@@ -65,6 +65,17 @@ beforeAll(async () => {
 			target: "node24",
 		},
 	);
+	const nativeMetadataCurrentClient = await transform(
+		await readFile(
+			new URL("./runtime-native-metadata-current-client.ts", import.meta.url),
+			"utf8",
+		),
+		{
+			loader: "ts",
+			format: "esm",
+			target: "node24",
+		},
+	);
 	await writeFile(join(directory, "package.json"), '{"type":"module"}');
 	await writeFile(join(directory, "deployment.mjs"), code);
 	await writeFile(
@@ -78,6 +89,10 @@ beforeAll(async () => {
 	await writeFile(
 		join(directory, "runtime-native-metadata-gateway.js"),
 		nativeMetadataGateway.code,
+	);
+	await writeFile(
+		join(directory, "runtime-native-metadata-current-client.js"),
+		nativeMetadataCurrentClient.code,
 	);
 	await build({
 		entryPoints: [
