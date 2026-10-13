@@ -566,9 +566,8 @@ describe("PostgreSQL Conversation query", () => {
 				await seedSessionSandboxFixture(client, entry.id);
 			}
 			const web = await query.list(actorOne, "agent-1", { limit: 20 });
-			expect(web.items.map((item) => item.conversationId)).not.toEqual(
-				expect.arrayContaining(entries.map((entry) => entry.id)),
-			);
+			const webIds = web.items.map((item) => item.conversationId);
+			for (const entry of entries) expect(webIds).not.toContain(entry.id);
 			const wecom = await query.get(
 				{ actorId: "actor-1", channelId: entries[0].channel },
 				entries[0].id,
@@ -583,8 +582,31 @@ describe("PostgreSQL Conversation query", () => {
 			);
 			expect(wecom?.conversation.conversationId).toBe(entries[0].id);
 			expect(api?.conversation.conversationId).toBe(entries[1].id);
+			const wecomSandbox = wecom?.conversation.sandbox;
+			const apiSandbox = api?.conversation.sandbox;
+			if (!wecomSandbox || !apiSandbox)
+				throw new Error("Expected Sandbox bindings");
+			expect(wecomSandbox.sessionId).toBe(entries[0].id);
+			expect(apiSandbox.sessionId).toBe(entries[1].id);
+			expect(wecomSandbox.sandboxId).not.toBe(apiSandbox.sandboxId);
 			await expect(query.get(actorOne, entries[0].id)).resolves.toBeUndefined();
 			await expect(query.get(actorOne, entries[1].id)).resolves.toBeUndefined();
+			await expect(
+				query.get(
+					{ actorId: "actor-1", channelId: entries[0].channel },
+					entries[1].id,
+				),
+			).resolves.toBeUndefined();
+			await expect(
+				query.get(
+					{
+						actorId: "actor-1",
+						channelId: "api",
+						principal: { kind: "user", id: "actor-1" },
+					},
+					entries[0].id,
+				),
+			).resolves.toBeUndefined();
 		} finally {
 			for (const entry of entries) {
 				await client`delete from platform.session_sandbox_allocations where conversation_id = ${entry.id}`;
