@@ -543,4 +543,26 @@ it("requires a current sender-to-Connection fact when Connection is enabled", as
 		},
 	}).authorize(message, "use", undefined, message.providerId);
 	expect(mismatch).toMatchObject({ outcome: "denied" });
+	for (const candidate of [
+		{ ...fact, expiresAt: "2000-01-01T00:00:00.000Z" },
+		{ ...fact, bindingReference: "other-binding" },
+		null,
+	]) {
+		const result = await createWecomAuthorizationV1({
+			identity,
+			state: statePort,
+			connectionAuthorization: { resolve: async () => candidate },
+		}).authorize(message, "use", undefined, message.providerId);
+		expect(result).toMatchObject({ outcome: "denied" });
+	}
+	const unavailableFact = await createWecomAuthorizationV1({
+		identity,
+		state: statePort,
+		connectionAuthorization: {
+			resolve: async () => {
+				throw new Error("provider unavailable");
+			},
+		},
+	}).authorize(message, "use", undefined, message.providerId);
+	expect(unavailableFact).toMatchObject({ outcome: "unavailable" });
 });

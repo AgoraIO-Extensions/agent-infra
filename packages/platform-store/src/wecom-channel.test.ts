@@ -2,6 +2,7 @@ import { createConnection, createServer, type Socket } from "node:net";
 import {
 	createWecomAuthorizationV1,
 	createWecomChannelV1,
+	createWecomDeliveryV1,
 	type WecomChannelStorePortV1,
 	type WecomConnectionFenceV1,
 	type WecomIdentityPortV1,
@@ -1920,6 +1921,21 @@ it("pins the sender-to-Connection fact in the receipt and delivery claim", async
 			where execution_id=${accepted.receipt.executionId}`;
 		const claim = await connectionStore.claim();
 		expect(claim?.connectionAuthorizationFact).toEqual(fact);
+		await sql`update platform.wecom_receipts set delivery_status='pending', lease_until=null
+			where id=${accepted.receipt.receiptId}`;
+		let revalidated = false;
+		const delivery = createWecomDeliveryV1({
+			store: connectionStore,
+			authorization,
+			sender: {
+				async send(input) {
+					revalidated = (await input.revalidate?.()) === true;
+					return "sent";
+				},
+			},
+		});
+		expect(await delivery.dispatch()).toBe(true);
+		expect(revalidated).toBe(true);
 	} finally {
 		await sql`update platform.agent_configuration_revisions
 			set configuration=jsonb_set(configuration,'{source,connectionEnabled}','false'::jsonb)

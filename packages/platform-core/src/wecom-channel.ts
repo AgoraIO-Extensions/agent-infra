@@ -66,6 +66,7 @@ export interface WecomConnectionAuthorizationFactV1 {
 	readonly expiresAt: string;
 }
 export interface WecomConnectionAuthorizationPortV1 {
+	/** Return null for revoked, disabled, stale or cross-sender authority. */
 	resolve(
 		request: WecomConnectionAuthorizationRequestV1,
 		signal?: AbortSignal,
@@ -75,7 +76,18 @@ export function sameWecomConnectionAuthorizationFactV1(
 	left: WecomConnectionAuthorizationFactV1 | undefined,
 	right: WecomConnectionAuthorizationFactV1 | undefined,
 ): boolean {
-	return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+	if (!left || !right) return left === right;
+	return (
+		left.schemaVersion === right.schemaVersion &&
+		left.providerId === right.providerId &&
+		left.bindingReference === right.bindingReference &&
+		left.senderId === right.senderId &&
+		left.authorizationReference === right.authorizationReference &&
+		left.authorizationRevision === right.authorizationRevision &&
+		left.grantRevision === right.grantRevision &&
+		left.revocationRevision === right.revocationRevision &&
+		left.expiresAt === right.expiresAt
+	);
 }
 export interface WecomMediaResolverV1 {
 	/**
