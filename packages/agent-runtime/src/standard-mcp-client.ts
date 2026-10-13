@@ -587,6 +587,9 @@ export class StandardMcpClient {
 	get credentialRevision() {
 		return this.#input.credentialRevision;
 	}
+	get expiresAt() {
+		return this.#input.expiresAt;
+	}
 	get toolDefinitions() {
 		return [
 			{

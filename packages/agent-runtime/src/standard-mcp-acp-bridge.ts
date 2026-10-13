@@ -21,6 +21,7 @@ import type {
 
 const maximumBodyBytes = 1_048_576;
 const maximumReplayKeys = 128;
+const maximumBridgeLifetimeMs = 5 * 60_000;
 
 export interface StandardMcpAcpBridge {
 	readonly server: {
@@ -35,7 +36,7 @@ export interface StandardMcpAcpBridge {
 export interface StandardMcpAcpBridgeOptions {
 	readonly client: StandardMcpClient;
 	readonly execution: RuntimeOriginalExecutionRef;
-	readonly nativeSessionRef?: () => string;
+	readonly nativeSessionRef: () => string;
 	readonly recordOperationFact?: (
 		fact: RuntimeOperationFactV2,
 	) => Promise<void>;
@@ -108,6 +109,11 @@ export async function createStandardMcpAcpBridge(
 	options: StandardMcpAcpBridgeOptions,
 ): Promise<StandardMcpAcpBridge> {
 	const token = randomBytes(32).toString("base64url");
+	const bridgeExpiresAt = Math.min(
+		options.client.expiresAt,
+		Date.now() + maximumBridgeLifetimeMs,
+	);
+	if (bridgeExpiresAt <= Date.now()) unavailable();
 	const descriptorMap = new Map(
 		tools(options.client).map((tool) => [tool.name, tool]),
 	);
@@ -115,15 +121,21 @@ export async function createStandardMcpAcpBridge(
 	let closed = false;
 	let active = false;
 	let blocked = false;
+	let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+	let closePromise: Promise<void> | undefined;
+	const expired = () => Date.now() >= bridgeExpiresAt;
 	const mcp = new Server(
 		{ name: "agent-infra-connection", version: "1" },
 		{ capabilities: { tools: {} } },
 	);
-	mcp.setRequestHandler(ListToolsRequestSchema, () => ({
-		tools: [...descriptorMap.values()],
-	}));
+	let close: () => Promise<void>;
+	mcp.setRequestHandler(ListToolsRequestSchema, async () => {
+		if (closed || blocked || expired()) unavailable();
+		await options.client.assertCurrent();
+		return { tools: [...descriptorMap.values()] };
+	});
 	mcp.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-		if (closed || blocked || active) unavailable();
+		if (closed || blocked || expired() || active) unavailable();
 		const name = request.params.name;
 		const tool = descriptorMap.get(name);
 		const args = request.params.arguments;
@@ -183,11 +195,13 @@ export async function createStandardMcpAcpBridge(
 		};
 		const operation: StandardMcpOperation = {
 			assertCurrent: async () => {
-				if (closed || blocked) unavailable();
+				if (closed || blocked || expired()) unavailable();
 				await options.client.assertCurrent();
+				const nativeSessionRef = options.nativeSessionRef();
+				if (!nativeSessionRef.trim()) unavailable();
 				const authorized = await options.authorizeToolAction?.({
 					kind: "tool",
-					nativeSessionRef: options.nativeSessionRef?.() ?? "pending",
+					nativeSessionRef,
 					executionId: options.execution.executionId,
 					runtimeOperationId: options.execution.executionId,
 					operationRef,
@@ -197,7 +211,7 @@ export async function createStandardMcpAcpBridge(
 					unavailable();
 				authorized?.revalidate?.();
 				return () => {
-					if (closed || blocked) unavailable();
+					if (closed || blocked || expired()) unavailable();
 					const guarded = authorized?.revalidate?.();
 					if (guarded !== undefined) unavailable();
 				};
@@ -235,8 +249,14 @@ export async function createStandardMcpAcpBridge(
 	});
 	await mcp.connect(transport);
 	const server = createServer(async (request, response) => {
-		if (request.url !== "/mcp" || !authorized(request, token)) {
+		if (
+			expired() ||
+			request.method !== "POST" ||
+			request.url !== "/mcp" ||
+			!authorized(request, token)
+		) {
 			response.writeHead(404).end();
+			if (expired()) void close();
 			return;
 		}
 		try {
@@ -258,6 +278,21 @@ export async function createStandardMcpAcpBridge(
 		server.close();
 		unavailable();
 	}
+	close = async () => {
+		if (closePromise) return closePromise;
+		closePromise = (async () => {
+			closed = true;
+			blocked = true;
+			if (expiryTimer) clearTimeout(expiryTimer);
+			await transport.close().catch(() => {});
+			await mcp.close().catch(() => {});
+			await options.client.close().catch(() => {});
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		})();
+		return closePromise;
+	};
+	expiryTimer = setTimeout(() => void close(), bridgeExpiresAt - Date.now());
+	if (typeof expiryTimer.unref === "function") expiryTimer.unref();
 	return {
 		server: {
 			type: "http",
@@ -265,13 +300,6 @@ export async function createStandardMcpAcpBridge(
 			url: `http://127.0.0.1:${address.port}/mcp`,
 			headers: [{ name: "Authorization", value: `Bearer ${token}` }],
 		},
-		async close() {
-			if (closed) return;
-			closed = true;
-			await transport.close().catch(() => {});
-			await mcp.close().catch(() => {});
-			await options.client.close().catch(() => {});
-			await new Promise<void>((resolve) => server.close(() => resolve()));
-		},
+		close,
 	};
 }
