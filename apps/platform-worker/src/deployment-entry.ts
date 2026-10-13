@@ -6,6 +6,7 @@ import {
 } from "./connection-consumer-projection.js";
 import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
+import type { PlatformWorkerNativeMetadataGatewayServerOptionsV1 } from "./runtime-native-metadata-server.js";
 import {
 	type DeploymentSkillMaterializerFactoryV1,
 	resolveDeploymentSkillMaterializerV1,
@@ -46,6 +47,7 @@ type DeploymentConfiguration = {
 	};
 	/** Deployment-owned object-storage/Store assembly for the existing Worker seam. */
 	readonly createSkillMaterializer?: DeploymentSkillMaterializerFactoryV1;
+	readonly nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayServerOptionsV1;
 };
 
 function resolveConnectionInstallation(
@@ -91,6 +93,7 @@ const {
 	connectionInstallationSupply,
 	connectionInstallation: configuredConnectionInstallation,
 	createSkillMaterializer,
+	nativeMetadataGateway,
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
@@ -369,4 +372,11 @@ export async function createPlatformConversationWorkerOptionsV2(
 
 export async function createPlatformWecomWorkerInstanceV1(signal: AbortSignal) {
 	return (await prepare(signal)).wecom.start(signal);
+}
+
+export async function createPlatformNativeMetadataGatewayOptionsV1(
+	signal: AbortSignal,
+) {
+	signal.throwIfAborted();
+	return nativeMetadataGateway;
 }
