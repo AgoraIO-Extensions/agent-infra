@@ -148,4 +148,68 @@ describe("ApiCredentialsScreen", () => {
 		expect(screen.queryByRole("form", { name: /收窄凭证/ })).toBeNull();
 		await waitFor(() => expect(document.activeElement).toBe(button));
 	});
+
+	it("keeps narrow failure feedback when a parent readback updates the row", async () => {
+		const initialMetadata: PersonalApiCredentialMetadataV1 = {
+			...metadata,
+			expiresAt: "2026-11-01T00:00:00Z",
+			scopes: ["agent:read", "agent:use", "agent:manage"],
+		};
+		const refreshedMetadata: PersonalApiCredentialMetadataV1 = {
+			...initialMetadata,
+			expiresAt: "2026-10-15T00:00:00Z",
+			scopes: ["agent:read"],
+		};
+		const onRefresh = vi.fn();
+		let rejectNarrow: (reason: unknown) => void = () => undefined;
+		const onNarrow = vi.fn(
+			() =>
+				new Promise<never>((_resolve, reject) => {
+					rejectNarrow = reject;
+				}),
+		);
+		const view = render(
+			<ApiCredentialsScreen
+				state={{ kind: "ready", credentials: [initialMetadata] }}
+				onNarrow={onNarrow}
+				onRetry={onRefresh}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "收窄权限与有效期" }));
+		const form = screen.getByRole("form", { name: /收窄凭证/ });
+		fireEvent.click(within(form).getByRole("checkbox", { name: "读取 Agent" }));
+		fireEvent.click(within(form).getByRole("checkbox", { name: "使用 Agent" }));
+		fireEvent.click(within(form).getByRole("button", { name: "保存收窄" }));
+		await waitFor(() => expect(onNarrow).toHaveBeenCalledOnce());
+
+		view.rerender(
+			<ApiCredentialsScreen
+				state={{ kind: "ready", credentials: [refreshedMetadata] }}
+				onNarrow={onNarrow}
+				onRetry={onRefresh}
+			/>,
+		);
+		await waitFor(() =>
+			expect(
+				within(screen.getByRole("form", { name: /收窄凭证/ }))
+					.getByRole("checkbox", { name: "读取 Agent" })
+					.getAttribute("aria-checked"),
+			).toBe("true"),
+		);
+
+		await act(async () => {
+			rejectNarrow(Object.assign(new Error("Conflict"), { code: "CONFLICT" }));
+		});
+		await waitFor(() =>
+			expect(screen.getByText(/凭证状态已变化/)).toBeTruthy(),
+		);
+		expect(
+			screen
+				.getByRole("button", { name: "重新加载凭证" })
+				.hasAttribute("disabled"),
+		).toBe(false);
+		fireEvent.click(screen.getByRole("button", { name: "重新加载凭证" }));
+		expect(onRefresh).toHaveBeenCalledOnce();
+	});
 });

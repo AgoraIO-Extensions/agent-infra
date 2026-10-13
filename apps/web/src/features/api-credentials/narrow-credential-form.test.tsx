@@ -149,6 +149,79 @@ describe("NarrowCredentialForm", () => {
 		expect(onNarrow.mock.calls[0]).toEqual(onNarrow.mock.calls[1]);
 	});
 
+	it("keeps refresh feedback while syncing a readback that arrives during a request", async () => {
+		const onRefresh = vi.fn();
+		const onComplete = vi.fn();
+		const onCancel = vi.fn();
+		const initialMetadata: PersonalApiCredentialMetadataV1 = {
+			...metadata,
+			scopes: ["agent:read", "agent:use", "agent:manage"],
+		};
+		let rejectNarrow: (reason: unknown) => void = () => undefined;
+		const onNarrow = vi.fn(
+			() =>
+				new Promise<never>((_resolve, reject) => {
+					rejectNarrow = reject;
+				}),
+		);
+		const view = render(
+			<NarrowCredentialForm
+				credential={initialMetadata}
+				onNarrow={onNarrow}
+				onComplete={onComplete}
+				onCancel={onCancel}
+				onRefresh={onRefresh}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("checkbox", { name: "使用 Agent" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: "读取 Agent" }));
+		fireEvent.change(screen.getByLabelText("提前到期时间（可选）"), {
+			target: { value: "2026-10-20T12:30" },
+		});
+		submit();
+		await waitFor(() => expect(onNarrow).toHaveBeenCalledOnce());
+
+		const refreshedMetadata: PersonalApiCredentialMetadataV1 = {
+			...metadata,
+			expiresAt: "2026-10-15T00:00:00Z",
+			scopes: ["agent:read"],
+		};
+		view.rerender(
+			<NarrowCredentialForm
+				credential={refreshedMetadata}
+				onNarrow={onNarrow}
+				onComplete={onComplete}
+				onCancel={onCancel}
+				onRefresh={onRefresh}
+			/>,
+		);
+		await waitFor(() =>
+			expect(
+				screen
+					.getByRole("checkbox", { name: "读取 Agent" })
+					.getAttribute("aria-checked"),
+			).toBe("true"),
+		);
+		expect(
+			(screen.getByLabelText("提前到期时间（可选）") as HTMLInputElement).value,
+		).toBe("");
+
+		await act(async () => {
+			rejectNarrow(Object.assign(new Error("Conflict"), { code: "CONFLICT" }));
+		});
+		await waitFor(() =>
+			expect(screen.getByText(/凭证状态已变化/)).toBeTruthy(),
+		);
+		expect(
+			screen
+				.getByRole("button", { name: "重新加载凭证" })
+				.hasAttribute("disabled"),
+		).toBe(false);
+		fireEvent.click(screen.getByRole("button", { name: "重新加载凭证" }));
+		expect(onRefresh).toHaveBeenCalledOnce();
+	});
+
 	it("prevents concurrent submissions and keeps controls disabled through completion", async () => {
 		const { onNarrow, onComplete } = setup();
 		let finish: () => void = () => undefined;

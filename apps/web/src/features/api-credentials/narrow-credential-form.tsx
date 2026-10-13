@@ -1,4 +1,11 @@
-import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import {
+	type FormEvent,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -58,10 +65,29 @@ export function NarrowCredentialForm({
 	const [expiryError, setExpiryError] = useState<string | null>(null);
 	const [requestError, setRequestError] = useState<string | null>(null);
 	const busy = pending || disabled;
+	const credentialSnapshot = useMemo(
+		() => ({
+			credentialId: credential.credentialId,
+			scopes: credential.scopes,
+			expiresAt: credential.expiresAt,
+		}),
+		[credential.credentialId, credential.scopes, credential.expiresAt],
+	);
 
 	useEffect(() => {
 		formRef.current?.querySelector<HTMLElement>('[role="checkbox"]')?.focus();
 	}, []);
+
+	useEffect(() => {
+		// A readback can update the row while this form is still mounted. Drop
+		// drafts from the previous metadata snapshot so a retry cannot submit
+		// stale scopes or an expiry that is no longer valid. An empty expiry
+		// means "keep the current expiry", so it follows the refreshed metadata.
+		setScopes(credentialSnapshot.scopes);
+		setExpiresAt("");
+		setScopeError(null);
+		setExpiryError(null);
+	}, [credentialSnapshot]);
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
