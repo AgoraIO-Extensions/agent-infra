@@ -49,6 +49,25 @@ const accountBase = {
 };
 
 describe("Connection runtime configuration", () => {
+	it("keeps company identity probes separate and rejects partial client configuration", () => {
+		expect(
+			fullConnectionRuntimeConfig(accountBase).companyIdentityOAuth,
+		).toBeUndefined();
+		for (const extra of [
+			{ CONNECTION_IDENTITY_OAUTH_CLIENT_ID: "probe-client" },
+			{ CONNECTION_IDENTITY_OAUTH_CLIENT_SECRET: "probe-secret" },
+		])
+			expect(() =>
+				fullConnectionRuntimeConfig({ ...accountBase, ...extra }),
+			).toThrow(/CONNECTION_IDENTITY_OAUTH/);
+		expect(
+			fullConnectionRuntimeConfig({
+				...accountBase,
+				CONNECTION_IDENTITY_OAUTH_CLIENT_ID: "probe-client",
+				CONNECTION_IDENTITY_OAUTH_CLIENT_SECRET: "probe-secret",
+			}).companyIdentityOAuth,
+		).toEqual({ clientId: "probe-client", clientSecret: "probe-secret" });
+	});
 	it("configures employee discovery independently without enabling the approval gate", () => {
 		const config = connectionApiRuntimeConfig({
 			...accountBase,

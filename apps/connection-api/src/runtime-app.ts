@@ -1,4 +1,5 @@
 import {
+	CompanyIdentityProbe,
 	ConnectionAccessApprovalService,
 	ConnectionApplicationService,
 	ConnectionOAuthService,
@@ -9,7 +10,10 @@ import {
 	portablePatConsumerId,
 	rehoboamAiConsumer,
 } from "@agent-infra/connection-core";
-import { LdapDirectoryAuthenticator } from "@agent-infra/connection-identity";
+import {
+	CompanyOAuthIdentityClient,
+	LdapDirectoryAuthenticator,
+} from "@agent-infra/connection-identity";
 import {
 	PostgresBrowserCommandIdempotency,
 	PostgresConnectionAccessRequestRepository,
@@ -552,12 +556,34 @@ export async function createConnectionRuntime(
 			[datalegoOAuth.providerId]: datalegoOAuth,
 		},
 	);
+	const identityClient = config.companyIdentityOAuth
+		? new CompanyOAuthIdentityClient({
+				...config.companyIdentityOAuth,
+				fetch: providerFetch(["https://oauth.agoralab.co"]),
+			})
+		: undefined;
+	const identityProbe =
+		config.companyIdentityOAuth && identityClient
+			? new CompanyIdentityProbe({
+					clientId: config.companyIdentityOAuth.clientId,
+					identityKey: config.identityKey,
+					identityRealm: config.identityRealm,
+					publicBaseUrl: config.publicBaseUrl,
+					oauth,
+					commands: browserCommands,
+					isAdministrator: (principalId) =>
+						service.authorizeConnectionAdministration(principalId),
+					readIdentity: (code, redirectUri) =>
+						identityClient.readIdentity(code, redirectUri),
+				})
+			: undefined;
 	const app = createConnectionApp({
 		accessTokens: oauth,
 		connectionWebUrl: config.publicBaseUrl,
 		directMcpEnabled: true,
 		githubProviderEnabled: false,
 		oauthServer: {
+			...(identityProbe ? { identityProbe } : {}),
 			browserCommands,
 			dynamicClientRegistration: {
 				clientName: config.directConsumer.name,

@@ -329,6 +329,11 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 ### 9.1 Web 登录
 
+Connection 的受监督公司 OAuth 身份诊断独立于正式登录，复用现有浏览器会话与 PostgreSQL
+单次消费，不改变 Principal 权威或 LDAP 认证。接口、状态与安全约束见
+[HLD 身份探测](HLD-connection-M1.md#公司-oauth-身份探测)；决策见
+[身份探测 ADR](../adr/ADR-connection-company-oauth-identity-probe.md)。
+
 - `platform-api` 接入公司 OIDC 或现有身份网关。
 - `connection-api` 作为 OAuth Authorization Server，通过独立 Connection Web 的 HTTPS 登录页使用
   公司 LDAP 认证员工，
