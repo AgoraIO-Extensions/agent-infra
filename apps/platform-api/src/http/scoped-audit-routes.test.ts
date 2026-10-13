@@ -104,7 +104,7 @@ function fixture(telemetry?: AuditTelemetry) {
 			? context.json(error.body, error.status)
 			: context.json({ code: "unexpected" }, 500),
 	);
-	registerScopedAuditRoutes(app, { identity, audit, telemetry });
+	registerScopedAuditRoutes(app, { identity, audit, observability: telemetry });
 	return { app, identity, audit };
 }
 

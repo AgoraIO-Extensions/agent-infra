@@ -46,7 +46,7 @@ interface PlatformAuditQuery {
 export interface SessionAuditRoutesDependencies {
 	readonly identity: IdentityAdapter;
 	readonly audit: PlatformAuditQuery;
-	readonly telemetry?: AuditTelemetry;
+	readonly observability?: AuditTelemetry;
 	readonly connectionCapability?: ConnectionCapabilityV1;
 }
 
@@ -85,7 +85,7 @@ async function readAuditPage(
 		page = parsePageQuery(request, metadata.traceId);
 	} catch (error) {
 		recordAuditStage(
-			dependencies.telemetry,
+			dependencies.observability,
 			"audit_query",
 			"list",
 			preflightStartedAt,
@@ -96,7 +96,7 @@ async function readAuditPage(
 	}
 	try {
 		return await observeAuditQuery({
-			telemetry: dependencies.telemetry,
+			telemetry: dependencies.observability,
 			operation: "list",
 			metadata,
 			work: () =>

@@ -68,7 +68,7 @@ function createApp(
 	registerSessionAuditRoutes(app, {
 		identity: identityAdapter,
 		audit,
-		telemetry,
+		observability: telemetry,
 		...(connectionCapability ? { connectionCapability } : {}),
 	});
 	return { app, identityAdapter, audit };

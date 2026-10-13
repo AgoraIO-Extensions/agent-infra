@@ -31,7 +31,7 @@ import {
 
 export interface ScopedAuditRoutesDependencies {
 	readonly identity: IdentityAdapter;
-	readonly telemetry?: AuditTelemetry;
+	readonly observability?: AuditTelemetry;
 	readonly audit: Pick<
 		PostgresScopedPlatformAuditQueryV1,
 		"listAudit" | "getAudit" | "recordDeniedQuery"
@@ -126,7 +126,7 @@ async function auditedQueryScope(
 				metadata,
 			);
 			recordAuditStage(
-				dependencies.telemetry,
+				dependencies.observability,
 				"audit_write",
 				"denied",
 				startedAt,
@@ -135,7 +135,7 @@ async function auditedQueryScope(
 			);
 		} catch {
 			recordAuditStage(
-				dependencies.telemetry,
+				dependencies.observability,
 				"audit_write",
 				"denied",
 				startedAt,
@@ -143,7 +143,7 @@ async function auditedQueryScope(
 				metadata,
 			);
 			recordAuditStage(
-				dependencies.telemetry,
+				dependencies.observability,
 				"audit_query",
 				"denied",
 				startedAt,
@@ -153,7 +153,7 @@ async function auditedQueryScope(
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 		}
 		recordAuditStage(
-			dependencies.telemetry,
+			dependencies.observability,
 			"audit_query",
 			"denied",
 			startedAt,
@@ -232,7 +232,7 @@ export function registerScopedAuditRoutes(
 					metadata,
 				);
 				const page = await observeAuditQuery({
-					telemetry: dependencies.telemetry,
+					telemetry: dependencies.observability,
 					operation: "list",
 					metadata,
 					work: () =>
@@ -260,7 +260,7 @@ export function registerScopedAuditRoutes(
 					metadata,
 				);
 				const item = await observeAuditQuery({
-					telemetry: dependencies.telemetry,
+					telemetry: dependencies.observability,
 					operation: "detail",
 					metadata,
 					work: () =>
