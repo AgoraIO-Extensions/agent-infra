@@ -6,6 +6,7 @@ import {
 } from "@agent-infra/contracts/runtime";
 
 const maximumResponseBytes = 1_048_576;
+const transportTimeoutMs = 10_000;
 
 function endpoint(baseUrl: string) {
 	let origin: URL;
@@ -53,17 +54,24 @@ export function createPlatformWorkerNativeMetadataGatewayClientV1(options: {
 	readonly baseUrl: string;
 	readonly serviceToken: string;
 	readonly fetch?: typeof fetch;
+	readonly transportTimeoutMs?: number;
 }) {
 	if (!/^[\x21-\x7e]{1,8192}$/.test(options.serviceToken))
 		throw new TypeError("Platform Worker service token is invalid");
 	const url = endpoint(options.baseUrl);
 	const fetcher = options.fetch ?? fetch;
+	const timeoutMs = options.transportTimeoutMs ?? transportTimeoutMs;
+	if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
+		throw new TypeError("Platform Worker transport timeout is invalid");
 	return {
 		async read(
 			value: PlatformNativeMetadataReadRequestV1,
 			signal?: AbortSignal,
 		) {
 			const request = PlatformNativeMetadataReadRequestV1Schema.parse(value);
+			const transportSignal = signal
+				? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+				: AbortSignal.timeout(timeoutMs);
 			let response: Response | undefined;
 			try {
 				response = await fetcher(url, {
@@ -76,7 +84,7 @@ export function createPlatformWorkerNativeMetadataGatewayClientV1(options: {
 						accept: "application/json",
 					},
 					body: JSON.stringify(request),
-					signal,
+					signal: transportSignal,
 				});
 				if (!response.ok || response.redirected)
 					throw new Error("PLATFORM_WORKER_UNAVAILABLE");

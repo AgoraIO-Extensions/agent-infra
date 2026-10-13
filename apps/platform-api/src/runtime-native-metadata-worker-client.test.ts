@@ -70,4 +70,25 @@ describe("Platform Worker native metadata gateway client", () => {
 			"PLATFORM_WORKER_UNAVAILABLE",
 		);
 	});
+
+	it("applies a transport deadline when Worker fetch stalls", async () => {
+		const client = createPlatformWorkerNativeMetadataGatewayClientV1({
+			baseUrl: "http://worker",
+			serviceToken: "worker-token",
+			transportTimeoutMs: 25,
+			fetch: async (_input, init) =>
+				new Promise<Response>((_resolve, reject) => {
+					init?.signal?.addEventListener(
+						"abort",
+						() => reject(new Error("aborted")),
+						{ once: true },
+					);
+				}),
+		});
+		const started = Date.now();
+		await expect(client.read(request)).rejects.toThrow(
+			"PLATFORM_WORKER_UNAVAILABLE",
+		);
+		expect(Date.now() - started).toBeLessThan(1_000);
+	});
 });
