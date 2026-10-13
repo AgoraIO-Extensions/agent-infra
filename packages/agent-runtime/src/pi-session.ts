@@ -1,8 +1,9 @@
 // Pi lifecycle adapted from Paseo PiCliRuntimeSession/buildPiLaunch at d1b705a0cd91617a5707fae25d80cb0be3057950.
 // Copyright (c) 2025-present Mohamed Boudra. Apache-2.0; see THIRD_PARTY_NOTICES.md.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
+import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import type { NativeProcessLaunch } from "./native-process.js";
 import { readPiNativeCommandsV1 } from "./pi-native-command.js";
@@ -272,6 +273,8 @@ export async function openPiSession(
 	let currentCheckpoint: string | undefined;
 	let exited = false;
 	let policyReady = false;
+	let currentRecordOperationFact = options.recordOperationFact;
+	let currentModelFact = options.modelFact;
 	const phases = new Map<string, string>();
 	const rpc = await openPiRpc(
 		options.directory,
@@ -335,6 +338,14 @@ export async function openPiSession(
 									: "completed";
 						if (phases.get(frame.toolCallId) !== phase) {
 							phases.set(frame.toolCallId, phase);
+							await options.recordToolOperation?.(
+								frame.toolName === "read"
+									? "Read"
+									: ["write", "edit"].includes(frame.toolName as string)
+										? "Edit"
+										: "unavailable",
+								phase,
+							);
 							await options.update({
 								type: "tool",
 								payload: {
@@ -508,6 +519,15 @@ export async function openPiSession(
 		}
 		return {
 			nativeId,
+			startTurn(next: {
+				recordOperationFact?: (fact: RuntimeOperationFactV2) => Promise<void>;
+				modelFact?: () =>
+					| Extract<RuntimeOperationFactV2, { kind: "model" }>["model"]
+					| undefined;
+			}) {
+				currentRecordOperationFact = next.recordOperationFact;
+				currentModelFact = next.modelFact;
+			},
 			async discoverCommands(input: {
 				readonly signal: AbortSignal;
 				readonly expiresAt: number;
@@ -594,12 +614,46 @@ export async function openPiSession(
 					if (active === target) active = undefined;
 					throw error;
 				}
+				const operationRef = randomUUID();
+				const attemptRef = randomUUID();
+				const fact = currentModelFact?.();
+				const writeFact = currentRecordOperationFact;
+				const startedAt = Date.now();
+				if (fact && writeFact) {
+					await writeFact({
+						kind: "model",
+						operationRef,
+						attemptRef,
+						phase: "intent",
+						model: fact,
+					});
+					await writeFact({
+						kind: "model",
+						operationRef,
+						attemptRef,
+						phase: "started",
+						startedAt: new Date(startedAt).toISOString(),
+						model: fact,
+					});
+				}
 				void rpc
 					.request("prompt", {
 						message: content.text,
 						...(images.length ? { images } : {}),
 					})
-					.then(() => (active === target ? options.update() : undefined))
+					.then(async () => {
+						if (active === target) await options.update();
+						if (fact && writeFact)
+							await writeFact({
+								kind: "model",
+								operationRef,
+								attemptRef,
+								phase: "completed",
+								finishedAt: new Date().toISOString(),
+								durationMs: Math.max(0, Date.now() - startedAt),
+								model: fact,
+							});
+					})
 					.catch(() => {
 						if (active === target) {
 							active?.reject(new Error("RUNTIME_ACCEPTANCE_UNKNOWN"));
