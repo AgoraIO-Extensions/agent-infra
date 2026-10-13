@@ -193,9 +193,17 @@ async function readPiResultFile(
 			offset += bytesRead;
 		}
 		if (offset > piResultFileMaximumBytes) return;
+		let content: string;
+		try {
+			content = new TextDecoder("utf-8", { fatal: true }).decode(
+				bytes.subarray(0, offset),
+			);
+		} catch {
+			return;
+		}
 		return {
 			path: actual,
-			content: bytes.subarray(0, offset).toString("utf8"),
+			content,
 		};
 	} finally {
 		await file.close().catch(() => {});

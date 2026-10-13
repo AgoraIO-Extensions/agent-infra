@@ -61,6 +61,10 @@ const finish = async (stopReason) => {
 	if (mode === "result-file-negative") {
 		await writeFile(`${process.cwd()}/result.txt`, "synthetic Pi result\n");
 		await writeFile(`${process.cwd()}/outside-result.txt`, "outside\n");
+		await writeFile(
+			`${process.cwd()}/invalid-result.txt`,
+			new Uint8Array([0xc3, 0x28]),
+		);
 		await symlink(
 			`${process.cwd()}/outside-result.txt`,
 			`${process.cwd()}/result-link.txt`,
@@ -70,6 +74,7 @@ const finish = async (stopReason) => {
 			["read-tool", "read", "result.txt", false],
 			["outside-write", "write", "../outside-result.txt", false],
 			["symlink-write", "write", "result-link.txt", false],
+			["invalid-write", "write", "invalid-result.txt", false],
 		]) {
 			send({
 				type: "tool_execution_start",
@@ -91,6 +96,12 @@ const finish = async (stopReason) => {
 			toolName: "write",
 			result: { content: [{ type: "text", text: "duplicate" }] },
 			isError: false,
+		});
+		send({
+			type: "tool_execution_start",
+			toolCallId: "late-write",
+			toolName: "write",
+			args: { path: "result.txt", content: "late" },
 		});
 	}
 	send({
@@ -126,7 +137,7 @@ const finish = async (stopReason) => {
 	if (mode === "result-file-negative")
 		send({
 			type: "tool_execution_end",
-			toolCallId: "failed-write",
+			toolCallId: "late-write",
 			toolName: "write",
 			result: { content: [{ type: "text", text: "late" }] },
 			isError: false,
