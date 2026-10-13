@@ -3,7 +3,19 @@
  * the Agent Pod, as opposed to one that answered unhealthy (#2046). A ready
  * Workload tolerates a bounded run of these before it closes its route.
  */
-export type WorkloadProbeIncompleteReasonV1 = "timeout" | "connection";
+export type WorkloadProbeIncompleteReasonV1 =
+	| "timeout"
+	| "connection"
+	/** Pod 应答了 5xx：服务端暂时无法处理，与超时同样有界容忍（#2252，对齐 Magic）。 */
+	| "unavailable";
+
+/**
+ * 5xx 表示服务端暂时无法处理；其余非 2xx、超限、格式错误或身份/签名不匹配的
+ * 应答仍是不健康结果，立即关闭路由（#2046）。
+ */
+export function isTransientProbeStatusV1(status: number): boolean {
+	return Number.isSafeInteger(status) && status >= 500 && status <= 599;
+}
 
 export class WorkloadProbeIncompleteErrorV1 extends Error {
 	constructor(

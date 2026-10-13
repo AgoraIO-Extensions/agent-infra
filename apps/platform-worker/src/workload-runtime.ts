@@ -60,6 +60,7 @@ import {
 	type WorkloadSkillMaterializerV1,
 } from "./skill-materialization.js";
 import {
+	isTransientProbeStatusV1,
 	WorkloadProbeIncompleteErrorV1,
 	workloadProbeIncompleteReasonV1,
 } from "./workload-probe-failure.js";
@@ -188,8 +189,9 @@ export interface WorkloadProbeFailureV1 {
 	readonly agentId: string;
 	readonly workloadRevision: number;
 	readonly stage: "health" | "readiness";
-	/** `timeout`/`connection` never answered; `response` answered unhealthy. */
-	readonly reason: "timeout" | "connection" | "response";
+	/** `timeout`/`connection` never answered; `unavailable` answered 5xx;
+	 * `response` answered unhealthy. */
+	readonly reason: "timeout" | "connection" | "unavailable" | "response";
 }
 
 export function workloadResourceConfigurationHashV1(
@@ -650,6 +652,11 @@ export function createWorkloadRuntimeV1(
 					throw rethrown("health", error);
 				}
 				if (!response.ok) {
+					// 5xx 是暂时性故障，与未完成的探测同样按阈值容忍（#2252）。
+					if (isTransientProbeStatusV1(response.status)) {
+						failed("health", "unavailable");
+						throw new WorkloadProbeIncompleteErrorV1("health", "unavailable");
+					}
 					failed("health", "response");
 					return false;
 				}
