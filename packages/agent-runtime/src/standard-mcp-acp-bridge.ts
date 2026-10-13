@@ -249,7 +249,12 @@ export async function createStandardMcpAcpBridge(
 	});
 	await mcp.connect(transport);
 	const server = createServer(async (request, response) => {
-		if (expired() || request.url !== "/mcp" || !authorized(request, token)) {
+		if (
+			expired() ||
+			request.method !== "POST" ||
+			request.url !== "/mcp" ||
+			!authorized(request, token)
+		) {
 			response.writeHead(404).end();
 			if (expired()) void close();
 			return;

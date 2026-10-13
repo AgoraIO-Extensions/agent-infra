@@ -231,6 +231,11 @@ it("rejects requests without the local bearer", async () => {
 		body: "{}",
 	});
 	expect(response.status).toBe(404);
+	const methodResponse = await fetch(bridge.server.url, {
+		method: "GET",
+		headers: { Authorization: bridge.server.headers[0].value },
+	});
+	expect(methodResponse.status).toBe(404);
 	const peer = new Client({ name: "bridge-test", version: "1" });
 	const transport = new StreamableHTTPClientTransport(
 		new URL(bridge.server.url),
@@ -266,16 +271,17 @@ it("closes the local bearer at the approved credential expiry", async () => {
 	});
 	bridges.push(bridge);
 	vi.setSystemTime(client.expiresAt + 1);
-	const response = await fetch(bridge.server.url, {
-		method: "POST",
-		headers: {
-			Authorization: bridge.server.headers[0].value,
-			"Content-Type": "application/json",
-		},
-		body: "{}",
-	});
-	expect(response.status).toBe(404);
 	await vi.runOnlyPendingTimersAsync();
+	await expect(
+		fetch(bridge.server.url, {
+			method: "POST",
+			headers: {
+				Authorization: bridge.server.headers[0].value,
+				"Content-Type": "application/json",
+			},
+			body: "{}",
+		}),
+	).rejects.toThrow();
 });
 
 it("blocks the bridge when a Connection WRITE result is unknown", async () => {
