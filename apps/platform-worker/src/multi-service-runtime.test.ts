@@ -377,7 +377,10 @@ describe("multi-service runtime operations", () => {
 			(resource) => resource.kind === "Job",
 		) as V1Job | undefined;
 		if (!job) throw new Error("migration Job fixture missing");
-		job.status = { failed: 1 };
+		job.status = {
+			failed: 1,
+			conditions: [{ type: "Failed", status: "True" }],
+		};
 		expect(await operations.observe(value, { uid: "u", generation: 1 })).toBe(
 			"unhealthy",
 		);

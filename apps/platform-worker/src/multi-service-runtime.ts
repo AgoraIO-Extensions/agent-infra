@@ -81,7 +81,6 @@ function jobSucceeded(job: V1Job): boolean {
 
 function jobFailed(job: V1Job): boolean {
 	return (
-		(job.status?.failed ?? 0) > 0 ||
 		job.status?.conditions?.some(
 			(condition) => condition.type === "Failed" && condition.status === "True",
 		) === true
@@ -456,8 +455,8 @@ export function createMultiServiceRuntimeOperations(options: {
 			await put(serviceAccount(value), value);
 			const migration = migrationResource(value);
 			if (migration?.kind === "Job") {
-				const job = await put(migrationJob(value, migration), value);
 				await put(migrationNetworkPolicy(value), value);
+				const job = await put(migrationJob(value, migration), value);
 				if (!jobSucceeded(job as V1Job))
 					return {
 						uid: workloadResourceNameV1(value.agentId),
