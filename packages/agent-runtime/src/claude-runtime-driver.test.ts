@@ -14,6 +14,7 @@ import { expect, it, vi } from "vitest";
 import {
 	type ClaudeNativeCommandReadContext,
 	ClaudeRuntimeDriver,
+	normalizeClaudeUncertainConnectionOperations,
 	parseClaudeNativeCommands,
 } from "./claude-runtime-driver.js";
 import type {
@@ -75,6 +76,29 @@ const attachmentCommand = {
 	},
 	input: { text: "inspect", attachments: ["file-1"] },
 };
+
+it("keeps uncertain Claude Connection operations held across restart", () => {
+	const turn: Parameters<
+		typeof normalizeClaudeUncertainConnectionOperations
+	>[0] = {
+		connectionOperations: [
+			{
+				callId: "11111111-1111-4111-8111-111111111111",
+				alias: "mcp_abc",
+				name: "connection.write",
+				phase: "started" as const,
+				rpcRequestId: 7,
+				requestDigest: "a".repeat(64),
+				consumerId: "consumer-a",
+				instanceRef: "instance-a",
+				credentialRevision: "revision-a",
+			},
+		],
+	};
+	normalizeClaudeUncertainConnectionOperations(turn);
+	expect(turn.unknownHold).toBe(true);
+	expect(turn.connectionOperations?.[0]?.phase).toBe("unknown");
+});
 
 const openAttachmentDriver = (path: string) =>
 	ClaudeRuntimeDriver.open({
