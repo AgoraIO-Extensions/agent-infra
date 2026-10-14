@@ -117,6 +117,37 @@ describe("native capability admission Store seam", () => {
 		expect(harness.store.plans).toHaveLength(1);
 	});
 
+	it.each(["omitted", "changed", "digest-mismatched"] as const)(
+		"rejects a native plan with %s persisted parameters",
+		async (failure) => {
+			const source = createHarness();
+			const accepted = await source.useCase.admit(request);
+			if (accepted.outcome !== "accepted")
+				throw new Error("Expected acceptance");
+			const malformed = structuredClone(accepted.plan) as unknown as {
+				outbox: { payload: Record<string, unknown> };
+			};
+			if (failure === "omitted") delete malformed.outbox.payload.parameters;
+			if (failure === "changed")
+				malformed.outbox.payload.parameters = "changed";
+			if (failure === "digest-mismatched")
+				malformed.outbox.payload.parametersDigest = "0".repeat(64);
+			const store = new FakeNativeCapabilityAdmissionStoreV1({ conversation });
+			await expect(
+				store.admitNativeCapability(
+					{
+						command: request,
+						authority,
+						requestDigest: nativeCapabilityAdmissionRequestDigestV1(request),
+					},
+					async () => malformed as never,
+					() => true,
+					async () => true,
+				),
+			).rejects.toThrow("Native capability admission plan is invalid");
+		},
+	);
+
 	it("rechecks authorization before returning a queued replay", async () => {
 		let authorizationCalls = 0;
 		const store = new FakeNativeCapabilityAdmissionStoreV1({ conversation });
