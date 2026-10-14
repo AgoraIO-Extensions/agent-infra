@@ -6374,7 +6374,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		if (!prepared.created)
 			return this.unknown(command, prepared.operation.nativeSessionRef);
-		await this.readNativeStatus(
+		const observed = await this.readNativeStatus(
 			{
 				capabilityId: command.capabilityId,
 				directoryRevision: command.directoryRevision,
@@ -6382,7 +6382,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			},
 			read,
 		);
-		return this.resolveNativeCommand(command, command.nativeSessionRef);
+		return this.resolveNativeCommand(
+			command,
+			command.nativeSessionRef,
+			observed.status === "active" ? "running" : "completed",
+		);
 	}
 
 	private async prepareNativeCommand(command: CodexNativeCommandCommand) {
@@ -12393,6 +12397,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async resolveNativeCommand(
 		command: CodexNativeCommandCommand,
 		nativeSessionRef: string,
+		status: "running" | "completed",
 	) {
 		const record = driverRecord(command, {
 			schemaVersion: 1,
@@ -12402,7 +12407,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			kind: command.kind,
 			operationId: command.operationId,
 			nativeSessionRef,
-			result: { outcome: "accepted", status: "completed" },
+			result: { outcome: "accepted", status },
 		});
 		return this.update((state) => {
 			const operation = ownRecordValue(state.operations, operationKey(command));
