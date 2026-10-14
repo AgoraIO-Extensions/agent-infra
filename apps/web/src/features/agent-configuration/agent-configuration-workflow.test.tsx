@@ -7,6 +7,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useBrowserSession } from "../use-browser-session.js";
+import { grantApplicationManager } from "./agent-authorization.js";
 import { AgentConfigurationWorkflow } from "./agent-configuration-workflow.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
 
@@ -18,6 +19,14 @@ vi.mock("../agent-administration/use-agent-lifecycle-command.js", () => ({
 }));
 vi.mock("./use-agent-configuration-submission.js", () => ({
 	useAgentConfigurationSubmission: vi.fn(),
+}));
+vi.mock("./agent-authorization.js", () => ({
+	AgentAuthorizationRequestError: class extends Error {},
+	grantApplicationManager: vi.fn(),
+	grantApplicationUse: vi.fn(),
+	revokeApplicationManager: vi.fn(),
+	revokeApplicationUse: vi.fn(),
+	revokeUserApiUse: vi.fn(),
 }));
 
 const ownerSession = BrowserSessionProjectionV1Schema.parse({
@@ -107,6 +116,35 @@ describe("AgentConfigurationWorkflow", () => {
 					{ kind: "organization", organizationId: "organization-2" },
 				],
 			}),
+		);
+	});
+
+	it("resets pending authorization controls when an administrator changes Agent", () => {
+		vi.mocked(useBrowserSession).mockReturnValue({
+			state: { kind: "ready", session: administratorSession },
+		} as never);
+		vi.mocked(grantApplicationManager).mockReturnValue(
+			new Promise(() => undefined),
+		);
+
+		const { rerender } = render(
+			<AgentConfigurationWorkflow agent={firstAgent} />,
+		);
+		fireEvent.change(screen.getByLabelText("应用 ID"), {
+			target: { value: "application-1" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "授权管理" }));
+		expect(screen.getByRole("button", { name: "授权管理" })).toHaveProperty(
+			"disabled",
+			true,
+		);
+
+		rerender(<AgentConfigurationWorkflow agent={secondAgent} />);
+
+		expect(screen.getByLabelText("应用 ID")).toHaveProperty("value", "");
+		expect(screen.getByRole("button", { name: "授权管理" })).toHaveProperty(
+			"disabled",
+			true,
 		);
 	});
 });

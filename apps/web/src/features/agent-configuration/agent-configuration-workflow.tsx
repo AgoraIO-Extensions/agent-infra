@@ -30,6 +30,7 @@ export function AgentConfigurationWorkflow({
 	);
 	const authorization = (
 		<AgentAuthorizationControls
+			key={agent.agentId}
 			agentId={agent.agentId}
 			enabled={isConfigurationOwner || isSystemAdministrator}
 		/>
