@@ -134,6 +134,7 @@ import type {
 	RuntimeExternalActionAuthorizer,
 	RuntimeModelDirectory,
 	RuntimeNativeMetadataReadContextV1,
+	RuntimeNativeSkillCommandV1,
 	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
 	RuntimeOriginalEvidenceRecoveryRef,
@@ -884,9 +885,37 @@ interface NativeResultFileContext {
 
 const maximumNativeResultFileBytes = 10 * 1024 * 1024;
 
-type CodexNativeInputItem =
+export type CodexNativeInputItem =
 	| { readonly type: "text"; readonly text: string }
-	| { readonly type: "local_image"; readonly path: string };
+	| { readonly type: "local_image"; readonly path: string }
+	| { readonly type: "skill"; readonly name: string; readonly path: string };
+
+/** Build the pinned Codex structured Skill input from the verified mount. */
+export function createCodexNativeSkillInputV1(
+	directory: RuntimeFilesystemSkillDirectoryV1,
+	command: {
+		readonly name: string;
+		readonly version: string;
+		readonly text: string;
+	},
+): readonly CodexNativeInputItem[] {
+	if (!directory.nativeRoot || !directory.nativeSkillPaths)
+		skillDirectoryInvalid();
+	const entry = directory
+		.findSkills()
+		.find(
+			(candidate) =>
+				candidate.name === command.name &&
+				candidate.version === command.version,
+		);
+	if (!entry) skillDirectoryInvalid();
+	const path = `${directory.nativeRoot}/${entry.targetPath}/SKILL.md`;
+	if (!directory.nativeSkillPaths().includes(path)) skillDirectoryInvalid();
+	return [
+		{ type: "text", text: command.text },
+		{ type: "skill", name: entry.name, path },
+	];
+}
 
 interface MaterializedCodexInput {
 	readonly items: readonly CodexNativeInputItem[];
@@ -5821,6 +5850,46 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return result;
 	}
 
+	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
+		const directory = this.skillDirectory;
+		if (!directory?.nativeRoot || !directory.nativeSkillPaths)
+			skillDirectoryInvalid();
+		const entry = directory
+			.findSkills()
+			.find(
+				(candidate) =>
+					candidate.name === command.capabilityName &&
+					candidate.version === command.capabilitySourceVersion,
+			);
+		if (!entry) skillDirectoryInvalid();
+		const expectedPath = `${directory.nativeRoot}/${entry.targetPath}/SKILL.md`;
+		const path = directory
+			.nativeSkillPaths()
+			.find((candidate) => candidate === expectedPath);
+		if (!path) skillDirectoryInvalid();
+		return {
+			schemaVersion: 1 as const,
+			kind: "submit-turn" as const,
+			operationId: command.operationId,
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			executionId: command.executionId,
+			turnId: command.turnId,
+			sessionGeneration: command.sessionGeneration,
+			nativeSessionRef: command.nativeSessionRef,
+			input: {
+				text: `$${command.capabilityName}${command.parameters.length > 0 ? ` ${command.parameters}` : ""}`,
+				attachments: [],
+			},
+			nativeSkill: {
+				capabilityId: command.capabilityId,
+				directoryRevision: command.directoryRevision,
+				name: command.capabilityName,
+				version: command.capabilitySourceVersion,
+			},
+		};
+	}
+
 	/** Read the authenticated V1 metadata projection without opening a Turn. */
 	async readNativeMetadataV1(
 		selector: NativeMetadataSelectorV1,
@@ -6234,6 +6303,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 	}
 
+	private async nativeSkillInput(
+		command: CodexSubmitTurnCommand,
+		text: string,
+	) {
+		if (!command.nativeSkill || !this.skillDirectory) skillDirectoryInvalid();
+		return {
+			items: createCodexNativeSkillInputV1(this.skillDirectory, {
+				name: command.nativeSkill.name,
+				version: command.nativeSkill.version,
+				text,
+			}),
+			cleanup: async () => {},
+		};
+	}
+
 	private async executePreparedSubmitTurn(
 		command: CodexSubmitTurnCommand,
 		text: string,
@@ -6254,8 +6338,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!prepared.created) {
 			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
-		const nativeInput =
-			command.input.attachments.length > 0
+		const nativeInput = command.nativeSkill
+			? await this.nativeSkillInput(command, text)
+			: command.input.attachments.length > 0
 				? await ensureInput()
 				: { items: [{ type: "text", text }], cleanup: async () => {} };
 		const nativeSelection = this.operationSelection(prepared.operation);

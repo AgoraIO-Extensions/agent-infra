@@ -65,6 +65,35 @@
           "minLength": 1,
           "type": "string"
         },
+        "nativeSkill": {
+          "additionalProperties": false,
+          "properties": {
+            "capabilityId": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "directoryRevision": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "name": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            },
+            "version": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "capabilityId",
+            "directoryRevision",
+            "name",
+            "version"
+          ],
+          "type": "object"
+        },
         "operationId": {
           "minLength": 1,
           "type": "string"
