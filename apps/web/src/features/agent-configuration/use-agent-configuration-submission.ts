@@ -3,8 +3,8 @@ import { useLayoutEffect, useRef } from "react";
 
 import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
 import {
+	checkAgentDefaultRelayKey,
 	loadAgentDefaultRelayKey,
-	previewAgentDefaultRelayKeyCandidates,
 	replaceAgentDefaultRelayKey,
 	updateAgentConfiguration,
 	upgradeAgentCustomImage,
@@ -116,16 +116,7 @@ export function useAgentConfigurationSubmission(agentId: string) {
 			: undefined,
 		replaceDefaultRelayKey: relayKeySubmission.mutate,
 		/** 返回候选模型，以及检查时看到的配置修订和 Key 版本（保存时作为 expected 值）。 */
-		previewDefaultRelayKeyCandidates: async (keyValue: string) => {
-			const state = await loadAgentDefaultRelayKey(agentId);
-			const candidates = await previewAgentDefaultRelayKeyCandidates(agentId, {
-				configurationRevision: state.configurationRevision,
-				keyValue,
-			});
-			return {
-				...candidates,
-				keyVersion: state.isSet ? state.keyVersion : null,
-			};
-		},
+		previewDefaultRelayKeyCandidates: (keyValue: string) =>
+			checkAgentDefaultRelayKey(agentId, keyValue),
 	};
 }

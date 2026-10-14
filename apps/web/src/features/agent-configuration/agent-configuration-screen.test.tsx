@@ -531,15 +531,26 @@ describe("agents whose models are managed by the default Relay Key (#2421)", () 
 		expect(screen.queryByText("选择允许的模型")).toBeNull();
 	});
 
-	it("never sends a Key replacement without a completed check and a valid selection", async () => {
+	it("blocks the save instead of dropping a typed Key that was never checked", () => {
 		const { onSave } = renderManaged();
-		// 只改了 Key 输入、没有检查：普通保存，不带 Key。
 		fireEvent.change(screen.getByPlaceholderText("输入新 Key"), {
 			target: { value: newKey },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
+		expect(onSave).not.toHaveBeenCalled();
+		expect(
+			screen.getByText(/已填写新 Key，但还没有可保存的模型选择/),
+		).toBeTruthy();
+		// 清空 Key 后可以正常保存其他修改。
+		fireEvent.change(screen.getByPlaceholderText("输入新 Key"), {
+			target: { value: "" },
+		});
+		expect(
+			screen.queryByText(/已填写新 Key，但还没有可保存的模型选择/),
+		).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
+		expect(onSave).toHaveBeenCalledTimes(1);
 		expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("defaultRelayKey");
-		expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("modelConfiguration");
 	});
 
 	it("drops the selection and the versions when the Key text changes after a check", async () => {
@@ -549,17 +560,81 @@ describe("agents whose models are managed by the default Relay Key (#2421)", () 
 			target: { value: `${newKey}-changed` },
 		});
 		expect(screen.queryByText("选择允许的模型")).toBeNull();
+		// 旧的检查结果不能套在新 Key 上：保存被拦下，而不是带着旧版本提交。
+		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
+		expect(onSave).not.toHaveBeenCalled();
+		fireEvent.change(screen.getByPlaceholderText("输入新 Key"), {
+			target: { value: "" },
+		});
 		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 		expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("defaultRelayKey");
 	});
 
-	it("blocks the request while no model or no reasoning level is selected", async () => {
+	it("blocks the save while no model or no reasoning level is selected", async () => {
 		const { onSave } = renderManaged();
 		await checkWithKey();
 		fireEvent.click(screen.getByRole("checkbox", { name: "relay · model-a" }));
 		expect(screen.getByText("至少选择一个模型。")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
-		expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("modelConfiguration");
+		expect(onSave).not.toHaveBeenCalled();
+		expect(
+			screen.getByText(/已填写新 Key，但还没有可保存的模型选择/),
+		).toBeTruthy();
+		// 再选回一个模型后恢复，提示随之消失并带 Key 保存。
+		fireEvent.click(screen.getByRole("checkbox", { name: "relay · model-a" }));
+		expect(
+			screen.queryByText(/已填写新 Key，但还没有可保存的模型选择/),
+		).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
+		expect(onSave.mock.calls[0]?.[0]).toMatchObject({
+			defaultRelayKey: newKey,
+		});
+	});
+
+	it("blocks the save while the Key is still being checked", async () => {
+		let resolve: (value: typeof candidates) => void = () => undefined;
+		const pending = new Promise<typeof candidates>((r) => {
+			resolve = r;
+		});
+		const { onSave } = renderManaged({
+			onPreviewDefaultRelayKeyCandidates: vi.fn().mockReturnValue(pending),
+		});
+		fireEvent.change(screen.getByPlaceholderText("输入新 Key"), {
+			target: { value: newKey },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
+		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
+		expect(onSave).not.toHaveBeenCalled();
+		resolve(candidates);
+		await screen.findByText("选择允许的模型");
+	});
+
+	it("ignores a late check response after the Key text changed", async () => {
+		let resolveFirst: (value: typeof candidates) => void = () => undefined;
+		const first = new Promise<typeof candidates>((r) => {
+			resolveFirst = r;
+		});
+		const { onSave } = renderManaged({
+			onPreviewDefaultRelayKeyCandidates: vi
+				.fn()
+				.mockReturnValueOnce(first)
+				.mockResolvedValue({ ...candidates, keyVersion: 9 }),
+		});
+		fireEvent.change(screen.getByPlaceholderText("输入新 Key"), {
+			target: { value: "SYNTHETIC_KEY_A_0000000001" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
+		// 检查 A 还没返回，用户已改成 B。
+		fireEvent.change(screen.getByPlaceholderText("输入新 Key"), {
+			target: { value: "SYNTHETIC_KEY_B_0000000001" },
+		});
+		resolveFirst(candidates);
+		await Promise.resolve();
+		await Promise.resolve();
+		// A 的候选和版本没有被套在 B 上。
+		expect(screen.queryByText("选择允许的模型")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
+		expect(onSave).not.toHaveBeenCalled();
 	});
 
 	it("confirms a successful Key-only replacement with the new version", () => {
