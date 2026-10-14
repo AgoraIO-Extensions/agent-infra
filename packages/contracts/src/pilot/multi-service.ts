@@ -74,6 +74,14 @@ const pvcSpec = z.strictObject({
 });
 const jobSpec = z.strictObject({
 	backoffLimit: z.number().int().min(0).max(5),
+	/** Platform-enforced upper bound for a release migration. */
+	activeDeadlineSeconds: z
+		.number()
+		.int()
+		.min(1)
+		.max(1_800)
+		.optional()
+		.default(1_800),
 	template: podTemplate.extend({
 		spec: podTemplate.shape.spec.extend({ restartPolicy: z.literal("Never") }),
 	}),

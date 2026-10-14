@@ -313,6 +313,22 @@ describe("production deployment admissions", () => {
 						ports: [{ name: "http", port: 8080, targetPort: 8080 }],
 					},
 				},
+				{
+					apiVersion: "batch/v1",
+					kind: "Job",
+					metadata: { name: "migrate" },
+					spec: {
+						backoffLimit: 1,
+						activeDeadlineSeconds: 300,
+						template: {
+							metadata: { labels: { app: "migration" } },
+							spec: {
+								restartPolicy: "Never",
+								containers: [{ name: "migrate", image }],
+							},
+						},
+					},
+				},
 			],
 		});
 		const result = await admissions.imageAdmission.admitImage({

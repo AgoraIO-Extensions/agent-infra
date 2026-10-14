@@ -1211,6 +1211,12 @@
                                   "spec": {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "activeDeadlineSeconds": {
+                                        "default": 1800,
+                                        "maximum": 1800,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
                                       "backoffLimit": {
                                         "maximum": 5,
                                         "minimum": 0,
@@ -3566,6 +3572,12 @@
                                   "spec": {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "activeDeadlineSeconds": {
+                                        "default": 1800,
+                                        "maximum": 1800,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
                                       "backoffLimit": {
                                         "maximum": 5,
                                         "minimum": 0,
@@ -5921,6 +5933,12 @@
                                   "spec": {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "activeDeadlineSeconds": {
+                                        "default": 1800,
+                                        "maximum": 1800,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
                                       "backoffLimit": {
                                         "maximum": 5,
                                         "minimum": 0,
@@ -8276,6 +8294,12 @@
                                   "spec": {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "activeDeadlineSeconds": {
+                                        "default": 1800,
+                                        "maximum": 1800,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
                                       "backoffLimit": {
                                         "maximum": 5,
                                         "minimum": 0,
@@ -10626,6 +10650,12 @@
                                   "spec": {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "activeDeadlineSeconds": {
+                                        "default": 1800,
+                                        "maximum": 1800,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
                                       "backoffLimit": {
                                         "maximum": 5,
                                         "minimum": 0,
@@ -12976,6 +13006,12 @@
                                   "spec": {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "activeDeadlineSeconds": {
+                                        "default": 1800,
+                                        "maximum": 1800,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
                                       "backoffLimit": {
                                         "maximum": 5,
                                         "minimum": 0,
@@ -15326,6 +15362,12 @@
                                   "spec": {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "activeDeadlineSeconds": {
+                                        "default": 1800,
+                                        "maximum": 1800,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
                                       "backoffLimit": {
                                         "maximum": 5,
                                         "minimum": 0,
@@ -17694,6 +17736,12 @@
                                   "spec": {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "activeDeadlineSeconds": {
+                                        "default": 1800,
+                                        "maximum": 1800,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
                                       "backoffLimit": {
                                         "maximum": 5,
                                         "minimum": 0,
@@ -20062,6 +20110,12 @@
                                   "spec": {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "activeDeadlineSeconds": {
+                                        "default": 1800,
+                                        "maximum": 1800,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
                                       "backoffLimit": {
                                         "maximum": 5,
                                         "minimum": 0,

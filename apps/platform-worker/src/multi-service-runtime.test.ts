@@ -1,6 +1,6 @@
 import { MultiServiceManifestDocumentV1Schema } from "@agent-infra/contracts/pilot";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
-import type { KubernetesObject } from "@kubernetes/client-node";
+import type { KubernetesObject, V1Job } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
@@ -75,7 +75,32 @@ const manifest = MultiServiceManifestDocumentV1Schema.parse({
 	],
 });
 
-function desired() {
+const migrationManifest = MultiServiceManifestDocumentV1Schema.parse({
+	...manifest,
+	resources: [
+		...manifest.resources,
+		{
+			apiVersion: "batch/v1",
+			kind: "Job",
+			metadata: { name: "migrate" },
+			spec: {
+				backoffLimit: 1,
+				activeDeadlineSeconds: 300,
+				template: {
+					metadata: { labels: { app: "migration" } },
+					spec: {
+						restartPolicy: "Never",
+						containers: [
+							{ name: "migrate", image: `sha256:${"d".repeat(64)}` },
+						],
+					},
+				},
+			},
+		},
+	],
+});
+
+function desired(multiService = manifest) {
 	return validateAgentWorkloadDesiredV1({
 		schemaVersion: 1,
 		requestId: "request-a",
@@ -152,7 +177,7 @@ function desired() {
 		secretRefs: [],
 		desiredState: "running",
 		replicas: 1,
-		multiService: manifest,
+		multiService,
 	});
 }
 
@@ -225,5 +250,77 @@ describe("multi-service runtime operations", () => {
 		expect(
 			fake.resources.has(`Ingress/${workloadResourceNameV1("agent-a")}`),
 		).toBe(true);
+	});
+
+	it("runs a migration Job before services and reuses its completed result", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				namespace: "agents",
+				routeHostSuffix: "example.test",
+				ingressClassName: "nginx",
+				tlsSecretName: "tls",
+				routeSelector: { "app.kubernetes.io/name": "ingress" },
+			},
+		});
+		const value = desired(migrationManifest);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		const identity = await operations.apply(value);
+		const job = [...fake.resources.values()].find(
+			(resource) => resource.kind === "Job",
+		) as V1Job | undefined;
+		expect(job?.spec?.activeDeadlineSeconds).toBe(300);
+		expect(job?.spec?.template?.spec?.restartPolicy).toBe("Never");
+		expect(
+			[...fake.resources.values()].some(
+				(resource) => resource.kind === "Deployment",
+			),
+		).toBe(false);
+		expect(await operations.observe(value, identity)).toBe("unreachable");
+		if (!job) throw new Error("migration Job fixture missing");
+		job.status = { succeeded: 1 };
+		expect(await operations.observe(value, identity)).toBe("drifted");
+		await operations.apply(value);
+		expect(
+			[...fake.resources.values()].some(
+				(resource) => resource.kind === "Deployment",
+			),
+		).toBe(true);
+		const completedJob = fake.resources.get(`Job/${job.metadata?.name}`);
+		await operations.apply(value);
+		expect(fake.resources.get(`Job/${job.metadata?.name}`)).toBe(completedJob);
+	});
+
+	it("fails closed when the migration Job reports failure", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				namespace: "agents",
+				routeHostSuffix: "example.test",
+				ingressClassName: "nginx",
+				tlsSecretName: "tls",
+				routeSelector: { "app.kubernetes.io/name": "ingress" },
+			},
+		});
+		const value = desired(migrationManifest);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(value);
+		const job = [...fake.resources.values()].find(
+			(resource) => resource.kind === "Job",
+		) as V1Job | undefined;
+		if (!job) throw new Error("migration Job fixture missing");
+		job.status = { failed: 1 };
+		expect(await operations.observe(value, { uid: "u", generation: 1 })).toBe(
+			"unhealthy",
+		);
+		expect(
+			[...fake.resources.values()].some(
+				(resource) => resource.kind === "Deployment",
+			),
+		).toBe(false);
 	});
 });
