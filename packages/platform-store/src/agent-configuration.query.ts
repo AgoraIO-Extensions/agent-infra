@@ -307,7 +307,7 @@ export class PostgresAgentConfigurationQueryV1 {
 		}
 	}
 
-	/** Legacy consumers remain V2-only until their own lifecycle accepts keyless records. */
+	/** 只返回 V2：没有生产调用方，新调用方必须用 readVersionedAuthority，否则带默认 Key 的 V3 Agent 会不可见（#2401、#2422）。 */
 	async readAuthority(
 		input: AgentConfigurationAuthorityQueryInputV1,
 	): Promise<AgentConfigurationAuthorityQueryResultV1> {

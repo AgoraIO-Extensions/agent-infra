@@ -21,7 +21,7 @@ import {
 	type WecomScopeV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { PostgresAgentManagementTransactionV1 } from "./agent-management.js";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";
 import {
@@ -183,7 +183,9 @@ export class PostgresWecomChannelV1
 		return row
 			? {
 					management,
-					configuration: decodeAgentConfigurationRecord(row.configuration),
+					configuration: decodeVersionedAgentConfigurationRecord(
+						row.configuration,
+					),
 					authorizationRevision: row.authorization_revision,
 				}
 			: null;
@@ -251,7 +253,9 @@ export class PostgresWecomChannelV1
 		return row
 			? {
 					management: row.management,
-					configuration: decodeAgentConfigurationRecord(row.configuration),
+					configuration: decodeVersionedAgentConfigurationRecord(
+						row.configuration,
+					),
 					authorizationRevision: row.authorization_revision,
 				}
 			: null;
@@ -464,7 +468,9 @@ export class PostgresWecomChannelV1
 				management.service_availability !== "ready"
 			)
 				return reject("denied");
-			const config = decodeAgentConfigurationRecord(agent.configuration);
+			const config = decodeVersionedAgentConfigurationRecord(
+				agent.configuration,
+			);
 			if (
 				config.channelRevision !== plan.authority.channelRevision ||
 				agent.authorization_revision !==

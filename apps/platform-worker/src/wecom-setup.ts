@@ -195,7 +195,7 @@ export function createWecomSetupWorkerV1(
 					readCurrentUser: (actorId) =>
 						resolveCurrentTaskUserV1(options.directory, actorId),
 					readAuthority: async (session, organizationIds) => {
-						const current = await query.readAuthority({
+						const current = await query.readVersionedAuthority({
 							agentId: session.agentId,
 							actorId: session.actorId,
 							organizationIds: [...organizationIds],

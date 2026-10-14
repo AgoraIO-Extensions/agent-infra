@@ -31,6 +31,7 @@ it.each([
 	"replacement-disconnected-wrong-secret",
 	"replacement-commit-unavailable",
 	"cross-agent-deployed-bot",
+	"keyless-success",
 ] as const)(
 	"manual onboarding %s uses Worker authentication and the existing configuration authority",
 	async (mode) => {
@@ -44,9 +45,12 @@ it.each([
 			"commit-unavailable",
 			"replacement-commit-unavailable",
 		].includes(mode);
+		// 标准 Agent 带默认 Relay Key 时配置是 V3：整条企微绑定链路必须与 V2 一致（#2422）。
+		const keyless = mode === "keyless-success";
 		const succeeds =
 			[
 				"success",
+				"keyless-success",
 				"probe-closed",
 				"concurrent-submit",
 				"replacement-success",
@@ -153,12 +157,24 @@ it.each([
 		});
 		try {
 			await migratePlatformDatabase(db);
-			const configuration = {
+			const base = {
 				...agentConfigurationConformanceRecordV1,
 				agentId: "agent",
 				revision: 1,
 				channels: [{ kind: "wecom_bot", bindingReference: "old-binding" }],
 			};
+			const configuration = keyless
+				? {
+						...base,
+						schemaVersion: 3,
+						modelConfiguration: {
+							...base.modelConfiguration,
+							options: base.modelConfiguration?.options.map(
+								({ credential: _credential, ...option }) => option,
+							),
+						},
+					}
+				: base;
 			await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values ('agent',1,'authorization')`;
 			await sql`insert into platform.agent_applications (id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,desired_state,service_availability,workload_revision,fence) values ('application','agent','owner','Fixture','Fixture','available','trace','request',now(),1,1,'running','ready',1,1)`;
 			await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values ('agent','owner',now())`;
@@ -257,7 +273,7 @@ it.each([
 						: "conflict",
 			);
 			expect(authFrames).toBe(mode === "stale-config" ? 0 : recovers ? 2 : 1);
-			const current = await query.readAuthority({
+			const current = await query.readVersionedAuthority({
 				agentId: "agent",
 				actorId: "owner",
 				organizationIds: [],
@@ -302,7 +318,16 @@ it.each([
 					(row) => row.action === "wecom.credentials_submitted",
 				),
 			).toHaveLength(1);
-			if (mode === "success") {
+			if (keyless) {
+				// V3 配置只推进修订并加入通道，仍是 V3 且不含任何凭证。
+				const [stored] =
+					await sql`select configuration from platform.agent_configuration_revisions where agent_id='agent' and revision=2`;
+				expect(stored?.configuration.schemaVersion).toBe(3);
+				expect(JSON.stringify(stored?.configuration)).not.toContain(
+					"credential",
+				);
+			}
+			if (mode === "success" || keyless) {
 				const admission = createWecomChannelAdmissionV1(
 					(reference) => api.resolveBinding(reference, async () => null),
 					api.resolveManagedBotAdmission,
