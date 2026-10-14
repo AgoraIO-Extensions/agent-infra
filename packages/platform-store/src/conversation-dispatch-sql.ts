@@ -489,7 +489,12 @@ function claimMatchesState(
 		executionFence === claim.executionDeliveryFence &&
 		modelConfigurationRevision === claim.modelConfigurationRevision &&
 		state.execution.model_option_id === claim.modelOptionId &&
-		state.execution.reasoning_level === claim.reasoningLevel
+		state.execution.reasoning_level === claim.reasoningLevel &&
+		(claim.nativeCapability === undefined ||
+			(claim.nativeCapability.agentId === claim.agentId &&
+				claim.nativeCapability.actorId === claim.actorId &&
+				claim.nativeCapability.channelId === claim.channelId &&
+				claim.nativeCapability.turnId === claim.turnId))
 	);
 }
 

@@ -21,6 +21,8 @@ export function exactPayload(
 	const input = plainObject(value);
 	if (!input) return undefined;
 	const isStop = operation === "conversation.turn.stop.v1";
+	const isNativeCapability =
+		operation === "conversation.native-capability.invoke.v1";
 	const selectionKeys = [
 		"modelConfigurationRevision",
 		"modelOptionId",
@@ -64,6 +66,56 @@ export function exactPayload(
 					...(metadataRecovery ? ["metadataRecovery"] : []),
 				],
 	);
+	if (isNativeCapability) {
+		const capabilityId = input.capabilityId;
+		const capabilityKind = input.capabilityKind;
+		const directoryRevision = input.directoryRevision;
+		const parameters = input.parameters;
+		const parametersDigest = input.parametersDigest;
+		if (
+			Object.keys(input).length !== 13 ||
+			input.schemaVersion !== 1 ||
+			!validText(input.conversationId) ||
+			!validText(input.executionId) ||
+			!validText(input.agentId) ||
+			!validText(input.actorId) ||
+			!validText(input.channelId) ||
+			!validText(input.turnId) ||
+			!validText(capabilityId) ||
+			(capabilityKind !== "command" && capabilityKind !== "skill") ||
+			!validText(directoryRevision) ||
+			!validText(parameters) ||
+			!validText(parametersDigest) ||
+			!/^[a-f0-9]{64}$/.test(String(directoryRevision)) ||
+			!/^[a-f0-9]{64}$/.test(String(parametersDigest))
+		)
+			return undefined;
+		const sessionGeneration = safeCounter(input.sessionGeneration, 1);
+		if (sessionGeneration === undefined) return undefined;
+		return {
+			schemaVersion: 1,
+			conversationId: input.conversationId as string,
+			executionId: input.executionId as string,
+			messageId: null,
+			turnId: null,
+			sessionGeneration,
+			stopRequestId: null,
+			modelConfigurationRevision: null,
+			modelOptionId: null,
+			reasoningLevel: null,
+			nativeCapability: {
+				agentId: input.agentId as string,
+				actorId: input.actorId as string,
+				channelId: input.channelId as string,
+				turnId: input.turnId as string,
+				capabilityId: capabilityId as string,
+				capabilityKind,
+				directoryRevision: directoryRevision as string,
+				parameters: parameters as string,
+				parametersDigest: parametersDigest as string,
+			},
+		};
+	}
 	if (
 		Object.keys(input).length !== expected.size ||
 		Object.keys(input).some((key) => !expected.has(key)) ||
