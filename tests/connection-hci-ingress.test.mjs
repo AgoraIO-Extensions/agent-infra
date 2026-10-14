@@ -3,6 +3,41 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { parseAllDocuments } from "yaml";
 
+const protocolExamples = [
+	"/mcp",
+	"/.well-known/oauth-authorization-server",
+	"/.well-known/oauth-protected-resource/mcp",
+	"/oauth/register",
+	"/oauth/token",
+	"/oauth/revoke",
+	"/oauth/callback",
+	"/oauth/github/callback",
+	"/api/v1/connection/identity/oauth/callback",
+	"/api/v1/connection/pat-bindings",
+	"/api/v1/connection/pat-bindings/binding-123/claim",
+	"/connection/internal/v1/action-calls",
+	"/connection/v1/consumer-instances/instance-123/session",
+	"/api/grants/grant-123/revoke",
+	"/api/connections/connection-123/disconnect",
+];
+
+const publicExamples = [
+	"/healthz",
+	"/connection",
+	"/connection/",
+	"/connection/index.html",
+	"/connection/agent",
+	"/connection/agent/",
+	"/connection/agent/index.html",
+	"/connection/agent/llms.txt",
+	"/connection/help",
+	"/connection/help/",
+	"/connection/help/user-manual.md",
+	"/connection/install.css",
+	"/llms.txt",
+	"/assets/index-test.js",
+];
+
 const documents = parseAllDocuments(
 	await readFile("deploy/connection-hci-ingress.yaml", "utf8"),
 ).map((document) => {
@@ -16,25 +51,30 @@ const routes = ingresses.flatMap((ingress) =>
 	),
 );
 
-// Model the configured Exact / element-wise Prefix / explicitly anchored Kong
-// regex precedence. Real Controller translation and HCI require live acceptance.
+// Match the paths emitted by the deployed KIC 3.5, including its unanchored
+// Exact conversion. Never grant tests stricter semantics than the real gateway.
+function kongPaths(route) {
+	if (route.pathType === "Exact") return [`~${route.path}$`];
+	if (route.pathType === "ImplementationSpecific")
+		return [`~${route.path.slice(2)}`];
+	return route.path === "/" ? ["/"] : [`${route.path}/`, `~${route.path}$`];
+}
+
 function routeFor(path) {
-	const matching = routes.filter((route) => {
-		if (route.pathType === "Exact") return path === route.path;
-		if (route.pathType === "ImplementationSpecific")
-			return new RegExp(route.path.slice(2)).test(path);
-		return (
-			route.path === "/" ||
-			path === route.path ||
-			path.startsWith(`${route.path}/`)
-		);
-	});
+	const matching = routes.filter((route) =>
+		kongPaths(route).some((pattern) =>
+			pattern.startsWith("~")
+				? new RegExp(pattern.slice(1)).test(path)
+				: path.startsWith(pattern),
+		),
+	);
 	const rank = (route) =>
-		route.pathType === "Exact"
-			? 2000
-			: route.pathType === "ImplementationSpecific"
-				? 1000
-				: route.path.length;
+		route.pathType === "Prefix"
+			? route.path.length
+			: 1000 +
+				Number(
+					route.ingress.metadata.annotations["konghq.com/regex-priority"] ?? 0,
+				);
 	matching.sort((a, b) => rank(b) - rank(a));
 	assert.ok(matching[0], `No route for ${path}`);
 	return matching[0].ingress;
@@ -119,45 +159,14 @@ test("browser LDAP login, consent and management still require entrance admissio
 });
 
 test("OAuth clients, Agents and callbacks need no HCI cookie or extra key", () => {
-	for (const path of [
-		"/mcp",
-		"/.well-known/oauth-authorization-server",
-		"/.well-known/oauth-protected-resource/mcp",
-		"/oauth/register",
-		"/oauth/token",
-		"/oauth/revoke",
-		"/oauth/callback",
-		"/oauth/github/callback",
-		"/api/v1/connection/identity/oauth/callback",
-		"/api/v1/connection/pat-bindings",
-		"/api/v1/connection/pat-bindings/binding-123/claim",
-		"/connection/internal/v1/action-calls",
-		"/connection/v1/consumer-instances/instance-123/session",
-		"/api/grants/grant-123/revoke",
-		"/api/connections/connection-123/disconnect",
-	]) {
+	for (const path of protocolExamples) {
 		assert.equal(protectedByHci(path), false, path);
 		assert.equal(routeFor(path).metadata.name, "connection-protocol", path);
 	}
 });
 
 test("public installation/help assets remain readable without browser admission", () => {
-	for (const path of [
-		"/healthz",
-		"/connection",
-		"/connection/",
-		"/connection/index.html",
-		"/connection/agent",
-		"/connection/agent/",
-		"/connection/agent/index.html",
-		"/connection/agent/llms.txt",
-		"/connection/help",
-		"/connection/help/",
-		"/connection/help/user-manual.md",
-		"/connection/install.css",
-		"/llms.txt",
-		"/assets/index-test.js",
-	]) {
+	for (const path of publicExamples) {
 		assert.equal(protectedByHci(path), false, path);
 		assert.equal(routeFor(path).metadata.name, "connection-public", path);
 	}
@@ -186,5 +195,15 @@ test("prefix collisions, extra segments and future APIs cannot broaden exception
 		"/healthz-admin",
 	]) {
 		assert.equal(protectedByHci(path), true, path);
+	}
+});
+
+test("every exception rejects extra prefixes, suffixes and nonliteral dots after KIC translation", () => {
+	for (const path of [...protocolExamples, ...publicExamples]) {
+		assert.equal(protectedByHci(`/prefix${path}`), true, path);
+		if (path.startsWith("/assets/")) continue;
+		assert.equal(protectedByHci(`${path}/extra`), true, path);
+		if (path.includes("."))
+			assert.equal(protectedByHci(path.replaceAll(".", "X")), true, path);
 	}
 });

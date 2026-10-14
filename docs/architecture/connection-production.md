@@ -35,6 +35,11 @@ HCI 完成公司入口准入，Connection 保留 LDAP 身份和目录，允许�
 源配置为 `deploy/connection-hci-ingress.yaml`，不是常规镜像 release 的一部分，尚需具名生产启用。
 不注入独立公司 OAuth client Secret，不启用管理员 identity probe，也不修改共享 Kong。
 
+先检查 Web 是否由 `connection-web-nginx` ConfigMap 的 `default.conf` subPath 覆盖镜像配置。
+若存在挂载，备份并比较该键与已合并版本的 `apps/connection-web/nginx.conf`；只同步已批准差异，
+保留其他配置。subPath 不会随 ConfigMap 自动刷新，须滚动重建本服务 Web Pod 后检查 Nginx
+配置和 Delegated 精确路径响应；仅更新镜像不能证明代理已生效。不要改共享网关配置。
+
 生产启用前先取得 HCI 对 `https://agent-connector.agoralab.co` 的 redirectUris 白名单确认，
 并核实 `agora-hciauth-v1` anonymous consumer 和当前 KIC/Kong 支持。动态路由使用 PCRE
 lookbehind，必须确认目标网关 `KONG_ROUTER_FLAVOR=traditional`；不同 router flavor 不得直接启用。公司 client 的 callback
@@ -63,7 +68,11 @@ node --test tests/connection-hci-ingress.test.mjs
   apply -f deploy/connection-hci-ingress.yaml -l connection.agora.io/hci-stage=activate
 ```
 
-Kubernetes 接受 YAML 不证明 Kong 已装载路由。先检查 Controller/网关生效配置，再实测 HLD
+Kubernetes 接受 YAML 不证明 Kong 已装载路由。KIC 3.5 的 `Exact` 翻译会丢失严格的字面
+匹配，因此例外全部显式使用 Kong 正则，不能改回 `Exact` 或在测试中补锚点。激活前逐个运行中
+网关副本回读本服务 host 的 route paths、regex priority、route/service plugin，逐字比较来源
+表达式；只输出本服务的路径和插件名，不输出其他服务配置、Header 或凭据。管理接口的 TLS
+必须使用该副本实际配置的证书验证，不能跳过校验。所有副本一致后再实测 HLD
 列出的交互及机器路径，保留原 HTTP 方法、Authorization 和不自动跟随重定向的结果。
 未登录浏览器应先进入 HCI，公司登录后仍以 LDAP 登录；账号不同与低权限用户必须分别验证。
 MCP/PAT、DCR、token/refresh/revoke、PAT binding 创建/领取和回调不能变成 HCI HTML/302。
