@@ -294,7 +294,7 @@ export async function requestSessionSandboxResume(
 		return false;
 	const updated = await transaction`
 		update platform.outbox_items
-		set payload = payload || ${transaction.json({
+		set payload = (payload - 'sandboxObservationRetry') || ${transaction.json({
 			schemaVersion: 1,
 			conversationId,
 			sessionGeneration: lifecycle.source.sandbox.generation,

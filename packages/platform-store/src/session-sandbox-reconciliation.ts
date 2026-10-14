@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
 	type AgentWorkloadDesiredV1,
@@ -49,6 +49,101 @@ interface AllocationRow {
 	status: string;
 	resource_policy: SessionSandboxVerifiedPolicyV1 | null;
 	resource_observation: SessionSandboxObservationV1 | null;
+}
+
+/**
+ * The retry state is carried by the durable reconcile outbox payload. It is
+ * deliberately separate from the lifecycle authority: management, upgrade
+ * and resume intents replace/clear this value so a new intent is immediately
+ * due and starts at its first retry.
+ */
+interface SessionSandboxObservationRetryStateV1 {
+	readonly fingerprint: string;
+	readonly unknownAttempts: number;
+}
+
+const sessionSandboxObservationRetryPayloadKey = "sandboxObservationRetry";
+
+function readSessionSandboxObservationRetryStateV1(
+	payload: unknown,
+): SessionSandboxObservationRetryStateV1 | null {
+	if (!payload || typeof payload !== "object" || Array.isArray(payload))
+		return null;
+	const value = (payload as Record<string, unknown>)[
+		sessionSandboxObservationRetryPayloadKey
+	];
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const fingerprint = (value as Record<string, unknown>).fingerprint;
+	const unknownAttempts = (value as Record<string, unknown>).unknownAttempts;
+	if (
+		typeof fingerprint !== "string" ||
+		!/^[a-f0-9]{64}$/.test(fingerprint) ||
+		typeof unknownAttempts !== "number" ||
+		!Number.isSafeInteger(unknownAttempts) ||
+		unknownAttempts < 0
+	)
+		return null;
+	return { fingerprint, unknownAttempts };
+}
+
+function stableResourceIdentityV1(
+	resource: SessionSandboxObservationV1["resources"][number],
+) {
+	return {
+		kind: resource.kind,
+		namespace: resource.namespace,
+		name: resource.name,
+		uid: resource.uid,
+		...(resource.controllerUid === undefined
+			? {}
+			: { controllerUid: resource.controllerUid }),
+	};
+}
+
+/**
+ * Hash only evidence that can change the reconciliation decision. Kubernetes
+ * resourceVersion and delete-attempt IDs are intentionally excluded: they are
+ * per-read/per-call details, not progress evidence for retry pacing.
+ */
+export function sessionSandboxObservationFingerprintV1(input: {
+	readonly allocationStatus: SessionSandboxObservationV1["status"];
+	readonly observation: SessionSandboxObservationV1;
+	readonly stopReceipt: unknown;
+}): string {
+	const resources = input.observation.resources
+		.map(stableResourceIdentityV1)
+		.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+	const deletionProgress = (input.observation.deletionProgress ?? [])
+		.map((entry) => ({
+			kind: entry.resource.kind,
+			namespace: entry.resource.namespace,
+			name: entry.resource.name,
+			uid: entry.resource.uid,
+			state: entry.state,
+			deleteAttempted: entry.deleteAttempted,
+			deleteCallResult: entry.deleteCallResult,
+			...(entry.absence ? { absence: entry.absence } : {}),
+		}))
+		.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+	return createHash("sha256")
+		.update(
+			JSON.stringify({
+				allocationStatus: input.allocationStatus,
+				observationStatus: input.observation.status,
+				resources,
+				deletionProgress,
+				stopReceipt: input.stopReceipt !== null,
+			}),
+		)
+		.digest("hex");
+}
+
+/** Delay for the next unchanged `unknown` observation attempt. */
+export function sessionSandboxUnknownRetryDelayMs(attempt: number): number {
+	if (!Number.isSafeInteger(attempt) || attempt < 1)
+		throw new TypeError("Sandbox retry attempt is invalid");
+	if (attempt <= 5) return 1_000;
+	return Math.min(60_000, 1_000 * 2 ** (attempt - 5));
 }
 
 /** Reuses current Platform authority and the original governance -> Agent -> outbox lock order. */
@@ -121,7 +216,8 @@ async function lockedContext(
 					([key]) =>
 						key !== "lifecycle" &&
 						key !== "deployment" &&
-						key !== "modelProjection",
+						key !== "modelProjection" &&
+						key !== sessionSandboxObservationRetryPayloadKey,
 				),
 			),
 			{
@@ -601,6 +697,33 @@ export async function recordSandboxObservation(
 		!!context.lifecycle &&
 		shouldContinueSessionSandboxPreparationV1(context.lifecycle);
 	const stopReceipt = "stopReceipt" in decision ? decision.stopReceipt : null;
+	const fingerprint = sessionSandboxObservationFingerprintV1({
+		allocationStatus: decision.status,
+		// Fingerprint the receiver's fresh evidence. The core decision may retain
+		// the previous observation on an identity mismatch to stay fail-closed;
+		// that must not hide a real evidence change from retry pacing/audit.
+		observation,
+		stopReceipt: stopReceipt ?? observation.sourceStop ?? null,
+	});
+	const previousRetry = readSessionSandboxObservationRetryStateV1(
+		context.outbox.payload,
+	);
+	const fingerprintChanged = previousRetry?.fingerprint !== fingerprint;
+	const unknownAttempts = unknown
+		? fingerprintChanged
+			? 1
+			: Math.min(
+					Number.MAX_SAFE_INTEGER,
+					(previousRetry?.unknownAttempts ?? 0) + 1,
+				)
+		: 0;
+	const retryState: SessionSandboxObservationRetryStateV1 = {
+		fingerprint,
+		unknownAttempts,
+	};
+	const retryDelayMs = unknown
+		? sessionSandboxUnknownRetryDelayMs(unknownAttempts)
+		: 1_000;
 	let nextLifecycle: SessionSandboxLifecycleV1 | undefined;
 	if (context.lifecycle && context.purpose === "drain") {
 		nextLifecycle = {
@@ -620,9 +743,12 @@ export async function recordSandboxObservation(
 		};
 	}
 	const recorded = await transaction`update platform.outbox_items
-		set payload = payload || ${transaction.json((nextLifecycle ? { lifecycle: nextLifecycle } : {}) as unknown as Parameters<typeof transaction.json>[0])},
+		set payload = payload || ${transaction.json({
+			...(nextLifecycle ? { lifecycle: nextLifecycle } : {}),
+			[sessionSandboxObservationRetryPayloadKey]: retryState,
+		} as unknown as Parameters<typeof transaction.json>[0])},
 		status = ${decision.finished && !continuePreparation ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
-		available_at = clock_timestamp() + interval '1 second', updated_at = clock_timestamp()
+		available_at = clock_timestamp() + (${retryDelayMs}::bigint * interval '1 millisecond'), updated_at = clock_timestamp()
 		where id = ${claim.itemId} and status = 'processing'
 			and lease_owner = ${claim.leaseOwner}
 			and delivery_fence = ${claim.deliveryFence}
@@ -631,10 +757,17 @@ export async function recordSandboxObservation(
 	await transaction`update platform.session_sandbox_allocations set status = ${decision.status},
 		resource_observation = ${transaction.json(decision.observation as unknown as Parameters<typeof transaction.json>[0])},
 		updated_at = clock_timestamp() where sandbox_id = ${claim.sandbox.sandboxId}`;
-	await transaction`insert into platform.conversation_audit_events
+	if (fingerprintChanged)
+		await transaction`insert into platform.conversation_audit_events
 		(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)
 		values (${randomUUID()}, ${context.sandbox.sessionId}, null, ${context.sandbox.agentId}, ${context.sandbox.principal.id},
 			'conversation.sandbox.observed', ${context.outbox.trace_id}, ${context.outbox.request_id}, clock_timestamp(),
-			${transaction.json({ sandboxId: context.sandbox.sandboxId, sessionGeneration: context.sandbox.generation, resourceFence: claim.resourceFence, status: decision.status })})`;
+			${transaction.json({
+				sandboxId: context.sandbox.sandboxId,
+				sessionGeneration: context.sandbox.generation,
+				resourceFence: claim.resourceFence,
+				status: decision.status,
+				evidenceFingerprint: fingerprint,
+			})})`;
 	return unknown ? "unknown" : "committed";
 }

@@ -545,6 +545,133 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("backs off unchanged unknown observations and deduplicates their audit", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+		});
+		const [workload] =
+			await client`select state from platform.workload_reconciliations where agent_id = 'agent-dispatch'`;
+		if (!workload) throw new Error("Expected verified Workload fixture");
+		await client`insert into platform.agent_owners (agent_id, owner_id, created_at)
+			values ('agent-dispatch', 'actor-dispatch', now())`;
+		await client`update platform.session_sandbox_allocations
+			set resource_policy = jsonb_set(resource_policy, '{namespace}', to_jsonb(${workloadTestPolicy.namespace}::text))
+			where conversation_id = ${work.conversationId}`;
+		await client`update platform.session_sandbox_allocations
+			set resource_observation = jsonb_set(resource_observation, '{resources}',
+				coalesce((select jsonb_agg(jsonb_set(resource, '{namespace}', to_jsonb(${workloadTestPolicy.namespace}::text)))
+					from jsonb_array_elements(resource_observation->'resources') as resource), '[]'::jsonb))
+			where conversation_id = ${work.conversationId}`;
+		const itemId = `conversation:sandbox:${work.conversationId}:1`;
+		await client`insert into platform.outbox_items
+			(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+			 status, available_at, created_at, updated_at)
+			values (${itemId}, 'conversation', ${work.conversationId},
+			 'conversation.sandbox.reconcile.v1', ${client.json({
+					schemaVersion: 1,
+					conversationId: work.conversationId,
+					sessionGeneration: 1,
+					deployment: workload.state.verified.deployment,
+					modelProjection: null,
+				})}, 'trace-sandbox-retry', 'request-sandbox-retry',
+			 'pending', now(), now(), now())`;
+		await client`update platform.outbox_items
+			set status = 'pending', available_at = now(), lease_owner = null, lease_expires_at = null
+			where id = ${itemId}`;
+		const store = new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			sandboxPolicy: {
+				namespace: workloadTestPolicy.namespace,
+				resourceConfigurationHash:
+					workloadResourceConfigurationHashV1(workloadTestPolicy),
+			},
+			userDirectory: {
+				async resolveUser(userId) {
+					return {
+						schemaVersion: 1,
+						userId,
+						accountStatus: "active",
+						organizationIds: [],
+						authorizationRevision: "sandbox-retry",
+					};
+				},
+			},
+		});
+		try {
+			let claim = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "sandbox-retry-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (!claim) throw new Error("Expected Sandbox claim");
+			const resources = claim.previousObservation?.resources ?? [];
+			expect(resources).toHaveLength(6);
+			const delays: number[] = [];
+			for (let attempt = 1; attempt <= 11; attempt += 1) {
+				if (attempt > 1) {
+					await client`update platform.outbox_items set available_at = now() where id = ${itemId}`;
+					claim = (await store.claimSandboxReconciliation({
+						schemaVersion: 1,
+						itemId,
+						workerId: "sandbox-retry-worker",
+						leaseDurationMs: 30_000,
+					})) as NonNullable<typeof claim>;
+				}
+				expect(
+					await store.recordSandboxObservation({
+						claim,
+						observation: { status: "unknown", resources: [] },
+					}),
+				).toBe("unknown");
+				const [retry] = await client<{ delay_ms: number }[]>`
+					select extract(epoch from (available_at - clock_timestamp())) * 1000 as delay_ms
+					from platform.outbox_items where id = ${itemId}`;
+				delays.push(Number(retry?.delay_ms));
+				const [state] = await client<{ unknown_attempts: number }[]>`
+					select (payload->'sandboxObservationRetry'->>'unknownAttempts')::int as unknown_attempts
+					from platform.outbox_items where id = ${itemId}`;
+				expect(state?.unknown_attempts).toBe(attempt);
+			}
+			expect(
+				delays.slice(0, 5).every((delay) => delay > 750 && delay < 1_500),
+			).toBe(true);
+			expect(delays[5]).toBeGreaterThan(1_750);
+			expect(delays[9]).toBeGreaterThan(31_750);
+			expect(delays[10]).toBeGreaterThan(59_000);
+			expect(
+				await client`select count(*)::int as count from platform.conversation_audit_events where action = 'conversation.sandbox.observed'`,
+			).toEqual([{ count: 1 }]);
+
+			await client`update platform.outbox_items set available_at = now() where id = ${itemId}`;
+			const changed = (await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "sandbox-retry-worker",
+				leaseDurationMs: 30_000,
+			})) as NonNullable<typeof claim>;
+			expect(
+				await store.recordSandboxObservation({
+					claim: changed,
+					observation: { status: "observed", resources },
+				}),
+			).toBe("committed");
+			const [reset] = await client<
+				{ unknown_attempts: number; delay_ms: number }[]
+			>`
+				select (payload->'sandboxObservationRetry'->>'unknownAttempts')::int as unknown_attempts,
+					extract(epoch from (available_at - clock_timestamp())) * 1000 as delay_ms
+				from platform.outbox_items where id = ${itemId}`;
+			expect(reset?.unknown_attempts).toBe(0);
+			expect(Number(reset?.delay_ms)).toBeGreaterThan(750);
+			expect(
+				await client`select count(*)::int as count from platform.conversation_audit_events where action = 'conversation.sandbox.observed'`,
+			).toEqual([{ count: 2 }]);
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("persists an expired stop as unknown and keeps the stop open until a terminal response", async () => {
 		const work = await seed("conversation.turn.stop.v1", {
 			executionStatus: "processing",
