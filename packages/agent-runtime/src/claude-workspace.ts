@@ -21,6 +21,7 @@ export type ClaudeToolOperationCallbacks = Readonly<{
 		filePath: string,
 		signal: AbortSignal,
 	) => Promise<string | undefined>;
+	cleanupReadOnlyFile?: (filePath: string) => Promise<void>;
 }>;
 
 /** Fixed core tools; Bash, subagents, MCP, network tools and arbitrary file roots remain unavailable. */
@@ -32,6 +33,14 @@ export function claudeWorkspaceTools(
 	readOnlyRoots: readonly string[] = [],
 ): Pick<Options, "tools" | "hooks" | "canUseTool" | "settings"> {
 	const approvedReadOnlyPaths = new Map<string, string>();
+	const cleanupReadOnlyPaths = new Map<string, string>();
+	const cleanupToolReadOnlyFile = async (toolUseId: unknown) => {
+		if (typeof toolUseId !== "string") return;
+		const filePath = cleanupReadOnlyPaths.get(toolUseId);
+		if (!filePath) return;
+		cleanupReadOnlyPaths.delete(toolUseId);
+		await onToolOperation?.cleanupReadOnlyFile?.(filePath);
+	};
 	const resolveInput = async (
 		name: string,
 		input: unknown,
@@ -64,8 +73,10 @@ export function claudeWorkspaceTools(
 				signal,
 			);
 			if (!resolved) return undefined;
-			if (toolUseId !== undefined)
+			if (toolUseId !== undefined) {
 				approvedReadOnlyPaths.set(resolved, toolUseId);
+				cleanupReadOnlyPaths.set(toolUseId, resolved);
+			}
 			return { ...(input as Record<string, unknown>), file_path: resolved };
 		}
 		if (
@@ -96,8 +107,11 @@ export function claudeWorkspaceTools(
 				options.signal,
 				options.toolUseID,
 			);
-			return updatedInput !== undefined &&
-				(!onToolOperation?.authorize || (await onToolOperation.authorize()))
+			const authorized =
+				updatedInput !== undefined &&
+				(!onToolOperation?.authorize || (await onToolOperation.authorize()));
+			if (!authorized) await cleanupToolReadOnlyFile(options.toolUseID);
+			return authorized
 				? { behavior: "allow", updatedInput }
 				: { behavior: "deny", message: "Tool access is unavailable" };
 		},
@@ -106,16 +120,22 @@ export function claudeWorkspaceTools(
 				{
 					hooks: [
 						async (input) => {
+							const toolUseId =
+								"tool_use_id" in input && typeof input.tool_use_id === "string"
+									? input.tool_use_id
+									: undefined;
+							const updatedInput =
+								input.hook_event_name === "PreToolUse"
+									? await resolveInput(
+											input.tool_name,
+											input.tool_input,
+											new AbortController().signal,
+											toolUseId,
+										)
+									: undefined;
 							const allowed =
 								input.hook_event_name === "PreToolUse" &&
-								(await resolveInput(
-									input.tool_name,
-									input.tool_input,
-									new AbortController().signal,
-									typeof input.tool_use_id === "string"
-										? input.tool_use_id
-										: undefined,
-								)) !== undefined &&
+								updatedInput !== undefined &&
 								(!onToolOperation?.authorize ||
 									(await onToolOperation.authorize()));
 							if (
@@ -129,13 +149,18 @@ export function claudeWorkspaceTools(
 										: "unknown-tool-use",
 									input.tool_name,
 								);
-							return {
+							const output = {
 								hookSpecificOutput: {
-									hookEventName: "PreToolUse",
-									permissionDecision: allowed ? "allow" : "deny",
+									hookEventName: "PreToolUse" as const,
+									permissionDecision: allowed
+										? ("allow" as const)
+										: ("deny" as const),
 									permissionDecisionReason: "Conversation workspace policy",
+									...(allowed && updatedInput ? { updatedInput } : {}),
 								},
 							};
+							if (!allowed) await cleanupToolReadOnlyFile(toolUseId);
+							return output;
 						},
 					],
 				},
@@ -185,6 +210,9 @@ export function claudeWorkspaceTools(
 												input.tool_response as ClaudeFileWriteOutput,
 											);
 										}
+										await cleanupToolReadOnlyFile(
+											"tool_use_id" in input ? input.tool_use_id : undefined,
+										);
 										return {};
 									},
 								],
@@ -212,6 +240,9 @@ export function claudeWorkspaceTools(
 											toolUseId,
 											input.tool_name,
 											input.duration_ms,
+										);
+										await cleanupToolReadOnlyFile(
+											"tool_use_id" in input ? input.tool_use_id : undefined,
 										);
 										return {};
 									},
