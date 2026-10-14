@@ -1,4 +1,8 @@
 import {
+	createPlatformApiNativeMetadataCurrentClientV1,
+	type PlatformApiNativeMetadataCurrentClientOptionsV1,
+} from "./runtime-native-metadata-current-client.js";
+import {
 	createWorkerRuntimeNativeMetadataGatewayAppV1,
 	createWorkerRuntimeNativeMetadataGatewayV1,
 	type WorkerRuntimeNativeMetadataBindingResolverV1,
@@ -10,7 +14,10 @@ import type { PlatformWorkerNativeMetadataGatewayServerOptionsV1 } from "./runti
 
 export interface PlatformWorkerNativeMetadataGatewayPortsV1 {
 	readonly binding: WorkerRuntimeNativeMetadataBindingResolverV1;
-	readonly current: WorkerRuntimeNativeMetadataCurrentCheckerV1;
+	/** Explicit test/deployment seam; takes precedence over platformApiCurrent. */
+	readonly current?: WorkerRuntimeNativeMetadataCurrentCheckerV1;
+	/** Optional production Platform API current-confirmation input. */
+	readonly platformApiCurrent?: PlatformApiNativeMetadataCurrentClientOptionsV1;
 	readonly proofIssuer: WorkerRuntimeNativeMetadataProofIssuerV1;
 	readonly transport: WorkerRuntimeNativeMetadataTransportResolverV1;
 	readonly port?: number;
@@ -22,7 +29,17 @@ export function createPlatformNativeMetadataGatewayAssemblyV1(options: {
 }): PlatformWorkerNativeMetadataGatewayServerOptionsV1 {
 	if (!/^[\x21-\x7e]{1,8192}$/.test(options.serviceToken))
 		throw new TypeError("Platform Worker service token is invalid");
-	const gateway = createWorkerRuntimeNativeMetadataGatewayV1(options.ports);
+	const current =
+		options.ports.current ??
+		(options.ports.platformApiCurrent
+			? createPlatformApiNativeMetadataCurrentClientV1(
+					options.ports.platformApiCurrent,
+				)
+			: { check: async () => ({ outcome: "unavailable" as const }) });
+	const gateway = createWorkerRuntimeNativeMetadataGatewayV1({
+		...options.ports,
+		current,
+	});
 	return {
 		app: createWorkerRuntimeNativeMetadataGatewayAppV1({
 			serviceToken: options.serviceToken,
