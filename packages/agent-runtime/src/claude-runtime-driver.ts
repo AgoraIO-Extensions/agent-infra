@@ -836,6 +836,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				for (const turn of file.read().turns) {
 					if (
 						!terminal(turn.status) &&
+						!turn.unknownHold &&
 						turn.configVersion === this.options.configVersion &&
 						turn.modelResponse?.state === "failed"
 					) {
