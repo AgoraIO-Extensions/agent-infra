@@ -290,9 +290,7 @@ describe("Conversation Worker discovery and shutdown", () => {
 			"00-1234567890abcdef1234567890abcdef-1234567890abcdef-01";
 		const span: ObservabilitySpan = {
 			traceParent,
-			run<T>(work: () => T): T {
-				return work();
-			},
+			run: vi.fn(<T>(work: () => T): T => work()),
 			end: vi.fn(),
 		};
 		const startSpan = vi.fn(() => span);
