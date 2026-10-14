@@ -1239,6 +1239,20 @@ describe("PostgreSQL application revision transaction", () => {
 			expect(await snapshot()).toEqual(before);
 		});
 
+		it("refuses a revision from someone who is not the applicant and never encrypts the Key", async () => {
+			await seedKeyed();
+			const before = await snapshot();
+			await expect(
+				keyedUseCase(openAdapter()).revise(keyedCommand("keyed-intruder"), {
+					...actor(),
+					userId: "intruder_01",
+				}),
+			).rejects.toMatchObject({ code: "not_authorized" });
+			expect(await snapshot()).toEqual(before);
+			expect(await keyVersions()).toEqual([1]);
+			expect(encrypted).toHaveLength(0);
+		});
+
 		it("rolls the Key version back with every other write when the transaction fails late", async () => {
 			await seedKeyed();
 			const before = await snapshot();

@@ -3099,6 +3099,21 @@ describe("Agent configuration replaces the model set together with the default K
 		},
 	);
 
+	it("refuses a keyed update from someone who is not an Owner before the Key is encrypted", async () => {
+		const { transaction, useCase, encrypted } = create();
+		await expect(
+			useCase.update(keyedCommand() as never, {
+				...actor,
+				actorId: "intruder_01",
+			}),
+		).rejects.toMatchObject({ code: "not_authorized" });
+		expect(transaction.snapshot()).toMatchObject({
+			commitCount: 0,
+			keyVersion: 1,
+		});
+		expect(encrypted).toHaveLength(0);
+	});
+
 	it("replays the same idempotent request without encrypting the Key again", async () => {
 		const { transaction, useCase, encrypted } = create();
 		const first = await useCase.update(keyedCommand() as never, actor);
