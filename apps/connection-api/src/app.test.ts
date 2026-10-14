@@ -1176,6 +1176,14 @@ describe("Connection API", () => {
 			cookie: "connection_session=test",
 			origin: "https://connection.example",
 		};
+		for (const path of [
+			"/api/v1/connection/admin/administrators",
+			"/api/v1/connection/admin/shared-connections",
+		]) {
+			const denied = await app.request(path, { headers });
+			expect([403, 404]).toContain(denied.status);
+		}
+
 		const search = await app.request(
 			"/api/v1/connection/admin/employee-candidates?query=alice",
 			{ headers },
@@ -4119,13 +4127,105 @@ describe("Connection API", () => {
 		}
 	});
 
+	it("keeps registration throttles as protocol JSON with Retry-After and no company redirect", async () => {
+		const service = {
+			registerClient: async () => {
+				throw new OAuthProtocolError(
+					"temporarily_unavailable",
+					"Too many registrations",
+					429,
+					17,
+				);
+			},
+		} as unknown as ConnectionOAuthService;
+		const app = createConnectionOAuthApp({
+			service,
+			issuer: "https://connection.example/",
+			resource: "https://connection.example/mcp",
+			dynamicClientRegistration: { clientName: "Codex" },
+		});
+		const response = await app.request("/oauth/register", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				application_type: "native",
+				client_name: "Codex",
+				grant_types: ["authorization_code", "refresh_token"],
+				redirect_uris: ["http://127.0.0.1:58245/callback/test-nonce"],
+				response_types: ["code"],
+				scope: "mcp",
+				token_endpoint_auth_method: "none",
+			}),
+		});
+		expect(response.status).toBe(429);
+		expect(response.headers.get("retry-after")).toBe("17");
+		expect(response.headers.get("location")).toBeNull();
+		expect(await response.json()).toMatchObject({
+			error: "temporarily_unavailable",
+		});
+	});
+
+	it("preserves the approved loopback form redirect on a throttled OAuth login page", async () => {
+		const issuer = "https://connection.example";
+		const app = createConnectionOAuthApp({
+			issuer,
+			resource: `${issuer}/mcp`,
+			service: {
+				approveAuthorization: async () => {
+					throw new OAuthProtocolError(
+						"temporarily_unavailable",
+						"throttled",
+						429,
+						17,
+					);
+				},
+			} as unknown as ConnectionOAuthService,
+		});
+		const response = await app.request(`${issuer}/oauth/login`, {
+			method: "POST",
+			headers: {
+				origin: issuer,
+				"content-type": "application/x-www-form-urlencoded",
+			},
+			body: new URLSearchParams({
+				username: "synthetic-user",
+				password: "synthetic-password",
+				request_id: "synthetic-request",
+			}).toString(),
+		});
+		expect(response.status).toBe(429);
+		expect(response.headers.get("retry-after")).toBe("17");
+		expect(response.headers.get("content-security-policy")).toContain(
+			"form-action 'self' http://127.0.0.1:*",
+		);
+		expect(response.headers.get("content-security-policy")).not.toContain(
+			"script-src",
+		);
+		expect(await response.text()).toContain("返回客户端重新发起");
+	});
+
 	it("publishes the versioned Connection Browser OpenAPI contract", async () => {
 		const app = createConnectionOAuthApp({
 			issuer: "https://connection.example/",
 			resource: "https://connection.example/mcp",
-			service: {} as ConnectionOAuthService,
+			service: {
+				getBrowserAccount: async (token: string) => {
+					if (token !== "conn_session_schema")
+						throw new OAuthProtocolError("invalid_token", "denied", 401);
+					return {
+						principalId: "schema-user",
+						displayName: "Schema User",
+						email: null,
+					};
+				},
+			} as unknown as ConnectionOAuthService,
 		});
-		const response = await app.request("/api/v1/connection/openapi.json");
+		expect((await app.request("/api/v1/connection/openapi.json")).status).toBe(
+			401,
+		);
+		const response = await app.request("/api/v1/connection/openapi.json", {
+			headers: { cookie: "connection_session=conn_session_schema" },
+		});
 		expect(response.status).toBe(200);
 		expect(response.headers.get("cache-control")).toBe("no-store");
 		const document = (await response.json()) as {

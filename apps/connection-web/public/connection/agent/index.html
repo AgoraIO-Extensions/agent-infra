@@ -140,6 +140,7 @@ Authorization: Bearer &lt;当前用户与实例的 Connection PAT&gt;</code></pr
         <h2 id="delegated-title">平台级 Delegated 接入</h2>
         <p>以上逐用户 PAT Binding 仍属于 Direct MCP。需要以注册 workload 代表当前 Principal 调用的 Agent 平台，应与 Connection 管理员对接 HTTP/OpenAPI Delegated 契约、workload 身份和短期委托上下文；Agent Platform 还需绑定稳定 Agent Actor。不能用自报身份或共享 PAT 替代该契约，也不能从 MCP URL 推测 Delegated 接口。</p>
       </section>
+    <p>遇到 429 请按 Retry-After 等待后重试，不要循环提交。完整管理 API 文档需 Connection 登录；MCP 发现仍使用公开 metadata，不要求公司入口 Cookie。</p>
     </main>
 
     <footer>
