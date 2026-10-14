@@ -366,6 +366,107 @@ describe("production deployment admissions", () => {
 		expect(f.fetch).toHaveBeenCalled();
 	});
 
+	it("admits one StatefulSet service with a PVC in the multi-service contract", async () => {
+		const f = fixture("self-managed");
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			imageRepository: "registry.example.test/agents/codex",
+		});
+		const document = JSON.parse(
+			JSON.stringify({
+				schemaVersion: 1,
+				entryServiceName: "web",
+				resources: [
+					{
+						apiVersion: "apps/v1",
+						kind: "Deployment",
+						metadata: { name: "web" },
+						spec: {
+							replicas: 1,
+							selector: { matchLabels: { app: "web" } },
+							template: {
+								metadata: { labels: { app: "web" } },
+								spec: {
+									containers: [
+										{
+											name: "web",
+											image: f.imageDigest,
+											ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+										},
+									],
+								},
+							},
+						},
+					},
+					{
+						apiVersion: "apps/v1",
+						kind: "StatefulSet",
+						metadata: { name: "db" },
+						spec: {
+							replicas: 1,
+							serviceName: "db",
+							selector: { matchLabels: { app: "db" } },
+							template: {
+								metadata: { labels: { app: "db" } },
+								spec: {
+									containers: [
+										{
+											name: "db",
+											image: f.imageDigest,
+											ports: [{ name: "db", port: 8080, targetPort: 8080 }],
+										},
+									],
+								},
+							},
+						},
+					},
+					{
+						apiVersion: "v1",
+						kind: "Service",
+						metadata: {
+							name: "web",
+							annotations: { "agent-infra.agora.io/entry": "true" },
+						},
+						spec: {
+							type: "ClusterIP",
+							selector: { app: "web" },
+							ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+						},
+					},
+					{
+						apiVersion: "v1",
+						kind: "Service",
+						metadata: { name: "db" },
+						spec: {
+							type: "ClusterIP",
+							selector: { app: "db" },
+							ports: [{ name: "db", port: 8080, targetPort: 8080 }],
+						},
+					},
+					{
+						apiVersion: "v1",
+						kind: "PersistentVolumeClaim",
+						metadata: { name: "db-data" },
+						spec: {
+							accessModes: ["ReadWriteOnce"],
+							resources: { requests: { storage: "100Gi" } },
+						},
+					},
+				],
+			}),
+		);
+		const result = await admissions.imageAdmission.admitImage({
+			...request,
+			requested: {
+				kind: "custom",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+				manifest: JSON.stringify(document),
+			},
+		});
+		expect(result).toMatchObject({ status: "admitted" });
+	});
+
 	it("rejects images outside the repository the Worker can actually deploy", async () => {
 		const { input, fetch } = fixture();
 		const admissions = createDeploymentAdmissionsV1({

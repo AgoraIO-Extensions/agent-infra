@@ -1479,8 +1479,9 @@ export function createWorkloadRuntimeV1(
 		async apply(state, stopped, input) {
 			if (stopped && "manifest" in state.candidate.configuration.source) {
 				const workload = desired(state);
-				if (isMultiService(workload)) await multiService.closeRoute(workload);
-				return null;
+				if (!isMultiService(workload)) return null;
+				await multiService.closeRoute(workload);
+				return multiService.scaleDown(workload);
 			}
 			if (stopped)
 				return createAdapter().scaleDownAgent(
@@ -1762,7 +1763,10 @@ export function createWorkloadRuntimeV1(
 			if ("manifest" in state.candidate.configuration.source) {
 				const workload = desired(state);
 				if (!isMultiService(workload)) return false;
-				resourcesRemoved = await multiService.cleanupAgent(workload);
+				resourcesRemoved = await multiService.cleanupAgent(
+					workload,
+					deleteNewVolume,
+				);
 				return resourcesRemoved;
 			}
 			if (state.identity) {

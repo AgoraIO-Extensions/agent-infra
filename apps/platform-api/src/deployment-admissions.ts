@@ -289,29 +289,55 @@ function validMultiServiceTopology(
 	const deployments = manifest.resources.filter(
 		(resource) => resource.kind === "Deployment",
 	);
+	const statefulSets = manifest.resources.filter(
+		(resource) => resource.kind === "StatefulSet",
+	);
 	const services = manifest.resources.filter(
 		(resource) => resource.kind === "Service",
 	);
 	const jobs = manifest.resources.filter((resource) => resource.kind === "Job");
+	const pvcs = manifest.resources.filter(
+		(resource) => resource.kind === "PersistentVolumeClaim",
+	);
+	const workloads = [...deployments, ...statefulSets];
+	const statefulExtension =
+		statefulSets.length === 1 &&
+		pvcs.length === 1 &&
+		deployments.length === 1 &&
+		statefulSets.every(
+			(resource) =>
+				resource.spec.template.spec.restartPolicy === undefined ||
+				resource.spec.template.spec.restartPolicy === "Always",
+		) &&
+		statefulSets.every((resource) =>
+			services.some(
+				(service) => service.metadata.name === resource.spec.serviceName,
+			),
+		);
+	const tracerTopology =
+		deployments.length === 2 && statefulSets.length === 0 && pvcs.length === 0;
 	if (
-		manifest.resources.length < 4 ||
-		deployments.length !== 2 ||
+		(!tracerTopology && !statefulExtension) ||
+		manifest.resources.length < (statefulExtension ? 5 : 4) ||
+		workloads.length !== 2 ||
 		services.length !== 2 ||
 		jobs.length > 1 ||
 		manifest.resources.some(
 			(resource) =>
 				resource.kind !== "Deployment" &&
+				resource.kind !== "StatefulSet" &&
 				resource.kind !== "Service" &&
+				resource.kind !== "PersistentVolumeClaim" &&
 				resource.kind !== "Job" &&
 				resource.kind !== "ConfigMap",
 		)
 	)
 		return false;
 	return services.every((service) => {
-		const target = deployments.find((deployment) =>
+		const target = workloads.find((workload) =>
 			Object.entries(service.spec.selector).every(
 				([key, expected]) =>
-					deployment.spec.template.metadata.labels[key] === expected,
+					workload.spec.template.metadata.labels[key] === expected,
 			),
 		);
 		if (!target) return false;
@@ -597,13 +623,14 @@ export function createDeploymentAdmissionsV1(
 						!validMultiServiceTopology(multiServiceManifest)
 					)
 						return denied;
-					const deployments = multiServiceManifest.resources.filter(
-						(resource) => resource.kind === "Deployment",
-					);
 					const services = multiServiceManifest.resources.filter(
 						(resource) => resource.kind === "Service",
 					);
-					if (deployments.length !== 2 || services.length !== 2) return denied;
+					const workloads = multiServiceManifest.resources.filter(
+						(resource) =>
+							resource.kind === "Deployment" || resource.kind === "StatefulSet",
+					);
+					if (workloads.length !== 2 || services.length !== 2) return denied;
 					const digests = multiServiceImageDigests(multiServiceManifest);
 					if (digests.length < 1) return denied;
 					const canonicalManifest = JSON.stringify(multiServiceManifest);
