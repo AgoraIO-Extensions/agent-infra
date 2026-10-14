@@ -27,6 +27,21 @@ const container = z.strictObject({
 	name: kubernetesName,
 	image: digest,
 	ports: z.array(port).max(32).optional(),
+	volumeMounts: z
+		.array(
+			z.strictObject({
+				name: kubernetesName,
+				mountPath: z
+					.string()
+					.regex(
+						/^\/(?!\/)(?!.*\/\/)(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9._~/-]+$/,
+					)
+					.max(256),
+				readOnly: z.literal(true).optional(),
+			}),
+		)
+		.max(32)
+		.optional(),
 	env: z
 		.array(
 			z.strictObject({
@@ -41,6 +56,15 @@ const podTemplate = z.strictObject({
 	metadata: z.strictObject({ labels: z.record(kubernetesName, z.string()) }),
 	spec: z.strictObject({
 		containers: z.array(container).min(1).max(32),
+		volumes: z
+			.array(
+				z.strictObject({
+					name: kubernetesName,
+					configMap: z.strictObject({ name: kubernetesName }),
+				}),
+			)
+			.max(32)
+			.optional(),
 		restartPolicy: z.enum(["Always", "Never"]).optional(),
 	}),
 });
@@ -64,6 +88,62 @@ const serviceSpec = z.strictObject({
 const configMapSpec = z.strictObject({
 	data: z.record(z.string().min(1).max(256), z.string().max(65_536)),
 });
+
+/** ConfigMap data is intentionally bounded and is never a Secret transport. */
+export const MultiServiceConfigMapMaxBytesV1 = 65_536;
+
+const secretLikeConfigMapKey =
+	/(?:^|[_.-])(?:pass(?:word)?|secret|token|api[_-]?key|private[_-]?key|credential|oauth|access[_-]?key)(?:$|[_.-])/i;
+const secretLikeConfigMapValue =
+	/(?:-----BEGIN [^-]*PRIVATE KEY-----|^(?:bearer|basic)\s+\S+|^(?:sk|gh[pousr]_|xox[baprs]-)[A-Za-z0-9._-]{8,}$)/i;
+
+export function isSecretLikeConfigMapEntryV1(key: string, value: string) {
+	return (
+		secretLikeConfigMapKey.test(key) ||
+		secretLikeConfigMapValue.test(value.trim())
+	);
+}
+
+function validateConfigMapData(
+	data: Record<string, string>,
+	context: z.RefinementCtx,
+) {
+	let bytes = 0;
+	for (const [key, value] of Object.entries(data)) {
+		const keyBytes = new TextEncoder().encode(key).byteLength;
+		const valueBytes = new TextEncoder().encode(value).byteLength;
+		bytes += keyBytes + valueBytes;
+		if (
+			!String.prototype.isWellFormed.call(value) ||
+			value.includes("\0") ||
+			isSecretLikeConfigMapEntryV1(key, value)
+		)
+			context.addIssue({
+				code: "custom",
+				path: ["data", key],
+				message: isSecretLikeConfigMapEntryV1(key, value)
+					? "ConfigMap data must not contain Secret-like keys or values"
+					: "ConfigMap data must be valid UTF-8 without NUL bytes",
+			});
+	}
+	if (bytes > MultiServiceConfigMapMaxBytesV1)
+		context.addIssue({
+			code: "custom",
+			path: ["data"],
+			message: `ConfigMap data exceeds ${MultiServiceConfigMapMaxBytesV1} bytes`,
+		});
+}
+
+const configMapResource = z
+	.strictObject({
+		apiVersion: z.literal("v1"),
+		kind: z.literal("ConfigMap"),
+		metadata,
+		spec: configMapSpec,
+	})
+	.superRefine((resource, context) =>
+		validateConfigMapData(resource.spec.data, context),
+	);
 const pvcSpec = z.strictObject({
 	accessModes: z.array(z.literal("ReadWriteOnce")).length(1),
 	resources: z.strictObject({
@@ -98,12 +178,7 @@ export const MultiServiceResourceV1Schema = z.discriminatedUnion("kind", [
 		metadata,
 		spec: serviceSpec,
 	}),
-	z.strictObject({
-		apiVersion: z.literal("v1"),
-		kind: z.literal("ConfigMap"),
-		metadata,
-		spec: configMapSpec,
-	}),
+	configMapResource,
 	z.strictObject({
 		apiVersion: z.literal("v1"),
 		kind: z.literal("PersistentVolumeClaim"),
@@ -156,6 +231,75 @@ export const MultiServiceManifestDocumentV1Schema = z
 				path: ["entryServiceName"],
 				message: "entryServiceName must match the annotated Service",
 			});
+
+		const configMaps = new Set(
+			value.resources
+				.filter((resource) => resource.kind === "ConfigMap")
+				.map((resource) => resource.metadata.name),
+		);
+		for (const [index, resource] of value.resources.entries()) {
+			if (
+				resource.kind !== "Deployment" &&
+				resource.kind !== "StatefulSet" &&
+				resource.kind !== "Job"
+			)
+				continue;
+			const volumeNames = new Set<string>();
+			for (const volume of resource.spec.template.spec.volumes ?? []) {
+				if (volumeNames.has(volume.name))
+					context.addIssue({
+						code: "custom",
+						path: ["resources", index, "spec", "template", "spec", "volumes"],
+						message: "volume names must be unique",
+					});
+				volumeNames.add(volume.name);
+				if (!configMaps.has(volume.configMap.name))
+					context.addIssue({
+						code: "custom",
+						path: ["resources", index, "spec", "template", "spec", "volumes"],
+						message: "volume ConfigMap must be declared in the manifest",
+					});
+			}
+			for (const [
+				containerIndex,
+				container,
+			] of resource.spec.template.spec.containers.entries()) {
+				const mountNames = new Set<string>();
+				for (const mount of container.volumeMounts ?? []) {
+					if (mountNames.has(mount.name))
+						context.addIssue({
+							code: "custom",
+							path: [
+								"resources",
+								index,
+								"spec",
+								"template",
+								"spec",
+								"containers",
+								containerIndex,
+								"volumeMounts",
+							],
+							message: "volume mount names must be unique per container",
+						});
+					mountNames.add(mount.name);
+					if (!volumeNames.has(mount.name))
+						context.addIssue({
+							code: "custom",
+							path: [
+								"resources",
+								index,
+								"spec",
+								"template",
+								"spec",
+								"containers",
+								containerIndex,
+								"volumeMounts",
+							],
+							message: "volume mount must reference a declared volume",
+						});
+				}
+			}
+		}
 	});
 
 export const MultiServiceAgentSourceV1Schema = z.strictObject({
