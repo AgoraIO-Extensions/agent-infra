@@ -162,6 +162,7 @@ export {
 export * from "./task-api-audit.js";
 export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";
+export * from "./trace-context.js";
 export * from "./wecom-channel.js";
 export * from "./wecom-setup.js";
 export * from "./wecom-setup-activation.js";

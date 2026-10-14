@@ -26,6 +26,7 @@ import {
 	parseTaskPrincipalV1,
 	type TaskPrincipalV1,
 } from "./task-authorization.js";
+import { isTraceParentV1 } from "./trace-context.js";
 
 export function parseConversationMetadataRecoveryV1(
 	value: unknown,
@@ -178,6 +179,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"taskWaitOrder",
 			"stopConfirmationTimedOut",
 			"nativeCapability",
+			"traceParent",
 		],
 	);
 	if (
@@ -191,6 +193,9 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 				) ||
 				input.runtimeCursor === null))
 	)
+		return unavailable();
+	// 持久工作项上的 W3C traceparent（#2412）；格式不对的值不能当作可信 claim。
+	if (input.traceParent !== undefined && !isTraceParentV1(input.traceParent))
 		return unavailable();
 	const parsedOperation = operation(input.operation);
 	const parsedNativeCapability =
@@ -372,6 +377,9 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		...(generationIsolation ? { generationIsolation } : {}),
 		requestId: text(input.requestId),
 		traceId: text(input.traceId),
+		...(input.traceParent === undefined
+			? {}
+			: { traceParent: input.traceParent as string }),
 		agentId: text(input.agentId),
 		actorId: text(input.actorId),
 		channelId: text(input.channelId),

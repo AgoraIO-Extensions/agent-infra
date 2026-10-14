@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { parseClaim } from "./conversation-dispatch-input.js";
 import { parseRuntimeStatusResponse } from "./conversation-dispatch-runtime.js";
 import { ConversationRuntimeHostError } from "./conversation-dispatch-types.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
@@ -1229,6 +1230,21 @@ describe("Conversation Worker dispatch", () => {
 		expect(await dispatch(h.useCase)).toMatchObject({ outcome: "retry" });
 		expect(runtimeHost.sideEffectCount()).toBe(0);
 		expect(h.store.current.executionStatus).toBe("submitted");
+	});
+
+	it("dispatches a claim whose durable work item carries a W3C traceparent (#2473)", async () => {
+		const traceParent =
+			"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.setEvents([runtimeEvent(1, "running"), runtimeEvent(2)]);
+		const h = setup({
+			store: new MemoryDispatchStore(claim({ traceParent })),
+			runtimeHost,
+		});
+		await expect(dispatch(h.useCase)).resolves.toMatchObject({
+			outcome: "accepted",
+		});
+		expect(runtimeHost.sideEffectCount()).toBe(1);
 	});
 
 	it("acknowledges only committed cursors and resumes after a lost acknowledgement without repeating execution", async () => {
@@ -2799,5 +2815,37 @@ describe("terminal Runtime delivery recovery", () => {
 		expect(h.events.persisted).toHaveLength(2);
 		expect(h.events.persisted[1]?.operationMetadataOnly).toBeUndefined();
 		expect(runtimeHost.sideEffectCount()).toBe(1);
+	});
+});
+
+describe("claim traceparent (#2473)", () => {
+	const traceParent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+
+	it("keeps a valid traceparent and does not invent one", () => {
+		expect(parseClaim(claim({ traceParent })).traceParent).toBe(traceParent);
+		expect(parseClaim(claim())).not.toHaveProperty("traceParent");
+	});
+
+	it.each([
+		["not a string", 7],
+		["null", null],
+		["empty", ""],
+		["too short", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331"],
+		["wrong version", `01${traceParent.slice(2)}`],
+		["zero trace id", `00-${"0".repeat(32)}-b7ad6b7169203331-01`],
+		[
+			"zero span id",
+			`00-0af7651916cd43dd8448eb211c80319c-${"0".repeat(16)}-01`,
+		],
+	])("rejects a malformed traceparent (%s)", (_name, value) => {
+		expect(() => parseClaim({ ...claim(), traceParent: value })).toThrow(
+			expect.objectContaining({ code: "unavailable" }),
+		);
+	});
+
+	it("still rejects unknown claim keys", () => {
+		expect(() =>
+			parseClaim({ ...claim({ traceParent }), unexpected: 1 }),
+		).toThrow();
 	});
 });
