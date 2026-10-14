@@ -51,7 +51,8 @@ const mocks = vi.hoisted(() => ({
 	redirect: vi.fn(),
 }));
 
-vi.mock("./api", () => ({
+vi.mock("./api", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./api")>()),
 	connectionApi: {
 		getSession: mocks.getSession,
 		logout: mocks.logout,
@@ -83,7 +84,8 @@ vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => mocks.navigate,
 }));
 
-import { ConsoleShell } from "./shell";
+import { ConnectionApiError } from "./api";
+import { ConsoleShell, PageError } from "./shell";
 
 afterEach(() => {
 	cleanup();
@@ -374,4 +376,25 @@ describe("Connection 控制台 Session", () => {
 			to: "/connection/login",
 		});
 	});
+});
+
+it("入口过期的操作错误提供明确恢复链接且不重新提交", () => {
+	window.history.replaceState({}, "", "/connection/tokens");
+	render(
+		<PageError
+			error={
+				new ConnectionApiError({
+					code: "UNAUTHENTICATED",
+					messageKey: "connection.error.company_oauth_required",
+					retryable: false,
+					traceId: "test",
+				})
+			}
+		/>,
+	);
+	const link = screen.getByRole("link", { name: "公司 OAuth 登录" });
+	expect(link.getAttribute("href")).toBe(
+		"/api/v1/connection/identity/oauth/entry?returnTo=%2Fconnection%2Ftokens",
+	);
+	expect(mocks.getSession).not.toHaveBeenCalled();
 });

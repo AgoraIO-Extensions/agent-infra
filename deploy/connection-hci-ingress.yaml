@@ -1,3 +1,5 @@
+# Retired HCI experiment: do not use this template to enable direct company OAuth.
+# Retained for the already-reviewed protocol path/rollback history; see production docs.
 # Complete scoped Shanghai route set. This file is not applied by image releases.
 # Apply protocol/public routes and plugin before updating the existing root Ingress.
 # All exceptions use PCRE fixed-length lookbehind to anchor the leading slash.

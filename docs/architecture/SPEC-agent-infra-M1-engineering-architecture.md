@@ -365,13 +365,14 @@ Connection 的受监督公司 OAuth 身份诊断独立于正式登录，复用�
 
 #### Connection 公司入口准入
 
-Connection 保留 9.1 的 LDAP 登录、目录和 PostgreSQL 会话。公司 OAuth 由 HCI Auth 网关完成，
-仅保护批准的交互路由；不在 Connection 内增加公司 token exchange 或账号迁移。
+Connection 保留 9.1 的 LDAP 登录、目录和 PostgreSQL 会话。公司 OAuth 由
+`connection-identity` 的固定 confidential client 适配器完成交换，`connection-core` 校验并签发
+有界入口证明；不接入 HCI、不迁移账号。
 网关和应用身份边界、路由清单与上线门禁统一见
-[HLD](HLD-connection-M1.md#公司-oauthhci-入口与-ldap-身份分离)。
-应用不使用 HCI Header/JWT 的邮箱、权限或显示名解析 Principal，也不校验入口账号与 LDAP
+[HLD](HLD-connection-M1.md#直接公司-oauth-入口)。
+应用不使用公司 OAuth profile 或入口证明解析 Principal，也不校验入口账号与 LDAP
 账号是否一致。既有 Browser API 的 session/CSRF/RBAC、MCP 的 OAuth/PAT 和服务接口的原鉴权
-继续生效；HCI 不是 Connection 身份签发方。Agent Platform 的身份接入不在本次范围内。
+继续生效；公司 OAuth 准入凭据不签发 Connection 业务身份。Agent Platform 的身份接入不在本次范围内。
 
 ### 9.2 权限顺序
 

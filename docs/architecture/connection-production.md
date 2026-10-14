@@ -28,7 +28,44 @@ Runtime、SQLite、global alias 和 Runtime token 不进入部署拓扑。[#301]
 批准 `https://agent-connector.gz3.agoralab.co` 的 GZ3 control plane 使用完整 Connection runtime；
 该批准不关闭 HLD 中面向其他环境、客户端或广泛生产支持的门禁。
 
+## 直接公司 OAuth 入口
+
+当前方案为公司 OAuth 直接入口准入，再使用原 LDAP 业务身份；不再启用 HCI 的根插件。
+正式契约见 [HLD](HLD-connection-M1.md#直接公司-oauth-入口)。源代码与真实启用分开验收：
+管理员 probe 不是普通入口，已有 callback 也不能证明 token/userInfo 或 LDAP 链路通过。
+
+启用前须完成 callback 原始 access/error/Referer 及采集链路的日志保护，并确认真实 userInfo
+字段与员工域契约。当前入口校验接受 `email` 或 `notifyemail` 中的公司邮箱（`agora.io`、
+`shengwang.cn`），拒绝已报告的禁用/错误或缺失字段；这只是待真实验收的严格接收契约，
+不能以 fixture 或邮箱相同证明身份关联。字段不匹配须经 Identity Owner 说明后调整，不能
+为通过测试接受任意 JSON/邮箱或跳过校验。所有业务授权仍由 LDAP 完成。
+
+经上述验收后，由现有 `connection-config` Secret 注入 `CONNECTION_COMPANY_OAUTH_CLIENT_ID`
+与 `CONNECTION_COMPANY_OAUTH_CLIENT_SECRET`，并在 API 通过具名 secretKeyRef 成对引用。
+Secret 值不进入源码、Helm values、命令参数或聊天。此 pair 与 `CONNECTION_IDENTITY_OAUTH_*`
+管理员探测配置独立，不启用 probe，也不新增 HCI Consumer；缺少整个 pair 时仍是原 LDAP
+阶段，部分配置拒绝启动。不能据镜像部署或 LDAP 可用宣称公司入口已启用。
+
+按正式上海镜像流程先部署带入口 check/start/callback 的 API，再检查未配置时
+`GET /api/v1/connection/identity/oauth/entry/check` 返回 204；确认新 API 已 Ready 后，才同步
+Web Nginx ConfigMap 中已合并的 auth_request 配置并重建 Web。不要先更新 Nginx 指向旧 API
+不存在的 check。配置有效入口 client 后，无入口 Cookie 的 check 应为 401；交互页面进入
+公司 authorize，callback GET 仅展示同源确认，点击后服务端交换并建立 30 分钟入口证明，
+随后仍按 LDAP 登录或使用既有有效会话。两次账号可以不同，不改变任何连接或授权归属。
+
+check 子请求及过期恢复不转发请求体。入口失效时 API 为 JSON 401；浏览器通过明确恢复链接
+重新完成公司登录，密码、PAT 确认和写请求不自动重放。Cookie 使用 Secure/HttpOnly/host-only，
+公司入口证明不是 Connection session 或 MCP token。入口及 LDAP 有效期独立，不把退出
+Connection 描述为已退出公司 SSO。
+
+生产验收分别记录：真实 token/userInfo/入口证明、LDAP 身份/角色与已有账号、不同账号、
+state/跨浏览器/重放/开放跳转负向，以及不带入口 Cookie 的 MCP、metadata、DCR、token/
+refresh/revoke、PAT Binding 后端与 Delegated。整个过程不触发 bootstrap、换库或扩大 Provider
+权限。日志或真实契约未通过时不注入 client，不启用；运行失败不自动重试旧 code。
+
 ## 可选公司 OAuth/HCI 入口保护
+
+此 HCI 方案已取消，以下保留为历史部署与回退说明，不作为本轮启用步骤。
 
 该入口按 [HLD](HLD-connection-M1.md#公司-oauthhci-入口与-ldap-身份分离) 使用双重登录：
 HCI 完成公司入口准入，Connection 保留 LDAP 身份和目录，允许账号不同；不迁移旧连接和授权。

@@ -8,6 +8,10 @@ Agent Infrastructure 定义 Agent Consumer 使用 Connection 访问外部 Provid
 Connection 从受信身份源识别的员工或受管理服务主体。
 _Avoid_: 用户名、邮箱账号
 
+**公司入口准入**:
+通过公司身份认证后获得的交互入口访问资格；不决定 Connection 的业务 Principal、管理员角色或 Consumer 授权。
+_Avoid_: Connection 登录、Connection Grant
+
 **Consumer**:
 使用 Connection 的稳定客户端或服务产品，例如 RehoboamAI 或 Codex。
 _Avoid_: Agent、调用方名称

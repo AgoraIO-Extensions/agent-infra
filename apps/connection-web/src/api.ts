@@ -229,6 +229,8 @@ function parseClientInput<T>(
 }
 
 const errorMessages: Record<string, string> = {
+	"connection.error.company_oauth_required":
+		"公司 OAuth 入口会话已过期，请重新完成公司登录",
 	"connection.error.authentication_failed": "账号或密码错误",
 	"connection.error.authentication_required": "请重新登录 Connection",
 	"connection.error.idempotency_conflict":
@@ -253,6 +255,10 @@ const errorMessages: Record<string, string> = {
 	"connection.error.result_uncertain": "请求结果暂时无法确认，请勿重复操作",
 	"connection.error.server_error": "Connection 服务暂时不可用",
 };
+
+export function companyOAuthEntryUrl(returnTo = "/connection/connections") {
+	return `/api/v1/connection/identity/oauth/entry?${new URLSearchParams({ returnTo })}`;
+}
 
 function errorMessage(messageKey: string) {
 	return errorMessages[messageKey] ?? "请求无法完成";

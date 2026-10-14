@@ -2313,8 +2313,8 @@ metadata 和注册生命周期，不能开放任意公共 client。
 
 ### 公司 OAuth 身份探测
 
-公司入口采用 [HCI 与 LDAP 分离方案](#公司-oauthhci-入口与-ldap-身份分离)。
-本节管理员探测独立保留，不是正式登录入口，也不因启用 HCI 而自动启用。
+公司入口采用 [直接公司 OAuth 入口](#直接公司-oauth-入口)，与 LDAP 业务身份分离。
+本节管理员探测独立保留，不是正式登录入口，也不因启用公司 OAuth 入口而自动启用。
 
 已登录的 Connection 管理员可在 `/api/v1/connection/identity/oauth/probe` 发起公司 OAuth
 诊断，固定使用公司 confidential client、`scope=read` 与
@@ -2356,7 +2356,55 @@ query 必须同时限定该 Principal，跨 Principal token ID 与不存在 toke
 forwarded host 或任意 Origin allowlist。
 `/oauth/revoke` 同时识别 OAuth token 和 Connection PAT hash，并只执行幂等撤销。
 
+### 直接公司 OAuth 入口
+
+[#2256](https://github.com/AgoraIO-Extensions/agent-infra/issues/2256) 选择公司 OAuth 直接接入，
+不再启用下文 HCI 方案。LDAP 仍是唯一业务身份，原 Principal、role、连接、Grant、PAT、目录
+及消费者协议保留。入口账号允许与 LDAP 不同，不作为业务审计主体；不迁移或合并账号。
+决策见 [ADR 0004](../adr/0004-direct-company-oauth-entrance.md)。
+
+公司 OAuth 端点固定为 `https://oauth.agoralab.co/oauth/authorize`、`/oauth/token` 和
+`/api/v2/userInfo`。服务端以 Basic confidential client 交换 code，复用受控 transport、十秒总
+期限、64 KiB 响应上限、禁止 redirect 与自动重试。callback 使用已注册的
+`/api/v1/connection/identity/oauth/callback`，不新增本机回调。client 成对配置与现有管理员
+probe 分开；本轮生产不配置 probe。字段契约和真实公司身份读取须在激活前实测确认，测试
+fixture 不是员工身份或可用性的证据。
+
+入口 state 使用独立用途 HMAC、随机 nonce、五分钟期限及受控站内 returnTo；独立 Lax、
+Secure、HttpOnly state Cookie 绑定浏览器。跨站 GET callback 只返回 no-store/no-referrer 的
+同源确认页，不交换 code；同源 POST 验证 Origin、state/Cookie/期限及用途，并经 PostgreSQL
+Browser Command 原子取得单次执行权后才交换。失败或响应未知不重试旧 code，不持久化 code、
+token 或 userInfo。普通入口与管理员 probe 的 state 必须互相拒绝。
+
+公司 API 的成功员工 profile 只作入口准入校验：严格校验公司邮箱字段、批准域及错误响应，
+不把邮箱当 Principal、不继承 permissions。具体字段与员工域在真实验收前确认，缺失或不符
+拒绝签发。通过后只签发 realm/用途隔离、三十分钟有效的签名 opaque 入口 Cookie，不含邮箱、
+subject、角色或上游 token。此证明不是业务浏览器会话，不支持 MCP 或 PAT 调用。LDAP 仍每次
+按原目录和会话规则认证/授权；入口证明与 LDAP 会话分别过期，退出 LDAP 不表示退出公司 SSO。
+
+Nginx 对业务 HTML 与浏览器 authorize/确认页使用内置 auth_request，只向 API 查询入口证明；
+API 本身独立保护 Browser API 与浏览器登录提交，不能靠绕过 Web 直接访问。公开安装、帮助、schema、
+静态资源、healthz 及原机器协议保持开放路由并执行原有认证。入口证明缺失时，浏览器 GET
+进入公司授权；API 返回原有 JSON 401，密码或写 POST 不自动转发、重放。受控 returnTo 只
+恢复站内 GET 页面或原 /oauth/authorize 参数；不允许任意 origin、回调或跳到机器接口。
+
+直接入口的机器豁免与下文路由矩阵一致，但不使用 HCI Cookie、Header、Consumer 或插件。
+管理员 probe 仍要求原 LDAP 管理员会话，不建立普通入口身份。入口 check/start/callback 是
+具名协议端点，不允许用调用方声称的 identity/role 创建入口证明。所有权限以 LDAP 为准。
+
+激活门禁继续适用：callback 原始 access/error/Referer 与采集链路不得记录授权码或 token，
+合成标记和非敏感 control 必须分别验证；未通过前不注入 client Secret、不运行真实交换。
+无依据证明 form_post/fragment 支持时仍按 query callback 处理，不能靠设置 response_mode
+绕过日志门禁。日志保护涉及共享网关时须由对应维护者评审，不擅改共享 Kong。
+
+完整代码、迁移（若有）、当前 head CI/review、真实公司 OAuth→LDAP、账号不一致、权限负向
+及无入口 Cookie 的 MCP/PAT/PKCE/DCR/refresh/Binding/Delegated 均须单独验收。分阶段发布
+只有未配置入口 client 的既有 LDAP 路径，不能称为公司 OAuth 已启用；生产激活须按正式上海
+流程，保留数据库/CA/凭据与授权。入口失败不自动重试 code 或向模型索取密码。
+
 ### 公司 OAuth/HCI 入口与 LDAP 身份分离
+
+本节为已取消的 HCI 方案记录；当前决策以 [直接公司 OAuth 入口](#直接公司-oauth-入口) 为准。
 
 [#2256](https://github.com/AgoraIO-Extensions/agent-infra/issues/2256) 采用双重登录：公司 OAuth
 由 HCI Auth 完成入口准入，LDAP 继续认证 Connection 的业务身份。允许两次登录账号不同；

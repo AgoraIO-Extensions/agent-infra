@@ -32,6 +32,7 @@ import {
 } from "@agent-infra/connection-contracts";
 import {
 	type CompanyIdentityProbe,
+	type CompanyOAuthEntry,
 	type ConnectionAccessApprovalService,
 	type ConnectionApplicationService,
 	ConnectionError,
@@ -46,6 +47,7 @@ import type {
 } from "@agent-infra/connection-store";
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { createCompanyOAuthEntryApp } from "./company-oauth-entry-routes";
 import { createIdentityProbeApp } from "./identity-probe-routes";
 
 function providerCredentialValue(body: ProviderCredentialRequest) {
@@ -63,6 +65,7 @@ function providerCredentialValue(body: ProviderCredentialRequest) {
 }
 
 export type ConnectionOAuthServerOptions = {
+	companyEntry?: CompanyOAuthEntry;
 	identityProbe?: CompanyIdentityProbe;
 	browserCommands?: {
 		execute: <T>(
@@ -317,7 +320,7 @@ export function secureHtmlHeaders(
 	context.header("x-frame-options", "DENY");
 }
 
-function browserApiError(
+export function browserApiError(
 	context: Context,
 	input: {
 		code: string;
@@ -520,6 +523,10 @@ export function createConnectionOAuthApp(
 ) {
 	const app = new Hono();
 	const cookieOptions = browserCookieOptions(options.issuer);
+	app.route(
+		"/",
+		createCompanyOAuthEntryApp(options.companyEntry, options.issuer),
+	);
 	app.route("/", createIdentityProbeApp(options.identityProbe, options.issuer));
 
 	const currentBrowserAccount = async (context: Context) => {
