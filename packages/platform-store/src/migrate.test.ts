@@ -297,7 +297,10 @@ describe("Platform PostgreSQL migration foundation", () => {
 					where agent_id = 'retained_agent' order by revision`,
 				idempotency: await client`select * from platform.idempotency_records
 					where scope_id = 'retained_application' order by id`,
-				outbox: await client`select * from platform.outbox_items
+				outbox: await client`select id, scope_type, scope_id, operation,
+					payload, status, attempt_count, available_at, lease_owner,
+					lease_expires_at, delivery_fence, trace_id, created_at,
+					updated_at, request_id from platform.outbox_items
 					where scope_id = 'retained_agent' order by id`,
 			});
 			const before = await readRetained();
