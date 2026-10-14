@@ -9,6 +9,9 @@ import {
 	type RuntimeAuthorizationRenewRequestV3,
 	RuntimeAuthorizationRenewRequestV3Schema,
 	RuntimeAuthorizationRenewResponseV3Schema,
+	type RuntimeBrowserHandoffRequestV3,
+	RuntimeBrowserHandoffRequestV3Schema,
+	RuntimeBrowserHandoffResponseV3Schema,
 	type RuntimeBusinessGrantClaimsV4,
 	type RuntimeBusinessRequestV4,
 	type RuntimeEventAckRequestV3,
@@ -1031,6 +1034,17 @@ export function createWorkerRuntimeHostClientV3(
 				value,
 				RuntimeGenerationCancelRequestV3Schema,
 				RuntimeOperationResponseV3Schema,
+				signal,
+			),
+		browserHandoff: (
+			value: RuntimeBrowserHandoffRequestV3,
+			signal?: AbortSignal,
+		) =>
+			request(
+				"browser/handoff",
+				value,
+				RuntimeBrowserHandoffRequestV3Schema,
+				RuntimeBrowserHandoffResponseV3Schema,
 				signal,
 			),
 		renewAuthorization: (

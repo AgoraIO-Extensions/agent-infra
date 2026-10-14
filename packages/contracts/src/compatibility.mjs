@@ -814,6 +814,33 @@ function isRuntimeOperationIdentityOpenApiAddition(previous, current) {
 	return isDeepStrictEqual(previous, normalized);
 }
 
+// Browser handoff is an additive, authenticated V3 control route. Its request
+// and response schemas are new components; the existing Runtime routes remain
+// byte-compatible.
+function isRuntimeBrowserHandoffOpenApiAddition(previous, current) {
+	const path = "/internal/runtime/v3/browser/handoff";
+	if (
+		previous.paths?.[path] !== undefined ||
+		current.paths?.[path] === undefined
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	const previousSchemas = previous.components?.schemas ?? {};
+	for (const name of Object.keys(normalized.components?.schemas ?? {}))
+		if (previousSchemas[name] === undefined)
+			delete normalized.components.schemas[name];
+	for (const name of ["RuntimeControlCommandV2", "RuntimeControlReasonV2"]) {
+		const previousEnum = previousSchemas[name]?.enum;
+		const currentEnum = normalized.components?.schemas?.[name]?.enum;
+		if (Array.isArray(previousEnum) && Array.isArray(currentEnum))
+			normalized.components.schemas[name].enum = currentEnum.filter((value) =>
+				previousEnum.includes(value),
+			);
+	}
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function stripRuntimeOperationIdentity(value) {
 	if (Array.isArray(value)) return value.map(stripRuntimeOperationIdentity);
 	if (!value || typeof value !== "object") return value;
@@ -3821,6 +3848,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isFileAuthorityOpenApiAddition(previous, current) &&
 			!isCustomAgentModelSelectionOpenApiAddition(previous, current) &&
 			!isRuntimeOperationIdentityOpenApiAddition(previous, current) &&
+			!isRuntimeBrowserHandoffOpenApiAddition(previous, current) &&
 			!isCustomAgentModelProjectionOpenApiAddition(previous, current) &&
 			!isStandardTemplateReleaseCompatibilityOpenApiAddition(previous, current)
 		) {
