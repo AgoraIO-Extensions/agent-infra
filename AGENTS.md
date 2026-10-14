@@ -146,6 +146,10 @@ volume。本地省略 Docker 不替代当前 PR head 的 CI 镜像构建和正�
 
 ## Security
 
+- legacy WRITE ledger 的确定性 Provider 拒绝投影为 Call/Effect `FAILED`、Dispatch `REJECTED`；
+  只有执行层明确分类后设置 `providerRejected`。未知提交继续 `UNCERTAIN`，不得自动换键重试；
+  migration `0048_definite_dispatch_rejection` 必须先于新 API 镜像上线，不能直接修写旧 Call。
+
 - GitHub 当前发布为 v10，保留 v9 源码及运行路由；v10 仅恢复 Kernel 包装错误中的原始
   HTTP 状态。405/409 等拒绝走现有确定性失败，真实 5xx/断线仍为 UNCERTAIN，不自动重试。
 

@@ -5460,61 +5460,81 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 
 	async setCallResult(input: {
 		diagnostics?: CallDiagnostics;
+		providerRejected?: boolean;
 		callId: string;
 		result?: Record<string, unknown>;
 		status: CallStatus;
 	}) {
-		await this.sql.begin(async (sql) => {
-			const [call] = await sql<
-				{ effect: "READ" | "WRITE"; principal_id: string }[]
-			>`
+		await this.sql
+			.begin(async (sql) => {
+				const [call] = await sql<
+					{ effect: "READ" | "WRITE"; principal_id: string }[]
+				>`
 				SELECT action.effect, call.principal_id
 				FROM connection_calls call
 				JOIN connection_action_versions action ON action.id = call.action_version_id
 				WHERE call.id = ${input.callId}
 				FOR UPDATE OF call
 			`;
-			if (!call) return;
-			await this.persistCallDiagnostics(sql, input.callId, input.diagnostics);
-			if (call.effect === "WRITE") {
-				const effectStatus =
-					input.status === "DENIED_LOCAL" ? "FAILED" : input.status;
-				await sql`
+				if (!call) return;
+				await this.persistCallDiagnostics(sql, input.callId, input.diagnostics);
+				if (call.effect === "WRITE") {
+					const effectStatus =
+						input.status === "DENIED_LOCAL" ? "FAILED" : input.status;
+					await sql`
 					UPDATE connection_dispatches dispatch
-					SET status = ${effectStatus}
+						SET status = CASE
+							WHEN dispatch.status = 'SUBMISSION_STARTED'
+								AND ${input.providerRejected === true && input.status === "FAILED"}
+							THEN 'REJECTED' ELSE ${effectStatus} END
 					FROM connection_effects effect
 					WHERE dispatch.effect_id = effect.id
 						AND effect.call_id = ${input.callId}
 						AND dispatch.status IN ('PENDING', 'SUBMISSION_STARTED')
 				`;
-				await sql`
+					await sql`
 					UPDATE connection_effects
 					SET status = ${effectStatus}
 					WHERE call_id = ${input.callId} AND status = 'PREPARED'
 				`;
-			}
-			await sql`
+				}
+				await sql`
 				UPDATE connection_calls
 				SET status = ${input.status}, result = ${
 					input.result ? sql.json(input.result as postgres.JSONValue) : null
 				}
 				WHERE id = ${input.callId}
 			`;
-			if (input.status === "UNCERTAIN") {
-				await sql`
+				if (input.status === "UNCERTAIN") {
+					await sql`
 					INSERT INTO connection_reconciliation_jobs (call_id, status)
 					VALUES (${input.callId}, 'PENDING')
 					ON CONFLICT (call_id) DO NOTHING
 				`;
-			}
-			await sql`
+				}
+				await sql`
 				INSERT INTO connection_audit_records (principal_id, call_id, event, detail)
 				VALUES (
 					${call.principal_id}, ${input.callId}, ${`CALL_${input.status}`},
 					'{}'::jsonb
 				)
 			`;
-		});
+			})
+			.catch((error: unknown) => {
+				const code = (error as { code?: unknown } | null)?.code;
+				console.error(
+					JSON.stringify({
+						event: "connection_call_finalization_failed",
+						callId: input.callId,
+						status: input.status,
+						databaseCode:
+							typeof code === "string" && /^[A-Z0-9]{5}$/.test(code)
+								? code
+								: "UNKNOWN",
+					}),
+				);
+				throw error;
+			});
 	}
 
 	async claimReconciliationJob(): Promise<ReconciliationJob | undefined> {
