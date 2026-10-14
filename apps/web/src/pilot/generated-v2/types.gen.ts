@@ -208,6 +208,8 @@ export type AgentApplicationUpdateRequestV2 = {
         name: string;
         value: string;
     }>;
+    expectedConfigurationRevision?: number;
+    expectedKeyVersion?: number | null;
     modelConfiguration?: {
         defaultOptionId: string;
         defaultReasoningLevel: string;
@@ -296,6 +298,8 @@ export type AgentConfigurationUpdateRequestV2 = {
         name: string;
         value: string;
     }>;
+    expectedConfigurationRevision?: number;
+    expectedKeyVersion?: number | null;
     modelConfiguration?: {
         defaultOptionId: string;
         defaultReasoningLevel: string;
@@ -1427,11 +1431,14 @@ export type AgentApplicationUpdateRequestV2Writable = {
         organizationId: string;
     }>;
     coOwnerIds: Array<string>;
+    defaultRelayKey?: string;
     description: string;
     environment: Array<{
         name: string;
         value: string;
     }>;
+    expectedConfigurationRevision?: number;
+    expectedKeyVersion?: number | null;
     modelConfiguration?: {
         defaultOptionId: string;
         defaultReasoningLevel: string;
@@ -1482,10 +1489,13 @@ export type AgentConfigurationUpdateRequestV2Writable = {
         kind: 'wecom_bot' | 'wecom_app';
     }>;
     coOwnerIds?: Array<string>;
+    defaultRelayKey?: string;
     environment?: Array<{
         name: string;
         value: string;
     }>;
+    expectedConfigurationRevision?: number;
+    expectedKeyVersion?: number | null;
     modelConfiguration?: {
         defaultOptionId: string;
         defaultReasoningLevel: string;

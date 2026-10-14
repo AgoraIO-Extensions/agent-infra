@@ -5,6 +5,7 @@ import {
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
+	ApplicationRevisionError,
 	createPersonalApiAgentReadUseCaseV1,
 	type PersonalApiAgentReadAuditV1,
 	type PersonalApiAgentReadUseCaseV1,
@@ -158,6 +159,7 @@ function createApp(
 	const allocateApplicationIds = vi
 		.fn()
 		.mockResolvedValue({ applicationId: "application-1", agentId: "agent-1" });
+	const revise = vi.fn().mockResolvedValue({});
 
 	const resolve = options.identityFailure
 		? vi.fn().mockRejectedValue(new Error("private identity detail"))
@@ -180,7 +182,7 @@ function createApp(
 			hydrateUsers: vi.fn().mockResolvedValue([]),
 		},
 		foundation: { submit },
-		revision: { revise: vi.fn().mockResolvedValue({}) },
+		revision: { revise },
 		management: { executeManagementCommand },
 		configuration: { upgradeCustomImage: vi.fn().mockResolvedValue({}) },
 		query: { listApplications, getApplication, listAgents, getAgent },
@@ -195,6 +197,7 @@ function createApp(
 	return {
 		app,
 		submit,
+		revise,
 		executeManagementCommand,
 		listAgents,
 		getAgent,
@@ -609,6 +612,112 @@ describe("V2 management routes", () => {
 		});
 		expect(response.status).toBe(400);
 		expect(submit).not.toHaveBeenCalled();
+	});
+
+	describe("application revision with a re-submitted default Relay Key (#2421)", () => {
+		const key = "SYNTHETIC_ROUTE_KEY_000000001";
+		const revisionBody = {
+			schemaVersion: 2,
+			name: "Release assistant",
+			description: "Helps the release team",
+			source: { kind: "standard", templateId: "template-1" },
+			coOwnerIds: [],
+			availability: [{ kind: "organization", organizationId: "org-1" }],
+			environment: [],
+			defaultRelayKey: key,
+			expectedConfigurationRevision: 7,
+			expectedKeyVersion: 2,
+			modelConfiguration: applicationBody.modelConfiguration,
+		};
+		const put = (app: ReturnType<typeof createApp>["app"], payload: unknown) =>
+			app.request("/api/v2/agent-applications/application-1", {
+				method: "PUT",
+				headers,
+				body: JSON.stringify(payload),
+			});
+
+		it("sends the V3 revise command with the Key, expected versions and credential-free models", async () => {
+			const { app, revise } = createApp();
+			const response = await put(app, revisionBody);
+			expect(response.status).toBe(200);
+			expect(await response.text()).not.toContain(key);
+			expect(revise).toHaveBeenCalledWith(
+				expect.objectContaining({
+					schemaVersion: 3,
+					defaultRelayKey: key,
+					expectedConfigurationRevision: 7,
+					expectedKeyVersion: 2,
+					modelConfiguration: applicationBody.modelConfiguration,
+				}),
+				expect.objectContaining({ applicationId: "application-1" }),
+				undefined,
+			);
+			const command = revise.mock.calls[0]?.[0];
+			expect(JSON.stringify(command.modelConfiguration)).not.toMatch(
+				/replaceCredential|credentialValue/,
+			);
+		});
+
+		it("keeps the V2 revise command for requests without a Key", async () => {
+			const { app, revise } = createApp();
+			const {
+				defaultRelayKey: _key,
+				expectedConfigurationRevision: _revision,
+				expectedKeyVersion: _version,
+				modelConfiguration: _model,
+				...plain
+			} = revisionBody;
+			expect((await put(app, plain)).status).toBe(200);
+			expect(revise).toHaveBeenCalledWith(
+				expect.objectContaining({ schemaVersion: 2 }),
+				expect.anything(),
+				undefined,
+			);
+			expect(revise.mock.calls[0]?.[0]).not.toHaveProperty("defaultRelayKey");
+		});
+
+		it.each([
+			[
+				"a Key without the expected versions",
+				{
+					expectedConfigurationRevision: undefined,
+					expectedKeyVersion: undefined,
+				},
+			],
+			["a Key without a model selection", { modelConfiguration: undefined }],
+			["expected versions without a Key", { defaultRelayKey: undefined }],
+			[
+				"a Key on a custom image source",
+				{
+					source: {
+						kind: "custom",
+						imageReference: `registry.example/agent@sha256:${"a".repeat(64)}`,
+						interactionMode: "platform-adapter",
+					},
+				},
+			],
+		])("rejects %s before touching Core", async (_label, override) => {
+			const { app, revise } = createApp();
+			const response = await put(app, { ...revisionBody, ...override });
+			expect(response.status).toBe(400);
+			expect(revise).not.toHaveBeenCalled();
+		});
+
+		it.each([["key_version_conflict"], ["stale_revision"]] as const)(
+			"answers a %s failure with 409 and never echoes the Key",
+			async (code) => {
+				const { app, revise } = createApp();
+				revise.mockRejectedValueOnce(new ApplicationRevisionError(code));
+				const response = await put(app, revisionBody);
+				expect(response.status).toBe(409);
+				const text = await response.text();
+				expect(JSON.parse(text)).toMatchObject({
+					code: "INVALID_REQUEST",
+					message: "Request conflicts with current state.",
+				});
+				expect(text).not.toContain(key);
+			},
+		);
 	});
 
 	it("runs administrator approval through the management command and rejects invalid scope", async () => {

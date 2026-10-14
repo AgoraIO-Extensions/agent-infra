@@ -8,6 +8,7 @@ import type {
 	NativeMetadataObjectScopeV1,
 	RuntimeAuthorizationRenewRequestV3,
 	RuntimeBrowserCapabilityProbeEvidenceV1,
+	RuntimeBrowserHandoffRequestV3,
 	RuntimeBusinessRequestV4,
 	RuntimeCapabilitiesRequestV1,
 	RuntimeCapabilitiesResponseV1,
@@ -656,6 +657,8 @@ export class RuntimeHost {
 				dispatch: (ref, operation, allowBusinessExecution) =>
 					this.dispatch(ref, operation, allowBusinessExecution),
 				serialize: (key, work) => this.serialize(key, work),
+				executeBrowserHandoff: (request, claims, signal) =>
+					this.executeBrowserHandoffV3(request, claims, signal),
 			});
 		if (options.validateGrantV4)
 			this.v4 = new RuntimeHostV4({
@@ -721,6 +724,40 @@ export class RuntimeHost {
 	private trustedHost() {
 		if (this.closed) runtimeAuthorizationDenied();
 		return this.v3 ?? runtimeAuthorizationDenied();
+	}
+	private async executeBrowserHandoffV3(
+		request: RuntimeBrowserHandoffRequestV3,
+		claims: import("@agent-infra/contracts/runtime").RuntimeExecutionGrantClaimsV2,
+		signal: AbortSignal,
+	) {
+		if (!this.v3 || !this.options.driver.executeBrowserHandoff)
+			runtimeAuthorizationDenied();
+		const session = await this.options.store.authorizeRequestV3(
+			claims,
+			"query",
+			this.options.grantValidationV2?.now ?? Date.now,
+		);
+		const nativeSessionRef =
+			session.session.nativeSessionRef ?? nativeSessionRequired();
+		const admitted = runtimeBrowserExecutionContextForCommand(
+			this.browserExecutionContext,
+			request,
+		);
+		const browser = await createBrowserExecutionContextForCommand(
+			this.options.createBrowserExecutionContext,
+			admitted,
+			request.executionId,
+			claims.principal,
+		);
+		if (!browser) runtimeAuthorizationDenied();
+		signal.throwIfAborted();
+		const record = await this.options.driver.executeBrowserHandoff(
+			nativeSessionRef,
+			request.executionId,
+			request.handoff as import("./driver.js").RuntimeBrowserHandoffRequestV1,
+			{ browser },
+		);
+		return record ?? null;
 	}
 	async close() {
 		if (this.closed) return;
@@ -980,6 +1017,13 @@ export class RuntimeHost {
 	}
 	stopV3(value: RuntimeStopRequestV3, verification: unknown) {
 		return this.trustedHost().stop(value, verification);
+	}
+	browserHandoff(
+		value: RuntimeBrowserHandoffRequestV3,
+		verification: unknown,
+		signal: AbortSignal,
+	) {
+		return this.trustedHost().browserHandoff(value, verification, signal);
 	}
 	recoverStatusV3(
 		value: RuntimeStatusRequestV3,

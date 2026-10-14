@@ -18,7 +18,10 @@ import {
 } from "../agent-management-status.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import { DirectoryPicker } from "../directory-fields.js";
-import type { AgentDefaultRelayKeyCandidates } from "./agent-configuration.js";
+import type {
+	AgentDefaultRelayKeyCheck,
+	AgentDefaultRelayKeyState,
+} from "./agent-configuration.js";
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
 import {
 	type AgentConfigurationModelDraft,
@@ -26,6 +29,8 @@ import {
 	buildAgentConfigurationRequest,
 	configurationDraftFromAgent,
 } from "./agent-configuration-draft.js";
+import { KeylessModelPicker } from "./keyless-model-picker.js";
+import { useKeylessKeyCheck } from "./use-keyless-key-check.js";
 import { WecomAppSetup } from "./wecom-app-setup.js";
 import { WecomBotSetup } from "./wecom-bot-setup.js";
 
@@ -38,12 +43,16 @@ type AgentConfigurationScreenProps = {
 	commandResult?: AgentProjectionV2;
 	lifecycle?: ReactNode;
 	onSave: (body: AgentConfigurationUpdateRequestV2Writable) => void;
+	/** Agent 由默认 Relay Key 管理模型（配置 V3）：用候选模型选择代替自由文本字段。 */
+	defaultRelayKeyManaged?: boolean;
 	onPreviewDefaultRelayKeyCandidates?: (
 		keyValue: string,
-	) => Promise<AgentDefaultRelayKeyCandidates>;
+	) => Promise<AgentDefaultRelayKeyCheck>;
 	onReplaceDefaultRelayKey?: (keyValue: string) => void;
 	onUpgradeImage: (imageReference: string) => void;
 	relayKeyError?: Error | null;
+	/** 仅替换 Key 成功后的状态。 */
+	relayKeyResult?: AgentDefaultRelayKeyState;
 	relayKeySubmitting?: boolean;
 	session: ConfigurationSessionState;
 	submitting: boolean;
@@ -150,12 +159,14 @@ export function AgentConfigurationScreen({
 	authorization,
 	commandError = null,
 	commandResult,
+	defaultRelayKeyManaged = false,
 	lifecycle,
 	onSave,
 	onPreviewDefaultRelayKeyCandidates,
 	onReplaceDefaultRelayKey,
 	onUpgradeImage,
 	relayKeyError = null,
+	relayKeyResult,
 	relayKeySubmitting = false,
 	session,
 	submitting,
@@ -163,12 +174,7 @@ export function AgentConfigurationScreen({
 	const [draft, setDraft] = useState(() => configurationDraftFromAgent(agent));
 	const [ownerError, setOwnerError] = useState<string>();
 	const [imageReference, setImageReference] = useState("");
-	const [defaultRelayKey, setDefaultRelayKey] = useState("");
-	const [keyCandidates, setKeyCandidates] = useState<
-		AgentDefaultRelayKeyCandidates["candidates"]
-	>([]);
-	const [keyChecking, setKeyChecking] = useState(false);
-	const [keyCheckError, setKeyCheckError] = useState(false);
+	const keyCheck = useKeylessKeyCheck(onPreviewDefaultRelayKeyCandidates);
 	const submittedResult =
 		commandResult?.agentId === agent.agentId ? commandResult : undefined;
 	const resultRef = useResultFocus(submittedResult);
@@ -192,27 +198,10 @@ export function AgentConfigurationScreen({
 		)
 		.join("、");
 	const isDisabled = submitting || agent.managementStatus === "disabled";
-	const checkDefaultRelayKey = async () => {
-		if (!onPreviewDefaultRelayKeyCandidates || !defaultRelayKey.trim()) return;
-		setKeyChecking(true);
-		setKeyCheckError(false);
-		try {
-			const result = await onPreviewDefaultRelayKeyCandidates(
-				defaultRelayKey.trim(),
-			);
-			setKeyCandidates(result.candidates);
-		} catch {
-			setKeyCandidates([]);
-			setKeyCheckError(true);
-		} finally {
-			setKeyChecking(false);
-		}
-	};
 	const replaceDefaultRelayKey = () => {
-		if (!onReplaceDefaultRelayKey || !defaultRelayKey.trim()) return;
-		onReplaceDefaultRelayKey(defaultRelayKey.trim());
-		setDefaultRelayKey("");
-		setKeyCandidates([]);
+		if (!onReplaceDefaultRelayKey || !keyCheck.typed) return;
+		onReplaceDefaultRelayKey(keyCheck.key.trim());
+		keyCheck.reset();
 	};
 	const updateModel = (
 		index: number,
@@ -244,10 +233,23 @@ export function AgentConfigurationScreen({
 			return;
 		}
 		setOwnerError(undefined);
+		// 已经开始替换默认 Key：必须完成检查并选好模型，不能退回普通保存而静默丢掉用户正在
+		// 编辑的 Key 和模型集合。
+		if (defaultRelayKeyManaged && keyCheck.typed && !keyCheck.replacement) {
+			keyCheck.block();
+			document.getElementById("configuration-default-relay-key")?.focus();
+			return;
+		}
 		setDraft((current) => ({
 			...current,
 			secrets: [],
 		}));
+		// 填写了 Key 并选好模型：与页面其他修改一起，Key、模型集合和配置修订一次保存。
+		if (defaultRelayKeyManaged && keyCheck.replacement) {
+			onSave({ ...request, ...keyCheck.replacement });
+			keyCheck.reset();
+			return;
+		}
 		onSave(request);
 	};
 
@@ -442,32 +444,28 @@ export function AgentConfigurationScreen({
 														autoComplete="new-password"
 														disabled={isDisabled || relayKeySubmitting}
 														id="configuration-default-relay-key"
-														onChange={(event) => {
-															setDefaultRelayKey(event.target.value);
-															setKeyCandidates([]);
-															setKeyCheckError(false);
-														}}
+														onChange={(event) =>
+															keyCheck.setKey(event.target.value)
+														}
 														placeholder="输入新 Key"
 														type="password"
-														value={defaultRelayKey}
+														value={keyCheck.key}
 													/>
 													<Button
 														disabled={
-															isDisabled ||
-															keyChecking ||
-															!defaultRelayKey.trim()
+															isDisabled || keyCheck.checking || !keyCheck.typed
 														}
-														onClick={() => void checkDefaultRelayKey()}
+														onClick={() => void keyCheck.runCheck()}
 														type="button"
 														variant="outline"
 													>
-														{keyChecking ? "正在检查…" : "检查可用模型"}
+														{keyCheck.checking ? "正在检查…" : "检查可用模型"}
 													</Button>
 													<Button
 														disabled={
 															isDisabled ||
 															relayKeySubmitting ||
-															!defaultRelayKey.trim()
+															!keyCheck.typed
 														}
 														onClick={replaceDefaultRelayKey}
 														type="button"
@@ -479,17 +477,38 @@ export function AgentConfigurationScreen({
 													当前 Key
 													只显示已设置状态；输入值不会回显或写入普通业务投影。
 												</p>
-												{keyCheckError || relayKeyError ? (
+												{relayKeyResult?.isSet &&
+												!relayKeySubmitting &&
+												!relayKeyError ? (
+													<p
+														className="font-medium text-foreground text-sm"
+														role="status"
+													>
+														默认 Key 已替换，当前版本{" "}
+														{relayKeyResult.keyVersion}。
+													</p>
+												) : null}
+												{keyCheck.blocked ? (
+													<Alert variant="destructive">
+														<AlertDescription>
+															已填写新
+															Key，但还没有可保存的模型选择：请先点击「检查可用模型」，选好模型（至少一个模型，每个模型至少一个推理档位）后再保存；不想更换
+															Key 请清空输入框。
+														</AlertDescription>
+													</Alert>
+												) : null}
+												{keyCheck.error || relayKeyError ? (
 													<Alert variant="destructive">
 														<AlertDescription>
 															Key 校验或替换失败，请刷新后重试。
 														</AlertDescription>
 													</Alert>
 												) : null}
-												{keyCandidates.length > 0 ? (
+												{keyCheck.candidates.length > 0 &&
+												!defaultRelayKeyManaged ? (
 													<p className="text-muted-foreground text-sm">
 														Key 可用模型：
-														{keyCandidates
+														{keyCheck.candidates
 															.map(
 																(candidate) =>
 																	`${candidate.endpointId} · ${candidate.modelId}`,
@@ -497,118 +516,152 @@ export function AgentConfigurationScreen({
 															.join("、")}
 													</p>
 												) : null}
+												{keyCheck.candidates.length > 0 &&
+												defaultRelayKeyManaged ? (
+													<>
+														<KeylessModelPicker
+															candidates={keyCheck.candidates}
+															current={agent.configuration.modelOptions}
+															currentDefault={{
+																optionId:
+																	agent.configuration.defaultModelOptionId ??
+																	"",
+																level:
+																	agent.configuration.defaultReasoningLevel ??
+																	"",
+															}}
+															disabled={isDisabled}
+															idPrefix="configuration-keyless-model"
+															key={keyCheck.candidates
+																.map(
+																	(candidate) =>
+																		`${candidate.endpointId}/${candidate.modelId}`,
+																)
+																.join("|")}
+															onChange={keyCheck.setSelection}
+														/>
+														<p className="text-muted-foreground text-sm">
+															选好后点击页面底部的「校验并保存」：新
+															Key、模型集合和其他修改会在同一次保存中生效。
+														</p>
+													</>
+												) : null}
 											</div>
 										) : null}
-										<Label className="min-h-11 gap-3">
-											<Checkbox
-												disabled={isDisabled}
-												checked={draft.replaceModels}
-												onCheckedChange={(checked) =>
-													setDraft((current) => ({
-														...current,
-														replaceModels: checked,
-														models: checked
-															? current.models.length === 0
-																? [blankModel()]
-																: current.models
-															: current.models,
-													}))
-												}
-											/>
-											替换模型配置
-										</Label>
-										{draft.replaceModels ? (
+										{defaultRelayKeyManaged ? null : (
 											<>
-												<DraftRows
-													fields={
-														[
-															{
-																key: "optionId",
-																label: "选项 ID",
-																required: true,
-															},
-															{
-																key: "endpointId",
-																label: "端点 ID",
-																required: true,
-															},
-															{
-																key: "modelId",
-																label: "模型 ID",
-																required: true,
-															},
-															{
-																key: "reasoningLevels",
-																label: "可选推理强度",
-																required: true,
-															},
-														] as const
-													}
-													idPrefix="model"
-													label="模型"
-													onChange={updateModel}
-													onRemove={(index) =>
-														setDraft((current) => ({
-															...current,
-															models: current.models.filter(
-																(_, modelIndex) => modelIndex !== index,
-															),
-														}))
-													}
-													rows={draft.models}
-												/>
-												<Button
-													variant="outline"
-													onClick={() =>
-														setDraft((current) => ({
-															...current,
-															models: [...current.models, blankModel()],
-														}))
-													}
-													type="button"
-												>
-													<PlusIcon
-														aria-hidden="true"
-														data-icon="inline-start"
+												<Label className="min-h-11 gap-3">
+													<Checkbox
+														disabled={isDisabled}
+														checked={draft.replaceModels}
+														onCheckedChange={(checked) =>
+															setDraft((current) => ({
+																...current,
+																replaceModels: checked,
+																models: checked
+																	? current.models.length === 0
+																		? [blankModel()]
+																		: current.models
+																	: current.models,
+															}))
+														}
 													/>
-													添加模型
-												</Button>
-												<div className="grid gap-4 sm:grid-cols-2">
-													<div className="space-y-2">
-														<Label htmlFor="configuration-default-model">
-															默认模型选项 ID
-														</Label>
-														<Input
-															id="configuration-default-model"
-															onChange={(event) =>
+													替换模型配置
+												</Label>
+												{draft.replaceModels ? (
+													<>
+														<DraftRows
+															fields={
+																[
+																	{
+																		key: "optionId",
+																		label: "选项 ID",
+																		required: true,
+																	},
+																	{
+																		key: "endpointId",
+																		label: "端点 ID",
+																		required: true,
+																	},
+																	{
+																		key: "modelId",
+																		label: "模型 ID",
+																		required: true,
+																	},
+																	{
+																		key: "reasoningLevels",
+																		label: "可选推理强度",
+																		required: true,
+																	},
+																] as const
+															}
+															idPrefix="model"
+															label="模型"
+															onChange={updateModel}
+															onRemove={(index) =>
 																setDraft((current) => ({
 																	...current,
-																	defaultModelOptionId: event.target.value,
+																	models: current.models.filter(
+																		(_, modelIndex) => modelIndex !== index,
+																	),
 																}))
 															}
-															required
-															value={draft.defaultModelOptionId}
+															rows={draft.models}
 														/>
-													</div>
-													<div className="space-y-2">
-														<Label htmlFor="configuration-default-reasoning">
-															默认推理强度
-														</Label>
-														<Input
-															id="configuration-default-reasoning"
-															onChange={(event) =>
+														<Button
+															variant="outline"
+															onClick={() =>
 																setDraft((current) => ({
 																	...current,
-																	defaultReasoningLevel: event.target.value,
+																	models: [...current.models, blankModel()],
 																}))
 															}
-															required
-															value={draft.defaultReasoningLevel}
-														/>
-													</div>
-												</div>
+															type="button"
+														>
+															<PlusIcon
+																aria-hidden="true"
+																data-icon="inline-start"
+															/>
+															添加模型
+														</Button>
+														<div className="grid gap-4 sm:grid-cols-2">
+															<div className="space-y-2">
+																<Label htmlFor="configuration-default-model">
+																	默认模型选项 ID
+																</Label>
+																<Input
+																	id="configuration-default-model"
+																	onChange={(event) =>
+																		setDraft((current) => ({
+																			...current,
+																			defaultModelOptionId: event.target.value,
+																		}))
+																	}
+																	required
+																	value={draft.defaultModelOptionId}
+																/>
+															</div>
+															<div className="space-y-2">
+																<Label htmlFor="configuration-default-reasoning">
+																	默认推理强度
+																</Label>
+																<Input
+																	id="configuration-default-reasoning"
+																	onChange={(event) =>
+																		setDraft((current) => ({
+																			...current,
+																			defaultReasoningLevel: event.target.value,
+																		}))
+																	}
+																	required
+																	value={draft.defaultReasoningLevel}
+																/>
+															</div>
+														</div>
+													</>
+												) : null}
 											</>
-										) : null}
+										)}
 									</fieldset>
 								) : null}
 								<fieldset className="detail-section space-y-4 border-border border-t pt-5">

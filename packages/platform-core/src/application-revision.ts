@@ -161,7 +161,9 @@ export type ApplicationRevisionCommitDecisionV1 =
 				| "idempotency_conflict"
 				| "stale_authorization"
 				| "stale_configuration"
-				| "stale_management";
+				| "stale_management"
+				/** 默认 Key 的当前版本与 expectedKeyVersion 不一致（#2421）。 */
+				| "stale_key_version";
 	  };
 
 export interface ApplicationRevisionTransactionPortV1 {
@@ -207,6 +209,7 @@ export type ApplicationRevisionErrorCode =
 	| "not_admitted"
 	| "no_change"
 	| "stale_revision"
+	| "key_version_conflict"
 	| "idempotency_conflict"
 	| "dependency_unavailable"
 	| "persistence_failed";
@@ -886,6 +889,9 @@ function configurationError(error: unknown): ApplicationRevisionError {
 	if (error.code === "stale_revision") {
 		return new ApplicationRevisionError("stale_revision");
 	}
+	if (error.code === "key_version_conflict") {
+		return new ApplicationRevisionError("key_version_conflict");
+	}
 	return new ApplicationRevisionError(
 		error.code === "dependency_unavailable"
 			? "dependency_unavailable"
@@ -1072,7 +1078,8 @@ function parseCommitDecision(
 				decision.reason !== "idempotency_conflict" &&
 				decision.reason !== "stale_authorization" &&
 				decision.reason !== "stale_configuration" &&
-				decision.reason !== "stale_management"
+				decision.reason !== "stale_management" &&
+				decision.reason !== "stale_key_version"
 			) {
 				throw new Error();
 			}
@@ -1258,7 +1265,9 @@ export function createApplicationRevisionUseCaseV1(
 			throw new ApplicationRevisionError(
 				commitDecision.reason === "idempotency_conflict"
 					? "idempotency_conflict"
-					: "stale_revision",
+					: commitDecision.reason === "stale_key_version"
+						? "key_version_conflict"
+						: "stale_revision",
 			);
 		}
 		return commitDecision.result;

@@ -236,3 +236,94 @@ it("allows Read from the deployment-owned Skill root but never Write/Edit", asyn
 		await rm(root, { recursive: true, force: true });
 	}
 });
+
+it("routes Applied Skill reads through a verified ephemeral file", async () => {
+	const root = await realpath(
+		await mkdtemp(join(tmpdir(), "claude-verified-skill-")),
+	);
+	const workspace = join(root, "workspace");
+	const memory = join(root, "memory");
+	const skillRoot = join(root, "skills");
+	const verified = join(root, "verified", "SKILL.md");
+	await mkdir(workspace);
+	await mkdir(memory);
+	await mkdir(join(root, "verified"), { recursive: true });
+	await mkdir(skillRoot);
+	const skillFile = join(skillRoot, "workspace-summary", "SKILL.md");
+	await mkdir(join(skillRoot, "workspace-summary"));
+	await writeFile(skillFile, "tamperable", "utf8");
+	try {
+		let verifiedReads = 0;
+		const cleanupReadOnlyFile = vi.fn(async () => {});
+		const tools = claudeWorkspaceTools(
+			workspace,
+			memory,
+			undefined,
+			{
+				resolveReadOnlyFile: async (filePath) =>
+					filePath === skillFile && verifiedReads++ === 0
+						? verified
+						: undefined,
+				cleanupReadOnlyFile,
+			},
+			[skillRoot],
+		);
+		const signal = new AbortController().signal;
+		const canUse = await tools.canUseTool?.(
+			"Read",
+			{ file_path: skillFile },
+			{ signal, toolUseID: "read", requestId: "request" },
+		);
+		expect(canUse).toMatchObject({
+			behavior: "allow",
+			updatedInput: { file_path: verified },
+		});
+		const before = tools.hooks?.PreToolUse?.[0]?.hooks[0];
+		if (!before) throw new Error("missing PreToolUse hook");
+		await expect(
+			before(
+				{
+					hook_event_name: "PreToolUse",
+					tool_name: "Read",
+					tool_input: { file_path: verified },
+					tool_use_id: "read",
+				} as never,
+				"read",
+				{ signal },
+			),
+		).resolves.toMatchObject({
+			hookSpecificOutput: {
+				permissionDecision: "allow",
+				updatedInput: { file_path: verified },
+			},
+		});
+		const after = tools.hooks?.PostToolUse?.[0]?.hooks[0];
+		if (!after) throw new Error("missing PostToolUse hook");
+		await after(
+			{
+				hook_event_name: "PostToolUse",
+				tool_name: "Read",
+				tool_input: { file_path: verified },
+				tool_response: { type: "text", content: "skill" },
+				tool_use_id: "read",
+			} as never,
+			"read",
+			{ signal },
+		);
+		expect(cleanupReadOnlyFile).toHaveBeenCalledWith(verified);
+		const external = await tools.canUseTool?.(
+			"Read",
+			{ file_path: join(skillRoot, "workspace-summary", "external.txt") },
+			{ signal, toolUseID: "external", requestId: "request" },
+		);
+		expect(external).toMatchObject({ behavior: "deny" });
+		const stale = await tools.canUseTool?.(
+			"Read",
+			{ file_path: skillFile },
+			{ signal, toolUseID: "stale", requestId: "request" },
+		);
+		expect(stale).toMatchObject({ behavior: "deny" });
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});

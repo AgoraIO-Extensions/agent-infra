@@ -1156,6 +1156,13 @@
             },
             "type": "array"
           },
+          "defaultRelayKey": {
+            "maxLength": 8192,
+            "minLength": 16,
+            "pattern": "^[\\x21-\\x7e]+$",
+            "type": "string",
+            "writeOnly": true
+          },
           "description": {
             "minLength": 1,
             "type": "string"
@@ -1179,6 +1186,23 @@
               "type": "object"
             },
             "type": "array"
+          },
+          "expectedConfigurationRevision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "expectedKeyVersion": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "modelConfiguration": {
             "additionalProperties": false,
@@ -1706,6 +1730,13 @@
             },
             "type": "array"
           },
+          "defaultRelayKey": {
+            "maxLength": 8192,
+            "minLength": 16,
+            "pattern": "^[\\x21-\\x7e]+$",
+            "type": "string",
+            "writeOnly": true
+          },
           "environment": {
             "items": {
               "additionalProperties": false,
@@ -1725,6 +1756,23 @@
               "type": "object"
             },
             "type": "array"
+          },
+          "expectedConfigurationRevision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "expectedKeyVersion": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "modelConfiguration": {
             "additionalProperties": false,

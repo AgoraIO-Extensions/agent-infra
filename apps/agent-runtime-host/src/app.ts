@@ -10,6 +10,7 @@ import {
 import {
 	type ExecutionGrantV1,
 	RuntimeAuthorizationRenewRequestV3Schema,
+	RuntimeBrowserHandoffRequestV3Schema,
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeEventAckRequestV3Schema,
 	RuntimeEventAckRequestV4Schema,
@@ -564,6 +565,12 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		RuntimeGenerationCancelRequestV3Schema,
 		(request, verification) =>
 			options.host.cancelGenerationV3(request, verification),
+	);
+	v3Route(
+		"browser/handoff",
+		RuntimeBrowserHandoffRequestV3Schema,
+		(request, verification, signal) =>
+			options.host.browserHandoff(request, verification, signal),
 	);
 	v3Route(
 		"authorizations/renew",

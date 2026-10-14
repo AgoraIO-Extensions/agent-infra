@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import type {
 	AgentConfigurationAccessTargetV1,
 	AgentConfigurationRecord,
+	AgentConfigurationRelayKeyAttachmentV1,
 	ApplicationRevisionResultV1,
 	ApplicationRevisionTransactionPortV1,
 	ApplicationRevisionWritePlanV1,
@@ -25,6 +26,7 @@ import {
 	insertAgentManagementEffects,
 	insertAgentManagementHistory,
 	replaceAgentAccess,
+	replaceAgentDefaultRelayKeyInTransaction,
 } from "./plan-writes.js";
 import {
 	agentApplications,
@@ -393,9 +395,16 @@ export class PostgresApplicationRevisionTransactionV1
 	async commit(
 		input: ApplicationRevisionWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
+		defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1,
 	): ReturnType<ApplicationRevisionTransactionPortV1["commit"]> {
 		try {
 			const { plan, result, configuration } = validatedPlan(input);
+			// Key 附件只随带配置变更的计划出现；其余形态一律失败关闭。
+			if (
+				defaultRelayKey !== undefined &&
+				(!configuration || !plan.configuration)
+			)
+				throw new ApplicationRevisionStoreError();
 			return await this.#database.transaction(async (transaction) => {
 				const [agent] = await transaction
 					.select({
@@ -507,9 +516,25 @@ export class PostgresApplicationRevisionTransactionV1
 							plan.configuration,
 							configuration,
 							previousConfiguration,
+							defaultRelayKey !== undefined,
 						)
 					)
 						unavailable();
+					// 默认 Key 与配置修订、模型集合在同一事务内前进；Key 版本冲突先于任何
+					// 配置写入返回，与配置修订冲突分开表达。
+					if (
+						defaultRelayKey &&
+						(await replaceAgentDefaultRelayKeyInTransaction(
+							transaction,
+							plan.configuration,
+							defaultRelayKey,
+						)) === "stale"
+					) {
+						return {
+							outcome: "conflict" as const,
+							reason: "stale_key_version" as const,
+						};
+					}
 					if (
 						!(await advanceAgentConfigurationRevision(
 							transaction,
