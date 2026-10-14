@@ -38,10 +38,14 @@ const timer = setTimeout(() => {
 	cleanup();
 	fail("CODEX_MODEL_PROFILES_TIMEOUT");
 }, timeoutMs);
-child.on("error", () => {
+// Codex 无法启动，或启动后关闭了 stdin 读端（写入得到 EPIPE）：两者都走同一条
+// 清理加固定错误码路径，不能以未处理的 error 事件和堆栈退出。
+const unavailable = () => {
 	cleanup();
 	fail("CODEX_MODEL_PROFILES_UNAVAILABLE");
-});
+};
+child.on("error", unavailable);
+child.stdin.on("error", unavailable);
 
 let buffer = "";
 let nextId = 0;
