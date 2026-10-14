@@ -41,6 +41,33 @@ const projection = SkillWorkloadProjectionV1Schema.parse({
 	},
 });
 
+const appliedBinding = {
+	schemaVersion: 1,
+	agentId: "agent-a",
+	agentVersion: "agent-version-1",
+	skillName: "workspace-summary",
+	skillVersion: projection.skillVersion,
+	grant: projection.grant,
+	configurationRevision: 4,
+	syncRevision: 1,
+	state: "synced",
+	failureReason: null,
+	appliedReceipt: {
+		schemaVersion: 1,
+		agentId: "agent-a",
+		agentVersion: "agent-version-1",
+		skillName: "workspace-summary",
+		configurationRevision: 4,
+		syncRevision: 1,
+		skillVersionId: "skill-version-a",
+		generationId: "d".repeat(64),
+		packageDigest: "a".repeat(64),
+		manifestDigest: "b".repeat(64),
+		targetPath: ".agents/skills/workspace-summary",
+		readOnly: true,
+	},
+} as const;
+
 function environment() {
 	return {
 		AGENT_INFRA_RUNTIME_AGENT_ID: "agent-a",
@@ -48,8 +75,10 @@ function environment() {
 			schemaVersion: 1,
 			agentId: "agent-a",
 			agentVersion: "agent-version-1",
+			configurationRevision: 4,
 			generationId: "d".repeat(64),
 			projections: [projection],
+			appliedBindings: [appliedBinding],
 		}),
 	};
 }
@@ -60,6 +89,7 @@ describe("Runtime Skill Hub configuration", () => {
 		if (!binding) throw new Error("Expected Skill Hub binding");
 		const directory = createRuntimeSkillHubDirectoryV1(binding);
 		expect(runtimeSkillHubMountRootV1).toBe("/opt/agent-infra-skill-hub");
+		expect(directory.nativeRoot).toBe(runtimeSkillHubMountRootV1);
 		expect(directory.findSkills()).toEqual([
 			expect.objectContaining({
 				name: "workspace-summary",
@@ -68,6 +98,19 @@ describe("Runtime Skill Hub configuration", () => {
 				readOnly: true,
 			}),
 		]);
+	});
+
+	it("rejects a binding whose Applied receipt is stale for the generation", () => {
+		const value = JSON.parse(
+			environment().AGENT_INFRA_RUNTIME_SKILL_HUB_BINDING,
+		);
+		value.appliedBindings[0].appliedReceipt.generationId = "e".repeat(64);
+		expect(() =>
+			readRuntimeSkillHubBindingV1({
+				...environment(),
+				AGENT_INFRA_RUNTIME_SKILL_HUB_BINDING: JSON.stringify(value),
+			}),
+		).toThrow("RUNTIME_CONFIGURATION_INVALID");
 	});
 
 	it("rejects a binding for a different Runtime Agent", () => {

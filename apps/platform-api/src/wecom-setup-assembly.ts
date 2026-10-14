@@ -137,7 +137,7 @@ export function assembleWecomSetupApiV1(options: {
 				"wecom-setup",
 			);
 			if (user?.accountStatus !== "active") return null;
-			const current = await query.readAuthority({
+			const current = await query.readVersionedAuthority({
 				agentId,
 				actorId,
 				organizationIds: user.organizationIds,

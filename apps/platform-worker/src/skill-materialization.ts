@@ -2,6 +2,8 @@ import {
 	createSkillWorkloadProjectionV1,
 	type SkillGrantV1,
 	type SkillHubAppliedReceiptV1,
+	type SkillHubSyncBindingV1,
+	SkillHubSyncBindingV1Schema,
 	type SkillVersionRefV1,
 	type SkillWorkloadProjectionV1,
 	SkillWorkloadProjectionV1Schema,
@@ -23,6 +25,8 @@ export type WorkloadSkillMaterializationInputV1 = Readonly<{
 export type WorkloadSkillMaterializationResultV1 = Readonly<{
 	generationId: string;
 	skills: readonly SkillWorkloadProjectionV1[];
+	/** Store-backed Applied bindings for the exact generation above. */
+	appliedBindings?: readonly SkillHubSyncBindingV1[];
 }>;
 
 /** Existing deployment assembly supplies the DB/object-storage-backed implementation. */
@@ -129,29 +133,48 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 				})
 			)
 				throw new Error("Skill materialization binding mismatch");
+			if (bindings.length > 0 && !options.writeAppliedReceipt)
+				throw new Error("Skill Applied receipt writer unavailable");
+			const appliedBindings: SkillHubSyncBindingV1[] = [];
+			const appliedReceipts: SkillHubAppliedReceiptV1[] = [];
+			for (const binding of bindings) {
+				const appliedReceipt: SkillHubAppliedReceiptV1 = {
+					schemaVersion: 1,
+					agentId: input.agentId,
+					agentVersion: binding.agentVersion,
+					skillName: binding.name,
+					configurationRevision: input.configurationRevision,
+					syncRevision: binding.syncRevision,
+					skillVersionId: binding.skillVersion.skillVersionId,
+					generationId: result.generationId,
+					packageDigest: binding.skillVersion.packageDigest,
+					manifestDigest: binding.skillVersion.manifestDigest,
+					targetPath: `.agents/skills/${binding.name}`,
+					readOnly: true,
+				};
+				appliedBindings.push({
+					schemaVersion: 1,
+					agentId: binding.agentId,
+					agentVersion: binding.agentVersion,
+					skillName: binding.name,
+					skillVersion: binding.skillVersion,
+					grant: binding.grant,
+					configurationRevision: input.configurationRevision,
+					syncRevision: binding.syncRevision,
+					state: "synced",
+					failureReason: null,
+					appliedReceipt,
+				});
+				appliedReceipts.push(appliedReceipt);
+			}
 			const validated = validateWorkloadSkillMaterializationV1(input, {
 				generationId: result.generationId,
 				skills,
+				appliedBindings,
 			});
-			if (bindings.length > 0 && !options.writeAppliedReceipt)
-				throw new Error("Skill Applied receipt writer unavailable");
 			if (options.writeAppliedReceipt) {
-				for (const binding of bindings) {
-					await options.writeAppliedReceipt({
-						schemaVersion: 1,
-						agentId: input.agentId,
-						agentVersion: binding.agentVersion,
-						skillName: binding.name,
-						configurationRevision: input.configurationRevision,
-						syncRevision: binding.syncRevision,
-						skillVersionId: binding.skillVersion.skillVersionId,
-						generationId: result.generationId,
-						packageDigest: binding.skillVersion.packageDigest,
-						manifestDigest: binding.skillVersion.manifestDigest,
-						targetPath: `.agents/skills/${binding.name}`,
-						readOnly: true,
-					});
-				}
+				for (const appliedReceipt of appliedReceipts)
+					await options.writeAppliedReceipt(appliedReceipt);
 			}
 			return validated;
 		},
@@ -179,13 +202,44 @@ export function validateWorkloadSkillMaterializationV1(
 	const skills = result.skills.map((skill) =>
 		SkillWorkloadProjectionV1Schema.parse(skill),
 	);
+	const appliedBindings = result.appliedBindings?.map((binding) =>
+		SkillHubSyncBindingV1Schema.parse(binding),
+	);
 	if (
 		skills.some((skill) => skill.agentId !== input.agentId) ||
-		new Set(skills.map((skill) => skill.targetPath)).size !== skills.length
+		new Set(skills.map((skill) => skill.targetPath)).size !== skills.length ||
+		(appliedBindings !== undefined &&
+			(appliedBindings.length !== skills.length ||
+				new Set(
+					appliedBindings.map((binding) => binding.skillVersion.skillVersionId),
+				).size !== appliedBindings.length ||
+				appliedBindings.some(
+					(binding) =>
+						binding.state !== "synced" ||
+						binding.agentId !== input.agentId ||
+						binding.agentVersion !== skills[0]?.agentVersion ||
+						binding.configurationRevision !== input.configurationRevision ||
+						binding.appliedReceipt.generationId !== result.generationId ||
+						!skills.some((skill) => {
+							return (
+								skill.skillVersion.skillVersionId ===
+									binding.skillVersion.skillVersionId &&
+								binding.skillName === skill.manifest.name &&
+								binding.skillVersion.packageDigest ===
+									skill.skillVersion.packageDigest &&
+								binding.skillVersion.manifestDigest ===
+									skill.skillVersion.manifestDigest &&
+								JSON.stringify(binding.grant) === JSON.stringify(skill.grant)
+							);
+						}),
+				)))
 	)
 		throw new Error("Skill materialization identity mismatch");
 	return Object.freeze({
 		generationId: result.generationId,
 		skills: Object.freeze(skills),
+		...(appliedBindings
+			? { appliedBindings: Object.freeze(appliedBindings) }
+			: {}),
 	});
 }

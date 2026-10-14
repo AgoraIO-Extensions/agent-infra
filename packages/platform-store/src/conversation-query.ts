@@ -1,8 +1,11 @@
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import { types } from "node:util";
 import {
 	type NativeMetadataObjectScopeV1,
 	NativeMetadataObjectScopeV1Schema,
+	type RuntimeModelDirectoryDispatchRequestV1,
+	RuntimeModelDirectoryDispatchRequestV1Schema,
 } from "@agent-infra/contracts/runtime";
 import type { RecentPersonalConversationsQueryV1 } from "@agent-infra/platform-core";
 import {
@@ -123,6 +126,15 @@ export interface NativeMetadataObjectScopeRequestV1 {
 
 export type NativeMetadataObjectScopeResponseV1 = NativeMetadataObjectScopeV1;
 
+export interface RuntimeModelDirectoryDispatchRequestInputV1 {
+	readonly scope: ConversationQueryScopeV1;
+	readonly conversationId: string;
+	readonly signal?: AbortSignal;
+}
+
+export type RuntimeModelDirectoryDispatchRequestResponseV1 =
+	RuntimeModelDirectoryDispatchRequestV1;
+
 export interface ConversationExecutionDetailV1 {
 	readonly execution: ConversationQueryExecutionV1;
 	readonly events: readonly ConversationQueryEventV1[];
@@ -235,6 +247,26 @@ interface NativeMetadataObjectScopeRow {
 	readonly execution_principal_type: string;
 	readonly session_generation: string | number;
 	readonly authorization_revision: string;
+}
+
+interface RuntimeModelDirectoryDispatchRow {
+	readonly conversation_id: string;
+	readonly conversation_agent: string;
+	readonly conversation_actor: string;
+	readonly conversation_channel: string;
+	readonly conversation_principal_type: string;
+	readonly conversation_host_session_ref: string | null;
+	readonly conversation_session_generation: string | number;
+	readonly execution_id: string;
+	readonly execution_conversation: string;
+	readonly execution_agent: string;
+	readonly execution_actor: string;
+	readonly execution_channel: string;
+	readonly execution_principal_type: string;
+	readonly turn_id: string;
+	readonly session_generation: string | number;
+	readonly delivery_fence: string | number;
+	readonly trace_id: string | null;
 }
 
 interface EventIdentityRow {
@@ -1225,6 +1257,107 @@ export class PostgresConversationQueryV1 {
 						executionId: row.execution_id,
 						sessionGeneration: safeInteger(row.session_generation, 1),
 						authorizationRevision: row.authorization_revision,
+					});
+				},
+				request.signal,
+			);
+		} catch (error) {
+			if (error instanceof ConversationQueryError) throw error;
+			return unavailable();
+		}
+	}
+
+	/**
+	 * Resolve the current Web execution for the API → Worker model-directory
+	 * dispatch. The Store proves the Conversation/Execution/Session/fence
+	 * relationship; the Worker remains responsible for issuing the Host Grant.
+	 */
+	async readRuntimeModelDirectoryDispatchRequestV1(
+		request: RuntimeModelDirectoryDispatchRequestInputV1,
+	): Promise<RuntimeModelDirectoryDispatchRequestResponseV1 | undefined> {
+		const readScope = scope(request.scope);
+		const conversationId = requestText(request.conversationId);
+		if (readScope.channelId !== "web") return undefined;
+		try {
+			return await repeatableRead(
+				this.#client,
+				async (transaction, run) => {
+					const rows = await run(
+						transaction<RuntimeModelDirectoryDispatchRow[]>`
+							/* runtime_model_directory.current_dispatch */
+							select
+								c.id as conversation_id,
+								c.agent_id as conversation_agent,
+								c.actor_id as conversation_actor,
+								c.channel_id as conversation_channel,
+								c.principal_type as conversation_principal_type,
+								c.host_session_ref as conversation_host_session_ref,
+								c.session_generation as conversation_session_generation,
+								e.execution_id,
+								e.conversation_id as execution_conversation,
+								e.agent_id as execution_agent,
+								e.actor_id as execution_actor,
+								e.channel_id as execution_channel,
+								e.principal_type as execution_principal_type,
+								e.turn_id,
+								e.session_generation,
+								e.delivery_fence,
+								(
+									select a.trace_id
+									from platform.conversation_audit_events a
+									where a.execution_id = e.execution_id
+									order by a.occurred_at, a.id
+									limit 1
+								) as trace_id
+							from platform.conversations c
+							join platform.conversation_executions e
+								on e.conversation_id = c.id
+								and e.agent_id = c.agent_id
+								and e.actor_id = c.actor_id
+								and e.channel_id = c.channel_id
+								and e.principal_type = c.principal_type
+							where c.id = ${conversationId}
+								and c.actor_id = ${readScope.actorId}
+								and c.channel_id = ${readScope.channelId}
+								and c.principal_type = ${readScope.principal?.kind ?? "user"}
+								and c.channel_id = 'web'
+								and c.principal_type = 'user'
+								and c.host_session_ref is not null
+								and c.session_generation = e.session_generation
+								and e.delivery_fence > 0
+								and e.status in ('submitted', 'processing', 'unknown')
+							order by e.updated_at desc, e.execution_id
+							limit 2
+						`,
+					);
+					if (rows.length !== 1) return undefined;
+					const row = rows[0];
+					if (
+						!row ||
+						row.conversation_id !== conversationId ||
+						row.execution_conversation !== row.conversation_id ||
+						row.conversation_agent !== row.execution_agent ||
+						row.conversation_actor !== row.execution_actor ||
+						row.conversation_channel !== row.execution_channel ||
+						row.conversation_principal_type !== row.execution_principal_type ||
+						row.conversation_channel !== "web" ||
+						row.conversation_principal_type !== "user" ||
+						row.conversation_host_session_ref === null
+					)
+						return undefined;
+					return RuntimeModelDirectoryDispatchRequestV1Schema.parse({
+						schemaVersion: 1,
+						requestId: randomUUID(),
+						traceId: row.trace_id ?? randomUUID(),
+						actorId: row.conversation_actor,
+						channelId: row.conversation_channel,
+						agentId: row.conversation_agent,
+						conversationId: row.conversation_id,
+						executionId: row.execution_id,
+						turnId: row.turn_id,
+						sessionGeneration: safeInteger(row.session_generation, 1),
+						deliveryFence: safeInteger(row.delivery_fence, 1),
+						hostSessionRef: row.conversation_host_session_ref,
 					});
 				},
 				request.signal,

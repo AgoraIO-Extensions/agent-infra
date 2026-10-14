@@ -1292,6 +1292,9 @@ export function createWorkloadRuntimeV1(
 					...(materializedSkills
 						? {
 								skills: materializedSkills.skills,
+								skillAppliedBindings: materializedSkills.appliedBindings?.length
+									? JSON.stringify(materializedSkills.appliedBindings)
+									: undefined,
 								skillGenerationId: materializedSkills.generationId,
 							}
 						: {}),

@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
+import type { AgentConfigurationRecord } from "./agent-configuration.js";
 import { isAgentManagementText } from "./agent-management-input.js";
 export type WecomSetupStatusV1 =
 	| "awaiting_input"
@@ -67,7 +67,8 @@ export interface WecomSetupStoreV1 {
 	cancel(session: WecomSetupRecordV1): Promise<boolean>;
 }
 export interface WecomSetupAuthorityV1 {
-	readonly configuration: AgentConfigurationRecordV2;
+	/** 标准 Agent 带默认 Relay Key 时是 V3，企微绑定只读写通道，对两种版本一致（#2422）。 */
+	readonly configuration: AgentConfigurationRecord;
 	readonly authorizationRevision: string;
 }
 export class WecomSetupError extends Error {
