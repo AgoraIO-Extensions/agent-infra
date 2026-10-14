@@ -72,6 +72,13 @@ export function createDeploymentPresentation(input: {
 		let browserSource: Presentation["source"];
 		if (source.kind === "standard") {
 			browserSource = { kind: "standard", templateId: source.templateId };
+		} else if (source.manifest !== undefined) {
+			browserSource = {
+				kind: "custom",
+				manifest: source.manifest,
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+			};
 		} else if (source.interactionMode === "self-managed") {
 			if (!source.identityResponsibility) {
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);

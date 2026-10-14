@@ -121,6 +121,55 @@ describe("deployment presentation platform identity route", () => {
 		expect(standard.capabilities.modelSelection).toBe(true);
 	});
 
+	it("projects a persisted multi-service manifest without inventing an image reference", async () => {
+		const request = new Request("https://platform.test/agents/agent_01");
+		const present = await createDeploymentPresentation({
+			identityScope: {
+				currentRequest: () => request,
+				currentIdentity: async () => identity,
+			} as never,
+			configurationQuery: {
+				readRuntimePresentation: vi.fn().mockResolvedValue({
+					outcome: "found",
+					sourceReference: "sha256:multi-service",
+					capabilities: {},
+					interactionUrl: null,
+				}),
+			},
+			resourceProfile: {
+				profileId: "profile_01",
+				displayName: "Small",
+				estimatedResources: {
+					cpuMillicores: 100,
+					memoryMiB: 128,
+					storageGiB: 1,
+				},
+			},
+			imageRepository: "registry.example.test/agents",
+		})({
+			agentId: "agent_01",
+			configuration: {
+				...configuration,
+				source: {
+					kind: "custom",
+					interactionMode: "self-managed",
+					identityResponsibility: "self-managed",
+					connectionEnabled: false,
+					manifest: '{"schemaVersion":1,"entryServiceName":"api"}',
+				},
+			},
+			management,
+		});
+
+		expect(present.source).toEqual({
+			kind: "custom",
+			manifest: '{"schemaVersion":1,"entryServiceName":"api"}',
+			interactionMode: "self-managed",
+			identityResponsibility: "self-managed",
+		});
+		expect(present.source).not.toHaveProperty("imageReference");
+	});
+
 	it("uses only a resolver-provided canonical HTTPS origin", async () => {
 		const request = new Request("https://platform.test/agents/agent_01");
 		const present = createDeploymentPresentation({

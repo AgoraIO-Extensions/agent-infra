@@ -63,6 +63,10 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import { createKubernetesWorkloadPolicyHelpersV1 } from "./kubernetes-runtime-policy.js";
+import {
+	createMultiServiceRuntimeOperations,
+	isMultiService,
+} from "./multi-service-runtime.js";
 
 const selectorNamePattern = /^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
 const selectorPrefixPattern =
@@ -174,6 +178,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	}) => Promise<boolean>;
 }) {
 	const { client, policy } = options;
+	const multiService = createMultiServiceRuntimeOperations({
+		client,
+		policy,
+	});
 	const connectionInstallationRevision = policy.connectionInstallationRevision;
 	const connection = runtimeConnectionConsumerProjectionV1(
 		options.connectionConsumerControl
@@ -394,6 +402,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		},
 	): Promise<"pending" | "healthy" | "unhealthy" | "unreachable" | "drifted"> {
 		const value = desired(input);
+		if (isMultiService(value)) return multiService.observe(value, identity);
 		if (
 			!options.connectionConsumerControl &&
 			connectionInstallationRevision === null
@@ -1187,6 +1196,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			input: unknown,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const value = desired(input);
+			if (isMultiService(value)) return multiService.apply(value);
 			if (options.connectionConsumerControl && value.replicas !== 0)
 				throw new WorkloadKubernetesError("policy");
 			if (
@@ -1547,6 +1557,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			routeMode: RouteSelectorMode = "closed",
 		) {
 			const value = desired(input);
+			if (isMultiService(value)) return multiService.promote(value);
 			if ((await observe(value, identity, routeMode, "required")) !== "healthy")
 				throw new WorkloadKubernetesError("conflict");
 			const name = workloadResourceNameV1(value.agentId);

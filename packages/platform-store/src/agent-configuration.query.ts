@@ -63,6 +63,8 @@ export interface AgentConfigurationProjectionV1 {
 				readonly kind: "custom";
 				readonly interactionMode: "self-managed" | "platform-adapter";
 				readonly identityResponsibility?: "self-managed" | "platform-managed";
+				/** Persisted multi-service source material, projected without an image reference. */
+				readonly manifest?: string;
 				readonly connectionEnabled: boolean;
 		  };
 	readonly ownerIds: readonly string[];
@@ -737,6 +739,9 @@ export class PostgresAgentConfigurationQueryV1 {
 												identityResponsibility:
 													configuration.source.identityResponsibility,
 											}
+										: {}),
+									...("manifest" in configuration.source
+										? { manifest: configuration.source.manifest }
 										: {}),
 									connectionEnabled: configuration.source.connectionEnabled,
 								};
