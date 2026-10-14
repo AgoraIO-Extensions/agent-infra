@@ -26,6 +26,7 @@ import {
 } from "../agent-management-status.js";
 import type { AdminAgentsState } from "./admin-agents.js";
 import { AdminUserGovernance } from "./admin-user-governance.js";
+import { ApplicationMaterialGovernance } from "./application-material-governance.js";
 
 export const adminAgentStatuses = [
 	"creating",
@@ -121,6 +122,7 @@ export function AdminAgentsScreen({
 			) : (
 				<>
 					<AdminUserGovernance />
+					<ApplicationMaterialGovernance />
 					<div className="admin-agent-filters">
 						<div className="space-y-2">
 							<Label htmlFor={`${id}-status`}>产品状态</Label>
