@@ -14,6 +14,7 @@ const payload = {
 	capabilityId: "a".repeat(64),
 	capabilityKind: "skill",
 	directoryRevision: "b".repeat(64),
+	capabilitySourceVersion: "1.2.3",
 	parameters: "summary",
 	parametersDigest: nativeCapabilityParametersDigestV1("summary"),
 };
@@ -34,18 +35,21 @@ describe("Conversation Dispatch native capability payload", () => {
 				capabilityId: payload.capabilityId,
 				parameters: payload.parameters,
 				parametersDigest: payload.parametersDigest,
+				capabilitySourceVersion: payload.capabilitySourceVersion,
 			},
 		});
 	});
 
-	it.each(["parameters", "parametersDigest", "directoryRevision"] as const)(
-		"rejects a native payload missing %s",
-		(field) => {
-			const invalid = { ...payload } as Record<string, unknown>;
-			delete invalid[field];
-			expect(
-				exactPayload(invalid, "conversation.native-capability.invoke.v1"),
-			).toBeUndefined();
-		},
-	);
+	it.each([
+		"parameters",
+		"parametersDigest",
+		"directoryRevision",
+		"capabilitySourceVersion",
+	] as const)("rejects a native payload missing %s", (field) => {
+		const invalid = { ...payload } as Record<string, unknown>;
+		delete invalid[field];
+		expect(
+			exactPayload(invalid, "conversation.native-capability.invoke.v1"),
+		).toBeUndefined();
+	});
 });

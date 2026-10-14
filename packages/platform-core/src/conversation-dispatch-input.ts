@@ -59,7 +59,7 @@ function nativeCapabilityBinding(value: unknown) {
 		return unavailable();
 	const input = value as Record<string, unknown>;
 	if (
-		Object.keys(input).length !== 9 ||
+		Object.keys(input).length !== 10 ||
 		!text(input.agentId) ||
 		!text(input.actorId) ||
 		!text(input.channelId) ||
@@ -67,6 +67,7 @@ function nativeCapabilityBinding(value: unknown) {
 		!text(input.capabilityId) ||
 		(input.capabilityKind !== "command" && input.capabilityKind !== "skill") ||
 		!text(input.directoryRevision) ||
+		!text(input.capabilitySourceVersion) ||
 		!text(input.parameters) ||
 		!text(input.parametersDigest) ||
 		!/^[a-f0-9]{64}$/.test(String(input.directoryRevision)) ||
@@ -81,6 +82,7 @@ function nativeCapabilityBinding(value: unknown) {
 		capabilityId: input.capabilityId as string,
 		capabilityKind: input.capabilityKind as "command" | "skill",
 		directoryRevision: input.directoryRevision as string,
+		capabilitySourceVersion: input.capabilitySourceVersion as string,
 		parameters: input.parameters as string,
 		parametersDigest: input.parametersDigest as string,
 	};

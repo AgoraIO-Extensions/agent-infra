@@ -1597,6 +1597,182 @@
         ],
         "type": "object"
       },
+      "RuntimeNativeCapabilityRequestV4": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "capabilityId": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "capabilityKind": {
+            "const": "skill",
+            "type": "string"
+          },
+          "capabilitySourceVersion": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "channelId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "conversationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "directoryRevision": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "executionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "executionSource": {
+            "$ref": "#/components/schemas/RuntimeExecutionSourceV1"
+          },
+          "grant": {
+            "$ref": "#/components/schemas/RuntimeExecutionGrantV4"
+          },
+          "hostSessionRef": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "keyBinding": {
+            "$ref": "#/components/schemas/RuntimeRelayKeyBindingV1"
+          },
+          "operation": {
+            "additionalProperties": false,
+            "properties": {
+              "deliveryFence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "executionDeliveryFence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "execution",
+                  "message",
+                  "stop",
+                  "generation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "deliveryFence",
+              "executionDeliveryFence"
+            ],
+            "type": "object"
+          },
+          "parameters": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "parametersDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "principal": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "user",
+                  "application"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          "requestId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 4,
+            "type": "number"
+          },
+          "sessionGeneration": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "traceId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "turnId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "requestId",
+          "traceId",
+          "principal",
+          "executionSource",
+          "channelId",
+          "agentId",
+          "conversationId",
+          "executionId",
+          "turnId",
+          "sessionGeneration",
+          "hostSessionRef",
+          "operation",
+          "grant",
+          "keyBinding",
+          "capabilityId",
+          "capabilityKind",
+          "directoryRevision",
+          "parameters",
+          "parametersDigest",
+          "capabilitySourceVersion"
+        ],
+        "type": "object"
+      },
+      "RuntimeNativeCapabilityTransportV4": {
+        "additionalProperties": false,
+        "properties": {
+          "businessRequest": {
+            "$ref": "#/components/schemas/RuntimeNativeCapabilityRequestV4"
+          },
+          "privateKeyField": {
+            "$ref": "#/components/schemas/RuntimePrivateRelayKeyFieldV1"
+          }
+        },
+        "required": [
+          "businessRequest",
+          "privateKeyField"
+        ],
+        "type": "object"
+      },
       "RuntimeOperationResponseV4": {
         "additionalProperties": false,
         "properties": {

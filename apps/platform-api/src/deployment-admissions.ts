@@ -317,7 +317,7 @@ function validMultiServiceTopology(
 		deployments.length === 2 && statefulSets.length === 0 && pvcs.length === 0;
 	if (
 		(!tracerTopology && !statefulExtension) ||
-		manifest.resources.length !== (statefulExtension ? 5 : 4) ||
+		manifest.resources.length < (statefulExtension ? 5 : 4) ||
 		workloads.length !== 2 ||
 		services.length !== 2 ||
 		manifest.resources.some(
@@ -325,7 +325,8 @@ function validMultiServiceTopology(
 				resource.kind !== "Deployment" &&
 				resource.kind !== "StatefulSet" &&
 				resource.kind !== "Service" &&
-				resource.kind !== "PersistentVolumeClaim",
+				resource.kind !== "PersistentVolumeClaim" &&
+				resource.kind !== "ConfigMap",
 		)
 	)
 		return false;

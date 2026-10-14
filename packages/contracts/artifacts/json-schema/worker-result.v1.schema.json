@@ -570,6 +570,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -588,6 +617,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -800,6 +864,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -818,6 +911,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -1309,6 +1437,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -1324,6 +1481,41 @@
                                               "restartPolicy": {
                                                 "const": "Never",
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -2925,6 +3117,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -2943,6 +3164,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -3155,6 +3411,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -3173,6 +3458,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -3664,6 +3984,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -3679,6 +4028,41 @@
                                               "restartPolicy": {
                                                 "const": "Never",
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -5280,6 +5664,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -5298,6 +5711,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -5510,6 +5958,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -5528,6 +6005,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -6019,6 +6531,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -6034,6 +6575,41 @@
                                               "restartPolicy": {
                                                 "const": "Never",
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -7635,6 +8211,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -7653,6 +8258,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -7865,6 +8505,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -7883,6 +8552,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -8374,6 +9078,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -8389,6 +9122,41 @@
                                               "restartPolicy": {
                                                 "const": "Never",
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -9985,6 +10753,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -10003,6 +10800,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -10215,6 +11047,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -10233,6 +11094,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -10724,6 +11620,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -10739,6 +11664,41 @@
                                               "restartPolicy": {
                                                 "const": "Never",
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -12335,6 +13295,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -12353,6 +13342,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -12565,6 +13589,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -12583,6 +13636,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -13074,6 +14162,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -13089,6 +14206,41 @@
                                               "restartPolicy": {
                                                 "const": "Never",
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -14685,6 +15837,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -14703,6 +15884,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -14915,6 +16131,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -14933,6 +16178,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -15424,6 +16704,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -15439,6 +16748,41 @@
                                               "restartPolicy": {
                                                 "const": "Never",
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -17053,6 +18397,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -17071,6 +18444,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -17283,6 +18691,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -17301,6 +18738,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -17792,6 +19264,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -17807,6 +19308,41 @@
                                               "restartPolicy": {
                                                 "const": "Never",
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -19421,6 +20957,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -19439,6 +21004,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -19651,6 +21251,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -19669,6 +21298,41 @@
                                                   "Never"
                                                 ],
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [
@@ -20160,6 +21824,35 @@
                                                       },
                                                       "maxItems": 32,
                                                       "type": "array"
+                                                    },
+                                                    "volumeMounts": {
+                                                      "items": {
+                                                        "additionalProperties": false,
+                                                        "properties": {
+                                                          "mountPath": {
+                                                            "maxLength": 256,
+                                                            "pattern": "^\\/(?!\\/)(?!.*\\/\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))[A-Za-z0-9._~/-]+$",
+                                                            "type": "string"
+                                                          },
+                                                          "name": {
+                                                            "maxLength": 63,
+                                                            "minLength": 1,
+                                                            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                            "type": "string"
+                                                          },
+                                                          "readOnly": {
+                                                            "const": true,
+                                                            "type": "boolean"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "name",
+                                                          "mountPath"
+                                                        ],
+                                                        "type": "object"
+                                                      },
+                                                      "maxItems": 32,
+                                                      "type": "array"
                                                     }
                                                   },
                                                   "required": [
@@ -20175,6 +21868,41 @@
                                               "restartPolicy": {
                                                 "const": "Never",
                                                 "type": "string"
+                                              },
+                                              "volumes": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "configMap": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "name": {
+                                                          "maxLength": 63,
+                                                          "minLength": 1,
+                                                          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "name"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "name": {
+                                                      "maxLength": 63,
+                                                      "minLength": 1,
+                                                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "name",
+                                                    "configMap"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "maxItems": 32,
+                                                "type": "array"
                                               }
                                             },
                                             "required": [

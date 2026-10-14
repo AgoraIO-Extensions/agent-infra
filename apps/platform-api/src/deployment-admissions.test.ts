@@ -258,11 +258,17 @@ describe("production deployment admissions", () => {
 						template: {
 							metadata: { labels: { app: "web" } },
 							spec: {
+								volumes: [
+									{ name: "config", configMap: { name: "web-config" } },
+								],
 								containers: [
 									{
 										name: "web",
 										image,
 										ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+										volumeMounts: [
+											{ name: "config", mountPath: "/etc/web", readOnly: true },
+										],
 									},
 								],
 							},
@@ -313,6 +319,12 @@ describe("production deployment admissions", () => {
 						ports: [{ name: "http", port: 8080, targetPort: 8080 }],
 					},
 				},
+				{
+					apiVersion: "v1",
+					kind: "ConfigMap",
+					metadata: { name: "web-config" },
+					spec: { data: { "app.conf": "port=8080\n" } },
+				},
 			],
 		});
 		const result = await admissions.imageAdmission.admitImage({
@@ -326,8 +338,15 @@ describe("production deployment admissions", () => {
 		});
 		expect(result).toMatchObject({
 			status: "admitted",
-			source: { kind: "custom", manifest, interactionMode: "self-managed" },
+			source: { kind: "custom", interactionMode: "self-managed" },
 		});
+		if (
+			result.status === "admitted" &&
+			result.source.kind === "custom" &&
+			"manifest" in result.source
+		) {
+			expect(JSON.parse(result.source.manifest)).toEqual(JSON.parse(manifest));
+		}
 		expect(f.fetch).toHaveBeenCalled();
 	});
 

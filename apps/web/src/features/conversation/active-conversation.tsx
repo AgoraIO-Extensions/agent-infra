@@ -20,6 +20,7 @@ import {
 } from "../../components/ui/select.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import { BrowserHandoffPanel } from "../agent-discovery/browser-handoff-panel.js";
 import { BrowserOperationStatus } from "./browser-operation-status.js";
 import type { ConversationCapabilitySelectionV1 } from "./conversation-capability-picker.js";
 import { ConversationCapabilityPickerPanel } from "./conversation-capability-picker-panel.js";
@@ -631,6 +632,14 @@ export function ActiveConversation({
 					events={timeline.events}
 					executionId={latestExecution}
 				/>
+				{reader.browserHandoffEvent ? (
+					<BrowserHandoffPanel
+						browserAvailable={
+							agent.capabilities.browser?.status === "available"
+						}
+						handoffEvent={reader.browserHandoffEvent}
+					/>
+				) : null}
 				<CommandNotice
 					result={command.result}
 					pending={command.isPending}

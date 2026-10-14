@@ -170,6 +170,8 @@ import {
 	RuntimeBusinessGrantClaimsV4Schema,
 	RuntimeExecutionGrantV4Schema,
 	RuntimeExecutionSourceV1Schema,
+	RuntimeNativeCapabilityRequestV4Schema,
+	RuntimeNativeCapabilityTransportV4Schema,
 	RuntimeOperationResponseV4Schema,
 	RuntimePrivateRelayKeyContextV1Schema,
 	RuntimePrivateRelayKeyFieldV1Schema,
@@ -203,6 +205,8 @@ export const RuntimeHostV4SchemaDefinitions = {
 	RuntimeSubmitTurnTransportV4: RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV4: RuntimeSupplementRequestV4Schema,
 	RuntimeSupplementTransportV4: RuntimeSupplementTransportV4Schema,
+	RuntimeNativeCapabilityRequestV4: RuntimeNativeCapabilityRequestV4Schema,
+	RuntimeNativeCapabilityTransportV4: RuntimeNativeCapabilityTransportV4Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV4:
 		RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
 	RuntimeRestoreExecutionKeyRequestV4:

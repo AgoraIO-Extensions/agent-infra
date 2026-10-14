@@ -21,7 +21,9 @@ import {
 	PostgresTaskAuthorizationStoreV1,
 	platformQueueResourceSnapshotTimeoutMs,
 } from "@agent-infra/platform-store";
+import { createBrowserHandoffEventAdapterV1 } from "./browser-handoff-events.js";
 import {
+	type ConversationRuntimeBrowserHandoffRequestV1,
 	type ConversationRuntimeOptionsV2,
 	createConversationRuntimeV2,
 } from "./conversation-runtime.js";
@@ -68,6 +70,14 @@ export interface PlatformConversationWorkerOptionsV2
 
 type Telemetry = Pick<ReturnType<typeof startObservability>, "record">;
 type ConversationRuntime = ReturnType<typeof createConversationRuntimeV2>;
+
+export type PlatformConversationBrowserHandoffInputV1 = Readonly<{
+	readonly request: ConversationRuntimeBrowserHandoffRequestV1;
+	readonly occurredAt: string;
+	readonly adapterEventKeyPrefix: string;
+	readonly runtimeCursorPrefix: string;
+	readonly signal?: AbortSignal;
+}>;
 const resourceSnapshotOperation = "platform.resource_snapshot";
 const slowQueueQueryOperation = "conversation.queue.find.slow";
 const defaultSlowQueryThresholdMs = 250;
@@ -192,6 +202,15 @@ export function createPlatformConversationWorkerV2(
 	const transaction = new PostgresConversationEventTransactionV1({
 		databaseUrl: options.databaseUrl,
 	});
+	const conversationEvents = options.observability
+		? createObservedConversationEvents({
+				transaction,
+				telemetry: options.observability,
+			})
+		: createConversationEventUseCaseV1({ transaction });
+	const browserHandoffEvents = createBrowserHandoffEventAdapterV1({
+		events: conversationEvents,
+	});
 	let runtime: ReturnType<typeof createConversationRuntimeV2> | undefined;
 	let dispatch: ReturnType<typeof createConversationDispatchUseCaseV1>;
 	try {
@@ -241,12 +260,7 @@ export function createPlatformConversationWorkerV2(
 				runtimeHost: telemetry
 					? timedRuntimeSubmit(runtime.runtimeHost, telemetry)
 					: runtime.runtimeHost,
-				events: options.observability
-					? createObservedConversationEvents({
-							transaction,
-							telemetry: options.observability,
-						})
-					: createConversationEventUseCaseV1({ transaction }),
+				events: conversationEvents,
 			},
 			{
 				leaseDurationMs: options.leaseDurationMs,
@@ -716,6 +730,20 @@ export function createPlatformConversationWorkerV2(
 	}
 	return {
 		tick,
+		async browserHandoff(input: PlatformConversationBrowserHandoffInputV1) {
+			if (!runtime) throw new Error("BROWSER_HANDOFF_RUNTIME_UNAVAILABLE");
+			const dispatched = await runtime.browserHandoff(
+				input.request,
+				input.signal ?? signal,
+			);
+			return browserHandoffEvents.persist({
+				request: dispatched.request,
+				response: dispatched.response,
+				occurredAt: input.occurredAt,
+				adapterEventKeyPrefix: input.adapterEventKeyPrefix,
+				runtimeCursorPrefix: input.runtimeCursorPrefix,
+			});
+		},
 		start() {
 			if (started || stopped) return;
 			started = true;

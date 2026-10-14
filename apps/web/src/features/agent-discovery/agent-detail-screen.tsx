@@ -34,6 +34,7 @@ import type {
 	BrowserHandoffActionInputV1,
 	BrowserHandoffBindingV1,
 	BrowserHandoffPanelStateV1,
+	BrowserHandoffTimelineEventV1,
 	BrowserSideEffectConfirmationV1,
 } from "./browser-handoff-panel.js";
 
@@ -41,6 +42,7 @@ type AgentDetailScreenProps = {
 	browserCapability?: BrowserCapabilityProjectionV1;
 	browserWorkflow?: BrowserWorkflowState;
 	browserHandoff?: BrowserHandoffPanelStateV1;
+	browserHandoffEvent?: BrowserHandoffTimelineEventV1;
 	browserConfirmation?: BrowserSideEffectConfirmationV1;
 	browserCurrentBinding?: BrowserHandoffBindingV1;
 	onBrowserCancelConfirmation?: (input: BrowserHandoffActionInputV1) => void;
@@ -99,6 +101,7 @@ export function AgentDetailScreen({
 	browserCapability,
 	browserWorkflow,
 	browserHandoff,
+	browserHandoffEvent,
 	browserConfirmation,
 	browserCurrentBinding,
 	onBrowserCancelConfirmation,
@@ -368,6 +371,7 @@ export function AgentDetailScreen({
 							capability={browserCapability}
 							workflow={browserWorkflow}
 							handoff={browserHandoff}
+							handoffEvent={browserHandoffEvent}
 							confirmation={browserConfirmation}
 							currentBinding={browserCurrentBinding}
 							onCancelConfirmation={onBrowserCancelConfirmation}

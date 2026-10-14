@@ -206,6 +206,8 @@ export class FakeNativeCapabilityAdmissionStoreV1
 			plan.authorizationRevision !== request.authority.authorizationRevision ||
 			plan.capability.id !== command.capabilityId ||
 			plan.capability.directoryRevision !== command.directoryRevision ||
+			plan.outbox.payload.capabilitySourceVersion !==
+				plan.capability.source.version ||
 			plan.parameters.length > 16 * 1024 ||
 			plan.parameters !== command.parameters ||
 			plan.parametersDigest !==
@@ -219,6 +221,8 @@ export class FakeNativeCapabilityAdmissionStoreV1
 			plan.outbox.payload.capabilityId !== plan.capability.id ||
 			plan.outbox.payload.directoryRevision !==
 				plan.capability.directoryRevision ||
+			plan.outbox.payload.capabilitySourceVersion !==
+				plan.capability.source.version ||
 			plan.outbox.payload.parameters !== plan.parameters ||
 			plan.outbox.payload.parametersDigest !== plan.parametersDigest ||
 			plan.result.executionId !== plan.executionId ||

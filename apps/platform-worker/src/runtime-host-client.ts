@@ -35,6 +35,9 @@ import {
 	RuntimeModelDirectoryResponseV1Schema,
 	type RuntimeNativeCapabilityRequestV3,
 	RuntimeNativeCapabilityRequestV3Schema,
+	type RuntimeNativeCapabilityRequestV4,
+	RuntimeNativeCapabilityRequestV4Schema,
+	RuntimeNativeCapabilityTransportV4Schema,
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV3Schema,
@@ -108,7 +111,7 @@ export interface WorkerAcceptedExecutionV4 {
 	readonly scope: RuntimePinnedExecutionKeyScopeV4;
 	readonly trustedHostSessionRef: string | null;
 	readonly authorizationRecordId: string;
-	readonly selection: RuntimeSelectionV1;
+	readonly selection?: RuntimeSelectionV1;
 }
 
 export interface WorkerExecutionKeyReaderV4 {
@@ -1154,12 +1157,18 @@ export function createWorkerRuntimeHostClientV4(
 			const request =
 				"selection" in value
 					? RuntimeSubmitTurnRequestV4Schema.parse(value)
-					: RuntimeSupplementRequestV4Schema.parse(value);
+					: "capabilityId" in value
+						? RuntimeNativeCapabilityRequestV4Schema.parse(value)
+						: RuntimeSupplementRequestV4Schema.parse(value);
 			const claims = options.verifyGrant(request.grant);
 			await validateRuntimeBusinessBindingV4(request, claims);
 			const reader = options.executionKeys;
 			const decryptor = options.decryptor;
-			if (!reader || !decryptor || !options.selection)
+			if (
+				!reader ||
+				!decryptor ||
+				("selection" in request && !options.selection)
+			)
 				throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
 			const accepted = await interruptedDependency(
 				reader.readAcceptedExecution(request),
@@ -1173,9 +1182,10 @@ export function createWorkerRuntimeHostClientV4(
 			);
 			if (
 				accepted.authorizationRecordId !== claims.authorizationRecordId ||
-				!isDeepStrictEqual(accepted.selection, options.selection) ||
 				("selection" in request &&
-					!isDeepStrictEqual(accepted.selection, request.selection))
+					(!options.selection ||
+						!isDeepStrictEqual(accepted.selection, options.selection) ||
+						!isDeepStrictEqual(accepted.selection, request.selection)))
 			)
 				return failure("RUNTIME_GRANT_INVALID", false);
 			const original = structuredClone(accepted);
@@ -1245,10 +1255,15 @@ export function createWorkerRuntimeHostClientV4(
 							businessRequest: request,
 							privateKeyField,
 						})
-					: RuntimeSupplementTransportV4Schema.parse({
-							businessRequest: request,
-							privateKeyField,
-						});
+					: "capabilityId" in request
+						? RuntimeNativeCapabilityTransportV4Schema.parse({
+								businessRequest: request,
+								privateKeyField,
+							})
+						: RuntimeSupplementTransportV4Schema.parse({
+								businessRequest: request,
+								privateKeyField,
+							});
 			await interruptedDependency(options.assertCurrentAuthorization(), signal);
 			signal?.throwIfAborted();
 			// Synchronous final cryptographic/time check follows all dependency awaits.
@@ -1258,7 +1273,13 @@ export function createWorkerRuntimeHostClientV4(
 			const response = await post(
 				fetcher,
 				new URL(
-					`internal/runtime/v4/${"selection" in request ? "turns" : "instructions"}`,
+					`internal/runtime/v4/${
+						"selection" in request
+							? "turns"
+							: "capabilityId" in request
+								? "native-capability"
+								: "instructions"
+					}`,
 					base,
 				),
 				options.serviceToken,
@@ -1288,6 +1309,10 @@ export function createWorkerRuntimeHostClientV4(
 	return {
 		submitTurn: send,
 		supplement: send,
+		nativeCapability: (
+			value: RuntimeNativeCapabilityRequestV4,
+			signal?: AbortSignal,
+		) => send(value, signal),
 		async restoreExecutionKey(
 			originalRequest: RuntimeSubmitTurnRequestV4,
 			acceptedHostSessionRef: string,
