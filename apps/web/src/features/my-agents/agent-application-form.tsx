@@ -21,6 +21,7 @@ import type {
 } from "../../pilot/generated-v2/types.gen.js";
 import { DirectoryPicker } from "../directory-fields.js";
 import {
+	type AgentApplicationDefaultKeyState,
 	type AgentApplicationEnvironmentDraft,
 	type AgentApplicationFieldErrors,
 	type AgentApplicationModelDraft,
@@ -57,6 +58,8 @@ type AgentApplicationFormProps = {
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			deploymentConfigurationRetryable?: boolean;
 			mode: "update";
+			/** 编辑页读取的默认 Key 状态；`isSet` 为真时更换模型集合需要重新提交 Key。 */
+			defaultRelayKeyState?: AgentApplicationDefaultKeyState;
 			onSubmit: (body: AgentApplicationUpdateRequestV2Writable) => void;
 			serverError?: AgentApplicationServerError | null;
 			submitting: boolean;
@@ -608,6 +611,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		advancedConfigurationOpen: boolean;
 	}>({ advancedConfigurationOpen: false, focusRequest: -1 });
 	const application = props.mode === "update" ? props.application : undefined;
+	const defaultRelayKeyState =
+		props.mode === "update" ? props.defaultRelayKeyState : undefined;
+	const keyManaged = defaultRelayKeyState?.isSet === true;
 	const configuration = application?.configuration;
 	const persistedModelOptions = configuration?.modelOptions;
 	const deployment = props.deploymentConfiguration;
@@ -1204,7 +1210,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			modelConfigurationVisible,
 			requiresTemplateReadiness: readinessEnabled && sourceKind === "standard",
 			requiresDefaultRelayKey:
-				props.mode === "create" && sourceKind === "standard",
+				(props.mode === "create" || keyManaged) && sourceKind === "standard",
 			staleModel,
 			staleModelIndexes,
 			staleTemplate,
@@ -1224,7 +1230,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			props.onSubmit(buildAgentApplicationRequest("create", draft));
 			return;
 		}
-		props.onSubmit(buildAgentApplicationRequest("update", draft));
+		props.onSubmit(
+			buildAgentApplicationRequest("update", draft, defaultRelayKeyState),
+		);
 	};
 
 	return (
@@ -1564,7 +1572,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						) : null}
 						{modelConfigurationVisible ? (
 							<>
-								{props.mode === "create" ? (
+								{props.mode === "create" || keyManaged ? (
 									<div className="space-y-2">
 										<Label htmlFor="application-default-relay-key">
 											Agent 默认 Relay Key
@@ -1589,7 +1597,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 											value={defaultRelayKey}
 										/>
 										<p className="text-muted-foreground text-sm">
-											只提交一次；保存后仅显示已设置状态，Key 不会回显。
+											{props.mode === "create"
+												? "只提交一次；保存后仅显示已设置状态，Key 不会回显。"
+												: "更换模型集合需要重新提交 Key，服务端按该 Key 实际可见的模型校验；保存后不会回显。"}
 										</p>
 										<FieldError
 											id={errorId("defaultRelayKey")}

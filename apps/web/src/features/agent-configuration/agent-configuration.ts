@@ -37,6 +37,10 @@ export function isAgentConfigurationOwner(
 export type AgentDefaultRelayKeyState = GetAgentDefaultRelayKeyV2Responses[200];
 export type AgentDefaultRelayKeyCandidates =
 	GetAgentDefaultRelayKeyCandidatesV2Responses[200];
+/** 候选模型，连同检查时看到的 Key 版本；保存时与 `configurationRevision` 一起作为 expected 值。 */
+export type AgentDefaultRelayKeyCheck = AgentDefaultRelayKeyCandidates & {
+	keyVersion: number | null;
+};
 
 export async function loadAgentDefaultRelayKey(
 	agentId: string,

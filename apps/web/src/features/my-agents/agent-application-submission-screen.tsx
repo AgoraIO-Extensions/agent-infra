@@ -10,6 +10,7 @@ import type {
 	DeploymentConfigurationProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
+import type { AgentApplicationDefaultKeyState } from "./agent-application-draft.js";
 import { AgentApplicationForm } from "./agent-application-form.js";
 import {
 	type AgentApplicationEditAction,
@@ -39,6 +40,8 @@ type AgentApplicationSubmissionScreenProps =
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			error?: RequestError | null;
 			mode: "update";
+			/** 默认 Key 状态：`isSet` 为真时，更换模型集合需要重新提交 Key。 */
+			defaultRelayKeyState?: AgentApplicationDefaultKeyState;
 			onSubmit: (body: AgentApplicationUpdateRequestV2Writable) => void;
 			result?: AgentApplicationProjectionV2;
 			submitting: boolean;

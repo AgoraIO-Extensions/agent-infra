@@ -4,6 +4,7 @@ import { useBrowserSession } from "../use-browser-session.js";
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
 import { AgentConfigurationScreen } from "./agent-configuration-screen.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
+import { useAgentDefaultRelayKeyState } from "./use-agent-default-relay-key-state.js";
 
 type AgentConfigurationWorkflowProps = {
 	agent: AgentProjectionV2;
@@ -24,6 +25,11 @@ export function AgentConfigurationWorkflow({
 	const isSystemAdministrator =
 		session.state.kind === "ready" &&
 		session.state.session.user.roles.includes("system_admin");
+	// 只有 Owner 能读取默认 Key 状态；`isSet` 表示模型由默认 Key 管理（#2421）。
+	const defaultRelayKey = useAgentDefaultRelayKeyState(
+		agent.agentId,
+		isConfigurationOwner && agent.source.kind === "standard",
+	);
 	const lifecycle = (
 		<AgentLifecycleWorkflow key={agent.agentId} agent={agent} />
 	);
@@ -35,6 +41,7 @@ export function AgentConfigurationWorkflow({
 				agent={agent}
 				commandError={commandError}
 				commandResult={submission.data}
+				defaultRelayKeyManaged={defaultRelayKey.data?.isSet === true}
 				key={agent.agentId}
 				onSave={submission.saveConfiguration}
 				onPreviewDefaultRelayKeyCandidates={
@@ -42,6 +49,7 @@ export function AgentConfigurationWorkflow({
 				}
 				onReplaceDefaultRelayKey={submission.replaceDefaultRelayKey}
 				relayKeyError={submission.relayKeyError}
+				relayKeyResult={submission.relayKeyResult}
 				relayKeySubmitting={submission.relayKeySubmitting}
 				onUpgradeImage={submission.upgradeImage}
 				session={session.state}

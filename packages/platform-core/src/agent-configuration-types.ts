@@ -456,6 +456,8 @@ export interface AgentConfigurationTransactionPortV1 {
 				readonly result: AgentConfigurationResultV1;
 		  }
 		| { readonly outcome: "stale" }
+		/** 默认 Key 的当前版本与 expectedKeyVersion 不一致：与配置修订冲突分开表达（#2421）。 */
+		| { readonly outcome: "key_stale" }
 		| { readonly outcome: "idempotency_conflict" }
 	>;
 }
@@ -641,6 +643,7 @@ export type AgentConfigurationErrorCode =
 	| "model_profile_unsupported"
 	| "no_change"
 	| "stale_revision"
+	| "key_version_conflict"
 	| "idempotency_conflict"
 	| "dependency_unavailable"
 	| "persistence_failed";

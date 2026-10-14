@@ -404,6 +404,22 @@ export const AgentApiCreationResponseV1Schema = z.strictObject({
 	revision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 	replayed: z.boolean(),
 });
+/**
+ * 带默认 Relay Key 的标准 Agent 更换模型集合：必须同时重新提交 Key（服务端按 Key 实际
+ * 可见的模型校验，API 没有解密私钥）并带上调用方看到的配置修订和 Key 版本。三者要么
+ * 同时出现、同时省略；`modelConfiguration` 此时不得携带 `credentialValue`。
+ */
+const defaultRelayKeyReplacementShape = {
+	defaultRelayKey: z
+		.string()
+		.min(16)
+		.max(8192)
+		.regex(/^[\x21-\x7e]+$/)
+		.meta({ writeOnly: true })
+		.optional(),
+	expectedConfigurationRevision: z.number().int().positive().optional(),
+	expectedKeyVersion: z.number().int().positive().nullable().optional(),
+};
 export const AgentApplicationUpdateRequestV2Schema =
 	AgentApplicationUpdateRequestV1Schema.omit({ actions: true }).extend({
 		schemaVersion: z.literal(2),
@@ -415,10 +431,12 @@ export const AgentApplicationUpdateRequestV2Schema =
 			}),
 			...AgentSourceInputV1Schema.options.slice(1),
 		]),
+		...defaultRelayKeyReplacementShape,
 	});
 export const AgentConfigurationUpdateRequestV2Schema =
 	AgentConfigurationUpdateRequestV1Schema.omit({ actions: true }).extend({
 		schemaVersion: z.literal(2),
+		...defaultRelayKeyReplacementShape,
 	});
 export const AgentConfigurationProjectionV2Schema =
 	AgentConfigurationProjectionV1Schema.omit({ actions: true });

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type {
+	AgentConfigurationRelayKeyAttachmentV1,
 	AgentConfigurationTransactionPortV1,
 	AgentConfigurationWritePlanV1,
 	PendingSecretRecordAttachmentsV1,
@@ -25,6 +26,7 @@ import {
 	configurationVersionTransitionAllowed,
 	insertAgentConfigurationEffects,
 	replaceAgentAccess,
+	replaceAgentDefaultRelayKeyInTransaction,
 	replaceSkillHubAgentBindings,
 } from "./plan-writes.js";
 import {
@@ -142,8 +144,9 @@ export class PostgresAgentConfigurationTransactionV1
 	async commit(
 		input: AgentConfigurationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
+		defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1,
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
-		return this.#commit(input, attachments);
+		return this.#commit(input, attachments, undefined, defaultRelayKey);
 	}
 
 	async commitWecomSetup(
@@ -177,6 +180,7 @@ export class PostgresAgentConfigurationTransactionV1
 			readonly holderId: string;
 			readonly fence: number;
 		},
+		defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1,
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
 		try {
 			const plan = validatedPlan(input);
@@ -403,9 +407,22 @@ export class PostgresAgentConfigurationTransactionV1
 						plan,
 						configuration,
 						previousConfiguration,
+						defaultRelayKey !== undefined,
 					)
 				)
 					throw new AgentConfigurationStoreError();
+
+				// 默认 Key 与配置修订、模型集合在同一事务内前进；Key 版本冲突在任何配置写入之前
+				// 返回，与配置修订冲突（stale）区分开。
+				if (
+					defaultRelayKey &&
+					(await replaceAgentDefaultRelayKeyInTransaction(
+						transaction,
+						plan,
+						defaultRelayKey,
+					)) === "stale"
+				)
+					return { outcome: "key_stale" as const };
 
 				if (
 					!(await advanceAgentConfigurationRevision(

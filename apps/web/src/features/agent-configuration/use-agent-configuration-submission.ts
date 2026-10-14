@@ -110,13 +110,22 @@ export function useAgentConfigurationSubmission(agentId: string) {
 			startSubmission({ kind: "configuration", body }),
 		upgradeImage: (imageReference: string) =>
 			startSubmission({ kind: "image", imageReference }),
+		/** 仅替换 Key 成功后的状态（含新版本），供页面给出确认提示。 */
+		relayKeyResult: relayKeySubmission.isSuccess
+			? relayKeySubmission.data
+			: undefined,
 		replaceDefaultRelayKey: relayKeySubmission.mutate,
+		/** 返回候选模型，以及检查时看到的配置修订和 Key 版本（保存时作为 expected 值）。 */
 		previewDefaultRelayKeyCandidates: async (keyValue: string) => {
 			const state = await loadAgentDefaultRelayKey(agentId);
-			return previewAgentDefaultRelayKeyCandidates(agentId, {
+			const candidates = await previewAgentDefaultRelayKeyCandidates(agentId, {
 				configurationRevision: state.configurationRevision,
 				keyValue,
 			});
+			return {
+				...candidates,
+				keyVersion: state.isSet ? state.keyVersion : null,
+			};
 		},
 	};
 }

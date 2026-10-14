@@ -220,9 +220,17 @@ export function validateAgentApplicationDraft(
 	return errors;
 }
 
+/** 编辑已有申请时读取到的默认 Key 状态：更换模型集合时作为 expected 值带回。 */
+export type AgentApplicationDefaultKeyState = {
+	readonly isSet: boolean;
+	readonly keyVersion: number | null;
+	readonly configurationRevision: number;
+};
+
 function requestBody(
 	mode: "create" | "update",
 	draft: AgentApplicationFormDraft,
+	keyState?: AgentApplicationDefaultKeyState,
 ) {
 	const source: AgentApplicationCreateRequestV2Writable["source"] =
 		draft.source ??
@@ -288,6 +296,17 @@ function requestBody(
 		...(mode === "create" && draft.defaultRelayKey?.trim()
 			? { defaultRelayKey: draft.defaultRelayKey.trim() }
 			: {}),
+		// 已由默认 Key 管理模型的申请：更换模型集合必须重新提交 Key，并带上看到的版本（#2421）。
+		...(mode === "update" &&
+		keyState?.isSet &&
+		modelConfiguration !== undefined &&
+		draft.defaultRelayKey?.trim()
+			? {
+					defaultRelayKey: draft.defaultRelayKey.trim(),
+					expectedConfigurationRevision: keyState.configurationRevision,
+					expectedKeyVersion: keyState.keyVersion,
+				}
+			: {}),
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
 	};
 }
@@ -306,12 +325,14 @@ export function buildAgentApplicationRequest(
 export function buildAgentApplicationRequest(
 	mode: "update",
 	draft: AgentApplicationFormDraft,
+	keyState?: AgentApplicationDefaultKeyState,
 ): AgentApplicationUpdateRequestV2Writable;
 export function buildAgentApplicationRequest(
 	mode: "create" | "update",
 	draft: AgentApplicationFormDraft,
+	keyState?: AgentApplicationDefaultKeyState,
 ) {
-	const body = requestBody(mode, draft);
+	const body = requestBody(mode, draft, keyState);
 	const secrets = secretValues(draft);
 	if (mode === "create") return { ...body, secrets };
 

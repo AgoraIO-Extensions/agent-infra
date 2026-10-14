@@ -22,6 +22,7 @@ import {
 	requestMetadata,
 } from "./common.js";
 import { mapCoreError } from "./core-errors.js";
+import { parseDefaultRelayKeyReplacement } from "./default-relay-key-replacement.js";
 import {
 	type IdentityAdapter,
 	type IdentityContext,
@@ -211,6 +212,11 @@ export function registerV2ConfigurationRoutes(
 			AgentConfigurationUpdateRequestV2Schema,
 			metadata.traceId,
 		);
+		// 带默认 Key 的更换模型请求：Key、版本与模型选择成套出现，走 V3 命令（#2421）。
+		const keyReplacement = parseDefaultRelayKeyReplacement(
+			body,
+			metadata.traceId,
+		);
 		let prepared: Awaited<
 			ReturnType<ConfigurationRoutesDependencies["prepareSecretReplacements"]>
 		> = { secrets: [], modelCredentialOptionIds: [] };
@@ -263,17 +269,45 @@ export function registerV2ConfigurationRoutes(
 		);
 		try {
 			await dependencies.configuration.update(
-				{
-					schemaVersion: 2,
-					agentId: context.req.param("agentId"),
-					idempotencyKey,
-					requestId: metadata.requestId,
-					traceId: metadata.traceId,
-					changes: configurationChanges(
-						body,
-						preparedSecrets.modelCredentialOptionIds,
-					),
-				},
+				keyReplacement && body.modelConfiguration
+					? {
+							schemaVersion: 3,
+							agentId: context.req.param("agentId"),
+							idempotencyKey,
+							requestId: metadata.requestId,
+							traceId: metadata.traceId,
+							defaultRelayKey: keyReplacement.defaultRelayKey,
+							expectedConfigurationRevision:
+								keyReplacement.expectedConfigurationRevision,
+							expectedKeyVersion: keyReplacement.expectedKeyVersion,
+							changes: {
+								...configurationChanges(
+									{ ...body, modelConfiguration: undefined },
+									preparedSecrets.modelCredentialOptionIds,
+								),
+								// 无凭证的模型选择：Key 单独加密保存，不进入配置记录。
+								modelConfiguration: {
+									options: body.modelConfiguration.options.map(
+										({ credentialValue: _credentialValue, ...option }) =>
+											option,
+									),
+									defaultOptionId: body.modelConfiguration.defaultOptionId,
+									defaultReasoningLevel:
+										body.modelConfiguration.defaultReasoningLevel,
+								},
+							},
+						}
+					: {
+							schemaVersion: 2,
+							agentId: context.req.param("agentId"),
+							idempotencyKey,
+							requestId: metadata.requestId,
+							traceId: metadata.traceId,
+							changes: configurationChanges(
+								body,
+								preparedSecrets.modelCredentialOptionIds,
+							),
+						},
 				{
 					schemaVersion: 1,
 					actorId: identity.userId,

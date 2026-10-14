@@ -27,17 +27,39 @@ describe("configuration version transitions (#2401)", () => {
 		},
 	);
 
-	it("fails closed on every plan that replaces the default Key until its attachment is persisted", () => {
+	it("admits a Key-replacing plan only with its Key attachment and only on V3 over V3 (#2421)", () => {
+		const keyPlan = plan(["defaultRelayKey", "modelConfiguration"]);
+		const check = (
+			configuration: 2 | 3,
+			previous: 2 | 3,
+			keyAttached: boolean,
+		) =>
+			configurationVersionTransitionAllowed(
+				keyPlan,
+				{ schemaVersion: configuration },
+				{ schemaVersion: previous },
+				keyAttached,
+			);
+		expect(check(3, 3, true)).toBe(true);
+		// 计划声明替换 Key 却没有附件：配置会前进而新 Key 被静默丢弃。
+		expect(check(3, 3, false)).toBe(false);
+		// V2 基线不能借 Key 替换变成 V3，V3 也不能降级。
+		expect(check(3, 2, true)).toBe(false);
+		expect(check(2, 3, true)).toBe(false);
+		expect(check(2, 2, true)).toBe(false);
+	});
+
+	it("rejects a Key attachment on a plan that does not replace the Key", () => {
 		for (const [configuration, previous] of [
 			[3, 3],
-			[3, 2],
 			[2, 2],
 		] as const)
 			expect(
 				configurationVersionTransitionAllowed(
-					plan(["defaultRelayKey", "modelConfiguration"]),
+					plan(["environment"]),
 					{ schemaVersion: configuration },
 					{ schemaVersion: previous },
+					true,
 				),
 			).toBe(false);
 	});

@@ -2922,3 +2922,192 @@ describe("Agent configuration policy", () => {
 		expectNoEffects(transaction);
 	});
 });
+
+describe("Agent configuration replaces the model set together with the default Key (#2421)", () => {
+	const record = (() => {
+		const base = structuredClone(agentConfigurationConformanceRecordV1);
+		const model = base.modelConfiguration;
+		if (!model) throw new Error("fixture model missing");
+		return {
+			...base,
+			schemaVersion: 3,
+			modelConfiguration: {
+				...model,
+				options: model.options.map(
+					({ credential: _credential, ...option }) => option,
+				),
+			},
+		} as unknown as AgentConfigurationRecordV2;
+	})();
+	const plaintextKey = "SYNTHETIC_REPLACEMENT_KEY_0001";
+	const requested = {
+		options: [
+			{
+				optionId: "model_primary",
+				endpointId: "endpoint_01",
+				modelId: "gpt-5",
+				reasoningLevels: ["low"],
+			},
+			{
+				optionId: "model_second",
+				endpointId: "endpoint_01",
+				modelId: "gpt-5-mini",
+				reasoningLevels: ["low"],
+			},
+		],
+		defaultOptionId: "model_second",
+		defaultReasoningLevel: "low",
+	};
+	function create(
+		options: {
+			visible?: readonly string[];
+			keyVersion?: number | null;
+			identityRevision?: string;
+		} = {},
+	) {
+		const transaction = new FakeAgentConfigurationTransactionV1(record, {
+			managementState: accessState,
+			authorizationRevision: "authorization_9",
+			keyVersion: options.keyVersion === undefined ? 1 : options.keyVersion,
+		});
+		const admissions = new FakeAgentConfigurationAdmissionsV1({
+			...agentConfigurationConformanceAdmissionsV1,
+			authorizations: [
+				{
+					agentId: "agent_01",
+					actorId: "owner_01",
+					authorizationRevision: "authorization_9",
+					accessAuthority,
+				},
+			],
+		});
+		const encrypted: unknown[] = [];
+		const useCase = createAgentConfigurationUseCaseV1({
+			transaction,
+			authorizationAdmission: admissions,
+			imageAdmission: admissions,
+			modelAdmission: admissions,
+			secretAdmission: admissions,
+			channelAdmission: admissions,
+			keylessModelAdmission: {
+				// 部署的目录准入：原样接受 Owner 选择，并补上目录修订。
+				admitModels: async ({ requested: selection }) =>
+					({ catalogRevision: "catalog_3", ...selection }) as never,
+			},
+			defaultRelayKey: {
+				currentIdentity: async () => ({
+					userId: "owner_01",
+					accountStatus: "active",
+					authorizationRevision: options.identityRevision ?? "authorization_9",
+				}),
+				candidates: async () =>
+					(options.visible ?? ["gpt-5", "gpt-5-mini"]).map((modelId) => ({
+						endpointId: "endpoint_01",
+						modelId,
+						reasoningLevels: ["low"],
+					})),
+				encrypt: (binding, keyValue) => {
+					encrypted.push({ binding, keyValue });
+					return { ciphertext: "opaque" };
+				},
+			},
+		});
+		return { transaction, useCase, encrypted };
+	}
+	const keyedCommand = (overrides: Record<string, unknown> = {}) => ({
+		...command,
+		schemaVersion: 3 as const,
+		idempotencyKey: "keyed-update",
+		defaultRelayKey: plaintextKey,
+		expectedConfigurationRevision: 7,
+		expectedKeyVersion: 1,
+		changes: { modelConfiguration: requested },
+		...overrides,
+	});
+
+	it("advances the revision, the model set and the Key version together", async () => {
+		const { transaction, useCase, encrypted } = create();
+		const result = await useCase.update(keyedCommand() as never, actor);
+		expect(result).toMatchObject({ revision: 8 });
+		expect(result.changedFields).toEqual(
+			expect.arrayContaining(["modelConfiguration", "defaultRelayKey"]),
+		);
+		const stored = transaction.snapshot();
+		expect(stored).toMatchObject({
+			commitCount: 1,
+			keyVersion: 2,
+			configuration: {
+				schemaVersion: 3,
+				revision: 8,
+				modelConfiguration: { defaultOptionId: "model_second" },
+			},
+		});
+		expect(JSON.stringify(stored.configuration)).not.toContain("credential");
+		// Key 明文只交给加密端口，不进入配置、写入计划或审计。
+		expect(encrypted).toHaveLength(1);
+		expect(JSON.stringify(stored.lastPlan)).not.toContain(plaintextKey);
+		expect(JSON.stringify(stored.configuration)).not.toContain(plaintextKey);
+	});
+
+	it("tells a stale Key version apart from a stale configuration revision and writes nothing", async () => {
+		const staleKey = create();
+		await expect(
+			staleKey.useCase.update(
+				keyedCommand({ expectedKeyVersion: 5 }) as never,
+				actor,
+			),
+		).rejects.toMatchObject({ code: "key_version_conflict" });
+		expect(staleKey.transaction.snapshot()).toMatchObject({
+			commitCount: 0,
+			keyVersion: 1,
+			configuration: { revision: 7 },
+		});
+		expect(staleKey.encrypted).toHaveLength(0);
+
+		const staleRevision = create();
+		await expect(
+			staleRevision.useCase.update(
+				keyedCommand({ expectedConfigurationRevision: 6 }) as never,
+				actor,
+			),
+		).rejects.toMatchObject({ code: "stale_revision" });
+		expect(staleRevision.transaction.snapshot()).toMatchObject({
+			commitCount: 0,
+			keyVersion: 1,
+		});
+	});
+
+	it.each([
+		["a model the Key cannot see", { visible: ["gpt-5"] }, "not_admitted"],
+		[
+			"an identity revision that changed during validation",
+			{ identityRevision: "authorization_10" },
+			"stale_revision",
+		],
+	] as const)(
+		"refuses %s without touching the Key",
+		async (_label, options, code) => {
+			const { transaction, useCase, encrypted } = create(options);
+			await expect(
+				useCase.update(keyedCommand() as never, actor),
+			).rejects.toMatchObject({ code });
+			expect(transaction.snapshot()).toMatchObject({
+				commitCount: 0,
+				keyVersion: 1,
+			});
+			expect(encrypted).toHaveLength(0);
+		},
+	);
+
+	it("replays the same idempotent request without encrypting the Key again", async () => {
+		const { transaction, useCase, encrypted } = create();
+		const first = await useCase.update(keyedCommand() as never, actor);
+		const replay = await useCase.update(keyedCommand() as never, actor);
+		expect(replay).toEqual(first);
+		expect(encrypted).toHaveLength(1);
+		expect(transaction.snapshot()).toMatchObject({
+			commitCount: 1,
+			keyVersion: 2,
+		});
+	});
+});

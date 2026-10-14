@@ -42,6 +42,10 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import {
+	type RelayKeyVersionBindingV1,
+	replaceRelayKeyVersionInTransaction,
+} from "./relay-key-versions.ts";
 import { createSecretRecordFixtureResolver } from "./secret-record-fixture.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -1023,6 +1027,272 @@ describe("PostgreSQL application revision transaction", () => {
 				),
 			).rejects.toMatchObject({ code: "not_admitted" });
 			expect(await snapshot()).toEqual(before);
+		});
+	});
+
+	describe("keyless (V3) applications resubmit with a new Key and model set (#2421)", () => {
+		const plaintextKey = "SYNTHETIC_REVISION_KEY_00001";
+		const requested = {
+			options: [
+				{
+					optionId: "model_primary",
+					endpointId: "endpoint_01",
+					modelId: "gpt-5",
+					reasoningLevels: ["low"],
+				},
+				{
+					optionId: "model_second",
+					endpointId: "endpoint_01",
+					modelId: "gpt-5-mini",
+					reasoningLevels: ["low"],
+				},
+			],
+			defaultOptionId: "model_second",
+			defaultReasoningLevel: "low",
+		};
+		/** 形状有效的 Key 密文替身：Store 只校验结构与绑定，不涉及真实加解密。 */
+		function ciphertext(binding: RelayKeyVersionBindingV1) {
+			return {
+				schemaVersion: 1,
+				...binding,
+				crypto: {
+					schemaVersion: 1,
+					algorithmVersion: "aes-256-gcm:v1",
+					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+					wrappingKeyVersion: "wrapping-key-1",
+					aadVersion: "relay-key-aad:v1",
+					dekFingerprint: "a".repeat(64),
+					nonce: Buffer.alloc(12).toString("base64"),
+					ciphertext: Buffer.alloc(16).toString("base64"),
+					authenticationTag: Buffer.alloc(16).toString("base64"),
+					wrappedDek: Buffer.alloc(384).toString("base64"),
+				},
+			};
+		}
+		const encrypted: string[] = [];
+		function keyedUseCase(transaction: ApplicationRevisionTransactionPortV1) {
+			const admission = admissions(managementState("rejected"));
+			return createApplicationRevisionUseCaseV1(
+				{
+					transaction,
+					authorizationAdmission: admission,
+					imageAdmission: admission,
+					modelAdmission: admission,
+					secretAdmission: admission,
+					channelAdmission: admission,
+					keylessModelAdmission: {
+						admitModels: async ({ requested: selection }) =>
+							({ catalogRevision: "catalog_3", ...selection }) as never,
+					},
+					defaultRelayKey: {
+						currentIdentity: async () => ({
+							userId: applicantId,
+							accountStatus: "active",
+							authorizationRevision: "authorization_10",
+						}),
+						candidates: async () =>
+							["gpt-5", "gpt-5-mini"].map((modelId) => ({
+								endpointId: "endpoint_01",
+								modelId,
+								reasoningLevels: ["low"],
+							})),
+						encrypt: (binding, keyValue) => {
+							encrypted.push(keyValue);
+							return ciphertext(binding as RelayKeyVersionBindingV1);
+						},
+					},
+				},
+				{ now: () => new Date(occurredAt) },
+			);
+		}
+		const keyedCommand = (
+			key = "keyed-revision-01",
+			overrides: Record<string, unknown> = {},
+		) =>
+			({
+				schemaVersion: 3,
+				idempotencyKey: key,
+				requestId: "request_keyed",
+				traceId: "trace_keyed",
+				name: "Re-keyed Agent",
+				description: "Resubmitted with a new Key",
+				coOwnerIds: [],
+				availability: [],
+				source: { kind: "standard", templateId: "template_01" },
+				environment: [{ name: "LOG_LEVEL", value: "info" }],
+				secrets: [],
+				channels: [],
+				defaultRelayKey: plaintextKey,
+				expectedConfigurationRevision: 7,
+				expectedKeyVersion: 1,
+				modelConfiguration: requested,
+				...overrides,
+			}) as never;
+		async function seedKeyed() {
+			await resetDatabase();
+			await adminClient`delete from platform.relay_key_versions`;
+			await adminClient`delete from platform.relay_key_subjects`;
+			encrypted.length = 0;
+			await seedRevisionState(keylessState());
+			await adminClient.begin((sql) =>
+				replaceRelayKeyVersionInTransaction(sql, {
+					purpose: "agent-default",
+					subjectId: agentId,
+					expectedCurrentVersion: null,
+					encrypt: ciphertext,
+				}),
+			);
+		}
+		async function keyVersions() {
+			const rows = await adminClient<{ key_version: string }[]>`
+				select key_version from platform.relay_key_versions
+				where purpose = 'agent-default' and subject_id = ${agentId}
+				order by key_version
+			`;
+			return rows.map((row) => Number(row.key_version));
+		}
+
+		it("resubmits a rejected application with the new Key, model set and revision in one transaction", async () => {
+			await seedKeyed();
+			const revision = keyedUseCase(openAdapter());
+			const first = await revision.revise(keyedCommand(), actor());
+			expect(first).toEqual({
+				schemaVersion: 1,
+				applicationId,
+				agentId,
+				status: "pending_approval",
+				managementRevision: 4,
+				configurationRevision: 8,
+			});
+			const stored = await snapshot();
+			expect(stored).toMatchObject({
+				application: {
+					name: "Re-keyed Agent",
+					status: "pending_approval",
+					decision_reason: null,
+				},
+				currentConfigurationRevision: 8,
+				configuration: {
+					schemaVersion: 3,
+					revision: 8,
+					modelConfiguration: { defaultOptionId: "model_second" },
+				},
+			});
+			expect(JSON.stringify(stored.configuration)).not.toContain("credential");
+			expect(await keyVersions()).toEqual([1, 2]);
+			const [audit] = await adminClient<{ details: unknown }[]>`
+				select details from platform.audit_events
+				where action = 'relay_key.agent_default.replace'
+			`;
+			expect(audit?.details).toEqual({
+				schemaVersion: 1,
+				previousVersion: 1,
+				keyVersion: 2,
+				configurationRevision: 8,
+			});
+			// Key 明文只交给加密端口，不出现在任何业务表。
+			expect(encrypted).toEqual([plaintextKey]);
+			for (const table of [
+				"audit_events",
+				"idempotency_records",
+				"outbox_items",
+				"agent_configuration_revisions",
+				"agent_applications",
+			]) {
+				const rows = await adminClient.unsafe(
+					`select * from platform.${table}`,
+				);
+				expect(JSON.stringify(rows)).not.toContain(plaintextKey);
+			}
+			// 同一幂等键重放不再写 Key。
+			await expect(
+				keyedUseCase(openAdapter()).revise(keyedCommand(), actor()),
+			).resolves.toEqual(first);
+			expect(await keyVersions()).toEqual([1, 2]);
+			expect(encrypted).toHaveLength(1);
+		});
+
+		it("returns a Key version conflict distinct from a stale configuration and leaves the application rejected", async () => {
+			await seedKeyed();
+			await adminClient.begin((sql) =>
+				replaceRelayKeyVersionInTransaction(sql, {
+					purpose: "agent-default",
+					subjectId: agentId,
+					expectedCurrentVersion: 1,
+					encrypt: ciphertext,
+				}),
+			);
+			const before = await snapshot();
+			await expect(
+				keyedUseCase(openAdapter()).revise(keyedCommand(), actor()),
+			).rejects.toMatchObject({ code: "key_version_conflict" });
+			expect(await snapshot()).toEqual(before);
+			expect(await keyVersions()).toEqual([1, 2]);
+			expect(encrypted).toHaveLength(0);
+			// 调用方看到的配置修订已过期：另一类冲突，同样不写入。
+			await expect(
+				keyedUseCase(openAdapter()).revise(
+					keyedCommand("keyed-stale", { expectedConfigurationRevision: 6 }),
+					actor(),
+				),
+			).rejects.toMatchObject({ code: "stale_revision" });
+			expect(await snapshot()).toEqual(before);
+		});
+
+		it("rolls the Key version back with every other write when the transaction fails late", async () => {
+			await seedKeyed();
+			const before = await snapshot();
+			await armFailure("key_outbox", "platform.outbox_items", "insert", "");
+			try {
+				await expect(
+					keyedUseCase(openAdapter()).revise(keyedCommand(), actor()),
+				).rejects.toMatchObject({ code: "persistence_failed" });
+			} finally {
+				await disarmFailure("key_outbox", "platform.outbox_items");
+			}
+			expect(await snapshot()).toEqual(before);
+			expect(await keyVersions()).toEqual([1]);
+			await keyedUseCase(openAdapter()).revise(keyedCommand(), actor());
+			expect(await keyVersions()).toEqual([1, 2]);
+		});
+
+		it("rejects a Key attachment on plans that do not replace the Key", async () => {
+			// 带配置变更但不替换 Key 的计划，以及完全没有配置变更的计划。
+			const nameOnly = async () => {
+				let captured: ApplicationRevisionWritePlanV1 | undefined;
+				const state = readState("rejected");
+				await expect(
+					useCase(
+						{
+							async read() {
+								return { outcome: "ready", state: structuredClone(state) };
+							},
+							async commit(plan) {
+								captured = structuredClone(plan);
+								return { outcome: "conflict", reason: "stale_management" };
+							},
+						},
+						state.management,
+					).revise(nameOnlyCommand(), actor()),
+				).rejects.toMatchObject({ code: "stale_revision" });
+				if (!captured) throw new Error("Expected application revision plan");
+				return captured;
+			};
+			await resetDatabase();
+			await adminClient`delete from platform.relay_key_versions`;
+			await adminClient`delete from platform.relay_key_subjects`;
+			await seed("rejected");
+			const before = await snapshot();
+			const attachment = { expectedVersion: null, encrypt: ciphertext };
+			for (const plan of [
+				(await capturePlan("rejected")).plan,
+				await nameOnly(),
+			])
+				await expect(
+					openAdapter().commit(plan, undefined, attachment),
+				).rejects.toBeInstanceOf(ApplicationRevisionStoreError);
+			expect(await snapshot()).toEqual(before);
+			expect(await keyVersions()).toEqual([]);
 		});
 	});
 

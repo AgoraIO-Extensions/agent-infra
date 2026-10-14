@@ -3,6 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 
+import { useAgentDefaultRelayKeyState } from "../../../features/agent-configuration/use-agent-default-relay-key-state.js";
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
 import { projectDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
 import {
@@ -24,6 +25,14 @@ function EditAgentApplicationRoute() {
 	const query = useMyAgentApplication(applicationId);
 	const submission = useAgentApplicationSubmission(applicationId);
 	const deployment = useDeploymentConfiguration();
+	// 标准模板申请的模型由默认 Key 管理时，更换模型需要重新提交 Key（#2421）。
+	const loadedApplication =
+		query.data?.kind === "ready" ? query.data.application : undefined;
+	const defaultRelayKey = useAgentDefaultRelayKeyState(
+		loadedApplication?.agentId ?? "",
+		loadedApplication?.agentId != null &&
+			loadedApplication.source.kind === "standard",
+	);
 	const retryable = query.isError
 		? isRetryableMyAgentApplicationError(query.error)
 		: query.data?.kind === "unavailable" && query.data.retryable;
@@ -94,7 +103,7 @@ function EditAgentApplicationRoute() {
 			</main>
 		);
 	}
-	if (deployment.isPending) {
+	if (deployment.isPending || defaultRelayKey.isLoading) {
 		return (
 			<main className="platform-content management-content">
 				<PageLoadingState
@@ -122,6 +131,9 @@ function EditAgentApplicationRoute() {
 			<AgentApplicationSubmissionScreen
 				action={action}
 				application={application}
+				defaultRelayKeyState={
+					defaultRelayKey.data?.isSet ? defaultRelayKey.data : undefined
+				}
 				error={error}
 				mode="update"
 				onSubmit={(body) => submission.update(applicationId, body)}
