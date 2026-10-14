@@ -254,6 +254,7 @@ it("routes Applied Skill reads through a verified ephemeral file", async () => {
 	await writeFile(skillFile, "tamperable", "utf8");
 	try {
 		let verifiedReads = 0;
+		const cleanupReadOnlyFile = vi.fn(async () => {});
 		const tools = claudeWorkspaceTools(
 			workspace,
 			memory,
@@ -263,6 +264,7 @@ it("routes Applied Skill reads through a verified ephemeral file", async () => {
 					filePath === skillFile && verifiedReads++ === 0
 						? verified
 						: undefined,
+				cleanupReadOnlyFile,
 			},
 			[skillRoot],
 		);
@@ -276,6 +278,39 @@ it("routes Applied Skill reads through a verified ephemeral file", async () => {
 			behavior: "allow",
 			updatedInput: { file_path: verified },
 		});
+		const before = tools.hooks?.PreToolUse?.[0]?.hooks[0];
+		if (!before) throw new Error("missing PreToolUse hook");
+		await expect(
+			before(
+				{
+					hook_event_name: "PreToolUse",
+					tool_name: "Read",
+					tool_input: { file_path: verified },
+					tool_use_id: "read",
+				} as never,
+				"read",
+				{ signal },
+			),
+		).resolves.toMatchObject({
+			hookSpecificOutput: {
+				permissionDecision: "allow",
+				updatedInput: { file_path: verified },
+			},
+		});
+		const after = tools.hooks?.PostToolUse?.[0]?.hooks[0];
+		if (!after) throw new Error("missing PostToolUse hook");
+		await after(
+			{
+				hook_event_name: "PostToolUse",
+				tool_name: "Read",
+				tool_input: { file_path: verified },
+				tool_response: { type: "text", content: "skill" },
+				tool_use_id: "read",
+			} as never,
+			"read",
+			{ signal },
+		);
+		expect(cleanupReadOnlyFile).toHaveBeenCalledWith(verified);
 		const external = await tools.canUseTool?.(
 			"Read",
 			{ file_path: join(skillRoot, "workspace-summary", "external.txt") },
