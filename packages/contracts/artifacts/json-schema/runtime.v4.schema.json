@@ -626,6 +626,7 @@
         "turn.stop",
         "session.status",
         "generation.cancel",
+        "browser.handoff",
         "events.persist",
         "events.ack"
       ],
@@ -644,6 +645,7 @@
               "turn.stop",
               "session.status",
               "generation.cancel",
+              "browser.handoff",
               "events.persist",
               "events.ack"
             ],
@@ -824,7 +826,8 @@
             "stop",
             "authorization_revoked",
             "recovery",
-            "generation_isolation"
+            "generation_isolation",
+            "browser_handoff"
           ],
           "type": "string"
         },
@@ -885,7 +888,8 @@
         "stop",
         "authorization_revoked",
         "recovery",
-        "generation_isolation"
+        "generation_isolation",
+        "browser_handoff"
       ],
       "type": "string"
     },
@@ -2472,6 +2476,7 @@
                   "turn.stop",
                   "session.status",
                   "generation.cancel",
+                  "browser.handoff",
                   "events.persist",
                   "events.ack"
                 ],
@@ -2652,7 +2657,8 @@
                 "stop",
                 "authorization_revoked",
                 "recovery",
-                "generation_isolation"
+                "generation_isolation",
+                "browser_handoff"
               ],
               "type": "string"
             },
@@ -6717,6 +6723,7 @@
                       "turn.stop",
                       "session.status",
                       "generation.cancel",
+                      "browser.handoff",
                       "events.persist",
                       "events.ack"
                     ],
@@ -6897,7 +6904,8 @@
                     "stop",
                     "authorization_revoked",
                     "recovery",
-                    "generation_isolation"
+                    "generation_isolation",
+                    "browser_handoff"
                   ],
                   "type": "string"
                 },

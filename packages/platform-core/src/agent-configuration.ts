@@ -857,6 +857,9 @@ function createAgentConfigurationUseCaseV1Internal(
 		if (decision.outcome === "stale") {
 			throw new AgentConfigurationError("stale_revision");
 		}
+		if (decision.outcome === "key_stale") {
+			throw new AgentConfigurationError("key_version_conflict");
+		}
 		if (decision.outcome === "idempotency_conflict") {
 			throw new AgentConfigurationError("idempotency_conflict");
 		}

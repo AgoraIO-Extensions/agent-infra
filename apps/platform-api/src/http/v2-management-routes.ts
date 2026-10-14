@@ -40,6 +40,7 @@ import {
 	requestMetadata,
 } from "./common.js";
 import { mapCoreError } from "./core-errors.js";
+import { parseDefaultRelayKeyReplacement } from "./default-relay-key-replacement.js";
 import {
 	type IdentityAdapter,
 	type IdentityContext,
@@ -654,6 +655,14 @@ export function registerV2ManagementRoutes(
 				metadata.traceId,
 			);
 			const applicationId = context.req.param("applicationId");
+			// 带默认 Key 的重新提交：Key、版本与模型选择成套出现，走 V3 命令（#2421）；
+			// 只有标准模板申请才有默认 Key。
+			const keyReplacement = parseDefaultRelayKeyReplacement(
+				body,
+				metadata.traceId,
+			);
+			if (keyReplacement && body.source.kind !== "standard")
+				fail("INVALID_REQUEST", metadata.traceId);
 			const current = await applicationOrUnavailable(
 				dependencies,
 				applicantScope(identity),
@@ -669,11 +678,18 @@ export function registerV2ManagementRoutes(
 			);
 			await dependencies.revision.revise(
 				{
-					schemaVersion: 2,
+					schemaVersion: keyReplacement ? 3 : 2,
 					idempotencyKey,
 					requestId: metadata.requestId,
 					traceId: metadata.traceId,
 					...applicationCommandFields(body, prepared, metadata.traceId),
+					...(keyReplacement
+						? {
+								expectedConfigurationRevision:
+									keyReplacement.expectedConfigurationRevision,
+								expectedKeyVersion: keyReplacement.expectedKeyVersion,
+							}
+						: {}),
 					...(body.secrets === undefined ? {} : { secrets: prepared.secrets }),
 				} as Parameters<ApplicationRevisionUseCaseV1["revise"]>[0],
 				{

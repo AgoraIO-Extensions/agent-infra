@@ -40,7 +40,8 @@ export interface RuntimeExecutionAuthority {
 			| "stop"
 			| "authorization_revoked"
 			| "recovery"
-			| "generation_isolation";
+			| "generation_isolation"
+			| "browser_handoff";
 	};
 	confirmedCursor?: string;
 	deliveredCursors: string[];
@@ -211,6 +212,7 @@ export function validStoredExecutionAuthority(
 					"authorization_revoked",
 					"recovery",
 					"generation_isolation",
+					"browser_handoff",
 				].includes(authority.control.reason)))
 	);
 }

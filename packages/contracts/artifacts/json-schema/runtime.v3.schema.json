@@ -216,6 +216,715 @@
       ],
       "type": "object"
     },
+    "RuntimeBrowserHandoffRequestV3": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "runtime-execution-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 2,
+              "type": "number"
+            },
+            "token": {
+              "maxLength": 262144,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "handoff": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "request",
+                  "type": "string"
+                },
+                "reason": {
+                  "enum": [
+                    "login",
+                    "mfa",
+                    "captcha",
+                    "human_judgment"
+                  ],
+                  "type": "string"
+                },
+                "runtime": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorized": {
+                      "type": "boolean"
+                    },
+                    "browserAlive": {
+                      "type": "boolean"
+                    },
+                    "capabilityVersion": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "conversationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "executionId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^(?:[^@\\s]+@)?sha256:[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "pageRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "resourceFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "sessionGeneration": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "subjectId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workloadRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "browserAlive",
+                    "authorized",
+                    "subjectId",
+                    "agentId",
+                    "conversationId",
+                    "executionId",
+                    "sessionGeneration",
+                    "resourceFence",
+                    "workloadRevision",
+                    "imageDigest",
+                    "capabilityVersion",
+                    "pageRevision"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "reason",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "handoffId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "take-over",
+                  "type": "string"
+                },
+                "operatorId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "runtime": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorized": {
+                      "type": "boolean"
+                    },
+                    "browserAlive": {
+                      "type": "boolean"
+                    },
+                    "capabilityVersion": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "conversationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "executionId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^(?:[^@\\s]+@)?sha256:[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "pageRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "resourceFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "sessionGeneration": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "subjectId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workloadRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "browserAlive",
+                    "authorized",
+                    "subjectId",
+                    "agentId",
+                    "conversationId",
+                    "executionId",
+                    "sessionGeneration",
+                    "resourceFence",
+                    "workloadRevision",
+                    "imageDigest",
+                    "capabilityVersion",
+                    "pageRevision"
+                  ],
+                  "type": "object"
+                },
+                "subjectId": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "handoffId",
+                "operatorId",
+                "subjectId",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "handoffId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "return-to-agent",
+                  "type": "string"
+                },
+                "operatorId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "runtime": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorized": {
+                      "type": "boolean"
+                    },
+                    "browserAlive": {
+                      "type": "boolean"
+                    },
+                    "capabilityVersion": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "conversationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "executionId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^(?:[^@\\s]+@)?sha256:[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "pageRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "resourceFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "sessionGeneration": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "subjectId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workloadRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "browserAlive",
+                    "authorized",
+                    "subjectId",
+                    "agentId",
+                    "conversationId",
+                    "executionId",
+                    "sessionGeneration",
+                    "resourceFence",
+                    "workloadRevision",
+                    "imageDigest",
+                    "capabilityVersion",
+                    "pageRevision"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "handoffId",
+                "operatorId",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "revoke",
+                  "type": "string"
+                },
+                "reason": {
+                  "enum": [
+                    "BROWSER_HANDOFF_REVOKED",
+                    "BROWSER_HANDOFF_AUTHORIZATION_REVOKED",
+                    "BROWSER_HANDOFF_OPERATOR_CHANGED"
+                  ],
+                  "type": "string"
+                },
+                "runtime": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorized": {
+                      "type": "boolean"
+                    },
+                    "browserAlive": {
+                      "type": "boolean"
+                    },
+                    "capabilityVersion": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "conversationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "executionId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^(?:[^@\\s]+@)?sha256:[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "pageRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "resourceFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "sessionGeneration": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "subjectId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workloadRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "browserAlive",
+                    "authorized",
+                    "subjectId",
+                    "agentId",
+                    "conversationId",
+                    "executionId",
+                    "sessionGeneration",
+                    "resourceFence",
+                    "workloadRevision",
+                    "imageDigest",
+                    "capabilityVersion",
+                    "pageRevision"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "runtime"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "browser-crashed",
+                  "type": "string"
+                },
+                "runtime": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorized": {
+                      "type": "boolean"
+                    },
+                    "browserAlive": {
+                      "type": "boolean"
+                    },
+                    "capabilityVersion": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "conversationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "executionId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "pattern": "^(?:[^@\\s]+@)?sha256:[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "pageRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "resourceFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "sessionGeneration": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "subjectId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workloadRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "browserAlive",
+                    "authorized",
+                    "subjectId",
+                    "agentId",
+                    "conversationId",
+                    "executionId",
+                    "sessionGeneration",
+                    "resourceFence",
+                    "workloadRevision",
+                    "imageDigest",
+                    "capabilityVersion",
+                    "pageRevision"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "runtime"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "operation": {
+          "additionalProperties": false,
+          "properties": {
+            "deliveryFence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "executionDeliveryFence": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "execution",
+                "message",
+                "stop",
+                "generation"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "deliveryFence",
+            "executionDeliveryFence"
+          ],
+          "type": "object"
+        },
+        "principal": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 3,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "turnId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "traceId",
+        "principal",
+        "channelId",
+        "agentId",
+        "conversationId",
+        "executionId",
+        "turnId",
+        "sessionGeneration",
+        "hostSessionRef",
+        "operation",
+        "grant",
+        "handoff"
+      ],
+      "type": "object"
+    },
+    "RuntimeBrowserHandoffResponseV3": {
+      "additionalProperties": false,
+      "properties": {
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "hostSessionRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "outcome": {
+          "const": "accepted",
+          "type": "string"
+        },
+        "record": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "expiresAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                  "type": "string"
+                },
+                "handoffId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "operatorId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "reason": {
+                  "enum": [
+                    "login",
+                    "mfa",
+                    "captcha",
+                    "human_judgment"
+                  ],
+                  "type": "string"
+                },
+                "requestedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "requested",
+                    "active",
+                    "returning",
+                    "completed",
+                    "revoked",
+                    "expired",
+                    "crashed",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                "terminalReason": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "handoffId",
+                "status",
+                "reason",
+                "requestedAt",
+                "expiresAt"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schemaVersion": {
+          "const": 3,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "hostSessionRef",
+        "executionId",
+        "outcome",
+        "record"
+      ],
+      "type": "object"
+    },
     "RuntimeBusinessCommandV2": {
       "enum": [
         "turn.submit",
@@ -585,6 +1294,7 @@
         "turn.stop",
         "session.status",
         "generation.cancel",
+        "browser.handoff",
         "events.persist",
         "events.ack"
       ],
@@ -603,6 +1313,7 @@
               "turn.stop",
               "session.status",
               "generation.cancel",
+              "browser.handoff",
               "events.persist",
               "events.ack"
             ],
@@ -783,7 +1494,8 @@
             "stop",
             "authorization_revoked",
             "recovery",
-            "generation_isolation"
+            "generation_isolation",
+            "browser_handoff"
           ],
           "type": "string"
         },
@@ -844,7 +1556,8 @@
         "stop",
         "authorization_revoked",
         "recovery",
-        "generation_isolation"
+        "generation_isolation",
+        "browser_handoff"
       ],
       "type": "string"
     },
@@ -2646,6 +3359,7 @@
                   "turn.stop",
                   "session.status",
                   "generation.cancel",
+                  "browser.handoff",
                   "events.persist",
                   "events.ack"
                 ],
@@ -2826,7 +3540,8 @@
                 "stop",
                 "authorization_revoked",
                 "recovery",
-                "generation_isolation"
+                "generation_isolation",
+                "browser_handoff"
               ],
               "type": "string"
             },
@@ -4924,6 +5639,7 @@
                       "turn.stop",
                       "session.status",
                       "generation.cancel",
+                      "browser.handoff",
                       "events.persist",
                       "events.ack"
                     ],
@@ -5104,7 +5820,8 @@
                     "stop",
                     "authorization_revoked",
                     "recovery",
-                    "generation_isolation"
+                    "generation_isolation",
+                    "browser_handoff"
                   ],
                   "type": "string"
                 },

@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 
 import type {
 	AgentConfigurationRecord,
+	AgentConfigurationRelayKeyAttachmentV1,
 	AgentConfigurationWritePlanV1,
 	AgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { drizzle } from "drizzle-orm/postgres-js";
+import { replaceRelayKeyVersionInTransaction } from "./relay-key-versions.js";
 import {
 	agentAvailability,
 	agentConfigurationRevisions,
@@ -28,20 +30,76 @@ type Transaction = Parameters<
 >[0];
 
 /**
- * 配置版本只能沿 V2→V2、V3→V3 前进（#2401）：
+ * 配置版本只能沿 V2→V2、V3→V3 前进（#2401、#2421）：
  * - V3 基线绝不降级为需要模型凭证的 V2；
- * - V2 基线要变成 V3，必须由替换默认 Key 的计划完成，不能悄悄改写版本；
- * - 替换默认 Key 的计划需要持久化 Key 附件，当前提交边界尚未实现，一律拒绝，
- *   避免配置已前进而新 Key 被静默丢弃。
+ * - V2 基线不会被悄悄改写成 V3；
+ * - 替换默认 Key 的计划必须恰好带着 Key 附件（`keyAttached`），且只发生在 V3 上：
+ *   没有附件会让配置前进而新 Key 被静默丢弃，有附件但计划没声明则是写入越权。
  */
 export function configurationVersionTransitionAllowed(
 	plan: Pick<AgentConfigurationWritePlanV1, "result">,
 	configuration: Pick<AgentConfigurationRecord, "schemaVersion">,
 	previous: Pick<AgentConfigurationRecord, "schemaVersion">,
+	keyAttached = false,
 ): boolean {
-	if (plan.result.changedFields.includes("defaultRelayKey")) return false;
+	const replacesKey = plan.result.changedFields.includes("defaultRelayKey");
+	if (replacesKey !== keyAttached) return false;
 	if (configuration.schemaVersion === 3) return previous.schemaVersion === 3;
-	return configuration.schemaVersion === 2 && previous.schemaVersion === 2;
+	return (
+		!replacesKey &&
+		configuration.schemaVersion === 2 &&
+		previous.schemaVersion === 2
+	);
+}
+
+/**
+ * 在配置提交的同一事务内写入新的 Agent 默认 Key 版本和审计（#2421）。
+ * 返回 `stale` 表示当前 Key 版本与调用方看到的 expectedVersion 不一致，此时没有写入
+ * 任何 Key 材料；调用方据此返回可与配置修订冲突区分开的结果，或抛错回滚整个事务。
+ * 审计只记录版本号，不含 Key 材料。
+ */
+export async function replaceAgentDefaultRelayKeyInTransaction(
+	transaction: Transaction,
+	plan: Pick<AgentConfigurationWritePlanV1, "agentId" | "nextRevision"> & {
+		readonly auditEvent: Pick<
+			AgentConfigurationWritePlanV1["auditEvent"],
+			"actorId" | "traceId" | "requestId" | "occurredAt"
+		>;
+	},
+	key: AgentConfigurationRelayKeyAttachmentV1,
+): Promise<"replaced" | "stale"> {
+	// 沿用原 Drizzle 事务，只把带标签的 SQL 适配给 Key 版本写入器。
+	const keySql = async (
+		parts: TemplateStringsArray,
+		...parameters: (string | number)[]
+	) => transaction.execute(sql(parts, ...parameters));
+	const replacement = await replaceRelayKeyVersionInTransaction(keySql, {
+		purpose: "agent-default",
+		subjectId: plan.agentId,
+		expectedCurrentVersion: key.expectedVersion,
+		encrypt: (binding) => key.encrypt({ ...binding, purpose: "agent-default" }),
+	});
+	if (replacement.outcome !== "replaced") return "stale";
+	await transaction.insert(auditEvents).values({
+		id: randomUUID(),
+		traceId: plan.auditEvent.traceId,
+		requestId: plan.auditEvent.requestId,
+		agentId: plan.agentId,
+		actorType: "user",
+		actorId: plan.auditEvent.actorId,
+		action: "relay_key.agent_default.replace",
+		targetType: "agent",
+		targetId: plan.agentId,
+		outcome: "succeeded",
+		occurredAt: plan.auditEvent.occurredAt,
+		details: {
+			schemaVersion: 1,
+			previousVersion: key.expectedVersion,
+			keyVersion: replacement.binding.keyVersion,
+			configurationRevision: plan.nextRevision,
+		},
+	});
+	return "replaced";
 }
 
 export async function advanceAgentConfigurationRevision(

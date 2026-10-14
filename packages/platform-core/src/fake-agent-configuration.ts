@@ -8,6 +8,7 @@ import {
 	type AgentConfigurationModelAdmissionPortV1,
 	type AgentConfigurationRecord,
 	type AgentConfigurationRecordV2,
+	type AgentConfigurationRelayKeyAttachmentV1,
 	type AgentConfigurationResultV1,
 	type AgentConfigurationSecretAdmissionPortV1,
 	type AgentConfigurationTransactionPortV1,
@@ -26,11 +27,14 @@ export interface FakeAgentConfigurationSnapshotV1 {
 	readonly authorizationRevision: string;
 	readonly outboxCount: number;
 	readonly auditCount: number;
+	/** 当前默认 Key 版本；还没有 Key 时为 null。 */
+	readonly keyVersion: number | null;
 }
 
 export interface FakeAgentConfigurationTransactionOptionsV1 {
 	readonly managementState?: AgentManagementStateV1;
 	readonly authorizationRevision?: string;
+	readonly keyVersion?: number | null;
 }
 
 export class FakeAgentConfigurationTransactionV1
@@ -45,6 +49,7 @@ export class FakeAgentConfigurationTransactionV1
 	#authorizationRevision: string;
 	#outboxCount = 0;
 	#auditCount = 0;
+	#keyVersion: number | null;
 	#idempotency = new Map<
 		string,
 		{ requestDigest: string; result: AgentConfigurationResultV1 }
@@ -60,6 +65,7 @@ export class FakeAgentConfigurationTransactionV1
 			: null;
 		this.#authorizationRevision =
 			options.authorizationRevision ?? "authorization_9";
+		this.#keyVersion = options.keyVersion ?? null;
 	}
 
 	async read(
@@ -90,16 +96,23 @@ export class FakeAgentConfigurationTransactionV1
 
 	async commit(
 		input: AgentConfigurationWritePlanV1,
+		_attachments?: unknown,
+		defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1,
 	): ReturnType<AgentConfigurationTransactionPortV1["commit"]> {
 		if (this.#failCommit) {
 			this.#failCommit = false;
 			throw new Error("Injected Agent configuration commit failure");
 		}
 		const plan = snapshotAgentConfigurationWritePlanV1(input);
-		// 与 Store 相同：替换默认 Key 需要持久化 Key 附件，这里没有写入器；
-		// 配置版本只能沿 V2→V2、V3→V3 前进（#2401）。
-		if (plan.result.changedFields.includes("defaultRelayKey"))
-			throw new Error("Fake transaction has no Relay Key writer");
+		// 与 Store 相同：Key 附件恰好伴随替换默认 Key 的计划，且只能发生在 V3 上；
+		// 配置版本只能沿 V2→V2、V3→V3 前进（#2401、#2421）。
+		const replacesKey = plan.result.changedFields.includes("defaultRelayKey");
+		if (replacesKey !== (defaultRelayKey !== undefined))
+			throw new Error(
+				"Fake transaction requires a Key attachment exactly for Key plans",
+			);
+		if (replacesKey && this.#configuration.schemaVersion !== 3)
+			throw new Error("Fake transaction only replaces Keys on keyless records");
 		if (plan.configuration.schemaVersion !== this.#configuration.schemaVersion)
 			throw new Error(
 				"Fake transaction cannot rewrite the configuration version",
@@ -135,6 +148,19 @@ export class FakeAgentConfigurationTransactionV1
 			!isDeepStrictEqual(plan.configuration, this.#configuration)
 		) {
 			throw new Error("Access update cannot change the runtime configuration");
+		}
+		// 配置修订冲突已在上面返回；Key 版本冲突单独表达，不落任何数据。
+		if (defaultRelayKey && defaultRelayKey.expectedVersion !== this.#keyVersion)
+			return { outcome: "key_stale" };
+		if (defaultRelayKey) {
+			const next = (this.#keyVersion ?? 0) + 1;
+			await defaultRelayKey.encrypt({
+				purpose: "agent-default",
+				subjectId: plan.agentId,
+				keyId: `fake-key-${next}`,
+				keyVersion: next,
+			});
+			this.#keyVersion = next;
 		}
 		const configuration = structuredClone(plan.configuration);
 		const lastPlan = structuredClone(plan);
@@ -199,6 +225,7 @@ export class FakeAgentConfigurationTransactionV1
 			authorizationRevision: this.#authorizationRevision,
 			outboxCount: this.#outboxCount,
 			auditCount: this.#auditCount,
+			keyVersion: this.#keyVersion,
 		});
 	}
 

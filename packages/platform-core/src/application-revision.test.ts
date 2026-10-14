@@ -8,6 +8,7 @@ import {
 } from "./application-revision.conformance.ts";
 import {
 	ApplicationRevisionError,
+	type ApplicationRevisionReadStateV1,
 	type ApplicationRevisionTransactionPortV1,
 	type ApplicationRevisionWritePlanV1,
 	createApplicationRevisionUseCaseV1,
@@ -414,5 +415,128 @@ describe("Application revision input and plan boundary", () => {
 			),
 		).toThrow(ApplicationRevisionError);
 		expect(trapCalls).toBe(0);
+	});
+});
+
+describe("Application revision with a re-submitted default Key (#2421)", () => {
+	// 带默认 Key 的标准申请持久化为 V3：模型选项不含凭证。
+	const keylessState = (() => {
+		const base = structuredClone(applicationRevisionStateV1);
+		const model = base.configuration.modelConfiguration;
+		if (!model) throw new Error("fixture model missing");
+		return {
+			...base,
+			configuration: {
+				...base.configuration,
+				schemaVersion: 3,
+				modelConfiguration: {
+					...model,
+					options: model.options.map((option) => {
+						const { credential: _credential, ...rest } = option as Record<
+							string,
+							unknown
+						>;
+						return rest;
+					}),
+				},
+			},
+		} as unknown as ApplicationRevisionReadStateV1;
+	})();
+	const plaintextKey = "SYNTHETIC_REVISION_KEY_00001";
+	const { replaceCredential: _replace, ...keylessOption } =
+		applicationRevisionCommandV1.modelConfiguration?.options[0] ?? {
+			optionId: "model_primary",
+			endpointId: "endpoint_01",
+			modelId: "gpt-5",
+			reasoningLevels: ["low"],
+		};
+	const keyedCommand = {
+		...applicationRevisionCommandV1,
+		schemaVersion: 3,
+		defaultRelayKey: plaintextKey,
+		expectedConfigurationRevision: keylessState.configuration.revision,
+		expectedKeyVersion: 1,
+		modelConfiguration: {
+			options: [keylessOption],
+			defaultOptionId: "model_primary",
+			defaultReasoningLevel: "low",
+		},
+	} as never;
+	function createKeyed(transaction: ApplicationRevisionTransactionPortV1) {
+		return createApplicationRevisionUseCaseV1(
+			{
+				transaction,
+				...applicationRevisionAdmissionsV1(keylessState),
+				keylessModelAdmission: {
+					admitModels: async ({ requested }) =>
+						({ catalogRevision: "catalog_3", ...requested }) as never,
+				},
+				defaultRelayKey: {
+					currentIdentity: async () => ({
+						userId: keylessState.application.applicantId,
+						accountStatus: "active",
+						authorizationRevision: "authorization_10",
+					}),
+					candidates: async () => [
+						{
+							endpointId: "endpoint_01",
+							modelId: "gpt-5",
+							reasoningLevels: ["low"],
+						},
+					],
+					encrypt: () => ({ ciphertext: "opaque" }),
+				},
+			},
+			{ now: () => new Date("2026-09-02T04:00:00.000Z") },
+		);
+	}
+	const transactionReturning = (
+		decision: Awaited<
+			ReturnType<ApplicationRevisionTransactionPortV1["commit"]>
+		>,
+		seen?: { attachment?: unknown },
+	): ApplicationRevisionTransactionPortV1 => ({
+		async read() {
+			return { outcome: "ready", state: structuredClone(keylessState) };
+		},
+		async commit(_plan, _attachments, key) {
+			if (seen) seen.attachment = key;
+			return decision;
+		},
+	});
+
+	it("hands the Key attachment and the expected version to the commit boundary", async () => {
+		const seen: { attachment?: unknown } = {};
+		const revision = createKeyed(
+			transactionReturning(
+				{
+					outcome: "committed",
+					result: {
+						schemaVersion: 1,
+						applicationId: "application_01",
+						agentId: "agent_01",
+						status: "pending_approval",
+						managementRevision: 4,
+						configurationRevision: 8,
+					},
+				},
+				seen,
+			),
+		);
+		await revision.revise(keyedCommand, applicationRevisionActorContextV1);
+		expect(seen.attachment).toMatchObject({ expectedVersion: 1 });
+		expect(JSON.stringify(seen.attachment)).not.toContain(plaintextKey);
+	});
+
+	it.each([
+		["stale_key_version", "key_version_conflict"],
+		["stale_configuration", "stale_revision"],
+	] as const)("maps the %s conflict to %s", async (reason, code) => {
+		const revision = createKeyed(
+			transactionReturning({ outcome: "conflict", reason }),
+		);
+		await expect(
+			revision.revise(keyedCommand, applicationRevisionActorContextV1),
+		).rejects.toMatchObject({ code });
 	});
 });

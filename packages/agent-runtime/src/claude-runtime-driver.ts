@@ -6,6 +6,7 @@ import {
 	readdir,
 	readFile,
 	realpath,
+	unlink,
 	writeFile,
 } from "node:fs/promises";
 import { basename, isAbsolute, join, relative } from "node:path";
@@ -1689,6 +1690,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							? {
 									...toolOperations,
 									resolveReadOnlyFile: resolveReadOnlySkillFile,
+									cleanupReadOnlyFile: async (filePath: string) => {
+										await unlink(filePath).catch(() => undefined);
+									},
 								}
 							: toolOperations,
 					),

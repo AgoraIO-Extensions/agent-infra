@@ -334,4 +334,63 @@ describe("Agent application draft", () => {
 		expect(errors["model.0.modelId"]).toBeUndefined();
 		expect(errors["model.1.modelId"]).toBe("模型选项已移除，请重新选择。");
 	});
+
+	describe("updating an application whose models the default Relay Key manages (#2421)", () => {
+		const replacement = {
+			defaultRelayKey: "agent-relay-key-value",
+			expectedConfigurationRevision: 7,
+			expectedKeyVersion: 2,
+			modelConfiguration: {
+				options: [
+					{
+						optionId: "endpoint-primary:gpt-5",
+						endpointId: "endpoint-primary",
+						modelId: "gpt-5",
+						reasoningLevels: ["high"],
+					},
+				],
+				defaultOptionId: "endpoint-primary:gpt-5",
+				defaultReasoningLevel: "high",
+			},
+		};
+
+		it("carries the Key, the checked versions and the model set chosen from the Key's candidates", () => {
+			const body = buildAgentApplicationRequest(
+				"update",
+				{ ...standardCreateDraft, configureModels: false },
+				replacement,
+			);
+			expect(body).toMatchObject({
+				schemaVersion: 2,
+				defaultRelayKey: "agent-relay-key-value",
+				expectedConfigurationRevision: 7,
+				expectedKeyVersion: 2,
+				modelConfiguration: replacement.modelConfiguration,
+			});
+		});
+
+		it("never mixes catalog rows into a replacement and keeps a null Key version", () => {
+			const body = buildAgentApplicationRequest(
+				"update",
+				// 即使草稿里还留着逐行模型，也以候选选择为准。
+				{ ...standardCreateDraft, configureModels: true },
+				{ ...replacement, expectedKeyVersion: null },
+			);
+			expect(body).toMatchObject({
+				expectedKeyVersion: null,
+				modelConfiguration: replacement.modelConfiguration,
+			});
+		});
+
+		it("sends no Key or versions without a replacement", () => {
+			const body = buildAgentApplicationRequest("update", {
+				...standardCreateDraft,
+				configureModels: false,
+			});
+			expect(body).not.toHaveProperty("defaultRelayKey");
+			expect(body).not.toHaveProperty("expectedConfigurationRevision");
+			expect(body).not.toHaveProperty("expectedKeyVersion");
+			expect(body).not.toHaveProperty("modelConfiguration");
+		});
+	});
 });

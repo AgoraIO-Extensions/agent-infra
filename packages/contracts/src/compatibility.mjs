@@ -814,6 +814,42 @@ function isRuntimeOperationIdentityOpenApiAddition(previous, current) {
 	return isDeepStrictEqual(previous, normalized);
 }
 
+// Browser handoff is an additive, authenticated V3 control route. Its request
+// and response schemas are new components; the existing Runtime routes remain
+// byte-compatible.
+function isRuntimeBrowserHandoffOpenApiAddition(previous, current) {
+	const path = "/internal/runtime/v3/browser/handoff";
+	if (
+		previous.paths?.[path] !== undefined ||
+		current.paths?.[path] === undefined
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	const previousSchemas = previous.components?.schemas ?? {};
+	for (const name of [
+		"RuntimeBrowserHandoffRequestV3",
+		"RuntimeBrowserHandoffResponseV3",
+	]) {
+		if (previousSchemas[name] !== undefined) return false;
+		delete normalized.components.schemas[name];
+	}
+	for (const [name, addition] of [
+		["RuntimeControlCommandV2", "browser.handoff"],
+		["RuntimeControlReasonV2", "browser_handoff"],
+	]) {
+		const previousEnum = previousSchemas[name]?.enum;
+		const currentEnum = normalized.components?.schemas?.[name]?.enum;
+		if (!Array.isArray(previousEnum) || !Array.isArray(currentEnum))
+			return false;
+		if (previousEnum.includes(addition)) return false;
+		normalized.components.schemas[name].enum = currentEnum.filter(
+			(value) => value !== addition,
+		);
+	}
+	return isDeepStrictEqual(previous, normalized);
+}
+
 function stripRuntimeOperationIdentity(value) {
 	if (Array.isArray(value)) return value.map(stripRuntimeOperationIdentity);
 	if (!value || typeof value !== "object") return value;
@@ -2507,6 +2543,48 @@ function isApplicationDefaultRelayKeyV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2421 admits only the three optional fields that let a keyless Agent replace its
+// model set together with a re-submitted default Key (configuration update and
+// application revision requests).
+function isKeylessModelReplacementOpenApiAddition(previous, current) {
+	const names = [
+		"AgentApplicationUpdateRequestV2",
+		"AgentConfigurationUpdateRequestV2",
+	];
+	const integer = {
+		exclusiveMinimum: 0,
+		maximum: Number.MAX_SAFE_INTEGER,
+		type: "integer",
+	};
+	const added = {
+		defaultRelayKey: {
+			maxLength: 8192,
+			minLength: 16,
+			pattern: "^[\\x21-\\x7e]+$",
+			type: "string",
+			writeOnly: true,
+		},
+		expectedConfigurationRevision: integer,
+		expectedKeyVersion: { anyOf: [integer, { type: "null" }] },
+	};
+	const normalized = structuredClone(current);
+	for (const name of names) {
+		const previousProperties = previous.components?.schemas?.[name]?.properties;
+		const currentSchema = current.components?.schemas?.[name];
+		if (!previousProperties || !currentSchema?.properties) return false;
+		for (const [property, definition] of Object.entries(added)) {
+			if (
+				previousProperties[property] !== undefined ||
+				currentSchema.required?.includes(property) ||
+				!isDeepStrictEqual(currentSchema.properties[property], definition)
+			)
+				return false;
+			delete normalized.components.schemas[name].properties[property];
+		}
+	}
+	return sameValue(previous, normalized);
+}
+
 // #1260 adds the same write-only key input to direct Agent creation custom requests.
 function isAgentDefaultRelayKeyInputOpenApiAddition(previous, current) {
 	const name = "AgentApiCreationRequestV1";
@@ -3823,6 +3901,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isPersonalRelayKeyV2OpenApiAddition(previous, current) &&
 			!isAgentDefaultRelayKeyV2OpenApiAddition(previous, current) &&
 			!isApplicationDefaultRelayKeyV2OpenApiAddition(previous, current) &&
+			!isKeylessModelReplacementOpenApiAddition(previous, current) &&
 			!isAgentDefaultRelayKeyInputOpenApiAddition(previous, current) &&
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isTaskHttpV1SseOpenApiAddition(previous, current) &&
@@ -3854,6 +3933,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isFileAuthorityOpenApiAddition(previous, current) &&
 			!isCustomAgentModelSelectionOpenApiAddition(previous, current) &&
 			!isRuntimeOperationIdentityOpenApiAddition(previous, current) &&
+			!isRuntimeBrowserHandoffOpenApiAddition(previous, current) &&
 			!isCustomAgentModelProjectionOpenApiAddition(previous, current) &&
 			!isStandardTemplateReleaseCompatibilityOpenApiAddition(previous, current)
 		) {

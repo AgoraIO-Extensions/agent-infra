@@ -20,6 +20,8 @@ import type {
 	DeploymentModelEndpointProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
 import { agentSourceReferenceLabel } from "../agent-management-status.js";
+import type { AgentDefaultRelayKeyCheck } from "../agent-configuration/agent-configuration.js";
+import { useKeylessKeyCheck } from "../agent-configuration/use-keyless-key-check.js";
 import { DirectoryPicker } from "../directory-fields.js";
 import {
 	type AgentApplicationEnvironmentDraft,
@@ -31,6 +33,7 @@ import {
 	sourceKindFor,
 	validateAgentApplicationDraft,
 } from "./agent-application-draft.js";
+import { ApplicationKeylessModelEditor } from "./application-keyless-model-editor.js";
 import {
 	applicationTemplateChoices,
 	templateReadinessMessages,
@@ -58,6 +61,12 @@ type AgentApplicationFormProps = {
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			deploymentConfigurationRetryable?: boolean;
 			mode: "update";
+			/** 模型由默认 Relay Key 管理：更换模型集合要重新提交 Key，并只能从该 Key 的候选里选。 */
+			defaultRelayKeyManaged?: boolean;
+			/** 读取当前配置修订与 Key 版本后检查 Key 可见的模型。 */
+			onCheckDefaultRelayKey?: (
+				keyValue: string,
+			) => Promise<AgentDefaultRelayKeyCheck>;
 			onSubmit: (body: AgentApplicationUpdateRequestV2Writable) => void;
 			serverError?: AgentApplicationServerError | null;
 			submitting: boolean;
@@ -609,6 +618,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		advancedConfigurationOpen: boolean;
 	}>({ advancedConfigurationOpen: false, focusRequest: -1 });
 	const application = props.mode === "update" ? props.application : undefined;
+	const keyManaged =
+		props.mode === "update" && props.defaultRelayKeyManaged === true;
+	const keyCheck = useKeylessKeyCheck(
+		props.mode === "update" ? props.onCheckDefaultRelayKey : undefined,
+	);
 	const configuration = application?.configuration;
 	const persistedModelOptions = configuration?.modelOptions;
 	const deployment = props.deploymentConfiguration;
@@ -761,11 +775,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			return next;
 		});
 	};
-	const modelConfigurationVisible = showsModelConfiguration(
-		props.mode,
-		sourceKind,
-		configureModels,
-	);
+	// 由默认 Key 管理模型的申请改用“Key + 候选选择”，目录里的逐行模型编辑随之隐藏。
+	const managedModelEdit =
+		keyManaged && sourceKind === "standard" && configureModels;
+	const modelConfigurationVisible =
+		showsModelConfiguration(props.mode, sourceKind, configureModels) &&
+		!managedModelEdit;
 	const selectedTemplate = templateFor(deployment, templateId);
 	const templateReadiness = selectedTemplate?.readiness;
 	const readinessEnabled = deployment.templates.some(
@@ -878,11 +893,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			!serverValidationDismissed &&
 			props.mode === "update" &&
 			props.serverError?.code === "MODEL_SELECTION_INVALID" &&
-			!modelConfigurationVisible
+			!modelConfigurationVisible &&
+			!managedModelEdit
 		)
 			errors.configureModels = "服务端拒绝了模型配置，请开启修改模型配置。";
 		return errors;
 	}, [
+		managedModelEdit,
 		modelConfigurationVisible,
 		modelServerErrorIndexes,
 		props.mode,
@@ -1211,6 +1228,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			staleTemplate,
 			standardChoicesBlocked,
 		});
+		if (managedModelEdit && !keyCheck.replacement)
+			errors.defaultRelayKey = keyCheck.typed
+				? "请先点击「检查可用模型」并选好模型（至少一个模型，每个模型至少一个推理档位）。"
+				: "请输入 Agent 默认 Relay Key。";
 		setFieldErrors(errors);
 		setFocusRequest((current) => current + 1);
 		if (
@@ -1225,7 +1246,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			props.onSubmit(buildAgentApplicationRequest("create", draft));
 			return;
 		}
-		props.onSubmit(buildAgentApplicationRequest("update", draft));
+		props.onSubmit(
+			buildAgentApplicationRequest(
+				"update",
+				{ ...draft, configureModels: configureModels && !managedModelEdit },
+				managedModelEdit ? keyCheck.replacement : undefined,
+			),
+		);
 	};
 
 	return (
@@ -1562,6 +1589,20 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									message={fieldErrors.configureModels}
 								/>
 							</div>
+						) : null}
+						{managedModelEdit ? (
+							<ApplicationKeylessModelEditor
+								current={persistedModelOptions ?? []}
+								currentDefault={{
+									optionId: initialDefaultModelOptionId,
+									level: configuration?.defaultReasoningLevel ?? "",
+								}}
+								disabled={props.submitting}
+								error={fieldErrors.defaultRelayKey}
+								errorId={errorId("defaultRelayKey")}
+								keyCheck={keyCheck}
+								onChangeKey={() => clearFieldErrors("defaultRelayKey")}
+							/>
 						) : null}
 						{modelConfigurationVisible ? (
 							<>
