@@ -123,6 +123,7 @@ export async function runBrowserConformanceSuite(input) {
 			deployment: structuredClone(deployment),
 			signal: value.signal,
 		});
+		value.signal?.throwIfAborted();
 		templates.push(normalizeTemplateResult(template, result, deployment));
 	}
 	const receipt = {

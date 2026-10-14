@@ -105,3 +105,19 @@ test("stops before the next template when the runner is aborted", async () => {
 	);
 	assert.deepEqual(order, ["codex"]);
 });
+
+test("rejects cancellation after the final template callback", async () => {
+	const controller = new AbortController();
+	await assert.rejects(
+		runBrowserConformanceSuite({
+			commit: "e".repeat(40),
+			deployment,
+			signal: controller.signal,
+			runTemplate: async (template) => {
+				if (template === "pi") controller.abort();
+				return result();
+			},
+		}),
+		/aborted/i,
+	);
+});
