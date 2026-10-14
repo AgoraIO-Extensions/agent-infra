@@ -26,6 +26,21 @@ import { registerAgentDefaultRelayKeyRoutes } from "./http/agent-default-relay-k
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 const fixture = structuredClone(agentConfigurationConformanceRecordV1);
+/** 带 Agent 默认 Relay Key 的标准 Agent 持久化为 V3：模型选项不含任何凭证（#2430）。 */
+function keylessFixture() {
+	const model = fixture.modelConfiguration;
+	if (!model) throw new Error("fixture model missing");
+	return {
+		...structuredClone(fixture),
+		schemaVersion: 3,
+		modelConfiguration: {
+			...structuredClone(model),
+			options: model.options.map(({ credential: _credential, ...option }) =>
+				structuredClone(option),
+			),
+		},
+	};
+}
 const key = "SYNTHETIC_AGENT_DEFAULT_KEY_ONE";
 const key2 = "SYNTHETIC_AGENT_DEFAULT_KEY_TWO";
 const { publicKey, privateKey } = generateKeyPairSync("rsa", {
@@ -372,4 +387,124 @@ describe("existing Agent default Relay Key HTTP and original PostgreSQL authorit
 		}
 		expect((await request("PUT", command())).status).toBe(200);
 	});
+});
+
+/** 标准申请产生的 V3 配置与 V2 共用同一套默认 Key 授权与事务（#2430）。 */
+describe("keyless (V3) Agent default Relay Key HTTP and PostgreSQL authority", () => {
+	beforeEach(async () => {
+		// 外层 beforeEach 先写入 V2 夹具；这里把同一修订改写为 V3，其余数据完全相同。
+		await sql`update platform.agent_configuration_revisions set configuration = ${sql.json(keylessFixture() as unknown as postgres.JSONValue)} where agent_id = 'agent_01' and revision = 7`;
+	});
+	it("reads the unset state, previews candidates and persists nothing", async () => {
+		const state = await request("GET");
+		expect(state.status).toBe(200);
+		expect(await state.json()).toEqual({
+			schemaVersion: 1,
+			isSet: false,
+			keyVersion: null,
+			configurationRevision: 7,
+		});
+		const preview = await request(
+			"POST",
+			{ keyValue: key, configurationRevision: 7 },
+			"owner_01",
+			"/candidates",
+		);
+		expect(preview.status).toBe(200);
+		expect(await preview.json()).toEqual({
+			schemaVersion: 1,
+			configurationRevision: 7,
+			candidates: [
+				{
+					endpointId: "endpoint_01",
+					modelId: "gpt-5",
+					reasoningLevels: ["low"],
+				},
+			],
+		});
+		expect(await sql`select * from platform.relay_key_versions`).toHaveLength(
+			0,
+		);
+	});
+	it("replaces the Key without touching the V3 configuration record", async () => {
+		const before =
+			await sql`select revision, configuration from platform.agent_configuration_revisions where agent_id = 'agent_01'`;
+		expect(before[0]?.configuration.schemaVersion).toBe(3);
+		const first = await request("PUT", command());
+		expect(first.status).toBe(200);
+		expect(await first.json()).toEqual({
+			schemaVersion: 1,
+			isSet: true,
+			keyVersion: 1,
+			configurationRevision: 7,
+		});
+		expect((await request("PUT", command(1, key2))).status).toBe(200);
+		// 替换只推进 Key 版本：配置修订、版本与内容都不变，也不含任何 Key 材料。
+		const after =
+			await sql`select revision, configuration from platform.agent_configuration_revisions where agent_id = 'agent_01'`;
+		expect(after).toEqual(before);
+		expect(JSON.stringify(after)).not.toContain(key);
+		const state = await request("GET");
+		expect(await state.json()).toEqual({
+			schemaVersion: 1,
+			isSet: true,
+			keyVersion: 2,
+			configurationRevision: 7,
+		});
+		const audits =
+			await sql`select details from platform.audit_events where action = 'relay_key.agent_default.replace' order by occurred_at`;
+		expect(audits.map((row) => row.details)).toEqual([
+			{
+				schemaVersion: 1,
+				configurationRevision: 7,
+				previousVersion: null,
+				keyVersion: 1,
+			},
+			{
+				schemaVersion: 1,
+				configurationRevision: 7,
+				previousVersion: 1,
+				keyVersion: 2,
+			},
+		]);
+		expect(
+			JSON.stringify(await sql`select * from platform.audit_events`),
+		).not.toContain(key);
+	});
+	it.each([
+		["stale configuration", 409],
+		["template changed", 503], // 模板不再有候选绑定：与 V2 一致，按依赖不可用处理
+		["nonowner", 404],
+		["disabled owner", 404],
+		["missing Agent", 404],
+		["model not covered by the Key", 400],
+	] as const)(
+		"rejects %s with %i and leaves the Key unchanged",
+		async (mode, status) => {
+			if (mode === "stale configuration")
+				// 真实的新修订：配置已前进到 8，调用方仍按 7 提交。
+				await sql.begin(async (tx) => {
+					await tx`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration) select agent_id, 8, source_reference, now(), jsonb_set(configuration, '{revision}', '8') from platform.agent_configuration_revisions where agent_id = 'agent_01' and revision = 7`;
+					await tx`update platform.agents set current_configuration_revision = 8 where id = 'agent_01'`;
+				});
+			if (mode === "template changed")
+				await sql`update platform.agent_configuration_revisions set configuration = jsonb_set(configuration, '{source,templateId}', '"other-template"')`;
+			if (mode === "disabled owner")
+				await sql`insert into platform.platform_user_disables (user_id) values ('owner_01')`;
+			if (mode === "model not covered by the Key") visible = ["outside-policy"];
+			const agentId = mode === "missing Agent" ? "absent" : "agent_01";
+			const actor = mode === "nonowner" ? "other" : "owner_01";
+			const response = await request("PUT", command(), actor, "", agentId);
+			expect(response.status).toBe(status);
+			expect(await response.text()).not.toContain(key);
+			expect(await sql`select * from platform.relay_key_versions`).toHaveLength(
+				0,
+			);
+			// 读取接口对同一调用方同样不可见，不泄露任何状态。
+			if (status === 404)
+				expect(
+					(await request("GET", undefined, actor, "", agentId)).status,
+				).toBe(404);
+		},
+	);
 });
