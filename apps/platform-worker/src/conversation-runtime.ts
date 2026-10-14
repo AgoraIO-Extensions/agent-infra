@@ -1239,7 +1239,12 @@ export function createConversationRuntimeV2(
 						JSON.stringify(context.claim.nativeCapability)
 				)
 					unavailable("RUNTIME_REQUEST_INVALID");
-				if (context.claim.nativeCapability.capabilityKind !== "skill")
+				if (
+					context.claim.nativeCapability.capabilityKind !== "skill" &&
+					context.claim.nativeCapability.capabilityKind !== "command"
+				)
+					unavailable("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
+				if (context.claim.nativeCapability.capabilityKind === "command")
 					unavailable("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
 				const body = {
 					...base,

@@ -6352,15 +6352,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	) {
 		if (!read) nativeCommandUnsupported();
 		read.assertCurrent();
-		const prepared = await this.prepareNativeCommand(command);
-		if (prepared.operation.record) {
-			if (prepared.operation.state !== "resolved") stateInvalid();
-			return prepared.operation.record;
-		}
-		if (!prepared.created)
-			return this.unknown(command, prepared.operation.nativeSessionRef);
 		const binding = this.nativeCommandBinding(read);
 		const directory = this.nativeCommandDirectory(binding);
+		const parameters = parseNativeCommandParameters(command.parameters);
 		const capability = directory.capabilities.find(
 			(entry) =>
 				entry.id === command.capabilityId &&
@@ -6373,11 +6367,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			capability?.availability !== "available"
 		)
 			nativeCommandUnsupported();
+		const prepared = await this.prepareNativeCommand(command);
+		if (prepared.operation.record) {
+			if (prepared.operation.state !== "resolved") stateInvalid();
+			return prepared.operation.record;
+		}
+		if (!prepared.created)
+			return this.unknown(command, prepared.operation.nativeSessionRef);
 		await this.readNativeStatus(
 			{
 				capabilityId: command.capabilityId,
 				directoryRevision: command.directoryRevision,
-				parameters: parseNativeCommandParameters(command.parameters),
+				parameters,
 			},
 			read,
 		);
