@@ -344,31 +344,20 @@ export function isSessionSandboxReadyV1(facts: {
 const sessionSandboxRetryBaseDelayMsV1 = 1_000;
 /** 证据长期不变时的重试间隔上限；条目始终保留，只是不再每秒重试。 */
 const sessionSandboxRetryMaxDelayMsV1 = 60_000;
-/** 证据不变时仍按基础延迟重试的次数，足以覆盖正常的启动和删除等待。 */
-const sessionSandboxRetryGraceAttemptsV1 = 5;
-const sessionSandboxRetryUnchangedLimit = 64;
 
 /**
- * 证据连续 `unchanged` 次没有变化时，下一次重试的延迟。
- * 前 5 次保持基础延迟，之后每次翻倍，直到上限。
+ * 证据已连续 `stableForMs` 毫秒没有变化时，下一次重试的延迟：停滞时长的一半，
+ * 不低于基础延迟、不高于上限。刚出现的停滞仍是 1 s，持续约 2 分钟后到达上限。
  */
-export function sessionSandboxRetryDelayMsV1(unchanged: number): number {
-	if (!Number.isSafeInteger(unchanged) || unchanged < 0)
-		throw new TypeError("Sandbox retry streak must be a non-negative integer");
-	const doublings = Math.min(
-		Math.max(0, unchanged - sessionSandboxRetryGraceAttemptsV1),
-		32,
-	);
+export function sessionSandboxRetryDelayMsV1(stableForMs: number): number {
+	if (!Number.isFinite(stableForMs) || stableForMs < 0)
+		throw new TypeError(
+			"Sandbox stable duration must be a non-negative number",
+		);
 	return Math.min(
 		sessionSandboxRetryMaxDelayMsV1,
-		sessionSandboxRetryBaseDelayMsV1 * 2 ** doublings,
+		Math.max(sessionSandboxRetryBaseDelayMsV1, Math.floor(stableForMs / 2)),
 	);
-}
-
-/** 持久在调谐 outbox payload 里的退避状态；只含指纹和连续未变化次数。 */
-export interface SessionSandboxObservationBackoffV1 {
-	readonly progress: string;
-	readonly unchanged: number;
 }
 
 /**
@@ -418,49 +407,33 @@ export function sessionSandboxReconcileProgressV1(input: {
 		.slice(0, 32);
 }
 
-function persistedObservationBackoff(
-	value: unknown,
-): SessionSandboxObservationBackoffV1 | undefined {
-	if (typeof value !== "object" || value === null || Array.isArray(value))
-		return undefined;
-	const { progress, unchanged } = value as Record<string, unknown>;
-	return typeof progress === "string" &&
-		/^[0-9a-f]{32}$/.test(progress) &&
-		typeof unchanged === "number" &&
-		Number.isSafeInteger(unchanged) &&
-		unchanged >= 0
-		? { progress, unchanged }
-		: undefined;
-}
-
 /**
- * 记录一次观测后的退避决定。进度指纹与上次相同视为“没有变化”：
- * 只有 `unknown` 按连续次数退避（其余状态是在等待就绪或删除，保持基础延迟），
- * 审计只在指纹变化时写。无法识别的旧状态按“有变化”处理。
+ * 记录一次观测后的重试决定。`previous` 是上一次“有变化”的审计行：它的进度指纹，以及
+ * 距今多久。指纹相同视为没有变化：不再写审计，并且只有 `unknown` 按停滞时长退避
+ * （其余状态是在等待就绪或删除，保持基础延迟）。没有记录、或记录无法识别（例如旧版本
+ * 写的审计行没有指纹），都按“有变化”处理。
  */
-export function nextSessionSandboxObservationBackoffV1(input: {
-	readonly previous: unknown;
+export function decideSessionSandboxRetryV1(input: {
+	readonly previous:
+		| { readonly progress: unknown; readonly stableForMs: unknown }
+		| undefined;
 	readonly progress: string;
 	readonly status: string;
-}): {
-	readonly backoff: SessionSandboxObservationBackoffV1;
-	readonly changed: boolean;
-	readonly delayMs: number;
-} {
-	const previous = persistedObservationBackoff(input.previous);
-	const changed = previous?.progress !== input.progress;
-	const unchanged = changed
-		? 0
-		: Math.min(
-				(previous?.unchanged ?? 0) + 1,
-				sessionSandboxRetryUnchangedLimit,
-			);
+}): { readonly changed: boolean; readonly delayMs: number } {
+	const { previous } = input;
+	const unchanged =
+		previous !== undefined &&
+		previous.progress === input.progress &&
+		typeof previous.stableForMs === "number" &&
+		Number.isFinite(previous.stableForMs);
 	return {
-		backoff: { progress: input.progress, unchanged },
-		changed,
+		changed: !unchanged,
 		delayMs:
-			input.status === "unknown"
-				? sessionSandboxRetryDelayMsV1(unchanged)
+			unchanged && input.status === "unknown"
+				? sessionSandboxRetryDelayMsV1(
+						// 数据库与 Worker 的时钟偏差可能给出负值，按没有停滞处理。
+						Math.max(0, previous.stableForMs as number),
+					)
 				: sessionSandboxRetryBaseDelayMsV1,
 	};
 }

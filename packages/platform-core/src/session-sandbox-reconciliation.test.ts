@@ -3,9 +3,9 @@ import { createSessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
 	canAdvanceSessionSandboxDeletionProgressV1,
 	decideSessionSandboxObservationV1,
+	decideSessionSandboxRetryV1,
 	isSessionSandboxDeletionProgressValidV1,
 	isSessionSandboxObservationValidV1,
-	nextSessionSandboxObservationBackoffV1,
 	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxReconciliationClaimV1,
@@ -292,21 +292,20 @@ describe("Session Sandbox observation decision", () => {
 });
 
 describe("Session Sandbox reconcile retry pacing (#2456)", () => {
-	it("keeps the base delay through the grace attempts, then doubles up to the cap", () => {
+	it("paces the retry at half the stalled duration, between 1 s and 60 s", () => {
 		expect(
-			[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 64].map(
+			[0, 1_000, 2_000, 3_000, 10_000, 60_000, 119_999, 120_000, 3_600_000].map(
 				sessionSandboxRetryDelayMsV1,
 			),
 		).toEqual([
-			1_000, 1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000, 16_000,
-			32_000, 60_000, 60_000, 60_000,
+			1_000, 1_000, 1_000, 1_500, 5_000, 30_000, 59_999, 60_000, 60_000,
 		]);
 	});
 
-	it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-		"rejects the invalid streak %s",
-		(streak) => {
-			expect(() => sessionSandboxRetryDelayMsV1(streak)).toThrow(TypeError);
+	it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])(
+		"rejects the invalid stalled duration %s",
+		(duration) => {
+			expect(() => sessionSandboxRetryDelayMsV1(duration)).toThrow(TypeError);
 		},
 	);
 
@@ -412,91 +411,76 @@ describe("Session Sandbox reconcile retry pacing (#2456)", () => {
 		);
 	});
 
-	it("backs off only while an unknown observation keeps the same evidence", () => {
+	it("backs off an unknown observation only while its evidence stays the same", () => {
 		const progress = progressOf();
-		let previous: unknown;
-		const delays: number[] = [];
-		const changes: boolean[] = [];
-		for (let attempt = 0; attempt < 13; attempt += 1) {
-			const next = nextSessionSandboxObservationBackoffV1({
-				previous,
+		// 没有上一次记录：写审计，按基础延迟。
+		expect(
+			decideSessionSandboxRetryV1({
+				previous: undefined,
 				progress,
 				status: "unknown",
-			});
-			delays.push(next.delayMs);
-			changes.push(next.changed);
-			previous = next.backoff;
-		}
-		// 首次观测写审计且按基础延迟；之后的相同证据不写审计，从第 6 次重复起翻倍。
-		expect(changes).toEqual([true, ...Array(12).fill(false)]);
-		expect(delays).toEqual([
-			1_000, 1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000, 16_000,
-			32_000, 60_000, 60_000,
-		]);
-	});
-
-	it("returns to the base delay and writes an audit row when the evidence changes", () => {
-		let previous: unknown;
-		const progress = progressOf();
-		for (let attempt = 0; attempt < 10; attempt += 1)
-			previous = nextSessionSandboxObservationBackoffV1({
-				previous,
+			}),
+		).toEqual({ changed: true, delayMs: 1_000 });
+		// 同一指纹：不写审计，延迟随停滞时长增长并封顶。
+		expect(
+			[0, 4_000, 20_000, 200_000].map(
+				(stableForMs) =>
+					decideSessionSandboxRetryV1({
+						previous: { progress, stableForMs },
+						progress,
+						status: "unknown",
+					}).delayMs,
+			),
+		).toEqual([1_000, 2_000, 10_000, 60_000]);
+		expect(
+			decideSessionSandboxRetryV1({
+				previous: { progress, stableForMs: 200_000 },
 				progress,
 				status: "unknown",
-			}).backoff;
-		const next = nextSessionSandboxObservationBackoffV1({
-			previous,
-			progress: progressOf({ hasStopReceipt: true }),
-			status: "unknown",
-		});
-		expect(next).toMatchObject({
-			changed: true,
-			delayMs: 1_000,
-			backoff: { unchanged: 0 },
-		});
+			}).changed,
+		).toBe(false);
+		// 指纹变化：写审计，立即回到基础延迟，不管之前停滞了多久。
+		expect(
+			decideSessionSandboxRetryV1({
+				previous: { progress, stableForMs: 200_000 },
+				progress: progressOf({ hasStopReceipt: true }),
+				status: "unknown",
+			}),
+		).toEqual({ changed: true, delayMs: 1_000 });
 	});
 
 	it("never slows the wait for readiness or deletion, only the audit rows", () => {
-		let previous: unknown;
 		const progress = progressOf({ status: "observed" });
-		for (let attempt = 0; attempt < 30; attempt += 1) {
-			const next = nextSessionSandboxObservationBackoffV1({
-				previous,
-				progress,
-				status: "observed",
-			});
-			expect(next.delayMs).toBe(1_000);
-			expect(next.changed).toBe(attempt === 0);
-			previous = next.backoff;
-		}
+		for (const status of ["observed", "applying", "ready", "stopped"])
+			expect(
+				decideSessionSandboxRetryV1({
+					previous: { progress, stableForMs: 3_600_000 },
+					progress,
+					status,
+				}),
+			).toEqual({ changed: false, delayMs: 1_000 });
 	});
 
-	it("treats unrecognized persisted state as a change and bounds the streak", () => {
+	it("treats an unrecognized previous record as a change, and a clock skew as no stall", () => {
 		const progress = progressOf();
 		for (const previous of [
-			undefined,
-			null,
-			"text",
-			[],
-			{},
-			{ progress: "short", unchanged: 3 },
-			{ progress, unchanged: -1 },
-			{ progress, unchanged: 1.5 },
-			{ progress: progress.toUpperCase(), unchanged: 2 },
+			{ progress: null, stableForMs: 5_000 },
+			{ progress: "short", stableForMs: 5_000 },
+			{ progress: progress.toUpperCase(), stableForMs: 5_000 },
+			{ progress, stableForMs: Number.NaN },
+			{ progress, stableForMs: "5000" },
+			{ progress, stableForMs: undefined },
 		])
 			expect(
-				nextSessionSandboxObservationBackoffV1({
-					previous,
-					progress,
-					status: "unknown",
-				}),
-			).toMatchObject({ changed: true, backoff: { unchanged: 0 } });
+				decideSessionSandboxRetryV1({ previous, progress, status: "unknown" })
+					.changed,
+			).toBe(true);
 		expect(
-			nextSessionSandboxObservationBackoffV1({
-				previous: { progress, unchanged: 1_000_000 },
+			decideSessionSandboxRetryV1({
+				previous: { progress, stableForMs: -5_000 },
 				progress,
 				status: "unknown",
-			}).backoff.unchanged,
-		).toBe(64);
+			}),
+		).toEqual({ changed: false, delayMs: 1_000 });
 	});
 });
