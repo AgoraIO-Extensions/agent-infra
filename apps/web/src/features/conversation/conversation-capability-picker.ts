@@ -6,6 +6,7 @@ export type ConversationCapabilityV1 = Readonly<{
 	version?: string;
 	/** Stable service-provided identity used to invalidate replaced metadata. */
 	identity?: string;
+	directoryRevision?: string;
 	parameterHint?: string;
 }>;
 
@@ -13,6 +14,8 @@ export type ConversationCapabilitySelectionV1 = Readonly<{
 	kind: ConversationCapabilityV1["kind"];
 	name: string;
 	parameterText: string;
+	capabilityId?: string;
+	directoryRevision?: string;
 }>;
 
 export type ConversationCapabilityPickerStateV1 = Readonly<{
@@ -129,6 +132,12 @@ export function confirmConversationCapability(
 		kind: state.selected.kind,
 		name: state.selected.name,
 		parameterText: state.parameterText,
+		...(state.selected.identity
+			? { capabilityId: state.selected.identity }
+			: {}),
+		...(state.selected.directoryRevision
+			? { directoryRevision: state.selected.directoryRevision }
+			: {}),
 	};
 }
 

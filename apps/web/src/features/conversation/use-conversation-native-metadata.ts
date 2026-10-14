@@ -17,6 +17,7 @@ export function nativeMetadataCapabilities(
 		source: capability.source.name,
 		version: capability.source.version,
 		identity: capability.id,
+		directoryRevision: projection.revision,
 		...(capability.kind === "command"
 			? {
 					parameterHint:

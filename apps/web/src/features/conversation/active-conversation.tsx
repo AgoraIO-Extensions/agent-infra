@@ -21,6 +21,7 @@ import {
 import { Textarea } from "../../components/ui/textarea.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { BrowserOperationStatus } from "./browser-operation-status.js";
+import type { ConversationCapabilitySelectionV1 } from "./conversation-capability-picker.js";
 import { ConversationCapabilityPickerPanel } from "./conversation-capability-picker-panel.js";
 import { CommandNotice } from "./conversation-command-notice.js";
 import type { ConversationCommandResult } from "./conversation-commands.js";
@@ -92,9 +93,9 @@ export function ActiveConversation({
 	const composerId = useId();
 	const composer = useRef<HTMLTextAreaElement>(null);
 	const composing = useRef(false);
-	const action = useRef<"message" | "stop" | "regenerate" | "selection">(
-		"message",
-	);
+	const action = useRef<
+		"message" | "stop" | "regenerate" | "selection" | "native"
+	>("message");
 	const handled = useRef<ConversationCommandResult | undefined>(undefined);
 	const conversation = timeline.history?.conversation;
 	// The Conversation stays read-only until its own Session Sandbox is ready
@@ -285,6 +286,14 @@ export function ActiveConversation({
 			// to the stale conversation would briefly show and submit the old choice.
 			setNotice("模型选择已保存，从下一条消息开始生效。");
 			void reader.refresh();
+		} else if (result.kind === "native-accepted") {
+			action.current = "native";
+			setNotice(
+				result.outcome === "replayed" ? "能力请求已恢复。" : "能力请求已受理。",
+			);
+			void reader.refresh();
+		} else if (result.kind === "native-rejected") {
+			setNotice(`能力请求未受理：${result.outcome}`);
 		}
 	}, [command.result, reader.refresh, refreshAgent]);
 	const options = customPlatformAdapter
@@ -416,6 +425,15 @@ export function ActiveConversation({
 								capabilities={nativeMetadataCapabilities}
 								scopeKey={nativeMetadataScopeKey}
 								disabled={!available}
+								onConfirm={(selection: ConversationCapabilitySelectionV1) => {
+									if (!selection.capabilityId || !selection.directoryRevision)
+										return;
+									command.invokeCapability({
+										capabilityId: selection.capabilityId,
+										directoryRevision: selection.directoryRevision,
+										parameters: selection.parameterText,
+									});
+								}}
 							/>
 						)}
 					</div>
