@@ -249,6 +249,7 @@ it("builds the bounded Pi native Skill command from the mounted directory", asyn
 			parameters: "summarize files",
 			parametersDigest: "f".repeat(64),
 			capabilityName: "workspace-summary",
+			capabilitySourceVersion: "1.0.0",
 		} satisfies RuntimeNativeSkillCommandV1);
 		expect(command).toMatchObject({
 			kind: "submit-turn",

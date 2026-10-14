@@ -57,6 +57,7 @@ export type RuntimeNativeSkillCommandV1 = Readonly<{
 	parameters: string;
 	parametersDigest: string;
 	capabilityName: string;
+	capabilitySourceVersion: string;
 }>;
 
 /** Request-local authority for one authenticated native metadata read. */

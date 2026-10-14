@@ -408,7 +408,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(command.capabilityName) ||
 			!this.options.skillDirectory
 				.findSkills()
-				.some((entry) => entry.name === command.capabilityName)
+				.some(
+					(entry) =>
+						entry.name === command.capabilityName &&
+						entry.version === command.capabilitySourceVersion,
+				)
 		)
 			nativeSkillUnsupported();
 		const text = this.options.nativeSkillPrompt(

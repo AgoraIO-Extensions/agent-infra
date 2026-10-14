@@ -296,6 +296,41 @@ export class RuntimeHostV3 {
 				async () => {
 					this.assertOpen();
 					this.validate(request, "native-capability.invoke", verification);
+					const latestProjection =
+						await this.options.driver.readNativeMetadataV1?.call(
+							this.options.driver,
+							"skills",
+							read,
+						);
+					if (!latestProjection)
+						throw new RuntimeHostError(
+							"RUNTIME_NATIVE_CAPABILITY_STALE",
+							"Native Skill directory is no longer current",
+							409,
+						);
+					if (
+						latestProjection.selector !== "skills" ||
+						latestProjection.revision !== request.directoryRevision
+					)
+						throw new RuntimeHostError(
+							"RUNTIME_NATIVE_CAPABILITY_STALE",
+							"Native Skill directory is no longer current",
+							409,
+						);
+					const latestCapability = latestProjection.capabilities.find(
+						(entry) =>
+							entry.id === request.capabilityId && entry.kind === "skill",
+					);
+					if (
+						!latestCapability ||
+						latestCapability.name !== capabilityName ||
+						latestCapability.availability !== "discovered"
+					)
+						throw new RuntimeHostError(
+							"RUNTIME_NATIVE_CAPABILITY_STALE",
+							"Native Skill is no longer current",
+							409,
+						);
 					const prepared = await this.options.store.prepareOperation({
 						authorization: claims,
 						now: this.options.grantValidation.now ?? Date.now,
@@ -341,6 +376,7 @@ export class RuntimeHostV3 {
 								parameters: request.parameters,
 								parametersDigest: request.parametersDigest,
 								capabilityName,
+								capabilitySourceVersion: latestCapability.source.version,
 							});
 						},
 					});
