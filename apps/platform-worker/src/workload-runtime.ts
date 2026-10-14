@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { discoverRuntimeBrowserCapabilityV1 } from "@agent-infra/agent-runtime";
+import { MultiServiceManifestDocumentV1Schema } from "@agent-infra/contracts/pilot";
 import {
 	type BrowserCapabilityBindingV1,
 	BrowserCapabilityProjectionV1Schema,
@@ -46,6 +47,7 @@ import {
 	type WorkloadSecretBindingV1,
 } from "@agent-infra/platform-core";
 import type { V1StatefulSet } from "@kubernetes/client-node";
+import { parseAllDocuments } from "yaml";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import {
 	createKubernetesRuntimeAdapterV1,
@@ -53,6 +55,10 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 import { createWorkloadInteractionOriginV1 } from "./kubernetes-runtime-policy.js";
+import {
+	createMultiServiceRuntimeOperations,
+	isMultiService,
+} from "./multi-service-runtime.js";
 import { runtimeFetch } from "./runtime-transport.js";
 import {
 	validateWorkloadSkillMaterializationV1,
@@ -135,6 +141,15 @@ export interface WorkloadReadinessBindingV1 {
 export interface WorkloadReadinessPassV1 {
 	readonly podUid: string;
 	readonly passedAt: number;
+}
+
+function parseMultiServiceManifest(input: string) {
+	const documents = parseAllDocuments(input, {
+		prettyErrors: false,
+		maxAliasCount: 0,
+	} as never);
+	if (documents.length !== 1 || documents[0]?.errors.length) throw new Error();
+	return MultiServiceManifestDocumentV1Schema.parse(documents[0]?.toJSON());
 }
 
 /**
@@ -511,6 +526,10 @@ export function createWorkloadRuntimeV1(
 	const templateModelBindings = validateStandardTemplateModelBindingsV1(
 		options.templateModelBindings,
 	);
+	const multiService = createMultiServiceRuntimeOperations({
+		client: options.client,
+		policy: options.policy,
+	});
 	const fetcher = options.fetch ?? globalThis.fetch;
 	const observedCapabilities = new WeakMap<
 		WorkloadReconciliationStateV1,
@@ -962,6 +981,9 @@ export function createWorkloadRuntimeV1(
 	) {
 		observedCapabilities.delete(state);
 		if (!state.identity) return "pending" as const;
+		const observedWorkload = desired(state);
+		if (isMultiService(observedWorkload))
+			return multiService.observe(observedWorkload, state.identity);
 		if (state.phase === "ready" && candidateKeyless(state))
 			await revalidateCandidateCatalog(state, true);
 		let capabilities: WorkloadCapabilitiesV1 | undefined;
@@ -1062,6 +1084,117 @@ export function createWorkloadRuntimeV1(
 			const configuration = state.candidate.configuration;
 			const secretBindings = bindingsFor(state, input, candidateKeyless(state));
 			validateSecretDataKeys(configuration, secretBindings);
+			if ("manifest" in configuration.source) {
+				try {
+					const multiServiceManifest = parseMultiServiceManifest(
+						configuration.source.manifest,
+					);
+					const entryService = multiServiceManifest.resources.find(
+						(resource) =>
+							resource.kind === "Service" &&
+							resource.metadata.name === multiServiceManifest.entryServiceName,
+					);
+					if (entryService?.kind !== "Service") throw new Error();
+					const port = entryService.spec.ports[0]?.port;
+					if (!port) throw new Error();
+					const runtimeManifest = {
+						schemaVersion: 1 as const,
+						interactionMode: "self-managed" as const,
+						service: { port },
+						health: { path: "/" },
+					};
+					const deployment = validateAgentWorkloadDesiredV1({
+						schemaVersion: 1,
+						requestId: input.requestId,
+						traceId: input.traceId,
+						agentId: state.agentId,
+						configRevision: configuration.revision,
+						workloadRevision: state.revision,
+						fence: state.fence,
+						expectedWorkload: state.identity
+							? {
+									state: "present",
+									workloadUid: state.identity.uid,
+									workloadGeneration: state.identity.generation,
+								}
+							: { state: "absent" },
+						namespaceRef: options.policy.namespaceRef,
+						imageDigest: configuration.source.imageDigest,
+						registryAdmission: {
+							schemaVersion: 1,
+							immutableDigest: configuration.source.imageDigest,
+							runtimeManifest,
+							policyEvidence: {
+								schemaVersion: 1,
+								policyRef: options.admissionPolicyRef,
+								decisionRef: configuration.source.admissionRevision,
+								subjectRef: options.registrySubjectRef,
+								agentId: state.agentId,
+								imageDigest: configuration.source.imageDigest,
+								evaluatedAt: new Date().toISOString(),
+							},
+							runtimeManifestParsingEvidence: {
+								schemaVersion: 1,
+								labelName: "io.agora.agent.runtime.manifest",
+								utf8ByteLength: 1,
+								maxDepth: 1,
+								duplicateKeysDetected: false,
+								unknownFieldsDetected: false,
+							},
+						},
+						runtimeManifest,
+						resourceProfileRef: options.policy.resourceProfileRef,
+						env: Object.fromEntries(
+							configuration.environment.map((entry) => [
+								entry.name,
+								entry.value,
+							]),
+						),
+						service: {
+							name: workloadResourceNameV1(state.agentId),
+							port,
+						},
+						health: { path: "/", timeoutSeconds: 5, failureThreshold: 3 },
+						persistentVolume: {
+							name: `${workloadResourceNameV1(state.agentId)}-data`,
+							mountPath: "/workspace",
+							storageProfileRef: options.policy.storageProfileRef,
+							accessMode: "ReadWriteOnce",
+							retention: "retain",
+						},
+						serviceAccount: {
+							name: workloadResourceNameV1(state.agentId),
+							kubernetesApiAccess: false,
+						},
+						networkPolicy: {
+							deploymentPolicyRef: options.policy.networkPolicyRef,
+							ingressMode: "self-managed-route",
+							kubernetesApiAccess: false,
+							platformDatabaseAccess: false,
+							connectionDatabaseAccess: false,
+							decryptionKeyringAccess: false,
+						},
+						route: {
+							name: workloadResourceNameV1(state.agentId),
+							exposure: "self-managed",
+							tlsRequired: true,
+							interactionOrigin: createWorkloadInteractionOriginV1({
+								routeHostSuffix: options.policy.routeHostSuffix,
+								agentId: state.agentId,
+							}),
+						},
+						secretRefs: secretBindings.map(({ record }) =>
+							recordReference(record),
+						),
+						desiredState: "running",
+						replicas: 1,
+						multiService: multiServiceManifest,
+					});
+					return { configuration, deployment };
+				} catch {
+					throw new WorkloadPreflightRejectedErrorV1();
+				}
+			}
 			const request = {
 				schemaVersion: 1 as const,
 				requestId: input.requestId,
@@ -1316,6 +1449,15 @@ export function createWorkloadRuntimeV1(
 			}
 		},
 		async closeRoute(state) {
+			if ("manifest" in state.candidate.configuration.source) {
+				const workload = desired(state);
+				if (
+					!isMultiService(workload) ||
+					!(await multiService.closeRoute(workload))
+				)
+					throw new Error("Workload route is closing");
+				return;
+			}
 			const revision =
 				state.phase === "rejected" ? state.verifiedRevision : state.revision;
 			if (
@@ -1331,6 +1473,11 @@ export function createWorkloadRuntimeV1(
 			);
 		},
 		async apply(state, stopped, input) {
+			if (stopped && "manifest" in state.candidate.configuration.source) {
+				const workload = desired(state);
+				if (isMultiService(workload)) await multiService.closeRoute(workload);
+				return null;
+			}
 			if (stopped)
 				return createAdapter().scaleDownAgent(
 					state.agentId,
@@ -1341,6 +1488,7 @@ export function createWorkloadRuntimeV1(
 			const adapter = createAdapter(undefined, state);
 			await revalidateCandidateCatalog(state);
 			const workload = desired(state);
+			if (isMultiService(workload)) return multiService.apply(workload);
 			await adapter.assertStandardTemplateSelector(workload);
 			const activeBindingsToRepair: {
 				readonly reference: SecretActivationReferenceV1;
@@ -1567,6 +1715,11 @@ export function createWorkloadRuntimeV1(
 		},
 		async promote(state) {
 			assertCandidateMaterializationAllowed(state);
+			if ("manifest" in state.candidate.configuration.source) {
+				const workload = desired(state);
+				if (isMultiService(workload)) await multiService.promote(workload);
+				return;
+			}
 			const adapter = createAdapter(undefined, state);
 			await revalidateCandidateCatalog(state);
 			if (!state.identity) throw new Error();
@@ -1602,6 +1755,12 @@ export function createWorkloadRuntimeV1(
 			if (deleteNewVolume && !(await cleanupUnactivatedSecrets(state, input)))
 				return false;
 			let resourcesRemoved: boolean;
+			if ("manifest" in state.candidate.configuration.source) {
+				const workload = desired(state);
+				if (!isMultiService(workload)) return false;
+				resourcesRemoved = await multiService.cleanupAgent(workload);
+				return resourcesRemoved;
+			}
 			if (state.identity) {
 				// An apply can advance generation before its database step commits.
 				// Refresh only this UID; cleanup still fences every resource revision.

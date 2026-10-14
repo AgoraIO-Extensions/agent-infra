@@ -822,6 +822,7 @@
           "turn.submit",
           "turn.supplement",
           "turn.stop",
+          "native-capability.invoke",
           "session.status",
           "execution.renew",
           "events.persist",
@@ -2252,6 +2253,102 @@
           "principal",
           "channelId",
           "executions"
+        ],
+        "type": "object"
+      },
+      "RuntimeNativeCapabilityRequestV3": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "capabilityId": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "capabilityKind": {
+            "const": "skill",
+            "type": "string"
+          },
+          "channelId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "conversationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "directoryRevision": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "executionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "grant": {
+            "$ref": "#/components/schemas/RuntimeExecutionGrantV2"
+          },
+          "hostSessionRef": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/RuntimeOperationBindingV2"
+          },
+          "parameters": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "parametersDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/RuntimePrincipalV1"
+          },
+          "requestId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 3,
+            "type": "number"
+          },
+          "sessionGeneration": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "traceId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "turnId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "requestId",
+          "traceId",
+          "principal",
+          "channelId",
+          "agentId",
+          "conversationId",
+          "executionId",
+          "turnId",
+          "sessionGeneration",
+          "hostSessionRef",
+          "operation",
+          "capabilityId",
+          "capabilityKind",
+          "directoryRevision",
+          "parameters",
+          "parametersDigest",
+          "grant"
         ],
         "type": "object"
       },
@@ -3753,6 +3850,103 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/RuntimeSupplementRequestV3"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeOperationResponseV3"
+                }
+              }
+            },
+            "description": "RuntimeHost response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid RuntimeHost request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Execution Grant is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime session or operation is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Generation, fence, or operation conflict"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost operation failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime or Driver is unavailable"
+          }
+        }
+      }
+    },
+    "/internal/runtime/v3/native-capability": {
+      "post": {
+        "operationId": "invokeNativeCapabilityV3",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeNativeCapabilityRequestV3"
               }
             }
           },

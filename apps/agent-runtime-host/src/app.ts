@@ -20,6 +20,7 @@ import {
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeGenerationCancelRequestV3Schema,
 	RuntimeModelDirectoryRequestV1Schema,
+	RuntimeNativeCapabilityRequestV3Schema,
 	RuntimeNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataReadResponseV1Schema,
 	RuntimeReplayRequestV1Schema,
@@ -166,7 +167,7 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		// must remain usable when a deployment profile changes or disappears.
 		if (
 			context.req.method === "POST" &&
-			/^\/internal\/runtime\/v(?:[1-4]\/turns|[134]\/instructions)$/.test(
+			/^\/internal\/runtime\/v(?:[1-4]\/turns|[134]\/instructions|3\/native-capability)$/.test(
 				context.req.path,
 			)
 		) {
@@ -462,6 +463,12 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 	}
 	v3Route("turns", RuntimeSubmitTurnRequestV3Schema, (request, verification) =>
 		options.host.submitTurnV3(request, verification),
+	);
+	v3Route(
+		"native-capability",
+		RuntimeNativeCapabilityRequestV3Schema,
+		(request, verification, signal) =>
+			options.host.nativeCapabilityV3(request, verification, signal),
 	);
 	v3Route(
 		"instructions",

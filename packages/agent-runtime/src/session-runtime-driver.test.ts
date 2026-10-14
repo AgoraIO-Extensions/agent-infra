@@ -3,7 +3,10 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import type { RuntimeDriverCommand } from "./driver.js";
+import type {
+	RuntimeDriverCommand,
+	RuntimeNativeSkillCommandV1,
+} from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import {
@@ -15,6 +18,7 @@ import {
 	type NativeSessionOptions,
 	SessionRuntimeDriver,
 } from "./session-runtime-driver.js";
+import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 
@@ -165,6 +169,8 @@ async function driver(
 	options: {
 		supportsAttachments?: boolean;
 		attachmentsNegotiated?: () => boolean;
+		skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
+		nativeSkillPrompt?: (name: string, parameters: string) => string;
 	} = {},
 ): Promise<SessionRuntimeDriver> {
 	return SessionRuntimeDriver.open({
@@ -183,12 +189,81 @@ async function driver(
 		...(options.attachmentsNegotiated
 			? { attachmentsNegotiated: options.attachmentsNegotiated }
 			: {}),
+		...(options.skillDirectory
+			? { skillDirectory: options.skillDirectory }
+			: {}),
+		...(options.nativeSkillPrompt
+			? { nativeSkillPrompt: options.nativeSkillPrompt }
+			: {}),
 		cursorPrefix: "test",
 		retireSession: async () => {},
 		completionStatus: () => "completed",
 		openSession,
 	});
 }
+
+it("builds the bounded Pi native Skill command from the mounted directory", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-native-skill-command-"));
+	const skillDirectory: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "a".repeat(64),
+		findSkills: () => [
+			{
+				schemaVersion: 1,
+				name: "workspace-summary",
+				version: "1.0.0",
+				packageDigest: "b".repeat(64),
+				manifestDigest: "c".repeat(64),
+				targetPath: ".agents/skills/workspace-summary",
+				readOnly: true,
+			},
+		],
+		readSkill: async () => new Uint8Array(),
+	};
+	const runtime = await driver(
+		path,
+		async () => ({
+			nativeId: "native-a",
+			select: async () => {},
+			prompt: async () => ({ stopReason: "completed" }),
+			cancel: async () => {},
+			close: async () => {},
+		}),
+		{
+			skillDirectory,
+			nativeSkillPrompt: (name, parameters) => `/skill:${name} ${parameters}`,
+		},
+	);
+	try {
+		const command = runtime.createNativeSkillCommand({
+			schemaVersion: 1,
+			kind: "native-capability",
+			operationId: "execution-a",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			executionId: "execution-a",
+			turnId: "turn-a",
+			sessionGeneration: 1,
+			nativeSessionRef: "native-a",
+			capabilityId: "d".repeat(64),
+			directoryRevision: "e".repeat(64),
+			parameters: "summarize files",
+			parametersDigest: "f".repeat(64),
+			capabilityName: "workspace-summary",
+			capabilitySourceVersion: "1.0.0",
+		} satisfies RuntimeNativeSkillCommandV1);
+		expect(command).toMatchObject({
+			kind: "submit-turn",
+			operationId: "execution-a",
+			input: {
+				text: "/skill:workspace-summary summarize files",
+				attachments: [],
+			},
+		});
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
 
 it("rejects attachments before opening a Session the Driver does not declare support for", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-attachment-declared-"));

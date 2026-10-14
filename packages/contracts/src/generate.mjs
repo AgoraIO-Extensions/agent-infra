@@ -587,6 +587,12 @@ function buildArtifacts() {
 			"RuntimeOperationResponseV3",
 		],
 		[
+			"native-capability",
+			"invokeNativeCapabilityV3",
+			"RuntimeNativeCapabilityRequestV3",
+			"RuntimeOperationResponseV3",
+		],
+		[
 			"instructions",
 			"supplementRuntimeTurnV3",
 			"RuntimeSupplementRequestV3",

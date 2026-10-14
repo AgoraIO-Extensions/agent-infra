@@ -82,7 +82,44 @@ export interface ImageRegistryAdapterV1 {
 		request: ImageRegistryAdmissionRequestV1,
 		options?: { readonly signal?: AbortSignal },
 	): Promise<ImageRegistryAdmissionResultV1>;
+	/**
+	 * Admit an arbitrary image that is already pinned to an immutable OCI
+	 * manifest digest.  This is optional so existing test adapters can continue
+	 * to implement the original Runtime Manifest admission seam.
+	 */
+	admitDigest?(
+		request: ImageRegistryAdmissionRequestV1,
+		options?: { readonly signal?: AbortSignal },
+	): Promise<ImageRegistryDigestAdmissionResultV1>;
 }
+
+/** Concrete OCI adapter surface; the digest seam is always available here. */
+export interface OciImageRegistryAdapterV1 extends ImageRegistryAdapterV1 {
+	admitDigest(
+		request: ImageRegistryAdmissionRequestV1,
+		options?: { readonly signal?: AbortSignal },
+	): Promise<ImageRegistryDigestAdmissionResultV1>;
+}
+
+export type ImageRegistryAdmissionRejectedResultV1 = Extract<
+	ImageRegistryAdmissionResultV1,
+	{ readonly status: "rejected" }
+>;
+
+export type ImageRegistryDigestAdmissionAdmittedResultV1 = {
+	readonly schemaVersion: 1;
+	readonly status: "admitted";
+	readonly requestId: string;
+	readonly traceId: string;
+	readonly immutableDigest: string;
+	readonly policyEvidence: ImageAdmissionPolicyEvidenceV1;
+	readonly ociConfig: OciImageConfigV1;
+};
+
+/** Result returned by the digest-only admission seam for arbitrary OCI images. */
+export type ImageRegistryDigestAdmissionResultV1 =
+	| ImageRegistryDigestAdmissionAdmittedResultV1
+	| ImageRegistryAdmissionRejectedResultV1;
 
 function createOciDistributionClientV1(options: {
 	readonly imageReferencePrefix: string;
@@ -165,7 +202,7 @@ export function createOciImageRegistryAdapterV1(options: {
 	readonly endpoint: string;
 	readonly fetch?: typeof globalThis.fetch;
 	readonly policy: OciImageAdmissionPolicyV1;
-}): ImageRegistryAdapterV1 {
+}): OciImageRegistryAdapterV1 {
 	const distribution = createOciDistributionClientV1({
 		imageReferencePrefix: options.imageReferencePrefix,
 		endpoint: options.endpoint,
@@ -249,6 +286,78 @@ export function createOciImageRegistryAdapterV1(options: {
 				return rejected(request, "RUNTIME_MANIFEST_INVALID");
 			}
 		},
+		async admitDigest(
+			requestInput: unknown,
+			admissionOptions?: { readonly signal?: AbortSignal },
+		): Promise<ImageRegistryDigestAdmissionResultV1> {
+			const parsedRequest = parseImageRegistryAdmissionRequestV1(requestInput);
+			if (parsedRequest.status === "invalid-image-reference") {
+				return rejected(parsedRequest.correlation, "IMAGE_REFERENCE_INVALID");
+			}
+			if (parsedRequest.status === "invalid") {
+				throw new TypeError("Image registry request is invalid");
+			}
+			const request = parsedRequest.request;
+			const requestedDigest = pinnedImageDigest(request.imageReference);
+			if (requestedDigest === undefined) {
+				return rejected(request, "IMAGE_REFERENCE_INVALID");
+			}
+			if (admissionOptions?.signal?.aborted) {
+				return rejected(request, "IMAGE_REGISTRY_UNAVAILABLE");
+			}
+
+			const manifest = await resolveManifest(
+				distribution,
+				request,
+				admissionOptions?.signal,
+			);
+			if (manifest.status !== "resolved") {
+				return rejected(request, distributionFailureCode(manifest.status));
+			}
+			// resolveManifest verifies the response body against the registry's
+			// digest header and, for a pinned reference, against this digest too.
+			// Keep the explicit check here so a future distribution implementation
+			// cannot accidentally turn a forged digest into an admitted result.
+			if (manifest.immutableDigest !== requestedDigest) {
+				return rejected(request, "OCI_CONFIG_INVALID");
+			}
+
+			if (admissionOptions?.signal?.aborted) {
+				return rejected(request, "IMAGE_REGISTRY_UNAVAILABLE");
+			}
+			const policy = await authorizePolicy(
+				options.policy,
+				request,
+				manifest,
+				admissionOptions?.signal,
+			);
+			if (policy.status !== "admitted") {
+				return rejected(request, policy.code);
+			}
+
+			if (admissionOptions?.signal?.aborted) {
+				return rejected(request, "IMAGE_REGISTRY_UNAVAILABLE");
+			}
+			const config = await resolveConfig(
+				distribution,
+				request,
+				manifest,
+				admissionOptions?.signal,
+			);
+			if (config.status !== "resolved") {
+				return rejected(request, config.code);
+			}
+
+			return {
+				schemaVersion: 1,
+				status: "admitted",
+				requestId: request.requestId,
+				traceId: request.traceId,
+				immutableDigest: manifest.immutableDigest,
+				ociConfig: config.ociConfig,
+				policyEvidence: policy.evidence,
+			};
+		},
 	};
 }
 
@@ -325,6 +434,17 @@ function resolveImageLocation(
 				reference: remainder.slice(separator + 1),
 			}
 		: { repository: remainder, reference: "latest" };
+}
+
+/** Return the digest only when the reference is exactly repository@sha256:digest. */
+function pinnedImageDigest(imageReference: string): string | undefined {
+	const separator = imageReference.lastIndexOf("@");
+	if (separator <= 0) return undefined;
+	const digest = imageReference.slice(separator + 1);
+	if (!ImmutableOciDigestV1Schema.safeParse(digest).success) return undefined;
+	const repository = imageReference.slice(0, separator);
+	const lastComponent = repository.slice(repository.lastIndexOf("/") + 1);
+	return lastComponent.includes(":") ? undefined : digest;
 }
 
 function encodeRepository(repository: string): string {
@@ -915,7 +1035,7 @@ function rejected(
 		| "RUNTIME_MANIFEST_INVALID"
 		| "IMAGE_REGISTRY_UNAVAILABLE"
 		| "IMAGE_ADMISSION_POLICY_UNAVAILABLE",
-): ImageRegistryAdmissionResultV1 {
+): ImageRegistryAdmissionRejectedResultV1 {
 	const errors = {
 		IMAGE_REFERENCE_INVALID: ["Image reference is invalid", false],
 		IMAGE_NOT_FOUND: ["Image was not found", false],
@@ -945,5 +1065,5 @@ function rejected(
 			retryable,
 			traceId: request.traceId,
 		},
-	});
+	}) as ImageRegistryAdmissionRejectedResultV1;
 }

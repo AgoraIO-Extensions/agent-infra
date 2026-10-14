@@ -39,6 +39,12 @@ import {
 	templateReadinessMessages,
 } from "./deployment-configuration.js";
 import {
+	formatMultiServiceManifestSummary,
+	MULTI_SERVICE_MANIFEST_MAX_BYTES,
+	type MultiServiceManifestSummary,
+	parseMultiServiceManifest,
+} from "./multi-service-manifest.js";
+import {
 	type AgentApplicationEditAction,
 	agentApplicationEditActionLabels,
 } from "./my-agent-applications.js";
@@ -655,6 +661,21 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			? agentSourceReferenceLabel(application)
 			: "",
 	);
+	const [manifest, setManifest] = useState(
+		application?.source.kind === "custom" && "manifest" in application.source
+			? application.source.manifest
+			: "",
+	);
+	const [manifestSummary, setManifestSummary] =
+		useState<MultiServiceManifestSummary | null>(() => {
+			if (
+				application?.source.kind !== "custom" ||
+				!("manifest" in application.source)
+			)
+				return null;
+			const parsed = parseMultiServiceManifest(application.source.manifest);
+			return parsed.ok ? parsed.summary : null;
+		});
 	const [identityResponsibility, setIdentityResponsibility] = useState<
 		"platform-managed" | "self-managed"
 	>(
@@ -750,6 +771,18 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				}
 			}
 			return changed ? next : current;
+		});
+	};
+	const updateManifest = (value: string) => {
+		dismissServerFormError();
+		setManifest(value);
+		const parsed = parseMultiServiceManifest(value);
+		setManifestSummary(parsed.ok ? parsed.summary : null);
+		setFieldErrors((current) => {
+			const next = { ...current };
+			if (parsed.ok) delete next.manifest;
+			else next.manifest = parsed.message;
+			return next;
 		});
 	};
 	const updateNameField = (
@@ -954,7 +987,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const sourceFields = (
 		<>
 			<p className="sr-only" id="application-source-help">
-				从部署提供的标准模板中选择，或填写自定义镜像地址。已有申请的来源不能更改。
+				从部署提供的标准模板中选择，填写自定义镜像地址，或上传受限的多服务
+				YAML。已有申请的来源不能更改。
 			</p>
 			{showDeploymentStatus && configurationMessage ? (
 				<p
@@ -977,6 +1011,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								standard: "标准模板",
 								"custom-platform-adapter": "自定义 Agent · 平台交互入口",
 								"custom-self-managed": "自定义 Agent · 自有交互入口",
+								"custom-multi-service": "多服务 Agent · 自有交互入口",
 							}) as Record<string, string>
 						)[String(value)] ?? String(value)
 					}
@@ -1008,6 +1043,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						</SelectItem>
 						<SelectItem value="custom-self-managed">
 							自定义 Agent · 自有交互入口
+						</SelectItem>
+						<SelectItem value="custom-multi-service">
+							多服务 Agent · 自有交互入口
 						</SelectItem>
 					</SelectContent>
 				</Select>
@@ -1098,6 +1136,56 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						id={errorId("templateId")}
 						message={fieldErrors.templateId}
 					/>
+				</div>
+			) : sourceKind === "custom-multi-service" ? (
+				<div className="space-y-3 sm:col-span-2">
+					<div className="space-y-2">
+						<Label htmlFor="application-multi-service-file">
+							多服务资源 YAML
+						</Label>
+						<Input
+							accept=".yaml,.yml,text/yaml,application/yaml"
+							disabled={props.mode === "update"}
+							id="application-multi-service-file"
+							type="file"
+							onChange={(event) => {
+								const file = event.target.files?.[0];
+								if (!file) return;
+								if (file.size > MULTI_SERVICE_MANIFEST_MAX_BYTES) {
+									setManifest("");
+									setManifestSummary(null);
+									setFieldErrors((current) => ({
+										...current,
+										manifest: `多服务 YAML 不能超过 ${MULTI_SERVICE_MANIFEST_MAX_BYTES} bytes。`,
+									}));
+									return;
+								}
+								void file.text().then(updateManifest);
+							}}
+						/>
+						<p className="text-muted-foreground text-sm">
+							上传受限 Kubernetes 资源清单，或直接粘贴 YAML；最多 262,144
+							bytes。
+						</p>
+					</div>
+					<Textarea
+						aria-describedby={
+							fieldErrors.manifest ? errorId("manifest") : undefined
+						}
+						aria-invalid={fieldErrors.manifest ? true : undefined}
+						className="min-h-56 font-mono text-sm"
+						disabled={props.mode === "update"}
+						id="application-multi-service-manifest"
+						onChange={(event) => updateManifest(event.target.value)}
+						placeholder="schemaVersion: 1\nentryServiceName: api\nresources:"
+						value={manifest}
+					/>
+					<FieldError id={errorId("manifest")} message={fieldErrors.manifest} />
+					{manifestSummary ? (
+						<p className="text-muted-foreground text-sm" role="status">
+							{formatMultiServiceManifestSummary(manifestSummary)}
+						</p>
+					) : null}
 				</div>
 			) : (
 				<div className="space-y-2">
@@ -1200,6 +1288,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			templateId,
 			templateRevision,
 			imageReference,
+			manifest,
 			identityResponsibility,
 			coOwnerIds,
 			userAvailabilityIds,
@@ -1228,6 +1317,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			staleTemplate,
 			standardChoicesBlocked,
 		});
+		if (sourceKind === "custom-multi-service") {
+			const parsed = parseMultiServiceManifest(manifest);
+			if (!parsed.ok) errors.manifest = parsed.message;
+		}
 		if (managedModelEdit && !keyCheck.replacement)
 			errors.defaultRelayKey = keyCheck.typed
 				? "请先点击「检查可用模型」并选好模型（至少一个模型，每个模型至少一个推理档位）。"

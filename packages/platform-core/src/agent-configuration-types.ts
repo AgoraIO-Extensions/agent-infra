@@ -30,6 +30,15 @@ export type AgentConfigurationSourceV1 =
 			readonly interactionMode: "self-managed" | "platform-adapter";
 			readonly identityResponsibility?: "self-managed" | "platform-managed";
 			readonly connectionEnabled: boolean;
+	  }
+	| {
+			readonly kind: "custom";
+			readonly imageDigest: string;
+			readonly admissionRevision: string;
+			readonly interactionMode: "self-managed";
+			readonly identityResponsibility: "self-managed";
+			readonly connectionEnabled: false;
+			readonly manifest: string;
 	  };
 
 export interface AgentConfigurationSecretMetadataV1 {
@@ -144,6 +153,12 @@ export type AgentConfigurationSourceSelectionV1 =
 			readonly imageReference: string;
 			readonly interactionMode: "self-managed";
 			readonly identityResponsibility: "self-managed" | "platform-managed";
+	  }
+	| {
+			readonly kind: "custom";
+			readonly manifest: string;
+			readonly interactionMode: "self-managed";
+			readonly identityResponsibility: "self-managed";
 	  }
 	| {
 			readonly kind: "custom";

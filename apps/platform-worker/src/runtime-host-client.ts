@@ -33,6 +33,8 @@ import {
 	RuntimeModelDirectoryRequestV1Schema,
 	type RuntimeModelDirectoryResponseV1,
 	RuntimeModelDirectoryResponseV1Schema,
+	type RuntimeNativeCapabilityRequestV3,
+	RuntimeNativeCapabilityRequestV3Schema,
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV3Schema,
@@ -997,6 +999,17 @@ export function createWorkerRuntimeHostClientV3(
 				"stops",
 				value,
 				RuntimeStopRequestV3Schema,
+				RuntimeOperationResponseV3Schema,
+				signal,
+			),
+		nativeCapability: (
+			value: RuntimeNativeCapabilityRequestV3,
+			signal?: AbortSignal,
+		) =>
+			request(
+				"native-capability",
+				value,
+				RuntimeNativeCapabilityRequestV3Schema,
 				RuntimeOperationResponseV3Schema,
 				signal,
 			),

@@ -16,6 +16,13 @@ const binding = {
 	sessionGeneration: z.number().int().positive(),
 };
 
+const nativeSkillInput = z.strictObject({
+	capabilityId: z.string().regex(/^[a-f0-9]{64}$/),
+	directoryRevision: z.string().regex(/^[a-f0-9]{64}$/),
+	name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
+	version: z.string().min(1).max(512),
+});
+
 const operationBinding = {
 	agentId: binding.agentId,
 	conversationId: binding.conversationId,
@@ -32,6 +39,7 @@ export const RuntimeDriverCommandV1Schema = z.discriminatedUnion("kind", [
 		operationId: OpaqueIdV1Schema,
 		nativeSessionRef: OpaqueIdV1Schema.optional(),
 		input: RuntimeInputV1Schema,
+		nativeSkill: nativeSkillInput.optional(),
 	}),
 	z.strictObject({
 		...binding,
@@ -81,6 +89,7 @@ export const RuntimeDriverSubmitTurnCommandV2Schema = z.strictObject({
 	nativeSessionRef: OpaqueIdV1Schema.optional(),
 	input: RuntimeInputV1Schema,
 	selection: RuntimeSelectionV1Schema,
+	nativeSkill: nativeSkillInput.optional(),
 });
 
 export const RuntimeDriverSubmitTurnOperationRecordV2Schema = z.strictObject({

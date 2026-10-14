@@ -59,6 +59,7 @@ import {
 	type CodexNativeCommandReadContext,
 	CodexRuntimeDriver,
 	type CodexRuntimeDriverOptions,
+	createCodexNativeSkillInputV1,
 } from "./codex-runtime-driver.js";
 import { openCodexRuntimeDriverForTest } from "./codex-runtime-driver.test-support.js";
 import {
@@ -12768,6 +12769,40 @@ describe("Codex model started Driver state guard", () => {
 			}
 		},
 	);
+});
+
+describe("Codex structured Skill input", () => {
+	it("binds the verified mounted entry path and version", () => {
+		const root = "/opt/agent-infra-skill-hub";
+		const path = `${root}/.agents/skills/workspace-summary/SKILL.md`;
+		const directory = {
+			generationId: "a".repeat(64),
+			nativeRoot: root,
+			findSkills: () => [
+				{
+					schemaVersion: 1 as const,
+					name: "workspace-summary",
+					version: "1.0.0",
+					packageDigest: "b".repeat(64),
+					manifestDigest: "c".repeat(64),
+					targetPath: ".agents/skills/workspace-summary",
+					readOnly: true as const,
+				},
+			],
+			nativeSkillPaths: () => [path],
+			readSkill: async () => new Uint8Array(),
+		};
+		expect(
+			createCodexNativeSkillInputV1(directory, {
+				name: "workspace-summary",
+				version: "1.0.0",
+				text: "$workspace-summary summarize files",
+			}),
+		).toEqual([
+			{ type: "text", text: "$workspace-summary summarize files" },
+			{ type: "skill", name: "workspace-summary", path },
+		]);
+	});
 });
 
 // Complete-entry scripted tests. These mappings/configs are not native acceptance.

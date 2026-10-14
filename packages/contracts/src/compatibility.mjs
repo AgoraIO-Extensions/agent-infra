@@ -1043,6 +1043,40 @@ function isRuntimeOriginalBindingV3OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2450 adds the authenticated RuntimeHost native Skill execution route.
+function isRuntimeNativeCapabilityV3OpenApiAddition(previous, current) {
+	const path = "/internal/runtime/v3/native-capability";
+	const requestName = "RuntimeNativeCapabilityRequestV3";
+	const commandName = "RuntimeBusinessCommandV2";
+	if (
+		previous.paths?.[path] !== undefined ||
+		previous.components?.schemas?.[requestName] !== undefined ||
+		previous.components?.schemas?.[commandName] === undefined
+	)
+		return false;
+	const addition = {
+		path: current.paths?.[path],
+		request: current.components?.schemas?.[requestName],
+		command: current.components?.schemas?.[commandName],
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"3c0135368c1cddfabb686321ab3c463918d7ef66863bd810eb5e3395cd9e6b59"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	delete normalized.components.schemas[requestName];
+	const commands = normalized.components.schemas[commandName].enum;
+	if (
+		!Array.isArray(commands) ||
+		!commands.includes("native-capability.invoke")
+	)
+		return false;
+	commands.splice(commands.indexOf("native-capability.invoke"), 1);
+	return sameValue(previous, normalized);
+}
+
 function isRuntimeStatusRecoveryOpenApiAddition(previous, current) {
 	const path = "/internal/runtime/v2/status";
 	const requestName = "RuntimeStatusRequestV2";
@@ -4050,6 +4084,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRuntimeBrowserWorkloadIdentityOpenApiAddition(previous, current) &&
 			!isPilotBrowserProjectionOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
+			!isRuntimeNativeCapabilityV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
 			!isApplicationMaterialGrantV2OpenApiAddition(previous, current) &&

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MultiServiceManifestDocumentV1Schema } from "../pilot/multi-service.ts";
 import { SkillWorkloadProjectionV1Schema } from "../skill-hub.ts";
 import {
 	WorkloadFenceV1Schema,
@@ -221,6 +222,8 @@ const desiredWorkloadBaseV1Schema = z.strictObject({
 		.string()
 		.regex(/^[a-f0-9]{64}$/)
 		.optional(),
+	/** Parsed, immutable multi-service resource description for the Worker. */
+	multiService: MultiServiceManifestDocumentV1Schema.optional(),
 });
 
 const platformAdapterWorkloadBaseV1Schema = desiredWorkloadBaseV1Schema.extend({

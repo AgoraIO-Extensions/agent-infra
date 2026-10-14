@@ -7,7 +7,8 @@ import type {
 export type AgentApplicationSourceKind =
 	| "standard"
 	| "custom-platform-adapter"
-	| "custom-self-managed";
+	| "custom-self-managed"
+	| "custom-multi-service";
 
 export type AgentApplicationEnvironmentDraft = {
 	name: string;
@@ -31,6 +32,8 @@ export type AgentApplicationFormDraft = {
 	environment: readonly AgentApplicationEnvironmentDraft[];
 	identityResponsibility: "platform-managed" | "self-managed";
 	imageReference: string;
+	/** Inline multi-service resource YAML. Optional for legacy single-image drafts. */
+	manifest?: string;
 	models: readonly AgentApplicationModelDraft[];
 	name: string;
 	organizationAvailabilityIds: string;
@@ -53,6 +56,7 @@ export function sourceKindFor(
 	source: AgentApplicationProjectionV2["source"] | undefined,
 ): AgentApplicationSourceKind {
 	if (!source || source.kind === "standard") return "standard";
+	if ("manifest" in source) return "custom-multi-service";
 	return source.interactionMode === "platform-adapter"
 		? "custom-platform-adapter"
 		: "custom-self-managed";
@@ -98,6 +102,8 @@ export function validateAgentApplicationDraft(
 		if (context.staleTemplate) errors.templateId = "该模板已移除，请重新选择。";
 		if (context.standardChoicesBlocked)
 			errors.templateId = context.configurationMessage ?? "部署选项暂不可用。";
+	} else if (draft.sourceKind === "custom-multi-service") {
+		if (!draft.manifest?.trim()) errors.manifest = "请上传或粘贴多服务 YAML。";
 	} else if (!draft.imageReference.trim()) {
 		errors.imageReference = "请输入镜像地址。";
 	}
@@ -249,12 +255,19 @@ function requestBody(
 						imageReference: draft.imageReference.trim(),
 						interactionMode: "platform-adapter",
 					}
-				: {
-						kind: "custom",
-						imageReference: draft.imageReference.trim(),
-						interactionMode: "self-managed",
-						identityResponsibility: draft.identityResponsibility,
-					});
+				: draft.sourceKind === "custom-multi-service"
+					? {
+							kind: "custom",
+							interactionMode: "self-managed",
+							identityResponsibility: "self-managed",
+							manifest: draft.manifest?.trim() ?? "",
+						}
+					: {
+							kind: "custom",
+							imageReference: draft.imageReference.trim(),
+							interactionMode: "self-managed",
+							identityResponsibility: draft.identityResponsibility,
+						});
 	const modelConfiguration = showsModelConfiguration(
 		mode,
 		draft.sourceKind,

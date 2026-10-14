@@ -31,6 +31,7 @@ import type {
 	RuntimeModelCredentialResolver,
 	RuntimeModelDirectory,
 	RuntimeNativeMetadataReadContextV1,
+	RuntimeNativeSkillCommandV1,
 	RuntimeOperationFactInputV1,
 } from "./driver.js";
 import {
@@ -118,6 +119,8 @@ export interface SessionRuntimeDriverOptions {
 	readonly attachmentsNegotiated?: () => boolean;
 	/** Deployment-owned verified Skill Hub generation; never selected by a wire command. */
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
+	/** Native prompt expansion supplied by the pinned Driver adapter (Pi only for now). */
+	readonly nativeSkillPrompt?: (name: string, parameters: string) => string;
 	readonly cursorPrefix: string;
 	readonly openSession: (
 		options: NativeSessionOptions,
@@ -323,6 +326,13 @@ function nativeMetadataUnsupported(): never {
 		"unavailable",
 	);
 }
+function nativeSkillUnsupported(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+		"Native Skill execution is unavailable for this runtime",
+		409,
+	);
+}
 function conflict(): never {
 	throw new RuntimeHostError(
 		"RUNTIME_OPERATION_CONFLICT",
@@ -389,6 +399,45 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		} else if (action.kind === "tool") {
 			runtimeAuthorizationDenied();
 		}
+	}
+
+	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
+		if (!this.options.nativeSkillPrompt || !this.options.skillDirectory)
+			nativeSkillUnsupported();
+		if (
+			!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(command.capabilityName) ||
+			!this.options.skillDirectory
+				.findSkills()
+				.some(
+					(entry) =>
+						entry.name === command.capabilityName &&
+						entry.version === command.capabilitySourceVersion,
+				)
+		)
+			nativeSkillUnsupported();
+		const text = this.options.nativeSkillPrompt(
+			command.capabilityName,
+			command.parameters,
+		);
+		if (
+			typeof text !== "string" ||
+			text.length === 0 ||
+			text.length > 16 * 1024 ||
+			!text.isWellFormed()
+		)
+			nativeSkillUnsupported();
+		return {
+			schemaVersion: 1 as const,
+			kind: "submit-turn" as const,
+			operationId: command.operationId,
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			executionId: command.executionId,
+			turnId: command.turnId,
+			sessionGeneration: command.sessionGeneration,
+			nativeSessionRef: command.nativeSessionRef,
+			input: { text, attachments: [] },
+		};
 	}
 
 	/** Append one durable operation fact and acknowledge its journal commit. */

@@ -27,6 +27,7 @@ export const RuntimeBusinessCommandV2Schema = z.enum([
 	"turn.submit",
 	"turn.supplement",
 	"turn.stop",
+	"native-capability.invoke",
 	"session.status",
 	"execution.renew",
 	"events.persist",

@@ -1965,6 +1965,48 @@ async function seedActiveCoOwnerSecrets() {
 }
 
 describe("PostgreSQL Agent configuration query", () => {
+	it("projects a persisted multi-service manifest as source material", async () => {
+		await clearDatabase();
+		const manifest = '{"schemaVersion":1,"entryServiceName":"api"}';
+		const record: AgentConfigurationRecordV2 = {
+			...structuredClone(agentConfigurationConformanceRecordV1),
+			source: {
+				kind: "custom",
+				imageDigest: `sha256:${"b".repeat(64)}`,
+				admissionRevision: "multi-service-policy-1",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+				connectionEnabled: false,
+				manifest,
+			},
+			modelConfiguration: null,
+		};
+		await seed("agent_01", record);
+		const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+		adapters.push(query);
+
+		await expect(
+			query.read({
+				agentId: "agent_01",
+				actorId: "owner_01",
+				organizationIds: [],
+				isAdministrator: false,
+				intent: "discover",
+			}),
+		).resolves.toMatchObject({
+			outcome: "found",
+			configuration: {
+				source: {
+					kind: "custom",
+					interactionMode: "self-managed",
+					identityResponsibility: "self-managed",
+					connectionEnabled: false,
+					manifest,
+				},
+			},
+		});
+	});
+
 	it.each(["availability", "owners", "owners+availability"] as const)(
 		"gates the old runtime with active coOwner env/model Secrets after %s changes",
 		async (change) => {
