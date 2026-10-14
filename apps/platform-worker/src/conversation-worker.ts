@@ -69,6 +69,15 @@ export interface PlatformConversationWorkerOptionsV2
 type Telemetry = Pick<ReturnType<typeof startObservability>, "record">;
 type ConversationRuntime = ReturnType<typeof createConversationRuntimeV2>;
 const resourceSnapshotOperation = "platform.resource_snapshot";
+const slowQueueQueryOperation = "conversation.queue.find.slow";
+const defaultSlowQueryThresholdMs = 250;
+
+function slowQueryThresholdMs() {
+	const configured = Number(process.env.AGENT_INFRA_SLOW_QUERY_THRESHOLD_MS);
+	return Number.isInteger(configured) && configured >= 1 && configured <= 2_000
+		? configured
+		: defaultSlowQueryThresholdMs;
+}
 
 function boundedResourceSnapshotDuration(
 	value: unknown,
@@ -82,27 +91,6 @@ function boundedResourceSnapshotDuration(
 		platformQueueResourceSnapshotTimeoutMs,
 		Math.max(0, measured),
 	);
-}
-
-function observeOptionalPoolResources(
-	telemetry: Pick<ReturnType<typeof startObservability>, "observeResource">,
-	snapshot: {
-		postgresActivityActive?: unknown;
-		postgresActivityIdle?: unknown;
-		postgresActivityWaiting?: unknown;
-	},
-) {
-	const resources = [
-		["postgres_activity_active", snapshot.postgresActivityActive],
-		["postgres_activity_idle", snapshot.postgresActivityIdle],
-		["postgres_activity_waiting", snapshot.postgresActivityWaiting],
-	] as const;
-	for (const [kind, value] of resources) {
-		if (value === undefined) continue;
-		if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
-			continue;
-		telemetry.observeResource({ kind, value });
-	}
 }
 
 /** Bounded stage timings between a claim and the Runtime submit (#1561);
@@ -356,9 +344,6 @@ export function createPlatformConversationWorkerV2(
 					kind: "outbox_pending",
 					value: snapshot.outboxPending,
 				});
-				const observeResource = telemetry.observeResource;
-				if (observeResource)
-					observeOptionalPoolResources({ observeResource }, snapshot);
 			})
 			.catch(() => {
 				if (!stopped && !signal.aborted) {
@@ -658,6 +643,14 @@ export function createPlatformConversationWorkerV2(
 				outcome: "completed",
 				durationMs: performance.now() - began,
 				operationRef: "conversation.queue.find",
+			});
+		const discoveryDurationMs = performance.now() - began;
+		if (options.observability && discoveryDurationMs >= slowQueryThresholdMs())
+			record(options.observability, {
+				stage: "dependency",
+				outcome: "completed",
+				durationMs: Math.min(2_000, discoveryDurationMs),
+				operationRef: slowQueueQueryOperation,
 			});
 		let launched = 0;
 		let lastBusinessItemId: string | undefined;

@@ -559,6 +559,8 @@ describe("Platform API production assembly", () => {
 				expect(observe.mock.calls).toEqual([
 					[{ kind: "task_waiting", value: snapshot.taskWaiting }],
 					[{ kind: "outbox_pending", value: snapshot.outboxPending }],
+					[{ kind: "sse_connections", value: 0 }],
+					[{ kind: "sse_pending_events", value: 0 }],
 				]);
 			} finally {
 				await createPlatformApiShutdown(running)();

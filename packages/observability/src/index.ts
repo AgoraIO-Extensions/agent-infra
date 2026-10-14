@@ -136,9 +136,6 @@ export const resourceKinds = [
 	"sse_pending_events",
 	"task_waiting",
 	"outbox_pending",
-	"postgres_activity_active",
-	"postgres_activity_idle",
-	"postgres_activity_waiting",
 ] as const;
 
 export interface ResourceSnapshot {
