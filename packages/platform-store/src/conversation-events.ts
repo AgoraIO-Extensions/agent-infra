@@ -15,6 +15,7 @@ import {
 	type PersistedRuntimeConversationEventV1,
 	parseConversationOperationEventV2,
 	parseConversationOperationFactV2,
+	parseConversationPersistedEventPayloadV1,
 	parseTaskAuthorizationBoundaryV1,
 	requireConversationOperationSuccessorV2,
 } from "@agent-infra/platform-core";
@@ -186,6 +187,11 @@ function eventType(value: unknown): unknown {
 
 function normalizedEvent(value: unknown): ConversationNormalizedEventV1 {
 	const type = eventType(value);
+	if (type === "browser.handoff") {
+		const parsed = parseConversationPersistedEventPayloadV1(value);
+		if (parsed.type !== "browser.handoff") return unavailable();
+		return parsed;
+	}
 	if (type === "execution.operation") {
 		try {
 			return parseConversationOperationEventV2(value);

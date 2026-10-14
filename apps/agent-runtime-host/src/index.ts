@@ -64,10 +64,12 @@ import {
 	readRuntimeLegacyJournal,
 } from "./legacy-migration-journal.js";
 import {
+	createRuntimeNativeMetadataCurrentAssemblyV1,
 	createRuntimeNativeMetadataReadV1,
 	type RuntimeNativeMetadataReadAssemblyV1,
 } from "./native-metadata-assembly.js";
 import { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-current-client.js";
+import { createRuntimeNativeMetadataProofVerifierV1 } from "./native-metadata-proof.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
 import { createRuntimeFileBridgeFactoryV1 } from "./runtime-file-exchange.js";
 import {
@@ -90,6 +92,7 @@ export {
 	type RuntimeNativeMetadataReadAssemblyV1,
 } from "./native-metadata-assembly.js";
 export { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-current-client.js";
+export { createRuntimeNativeMetadataProofVerifierV1 } from "./native-metadata-proof.js";
 
 interface StartOptions {
 	browserCapability?:
@@ -163,9 +166,11 @@ export async function createRuntimeNativeMetadataDeploymentAssemblyV1(input: {
 		moduleSpecifier === undefined
 	)
 		return undefined;
-	if (!origin || !token || !moduleSpecifier) return undefined;
+	// A partially configured target is deliberately unavailable.  Never infer a
+	// Worker origin, token, proof key or session from request data.
+	if (!origin || !token) return undefined;
 	let deployment = input.deployment;
-	if (!deployment) {
+	if (moduleSpecifier !== undefined && !deployment) {
 		try {
 			if (!moduleSpecifier.startsWith("file:")) return undefined;
 			deployment = (await import(
@@ -175,17 +180,66 @@ export async function createRuntimeNativeMetadataDeploymentAssemblyV1(input: {
 			return undefined;
 		}
 	}
-	if (typeof deployment.createRuntimeNativeMetadataReadAssembly !== "function")
-		return undefined;
 	const current = createRuntimeNativeMetadataCurrentClientV1({
 		baseUrl: origin,
 		serviceToken: token,
 	});
-	return deployment.createRuntimeNativeMetadataReadAssembly({
-		environment: input.environment,
-		host: input.host,
-		current,
-	});
+	if (deployment) {
+		if (
+			typeof deployment.createRuntimeNativeMetadataReadAssembly !== "function"
+		)
+			return undefined;
+		return deployment.createRuntimeNativeMetadataReadAssembly({
+			environment: input.environment,
+			host: input.host,
+			current,
+		});
+	}
+	const publicKeyText = input.environment.AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY;
+	const issuer = input.environment.AGENT_INFRA_RUNTIME_GRANT_ISSUER;
+	const keyVersion = input.environment.AGENT_INFRA_RUNTIME_GRANT_KEY_ID;
+	let workerId = input.environment.AGENT_INFRA_RUNTIME_WORKER_ID;
+	if (!workerId && input.environment.AGENT_INFRA_RUNTIME_READINESS_BINDING) {
+		try {
+			const candidate = JSON.parse(
+				input.environment.AGENT_INFRA_RUNTIME_READINESS_BINDING,
+			) as { workerId?: unknown };
+			if (typeof candidate.workerId === "string") workerId = candidate.workerId;
+		} catch {
+			workerId = undefined;
+		}
+	}
+	if (!publicKeyText || !issuer || !keyVersion || !workerId) return undefined;
+	try {
+		const publicKey = createPublicKey(publicKeyText);
+		const proof = createRuntimeNativeMetadataProofVerifierV1({
+			publicKey,
+			issuer,
+			workerId,
+			keyVersion,
+		});
+		return createRuntimeNativeMetadataCurrentAssemblyV1({
+			current,
+			verifyProof: proof.verify,
+			resolveNativeSessionRef: async ({ request }) => {
+				try {
+					return await input.host.resolveNativeMetadataSessionRef(
+						{
+							agentId: request.scope.agentId,
+							conversationId: request.scope.conversationId,
+							sessionGeneration: request.scope.sessionGeneration,
+							executionId: request.scope.executionId,
+						},
+						request.originalHostScopeRef,
+					);
+				} catch {
+					return null;
+				}
+			},
+		});
+	} catch {
+		return undefined;
+	}
 }
 
 function runtimePort(value: string | undefined, fallback: number) {

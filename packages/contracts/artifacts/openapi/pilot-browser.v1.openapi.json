@@ -5721,6 +5721,189 @@
                         "payload"
                       ],
                       "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "conversationCursor": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "conversationId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "eventId": {
+                          "$ref": "#/components/schemas/SseEventIdV1"
+                        },
+                        "executionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "event",
+                          "type": "string"
+                        },
+                        "occurredAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                          "type": "string"
+                        },
+                        "payload": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "binding": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "agentId": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "capabilityRevision": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991,
+                                  "type": "integer"
+                                },
+                                "capabilityVersion": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991,
+                                  "type": "integer"
+                                },
+                                "conversationId": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "executionId": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "imageDigest": {
+                                  "pattern": "^(?:[^@\\s]+@)?sha256:[0-9a-f]{64}$",
+                                  "type": "string"
+                                },
+                                "pageRevision": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991,
+                                  "type": "integer"
+                                },
+                                "resourceFence": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991,
+                                  "type": "integer"
+                                },
+                                "sessionGeneration": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991,
+                                  "type": "integer"
+                                },
+                                "subjectId": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "workloadRevision": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "subjectId",
+                                "agentId",
+                                "conversationId",
+                                "executionId",
+                                "sessionGeneration",
+                                "resourceFence",
+                                "workloadRevision",
+                                "imageDigest",
+                                "capabilityVersion",
+                                "capabilityRevision",
+                                "pageRevision"
+                              ],
+                              "type": "object"
+                            },
+                            "expiresAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                              "type": "string"
+                            },
+                            "handoffId": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "operatorId": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "reason": {
+                              "enum": [
+                                "login",
+                                "mfa",
+                                "captcha",
+                                "human_judgment"
+                              ],
+                              "type": "string"
+                            },
+                            "requestedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "requested",
+                                "active",
+                                "returning",
+                                "completed",
+                                "revoked",
+                                "expired",
+                                "crashed",
+                                "unknown"
+                              ],
+                              "type": "string"
+                            },
+                            "terminalReason": {
+                              "maxLength": 256,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "handoffId",
+                            "status",
+                            "reason",
+                            "requestedAt",
+                            "expiresAt",
+                            "binding"
+                          ],
+                          "type": "object"
+                        },
+                        "schemaVersion": {
+                          "const": 2,
+                          "type": "number"
+                        },
+                        "sequence": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "type": {
+                          "const": "browser.handoff",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "kind",
+                        "eventId",
+                        "conversationId",
+                        "executionId",
+                        "sequence",
+                        "conversationCursor",
+                        "occurredAt",
+                        "type",
+                        "payload"
+                      ],
+                      "type": "object"
                     }
                   ]
                 },
@@ -6162,6 +6345,189 @@
                       },
                       "type": {
                         "const": "execution.operation",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "kind",
+                      "eventId",
+                      "conversationId",
+                      "executionId",
+                      "sequence",
+                      "conversationCursor",
+                      "occurredAt",
+                      "type",
+                      "payload"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "conversationCursor": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "conversationId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "eventId": {
+                        "$ref": "#/components/schemas/SseEventIdV1"
+                      },
+                      "executionId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "event",
+                        "type": "string"
+                      },
+                      "occurredAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                        "type": "string"
+                      },
+                      "payload": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "binding": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "agentId": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "capabilityRevision": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991,
+                                "type": "integer"
+                              },
+                              "capabilityVersion": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991,
+                                "type": "integer"
+                              },
+                              "conversationId": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "executionId": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "imageDigest": {
+                                "pattern": "^(?:[^@\\s]+@)?sha256:[0-9a-f]{64}$",
+                                "type": "string"
+                              },
+                              "pageRevision": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991,
+                                "type": "integer"
+                              },
+                              "resourceFence": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991,
+                                "type": "integer"
+                              },
+                              "sessionGeneration": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991,
+                                "type": "integer"
+                              },
+                              "subjectId": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "workloadRevision": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "subjectId",
+                              "agentId",
+                              "conversationId",
+                              "executionId",
+                              "sessionGeneration",
+                              "resourceFence",
+                              "workloadRevision",
+                              "imageDigest",
+                              "capabilityVersion",
+                              "capabilityRevision",
+                              "pageRevision"
+                            ],
+                            "type": "object"
+                          },
+                          "expiresAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                            "type": "string"
+                          },
+                          "handoffId": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "operatorId": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "reason": {
+                            "enum": [
+                              "login",
+                              "mfa",
+                              "captcha",
+                              "human_judgment"
+                            ],
+                            "type": "string"
+                          },
+                          "requestedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                            "type": "string"
+                          },
+                          "status": {
+                            "enum": [
+                              "requested",
+                              "active",
+                              "returning",
+                              "completed",
+                              "revoked",
+                              "expired",
+                              "crashed",
+                              "unknown"
+                            ],
+                            "type": "string"
+                          },
+                          "terminalReason": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "handoffId",
+                          "status",
+                          "reason",
+                          "requestedAt",
+                          "expiresAt",
+                          "binding"
+                        ],
+                        "type": "object"
+                      },
+                      "schemaVersion": {
+                        "const": 2,
+                        "type": "number"
+                      },
+                      "sequence": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "type": {
+                        "const": "browser.handoff",
                         "type": "string"
                       }
                     },

@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import {
 	RuntimeBusinessGrantClaimsV4Schema,
+	RuntimeNativeCapabilityRequestV4Schema,
+	RuntimeNativeCapabilityTransportV4Schema,
 	RuntimePrivateRelayKeyFieldV1Schema,
 	type RuntimeSubmitTurnRequestV4,
 	RuntimeSubmitTurnRequestV4Schema,
@@ -18,7 +20,10 @@ import {
 	validateVerifiedRuntimeExecutionGrantClaimsV4,
 } from "./host-v4.js";
 
-type BusinessRequest = RuntimeSubmitTurnRequestV4 | RuntimeSupplementRequestV4;
+type BusinessRequest =
+	| RuntimeSubmitTurnRequestV4
+	| RuntimeSupplementRequestV4
+	| import("./host-v4.js").RuntimeNativeCapabilityRequestV4;
 
 const request = RuntimeSubmitTurnRequestV4Schema.parse({
 	schemaVersion: 4,
@@ -84,7 +89,13 @@ function claims(value: BusinessRequest) {
 		requestDigest: digest(value),
 		purpose: "business",
 		authorizationRecordId: "authorization-1",
-		allowedCommands: ["selection" in value ? "turn.submit" : "turn.supplement"],
+		allowedCommands: [
+			"selection" in value
+				? "turn.submit"
+				: "capabilityId" in value
+					? "native-capability.invoke"
+					: "turn.supplement",
+		],
 		attachments: [],
 	});
 }
@@ -159,6 +170,97 @@ it("requires an independent private field for each V4 transport", () => {
 			requestDigest: digest(supplementRequest),
 		}),
 	).toEqual(supplementField);
+});
+
+it("binds a native Skill invocation to V4 execution and parameters", async () => {
+	const { input: _input, selection: _selection, ...nativeContext } = request;
+	const native = RuntimeNativeCapabilityRequestV4Schema.parse({
+		...nativeContext,
+		hostSessionRef: "session-1",
+		operation: {
+			kind: "execution",
+			id: request.executionId,
+			deliveryFence: 2,
+			executionDeliveryFence: 2,
+		},
+		capabilityId: "a".repeat(64),
+		capabilityKind: "skill",
+		directoryRevision: "b".repeat(64),
+		parameters: "--verbose",
+		parametersDigest: createHash("sha256").update("--verbose").digest("hex"),
+		capabilitySourceVersion: "1.2.3",
+	});
+	const grant = claims(native);
+	expect(
+		RuntimeNativeCapabilityTransportV4Schema.safeParse({
+			businessRequest: native,
+			privateKeyField: {
+				...privateField,
+				context: {
+					...privateField.context,
+					hostSessionRef: native.hostSessionRef,
+					operation: native.operation,
+					requestDigest: digest(native),
+				},
+			},
+		}).success,
+	).toBe(true);
+	await expect(
+		validateRuntimeBusinessBindingV4(native, grant),
+	).resolves.toBeUndefined();
+	expect(runtimeOperationDigestInputV4(native)).toMatchObject({
+		kind: "native-capability",
+		capabilityId: native.capabilityId,
+		directoryRevision: native.directoryRevision,
+		parametersDigest: native.parametersDigest,
+	});
+	await expect(
+		validateRuntimeBusinessBindingV4(
+			{ ...native, parametersDigest: "0".repeat(64) },
+			grant,
+		),
+	).rejects.toThrow("RuntimeHostV4 binding is invalid");
+});
+
+it("binds a native command invocation without an ordinary text input", async () => {
+	const { input: _input, selection: _selection, ...nativeContext } = request;
+	const native = RuntimeNativeCapabilityRequestV4Schema.parse({
+		...nativeContext,
+		hostSessionRef: "session-1",
+		operation: {
+			kind: "execution",
+			id: request.executionId,
+			deliveryFence: 2,
+			executionDeliveryFence: 2,
+		},
+		capabilityId: "c".repeat(64),
+		capabilityKind: "command",
+		directoryRevision: "d".repeat(64),
+		parameters: "",
+		parametersDigest: createHash("sha256").update("").digest("hex"),
+		capabilitySourceVersion: "0.153.0",
+	});
+	const transport = RuntimeNativeCapabilityTransportV4Schema.parse({
+		businessRequest: native,
+		privateKeyField: {
+			...privateField,
+			context: {
+				...privateField.context,
+				hostSessionRef: native.hostSessionRef,
+				operation: native.operation,
+				requestDigest: digest(native),
+			},
+		},
+	});
+	await expect(
+		validateRuntimeBusinessBindingV4(native, claims(native)),
+	).resolves.toBeUndefined();
+	expect(transport.businessRequest).not.toHaveProperty("input");
+	expect(runtimeOperationDigestInputV4(native)).toMatchObject({
+		kind: "native-capability",
+		capabilityKind: "command",
+		capabilitySourceVersion: "0.153.0",
+	});
 });
 
 it("binds the Key reference/version into the Grant digest without the Key", async () => {

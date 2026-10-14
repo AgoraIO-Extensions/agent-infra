@@ -510,6 +510,26 @@ export function eventProjection(
 				...(persisted.callId === undefined ? {} : { callId: persisted.callId }),
 			},
 		};
+	} else if (persisted.type === "browser.handoff") {
+		return PersistedConversationEventV2Schema.parse({
+			...base,
+			schemaVersion: 2,
+			type: "browser.handoff",
+			payload: {
+				handoffId: persisted.handoffId,
+				status: persisted.status,
+				reason: persisted.reason,
+				requestedAt: persisted.requestedAt,
+				expiresAt: persisted.expiresAt,
+				...(persisted.operatorId === undefined
+					? {}
+					: { operatorId: persisted.operatorId }),
+				...(persisted.terminalReason === undefined
+					? {}
+					: { terminalReason: persisted.terminalReason }),
+				binding: persisted.binding,
+			},
+		});
 	} else if (persisted.type === "result.file") {
 		projected = {
 			...base,

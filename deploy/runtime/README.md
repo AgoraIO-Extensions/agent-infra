@@ -95,12 +95,13 @@ endpoint 或 credential。`AGENT_INFRA_RUNTIME_DRIVER=codex` 是固定模板绑�
 | `AGENT_INFRA_RUNTIME_GRANT_ISSUER` | 预期 Grant issuer |
 | `AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN` | 固定 Worker current-confirmation origin；只接受受信部署注入的 `http://` origin |
 | `AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN` | Host→Worker current-confirmation 服务凭证；不从请求字段读取 |
-| `AGENT_INFRA_RUNTIME_NATIVE_METADATA_DEPLOYMENT_MODULE` | `file:` URL；导出 `createRuntimeNativeMetadataReadAssembly({ environment, host, current })`，负责验证 Worker proof 并解析本机 native session |
+| `AGENT_INFRA_RUNTIME_NATIVE_METADATA_DEPLOYMENT_MODULE` | 可选 `file:` URL；若提供则导出 `createRuntimeNativeMetadataReadAssembly({ environment, host, current })`，负责额外部署绑定。未提供时 Host 使用仓库内建的 Ed25519 proof verifier 和 durable original-Execution→native-Session resolver；两者都不能接受调用方 URL、主体、Host scope 或 native session 字段 |
 | `PORT` | HTTP 监听端口，默认为 `3003` |
 
-Native metadata 的 Host 读取只有在上述三个输入同时存在且部署模块返回有效 assembly 时才会
-装配；缺失、依赖不可达或 binding 无法确认时保持 `503 unavailable`。部署模块不得接受调用方
-URL、主体、Host scope 或 native session 字段。
+Native metadata 的 Host 读取只有在 Worker origin、service token、Grant public key、issuer、
+worker ID 和 key ID 可组成固定 assembly 时才会装配；缺失、依赖不可达或 durable binding
+无法确认时保持 `503 unavailable`。如果显式部署模块存在，它必须通过同一 Host/Worker
+contract 返回 assembly；模块失败不会回退到未验证的请求字段。
 
 模型配置结构示例，不包含凭证：
 

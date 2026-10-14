@@ -336,24 +336,55 @@ function validMultiServiceTopology(
 	const deployments = manifest.resources.filter(
 		(resource) => resource.kind === "Deployment",
 	);
+	const statefulSets = manifest.resources.filter(
+		(resource) => resource.kind === "StatefulSet",
+	);
 	const services = manifest.resources.filter(
 		(resource) => resource.kind === "Service",
 	);
+	const jobs = manifest.resources.filter((resource) => resource.kind === "Job");
+	const pvcs = manifest.resources.filter(
+		(resource) => resource.kind === "PersistentVolumeClaim",
+	);
+	const workloads = [...deployments, ...statefulSets];
+	const statefulExtension =
+		statefulSets.length === 1 &&
+		pvcs.length === 1 &&
+		deployments.length === 1 &&
+		statefulSets.every(
+			(resource) =>
+				resource.spec.template.spec.restartPolicy === undefined ||
+				resource.spec.template.spec.restartPolicy === "Always",
+		) &&
+		statefulSets.every((resource) =>
+			services.some(
+				(service) => service.metadata.name === resource.spec.serviceName,
+			),
+		);
+	const tracerTopology =
+		deployments.length === 2 && statefulSets.length === 0 && pvcs.length === 0;
 	if (
-		manifest.resources.length !== 4 ||
-		deployments.length !== 2 ||
+		(!tracerTopology && !statefulExtension) ||
+		manifest.resources.length < (statefulExtension ? 5 : 4) ||
+		workloads.length !== 2 ||
 		services.length !== 2 ||
+		jobs.length > 1 ||
 		manifest.resources.some(
 			(resource) =>
-				resource.kind !== "Deployment" && resource.kind !== "Service",
+				resource.kind !== "Deployment" &&
+				resource.kind !== "StatefulSet" &&
+				resource.kind !== "Service" &&
+				resource.kind !== "PersistentVolumeClaim" &&
+				resource.kind !== "Job" &&
+				resource.kind !== "ConfigMap",
 		)
 	)
 		return false;
 	return services.every((service) => {
-		const target = deployments.find((deployment) =>
+		const target = workloads.find((workload) =>
 			Object.entries(service.spec.selector).every(
 				([key, expected]) =>
-					deployment.spec.template.metadata.labels[key] === expected,
+					workload.spec.template.metadata.labels[key] === expected,
 			),
 		);
 		if (!target) return false;
@@ -754,15 +785,18 @@ export function createDeploymentAdmissionsV1(
 						cap: multiServiceResourceCap,
 					});
 					if (!capacity.ok) return denied;
-					const deployments = multiServiceManifest.resources.filter(
-						(resource) => resource.kind === "Deployment",
-					);
 					const services = multiServiceManifest.resources.filter(
 						(resource) => resource.kind === "Service",
 					);
-					if (deployments.length !== 2 || services.length !== 2) return denied;
+					const workloads = multiServiceManifest.resources.filter(
+						(resource) =>
+							resource.kind === "Deployment" || resource.kind === "StatefulSet",
+					);
+					if (workloads.length !== 2 || services.length !== 2) return denied;
 					const digests = multiServiceImageDigests(multiServiceManifest);
 					if (digests.length < 1) return denied;
+					const canonicalManifest = JSON.stringify(multiServiceManifest);
+					if (canonicalManifest.length > 262_144) return denied;
 					const admittedImages = await Promise.all(
 						digests.map(async (digest) => {
 							const result = await registry.admitDigest(
@@ -781,7 +815,6 @@ export function createDeploymentAdmissionsV1(
 						}),
 					);
 					if (admittedImages.some((result) => result === null)) return denied;
-					const canonicalManifest = JSON.stringify(multiServiceManifest);
 					const imageDigest = `sha256:${createHash("sha256")
 						.update(canonicalManifest)
 						.digest("hex")}`;
@@ -798,7 +831,10 @@ export function createDeploymentAdmissionsV1(
 							interactionMode: "self-managed",
 							identityResponsibility: "self-managed",
 							connectionEnabled: false,
-							manifest: selection.manifest,
+							// Persist the parsed JSON document, never the caller's YAML bytes.
+							// This makes the admitted resource set immutable and ensures that
+							// equivalent YAML cannot change after admission.
+							manifest: canonicalManifest,
 						},
 					};
 				}

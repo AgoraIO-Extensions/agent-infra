@@ -190,6 +190,7 @@ export function createWorkerRuntimeGrantSignerV4(options: SignerOptionsV4) {
 			if (!authorizationRecordId)
 				throw new TypeError("Runtime V4 business authorization is required");
 			const submit = "selection" in request;
+			const native = "capabilityId" in request;
 			const purpose =
 				request.executionSource === "web" || request.executionSource === "wecom"
 					? "personal"
@@ -199,12 +200,13 @@ export function createWorkerRuntimeGrantSignerV4(options: SignerOptionsV4) {
 				request.keyBinding.subjectId !==
 					(purpose === "personal" ? request.principal.id : request.agentId) ||
 				(purpose === "personal" && request.principal.kind !== "user") ||
-				request.operation.kind !== (submit ? "execution" : "message") ||
-				(submit && request.operation.id !== request.executionId)
+				request.operation.kind !==
+					(submit || native ? "execution" : "message") ||
+				((submit || native) && request.operation.id !== request.executionId)
 			)
 				throw new TypeError("Runtime V4 business binding is invalid");
 			const issuedAt = now();
-			const attachments = request.input.attachments;
+			const attachments = "input" in request ? request.input.attachments : [];
 			if (new Set(attachments).size !== attachments.length)
 				throw new TypeError("Runtime V4 grant attachments must be unique");
 			const claims = RuntimeBusinessGrantClaimsV4Schema.parse({
@@ -228,7 +230,11 @@ export function createWorkerRuntimeGrantSignerV4(options: SignerOptionsV4) {
 				hostSessionRef: request.hostSessionRef,
 				operation: request.operation,
 				allowedCommands: [
-					"selection" in request ? "turn.submit" : "turn.supplement",
+					submit
+						? "turn.submit"
+						: native
+							? "native-capability.invoke"
+							: "turn.supplement",
 				],
 				purpose: "business",
 				authorizationRecordId,

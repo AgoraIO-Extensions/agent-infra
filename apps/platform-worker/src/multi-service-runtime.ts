@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type {
 	MultiServiceResourceCapV1,
 	MultiServiceResourceProfileV1,
@@ -11,11 +12,17 @@ import {
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import type {
 	KubernetesObject,
+	V1ConfigMap,
+	V1Container,
 	V1Deployment,
 	V1Ingress,
+	V1Job,
 	V1NetworkPolicy,
+	V1PersistentVolumeClaim,
+	V1PodSpec,
 	V1Service,
 	V1ServiceAccount,
+	V1StatefulSet,
 } from "@kubernetes/client-node";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import {
@@ -33,6 +40,9 @@ export type MultiServiceDesired = AgentWorkloadDesiredV1 & {
 
 export interface MultiServiceRuntimePolicyV1 {
 	readonly namespace: string;
+	readonly imageRepository?: string;
+	readonly storageSize?: string;
+	readonly storageClassName?: string;
 	readonly routeHostSuffix: string;
 	readonly ingressClassName: string;
 	readonly tlsSecretName: string;
@@ -56,6 +66,11 @@ export const defaultMultiServiceResourceCapV1 = {
 	memoryMiB: 4_096,
 	storageGiB: 20,
 } satisfies MultiServiceResourceCapV1;
+function imageReference(policy: MultiServiceRuntimePolicyV1, digest: string) {
+	return policy.imageRepository
+		? `${policy.imageRepository}@${digest}`
+		: digest;
+}
 
 export function isMultiService(
 	value: AgentWorkloadDesiredV1,
@@ -173,6 +188,37 @@ export function validateMultiServiceResourceCapacityV1(
 	return { total, cap };
 }
 
+function migrationJobName(value: MultiServiceDesired): string {
+	return serviceResourceName(
+		value.agentId,
+		`migration-${fingerprint(value.multiService).slice(0, 12)}`,
+	);
+}
+
+function migrationResource(value: MultiServiceDesired) {
+	return value.multiService.resources.find(
+		(resource) => resource.kind === "Job",
+	);
+}
+
+function jobSucceeded(job: V1Job): boolean {
+	return (
+		(job.status?.succeeded ?? 0) > 0 ||
+		job.status?.conditions?.some(
+			(condition) =>
+				condition.type === "Complete" && condition.status === "True",
+		) === true
+	);
+}
+
+function jobFailed(job: V1Job): boolean {
+	return (
+		job.status?.conditions?.some(
+			(condition) => condition.type === "Failed" && condition.status === "True",
+		) === true
+	);
+}
+
 function metadata(value: MultiServiceDesired, name: string, service?: string) {
 	const labels = {
 		[ownerLabel]: workloadResourceNameV1(value.agentId),
@@ -208,7 +254,7 @@ function deployment(
 	value: MultiServiceDesired,
 	resource: Extract<
 		MultiServiceDesired["multiService"]["resources"][number],
-		{ kind: "Deployment" }
+		{ kind: "Deployment" | "StatefulSet" }
 	>,
 	policy: MultiServiceRuntimePolicyV1,
 ): V1Deployment {
@@ -225,6 +271,22 @@ function deployment(
 		[ownerLabel]: workloadResourceNameV1(value.agentId),
 		"agent-infra.agora.io/service": service,
 	};
+	const configMapNames = new Set(
+		value.multiService.resources
+			.filter((item) => item.kind === "ConfigMap")
+			.map((item) => item.metadata.name),
+	);
+	const volumes = resource.spec.template.spec.volumes?.map((volume) => {
+		if (!configMapNames.has(volume.configMap.name))
+			throw new Error("Multi-service volume ConfigMap is undeclared");
+		return {
+			name: volume.name,
+			configMap: {
+				name: serviceResourceName(value.agentId, volume.configMap.name),
+				optional: false,
+			},
+		};
+	});
 	return {
 		apiVersion: "apps/v1",
 		kind: "Deployment",
@@ -236,6 +298,212 @@ function deployment(
 				metadata: { labels },
 				spec: {
 					...resource.spec.template.spec,
+					...(volumes ? { volumes } : {}),
+					containers: resource.spec.template.spec.containers.map(
+						(container) => ({
+							...container,
+							image: imageReference(policy, container.image),
+							resources: profile.resources,
+							ports: container.ports?.map((port) => ({
+								name: port.name,
+								containerPort: port.targetPort,
+							})),
+							volumeMounts: container.volumeMounts?.map((mount) => ({
+								name: mount.name,
+								mountPath: mount.mountPath,
+								readOnly: true,
+							})),
+						}),
+					),
+					serviceAccountName: workloadResourceNameV1(value.agentId),
+					automountServiceAccountToken: false,
+				},
+			},
+		},
+	};
+}
+
+function configMap(
+	value: MultiServiceDesired,
+	resource: Extract<
+		MultiServiceDesired["multiService"]["resources"][number],
+		{ kind: "ConfigMap" }
+	>,
+): V1ConfigMap {
+	return {
+		apiVersion: "v1",
+		kind: "ConfigMap",
+		metadata: metadata(
+			value,
+			serviceResourceName(value.agentId, resource.metadata.name),
+			resource.metadata.name,
+		),
+		immutable: true,
+		data: { ...resource.spec.data },
+	};
+}
+
+function statefulSet(
+	value: MultiServiceDesired,
+	resource: Extract<
+		MultiServiceDesired["multiService"]["resources"][number],
+		{ kind: "StatefulSet" }
+	>,
+	policy: MultiServiceRuntimePolicyV1,
+	persistentVolumeClaim?: V1PersistentVolumeClaim,
+): V1StatefulSet {
+	const name = serviceResourceName(value.agentId, resource.metadata.name);
+	const serviceName = serviceResourceName(
+		value.agentId,
+		resource.spec.serviceName,
+	);
+	const service = serviceLabel(resource.metadata.name);
+	const labels = {
+		...resource.spec.template.metadata.labels,
+		[ownerLabel]: workloadResourceNameV1(value.agentId),
+		"agent-infra.agora.io/service": service,
+	};
+	const selector = {
+		...resource.spec.selector.matchLabels,
+		[ownerLabel]: workloadResourceNameV1(value.agentId),
+		"agent-infra.agora.io/service": service,
+	};
+	const claimName = persistentVolumeClaim?.metadata?.name
+		? serviceResourceName(value.agentId, persistentVolumeClaim.metadata.name)
+		: undefined;
+	const volumeMount = claimName
+		? { name: "data", mountPath: "/data" }
+		: undefined;
+	const profile = profileForWorkload(value, resource, policy);
+	const podSpecWithVolumes = resource.spec.template
+		.spec as typeof resource.spec.template.spec & Pick<V1PodSpec, "volumes">;
+	return {
+		apiVersion: "apps/v1",
+		kind: "StatefulSet",
+		metadata: metadata(value, name, resource.metadata.name),
+		spec: {
+			replicas: value.replicas,
+			serviceName,
+			selector: { matchLabels: selector },
+			persistentVolumeClaimRetentionPolicy: {
+				whenDeleted: "Retain",
+				whenScaled: "Retain",
+			},
+			template: {
+				metadata: { labels },
+				spec: {
+					...resource.spec.template.spec,
+					containers: resource.spec.template.spec.containers.map(
+						(container) => ({
+							...container,
+							image: imageReference(policy, container.image),
+							resources: profile.resources,
+							ports: container.ports?.map((port) => ({
+								name: port.name,
+								containerPort: port.targetPort,
+							})),
+							...(volumeMount
+								? {
+										volumeMounts: [
+											...(
+												(
+													container as typeof container &
+														Pick<V1Container, "volumeMounts">
+												).volumeMounts ?? []
+											).filter((mount) => mount.name !== volumeMount.name),
+											volumeMount,
+										],
+									}
+								: {}),
+						}),
+					),
+					...(claimName
+						? {
+								volumes: [
+									...(podSpecWithVolumes.volumes ?? []).filter(
+										(volume) => volume.name !== "data",
+									),
+									{ name: "data", persistentVolumeClaim: { claimName } },
+								],
+							}
+						: {}),
+					serviceAccountName: workloadResourceNameV1(value.agentId),
+					automountServiceAccountToken: false,
+				},
+			},
+		},
+	};
+}
+
+function persistentVolumeClaim(
+	value: MultiServiceDesired,
+	resource: Extract<
+		MultiServiceDesired["multiService"]["resources"][number],
+		{ kind: "PersistentVolumeClaim" }
+	>,
+	policy: MultiServiceRuntimePolicyV1,
+): V1PersistentVolumeClaim {
+	if (!policy.storageSize)
+		throw new Error("multi-service storage policy missing");
+	return {
+		apiVersion: "v1",
+		kind: "PersistentVolumeClaim",
+		metadata: metadata(
+			value,
+			serviceResourceName(value.agentId, resource.metadata.name),
+		),
+		spec: {
+			accessModes: ["ReadWriteOnce"],
+			...(policy.storageClassName
+				? { storageClassName: policy.storageClassName }
+				: {}),
+			resources: { requests: { storage: policy.storageSize } },
+		},
+	};
+}
+
+function storageMatchesPolicy(
+	current: V1PersistentVolumeClaim,
+	policy: MultiServiceRuntimePolicyV1,
+) {
+	return (
+		current.spec?.accessModes?.length === 1 &&
+		current.spec.accessModes[0] === "ReadWriteOnce" &&
+		policy.storageSize !== undefined &&
+		current.spec.resources?.requests?.storage === policy.storageSize &&
+		(policy.storageClassName === undefined ||
+			current.spec.storageClassName === policy.storageClassName)
+	);
+}
+
+function migrationJob(
+	value: MultiServiceDesired,
+	resource: Extract<
+		MultiServiceDesired["multiService"]["resources"][number],
+		{ kind: "Job" }
+	>,
+	policy: MultiServiceRuntimePolicyV1,
+): V1Job {
+	const profile = profileForWorkload(value, resource, policy);
+	const labels = {
+		...resource.spec.template.metadata.labels,
+		[ownerLabel]: workloadResourceNameV1(value.agentId),
+		"agent-infra.agora.io/service": "migration",
+	};
+	return {
+		apiVersion: "batch/v1",
+		kind: "Job",
+		metadata: metadata(value, migrationJobName(value), "migration"),
+		spec: {
+			backoffLimit: resource.spec.backoffLimit,
+			activeDeadlineSeconds: resource.spec.activeDeadlineSeconds,
+			template: {
+				metadata: { labels },
+				spec: {
+					...resource.spec.template.spec,
+					restartPolicy: "Never",
+					serviceAccountName: workloadResourceNameV1(value.agentId),
+					automountServiceAccountToken: false,
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
@@ -246,10 +514,27 @@ function deployment(
 							})),
 						}),
 					),
-					serviceAccountName: workloadResourceNameV1(value.agentId),
-					automountServiceAccountToken: false,
 				},
 			},
+		},
+	};
+}
+
+function migrationNetworkPolicy(value: MultiServiceDesired): V1NetworkPolicy {
+	const name = migrationJobName(value);
+	return {
+		apiVersion: "networking.k8s.io/v1",
+		kind: "NetworkPolicy",
+		metadata: metadata(value, `${name}-network`, "migration"),
+		spec: {
+			podSelector: {
+				matchLabels: {
+					[ownerLabel]: workloadResourceNameV1(value.agentId),
+					"agent-infra.agora.io/service": "migration",
+				},
+			},
+			policyTypes: ["Ingress"],
+			ingress: [],
 		},
 	};
 }
@@ -288,7 +573,7 @@ function networkPolicy(
 	value: MultiServiceDesired,
 	resource: Extract<
 		MultiServiceDesired["multiService"]["resources"][number],
-		{ kind: "Deployment" }
+		{ kind: "Deployment" | "StatefulSet" }
 	>,
 	policy: MultiServiceRuntimePolicyV1,
 ): V1NetworkPolicy {
@@ -373,6 +658,14 @@ export function createMultiServiceRuntimeOperations(options: {
 	readonly policy: MultiServiceRuntimePolicyV1;
 }) {
 	const { client } = options;
+	const resourceName = (value: MultiServiceDesired, name: string) =>
+		serviceResourceName(value.agentId, name);
+	const manifestPvc = (value: MultiServiceDesired, name: string) =>
+		value.multiService.resources.find(
+			(resource) =>
+				resource.kind === "PersistentVolumeClaim" &&
+				resourceName(value, resource.metadata.name) === name,
+		);
 	async function put<T extends KubernetesObject>(
 		object: T,
 		value: MultiServiceDesired,
@@ -384,9 +677,49 @@ export function createMultiServiceRuntimeOperations(options: {
 		if (!current) return client.create(object);
 		if (!owned(current, value))
 			throw new Error("multi-service resource drifted");
+		if (object.kind === "ConfigMap") {
+			if (
+				(current as V1ConfigMap).immutable !== true ||
+				!isDeepStrictEqual(
+					(current as V1ConfigMap).data ?? {},
+					(object as V1ConfigMap).data ?? {},
+				)
+			)
+				throw new Error("multi-service ConfigMap is immutable and drifted");
+			return current;
+		}
+		if (object.kind === "Job") return current;
+		if (current.kind === "PersistentVolumeClaim") {
+			const currentPvc = current as unknown as V1PersistentVolumeClaim;
+			if (
+				!manifestPvc(value, current.metadata?.name ?? "") ||
+				!storageMatchesPolicy(currentPvc, options.policy)
+			)
+				throw new Error("multi-service PVC drifted");
+		}
+		const currentPvc =
+			current.kind === "PersistentVolumeClaim"
+				? (current as unknown as V1PersistentVolumeClaim)
+				: undefined;
 		if (current.metadata?.resourceVersion && current.metadata.uid)
 			return client.replace({
 				...object,
+				...(currentPvc
+					? {
+							spec: {
+								...(object as V1PersistentVolumeClaim).spec,
+								...(currentPvc.spec?.volumeName
+									? { volumeName: currentPvc.spec.volumeName }
+									: {}),
+								...(currentPvc.spec?.volumeMode
+									? { volumeMode: currentPvc.spec.volumeMode }
+									: {}),
+								...(currentPvc.spec?.storageClassName
+									? { storageClassName: currentPvc.spec.storageClassName }
+									: {}),
+							},
+						}
+					: {}),
 				metadata: {
 					...object.metadata,
 					resourceVersion: current.metadata.resourceVersion,
@@ -398,10 +731,14 @@ export function createMultiServiceRuntimeOperations(options: {
 	async function remove(
 		kind:
 			| "Deployment"
+			| "StatefulSet"
 			| "Service"
+			| "ConfigMap"
+			| "Job"
 			| "ServiceAccount"
 			| "NetworkPolicy"
-			| "Ingress",
+			| "Ingress"
+			| "PersistentVolumeClaim",
 		name: string,
 		value: MultiServiceDesired,
 	) {
@@ -412,23 +749,114 @@ export function createMultiServiceRuntimeOperations(options: {
 		await client.delete(current);
 		return (await client.read(kind, name)) === null;
 	}
+	async function cleanupMigration(value: MultiServiceDesired) {
+		let complete = await remove(
+			"NetworkPolicy",
+			`${migrationJobName(value)}-network`,
+			value,
+		);
+		complete =
+			(await remove("Job", migrationJobName(value), value)) && complete;
+		return complete;
+	}
+	async function scaleDown(value: MultiServiceDesired) {
+		let pending = false;
+		for (const resource of value.multiService.resources) {
+			if (resource.kind !== "Deployment" && resource.kind !== "StatefulSet")
+				continue;
+			const current = await client.read<V1Deployment | V1StatefulSet>(
+				resource.kind,
+				resourceName(value, resource.metadata.name),
+			);
+			if (!current) continue;
+			if (!owned(current, value))
+				throw new Error("multi-service resource drifted");
+			if (current.spec?.replicas !== 0) {
+				if (!current.metadata?.resourceVersion || !current.metadata.uid)
+					throw new Error("multi-service resource cannot be fenced");
+				await client.replace({
+					...current,
+					metadata: {
+						...current.metadata,
+						labels: {
+							...current.metadata.labels,
+							[revisionLabel]: String(value.workloadRevision),
+						},
+						annotations: {
+							...current.metadata.annotations,
+							"agent-infra.agora.io/fence": String(value.fence),
+						},
+						resourceVersion: current.metadata.resourceVersion,
+						uid: current.metadata.uid,
+					},
+					spec: { ...current.spec, replicas: 0 },
+				} as V1Deployment | V1StatefulSet);
+				pending = true;
+			}
+		}
+		const pods = await client.list(
+			"Pod",
+			`agent-infra.agora.io/agent=${workloadResourceNameV1(value.agentId)}`,
+		);
+		return pending || pods.length > 0 ? ("pending" as const) : null;
+	}
 	return {
 		isMultiService,
 		async apply(value: MultiServiceDesired) {
 			// Capacity is checked before the first read/create so a rejected Agent
 			// cannot leave a partial multi-service installation behind.
 			validateMultiServiceResourceCapacityV1(value, options.policy);
+			await put(serviceAccount(value), value);
+			const migration = migrationResource(value);
+			if (migration?.kind === "Job") {
+				await put(migrationNetworkPolicy(value), value);
+				const job = await put(
+					migrationJob(value, migration, options.policy),
+					value,
+				);
+				if (!jobSucceeded(job as V1Job))
+					return {
+						uid: workloadResourceNameV1(value.agentId),
+						generation: value.workloadRevision,
+					};
+			}
+			for (const resource of value.multiService.resources) {
+				if (resource.kind === "PersistentVolumeClaim")
+					await put(
+						persistentVolumeClaim(value, resource, options.policy),
+						value,
+					);
+			}
+			for (const resource of value.multiService.resources) {
+				if (resource.kind === "ConfigMap")
+					await put(configMap(value, resource), value);
+			}
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "Deployment")
 					await put(deployment(value, resource, options.policy), value);
+				if (resource.kind === "StatefulSet") {
+					const pvc = value.multiService.resources.find(
+						(candidate) => candidate.kind === "PersistentVolumeClaim",
+					);
+					await put(
+						statefulSet(
+							value,
+							resource,
+							options.policy,
+							pvc
+								? persistentVolumeClaim(value, pvc, options.policy)
+								: undefined,
+						),
+						value,
+					);
+				}
 				if (resource.kind === "Service")
 					await put(service(value, resource), value);
 			}
 			for (const resource of value.multiService.resources) {
-				if (resource.kind === "Deployment")
+				if (resource.kind === "Deployment" || resource.kind === "StatefulSet")
 					await put(networkPolicy(value, resource, options.policy), value);
 			}
-			await put(serviceAccount(value), value);
 			return {
 				uid: workloadResourceNameV1(value.agentId),
 				generation: value.workloadRevision,
@@ -438,16 +866,38 @@ export function createMultiServiceRuntimeOperations(options: {
 			value: MultiServiceDesired,
 			_identity: { uid: string; generation: number },
 		) {
+			const migration = migrationResource(value);
+			if (migration?.kind === "Job") {
+				const job = await client.read<V1Job>("Job", migrationJobName(value));
+				if (!job) return "unreachable" as const;
+				if (jobFailed(job)) return "unhealthy" as const;
+				if (!jobSucceeded(job)) return "unreachable" as const;
+			}
 			for (const resource of value.multiService.resources) {
-				if (resource.kind !== "Deployment") continue;
-				const current = await client.read<V1Deployment>(
-					"Deployment",
+				if (resource.kind !== "Deployment" && resource.kind !== "StatefulSet")
+					continue;
+				const current = await client.read<V1Deployment | V1StatefulSet>(
+					resource.kind,
 					serviceResourceName(value.agentId, resource.metadata.name),
+				);
+				if (!current || !owned(current, value)) return "drifted" as const;
+				if (
+					(resource.kind === "Deployment"
+						? (current.status?.availableReplicas ?? 0)
+						: (current.status?.readyReplicas ?? 0)) < 1
+				)
+					return "unhealthy" as const;
+			}
+			for (const resource of value.multiService.resources) {
+				if (resource.kind !== "PersistentVolumeClaim") continue;
+				const current = await client.read<V1PersistentVolumeClaim>(
+					"PersistentVolumeClaim",
+					resourceName(value, resource.metadata.name),
 				);
 				if (
 					!current ||
 					!owned(current, value) ||
-					(current.status?.availableReplicas ?? 0) < 1
+					!storageMatchesPolicy(current, options.policy)
 				)
 					return "unhealthy" as const;
 			}
@@ -459,14 +909,23 @@ export function createMultiServiceRuntimeOperations(options: {
 		async closeRoute(value: MultiServiceDesired) {
 			return remove("Ingress", workloadResourceNameV1(value.agentId), value);
 		},
-		async cleanupAgent(value: MultiServiceDesired) {
+		scaleDown,
+		async cleanupAgent(value: MultiServiceDesired, deleteVolume = false) {
 			let complete = await remove(
 				"Ingress",
 				workloadResourceNameV1(value.agentId),
 				value,
 			);
+			complete = (await cleanupMigration(value)) && complete;
 			for (const resource of value.multiService.resources) {
-				if (resource.kind === "Deployment") {
+				if (resource.kind === "ConfigMap")
+					complete =
+						(await remove(
+							"ConfigMap",
+							serviceResourceName(value.agentId, resource.metadata.name),
+							value,
+						)) && complete;
+				if (resource.kind === "Deployment" || resource.kind === "StatefulSet") {
 					complete =
 						(await remove(
 							"NetworkPolicy",
@@ -475,7 +934,7 @@ export function createMultiServiceRuntimeOperations(options: {
 						)) && complete;
 					complete =
 						(await remove(
-							"Deployment",
+							resource.kind,
 							serviceResourceName(value.agentId, resource.metadata.name),
 							value,
 						)) && complete;
@@ -487,6 +946,13 @@ export function createMultiServiceRuntimeOperations(options: {
 							serviceResourceName(value.agentId, resource.metadata.name),
 							value,
 						)) && complete;
+				if (resource.kind === "PersistentVolumeClaim" && deleteVolume)
+					complete =
+						(await remove(
+							"PersistentVolumeClaim",
+							resourceName(value, resource.metadata.name),
+							value,
+						)) && complete;
 			}
 			complete =
 				(await remove(
@@ -496,5 +962,6 @@ export function createMultiServiceRuntimeOperations(options: {
 				)) && complete;
 			return complete;
 		},
+		cleanupMigration,
 	};
 }

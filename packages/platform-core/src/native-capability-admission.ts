@@ -85,6 +85,7 @@ export interface NativeCapabilityInvocationPlanV1 {
 			readonly capabilityId: string;
 			readonly capabilityKind: NativeCapabilityKindV1;
 			readonly directoryRevision: string;
+			readonly capabilitySourceVersion: string;
 			readonly parameters: string;
 			readonly parametersDigest: string;
 		};
@@ -534,11 +535,6 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 								selected.availability !== "discovered")
 						)
 							return { outcome: "disabled" };
-						if (selected.kind === "command") {
-							if (request.parameters.length > 0)
-								return { outcome: "invalid_parameters" };
-							return { outcome: "unsupported" };
-						}
 						if (
 							selected.kind === "skill" &&
 							request.parameters.trim().length === 0
@@ -640,6 +636,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 									capabilityId: selected.id,
 									capabilityKind: selected.kind,
 									directoryRevision: selected.directoryRevision,
+									capabilitySourceVersion: selected.source.version,
 									parameters: request.parameters,
 									parametersDigest: nativeCapabilityParametersDigestV1(
 										request.parameters,

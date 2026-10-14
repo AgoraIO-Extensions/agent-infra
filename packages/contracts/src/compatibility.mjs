@@ -1646,6 +1646,27 @@ function isDeploymentConfigurationV2OpenApiAddition(previous, current) {
 	);
 }
 
+// #2396 adds deployment-owned multi-service profile summaries and caps.
+function isMultiServiceResourceProfileOpenApiAddition(previous, current) {
+	const normalized = structuredClone(current);
+	let changed = false;
+	const schemas = normalized.components?.schemas ?? {};
+	for (const schema of Object.values(schemas)) {
+		if (schema?.properties?.services !== undefined) {
+			delete schema.properties.services;
+			changed = true;
+		}
+		if (schema?.properties?.multiServiceResourceCap !== undefined) {
+			delete schema.properties.multiServiceResourceCap;
+			delete schema.properties.multiServiceResourceDefaultProfileRef;
+			delete schema.properties.multiServiceResourceProfiles;
+			delete schema.properties.multiServiceResourceProfilesSource;
+			changed = true;
+		}
+	}
+	return changed && sameValue(previous, normalized);
+}
+
 // #1765 adds the reviewed V4 Worker/File Authority request schema without
 // changing any previously published file path or schema.
 function isRuntimeFileExchangeOpenApiAddition(previous, current) {
@@ -1774,6 +1795,12 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 			),
 		}),
 	);
+	delete addition.schemas.BrowserHandoffEventV2;
+	const persistedEvents = addition.schemas.PersistedConversationEventV2;
+	if (Array.isArray(persistedEvents?.anyOf))
+		persistedEvents.anyOf = persistedEvents.anyOf.filter(
+			(option) => option?.$ref !== "#/components/schemas/BrowserHandoffEventV2",
+		);
 	// The bounded event window is a later additive field on this V2 detail;
 	// keep the original #508 publication digest stable when checking the
 	// historical operation-read addition.
@@ -1812,9 +1839,14 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		delete properties.sessionAvailability;
 		addition.schemas.ConversationDetailProjectionV2 = { ...detail, properties };
 	}
+	const additionHash = createHash("sha256")
+		.update(JSON.stringify(addition))
+		.digest("hex");
 	if (
-		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"097d6b3631a284fd8faf916f2c35a70d7c721c8bc832f3b97a96389fecfc541f"
+		![
+			"097d6b3631a284fd8faf916f2c35a70d7c721c8bc832f3b97a96389fecfc541f",
+			"a50b0094b786fa3081f65018d283964ca272f091871d89ed4af669c4927fe448",
+		].includes(additionHash)
 	)
 		return false;
 	const normalized = stripRuntimeOperationIdentity(
@@ -1835,10 +1867,16 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		stripRuntimeBrowserOperationFacts(previous),
 	);
 	delete normalizedPrevious.components.schemas.ConversationEventWindowV1;
-	return (
-		sameValue(normalizedPrevious, normalized) ||
-		isAgentLifecycleV2OpenApiAddition(normalizedPrevious, normalized)
+	if (
+		normalizedPrevious.components?.schemas?.BrowserHandoffEventV2 === undefined
+	)
+		delete normalized.components.schemas.BrowserHandoffEventV2;
+	const factsSame = sameValue(normalizedPrevious, normalized);
+	const lifecycle = isAgentLifecycleV2OpenApiAddition(
+		normalizedPrevious,
+		normalized,
 	);
+	return factsSame || lifecycle;
 }
 
 // #1812 adds only the optional bounded V2 detail window and its backward cursor.
@@ -1901,6 +1939,85 @@ function isConversationSseV2NotFoundAddition(previous, current) {
 		return false;
 	const normalized = structuredClone(current);
 	delete normalized.paths[path].get.responses["404"];
+	return sameValue(previous, normalized);
+}
+
+// #2467 adds the bounded V2 Browser handoff timeline event. V1 clients keep
+// their historical event union and skip this schema-versioned event while
+// advancing the durable cursor.
+function isBrowserHandoffOpenApiOption(value) {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		!Array.isArray(value) &&
+		((value.properties?.type?.const === "browser.handoff" &&
+			value.properties?.schemaVersion?.const === 2) ||
+			value.$ref === "#/components/schemas/BrowserHandoffEventV2")
+	);
+}
+
+function hasBrowserHandoffOpenApiOption(value) {
+	if (Array.isArray(value)) return value.some(hasBrowserHandoffOpenApiOption);
+	if (value !== null && typeof value === "object")
+		return (
+			isBrowserHandoffOpenApiOption(value) ||
+			Object.values(value).some(hasBrowserHandoffOpenApiOption)
+		);
+	return false;
+}
+
+function hasSelectedBrowserHandoffOpenApiOption(value) {
+	return (
+		value.components?.schemas?.BrowserHandoffEventV2 !== undefined ||
+		[
+			"PersistedConversationEventV2",
+			"TaskProjectionV1",
+			"TaskSseMessageV1",
+		].some((name) =>
+			hasBrowserHandoffOpenApiOption(value.components?.schemas?.[name]),
+		)
+	);
+}
+
+function stripBrowserHandoffSchemaOptions(value) {
+	if (Array.isArray(value))
+		return value
+			.filter((item) => !isBrowserHandoffOpenApiOption(item))
+			.map(stripBrowserHandoffSchemaOptions);
+	if (value !== null && typeof value === "object") {
+		const result = {};
+		for (const [key, item] of Object.entries(value))
+			result[key] = stripBrowserHandoffSchemaOptions(item);
+		return result;
+	}
+	return value;
+}
+
+function stripBrowserHandoffOpenApiAdditions(value) {
+	const normalized = structuredClone(value);
+	const schemas = normalized.components?.schemas;
+	for (const name of [
+		"PersistedConversationEventV2",
+		"TaskProjectionV1",
+		"TaskSseMessageV1",
+	]) {
+		if (schemas?.[name] !== undefined)
+			schemas[name] = stripBrowserHandoffSchemaOptions(schemas[name]);
+	}
+	return normalized;
+}
+
+function isBrowserHandoffEventV2Addition(previous, current) {
+	const schemaName = "BrowserHandoffEventV2";
+	if (
+		previous.components?.schemas?.[schemaName] !== undefined ||
+		hasSelectedBrowserHandoffOpenApiOption(previous) ||
+		(!hasSelectedBrowserHandoffOpenApiOption(current) &&
+			current.components?.schemas?.[schemaName] === undefined)
+	)
+		return false;
+	const normalized = stripBrowserHandoffOpenApiAdditions(current);
+	delete normalized.components.schemas[schemaName];
 	return sameValue(previous, normalized);
 }
 
@@ -3924,6 +4041,11 @@ function stripMultiServiceSourceOpenApiBranches(value) {
 function findBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
 	let current = currentValue;
+	if (
+		previous.openapi !== undefined &&
+		isBrowserHandoffEventV2Addition(previous, current)
+	)
+		return [];
 	const before =
 		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
 	const after = current.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
@@ -3948,6 +4070,15 @@ function findBreakingChanges(previousValue, currentValue) {
 		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
 		previous = stripMultiServiceSourceOpenApiBranches(previous);
 		current = stripMultiServiceSourceOpenApiBranches(current);
+		if (!hasSelectedBrowserHandoffOpenApiOption(previous)) {
+			const browserNormalized = stripBrowserHandoffOpenApiAdditions(current);
+			if (previous.components?.schemas?.BrowserHandoffEventV2 === undefined)
+				delete browserNormalized.components?.schemas?.BrowserHandoffEventV2;
+			if (!sameValue(browserNormalized, current)) {
+				if (isBrowserHandoffEventV2Addition(previous, current)) return changes;
+				current = browserNormalized;
+			}
+		}
 		if (isA2ParallelModelConfigurationOpenApiAddition(previous, current))
 			return changes;
 		if (
@@ -3982,6 +4113,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isOwnApplicationDisableV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
+			!isMultiServiceResourceProfileOpenApiAddition(previous, current) &&
 			!isTemplateReadinessV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
 			!isAdministratorAgentReadV2OpenApiAddition(previous, current) &&

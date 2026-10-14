@@ -31,6 +31,7 @@ import { RuntimeBrowserCapabilityProbeEvidenceV1Schema } from "./browser-capabil
 import {
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverLookupV1Schema,
+	RuntimeDriverNativeCommandV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
 	RuntimeDriverSubmitTurnLookupV2Schema,
@@ -118,6 +119,7 @@ export const RuntimeEventV1SchemaDefinitions = {
 
 export const RuntimeDriverV1SchemaDefinitions = {
 	RuntimeDriverCommandV1: RuntimeDriverCommandV1Schema,
+	RuntimeDriverNativeCommandV1: RuntimeDriverNativeCommandV1Schema,
 	RuntimeDriverLookupV1: RuntimeDriverLookupV1Schema,
 	RuntimeDriverOperationRecordV1: RuntimeDriverOperationRecordV1Schema,
 };
@@ -170,6 +172,8 @@ import {
 	RuntimeBusinessGrantClaimsV4Schema,
 	RuntimeExecutionGrantV4Schema,
 	RuntimeExecutionSourceV1Schema,
+	RuntimeNativeCapabilityRequestV4Schema,
+	RuntimeNativeCapabilityTransportV4Schema,
 	RuntimeOperationResponseV4Schema,
 	RuntimePrivateRelayKeyContextV1Schema,
 	RuntimePrivateRelayKeyFieldV1Schema,
@@ -203,6 +207,8 @@ export const RuntimeHostV4SchemaDefinitions = {
 	RuntimeSubmitTurnTransportV4: RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV4: RuntimeSupplementRequestV4Schema,
 	RuntimeSupplementTransportV4: RuntimeSupplementTransportV4Schema,
+	RuntimeNativeCapabilityRequestV4: RuntimeNativeCapabilityRequestV4Schema,
+	RuntimeNativeCapabilityTransportV4: RuntimeNativeCapabilityTransportV4Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV4:
 		RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
 	RuntimeRestoreExecutionKeyRequestV4:

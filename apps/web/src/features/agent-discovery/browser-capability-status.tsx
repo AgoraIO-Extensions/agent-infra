@@ -13,6 +13,7 @@ import {
 	type BrowserHandoffBindingV1,
 	BrowserHandoffPanel,
 	type BrowserHandoffPanelStateV1,
+	type BrowserHandoffTimelineEventV1,
 	type BrowserSideEffectConfirmationV1,
 } from "./browser-handoff-panel.js";
 
@@ -35,6 +36,7 @@ type BrowserCapabilityStatusProps = {
 	readonly workflow?: BrowserWorkflowState;
 	readonly capability: BrowserCapabilityProjectionV1;
 	readonly handoff?: BrowserHandoffPanelStateV1;
+	readonly handoffEvent?: BrowserHandoffTimelineEventV1;
 	readonly confirmation?: BrowserSideEffectConfirmationV1;
 	readonly currentBinding?: BrowserHandoffBindingV1;
 	readonly onCancelConfirmation?: (input: BrowserHandoffActionInputV1) => void;
@@ -210,6 +212,7 @@ export function BrowserCapabilityStatus({
 	capability,
 	workflow,
 	handoff,
+	handoffEvent,
 	confirmation,
 	currentBinding,
 	onCancelConfirmation,
@@ -229,6 +232,7 @@ export function BrowserCapabilityStatus({
 			<BrowserWorkflowStatus workflow={workflow} />
 			<BrowserHandoffPanel
 				handoff={handoff}
+				handoffEvent={handoffEvent}
 				confirmation={confirmation}
 				currentBinding={currentBinding}
 				browserAvailable={capability.status === "available"}

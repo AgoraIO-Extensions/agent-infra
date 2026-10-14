@@ -1,7 +1,8 @@
-import { sign, verify } from "node:crypto";
+import { createHash, sign, verify } from "node:crypto";
 import {
 	RuntimeEventAckRequestV4Schema,
 	RuntimeEventReadRequestV4Schema,
+	RuntimeNativeCapabilityRequestV4Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	RuntimeSupplementRequestV4Schema,
@@ -137,6 +138,68 @@ describe("V4 production Grant signer", () => {
 			expect(claims).not.toHaveProperty("relayKey");
 			expect(claims).not.toHaveProperty("privateKeyField");
 		}
+	});
+
+	it("signs a native Skill invocation without model input or attachments", async () => {
+		const { signer, request } = fixture();
+		const { input: _input, selection: _selection, ...context } = request;
+		const native = RuntimeNativeCapabilityRequestV4Schema.parse({
+			...context,
+			hostSessionRef: "host",
+			operation: {
+				kind: "execution",
+				id: request.executionId,
+				deliveryFence: 3,
+				executionDeliveryFence: 3,
+			},
+			capabilityId: "a".repeat(64),
+			capabilityKind: "skill",
+			directoryRevision: "b".repeat(64),
+			parameters: "--fast",
+			parametersDigest: createHash("sha256").update("--fast").digest("hex"),
+			capabilitySourceVersion: "1.2.3",
+		});
+		const grant = signer.sign(native, "authorization");
+		const claims = decoded(grant.token);
+		expect(claims.allowedCommands).toEqual(["native-capability.invoke"]);
+		expect(claims.attachments).toEqual([]);
+		await expect(
+			validateRuntimeBusinessBindingV4(
+				{ ...native, grant },
+				signer.verify(grant),
+			),
+		).resolves.toBeUndefined();
+	});
+
+	it("signs a native command invocation without ordinary input", async () => {
+		const { signer, request } = fixture();
+		const { input: _input, selection: _selection, ...context } = request;
+		const native = RuntimeNativeCapabilityRequestV4Schema.parse({
+			...context,
+			hostSessionRef: "host",
+			operation: {
+				kind: "execution",
+				id: request.executionId,
+				deliveryFence: 3,
+				executionDeliveryFence: 3,
+			},
+			capabilityId: "c".repeat(64),
+			capabilityKind: "command",
+			directoryRevision: "d".repeat(64),
+			parameters: "",
+			parametersDigest: createHash("sha256").update("").digest("hex"),
+			capabilitySourceVersion: "0.153.0",
+		});
+		const grant = signer.sign(native, "authorization");
+		const claims = decoded(grant.token);
+		expect(claims.allowedCommands).toEqual(["native-capability.invoke"]);
+		expect(claims.attachments).toEqual([]);
+		await expect(
+			validateRuntimeBusinessBindingV4(
+				{ ...native, grant },
+				signer.verify(grant),
+			),
+		).resolves.toBeUndefined();
 	});
 
 	it.each([

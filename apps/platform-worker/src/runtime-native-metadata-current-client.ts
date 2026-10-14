@@ -23,11 +23,12 @@ function endpoint(baseUrl: string) {
 		origin.protocol !== "http:" ||
 		origin.username ||
 		origin.password ||
+		(origin.pathname !== "/" && origin.pathname !== "") ||
 		origin.search ||
 		origin.hash
 	)
 		throw new TypeError("Platform API base URL is invalid");
-	return new URL(currentPath, `${origin.href.replace(/\/$/, "")}/`);
+	return new URL(currentPath, `${origin.origin}/`);
 }
 
 function unavailable(): NativeMetadataCurrentResponseV1 {

@@ -242,6 +242,69 @@ function modelInput(replaceCredential = true): AgentConfigurationModelInputV1 {
 }
 
 describe("production deployment admissions", () => {
+	it("calculates per-service profile capacity before admission", () => {
+		const parsed = MultiServiceManifestDocumentV1Schema.parse({
+			schemaVersion: 1,
+			entryServiceName: "api",
+			resources: [
+				{
+					apiVersion: "apps/v1",
+					kind: "Deployment",
+					metadata: { name: "api" },
+					spec: {
+						replicas: 1,
+						selector: { matchLabels: { app: "api" } },
+						template: {
+							metadata: { labels: { app: "api" } },
+							spec: { containers: [{ name: "api", image: digest("api") }] },
+						},
+					},
+				},
+				{
+					apiVersion: "v1",
+					kind: "Service",
+					metadata: {
+						name: "api",
+						annotations: {
+							[MultiServiceResourceProfileAnnotationV1]: "small",
+							"agent-infra.agora.io/entry": "true",
+						},
+					},
+					spec: {
+						type: "ClusterIP",
+						selector: { app: "api" },
+						ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+					},
+				},
+			],
+		});
+		const profiles = [
+			{
+				profileId: "small",
+				displayName: "Small",
+				estimatedResources: {
+					cpuMillicores: 100,
+					memoryMiB: 128,
+					storageGiB: 1,
+				},
+				resources: {
+					requests: { cpu: "25m", memory: "32Mi" },
+					limits: { cpu: "100m", memory: "128Mi" },
+				},
+			},
+		] as const;
+		expect(
+			calculateMultiServiceResourceCapacityV1({ manifest: parsed, profiles })
+				.ok,
+		).toBe(true);
+		expect(
+			calculateMultiServiceResourceCapacityV1({
+				manifest: parsed,
+				profiles,
+				cap: { cpuMillicores: 50, memoryMiB: 128, storageGiB: 1 },
+			}).ok,
+		).toBe(false);
+	});
 	it("admits a two-service digest-only manifest before Worker side effects", async () => {
 		const f = fixture("self-managed");
 		const admissions = createDeploymentAdmissionsV1({
@@ -263,11 +326,17 @@ describe("production deployment admissions", () => {
 						template: {
 							metadata: { labels: { app: "web" } },
 							spec: {
+								volumes: [
+									{ name: "config", configMap: { name: "web-config" } },
+								],
 								containers: [
 									{
 										name: "web",
 										image,
 										ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+										volumeMounts: [
+											{ name: "config", mountPath: "/etc/web", readOnly: true },
+										],
 									},
 								],
 							},
@@ -318,6 +387,28 @@ describe("production deployment admissions", () => {
 						ports: [{ name: "http", port: 8080, targetPort: 8080 }],
 					},
 				},
+				{
+					apiVersion: "v1",
+					kind: "ConfigMap",
+					metadata: { name: "web-config" },
+					spec: { data: { "app.conf": "port=8080\n" } },
+				},
+				{
+					apiVersion: "batch/v1",
+					kind: "Job",
+					metadata: { name: "migrate" },
+					spec: {
+						backoffLimit: 1,
+						activeDeadlineSeconds: 300,
+						template: {
+							metadata: { labels: { app: "migration" } },
+							spec: {
+								restartPolicy: "Never",
+								containers: [{ name: "migrate", image }],
+							},
+						},
+					},
+				},
 			],
 		});
 		const result = await admissions.imageAdmission.admitImage({
@@ -331,77 +422,117 @@ describe("production deployment admissions", () => {
 		});
 		expect(result).toMatchObject({
 			status: "admitted",
-			source: { kind: "custom", manifest, interactionMode: "self-managed" },
+			source: { kind: "custom", interactionMode: "self-managed" },
 		});
+		if (
+			result.status === "admitted" &&
+			result.source.kind === "custom" &&
+			"manifest" in result.source
+		) {
+			expect(JSON.parse(result.source.manifest)).toEqual(JSON.parse(manifest));
+		}
 		expect(f.fetch).toHaveBeenCalled();
 	});
 
-	it("resolves per-service profiles and rejects an aggregate cap before admission", () => {
-		const parsed = MultiServiceManifestDocumentV1Schema.parse({
-			schemaVersion: 1,
-			entryServiceName: "api",
-			resources: [
-				{
-					apiVersion: "apps/v1",
-					kind: "Deployment",
-					metadata: { name: "api" },
-					spec: {
-						replicas: 1,
-						selector: { matchLabels: { app: "api" } },
-						template: {
-							metadata: { labels: { app: "api" } },
-							spec: {
-								containers: [{ name: "api", image: digest("api") }],
+	it("admits one StatefulSet service with a PVC in the multi-service contract", async () => {
+		const f = fixture("self-managed");
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			imageRepository: "registry.example.test/agents/codex",
+		});
+		const document = JSON.parse(
+			JSON.stringify({
+				schemaVersion: 1,
+				entryServiceName: "web",
+				resources: [
+					{
+						apiVersion: "apps/v1",
+						kind: "Deployment",
+						metadata: { name: "web" },
+						spec: {
+							replicas: 1,
+							selector: { matchLabels: { app: "web" } },
+							template: {
+								metadata: { labels: { app: "web" } },
+								spec: {
+									containers: [
+										{
+											name: "web",
+											image: f.imageDigest,
+											ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+										},
+									],
+								},
 							},
 						},
 					},
-				},
-				{
-					apiVersion: "v1",
-					kind: "Service",
-					metadata: {
-						name: "api",
-						annotations: {
-							"agent-infra.agora.io/entry": "true",
-							[MultiServiceResourceProfileAnnotationV1]: "small",
+					{
+						apiVersion: "apps/v1",
+						kind: "StatefulSet",
+						metadata: { name: "db" },
+						spec: {
+							replicas: 1,
+							serviceName: "db",
+							selector: { matchLabels: { app: "db" } },
+							template: {
+								metadata: { labels: { app: "db" } },
+								spec: {
+									containers: [
+										{
+											name: "db",
+											image: f.imageDigest,
+											ports: [{ name: "db", port: 8080, targetPort: 8080 }],
+										},
+									],
+								},
+							},
 						},
 					},
-					spec: {
-						type: "ClusterIP",
-						selector: { app: "api" },
-						ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+					{
+						apiVersion: "v1",
+						kind: "Service",
+						metadata: {
+							name: "web",
+							annotations: { "agent-infra.agora.io/entry": "true" },
+						},
+						spec: {
+							type: "ClusterIP",
+							selector: { app: "web" },
+							ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+						},
 					},
-				},
-			],
-		});
-		const profiles = [
-			{
-				profileId: "small",
-				displayName: "Small",
-				estimatedResources: {
-					cpuMillicores: 100,
-					memoryMiB: 128,
-					storageGiB: 1,
-				},
-				resources: {
-					requests: { cpu: "25m", memory: "32Mi" },
-					limits: { cpu: "100m", memory: "128Mi" },
-				},
+					{
+						apiVersion: "v1",
+						kind: "Service",
+						metadata: { name: "db" },
+						spec: {
+							type: "ClusterIP",
+							selector: { app: "db" },
+							ports: [{ name: "db", port: 8080, targetPort: 8080 }],
+						},
+					},
+					{
+						apiVersion: "v1",
+						kind: "PersistentVolumeClaim",
+						metadata: { name: "db-data" },
+						spec: {
+							accessModes: ["ReadWriteOnce"],
+							resources: { requests: { storage: "100Gi" } },
+						},
+					},
+				],
+			}),
+		);
+		const result = await admissions.imageAdmission.admitImage({
+			...request,
+			requested: {
+				kind: "custom",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+				manifest: JSON.stringify(document),
 			},
-		] as const;
-		expect(
-			calculateMultiServiceResourceCapacityV1({
-				manifest: parsed,
-				profiles,
-			}).ok,
-		).toBe(true);
-		expect(
-			calculateMultiServiceResourceCapacityV1({
-				manifest: parsed,
-				profiles,
-				cap: { cpuMillicores: 50, memoryMiB: 128, storageGiB: 1 },
-			}).ok,
-		).toBe(false);
+		});
+		expect(result).toMatchObject({ status: "admitted" });
 	});
 
 	it("rejects images outside the repository the Worker can actually deploy", async () => {

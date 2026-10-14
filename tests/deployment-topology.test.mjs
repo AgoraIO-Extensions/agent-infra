@@ -714,6 +714,16 @@ test("native metadata Worker gateway is opt-in and restricted to Platform API", 
 		"app.kubernetes.io/instance": "topology",
 		"app.kubernetes.io/component": "platform-api",
 	});
+	const apiEgress = resource(
+		resources,
+		"NetworkPolicy",
+		"topology-agent-infra-platform-worker-native-metadata-api-egress",
+	);
+	assert.equal(apiEgress.spec.egress[0].ports[0].port, 3010);
+	assert.deepEqual(apiEgress.spec.egress[0].to[0].podSelector.matchLabels, {
+		"app.kubernetes.io/instance": "topology",
+		"app.kubernetes.io/component": "platform-worker",
+	});
 	const external = render(
 		"--set",
 		"platformWorker.nativeMetadataGateway.enabled=true",

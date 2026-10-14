@@ -331,6 +331,24 @@ describe("Codex metadata async current confirmation (controlled behavior only)",
 		},
 	);
 
+	it("carries bounded command parameters through the native thread/read seam", async () => {
+		const f = await fixture();
+		const directory = await f.driver.discoverNativeCommands(f.read);
+		const capability = directory.capabilities[0];
+		await f.driver.readNativeStatus(
+			{
+				capabilityId: capability?.id as string,
+				directoryRevision: directory.revision,
+				parameters: { includeTurns: false },
+			},
+			f.read,
+		);
+		expect(
+			f.transport.requests.filter((x) => x.method === "thread/read").at(-1)
+				?.params,
+		).toEqual({ threadId: "native-thread-private", includeTurns: false });
+	});
+
 	it.each([
 		"bridge",
 		"initialize",

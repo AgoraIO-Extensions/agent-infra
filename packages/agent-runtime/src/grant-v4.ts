@@ -3,6 +3,8 @@ import { TextDecoder } from "node:util";
 
 import {
 	RuntimeExecutionGrantV4Schema,
+	RuntimeNativeCapabilityRequestV4Schema,
+	RuntimeNativeCapabilityTransportV4Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
 	RuntimeRestoreExecutionKeyRequestV4Schema,
 	RuntimeSubmitTurnRequestV4Schema,
@@ -95,7 +97,11 @@ async function validateRuntimeExecutionGrantV4(
 		const parsedRequest =
 			request !== null && typeof request === "object" && "selection" in request
 				? RuntimeSubmitTurnRequestV4Schema.parse(request)
-				: RuntimeSupplementRequestV4Schema.parse(request);
+				: request !== null &&
+						typeof request === "object" &&
+						"capabilityId" in request
+					? RuntimeNativeCapabilityRequestV4Schema.parse(request)
+					: RuntimeSupplementRequestV4Schema.parse(request);
 		const verification =
 			VerifiedRuntimeExecutionGrantV4Schema.parse(verificationInput);
 		if (verification.token !== parsedRequest.grant.token)
@@ -131,7 +137,11 @@ export function createRuntimeExecutionGrantValidatorV4(
 				typeof request === "object" &&
 				"selection" in request
 					? RuntimeSubmitTurnRequestV4Schema.parse(request)
-					: RuntimeSupplementRequestV4Schema.parse(request);
+					: request !== null &&
+							typeof request === "object" &&
+							"capabilityId" in request
+						? RuntimeNativeCapabilityRequestV4Schema.parse(request)
+						: RuntimeSupplementRequestV4Schema.parse(request);
 			return await validateRuntimeExecutionGrantV4(
 				parsedRequest,
 				verifyGrant(parsedRequest.grant),
@@ -169,7 +179,11 @@ export function createRuntimeExecutionKeyDeliveryValidatorV4(
 				typeof businessRequest === "object" &&
 				"selection" in businessRequest
 					? RuntimeSubmitTurnTransportV4Schema.parse(transport)
-					: RuntimeSupplementTransportV4Schema.parse(transport);
+					: businessRequest !== null &&
+							typeof businessRequest === "object" &&
+							"capabilityId" in businessRequest
+						? RuntimeNativeCapabilityTransportV4Schema.parse(transport)
+						: RuntimeSupplementTransportV4Schema.parse(transport);
 			const accepted = await validateGrant(parsed.businessRequest);
 			const privateField = validateRuntimePrivateRelayKeyFieldV1(
 				parsed.privateKeyField,

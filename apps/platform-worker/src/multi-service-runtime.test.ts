@@ -1,6 +1,14 @@
-import { MultiServiceManifestDocumentV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	MultiServiceManifestDocumentV1Schema,
+	MultiServiceResourceProfileAnnotationV1,
+} from "@agent-infra/contracts/pilot";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
-import type { KubernetesObject } from "@kubernetes/client-node";
+import type {
+	KubernetesObject,
+	V1ConfigMap,
+	V1Deployment,
+	V1Job,
+} from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
@@ -23,11 +31,15 @@ const manifest = MultiServiceManifestDocumentV1Schema.parse({
 				template: {
 					metadata: { labels: { app: "web" } },
 					spec: {
+						volumes: [{ name: "config", configMap: { name: "web-config" } }],
 						containers: [
 							{
 								name: "web",
 								image: `sha256:${"a".repeat(64)}`,
 								ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+								volumeMounts: [
+									{ name: "config", mountPath: "/etc/web", readOnly: true },
+								],
 							},
 						],
 					},
@@ -56,7 +68,7 @@ const manifest = MultiServiceManifestDocumentV1Schema.parse({
 				name: "web",
 				annotations: {
 					"agent-infra.agora.io/entry": "true",
-					"agent-infra.agora.io/resource-profile": "small",
+					[MultiServiceResourceProfileAnnotationV1]: "small",
 				},
 			},
 			spec: {
@@ -70,7 +82,7 @@ const manifest = MultiServiceManifestDocumentV1Schema.parse({
 			kind: "Service",
 			metadata: {
 				name: "worker",
-				annotations: { "agent-infra.agora.io/resource-profile": "small" },
+				annotations: { [MultiServiceResourceProfileAnnotationV1]: "small" },
 			},
 			spec: {
 				type: "ClusterIP",
@@ -78,10 +90,51 @@ const manifest = MultiServiceManifestDocumentV1Schema.parse({
 				ports: [{ name: "http", port: 8080, targetPort: 8080 }],
 			},
 		},
+		{
+			apiVersion: "v1",
+			kind: "ConfigMap",
+			metadata: { name: "web-config" },
+			spec: { data: { "app.conf": "hello=world\n" } },
+		},
 	],
 });
 
-function desired() {
+const smallProfile = {
+	profileId: "small",
+	displayName: "Small",
+	estimatedResources: { cpuMillicores: 100, memoryMiB: 128, storageGiB: 1 },
+	resources: {
+		requests: { cpu: "25m", memory: "32Mi" },
+		limits: { cpu: "100m", memory: "128Mi" },
+	},
+} as const;
+
+const migrationManifest = MultiServiceManifestDocumentV1Schema.parse({
+	...manifest,
+	resources: [
+		...manifest.resources,
+		{
+			apiVersion: "batch/v1",
+			kind: "Job",
+			metadata: { name: "migrate" },
+			spec: {
+				backoffLimit: 1,
+				activeDeadlineSeconds: 300,
+				template: {
+					metadata: { labels: { app: "migration" } },
+					spec: {
+						restartPolicy: "Never",
+						containers: [
+							{ name: "migrate", image: `sha256:${"d".repeat(64)}` },
+						],
+					},
+				},
+			},
+		},
+	],
+});
+
+function desired(multiService = manifest) {
 	return validateAgentWorkloadDesiredV1({
 		schemaVersion: 1,
 		requestId: "request-a",
@@ -158,7 +211,7 @@ function desired() {
 		secretRefs: [],
 		desiredState: "running",
 		replicas: 1,
-		multiService: manifest,
+		multiService,
 	});
 }
 
@@ -202,25 +255,11 @@ describe("multi-service runtime operations", () => {
 			client: fake.client,
 			policy: {
 				namespace: "agents",
+				multiServiceResourceProfiles: [smallProfile],
 				routeHostSuffix: "example.test",
 				ingressClassName: "nginx",
 				tlsSecretName: "tls",
 				routeSelector: { "app.kubernetes.io/name": "ingress" },
-				multiServiceResourceProfiles: [
-					{
-						profileId: "small",
-						displayName: "Small",
-						estimatedResources: {
-							cpuMillicores: 100,
-							memoryMiB: 128,
-							storageGiB: 1,
-						},
-						resources: {
-							requests: { cpu: "25m", memory: "32Mi" },
-							limits: { cpu: "100m", memory: "128Mi" },
-						},
-					},
-				],
 			},
 		});
 		const value = desired();
@@ -229,7 +268,7 @@ describe("multi-service runtime operations", () => {
 		await operations.apply(value);
 		const deployment = [...fake.resources.values()].find(
 			(resource) => resource.kind === "Deployment",
-		);
+		) as V1Deployment | undefined;
 		expect(deployment?.metadata?.labels?.["agent-infra.agora.io/agent"]).toBe(
 			workloadResourceNameV1("agent-a"),
 		);
@@ -245,6 +284,23 @@ describe("multi-service runtime operations", () => {
 			requests: { cpu: "25m", memory: "32Mi" },
 			limits: { cpu: "100m", memory: "128Mi" },
 		});
+		const configMap = [...fake.resources.values()].find(
+			(resource) => resource.kind === "ConfigMap",
+		) as V1ConfigMap | undefined;
+		expect(configMap?.immutable).toBe(true);
+		expect(configMap?.data).toEqual({ "app.conf": "hello=world\n" });
+		expect(deployment?.spec?.template.spec?.volumes).toEqual([
+			{
+				name: "config",
+				configMap: {
+					name: `${workloadResourceNameV1("agent-a")}-web-config`,
+					optional: false,
+				},
+			},
+		]);
+		expect(
+			deployment?.spec?.template.spec?.containers[0]?.volumeMounts,
+		).toEqual([{ name: "config", mountPath: "/etc/web", readOnly: true }]);
 		expect(
 			fake.resources.has(`ServiceAccount/${workloadResourceNameV1("agent-a")}`),
 		).toBe(true);
@@ -260,62 +316,113 @@ describe("multi-service runtime operations", () => {
 		).toBe(true);
 	});
 
-	it("rejects user resource fields and aggregate profile caps", async () => {
-		const firstResource = manifest.resources[0];
-		if (firstResource?.kind !== "Deployment")
-			throw new Error("multi-service fixture missing Deployment");
-		const invalid = MultiServiceManifestDocumentV1Schema.safeParse({
-			...manifest,
-			resources: [
-				{
-					...firstResource,
-					spec: {
-						...firstResource.spec,
-						resources: {},
-					},
-				},
-				...manifest.resources.slice(1),
-			],
-		});
-		expect(invalid.success).toBe(false);
-
+	it("fails closed when an immutable ConfigMap is changed in place", async () => {
 		const fake = fakeClient();
 		const operations = createMultiServiceRuntimeOperations({
 			client: fake.client,
 			policy: {
 				namespace: "agents",
+				multiServiceResourceProfiles: [smallProfile],
 				routeHostSuffix: "example.test",
 				ingressClassName: "nginx",
 				tlsSecretName: "tls",
 				routeSelector: { "app.kubernetes.io/name": "ingress" },
-				multiServiceResourceProfiles: [
-					{
-						profileId: "small",
-						displayName: "Small",
-						estimatedResources: {
-							cpuMillicores: 1_000,
-							memoryMiB: 1_000,
-							storageGiB: 1,
-						},
-						resources: {
-							requests: { cpu: "25m", memory: "32Mi" },
-							limits: { cpu: "100m", memory: "128Mi" },
-						},
-					},
-				],
-				multiServiceResourceCap: {
-					cpuMillicores: 1_500,
-					memoryMiB: 2_000,
-					storageGiB: 2,
-				},
 			},
 		});
 		const value = desired();
 		if (!isMultiService(value))
 			throw new Error("multi-service fixture invalid");
-		await expect(operations.apply(value)).rejects.toThrow(
-			"MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+		await operations.apply(value);
+		const configMap = fake.resources.get(
+			`ConfigMap/${workloadResourceNameV1("agent-a")}-web-config`,
+		) as V1ConfigMap | undefined;
+		if (!configMap) throw new Error("ConfigMap fixture missing");
+		fake.resources.set(
+			`ConfigMap/${workloadResourceNameV1("agent-a")}-web-config`,
+			{
+				...configMap,
+				data: { "app.conf": "tampered=true\n" },
+			} as V1ConfigMap,
 		);
-		expect(fake.resources.size).toBe(0);
+		await expect(operations.apply(value)).rejects.toThrow(
+			"ConfigMap is immutable and drifted",
+		);
+	});
+
+	it("runs a migration Job before services and reuses its completed result", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				namespace: "agents",
+				multiServiceResourceProfiles: [smallProfile],
+				routeHostSuffix: "example.test",
+				ingressClassName: "nginx",
+				tlsSecretName: "tls",
+				routeSelector: { "app.kubernetes.io/name": "ingress" },
+			},
+		});
+		const value = desired(migrationManifest);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		const identity = await operations.apply(value);
+		const job = [...fake.resources.values()].find(
+			(resource) => resource.kind === "Job",
+		) as V1Job | undefined;
+		expect(job?.spec?.activeDeadlineSeconds).toBe(300);
+		expect(job?.spec?.template?.spec?.restartPolicy).toBe("Never");
+		expect(
+			[...fake.resources.values()].some(
+				(resource) => resource.kind === "Deployment",
+			),
+		).toBe(false);
+		expect(await operations.observe(value, identity)).toBe("unreachable");
+		if (!job) throw new Error("migration Job fixture missing");
+		job.status = { succeeded: 1 };
+		expect(await operations.observe(value, identity)).toBe("drifted");
+		await operations.apply(value);
+		expect(
+			[...fake.resources.values()].some(
+				(resource) => resource.kind === "Deployment",
+			),
+		).toBe(true);
+		const completedJob = fake.resources.get(`Job/${job.metadata?.name}`);
+		await operations.apply(value);
+		expect(fake.resources.get(`Job/${job.metadata?.name}`)).toBe(completedJob);
+	});
+
+	it("fails closed when the migration Job reports failure", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				namespace: "agents",
+				multiServiceResourceProfiles: [smallProfile],
+				routeHostSuffix: "example.test",
+				ingressClassName: "nginx",
+				tlsSecretName: "tls",
+				routeSelector: { "app.kubernetes.io/name": "ingress" },
+			},
+		});
+		const value = desired(migrationManifest);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(value);
+		const job = [...fake.resources.values()].find(
+			(resource) => resource.kind === "Job",
+		) as V1Job | undefined;
+		if (!job) throw new Error("migration Job fixture missing");
+		job.status = {
+			failed: 1,
+			conditions: [{ type: "Failed", status: "True" }],
+		};
+		expect(await operations.observe(value, { uid: "u", generation: 1 })).toBe(
+			"unhealthy",
+		);
+		expect(
+			[...fake.resources.values()].some(
+				(resource) => resource.kind === "Deployment",
+			),
+		).toBe(false);
 	});
 });

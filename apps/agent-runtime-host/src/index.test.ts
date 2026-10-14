@@ -263,6 +263,26 @@ describe("RuntimeHost environment assembly", () => {
 			await runtime.close();
 		}
 	});
+
+	it("assembles the built-in proof/session resolver without a module", async () => {
+		const values = await environment();
+		Object.assign(values, {
+			AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN:
+				"http://worker.internal",
+			AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN:
+				"worker-current-token",
+			AGENT_INFRA_RUNTIME_WORKER_ID: "worker-proof",
+		});
+		const host = {
+			resolveNativeMetadataSessionRef: vi.fn(async () => "native-session"),
+		};
+		const assembly = await createRuntimeNativeMetadataDeploymentAssemblyV1({
+			environment: values,
+			host: host as never,
+		});
+		expect(assembly).toBeDefined();
+		expect(assembly?.resolveContext).toBeTypeOf("function");
+	});
 	it.each(["pi", "acp"] as const)(
 		"does not inject protected Connection MCP into the unsupported %s driver",
 		async (binding) => {

@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type {
+	NativeMetadataProjectionV1,
 	RuntimeCapabilitiesV1,
 	RuntimeEventV1,
 	RuntimeSelectionV1,
@@ -19,6 +20,13 @@ import type {
 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
+
+export const fakeNativeCommandDirectoryRevision = createHash("sha256")
+	.update("fake-native-command-directory-v1")
+	.digest("hex");
+export const fakeNativeCommandCapabilityId = createHash("sha256")
+	.update(`fake-native-command:${fakeNativeCommandDirectoryRevision}`)
+	.digest("hex");
 
 interface FakeSession {
 	nativeSessionRef: string;
@@ -126,6 +134,41 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 		);
 	}
 
+	createNativeCommandCommand(
+		command: import("./driver.js").RuntimeNativeCommandCommandV1,
+	) {
+		return structuredClone(command);
+	}
+
+	async readNativeMetadataV1(
+		selector: "commands" | "skills" | "status",
+		read: import("./driver.js").RuntimeNativeMetadataReadContextV1,
+	): Promise<NativeMetadataProjectionV1> {
+		read.assertCurrent();
+		if (selector !== "commands")
+			throw new RuntimeHostError(
+				"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+				"Fake native metadata selector is unsupported",
+				409,
+			);
+		return {
+			selector,
+			revision: fakeNativeCommandDirectoryRevision,
+			capabilities: [
+				{
+					id: fakeNativeCommandCapabilityId,
+					kind: "command",
+					name: "查看原生会话状态",
+					description: "Read the native session status",
+					source: { name: "fake", version: "1" },
+					parameters: [],
+					effect: "read_only",
+					availability: "available",
+				},
+			],
+		};
+	}
+
 	async validateExternalAction() {
 		// The fake driver has no external operation journal. RuntimeHost still
 		// requires this hook so real Drivers cannot silently bypass ref validation.
@@ -185,7 +228,10 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 			}
 
 			let result: RuntimeDriverOperationRecord["result"];
-			if (command.kind === "submit-turn") {
+			if (command.kind === "native-command") {
+				result = { outcome: "accepted", status: "completed" };
+				state.sideEffects += 1;
+			} else if (command.kind === "submit-turn") {
 				if (
 					command.schemaVersion === 2 &&
 					!this.supportedSelections.has(selectionKey(command.selection))

@@ -9,6 +9,9 @@ import {
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import type { BrowserHandoffTimelineEventV1 } from "../conversation/browser-handoff-timeline.js";
+
+export type { BrowserHandoffTimelineEventV1 } from "../conversation/browser-handoff-timeline.js";
 
 export type BrowserHandoffReasonV1 =
 	| "login"
@@ -74,11 +77,22 @@ export type BrowserHandoffActionInputV1 = Readonly<{
 	binding: BrowserHandoffBindingV1;
 }>;
 
+const terminalReasonCodes = new Set<
+	NonNullable<BrowserHandoffPanelStateV1["terminalReasonCode"]>
+>([
+	"BROWSER_HANDOFF_EXPIRED",
+	"BROWSER_HANDOFF_BROWSER_CRASHED",
+	"BROWSER_HANDOFF_AUTHORIZATION_REVOKED",
+	"BROWSER_HANDOFF_OPERATOR_CHANGED",
+	"BROWSER_HANDOFF_RETURN_UNCONFIRMED",
+]);
+
 type BrowserHandoffPanelProps = {
 	readonly browserAvailable?: boolean;
 	readonly confirmation?: BrowserSideEffectConfirmationV1;
 	/** Current server-authenticated binding used to validate every action. */
 	readonly currentBinding?: BrowserHandoffBindingV1;
+	readonly handoffEvent?: BrowserHandoffTimelineEventV1;
 	readonly handoff?: BrowserHandoffPanelStateV1;
 	readonly now?: () => number;
 	readonly onCancelConfirmation?: (input: BrowserHandoffActionInputV1) => void;
@@ -124,6 +138,7 @@ function validBinding(binding: BrowserHandoffBindingV1): boolean {
 			binding.capabilityRevision,
 			binding.pageRevision,
 		].every((value) => Number.isSafeInteger(value) && value >= 1) &&
+		typeof binding.imageDigest === "string" &&
 		/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(binding.imageDigest)
 	);
 }
@@ -145,6 +160,99 @@ function sameBinding(
 		left.capabilityRevision === right.capabilityRevision &&
 		left.pageRevision === right.pageRevision
 	);
+}
+
+function validTimelineBinding(
+	binding: BrowserHandoffTimelineEventV1["payload"]["binding"],
+): boolean {
+	return (
+		[
+			binding.subjectId,
+			binding.agentId,
+			binding.conversationId,
+			binding.executionId,
+		].every((value) => typeof value === "string" && value.length > 0) &&
+		[
+			binding.sessionGeneration,
+			binding.resourceFence,
+			binding.workloadRevision,
+			binding.capabilityVersion,
+			binding.capabilityRevision,
+			binding.pageRevision,
+		].every((value) => Number.isSafeInteger(value) && value >= 1) &&
+		typeof binding.imageDigest === "string" &&
+		/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(binding.imageDigest)
+	);
+}
+
+function sameTimelineBinding(
+	eventBinding: BrowserHandoffTimelineEventV1["payload"]["binding"],
+	currentBinding: BrowserHandoffBindingV1,
+): boolean {
+	return (
+		eventBinding.subjectId === currentBinding.subjectId &&
+		eventBinding.agentId === currentBinding.agentId &&
+		eventBinding.conversationId === currentBinding.conversationId &&
+		eventBinding.executionId === currentBinding.executionId &&
+		eventBinding.sessionGeneration === currentBinding.sessionGeneration &&
+		eventBinding.resourceFence === currentBinding.resourceFence &&
+		eventBinding.workloadRevision === currentBinding.workloadRevision &&
+		eventBinding.imageDigest === currentBinding.imageDigest &&
+		eventBinding.capabilityVersion === currentBinding.capabilityVersion &&
+		eventBinding.capabilityRevision === currentBinding.capabilityRevision &&
+		eventBinding.pageRevision === currentBinding.pageRevision
+	);
+}
+
+/**
+ * Converts the server-authenticated V2 timeline event into the existing panel
+ * state. The current binding remains the action authority; an event cannot
+ * replace it or open an action for a foreign/stale Browser session.
+ */
+export function projectBrowserHandoffTimelineEventV1(
+	input: unknown,
+	currentBinding?: BrowserHandoffBindingV1,
+): BrowserHandoffPanelStateV1 | undefined {
+	if (
+		!currentBinding ||
+		!validBinding(currentBinding) ||
+		typeof input !== "object" ||
+		input === null ||
+		(input as { readonly type?: unknown }).type !== "browser.handoff"
+	)
+		return undefined;
+	const payload = (input as { readonly payload?: unknown }).payload;
+	if (typeof payload !== "object" || payload === null) return undefined;
+	const value = payload as BrowserHandoffTimelineEventV1["payload"];
+	if (
+		typeof value.handoffId !== "string" ||
+		value.handoffId.length === 0 ||
+		!Object.hasOwn(handoffLabels, value.status) ||
+		!Object.hasOwn(reasonLabels, value.reason) ||
+		typeof value.expiresAt !== "string" ||
+		!Number.isFinite(Date.parse(value.expiresAt)) ||
+		!value.binding ||
+		!validTimelineBinding(value.binding) ||
+		!sameTimelineBinding(value.binding, currentBinding)
+	)
+		return undefined;
+	const terminalReasonCode = terminalReasonCodes.has(
+		value.terminalReason as NonNullable<
+			BrowserHandoffPanelStateV1["terminalReasonCode"]
+		>,
+	)
+		? (value.terminalReason as NonNullable<
+				BrowserHandoffPanelStateV1["terminalReasonCode"]
+			>)
+		: undefined;
+	return {
+		handoffId: value.handoffId,
+		status: value.status,
+		reason: value.reason,
+		expiresAt: value.expiresAt,
+		binding: currentBinding,
+		...(terminalReasonCode ? { terminalReasonCode } : {}),
+	};
 }
 
 function safeOrigin(value: string): string | undefined {
@@ -526,12 +634,25 @@ function ConfirmationPanel({
 }
 
 export function BrowserHandoffPanel(props: BrowserHandoffPanelProps) {
+	const handoff =
+		props.handoff ??
+		projectBrowserHandoffTimelineEventV1(
+			props.handoffEvent,
+			props.currentBinding,
+		);
+	const eventBindingUnavailable =
+		props.handoffEvent !== undefined &&
+		props.handoff === undefined &&
+		handoff === undefined;
 	return (
 		<>
+			{eventBindingUnavailable ? (
+				<BlockedPanel message="Browser 接管事件已收到，但当前 Session 绑定无法核验；不会开放接管操作。" />
+			) : null}
 			<HandoffPanel
 				browserAvailable={props.browserAvailable}
 				currentBinding={props.currentBinding}
-				handoff={props.handoff}
+				handoff={handoff}
 				now={props.now}
 				onPauseAgent={props.onPauseAgent}
 				onReturnToAgent={props.onReturnToAgent}
@@ -541,7 +662,7 @@ export function BrowserHandoffPanel(props: BrowserHandoffPanelProps) {
 				browserAvailable={props.browserAvailable}
 				confirmation={props.confirmation}
 				currentBinding={props.currentBinding}
-				handoff={props.handoff}
+				handoff={handoff}
 				now={props.now}
 				onCancelConfirmation={props.onCancelConfirmation}
 				onConfirmSideEffect={props.onConfirmSideEffect}
