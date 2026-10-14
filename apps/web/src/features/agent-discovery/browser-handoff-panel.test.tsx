@@ -79,6 +79,7 @@ describe("Browser handoff and confirmation panel", () => {
 							workloadRevision: binding.workloadRevision,
 							imageDigest: binding.imageDigest,
 							capabilityVersion: binding.capabilityVersion,
+							capabilityRevision: binding.capabilityRevision,
 							pageRevision: binding.pageRevision,
 						},
 					},

@@ -177,6 +177,7 @@ function validTimelineBinding(
 			binding.resourceFence,
 			binding.workloadRevision,
 			binding.capabilityVersion,
+			binding.capabilityRevision,
 			binding.pageRevision,
 		].every((value) => Number.isSafeInteger(value) && value >= 1) &&
 		typeof binding.imageDigest === "string" &&
@@ -198,6 +199,7 @@ function sameTimelineBinding(
 		eventBinding.workloadRevision === currentBinding.workloadRevision &&
 		eventBinding.imageDigest === currentBinding.imageDigest &&
 		eventBinding.capabilityVersion === currentBinding.capabilityVersion &&
+		eventBinding.capabilityRevision === currentBinding.capabilityRevision &&
 		eventBinding.pageRevision === currentBinding.pageRevision
 	);
 }
@@ -638,8 +640,15 @@ export function BrowserHandoffPanel(props: BrowserHandoffPanelProps) {
 			props.handoffEvent,
 			props.currentBinding,
 		);
+	const eventBindingUnavailable =
+		props.handoffEvent !== undefined &&
+		props.handoff === undefined &&
+		handoff === undefined;
 	return (
 		<>
+			{eventBindingUnavailable ? (
+				<BlockedPanel message="Browser 接管事件已收到，但当前 Session 绑定无法核验；不会开放接管操作。" />
+			) : null}
 			<HandoffPanel
 				browserAvailable={props.browserAvailable}
 				currentBinding={props.currentBinding}

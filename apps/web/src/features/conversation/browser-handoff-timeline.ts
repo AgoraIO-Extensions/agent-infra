@@ -27,6 +27,7 @@ export type BrowserHandoffTimelineEventV1 = Readonly<{
 			workloadRevision: number;
 			imageDigest: string;
 			capabilityVersion: number;
+			capabilityRevision: number;
 			pageRevision: number;
 		}>;
 	}>;

@@ -18,6 +18,7 @@ const event = (handoffId: string) => ({
 			workloadRevision: 3,
 			imageDigest: `sha256:${"a".repeat(64)}`,
 			capabilityVersion: 4,
+			capabilityRevision: 4,
 			pageRevision: 5,
 		},
 	},
