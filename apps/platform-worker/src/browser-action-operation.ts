@@ -130,6 +130,11 @@ export function createBrowserActionOperationAdapterV1(input: {
 		executeAction(
 			request: BrowserActionOperationControllerRequestV1,
 		): Promise<BrowserActionOperationControllerRecordV1>;
+		readonly readAction?: (request: {
+			readonly actionId: string;
+			readonly idempotencyKey?: string;
+			readonly executionBinding: BrowserActionExecutionBindingV1;
+		}) => BrowserActionOperationControllerRecordV1 | null;
 	};
 }) {
 	return {
@@ -178,6 +183,20 @@ export function createBrowserActionOperationAdapterV1(input: {
 						sideEffect: request.action.sideEffect === true,
 					});
 					assertReturnedIdentity(actionRecord, request);
+					if (actionRecord.status === "unknown") {
+						const recovered = input.controller.readAction?.({
+							actionId: request.actionId,
+							idempotencyKey: request.idempotencyKey ?? request.actionId,
+							executionBinding: request.controllerBinding,
+						});
+						if (
+							recovered &&
+							["completed", "failed", "rejected"].includes(recovered.status)
+						) {
+							assertReturnedIdentity(recovered, request);
+							actionRecord = recovered;
+						}
+					}
 					if (actionRecord.status === "completed") return {};
 					if (actionRecord.status === "unknown")
 						throw new ConversationBrowserActionExecutionError(
