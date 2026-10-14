@@ -115,8 +115,10 @@ function eventFromResponse(
 	const requestedAt = response.record?.requestedAt ?? new Date(0).toISOString();
 	const expiresAt = response.record?.expiresAt ?? new Date(0).toISOString();
 	const operatorId = response.record?.operatorId;
-	const terminalReason =
-		response.record?.terminalReason ?? "BROWSER_HANDOFF_RECORD_UNAVAILABLE";
+	const outcomeUnknown = response.outcome !== "accepted";
+	const terminalReason = outcomeUnknown
+		? "BROWSER_HANDOFF_ACCEPTANCE_UNKNOWN"
+		: (response.record?.terminalReason ?? "BROWSER_HANDOFF_RECORD_UNAVAILABLE");
 	const addressedHandoff =
 		request.handoff.kind === "take-over" ||
 		request.handoff.kind === "return-to-agent"
@@ -134,7 +136,7 @@ function eventFromResponse(
 	return {
 		type: "browser.handoff",
 		handoffId,
-		status,
+		status: outcomeUnknown ? "unknown" : status,
 		reason,
 		requestedAt,
 		expiresAt,
@@ -153,9 +155,18 @@ function parseInput(input: BrowserHandoffEventInputV1): {
 } {
 	try {
 		const request = RuntimeBrowserHandoffRequestV3Schema.parse(input.request);
-		const response = RuntimeBrowserHandoffResponseV3Schema.parse(
-			input.response,
-		);
+		const rawOutcome =
+			typeof input.response === "object" && input.response !== null
+				? (input.response as { readonly outcome?: unknown }).outcome
+				: undefined;
+		const parsedResponse = RuntimeBrowserHandoffResponseV3Schema.parse({
+			...input.response,
+			outcome: rawOutcome === "unknown" ? "accepted" : rawOutcome,
+		});
+		const response = {
+			...parsedResponse,
+			...(rawOutcome === "unknown" ? { outcome: "unknown" as never } : {}),
+		} as RuntimeBrowserHandoffResponseV3;
 		if (
 			typeof input.occurredAt !== "string" ||
 			input.occurredAt.length === 0 ||
@@ -184,7 +195,7 @@ function parseInput(input: BrowserHandoffEventInputV1): {
  * This adapter owns no queue, state store, URL, credential, cursor or ACK.
  */
 export function createBrowserHandoffEventAdapterV1(input: {
-	readonly runtime: BrowserHandoffRuntimeClientV1;
+	readonly runtime?: BrowserHandoffRuntimeClientV1;
 	readonly events: ConversationEventUseCaseV1;
 }) {
 	const persist = async (request: BrowserHandoffEventInputV1) => {
@@ -217,6 +228,8 @@ export function createBrowserHandoffEventAdapterV1(input: {
 	return {
 		persist,
 		async dispatch(request: BrowserHandoffDispatchInputV1) {
+			if (!input.runtime)
+				throw new Error("BROWSER_HANDOFF_EVENT_RUNTIME_UNAVAILABLE");
 			let response: RuntimeBrowserHandoffResponseV3;
 			try {
 				response = await input.runtime.browserHandoff(

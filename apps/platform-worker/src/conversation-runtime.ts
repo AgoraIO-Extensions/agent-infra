@@ -3,6 +3,8 @@ import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type {
+	RuntimeBrowserHandoffRequestV3,
+	RuntimeBrowserHandoffResponseV3,
 	RuntimeBusinessCommandV2,
 	RuntimeBusinessRequestV4,
 	RuntimeControlCommandV2,
@@ -177,12 +179,21 @@ type Request =
 	| ConversationRuntimeDispatchRequestV1
 	| ConversationRuntimeEventRequestV1
 	| ConversationRuntimeStatusRequestV2
-	| OriginalStatusRequest;
-// Browser handoff is a Host-only V3 control transport command; it must never
-// enter the Conversation dispatch loop or its business command union.
-type Command =
-	| RuntimeBusinessCommandV2
-	| Exclude<RuntimeControlCommandV2, "browser.handoff">;
+	| OriginalStatusRequest
+	| ConversationRuntimeBrowserHandoffRequestV1;
+
+export type ConversationRuntimeBrowserHandoffRequestV1 =
+	ConversationRuntimeEventRequestV1 & {
+		readonly handoff: RuntimeBrowserHandoffRequestV3["handoff"];
+	};
+
+export type ConversationRuntimeBrowserHandoffDispatchV1 = Readonly<{
+	readonly request: RuntimeBrowserHandoffRequestV3;
+	readonly response: RuntimeBrowserHandoffResponseV3;
+}>;
+// Browser handoff is a Host-only V3 control command. It is admitted only by
+// the explicit browserHandoff receiver below, never by turn dispatch.
+type Command = RuntimeBusinessCommandV2 | RuntimeControlCommandV2;
 
 /** Bounded reuse of one drain's live Kubernetes route observation (#1611). */
 const eventRouteProofMaxAgeMs = 2_000;
@@ -1461,6 +1472,46 @@ export function createConversationRuntimeV2(
 			}
 		},
 	};
+	async function browserHandoff(
+		request: ConversationRuntimeBrowserHandoffRequestV1,
+		signal?: AbortSignal,
+	): Promise<ConversationRuntimeBrowserHandoffDispatchV1> {
+		const active = combined(signal);
+		const context = contextFor(request);
+		if (request.deliveryFence !== context.claim.executionDeliveryFence)
+			denied("RUNTIME_FENCE_STALE");
+		const prepared = await prepare(request, "browser.handoff", active);
+		const { state, authority, client, base } = prepared;
+		if (authority.purpose !== "control") {
+			await latch(prepared, active);
+			denied("TASK_AUTHORIZATION_CONTROL_ONLY");
+		}
+		if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+		// The existing recovery control record remains the persistence authority;
+		// only the short-lived Runtime grant names the Host command explicitly.
+		const browserAuthority = {
+			...authority,
+			reason: "browser_handoff" as const,
+		};
+		const wire = {
+			...base,
+			hostSessionRef: state.hostSessionRef,
+			handoff: request.handoff,
+			grant: signRequest(
+				{
+					...base,
+					hostSessionRef: state.hostSessionRef,
+					handoff: request.handoff,
+				},
+				browserAuthority,
+				"browser.handoff",
+			),
+		} as RuntimeBrowserHandoffRequestV3;
+		return {
+			request: wire,
+			response: await client.browserHandoff(wire, active),
+		};
+	}
 	const connectionInstallation = {
 		activeExecutionIds() {
 			return [...activeInstallations.keys()];
@@ -1781,6 +1832,7 @@ export function createConversationRuntimeV2(
 		connectionInstallation,
 		authorization,
 		runtimeHost,
+		browserHandoff,
 		async close() {
 			controller.abort();
 			await Promise.allSettled([...keyDependencies]);

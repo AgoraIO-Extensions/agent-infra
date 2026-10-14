@@ -161,6 +161,24 @@ describe("Browser handoff event adapter", () => {
 		);
 	});
 
+	it("preserves a forward-compatible unknown Host outcome as unknown", async () => {
+		const state = setup({
+			...response("active"),
+			outcome: "unknown",
+		} as never);
+		await expect(state.adapter.persist(state.input)).resolves.toMatchObject({
+			status: "unknown",
+		});
+		expect(state.persist).toHaveBeenCalledWith(
+			expect.objectContaining({
+				event: expect.objectContaining({
+					status: "unknown",
+					terminalReason: "BROWSER_HANDOFF_ACCEPTANCE_UNKNOWN",
+				}),
+			}),
+		);
+	});
+
 	it("dispatches through the existing Worker client before persisting", async () => {
 		const state = setup(response("active"));
 		await expect(
