@@ -52,22 +52,29 @@ it("returns one bounded durable snapshot without inspecting business payloads", 
 	// The query only compares payload bindings and never selects business text.
 	expect(query).not.toContain("m.text");
 	expect(query).not.toContain("payload,");
-	expect(snapshot).not.toHaveProperty("postgresPoolActive");
+	expect(snapshot).not.toHaveProperty("postgresActivityActive");
 });
 
-it("returns optional local PostgreSQL pool gauges without exposing activity text", async () => {
+it("returns optional local PostgreSQL activity gauges without exposing activity text", async () => {
 	const { sql } = client(
 		Promise.resolve([{ task_waiting: "2", outbox_pending: "3" }]),
-		Promise.resolve([{ pool_active: "1", pool_idle: "4", pool_waiting: "2" }]),
+		Promise.resolve([
+			{
+				activity_active: "1",
+				activity_idle: "4",
+				activity_waiting: "2",
+				activity_hidden: "0",
+			},
+		]),
 	);
 	const snapshot = await readPlatformQueueResourceSnapshot(
 		sql,
 		new AbortController().signal,
 	);
 	expect(snapshot).toMatchObject({
-		postgresPoolActive: 1,
-		postgresPoolIdle: 4,
-		postgresPoolWaiting: 2,
+		postgresActivityActive: 1,
+		postgresActivityIdle: 4,
+		postgresActivityWaiting: 2,
 	});
 	const poolStatement = sql.mock.calls
 		.find((call) => call[0]?.join("").includes("pg_stat_activity"))?.[0]
@@ -76,7 +83,7 @@ it("returns optional local PostgreSQL pool gauges without exposing activity text
 	expect(poolStatement).not.toContain("query,");
 });
 
-it("keeps queue counts when local PostgreSQL pool visibility is unavailable", async () => {
+it("keeps queue counts when local PostgreSQL activity visibility is unavailable", async () => {
 	const { sql } = client(
 		Promise.resolve([{ task_waiting: "2", outbox_pending: "3" }]),
 		Promise.reject(new Error("permission denied for pg_stat_activity")),
@@ -86,7 +93,27 @@ it("keeps queue counts when local PostgreSQL pool visibility is unavailable", as
 	).resolves.toMatchObject({ taskWaiting: 2, outboxPending: 3 });
 });
 
-it("bounds an optional pool visibility query by the shared snapshot deadline", async () => {
+it("omits local activity gauges when pg_stat_activity hides another backend", async () => {
+	const { sql } = client(
+		Promise.resolve([{ task_waiting: "2", outbox_pending: "3" }]),
+		Promise.resolve([
+			{
+				activity_active: "0",
+				activity_idle: "0",
+				activity_waiting: "0",
+				activity_hidden: "1",
+			},
+		]),
+	);
+	const snapshot = await readPlatformQueueResourceSnapshot(
+		sql,
+		new AbortController().signal,
+	);
+	expect(snapshot).toMatchObject({ taskWaiting: 2, outboxPending: 3 });
+	expect(snapshot).not.toHaveProperty("postgresActivityActive");
+});
+
+it("bounds an optional activity visibility query by the shared snapshot deadline", async () => {
 	vi.useFakeTimers();
 	try {
 		const poolQuery = new Promise<unknown[]>(() => {});
@@ -98,11 +125,11 @@ it("bounds an optional pool visibility query by the shared snapshot deadline", a
 			sql,
 			new AbortController().signal,
 		);
-		const rejection = expect(pending).rejects.toThrow(
-			"Platform resource snapshot is unavailable",
-		);
 		await vi.advanceTimersByTimeAsync(2000);
-		await rejection;
+		await expect(pending).resolves.toMatchObject({
+			taskWaiting: 2,
+			outboxPending: 3,
+		});
 	} finally {
 		vi.useRealTimers();
 	}

@@ -18,15 +18,15 @@ function boundedDurationMs(value: unknown, startedAt: number): number {
 function observeOptionalPoolResources(
 	observability: ReturnType<typeof startObservability>,
 	snapshot: {
-		postgresPoolActive?: unknown;
-		postgresPoolIdle?: unknown;
-		postgresPoolWaiting?: unknown;
+		postgresActivityActive?: unknown;
+		postgresActivityIdle?: unknown;
+		postgresActivityWaiting?: unknown;
 	},
 ) {
 	const resources = [
-		["postgres_pool_active", snapshot.postgresPoolActive],
-		["postgres_pool_idle", snapshot.postgresPoolIdle],
-		["postgres_pool_waiting", snapshot.postgresPoolWaiting],
+		["postgres_activity_active", snapshot.postgresActivityActive],
+		["postgres_activity_idle", snapshot.postgresActivityIdle],
+		["postgres_activity_waiting", snapshot.postgresActivityWaiting],
 	] as const;
 	for (const [kind, value] of resources) {
 		if (value === undefined) continue;

@@ -160,11 +160,11 @@ export interface PlatformQueueResourceSnapshot {
 	/** Bounded duration of this read-only snapshot, in milliseconds. */
 	readonly queryDurationMs?: number;
 	/** PostgreSQL client backends currently executing without a server-side wait. */
-	readonly postgresPoolActive?: number;
+	readonly postgresActivityActive?: number;
 	/** PostgreSQL client backends in the idle state (including ClientRead). */
-	readonly postgresPoolIdle?: number;
+	readonly postgresActivityIdle?: number;
 	/** PostgreSQL active client backends reporting a server-side wait event. */
-	readonly postgresPoolWaiting?: number;
+	readonly postgresActivityWaiting?: number;
 }
 
 interface ConversationRow {
@@ -847,18 +847,26 @@ export async function readPlatformQueueResourceSnapshot(
 	activeResourceSnapshots.add(client);
 	const controller = new AbortController();
 	const operationSignal = controller.signal;
-	const onAbort = () => controller.abort();
+	let callerAborted: boolean = signal.aborted;
+	const onAbort = () => {
+		callerAborted = true;
+		controller.abort();
+	};
 	signal.addEventListener("abort", onAbort, { once: true });
 	if (signal.aborted) onAbort();
-	const timer = setTimeout(onAbort, platformQueueResourceSnapshotTimeoutMs);
+	const timer = setTimeout(
+		() => controller.abort(),
+		platformQueueResourceSnapshotTimeoutMs,
+	);
 	let rejectOnAbort: () => void = () => {};
 	let removeOperationAbortListener = () => {};
 	let began = false;
 	let snapshot: Promise<PlatformQueueResourceSnapshot> | undefined;
 	type PostgresPoolRow = {
-		pool_active: string;
-		pool_idle: string;
-		pool_waiting: string;
+		activity_active: string;
+		activity_idle: string;
+		activity_waiting: string;
+		activity_hidden: string;
 	};
 	let poolQuery: Promise<PostgresPoolRow[]> | undefined;
 	let optionalPoolQueryExpected = true;
@@ -981,7 +989,10 @@ export async function readPlatformQueueResourceSnapshot(
 			},
 		);
 		const queueSnapshot = await Promise.race([snapshot, cancelled]);
-		if (operationSignal.aborted) throw unavailable();
+		if (operationSignal.aborted) {
+			if (callerAborted) throw unavailable();
+			return queueSnapshot;
+		}
 		optionalPoolQueryExpected = false;
 		// Keep the existing mock/adapter behavior for an empty transaction result;
 		// a real Store transaction always returns the complete queue snapshot.
@@ -993,10 +1004,12 @@ export async function readPlatformQueueResourceSnapshot(
 		// pg_stat_activity is an optional, local PostgreSQL signal.  It is queried
 		// separately so a managed database that hides the view (or denies access)
 		// cannot discard the durable queue counts above.
-		let postgresPoolSnapshot:
+		let postgresActivitySnapshot:
 			| Pick<
 					PlatformQueueResourceSnapshot,
-					"postgresPoolActive" | "postgresPoolIdle" | "postgresPoolWaiting"
+					| "postgresActivityActive"
+					| "postgresActivityIdle"
+					| "postgresActivityWaiting"
 			  >
 			| undefined;
 		try {
@@ -1005,11 +1018,14 @@ export async function readPlatformQueueResourceSnapshot(
 					select
 						count(*) filter (
 							where state = 'active' and wait_event is null
-						)::text as pool_active,
-						count(*) filter (where state = 'idle')::text as pool_idle,
+						)::text as activity_active,
+						count(*) filter (where state = 'idle')::text as activity_idle,
 						count(*) filter (
 							where state = 'active' and wait_event is not null
-						)::text as pool_waiting
+						)::text as activity_waiting,
+						count(*) filter (
+							where state is null
+						)::text as activity_hidden
 					from pg_stat_activity
 					where datname = current_database()
 						and pid <> pg_backend_pid()
@@ -1019,20 +1035,22 @@ export async function readPlatformQueueResourceSnapshot(
 			const poolRows = await Promise.race([poolQuery, cancelled]);
 			if (poolRows.length === 1) {
 				const row = poolRows[0];
-				const active = countResource(row?.pool_active);
-				const idle = countResource(row?.pool_idle);
-				const waiting = countResource(row?.pool_waiting);
-				postgresPoolSnapshot = {
-					postgresPoolActive: active,
-					postgresPoolIdle: idle,
-					postgresPoolWaiting: waiting,
+				const hidden = countResource(row?.activity_hidden);
+				if (hidden > 0) return queueSnapshot;
+				const active = countResource(row?.activity_active);
+				const idle = countResource(row?.activity_idle);
+				const waiting = countResource(row?.activity_waiting);
+				postgresActivitySnapshot = {
+					postgresActivityActive: active,
+					postgresActivityIdle: idle,
+					postgresActivityWaiting: waiting,
 				};
 			}
 		} catch {
-			if (operationSignal.aborted) throw unavailable();
-			// Optional pool visibility is unavailable; preserve the queue snapshot.
+			if (callerAborted) throw unavailable();
+			// Optional activity visibility is unavailable; preserve the queue snapshot.
 		}
-		return { ...queueSnapshot, ...postgresPoolSnapshot };
+		return { ...queueSnapshot, ...postgresActivitySnapshot };
 	} catch {
 		optionalPoolQueryExpected = false;
 		if (!began) {
