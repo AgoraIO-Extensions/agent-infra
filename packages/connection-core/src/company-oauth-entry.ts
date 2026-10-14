@@ -169,7 +169,8 @@ export class CompanyOAuthEntry {
 
 	recoveryTarget(state: string) {
 		try {
-			const value = this.open(state.slice(6), companyEntryStateTtl);
+			// Expired signed context may locate a GET page, never authorize the callback.
+			const value = this.open(state.slice(6), companyEntryStateTtl, true);
 			if (
 				!state.startsWith("entry.") ||
 				value.purpose !== "state" ||
@@ -287,7 +288,11 @@ export class CompanyOAuthEntry {
 	private sign(value: string) {
 		return createHmac("sha256", this.key).update(value).digest("base64url");
 	}
-	private open(value: string, ttl: number): Record<string, unknown> {
+	private open(
+		value: string,
+		ttl: number,
+		recoveryOnly = false,
+	): Record<string, unknown> {
 		if (
 			value.trim() !== value ||
 			!/^[A-Za-z0-9_-]{1,3000}\.[A-Za-z0-9_-]{43}$/.test(value)
@@ -306,7 +311,7 @@ export class CompanyOAuthEntry {
 				!parsed ||
 				typeof parsed !== "object" ||
 				!Number.isSafeInteger(parsed.expires) ||
-				parsed.expires <= Date.now() ||
+				(!recoveryOnly && parsed.expires <= Date.now()) ||
 				parsed.expires > Date.now() + ttl * 1000
 			)
 				rejected();

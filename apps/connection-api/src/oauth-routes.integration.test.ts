@@ -384,6 +384,15 @@ describe("Connection OAuth HTTP flow", () => {
 				const confirmationCookie =
 					authorization.headers.get("set-cookie")?.split(";")[0] ?? "";
 				expect(csrfToken).toBeTruthy();
+				const recoveryPage = await app.request(
+					`/oauth/authorization-requests/${requestId}`,
+					{ headers: { cookie: confirmationCookie } },
+				);
+				expect(recoveryPage.status).toBe(200);
+				expect(await recoveryPage.text()).toContain(
+					`name="request_id" value="${requestId}"`,
+				);
+				expect(authenticationCalls).toBe(0);
 
 				for (const origin of [undefined, "https://attacker.invalid"]) {
 					const headers: Record<string, string> = {
@@ -442,6 +451,10 @@ describe("Connection OAuth HTTP flow", () => {
 				});
 				expect(login.status).toBe(302);
 				expect(authenticationCalls).toBe(1);
+				expect(
+					(await app.request(`/oauth/authorization-requests/${requestId}`))
+						.status,
+				).toBe(400);
 				const callback = new URL(login.headers.get("location") ?? "");
 				expect(callback.searchParams.get("state")).toBe(state);
 

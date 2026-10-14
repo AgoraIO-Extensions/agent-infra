@@ -35,7 +35,7 @@
           <li><strong>个人脚本或手工配置的客户端：</strong>用户在<a href="/connection/tokens" target="_blank" rel="noopener noreferrer">访问令牌</a>页签发 Connection PAT，保存到服务端 Secret。通用 PAT 使用 Portable PAT Consumer。</li>
         </ul>
         <p>三种方式都访问 <code>__CONNECTION_ORIGIN__/mcp</code>，传输协议为 Streamable HTTP。令牌认证只证明“是谁、哪个客户端”；外部账号连接和 Action 授权还需分别完成；只有管理员开启审批的连接器要求公司审批，现有及新增连接器默认关闭审批。</p>
-        <p>启用公司入口保护时，用户在浏览器先完成公司 OAuth 登录，回跳后自动完成入口校验（未自动跳转时点击“完成公司登录”），再按 LDAP 账号登录 Connection；两次账号可以不同，业务身份和已有授权仍归 LDAP 账号。MCP、metadata、DCR、token 与 PAT Binding 后端创建/领取请求不需要 公司入口 Cookie 或额外 apiKey。用户确认页仍需入口准入和 Connection 登录。</p>
+        <p>启用公司入口保护时，用户在浏览器先完成公司 OAuth 登录，回跳后自动完成入口校验（未自动跳转时等待两秒，使用出现的“完成公司登录”按钮），再按 LDAP 账号登录 Connection；两次账号可以不同，业务身份和已有授权仍归 LDAP 账号。MCP、metadata、DCR、token 与 PAT Binding 后端创建/领取请求不需要 公司入口 Cookie 或额外 apiKey。用户确认页仍需入口准入和 Connection 登录。</p>
         <p>公司登录、LDAP 授权登录和授权确认均保留用途独立的短期防伪校验。会话丢失或页面失效时，按页面提示重新打开授权入口并核对账号，不会自动重放提交。若企业微信等内置浏览器隔离或清除 Cookie，请复制页面中的恢复入口到系统浏览器继续。URL 仅携带不透明流程标识，不携带密码、PAT 或防伪证明；不要自行拼接参数。外部系统回调仍按各 Provider 的 state/PKCE 校验，客户端后端的创建/领取契约不变。</p>
         <p>入口会话过期时，用户重新打开控制台完成入口登录后主动重试，不自动重放提交；退出 Connection 不等于退出公司 SSO。</p>
       </section>
@@ -142,6 +142,7 @@ Authorization: Bearer &lt;当前用户与实例的 Connection PAT&gt;</code></pr
         <h2 id="delegated-title">平台级 Delegated 接入</h2>
         <p>以上逐用户 PAT Binding 仍属于 Direct MCP。需要以注册 workload 代表当前 Principal 调用的 Agent 平台，应与 Connection 管理员对接 HTTP/OpenAPI Delegated 契约、workload 身份和短期委托上下文；Agent Platform 还需绑定稳定 Agent Actor。不能用自报身份或共享 PAT 替代该契约，也不能从 MCP URL 推测 Delegated 接口。</p>
       </section>
+    <p>遇到 429 请按 Retry-After 等待后重试，不要循环提交。完整管理 API 文档需 Connection 登录；MCP 发现仍使用公开 metadata，不要求公司入口 Cookie。</p>
     </main>
 
     <footer>

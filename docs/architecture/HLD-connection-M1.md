@@ -1438,6 +1438,7 @@ Token、MCP、PAT backend 创建/claim 不要求该浏览器证明，继续按�
 恢复仅使用已验证的同站 GET 目标或原有不透明流程标识；会话丢失时重新认证并重新确认，
 不得通过 URL 恢复认证本身、携带密码/PAT/proof 或自动重放 POST。登录切换清理页面业务缓存。
 用户 OAuth 回调的 GET 仍按既有 state/PKCE/owner 事务合同处理一次性 code，不等于 GET 直接签发 PAT。
+验收路径见[浏览器授权验收](connection-browser-authorization-validation.md)。
 
 ### 16.3 Envelope Encryption
 
@@ -2329,6 +2330,32 @@ OAuth endpoints 以 G-01 对目标 Direct MCP Client 版本支持的 remote MCP 
 Connection MCP resource。若客户端需要 dynamic client registration，必须限制 redirect URI、software
 metadata 和注册生命周期，不能开放任意公共 client。
 
+### 登录与动态注册防滥用
+
+[#2472](https://github.com/AgoraIO-Extensions/agent-infra/issues/2472) 跟进安全报告和
+CYBERSEC-1108。完整 `/api/v1/connection/openapi.json` 必须验证有效 Connection 浏览器会话，
+启用公司入口时还须入口证明；普通员工可读文档不等于获得管理接口权限。公开 MCP metadata、
+DCR/token/revoke 保留原凭据协议，不增加公司 Cookie 或 HTML 重定向。
+
+密码认证的所有入口共用 PostgreSQL 原子预算：同一身份 realm 每分钟最多 120 次目录认证尝试，
+规范化账号（去首尾空白并转小写）五分钟最多 10 次失败或进行中的尝试；成功只释放本次账号
+预留，不清除其他并发失败。仅保存带用途隔离的 HMAC 键、计数和窗口结束时间；不保存用户名、
+密码或调用方转发 IP。窗口过期自动恢复，拒绝返回 429 和 Retry-After，换幂等键、Pod 或进程
+不能绕过。失败统一消息并采用至少 300ms 加 0–100ms 抖动的异步响应延迟，缓解账号枚举，
+不声称消除目录或网络慢请求导致的全部时间差；不修改 LDAP 账户锁定策略。
+
+公开 DCR 每 Consumer 每分钟最多 30 次有效注册，尚未建立会话的动态注册最多 1000 个。
+超过一小时且无账号绑定、授权请求、会话或其他引用的动态注册及空设备可分批清理。静态注册
+和迁移前无法可靠区分来源的既有注册均视为 TRUSTED，不自动回填成待清理对象。已使用客户端、
+会话、PAT、Grant 和审计不删除；配额不足返回 429/Retry-After。现有 client 名称、redirect URI、
+PKCE、resource 和同意规则继续生效。预算/数据库不可用时拒绝，不退回单进程计数或环境开关。
+
+`/oauth/revoke` 仍通过精确令牌摘要查找其所属会话并撤销该会话的 access/refresh family，
+不接受调用方指定其他用户或客户端会话；同账号的独立客户端会话不连带撤销。持有某个令牌
+不是其他会话的撤销权限。普通用户不可访问管理员接口或其他用户的连接、PAT、授权与审批。
+本轮仓库负向回归不代替安全团队的登录后线上复测。持久化迁移先通过 reviewed migrations
+发布，再更新镜像；操作边界见 [ADR 0006](../adr/0006-authentication-abuse-budgets.md)。
+
 ### 公司 OAuth 身份探测
 
 公司入口采用 [直接公司 OAuth 入口](#直接公司-oauth-入口)，与 LDAP 业务身份分离。
@@ -2392,9 +2419,11 @@ fixture 不是员工身份或可用性的证据。
 Secure、HttpOnly state Cookie 绑定浏览器。跨站 GET callback 只返回 no-store/no-referrer 的
 同源中转表单，不交换 code。普通入口由固定内联脚本自动提交一次同源 POST，CSP 只允许该脚本
 的精确 SHA-256 hash；state/code 只经转义写入表单，不拼入脚本，不开放 unsafe-inline 脚本权限。
-脚本不可用时保留“完成公司登录”按钮；失败不自动重试。管理员身份探测仍使用无脚本手动确认，
-不继承普通入口的自动提交。此变更由 [#2460](https://github.com/AgoraIO-Extensions/agent-infra/issues/2460)
-跟踪。同源 POST 验证 Origin、state/Cookie/期限及用途，并经 PostgreSQL
+正常回跳首屏只显示跳转状态，手动兜底提示与“完成公司登录”按钮通过 CSS 延迟两秒显示，
+避免自动提交时闪现；脚本不可用时同样可在两秒后手动提交，失败不自动重试。
+管理员身份探测仍使用无脚本手动确认，不继承普通入口的自动提交。自动提交与兜底显示由
+[#2460](https://github.com/AgoraIO-Extensions/agent-infra/issues/2460)、
+[#2466](https://github.com/AgoraIO-Extensions/agent-infra/issues/2466) 跟踪。同源 POST 验证 Origin、state/Cookie/期限及用途，并经 PostgreSQL
 Browser Command 原子取得单次执行权后才交换。失败或响应未知不重试旧 code，不持久化 code、
 token 或 userInfo。普通入口与管理员 probe 的 state 必须互相拒绝。
 
@@ -2405,7 +2434,7 @@ subject、角色或上游 token。此证明不是业务浏览器会话，不支�
 按原目录和会话规则认证/授权；入口证明与 LDAP 会话分别过期，退出 LDAP 不表示退出公司 SSO。
 
 Nginx 对业务 HTML 与浏览器 authorize/确认页使用内置 auth_request，只向 API 查询入口证明；
-API 本身独立保护 Browser API 与浏览器登录提交，不能靠绕过 Web 直接访问。公开安装、帮助、schema、
+API 本身独立保护 Browser API 与浏览器登录提交，不能靠绕过 Web 直接访问。公开安装、帮助、机器协议 metadata、
 静态资源、healthz 及原机器协议保持开放路由并执行原有认证。入口证明缺失时，浏览器 GET
 进入公司授权；API 返回原有 JSON 401，密码或写 POST 不自动转发、重放。受控 returnTo 只
 恢复站内 GET 页面或原 /oauth/authorize 参数；不允许任意 origin、回调或跳到机器接口。

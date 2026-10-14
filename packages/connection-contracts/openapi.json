@@ -233,8 +233,11 @@
 		"/api/v1/connection/openapi.json": {
 			"get": {
 				"operationId": "getConnectionBrowserOpenApi",
-				"security": [],
-				"responses": { "200": { "description": "OpenAPI document" } }
+				"security": [{ "browserSession": [] }],
+				"responses": {
+					"200": { "description": "OpenAPI document" },
+					"401": { "$ref": "#/components/responses/Error" }
+				}
 			}
 		},
 		"/api/v1/connection/session": {
@@ -261,7 +264,8 @@
 					"200": { "$ref": "#/components/responses/Session" },
 					"400": { "$ref": "#/components/responses/Error" },
 					"401": { "$ref": "#/components/responses/Error" },
-					"409": { "$ref": "#/components/responses/Error" }
+					"409": { "$ref": "#/components/responses/Error" },
+					"429": { "$ref": "#/components/responses/RateLimited" }
 				}
 			},
 			"delete": {
@@ -2255,6 +2259,25 @@
 			}
 		},
 		"responses": {
+			"RateLimited": {
+				"description": "Authentication attempts exceeded the shared budget. Wait for Retry-After and explicitly retry.",
+				"headers": {
+					"Retry-After": {
+						"description": "Seconds until the budget may recover",
+						"schema": {
+							"type": "integer",
+							"minimum": 1
+						}
+					}
+				},
+				"content": {
+					"application/json": {
+						"schema": {
+							"$ref": "#/components/schemas/Error"
+						}
+					}
+				}
+			},
 			"Error": {
 				"description": "Stable browser error",
 				"content": {

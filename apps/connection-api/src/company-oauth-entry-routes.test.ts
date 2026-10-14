@@ -96,7 +96,6 @@ describe("company entrance HTTP boundary", () => {
 			"/connection/v1/consumer-instances/a/session",
 			"/api/v1/connection/pat-bindings",
 			"/api/v1/connection/pat-bindings/a/claim",
-			"/api/v1/connection/openapi.json",
 			"/api/v1/connection/browser-confirmation",
 			companyEntryCheckPath,
 			companyEntryPath,
@@ -107,6 +106,7 @@ describe("company entrance HTTP boundary", () => {
 			"/oauth/authorize",
 			"/oauth/login",
 			"/api/v1/connection/session",
+			"/api/v1/connection/openapi.json",
 			"/api/v1/connection/connections",
 			"/api/v1/connection/new-browser-api",
 			"/api/v1/connection/pat-bindings/a/claim/extra",
@@ -199,6 +199,12 @@ describe("company entrance HTTP boundary", () => {
 			`<form id="company-oauth-complete" method="post" action="${companyIdentityCallbackPath}">`,
 		);
 		expect(page).toContain('<button type="submit">完成公司登录</button>');
+		expect(page).toContain('<div id="company-oauth-recovery">');
+		expect(page).toContain(
+			"#company-oauth-recovery{visibility:hidden;animation:show-recovery 0s 2s forwards}",
+		);
+		expect(page).toContain("@keyframes show-recovery{to{visibility:visible}}");
+		expect(page.indexOf("<style>")).toBeLessThan(page.indexOf("<form"));
 		expect(readIdentity).not.toHaveBeenCalled();
 		const body = new URLSearchParams({
 			csrfToken: /name="csrfToken" value="([^"]+)"/.exec(page)?.[1] ?? "",

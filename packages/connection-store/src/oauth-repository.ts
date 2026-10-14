@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+	type AuthenticationBudget,
+	type AuthenticationBudgetReservation,
+	authenticationAbuseLimits,
 	type BrowserSessionIdentity,
 	type ConnectionOAuthRepository,
 	type OAuthAuthorizationRecord,
@@ -424,7 +427,78 @@ export class PostgresConnectionOAuthRepository
 		});
 	}
 
-	async registerClient(client: OAuthClientRegistration) {
+	async consumeAuthenticationBudget(budgets: readonly AuthenticationBudget[]) {
+		if (
+			budgets.length < 1 ||
+			budgets.length > 2 ||
+			budgets.some(
+				(b) =>
+					!/^[a-f0-9]{64}$/.test(b.keyHash) ||
+					!Number.isInteger(b.limit) ||
+					b.limit < 1 ||
+					b.limit > 1000 ||
+					!Number.isInteger(b.windowMs) ||
+					b.windowMs < 1 ||
+					b.windowMs > 300_000,
+			)
+		)
+			throw new Error("Invalid authentication budget");
+		const result = await this.sql.begin(async (sql) => {
+			await sql`DELETE FROM connection_authentication_budgets
+				WHERE window_ends_at <= now() AND key_hash IN
+				(SELECT key_hash FROM connection_authentication_budgets WHERE window_ends_at <= now() ORDER BY key_hash LIMIT 128 FOR UPDATE SKIP LOCKED)`;
+			const reservations: AuthenticationBudgetReservation[] = [];
+			for (const budget of budgets) {
+				const [row] = await sql<
+					{ attempts: number; window_ends_at: Date; retry_seconds: number }[]
+				>`
+					INSERT INTO connection_authentication_budgets (key_hash, attempts, window_ends_at)
+					VALUES (${budget.keyHash}, 1, date_trunc('milliseconds', now()) + ${budget.windowMs} * interval '1 millisecond')
+					ON CONFLICT (key_hash) DO UPDATE SET
+						attempts = CASE WHEN connection_authentication_budgets.window_ends_at <= now() THEN 1
+							ELSE connection_authentication_budgets.attempts + 1 END,
+						window_ends_at = CASE WHEN connection_authentication_budgets.window_ends_at <= now()
+							THEN date_trunc('milliseconds', now()) + ${budget.windowMs} * interval '1 millisecond'
+							ELSE connection_authentication_budgets.window_ends_at END
+					WHERE connection_authentication_budgets.window_ends_at <= now()
+						OR connection_authentication_budgets.attempts < ${budget.limit}
+					RETURNING attempts, window_ends_at, GREATEST(1, CEIL(EXTRACT(EPOCH FROM (window_ends_at - now()))))::integer AS retry_seconds`;
+				if (!row) {
+					const [denied] = await sql<{ retry_seconds: number }[]>`
+						SELECT GREATEST(1, CEIL(EXTRACT(EPOCH FROM (window_ends_at - now()))))::integer AS retry_seconds
+						FROM connection_authentication_budgets WHERE key_hash = ${budget.keyHash}`;
+					if (!denied) throw new Error("Missing authentication budget row");
+					return { retryAfter: denied.retry_seconds, reservations };
+				}
+				reservations.push({
+					keyHash: budget.keyHash,
+					windowEndsAt: row.window_ends_at,
+				});
+			}
+			return { retryAfter: 0, reservations };
+		});
+		if (result.retryAfter)
+			throw new OAuthProtocolError(
+				"temporarily_unavailable",
+				"Too many authentication requests. Try again later.",
+				429,
+				result.retryAfter,
+			);
+		return result.reservations;
+	}
+
+	async releaseAuthenticationBudget(
+		reservation: AuthenticationBudgetReservation,
+	) {
+		await this
+			.sql`UPDATE connection_authentication_budgets SET attempts = GREATEST(0, attempts - 1)
+            WHERE key_hash = ${reservation.keyHash} AND window_ends_at = ${reservation.windowEndsAt}`;
+	}
+
+	async registerClient(
+		client: OAuthClientRegistration,
+		options?: { dynamic: boolean },
+	) {
 		await this.sql.begin(async (sql) => {
 			const [consumer] = await sql<{ status: string }[]>`
 					INSERT INTO connection_consumers (id, display_name, status)
@@ -438,6 +512,47 @@ export class PostgresConnectionOAuthRepository
 					"OAuth client registration is disabled",
 				);
 			}
+			if (options?.dynamic) {
+				const stale = await sql<{ client_id: string; instance_id: string }[]>`
+					SELECT c.client_id, c.instance_id FROM connection_oauth_clients c
+					JOIN connection_consumer_instances i ON i.id = c.instance_id
+					WHERE c.consumer_id = ${client.consumerId} AND c.registration_kind = 'DYNAMIC'
+					AND c.created_at < now() - ${authenticationAbuseLimits.unusedRegistrationTtlMs} * interval '1 millisecond'
+					AND i.principal_id IS NULL
+					AND NOT EXISTS (SELECT 1 FROM connection_oauth_authorizations a WHERE a.client_id = c.client_id)
+					AND NOT EXISTS (SELECT 1 FROM connection_oauth_sessions s WHERE s.client_id = c.client_id)
+					ORDER BY c.created_at LIMIT 32 FOR UPDATE OF c, i`;
+				for (const candidate of stale) {
+					try {
+						await sql.savepoint(async (cleanup) => {
+							await cleanup`DELETE FROM connection_oauth_clients WHERE client_id = ${candidate.client_id}`;
+							await cleanup`DELETE FROM connection_consumer_instances WHERE id = ${candidate.instance_id} AND principal_id IS NULL`;
+						});
+					} catch (error) {
+						// An unexpected durable reference protects the whole candidate, including its client row.
+						if (
+							!(error instanceof Error) ||
+							!("code" in error) ||
+							error.code !== "23503"
+						)
+							throw error;
+					}
+				}
+				const [pending] = await sql<{ count: number }[]>`
+					SELECT count(*)::integer AS count FROM connection_oauth_clients c
+					WHERE c.consumer_id = ${client.consumerId} AND c.registration_kind = 'DYNAMIC'
+					AND NOT EXISTS (SELECT 1 FROM connection_oauth_sessions s WHERE s.client_id = c.client_id)`;
+				if (
+					!pending ||
+					pending.count >= authenticationAbuseLimits.pendingRegistrations
+				)
+					throw new OAuthProtocolError(
+						"temporarily_unavailable",
+						"Dynamic registration quota is full. Try again later.",
+						429,
+						60,
+					);
+			}
 			await sql`
 					INSERT INTO connection_consumer_instances (
 						id, consumer_id, kind, auth_subject, status
@@ -449,11 +564,11 @@ export class PostgresConnectionOAuthRepository
 				`;
 			await sql`
 					INSERT INTO connection_oauth_clients (
-						client_id, client_name, consumer_id, instance_id, redirect_uris, status
+						client_id, client_name, consumer_id, instance_id, redirect_uris, status, registration_kind
 					)
 					VALUES (
 						${client.clientId}, ${client.clientName}, ${client.consumerId},
-						${client.instanceId}, ${sql.json(client.redirectUris)}, 'ACTIVE'
+						${client.instanceId}, ${sql.json(client.redirectUris)}, 'ACTIVE', ${options?.dynamic ? "DYNAMIC" : "TRUSTED"}
 					)
 				`;
 		});

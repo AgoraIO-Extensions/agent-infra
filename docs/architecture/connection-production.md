@@ -56,7 +56,7 @@ Secret 值不进入源码、Helm values、命令参数或聊天。此 pair 与 `
 Web Nginx ConfigMap 中已合并的 auth_request 配置并重建 Web。不要先更新 Nginx 指向旧 API
 不存在的 check。配置有效入口 client 后，无入口 Cookie 的 check 应为 401；交互页面进入
 公司 authorize，callback GET 返回同源中转表单，由 CSP hash 允许的固定脚本自动提交一次 POST；
-脚本不可用时点击“完成公司登录”。服务端验证 POST 后交换并建立 30 分钟入口证明，
+正常回跳不显示手动按钮；未自动跳转时等待两秒，再使用出现的“完成公司登录”按钮。服务端验证 POST 后交换并建立 30 分钟入口证明，
 随后仍按 LDAP 登录或使用既有有效会话。两次账号可以不同，不改变任何连接或授权归属。
 
 check 子请求及过期恢复不转发请求体。入口失效时 API 为 JSON 401；浏览器通过明确恢复链接
@@ -616,3 +616,12 @@ Security/SRE 应核实 Kubernetes API 的公网访问限制、RBAC 与审计记�
 匹配新域名；在 RDS 的 SSL 配置中选择新地址更新证书，并同步数据库 Secret 和私有发布目标
 文件。证书更新会重启 RDS 实例，须纳入已批准的维护窗口。API 重建后从实际 Pod 验证
 数据库连接、证书 hostname 和 TLS；不得用 `sslmode=require` 或关闭证书校验规避失败。
+
+## 安全报告后续治理
+
+完整管理 OpenAPI 需要 Connection 浏览器会话；机器 metadata/DCR/token/revoke 不要求公司入口
+Cookie。登录和动态注册的阈值、429 恢复及保护性清理见
+[HLD 防滥用](HLD-connection-M1.md#登录与动态注册防滥用)。新增共享预算及注册来源字段必须先
+使用 reviewed migrations 路径发布，成功账本回执后才能更新镜像；不启用单进程或环境开关回退。
+已有客户端按 TRUSTED 保留，不能直接批量删除旧注册。生产验证不得通过暴力尝试真实 LDAP
+账号或撤销真实用户令牌来制造证据；登录后越权复测与安全 Jira 关闭单独记录。

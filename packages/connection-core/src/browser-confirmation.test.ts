@@ -74,7 +74,8 @@ describe("browser confirmation trust boundaries", () => {
 			readIdentity: async () => ({}),
 			commands: { execute: async (_input, command) => command() },
 		});
-		const { state } = entry.start();
+		const recovery = `/oauth/authorization-requests/${"A".repeat(43)}`;
+		const { state } = entry.start(recovery);
 		const csrfToken = entry.createCallbackConfirmation(state, state, "code-a");
 		expect(() =>
 			entry.verifyCallbackConfirmation({
@@ -100,6 +101,20 @@ describe("browser confirmation trust boundaries", () => {
 					...changed,
 				}),
 			).toThrow();
+		}
+		vi.spyOn(Date, "now").mockReturnValue(Date.now() + 300_001);
+		try {
+			expect(entry.recoveryTarget(state)).toBe(recovery);
+			expect(() =>
+				entry.verifyCallbackConfirmation({
+					state,
+					cookie: state,
+					code: "code-a",
+					csrfToken,
+				}),
+			).toThrow();
+		} finally {
+			vi.restoreAllMocks();
 		}
 	});
 	it("recovers only original same-origin GET contexts, never credentials or arbitrary redirects", () => {
