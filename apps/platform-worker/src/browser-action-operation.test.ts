@@ -491,7 +491,7 @@ describe("Browser action operation adapter", () => {
 							actionId: string;
 							idempotencyKey?: string;
 							executionBinding: BrowserActionExecutionBindingV1;
-						}) => ({
+						}): ActionRecord => ({
 							actionId: request.actionId,
 							operationRef:
 								kind === "mismatched"
