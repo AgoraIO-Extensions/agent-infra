@@ -78,6 +78,27 @@ function boundedResourceSnapshotDuration(
 	);
 }
 
+function observeOptionalPoolResources(
+	telemetry: Pick<ReturnType<typeof startObservability>, "observeResource">,
+	snapshot: {
+		postgresActivityActive?: unknown;
+		postgresActivityIdle?: unknown;
+		postgresActivityWaiting?: unknown;
+	},
+) {
+	const resources = [
+		["postgres_activity_active", snapshot.postgresActivityActive],
+		["postgres_activity_idle", snapshot.postgresActivityIdle],
+		["postgres_activity_waiting", snapshot.postgresActivityWaiting],
+	] as const;
+	for (const [kind, value] of resources) {
+		if (value === undefined) continue;
+		if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+			continue;
+		telemetry.observeResource({ kind, value });
+	}
+}
+
 /** Bounded stage timings between a claim and the Runtime submit (#1561);
  * only identifiers and durations are recorded. */
 function timedAuthorization(
@@ -329,6 +350,9 @@ export function createPlatformConversationWorkerV2(
 					kind: "outbox_pending",
 					value: snapshot.outboxPending,
 				});
+				const observeResource = telemetry.observeResource;
+				if (observeResource)
+					observeOptionalPoolResources({ observeResource }, snapshot);
 			})
 			.catch(() => {
 				if (!stopped && !signal.aborted) {

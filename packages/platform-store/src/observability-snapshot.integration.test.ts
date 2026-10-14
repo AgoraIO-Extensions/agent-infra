@@ -179,6 +179,28 @@ it("counts the current-generation unreserved Turn backlog once per Execution", a
 	).resolves.toMatchObject({ taskWaiting: 0, outboxPending: 4 });
 });
 
+it("samples local pg_stat_activity activity gauges without selecting activity text", async () => {
+	if (!database) throw new Error("PostgreSQL fixture is unavailable");
+	const idlePool = postgres(database.databaseUrl, { max: 1 });
+	let reserved: postgres.ReservedSql | undefined;
+	try {
+		reserved = await idlePool.reserve();
+		const snapshot = await readPlatformQueueResourceSnapshot(
+			client,
+			AbortSignal.timeout(5000),
+		);
+		expect(snapshot.postgresActivityActive).toEqual(expect.any(Number));
+		expect(snapshot.postgresActivityIdle).toEqual(expect.any(Number));
+		expect(snapshot.postgresActivityWaiting).toEqual(expect.any(Number));
+		expect(snapshot.postgresActivityActive).toBeGreaterThanOrEqual(0);
+		expect(snapshot.postgresActivityIdle).toBeGreaterThanOrEqual(1);
+		expect(snapshot.postgresActivityWaiting).toBeGreaterThanOrEqual(0);
+	} finally {
+		reserved?.release();
+		await idlePool.end();
+	}
+});
+
 it("bounds a saturated max:1 pool and cancels a running count query", async () => {
 	if (!database) throw new Error("PostgreSQL fixture is unavailable");
 	const observedQueries: string[] = [];

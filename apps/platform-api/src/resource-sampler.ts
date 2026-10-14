@@ -15,6 +15,27 @@ function boundedDurationMs(value: unknown, startedAt: number): number {
 	);
 }
 
+function observeOptionalPoolResources(
+	observability: ReturnType<typeof startObservability>,
+	snapshot: {
+		postgresActivityActive?: unknown;
+		postgresActivityIdle?: unknown;
+		postgresActivityWaiting?: unknown;
+	},
+) {
+	const resources = [
+		["postgres_activity_active", snapshot.postgresActivityActive],
+		["postgres_activity_idle", snapshot.postgresActivityIdle],
+		["postgres_activity_waiting", snapshot.postgresActivityWaiting],
+	] as const;
+	for (const [kind, value] of resources) {
+		if (value === undefined) continue;
+		if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+			continue;
+		observability.observeResource({ kind, value });
+	}
+}
+
 /** Process-owned sampling of the existing query; no business state is computed here. */
 export function startPlatformResourceSampling(
 	read: PlatformApiAssembly["readResourceSnapshot"],
@@ -68,6 +89,7 @@ export function startPlatformResourceSampling(
 				kind: "outbox_pending",
 				value: snapshot.outboxPending,
 			});
+			observeOptionalPoolResources(observability, snapshot);
 		} catch {
 			if (!stopped && !snapshotRead) {
 				try {
