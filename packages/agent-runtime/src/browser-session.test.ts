@@ -152,11 +152,30 @@ it("composes one Session facade over Context lifecycle and observe controller", 
 		kind: "click",
 		page,
 		target,
+		actionId: "test-action",
 		operationRef: "test-operation",
 		attemptRef: "test-attempt",
 		idempotencyKey: "test-click",
+		executionBinding: {
+			...binding,
+			executionId: "execution-1",
+			capabilityVersion: 1,
+			pageRevision: page.pageRevision,
+		},
 	});
 	expect(action).toMatchObject({ status: "completed" });
+	expect(
+		session.readAction({
+			actionId: "test-action",
+			idempotencyKey: "test-click",
+			executionBinding: {
+				...binding,
+				executionId: "execution-1",
+				capabilityVersion: 1,
+				pageRevision: page.pageRevision,
+			},
+		}),
+	).toMatchObject({ status: "completed", actionId: "test-action" });
 	await session.close();
 	expect(session.snapshot().status).toBe("closed");
 	const restarted = await session.start();

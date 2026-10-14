@@ -7,6 +7,7 @@ import {
 	createChromiumBrowserContextManagerV1,
 } from "./browser-context.js";
 import type {
+	BrowserActionExecutionBindingV1,
 	BrowserActionRecordV1,
 	BrowserActionRequestV1,
 	BrowserControlledFixtureV1,
@@ -27,6 +28,11 @@ export type BrowserSessionControllerV1 = Readonly<{
 		request: BrowserActionRequestV1,
 		signal?: AbortSignal,
 	): Promise<BrowserActionRecordV1>;
+	readAction(input: {
+		readonly actionId: string;
+		readonly idempotencyKey?: string;
+		readonly executionBinding: BrowserActionExecutionBindingV1;
+	}): BrowserActionRecordV1 | null;
 	cancelAction(actionId: string): boolean;
 	close(): Promise<void>;
 	snapshot(): BrowserContextManagerSnapshotV1;
@@ -69,6 +75,13 @@ export function createBrowserSessionControllerV1(input: {
 		pendingCancellationIds.add(actionId);
 		return true;
 	}
+	function readAction(input_: {
+		readonly actionId: string;
+		readonly idempotencyKey?: string;
+		readonly executionBinding: BrowserActionExecutionBindingV1;
+	}): BrowserActionRecordV1 | null {
+		return observe?.readAction(input_) ?? null;
+	}
 
 	return {
 		start,
@@ -108,6 +121,7 @@ export function createBrowserSessionControllerV1(input: {
 				signal?.removeEventListener("abort", cancel);
 			}
 		},
+		readAction,
 		cancelAction,
 		async close() {
 			await input.manager.close(input.binding);
