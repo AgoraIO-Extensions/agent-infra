@@ -136,6 +136,7 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 			if (bindings.length > 0 && !options.writeAppliedReceipt)
 				throw new Error("Skill Applied receipt writer unavailable");
 			const appliedBindings: SkillHubSyncBindingV1[] = [];
+			const appliedReceipts: SkillHubAppliedReceiptV1[] = [];
 			for (const binding of bindings) {
 				const appliedReceipt: SkillHubAppliedReceiptV1 = {
 					schemaVersion: 1,
@@ -164,6 +165,7 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 					failureReason: null,
 					appliedReceipt,
 				});
+				appliedReceipts.push(appliedReceipt);
 			}
 			const validated = validateWorkloadSkillMaterializationV1(input, {
 				generationId: result.generationId,
@@ -171,11 +173,8 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 				appliedBindings,
 			});
 			if (options.writeAppliedReceipt) {
-				for (const binding of appliedBindings) {
-					if (!binding.appliedReceipt)
-						throw new Error("Skill Applied receipt unavailable");
-					await options.writeAppliedReceipt(binding.appliedReceipt);
-				}
+				for (const appliedReceipt of appliedReceipts)
+					await options.writeAppliedReceipt(appliedReceipt);
 			}
 			return validated;
 		},
