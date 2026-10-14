@@ -40,6 +40,7 @@ import {
 } from "./deployment-configuration.js";
 import {
 	formatMultiServiceManifestSummary,
+	MULTI_SERVICE_MANIFEST_MAX_BYTES,
 	type MultiServiceManifestSummary,
 	parseMultiServiceManifest,
 } from "./multi-service-manifest.js";
@@ -1149,7 +1150,17 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							type="file"
 							onChange={(event) => {
 								const file = event.target.files?.[0];
-								if (file) void file.text().then(updateManifest);
+								if (!file) return;
+								if (file.size > MULTI_SERVICE_MANIFEST_MAX_BYTES) {
+									setManifest("");
+									setManifestSummary(null);
+									setFieldErrors((current) => ({
+										...current,
+										manifest: `多服务 YAML 不能超过 ${MULTI_SERVICE_MANIFEST_MAX_BYTES} bytes。`,
+									}));
+									return;
+								}
+								void file.text().then(updateManifest);
 							}}
 						/>
 						<p className="text-muted-foreground text-sm">
