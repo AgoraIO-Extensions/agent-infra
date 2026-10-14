@@ -1029,6 +1029,15 @@ export type GetConnectionBrowserOpenApiData = {
     url: '/api/v1/connection/openapi.json';
 };
 
+export type GetConnectionBrowserOpenApiErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+};
+
+export type GetConnectionBrowserOpenApiError = GetConnectionBrowserOpenApiErrors[keyof GetConnectionBrowserOpenApiErrors];
+
 export type GetConnectionBrowserOpenApiResponses = {
     /**
      * OpenAPI document
@@ -1112,6 +1121,10 @@ export type LoginErrors = {
      * Stable browser error
      */
     409: Error;
+    /**
+     * Authentication attempts exceeded the shared budget. Wait for Retry-After and explicitly retry.
+     */
+    429: Error;
 };
 
 export type LoginError = LoginErrors[keyof LoginErrors];

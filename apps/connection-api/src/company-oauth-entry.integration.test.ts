@@ -160,6 +160,13 @@ integrationTest(
 					)
 				).status,
 			).toBe(401);
+			expect(
+				(
+					await app.request("/api/v1/connection/openapi.json", {
+						headers: { cookie: entryCookie },
+					})
+				).status,
+			).toBe(401);
 			const authenticated = await login(entryCookie);
 			expect(authenticated.status).toBe(200);
 			expect(await authenticated.json()).toMatchObject({
@@ -178,6 +185,20 @@ integrationTest(
 					})
 				).status,
 			).toBe(401);
+			expect(
+				(
+					await app.request("/api/v1/connection/openapi.json", {
+						headers: { cookie: ldapCookie },
+					})
+				).status,
+			).toBe(401);
+			expect(
+				(
+					await app.request("/api/v1/connection/openapi.json", {
+						headers: { cookie: `${entryCookie}; ${ldapCookie}` },
+					})
+				).status,
+			).toBe(200);
 			const issued = await app.request(`${issuer}api/v1/connection/tokens`, {
 				method: "POST",
 				body: JSON.stringify({ name: "entry-boundary-test" }),

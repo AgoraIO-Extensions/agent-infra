@@ -35,7 +35,6 @@ export function companyEntryRequired(path: string) {
 		return true;
 	if (!path.startsWith("/api/v1/connection/")) return false;
 	if (
-		path === "/api/v1/connection/openapi.json" ||
 		path === companyIdentityCallbackPath ||
 		path === companyEntryPath ||
 		path === companyEntryCheckPath

@@ -327,7 +327,7 @@ export function browserApiError(
 		code: string;
 		messageKey: string;
 		retryable?: boolean;
-		status: 400 | 401 | 403 | 404 | 409 | 500 | 503;
+		status: 400 | 401 | 403 | 404 | 409 | 429 | 500 | 503;
 	},
 ) {
 	context.header("cache-control", "no-store");
@@ -550,11 +550,20 @@ export function createConnectionOAuthApp(
 	};
 
 	app.onError((error, context) => {
+		if (error instanceof OAuthProtocolError && error.status === 429)
+			context.header("retry-after", String(error.retryAfterSeconds ?? 60));
 		if (context.req.path.startsWith("/api/v1/connection/")) {
 			if (error instanceof ConnectionError) {
 				return browserConnectionError(context, error);
 			}
 			if (error instanceof OAuthProtocolError) {
+				if (error.status === 429)
+					return browserApiError(context, {
+						code: "RATE_LIMITED",
+						messageKey: "connection.error.authentication_rate_limited",
+						retryable: true,
+						status: 429,
+					});
 				if (error.status === 503)
 					return browserConnectionError(
 						context,
@@ -599,11 +608,14 @@ export function createConnectionOAuthApp(
 								? "revoke"
 								: "oauth",
 					code: error.error,
-					status: error.status === 401 ? 401 : 400,
+					status: error.status === 429 ? 429 : error.status === 401 ? 401 : 400,
 				}),
 			);
 			context.header("cache-control", "no-store");
-			return context.json(oauthError(error), error.status === 401 ? 401 : 400);
+			return context.json(
+				oauthError(error),
+				error.status === 429 ? 429 : error.status === 401 ? 401 : 400,
+			);
 		}
 		console.error(
 			JSON.stringify({
@@ -679,7 +691,13 @@ export function createConnectionOAuthApp(
 		});
 	}
 
-	app.get("/api/v1/connection/openapi.json", (context) => {
+	app.get("/api/v1/connection/openapi.json", async (context) => {
+		if (!(await currentBrowserAccount(context)))
+			return browserApiError(context, {
+				code: "AUTHENTICATION_REQUIRED",
+				messageKey: "connection.error.authentication_required",
+				status: 401,
+			});
 		context.header("cache-control", "no-store");
 		return context.json(connectionBrowserOpenApi);
 	});
@@ -3745,6 +3763,20 @@ export function createConnectionOAuthApp(
 			redirect.searchParams.set("state", approved.state);
 			return context.redirect(redirect.toString(), 302);
 		} catch (error) {
+			if (error instanceof OAuthProtocolError && error.status === 429) {
+				secureHtmlHeaders(context, { allowLoopbackFormRedirect: true });
+				context.header("retry-after", String(error.retryAfterSeconds ?? 60));
+				return context.html(
+					loginPage({
+						clientName: "当前客户端",
+						requestId,
+						error:
+							"登录尝试过于频繁，请稍后重试；授权过期时请返回客户端重新发起",
+					}),
+					429,
+				);
+			}
+
 			if (
 				error instanceof OAuthProtocolError &&
 				error.error === "invalid_request"

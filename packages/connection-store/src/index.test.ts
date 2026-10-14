@@ -85,6 +85,7 @@ describe("Connection store migrations", () => {
 			"0046_static_spaces_full_admission",
 			"0047_optional_pat_binding_hint",
 			"0048_definite_dispatch_rejection",
+			"0049_authentication_abuse_budgets",
 		]);
 		for (const migration of journal.entries) {
 			await access(resolve(directory, `${migration.tag}.sql`));

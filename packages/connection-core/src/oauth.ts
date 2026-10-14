@@ -5,9 +5,11 @@ import {
 	createHmac,
 	hkdfSync,
 	randomBytes,
+	randomInt,
 	randomUUID,
 	timingSafeEqual,
 } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 export type DirectoryIdentity = {
 	displayName: string;
@@ -147,7 +149,30 @@ export interface ConnectionPatBindingRepository {
 	disablePatBindingConsumer(consumerId: string): Promise<void>;
 }
 
+export type AuthenticationBudget = {
+	keyHash: string;
+	limit: number;
+	windowMs: number;
+};
+export type AuthenticationBudgetReservation = {
+	keyHash: string;
+	windowEndsAt: Date;
+};
+export const authenticationAbuseLimits = {
+	loginGlobalPerMinute: 120,
+	loginFailuresPerFiveMinutes: 10,
+	registrationsPerMinute: 30,
+	pendingRegistrations: 1000,
+	unusedRegistrationTtlMs: 60 * 60_000,
+} as const;
+
 export interface ConnectionOAuthRepository {
+	consumeAuthenticationBudget(
+		budgets: readonly AuthenticationBudget[],
+	): Promise<AuthenticationBudgetReservation[]>;
+	releaseAuthenticationBudget(
+		reservation: AuthenticationBudgetReservation,
+	): Promise<void>;
 	storeEmployeeCandidates?(input: {
 		requestedByPrincipalId: string;
 		candidates: readonly {
@@ -236,7 +261,10 @@ export interface ConnectionOAuthRepository {
 		resource: string;
 	}): Promise<OAuthTokenIdentity>;
 	requirePendingAuthorization(requestId: string): Promise<void>;
-	registerClient(client: OAuthClientRegistration): Promise<void>;
+	registerClient(
+		client: OAuthClientRegistration,
+		options?: { dynamic: boolean },
+	): Promise<void>;
 	resolveBrowserSession(sessionHash: string): Promise<BrowserSessionIdentity>;
 	resolveAccessToken(accessTokenHash: string): Promise<OAuthTokenIdentity>;
 	revokeBrowserSession(sessionHash: string): Promise<void>;
@@ -273,9 +301,11 @@ export class OAuthProtocolError extends Error {
 			| "invalid_grant"
 			| "invalid_request"
 			| "invalid_token"
-			| "unsupported_grant_type",
+			| "unsupported_grant_type"
+			| "temporarily_unavailable",
 		message: string,
 		readonly status = 400,
+		readonly retryAfterSeconds?: number,
 	) {
 		super(message);
 	}
@@ -539,7 +569,16 @@ export class ConnectionOAuthService {
 			instanceId: `instance-${randomUUID()}`,
 			redirectUris: [...new Set(input.redirectUris.map(assertRedirectUri))],
 		};
-		await this.options.repository.registerClient(client);
+		await this.options.repository.consumeAuthenticationBudget([
+			{
+				keyHash: this.authenticationBudgetKey(
+					`registration:${this.options.consumer.id}`,
+				),
+				limit: authenticationAbuseLimits.registrationsPerMinute,
+				windowMs: 60_000,
+			},
+		]);
+		await this.options.repository.registerClient(client, { dynamic: true });
 		return client;
 	}
 
@@ -1391,42 +1430,67 @@ export class ConnectionOAuthService {
 		});
 	}
 
+	private authenticationBudgetKey(scope: string) {
+		return createHmac("sha256", this.options.identityKey)
+			.update(
+				`connection-auth-budget-v1\0${this.options.identityRealm}\0${scope}`,
+			)
+			.digest("hex");
+	}
+
 	private async authenticateDirectory(usernameValue: string, password: string) {
 		const username = usernameValue.trim();
 		if (
-			username.length < 1 ||
+			!username ||
 			username.length > 256 ||
-			password.length < 1 ||
+			!password ||
 			password.length > 1024
-		) {
+		)
 			throw new OAuthProtocolError(
 				"access_denied",
 				"Authentication failed",
 				401,
 			);
-		}
+		const reservations =
+			await this.options.repository.consumeAuthenticationBudget([
+				{
+					keyHash: this.authenticationBudgetKey("login-global"),
+					limit: authenticationAbuseLimits.loginGlobalPerMinute,
+					windowMs: 60_000,
+				},
+				{
+					keyHash: this.authenticationBudgetKey(
+						`login-account:${username.toLowerCase()}`,
+					),
+					limit: authenticationAbuseLimits.loginFailuresPerFiveMinutes,
+					windowMs: 300_000,
+				},
+			]);
+		const startedAt = Date.now();
 		let identity: DirectoryIdentity;
 		try {
 			identity = await this.options.directory.authenticate(username, password);
+			if (
+				!identity.issuer ||
+				!identity.subject ||
+				!identity.displayName ||
+				(identity.email !== null && !identity.email)
+			)
+				throw new Error("Invalid directory identity");
 		} catch {
+			await delay(Math.max(0, 300 - (Date.now() - startedAt)) + randomInt(101));
 			throw new OAuthProtocolError(
 				"access_denied",
 				"Authentication failed",
 				401,
 			);
 		}
-		if (
-			!identity.issuer ||
-			!identity.subject ||
-			!identity.displayName ||
-			(identity.email !== null && !identity.email)
-		) {
-			throw new OAuthProtocolError(
-				"access_denied",
-				"Authentication failed",
-				401,
-			);
-		}
+		const accountReservation = reservations[1];
+		if (!accountReservation)
+			throw new Error("Missing authentication budget reservation");
+		await this.options.repository.releaseAuthenticationBudget(
+			accountReservation,
+		);
 		return identity;
 	}
 

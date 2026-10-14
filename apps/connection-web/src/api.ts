@@ -231,6 +231,8 @@ function parseClientInput<T>(
 const errorMessages: Record<string, string> = {
 	"connection.error.company_oauth_required":
 		"公司 OAuth 入口会话已过期，请重新完成公司登录",
+	"connection.error.authentication_rate_limited":
+		"登录尝试过于频繁，请稍后重试",
 	"connection.error.authentication_failed": "账号或密码错误",
 	"connection.error.authentication_required": "请重新登录 Connection",
 	"connection.error.idempotency_conflict":

@@ -616,3 +616,12 @@ Security/SRE 应核实 Kubernetes API 的公网访问限制、RBAC 与审计记�
 匹配新域名；在 RDS 的 SSL 配置中选择新地址更新证书，并同步数据库 Secret 和私有发布目标
 文件。证书更新会重启 RDS 实例，须纳入已批准的维护窗口。API 重建后从实际 Pod 验证
 数据库连接、证书 hostname 和 TLS；不得用 `sslmode=require` 或关闭证书校验规避失败。
+
+## 安全报告后续治理
+
+完整管理 OpenAPI 需要 Connection 浏览器会话；机器 metadata/DCR/token/revoke 不要求公司入口
+Cookie。登录和动态注册的阈值、429 恢复及保护性清理见
+[HLD 防滥用](HLD-connection-M1.md#登录与动态注册防滥用)。新增共享预算及注册来源字段必须先
+使用 reviewed migrations 路径发布，成功账本回执后才能更新镜像；不启用单进程或环境开关回退。
+已有客户端按 TRUSTED 保留，不能直接批量删除旧注册。生产验证不得通过暴力尝试真实 LDAP
+账号或撤销真实用户令牌来制造证据；登录后越权复测与安全 Jira 关闭单独记录。
