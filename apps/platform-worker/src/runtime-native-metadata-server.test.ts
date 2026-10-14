@@ -57,6 +57,34 @@ describe("Platform Worker native metadata gateway server", () => {
 		expect(server.listening).toBe(false);
 	});
 
+	it("shares one listener for native metadata and model-directory gateways", async () => {
+		const worker = startPlatformWorker({
+			nativeMetadataGateway: {
+				port: 0,
+				app: { fetch: async () => new Response("native") },
+			},
+			modelDirectoryGateway: {
+				port: 0,
+				app: { fetch: async () => new Response("model") },
+			},
+		});
+		const nativeServer = worker.nativeMetadataGatewayServer;
+		const modelServer = worker.modelDirectoryGatewayServer;
+		if (!nativeServer || !modelServer)
+			throw new Error("Missing gateway server");
+		expect(modelServer).toBe(nativeServer);
+		const port = await listeningPort(nativeServer);
+		const nativeResponse = await fetch(
+			`http://127.0.0.1:${port}/internal/platform-worker/v1/native-metadata`,
+		);
+		expect(await nativeResponse.text()).toBe("native");
+		const modelResponse = await fetch(
+			`http://127.0.0.1:${port}/internal/worker/v1/model-directory`,
+		);
+		expect(await modelResponse.text()).toBe("model");
+		await worker.stop();
+	});
+
 	it("rejects invalid deployment input before creating a server", () => {
 		expect(() =>
 			startPlatformWorkerNativeMetadataGatewayServerV1({
@@ -64,5 +92,17 @@ describe("Platform Worker native metadata gateway server", () => {
 				app: { fetch: async () => new Response("ok") },
 			}),
 		).toThrow("gateway port is invalid");
+		expect(() =>
+			startPlatformWorker({
+				nativeMetadataGateway: {
+					port: 3_004,
+					app: { fetch: async () => new Response("native") },
+				},
+				modelDirectoryGateway: {
+					port: 3_005,
+					app: { fetch: async () => new Response("model") },
+				},
+			}),
+		).toThrow("PORT_MISMATCH");
 	});
 });
