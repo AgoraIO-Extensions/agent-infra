@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -129,6 +129,9 @@ describe("Browser handoff and confirmation panel", () => {
 		expect(
 			screen.getByRole("button", { name: "确认执行" }).parentElement?.className,
 		).toContain("sm:flex-row");
+		expect(
+			screen.getByRole("button", { name: "确认执行" }).parentElement?.className,
+		).toContain("flex-col");
 		expect(screen.queryByText(binding.subjectId)).toBeNull();
 		screen.getByRole("button", { name: "确认执行" }).click();
 		screen.getByRole("button", { name: "拒绝" }).click();
@@ -145,6 +148,25 @@ describe("Browser handoff and confirmation panel", () => {
 			id: "confirmation-1",
 			binding,
 		});
+	});
+
+	it("removes confirmation actions after the open request expires", () => {
+		const onConfirmSideEffect = vi.fn();
+		render(
+			<BrowserHandoffPanel
+				browserAvailable
+				confirmation={confirmation}
+				currentBinding={binding}
+				onConfirmSideEffect={onConfirmSideEffect}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "确认执行" })).toBeTruthy();
+		act(() => {
+			vi.advanceTimersByTime(2 * 60 * 60 * 1000 + 1);
+		});
+		expect(screen.getByRole("alert").textContent).toContain("不会执行此副作用");
+		expect(screen.queryByRole("button", { name: "确认执行" })).toBeNull();
+		expect(onConfirmSideEffect).not.toHaveBeenCalled();
 	});
 
 	it("fails closed for unsafe origins, invalid bindings and unknown outcomes", () => {
@@ -193,6 +215,25 @@ describe("Browser handoff and confirmation panel", () => {
 		);
 		expect(screen.getByRole("alert").textContent).toContain("已过期");
 		expect(screen.queryByRole("button")).toBeNull();
+		expect(onTakeOver).not.toHaveBeenCalled();
+	});
+
+	it("removes takeover after the open handoff expires", () => {
+		const onTakeOver = vi.fn();
+		render(
+			<BrowserHandoffPanel
+				browserAvailable
+				currentBinding={binding}
+				handoff={requested}
+				onTakeOver={onTakeOver}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "接管浏览器" })).toBeTruthy();
+		act(() => {
+			vi.advanceTimersByTime(2 * 60 * 60 * 1000 + 1);
+		});
+		expect(screen.getByRole("alert").textContent).toContain("已过期");
+		expect(screen.queryByRole("button", { name: "接管浏览器" })).toBeNull();
 		expect(onTakeOver).not.toHaveBeenCalled();
 	});
 
