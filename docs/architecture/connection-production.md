@@ -56,7 +56,7 @@ Secret 值不进入源码、Helm values、命令参数或聊天。此 pair 与 `
 Web Nginx ConfigMap 中已合并的 auth_request 配置并重建 Web。不要先更新 Nginx 指向旧 API
 不存在的 check。配置有效入口 client 后，无入口 Cookie 的 check 应为 401；交互页面进入
 公司 authorize，callback GET 返回同源中转表单，由 CSP hash 允许的固定脚本自动提交一次 POST；
-脚本不可用时点击“完成公司登录”。服务端验证 POST 后交换并建立 30 分钟入口证明，
+正常回跳不显示手动按钮；未自动跳转时等待两秒，再使用出现的“完成公司登录”按钮。服务端验证 POST 后交换并建立 30 分钟入口证明，
 随后仍按 LDAP 登录或使用既有有效会话。两次账号可以不同，不改变任何连接或授权归属。
 
 check 子请求及过期恢复不转发请求体。入口失效时 API 为 JSON 401；浏览器通过明确恢复链接

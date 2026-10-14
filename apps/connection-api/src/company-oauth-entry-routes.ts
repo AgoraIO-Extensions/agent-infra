@@ -140,7 +140,7 @@ export function createCompanyOAuthEntryApp(
 			entry.validateCallback(state, getCookie(context, stateCookie), code);
 			secureHtmlHeaders(context, { inlineScriptHash: completeScriptHash });
 			return context.html(
-				`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>完成公司登录</title><p>正在完成公司登录，即将继续。若未自动跳转，请点击下方按钮。</p><form id="company-oauth-complete" method="post" action="${companyIdentityCallbackPath}"><input type="hidden" name="flow" value="entry"><input type="hidden" name="state" value="${html(state)}"><input type="hidden" name="code" value="${html(code)}"><button type="submit">完成公司登录</button></form><script>${completeScript}</script></html>`,
+				`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>正在跳转</title><style>#company-oauth-recovery{visibility:hidden;animation:show-recovery 0s 2s forwards}@keyframes show-recovery{to{visibility:visible}}</style><p role="status">正在跳转…</p><form id="company-oauth-complete" method="post" action="${companyIdentityCallbackPath}"><input type="hidden" name="flow" value="entry"><input type="hidden" name="state" value="${html(state)}"><input type="hidden" name="code" value="${html(code)}"><div id="company-oauth-recovery"><p>若未自动跳转，请点击下方按钮。</p><button type="submit">完成公司登录</button></div></form><script>${completeScript}</script></html>`,
 			);
 		} catch {
 			return context.html(

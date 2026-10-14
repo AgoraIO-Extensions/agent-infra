@@ -175,6 +175,12 @@ describe("company entrance HTTP boundary", () => {
 			`<form id="company-oauth-complete" method="post" action="${companyIdentityCallbackPath}">`,
 		);
 		expect(page).toContain('<button type="submit">完成公司登录</button>');
+		expect(page).toContain('<div id="company-oauth-recovery">');
+		expect(page).toContain(
+			"#company-oauth-recovery{visibility:hidden;animation:show-recovery 0s 2s forwards}",
+		);
+		expect(page).toContain("@keyframes show-recovery{to{visibility:visible}}");
+		expect(page.indexOf("<style>")).toBeLessThan(page.indexOf("<form"));
 		expect(readIdentity).not.toHaveBeenCalled();
 		const body = new URLSearchParams({
 			flow: "entry",

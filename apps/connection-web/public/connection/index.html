@@ -46,7 +46,7 @@
           <div>
             <h2 id="login-title">登录 Connection</h2>
             <p>继续执行，随后在浏览器中完成公司账号登录：</p>
-            <p>启用入口保护时，先完成公司 OAuth 登录，回跳后自动完成入口校验（未自动跳转时点击“完成公司登录”），再使用 LDAP 登录 Connection。账号归属和权限以 LDAP 账号为准，已有连接与授权保留；客户端不需要 公司入口 Cookie 或额外 apiKey。</p>
+            <p>启用入口保护时，先完成公司 OAuth 登录，回跳后自动完成入口校验（未自动跳转时等待两秒，使用出现的“完成公司登录”按钮），再使用 LDAP 登录 Connection。账号归属和权限以 LDAP 账号为准，已有连接与授权保留；客户端不需要 公司入口 Cookie 或额外 apiKey。</p>
           </div>
         </div>
         <pre><code>codex mcp login connection --scopes mcp --oauth-client-registration dcr</code></pre>
