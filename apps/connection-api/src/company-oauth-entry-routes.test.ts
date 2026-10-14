@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { runInNewContext } from "node:vm";
 import {
 	CompanyOAuthEntry,
 	companyEntryCheckPath,
@@ -123,12 +125,15 @@ describe("company entrance HTTP boundary", () => {
 		);
 	});
 
-	it("requires an explicit same-origin callback POST, issues only entrance proof and blocks replay", async () => {
+	it("automatically submits a hash-authorized same-origin POST, issues only entrance proof and blocks replay", async () => {
 		const { app, readIdentity, ldapLogin } = setup();
 		const start = await app.request(
 			`${companyEntryPath}?returnTo=${encodeURIComponent("/connection/login")}`,
 		);
 		const cookie = start.headers.getSetCookie()[0]?.split(";")[0] ?? "";
+		expect(start.headers.get("content-security-policy")).not.toContain(
+			"script-src",
+		);
 		expect(start.headers.get("set-cookie")).toContain("__Host-");
 		expect(start.headers.get("set-cookie")).toContain("HttpOnly");
 		expect(start.headers.get("set-cookie")).toContain("Secure");
@@ -144,6 +149,32 @@ describe("company entrance HTTP boundary", () => {
 		expect(callback.status).toBe(200);
 		expect(callback.headers.get("cache-control")).toBe("no-store");
 		expect(callback.headers.get("referrer-policy")).toBe("no-referrer");
+		const page = await callback.text();
+		const script = /<script>([\s\S]*?)<\/script>/.exec(page)?.[1] ?? "";
+		expect(script).not.toBe("");
+		expect(script).not.toContain(state);
+		expect(script).not.toContain("synthetic-code");
+		const scriptPolicy = callback.headers
+			.get("content-security-policy")
+			?.split(";")
+			.find((directive) => directive.trim().startsWith("script-src"));
+		expect(scriptPolicy?.trim()).toBe(
+			`script-src 'sha256-${createHash("sha256").update(script).digest("base64")}'`,
+		);
+		expect(callback.headers.get("content-security-policy")).toContain(
+			"form-action 'self';",
+		);
+		const requestSubmit = vi.fn();
+		const getElementById = vi.fn((id: string) => {
+			expect(id).toBe("company-oauth-complete");
+			return { requestSubmit };
+		});
+		runInNewContext(script, { document: { getElementById } });
+		expect(requestSubmit).toHaveBeenCalledExactlyOnceWith();
+		expect(page).toContain(
+			`<form id="company-oauth-complete" method="post" action="${companyIdentityCallbackPath}">`,
+		);
+		expect(page).toContain('<button type="submit">完成公司登录</button>');
 		expect(readIdentity).not.toHaveBeenCalled();
 		const body = new URLSearchParams({
 			flow: "entry",
@@ -163,8 +194,29 @@ describe("company entrance HTTP boundary", () => {
 		expect((await complete("https://attacker.invalid")).status).toBe(400);
 		expect((await complete(issuer, "other-browser=1")).status).toBe(400);
 		expect(readIdentity).not.toHaveBeenCalled();
-		const accepted = await complete(issuer);
+		const browserPost = (fetchSite: string, host: string) =>
+			app.request(`${issuer}${companyIdentityCallbackPath}`, {
+				method: "POST",
+				headers: {
+					cookie,
+					origin: "null",
+					"sec-fetch-site": fetchSite,
+					host,
+					"content-type": "application/x-www-form-urlencoded",
+				},
+				body,
+			});
+		expect((await browserPost("cross-site", new URL(issuer).host)).status).toBe(
+			400,
+		);
+		expect((await browserPost("same-origin", "attacker.invalid")).status).toBe(
+			400,
+		);
+		const accepted = await browserPost("same-origin", new URL(issuer).host);
 		expect(accepted.status).toBe(303);
+		expect(accepted.headers.get("content-security-policy")).not.toContain(
+			"script-src",
+		);
 		expect(accepted.headers.get("location")).toBe("/connection/login");
 		const ticket =
 			accepted.headers
@@ -196,6 +248,30 @@ describe("company entrance HTTP boundary", () => {
 		).toBe(401);
 		expect((await complete(issuer)).status).toBe(400);
 		expect(readIdentity).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps untrusted callback fields out of the script and denies scripts on errors", async () => {
+		const { app, entry, readIdentity } = setup();
+		const { state } = entry.start();
+		const code = "</script><script>alert(1)</script>";
+		const url = `${companyIdentityCallbackPath}?${new URLSearchParams({ state, code })}`;
+		const valid = await app.request(url, {
+			headers: { cookie: `__Host-connection_company_oauth_state=${state}` },
+		});
+		const page = await valid.text();
+		expect(valid.status).toBe(200);
+		expect(page.match(/<script>/g)).toHaveLength(1);
+		expect(page).not.toContain(code);
+		expect(page).toContain(
+			"&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;",
+		);
+		const rejected = await app.request(url);
+		expect(rejected.status).toBe(400);
+		expect(rejected.headers.get("content-security-policy")).not.toContain(
+			"script-src",
+		);
+		expect(await rejected.text()).not.toContain("<script>");
+		expect(readIdentity).not.toHaveBeenCalled();
 	});
 
 	it("keeps unconfigured entrance separate from legacy LDAP and disabled probes", async () => {
