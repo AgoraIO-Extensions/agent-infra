@@ -346,7 +346,9 @@ export const guideChapters: GuideChapter[] = [
 			},
 			{
 				title: "结果未知",
-				paragraphs: [],
+				paragraphs: [
+					"AUTHORIZED 只表示调用已获准，不代表外部系统执行成功；长时间停留在此状态也不能证明没有提交。确定性拒绝显示 FAILED，无需因此重新授权；超时、断线或终态保存失败仍按结果未知处理。",
+				],
 				steps: [
 					"看到 UNCERTAIN、超时或断连时保留原调用编号和幂等信息。",
 					"回读原调用状态并检查目标系统实际结果，例如 PR 是否已存在。",

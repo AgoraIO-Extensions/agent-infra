@@ -17,6 +17,8 @@ Installing and logging in do not grant access to GitHub, Jira, Confluence, or ot
 
 ## Public URLs
 
+`AUTHORIZED` only confirms admission, not successful execution or absence of submission. Preserve the original write idempotency key. Deterministic Provider rejection is `FAILED`; transport or terminal-persistence failure is unknown and must be reconciled before resubmission. These states alone do not require reauthorization.
+
 - Installation guide: __CONNECTION_ORIGIN__/connection
 - Connection console: __CONNECTION_ORIGIN__/connection/connections
 - MCP endpoint: __CONNECTION_ORIGIN__/mcp

@@ -87,6 +87,8 @@ After initialization, call `tools/list` and use the five generic tools:
 4. `get_action_guide`: read the input schema, permissions and idempotency requirements.
 5. `execute_action`: execute with the actual schema/guide.
 
+`AUTHORIZED` is not an execution receipt and does not prove a write was never submitted. Preserve the original idempotency key when checking/retrying the same operation. A deterministic Provider rejection is `FAILED`; a transport or terminal-persistence failure remains unknown (`PROVIDER_UNCERTAIN` / `UNCERTAIN`). Do not switch keys or reauthorize just because execution is pending or rejected.
+
 Do not guess Action IDs or submit raw provider credentials or caller-supplied user/Consumer/Agent identities. Keep service credentials and user PATs separate. Neither may enter model input, chat, frontend storage, source, logs or URLs. Never share one PAT across users; independent instances require separate tokens for independent audit/revocation.
 
 ## Permission recovery and current error coverage

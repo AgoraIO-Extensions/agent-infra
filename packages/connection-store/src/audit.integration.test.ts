@@ -10,7 +10,7 @@ import {
 } from "@agent-infra/connection-core";
 import { githubConnectionCatalog } from "@agent-infra/openconnector-adapter";
 import postgres from "postgres";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { seedApprovedConnectPermit } from "./approved-connect-fixture";
 import { migrateConnectionDatabase } from "./migrations";
 import { PostgresConnectionRepository } from "./repository";
@@ -85,6 +85,97 @@ if (process.env.CI && !url)
 				principalId: user,
 				consumerId: consumer,
 				instanceId: instance,
+			});
+			// Exercise the real ledger triggers, not just the in-memory repository.
+			for (const [providerStatus, status, dispatchStatus] of [
+				[400, "FAILED", "REJECTED"],
+				[409, "FAILED", "REJECTED"],
+				[503, "UNCERTAIN", "UNCERTAIN"],
+			] as const) {
+				let executions = 0;
+				const failingService = new ConnectionApplicationService(repo, {
+					execute: async () => {
+						executions++;
+						throw Object.assign(new Error("Provider rejection"), {
+							providerStatus,
+						});
+					},
+				});
+				const identity = {
+					principalId: user,
+					consumerId: consumer,
+					instanceId: instance,
+				};
+				const input = {
+					owner: "acme",
+					repo: "widgets",
+					base: "main",
+					head: "test/reject",
+					title: "Rejected",
+					idempotencyKey: randomUUID(),
+				};
+				await expect(
+					failingService.invokeDirectForIdentity(
+						identity,
+						"github.create_pull_request",
+						input,
+					),
+				).rejects.toMatchObject({
+					code: status === "FAILED" ? "INVALID_REQUEST" : "PROVIDER_UNCERTAIN",
+				});
+				const replay = await failingService.invokeDirectForIdentity(
+					identity,
+					"github.create_pull_request",
+					input,
+				);
+				expect(replay.status).toBe(status);
+				expect(executions).toBe(1);
+				const [ledger] =
+					await sql`SELECT call.status AS call_status, effect.status AS effect_status,
+					dispatch.status AS dispatch_status FROM connection_calls call
+					JOIN connection_effects effect ON effect.call_id = call.id
+					JOIN connection_dispatches dispatch ON dispatch.effect_id = effect.id WHERE call.id = ${replay.callId}`;
+				expect(ledger).toEqual({
+					call_status: status,
+					effect_status: status,
+					dispatch_status: dispatchStatus,
+				});
+				// This test's uncertain call must not consume the later recovery fixture's lease.
+				if (status === "UNCERTAIN")
+					await sql`UPDATE connection_reconciliation_jobs SET next_attempt_at = 'infinity' WHERE call_id = ${replay.callId}`;
+			}
+			const { call: unclassified } = await repo.createCall({
+				action: "github.create_pull_request",
+				argsHash: randomUUID(),
+				idempotencyKey: randomUUID(),
+				input: {},
+				invocation,
+			});
+			await repo.startDispatch({
+				action: "github.create_pull_request",
+				callId: unclassified.callId,
+				invocation,
+			});
+			const log = vi.spyOn(console, "error").mockImplementation(() => {});
+			try {
+				await expect(
+					repo.setCallResult({ callId: unclassified.callId, status: "FAILED" }),
+				).rejects.toThrow("invalid Connection status transition");
+				expect(log).toHaveBeenCalledWith(
+					JSON.stringify({
+						event: "connection_call_finalization_failed",
+						callId: unclassified.callId,
+						status: "FAILED",
+						databaseCode: "23514",
+					}),
+				);
+			} finally {
+				log.mockRestore();
+			}
+			await repo.setCallResult({
+				callId: unclassified.callId,
+				status: "SUCCEEDED",
+				result: {},
 			});
 			const { call } = await repo.createCall({
 				action: "github.list_pull_requests",

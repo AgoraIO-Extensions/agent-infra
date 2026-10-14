@@ -374,6 +374,11 @@ COMMIT;
 
 ### 镜像回退与故障定位
 
+`0048_definite_dispatch_rejection` 为确定性拒绝增加内部 Dispatch 终态 `REJECTED`。
+上线须先通过 reviewed migrations 路径应用迁移，再更新 API 镜像；旧镜像与新增约束兼容。
+该迁移不修写历史 `AUTHORIZED` Call。历史提交须按原 Call 对账，不得换幂等键重复提交。
+`connection_call_finalization_failed` 日志提供 Call ID、目标状态和 SQLSTATE；不要输出原始请求或凭证。
+
 发布输出会列出原 API/Web 镜像。先检查失败 Pod 的事件与脱敏错误，确认上一镜像对当前 schema、
 Catalog 和已经产生的新数据兼容后，只把对应容器设回原镜像。保持当前上海数据库和 CA 配置。
 不要直接 `rollout undo` 整个 Pod template，因为旧 revision 可能引用美国库或缺少 CA。

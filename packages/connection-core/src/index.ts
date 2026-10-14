@@ -896,6 +896,7 @@ export interface ConnectionRepository {
 	}): Promise<InvocationContext[]>;
 	setCallResult(input: {
 		diagnostics?: CallDiagnostics;
+		providerRejected?: boolean;
 		callId: string;
 		result?: Record<string, unknown>;
 		status: CallStatus;
@@ -2282,9 +2283,18 @@ export class ConnectionApplicationService {
 					callId: call.callId,
 					status,
 					diagnostics,
+					providerRejected:
+						isMutating &&
+						submissionStarted &&
+						status === "FAILED" &&
+						isDeterministicProviderRejection(error),
 				});
 			} catch {
 				if (!providerResponded && !submissionStarted) throw error;
+				throw new ConnectionError(
+					"PROVIDER_UNCERTAIN",
+					"Connection could not persist the terminal result; do not resubmit with a new idempotency key",
+				);
 			}
 			if (isProviderReauthorizationFailure(error)) {
 				await this.repository.pauseCredentialForReauthorization?.(invocation);

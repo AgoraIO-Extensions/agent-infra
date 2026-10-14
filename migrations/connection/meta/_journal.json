@@ -337,6 +337,13 @@
       "when": 1791792000000,
       "tag": "0047_optional_pat_binding_hint",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1791964800000,
+      "tag": "0048_definite_dispatch_rejection",
+      "breakpoints": true
     }
   ]
 }

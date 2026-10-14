@@ -2028,6 +2028,12 @@ EffectDispatch:
 
 ### 20.4 Crash Window
 
+当前 legacy ledger 用 Call/Effect `FAILED` 和 Dispatch `REJECTED` 表示 Adapter 已明确判定的
+Provider 拒绝（对应 `FAILED_DEFINITE` / `CONFIRMED_NOT_APPLIED`）。只有共享执行层确认确定性
+拒绝后才传递 `providerRejected`；提交开始后的普通失败仍禁止落为 Dispatch `FAILED`。
+超时、断线、5xx 或终态落库失败不得推断未发生副作用，保持未知结果且禁止换幂等键自动重提。
+终态落库失败日志只记录 Call ID、目标状态和 SQLSTATE，不记录 Provider 凭证、输入或错误正文。
+
 | Crash point | durable evidence | 恢复 |
 | --- | --- | --- |
 | Invocation 已提交，Call 未创建 | Invocation AUTHORIZED | worker 幂等创建同一 Call |

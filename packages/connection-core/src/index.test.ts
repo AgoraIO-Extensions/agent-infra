@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	OpenConnectorGitHubAdapter as GitHubLogAdapter,
 	githubV11ConnectionCatalog,
@@ -1258,6 +1258,7 @@ describe("Connection application service", () => {
 
 	it("records deterministic write rejection without entering reconciliation", async () => {
 		const repository = new MemoryRepository();
+		const finalize = vi.spyOn(repository, "setCallResult");
 		const service = new ConnectionApplicationService(repository, {
 			execute: async () => {
 				throw Object.assign(new Error("Jira Server request failed (400)"), {
@@ -1283,7 +1284,50 @@ describe("Connection application service", () => {
 		});
 
 		expect(repository.calls[0]?.status).toBe("FAILED");
+		expect(finalize).toHaveBeenCalledWith(
+			expect.objectContaining({
+				status: "FAILED",
+				providerRejected: true,
+			}),
+		);
 		expect(repository.reconciliationJobs).toHaveLength(0);
+	});
+
+	it("reports unknown persistence outcome instead of hiding a rejected write finalization failure", async () => {
+		const repository = new MemoryRepository();
+		vi.spyOn(repository, "setCallResult").mockRejectedValue(
+			new Error("DATABASE-SECRET-CANARY"),
+		);
+		let executions = 0;
+		const service = new ConnectionApplicationService(repository, {
+			execute: async () => {
+				executions++;
+				throw Object.assign(new Error("PROVIDER-SECRET-CANARY"), {
+					providerStatus: 400,
+				});
+			},
+		});
+		const input = {
+			base: "main",
+			head: "feature/rejected",
+			idempotencyKey: "failed-finalization",
+			repository: "acme/widgets",
+			title: "Rejected",
+		};
+		await expect(
+			service.invokeDirect("direct", "github.createPullRequest", input),
+		).rejects.toMatchObject({
+			code: "PROVIDER_UNCERTAIN",
+			message:
+				"Connection could not persist the terminal result; do not resubmit with a new idempotency key",
+		});
+		const replay = await service.invokeDirect(
+			"direct",
+			"github.createPullRequest",
+			input,
+		);
+		expect(replay.status).toBe("AUTHORIZED");
+		expect(executions).toBe(1);
 	});
 
 	it("distinguishes a Provider 409 rejection from an ambiguous 503 write", async () => {
