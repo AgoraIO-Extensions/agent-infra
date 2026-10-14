@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { SkillWorkloadProjectionV1Schema } from "@agent-infra/contracts";
 import { expect, it } from "vitest";
 import {
+	createAppliedRuntimeSkillDirectoryV1,
 	createFilesystemRuntimeSkillDirectoryV1,
 	createRuntimeSkillDirectoryV1,
 	RuntimeSkillDirectoryErrorV1,
@@ -45,6 +46,76 @@ const projection = SkillWorkloadProjectionV1Schema.parse({
 		networkOrigins: [],
 		scripts: false,
 	},
+});
+
+const appliedBinding = {
+	schemaVersion: 1 as const,
+	agentId: "agent-a",
+	agentVersion: "version-a",
+	skillName: "workspace-summary",
+	skillVersion: projection.skillVersion,
+	grant: projection.grant,
+	configurationRevision: 4,
+	syncRevision: 2,
+	state: "synced" as const,
+	failureReason: null,
+	appliedReceipt: {
+		schemaVersion: 1 as const,
+		agentId: "agent-a",
+		agentVersion: "version-a",
+		skillName: "workspace-summary",
+		configurationRevision: 4,
+		syncRevision: 2,
+		skillVersionId: projection.skillVersion.skillVersionId,
+		generationId: "e".repeat(64),
+		packageDigest: projection.skillVersion.packageDigest,
+		manifestDigest: projection.skillVersion.manifestDigest,
+		targetPath: ".agents/skills/workspace-summary",
+		readOnly: true as const,
+	},
+};
+
+it("requires current Applied binding facts before exposing Runtime skills", () => {
+	const directory = createAppliedRuntimeSkillDirectoryV1({
+		agentId: "agent-a",
+		agentVersion: "version-a",
+		configurationRevision: 4,
+		generationId: "e".repeat(64),
+		projections: [projection],
+		appliedBindings: [appliedBinding],
+	});
+	expect(directory.findSkills()).toHaveLength(1);
+});
+
+it.each([
+	[
+		"pending",
+		{ ...appliedBinding, state: "pending_sync", appliedReceipt: null },
+	],
+	["foreign config", { ...appliedBinding, configurationRevision: 3 }],
+	[
+		"foreign generation",
+		{
+			...appliedBinding,
+			appliedReceipt: {
+				...appliedBinding.appliedReceipt,
+				generationId: "f".repeat(64),
+			},
+		},
+	],
+	["cross agent", { ...appliedBinding, agentId: "agent-b" }],
+	["duplicate Applied version", [appliedBinding, appliedBinding]],
+])("rejects %s Applied facts", (_label, binding) => {
+	expect(() =>
+		createAppliedRuntimeSkillDirectoryV1({
+			agentId: "agent-a",
+			agentVersion: "version-a",
+			configurationRevision: 4,
+			generationId: "e".repeat(64),
+			projections: [projection],
+			appliedBindings: Array.isArray(binding) ? binding : [binding],
+		}),
+	).toThrow(RuntimeSkillDirectoryErrorV1);
 });
 
 it("projects verified bindings into bounded Skill metadata and reads resources", async () => {
