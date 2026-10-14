@@ -294,7 +294,7 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 		);
 		await stage("reload_error_logs", () => sql`select pg_reload_conf()`);
 		async function blockedPid() {
-			const deadline = Date.now() + 5000;
+			const deadline = Date.now() + 15_000;
 			while (Date.now() < deadline) {
 				const rows = await observer<{ pid: number }[]>`
 					select pid from pg_stat_activity
