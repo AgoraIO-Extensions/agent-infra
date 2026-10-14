@@ -2400,7 +2400,9 @@ HCI 身份 Header/JWT/permissions 不进入 Connection 身份、role、Grant 或
 | 具名公开帮助、安装页、静态资源、`/healthz` | 不挂 | 原公开内容，无业务访问权 |
 
 正式配置及逐路径测试位于 `deploy/connection-hci-ingress.yaml` 与
-`tests/connection-hci-ingress.test.mjs`。当前上海 Kong 使用 `traditional` router。动态 ID 例外以 PCRE 固定长度 lookbehind
+`tests/connection-hci-ingress.test.mjs`。当前上海 Kong 使用 `traditional` router。KIC 3.5 会把 `Exact` 转换成不带开头锚点的
+正则，且不能保留字面点号的严格含义，因此所有例外都使用 `ImplementationSpecific` 的显式
+Kong 正则。字面路径转义元字符，assets 只允许自身及斜杠分隔的静态子树。例外以 PCRE 固定长度 lookbehind
 `/(?<=^/)` 锚定首个斜杠，并用 `$` 锚定结尾；测试不得自行补锚点。切换 router flavor 前须重新
 评审这些表达式及实际匹配。不能豁免整个
 `/api/v1/connection`、`/connection` 或 `/oauth` 前缀。不要给机器接口增加 HCI Cookie、共享 key

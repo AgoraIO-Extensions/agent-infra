@@ -1,6 +1,7 @@
 # Complete scoped Shanghai route set. This file is not applied by image releases.
 # Apply protocol/public routes and plugin before updating the existing root Ingress.
-# Dynamic paths use PCRE fixed-length lookbehind to anchor the leading slash.
+# All exceptions use PCRE fixed-length lookbehind to anchor the leading slash.
+# KIC 3.5 Exact translation does not preserve strict literal path matching.
 # Requires the reviewed Kong traditional router; do not switch router flavors.
 apiVersion: configuration.konghq.com/v1
 kind: KongPlugin
@@ -34,78 +35,78 @@ spec:
     - host: agent-connector.agoralab.co
       http:
         paths:
-          - path: /mcp
-            pathType: Exact
+          - path: /~/(?<=^/)mcp$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /.well-known/oauth-authorization-server
-            pathType: Exact
+          - path: /~/(?<=^/)\.well-known/oauth-authorization-server$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /.well-known/oauth-protected-resource/mcp
-            pathType: Exact
+          - path: /~/(?<=^/)\.well-known/oauth-protected-resource/mcp$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /oauth/register
-            pathType: Exact
+          - path: /~/(?<=^/)oauth/register$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /oauth/token
-            pathType: Exact
+          - path: /~/(?<=^/)oauth/token$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /oauth/revoke
-            pathType: Exact
+          - path: /~/(?<=^/)oauth/revoke$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /oauth/callback
-            pathType: Exact
+          - path: /~/(?<=^/)oauth/callback$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /oauth/github/callback
-            pathType: Exact
+          - path: /~/(?<=^/)oauth/github/callback$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /api/v1/connection/identity/oauth/callback
-            pathType: Exact
+          - path: /~/(?<=^/)api/v1/connection/identity/oauth/callback$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /api/v1/connection/pat-bindings
-            pathType: Exact
+          - path: /~/(?<=^/)api/v1/connection/pat-bindings$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /connection/internal/v1/action-calls
-            pathType: Exact
+          - path: /~/(?<=^/)connection/internal/v1/action-calls$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
@@ -151,105 +152,106 @@ metadata:
     konghq.com/protocols: https
     konghq.com/https-redirect-status-code: "308"
     konghq.com/strip-path: "false"
+    konghq.com/regex-priority: "100"
 spec:
   ingressClassName: kong
   rules:
     - host: agent-connector.agoralab.co
       http:
         paths:
-          - path: /healthz
-            pathType: Exact
+          - path: /~/(?<=^/)healthz$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /connection
-            pathType: Exact
+          - path: /~/(?<=^/)connection$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /connection/
-            pathType: Exact
+          - path: /~/(?<=^/)connection/$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /connection/index.html
-            pathType: Exact
+          - path: /~/(?<=^/)connection/index\.html$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /connection/agent
-            pathType: Exact
+          - path: /~/(?<=^/)connection/agent$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /connection/agent/
-            pathType: Exact
+          - path: /~/(?<=^/)connection/agent/$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /connection/agent/index.html
-            pathType: Exact
+          - path: /~/(?<=^/)connection/agent/index\.html$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /connection/agent/llms.txt
-            pathType: Exact
+          - path: /~/(?<=^/)connection/agent/llms\.txt$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /connection/help
-            pathType: Exact
+          - path: /~/(?<=^/)connection/help$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /connection/help/
-            pathType: Exact
+          - path: /~/(?<=^/)connection/help/$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /connection/help/user-manual.md
-            pathType: Exact
+          - path: /~/(?<=^/)connection/help/user-manual\.md$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /llms.txt
-            pathType: Exact
+          - path: /~/(?<=^/)llms\.txt$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /connection/install.css
-            pathType: Exact
+          - path: /~/(?<=^/)connection/install\.css$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
                 port:
                   number: 8080
-          - path: /assets
-            pathType: Prefix
+          - path: /~/(?<=^/)assets(?:/.*)?$
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: connection-web
