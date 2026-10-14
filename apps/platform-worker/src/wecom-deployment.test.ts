@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	createWecomDeploymentCoordinatorV1,
 	startPlatformWecomPollingWorkerV1,
@@ -182,10 +182,79 @@ it.each(["connections", "setup"])(
 			"WeCom Worker deployment dependencies are unavailable",
 		);
 		const record = {
-			boundary: { channelId: "wecom_bot:pending" },
+			boundary: {
+				channelId: "wecom_bot:pending",
+				principal: { kind: "user", id: "user" },
+			},
 		} as Parameters<typeof coordinator.channelAuthorizationCurrent>[0];
 		expect(await coordinator.channelAuthorizationCurrent(record, signal)).toBe(
 			false,
 		);
 	},
 );
+
+describe("channel authority for the deployed Worker (#2469)", () => {
+	const signal = new AbortController().signal;
+	// 没有启动 WeCom Worker 的装配，等同于未配置 WeCom 的部署。
+	const coordinator = createWecomDeploymentCoordinatorV1({
+		databaseUrl: "postgres://fixture",
+		configuration: {},
+	});
+	const recordFor = (
+		channelId: string,
+		principal: { kind: "user" | "application"; id: string },
+	) =>
+		({
+			boundary: { channelId, principal, agentId: "agent" },
+		}) as unknown as Parameters<
+			typeof coordinator.channelAuthorizationCurrent
+		>[0];
+
+	it.each([
+		["api", { kind: "user", id: "user" }],
+		["api:user", { kind: "user", id: "user" }],
+		["api:application", { kind: "application", id: "application" }],
+	] as const)(
+		"does not veto the Platform API channel %s without WeCom",
+		async (channelId, principal) => {
+			expect(
+				await coordinator.channelAuthorizationCurrent(
+					recordFor(channelId, principal),
+					signal,
+				),
+			).toBe(true);
+		},
+	);
+
+	it.each([
+		// 渠道和主体类型对不上的 API 渠道不是 Platform API 渠道。
+		["api:application", { kind: "user", id: "user" }],
+		["api:user", { kind: "application", id: "application" }],
+		["api:other", { kind: "user", id: "user" }],
+		["eval", { kind: "user", id: "user" }],
+		["wecom", { kind: "user", id: "user" }],
+		["wecom_bot:pending", { kind: "user", id: "user" }],
+		["wecom_app:pending", { kind: "user", id: "user" }],
+		["", { kind: "user", id: "user" }],
+	] as const)(
+		"keeps %s fail-closed when no WeCom Worker can vouch for it",
+		async (channelId, principal) => {
+			expect(
+				await coordinator.channelAuthorizationCurrent(
+					recordFor(channelId, principal),
+					signal,
+				),
+			).toBe(false);
+		},
+	);
+
+	it("still evaluates the platform channel for web instead of short-circuiting", async () => {
+		// 缺少 Workload 的 web 记录由平台渠道检查判为不可用，说明 web 没有走 API 分支。
+		await expect(
+			coordinator.channelAuthorizationCurrent(
+				recordFor("web", { kind: "user", id: "user" }),
+				signal,
+			),
+		).rejects.toMatchObject({ code: "CHANNEL_AUTHORIZATION_UNAVAILABLE" });
+	});
+});

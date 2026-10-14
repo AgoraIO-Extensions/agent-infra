@@ -1,5 +1,6 @@
 import {
 	isPlatformConversationChannelCurrentV1,
+	isTaskApiChannelV1,
 	type TaskRuntimeAuthorizationRecordV1,
 } from "@agent-infra/platform-core";
 import {
@@ -56,6 +57,14 @@ export function createWecomDeploymentCoordinatorV1(options: {
 			signal.throwIfAborted();
 			if (record.boundary.channelId === "web")
 				return isPlatformConversationChannelCurrentV1(record);
+			// Platform API 渠道没有渠道级授权源：授权完全取决于任务边界里的 API 使用授权或
+			// 应用授权，它们由 Core 在同一次重验里检查（#2469）。这里不能一票否决，否则
+			// 所有 API 任务都会在投递时被判为 authorization_revoked。
+			if (
+				isTaskApiChannelV1(record.boundary.channelId, record.boundary.principal)
+			)
+				return true;
+			// 其余渠道（WeCom、eval 等）由对应的渠道授权源决定，未知渠道保持 fail-closed。
 			return (await worker?.channelAuthorizationCurrent(record)) ?? false;
 		},
 		start(signal: AbortSignal): WecomLoop {

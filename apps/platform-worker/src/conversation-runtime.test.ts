@@ -11,6 +11,7 @@ import type {
 	AgentManagementStateV1,
 	ConversationDispatchClaimV1,
 	ConversationDispatchStorePortV1,
+	CurrentTaskApiUseGrantV1,
 	CurrentTaskUserV1,
 	TaskAuthorizationBoundaryV1,
 	WorkloadReconciliationStateV1,
@@ -27,6 +28,7 @@ import {
 	type ConversationRuntimeStateV2,
 	createConversationRuntimeV2,
 } from "./conversation-runtime.js";
+import { createWecomDeploymentCoordinatorV1 } from "./wecom-deployment.js";
 
 const keys = generateKeyPairSync("ed25519");
 const verify = createRuntimeExecutionGrantVerifierV2(
@@ -2616,4 +2618,93 @@ it("rejects unapproved URL parameters in an otherwise approved authorization red
 	} finally {
 		await h.runtime.close();
 	}
+});
+
+describe("Platform API task authorization with the deployed channel authority (#2469)", () => {
+	// 真实装配里的渠道授权钩子来自 WeCom 协调器；没有启动 WeCom Worker，等同于未配置 WeCom。
+	const coordinator = createWecomDeploymentCoordinatorV1({
+		databaseUrl: "postgres://fixture",
+		configuration: {},
+	});
+	const useGrant = (
+		overrides: Partial<CurrentTaskApiUseGrantV1> = {},
+	): CurrentTaskApiUseGrantV1 => ({
+		principal: { kind: "user", id: "user" },
+		grantType: "use",
+		agentId: "agent",
+		authorizationRevision: "grant-1",
+		revoked: false,
+		...overrides,
+	});
+	function apiHarness(grant: CurrentTaskApiUseGrantV1 | null) {
+		const h = harness(
+			1,
+			(record, signal) =>
+				coordinator.channelAuthorizationCurrent(record, signal),
+			{ resolveCurrentApiUseGrant: async () => grant },
+		);
+		const record = h.record();
+		if (!record) throw new Error("fixture record is missing");
+		Object.assign(h.claim, { channelId: "api" });
+		h.setRecord({
+			...record,
+			boundary: {
+				...record.boundary,
+				channelId: "api",
+				accessSources: [{ kind: "api-use", useGrantRevision: "grant-1" }],
+			},
+		});
+		return h;
+	}
+	const authorizeDecision = (h: ReturnType<typeof apiHarness>) =>
+		h.runtime.authorization.authorize({ ...h.claim, claim: h.claim });
+
+	it("keeps an API task authorized while its use grant is current", async () => {
+		const h = apiHarness(useGrant());
+		expect((await authorizeDecision(h)).outcome).toBe("allowed");
+		expect(h.authorizationStore.recordControl).not.toHaveBeenCalled();
+		h.runtime.close();
+	});
+
+	it.each([
+		["revoked", { revoked: true }],
+		["replaced by a newer grant", { authorizationRevision: "grant-2" }],
+		["granted for another Agent", { agentId: "another-agent" }],
+		["granted to another user", { principal: { kind: "user", id: "other" } }],
+	] as const)(
+		"still revokes an API task whose use grant is %s",
+		async (_name, overrides) => {
+			const h = apiHarness(
+				useGrant(overrides as Partial<CurrentTaskApiUseGrantV1>),
+			);
+			await authorizeDecision(h);
+			// 执行已在处理中：授权失效表现为写入 authorization_revoked 控制记录，随后只剩控制用途。
+			expect(h.authorizationStore.recordControl).toHaveBeenCalledWith(
+				expect.objectContaining({ reason: "authorization_revoked" }),
+			);
+			h.runtime.close();
+		},
+	);
+
+	it("still revokes an API task without any use grant or for a disabled user", async () => {
+		const missing = apiHarness(null);
+		await authorizeDecision(missing);
+		expect(missing.authorizationStore.recordControl).toHaveBeenCalledWith(
+			expect.objectContaining({ reason: "authorization_revoked" }),
+		);
+		missing.runtime.close();
+		const disabled = apiHarness(useGrant());
+		disabled.setUser({
+			schemaVersion: 1,
+			userId: "user",
+			accountStatus: "disabled",
+			organizationIds: [],
+			authorizationRevision: "identity-9",
+		});
+		await authorizeDecision(disabled);
+		expect(disabled.authorizationStore.recordControl).toHaveBeenCalledWith(
+			expect.objectContaining({ reason: "authorization_revoked" }),
+		);
+		disabled.runtime.close();
+	});
 });
