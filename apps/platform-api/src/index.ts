@@ -281,6 +281,7 @@ export {
 export {
 	createNativeMetadataCurrentAppV1,
 	type NativeMetadataCurrentRouteDependenciesV1,
+	registerNativeMetadataCurrentRoutesV1,
 } from "./http/native-metadata-current-routes.js";
 export {
 	type NativeMetadataRoutesDependenciesV1,

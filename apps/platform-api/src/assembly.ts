@@ -70,6 +70,7 @@ import {
 	resolveCurrentMaterialGrantActor,
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
+import type { NativeMetadataCurrentRouteDependenciesV1 } from "./http/native-metadata-current-routes.js";
 import type { NativeMetadataRoutesDependenciesV1 } from "./http/native-metadata-routes.js";
 import type { SkillHubAgentBindingRoutesDependenciesV1 } from "./http/skill-hub-agent-binding-routes.js";
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
@@ -168,6 +169,8 @@ export interface PlatformApiAssemblyInput {
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	/** Optional deployment-owned public native metadata reader. */
 	readonly nativeMetadata?: Pick<NativeMetadataRoutesDependenciesV1, "reader">;
+	/** Optional deployment-owned Worker current-confirmation route. */
+	readonly nativeMetadataCurrent?: NativeMetadataCurrentRouteDependenciesV1;
 	/** Optional deployment-owned Provider registry and admission pipeline. */
 	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 	/** Optional deployment-owned platform identity route for custom Agents. */
@@ -841,6 +844,9 @@ export function assemblePlatformApi(
 						reader: input.nativeMetadata.reader,
 					},
 				}
+			: {}),
+		...(input.nativeMetadataCurrent
+			? { nativeMetadataCurrent: input.nativeMetadataCurrent }
 			: {}),
 		sessionAudit: {
 			identity: input.identity,

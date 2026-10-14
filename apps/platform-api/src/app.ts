@@ -61,6 +61,10 @@ import {
 	registerFileRoutesV1,
 } from "./http/file-routes.js";
 import {
+	type NativeMetadataCurrentRouteDependenciesV1,
+	registerNativeMetadataCurrentRoutesV1,
+} from "./http/native-metadata-current-routes.js";
+import {
 	type NativeMetadataRoutesDependenciesV1,
 	registerNativeMetadataRoutes,
 } from "./http/native-metadata-routes.js";
@@ -163,6 +167,7 @@ export interface PlatformAppDependencies {
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
 	readonly nativeMetadata?: NativeMetadataRoutesDependenciesV1;
+	readonly nativeMetadataCurrent?: NativeMetadataCurrentRouteDependenciesV1;
 	readonly tasks?: TaskRoutesDependencies;
 	readonly unknownStopOperations?: UnknownStopOperationsRouteDependencies;
 	readonly management: ManagementRouteDependencies;
@@ -303,6 +308,11 @@ export function createPlatformApp(
 	});
 	if (dependencies.nativeMetadata)
 		registerNativeMetadataRoutes(app, dependencies.nativeMetadata);
+	if (dependencies.nativeMetadataCurrent)
+		registerNativeMetadataCurrentRoutesV1(
+			app,
+			dependencies.nativeMetadataCurrent,
+		);
 	if (dependencies.tasks)
 		registerTaskRoutes(app, {
 			...dependencies.tasks,

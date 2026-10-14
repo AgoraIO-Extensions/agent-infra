@@ -125,3 +125,11 @@ export function createNativeMetadataCurrentAppV1(
 	});
 	return app;
 }
+
+/** Register the internal current-confirmation app on the production API app. */
+export function registerNativeMetadataCurrentRoutesV1(
+	app: Hono,
+	dependencies: NativeMetadataCurrentRouteDependenciesV1,
+) {
+	app.route("/", createNativeMetadataCurrentAppV1(dependencies));
+}

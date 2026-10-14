@@ -111,6 +111,8 @@ export interface ProductionPlatformApiInputV1
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	/** Optional deployment-owned authenticated native metadata reader. */
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
+	/** Optional deployment-owned Worker current-confirmation route. */
+	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
 	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 	/** Optional deployment-owned platform identity route for custom Agents. */
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
@@ -138,6 +140,7 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
+	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
 	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 }): ProductionPlatformApiInputV1 {
 	if (
@@ -156,6 +159,11 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	)
 		throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
 	if (
+		input.nativeMetadataCurrent !== undefined &&
+		input.apiInput.nativeMetadataCurrent !== undefined
+	)
+		throw new Error("PLATFORM_NATIVE_METADATA_CURRENT_DUPLICATE");
+	if (
 		input.providerImport !== undefined &&
 		input.apiInput.providerImport !== undefined
 	)
@@ -170,6 +178,9 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 			: {}),
 		...(input.nativeMetadata !== undefined
 			? { nativeMetadata: input.nativeMetadata }
+			: {}),
+		...(input.nativeMetadataCurrent !== undefined
+			? { nativeMetadataCurrent: input.nativeMetadataCurrent }
 			: {}),
 		...(input.providerImport !== undefined
 			? { providerImport: input.providerImport }
@@ -410,6 +421,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
 		...(input.nativeMetadata ? { nativeMetadata: input.nativeMetadata } : {}),
+		...(input.nativeMetadataCurrent
+			? { nativeMetadataCurrent: input.nativeMetadataCurrent }
+			: {}),
 		...(input.providerImport ? { providerImport: input.providerImport } : {}),
 		...(input.customAgentGateway
 			? {

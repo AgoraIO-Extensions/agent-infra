@@ -1,7 +1,9 @@
+import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createNativeMetadataCurrentAppV1,
 	type NativeMetadataCurrentRouteDependenciesV1,
+	registerNativeMetadataCurrentRoutesV1,
 } from "./native-metadata-current-routes.js";
 
 const request = {
@@ -93,6 +95,29 @@ describe("native metadata current-confirmation route", () => {
 		);
 		expect(response.status).toBe(403);
 		expect(await response.json()).toEqual({ outcome: "denied" });
+	});
+
+	it("registers the fixed route on the production API app", async () => {
+		const app = new Hono();
+		registerNativeMetadataCurrentRoutesV1(app, {
+			serviceToken: "api-current-token",
+			check: async () => allowed,
+		});
+		const response = await app.request(
+			"/internal/platform/v1/native-metadata/current",
+			{
+				method: "POST",
+				headers: {
+					authorization: "Bearer api-current-token",
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					apiRequestSourceRef: "api-source-current",
+					request,
+				}),
+			},
+		);
+		expect(response.status).toBe(200);
 	});
 
 	it("ends a stalled checker at the route deadline", async () => {
