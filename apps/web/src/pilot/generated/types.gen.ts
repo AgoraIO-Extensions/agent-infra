@@ -990,6 +990,7 @@ export type TaskProjectionV1 = {
         payload: {
             binding: {
                 agentId: string;
+                capabilityRevision: number;
                 capabilityVersion: number;
                 conversationId: string;
                 executionId: string;
@@ -1100,6 +1101,7 @@ export type TaskSseMessageV1 = PersistedConversationEventV1 | {
     payload: {
         binding: {
             agentId: string;
+            capabilityRevision: number;
             capabilityVersion: number;
             conversationId: string;
             executionId: string;

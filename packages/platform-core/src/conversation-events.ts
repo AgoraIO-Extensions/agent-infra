@@ -49,6 +49,8 @@ export interface ConversationBrowserHandoffBindingV1 {
 	readonly workloadRevision: number;
 	readonly imageDigest: string;
 	readonly capabilityVersion: number;
+	/** Web projection revision; Runtime V3 derives it from capabilityVersion. */
+	readonly capabilityRevision: number;
 	readonly pageRevision: number;
 }
 
@@ -487,6 +489,7 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 			"workloadRevision",
 			"imageDigest",
 			"capabilityVersion",
+			"capabilityRevision",
 			"pageRevision",
 		]);
 		const subjectId = binding.subjectId;
@@ -498,6 +501,7 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 		const workloadRevision = binding.workloadRevision;
 		const imageDigest = binding.imageDigest;
 		const capabilityVersion = binding.capabilityVersion;
+		const capabilityRevision = binding.capabilityRevision;
 		const pageRevision = binding.pageRevision;
 		if (
 			!["subjectId", "agentId", "conversationId", "executionId"].every((key) =>
@@ -508,6 +512,7 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 				"resourceFence",
 				"workloadRevision",
 				"capabilityVersion",
+				"capabilityRevision",
 				"pageRevision",
 			].every((key) => isPositiveSafeInteger(binding[key])) ||
 			!isText(imageDigest) ||
@@ -520,6 +525,7 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 			!isPositiveSafeInteger(resourceFence) ||
 			!isPositiveSafeInteger(workloadRevision) ||
 			!isPositiveSafeInteger(capabilityVersion) ||
+			!isPositiveSafeInteger(capabilityRevision) ||
 			!isPositiveSafeInteger(pageRevision)
 		) {
 			invalidInput();
@@ -547,6 +553,7 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 				workloadRevision,
 				imageDigest,
 				capabilityVersion,
+				capabilityRevision,
 				pageRevision,
 			},
 		};

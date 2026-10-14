@@ -79,6 +79,9 @@ function bindingFromRequest(
 		workloadRevision: runtime.workloadRevision,
 		imageDigest: runtime.imageDigest,
 		capabilityVersion: runtime.capabilityVersion,
+		// Runtime V3 exposes one authenticated capability revision; preserve it
+		// under the Web binding's explicit revision field as well.
+		capabilityRevision: runtime.capabilityVersion,
 		pageRevision: runtime.pageRevision,
 	};
 }

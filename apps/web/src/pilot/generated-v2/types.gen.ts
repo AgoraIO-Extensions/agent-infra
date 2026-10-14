@@ -520,6 +520,7 @@ export type BrowserHandoffEventV2 = {
     payload: {
         binding: {
             agentId: string;
+            capabilityRevision: number;
             capabilityVersion: number;
             conversationId: string;
             executionId: string;

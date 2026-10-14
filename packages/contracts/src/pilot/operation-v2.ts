@@ -35,6 +35,7 @@ const BrowserHandoffBindingV2Schema = z.strictObject({
 	workloadRevision: z.number().int().positive().safe(),
 	imageDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u),
 	capabilityVersion: z.number().int().positive().safe(),
+	capabilityRevision: z.number().int().positive().safe(),
 	pageRevision: z.number().int().positive().safe(),
 });
 
