@@ -44,6 +44,7 @@ export function createPlatformNativeMetadataGatewayAssemblyV1(options: {
 		app: createWorkerRuntimeNativeMetadataGatewayAppV1({
 			serviceToken: options.serviceToken,
 			gateway,
+			current,
 		}),
 		...(options.ports.port === undefined ? {} : { port: options.ports.port }),
 	};

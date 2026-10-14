@@ -11,6 +11,7 @@ import { request as httpsRequest } from "node:https";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
 	type ClaudeRuntimeDriverOptions,
 	type CodexRuntimeDriverOptions,
@@ -98,6 +99,7 @@ import {
 	assembleRuntimeHost,
 	closeRuntimeHost,
 	createRuntimeHostApp,
+	createRuntimeNativeMetadataDeploymentAssemblyV1,
 	startRuntimeHost,
 } from "./index.js";
 
@@ -208,6 +210,59 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
+	it("assembles the fixed Worker current client from deployment environment", async () => {
+		let currentBaseUrl = "";
+		let currentToken = "";
+		const assembly = await createRuntimeNativeMetadataDeploymentAssemblyV1({
+			environment: {
+				AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN:
+					"http://worker.internal",
+				AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN:
+					"worker-current-token",
+				AGENT_INFRA_RUNTIME_NATIVE_METADATA_DEPLOYMENT_MODULE:
+					"file:///deployment/native-metadata.mjs",
+			},
+			host: {} as never,
+			deployment: {
+				createRuntimeNativeMetadataReadAssembly({ current }) {
+					currentBaseUrl = "http://worker.internal";
+					currentToken = "worker-current-token";
+					expect(typeof current.check).toBe("function");
+					return {
+						resolveContext: async () => null,
+					};
+				},
+			},
+		});
+		expect(assembly).toBeDefined();
+		expect(currentBaseUrl).toBe("http://worker.internal");
+		expect(currentToken).toBe("worker-current-token");
+	});
+
+	it("uses the deployment native metadata module on the real environment path", async () => {
+		const values = await environment();
+		const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
+		if (!dataDirectory) throw new Error("Missing test data directory");
+		const modulePath = join(dataDirectory, "native-metadata.mjs");
+		await writeFile(
+			modulePath,
+			"export function createRuntimeNativeMetadataReadAssembly() { return { resolveContext: async () => null }; }",
+		);
+		Object.assign(values, {
+			AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN:
+				"http://worker.internal",
+			AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN:
+				"worker-current-token",
+			AGENT_INFRA_RUNTIME_NATIVE_METADATA_DEPLOYMENT_MODULE:
+				pathToFileURL(modulePath).href,
+		});
+		const runtime = await assembleRuntimeHost(values);
+		try {
+			expect(runtime.nativeMetadataRead).toBeTypeOf("function");
+		} finally {
+			await runtime.close();
+		}
+	});
 	it.each(["pi", "acp"] as const)(
 		"does not inject protected Connection MCP into the unsupported %s driver",
 		async (binding) => {

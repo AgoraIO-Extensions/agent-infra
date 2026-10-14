@@ -228,6 +228,7 @@ const runtimeNativeMetadataProofClaimsShape = {
 	audience: z.literal("runtime_host.native_metadata_read"),
 	workerId: boundedIdentity,
 	keyVersion: boundedIdentity,
+	apiRequestSourceRef: OpaqueIdV1Schema.optional(),
 	originalHostScopeRef: boundedIdentity,
 	requestDigest: digest,
 };
@@ -273,6 +274,8 @@ export const RuntimeNativeMetadataReadRequestV1Schema = z
 	.strictObject({
 		...readIdentity,
 		originalHostScopeRef: OpaqueIdV1Schema,
+		/** Opaque API request correlation used only for Worker current checks. */
+		apiRequestSourceRef: OpaqueIdV1Schema.optional(),
 		proof: RuntimeNativeMetadataProofV1Schema,
 	})
 	.superRefine(validateReadLifetime);
@@ -318,6 +321,7 @@ export interface RuntimeNativeMetadataProofClaimsValidationContextV1 {
 	readonly expectedIssuer: string;
 	readonly expectedWorkerId: string;
 	readonly expectedRequestDigest: string;
+	readonly expectedApiRequestSourceRef?: string;
 	readonly now: number;
 }
 
@@ -341,6 +345,8 @@ export function validateRuntimeNativeMetadataProofClaimsV1(
 		!Number.isSafeInteger(context.now) ||
 		claims.issuer !== context.expectedIssuer ||
 		claims.workerId !== context.expectedWorkerId ||
+		(context.expectedApiRequestSourceRef !== undefined &&
+			claims.apiRequestSourceRef !== context.expectedApiRequestSourceRef) ||
 		claims.readStartedAt !== request.readStartedAt ||
 		claims.issuedAt > context.now ||
 		claims.expiresAt <= context.now ||
@@ -407,6 +413,7 @@ export function runtimeNativeMetadataProofSigningPayloadV1(
 		audience,
 		workerId,
 		keyVersion,
+		apiRequestSourceRef,
 		requestDigest,
 		...binding
 	} = claims;
@@ -418,6 +425,7 @@ export function runtimeNativeMetadataProofSigningPayloadV1(
 		audience,
 		workerId,
 		keyVersion,
+		...(apiRequestSourceRef === undefined ? {} : { apiRequestSourceRef }),
 		requestDigest,
 	});
 }
