@@ -105,6 +105,11 @@ describe("native capability admission Store seam", () => {
 		});
 		expect(first.outcome).toBe("accepted");
 		expect(replay.outcome).toBe("replayed");
+		if (first.outcome !== "accepted") throw new Error("Expected acceptance");
+		expect(first.plan.outbox.payload.parameters).toBe(request.parameters);
+		expect(first.plan.outbox.payload.parametersDigest).toBe(
+			first.plan.parametersDigest,
+		);
 		expect(conflict).toEqual({
 			outcome: "conflict",
 			reason: "idempotency_conflict",
