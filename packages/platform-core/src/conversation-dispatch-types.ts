@@ -18,6 +18,7 @@ export type ConversationNativeCapabilityBindingV1 = Readonly<{
 	readonly capabilityId: string;
 	readonly capabilityKind: "command" | "skill";
 	readonly directoryRevision: string;
+	readonly capabilitySourceVersion: string;
 	readonly parameters: string;
 	readonly parametersDigest: string;
 }>;

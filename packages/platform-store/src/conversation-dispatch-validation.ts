@@ -71,10 +71,11 @@ export function exactPayload(
 		const capabilityId = input.capabilityId;
 		const capabilityKind = input.capabilityKind;
 		const directoryRevision = input.directoryRevision;
+		const capabilitySourceVersion = input.capabilitySourceVersion;
 		const parameters = input.parameters;
 		const parametersDigest = input.parametersDigest;
 		if (
-			Object.keys(input).length !== 13 ||
+			Object.keys(input).length !== 14 ||
 			input.schemaVersion !== 1 ||
 			!validText(input.conversationId) ||
 			!validText(input.executionId) ||
@@ -85,6 +86,7 @@ export function exactPayload(
 			!validText(capabilityId) ||
 			(capabilityKind !== "command" && capabilityKind !== "skill") ||
 			!validText(directoryRevision) ||
+			!validText(capabilitySourceVersion) ||
 			!validText(parameters) ||
 			!validText(parametersDigest) ||
 			!/^[a-f0-9]{64}$/.test(String(directoryRevision)) ||
@@ -114,6 +116,7 @@ export function exactPayload(
 				capabilityId: capabilityId as string,
 				capabilityKind,
 				directoryRevision: directoryRevision as string,
+				capabilitySourceVersion: capabilitySourceVersion as string,
 				parameters: parameters as string,
 				parametersDigest: parametersDigest as string,
 			},

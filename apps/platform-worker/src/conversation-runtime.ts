@@ -821,6 +821,45 @@ export function createConversationRuntimeV2(
 		if (authority.purpose !== "business")
 			denied("TASK_AUTHORIZATION_CONTROL_ONLY");
 		const claim = context.claim;
+		const native =
+			claim.operation === "conversation.native-capability.invoke.v1";
+		if (native) {
+			if (!claim.nativeCapability || !state.hostSessionRef)
+				unavailable("RUNTIME_REQUEST_INVALID");
+			const identity = keyedIdentity(prepared);
+			const unsigned: RuntimeBusinessRequestV4 = {
+				...base,
+				schemaVersion: 4,
+				...identity,
+				hostSessionRef: state.hostSessionRef,
+				operation: {
+					kind: "execution",
+					id: claim.executionId,
+					deliveryFence: claim.deliveryFence,
+					executionDeliveryFence: claim.executionDeliveryFence,
+				},
+				capabilityId: claim.nativeCapability.capabilityId,
+				capabilityKind: "skill",
+				directoryRevision: claim.nativeCapability.directoryRevision,
+				parameters: claim.nativeCapability.parameters,
+				parametersDigest: claim.nativeCapability.parametersDigest,
+				capabilitySourceVersion: claim.nativeCapability.capabilitySourceVersion,
+				grant: {
+					schemaVersion: 4,
+					format: "runtime-execution-jws",
+					token: "unsigned.unsigned.unsigned",
+				},
+			};
+			const client = v4Client(prepared, "native-capability.invoke", signal);
+			const response = await client.nativeCapability(
+				{
+					...unsigned,
+					grant: signV4.sign(unsigned, authority.authorizationRecordId),
+				},
+				signal,
+			);
+			return { ...response, schemaVersion: 1 as const };
+		}
 		if (!claim.input || !claim.modelOptionId || !claim.reasoningLevel)
 			unavailable("RUNTIME_REQUEST_INVALID");
 		const identity = keyedIdentity(prepared);
@@ -1190,8 +1229,9 @@ export function createConversationRuntimeV2(
 				denied();
 			}
 			if ((request.operation as string) === "native-capability.invoke") {
+				if (state.runtimeSubmitProtocol === "v4")
+					return dispatchBusinessV4(prepared, active);
 				if (
-					state.runtimeSubmitProtocol === "v4" ||
 					!state.hostSessionRef ||
 					!context.claim.nativeCapability ||
 					!request.nativeCapability ||

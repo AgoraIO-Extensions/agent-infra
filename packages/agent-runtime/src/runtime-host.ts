@@ -131,9 +131,7 @@ export interface RuntimeHostOptions {
 	grantValidationV2?: RuntimeGrantValidationOptionsV2;
 	allowLegacyBusiness?: boolean;
 	validateGrantV4?: (request: unknown) => Promise<{
-		request:
-			| RuntimeSubmitTurnTransportV4["businessRequest"]
-			| RuntimeSupplementTransportV4["businessRequest"];
+		request: RuntimeBusinessRequestV4;
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
 	}>;
 	validateRecoveryGrantV4?: (request: unknown) => Promise<{
@@ -664,6 +662,7 @@ export class RuntimeHost {
 		if (options.validateGrantV4)
 			this.v4 = new RuntimeHostV4({
 				store: options.store,
+				driver: options.driver,
 				assertOpen: () => {
 					if (this.closed) runtimeAuthorizationDenied();
 				},
@@ -679,7 +678,10 @@ export class RuntimeHost {
 							createFileBridge: (
 								request: RuntimeBusinessRequestV4,
 								claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4,
-							) => this.createFileBridgeFor(request, claims),
+							) => {
+								if (!("input" in request)) runtimeAuthorizationDenied();
+								return this.createFileBridgeFor(request, claims);
+							},
 						}
 					: {}),
 				serialize: (key, work) => this.serialize(key, work),
@@ -792,14 +794,13 @@ export class RuntimeHost {
 	 * one. A missing bridge stays fail-closed and never enables Driver media.
 	 */
 	async getFileBridge(
-		request:
-			| RuntimeSubmitTurnTransportV4["businessRequest"]
-			| RuntimeSupplementTransportV4["businessRequest"],
+		request: RuntimeBusinessRequestV4,
 	): Promise<RuntimeFileBridgePortV1> {
 		this.requireLegacyHost();
 		if (!this.options.fileBridge || !this.options.validateGrantV4)
 			runtimeAuthorizationDenied();
 		const accepted = await this.options.validateGrantV4(request);
+		if (!("input" in accepted.request)) runtimeAuthorizationDenied();
 		return this.createFileBridgeFor(accepted.request, accepted.claims);
 	}
 
@@ -876,6 +877,12 @@ export class RuntimeHost {
 	supplementV4(value: RuntimeSupplementTransportV4) {
 		if (this.closed || !this.v4) runtimeAuthorizationDenied();
 		return this.v4.supplement(value);
+	}
+	nativeCapabilityV4(
+		value: import("@agent-infra/contracts/runtime").RuntimeNativeCapabilityTransportV4,
+	) {
+		if (this.closed || !this.v4) runtimeAuthorizationDenied();
+		return this.v4.nativeCapability(value);
 	}
 	restoreExecutionKeyV4(value: RuntimeRestoreExecutionKeyTransportV4) {
 		if (this.closed || !this.v4 || !this.options.validateRecoveryGrantV4)
