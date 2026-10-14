@@ -34,6 +34,7 @@ const {
 	apiInput,
 	customAgentGateway,
 	modelSelection,
+	modelDirectory,
 	nativeMetadata,
 	nativeMetadataCurrent,
 	nativeCapabilityInvocation,
@@ -116,6 +117,7 @@ export function createPlatformApiAssemblyInput() {
 		apiInput,
 		...(customAgentGateway !== undefined ? { customAgentGateway } : {}),
 		...(modelSelection !== undefined ? { modelSelection } : {}),
+		...(modelDirectory !== undefined ? { modelDirectory } : {}),
 		...(nativeMetadata !== undefined ? { nativeMetadata } : {}),
 		...(nativeMetadataCurrent !== undefined ? { nativeMetadataCurrent } : {}),
 		...(nativeCapabilityInvocation !== undefined
