@@ -303,6 +303,7 @@ export function secureHtmlHeaders(
 	options: {
 		allowLoopbackFormRedirect?: boolean;
 		formActionOrigins?: readonly string[];
+		inlineScriptHash?: string;
 	} = {},
 ) {
 	context.header("cache-control", "no-store");
@@ -313,7 +314,7 @@ export function secureHtmlHeaders(
 	].join(" ");
 	context.header(
 		"content-security-policy",
-		`default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,
+		`default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'${options.inlineScriptHash ? `; script-src 'sha256-${options.inlineScriptHash}'` : ""}`,
 	);
 	context.header("referrer-policy", "no-referrer");
 	context.header("x-content-type-options", "nosniff");
