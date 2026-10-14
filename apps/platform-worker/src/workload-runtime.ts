@@ -1467,10 +1467,14 @@ export function createWorkloadRuntimeV1(
 				throw new Error("Workload route is closing");
 		},
 		async discardUnactivatedSecrets(state, input) {
-			return (
-				(await cleanupUnactivatedSecrets(state, input)) &&
-				(await cleanupModelConfiguration(state))
-			);
+			if (!(await cleanupUnactivatedSecrets(state, input))) return false;
+			if (!(await cleanupModelConfiguration(state))) return false;
+			if ("manifest" in state.candidate.configuration.source) {
+				const workload = desired(state);
+				if (!isMultiService(workload)) return false;
+				return multiService.cleanupMigration(workload);
+			}
+			return true;
 		},
 		async apply(state, stopped, input) {
 			if (stopped && "manifest" in state.candidate.configuration.source) {

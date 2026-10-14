@@ -1,6 +1,11 @@
 import { MultiServiceManifestDocumentV1Schema } from "@agent-infra/contracts/pilot";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
-import type { KubernetesObject } from "@kubernetes/client-node";
+import type {
+	KubernetesObject,
+	V1ConfigMap,
+	V1Deployment,
+	V1Job,
+} from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
@@ -23,11 +28,15 @@ const manifest = MultiServiceManifestDocumentV1Schema.parse({
 				template: {
 					metadata: { labels: { app: "web" } },
 					spec: {
+						volumes: [{ name: "config", configMap: { name: "web-config" } }],
 						containers: [
 							{
 								name: "web",
 								image: `sha256:${"a".repeat(64)}`,
 								ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+								volumeMounts: [
+									{ name: "config", mountPath: "/etc/web", readOnly: true },
+								],
 							},
 						],
 					},
@@ -72,39 +81,35 @@ const manifest = MultiServiceManifestDocumentV1Schema.parse({
 				ports: [{ name: "http", port: 8080, targetPort: 8080 }],
 			},
 		},
+		{
+			apiVersion: "v1",
+			kind: "ConfigMap",
+			metadata: { name: "web-config" },
+			spec: { data: { "app.conf": "hello=world\n" } },
+		},
 	],
 });
 
-const statefulManifest = MultiServiceManifestDocumentV1Schema.parse({
-	schemaVersion: 1,
-	entryServiceName: "web",
+const migrationManifest = MultiServiceManifestDocumentV1Schema.parse({
+	...manifest,
 	resources: [
-		manifest.resources[0],
+		...manifest.resources,
 		{
-			apiVersion: "apps/v1",
-			kind: "StatefulSet",
-			metadata: { name: "worker" },
+			apiVersion: "batch/v1",
+			kind: "Job",
+			metadata: { name: "migrate" },
 			spec: {
-				replicas: 1,
-				serviceName: "worker",
-				selector: { matchLabels: { app: "worker" } },
+				backoffLimit: 1,
+				activeDeadlineSeconds: 300,
 				template: {
-					metadata: { labels: { app: "worker" } },
+					metadata: { labels: { app: "migration" } },
 					spec: {
-						containers: [{ name: "worker", image: `sha256:${"b".repeat(64)}` }],
+						restartPolicy: "Never",
+						containers: [
+							{ name: "migrate", image: `sha256:${"d".repeat(64)}` },
+						],
 					},
 				},
-			},
-		},
-		manifest.resources[2],
-		manifest.resources[3],
-		{
-			apiVersion: "v1",
-			kind: "PersistentVolumeClaim",
-			metadata: { name: "worker-data" },
-			spec: {
-				accessModes: ["ReadWriteOnce"],
-				resources: { requests: { storage: "100Gi" } },
 			},
 		},
 	],
@@ -231,8 +236,6 @@ describe("multi-service runtime operations", () => {
 			client: fake.client,
 			policy: {
 				namespace: "agents",
-				imageRepository: "registry.example.test/agents",
-				storageSize: "1Gi",
 				routeHostSuffix: "example.test",
 				ingressClassName: "nginx",
 				tlsSecretName: "tls",
@@ -245,10 +248,27 @@ describe("multi-service runtime operations", () => {
 		await operations.apply(value);
 		const deployment = [...fake.resources.values()].find(
 			(resource) => resource.kind === "Deployment",
-		);
+		) as V1Deployment | undefined;
 		expect(deployment?.metadata?.labels?.["agent-infra.agora.io/agent"]).toBe(
 			workloadResourceNameV1("agent-a"),
 		);
+		const configMap = [...fake.resources.values()].find(
+			(resource) => resource.kind === "ConfigMap",
+		) as V1ConfigMap | undefined;
+		expect(configMap?.immutable).toBe(true);
+		expect(configMap?.data).toEqual({ "app.conf": "hello=world\n" });
+		expect(deployment?.spec?.template.spec?.volumes).toEqual([
+			{
+				name: "config",
+				configMap: {
+					name: `${workloadResourceNameV1("agent-a")}-web-config`,
+					optional: false,
+				},
+			},
+		]);
+		expect(
+			deployment?.spec?.template.spec?.containers[0]?.volumeMounts,
+		).toEqual([{ name: "config", mountPath: "/etc/web", readOnly: true }]);
 		expect(
 			fake.resources.has(`ServiceAccount/${workloadResourceNameV1("agent-a")}`),
 		).toBe(true);
@@ -264,116 +284,110 @@ describe("multi-service runtime operations", () => {
 		).toBe(true);
 	});
 
-	it("reconciles a StatefulSet with a policy-owned PVC and retains it on stop", async () => {
+	it("fails closed when an immutable ConfigMap is changed in place", async () => {
 		const fake = fakeClient();
 		const operations = createMultiServiceRuntimeOperations({
 			client: fake.client,
 			policy: {
 				namespace: "agents",
-				imageRepository: "registry.example.test/agents",
-				storageSize: "1Gi",
-				storageClassName: "platform",
 				routeHostSuffix: "example.test",
 				ingressClassName: "nginx",
 				tlsSecretName: "tls",
 				routeSelector: { "app.kubernetes.io/name": "ingress" },
 			},
 		});
-		const value = desired(statefulManifest);
+		const value = desired();
 		if (!isMultiService(value))
 			throw new Error("multi-service fixture invalid");
-
 		await operations.apply(value);
-		const statefulSet = fake.resources.get(
-			`StatefulSet/${workloadResourceNameV1("agent-a")}-worker`,
-		) as {
-			spec?: {
-				template?: {
-					spec?: {
-						containers?: Array<{ image?: string; volumeMounts?: unknown[] }>;
-					};
-				};
-			};
-		};
-		const pvc = fake.resources.get(
-			`PersistentVolumeClaim/${workloadResourceNameV1("agent-a")}-worker-data`,
-		) as {
-			spec?: {
-				resources?: { requests?: { storage?: string } };
-				storageClassName?: string;
-			};
-		};
-		expect(pvc.spec?.resources?.requests?.storage).toBe("1Gi");
-		expect(pvc.spec?.storageClassName).toBe("platform");
-		const pvcUid = (
-			fake.resources.get(
-				`PersistentVolumeClaim/${workloadResourceNameV1("agent-a")}-worker-data`,
-			) as { metadata?: { uid?: string } }
-		).metadata?.uid;
-		expect(statefulSet.spec?.template?.spec?.containers?.[0]?.image).toBe(
-			`registry.example.test/agents@sha256:${"b".repeat(64)}`,
+		const configMap = fake.resources.get(
+			`ConfigMap/${workloadResourceNameV1("agent-a")}-web-config`,
+		) as V1ConfigMap | undefined;
+		if (!configMap) throw new Error("ConfigMap fixture missing");
+		fake.resources.set(
+			`ConfigMap/${workloadResourceNameV1("agent-a")}-web-config`,
+			{
+				...configMap,
+				data: { "app.conf": "tampered=true\n" },
+			} as V1ConfigMap,
 		);
-		expect(
-			statefulSet.spec?.template?.spec?.containers?.[0]?.volumeMounts,
-		).toEqual([{ name: "data", mountPath: "/data" }]);
-
-		expect(await operations.scaleDown(value)).toBe("pending");
-		expect(
-			(
-				fake.resources.get(
-					`StatefulSet/${workloadResourceNameV1("agent-a")}-worker`,
-				) as { spec?: { replicas?: number } }
-			).spec?.replicas,
-		).toBe(0);
-		expect(await operations.cleanupAgent(value)).toBe(true);
-		expect(
-			fake.resources.has(
-				`PersistentVolumeClaim/${workloadResourceNameV1("agent-a")}-worker-data`,
-			),
-		).toBe(true);
-		await operations.apply(value);
-		expect(
-			(
-				fake.resources.get(
-					`PersistentVolumeClaim/${workloadResourceNameV1("agent-a")}-worker-data`,
-				) as { metadata?: { uid?: string } }
-			).metadata?.uid,
-		).toBe(pvcUid);
-		expect(await operations.cleanupAgent(value, true)).toBe(true);
-		expect(
-			fake.resources.has(
-				`PersistentVolumeClaim/${workloadResourceNameV1("agent-a")}-worker-data`,
-			),
-		).toBe(false);
+		await expect(operations.apply(value)).rejects.toThrow(
+			"ConfigMap is immutable and drifted",
+		);
 	});
 
-	it("rejects an owned PVC that drifts from the platform storage tier", async () => {
+	it("runs a migration Job before services and reuses its completed result", async () => {
 		const fake = fakeClient();
 		const operations = createMultiServiceRuntimeOperations({
 			client: fake.client,
 			policy: {
 				namespace: "agents",
-				imageRepository: "registry.example.test/agents",
-				storageSize: "1Gi",
-				storageClassName: "platform",
 				routeHostSuffix: "example.test",
 				ingressClassName: "nginx",
 				tlsSecretName: "tls",
 				routeSelector: { "app.kubernetes.io/name": "ingress" },
 			},
 		});
-		const value = desired(statefulManifest);
+		const value = desired(migrationManifest);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		const identity = await operations.apply(value);
+		const job = [...fake.resources.values()].find(
+			(resource) => resource.kind === "Job",
+		) as V1Job | undefined;
+		expect(job?.spec?.activeDeadlineSeconds).toBe(300);
+		expect(job?.spec?.template?.spec?.restartPolicy).toBe("Never");
+		expect(
+			[...fake.resources.values()].some(
+				(resource) => resource.kind === "Deployment",
+			),
+		).toBe(false);
+		expect(await operations.observe(value, identity)).toBe("unreachable");
+		if (!job) throw new Error("migration Job fixture missing");
+		job.status = { succeeded: 1 };
+		expect(await operations.observe(value, identity)).toBe("drifted");
+		await operations.apply(value);
+		expect(
+			[...fake.resources.values()].some(
+				(resource) => resource.kind === "Deployment",
+			),
+		).toBe(true);
+		const completedJob = fake.resources.get(`Job/${job.metadata?.name}`);
+		await operations.apply(value);
+		expect(fake.resources.get(`Job/${job.metadata?.name}`)).toBe(completedJob);
+	});
+
+	it("fails closed when the migration Job reports failure", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				namespace: "agents",
+				routeHostSuffix: "example.test",
+				ingressClassName: "nginx",
+				tlsSecretName: "tls",
+				routeSelector: { "app.kubernetes.io/name": "ingress" },
+			},
+		});
+		const value = desired(migrationManifest);
 		if (!isMultiService(value))
 			throw new Error("multi-service fixture invalid");
 		await operations.apply(value);
-		const pvcName = `PersistentVolumeClaim/${workloadResourceNameV1("agent-a")}-worker-data`;
-		const pvc = fake.resources.get(pvcName);
-		if (!pvc) throw new Error("PVC fixture missing");
-		(
-			pvc as { spec: { resources: { requests: { storage: string } } } }
-		).spec.resources.requests.storage = "100Gi";
-		await expect(operations.apply(value)).rejects.toThrow(
-			"multi-service PVC drifted",
+		const job = [...fake.resources.values()].find(
+			(resource) => resource.kind === "Job",
+		) as V1Job | undefined;
+		if (!job) throw new Error("migration Job fixture missing");
+		job.status = {
+			failed: 1,
+			conditions: [{ type: "Failed", status: "True" }],
+		};
+		expect(await operations.observe(value, { uid: "u", generation: 1 })).toBe(
+			"unhealthy",
 		);
+		expect(
+			[...fake.resources.values()].some(
+				(resource) => resource.kind === "Deployment",
+			),
+		).toBe(false);
 	});
 });
