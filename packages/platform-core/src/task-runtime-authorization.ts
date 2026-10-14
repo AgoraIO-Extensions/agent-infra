@@ -80,6 +80,7 @@ type Context = TaskRuntimeAuthorizationContextV1;
 type Command =
 	| "turn.submit"
 	| "turn.supplement"
+	| "native-capability.invoke"
 	| "turn.stop"
 	| "session.status"
 	| "generation.cancel"
@@ -542,9 +543,11 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			const { authority: result } = await current(
 				context,
 				state,
-				claim.operation === "conversation.turn.stop.v1"
-					? "turn.stop"
-					: "session.status",
+				claim.operation === "conversation.native-capability.invoke.v1"
+					? "native-capability.invoke"
+					: claim.operation === "conversation.turn.stop.v1"
+						? "turn.stop"
+						: "session.status",
 				signal,
 			);
 			if (

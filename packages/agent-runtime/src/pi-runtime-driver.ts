@@ -46,6 +46,8 @@ export const PiRuntimeDriver = {
 	open(options: PiRuntimeDriverOptions) {
 		return SessionRuntimeDriver.open({
 			...options,
+			nativeSkillPrompt: (name, parameters) =>
+				`/skill:${name}${parameters.length > 0 ? ` ${parameters}` : ""}`,
 			// The pinned Pi adapter has no verified Browser transport seam; keep the
 			// descriptor surface empty until an extension/ACP callback is available.
 			browserCapability: undefined,

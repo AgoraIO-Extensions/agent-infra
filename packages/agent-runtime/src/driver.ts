@@ -41,6 +41,25 @@ export interface RuntimeNativeSkillReaderV1 {
 	): Promise<Uint8Array>;
 }
 
+/** Request-local native Skill execution; the mounted directory remains Host-owned. */
+export type RuntimeNativeSkillCommandV1 = Readonly<{
+	schemaVersion: 1;
+	kind: "native-capability";
+	operationId: string;
+	agentId: string;
+	conversationId: string;
+	executionId: string;
+	turnId: string;
+	sessionGeneration: number;
+	nativeSessionRef: string;
+	capabilityId: string;
+	directoryRevision: string;
+	parameters: string;
+	parametersDigest: string;
+	capabilityName: string;
+	capabilitySourceVersion: string;
+}>;
+
 /** Request-local authority for one authenticated native metadata read. */
 export interface RuntimeNativeMetadataReadContextV1 {
 	readonly nativeSessionRef: string;
@@ -248,6 +267,10 @@ export interface RuntimeDriver {
 		selector: NativeMetadataSelectorV1,
 		read: RuntimeNativeMetadataReadContextV1,
 	): Promise<NativeMetadataProjectionV1>;
+	/** Build the durable Driver command for one verified native Skill invocation. */
+	createNativeSkillCommand?(
+		command: RuntimeNativeSkillCommandV1,
+	): Extract<RuntimeDriverCommand, { kind: "submit-turn" }>;
 	executeBrowserHandoff?(
 		nativeSessionRef: string,
 		executionId: string,

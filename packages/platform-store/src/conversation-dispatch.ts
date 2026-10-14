@@ -749,6 +749,12 @@ export class PostgresConversationDispatchStoreV1
 					)
 						throw new StaleDispatchLease();
 					if (
+						input.claim.operation ===
+							"conversation.native-capability.invoke.v1" &&
+						state.conversation.status !== "ready"
+					)
+						throw new DispatchCapacityUnavailable("capacity_wait");
+					if (
 						isTurn(input.claim.operation) &&
 						(state.execution.status === "submitted" ||
 							state.execution.status === "waiting")

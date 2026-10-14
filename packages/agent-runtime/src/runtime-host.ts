@@ -21,6 +21,7 @@ import type {
 	RuntimeGenerationCancelRequestV3,
 	RuntimeModelDirectoryRequestV1,
 	RuntimeModelDirectoryResponseV1,
+	RuntimeNativeCapabilityRequestV3,
 	RuntimeNativeMetadataReadRequestV1,
 	RuntimeNativeMetadataReadResponseV1,
 	RuntimeOperationResponseV1,
@@ -859,6 +860,14 @@ export class RuntimeHost {
 	supplementV3(value: RuntimeSupplementRequestV3, verification: unknown) {
 		this.requireLegacyBusiness();
 		return this.trustedHost().supplement(value, verification);
+	}
+	nativeCapabilityV3(
+		value: RuntimeNativeCapabilityRequestV3,
+		verification: unknown,
+		signal: AbortSignal,
+	) {
+		this.requireLegacyBusiness();
+		return this.trustedHost().nativeCapability(value, verification, signal);
 	}
 	submitTurnV4(value: RuntimeSubmitTurnTransportV4) {
 		if (this.closed || !this.v4) runtimeAuthorizationDenied();

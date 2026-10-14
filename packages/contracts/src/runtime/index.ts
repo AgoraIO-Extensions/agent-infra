@@ -21,6 +21,7 @@ export * from "./host-v4-events.ts";
 export * from "./host-v4-key-recovery.ts";
 export * from "./installation.ts";
 export * from "./legacy-migration-v1.ts";
+export * from "./native-capability.ts";
 export * from "./native-metadata-v1.ts";
 export * from "./platform-entry-auth.ts";
 export * from "./readiness.ts";
@@ -231,11 +232,13 @@ import {
 	RuntimeSubmitTurnRequestV3Schema,
 	RuntimeSupplementRequestV3Schema,
 } from "./host-v3.ts";
+import { RuntimeNativeCapabilityRequestV3Schema } from "./native-capability.ts";
 
 export const RuntimeHostV3SchemaDefinitions = {
 	RuntimeBrowserHandoffRequestV3: RuntimeBrowserHandoffRequestV3Schema,
 	RuntimeBrowserHandoffResponseV3: RuntimeBrowserHandoffResponseV3Schema,
 	RuntimeSubmitTurnRequestV3: RuntimeSubmitTurnRequestV3Schema,
+	RuntimeNativeCapabilityRequestV3: RuntimeNativeCapabilityRequestV3Schema,
 	RuntimeSupplementRequestV3: RuntimeSupplementRequestV3Schema,
 	RuntimeStopRequestV3: RuntimeStopRequestV3Schema,
 	RuntimeStatusRequestV3: RuntimeStatusRequestV3Schema,
