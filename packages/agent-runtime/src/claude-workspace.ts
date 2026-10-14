@@ -37,9 +37,12 @@ export function claudeWorkspaceTools(
 	const cleanupToolReadOnlyFile = async (toolUseId: unknown) => {
 		if (typeof toolUseId !== "string") return;
 		const filePath = cleanupReadOnlyPaths.get(toolUseId);
-		if (!filePath) return;
 		cleanupReadOnlyPaths.delete(toolUseId);
-		await onToolOperation?.cleanupReadOnlyFile?.(filePath);
+		for (const [approvedPath, approvedToolUseId] of approvedReadOnlyPaths) {
+			if (approvedToolUseId === toolUseId)
+				approvedReadOnlyPaths.delete(approvedPath);
+		}
+		if (filePath) await onToolOperation?.cleanupReadOnlyFile?.(filePath);
 	};
 	const resolveInput = async (
 		name: string,
@@ -171,49 +174,55 @@ export function claudeWorkspaceTools(
 							{
 								hooks: [
 									async (input) => {
-										if (
-											onToolOperation &&
-											input.hook_event_name === "PostToolUse"
-										)
-											await onToolOperation.onStarted?.(
-												typeof input.tool_use_id === "string"
-													? input.tool_use_id
-													: "unknown-tool-use",
-												input.tool_name,
-											);
-										if (
-											onToolOperation &&
-											input.hook_event_name === "PostToolUse"
-										)
-											await onToolOperation.onCompleted?.(
-												typeof input.tool_use_id === "string"
-													? input.tool_use_id
-													: "unknown-tool-use",
-												input.tool_name,
-											);
-										if (
-											onResultFile &&
-											input.hook_event_name === "PostToolUse" &&
-											["Write", "Edit"].includes(input.tool_name) &&
-											input.tool_response &&
-											typeof input.tool_response === "object" &&
-											(input.tool_response as { filePath?: unknown })
-												.filePath &&
-											(typeof (input.tool_response as { content?: unknown })
-												.content === "string" ||
-												Array.isArray(
-													(input.tool_response as { structuredPatch?: unknown })
-														.structuredPatch,
-												))
-										) {
-											await onResultFile(
-												input.tool_response as ClaudeFileWriteOutput,
-											);
+										const toolUseId =
+											"tool_use_id" in input ? input.tool_use_id : undefined;
+										try {
+											if (
+												onToolOperation &&
+												input.hook_event_name === "PostToolUse"
+											)
+												await onToolOperation.onStarted?.(
+													typeof toolUseId === "string"
+														? toolUseId
+														: "unknown-tool-use",
+													input.tool_name,
+												);
+											if (
+												onToolOperation &&
+												input.hook_event_name === "PostToolUse"
+											)
+												await onToolOperation.onCompleted?.(
+													typeof toolUseId === "string"
+														? toolUseId
+														: "unknown-tool-use",
+													input.tool_name,
+												);
+											if (
+												onResultFile &&
+												input.hook_event_name === "PostToolUse" &&
+												["Write", "Edit"].includes(input.tool_name) &&
+												input.tool_response &&
+												typeof input.tool_response === "object" &&
+												(input.tool_response as { filePath?: unknown })
+													.filePath &&
+												(typeof (input.tool_response as { content?: unknown })
+													.content === "string" ||
+													Array.isArray(
+														(
+															input.tool_response as {
+																structuredPatch?: unknown;
+															}
+														).structuredPatch,
+													))
+											) {
+												await onResultFile(
+													input.tool_response as ClaudeFileWriteOutput,
+												);
+											}
+											return {};
+										} finally {
+											await cleanupToolReadOnlyFile(toolUseId);
 										}
-										await cleanupToolReadOnlyFile(
-											"tool_use_id" in input ? input.tool_use_id : undefined,
-										);
-										return {};
 									},
 								],
 							},
@@ -232,19 +241,22 @@ export function claudeWorkspaceTools(
 											typeof input.tool_use_id === "string"
 												? input.tool_use_id
 												: "unknown-tool-use";
-										await onToolOperation.onStarted?.(
-											toolUseId,
-											input.tool_name,
-										);
-										await onToolOperation.onFailed?.(
-											toolUseId,
-											input.tool_name,
-											input.duration_ms,
-										);
-										await cleanupToolReadOnlyFile(
-											"tool_use_id" in input ? input.tool_use_id : undefined,
-										);
-										return {};
+										try {
+											await onToolOperation.onStarted?.(
+												toolUseId,
+												input.tool_name,
+											);
+											await onToolOperation.onFailed?.(
+												toolUseId,
+												input.tool_name,
+												input.duration_ms,
+											);
+											return {};
+										} finally {
+											await cleanupToolReadOnlyFile(
+												"tool_use_id" in input ? input.tool_use_id : undefined,
+											);
+										}
 									},
 								],
 							},
