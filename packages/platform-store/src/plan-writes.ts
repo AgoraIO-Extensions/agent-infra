@@ -27,6 +27,23 @@ type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
 >[0];
 
+/**
+ * 配置版本只能沿 V2→V2、V3→V3 前进（#2401）：
+ * - V3 基线绝不降级为需要模型凭证的 V2；
+ * - V2 基线要变成 V3，必须由替换默认 Key 的计划完成，不能悄悄改写版本；
+ * - 替换默认 Key 的计划需要持久化 Key 附件，当前提交边界尚未实现，一律拒绝，
+ *   避免配置已前进而新 Key 被静默丢弃。
+ */
+export function configurationVersionTransitionAllowed(
+	plan: Pick<AgentConfigurationWritePlanV1, "result">,
+	configuration: Pick<AgentConfigurationRecord, "schemaVersion">,
+	previous: Pick<AgentConfigurationRecord, "schemaVersion">,
+): boolean {
+	if (plan.result.changedFields.includes("defaultRelayKey")) return false;
+	if (configuration.schemaVersion === 3) return previous.schemaVersion === 3;
+	return configuration.schemaVersion === 2 && previous.schemaVersion === 2;
+}
+
 export async function advanceAgentConfigurationRevision(
 	transaction: Transaction,
 	plan: AgentConfigurationWritePlanV1,

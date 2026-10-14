@@ -218,8 +218,6 @@ function createAgentConfigurationUseCaseV1Internal(
 			throw new AgentConfigurationError("not_authorized");
 		}
 		const current = readDecision.record.configuration;
-		if (!keyless && current.schemaVersion === 3)
-			throw new AgentConfigurationError("not_admitted");
 		if (keyless && current.revision !== keyless.expectedConfigurationRevision)
 			throw new AgentConfigurationError("stale_revision");
 		if (keyless && current.source.kind !== "standard")
@@ -241,6 +239,14 @@ function createAgentConfigurationUseCaseV1Internal(
 		)
 			throw new AgentConfigurationError("stale_revision");
 		const changes = changesFromCurrent(current);
+		// V3（无凭证）配置的模型集合只能由携带默认 Key 的 V3 命令更换；V2 形态命令
+		// 只改变其他字段，结果保持 V3，不会降级成需要模型凭证的 V2（#2401）。
+		if (
+			!keyless &&
+			current.schemaVersion === 3 &&
+			changes.modelConfiguration !== undefined
+		)
+			throw new AgentConfigurationError("not_admitted");
 
 		let accessUpdate: AgentConfigurationAccessPlanV1 | null = null;
 		const changedFields: AgentConfigurationChangedFieldV1[] = [];
@@ -691,7 +697,7 @@ function createAgentConfigurationUseCaseV1Internal(
 		}
 		const configuration = decodeAgentConfigurationRecord({
 			...current,
-			schemaVersion: keyless ? 3 : 2,
+			schemaVersion: keyless || current.schemaVersion === 3 ? 3 : 2,
 			revision: nextRevision,
 			source,
 			modelConfiguration,
