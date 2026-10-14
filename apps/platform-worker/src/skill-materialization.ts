@@ -136,43 +136,44 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 			if (bindings.length > 0 && !options.writeAppliedReceipt)
 				throw new Error("Skill Applied receipt writer unavailable");
 			const appliedBindings: SkillHubSyncBindingV1[] = [];
-			if (options.writeAppliedReceipt) {
-				for (const binding of bindings) {
-					const appliedReceipt: SkillHubAppliedReceiptV1 = {
-						schemaVersion: 1,
-						agentId: input.agentId,
-						agentVersion: binding.agentVersion,
-						skillName: binding.name,
-						configurationRevision: input.configurationRevision,
-						syncRevision: binding.syncRevision,
-						skillVersionId: binding.skillVersion.skillVersionId,
-						generationId: result.generationId,
-						packageDigest: binding.skillVersion.packageDigest,
-						manifestDigest: binding.skillVersion.manifestDigest,
-						targetPath: `.agents/skills/${binding.name}`,
-						readOnly: true,
-					};
-					await options.writeAppliedReceipt(appliedReceipt);
-					appliedBindings.push({
-						schemaVersion: 1,
-						agentId: binding.agentId,
-						agentVersion: binding.agentVersion,
-						skillName: binding.name,
-						skillVersion: binding.skillVersion,
-						grant: binding.grant,
-						configurationRevision: input.configurationRevision,
-						syncRevision: binding.syncRevision,
-						state: "synced",
-						failureReason: null,
-						appliedReceipt,
-					});
-				}
+			for (const binding of bindings) {
+				const appliedReceipt: SkillHubAppliedReceiptV1 = {
+					schemaVersion: 1,
+					agentId: input.agentId,
+					agentVersion: binding.agentVersion,
+					skillName: binding.name,
+					configurationRevision: input.configurationRevision,
+					syncRevision: binding.syncRevision,
+					skillVersionId: binding.skillVersion.skillVersionId,
+					generationId: result.generationId,
+					packageDigest: binding.skillVersion.packageDigest,
+					manifestDigest: binding.skillVersion.manifestDigest,
+					targetPath: `.agents/skills/${binding.name}`,
+					readOnly: true,
+				};
+				appliedBindings.push({
+					schemaVersion: 1,
+					agentId: binding.agentId,
+					agentVersion: binding.agentVersion,
+					skillName: binding.name,
+					skillVersion: binding.skillVersion,
+					grant: binding.grant,
+					configurationRevision: input.configurationRevision,
+					syncRevision: binding.syncRevision,
+					state: "synced",
+					failureReason: null,
+					appliedReceipt,
+				});
 			}
 			const validated = validateWorkloadSkillMaterializationV1(input, {
 				generationId: result.generationId,
 				skills,
 				appliedBindings,
 			});
+			if (options.writeAppliedReceipt) {
+				for (const binding of appliedBindings)
+					await options.writeAppliedReceipt(binding.appliedReceipt);
+			}
 			return validated;
 		},
 	};
