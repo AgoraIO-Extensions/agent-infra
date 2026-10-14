@@ -94,7 +94,7 @@ describe("AgentAuthorizationControls", () => {
 		});
 
 		render(<AgentAuthorizationControls agentId="agent-1" enabled />);
-		fireEvent.click(screen.getByRole("button", { name: "用户", exact: true }));
+		fireEvent.click(screen.getByRole("button", { name: /^用户$/ }));
 		fireEvent.change(screen.getByLabelText("用户 ID"), {
 			target: { value: "user-1" },
 		});
