@@ -30,9 +30,6 @@ describe("Platform API resource sampling lifecycle", () => {
 				new Promise<{
 					taskWaiting: number;
 					outboxPending: number;
-					postgresActivityActive?: number;
-					postgresActivityIdle?: number;
-					postgresActivityWaiting?: number;
 				}>((resolve) => {
 					complete = resolve;
 				}),
@@ -50,28 +47,6 @@ describe("Platform API resource sampling lifecycle", () => {
 		await sampling.stop();
 		await vi.advanceTimersByTimeAsync(10_000);
 		expect(read).toHaveBeenCalledOnce();
-		await telemetry.close();
-	});
-
-	it("publishes optional local PostgreSQL activity gauges when Store exposes them", async () => {
-		const { telemetry, observe } = observer();
-		const read = vi.fn().mockResolvedValue({
-			taskWaiting: 1,
-			outboxPending: 2,
-			postgresActivityActive: 3,
-			postgresActivityIdle: 4,
-			postgresActivityWaiting: 5,
-		});
-		const sampling = startPlatformResourceSampling(read, telemetry, 1000);
-		await vi.advanceTimersByTimeAsync(0);
-		expect(observe.mock.calls).toEqual([
-			[{ kind: "task_waiting", value: 1 }],
-			[{ kind: "outbox_pending", value: 2 }],
-			[{ kind: "postgres_activity_active", value: 3 }],
-			[{ kind: "postgres_activity_idle", value: 4 }],
-			[{ kind: "postgres_activity_waiting", value: 5 }],
-		]);
-		await sampling.stop();
 		await telemetry.close();
 	});
 

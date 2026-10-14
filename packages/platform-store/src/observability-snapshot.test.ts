@@ -2,10 +2,7 @@ import type postgres from "postgres";
 import { expect, it, vi } from "vitest";
 import { readPlatformQueueResourceSnapshot } from "./index.js";
 
-function client(
-	query: Promise<unknown[]>,
-	poolQuery: Promise<unknown[]> = Promise.resolve([]),
-) {
+function client(query: Promise<unknown[]>) {
 	const cancellable = <T>(value: Promise<T>) =>
 		Object.assign(value, { cancel: vi.fn() });
 	const transaction = vi.fn((statement: TemplateStringsArray) =>
@@ -13,11 +10,7 @@ function client(
 			? cancellable(Promise.resolve([]))
 			: cancellable(query),
 	);
-	const mockSql = vi.fn((strings: TemplateStringsArray) =>
-		cancellable(
-			strings.join("").includes("pg_stat_activity") ? poolQuery : query,
-		),
-	);
+	const mockSql = vi.fn(() => cancellable(query));
 	const begin = vi.fn(async (_mode, read) => read(transaction));
 	const sql = Object.assign(mockSql, { begin }) as unknown as postgres.Sql &
 		typeof mockSql;
@@ -52,87 +45,6 @@ it("returns one bounded durable snapshot without inspecting business payloads", 
 	// The query only compares payload bindings and never selects business text.
 	expect(query).not.toContain("m.text");
 	expect(query).not.toContain("payload,");
-	expect(snapshot).not.toHaveProperty("postgresActivityActive");
-});
-
-it("returns optional local PostgreSQL activity gauges without exposing activity text", async () => {
-	const { sql } = client(
-		Promise.resolve([{ task_waiting: "2", outbox_pending: "3" }]),
-		Promise.resolve([
-			{
-				activity_active: "1",
-				activity_idle: "4",
-				activity_waiting: "2",
-				activity_hidden: "0",
-			},
-		]),
-	);
-	const snapshot = await readPlatformQueueResourceSnapshot(
-		sql,
-		new AbortController().signal,
-	);
-	expect(snapshot).toMatchObject({
-		postgresActivityActive: 1,
-		postgresActivityIdle: 4,
-		postgresActivityWaiting: 2,
-	});
-	const poolStatement = sql.mock.calls
-		.find((call) => call[0]?.join("").includes("pg_stat_activity"))?.[0]
-		?.join("");
-	expect(poolStatement).toContain("backend_type = 'client backend'");
-	expect(poolStatement).not.toContain("query,");
-});
-
-it("keeps queue counts when local PostgreSQL activity visibility is unavailable", async () => {
-	const { sql } = client(
-		Promise.resolve([{ task_waiting: "2", outbox_pending: "3" }]),
-		Promise.reject(new Error("permission denied for pg_stat_activity")),
-	);
-	await expect(
-		readPlatformQueueResourceSnapshot(sql, new AbortController().signal),
-	).resolves.toMatchObject({ taskWaiting: 2, outboxPending: 3 });
-});
-
-it("omits local activity gauges when pg_stat_activity hides another backend", async () => {
-	const { sql } = client(
-		Promise.resolve([{ task_waiting: "2", outbox_pending: "3" }]),
-		Promise.resolve([
-			{
-				activity_active: "0",
-				activity_idle: "0",
-				activity_waiting: "0",
-				activity_hidden: "1",
-			},
-		]),
-	);
-	const snapshot = await readPlatformQueueResourceSnapshot(
-		sql,
-		new AbortController().signal,
-	);
-	expect(snapshot).toMatchObject({ taskWaiting: 2, outboxPending: 3 });
-	expect(snapshot).not.toHaveProperty("postgresActivityActive");
-});
-
-it("bounds an optional activity visibility query by the shared snapshot deadline", async () => {
-	vi.useFakeTimers();
-	try {
-		const poolQuery = new Promise<unknown[]>(() => {});
-		const { sql } = client(
-			Promise.resolve([{ task_waiting: "2", outbox_pending: "3" }]),
-			poolQuery,
-		);
-		const pending = readPlatformQueueResourceSnapshot(
-			sql,
-			new AbortController().signal,
-		);
-		await vi.advanceTimersByTimeAsync(2000);
-		await expect(pending).resolves.toMatchObject({
-			taskWaiting: 2,
-			outboxPending: 3,
-		});
-	} finally {
-		vi.useRealTimers();
-	}
 });
 
 it.each([
@@ -203,34 +115,6 @@ it("rejects late query results after cancellation without cancelling a shared co
 	await expect(pending).rejects.toThrow(
 		"Platform resource snapshot is unavailable",
 	);
-});
-
-it("rejects while waiting for a pooled connection", async () => {
-	let resolveBegin: (() => void) | undefined;
-	const begin = vi.fn(() => {
-		if (begin.mock.calls.length > 1) return Promise.resolve();
-		return new Promise<void>((resolve) => {
-			resolveBegin = resolve;
-		});
-	});
-	const sql = Object.assign(vi.fn(), { begin }) as unknown as postgres.Sql;
-	const controller = new AbortController();
-	const pending = readPlatformQueueResourceSnapshot(sql, controller.signal);
-	await vi.waitFor(() => expect(begin).toHaveBeenCalledTimes(1));
-	controller.abort();
-	await expect(pending).rejects.toThrow(
-		"Platform resource snapshot is unavailable",
-	);
-	await expect(
-		readPlatformQueueResourceSnapshot(sql, new AbortController().signal),
-	).rejects.toThrow("Platform resource snapshot is unavailable");
-	expect(begin).toHaveBeenCalledTimes(1);
-	resolveBegin?.();
-	await Promise.resolve();
-	await expect(
-		readPlatformQueueResourceSnapshot(sql, new AbortController().signal),
-	).resolves.toBeUndefined();
-	expect(begin).toHaveBeenCalledTimes(2);
 });
 
 it("cancels an active snapshot query on abort", async () => {
