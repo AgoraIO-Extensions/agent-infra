@@ -827,18 +827,27 @@ function isRuntimeBrowserHandoffOpenApiAddition(previous, current) {
 	const normalized = structuredClone(current);
 	delete normalized.paths[path];
 	const previousSchemas = previous.components?.schemas ?? {};
-	for (const name of Object.keys(normalized.components?.schemas ?? {}))
-		if (previousSchemas[name] === undefined)
-			delete normalized.components.schemas[name];
-	for (const name of ["RuntimeControlCommandV2", "RuntimeControlReasonV2"]) {
+	for (const name of [
+		"RuntimeBrowserHandoffRequestV3",
+		"RuntimeBrowserHandoffResponseV3",
+	]) {
+		if (previousSchemas[name] !== undefined) return false;
+		delete normalized.components.schemas[name];
+	}
+	for (const [name, addition] of [
+		["RuntimeControlCommandV2", "browser.handoff"],
+		["RuntimeControlReasonV2", "browser_handoff"],
+	]) {
 		const previousEnum = previousSchemas[name]?.enum;
 		const currentEnum = normalized.components?.schemas?.[name]?.enum;
-		if (Array.isArray(previousEnum) && Array.isArray(currentEnum))
-			normalized.components.schemas[name].enum = currentEnum.filter((value) =>
-				previousEnum.includes(value),
-			);
+		if (!Array.isArray(previousEnum) || !Array.isArray(currentEnum))
+			return false;
+		if (previousEnum.includes(addition)) return false;
+		normalized.components.schemas[name].enum = currentEnum.filter(
+			(value) => value !== addition,
+		);
 	}
-	return findBreakingChanges(previous, normalized).length === 0;
+	return isDeepStrictEqual(previous, normalized);
 }
 
 function stripRuntimeOperationIdentity(value) {

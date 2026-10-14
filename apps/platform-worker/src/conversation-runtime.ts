@@ -178,7 +178,11 @@ type Request =
 	| ConversationRuntimeEventRequestV1
 	| ConversationRuntimeStatusRequestV2
 	| OriginalStatusRequest;
-type Command = RuntimeBusinessCommandV2 | RuntimeControlCommandV2;
+// Browser handoff is a Host-only V3 control transport command; it must never
+// enter the Conversation dispatch loop or its business command union.
+type Command =
+	| RuntimeBusinessCommandV2
+	| Exclude<RuntimeControlCommandV2, "browser.handoff">;
 
 /** Bounded reuse of one drain's live Kubernetes route observation (#1611). */
 const eventRouteProofMaxAgeMs = 2_000;
