@@ -2374,9 +2374,11 @@ fixture 不是员工身份或可用性的证据。
 Secure、HttpOnly state Cookie 绑定浏览器。跨站 GET callback 只返回 no-store/no-referrer 的
 同源中转表单，不交换 code。普通入口由固定内联脚本自动提交一次同源 POST，CSP 只允许该脚本
 的精确 SHA-256 hash；state/code 只经转义写入表单，不拼入脚本，不开放 unsafe-inline 脚本权限。
-脚本不可用时保留“完成公司登录”按钮；失败不自动重试。管理员身份探测仍使用无脚本手动确认，
-不继承普通入口的自动提交。此变更由 [#2460](https://github.com/AgoraIO-Extensions/agent-infra/issues/2460)
-跟踪。同源 POST 验证 Origin、state/Cookie/期限及用途，并经 PostgreSQL
+正常回跳首屏只显示跳转状态，手动兜底提示与“完成公司登录”按钮通过 CSS 延迟两秒显示，
+避免自动提交时闪现；脚本不可用时同样可在两秒后手动提交，失败不自动重试。
+管理员身份探测仍使用无脚本手动确认，不继承普通入口的自动提交。自动提交与兜底显示由
+[#2460](https://github.com/AgoraIO-Extensions/agent-infra/issues/2460)、
+[#2466](https://github.com/AgoraIO-Extensions/agent-infra/issues/2466) 跟踪。同源 POST 验证 Origin、state/Cookie/期限及用途，并经 PostgreSQL
 Browser Command 原子取得单次执行权后才交换。失败或响应未知不重试旧 code，不持久化 code、
 token 或 userInfo。普通入口与管理员 probe 的 state 必须互相拒绝。
 
