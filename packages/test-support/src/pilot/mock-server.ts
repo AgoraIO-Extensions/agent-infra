@@ -17,6 +17,9 @@ export type PilotAgentMockServerScenarioV1 = {
 	readonly getDeploymentConfiguration?: PilotAgentMockResponderV1<[Request]>;
 	readonly listAgents: PilotAgentMockResponderV1<[Request]>;
 	readonly getAgent: PilotAgentMockResponderV1<[Request, string]>;
+	readonly getAgentDefaultRelayKey?: PilotAgentMockResponderV1<
+		[Request, string]
+	>;
 	readonly listAgentApplications?: PilotAgentMockResponderV1<[Request]>;
 	readonly createAgentApplication?: PilotAgentMockResponderV1<[Request]>;
 	readonly getAgentApplication?: PilotAgentMockResponderV1<[Request, string]>;
@@ -104,6 +107,13 @@ function jsonResponse(response: PilotAgentMockResponseV1) {
 	});
 }
 
+function resolveResponse<TArgs extends readonly unknown[]>(
+	responder: PilotAgentMockResponderV1<TArgs>,
+	...args: TArgs
+) {
+	return typeof responder === "function" ? responder(...args) : responder;
+}
+
 export function createPilotAgentMockServerV1(
 	scenario: PilotAgentMockServerScenarioV1,
 ): PilotAgentMockServerV1 {
@@ -143,10 +153,9 @@ function createPilotAgentMockServer(
 			? operation("/api/v2/deployment/configuration", "get")
 			: undefined;
 	const getAgentOperation = operation("/api/v1/agents/{agentId}", "get");
-	// Owner 配置页会读取默认 Key 状态来决定是否由默认 Key 管理模型（#2421）。
 	const getAgentDefaultRelayKeyOperation =
 		version === 2
-			? operation("/api/v1/agents/{agentId}/default-relay-key", "get")
+			? operation("/api/v2/agents/{agentId}/default-relay-key", "get")
 			: undefined;
 	const updateAgentConfigurationOperation = operation(
 		"/api/v1/agents/{agentId}/configuration",
@@ -197,6 +206,12 @@ function createPilotAgentMockServer(
 	}
 	validateStaticResponse(scenario.listAgents, listAgentsOperation);
 	validateStaticResponse(scenario.getAgent, getAgentOperation);
+	if (getAgentDefaultRelayKeyOperation) {
+		validateStaticResponse(
+			scenario.getAgentDefaultRelayKey,
+			getAgentDefaultRelayKeyOperation,
+		);
+	}
 	validateStaticResponse(
 		scenario.updateAgentConfiguration,
 		updateAgentConfigurationOperation,
@@ -468,31 +483,36 @@ function createPilotAgentMockServer(
 			return jsonResponse(response);
 		}
 
-		const keyStateAgentId =
+		const agentIdPath = /^\/api\/v1\/agents\/([^/]+)$/.exec(routingPath)?.[1];
+		const defaultRelayKeyAgentIdPath =
 			/^\/api\/v1\/agents\/([^/]+)\/default-relay-key$/.exec(routingPath)?.[1];
 		if (
+			version === 2 &&
 			request.method === "GET" &&
-			keyStateAgentId !== undefined &&
+			defaultRelayKeyAgentIdPath !== undefined &&
 			getAgentDefaultRelayKeyOperation !== undefined
 		) {
-			// 场景没有声明默认 Key：按“未设置”回答，页面保持逐模型凭证的原有界面。
 			getAgentDefaultRelayKeyOperation.requestParams.path?.parse({
-				agentId: decodeURIComponent(keyStateAgentId),
+				agentId: decodeURIComponent(defaultRelayKeyAgentIdPath),
 			});
-			const response = {
-				status: 200,
-				body: {
-					schemaVersion: 1,
-					isSet: false,
-					keyVersion: null,
-					configurationRevision: 1,
-				},
-			};
+			const response = scenario.getAgentDefaultRelayKey
+				? await resolveResponse(
+						scenario.getAgentDefaultRelayKey,
+						request,
+						decodeURIComponent(defaultRelayKeyAgentIdPath),
+					)
+				: {
+						status: 200,
+						body: {
+							schemaVersion: 1,
+							isSet: false,
+							keyVersion: null,
+							configurationRevision: 1,
+						},
+					};
 			validateResponse(getAgentDefaultRelayKeyOperation, response);
 			return jsonResponse(response);
 		}
-
-		const agentIdPath = /^\/api\/v1\/agents\/([^/]+)$/.exec(routingPath)?.[1];
 		if (request.method === "GET" && agentIdPath !== undefined) {
 			const agentId = decodeURIComponent(agentIdPath);
 			getAgentOperation.requestParams.path?.parse({ agentId });
