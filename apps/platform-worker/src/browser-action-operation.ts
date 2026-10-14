@@ -189,7 +189,10 @@ export function createBrowserActionOperationAdapterV1(input: {
 							idempotencyKey: request.idempotencyKey ?? request.actionId,
 							executionBinding: request.controllerBinding,
 						});
-						if (recovered) {
+						if (
+							recovered &&
+							["completed", "failed", "rejected"].includes(recovered.status)
+						) {
 							assertReturnedIdentity(recovered, request);
 							actionRecord = recovered;
 						}

@@ -1,3 +1,4 @@
+import type { BrowserActionExecutionBindingV1 } from "@agent-infra/agent-runtime";
 import { createBrowserObserveControllerV1 } from "@agent-infra/agent-runtime";
 import type { BrowserCapabilityAvailableV1 } from "@agent-infra/contracts/runtime";
 import type {
@@ -185,7 +186,7 @@ function setup(
 		readonly readAction?: (request: {
 			readonly actionId: string;
 			readonly idempotencyKey?: string;
-			readonly executionBinding: typeof binding;
+			readonly executionBinding: BrowserActionExecutionBindingV1;
 		}) => ActionRecord | null;
 	} = {},
 ) {
@@ -479,6 +480,51 @@ describe("Browser action operation adapter", () => {
 			executionBinding: binding,
 		});
 	});
+
+	it.each(["missing", "mismatched", "nonterminal"] as const)(
+		"preserves unknown when Browser readback is %s",
+		async (kind) => {
+			const readAction =
+				kind === "missing"
+					? undefined
+					: (request: {
+							actionId: string;
+							idempotencyKey?: string;
+							executionBinding: BrowserActionExecutionBindingV1;
+						}) => ({
+							actionId: request.actionId,
+							operationRef:
+								kind === "mismatched"
+									? "foreign-operation"
+									: attempt.operationRef,
+							attemptRef: attempt.attemptRef,
+							kind: action.kind,
+							status: kind === "nonterminal" ? "processing" : "completed",
+							page,
+							sideEffect: true,
+							executionBinding: request.executionBinding,
+							createdAt: "2026-10-07T00:00:00.000Z",
+						});
+			const state = setup({
+				executeAction: async (request) => ({
+					actionId: request.actionId,
+					operationRef: request.operationRef,
+					attemptRef: request.attemptRef,
+					kind: request.kind,
+					status: "unknown",
+					page: request.page,
+					sideEffect: request.sideEffect === true,
+					executionBinding: request.executionBinding,
+					createdAt: "2026-10-07T00:00:00.000Z",
+				}),
+				...(readAction ? { readAction } : {}),
+			});
+			await expect(state.adapter.execute(state.input)).rejects.toMatchObject({
+				failureCode: "recovery_unconfirmed",
+			});
+			expect(state.phases).toEqual(["intent", "started", "unknown"]);
+		},
+	);
 
 	it("does not invoke the controller when the durable intent replays completed", async () => {
 		const state = setup({
