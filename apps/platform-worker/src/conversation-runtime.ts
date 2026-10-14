@@ -1148,11 +1148,13 @@ export function createConversationRuntimeV2(
 			const active = combined(signal);
 			const context = contextFor(request);
 			const expectedOperation =
-				context.claim.operation === "conversation.turn.stop.v1"
-					? "turn.stop"
-					: context.claim.operation === "conversation.turn.supplement.v1"
-						? "turn.supplement"
-						: "turn.submit";
+				context.claim.operation === "conversation.native-capability.invoke.v1"
+					? "native-capability.invoke"
+					: context.claim.operation === "conversation.turn.stop.v1"
+						? "turn.stop"
+						: context.claim.operation === "conversation.turn.supplement.v1"
+							? "turn.supplement"
+							: "turn.submit";
 			if (
 				request.operation !== expectedOperation ||
 				request.deliveryFence !== context.claim.deliveryFence ||
@@ -1175,6 +1177,36 @@ export function createConversationRuntimeV2(
 			) {
 				await latch(prepared, active);
 				denied();
+			}
+			if ((request.operation as string) === "native-capability") {
+				if (
+					state.runtimeSubmitProtocol === "v4" ||
+					!state.hostSessionRef ||
+					!context.claim.nativeCapability ||
+					!request.nativeCapability ||
+					JSON.stringify(request.nativeCapability) !==
+						JSON.stringify(context.claim.nativeCapability)
+				)
+					unavailable("RUNTIME_REQUEST_INVALID");
+				const body = {
+					...base,
+					hostSessionRef: state.hostSessionRef,
+					capabilityId: context.claim.nativeCapability.capabilityId,
+					capabilityKind: "skill" as const,
+					directoryRevision: context.claim.nativeCapability.directoryRevision,
+					parameters: context.claim.nativeCapability.parameters,
+					parametersDigest: context.claim.nativeCapability.parametersDigest,
+				};
+				return {
+					...(await client.nativeCapability(
+						{
+							...body,
+							grant: signRequest(body, authority, "native-capability.invoke"),
+						},
+						active,
+					)),
+					schemaVersion: 1,
+				};
 			}
 			if (request.operation === "turn.submit") {
 				if (!customBusiness(prepared))

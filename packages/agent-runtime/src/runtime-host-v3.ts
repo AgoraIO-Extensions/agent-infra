@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	type RuntimeAuthorizationRenewRequestV3,
 	RuntimeAuthorizationRenewRequestV3Schema,
@@ -13,6 +14,8 @@ import {
 	type RuntimeExecutionGrantClaimsV2,
 	type RuntimeGenerationCancelRequestV3,
 	RuntimeGenerationCancelRequestV3Schema,
+	type RuntimeNativeCapabilityRequestV3,
+	RuntimeNativeCapabilityRequestV3Schema,
 	type RuntimeOperationResponseV1,
 	type RuntimeOperationResponseV2,
 	type RuntimeOriginalBindingResponseV3,
@@ -29,6 +32,7 @@ import {
 
 import type {
 	RuntimeDriver,
+	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
 } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
@@ -156,6 +160,200 @@ export class RuntimeHostV3 {
 		);
 		for (const guard of matching) guard.controller.abort();
 		await Promise.allSettled(matching.map((guard) => guard.done));
+	}
+
+	private nativeSkillReadContext(
+		request: RuntimeNativeCapabilityRequestV3,
+		verification: unknown,
+		signal: AbortSignal,
+		claims: RuntimeExecutionGrantClaimsV2,
+	) {
+		const now = this.options.grantValidation.now ?? Date.now;
+		const expiresAt = Math.min(claims.expiresAt, now() + 30_000);
+		if (!Number.isSafeInteger(expiresAt) || expiresAt <= now())
+			nativeRequired();
+		const controller = new AbortController();
+		const active = AbortSignal.any([
+			this.lifetime.signal,
+			controller.signal,
+			signal,
+		]);
+		const timer = setTimeout(
+			() => controller.abort(),
+			Math.max(0, expiresAt - now()),
+		);
+		timer.unref();
+		const binding: RuntimeOriginalEvidenceBinding = {
+			principal: request.principal,
+			scope: {
+				agentId: request.agentId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				sessionGeneration: request.sessionGeneration,
+			},
+		};
+		const assertCurrent = () => {
+			active.throwIfAborted();
+			if (expiresAt <= now()) nativeRequired();
+			this.assertOpen();
+			this.validate(request, "native-capability.invoke", verification);
+			this.options.store.getSessionForQuery(
+				request.hostSessionRef,
+				request,
+				request.operation.deliveryFence,
+			);
+			return binding;
+		};
+		return {
+			nativeSessionRef:
+				this.options.store.getSessionForQuery(
+					request.hostSessionRef,
+					request,
+					request.operation.deliveryFence,
+				).nativeSessionRef ?? nativeRequired(),
+			active,
+			signal: active,
+			expiresAt,
+			assertCurrent,
+			revalidate: async () => {
+				assertCurrent();
+				return assertCurrent();
+			},
+			close: () => {
+				clearTimeout(timer);
+				controller.abort();
+			},
+		};
+	}
+
+	async nativeCapability(
+		value: RuntimeNativeCapabilityRequestV3,
+		verification: unknown,
+		signal: AbortSignal,
+	) {
+		this.assertOpen();
+		const request = RuntimeNativeCapabilityRequestV3Schema.parse(value);
+		const claims = this.validate(
+			request,
+			"native-capability.invoke",
+			verification,
+		);
+		if (claims.purpose !== "business") runtimeAuthorizationDenied();
+		if (
+			request.operation.kind !== "execution" ||
+			request.operation.id !== request.executionId ||
+			request.operation.deliveryFence !==
+				request.operation.executionDeliveryFence ||
+			createHash("sha256").update(request.parameters).digest("hex") !==
+				request.parametersDigest
+		)
+			runtimeAuthorizationDenied();
+		const read = this.nativeSkillReadContext(
+			request,
+			verification,
+			signal,
+			claims,
+		);
+		let capabilityName: string;
+		try {
+			read.assertCurrent();
+			const metadataReader = this.options.driver.readNativeMetadataV1;
+			if (!metadataReader) {
+				throw new RuntimeHostError(
+					"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+					"Native Skill execution is unavailable for this runtime",
+					409,
+				);
+			}
+			const projection = await metadataReader.call(
+				this.options.driver,
+				"skills",
+				read,
+			);
+			await read.revalidate();
+			if (projection.selector !== "skills") invalidDriver();
+			if (projection.revision !== request.directoryRevision) {
+				throw new RuntimeHostError(
+					"RUNTIME_NATIVE_CAPABILITY_STALE",
+					"Native Skill directory is no longer current",
+					409,
+				);
+			}
+			const capability = projection.capabilities.find(
+				(entry) => entry.id === request.capabilityId && entry.kind === "skill",
+			);
+			if (capability?.availability !== "discovered") {
+				throw new RuntimeHostError(
+					"RUNTIME_NATIVE_CAPABILITY_UNAVAILABLE",
+					"Native Skill is unavailable",
+					409,
+				);
+			}
+			capabilityName = capability.name;
+			await read.revalidate();
+			const response = await this.options.serialize(
+				this.options.store.sessionQueueKey(request),
+				async () => {
+					this.assertOpen();
+					this.validate(request, "native-capability.invoke", verification);
+					const prepared = await this.options.store.prepareOperation({
+						authorization: claims,
+						now: this.options.grantValidation.now ?? Date.now,
+						requestedHostSessionRef: request.hostSessionRef,
+						binding: request,
+						operationId: request.executionId,
+						kind: "submit-turn",
+						scope: `execution:${request.executionId}`,
+						deliveryFence: request.operation.deliveryFence,
+						requestDigest: requestDigest({
+							kind: "native-capability",
+							agentId: request.agentId,
+							conversationId: request.conversationId,
+							executionId: request.executionId,
+							turnId: request.turnId,
+							sessionGeneration: request.sessionGeneration,
+							capabilityId: request.capabilityId,
+							directoryRevision: request.directoryRevision,
+							parametersDigest: request.parametersDigest,
+						}),
+						command: (nativeSessionRef) => {
+							if (!nativeSessionRef) nativeRequired();
+							const create = this.options.driver.createNativeSkillCommand;
+							if (!create) {
+								throw new RuntimeHostError(
+									"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+									"Native Skill execution is unavailable for this runtime",
+									409,
+								);
+							}
+							return create({
+								schemaVersion: 1,
+								kind: "native-capability",
+								operationId: request.executionId,
+								agentId: request.agentId,
+								conversationId: request.conversationId,
+								executionId: request.executionId,
+								turnId: request.turnId,
+								sessionGeneration: request.sessionGeneration,
+								nativeSessionRef,
+								capabilityId: request.capabilityId,
+								directoryRevision: request.directoryRevision,
+								parameters: request.parameters,
+								parametersDigest: request.parametersDigest,
+								capabilityName,
+							});
+						},
+					});
+					return this.options.dispatch(
+						prepared.session.hostSessionRef,
+						prepared.operation,
+					);
+				},
+			);
+			return { ...response, schemaVersion: 3 as const };
+		} finally {
+			read.close();
+		}
 	}
 
 	private async recoverEvidence(
@@ -324,6 +522,7 @@ export class RuntimeHostV3 {
 	private validate(
 		request:
 			| RuntimeSubmitTurnRequestV3
+			| RuntimeNativeCapabilityRequestV3
 			| RuntimeSupplementRequestV3
 			| RuntimeStopRequestV3
 			| RuntimeStatusRequestV3
