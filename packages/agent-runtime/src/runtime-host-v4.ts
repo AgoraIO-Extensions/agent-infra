@@ -186,11 +186,13 @@ export class RuntimeHostV4 {
 			assertCurrent: () => {
 				if (controller.signal.aborted || expiresAt <= now()) nativeRequired();
 				this.options.assertOpen();
-				this.options.store.getSessionForQuery(
+				const currentSession = this.options.store.getSessionForQuery(
 					request.hostSessionRef,
 					request,
 					request.operation.deliveryFence,
 				);
+				if (currentSession.nativeSessionRef !== nativeSessionRef)
+					nativeRequired();
 				return binding;
 			},
 			revalidate: async () => {
@@ -280,8 +282,10 @@ export class RuntimeHostV4 {
 							runtimeOperationDigestInputV4(request),
 						),
 						keyScopeV4: pinnedScope,
-						command: (sessionRef) =>
-							create({
+						command: (commandNativeSessionRef) => {
+							if (commandNativeSessionRef !== nativeSessionRef)
+								nativeRequired();
+							return create({
 								schemaVersion: 1,
 								kind: "native-capability",
 								operationId: request.executionId,
@@ -290,14 +294,15 @@ export class RuntimeHostV4 {
 								executionId: request.executionId,
 								turnId: request.turnId,
 								sessionGeneration: request.sessionGeneration,
-								nativeSessionRef: sessionRef ?? nativeRequired(),
+								nativeSessionRef: commandNativeSessionRef,
 								capabilityId: request.capabilityId,
 								directoryRevision: request.directoryRevision,
 								parameters: request.parameters,
 								parametersDigest: request.parametersDigest,
 								capabilityName,
 								capabilitySourceVersion: request.capabilitySourceVersion,
-							}),
+							});
+						},
 					});
 					this.options.assertOpen();
 					if (prepared.operation.state === "resolved") {
