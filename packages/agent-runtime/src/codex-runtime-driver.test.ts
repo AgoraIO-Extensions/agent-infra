@@ -4143,6 +4143,7 @@ describe("Codex Runtime Driver", () => {
 			const command = submitCommand();
 			const accepted = await driver.execute(command);
 			const calls = { value: 0 };
+			const externalSideEffect = { count: 0 };
 			const browser = {
 				capabilityVersion: 3,
 				binding: {
@@ -4155,6 +4156,9 @@ describe("Codex Runtime Driver", () => {
 				},
 				executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) => {
 					calls.value += 1;
+					// Model the observable external mutation separately from the
+					// controller invocation count. Recovery must never increment it twice.
+					externalSideEffect.count += 1;
 					return {
 						actionId: request.actionId,
 						operationRef: request.operationRef,
@@ -4167,7 +4171,7 @@ describe("Codex Runtime Driver", () => {
 				},
 			};
 			const request = {
-				tool: "browser_observe",
+				tool: "browser_click",
 				arguments: {},
 				pageRevision: 2,
 				actionId: `browser-durable-${fault}`,
@@ -4229,6 +4233,7 @@ describe("Codex Runtime Driver", () => {
 			}
 			failure.mockRestore();
 			expect(injected).toBe(true);
+			expect(externalSideEffect.count).toBe(fault === "before-result" ? 1 : 0);
 			expect(calls.value).toBe(fault === "before-result" ? 1 : 0);
 			await driver.close();
 
@@ -4250,6 +4255,9 @@ describe("Codex Runtime Driver", () => {
 			if (fault === "before-intent")
 				expect(retry).toMatchObject({ phase: "completed", success: true });
 			else expect(retry).toMatchObject({ phase: "unknown", success: false });
+			expect(externalSideEffect.count).toBe(
+				fault === "before-intent" || fault === "before-result" ? 1 : 0,
+			);
 			expect(calls.value).toBe(
 				fault === "before-intent" ? 1 : fault === "before-result" ? 1 : 0,
 			);
