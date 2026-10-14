@@ -23,3 +23,9 @@ Agent Consumer 可在已认证服务请求中携带当前登录名提示；提�
 仅放在 POST 表单隐藏字段。Origin 缺失/null 的内置浏览器可以凭完整 proof 和服务器当前身份完成
 确认，明确跨域 Origin 仍拒绝；不采用 GET 授权或 UA 放行。复用现有身份加密封装的独立用途及
 binding 的原子单次状态，不新增存储或秘密配置。旧打开页面需要刷新，下游创建/领取与已签发 Token 不变。
+
+同类浏览器入口一起检查：公司入口完成采用其 state Cookie/code 绑定证明，native OAuth 登录采用
+匿名 Cookie/request 绑定证明，管理员探测采用会话/事务绑定证明。JSON 控制台请求的 Cookie 证明
+只防止第三方发起请求，不认证用户，业务身份和权限仍由原会话及领域状态决定。正常 Origin 的
+旧 JSON 客户端保持兼容，缺失/null Origin 没有充分证明时拒绝。后端 Token/MCP/PAT API 不受影响。
+URL 只恢复安全 GET 上下文，不承载敏感值或执行确认；重新登录清理旧账号缓存并等待新的用户操作。

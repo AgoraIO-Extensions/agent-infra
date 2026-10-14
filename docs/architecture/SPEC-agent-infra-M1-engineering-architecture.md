@@ -327,6 +327,11 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 
 ## 9. 身份与权限
 
+Connection 浏览器入口使用专用短期防伪证明及既有 Cookie/事务状态，来源缺失/null 不能代替认证。
+控制台 JSON 证明由只读匿名 bootstrap 签发，客户端仅内存缓存，不增加用户身份或权限；公司入口、
+native OAuth、管理员探测及 PAT 的证明用途和绑定上下文分别隔离。恢复只导航至已验证同站 GET，
+不恢复认证或重放 POST/业务写。后端 Token/MCP/PAT create/claim 继续使用各自认证契约。
+
 ### 9.1 Web 登录
 
 Connection 的受监督公司 OAuth 身份诊断独立于正式登录，复用现有浏览器会话与 PostgreSQL

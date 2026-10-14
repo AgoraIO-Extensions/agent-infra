@@ -236,7 +236,9 @@ export interface ConnectionOAuthRepository {
 		refreshTokenHash: string;
 		resource: string;
 	}): Promise<OAuthTokenIdentity>;
-	requirePendingAuthorization(requestId: string): Promise<void>;
+	requirePendingAuthorization(
+		requestId: string,
+	): Promise<{ clientName: string; expiresAt: Date }>;
 	registerClient(client: OAuthClientRegistration): Promise<void>;
 	resolveBrowserSession(sessionHash: string): Promise<BrowserSessionIdentity>;
 	resolveAccessToken(accessTokenHash: string): Promise<OAuthTokenIdentity>;
@@ -625,6 +627,15 @@ export class ConnectionOAuthService {
 			clientName: client.clientName,
 			requestId: authorization.requestId,
 		};
+	}
+
+	async getOAuthLoginPage(requestId: string) {
+		if (!/^[A-Za-z0-9_-]{43}$/.test(requestId))
+			throw new OAuthProtocolError(
+				"invalid_request",
+				oauthAuthorizationRequestUnavailableMessage,
+			);
+		return this.options.repository.requirePendingAuthorization(requestId);
 	}
 
 	async approveAuthorization(input: {
@@ -1048,6 +1059,65 @@ export class ConnectionOAuthService {
 		return this.options.patBinding.repository.findPersonalAccessTokenBinding(
 			tokenHash(state),
 		);
+	}
+
+	createBrowserFormConfirmation(input: {
+		nonce: string;
+		purpose: "browser-api" | "oauth-login" | "identity-probe";
+		context: string;
+	}) {
+		if (!/^[A-Za-z0-9_-]{43}$/.test(input.nonce))
+			throw new PatBindingConfirmationError("INVALID_PROOF");
+		const expiresAt = Date.now() + 5 * 60_000;
+		return {
+			csrfToken: this.protector.protect({
+				issuer: "connection-browser-form-v1",
+				subject: JSON.stringify({
+					purpose: input.purpose,
+					nonceHash: tokenHash(input.nonce),
+					contextHash: tokenHash(input.context),
+					origin: new URL(this.options.resource).origin,
+					expiresAt,
+				}),
+			}),
+			expiresAt: new Date(expiresAt).toISOString(),
+		};
+	}
+
+	verifyBrowserFormConfirmation(input: {
+		nonce: string | undefined;
+		csrfToken: string;
+		purpose: "browser-api" | "oauth-login" | "identity-probe";
+		context: string;
+	}) {
+		if (!input.nonce || !input.csrfToken)
+			throw new PatBindingConfirmationError("MISSING_PROOF");
+		try {
+			if (
+				input.csrfToken.length > 4096 ||
+				input.csrfToken.split(".").length !== 3
+			)
+				throw new Error();
+			const value = this.protector.unprotect(input.csrfToken);
+			if (value.issuer !== "connection-browser-form-v1") throw new Error();
+			const proof = JSON.parse(value.subject);
+			if (
+				!Number.isSafeInteger(proof.expiresAt) ||
+				proof.expiresAt <= Date.now()
+			)
+				throw new PatBindingConfirmationError("PROOF_EXPIRED");
+			if (
+				proof.purpose !== input.purpose ||
+				proof.nonceHash !== tokenHash(input.nonce) ||
+				proof.contextHash !== tokenHash(input.context) ||
+				proof.origin !== new URL(this.options.resource).origin
+			) {
+				throw new PatBindingConfirmationError("PROOF_MISMATCH");
+			}
+		} catch (error) {
+			if (error instanceof PatBindingConfirmationError) throw error;
+			throw new PatBindingConfirmationError("INVALID_PROOF");
+		}
 	}
 
 	async createPersonalAccessTokenBindingConfirmation(input: {

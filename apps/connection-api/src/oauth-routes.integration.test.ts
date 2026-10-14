@@ -379,6 +379,11 @@ describe("Connection OAuth HTTP flow", () => {
 					page,
 				)?.[1];
 				expect(requestId).toBeTruthy();
+				const csrfToken =
+					/name="csrfToken" value="([^"]+)"/.exec(page)?.[1] ?? "";
+				const confirmationCookie =
+					authorization.headers.get("set-cookie")?.split(";")[0] ?? "";
+				expect(csrfToken).toBeTruthy();
 
 				for (const origin of [undefined, "https://attacker.invalid"]) {
 					const headers: Record<string, string> = {
@@ -394,25 +399,27 @@ describe("Connection OAuth HTTP flow", () => {
 						headers,
 						method: "POST",
 					});
-					expect(rejected.status).toBe(400);
+					expect(rejected.status).toBe(origin ? 400 : 403);
 				}
 				expect(authenticationCalls).toBe(0);
 
 				const invalidLogin = await app.request("/oauth/login", {
 					body: new URLSearchParams({
+						csrfToken,
 						password: "must-not-be-checked",
 						request_id: "A".repeat(43),
 						username: "integration-user",
 					}),
 					headers: {
+						cookie: confirmationCookie,
 						"content-type": "application/x-www-form-urlencoded",
 						origin: "https://connection.example",
 					},
 					method: "POST",
 				});
-				expect(invalidLogin.status).toBe(400);
+				expect(invalidLogin.status).toBe(403);
 				const invalidLoginBody = await invalidLogin.text();
-				expect(invalidLoginBody).toContain("授权请求已失效");
+				expect(invalidLoginBody).toContain("登录确认已失效");
 				expect(invalidLoginBody).not.toContain('name="password"');
 				expect(
 					invalidLogin.headers.get("content-security-policy"),
@@ -421,13 +428,15 @@ describe("Connection OAuth HTTP flow", () => {
 
 				const login = await app.request("/oauth/login", {
 					body: new URLSearchParams({
+						csrfToken,
 						password: "integration-password",
 						request_id: requestId ?? "",
 						username: "integration-user",
 					}),
 					headers: {
+						cookie: confirmationCookie,
 						"content-type": "application/x-www-form-urlencoded",
-						origin: "https://connection.example",
+						origin: "null",
 					},
 					method: "POST",
 				});

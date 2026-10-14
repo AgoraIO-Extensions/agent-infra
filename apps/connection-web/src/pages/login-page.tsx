@@ -35,10 +35,11 @@ export function LoginPage(props: { returnTo?: string }) {
 	const mutation = useMutation({
 		mutationFn: connectionApi.login,
 		onSuccess: async (session) => {
+			queryClient.clear();
 			queryClient.setQueryData(["session"], session);
 			if (
 				props.returnTo &&
-				/^\/connection\/pat-bindings\/(?!confirm$)[A-Za-z0-9_-]+$/.test(
+				/^(?:\/connection\/pat-bindings\/(?!confirm$)[A-Za-z0-9_-]+|\/oauth\/authorization-requests\/[A-Za-z0-9_-]{43})$/.test(
 					props.returnTo,
 				)
 			) {

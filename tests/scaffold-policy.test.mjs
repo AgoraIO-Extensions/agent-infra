@@ -80,7 +80,10 @@ test("Connection access logs exclude callback queries and Referer", async () => 
 	const nginx = await readFile("apps/connection-web/nginx-main.conf", "utf8");
 	const format = nginx.match(/log_format connection_safe ([^;]+);/)?.[1];
 	assert.ok(format);
-	assert.match(format, /\$request_method \$uri \$status/);
+	assert.match(format, /\$request_method \$connection_log_path \$status/);
+	assert.match(nginx, /map \$uri \$connection_log_path/);
+	assert.match(nginx, /\/connection\/pat-bindings\/:flow/);
+	assert.match(nginx, /\/oauth\/authorization-requests\/:request/);
 	assert.doesNotMatch(
 		format,
 		/\$request\b|\$request_uri\b|\$args\b|\$http_referer\b/,

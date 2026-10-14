@@ -62,6 +62,29 @@ function setup(enabled = true) {
 }
 
 describe("company entrance HTTP boundary", () => {
+	it("recovers interrupted submissions to safe GET pages without replay or reflecting credentials", async () => {
+		const { app, ldapLogin, readIdentity } = setup();
+		const id = "A".repeat(43);
+		for (const [path, recovery] of [
+			[
+				`/connection/pat-bindings/confirm?flow=conn_pat_binding_${id}`,
+				`/connection/pat-bindings/conn_pat_binding_${id}`,
+			],
+			[`/oauth/login?request_id=${id}`, `/oauth/authorization-requests/${id}`],
+		] as const) {
+			const response = await app.request(path, {
+				method: "POST",
+				body: "password=must-not-reflect&csrfToken=must-not-reflect",
+			});
+			expect(response.status).toBe(401);
+			const page = await response.text();
+			expect(page).toContain(encodeURIComponent(recovery ?? ""));
+			expect(page).not.toContain("must-not-reflect");
+			expect(page).toContain("不会重放");
+		}
+		expect(ldapLogin).not.toHaveBeenCalled();
+		expect(readIdentity).not.toHaveBeenCalled();
+	});
 	it("gates only browser interactions, never MCP, metadata or service credentials", async () => {
 		for (const path of [
 			"/mcp",
@@ -74,6 +97,7 @@ describe("company entrance HTTP boundary", () => {
 			"/api/v1/connection/pat-bindings",
 			"/api/v1/connection/pat-bindings/a/claim",
 			"/api/v1/connection/openapi.json",
+			"/api/v1/connection/browser-confirmation",
 			companyEntryCheckPath,
 			companyEntryPath,
 			companyIdentityCallbackPath,
@@ -177,6 +201,7 @@ describe("company entrance HTTP boundary", () => {
 		expect(page).toContain('<button type="submit">完成公司登录</button>');
 		expect(readIdentity).not.toHaveBeenCalled();
 		const body = new URLSearchParams({
+			csrfToken: /name="csrfToken" value="([^"]+)"/.exec(page)?.[1] ?? "",
 			flow: "entry",
 			state,
 			code: "synthetic-code",
@@ -194,7 +219,7 @@ describe("company entrance HTTP boundary", () => {
 		expect((await complete("https://attacker.invalid")).status).toBe(400);
 		expect((await complete(issuer, "other-browser=1")).status).toBe(400);
 		expect(readIdentity).not.toHaveBeenCalled();
-		const browserPost = (fetchSite: string, host: string) =>
+		const browserPost = (fetchSite: string, host: string, requestBody = body) =>
 			app.request(`${issuer}${companyIdentityCallbackPath}`, {
 				method: "POST",
 				headers: {
@@ -204,15 +229,25 @@ describe("company entrance HTTP boundary", () => {
 					host,
 					"content-type": "application/x-www-form-urlencoded",
 				},
-				body,
+				body: requestBody,
 			});
-		expect((await browserPost("cross-site", new URL(issuer).host)).status).toBe(
-			400,
-		);
+		expect(
+			(
+				await browserPost(
+					"cross-site",
+					new URL(issuer).host,
+					new URLSearchParams({
+						flow: "entry",
+						state,
+						code: "synthetic-code",
+					}).toString(),
+				)
+			).status,
+		).toBe(400);
 		expect((await browserPost("same-origin", "attacker.invalid")).status).toBe(
 			400,
 		);
-		const accepted = await browserPost("same-origin", new URL(issuer).host);
+		const accepted = await browserPost("cross-site", new URL(issuer).host);
 		expect(accepted.status).toBe(303);
 		expect(accepted.headers.get("content-security-policy")).not.toContain(
 			"script-src",

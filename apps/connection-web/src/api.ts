@@ -58,6 +58,7 @@ import {
 	getApprovalCapabilityProfile,
 	getApprovalPolicyStages,
 	getAuditCall,
+	getBrowserConfirmation,
 	getConnectionAccessPolicyDraft,
 	getConnectionAccessRequest,
 	getConnections,
@@ -147,7 +148,82 @@ import {
 	upgradeProviderConnection,
 } from "@agent-infra/connection-contracts";
 
-client.setConfig({ baseUrl: "/", credentials: "same-origin" });
+let browserConfirmation: { csrfToken: string; expiresAt: string } | undefined;
+let browserConfirmationRequest:
+	| Promise<{ csrfToken: string; expiresAt: string }>
+	| undefined;
+
+async function browserFetch(input: RequestInfo | URL, init?: RequestInit) {
+	const method =
+		init?.method ?? (input instanceof Request ? input.method : "GET");
+	if (["GET", "HEAD"].includes(method.toUpperCase())) return fetch(input, init);
+	const target = new URL(
+		input instanceof Request ? input.url : String(input),
+		window.location.origin,
+	);
+	if (target.origin !== window.location.origin)
+		throw new Error("浏览器请求不能发送到其他站点");
+	if (
+		!browserConfirmation ||
+		Date.parse(browserConfirmation.expiresAt) <= Date.now() + 60_000
+	) {
+		browserConfirmationRequest ??= getBrowserConfirmation({
+			credentials: "same-origin",
+			cache: "no-store",
+		})
+			.then(({ response, data: value }) => {
+				if (!response?.ok || !value)
+					throw new ConnectionApiError({
+						code: "INVALID_REQUEST",
+						messageKey: "connection.error.browser_confirmation_required",
+						retryable: false,
+						traceId: "browser-confirmation",
+					});
+				if (
+					typeof value.csrfToken !== "string" ||
+					value.csrfToken.length === 0 ||
+					value.csrfToken.length > 4096 ||
+					!Number.isFinite(Date.parse(value.expiresAt)) ||
+					Date.parse(value.expiresAt) <= Date.now()
+				)
+					throw new ConnectionApiError({
+						code: "INVALID_REQUEST",
+						messageKey: "connection.error.browser_confirmation_required",
+						retryable: false,
+						traceId: "browser-confirmation",
+					});
+				browserConfirmation = value;
+				return value;
+			})
+			.finally(() => {
+				browserConfirmationRequest = undefined;
+			});
+		browserConfirmation = await browserConfirmationRequest;
+	}
+	const headers = new Headers(
+		init?.headers ?? (input instanceof Request ? input.headers : undefined),
+	);
+	headers.set("X-Connection-CSRF", browserConfirmation.csrfToken);
+	const response = await fetch(input, { ...init, headers });
+	if (response.status === 403) {
+		const detail = await response
+			.clone()
+			.json()
+			.catch(() => undefined);
+		if (
+			detail?.error?.messageKey ===
+			"connection.error.browser_confirmation_required"
+		)
+			browserConfirmation = undefined;
+	}
+	return response;
+}
+
+client.setConfig({
+	baseUrl: "/",
+	credentials: "same-origin",
+	fetch: browserFetch,
+});
 
 export type PatConsumerProfile = {
 	callbackUrl: string;
@@ -173,7 +249,7 @@ export type ConsumerDeclarationOptions = {
 };
 
 async function patConsumerRequest<T>(path: string, init?: RequestInit) {
-	const response = await fetch(path, {
+	const response = await browserFetch(path, {
 		...init,
 		credentials: "same-origin",
 		headers: {
@@ -250,6 +326,8 @@ const errorMessages: Record<string, string> = {
 	"connection.error.provider_reauthorization_required":
 		"外部账号需要重新授权，请重新连接后重试。",
 	"connection.error.resource_not_found": "无法访问该资源",
+	"connection.error.browser_confirmation_required":
+		"页面安全校验已失效，请刷新后再操作；本次请求不会自动重试。",
 	"connection.error.consumer_declaration_required":
 		"该客户端尚未配置所需能力，请联系管理员申请开通。",
 	"connection.error.result_uncertain": "请求结果暂时无法确认，请勿重复操作",

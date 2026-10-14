@@ -8,7 +8,11 @@ import {
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import { html, requireSameOrigin, secureHtmlHeaders } from "./oauth-routes";
+import {
+	html,
+	rejectForeignBrowserOrigin,
+	secureHtmlHeaders,
+} from "./oauth-routes";
 
 const stateCookie = "connection_identity_probe_state";
 const sessionCookie = "connection_session";
@@ -42,6 +46,13 @@ export function createIdentityProbeApp(
 		secure: new URL(issuer).protocol === "https:",
 	};
 	app.onError((error, context) => {
+		console.warn(
+			JSON.stringify({
+				event: "connection_identity_probe_rejected",
+				stage:
+					context.req.path === companyIdentityProbePath ? "start" : "callback",
+			}),
+		);
 		secureHtmlHeaders(context);
 		return context.html(
 			'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>身份探测未完成</title><p>身份探测未完成，请确认管理员登录后重新发起。不会更新账号或授权。</p></html>',
@@ -53,15 +64,31 @@ export function createIdentityProbeApp(
 
 	app.get(companyIdentityProbePath, async (context) => {
 		await probe.requireAdministrator(getCookie(context, sessionCookie));
+		const csrfToken = await probe.createStartConfirmation(
+			getCookie(context, sessionCookie),
+		);
 		secureHtmlHeaders(context, {
 			formActionOrigins: ["https://oauth.agoralab.co"],
 		});
 		return context.html(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>公司 OAuth 身份探测</title>
 <h1>公司 OAuth 身份探测</h1><p>仅比较当前管理员的身份字段。不会更新账号、授权或登录方式。公司登录后请点击“完成身份探测”。</p>
-<form method="post" action="${companyIdentityProbePath}"><button type="submit">开始公司 OAuth 身份探测</button></form></html>`);
+<form method="post" action="${companyIdentityProbePath}"><input type="hidden" name="csrfToken" value="${html(csrfToken)}"><button type="submit">开始公司 OAuth 身份探测</button></form></html>`);
 	});
 	app.post(companyIdentityProbePath, async (context) => {
-		requireSameOrigin(context.req.raw.headers, issuer);
+		rejectForeignBrowserOrigin(context.req.raw.headers, issuer);
+		const form = await context.req.formData();
+		if (
+			form.getAll("csrfToken").length !== 1 ||
+			[...form.keys()].some((key) => key !== "csrfToken")
+		)
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Identity probe is unavailable",
+			);
+		probe.verifyStartConfirmation(
+			getCookie(context, sessionCookie),
+			String(form.get("csrfToken") ?? ""),
+		);
 		const started = await probe.start(getCookie(context, sessionCookie));
 		setCookie(context, stateCookie, started.state, cookieOptions);
 		secureHtmlHeaders(context, {
@@ -84,16 +111,21 @@ export function createIdentityProbeApp(
 			);
 		}
 		probe.validateCallback(state, getCookie(context, stateCookie), code);
+		const csrfToken = probe.createCallbackConfirmation(
+			state,
+			getCookie(context, stateCookie),
+			code,
+		);
 		secureHtmlHeaders(context);
 		// A fresh same-origin form POST sends the existing Strict session cookie.
 		return context.html(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>完成身份探测</title>
 <p>点击后将校验当前 Connection 管理员会话，并读取公司身份字段。不会更新账号或授权。</p>
 <form method="post" action="${companyIdentityCallbackPath}">
-<input type="hidden" name="state" value="${html(state)}"><input type="hidden" name="code" value="${html(code)}">
+<input type="hidden" name="csrfToken" value="${html(csrfToken)}"><input type="hidden" name="state" value="${html(state)}"><input type="hidden" name="code" value="${html(code)}">
 <button type="submit">完成身份探测</button></form></html>`);
 	});
 	app.post(companyIdentityCallbackPath, async (context) => {
-		requireSameOrigin(context.req.raw.headers, issuer);
+		rejectForeignBrowserOrigin(context.req.raw.headers, issuer);
 		const body = await context.req.text();
 		if (
 			Buffer.byteLength(body) > 8192 ||
@@ -110,7 +142,10 @@ export function createIdentityProbeApp(
 		if (
 			form.getAll("state").length !== 1 ||
 			form.getAll("code").length !== 1 ||
-			[...form.keys()].some((key) => key !== "state" && key !== "code")
+			form.getAll("csrfToken").length !== 1 ||
+			[...form.keys()].some(
+				(key) => key !== "state" && key !== "code" && key !== "csrfToken",
+			)
 		) {
 			throw new OAuthProtocolError(
 				"invalid_request",
@@ -118,6 +153,13 @@ export function createIdentityProbeApp(
 			);
 		}
 		const cookie = getCookie(context, stateCookie);
+		probe.verifyCallbackConfirmation({
+			state: form.get("state") ?? "",
+			code: form.get("code") ?? "",
+			cookie,
+			sessionToken: getCookie(context, sessionCookie),
+			csrfToken: form.get("csrfToken") ?? "",
+		});
 		deleteCookie(context, stateCookie, cookieOptions);
 		const result = await probe.complete({
 			state: form.get("state") ?? "",

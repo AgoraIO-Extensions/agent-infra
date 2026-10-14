@@ -869,6 +869,25 @@ export type SharedScopeId = string;
 
 export type TokenId = string;
 
+export type GetBrowserConfirmationData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/browser-confirmation';
+};
+
+export type GetBrowserConfirmationResponses = {
+    /**
+     * Short-lived cookie-bound browser confirmation proof; never authenticates a user
+     */
+    200: {
+        csrfToken: string;
+        expiresAt: string;
+    };
+};
+
+export type GetBrowserConfirmationResponse = GetBrowserConfirmationResponses[keyof GetBrowserConfirmationResponses];
+
 export type ListProviderAccessSettingsData = {
     body?: never;
     path?: never;

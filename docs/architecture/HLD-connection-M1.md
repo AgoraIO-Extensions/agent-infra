@@ -1428,6 +1428,17 @@ Origin 缺失或为 null 时，完整 proof、当前登录及既有数据库准�
 Consumer 后端负责将 bindingId 关联原发起用户/会话并隔离各业务用户的 PAT。
 提示不创建 Principal，也不能替代 LDAP subject 或 browser session；已有含提示绑定及已签发 PAT 保持有效。
 
+浏览器全链路采用用途分隔的短期防伪证明：公司入口完成 proof 绑定 state Cookie 与 code hash，
+native OAuth 登录 proof 绑定匿名 host-only Cookie 与已有授权请求，管理员身份探测 proof 绑定管理员
+会话及 probe 事务。明确跨域 Origin 拒绝；缺失/null 来源必须通过证明和各自原有状态、身份与准入校验。
+控制台 JSON 写接口保留正常同源来源检查，并仅在 Cookie 与专用请求证明完整时兼容缺失/null 来源；
+浏览器客户端只在内存缓存证明并放请求 Header，不能据此解析用户身份或扩大权限。
+匿名 browser-confirmation GET 仅签发防伪证明和 HttpOnly/host-only 短期 Cookie，不授予准入或业务访问；
+Token、MCP、PAT backend 创建/claim 不要求该浏览器证明，继续按原协议鉴权。
+恢复仅使用已验证的同站 GET 目标或原有不透明流程标识；会话丢失时重新认证并重新确认，
+不得通过 URL 恢复认证本身、携带密码/PAT/proof 或自动重放 POST。登录切换清理页面业务缓存。
+用户 OAuth 回调的 GET 仍按既有 state/PKCE/owner 事务合同处理一次性 code，不等于 GET 直接签发 PAT。
+
 ### 16.3 Envelope Encryption
 
 ```text
