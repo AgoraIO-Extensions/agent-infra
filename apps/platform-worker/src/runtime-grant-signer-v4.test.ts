@@ -2,10 +2,12 @@ import { sign, verify } from "node:crypto";
 import {
 	RuntimeEventAckRequestV4Schema,
 	RuntimeEventReadRequestV4Schema,
+	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	RuntimeSupplementRequestV4Schema,
 	runtimeEventRequestDigestV4,
 	runtimeRequestDigestV4,
+	runtimeRestoreExecutionKeyRequestDigestV4,
 	validateRuntimeBusinessBindingV4,
 	validateVerifiedRuntimeExecutionGrantClaimsV2,
 } from "@agent-infra/contracts/runtime";
@@ -69,6 +71,32 @@ function decoded(token: string) {
 }
 
 describe("V4 production Grant signer", () => {
+	it("signs an independent existing-accepted-only Key recovery Grant", async () => {
+		const { signer, request } = fixture();
+		const acceptedOperationDigest = "A".repeat(43);
+		const recovery = await signer.signRecovery(
+			request,
+			"host-session",
+			acceptedOperationDigest,
+			"authorization",
+		);
+		const claims = decoded(recovery.request.grant.token);
+		expect(claims).toMatchObject({
+			allowedCommands: ["execution.key.restore"],
+			acceptedHostSessionRef: "host-session",
+			acceptedOperationDigest,
+			attachments: [],
+			authorizationRecordId: "authorization",
+		});
+		expect(claims.requestDigest).toBe(
+			await runtimeRestoreExecutionKeyRequestDigestV4(recovery.request),
+		);
+		expect(
+			RuntimeRestoreExecutionKeyGrantClaimsV4Schema.safeParse(claims).success,
+		).toBe(true);
+		expect(claims).not.toHaveProperty("relayKey");
+	});
+
 	it("signs submit and supplement with independent signature and published digest checks", async () => {
 		const { signer, request } = fixture();
 		const { selection: _selection, ...context } = request;

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRuntimeModelSelectionReaderV1 } from "./runtime-model-selection-reader.js";
+import {
+	createRuntimeModelSelectionReaderFromDispatchV1,
+	createRuntimeModelSelectionReaderV1,
+} from "./runtime-model-selection-reader.js";
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -48,6 +51,37 @@ const response = {
 };
 
 describe("Runtime model-selection reader", () => {
+	it("projects a Worker dispatch without allowing the API to manufacture a Grant", async () => {
+		const { grant: _grant, ...dispatch } = request;
+		const reader = createRuntimeModelSelectionReaderFromDispatchV1({
+			resolveRequest: async () => dispatch,
+			transport: { read: vi.fn().mockResolvedValue(response) },
+		});
+		await expect(
+			reader.read(identity, request.conversationId),
+		).resolves.toMatchObject({
+			agentId: request.agentId,
+			currentModelOptionId: "model-primary",
+			currentReasoningLevel: "medium",
+		});
+	});
+
+	it("rejects a Worker response from another execution", async () => {
+		const { grant: _grant, ...dispatch } = request;
+		const reader = createRuntimeModelSelectionReaderFromDispatchV1({
+			resolveRequest: async () => dispatch,
+			transport: {
+				read: vi.fn().mockResolvedValue({
+					...response,
+					executionId: "foreign-execution",
+				}),
+			},
+		});
+		await expect(
+			reader.read(identity, request.conversationId),
+		).resolves.toBeNull();
+	});
+
 	it("projects only a bound Runtime response", async () => {
 		const transport = { read: vi.fn().mockResolvedValue(response) };
 		const reader = createRuntimeModelSelectionReaderV1({

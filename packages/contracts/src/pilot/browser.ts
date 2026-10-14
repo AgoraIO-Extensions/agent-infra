@@ -25,6 +25,8 @@ import {
 	AgentDefaultRelayKeyStateV1Schema,
 } from "./agent-default-relay-key.ts";
 import {
+	AgentUserUseGrantRequestV1Schema,
+	AgentUserUseGrantResponseV1Schema,
 	AgentUserUseRevokeRequestV1Schema,
 	AgentUserUseRevokeResponseV1Schema,
 } from "./agent-user-use-grants.ts";
@@ -323,6 +325,7 @@ export const AgentProjectionV1Schema = z.strictObject({
 		resultFiles: z.boolean(),
 		connection: z.boolean(),
 		supplementaryInstruction: z.boolean(),
+		nativeMetadata: z.boolean().optional(),
 		skills: z.array(RuntimeSkillCapabilityV1Schema).max(150).optional(),
 		browser: BrowserCapabilityProjectionV1Schema.optional(),
 	}),
@@ -1446,6 +1449,22 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 		},
 	},
 	"/api/v2/agents/{agentId}/api-use-grants/{userId}": {
+		put: {
+			operationId: "grantAgentUserApiUseV1",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ agentId: pathId(), userId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(AgentUserUseGrantRequestV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Explicit user API use grant",
+					AgentUserUseGrantResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
 		delete: {
 			operationId: "revokeAgentUserApiUseV1",
 			security: personalCredentialSecurity,
@@ -2059,6 +2078,8 @@ export const pilotBrowserSchemasV2 = {
 	AgentApplicationManagerResponseV1: AgentApplicationManagerResponseV1Schema,
 	AgentUserUseRevokeRequestV1: AgentUserUseRevokeRequestV1Schema,
 	AgentUserUseRevokeResponseV1: AgentUserUseRevokeResponseV1Schema,
+	AgentUserUseGrantRequestV1: AgentUserUseGrantRequestV1Schema,
+	AgentUserUseGrantResponseV1: AgentUserUseGrantResponseV1Schema,
 	AgentApiLifecycleRequestV1: AgentApiLifecycleRequestV1Schema,
 	AgentApiLifecycleResponseV1: AgentApiLifecycleResponseV1Schema,
 	AgentApiCreationRequestV1: AgentApiCreationRequestV1Schema,

@@ -2,6 +2,7 @@ import { createConnection, createServer, type Socket } from "node:net";
 import {
 	createWecomAuthorizationV1,
 	createWecomChannelV1,
+	createWecomDeliveryV1,
 	type WecomChannelStorePortV1,
 	type WecomConnectionFenceV1,
 	type WecomIdentityPortV1,
@@ -162,6 +163,7 @@ afterAll(async () => {
 	await sql?.end();
 	await db?.stop();
 });
+
 it("requires a trusted identity provider before opening the WeCom Store", () => {
 	expect(
 		() =>
@@ -1864,4 +1866,80 @@ describe("existing WeCom transaction cancellation", () => {
 			});
 		},
 	);
+});
+
+it("pins the sender-to-Connection fact in the receipt and delivery claim", async () => {
+	const fact = {
+		schemaVersion: 1 as const,
+		providerId: message.providerId,
+		bindingReference: message.bindingReference,
+		senderId: message.senderId,
+		authorizationReference: "opaque-grant-ref",
+		authorizationRevision: "auth-r1",
+		grantRevision: "grant-r1",
+		revocationRevision: "revoke-r1",
+		expiresAt: "2099-01-01T00:00:00.000Z",
+	};
+	const connectionStore = new PostgresWecomChannelV1({
+		...db,
+		identity: fixtureIdentity,
+		userDirectory: fixtureUserDirectory,
+		connectionAuthorization: { resolve: async () => fact },
+	});
+	const authorization = createWecomAuthorizationV1({
+		identity: fixtureIdentity,
+		state: connectionStore,
+		connectionAuthorization: { resolve: async () => fact },
+	});
+	const channel = createWecomChannelV1({
+		store: connectionStore,
+		authorization,
+	});
+	const event = { ...message, eventId: "connection-fact-event" };
+	try {
+		await sql`update platform.agent_configuration_revisions
+			set configuration=jsonb_set(configuration,'{source,connectionEnabled}','true'::jsonb)
+			where agent_id=${message.agentId} and revision=1`;
+		await sql`insert into platform.relay_key_subjects
+			(purpose, subject_id, last_version, current_version)
+			values ('personal', ${event.senderId}, 1, 1)
+			on conflict (purpose, subject_id) do nothing`;
+		await sql`insert into platform.relay_key_versions
+			(purpose, subject_id, key_version, key_id, ciphertext)
+			values ('personal', ${event.senderId}, 1, ${`fixture-key:personal:${event.senderId}`},
+			${sql.json({ purpose: "personal", subjectId: event.senderId, keyId: `fixture-key:personal:${event.senderId}`, keyVersion: 1 })})
+			on conflict do nothing`;
+		const accepted = await channel.receive(event);
+		expect(accepted.outcome).toBe("accepted");
+		if (accepted.outcome !== "accepted")
+			throw new Error("Expected accepted receipt");
+		const [row] = await sql<{ connection_authorization_fact: unknown }[]>`
+			select connection_authorization_fact from platform.wecom_receipts
+			where id=${accepted.receipt.receiptId}`;
+		expect(row?.connection_authorization_fact).toEqual(fact);
+		await sql`update platform.conversation_executions set status='completed'
+			where execution_id=${accepted.receipt.executionId}`;
+		const claim = await connectionStore.claim();
+		expect(claim?.connectionAuthorizationFact).toEqual(fact);
+		await sql`update platform.wecom_receipts set delivery_status='pending', lease_until=null
+			where id=${accepted.receipt.receiptId}`;
+		let revalidated = false;
+		const delivery = createWecomDeliveryV1({
+			store: connectionStore,
+			authorization,
+			sender: {
+				async send(input) {
+					revalidated = (await input.revalidate?.()) === true;
+					return "sent";
+				},
+			},
+		});
+		expect(await delivery.dispatch()).toBe(true);
+		expect(revalidated).toBe(true);
+	} finally {
+		await sql`update platform.agent_configuration_revisions
+			set configuration=jsonb_set(configuration,'{source,connectionEnabled}','false'::jsonb)
+			where agent_id=${message.agentId} and revision=1`;
+		await connectionStore.close();
+	}
 });

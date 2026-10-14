@@ -9,6 +9,11 @@ import { RuntimeEventV1Schema } from "./events.ts";
 
 const count = z.number().int().safe().nonnegative();
 const metadataId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
+const rpcRequestId = z.union([
+	z.string().min(1).max(128),
+	z.number().int().safe(),
+]);
+const requestDigest = z.string().regex(/^[a-f0-9]{64}$/);
 
 /** A reference to independently authorized Connection evidence, without its data. */
 export const RuntimeConnectionAssociationV1Schema = z.discriminatedUnion(
@@ -108,6 +113,9 @@ export const RuntimeOperationFactV2Schema = z.discriminatedUnion("kind", [
 		...operation,
 		kind: z.literal("tool"),
 		toolId: metadataId,
+		/** JSON-RPC identity and parameter digest persisted before dispatch. */
+		rpcRequestId: rpcRequestId.optional(),
+		requestDigest: requestDigest.optional(),
 		resultRef: OpaqueIdV1Schema.optional(),
 		connection: RuntimeConnectionAssociationV1Schema.optional(),
 		browser: RuntimeBrowserActionBindingV1Schema.optional(),

@@ -337,6 +337,7 @@ beforeAll(async () => {
 		identity: identityAdapter,
 		managementQuery,
 		configurationQuery,
+		nativeMetadataAvailable: true,
 		presentAgent: async ({ configuration }) => {
 			if (configuration.source.kind !== "custom") {
 				throw new Error("unexpected test source");
@@ -600,9 +601,10 @@ describe("PostgreSQL Platform HTTP integration", () => {
 			headers: requestHeaders("owner"),
 		});
 		expect(agentDetail.status).toBe(200);
-		expect(
-			AgentProjectionV2Schema.safeParse(await agentDetail.json()).success,
-		).toBe(true);
+		const agentDetailProjection = AgentProjectionV2Schema.parse(
+			await agentDetail.json(),
+		);
+		expect(agentDetailProjection.capabilities.nativeMetadata).toBe(true);
 		expect(
 			(
 				await app.request("/api/v2/agents/agent-run/configuration", {

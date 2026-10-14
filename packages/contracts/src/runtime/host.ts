@@ -94,6 +94,13 @@ export const RuntimeCapabilitiesRequestV1Schema = z.strictObject({
 });
 
 /** Read-only public model choices for an already-bound Runtime Host Session. */
+const { grant: _runtimeGrant, ...dispatchRequestContext } = requestContext;
+export const RuntimeModelDirectoryDispatchRequestV1Schema = z.strictObject({
+	...dispatchRequestContext,
+	hostSessionRef: OpaqueIdV1Schema,
+});
+
+/** Worker-to-Host model-directory request after the Worker has signed a Grant. */
 export const RuntimeModelDirectoryRequestV1Schema = z.strictObject({
 	...requestContext,
 	hostSessionRef: OpaqueIdV1Schema,
@@ -318,6 +325,9 @@ export type RuntimeCapabilitiesRequestV1 = z.infer<
 >;
 export type RuntimeModelDirectoryRequestV1 = z.infer<
 	typeof RuntimeModelDirectoryRequestV1Schema
+>;
+export type RuntimeModelDirectoryDispatchRequestV1 = z.infer<
+	typeof RuntimeModelDirectoryDispatchRequestV1Schema
 >;
 export type RuntimeModelDirectoryOptionV1 = z.infer<
 	typeof RuntimeModelDirectoryOptionV1Schema

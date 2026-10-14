@@ -95,6 +95,8 @@ describe("explicit custom Agent deployment ports", () => {
 			{} as ProductionPlatformApiInputV1["customAgentGateway"];
 		const modelSelection = {} as ProductionPlatformApiInputV1["modelSelection"];
 		const nativeMetadata = {} as ProductionPlatformApiInputV1["nativeMetadata"];
+		const nativeMetadataCurrent =
+			{} as ProductionPlatformApiInputV1["nativeMetadataCurrent"];
 		const apiInput = {} as ProductionPlatformApiInputV1;
 
 		expect(
@@ -103,8 +105,14 @@ describe("explicit custom Agent deployment ports", () => {
 				customAgentGateway,
 				modelSelection,
 				nativeMetadata,
+				nativeMetadataCurrent,
 			}),
-		).toMatchObject({ customAgentGateway, modelSelection, nativeMetadata });
+		).toMatchObject({
+			customAgentGateway,
+			modelSelection,
+			nativeMetadata,
+			nativeMetadataCurrent,
+		});
 	});
 
 	it("does not accept Relay Key policy nested in apiInput as production supply", () => {
@@ -121,6 +129,7 @@ describe("explicit custom Agent deployment ports", () => {
 		["Gateway", "customAgentGateway"],
 		["model reader", "modelSelection"],
 		["native metadata reader", "nativeMetadata"],
+		["native metadata current route", "nativeMetadataCurrent"],
 	] as const)("rejects duplicate %s authorities", (_label, field) => {
 		const value = {};
 		const apiInput = {
@@ -136,7 +145,9 @@ describe("explicit custom Agent deployment ports", () => {
 				? "PLATFORM_CUSTOM_AGENT_GATEWAY_DUPLICATE"
 				: field === "modelSelection"
 					? "PLATFORM_MODEL_SELECTION_DUPLICATE"
-					: "PLATFORM_NATIVE_METADATA_DUPLICATE",
+					: field === "nativeMetadata"
+						? "PLATFORM_NATIVE_METADATA_DUPLICATE"
+						: "PLATFORM_NATIVE_METADATA_CURRENT_DUPLICATE",
 		);
 	});
 });
@@ -304,6 +315,9 @@ function deploymentInput(
 				templateId: "codex",
 				imageDigest,
 				modelBinding,
+				codexModelProfiles: [
+					{ model: "model-a", reasoningLevels: ["medium", "high"] },
+				],
 				configurationRevision: "configuration-a",
 			},
 			validation: readiness.revision,
@@ -370,6 +384,9 @@ function deploymentInput(
 				platformManagedKeys: ["PORT"],
 				connectionEnabled: false,
 				modelBinding,
+				codexModelProfiles: [
+					{ model: "model-a", reasoningLevels: ["medium", "high"] },
+				],
 				configurationRevision: "configuration-a",
 				loadValidation: async () => validation,
 			},

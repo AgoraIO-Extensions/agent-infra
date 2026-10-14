@@ -94,6 +94,49 @@ it("uses actual standard initialize/discovery/call once without exporting creden
 	expect(JSON.stringify([client.toolDefinitions, result])).not.toContain(token);
 });
 
+it("does not dispatch the HTTP WRITE until the started fact is durable", async () => {
+	const fixture = await standardMcpFixture();
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const client = await StandardMcpClient.open(
+		{
+			target: fixture.target,
+			resolveInput: async () => fixture.input,
+			fetch: fixture.fetch,
+		},
+		reference,
+		new AbortController().signal,
+	);
+	closes.push(() => client.close());
+	const pending = client.call(
+		client.toolDefinitions[0]?.tools[0]?.name ?? "",
+		{ text: "started barrier" },
+		{
+			block: () => {},
+			confirm: async () => {},
+			assertCurrent: async () => () => {},
+			prepare: async () => {},
+			started: async () => {
+				entered.resolve();
+				await release.promise;
+			},
+		},
+		new AbortController().signal,
+	);
+	await entered.promise;
+	expect(
+		fixture.trace.filter((item) => item.method === "tools/call"),
+	).toHaveLength(0);
+	release.resolve();
+	await expect(pending).resolves.toMatchObject({
+		phase: "completed",
+		success: true,
+	});
+	expect(
+		fixture.trace.filter((item) => item.method === "tools/call"),
+	).toHaveLength(1);
+});
+
 it.each(["persisted", "failed", "revoked"] as const)(
 	"waits for RPC identity persistence and rechecks authority when it is %s",
 	async (outcome) => {
@@ -101,6 +144,7 @@ it.each(["persisted", "failed", "revoked"] as const)(
 		let persisted = false;
 		let authorized = true;
 		let starts = 0;
+		let blocks = 0;
 		const sends: boolean[] = [];
 		const client = await StandardMcpClient.open(
 			{
@@ -125,7 +169,9 @@ it.each(["persisted", "failed", "revoked"] as const)(
 			client.toolDefinitions[0]?.tools[0]?.name ?? "",
 			{ text: "fixture" },
 			{
-				block: () => {},
+				block: () => {
+					blocks++;
+				},
 				confirm: async () => {},
 				assertCurrent: async () => () => {
 					if (!authorized) throw new Error("Controlled revocation");
@@ -139,7 +185,9 @@ it.each(["persisted", "failed", "revoked"] as const)(
 				},
 				started: async () => {
 					starts++;
-					expect(sends).toEqual([true]);
+					// The started fact is committed before fetch dispatch; the request
+					// is asserted after the callback releases the barrier below.
+					expect(sends).toEqual([]);
 				},
 			},
 			new AbortController().signal,
@@ -148,13 +196,20 @@ it.each(["persisted", "failed", "revoked"] as const)(
 		const sendsBeforePersistence = sends.length;
 		if (outcome === "revoked") authorized = false;
 		release.resolve();
-		const result = await pending;
+		if (outcome === "failed") {
+			await expect(pending).rejects.toMatchObject({
+				code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
+			});
+		} else {
+			const result = await pending;
+			expect(result.phase).toBe(
+				outcome === "persisted" ? "completed" : "unknown",
+			);
+		}
 		expect(sendsBeforePersistence).toBe(0);
 		expect(sends).toEqual(outcome === "persisted" ? [true] : []);
 		expect(starts).toBe(outcome === "persisted" ? 1 : 0);
-		expect(result.phase).toBe(
-			outcome === "persisted" ? "completed" : "unknown",
-		);
+		if (outcome === "failed") expect(blocks).toBe(1);
 	},
 );
 

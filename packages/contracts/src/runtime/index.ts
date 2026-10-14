@@ -11,6 +11,7 @@ export * from "./host.ts";
 export * from "./host-v3.ts";
 export * from "./host-v4.ts";
 export * from "./host-v4-events.ts";
+export * from "./host-v4-key-recovery.ts";
 export * from "./installation.ts";
 export * from "./legacy-migration-v1.ts";
 export * from "./native-metadata-v1.ts";
@@ -43,6 +44,7 @@ import {
 	RuntimeCapabilitiesResponseV1Schema,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeInputV1Schema,
+	RuntimeModelDirectoryDispatchRequestV1Schema,
 	RuntimeModelDirectoryRequestV1Schema,
 	RuntimeModelDirectoryResponseV1Schema,
 	RuntimeOperationResponseV1Schema,
@@ -79,6 +81,8 @@ export const RuntimeHostV1SchemaDefinitions = {
 	RuntimeSkillResourceReadRequestV1: RuntimeSkillResourceReadRequestV1Schema,
 	RuntimeSkillResourceReadResponseV1: RuntimeSkillResourceReadResponseV1Schema,
 	RuntimeModelDirectoryRequestV1: RuntimeModelDirectoryRequestV1Schema,
+	RuntimeModelDirectoryDispatchRequestV1:
+		RuntimeModelDirectoryDispatchRequestV1Schema,
 	RuntimeModelDirectoryResponseV1: RuntimeModelDirectoryResponseV1Schema,
 	RuntimeGenerationCancelRequestV1: RuntimeGenerationCancelRequestV1Schema,
 	RuntimeInputV1: RuntimeInputV1Schema,
@@ -169,6 +173,12 @@ import {
 	RuntimeSupplementTransportV4Schema,
 	VerifiedRuntimeExecutionGrantV4Schema,
 } from "./host-v4.ts";
+import {
+	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
+	RuntimeRestoreExecutionKeyRequestV4Schema,
+	RuntimeRestoreExecutionKeyResponseV4Schema,
+	RuntimeRestoreExecutionKeyTransportV4Schema,
+} from "./host-v4-key-recovery.ts";
 
 export const RuntimeHostV4SchemaDefinitions = {
 	RuntimeBusinessGrantClaimsV4: RuntimeBusinessGrantClaimsV4Schema,
@@ -185,6 +195,14 @@ export const RuntimeHostV4SchemaDefinitions = {
 	RuntimeSubmitTurnTransportV4: RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV4: RuntimeSupplementRequestV4Schema,
 	RuntimeSupplementTransportV4: RuntimeSupplementTransportV4Schema,
+	RuntimeRestoreExecutionKeyGrantClaimsV4:
+		RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
+	RuntimeRestoreExecutionKeyRequestV4:
+		RuntimeRestoreExecutionKeyRequestV4Schema,
+	RuntimeRestoreExecutionKeyTransportV4:
+		RuntimeRestoreExecutionKeyTransportV4Schema,
+	RuntimeRestoreExecutionKeyResponseV4:
+		RuntimeRestoreExecutionKeyResponseV4Schema,
 };
 
 export const RuntimeModelConfigurationV4SchemaDefinitions = {

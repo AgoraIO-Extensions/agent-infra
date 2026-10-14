@@ -7,6 +7,11 @@ import {
 	type PlatformConversationWorkerLifecycleStatusV1,
 	startPlatformConversationWorkerFromDeploymentV2,
 } from "./conversation-worker.js";
+import { createPlatformNativeMetadataGatewayOptionsV1 } from "./native-metadata-deployment.js";
+import {
+	type PlatformWorkerNativeMetadataGatewayServerOptionsV1,
+	startPlatformWorkerNativeMetadataGatewayServerV1,
+} from "./runtime-native-metadata-server.js";
 import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
@@ -15,10 +20,19 @@ export * from "./conversation-runtime.js";
 export * from "./conversation-worker.js";
 export * from "./kubernetes-client.js";
 export * from "./kubernetes-runtime-adapter.js";
+export * from "./native-metadata-deployment.js";
+export * from "./native-metadata-deployment-assembly.js";
 export * from "./runtime-grant-signer.js";
 export * from "./runtime-model-directory-client.js";
+export * from "./runtime-model-directory-service.js";
 export * from "./runtime-native-metadata-client.js";
+export * from "./runtime-native-metadata-current-client.js";
+export * from "./runtime-native-metadata-gateway.js";
+export * from "./runtime-native-metadata-proof.js";
+export * from "./runtime-native-metadata-server.js";
 export * from "./skill-materialization.js";
+export * from "./skill-materializer-production-assembly.js";
+export * from "./skill-materializer-store-adapter.js";
 export * from "./wecom-deployment.js";
 export { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 export * from "./workload-deployment.js";
@@ -171,23 +185,39 @@ export function createPlatformSecretRotationWorkerV1(options: {
 interface StartOptions {
 	heartbeatMs?: number;
 	log?: (message: string) => void;
+	nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayServerOptionsV1;
 }
 
 export function startPlatformWorker(options: StartOptions = {}) {
 	const log = options.log ?? console.info;
 	const heartbeat = setInterval(() => undefined, options.heartbeatMs ?? 60_000);
 	let stopped = false;
+	let gateway:
+		| ReturnType<typeof startPlatformWorkerNativeMetadataGatewayServerV1>
+		| undefined;
+	try {
+		if (options.nativeMetadataGateway)
+			gateway = startPlatformWorkerNativeMetadataGatewayServerV1(
+				options.nativeMetadataGateway,
+			);
+	} catch (error) {
+		clearInterval(heartbeat);
+		throw error;
+	}
 
 	log(JSON.stringify({ service: platformWorkerService, status: "ready" }));
 
 	return {
+		nativeMetadataGatewayServer: gateway?.server,
 		stop() {
 			if (stopped) return;
 			stopped = true;
 			clearInterval(heartbeat);
+			const closing = gateway?.stop();
 			log(
 				JSON.stringify({ service: platformWorkerService, status: "stopped" }),
 			);
+			return closing;
 		},
 	};
 }
@@ -232,7 +262,9 @@ export async function startPlatformWorkerFromDeploymentV1(
 export async function startPlatformWorkerFromDeploymentV2(
 	options: {
 		readonly startPrimary?: () => { stop(): void | Promise<void> };
-		readonly startWorkload?: () => Promise<{ stop(): Promise<void> }>;
+		readonly startWorkload?: (
+			observability: ReturnType<typeof startObservability>,
+		) => Promise<{ stop(): Promise<void> }>;
 		readonly startConversation?: (
 			observability: ReturnType<typeof startObservability>,
 		) => Promise<{
@@ -268,9 +300,39 @@ export async function startPlatformWorkerFromDeploymentV2(
 		| undefined;
 	let wecom: { stop(): Promise<void> } | undefined;
 	try {
-		workload = await (
-			options.startWorkload ?? startPlatformWorkloadWorkerFromDeploymentV1
-		)();
+		const workloadStartedAt = performance.now();
+		try {
+			workload = await (
+				options.startWorkload ??
+				((telemetry) =>
+					startPlatformWorkloadWorkerFromDeploymentV1(
+						undefined,
+						undefined,
+						telemetry,
+					))
+			)(observability);
+			try {
+				observability.record({
+					stage: "workload",
+					outcome: "completed",
+					durationMs: performance.now() - workloadStartedAt,
+				});
+			} catch {
+				// Telemetry is observational and must not alter startup.
+			}
+		} catch (error) {
+			try {
+				observability.record({
+					stage: "workload",
+					outcome: "failed",
+					code: "WORKLOAD_UNAVAILABLE",
+					durationMs: performance.now() - workloadStartedAt,
+				});
+			} catch {
+				// Telemetry is observational and must not alter startup failure.
+			}
+			throw error;
+		}
 		wecom = await options.startWecom?.();
 		conversation = await (
 			options.startConversation ??
@@ -337,10 +399,12 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	if (wecomSetting !== undefined && !["true", "false"].includes(wecomSetting))
 		throw new Error("PLATFORM_WORKER_WECOM_ENABLED must be true or false");
 	const wecomEnabled = wecomSetting === "true";
+	const nativeMetadataGateway =
+		await createPlatformNativeMetadataGatewayOptionsV1(termination.signal);
 	let primary: ReturnType<typeof startPlatformWorker> | undefined;
 	const workerPromise = startPlatformWorkerFromDeploymentV2({
 		startPrimary: () => {
-			primary = startPlatformWorker();
+			primary = startPlatformWorker({ nativeMetadataGateway });
 			return primary;
 		},
 		startConversation: (observability) =>

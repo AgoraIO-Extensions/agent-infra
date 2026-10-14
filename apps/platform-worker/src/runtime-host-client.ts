@@ -26,6 +26,10 @@ import {
 	type RuntimeEventV2,
 	type RuntimeGenerationCancelRequestV3,
 	RuntimeGenerationCancelRequestV3Schema,
+	type RuntimeModelDirectoryRequestV1,
+	RuntimeModelDirectoryRequestV1Schema,
+	type RuntimeModelDirectoryResponseV1,
+	RuntimeModelDirectoryResponseV1Schema,
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV3Schema,
@@ -33,8 +37,12 @@ import {
 	RuntimeOriginalBindingResponseV3Schema,
 	type RuntimePinnedExecutionKeyScopeV4,
 	RuntimePrivateRelayKeyFieldV1Schema,
+	type RuntimeRelayKeyBindingV1,
 	RuntimeRelayKeyDeliveryV1Schema,
 	RuntimeReplayRequestV1Schema,
+	type RuntimeRestoreExecutionKeyRequestV4,
+	RuntimeRestoreExecutionKeyResponseV4Schema,
+	RuntimeRestoreExecutionKeyTransportV4Schema,
 	type RuntimeSelectionV1,
 	type RuntimeSkillDirectoryEntryV1,
 	RuntimeSkillDirectoryEntryV1Schema,
@@ -58,6 +66,7 @@ import {
 	RuntimeSubmitTurnRequestV2Schema,
 	type RuntimeSubmitTurnRequestV3,
 	RuntimeSubmitTurnRequestV3Schema,
+	type RuntimeSubmitTurnRequestV4,
 	RuntimeSubmitTurnRequestV4Schema,
 	RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV1Schema,
@@ -119,6 +128,15 @@ export interface WorkerRuntimeHostClientOptionsV4
 	/** Original accepted model selection supplied by the Store claim, also checked against the Reader. */
 	readonly selection?: RuntimeSelectionV1;
 	readonly assertCurrentAuthorization: () => Promise<void>;
+	readonly signRecovery?: (
+		originalRequest: RuntimeSubmitTurnRequestV4,
+		acceptedHostSessionRef: string,
+		acceptedOperationDigest: string,
+		authorizationRecordId: string,
+	) => Promise<{
+		request: RuntimeRestoreExecutionKeyRequestV4;
+		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
+	}>;
 }
 
 /** Local failure before the original Key can be delivered to RuntimeHost. */
@@ -150,6 +168,10 @@ export interface WorkerRuntimeSkillResourceBindingV1 {
 
 export interface WorkerRuntimeHostClientV1
 	extends ConversationRuntimeHostPortV1 {
+	modelDirectory(
+		request: RuntimeModelDirectoryRequestV1,
+		signal?: AbortSignal,
+	): Promise<RuntimeModelDirectoryResponseV1>;
 	skillDirectory(
 		request: RuntimeSkillDirectoryRequestV1,
 		signal?: AbortSignal,
@@ -611,6 +633,37 @@ export function createWorkerRuntimeHostClientV1(
 		}
 	};
 	return {
+		async modelDirectory(request, signal) {
+			let body: RuntimeModelDirectoryRequestV1;
+			try {
+				body = RuntimeModelDirectoryRequestV1Schema.parse(request);
+			} catch {
+				return failure("RUNTIME_REQUEST_INVALID", false);
+			}
+			if (signal?.aborted) return failure("RUNTIME_INTERRUPTED", true);
+			try {
+				const response = await interruptedDependency(
+					post(
+						fetcher,
+						new URL("internal/runtime/v1/model-directory", dispatchBase),
+						options.serviceToken,
+						body.traceId,
+						body,
+						signal,
+					),
+					signal,
+				);
+				if (signal?.aborted) return failure("RUNTIME_INTERRUPTED", true);
+				return RuntimeModelDirectoryResponseV1Schema.parse(
+					JSON.parse(
+						await interruptedDependency(boundedResponseText(response), signal),
+					),
+				);
+			} catch (error) {
+				if (error instanceof ConversationRuntimeHostError) throw error;
+				return failure("RUNTIME_RESPONSE_INVALID", true);
+			}
+		},
 		async dispatch(request, signal) {
 			let selected: ReturnType<typeof dispatchBody>;
 			try {
@@ -1208,6 +1261,134 @@ export function createWorkerRuntimeHostClientV4(
 	return {
 		submitTurn: send,
 		supplement: send,
+		async restoreExecutionKey(
+			originalRequest: RuntimeSubmitTurnRequestV4,
+			acceptedHostSessionRef: string,
+			acceptedOperationDigest: string,
+			signal?: AbortSignal,
+		) {
+			try {
+				if (
+					!options.signRecovery ||
+					!options.executionKeys ||
+					!options.decryptor
+				)
+					throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
+				const request = RuntimeSubmitTurnRequestV4Schema.parse(originalRequest);
+				const accepted = await interruptedDependency(
+					options.executionKeys.readAcceptedExecution(request),
+					signal,
+				);
+				if (
+					!accepted ||
+					accepted.trustedHostSessionRef !== acceptedHostSessionRef ||
+					accepted.authorizationRecordId.length === 0 ||
+					accepted.scope.hostSessionRef !== request.hostSessionRef ||
+					accepted.scope.executionId !== request.executionId ||
+					accepted.scope.turnId !== request.turnId ||
+					accepted.scope.agentId !== request.agentId ||
+					accepted.scope.conversationId !== request.conversationId ||
+					!isDeepStrictEqual(accepted.scope.keyBinding, request.keyBinding) ||
+					!isDeepStrictEqual(accepted.selection, request.selection)
+				)
+					return failure("RUNTIME_GRANT_INVALID", false);
+				const binding: RuntimeRelayKeyBindingV1 = {
+					purpose: accepted.scope.keyBinding.purpose,
+					subjectId: accepted.scope.keyBinding.subjectId,
+					ciphertextRef: accepted.scope.keyBinding.ciphertextRef,
+					version: accepted.scope.keyBinding.version,
+				};
+				const encryptedRecord = await interruptedDependency(
+					options.executionKeys.readCiphertext({
+						purpose: binding.purpose,
+						subjectId: binding.subjectId,
+						keyId: binding.ciphertextRef,
+						keyVersion: binding.version,
+					}),
+					signal,
+				);
+				if (!encryptedRecord)
+					throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
+				const decrypted = await interruptedDependency(
+					options.decryptor.decrypt({
+						encryptedRecord,
+						expectedBinding: {
+							purpose: binding.purpose,
+							subjectId: binding.subjectId,
+							keyId: binding.ciphertextRef,
+							keyVersion: binding.version,
+						},
+					}),
+					signal,
+				);
+				if (decrypted.outcome !== "decrypted")
+					throw new RuntimeRelayKeyDeliveryError(decrypted.code);
+				let relayKey: string;
+				try {
+					relayKey = new TextDecoder("utf-8", { fatal: true }).decode(
+						decrypted.plaintext,
+					);
+					RuntimeRelayKeyDeliveryV1Schema.parse({ relayKey });
+				} finally {
+					decrypted.plaintext.fill(0);
+				}
+				const signed = await options.signRecovery(
+					request,
+					acceptedHostSessionRef,
+					acceptedOperationDigest,
+					accepted.authorizationRecordId,
+				);
+				const privateKeyField = RuntimePrivateRelayKeyFieldV1Schema.parse({
+					schemaVersion: 1,
+					context: {
+						requestId: request.requestId,
+						grantId: signed.claims.grantId,
+						requestDigest: signed.claims.requestDigest,
+						traceId: request.traceId,
+						principal: request.principal,
+						executionSource: request.executionSource,
+						channelId: request.channelId,
+						agentId: request.agentId,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+						turnId: request.turnId,
+						sessionGeneration: request.sessionGeneration,
+						hostSessionRef: request.hostSessionRef,
+						operation: request.operation,
+						keyBinding: request.keyBinding,
+					},
+					keyDelivery: { relayKey },
+				});
+				const transport = RuntimeRestoreExecutionKeyTransportV4Schema.parse({
+					recoveryRequest: signed.request,
+					privateKeyField,
+				});
+				await interruptedDependency(
+					options.assertCurrentAuthorization(),
+					signal,
+				);
+				const response = await post(
+					fetcher,
+					new URL("internal/runtime/v4/execution-key/restore", base),
+					options.serviceToken,
+					request.traceId,
+					transport,
+					signal,
+				);
+				const result = RuntimeRestoreExecutionKeyResponseV4Schema.parse(
+					JSON.parse(await boundedResponseText(response)),
+				);
+				if (
+					result.hostSessionRef !== acceptedHostSessionRef ||
+					result.operationId !== request.operation.id
+				)
+					return failure("RUNTIME_RESPONSE_INVALID", true);
+				return result;
+			} catch (error) {
+				if (error instanceof ConversationRuntimeHostError) throw error;
+				return failure("RUNTIME_REQUEST_INVALID", false);
+			}
+		},
 		async readEvents(value: RuntimeEventReadRequestV4, signal?: AbortSignal) {
 			const parsed = RuntimeEventReadRequestV4Schema.safeParse(value);
 			if (!parsed.success) return failure("RUNTIME_REQUEST_INVALID", false);

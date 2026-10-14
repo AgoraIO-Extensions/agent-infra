@@ -7,9 +7,17 @@ import {
 import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import {
+	createPlatformNativeMetadataGatewayAssemblyV1,
+	type PlatformWorkerNativeMetadataGatewayPortsV1,
+} from "./native-metadata-deployment-assembly.js";
+import {
 	type DeploymentSkillMaterializerFactoryV1,
 	resolveDeploymentSkillMaterializerV1,
 } from "./skill-materializer-assembly.js";
+import {
+	createDeploymentSkillHubMaterializerFactoryV1,
+	type DeploymentSkillMaterializationConfigurationV1,
+} from "./skill-materializer-production-assembly.js";
 import { createWecomDeploymentCoordinatorV1 } from "./wecom-deployment.js";
 import {
 	createProductionWorkloadWorkerOptionsV1,
@@ -46,6 +54,9 @@ type DeploymentConfiguration = {
 	};
 	/** Deployment-owned object-storage/Store assembly for the existing Worker seam. */
 	readonly createSkillMaterializer?: DeploymentSkillMaterializerFactoryV1;
+	/** Optional production Store/object-storage Skill materialization assembly. */
+	readonly skillMaterialization?: DeploymentSkillMaterializationConfigurationV1;
+	readonly nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayPortsV1;
 };
 
 function resolveConnectionInstallation(
@@ -91,6 +102,8 @@ const {
 	connectionInstallationSupply,
 	connectionInstallation: configuredConnectionInstallation,
 	createSkillMaterializer,
+	skillMaterialization,
+	nativeMetadataGateway,
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
@@ -150,7 +163,9 @@ async function createPrepared(signal: AbortSignal) {
 		databaseUrl,
 		signal,
 		configured: workloadInput.skillMaterializer,
-		factory: createSkillMaterializer,
+		factory:
+			createSkillMaterializer ??
+			createDeploymentSkillHubMaterializerFactoryV1(skillMaterialization),
 	});
 	const productionWorkload = await createProductionWorkloadWorkerOptionsV1(
 		{
@@ -369,4 +384,15 @@ export async function createPlatformConversationWorkerOptionsV2(
 
 export async function createPlatformWecomWorkerInstanceV1(signal: AbortSignal) {
 	return (await prepare(signal)).wecom.start(signal);
+}
+
+export async function createPlatformNativeMetadataGatewayOptionsV1(
+	signal: AbortSignal,
+) {
+	signal.throwIfAborted();
+	if (!nativeMetadataGateway) return undefined;
+	return createPlatformNativeMetadataGatewayAssemblyV1({
+		serviceToken,
+		ports: nativeMetadataGateway,
+	});
 }

@@ -556,6 +556,12 @@ describe("contract compatibility command", () => {
 			);
 			const previous = structuredClone(current);
 			restorePreApplicationUseGrantContract(previous);
+			for (const document of [current, previous]) {
+				const userUsePath = "/api/v2/agents/{agentId}/api-use-grants/{userId}";
+				if (document.paths[userUsePath]) delete document.paths[userUsePath].put;
+				delete document.components.schemas.AgentUserUseGrantRequestV1;
+				delete document.components.schemas.AgentUserUseGrantResponseV1;
+			}
 			const dir = await mkdtemp(
 				resolve(tmpdir(), "agent-infra-use-grant-compat-"),
 			);
@@ -1914,6 +1920,8 @@ describe("contract compatibility command", () => {
 				name: "runtime-host.v1.openapi.json",
 				remove(value: OpenApiDocument) {
 					delete value.components.schemas.RuntimeModelDirectoryRequestV1;
+					delete value.components.schemas
+						.RuntimeModelDirectoryDispatchRequestV1;
 					delete value.components.schemas.RuntimeModelDirectoryResponseV1;
 					const schema = value.components.schemas.ExecutionGrantCommandV1;
 					if (!schema) throw new Error("ExecutionGrantCommandV1 missing");
@@ -2633,6 +2641,7 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/me/api-credentials" &&
 				path !== "/api/v2/me/api-credentials/{credentialId}" &&
 				path !== "/api/v2/skills" &&
+				path !== "/api/v2/skills/imports" &&
 				path !== "/api/v2/skills/installations" &&
 				path !== "/api/v2/skills/installations/{installationId}" &&
 				path !== "/api/v2/agents/{agentId}/versions/{agentVersion}/skills" &&

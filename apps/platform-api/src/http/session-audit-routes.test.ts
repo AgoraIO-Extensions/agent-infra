@@ -6,7 +6,7 @@ import {
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { createConnectionCapability } from "../connection-consumer-profile.js";
-
+import type { AuditTelemetry } from "./audit-telemetry.js";
 import { HttpProtocolError } from "./common.js";
 import { registerSessionAuditRoutes } from "./session-audit-routes.js";
 
@@ -29,6 +29,7 @@ function createApp(
 		mcpPath: string;
 		configFingerprint: string;
 	},
+	telemetry?: AuditTelemetry,
 ) {
 	const app = new Hono();
 	app.onError((error, context) =>
@@ -67,6 +68,7 @@ function createApp(
 	registerSessionAuditRoutes(app, {
 		identity: identityAdapter,
 		audit,
+		observability: telemetry,
 		...(connectionCapability ? { connectionCapability } : {}),
 	});
 	return { app, identityAdapter, audit };
@@ -190,14 +192,31 @@ describe("session and audit routes", () => {
 		).toBe(401);
 	});
 	it("rejects non-administrators before querying audit persistence", async () => {
-		const { app, audit } = createApp({
-			...activeIdentity,
-			roles: ["employee"],
-		});
+		const telemetry = { record: vi.fn() } satisfies AuditTelemetry;
+		const { app, audit } = createApp(
+			{
+				...activeIdentity,
+				roles: ["employee"],
+			},
+			undefined,
+			telemetry,
+		);
 		for (const path of ["/api/v1/admin/audit", "/api/v2/admin/audit"]) {
 			expect((await app.request(path)).status).toBe(403);
 		}
 		expect(audit.listAudit).not.toHaveBeenCalled();
+		expect(telemetry.record).toHaveBeenCalledTimes(2);
+		expect(telemetry.record.mock.calls).toEqual(
+			expect.arrayContaining([
+				expect.arrayContaining([
+					expect.objectContaining({
+						stage: "audit_query",
+						outcome: "rejected",
+						code: "AUTHORIZATION_DENIED",
+					}),
+				]),
+			]),
+		);
 	});
 
 	it("does not invent a browser user for a system audit actor", async () => {
@@ -387,5 +406,23 @@ describe("session and audit routes", () => {
 			retryable: true,
 		});
 		expect(JSON.stringify(body)).not.toContain("private database detail");
+	});
+
+	it("records a bounded audit query stage for the administrator page", async () => {
+		const telemetry = { record: vi.fn() } satisfies AuditTelemetry;
+		const { app } = createApp(activeIdentity, undefined, telemetry);
+		const response = await app.request("/api/v2/admin/audit");
+		expect(response.status).toBe(200);
+		expect(telemetry.record).toHaveBeenCalledOnce();
+		expect(telemetry.record).toHaveBeenCalledWith(
+			expect.objectContaining({
+				stage: "audit_query",
+				outcome: "completed",
+				operationRef: "platform.audit.list",
+				requestId: expect.any(String),
+				traceId: expect.any(String),
+				durationMs: expect.any(Number),
+			}),
+		);
 	});
 });

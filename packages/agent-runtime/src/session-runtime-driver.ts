@@ -138,6 +138,8 @@ export interface NativeSessionOptions {
 	readonly executionId?: string;
 	/** Trusted original execution binding for protected Connection adapters. */
 	readonly connectionReference?: RuntimeOriginalExecutionRef;
+	/** Retires a protected external action while preserving an unknown Turn hold. */
+	readonly markUnknown?: () => Promise<void>;
 	admit: () => Promise<void>;
 	resolveModelCredential?: RuntimeModelCredentialResolver;
 	/** Request-local Browser context; never persisted or selected by native input. */
@@ -231,6 +233,8 @@ interface Turn {
 	configVersion: string;
 	selection: RuntimeSelectionV1;
 	status: RuntimeStatusV1;
+	/** Protected external action was blocked; terminal native callbacks cannot clear it. */
+	unknownHold?: true;
 	nativeStopReason?: string;
 	nativeCheckpoint?: string;
 	nativeTerminalCheckpoint?: string;
@@ -239,6 +243,49 @@ interface Turn {
 	operationFacts?: RuntimeOperationFactV2[];
 	operationRef?: string;
 	attemptRef?: string;
+}
+function uncertainOperationFacts(turn: Turn) {
+	const latest = new Map<string, RuntimeOperationFactV2>();
+	for (const fact of turn.operationFacts ?? []) {
+		latest.set(JSON.stringify([fact.operationRef, fact.attemptRef]), fact);
+	}
+	return [...latest.values()].filter(
+		(fact) =>
+			fact.phase === "intent" ||
+			fact.phase === "started" ||
+			fact.phase === "unknown",
+	);
+}
+function appendUnknownOperationFacts(
+	turn: Turn,
+	facts: readonly RuntimeOperationFactV2[],
+) {
+	if (!facts.length) return;
+	const now = new Date().toISOString();
+	for (const fact of facts) {
+		if (fact.phase === "unknown") continue;
+		turn.operationFacts ??= [];
+		turn.operationFacts.push(
+			RuntimeOperationFactV2Schema.parse({
+				...fact,
+				phase: "unknown",
+				finishedAt: now,
+				...(fact.startedAt
+					? {
+							durationMs: Math.max(
+								0,
+								Date.parse(now) - Date.parse(fact.startedAt),
+							),
+						}
+					: {}),
+				failureCode: "recovery_unconfirmed",
+			}),
+		);
+	}
+}
+function hasUnknownStatusEvent(turn: Turn) {
+	const last = turn.events.at(-1);
+	return last?.type === "status" && last.payload.status === "unknown";
 }
 interface Session {
 	schemaVersion: 1;
@@ -321,6 +368,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.read()
 			.turns.find((item) => item.executionId === action.executionId);
 		if (!turn) runtimeAuthorizationDenied();
+		if (turn.unknownHold) runtimeAuthorizationDenied();
 		if (
 			action.kind === "model" &&
 			(turn.operationRef !== action.operationRef ||
@@ -366,7 +414,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			const turn = state.turns.find(
 				(entry) => entry.executionId === executionId,
 			);
-			if (!turn || terminal(turn.status))
+			if (!turn || terminal(turn.status) || turn.unknownHold)
 				throw new RuntimeHostError(
 					"RUNTIME_OPERATION_CONFLICT",
 					"Runtime operation fact is no longer current",
@@ -557,7 +605,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			return binding;
 		});
 	}
-	private file(binding: Binding) {
+	private file(binding: Binding, recover = true) {
 		let file = this.files.get(binding.ref);
 		if (!file) {
 			file = (async () => {
@@ -580,7 +628,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						turns: [],
 					},
 				);
-				const state = file.read();
+				let state = file.read();
 				if (
 					state.schemaVersion !== 1 ||
 					JSON.stringify(state.binding) !== JSON.stringify(binding) ||
@@ -654,10 +702,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					executions.add(turn.executionId);
 					turns.add(turn.turnId);
 					let completed = false;
+					let corrected = false;
 					for (const event of turn.events) {
 						sequence++;
 						if (
-							completed ||
+							(completed && !(event.type === "status" && !corrected)) ||
 							!RuntimeEventV1Schema.safeParse(event).success ||
 							event.executionId !== turn.executionId ||
 							event.cursor !== `${this.options.cursorPrefix}-${sequence}` ||
@@ -667,7 +716,17 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						eventKeys.add(event.adapterEventKey);
 						if (event.type === "completed") {
 							completed = true;
-							if (event.payload.status !== turn.status) unavailable();
+							if (!turn.unknownHold && event.payload.status !== turn.status)
+								unavailable();
+						} else if (completed) {
+							if (
+								!turn.unknownHold ||
+								event.type !== "status" ||
+								event.payload.status !== "unknown" ||
+								corrected
+							)
+								unavailable();
+							corrected = true;
 						}
 					}
 					const operationFacts = turn.operationFacts ?? [];
@@ -689,15 +748,19 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						factKeys.add(key);
 						latestFacts.set(key, fact);
 					}
-					if (terminal(turn.status) !== completed) unavailable();
+					if (corrected) {
+						if (turn.status !== "unknown" || !turn.unknownHold) unavailable();
+					} else if (terminal(turn.status) !== completed) unavailable();
 					if (
 						completed &&
+						!corrected &&
 						turn.nativeCheckpoint &&
 						!turn.nativeTerminalCheckpoint
 					)
 						unavailable();
 					if (
 						completed &&
+						!corrected &&
 						this.options.completionStatus(turn.nativeStopReason ?? "") !==
 							turn.status
 					)
@@ -708,12 +771,72 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					state.turns.filter((turn) => !terminal(turn.status)).length > 1
 				)
 					unavailable();
-				await file.update((state) => {
-					for (const turn of state.turns)
-						if (turn.status === "running") turn.status = "unknown";
+				await file.update((draft) => {
+					const sessionCancelled = this.cancelled(binding.ref);
+					for (const turn of draft.turns) {
+						const uncertainOperations = uncertainOperationFacts(turn);
+						const uncertainTools = uncertainOperations.filter(
+							(fact) => fact.kind === "tool",
+						);
+						const hold =
+							turn.unknownHold || uncertainTools.length > 0 || sessionCancelled;
+						if (turn.status === "running" && hold) {
+							appendUnknownOperationFacts(turn, uncertainTools);
+							draft.sequence++;
+							turn.events.push(
+								RuntimeEventV1Schema.parse({
+									schemaVersion: 1,
+									executionId: turn.executionId,
+									adapterEventKey: randomUUID(),
+									cursor: `${this.options.cursorPrefix}-${draft.sequence}`,
+									occurredAt: new Date().toISOString(),
+									type: "status",
+									payload: { status: "unknown" },
+								}),
+							);
+							turn.status = "unknown";
+							turn.unknownHold = true;
+						} else if (turn.status === "unknown" && hold) {
+							appendUnknownOperationFacts(turn, uncertainTools);
+							turn.unknownHold = true;
+							if (!hasUnknownStatusEvent(turn)) {
+								draft.sequence++;
+								turn.events.push(
+									RuntimeEventV1Schema.parse({
+										schemaVersion: 1,
+										executionId: turn.executionId,
+										adapterEventKey: randomUUID(),
+										cursor: `${this.options.cursorPrefix}-${draft.sequence}`,
+										occurredAt: new Date().toISOString(),
+										type: "status",
+										payload: { status: "unknown" },
+									}),
+								);
+							}
+						} else if (
+							turn.status === "unknown" &&
+							!hasUnknownStatusEvent(turn)
+						) {
+							draft.sequence++;
+							turn.events.push(
+								RuntimeEventV1Schema.parse({
+									schemaVersion: 1,
+									executionId: turn.executionId,
+									adapterEventKey: randomUUID(),
+									cursor: `${this.options.cursorPrefix}-${draft.sequence}`,
+									occurredAt: new Date().toISOString(),
+									type: "status",
+									payload: { status: "unknown" },
+								}),
+							);
+						}
+					}
 				});
+				state = file.read();
+				if (!recover) return file;
 				const active = state.turns.find((turn) => !terminal(turn.status));
 				const latest = active ?? state.turns.at(-1);
+				const recoverable = active && !active.unknownHold ? active : undefined;
 				if (
 					latest &&
 					(active || latest.nativeTerminalCheckpoint) &&
@@ -768,32 +891,47 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								(await restored.checkpoint?.())
 						)
 							unavailable();
-						const recovered = active?.nativeCheckpoint
-							? await restored.recover?.(active.nativeCheckpoint)
+						const recovered = recoverable?.nativeCheckpoint
+							? await restored.recover?.(recoverable.nativeCheckpoint)
 							: undefined;
+						let recoveredTerminal = false;
 						if (
-							active &&
+							recoverable &&
 							recovered &&
 							terminal(this.options.completionStatus(recovered.stopReason))
 						) {
-							const text = active.events
+							const text = recoverable.events
 								.filter((event) => event.type === "text")
 								.map((event) => event.payload.delta)
 								.join("");
 							if (recovered.text.startsWith(text)) {
 								if (recovered.text.length > text.length)
-									await this.event(file, active.executionId, {
+									await this.event(file, recoverable.executionId, {
 										type: "text",
 										payload: { delta: recovered.text.slice(text.length) },
 									});
 								await this.status(
 									file,
-									active.executionId,
+									recoverable.executionId,
 									this.options.completionStatus(recovered.stopReason),
 									recovered.stopReason,
 									recovered.checkpoint,
 								);
+								recoveredTerminal = true;
 							}
+						}
+						if (recoverable && !recoveredTerminal) {
+							await file.update((draft) => {
+								const turn = draft.turns.find(
+									(entry) => entry.executionId === recoverable.executionId,
+								);
+								if (turn)
+									appendUnknownOperationFacts(
+										turn,
+										uncertainOperationFacts(turn),
+									);
+							});
+							await this.status(file, recoverable.executionId, "unknown");
 						}
 					} finally {
 						await restored.close();
@@ -804,6 +942,42 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			this.files.set(binding.ref, file);
 		}
 		return file;
+	}
+	/**
+	 * A failed DurableJsonFile commit poisons that in-memory instance. Reopen the
+	 * committed bytes so an unknown hold can be retried after a transient fsync or
+	 * rename failure. The caller keeps the native action blocked while this runs.
+	 */
+	private reopenDurableFile(binding: Binding) {
+		this.files.delete(binding.ref);
+		return this.file(binding, false);
+	}
+	private async persistUnknownAfterFailure(
+		binding: Binding,
+		executionId: string,
+		firstError: unknown,
+	) {
+		let lastError = firstError;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			try {
+				const reopened = await this.reopenDurableFile(binding);
+				await this.status(
+					reopened,
+					executionId,
+					"unknown",
+					undefined,
+					undefined,
+					true,
+				);
+				return reopened;
+			} catch (error) {
+				lastError = error;
+			}
+		}
+		throw new AggregateError(
+			[firstError, lastError],
+			"Unable to persist protected runtime unknown hold",
+		);
 	}
 	private cancelled(ref: string) {
 		return (
@@ -982,8 +1156,16 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		command: RuntimeDriverCommand,
 		value: RuntimeDriverOperationRecord["result"],
 	) {
-		const record = result(command, file.read().binding.ref, value);
+		let record!: RuntimeDriverOperationRecord;
 		await file.update((state) => {
+			const current = state.turns.find(
+				(turn) => turn.executionId === command.executionId,
+			);
+			record = result(
+				command,
+				state.binding.ref,
+				current?.unknownHold ? unknownResult : value,
+			);
 			let operation = state.operations.find(
 				(entry) => entry.key === operationKey(command),
 			);
@@ -1063,11 +1245,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		});
 	}
 	private async submit(
-		file: DurableJsonFile<Session>,
+		initialFile: DurableJsonFile<Session>,
 		command: Submit,
 		fileBridge?: import("./runtime-file-bridge.js").RuntimeFileBridgePortV1,
 		browser?: import("./driver.js").RuntimeBrowserExecutionContextV1,
 	) {
+		let file = initialFile;
 		const before = file.read();
 		const ref = before.binding.ref;
 		if (before.cancelled || this.cancelled(ref)) unavailable();
@@ -1213,6 +1396,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			admitted = resolve;
 		});
 		let dispatched = false;
+		let unknownHold = false;
+		let unknownMarking = false;
 		const toolFacts = new Map<
 			string,
 			{ operationRef: string; attemptRef: string; startedAt: number }
@@ -1277,7 +1462,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				},
 				selection,
 				admit: async () => {
-					if (!dispatched || this.closed)
+					if (!dispatched || this.closed || unknownHold || unknownMarking)
 						throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 					await this.resolve(file, command, {
 						outcome: "accepted",
@@ -1285,6 +1470,31 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					});
 					await this.status(file, command.executionId, "running");
 					admitted();
+				},
+				markUnknown: async () => {
+					unknownMarking = true;
+					unknownHold = true;
+					if (dispatched && !this.closed) {
+						try {
+							await this.status(
+								file,
+								command.executionId,
+								"unknown",
+								undefined,
+								undefined,
+								true,
+							);
+						} catch (error) {
+							// DurableJsonFile deliberately poisons a failed instance. Reopen
+							// the committed bytes and retry so a transient persistence fault
+							// cannot leave a cancelled protected Turn durably running.
+							file = await this.persistUnknownAfterFailure(
+								before.binding,
+								command.executionId,
+								error,
+							);
+						}
+					}
 				},
 				...(resolveModelCredential ? { resolveModelCredential } : {}),
 				...(browser ? { browser } : {}),
@@ -1309,7 +1519,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						}
 					: undefined,
 				update: async (event) => {
-					if (!dispatched) return;
+					if (!dispatched || unknownHold || unknownMarking) return;
 					await this.resolve(file, command, {
 						outcome: "accepted",
 						status: "running",
@@ -1419,20 +1629,23 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				// Only a Turn that passed the native boundary counts as dispatched.
 				dispatched = true;
 				const response = await native.prompt(input);
-				await this.resolve(file, command, {
-					outcome: "accepted",
-					status: "running",
-				});
-				await this.status(
-					file,
-					command.executionId,
-					this.options.completionStatus(response.stopReason),
-					response.stopReason,
-					response.checkpoint,
-				);
-				admitted();
+				if (!unknownHold && !unknownMarking) {
+					await this.resolve(file, command, {
+						outcome: "accepted",
+						status: "running",
+					});
+					await this.status(
+						file,
+						command.executionId,
+						this.options.completionStatus(response.stopReason),
+						response.stopReason,
+						response.checkpoint,
+					);
+					admitted();
+				}
 			} catch {
-				await this.status(file, command.executionId, "unknown");
+				if (!unknownHold && !unknownMarking)
+					await this.status(file, command.executionId, "unknown");
 			}
 		})();
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1448,6 +1661,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			clearTimeout(timer);
 		}
 		if (preDispatchFailure) unavailable();
+		if (unknownHold) return result(command, ref, unknownResult);
 		return (
 			file
 				.read()
@@ -1462,7 +1676,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	) {
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
-			if (!turn || terminal(turn.status)) return;
+			if (!turn || terminal(turn.status) || turn.unknownHold) return;
 			state.sequence++;
 			turn.events.push(
 				RuntimeEventV1Schema.parse({
@@ -1483,10 +1697,40 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		status: RuntimeStatusV1,
 		nativeStopReason?: string,
 		nativeTerminalCheckpoint?: string,
+		unknownHold = false,
 	) {
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
-			if (!turn || terminal(turn.status)) return;
+			if (!turn) return;
+			if (turn.status === status && status === "unknown") {
+				if (unknownHold) turn.unknownHold = true;
+				return;
+			}
+			if (unknownHold && terminal(turn.status)) {
+				const completed = turn.events.at(-1);
+				if (completed?.type !== "completed") unavailable();
+				state.sequence++;
+				turn.events.push(
+					RuntimeEventV1Schema.parse({
+						schemaVersion: 1,
+						executionId,
+						adapterEventKey: randomUUID(),
+						cursor: `${this.options.cursorPrefix}-${state.sequence}`,
+						occurredAt: new Date().toISOString(),
+						type: "status",
+						payload: { status: "unknown" },
+					}),
+				);
+				turn.status = "unknown";
+				turn.unknownHold = true;
+				delete turn.nativeStopReason;
+				delete turn.nativeTerminalCheckpoint;
+				return;
+			}
+			if (terminal(turn.status)) return;
+			if (turn.unknownHold && status === "unknown") return;
+			if (turn.unknownHold && status !== "unknown") return;
+			if (unknownHold) turn.unknownHold = true;
 			if (terminal(status)) {
 				if (
 					!nativeStopReason ||

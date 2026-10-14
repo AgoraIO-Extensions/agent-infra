@@ -12,6 +12,7 @@ import {
 	createExecutionGrantVerifier,
 	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
+	createRuntimeExecutionKeyRecoveryValidatorV4,
 	createWorkloadReadinessVerifierV1,
 	discoverRuntimeBrowserCapabilityV1,
 	FakeRuntimeDriver,
@@ -28,6 +29,7 @@ import type {
 	ExecutionGrantV1,
 	RuntimeBusinessRequestV4,
 	RuntimeExecutionGrantV2,
+	RuntimeRestoreExecutionKeyRequestV4,
 	VerifiedExecutionGrantV1,
 	VerifiedRuntimeExecutionGrantV2,
 } from "@agent-infra/contracts/runtime";
@@ -60,6 +62,10 @@ import {
 	previewRuntimeLegacyMigration,
 	readRuntimeLegacyJournal,
 } from "./legacy-migration-journal.js";
+import {
+	createRuntimeNativeMetadataReadV1,
+	type RuntimeNativeMetadataReadAssemblyV1,
+} from "./native-metadata-assembly.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
 import { createRuntimeFileBridgeFactoryV1 } from "./runtime-file-exchange.js";
 import {
@@ -76,6 +82,10 @@ import { receiveProtectedStandardMcpInstallation } from "./standard-mcp-installa
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
 
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
+export {
+	createRuntimeNativeMetadataReadV1,
+	type RuntimeNativeMetadataReadAssemblyV1,
+} from "./native-metadata-assembly.js";
 
 interface StartOptions {
 	browserCapability?:
@@ -94,6 +104,14 @@ interface StartOptions {
 		request: RuntimeBusinessRequestV4;
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
 	}>;
+	verifyRecoveryGrantV4?: (request: unknown) => Promise<{
+		request: RuntimeRestoreExecutionKeyRequestV4;
+		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
+	}>;
+	nativeMetadataRead?: (
+		request: import("@agent-infra/contracts/runtime").RuntimeNativeMetadataReadRequestV1,
+		signal: AbortSignal,
+	) => Promise<unknown>;
 	host: RuntimeHost;
 	serviceToken: string;
 	verifyGrant: (
@@ -107,7 +125,10 @@ interface StartOptions {
 export type RuntimeHostAssemblyOptionsV1 = Pick<
 	RuntimeHostOptions,
 	"createBrowserExecutionContext"
->;
+> & {
+	/** Deployment-owned Worker proof/current binding for native metadata reads. */
+	nativeMetadataRead?: RuntimeNativeMetadataReadAssemblyV1;
+};
 
 function runtimePort(value: string | undefined, fallback: number) {
 	const port = Number(value ?? fallback);
@@ -581,6 +602,29 @@ export async function assembleRuntimeHost(
 					},
 				});
 			});
+
+		const rawValidateRecoveryV4 =
+			runtimeWorkerId && activeConfiguration?.schemaVersion === 4
+				? createRuntimeExecutionKeyRecoveryValidatorV4(
+						new Map([[keyId, publicKey]]),
+						{
+							expectedIssuer,
+							expectedWorkerId: runtimeWorkerId,
+						},
+					)
+				: undefined;
+		const validateRecoveryV4 = rawValidateRecoveryV4
+			? async (request: unknown) => {
+					const verified = await rawValidateRecoveryV4(request);
+					if (agentId && verified.claims.agentId !== agentId)
+						throw new RuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							"Runtime authorization does not match this deployment",
+							403,
+						);
+					return verified;
+				}
+			: undefined;
 		const host = await RuntimeHost.open({
 			createBrowserExecutionContext,
 			probeBrowserCapability: async ({ declaration, binding, signal }) =>
@@ -619,8 +663,14 @@ export async function assembleRuntimeHost(
 					}
 				: {}),
 			...(validateV4 ? { validateGrantV4: validateV4 } : {}),
+			...(validateRecoveryV4
+				? { validateRecoveryGrantV4: validateRecoveryV4 }
+				: {}),
 		});
 		assembledHost = host;
+		const nativeMetadataRead = options.nativeMetadataRead
+			? createRuntimeNativeMetadataReadV1(host, options.nativeMetadataRead)
+			: undefined;
 		const verifyV2 = createRuntimeExecutionGrantVerifierV2(
 			new Map([[keyId, publicKey]]),
 		);
@@ -653,10 +703,17 @@ export async function assembleRuntimeHost(
 			...(validateV4
 				? { verifyGrantV4: (request: unknown) => validateV4(request) }
 				: {}),
+			...(validateRecoveryV4
+				? {
+						verifyRecoveryGrantV4: (request: unknown) =>
+							validateRecoveryV4(request),
+					}
+				: {}),
 			...(activeConfiguration
 				? { configVersion: activeConfiguration.configVersion }
 				: {}),
 			...(oauth ? { oauth } : {}),
+			...(nativeMetadataRead ? { nativeMetadataRead } : {}),
 			serviceToken,
 			port,
 			close,

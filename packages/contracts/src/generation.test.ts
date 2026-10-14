@@ -257,6 +257,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/me/conversations/recent",
 			"/api/v2/me/relay-key",
 			"/api/v2/skills",
+			"/api/v2/skills/imports",
 			"/api/v2/skills/installations",
 			"/api/v2/skills/installations/{installationId}",
 			"/api/v2/skills/projects",

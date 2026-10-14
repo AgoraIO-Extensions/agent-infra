@@ -4,6 +4,7 @@ import {
 	createWecomAuthorizationV1,
 	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
+	sameWecomConnectionAuthorizationFactV1,
 	type TaskAuthorizationBoundaryV1,
 	type TaskUserDirectoryV1,
 	type WecomAcceptancePlanV1,
@@ -11,6 +12,8 @@ import {
 	type WecomAuthorityStateV1,
 	type WecomAuthorityV1,
 	type WecomChannelStorePortV1,
+	type WecomConnectionAuthorizationFactV1,
+	type WecomConnectionAuthorizationPortV1,
 	type WecomDeliveryClaimV1,
 	type WecomDeliveryStatusV1,
 	type WecomDeliveryStorePortV1,
@@ -103,6 +106,7 @@ interface Row {
 	task_boundary: TaskAuthorizationBoundaryV1;
 	channel_revision: string;
 	authorization_revision: string;
+	connection_authorization_fact: WecomConnectionAuthorizationFactV1 | null;
 	acceptance_status: "accepted" | "busy" | "unavailable";
 	conversation_id: string | null;
 	execution_id: string | null;
@@ -132,11 +136,15 @@ export class PostgresWecomChannelV1
 	readonly #connectionHolderId: string | null;
 	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
 	readonly #identity: WecomIdentityPortV1;
+	readonly #connectionAuthorization:
+		| WecomConnectionAuthorizationPortV1
+		| undefined;
 	readonly #observe: (status: WecomDeliveryStatusV1) => void;
 	constructor(options: {
 		readonly databaseUrl: string;
 		readonly userDirectory?: TaskUserDirectoryV1;
 		readonly identity: WecomIdentityPortV1;
+		readonly connectionAuthorization?: WecomConnectionAuthorizationPortV1;
 		readonly connectionHolderId?: string;
 		readonly observe?: (status: WecomDeliveryStatusV1) => void;
 	}) {
@@ -144,6 +152,7 @@ export class PostgresWecomChannelV1
 		this.#connectionHolderId = options.connectionHolderId ?? null;
 		this.#userDirectory = options.userDirectory;
 		this.#identity = options.identity;
+		this.#connectionAuthorization = options.connectionAuthorization;
 		this.#observe = (status) => {
 			try {
 				options.observe?.(status);
@@ -304,9 +313,16 @@ export class PostgresWecomChannelV1
 						signal,
 					),
 			},
+			connectionAuthorization: this.#connectionAuthorization,
 		});
 		const current = await awaitTaskAuthorizationDependencyV1(
-			() => authorization.authorize(plan.message, "use", boundary),
+			() =>
+				authorization.authorize(
+					plan.message,
+					"use",
+					boundary,
+					plan.message.providerId,
+				),
 			signal,
 		);
 		if (current.outcome !== "allowed") return current;
@@ -317,7 +333,12 @@ export class PostgresWecomChannelV1
 			current.authority.actor.authorizationRevision !==
 				plan.authority.actor.authorizationRevision ||
 			current.authority.channelRevision !== plan.authority.channelRevision ||
-			current.authority.managementRevision !== plan.authority.managementRevision
+			current.authority.managementRevision !==
+				plan.authority.managementRevision ||
+			!sameWecomConnectionAuthorizationFactV1(
+				current.authority.connectionAuthorizationFact,
+				plan.authority.connectionAuthorizationFact,
+			)
 		)
 			return { outcome: "denied" };
 		return current;
@@ -597,8 +618,8 @@ export class PostgresWecomChannelV1
 					};
 					const accepted = acceptedResult;
 					if (!accepted) throw new TaskAuthorizationStoreError();
-					await run(business`insert into platform.wecom_receipts (id,request_digest,scope,actor_id,task_boundary,channel_revision,authorization_revision,acceptance_status,conversation_id,execution_id,reply_handle,expires_at,created_at,updated_at,connection_bot_id,connection_fence)
-    values (${plan.eventKey},${plan.requestDigest},${business.json(scope)},${plan.authority.actor.actorId},${business.json(parseTaskAuthorizationBoundaryV1(plan.authority.actor.taskBoundary) as unknown as postgres.JSONValue)},${plan.authority.channelRevision},${plan.authority.actor.authorizationRevision},${accepted.status},${accepted.conversationId},${accepted.executionId},${plan.message.replyHandle},${new Date(plan.message.replyExpiresAt)},now(),now(),${plan.connectionFence?.botId ?? null},${plan.connectionFence?.fence ?? null})`);
+					await run(business`insert into platform.wecom_receipts (id,request_digest,scope,actor_id,task_boundary,channel_revision,authorization_revision,connection_authorization_fact,acceptance_status,conversation_id,execution_id,reply_handle,expires_at,created_at,updated_at,connection_bot_id,connection_fence)
+    values (${plan.eventKey},${plan.requestDigest},${business.json(scope)},${plan.authority.actor.actorId},${business.json(parseTaskAuthorizationBoundaryV1(plan.authority.actor.taskBoundary) as unknown as postgres.JSONValue)},${plan.authority.channelRevision},${plan.authority.actor.authorizationRevision},${plan.authority.connectionAuthorizationFact ? business.json(plan.authority.connectionAuthorizationFact as unknown as postgres.JSONValue) : null},${accepted.status},${accepted.conversationId},${accepted.executionId},${plan.message.replyHandle},${new Date(plan.message.replyExpiresAt)},now(),now(),${plan.connectionFence?.botId ?? null},${plan.connectionFence?.fence ?? null})`);
 					await audit(
 						business,
 						plan.eventKey,
@@ -772,6 +793,9 @@ export class PostgresWecomChannelV1
 				replyHandle: row.reply_handle,
 				replyExpiresAt: row.expires_at.toISOString(),
 				taskBoundary: parseTaskAuthorizationBoundaryV1(row.task_boundary),
+				...(row.connection_authorization_fact
+					? { connectionAuthorizationFact: row.connection_authorization_fact }
+					: {}),
 				acceptanceStatus: row.acceptance_status,
 				executionStatus: row.execution_status,
 				textDeltas: deltas.map((d) => d.event_payload.text ?? ""),
@@ -797,6 +821,13 @@ export class PostgresWecomChannelV1
 		claim: WecomDeliveryClaimV1,
 		authority: WecomAuthorityV1,
 	): Promise<boolean> {
+		if (
+			!sameWecomConnectionAuthorizationFactV1(
+				authority.connectionAuthorizationFact,
+				claim.connectionAuthorizationFact,
+			)
+		)
+			return false;
 		return this.#sql.begin(async (sql) => {
 			// 20,480 bytes can need eleven UTF-8 parts with 10-second sends.
 			const rows =
@@ -843,7 +874,11 @@ export class PostgresWecomChannelV1
 			Row[]
 		>`select r.* from platform.wecom_receipts r join platform.conversation_executions e on e.execution_id=r.execution_id where r.execution_id=${executionId} and r.actor_id=${actorId} and e.channel_id=${channelId} limit 1`;
 		return row
-			? { scope: row.scope, channelRevision: row.channel_revision }
+			? {
+					scope: row.scope,
+					channelRevision: row.channel_revision,
+					connectionAuthorizationFact: row.connection_authorization_fact,
+				}
 			: null;
 	}
 	async read(receiptId: string, actorId: string) {

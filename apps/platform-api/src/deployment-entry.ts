@@ -37,6 +37,8 @@ const {
 	customAgentGateway,
 	modelSelection,
 	nativeMetadata,
+	nativeMetadataCurrent,
+	providerImport,
 	directorySearch,
 } = await import(configurationModule);
 const databaseUrl = process.env.PLATFORM_DATABASE_URL;
@@ -119,6 +121,8 @@ export function createPlatformApiAssemblyInput() {
 		...(customAgentGateway !== undefined ? { customAgentGateway } : {}),
 		...(modelSelection !== undefined ? { modelSelection } : {}),
 		...(nativeMetadata !== undefined ? { nativeMetadata } : {}),
+		...(nativeMetadataCurrent !== undefined ? { nativeMetadataCurrent } : {}),
+		...(providerImport !== undefined ? { providerImport } : {}),
 	});
 	return createProductionPlatformApiAssemblyInputV1({
 		...configuredApiInput,

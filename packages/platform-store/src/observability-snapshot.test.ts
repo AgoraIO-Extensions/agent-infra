@@ -19,9 +19,14 @@ it("returns one bounded durable snapshot without inspecting business payloads", 
 	const { sql, transaction, begin } = client(
 		Promise.resolve([{ task_waiting: "2", outbox_pending: "3" }]),
 	);
-	await expect(
-		readPlatformQueueResourceSnapshot(sql, new AbortController().signal),
-	).resolves.toEqual({ taskWaiting: 2, outboxPending: 3 });
+	const snapshot = await readPlatformQueueResourceSnapshot(
+		sql,
+		new AbortController().signal,
+	);
+	expect(snapshot).toMatchObject({ taskWaiting: 2, outboxPending: 3 });
+	expect(snapshot.queryDurationMs).toEqual(expect.any(Number));
+	expect(snapshot.queryDurationMs).toBeGreaterThanOrEqual(0);
+	expect(snapshot.queryDurationMs).toBeLessThanOrEqual(2000);
 	expect(begin.mock.calls[0]?.[0]).toBe("read only");
 	const statement = transaction.mock.calls[1]?.[0];
 	const query = statement?.join("");
@@ -77,6 +82,21 @@ it("redacts a synchronous client failure before query creation", async () => {
 	await expect(
 		readPlatformQueueResourceSnapshot(sql, new AbortController().signal),
 	).rejects.toThrow(/^Platform resource snapshot is unavailable$/);
+});
+
+it("clamps the reported read duration to the Store timeout", async () => {
+	const now = vi.spyOn(performance, "now");
+	now.mockReturnValueOnce(0).mockReturnValue(9000);
+	try {
+		const { sql } = client(
+			Promise.resolve([{ task_waiting: "1", outbox_pending: "1" }]),
+		);
+		await expect(
+			readPlatformQueueResourceSnapshot(sql, new AbortController().signal),
+		).resolves.toMatchObject({ queryDurationMs: 2000 });
+	} finally {
+		now.mockRestore();
+	}
 });
 
 it("rejects late query results after cancellation without cancelling a shared connection", async () => {

@@ -61,6 +61,10 @@ import {
 	registerFileRoutesV1,
 } from "./http/file-routes.js";
 import {
+	type NativeMetadataCurrentRouteDependenciesV1,
+	registerNativeMetadataCurrentRoutesV1,
+} from "./http/native-metadata-current-routes.js";
+import {
 	type NativeMetadataRoutesDependenciesV1,
 	registerNativeMetadataRoutes,
 } from "./http/native-metadata-routes.js";
@@ -86,6 +90,10 @@ import {
 	registerSkillHubAgentBindingRoutesV1,
 	type SkillHubAgentBindingRoutesDependenciesV1,
 } from "./http/skill-hub-agent-binding-routes.js";
+import {
+	registerSkillHubImportRoutesV1,
+	type SkillHubImportRoutesDependenciesV1,
+} from "./http/skill-hub-import-routes.js";
 import {
 	registerSkillHubInstallationRoutesV1,
 	type SkillHubInstallationRoutesDependenciesV1,
@@ -159,6 +167,7 @@ export interface PlatformAppDependencies {
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
 	readonly nativeMetadata?: NativeMetadataRoutesDependenciesV1;
+	readonly nativeMetadataCurrent?: NativeMetadataCurrentRouteDependenciesV1;
 	readonly tasks?: TaskRoutesDependencies;
 	readonly unknownStopOperations?: UnknownStopOperationsRouteDependencies;
 	readonly management: ManagementRouteDependencies;
@@ -179,6 +188,7 @@ export interface PlatformAppDependencies {
 	readonly skillHubInstallations?: SkillHubInstallationRoutesDependenciesV1;
 	readonly skillHubPublication?: SkillHubPublicationRoutesDependenciesV1;
 	readonly skillHubAgentBindings?: SkillHubAgentBindingRoutesDependenciesV1;
+	readonly skillHubImport?: SkillHubImportRoutesDependenciesV1;
 	readonly userGovernance?: UserGovernanceRoutesDependencies;
 }
 
@@ -298,15 +308,30 @@ export function createPlatformApp(
 	});
 	if (dependencies.nativeMetadata)
 		registerNativeMetadataRoutes(app, dependencies.nativeMetadata);
-	if (dependencies.tasks) registerTaskRoutes(app, dependencies.tasks);
+	if (dependencies.nativeMetadataCurrent)
+		registerNativeMetadataCurrentRoutesV1(
+			app,
+			dependencies.nativeMetadataCurrent,
+		);
+	if (dependencies.tasks)
+		registerTaskRoutes(app, {
+			...dependencies.tasks,
+			...(observability ? { observability } : {}),
+		});
 	if (dependencies.unknownStopOperations)
 		registerUnknownStopOperationsRoutes(
 			app,
 			dependencies.unknownStopOperations,
 		);
-	registerSessionAuditRoutes(app, dependencies.sessionAudit);
+	registerSessionAuditRoutes(app, {
+		...dependencies.sessionAudit,
+		...(observability ? { observability } : {}),
+	});
 	if (dependencies.scopedAudit)
-		registerScopedAuditRoutes(app, dependencies.scopedAudit);
+		registerScopedAuditRoutes(app, {
+			...dependencies.scopedAudit,
+			...(observability ? { observability } : {}),
+		});
 	if (dependencies.directory)
 		registerDirectoryRoutes(app, dependencies.directory);
 	if (dependencies.files) registerFileRoutesV1(app, dependencies.files);
@@ -326,5 +351,7 @@ export function createPlatformApp(
 			app,
 			dependencies.skillHubAgentBindings,
 		);
+	if (dependencies.skillHubImport)
+		registerSkillHubImportRoutesV1(app, dependencies.skillHubImport);
 	return app;
 }

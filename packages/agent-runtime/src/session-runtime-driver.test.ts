@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type { RuntimeDriverCommand } from "./driver.js";
+import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import {
 	createRuntimeFileResultReceiptV1,
@@ -423,12 +424,17 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 			nativeSessionRef: record.nativeSessionRef,
 			executionId: "execution-a",
 		};
+		const requestIdentity = {
+			rpcRequestId: 7,
+			requestDigest: "a".repeat(64),
+		};
 		await sessionOptions?.recordOperationFact?.({
 			kind: "tool",
 			operationRef: "11111111-1111-4111-8111-111111111111",
 			attemptRef: "22222222-2222-4222-8222-222222222222",
 			phase: "intent",
 			toolId: "filesystem.read",
+			...requestIdentity,
 		});
 		await sessionOptions?.recordOperationFact?.({
 			kind: "tool",
@@ -437,6 +443,7 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 			phase: "started",
 			startedAt: new Date().toISOString(),
 			toolId: "filesystem.read",
+			...requestIdentity,
 		});
 		await runtime.recordOperationFact({
 			...input,
@@ -498,7 +505,15 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 		await runtime.close();
 		const state = JSON.parse(
 			await readFile(join(path, record.nativeSessionRef, "state.json"), "utf8"),
-		) as { turns: { operationFacts?: { phase: string }[] }[] };
+		) as {
+			turns: {
+				operationFacts?: {
+					phase: string;
+					rpcRequestId?: string | number;
+					requestDigest?: string;
+				}[];
+			}[];
+		};
 		const facts = state.turns[0]?.operationFacts ?? [];
 		expect(facts.length).toBeLessThanOrEqual(256);
 		expect(facts.slice(0, 4).map((fact) => fact.phase)).toEqual([
@@ -508,8 +523,334 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 			"started",
 		]);
 		expect(facts.at(-1)?.phase).toBe("started");
+		expect(
+			facts.slice(0, 2).map((fact) => ({
+				rpcRequestId: fact.rpcRequestId,
+				requestDigest: fact.requestDigest,
+			})),
+		).toEqual([requestIdentity, requestIdentity]);
 	} finally {
 		releasePrompt?.();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("keeps a protected cancellation as an unknown Turn hold after a persistence retry", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-protected-unknown-"));
+	let sessionOptions: NativeSessionOptions | undefined;
+	let entered!: () => void;
+	const enteredPrompt = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	let release!: () => void;
+	const releasePrompt = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const runtime = await driver(path, async (options) => {
+		sessionOptions = options;
+		return {
+			nativeId: "native-protected",
+			select: async () => {},
+			prompt: async () => {
+				entered();
+				await releasePrompt;
+				return { stopReason: "cancelled" };
+			},
+			cancel: async () => {},
+			close: async () => {},
+		};
+	});
+	const originalPersist = (
+		DurableJsonFile.prototype as unknown as {
+			persist: (serialized: string) => Promise<void>;
+		}
+	).persist;
+	let failNextPersist = false;
+	const persistFailure = vi
+		.spyOn(
+			DurableJsonFile.prototype as unknown as {
+				persist: (serialized: string) => Promise<void>;
+			},
+			"persist",
+		)
+		.mockImplementation(function (this: DurableJsonFile<unknown>, serialized) {
+			if (failNextPersist) {
+				failNextPersist = false;
+				return Promise.reject(new Error("synthetic persistence failure"));
+			}
+			return originalPersist.call(this, serialized);
+		});
+	const pending = runtime.execute(command([]));
+	try {
+		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
+		await enteredPrompt;
+		await sessionOptions?.recordOperationFact?.({
+			kind: "tool",
+			operationRef: "11111111-1111-4111-8111-111111111111",
+			attemptRef: "22222222-2222-4222-8222-222222222222",
+			phase: "intent",
+			toolId: "filesystem.read",
+		});
+		failNextPersist = true;
+		await sessionOptions?.markUnknown?.();
+		await expect(
+			sessionOptions?.recordOperationFact?.({
+				kind: "tool",
+				operationRef: "33333333-3333-4333-8333-333333333333",
+				attemptRef: "44444444-4444-4444-8444-444444444444",
+				phase: "intent",
+				toolId: "filesystem.write",
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+		release();
+		await pending;
+		const state = JSON.parse(
+			await readFile(join(path, "index.json"), "utf8"),
+		) as { sessions: { ref: string }[] };
+		const ref = state.sessions[0]?.ref;
+		if (!ref) throw new Error("missing session ref");
+		const persisted = JSON.parse(
+			await readFile(join(path, ref, "state.json"), "utf8"),
+		) as {
+			turns: {
+				status: string;
+				events: { type: string }[];
+				operationFacts?: { phase: string; failureCode?: string }[];
+			}[];
+		};
+		expect(persisted.turns[0]?.status).toBe("unknown");
+		expect(persisted.turns[0]?.operationFacts?.at(-1)).toMatchObject({
+			phase: "unknown",
+			failureCode: "recovery_unconfirmed",
+		});
+		expect(
+			persisted.turns[0]?.events.some((event) => event.type === "completed"),
+		).toBe(false);
+	} finally {
+		release();
+		persistFailure.mockRestore();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("lets a protected unknown hold supersede a racing terminal status", async () => {
+	const path = await mkdtemp(
+		join(tmpdir(), "session-protected-terminal-race-"),
+	);
+	let sessionOptions: NativeSessionOptions | undefined;
+	const runtime = await driver(path, async (options) => {
+		sessionOptions = options;
+		return {
+			nativeId: "native-protected",
+			select: async () => {},
+			prompt: async () => ({ stopReason: "completed" }),
+			cancel: async () => {},
+			close: async () => {},
+		};
+	});
+	try {
+		const record = await runtime.execute(command([]));
+		await sessionOptions?.markUnknown?.();
+		const persisted = JSON.parse(
+			await readFile(join(path, record.nativeSessionRef, "state.json"), "utf8"),
+		) as { turns: { status: string; events: { type: string }[] }[] };
+		expect(persisted.turns[0]?.status).toBe("unknown");
+		expect(
+			persisted.turns[0]?.events.some((event) => event.type === "completed"),
+		).toBe(true);
+		expect(persisted.turns[0]?.events.at(-1)?.type).toBe("status");
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("normalizes an interrupted Turn into an unknown hold before recovery", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-recovery-unknown-hold-"));
+	let sessionOptions: NativeSessionOptions | undefined;
+	let release!: () => void;
+	const releasePrompt = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const runtime = await driver(path, async (options) => {
+		sessionOptions = options;
+		return {
+			nativeId: "native-interrupted",
+			select: async () => {},
+			prompt: async () => {
+				await options.admit();
+				await releasePrompt;
+				return { stopReason: "completed" };
+			},
+			cancel: async () => {},
+			close: async () => {},
+		};
+	});
+	const pending = runtime.execute(command([]));
+	try {
+		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
+		const record = await pending;
+		await sessionOptions?.recordOperationFact?.({
+			kind: "tool",
+			operationRef: "11111111-1111-4111-8111-111111111111",
+			attemptRef: "22222222-2222-4222-8222-222222222222",
+			phase: "intent",
+			toolId: "filesystem.write",
+		});
+		const recoverCall = vi.fn(async () => undefined);
+		const recoveredOpen = vi.fn(async () => ({
+			nativeId: "native-reopened",
+			select: async () => {},
+			prompt: async () => ({ stopReason: "completed" }),
+			recover: recoverCall,
+			cancel: async () => {},
+			close: async () => {},
+		}));
+		const recovered = await driver(path, recoveredOpen);
+		try {
+			expect(
+				await recovered.getStatus(record.nativeSessionRef, "execution-a"),
+			).toBe("unknown");
+			expect(recoveredOpen).toHaveBeenCalledOnce();
+			expect(recoverCall).not.toHaveBeenCalled();
+			const persisted = JSON.parse(
+				await readFile(
+					join(path, record.nativeSessionRef, "state.json"),
+					"utf8",
+				),
+			) as {
+				sequence: number;
+				turns: {
+					status: string;
+					unknownHold?: true;
+					events: { type: string; payload?: { status?: string } }[];
+					operationFacts?: { phase: string; failureCode?: string }[];
+				}[];
+			};
+			expect(persisted.turns[0]?.unknownHold).toBe(true);
+			expect(persisted.turns[0]?.events.at(-1)).toMatchObject({
+				type: "status",
+				payload: { status: "unknown" },
+			});
+			expect(persisted.turns[0]?.operationFacts?.at(-1)).toMatchObject({
+				phase: "unknown",
+				failureCode: "recovery_unconfirmed",
+			});
+			await recovered.close();
+			const legacyUnknown = persisted;
+			if (!legacyUnknown.turns[0]) throw new Error("missing recovered turn");
+			legacyUnknown.turns[0].status = "unknown";
+			delete legacyUnknown.turns[0].unknownHold;
+			const legacyFact = legacyUnknown.turns[0].operationFacts?.at(-1);
+			if (!legacyFact) throw new Error("missing recovered operation fact");
+			legacyFact.phase = "started";
+			delete legacyFact.failureCode;
+			legacyUnknown.turns[0].events.pop();
+			legacyUnknown.sequence--;
+			await writeFile(
+				join(path, record.nativeSessionRef, "state.json"),
+				JSON.stringify(legacyUnknown),
+			);
+			const recoveredLegacy = await driver(path, recoveredOpen);
+			try {
+				expect(
+					await recoveredLegacy.getStatus(
+						record.nativeSessionRef,
+						"execution-a",
+					),
+				).toBe("unknown");
+				expect(recoverCall).not.toHaveBeenCalled();
+				const legacyPersisted = JSON.parse(
+					await readFile(
+						join(path, record.nativeSessionRef, "state.json"),
+						"utf8",
+					),
+				) as { turns: { operationFacts?: { phase: string }[] }[] };
+				expect(legacyPersisted.turns[0]?.operationFacts?.at(-1)?.phase).toBe(
+					"unknown",
+				);
+			} finally {
+				await recoveredLegacy.close();
+			}
+			const beforeRepeat = JSON.parse(
+				await readFile(
+					join(path, record.nativeSessionRef, "state.json"),
+					"utf8",
+				),
+			) as { sequence: number };
+			const recoveredAgain = await driver(path, recoveredOpen);
+			try {
+				expect(
+					await recoveredAgain.getStatus(
+						record.nativeSessionRef,
+						"execution-a",
+					),
+				).toBe("unknown");
+				const afterRepeat = JSON.parse(
+					await readFile(
+						join(path, record.nativeSessionRef, "state.json"),
+						"utf8",
+					),
+				) as { sequence: number };
+				expect(afterRepeat.sequence).toBe(beforeRepeat.sequence);
+			} finally {
+				await recoveredAgain.close();
+			}
+		} finally {
+			await recovered.close();
+		}
+	} finally {
+		release();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("converges an ordinary interrupted Turn to unknown without recovery evidence", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-recovery-no-evidence-"));
+	let sessionOptions: NativeSessionOptions | undefined;
+	let release!: () => void;
+	const releasePrompt = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const runtime = await driver(path, async (options) => {
+		sessionOptions = options;
+		return {
+			nativeId: "native-interrupted",
+			select: async () => {},
+			prompt: async () => {
+				await options.admit();
+				await releasePrompt;
+				return { stopReason: "completed" };
+			},
+			cancel: async () => {},
+			close: async () => {},
+		};
+	});
+	const pending = runtime.execute(command([]));
+	try {
+		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
+		const record = await pending;
+		const recoveredOpen = vi.fn(async () => ({
+			nativeId: "native-reopened",
+			select: async () => {},
+			prompt: async () => ({ stopReason: "completed" }),
+			cancel: async () => {},
+			close: async () => {},
+		}));
+		const recovered = await driver(path, recoveredOpen);
+		try {
+			expect(
+				await recovered.getStatus(record.nativeSessionRef, "execution-a"),
+			).toBe("unknown");
+			expect(recoveredOpen).toHaveBeenCalledOnce();
+		} finally {
+			await recovered.close();
+		}
+	} finally {
+		release();
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });
 	}

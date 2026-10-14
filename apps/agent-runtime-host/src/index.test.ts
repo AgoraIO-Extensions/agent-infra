@@ -365,6 +365,19 @@ describe("RuntimeHost environment assembly", () => {
 		}
 	});
 
+	it("assembles the deployment-owned native metadata reader", async () => {
+		const env = await environment();
+		const resolveContext = vi.fn(async () => null);
+		const runtime = await assembleRuntimeHost(env, undefined, {
+			nativeMetadataRead: { resolveContext },
+		});
+		try {
+			expect(runtime.nativeMetadataRead).toEqual(expect.any(Function));
+		} finally {
+			await runtime.close();
+		}
+	});
+
 	async function retainSignedControl(failure: string) {
 		const values = await environment();
 		values.AGENT_INFRA_RUNTIME_DATA_DIR = await realpath(

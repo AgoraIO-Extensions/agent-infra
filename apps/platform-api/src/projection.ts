@@ -44,6 +44,8 @@ interface ProjectionReaderDependencies {
 	readonly managementQuery: Pick<PostgresAgentManagementQueryV1, "getAgent">;
 	readonly configurationQuery: Pick<PostgresAgentConfigurationQueryV1, "read">;
 	readonly presentAgent: PresentPlatformAgent;
+	/** True only when the authenticated native metadata reader is assembled. */
+	readonly nativeMetadataAvailable?: boolean;
 }
 
 interface ProjectionMetadata {
@@ -145,7 +147,10 @@ export function createPlatformProjectionReaders(
 			managementStatus: agent.management.status,
 			serviceAvailability: agent.management.serviceAvailability,
 			configuration: wire,
-			capabilities: presentation.capabilities,
+			capabilities: {
+				...presentation.capabilities,
+				nativeMetadata: dependencies.nativeMetadataAvailable === true,
+			},
 			interactionUrl: presentation.interactionUrl,
 		});
 	}

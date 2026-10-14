@@ -11,6 +11,12 @@ import {
 import type { Hono } from "hono";
 import type { ConnectionCapabilityV1 } from "../connection-consumer-profile.js";
 import {
+	type AuditTelemetry,
+	auditOutcome,
+	observeAuditQuery,
+	recordAuditStage,
+} from "./audit-telemetry.js";
+import {
 	HttpProtocolError,
 	parsePageQuery,
 	type RequestMetadata,
@@ -40,6 +46,7 @@ interface PlatformAuditQuery {
 export interface SessionAuditRoutesDependencies {
 	readonly identity: IdentityAdapter;
 	readonly audit: PlatformAuditQuery;
+	readonly observability?: AuditTelemetry;
 	readonly connectionCapability?: ConnectionCapabilityV1;
 }
 
@@ -64,28 +71,48 @@ async function readAuditPage(
 	request: Request,
 	metadata: RequestMetadata,
 ): Promise<PlatformAuditPageV1> {
-	const identity = await resolveIdentity(
-		dependencies.identity,
-		request,
-		metadata.traceId,
-	);
-	if (!identity.roles.includes("system_admin")) {
-		throw new HttpProtocolError("FORBIDDEN", metadata.traceId);
-	}
-	const page = parsePageQuery(request, metadata.traceId);
+	const preflightStartedAt = performance.now();
+	let identity: Awaited<ReturnType<typeof resolveIdentity>>;
+	let page: ReturnType<typeof parsePageQuery>;
 	try {
-		return await dependencies.audit.listAudit(
-			{
-				schemaVersion: 1,
-				kind: "administrator",
-				administratorId: identity.userId,
-			},
-			{
-				schemaVersion: 1,
-				limit: page.limit ?? 50,
-				...(page.cursor === undefined ? {} : { cursor: page.cursor }),
-			},
+		identity = await resolveIdentity(
+			dependencies.identity,
+			request,
+			metadata.traceId,
 		);
+		if (!identity.roles.includes("system_admin"))
+			throw new HttpProtocolError("FORBIDDEN", metadata.traceId);
+		page = parsePageQuery(request, metadata.traceId);
+	} catch (error) {
+		recordAuditStage(
+			dependencies.observability,
+			"audit_query",
+			"list",
+			preflightStartedAt,
+			auditOutcome(error),
+			metadata,
+		);
+		throw error;
+	}
+	try {
+		return await observeAuditQuery({
+			telemetry: dependencies.observability,
+			operation: "list",
+			metadata,
+			work: () =>
+				dependencies.audit.listAudit(
+					{
+						schemaVersion: 1,
+						kind: "administrator",
+						administratorId: identity.userId,
+					},
+					{
+						schemaVersion: 1,
+						limit: page.limit ?? 50,
+						...(page.cursor === undefined ? {} : { cursor: page.cursor }),
+					},
+				),
+		});
 	} catch (error) {
 		mapAuditError(error, metadata.traceId);
 	}

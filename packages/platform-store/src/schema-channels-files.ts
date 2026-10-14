@@ -35,6 +35,7 @@ export const wecomReceipts = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 		connectionBotId: text("connection_bot_id"),
 		connectionFence: bigint("connection_fence", { mode: "number" }),
+		connectionAuthorizationFact: jsonb("connection_authorization_fact"),
 	},
 	(table) => [
 		check(

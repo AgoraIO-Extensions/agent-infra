@@ -1576,9 +1576,27 @@
                       ],
                       "type": "string"
                     },
+                    "requestDigest": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
                     "resultRef": {
                       "minLength": 1,
                       "type": "string"
+                    },
+                    "rpcRequestId": {
+                      "anyOf": [
+                        {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        }
+                      ]
                     },
                     "startedAt": {
                       "format": "date-time",
@@ -2282,9 +2300,27 @@
                   ],
                   "type": "string"
                 },
+                "requestDigest": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
                 "resultRef": {
                   "minLength": 1,
                   "type": "string"
+                },
+                "rpcRequestId": {
+                  "anyOf": [
+                    {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    }
+                  ]
                 },
                 "startedAt": {
                   "format": "date-time",
@@ -3537,9 +3573,27 @@
               ],
               "type": "string"
             },
+            "requestDigest": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
             "resultRef": {
               "minLength": 1,
               "type": "string"
+            },
+            "rpcRequestId": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                }
+              ]
             },
             "startedAt": {
               "format": "date-time",

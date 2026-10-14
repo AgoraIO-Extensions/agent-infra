@@ -472,6 +472,8 @@ export class StandardMcpClient {
 				arguments: Record<string, unknown>;
 				operation: StandardMcpOperation;
 				sends: number;
+				prepared: boolean;
+				prepareFailed: boolean;
 		  }
 		| undefined;
 	#discoveryRequests = 0;
@@ -587,6 +589,9 @@ export class StandardMcpClient {
 	get credentialRevision() {
 		return this.#input.credentialRevision;
 	}
+	get expiresAt() {
+		return this.#input.expiresAt;
+	}
 	get toolDefinitions() {
 		return [
 			{
@@ -697,6 +702,8 @@ export class StandardMcpClient {
 				arguments: structuredClone(arguments_),
 				operation,
 				sends: 0,
+				prepared: false,
+				prepareFailed: false,
 			};
 			let result: CallToolResult;
 			try {
@@ -709,9 +716,16 @@ export class StandardMcpClient {
 					},
 				)) as CallToolResult;
 			} catch {
+				if (this.#active.sends && !this.#active.prepared) {
+					return unavailable();
+				}
 				return this.#active.sends
 					? this.unknown(operation)
 					: { phase: "failed", contentItems: [], success: false };
+			}
+			if (this.#active.prepareFailed) {
+				this.block(operation);
+				return unavailable();
 			}
 			if (
 				this.#active.sends !== 1 ||
@@ -742,6 +756,10 @@ export class StandardMcpClient {
 				success: completed,
 			};
 		} catch {
+			if (this.#active?.prepareFailed) {
+				this.block(operation);
+				return unavailable();
+			}
 			return this.#active?.sends
 				? this.unknown(operation)
 				: { phase: "failed", contentItems: [], success: false };
@@ -803,7 +821,13 @@ export class StandardMcpClient {
 					rpcRequestId: parsed.id as string | number,
 					requestDigest: standardMcpDigest(parsed.params),
 				};
-				await active.operation.prepare(request);
+				try {
+					await active.operation.prepare(request);
+				} catch (error) {
+					active.prepareFailed = true;
+					throw error;
+				}
+				active.prepared = true;
 				const finalRevalidate = await active.operation.assertCurrent();
 				await this.assertCurrent();
 				const finalGuarded: unknown = finalRevalidate();
@@ -824,6 +848,10 @@ export class StandardMcpClient {
 		const headers = new Headers(init?.headers);
 		headers.set("authorization", `Bearer ${this.#input.token}`);
 		const fetch = this.options.fetch ?? globalThis.fetch;
+		// The operation journal must confirm the native started boundary before
+		// creating the HTTP request. Otherwise a WRITE can reach Connection while
+		// its durable started fact is still pending.
+		await recordStarted?.();
 		const pending = fetch(url, {
 			...init,
 			headers,
@@ -834,7 +862,6 @@ export class StandardMcpClient {
 			]),
 		});
 		void pending.catch(() => {});
-		await recordStarted?.();
 		const response = await pending;
 		if (response.status >= 300 && response.status < 400) unavailable();
 		if (!response.body) return response;

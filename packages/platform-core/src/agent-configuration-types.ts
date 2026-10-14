@@ -518,6 +518,8 @@ export interface AgentConfigurationModelAdmissionPortV1 {
 		readonly agentId: string;
 		readonly requestId: string;
 		readonly traceId: string;
+		/** Server-resolved source; never supplied by the applicant. */
+		readonly source?: AgentConfigurationSourceV1;
 		readonly requested: AgentConfigurationModelInputV1;
 		readonly current: AgentConfigurationModelV1 | null;
 	}): Promise<
@@ -533,8 +535,14 @@ export interface AgentConfigurationModelAdmissionPortV1 {
 				readonly status: "rejected";
 				readonly agentId: string;
 				readonly requestId: string;
+				readonly reason?: "codex_model_profile_unsupported";
 		  }
 	>;
+}
+
+export interface AgentConfigurationModelAdmissionRejectionV2 {
+	readonly status: "rejected";
+	readonly reason: "codex_model_profile_unsupported";
 }
 
 export interface AgentConfigurationModelAdmissionPortV2 {
@@ -542,8 +550,14 @@ export interface AgentConfigurationModelAdmissionPortV2 {
 		readonly agentId: string;
 		readonly requestId: string;
 		readonly traceId: string;
+		/** Server-resolved source; never supplied by the applicant. */
+		readonly source?: AgentConfigurationSourceV1;
 		readonly requested: AgentConfigurationModelInputV2;
-	}): Promise<AgentConfigurationModelV2 | null>;
+	}): Promise<
+		| AgentConfigurationModelV2
+		| AgentConfigurationModelAdmissionRejectionV2
+		| null
+	>;
 }
 
 export interface AgentConfigurationSecretAdmissionPortV1 {
@@ -624,6 +638,7 @@ export type AgentConfigurationErrorCode =
 	| "invalid_command"
 	| "not_authorized"
 	| "not_admitted"
+	| "model_profile_unsupported"
 	| "no_change"
 	| "stale_revision"
 	| "idempotency_conflict"

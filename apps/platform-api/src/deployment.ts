@@ -33,6 +33,11 @@ import type { ConversationModelSelectionReaderV1 } from "./http/conversation-rou
 import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
+import {
+	createRuntimeNativeMetadataWorkerReaderV1,
+	type RuntimeNativeMetadataWorkerGatewayV1,
+} from "./runtime-native-metadata-reader.js";
+import type { SkillHubProviderImportDeploymentV1 } from "./skill-hub-read-assembly.js";
 
 type CustomAgentGatewayRouteInput = NonNullable<
 	PlatformApiAssemblyInput["customAgentGateway"]
@@ -125,11 +130,27 @@ export interface ProductionPlatformApiInputV1
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	/** Optional deployment-owned authenticated native metadata reader. */
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
+	/** Optional deployment-owned Worker current-confirmation route. */
+	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
+	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 	/** Optional deployment-owned platform identity route for custom Agents. */
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
 	readonly resolveCustomAgentInteractionUrl?: Parameters<
 		typeof createDeploymentPresentation
 	>[0]["resolveCustomAgentInteractionUrl"];
+}
+
+/**
+ * Compose the production API reader from the Store scope resolver and the
+ * fixed Worker gateway. The Worker remains the only proof issuer.
+ */
+export function createProductionNativeMetadataReaderV1(options: {
+	readonly resolveRequest: Parameters<
+		typeof createRuntimeNativeMetadataWorkerReaderV1
+	>[0]["resolveRequest"];
+	readonly gateway: RuntimeNativeMetadataWorkerGatewayV1;
+}) {
+	return createRuntimeNativeMetadataWorkerReaderV1(options);
 }
 
 /** Merge explicit mounted deployment ports without allowing duplicate authorities. */
@@ -138,6 +159,8 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
+	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
+	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 }): ProductionPlatformApiInputV1 {
 	const {
 		agentDefaultRelayKeyPolicy: _apiAgentDefaultRelayKeyPolicy,
@@ -159,6 +182,16 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 		apiInputWithoutRelayKeyPolicy.nativeMetadata !== undefined
 	)
 		throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
+	if (
+		input.nativeMetadataCurrent !== undefined &&
+		input.apiInput.nativeMetadataCurrent !== undefined
+	)
+		throw new Error("PLATFORM_NATIVE_METADATA_CURRENT_DUPLICATE");
+	if (
+		input.providerImport !== undefined &&
+		input.apiInput.providerImport !== undefined
+	)
+		throw new Error("PLATFORM_PROVIDER_IMPORT_DUPLICATE");
 	return {
 		...apiInputWithoutRelayKeyPolicy,
 		...(input.customAgentGateway !== undefined
@@ -169,6 +202,12 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 			: {}),
 		...(input.nativeMetadata !== undefined
 			? { nativeMetadata: input.nativeMetadata }
+			: {}),
+		...(input.nativeMetadataCurrent !== undefined
+			? { nativeMetadataCurrent: input.nativeMetadataCurrent }
+			: {}),
+		...(input.providerImport !== undefined
+			? { providerImport: input.providerImport }
 			: {}),
 	};
 }
@@ -406,6 +445,10 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
 		...(input.nativeMetadata ? { nativeMetadata: input.nativeMetadata } : {}),
+		...(input.nativeMetadataCurrent
+			? { nativeMetadataCurrent: input.nativeMetadataCurrent }
+			: {}),
+		...(input.providerImport ? { providerImport: input.providerImport } : {}),
 		...(input.customAgentGateway
 			? {
 					customAgentGateway: input.customAgentGateway,

@@ -784,6 +784,18 @@ export function createConversationRuntimeV2(
 					}
 				: {}),
 			assertCurrentAuthorization: assertCurrent,
+			signRecovery: (
+				originalRequest,
+				acceptedHostSessionRef,
+				acceptedOperationDigest,
+				authorizationRecordId,
+			) =>
+				signV4.signRecovery(
+					originalRequest,
+					acceptedHostSessionRef,
+					acceptedOperationDigest,
+					authorizationRecordId,
+				),
 		});
 	}
 	async function dispatchBusinessV4(
@@ -990,11 +1002,53 @@ export function createConversationRuntimeV2(
 		signal?: AbortSignal,
 	) {
 		const active = combined(signal);
-		const { context, state, authority, client, base, route } = await prepare(
-			request,
-			"session.status",
-			active,
-		);
+		const prepared = await prepare(request, "session.status", active);
+		const { context, state, authority, client, base, route } = prepared;
+		if (
+			state.runtimeSubmitProtocol === "v4" &&
+			state.executionStatus === "processing" &&
+			authority.purpose === "business" &&
+			!context.claim.metadataRecovery &&
+			state.hostSessionRef !== null &&
+			state.originalSubmitHostSessionRef !== undefined &&
+			state.originalOperationDigest &&
+			context.claim.input &&
+			context.claim.modelOptionId &&
+			context.claim.reasoningLevel
+		) {
+			const originalRequest = {
+				...base,
+				schemaVersion: 4 as const,
+				...keyedIdentity(prepared),
+				hostSessionRef: state.originalSubmitHostSessionRef,
+				input: {
+					...context.claim.input,
+					attachments: [...context.claim.input.attachments],
+				},
+				selection: {
+					schemaVersion: 1 as const,
+					modelOptionId: context.claim.modelOptionId,
+					reasoningLevel: context.claim.reasoningLevel,
+				},
+				grant: {
+					schemaVersion: 4 as const,
+					format: "runtime-execution-jws" as const,
+					token: "unsigned.unsigned.unsigned",
+				},
+			};
+			try {
+				await v4Client(prepared, "turn.submit", active).restoreExecutionKey(
+					originalRequest,
+					state.hostSessionRef,
+					state.originalOperationDigest,
+					active,
+				);
+			} catch (error) {
+				// A terminal transition can race this read-only Key restore. The
+				// following status query is authoritative and must still reconcile it.
+				if (!(error instanceof ConversationRuntimeHostError)) throw error;
+			}
+		}
 		const body = {
 			...base,
 			originalOperationDigest: state.originalOperationDigest,

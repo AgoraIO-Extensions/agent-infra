@@ -147,6 +147,7 @@ export const GenericAcpRuntimeDriver = {
 				let connectionClient: StandardMcpClient | undefined;
 				let nativeSessionRef = session.nativeId ?? "";
 				let nativeCancel: (() => Promise<void>) | undefined;
+				let nativeClose: (() => Promise<void>) | undefined;
 				try {
 					if (executionBrowser) {
 						if (!executionCapability || !session.executionId)
@@ -173,7 +174,18 @@ export const GenericAcpRuntimeDriver = {
 							recordOperationFact: callbacks.recordOperationFact,
 							authorizeToolAction: options.authorizeToolAction,
 							onBlocked: async () => {
-								await nativeCancel?.();
+								try {
+									await session.markUnknown?.();
+								} finally {
+									try {
+										await nativeCancel?.();
+									} catch {
+										await nativeClose?.().catch(() => {});
+									} finally {
+										await connectionGateway?.close().catch(() => {});
+										await connectionClient?.close().catch(() => {});
+									}
+								}
 							},
 						});
 					}
@@ -259,6 +271,7 @@ export const GenericAcpRuntimeDriver = {
 				});
 				nativeSessionRef = native.nativeId;
 				nativeCancel = native.cancel;
+				nativeClose = native.close;
 				negotiatedImageInput = native.supportsImagePrompt;
 				if (gateway || connectionGateway) {
 					return {

@@ -274,10 +274,16 @@ export {
 	registerCustomAgentAuthGatewayRoutesV1,
 } from "./custom-agent-auth-gateway.js";
 export {
+	createProductionNativeMetadataReaderV1,
 	createProductionPlatformApiAssemblyInputV1,
 	inspectProductionRelayKeyPolicyV1,
 	type ProductionPlatformApiInputV1,
 } from "./deployment.js";
+export {
+	createNativeMetadataCurrentAppV1,
+	type NativeMetadataCurrentRouteDependenciesV1,
+	registerNativeMetadataCurrentRoutesV1,
+} from "./http/native-metadata-current-routes.js";
 export {
 	type NativeMetadataRoutesDependenciesV1,
 	type RuntimeNativeMetadataPublicReaderV1,
@@ -289,16 +295,22 @@ export {
 	type LdapSessionStore,
 } from "./ldap-browser.js";
 export { createPostgresLdapBrowserDeployment } from "./ldap-browser-deployment.js";
+export { createWorkerRuntimeModelDirectoryTransportV1 } from "./runtime-model-directory-transport.js";
 export {
+	createRuntimeModelSelectionReaderFromDispatchV1,
 	createRuntimeModelSelectionReaderV1,
+	type RuntimeModelDirectoryDispatchTransportV1,
 	type RuntimeModelDirectoryTransportV1,
 } from "./runtime-model-selection-reader.js";
 export {
 	createRuntimeNativeMetadataReaderV1,
+	createRuntimeNativeMetadataWorkerReaderV1,
 	type RuntimeNativeMetadataProofIssuerV1,
 	type RuntimeNativeMetadataTransportV1,
+	type RuntimeNativeMetadataWorkerGatewayV1,
 } from "./runtime-native-metadata-reader.js";
 export { createRuntimeNativeMetadataScopeResolverV1 } from "./runtime-native-metadata-scope-resolver.js";
+export { createPlatformWorkerNativeMetadataGatewayClientV1 } from "./runtime-native-metadata-worker-client.js";
 export {
 	createPendingSecretRecordAttachmentResolverV1,
 	type PreparedSecretPlaintextV1,

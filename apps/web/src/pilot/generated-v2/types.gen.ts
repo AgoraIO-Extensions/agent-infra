@@ -372,6 +372,7 @@ export type AgentProjectionV2 = {
         };
         connection: boolean;
         modelSelection: boolean;
+        nativeMetadata?: boolean;
         resultFiles: boolean;
         skills?: Array<{
             manifestSha256: string;
@@ -403,6 +404,20 @@ export type AgentProjectionV2 = {
         interactionMode: 'platform-adapter';
         kind: 'custom';
     };
+};
+
+export type AgentUserUseGrantRequestV1 = {
+    expectedRevision: number;
+    schemaVersion: 1;
+};
+
+export type AgentUserUseGrantResponseV1 = {
+    agentId: string;
+    authorizationRevision: string;
+    granted: true;
+    replayed: boolean;
+    schemaVersion: 1;
+    userId: string;
 };
 
 export type AgentUserUseRevokeRequestV1 = {
@@ -977,7 +992,9 @@ export type RuntimeOperationFactV2 = {
     operationRef: string;
     parentOperationRef?: string;
     phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+    requestDigest?: string;
     resultRef?: string;
+    rpcRequestId?: string | number;
     startedAt?: string;
     toolId: string;
 };
@@ -1203,6 +1220,18 @@ export type SkillHubProjectV1 = {
     schemaVersion: 1;
     status: 'active' | 'disabled';
     updatedAt: string;
+};
+
+export type SkillHubProviderImportRequestV1 = {
+    name: string;
+    provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+    schemaVersion: 1;
+    version: string;
+};
+
+export type SkillHubProviderImportResponseV1 = {
+    replayed: boolean;
+    version: SkillHubPublicationVersionV1;
 };
 
 export type SkillHubPublicationRequestV1 = {
@@ -2369,6 +2398,61 @@ export type RevokeAgentUserApiUseV1Responses = {
 };
 
 export type RevokeAgentUserApiUseV1Response = RevokeAgentUserApiUseV1Responses[keyof RevokeAgentUserApiUseV1Responses];
+
+export type GrantAgentUserApiUseV1Data = {
+    body: AgentUserUseGrantRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+        userId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/api-use-grants/{userId}';
+};
+
+export type GrantAgentUserApiUseV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GrantAgentUserApiUseV1Error = GrantAgentUserApiUseV1Errors[keyof GrantAgentUserApiUseV1Errors];
+
+export type GrantAgentUserApiUseV1Responses = {
+    /**
+     * Explicit user API use grant
+     */
+    200: AgentUserUseGrantResponseV1;
+};
+
+export type GrantAgentUserApiUseV1Response = GrantAgentUserApiUseV1Responses[keyof GrantAgentUserApiUseV1Responses];
 
 export type RevokeAgentApplicationManagerV1Data = {
     body: AgentApplicationManagerRequestV1;
@@ -4299,6 +4383,54 @@ export type ListSkillHubVersionsV1Responses = {
 };
 
 export type ListSkillHubVersionsV1Response = ListSkillHubVersionsV1Responses[keyof ListSkillHubVersionsV1Responses];
+
+export type ImportSkillHubVersionV1Data = {
+    body: SkillHubProviderImportRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/skills/imports';
+};
+
+export type ImportSkillHubVersionV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ImportSkillHubVersionV1Error = ImportSkillHubVersionV1Errors[keyof ImportSkillHubVersionV1Errors];
+
+export type ImportSkillHubVersionV1Responses = {
+    /**
+     * Replayed import
+     */
+    200: SkillHubPublicationResponseV1;
+    /**
+     * Skill version imported
+     */
+    201: SkillHubPublicationResponseV1;
+};
+
+export type ImportSkillHubVersionV1Response = ImportSkillHubVersionV1Responses[keyof ImportSkillHubVersionV1Responses];
 
 export type InstallSkillHubVersionV1Data = {
     body: SkillHubInstallationCommandV1;

@@ -70,6 +70,7 @@ import {
 	resolveCurrentMaterialGrantActor,
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
+import type { NativeMetadataCurrentRouteDependenciesV1 } from "./http/native-metadata-current-routes.js";
 import type { NativeMetadataRoutesDependenciesV1 } from "./http/native-metadata-routes.js";
 import type { SkillHubAgentBindingRoutesDependenciesV1 } from "./http/skill-hub-agent-binding-routes.js";
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
@@ -78,7 +79,10 @@ import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
 } from "./projection.js";
-import { assembleSkillHubReadApiV1 } from "./skill-hub-read-assembly.js";
+import {
+	assembleSkillHubReadApiV1,
+	type SkillHubProviderImportDeploymentV1,
+} from "./skill-hub-read-assembly.js";
 import {
 	assembleWecomApiV1,
 	assembleWecomReceiptApiV1,
@@ -165,6 +169,10 @@ export interface PlatformApiAssemblyInput {
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	/** Optional deployment-owned public native metadata reader. */
 	readonly nativeMetadata?: Pick<NativeMetadataRoutesDependenciesV1, "reader">;
+	/** Optional deployment-owned Worker current-confirmation route. */
+	readonly nativeMetadataCurrent?: NativeMetadataCurrentRouteDependenciesV1;
+	/** Optional deployment-owned Provider registry and admission pipeline. */
+	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 	/** Optional deployment-owned platform identity route for custom Agents. */
 	readonly customAgentGateway?: Omit<
 		NonNullable<PlatformAppDependencies["customAgentGateway"]>,
@@ -509,6 +517,7 @@ export function assemblePlatformApi(
 		managementQuery,
 		configurationQuery,
 		presentAgent,
+		nativeMetadataAvailable: input.nativeMetadata !== undefined,
 	});
 	const conversationAuthorization: ConversationAuthorization = {
 		async authorize(identity, request) {
@@ -747,6 +756,7 @@ export function assemblePlatformApi(
 		},
 		agentUserUseGrants: {
 			identity: input.identity,
+			grant: (command) => managementTransaction.grantUserApiUse(command),
 			revoke: (command) => managementTransaction.revokeUserApiUse(command),
 			recordRefusal: (request) =>
 				managementTransaction.recordApiManagementRefusal(request),
@@ -835,6 +845,9 @@ export function assemblePlatformApi(
 					},
 				}
 			: {}),
+		...(input.nativeMetadataCurrent
+			? { nativeMetadataCurrent: input.nativeMetadataCurrent }
+			: {}),
 		sessionAudit: {
 			identity: input.identity,
 			audit: auditQuery,
@@ -905,6 +918,9 @@ export function assemblePlatformApi(
 			},
 		} satisfies SkillHubAgentBindingRoutesDependenciesV1,
 		skillHubProjects: skillHubRead.projectDependencies,
+		...(skillHubRead.importDependencies
+			? { skillHubImport: skillHubRead.importDependencies }
+			: {}),
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.userGovernance
 			? {

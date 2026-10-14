@@ -696,6 +696,7 @@ function isCustomAgentModelSelectionOpenApiAddition(previous, current) {
 	const command = "model-directory.read";
 	const runtimeSchemas = [
 		"RuntimeModelDirectoryRequestV1",
+		"RuntimeModelDirectoryDispatchRequestV1",
 		"RuntimeModelDirectoryResponseV1",
 	];
 	const runtimeHasSchemas = runtimeSchemas.some(
@@ -704,6 +705,21 @@ function isCustomAgentModelSelectionOpenApiAddition(previous, current) {
 	const currentHasSchemas = runtimeSchemas.every(
 		(name) => current.components?.schemas?.[name] !== undefined,
 	);
+	const previousHasPublishedDirectory =
+		previous.components?.schemas?.RuntimeModelDirectoryRequestV1 !==
+			undefined &&
+		previous.components?.schemas?.RuntimeModelDirectoryResponseV1 !== undefined;
+	if (
+		previousHasPublishedDirectory &&
+		previous.components?.schemas?.RuntimeModelDirectoryDispatchRequestV1 ===
+			undefined &&
+		current.components?.schemas?.RuntimeModelDirectoryDispatchRequestV1 !==
+			undefined
+	) {
+		const normalized = structuredClone(current);
+		delete normalized.components.schemas.RuntimeModelDirectoryDispatchRequestV1;
+		return findBreakingChanges(previous, normalized).length === 0;
+	}
 	if (runtimeHasSchemas) return false;
 	const previousCommands = previous.components?.schemas?.[commandSchema]?.enum;
 	const currentCommands = current.components?.schemas?.[commandSchema]?.enum;
@@ -730,7 +746,7 @@ function isCustomAgentModelSelectionOpenApiAddition(previous, current) {
 	if (
 		currentHasSchemas &&
 		fingerprint !==
-			"295257286a4113aa928fd4ccf63949e3518ffe9b90afdabf28d031d485ca75b9"
+			"86876308c8233f9c95306b421e6bd622c60e974f6213e47e95830e14d14f9ba6"
 	)
 		return false;
 	if (
@@ -758,6 +774,64 @@ function isCustomAgentModelSelectionOpenApiAddition(previous, current) {
 			delete normalized.components.schemas[name];
 	}
 	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #851 persists the non-sensitive JSON-RPC identity for Host-owned ACP tool
+// facts. The fields are optional and only widen the existing tool branch.
+function isRuntimeOperationIdentityOpenApiAddition(previous, current) {
+	const previousFact = previous.components?.schemas?.RuntimeOperationFactV2;
+	const currentFact = current.components?.schemas?.RuntimeOperationFactV2;
+	if (
+		!previousFact ||
+		!currentFact ||
+		!Array.isArray(previousFact.oneOf) ||
+		!Array.isArray(currentFact.oneOf) ||
+		previousFact.oneOf.length !== currentFact.oneOf.length
+	)
+		return isDeepStrictEqual(previous, stripRuntimeOperationIdentity(current));
+	const previousTool = previousFact.oneOf.find(
+		(option) => option.properties?.kind?.const === "tool",
+	);
+	const currentTool = currentFact.oneOf.find(
+		(option) => option.properties?.kind?.const === "tool",
+	);
+	if (!previousTool || !currentTool) return false;
+	if (
+		previousTool.properties?.rpcRequestId !== undefined ||
+		previousTool.properties?.requestDigest !== undefined ||
+		currentTool.properties?.rpcRequestId === undefined ||
+		currentTool.properties?.requestDigest === undefined
+	)
+		return false;
+	const normalized = structuredClone(current);
+	const normalizedTool =
+		normalized.components.schemas.RuntimeOperationFactV2.oneOf.find(
+			(option) => option.properties?.kind?.const === "tool",
+		);
+	if (!normalizedTool) return false;
+	delete normalizedTool.properties.rpcRequestId;
+	delete normalizedTool.properties.requestDigest;
+	return isDeepStrictEqual(previous, normalized);
+}
+
+function stripRuntimeOperationIdentity(value) {
+	if (Array.isArray(value)) return value.map(stripRuntimeOperationIdentity);
+	if (!value || typeof value !== "object") return value;
+	const copy = Object.fromEntries(
+		Object.entries(value).map(([key, child]) => [
+			key,
+			stripRuntimeOperationIdentity(child),
+		]),
+	);
+	if (
+		copy.properties?.kind?.const === "tool" &&
+		copy.properties.requestDigest !== undefined &&
+		copy.properties.rpcRequestId !== undefined
+	) {
+		delete copy.properties.requestDigest;
+		delete copy.properties.rpcRequestId;
+	}
+	return copy;
 }
 
 // #1266 admits the GET side of the existing model-selection route and its
@@ -1320,24 +1394,28 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
 	)
 		return false;
-	const addition = stripRuntimeBrowserOperationFacts({
-		paths: Object.fromEntries(
-			paths.map((path) => [path, current.paths?.[path]]),
-		),
-		schemas: Object.fromEntries(
-			schemas.map((name) => [name, current.components?.schemas?.[name]]),
-		),
-		security: {
-			platformApiCredential:
-				current.components?.securitySchemes?.platformApiCredential,
-		},
-	});
+	const addition = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts({
+			paths: Object.fromEntries(
+				paths.map((path) => [path, current.paths?.[path]]),
+			),
+			schemas: Object.fromEntries(
+				schemas.map((name) => [name, current.components?.schemas?.[name]]),
+			),
+			security: {
+				platformApiCredential:
+					current.components?.securitySchemes?.platformApiCredential,
+			},
+		}),
+	);
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
 		"062938f470294f68ec205f6e2007fa01a6306c40e3a59fe2195b8cad9e580a48"
 	)
 		return false;
-	const normalized = stripRuntimeBrowserOperationFacts(current);
+	const normalized = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts(current),
+	);
 	for (const path of paths) delete normalized.paths[path];
 	for (const name of schemas) delete normalized.components.schemas[name];
 	if (
@@ -1350,7 +1428,10 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 		)
 			delete normalized.components.securitySchemes;
 	}
-	return sameValue(stripRuntimeBrowserOperationFacts(previous), normalized);
+	return sameValue(
+		stripRuntimeOperationIdentity(stripRuntimeBrowserOperationFacts(previous)),
+		normalized,
+	);
 }
 
 // #482 follow-up permits only the execution-scoped Task SSE path/schema.
@@ -1363,21 +1444,29 @@ function isTaskHttpV1SseOpenApiAddition(previous, current) {
 		previous.components?.schemas?.[schema] !== undefined
 	)
 		return false;
-	const addition = stripRuntimeBrowserOperationFacts({
-		paths: { [path]: current.paths?.[path] },
-		schemas: { [schema]: current.components?.schemas?.[schema] },
-	});
+	const addition = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts({
+			paths: { [path]: current.paths?.[path] },
+			schemas: { [schema]: current.components?.schemas?.[schema] },
+		}),
+	);
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
 		"6326d5f83b123da8233ac85fb694a1362d64ee5c4747618b37acba8759721167"
 	)
 		return false;
-	const normalized = stripRuntimeBrowserOperationFacts(current);
+	const normalized = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts(current),
+	);
 	delete normalized.paths[path];
 	delete normalized.components.schemas[schema];
 	return (
-		findBreakingChanges(stripRuntimeBrowserOperationFacts(previous), normalized)
-			.length === 0
+		findBreakingChanges(
+			stripRuntimeOperationIdentity(
+				stripRuntimeBrowserOperationFacts(previous),
+			),
+			normalized,
+		).length === 0
 	);
 }
 
@@ -1605,14 +1694,16 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
 	)
 		return false;
-	const addition = stripRuntimeBrowserOperationFacts({
-		paths: Object.fromEntries(
-			paths.map((path) => [path, current.paths?.[path]]),
-		),
-		schemas: Object.fromEntries(
-			schemas.map((name) => [name, current.components?.schemas?.[name]]),
-		),
-	});
+	const addition = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts({
+			paths: Object.fromEntries(
+				paths.map((path) => [path, current.paths?.[path]]),
+			),
+			schemas: Object.fromEntries(
+				schemas.map((name) => [name, current.components?.schemas?.[name]]),
+			),
+		}),
+	);
 	// The bounded event window is a later additive field on this V2 detail;
 	// keep the original #508 publication digest stable when checking the
 	// historical operation-read addition.
@@ -1656,7 +1747,9 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		"097d6b3631a284fd8faf916f2c35a70d7c721c8bc832f3b97a96389fecfc541f"
 	)
 		return false;
-	const normalized = stripRuntimeBrowserOperationFacts(current);
+	const normalized = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts(current),
+	);
 	const normalizedDetailPath =
 		normalized.paths["/api/v2/conversations/{conversationId}"];
 	if (
@@ -1668,7 +1761,9 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	for (const path of paths) delete normalized.paths[path];
 	for (const name of schemas) delete normalized.components.schemas[name];
 	delete normalized.components.schemas.ConversationEventWindowV1;
-	const normalizedPrevious = stripRuntimeBrowserOperationFacts(previous);
+	const normalizedPrevious = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts(previous),
+	);
 	delete normalizedPrevious.components.schemas.ConversationEventWindowV1;
 	return (
 		sameValue(normalizedPrevious, normalized) ||
@@ -1950,6 +2045,39 @@ function isSkillHubAgentBindingOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2214 adds the controlled Provider import entry point. The request contains
+// only server-resolved candidate selectors; archive, trust and storage facts
+// remain deployment-owned.
+function isSkillHubImportOpenApiAddition(previous, current) {
+	const paths = ["/api/v2/skills/imports"];
+	const schemas = [
+		"SkillHubProviderImportRequestV1",
+		"SkillHubProviderImportResponseV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"cd83cfd612b5226914c5ba26fd89d8278fa55c2cfa8a53ffe7088472c05e5cdc"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #2207 publishes the authenticated Skill project management API additively.
 function isSkillHubProjectOpenApiAddition(previous, current) {
 	const paths = [
@@ -1961,6 +2089,43 @@ function isSkillHubProjectOpenApiAddition(previous, current) {
 		"SkillHubProjectUpdateV1",
 		"SkillHubProjectV1",
 		"SkillHubProjectPageV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (Object.values(addition.paths).some((path) => path === undefined))
+		return false;
+	if (Object.values(addition.schemas).some((schema) => schema === undefined))
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
+function isSkillHubProjectAndImportOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/skills/projects",
+		"/api/v2/skills/projects/{projectId}",
+		"/api/v2/skills/imports",
+	];
+	const schemas = [
+		"SkillHubProjectCreateV1",
+		"SkillHubProjectUpdateV1",
+		"SkillHubProjectV1",
+		"SkillHubProjectPageV1",
+		"SkillHubProviderImportRequestV1",
+		"SkillHubProviderImportResponseV1",
 	];
 	if (
 		paths.some((path) => previous.paths?.[path] !== undefined) ||
@@ -2738,6 +2903,32 @@ function isAgentUserUseRevokeOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1084 admits only the additive Owner user-use grant method and its schemas.
+function isAgentUserUseGrantOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents/{agentId}/api-use-grants/{userId}";
+	const schemas = ["AgentUserUseGrantRequestV1", "AgentUserUseGrantResponseV1"];
+	if (
+		previous.paths?.[path]?.put !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: { [path]: { put: current.paths?.[path]?.put } },
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"f46a4f608dc9ab4c58aa71df467542f5bc02ead2d1c60061bfcb259fe7ede9bb"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].put;
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #481 admits only this exact machine/personal lifecycle contract and its audit variants.
 function isAgentApiManagementOpenApiAddition(previous, current) {
 	const actions = [
@@ -3439,9 +3630,9 @@ function isConnectionInstallationAuthorizationUrlAddition(previous, current) {
 	return changed && findBreakingChanges(previous, normalized).length === 0;
 }
 
-// #1760 projects the already-versioned Browser projection into Agent API
-// capabilities. The field is optional, so Browser-absent consumers keep the
-// historical response shape.
+// #1760 and #2305 add optional verified runtime capabilities to Agent API
+// projections. Browser/native-metadata-absent consumers keep the historical
+// response shape.
 function isPilotBrowserProjectionOpenApiAddition(previous, current) {
 	const normalized = structuredClone(current);
 	let changed = false;
@@ -3455,6 +3646,13 @@ function isPilotBrowserProjectionOpenApiAddition(previous, current) {
 			previousCapabilities?.properties?.browser === undefined
 		) {
 			delete currentCapabilities.properties.browser;
+			changed = true;
+		}
+		if (
+			currentCapabilities?.properties?.nativeMetadata !== undefined &&
+			previousCapabilities?.properties?.nativeMetadata === undefined
+		) {
+			delete currentCapabilities.properties.nativeMetadata;
 			changed = true;
 		}
 	}
@@ -3556,6 +3754,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!sameValue(previous, current) &&
 			!isAgentApplicationUseGrantOpenApiAddition(previous, current) &&
 			!isAgentUserUseRevokeOpenApiAddition(previous, current) &&
+			!isAgentUserUseGrantOpenApiAddition(previous, current) &&
 			!isAgentApiManagementOpenApiAddition(previous, current) &&
 			!isAgentApiCreationOpenApiAddition(previous, current) &&
 			!isConnectionCapabilityOpenApiAddition(previous, current) &&
@@ -3603,7 +3802,9 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isSkillHubReadOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationOpenApiAddition(previous, current) &&
 			!isSkillHubPublicationOpenApiAddition(previous, current) &&
+			!isSkillHubProjectAndImportOpenApiAddition(previous, current) &&
 			!isSkillHubProjectOpenApiAddition(previous, current) &&
+			!isSkillHubImportOpenApiAddition(previous, current) &&
 			!isSkillHubAgentBindingOpenApiAddition(previous, current) &&
 			!isNativeMetadataOpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
@@ -3619,6 +3820,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRuntimeFileExchangeOpenApiAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current) &&
 			!isCustomAgentModelSelectionOpenApiAddition(previous, current) &&
+			!isRuntimeOperationIdentityOpenApiAddition(previous, current) &&
 			!isCustomAgentModelProjectionOpenApiAddition(previous, current) &&
 			!isStandardTemplateReleaseCompatibilityOpenApiAddition(previous, current)
 		) {

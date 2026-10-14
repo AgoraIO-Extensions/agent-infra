@@ -256,6 +256,7 @@ export type AgentProjectionV1 = {
         };
         connection: boolean;
         modelSelection: boolean;
+        nativeMetadata?: boolean;
         resultFiles: boolean;
         skills?: Array<{
             manifestSha256: string;
@@ -828,7 +829,9 @@ export type ScopedPlatformAuditProjectionV1 = {
             operationRef: string;
             parentOperationRef?: string;
             phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+            requestDigest?: string;
             resultRef?: string;
+            rpcRequestId?: string | number;
             startedAt?: string;
             toolId: string;
         };
@@ -948,7 +951,9 @@ export type TaskProjectionV1 = {
             operationRef: string;
             parentOperationRef?: string;
             phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+            requestDigest?: string;
             resultRef?: string;
+            rpcRequestId?: string | number;
             startedAt?: string;
             toolId: string;
         };
@@ -1025,7 +1030,9 @@ export type TaskSseMessageV1 = PersistedConversationEventV1 | {
         operationRef: string;
         parentOperationRef?: string;
         phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+        requestDigest?: string;
         resultRef?: string;
+        rpcRequestId?: string | number;
         startedAt?: string;
         toolId: string;
     };

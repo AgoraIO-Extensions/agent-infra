@@ -1,6 +1,9 @@
 {{- if and .Values.workloadTopology.enabled .Values.platformWorker.wecomEnabled -}}
 {{- fail "platformWorker.wecomEnabled requires production Worker deployment (workloadTopology.enabled=false)" -}}
 {{- end -}}
+{{- if and .Values.platformWorker.nativeMetadataGateway.enabled (ne .Values.platformApi.placement "in-cluster") -}}
+{{- fail "platformWorker.nativeMetadataGateway.enabled requires platformApi.placement=in-cluster" -}}
+{{- end -}}
 {{- $name := include "agent-infra.componentName" (dict "root" . "suffix" "platform-worker") -}}
 {{- $bindings := include "agent-infra.componentName" (dict "root" . "suffix" "adapter-bindings") -}}
 {{- $moduleRef := .Values.platformWorker.configurationModuleSecretRef | default dict -}}
@@ -84,6 +87,12 @@ spec:
         - name: platform-worker
           image: {{ include "agent-infra.image" .Values.images.platformWorker }}
           imagePullPolicy: {{ .Values.images.pullPolicy }}
+          {{- if .Values.platformWorker.nativeMetadataGateway.enabled }}
+          ports:
+            - name: native-metadata
+              containerPort: {{ .Values.platformWorker.nativeMetadataGateway.port }}
+              protocol: TCP
+          {{- end }}
           {{- if .Values.workloadTopology.enabled }}
           command: ["node", "-e"]
           args: ["setInterval(() => undefined, 60000)"]
@@ -182,3 +191,45 @@ spec:
             items:
               - key: {{ .Values.keys.workerDecryptionKeyring.secretRef.key }}
                 path: keyring.pem
+{{- if .Values.platformWorker.nativeMetadataGateway.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-native-metadata
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+    app.kubernetes.io/component: platform-worker
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: platform-worker
+  ports:
+    - name: native-metadata
+      port: {{ .Values.platformWorker.nativeMetadataGateway.port }}
+      targetPort: native-metadata
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-native-metadata
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: platform-worker
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: platform-api
+      ports:
+        - protocol: TCP
+          port: {{ .Values.platformWorker.nativeMetadataGateway.port }}
+{{- end }}

@@ -108,17 +108,20 @@ export function ActiveConversation({
 		timeline.events,
 		acceptedExecution,
 	);
+	const nativeMetadataEnabled = agent.capabilities.nativeMetadata === true;
 	const nativeMetadataCommands = useConversationNativeMetadata({
 		identityKey,
 		conversationId,
 		executionId: latestExecution,
 		selector: "commands",
+		enabled: nativeMetadataEnabled,
 	});
 	const nativeMetadataSkills = useConversationNativeMetadata({
 		identityKey,
 		conversationId,
 		executionId: latestExecution,
 		selector: "skills",
+		enabled: nativeMetadataEnabled,
 	});
 	const nativeMetadataCapabilities = useMemo(
 		() => [

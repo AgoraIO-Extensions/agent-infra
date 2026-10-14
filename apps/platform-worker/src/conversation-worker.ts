@@ -16,6 +16,7 @@ import {
 	PostgresConversationEventTransactionV1,
 	PostgresLegacyTaskRecoveryReaderV1,
 	PostgresTaskAuthorizationStoreV1,
+	platformQueueResourceSnapshotTimeoutMs,
 } from "@agent-infra/platform-store";
 import {
 	type ConversationRuntimeOptionsV2,
@@ -61,6 +62,21 @@ export interface PlatformConversationWorkerOptionsV2
 
 type Telemetry = Pick<ReturnType<typeof startObservability>, "record">;
 type ConversationRuntime = ReturnType<typeof createConversationRuntimeV2>;
+const resourceSnapshotOperation = "platform.resource_snapshot";
+
+function boundedResourceSnapshotDuration(
+	value: unknown,
+	startedAt: number,
+): number {
+	const measured =
+		typeof value === "number" && Number.isFinite(value)
+			? value
+			: performance.now() - startedAt;
+	return Math.min(
+		platformQueueResourceSnapshotTimeoutMs,
+		Math.max(0, measured),
+	);
+}
 
 /** Bounded stage timings between a claim and the Runtime submit (#1561);
  * only identifiers and durations are recorded. */
@@ -286,23 +302,46 @@ export function createPlatformConversationWorkerV2(
 	}
 	function sampleResources() {
 		if (sampling || !canSampleResources()) return;
+		const telemetry = options.observability;
+		if (!telemetry) return;
+		const startedAt = performance.now();
+		let snapshotRead = false;
 		sampling = Promise.resolve()
 			.then(async () => {
 				if (!canSampleResources()) return;
 				const snapshot = await store.readResourceSnapshot(signal);
 				if (!canSampleResources()) return;
-				options.observability?.observeResource?.({
+				snapshotRead = true;
+				record(telemetry, {
+					stage: "dependency",
+					outcome: "completed",
+					durationMs: boundedResourceSnapshotDuration(
+						snapshot.queryDurationMs,
+						startedAt,
+					),
+					operationRef: resourceSnapshotOperation,
+				});
+				telemetry.observeResource?.({
 					kind: "task_waiting",
 					value: snapshot.taskWaiting,
 				});
-				options.observability?.observeResource?.({
+				telemetry.observeResource?.({
 					kind: "outbox_pending",
 					value: snapshot.outboxPending,
 				});
 			})
 			.catch(() => {
-				if (!stopped && !signal.aborted)
+				if (!stopped && !signal.aborted) {
+					if (!snapshotRead)
+						record(telemetry, {
+							stage: "dependency",
+							outcome: "failed",
+							code: "DEPENDENCY_UNAVAILABLE",
+							durationMs: boundedResourceSnapshotDuration(undefined, startedAt),
+							operationRef: resourceSnapshotOperation,
+						});
 					log("CONVERSATION_RESOURCE_SNAPSHOT_UNAVAILABLE");
+				}
 			})
 			.finally(() => {
 				sampling = undefined;
@@ -314,12 +353,48 @@ export function createPlatformConversationWorkerV2(
 		readonly itemId: string;
 		readonly operation: string;
 	}) {
-		if (item.operation !== "conversation.sandbox.reconcile.v1")
-			return dispatch.dispatch({
-				schemaVersion: 1,
-				itemId: item.itemId,
-				workerId: options.workerId,
-			});
+		if (item.operation !== "conversation.sandbox.reconcile.v1") {
+			const began = performance.now();
+			try {
+				const decision = await dispatch.dispatch({
+					schemaVersion: 1,
+					itemId: item.itemId,
+					workerId: options.workerId,
+				});
+				if (options.observability) {
+					const outcome =
+						decision.outcome === "accepted"
+							? "completed"
+							: decision.outcome === "unknown"
+								? "unknown"
+								: decision.outcome === "busy" || decision.outcome === "retry"
+									? "failed"
+									: "rejected";
+					record(options.observability, {
+						stage: "task_dispatch",
+						outcome,
+						durationMs: performance.now() - began,
+						...(decision.outcome === "busy" || decision.outcome === "retry"
+							? { code: "TASK_UNAVAILABLE" as const }
+							: {}),
+						// The operation is a bounded Store value. Item IDs stay out of
+						// telemetry to avoid high-cardinality labels and logs.
+						operationRef: item.operation,
+					});
+				}
+				return decision;
+			} catch (error) {
+				if (options.observability)
+					record(options.observability, {
+						stage: "task_dispatch",
+						outcome: "failed",
+						durationMs: performance.now() - began,
+						code: "TASK_UNAVAILABLE",
+						operationRef: item.operation,
+					});
+				throw error;
+			}
+		}
 		signal.throwIfAborted();
 		const leaseDurationMs = options.leaseDurationMs ?? 30_000;
 		const initialClaim = await store.claimSandboxReconciliation({
@@ -497,11 +572,40 @@ export function createPlatformConversationWorkerV2(
 			}
 		}
 		const limit = 256;
-		const items = await store.findDispatchable({
-			limit,
-			...(afterItemId ? { afterItemId } : {}),
-			signal,
-		});
+		const began = performance.now();
+		let items: Awaited<ReturnType<typeof store.findDispatchable>>;
+		try {
+			items = await store.findDispatchable({
+				limit,
+				...(afterItemId ? { afterItemId } : {}),
+				signal,
+			});
+		} catch (error) {
+			if (options.observability)
+				record(options.observability, {
+					stage: "task_wait",
+					outcome: "failed",
+					durationMs: performance.now() - began,
+					code: "TASK_UNAVAILABLE",
+					operationRef: "conversation.queue.find",
+				});
+			throw error;
+		}
+		// An empty discovery (or a page containing only maintenance work) is an
+		// idle poll, not a task wait. Emit one bounded observation for a returned
+		// task page so timer sleeps do not create events.
+		if (
+			items.some(
+				(item) => item.operation !== "conversation.sandbox.reconcile.v1",
+			) &&
+			options.observability
+		)
+			record(options.observability, {
+				stage: "task_wait",
+				outcome: "completed",
+				durationMs: performance.now() - began,
+				operationRef: "conversation.queue.find",
+			});
 		let launched = 0;
 		let lastBusinessItemId: string | undefined;
 		for (const item of items) {

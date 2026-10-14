@@ -14,3 +14,16 @@ export const AgentUserUseRevokeResponseV1Schema = z.strictObject({
 	authorizationRevision: z.string().min(1).nullable(),
 	replayed: z.boolean(),
 });
+
+export const AgentUserUseGrantRequestV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	expectedRevision: z.number().int().nonnegative().safe(),
+});
+export const AgentUserUseGrantResponseV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	agentId: OpaqueIdV1Schema,
+	userId: OpaqueIdV1Schema,
+	granted: z.literal(true),
+	authorizationRevision: z.string().min(1),
+	replayed: z.boolean(),
+});

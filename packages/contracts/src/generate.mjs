@@ -48,6 +48,8 @@ import {
 	pilotTaskSchemasV1,
 	skillHubAgentBindingOpenApiPathsV1,
 	skillHubAgentBindingSchemasV1,
+	skillHubImportOpenApiPathsV1,
+	skillHubImportSchemasV1,
 	skillHubInstallationOpenApiPathsV1,
 	skillHubInstallationSchemasV1,
 	skillHubProjectOpenApiPathsV1,
@@ -98,6 +100,8 @@ import {
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV4Schema,
 	RuntimeReplayRequestV1Schema,
+	RuntimeRestoreExecutionKeyResponseV4Schema,
+	RuntimeRestoreExecutionKeyTransportV4Schema,
 	RuntimeSkillDirectoryRequestV1Schema,
 	RuntimeSkillDirectoryResponseV1Schema,
 	RuntimeSkillResourceReadRequestV1Schema,
@@ -699,6 +703,14 @@ function buildArtifacts() {
 					"application/json",
 				),
 			},
+			"/internal/runtime/v4/execution-key/restore": {
+				post: postOperation(
+					"restoreRuntimeExecutionKeyV4",
+					RuntimeRestoreExecutionKeyTransportV4Schema,
+					RuntimeRestoreExecutionKeyResponseV4Schema,
+					"application/json",
+				),
+			},
 		},
 		components: {
 			securitySchemes: {
@@ -758,6 +770,7 @@ function buildArtifacts() {
 			...skillHubReadOpenApiPathsV1,
 			...skillHubProjectOpenApiPathsV1,
 			...skillHubInstallationOpenApiPathsV1,
+			...skillHubImportOpenApiPathsV1,
 			...skillHubPublicationOpenApiPathsV1,
 			...skillHubAgentBindingOpenApiPathsV1,
 			...nativeMetadataOpenApiPathsV1,
@@ -778,6 +791,7 @@ function buildArtifacts() {
 				...skillHubReadSchemasV1,
 				...skillHubProjectSchemasV1,
 				...skillHubInstallationSchemasV1,
+				...skillHubImportSchemasV1,
 				...skillHubPublicationSchemasV1,
 				...skillHubAgentBindingSchemasV1,
 				...nativeMetadataSchemasV1,
