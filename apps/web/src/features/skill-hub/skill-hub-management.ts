@@ -99,6 +99,7 @@ export async function listSkillHubProjects(
 
 export async function createSkillHubProject(
 	body: SkillHubProjectCreateV1,
+	idempotencyKey: string,
 	client?: Client,
 ) {
 	const result: Awaited<
@@ -110,7 +111,7 @@ export async function createSkillHubProject(
 	> = await createSkillHubProjectV1({
 		client,
 		body,
-		headers: { "Idempotency-Key": crypto.randomUUID() },
+		headers: { "Idempotency-Key": idempotencyKey },
 		responseStyle: "fields",
 		throwOnError: false,
 	});
@@ -120,6 +121,7 @@ export async function createSkillHubProject(
 export async function updateSkillHubProject(
 	projectId: string,
 	body: Parameters<typeof updateSkillHubProjectV1>[0]["body"],
+	idempotencyKey: string,
 	client?: Client,
 ) {
 	const result: Awaited<
@@ -132,7 +134,7 @@ export async function updateSkillHubProject(
 		client,
 		path: { projectId },
 		body,
-		headers: { "Idempotency-Key": crypto.randomUUID() },
+		headers: { "Idempotency-Key": idempotencyKey },
 		responseStyle: "fields",
 		throwOnError: false,
 	});
@@ -141,6 +143,7 @@ export async function updateSkillHubProject(
 
 export async function importSkillHubVersion(
 	body: SkillHubProviderImportRequestV1,
+	idempotencyKey: string,
 	client?: Client,
 ) {
 	const result: Awaited<
@@ -152,7 +155,7 @@ export async function importSkillHubVersion(
 	> = await importSkillHubVersionV1({
 		client,
 		body,
-		headers: { "Idempotency-Key": crypto.randomUUID() },
+		headers: { "Idempotency-Key": idempotencyKey },
 		responseStyle: "fields",
 		throwOnError: false,
 	});
@@ -164,6 +167,7 @@ export async function importSkillHubVersion(
 
 export async function publishSkillHubVersion(
 	body: PublishSkillHubVersionV1Data["body"],
+	idempotencyKey: string,
 	client?: Client,
 ) {
 	const result: Awaited<
@@ -175,7 +179,7 @@ export async function publishSkillHubVersion(
 	> = await publishSkillHubVersionV1({
 		client,
 		body,
-		headers: { "Idempotency-Key": crypto.randomUUID() },
+		headers: { "Idempotency-Key": idempotencyKey },
 		responseStyle: "fields",
 		throwOnError: false,
 	});
@@ -188,6 +192,7 @@ export async function publishSkillHubVersion(
 export async function reviewSkillHubVersion(
 	skillVersionId: string,
 	body: SkillHubReviewRequestV1,
+	idempotencyKey: string,
 	client?: Client,
 ) {
 	const result: Awaited<
@@ -200,7 +205,7 @@ export async function reviewSkillHubVersion(
 		client,
 		path: { skillVersionId },
 		body,
-		headers: { "Idempotency-Key": crypto.randomUUID() },
+		headers: { "Idempotency-Key": idempotencyKey },
 		responseStyle: "fields",
 		throwOnError: false,
 	});
@@ -212,6 +217,7 @@ export async function reviewSkillHubVersion(
 
 export async function revokeSkillHubVersion(
 	skillVersionId: string,
+	idempotencyKey: string,
 	client?: Client,
 ) {
 	const result: Awaited<
@@ -223,7 +229,7 @@ export async function revokeSkillHubVersion(
 	> = await revokeSkillHubVersionV1({
 		client,
 		path: { skillVersionId },
-		headers: { "Idempotency-Key": crypto.randomUUID() },
+		headers: { "Idempotency-Key": idempotencyKey },
 		responseStyle: "fields",
 		throwOnError: false,
 	});
@@ -260,6 +266,7 @@ export async function bindSkillHubAgentVersion(
 	agentId: string,
 	agentVersion: string,
 	body: SkillHubAgentBindingCommandV1,
+	idempotencyKey: string,
 	client?: Client,
 ) {
 	const result: Awaited<
@@ -272,7 +279,7 @@ export async function bindSkillHubAgentVersion(
 		client,
 		path: { agentId, agentVersion },
 		body,
-		headers: { "Idempotency-Key": crypto.randomUUID() },
+		headers: { "Idempotency-Key": idempotencyKey },
 		responseStyle: "fields",
 		throwOnError: false,
 	});

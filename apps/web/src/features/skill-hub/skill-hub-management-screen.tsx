@@ -6,7 +6,7 @@ import {
 	PackageOpen,
 	RefreshCw,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useState } from "react";
+import { type FormEvent, type ReactNode, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -29,6 +29,7 @@ import type {
 	SkillHubProjectCreateV1,
 	SkillHubProviderImportRequestV1,
 	SkillHubPublicationRequestV1,
+	SkillHubPublicationResponseV1,
 	SkillHubReviewRequestV1,
 } from "../../pilot/generated-v2/types.gen.js";
 import type { SkillHubDirectoryState } from "./skill-hub.js";
@@ -73,6 +74,52 @@ const defaultActions: SkillHubManagementActions = {
 };
 
 type FormState = { busy: boolean; message?: string };
+type SkillHubPublicationDraft = Omit<
+	SkillHubPublicationRequestV1,
+	"packageObjectVersion"
+>;
+
+function publicationMessage(
+	action: string,
+	result: SkillHubPublicationResponseV1,
+) {
+	const replay = result.replayed ? "（服务端重放）" : "";
+	const reason = result.version.reviewReason
+		? `，原因：${result.version.reviewReason}`
+		: "";
+	return `${action}成功：服务端状态 ${result.version.state}${replay}${reason}。`;
+}
+
+function bindingMessage(
+	bindings: Awaited<ReturnType<typeof readSkillHubAgentBindings>>["bindings"],
+) {
+	if (bindings.length === 0) return "服务端绑定状态：暂无绑定。";
+	return `服务端绑定状态：${bindings
+		.map((binding) => {
+			if (binding.state === "synced" && binding.appliedReceipt) {
+				return `synced / Applied（${binding.appliedReceipt.targetPath}）`;
+			}
+			if (binding.state === "failed")
+				return `failed（${binding.failureReason}）`;
+			return binding.state;
+		})
+		.join("、")}。`;
+}
+
+function actionFailureMessage(error: unknown) {
+	const requestError =
+		error && typeof error === "object"
+			? (error as { code?: string; retryable?: boolean; status?: number })
+			: {};
+	if (requestError.status === 503)
+		return "Skill Hub 后端暂时不可用，可稍后重试。";
+	if (requestError.retryable) return "Skill Hub 操作暂时失败，可稍后重试。";
+	if (requestError.status === 409)
+		return "操作冲突，当前状态或配置 revision 已变化，请刷新后重试。";
+	return requestError.code
+		? `操作被拒绝（${requestError.code}）。`
+		: "操作失败，请检查输入后重试。";
+}
 
 export function SkillHubManagementScreen({
 	state,
@@ -80,14 +127,20 @@ export function SkillHubManagementScreen({
 	onRetry,
 	retrying = false,
 	actions = defaultActions,
+	publicationSource,
 }: {
 	state: SkillHubDirectoryState | { kind: "loading" };
 	isAdministrator: boolean;
 	onRetry?: () => void;
 	retrying?: boolean;
 	actions?: SkillHubManagementActions;
+	/** Server-provided object version; storage locations never come from user input. */
+	publicationSource?: string;
 }) {
 	const versions = state.kind === "ready" ? state.versions : [];
+	const publishedVersionIds = new Set(
+		versions.map((version) => version.skillVersionId),
+	);
 	const [project, setProject] = useState<FormState>({ busy: false });
 	const [projectName, setProjectName] = useState("");
 	const [projectId, setProjectId] = useState("");
@@ -104,7 +157,7 @@ export function SkillHubManagementScreen({
 		version: "",
 	});
 	const [publishState, setPublishState] = useState<FormState>({ busy: false });
-	const [publishForm, setPublishForm] = useState<SkillHubPublicationRequestV1>({
+	const [publishForm, setPublishForm] = useState<SkillHubPublicationDraft>({
 		schemaVersion: 1,
 		name: "",
 		skillId: "",
@@ -112,7 +165,6 @@ export function SkillHubManagementScreen({
 		visibility: "PRIVATE",
 		provider: "my_library",
 		version: "",
-		packageObjectVersion: "",
 		packageDigest: "",
 		manifestDigest: "",
 		signatureDigest: "",
@@ -132,26 +184,35 @@ export function SkillHubManagementScreen({
 		grant:
 			'{"schemaVersion":1,"tools":[],"connections":[],"fileRoots":[],"networkOrigins":[],"scripts":false}',
 	});
+	const operationKeys = useRef(
+		new Map<string, { fingerprint: string; key: string }>(),
+	);
+
+	function idempotencyKey(scope: string, input: unknown) {
+		const fingerprint = JSON.stringify(input);
+		const previous = operationKeys.current.get(scope);
+		if (previous?.fingerprint === fingerprint) return previous.key;
+		const key = crypto.randomUUID();
+		operationKeys.current.set(scope, { fingerprint, key });
+		return key;
+	}
 
 	async function run(
-		setState: (state: FormState) => void,
-		operation: () => Promise<unknown>,
+		scope: string,
+		setState: (state: FormState | ((previous: FormState) => FormState)) => void,
+		operation: () => Promise<string | undefined>,
 	) {
 		setState({ busy: true });
 		try {
-			await operation();
-			setState({ busy: false, message: "操作已提交，服务端状态已更新。" });
-		} catch (error) {
-			const code =
-				error && typeof error === "object" && "code" in error
-					? String(error.code)
-					: undefined;
-			setState({
+			const message = await operation();
+			operationKeys.current.delete(scope);
+			setState((previous) => ({
 				busy: false,
-				message: code
-					? `操作被拒绝（${code}）。`
-					: "操作失败，请检查输入后重试。",
-			});
+				message:
+					message ?? previous.message ?? "操作已提交，服务端状态已更新。",
+			}));
+		} catch (error) {
+			setState({ busy: false, message: actionFailureMessage(error) });
 		}
 	}
 
@@ -161,10 +222,14 @@ export function SkillHubManagementScreen({
 			schemaVersion: 1,
 			name: projectName.trim(),
 		};
-		await run(setProject, async () => {
-			await actions.createProject(body);
+		await run("project-create", setProject, async () => {
+			const result = await actions.createProject(
+				body,
+				idempotencyKey("project-create", body),
+			);
 			setProjects((await actions.listProjects()).items);
 			setProjectName("");
+			return `项目已创建：${result.name}。`;
 		});
 	}
 
@@ -239,13 +304,22 @@ export function SkillHubManagementScreen({
 								className="mt-5 space-y-3 border-t pt-4"
 								onSubmit={(event) => {
 									event.preventDefault();
-									void run(setProject, async () => {
-										await actions.updateProject(projectId.trim(), {
-											schemaVersion: 1,
+									void run("project-update", setProject, async () => {
+										const body = {
+											schemaVersion: 1 as const,
 											name: projectName.trim(),
 											status: projectStatus,
-										});
+										};
+										const result = await actions.updateProject(
+											projectId.trim(),
+											body,
+											idempotencyKey("project-update", {
+												projectId: projectId.trim(),
+												body,
+											}),
+										);
 										setProjects((await actions.listProjects()).items);
+										return `项目已${result.status === "disabled" ? "停用" : "更新"}：${result.name}。`;
 									});
 								}}
 							>
@@ -302,14 +376,19 @@ export function SkillHubManagementScreen({
 								className="mt-5 space-y-3 border-t pt-4"
 								onSubmit={(event) => {
 									event.preventDefault();
-									void run(setImportState, async () => {
-										await actions.importVersion({
-											schemaVersion: 1,
+									void run("provider-import", setImportState, async () => {
+										const body = {
+											schemaVersion: 1 as const,
 											name: importForm.name.trim(),
 											provider: importForm.provider,
 											version: importForm.version.trim(),
-										});
+										};
+										const result = await actions.importVersion(
+											body,
+											idempotencyKey("provider-import", body),
+										);
 										setImportForm({ ...importForm, name: "", version: "" });
+										return publicationMessage("Provider 导入", result);
 									});
 								}}
 							>
@@ -355,15 +434,31 @@ export function SkillHubManagementScreen({
 						<ManagementCard
 							icon={<PackageOpen aria-hidden="true" />}
 							title="发布与版本"
-							description="发布不可变版本，摘要和来源字段直接提交到服务端。"
+							description="发布不可变版本；包来源由服务端受控提供。"
 						>
 							<form
 								className="mt-4 grid gap-3"
 								onSubmit={(event) => {
 									event.preventDefault();
-									void run(setPublishState, () =>
-										actions.publishVersion(publishForm),
-									);
+									if (!publicationSource) {
+										setPublishState({
+											busy: false,
+											message:
+												"Skill Hub 后端暂时不可用：当前会话没有受控包来源，请稍后重试。",
+										});
+										return;
+									}
+									const body: SkillHubPublicationRequestV1 = {
+										...publishForm,
+										packageObjectVersion: publicationSource,
+									};
+									void run("publication", setPublishState, async () => {
+										const result = await actions.publishVersion(
+											body,
+											idempotencyKey("publication", body),
+										);
+										return publicationMessage("版本发布", result);
+									});
 								}}
 							>
 								<Field
@@ -398,17 +493,15 @@ export function SkillHubManagementScreen({
 									}
 									required
 								/>
-								<Field
-									label="包对象版本"
-									value={publishForm.packageObjectVersion}
-									onChange={(value) =>
-										setPublishForm({
-											...publishForm,
-											packageObjectVersion: value,
-										})
-									}
-									required
-								/>
+								{publicationSource ? (
+									<p className="text-muted-foreground text-sm" role="status">
+										已使用服务端受控包来源。
+									</p>
+								) : (
+									<p className="text-muted-foreground text-sm" role="status">
+										当前会话尚未取得受控包来源，发布暂不可用。
+									</p>
+								)}
 								<ProviderSelect
 									value={publishForm.provider}
 									onChange={(value) =>
@@ -445,7 +538,10 @@ export function SkillHubManagementScreen({
 									}
 									required
 								/>
-								<Button type="submit" disabled={publishState.busy}>
+								<Button
+									type="submit"
+									disabled={publishState.busy || !publicationSource}
+								>
 									发布版本
 								</Button>
 								{publishState.message ? (
@@ -459,22 +555,31 @@ export function SkillHubManagementScreen({
 							title="共享审核"
 							description={
 								isAdministrator
-									? "审核或撤销共享发布。"
-									: "只有系统管理员可以执行共享审核。"
+									? "审核共享发布，或撤销已授权版本。"
+									: "共享审核需要管理员；版本撤销由服务端校验 Owner 授权。"
 							}
 						>
 							<form
 								className="mt-4 space-y-3"
 								onSubmit={(event) => {
 									event.preventDefault();
-									void run(setReviewState, () =>
-										actions.reviewVersion(reviewForm.skillVersionId.trim(), {
+									void run("review", setReviewState, async () => {
+										const body = {
 											decision: reviewForm.decision,
 											...(reviewForm.reason.trim()
 												? { reason: reviewForm.reason.trim() }
 												: {}),
-										}),
-									);
+										};
+										const result = await actions.reviewVersion(
+											reviewForm.skillVersionId.trim(),
+											body,
+											idempotencyKey("review", {
+												skillVersionId: reviewForm.skillVersionId.trim(),
+												body,
+											}),
+										);
+										return publicationMessage("审核", result);
+									});
 								}}
 							>
 								<Field
@@ -485,6 +590,11 @@ export function SkillHubManagementScreen({
 									}
 									required
 								/>
+								<p className="text-muted-foreground text-sm" role="status">
+									{publishedVersionIds.has(reviewForm.skillVersionId.trim())
+										? "当前授权目录确认该版本为 published，可申请撤销。"
+										: "当前授权目录未确认 published 状态，撤销按钮保持不可用。"}
+								</p>
 								<Label>
 									决定
 									<NativeSelect
@@ -533,14 +643,19 @@ export function SkillHubManagementScreen({
 										type="button"
 										variant="outline"
 										disabled={
-											!isAdministrator ||
 											reviewState.busy ||
-											!reviewForm.skillVersionId.trim()
+											!reviewForm.skillVersionId.trim() ||
+											!publishedVersionIds.has(reviewForm.skillVersionId.trim())
 										}
 										onClick={() =>
-											void run(setReviewState, () =>
-												actions.revokeVersion(reviewForm.skillVersionId.trim()),
-											)
+											void run("revoke", setReviewState, async () => {
+												const skillVersionId = reviewForm.skillVersionId.trim();
+												const result = await actions.revokeVersion(
+													skillVersionId,
+													idempotencyKey("revoke", skillVersionId),
+												);
+												return publicationMessage("撤销", result);
+											})
 										}
 									>
 										撤销版本
@@ -561,7 +676,7 @@ export function SkillHubManagementScreen({
 								className="mt-4 space-y-3"
 								onSubmit={(event) => {
 									event.preventDefault();
-									void run(setBindingState, async () => {
+									void run("binding", setBindingState, async () => {
 										const grant = JSON.parse(
 											bindingForm.grant,
 										) as SkillHubAgentBindingCommandV1["bindings"][number]["grant"];
@@ -580,7 +695,13 @@ export function SkillHubManagementScreen({
 													},
 												],
 											},
+											idempotencyKey("binding", bindingForm),
 										);
+										const status = await actions.readBindings(
+											bindingForm.agentId.trim(),
+											bindingForm.agentVersion.trim(),
+										);
+										return bindingMessage(status.bindings);
 									});
 								}}
 							>
@@ -651,15 +772,12 @@ export function SkillHubManagementScreen({
 											!bindingForm.agentVersion.trim()
 										}
 										onClick={() =>
-											void run(setBindingState, async () => {
+											void run("binding-read", setBindingState, async () => {
 												const status = await actions.readBindings(
 													bindingForm.agentId.trim(),
 													bindingForm.agentVersion.trim(),
 												);
-												setBindingState({
-													busy: false,
-													message: `${status.bindings.length} 个绑定：${status.bindings.map((binding) => binding.state).join("、") || "暂无"}`,
-												});
+												return bindingMessage(status.bindings);
 											})
 										}
 									>
