@@ -280,6 +280,10 @@ export {
 	type ProductionPlatformApiInputV1,
 } from "./deployment.js";
 export {
+	type NativeCapabilityInvocationRouteDependenciesV1,
+	registerNativeCapabilityInvocationRoutesV1,
+} from "./http/native-capability-invocation-routes.js";
+export {
 	createNativeMetadataCurrentAppV1,
 	type NativeMetadataCurrentRouteDependenciesV1,
 	registerNativeMetadataCurrentRoutesV1,

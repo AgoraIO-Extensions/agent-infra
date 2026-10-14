@@ -36,6 +36,7 @@ const {
 	modelSelection,
 	nativeMetadata,
 	nativeMetadataCurrent,
+	nativeCapabilityInvocation,
 	providerImport,
 	directorySearch,
 } = await import(configurationModule);
@@ -117,6 +118,9 @@ export function createPlatformApiAssemblyInput() {
 		...(modelSelection !== undefined ? { modelSelection } : {}),
 		...(nativeMetadata !== undefined ? { nativeMetadata } : {}),
 		...(nativeMetadataCurrent !== undefined ? { nativeMetadataCurrent } : {}),
+		...(nativeCapabilityInvocation !== undefined
+			? { nativeCapabilityInvocation }
+			: {}),
 		...(providerImport !== undefined ? { providerImport } : {}),
 	});
 	return createProductionPlatformApiAssemblyInputV1({

@@ -132,6 +132,7 @@ export interface ProductionPlatformApiInputV1
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
 	/** Optional deployment-owned Worker current-confirmation route. */
 	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
+	readonly nativeCapabilityInvocation?: PlatformApiAssemblyInput["nativeCapabilityInvocation"];
 	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 	/** Optional deployment-owned platform identity route for custom Agents. */
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
@@ -160,6 +161,7 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
 	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
+	readonly nativeCapabilityInvocation?: PlatformApiAssemblyInput["nativeCapabilityInvocation"];
 	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 }): ProductionPlatformApiInputV1 {
 	if (
@@ -183,6 +185,11 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	)
 		throw new Error("PLATFORM_NATIVE_METADATA_CURRENT_DUPLICATE");
 	if (
+		input.nativeCapabilityInvocation !== undefined &&
+		input.apiInput.nativeCapabilityInvocation !== undefined
+	)
+		throw new Error("PLATFORM_NATIVE_CAPABILITY_INVOCATION_DUPLICATE");
+	if (
 		input.providerImport !== undefined &&
 		input.apiInput.providerImport !== undefined
 	)
@@ -200,6 +207,9 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 			: {}),
 		...(input.nativeMetadataCurrent !== undefined
 			? { nativeMetadataCurrent: input.nativeMetadataCurrent }
+			: {}),
+		...(input.nativeCapabilityInvocation !== undefined
+			? { nativeCapabilityInvocation: input.nativeCapabilityInvocation }
 			: {}),
 		...(input.providerImport !== undefined
 			? { providerImport: input.providerImport }
@@ -442,6 +452,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.nativeMetadata ? { nativeMetadata: input.nativeMetadata } : {}),
 		...(input.nativeMetadataCurrent
 			? { nativeMetadataCurrent: input.nativeMetadataCurrent }
+			: {}),
+		...(input.nativeCapabilityInvocation
+			? { nativeCapabilityInvocation: input.nativeCapabilityInvocation }
 			: {}),
 		...(input.providerImport ? { providerImport: input.providerImport } : {}),
 		...(input.customAgentGateway
