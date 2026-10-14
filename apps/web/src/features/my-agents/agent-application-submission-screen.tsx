@@ -9,6 +9,7 @@ import type {
 	AgentApplicationUpdateRequestV2Writable,
 	DeploymentConfigurationProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
+import type { AgentDefaultRelayKeyCheck } from "../agent-configuration/agent-configuration.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
 import { AgentApplicationForm } from "./agent-application-form.js";
 import {
@@ -39,6 +40,11 @@ type AgentApplicationSubmissionScreenProps =
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
 			error?: RequestError | null;
 			mode: "update";
+			/** 模型由默认 Relay Key 管理：更换模型集合要重新提交 Key，并只能从该 Key 的候选里选。 */
+			defaultRelayKeyManaged?: boolean;
+			onCheckDefaultRelayKey?: (
+				keyValue: string,
+			) => Promise<AgentDefaultRelayKeyCheck>;
 			onSubmit: (body: AgentApplicationUpdateRequestV2Writable) => void;
 			result?: AgentApplicationProjectionV2;
 			submitting: boolean;

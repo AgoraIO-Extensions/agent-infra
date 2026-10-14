@@ -5,8 +5,10 @@ import {
 	AgentApplicationCreateRequestV1Schema,
 	AgentApplicationProjectionV1Schema,
 	AgentApplicationUpdateRequestV1Schema,
+	AgentApplicationUpdateRequestV2Schema,
 	AgentConfigurationProjectionV1Schema,
 	AgentConfigurationUpdateRequestV1Schema,
+	AgentConfigurationUpdateRequestV2Schema,
 	AgentLifecycleCommandRequestV1Schema,
 	AgentProjectionV1Schema,
 	BrowserSessionProjectionV1Schema,
@@ -642,5 +644,71 @@ describe("Pilot browser contracts", () => {
 			"/api/v2/admin/audit",
 		);
 		expect(pilotBrowserOpenApiPathsV2).toHaveProperty("/api/v2/admin/audit");
+	});
+
+	it("accepts a default Relay Key replacement with versions and rejects malformed Key or versions", () => {
+		const replacement = {
+			defaultRelayKey: "sk-synthetic-key-0001",
+			expectedConfigurationRevision: 3,
+			expectedKeyVersion: 2,
+			modelConfiguration: {
+				options: [
+					{
+						optionId: "endpoint-approved:gpt-5",
+						endpointId: "endpoint-approved",
+						modelId: "gpt-5",
+						reasoningLevels: ["medium"],
+					},
+				],
+				defaultOptionId: "endpoint-approved:gpt-5",
+				defaultReasoningLevel: "medium",
+			},
+		};
+		const configuration = { schemaVersion: 2, ...replacement };
+		expect(
+			AgentConfigurationUpdateRequestV2Schema.parse(configuration),
+		).toEqual(configuration);
+		// 没有 Key 的老请求形态保持有效，字段全部可选。
+		expect(
+			AgentConfigurationUpdateRequestV2Schema.parse({ schemaVersion: 2 }),
+		).toEqual({ schemaVersion: 2 });
+		// expectedKeyVersion 允许 null（Agent 还没有 Key 版本）。
+		expect(
+			AgentConfigurationUpdateRequestV2Schema.parse({
+				...configuration,
+				expectedKeyVersion: null,
+			}).expectedKeyVersion,
+		).toBeNull();
+		for (const bad of [
+			{ defaultRelayKey: "short" },
+			{ defaultRelayKey: `${"k".repeat(16)} with space` },
+			{ defaultRelayKey: "k".repeat(8193) },
+			{ expectedConfigurationRevision: 0 },
+			{ expectedKeyVersion: 0 },
+			{ expectedKeyVersion: 1.5 },
+		])
+			expect(
+				AgentConfigurationUpdateRequestV2Schema.safeParse({
+					...configuration,
+					...bad,
+				}).success,
+			).toBe(false);
+		// Key 只能写入：生成的 OpenAPI 标记为 writeOnly，不出现在任何投影里。
+		expect(JSON.stringify(AgentProjectionV1Schema.shape)).not.toContain(
+			"defaultRelayKey",
+		);
+		const application = {
+			schemaVersion: 2,
+			name: "Release assistant",
+			description: "Helps the release team",
+			source: { kind: "standard", templateId: "codex" },
+			coOwnerIds: [],
+			availability: [],
+			environment: [],
+			...replacement,
+		};
+		expect(AgentApplicationUpdateRequestV2Schema.parse(application)).toEqual(
+			application,
+		);
 	});
 });

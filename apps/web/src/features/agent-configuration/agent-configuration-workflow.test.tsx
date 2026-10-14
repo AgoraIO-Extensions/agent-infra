@@ -10,6 +10,7 @@ import { useBrowserSession } from "../use-browser-session.js";
 import { grantApplicationManager } from "./agent-authorization.js";
 import { AgentConfigurationWorkflow } from "./agent-configuration-workflow.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
+import { useAgentDefaultRelayKeyState } from "./use-agent-default-relay-key-state.js";
 
 vi.mock("../use-browser-session.js", () => ({
 	useBrowserSession: vi.fn(),
@@ -19,6 +20,9 @@ vi.mock("../agent-administration/use-agent-lifecycle-command.js", () => ({
 }));
 vi.mock("./use-agent-configuration-submission.js", () => ({
 	useAgentConfigurationSubmission: vi.fn(),
+}));
+vi.mock("./use-agent-default-relay-key-state.js", () => ({
+	useAgentDefaultRelayKeyState: vi.fn(),
 }));
 vi.mock("./agent-authorization.js", () => ({
 	AgentAuthorizationRequestError: class extends Error {},
@@ -66,6 +70,9 @@ afterEach(() => {
 beforeEach(() => {
 	vi.mocked(useBrowserSession).mockReturnValue({
 		state: { kind: "ready", session: ownerSession },
+	} as never);
+	vi.mocked(useAgentDefaultRelayKeyState).mockReturnValue({
+		data: undefined,
 	} as never);
 	vi.mocked(useAgentConfigurationSubmission).mockReturnValue({
 		isError: false,
@@ -117,6 +124,39 @@ describe("AgentConfigurationWorkflow", () => {
 				],
 			}),
 		);
+	});
+
+	it("reads the default Key state only for Owners of a standard-template Agent (#2421)", () => {
+		render(<AgentConfigurationWorkflow agent={firstAgent} />);
+		expect(vi.mocked(useAgentDefaultRelayKeyState)).toHaveBeenLastCalledWith(
+			firstAgent.agentId,
+			true,
+		);
+		cleanup();
+		vi.mocked(useBrowserSession).mockReturnValue({
+			state: { kind: "ready", session: administratorSession },
+		} as never);
+		render(<AgentConfigurationWorkflow agent={firstAgent} />);
+		expect(vi.mocked(useAgentDefaultRelayKeyState)).toHaveBeenLastCalledWith(
+			firstAgent.agentId,
+			false,
+		);
+	});
+
+	it("shows the V2 free-text model fields unless the default Key manages the models (#2421)", () => {
+		render(<AgentConfigurationWorkflow agent={firstAgent} />);
+		expect(screen.getByRole("checkbox", { name: "替换模型配置" })).toBeTruthy();
+		cleanup();
+		vi.mocked(useAgentDefaultRelayKeyState).mockReturnValue({
+			data: {
+				schemaVersion: 1,
+				isSet: true,
+				keyVersion: 2,
+				configurationRevision: 7,
+			},
+		} as never);
+		render(<AgentConfigurationWorkflow agent={firstAgent} />);
+		expect(screen.queryByRole("checkbox", { name: "替换模型配置" })).toBeNull();
 	});
 
 	it("resets pending authorization controls when an administrator changes Agent", () => {

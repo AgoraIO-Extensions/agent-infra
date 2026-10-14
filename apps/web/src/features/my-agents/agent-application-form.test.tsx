@@ -11,6 +11,7 @@ import type { DeploymentConfigurationProjectionV2 } from "../../pilot/generated-
 
 import { AgentApplicationForm as AgentApplicationFormView } from "./agent-application-form.js";
 import {
+	pendingApplication as basePendingApplication,
 	deploymentConfiguration,
 	pendingApplication,
 } from "./test-fixtures.js";
@@ -1851,5 +1852,155 @@ describe("AgentApplicationForm", () => {
 		expect(
 			(screen.getByLabelText("Agent 名称") as HTMLInputElement).value,
 		).toBe("Other release assistant");
+	});
+});
+
+describe("AgentApplicationForm editing the models of a default-Key application (#2421)", () => {
+	const key = "SYNTHETIC_FORM_KEY_0000001";
+	const candidates = {
+		schemaVersion: 1 as const,
+		configurationRevision: 7,
+		keyVersion: 2,
+		candidates: [
+			{
+				endpointId: "endpoint-primary",
+				modelId: "gpt-5",
+				reasoningLevels: ["medium", "high"],
+			},
+			{
+				endpointId: "endpoint-primary",
+				modelId: "gpt-5-mini",
+				reasoningLevels: ["low"],
+			},
+		],
+	};
+	// 已持久化的模型选项与候选一致，编辑时从它们开始。
+	const pendingApplication = AgentApplicationProjectionV2Schema.parse({
+		...basePendingApplication,
+		configuration: {
+			...basePendingApplication.configuration,
+			modelOptions: [
+				{
+					optionId: "endpoint-primary:gpt-5",
+					displayName: "Primary model",
+					modelId: "gpt-5",
+					reasoningLevels: ["medium", "high"],
+				},
+			],
+			defaultModelOptionId: "endpoint-primary:gpt-5",
+			defaultReasoningLevel: "medium",
+		},
+	});
+	function renderManaged(check = vi.fn().mockResolvedValue(candidates)) {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				action="edit"
+				application={pendingApplication}
+				defaultRelayKeyManaged
+				mode="update"
+				onCheckDefaultRelayKey={check}
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		return { onSubmit, check };
+	}
+
+	it("replaces the catalog rows with a Key check and a candidate picker", async () => {
+		const { check } = renderManaged();
+		// 没有修改模型配置时没有 Key 输入，请求也不带 Key。
+		expect(screen.queryByLabelText("Agent 默认 Relay Key")).toBeNull();
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		expect(
+			screen.getByLabelText<HTMLInputElement>("Agent 默认 Relay Key").type,
+		).toBe("password");
+		// 目录里的逐行模型编辑被候选选择取代。
+		expect(screen.queryByRole("combobox", { name: "模型端点" })).toBeNull();
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: key },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
+		await screen.findByText("选择允许的模型");
+		expect(check).toHaveBeenCalledWith(key);
+		// 当前模型预先勾选，Key 可见的另一个模型可选。
+		expect(
+			screen
+				.getByRole("checkbox", { name: "endpoint-primary · gpt-5" })
+				.getAttribute("aria-checked"),
+		).toBe("true");
+		expect(
+			screen
+				.getByRole("checkbox", { name: "endpoint-primary · gpt-5-mini" })
+				.getAttribute("aria-checked"),
+		).toBe("false");
+	});
+
+	it("submits the Key, the checked versions and the selection once the Key was checked", async () => {
+		const { onSubmit } = renderManaged();
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: key },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
+		await screen.findByText("选择允许的模型");
+		fireEvent.click(
+			screen.getByRole("checkbox", { name: "endpoint-primary · gpt-5-mini" }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		const body = onSubmit.mock.calls[0]?.[0];
+		expect(body).toMatchObject({
+			schemaVersion: 2,
+			defaultRelayKey: key,
+			expectedConfigurationRevision: 7,
+			expectedKeyVersion: 2,
+		});
+		expect(
+			body.modelConfiguration.options.map(
+				(o: { optionId: string }) => o.optionId,
+			),
+		).toEqual(["endpoint-primary:gpt-5", "endpoint-primary:gpt-5-mini"]);
+		expect(body.modelConfiguration.defaultOptionId).toBe(
+			"endpoint-primary:gpt-5",
+		);
+	});
+
+	it("blocks the submission until the Key was checked and models were selected", async () => {
+		const { onSubmit } = renderManaged();
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(screen.getByText("请输入 Agent 默认 Relay Key。")).toBeTruthy();
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: key },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(screen.getByText(/请先点击「检查可用模型」并选好模型/)).toBeTruthy();
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("does not send the Key or versions when the models stay untouched", () => {
+		const { onSubmit } = renderManaged();
+		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		const body = onSubmit.mock.calls[0]?.[0];
+		expect(body).not.toHaveProperty("defaultRelayKey");
+		expect(body).not.toHaveProperty("expectedKeyVersion");
+		expect(body).not.toHaveProperty("modelConfiguration");
+	});
+
+	it("keeps the previous behaviour for an application the default Key does not manage", () => {
+		render(
+			<AgentApplicationForm
+				action="edit"
+				application={pendingApplication}
+				mode="update"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
+		expect(screen.queryByLabelText("Agent 默认 Relay Key")).toBeNull();
+		expect(screen.getByRole("combobox", { name: "模型端点" })).toBeTruthy();
 	});
 });

@@ -2612,6 +2612,17 @@ describe("contract compatibility command", () => {
 		delete current.components.schemas.AgentUserUseRevokeResponseV1;
 		delete current.components.schemas.AgentApplicationCreateRequestV2.properties
 			.defaultRelayKey;
+		// #2421 之后新增的默认 Key 替换字段同样属于后加内容。
+		for (const name of [
+			"AgentApplicationUpdateRequestV2",
+			"AgentConfigurationUpdateRequestV2",
+		])
+			for (const property of [
+				"defaultRelayKey",
+				"expectedConfigurationRevision",
+				"expectedKeyVersion",
+			])
+				delete current.components.schemas[name].properties[property];
 		delete current.components.schemas.DeploymentTemplateProjectionV2.properties
 			.readiness;
 		for (const name of [

@@ -37,6 +37,10 @@ export function isAgentConfigurationOwner(
 export type AgentDefaultRelayKeyState = GetAgentDefaultRelayKeyV2Responses[200];
 export type AgentDefaultRelayKeyCandidates =
 	GetAgentDefaultRelayKeyCandidatesV2Responses[200];
+/** 候选模型，连同检查时看到的 Key 版本；保存时与 `configurationRevision` 一起作为 expected 值。 */
+export type AgentDefaultRelayKeyCheck = AgentDefaultRelayKeyCandidates & {
+	keyVersion: number | null;
+};
 
 export async function loadAgentDefaultRelayKey(
 	agentId: string,
@@ -78,6 +82,24 @@ export async function previewAgentDefaultRelayKeyCandidates(
 	});
 	if (!result.data) throw requestError(result.error?.retryable !== false);
 	return result.data;
+}
+
+/**
+ * 读取当前配置修订与 Key 版本后检查 Key 可见的模型。返回的修订和版本就是保存时作为
+ * expected 值带回的那一组：检查之后任何一方变化，服务端都会拒绝（#2421）。
+ */
+export async function checkAgentDefaultRelayKey(
+	agentId: string,
+	keyValue: string,
+	client?: Client,
+): Promise<AgentDefaultRelayKeyCheck> {
+	const state = await loadAgentDefaultRelayKey(agentId, client);
+	const candidates = await previewAgentDefaultRelayKeyCandidates(
+		agentId,
+		{ configurationRevision: state.configurationRevision, keyValue },
+		client,
+	);
+	return { ...candidates, keyVersion: state.isSet ? state.keyVersion : null };
 }
 
 export async function replaceAgentDefaultRelayKey(

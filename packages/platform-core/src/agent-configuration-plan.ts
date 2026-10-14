@@ -456,7 +456,11 @@ export function parseTransactionCommitDecision(
 				result: parseResult(base.result, agentId),
 			};
 		}
-		if (base.outcome === "stale" || base.outcome === "idempotency_conflict") {
+		if (
+			base.outcome === "stale" ||
+			base.outcome === "key_stale" ||
+			base.outcome === "idempotency_conflict"
+		) {
 			requireAgentManagementExactKeys(base, ["outcome"]);
 			return { outcome: base.outcome };
 		}

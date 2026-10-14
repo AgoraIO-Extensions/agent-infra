@@ -48,6 +48,10 @@ import {
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
 import {
+	type RelayKeyVersionBindingV1,
+	replaceRelayKeyVersionInTransaction,
+} from "./relay-key-versions.ts";
+import {
 	createSecretRecordFixtureResolver,
 	materializeSecretRecordFixtureAttachments,
 } from "./secret-record-fixture.ts";
@@ -391,6 +395,277 @@ describe("PostgreSQL Agent configuration transaction", () => {
 				configurationCount: 1,
 				configuration: { schemaVersion: 2 },
 			});
+		});
+	});
+
+	describe("keyless (V3) default Key replacement with the model set (#2421)", () => {
+		const plaintextKey = "SYNTHETIC_STORE_KEY_000000001";
+		const requested = {
+			options: [
+				{
+					optionId: "model_primary",
+					endpointId: "endpoint_01",
+					modelId: "gpt-5",
+					reasoningLevels: ["low"],
+				},
+				{
+					optionId: "model_second",
+					endpointId: "endpoint_01",
+					modelId: "gpt-5-mini",
+					reasoningLevels: ["low"],
+				},
+			],
+			defaultOptionId: "model_second",
+			defaultReasoningLevel: "low",
+		};
+		/** 形状有效的 Key 密文替身：Store 只校验结构与绑定，不涉及真实加解密。 */
+		function ciphertext(binding: RelayKeyVersionBindingV1) {
+			return {
+				schemaVersion: 1,
+				...binding,
+				crypto: {
+					schemaVersion: 1,
+					algorithmVersion: "aes-256-gcm:v1",
+					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+					wrappingKeyVersion: "wrapping-key-1",
+					aadVersion: "relay-key-aad:v1",
+					dekFingerprint: "a".repeat(64),
+					nonce: Buffer.alloc(12).toString("base64"),
+					ciphertext: Buffer.alloc(16).toString("base64"),
+					authenticationTag: Buffer.alloc(16).toString("base64"),
+					wrappedDek: Buffer.alloc(384).toString("base64"),
+				},
+			};
+		}
+		const encrypted: string[] = [];
+		function keyedUseCase(transaction: AgentConfigurationTransactionPortV1) {
+			return createAgentConfigurationUseCaseV1(
+				{
+					...dependencies(transaction, true),
+					keylessModelAdmission: {
+						admitModels: async ({ requested: selection }) =>
+							({ catalogRevision: "catalog_3", ...selection }) as never,
+					},
+					defaultRelayKey: {
+						currentIdentity: async () => ({
+							userId: "owner_01",
+							accountStatus: "active",
+							authorizationRevision: "authorization_9",
+						}),
+						candidates: async () =>
+							["gpt-5", "gpt-5-mini"].map((modelId) => ({
+								endpointId: "endpoint_01",
+								modelId,
+								reasoningLevels: ["low"],
+							})),
+						encrypt: (binding, keyValue) => {
+							encrypted.push(keyValue);
+							return ciphertext(binding as RelayKeyVersionBindingV1);
+						},
+					},
+				},
+				{ now: () => new Date(occurredAt) },
+			);
+		}
+		const keyedCommand = (overrides: Record<string, unknown> = {}) =>
+			({
+				schemaVersion: 3,
+				agentId: "agent_01",
+				idempotencyKey: "keyed-update",
+				requestId: "request_keyed",
+				traceId: "trace_keyed",
+				defaultRelayKey: plaintextKey,
+				expectedConfigurationRevision: 7,
+				expectedKeyVersion: 1,
+				changes: { modelConfiguration: requested },
+				...overrides,
+			}) as never;
+		async function seedKeyed(record = keylessRecord()) {
+			await clearDatabase();
+			await adminClient`delete from platform.relay_key_versions`;
+			await adminClient`delete from platform.relay_key_subjects`;
+			encrypted.length = 0;
+			await seed("agent_01", record);
+			// 第一版 Key 走真实写入器，之后的版本由被测提交边界产生。
+			await adminClient.begin((sql) =>
+				replaceRelayKeyVersionInTransaction(sql, {
+					purpose: "agent-default",
+					subjectId: "agent_01",
+					expectedCurrentVersion: null,
+					encrypt: ciphertext,
+				}),
+			);
+		}
+		async function keyState() {
+			const versions = await adminClient<{ key_version: string }[]>`
+				select key_version from platform.relay_key_versions
+				where purpose = 'agent-default' and subject_id = 'agent_01'
+				order by key_version
+			`;
+			const [subject] = await adminClient<{ current_version: string | null }[]>`
+				select current_version from platform.relay_key_subjects
+				where purpose = 'agent-default' and subject_id = 'agent_01'
+			`;
+			return {
+				versions: versions.map((row) => Number(row.key_version)),
+				current:
+					subject?.current_version == null
+						? null
+						: Number(subject.current_version),
+			};
+		}
+
+		it("advances the revision, the model set and the Key version in one transaction", async () => {
+			await seedKeyed();
+			const result = await keyedUseCase(openTransaction()).update(
+				keyedCommand(),
+				actor,
+			);
+			expect(result).toMatchObject({ agentId: "agent_01", revision: 8 });
+			expect(result.changedFields).toEqual(
+				expect.arrayContaining(["modelConfiguration", "defaultRelayKey"]),
+			);
+			expect(await versionedSnapshot()).toMatchObject({
+				currentRevision: 8,
+				configurationCount: 2,
+				idempotencyCount: 1,
+				outboxCount: 1,
+				configuration: {
+					schemaVersion: 3,
+					revision: 8,
+					modelConfiguration: { defaultOptionId: "model_second" },
+				},
+			});
+			expect(await keyState()).toEqual({ versions: [1, 2], current: 2 });
+			const audits = await adminClient<
+				{ action: string; details: Record<string, unknown> }[]
+			>`select action, details from platform.audit_events order by action`;
+			expect(audits.map((row) => row.action)).toEqual([
+				"agent.configuration.revised",
+				"relay_key.agent_default.replace",
+			]);
+			expect(
+				audits.find((row) => row.action === "relay_key.agent_default.replace")
+					?.details,
+			).toEqual({
+				schemaVersion: 1,
+				previousVersion: 1,
+				keyVersion: 2,
+				configurationRevision: 8,
+			});
+			// Key 明文只进入加密端口，不会出现在任何业务表。
+			expect(encrypted).toEqual([plaintextKey]);
+			for (const table of [
+				"audit_events",
+				"idempotency_records",
+				"outbox_items",
+				"agent_configuration_revisions",
+			]) {
+				const rows = await adminClient.unsafe(
+					`select * from platform.${table}`,
+				);
+				expect(JSON.stringify(rows)).not.toContain(plaintextKey);
+			}
+			// 同一幂等键重放：不再加密、不再写 Key。
+			await expect(
+				keyedUseCase(openTransaction()).update(keyedCommand(), actor),
+			).resolves.toEqual(result);
+			expect(encrypted).toHaveLength(1);
+			expect(await keyState()).toEqual({ versions: [1, 2], current: 2 });
+		});
+
+		it("returns a Key version conflict distinct from a configuration revision conflict and writes nothing", async () => {
+			await seedKeyed();
+			// 另一位 Owner 已经把 Key 换到版本 2，调用方看到的还是版本 1。
+			await adminClient.begin((sql) =>
+				replaceRelayKeyVersionInTransaction(sql, {
+					purpose: "agent-default",
+					subjectId: "agent_01",
+					expectedCurrentVersion: 1,
+					encrypt: ciphertext,
+				}),
+			);
+			const before = await versionedSnapshot();
+			await expect(
+				keyedUseCase(openTransaction()).update(keyedCommand(), actor),
+			).rejects.toMatchObject({ code: "key_version_conflict" });
+			expect(await versionedSnapshot()).toEqual(before);
+			expect(await keyState()).toEqual({ versions: [1, 2], current: 2 });
+			expect(encrypted).toHaveLength(0);
+
+			// 配置修订已前进而 Key 版本不变：属于另一类冲突。
+			await adminClient`update platform.agents set current_configuration_revision = 8 where id = 'agent_01'`;
+			await adminClient`insert into platform.agent_configuration_revisions
+				(agent_id, revision, source_reference, created_at, configuration)
+				select agent_id, 8, source_reference, created_at, jsonb_set(configuration, '{revision}', '8')
+				from platform.agent_configuration_revisions where agent_id = 'agent_01' and revision = 7`;
+			await expect(
+				keyedUseCase(openTransaction()).update(
+					keyedCommand({ expectedKeyVersion: 2 }),
+					actor,
+				),
+			).rejects.toMatchObject({ code: "stale_revision" });
+			expect(await keyState()).toEqual({ versions: [1, 2], current: 2 });
+		});
+
+		it("rolls the Key version back together with the configuration when a later write fails", async () => {
+			await seedKeyed();
+			const before = await versionedSnapshot();
+			await armFailure("key_outbox", "platform.outbox_items", "insert", false);
+			try {
+				await expect(
+					keyedUseCase(openTransaction()).update(keyedCommand(), actor),
+				).rejects.toMatchObject({ code: "persistence_failed" });
+			} finally {
+				await disarmFailure("key_outbox", "platform.outbox_items");
+			}
+			expect(await versionedSnapshot()).toEqual(before);
+			expect(await keyState()).toEqual({ versions: [1], current: 1 });
+			// 失败后原样重试成功，只产生一个新版本。
+			await keyedUseCase(openTransaction()).update(keyedCommand(), actor);
+			expect(await keyState()).toEqual({ versions: [1, 2], current: 2 });
+		});
+
+		it("lets only one of two concurrent replacements win and never creates a third Key version", async () => {
+			await seedKeyed();
+			const outcomes = await Promise.allSettled(
+				["first", "second"].map((name) =>
+					keyedUseCase(openTransaction()).update(
+						keyedCommand({ idempotencyKey: `concurrent-${name}` }),
+						actor,
+					),
+				),
+			);
+			expect(outcomes.filter((o) => o.status === "fulfilled")).toHaveLength(1);
+			const rejected = outcomes.find((o) => o.status === "rejected");
+			expect(["stale_revision", "key_version_conflict"]).toContain(
+				(rejected as PromiseRejectedResult).reason.code,
+			);
+			expect(await keyState()).toEqual({ versions: [1, 2], current: 2 });
+			expect(await versionedSnapshot()).toMatchObject({ currentRevision: 8 });
+		});
+
+		it("refuses to turn a V2 record into a keyless one through a Key replacement", async () => {
+			await seedKeyed(agentConfigurationConformanceRecordV1);
+			const before = await rawSnapshot();
+			await expect(
+				keyedUseCase(openTransaction()).update(keyedCommand(), actor),
+			).rejects.toMatchObject({ code: "persistence_failed" });
+			expect(await rawSnapshot()).toEqual(before);
+			expect(await keyState()).toEqual({ versions: [1], current: 1 });
+		});
+
+		it("rejects a Key attachment on a plan that does not replace the Key", async () => {
+			await seedKeyed();
+			const plan = await captureUpdatePlan(keylessRecord());
+			await expect(
+				openTransaction().commit(plan, undefined, {
+					expectedVersion: 1,
+					encrypt: ciphertext,
+				}),
+			).rejects.toMatchObject({ name: "AgentConfigurationStoreError" });
+			expect(await keyState()).toEqual({ versions: [1], current: 1 });
+			expect(await versionedSnapshot()).toMatchObject({ currentRevision: 7 });
 		});
 	});
 

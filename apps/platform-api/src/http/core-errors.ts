@@ -94,6 +94,9 @@ export function mapCoreError(
 			error.code === "not_admitted" ||
 			error.code === "no_change" ||
 			error.code === "stale_revision" ||
+			// Key 版本冲突与配置修订冲突在 Core/Store/审计里可区分；线上同为 409，处理方式相同：
+			// 刷新后重新检查再提交（#2421）。
+			error.code === "key_version_conflict" ||
 			error.code === "idempotency_conflict"
 		) {
 			return new HttpProtocolError("CONFLICT", traceId);
@@ -111,6 +114,9 @@ export function mapCoreError(
 			error.code === "not_admitted" ||
 			error.code === "no_change" ||
 			error.code === "stale_revision" ||
+			// Key 版本冲突与配置修订冲突在 Core/Store/审计里可区分；线上同为 409，处理方式相同：
+			// 刷新后重新检查再提交（#2421）。
+			error.code === "key_version_conflict" ||
 			error.code === "idempotency_conflict"
 		) {
 			return new HttpProtocolError("CONFLICT", traceId);

@@ -2543,6 +2543,48 @@ function isApplicationDefaultRelayKeyV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2421 admits only the three optional fields that let a keyless Agent replace its
+// model set together with a re-submitted default Key (configuration update and
+// application revision requests).
+function isKeylessModelReplacementOpenApiAddition(previous, current) {
+	const names = [
+		"AgentApplicationUpdateRequestV2",
+		"AgentConfigurationUpdateRequestV2",
+	];
+	const integer = {
+		exclusiveMinimum: 0,
+		maximum: Number.MAX_SAFE_INTEGER,
+		type: "integer",
+	};
+	const added = {
+		defaultRelayKey: {
+			maxLength: 8192,
+			minLength: 16,
+			pattern: "^[\\x21-\\x7e]+$",
+			type: "string",
+			writeOnly: true,
+		},
+		expectedConfigurationRevision: integer,
+		expectedKeyVersion: { anyOf: [integer, { type: "null" }] },
+	};
+	const normalized = structuredClone(current);
+	for (const name of names) {
+		const previousProperties = previous.components?.schemas?.[name]?.properties;
+		const currentSchema = current.components?.schemas?.[name];
+		if (!previousProperties || !currentSchema?.properties) return false;
+		for (const [property, definition] of Object.entries(added)) {
+			if (
+				previousProperties[property] !== undefined ||
+				currentSchema.required?.includes(property) ||
+				!isDeepStrictEqual(currentSchema.properties[property], definition)
+			)
+				return false;
+			delete normalized.components.schemas[name].properties[property];
+		}
+	}
+	return sameValue(previous, normalized);
+}
+
 // #1260 adds the same write-only key input to direct Agent creation custom requests.
 function isAgentDefaultRelayKeyInputOpenApiAddition(previous, current) {
 	const name = "AgentApiCreationRequestV1";
@@ -3826,6 +3868,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isPersonalRelayKeyV2OpenApiAddition(previous, current) &&
 			!isAgentDefaultRelayKeyV2OpenApiAddition(previous, current) &&
 			!isApplicationDefaultRelayKeyV2OpenApiAddition(previous, current) &&
+			!isKeylessModelReplacementOpenApiAddition(previous, current) &&
 			!isAgentDefaultRelayKeyInputOpenApiAddition(previous, current) &&
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isTaskHttpV1SseOpenApiAddition(previous, current) &&

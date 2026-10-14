@@ -493,10 +493,15 @@ export function assemblePlatformApi(
 					: {}),
 			})
 		: undefined;
+	// 重新提交 Key 并更换模型集合（V3）与创建共用同一组 Key 端口（#2421）。
+	const defaultRelayKeyPorts = input.agentDefaultRelayKeys
+		? { defaultRelayKey: input.agentDefaultRelayKeys }
+		: {};
 	const revision = createApplicationRevisionUseCaseV1({
 		transaction: revisionTransaction,
 		...admissions,
 		...channelAdmission,
+		...defaultRelayKeyPorts,
 	});
 	const management = createAgentManagementV1(managementTransaction);
 	const customAgentGateway = input.customAgentGateway
@@ -533,6 +538,7 @@ export function assemblePlatformApi(
 		transaction: configurationTransaction,
 		...admissions,
 		...channelAdmission,
+		...defaultRelayKeyPorts,
 	});
 	const projections = createPlatformProjectionReaders({
 		identity: input.identity,
