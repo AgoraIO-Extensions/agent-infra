@@ -32,6 +32,7 @@ const {
 	customAgentGateway,
 	modelSelection,
 	nativeMetadata,
+	nativeMetadataCurrent,
 	providerImport,
 	directorySearch,
 } = await import(configurationModule);
@@ -102,6 +103,7 @@ export function createPlatformApiAssemblyInput() {
 		...(customAgentGateway !== undefined ? { customAgentGateway } : {}),
 		...(modelSelection !== undefined ? { modelSelection } : {}),
 		...(nativeMetadata !== undefined ? { nativeMetadata } : {}),
+		...(nativeMetadataCurrent !== undefined ? { nativeMetadataCurrent } : {}),
 		...(providerImport !== undefined ? { providerImport } : {}),
 	});
 	return createProductionPlatformApiAssemblyInputV1({
