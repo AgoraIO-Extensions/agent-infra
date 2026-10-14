@@ -133,6 +133,24 @@ function snapshotTemplates(templates: readonly Template[]) {
 	}));
 }
 
+function parseConfiguredMultiServiceResourceProfiles(
+	profiles: readonly MultiServiceResourceProfileV1[] | undefined,
+) {
+	const configuredProfiles = (profiles ?? []).map((profile) =>
+		MultiServiceResourceProfileV1Schema.parse(profile),
+	);
+	if (
+		configuredProfiles.some(
+			(profile) =>
+				profile.profileId === defaultMultiServiceResourceProfileV1.profileId,
+		) ||
+		new Set(configuredProfiles.map((profile) => profile.profileId)).size !==
+			configuredProfiles.length
+	)
+		throw new Error("PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID");
+	return configuredProfiles;
+}
+
 async function readTemplateReadiness(template: Template) {
 	if (!template.loadValidation)
 		return { state: "unverified" as const, revision: null };
@@ -185,7 +203,9 @@ export function createDeploymentConfigurationProjectionV2(input: {
 }) {
 	const templates = snapshotTemplates(input.templates);
 	const loadModelCatalog = input.modelCatalog.load;
-	const configuredProfiles = input.multiServiceResourceProfiles ?? [];
+	const configuredProfiles = parseConfiguredMultiServiceResourceProfiles(
+		input.multiServiceResourceProfiles,
+	);
 	const multiServiceResourceProfiles = [
 		defaultMultiServiceResourceProfileV1,
 		...configuredProfiles,
@@ -430,7 +450,7 @@ function serviceSelectsWorkload(
 	);
 }
 
-/** Resolve profile refs and sum one replica of every workload before side effects. */
+/** Resolve profile refs and sum all workload replicas before side effects. */
 export function calculateMultiServiceResourceCapacityV1(input: {
 	readonly manifest: ReturnType<
 		typeof MultiServiceManifestDocumentV1Schema.parse
@@ -477,11 +497,16 @@ export function calculateMultiServiceResourceCapacityV1(input: {
 				reason: "unknown_profile" as const,
 				profileRef,
 			};
+		const replicas =
+			resource.kind === "Job" ? 1 : (resource.spec.replicas ?? 1);
 		total = {
 			cpuMillicores:
-				total.cpuMillicores + profile.estimatedResources.cpuMillicores,
-			memoryMiB: total.memoryMiB + profile.estimatedResources.memoryMiB,
-			storageGiB: total.storageGiB + profile.estimatedResources.storageGiB,
+				total.cpuMillicores +
+				profile.estimatedResources.cpuMillicores * replicas,
+			memoryMiB:
+				total.memoryMiB + profile.estimatedResources.memoryMiB * replicas,
+			storageGiB:
+				total.storageGiB + profile.estimatedResources.storageGiB * replicas,
 		};
 	}
 	return {
@@ -539,13 +564,10 @@ export function createDeploymentAdmissionsV1(
 		channels = structuredClone(input.channelPolicy);
 		multiServiceResourceProfiles = [
 			defaultMultiServiceResourceProfileV1,
-			...(input.multiServiceResourceProfiles ?? []),
-		].map((profile) => MultiServiceResourceProfileV1Schema.parse(profile));
-		if (
-			new Set(multiServiceResourceProfiles.map((profile) => profile.profileId))
-				.size !== multiServiceResourceProfiles.length
-		)
-			throw new Error();
+			...parseConfiguredMultiServiceResourceProfiles(
+				input.multiServiceResourceProfiles,
+			),
+		];
 		multiServiceResourceCap = MultiServiceResourceCapV1Schema.parse(
 			input.multiServiceResourceCap ?? defaultMultiServiceResourceCapV1,
 		);

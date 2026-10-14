@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	calculateMultiServiceResourceCapacityV1,
 	createDeploymentAdmissionsV1,
+	createDeploymentConfigurationProjectionV2,
 	type DeploymentAdmissionInputV1,
 } from "./deployment-admissions.js";
 import { deploymentDiagnosticV1 } from "./deployment-diagnostic.js";
@@ -304,6 +305,19 @@ describe("production deployment admissions", () => {
 				cap: { cpuMillicores: 50, memoryMiB: 128, storageGiB: 1 },
 			}).ok,
 		).toBe(false);
+		const multiReplica = structuredClone(parsed);
+		const workload = multiReplica.resources.find(
+			(resource) => resource.kind === "Deployment",
+		);
+		if (workload?.kind !== "Deployment")
+			throw new Error("deployment fixture missing");
+		Object.assign(workload.spec, { replicas: 3 });
+		expect(
+			calculateMultiServiceResourceCapacityV1({
+				manifest: multiReplica,
+				profiles,
+			}).total,
+		).toEqual({ cpuMillicores: 300, memoryMiB: 384, storageGiB: 3 });
 	});
 	it("admits a two-service digest-only manifest before Worker side effects", async () => {
 		const f = fixture("self-managed");
@@ -606,6 +620,75 @@ describe("production deployment admissions", () => {
 		);
 		expect(deploymentDiagnosticV1(caught)).toBeUndefined();
 	});
+	it.each([
+		[
+			"reserved default",
+			[
+				{
+					profileId: "default",
+					displayName: "Override",
+					estimatedResources: {
+						cpuMillicores: 100,
+						memoryMiB: 128,
+						storageGiB: 1,
+					},
+					resources: {
+						requests: { cpu: "25m", memory: "32Mi" },
+						limits: { cpu: "100m", memory: "128Mi" },
+					},
+				},
+			],
+		],
+		[
+			"duplicate custom IDs",
+			[
+				{
+					profileId: "small",
+					displayName: "Small",
+					estimatedResources: {
+						cpuMillicores: 100,
+						memoryMiB: 128,
+						storageGiB: 1,
+					},
+					resources: {
+						requests: { cpu: "25m", memory: "32Mi" },
+						limits: { cpu: "100m", memory: "128Mi" },
+					},
+				},
+				{
+					profileId: "small",
+					displayName: "Small again",
+					estimatedResources: {
+						cpuMillicores: 100,
+						memoryMiB: 128,
+						storageGiB: 1,
+					},
+					resources: {
+						requests: { cpu: "25m", memory: "32Mi" },
+						limits: { cpu: "100m", memory: "128Mi" },
+					},
+				},
+			],
+		],
+	] as const)(
+		"rejects %s in both admission and browser projection",
+		(_label, profiles) => {
+			const { input } = fixture();
+			expect(() =>
+				createDeploymentAdmissionsV1({
+					...input,
+					multiServiceResourceProfiles: profiles,
+				}),
+			).toThrow("PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID");
+			expect(() =>
+				createDeploymentConfigurationProjectionV2({
+					templates: input.templates,
+					modelCatalog: input.modelCatalog,
+					multiServiceResourceProfiles: profiles,
+				}),
+			).toThrow("PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID");
+		},
+	);
 	it("binds actual OCI content and policy evidence to the trusted actor and template", async () => {
 		const { input, authorize, imageDigest, fetch, templateRevision } =
 			fixture();

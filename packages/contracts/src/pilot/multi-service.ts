@@ -10,15 +10,16 @@ const kubernetesName = z
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 /** Platform-owned profile selected by a Service annotation. */
 export const MultiServiceResourceProfileRefV1Schema = OpaqueIdV1Schema;
-const quantity = z.string().regex(/^[1-9][0-9]*(?:m|Ki|Mi|Gi|Ti)?$/);
+const cpuQuantity = z.string().regex(/^[1-9][0-9]*m?$/);
+const memoryQuantity = z.string().regex(/^[1-9][0-9]*(?:Ki|Mi|Gi|Ti)$/);
 const estimatedResources = z.strictObject({
 	cpuMillicores: z.number().int().positive(),
 	memoryMiB: z.number().int().positive(),
 	storageGiB: z.number().int().positive(),
 });
 const resourceQuantities = z.strictObject({
-	requests: z.strictObject({ cpu: quantity, memory: quantity }),
-	limits: z.strictObject({ cpu: quantity, memory: quantity }),
+	requests: z.strictObject({ cpu: cpuQuantity, memory: memoryQuantity }),
+	limits: z.strictObject({ cpu: cpuQuantity, memory: memoryQuantity }),
 });
 
 /** Deployment-owned resource settings for one multi-service workload. */
