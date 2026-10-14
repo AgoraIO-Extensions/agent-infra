@@ -20,17 +20,16 @@ import {
 	isTaskApiChannelV1,
 	parseTaskAuthorizationBoundaryV1,
 } from "./task-authorization.js";
+import { isTraceParentV1 } from "./trace-context.js";
 
 export function parseCreateCommand(
 	input: unknown,
 ): CreateConversationCommandV1 {
-	const values = snapshotObject(input, [
-		"schemaVersion",
-		"agentId",
-		"idempotencyKey",
-		"requestId",
-		"traceId",
-	]);
+	const values = snapshotObject(
+		input,
+		["schemaVersion", "agentId", "idempotencyKey", "requestId", "traceId"],
+		["traceParent"],
+	);
 	if (
 		values.schemaVersion !== 1 ||
 		!isText(values.agentId) ||
@@ -47,6 +46,9 @@ export function parseCreateCommand(
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,
+		...(isTraceParentV1(values.traceParent)
+			? { traceParent: values.traceParent }
+			: {}),
 	};
 }
 
@@ -64,7 +66,7 @@ export function parseMessageCommand(
 			"requestId",
 			"traceId",
 		],
-		["attachments"],
+		["attachments", "traceParent"],
 	);
 	if (
 		values.schemaVersion !== 1 ||
@@ -103,21 +105,28 @@ export function parseMessageCommand(
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,
+		...(isTraceParentV1(values.traceParent)
+			? { traceParent: values.traceParent }
+			: {}),
 	};
 }
 
 export function parseRegenerateCommand(
 	input: unknown,
 ): ConversationRegenerateCommandV1 {
-	const values = snapshotObject(input, [
-		"schemaVersion",
-		"command",
-		"conversationId",
-		"sourceMessageId",
-		"idempotencyKey",
-		"requestId",
-		"traceId",
-	]);
+	const values = snapshotObject(
+		input,
+		[
+			"schemaVersion",
+			"command",
+			"conversationId",
+			"sourceMessageId",
+			"idempotencyKey",
+			"requestId",
+			"traceId",
+		],
+		["traceParent"],
+	);
 	if (
 		values.schemaVersion !== 1 ||
 		values.command !== "regenerate" ||
@@ -138,19 +147,26 @@ export function parseRegenerateCommand(
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,
+		...(isTraceParentV1(values.traceParent)
+			? { traceParent: values.traceParent }
+			: {}),
 	};
 }
 
 export function parseStopCommand(input: unknown): ConversationStopCommandV1 {
-	const values = snapshotObject(input, [
-		"schemaVersion",
-		"command",
-		"conversationId",
-		"targetExecutionId",
-		"idempotencyKey",
-		"requestId",
-		"traceId",
-	]);
+	const values = snapshotObject(
+		input,
+		[
+			"schemaVersion",
+			"command",
+			"conversationId",
+			"targetExecutionId",
+			"idempotencyKey",
+			"requestId",
+			"traceId",
+		],
+		["traceParent"],
+	);
 	if (
 		values.schemaVersion !== 1 ||
 		values.command !== "stop" ||
@@ -171,22 +187,29 @@ export function parseStopCommand(input: unknown): ConversationStopCommandV1 {
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,
+		...(isTraceParentV1(values.traceParent)
+			? { traceParent: values.traceParent }
+			: {}),
 	};
 }
 
 export function parseModelSelectionCommand(
 	input: unknown,
 ): ConversationModelSelectionCommandV1 {
-	const values = snapshotObject(input, [
-		"schemaVersion",
-		"command",
-		"conversationId",
-		"modelOptionId",
-		"reasoningLevel",
-		"idempotencyKey",
-		"requestId",
-		"traceId",
-	]);
+	const values = snapshotObject(
+		input,
+		[
+			"schemaVersion",
+			"command",
+			"conversationId",
+			"modelOptionId",
+			"reasoningLevel",
+			"idempotencyKey",
+			"requestId",
+			"traceId",
+		],
+		["traceParent"],
+	);
 	if (
 		values.schemaVersion !== 1 ||
 		values.command !== "model.select" ||
@@ -209,6 +232,9 @@ export function parseModelSelectionCommand(
 		idempotencyKey: values.idempotencyKey,
 		requestId: values.requestId,
 		traceId: values.traceId,
+		...(isTraceParentV1(values.traceParent)
+			? { traceParent: values.traceParent }
+			: {}),
 	};
 }
 

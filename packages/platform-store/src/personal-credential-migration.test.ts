@@ -152,6 +152,7 @@ beforeAll(async () => {
 		{ idx: 54, tag: "0054_skill_agent_binding_applied_receipt" },
 		{ idx: 55, tag: "0055_platform_execution_failure_events" },
 		{ idx: 56, tag: "0056_wecom_connection_authorization" },
+		{ idx: 57, tag: "0057_trace_context" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
@@ -400,6 +401,7 @@ describe("personal credential disable authority append", () => {
 							delete copy.creator_principal_type;
 							delete copy.creator_principal_id;
 						}
+						if (table === "outbox_items") delete copy.trace_parent;
 						delete copy.principal_type;
 						if (table === "conversation_executions") {
 							if ("sandbox_id" in copy) expect(copy.sandbox_id).toBeNull();

@@ -52,6 +52,7 @@ export interface OutboxRow {
 	delivery_fence: string | number;
 	trace_id: string;
 	request_id: string | null;
+	trace_parent: string | null;
 	decision_at: Date;
 }
 

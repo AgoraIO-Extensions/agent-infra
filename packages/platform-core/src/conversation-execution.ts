@@ -368,6 +368,9 @@ export function createConversationExecutionUseCaseV1(
 										reasoningLevel: state.activeExecution.reasoningLevel,
 										traceId: command.traceId,
 										requestId: command.requestId,
+										...(command.traceParent === undefined
+											? {}
+											: { traceParent: command.traceParent }),
 										occurredAt,
 									},
 									auditEvent: {
@@ -465,6 +468,9 @@ export function createConversationExecutionUseCaseV1(
 									reasoningLevel: modelSelection.reasoningLevel,
 									traceId: command.traceId,
 									requestId: command.requestId,
+									...(command.traceParent === undefined
+										? {}
+										: { traceParent: command.traceParent }),
 									occurredAt,
 								},
 								auditEvent: {
@@ -703,6 +709,9 @@ export function createConversationExecutionUseCaseV1(
 									reasoningLevel: modelSelection.reasoningLevel,
 									traceId: command.traceId,
 									requestId: command.requestId,
+									...(command.traceParent === undefined
+										? {}
+										: { traceParent: command.traceParent }),
 									occurredAt,
 								},
 								auditEvent: {
@@ -824,6 +833,9 @@ export function createConversationExecutionUseCaseV1(
 									stopRequestId,
 									traceId: command.traceId,
 									requestId: command.requestId,
+									...(command.traceParent === undefined
+										? {}
+										: { traceParent: command.traceParent }),
 									occurredAt,
 								},
 								auditEvent: {

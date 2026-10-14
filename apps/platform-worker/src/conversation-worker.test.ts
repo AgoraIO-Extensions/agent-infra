@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
+import type { ObservabilitySpan } from "@agent-infra/observability";
 import type { ConnectionInstallationCommandDrainStoreV1 } from "@agent-infra/platform-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -283,6 +284,39 @@ describe("Conversation Worker discovery and shutdown", () => {
 		);
 		await worker.stop();
 		expect(mocks.wakeClose).toHaveBeenCalledTimes(1);
+	});
+	it("links a durable W3C context around the Worker dispatch", async () => {
+		const traceParent =
+			"00-1234567890abcdef1234567890abcdef-1234567890abcdef-01";
+		const span: ObservabilitySpan = {
+			traceParent,
+			run<T>(work: () => T): T {
+				return work();
+			},
+			end: vi.fn(),
+		};
+		const startSpan = vi.fn(() => span);
+		mocks.find.mockResolvedValue([
+			{
+				itemId: "turn-linked",
+				operation: "conversation.turn.submit.v1",
+				traceParent,
+			},
+		]);
+		mocks.dispatch.mockResolvedValue(undefined);
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			observability: { record: vi.fn(), startSpan },
+		});
+		await worker.tick();
+		await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalled());
+		expect(startSpan).toHaveBeenCalledWith(
+			"platform.worker.dispatch",
+			expect.objectContaining({ link: traceParent }),
+		);
+		expect(span.run).toHaveBeenCalledTimes(1);
+		expect(span.end).toHaveBeenCalledTimes(1);
+		await worker.stop();
 	});
 
 	it("rescans once when a wakeup arrives during a scan (#1561)", async () => {

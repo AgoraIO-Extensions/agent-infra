@@ -164,6 +164,9 @@ export function registerTaskRoutes(
 						metadata.traceId,
 					),
 					...metadata,
+					...(metadata.traceParent === undefined
+						? {}
+						: { traceParent: metadata.traceParent }),
 				});
 				if (decision.outcome === "capacity_full")
 					throw new HttpProtocolError("BUSY", metadata.traceId);
@@ -294,6 +297,9 @@ export function registerTaskRoutes(
 				targetExecutionId: executionId,
 				idempotencyKey: parseIdempotencyKey(context.req.raw, metadata.traceId),
 				...metadata,
+				...(metadata.traceParent === undefined
+					? {}
+					: { traceParent: metadata.traceParent }),
 			});
 			if (decision.outcome === "denied")
 				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);

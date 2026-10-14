@@ -595,7 +595,7 @@ export class PostgresConversationExecutionTransactionV1
 				transaction,
 				transaction`
 				insert into platform.outbox_items
-					(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+					(id, scope_type, scope_id, operation, payload, trace_id, request_id, trace_parent,
 					 available_at, created_at, updated_at)
 				values
 					(${outboxId(
@@ -615,7 +615,7 @@ export class PostgresConversationExecutionTransactionV1
 							modelOptionId: plan.outboxIntent.modelOptionId,
 							reasoningLevel: plan.outboxIntent.reasoningLevel,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
-					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt},
+					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.traceParent ?? null}, ${plan.outboxIntent.occurredAt},
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`,
 			);
@@ -846,7 +846,7 @@ export class PostgresConversationExecutionTransactionV1
 			});
 			await transaction`
 				insert into platform.outbox_items
-					(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+					(id, scope_type, scope_id, operation, payload, trace_id, request_id, trace_parent,
 					 available_at, created_at, updated_at)
 				values
 					(${`conversation:regenerate:${plan.execution.executionId}`},
@@ -863,7 +863,7 @@ export class PostgresConversationExecutionTransactionV1
 							modelOptionId: plan.outboxIntent.modelOptionId,
 							reasoningLevel: plan.outboxIntent.reasoningLevel,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
-					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt},
+					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.traceParent ?? null}, ${plan.outboxIntent.occurredAt},
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`;
 			await transaction`
@@ -1074,7 +1074,7 @@ export class PostgresConversationExecutionTransactionV1
 			`;
 			await transaction`
 				insert into platform.outbox_items
-					(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+					(id, scope_type, scope_id, operation, payload, trace_id, request_id, trace_parent,
 					 available_at, created_at, updated_at)
 				values
 					(${`conversation:stop:${plan.stopRequestId}`}, 'conversation',
@@ -1086,7 +1086,7 @@ export class PostgresConversationExecutionTransactionV1
 							sessionGeneration: plan.outboxIntent.sessionGeneration,
 							stopRequestId: plan.outboxIntent.stopRequestId,
 						} as JsonValue)}, ${plan.outboxIntent.traceId},
-					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.occurredAt},
+					 ${plan.outboxIntent.requestId}, ${plan.outboxIntent.traceParent ?? null}, ${plan.outboxIntent.occurredAt},
 					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`;
 			await transaction`

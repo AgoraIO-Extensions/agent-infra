@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { startObservability } from "@agent-infra/observability";
+import type {
+	ObservabilitySpan,
+	startObservability,
+} from "@agent-infra/observability";
 import { createObservedConversationEvents } from "@agent-infra/observability/worker";
 import {
 	createConversationDispatchUseCaseV1,
@@ -56,7 +59,10 @@ export interface PlatformConversationWorkerOptionsV2
 		"record"
 	> &
 		Partial<
-			Pick<ReturnType<typeof startObservability>, "observeResource" | "status">
+			Pick<
+				ReturnType<typeof startObservability>,
+				"observeResource" | "status" | "startSpan"
+			>
 		>;
 }
 
@@ -373,9 +379,10 @@ export function createPlatformConversationWorkerV2(
 					resourceTimer = setTimeout(sampleResources, 1000);
 			});
 	}
-	async function dispatchItem(item: {
+	async function dispatchItemCore(item: {
 		readonly itemId: string;
 		readonly operation: string;
+		readonly traceParent?: string;
 	}) {
 		if (item.operation !== "conversation.sandbox.reconcile.v1") {
 			const began = performance.now();
@@ -517,6 +524,28 @@ export function createPlatformConversationWorkerV2(
 		)
 			return;
 		await store.recordSandboxObservation({ claim, observation });
+	}
+	async function dispatchItem(item: {
+		readonly itemId: string;
+		readonly operation: string;
+		readonly traceParent?: string;
+	}) {
+		let span: ObservabilitySpan | undefined;
+		try {
+			span = options.observability?.startSpan?.("platform.worker.dispatch", {
+				...(item.traceParent === undefined ? {} : { link: item.traceParent }),
+				attributes: { operation: item.operation },
+			});
+		} catch {
+			span = undefined;
+		}
+		try {
+			return span
+				? await span.run(() => dispatchItemCore(item))
+				: await dispatchItemCore(item);
+		} finally {
+			span?.end();
+		}
 	}
 	async function drainInstallationCommands() {
 		const commandStore = options.connectionInstallation?.commandStore;

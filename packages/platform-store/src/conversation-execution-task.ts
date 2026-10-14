@@ -437,12 +437,13 @@ export async function submitConversationTask(
 	`;
 	await transaction`
 		insert into platform.outbox_items
-			(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+			(id, scope_type, scope_id, operation, payload, trace_id, request_id, trace_parent,
 			 available_at, created_at, updated_at)
 		values (${plan.outbox.id}, 'conversation',
 			${plan.conversationId}, ${plan.outbox.operation},
 			${transaction.json(plan.outbox.payload)},
 			${request.command.traceId}, ${request.command.requestId},
+			${request.command.traceParent ?? null},
 			'infinity'::timestamptz, ${plan.acceptedAt}, ${plan.acceptedAt})
 	`;
 	await transaction`

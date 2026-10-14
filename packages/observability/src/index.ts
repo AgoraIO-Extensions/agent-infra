@@ -1,4 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Writable } from "node:stream";
+import { ROOT_CONTEXT, type Span } from "@opentelemetry/api";
 import { ExportResultCode } from "@opentelemetry/core";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
@@ -17,6 +19,32 @@ import {
 	BatchSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import pino from "pino";
+import {
+	createTraceParent,
+	formatTraceParent,
+	parseTraceParent,
+} from "./trace.js";
+
+export {
+	createTraceParent,
+	formatTraceParent,
+	isTraceParent,
+	parseTraceParent,
+	traceParentMaxLength,
+} from "./trace.js";
+
+export interface ObservabilitySpan {
+	readonly traceParent: string;
+	end(): void;
+	run<T>(work: () => T): T;
+}
+
+export interface ObservabilitySpanOptions {
+	readonly link?: string;
+	readonly attributes?: Record<string, string | number | boolean>;
+}
+
+const traceParentStorage = new AsyncLocalStorage<string>();
 
 export const operationalStages = [
 	"http",
@@ -86,6 +114,8 @@ export interface OperationalEvent {
 	readonly executionId?: string;
 	readonly operationRef?: string;
 	readonly attemptRef?: string;
+	/** A W3C parent retained only for a durable asynchronous operation. */
+	readonly traceParent?: string;
 	readonly browserCategory?: OperationalBrowserCategory;
 }
 
@@ -357,6 +387,40 @@ export function startObservability(options: ObservabilityOptions) {
 	}
 	const meter = providers?.meter.getMeter("agent-infra-observability");
 	const tracer = providers?.tracer.getTracer("agent-infra-observability");
+	const startSpan = (
+		name: string,
+		spanOptions: ObservabilitySpanOptions = {},
+	): ObservabilitySpan => {
+		const link = parseTraceParent(spanOptions.link);
+		const span: Span | undefined = tracer?.startSpan(
+			name,
+			{
+				...(spanOptions.attributes === undefined
+					? {}
+					: { attributes: spanOptions.attributes }),
+				...(link === undefined ? {} : { links: [{ context: link }] }),
+			},
+			ROOT_CONTEXT,
+		);
+		const traceParent =
+			span === undefined
+				? createTraceParent()
+				: formatTraceParent(span.spanContext());
+		const scopeParent = traceParent;
+		return {
+			traceParent,
+			end() {
+				try {
+					span?.end();
+				} catch {
+					captureFailures++;
+				}
+			},
+			run<T>(work: () => T): T {
+				return traceParentStorage.run(scopeParent, work);
+			},
+		};
+	};
 	const operations = meter?.createCounter("agent_platform_operations_total", {
 		description: "Observed platform stage outcomes",
 	});
@@ -394,6 +458,7 @@ export function startObservability(options: ObservabilityOptions) {
 		});
 	let closing: Promise<void> | undefined;
 	return {
+		startSpan,
 		recordModelUsage(usage: ModelTokenUsage) {
 			if (state !== "active") return;
 			try {
@@ -452,8 +517,10 @@ export function startObservability(options: ObservabilityOptions) {
 					executionId,
 					operationRef,
 					attemptRef,
+					traceParent,
 					browserCategory,
 				} = event;
+				const eventTraceParent = traceParent ?? traceParentStorage.getStore();
 				if (
 					!stages.has(stage) ||
 					!outcomes.has(outcome) ||
@@ -489,11 +556,20 @@ export function startObservability(options: ObservabilityOptions) {
 					...(safeId(executionId) ? { executionId } : {}),
 					...(safeOperationRef(operationRef) ? { operationRef } : {}),
 					...(safeOperationRef(attemptRef) ? { attemptRef } : {}),
+					...(parseTraceParent(eventTraceParent)
+						? { traceParent: eventTraceParent as string }
+						: {}),
 					...(browserCategory === undefined ? {} : { browserCategory }),
 				};
 				operations?.add(1, labels);
 				if (durationMs !== undefined) duration?.record(durationMs, labels);
-				tracer?.startSpan(`platform.${stage}`, { attributes: details }).end();
+				const stageSpan = startSpan(`platform.${stage}`, {
+					attributes: details,
+					...(parseTraceParent(eventTraceParent)
+						? { link: eventTraceParent as string }
+						: {}),
+				});
+				stageSpan.end();
 				// Stage duration is bounded metadata; logging it lets latency be
 				// compared across deployments without an exporter (#1525).
 				// pino 的 base 已写入 service；日志记录不再重复写，否则每行 JSON 都有

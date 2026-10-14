@@ -160,6 +160,7 @@ export interface CreateConversationCommandV1 {
 	readonly idempotencyKey: string;
 	readonly requestId: string;
 	readonly traceId: string;
+	readonly traceParent?: string;
 }
 
 export interface ConversationMessageCommandV1 {
@@ -171,6 +172,7 @@ export interface ConversationMessageCommandV1 {
 	readonly idempotencyKey: string;
 	readonly requestId: string;
 	readonly traceId: string;
+	readonly traceParent?: string;
 }
 
 export interface ConversationRegenerateCommandV1 {
@@ -181,6 +183,7 @@ export interface ConversationRegenerateCommandV1 {
 	readonly idempotencyKey: string;
 	readonly requestId: string;
 	readonly traceId: string;
+	readonly traceParent?: string;
 }
 
 export interface ConversationStopCommandV1 {
@@ -191,6 +194,7 @@ export interface ConversationStopCommandV1 {
 	readonly idempotencyKey: string;
 	readonly requestId: string;
 	readonly traceId: string;
+	readonly traceParent?: string;
 }
 
 export interface ConversationModelSelectionCommandV1 {
@@ -202,6 +206,7 @@ export interface ConversationModelSelectionCommandV1 {
 	readonly idempotencyKey: string;
 	readonly requestId: string;
 	readonly traceId: string;
+	readonly traceParent?: string;
 }
 
 export interface ConversationStateQueryV1 {
@@ -480,6 +485,7 @@ export interface ConversationMessageWritePlanV1 {
 		readonly reasoningLevel: string | null;
 		readonly traceId: string;
 		readonly requestId: string;
+		readonly traceParent?: string;
 		readonly occurredAt: Date;
 	};
 	readonly auditEvent: {
@@ -538,6 +544,7 @@ export interface ConversationRegenerationWritePlanV1 {
 		readonly reasoningLevel: string | null;
 		readonly traceId: string;
 		readonly requestId: string;
+		readonly traceParent?: string;
 		readonly occurredAt: Date;
 	};
 	readonly auditEvent: {
@@ -579,6 +586,7 @@ export interface ConversationStopWritePlanV1 {
 		readonly stopRequestId: string;
 		readonly traceId: string;
 		readonly requestId: string;
+		readonly traceParent?: string;
 		readonly occurredAt: Date;
 	};
 	readonly auditEvent: {

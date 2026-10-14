@@ -93,7 +93,7 @@ export async function lockOutbox(
 			available_at, available_at <= clock_timestamp() as available_now,
 			available_at = 'infinity'::timestamptz as waiting_available,
 			lease_owner, lease_expires_at, delivery_fence::text,
-			trace_id, request_id, clock_timestamp() as decision_at
+			trace_id, request_id, trace_parent, clock_timestamp() as decision_at
 		from platform.outbox_items where id = ${itemId} for update
 	`;
 	const outbox = rows[0];

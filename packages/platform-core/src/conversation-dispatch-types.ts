@@ -112,6 +112,7 @@ export interface ConversationDispatchClaimV1 {
 	readonly operation: ConversationDispatchOperationV1;
 	readonly requestId: string;
 	readonly traceId: string;
+	readonly traceParent?: string;
 	readonly agentId: string;
 	readonly actorId: string;
 	readonly channelId: string;
