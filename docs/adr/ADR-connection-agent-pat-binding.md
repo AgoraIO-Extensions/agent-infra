@@ -18,3 +18,8 @@ Agent Consumer 可在已认证服务请求中携带当前登录名提示；提�
 选择 PAT 是为了支持不能使用完整 OAuth client profile 的 Agent；代价是 Bearer PAT 本身不能证明
 实际调用进程，隔离依赖独立签发、Consumer 服务端选择、最小授权和快速撤销。任意 callback、浏览器
 或聊天中转明文，以及通过扩大部署 allowlist 共享 PAT，均被拒绝。
+
+浏览器确认使用绑定会话、Principal、binding state 和服务 origin 的短期认证加密 proof，
+仅放在 POST 表单隐藏字段。Origin 缺失/null 的内置浏览器可以凭完整 proof 和服务器当前身份完成
+确认，明确跨域 Origin 仍拒绝；不采用 GET 授权或 UA 放行。复用现有身份加密封装的独立用途及
+binding 的原子单次状态，不新增存储或秘密配置。旧打开页面需要刷新，下游创建/领取与已签发 Token 不变。

@@ -65,6 +65,7 @@ Idempotency-Key: &lt;本次创建操作的 UUID&gt;
 }</code></pre>
         <p>成功返回 HTTP 201，包含 <code>bindingId</code>、<code>authorizationUrl</code> 和 <code>expiresAt</code>。后端保存 <code>bindingId → 当前产品用户/会话/实例</code> 的关联，再让用户在新 tab 打开返回的 <code>authorizationUrl</code>。不要自行拼授权 URL，也不要把浏览器提交的用户 ID 当作身份权威。</p>
         <p><strong>用户确认：</strong>用户在 Connection 登录后会看到“授权 My Agent”页面，展示当前 Connection 账号、客户端名称、令牌名称、链接有效期及将交付客户端后端的账号信息。点击“确认并返回 My Agent”后，Connection 创建该用户、该 Consumer 的独立实例与 PAT，并以 HTTP 303 回到已注册地址：</p>
+        <p>授权确认表单自动携带绑定当前登录会话、账号和本次请求的校验码，最多五分钟有效且不超过绑定链接期限。企业微信等内置浏览器缺失或发送 null 来源时，仍需校验码与登录验证全部通过；明确跨域来源拒绝。无需客户端修改创建/领取接口，不要代提交确认表单或把校验码、PAT 放到 URL。旧页面、校验码过期或账号切换时，重新打开授权页；排查只需提供错误编号。企业微信实际兼容性需用真实客户端验收。</p>
         <pre><code>https://agent.example/connection/callback?binding_id=&lt;bindingId&gt;</code></pre>
         <p><strong>服务端领取：</strong>回调必须验证 <code>binding_id</code> 属于原来发起绑定的用户、会话和实例；不要接受任意 ID 后给当前用户绑定。后端使用同一 Consumer 的服务凭据领取：</p>
         <pre><code>POST __CONNECTION_ORIGIN__/api/v1/connection/pat-bindings/&lt;bindingId&gt;/claim

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
 	type ConnectionPatBindingRepository,
 	OAuthProtocolError,
+	PatBindingConfirmationError,
 } from "@agent-infra/connection-core";
 import postgres from "postgres";
 
@@ -199,6 +200,8 @@ export class PostgresConnectionPatBindingRepository
 				binding.callback_url
 			FROM connection_pat_binding_sessions binding
 			JOIN connection_consumers consumer ON consumer.id = binding.consumer_id
+			JOIN connection_pat_consumer_profiles profile ON profile.consumer_id = consumer.id
+				AND profile.status = 'ACTIVE'
 			WHERE binding.state_hash = ${stateHash}
 				AND binding.status = 'PENDING'
 				AND binding.expires_at > now()
@@ -223,6 +226,7 @@ export class PostgresConnectionPatBindingRepository
 
 	async confirmPersonalAccessTokenBinding(input: {
 		browserSessionHash: string;
+		confirmationExpiresAt?: Date;
 		expectedPrincipalId?: string;
 		protectedToken: string;
 		stateHash: string;
@@ -256,11 +260,14 @@ export class PostgresConnectionPatBindingRepository
 					binding.principal_hint_hash
 				FROM connection_pat_binding_sessions binding
 				JOIN connection_consumers consumer ON consumer.id = binding.consumer_id
+				JOIN connection_pat_consumer_profiles profile ON profile.consumer_id = consumer.id
+					AND profile.status = 'ACTIVE'
 				WHERE binding.state_hash = ${input.stateHash}
 					AND binding.status = 'PENDING'
 					AND binding.expires_at > now()
 					AND consumer.status = 'ACTIVE'
 				FOR UPDATE OF binding
+				FOR SHARE OF consumer, profile
 			`;
 			if (!binding) {
 				throw new OAuthProtocolError(
@@ -319,15 +326,16 @@ export class PostgresConnectionPatBindingRepository
 					id, token_hash, principal_id, consumer_id, instance_id, name,
 					recovery_generation, expires_at
 				)
-				VALUES (
+				SELECT
 					${input.tokenId}, ${input.tokenHash}, ${browserSession.principal_id},
 					${binding.consumer_id}, ${binding.instance_id}, ${binding.name},
 					${recovery.generation},
 					now() + (${input.ttlMs}::bigint * interval '1 millisecond')
-				)
+				WHERE (${input.confirmationExpiresAt ?? null}::timestamptz IS NULL
+					OR ${input.confirmationExpiresAt ?? null}::timestamptz > clock_timestamp())
 				RETURNING expires_at
 			`;
-			if (!token) throw new Error("Connection PAT was not persisted");
+			if (!token) throw new PatBindingConfirmationError("PROOF_EXPIRED");
 			await sql`
 				UPDATE connection_pat_binding_sessions SET
 					status = 'ISSUED',
@@ -457,6 +465,7 @@ export class PostgresConnectionPatBindingRepository
 				AND browser_session.expires_at > now()
 				AND browser_session.recovery_generation = recovery.generation
 			FOR UPDATE OF browser_session
+			FOR SHARE OF principal, identity
 		`;
 		if (!row) invalidToken();
 		await sql`

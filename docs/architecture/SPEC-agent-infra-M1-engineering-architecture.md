@@ -353,6 +353,9 @@ Connection 的受监督公司 OAuth 身份诊断独立于正式登录，复用�
   账号与 Connection 账号属于同一员工。单次 claim 向对应 Consumer 后端交付已确认 PAT 的
   稳定账号标识和当前 profile；客户端负责发起会话关联及业务用户之间的 Token 隔离，见
   [PAT Binding ADR](../adr/ADR-connection-agent-pat-binding.md)。
+  浏览器确认要求会话与 binding 绑定的短期认证 proof，明确跨域 Origin 拒绝；缺失/null Origin
+  不能替代 proof 或身份校验。proof 通过隐藏表单 POST，单次消费复用既有 binding 事务，
+  不新增部署秘密或表，不改变 Consumer 创建/claim 接口；详见同一 ADR。
 - Consumer 注册由 Connection 管理员在独立 Connection Web 完成，callback、服务凭据 hash、状态和
   轮换生命周期以 Connection DB 为准；不得为 RehoboamAI 或其他 Agent 增加专属环境变量。
 - LDAP egress 使用部署批准的固定 transport profile。当前 Agora 目录因不提供可用 TLS，批准仅在

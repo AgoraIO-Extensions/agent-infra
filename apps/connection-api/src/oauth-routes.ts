@@ -38,6 +38,7 @@ import {
 	ConnectionError,
 	type ConnectionOAuthService,
 	OAuthProtocolError,
+	PatBindingConfirmationError,
 	type ProviderOAuthCallbackStage,
 } from "@agent-infra/connection-core";
 import type {
@@ -244,6 +245,7 @@ ${
 }
 
 function patBindingPage(input: {
+	csrfToken: string;
 	account: { displayName: string; email?: string | null; principalId: string };
 	consumerName: string;
 	expiresAt: Date;
@@ -276,9 +278,11 @@ button:hover { background: #14532d; }
 <p>将为当前 Connection 账号签发独立访问令牌：<strong>${html(input.name)}</strong>。</p>
 <p>该令牌可以使用你已授权给 ${html(input.consumerName)} 的多个连接器；外部账号凭据不会交给客户端。</p>
 <p>本链接将在 ${html(input.expiresAt.toISOString())} 失效。</p>
+<p>本次确认最多五分钟有效；超时或登录账号变化时，请重新打开授权页。</p>
 <form method="post" action="/connection/pat-bindings/confirm">
 <input type="hidden" name="state" value="${html(input.state)}">
 <input type="hidden" name="expectedPrincipalId" value="${html(input.account.principalId)}">
+<input type="hidden" name="csrfToken" value="${html(input.csrfToken)}">
 <button type="submit">确认并返回 ${html(input.consumerName)}</button>
 </form>
 </main>
@@ -822,7 +826,7 @@ export function createConnectionOAuthApp(
 			if (!(error instanceof OAuthProtocolError)) throw error;
 			secureHtmlHeaders(context);
 			return context.html(
-				'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>链接无效</title><body><p>该授权链接已失效，请返回 RehoboamAI 重新发起。</p></body></html>',
+				'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>链接无效</title><body><p>该授权链接已失效，请返回客户端重新发起。</p></body></html>',
 				404,
 			);
 		}
@@ -835,9 +839,15 @@ export function createConnectionOAuthApp(
 		secureHtmlHeaders(context, {
 			formActionOrigins: [new URL(binding.callbackUrl).origin],
 		});
+		const confirmation =
+			await options.service.createPersonalAccessTokenBindingConfirmation({
+				sessionToken: session.sessionToken,
+				state,
+			});
 		return context.html(
 			patBindingPage({
-				account: session.account,
+				account: confirmation.account,
+				csrfToken: confirmation.csrfToken,
 				consumerName: binding.consumerName,
 				expiresAt: binding.expiresAt,
 				name: binding.name,
@@ -847,24 +857,84 @@ export function createConnectionOAuthApp(
 	});
 
 	app.post("/connection/pat-bindings/confirm", async (context) => {
-		requireSameOrigin(context.req.raw.headers, options.issuer);
-		const form = await context.req.formData();
-		const state = formValue(form, "state");
-		const session = await currentBrowserAccount(context);
-		if (!session) {
-			const login = new URL("/connection/login", options.issuer);
-			login.searchParams.set(
-				"returnTo",
-				`/connection/pat-bindings/${encodeURIComponent(state)}`,
+		const origin = context.req.header("origin");
+		const originKind =
+			origin === undefined
+				? "missing"
+				: origin === "null"
+					? "opaque"
+					: origin === new URL(options.issuer).origin
+						? "same-origin"
+						: "cross-origin";
+		const site = context.req.header("sec-fetch-site");
+		const fetchSite =
+			site === undefined
+				? "missing"
+				: ["same-origin", "same-site", "cross-site", "none"].includes(site)
+					? site
+					: "other";
+		const logFailure = (reason: string, status: number) => {
+			const traceId = randomUUID();
+			console.warn(
+				JSON.stringify({
+					event: "connection_pat_binding_confirmation_rejected",
+					route: "/connection/pat-bindings/confirm",
+					reason,
+					status,
+					originKind,
+					fetchSite,
+					traceId,
+				}),
 			);
-			return context.redirect(login.toString(), 302);
+			return traceId;
+		};
+		const fail = (reason: string, status: 400 | 403 | 404) => {
+			const traceId = logFailure(reason, status);
+			secureHtmlHeaders(context);
+			const message =
+				reason === "CROSS_ORIGIN"
+					? "授权确认必须在 Connection 页面完成，请返回客户端重新发起。"
+					: reason === "MISSING_PROOF"
+						? "确认页已更新，请重新打开授权页后再确认。"
+						: "授权确认已失效，或登录账号发生变化，请返回客户端重新打开授权页后再确认。";
+			return context.html(
+				`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>授权未完成</title><body><h1>授权未完成</h1><p>${message}</p><p>错误编号：${traceId}</p></body></html>`,
+				status,
+			);
+		};
+		if (originKind === "cross-origin") return fail("CROSS_ORIGIN", 403);
+		try {
+			const form = await context.req.formData();
+			const state = formValue(form, "state");
+			const session = await currentBrowserAccount(context);
+			if (!session) {
+				logFailure("SESSION_REQUIRED", 302);
+				const login = new URL("/connection/login", options.issuer);
+				login.searchParams.set(
+					"returnTo",
+					`/connection/pat-bindings/${encodeURIComponent(state)}`,
+				);
+				return context.redirect(login.toString(), 302);
+			}
+			const csrfToken = formValue(form, "csrfToken");
+			if (!csrfToken) return fail("MISSING_PROOF", 403);
+			const confirmed =
+				await options.service.confirmPersonalAccessTokenBindingWithCsrf({
+					csrfToken,
+					sessionToken: session.sessionToken,
+					state,
+				});
+			return context.redirect(confirmed.callbackUrl, 303);
+		} catch (error) {
+			if (!(error instanceof OAuthProtocolError)) throw error;
+			const reason =
+				error instanceof PatBindingConfirmationError
+					? error.reason
+					: error.error === "access_denied" || error.error === "invalid_token"
+						? "SESSION_OR_ACCOUNT_DENIED"
+						: "BINDING_UNAVAILABLE";
+			return fail(reason, error.status === 404 ? 404 : 403);
 		}
-		const confirmed = await options.service.confirmPersonalAccessTokenBinding({
-			expectedPrincipalId: formValue(form, "expectedPrincipalId") || undefined,
-			sessionToken: session.sessionToken,
-			state,
-		});
-		return context.redirect(confirmed.callbackUrl, 303);
 	});
 
 	app.post(

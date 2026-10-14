@@ -1416,6 +1416,13 @@ Consumer 创建 binding 时可提交由其服务身份认证的当前登录名�
 两种方式均在确认页展示当前账号、目标 Consumer 及后端将获得的账号信息，由用户显式确认。
 确认页记录其展示的账号标识，无提示绑定在确认事务中仅将该标识与认证会话比较；
 标识缺失或登录已切换则拒绝并要求重新打开确认页，不能据该字段选择 Principal。
+PAT Binding 的浏览器确认 POST 必须带确认页签发的认证加密 proof，复用现有身份加密封装并使用
+独立用途，绑定会话 hash、真实 Principal、state hash 和当前服务 origin；期限最多五分钟且不超过 binding 期限。
+proof 只进入 no-store 确认页的隐藏字段，不进入 URL、日志或审计。明确跨域 Origin 始终拒绝；
+Origin 缺失或为 null 时，完整 proof、当前登录及既有数据库准入校验仍必须通过，不按 UA 放行。
+确认从 proof 取得预期账号，仅与认证会话比较；PENDING→ISSUED 行锁事务同时消费确认机会，
+重复或并发提交不能创建第二枚 PAT。旧确认页缺少 proof 时要求刷新，不影响已签发 PAT 或创建/claim 接口。
+拒绝日志只记录固定原因分类、Origin/Fetch Metadata 枚举、固定路由和错误编号，不保存原始 Header 或身份。
 单次 claim 只向对应获准 Consumer 返回 PAT 及其关联 Principal 的稳定标识、当前邮箱和显示名，
 不提供邮箱反查，不放入回调 URL、审计或日志；领取时重新检查主体、实例、客户端和 Token 有效性。
 Consumer 后端负责将 bindingId 关联原发起用户/会话并隔离各业务用户的 PAT。
