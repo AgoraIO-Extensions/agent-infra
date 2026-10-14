@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
 			taskWaiting: number;
 			outboxPending: number;
 			queryDurationMs?: number;
+			postgresPoolActive?: number;
+			postgresPoolIdle?: number;
+			postgresPoolWaiting?: number;
 		}>
 	>(),
 	find: vi.fn(),
@@ -241,6 +244,31 @@ describe("Conversation Worker automatic queue sampling", () => {
 		);
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(mocks.read.mock.calls.length - before).toBe(1);
+	});
+
+	it("exports optional local PostgreSQL pool gauges when available", async () => {
+		mocks.read.mockResolvedValue({
+			taskWaiting: 2,
+			outboxPending: 5,
+			postgresPoolActive: 3,
+			postgresPoolIdle: 4,
+			postgresPoolWaiting: 1,
+		});
+		const observation = telemetry();
+		create(observation).start();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(observation.observeResource).toHaveBeenCalledWith({
+			kind: "postgres_pool_active",
+			value: 3,
+		});
+		expect(observation.observeResource).toHaveBeenCalledWith({
+			kind: "postgres_pool_idle",
+			value: 4,
+		});
+		expect(observation.observeResource).toHaveBeenCalledWith({
+			kind: "postgres_pool_waiting",
+			value: 1,
+		});
 	});
 
 	it("keeps one unresolved read despite repeated starts and elapsed intervals", async () => {

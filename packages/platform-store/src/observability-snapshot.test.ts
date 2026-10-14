@@ -2,7 +2,10 @@ import type postgres from "postgres";
 import { expect, it, vi } from "vitest";
 import { readPlatformQueueResourceSnapshot } from "./index.js";
 
-function client(query: Promise<unknown[]>) {
+function client(
+	query: Promise<unknown[]>,
+	poolQuery: Promise<unknown[]> = Promise.resolve([]),
+) {
 	const cancellable = <T>(value: Promise<T>) =>
 		Object.assign(value, { cancel: vi.fn() });
 	const transaction = vi.fn((statement: TemplateStringsArray) =>
@@ -10,8 +13,14 @@ function client(query: Promise<unknown[]>) {
 			? cancellable(Promise.resolve([]))
 			: cancellable(query),
 	);
+	const mockSql = vi.fn((strings: TemplateStringsArray) =>
+		cancellable(
+			strings.join("").includes("pg_stat_activity") ? poolQuery : query,
+		),
+	);
 	const begin = vi.fn(async (_mode, read) => read(transaction));
-	const sql = Object.assign(vi.fn(), { begin }) as unknown as postgres.Sql;
+	const sql = Object.assign(mockSql, { begin }) as unknown as postgres.Sql &
+		typeof mockSql;
 	return { sql, transaction, begin };
 }
 
@@ -43,6 +52,60 @@ it("returns one bounded durable snapshot without inspecting business payloads", 
 	// The query only compares payload bindings and never selects business text.
 	expect(query).not.toContain("m.text");
 	expect(query).not.toContain("payload,");
+	expect(snapshot).not.toHaveProperty("postgresPoolActive");
+});
+
+it("returns optional local PostgreSQL pool gauges without exposing activity text", async () => {
+	const { sql } = client(
+		Promise.resolve([{ task_waiting: "2", outbox_pending: "3" }]),
+		Promise.resolve([{ pool_active: "1", pool_idle: "4", pool_waiting: "2" }]),
+	);
+	const snapshot = await readPlatformQueueResourceSnapshot(
+		sql,
+		new AbortController().signal,
+	);
+	expect(snapshot).toMatchObject({
+		postgresPoolActive: 1,
+		postgresPoolIdle: 4,
+		postgresPoolWaiting: 2,
+	});
+	const poolStatement = sql.mock.calls
+		.find((call) => call[0]?.join("").includes("pg_stat_activity"))?.[0]
+		?.join("");
+	expect(poolStatement).toContain("backend_type = 'client backend'");
+	expect(poolStatement).not.toContain("query,");
+});
+
+it("keeps queue counts when local PostgreSQL pool visibility is unavailable", async () => {
+	const { sql } = client(
+		Promise.resolve([{ task_waiting: "2", outbox_pending: "3" }]),
+		Promise.reject(new Error("permission denied for pg_stat_activity")),
+	);
+	await expect(
+		readPlatformQueueResourceSnapshot(sql, new AbortController().signal),
+	).resolves.toMatchObject({ taskWaiting: 2, outboxPending: 3 });
+});
+
+it("bounds an optional pool visibility query by the shared snapshot deadline", async () => {
+	vi.useFakeTimers();
+	try {
+		const poolQuery = new Promise<unknown[]>(() => {});
+		const { sql } = client(
+			Promise.resolve([{ task_waiting: "2", outbox_pending: "3" }]),
+			poolQuery,
+		);
+		const pending = readPlatformQueueResourceSnapshot(
+			sql,
+			new AbortController().signal,
+		);
+		const rejection = expect(pending).rejects.toThrow(
+			"Platform resource snapshot is unavailable",
+		);
+		await vi.advanceTimersByTimeAsync(2000);
+		await rejection;
+	} finally {
+		vi.useRealTimers();
+	}
 });
 
 it.each([
