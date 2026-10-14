@@ -20,9 +20,9 @@ describe("protected Connection MCP compatibility facts", () => {
 			upstreamCommit: "ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc",
 		});
 		expect(OPENCODE_NATIVE_PROVENANCE).toMatchObject({
-			nativeVersion: "1.18.30",
+			nativeVersion: "1.19.0",
 			sdkVersion: "1.4.0",
-			upstreamCommit: "3104c1428ec91f809e5ab86631300de41eb6952e",
+			upstreamCommit: "733b2c627e5aec39cb33cc22373bdce33053ef2c",
 		});
 
 		const readme = await readFile(
@@ -31,6 +31,6 @@ describe("protected Connection MCP compatibility facts", () => {
 		);
 		expect(readme).toContain(PI_NATIVE_PROVENANCE.upstreamCommit);
 		expect(readme).toContain(OPENCODE_NATIVE_PROVENANCE.upstreamCommit);
-		expect(supportsProtectedOpenCodeMcpTransport()).toBe(false);
+		expect(supportsProtectedOpenCodeMcpTransport()).toBe(true);
 	});
 });

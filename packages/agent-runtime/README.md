@@ -1,19 +1,19 @@
 # Agent Runtime 上游版本与兼容性
 
-本模块的 Driver 通过统一 Runtime 接口接入固定上游。下表只记录已实际验证的 Pi RPC 版本；具体产品验收仍以当前部署的镜像、授权和端到端运行结果为准。
+本模块的 Driver 通过统一 Runtime 接口接入固定上游。下表记录固定上游的产物、协议接缝和受控验证；具体产品验收仍以当前部署的镜像、授权和端到端运行结果为准。
 
 ## Protected Connection MCP compatibility
 
-受保护的 Connection MCP 只在已有安全的 Runtime 内部 transport 时开放。当前固定的 Pi 和 OpenCode/Generic ACP 上游都不满足这个条件，因此它们的 `connection` capability 保持 `false`，Host 也不会把 `standardConnectionClient` 或任何 token-bearing 配置传给原生进程。
+受保护的 Connection MCP 只在已有安全的 Runtime 内部 transport 时开放。Pi 仍保持 `connection: false`；固定 OpenCode 1.19.0 的 ACP HTTP MCP 接缝已通过显式 `acp-loopback-v1` gate 开放。Host 只把短期 loopback bearer 传给原生进程，Connection token 仍留在 Host 的 `StandardMcpClient`。
 
 Claude 使用已审核的 SDK 内部 MCP bridge；Host 只把受保护的 client input 交给 Claude Driver，token 不进入 Claude 原生进程的环境、参数或配置。
 
 | Runtime | 固定上游 | 当前结论 |
 | --- | --- | --- |
 | Pi RPC | `@earendil-works/pi-coding-agent@0.86.0`，commit `ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc` | RPC 没有 MCP transport；保持 `connection: false` |
-| Generic ACP/OpenCode | OpenCode `1.18.30`，commit `3104c1428ec91f809e5ab86631300de41eb6952e`；ACP SDK `1.4.0` | 固定 OpenCode ACP service 未实现 MCP over ACP；保持 `connection: false` |
+| Generic ACP/OpenCode | OpenCode `1.19.0`，commit `733b2c627e5aec39cb33cc22373bdce33053ef2c`；Host ACP SDK `1.4.0`，上游 ACP SDK `0.21.0` | `session/new` 接收 HTTP MCP server，Host-owned loopback bridge 通过显式 `acp-loopback-v1` gate；Connection token 不进入原生进程 |
 
-只有上游提供受保护的 in-process/ACP transport，或另有获批的受保护 bridge 设计，才可以在显式 capability gate 后增加接入。
+只有通过固定产物哈希、协议接缝和显式 capability gate 的上游，才可以增加接入；Pi 的上游限制仍保留。
 
 ## Pi RPC 0.86.0
 
