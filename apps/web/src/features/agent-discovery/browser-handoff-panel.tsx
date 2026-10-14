@@ -92,6 +92,7 @@ type BrowserHandoffPanelProps = {
 	readonly confirmation?: BrowserSideEffectConfirmationV1;
 	/** Current server-authenticated binding used to validate every action. */
 	readonly currentBinding?: BrowserHandoffBindingV1;
+	readonly handoffEvent?: BrowserHandoffTimelineEventV1;
 	readonly handoff?: BrowserHandoffPanelStateV1;
 	readonly now?: () => number;
 	readonly onCancelConfirmation?: (input: BrowserHandoffActionInputV1) => void;
@@ -631,12 +632,18 @@ function ConfirmationPanel({
 }
 
 export function BrowserHandoffPanel(props: BrowserHandoffPanelProps) {
+	const handoff =
+		props.handoff ??
+		projectBrowserHandoffTimelineEventV1(
+			props.handoffEvent,
+			props.currentBinding,
+		);
 	return (
 		<>
 			<HandoffPanel
 				browserAvailable={props.browserAvailable}
 				currentBinding={props.currentBinding}
-				handoff={props.handoff}
+				handoff={handoff}
 				now={props.now}
 				onPauseAgent={props.onPauseAgent}
 				onReturnToAgent={props.onReturnToAgent}
@@ -646,7 +653,7 @@ export function BrowserHandoffPanel(props: BrowserHandoffPanelProps) {
 				browserAvailable={props.browserAvailable}
 				confirmation={props.confirmation}
 				currentBinding={props.currentBinding}
-				handoff={props.handoff}
+				handoff={handoff}
 				now={props.now}
 				onCancelConfirmation={props.onCancelConfirmation}
 				onConfirmSideEffect={props.onConfirmSideEffect}
