@@ -727,7 +727,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				const turns = new Set<string>();
 				const users = new Set<string>();
 				const eventKeys = new Set<string>();
-				let sequence = 0;
+				const eventCursors = new Set<number>();
 				for (const turn of state.turns) {
 					if (
 						!turn.executionId ||
@@ -805,16 +805,23 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					users.add(turn.userMessageId);
 					let completed = false;
 					let corrected = false;
+					let previousCursor = 0;
 					for (const event of turn.events) {
-						sequence++;
+						const cursor = /^claude-(\d+)$/.exec(event.cursor);
+						const cursorNumber = cursor ? Number(cursor[1]) : 0;
 						if (
 							(completed && !(event.type === "status" && !corrected)) ||
 							!RuntimeEventV1Schema.safeParse(event).success ||
 							event.executionId !== turn.executionId ||
-							event.cursor !== `claude-${sequence}` ||
+							!Number.isSafeInteger(cursorNumber) ||
+							cursorNumber < 1 ||
+							cursorNumber <= previousCursor ||
+							eventCursors.has(cursorNumber) ||
 							eventKeys.has(event.adapterEventKey)
 						)
 							unavailable();
+						previousCursor = cursorNumber;
+						eventCursors.add(cursorNumber);
 						eventKeys.add(event.adapterEventKey);
 						if (event.type === "completed") {
 							completed = true;
@@ -836,7 +843,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					} else if (terminal(turn.status) !== completed) unavailable();
 				}
 				if (
-					sequence !== state.sequence ||
+					eventCursors.size !== state.sequence ||
+					[...Array(state.sequence)].some(
+						(_, index) => !eventCursors.has(index + 1),
+					) ||
 					state.turns.filter((turn) => !terminal(turn.status)).length > 1
 				)
 					unavailable();
