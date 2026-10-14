@@ -727,7 +727,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				const turns = new Set<string>();
 				const users = new Set<string>();
 				const eventKeys = new Set<string>();
-				let sequence = 0;
+				const eventCursors = new Set<number>();
 				for (const turn of state.turns) {
 					if (
 						!turn.executionId ||
@@ -804,26 +804,49 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					turns.add(turn.turnId);
 					users.add(turn.userMessageId);
 					let completed = false;
+					let corrected = false;
+					let previousCursor = 0;
 					for (const event of turn.events) {
-						sequence++;
+						const cursor = /^claude-(\d+)$/.exec(event.cursor);
+						const cursorNumber = cursor ? Number(cursor[1]) : 0;
 						if (
-							completed ||
+							(completed && !(event.type === "status" && !corrected)) ||
 							!RuntimeEventV1Schema.safeParse(event).success ||
 							event.executionId !== turn.executionId ||
-							event.cursor !== `claude-${sequence}` ||
+							!Number.isSafeInteger(cursorNumber) ||
+							cursorNumber < 1 ||
+							cursorNumber <= previousCursor ||
+							eventCursors.has(cursorNumber) ||
 							eventKeys.has(event.adapterEventKey)
 						)
 							unavailable();
+						previousCursor = cursorNumber;
+						eventCursors.add(cursorNumber);
 						eventKeys.add(event.adapterEventKey);
 						if (event.type === "completed") {
 							completed = true;
-							if (event.payload.status !== turn.status) unavailable();
+							if (!turn.unknownHold && event.payload.status !== turn.status)
+								unavailable();
+						} else if (completed) {
+							if (
+								!turn.unknownHold ||
+								event.type !== "status" ||
+								event.payload.status !== "unknown" ||
+								corrected
+							)
+								unavailable();
+							corrected = true;
 						}
 					}
-					if (terminal(turn.status) !== completed) unavailable();
+					if (corrected) {
+						if (turn.status !== "unknown" || !turn.unknownHold) unavailable();
+					} else if (terminal(turn.status) !== completed) unavailable();
 				}
 				if (
-					sequence !== state.sequence ||
+					eventCursors.size !== state.sequence ||
+					[...Array(state.sequence)].some(
+						(_, index) => !eventCursors.has(index + 1),
+					) ||
 					state.turns.filter((turn) => !terminal(turn.status)).length > 1
 				)
 					unavailable();
@@ -831,7 +854,28 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					for (const turn of state.turns) {
 						normalizeClaudeUncertainConnectionOperations(turn);
 						if (turn.status === "running") turn.status = "unknown";
+						if (turn.unknownHold && terminal(turn.status)) {
+							const completed = turn.events.at(-1);
+							if (completed?.type !== "completed") unavailable();
+							state.sequence++;
+							turn.events.push(
+								RuntimeEventV1Schema.parse({
+									schemaVersion: 1,
+									executionId: turn.executionId,
+									adapterEventKey: randomUUID(),
+									cursor: `claude-${state.sequence}`,
+									occurredAt: new Date().toISOString(),
+									type: "status",
+									payload: { status: "unknown" },
+								}),
+							);
+							turn.status = "unknown";
+							if (turn.modelResponse)
+								turn.modelResponse = { state: "unknown", endTurn: false };
+						}
 					}
+					if (state.turns.filter((turn) => !terminal(turn.status)).length > 1)
+						unavailable();
 				});
 				for (const turn of file.read().turns) {
 					if (
