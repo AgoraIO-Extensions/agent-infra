@@ -2956,10 +2956,15 @@ function isAgentApiManagementOpenApiAddition(previous, current) {
 	const normalized = structuredClone(current);
 	// Keep the original #481 addition pinned while allowing the later #2389
 	// additive failure details to be reviewed by its own guard.
-	delete normalized.components.schemas.AgentApiStateResponseV1?.properties
-		.failureCode;
-	delete normalized.components.schemas.AgentApiStateResponseV1?.properties
-		.failureReason;
+	const stateSchema = normalized.components.schemas.AgentApiStateResponseV1;
+	if (
+		stateSchema?.properties?.failureCode !== undefined ||
+		stateSchema?.properties?.failureReason !== undefined
+	) {
+		if (!isAgentApiStateFailureReasonShape(stateSchema)) return false;
+		delete stateSchema.properties.failureCode;
+		delete stateSchema.properties.failureReason;
+	}
 	const oldActions =
 		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
 	const newActions =
@@ -3013,6 +3018,32 @@ function isAgentApiManagementOpenApiAddition(previous, current) {
 	return changed && sameValue(previous, normalized);
 }
 
+function isAgentApiStateFailureReasonShape(schema) {
+	if (
+		!schema ||
+		schema.required?.includes("failureCode") ||
+		schema.required?.includes("failureReason")
+	)
+		return false;
+	return (
+		isDeepStrictEqual(schema.properties?.failureCode, {
+			enum: [
+				"creation_not_ready",
+				"health_check_failed",
+				"workload_unavailable",
+				"reconciliation_failed",
+			],
+			type: "string",
+		}) &&
+		isDeepStrictEqual(schema.properties?.failureReason, {
+			maxLength: 128,
+			minLength: 1,
+			pattern: "^[A-Za-z0-9 .,:'-]+$",
+			type: "string",
+		})
+	);
+}
+
 // #2389 adds bounded, sanitized failure details to the existing Agent state read.
 function isAgentApiStateFailureReasonOpenApiAddition(previous, current) {
 	const name = "AgentApiStateResponseV1";
@@ -3022,28 +3053,7 @@ function isAgentApiStateFailureReasonOpenApiAddition(previous, current) {
 	if (
 		before.properties?.failureCode !== undefined ||
 		before.properties?.failureReason !== undefined ||
-		after.required?.includes("failureCode") ||
-		after.required?.includes("failureReason")
-	)
-		return false;
-	const failureCode = after.properties?.failureCode;
-	const failureReason = after.properties?.failureReason;
-	if (
-		!isDeepStrictEqual(failureCode, {
-			enum: [
-				"creation_not_ready",
-				"health_check_failed",
-				"workload_unavailable",
-				"reconciliation_failed",
-			],
-			type: "string",
-		}) ||
-		!isDeepStrictEqual(failureReason, {
-			maxLength: 128,
-			minLength: 1,
-			pattern: "^[A-Za-z0-9 .,:'-]+$",
-			type: "string",
-		})
+		!isAgentApiStateFailureReasonShape(after)
 	)
 		return false;
 	const normalized = structuredClone(current);
