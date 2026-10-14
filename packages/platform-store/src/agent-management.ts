@@ -101,18 +101,26 @@ function validText(input: unknown, maximum = 1024): input is string {
 	);
 }
 
+function isAgentApiFailureStateV1(state: AgentManagementStateV1): boolean {
+	return (
+		state.status === "creation_failed" ||
+		(state.status === "available" &&
+			state.serviceAvailability === "unavailable")
+	);
+}
+
 function agentApiFailureReasonV1(
 	code: AgentManagementStateV1["failureCode"],
 ): string | undefined {
 	switch (code) {
 		case "creation_not_ready":
-			return "Agent creation did not reach ready state";
+			return "Agent image admission or creation readiness failed";
 		case "health_check_failed":
-			return "Agent health check failed";
+			return "Agent interaction entry or health check timed out or failed";
 		case "workload_unavailable":
-			return "Agent workload is unavailable";
+			return "Agent workload exceeds or cannot use the selected resource tier";
 		case "reconciliation_failed":
-			return "Agent reconciliation failed";
+			return "Agent workload reconciliation failed";
 		default:
 			return undefined;
 	}
@@ -658,7 +666,7 @@ export class PostgresAgentManagementTransactionV1
 					status: state.status,
 					serviceAvailability: state.serviceAvailability,
 					revision: state.revision,
-					...(state.failureCode
+					...(isAgentApiFailureStateV1(state) && state.failureCode
 						? {
 								failureCode: state.failureCode,
 								failureReason: agentApiFailureReasonV1(state.failureCode),

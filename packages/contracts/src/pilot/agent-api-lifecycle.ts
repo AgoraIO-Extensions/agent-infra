@@ -49,12 +49,20 @@ export const AgentApiStateResponseV1Schema = z
 		failureReason: AgentApiFailureReasonV1Schema.optional(),
 	})
 	.superRefine((value, context) => {
+		const isFailureState =
+			value.status === "creation_failed" ||
+			(value.status === "available" &&
+				value.serviceAvailability === "unavailable");
 		const hasFailureCode = value.failureCode !== undefined;
 		const hasFailureReason = value.failureReason !== undefined;
-		if (hasFailureCode === hasFailureReason) return;
+		if (
+			hasFailureCode === isFailureState &&
+			hasFailureReason === isFailureState
+		)
+			return;
 		context.addIssue({
 			code: z.ZodIssueCode.custom,
 			path: [hasFailureCode ? "failureReason" : "failureCode"],
-			message: "failureCode and failureReason must be provided together",
+			message: "failure details are only valid for a failed Agent state",
 		});
 	});

@@ -74,7 +74,7 @@ describe("Agent API lifecycle HTTP", () => {
 				serviceAvailability: null,
 				revision: 3,
 				failureCode: "creation_not_ready",
-				failureReason: "Agent creation did not reach ready state",
+				failureReason: "Agent image admission or creation readiness failed",
 			}),
 			lifecycle: { execute: f.execute },
 			recordRefusal: f.recordRefusal,
@@ -90,10 +90,10 @@ describe("Agent API lifecycle HTTP", () => {
 			serviceAvailability: null,
 			revision: 3,
 			failureCode: "creation_not_ready",
-			failureReason: "Agent creation did not reach ready state",
+			failureReason: "Agent image admission or creation readiness failed",
 		});
 	});
-	it("rejects an unpaired failure detail on a non-failure state", async () => {
+	it("rejects complete failure details on a non-failure state", async () => {
 		const f = fixture();
 		f.app = new Hono();
 		registerAgentApiLifecycleRoutes(f.app, {
@@ -104,6 +104,7 @@ describe("Agent API lifecycle HTTP", () => {
 				serviceAvailability: null,
 				revision: 1,
 				failureCode: "creation_not_ready",
+				failureReason: "Agent image admission or creation readiness failed",
 			}),
 			lifecycle: { execute: f.execute },
 			recordRefusal: f.recordRefusal,

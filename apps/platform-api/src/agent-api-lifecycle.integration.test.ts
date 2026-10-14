@@ -302,7 +302,9 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 		});
 		expect(body.failureReason).toEqual(expect.any(String));
 		expect(String(body.failureReason).length).toBeLessThanOrEqual(128);
-		expect(JSON.stringify(body)).not.toContain("select ");
+		expect(JSON.stringify(body)).not.toContain(
+			"registry.internal.example/private?token=sentinel",
+		);
 		expect(JSON.stringify(body)).not.toContain(material.application);
 	});
 
@@ -319,7 +321,8 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 			status: "available",
 			serviceAvailability: "unavailable",
 			failureCode: "health_check_failed",
-			failureReason: "Agent health check failed",
+			failureReason:
+				"Agent interaction entry or health check timed out or failed",
 		});
 	});
 
