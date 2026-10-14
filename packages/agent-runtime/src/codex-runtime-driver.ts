@@ -182,7 +182,9 @@ interface NativeMetadataReadBoundary {
 export interface CodexNativeStatusSelection {
 	readonly capabilityId: string;
 	readonly directoryRevision: string;
-	readonly parameters: Readonly<Record<string, never>>;
+	readonly parameters:
+		| Readonly<Record<string, never>>
+		| { includeTurns: false };
 }
 
 interface NativeCommandBinding {
@@ -214,6 +216,33 @@ function nativeCommandUnsupported(): never {
 		"Native command execution is unavailable for this runtime",
 		409,
 	);
+}
+
+function parseNativeCommandParameters(
+	input: string,
+): CodexNativeStatusSelection["parameters"] {
+	if (input.length === 0) return {} as const;
+	let value: unknown;
+	try {
+		value = JSON.parse(input);
+	} catch {
+		throw new RuntimeHostError(
+			"RUNTIME_CODEX_COMMAND_PARAMETERS_INVALID",
+			"Native command parameters are invalid",
+			400,
+		);
+	}
+	if (
+		!isPlainRecord(value) ||
+		!hasOnlyKeys(value, ["includeTurns"]) ||
+		value.includeTurns !== false
+	)
+		throw new RuntimeHostError(
+			"RUNTIME_CODEX_COMMAND_PARAMETERS_INVALID",
+			"Native command parameters are invalid",
+			400,
+		);
+	return { includeTurns: false as const };
 }
 
 // Fixed 0.1.0-candidate.1 package: its approved SKILL.md bytes bind the display text.
@@ -5866,6 +5895,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		read: CodexNativeCommandReadContext,
 		binding: NativeCommandBinding,
 		metadataRead: NativeMetadataReadBoundary,
+		parameters: CodexNativeStatusSelection["parameters"] = {},
 	) {
 		const rpc = await this.rpc(
 			binding.nativeSessionRef,
@@ -5877,7 +5907,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const metadata = await metadataRead.wait(
 			rpc.request(
 				"thread/read",
-				{ threadId: binding.threadId, includeTurns: false },
+				{
+					threadId: binding.threadId,
+					includeTurns:
+						"includeTurns" in parameters ? parameters.includeTurns : false,
+				},
 				(value) => value,
 				false,
 				false,
@@ -6173,7 +6207,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				"directoryRevision",
 				"parameters",
 			]) ||
-			!isEmptyRecord(selection.parameters)
+			(!isEmptyRecord(selection.parameters) &&
+				(!hasOnlyKeys(selection.parameters, ["includeTurns"]) ||
+					selection.parameters.includeTurns !== false))
 		)
 			throw new RuntimeHostError(
 				"RUNTIME_CODEX_COMMAND_PARAMETERS_INVALID",
@@ -6197,6 +6233,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			read,
 			binding,
 			metadataRead,
+			selection.parameters,
 		);
 		await metadataRead.revalidate();
 		return status;
@@ -6333,12 +6370,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		);
 		if (
 			directory.revision !== command.directoryRevision ||
-			capability?.availability !== "available" ||
-			command.parameters.length > 0
+			capability?.availability !== "available"
 		)
 			nativeCommandUnsupported();
-		const metadataRead = this.nativeMetadataRead(read, binding);
-		await this.readBoundNativeStatus(read, binding, metadataRead);
+		await this.readNativeStatus(
+			{
+				capabilityId: command.capabilityId,
+				directoryRevision: command.directoryRevision,
+				parameters: parseNativeCommandParameters(command.parameters),
+			},
+			read,
+		);
 		return this.resolveNativeCommand(command, command.nativeSessionRef);
 	}
 

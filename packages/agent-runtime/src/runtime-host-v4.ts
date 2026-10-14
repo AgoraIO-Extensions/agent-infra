@@ -235,11 +235,7 @@ export class RuntimeHostV4 {
 			if (
 				!capability ||
 				capability.availability !== expectedAvailability ||
-				capability.source.version !== request.capabilitySourceVersion ||
-				(request.capabilityKind === "command" &&
-					(!("parameters" in capability) ||
-						capability.parameters.length !== 0 ||
-						request.parameters.length !== 0))
+				capability.source.version !== request.capabilitySourceVersion
 			)
 				throw new RuntimeHostError(
 					"RUNTIME_NATIVE_CAPABILITY_UNAVAILABLE",
@@ -275,12 +271,7 @@ export class RuntimeHostV4 {
 						!latestCapability ||
 						latestCapability.name !== capabilityName ||
 						latestCapability.availability !== expectedAvailability ||
-						latestCapability.source.version !==
-							request.capabilitySourceVersion ||
-						(request.capabilityKind === "command" &&
-							(!("parameters" in latestCapability) ||
-								latestCapability.parameters.length !== 0 ||
-								request.parameters.length !== 0))
+						latestCapability.source.version !== request.capabilitySourceVersion
 					)
 						throw new RuntimeHostError(
 							"RUNTIME_NATIVE_CAPABILITY_STALE",

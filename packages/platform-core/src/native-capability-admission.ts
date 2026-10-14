@@ -535,8 +535,6 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 								selected.availability !== "discovered")
 						)
 							return { outcome: "disabled" };
-						if (selected.kind === "command" && request.parameters.length > 0)
-							return { outcome: "invalid_parameters" };
 						if (
 							selected.kind === "skill" &&
 							request.parameters.trim().length === 0
