@@ -17,6 +17,10 @@ export type ClaudeToolOperationCallbacks = Readonly<{
 		durationMs?: number,
 	) => Promise<void>;
 	authorize?: () => Promise<boolean>;
+	resolveReadOnlyFile?: (
+		filePath: string,
+		signal: AbortSignal,
+	) => Promise<string | undefined>;
 }>;
 
 /** Fixed core tools; Bash, subagents, MCP, network tools and arbitrary file roots remain unavailable. */
@@ -27,7 +31,12 @@ export function claudeWorkspaceTools(
 	onToolOperation?: ClaudeToolOperationCallbacks,
 	readOnlyRoots: readonly string[] = [],
 ): Pick<Options, "tools" | "hooks" | "canUseTool" | "settings"> {
-	const permits = async (name: string, input: unknown) => {
+	const resolvedReadOnlyPaths = new Set<string>();
+	const resolveInput = async (
+		name: string,
+		input: unknown,
+		signal: AbortSignal,
+	): Promise<Record<string, unknown> | undefined> => {
 		if (
 			!["Read", "Write", "Edit"].includes(name) ||
 			!input ||
@@ -36,10 +45,11 @@ export function claudeWorkspaceTools(
 			typeof input.file_path !== "string" ||
 			input.file_path.includes("\0")
 		)
-			return false;
+			return undefined;
 		const filePath = input.file_path;
-		if (await workspacePathAllowed(workspace, memory, filePath)) return true;
-		return (
+		if (await workspacePathAllowed(workspace, memory, filePath))
+			return input as Record<string, unknown>;
+		if (
 			name === "Read" &&
 			(
 				await Promise.all(
@@ -48,6 +58,24 @@ export function claudeWorkspaceTools(
 					),
 				)
 			).some(Boolean)
+		)
+			return input as Record<string, unknown>;
+		if (name !== "Read" || !onToolOperation?.resolveReadOnlyFile)
+			return undefined;
+		if (resolvedReadOnlyPaths.has(filePath))
+			return input as Record<string, unknown>;
+		const resolved = await onToolOperation.resolveReadOnlyFile(
+			filePath,
+			signal,
+		);
+		if (!resolved) return undefined;
+		resolvedReadOnlyPaths.add(resolved);
+		return { ...(input as Record<string, unknown>), file_path: resolved };
+	};
+	const permits = async (name: string, input: unknown) => {
+		return (
+			(await resolveInput(name, input, new AbortController().signal)) !==
+			undefined
 		);
 	};
 	return {
@@ -58,11 +86,13 @@ export function claudeWorkspaceTools(
 			autoDreamEnabled: false,
 			claudeMdExcludes: ["**"],
 		},
-		canUseTool: async (name, input) =>
-			(await permits(name, input)) &&
-			(!onToolOperation?.authorize || (await onToolOperation.authorize()))
-				? { behavior: "allow", updatedInput: input }
-				: { behavior: "deny", message: "Tool access is unavailable" },
+		canUseTool: async (name, input, options) => {
+			const updatedInput = await resolveInput(name, input, options.signal);
+			return updatedInput !== undefined &&
+				(!onToolOperation?.authorize || (await onToolOperation.authorize()))
+				? { behavior: "allow", updatedInput }
+				: { behavior: "deny", message: "Tool access is unavailable" };
+		},
 		hooks: {
 			PreToolUse: [
 				{
