@@ -4,10 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-	NativeSelect,
-	NativeSelectOption,
-} from "@/components/ui/native-select";
-import {
 	AgentAuthorizationRequestError,
 	grantApplicationManager,
 	grantApplicationUse,
@@ -110,22 +106,32 @@ export function AgentAuthorizationControls({
 				</p>
 			</div>
 			<div className="grid gap-3 sm:grid-cols-2">
-				<div className="space-y-2">
-					<Label htmlFor="agent-authorization-target-kind">目标类型</Label>
-					<NativeSelect
-						id="agent-authorization-target-kind"
-						value={targetKind}
-						disabled={busy}
-						onChange={(event) => {
-							setTargetKind(event.target.value as TargetKind);
-							setMetadata(undefined);
-							setMessage("");
-						}}
-					>
-						<NativeSelectOption value="application">应用</NativeSelectOption>
-						<NativeSelectOption value="user">用户</NativeSelectOption>
-					</NativeSelect>
-				</div>
+				<fieldset className="space-y-2">
+					<legend className="font-medium text-sm">目标类型</legend>
+					<div className="flex flex-wrap gap-2">
+						{(
+							[
+								["application", "应用"],
+								["user", "用户"],
+							] as const
+						).map(([kind, label]) => (
+							<Button
+								aria-pressed={targetKind === kind}
+								key={kind}
+								type="button"
+								variant={targetKind === kind ? "default" : "outline"}
+								disabled={busy}
+								onClick={() => {
+									setTargetKind(kind);
+									setMetadata(undefined);
+									setMessage("");
+								}}
+							>
+								{label}
+							</Button>
+						))}
+					</div>
+				</fieldset>
 				<div className="space-y-2">
 					<Label htmlFor="agent-authorization-target-id">
 						{targetKind === "application" ? "应用 ID" : "用户 ID"}
