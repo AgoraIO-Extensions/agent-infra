@@ -19,13 +19,14 @@ function endpoint(baseUrl: string) {
 		origin.protocol !== "http:" ||
 		origin.username ||
 		origin.password ||
+		(origin.pathname !== "/" && origin.pathname !== "") ||
 		origin.search ||
 		origin.hash
 	)
 		throw new TypeError("Platform Worker base URL is invalid");
 	return new URL(
 		"internal/platform-worker/v1/native-metadata",
-		`${origin.href.replace(/\/$/, "")}/`,
+		`${origin.origin}/`,
 	);
 }
 

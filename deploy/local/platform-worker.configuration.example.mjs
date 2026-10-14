@@ -20,6 +20,14 @@ export const workloadInput = missing("workloadInput");
 // callers never choose a Runtime URL, Session, or Grant.
 export const modelDirectory = undefined;
 
+// Optional native metadata gateway. The deployment must provide only the
+// persisted Execution→Host binding resolver and a fixed Runtime target
+// resolver; proof signing defaults to the Worker `signing` key above. When
+// Platform API current confirmation is enabled, set `platformApiCurrent` to a
+// fixed `{ baseUrl, serviceToken }` client target. Missing or stale ports stay
+// unavailable and never fall back to direct Runtime access.
+export const nativeMetadataGateway = undefined;
+
 // workloadInput.files is optional during deployments without file support. If
 // enabled, provide the same deployment-owned S3-compatible adapter used by the
 // API and bounded batch/orphan settings for reconciliation.

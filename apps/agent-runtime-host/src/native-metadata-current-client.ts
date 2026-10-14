@@ -29,11 +29,12 @@ function endpoint(baseUrl: string) {
 		origin.protocol !== "http:" ||
 		origin.username ||
 		origin.password ||
+		(origin.pathname !== "/" && origin.pathname !== "") ||
 		origin.search ||
 		origin.hash
 	)
 		throw new TypeError("Platform Worker base URL is invalid");
-	return new URL(path, `${origin.href.replace(/\/$/, "")}/`);
+	return new URL(path, `${origin.origin}/`);
 }
 
 async function responseText(response: Response) {

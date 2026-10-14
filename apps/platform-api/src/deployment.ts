@@ -37,6 +37,7 @@ import {
 	createRuntimeNativeMetadataWorkerReaderV1,
 	type RuntimeNativeMetadataWorkerGatewayV1,
 } from "./runtime-native-metadata-reader.js";
+import { createPlatformWorkerNativeMetadataGatewayClientV1 } from "./runtime-native-metadata-worker-client.js";
 import type { SkillHubProviderImportDeploymentV1 } from "./skill-hub-read-assembly.js";
 
 type CustomAgentGatewayRouteInput = NonNullable<
@@ -158,6 +159,28 @@ export function createProductionNativeMetadataReaderV1(options: {
 	readonly gateway: RuntimeNativeMetadataWorkerGatewayV1;
 }) {
 	return createRuntimeNativeMetadataWorkerReaderV1(options);
+}
+
+/**
+ * Assemble the API reader from the fixed Worker ingress.  The resolver is
+ * still deployment-owned because it must map the current API request to the
+ * persisted Execution scope; the network client never accepts a request URL.
+ */
+export function createProductionNativeMetadataReaderFromWorkerV1(options: {
+	readonly resolveRequest: Parameters<
+		typeof createRuntimeNativeMetadataWorkerReaderV1
+	>[0]["resolveRequest"];
+	readonly worker: {
+		readonly baseUrl: string;
+		readonly serviceToken: string;
+		readonly fetch?: typeof fetch;
+		readonly transportTimeoutMs?: number;
+	};
+}) {
+	return createProductionNativeMetadataReaderV1({
+		resolveRequest: options.resolveRequest,
+		gateway: createPlatformWorkerNativeMetadataGatewayClientV1(options.worker),
+	});
 }
 
 /** Merge explicit mounted deployment ports without allowing duplicate authorities. */

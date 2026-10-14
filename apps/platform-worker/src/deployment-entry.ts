@@ -399,6 +399,7 @@ export async function createPlatformNativeMetadataGatewayOptionsV1(
 	if (!nativeMetadataGateway) return undefined;
 	return createPlatformNativeMetadataGatewayAssemblyV1({
 		serviceToken,
+		signing,
 		ports: nativeMetadataGateway,
 	});
 }

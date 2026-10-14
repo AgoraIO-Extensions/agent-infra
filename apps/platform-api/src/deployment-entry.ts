@@ -3,6 +3,7 @@ import { createLdapIdentityDirectory } from "@agent-infra/identity";
 import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
 import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
 import {
+	createProductionNativeMetadataReaderFromWorkerV1,
 	inspectProductionRelayKeyPolicyV1,
 	mergeProductionPlatformApiDeploymentPortsV1,
 } from "./deployment.js";
@@ -36,6 +37,8 @@ const {
 	modelSelection,
 	modelDirectory,
 	nativeMetadata,
+	nativeMetadataWorker,
+	nativeMetadataResolveRequest,
 	nativeMetadataCurrent,
 	nativeCapabilityInvocation,
 	providerImport,
@@ -101,6 +104,18 @@ const callbackForwarder =
 			}
 		: undefined);
 
+if (
+	nativeMetadata !== undefined &&
+	(nativeMetadataWorker !== undefined ||
+		nativeMetadataResolveRequest !== undefined)
+)
+	throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
+if (
+	(nativeMetadataWorker === undefined) !==
+	(nativeMetadataResolveRequest === undefined)
+)
+	throw new Error("PLATFORM_NATIVE_METADATA_CONFIGURATION_INVALID");
+
 export const browserAuth = browser.browserAuth;
 export function createPlatformApiAssemblyInput() {
 	const relayKeyPolicy = inspectProductionRelayKeyPolicyV1(apiInput);
@@ -113,12 +128,24 @@ export function createPlatformApiAssemblyInput() {
 				fields: relayKeyPolicy.missing,
 			}),
 		);
+	const assembledNativeMetadata =
+		nativeMetadata ??
+		(nativeMetadataWorker && nativeMetadataResolveRequest
+			? {
+					reader: createProductionNativeMetadataReaderFromWorkerV1({
+						resolveRequest: nativeMetadataResolveRequest,
+						worker: nativeMetadataWorker,
+					}),
+				}
+			: undefined);
 	const configuredApiInput = mergeProductionPlatformApiDeploymentPortsV1({
 		apiInput,
 		...(customAgentGateway !== undefined ? { customAgentGateway } : {}),
 		...(modelSelection !== undefined ? { modelSelection } : {}),
 		...(modelDirectory !== undefined ? { modelDirectory } : {}),
-		...(nativeMetadata !== undefined ? { nativeMetadata } : {}),
+		...(assembledNativeMetadata !== undefined
+			? { nativeMetadata: assembledNativeMetadata }
+			: {}),
 		...(nativeMetadataCurrent !== undefined ? { nativeMetadataCurrent } : {}),
 		...(nativeCapabilityInvocation !== undefined
 			? { nativeCapabilityInvocation }
