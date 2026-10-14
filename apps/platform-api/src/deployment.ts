@@ -162,24 +162,19 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
 	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 }): ProductionPlatformApiInputV1 {
-	const {
-		agentDefaultRelayKeyPolicy: _apiAgentDefaultRelayKeyPolicy,
-		personalRelayKeyValidation: _apiPersonalRelayKeyValidation,
-		...apiInputWithoutRelayKeyPolicy
-	} = input.apiInput;
 	if (
 		input.customAgentGateway !== undefined &&
-		apiInputWithoutRelayKeyPolicy.customAgentGateway !== undefined
+		input.apiInput.customAgentGateway !== undefined
 	)
 		throw new Error("PLATFORM_CUSTOM_AGENT_GATEWAY_DUPLICATE");
 	if (
 		input.modelSelection !== undefined &&
-		apiInputWithoutRelayKeyPolicy.modelSelection !== undefined
+		input.apiInput.modelSelection !== undefined
 	)
 		throw new Error("PLATFORM_MODEL_SELECTION_DUPLICATE");
 	if (
 		input.nativeMetadata !== undefined &&
-		apiInputWithoutRelayKeyPolicy.nativeMetadata !== undefined
+		input.apiInput.nativeMetadata !== undefined
 	)
 		throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
 	if (
@@ -193,7 +188,7 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	)
 		throw new Error("PLATFORM_PROVIDER_IMPORT_DUPLICATE");
 	return {
-		...apiInputWithoutRelayKeyPolicy,
+		...input.apiInput,
 		...(input.customAgentGateway !== undefined
 			? { customAgentGateway: input.customAgentGateway }
 			: {}),

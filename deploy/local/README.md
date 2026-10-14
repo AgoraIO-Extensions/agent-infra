@@ -25,9 +25,9 @@ project 同名。普通停止保留数据库、对象存储卷和 Agent PVC。
 API 镜像内置[部署模块](../../apps/platform-api/src/deployment-entry.ts)，固定从
 `file:///app/dist/deployment.mjs` 加载。API 专属目录只提供受审阅的
 `configuration.mjs` 及其私有导入；所需导出及受信身份、目录、Registry 和模型
-依赖见 [API 部署说明](../platform-api/README.md)。标准模板 Relay Key 策略必须由部署 owner 在
-`configuration.mjs` 顶层提供 `agentDefaultRelayKeyPolicy` 和 `personalRelayKeyValidation`；两者的
-来源是已审阅的 ModelCatalog/模板策略与固定 billing transport，不能放在 `apiInput` 中冒充生产供给。
+依赖见 [API 部署说明](../platform-api/README.md)。标准模板 Relay Key 策略必须由部署 owner 在 `configuration.mjs` 导出的 `apiInput` 中提供
+`agentDefaultRelayKeyPolicy` 和 `personalRelayKeyValidation`；两者的来源是已审阅的 ModelCatalog/模板
+策略与固定 billing transport。
 缺失字段只产生脱敏 degraded warning，依赖该策略的标准模板申请保持失败关闭。内置模块从
 `PLATFORM_DATABASE_URL` 取得数据库 URL，建立第一方 LDAP Adapter 和 PostgreSQL
 会话 Store，再将同一个身份 Adapter 交给生产 API 装配工厂。API 只将

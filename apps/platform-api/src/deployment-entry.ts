@@ -31,8 +31,6 @@ const {
 	connectionInstallationConfiguration,
 	connectionInstallationCallback,
 	applicationCredentialDelivery,
-	agentDefaultRelayKeyPolicy,
-	personalRelayKeyValidation,
 	apiInput,
 	customAgentGateway,
 	modelSelection,
@@ -103,10 +101,7 @@ const callbackForwarder =
 
 export const browserAuth = browser.browserAuth;
 export function createPlatformApiAssemblyInput() {
-	const relayKeyPolicy = inspectProductionRelayKeyPolicyV1({
-		agentDefaultRelayKeyPolicy,
-		personalRelayKeyValidation,
-	});
+	const relayKeyPolicy = inspectProductionRelayKeyPolicyV1(apiInput);
 	if (relayKeyPolicy.missing.length > 0)
 		console.warn(
 			JSON.stringify({
@@ -126,12 +121,7 @@ export function createPlatformApiAssemblyInput() {
 	});
 	return createProductionPlatformApiAssemblyInputV1({
 		...configuredApiInput,
-		...(agentDefaultRelayKeyPolicy !== undefined
-			? { agentDefaultRelayKeyPolicy }
-			: {}),
-		...(personalRelayKeyValidation !== undefined
-			? { personalRelayKeyValidation }
-			: {}),
+
 		userGovernance,
 		directory: { identity: browser.identity, search: directorySearch },
 		connectionConsumerProfile,

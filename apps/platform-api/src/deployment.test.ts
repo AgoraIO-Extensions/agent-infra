@@ -115,14 +115,19 @@ describe("explicit custom Agent deployment ports", () => {
 		});
 	});
 
-	it("does not accept Relay Key policy nested in apiInput as production supply", () => {
+	it("preserves Relay Key policy fields supplied through apiInput", () => {
 		const apiInput = {
-			agentDefaultRelayKeyPolicy: { relayEndpointId: "nested" },
-			personalRelayKeyValidation: { billingUrl: "https://nested.invalid" },
+			agentDefaultRelayKeyPolicy: { relayEndpointId: "endpoint-a" },
+			personalRelayKeyValidation: {
+				billingUrl: "https://billing.example.test",
+			},
 		} as unknown as ProductionPlatformApiInputV1;
-		const merged = mergeProductionPlatformApiDeploymentPortsV1({ apiInput });
-		expect(merged).not.toHaveProperty("agentDefaultRelayKeyPolicy");
-		expect(merged).not.toHaveProperty("personalRelayKeyValidation");
+		expect(
+			mergeProductionPlatformApiDeploymentPortsV1({ apiInput }),
+		).toMatchObject({
+			agentDefaultRelayKeyPolicy: apiInput.agentDefaultRelayKeyPolicy,
+			personalRelayKeyValidation: apiInput.personalRelayKeyValidation,
+		});
 	});
 
 	it.each([
