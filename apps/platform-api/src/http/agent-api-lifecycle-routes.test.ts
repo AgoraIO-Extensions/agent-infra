@@ -63,6 +63,58 @@ describe("Agent API lifecycle HTTP", () => {
 		);
 		expect(f.recordRefusal).not.toHaveBeenCalled();
 	});
+	it("returns a bounded failure code and sanitized reason only when present", async () => {
+		const f = fixture();
+		f.app = new Hono();
+		registerAgentApiLifecycleRoutes(f.app, {
+			readState: vi.fn().mockResolvedValue({
+				schemaVersion: 1,
+				agentId: "agent",
+				status: "creation_failed",
+				serviceAvailability: null,
+				revision: 3,
+				failureCode: "creation_not_ready",
+				failureReason: "Agent image admission or creation readiness failed",
+			}),
+			lifecycle: { execute: f.execute },
+			recordRefusal: f.recordRefusal,
+		});
+		const response = await f.app.request("/api/v2/agents/agent/state", {
+			headers: { Authorization: `Bearer ${material}` },
+		});
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			schemaVersion: 1,
+			agentId: "agent",
+			status: "creation_failed",
+			serviceAvailability: null,
+			revision: 3,
+			failureCode: "creation_not_ready",
+			failureReason: "Agent image admission or creation readiness failed",
+		});
+	});
+	it("rejects complete failure details on a non-failure state", async () => {
+		const f = fixture();
+		f.app = new Hono();
+		registerAgentApiLifecycleRoutes(f.app, {
+			readState: vi.fn().mockResolvedValue({
+				schemaVersion: 1,
+				agentId: "agent",
+				status: "stopped",
+				serviceAvailability: null,
+				revision: 1,
+				failureCode: "creation_not_ready",
+				failureReason: "Agent image admission or creation readiness failed",
+			}),
+			lifecycle: { execute: f.execute },
+			recordRefusal: f.recordRefusal,
+		});
+		const response = await f.app.request("/api/v2/agents/agent/state", {
+			headers: { Authorization: `Bearer ${material}` },
+		});
+		expect(response.status).toBe(500);
+		expect(f.recordRefusal).toHaveBeenCalledOnce();
+	});
 	it.each([
 		["Cookie", "session=caller"],
 		["X-User-Id", "owner"],

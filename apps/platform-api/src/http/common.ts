@@ -114,6 +114,8 @@ export class HttpProtocolError extends Error {
 export interface RequestMetadata {
 	requestId: string;
 	traceId: string;
+	/** W3C context from the server-owned observability middleware. */
+	traceParent?: string;
 }
 
 export function requestMetadata(_request: Request): RequestMetadata {

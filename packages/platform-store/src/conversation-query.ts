@@ -171,12 +171,6 @@ export interface PlatformQueueResourceSnapshot {
 	readonly outboxPending: number;
 	/** Bounded duration of this read-only snapshot, in milliseconds. */
 	readonly queryDurationMs?: number;
-	/** PostgreSQL client backends currently executing without a server-side wait. */
-	readonly postgresActivityActive?: number;
-	/** PostgreSQL client backends in the idle state (including ClientRead). */
-	readonly postgresActivityIdle?: number;
-	/** PostgreSQL active client backends reporting a server-side wait event. */
-	readonly postgresActivityWaiting?: number;
 }
 
 interface ConversationRow {
@@ -894,14 +888,6 @@ export async function readPlatformQueueResourceSnapshot(
 	let removeOperationAbortListener = () => {};
 	let began = false;
 	let snapshot: Promise<PlatformQueueResourceSnapshot> | undefined;
-	type PostgresPoolRow = {
-		activity_active: string;
-		activity_idle: string;
-		activity_waiting: string;
-		activity_hidden: string;
-	};
-	let poolQuery: Promise<PostgresPoolRow[]> | undefined;
-	let optionalPoolQueryExpected = true;
 	const releaseClient = () => {
 		removeOperationAbortListener();
 		activeResourceSnapshots.delete(client);
@@ -1010,22 +996,11 @@ export async function readPlatformQueueResourceSnapshot(
 			};
 		});
 		began = true;
-		void snapshot.then(
-			() => {
-				if (!optionalPoolQueryExpected && poolQuery === undefined)
-					releaseClient();
-			},
-			() => {
-				if (!optionalPoolQueryExpected && poolQuery === undefined)
-					releaseClient();
-			},
-		);
 		const queueSnapshot = await Promise.race([snapshot, cancelled]);
 		if (operationSignal.aborted) {
 			if (callerAborted) throw unavailable();
 			return queueSnapshot;
 		}
-		optionalPoolQueryExpected = false;
 		// Keep the existing mock/adapter behavior for an empty transaction result;
 		// a real Store transaction always returns the complete queue snapshot.
 		if (!queueSnapshot) {
@@ -1033,58 +1008,8 @@ export async function readPlatformQueueResourceSnapshot(
 			return queueSnapshot as PlatformQueueResourceSnapshot;
 		}
 
-		// pg_stat_activity is an optional, local PostgreSQL signal.  It is queried
-		// separately so a managed database that hides the view (or denies access)
-		// cannot discard the durable queue counts above.
-		let postgresActivitySnapshot:
-			| Pick<
-					PlatformQueueResourceSnapshot,
-					| "postgresActivityActive"
-					| "postgresActivityIdle"
-					| "postgresActivityWaiting"
-			  >
-			| undefined;
-		try {
-			poolQuery = runQuery(
-				client<PostgresPoolRow[]>`
-					select
-						count(*) filter (
-							where state = 'active' and wait_event is null
-						)::text as activity_active,
-						count(*) filter (where state = 'idle')::text as activity_idle,
-						count(*) filter (
-							where state = 'active' and wait_event is not null
-						)::text as activity_waiting,
-						count(*) filter (
-							where state is null
-						)::text as activity_hidden
-					from pg_stat_activity
-					where datname = current_database()
-						and pid <> pg_backend_pid()
-						and backend_type = 'client backend'
-				`,
-			);
-			const poolRows = await Promise.race([poolQuery, cancelled]);
-			if (poolRows.length === 1) {
-				const row = poolRows[0];
-				const hidden = countResource(row?.activity_hidden);
-				if (hidden > 0) return queueSnapshot;
-				const active = countResource(row?.activity_active);
-				const idle = countResource(row?.activity_idle);
-				const waiting = countResource(row?.activity_waiting);
-				postgresActivitySnapshot = {
-					postgresActivityActive: active,
-					postgresActivityIdle: idle,
-					postgresActivityWaiting: waiting,
-				};
-			}
-		} catch {
-			if (callerAborted) throw unavailable();
-			// Optional activity visibility is unavailable; preserve the queue snapshot.
-		}
-		return { ...queueSnapshot, ...postgresActivitySnapshot };
+		return queueSnapshot;
 	} catch {
-		optionalPoolQueryExpected = false;
 		if (!began) {
 			releaseClient();
 		}
@@ -1098,7 +1023,7 @@ export async function readPlatformQueueResourceSnapshot(
 			releaseClient();
 		} else {
 			void Promise.allSettled(
-				[snapshot, poolQuery].filter((value) => value !== undefined),
+				[snapshot].filter((value) => value !== undefined),
 			).then(() => {
 				releaseClient();
 			});

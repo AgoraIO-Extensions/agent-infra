@@ -1,6 +1,7 @@
 import type { startObservability } from "@agent-infra/observability";
 import { platformQueueResourceSnapshotTimeoutMs } from "@agent-infra/platform-store";
 import type { PlatformApiAssembly } from "./assembly.js";
+import type { SseResourceTracker } from "./sse-resource-tracker.js";
 
 const resourceSnapshotOperation = "platform.resource_snapshot";
 
@@ -15,32 +16,12 @@ function boundedDurationMs(value: unknown, startedAt: number): number {
 	);
 }
 
-function observeOptionalPoolResources(
-	observability: ReturnType<typeof startObservability>,
-	snapshot: {
-		postgresActivityActive?: unknown;
-		postgresActivityIdle?: unknown;
-		postgresActivityWaiting?: unknown;
-	},
-) {
-	const resources = [
-		["postgres_activity_active", snapshot.postgresActivityActive],
-		["postgres_activity_idle", snapshot.postgresActivityIdle],
-		["postgres_activity_waiting", snapshot.postgresActivityWaiting],
-	] as const;
-	for (const [kind, value] of resources) {
-		if (value === undefined) continue;
-		if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
-			continue;
-		observability.observeResource({ kind, value });
-	}
-}
-
 /** Process-owned sampling of the existing query; no business state is computed here. */
 export function startPlatformResourceSampling(
 	read: PlatformApiAssembly["readResourceSnapshot"],
 	observability: ReturnType<typeof startObservability>,
 	intervalMs: number,
+	sseResources?: SseResourceTracker,
 ) {
 	let stopped = false;
 	let scheduled: ReturnType<typeof setTimeout> | undefined;
@@ -89,7 +70,17 @@ export function startPlatformResourceSampling(
 				kind: "outbox_pending",
 				value: snapshot.outboxPending,
 			});
-			observeOptionalPoolResources(observability, snapshot);
+			if (sseResources) {
+				const sse = sseResources.snapshot();
+				observability.observeResource({
+					kind: "sse_connections",
+					value: sse.connections,
+				});
+				observability.observeResource({
+					kind: "sse_pending_events",
+					value: sse.pendingEvents,
+				});
+			}
 		} catch {
 			if (!stopped && !snapshotRead) {
 				try {

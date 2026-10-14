@@ -164,6 +164,9 @@ export function registerTaskRoutes(
 						metadata.traceId,
 					),
 					...metadata,
+					...(metadata.traceParent === undefined
+						? {}
+						: { traceParent: metadata.traceParent }),
 				});
 				if (decision.outcome === "capacity_full")
 					throw new HttpProtocolError("BUSY", metadata.traceId);
@@ -294,6 +297,9 @@ export function registerTaskRoutes(
 				targetExecutionId: executionId,
 				idempotencyKey: parseIdempotencyKey(context.req.raw, metadata.traceId),
 				...metadata,
+				...(metadata.traceParent === undefined
+					? {}
+					: { traceParent: metadata.traceParent }),
 			});
 			if (decision.outcome === "denied")
 				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
@@ -379,6 +385,7 @@ export function registerTaskRoutes(
 			);
 			const request = context.req.raw;
 			return streamSSE(context, async (stream) => {
+				const connection = dependencies.sseResources?.open();
 				const began = performance.now();
 				recordTaskObservation(dependencies.observability, {
 					stage: "sse",
@@ -398,6 +405,7 @@ export function registerTaskRoutes(
 				if (request.signal.aborted || stream.aborted) abort();
 				const write = async (message: unknown) => {
 					const frame = frameTaskSseMessageV1(message);
+					const pending = dependencies.sseResources?.beginPending();
 					try {
 						return await streamRead(
 							() =>
@@ -411,6 +419,8 @@ export function registerTaskRoutes(
 					} catch (error) {
 						stream.abort();
 						throw error;
+					} finally {
+						pending?.close();
 					}
 				};
 				const closeForRevocation = async () => {
@@ -552,6 +562,7 @@ export function registerTaskRoutes(
 						endReason = "dependency_unavailable";
 					}
 				} finally {
+					connection?.close();
 					if (request.signal.aborted || stream.aborted)
 						endReason = "client_disconnected";
 					request.signal.removeEventListener("abort", abort);

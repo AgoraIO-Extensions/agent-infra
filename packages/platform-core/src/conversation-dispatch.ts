@@ -67,6 +67,7 @@ export {
 	type ConversationDispatchStorePortV1,
 	type ConversationDispatchUseCaseV1,
 	type ConversationMetadataRecoveryV1,
+	type ConversationNativeCapabilityBindingV1,
 	type ConversationRuntimeDispatchRequestV1,
 	type ConversationRuntimeEvent,
 	type ConversationRuntimeEventRequestV1,

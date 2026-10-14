@@ -17,6 +17,8 @@ import {
 import { parseConversationOperationFactV2 } from "./conversation-operation-facts.js";
 
 function runtimeOperation(claim: ConversationDispatchClaimV1) {
+	if (claim.operation === "conversation.native-capability.invoke.v1")
+		return "native-capability" as const;
 	if (claim.operation === "conversation.turn.supplement.v1") {
 		return "turn.supplement" as const;
 	}
@@ -33,6 +35,8 @@ export function isTurnOperation(operation: ConversationDispatchOperationV1) {
 }
 
 export function operationId(claim: ConversationDispatchClaimV1): string {
+	if (claim.operation === "conversation.native-capability.invoke.v1")
+		return claim.executionId;
 	if (claim.operation === "conversation.turn.supplement.v1") {
 		return claim.messageId ?? unavailable();
 	}
@@ -77,6 +81,13 @@ export function runtimeRequest(
 			messageId: claim.messageId ?? unavailable(),
 			executionDeliveryFence: claim.executionDeliveryFence,
 			input: claim.input ?? unavailable(),
+		};
+	}
+	if (claim.operation === "conversation.native-capability.invoke.v1") {
+		return {
+			...base,
+			operation: "native-capability",
+			nativeCapability: claim.nativeCapability ?? unavailable(),
 		};
 	}
 	return {

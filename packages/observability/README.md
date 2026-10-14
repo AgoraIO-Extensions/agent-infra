@@ -10,11 +10,11 @@
 | `agent_platform_operation_duration` | ms | `service`、`stage`、`outcome` | 阶段拥有者提供一次已确认耗时；缺失时不记录。 |
 | `agent_platform_resource_count` | `1`，当前数量 | `service`、`kind` | 阶段拥有者从权威运行状态采样后调用 `observeResource`；同种类只保留最新值，不按事件增量累加。 |
 
-`observeResource` 只接受非负安全整数和固定 `kind`：`sse_connections`、`sse_pending_events`、`task_waiting`、`outbox_pending`、`postgres_activity_active`、`postgres_activity_idle`、`postgres_activity_waiting`。未收到快照的种类不会输出零值；收到明确的零值才输出零。每个实例最多保留上述七种最新值，样本超过三个 Metric 导出间隔后停止观测，下一次可信采样才恢复。该 Gauge 使用 delta 聚合以避免 SDK 在无新观测时继续导出过期值；现有阶段计数器保持原聚合方式。真实 API/Worker 必须定期从各自权威状态采样，包内不读取 Store、SSE 或 PostgreSQL。过期停止输出只表示本进程没有新样本，不能证明下游查询后端已经删除旧时间序列。
+`observeResource` 只接受非负安全整数和固定 `kind`：`sse_connections`、`sse_pending_events`、`task_waiting`、`outbox_pending`。未收到快照的种类不会输出零值；收到明确的零值才输出零。每个实例最多保留上述四种最新值，样本超过三个 Metric 导出间隔后停止观测，下一次可信采样才恢复。该 Gauge 使用 delta 聚合以避免 SDK 在无新观测时继续导出过期值；现有阶段计数器保持原聚合方式。真实 API/Worker 必须定期从各自权威状态采样，包内不读取 Store、SSE 或 PostgreSQL。过期停止输出只表示本进程没有新样本，不能证明下游查询后端已经删除旧时间序列。
 
 `service`、`stage` 和 `outcome` 均为封闭集合。请求、Trace、Agent、Conversation、Execution、操作和尝试引用只进入受控日志与 Trace，不作为指标标签。请求、Trace、Agent、Conversation 和 Execution ID 仅接受平台生成的 UUID；操作与尝试引用须来自可信持久事实，包内仅接受 1-128 字符、字母或数字开头且其余为字母、数字、`.`、`_`、`:`、`-` 的值。格式校验不证明引用来源可信；外部请求头和任意文本不得作为观测关联值。不符合格式的关联值会被省略，非法阶段、结果或耗时会被丢弃并计入 `status().invalidRecords`。
 
-`record` 只记录调用方已确认的阶段结果。`durationMs` 进入耗时直方图；当前 Span 在采集时创建并结束，其自身时长不是该阶段的实际耗时。业务 `traceId` 只是受控关联属性，尚未恢复持久工作项的 OpenTelemetry 上下文或建立跨进程 Span link。真实 API/Worker 装配、持久重放去重和全链路关联仍由 #441 交付。
+`record` 只记录调用方已确认的阶段结果。`durationMs` 进入耗时直方图；当前 Span 在采集时创建并结束，其自身时长不是该阶段的实际耗时。业务 `traceId` 仍是受控关联属性；持久会话 outbox 另存有界的 W3C `traceparent`（仅 ID 与 flags）。Worker 对合法 context 建立独立的 root span，并用 SpanLink 关联发起请求，不把异步等待计算进 API span；缺失或格式错误的 context 会忽略并开新的 root span。context 永远不作为身份或授权依据，重试共享原持久 context 但由 attempt/operation 区分。
 
 Conversation Worker 在已有 dispatch use case 返回决定后记录一次带实测耗时的 `task_dispatch`：`accepted` 为 `completed`，`busy`/`retry` 为带 `TASK_UNAVAILABLE` 的 `failed`，`unknown` 为 `unknown`，`rejected`/`stale`/`already_completed` 为 `rejected`。`operationRef` 只使用 Store 提供的固定 operation 名称；item ID 不进入日志或指标标签。dispatch 抛出异常时记录 `failed`，遥测采集失败仍由 Worker 原有错误处理和重试语义决定。未装配 observability 时不产生该阶段记录。
 
@@ -22,11 +22,11 @@ Conversation Worker 在已有 durable queue discovery 返回至少一个会话�
 
 Workload Worker 在部署装配完成或失败时记录一次 `workload` 启动结果；每次既有 reconciliation Store 写回前的状态步记录一次带实测耗时的 `workload` 结果。正常状态步为 `completed`，带 `failureCode` 的 `rejected`、`cleaning` 或 `failed` 状态为 `failed`，分别使用固定的 `WORKLOAD_RECONCILIATION_FAILED` 或 `WORKLOAD_HEALTH_CHECK_FAILED`；Store/调谐依赖不可用使用 `WORKLOAD_UNAVAILABLE`。阶段和代码是封闭集合，Agent、request 和 trace 关联只进入受控日志/Trace，不进入指标标签；采集异常不会改变原有调谐、写回、重试或关闭语义。
 
-Platform API 与 Conversation Worker 的 queue sampler 只消费 Store-owned 的 bounded resource snapshot。Store 在 read-only transaction 中设置 `statement_timeout = 2000ms`，返回两个 durable queue counts 和本次读取的 `queryDurationMs`；时长被限制在 `0..2000ms`，输出不包含 SQL、参数或业务正文。成功读取记录一次 `dependency/completed`，固定 `operationRef=platform.resource_snapshot`；连接、取消、超时、非法计数或其他读取失败记录一次带 `DEPENDENCY_UNAVAILABLE` 的 `dependency/failed`，耗时同样有界。该摘要还会在本地 PostgreSQL 允许读取 `pg_stat_activity` 时提供 `postgres_activity_active`、`postgres_activity_idle` 与 `postgres_activity_waiting` 三个可选 gauge：它们统计当前数据库中、排除本次采样 backend 后的 `client backend`；active 是 `state='active'` 且没有 `wait_event`，idle 是 `state='idle'`（包括 PostgreSQL 的 `ClientRead`），waiting 是 `state='active'` 且存在 `wait_event`。这些是数据库活动状态的 bounded 采样，不是某个 `postgres.js` 进程池的精确 checkout 容量。视图权限或托管数据库限制导致采样失败时只省略这三个可选 gauge，保留 queue counts 与既有失败隔离语义。查询不读取 SQL 文本、参数或业务正文，也不携带云厂商 SDK；后续数据库适配沿用 Store seam。
+Platform API 与 Conversation Worker 的 queue sampler 只消费 Store-owned 的 bounded resource snapshot。Store 在 read-only transaction 中设置 `statement_timeout = 2000ms`，返回两个 durable queue counts 和本次读取的 `queryDurationMs`；时长被限制在 `0..2000ms`，输出不包含 SQL、参数或业务正文。成功读取记录一次 `dependency/completed`，固定 `operationRef=platform.resource_snapshot`；连接、取消、超时、非法计数或其他读取失败记录一次带 `DEPENDENCY_UNAVAILABLE` 的 `dependency/failed`，耗时同样有界。平台 API 还从真实 SSE stream 入口采样 `sse_connections` 与写入中的 `sse_pending_events`，只统计当前进程，连接关闭和写入完成均幂等扣减；未建立或无积压时只有可信的零值才输出。Worker 的 `conversation.queue.find` 阶段同样只输出固定 operationRef 和有界 duration，不记录 SQL、参数、ID 或正文；超过部署配置阈值的发现会额外输出固定 `conversation.queue.find.slow` 摘要，duration 限制在 `0..2000ms`，不把慢查询写入高基数标签。慢查询阈值默认 250ms，可由 `AGENT_INFRA_SLOW_QUERY_THRESHOLD_MS` 配置，范围为 1–2000ms。PostgreSQL checkout pool active/idle/waiting 没有可信的 postgres.js 公开计数，因此本票不输出这些 kind；后续 Aliyun 或其他数据库适配沿用 Store seam。
 
 ## HTTP 与已持久事件 Adapter
 
-`@agent-infra/observability/http` 的 `createHttpObservability(telemetry)` 是 Hono middleware，须在路由前注册。每个请求生成独立的 UUID `requestId`、`traceId`；`currentRequestMetadata()` 在该请求的 await 链内返回同一只读上下文，请求结束后及其后续异步任务返回 `undefined`。接入方的 `requestMetadata` 须消费该上下文，不能另行生成或采信外部 header。
+`@agent-infra/observability/http` 的 `createHttpObservability(telemetry)` 是 Hono middleware，须在路由前注册。每个请求生成独立的 UUID `requestId`、`traceId`，并在配置的观测实例中生成 server-owned W3C `traceparent`；`currentRequestMetadata()` 在该请求的 await 链内返回同一只读上下文，请求结束后及其后续异步任务返回 `undefined`。`traceParent` 是内部非枚举字段，不会进入业务响应；接入方的 `requestMetadata` 须消费该上下文，不能另行生成或采信外部 header。
 
 HTTP 只记录一次响应头建立阶段的结果与实测耗时：2xx/3xx 为 `completed`，4xx 为 `rejected`，5xx 或未被应用处理的异常为 `failed`。不读取 URL、header、body 或原始 error。流式响应返回后的传输耗时、连接数、积压与断流须由实际流入口另行采样；本 middleware 不声称这些数据已获得。
 
@@ -38,6 +38,6 @@ HTTP 只记录一次响应头建立阶段的结果与实测耗时：2xx/3xx 为 
 
 原事件消费者在同一锁定事实历史中按 operation/attempt/usage 字段判断首次出现，事务确认后才调用该方法。重放、stale 和持久失败不新增；未知恢复可补首次获得的字段，已观测字段和原终态不重计。新 attempt 单独统计，消费者重建仍从原历史去重，不维护额外缓存。指标表示首次持久确认的已知字段观测，不作账单权威；进程退出与 exporter 故障可能丢失遥测，不能宣称跨进程 exactly-once 导出。旧仅提供 `record` 的调用方保持兼容，完整正式进程 telemetry 对象直接支持用量消费。
 
-Issue #962 提供基础消费者 Adapter。实际进程装配、collector、四模板及 Connection 验收、跨进程 Span link、SSE/资源采样、查询与告警继续按 #441 各自实际证据验收；用量消费不证明真实 Codex 或 Connection 全链通过。
+Issue #962 提供基础消费者 Adapter。实际进程装配、collector、四模板及 Connection 验收、SSE/资源采样、查询与告警继续按各自 Issue 的实际证据验收；用量消费不证明真实 Codex 或 Connection 全链通过。
 
 Trace 队列最多保留 512 个 Span，每批最多导出 32 个；Trace 和 Metric 各最多并发一个 OTLP 请求，导出超时为两秒，`close()` 最多等待五秒。关闭超时后不再发起新的导出，状态保持 `closing`，直到 SDK shutdown 真正结束才变为 `closed`；此前已发出的请求仍受各自的导出超时约束。日志目的地阻塞或报错时，后续日志会丢弃并计入 `status().droppedLogs`。同步采集异常计入 `status().captureFailures`，导出回调只记录失败次数和时间，不记录原始错误。故障计数需要独立的进程健康入口；故障中的 exporter 无法可靠导出自己的故障指标。

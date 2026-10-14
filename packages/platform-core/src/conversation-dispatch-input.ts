@@ -45,11 +45,44 @@ function operation(value: unknown): ConversationDispatchOperationV1 {
 		value !== "conversation.turn.submit.v1" &&
 		value !== "conversation.turn.regenerate.v1" &&
 		value !== "conversation.turn.supplement.v1" &&
-		value !== "conversation.turn.stop.v1"
+		value !== "conversation.turn.stop.v1" &&
+		value !== "conversation.native-capability.invoke.v1"
 	) {
 		return unavailable();
 	}
 	return value;
+}
+
+function nativeCapabilityBinding(value: unknown) {
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		return unavailable();
+	const input = value as Record<string, unknown>;
+	if (
+		Object.keys(input).length !== 9 ||
+		!text(input.agentId) ||
+		!text(input.actorId) ||
+		!text(input.channelId) ||
+		!text(input.turnId) ||
+		!text(input.capabilityId) ||
+		(input.capabilityKind !== "command" && input.capabilityKind !== "skill") ||
+		!text(input.directoryRevision) ||
+		!text(input.parameters) ||
+		!text(input.parametersDigest) ||
+		!/^[a-f0-9]{64}$/.test(String(input.directoryRevision)) ||
+		!/^[a-f0-9]{64}$/.test(String(input.parametersDigest))
+	)
+		return unavailable();
+	return {
+		agentId: input.agentId as string,
+		actorId: input.actorId as string,
+		channelId: input.channelId as string,
+		turnId: input.turnId as string,
+		capabilityId: input.capabilityId as string,
+		capabilityKind: input.capabilityKind as "command" | "skill",
+		directoryRevision: input.directoryRevision as string,
+		parameters: input.parameters as string,
+		parametersDigest: input.parametersDigest as string,
+	};
 }
 
 function executionStatus(
@@ -144,6 +177,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"relayKeyBinding",
 			"taskWaitOrder",
 			"stopConfirmationTimedOut",
+			"nativeCapability",
 		],
 	);
 	if (
@@ -159,6 +193,18 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 	)
 		return unavailable();
 	const parsedOperation = operation(input.operation);
+	const parsedNativeCapability =
+		parsedOperation === "conversation.native-capability.invoke.v1"
+			? nativeCapabilityBinding(input.nativeCapability)
+			: undefined;
+	if (
+		parsedNativeCapability &&
+		(parsedNativeCapability.agentId !== text(input.agentId) ||
+			parsedNativeCapability.actorId !== text(input.actorId) ||
+			parsedNativeCapability.channelId !== text(input.channelId) ||
+			parsedNativeCapability.turnId !== text(input.turnId))
+	)
+		return unavailable();
 	const parsedPrincipal =
 		input.principal === undefined
 			? ({ kind: "user", id: text(input.actorId) } as const)
@@ -288,10 +334,19 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		};
 	}
 	const isStop = parsedOperation === "conversation.turn.stop.v1";
+	const isNativeCapability =
+		parsedOperation === "conversation.native-capability.invoke.v1";
 	if (
-		isStop !== (stopRequestId !== null) ||
-		isStop !== (runtimeInput === null) ||
-		isStop === (messageId !== null) ||
+		(isNativeCapability
+			? stopRequestId !== null ||
+				messageId !== null ||
+				runtimeInput !== null ||
+				modelConfigurationRevision !== null ||
+				modelOptionId !== null ||
+				reasoningLevel !== null
+			: isStop !== (stopRequestId !== null) ||
+				isStop !== (runtimeInput === null) ||
+				isStop === (messageId !== null)) ||
 		new Set([
 			modelConfigurationRevision === null,
 			modelOptionId === null,
@@ -342,6 +397,9 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			: {}),
 		...(metadataRecovery ? { metadataRecovery } : {}),
 		input: runtimeInput,
+		...(parsedNativeCapability
+			? { nativeCapability: parsedNativeCapability }
+			: {}),
 		executionStatus: executionStatus(input.executionStatus),
 		stopPending:
 			typeof input.stopPending === "boolean"

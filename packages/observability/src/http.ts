@@ -2,11 +2,17 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { MiddlewareHandler } from "hono";
-import type { startObservability } from "./index.js";
+import {
+	createTraceParent,
+	type ObservabilitySpan,
+	type startObservability,
+} from "./index.js";
 
 interface RequestMetadata {
 	readonly requestId: string;
 	readonly traceId: string;
+	/** Internal W3C context; non-enumerable on the returned object. */
+	readonly traceParent?: string;
 }
 
 const requests = new AsyncLocalStorage<{
@@ -21,14 +27,31 @@ export function currentRequestMetadata(): RequestMetadata | undefined {
 
 /** Measures response-header readiness, not the lifetime of a streaming body. */
 export function createHttpObservability(
-	telemetry: Pick<ReturnType<typeof startObservability>, "record">,
+	telemetry: Pick<ReturnType<typeof startObservability>, "record"> &
+		Partial<Pick<ReturnType<typeof startObservability>, "startSpan">>,
 ): MiddlewareHandler {
 	return async (context, next) => {
+		let span: ObservabilitySpan | undefined;
+		try {
+			span = telemetry.startSpan?.("platform.http.server");
+		} catch {
+			// Trace setup cannot change the existing response or exception.
+		}
+		const traceParent =
+			span?.traceParent ??
+			(telemetry.startSpan === undefined ? undefined : createTraceParent());
+		const metadata = {
+			requestId: randomUUID(),
+			traceId: randomUUID(),
+		};
+		if (traceParent !== undefined)
+			Object.defineProperty(metadata, "traceParent", {
+				value: traceParent,
+				enumerable: false,
+				writable: false,
+			});
 		const request = {
-			metadata: Object.freeze({
-				requestId: randomUUID(),
-				traceId: randomUUID(),
-			}),
+			metadata: Object.freeze(metadata) as RequestMetadata,
 			active: true,
 		};
 		return requests.run(request, async () => {
@@ -52,10 +75,12 @@ export function createHttpObservability(
 									: "completed",
 						durationMs: performance.now() - began,
 						...request.metadata,
+						...(traceParent === undefined ? {} : { traceParent }),
 					});
 				} catch {
 					// Telemetry cannot change the existing response or exception.
 				}
+				span?.end();
 			}
 		});
 	};

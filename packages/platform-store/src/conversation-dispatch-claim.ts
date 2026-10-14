@@ -323,6 +323,7 @@ export async function claimWork(
 		attemptCount: previousAttempt + 1,
 		requestId: outbox.request_id as string,
 		traceId: outbox.trace_id,
+		...(outbox.trace_parent ? { traceParent: outbox.trace_parent } : {}),
 		agentId: execution.agent_id,
 		actorId: execution.actor_id,
 		channelId: execution.channel_id,
@@ -353,6 +354,9 @@ export async function claimWork(
 					attachments: inputFiles.map((file) => file.file_id),
 				}
 			: null,
+		...(payload.nativeCapability
+			? { nativeCapability: payload.nativeCapability }
+			: {}),
 		executionStatus: currentExecutionStatus,
 		stopPending: stop?.status === "submitted",
 		...(stopConfirmationTimedOut ||

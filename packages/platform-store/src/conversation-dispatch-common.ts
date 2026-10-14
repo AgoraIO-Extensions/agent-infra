@@ -52,6 +52,7 @@ export interface OutboxRow {
 	delivery_fence: string | number;
 	trace_id: string;
 	request_id: string | null;
+	trace_parent: string | null;
 	decision_at: Date;
 }
 
@@ -189,6 +190,7 @@ export interface ConversationPayload {
 	modelConfigurationRevision: number | null;
 	modelOptionId: string | null;
 	reasoningLevel: string | null;
+	nativeCapability?: import("@agent-infra/platform-core").ConversationNativeCapabilityBindingV1;
 }
 
 export class ConversationDispatchStoreError extends Error {
@@ -217,6 +219,7 @@ export const operations = new Set<ConversationDispatchOperationV1>([
 	"conversation.turn.regenerate.v1",
 	"conversation.turn.supplement.v1",
 	"conversation.turn.stop.v1",
+	"conversation.native-capability.invoke.v1",
 ]);
 
 const retryableDatabaseCodes = new Set([

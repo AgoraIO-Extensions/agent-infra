@@ -21,6 +21,7 @@ import {
 	withDeploymentDiagnosticV1,
 } from "./deployment-diagnostic.js";
 import { startPlatformResourceSampling } from "./resource-sampler.js";
+import { SseResourceTracker } from "./sse-resource-tracker.js";
 
 interface StartOptions {
 	dependencies: PlatformAppDependencies;
@@ -28,6 +29,7 @@ interface StartOptions {
 	observability?: ReturnType<typeof startObservability>;
 	log?: (message: string) => void;
 	port?: number;
+	sseResources?: SseResourceTracker;
 }
 
 interface BrowserAuthHandler {
@@ -71,7 +73,11 @@ function authUnavailable(): Response {
 export function startPlatformApi(options: StartOptions) {
 	const port = options.port ?? runtimePort(process.env.PORT, 3000);
 	const log = options.log ?? console.info;
-	const app = createPlatformApp(options.dependencies, options.observability);
+	const app = createPlatformApp(
+		options.dependencies,
+		options.observability,
+		options.sseResources,
+	);
 	const browserAuth = options.browserAuth;
 	return serve(
 		{
@@ -173,6 +179,7 @@ export async function startPlatformApiFromDeployment(
 	let resourceSampling:
 		| ReturnType<typeof startPlatformResourceSampling>
 		| undefined;
+	const sseResources = new SseResourceTracker();
 	try {
 		observability = startObservability({
 			service: platformApiService,
@@ -187,6 +194,7 @@ export async function startPlatformApiFromDeployment(
 			dependencies: assembly.dependencies,
 			browserAuth: assembly.browserAuth,
 			observability,
+			sseResources,
 			log: options.log,
 			port: options.port,
 		});
@@ -212,6 +220,7 @@ export async function startPlatformApiFromDeployment(
 				assembly.readResourceSnapshot,
 				observability,
 				options.observabilityOptions?.metricIntervalMs ?? 5000,
+				sseResources,
 			);
 		}
 		return {

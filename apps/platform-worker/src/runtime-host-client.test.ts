@@ -1,5 +1,6 @@
 import type {
 	ExecutionGrantV1,
+	RuntimeBrowserHandoffRequestV3,
 	RuntimeSkillDirectoryEntryV1,
 	RuntimeSkillDirectoryRequestV1,
 	RuntimeSkillResourceReadRequestV1,
@@ -167,6 +168,133 @@ function response(
 }
 
 describe("Worker RuntimeHost HTTP/SSE client", () => {
+	function handoffRequest(
+		kind: RuntimeBrowserHandoffRequestV3["handoff"]["kind"],
+	): RuntimeBrowserHandoffRequestV3 {
+		const runtime = {
+			browserAlive: true,
+			authorized: true,
+			subjectId: "subject-1",
+			agentId: "agent-client",
+			conversationId: "conversation-client",
+			executionId: "execution-client",
+			sessionGeneration: 1,
+			resourceFence: 3,
+			workloadRevision: 1,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+			capabilityVersion: 1,
+			pageRevision: 1,
+		} as const;
+		const handoff =
+			kind === "request"
+				? { kind, reason: "mfa" as const, runtime }
+				: kind === "take-over"
+					? {
+							kind,
+							handoffId: "handoff-1",
+							operatorId: "subject-1",
+							subjectId: "subject-1",
+							runtime,
+						}
+					: kind === "return-to-agent"
+						? { kind, handoffId: "handoff-1", operatorId: "subject-1", runtime }
+						: kind === "revoke"
+							? { kind, reason: "BROWSER_HANDOFF_REVOKED" as const, runtime }
+							: { kind, runtime };
+		return {
+			schemaVersion: 3,
+			requestId: "request-handoff",
+			traceId: "trace-handoff",
+			principal: { kind: "user", id: "subject-1" },
+			channelId: "web",
+			agentId: "agent-client",
+			conversationId: "conversation-client",
+			executionId: "execution-client",
+			turnId: "turn-client",
+			sessionGeneration: 1,
+			hostSessionRef: "host-client",
+			operation: {
+				kind: "execution",
+				id: "execution-client",
+				deliveryFence: 3,
+				executionDeliveryFence: 3,
+			},
+			grant: {
+				schemaVersion: 2,
+				format: "runtime-execution-jws",
+				token: "header.payload.signature",
+			},
+			handoff,
+		};
+	}
+
+	it.each([
+		"request",
+		"take-over",
+		"return-to-agent",
+		"revoke",
+		"browser-crashed",
+	] as const)(
+		"sends Browser handoff %s through the V3 endpoint",
+		async (kind) => {
+			const fetcher = vi.fn<typeof fetch>(
+				async () =>
+					new Response(
+						JSON.stringify({
+							schemaVersion: 3,
+							hostSessionRef: "host-client",
+							executionId: "execution-client",
+							outcome: "accepted",
+							record: null,
+						}),
+						{ status: 200 },
+					),
+			);
+			const client = createWorkerRuntimeHostClientV3({
+				baseUrl: "http://runtime.internal",
+				serviceToken: "synthetic-service-token",
+				fetch: fetcher,
+			});
+			await expect(
+				client.browserHandoff(handoffRequest(kind)),
+			).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+			const [url] = fetcher.mock.calls[0] ?? [];
+			const [, init] = fetcher.mock.calls[0] ?? [];
+			expect(String(url)).toBe(
+				"http://runtime.internal/internal/runtime/v3/browser/handoff",
+			);
+			expect(init?.method).toBe("POST");
+			expect(init?.headers).toMatchObject({
+				authorization: "Bearer synthetic-service-token",
+				"content-type": "application/json",
+			});
+			expect(JSON.parse(String(init?.body))).toEqual(handoffRequest(kind));
+		},
+	);
+
+	it("fails closed on a malformed Browser handoff response", async () => {
+		const client = createWorkerRuntimeHostClientV3({
+			baseUrl: "http://runtime.internal",
+			serviceToken: "synthetic-service-token",
+			fetch: vi.fn<typeof fetch>(
+				async () =>
+					new Response(
+						JSON.stringify({ schemaVersion: 3, outcome: "accepted" }),
+						{
+							status: 200,
+						},
+					),
+			),
+		});
+		await expect(
+			client.browserHandoff(handoffRequest("request")),
+		).rejects.toMatchObject({
+			code: "RUNTIME_RESPONSE_INVALID",
+			retryable: true,
+		});
+	});
 	it.each(
 		[createWorkerRuntimeHostClientV1, createWorkerRuntimeHostClientV3].flatMap(
 			(createClient) =>

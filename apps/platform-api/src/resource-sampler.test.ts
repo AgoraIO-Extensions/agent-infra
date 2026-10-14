@@ -2,6 +2,7 @@ import { PassThrough } from "node:stream";
 import { startObservability } from "@agent-infra/observability";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startPlatformResourceSampling } from "./resource-sampler.js";
+import { SseResourceTracker } from "./sse-resource-tracker.js";
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -29,9 +30,6 @@ describe("Platform API resource sampling lifecycle", () => {
 				new Promise<{
 					taskWaiting: number;
 					outboxPending: number;
-					postgresActivityActive?: number;
-					postgresActivityIdle?: number;
-					postgresActivityWaiting?: number;
 				}>((resolve) => {
 					complete = resolve;
 				}),
@@ -52,24 +50,29 @@ describe("Platform API resource sampling lifecycle", () => {
 		await telemetry.close();
 	});
 
-	it("publishes optional local PostgreSQL activity gauges when Store exposes them", async () => {
+	it("publishes live SSE gauges from the process-owned tracker", async () => {
 		const { telemetry, observe } = observer();
-		const read = vi.fn().mockResolvedValue({
-			taskWaiting: 1,
-			outboxPending: 2,
-			postgresActivityActive: 3,
-			postgresActivityIdle: 4,
-			postgresActivityWaiting: 5,
-		});
-		const sampling = startPlatformResourceSampling(read, telemetry, 1000);
+		const tracker = new SseResourceTracker();
+		const connection = tracker.open();
+		const pending = tracker.beginPending();
+		const read = vi
+			.fn()
+			.mockResolvedValue({ taskWaiting: 1, outboxPending: 2 });
+		const sampling = startPlatformResourceSampling(
+			read,
+			telemetry,
+			1000,
+			tracker,
+		);
 		await vi.advanceTimersByTimeAsync(0);
 		expect(observe.mock.calls).toEqual([
 			[{ kind: "task_waiting", value: 1 }],
 			[{ kind: "outbox_pending", value: 2 }],
-			[{ kind: "postgres_activity_active", value: 3 }],
-			[{ kind: "postgres_activity_idle", value: 4 }],
-			[{ kind: "postgres_activity_waiting", value: 5 }],
+			[{ kind: "sse_connections", value: 1 }],
+			[{ kind: "sse_pending_events", value: 1 }],
 		]);
+		pending.close();
+		connection.close();
 		await sampling.stop();
 		await telemetry.close();
 	});

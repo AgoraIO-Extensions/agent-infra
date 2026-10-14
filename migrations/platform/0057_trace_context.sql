@@ -1,0 +1,2 @@
+ALTER TABLE "platform"."outbox_items" ADD COLUMN "trace_parent" varchar(55);--> statement-breakpoint
+ALTER TABLE "platform"."outbox_items" ADD CONSTRAINT "outbox_trace_parent_w3c" CHECK ("platform"."outbox_items"."trace_parent" IS NULL OR ("platform"."outbox_items"."trace_parent" ~ '^00-[0-9a-fA-F]{32}-[0-9a-fA-F]{16}-[0-9a-fA-F]{2}$' AND "platform"."outbox_items"."trace_parent" !~ '^00-0{32}-' AND "platform"."outbox_items"."trace_parent" !~ '-0{16}-'));

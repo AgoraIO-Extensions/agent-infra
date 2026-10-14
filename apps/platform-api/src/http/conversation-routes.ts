@@ -52,6 +52,7 @@ import {
 } from "@agent-infra/platform-store";
 import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import type { SseResourceTracker } from "../sse-resource-tracker.js";
 import {
 	HttpProtocolError,
 	parseIdempotencyKey,
@@ -164,6 +165,7 @@ export interface ConversationRoutesDependencies {
 	 * closed, 0–100; default 10. While they fail the stream writes nothing (#1606).
 	 */
 	readonly streamTransientFailureLimit?: number;
+	readonly sseResources?: SseResourceTracker;
 }
 
 type ConversationProjection = ReturnType<
@@ -1192,6 +1194,9 @@ export function registerConversationRoutes(
 				idempotencyKey: parseIdempotencyKey(context.req.raw, metadata.traceId),
 				requestId: metadata.requestId,
 				traceId: metadata.traceId,
+				...(metadata.traceParent === undefined
+					? {}
+					: { traceParent: metadata.traceParent }),
 			});
 			if (decision.outcome === "busy") return fail("BUSY", metadata.traceId);
 			if (decision.outcome === "starting")
@@ -1234,6 +1239,9 @@ export function registerConversationRoutes(
 				idempotencyKey: parseIdempotencyKey(context.req.raw, metadata.traceId),
 				requestId: metadata.requestId,
 				traceId: metadata.traceId,
+				...(metadata.traceParent === undefined
+					? {}
+					: { traceParent: metadata.traceParent }),
 			});
 			if (decision.outcome === "busy") return fail("BUSY", metadata.traceId);
 			if (decision.outcome === "starting")
@@ -1276,6 +1284,9 @@ export function registerConversationRoutes(
 				idempotencyKey: parseIdempotencyKey(context.req.raw, metadata.traceId),
 				requestId: metadata.requestId,
 				traceId: metadata.traceId,
+				...(metadata.traceParent === undefined
+					? {}
+					: { traceParent: metadata.traceParent }),
 			});
 			if (decision.outcome === "denied")
 				return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
@@ -1389,6 +1400,7 @@ export function registerConversationRoutes(
 					return streamSSE(
 						context,
 						async (stream) => {
+							const connection = dependencies.sseResources?.open();
 							const lifetime = new AbortController();
 							const abort = () => lifetime.abort();
 							request.signal.addEventListener("abort", abort, { once: true });
@@ -1401,12 +1413,15 @@ export function registerConversationRoutes(
 							let transientFailures = 0;
 							const watcher = dependencies.eventWake?.watch(conversationId);
 							const write = async <T>(task: () => Promise<T>): Promise<T> => {
+								const pending = dependencies.sseResources?.beginPending();
 								try {
 									return await streamRead(task, readTimeoutMs, lifetime.signal);
 								} catch (error) {
 									// Cancel the underlying reader to discard queued writes on backpressure.
 									stream.abort();
 									throw error;
+								} finally {
+									pending?.close();
 								}
 							};
 							const output = {
@@ -1583,6 +1598,7 @@ export function registerConversationRoutes(
 							} catch {
 								await terminate("dependency_unavailable");
 							} finally {
+								connection?.close();
 								watcher?.close();
 								request.signal.removeEventListener("abort", abort);
 								abort();
