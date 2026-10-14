@@ -1,6 +1,10 @@
 import { MultiServiceManifestDocumentV1Schema } from "@agent-infra/contracts/pilot";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
-import type { KubernetesObject } from "@kubernetes/client-node";
+import type {
+	KubernetesObject,
+	V1ConfigMap,
+	V1Deployment,
+} from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
@@ -218,13 +222,13 @@ describe("multi-service runtime operations", () => {
 		await operations.apply(value);
 		const deployment = [...fake.resources.values()].find(
 			(resource) => resource.kind === "Deployment",
-		);
+		) as V1Deployment | undefined;
 		expect(deployment?.metadata?.labels?.["agent-infra.agora.io/agent"]).toBe(
 			workloadResourceNameV1("agent-a"),
 		);
 		const configMap = [...fake.resources.values()].find(
 			(resource) => resource.kind === "ConfigMap",
-		);
+		) as V1ConfigMap | undefined;
 		expect(configMap?.immutable).toBe(true);
 		expect(configMap?.data).toEqual({ "app.conf": "hello=world\n" });
 		expect(deployment?.spec?.template.spec?.volumes).toEqual([
@@ -267,17 +271,19 @@ describe("multi-service runtime operations", () => {
 			},
 		});
 		const value = desired();
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
 		await operations.apply(value);
 		const configMap = fake.resources.get(
 			`ConfigMap/${workloadResourceNameV1("agent-a")}-web-config`,
-		);
+		) as V1ConfigMap | undefined;
 		if (!configMap) throw new Error("ConfigMap fixture missing");
 		fake.resources.set(
 			`ConfigMap/${workloadResourceNameV1("agent-a")}-web-config`,
 			{
 				...configMap,
 				data: { "app.conf": "tampered=true\n" },
-			},
+			} as V1ConfigMap,
 		);
 		await expect(operations.apply(value)).rejects.toThrow(
 			"ConfigMap is immutable and drifted",
