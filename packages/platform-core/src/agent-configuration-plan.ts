@@ -274,8 +274,10 @@ export function snapshotAgentConfigurationWritePlanV1(
 					.schemaVersion as number,
 			) ||
 			result.changedFields.includes("actions") ||
-			(configuration.schemaVersion === 3) !==
-				result.changedFields.includes("defaultRelayKey") ||
+			// 替换默认 Key 只会产生 V3；V3 计划也可以不替换 Key（保持 V3 的其他变更），
+			// 其基线必须同为 V3，由提交边界核对（#2401）。
+			(result.changedFields.includes("defaultRelayKey") &&
+				configuration.schemaVersion !== 3) ||
 			!Number.isSafeInteger(values.baseRevision) ||
 			(values.baseRevision as number) < 1 ||
 			!Number.isSafeInteger(values.nextRevision) ||

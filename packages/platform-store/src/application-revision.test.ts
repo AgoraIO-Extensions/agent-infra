@@ -29,7 +29,10 @@ import type {
 	ApplicationRevisionFailurePoint,
 	ApplicationRevisionFakeSnapshotV1,
 } from "../../platform-core/src/fake-application-revision.ts";
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.ts";
+import {
+	decodeAgentConfigurationRecord,
+	decodeVersionedAgentConfigurationRecord,
+} from "./agent-configuration-record.ts";
 import {
 	ApplicationRevisionStoreError,
 	PostgresApplicationRevisionTransactionV1,
@@ -145,6 +148,52 @@ function command(
 				bindingReference: "binding_01",
 			},
 		],
+	};
+}
+
+/** 带 Agent 默认 Relay Key 的标准申请持久化为 V3：模型配置不含任何凭证（#2401）。 */
+function keylessState(
+	status: "pending_approval" | "rejected" = "rejected",
+): ApplicationRevisionReadStateV1 {
+	const base = readState(status);
+	const model = base.configuration.modelConfiguration;
+	if (!model) throw new Error("fixture model missing");
+	return {
+		...base,
+		configuration: {
+			...base.configuration,
+			schemaVersion: 3,
+			modelConfiguration: {
+				...model,
+				options: model.options.map(
+					({ credential: _credential, ...option }) => option,
+				),
+			},
+		},
+	} as unknown as ApplicationRevisionReadStateV1;
+}
+
+/** V2 形态命令：不带 modelConfiguration，模型与默认 Key 保持不变。 */
+function keylessCommand(
+	key = "keyless-revision-01",
+	access = false,
+	environment = "debug",
+): ReviseApplicationCommandV2 {
+	return {
+		schemaVersion: 2,
+		idempotencyKey: key,
+		requestId: "request_keyless",
+		traceId: "trace_keyless",
+		name: "Revised keyless Agent",
+		description: "Revised keyless description",
+		coOwnerIds: access ? ["owner_02"] : [],
+		availability: access
+			? [{ kind: "organization", organizationId: "org_platform" }]
+			: [],
+		source: { kind: "standard", templateId: "template_01" },
+		environment: [{ name: "LOG_LEVEL", value: environment }],
+		secrets: [],
+		channels: [],
 	};
 }
 
@@ -358,7 +407,7 @@ async function snapshot() {
 		currentConfigurationRevision: Number(agent?.current_configuration_revision),
 		authorizationRevision: String(agent?.authorization_revision),
 		configuration: configuration?.configuration
-			? decodeAgentConfigurationRecord(configuration.configuration)
+			? decodeVersionedAgentConfigurationRecord(configuration.configuration)
 			: null,
 		owners: owners.map(({ owner_id }) => String(owner_id)),
 		availability: availability.map(({ target_type, target_id }) => ({
@@ -798,6 +847,182 @@ describe("PostgreSQL application revision transaction", () => {
 				outbox: 1,
 				audit: 1,
 			},
+		});
+	});
+
+	describe("keyless (V3) applications (#2401)", () => {
+		it("reads the complete state of a keyless application", async () => {
+			await resetDatabase();
+			await seedRevisionState(keylessState());
+			await expect(
+				openAdapter().read({
+					schemaVersion: 1,
+					applicationId,
+					actorId: applicantId,
+					idempotencyKey: "read-keyless",
+					requestDigest: "0".repeat(64),
+				}),
+			).resolves.toMatchObject({
+				outcome: "ready",
+				state: { configuration: { schemaVersion: 3, agentId, revision: 7 } },
+			});
+			await expect(
+				openAdapter().read({
+					schemaVersion: 1,
+					applicationId,
+					actorId: "user_other",
+					idempotencyKey: "read-keyless-cross-user",
+					requestDigest: "0".repeat(64),
+				}),
+			).resolves.toEqual({ outcome: "unavailable" });
+		});
+
+		it("resubmits a rejected keyless application with a configuration revision and keeps it keyless", async () => {
+			await resetDatabase();
+			await seedRevisionState(keylessState());
+			const before = await snapshot();
+			const revision = useCase(openAdapter(), managementState("rejected"));
+			const first = await revision.revise(
+				keylessCommand("keyless-01", true),
+				actor(),
+			);
+			expect(first).toEqual({
+				schemaVersion: 1,
+				applicationId,
+				agentId,
+				status: "pending_approval",
+				managementRevision: 4,
+				configurationRevision: 8,
+			});
+			await expect(
+				revision.revise(keylessCommand("keyless-01", true), actor()),
+			).resolves.toEqual(first);
+			const stored = await snapshot();
+			expect(stored).toMatchObject({
+				application: {
+					name: "Revised keyless Agent",
+					status: "pending_approval",
+					management_revision: "4",
+					decision_reason: null,
+				},
+				currentConfigurationRevision: 8,
+				owners: [applicantId, "owner_02"],
+				availability: [
+					{ targetType: "organization", targetId: "org_platform" },
+				],
+				counts: {
+					configurations: 2,
+					history: 1,
+					idempotency: 1,
+					outbox: 2,
+					audit: 2,
+				},
+			});
+			// 仍是无凭证的 V3，模型配置原样保留，没有降级成 V2。
+			expect(stored.configuration).toMatchObject({
+				schemaVersion: 3,
+				revision: 8,
+				environment: [{ name: "LOG_LEVEL", value: "debug" }],
+				modelConfiguration: before.configuration?.modelConfiguration,
+			});
+			const [row] = await adminClient`
+				select configuration from platform.agent_configuration_revisions
+				where agent_id = ${agentId} and revision = 8
+			`;
+			expect(JSON.stringify(row?.configuration)).not.toContain("credential");
+		});
+
+		it("commits a name-only keyless revision without a configuration revision", async () => {
+			await resetDatabase();
+			await seedRevisionState(keylessState("pending_approval"));
+			await expect(
+				useCase(
+					openAdapter(),
+					managementState(),
+					"authorization_9",
+					true,
+				).revise(
+					{
+						...keylessCommand("keyless-name-only", false, "info"),
+						description: "Original description",
+					},
+					actor(),
+				),
+			).resolves.toMatchObject({
+				managementRevision: 4,
+				configurationRevision: 7,
+			});
+			expect(await snapshot()).toMatchObject({
+				application: {
+					name: "Revised keyless Agent",
+					management_revision: "4",
+				},
+				currentConfigurationRevision: 7,
+				configuration: { schemaVersion: 3, revision: 7 },
+				counts: {
+					configurations: 1,
+					history: 1,
+					idempotency: 1,
+					outbox: 1,
+					audit: 1,
+				},
+			});
+		});
+
+		it("refuses to rewrite the configuration version at the commit boundary", async () => {
+			// 降级：V3 基线上提交由 V2 状态捕获的计划。
+			const v2Plan = await capturePlan("rejected");
+			await resetDatabase();
+			await seedRevisionState(keylessState());
+			await expect(
+				openAdapter().commit(structuredClone(v2Plan.plan), v2Plan.attachments),
+			).rejects.toMatchObject({ code: "unavailable" });
+			expect(await snapshot()).toMatchObject({
+				currentConfigurationRevision: 7,
+				configuration: { schemaVersion: 3 },
+				counts: { configurations: 1, history: 0, idempotency: 0 },
+			});
+			// 悄悄升级：V2 基线上提交由 V3 状态捕获的、不替换 Key 的计划。
+			let v3Plan: ApplicationRevisionWritePlanV1 | undefined;
+			await useCase(
+				{
+					async read() {
+						return { outcome: "ready", state: keylessState() };
+					},
+					async commit(plan) {
+						v3Plan = structuredClone(plan);
+						return { outcome: "conflict", reason: "stale_management" };
+					},
+				},
+				managementState("rejected"),
+			)
+				.revise(keylessCommand("keyless-capture"), actor())
+				.catch(() => undefined);
+			if (!v3Plan) throw new Error("Expected a keyless revision plan");
+			await resetDatabase();
+			await seed("rejected");
+			await expect(openAdapter().commit(v3Plan)).rejects.toMatchObject({
+				code: "unavailable",
+			});
+			expect(await snapshot()).toMatchObject({
+				currentConfigurationRevision: 7,
+				configuration: { schemaVersion: 2 },
+				counts: { configurations: 1, history: 0, idempotency: 0 },
+			});
+		});
+
+		it("refuses to change the model set of a keyless application and persists nothing", async () => {
+			await resetDatabase();
+			await seedRevisionState(keylessState());
+			const before = await snapshot();
+			await expect(
+				useCase(openAdapter(), managementState("rejected")).revise(
+					command("keyless-model-change"),
+					actor(),
+					createSecretRecordFixtureResolver(),
+				),
+			).rejects.toMatchObject({ code: "not_admitted" });
+			expect(await snapshot()).toEqual(before);
 		});
 	});
 

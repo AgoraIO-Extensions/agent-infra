@@ -37,7 +37,10 @@ import {
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
 } from "./agent-configuration.ts";
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.ts";
+import {
+	decodeAgentConfigurationRecord,
+	decodeVersionedAgentConfigurationRecord,
+} from "./agent-configuration-record.ts";
 import { PostgresAgentManagementTransactionV1 } from "./agent-management.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
@@ -207,7 +210,7 @@ async function waitForBlockedQuery(includes: readonly string[]): Promise<void> {
 	);
 }
 
-async function snapshot() {
+async function rawSnapshot() {
 	const [agent] = await adminClient`
 		select current_configuration_revision, authorization_revision
 		from platform.agents where id = 'agent_01'
@@ -230,7 +233,7 @@ async function snapshot() {
 			(select count(*) from platform.audit_events) as audit_count
 	`;
 	return {
-		configuration: decodeAgentConfigurationRecord(current?.configuration),
+		rawConfiguration: current?.configuration,
 		currentRevision: Number(agent?.current_configuration_revision),
 		authorizationRevision: String(agent?.authorization_revision),
 		managementRevision: Number(application?.management_revision),
@@ -238,6 +241,23 @@ async function snapshot() {
 		idempotencyCount: Number(counts?.idempotency_count),
 		outboxCount: Number(counts?.outbox_count),
 		auditCount: Number(counts?.audit_count),
+	};
+}
+
+async function snapshot() {
+	const { rawConfiguration, ...rest } = await rawSnapshot();
+	return {
+		...rest,
+		configuration: decodeAgentConfigurationRecord(rawConfiguration),
+	};
+}
+
+/** 与 snapshot 相同，但接受 V3（无凭证）配置记录。 */
+async function versionedSnapshot() {
+	const { rawConfiguration, ...rest } = await rawSnapshot();
+	return {
+		...rest,
+		configuration: decodeVersionedAgentConfigurationRecord(rawConfiguration),
 	};
 }
 
@@ -264,6 +284,116 @@ afterAll(async () => {
 });
 
 describe("PostgreSQL Agent configuration transaction", () => {
+	describe("keyless (V3) Agents (#2401)", () => {
+		it("reads a keyless record", async () => {
+			await clearDatabase();
+			await seed("agent_01", keylessRecord());
+			await expect(
+				openTransaction().read({
+					schemaVersion: 1,
+					agentId: "agent_01",
+					actorId: "owner_01",
+					idempotencyKey: "read-keyless",
+					requestDigest: "0".repeat(64),
+				}),
+			).resolves.toMatchObject({
+				outcome: "ready",
+				record: { configuration: { schemaVersion: 3, agentId: "agent_01" } },
+			});
+		});
+
+		it("persists a non-model update as a keyless revision", async () => {
+			await clearDatabase();
+			await seed("agent_01", keylessRecord());
+			const adapter = openTransaction();
+			const first = await useCase(adapter).update(keylessInput, actor);
+			expect(first).toMatchObject({ agentId: "agent_01", revision: 8 });
+			expect(first.changedFields).not.toContain("defaultRelayKey");
+			await expect(
+				useCase(adapter).update(keylessInput, actor),
+			).resolves.toEqual(first);
+			const stored = await versionedSnapshot();
+			expect(stored).toMatchObject({
+				currentRevision: 8,
+				configurationCount: 2,
+				idempotencyCount: 1,
+				outboxCount: 1,
+				auditCount: 1,
+				configuration: {
+					schemaVersion: 3,
+					revision: 8,
+					environment: [{ name: "LOG_LEVEL", value: "debug" }],
+					modelConfiguration: keylessRecord().modelConfiguration,
+				},
+			});
+			const [row] = await adminClient`
+				select configuration from platform.agent_configuration_revisions
+				where agent_id = 'agent_01' and revision = 8
+			`;
+			expect(JSON.stringify(row?.configuration)).not.toContain("credential");
+		});
+
+		it("refuses a V2-shaped model change on a keyless Agent and persists nothing", async () => {
+			await clearDatabase();
+			await seed("agent_01", keylessRecord());
+			const before = await versionedSnapshot();
+			await expect(
+				useCase(openTransaction()).update(
+					{
+						...keylessInput,
+						idempotencyKey: "keyless-model-change",
+						changes: {
+							modelConfiguration: {
+								options: [
+									{
+										optionId: "model_primary",
+										endpointId: "endpoint_01",
+										modelId: "gpt-5",
+										reasoningLevels: ["low"],
+										replaceCredential: true,
+									},
+								],
+								defaultOptionId: "model_primary",
+								defaultReasoningLevel: "low",
+							},
+						},
+					},
+					actor,
+				),
+			).rejects.toMatchObject({ code: "not_admitted" });
+			expect(await versionedSnapshot()).toEqual(before);
+		});
+
+		it("rejects plans that rewrite the configuration version", async () => {
+			// 降级：V3 基线上提交 V2 计划。
+			await clearDatabase();
+			await seed("agent_01", keylessRecord());
+			const downgrade = await captureUpdatePlan(
+				agentConfigurationConformanceRecordV1,
+			);
+			await expect(openTransaction().commit(downgrade)).rejects.toMatchObject({
+				name: "AgentConfigurationStoreError",
+			});
+			expect(await versionedSnapshot()).toMatchObject({
+				currentRevision: 7,
+				configurationCount: 1,
+				configuration: { schemaVersion: 3 },
+			});
+			// 悄悄升级：V2 基线上提交不替换 Key 的 V3 计划。
+			await clearDatabase();
+			await seed();
+			const upgrade = await captureUpdatePlan(keylessRecord());
+			await expect(openTransaction().commit(upgrade)).rejects.toMatchObject({
+				name: "AgentConfigurationStoreError",
+			});
+			expect(await versionedSnapshot()).toMatchObject({
+				currentRevision: 7,
+				configurationCount: 1,
+				configuration: { schemaVersion: 2 },
+			});
+		});
+	});
+
 	it("removes a bot binding and its encrypted setup credential in one revision", async () => {
 		await clearDatabase();
 		await seed("agent_01", {
@@ -1932,6 +2062,39 @@ describe("PostgreSQL Agent configuration query", () => {
 		).rejects.toThrow(AgentConfigurationStoreError);
 	});
 
+	it("returns versioned admission authority for keyless (V3) records with the same Owner scoping (#2401)", async () => {
+		await clearDatabase();
+		await seed("agent_01", keylessRecord());
+		const query = new PostgresAgentConfigurationQueryV1({ databaseUrl });
+		adapters.push(query);
+		const input = {
+			agentId: "agent_01",
+			actorId: "owner_01",
+			organizationIds: [],
+			isAdministrator: false,
+		};
+		await expect(query.readVersionedAuthority(input)).resolves.toMatchObject({
+			outcome: "found",
+			configuration: { schemaVersion: 3, agentId: "agent_01" },
+			management: { agentId: "agent_01", ownerIds: ["owner_01"] },
+			authorizationRevision: "authorization_9",
+		});
+		// 授权范围与 V2 完全相同：非 Owner、无救援标记的管理员、不存在的 Agent 一律不可见。
+		for (const changes of [
+			{ actorId: "administrator", isAdministrator: true },
+			{ actorId: "user_03", organizationIds: ["org_platform"] },
+			{ agentId: "agent_missing" },
+		]) {
+			await expect(
+				query.readVersionedAuthority({ ...input, ...changes }),
+			).resolves.toEqual({ outcome: "unavailable" });
+		}
+		// 旧消费者（企微绑定等）仍只接收 V2，直到各自的生命周期接收 V3。
+		await expect(query.readAuthority(input)).resolves.toEqual({
+			outcome: "unavailable",
+		});
+	});
+
 	it("returns one redacted domain projection and hides missing or forbidden Agents", async () => {
 		await clearDatabase();
 		await seed();
@@ -2219,6 +2382,61 @@ describe("PostgreSQL Agent configuration query", () => {
 		await transaction.close().catch(() => {});
 	});
 });
+
+/** 带 Agent 默认 Relay Key 的标准 Agent 持久化为 V3：模型配置不含任何凭证（#2401）。 */
+function keylessRecord(): typeof agentConfigurationConformanceRecordV1 {
+	const record = structuredClone(agentConfigurationConformanceRecordV1);
+	const model = record.modelConfiguration;
+	if (!model) throw new Error("fixture model missing");
+	return {
+		...record,
+		schemaVersion: 3,
+		modelConfiguration: {
+			...model,
+			options: model.options.map(
+				({ credential: _credential, ...option }) => option,
+			),
+		},
+	} as unknown as typeof agentConfigurationConformanceRecordV1;
+}
+
+const keylessInput = {
+	schemaVersion: 2 as const,
+	agentId: "agent_01",
+	idempotencyKey: "keyless-update",
+	requestId: "request_keyless",
+	traceId: "trace_keyless",
+	changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+};
+
+/** 用内存事务端口从指定基线捕获一份写入计划。 */
+async function captureUpdatePlan(
+	base: typeof agentConfigurationConformanceRecordV1,
+	input: Parameters<ReturnType<typeof useCase>["update"]>[0] = keylessInput,
+): Promise<AgentConfigurationWritePlanV1> {
+	let captured: AgentConfigurationWritePlanV1 | undefined;
+	const transaction: AgentConfigurationTransactionPortV1 = {
+		async read() {
+			return {
+				outcome: "ready",
+				record: {
+					schemaVersion: 1,
+					configuration: structuredClone(base),
+					authorizationRevision: "authorization_9",
+				},
+			};
+		},
+		async commit(plan) {
+			captured = structuredClone(plan);
+			return { outcome: "stale" };
+		},
+	};
+	await expect(useCase(transaction).update(input, actor)).rejects.toMatchObject(
+		{ code: "stale_revision" },
+	);
+	if (!captured) throw new Error("Expected a captured configuration plan");
+	return captured;
+}
 
 async function captureAccessPlan(
 	nextAuthorizationRevision = "authorization_9",
