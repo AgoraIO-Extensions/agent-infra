@@ -25,7 +25,7 @@ describe("Conversation Dispatch native capability payload", () => {
 		).toMatchObject({
 			conversationId: payload.conversationId,
 			executionId: payload.executionId,
-			turnId: null,
+			turnId: payload.turnId,
 			nativeCapability: {
 				agentId: payload.agentId,
 				actorId: payload.actorId,

@@ -100,7 +100,7 @@ export function exactPayload(
 			conversationId: input.conversationId as string,
 			executionId: input.executionId as string,
 			messageId: null,
-			turnId: null,
+			turnId: input.turnId as string,
 			sessionGeneration,
 			stopRequestId: null,
 			modelConfigurationRevision: null,
