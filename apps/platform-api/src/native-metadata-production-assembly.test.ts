@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createProductionNativeMetadataReaderV1 } from "./deployment.js";
+import {
+	createProductionNativeMetadataReaderFromWorkerV1,
+	createProductionNativeMetadataReaderV1,
+} from "./deployment.js";
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -78,5 +81,36 @@ describe("production native metadata assembly", () => {
 				"commands",
 			),
 		).resolves.toBeNull();
+	});
+
+	it("assembles the fixed Worker ingress without exposing a Runtime target", async () => {
+		let called = false;
+		const reader = createProductionNativeMetadataReaderFromWorkerV1({
+			resolveRequest: async () => binding,
+			worker: {
+				baseUrl: "http://worker.example.test",
+				serviceToken: "worker-service-token",
+				fetch: async (input, init) => {
+					called = true;
+					expect(String(input)).toBe(
+						"http://worker.example.test/internal/platform-worker/v1/native-metadata",
+					);
+					expect(String(init?.body)).not.toContain("runtime");
+					return new Response(JSON.stringify(response), {
+						status: 200,
+						headers: { "content-type": "application/json" },
+					});
+				},
+			},
+		});
+		await expect(
+			reader.read(
+				identity,
+				binding.scope.conversationId,
+				binding.scope.executionId,
+				"commands",
+			),
+		).resolves.toEqual(response.projection);
+		expect(called).toBe(true);
 	});
 });

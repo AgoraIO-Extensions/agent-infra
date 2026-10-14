@@ -1244,6 +1244,23 @@ export class RuntimeHost {
 		);
 	}
 
+	/**
+	 * Resolve a native Session only after checking the durable original
+	 * Execution authority.  This is a read-only production assembly seam for
+	 * native metadata; it does not create or renew a Runtime Session.
+	 */
+	async resolveNativeMetadataSessionRef(
+		reference: RuntimeOriginalExecutionRef,
+		hostSessionRef: string,
+	) {
+		this.trustedHost();
+		return this.options.store.resolveNativeSessionRefForOriginalExecution(
+			reference,
+			hostSessionRef,
+			this.options.grantValidationV2?.now ?? Date.now,
+		);
+	}
+
 	static async open(options: RuntimeHostOptions) {
 		const host = new RuntimeHost(options);
 		await host.recoverOperations();

@@ -232,4 +232,32 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.platformWorker.nativeMetadataGateway.port }}
+---
+# The API egress half is kept separate from the Worker ingress policy so the
+# Worker still retains its existing database/Kubernetes egress contract.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-native-metadata-api-egress
+  labels:
+    {{- include "agent-infra.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: platform-api
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: platform-worker
+      ports:
+        - protocol: TCP
+          port: {{ .Values.platformWorker.nativeMetadataGateway.port }}
+    # Platform API already has deployment-specific database/LDAP egress
+    # requirements. Keep this optional policy additive so enabling the Worker
+    # ingress cannot silently cut those existing dependencies.
+    - {}
 {{- end }}

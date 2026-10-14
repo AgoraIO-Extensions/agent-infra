@@ -849,6 +849,34 @@ export class FileRuntimeStore {
 			.nativeSessionRef;
 	}
 
+	/**
+	 * Resolve the native Session for one already accepted original Execution.
+	 *
+	 * Native metadata callers only carry the opaque Host Session reference.  Do
+	 * the complete durable authority check before returning its native mapping;
+	 * a stale execution, generation or authority therefore cannot turn a leaked
+	 * reference into a metadata read.
+	 */
+	async resolveNativeSessionRefForOriginalExecution(
+		reference: RuntimeOriginalExecutionRef,
+		hostSessionRef: string,
+		readNow: () => number,
+	) {
+		if (typeof hostSessionRef !== "string" || !hostSessionRef)
+			runtimeAuthorizationDenied();
+		const session = await this.authorizedOriginalExecution(
+			{ ...reference, runtimeOperationId: reference.executionId },
+			readNow,
+		);
+		if (
+			session.hostSessionRef !== hostSessionRef ||
+			typeof session.nativeSessionRef !== "string" ||
+			!session.nativeSessionRef
+		)
+			runtimeAuthorizationDenied();
+		return session.nativeSessionRef;
+	}
+
 	prepareOperation(input: PrepareOperation) {
 		const keyScopeV4 = input.keyScopeV4
 			? RuntimePinnedExecutionKeyScopeV4Schema.parse(input.keyScopeV4)
