@@ -31,6 +31,7 @@ export * from "./runtime-native-metadata-gateway.js";
 export * from "./runtime-native-metadata-proof.js";
 export * from "./runtime-native-metadata-server.js";
 export * from "./skill-materialization.js";
+export * from "./skill-materializer-store-adapter.js";
 export * from "./wecom-deployment.js";
 export { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 export * from "./workload-deployment.js";
