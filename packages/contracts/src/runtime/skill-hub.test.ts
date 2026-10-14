@@ -36,6 +36,33 @@ const projection = {
 	},
 } as const;
 
+const appliedBinding = {
+	schemaVersion: 1,
+	agentId: "agent-a",
+	agentVersion: "agent-version-1",
+	skillName: "workspace-summary",
+	skillVersion: projection.skillVersion,
+	grant: projection.grant,
+	configurationRevision: 4,
+	syncRevision: 1,
+	state: "synced",
+	failureReason: null,
+	appliedReceipt: {
+		schemaVersion: 1,
+		agentId: "agent-a",
+		agentVersion: "agent-version-1",
+		skillName: "workspace-summary",
+		configurationRevision: 4,
+		syncRevision: 1,
+		skillVersionId: "skill-version-a",
+		generationId: "d".repeat(64),
+		packageDigest: "a".repeat(64),
+		manifestDigest: "b".repeat(64),
+		targetPath: ".agents/skills/workspace-summary",
+		readOnly: true,
+	},
+} as const;
+
 describe("Runtime Skill Hub binding", () => {
 	it("accepts one bounded projection and rejects mixed identity", () => {
 		expect(
@@ -43,8 +70,10 @@ describe("Runtime Skill Hub binding", () => {
 				schemaVersion: 1,
 				agentId: "agent-a",
 				agentVersion: "agent-version-1",
+				configurationRevision: 4,
 				generationId: "d".repeat(64),
 				projections: [projection],
+				appliedBindings: [appliedBinding],
 			}),
 		).toMatchObject({ generationId: "d".repeat(64) });
 		expect(() =>
@@ -52,8 +81,10 @@ describe("Runtime Skill Hub binding", () => {
 				schemaVersion: 1,
 				agentId: "agent-a",
 				agentVersion: "agent-version-1",
+				configurationRevision: 4,
 				generationId: "d".repeat(64),
 				projections: [{ ...projection, agentId: "agent-b" }],
+				appliedBindings: [appliedBinding],
 			}),
 		).toThrow();
 	});

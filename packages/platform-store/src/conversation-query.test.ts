@@ -1003,6 +1003,93 @@ describe("PostgreSQL original native metadata scope", () => {
 	});
 });
 
+describe("PostgreSQL current model-directory dispatch scope", () => {
+	it("binds the active Web execution to its Conversation session and fence", async () => {
+		await client`
+			update platform.conversations
+			set host_session_ref = 'current-model-host'
+			where id = 'conversation-1'
+		`;
+		await client`
+			update platform.conversation_executions
+			set status = 'processing', delivery_fence = 9, updated_at = now()
+			where execution_id = 'execution-conversation-1'
+		`;
+		try {
+			expect(
+				await query.readRuntimeModelDirectoryDispatchRequestV1({
+					scope: actorOne,
+					conversationId: "conversation-1",
+				}),
+			).toMatchObject({
+				actorId: "actor-1",
+				channelId: "web",
+				agentId: "agent-1",
+				conversationId: "conversation-1",
+				executionId: "execution-conversation-1",
+				turnId: "turn-conversation-1",
+				sessionGeneration: 1,
+				deliveryFence: 9,
+				hostSessionRef: "current-model-host",
+			});
+		} finally {
+			await client`
+				update platform.conversations
+				set host_session_ref = null
+				where id = 'conversation-1'
+			`;
+			await client`
+				update platform.conversation_executions
+				set status = 'completed', delivery_fence = 1
+				where execution_id = 'execution-conversation-1'
+			`;
+		}
+	});
+
+	it("fails closed for another actor and for a completed execution", async () => {
+		await client`
+			update platform.conversations
+			set host_session_ref = 'current-model-host'
+			where id = 'conversation-1'
+		`;
+		await client`
+			update platform.conversation_executions
+			set status = 'processing', delivery_fence = 9
+			where execution_id = 'execution-conversation-1'
+		`;
+		try {
+			await expect(
+				query.readRuntimeModelDirectoryDispatchRequestV1({
+					scope: { actorId: "actor-2", channelId: "web" },
+					conversationId: "conversation-1",
+				}),
+			).resolves.toBeUndefined();
+			await client`
+				update platform.conversation_executions
+				set status = 'completed'
+				where execution_id = 'execution-conversation-1'
+			`;
+			await expect(
+				query.readRuntimeModelDirectoryDispatchRequestV1({
+					scope: actorOne,
+					conversationId: "conversation-1",
+				}),
+			).resolves.toBeUndefined();
+		} finally {
+			await client`
+				update platform.conversations
+				set host_session_ref = null
+				where id = 'conversation-1'
+			`;
+			await client`
+				update platform.conversation_executions
+				set status = 'completed', delivery_fence = 1
+				where execution_id = 'execution-conversation-1'
+			`;
+		}
+	});
+});
+
 it("preserves unallocated history and replay without treating missing or corrupt bindings as readiness", async () => {
 	const scope = { actorId: "legacy-user", channelId: "web" };
 	await client`insert into platform.conversations

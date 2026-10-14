@@ -38,6 +38,7 @@ type ConfigurationSessionState = BrowserSessionState | { kind: "loading" };
 
 type AgentConfigurationScreenProps = {
 	agent: AgentProjectionV2;
+	authorization?: ReactNode;
 	commandError?: (Error & { readonly retryable?: boolean }) | null;
 	commandResult?: AgentProjectionV2;
 	lifecycle?: ReactNode;
@@ -155,6 +156,7 @@ function unavailableScreen() {
 
 export function AgentConfigurationScreen({
 	agent,
+	authorization,
 	commandError = null,
 	commandResult,
 	defaultRelayKeyManaged = false,
@@ -332,6 +334,7 @@ export function AgentConfigurationScreen({
 			</p>
 			<div className="form-layout full-width-form">
 				<div className="min-w-0 space-y-6">
+					{authorization}
 					{submittedResult ? (
 						<p
 							ref={resultRef}

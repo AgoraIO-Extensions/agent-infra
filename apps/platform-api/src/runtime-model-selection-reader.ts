@@ -6,6 +6,7 @@ import {
 	type RuntimeModelDirectoryResponseV1,
 	RuntimeModelDirectoryResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
+import type { PostgresConversationQueryV1 } from "@agent-infra/platform-store";
 import type {
 	ConversationModelSelectionReaderV1,
 	ConversationModelSelectionReaderV1 as Reader,
@@ -158,6 +159,31 @@ export function createRuntimeModelSelectionReaderFromDispatchV1(options: {
 			}
 		},
 	};
+}
+
+/** Compose the production reader from the Platform Store binding and Worker transport. */
+export function createRuntimeModelSelectionReaderFromStoreV1(options: {
+	readonly query: Pick<
+		PostgresConversationQueryV1,
+		"readRuntimeModelDirectoryDispatchRequestV1"
+	>;
+	readonly transport: RuntimeModelDirectoryDispatchTransportV1;
+}): ConversationModelSelectionReaderV1 {
+	return createRuntimeModelSelectionReaderFromDispatchV1({
+		resolveRequest: ({ identity, conversationId, signal }) =>
+			options.query
+				.readRuntimeModelDirectoryDispatchRequestV1({
+					scope: {
+						actorId: identity.userId,
+						channelId: "web",
+						principal: { kind: "user", id: identity.userId },
+					},
+					conversationId,
+					signal,
+				})
+				.then((request) => request ?? null),
+		transport: options.transport,
+	});
 }
 
 export type RuntimeModelSelectionReaderV1 = Reader;

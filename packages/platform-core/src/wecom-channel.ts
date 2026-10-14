@@ -573,7 +573,7 @@ export interface WecomIdentityPortV1 {
 }
 export interface WecomAuthorityStateV1 {
 	readonly management: import("./agent-management.js").AgentManagementStateV1;
-	readonly configuration: import("./agent-configuration.js").AgentConfigurationRecordV2;
+	readonly configuration: import("./agent-configuration.js").AgentConfigurationRecord;
 	readonly authorizationRevision: string;
 }
 export interface WecomAuthorityStatePortV1 {

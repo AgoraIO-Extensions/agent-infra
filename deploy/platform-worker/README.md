@@ -8,7 +8,9 @@
 装配 API→Worker 的 ACP model-directory 内部入口（默认端口 3005）。该导出必须提供
 已绑定的 RuntimeHost resolver 与 Worker-only Grant signer；请求不能选择 URL、Session 或 Grant。
 入口使用同一 `serviceToken`，失败和绑定漂移均 fail closed；部署需要把端口作为 Worker 内部
-Service/NetworkPolicy 输入暴露给 Platform API，不能暴露给浏览器或 Agent。
+Service/NetworkPolicy 输入暴露给 Platform API，不能暴露给浏览器或 Agent。启用 native metadata
+时，两个入口共享同一个 Worker internal HTTP listener；显式配置的 port/hostname 必须一致，
+否则启动失败。
 Helm 的 `platformWorker.wecomEnabled=true` 还会在同一进程启动 WeCom 连接调谐和回复
 派发。未提供受信 WeCom 配置时启动失败；关闭该开关时不受理 WeCom Runtime 授权。
 启用该开关须使用 `workloadTopology.enabled=false` 的正式 Worker 部署；受控 topology
