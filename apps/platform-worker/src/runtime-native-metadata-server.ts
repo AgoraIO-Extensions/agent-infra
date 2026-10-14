@@ -15,6 +15,52 @@ export interface PlatformWorkerNativeMetadataGatewayServerOptionsV1 {
 	readonly hostname?: string;
 }
 
+/** Compose the native metadata and model-directory apps behind one Worker listener. */
+export function composePlatformWorkerInternalGatewayServerOptionsV1(options: {
+	readonly nativeMetadata?: PlatformWorkerInternalGatewayServerOptionsV1;
+	readonly modelDirectory?: PlatformWorkerInternalGatewayServerOptionsV1;
+}): PlatformWorkerInternalGatewayServerOptionsV1 | undefined {
+	const nativeMetadata = options.nativeMetadata;
+	const modelDirectory = options.modelDirectory;
+	if (!nativeMetadata && !modelDirectory) return undefined;
+	if (
+		nativeMetadata?.port !== undefined &&
+		modelDirectory?.port !== undefined &&
+		nativeMetadata.port !== modelDirectory.port
+	)
+		throw new Error("PLATFORM_WORKER_INTERNAL_GATEWAY_PORT_MISMATCH");
+	if (
+		nativeMetadata?.hostname !== undefined &&
+		modelDirectory?.hostname !== undefined &&
+		nativeMetadata.hostname !== modelDirectory.hostname
+	)
+		throw new Error("PLATFORM_WORKER_INTERNAL_GATEWAY_HOSTNAME_MISMATCH");
+	return {
+		app: {
+			async fetch(request) {
+				const pathname = new URL(request.url).pathname;
+				if (
+					pathname === "/internal/worker/v1/model-directory" &&
+					modelDirectory
+				)
+					return modelDirectory.app.fetch(request);
+				if (nativeMetadata) return nativeMetadata.app.fetch(request);
+				return new Response(null, { status: 404 });
+			},
+		},
+		...(modelDirectory?.port !== undefined
+			? { port: modelDirectory.port }
+			: nativeMetadata?.port !== undefined
+				? { port: nativeMetadata.port }
+				: {}),
+		...(modelDirectory?.hostname !== undefined
+			? { hostname: modelDirectory.hostname }
+			: nativeMetadata?.hostname !== undefined
+				? { hostname: nativeMetadata.hostname }
+				: {}),
+	};
+}
+
 function headers(input: IncomingMessage) {
 	const result = new Headers();
 	for (const [name, value] of Object.entries(input.headers)) {
