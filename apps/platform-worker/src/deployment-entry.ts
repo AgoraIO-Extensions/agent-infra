@@ -11,6 +11,10 @@ import {
 	type PlatformWorkerNativeMetadataGatewayPortsV1,
 } from "./native-metadata-deployment-assembly.js";
 import {
+	createPlatformRuntimeModelDirectoryGatewayV1,
+	type PlatformWorkerRuntimeModelDirectoryPortsV1,
+} from "./runtime-model-directory-deployment.js";
+import {
 	type DeploymentSkillMaterializerFactoryV1,
 	resolveDeploymentSkillMaterializerV1,
 } from "./skill-materializer-assembly.js";
@@ -23,10 +27,6 @@ import {
 	createProductionWorkloadWorkerOptionsV1,
 	createWorkloadReadinessAuthorizationV1,
 } from "./workload-deployment.js";
-import {
-	createPlatformRuntimeModelDirectoryGatewayV1,
-	type PlatformWorkerRuntimeModelDirectoryPortsV1,
-} from "./runtime-model-directory-deployment.js";
 import {
 	createWorkloadReadinessLedgerV1,
 	workloadResourceConfigurationHashV1,
