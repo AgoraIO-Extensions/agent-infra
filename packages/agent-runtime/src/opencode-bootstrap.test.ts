@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
 	type OpenCodeRuntimeOptions,
+	resolveOpenCodeSkillHome,
 	validateOpenCodeRuntimeOptions,
 } from "./opencode-bootstrap.js";
 
@@ -49,4 +50,17 @@ it("retains static credential validation for legacy OpenCode options", () => {
 			}),
 		),
 	).not.toThrow();
+});
+
+it("uses the verified Applied root as the private OpenCode Skill home", () => {
+	const skillDirectory = {
+		nativeRoot: "/opt/agent-infra-skill-hub",
+		generationId: "a".repeat(64),
+		findSkills: () => [],
+		readSkill: async () => new Uint8Array(),
+	};
+	expect(resolveOpenCodeSkillHome("/tmp/session", skillDirectory)).toBe(
+		"/opt/agent-infra-skill-hub",
+	);
+	expect(resolveOpenCodeSkillHome("/tmp/session")).toBe("/tmp/session/home");
 });
