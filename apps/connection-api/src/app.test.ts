@@ -3,13 +3,15 @@ import {
 	type ConnectionAccessApprovalService,
 	ConnectionApplicationService,
 	ConnectionError,
-	type ConnectionOAuthService,
+	type ConnectionOAuthRepository,
+	ConnectionOAuthService,
 	type ConnectionRepository,
 	type CredentialForExecution,
 	type GitHubExecutor,
 	type GitHubOAuthProvider,
 	type InvocationContext,
 	OAuthProtocolError,
+	PatBindingConfirmationError,
 	type ProviderOAuthCallbackStage,
 	type StoredCall,
 } from "@agent-infra/connection-core";
@@ -19,6 +21,28 @@ import { createConnectionApp } from "./app";
 import { createConnectionOAuthApp } from "./oauth-routes";
 import { createProductionConnectionApp } from "./production-app";
 import { createConnectionRuntimeApp } from "./runtime-app";
+
+function browserProofMethods(origin = "https://connection.example") {
+	const service = new ConnectionOAuthService({
+		consumer: { id: "test", name: "Test" },
+		identityRealm: "urn:test:forms",
+		identityKey: Buffer.alloc(32, 21),
+		resource: `${origin}/mcp`,
+		directory: {
+			authenticate: async () => {
+				throw new Error("Unused");
+			},
+			isActive: async () => true,
+		},
+		repository: {} as ConnectionOAuthRepository,
+	});
+	return {
+		createBrowserFormConfirmation:
+			service.createBrowserFormConfirmation.bind(service),
+		verifyBrowserFormConfirmation:
+			service.verifyBrowserFormConfirmation.bind(service),
+	};
+}
 
 const actions: ActionDefinition[] = [
 	{
@@ -2249,9 +2273,19 @@ describe("Connection API", () => {
 					tokenId: "pat-bound",
 				};
 			},
-			confirmPersonalAccessTokenBinding: async (
+			createPersonalAccessTokenBindingConfirmation: async () => ({
+				csrfToken: "fake-confirmation-proof",
+				account: {
+					displayName: "Alice",
+					email: "alice@example.invalid",
+					principalId: "principal-alice",
+				},
+			}),
+			confirmPersonalAccessTokenBindingWithCsrf: async (
 				input: Record<string, unknown>,
 			) => {
+				if (input.csrfToken !== "fake-confirmation-proof")
+					throw new PatBindingConfirmationError("INVALID_PROOF");
 				seen.push({ operation: "confirm", ...input });
 				return {
 					callbackUrl:
@@ -2365,6 +2399,9 @@ describe("Connection API", () => {
 		);
 		const pageHtml = await page.text();
 		expect(pageHtml).toContain("Alice / Agent A");
+		expect(pageHtml).toContain(
+			'name="csrfToken" value="fake-confirmation-proof"',
+		);
 		expect(pageHtml).toContain("当前 Connection 账号");
 		expect(pageHtml).toContain("alice@example.invalid");
 		expect(pageHtml).toContain(
@@ -2375,10 +2412,23 @@ describe("Connection API", () => {
 		);
 		expect(pageHtml).toContain("确认并返回 Connection E2E Reviewer");
 		expect(pageHtml).not.toContain("确认并返回 RehoboamAI");
+		vi.spyOn(
+			service,
+			"createPersonalAccessTokenBindingConfirmation",
+		).mockRejectedValueOnce(new PatBindingConfirmationError("PROOF_EXPIRED"));
+		const expiredDuringRender = await app.request(
+			`/connection/pat-bindings/${state}`,
+			{ headers: { cookie: `connection_session=${sessionToken}` } },
+		);
+		expect(expiredDuringRender.status).toBe(403);
+		expect(await expiredDuringRender.text()).toContain(
+			"请返回客户端重新打开授权页",
+		);
 
 		const confirmed = await app.request("/connection/pat-bindings/confirm", {
 			body: new URLSearchParams({
 				state,
+				csrfToken: "fake-confirmation-proof",
 				expectedPrincipalId: "principal-alice",
 			}),
 			headers: {
@@ -2393,6 +2443,70 @@ describe("Connection API", () => {
 			"https://rehoboam.example/api/connection/callback?binding_id=pat-binding-1",
 		);
 		expect(confirmed.headers.get("location")).not.toContain(pat);
+		for (const origin of [undefined, "null"]) {
+			const headers: Record<string, string> = {
+				"content-type": "application/x-www-form-urlencoded",
+				cookie: `connection_session=${sessionToken}`,
+			};
+			if (origin !== undefined) headers.origin = origin;
+			const compatible = await app.request("/connection/pat-bindings/confirm", {
+				method: "POST",
+				headers,
+				body: new URLSearchParams({
+					state,
+					csrfToken: "fake-confirmation-proof",
+				}),
+			});
+			expect(compatible.status).toBe(303);
+			expect(compatible.headers.get("location")).not.toContain(
+				"fake-confirmation-proof",
+			);
+		}
+		const warning = vi
+			.spyOn(console, "warn")
+			.mockImplementation(() => undefined);
+		try {
+			for (const [origin, csrfToken, reason] of [
+				[
+					"https://attacker.example/HEADER_SENTINEL",
+					"fake-confirmation-proof",
+					"CROSS_ORIGIN",
+				],
+				[undefined, "", "MISSING_PROOF"],
+				["null", "PROOF_SENTINEL", "INVALID_PROOF"],
+			] as const) {
+				const headers: Record<string, string> = {
+					"content-type": "application/x-www-form-urlencoded",
+					cookie: `connection_session=${sessionToken}`,
+					"sec-fetch-site": "FETCH_SENTINEL",
+				};
+				if (origin !== undefined) headers.origin = origin;
+				const denied = await app.request("/connection/pat-bindings/confirm", {
+					method: "POST",
+					headers,
+					body: new URLSearchParams({ state, csrfToken }),
+				});
+				expect(denied.status).toBe(403);
+				expect(await denied.text()).toContain("授权未完成");
+				const log = String(warning.mock.calls.at(-1)?.[0]);
+				expect(JSON.parse(log)).toMatchObject({
+					reason,
+					event: "connection_pat_binding_confirmation_rejected",
+				});
+				for (const secret of [
+					state,
+					sessionToken,
+					pat,
+					"HEADER_SENTINEL",
+					"PROOF_SENTINEL",
+					"FETCH_SENTINEL",
+					"alice@example.invalid",
+				])
+					expect(log).not.toContain(secret);
+			}
+		} finally {
+			warning.mockRestore();
+		}
 
 		const claimed = await app.request(
 			"/api/v1/connection/pat-bindings/pat-binding-1/claim",
@@ -2592,8 +2706,17 @@ describe("Connection API", () => {
 		const loopbackApp = createConnectionOAuthApp({
 			issuer: "http://127.0.0.1:3002/",
 			resource: "http://127.0.0.1:3002/mcp",
-			service,
+			service: {
+				...service,
+				...browserProofMethods("http://127.0.0.1:3002"),
+			} as unknown as ConnectionOAuthService,
 		});
+		const bootstrap = await loopbackApp.request(
+			"/api/v1/connection/browser-confirmation",
+		);
+		const browserCookie =
+			bootstrap.headers.getSetCookie()[0]?.split(";")[0] ?? "";
+		const csrf = (await bootstrap.json()).csrfToken;
 		const loopbackLogin = await loopbackApp.request(
 			"/api/v1/connection/session",
 			{
@@ -2615,6 +2738,8 @@ describe("Connection API", () => {
 					"content-type": "application/json",
 					host: "127.0.0.1:3002",
 					"idempotency-key": "test-opaque-login",
+					cookie: browserCookie,
+					"x-connection-csrf": csrf,
 					origin: "null",
 					"sec-fetch-site": "same-origin",
 				},
@@ -2631,7 +2756,8 @@ describe("Connection API", () => {
 				body: JSON.stringify({ name: "Safari laptop" }),
 				headers: {
 					"content-type": "application/json",
-					cookie: opaqueCookie,
+					cookie: `${opaqueCookie}; ${browserCookie}`,
+					"x-connection-csrf": csrf,
 					host: "127.0.0.1:3002",
 					"idempotency-key": "test-opaque-issue",
 					origin: "null",
@@ -2664,7 +2790,9 @@ describe("Connection API", () => {
 				},
 				method: "POST",
 			});
-			expect(rejected.status).toBe(400);
+			expect(rejected.status).toBe(
+				headers.host === "attacker.invalid" ? 400 : 403,
+			);
 		}
 
 		for (const request of [
@@ -2695,7 +2823,7 @@ describe("Connection API", () => {
 					headers,
 					method: request.method,
 				});
-				expect(rejected.status).toBe(400);
+				expect(rejected.status).toBe(origin ? 400 : 403);
 			}
 		}
 		expect(() =>
@@ -4167,10 +4295,12 @@ describe("Connection API", () => {
 
 	it("preserves the approved loopback form redirect on a throttled OAuth login page", async () => {
 		const issuer = "https://connection.example";
+		const proofMethods = browserProofMethods();
 		const app = createConnectionOAuthApp({
 			issuer,
 			resource: `${issuer}/mcp`,
 			service: {
+				...proofMethods,
 				approveAuthorization: async () => {
 					throw new OAuthProtocolError(
 						"temporarily_unavailable",
@@ -4184,10 +4314,16 @@ describe("Connection API", () => {
 		const response = await app.request(`${issuer}/oauth/login`, {
 			method: "POST",
 			headers: {
+				cookie: `__Host-connection_browser_confirmation=${"A".repeat(43)}`,
 				origin: issuer,
 				"content-type": "application/x-www-form-urlencoded",
 			},
 			body: new URLSearchParams({
+				csrfToken: proofMethods.createBrowserFormConfirmation({
+					nonce: "A".repeat(43),
+					purpose: "oauth-login",
+					context: "synthetic-request",
+				}).csrfToken,
 				username: "synthetic-user",
 				password: "synthetic-password",
 				request_id: "synthetic-request",
@@ -4258,6 +4394,7 @@ describe("Connection API", () => {
 					clientName: "Codex",
 					requestId: "oauth-request-id",
 				}),
+				...browserProofMethods(),
 			} as unknown as ConnectionOAuthService,
 		});
 		const response = await app.request("/oauth/authorize");
@@ -4273,6 +4410,7 @@ describe("Connection API", () => {
 	it("identifies the issuer on OAuth authorization responses", async () => {
 		let approvalCalls = 0;
 		const service = {
+			...browserProofMethods(),
 			approveAuthorization: async () => {
 				approvalCalls += 1;
 				return {
@@ -4295,6 +4433,11 @@ describe("Connection API", () => {
 			authorization_response_iss_parameter_supported: true,
 		});
 		const loginBody = new URLSearchParams({
+			csrfToken: service.createBrowserFormConfirmation({
+				nonce: "A".repeat(43),
+				purpose: "oauth-login",
+				context: "request-id",
+			}).csrfToken,
 			password: "password",
 			request_id: "request-id",
 			username: "user",
@@ -4312,13 +4455,14 @@ describe("Connection API", () => {
 						method: "POST",
 					})
 				).status,
-			).toBe(400);
+			).toBe(origin ? 400 : 403);
 		}
 		expect(approvalCalls).toBe(0);
 
 		const response = await app.request("/oauth/login", {
 			body: loginBody,
 			headers: {
+				cookie: `__Host-connection_browser_confirmation=${"A".repeat(43)}`,
 				"content-type": "application/x-www-form-urlencoded",
 				origin: "https://connection.example",
 			},

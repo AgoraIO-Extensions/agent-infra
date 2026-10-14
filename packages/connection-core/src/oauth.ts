@@ -112,6 +112,7 @@ export interface ConnectionPatBindingRepository {
 	}>;
 	confirmPersonalAccessTokenBinding(input: {
 		browserSessionHash: string;
+		confirmationExpiresAt?: Date;
 		expectedPrincipalId?: string;
 		protectedToken: string;
 		stateHash: string;
@@ -260,7 +261,9 @@ export interface ConnectionOAuthRepository {
 		refreshTokenHash: string;
 		resource: string;
 	}): Promise<OAuthTokenIdentity>;
-	requirePendingAuthorization(requestId: string): Promise<void>;
+	requirePendingAuthorization(
+		requestId: string,
+	): Promise<{ clientName: string; expiresAt: Date }>;
 	registerClient(
 		client: OAuthClientRegistration,
 		options?: { dynamic: boolean },
@@ -308,6 +311,22 @@ export class OAuthProtocolError extends Error {
 		readonly retryAfterSeconds?: number,
 	) {
 		super(message);
+	}
+}
+
+export class PatBindingConfirmationError extends OAuthProtocolError {
+	constructor(
+		readonly reason:
+			| "MISSING_PROOF"
+			| "INVALID_PROOF"
+			| "PROOF_EXPIRED"
+			| "PROOF_MISMATCH",
+	) {
+		super(
+			"access_denied",
+			"PAT binding confirmation is invalid or expired",
+			403,
+		);
 	}
 }
 
@@ -647,6 +666,15 @@ export class ConnectionOAuthService {
 			clientName: client.clientName,
 			requestId: authorization.requestId,
 		};
+	}
+
+	async getOAuthLoginPage(requestId: string) {
+		if (!/^[A-Za-z0-9_-]{43}$/.test(requestId))
+			throw new OAuthProtocolError(
+				"invalid_request",
+				oauthAuthorizationRequestUnavailableMessage,
+			);
+		return this.options.repository.requirePendingAuthorization(requestId);
 	}
 
 	async approveAuthorization(input: {
@@ -1072,7 +1100,147 @@ export class ConnectionOAuthService {
 		);
 	}
 
+	createBrowserFormConfirmation(input: {
+		nonce: string;
+		purpose: "browser-api" | "oauth-login" | "identity-probe";
+		context: string;
+	}) {
+		if (!/^[A-Za-z0-9_-]{43}$/.test(input.nonce))
+			throw new PatBindingConfirmationError("INVALID_PROOF");
+		const expiresAt = Date.now() + 5 * 60_000;
+		return {
+			csrfToken: this.protector.protect({
+				issuer: "connection-browser-form-v1",
+				subject: JSON.stringify({
+					purpose: input.purpose,
+					nonceHash: tokenHash(input.nonce),
+					contextHash: tokenHash(input.context),
+					origin: new URL(this.options.resource).origin,
+					expiresAt,
+				}),
+			}),
+			expiresAt: new Date(expiresAt).toISOString(),
+		};
+	}
+
+	verifyBrowserFormConfirmation(input: {
+		nonce: string | undefined;
+		csrfToken: string;
+		purpose: "browser-api" | "oauth-login" | "identity-probe";
+		context: string;
+	}) {
+		if (!input.nonce || !input.csrfToken)
+			throw new PatBindingConfirmationError("MISSING_PROOF");
+		try {
+			if (
+				input.csrfToken.length > 4096 ||
+				input.csrfToken.split(".").length !== 3
+			)
+				throw new Error();
+			const value = this.protector.unprotect(input.csrfToken);
+			if (value.issuer !== "connection-browser-form-v1") throw new Error();
+			const proof = JSON.parse(value.subject);
+			if (
+				!Number.isSafeInteger(proof.expiresAt) ||
+				proof.expiresAt <= Date.now()
+			)
+				throw new PatBindingConfirmationError("PROOF_EXPIRED");
+			if (
+				proof.purpose !== input.purpose ||
+				proof.nonceHash !== tokenHash(input.nonce) ||
+				proof.contextHash !== tokenHash(input.context) ||
+				proof.origin !== new URL(this.options.resource).origin
+			) {
+				throw new PatBindingConfirmationError("PROOF_MISMATCH");
+			}
+		} catch (error) {
+			if (error instanceof PatBindingConfirmationError) throw error;
+			throw new PatBindingConfirmationError("INVALID_PROOF");
+		}
+	}
+
+	async createPersonalAccessTokenBindingConfirmation(input: {
+		sessionToken: string | undefined;
+		state: string;
+	}) {
+		const account = await this.getBrowserAccount(input.sessionToken);
+		const binding = await this.getPersonalAccessTokenBinding(input.state);
+		const expiresAt = Math.min(
+			Date.now() + 5 * 60_000,
+			binding.expiresAt.getTime(),
+		);
+		if (expiresAt <= Date.now())
+			throw new PatBindingConfirmationError("PROOF_EXPIRED");
+		return {
+			account,
+			csrfToken: this.protector.protect({
+				issuer: "connection-pat-binding-confirmation-v1",
+				subject: JSON.stringify({
+					sessionHash: this.browserSessionHash(input.sessionToken),
+					principalId: account.principalId,
+					stateHash: tokenHash(input.state),
+					origin: new URL(this.options.resource).origin,
+					expiresAt,
+				}),
+			}),
+		};
+	}
+
+	async confirmPersonalAccessTokenBindingWithCsrf(input: {
+		csrfToken: string;
+		sessionToken: string | undefined;
+		state: string;
+	}) {
+		if (!input.csrfToken)
+			throw new PatBindingConfirmationError("MISSING_PROOF");
+		let proof: {
+			sessionHash: string;
+			principalId: string;
+			stateHash: string;
+			origin: string;
+			expiresAt: number;
+		};
+		try {
+			if (
+				input.csrfToken.length > 4096 ||
+				input.csrfToken.split(".").length !== 3
+			)
+				throw new Error();
+			const protectedValue = this.protector.unprotect(input.csrfToken);
+			if (protectedValue.issuer !== "connection-pat-binding-confirmation-v1")
+				throw new Error();
+			proof = JSON.parse(protectedValue.subject);
+			if (
+				!proof ||
+				typeof proof.sessionHash !== "string" ||
+				typeof proof.principalId !== "string" ||
+				typeof proof.stateHash !== "string" ||
+				typeof proof.origin !== "string" ||
+				!Number.isSafeInteger(proof.expiresAt)
+			)
+				throw new Error();
+		} catch {
+			throw new PatBindingConfirmationError("INVALID_PROOF");
+		}
+		if (proof.expiresAt <= Date.now())
+			throw new PatBindingConfirmationError("PROOF_EXPIRED");
+		if (
+			proof.sessionHash !== this.browserSessionHash(input.sessionToken) ||
+			proof.stateHash !== tokenHash(input.state) ||
+			proof.origin !== new URL(this.options.resource).origin
+		) {
+			throw new PatBindingConfirmationError("PROOF_MISMATCH");
+		}
+		return this.confirmPersonalAccessTokenBinding({
+			confirmationExpiresAt: new Date(proof.expiresAt),
+			expectedPrincipalId: proof.principalId,
+			sessionToken: input.sessionToken,
+			state: input.state,
+		});
+	}
+
 	async confirmPersonalAccessTokenBinding(input: {
+		confirmationExpiresAt?: Date;
 		expectedPrincipalId?: string;
 		sessionToken: string | undefined;
 		state: string;
@@ -1090,6 +1258,7 @@ export class ConnectionOAuthService {
 			await this.options.patBinding.repository.confirmPersonalAccessTokenBinding(
 				{
 					browserSessionHash: this.browserSessionHash(input.sessionToken),
+					confirmationExpiresAt: input.confirmationExpiresAt,
 					expectedPrincipalId: input.expectedPrincipalId,
 					protectedToken: this.protector.protect({
 						issuer: "connection-pat-binding",

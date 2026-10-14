@@ -110,7 +110,13 @@ describe("company identity probe with durable commands", () => {
 				);
 				const response = await app.request(start, {
 					method: "POST",
+					body: new URLSearchParams({
+						csrfToken:
+							/name="csrfToken" value="([^"]+)"/.exec(await page.text())?.[1] ??
+							"",
+					}),
 					headers: {
+						"content-type": "application/x-www-form-urlencoded",
 						origin,
 						cookie: `connection_session=${alice.sessionToken}`,
 					},
@@ -125,6 +131,17 @@ describe("company identity probe with durable commands", () => {
 				expect(response.headers.get("set-cookie")).toContain("HttpOnly");
 				return url.searchParams.get("state") ?? "";
 			};
+			const callbackProofs = new Map<string, string>();
+			const callbackProof = (state: string) => {
+				try {
+					return (
+						callbackProofs.get(state) ??
+						probe.createCallbackConfirmation(state, state, "test-code")
+					);
+				} catch {
+					return "";
+				}
+			};
 			const finish = (
 				state: string,
 				session = alice.sessionToken,
@@ -137,7 +154,11 @@ describe("company identity probe with durable commands", () => {
 						"content-type": "application/x-www-form-urlencoded",
 						cookie: `connection_session=${session}; connection_identity_probe_state=${cookieState}`,
 					},
-					body: new URLSearchParams({ state, code: "test-code" }).toString(),
+					body: new URLSearchParams({
+						state,
+						code: "test-code",
+						csrfToken: callbackProof(state),
+					}).toString(),
 				});
 			try {
 				expect((await app.request(start)).status).toBe(401);
@@ -178,7 +199,12 @@ describe("company identity probe with durable commands", () => {
 					"default-src 'none'",
 				);
 				expect(bridge.headers.get("referrer-policy")).toBe("no-referrer");
-				expect(await bridge.text()).toContain("完成身份探测");
+				const bridgeText = await bridge.text();
+				expect(bridgeText).toContain("完成身份探测");
+				callbackProofs.set(
+					state,
+					/name="csrfToken" value="([^"]+)"/.exec(bridgeText)?.[1] ?? "",
+				);
 				expect(readIdentity).not.toHaveBeenCalled();
 				expect((await finish(state, bob.sessionToken)).status).toBe(400);
 				expect(

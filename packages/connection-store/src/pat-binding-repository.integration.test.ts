@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { ConnectionOAuthService } from "@agent-infra/connection-core";
 import postgres from "postgres";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { migrateConnectionDatabase } from "./migrations";
 import { PostgresConnectionOAuthRepository } from "./oauth-repository";
@@ -17,6 +17,199 @@ if (process.env.CI && !databaseUrl) {
 const integrationTest = databaseUrl ? it : it.skip;
 
 describe("PostgreSQL PAT binding", () => {
+	integrationTest(
+		"binds confirmation proof to session, account, binding, purpose and deadline with single consumption",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const oauthRepository = new PostgresConnectionOAuthRepository(
+				databaseUrl,
+			);
+			const bindingRepository = new PostgresConnectionPatBindingRepository(
+				databaseUrl,
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			const options = {
+				consumer: { id: "consumer-codex", name: "Codex" },
+				directory: {
+					authenticate: async (username: string) => ({
+						displayName: username,
+						email: `${username}@example.invalid`,
+						issuer: "urn:test:company-ldap",
+						subject: username,
+					}),
+					isActive: async () => true,
+				},
+				identityRealm: `urn:test:csrf:${suffix}`,
+				identityKey: Buffer.alloc(32, 31),
+				patBinding: { repository: bindingRepository },
+				repository: oauthRepository,
+				resource: "https://connection.example/mcp",
+			};
+			const service = new ConnectionOAuthService(options);
+			try {
+				const client = await service.registerPatBindingConsumer({
+					consumerId: `csrf-client-${suffix}`,
+					consumerName: "CSRF client",
+					callbackUrl: "https://client.example/callback",
+				});
+				const alice = await service.loginBrowserSession({
+					username: `alice-${suffix}`,
+					password: "fake",
+				});
+				const aliceOtherSession = await service.loginBrowserSession({
+					username: `alice-${suffix}`,
+					password: "fake",
+				});
+				const bob = await service.loginBrowserSession({
+					username: `bob-${suffix}`,
+					password: "fake",
+				});
+				const create = async () => {
+					const pending = await service.createPersonalAccessTokenBinding({
+						consumerId: client.consumerId,
+						secret: client.secret,
+						name: "CSRF test",
+					});
+					return {
+						...pending,
+						state:
+							new URL(pending.authorizationUrl).pathname.split("/").at(-1) ??
+							"",
+					};
+				};
+				const pending = await create();
+				const other = await create();
+				const confirmation =
+					await service.createPersonalAccessTokenBindingConfirmation({
+						sessionToken: alice.sessionToken,
+						state: pending.state,
+					});
+				const input = {
+					csrfToken: confirmation.csrfToken,
+					sessionToken: alice.sessionToken,
+					state: pending.state,
+				};
+				for (const invalid of [
+					{ ...input, csrfToken: "" },
+					{ ...input, csrfToken: "invalid" },
+					{ ...input, csrfToken: `${input.csrfToken}.extra` },
+					{
+						...input,
+						csrfToken:
+							(input.csrfToken[0] === "A" ? "B" : "A") +
+							input.csrfToken.slice(1),
+					},
+					{ ...input, sessionToken: bob.sessionToken },
+					{ ...input, sessionToken: aliceOtherSession.sessionToken },
+					{ ...input, state: other.state },
+				])
+					await expect(
+						service.confirmPersonalAccessTokenBindingWithCsrf(invalid),
+					).rejects.toMatchObject({ error: "access_denied" });
+				const otherOrigin = new ConnectionOAuthService({
+					...options,
+					resource: "https://other.example/mcp",
+				});
+				await expect(
+					otherOrigin.confirmPersonalAccessTokenBindingWithCsrf(input),
+				).rejects.toMatchObject({ reason: "PROOF_MISMATCH" });
+				const clock = vi
+					.spyOn(Date, "now")
+					.mockReturnValue(Date.now() + 5 * 60_000 + 1);
+				try {
+					await expect(
+						service.confirmPersonalAccessTokenBindingWithCsrf(input),
+					).rejects.toMatchObject({ reason: "PROOF_EXPIRED" });
+				} finally {
+					clock.mockRestore();
+				}
+				await service.confirmPersonalAccessTokenBinding({
+					state: other.state,
+					sessionToken: alice.sessionToken,
+					expectedPrincipalId: alice.account.principalId,
+				});
+				const [otherRow] =
+					await sql`SELECT protected_token FROM connection_pat_binding_sessions WHERE id = ${other.bindingId}`;
+				await expect(
+					service.confirmPersonalAccessTokenBindingWithCsrf({
+						...input,
+						csrfToken: otherRow?.protected_token,
+					}),
+				).rejects.toMatchObject({ reason: "INVALID_PROOF" });
+				await expect(
+					service.confirmPersonalAccessTokenBinding({
+						state: pending.state,
+						sessionToken: alice.sessionToken,
+						expectedPrincipalId: alice.account.principalId,
+						confirmationExpiresAt: new Date(0),
+					}),
+				).rejects.toMatchObject({ reason: "PROOF_EXPIRED" });
+				const [before] =
+					await sql`SELECT status, token_id FROM connection_pat_binding_sessions WHERE id = ${pending.bindingId}`;
+				expect(before).toMatchObject({ status: "PENDING", token_id: null });
+				const attempts = await Promise.allSettled([
+					service.confirmPersonalAccessTokenBindingWithCsrf(input),
+					service.confirmPersonalAccessTokenBindingWithCsrf(input),
+				]);
+				expect(
+					attempts.filter((attempt) => attempt.status === "fulfilled"),
+				).toHaveLength(1);
+				expect(
+					attempts.filter((attempt) => attempt.status === "rejected"),
+				).toHaveLength(1);
+				const [count] =
+					await sql`SELECT count(*)::int AS count FROM connection_personal_access_tokens token JOIN connection_pat_binding_sessions binding ON binding.token_id=token.id WHERE binding.id = ${pending.bindingId}`;
+				expect(count?.count).toBe(1);
+				const claimed = await service.claimPersonalAccessTokenBinding({
+					bindingId: pending.bindingId,
+					consumerId: client.consumerId,
+					secret: client.secret,
+				});
+				expect(claimed.account.id).toBe(alice.account.principalId);
+				await expect(
+					service.confirmPersonalAccessTokenBindingWithCsrf(input),
+				).rejects.toMatchObject({ error: "invalid_request" });
+				const expiredBinding = await create();
+				const expiredProof =
+					await service.createPersonalAccessTokenBindingConfirmation({
+						state: expiredBinding.state,
+						sessionToken: alice.sessionToken,
+					});
+				await sql`UPDATE connection_pat_binding_sessions SET expires_at = now() - interval '1 minute' WHERE id = ${expiredBinding.bindingId}`;
+				await expect(
+					service.confirmPersonalAccessTokenBindingWithCsrf({
+						state: expiredBinding.state,
+						csrfToken: expiredProof.csrfToken,
+						sessionToken: alice.sessionToken,
+					}),
+				).rejects.toMatchObject({ error: "invalid_request" });
+				const disabledBinding = await create();
+				const disabledProof =
+					await service.createPersonalAccessTokenBindingConfirmation({
+						state: disabledBinding.state,
+						sessionToken: alice.sessionToken,
+					});
+				await service.disablePatBindingConsumer(client.consumerId);
+				await expect(
+					service.confirmPersonalAccessTokenBindingWithCsrf({
+						state: disabledBinding.state,
+						csrfToken: disabledProof.csrfToken,
+						sessionToken: alice.sessionToken,
+					}),
+				).rejects.toMatchObject({ error: "invalid_request" });
+			} finally {
+				await sql.end();
+				await bindingRepository.close();
+				await oauthRepository.close();
+			}
+		},
+		30_000,
+	);
 	integrationTest(
 		"binds, claims, and isolates one PAT per Principal and token instance",
 		async () => {

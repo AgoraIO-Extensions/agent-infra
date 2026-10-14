@@ -73,6 +73,56 @@ export class CompanyIdentityProbe {
 		return account;
 	}
 
+	async createStartConfirmation(sessionToken: string | undefined) {
+		await this.requireAdministrator(sessionToken);
+		if (!sessionToken) invalid();
+		return this.options.oauth.createBrowserFormConfirmation({
+			nonce: Buffer.from(hash(sessionToken), "hex").toString("base64url"),
+			purpose: "identity-probe",
+			context: "start",
+		}).csrfToken;
+	}
+
+	verifyStartConfirmation(sessionToken: string | undefined, csrfToken: string) {
+		if (!sessionToken) invalid();
+		this.options.oauth.verifyBrowserFormConfirmation({
+			nonce: Buffer.from(hash(sessionToken), "hex").toString("base64url"),
+			purpose: "identity-probe",
+			context: "start",
+			csrfToken,
+		});
+	}
+
+	createCallbackConfirmation(
+		state: string,
+		cookie: string | undefined,
+		code: string,
+	) {
+		const value = this.validateCallback(state, cookie, code);
+		return this.options.oauth.createBrowserFormConfirmation({
+			nonce: Buffer.from(value.session, "hex").toString("base64url"),
+			purpose: "identity-probe",
+			context: `${state}\0${code}`,
+		}).csrfToken;
+	}
+
+	verifyCallbackConfirmation(input: {
+		state: string;
+		cookie: string | undefined;
+		code: string;
+		sessionToken: string | undefined;
+		csrfToken: string;
+	}) {
+		this.validateCallback(input.state, input.cookie, input.code);
+		if (!input.sessionToken) invalid();
+		this.options.oauth.verifyBrowserFormConfirmation({
+			nonce: Buffer.from(hash(input.sessionToken), "hex").toString("base64url"),
+			purpose: "identity-probe",
+			context: `${input.state}\0${input.code}`,
+			csrfToken: input.csrfToken,
+		});
+	}
+
 	async start(sessionToken: string | undefined) {
 		await this.requireAdministrator(sessionToken);
 		if (!sessionToken) invalid();

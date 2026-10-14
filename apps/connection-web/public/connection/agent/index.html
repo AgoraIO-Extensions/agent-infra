@@ -36,6 +36,7 @@
         </ul>
         <p>三种方式都访问 <code>__CONNECTION_ORIGIN__/mcp</code>，传输协议为 Streamable HTTP。令牌认证只证明“是谁、哪个客户端”；外部账号连接和 Action 授权还需分别完成；只有管理员开启审批的连接器要求公司审批，现有及新增连接器默认关闭审批。</p>
         <p>启用公司入口保护时，用户在浏览器先完成公司 OAuth 登录，回跳后自动完成入口校验（未自动跳转时等待两秒，使用出现的“完成公司登录”按钮），再按 LDAP 账号登录 Connection；两次账号可以不同，业务身份和已有授权仍归 LDAP 账号。MCP、metadata、DCR、token 与 PAT Binding 后端创建/领取请求不需要 公司入口 Cookie 或额外 apiKey。用户确认页仍需入口准入和 Connection 登录。</p>
+        <p>公司登录、LDAP 授权登录和授权确认均保留用途独立的短期防伪校验。会话丢失或页面失效时，按页面提示重新打开授权入口并核对账号，不会自动重放提交。若企业微信等内置浏览器隔离或清除 Cookie，请复制页面中的恢复入口到系统浏览器继续。URL 仅携带不透明流程标识，不携带密码、PAT 或防伪证明；不要自行拼接参数。外部系统回调仍按各 Provider 的 state/PKCE 校验，客户端后端的创建/领取契约不变。</p>
         <p>入口会话过期时，用户重新打开控制台完成入口登录后主动重试，不自动重放提交；退出 Connection 不等于退出公司 SSO。</p>
       </section>
 
@@ -65,6 +66,7 @@ Idempotency-Key: &lt;本次创建操作的 UUID&gt;
 }</code></pre>
         <p>成功返回 HTTP 201，包含 <code>bindingId</code>、<code>authorizationUrl</code> 和 <code>expiresAt</code>。后端保存 <code>bindingId → 当前产品用户/会话/实例</code> 的关联，再让用户在新 tab 打开返回的 <code>authorizationUrl</code>。不要自行拼授权 URL，也不要把浏览器提交的用户 ID 当作身份权威。</p>
         <p><strong>用户确认：</strong>用户在 Connection 登录后会看到“授权 My Agent”页面，展示当前 Connection 账号、客户端名称、令牌名称、链接有效期及将交付客户端后端的账号信息。点击“确认并返回 My Agent”后，Connection 创建该用户、该 Consumer 的独立实例与 PAT，并以 HTTP 303 回到已注册地址：</p>
+        <p>授权确认表单自动携带绑定当前登录会话、账号和本次请求的校验码，最多五分钟有效且不超过绑定链接期限。企业微信等内置浏览器缺失或发送 null 来源时，仍需校验码与登录验证全部通过；明确跨域来源拒绝。无需客户端修改创建/领取接口，不要代提交确认表单或把校验码、PAT 放到 URL。旧页面、校验码过期或账号切换时，重新打开授权页；排查只需提供错误编号。企业微信实际兼容性需用真实客户端验收。</p>
         <pre><code>https://agent.example/connection/callback?binding_id=&lt;bindingId&gt;</code></pre>
         <p><strong>服务端领取：</strong>回调必须验证 <code>binding_id</code> 属于原来发起绑定的用户、会话和实例；不要接受任意 ID 后给当前用户绑定。后端使用同一 Consumer 的服务凭据领取：</p>
         <pre><code>POST __CONNECTION_ORIGIN__/api/v1/connection/pat-bindings/&lt;bindingId&gt;/claim

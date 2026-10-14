@@ -875,13 +875,16 @@ export class PostgresConnectionOAuthRepository
 
 	async requirePendingAuthorization(requestId: string) {
 		const [authorization] = await this.sql`
-			SELECT request_id_hash
+			SELECT request_id_hash, client.client_name, auth.expires_at
 			FROM connection_oauth_authorizations auth
+			JOIN connection_oauth_clients client ON client.client_id = auth.client_id AND client.status = 'ACTIVE'
+			JOIN connection_consumers consumer ON consumer.id = client.consumer_id AND consumer.status = 'ACTIVE'
+			JOIN connection_consumer_instances instance ON instance.id = client.instance_id AND instance.status = 'ACTIVE'
 			CROSS JOIN connection_recovery_control recovery
 			WHERE request_id_hash = ${hash(requestId)}
 				AND approved_at IS NULL
 				AND consumed_at IS NULL
-				AND expires_at > now()
+				AND auth.expires_at > now()
 				AND auth.recovery_generation = recovery.generation
 		`;
 		if (!authorization) {
@@ -890,6 +893,10 @@ export class PostgresConnectionOAuthRepository
 				oauthAuthorizationRequestUnavailableMessage,
 			);
 		}
+		return {
+			clientName: String(authorization.client_name),
+			expiresAt: authorization.expires_at as Date,
+		};
 	}
 
 	async approveAuthorization(input: {

@@ -15,6 +15,40 @@ export const companyEntryCheckPath = `${companyEntryPath}/check`;
 export const companyEntryStateTtl = 300;
 export const companyEntryTtl = 1800;
 
+export function browserAuthorizationRecoveryTarget(
+	value: string | undefined,
+	origin: string,
+) {
+	if (!value) return undefined;
+	try {
+		const url = new URL(value, origin);
+		if (
+			url.origin !== new URL(origin).origin ||
+			url.username ||
+			url.password ||
+			url.hash
+		)
+			return undefined;
+		if (
+			url.pathname === "/connection/pat-bindings/confirm" &&
+			url.searchParams.getAll("flow").length === 1
+		) {
+			const state = url.searchParams.get("flow") ?? "";
+			if (/^conn_pat_binding_[A-Za-z0-9_-]{43}$/.test(state))
+				return `/connection/pat-bindings/${state}`;
+		}
+		if (
+			url.pathname === "/oauth/login" &&
+			url.searchParams.getAll("request_id").length === 1
+		) {
+			const id = url.searchParams.get("request_id") ?? "";
+			if (/^[A-Za-z0-9_-]{43}$/.test(id))
+				return `/oauth/authorization-requests/${id}`;
+		}
+	} catch {}
+	return undefined;
+}
+
 function rejected(): never {
 	throw new OAuthProtocolError(
 		"invalid_request",
@@ -70,7 +104,11 @@ export class CompanyOAuthEntry {
 		const binding =
 			/^\/connection\/pat-bindings\/[A-Za-z0-9_-]+$/.test(url.pathname) &&
 			!url.pathname.endsWith("/confirm");
-		if (!page && !binding && url.pathname !== "/oauth/authorize") rejected();
+		const native = /^\/oauth\/authorization-requests\/[A-Za-z0-9_-]{43}$/.test(
+			url.pathname,
+		);
+		if (!page && !binding && !native && url.pathname !== "/oauth/authorize")
+			rejected();
 		return `${url.pathname}${url.search}`;
 	}
 
@@ -111,6 +149,55 @@ export class CompanyOAuthEntry {
 		)
 			rejected();
 		return this.returnTo(value.returnTo);
+	}
+
+	createCallbackConfirmation(
+		state: string,
+		cookie: string | undefined,
+		code: string,
+	) {
+		this.validateCallback(state, cookie, code);
+		const original = this.open(state.slice(6), companyEntryStateTtl);
+		return this.seal({
+			purpose: "callback-form",
+			expires: original.expires,
+			stateHash: hash(state),
+			cookieHash: hash(cookie ?? ""),
+			codeHash: hash(code),
+		});
+	}
+
+	recoveryTarget(state: string) {
+		try {
+			// Expired signed context may locate a GET page, never authorize the callback.
+			const value = this.open(state.slice(6), companyEntryStateTtl, true);
+			if (
+				!state.startsWith("entry.") ||
+				value.purpose !== "state" ||
+				typeof value.returnTo !== "string"
+			)
+				rejected();
+			return this.returnTo(value.returnTo);
+		} catch {
+			return "/connection/connections";
+		}
+	}
+
+	verifyCallbackConfirmation(input: {
+		state: string;
+		cookie: string | undefined;
+		code: string;
+		csrfToken: string;
+	}) {
+		this.validateCallback(input.state, input.cookie, input.code);
+		const value = this.open(input.csrfToken, companyEntryStateTtl);
+		if (
+			value.purpose !== "callback-form" ||
+			value.stateHash !== hash(input.state) ||
+			value.cookieHash !== hash(input.cookie ?? "") ||
+			value.codeHash !== hash(input.code)
+		)
+			rejected();
 	}
 
 	async complete(input: {
@@ -161,6 +248,7 @@ export class CompanyOAuthEntry {
 						)
 					)
 						rejected();
+					this.validateCallback(input.state, input.cookie, input.code);
 					return {
 						returnTo,
 						ticket: this.seal({
@@ -200,7 +288,11 @@ export class CompanyOAuthEntry {
 	private sign(value: string) {
 		return createHmac("sha256", this.key).update(value).digest("base64url");
 	}
-	private open(value: string, ttl: number): Record<string, unknown> {
+	private open(
+		value: string,
+		ttl: number,
+		recoveryOnly = false,
+	): Record<string, unknown> {
 		if (
 			value.trim() !== value ||
 			!/^[A-Za-z0-9_-]{1,3000}\.[A-Za-z0-9_-]{43}$/.test(value)
@@ -219,7 +311,7 @@ export class CompanyOAuthEntry {
 				!parsed ||
 				typeof parsed !== "object" ||
 				!Number.isSafeInteger(parsed.expires) ||
-				parsed.expires <= Date.now() ||
+				(!recoveryOnly && parsed.expires <= Date.now()) ||
 				parsed.expires > Date.now() + ttl * 1000
 			)
 				rejected();

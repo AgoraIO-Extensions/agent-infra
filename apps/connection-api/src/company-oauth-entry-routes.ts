@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+	browserAuthorizationRecoveryTarget,
 	type CompanyOAuthEntry,
 	companyEntryCheckPath,
 	companyEntryPath,
@@ -13,7 +14,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import {
 	browserApiError,
 	html,
-	requireSameOrigin,
+	rejectForeignBrowserOrigin,
 	secureHtmlHeaders,
 } from "./oauth-routes";
 
@@ -30,6 +31,7 @@ export function companyEntryRequired(path: string) {
 	if (
 		path === "/oauth/authorize" ||
 		path === "/oauth/login" ||
+		path.startsWith("/oauth/authorization-requests/") ||
 		path.startsWith("/connection/pat-bindings/")
 	)
 		return true;
@@ -37,7 +39,8 @@ export function companyEntryRequired(path: string) {
 	if (
 		path === companyIdentityCallbackPath ||
 		path === companyEntryPath ||
-		path === companyEntryCheckPath
+		path === companyEntryCheckPath ||
+		path === "/api/v1/connection/browser-confirmation"
 	)
 		return false;
 	if (
@@ -84,8 +87,12 @@ export function createCompanyOAuthEntryApp(
 			);
 			return context.redirect(target.href, 303);
 		}
+		const recovery = browserAuthorizationRecoveryTarget(
+			`${context.req.path}${new URL(context.req.url).search}`,
+			issuer,
+		);
 		return context.html(
-			'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>请重新登录</title><p>公司 OAuth 入口会话已过期。请重新打开控制台；客户端授权请返回客户端重新发起。不会重放本次提交。</p><a href="/connection/login">打开登录页</a></html>',
+			`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>请重新登录</title><p>公司 OAuth 入口会话已过期。本次提交不会重放；重新登录后请核对账号并确认。若内置浏览器仍失败，请复制下方入口到系统浏览器。</p><a href="${html(recovery ? `${companyEntryPath}?returnTo=${encodeURIComponent(recovery)}` : "/connection/login")}">重新登录并打开授权页</a></html>`,
 			401,
 		);
 	});
@@ -107,8 +114,12 @@ export function createCompanyOAuthEntryApp(
 			);
 		const originalMethod = context.req.header("x-connection-original-method");
 		if (originalMethod && !["GET", "HEAD"].includes(originalMethod)) {
+			const recovery = browserAuthorizationRecoveryTarget(
+				context.req.header("x-connection-return-to"),
+				issuer,
+			);
 			return context.html(
-				'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>请重新登录</title><p>公司入口会话已过期。本次提交不会自动重放，请重新打开控制台；客户端授权请返回客户端重新发起。</p><a href="/connection/login">打开登录页</a></html>',
+				`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>请重新登录</title><p>公司入口会话已过期。本次提交不会自动重放；重新登录后仍需核对账号并确认。</p><a href="${html(recovery ? `${companyEntryPath}?returnTo=${encodeURIComponent(recovery)}` : "/connection/login")}">重新登录并打开授权页</a></html>`,
 				401,
 			);
 		}
@@ -137,13 +148,25 @@ export function createCompanyOAuthEntryApp(
 				throw new Error("Rejected");
 			const code = context.req.query("code") ?? "";
 			entry.validateCallback(state, getCookie(context, stateCookie), code);
+			const csrfToken = entry.createCallbackConfirmation(
+				state,
+				getCookie(context, stateCookie),
+				code,
+			);
 			secureHtmlHeaders(context, { inlineScriptHash: completeScriptHash });
 			return context.html(
-				`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>正在跳转</title><style>#company-oauth-recovery{visibility:hidden;animation:show-recovery 0s 2s forwards}@keyframes show-recovery{to{visibility:visible}}</style><p role="status">正在跳转…</p><form id="company-oauth-complete" method="post" action="${companyIdentityCallbackPath}"><input type="hidden" name="flow" value="entry"><input type="hidden" name="state" value="${html(state)}"><input type="hidden" name="code" value="${html(code)}"><div id="company-oauth-recovery"><p>若未自动跳转，请点击下方按钮。</p><button type="submit">完成公司登录</button></div></form><script>${completeScript}</script></html>`,
+				`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>正在跳转</title><style>#company-oauth-recovery{visibility:hidden;animation:show-recovery 0s 2s forwards}@keyframes show-recovery{to{visibility:visible}}</style><p role="status">正在跳转…</p><form id="company-oauth-complete" method="post" action="${companyIdentityCallbackPath}"><input type="hidden" name="csrfToken" value="${html(csrfToken)}"><input type="hidden" name="flow" value="entry"><input type="hidden" name="state" value="${html(state)}"><input type="hidden" name="code" value="${html(code)}"><div id="company-oauth-recovery"><p>若未自动跳转，请点击下方按钮。</p><button type="submit">完成公司登录</button></div></form><script>${completeScript}</script></html>`,
 			);
 		} catch {
+			console.warn(
+				JSON.stringify({
+					event: "connection_company_entry_rejected",
+					stage: "callback_get",
+				}),
+			);
+			const recovery = entry.recoveryTarget(state);
 			return context.html(
-				'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><p>公司登录未完成，请重新发起。</p></html>',
+				`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><p>公司登录未完成。请重新登录，或将下方入口链接复制到系统浏览器继续。</p><a href="${html(`${companyEntryPath}?returnTo=${encodeURIComponent(recovery)}`)}">重新打开公司登录</a></html>`,
 				400,
 			);
 		}
@@ -155,7 +178,7 @@ export function createCompanyOAuthEntryApp(
 		if (form.get("flow") !== "entry") return next();
 		secureHtmlHeaders(context);
 		try {
-			requireSameOrigin(context.req.raw.headers, issuer);
+			rejectForeignBrowserOrigin(context.req.raw.headers, issuer);
 			if (
 				!context.req
 					.header("content-type")
@@ -164,10 +187,19 @@ export function createCompanyOAuthEntryApp(
 				form.getAll("state").length !== 1 ||
 				form.getAll("code").length !== 1 ||
 				form.getAll("flow").length !== 1 ||
-				[...form.keys()].some((k) => !["flow", "state", "code"].includes(k))
+				form.getAll("csrfToken").length !== 1 ||
+				[...form.keys()].some(
+					(k) => !["flow", "state", "code", "csrfToken"].includes(k),
+				)
 			)
 				throw new Error("Rejected");
 			const cookie = getCookie(context, stateCookie);
+			entry.verifyCallbackConfirmation({
+				state: form.get("state") ?? "",
+				code: form.get("code") ?? "",
+				cookie,
+				csrfToken: form.get("csrfToken") ?? "",
+			});
 			deleteCookie(context, stateCookie, stateOptions);
 			const completed = await entry.complete({
 				state: form.get("state") ?? "",
@@ -183,8 +215,15 @@ export function createCompanyOAuthEntryApp(
 			});
 			return context.redirect(completed.returnTo, 303);
 		} catch {
+			console.warn(
+				JSON.stringify({
+					event: "connection_company_entry_rejected",
+					stage: "callback_post",
+				}),
+			);
+			const recovery = entry.recoveryTarget(form.get("state") ?? "");
 			return context.html(
-				'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><p>公司登录未完成，请重新发起；本次授权不会自动重试。</p></html>',
+				`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><p>公司登录未完成，本次授权不会自动重试。请重新登录；若内置浏览器仍失败，请复制下方入口到系统浏览器。</p><a href="${html(`${companyEntryPath}?returnTo=${encodeURIComponent(recovery)}`)}">重新打开公司登录</a></html>`,
 				400,
 			);
 		}

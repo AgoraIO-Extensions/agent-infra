@@ -41,9 +41,9 @@ afterEach(() => {
 	vi.clearAllMocks();
 });
 
-function renderLogin() {
+function renderLogin(client = new QueryClient()) {
 	return render(
-		<QueryClientProvider client={new QueryClient()}>
+		<QueryClientProvider client={client}>
 			<LoginPage returnTo={mocks.returnTo} />
 		</QueryClientProvider>,
 	);
@@ -61,6 +61,20 @@ async function login() {
 }
 
 describe("Connection 登录恢复", () => {
+	it("登录成功后清除上一账号的业务缓存", async () => {
+		const client = new QueryClient();
+		client.setQueryData(["connections"], { owner: "previous-account" });
+		client.setQueryData(["session"], {
+			account: { displayName: "previous-account" },
+		});
+		renderLogin(client);
+		await login();
+		await waitFor(() => expect(mocks.navigate).toHaveBeenCalled());
+		expect(client.getQueryData(["connections"])).toBeUndefined();
+		expect(client.getQueryData(["session"])).toMatchObject({
+			account: { displayName: "连接用户" },
+		});
+	});
 	it("公司入口过期时只展示恢复链接，不自动重放密码", async () => {
 		mocks.login.mockRejectedValueOnce(
 			new ConnectionApiError({

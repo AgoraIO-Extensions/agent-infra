@@ -103,6 +103,11 @@ integrationTest(
 					"state",
 				) ?? "";
 			const body = new URLSearchParams({
+				csrfToken: companyEntry.createCallbackConfirmation(
+					state,
+					state,
+					"synthetic-company-code",
+				),
 				flow: "entry",
 				state,
 				code: "synthetic-company-code",

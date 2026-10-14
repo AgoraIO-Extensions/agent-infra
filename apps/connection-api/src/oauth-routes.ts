@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
 	accessPolicyDraftSchema,
 	accessRequestSubmitSchema,
@@ -38,6 +38,7 @@ import {
 	ConnectionError,
 	type ConnectionOAuthService,
 	OAuthProtocolError,
+	PatBindingConfirmationError,
 	type ProviderOAuthCallbackStage,
 } from "@agent-infra/connection-core";
 import type {
@@ -46,6 +47,7 @@ import type {
 	PostgresConnectionRepository,
 } from "@agent-infra/connection-store";
 import { type Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { createCompanyOAuthEntryApp } from "./company-oauth-entry-routes";
 import { createIdentityProbeApp } from "./identity-probe-routes";
@@ -194,8 +196,10 @@ export function html(value: string) {
 }
 
 function loginPage(input: {
+	csrfToken?: string;
 	clientName: string;
 	error?: string;
+	recoveryUrl?: string;
 	requestId?: string;
 }) {
 	return `<!doctype html>
@@ -224,11 +228,13 @@ button:hover { background: #14532d; }
 <h1>登录 Connection</h1>
 <p>继续访问 ${html(input.clientName)}</p>
 ${input.error ? `<p class="error" role="alert">${html(input.error)}</p>` : ""}
+${input.recoveryUrl ? `<p><a href="${html(input.recoveryUrl)}">重新打开授权页</a>；若仍失败，请将此入口复制到系统浏览器继续。</p>` : ""}
 ${
 	input.requestId
 		? `
-<form method="post" action="/oauth/login">
+<form method="post" action="/oauth/login?request_id=${encodeURIComponent(input.requestId)}">
 <input type="hidden" name="request_id" value="${html(input.requestId)}">
+<input type="hidden" name="csrfToken" value="${html(input.csrfToken ?? "")}">
 <label for="username">公司账号</label>
 <input id="username" name="username" type="text" autocomplete="username" required maxlength="256" autofocus>
 <label for="password">密码</label>
@@ -244,6 +250,7 @@ ${
 }
 
 function patBindingPage(input: {
+	csrfToken: string;
 	account: { displayName: string; email?: string | null; principalId: string };
 	consumerName: string;
 	expiresAt: Date;
@@ -276,9 +283,11 @@ button:hover { background: #14532d; }
 <p>将为当前 Connection 账号签发独立访问令牌：<strong>${html(input.name)}</strong>。</p>
 <p>该令牌可以使用你已授权给 ${html(input.consumerName)} 的多个连接器；外部账号凭据不会交给客户端。</p>
 <p>本链接将在 ${html(input.expiresAt.toISOString())} 失效。</p>
-<form method="post" action="/connection/pat-bindings/confirm">
+<p>本次确认最多五分钟有效；超时或登录账号变化时，请重新打开授权页。</p>
+<form method="post" action="/connection/pat-bindings/confirm?flow=${encodeURIComponent(input.state)}">
 <input type="hidden" name="state" value="${html(input.state)}">
 <input type="hidden" name="expectedPrincipalId" value="${html(input.account.principalId)}">
+<input type="hidden" name="csrfToken" value="${html(input.csrfToken)}">
 <button type="submit">确认并返回 ${html(input.consumerName)}</button>
 </form>
 </main>
@@ -505,18 +514,64 @@ function browserCookieOptions(issuer: string) {
 	};
 }
 
-export function requireSameOrigin(headers: Headers, issuer: string) {
-	const issuerUrl = new URL(issuer);
+export function rejectForeignBrowserOrigin(headers: Headers, issuer: string) {
 	const origin = headers.get("origin");
-	if (origin === issuerUrl.origin) return;
+	const host = headers.get("host");
+	if (host && host !== new URL(issuer).host)
+		throw new OAuthProtocolError("invalid_request", "Invalid form host", 403);
 	if (
-		origin === "null" &&
-		headers.get("sec-fetch-site") === "same-origin" &&
-		headers.get("host") === issuerUrl.host
+		origin !== null &&
+		origin !== "null" &&
+		origin !== new URL(issuer).origin
 	) {
-		return;
+		throw new OAuthProtocolError("invalid_request", "Invalid form origin", 403);
 	}
-	throw new OAuthProtocolError("invalid_request", "Invalid form origin");
+}
+
+export function browserFormNonce(context: Context, issuer: string) {
+	const secure = new URL(issuer).protocol === "https:";
+	const name = secure
+		? "__Host-connection_browser_confirmation"
+		: "connection_browser_confirmation";
+	let nonce = getCookie(context, name);
+	if (!nonce || !/^[A-Za-z0-9_-]{43}$/.test(nonce))
+		nonce = randomBytes(32).toString("base64url");
+	setCookie(context, name, nonce, {
+		httpOnly: true,
+		secure,
+		sameSite: "Lax",
+		path: "/",
+		maxAge: 300,
+	});
+	return nonce;
+}
+
+export function readBrowserFormNonce(context: Context, issuer: string) {
+	return getCookie(
+		context,
+		new URL(issuer).protocol === "https:"
+			? "__Host-connection_browser_confirmation"
+			: "connection_browser_confirmation",
+	);
+}
+
+function requireBrowserMutationOrigin(
+	context: Context,
+	options: ConnectionOAuthServerOptions,
+) {
+	const origin = context.req.header("origin");
+	rejectForeignBrowserOrigin(context.req.raw.headers, options.issuer);
+	if (origin === new URL(options.issuer).origin) return;
+	const nonce = readBrowserFormNonce(context, options.issuer);
+	const csrfToken = context.req.header("x-connection-csrf") ?? "";
+	if (!nonce || !csrfToken)
+		throw new PatBindingConfirmationError("MISSING_PROOF");
+	options.service.verifyBrowserFormConfirmation({
+		nonce,
+		csrfToken,
+		purpose: "browser-api",
+		context: "",
+	});
 }
 
 export function createConnectionOAuthApp(
@@ -553,6 +608,20 @@ export function createConnectionOAuthApp(
 		if (error instanceof OAuthProtocolError && error.status === 429)
 			context.header("retry-after", String(error.retryAfterSeconds ?? 60));
 		if (context.req.path.startsWith("/api/v1/connection/")) {
+			if (error instanceof PatBindingConfirmationError) {
+				console.warn(
+					JSON.stringify({
+						event: "connection_browser_confirmation_rejected",
+						route: "/api/v1/connection/*",
+						reason: error.reason,
+					}),
+				);
+				return browserApiError(context, {
+					code: "INVALID_REQUEST",
+					messageKey: "connection.error.browser_confirmation_required",
+					status: 403,
+				});
+			}
 			if (error instanceof ConnectionError) {
 				return browserConnectionError(context, error);
 			}
@@ -702,6 +771,17 @@ export function createConnectionOAuthApp(
 		return context.json(connectionBrowserOpenApi);
 	});
 
+	app.get("/api/v1/connection/browser-confirmation", (context) => {
+		secureHtmlHeaders(context);
+		const nonce = browserFormNonce(context, options.issuer);
+		return context.json(
+			options.service.createBrowserFormConfirmation({
+				nonce,
+				purpose: "browser-api",
+				context: "",
+			}),
+		);
+	});
 	app.get("/api/v1/connection/session", async (context) => {
 		const session = await currentBrowserAccount(context);
 		if (!session) {
@@ -723,7 +803,7 @@ export function createConnectionOAuthApp(
 	});
 
 	app.post("/api/v1/connection/session", async (context) => {
-		requireSameOrigin(context.req.raw.headers, options.issuer);
+		requireBrowserMutationOrigin(context, options);
 		const body = parseJsonBody(
 			loginRequestSchema,
 			await context.req.json().catch(() => undefined),
@@ -774,7 +854,7 @@ export function createConnectionOAuthApp(
 	});
 
 	app.delete("/api/v1/connection/session", async (context) => {
-		requireSameOrigin(context.req.raw.headers, options.issuer);
+		requireBrowserMutationOrigin(context, options);
 		const sessionToken = getCookie(context, browserSessionCookie);
 		await browserCommand(
 			options,
@@ -841,7 +921,7 @@ export function createConnectionOAuthApp(
 			if (!(error instanceof OAuthProtocolError)) throw error;
 			secureHtmlHeaders(context);
 			return context.html(
-				'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>链接无效</title><body><p>该授权链接已失效，请返回 RehoboamAI 重新发起。</p></body></html>',
+				'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>链接无效</title><body><p>该授权链接已失效，请返回客户端重新发起。</p></body></html>',
 				404,
 			);
 		}
@@ -854,9 +934,29 @@ export function createConnectionOAuthApp(
 		secureHtmlHeaders(context, {
 			formActionOrigins: [new URL(binding.callbackUrl).origin],
 		});
+		let confirmation: Awaited<
+			ReturnType<
+				ConnectionOAuthService["createPersonalAccessTokenBindingConfirmation"]
+			>
+		>;
+		try {
+			confirmation =
+				await options.service.createPersonalAccessTokenBindingConfirmation({
+					sessionToken: session.sessionToken,
+					state,
+				});
+		} catch (error) {
+			if (!(error instanceof OAuthProtocolError)) throw error;
+			secureHtmlHeaders(context);
+			return context.html(
+				'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>链接无效</title><p>授权链接或登录会话已失效，请返回客户端重新打开授权页。不会签发令牌。</p></html>',
+				error.status === 404 ? 404 : 403,
+			);
+		}
 		return context.html(
 			patBindingPage({
-				account: session.account,
+				account: confirmation.account,
+				csrfToken: confirmation.csrfToken,
 				consumerName: binding.consumerName,
 				expiresAt: binding.expiresAt,
 				name: binding.name,
@@ -865,25 +965,105 @@ export function createConnectionOAuthApp(
 		);
 	});
 
+	app.use("/connection/pat-bindings/confirm", bodyLimit({ maxSize: 8192 }));
 	app.post("/connection/pat-bindings/confirm", async (context) => {
-		requireSameOrigin(context.req.raw.headers, options.issuer);
-		const form = await context.req.formData();
-		const state = formValue(form, "state");
-		const session = await currentBrowserAccount(context);
-		if (!session) {
-			const login = new URL("/connection/login", options.issuer);
-			login.searchParams.set(
-				"returnTo",
-				`/connection/pat-bindings/${encodeURIComponent(state)}`,
+		const origin = context.req.header("origin");
+		const originKind =
+			origin === undefined
+				? "missing"
+				: origin === "null"
+					? "opaque"
+					: origin === new URL(options.issuer).origin
+						? "same-origin"
+						: "cross-origin";
+		const site = context.req.header("sec-fetch-site");
+		const fetchSite =
+			site === undefined
+				? "missing"
+				: ["same-origin", "same-site", "cross-site", "none"].includes(site)
+					? site
+					: "other";
+		const logFailure = (reason: string, status: number) => {
+			const traceId = randomUUID();
+			console.warn(
+				JSON.stringify({
+					event: "connection_pat_binding_confirmation_rejected",
+					route: "/connection/pat-bindings/confirm",
+					reason,
+					status,
+					originKind,
+					fetchSite,
+					traceId,
+				}),
 			);
-			return context.redirect(login.toString(), 302);
+			return traceId;
+		};
+		const fail = (reason: string, status: 400 | 403 | 404) => {
+			const traceId = logFailure(reason, status);
+			secureHtmlHeaders(context);
+			const message =
+				reason === "CROSS_ORIGIN"
+					? "授权确认必须在 Connection 页面完成，请返回客户端重新发起。"
+					: reason === "MISSING_PROOF"
+						? "确认页已更新，请重新打开授权页后再确认。"
+						: "授权确认已失效，或登录账号发生变化，请返回客户端重新打开授权页后再确认。";
+			const flow = context.req.query("flow") ?? "";
+			const recovery = /^conn_pat_binding_[A-Za-z0-9_-]{43}$/.test(flow)
+				? `/connection/pat-bindings/${flow}`
+				: undefined;
+			return context.html(
+				`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>授权未完成</title><body><h1>授权未完成</h1><p>${message}</p>${recovery ? `<p><a href="${html(recovery)}">重新打开授权页</a>；若仍失败，请复制此入口到系统浏览器继续。</p>` : ""}<p>错误编号：${traceId}</p></body></html>`,
+				status,
+			);
+		};
+		if (originKind === "cross-origin") return fail("CROSS_ORIGIN", 403);
+		try {
+			rejectForeignBrowserOrigin(context.req.raw.headers, options.issuer);
+			const form = await context.req.formData();
+			const state = formValue(form, "state");
+			if (
+				!/^conn_pat_binding_[A-Za-z0-9_-]{43}$/.test(state) ||
+				form.getAll("expectedPrincipalId").length > 1 ||
+				[...form.keys()].some(
+					(key) => !["state", "csrfToken", "expectedPrincipalId"].includes(key),
+				) ||
+				form.getAll("state").length !== 1 ||
+				form.getAll("csrfToken").length !== 1 ||
+				(context.req.queries("flow")?.length &&
+					(context.req.queries("flow")?.length !== 1 ||
+						context.req.query("flow") !== state))
+			) {
+				return fail("INVALID_FORM", 400);
+			}
+			const session = await currentBrowserAccount(context);
+			if (!session) {
+				logFailure("SESSION_REQUIRED", 302);
+				const login = new URL("/connection/login", options.issuer);
+				login.searchParams.set(
+					"returnTo",
+					`/connection/pat-bindings/${encodeURIComponent(state)}`,
+				);
+				return context.redirect(login.toString(), 302);
+			}
+			const csrfToken = formValue(form, "csrfToken");
+			if (!csrfToken) return fail("MISSING_PROOF", 403);
+			const confirmed =
+				await options.service.confirmPersonalAccessTokenBindingWithCsrf({
+					csrfToken,
+					sessionToken: session.sessionToken,
+					state,
+				});
+			return context.redirect(confirmed.callbackUrl, 303);
+		} catch (error) {
+			if (!(error instanceof OAuthProtocolError)) throw error;
+			const reason =
+				error instanceof PatBindingConfirmationError
+					? error.reason
+					: error.error === "access_denied" || error.error === "invalid_token"
+						? "SESSION_OR_ACCOUNT_DENIED"
+						: "BINDING_UNAVAILABLE";
+			return fail(reason, error.status === 404 ? 404 : 403);
 		}
-		const confirmed = await options.service.confirmPersonalAccessTokenBinding({
-			expectedPrincipalId: formValue(form, "expectedPrincipalId") || undefined,
-			sessionToken: session.sessionToken,
-			state,
-		});
-		return context.redirect(confirmed.callbackUrl, 303);
 	});
 
 	app.post(
@@ -939,7 +1119,7 @@ export function createConnectionOAuthApp(
 	});
 
 	app.post("/api/v1/connection/tokens", async (context) => {
-		requireSameOrigin(context.req.raw.headers, options.issuer);
+		requireBrowserMutationOrigin(context, options);
 		const session = await currentBrowserAccount(context);
 		if (!session) {
 			return browserApiError(context, {
@@ -987,7 +1167,7 @@ export function createConnectionOAuthApp(
 	});
 
 	app.delete("/api/v1/connection/tokens/:tokenId", async (context) => {
-		requireSameOrigin(context.req.raw.headers, options.issuer);
+		requireBrowserMutationOrigin(context, options);
 		const session = await currentBrowserAccount(context);
 		if (!session) {
 			return browserApiError(context, {
@@ -1084,7 +1264,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/provider-releases/:releaseId/lifecycle",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const lifecycle = management.providerLifecycle;
@@ -1190,7 +1370,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/provider-access-settings/:providerId",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const catalog = management.approvalCatalog;
@@ -1270,7 +1450,7 @@ export function createConnectionOAuthApp(
 		app.put(
 			"/api/v1/connection/admin/capability-profiles/:profileId",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const ifMatch = context.req.header("if-match");
@@ -1335,7 +1515,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/capability-profiles",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const catalog = management.approvalCatalog;
@@ -1373,7 +1553,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/capability-profiles/:profileId/publish",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const catalog = management.approvalCatalog;
@@ -1408,7 +1588,7 @@ export function createConnectionOAuthApp(
 			app.post(
 				`/api/v1/connection/admin/capability-profiles/:profileId/${action}`,
 				async (context) => {
-					requireSameOrigin(context.req.raw.headers, options.issuer);
+					requireBrowserMutationOrigin(context, options);
 					const session = await currentBrowserApiAdministrator(context);
 					if (session instanceof Response) return session;
 					const ifMatch = context.req.header("if-match");
@@ -1506,7 +1686,7 @@ export function createConnectionOAuthApp(
 		});
 
 		app.post("/api/v1/connection/admin/disclaimers", async (context) => {
-			requireSameOrigin(context.req.raw.headers, options.issuer);
+			requireBrowserMutationOrigin(context, options);
 			const session = await currentBrowserApiAdministrator(context);
 			if (session instanceof Response) return session;
 			const catalog = management.approvalCatalog;
@@ -1546,7 +1726,7 @@ export function createConnectionOAuthApp(
 		app.put(
 			"/api/v1/connection/admin/disclaimers/:disclaimerId",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const ifMatch = context.req.header("if-match");
@@ -1593,7 +1773,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/disclaimers/:disclaimerId/publish",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const catalog = management.approvalCatalog;
@@ -1628,7 +1808,7 @@ export function createConnectionOAuthApp(
 			app.post(
 				`/api/v1/connection/admin/disclaimers/:disclaimerId/${action}`,
 				async (context) => {
-					requireSameOrigin(context.req.raw.headers, options.issuer);
+					requireBrowserMutationOrigin(context, options);
 					const session = await currentBrowserApiAdministrator(context);
 					if (session instanceof Response) return session;
 					const ifMatch = context.req.header("if-match");
@@ -1808,7 +1988,7 @@ export function createConnectionOAuthApp(
 		);
 
 		const saveAccessPolicyDraft = async (context: Context) => {
-			requireSameOrigin(context.req.raw.headers, options.issuer);
+			requireBrowserMutationOrigin(context, options);
 			const session = await currentBrowserApiAdministrator(context);
 			if (session instanceof Response) return session;
 			const policyVersionId = context.req.param("policyId");
@@ -1896,7 +2076,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/access-policies/:policyId/publish",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const catalog = management.approvalCatalog;
@@ -1942,7 +2122,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/access-policies/:policyId/revise",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const ifMatch = context.req.header("if-match");
@@ -2025,7 +2205,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/access-policies/:policyId/retire",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const ifMatch = context.req.header("if-match");
@@ -2070,7 +2250,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/access-policies/:policyId/revoke",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const catalog = management.approvalCatalog;
@@ -2146,7 +2326,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/access-authorizations/:authorizationId/revoke",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const approvalService = management.approvalService;
@@ -2186,7 +2366,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/reapproval-campaigns",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const approvalService = management.approvalService;
@@ -2227,7 +2407,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/access-requests/:requestId/reroute",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const approvalService = management.approvalService;
@@ -2296,7 +2476,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/outbox-failures/:eventId/retry",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const dispatcher = management.notificationDispatcher;
@@ -2355,7 +2535,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/approval-delegations",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const approvalService = management.approvalService;
@@ -2408,7 +2588,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/approval-delegations/:delegationId/revoke",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const approvalService = management.approvalService;
@@ -2550,7 +2730,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/access-requests/:requestId/connect",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAccount(context);
 				if (session instanceof Response) return session;
 				const approvalService = management.approvalService;
@@ -2584,7 +2764,7 @@ export function createConnectionOAuthApp(
 		);
 
 		app.post("/api/v1/connection/access-requests", async (context) => {
-			requireSameOrigin(context.req.raw.headers, options.issuer);
+			requireBrowserMutationOrigin(context, options);
 			const session = await currentBrowserApiAccount(context);
 			if (session instanceof Response) return session;
 			const approvalService = management.approvalService;
@@ -2624,7 +2804,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/access-authorizations/:authorizationId/renewals",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAccount(context);
 				if (session instanceof Response) return session;
 				const approvalService = management.approvalService;
@@ -2669,7 +2849,7 @@ export function createConnectionOAuthApp(
 		app.delete(
 			"/api/v1/connection/access-requests/:requestId",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAccount(context);
 				if (session instanceof Response) return session;
 				const approvalService = management.approvalService;
@@ -2736,7 +2916,7 @@ export function createConnectionOAuthApp(
 			app.post(
 				`/api/v1/connection/notifications/${action}`,
 				async (context) => {
-					requireSameOrigin(context.req.raw.headers, options.issuer);
+					requireBrowserMutationOrigin(context, options);
 					const session = await currentBrowserApiAccount(context);
 					if (session instanceof Response) return session;
 					const approvalService = management.approvalService;
@@ -2794,7 +2974,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/approval-requests/:requestId/decisions",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAccount(context);
 				if (session instanceof Response) return session;
 				const approvalService = management.approvalService;
@@ -2847,7 +3027,7 @@ export function createConnectionOAuthApp(
 		);
 
 		app.post("/api/v1/connection/oauth-transactions", async (context) => {
-			requireSameOrigin(context.req.raw.headers, options.issuer);
+			requireBrowserMutationOrigin(context, options);
 			const body = parseJsonBody(
 				oauthTransactionRequestSchema,
 				await context.req.json().catch(() => ({})),
@@ -2925,7 +3105,7 @@ export function createConnectionOAuthApp(
 		});
 
 		app.post("/api/v1/connection/provider-credentials", async (context) => {
-			requireSameOrigin(context.req.raw.headers, options.issuer);
+			requireBrowserMutationOrigin(context, options);
 			const session = await currentBrowserApiAccount(context);
 			if (session instanceof Response) return session;
 			const body = parseJsonBody(
@@ -2960,7 +3140,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/connections/:connectionId/reauthorize",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAccount(context);
 				if (session instanceof Response) return session;
 				const body = parseJsonBody(
@@ -3018,7 +3198,7 @@ export function createConnectionOAuthApp(
 		);
 
 		app.post("/api/v1/connection/authorization-previews", async (context) => {
-			requireSameOrigin(context.req.raw.headers, options.issuer);
+			requireBrowserMutationOrigin(context, options);
 			const session = await currentBrowserApiAccount(context);
 			if (session instanceof Response) return session;
 			const body = parseJsonBody(
@@ -3055,7 +3235,7 @@ export function createConnectionOAuthApp(
 		});
 
 		app.post("/api/v1/connection/authorization-consents", async (context) => {
-			requireSameOrigin(context.req.raw.headers, options.issuer);
+			requireBrowserMutationOrigin(context, options);
 			const session = await currentBrowserApiAccount(context);
 			if (session instanceof Response) return session;
 			const body = parseJsonBody(
@@ -3087,7 +3267,7 @@ export function createConnectionOAuthApp(
 		});
 
 		app.delete("/api/v1/connection/grants/:grantId", async (context) => {
-			requireSameOrigin(context.req.raw.headers, options.issuer);
+			requireBrowserMutationOrigin(context, options);
 			const session = await currentBrowserApiAccount(context);
 			if (session instanceof Response) return session;
 			const grantId = context.req.param("grantId");
@@ -3115,7 +3295,7 @@ export function createConnectionOAuthApp(
 		app.delete(
 			"/api/v1/connection/connections/:connectionId",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAccount(context);
 				if (session instanceof Response) return session;
 				const connectionId = context.req.param("connectionId");
@@ -3161,7 +3341,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/connections/:connectionId/refresh-permissions",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				if ((await context.req.text()).trim())
 					throw new ConnectionError(
 						"INVALID_REQUEST",
@@ -3195,7 +3375,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/connections/:connectionId/upgrade",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const rawBody = await context.req.text();
 				let parsedBody: unknown = {};
 				if (rawBody) {
@@ -3245,7 +3425,7 @@ export function createConnectionOAuthApp(
 		});
 
 		app.post("/api/v1/connection/admin/pat-consumers", async (context) => {
-			requireSameOrigin(context.req.raw.headers, options.issuer);
+			requireBrowserMutationOrigin(context, options);
 			const session = await currentBrowserApiAdministrator(context);
 			if (session instanceof Response) return session;
 			const body = (await context.req.json().catch(() => undefined)) as
@@ -3330,7 +3510,7 @@ export function createConnectionOAuthApp(
 		app.post(
 			"/api/v1/connection/admin/consumers/:consumerId/declarations",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const body = (await context.req.json().catch(() => undefined)) as
@@ -3391,7 +3571,7 @@ export function createConnectionOAuthApp(
 		app.delete(
 			"/api/v1/connection/admin/pat-consumers/:consumerId",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const consumerId = context.req.param("consumerId");
@@ -3438,7 +3618,7 @@ export function createConnectionOAuthApp(
 		app.put(
 			"/api/v1/connection/admin/administrators/:principalId",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const principalId = context.req.param("principalId");
@@ -3467,7 +3647,7 @@ export function createConnectionOAuthApp(
 		app.delete(
 			"/api/v1/connection/admin/administrators/:principalId",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const principalId = context.req.param("principalId");
@@ -3507,7 +3687,7 @@ export function createConnectionOAuthApp(
 		});
 
 		app.post("/api/v1/connection/admin/shared-scopes", async (context) => {
-			requireSameOrigin(context.req.raw.headers, options.issuer);
+			requireBrowserMutationOrigin(context, options);
 			const session = await currentBrowserApiAdministrator(context);
 			if (session instanceof Response) return session;
 			const body = parseJsonBody(
@@ -3538,7 +3718,7 @@ export function createConnectionOAuthApp(
 		app.patch(
 			"/api/v1/connection/admin/shared-scopes/:sharedScopeId",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const body = parseJsonBody(
@@ -3572,7 +3752,7 @@ export function createConnectionOAuthApp(
 		app.put(
 			"/api/v1/connection/admin/shared-scopes/:sharedScopeId/principals/:principalId",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const sharedScopeId = context.req.param("sharedScopeId");
@@ -3603,7 +3783,7 @@ export function createConnectionOAuthApp(
 		app.delete(
 			"/api/v1/connection/admin/shared-scopes/:sharedScopeId/principals/:principalId",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const sharedScopeId = context.req.param("sharedScopeId");
@@ -3634,7 +3814,7 @@ export function createConnectionOAuthApp(
 		app.delete(
 			"/api/v1/connection/admin/shared-connections/:connectionId",
 			async (context) => {
-				requireSameOrigin(context.req.raw.headers, options.issuer);
+				requireBrowserMutationOrigin(context, options);
 				const session = await currentBrowserApiAdministrator(context);
 				if (session instanceof Response) return session;
 				const connectionId = context.req.param("connectionId");
@@ -3664,6 +3844,15 @@ export function createConnectionOAuthApp(
 			context.header("referrer-policy", "no-referrer");
 			let stage: ProviderOAuthCallbackStage = "callback_input";
 			try {
+				if (
+					["provider", "state", "code", "error"].some(
+						(key) => (context.req.queries(key)?.length ?? 0) > 1,
+					)
+				)
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"Duplicate OAuth callback parameter",
+					);
 				const callbackProvider = context.req.query("provider") ?? "github";
 				if (!["github", "manhattan", "datalego"].includes(callbackProvider))
 					throw new ConnectionError(
@@ -3733,6 +3922,22 @@ export function createConnectionOAuthApp(
 	}
 
 	app.get("/oauth/authorize", async (context) => {
+		if (
+			[
+				"client_id",
+				"redirect_uri",
+				"resource",
+				"response_type",
+				"code_challenge",
+				"code_challenge_method",
+				"scope",
+				"state",
+			].some((key) => (context.req.queries(key)?.length ?? 0) > 1)
+		)
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Duplicate authorization parameter",
+			);
 		const authorization = await options.service.beginAuthorization({
 			clientId: context.req.query("client_id") ?? "",
 			codeChallenge: context.req.query("code_challenge") ?? "",
@@ -3744,14 +3949,69 @@ export function createConnectionOAuthApp(
 			state: context.req.query("state") ?? "",
 		});
 		secureHtmlHeaders(context, { allowLoopbackFormRedirect: true });
-		return context.html(loginPage(authorization));
+		const csrf = options.service.createBrowserFormConfirmation({
+			nonce: browserFormNonce(context, options.issuer),
+			purpose: "oauth-login",
+			context: authorization.requestId,
+		});
+		return context.html(
+			loginPage({ ...authorization, csrfToken: csrf.csrfToken }),
+		);
+	});
+	app.get("/oauth/authorization-requests/:requestId", async (context) => {
+		secureHtmlHeaders(context, { allowLoopbackFormRedirect: true });
+		try {
+			const requestId = context.req.param("requestId");
+			const page = await options.service.getOAuthLoginPage(requestId);
+			const csrf = options.service.createBrowserFormConfirmation({
+				nonce: browserFormNonce(context, options.issuer),
+				purpose: "oauth-login",
+				context: requestId,
+			});
+			return context.html(
+				loginPage({
+					clientName: page.clientName,
+					requestId,
+					csrfToken: csrf.csrfToken,
+				}),
+			);
+		} catch (error) {
+			if (!(error instanceof OAuthProtocolError)) throw error;
+			return context.html(
+				loginPage({
+					clientName: "当前客户端",
+					error: "授权请求已失效，请返回客户端重新发起",
+				}),
+				400,
+			);
+		}
 	});
 
+	app.use("/oauth/login", bodyLimit({ maxSize: 8192 }));
 	app.post("/oauth/login", async (context) => {
-		requireSameOrigin(context.req.raw.headers, options.issuer);
+		rejectForeignBrowserOrigin(context.req.raw.headers, options.issuer);
 		const form = await context.req.raw.formData();
 		const requestId = formValue(form, "request_id");
 		try {
+			if (
+				["request_id", "csrfToken", "username", "password"].some(
+					(key) => form.getAll(key).length !== 1,
+				) ||
+				[...form.keys()].some(
+					(key) =>
+						!["request_id", "csrfToken", "username", "password"].includes(key),
+				) ||
+				(context.req.query("request_id") !== undefined &&
+					(context.req.queries("request_id")?.length !== 1 ||
+						context.req.query("request_id") !== requestId))
+			)
+				throw new PatBindingConfirmationError("INVALID_PROOF");
+			options.service.verifyBrowserFormConfirmation({
+				nonce: readBrowserFormNonce(context, options.issuer),
+				csrfToken: formValue(form, "csrfToken"),
+				purpose: "oauth-login",
+				context: requestId,
+			});
 			const approved = await options.service.approveAuthorization({
 				password: formValue(form, "password"),
 				requestId,
@@ -3763,6 +4023,26 @@ export function createConnectionOAuthApp(
 			redirect.searchParams.set("state", approved.state);
 			return context.redirect(redirect.toString(), 302);
 		} catch (error) {
+			if (error instanceof PatBindingConfirmationError) {
+				secureHtmlHeaders(context);
+				console.warn(
+					JSON.stringify({
+						event: "connection_browser_confirmation_rejected",
+						route: "/oauth/login",
+						reason: error.reason,
+					}),
+				);
+				return context.html(
+					loginPage({
+						clientName: "当前客户端",
+						error: "登录确认已失效，请重新打开授权页；本次登录不会重试",
+						recoveryUrl: /^[A-Za-z0-9_-]{43}$/.test(requestId)
+							? `/oauth/authorization-requests/${requestId}`
+							: undefined,
+					}),
+					403,
+				);
+			}
 			if (error instanceof OAuthProtocolError && error.status === 429) {
 				secureHtmlHeaders(context, { allowLoopbackFormRedirect: true });
 				context.header("retry-after", String(error.retryAfterSeconds ?? 60));
@@ -3770,6 +4050,11 @@ export function createConnectionOAuthApp(
 					loginPage({
 						clientName: "当前客户端",
 						requestId,
+						csrfToken: options.service.createBrowserFormConfirmation({
+							nonce: browserFormNonce(context, options.issuer),
+							purpose: "oauth-login",
+							context: requestId,
+						}).csrfToken,
 						error:
 							"登录尝试过于频繁，请稍后重试；授权过期时请返回客户端重新发起",
 					}),
@@ -3798,6 +4083,11 @@ export function createConnectionOAuthApp(
 				loginPage({
 					clientName: "当前客户端",
 					error: "账号或密码错误",
+					csrfToken: options.service.createBrowserFormConfirmation({
+						nonce: browserFormNonce(context, options.issuer),
+						purpose: "oauth-login",
+						context: requestId,
+					}).csrfToken,
 					requestId,
 				}),
 				401,

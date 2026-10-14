@@ -8,6 +8,30 @@
 	"servers": [{ "url": "/" }],
 	"security": [{ "browserSession": [] }],
 	"paths": {
+		"/api/v1/connection/browser-confirmation": {
+			"get": {
+				"operationId": "getBrowserConfirmation",
+				"security": [],
+				"responses": {
+					"200": {
+						"description": "Short-lived cookie-bound browser confirmation proof; never authenticates a user",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"additionalProperties": false,
+									"required": ["csrfToken", "expiresAt"],
+									"properties": {
+										"csrfToken": { "type": "string", "maxLength": 4096 },
+										"expiresAt": { "type": "string", "format": "date-time" }
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
 		"/api/v1/connection/provider-access-settings": {
 			"get": {
 				"operationId": "listProviderAccessSettings",
