@@ -27,9 +27,9 @@ export type MultiServiceDesired = AgentWorkloadDesiredV1 & {
 export interface MultiServiceRuntimePolicyV1 {
 	readonly namespace: string;
 	/** The only repository admitted for user supplied digest-only images. */
-	readonly imageRepository: string;
+	readonly imageRepository?: string;
 	/** Platform storage tier. Manifest PVC sizing and class are never authoritative. */
-	readonly storageSize: string;
+	readonly storageSize?: string;
 	readonly storageClassName?: string;
 	readonly routeHostSuffix: string;
 	readonly ingressClassName: string;
@@ -203,12 +203,24 @@ function statefulSet(
 								name: port.name,
 								containerPort: port.targetPort,
 							})),
-							...(volumeMount ? { volumeMounts: [volumeMount] } : {}),
+							...(volumeMount
+								? {
+										volumeMounts: [
+											...(container.volumeMounts ?? []).filter(
+												(mount) => mount.name !== volumeMount.name,
+											),
+											volumeMount,
+										],
+									}
+								: {}),
 						}),
 					),
 					...(claimName
 						? {
 								volumes: [
+									...(resource.spec.template.spec.volumes ?? []).filter(
+										(volume) => volume.name !== "data",
+									),
 									{
 										name: "data",
 										persistentVolumeClaim: { claimName },
@@ -232,6 +244,8 @@ function persistentVolumeClaim(
 	>,
 	policy: MultiServiceRuntimePolicyV1,
 ): V1PersistentVolumeClaim {
+	if (!policy.storageSize)
+		throw new Error("multi-service storage policy missing");
 	const spec: NonNullable<V1PersistentVolumeClaim["spec"]> = {
 		accessModes: ["ReadWriteOnce"],
 		...(policy.storageClassName
@@ -266,6 +280,7 @@ function storageMatchesPolicy(
 		Array.isArray(current.spec?.accessModes) &&
 		current.spec.accessModes.length === 1 &&
 		current.spec.accessModes[0] === "ReadWriteOnce" &&
+		policy.storageSize !== undefined &&
 		actual === expectedStorage &&
 		(policy.storageClassName === undefined ||
 			current.spec.storageClassName === policy.storageClassName) &&
@@ -453,6 +468,9 @@ export function createMultiServiceRuntimeOperations(options: {
 									: {}),
 								...(currentPvc.spec?.volumeMode
 									? { volumeMode: currentPvc.spec.volumeMode }
+									: {}),
+								...(currentPvc.spec?.storageClassName
+									? { storageClassName: currentPvc.spec.storageClassName }
 									: {}),
 							},
 						}
