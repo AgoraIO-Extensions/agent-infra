@@ -3,6 +3,7 @@ import type {
 	NativeMetadataSelectorV1,
 	RuntimeCapabilitiesV1,
 	RuntimeDriverCommandV1,
+	RuntimeDriverNativeCommandV1,
 	RuntimeDriverOperationRecordV1,
 	RuntimeDriverSubmitTurnCommandV2,
 	RuntimeDriverSubmitTurnOperationRecordV2,
@@ -60,6 +61,9 @@ export type RuntimeNativeSkillCommandV1 = Readonly<{
 	capabilitySourceVersion: string;
 }>;
 
+/** Request-local execution of one verified native command directory entry. */
+export type RuntimeNativeCommandCommandV1 = RuntimeDriverNativeCommandV1;
+
 /** Request-local authority for one authenticated native metadata read. */
 export interface RuntimeNativeMetadataReadContextV1 {
 	readonly nativeSessionRef: string;
@@ -68,6 +72,8 @@ export interface RuntimeNativeMetadataReadContextV1 {
 	assertCurrent(): RuntimeOriginalEvidenceBinding;
 	/** Reconfirm the Host current/proof binding after each Driver await. */
 	revalidate(): Promise<RuntimeOriginalEvidenceBinding>;
+	/** V4 admitted native plans may create their durable operation after metadata. */
+	readonly allowUnboundExecution?: boolean;
 }
 
 /** Optional RuntimeHost consumer seam for the authenticated native metadata V1 read. */
@@ -192,6 +198,8 @@ export type RuntimeDriverCommand =
 /** Request-local execution dependencies; never part of a durable command. */
 export interface RuntimeDriverExecutionContextV1 {
 	readonly fileBridge?: RuntimeFileBridgePortV1;
+	/** Current Host authority for one native command execution. */
+	readonly nativeCommand?: RuntimeNativeMetadataReadContextV1;
 	/** Deployment-owned Browser context; absent means Browser execution is unavailable. */
 	readonly browser?: RuntimeBrowserExecutionContextV1;
 }
@@ -271,6 +279,10 @@ export interface RuntimeDriver {
 	createNativeSkillCommand?(
 		command: RuntimeNativeSkillCommandV1,
 	): Extract<RuntimeDriverCommand, { kind: "submit-turn" }>;
+	/** Build a durable native command operation without ordinary text fallback. */
+	createNativeCommandCommand?(
+		command: RuntimeNativeCommandCommandV1,
+	): Extract<RuntimeDriverCommand, { kind: "native-command" }>;
 	executeBrowserHandoff?(
 		nativeSessionRef: string,
 		executionId: string,

@@ -48,7 +48,12 @@ interface SessionBinding {
 
 export interface StoredOperation {
 	operationId: string;
-	kind: "submit-turn" | "supplement" | "stop" | "generation-cancel";
+	kind:
+		| "submit-turn"
+		| "native-command"
+		| "supplement"
+		| "stop"
+		| "generation-cancel";
 	executionId: string;
 	turnId: string;
 	scope: string;
@@ -254,7 +259,7 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 	for (const [operationId, operation] of Object.entries(session.operations)) {
 		if (!isPlainRecord(operation)) storeCorrupted();
 		const expectedScope =
-			operation.kind === "submit-turn"
+			operation.kind === "submit-turn" || operation.kind === "native-command"
 				? `execution:${operation.executionId}`
 				: operation.kind === "supplement"
 					? `message:${operation.operationId}`
@@ -297,6 +302,7 @@ function assertSessionRecord(hostSessionRef: string, session: StoredSession) {
 						session.authority.principal.id ||
 					operation.keyScopeV4.channelId !== session.authority.channelId ||
 					(operation.kind !== "submit-turn" &&
+						operation.kind !== "native-command" &&
 						operation.kind !== "supplement") ||
 					operation.keyScopeV4.agentId !== session.agentId ||
 					operation.keyScopeV4.conversationId !== session.conversationId ||
@@ -860,7 +866,11 @@ export class FileRuntimeStore {
 					: (input.now ?? Date.now());
 			assertStoreState(state);
 			if (keyScopeV4) {
-				if (input.kind !== "submit-turn" && input.kind !== "supplement")
+				if (
+					input.kind !== "submit-turn" &&
+					input.kind !== "native-command" &&
+					input.kind !== "supplement"
+				)
 					runtimeAuthorizationDenied();
 				assertSessionAuthority(input.authorization, keyScopeV4);
 				if (
@@ -914,12 +924,12 @@ export class FileRuntimeStore {
 				state.sessionBindings[sessionBindingKey(input.binding)] =
 					newHostSessionRef;
 			}
-			if (input.kind !== "submit-turn") {
+			if (input.kind !== "submit-turn" && input.kind !== "native-command") {
 				assertExecutionBinding(session, input.binding);
 			}
 			if (
 				session.recovery?.status === "blocked" &&
-				["submit-turn", "supplement"].includes(input.kind)
+				["submit-turn", "native-command", "supplement"].includes(input.kind)
 			) {
 				throw new RuntimeHostError(
 					"RUNTIME_SESSION_RECOVERY_BLOCKED",
@@ -980,7 +990,7 @@ export class FileRuntimeStore {
 					);
 				}
 				if (
-					input.kind === "submit-turn" &&
+					(input.kind === "submit-turn" || input.kind === "native-command") &&
 					keyScopeV4 &&
 					input.authorization &&
 					input.authorization.purpose === "business" &&
@@ -1151,14 +1161,21 @@ export class FileRuntimeStore {
 		hostSessionRef: string,
 		binding: SessionBinding & { executionId: string; turnId: string },
 		deliveryFence: number,
+		allowUnboundExecution = false,
 	) {
 		const state = this.file.read();
 		assertStoreState(state);
 		const session = sessionFor(state, hostSessionRef, binding);
-		assertExecutionBinding(session, binding);
 		if (
-			session.highestFences[`execution:${binding.executionId}`] !==
-			deliveryFence
+			!allowUnboundExecution ||
+			session.operations[binding.executionId] !== undefined
+		)
+			assertExecutionBinding(session, binding);
+		const currentFence =
+			session.highestFences[`execution:${binding.executionId}`];
+		if (
+			(!allowUnboundExecution || currentFence !== undefined) &&
+			currentFence !== deliveryFence
 		) {
 			throw new RuntimeHostError(
 				"RUNTIME_FENCE_STALE",
@@ -1737,7 +1754,9 @@ export class FileRuntimeStore {
 		const operation = session.operations[operationId];
 		if (
 			!operation ||
-			(operation.kind !== "submit-turn" && operation.kind !== "supplement")
+			(operation.kind !== "submit-turn" &&
+				operation.kind !== "native-command" &&
+				operation.kind !== "supplement")
 		)
 			runtimeAuthorizationDenied();
 		const authority = session.executionAuthorities?.[executionId];

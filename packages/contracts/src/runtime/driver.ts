@@ -23,11 +23,35 @@ const nativeSkillInput = z.strictObject({
 	version: z.string().min(1).max(512),
 });
 
+const nativeCommandInput = z.strictObject({
+	capabilityId: z.string().regex(/^[a-f0-9]{64}$/),
+	directoryRevision: z.string().regex(/^[a-f0-9]{64}$/),
+	capabilityName: z.string().min(1).max(256),
+	capabilitySourceVersion: z.string().min(1).max(128),
+	parameters: z.string().max(16 * 1024),
+	parametersDigest: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+export const RuntimeDriverNativeCommandV1Schema = z.strictObject({
+	...binding,
+	schemaVersion: SchemaVersionV1Schema,
+	kind: z.literal("native-command"),
+	operationId: OpaqueIdV1Schema,
+	nativeSessionRef: OpaqueIdV1Schema,
+	...nativeCommandInput.shape,
+});
+
 const operationBinding = {
 	agentId: binding.agentId,
 	conversationId: binding.conversationId,
 	sessionGeneration: binding.sessionGeneration,
-	kind: z.enum(["submit-turn", "supplement", "stop", "generation-cancel"]),
+	kind: z.enum([
+		"submit-turn",
+		"native-command",
+		"supplement",
+		"stop",
+		"generation-cancel",
+	]),
 	operationId: OpaqueIdV1Schema,
 };
 
@@ -41,6 +65,7 @@ export const RuntimeDriverCommandV1Schema = z.discriminatedUnion("kind", [
 		input: RuntimeInputV1Schema,
 		nativeSkill: nativeSkillInput.optional(),
 	}),
+	RuntimeDriverNativeCommandV1Schema,
 	z.strictObject({
 		...binding,
 		schemaVersion: SchemaVersionV1Schema,
@@ -117,6 +142,9 @@ export const RuntimeDriverSubmitTurnLookupV2Schema = z.discriminatedUnion(
 
 export type RuntimeDriverCommandV1 = z.infer<
 	typeof RuntimeDriverCommandV1Schema
+>;
+export type RuntimeDriverNativeCommandV1 = z.infer<
+	typeof RuntimeDriverNativeCommandV1Schema
 >;
 export type RuntimeDriverOperationRecordV1 = z.infer<
 	typeof RuntimeDriverOperationRecordV1Schema

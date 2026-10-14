@@ -171,6 +171,37 @@ describe("V4 production Grant signer", () => {
 		).resolves.toBeUndefined();
 	});
 
+	it("signs a native command invocation without ordinary input", async () => {
+		const { signer, request } = fixture();
+		const { input: _input, selection: _selection, ...context } = request;
+		const native = RuntimeNativeCapabilityRequestV4Schema.parse({
+			...context,
+			hostSessionRef: "host",
+			operation: {
+				kind: "execution",
+				id: request.executionId,
+				deliveryFence: 3,
+				executionDeliveryFence: 3,
+			},
+			capabilityId: "c".repeat(64),
+			capabilityKind: "command",
+			directoryRevision: "d".repeat(64),
+			parameters: "",
+			parametersDigest: createHash("sha256").update("").digest("hex"),
+			capabilitySourceVersion: "0.153.0",
+		});
+		const grant = signer.sign(native, "authorization");
+		const claims = decoded(grant.token);
+		expect(claims.allowedCommands).toEqual(["native-capability.invoke"]);
+		expect(claims.attachments).toEqual([]);
+		await expect(
+			validateRuntimeBusinessBindingV4(
+				{ ...native, grant },
+				signer.verify(grant),
+			),
+		).resolves.toBeUndefined();
+	});
+
 	it.each([
 		"wrong source",
 		"application personal Key",

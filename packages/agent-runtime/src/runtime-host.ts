@@ -2319,7 +2319,8 @@ export class RuntimeHost {
 		operation: StoredOperation,
 		result: RuntimeOperationResponse["result"],
 	) {
-		if (operation.kind !== "submit-turn") return;
+		if (operation.kind !== "submit-turn" && operation.kind !== "native-command")
+			return;
 		if (
 			(result.outcome === "accepted" &&
 				isTerminalRuntimeStatus(result.status)) ||
@@ -2614,6 +2615,7 @@ export class RuntimeHost {
 		if (record.result.outcome !== "accepted") {
 			return record.result;
 		}
+		if (operation.kind === "native-command") return record.result;
 		// A terminal generation-cancel receipt proves the durable barrier completed.
 		// The original Turn may remain unknown or unreadable after native Session loss.
 		if (

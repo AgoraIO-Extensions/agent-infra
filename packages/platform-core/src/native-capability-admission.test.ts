@@ -62,6 +62,28 @@ const projection = {
 	],
 };
 
+const commandRequest = {
+	...request,
+	capabilityId: "c".repeat(64),
+	directoryRevision: "d".repeat(64),
+	parameters: "",
+};
+
+const commandProjection = {
+	selector: "commands" as const,
+	revision: commandRequest.directoryRevision,
+	capabilities: [
+		{
+			id: commandRequest.capabilityId,
+			kind: "command" as const,
+			name: "查看原生会话状态",
+			description: "读取当前原生会话状态",
+			source: { name: "Codex", version: "0.153.0" },
+			availability: "available" as const,
+		},
+	],
+};
+
 function transaction(
 	state: NativeCapabilityAdmissionStateV1,
 ): NativeCapabilityAdmissionTransactionPortV1 {
@@ -128,6 +150,22 @@ describe("native capability admission contract", () => {
 		});
 		expect(Object.isFrozen(decision.plan)).toBe(true);
 		expect(Object.isFrozen(decision.plan.capability)).toBe(true);
+	});
+
+	it("admits a command plan with an empty bounded parameter payload", async () => {
+		const decision = await useCase(
+			new FakeNativeCapabilityMetadataRevalidationV1({
+				projection: commandProjection,
+			}),
+		).admit(commandRequest);
+		expect(decision.outcome).toBe("accepted");
+		if (decision.outcome !== "accepted") return;
+		expect(decision.plan.capability).toMatchObject({
+			id: commandRequest.capabilityId,
+			kind: "command",
+			directoryRevision: commandRequest.directoryRevision,
+			source: { version: "0.153.0" },
+		});
 	});
 
 	it("fails closed for a stale directory revision", async () => {

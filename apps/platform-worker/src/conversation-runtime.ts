@@ -839,7 +839,7 @@ export function createConversationRuntimeV2(
 					executionDeliveryFence: claim.executionDeliveryFence,
 				},
 				capabilityId: claim.nativeCapability.capabilityId,
-				capabilityKind: "skill",
+				capabilityKind: claim.nativeCapability.capabilityKind,
 				directoryRevision: claim.nativeCapability.directoryRevision,
 				parameters: claim.nativeCapability.parameters,
 				parametersDigest: claim.nativeCapability.parametersDigest,
@@ -1239,6 +1239,8 @@ export function createConversationRuntimeV2(
 						JSON.stringify(context.claim.nativeCapability)
 				)
 					unavailable("RUNTIME_REQUEST_INVALID");
+				if (context.claim.nativeCapability.capabilityKind !== "skill")
+					unavailable("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
 				const body = {
 					...base,
 					hostSessionRef: state.hostSessionRef,
