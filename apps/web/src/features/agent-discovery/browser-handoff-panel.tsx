@@ -137,6 +137,7 @@ function validBinding(binding: BrowserHandoffBindingV1): boolean {
 			binding.capabilityRevision,
 			binding.pageRevision,
 		].every((value) => Number.isSafeInteger(value) && value >= 1) &&
+		typeof binding.imageDigest === "string" &&
 		/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(binding.imageDigest)
 	);
 }
@@ -177,6 +178,7 @@ function validTimelineBinding(
 			binding.capabilityVersion,
 			binding.pageRevision,
 		].every((value) => Number.isSafeInteger(value) && value >= 1) &&
+		typeof binding.imageDigest === "string" &&
 		/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(binding.imageDigest)
 	);
 }
