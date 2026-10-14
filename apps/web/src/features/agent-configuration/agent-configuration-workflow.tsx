@@ -1,6 +1,7 @@
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { AgentLifecycleWorkflow } from "../agent-administration/agent-lifecycle-workflow.js";
 import { useBrowserSession } from "../use-browser-session.js";
+import { AgentAuthorizationControls } from "./agent-authorization-controls.js";
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
 import { AgentConfigurationScreen } from "./agent-configuration-screen.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
@@ -33,12 +34,20 @@ export function AgentConfigurationWorkflow({
 	const lifecycle = (
 		<AgentLifecycleWorkflow key={agent.agentId} agent={agent} />
 	);
+	const authorization = (
+		<AgentAuthorizationControls
+			key={agent.agentId}
+			agentId={agent.agentId}
+			enabled={isConfigurationOwner || isSystemAdministrator}
+		/>
+	);
 
 	return (
 		<>
 			<AgentConfigurationScreen
 				lifecycle={isConfigurationOwner ? lifecycle : undefined}
 				agent={agent}
+				authorization={isConfigurationOwner ? authorization : undefined}
 				commandError={commandError}
 				commandResult={submission.data}
 				defaultRelayKeyManaged={defaultRelayKey.data?.isSet === true}
@@ -57,7 +66,10 @@ export function AgentConfigurationWorkflow({
 			/>
 			{isSystemAdministrator && !isConfigurationOwner ? (
 				<div className="form-layout">
-					<aside className="form-aside">{lifecycle}</aside>
+					<div className="min-w-0 space-y-6">
+						{authorization}
+						<aside className="form-aside">{lifecycle}</aside>
+					</div>
 				</div>
 			) : null}
 		</>

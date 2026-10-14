@@ -1626,6 +1626,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		};
 		let native: ReturnType<typeof claudeQuery>;
 		try {
+			const skillRoot = this.options.skillDirectory?.nativeRoot;
+			const skillNames = this.options.skillDirectory
+				?.findSkills()
+				.map((entry) => entry.name);
 			native = claudeQuery(
 				{
 					pathToClaudeCodeExecutable: this.executable,
@@ -1645,12 +1649,19 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						join(directory, "memory"),
 						onResultFile,
 						toolOperations,
+						skillRoot ? [skillRoot] : [],
 					),
 					strictMcpConfig: true,
 					mcpServers: {
 						...(standardMcpServer ? { connection: standardMcpServer } : {}),
 						...(browserMcpServer ? { browser: browserMcpServer } : {}),
 					},
+					...(skillRoot
+						? {
+								additionalDirectories: [skillRoot],
+								skills: skillNames ?? [],
+							}
+						: {}),
 					systemPrompt: `You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories. Read MEMORY.md there for saved user preferences when present.`,
 					model: option.model,
 					effort: selection.reasoningLevel as EffortLevel,

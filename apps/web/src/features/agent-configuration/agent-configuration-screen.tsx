@@ -38,6 +38,7 @@ type ConfigurationSessionState = BrowserSessionState | { kind: "loading" };
 
 type AgentConfigurationScreenProps = {
 	agent: AgentProjectionV2;
+	authorization?: ReactNode;
 	commandError?: (Error & { readonly retryable?: boolean }) | null;
 	commandResult?: AgentProjectionV2;
 	lifecycle?: ReactNode;
@@ -155,6 +156,7 @@ function unavailableScreen() {
 
 export function AgentConfigurationScreen({
 	agent,
+	authorization,
 	commandError = null,
 	commandResult,
 	defaultRelayKeyManaged = false,
@@ -185,6 +187,7 @@ export function AgentConfigurationScreen({
 		useState<KeylessModelSelection | null>(null);
 	const [keyChecking, setKeyChecking] = useState(false);
 	const [keyCheckError, setKeyCheckError] = useState(false);
+	const [keySelectionError, setKeySelectionError] = useState(false);
 	const submittedResult =
 		commandResult?.agentId === agent.agentId ? commandResult : undefined;
 	const resultRef = useResultFocus(submittedResult);
@@ -212,6 +215,7 @@ export function AgentConfigurationScreen({
 		if (!onPreviewDefaultRelayKeyCandidates || !defaultRelayKey.trim()) return;
 		setKeyChecking(true);
 		setKeyCheckError(false);
+		setKeySelectionError(false);
 		try {
 			const result = await onPreviewDefaultRelayKeyCandidates(
 				defaultRelayKey.trim(),
@@ -236,6 +240,7 @@ export function AgentConfigurationScreen({
 		setKeyCandidates([]);
 		setCheckedVersions(undefined);
 		setKeySelection(null);
+		setKeySelectionError(false);
 	};
 	const updateModel = (
 		index: number,
@@ -260,6 +265,13 @@ export function AgentConfigurationScreen({
 			),
 		}));
 	const submitConfiguration = () => {
+		if (
+			defaultRelayKeyManaged &&
+			(keyChecking || (checkedVersions !== undefined && keySelection === null))
+		) {
+			setKeySelectionError(true);
+			return;
+		}
 		const request = buildAgentConfigurationRequest(draft);
 		if (!request.coOwnerIds?.length) {
 			setOwnerError("请选择至少一名有效 Owner。");
@@ -332,6 +344,7 @@ export function AgentConfigurationScreen({
 			</p>
 			<div className="form-layout full-width-form">
 				<div className="min-w-0 space-y-6">
+					{authorization}
 					{submittedResult ? (
 						<p
 							ref={resultRef}
@@ -490,6 +503,7 @@ export function AgentConfigurationScreen({
 															setCheckedVersions(undefined);
 															setKeySelection(null);
 															setKeyCheckError(false);
+															setKeySelectionError(false);
 														}}
 														placeholder="输入新 Key"
 														type="password"
@@ -534,10 +548,12 @@ export function AgentConfigurationScreen({
 														{relayKeyResult.keyVersion}。
 													</p>
 												) : null}
-												{keyCheckError || relayKeyError ? (
+												{keyCheckError || relayKeyError || keySelectionError ? (
 													<Alert variant="destructive">
 														<AlertDescription>
-															Key 校验或替换失败，请刷新后重试。
+															{keySelectionError
+																? "请等待 Key 检查完成，并选择至少一个有效模型和默认推理档位后再保存。"
+																: "Key 校验或替换失败，请刷新后重试。"}
 														</AlertDescription>
 													</Alert>
 												) : null}

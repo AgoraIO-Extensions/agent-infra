@@ -220,7 +220,7 @@ agent-infra/
 | Agent Lifecycle | Web 申请审批、API 直接创建、启动/停止/重启/停用、期望版本与状态迁移 | 直接操作 Kubernetes |
 | Agent Access | Owner、员工/组织范围、管理员手动禁用、应用与责任人、API 凭证范围/失效、显式授权及当前权限交集 | LDAP 员工身份、企微目录快照、Connection 授权 |
 | Agent Configuration | 模板、自定义镜像、交互模式、自有交互入口身份责任、env/Secret、个人与 Agent 默认 Relay Key、模型、渠道和已验证的集成能力 | Relay 路由和 Connection Provider 凭证 |
-| Builder / Build Service | 受控 Repo 工作区、构建定义、镜像构建与推送、Digest 版本、构建审计和可部署性评估 | 用户业务授权、Connection 凭证、生产合并与发布决定 |
+| Builder / 多服务 Agent | 普通 Agent 通过现有 Connection 读写 Repo；平台准入受限的多服务资源描述、Digest 版本和最终部署资源 | 用户业务授权、Connection 凭证、生产合并与发布决定 |
 | Conversation | 会话、消息、回答版本、附件引用、执行事件和历史查询 | Agent 内部思考原文 |
 | Agent Dispatch | API 有界受理/等待与投递、幂等、取消/恢复、Web 繁忙与补充指令 | Runtime 内部执行算法、通用调度服务 |
 | Channel | Web、API、企微的主体、会话与附件映射 | Runtime 原生 Session 和协议语义 |
@@ -239,7 +239,7 @@ Connection 在自己的 Core/Store/API/Web 中负责客户端身份、Provider/A
 - 企微目录服务的版本化、受认证快照读取契约与测试 Fake。
 - ImageRegistryAdapter、OCI Digest 与 Runtime Manifest 准入。
 - RepositoryConnectionAdapter 与受控分支/工作区操作；Builder 只能通过现有 Connection 授权读取或修改 Repo。
-- BuildServiceAdapter 与构建任务、目标架构、资源/网络/隔离策略、镜像推送和不可变 Digest；具体构建后端由部署提供，不在领域模块内固定。
+- MultiServiceManifestAdapter 与受限 Kubernetes 资源描述、入口服务、规格档位和最终资源准入；镜像由仓库已有 CI 或用户自己的构建流程提供并按 Digest 固定。
 - ModelCatalogAdapter 与获准模型端点政策。
 - KubernetesRuntimeAdapter 与部署访问路由。
 - 对象存储。
@@ -1071,83 +1071,19 @@ pin。真实 target 产物、built-ins 正向能力、隔离、故障与恢复�
 原执行屏障的既有评审不代表新增压缩策略已获评审；差额的文档和 Issue 范围先完成独立架构、
 安全及维护评审，再修改 native/code/pin，沿同一 primary Issue 与实现 PR 交付。
 
-### 10.12 Builder 与平台受控镜像构建
+### 10.12 Builder 与多服务自定义 Agent
 
-Builder 是现有对话式 Web 中的一个受授权任务能力，复用 Platform 的 IdentityContext、Agent 可用范围、Conversation/Execution、审计和部署状态；M1 不新增独立 Builder 生成 API。API 仍只提供普通非对话 Agent 创建和管理能力。Builder 读取或修改 Repo 必须经现有 Connection 授权，使用隔离分支和独立临时工作区，不接受调用方粘贴的 Token，也不能直接写入受保护分支。代码变更须可查看、可审计并提交 PR，但 PR 与构建/推送是独立链路，构建不等待 PR 合并。
+本节决策记录见 [ADR-0026：Builder 是普通 Agent](ADR-0026-builder-is-an-ordinary-agent.md) 和 [ADR-0027：多服务使用受限的标准 Kubernetes 资源描述](ADR-0027-multi-service-standard-resource-description.md)；领域术语见仓库根目录 [CONTEXT.md](../../CONTEXT.md)。
 
-Builder 可以生成或修改 Dockerfile、构建定义以及受平台约束的 System Manifest/Helm 部署。多服务系统在 Platform DB 中仍表示为一个 Agent 管理对象；每个服务的镜像、Service 和部署描述属于该 Agent 的同一版本。平台不创建多 Agent 生命周期，也不为多服务切换提供分布式原子性。数据库迁移、持久业务数据兼容和恢复由系统部署流程与 System Owner 负责，Builder 可以分析、提示或阻断高风险发布，但不自动回退或恢复业务数据。
+Builder 是标准模板上的普通 Agent，复用 Platform 的 IdentityContext、Agent 可用范围、Conversation/Execution、审计和部署状态。M1 不提供独立 Builder API、平台 Build Service、构建批次或构建清理能力。Builder 读取或修改 Repo 必须经现有 Connection 授权，使用隔离分支和独立临时工作区，不接受调用方粘贴的 Token，也不能直接写入受保护分支；源码变更必须可查看、可审计并提交 PR。镜像由仓库已有 CI 或用户自己的构建流程提供，平台只消费部署批准的不可变 Digest。
 
-Builder 生成 System Manifest/Helm 不构成部署授权。Agent 版本绑定前和实际部署前，平台服务端必须按 [Workload 形态](#101-workload-形态)、[环境变量与 Secret](#106-环境变量与-secret) 和[安全基线](#17-安全基线)对最终部署资源（含 Helm 渲染结果）执行准入，拒绝 `privileged`、`hostNetwork`、`hostPath`、未授权的 ServiceAccount/Secret 引用及绕过 Connection 独立授权的配置。不可校验或校验失败时拒绝绑定或部署，用户确认不得豁免。准入结论必须绑定不可变 Agent/系统版本的最终资源内容，实际资源仍仅由 `platform-worker` 调谐且必须与该内容一致；重新渲染或内容变化须重新准入，无法验证一致性时拒绝部署。该静态准入不能替代 Connection 对每次调用的独立授权。
+Builder 可以生成 Dockerfile 和受平台约束的多服务 System Manifest。多服务系统在 Platform DB 中仍表示为一个 Agent 管理对象，只支持 self-managed 模式；平台不创建多 Agent 生命周期，不把 Compose 作为请求格式，也不渲染 Helm。服务集合、入口服务、镜像 Digest、配置和版本整体管理，不承诺服务切换具有分布式原子性；数据库迁移、持久业务数据兼容和恢复由系统部署流程与 System Owner 负责。
 
-BuildServiceAdapter 至少提供以下语义：
+多服务版本只接受受限的标准 Kubernetes 资源描述：Deployment 或 StatefulSet、Service、ConfigMap、PVC 和发布前迁移 Job。请求以内联 YAML 提交并作为不可变版本的一部分保存。字段白名单、资源规格档位、单 Agent 总量上限和固定入口 annotation 是契约的一部分；平台注入名称、标签、ServiceAccount、NetworkPolicy、入口路由和规格档位。平台拒绝 privileged、hostNetwork、hostPath、自带 ServiceAccount 或 RBAC、未经批准的 Secret 引用、未获准 Registry 和非 Digest 镜像。
 
-- 为每次构建创建独立、短期的源码/工具/缓存工作区，任务完成或取消后清理；禁止跨用户或跨 Agent 复用工作区、运行时依赖和缓存。
-- 按部署目标 ACK 的 Linux OCI 与节点架构构建；目标架构无法产出或验证时失败。GPU、Windows、特定内核和特权运行要求在 M1 中明确不支持。
-- 允许受平台网络策略约束的公网依赖下载；不提供私有依赖凭证注入。构建所需私有凭证不可用时失败并说明原因，不能向用户索取粘贴 Token。
-- 强制禁止宿主 Docker socket、`privileged`、`hostNetwork`、`hostPath`、Kubernetes API 和内核模块；不得为使构建成功自动放宽隔离。任务超过平台时间、CPU、内存或磁盘上限时终止，不自动申请更高资源。
-- 平台负责 Registry 推送和部署拉取权限。镜像仓库统一位于 `agent-infra` 项目，单服务使用服务端生成且不可变的 `agent-id/service-id` 作为路径组件，用户可见名称不得直接参与 Registry 路径；平台拒绝路径分隔符、控制字符和规范化碰撞。任务只有在所有服务镜像构建、推送并取得不可变 Digest 后才可提交 Agent 创建。非研发用户不需要 Harbor/OCI Registry 账号、仓库管理权限或 `imagePullSecret`。
-- Builder 可临时安装工具或依赖，但最终镜像必须包含自身运行时依赖。未完成镜像和中间产物不得进入 Agent 版本；跨 Registry 复制私有镜像不属于 M1 P0。
+平台在绑定 Agent 版本和实际调谐前，按最终资源内容执行准入。所有服务通过准入和真实就绪检查后，才创建或切换版本；实际资源只能由 platform-worker 调谐，并且必须与已准入内容一致，内容变化必须重新准入。入口服务是唯一对外路由，非入口服务只在同一 Agent 内可达。任一服务失败时返回受控失败原因，旧版本继续提供服务；失败原因不含日志正文、凭证、内部地址或用户输入。
 
-Builder 在构建前根据 Repo、构建定义、声明依赖、网络/环境约束和 ACK 政策进行可部署性预检，部署启动后执行真实能力检查。预检发现必需或核心能力不可用时阻断发布；可选能力缺失只能在明确展示限制并获得用户确认后降级发布；无法判断核心性的能力必须说明不确定并取得确认。静态分析、healthz 或 mock 不能单独证明能力可用；无法部署或证据不足时返回如实的自然语言限制说明，不发布未就绪系统。
-
-BuildServiceAdapter 的任务状态至少区分排队、运行、成功、失败和取消，并持久保存构建批次、输入摘要、源码版本、构建后端版本、目标架构、镜像 Digest、脱敏日志摘要和错误/取消原因。凭证和敏感内容不得进入日志、错误、Trace 或审计正文。失败、取消或 Agent 创建回滚必须终止任务、清理临时资源、未完成产物及该批次已推送但未绑定的 Digest，并阻止后续 Agent 创建；后台 GC 按构建批次追踪并清理异常残留。
-
-成功结果形成不可变 Agent/系统版本；发布需要用户确认，Platform DB 保留当前运行版本与版本历史，升级和回滚复用既有 Agent 生命周期。合并受保护分支和正式生产发布仍需现有相应授权主体明确确认。签名、扫描和 Registry 准入沿用部署政策，不在 BuildServiceAdapter 外新增 Builder 审批流程。当前真实构建、OCI 导出/Digest 及 Registry push 尚待验证；本 Spec 不将某个具体构建器、rootless 实现或探针结果视为已验收事实。
-
-#### 10.12.1 构建批次与可信结果关联
-
-构建和 PR 创建、合并分别执行，均绑定同一固定源码提交。Core 只能根据已有 Connection 的
-可信读取结果固定获权仓库的不可变 ID、归属与完整 source commit；可变分支、模型输出和
-调用方提交的相同字符串不能建立关联。构建定义摘要绑定该提交中的实际构建输入。
-源码变更仍须独立提交 PR；关联 PR 时重新核实仓库 ID 与精确 head commit，后续 head 变化
-不改写原批次。PR 交付状态与失败独立保存，创建失败不取消已获权的构建。
-
-批次是原 Conversation/Execution 下的业务记录，复用原 Task 的受理、当前授权、控制记录、
-审计和 Worker 调度，不新增任务队列或独立 Builder API。受理事务固定发起主体、执行该任务的
-Agent、原 Conversation/Execution、源码证据引用、构建定义摘要、目标 Linux 架构、构建后端
-及版本、部署批准的构建参数和时间/资源/网络上限。同一事务生成批次及产物归属使用的
-不可变目标 Agent/Service ID；目标 ID 不代表 Agent 已创建，也不授予创建权限。
-幂等键沿原主体与任务命名空间串行化；完整输入及归属相同返回原批次，任一绑定变化则拒绝。
-读取原批次和幂等重放也必须复核当前访问资格，不泄露其他主体的记录。
-
-Worker 首次提交前持久保存批次、业务幂等键、确切输入及实际调用意图。后端调用只能使用
-部署已准入的固定构建入口与有界参数；不接受任意 Job、URL、命令或外部凭据。
-直接调用部署批准的 Build Service 时，Worker 只取得该后端获准的服务调用身份，并同时检查
-原任务当前业务权限和后端自身授权；服务身份不能代替用户授权或获得外部账号凭据。
-若构建后端使用 Connection，实际提交、查询、停止和清理由 [§13.1](#131-独立直连与权威边界)的
-Agent 独立客户端路径执行，Worker 只编排原任务并消费绑定原 Execution 的可信结果。
-该客户端的独立 Consumer/Instance/Actor、token 绑定及 profile 明确要求的持有证明、Grant、WRITE 确认、撤权与 Dispatch
-必须满足 [Connection HLD](HLD-connection-M1.md)；没有合法实际客户端时该绑定不启用。
-按 [§13.2](#132-调用与审计关联)，Platform API/Worker 不代理 Connection 调用或持有其查询
-凭据，不借用 Owner 身份、跨库读取凭据或把 Platform 授权当作 Connection Grant。
-
-后端受理结果须保存可信调用引用与原 queue/build 等后端引用，查询仅沿该绑定有界执行。
-提交超时、响应丢失或重启时无法确认 WRITE 结果，批次记为 `unknown`，只核实原调用，
-不得再次提交构建来代替对账。后端不能提供原调用核实、停止及清理能力时，不能启用该绑定。
-每次实际调用复核当前授权；撤权或任务控制生效后拒绝新增业务操作，停止与清理由原系统控制
-记录和后端获准的控制权限执行，不因用户撤权丢弃原调用或伪造停止成功。
-
-构建状态区分排队、运行、结果未知、停止中、清理中、失败、取消和待确认发布。
-后端成功仍须核实原调用、输入、源码提交、构建定义摘要、目标架构、批次及产物归属。
-镜像路径按本节规定使用服务端不可变 ID；Digest 来自后端产物记录并通过既有 Registry 准入
-读取实际 OCI 内容和目标架构，不能只信任 Tag、日志或模型摘要。全部本批次服务产物准入
-成功且临时工作区清理已确认，才可进入待确认发布；该状态不创建 Agent，也不代表发布成功。
-版本绑定和发布继续执行本节最终资源准入、当前创建/部署授权和用户确认。
-
-状态写入与原调用绑定及 Worker 当前 fence 原子比较，拒绝陈旧 Worker 和不匹配结果。
-重复结果不重复发布状态；停止已受理时，迟到的成功只能登记为待清理产物，不能恢复待发布。
-重启恢复沿原输入、调用、控制记录和 fence，不改绑 source、主体或产物。
-失败或取消的终态要求确认后端不再产生输出，并确认临时工作区、未完成产物和该批次未绑定
-Digest 已清理；未确认时继续显示未知、停止中或清理中，不释放对应占用或创建 Agent。
-后台 GC 以批次和版本绑定核实归属，不能删除已绑定版本或其他批次、用户、Agent 的资源。
-
-同一原任务查询和聊天时间线消费上述持久状态、独立 PR 结果与脱敏失败原因。
-批次、源码证据、PR、后端调用、产物准入及清理记录保留可信关联，审计分别记录原发起人与
-实际执行组件，供既有审计查询消费；普通页面只显示有权读取的摘要，不返回凭据、证明、
-原始日志或内部配置。Trace 和模型输出不承担构建业务权威。
-各部署绑定启用前须证明固定输入的真实提交、查询、Registry 准入、停止、清理和重启恢复，
-并覆盖撤权、跨主体/仓库/源码/Job/产物替换及迟到结果。Fixture/CI 与真实外部验收分别记录；
-单服务批次通过不代替多服务、发布、最终资源准入、失败回退和升级回滚的完整验收。
+Builder 的部署前评估和运行后检查必须以真实资源和批准的镜像为依据。静态分析、mock 或 healthz 不能单独证明能力可用；不支持的资源、不能部署或证据不足时如实拒绝。多服务能力通过契约 seam、准入、Worker 调谐、服务网络、入口路由、失败回滚和升级验收逐步交付，单服务或 fixture 通过不能替代完整多服务验收。
 
 ### 10.13 OpenCode 原生工具回执与来源
 
@@ -2196,7 +2132,7 @@ CI 仍验证构建出的镜像、不可变 image ID、Runtime probe、Web smoke�
 2. **Agent 生命周期与 API 身份：** Web 申请审批、用户/应用与凭证、API 直接创建及显式授权、OCI Digest、Secret 修订、Worker 调谐和状态展示。
 3. **Runtime 与任务闭环：** Conversation/Execution/outbox、API 有界等待/取消、Web 行为、SSE、RuntimeHost/固定 Driver、附件和恢复，逐个验证实际模型/工具采集与必要审计。
 4. **Connection 独立直连：** 由 Connection 自身文档与实施计划交付身份、MCP/API、Grant、外部执行/恢复和审计，再验证平台实际执行与直连调用的独立授权关联；本文不重排其内部 DAG。
-5. **渠道、自定义 Agent 与 Builder：** 企微 Channel、Runtime Manifest、自有交互入口 Auth Gateway、Connection 授权的 Builder、受控 Build Service 和 ACK 可部署性验证。
+5. **渠道、自定义 Agent 与 Builder：** 企微 Channel、Runtime Manifest、自有交互入口 Auth Gateway、Connection 授权的 Builder、受限多服务资源准入和 ACK 可部署性验证。
 6. **Eval 与查询入口：** 版本化数据集、实验/逐例任务、评分/复核/反馈、可比分析、审计查询 API 与页面、运行观测后端和告警。
 7. **上线加固：** 真实任务/评测、故障注入、权限/隐私隔离、负载基线和运维手册；审计持久化随业务切片交付，不留到最后补日志。
 
@@ -2236,7 +2172,7 @@ CI 仍验证构建出的镜像、不可变 image ID、Runtime probe、Web smoke�
 13. 四模板有真实模型/工具观测与任务关联，采集缺失和故障如实呈现；运行后端覆盖服务/任务/依赖并验证告警，恢复不重复计数。
 14. 审计 API 与基础管理页完整覆盖治理、执行和 Eval；必要审计与状态可靠保存，外部意图先记录，查询故障不显示空结果，记录不随 Trace 采样丢失。
 15. 固定集基线/候选真实对比，支持规则/人工/模型评分、逐例分析、复核和新版本再跑；分母/覆盖/评分故障及独立反馈可见，Eval 用途授权与数据生命周期有正负向验证。
-16. Builder 仅通过现有对话式 Web 和 Connection 授权工作；构建任务具备独立工作区、资源/网络/隔离上限、目标 ACK 架构约束、脱敏审计和取消清理语义。所有服务镜像成功推送并取得不可变 Digest 后才创建 Agent；Registry 路径使用服务端生成的不可变 Agent/Service ID；失败、取消或创建回滚按构建批次清理未绑定 Digest，后台 GC 兜底。核心能力缺失阻断发布，可选或不确定能力按用户确认规则处理，真实构建与 Registry push 证据齐全后才能宣称验收。
+16. Builder 仅通过现有对话式 Web 和 Connection 授权工作；仓库已有 CI 或用户自己的流程提供镜像，平台按不可变 Digest 和受限多服务资源描述准入。平台固定入口、NetworkPolicy、规格档位和服务端资源身份；不支持的资源、核心能力缺失或证据不足时拒绝发布，真实资源和就绪检查通过后才能宣称验收。
 
 ## 25. 评审结论记录
 

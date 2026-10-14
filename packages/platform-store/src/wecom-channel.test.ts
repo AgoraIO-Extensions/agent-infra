@@ -11,6 +11,7 @@ import {
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import { PostgresPlatformAuditQueryV1 } from "./audit.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
@@ -88,6 +89,30 @@ const configuration = {
 	],
 	channelRevision: "channels_1",
 };
+/** 带 Agent 默认 Relay Key 的标准 Agent 持久化为 V3：模型选项不含任何凭证（#2422）。 */
+const keylessAgentId = "wecom_agent_keyless";
+const keylessConfiguration = (() => {
+	const model = agentConfigurationConformanceRecordV1.modelConfiguration;
+	if (!model) throw new Error("fixture model missing");
+	return {
+		...agentConfigurationConformanceRecordV1,
+		schemaVersion: 3,
+		agentId: keylessAgentId,
+		revision: 1,
+		source: configuration.source,
+		environment: [],
+		secrets: [],
+		modelConfiguration: {
+			...model,
+			options: model.options.map(
+				({ credential: _credential, ...option }) => option,
+			),
+		},
+		channels: [
+			{ kind: message.kind, bindingReference: message.bindingReference },
+		],
+	};
+})();
 function channel(target = store) {
 	const base = createWecomChannelV1({
 		store: target,
@@ -157,6 +182,11 @@ beforeAll(async () => {
 	await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values (${message.agentId},'owner_1',now())`;
 	await sql`insert into platform.agent_availability (agent_id,target_type,target_id) values (${message.agentId},'organization','controlled-org')`;
 	await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${message.agentId},1,'fixture',${sql.json(configuration)},now())`;
+	await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values (${keylessAgentId},1,'authorization_1')`;
+	await sql`insert into platform.agent_applications (id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values ('app_keyless',${keylessAgentId},'owner_1','Keyless','Keyless','available','trace_k','request_k',now(),1,1,'ready','running',1,1)`;
+	await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values (${keylessAgentId},'owner_1',now())`;
+	await sql`insert into platform.agent_availability (agent_id,target_type,target_id) values (${keylessAgentId},'organization','controlled-org')`;
+	await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${keylessAgentId},1,'fixture',${sql.json(keylessConfiguration)},now())`;
 }, 120_000);
 afterAll(async () => {
 	await store?.close();
@@ -212,6 +242,37 @@ it("commits one receipt with one execution under concurrent callbacks and replay
 		principal: { kind: "user", id: message.senderId },
 		channelId: wecomChannelIdV1(message),
 	});
+});
+it("accepts a WeCom message for a keyless (V3) Agent with the same single receipt and execution", async () => {
+	const keyless = {
+		...message,
+		agentId: keylessAgentId,
+		eventId: "event_keyless",
+	};
+	const accepted = await channel().receive(keyless);
+	if (accepted.outcome !== "accepted") throw new Error("Expected accepted");
+	expect(await channel().receive(keyless)).toEqual({
+		...accepted,
+		outcome: "replayed",
+	});
+	const rows =
+		await sql`select * from platform.conversation_executions where conversation_id=${accepted.receipt.conversationId}`;
+	expect(rows).toHaveLength(1);
+	expect(rows[0]?.agent_id).toBe(keylessAgentId);
+	expect(rows[0]?.model_option_id).toBe("model_primary");
+	// 配置仍是 V3 且没有凭证：接收消息不会改写 Agent 配置。
+	const [stored] =
+		await sql`select configuration from platform.agent_configuration_revisions where agent_id=${keylessAgentId}`;
+	expect(stored?.configuration.schemaVersion).toBe(3);
+	expect(JSON.stringify(stored?.configuration)).not.toContain("credential");
+	// 绑定过期或通道修订不一致时，V3 同样拒绝而不是抛出解码错误。
+	expect(
+		await channel().receive({
+			...keyless,
+			eventId: "event_keyless_stale",
+			bindingReference: "other_binding",
+		}),
+	).toMatchObject({ outcome: expect.stringMatching(/denied|unavailable/) });
 });
 it("rolls back replay metadata and commits controls when identity is disabled at the final check", async () => {
 	const event = {

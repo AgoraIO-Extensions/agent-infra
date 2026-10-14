@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -180,4 +180,59 @@ describe("Claude workspace result hook", () => {
 		expect(onStarted).toHaveBeenCalledWith("tool-failed", "Read");
 		expect(onFailed).toHaveBeenCalledWith("tool-failed", "Read", 12);
 	});
+});
+
+it("allows Read from the deployment-owned Skill root but never Write/Edit", async () => {
+	const root = await realpath(
+		await mkdtemp(join(tmpdir(), "claude-skill-root-")),
+	);
+	const workspace = join(root, "workspace");
+	const memory = join(root, "memory");
+	const skillRoot = join(root, "skills");
+	await mkdir(workspace);
+	await mkdir(memory);
+	await mkdir(skillRoot);
+	const skillFile = join(skillRoot, "SKILL.md");
+	await writeFile(skillFile, "skill", "utf8");
+	try {
+		const tools = claudeWorkspaceTools(
+			workspace,
+			memory,
+			undefined,
+			undefined,
+			[skillRoot],
+		);
+		const before = tools.hooks?.PreToolUse?.[0]?.hooks[0];
+		if (!before) throw new Error("missing PreToolUse hook");
+		await expect(
+			before(
+				{
+					hook_event_name: "PreToolUse",
+					tool_name: "Read",
+					tool_input: { file_path: skillFile },
+					tool_use_id: "skill-read",
+				} as never,
+				"skill-read",
+				{ signal: new AbortController().signal },
+			),
+		).resolves.toMatchObject({
+			hookSpecificOutput: { permissionDecision: "allow" },
+		});
+		await expect(
+			before(
+				{
+					hook_event_name: "PreToolUse",
+					tool_name: "Write",
+					tool_input: { file_path: skillFile },
+					tool_use_id: "skill-write",
+				} as never,
+				"skill-write",
+				{ signal: new AbortController().signal },
+			),
+		).resolves.toMatchObject({
+			hookSpecificOutput: { permissionDecision: "deny" },
+		});
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });

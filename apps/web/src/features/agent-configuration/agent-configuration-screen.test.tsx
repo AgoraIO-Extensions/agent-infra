@@ -559,7 +559,12 @@ describe("agents whose models are managed by the default Relay Key (#2421)", () 
 		fireEvent.click(screen.getByRole("checkbox", { name: "relay · model-a" }));
 		expect(screen.getByText("至少选择一个模型。")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
-		expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("modelConfiguration");
+		expect(onSave).not.toHaveBeenCalled();
+		expect(
+			screen.getByText(
+				"请等待 Key 检查完成，并选择至少一个有效模型和默认推理档位后再保存。",
+			),
+		).toBeTruthy();
 	});
 
 	it("confirms a successful Key-only replacement with the new version", () => {

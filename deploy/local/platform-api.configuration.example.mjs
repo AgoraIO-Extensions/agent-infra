@@ -39,6 +39,11 @@ export const publicOrigin = requiredEnv("PLATFORM_PUBLIC_ORIGIN");
 // deploy/platform-api/README.md. Missing profiles stop the API at startup.
 export const apiInput = missing("apiInput");
 
+// Optional API → Worker model-directory transport. When provided, Platform
+// API assembles the Store-bound modelSelection reader; do not provide a custom
+// modelSelection reader for the same deployment.
+export const modelDirectory = undefined;
+
 // apiInput must include the reviewed deployment-owned Relay Key policy fields:
 //   agentDefaultRelayKeyPolicy: exact templateBindings, relayEndpointId and
 //     relayBaseUrl used by the deployment's model policy;

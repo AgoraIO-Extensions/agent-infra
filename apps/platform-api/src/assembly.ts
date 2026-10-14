@@ -79,6 +79,8 @@ import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
 } from "./projection.js";
+import { createWorkerRuntimeModelDirectoryTransportV1 } from "./runtime-model-directory-transport.js";
+import { createRuntimeModelSelectionReaderFromStoreV1 } from "./runtime-model-selection-reader.js";
 import {
 	assembleSkillHubReadApiV1,
 	type SkillHubProviderImportDeploymentV1,
@@ -167,6 +169,12 @@ export interface PlatformApiAssemblyInput {
 	readonly directory?: DirectoryRouteDependencies;
 	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
+	/** Deployment-owned API → Worker model-directory service boundary. */
+	readonly modelDirectory?: {
+		readonly baseUrl: string;
+		readonly serviceToken: string;
+		readonly fetch?: typeof fetch;
+	};
 	/** Optional deployment-owned public native metadata reader. */
 	readonly nativeMetadata?: Pick<NativeMetadataRoutesDependenciesV1, "reader">;
 	/** Optional deployment-owned native capability admission route. */
@@ -410,6 +418,18 @@ export function assemblePlatformApi(
 			? { eventWindow: 200 }
 			: { eventWindow: input.conversationEventWindow }),
 	});
+	if (input.modelSelection !== undefined && input.modelDirectory !== undefined)
+		throw new Error("PLATFORM_MODEL_SELECTION_DUPLICATE");
+	const modelSelection =
+		input.modelSelection ??
+		(input.modelDirectory
+			? createRuntimeModelSelectionReaderFromStoreV1({
+					query: conversationQuery,
+					transport: createWorkerRuntimeModelDirectoryTransportV1(
+						input.modelDirectory,
+					),
+				})
+			: undefined);
 	// Commit wakeups shorten SSE waits; streams keep polling without them (#1561).
 	const conversationEventWake = new ConversationEventWakeHubV1();
 	const conversationWakeups = new PostgresCommitWakeupListenerV1({
@@ -820,7 +840,7 @@ export function assemblePlatformApi(
 		conversation: {
 			identity: input.identity,
 			authorization: conversationAuthorization,
-			...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+			...(modelSelection ? { modelSelection } : {}),
 			commands: (identity) =>
 				createConversationExecutionUseCaseV1({
 					transaction: conversationTransaction,
