@@ -98,6 +98,39 @@ beforeAll(async () => {
 			target: "node24",
 		},
 	);
+	const modelDirectoryDeployment = await transform(
+		await readFile(
+			new URL("./runtime-model-directory-deployment.ts", import.meta.url),
+			"utf8",
+		),
+		{
+			loader: "ts",
+			format: "esm",
+			target: "node24",
+		},
+	);
+	const modelDirectoryService = await transform(
+		await readFile(
+			new URL("./runtime-model-directory-service.ts", import.meta.url),
+			"utf8",
+		),
+		{
+			loader: "ts",
+			format: "esm",
+			target: "node24",
+		},
+	);
+	const runtimeMetadataServer = await transform(
+		await readFile(
+			new URL("./runtime-native-metadata-server.ts", import.meta.url),
+			"utf8",
+		),
+		{
+			loader: "ts",
+			format: "esm",
+			target: "node24",
+		},
+	);
 	const nativeMetadataCurrentClient = await transform(
 		await readFile(
 			new URL("./runtime-native-metadata-current-client.ts", import.meta.url),
@@ -138,6 +171,18 @@ beforeAll(async () => {
 	await writeFile(
 		join(directory, "runtime-native-metadata-current-client.js"),
 		nativeMetadataCurrentClient.code,
+	);
+	await writeFile(
+		join(directory, "runtime-model-directory-deployment.js"),
+		modelDirectoryDeployment.code,
+	);
+	await writeFile(
+		join(directory, "runtime-model-directory-service.js"),
+		modelDirectoryService.code,
+	);
+	await writeFile(
+		join(directory, "runtime-native-metadata-server.js"),
+		runtimeMetadataServer.code,
 	);
 	await build({
 		entryPoints: [
