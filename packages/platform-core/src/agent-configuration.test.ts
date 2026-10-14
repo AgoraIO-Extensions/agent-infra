@@ -223,6 +223,143 @@ describe("Agent configuration conformance", () => {
 	});
 });
 
+describe("Agent configuration on keyless (V3) records (#2401)", () => {
+	function keylessRecord(): AgentConfigurationRecordV2 {
+		const record = structuredClone(agentConfigurationConformanceRecordV1);
+		const model = record.modelConfiguration;
+		if (!model) throw new Error("fixture model missing");
+		return {
+			...record,
+			schemaVersion: 3,
+			modelConfiguration: {
+				...model,
+				options: model.options.map(
+					({ credential: _credential, ...option }) => option,
+				),
+			},
+		} as unknown as AgentConfigurationRecordV2;
+	}
+	function create(base: AgentConfigurationRecordV2) {
+		const transaction = new FakeAgentConfigurationTransactionV1(base, {
+			managementState: accessState,
+			authorizationRevision: "authorization_9",
+		} as never);
+		const admissions = new FakeAgentConfigurationAdmissionsV1({
+			...agentConfigurationConformanceAdmissionsV1,
+			authorizations: [
+				{
+					agentId: "agent_01",
+					actorId: "owner_01",
+					authorizationRevision: "authorization_9",
+					accessAuthority,
+				},
+			],
+		});
+		return {
+			transaction,
+			useCase: createAgentConfigurationUseCaseV1({
+				transaction,
+				authorizationAdmission: admissions,
+				imageAdmission: admissions,
+				modelAdmission: admissions,
+				secretAdmission: admissions,
+				channelAdmission: admissions,
+			}),
+		};
+	}
+
+	it("applies a non-model update to a keyless record and keeps it keyless", async () => {
+		const { transaction, useCase } = create(keylessRecord());
+		const result = await useCase.update(
+			{
+				...command,
+				idempotencyKey: "keyless-environment",
+				changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+			},
+			actor,
+		);
+		expect(result).toMatchObject({
+			revision: 8,
+			changedFields: ["environment"],
+		});
+		const stored = transaction.snapshot();
+		expect(stored).toMatchObject({
+			commitCount: 1,
+			configuration: {
+				schemaVersion: 3,
+				revision: 8,
+				environment: [{ name: "LOG_LEVEL", value: "debug" }],
+			},
+		});
+		// 模型配置原样保留，没有出现任何凭证。
+		expect(stored.configuration.modelConfiguration).toEqual(
+			keylessRecord().modelConfiguration,
+		);
+		expect(JSON.stringify(stored.configuration)).not.toContain("credential");
+		// 写入计划本身能通过 Store 使用的同一份严格校验。
+		expect(() =>
+			snapshotAgentConfigurationWritePlanV1(stored.lastPlan),
+		).not.toThrow();
+	});
+
+	it("refuses to change the model set of a keyless record without a Key", async () => {
+		const { transaction, useCase } = create(keylessRecord());
+		await expect(
+			useCase.update(
+				{
+					...command,
+					idempotencyKey: "keyless-model",
+					changes: {
+						modelConfiguration: {
+							options: [
+								{
+									optionId: "model_primary",
+									endpointId: "endpoint_01",
+									modelId: "gpt-5",
+									reasoningLevels: ["low"],
+									replaceCredential: true,
+								},
+							],
+							defaultOptionId: "model_primary",
+							defaultReasoningLevel: "low",
+						},
+					},
+				},
+				actor,
+			),
+		).rejects.toMatchObject({ code: "not_admitted" });
+		expect(transaction.snapshot()).toMatchObject({
+			commitCount: 0,
+			configuration: { schemaVersion: 3, revision: 7 },
+		});
+	});
+
+	it("still produces V2 for V2 records and never lets a V2 plan claim a Key replacement", async () => {
+		const { transaction, useCase } = create(
+			structuredClone(agentConfigurationConformanceRecordV1),
+		);
+		await useCase.update(
+			{
+				...command,
+				idempotencyKey: "v2-environment",
+				changes: { environment: [{ name: "LOG_LEVEL", value: "debug" }] },
+			},
+			actor,
+		);
+		const plan = transaction.snapshot().lastPlan;
+		if (!plan) throw new Error("Expected a V2 plan");
+		expect(plan.configuration.schemaVersion).toBe(2);
+		const claimed = structuredClone(plan) as unknown as {
+			result: { changedFields: string[] };
+			auditEvent: { changedFields: string[] };
+		};
+		const fields = [...claimed.result.changedFields, "defaultRelayKey"].sort();
+		claimed.result.changedFields = fields;
+		claimed.auditEvent.changedFields = fields;
+		expect(() => snapshotAgentConfigurationWritePlanV1(claimed)).toThrow();
+	});
+});
+
 describe("Agent configuration Secret sidecar", () => {
 	it("fails closed before persistence when a Secret sidecar is missing", async () => {
 		const harness = createHarness();
