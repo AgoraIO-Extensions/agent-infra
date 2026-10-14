@@ -26,6 +26,7 @@ import {
 	type PostgresConversationExecutionTransactionV1,
 } from "@agent-infra/platform-store";
 import type { Context } from "hono";
+import type { SseResourceTracker } from "../sse-resource-tracker.js";
 import {
 	HttpProtocolError,
 	type RequestMetadata,
@@ -62,6 +63,7 @@ export interface TaskAccessDependencies {
 }
 export interface TaskRoutesDependencies extends TaskAccessDependencies {
 	readonly observability?: TaskRouteObservability;
+	readonly sseResources?: SseResourceTracker;
 	readonly commands: (authority: ConversationExecutionAuthorityV1) => {
 		submitTask(
 			command: ConversationTaskSubmitCommandV1,

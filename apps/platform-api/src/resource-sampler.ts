@@ -1,6 +1,7 @@
 import type { startObservability } from "@agent-infra/observability";
 import { platformQueueResourceSnapshotTimeoutMs } from "@agent-infra/platform-store";
 import type { PlatformApiAssembly } from "./assembly.js";
+import type { SseResourceTracker } from "./sse-resource-tracker.js";
 
 const resourceSnapshotOperation = "platform.resource_snapshot";
 
@@ -41,6 +42,7 @@ export function startPlatformResourceSampling(
 	read: PlatformApiAssembly["readResourceSnapshot"],
 	observability: ReturnType<typeof startObservability>,
 	intervalMs: number,
+	sseResources?: SseResourceTracker,
 ) {
 	let stopped = false;
 	let scheduled: ReturnType<typeof setTimeout> | undefined;
@@ -90,6 +92,17 @@ export function startPlatformResourceSampling(
 				value: snapshot.outboxPending,
 			});
 			observeOptionalPoolResources(observability, snapshot);
+			if (sseResources) {
+				const sse = sseResources.snapshot();
+				observability.observeResource({
+					kind: "sse_connections",
+					value: sse.connections,
+				});
+				observability.observeResource({
+					kind: "sse_pending_events",
+					value: sse.pendingEvents,
+				});
+			}
 		} catch {
 			if (!stopped && !snapshotRead) {
 				try {

@@ -69,6 +69,8 @@ export interface PlatformConversationWorkerOptionsV2
 type Telemetry = Pick<ReturnType<typeof startObservability>, "record">;
 type ConversationRuntime = ReturnType<typeof createConversationRuntimeV2>;
 const resourceSnapshotOperation = "platform.resource_snapshot";
+const slowQueueQueryOperation = "conversation.queue.find.slow";
+const slowQueryThresholdMs = 250;
 
 function boundedResourceSnapshotDuration(
 	value: unknown,
@@ -658,6 +660,14 @@ export function createPlatformConversationWorkerV2(
 				outcome: "completed",
 				durationMs: performance.now() - began,
 				operationRef: "conversation.queue.find",
+			});
+		const discoveryDurationMs = performance.now() - began;
+		if (options.observability && discoveryDurationMs >= slowQueryThresholdMs)
+			record(options.observability, {
+				stage: "dependency",
+				outcome: "completed",
+				durationMs: Math.min(2_000, discoveryDurationMs),
+				operationRef: slowQueueQueryOperation,
 			});
 		let launched = 0;
 		let lastBusinessItemId: string | undefined;

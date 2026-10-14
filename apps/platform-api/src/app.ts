@@ -136,6 +136,7 @@ import {
 	type WecomRoutesDependenciesV1,
 } from "./http/wecom-routes.js";
 import { registerWecomSetupRoutesV1 } from "./http/wecom-setup-routes.js";
+import { SseResourceTracker } from "./sse-resource-tracker.js";
 
 export const platformApiService = "platform-api";
 
@@ -222,6 +223,7 @@ export function createPlatformHealthApp(observability?: ApiObservability) {
 export function createPlatformApp(
 	dependencies: PlatformAppDependencies,
 	observability?: ApiObservability,
+	sseResources = new SseResourceTracker(),
 ) {
 	const app = createPlatformHealthApp(observability);
 	const requestScope = dependencies.requestScope;
@@ -308,6 +310,7 @@ export function createPlatformApp(
 	registerConversationRoutes(app, {
 		...dependencies.conversation,
 		files: dependencies.files,
+		sseResources,
 	});
 	if (dependencies.nativeMetadata)
 		registerNativeMetadataRoutes(app, dependencies.nativeMetadata);
@@ -325,6 +328,7 @@ export function createPlatformApp(
 		registerTaskRoutes(app, {
 			...dependencies.tasks,
 			...(observability ? { observability } : {}),
+			sseResources,
 		});
 	if (dependencies.unknownStopOperations)
 		registerUnknownStopOperationsRoutes(
