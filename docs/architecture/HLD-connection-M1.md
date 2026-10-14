@@ -2392,10 +2392,34 @@ API 本身独立保护 Browser API 与浏览器登录提交，不能靠绕过 We
 管理员 probe 仍要求原 LDAP 管理员会话，不建立普通入口身份。入口 check/start/callback 是
 具名协议端点，不允许用调用方声称的 identity/role 创建入口证明。所有权限以 LDAP 为准。
 
-激活门禁继续适用：callback 原始 access/error/Referer 与采集链路不得记录授权码或 token，
-合成标记和非敏感 control 必须分别验证；未通过前不注入 client Secret、不运行真实交换。
-无依据证明 form_post/fragment 支持时仍按 query callback 处理，不能靠设置 response_mode
-绕过日志门禁。日志保护涉及共享网关时须由对应维护者评审，不擅改共享 Kong。
+默认日志门禁要求 callback 原始 access/error/Referer 与采集链路不记录授权码或 token，
+合成标记和非敏感 control 分别验证。未满足默认门禁且不属于下述具名例外时，不注入 client
+Secret、不运行真实交换。无依据证明 form_post/fragment 支持时仍按 query callback 处理，
+不能靠设置 response_mode 宣称日志问题已解决。日志保护涉及共享网关时仍须由维护者评审，
+本例外不授权修改共享 Kong。
+
+#### 上海普通公司 OAuth 入口日志风险接受
+
+2026-10-14，项目操作者明确接受共享入口日志残余风险并要求调整门禁，由
+[#2455](https://github.com/AgoraIO-Extensions/agent-infra/issues/2455) 跟踪。仅对上海 Connection
+公开 origin `https://agent-connector.agoralab.co`、公司 client `agent_connector`、固定 callback
+`/api/v1/connection/identity/oauth/callback` 的普通入口流程，允许在共享网关日志尚未脱敏时
+注入普通入口 client 配置并开展真实登录验证；不再把共享网关日志脱敏完成作为该流程的前置条件。
+
+已知原始 access log 包含 callback code/state 和带查询串 Referer；隔离测试确认上游连接失败时
+error log 仍可能记录相同信息，采集链路保护未验收。日志读者可能在短期有效窗口获取授权材料，
+存在授权码被抢先使用或入口准入证明被冒领的风险；短期、单次消费及 confidential client 不能
+视为消除此风险。LDAP 仍独立认证业务身份，入口证明不授予连接、管理员、PAT 或 MCP 权限。
+
+该接受不是安全团队或共享网关维护者批准，不是日志已脱敏或采集验收通过的证据；不扩展到
+管理员身份探测、其他 client、域名、环境或服务。应用日志继续脱敏，client Secret、密码、
+access/refresh token 和 userInfo 仍不得进入日志、错误、审计或模型。state 的浏览器/Origin/
+期限/用途校验、PostgreSQL 单次交换、未知失败不重试及原有权限负向门禁继续生效。
+
+日志整改及合成回归仍需保留独立跟踪；日志访问权限与保存期限未核验的项目不得记为已通过。
+若发现 Secret/token/userInfo 记录，须停止该入口并按现有凭据事件流程处理，不能援引本例外。
+改变上述 origin/client/callback/环境或扩大日志内容范围时重新评审，不自动继承。
+决策记录见 [ADR 0005](../adr/0005-company-oauth-callback-log-risk-acceptance.md)。
 
 完整代码、迁移（若有）、当前 head CI/review、真实公司 OAuth→LDAP、账号不一致、权限负向
 及无入口 Cookie 的 MCP/PAT/PKCE/DCR/refresh/Binding/Delegated 均须单独验收。分阶段发布

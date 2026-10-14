@@ -7,5 +7,6 @@ LDAP 登录作为唯一业务身份；账号可以不同，既有连接、Grant�
 
 产品方向由 [#2256](https://github.com/AgoraIO-Extensions/agent-infra/issues/2256) 跟踪。
 技术与启用条件统一见 [HLD](../architecture/HLD-connection-M1.md#直接公司-oauth-入口)。
-callback 地址被接受不等同于完整登录通过；共享入口日志保护、真实公司字段契约及完整验收
-尚未完成时不启用。取消 HCI 不解除这些直接 OAuth 的独立条件。
+callback 地址被接受不等同于完整登录通过；真实公司字段契约及完整验收仍分别记录。
+共享入口日志的默认门禁由 [ADR 0005](0005-company-oauth-callback-log-risk-acceptance.md)
+补充上海普通入口的具名风险接受；其他环境及管理员探测不继承该例外。
