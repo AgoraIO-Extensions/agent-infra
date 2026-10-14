@@ -143,6 +143,11 @@ function createPilotAgentMockServer(
 			? operation("/api/v2/deployment/configuration", "get")
 			: undefined;
 	const getAgentOperation = operation("/api/v1/agents/{agentId}", "get");
+	// Owner 配置页会读取默认 Key 状态来决定是否由默认 Key 管理模型（#2421）。
+	const getAgentDefaultRelayKeyOperation =
+		version === 2
+			? operation("/api/v1/agents/{agentId}/default-relay-key", "get")
+			: undefined;
 	const updateAgentConfigurationOperation = operation(
 		"/api/v1/agents/{agentId}/configuration",
 		"put",
@@ -460,6 +465,30 @@ function createPilotAgentMockServer(
 					? responder(request, applicationId)
 					: responder;
 			validateResponse(getAgentApplicationOperation, response);
+			return jsonResponse(response);
+		}
+
+		const keyStateAgentId =
+			/^\/api\/v1\/agents\/([^/]+)\/default-relay-key$/.exec(routingPath)?.[1];
+		if (
+			request.method === "GET" &&
+			keyStateAgentId !== undefined &&
+			getAgentDefaultRelayKeyOperation !== undefined
+		) {
+			// 场景没有声明默认 Key：按“未设置”回答，页面保持逐模型凭证的原有界面。
+			getAgentDefaultRelayKeyOperation.requestParams.path?.parse({
+				agentId: decodeURIComponent(keyStateAgentId),
+			});
+			const response = {
+				status: 200,
+				body: {
+					schemaVersion: 1,
+					isSet: false,
+					keyVersion: null,
+					configurationRevision: 1,
+				},
+			};
+			validateResponse(getAgentDefaultRelayKeyOperation, response);
 			return jsonResponse(response);
 		}
 

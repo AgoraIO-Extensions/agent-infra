@@ -128,6 +128,34 @@ describe("Pilot Agent Mock Server", () => {
 		expect(await response.json()).toEqual(deploymentConfiguration);
 	});
 
+	it("answers the default Relay Key state as not set so Owner pages keep the per-model credential UI (#2421)", async () => {
+		const server = createPilotAgentMockServerV2({
+			listAgents: { status: 200, body: { items: [], nextCursor: null } },
+			getAgent: { status: 200, body: startingAgentV2 },
+		});
+		const response = await server.fetch(
+			new Request(
+				"https://platform.example.test/api/v2/agents/agent-pilot-1/default-relay-key",
+			),
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			schemaVersion: 1,
+			isSet: false,
+			keyVersion: null,
+			configurationRevision: 1,
+		});
+		// 只回答读取；写入默认 Key 的请求仍然不在场景里，必须显式声明。
+		await expect(
+			server.fetch(
+				new Request(
+					"https://platform.example.test/api/v2/agents/agent-pilot-1/default-relay-key",
+					{ method: "PUT", body: "{}" },
+				),
+			),
+		).rejects.toThrow("does not handle PUT");
+	});
+
 	it("routes list pages by the generated client's cursor request", async () => {
 		const server = createPilotAgentMockServerV1({
 			listAgents: (request) => ({
