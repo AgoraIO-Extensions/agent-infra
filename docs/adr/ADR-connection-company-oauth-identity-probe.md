@@ -6,5 +6,7 @@
 具体约束由 [HLD 身份探测](../architecture/HLD-connection-M1.md#公司-oauth-身份探测) 定义。
 
 该边界对应 [#2279](https://github.com/AgoraIO-Extensions/agent-infra/issues/2279) 的受监督
-实现与上海部署授权。身份字段吻合只形成诊断证据；稳定性、禁用和不复用契约确认后，
-才在 [#2256](https://github.com/AgoraIO-Extensions/agent-infra/issues/2256) 评审正式身份迁移。
+实现与上海部署授权。身份字段吻合只形成诊断证据，不授予权限。
+[#2256](https://github.com/AgoraIO-Extensions/agent-infra/issues/2256) 现按
+[入口准入与 LDAP 身份分离](0003-company-oauth-gate-with-ldap-identity.md) 实施，不迁移身份，
+也不因启用 HCI 而启用本探测。

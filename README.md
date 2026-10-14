@@ -96,6 +96,10 @@ url = "https://connection.example.com/mcp"
 密码只提交给 Connection，不进入 Codex 配置。Provider OAuth callback、真实 LDAP 和目标 Codex
 版本仍需按 HLD 记录脱敏 conformance 证据。
 
+启用[公司入口保护](docs/architecture/connection-production.md#可选公司-oauthhci-入口保护)时，
+浏览器先完成公司 OAuth/HCI 准入，再按 LDAP 身份使用 Connection；两次账号可不同。
+现有连接和授权保留，MCP、metadata、DCR 和 token 接口不要求 HCI Cookie 或额外 apiKey。
+
 需要跨客户端或无头部署时，用户先访问 `https://connection.example.com/connection/login` 完成 LDAP
 登录，再从中文控制台的“访问令牌”页面签发一次性展示的 Connection PAT。签发表单不会再次要求
 LDAP 密码。消费端只引用 Secret Manager 或进程环境中的 token：

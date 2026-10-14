@@ -1,0 +1,283 @@
+# Complete scoped Shanghai route set. This file is not applied by image releases.
+# Apply protocol/public routes and plugin before updating the existing root Ingress.
+# Dynamic paths use PCRE fixed-length lookbehind to anchor the leading slash.
+# Requires the reviewed Kong traditional router; do not switch router flavors.
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: connection-hci-auth
+  namespace: agent-connector
+  labels:
+    connection.agora.io/hci-stage: prepare
+plugin: key-auth
+config:
+  key_names:
+    - apiKey
+  anonymous: agora-hciauth-v1
+  hide_credentials: true
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: connection-protocol
+  namespace: agent-connector
+  labels:
+    connection.agora.io/hci-stage: prepare
+  annotations:
+    konghq.com/protocols: https
+    konghq.com/https-redirect-status-code: "308"
+    konghq.com/strip-path: "false"
+    konghq.com/regex-priority: "100"
+spec:
+  ingressClassName: kong
+  rules:
+    - host: agent-connector.agoralab.co
+      http:
+        paths:
+          - path: /mcp
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /.well-known/oauth-authorization-server
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /.well-known/oauth-protected-resource/mcp
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /oauth/register
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /oauth/token
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /oauth/revoke
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /oauth/callback
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /oauth/github/callback
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /api/v1/connection/identity/oauth/callback
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /api/v1/connection/pat-bindings
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /connection/internal/v1/action-calls
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /~/(?<=^/)api/v1/connection/pat-bindings/[^/]+/claim$
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /~/(?<=^/)connection/v1/consumer-instances/[^/]+/session$
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /~/(?<=^/)api/grants/[^/]+/revoke$
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /~/(?<=^/)api/connections/[^/]+/disconnect$
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: connection-public
+  namespace: agent-connector
+  labels:
+    connection.agora.io/hci-stage: prepare
+  annotations:
+    konghq.com/protocols: https
+    konghq.com/https-redirect-status-code: "308"
+    konghq.com/strip-path: "false"
+spec:
+  ingressClassName: kong
+  rules:
+    - host: agent-connector.agoralab.co
+      http:
+        paths:
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /connection
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /connection/
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /connection/index.html
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /connection/agent
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /connection/agent/
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /connection/agent/index.html
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /connection/agent/llms.txt
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /connection/help
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /connection/help/
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /connection/help/user-manual.md
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /llms.txt
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /connection/install.css
+            pathType: Exact
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+          - path: /assets
+            pathType: Prefix
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: connection-web
+  namespace: agent-connector
+  labels:
+    connection.agora.io/hci-stage: activate
+  annotations:
+    konghq.com/protocols: https
+    konghq.com/https-redirect-status-code: "308"
+    konghq.com/strip-path: "false"
+    konghq.com/plugins: connection-hci-auth
+spec:
+  ingressClassName: kong
+  rules:
+    - host: agent-connector.agoralab.co
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: connection-web
+                port:
+                  number: 8080

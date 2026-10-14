@@ -2313,6 +2313,9 @@ metadata 和注册生命周期，不能开放任意公共 client。
 
 ### 公司 OAuth 身份探测
 
+公司入口采用 [HCI 与 LDAP 分离方案](#公司-oauthhci-入口与-ldap-身份分离)。
+本节管理员探测独立保留，不是正式登录入口，也不因启用 HCI 而自动启用。
+
 已登录的 Connection 管理员可在 `/api/v1/connection/identity/oauth/probe` 发起公司 OAuth
 诊断，固定使用公司 confidential client、`scope=read` 与
 `/api/v1/connection/identity/oauth/callback`。authorize、token 和 userInfo 只允许
@@ -2334,7 +2337,7 @@ Browser Command 原子取得单次执行权。失败、响应未知或进程崩�
 PAT 或新会话。请求与上游错误只输出固定失败消息；接入层不得记录 callback 查询串或 Referer。
 
 MCP、metadata、DCR、Direct OAuth、Delegated 与现有 Provider 接口保持原协议。HCI 鉴权不挂到
-该域名的所有路径。正式 LDAP 替换仍需经批准的稳定身份映射、禁用与标识不复用契约。
+该域名的所有路径。本次保留 LDAP 登录，不以探测结果创建或合并正式身份。
 
 `/connection/login` 是 `apps/connection-web` 持有的中文登录页，表单只向
 `POST /api/v1/connection/session` 提交 LDAP 用户名/密码，成功后由 `connection-api` 设置
@@ -2352,6 +2355,77 @@ query 必须同时限定该 Principal，跨 Principal token ID 与不存在 toke
 `same-origin` 或 Host 不匹配均 fail closed。该兼容路径不能接受调用方提供的 public base、
 forwarded host 或任意 Origin allowlist。
 `/oauth/revoke` 同时识别 OAuth token 和 Connection PAT hash，并只执行幂等撤销。
+
+### 公司 OAuth/HCI 入口与 LDAP 身份分离
+
+[#2256](https://github.com/AgoraIO-Extensions/agent-infra/issues/2256) 采用双重登录：公司 OAuth
+由 HCI Auth 完成入口准入，LDAP 继续认证 Connection 的业务身份。允许两次登录账号不同；
+所有 Principal、Provider Connection、Grant、PAT、管理员、审批和审计仍按 LDAP 身份处理。
+不关联或迁移账号，不修改 identity realm、issuer、subject hash、既有会话或数据归属。
+取舍见 [ADR 0003](../adr/0003-company-oauth-gate-with-ldap-identity.md)。
+
+HCI 按公司 [接入指南](https://confluence.agoralab.co/pages/viewpage.action?pageId=1995112904)
+配置 Kong `key-auth`，anonymous consumer 固定 `agora-hciauth-v1`，由已有 HCI Auth 完成公司
+OAuth 和入口会话。Connection 不接收公司 access/refresh token，不启用独立 client exchange，
+不需要给浏览器或 MCP Consumer 配置 HCI apiKey，也不创建新的 KongConsumer/机器凭据。
+HCI 身份 Header/JWT/permissions 不进入 Connection 身份、role、Grant 或业务审计主体；应用忽略
+这些字段。伪造 Header 不能替代 LDAP 密码、Connection browser session 或消费者凭据。
+
+入口及 LDAP 会话分别管理。HCI 未登录时只在交互入口走公司登录；通过后仍须 LDAP 登录，
+已有 LDAP 会话则不重复收集密码。HCI 会话过期时用户先在浏览器重新进入控制台，完成入口登录后
+重试原操作，不自动重放 POST 或包含凭据的请求。退出 Connection 不注销 HCI，会话退出也不
+替代客户端撤销。公司入口身份不作为业务操作者，不断言两种账号属于同一员工。
+
+#### 路由边界
+
+上海配置固定 namespace `agent-connector`、host `agent-connector.agoralab.co`，只引用现有
+`connection-web:8080` ClusterIP Service，由它同源代理 API。不改变共享 Kong、数据库或镜像。
+独立 Ingress 的插件仅作用于自身路由，不能给 Service 或共享 Controller 附加全域 HCI 插件。
+精确/锚定的协议例外优先于挂 HCI 的根路径；未知路径默认进入受保护入口，不能通过前缀碰撞绕过。
+
+| 路径 | HCI | 仍执行的原鉴权 |
+| --- | --- | --- |
+| 控制台及 Browser API，包含 LDAP session 建立 | 保护 | LDAP/session、CSRF、角色与归属 |
+| `/oauth/authorize`、`/oauth/login` | 保护，均为浏览器交互 | client/redirect/resource/state/PKCE 绑定及 LDAP |
+| `/mcp` | 不挂 | Connection OAuth/PAT；缺凭据为协议 401 |
+| 两个已发布 `/.well-known/` metadata、`/oauth/register` | 不挂 | metadata 和受限 DCR 原规则 |
+| `/oauth/token`、`/oauth/revoke` | 不挂 | client、code/PKCE、refresh/revoke 原规则 |
+| `/api/v1/connection/pat-bindings` 与具名 binding 的 `/claim` | 不挂 | 已注册 Consumer 服务凭据及一次性 binding |
+| `/connection/pat-bindings/*` | 保护，是用户确认页 | browser session、CSRF 与用户确认 |
+| `/connection/internal/v1/action-calls` | 不挂 | 原 Delegated assertion 与 workload 认证 |
+| `/connection/v1/consumer-instances/{id}/session` | 不挂 | 原 Bearer 与实例归属 |
+| `/oauth/callback`、`/oauth/github/callback` | 不挂 | 原 Provider OAuth state/transaction 与会话确认 |
+| `/api/v1/connection/identity/oauth/callback` | 不挂 | 原受限探测；未配置时 503，不启用交换 |
+| 原 Bearer 管理接口 `/api/grants/{id}/revoke`、`/api/connections/{id}/disconnect` | 不挂 | 原 managementIdentity 与归属 |
+| 具名公开帮助、安装页、静态资源、`/healthz` | 不挂 | 原公开内容，无业务访问权 |
+
+正式配置及逐路径测试位于 `deploy/connection-hci-ingress.yaml` 与
+`tests/connection-hci-ingress.test.mjs`。当前上海 Kong 使用 `traditional` router。动态 ID 例外以 PCRE 固定长度 lookbehind
+`/(?<=^/)` 锚定首个斜杠，并用 `$` 锚定结尾；测试不得自行补锚点。切换 router flavor 前须重新
+评审这些表达式及实际匹配。不能豁免整个
+`/api/v1/connection`、`/connection` 或 `/oauth` 前缀。不要给机器接口增加 HCI Cookie、共享 key
+或自动跟随 HTML 登录的兼容逻辑；Provider token 也不替代 Connection token。
+
+#### 验收与发布
+
+本地路由检查不能证明网关实际匹配、HCI 生效或域名已批准。上线前必须确认 HCI 的 redirectUris
+已包含正式域名、现有 anonymous consumer 可用、KIC 的精确及正则路径行为，并逐接口对照有效
+Kong route/plugin。使用原 host 的完整路由集替换，先建立无插件例外及 HCI plugin，最后保护根
+Ingress；删除或回退配置也要先解除根插件，不能让机器请求短暂经过 HCI。
+
+真实验收分别覆盖：未登录交互页进入公司 OAuth；通过 HCI 后 LDAP 成功及失败；两种账号不同仍
+以 LDAP 账号授权；低权限 LDAP 账号不能因 HCI permissions 得到管理员；已有连接/Grant 可用；
+不带 HCI Cookie 的 MCP/PAT、DCR、token/refresh、撤销、PAT binding 服务接口与 Delegated
+继续原协议。Provider/identity callback 不能出现公司登录循环。仅正常登录页 200 不证明通过。
+
+不得修改共享 Kong 日志或恢复未启用的公司 identity probe。若独立 callback 探测以后启用，仍须
+通过其全链路日志门禁。HCI 自有登录端点和会话安全由网关负责；Connection 不记录或透传其
+身份字段到业务审计。公开入口路由外的网络直连仍按现有网络隔离和 LDAP/Consumer 鉴权治理，
+本次不宣称已实现集群内零信任或完成广泛生产网络门禁。
+
+生产启用不是常规镜像发布：需具名路由变更批准、完整配置备份、dry-run 与差异核对；
+按本文矩阵完成双登录及机器协议验收。不自动发送域名申请，不仅凭公司 client callback 验证
+宣称 HCI 白名单已完成。回退恢复原 Ingress 配置，不恢复数据库、不改变凭据或 Provider 授权。
 
 ### 22.5 Browser API
 

@@ -363,6 +363,16 @@ Connection 的受监督公司 OAuth 身份诊断独立于正式登录，复用�
 - 服务端根据稳定 LDAP `uid` 解析当前账号；显示名和邮箱只作为可变 profile projection。
 - 账号禁用与组织成员变化在每次敏感操作前重新校验，短期缓存不能成为权限来源。
 
+#### Connection 公司入口准入
+
+Connection 保留 9.1 的 LDAP 登录、目录和 PostgreSQL 会话。公司 OAuth 由 HCI Auth 网关完成，
+仅保护批准的交互路由；不在 Connection 内增加公司 token exchange 或账号迁移。
+网关和应用身份边界、路由清单与上线门禁统一见
+[HLD](HLD-connection-M1.md#公司-oauthhci-入口与-ldap-身份分离)。
+应用不使用 HCI Header/JWT 的邮箱、权限或显示名解析 Principal，也不校验入口账号与 LDAP
+账号是否一致。既有 Browser API 的 session/CSRF/RBAC、MCP 的 OAuth/PAT 和服务接口的原鉴权
+继续生效；HCI 不是 Connection 身份签发方。Agent Platform 的身份接入不在本次范围内。
+
 ### 9.2 权限顺序
 
 每次 Agent 使用按以下顺序判断：

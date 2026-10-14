@@ -28,6 +28,51 @@ Runtime、SQLite、global alias 和 Runtime token 不进入部署拓扑。[#301]
 批准 `https://agent-connector.gz3.agoralab.co` 的 GZ3 control plane 使用完整 Connection runtime；
 该批准不关闭 HLD 中面向其他环境、客户端或广泛生产支持的门禁。
 
+## 可选公司 OAuth/HCI 入口保护
+
+该入口按 [HLD](HLD-connection-M1.md#公司-oauthhci-入口与-ldap-身份分离) 使用双重登录：
+HCI 完成公司入口准入，Connection 保留 LDAP 身份和目录，允许账号不同；不迁移旧连接和授权。
+源配置为 `deploy/connection-hci-ingress.yaml`，不是常规镜像 release 的一部分，尚需具名生产启用。
+不注入独立公司 OAuth client Secret，不启用管理员 identity probe，也不修改共享 Kong。
+
+生产启用前先取得 HCI 对 `https://agent-connector.agoralab.co` 的 redirectUris 白名单确认，
+并核实 `agora-hciauth-v1` anonymous consumer 和当前 KIC/Kong 支持。动态路由使用 PCRE
+lookbehind，必须确认目标网关 `KONG_ROUTER_FLAVOR=traditional`；不同 router flavor 不得直接启用。公司 client 的 callback
+验证不能代替该域名白名单。申请由操作员按 HCI 接入文档提交，不自动发送邮件或消息。
+
+从已评审提交执行离线路由检查与服务器 dry-run；所有命令使用本文件发布步骤要求的显式上海
+kubeconfig、兼容 kubectl，不使用默认 context。下面变量只代表已核实的工具和 kubeconfig 路径，
+不承载 Secret：
+
+```bash
+node --test tests/connection-hci-ingress.test.mjs
+"$CONNECTION_KUBECTL" --kubeconfig "$CONNECTION_KUBECONFIG" -n agent-connector \
+  apply --dry-run=server -f deploy/connection-hci-ingress.yaml
+"$CONNECTION_KUBECTL" --kubeconfig "$CONNECTION_KUBECONFIG" -n agent-connector \
+  get ingress connection-web -o yaml > connection-ingress-before.yaml
+```
+
+先检查备份与 `kubectl diff`，确认目标 host、HTTPS、Service、插件作用范围及既有 annotations；
+若生产配置已变化，先评审合并差异，不能覆盖其他人的配置。正式操作按阶段执行：
+
+```bash
+"$CONNECTION_KUBECTL" --kubeconfig "$CONNECTION_KUBECONFIG" -n agent-connector \
+  apply -f deploy/connection-hci-ingress.yaml -l connection.agora.io/hci-stage=prepare
+# 等 Controller 接受配置，并核对生效的协议/公开 route 没有 HCI 插件，再保护交互入口。
+"$CONNECTION_KUBECTL" --kubeconfig "$CONNECTION_KUBECONFIG" -n agent-connector \
+  apply -f deploy/connection-hci-ingress.yaml -l connection.agora.io/hci-stage=activate
+```
+
+Kubernetes 接受 YAML 不证明 Kong 已装载路由。先检查 Controller/网关生效配置，再实测 HLD
+列出的交互及机器路径，保留原 HTTP 方法、Authorization 和不自动跟随重定向的结果。
+未登录浏览器应先进入 HCI，公司登录后仍以 LDAP 登录；账号不同与低权限用户必须分别验证。
+MCP/PAT、DCR、token/refresh/revoke、PAT binding 创建/领取和回调不能变成 HCI HTML/302。
+双登录只改变入口，不以此宣称客户端、网络隔离或共享入口日志的全部门禁通过。
+
+回退先恢复备份的根 Ingress 并确认 HCI 插件解除，再删除本次新增的 `connection-protocol`、
+`connection-public` Ingress 和 `connection-hci-auth` KongPlugin。不能先删例外路由，不能删除
+Service、Secret、数据库或 shared Kong consumer。回退后的机器协议及原 LDAP 登录再次验收。
+
 ## 前置条件
 
 ### 公司 OAuth 身份探测配置
