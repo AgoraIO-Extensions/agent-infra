@@ -1,5 +1,17 @@
 # Runtime Host Connection 安装接收
 
+## Skill Hub Applied 装配
+
+Runtime Host 只消费 Worker 生成的 `AGENT_INFRA_RUNTIME_SKILL_HUB_BINDING`。该环境值是受
+部署控制的有界 JSON，包含 Agent/Agent Version、配置修订、generation、Skill projection 和
+对应的 `synced` `SkillHubSyncBindingV1`（含 Applied receipt）。Host 启动时重新校验这些字段，
+并只从固定只读挂载 `/opt/agent-infra-skill-hub` 构造 `.agents/skills/<name>` 目录；不接受
+Web、Owner、URL、调用方路径或单独的 projections。环境值缺失或任一 revision、generation、
+digest、grant、身份或重复项不一致时，Skill directory 保持不可用并 fail closed。
+
+Worker 必须在写入并确认 Applied receipt 后再把该 envelope 放入 Workload Desired；部署配置
+不得自行拼接或覆盖 binding。受控 projection fixture 不代表真实四模板部署验收。
+
 Host 启动时可消费部署批准的私有文件 export，随后使用已有标准 MCP reader。
 完整信任、秘密保护、发布与失败规则以
 [工程 Spec §13.5.5](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1355-受保护安装交付)

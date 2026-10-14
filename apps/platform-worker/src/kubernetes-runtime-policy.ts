@@ -70,21 +70,30 @@ export function createWorkloadInteractionOriginV1(input: {
 }
 
 function skillHubRuntimeEnvironmentV1(value: AgentWorkloadDesiredV1) {
-	if (
-		value.skillGenerationId === undefined ||
-		value.skills === undefined ||
-		value.skills.length === 0
-	)
+	if (value.skillGenerationId === undefined || value.skills === undefined)
 		return undefined;
+	if (value.skills.length === 0) {
+		if (value.skillAppliedBindings !== undefined)
+			throw new WorkloadKubernetesError("policy");
+		return undefined;
+	}
 	try {
 		const first = value.skills[0];
-		if (!first) throw new Error();
+		if (
+			!first ||
+			value.skillAppliedBindings === undefined ||
+			typeof value.skillAppliedBindings !== "string"
+		)
+			throw new Error();
+		const appliedBindings = JSON.parse(value.skillAppliedBindings);
 		const binding = RuntimeSkillHubBindingV1Schema.parse({
 			schemaVersion: 1,
 			agentId: value.agentId,
 			agentVersion: first.agentVersion,
+			configurationRevision: value.configRevision,
 			generationId: value.skillGenerationId,
 			projections: value.skills,
+			appliedBindings,
 		});
 		return {
 			name: runtimeSkillHubBindingEnvironmentNameV1,
