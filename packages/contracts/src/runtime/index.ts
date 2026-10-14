@@ -1,4 +1,11 @@
 export * from "./browser-capability.ts";
+export * from "./browser-handoff.ts";
+
+import {
+	RuntimeBrowserHandoffRequestV3Schema,
+	RuntimeBrowserHandoffResponseV3Schema,
+} from "./browser-handoff.ts";
+
 export * from "./configuration.ts";
 export * from "./configuration-v4.ts";
 export * from "./driver.ts";
@@ -226,6 +233,8 @@ import {
 } from "./host-v3.ts";
 
 export const RuntimeHostV3SchemaDefinitions = {
+	RuntimeBrowserHandoffRequestV3: RuntimeBrowserHandoffRequestV3Schema,
+	RuntimeBrowserHandoffResponseV3: RuntimeBrowserHandoffResponseV3Schema,
 	RuntimeSubmitTurnRequestV3: RuntimeSubmitTurnRequestV3Schema,
 	RuntimeSupplementRequestV3: RuntimeSupplementRequestV3Schema,
 	RuntimeStopRequestV3: RuntimeStopRequestV3Schema,

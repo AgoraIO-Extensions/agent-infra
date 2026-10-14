@@ -1,6 +1,10 @@
 import {
 	type RuntimeAuthorizationRenewRequestV3,
 	RuntimeAuthorizationRenewRequestV3Schema,
+	type RuntimeBrowserHandoffRequestV3,
+	RuntimeBrowserHandoffRequestV3Schema,
+	type RuntimeBrowserHandoffResponseV3,
+	RuntimeBrowserHandoffResponseV3Schema,
 	type RuntimeEventAckRequestV3,
 	RuntimeEventAckRequestV3Schema,
 	type RuntimeEventPersistRequestV3,
@@ -50,6 +54,11 @@ interface Options {
 		allowBusinessExecution?: boolean,
 	) => Promise<RuntimeOperationResponseV1 | RuntimeOperationResponseV2>;
 	serialize: <T>(key: string, work: () => Promise<T>) => Promise<T>;
+	executeBrowserHandoff?: (
+		request: RuntimeBrowserHandoffRequestV3,
+		claims: RuntimeExecutionGrantClaimsV2,
+		signal: AbortSignal,
+	) => Promise<RuntimeBrowserHandoffResponseV3["record"]>;
 }
 
 function nativeRequired(): never {
@@ -321,7 +330,8 @@ export class RuntimeHostV3 {
 			| RuntimeGenerationCancelRequestV3
 			| RuntimeAuthorizationRenewRequestV3
 			| RuntimeEventPersistRequestV3
-			| RuntimeEventAckRequestV3,
+			| RuntimeEventAckRequestV3
+			| RuntimeBrowserHandoffRequestV3,
 		command: RuntimeExecutionGrantClaimsV2["allowedCommands"][0],
 		verification: unknown,
 	) {
@@ -331,6 +341,33 @@ export class RuntimeHostV3 {
 			verification,
 			this.options.grantValidation,
 		);
+	}
+
+	async browserHandoff(
+		value: RuntimeBrowserHandoffRequestV3,
+		verification: unknown,
+		signal: AbortSignal,
+	): Promise<RuntimeBrowserHandoffResponseV3> {
+		this.assertOpen();
+		const request = parseRequest(RuntimeBrowserHandoffRequestV3Schema, value);
+		const claims = this.validate(request, "browser.handoff", verification);
+		if (
+			claims.purpose !== "control" ||
+			claims.reason !== "browser_handoff" ||
+			!this.options.executeBrowserHandoff
+		)
+			runtimeAuthorizationDenied();
+		const record = await abortable(
+			this.options.executeBrowserHandoff(request, claims, signal),
+			signal,
+		);
+		return RuntimeBrowserHandoffResponseV3Schema.parse({
+			schemaVersion: 3,
+			hostSessionRef: request.hostSessionRef,
+			executionId: request.executionId,
+			outcome: "accepted",
+			record,
+		});
 	}
 
 	async submitTurn(value: RuntimeSubmitTurnRequestV3, verification: unknown) {

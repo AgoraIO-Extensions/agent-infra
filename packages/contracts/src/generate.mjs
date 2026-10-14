@@ -628,6 +628,12 @@ function buildArtifacts() {
 			"RuntimeEventAckRequestV3",
 			"RuntimeEventAckResponseV3",
 		],
+		[
+			"browser/handoff",
+			"executeBrowserHandoffV3",
+			"RuntimeBrowserHandoffRequestV3",
+			"RuntimeBrowserHandoffResponseV3",
+		],
 	];
 	const runtimeOpenapiV3 = createDocument({
 		openapi: "3.1.0",
