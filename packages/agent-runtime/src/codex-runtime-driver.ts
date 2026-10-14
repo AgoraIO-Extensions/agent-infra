@@ -3719,6 +3719,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		CodexRpc,
 		NativeSkillProcess
 	>();
+	private readonly nativeSkillDirectoryReceipts = new Map<
+		string,
+		{ readonly revision: string; readonly snapshot: string }
+	>();
 	private runtimeRequirementsMatch(session: CodexSession) {
 		return isDeepStrictEqual(session.requiredRuntime, this.requiredRuntime);
 	}
@@ -5854,6 +5858,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const directory = this.skillDirectory;
 		if (!directory?.nativeRoot || !directory.nativeSkillPaths)
 			skillDirectoryInvalid();
+		const receipt = this.nativeSkillDirectoryReceipts.get(
+			command.nativeSessionRef,
+		);
+		if (
+			!receipt ||
+			receipt.revision !== command.directoryRevision ||
+			receipt.snapshot !==
+				JSON.stringify([directory.generationId, directory.findSkills()])
+		)
+			skillDirectoryInvalid();
 		const entry = directory
 			.findSkills()
 			.find(
@@ -6058,6 +6072,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		await metadataRead.revalidate();
 		assertMountedCurrent();
+		if (mountedEntries) {
+			this.nativeSkillDirectoryReceipts.set(binding.nativeSessionRef, {
+				revision,
+				snapshot: JSON.stringify([mountedGenerationId, mountedEntries]),
+			});
+		}
 		return directory;
 	}
 
@@ -6338,6 +6358,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!prepared.created) {
 			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
+		if (command.nativeSkill && command.input.attachments.length > 0)
+			stateInvalid();
 		const nativeInput = command.nativeSkill
 			? await this.nativeSkillInput(command, text)
 			: command.input.attachments.length > 0
