@@ -1,5 +1,5 @@
 import {
-	createFilesystemRuntimeSkillDirectoryV1,
+	createAppliedRuntimeSkillDirectoryV1,
 	type RuntimeFilesystemSkillDirectoryV1,
 } from "@agent-infra/agent-runtime";
 import {
@@ -34,12 +34,14 @@ export function readRuntimeSkillHubBindingV1(
 export function createRuntimeSkillHubDirectoryV1(
 	binding: RuntimeSkillHubBindingV1,
 ): RuntimeFilesystemSkillDirectoryV1 {
-	return createFilesystemRuntimeSkillDirectoryV1({
+	return createAppliedRuntimeSkillDirectoryV1({
 		root: runtimeSkillHubMountRootV1,
 		agentId: binding.agentId,
 		agentVersion: binding.agentVersion,
+		configurationRevision: binding.configurationRevision,
 		generationId: binding.generationId,
 		projections: binding.projections,
+		appliedBindings: binding.appliedBindings,
 	});
 }
 

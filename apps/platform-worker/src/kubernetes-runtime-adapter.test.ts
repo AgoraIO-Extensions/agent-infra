@@ -1,4 +1,7 @@
-import { SkillWorkloadProjectionV1Schema } from "@agent-infra/contracts";
+import {
+	SkillHubSyncBindingV1Schema,
+	SkillWorkloadProjectionV1Schema,
+} from "@agent-infra/contracts";
 import { runtimeSkillHubBindingEnvironmentNameV1 } from "@agent-infra/contracts/runtime";
 import type {
 	V1Ingress,
@@ -113,12 +116,39 @@ describe("GA Kubernetes Workload adapter", () => {
 			scripts: false,
 		},
 	});
+	const appliedBinding = SkillHubSyncBindingV1Schema.parse({
+		schemaVersion: 1,
+		agentId: "agent-a",
+		agentVersion: "agent-version-1",
+		skillName: "workspace-summary",
+		skillVersion: skillProjection.skillVersion,
+		grant: skillProjection.grant,
+		configurationRevision: 1,
+		syncRevision: 1,
+		state: "synced",
+		failureReason: null,
+		appliedReceipt: {
+			schemaVersion: 1,
+			agentId: "agent-a",
+			agentVersion: "agent-version-1",
+			skillName: "workspace-summary",
+			configurationRevision: 1,
+			syncRevision: 1,
+			skillVersionId: "skill-version-a",
+			generationId: "a".repeat(64),
+			packageDigest: "a".repeat(64),
+			manifestDigest: "b".repeat(64),
+			targetPath: ".agents/skills/workspace-summary",
+			readOnly: true,
+		},
+	});
 
 	it("projects the verified Skill generation into the Runtime environment", async () => {
 		const f = fixture();
 		const desired = {
 			...workloadDesiredFixture(),
 			skills: [skillProjection],
+			skillAppliedBindings: JSON.stringify([appliedBinding]),
 			skillGenerationId: "a".repeat(64),
 		};
 		const adapter = f.adapter();
@@ -133,14 +163,18 @@ describe("GA Kubernetes Workload adapter", () => {
 		if (!entry?.value) throw new Error("Missing Runtime Skill binding");
 		const binding = JSON.parse(entry.value) as {
 			agentId: string;
+			configurationRevision: number;
 			generationId: string;
 			projections: readonly unknown[];
+			appliedBindings: readonly unknown[];
 		};
 		expect(binding).toMatchObject({
 			agentId: "agent-a",
+			configurationRevision: 1,
 			generationId: "a".repeat(64),
 		});
 		expect(binding.projections).toHaveLength(1);
+		expect(binding.appliedBindings).toHaveLength(1);
 	});
 
 	it("mounts the verified Skill generation through a fixed read-only Hub root", async () => {

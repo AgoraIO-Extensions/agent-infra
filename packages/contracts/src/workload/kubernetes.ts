@@ -215,6 +215,8 @@ const desiredWorkloadBaseV1Schema = z.strictObject({
 	networkPolicy: WorkloadNetworkPolicyV1Schema,
 	secretRefs: z.array(KubernetesSecretReferenceV1Schema),
 	skills: z.array(SkillWorkloadProjectionV1Schema).max(32).optional(),
+	/** Worker-only JSON envelope; Runtime validates its strict Applied contract. */
+	skillAppliedBindings: z.string().max(30_000).optional(),
 	skillGenerationId: z
 		.string()
 		.regex(/^[a-f0-9]{64}$/)
@@ -371,6 +373,7 @@ const appliedWorkloadBaseV1Schema = z.strictObject({
 	networkPolicyRef: WorkloadOpaqueIdV1Schema,
 	secretRefs: z.array(KubernetesSecretReferenceV1Schema),
 	skills: z.array(SkillWorkloadProjectionV1Schema).max(32).optional(),
+	skillAppliedBindings: z.string().max(30_000).optional(),
 	skillGenerationId: z
 		.string()
 		.regex(/^[a-f0-9]{64}$/)

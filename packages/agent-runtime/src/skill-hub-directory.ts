@@ -204,15 +204,27 @@ export function createRuntimeSkillDirectoryV1(input: {
  * Bind Runtime discovery to the same Applied Skill Hub facts that Worker
  * persisted. Pending or stale bindings never become a Runtime directory.
  */
-export function createAppliedRuntimeSkillDirectoryV1(input: {
+type AppliedRuntimeSkillDirectoryInputV1 = {
 	readonly agentId: string;
 	readonly agentVersion: string;
 	readonly configurationRevision: number;
 	readonly generationId: string;
 	readonly projections: readonly unknown[];
 	readonly appliedBindings: readonly unknown[];
+	/** Fixed Worker-mounted generation root used by Host production assembly. */
+	readonly root?: string;
 	readonly maximumResourceBytes?: number;
-}) {
+};
+
+export function createAppliedRuntimeSkillDirectoryV1(
+	input: AppliedRuntimeSkillDirectoryInputV1 & { readonly root: string },
+): RuntimeFilesystemSkillDirectoryV1;
+export function createAppliedRuntimeSkillDirectoryV1(
+	input: AppliedRuntimeSkillDirectoryInputV1,
+): ReturnType<typeof createRuntimeSkillDirectoryV1>;
+export function createAppliedRuntimeSkillDirectoryV1(
+	input: AppliedRuntimeSkillDirectoryInputV1,
+) {
 	if (
 		!Number.isSafeInteger(input.configurationRevision) ||
 		input.configurationRevision < 1 ||
@@ -289,13 +301,19 @@ export function createAppliedRuntimeSkillDirectoryV1(input: {
 		)
 			unavailable();
 	}
-	return createRuntimeSkillDirectoryV1({
+	const directoryInput = {
 		agentId: input.agentId,
 		agentVersion: input.agentVersion,
 		generationId: input.generationId,
 		projections: [...projectionByVersion.values()],
 		maximumResourceBytes: input.maximumResourceBytes,
-	});
+	};
+	return input.root === undefined
+		? createRuntimeSkillDirectoryV1(directoryInput)
+		: createFilesystemRuntimeSkillDirectoryV1({
+				...directoryInput,
+				root: input.root,
+			});
 }
 
 async function readMountedSkillFile(input: {

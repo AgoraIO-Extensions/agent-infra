@@ -9,6 +9,7 @@ import type {
 import {
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
+	createAppliedRuntimeSkillDirectoryV1,
 	createExecutionGrantVerifier,
 	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
@@ -74,8 +75,8 @@ import {
 	type RuntimeOAuthAssembly,
 } from "./runtime-oauth.js";
 import {
-	createRuntimeSkillHubDirectoryV1,
 	readRuntimeSkillHubBindingV1,
+	runtimeSkillHubMountRootV1,
 } from "./skill-hub-configuration.js";
 import { createProtectedStandardMcpInput } from "./standard-mcp-input.js";
 import { receiveProtectedStandardMcpInstallation } from "./standard-mcp-installation.js";
@@ -342,7 +343,15 @@ export async function assembleRuntimeHost(
 		: undefined;
 	const skillHubBinding = readRuntimeSkillHubBindingV1(environment);
 	const skillDirectory = skillHubBinding
-		? createRuntimeSkillHubDirectoryV1(skillHubBinding)
+		? createAppliedRuntimeSkillDirectoryV1({
+				root: runtimeSkillHubMountRootV1,
+				agentId: skillHubBinding.agentId,
+				agentVersion: skillHubBinding.agentVersion,
+				configurationRevision: skillHubBinding.configurationRevision,
+				generationId: skillHubBinding.generationId,
+				projections: skillHubBinding.projections,
+				appliedBindings: skillHubBinding.appliedBindings,
+			})
 		: undefined;
 	const legacyMigration = await readRuntimeLegacyMigrationV1({
 		environment,

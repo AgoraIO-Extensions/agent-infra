@@ -1382,6 +1382,10 @@
                       ],
                       "type": "object"
                     },
+                    "skillAppliedBindings": {
+                      "maxLength": 30000,
+                      "type": "string"
+                    },
                     "skillGenerationId": {
                       "pattern": "^[a-f0-9]{64}$",
                       "type": "string"
@@ -2743,6 +2747,10 @@
                       ],
                       "type": "object"
                     },
+                    "skillAppliedBindings": {
+                      "maxLength": 30000,
+                      "type": "string"
+                    },
                     "skillGenerationId": {
                       "pattern": "^[a-f0-9]{64}$",
                       "type": "string"
@@ -4104,6 +4112,10 @@
                       ],
                       "type": "object"
                     },
+                    "skillAppliedBindings": {
+                      "maxLength": 30000,
+                      "type": "string"
+                    },
                     "skillGenerationId": {
                       "pattern": "^[a-f0-9]{64}$",
                       "type": "string"
@@ -5459,6 +5471,10 @@
                         "kubernetesApiAccess"
                       ],
                       "type": "object"
+                    },
+                    "skillAppliedBindings": {
+                      "maxLength": 30000,
+                      "type": "string"
                     },
                     "skillGenerationId": {
                       "pattern": "^[a-f0-9]{64}$",
@@ -6816,6 +6832,10 @@
                       ],
                       "type": "object"
                     },
+                    "skillAppliedBindings": {
+                      "maxLength": 30000,
+                      "type": "string"
+                    },
                     "skillGenerationId": {
                       "pattern": "^[a-f0-9]{64}$",
                       "type": "string"
@@ -8171,6 +8191,10 @@
                         "kubernetesApiAccess"
                       ],
                       "type": "object"
+                    },
+                    "skillAppliedBindings": {
+                      "maxLength": 30000,
+                      "type": "string"
                     },
                     "skillGenerationId": {
                       "pattern": "^[a-f0-9]{64}$",
@@ -9546,6 +9570,10 @@
                       ],
                       "type": "object"
                     },
+                    "skillAppliedBindings": {
+                      "maxLength": 30000,
+                      "type": "string"
+                    },
                     "skillGenerationId": {
                       "pattern": "^[a-f0-9]{64}$",
                       "type": "string"
@@ -10920,6 +10948,10 @@
                       ],
                       "type": "object"
                     },
+                    "skillAppliedBindings": {
+                      "maxLength": 30000,
+                      "type": "string"
+                    },
                     "skillGenerationId": {
                       "pattern": "^[a-f0-9]{64}$",
                       "type": "string"
@@ -12293,6 +12325,10 @@
                         "kubernetesApiAccess"
                       ],
                       "type": "object"
+                    },
+                    "skillAppliedBindings": {
+                      "maxLength": 30000,
+                      "type": "string"
                     },
                     "skillGenerationId": {
                       "pattern": "^[a-f0-9]{64}$",
@@ -15094,6 +15130,10 @@
                               "minLength": 1,
                               "type": "string"
                             },
+                            "skillAppliedBindings": {
+                              "maxLength": 30000,
+                              "type": "string"
+                            },
                             "skillGenerationId": {
                               "pattern": "^[a-f0-9]{64}$",
                               "type": "string"
@@ -15780,6 +15820,10 @@
                             },
                             "serviceRef": {
                               "minLength": 1,
+                              "type": "string"
+                            },
+                            "skillAppliedBindings": {
+                              "maxLength": 30000,
                               "type": "string"
                             },
                             "skillGenerationId": {
@@ -16713,6 +16757,10 @@
                               "minLength": 1,
                               "type": "string"
                             },
+                            "skillAppliedBindings": {
+                              "maxLength": 30000,
+                              "type": "string"
+                            },
                             "skillGenerationId": {
                               "pattern": "^[a-f0-9]{64}$",
                               "type": "string"
@@ -17377,6 +17425,10 @@
                             },
                             "serviceRef": {
                               "minLength": 1,
+                              "type": "string"
+                            },
+                            "skillAppliedBindings": {
+                              "maxLength": 30000,
                               "type": "string"
                             },
                             "skillGenerationId": {
@@ -18916,6 +18968,10 @@
                               "minLength": 1,
                               "type": "string"
                             },
+                            "skillAppliedBindings": {
+                              "maxLength": 30000,
+                              "type": "string"
+                            },
                             "skillGenerationId": {
                               "pattern": "^[a-f0-9]{64}$",
                               "type": "string"
@@ -19602,6 +19658,10 @@
                             },
                             "serviceRef": {
                               "minLength": 1,
+                              "type": "string"
+                            },
+                            "skillAppliedBindings": {
+                              "maxLength": 30000,
                               "type": "string"
                             },
                             "skillGenerationId": {
@@ -20535,6 +20595,10 @@
                               "minLength": 1,
                               "type": "string"
                             },
+                            "skillAppliedBindings": {
+                              "maxLength": 30000,
+                              "type": "string"
+                            },
                             "skillGenerationId": {
                               "pattern": "^[a-f0-9]{64}$",
                               "type": "string"
@@ -21199,6 +21263,10 @@
                             },
                             "serviceRef": {
                               "minLength": 1,
+                              "type": "string"
+                            },
+                            "skillAppliedBindings": {
+                              "maxLength": 30000,
                               "type": "string"
                             },
                             "skillGenerationId": {
