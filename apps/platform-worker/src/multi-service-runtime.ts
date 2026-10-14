@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import type {
 	KubernetesObject,
+	V1ConfigMap,
 	V1Deployment,
 	V1Ingress,
 	V1NetworkPolicy,
@@ -103,6 +105,22 @@ function deployment(
 		[ownerLabel]: workloadResourceNameV1(value.agentId),
 		"agent-infra.agora.io/service": service,
 	};
+	const configMapNames = new Set(
+		value.multiService.resources
+			.filter((item) => item.kind === "ConfigMap")
+			.map((item) => item.metadata.name),
+	);
+	const volumes = resource.spec.template.spec.volumes?.map((volume) => {
+		if (!configMapNames.has(volume.configMap.name))
+			throw new Error("Multi-service volume ConfigMap is undeclared");
+		return {
+			name: volume.name,
+			configMap: {
+				name: serviceResourceName(value.agentId, volume.configMap.name),
+				optional: false,
+			},
+		};
+	});
 	return {
 		apiVersion: "apps/v1",
 		kind: "Deployment",
@@ -114,12 +132,18 @@ function deployment(
 				metadata: { labels },
 				spec: {
 					...resource.spec.template.spec,
+					...(volumes ? { volumes } : {}),
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
 							ports: container.ports?.map((port) => ({
 								name: port.name,
 								containerPort: port.targetPort,
+							})),
+							volumeMounts: container.volumeMounts?.map((mount) => ({
+								name: mount.name,
+								mountPath: mount.mountPath,
+								readOnly: true,
 							})),
 						}),
 					),
@@ -128,6 +152,26 @@ function deployment(
 				},
 			},
 		},
+	};
+}
+
+function configMap(
+	value: MultiServiceDesired,
+	resource: Extract<
+		MultiServiceDesired["multiService"]["resources"][number],
+		{ kind: "ConfigMap" }
+	>,
+): V1ConfigMap {
+	return {
+		apiVersion: "v1",
+		kind: "ConfigMap",
+		metadata: metadata(
+			value,
+			serviceResourceName(value.agentId, resource.metadata.name),
+			resource.metadata.name,
+		),
+		immutable: true,
+		data: { ...resource.spec.data },
 	};
 }
 
@@ -261,6 +305,17 @@ export function createMultiServiceRuntimeOperations(options: {
 		if (!current) return client.create(object);
 		if (!owned(current, value))
 			throw new Error("multi-service resource drifted");
+		if (object.kind === "ConfigMap") {
+			if (
+				(current as V1ConfigMap).immutable !== true ||
+				!isDeepStrictEqual(
+					(current as V1ConfigMap).data ?? {},
+					(object as V1ConfigMap).data ?? {},
+				)
+			)
+				throw new Error("multi-service ConfigMap is immutable and drifted");
+			return current;
+		}
 		if (current.metadata?.resourceVersion && current.metadata.uid)
 			return client.replace({
 				...object,
@@ -276,6 +331,7 @@ export function createMultiServiceRuntimeOperations(options: {
 		kind:
 			| "Deployment"
 			| "Service"
+			| "ConfigMap"
 			| "ServiceAccount"
 			| "NetworkPolicy"
 			| "Ingress",
@@ -292,6 +348,10 @@ export function createMultiServiceRuntimeOperations(options: {
 	return {
 		isMultiService,
 		async apply(value: MultiServiceDesired) {
+			for (const resource of value.multiService.resources) {
+				if (resource.kind === "ConfigMap")
+					await put(configMap(value, resource), value);
+			}
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "Deployment")
 					await put(deployment(value, resource), value);
@@ -340,6 +400,13 @@ export function createMultiServiceRuntimeOperations(options: {
 				value,
 			);
 			for (const resource of value.multiService.resources) {
+				if (resource.kind === "ConfigMap")
+					complete =
+						(await remove(
+							"ConfigMap",
+							serviceResourceName(value.agentId, resource.metadata.name),
+							value,
+						)) && complete;
 				if (resource.kind === "Deployment") {
 					complete =
 						(await remove(
