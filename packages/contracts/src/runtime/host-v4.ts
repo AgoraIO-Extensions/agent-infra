@@ -18,6 +18,7 @@ const keyReference = {
 	ciphertextRef: OpaqueIdV1Schema,
 	version: z.number().int().positive().safe(),
 };
+const digest = z.string().regex(/^[a-f0-9]{64}$/);
 
 export const RuntimeRelayKeyBindingV1Schema = z.discriminatedUnion("purpose", [
 	z.strictObject({ purpose: z.literal("personal"), ...keyReference }),
@@ -80,7 +81,9 @@ export function validateVerifiedRuntimeExecutionGrantClaimsV4(
 		claims.expiresAt <= claims.issuedAt ||
 		claims.expiresAt - claims.issuedAt >
 			RuntimeExecutionGrantMaximumLifetimeMsV4 ||
-		(command !== "turn.submit" && command !== "turn.supplement") ||
+		(command !== "turn.submit" &&
+			command !== "turn.supplement" &&
+			command !== "native-capability.invoke") ||
 		claims.eventAccess !== undefined ||
 		(claims.operation.kind === "execution" &&
 			claims.operation.deliveryFence !==
@@ -167,6 +170,19 @@ export const RuntimeSupplementRequestV4Schema = z.strictObject({
 	input: RuntimeInputV1Schema,
 });
 
+/** Authenticated Worker -> RuntimeHost native Skill invocation over V4. */
+export const RuntimeNativeCapabilityRequestV4Schema = z.strictObject({
+	...context,
+	hostSessionRef: OpaqueIdV1Schema,
+	operation: RuntimeOperationBindingV2Schema,
+	capabilityId: digest,
+	capabilityKind: z.literal("skill"),
+	directoryRevision: digest,
+	parameters: z.string().max(16 * 1024),
+	parametersDigest: digest,
+	capabilitySourceVersion: z.string().min(1).max(512),
+});
+
 export const RuntimeSubmitTurnTransportV4Schema = z.strictObject({
 	businessRequest: RuntimeSubmitTurnRequestV4Schema,
 	privateKeyField: RuntimePrivateRelayKeyFieldV1Schema,
@@ -174,6 +190,11 @@ export const RuntimeSubmitTurnTransportV4Schema = z.strictObject({
 
 export const RuntimeSupplementTransportV4Schema = z.strictObject({
 	businessRequest: RuntimeSupplementRequestV4Schema,
+	privateKeyField: RuntimePrivateRelayKeyFieldV1Schema,
+});
+
+export const RuntimeNativeCapabilityTransportV4Schema = z.strictObject({
+	businessRequest: RuntimeNativeCapabilityRequestV4Schema,
 	privateKeyField: RuntimePrivateRelayKeyFieldV1Schema,
 });
 
@@ -190,11 +211,17 @@ export type RuntimeSubmitTurnRequestV4 = z.infer<
 export type RuntimeSupplementRequestV4 = z.infer<
 	typeof RuntimeSupplementRequestV4Schema
 >;
+export type RuntimeNativeCapabilityRequestV4 = z.infer<
+	typeof RuntimeNativeCapabilityRequestV4Schema
+>;
 export type RuntimeSubmitTurnTransportV4 = z.infer<
 	typeof RuntimeSubmitTurnTransportV4Schema
 >;
 export type RuntimeSupplementTransportV4 = z.infer<
 	typeof RuntimeSupplementTransportV4Schema
+>;
+export type RuntimeNativeCapabilityTransportV4 = z.infer<
+	typeof RuntimeNativeCapabilityTransportV4Schema
 >;
 export type RuntimeOperationResponseV4 = z.infer<
 	typeof RuntimeOperationResponseV4Schema
@@ -202,7 +229,14 @@ export type RuntimeOperationResponseV4 = z.infer<
 
 export type RuntimeBusinessRequestV4 =
 	| RuntimeSubmitTurnRequestV4
-	| RuntimeSupplementRequestV4;
+	| RuntimeSupplementRequestV4
+	| RuntimeNativeCapabilityRequestV4;
+
+function isNativeRequest(
+	value: unknown,
+): value is RuntimeNativeCapabilityRequestV4 {
+	return value !== null && typeof value === "object" && "capabilityId" in value;
+}
 
 export const RuntimePinnedExecutionKeyScopeV4Schema = z.object({
 	principal: RuntimePrincipalV1Schema,
@@ -236,6 +270,8 @@ export function validateRuntimePinnedExecutionKeyScopeV4(
 		const submit =
 			request !== null && typeof request === "object" && "selection" in request;
 		if (submit) RuntimeSubmitTurnRequestV4Schema.parse(request);
+		else if (isNativeRequest(request))
+			RuntimeNativeCapabilityRequestV4Schema.parse(request);
 		else RuntimeSupplementRequestV4Schema.parse(request);
 		if (
 			original.principal.kind !== next.principal.kind ||
@@ -275,14 +311,24 @@ export async function validateRuntimeBusinessBindingV4(
 		parsedRequest =
 			request !== null && typeof request === "object" && "selection" in request
 				? RuntimeSubmitTurnRequestV4Schema.parse(request)
-				: RuntimeSupplementRequestV4Schema.parse(request);
+				: isNativeRequest(request)
+					? RuntimeNativeCapabilityRequestV4Schema.parse(request)
+					: RuntimeSupplementRequestV4Schema.parse(request);
 		parsedClaims = RuntimeBusinessGrantClaimsV4Schema.parse(claims);
 	} catch {
 		throw new TypeError("RuntimeHostV4 binding is invalid");
 	}
-	const command =
-		"selection" in parsedRequest ? "turn.submit" : "turn.supplement";
-	const operationKind = "selection" in parsedRequest ? "execution" : "message";
+	const submit = "selection" in parsedRequest;
+	const nativeRequest = isNativeRequest(parsedRequest)
+		? parsedRequest
+		: undefined;
+	const native = nativeRequest !== undefined;
+	const command = submit
+		? "turn.submit"
+		: native
+			? "native-capability.invoke"
+			: "turn.supplement";
+	const operationKind = submit || native ? "execution" : "message";
 	const expectedPurpose =
 		parsedClaims.executionSource === "web" ||
 		parsedClaims.executionSource === "wecom"
@@ -294,10 +340,24 @@ export async function validateRuntimeBusinessBindingV4(
 				? parsedRequest.principal.id
 				: null
 			: parsedRequest.agentId;
-	const requestedAttachments = new Set(parsedRequest.input.attachments);
+	const requestedAttachments = new Set(
+		"input" in parsedRequest ? parsedRequest.input.attachments : [],
+	);
 	const claimedAttachments = new Set(
 		parsedClaims.attachments.map((entry) => entry.attachmentId),
 	);
+	const parametersDigest = native
+		? Array.from(
+				new Uint8Array(
+					await globalThis.crypto.subtle.digest(
+						"SHA-256",
+						new TextEncoder().encode(nativeRequest?.parameters ?? ""),
+					),
+				),
+			)
+				.map((byte) => byte.toString(16).padStart(2, "0"))
+				.join("")
+		: undefined;
 	if (
 		parsedRequest.executionSource !== parsedClaims.executionSource ||
 		parsedRequest.keyBinding.purpose !== expectedPurpose ||
@@ -315,12 +375,14 @@ export async function validateRuntimeBusinessBindingV4(
 			(parsedRequest.operation.id !== parsedRequest.executionId ||
 				parsedRequest.operation.deliveryFence !==
 					parsedRequest.operation.executionDeliveryFence)) ||
-		requestedAttachments.size !== parsedRequest.input.attachments.length ||
+		("input" in parsedRequest &&
+			requestedAttachments.size !== parsedRequest.input.attachments.length) ||
 		claimedAttachments.size !== parsedClaims.attachments.length ||
 		claimedAttachments.size !== requestedAttachments.size ||
 		parsedClaims.attachments.some(
 			(entry) => !requestedAttachments.has(entry.attachmentId),
 		) ||
+		(native && nativeRequest?.parametersDigest !== parametersDigest) ||
 		parsedClaims.requestDigest !==
 			(await runtimeRequestDigestV4(parsedRequest)) ||
 		parsedClaims.traceId !== parsedRequest.traceId ||
@@ -352,7 +414,9 @@ export function validateRuntimePrivateRelayKeyFieldV1(
 		const acceptedRequest =
 			"selection" in accepted.request
 				? RuntimeSubmitTurnRequestV4Schema.parse(accepted.request)
-				: RuntimeSupplementRequestV4Schema.parse(accepted.request);
+				: isNativeRequest(accepted.request)
+					? RuntimeNativeCapabilityRequestV4Schema.parse(accepted.request)
+					: RuntimeSupplementRequestV4Schema.parse(accepted.request);
 		const expectedGrantId = OpaqueIdV1Schema.parse(accepted.grantId);
 		const expectedRequestDigest = z
 			.string()
@@ -416,7 +480,9 @@ export function runtimeRequestSigningPayloadV4(
 		request =
 			"selection" in input
 				? RuntimeSubmitTurnRequestV4Schema.parse(input)
-				: RuntimeSupplementRequestV4Schema.parse(input);
+				: isNativeRequest(input)
+					? RuntimeNativeCapabilityRequestV4Schema.parse(input)
+					: RuntimeSupplementRequestV4Schema.parse(input);
 	} catch {
 		throw new TypeError("RuntimeHostV4 request is invalid");
 	}
@@ -446,7 +512,9 @@ export function runtimeOperationDigestInputV4(input: RuntimeBusinessRequestV4) {
 		request =
 			"selection" in input
 				? RuntimeSubmitTurnRequestV4Schema.parse(input)
-				: RuntimeSupplementRequestV4Schema.parse(input);
+				: isNativeRequest(input)
+					? RuntimeNativeCapabilityRequestV4Schema.parse(input)
+					: RuntimeSupplementRequestV4Schema.parse(input);
 	} catch {
 		throw new TypeError("RuntimeHostV4 request is invalid");
 	}
@@ -455,6 +523,26 @@ export function runtimeOperationDigestInputV4(input: RuntimeBusinessRequestV4) {
 		executionDeliveryFence: _executionDeliveryFence,
 		...operation
 	} = request.operation;
+	if (isNativeRequest(request)) {
+		return {
+			kind: "native-capability",
+			principal: request.principal,
+			channelId: request.channelId,
+			agentId: request.agentId,
+			conversationId: request.conversationId,
+			executionId: request.executionId,
+			turnId: request.turnId,
+			sessionGeneration: request.sessionGeneration,
+			hostSessionRef: request.hostSessionRef,
+			operation,
+			executionSource: request.executionSource,
+			keyBinding: request.keyBinding,
+			capabilityId: request.capabilityId,
+			directoryRevision: request.directoryRevision,
+			parametersDigest: request.parametersDigest,
+			capabilitySourceVersion: request.capabilitySourceVersion,
+		};
+	}
 	return {
 		kind: "selection" in request ? "submit-turn" : "supplement",
 		principal: request.principal,

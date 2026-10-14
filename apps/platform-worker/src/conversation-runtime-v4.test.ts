@@ -294,7 +294,7 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			if (field === "reference")
 				next.scope.keyBinding.ciphertextRef = "other-key";
 			if (field === "version") next.scope.keyBinding.version = 2;
-			if (field === "selection")
+			if (field === "selection" && next.selection)
 				next.selection.modelOptionId = "current-default-option";
 			if (field === "original-host") next.scope.hostSessionRef = "other-host";
 			if (field === "authorization")

@@ -21,6 +21,7 @@ import {
 	RuntimeGenerationCancelRequestV3Schema,
 	RuntimeModelDirectoryRequestV1Schema,
 	RuntimeNativeCapabilityRequestV3Schema,
+	RuntimeNativeCapabilityTransportV4Schema,
 	RuntimeNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataReadResponseV1Schema,
 	RuntimeReplayRequestV1Schema,
@@ -167,7 +168,7 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		// must remain usable when a deployment profile changes or disappears.
 		if (
 			context.req.method === "POST" &&
-			/^\/internal\/runtime\/v(?:[1-4]\/turns|[134]\/instructions|3\/native-capability)$/.test(
+			/^\/internal\/runtime\/v(?:[1-4]\/turns|[134]\/instructions|3\/native-capability|4\/native-capability)$/.test(
 				context.req.path,
 			)
 		) {
@@ -522,6 +523,14 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		);
 		await verifyV4(request.businessRequest);
 		return context.json(await options.host.supplementV4(request));
+	});
+	app.post("/internal/runtime/v4/native-capability", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeNativeCapabilityTransportV4Schema,
+		);
+		await verifyV4(request.businessRequest);
+		return context.json(await options.host.nativeCapabilityV4(request));
 	});
 	app.post("/internal/runtime/v4/execution-key/restore", async (context) => {
 		const request = await parseBody(
