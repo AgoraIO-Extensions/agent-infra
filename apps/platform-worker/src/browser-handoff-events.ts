@@ -111,11 +111,15 @@ function eventFromResponse(
 		(request.handoff.kind === "request"
 			? request.handoff.reason
 			: "human_judgment");
-	const status = response.record?.status ?? "unknown";
+	const outcomeUnknown = response.outcome !== "accepted";
+	// A non-accepted outcome may carry diagnostic record data, but that record
+	// is never allowed to project requested/active state.
+	const status = outcomeUnknown
+		? "unknown"
+		: (response.record?.status ?? "unknown");
 	const requestedAt = response.record?.requestedAt ?? new Date(0).toISOString();
 	const expiresAt = response.record?.expiresAt ?? new Date(0).toISOString();
 	const operatorId = response.record?.operatorId;
-	const outcomeUnknown = response.outcome !== "accepted";
 	const terminalReason = outcomeUnknown
 		? "BROWSER_HANDOFF_ACCEPTANCE_UNKNOWN"
 		: (response.record?.terminalReason ?? "BROWSER_HANDOFF_RECORD_UNAVAILABLE");
