@@ -506,9 +506,9 @@ export function AdminAgentApplicationsScreen({
 										<TableCell>
 											{application.source.kind === "standard"
 												? application.source.templateId
-								: "manifest" in application.source
-									? "多服务 Agent"
-									: "自定义 Agent"}
+												: "manifest" in application.source
+													? "多服务 Agent"
+													: "自定义 Agent"}
 											<small>
 												Owner ·{" "}
 												{application.configuration.owners

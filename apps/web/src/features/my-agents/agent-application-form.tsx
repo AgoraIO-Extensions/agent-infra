@@ -986,7 +986,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const sourceFields = (
 		<>
 			<p className="sr-only" id="application-source-help">
-				从部署提供的标准模板中选择，填写自定义镜像地址，或上传受限的多服务 YAML。已有申请的来源不能更改。
+				从部署提供的标准模板中选择，填写自定义镜像地址，或上传受限的多服务
+				YAML。已有申请的来源不能更改。
 			</p>
 			{showDeploymentStatus && configurationMessage ? (
 				<p
