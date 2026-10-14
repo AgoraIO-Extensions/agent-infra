@@ -49,6 +49,7 @@ export const outboxItems = platformSchema.table(
 			.defaultNow()
 			.notNull(),
 		requestId: text("request_id"),
+		traceParent: varchar("trace_parent", { length: 55 }),
 	},
 	(table) => [
 		check("outbox_id_non_empty", sql`char_length(${table.id}) > 0`),
@@ -65,6 +66,10 @@ export const outboxItems = platformSchema.table(
 		check(
 			"outbox_request_id_non_empty",
 			sql`${table.requestId} IS NULL OR char_length(${table.requestId}) > 0`,
+		),
+		check(
+			"outbox_trace_parent_w3c",
+			sql`${table.traceParent} IS NULL OR (${table.traceParent} ~ '^00-[0-9a-fA-F]{32}-[0-9a-fA-F]{16}-[0-9a-fA-F]{2}$' AND ${table.traceParent} !~ '^00-0{32}-' AND ${table.traceParent} !~ '-0{16}-')`,
 		),
 		check("outbox_attempt_count_non_negative", sql`${table.attemptCount} >= 0`),
 		check(

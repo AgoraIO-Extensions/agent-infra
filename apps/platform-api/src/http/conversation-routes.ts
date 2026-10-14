@@ -1192,6 +1192,9 @@ export function registerConversationRoutes(
 				idempotencyKey: parseIdempotencyKey(context.req.raw, metadata.traceId),
 				requestId: metadata.requestId,
 				traceId: metadata.traceId,
+				...(metadata.traceParent === undefined
+					? {}
+					: { traceParent: metadata.traceParent }),
 			});
 			if (decision.outcome === "busy") return fail("BUSY", metadata.traceId);
 			if (decision.outcome === "starting")
@@ -1234,6 +1237,9 @@ export function registerConversationRoutes(
 				idempotencyKey: parseIdempotencyKey(context.req.raw, metadata.traceId),
 				requestId: metadata.requestId,
 				traceId: metadata.traceId,
+				...(metadata.traceParent === undefined
+					? {}
+					: { traceParent: metadata.traceParent }),
 			});
 			if (decision.outcome === "busy") return fail("BUSY", metadata.traceId);
 			if (decision.outcome === "starting")
@@ -1276,6 +1282,9 @@ export function registerConversationRoutes(
 				idempotencyKey: parseIdempotencyKey(context.req.raw, metadata.traceId),
 				requestId: metadata.requestId,
 				traceId: metadata.traceId,
+				...(metadata.traceParent === undefined
+					? {}
+					: { traceParent: metadata.traceParent }),
 			});
 			if (decision.outcome === "denied")
 				return fail("RESOURCE_UNAVAILABLE", metadata.traceId);

@@ -156,7 +156,9 @@ async function snapshotHistory() {
 				? "to_jsonb(record) - 'principal_type' - 'task_wait_order' - 'task_wait_deadline' - 'execution_source' - 'relay_key_purpose' - 'relay_key_subject_id' - 'relay_key_id' - 'relay_key_version' - 'runtime_submit_protocol' - 'original_operation_digest' - 'original_submit_host_session_ref' - 'sandbox_id'"
 				: table === "conversations"
 					? "to_jsonb(record) - 'principal_type'"
-					: "to_jsonb(record)";
+					: table === "outbox_items"
+						? "to_jsonb(record) - 'trace_parent'"
+						: "to_jsonb(record)";
 		snapshots.push(
 			await sql.unsafe(
 				`select ${record}::text as value from platform.${table} record order by ${record}::text`,

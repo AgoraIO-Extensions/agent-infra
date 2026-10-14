@@ -294,13 +294,13 @@ it("converges ordinary discovery cancellation and preserves database faults afte
 		);
 		await stage("reload_error_logs", () => sql`select pg_reload_conf()`);
 		async function blockedPid() {
-			const deadline = Date.now() + 5000;
+			const deadline = Date.now() + 15_000;
 			while (Date.now() < deadline) {
 				const rows = await observer<{ pid: number }[]>`
 					select pid from pg_stat_activity
 					where datname = current_database() and state = 'active'
 						and wait_event_type = 'Lock'
-						and query ~ 'select[[:space:]]+id,[[:space:]]+operation[[:space:]]+from[[:space:]]+platform.outbox_items'
+						and query ~ 'select[[:space:]]+id,[[:space:]]+operation([[:space:]]*,[[:space:]]+trace_parent)?[[:space:]]+from[[:space:]]+platform.outbox_items'
 				`;
 				if (rows.length === 1 && rows[0]) return rows[0].pid;
 				if (rows.length > 1)

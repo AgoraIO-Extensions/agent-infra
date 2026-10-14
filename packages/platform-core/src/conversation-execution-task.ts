@@ -29,6 +29,7 @@ import {
 	type SessionSandboxBindingV1,
 } from "./session-sandbox.js";
 import { isTaskApiChannelV1 } from "./task-authorization.js";
+import { isTraceParentV1 } from "./trace-context.js";
 import type { WorkloadVersionV1 } from "./workload-reconciliation.js";
 
 export interface ConversationTaskSubmitCommandV1 {
@@ -39,6 +40,7 @@ export interface ConversationTaskSubmitCommandV1 {
 	readonly idempotencyKey: string;
 	readonly requestId: string;
 	readonly traceId: string;
+	readonly traceParent?: string;
 }
 
 export interface ConversationTaskAdmissionStateV1 {
@@ -289,7 +291,7 @@ export function createConversationTaskAdmissionUseCaseV1(
 					"requestId",
 					"traceId",
 				],
-				["conversationId"],
+				["conversationId", "traceParent"],
 			);
 			if (
 				values.schemaVersion !== 1 ||
@@ -313,6 +315,9 @@ export function createConversationTaskAdmissionUseCaseV1(
 				idempotencyKey: values.idempotencyKey,
 				requestId: values.requestId,
 				traceId: values.traceId,
+				...(isTraceParentV1(values.traceParent)
+					? { traceParent: values.traceParent }
+					: {}),
 			};
 			let authority: ConversationExecutionAuthorityV1;
 			try {

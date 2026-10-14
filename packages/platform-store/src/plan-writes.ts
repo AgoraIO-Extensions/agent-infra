@@ -17,7 +17,6 @@ import {
 	agents,
 	auditEvents,
 	idempotencyRecords,
-	outboxItems,
 	skillHubAgentBindings,
 	skillHubInstallations,
 	skillHubSkills,
@@ -171,18 +170,18 @@ export async function insertAgentConfigurationEffects(
 	plan: AgentConfigurationWritePlanV1,
 ): Promise<void> {
 	if (plan.outboxIntent !== null) {
-		await transaction.insert(outboxItems).values({
-			id: randomUUID(),
-			scopeType: "agent",
-			scopeId: plan.agentId,
-			operation: plan.outboxIntent.operation,
-			payload: { ...plan.outboxIntent.payload },
-			traceId: plan.outboxIntent.traceId,
-			requestId: plan.outboxIntent.requestId,
-			availableAt: plan.outboxIntent.occurredAt,
-			createdAt: plan.outboxIntent.occurredAt,
-			updatedAt: plan.outboxIntent.occurredAt,
-		});
+		await transaction.execute(sql`
+			insert into platform.outbox_items
+				(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+				 available_at, created_at, updated_at)
+			values (${randomUUID()}, 'agent', ${plan.agentId},
+				${plan.outboxIntent.operation},
+				${JSON.stringify({ ...plan.outboxIntent.payload })}::jsonb,
+				${plan.outboxIntent.traceId}, ${plan.outboxIntent.requestId},
+				${plan.outboxIntent.occurredAt.toISOString()},
+				${plan.outboxIntent.occurredAt.toISOString()},
+				${plan.outboxIntent.occurredAt.toISOString()})
+		`);
 	}
 	await transaction.insert(auditEvents).values({
 		id: randomUUID(),
@@ -303,18 +302,18 @@ export async function insertAgentManagementEffects(
 ): Promise<void> {
 	if (plan.outboxIntent) {
 		await persistSessionSandboxManagementIntents(transaction, plan);
-		await transaction.insert(outboxItems).values({
-			id: randomUUID(),
-			scopeType: "agent",
-			scopeId: plan.state.agentId,
-			operation: plan.outboxIntent.operation,
-			payload: { ...plan.outboxIntent.payload },
-			traceId: plan.outboxIntent.traceId,
-			requestId: plan.outboxIntent.requestId,
-			availableAt: plan.outboxIntent.occurredAt,
-			createdAt: plan.outboxIntent.occurredAt,
-			updatedAt: plan.outboxIntent.occurredAt,
-		});
+		await transaction.execute(sql`
+			insert into platform.outbox_items
+				(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+				 available_at, created_at, updated_at)
+			values (${randomUUID()}, 'agent', ${plan.state.agentId},
+				${plan.outboxIntent.operation},
+				${JSON.stringify({ ...plan.outboxIntent.payload })}::jsonb,
+				${plan.outboxIntent.traceId}, ${plan.outboxIntent.requestId},
+				${plan.outboxIntent.occurredAt.toISOString()},
+				${plan.outboxIntent.occurredAt.toISOString()},
+				${plan.outboxIntent.occurredAt.toISOString()})
+		`);
 	}
 	await transaction.insert(auditEvents).values({
 		id: randomUUID(),

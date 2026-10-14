@@ -293,6 +293,7 @@ export class PostgresConversationDispatchStoreV1
 			readonly operation:
 				| ConversationDispatchOperationV1
 				| "conversation.sandbox.reconcile.v1";
+			readonly traceParent?: string;
 		}[]
 	> {
 		if (
@@ -310,9 +311,10 @@ export class PostgresConversationDispatchStoreV1
 					operation:
 						| ConversationDispatchOperationV1
 						| "conversation.sandbox.reconcile.v1";
+					trace_parent: string | null;
 				}[]
 			>`
-				select id, operation from platform.outbox_items
+				select id, operation, trace_parent from platform.outbox_items
 				where scope_type = 'conversation'
 					and operation in (
 						'conversation.turn.submit.v1', 'conversation.turn.regenerate.v1',
@@ -357,6 +359,7 @@ export class PostgresConversationDispatchStoreV1
 				return rows.map((row) => ({
 					itemId: row.id,
 					operation: row.operation,
+					...(row.trace_parent ? { traceParent: row.trace_parent } : {}),
 				}));
 			} catch (error) {
 				if (

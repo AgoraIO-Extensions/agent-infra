@@ -1,7 +1,12 @@
+import { Writable } from "node:stream";
 import { Hono } from "hono";
 import { expect, it } from "vitest";
 import { createHttpObservability, currentRequestMetadata } from "./http.js";
-import type { OperationalEvent } from "./index.js";
+import {
+	isTraceParent,
+	type OperationalEvent,
+	startObservability,
+} from "./index.js";
 
 it("keeps platform correlation stable within a request and ignores external headers", async () => {
 	const events: OperationalEvent[] = [];
@@ -42,6 +47,37 @@ it("keeps platform correlation stable within a request and ignores external head
 	]);
 	expect(JSON.stringify(events)).not.toContain("PRIVATE_SENTINEL");
 	expect(currentRequestMetadata()).toBeUndefined();
+});
+
+it("creates a server-owned W3C context without exposing it in the response object", async () => {
+	const output = new Writable({
+		write(_chunk, _encoding, done) {
+			done();
+		},
+	});
+	const telemetry = startObservability({ service: "platform-api", output });
+	const events: OperationalEvent[] = [];
+	const app = new Hono();
+	app.use(
+		"*",
+		createHttpObservability({
+			...telemetry,
+			record: (event) => events.push(event),
+		}),
+	);
+	app.get("/context", (context) => {
+		const metadata = currentRequestMetadata();
+		expect(metadata?.traceParent).toBeDefined();
+		expect(isTraceParent(metadata?.traceParent)).toBe(true);
+		return context.json({
+			requestId: metadata?.requestId,
+			traceId: metadata?.traceId,
+		});
+	});
+	const response = await app.request("/context");
+	expect(await response.json()).not.toHaveProperty("traceParent");
+	expect(isTraceParent(events[0]?.traceParent)).toBe(true);
+	await telemetry.close();
 });
 
 it("isolates concurrent requests across awaits", async () => {
