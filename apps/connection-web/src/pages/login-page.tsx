@@ -2,7 +2,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import type { FormEvent } from "react";
 
-import { ConnectionApiError, connectionApi } from "../api";
+import {
+	ConnectionApiError,
+	companyOAuthEntryUrl,
+	connectionApi,
+} from "../api";
 import { LoginView } from "../views";
 
 function recoverySearch(returnTo: string | undefined) {
@@ -32,6 +36,15 @@ export function LoginPage(props: { returnTo?: string }) {
 		mutationFn: connectionApi.login,
 		onSuccess: async (session) => {
 			queryClient.setQueryData(["session"], session);
+			if (
+				props.returnTo &&
+				/^\/connection\/pat-bindings\/(?!confirm$)[A-Za-z0-9_-]+$/.test(
+					props.returnTo,
+				)
+			) {
+				window.location.assign(props.returnTo);
+				return;
+			}
 			const search = recoverySearch(props.returnTo);
 			await navigate(
 				search
@@ -48,6 +61,21 @@ export function LoginPage(props: { returnTo?: string }) {
 			username: String(data.get("username") ?? ""),
 		});
 	};
+	if (
+		mutation.error instanceof ConnectionApiError &&
+		mutation.error.detail.messageKey ===
+			"connection.error.company_oauth_required"
+	) {
+		return (
+			<main>
+				<h1>请先完成公司登录</h1>
+				<p>公司入口会话已过期。本次提交不会自动重放。</p>
+				<a href={companyOAuthEntryUrl(props.returnTo ?? "/connection/login")}>
+					公司 OAuth 登录
+				</a>
+			</main>
+		);
+	}
 	return (
 		<LoginView
 			busy={mutation.isPending}

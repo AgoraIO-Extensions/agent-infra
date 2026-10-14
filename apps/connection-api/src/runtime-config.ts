@@ -31,6 +31,7 @@ export type ConnectionApiRuntimeConfig = {
 };
 
 export type FullConnectionRuntimeConfig = ConnectionApiRuntimeConfig & {
+	companyEntryOAuth?: { clientId: string; clientSecret: string };
 	companyIdentityOAuth?: { clientId: string; clientSecret: string };
 	credentialKey: Uint8Array;
 	datalegoOAuth: {
@@ -340,8 +341,25 @@ export function fullConnectionRuntimeConfig(
 	const hasIdentityOAuth =
 		environment.CONNECTION_IDENTITY_OAUTH_CLIENT_ID !== undefined ||
 		environment.CONNECTION_IDENTITY_OAUTH_CLIENT_SECRET !== undefined;
+	const hasEntryOAuth =
+		environment.CONNECTION_COMPANY_OAUTH_CLIENT_ID !== undefined ||
+		environment.CONNECTION_COMPANY_OAUTH_CLIENT_SECRET !== undefined;
 	return {
 		...api,
+		...(hasEntryOAuth
+			? {
+					companyEntryOAuth: {
+						clientId: requireValue(
+							environment,
+							"CONNECTION_COMPANY_OAUTH_CLIENT_ID",
+						),
+						clientSecret: requireValue(
+							environment,
+							"CONNECTION_COMPANY_OAUTH_CLIENT_SECRET",
+						),
+					},
+				}
+			: {}),
 		...(hasIdentityOAuth
 			? {
 					companyIdentityOAuth: {

@@ -19,15 +19,19 @@ const mocks = vi.hoisted(() => ({
 	returnTo: "/connection/connections?provider=confluence&intent=authorize",
 }));
 
-vi.mock("../api", () => ({
-	ConnectionApiError: class ConnectionApiError extends Error {},
-	connectionApi: { login: mocks.login },
-}));
+vi.mock("../api", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../api")>();
+	return {
+		...actual,
+		connectionApi: { ...actual.connectionApi, login: mocks.login },
+	};
+});
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-router")>()),
 	useNavigate: () => mocks.navigate,
 }));
 
+import { ConnectionApiError } from "../api";
 import { LoginPage } from "../pages/login-page";
 
 afterEach(() => {
@@ -57,6 +61,25 @@ async function login() {
 }
 
 describe("Connection 登录恢复", () => {
+	it("公司入口过期时只展示恢复链接，不自动重放密码", async () => {
+		mocks.login.mockRejectedValueOnce(
+			new ConnectionApiError({
+				code: "AUTHENTICATION_REQUIRED",
+				messageKey: "connection.error.company_oauth_required",
+				retryable: false,
+				traceId: "test",
+			}),
+		);
+		renderLogin();
+		await login();
+		const link = await screen.findByRole("link", { name: "公司 OAuth 登录" });
+		expect(link.getAttribute("href")).toContain(
+			"/api/v1/connection/identity/oauth/entry?returnTo=",
+		);
+		expect(screen.queryByLabelText("密码")).toBeNull();
+		expect(mocks.login).toHaveBeenCalledTimes(1);
+		expect(mocks.navigate).not.toHaveBeenCalled();
+	});
 	it("登录后恢复受控的 Provider 授权深链", async () => {
 		renderLogin();
 		await login();

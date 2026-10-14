@@ -12,7 +12,7 @@ export const companyIdentityProbePath =
 	"/api/v1/connection/identity/oauth/probe";
 export const companyIdentityProbeTtlSeconds = 300;
 
-type Commands = {
+export type CompanyOAuthCommands = {
 	execute<T>(
 		input: {
 			idempotencyKey: string;
@@ -43,7 +43,7 @@ export class CompanyIdentityProbe {
 	constructor(
 		private readonly options: {
 			clientId: string;
-			commands: Commands;
+			commands: CompanyOAuthCommands;
 			identityKey: Uint8Array;
 			identityRealm: string;
 			isAdministrator: (principalId: string) => Promise<boolean>;

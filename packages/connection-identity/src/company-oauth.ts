@@ -1,4 +1,4 @@
-// This Adapter is only for the company identity probe, never Provider execution.
+// Company entrance/probe only; never Provider execution or a source of LDAP identity.
 export class CompanyOAuthIdentityClient {
 	constructor(
 		private readonly options: {

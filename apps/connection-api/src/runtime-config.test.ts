@@ -49,6 +49,29 @@ const accountBase = {
 };
 
 describe("Connection runtime configuration", () => {
+	it("pairs direct entrance credentials independently of administrator probes", () => {
+		expect(
+			fullConnectionRuntimeConfig(accountBase).companyEntryOAuth,
+		).toBeUndefined();
+		for (const extra of [
+			{ CONNECTION_COMPANY_OAUTH_CLIENT_ID: "entry-client" },
+			{ CONNECTION_COMPANY_OAUTH_CLIENT_SECRET: "entry-secret" },
+		]) {
+			expect(() =>
+				fullConnectionRuntimeConfig({ ...accountBase, ...extra }),
+			).toThrow(/CONNECTION_COMPANY_OAUTH/);
+		}
+		const configured = fullConnectionRuntimeConfig({
+			...accountBase,
+			CONNECTION_COMPANY_OAUTH_CLIENT_ID: "entry-client",
+			CONNECTION_COMPANY_OAUTH_CLIENT_SECRET: "entry-secret",
+		});
+		expect(configured.companyEntryOAuth).toEqual({
+			clientId: "entry-client",
+			clientSecret: "entry-secret",
+		});
+		expect(configured.companyIdentityOAuth).toBeUndefined();
+	});
 	it("keeps company identity probes separate and rejects partial client configuration", () => {
 		expect(
 			fullConnectionRuntimeConfig(accountBase).companyIdentityOAuth,

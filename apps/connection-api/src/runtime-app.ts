@@ -1,5 +1,6 @@
 import {
 	CompanyIdentityProbe,
+	CompanyOAuthEntry,
 	ConnectionAccessApprovalService,
 	ConnectionApplicationService,
 	ConnectionOAuthService,
@@ -577,12 +578,31 @@ export async function createConnectionRuntime(
 						identityClient.readIdentity(code, redirectUri),
 				})
 			: undefined;
+	const entryClient = config.companyEntryOAuth
+		? new CompanyOAuthIdentityClient({
+				...config.companyEntryOAuth,
+				fetch: providerFetch(["https://oauth.agoralab.co"]),
+			})
+		: undefined;
+	const companyEntry =
+		config.companyEntryOAuth && entryClient
+			? new CompanyOAuthEntry({
+					clientId: config.companyEntryOAuth.clientId,
+					commands: browserCommands,
+					identityKey: config.identityKey,
+					identityRealm: config.identityRealm,
+					publicBaseUrl: config.publicBaseUrl,
+					readIdentity: (code, redirectUri) =>
+						entryClient.readIdentity(code, redirectUri),
+				})
+			: undefined;
 	const app = createConnectionApp({
 		accessTokens: oauth,
 		connectionWebUrl: config.publicBaseUrl,
 		directMcpEnabled: true,
 		githubProviderEnabled: false,
 		oauthServer: {
+			...(companyEntry ? { companyEntry } : {}),
 			...(identityProbe ? { identityProbe } : {}),
 			browserCommands,
 			dynamicClientRegistration: {

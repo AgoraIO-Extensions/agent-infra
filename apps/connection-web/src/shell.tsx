@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
-import { connectionApi } from "./api";
+import { ConnectionApiError, companyOAuthEntryUrl, connectionApi } from "./api";
 
 export function ConsoleShell(props: { children: ReactNode }) {
 	const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -79,6 +79,24 @@ export function ConsoleShell(props: { children: ReactNode }) {
 
 	if (session.isPending) return <FullPageState>正在加载账号...</FullPageState>;
 	if (session.isError) {
+		if (
+			session.error instanceof ConnectionApiError &&
+			session.error.detail.messageKey ===
+				"connection.error.company_oauth_required"
+		) {
+			return (
+				<FullPageState>
+					<p>公司入口会话已过期，请重新完成公司登录。</p>
+					<a
+						href={companyOAuthEntryUrl(
+							`${window.location.pathname}${window.location.search}`,
+						)}
+					>
+						公司 OAuth 登录
+					</a>
+				</FullPageState>
+			);
+		}
 		const returnTo =
 			window.location.pathname === "/connection/connections"
 				? `${window.location.pathname}${window.location.search}`
@@ -365,6 +383,17 @@ export function PageError(props: { error: unknown }) {
 	return (
 		<div className="alert alert-error" role="alert">
 			{props.error instanceof Error ? props.error.message : "页面加载失败"}
+			{props.error instanceof ConnectionApiError &&
+				props.error.detail.messageKey ===
+					"connection.error.company_oauth_required" && (
+					<a
+						href={companyOAuthEntryUrl(
+							`${window.location.pathname}${window.location.search}`,
+						)}
+					>
+						公司 OAuth 登录
+					</a>
+				)}
 		</div>
 	);
 }

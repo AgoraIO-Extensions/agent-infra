@@ -23,6 +23,7 @@ COPY apps/connection-api/src/index.ts apps/connection-api/src/index.ts
 COPY apps/connection-api/src/app.ts apps/connection-api/src/app.ts
 COPY apps/connection-api/src/oauth-routes.ts apps/connection-api/src/oauth-routes.ts
 COPY apps/connection-api/src/identity-probe-routes.ts apps/connection-api/src/identity-probe-routes.ts
+COPY apps/connection-api/src/company-oauth-entry-routes.ts apps/connection-api/src/company-oauth-entry-routes.ts
 COPY apps/connection-api/src/production-app.ts apps/connection-api/src/production-app.ts
 COPY apps/connection-api/src/provider-egress-control.ts apps/connection-api/src/provider-egress-control.ts
 COPY apps/connection-api/src/runtime-app.ts apps/connection-api/src/runtime-app.ts
