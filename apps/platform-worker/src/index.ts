@@ -10,10 +10,10 @@ import {
 import { createPlatformNativeMetadataGatewayOptionsV1 } from "./native-metadata-deployment.js";
 import { createPlatformRuntimeModelDirectoryOptionsV1 } from "./runtime-model-directory-deployment.js";
 import {
+	composePlatformWorkerInternalGatewayServerOptionsV1,
 	type PlatformWorkerInternalGatewayServerOptionsV1,
 	type PlatformWorkerNativeMetadataGatewayServerOptionsV1,
 	startPlatformWorkerInternalGatewayServerV1,
-	startPlatformWorkerNativeMetadataGatewayServerV1,
 } from "./runtime-native-metadata-server.js";
 import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
@@ -198,23 +198,21 @@ export function startPlatformWorker(options: StartOptions = {}) {
 	const heartbeat = setInterval(() => undefined, options.heartbeatMs ?? 60_000);
 	let stopped = false;
 	let gateway:
-		| ReturnType<typeof startPlatformWorkerNativeMetadataGatewayServerV1>
-		| undefined;
-	let modelDirectoryGateway:
 		| ReturnType<typeof startPlatformWorkerInternalGatewayServerV1>
 		| undefined;
 	try {
-		if (options.nativeMetadataGateway)
-			gateway = startPlatformWorkerNativeMetadataGatewayServerV1(
-				options.nativeMetadataGateway,
-			);
-		if (options.modelDirectoryGateway)
-			modelDirectoryGateway = startPlatformWorkerInternalGatewayServerV1(
-				options.modelDirectoryGateway,
-			);
+		const gatewayOptions = composePlatformWorkerInternalGatewayServerOptionsV1({
+			...(options.nativeMetadataGateway
+				? { nativeMetadata: options.nativeMetadataGateway }
+				: {}),
+			...(options.modelDirectoryGateway
+				? { modelDirectory: options.modelDirectoryGateway }
+				: {}),
+		});
+		if (gatewayOptions)
+			gateway = startPlatformWorkerInternalGatewayServerV1(gatewayOptions);
 	} catch (error) {
 		clearInterval(heartbeat);
-		void modelDirectoryGateway?.stop().catch(() => undefined);
 		void gateway?.stop().catch(() => undefined);
 		throw error;
 	}
@@ -223,16 +221,12 @@ export function startPlatformWorker(options: StartOptions = {}) {
 
 	return {
 		nativeMetadataGatewayServer: gateway?.server,
-		modelDirectoryGatewayServer: modelDirectoryGateway?.server,
+		modelDirectoryGatewayServer: gateway?.server,
 		stop() {
 			if (stopped) return;
 			stopped = true;
 			clearInterval(heartbeat);
-			const closing = Promise.all(
-				[gateway?.stop(), modelDirectoryGateway?.stop()].filter(
-					(value): value is Promise<void> => value !== undefined,
-				),
-			);
+			const closing = gateway?.stop() ?? Promise.resolve();
 			log(
 				JSON.stringify({ service: platformWorkerService, status: "stopped" }),
 			);
