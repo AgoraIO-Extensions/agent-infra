@@ -1609,7 +1609,10 @@
             "type": "string"
           },
           "capabilityKind": {
-            "const": "skill",
+            "enum": [
+              "command",
+              "skill"
+            ],
             "type": "string"
           },
           "capabilitySourceVersion": {

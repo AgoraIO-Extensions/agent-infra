@@ -361,7 +361,7 @@ describe("native capability admission Store seam", () => {
 		expect(harness.store.plans).toHaveLength(0);
 	});
 
-	it("rejects an empty Skill parameter while preserving command empty parameters", async () => {
+	it("rejects an empty Skill parameter while admitting command empty parameters", async () => {
 		const skill = createHarness();
 		expect(
 			(await skill.useCase.admit({ ...request, parameters: "" })).outcome,
@@ -388,6 +388,6 @@ describe("native capability admission Store seam", () => {
 		commandMetadata.setProjection(commandProjection);
 		expect(
 			(await command.useCase.admit({ ...request, parameters: "" })).outcome,
-		).toBe("unsupported");
+		).toBe("accepted");
 	});
 });

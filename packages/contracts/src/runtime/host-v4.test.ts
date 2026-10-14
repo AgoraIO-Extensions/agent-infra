@@ -222,6 +222,47 @@ it("binds a native Skill invocation to V4 execution and parameters", async () =>
 	).rejects.toThrow("RuntimeHostV4 binding is invalid");
 });
 
+it("binds a native command invocation without an ordinary text input", async () => {
+	const { input: _input, selection: _selection, ...nativeContext } = request;
+	const native = RuntimeNativeCapabilityRequestV4Schema.parse({
+		...nativeContext,
+		hostSessionRef: "session-1",
+		operation: {
+			kind: "execution",
+			id: request.executionId,
+			deliveryFence: 2,
+			executionDeliveryFence: 2,
+		},
+		capabilityId: "c".repeat(64),
+		capabilityKind: "command",
+		directoryRevision: "d".repeat(64),
+		parameters: "",
+		parametersDigest: createHash("sha256").update("").digest("hex"),
+		capabilitySourceVersion: "0.153.0",
+	});
+	const transport = RuntimeNativeCapabilityTransportV4Schema.parse({
+		businessRequest: native,
+		privateKeyField: {
+			...privateField,
+			context: {
+				...privateField.context,
+				hostSessionRef: native.hostSessionRef,
+				operation: native.operation,
+				requestDigest: digest(native),
+			},
+		},
+	});
+	await expect(
+		validateRuntimeBusinessBindingV4(native, claims(native)),
+	).resolves.toBeUndefined();
+	expect(transport.businessRequest).not.toHaveProperty("input");
+	expect(runtimeOperationDigestInputV4(native)).toMatchObject({
+		kind: "native-capability",
+		capabilityKind: "command",
+		capabilitySourceVersion: "0.153.0",
+	});
+});
+
 it("binds the Key reference/version into the Grant digest without the Key", async () => {
 	const payload = runtimeRequestSigningPayloadV4(request);
 	expect(payload).toContain('"ciphertextRef":"key-1"');

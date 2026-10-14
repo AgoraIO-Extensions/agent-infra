@@ -12,6 +12,7 @@ import {
 	RuntimeEventAckRequestV4Schema,
 	RuntimeEventReadRequestV4Schema,
 	RuntimeExecutionGrantClaimsV2Schema,
+	RuntimeNativeCapabilityRequestV4Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
 	type RuntimeRestoreExecutionKeyRequestV4,
 	RuntimeRestoreExecutionKeyRequestV4Schema,
@@ -27,7 +28,11 @@ import type {
 	RuntimeExternalActionAuthorization,
 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
-import { FakeRuntimeDriver } from "./fake-runtime-driver.js";
+import {
+	FakeRuntimeDriver,
+	fakeNativeCommandCapabilityId,
+	fakeNativeCommandDirectoryRevision,
+} from "./fake-runtime-driver.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
 import { createRuntimeExecutionGrantVerifierV2 } from "./grant-v2.js";
 import {
@@ -135,7 +140,11 @@ function businessClaims(
 		purpose: "business",
 		authorizationRecordId: "authorization-1",
 		allowedCommands: [
-			"selection" in request ? "turn.submit" : "turn.supplement",
+			"selection" in request
+				? "turn.submit"
+				: "capabilityId" in request
+					? "native-capability.invoke"
+					: "turn.supplement",
 		],
 		attachments: [],
 	});
@@ -342,6 +351,34 @@ it("binds the first durable native receipt and returns the original Key before s
 	expect(await readFile(f.path, "utf8")).not.toContain(
 		"synthetic-pinned-key-k1",
 	);
+});
+
+it("executes an admitted V4 native command through the Driver seam without text", async () => {
+	const f = await setup();
+	const submitted = await f.host.submitTurnV4(f.transport);
+	await f.driver.setOperationStatus("execution-1", "completed");
+	const { input: _input, selection: _selection, ...context } = submission();
+	const request = RuntimeNativeCapabilityRequestV4Schema.parse({
+		...context,
+		hostSessionRef: submitted.hostSessionRef,
+		executionId: "execution-command",
+		turnId: "turn-command",
+		operation: {
+			kind: "execution",
+			id: "execution-command",
+			deliveryFence: 2,
+			executionDeliveryFence: 2,
+		},
+		capabilityId: fakeNativeCommandCapabilityId,
+		capabilityKind: "command",
+		directoryRevision: fakeNativeCommandDirectoryRevision,
+		parameters: "",
+		parametersDigest: createHash("sha256").update("").digest("hex"),
+		capabilitySourceVersion: "1",
+	});
+	const result = await f.host.nativeCapabilityV4(delivery(request));
+	expect(result.result).toEqual({ outcome: "accepted", status: "completed" });
+	expect(await f.driver.sideEffectCount()).toBe(2);
 });
 
 it("passes the request-scoped file bridge only through the Driver execution context", async () => {

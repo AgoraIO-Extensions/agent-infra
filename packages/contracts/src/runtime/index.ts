@@ -31,6 +31,7 @@ import { RuntimeBrowserCapabilityProbeEvidenceV1Schema } from "./browser-capabil
 import {
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverLookupV1Schema,
+	RuntimeDriverNativeCommandV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
 	RuntimeDriverSubmitTurnLookupV2Schema,
@@ -118,6 +119,7 @@ export const RuntimeEventV1SchemaDefinitions = {
 
 export const RuntimeDriverV1SchemaDefinitions = {
 	RuntimeDriverCommandV1: RuntimeDriverCommandV1Schema,
+	RuntimeDriverNativeCommandV1: RuntimeDriverNativeCommandV1Schema,
 	RuntimeDriverLookupV1: RuntimeDriverLookupV1Schema,
 	RuntimeDriverOperationRecordV1: RuntimeDriverOperationRecordV1Schema,
 };

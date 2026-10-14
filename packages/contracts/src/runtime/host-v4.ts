@@ -170,13 +170,13 @@ export const RuntimeSupplementRequestV4Schema = z.strictObject({
 	input: RuntimeInputV1Schema,
 });
 
-/** Authenticated Worker -> RuntimeHost native Skill invocation over V4. */
+/** Authenticated Worker -> RuntimeHost native capability invocation over V4. */
 export const RuntimeNativeCapabilityRequestV4Schema = z.strictObject({
 	...context,
 	hostSessionRef: OpaqueIdV1Schema,
 	operation: RuntimeOperationBindingV2Schema,
 	capabilityId: digest,
-	capabilityKind: z.literal("skill"),
+	capabilityKind: z.enum(["command", "skill"]),
 	directoryRevision: digest,
 	parameters: z.string().max(16 * 1024),
 	parametersDigest: digest,
@@ -538,6 +538,7 @@ export function runtimeOperationDigestInputV4(input: RuntimeBusinessRequestV4) {
 			executionSource: request.executionSource,
 			keyBinding: request.keyBinding,
 			capabilityId: request.capabilityId,
+			capabilityKind: request.capabilityKind,
 			directoryRevision: request.directoryRevision,
 			parametersDigest: request.parametersDigest,
 			capabilitySourceVersion: request.capabilitySourceVersion,
