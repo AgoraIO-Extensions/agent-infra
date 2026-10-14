@@ -58,6 +58,8 @@ export interface GenericAcpRuntimeDriverOptions {
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
+	/** Controlled native Skill prompt mapping; never receives caller paths or credentials. */
+	readonly nativeSkillPrompt?: (name: string, parameters: string) => string;
 	readonly launch: (
 		directory: string,
 		selection: RuntimeSelectionV1,
@@ -83,6 +85,9 @@ export const GenericAcpRuntimeDriver = {
 			...(browserCapability
 				? { browserCapability }
 				: { browserCapability: undefined }),
+			...(options.nativeSkillPrompt
+				? { nativeSkillPrompt: options.nativeSkillPrompt }
+				: {}),
 			// The Driver consumes attachments when the peer negotiated image input;
 			// readiness reports that negotiated fact per peer, and each request
 			// enforces it before reading bytes.
