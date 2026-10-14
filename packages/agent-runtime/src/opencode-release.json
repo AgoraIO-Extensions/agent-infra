@@ -1,41 +1,42 @@
 {
-	"nativeVersion": "1.18.30",
+	"nativeVersion": "1.19.0",
 	"sdkVersion": "1.4.0",
-	"upstreamTag": "v1.18.30",
-	"upstreamCommit": "3104c1428ec91f809e5ab86631300de41eb6952e",
+	"upstreamTag": "v1.19.0",
+	"upstreamCommit": "733b2c627e5aec39cb33cc22373bdce33053ef2c",
 	"sdkSourceCommit": "c88bb0da97fe1059d4e3032df2724bf39c96f3d2",
+	"protectedMcpTransport": "acp-loopback-v1",
 	"artifacts": {
 		"darwin-arm64": {
-			"archiveSha256": "a5e43d6887386efc7d68ce49ae28e3bbdfdee3dfd1d7169b612c3ce67e53b1e8",
-			"executableSha256": "2d0c9c339bb91046c6ea951c97664bc2f8a8eaca707f31fbfbb7bc73c4eddc62"
+			"archiveSha256": "2fccf11218322be8de2d09ee0bf7d7fc2a90faeb3a7828991cc0e13273cc0b85",
+			"executableSha256": "476151a6c8b56e084d223d71a9312479e3b95547f8d8649b3489577059f9c5b4"
 		},
 		"linux-arm64-musl": {
 			"package": "opencode-linux-arm64-musl",
-			"tarball": "https://registry.npmjs.org/opencode-linux-arm64-musl/-/opencode-linux-arm64-musl-1.18.30.tgz",
-			"integrity": "sha512-IQedvhqaisv886gwk3bR603fPTErdExQa0z3hmqi7waIeuSsQG9B+suhg6iaD74lmxMbYMRlPlg4kIioytiHGg==",
-			"archiveSha256": "295250c1676545a3da14ccd650b7118e64d4f33a5d884c6d7c8d79c753d8238d",
-			"executableSha256": "581c68ed3c39bfc8ce60fcb20cc71f371e388c3f6d3a7ddd6f10a78a1d4128ab"
+			"tarball": "https://registry.npmjs.org/opencode-linux-arm64-musl/-/opencode-linux-arm64-musl-1.19.0.tgz",
+			"integrity": "sha512-Eppmg5z3MZ3CFvJ4jTtV/ubf09Dq1LylI0WFzRN26WPj50Lh/I51hiiRmha4e1I8nj5SRanraDDfH6aqHvbp+w==",
+			"archiveSha256": "ab33904fb5009f1d6d9c2564cad374bf039226952555d706a7b9fa15648fe71b",
+			"executableSha256": "6de1725013d173abad200570ad65fb4532c44ddbd23f1a3641a14a4cc81d07b4"
 		},
 		"linux-x64-musl": {
 			"package": "opencode-linux-x64-baseline-musl",
-			"tarball": "https://registry.npmjs.org/opencode-linux-x64-baseline-musl/-/opencode-linux-x64-baseline-musl-1.18.30.tgz",
-			"integrity": "sha512-8VAJb4VnNP6MbqWHMDMUwJ5k47tb5SPDqM0lcsCgfbeGjDy7rgFtlA8PYSgUgA9VTByBWmpfERR/34VVOHe82g==",
-			"archiveSha256": "d313abe7ae6a68f54f7ca93b0f2672adc0d129b6075db4c1211d27b4864fffcb",
-			"executableSha256": "2433b257165af0ac7fc4c42a638c5850e449f7973890269abe606fffde20a425"
+			"tarball": "https://registry.npmjs.org/opencode-linux-x64-baseline-musl/-/opencode-linux-x64-baseline-musl-1.19.0.tgz",
+			"integrity": "sha512-qSHclJXLTPs51Cxe/xTQ7DyvHRMGluGUgMbt00DOtzPKg4U60G7q2QqYa2b4RxSuejLIgstr3XJWUzCcgWb4Wg==",
+			"archiveSha256": "ab171d1fe3a382f052ba9accb9f633d129657d096dd128b82eec457765db5d09",
+			"executableSha256": "0edc4fe5ca2c956a4657fbeaf23fab02e5d2bdd7c28c612ef732c8e4a726163f"
 		},
 		"linux-arm64": {
 			"package": "opencode-linux-arm64",
-			"tarball": "https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.18.30.tgz",
-			"integrity": "sha512-KU2VO9oGRhV3M9LCYJXeBBtadIIgJYf620KMHFeghrGL0967Zz7PAcMBFZqTy7gUqNEnMaqOqAkSGx57BIw41Q==",
-			"archiveSha256": "1e20b66e76afbb7c1e5cd9be7515d2744cb4ea3476ff57add1f7e9ad6fb3a32d",
-			"executableSha256": "01edb5839aa10d5b09133fedcb335a062ecad6e82552933bb14f71756f2b296b"
+			"tarball": "https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.19.0.tgz",
+			"integrity": "sha512-XD1qcVN4jEiaYHqtx40p8cEPJxBc1mcB99ksgQ81akZsGGwcNFyG6GH857jVEplbGgdzWiWxDCrSii56sHjmRQ==",
+			"archiveSha256": "8481102c5d475013302d2f4766cea02b7390e76e74c146408a8cebe2b7f6778f",
+			"executableSha256": "1e392db1d558a9eebaef618d4da3927f8b61fbcbd9a19513ed77f911142415df"
 		},
 		"linux-x64": {
 			"package": "opencode-linux-x64-baseline",
-			"tarball": "https://registry.npmjs.org/opencode-linux-x64-baseline/-/opencode-linux-x64-baseline-1.18.30.tgz",
-			"integrity": "sha512-//sHZuMaNZXo6fzBtgUI5vf1oXiMX9Un2a2R3AUzajRahuW42+98wg9J33uuICblE3RS6G4HxobrvnWA8mr4VA==",
-			"archiveSha256": "766230dde0dfd351d817a4f48a21e76a9669a39ffbbe873b476a0261f1d5d95d",
-			"executableSha256": "87bd160e053af86b5b409daabf71f8dc05bbc3a2a3a5f563f36011cdf706a999"
+			"tarball": "https://registry.npmjs.org/opencode-linux-x64-baseline/-/opencode-linux-x64-baseline-1.19.0.tgz",
+			"integrity": "sha512-9EopGD/LvTfUBF24NyJFnkLd12CG0Tu7JO/BqHmjwASnaJbCmFQjx8KCJ5UBMPG/wwsBiXZiP8T0VMNTPWfnnw==",
+			"archiveSha256": "6bdf946045ebfa5773811d0037c1ca8c8a3831880434289b9e4a40c2f1fe8432",
+			"executableSha256": "135ac3f86c43f2a22328a3554fec5f0bc57d71576077902661bc38dac34871fd"
 		}
 	}
 }
