@@ -261,9 +261,16 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 				outcome: "accepted",
 			});
 			const [url] = fetcher.mock.calls[0] ?? [];
+			const [, init] = fetcher.mock.calls[0] ?? [];
 			expect(String(url)).toBe(
 				"http://runtime.internal/internal/runtime/v3/browser/handoff",
 			);
+			expect(init?.method).toBe("POST");
+			expect(init?.headers).toMatchObject({
+				authorization: "Bearer synthetic-service-token",
+				"content-type": "application/json",
+			});
+			expect(JSON.parse(String(init?.body))).toEqual(handoffRequest(kind));
 		},
 	);
 
