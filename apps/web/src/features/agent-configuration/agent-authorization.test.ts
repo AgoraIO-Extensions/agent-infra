@@ -2,17 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	grantApplicationManager,
+	grantUserApiUse,
 	revokeUserApiUse,
 } from "./agent-authorization.js";
 
-const { grant, revokeUser } = vi.hoisted(() => ({
+const { grant, grantUser, revokeUser } = vi.hoisted(() => ({
 	grant: vi.fn(),
+	grantUser: vi.fn(),
 	revokeUser: vi.fn(),
 }));
 
 vi.mock("../../pilot/generated-v2/sdk.gen.js", () => ({
 	grantAgentApplicationManagerV1: grant,
 	grantAgentApplicationUseV1: vi.fn(),
+	grantAgentUserApiUseV1: grantUser,
 	revokeAgentApplicationManagerV1: vi.fn(),
 	revokeAgentApplicationUseV1: vi.fn(),
 	revokeAgentUserApiUseV1: revokeUser,
@@ -37,6 +40,17 @@ beforeEach(() => {
 			authorizationRevision: null,
 			granted: false,
 			replayed: true,
+			schemaVersion: 1,
+			userId: "user-1",
+		},
+		response: { status: 200 },
+	});
+	grantUser.mockResolvedValue({
+		data: {
+			agentId: "agent-1",
+			authorizationRevision: "auth-2",
+			granted: true,
+			replayed: false,
 			schemaVersion: 1,
 			userId: "user-1",
 		},
@@ -68,6 +82,22 @@ describe("agent authorization commands", () => {
 		expect(revokeUser).toHaveBeenCalledWith(
 			expect.objectContaining({
 				body: { expectedRevision: 7, schemaVersion: 1 },
+				path: { agentId: "agent-1", userId: "user-1" },
+				headers: { "Idempotency-Key": expect.any(String) },
+			}),
+		);
+	});
+
+	it("passes user grant revision and requires a confirmed 200 response", async () => {
+		await expect(grantUserApiUse("agent-1", "user-1", 1)).resolves.toEqual(
+			expect.objectContaining({
+				authorizationRevision: "auth-2",
+				granted: true,
+			}),
+		);
+		expect(grantUser).toHaveBeenCalledWith(
+			expect.objectContaining({
+				body: { expectedRevision: 1, schemaVersion: 1 },
 				path: { agentId: "agent-1", userId: "user-1" },
 				headers: { "Idempotency-Key": expect.any(String) },
 			}),
