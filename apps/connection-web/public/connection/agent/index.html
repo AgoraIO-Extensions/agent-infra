@@ -35,7 +35,7 @@
           <li><strong>个人脚本或手工配置的客户端：</strong>用户在<a href="/connection/tokens" target="_blank" rel="noopener noreferrer">访问令牌</a>页签发 Connection PAT，保存到服务端 Secret。通用 PAT 使用 Portable PAT Consumer。</li>
         </ul>
         <p>三种方式都访问 <code>__CONNECTION_ORIGIN__/mcp</code>，传输协议为 Streamable HTTP。令牌认证只证明“是谁、哪个客户端”；外部账号连接和 Action 授权还需分别完成；只有管理员开启审批的连接器要求公司审批，现有及新增连接器默认关闭审批。</p>
-        <p>启用公司入口保护时，用户在浏览器先完成公司 OAuth 登录，回跳后点击“完成公司登录”，再按 LDAP 账号登录 Connection；两次账号可以不同，业务身份和已有授权仍归 LDAP 账号。MCP、metadata、DCR、token 与 PAT Binding 后端创建/领取请求不需要 公司入口 Cookie 或额外 apiKey。用户确认页仍需入口准入和 Connection 登录。</p>
+        <p>启用公司入口保护时，用户在浏览器先完成公司 OAuth 登录，回跳后自动完成入口校验（未自动跳转时点击“完成公司登录”），再按 LDAP 账号登录 Connection；两次账号可以不同，业务身份和已有授权仍归 LDAP 账号。MCP、metadata、DCR、token 与 PAT Binding 后端创建/领取请求不需要 公司入口 Cookie 或额外 apiKey。用户确认页仍需入口准入和 Connection 登录。</p>
         <p>入口会话过期时，用户重新打开控制台完成入口登录后主动重试，不自动重放提交；退出 Connection 不等于退出公司 SSO。</p>
       </section>
 

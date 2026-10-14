@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	type CompanyOAuthEntry,
 	companyEntryCheckPath,
@@ -15,6 +16,12 @@ import {
 	requireSameOrigin,
 	secureHtmlHeaders,
 } from "./oauth-routes";
+
+const completeScript =
+	'document.getElementById("company-oauth-complete").requestSubmit();';
+const completeScriptHash = createHash("sha256")
+	.update(completeScript)
+	.digest("base64");
 
 const stateCookie = "__Host-connection_company_oauth_state";
 const ticketCookie = "__Host-connection_company_oauth_entry";
@@ -131,8 +138,9 @@ export function createCompanyOAuthEntryApp(
 				throw new Error("Rejected");
 			const code = context.req.query("code") ?? "";
 			entry.validateCallback(state, getCookie(context, stateCookie), code);
+			secureHtmlHeaders(context, { inlineScriptHash: completeScriptHash });
 			return context.html(
-				`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>完成公司登录</title><p>点击后完成入口校验，再继续 LDAP 登录。不会关联两次登录账号。</p><form method="post" action="${companyIdentityCallbackPath}"><input type="hidden" name="flow" value="entry"><input type="hidden" name="state" value="${html(state)}"><input type="hidden" name="code" value="${html(code)}"><button type="submit">完成公司登录</button></form></html>`,
+				`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>完成公司登录</title><p>正在完成公司登录，即将继续。若未自动跳转，请点击下方按钮。</p><form id="company-oauth-complete" method="post" action="${companyIdentityCallbackPath}"><input type="hidden" name="flow" value="entry"><input type="hidden" name="state" value="${html(state)}"><input type="hidden" name="code" value="${html(code)}"><button type="submit">完成公司登录</button></form><script>${completeScript}</script></html>`,
 			);
 		} catch {
 			return context.html(
