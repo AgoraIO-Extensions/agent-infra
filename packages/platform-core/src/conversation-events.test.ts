@@ -521,6 +521,40 @@ describe("platform-owned task status reasons", () => {
 	});
 });
 
+describe("Browser handoff event parsing", () => {
+	it("accepts a bounded authenticated transition and rejects a mismatched binding", () => {
+		const payload = {
+			type: "browser.handoff" as const,
+			handoffId: "handoff-1",
+			status: "active" as const,
+			reason: "mfa" as const,
+			requestedAt: "2026-10-14T00:00:00.000Z",
+			expiresAt: "2026-10-14T00:05:00.000Z",
+			operatorId: "subject-1",
+			terminalReason: "BROWSER_HANDOFF_RETURNED",
+			binding: {
+				subjectId: "subject-1",
+				agentId: "agent-1",
+				conversationId: "conversation-1",
+				executionId: "execution-1",
+				sessionGeneration: 2,
+				resourceFence: 7,
+				workloadRevision: 3,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				capabilityVersion: 4,
+				pageRevision: 5,
+			},
+		};
+		expect(parseConversationPersistedEventPayloadV1(payload)).toEqual(payload);
+		expect(() =>
+			parseConversationPersistedEventPayloadV1({
+				...payload,
+				binding: { ...payload.binding, pageRevision: 0 },
+			}),
+		).toThrow(ConversationEventError);
+	});
+});
+
 describe("waiting control event ownership", () => {
 	it("reads the platform cancellation event without exposing its internal reason", () => {
 		const payload = publicTaskStatusEventV1({

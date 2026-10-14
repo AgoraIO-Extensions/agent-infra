@@ -49,6 +49,31 @@ const operation = {
 		},
 	},
 } as const;
+const handoff = {
+	...original,
+	schemaVersion: 2,
+	eventId: "handoff-event",
+	type: "browser.handoff",
+	payload: {
+		handoffId: "handoff-1",
+		status: "requested",
+		reason: "mfa",
+		requestedAt: "2026-09-14T12:00:00Z",
+		expiresAt: "2026-09-14T12:05:00Z",
+		binding: {
+			subjectId: "subject-1",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			sessionGeneration: 2,
+			resourceFence: 7,
+			workloadRevision: 3,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+			capabilityVersion: 4,
+			pageRevision: 5,
+		},
+	},
+} as const;
 
 describe("Pilot mixed-version operation contracts", () => {
 	it("reuses the public Runtime fact schema and preserves all original V1 event bytes", () => {
@@ -96,6 +121,23 @@ describe("Pilot mixed-version operation contracts", () => {
 			expect(ExecutionOperationEventV2Schema.safeParse(input).success).toBe(
 				false,
 			);
+	});
+
+	it("projects only bounded Browser handoff state through V2 SSE", () => {
+		expect(PersistedConversationEventV2Schema.parse(handoff)).toEqual(handoff);
+		expect(ConversationSseMessageV2Schema.parse(handoff)).toEqual(handoff);
+		expect(ConversationSseMessageV1Schema.safeParse(handoff).success).toBe(
+			false,
+		);
+		expect(
+			PersistedConversationEventV2Schema.safeParse({
+				...handoff,
+				payload: {
+					...handoff.payload,
+					binding: { ...handoff.payload.binding, pageUrl: "https://private" },
+				},
+			}).success,
+		).toBe(false);
 	});
 
 	it("adds complete events to V2 execution detail without changing V1 detail", () => {

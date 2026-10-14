@@ -16,6 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
 	type ConversationRoutesDependencies,
+	eventProjection,
 	registerConversationRoutes,
 } from "./conversation-routes.js";
 
@@ -37,6 +38,48 @@ const authority = {
 	authorizationRevision: identity.authorizationRevision,
 	supportsSupplementaryInstruction: true,
 };
+
+it("projects an internal Browser handoff event to bounded execution detail SSE", () => {
+	const projected = eventProjection({
+		eventId: "event-handoff-1",
+		conversationId: "conversation-1",
+		executionId: "execution-1",
+		sequence: 1,
+		conversationCursor: "1",
+		eventType: "browser.handoff",
+		eventPayload: {
+			type: "browser.handoff",
+			handoffId: "handoff-1",
+			status: "requested",
+			reason: "mfa",
+			requestedAt: "2026-10-14T00:00:00.000Z",
+			expiresAt: "2026-10-14T00:05:00.000Z",
+			binding: {
+				subjectId: "subject-1",
+				agentId: "agent-1",
+				conversationId: "conversation-1",
+				executionId: "execution-1",
+				sessionGeneration: 2,
+				resourceFence: 7,
+				workloadRevision: 3,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				capabilityVersion: 4,
+				pageRevision: 5,
+			},
+		},
+		occurredAt: new Date("2026-10-14T00:00:01.000Z"),
+		traceId: "trace-handoff",
+	});
+	expect(projected).toMatchObject({
+		type: "browser.handoff",
+		payload: {
+			status: "requested",
+			reason: "mfa",
+			handoffId: "handoff-1",
+			binding: { pageRevision: 5 },
+		},
+	});
+});
 
 const conversation = {
 	conversationId: "conversation-1",

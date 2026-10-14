@@ -492,6 +492,12 @@ export {
 	createBrowserFileGrantBridgeV1,
 } from "./browser-file-bridge.js";
 export {
+	type BrowserHandoffDispatchInputV1,
+	type BrowserHandoffEventInputV1,
+	type BrowserHandoffRuntimeClientV1,
+	createBrowserHandoffEventAdapterV1,
+} from "./browser-handoff-events.js";
+export {
 	type BrowserRecoveryBindingV1,
 	type BrowserRecoveryResultV1,
 	type BrowserRecoveryStatusV1,

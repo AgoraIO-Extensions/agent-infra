@@ -510,6 +510,39 @@ export type AuthorizationRevokedSignalV1 = {
     type: 'authorization.revoked';
 };
 
+export type BrowserHandoffEventV2 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        binding: {
+            agentId: string;
+            capabilityVersion: number;
+            conversationId: string;
+            executionId: string;
+            imageDigest: string;
+            pageRevision: number;
+            resourceFence: number;
+            sessionGeneration: number;
+            subjectId: string;
+            workloadRevision: number;
+        };
+        expiresAt: string;
+        handoffId: string;
+        operatorId?: string;
+        reason: 'login' | 'mfa' | 'captcha' | 'human_judgment';
+        requestedAt: string;
+        status: 'requested' | 'active' | 'returning' | 'completed' | 'revoked' | 'expired' | 'crashed' | 'unknown';
+        terminalReason?: string;
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'browser.handoff';
+};
+
 export type ConversationDetailProjectionV2 = {
     conversation: {
         agentId: string;
@@ -822,7 +855,7 @@ export type PersistedConversationEventV1 = {
     type: 'conversation.error';
 } | ModelSelectionFallbackEventV1;
 
-export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2;
+export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2 | BrowserHandoffEventV2;
 
 export type PersonalApiCredentialIssueRequestV1 = {
     expiresAt: string | null;
