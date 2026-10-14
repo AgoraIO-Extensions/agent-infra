@@ -9,7 +9,7 @@ import {
 	unlink,
 	writeFile,
 } from "node:fs/promises";
-import { basename, isAbsolute, join, relative } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import {
 	type NativeMetadataProjectionV1,
@@ -29,7 +29,10 @@ import {
 	type RuntimeStatusV1,
 	RuntimeStatusV1Schema,
 } from "@agent-infra/contracts/runtime";
-import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+import type {
+	Options as ClaudeQueryOptions,
+	EffortLevel,
+} from "@anthropic-ai/claude-agent-sdk";
 import { createClaudeBrowserMcpServer } from "./claude-browser-mcp.js";
 import {
 	CLAUDE_NATIVE_PROVENANCE,
@@ -117,6 +120,49 @@ export interface ClaudeRuntimeDriverOptions {
 	readonly authorizeModelAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
+}
+
+/**
+ * Keep Claude's native Skill entry point closed unless Host supplied the
+ * verified, filesystem-backed Applied directory. Metadata-only directories are
+ * still useful for discovery/read APIs, but they must not become a native path.
+ */
+export function claudeNativeSkillLaunchOptions(
+	skillDirectory?: RuntimeFilesystemSkillDirectoryV1,
+): Pick<ClaudeQueryOptions, "additionalDirectories" | "skills" | "extraArgs"> {
+	const nativeRoot = skillDirectory?.nativeRoot;
+	if (
+		typeof nativeRoot !== "string" ||
+		nativeRoot.length === 0 ||
+		!isAbsolute(nativeRoot) ||
+		nativeRoot !== resolve(nativeRoot) ||
+		typeof skillDirectory?.nativeSkillPaths !== "function"
+	)
+		return { extraArgs: { "disable-slash-commands": null } };
+
+	// The filesystem-backed directory verifies the immutable Applied files,
+	// read-only mode and manifest digests here. A stale or revoked mount throws;
+	// the caller's existing native-session failure path then remains fail-closed.
+	const nativeSkillPaths = skillDirectory.nativeSkillPaths();
+	const skills = skillDirectory.findSkills();
+	const expectedSkillPaths = new Set(
+		skills.map((entry) => resolve(nativeRoot, entry.targetPath, "SKILL.md")),
+	);
+	const verifiedSkillPaths = new Set(
+		nativeSkillPaths.map((path) => resolve(path)),
+	);
+	const skillNames = new Set(skills.map((entry) => entry.name));
+	if (
+		expectedSkillPaths.size !== skills.length ||
+		verifiedSkillPaths.size !== expectedSkillPaths.size ||
+		[...expectedSkillPaths].some((path) => !verifiedSkillPaths.has(path)) ||
+		skillNames.size !== skills.length
+	)
+		throw new RuntimeSkillDirectoryErrorV1();
+	return {
+		additionalDirectories: [nativeRoot],
+		skills: skills.map((entry) => entry.name),
+	};
 }
 interface Binding {
 	ref: string;
@@ -1635,10 +1681,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		};
 		let native: ReturnType<typeof claudeQuery>;
 		try {
-			const skillRoot = this.options.skillDirectory?.nativeRoot;
-			const skillNames = this.options.skillDirectory
-				?.findSkills()
-				.map((entry) => entry.name);
+			const skillLaunchOptions = claudeNativeSkillLaunchOptions(
+				this.options.skillDirectory,
+			);
+			const skillRoot = skillLaunchOptions.additionalDirectories?.[0];
 			const resolveReadOnlySkillFile = skillRoot
 				? async (filePath: string, signal: AbortSignal) => {
 						if (signal.aborted) return undefined;
@@ -1701,12 +1747,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						...(standardMcpServer ? { connection: standardMcpServer } : {}),
 						...(browserMcpServer ? { browser: browserMcpServer } : {}),
 					},
-					...(skillRoot
-						? {
-								additionalDirectories: [skillRoot],
-								skills: skillNames ?? [],
-							}
-						: {}),
+					...skillLaunchOptions,
 					systemPrompt: `You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories. Read MEMORY.md there for saved user preferences when present.`,
 					model: option.model,
 					effort: selection.reasoningLevel as EffortLevel,
@@ -1715,7 +1756,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					...(before.started
 						? { resume: before.nativeId }
 						: { sessionId: before.nativeId }),
-					extraArgs: { "disable-slash-commands": null },
 				},
 				{
 					type: "user",
