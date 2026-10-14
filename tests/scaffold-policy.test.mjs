@@ -210,6 +210,12 @@ test("Connection Web preserves every same-origin API route family", async () => 
 	const llms = await readFile("apps/connection-web/public/llms.txt", "utf8");
 	const appHtml = await readFile("apps/connection-web/index.html", "utf8");
 	const directSessionApi = nginx.indexOf("location ^~ /connection/v1/");
+	const delegatedApi = nginx.match(
+		/location = \/connection\/internal\/v1\/action-calls \{([^}]+)\}/,
+	)?.[1];
+	assert.ok(delegatedApi, "Delegated calls must not fall through to the SPA");
+	assert.match(delegatedApi, /proxy_pass http:\/\/connection-api:3002;/);
+	assert.match(delegatedApi, /proxy_next_upstream off;/);
 	const patBindingApi = nginx.indexOf("location ^~ /connection/pat-bindings/");
 	const spaFallback = nginx.indexOf("location /connection/");
 
@@ -224,6 +230,7 @@ test("Connection Web preserves every same-origin API route family", async () => 
 		"the PAT binding API must be matched before the Connection SPA",
 	);
 	assert.match(vite, /"\/connection\/v1"/);
+	assert.match(vite, /"\/connection\/internal\/v1\/action-calls"/);
 	assert.match(vite, /"\/connection\/pat-bindings"/);
 	assert.match(nginx, /absolute_redirect off;/);
 	assert.match(nginx, /location = \/connection/);

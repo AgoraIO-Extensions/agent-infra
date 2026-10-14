@@ -13,6 +13,9 @@ codex mcp login connection --scopes mcp --oauth-client-registration dcr
 
 The login command opens Connection's OAuth flow. The user signs in to Connection in the browser. Never ask the user to paste an LDAP password, Connection access token, or provider credential into chat or Codex configuration.
 
+On deployments with company entrance protection, the browser first completes company OAuth/HCI admission, then Connection LDAP login. The LDAP account remains the business identity; the two accounts need not match. Existing connections/grants remain owned by that LDAP account. MCP, metadata, DCR and token/refresh/revoke calls continue using their existing protocols without HCI cookies or an extra apiKey. Never add company headers/cookies as a workaround for a machine 401. If browser entrance admission expires, reopen the console and complete admission before explicitly retrying; do not automatically replay a submitted operation. Signing out of Connection does not sign out of HCI.
+
+
 Installing and logging in do not grant access to GitHub, Jira, Confluence, or other providers. The user must connect a provider account and explicitly approve the Codex grant in Connection before provider actions become available. Company approval is off by default for existing and new Providers; users connect their own accounts directly unless an administrator enables approval for that Provider. When enabled, obtain valid company eligibility first. Follow the current Connections page; do not assume missing access always requires company approval. Shared-account eligibility is separate.
 
 ## Public URLs

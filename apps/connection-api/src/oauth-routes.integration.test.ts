@@ -66,6 +66,26 @@ describe("Connection OAuth HTTP flow", () => {
 			});
 
 			try {
+				const entranceHeaders = {
+					"x-oauth-email": "different-entrance-user@example.invalid",
+					"x-oauth-displayname": "Different entrance user",
+					"x-iam-permissions": "CONNECTION_ADMIN",
+					"x-hci-auth-jwt": "untrusted.header.value",
+				};
+				expect(
+					(
+						await app.request("/api/v1/connection/session", {
+							headers: entranceHeaders,
+						})
+					).status,
+				).toBe(401);
+				const entranceOnlyMcp = await app.request("/mcp", {
+					method: "POST",
+					body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "initialize" }),
+					headers: { ...entranceHeaders, "content-type": "application/json" },
+				});
+				expect(entranceOnlyMcp.status).toBe(401);
+				expect(entranceOnlyMcp.headers.get("location")).toBeNull();
 				expect((await app.request("/api/v1/connection/tokens")).status).toBe(
 					401,
 				);
@@ -91,6 +111,7 @@ describe("Connection OAuth HTTP flow", () => {
 					headers: {
 						"content-type": "application/json",
 						"idempotency-key": `integration-denied-login-${commandSuffix}`,
+						...entranceHeaders,
 						origin: "https://connection.example",
 					},
 					method: "POST",
@@ -105,11 +126,16 @@ describe("Connection OAuth HTTP flow", () => {
 					headers: {
 						"content-type": "application/json",
 						"idempotency-key": `integration-browser-login-${commandSuffix}`,
+						...entranceHeaders,
 						origin: "https://connection.example",
 					},
 					method: "POST",
 				});
 				expect(login.status).toBe(200);
+				expect(await login.json()).toMatchObject({
+					account: { email: "pat-http@example.invalid" },
+					isAdministrator: false,
+				});
 				const setCookie = login.headers.get("set-cookie") ?? "";
 				expect(setCookie).toContain("HttpOnly");
 				expect(setCookie).toContain("Secure");

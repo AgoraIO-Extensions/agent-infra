@@ -110,6 +110,17 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 
 ## 6. Principal、身份与 Consumer
 
+### 公司入口双重登录
+
+启用公司 OAuth/HCI 的交互入口先完成公司入口准入，再按现有 LDAP 流程登录 Connection。
+Connection Account、账号归属、管理员角色、审批和审计主体仍以 LDAP 登录身份为准，已有连接、
+授权及客户端凭据继续遵循原有规则。不要求入口 OAuth 账号与 LDAP 账号一致，也不自动关联两者。
+
+入口准入不授予 Connection 权限。Agent、Codex 等消费者继续使用 Connection 自己的 OAuth、PAT
+或既有服务凭据协议；机器接口不要求公司网页登录、HCI Cookie 或额外 apiKey。
+具体交互入口及协议隔离由 [HLD](../architecture/HLD-connection-M1.md#公司-oauthhci-入口与-ldap-身份分离)
+定义。入口登录和 Connection 登录会话分别过期、退出；退出 Connection 不表示已退出公司入口。
+
 ### 6.1 Principal
 
 - 普通员工通过 Connection 的浏览器登录入口使用公司 LDAP 登录；MCP Client 不接收 LDAP 密码。

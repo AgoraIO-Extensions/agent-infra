@@ -14,6 +14,9 @@ export default defineConfig({
 			"/.well-known": { target: "http://127.0.0.1:3013" },
 			"/api": { target: "http://127.0.0.1:3013" },
 			"/connection/v1": { target: "http://127.0.0.1:3013" },
+			"/connection/internal/v1/action-calls": {
+				target: "http://127.0.0.1:3013",
+			},
 			"/connection/pat-bindings": { target: "http://127.0.0.1:3013" },
 			"/healthz": { target: "http://127.0.0.1:3013" },
 			"/mcp": { target: "http://127.0.0.1:3013" },

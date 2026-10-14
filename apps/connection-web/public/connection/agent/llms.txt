@@ -12,6 +12,10 @@ All Direct clients use Streamable HTTP at `__CONNECTION_ORIGIN__/mcp`.
 
 Token authentication, external account connection and Consumer Action consent are separate requirements. Company approval is required only when enabled for that Provider; existing and new Providers default to approval off. A token alone does not grant external account access.
 
+## Browser entrance admission
+
+On deployments with entrance protection, only interactive browser pages and Browser APIs use company OAuth/HCI before LDAP login. Connection derives the business Principal, roles, existing connections and grants only from LDAP; entrance and LDAP accounts need not match. This does not migrate accounts. User PAT Binding confirmation and OAuth authorize/login are browser interactions and may require both logins. MCP, metadata, DCR, token/refresh/revoke and PAT Binding backend create/claim retain their original credentials with no HCI cookie or extra apiKey. Never forward company identity headers as user credentials or follow a machine response into an HTML login flow. Browser entrance expiration requires the user to reopen the console and complete admission before explicitly retrying; do not automatically replay writes. Connection logout and HCI logout are separate.
+
 ## Register an Agent Consumer and obtain its service credential
 
 Developers and ordinary users must submit the Consumer ID, Agent name and fixed Callback URL to a Connection administrator for registration. The management page is administrator-only; ordinary users visiting it return to My Connection. Administrators use [Agent integration management (administrators only)](__CONNECTION_ORIGIN__/connection/admin/agents).
