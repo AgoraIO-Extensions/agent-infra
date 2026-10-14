@@ -137,6 +137,7 @@ function parseSourceSelection(
 			"templateId",
 			"templateRevision",
 			"imageReference",
+			"manifest",
 			"interactionMode",
 			"identityResponsibility",
 		],
@@ -156,6 +157,23 @@ function parseSourceSelection(
 			...(base.templateRevision === undefined
 				? {}
 				: { templateRevision: base.templateRevision as string }),
+		};
+	}
+	if (base.kind === "custom" && base.manifest !== undefined) {
+		if (
+			typeof base.manifest !== "string" ||
+			base.manifest.length < 1 ||
+			base.manifest.length > 262_144 ||
+			base.interactionMode !== "self-managed" ||
+			base.identityResponsibility !== "self-managed" ||
+			Object.keys(base).length !== 4
+		)
+			invalidCommand();
+		return {
+			kind: "custom",
+			manifest: base.manifest,
+			interactionMode: "self-managed",
+			identityResponsibility: "self-managed",
 		};
 	}
 	if (
@@ -215,6 +233,7 @@ export function parseAdmittedSource(
 			"allowedEnvironmentKeys",
 			"allowedSecretKeys",
 			"platformManagedKeys",
+			"manifest",
 			"interactionMode",
 			"identityResponsibility",
 		],
@@ -226,6 +245,27 @@ export function parseAdmittedSource(
 		typeof base.connectionEnabled !== "boolean"
 	) {
 		invalidCommand();
+	}
+	if (base.kind === "custom" && base.manifest !== undefined) {
+		if (
+			typeof base.manifest !== "string" ||
+			base.manifest.length < 1 ||
+			base.manifest.length > 262_144 ||
+			base.interactionMode !== "self-managed" ||
+			base.identityResponsibility !== "self-managed" ||
+			base.connectionEnabled !== false ||
+			Object.keys(base).length !== 7
+		)
+			invalidCommand();
+		return {
+			kind: "custom",
+			imageDigest: base.imageDigest,
+			admissionRevision: base.admissionRevision,
+			interactionMode: "self-managed",
+			identityResponsibility: "self-managed",
+			connectionEnabled: false,
+			manifest: base.manifest,
+		};
 	}
 	if (base.kind === "standard") {
 		if (

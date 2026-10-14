@@ -95,7 +95,9 @@ function fixture(
 			input instanceof Request ? input.url : input.toString(),
 		);
 		if (
-			decodeURIComponent(url.pathname) === `/v2/codex/manifests/${imageDigest}`
+			decodeURIComponent(url.pathname) ===
+				`/v2/codex/manifests/${imageDigest}` ||
+			decodeURIComponent(url.pathname) === `/v2/agents/manifests/${imageDigest}`
 		)
 			return new Response(manifest, {
 				headers: {
@@ -103,7 +105,10 @@ function fixture(
 					"docker-content-digest": imageDigest,
 				},
 			});
-		if (decodeURIComponent(url.pathname) === `/v2/codex/blobs/${configDigest}`)
+		if (
+			decodeURIComponent(url.pathname) === `/v2/codex/blobs/${configDigest}` ||
+			decodeURIComponent(url.pathname) === `/v2/agents/blobs/${configDigest}`
+		)
 			return new Response(config, {
 				headers: { "content-type": configMediaType },
 			});
@@ -232,6 +237,100 @@ function modelInput(replaceCredential = true): AgentConfigurationModelInputV1 {
 }
 
 describe("production deployment admissions", () => {
+	it("admits a two-service digest-only manifest before Worker side effects", async () => {
+		const f = fixture("self-managed");
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			imageRepository: "registry.example.test/agents/codex",
+		});
+		const image = f.imageDigest;
+		const manifest = JSON.stringify({
+			schemaVersion: 1,
+			entryServiceName: "web",
+			resources: [
+				{
+					apiVersion: "apps/v1",
+					kind: "Deployment",
+					metadata: { name: "web" },
+					spec: {
+						replicas: 1,
+						selector: { matchLabels: { app: "web" } },
+						template: {
+							metadata: { labels: { app: "web" } },
+							spec: {
+								containers: [
+									{
+										name: "web",
+										image,
+										ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+									},
+								],
+							},
+						},
+					},
+				},
+				{
+					apiVersion: "apps/v1",
+					kind: "Deployment",
+					metadata: { name: "worker" },
+					spec: {
+						replicas: 1,
+						selector: { matchLabels: { app: "worker" } },
+						template: {
+							metadata: { labels: { app: "worker" } },
+							spec: {
+								containers: [
+									{
+										name: "worker",
+										image,
+										ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+									},
+								],
+							},
+						},
+					},
+				},
+				{
+					apiVersion: "v1",
+					kind: "Service",
+					metadata: {
+						name: "web",
+						annotations: { "agent-infra.agora.io/entry": "true" },
+					},
+					spec: {
+						type: "ClusterIP",
+						selector: { app: "web" },
+						ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+					},
+				},
+				{
+					apiVersion: "v1",
+					kind: "Service",
+					metadata: { name: "worker" },
+					spec: {
+						type: "ClusterIP",
+						selector: { app: "worker" },
+						ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+					},
+				},
+			],
+		});
+		const result = await admissions.imageAdmission.admitImage({
+			...request,
+			requested: {
+				kind: "custom",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+				manifest,
+			},
+		});
+		expect(result).toMatchObject({
+			status: "admitted",
+			source: { kind: "custom", manifest, interactionMode: "self-managed" },
+		});
+		expect(f.fetch).toHaveBeenCalled();
+	});
+
 	it("rejects images outside the repository the Worker can actually deploy", async () => {
 		const { input, fetch } = fixture();
 		const admissions = createDeploymentAdmissionsV1({

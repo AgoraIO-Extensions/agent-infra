@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { DeploymentConfigurationProjectionV2Schema } from "@agent-infra/contracts/pilot";
+import {
+	DeploymentConfigurationProjectionV2Schema,
+	MultiServiceAgentSourceV1Schema,
+	MultiServiceManifestDocumentV1Schema,
+} from "@agent-infra/contracts/pilot";
 import {
 	ImmutableOciDigestV1Schema,
 	OciImageReferenceV1Schema,
@@ -29,6 +33,7 @@ import {
 	captureAgentApiCreatePrincipalsV1,
 	parseAgentConfigurationChangesV1,
 } from "@agent-infra/platform-core";
+import { parseAllDocuments } from "yaml";
 import type { z } from "zod";
 import {
 	type DeploymentDiagnosticV1,
@@ -243,6 +248,77 @@ function repositoryOf(imageReference: string) {
 	const name = imageReference.split("@")[0] ?? "";
 	const separator = name.lastIndexOf(":");
 	return separator > name.lastIndexOf("/") ? name.slice(0, separator) : name;
+}
+
+function parseMultiServiceManifest(input: string) {
+	try {
+		const documents = parseAllDocuments(input, {
+			prettyErrors: false,
+			maxAliasCount: 0,
+		} as never);
+		if (documents.length !== 1 || documents[0]?.errors.length) return null;
+		return MultiServiceManifestDocumentV1Schema.parse(documents[0]?.toJSON());
+	} catch {
+		return null;
+	}
+}
+
+function multiServiceImageDigests(
+	manifest: ReturnType<typeof MultiServiceManifestDocumentV1Schema.parse>,
+) {
+	return [
+		...new Set(
+			manifest.resources.flatMap((resource) => {
+				if (
+					resource.kind === "Deployment" ||
+					resource.kind === "StatefulSet" ||
+					resource.kind === "Job"
+				)
+					return resource.spec.template.spec.containers.map(
+						(container) => container.image,
+					);
+				return [];
+			}),
+		),
+	];
+}
+
+function validMultiServiceTopology(
+	manifest: ReturnType<typeof MultiServiceManifestDocumentV1Schema.parse>,
+): boolean {
+	const deployments = manifest.resources.filter(
+		(resource) => resource.kind === "Deployment",
+	);
+	const services = manifest.resources.filter(
+		(resource) => resource.kind === "Service",
+	);
+	if (
+		manifest.resources.length !== 4 ||
+		deployments.length !== 2 ||
+		services.length !== 2 ||
+		manifest.resources.some(
+			(resource) =>
+				resource.kind !== "Deployment" && resource.kind !== "Service",
+		)
+	)
+		return false;
+	return services.every((service) => {
+		const target = deployments.find((deployment) =>
+			Object.entries(service.spec.selector).every(
+				([key, expected]) =>
+					deployment.spec.template.metadata.labels[key] === expected,
+			),
+		);
+		if (!target) return false;
+		return service.spec.ports.every((servicePort) =>
+			target.spec.template.spec.containers.some((container) =>
+				container.ports?.some(
+					(containerPort) =>
+						containerPort.targetPort === servicePort.targetPort,
+				),
+			),
+		);
+	});
 }
 
 function replacement(
@@ -504,6 +580,66 @@ export function createDeploymentAdmissionsV1(
 					source: request.requested,
 				}).source;
 				if (!selection) return denied;
+				if ("manifest" in selection) {
+					if (!MultiServiceAgentSourceV1Schema.safeParse(selection).success)
+						return denied;
+					const multiServiceManifest = parseMultiServiceManifest(
+						selection.manifest,
+					);
+					if (
+						!multiServiceManifest ||
+						!imageRepository ||
+						!validMultiServiceTopology(multiServiceManifest)
+					)
+						return denied;
+					const deployments = multiServiceManifest.resources.filter(
+						(resource) => resource.kind === "Deployment",
+					);
+					const services = multiServiceManifest.resources.filter(
+						(resource) => resource.kind === "Service",
+					);
+					if (deployments.length !== 2 || services.length !== 2) return denied;
+					const digests = multiServiceImageDigests(multiServiceManifest);
+					if (digests.length < 1) return denied;
+					const admittedImages = await Promise.all(
+						digests.map(async (digest) => {
+							const result = await registry.admitDigest(
+								{
+									...correlation(request),
+									traceId: request.traceId,
+									subjectRef,
+									imageReference: `${imageRepository}@${digest}`,
+									usage: "custom-agent",
+									admissionPolicyRef,
+								},
+								{ signal: AbortSignal.timeout(30_000) },
+							);
+							if (result.status !== "admitted") return null;
+							return result.policyEvidence;
+						}),
+					);
+					if (admittedImages.some((result) => result === null)) return denied;
+					const canonicalManifest = JSON.stringify(multiServiceManifest);
+					const imageDigest = `sha256:${createHash("sha256")
+						.update(canonicalManifest)
+						.digest("hex")}`;
+					return {
+						...correlation(request),
+						status: "admitted",
+						source: {
+							kind: "custom",
+							imageDigest,
+							admissionRevision: revision("multi-service", {
+								digests,
+								admissions: admittedImages,
+							}),
+							interactionMode: "self-managed",
+							identityResponsibility: "self-managed",
+							connectionEnabled: false,
+							manifest: selection.manifest,
+						},
+					};
+				}
 				const template =
 					selection.kind === "standard"
 						? templates.find((item) => item.templateId === selection.templateId)

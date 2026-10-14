@@ -131,6 +131,35 @@ function source(input: unknown): AgentConfigurationSourceV1 {
 		"connectionEnabled",
 	];
 	const interactionMode = (input as Record<string, unknown>).interactionMode;
+	if (
+		interactionMode === "self-managed" &&
+		(input as Record<string, unknown>).manifest !== undefined
+	) {
+		const value = object(input, [
+			...common,
+			"identityResponsibility",
+			"manifest",
+		]);
+		const imageDigest = text(value.imageDigest, 128);
+		if (
+			!imageDigestPattern.test(imageDigest) ||
+			value.identityResponsibility !== "self-managed" ||
+			value.connectionEnabled !== false ||
+			typeof value.manifest !== "string" ||
+			value.manifest.length < 1 ||
+			Buffer.byteLength(value.manifest, "utf8") > 262_144
+		)
+			invalid();
+		return {
+			kind: "custom",
+			imageDigest,
+			admissionRevision: text(value.admissionRevision),
+			interactionMode,
+			identityResponsibility: "self-managed",
+			connectionEnabled: false,
+			manifest: value.manifest,
+		};
+	}
 	const keys =
 		interactionMode === "self-managed"
 			? [...common, "identityResponsibility"]

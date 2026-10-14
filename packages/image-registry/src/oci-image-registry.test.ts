@@ -7,6 +7,7 @@ import { createFakeImageRegistryAdapterV1 } from "../../test-support/src/workloa
 import {
 	createOciImageRegistryAdapterV1,
 	type ImageRegistryAdapterV1,
+	type OciImageAdmissionPolicyV1,
 } from "./oci-image-registry.js";
 
 const ociManifestMediaType = "application/vnd.oci.image.manifest.v1+json";
@@ -60,6 +61,28 @@ const request = {
 	imageReference: "registry.example/agents/codex:pilot",
 	usage: "custom-agent",
 	admissionPolicyRef: "policy_01",
+} as const;
+
+const arbitraryConfigBody = JSON.stringify({
+	os: "linux",
+	architecture: "arm64",
+	config: {
+		Entrypoint: ["/bin/worker"],
+		Cmd: ["--http", "8080"],
+		Env: ["PORT=8080"],
+	},
+});
+const arbitraryConfigDigest = digestText(arbitraryConfigBody);
+const arbitraryManifestBody = ociManifestBody({
+	configDigest: arbitraryConfigDigest,
+	configSize: Buffer.byteLength(arbitraryConfigBody),
+});
+const arbitraryManifestDigest = digestText(arbitraryManifestBody);
+const arbitraryRequest = {
+	...request,
+	requestId: "request_registry_digest_01",
+	traceId: "trace_registry_digest_01",
+	imageReference: `registry.example/agents/worker@${arbitraryManifestDigest}`,
 } as const;
 
 const admittedPolicy = {
@@ -1353,6 +1376,163 @@ describe("OCI ImageRegistryAdapter V1", () => {
 			expect(JSON.stringify(result)).not.toContain("models.example");
 		},
 	);
+});
+
+describe("OCI digest-only admission", () => {
+	function createAdapter(input: {
+		readonly policy: OciImageAdmissionPolicyV1;
+		readonly fetch?: typeof globalThis.fetch;
+	}) {
+		return createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			fetch: input.fetch,
+			policy: input.policy,
+		});
+	}
+
+	it("admits an arbitrary pinned image without a Runtime Manifest label", async () => {
+		const authorize = vi.fn(async (input) => {
+			expect(input.immutableDigest).toBe(arbitraryManifestDigest);
+			return admittedPolicy;
+		});
+		const adapter = createAdapter({
+			policy: { authorize },
+			async fetch(input) {
+				const url = requestUrl(input);
+				if (
+					url.endsWith(
+						`/manifests/${encodeURIComponent(arbitraryManifestDigest)}`,
+					)
+				)
+					return ociManifestResponse(
+						arbitraryManifestBody,
+						arbitraryManifestDigest,
+					);
+				if (url.endsWith(`/blobs/${encodeURIComponent(arbitraryConfigDigest)}`))
+					return ociConfigResponse(arbitraryConfigBody);
+				throw new Error(`Unexpected OCI request ${url}`);
+			},
+		});
+
+		await expect(adapter.admitDigest?.(arbitraryRequest)).resolves.toEqual({
+			schemaVersion: 1,
+			status: "admitted",
+			requestId: arbitraryRequest.requestId,
+			traceId: arbitraryRequest.traceId,
+			immutableDigest: arbitraryManifestDigest,
+			ociConfig: {
+				schemaVersion: 1,
+				configDigest: arbitraryConfigDigest,
+				operatingSystem: "linux",
+				architecture: "arm64",
+				entrypoint: ["/bin/worker"],
+				command: ["--http", "8080"],
+				declaredEnvKeys: ["PORT"],
+			},
+			policyEvidence: {
+				schemaVersion: 1,
+				policyRef: request.admissionPolicyRef,
+				decisionRef: admittedPolicy.decisionRef,
+				subjectRef: request.subjectRef,
+				agentId: request.agentId,
+				imageDigest: arbitraryManifestDigest,
+				evaluatedAt: admittedPolicy.evaluatedAt,
+			},
+		});
+		expect(authorize).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		["missing digest pin", request.imageReference],
+		[
+			"tag before digest",
+			`registry.example/agents/worker:latest@${arbitraryManifestDigest}`,
+		],
+	] as const)(
+		"rejects a %s before contacting the registry",
+		async (_name, imageReference) => {
+			const fetch = vi.fn<typeof globalThis.fetch>();
+			const adapter = createAdapter({
+				fetch,
+				policy: { authorize: async () => admittedPolicy },
+			});
+			const result = await adapter.admitDigest?.({
+				...arbitraryRequest,
+				imageReference,
+			});
+			expect(result).toMatchObject({
+				status: "rejected",
+				error: { code: "IMAGE_REFERENCE_INVALID" },
+			});
+			expect(fetch).not.toHaveBeenCalled();
+		},
+	);
+
+	it("rejects a forged manifest digest before policy admission", async () => {
+		const authorize = vi.fn(async () => admittedPolicy);
+		const adapter = createAdapter({
+			policy: { authorize },
+			async fetch() {
+				return ociManifestResponse(
+					arbitraryManifestBody,
+					`sha256:${"f".repeat(64)}`,
+				);
+			},
+		});
+		const result = await adapter.admitDigest?.(arbitraryRequest);
+		expect(result).toMatchObject({
+			status: "rejected",
+			error: { code: "OCI_CONFIG_INVALID" },
+		});
+		expect(authorize).not.toHaveBeenCalled();
+	});
+
+	it("rejects a forged config body after policy admission", async () => {
+		const authorize = vi.fn(async () => admittedPolicy);
+		const adapter = createAdapter({
+			policy: { authorize },
+			async fetch(input) {
+				const url = requestUrl(input);
+				return url.includes("/manifests/")
+					? ociManifestResponse(arbitraryManifestBody, arbitraryManifestDigest)
+					: ociConfigResponse(JSON.stringify({ os: "linux" }));
+			},
+		});
+		const result = await adapter.admitDigest?.(arbitraryRequest);
+		expect(result).toMatchObject({
+			status: "rejected",
+			error: { code: "OCI_CONFIG_INVALID" },
+		});
+		expect(authorize).toHaveBeenCalledOnce();
+	});
+
+	it("returns stable unauthorized and unavailable results", async () => {
+		const unauthorized = createAdapter({
+			policy: { authorize: async () => ({ status: "rejected" as const }) },
+			async fetch() {
+				return ociManifestResponse(
+					arbitraryManifestBody,
+					arbitraryManifestDigest,
+				);
+			},
+		});
+		expect(await unauthorized.admitDigest?.(arbitraryRequest)).toMatchObject({
+			status: "rejected",
+			error: { code: "IMAGE_NOT_ADMITTED", retryable: false },
+		});
+
+		const unavailable = createAdapter({
+			policy: { authorize: async () => admittedPolicy },
+			async fetch() {
+				throw new Error("registry unavailable");
+			},
+		});
+		expect(await unavailable.admitDigest?.(arbitraryRequest)).toMatchObject({
+			status: "rejected",
+			error: { code: "IMAGE_REGISTRY_UNAVAILABLE", retryable: true },
+		});
+	});
 });
 
 type AdapterScenarioV1 = "admitted" | "not-admitted" | "unavailable";

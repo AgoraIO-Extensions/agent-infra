@@ -8,8 +8,11 @@ import {
 } from "@kubernetes/client-node";
 
 export const workloadApiVersions = {
+	Deployment: "apps/v1",
 	StatefulSet: "apps/v1",
 	Service: "v1",
+	ConfigMap: "v1",
+	Job: "batch/v1",
 	ServiceAccount: "v1",
 	PersistentVolumeClaim: "v1",
 	Secret: "v1",
