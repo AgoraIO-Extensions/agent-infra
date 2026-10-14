@@ -109,6 +109,15 @@ describe("multi-service Agent contract seam", () => {
 		).toThrow();
 	});
 
+	it("rejects duplicate Kubernetes resource identities", () => {
+		expect(() =>
+			MultiServiceManifestDocumentV1Schema.parse({
+				...document,
+				resources: [deployment, service, deployment],
+			}),
+		).toThrow("resource identity must be unique");
+	});
+
 	it("adds a bounded self-managed source without changing standard/custom sources", () => {
 		const source = MultiServiceAgentSourceV1Schema.parse({
 			kind: "custom",

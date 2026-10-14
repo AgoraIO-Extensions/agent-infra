@@ -125,6 +125,17 @@ export const MultiServiceManifestDocumentV1Schema = z
 		resources: z.array(MultiServiceResourceV1Schema).min(2).max(64),
 	})
 	.superRefine((value, context) => {
+		const identities = new Set<string>();
+		for (const [index, resource] of value.resources.entries()) {
+			const identity = `${resource.apiVersion}/${resource.kind}/${resource.metadata.name}`;
+			if (identities.has(identity))
+				context.addIssue({
+					code: "custom",
+					path: ["resources", index],
+					message: "resource identity must be unique",
+				});
+			identities.add(identity);
+		}
 		const services = value.resources.filter(
 			(resource) => resource.kind === "Service",
 		);
