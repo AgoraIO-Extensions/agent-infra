@@ -23,6 +23,7 @@ import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
+	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
 import type { AdminAgentsState } from "./admin-agents.js";
 import { AdminUserGovernance } from "./admin-user-governance.js";
@@ -65,7 +66,7 @@ export function validateAdminAgentSearch(
 function sourceLabel(agent: AgentProjectionV2) {
 	return agent.source.kind === "standard"
 		? `标准模板 · ${agent.source.templateId}`
-		: `自定义镜像 · ${agent.source.imageReference}`;
+		: `自定义 Agent · ${agentSourceReferenceLabel(agent)}`;
 }
 
 export function AdminAgentsScreen({

@@ -15,6 +15,7 @@ import type {
 import {
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
+	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import { DirectoryPicker } from "../directory-fields.js";
@@ -675,7 +676,7 @@ export function AgentConfigurationScreen({
 								镜像升级
 							</h2>
 							<p className="text-muted-foreground text-sm">
-								当前镜像：{agent.source.imageReference}
+								当前来源：{agentSourceReferenceLabel(agent)}
 							</p>
 							<div className="flex flex-col gap-3 sm:flex-row">
 								<div className="min-w-0 flex-1 space-y-2">

@@ -19,6 +19,7 @@ import type {
 	DeploymentConfigurationProjectionV2,
 	DeploymentModelEndpointProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
+import { agentSourceReferenceLabel } from "../agent-management-status.js";
 import { DirectoryPicker } from "../directory-fields.js";
 import {
 	type AgentApplicationEnvironmentDraft,
@@ -637,7 +638,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	);
 	const [imageReference, setImageReference] = useState(
 		application?.source.kind === "custom"
-			? application.source.imageReference
+			? agentSourceReferenceLabel(application)
 			: "",
 	);
 	const [identityResponsibility, setIdentityResponsibility] = useState<

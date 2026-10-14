@@ -19,6 +19,7 @@ import {
 	agentConversationSourceLabel,
 	agentIdentityResponsibilityLabel,
 	agentManagementStatusLabels,
+	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
 import { PageLoadingState } from "../page-loading-state.js";
 import {
@@ -283,11 +284,7 @@ export function MyAgentApplicationDetailScreen({
 									? "标准模板"
 									: "镜像地址"}
 							</dt>
-							<dd>
-								{application.source.kind === "standard"
-									? application.source.templateId
-									: application.source.imageReference}
-							</dd>
+							<dd>{agentSourceReferenceLabel(application)}</dd>
 							<dt>入口模式</dt>
 							<dd>{agentConversationSourceLabel(application)}</dd>
 							<dt>入口身份责任</dt>
