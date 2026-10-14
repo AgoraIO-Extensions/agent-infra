@@ -169,6 +169,8 @@ export interface PlatformApiAssemblyInput {
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	/** Optional deployment-owned public native metadata reader. */
 	readonly nativeMetadata?: Pick<NativeMetadataRoutesDependenciesV1, "reader">;
+	/** Optional deployment-owned native capability admission route. */
+	readonly nativeCapabilityInvocation?: PlatformAppDependencies["nativeCapabilityInvocation"];
 	/** Optional deployment-owned Worker current-confirmation route. */
 	readonly nativeMetadataCurrent?: NativeMetadataCurrentRouteDependenciesV1;
 	/** Optional deployment-owned Provider registry and admission pipeline. */
@@ -847,6 +849,9 @@ export function assemblePlatformApi(
 			: {}),
 		...(input.nativeMetadataCurrent
 			? { nativeMetadataCurrent: input.nativeMetadataCurrent }
+			: {}),
+		...(input.nativeCapabilityInvocation
+			? { nativeCapabilityInvocation: input.nativeCapabilityInvocation }
 			: {}),
 		sessionAudit: {
 			identity: input.identity,

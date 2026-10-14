@@ -60,6 +60,8 @@ import {
 	type FileRoutesDependenciesV1,
 	registerFileRoutesV1,
 } from "./http/file-routes.js";
+import type { NativeCapabilityInvocationRouteDependenciesV1 } from "./http/native-capability-invocation-routes.js";
+import { registerNativeCapabilityInvocationRoutesV1 } from "./http/native-capability-invocation-routes.js";
 import {
 	type NativeMetadataCurrentRouteDependenciesV1,
 	registerNativeMetadataCurrentRoutesV1,
@@ -168,6 +170,7 @@ export interface PlatformAppDependencies {
 	readonly conversation: ConversationRoutesDependencies;
 	readonly nativeMetadata?: NativeMetadataRoutesDependenciesV1;
 	readonly nativeMetadataCurrent?: NativeMetadataCurrentRouteDependenciesV1;
+	readonly nativeCapabilityInvocation?: NativeCapabilityInvocationRouteDependenciesV1;
 	readonly tasks?: TaskRoutesDependencies;
 	readonly unknownStopOperations?: UnknownStopOperationsRouteDependencies;
 	readonly management: ManagementRouteDependencies;
@@ -312,6 +315,11 @@ export function createPlatformApp(
 		registerNativeMetadataCurrentRoutesV1(
 			app,
 			dependencies.nativeMetadataCurrent,
+		);
+	if (dependencies.nativeCapabilityInvocation)
+		registerNativeCapabilityInvocationRoutesV1(
+			app,
+			dependencies.nativeCapabilityInvocation,
 		);
 	if (dependencies.tasks)
 		registerTaskRoutes(app, {
