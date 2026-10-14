@@ -104,6 +104,7 @@ it.each([
 		},
 	],
 	["cross agent", { ...appliedBinding, agentId: "agent-b" }],
+	["duplicate Applied version", [appliedBinding, appliedBinding]],
 ])("rejects %s Applied facts", (_label, binding) => {
 	expect(() =>
 		createAppliedRuntimeSkillDirectoryV1({
@@ -112,7 +113,7 @@ it.each([
 			configurationRevision: 4,
 			generationId: "e".repeat(64),
 			projections: [projection],
-			appliedBindings: [binding],
+			appliedBindings: Array.isArray(binding) ? binding : [binding],
 		}),
 	).toThrow(RuntimeSkillDirectoryErrorV1);
 });

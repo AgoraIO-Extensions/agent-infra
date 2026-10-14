@@ -240,6 +240,12 @@ export function createAppliedRuntimeSkillDirectoryV1(input: {
 			unavailable();
 		return binding;
 	});
+	const bindingByVersion = new Map<string, (typeof bindings)[number]>();
+	for (const binding of bindings) {
+		if (bindingByVersion.has(binding.skillVersion.skillVersionId))
+			unavailable();
+		bindingByVersion.set(binding.skillVersion.skillVersionId, binding);
+	}
 	const projectionByVersion = new Map<string, unknown>();
 	for (const value of input.projections) {
 		const projection = SkillWorkloadProjectionV1Schema.safeParse(value);
@@ -258,11 +264,10 @@ export function createAppliedRuntimeSkillDirectoryV1(input: {
 			projection.data,
 		);
 	}
-	if (bindings.length !== projectionByVersion.size) unavailable();
-	for (const binding of bindings) {
-		const projection = projectionByVersion.get(
-			binding.skillVersion.skillVersionId,
-		);
+	if (bindingByVersion.size !== projectionByVersion.size) unavailable();
+	for (const [skillVersionId, projection] of projectionByVersion) {
+		const binding = bindingByVersion.get(skillVersionId);
+		if (!binding) unavailable();
 		if (!projection) unavailable();
 		const value = projection as {
 			readonly manifest: {
