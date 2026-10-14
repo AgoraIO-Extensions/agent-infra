@@ -1346,8 +1346,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 								};
 							},
 							block: () => {
-								if (handle) handle.retiring = true;
-								void standardMcp?.close();
+								if (!handle) return;
+								// An uncertain Connection WRITE must retire the native Claude
+								// owner immediately. Marking the handle alone lets the process
+								// continue until a later turn or driver shutdown.
+								handle.retiring = true;
+								void this.retire(ref).catch(() => {});
 							},
 							prepare: async ({ rpcRequestId, requestDigest }) => {
 								await this.connectionOperation(
