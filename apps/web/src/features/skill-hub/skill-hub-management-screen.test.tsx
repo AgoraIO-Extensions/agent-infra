@@ -5,9 +5,9 @@ import {
 	createRouter,
 	RouterProvider,
 } from "@tanstack/react-router";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SkillHubManagementScreen } from "./skill-hub-management-screen.js";
 
 afterEach(cleanup);
@@ -75,12 +75,43 @@ describe("SkillHubManagementScreen", () => {
 		expect(
 			screen.getByRole("link", { name: "release-notes" }).getAttribute("href"),
 		).toBe("/skills/release-notes-v1");
-		expect(
-			screen.getByText(/Agent sync \/ Applied 状态待正式配置查询接入/),
-		).toBeTruthy();
+		expect(screen.getByText(/绑定固定版本并读取 pending_sync/)).toBeTruthy();
 		expect(
 			screen.getByRole("button", { name: "创建项目" }).hasAttribute("disabled"),
 		).toBe(true);
+	});
+
+	it("submits a project through the server action boundary", async () => {
+		const createProject = vi.fn().mockResolvedValue({});
+		const listProjects = vi.fn().mockResolvedValue({ items: [] });
+		await renderWithRouter(
+			<SkillHubManagementScreen
+				isAdministrator={false}
+				state={{ kind: "ready", versions: [] }}
+				actions={{
+					createProject,
+					listProjects,
+					updateProject: vi.fn(),
+					importVersion: vi.fn(),
+					publishVersion: vi.fn(),
+					reviewVersion: vi.fn(),
+					revokeVersion: vi.fn(),
+					readBindings: vi.fn(),
+					bindVersion: vi.fn(),
+				}}
+			/>,
+		);
+		fireEvent.change(screen.getByLabelText("项目名称"), {
+			target: { value: "release-notes" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
+		await vi.waitFor(() =>
+			expect(createProject).toHaveBeenCalledWith({
+				schemaVersion: 1,
+				name: "release-notes",
+			}),
+		);
+		expect(listProjects).toHaveBeenCalledOnce();
 	});
 
 	it("keeps retryable and denied states separate", async () => {
