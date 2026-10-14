@@ -4,6 +4,7 @@ import {
 	type ConversationDispatchOperationV1,
 	type ConversationDispatchStateTransitionV1,
 	type ConversationMetadataRecoveryV1,
+	nativeCapabilityParametersDigestV1,
 	parseConversationMetadataRecoveryV1,
 } from "@agent-infra/platform-core";
 import {
@@ -87,7 +88,9 @@ export function exactPayload(
 			!validText(parameters) ||
 			!validText(parametersDigest) ||
 			!/^[a-f0-9]{64}$/.test(String(directoryRevision)) ||
-			!/^[a-f0-9]{64}$/.test(String(parametersDigest))
+			!/^[a-f0-9]{64}$/.test(String(parametersDigest)) ||
+			parametersDigest !==
+				nativeCapabilityParametersDigestV1(String(parameters))
 		)
 			return undefined;
 		const sessionGeneration = safeCounter(input.sessionGeneration, 1);

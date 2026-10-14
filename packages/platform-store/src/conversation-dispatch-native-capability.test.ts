@@ -1,3 +1,4 @@
+import { nativeCapabilityParametersDigestV1 } from "@agent-infra/platform-core";
 import { describe, expect, it } from "vitest";
 import { exactPayload } from "./conversation-dispatch-validation.ts";
 
@@ -14,7 +15,7 @@ const payload = {
 	capabilityKind: "skill",
 	directoryRevision: "b".repeat(64),
 	parameters: "summary",
-	parametersDigest: "c".repeat(64),
+	parametersDigest: nativeCapabilityParametersDigestV1("summary"),
 };
 
 describe("Conversation Dispatch native capability payload", () => {
