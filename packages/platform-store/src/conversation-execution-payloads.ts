@@ -82,21 +82,23 @@ export function parseMessage(value: unknown) {
 }
 
 export function parseMessageOutbox(value: unknown) {
-	const input = exactRecord(value, [
-		"operation",
-		"conversationId",
-		"executionId",
-		"messageId",
-		"turnId",
-		"sessionGeneration",
-		"modelConfigurationRevision",
-		"modelOptionId",
-		"reasoningLevel",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	],
-	["traceParent"],
+	const input = exactRecord(
+		value,
+		[
+			"operation",
+			"conversationId",
+			"executionId",
+			"messageId",
+			"turnId",
+			"sessionGeneration",
+			"modelConfigurationRevision",
+			"modelOptionId",
+			"reasoningLevel",
+			"traceId",
+			"requestId",
+			"occurredAt",
+		],
+		["traceParent"],
 	);
 	if (
 		input.operation !== "conversation.turn.submit.v1" &&
@@ -156,21 +158,23 @@ export function parseMessageAudit(value: unknown) {
 }
 
 export function parseRegenerationOutbox(value: unknown) {
-	const input = exactRecord(value, [
-		"operation",
-		"conversationId",
-		"executionId",
-		"messageId",
-		"turnId",
-		"sessionGeneration",
-		"modelConfigurationRevision",
-		"modelOptionId",
-		"reasoningLevel",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	],
-	["traceParent"],
+	const input = exactRecord(
+		value,
+		[
+			"operation",
+			"conversationId",
+			"executionId",
+			"messageId",
+			"turnId",
+			"sessionGeneration",
+			"modelConfigurationRevision",
+			"modelOptionId",
+			"reasoningLevel",
+			"traceId",
+			"requestId",
+			"occurredAt",
+		],
+		["traceParent"],
 	);
 	if (input.operation !== "conversation.turn.regenerate.v1") unavailable();
 	return {
@@ -220,17 +224,19 @@ export function parseRegenerationAudit(value: unknown) {
 }
 
 export function parseStopOutbox(value: unknown) {
-	const input = exactRecord(value, [
-		"operation",
-		"conversationId",
-		"executionId",
-		"sessionGeneration",
-		"stopRequestId",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	],
-	["traceParent"],
+	const input = exactRecord(
+		value,
+		[
+			"operation",
+			"conversationId",
+			"executionId",
+			"sessionGeneration",
+			"stopRequestId",
+			"traceId",
+			"requestId",
+			"occurredAt",
+		],
+		["traceParent"],
 	);
 	if (input.operation !== "conversation.turn.stop.v1") unavailable();
 	return {
