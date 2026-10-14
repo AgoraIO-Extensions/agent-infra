@@ -34,6 +34,47 @@ const standardCreateDraft = {
 } satisfies AgentApplicationFormDraft;
 
 describe("Agent application draft", () => {
+	it("serializes a multi-service source without treating its YAML as an image", () => {
+		const draft = {
+			...standardCreateDraft,
+			sourceKind: "custom-multi-service" as const,
+			manifest: "schemaVersion: 1\nentryServiceName: api\nresources: []",
+			imageReference: "",
+			configureModels: false,
+			models: [],
+			defaultModelOptionId: "",
+			defaultReasoningLevel: "",
+		};
+		expect(buildAgentApplicationRequest("create", draft)).toEqual(
+			expect.objectContaining({
+				source: {
+					kind: "custom",
+					interactionMode: "self-managed",
+					identityResponsibility: "self-managed",
+					manifest: draft.manifest,
+				},
+			}),
+		);
+	});
+
+	it("requires inline YAML for a multi-service draft", () => {
+		const errors = validateAgentApplicationDraft(
+			{
+				...standardCreateDraft,
+				sourceKind: "custom-multi-service",
+				manifest: "",
+			},
+			{
+				modelConfigurationVisible: false,
+				staleModel: false,
+				staleModelIndexes: [],
+				staleTemplate: false,
+				standardChoicesBlocked: false,
+			},
+		);
+		expect(errors.manifest).toBe("请上传或粘贴多服务 YAML。");
+	});
+
 	it("serializes a standard application into its generated writable create body", () => {
 		expect(buildAgentApplicationRequest("create", standardCreateDraft)).toEqual(
 			{

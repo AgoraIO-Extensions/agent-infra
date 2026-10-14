@@ -34,6 +34,10 @@ import {
 	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
 import type { BrowserSessionState } from "../browser-session.js";
+import {
+	formatMultiServiceManifestSummary,
+	parseMultiServiceManifest,
+} from "../my-agents/multi-service-manifest.js";
 import type {
 	AgentApplicationDecision,
 	PendingAgentApplicationsState,
@@ -127,6 +131,10 @@ function ApplicationReview({
 		decisionResult.status !== "pending_approval";
 	const { configuration, resourceProfile, source } = application;
 	const resources = resourceProfile.estimatedResources;
+	const multiServiceSummary =
+		source.kind === "custom" && "manifest" in source
+			? parseMultiServiceManifest(source.manifest)
+			: undefined;
 	const close = useCallback(() => {
 		setOpen(false);
 		onOpenChange?.(false);
@@ -174,10 +182,26 @@ function ApplicationReview({
 				{!rejecting ? (
 					<>
 						<dl className="detail-list my-5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-3 text-sm">
-							<dt>{source.kind === "standard" ? "模板" : "镜像"}</dt>
+							<dt>
+								{source.kind === "standard"
+									? "模板"
+									: "manifest" in source
+										? "多服务清单"
+										: "镜像"}
+							</dt>
 							<dd className="break-all">
 								{agentSourceReferenceLabel({ source })}
 							</dd>
+							{multiServiceSummary?.ok ? (
+								<>
+									<dt>服务摘要</dt>
+									<dd className="break-words">
+										{formatMultiServiceManifestSummary(
+											multiServiceSummary.summary,
+										)}
+									</dd>
+								</>
+							) : null}
 							<dt>Owner</dt>
 							<dd className="break-words">
 								{configuration.owners
@@ -482,7 +506,9 @@ export function AdminAgentApplicationsScreen({
 										<TableCell>
 											{application.source.kind === "standard"
 												? application.source.templateId
-												: "自定义 Agent"}
+												: "manifest" in application.source
+													? "多服务 Agent"
+													: "自定义 Agent"}
 											<small>
 												Owner ·{" "}
 												{application.configuration.owners

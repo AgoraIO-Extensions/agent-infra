@@ -138,6 +138,92 @@ function openAdvancedConfiguration() {
 }
 
 describe("AgentApplicationForm", () => {
+	it("accepts an inline multi-service YAML and shows its semantic summary", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Payments" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Runs payment services" },
+		});
+		choose("Agent 来源", "多服务 Agent · 自有交互入口");
+		const manifestField = document.getElementById(
+			"application-multi-service-manifest",
+		);
+		if (!(manifestField instanceof HTMLTextAreaElement))
+			throw new Error("multi-service manifest field not found");
+		fireEvent.change(manifestField, {
+			target: {
+				value: `schemaVersion: 1
+entryServiceName: api
+resources:
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: api
+      labels: {app: payments}
+      annotations: {agent-infra.agora.io/entry: "true"}
+    spec:
+      type: ClusterIP
+      selector: {app: payments}
+      ports: [{name: http, port: 8080, targetPort: 8080}]
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: payments
+    spec:
+      data: {MODE: production}
+`,
+			},
+		});
+		expect(screen.getByRole("status").textContent).toContain("入口服务：api");
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(onSubmit).toHaveBeenCalledWith(
+			expect.objectContaining({
+				source: expect.objectContaining({
+					interactionMode: "self-managed",
+					manifest: expect.stringContaining("entryServiceName: api"),
+				}),
+			}),
+		);
+	});
+
+	it("keeps invalid multi-service YAML out of the submission", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Payments" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Runs payment services" },
+		});
+		choose("Agent 来源", "多服务 Agent · 自有交互入口");
+		const manifestField = document.getElementById(
+			"application-multi-service-manifest",
+		);
+		if (!(manifestField instanceof HTMLTextAreaElement))
+			throw new Error("multi-service manifest field not found");
+		fireEvent.change(manifestField, {
+			target: { value: "schemaVersion: 1\nresources: []" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText(/多服务 YAML 不符合/)).toBeTruthy();
+	});
+
 	it("shows required model fields for a standard-template application", () => {
 		const onSubmit = vi.fn();
 		render(
