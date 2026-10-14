@@ -6,6 +6,7 @@ import type {
 	BrowserObservationV1,
 } from "./browser-observe.js";
 import type { BrowserSessionControllerV1 } from "./browser-session.js";
+import type { RuntimeBrowserToolExecutionRequestV1 } from "./driver.js";
 
 const capability = BrowserCapabilityAvailableV1Schema.parse({
 	schemaVersion: 1,
@@ -77,6 +78,32 @@ const record: BrowserActionRecordV1 = {
 	sideEffect: false,
 	createdAt: "2026-10-12T00:00:00.000Z",
 };
+
+const recoveryBinding = {
+	...binding,
+	executionId: "execution-recovery",
+	capabilityVersion: 3,
+	pageRevision: 2,
+};
+
+const recoveredRecord: BrowserActionRecordV1 = {
+	...record,
+	executionBinding: recoveryBinding,
+};
+
+function interactRequest(
+	overrides: Partial<RuntimeBrowserToolExecutionRequestV1> = {},
+): RuntimeBrowserToolExecutionRequestV1 {
+	return {
+		tool: "browser_interact",
+		arguments: { ...page, elementId: "element-1", kind: "click" },
+		actionId: "action-1",
+		operationRef: "operation-1",
+		attemptRef: "attempt-1",
+		binding: recoveryBinding,
+		...overrides,
+	};
+}
 
 function session(
 	options: Partial<Pick<BrowserSessionControllerV1, "act" | "readAction">> = {},
@@ -209,16 +236,7 @@ describe("createBrowserSessionDriverContextV1", () => {
 	});
 
 	it("recovers a terminal controller result after an unknown action outcome", async () => {
-		const recovered = {
-			...record,
-			executionBinding: {
-				...binding,
-				executionId: "execution-recovery",
-				capabilityVersion: 3,
-				pageRevision: 2,
-			},
-		};
-		const readAction = vi.fn(() => recovered);
+		const readAction = vi.fn(() => recoveredRecord);
 		const browser = session({
 			act: vi.fn().mockResolvedValue({ ...record, status: "unknown" }),
 			readAction,
@@ -230,23 +248,135 @@ describe("createBrowserSessionDriverContextV1", () => {
 			subjectId: "user-1",
 		});
 		const result = await context.executeTool?.(
-			{
-				tool: "browser_interact",
-				arguments: { ...page, elementId: "element-1", kind: "click" },
-				actionId: "action-1",
-				operationRef: "operation-1",
-				attemptRef: "attempt-1",
-				binding: {
-					...binding,
-					executionId: "execution-recovery",
-					capabilityVersion: 3,
-					pageRevision: 2,
-				},
-			},
+			interactRequest(),
 			new AbortController().signal,
 		);
 		expect(result).toMatchObject({ phase: "completed", success: true });
 		expect(readAction).toHaveBeenCalledOnce();
+	});
+
+	it("recovers a terminal controller result after an interrupted action outcome", async () => {
+		const readAction = vi.fn(() => recoveredRecord);
+		const browser = session({
+			act: vi
+				.fn()
+				.mockRejectedValue(new Error("BROWSER_CONTROLLER_UNAVAILABLE")),
+			readAction,
+		});
+		const context = createBrowserSessionDriverContextV1({
+			session: browser,
+			capability,
+			binding,
+			subjectId: "user-1",
+		});
+		const result = await context.executeTool?.(
+			interactRequest(),
+			new AbortController().signal,
+		);
+		expect(result).toMatchObject({ phase: "completed", success: true });
+		expect(readAction).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the outcome unknown when the recovered record carries another capability revision", async () => {
+		const readAction = vi.fn(() => ({
+			...recoveredRecord,
+			executionBinding: { ...recoveryBinding, capabilityVersion: 4 },
+		}));
+		const context = createBrowserSessionDriverContextV1({
+			session: session({
+				act: vi.fn().mockResolvedValue({ ...record, status: "unknown" }),
+				readAction,
+			}),
+			capability,
+			binding,
+			subjectId: "user-1",
+		});
+		const result = await context.executeTool?.(
+			interactRequest(),
+			new AbortController().signal,
+		);
+		expect(result).toMatchObject({
+			phase: "unknown",
+			success: false,
+			failureCode: "recovery_unconfirmed",
+		});
+		expect(readAction).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the outcome unknown when the recovered record breaks the action binding", async () => {
+		const mismatched: BrowserActionRecordV1[] = [
+			{ ...recoveredRecord, operationRef: "operation-other" },
+			{ ...recoveredRecord, attemptRef: "attempt-other" },
+			{
+				...recoveredRecord,
+				executionBinding: {
+					...recoveryBinding,
+					executionId: "execution-other",
+				},
+			},
+			{
+				...recoveredRecord,
+				executionBinding: { ...recoveryBinding, workloadRevision: 99 },
+			},
+			{
+				...recoveredRecord,
+				executionBinding: {
+					...recoveryBinding,
+					imageDigest: `sha256:${"f".repeat(64)}`,
+				},
+			},
+		];
+		for (const candidate of mismatched) {
+			const readAction = vi.fn(() => candidate);
+			const context = createBrowserSessionDriverContextV1({
+				session: session({
+					act: vi.fn().mockResolvedValue({ ...record, status: "unknown" }),
+					readAction,
+				}),
+				capability,
+				binding,
+				subjectId: "user-1",
+			});
+			const result = await context.executeTool?.(
+				interactRequest(),
+				new AbortController().signal,
+			);
+			expect(result).toMatchObject({
+				phase: "unknown",
+				success: false,
+				failureCode: "recovery_unconfirmed",
+			});
+			expect(readAction).toHaveBeenCalledOnce();
+		}
+	});
+
+	it("keeps the outcome unknown when the terminal record is unreadable", async () => {
+		for (const readAction of [
+			vi.fn().mockReturnValue(null),
+			vi.fn(() => {
+				throw new Error("BROWSER_ACTION_READBACK_BINDING_CONFLICT");
+			}),
+		]) {
+			const context = createBrowserSessionDriverContextV1({
+				session: session({
+					act: vi.fn().mockResolvedValue({ ...record, status: "unknown" }),
+					readAction,
+				}),
+				capability,
+				binding,
+				subjectId: "user-1",
+			});
+			const result = await context.executeTool?.(
+				interactRequest(),
+				new AbortController().signal,
+			);
+			expect(result).toMatchObject({
+				phase: "unknown",
+				success: false,
+				failureCode: "recovery_unconfirmed",
+			});
+			expect(readAction).toHaveBeenCalledOnce();
+		}
 	});
 
 	it("fails closed for unsupported tools and stale page references", async () => {

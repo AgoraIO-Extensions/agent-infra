@@ -141,7 +141,7 @@ function sameActionIdentity(
 		binding !== undefined &&
 		sameExecutionBinding(request.binding, {
 			binding,
-			capabilityVersion: request.binding.capabilityVersion,
+			capabilityVersion: binding.capabilityVersion,
 		}) &&
 		binding.executionId === request.binding.executionId
 	);
