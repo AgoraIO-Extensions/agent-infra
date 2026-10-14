@@ -49,6 +49,25 @@ export type ProductionCustomAgentGatewayInputV1 = Omit<
 	"identity" | "authorizeAgent"
 >;
 
+const productionRelayKeyPolicyFields = [
+	"agentDefaultRelayKeyPolicy",
+	"personalRelayKeyValidation",
+] as const;
+
+export type ProductionRelayKeyPolicyFieldV1 =
+	(typeof productionRelayKeyPolicyFields)[number];
+
+/** Inspect the reviewed Relay Key policy exports without retaining values. */
+export function inspectProductionRelayKeyPolicyV1(input: {
+	readonly agentDefaultRelayKeyPolicy?: ProductionPlatformApiInputV1["agentDefaultRelayKeyPolicy"];
+	readonly personalRelayKeyValidation?: ProductionPlatformApiInputV1["personalRelayKeyValidation"];
+}): { readonly missing: readonly ProductionRelayKeyPolicyFieldV1[] } {
+	const missing = productionRelayKeyPolicyFields.filter(
+		(field) => input[field] === undefined || input[field] === null,
+	);
+	return { missing };
+}
+
 export interface ProductionPlatformApiInputV1
 	extends Omit<
 		DeploymentAdmissionInputV1,

@@ -36,6 +36,7 @@ import {
 import { createAgentApiV1 } from "../../web/src/pilot/generated-v2/sdk.gen.js";
 import {
 	createProductionPlatformApiAssemblyInputV1,
+	inspectProductionRelayKeyPolicyV1,
 	mergeProductionPlatformApiDeploymentPortsV1,
 	type ProductionPlatformApiInputV1,
 } from "./deployment.js";
@@ -60,6 +61,35 @@ const connectDatabase = createRequire(
 ) => DatabaseReader;
 
 describe("explicit custom Agent deployment ports", () => {
+	it("inspects missing Relay Key policies without retaining policy values", () => {
+		const agentDefaultRelayKeyPolicy = {
+			templateBindings: [],
+			relayEndpointId: "endpoint-private-sentinel",
+			relayBaseUrl: "https://relay.private.invalid/v1",
+		};
+		const personalRelayKeyValidation = {
+			profile: "sub2api-key-billing-v1" as const,
+			billingUrl: "https://sub2api.la3.agoralab.co/v1/sub2api/billing",
+		};
+		expect(
+			inspectProductionRelayKeyPolicyV1({
+				agentDefaultRelayKeyPolicy,
+			}),
+		).toEqual({ missing: ["personalRelayKeyValidation"] });
+		expect(inspectProductionRelayKeyPolicyV1({})).toEqual({
+			missing: ["agentDefaultRelayKeyPolicy", "personalRelayKeyValidation"],
+		});
+		expect(
+			inspectProductionRelayKeyPolicyV1({
+				personalRelayKeyValidation,
+				agentDefaultRelayKeyPolicy,
+			}),
+		).toEqual({ missing: [] });
+		expect(JSON.stringify(inspectProductionRelayKeyPolicyV1({}))).not.toContain(
+			"https://",
+		);
+	});
+
 	it("merges Gateway, model and native metadata reader exports outside apiInput", () => {
 		const customAgentGateway =
 			{} as ProductionPlatformApiInputV1["customAgentGateway"];
@@ -82,6 +112,21 @@ describe("explicit custom Agent deployment ports", () => {
 			modelSelection,
 			nativeMetadata,
 			nativeMetadataCurrent,
+		});
+	});
+
+	it("preserves Relay Key policy fields supplied through apiInput", () => {
+		const apiInput = {
+			agentDefaultRelayKeyPolicy: { relayEndpointId: "endpoint-a" },
+			personalRelayKeyValidation: {
+				billingUrl: "https://billing.example.test",
+			},
+		} as unknown as ProductionPlatformApiInputV1;
+		expect(
+			mergeProductionPlatformApiDeploymentPortsV1({ apiInput }),
+		).toMatchObject({
+			agentDefaultRelayKeyPolicy: apiInput.agentDefaultRelayKeyPolicy,
+			personalRelayKeyValidation: apiInput.personalRelayKeyValidation,
 		});
 	});
 

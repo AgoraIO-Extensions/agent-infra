@@ -276,6 +276,7 @@ export {
 export {
 	createProductionNativeMetadataReaderV1,
 	createProductionPlatformApiAssemblyInputV1,
+	inspectProductionRelayKeyPolicyV1,
 	type ProductionPlatformApiInputV1,
 } from "./deployment.js";
 export {

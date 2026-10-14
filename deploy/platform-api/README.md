@@ -25,7 +25,7 @@ installation credential。外置 `platform-api` 的文件装配仍由其部署�
 | `organizationIds` | 从 #889 当前目录快照解析完整组织映射的函数；不可用时抛错 |
 | `directorySnapshot` | 可选的通用快照 consumer：`{ endpoint, token, organizationIdForDepartment }`。配置后每次敏感身份解析从 HTTPS 当前快照按 LDAP email 唯一匹配 active 成员，并映射组织 ID；失败不得回退到旧 `organizationIds`。快照 revision/fetchedAt/validUntil 已由 consumer 校验，但现有 LDAP identity wire 尚未携带 sidecar，跨 #481/#508/#440 的不可变版本绑定仍需后续契约接收。 |
 | `publicOrigin` | 与本地 HTTPS Web 相同的精确 Origin |
-| `apiInput` | [`ProductionPlatformApiInputV1`](../../apps/platform-api/src/deployment.ts) 中除 `databaseUrl`、`identity` 外的真实 Registry、模板、ModelCatalog、密钥公钥、准入和展示依赖 |
+| `apiInput` | [`ProductionPlatformApiInputV1`](../../apps/platform-api/src/deployment.ts) 中除 `databaseUrl`、`identity` 外的真实 Registry、模板、ModelCatalog、密钥公钥、准入和展示依赖；其中必须包含与模板 `modelBinding`/Model Catalog 端点一致的 `agentDefaultRelayKeyPolicy` 和 `personalRelayKeyValidation` |
 | `customAgentGateway` | 可选的部署端 Gateway port：提供 `resolveDeployment`、`authorizeAgent`、签名 issuer/key version/private key；不要同时放入 `apiInput.customAgentGateway` |
 | `modelSelection` | 可选的 Runtime ACP model-directory reader；应由部署方用 `createRuntimeModelSelectionReaderV1` 和受认证 transport 组装；不要同时放入 `apiInput.modelSelection` |
 | `providerImport` | 可选的受控 Skill Hub Provider import port：部署方提供已获准 registry、ObjectStorage、source verifier、scanner 和 admission policy；HTTP 只提交 provider/name/version 选择，不能提交 archive bytes、存储路径、trust、policy 或 approval 事实；不要同时放入 `apiInput.providerImport` |
@@ -35,6 +35,12 @@ installation credential。外置 `platform-api` 的文件装配仍由其部署�
 是每个 Agent 的等待任务容量（单位：任务），`waitingTimeoutMs` 是等待期限（单位：毫秒）；
 两者均为正安全整数。平台不提供隐含生产默认值；缺失或无效时启动失败。
 测试 fixture 中的受控数值仅用于测试，不是生产建议值，也不能通过关闭 Task 路由绕过配置。
+
+Relay Key 策略必须作为配置模块 `apiInput` 的 `agentDefaultRelayKeyPolicy` 和
+`personalRelayKeyValidation` 字段提供；两者来源必须与模板 `modelBinding`、Model Catalog 端点和固定 billing transport 一致。
+任一字段缺失时，Platform API 仍可启动，但以稳定的 `PLATFORM_RELAY_KEY_POLICY_MISSING` degraded
+warning 只列出缺失字段名，不输出 Relay Key、endpoint、billing URL 或 credential 内容；依赖缺失策略的
+标准模板申请保持失败关闭。
 
 内置模块从 `PLATFORM_DATABASE_URL` 取数据库 URL，从上述 Secret 文件读取高熵
 代理令牌，并覆盖 `apiInput` 中的

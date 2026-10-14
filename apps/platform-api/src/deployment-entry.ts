@@ -2,7 +2,10 @@ import { readFile } from "node:fs/promises";
 import { createLdapIdentityDirectory } from "@agent-infra/identity";
 import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
 import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
-import { mergeProductionPlatformApiDeploymentPortsV1 } from "./deployment.js";
+import {
+	inspectProductionRelayKeyPolicyV1,
+	mergeProductionPlatformApiDeploymentPortsV1,
+} from "./deployment.js";
 import {
 	createDirectoryOrganizationAuthorityResolverV1,
 	createDirectoryOrganizationIdsResolverV1,
@@ -98,6 +101,16 @@ const callbackForwarder =
 
 export const browserAuth = browser.browserAuth;
 export function createPlatformApiAssemblyInput() {
+	const relayKeyPolicy = inspectProductionRelayKeyPolicyV1(apiInput);
+	if (relayKeyPolicy.missing.length > 0)
+		console.warn(
+			JSON.stringify({
+				service: "platform-api",
+				status: "degraded",
+				code: "PLATFORM_RELAY_KEY_POLICY_MISSING",
+				fields: relayKeyPolicy.missing,
+			}),
+		);
 	const configuredApiInput = mergeProductionPlatformApiDeploymentPortsV1({
 		apiInput,
 		...(customAgentGateway !== undefined ? { customAgentGateway } : {}),
@@ -108,6 +121,7 @@ export function createPlatformApiAssemblyInput() {
 	});
 	return createProductionPlatformApiAssemblyInputV1({
 		...configuredApiInput,
+
 		userGovernance,
 		directory: { identity: browser.identity, search: directorySearch },
 		connectionConsumerProfile,

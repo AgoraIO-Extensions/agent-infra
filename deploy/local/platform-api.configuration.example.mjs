@@ -34,6 +34,13 @@ export const publicOrigin = requiredEnv("PLATFORM_PUBLIC_ORIGIN");
 // Supply reviewed deployment values explicitly; fixture values are not defaults.
 export const apiInput = missing("apiInput");
 
+// apiInput must include the reviewed deployment-owned Relay Key policy fields:
+//   agentDefaultRelayKeyPolicy: exact templateBindings, relayEndpointId and
+//     relayBaseUrl used by the deployment's model policy;
+//   personalRelayKeyValidation: approved billing profile and fixed HTTPS
+//     billing URL, with private CA/TLS transport supplied in-process.
+// Do not put Relay Keys, endpoint credentials or private transport material here.
+
 // Optional explicit production ports. The entrypoint merges these into
 // apiInput and rejects duplicate definitions. Gateway and model-directory
 // implementations remain deployment-owned; do not use fixtures here.

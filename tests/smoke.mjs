@@ -105,6 +105,12 @@ export const organizationIds = async () => ["fixture-org"];
 export const publicOrigin = "https://localhost:3001";
 export const directorySearch = async () => [];
 export const apiInput = {};
+export const agentDefaultRelayKeyPolicy = {
+  templateBindings: [], relayEndpointId: "fixture-endpoint", relayBaseUrl: "https://relay.example.test/v1"
+};
+export const personalRelayKeyValidation = {
+  profile: "sub2api-key-billing-v1", billingUrl: "https://sub2api.la3.agoralab.co/v1/sub2api/billing"
+};
 `,
 		);
 		const moduleUrl = new URL(
