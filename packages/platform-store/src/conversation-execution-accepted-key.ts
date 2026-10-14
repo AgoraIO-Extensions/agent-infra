@@ -1,5 +1,6 @@
 import {
 	type RuntimeBusinessRequestV4,
+	RuntimeNativeCapabilityRequestV4Schema,
 	type RuntimePinnedExecutionKeyScopeV4,
 	RuntimePinnedExecutionKeyScopeV4Schema,
 	type RuntimeSelectionV1,
@@ -30,7 +31,7 @@ export interface AcceptedExecutionKeyProjectionV4 {
 	readonly scope: RuntimePinnedExecutionKeyScopeV4;
 	readonly trustedHostSessionRef: string | null;
 	readonly authorizationRecordId: string;
-	readonly selection: RuntimeSelectionV1;
+	readonly selection?: RuntimeSelectionV1;
 }
 
 /** The original Store transaction owns all reads; the request only locates the operation. */
@@ -39,12 +40,15 @@ export async function readAcceptedExecutionKeyInTransactionV4(
 	value: RuntimeBusinessRequestV4,
 ): Promise<AcceptedExecutionKeyProjectionV4 | null> {
 	const submit = "selection" in value;
+	const native = "capabilityId" in value;
 	const request = submit
 		? RuntimeSubmitTurnRequestV4Schema.parse(value)
-		: RuntimeSupplementRequestV4Schema.parse(value);
+		: native
+			? RuntimeNativeCapabilityRequestV4Schema.parse(value)
+			: RuntimeSupplementRequestV4Schema.parse(value);
 	if (
-		request.operation.kind !== (submit ? "execution" : "message") ||
-		(submit && request.operation.id !== request.executionId)
+		request.operation.kind !== (submit || native ? "execution" : "message") ||
+		((submit || native) && request.operation.id !== request.executionId)
 	)
 		return null;
 	const candidates = await transaction<{ id: string }[]>`
@@ -54,7 +58,9 @@ export async function readAcceptedExecutionKeyInTransactionV4(
 			and (
 				(${submit} and operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
 					and id in ('conversation:turn:' || ${request.executionId}, 'conversation:regenerate:' || ${request.executionId}))
-				or (not ${submit} and operation = 'conversation.turn.supplement.v1'
+			or (${native} and operation = 'conversation.native-capability.invoke.v1'
+				and id = 'conversation:native-capability:' || ${request.executionId})
+			or (not ${submit} and not ${native} and operation = 'conversation.turn.supplement.v1'
 					and id = 'conversation:supplement:' || ${request.operation.id}
 					and payload->>'messageId' = ${request.operation.id})
 			)
@@ -84,7 +90,7 @@ export async function readAcceptedExecutionKeyInTransactionV4(
 		!payload ||
 		!bindingMatches(outbox, payload, conversation, execution) ||
 		payload.metadataRecovery !== undefined ||
-		(!submit && conversation.status !== "active") ||
+		(!submit && !native && conversation.status !== "active") ||
 		!["submitted", "processing", "unknown"].includes(execution.status) ||
 		execution.runtime_submit_protocol !== "v4" ||
 		outbox.status !== "processing" ||
@@ -94,19 +100,21 @@ export async function readAcceptedExecutionKeyInTransactionV4(
 		safeCounter(execution.delivery_fence, 1) !==
 			request.operation.executionDeliveryFence ||
 		payload.turnId !== execution.turn_id ||
-		(!submit && payload.messageId !== request.operation.id)
+		(!submit && !native && payload.messageId !== request.operation.id)
 	)
 		return null;
-	const message = payload.messageId
-		? await readMessage(transaction, conversation.id, payload.messageId)
-		: undefined;
+	const message =
+		!native && payload.messageId
+			? await readMessage(transaction, conversation.id, payload.messageId)
+			: undefined;
 	if (
-		!message ||
-		message.actor_id !== execution.actor_id ||
-		message.role !== "user" ||
-		message.status !== "submitted" ||
-		(outbox.operation !== "conversation.turn.regenerate.v1" &&
-			message.execution_id !== execution.execution_id)
+		!native &&
+		(!message ||
+			message.actor_id !== execution.actor_id ||
+			message.role !== "user" ||
+			message.status !== "submitted" ||
+			(outbox.operation !== "conversation.turn.regenerate.v1" &&
+				message.execution_id !== execution.execution_id))
 	)
 		return null;
 	if (
@@ -168,11 +176,14 @@ export async function readAcceptedExecutionKeyInTransactionV4(
 	} catch {
 		return null;
 	}
-	const selection = RuntimeSelectionV1Schema.parse({
-		schemaVersion: 1,
-		modelOptionId: execution.model_option_id,
-		reasoningLevel: execution.reasoning_level,
-	});
+	const selection =
+		submit || !native
+			? RuntimeSelectionV1Schema.parse({
+					schemaVersion: 1,
+					modelOptionId: execution.model_option_id,
+					reasoningLevel: execution.reasoning_level,
+				})
+			: undefined;
 	const [clock] = await transaction<{ checked_at: Date }[]>`
 		select clock_timestamp() as checked_at
 	`;

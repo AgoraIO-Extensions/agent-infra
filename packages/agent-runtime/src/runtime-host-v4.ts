@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
 import {
 	RuntimeBusinessGrantClaimsV2Schema,
 	type RuntimeBusinessGrantClaimsV4,
 	type RuntimeBusinessRequestV4,
+	type RuntimeNativeCapabilityTransportV4,
+	RuntimeNativeCapabilityTransportV4Schema,
 	RuntimeOperationResponseV4Schema,
 	type RuntimePinnedExecutionKeyScopeV4,
 	RuntimePinnedExecutionKeyScopeV4Schema,
@@ -18,7 +21,12 @@ import {
 	validateRuntimePrivateRelayKeyFieldV1,
 	validateRuntimeRestoreExecutionKeyPrivateFieldV4,
 } from "@agent-infra/contracts/runtime";
-import type { RuntimeDriverExecutionContextV1 } from "./driver.js";
+import type {
+	RuntimeDriver,
+	RuntimeDriverExecutionContextV1,
+	RuntimeOriginalEvidenceBinding,
+} from "./driver.js";
+import { RuntimeHostError } from "./errors.js";
 import {
 	type FileRuntimeStore,
 	requestDigest,
@@ -39,6 +47,7 @@ type AcceptedRecoveryV4 = {
 
 interface Options {
 	readonly store: FileRuntimeStore;
+	readonly driver: RuntimeDriver;
 	readonly assertOpen: () => void;
 	readonly validateGrant: (request: unknown) => Promise<AcceptedV4>;
 	readonly validateRecoveryGrant: (
@@ -61,6 +70,22 @@ interface Options {
 		relayKey: string,
 	) => void;
 	readonly now?: () => number;
+}
+
+function nativeRequired(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_SESSION_UNAVAILABLE",
+		"Runtime session could not be recovered",
+		503,
+	);
+}
+
+function nativeUnsupported(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+		"Native Skill execution is unavailable for this runtime",
+		409,
+	);
 }
 
 function businessAuthority(claims: RuntimeBusinessGrantClaimsV4) {
@@ -100,6 +125,228 @@ export class RuntimeHostV4 {
 
 	async supplement(transport: RuntimeSupplementTransportV4) {
 		return this.execute(RuntimeSupplementTransportV4Schema.parse(transport));
+	}
+
+	async nativeCapability(transport: RuntimeNativeCapabilityTransportV4) {
+		this.options.assertOpen();
+		const parsed = RuntimeNativeCapabilityTransportV4Schema.parse(transport);
+		const request = parsed.businessRequest;
+		const { claims } = await this.options.validateGrant(request);
+		if (
+			claims.purpose !== "business" ||
+			request.operation.kind !== "execution" ||
+			request.operation.id !== request.executionId ||
+			request.operation.deliveryFence !==
+				request.operation.executionDeliveryFence
+		)
+			runtimeAuthorizationDenied();
+		if (
+			createHash("sha256").update(request.parameters).digest("hex") !==
+			request.parametersDigest
+		)
+			runtimeAuthorizationDenied();
+		const pinnedScope = scope(request);
+		const privateField = validateRuntimePrivateRelayKeyFieldV1(
+			parsed.privateKeyField,
+			{
+				request,
+				grantId: claims.grantId,
+				requestDigest: claims.requestDigest,
+			},
+		);
+		const session = this.options.store.getSessionForQuery(
+			request.hostSessionRef,
+			request,
+			request.operation.deliveryFence,
+		);
+		const nativeSessionRef = session.nativeSessionRef ?? nativeRequired();
+		const now = this.options.now ?? Date.now;
+		const expiresAt = Math.min(claims.expiresAt, now() + 30_000);
+		if (!Number.isSafeInteger(expiresAt) || expiresAt <= now())
+			nativeRequired();
+		const controller = new AbortController();
+		const timer = setTimeout(
+			() => controller.abort(),
+			Math.max(0, expiresAt - now()),
+		);
+		timer.unref();
+		const binding: RuntimeOriginalEvidenceBinding = {
+			principal: request.principal,
+			scope: {
+				agentId: request.agentId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				sessionGeneration: request.sessionGeneration,
+			},
+		};
+		const read = {
+			nativeSessionRef,
+			signal: controller.signal,
+			expiresAt,
+			assertCurrent: () => {
+				if (controller.signal.aborted || expiresAt <= now()) nativeRequired();
+				this.options.assertOpen();
+				this.options.store.getSessionForQuery(
+					request.hostSessionRef,
+					request,
+					request.operation.deliveryFence,
+				);
+				return binding;
+			},
+			revalidate: async () => {
+				const current = read.assertCurrent();
+				await this.options.validateGrant(request);
+				return current;
+			},
+		};
+		try {
+			read.assertCurrent();
+			const metadataReader = this.options.driver.readNativeMetadataV1;
+			if (!metadataReader) nativeUnsupported();
+			const projection = await metadataReader.call(
+				this.options.driver,
+				"skills",
+				read,
+			);
+			await read.revalidate();
+			if (
+				projection.selector !== "skills" ||
+				projection.revision !== request.directoryRevision
+			)
+				throw new RuntimeHostError(
+					"RUNTIME_NATIVE_CAPABILITY_STALE",
+					"Native Skill directory is no longer current",
+					409,
+				);
+			const capability = projection.capabilities.find(
+				(entry) => entry.id === request.capabilityId && entry.kind === "skill",
+			);
+			if (
+				capability?.availability !== "discovered" ||
+				capability.source.version !== request.capabilitySourceVersion
+			)
+				throw new RuntimeHostError(
+					"RUNTIME_NATIVE_CAPABILITY_UNAVAILABLE",
+					"Native Skill is unavailable",
+					409,
+				);
+			const capabilityName = capability.name;
+			const response = await this.options.serialize(
+				this.options.store.sessionQueueKey(request),
+				async () => {
+					this.options.assertOpen();
+					await this.options.validateGrant(request);
+					const latest = await metadataReader.call(
+						this.options.driver,
+						"skills",
+						read,
+					);
+					if (
+						latest.selector !== "skills" ||
+						latest.revision !== request.directoryRevision
+					)
+						throw new RuntimeHostError(
+							"RUNTIME_NATIVE_CAPABILITY_STALE",
+							"Native Skill directory is no longer current",
+							409,
+						);
+					const latestCapability = latest.capabilities.find(
+						(entry) =>
+							entry.id === request.capabilityId && entry.kind === "skill",
+					);
+					if (
+						!latestCapability ||
+						latestCapability.name !== capabilityName ||
+						latestCapability.availability !== "discovered" ||
+						latestCapability.source.version !== request.capabilitySourceVersion
+					)
+						throw new RuntimeHostError(
+							"RUNTIME_NATIVE_CAPABILITY_STALE",
+							"Native Skill is no longer current",
+							409,
+						);
+					const create = this.options.driver.createNativeSkillCommand;
+					if (!create) nativeUnsupported();
+					const prepared = await this.options.store.prepareOperation({
+						authorization: businessAuthority(claims),
+						now,
+						requestedHostSessionRef: request.hostSessionRef,
+						binding: request,
+						operationId: request.executionId,
+						kind: "submit-turn",
+						scope: `execution:${request.executionId}`,
+						deliveryFence: request.operation.deliveryFence,
+						requestDigest: requestDigest(
+							runtimeOperationDigestInputV4(request),
+						),
+						keyScopeV4: pinnedScope,
+						command: (sessionRef) =>
+							create({
+								schemaVersion: 1,
+								kind: "native-capability",
+								operationId: request.executionId,
+								agentId: request.agentId,
+								conversationId: request.conversationId,
+								executionId: request.executionId,
+								turnId: request.turnId,
+								sessionGeneration: request.sessionGeneration,
+								nativeSessionRef: sessionRef ?? nativeRequired(),
+								capabilityId: request.capabilityId,
+								directoryRevision: request.directoryRevision,
+								parameters: request.parameters,
+								parametersDigest: request.parametersDigest,
+								capabilityName,
+								capabilitySourceVersion: request.capabilitySourceVersion,
+							}),
+					});
+					this.options.assertOpen();
+					if (prepared.operation.state === "resolved") {
+						const replayed = RuntimeOperationResponseV4Schema.parse({
+							schemaVersion: 4,
+							hostSessionRef: prepared.session.hostSessionRef,
+							operationId: prepared.operation.operationId,
+							result: (
+								await this.options.dispatch(
+									prepared.session.hostSessionRef,
+									prepared.operation,
+									false,
+								)
+							).result,
+						});
+						if (
+							replayed.result.outcome === "accepted" &&
+							replayed.result.status === "running"
+						)
+							this.options.installKey(
+								pinnedScope,
+								prepared.session.hostSessionRef,
+								privateField.keyDelivery.relayKey,
+							);
+						return replayed;
+					}
+					this.options.installKey(
+						pinnedScope,
+						prepared.session.hostSessionRef,
+						privateField.keyDelivery.relayKey,
+					);
+					const dispatched = await this.options.dispatch(
+						prepared.session.hostSessionRef,
+						prepared.operation,
+						true,
+					);
+					return RuntimeOperationResponseV4Schema.parse({
+						schemaVersion: 4,
+						hostSessionRef: prepared.session.hostSessionRef,
+						operationId: prepared.operation.operationId,
+						result: dispatched.result,
+					});
+				},
+			);
+			return response;
+		} finally {
+			clearTimeout(timer);
+			controller.abort();
+		}
 	}
 
 	async restoreExecutionKey(transport: RuntimeRestoreExecutionKeyTransportV4) {
