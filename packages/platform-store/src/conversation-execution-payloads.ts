@@ -1,4 +1,7 @@
-import type { ConversationModelSelectionFallbackWriteV1 } from "@agent-infra/platform-core";
+import {
+	type ConversationModelSelectionFallbackWriteV1,
+	isTraceParentV1,
+} from "@agent-infra/platform-core";
 import {
 	date,
 	exactRecord,
@@ -7,6 +10,13 @@ import {
 	timestamp,
 	unavailable,
 } from "./conversation-execution-common.js";
+
+/** 命令携带的 W3C traceparent（#2412）：缺省合法，出现就必须格式正确。 */
+function optionalTraceParent(value: unknown): { traceParent?: string } {
+	if (value === undefined) return {};
+	if (!isTraceParentV1(value)) return unavailable();
+	return { traceParent: value };
+}
 
 export function parseExecution(value: unknown) {
 	const input = exactRecord(value, [
@@ -72,20 +82,24 @@ export function parseMessage(value: unknown) {
 }
 
 export function parseMessageOutbox(value: unknown) {
-	const input = exactRecord(value, [
-		"operation",
-		"conversationId",
-		"executionId",
-		"messageId",
-		"turnId",
-		"sessionGeneration",
-		"modelConfigurationRevision",
-		"modelOptionId",
-		"reasoningLevel",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
+	const input = exactRecord(
+		value,
+		[
+			"operation",
+			"conversationId",
+			"executionId",
+			"messageId",
+			"turnId",
+			"sessionGeneration",
+			"modelConfigurationRevision",
+			"modelOptionId",
+			"reasoningLevel",
+			"traceId",
+			"requestId",
+			"occurredAt",
+		],
+		["traceParent"],
+	);
 	if (
 		input.operation !== "conversation.turn.submit.v1" &&
 		input.operation !== "conversation.turn.supplement.v1"
@@ -110,6 +124,7 @@ export function parseMessageOutbox(value: unknown) {
 		traceId: text(input.traceId),
 		requestId: text(input.requestId),
 		occurredAt: date(input.occurredAt),
+		...optionalTraceParent(input.traceParent),
 	};
 }
 
@@ -143,20 +158,24 @@ export function parseMessageAudit(value: unknown) {
 }
 
 export function parseRegenerationOutbox(value: unknown) {
-	const input = exactRecord(value, [
-		"operation",
-		"conversationId",
-		"executionId",
-		"messageId",
-		"turnId",
-		"sessionGeneration",
-		"modelConfigurationRevision",
-		"modelOptionId",
-		"reasoningLevel",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
+	const input = exactRecord(
+		value,
+		[
+			"operation",
+			"conversationId",
+			"executionId",
+			"messageId",
+			"turnId",
+			"sessionGeneration",
+			"modelConfigurationRevision",
+			"modelOptionId",
+			"reasoningLevel",
+			"traceId",
+			"requestId",
+			"occurredAt",
+		],
+		["traceParent"],
+	);
 	if (input.operation !== "conversation.turn.regenerate.v1") unavailable();
 	return {
 		operation: "conversation.turn.regenerate.v1" as const,
@@ -176,6 +195,7 @@ export function parseRegenerationOutbox(value: unknown) {
 		traceId: text(input.traceId),
 		requestId: text(input.requestId),
 		occurredAt: date(input.occurredAt),
+		...optionalTraceParent(input.traceParent),
 	};
 }
 
@@ -204,16 +224,20 @@ export function parseRegenerationAudit(value: unknown) {
 }
 
 export function parseStopOutbox(value: unknown) {
-	const input = exactRecord(value, [
-		"operation",
-		"conversationId",
-		"executionId",
-		"sessionGeneration",
-		"stopRequestId",
-		"traceId",
-		"requestId",
-		"occurredAt",
-	]);
+	const input = exactRecord(
+		value,
+		[
+			"operation",
+			"conversationId",
+			"executionId",
+			"sessionGeneration",
+			"stopRequestId",
+			"traceId",
+			"requestId",
+			"occurredAt",
+		],
+		["traceParent"],
+	);
 	if (input.operation !== "conversation.turn.stop.v1") unavailable();
 	return {
 		operation: "conversation.turn.stop.v1" as const,
@@ -224,6 +248,7 @@ export function parseStopOutbox(value: unknown) {
 		traceId: text(input.traceId),
 		requestId: text(input.requestId),
 		occurredAt: date(input.occurredAt),
+		...optionalTraceParent(input.traceParent),
 	};
 }
 

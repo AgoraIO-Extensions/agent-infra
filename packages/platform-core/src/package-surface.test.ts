@@ -152,6 +152,7 @@ describe("platform-core package surface", () => {
 			"isTaskApiChannelV1",
 			"isTaskApplicationAuthorizationCurrentV1",
 			"isTaskAuthorizationCurrentV1",
+			"isTraceParentV1",
 			"markSkillHubInstallationUpgradeV1",
 			"markSkillHubUpgradeV1",
 			"nativeCapabilityAdmissionRequestDigestV1",
