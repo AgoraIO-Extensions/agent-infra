@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	createRuntimeModelSelectionReaderFromDispatchV1,
+	createRuntimeModelSelectionReaderFromStoreV1,
 	createRuntimeModelSelectionReaderV1,
 } from "./runtime-model-selection-reader.js";
 
@@ -51,6 +52,42 @@ const response = {
 };
 
 describe("Runtime model-selection reader", () => {
+	it("binds the default reader through the Store resolver and Worker transport", async () => {
+		const { grant: _grant, ...dispatch } = request;
+		const transport = { read: vi.fn().mockResolvedValue(response) };
+		const query = {
+			readRuntimeModelDirectoryDispatchRequestV1: vi
+				.fn()
+				.mockResolvedValue(dispatch),
+		};
+		const reader = createRuntimeModelSelectionReaderFromStoreV1({
+			query,
+			transport,
+		});
+		await expect(
+			reader.read(identity, request.conversationId),
+		).resolves.toMatchObject({
+			agentId: request.agentId,
+			currentModelOptionId: "model-primary",
+		});
+		expect(
+			query.readRuntimeModelDirectoryDispatchRequestV1,
+		).toHaveBeenCalledWith(
+			expect.objectContaining({
+				conversationId: request.conversationId,
+				scope: {
+					actorId: identity.userId,
+					channelId: "web",
+					principal: { kind: "user", id: identity.userId },
+				},
+			}),
+		);
+		expect(transport.read).toHaveBeenCalledWith(
+			dispatch,
+			expect.any(AbortSignal),
+		);
+	});
+
 	it("projects a Worker dispatch without allowing the API to manufacture a Grant", async () => {
 		const { grant: _grant, ...dispatch } = request;
 		const reader = createRuntimeModelSelectionReaderFromDispatchV1({

@@ -128,6 +128,12 @@ export interface ProductionPlatformApiInputV1
 	readonly directory?: DirectoryRouteDependencies;
 	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
+	/** Deployment-owned API → Worker model-directory service boundary. */
+	readonly modelDirectory?: {
+		readonly baseUrl: string;
+		readonly serviceToken: string;
+		readonly fetch?: typeof fetch;
+	};
 	/** Optional deployment-owned authenticated native metadata reader. */
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
 	/** Optional deployment-owned Worker current-confirmation route. */
@@ -159,6 +165,7 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly apiInput: ProductionPlatformApiInputV1;
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
+	readonly modelDirectory?: ProductionPlatformApiInputV1["modelDirectory"];
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
 	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
 	readonly nativeCapabilityInvocation?: PlatformApiAssemblyInput["nativeCapabilityInvocation"];
@@ -174,6 +181,11 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 		input.apiInput.modelSelection !== undefined
 	)
 		throw new Error("PLATFORM_MODEL_SELECTION_DUPLICATE");
+	if (
+		input.modelDirectory !== undefined &&
+		input.apiInput.modelDirectory !== undefined
+	)
+		throw new Error("PLATFORM_MODEL_DIRECTORY_DUPLICATE");
 	if (
 		input.nativeMetadata !== undefined &&
 		input.apiInput.nativeMetadata !== undefined
@@ -202,6 +214,9 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 		...(input.modelSelection !== undefined
 			? { modelSelection: input.modelSelection }
 			: {}),
+		...(input.modelDirectory !== undefined
+			? { modelDirectory: input.modelDirectory }
+			: {}),
 		...(input.nativeMetadata !== undefined
 			? { nativeMetadata: input.nativeMetadata }
 			: {}),
@@ -220,6 +235,8 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 export function createProductionPlatformApiAssemblyInputV1(
 	input: ProductionPlatformApiInputV1,
 ): PlatformApiAssemblyInput {
+	if (input.modelDirectory !== undefined && input.modelSelection !== undefined)
+		throw new Error("PLATFORM_MODEL_SELECTION_DUPLICATE");
 	let resourceProfile: ProductionPlatformApiInputV1["resourceProfile"];
 	let allowedPrincipals: NonNullable<
 		PlatformApiAssemblyInput["agentApiCreation"]
@@ -449,6 +466,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		conversationEventWindow: input.conversationEventWindow,
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+		...(input.modelDirectory ? { modelDirectory: input.modelDirectory } : {}),
 		...(input.nativeMetadata ? { nativeMetadata: input.nativeMetadata } : {}),
 		...(input.nativeMetadataCurrent
 			? { nativeMetadataCurrent: input.nativeMetadataCurrent }

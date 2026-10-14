@@ -312,6 +312,7 @@ export { createPostgresLdapBrowserDeployment } from "./ldap-browser-deployment.j
 export { createWorkerRuntimeModelDirectoryTransportV1 } from "./runtime-model-directory-transport.js";
 export {
 	createRuntimeModelSelectionReaderFromDispatchV1,
+	createRuntimeModelSelectionReaderFromStoreV1,
 	createRuntimeModelSelectionReaderV1,
 	type RuntimeModelDirectoryDispatchTransportV1,
 	type RuntimeModelDirectoryTransportV1,
