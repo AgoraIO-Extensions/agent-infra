@@ -93,16 +93,71 @@ function safeTerminalReason(value: string | undefined): string | undefined {
 		: "BROWSER_HANDOFF_UNAVAILABLE";
 }
 
+function unknownEventFromRequest(
+	request: RuntimeBrowserHandoffRequestV3,
+	reason: string,
+): ConversationBrowserHandoffEventV1 {
+	const runtime = request.handoff.runtime;
+	const handoffId =
+		"handoffId" in request.handoff
+			? request.handoff.handoffId
+			: request.requestId;
+	const handoffReason =
+		request.handoff.kind === "request"
+			? request.handoff.reason
+			: "human_judgment";
+	// Keep a rejection on the authenticated request scope. Runtime metadata is
+	// retained only as bounded diagnostic context; status=unknown prevents it
+	// from being treated as an actionable handoff binding by consumers.
+	return {
+		type: "browser.handoff",
+		handoffId,
+		status: "unknown",
+		reason: handoffReason,
+		requestedAt: "1970-01-01T00:00:00.000Z",
+		expiresAt: "1970-01-01T00:00:00.000Z",
+		terminalReason: safeTerminalReason(reason) ?? "BROWSER_HANDOFF_UNAVAILABLE",
+		binding: {
+			subjectId: request.principal.id,
+			agentId: request.agentId,
+			conversationId: request.conversationId,
+			executionId: request.executionId,
+			sessionGeneration: request.sessionGeneration,
+			resourceFence: request.operation.deliveryFence,
+			workloadRevision: runtime.workloadRevision,
+			imageDigest: runtime.imageDigest,
+			capabilityVersion: runtime.capabilityVersion,
+			capabilityRevision: runtime.capabilityVersion,
+			pageRevision: runtime.pageRevision,
+		},
+	};
+}
+
 function eventFromResponse(
 	request: RuntimeBrowserHandoffRequestV3,
 	response: RuntimeBrowserHandoffResponseV3,
 ): ConversationBrowserHandoffEventV1 {
-	const binding = bindingFromRequest(request);
+	let binding: ConversationBrowserHandoffBindingV1;
+	try {
+		binding = bindingFromRequest(request);
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			(error.message === "BROWSER_HANDOFF_BINDING_CONFLICT" ||
+				error.message === "BROWSER_HANDOFF_OPERATOR_CONFLICT")
+		) {
+			return unknownEventFromRequest(request, error.message);
+		}
+		throw error;
+	}
 	if (
 		response.hostSessionRef !== request.hostSessionRef ||
 		response.executionId !== request.executionId
 	) {
-		throw new Error("BROWSER_HANDOFF_RESPONSE_BINDING_CONFLICT");
+		return unknownEventFromRequest(
+			request,
+			"BROWSER_HANDOFF_RESPONSE_BINDING_CONFLICT",
+		);
 	}
 	const handoffId =
 		response.record?.handoffId ??
@@ -138,7 +193,10 @@ function eventFromResponse(
 			addressedHandoff !== undefined &&
 			operatorId !== addressedHandoff.operatorId)
 	) {
-		throw new Error("BROWSER_HANDOFF_RESPONSE_BINDING_CONFLICT");
+		return unknownEventFromRequest(
+			request,
+			"BROWSER_HANDOFF_RESPONSE_BINDING_CONFLICT",
+		);
 	}
 	return {
 		type: "browser.handoff",

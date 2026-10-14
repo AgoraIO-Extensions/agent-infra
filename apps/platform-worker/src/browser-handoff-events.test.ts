@@ -192,7 +192,7 @@ describe("Browser handoff event adapter", () => {
 		expect(state.browserHandoff).toHaveBeenCalledWith(request, undefined);
 	});
 
-	it("rejects a foreign binding before persistence", async () => {
+	it("persists a bounded unknown event for a foreign binding", async () => {
 		const state = setup();
 		const foreign = structuredClone(request);
 		foreign.handoff.runtime = {
@@ -201,8 +201,38 @@ describe("Browser handoff event adapter", () => {
 		};
 		await expect(
 			state.adapter.persist({ ...state.input, request: foreign }),
-		).rejects.toThrow("BROWSER_HANDOFF_BINDING_CONFLICT");
-		expect(state.persist).not.toHaveBeenCalled();
+		).resolves.toMatchObject({ status: "unknown", outcome: "accepted" });
+		expect(state.persist).toHaveBeenCalledWith(
+			expect.objectContaining({
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				deliveryFence: request.operation.deliveryFence,
+				event: expect.objectContaining({
+					status: "unknown",
+					terminalReason: "BROWSER_HANDOFF_BINDING_CONFLICT",
+					binding: expect.objectContaining({ agentId: request.agentId }),
+				}),
+			}),
+		);
+	});
+
+	it("persists unknown when the response belongs to another Host execution", async () => {
+		const state = setup({
+			...response("active"),
+			hostSessionRef: "foreign-host-session",
+		});
+		await expect(state.adapter.persist(state.input)).resolves.toMatchObject({
+			status: "unknown",
+			outcome: "accepted",
+		});
+		expect(state.persist).toHaveBeenCalledWith(
+			expect.objectContaining({
+				event: expect.objectContaining({
+					status: "unknown",
+					terminalReason: "BROWSER_HANDOFF_RESPONSE_BINDING_CONFLICT",
+				}),
+			}),
+		);
 	});
 
 	it("fails closed when the Conversation Event lease is stale", async () => {
