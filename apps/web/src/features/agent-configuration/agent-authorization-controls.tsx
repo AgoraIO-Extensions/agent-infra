@@ -7,6 +7,7 @@ import {
 	AgentAuthorizationRequestError,
 	grantApplicationManager,
 	grantApplicationUse,
+	grantUserApiUse,
 	revokeApplicationManager,
 	revokeApplicationUse,
 	revokeUserApiUse,
@@ -60,7 +61,9 @@ export function AgentAuthorizationControls({
 		try {
 			const result =
 				targetKind === "user"
-					? await revokeUserApiUse(agentId, target, revision)
+					? revoke
+						? await revokeUserApiUse(agentId, target, revision)
+						: await grantUserApiUse(agentId, target, revision)
 					: permission === "manage"
 						? revoke
 							? await revokeApplicationManager(agentId, target)
@@ -151,7 +154,7 @@ export function AgentAuthorizationControls({
 			{targetKind === "user" ? (
 				<div className="space-y-2">
 					<Label htmlFor="agent-authorization-expected-revision">
-						撤销所需授权版本
+						授权版本
 					</Label>
 					<Input
 						id="agent-authorization-expected-revision"
@@ -195,13 +198,21 @@ export function AgentAuthorizationControls({
 					</Button>
 				</div>
 			) : (
-				<Button
-					variant="outline"
-					disabled={busy || !target || !validRevision}
-					onClick={() => void run("api-use", true)}
-				>
-					撤销用户 API 使用
-				</Button>
+				<div className="flex flex-wrap gap-3">
+					<Button
+						disabled={busy || !target || !validRevision}
+						onClick={() => void run("api-use", false)}
+					>
+						授权用户 API 使用
+					</Button>
+					<Button
+						variant="outline"
+						disabled={busy || !target || !validRevision}
+						onClick={() => void run("api-use", true)}
+					>
+						撤销用户 API 使用
+					</Button>
+				</div>
 			)}
 			{metadata ? (
 				<dl className="grid gap-2 text-muted-foreground text-xs sm:grid-cols-3">

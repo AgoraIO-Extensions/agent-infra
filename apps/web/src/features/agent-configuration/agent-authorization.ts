@@ -5,16 +5,20 @@ import type {
 import {
 	grantAgentApplicationManagerV1,
 	grantAgentApplicationUseV1,
+	grantAgentUserApiUseV1,
 	revokeAgentApplicationManagerV1,
 	revokeAgentApplicationUseV1,
 	revokeAgentUserApiUseV1,
 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
 	AgentApplicationManagerResponseV1,
+	AgentUserUseGrantRequestV1,
+	AgentUserUseGrantResponseV1,
 	AgentUserUseRevokeRequestV1,
 	AgentUserUseRevokeResponseV1,
 	GrantAgentApplicationManagerV1Responses,
 	GrantAgentApplicationUseV1Responses,
+	GrantAgentUserApiUseV1Responses,
 	RevokeAgentApplicationManagerV1Responses,
 	RevokeAgentApplicationUseV1Responses,
 	RevokeAgentUserApiUseV1Responses,
@@ -148,5 +152,26 @@ export function revokeUserApiUse(
 	}).then(
 		(result: ApplicationRequestResult<RevokeAgentUserApiUseV1Responses>) =>
 			requireData(result),
+	);
+}
+
+export function grantUserApiUse(
+	agentId: string,
+	userId: string,
+	expectedRevision: number,
+	client?: Client,
+): Promise<AgentUserUseGrantResponseV1> {
+	return grantAgentUserApiUseV1<false>({
+		client,
+		body: {
+			expectedRevision,
+			schemaVersion: 1,
+		} satisfies AgentUserUseGrantRequestV1,
+		headers: { "Idempotency-Key": operationKey() },
+		path: { agentId, userId },
+		responseStyle: "fields",
+		throwOnError: false,
+	}).then((result: ApplicationRequestResult<GrantAgentUserApiUseV1Responses>) =>
+		requireData(result),
 	);
 }
