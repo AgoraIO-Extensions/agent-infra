@@ -15,6 +15,7 @@ import type {
 } from "./driver.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
+import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
 import { workspacePathAllowed } from "./workspace-path.js";
 
@@ -39,9 +40,18 @@ export interface OpenCodeRuntimeOptions {
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 	readonly standardConnectionClient?: StandardMcpClientOptions;
+	/** Deployment-owned Applied Skill root; never selected by a wire request. */
+	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly authorizeToolAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
+}
+
+export function resolveOpenCodeSkillHome(
+	directory: string,
+	skillDirectory?: RuntimeFilesystemSkillDirectoryV1,
+) {
+	return skillDirectory?.nativeRoot ?? join(directory, "home");
 }
 
 export function validateOpenCodeRuntimeOptions(
@@ -168,7 +178,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 					args: ["acp", "--cwd", join(directory, "workspace")],
 					env: {
 						PATH: "/usr/bin:/bin",
-						HOME: join(directory, "home"),
+						HOME: resolveOpenCodeSkillHome(directory, options.skillDirectory),
 						XDG_CONFIG_HOME: join(directory, "config"),
 						XDG_DATA_HOME: join(directory, "data"),
 						XDG_CACHE_HOME: join(directory, "cache"),

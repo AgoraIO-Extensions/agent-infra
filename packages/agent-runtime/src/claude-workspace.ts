@@ -25,6 +25,7 @@ export function claudeWorkspaceTools(
 	memory: string,
 	onResultFile?: (output: ClaudeFileWriteOutput) => Promise<void>,
 	onToolOperation?: ClaudeToolOperationCallbacks,
+	readOnlyRoots: readonly string[] = [],
 ): Pick<Options, "tools" | "hooks" | "canUseTool" | "settings"> {
 	const permits = async (name: string, input: unknown) => {
 		if (
@@ -36,7 +37,18 @@ export function claudeWorkspaceTools(
 			input.file_path.includes("\0")
 		)
 			return false;
-		return workspacePathAllowed(workspace, memory, input.file_path);
+		const filePath = input.file_path;
+		if (await workspacePathAllowed(workspace, memory, filePath)) return true;
+		return (
+			name === "Read" &&
+			(
+				await Promise.all(
+					readOnlyRoots.map((root) =>
+						workspacePathAllowed(root, root, filePath),
+					),
+				)
+			).some(Boolean)
+		);
 	};
 	return {
 		tools: ["Read", "Write", "Edit"],
