@@ -9,6 +9,9 @@ import {
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import type { BrowserHandoffTimelineEventV1 } from "../conversation/browser-handoff-timeline.js";
+
+export type { BrowserHandoffTimelineEventV1 } from "../conversation/browser-handoff-timeline.js";
 
 export type BrowserHandoffReasonV1 =
 	| "login"
@@ -72,19 +75,6 @@ export type BrowserSideEffectConfirmationV1 = Readonly<{
 export type BrowserHandoffActionInputV1 = Readonly<{
 	id: string;
 	binding: BrowserHandoffBindingV1;
-}>;
-
-export type BrowserHandoffTimelineEventV1 = Readonly<{
-	type: "browser.handoff";
-	payload: Readonly<{
-		handoffId: string;
-		status: BrowserHandoffPanelStateV1["status"];
-		reason: BrowserHandoffReasonV1;
-		expiresAt: string;
-		operatorId?: string;
-		terminalReason?: string;
-		binding: Omit<BrowserHandoffBindingV1, "capabilityRevision">;
-	}>;
 }>;
 
 const terminalReasonCodes = new Set<
@@ -231,6 +221,7 @@ export function projectBrowserHandoffTimelineEventV1(
 	const value = payload as BrowserHandoffTimelineEventV1["payload"];
 	if (
 		typeof value.handoffId !== "string" ||
+		value.handoffId.length === 0 ||
 		!Object.hasOwn(handoffLabels, value.status) ||
 		!Object.hasOwn(reasonLabels, value.reason) ||
 		typeof value.expiresAt !== "string" ||

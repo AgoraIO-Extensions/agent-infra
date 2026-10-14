@@ -7,6 +7,7 @@ import {
 	useSyncExternalStore,
 } from "react";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
+import { latestBrowserHandoffTimelineEventV1 } from "./browser-handoff-timeline.js";
 import { createConversationTimeline } from "./conversation-timeline.js";
 import {
 	ConversationReadError,
@@ -146,6 +147,7 @@ export function useConversationTimeline({
 
 	return {
 		timeline,
+		browserHandoffEvent: latestBrowserHandoffTimelineEventV1(timeline.events),
 		execution,
 		refresh,
 		reconnect,
