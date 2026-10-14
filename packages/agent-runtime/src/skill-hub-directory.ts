@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { constants, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
-import { SkillWorkloadProjectionV1Schema } from "@agent-infra/contracts";
+import {
+	SkillHubSyncBindingV1Schema,
+	SkillWorkloadProjectionV1Schema,
+} from "@agent-infra/contracts";
 
 const maxSkills = 150;
 const maxMetadataBytes = 30_000;
@@ -195,6 +198,99 @@ export function createRuntimeSkillDirectoryV1(input: {
 			return bytes.slice();
 		},
 	};
+}
+
+/**
+ * Bind Runtime discovery to the same Applied Skill Hub facts that Worker
+ * persisted. Pending or stale bindings never become a Runtime directory.
+ */
+export function createAppliedRuntimeSkillDirectoryV1(input: {
+	readonly agentId: string;
+	readonly agentVersion: string;
+	readonly configurationRevision: number;
+	readonly generationId: string;
+	readonly projections: readonly unknown[];
+	readonly appliedBindings: readonly unknown[];
+	readonly maximumResourceBytes?: number;
+}) {
+	if (
+		!Number.isSafeInteger(input.configurationRevision) ||
+		input.configurationRevision < 1 ||
+		!Array.isArray(input.appliedBindings) ||
+		input.appliedBindings.length > maxSkills ||
+		!Array.isArray(input.projections) ||
+		input.projections.length > maxSkills
+	)
+		unavailable();
+	const bindings = input.appliedBindings.map((value) => {
+		const parsed = SkillHubSyncBindingV1Schema.safeParse(value);
+		if (!parsed.success || parsed.data.state !== "synced") unavailable();
+		const binding = parsed.data;
+		const receipt = binding.appliedReceipt;
+		if (
+			binding.agentId !== input.agentId ||
+			binding.agentVersion !== input.agentVersion ||
+			binding.configurationRevision !== input.configurationRevision ||
+			receipt.generationId !== input.generationId ||
+			receipt.targetPath !== `.agents/skills/${binding.skillName}` ||
+			receipt.skillVersionId !== binding.skillVersion.skillVersionId ||
+			receipt.packageDigest !== binding.skillVersion.packageDigest ||
+			receipt.manifestDigest !== binding.skillVersion.manifestDigest
+		)
+			unavailable();
+		return binding;
+	});
+	const projectionByVersion = new Map<string, unknown>();
+	for (const value of input.projections) {
+		const projection = SkillWorkloadProjectionV1Schema.safeParse(value);
+		if (
+			!projection.success ||
+			projection.data.agentId !== input.agentId ||
+			projection.data.agentVersion !== input.agentVersion ||
+			projection.data.manifest.packageDigest !==
+				projection.data.skillVersion.packageDigest
+		)
+			unavailable();
+		if (projectionByVersion.has(projection.data.skillVersion.skillVersionId))
+			unavailable();
+		projectionByVersion.set(
+			projection.data.skillVersion.skillVersionId,
+			projection.data,
+		);
+	}
+	if (bindings.length !== projectionByVersion.size) unavailable();
+	for (const binding of bindings) {
+		const projection = projectionByVersion.get(
+			binding.skillVersion.skillVersionId,
+		);
+		if (!projection) unavailable();
+		const value = projection as {
+			readonly manifest: {
+				readonly name: string;
+				readonly packageDigest: string;
+			};
+			readonly skillVersion: {
+				readonly packageDigest: string;
+				readonly manifestDigest: string;
+			};
+			readonly grant: unknown;
+		};
+		if (
+			value.manifest.name !== binding.skillName ||
+			value.skillVersion.packageDigest !== binding.skillVersion.packageDigest ||
+			value.skillVersion.manifestDigest !==
+				binding.skillVersion.manifestDigest ||
+			JSON.stringify(value.grant) !== JSON.stringify(binding.grant)
+		)
+			unavailable();
+	}
+	return createRuntimeSkillDirectoryV1({
+		agentId: input.agentId,
+		agentVersion: input.agentVersion,
+		generationId: input.generationId,
+		projections: [...projectionByVersion.values()],
+		maximumResourceBytes: input.maximumResourceBytes,
+	});
 }
 
 async function readMountedSkillFile(input: {
