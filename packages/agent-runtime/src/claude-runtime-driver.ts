@@ -1,5 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, realpath } from "node:fs/promises";
+import {
+	lstat,
+	mkdir,
+	readdir,
+	readFile,
+	realpath,
+	writeFile,
+} from "node:fs/promises";
 import { basename, isAbsolute, join, relative } from "node:path";
 import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import {
@@ -1630,6 +1637,34 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			const skillNames = this.options.skillDirectory
 				?.findSkills()
 				.map((entry) => entry.name);
+			const resolveReadOnlySkillFile = skillRoot
+				? async (filePath: string, signal: AbortSignal) => {
+						if (signal.aborted) return undefined;
+						const relativePath = relative(skillRoot, filePath);
+						if (
+							!relativePath ||
+							relativePath.startsWith("..") ||
+							isAbsolute(relativePath)
+						)
+							return undefined;
+						const [name, ...parts] = relativePath.split("/");
+						const resourcePath = parts.join("/");
+						if (!name || !resourcePath) return undefined;
+						const bytes = await this.options.skillDirectory?.readSkill(
+							name,
+							resourcePath,
+						);
+						if (!bytes || signal.aborted) return undefined;
+						const verifiedRoot = join(directory, "tmp", "verified-skill-reads");
+						await mkdir(verifiedRoot, { recursive: true, mode: 0o700 });
+						const target = join(
+							verifiedRoot,
+							`${randomUUID()}-${basename(resourcePath)}`,
+						);
+						await writeFile(target, bytes, { mode: 0o600 });
+						return target;
+					}
+				: undefined;
 			native = claudeQuery(
 				{
 					pathToClaudeCodeExecutable: this.executable,
@@ -1648,7 +1683,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						workspace,
 						join(directory, "memory"),
 						onResultFile,
-						toolOperations,
+						resolveReadOnlySkillFile
+							? {
+									...toolOperations,
+									resolveReadOnlyFile: resolveReadOnlySkillFile,
+								}
+							: toolOperations,
 						skillRoot ? [skillRoot] : [],
 					),
 					strictMcpConfig: true,

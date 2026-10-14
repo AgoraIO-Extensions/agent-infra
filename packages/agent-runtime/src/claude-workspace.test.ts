@@ -236,3 +236,44 @@ it("allows Read from the deployment-owned Skill root but never Write/Edit", asyn
 		await rm(root, { recursive: true, force: true });
 	}
 });
+
+it("routes Applied Skill reads through a verified ephemeral file", async () => {
+	const root = await realpath(
+		await mkdtemp(join(tmpdir(), "claude-verified-skill-")),
+	);
+	const workspace = join(root, "workspace");
+	const memory = join(root, "memory");
+	const skillRoot = join(root, "skills");
+	const verified = join(root, "verified", "SKILL.md");
+	await mkdir(workspace);
+	await mkdir(memory);
+	await mkdir(join(root, "verified"), { recursive: true });
+	await mkdir(skillRoot);
+	const skillFile = join(skillRoot, "workspace-summary", "SKILL.md");
+	await mkdir(join(skillRoot, "workspace-summary"));
+	await writeFile(skillFile, "tamperable", "utf8");
+	try {
+		const tools = claudeWorkspaceTools(workspace, memory, undefined, {
+			resolveReadOnlyFile: async (filePath) =>
+				filePath === skillFile ? verified : undefined,
+		});
+		const signal = new AbortController().signal;
+		const canUse = await tools.canUseTool?.(
+			"Read",
+			{ file_path: skillFile },
+			{ signal, toolUseID: "read", requestId: "request" },
+		);
+		expect(canUse).toMatchObject({
+			behavior: "allow",
+			updatedInput: { file_path: verified },
+		});
+		const external = await tools.canUseTool?.(
+			"Read",
+			{ file_path: join(skillRoot, "workspace-summary", "external.txt") },
+			{ signal, toolUseID: "external", requestId: "request" },
+		);
+		expect(external).toMatchObject({ behavior: "deny" });
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
