@@ -1664,7 +1664,12 @@ function isMultiServiceResourceProfileOpenApiAddition(previous, current) {
 			changed = true;
 		}
 	}
-	return changed && sameValue(previous, normalized);
+	return (
+		changed &&
+		(sameValue(previous, normalized) ||
+			isAgentLifecycleV2OpenApiAddition(previous, normalized) ||
+			isDeploymentConfigurationV2OpenApiAddition(previous, normalized))
+	);
 }
 
 // #1765 adds the reviewed V4 Worker/File Authority request schema without
