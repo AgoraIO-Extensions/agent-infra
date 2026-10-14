@@ -209,6 +209,7 @@ export function ConversationCapabilityPickerPanel({
 									type="button"
 									disabled={
 										disabled ||
+										confirmed ||
 										confirmConversationCapability(scopedState) === undefined
 									}
 									onClick={() => {
@@ -231,7 +232,7 @@ export function ConversationCapabilityPickerPanel({
 					{confirmed && (
 						<Alert>
 							<AlertDescription>
-								选择已保存在当前草稿中；执行接缝尚未接入，未提交请求。
+								选择已确认，正在通过当前会话接缝提交。
 							</AlertDescription>
 						</Alert>
 					)}

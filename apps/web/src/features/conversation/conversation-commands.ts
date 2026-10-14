@@ -143,6 +143,7 @@ export async function performConversationCommand(
 					capabilityId: payload.result.capabilityId,
 					outcome: payload.outcome,
 				};
+			if (payload?.outcome === "unknown") return { kind: "unknown" };
 			if (typeof payload?.outcome === "string")
 				return { kind: "native-rejected", outcome: payload.outcome };
 			return { kind: "unknown" };
