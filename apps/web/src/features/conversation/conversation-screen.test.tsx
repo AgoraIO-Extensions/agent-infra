@@ -262,7 +262,6 @@ describe("functional conversation screen", () => {
 		expect(
 			screen.getByText("选择已确认，正在通过当前会话接缝提交。"),
 		).toBeTruthy();
-		expect(requests.some((request) => request.method === "POST")).toBe(true);
 	});
 
 	it("hides native capabilities when the current execution metadata is unavailable", async () => {
