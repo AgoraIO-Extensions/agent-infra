@@ -1178,7 +1178,7 @@ export function createConversationRuntimeV2(
 				await latch(prepared, active);
 				denied();
 			}
-			if (request.operation === "native-capability.invoke") {
+			if ((request.operation as string) === "native-capability.invoke") {
 				if (
 					state.runtimeSubmitProtocol === "v4" ||
 					!state.hostSessionRef ||
