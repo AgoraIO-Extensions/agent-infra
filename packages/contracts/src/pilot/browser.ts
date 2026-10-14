@@ -49,6 +49,7 @@ import {
 	PilotInternalErrorV1Schema,
 	PilotProtocolErrorV1Schema,
 } from "./errors.ts";
+import { MultiServiceAgentSourceV1Schema } from "./multi-service.ts";
 import {
 	PersonalApiCredentialIssueRequestV1Schema,
 	PersonalApiCredentialIssueResponseV1Schema,
@@ -169,6 +170,7 @@ export const AgentSourceInputV1Schema = z.union([
 		imageReference: nonEmptyString(),
 		interactionMode: z.literal("platform-adapter"),
 	}),
+	MultiServiceAgentSourceV1Schema,
 ]);
 
 export const ModelOptionInputV1Schema = z.strictObject({
@@ -363,13 +365,21 @@ export const AgentApplicationCreateRequestV2Schema =
 		defaultRelayKey: nonEmptyString().meta({ writeOnly: true }).optional(),
 	});
 
-const [standardSource, selfManagedSource, platformAdapterSource] =
-	AgentSourceInputV1Schema.options;
+const [
+	standardSource,
+	selfManagedSource,
+	platformAdapterSource,
+	multiServiceSource,
+] = AgentSourceInputV1Schema.options;
 const AgentApiCreationCustomRequestV1Schema =
 	AgentApplicationCreateRequestV2Schema.omit({
 		modelConfiguration: true,
 	}).extend({
-		source: z.union([selfManagedSource, platformAdapterSource]),
+		source: z.union([
+			selfManagedSource,
+			platformAdapterSource,
+			multiServiceSource,
+		]),
 	});
 const AgentApiCreationStandardRequestV1Schema =
 	AgentApplicationCreateRequestV2Schema.extend({
