@@ -91,6 +91,8 @@ export type AgentApiLifecycleResponseV1 = {
 
 export type AgentApiStateResponseV1 = {
     agentId: string;
+    failureCode?: 'creation_not_ready' | 'health_check_failed' | 'workload_unavailable' | 'reconciliation_failed';
+    failureReason?: string;
     revision: number;
     schemaVersion: 1;
     serviceAvailability: 'ready' | 'starting' | 'updating' | 'unavailable' | null;

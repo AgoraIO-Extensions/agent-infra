@@ -101,6 +101,23 @@ function validText(input: unknown, maximum = 1024): input is string {
 	);
 }
 
+function agentApiFailureReasonV1(
+	code: AgentManagementStateV1["failureCode"],
+): string | undefined {
+	switch (code) {
+		case "creation_not_ready":
+			return "Agent creation did not reach ready state";
+		case "health_check_failed":
+			return "Agent health check failed";
+		case "workload_unavailable":
+			return "Agent workload is unavailable";
+		case "reconciliation_failed":
+			return "Agent reconciliation failed";
+		default:
+			return undefined;
+	}
+}
+
 function sameValue(left: unknown, right: unknown): boolean {
 	return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -641,6 +658,12 @@ export class PostgresAgentManagementTransactionV1
 					status: state.status,
 					serviceAvailability: state.serviceAvailability,
 					revision: state.revision,
+					...(state.failureCode
+						? {
+								failureCode: state.failureCode,
+								failureReason: agentApiFailureReasonV1(state.failureCode),
+							}
+						: {}),
 				};
 				await transaction.insert(auditEvents).values({
 					id: randomUUID(),

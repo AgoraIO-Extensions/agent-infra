@@ -2954,6 +2954,12 @@ function isAgentApiManagementOpenApiAddition(previous, current) {
 		"PlatformAuditProjectionV2",
 	];
 	const normalized = structuredClone(current);
+	// Keep the original #481 addition pinned while allowing the later #2389
+	// additive failure details to be reviewed by its own guard.
+	delete normalized.components.schemas.AgentApiStateResponseV1?.properties
+		.failureCode;
+	delete normalized.components.schemas.AgentApiStateResponseV1?.properties
+		.failureReason;
 	const oldActions =
 		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
 	const newActions =
@@ -2979,10 +2985,10 @@ function isAgentApiManagementOpenApiAddition(previous, current) {
 	) {
 		const addition = {
 			paths: Object.fromEntries(
-				paths.map((path) => [path, current.paths[path]]),
+				paths.map((path) => [path, normalized.paths[path]]),
 			),
 			schemas: Object.fromEntries(
-				names.map((name) => [name, current.components?.schemas?.[name]]),
+				names.map((name) => [name, normalized.components?.schemas?.[name]]),
 			),
 		};
 		if (
@@ -3005,6 +3011,45 @@ function isAgentApiManagementOpenApiAddition(previous, current) {
 		changed = true;
 	}
 	return changed && sameValue(previous, normalized);
+}
+
+// #2389 adds bounded, sanitized failure details to the existing Agent state read.
+function isAgentApiStateFailureReasonOpenApiAddition(previous, current) {
+	const name = "AgentApiStateResponseV1";
+	const before = previous.components?.schemas?.[name];
+	const after = current.components?.schemas?.[name];
+	if (!before || !after) return false;
+	if (
+		before.properties?.failureCode !== undefined ||
+		before.properties?.failureReason !== undefined ||
+		after.required?.includes("failureCode") ||
+		after.required?.includes("failureReason")
+	)
+		return false;
+	const failureCode = after.properties?.failureCode;
+	const failureReason = after.properties?.failureReason;
+	if (
+		!isDeepStrictEqual(failureCode, {
+			enum: [
+				"creation_not_ready",
+				"health_check_failed",
+				"workload_unavailable",
+				"reconciliation_failed",
+			],
+			type: "string",
+		}) ||
+		!isDeepStrictEqual(failureReason, {
+			maxLength: 128,
+			minLength: 1,
+			pattern: "^[A-Za-z0-9 .,:'-]+$",
+			type: "string",
+		})
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas[name].properties.failureCode;
+	delete normalized.components.schemas[name].properties.failureReason;
+	return sameValue(previous, normalized);
 }
 
 // #1259 adds only optional readiness metadata and the displayed selection revision.
@@ -3756,6 +3801,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isAgentUserUseRevokeOpenApiAddition(previous, current) &&
 			!isAgentUserUseGrantOpenApiAddition(previous, current) &&
 			!isAgentApiManagementOpenApiAddition(previous, current) &&
+			!isAgentApiStateFailureReasonOpenApiAddition(previous, current) &&
 			!isAgentApiCreationOpenApiAddition(previous, current) &&
 			!isConnectionCapabilityOpenApiAddition(previous, current) &&
 			!isKnownCredentialAuditSubjectAddition(previous, current) &&
