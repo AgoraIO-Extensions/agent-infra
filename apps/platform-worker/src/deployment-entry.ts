@@ -14,6 +14,10 @@ import {
 	type DeploymentSkillMaterializerFactoryV1,
 	resolveDeploymentSkillMaterializerV1,
 } from "./skill-materializer-assembly.js";
+import {
+	createDeploymentSkillHubMaterializerFactoryV1,
+	type DeploymentSkillMaterializationConfigurationV1,
+} from "./skill-materializer-production-assembly.js";
 import { createWecomDeploymentCoordinatorV1 } from "./wecom-deployment.js";
 import {
 	createProductionWorkloadWorkerOptionsV1,
@@ -50,6 +54,8 @@ type DeploymentConfiguration = {
 	};
 	/** Deployment-owned object-storage/Store assembly for the existing Worker seam. */
 	readonly createSkillMaterializer?: DeploymentSkillMaterializerFactoryV1;
+	/** Optional production Store/object-storage Skill materialization assembly. */
+	readonly skillMaterialization?: DeploymentSkillMaterializationConfigurationV1;
 	readonly nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayPortsV1;
 };
 
@@ -96,6 +102,7 @@ const {
 	connectionInstallationSupply,
 	connectionInstallation: configuredConnectionInstallation,
 	createSkillMaterializer,
+	skillMaterialization,
 	nativeMetadataGateway,
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
@@ -156,7 +163,9 @@ async function createPrepared(signal: AbortSignal) {
 		databaseUrl,
 		signal,
 		configured: workloadInput.skillMaterializer,
-		factory: createSkillMaterializer,
+		factory:
+			createSkillMaterializer ??
+			createDeploymentSkillHubMaterializerFactoryV1(skillMaterialization),
 	});
 	const productionWorkload = await createProductionWorkloadWorkerOptionsV1(
 		{

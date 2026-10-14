@@ -11,6 +11,10 @@ import type {
 } from "./skill-materialization.js";
 import { createObjectStorageWorkloadSkillMaterializerV1 } from "./skill-materialization.js";
 import type { DeploymentSkillMaterializerFactoryV1 } from "./skill-materializer-assembly.js";
+import {
+	createSkillHubStoreMaterializationAdapterV1,
+	type SkillHubStoreMaterializationAdapterOptionsV1,
+} from "./skill-materializer-store-adapter.js";
 
 type Materializer = Pick<
 	SkillPackageMaterializerV1,
@@ -31,6 +35,20 @@ export interface DeploymentSkillMaterializerAssemblyV1 {
 		input: SkillPackageMaterializationInputV1,
 	) => Promise<void>;
 }
+
+/**
+ * Complete production input for the Store-backed Worker materializer. Store,
+ * actor and package-object facts stay deployment-owned; workload callers only
+ * provide the bounded revision and fence consumed by the adapter.
+ */
+export type DeploymentSkillMaterializationConfigurationV1 = Omit<
+	DeploymentSkillMaterializerAssemblyV1,
+	"resolveBindings" | "recordAppliedReceipt"
+> &
+	Omit<SkillHubStoreMaterializationAdapterOptionsV1, "agentVersion"> & {
+		/** Agent Version is a fixed deployment fact, never derived from Workload input. */
+		readonly agentVersion: string;
+	};
 
 async function readObject(
 	storage: ObjectStorageDataV1,
@@ -109,4 +127,34 @@ export function createDeploymentSkillMaterializerFactoryV1(
 			writeAppliedReceipt: assembly.recordAppliedReceipt,
 		});
 	};
+}
+
+/**
+ * Compose the Store adapter with the existing physical object-storage path.
+ * Invalid or incomplete optional deployment input leaves Skill materialization
+ * unavailable so ordinary Workload startup can continue.
+ */
+export function createDeploymentSkillHubMaterializerFactoryV1(
+	configuration: DeploymentSkillMaterializationConfigurationV1 | undefined,
+): DeploymentSkillMaterializerFactoryV1 | undefined {
+	if (!configuration || typeof configuration.agentVersion !== "string")
+		return undefined;
+	try {
+		const adapter = createSkillHubStoreMaterializationAdapterV1({
+			store: configuration.store,
+			agentVersion: configuration.agentVersion,
+			actor: configuration.actor,
+			resolvePackageObject: configuration.resolvePackageObject,
+		});
+		return createDeploymentSkillMaterializerFactoryV1({
+			storage: configuration.storage,
+			assemblyRoot: configuration.assemblyRoot,
+			runtimeUid: configuration.runtimeUid,
+			resolveBindings: adapter.resolveBindings,
+			recordAppliedReceipt: adapter.recordAppliedReceipt,
+			verifyAdmission: configuration.verifyAdmission,
+		});
+	} catch {
+		return undefined;
+	}
 }

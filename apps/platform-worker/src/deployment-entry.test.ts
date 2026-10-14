@@ -43,6 +43,39 @@ beforeAll(async () => {
 			target: "node24",
 		},
 	);
+	const materialization = await transform(
+		await readFile(
+			new URL("./skill-materialization.ts", import.meta.url),
+			"utf8",
+		),
+		{
+			loader: "ts",
+			format: "esm",
+			target: "node24",
+		},
+	);
+	const materializerProductionAssembly = await transform(
+		await readFile(
+			new URL("./skill-materializer-production-assembly.ts", import.meta.url),
+			"utf8",
+		),
+		{
+			loader: "ts",
+			format: "esm",
+			target: "node24",
+		},
+	);
+	const materializerStoreAdapter = await transform(
+		await readFile(
+			new URL("./skill-materializer-store-adapter.ts", import.meta.url),
+			"utf8",
+		),
+		{
+			loader: "ts",
+			format: "esm",
+			target: "node24",
+		},
+	);
 	const nativeMetadataAssembly = await transform(
 		await readFile(
 			new URL("./native-metadata-deployment-assembly.ts", import.meta.url),
@@ -81,6 +114,18 @@ beforeAll(async () => {
 	await writeFile(
 		join(directory, "skill-materializer-assembly.js"),
 		materializerAssembly.code,
+	);
+	await writeFile(
+		join(directory, "skill-materialization.js"),
+		materialization.code,
+	);
+	await writeFile(
+		join(directory, "skill-materializer-production-assembly.js"),
+		materializerProductionAssembly.code,
+	);
+	await writeFile(
+		join(directory, "skill-materializer-store-adapter.js"),
+		materializerStoreAdapter.code,
 	);
 	await writeFile(
 		join(directory, "native-metadata-deployment-assembly.js"),
@@ -157,6 +202,10 @@ try {
  const signal = new AbortController().signal;
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
 	const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
+	if (process.env.RUN_SKILL_CHECK === "true") {
+	 console.log(JSON.stringify({ skillMaterializer: typeof workload.skillMaterializer?.materialize }));
+	 process.exit(0);
+	}
  if (process.env.RUN_CLOSE_INSTALLATION === "true") await conversation.closeDeployment?.();
 	if (process.env.RUN_INVALID_PROFILE === 'true') {
 	 const control = await conversation.resolveRuntimeHost({ purpose: 'control' });
@@ -207,6 +256,56 @@ it("uses the selected deployment database for all Worker consumers and prepares 
 		},
 		installationConfigured: false,
 	});
+});
+
+it("assembles the optional Store-backed Skill materializer in deployment entry", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	await writeFile(
+		path,
+		`${original}
+export const skillMaterialization = {
+  storage: { download: async () => new ReadableStream() },
+  assemblyRoot: "/var/lib/agent-infra/skills",
+  runtimeUid: 65534,
+  store: {
+    resolveSyncBindings: async () => [],
+    recordAppliedReceipt: async (receipt) => receipt,
+  },
+  agentVersion: "agent-version-1",
+  actor: { actorId: "deployment-actor", organizationIds: [], isAdministrator: false },
+  resolvePackageObject: async () => undefined,
+  verifyAdmission: async () => {},
+};
+`,
+	);
+	try {
+		const result = run({ RUN_SKILL_CHECK: "true" });
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			skillMaterializer: "function",
+		});
+	} finally {
+		await writeFile(path, original);
+	}
+});
+
+it("keeps ordinary Workload startup when optional Skill input is incomplete", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	await writeFile(
+		path,
+		`${original}\nexport const skillMaterialization = { storage: {} };\n`,
+	);
+	try {
+		const result = run({ RUN_SKILL_CHECK: "true" });
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			skillMaterializer: "undefined",
+		});
+	} finally {
+		await writeFile(path, original);
+	}
 });
 
 it("passes the deployment-owned nonsecret installation producer to the Conversation Worker", async () => {
