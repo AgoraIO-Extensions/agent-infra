@@ -152,6 +152,7 @@ export function ApplicationMaterialGovernance() {
 					<Input
 						id="material-application-id"
 						value={applicationId}
+						disabled={busy}
 						onChange={(event) => setApplicationId(event.target.value)}
 					/>
 				</div>
@@ -160,6 +161,7 @@ export function ApplicationMaterialGovernance() {
 					<NativeSelect
 						id="material-principal-type"
 						value={principalType}
+						disabled={busy}
 						onChange={(event) =>
 							setPrincipalType(event.target.value as "user" | "application")
 						}
@@ -173,6 +175,7 @@ export function ApplicationMaterialGovernance() {
 					<Input
 						id="material-principal-id"
 						value={principalId}
+						disabled={busy}
 						onChange={(event) => setPrincipalId(event.target.value)}
 					/>
 				</div>
@@ -192,7 +195,12 @@ export function ApplicationMaterialGovernance() {
 			</p>
 			<div className="flex flex-wrap gap-3">
 				<Button
-					disabled={busy || !applicationId.trim() || !principalId.trim()}
+					disabled={
+						busy ||
+						status === "loading" ||
+						!applicationId.trim() ||
+						!principalId.trim()
+					}
 					onClick={() => void grant()}
 				>
 					授权材料

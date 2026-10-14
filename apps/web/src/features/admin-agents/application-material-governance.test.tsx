@@ -88,4 +88,30 @@ describe("ApplicationMaterialGovernance", () => {
 				.hasAttribute("disabled"),
 		).toBe(true);
 	});
+
+	it("blocks grant and target changes while metadata or mutation is pending", async () => {
+		let resolveRead: (value: unknown) => void = () => undefined;
+		read.mockReturnValue(new Promise((resolve) => (resolveRead = resolve)));
+		render(<ApplicationMaterialGovernance />);
+		fill();
+		expect(
+			screen.getByRole("button", { name: "授权材料" }).hasAttribute("disabled"),
+		).toBe(true);
+		resolveRead({ response: { status: 200 }, data: { metadata } });
+		await screen.findByText("当前授权：有效");
+		let resolveGrant: (value: unknown) => void = () => undefined;
+		grant.mockReturnValue(new Promise((resolve) => (resolveGrant = resolve)));
+		fireEvent.click(screen.getByRole("button", { name: "授权材料" }));
+		await waitFor(() => expect(grant).toHaveBeenCalledOnce());
+		expect(screen.getByLabelText("应用 ID").hasAttribute("disabled")).toBe(
+			true,
+		);
+		expect(screen.getByLabelText("接收主体 ID").hasAttribute("disabled")).toBe(
+			true,
+		);
+		resolveGrant({
+			response: { status: 201 },
+			data: { metadata, replayed: false },
+		});
+	});
 });
