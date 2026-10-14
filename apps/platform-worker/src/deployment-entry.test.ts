@@ -87,6 +87,17 @@ beforeAll(async () => {
 			target: "node24",
 		},
 	);
+	const nativeMetadataProof = await transform(
+		await readFile(
+			new URL("./runtime-native-metadata-proof.ts", import.meta.url),
+			"utf8",
+		),
+		{
+			loader: "ts",
+			format: "esm",
+			target: "node24",
+		},
+	);
 	const nativeMetadataGateway = await transform(
 		await readFile(
 			new URL("./runtime-native-metadata-gateway.ts", import.meta.url),
@@ -163,6 +174,10 @@ beforeAll(async () => {
 	await writeFile(
 		join(directory, "native-metadata-deployment-assembly.js"),
 		nativeMetadataAssembly.code,
+	);
+	await writeFile(
+		join(directory, "runtime-native-metadata-proof.js"),
+		nativeMetadataProof.code,
 	);
 	await writeFile(
 		join(directory, "runtime-native-metadata-gateway.js"),
