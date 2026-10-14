@@ -289,21 +289,48 @@ function validMultiServiceTopology(
 	const deployments = manifest.resources.filter(
 		(resource) => resource.kind === "Deployment",
 	);
+	const statefulSets = manifest.resources.filter(
+		(resource) => resource.kind === "StatefulSet",
+	);
 	const services = manifest.resources.filter(
 		(resource) => resource.kind === "Service",
 	);
+	const pvcs = manifest.resources.filter(
+		(resource) => resource.kind === "PersistentVolumeClaim",
+	);
+	const workloads = [...deployments, ...statefulSets];
+	const statefulExtension =
+		statefulSets.length === 1 &&
+		pvcs.length === 1 &&
+		deployments.length === 1 &&
+		statefulSets.every(
+			(resource) =>
+				resource.spec.template.spec.restartPolicy === undefined ||
+				resource.spec.template.spec.restartPolicy === "Always",
+		) &&
+		statefulSets.every((resource) =>
+			services.some(
+				(service) => service.metadata.name === resource.spec.serviceName,
+			),
+		);
+	const tracerTopology =
+		deployments.length === 2 && statefulSets.length === 0 && pvcs.length === 0;
 	if (
-		manifest.resources.length !== 4 ||
-		deployments.length !== 2 ||
+		(!tracerTopology && !statefulExtension) ||
+		manifest.resources.length !== (statefulExtension ? 5 : 4) ||
+		workloads.length !== 2 ||
 		services.length !== 2 ||
 		manifest.resources.some(
 			(resource) =>
-				resource.kind !== "Deployment" && resource.kind !== "Service",
+				resource.kind !== "Deployment" &&
+				resource.kind !== "StatefulSet" &&
+				resource.kind !== "Service" &&
+				resource.kind !== "PersistentVolumeClaim",
 		)
 	)
 		return false;
 	return services.every((service) => {
-		const target = deployments.find((deployment) =>
+		const target = workloads.find((deployment) =>
 			Object.entries(service.spec.selector).every(
 				([key, expected]) =>
 					deployment.spec.template.metadata.labels[key] === expected,
@@ -592,13 +619,14 @@ export function createDeploymentAdmissionsV1(
 						!validMultiServiceTopology(multiServiceManifest)
 					)
 						return denied;
-					const deployments = multiServiceManifest.resources.filter(
-						(resource) => resource.kind === "Deployment",
+					const workloads = multiServiceManifest.resources.filter(
+						(resource) =>
+							resource.kind === "Deployment" || resource.kind === "StatefulSet",
 					);
 					const services = multiServiceManifest.resources.filter(
 						(resource) => resource.kind === "Service",
 					);
-					if (deployments.length !== 2 || services.length !== 2) return denied;
+					if (workloads.length !== 2 || services.length !== 2) return denied;
 					const digests = multiServiceImageDigests(multiServiceManifest);
 					if (digests.length < 1) return denied;
 					const admittedImages = await Promise.all(

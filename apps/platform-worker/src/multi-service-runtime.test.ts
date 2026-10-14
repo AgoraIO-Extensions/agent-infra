@@ -75,7 +75,42 @@ const manifest = MultiServiceManifestDocumentV1Schema.parse({
 	],
 });
 
-function desired() {
+const statefulManifest = MultiServiceManifestDocumentV1Schema.parse({
+	schemaVersion: 1,
+	entryServiceName: "web",
+	resources: [
+		manifest.resources[0],
+		{
+			apiVersion: "apps/v1",
+			kind: "StatefulSet",
+			metadata: { name: "worker" },
+			spec: {
+				replicas: 1,
+				serviceName: "worker",
+				selector: { matchLabels: { app: "worker" } },
+				template: {
+					metadata: { labels: { app: "worker" } },
+					spec: {
+						containers: [{ name: "worker", image: `sha256:${"b".repeat(64)}` }],
+					},
+				},
+			},
+		},
+		manifest.resources[2],
+		manifest.resources[3],
+		{
+			apiVersion: "v1",
+			kind: "PersistentVolumeClaim",
+			metadata: { name: "worker-data" },
+			spec: {
+				accessModes: ["ReadWriteOnce"],
+				resources: { requests: { storage: "100Gi" } },
+			},
+		},
+	],
+});
+
+function desired(multiService = manifest) {
 	return validateAgentWorkloadDesiredV1({
 		schemaVersion: 1,
 		requestId: "request-a",
@@ -152,7 +187,7 @@ function desired() {
 		secretRefs: [],
 		desiredState: "running",
 		replicas: 1,
-		multiService: manifest,
+		multiService,
 	});
 }
 
@@ -196,6 +231,8 @@ describe("multi-service runtime operations", () => {
 			client: fake.client,
 			policy: {
 				namespace: "agents",
+				imageRepository: "registry.example.test/agents",
+				storageSize: "1Gi",
 				routeHostSuffix: "example.test",
 				ingressClassName: "nginx",
 				tlsSecretName: "tls",
@@ -225,5 +262,118 @@ describe("multi-service runtime operations", () => {
 		expect(
 			fake.resources.has(`Ingress/${workloadResourceNameV1("agent-a")}`),
 		).toBe(true);
+	});
+
+	it("reconciles a StatefulSet with a policy-owned PVC and retains it on stop", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				namespace: "agents",
+				imageRepository: "registry.example.test/agents",
+				storageSize: "1Gi",
+				storageClassName: "platform",
+				routeHostSuffix: "example.test",
+				ingressClassName: "nginx",
+				tlsSecretName: "tls",
+				routeSelector: { "app.kubernetes.io/name": "ingress" },
+			},
+		});
+		const value = desired(statefulManifest);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+
+		await operations.apply(value);
+		const statefulSet = fake.resources.get(
+			`StatefulSet/${workloadResourceNameV1("agent-a")}-worker`,
+		) as {
+			spec?: {
+				template?: {
+					spec?: {
+						containers?: Array<{ image?: string; volumeMounts?: unknown[] }>;
+					};
+				};
+			};
+		};
+		const pvc = fake.resources.get(
+			`PersistentVolumeClaim/${workloadResourceNameV1("agent-a")}-worker-data`,
+		) as {
+			spec?: {
+				resources?: { requests?: { storage?: string } };
+				storageClassName?: string;
+			};
+		};
+		expect(pvc.spec?.resources?.requests?.storage).toBe("1Gi");
+		expect(pvc.spec?.storageClassName).toBe("platform");
+		const pvcUid = (
+			fake.resources.get(
+				`PersistentVolumeClaim/${workloadResourceNameV1("agent-a")}-worker-data`,
+			) as { metadata?: { uid?: string } }
+		).metadata?.uid;
+		expect(statefulSet.spec?.template?.spec?.containers?.[0]?.image).toBe(
+			`registry.example.test/agents@sha256:${"b".repeat(64)}`,
+		);
+		expect(
+			statefulSet.spec?.template?.spec?.containers?.[0]?.volumeMounts,
+		).toEqual([{ name: "data", mountPath: "/data" }]);
+
+		expect(await operations.scaleDown(value)).toBe("pending");
+		expect(
+			(
+				fake.resources.get(
+					`StatefulSet/${workloadResourceNameV1("agent-a")}-worker`,
+				) as { spec?: { replicas?: number } }
+			).spec?.replicas,
+		).toBe(0);
+		expect(await operations.cleanupAgent(value)).toBe(true);
+		expect(
+			fake.resources.has(
+				`PersistentVolumeClaim/${workloadResourceNameV1("agent-a")}-worker-data`,
+			),
+		).toBe(true);
+		await operations.apply(value);
+		expect(
+			(
+				fake.resources.get(
+					`PersistentVolumeClaim/${workloadResourceNameV1("agent-a")}-worker-data`,
+				) as { metadata?: { uid?: string } }
+			).metadata?.uid,
+		).toBe(pvcUid);
+		expect(await operations.cleanupAgent(value, true)).toBe(true);
+		expect(
+			fake.resources.has(
+				`PersistentVolumeClaim/${workloadResourceNameV1("agent-a")}-worker-data`,
+			),
+		).toBe(false);
+	});
+
+	it("rejects an owned PVC that drifts from the platform storage tier", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				namespace: "agents",
+				imageRepository: "registry.example.test/agents",
+				storageSize: "1Gi",
+				storageClassName: "platform",
+				routeHostSuffix: "example.test",
+				ingressClassName: "nginx",
+				tlsSecretName: "tls",
+				routeSelector: { "app.kubernetes.io/name": "ingress" },
+			},
+		});
+		const value = desired(statefulManifest);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(value);
+		const pvcName = `PersistentVolumeClaim/${workloadResourceNameV1("agent-a")}-worker-data`;
+		const pvc = fake.resources.get(pvcName);
+		if (!pvc) throw new Error("PVC fixture missing");
+		(
+			pvc as { spec: { resources: { requests: { storage: string } } } }
+		).spec.resources.requests.storage = "100Gi";
+		await expect(operations.apply(value)).rejects.toThrow(
+			"multi-service PVC drifted",
+		);
 	});
 });
