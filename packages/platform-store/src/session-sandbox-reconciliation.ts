@@ -622,30 +622,41 @@ export async function recordSandboxObservation(
 		};
 	}
 	// 证据不变的重复观测不再每秒重试，也不再逐次写审计；条目仍保留到真正收敛（Spec §10.1.1）。
-	// 停滞状态取自上一次“有变化”的审计行（指纹和距今多久），而不是写进 outbox payload：
-	// 旧版本 Worker 对 payload 做严格比较，多出的键会让回滚后的 Worker 认领不了这些条目。
+	// 停滞状态取自上一次“有变化”的审计行（指纹和当时的首次尝试次数），而不是写进 outbox
+	// payload：旧版本 Worker 对 payload 做严格比较，多出的键会让回滚后的 Worker 认领不了
+	// 这些条目。审计查询同时按 Sandbox 身份和 session generation 限定，替换后的 Sandbox
+	// 不会继承上一代的指纹或退避。
 	const terminal = decision.finished && !continuePreparation;
 	const progress = sessionSandboxReconcileProgressV1({
+		sandboxId: context.sandbox.sandboxId,
+		sessionGeneration: context.sandbox.generation,
+		resourceFence: claim.resourceFence,
 		status: decision.status,
 		finished: decision.finished,
 		observation: decision.observation,
 		deletionProgress: (nextLifecycle ?? context.lifecycle)?.deletionProgress,
 		hasStopReceipt: Boolean((nextLifecycle ?? context.lifecycle)?.stopReceipt),
+		// 用户消息重新打开空闲回收后，恢复请求本身必须让退避立即重新计时。
+		resumeRequested: Boolean(
+			(nextLifecycle ?? context.lifecycle)?.resumeRequested,
+		),
 	});
 	const [lastChange] = await transaction<
-		{ progress: string | null; stable_ms: string }[]
-	>`select details->>'progress' as progress,
-			floor(extract(epoch from (clock_timestamp() - occurred_at)) * 1000)::text as stable_ms
+		{ progress: string | null; attempt: string | null }[]
+	>`select details->>'progress' as progress, details->>'progressAttempt' as attempt
 		from platform.conversation_audit_events
 		where conversation_id = ${context.sandbox.sessionId}
 			and action = 'conversation.sandbox.observed'
+			and details->>'sandboxId' = ${context.sandbox.sandboxId}
+			and details->>'sessionGeneration' = ${String(context.sandbox.generation)}
 		order by occurred_at desc, id desc limit 1`;
 	const retry = decideSessionSandboxRetryV1({
 		previous: lastChange && {
 			progress: lastChange.progress,
-			stableForMs: Number(lastChange.stable_ms),
+			attempt: lastChange.attempt === null ? null : Number(lastChange.attempt),
 		},
 		progress,
+		attemptCount: Number(context.outbox.attempt_count),
 		status: decision.status,
 	});
 	const recorded = await transaction`update platform.outbox_items
@@ -665,6 +676,6 @@ export async function recordSandboxObservation(
 		(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)
 		values (${randomUUID()}, ${context.sandbox.sessionId}, null, ${context.sandbox.agentId}, ${context.sandbox.principal.id},
 			'conversation.sandbox.observed', ${context.outbox.trace_id}, ${context.outbox.request_id}, clock_timestamp(),
-			${transaction.json({ sandboxId: context.sandbox.sandboxId, sessionGeneration: context.sandbox.generation, resourceFence: claim.resourceFence, status: decision.status, progress })})`;
+			${transaction.json({ sandboxId: context.sandbox.sandboxId, sessionGeneration: context.sandbox.generation, resourceFence: claim.resourceFence, status: decision.status, progress, progressAttempt: Number(context.outbox.attempt_count) })})`;
 	return unknown ? "unknown" : "committed";
 }
