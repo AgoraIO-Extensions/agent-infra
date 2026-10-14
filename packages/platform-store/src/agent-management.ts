@@ -111,7 +111,7 @@ function isAgentApiFailureStateV1(state: AgentManagementStateV1): boolean {
 
 function agentApiFailureReasonV1(
 	code: AgentManagementStateV1["failureCode"],
-): string | undefined {
+): string {
 	switch (code) {
 		case "creation_not_ready":
 			return "Agent image admission or creation readiness failed";
@@ -122,7 +122,9 @@ function agentApiFailureReasonV1(
 		case "reconciliation_failed":
 			return "Agent workload reconciliation failed";
 		default:
-			return undefined;
+			// A non-null value outside the closed Store enum is a corrupt or
+			// future record. Never emit a partial public response.
+			throw new AgentManagementError("unavailable");
 	}
 }
 
