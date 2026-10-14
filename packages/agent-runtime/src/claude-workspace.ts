@@ -38,6 +38,7 @@ export function claudeWorkspaceTools(
 		if (typeof toolUseId !== "string") return;
 		const filePath = cleanupReadOnlyPaths.get(toolUseId);
 		cleanupReadOnlyPaths.delete(toolUseId);
+		if (filePath) approvedReadOnlyPaths.delete(filePath);
 		for (const [approvedPath, approvedToolUseId] of approvedReadOnlyPaths) {
 			if (approvedToolUseId === toolUseId)
 				approvedReadOnlyPaths.delete(approvedPath);
