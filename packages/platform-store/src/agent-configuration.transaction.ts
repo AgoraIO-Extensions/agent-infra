@@ -19,9 +19,10 @@ import {
 	validatedPlan,
 	validateText,
 } from "./agent-configuration.shared.js";
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import {
 	advanceAgentConfigurationRevision,
+	configurationVersionTransitionAllowed,
 	insertAgentConfigurationEffects,
 	replaceAgentAccess,
 	replaceSkillHubAgentBindings,
@@ -111,7 +112,7 @@ export class PostgresAgentConfigurationTransactionV1
 					if (!validateText(current.authorizationRevision)) {
 						throw new AgentConfigurationStoreError();
 					}
-					const configuration = decodeAgentConfigurationRecord(
+					const configuration = decodeVersionedAgentConfigurationRecord(
 						current.configuration,
 					);
 					if (
@@ -362,7 +363,7 @@ export class PostgresAgentConfigurationTransactionV1
 					)
 					.limit(1);
 				if (!previous?.configuration) throw new AgentConfigurationStoreError();
-				const previousConfiguration = decodeAgentConfigurationRecord(
+				const previousConfiguration = decodeVersionedAgentConfigurationRecord(
 					previous.configuration,
 				);
 				if (wecom?.kind === "replacement" && setup) {
@@ -398,10 +399,11 @@ export class PostgresAgentConfigurationTransactionV1
 					throw new AgentConfigurationStoreError();
 				}
 				if (
-					(configuration.schemaVersion !== 2 &&
-						configuration.schemaVersion !== 3) ||
-					(previousConfiguration.schemaVersion !== 2 &&
-						previousConfiguration.schemaVersion !== 3)
+					!configurationVersionTransitionAllowed(
+						plan,
+						configuration,
+						previousConfiguration,
+					)
 				)
 					throw new AgentConfigurationStoreError();
 

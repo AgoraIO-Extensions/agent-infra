@@ -66,6 +66,7 @@ import {
 	createRuntimeNativeMetadataReadV1,
 	type RuntimeNativeMetadataReadAssemblyV1,
 } from "./native-metadata-assembly.js";
+import { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-current-client.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
 import { createRuntimeFileBridgeFactoryV1 } from "./runtime-file-exchange.js";
 import {
@@ -83,9 +84,11 @@ import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js
 
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 export {
+	createRuntimeNativeMetadataCurrentAssemblyV1,
 	createRuntimeNativeMetadataReadV1,
 	type RuntimeNativeMetadataReadAssemblyV1,
 } from "./native-metadata-assembly.js";
+export { createRuntimeNativeMetadataCurrentClientV1 } from "./native-metadata-current-client.js";
 
 interface StartOptions {
 	browserCapability?:
@@ -129,6 +132,60 @@ export type RuntimeHostAssemblyOptionsV1 = Pick<
 	/** Deployment-owned Worker proof/current binding for native metadata reads. */
 	nativeMetadataRead?: RuntimeNativeMetadataReadAssemblyV1;
 };
+
+export interface RuntimeNativeMetadataDeploymentModuleV1 {
+	createRuntimeNativeMetadataReadAssembly(input: {
+		readonly environment: NodeJS.ProcessEnv;
+		readonly host: RuntimeHost;
+		readonly current: ReturnType<
+			typeof createRuntimeNativeMetadataCurrentClientV1
+		>;
+	}):
+		| RuntimeNativeMetadataReadAssemblyV1
+		| Promise<RuntimeNativeMetadataReadAssemblyV1>;
+}
+
+export async function createRuntimeNativeMetadataDeploymentAssemblyV1(input: {
+	readonly environment: NodeJS.ProcessEnv;
+	readonly host: RuntimeHost;
+	readonly deployment?: RuntimeNativeMetadataDeploymentModuleV1;
+}) {
+	const origin =
+		input.environment.AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN;
+	const token =
+		input.environment.AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN;
+	const moduleSpecifier =
+		input.environment.AGENT_INFRA_RUNTIME_NATIVE_METADATA_DEPLOYMENT_MODULE;
+	if (
+		origin === undefined &&
+		token === undefined &&
+		moduleSpecifier === undefined
+	)
+		return undefined;
+	if (!origin || !token || !moduleSpecifier) return undefined;
+	let deployment = input.deployment;
+	if (!deployment) {
+		try {
+			if (!moduleSpecifier.startsWith("file:")) return undefined;
+			deployment = (await import(
+				moduleSpecifier
+			)) as RuntimeNativeMetadataDeploymentModuleV1;
+		} catch {
+			return undefined;
+		}
+	}
+	if (typeof deployment.createRuntimeNativeMetadataReadAssembly !== "function")
+		return undefined;
+	const current = createRuntimeNativeMetadataCurrentClientV1({
+		baseUrl: origin,
+		serviceToken: token,
+	});
+	return deployment.createRuntimeNativeMetadataReadAssembly({
+		environment: input.environment,
+		host: input.host,
+		current,
+	});
+}
 
 function runtimePort(value: string | undefined, fallback: number) {
 	const port = Number(value ?? fallback);
@@ -668,8 +725,14 @@ export async function assembleRuntimeHost(
 				: {}),
 		});
 		assembledHost = host;
-		const nativeMetadataRead = options.nativeMetadataRead
-			? createRuntimeNativeMetadataReadV1(host, options.nativeMetadataRead)
+		const nativeMetadataAssembly =
+			options.nativeMetadataRead ??
+			(await createRuntimeNativeMetadataDeploymentAssemblyV1({
+				environment,
+				host,
+			}));
+		const nativeMetadataRead = nativeMetadataAssembly
+			? createRuntimeNativeMetadataReadV1(host, nativeMetadataAssembly)
 			: undefined;
 		const verifyV2 = createRuntimeExecutionGrantVerifierV2(
 			new Map([[keyId, publicKey]]),

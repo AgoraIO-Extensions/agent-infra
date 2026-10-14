@@ -70,9 +70,8 @@ function setup(
 	const resolveBinding = vi.fn(async () =>
 		patch.binding === undefined ? binding : patch.binding,
 	);
-	const resolveTransport = vi.fn(async () => ({
-		read: vi.fn(async () => response),
-	}));
+	const transportRead = vi.fn(async () => response);
+	const resolveTransport = vi.fn(async () => ({ read: transportRead }));
 	const issue = vi.fn(async () => proof);
 	const gateway = createWorkerRuntimeNativeMetadataGatewayV1({
 		binding: { resolve: resolveBinding },
@@ -80,7 +79,14 @@ function setup(
 		proofIssuer: { issue },
 		transport: { resolve: resolveTransport },
 	});
-	return { current, gateway, issue, resolveBinding, resolveTransport };
+	return {
+		current,
+		gateway,
+		issue,
+		resolveBinding,
+		resolveTransport,
+		transportRead,
+	};
 }
 
 describe("Worker native metadata gateway", () => {
@@ -95,6 +101,7 @@ describe("Worker native metadata gateway", () => {
 		});
 		expect(f.issue).toHaveBeenCalledWith({
 			request: binding,
+			apiRequestSourceRef: request.apiRequestSourceRef,
 			signal: expect.any(AbortSignal),
 		});
 		expect(f.current).toHaveBeenCalledTimes(2);
@@ -108,6 +115,12 @@ describe("Worker native metadata gateway", () => {
 			binding,
 			signal: expect.any(AbortSignal),
 		});
+		expect(f.transportRead).toHaveBeenCalledWith(
+			expect.objectContaining({
+				apiRequestSourceRef: request.apiRequestSourceRef,
+			}),
+			expect.any(AbortSignal),
+		);
 	});
 
 	it.each(["binding unavailable", "current denied"] as const)(
@@ -192,5 +205,37 @@ describe("Worker native metadata gateway", () => {
 		);
 		expect(responseValue.status).toBe(400);
 		expect(f.resolveBinding).not.toHaveBeenCalled();
+	});
+
+	it("exposes current confirmation through the fixed Worker boundary", async () => {
+		const f = setup();
+		const app = createWorkerRuntimeNativeMetadataGatewayAppV1({
+			serviceToken: "worker-gateway-token",
+			gateway: f.gateway,
+			current: { check: f.current },
+		});
+		const currentRequest = { ...binding, phase: "read_metadata" as const };
+		const responseValue = await app.fetch(
+			new Request(
+				"http://worker/internal/platform-worker/v1/native-metadata/current",
+				{
+					method: "POST",
+					headers: {
+						authorization: "Bearer worker-gateway-token",
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						apiRequestSourceRef: request.apiRequestSourceRef,
+						request: currentRequest,
+					}),
+				},
+			),
+		);
+		expect(responseValue.status).toBe(200);
+		expect(f.current).toHaveBeenCalledWith({
+			request: currentRequest,
+			apiRequestSourceRef: request.apiRequestSourceRef,
+			signal: expect.any(AbortSignal),
+		});
 	});
 });

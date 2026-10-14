@@ -6,6 +6,7 @@ import type {
 } from "@agent-infra/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
+	createRuntimeNativeMetadataCurrentAssemblyV1,
 	createRuntimeNativeMetadataReadV1,
 	type RuntimeNativeMetadataReadAssemblyV1,
 } from "./native-metadata-assembly.js";
@@ -72,6 +73,35 @@ function context(signal: AbortSignal): RuntimeHostNativeMetadataReadContextV1 {
 }
 
 describe("Runtime native metadata Host assembly", () => {
+	it("rechecks the API request through the fixed Worker current boundary", async () => {
+		const { proof: _proof, ...currentIdentity } = request;
+		const current = vi.fn(async () => ({
+			outcome: "allowed" as const,
+			request: {
+				...currentIdentity,
+				phase: "read_metadata" as const,
+				originalHostScopeRef: request.originalHostScopeRef,
+			},
+		}));
+		const verifyProof = vi.fn();
+		const resolveNativeSessionRef = vi
+			.fn()
+			.mockResolvedValue("native-session-assembly");
+		const assembly = createRuntimeNativeMetadataCurrentAssemblyV1({
+			current: { check: current },
+			resolveNativeSessionRef,
+			verifyProof,
+		});
+		const resolved = await assembly.resolveContext({
+			request: { ...request, apiRequestSourceRef: "api-source-assembly" },
+			signal: new AbortController().signal,
+		});
+		expect(resolved?.nativeSessionRef).toBe("native-session-assembly");
+		expect(current).toHaveBeenCalledWith(
+			expect.objectContaining({ apiRequestSourceRef: "api-source-assembly" }),
+		);
+		expect(verifyProof).toHaveBeenCalledTimes(1);
+	});
 	it("binds the request-local context to RuntimeHost and preserves the route signal", async () => {
 		const signal = new AbortController().signal;
 		const readNativeMetadataV1 = vi.fn().mockResolvedValue(response);

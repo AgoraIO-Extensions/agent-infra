@@ -52,6 +52,7 @@ export function createWorkerRuntimeNativeMetadataProofIssuerV1(
 	return {
 		async issue(input: {
 			readonly request: RuntimeNativeMetadataBindingResponseV1;
+			readonly apiRequestSourceRef?: string;
 			readonly signal: AbortSignal;
 		}): Promise<RuntimeNativeMetadataProofV1> {
 			if (input.signal.aborted) proofUnavailable();
@@ -64,6 +65,9 @@ export function createWorkerRuntimeNativeMetadataProofIssuerV1(
 			const digest = requestDigest(request);
 			const claims = RuntimeNativeMetadataProofClaimsV1Schema.parse({
 				...request,
+				...(input.apiRequestSourceRef
+					? { apiRequestSourceRef: input.apiRequestSourceRef }
+					: {}),
 				purpose: "native_metadata_read",
 				issuedAt,
 				issuer: options.issuer,
@@ -77,6 +81,7 @@ export function createWorkerRuntimeNativeMetadataProofIssuerV1(
 				expectedIssuer: options.issuer,
 				expectedWorkerId: options.workerId,
 				expectedRequestDigest: digest,
+				expectedApiRequestSourceRef: input.apiRequestSourceRef,
 				now: issuedAt,
 			});
 			const header = encode(

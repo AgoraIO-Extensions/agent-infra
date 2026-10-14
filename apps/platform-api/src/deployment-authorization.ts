@@ -12,9 +12,13 @@ import { parseIdempotencyKey } from "./http/common.js";
 
 export function createDeploymentAuthorizationAdmission(input: {
 	readonly identityScope: ReturnType<typeof createDeploymentIdentityScope>;
+	/**
+	 * 按版本读取授权事实：带默认 Relay Key 的 Agent 持久化为 V3，授权规则与 V2
+	 * 完全相同，只是不再因为配置版本而把 Owner 判成无权（#2401）。
+	 */
 	readonly configurationQuery: Pick<
 		PostgresAgentConfigurationQueryV1,
-		"readAuthority"
+		"readVersionedAuthority"
 	>;
 	/** Deployment-owned current directory; Core validates all referenced subjects. */
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
@@ -49,7 +53,7 @@ export function createDeploymentAuthorizationAdmission(input: {
 					authorityContext,
 				};
 			}
-			const current = await input.configurationQuery.readAuthority({
+			const current = await input.configurationQuery.readVersionedAuthority({
 				agentId: request.agentId,
 				actorId: identity.userId,
 				organizationIds: identity.organizationIds,

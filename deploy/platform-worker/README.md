@@ -4,6 +4,11 @@
 循环。[deployment-entry.ts](../../apps/platform-worker/src/deployment-entry.ts) 装配两个现有工厂及可选的 WeCom 渠道实例，共享一次经过
 验证的 Kubernetes、Registry、模型目录、keyring、Runtime readiness 与路由配置。
 每个进程生成独立的数据库 lease owner；Runtime 服务身份仍使用部署提供的稳定 Worker ID。
+配置模块可选导出 `modelDirectory`，由 `createPlatformRuntimeModelDirectoryGatewayV1`
+装配 API→Worker 的 ACP model-directory 内部入口（默认端口 3005）。该导出必须提供
+已绑定的 RuntimeHost resolver 与 Worker-only Grant signer；请求不能选择 URL、Session 或 Grant。
+入口使用同一 `serviceToken`，失败和绑定漂移均 fail closed；部署需要把端口作为 Worker 内部
+Service/NetworkPolicy 输入暴露给 Platform API，不能暴露给浏览器或 Agent。
 Helm 的 `platformWorker.wecomEnabled=true` 还会在同一进程启动 WeCom 连接调谐和回复
 派发。未提供受信 WeCom 配置时启动失败；关闭该开关时不受理 WeCom Runtime 授权。
 启用该开关须使用 `workloadTopology.enabled=false` 的正式 Worker 部署；受控 topology
@@ -14,6 +19,12 @@ Session Sandbox 的空闲计算回收属于同一 Worker 的会话生命周期�
 30 分钟；只有没有 `active`、`waiting` 或 `unknown` 执行的 Sandbox 才会停止计算资源，PVC 和会话映射保留，
 下一条消息会重新准备原 Sandbox。该策略与已验证 Workload 升级分开，
 不会改变 policy 或 Workload revision。
+
+Native metadata 的 Worker 网关还提供固定的当前确认入口
+`/internal/platform-worker/v1/native-metadata/current`。Runtime Host 只能使用部署注入的
+Worker origin 和 service token 调用该入口，并把 API request source ref 作为不透明关联值
+传递；调用方不能提交 URL、token、主体或 Host scope。缺少当前确认配置、关联失效或 Worker
+不可达时，读取保持 unavailable。
 
 ## 打包与启动
 

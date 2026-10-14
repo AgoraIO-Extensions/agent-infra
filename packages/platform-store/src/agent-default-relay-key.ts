@@ -6,7 +6,7 @@ import {
 	type AgentDefaultRelayKeyTransactionV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import {
 	currentRelayKeyVersionInTransaction,
@@ -50,7 +50,8 @@ function operations(
 			const rows =
 				await sql`select configuration from platform.agent_configuration_revisions where agent_id = ${request.agentId} and revision = ${agents[0]?.current_configuration_revision}`;
 			if (!rows[0]) throw new AgentDefaultRelayKeyErrorV1("unavailable");
-			const configuration = decodeAgentConfigurationRecord(
+			// 标准 Agent 带默认 Key 时配置为 V3，必须按版本解码（#2430）。
+			const configuration = decodeVersionedAgentConfigurationRecord(
 				rows[0].configuration,
 			);
 			if (

@@ -15,6 +15,11 @@ export const serviceToken = await requiredFile("PLATFORM_WORKER_SERVICE_TOKEN_FI
 // policy.namespace must match the Pod namespace in PLATFORM_WORKER_NAMESPACE.
 export const workloadInput = missing("workloadInput");
 
+// Optional ACP model-directory internal gateway. Provide the already-bound
+// RuntimeHost resolver and Worker Grant signer from the deployment module;
+// callers never choose a Runtime URL, Session, or Grant.
+export const modelDirectory = undefined;
+
 // workloadInput.files is optional during deployments without file support. If
 // enabled, provide the same deployment-owned S3-compatible adapter used by the
 // API and bounded batch/orphan settings for reconciliation.

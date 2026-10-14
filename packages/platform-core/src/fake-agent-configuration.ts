@@ -6,6 +6,7 @@ import {
 	type AgentConfigurationChannelAdmissionPortV1,
 	type AgentConfigurationImageAdmissionPortV1,
 	type AgentConfigurationModelAdmissionPortV1,
+	type AgentConfigurationRecord,
 	type AgentConfigurationRecordV2,
 	type AgentConfigurationResultV1,
 	type AgentConfigurationSecretAdmissionPortV1,
@@ -16,6 +17,7 @@ import {
 import type { AgentManagementStateV1 } from "./agent-management.ts";
 
 export interface FakeAgentConfigurationSnapshotV1 {
+	/** V3（无凭证）记录也按该形状暴露；一致性套件只检查两个版本共有的字段。 */
 	readonly configuration: AgentConfigurationRecordV2;
 	readonly commitCount: number;
 	readonly lastPlan: AgentConfigurationWritePlanV1 | null;
@@ -34,7 +36,7 @@ export interface FakeAgentConfigurationTransactionOptionsV1 {
 export class FakeAgentConfigurationTransactionV1
 	implements AgentConfigurationTransactionPortV1
 {
-	#configuration: AgentConfigurationRecordV2;
+	#configuration: AgentConfigurationRecord;
 	#commitCount = 0;
 	#lastPlan: AgentConfigurationWritePlanV1 | null = null;
 	#failCommit = false;
@@ -49,7 +51,7 @@ export class FakeAgentConfigurationTransactionV1
 	>();
 
 	constructor(
-		configuration: AgentConfigurationRecordV2,
+		configuration: AgentConfigurationRecord,
 		options: FakeAgentConfigurationTransactionOptionsV1 = {},
 	) {
 		this.#configuration = structuredClone(configuration);
@@ -94,8 +96,14 @@ export class FakeAgentConfigurationTransactionV1
 			throw new Error("Injected Agent configuration commit failure");
 		}
 		const plan = snapshotAgentConfigurationWritePlanV1(input);
-		if (plan.configuration.schemaVersion !== 2)
+		// 与 Store 相同：替换默认 Key 需要持久化 Key 附件，这里没有写入器；
+		// 配置版本只能沿 V2→V2、V3→V3 前进（#2401）。
+		if (plan.result.changedFields.includes("defaultRelayKey"))
 			throw new Error("Fake transaction has no Relay Key writer");
+		if (plan.configuration.schemaVersion !== this.#configuration.schemaVersion)
+			throw new Error(
+				"Fake transaction cannot rewrite the configuration version",
+			);
 		const scope = this.#idempotencyScope(
 			plan.agentId,
 			plan.auditEvent.actorId,
@@ -183,7 +191,7 @@ export class FakeAgentConfigurationTransactionV1
 
 	snapshot(): FakeAgentConfigurationSnapshotV1 {
 		return structuredClone({
-			configuration: this.#configuration,
+			configuration: this.#configuration as AgentConfigurationRecordV2,
 			commitCount: this.#commitCount,
 			lastPlan: this.#lastPlan,
 			idempotencyCount: this.#idempotency.size,

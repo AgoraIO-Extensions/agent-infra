@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import type {
 	AgentConfigurationAccessTargetV1,
+	AgentConfigurationRecord,
 	ApplicationRevisionResultV1,
 	ApplicationRevisionTransactionPortV1,
 	ApplicationRevisionWritePlanV1,
@@ -15,10 +16,11 @@ import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import {
 	advanceAgentConfigurationRevision,
 	agentManagementStateUpdate,
+	configurationVersionTransitionAllowed,
 	insertAgentConfigurationEffects,
 	insertAgentManagementEffects,
 	insertAgentManagementHistory,
@@ -207,9 +209,7 @@ function replayValue(
 	return { outcome: "replayed", result };
 }
 
-function sourceReference(
-	configuration: ReturnType<typeof decodeAgentConfigurationRecord>,
-): string {
+function sourceReference(configuration: AgentConfigurationRecord): string {
 	return configuration.source.kind === "standard"
 		? configuration.source.templateId
 		: configuration.source.imageDigest;
@@ -341,7 +341,9 @@ export class PostgresApplicationRevisionTransactionV1
 					.map(decodeAccessTarget)
 					.sort(compareAccessTargets);
 				validateAccess(ownerIds, availability);
-				const configuration = decodeAgentConfigurationRecord(row.configuration);
+				const configuration = decodeVersionedAgentConfigurationRecord(
+					row.configuration,
+				);
 				if (
 					configuration.agentId !== row.agentId ||
 					configuration.revision !== row.configurationRevision ||
@@ -500,7 +502,14 @@ export class PostgresApplicationRevisionTransactionV1
 				);
 
 				if (configuration && plan.configuration) {
-					if (configuration.schemaVersion !== 2) unavailable();
+					if (
+						!configurationVersionTransitionAllowed(
+							plan.configuration,
+							configuration,
+							previousConfiguration,
+						)
+					)
+						unavailable();
 					if (
 						!(await advanceAgentConfigurationRevision(
 							transaction,
@@ -540,7 +549,6 @@ export class PostgresApplicationRevisionTransactionV1
 					throw new ApplicationRevisionStoreError();
 				}
 				if (configuration !== null) {
-					if (configuration.schemaVersion !== 2) unavailable();
 					await insertPendingSecretRecordAttachments(
 						transaction,
 						attachments,
@@ -678,7 +686,9 @@ export class PostgresApplicationRevisionTransactionV1
 		) {
 			unavailable();
 		}
-		const configuration = decodeAgentConfigurationRecord(row.configuration);
+		const configuration = decodeVersionedAgentConfigurationRecord(
+			row.configuration,
+		);
 		if (
 			configuration.agentId !== result.agentId ||
 			configuration.revision !== result.configurationRevision
@@ -692,7 +702,7 @@ export class PostgresApplicationRevisionTransactionV1
 			Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
 		>[0],
 		plan: ApplicationRevisionWritePlanV1,
-	): Promise<ReturnType<typeof decodeAgentConfigurationRecord>> {
+	): Promise<AgentConfigurationRecord> {
 		const [configurationRows, ownerRows, availabilityRows] = await Promise.all([
 			transaction
 				.select({
@@ -724,7 +734,7 @@ export class PostgresApplicationRevisionTransactionV1
 		]);
 		const [configurationRow] = configurationRows;
 		if (!configurationRow?.configuration) unavailable();
-		const current = decodeAgentConfigurationRecord(
+		const current = decodeVersionedAgentConfigurationRecord(
 			configurationRow.configuration,
 		);
 		const ownerIds = ownerRows.map(({ ownerId }) => ownerId).sort();
