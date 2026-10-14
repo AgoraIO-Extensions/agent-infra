@@ -4,6 +4,11 @@
 循环。[deployment-entry.ts](../../apps/platform-worker/src/deployment-entry.ts) 装配两个现有工厂及可选的 WeCom 渠道实例，共享一次经过
 验证的 Kubernetes、Registry、模型目录、keyring、Runtime readiness 与路由配置。
 每个进程生成独立的数据库 lease owner；Runtime 服务身份仍使用部署提供的稳定 Worker ID。
+配置模块可选导出 `modelDirectory`，由 `createPlatformRuntimeModelDirectoryGatewayV1`
+装配 API→Worker 的 ACP model-directory 内部入口（默认端口 3005）。该导出必须提供
+已绑定的 RuntimeHost resolver 与 Worker-only Grant signer；请求不能选择 URL、Session 或 Grant。
+入口使用同一 `serviceToken`，失败和绑定漂移均 fail closed；部署需要把端口作为 Worker 内部
+Service/NetworkPolicy 输入暴露给 Platform API，不能暴露给浏览器或 Agent。
 Helm 的 `platformWorker.wecomEnabled=true` 还会在同一进程启动 WeCom 连接调谐和回复
 派发。未提供受信 WeCom 配置时启动失败；关闭该开关时不受理 WeCom Runtime 授权。
 启用该开关须使用 `workloadTopology.enabled=false` 的正式 Worker 部署；受控 topology
