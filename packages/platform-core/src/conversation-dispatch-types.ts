@@ -7,7 +7,20 @@ export type ConversationDispatchOperationV1 =
 	| "conversation.turn.submit.v1"
 	| "conversation.turn.regenerate.v1"
 	| "conversation.turn.supplement.v1"
-	| "conversation.turn.stop.v1";
+	| "conversation.turn.stop.v1"
+	| "conversation.native-capability.invoke.v1";
+
+export type ConversationNativeCapabilityBindingV1 = Readonly<{
+	readonly agentId: string;
+	readonly actorId: string;
+	readonly channelId: string;
+	readonly turnId: string;
+	readonly capabilityId: string;
+	readonly capabilityKind: "command" | "skill";
+	readonly directoryRevision: string;
+	readonly parameters: string;
+	readonly parametersDigest: string;
+}>;
 
 export type ConversationDispatchExecutionStatusV1 =
 	| "waiting"
@@ -145,6 +158,7 @@ export interface ConversationDispatchClaimV1 {
 		readonly text: string;
 		readonly attachments: readonly string[];
 	} | null;
+	readonly nativeCapability?: ConversationNativeCapabilityBindingV1;
 	readonly executionStatus: ConversationDispatchExecutionStatusV1;
 	readonly stopPending: boolean;
 	/** Set only when the Store durably marked the stop confirmation timeout. */
@@ -258,7 +272,11 @@ export interface ConversationDispatchAuthorizationPortV1 {
 
 export interface ConversationRuntimeDispatchRequestV1 {
 	readonly schemaVersion: 1;
-	readonly operation: "turn.submit" | "turn.supplement" | "turn.stop";
+	readonly operation:
+		| "turn.submit"
+		| "turn.supplement"
+		| "turn.stop"
+		| "native-capability";
 	readonly requestId: string;
 	readonly traceId: string;
 	readonly agentId: string;
@@ -283,6 +301,7 @@ export interface ConversationRuntimeDispatchRequestV1 {
 		readonly reasoningLevel: string;
 	};
 	readonly runtimeGrant: unknown;
+	readonly nativeCapability?: ConversationNativeCapabilityBindingV1;
 }
 
 export type ConversationRuntimeOperationResultV1 =

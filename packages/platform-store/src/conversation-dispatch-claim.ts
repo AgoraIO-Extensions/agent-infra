@@ -354,6 +354,9 @@ export async function claimWork(
 					attachments: inputFiles.map((file) => file.file_id),
 				}
 			: null,
+		...(payload.nativeCapability
+			? { nativeCapability: payload.nativeCapability }
+			: {}),
 		executionStatus: currentExecutionStatus,
 		stopPending: stop?.status === "submitted",
 		...(stopConfirmationTimedOut ||
