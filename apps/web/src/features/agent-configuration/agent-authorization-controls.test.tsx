@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	grantApplicationManager,
 	grantApplicationUse,
+	grantUserApiUse,
 	revokeApplicationUse,
 	revokeUserApiUse,
 } from "./agent-authorization.js";
@@ -18,6 +19,7 @@ import { AgentAuthorizationControls } from "./agent-authorization-controls.js";
 vi.mock("./agent-authorization.js", () => ({
 	grantApplicationManager: vi.fn(),
 	grantApplicationUse: vi.fn(),
+	grantUserApiUse: vi.fn(),
 	revokeApplicationManager: vi.fn(),
 	revokeApplicationUse: vi.fn(),
 	revokeUserApiUse: vi.fn(),
@@ -98,7 +100,7 @@ describe("AgentAuthorizationControls", () => {
 		fireEvent.change(screen.getByLabelText("用户 ID"), {
 			target: { value: "user-1" },
 		});
-		fireEvent.change(screen.getByLabelText("撤销所需授权版本"), {
+		fireEvent.change(screen.getByLabelText("授权版本"), {
 			target: { value: "7" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "撤销用户 API 使用" }));
@@ -106,6 +108,32 @@ describe("AgentAuthorizationControls", () => {
 		await waitFor(() =>
 			expect(revokeUserApiUse).toHaveBeenCalledWith("agent-1", "user-1", 7),
 		);
+	});
+
+	it("grants user API use with an explicit expected revision", async () => {
+		vi.mocked(grantUserApiUse).mockResolvedValue({
+			agentId: "agent-1",
+			userId: "user-1",
+			authorizationRevision: "auth-8",
+			granted: true,
+			replayed: false,
+			schemaVersion: 1,
+		});
+
+		render(<AgentAuthorizationControls agentId="agent-1" enabled />);
+		fireEvent.click(screen.getByRole("button", { name: /^用户$/ }));
+		fireEvent.change(screen.getByLabelText("用户 ID"), {
+			target: { value: "user-1" },
+		});
+		fireEvent.change(screen.getByLabelText("授权版本"), {
+			target: { value: "7" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "授权用户 API 使用" }));
+
+		await waitFor(() =>
+			expect(grantUserApiUse).toHaveBeenCalledWith("agent-1", "user-1", 7),
+		);
+		expect(await screen.findByText("已授权")).toBeTruthy();
 	});
 
 	it("keeps rejected responses opaque and never renders upstream details", async () => {
