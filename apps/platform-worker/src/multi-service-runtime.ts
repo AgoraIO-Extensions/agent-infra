@@ -2,10 +2,12 @@ import { createHash } from "node:crypto";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import type {
 	KubernetesObject,
+	V1Container,
 	V1Deployment,
 	V1Ingress,
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
+	V1PodSpec,
 	V1Service,
 	V1ServiceAccount,
 	V1StatefulSet,
@@ -177,6 +179,8 @@ function statefulSet(
 	const volumeMount = claimName
 		? { name: "data", mountPath: "/data" }
 		: undefined;
+	const podSpecWithVolumes = resource.spec.template
+		.spec as typeof resource.spec.template.spec & Pick<V1PodSpec, "volumes">;
 	return {
 		apiVersion: "apps/v1",
 		kind: "StatefulSet",
@@ -206,9 +210,12 @@ function statefulSet(
 							...(volumeMount
 								? {
 										volumeMounts: [
-											...(container.volumeMounts ?? []).filter(
-												(mount) => mount.name !== volumeMount.name,
-											),
+											...(
+												(
+													container as typeof container &
+														Pick<V1Container, "volumeMounts">
+												).volumeMounts ?? []
+											).filter((mount) => mount.name !== volumeMount.name),
 											volumeMount,
 										],
 									}
@@ -218,7 +225,7 @@ function statefulSet(
 					...(claimName
 						? {
 								volumes: [
-									...(resource.spec.template.spec.volumes ?? []).filter(
+									...(podSpecWithVolumes.volumes ?? []).filter(
 										(volume) => volume.name !== "data",
 									),
 									{
