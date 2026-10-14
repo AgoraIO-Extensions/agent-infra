@@ -288,9 +288,12 @@ describe("Conversation Worker discovery and shutdown", () => {
 	it("links a durable W3C context around the Worker dispatch", async () => {
 		const traceParent =
 			"00-1234567890abcdef1234567890abcdef-1234567890abcdef-01";
+		const run = vi.fn((work: () => unknown) =>
+			work(),
+		) as unknown as ObservabilitySpan["run"];
 		const span: ObservabilitySpan = {
 			traceParent,
-			run: vi.fn(<T>(work: () => T): T => work()),
+			run,
 			end: vi.fn(),
 		};
 		const startSpan = vi.fn(() => span);
