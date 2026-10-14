@@ -45,6 +45,29 @@ Kubernetes 凭证或模型原始凭据。issuer/UID 映射由 `@agent-infra/plat
 代理令牌正确与否及 PostgreSQL 会话装配属于部署证据；实际 LDAP 登录、
 停用传播、申请审批、Worker Pod/PVC、模型访问和重启持久化须单独实测。
 
+## 标准 Codex 模板的模型画像
+
+`apiInput.templates` 中 `modelBinding.driver` 为 `codex` 的模板必须提供
+`codexModelProfiles`：一个非空数组，每项为 `{ model, reasoningLevels }`，内容必须是该模板
+`imageDigest` 镜像内固定 Codex 的 `model/list` 结果。申请和配置准入用它提前拒绝固定 Codex
+不支持的模型或推理档位；Runtime readiness 仍按同一列表做 fail-closed 校验。其他 driver 的模板
+不得提供该字段。缺失、为空、格式无效或出现在非 Codex 模板上时，Platform API 拒绝启动，日志为
+`Platform API failed to start: codex_model_profiles_<missing|invalid|unexpected> (template <templateId>)`，
+不包含任何配置值。
+
+用模板镜像离线生成该列表，镜像 digest 变化时必须重新生成：
+
+```bash
+docker run --rm -i --network none --entrypoint node \
+  <registry>/agent-runtime-host@sha256:<digest> --input-type=module - \
+  < deploy/runtime/codex-model-profiles.mjs > codex-model-profiles.json
+```
+
+[`codex-model-profiles.mjs`](../runtime/codex-model-profiles.mjs) 在容器内以临时空 HOME 启动
+`codex app-server`，按 Runtime 相同的分页读取含隐藏项的 `model/list`；不联网、不读取凭证，
+失败时只输出固定错误码。把生成的数组原样写入私有配置的 `codexModelProfiles`。Model Catalog
+的 `allowedModels` 仍只应列出该数组中存在、且模型端点实际可用的模型。
+
 ## 应用 Token 管理 Agent
 
 机器人或服务复用独立应用及其 API Token；同一应用可获得多个 Agent 的显式授权。

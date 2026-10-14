@@ -14,6 +14,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { assemblePlatformApi } from "./assembly.js";
 import {
+	deploymentDiagnosticV1,
+	platformApiStartupFailureMessageV1,
+} from "./deployment-diagnostic.js";
+import {
 	createPlatformApiShutdown,
 	loadPlatformApiAssembly,
 	startPlatformApi,
@@ -91,6 +95,32 @@ describe("Platform API production assembly", () => {
 		},
 	);
 
+	it("forwards only a validated deployment diagnostic from a failing factory (#2382)", async () => {
+		const source = `
+			const key = Symbol.for("agent-infra.platform-api.deployment-diagnostic.v1");
+			export function createPlatformApiAssemblyInput() {
+				const error = new Error("private dependency sentinel");
+				Object.defineProperty(error, key, {
+					value: { reason: "codex_model_profiles_missing", templateId: "codex", extra: "private" },
+				});
+				throw error;
+			}
+		`;
+		const error = await loadPlatformApiAssembly(
+			`data:text/javascript,${encodeURIComponent(source)}`,
+		).catch((caught: unknown) => caught);
+		expect((error as Error).message).toBe(
+			"Platform API deployment dependencies are unavailable",
+		);
+		expect((error as Error).cause).toBeUndefined();
+		expect(deploymentDiagnosticV1(error)).toEqual({
+			reason: "codex_model_profiles_missing",
+			templateId: "codex",
+		});
+		expect(platformApiStartupFailureMessageV1(error)).toBe(
+			"Platform API failed to start: codex_model_profiles_missing (template codex); see deploy/platform-api/README.md",
+		);
+	});
 	it("wires a deployment-owned Runtime model directory without deriving it from ModelCatalog", () => {
 		const modelSelection = { read: vi.fn() };
 		const identity = {

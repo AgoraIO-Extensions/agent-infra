@@ -32,6 +32,11 @@ export const publicOrigin = requiredEnv("PLATFORM_PUBLIC_ORIGIN");
 // apiInput.taskAdmissionPolicy is required: maximumWaitingTasksPerAgent (tasks)
 // and waitingTimeoutMs (milliseconds) must both be positive safe integers.
 // Supply reviewed deployment values explicitly; fixture values are not defaults.
+// Every apiInput.templates entry whose modelBinding.driver is "codex" must also
+// set codexModelProfiles to the pinned Codex model/list of that exact image:
+//   codexModelProfiles: [{ model: "<model>", reasoningLevels: ["medium", "high"] }]
+// Generate it offline with deploy/runtime/codex-model-profiles.mjs; see
+// deploy/platform-api/README.md. Missing profiles stop the API at startup.
 export const apiInput = missing("apiInput");
 
 // Optional explicit production ports. The entrypoint merges these into
