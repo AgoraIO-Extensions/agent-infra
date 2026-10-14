@@ -3,10 +3,14 @@ import { createSessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
 	canAdvanceSessionSandboxDeletionProgressV1,
 	decideSessionSandboxObservationV1,
+	decideSessionSandboxRetryV1,
 	isSessionSandboxDeletionProgressValidV1,
 	isSessionSandboxObservationValidV1,
+	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxReconciliationClaimV1,
+	sessionSandboxReconcileProgressV1,
+	sessionSandboxRetryDelayMsV1,
 } from "./session-sandbox-reconciliation.js";
 
 const sandbox = createSessionSandboxBindingV1(
@@ -284,5 +288,239 @@ describe("Session Sandbox observation decision", () => {
 			observation: refreshed,
 			finished: true,
 		});
+	});
+});
+
+describe("Session Sandbox reconcile retry pacing (#2456)", () => {
+	it("grows the repeated retry by 2x from the 6th attempt, capped at 60 s", () => {
+		expect(
+			[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 64].map(
+				sessionSandboxRetryDelayMsV1,
+			),
+		).toEqual([
+			1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000, 16_000, 32_000,
+			60_000, 60_000, 60_000,
+		]);
+	});
+
+	it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "5", null])(
+		"rejects the invalid retry count %s",
+		(retryCount) => {
+			expect(() =>
+				sessionSandboxRetryDelayMsV1(retryCount as unknown as number),
+			).toThrow(TypeError);
+		},
+	);
+
+	const progressOf = (
+		overrides: Partial<
+			Parameters<typeof sessionSandboxReconcileProgressV1>[0]
+		> = {},
+	) =>
+		sessionSandboxReconcileProgressV1({
+			sandboxId: sandbox.sandboxId,
+			sessionGeneration: sandbox.generation,
+			resourceFence: 1,
+			status: "unknown",
+			finished: false,
+			observation: ready,
+			hasStopReceipt: false,
+			resumeRequested: false,
+			...overrides,
+		});
+	const deletion = (
+		kind: "Pod" | "Service",
+		state: SessionSandboxDeletionProgressV1["state"],
+	): SessionSandboxDeletionProgressV1 => {
+		const resource = ready.resources.find((item) => item.kind === kind);
+		if (!resource) throw new Error("fixture resource is missing");
+		return {
+			schemaVersion: 1,
+			state,
+			deleteAttemptId: `attempt-${kind}`,
+			deleteAttempted: state !== "delete-requested",
+			deleteCallResult:
+				state === "delete-requested" ? "not-attempted" : "acknowledged",
+			sourceGeneration: 1,
+			resourceFence: 1,
+			managementFence: 1,
+			resource: resource as SessionSandboxDeletionProgressV1["resource"],
+			preconditions: {
+				uid: resource.uid,
+				resourceVersion: resource.resourceVersion,
+			},
+			...(state === "absent"
+				? {
+						absence: {
+							kind,
+							namespace: resource.namespace,
+							name: resource.name,
+						},
+					}
+				: {}),
+		};
+	};
+
+	it("ignores resourceVersion churn, resource order and clock facts, but not identity, generation, state or resume", () => {
+		const base = progressOf();
+		expect(base).toMatch(/^[0-9a-f]{32}$/);
+		expect(
+			progressOf({
+				observation: {
+					...ready,
+					resources: [...ready.resources]
+						.reverse()
+						.map((resource) => ({ ...resource, resourceVersion: "999" })),
+				},
+			}),
+		).toBe(base);
+		const changed = [
+			progressOf({ status: "ready" }),
+			progressOf({ finished: true }),
+			progressOf({ hasStopReceipt: true }),
+			progressOf({ observation: { ...ready, status: "unknown" } }),
+			progressOf({
+				observation: {
+					...ready,
+					resources: ready.resources.map((resource) =>
+						resource.kind === "Pod"
+							? { ...resource, uid: "replacement" }
+							: resource,
+					),
+				},
+			}),
+			progressOf({
+				observation: { ...ready, resources: ready.resources.slice(1) },
+			}),
+			progressOf({ deletionProgress: [deletion("Pod", "delete-requested")] }),
+			// 替换后的 Sandbox：身份、session generation 或 resource fence 任何一个变化，
+			// 都不能被当成“证据没变”而继承上一代的指纹。
+			progressOf({ sandboxId: "00000000-0000-4000-8000-000000000000" }),
+			progressOf({ sessionGeneration: sandbox.generation + 1 }),
+			progressOf({ resourceFence: 2 }),
+			// 空闲回收后的恢复请求：必须重新计时，不能沿用上一段停滞的退避。
+			progressOf({ resumeRequested: true }),
+		];
+		expect(new Set([base, ...changed]).size).toBe(changed.length + 1);
+		expect(
+			progressOf({ deletionProgress: [deletion("Pod", "absent")] }),
+		).not.toBe(
+			progressOf({ deletionProgress: [deletion("Pod", "delete-requested")] }),
+		);
+		// 删除进度的顺序不影响指纹。
+		expect(
+			progressOf({
+				deletionProgress: [
+					deletion("Pod", "absent"),
+					deletion("Service", "absent"),
+				],
+			}),
+		).toBe(
+			progressOf({
+				deletionProgress: [
+					deletion("Service", "absent"),
+					deletion("Pod", "absent"),
+				],
+			}),
+		);
+	});
+
+	it("backs off an unknown observation only while its evidence stays the same", () => {
+		const progress = progressOf();
+		// 没有上一次记录：写审计，按基础延迟。
+		expect(
+			decideSessionSandboxRetryV1({
+				previous: undefined,
+				progress,
+				attemptCount: 1,
+				status: "unknown",
+			}),
+		).toEqual({ changed: true, delayMs: 1_000 });
+		// 同一指纹：不写审计。停滞里的第 1..12 次重试按 1 s 起步、第 6 次起翻倍、封顶 60 s。
+		expect(
+			[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(
+				(retry) =>
+					decideSessionSandboxRetryV1({
+						previous: { progress, attempt: 10 },
+						progress,
+						attemptCount: 10 + retry,
+						status: "unknown",
+					}).delayMs,
+			),
+		).toEqual([
+			1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000, 16_000, 32_000,
+			60_000, 60_000,
+		]);
+		expect(
+			decideSessionSandboxRetryV1({
+				previous: { progress, attempt: 10 },
+				progress,
+				attemptCount: 12,
+				status: "unknown",
+			}).changed,
+		).toBe(false);
+		// 指纹变化：写审计，立即回到基础延迟，不管之前停滞了多久。
+		expect(
+			decideSessionSandboxRetryV1({
+				previous: { progress, attempt: 1 },
+				progress: progressOf({ hasStopReceipt: true }),
+				attemptCount: 1_000,
+				status: "unknown",
+			}),
+		).toEqual({ changed: true, delayMs: 1_000 });
+	});
+
+	it("never slows the wait for readiness or deletion, only the unknown retry", () => {
+		const progress = progressOf({ status: "observed" });
+		for (const status of ["observed", "applying", "ready", "stopped"])
+			expect(
+				decideSessionSandboxRetryV1({
+					previous: { progress, attempt: 1 },
+					progress,
+					attemptCount: 100,
+					status,
+				}),
+			).toEqual({ changed: false, delayMs: 1_000 });
+	});
+
+	it("treats an unrecognized previous record as a change", () => {
+		const progress = progressOf();
+		for (const previous of [
+			{ progress: null, attempt: 5 },
+			{ progress: "short", attempt: 5 },
+			{ progress: progress.toUpperCase(), attempt: 5 },
+			{ progress, attempt: null },
+			{ progress, attempt: "5" },
+			{ progress, attempt: -1 },
+			{ progress, attempt: 1.5 },
+			{ progress, attempt: undefined },
+		])
+			expect(
+				decideSessionSandboxRetryV1({
+					previous,
+					progress,
+					attemptCount: 6,
+					status: "unknown",
+				}).changed,
+			).toBe(true);
+		// 计数无法识别（不是整数）时也不能退避。
+		for (const attemptCount of [undefined, null, "6", 6.5, Number.NaN])
+			expect(
+				decideSessionSandboxRetryV1({
+					previous: { progress, attempt: 5 },
+					progress,
+					attemptCount,
+					status: "unknown",
+				}).changed,
+			).toBe(true);
+		// 计数回退（不可能但可防御）：按第 1 次重试处理，不产生非法值。
+		expect(
+			decideSessionSandboxRetryV1({
+				previous: { progress, attempt: 5 },
+				progress,
+				attemptCount: 5,
+				status: "unknown",
+			}),
+		).toEqual({ changed: true, delayMs: 1_000 });
 	});
 });
