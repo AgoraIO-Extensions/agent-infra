@@ -30,6 +30,10 @@ import {
 	parseAgentConfigurationChangesV1,
 } from "@agent-infra/platform-core";
 import type { z } from "zod";
+import {
+	type DeploymentDiagnosticV1,
+	withDeploymentDiagnosticV1,
+} from "./deployment-diagnostic.js";
 import type { IdentityContext } from "./http/identity.js";
 
 type Admissions = Pick<
@@ -266,6 +270,8 @@ export function createDeploymentAdmissionsV1(
 	let registry: ReturnType<typeof createOciImageRegistryAdapterV1>;
 	let templates: DeploymentAdmissionInputV1["templates"];
 	let channels: DeploymentAdmissionInputV1["channelPolicy"];
+	// 只记录可安全输出的原因码与模板 ID，供启动日志定位（#2382）。
+	let diagnostic: DeploymentDiagnosticV1 | undefined;
 	try {
 		if (
 			!input.registry.admissionPolicyRef ||
@@ -300,8 +306,20 @@ export function createDeploymentAdmissionsV1(
 			)
 				throw new Error();
 			if (template.modelBinding?.driver === "codex") {
+				diagnostic = {
+					reason:
+						template.codexModelProfiles === undefined
+							? "codex_model_profiles_missing"
+							: "codex_model_profiles_invalid",
+					templateId: template.templateId,
+				};
 				validateCodexModelProfilesV1(template.codexModelProfiles);
+				diagnostic = undefined;
 			} else if (template.codexModelProfiles !== undefined) {
+				diagnostic = {
+					reason: "codex_model_profiles_unexpected",
+					templateId: template.templateId,
+				};
 				throw new Error();
 			}
 			if (
@@ -352,7 +370,10 @@ export function createDeploymentAdmissionsV1(
 			throw new Error();
 		registry = createOciImageRegistryAdapterV1(input.registry);
 	} catch {
-		throw new Error("PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID");
+		const error = new Error(
+			"PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID",
+		);
+		throw diagnostic ? withDeploymentDiagnosticV1(error, diagnostic) : error;
 	}
 	const modelCatalogRevision = input.modelCatalog.revision;
 	const loadModelCatalog = input.modelCatalog.load;

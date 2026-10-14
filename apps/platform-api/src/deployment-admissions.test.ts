@@ -10,6 +10,7 @@ import {
 	createDeploymentAdmissionsV1,
 	type DeploymentAdmissionInputV1,
 } from "./deployment-admissions.js";
+import { deploymentDiagnosticV1 } from "./deployment-diagnostic.js";
 import { createDeploymentIdentityScope } from "./deployment-identity.js";
 import type { IdentityContext } from "./http/identity.js";
 
@@ -253,6 +254,54 @@ describe("production deployment admissions", () => {
 				imageRepository: "registry.example.test/agents/other",
 			}),
 		).toThrow("PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID");
+	});
+	it.each([
+		["codex_model_profiles_missing", { codexModelProfiles: undefined }],
+		["codex_model_profiles_invalid", { codexModelProfiles: [] }],
+		[
+			"codex_model_profiles_unexpected",
+			{ modelBinding: undefined, codexModelProfiles: [] },
+		],
+	] as const)(
+		"names %s and the template in the startup diagnostic (#2382)",
+		(reason, change) => {
+			const { input } = fixture();
+			const [template] = input.templates;
+			if (!template) throw new Error("fixture template missing");
+			let caught: unknown;
+			try {
+				createDeploymentAdmissionsV1({
+					...input,
+					templates: [{ ...template, ...change }],
+				});
+			} catch (error) {
+				caught = error;
+			}
+			expect(caught).toBeInstanceOf(Error);
+			expect((caught as Error).message).toBe(
+				"PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID",
+			);
+			expect(deploymentDiagnosticV1(caught)).toEqual({
+				reason,
+				templateId: "codex",
+			});
+		},
+	);
+	it("keeps the generic configuration error for non-profile problems (#2382)", () => {
+		const { input } = fixture();
+		let caught: unknown;
+		try {
+			createDeploymentAdmissionsV1({
+				...input,
+				imageRepository: "registry.example.test/agents/other",
+			});
+		} catch (error) {
+			caught = error;
+		}
+		expect((caught as Error).message).toBe(
+			"PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID",
+		);
+		expect(deploymentDiagnosticV1(caught)).toBeUndefined();
 	});
 	it("binds actual OCI content and policy evidence to the trusted actor and template", async () => {
 		const { input, authorize, imageDigest, fetch, templateRevision } =

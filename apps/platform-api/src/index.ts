@@ -15,6 +15,11 @@ import {
 	type PlatformApiAssembly,
 	type PlatformApiAssemblyInput,
 } from "./assembly.js";
+import {
+	deploymentDiagnosticV1,
+	platformApiStartupFailureMessageV1,
+	withDeploymentDiagnosticV1,
+} from "./deployment-diagnostic.js";
 import { startPlatformResourceSampling } from "./resource-sampler.js";
 
 interface StartOptions {
@@ -128,8 +133,13 @@ export async function loadPlatformApiAssembly(
 		let input: PlatformApiAssemblyInput;
 		try {
 			input = await deployment.createPlatformApiAssemblyInput();
-		} catch {
-			throw new Error("Platform API deployment dependencies are unavailable");
+		} catch (cause) {
+			const error = new Error(
+				"Platform API deployment dependencies are unavailable",
+			);
+			// 只转交已校验的原因码与模板 ID，不保留原错误（#2382）。
+			const diagnostic = deploymentDiagnosticV1(cause);
+			throw diagnostic ? withDeploymentDiagnosticV1(error, diagnostic) : error;
 		}
 		assembly = assemblePlatformApi(input);
 	} catch (error) {
@@ -353,12 +363,7 @@ if (
 			process.once("SIGINT", handleShutdown);
 		})
 		.catch((error: unknown) => {
-			console.error(
-				error instanceof Error &&
-					error.message === "PLATFORM_API_DEPLOYMENT_MODULE is required"
-					? error.message
-					: "Platform API failed to start",
-			);
+			console.error(platformApiStartupFailureMessageV1(error));
 			process.exitCode = 1;
 		});
 }
