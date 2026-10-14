@@ -42,7 +42,12 @@ const service = {
 		ports: [{ name: "http", port: 8080, targetPort: 8080 }],
 	},
 };
-
+const configMap = {
+	apiVersion: "v1",
+	kind: "ConfigMap",
+	metadata: { name: "api-config" },
+	spec: { data: { "app.conf": "port=8080\n" } },
+};
 const migrationJob = {
 	apiVersion: "batch/v1",
 	kind: "Job",
@@ -93,6 +98,100 @@ describe("multi-service Agent contract seam", () => {
 						spec: { ...migrationJob.spec, activeDeadlineSeconds: 1_801 },
 					},
 				],
+			}),
+		).toThrow();
+	});
+
+	it("accepts a ConfigMap declared and mounted read-only by a service", () => {
+		const mounted = {
+			...deployment,
+			spec: {
+				...deployment.spec,
+				template: {
+					...deployment.spec.template,
+					spec: {
+						...deployment.spec.template.spec,
+						volumes: [{ name: "config", configMap: { name: "api-config" } }],
+						containers: [
+							{
+								...container,
+								volumeMounts: [
+									{ name: "config", mountPath: "/etc/app", readOnly: true },
+								],
+							},
+						],
+					},
+				},
+			},
+		};
+		expect(
+			MultiServiceManifestDocumentV1Schema.parse({
+				...document,
+				resources: [mounted, service, configMap],
+			}),
+		).toMatchObject({ resources: [mounted, service, configMap] });
+	});
+
+	it.each([
+		["oversized data", { data: { config: "x".repeat(65_537) } }],
+		["secret-like key", { data: { API_TOKEN: "do-not-store-here" } }],
+	])("rejects ConfigMap %s", (_label, spec) => {
+		expect(() =>
+			MultiServiceManifestDocumentV1Schema.parse({
+				...document,
+				resources: [deployment, service, { ...configMap, spec }],
+			}),
+		).toThrow();
+	});
+
+	it("requires mounted volumes to reference declared ConfigMaps", () => {
+		const mounted = {
+			...deployment,
+			spec: {
+				...deployment.spec,
+				template: {
+					...deployment.spec.template,
+					spec: {
+						...deployment.spec.template.spec,
+						volumes: [{ name: "missing", configMap: { name: "missing" } }],
+					},
+				},
+			},
+		};
+		expect(() =>
+			MultiServiceManifestDocumentV1Schema.parse({
+				...document,
+				resources: [mounted, service],
+			}),
+		).toThrow("volume ConfigMap must be declared");
+	});
+
+	it("does not allow a writable ConfigMap mount declaration", () => {
+		const writable = {
+			...deployment,
+			spec: {
+				...deployment.spec,
+				template: {
+					...deployment.spec.template,
+					spec: {
+						...deployment.spec.template.spec,
+						volumes: [{ name: "config", configMap: { name: "api-config" } }],
+						containers: [
+							{
+								...container,
+								volumeMounts: [
+									{ name: "config", mountPath: "/etc/app", readOnly: false },
+								],
+							},
+						],
+					},
+				},
+			},
+		};
+		expect(() =>
+			MultiServiceManifestDocumentV1Schema.parse({
+				...document,
+				resources: [writable, service, configMap],
 			}),
 		).toThrow();
 	});

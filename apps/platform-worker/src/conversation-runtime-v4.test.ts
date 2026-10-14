@@ -69,6 +69,63 @@ const terminal = {
 } as const;
 
 describe("Execution-bound V4 in the production conversation adapter", () => {
+	it("routes Browser handoff through the existing control grant and V3 client", async () => {
+		const h = runtimeV4Harness();
+		try {
+			const reference = await h.authorize();
+			h.fetcher.mockImplementationOnce(async (_input, init) => {
+				const body = JSON.parse(init?.body as string) as {
+					readonly hostSessionRef: string;
+				};
+				return Response.json({
+					schemaVersion: 3,
+					hostSessionRef: body.hostSessionRef,
+					executionId: "execution",
+					outcome: "accepted",
+					record: {
+						handoffId: "handoff-1",
+						status: "requested",
+						reason: "mfa",
+						requestedAt: "2026-10-14T00:00:00.000Z",
+						expiresAt: "2026-10-14T00:05:00.000Z",
+					},
+				});
+			});
+			const result = await h.runtime.browserHandoff({
+				...h.events(reference),
+				handoff: {
+					kind: "request",
+					reason: "mfa",
+					runtime: {
+						browserAlive: true,
+						authorized: true,
+						subjectId: "user",
+						agentId: "agent",
+						conversationId: "conversation",
+						executionId: "execution",
+						sessionGeneration: 1,
+						resourceFence: 2,
+						workloadRevision: 1,
+						imageDigest: `sha256:${"a".repeat(64)}`,
+						capabilityVersion: 1,
+						pageRevision: 1,
+					},
+				},
+			});
+			expect(result.response.record?.status).toBe("requested");
+			const sent = h.sent();
+			expect(sent.url).toContain("/internal/runtime/v3/browser/handoff");
+			const claims = verifyControl(sent.body.grant).claims;
+			expect(claims).toMatchObject({
+				purpose: "control",
+				reason: "browser_handoff",
+				allowedCommands: ["browser.handoff"],
+			});
+		} finally {
+			await h.runtime.close();
+		}
+	});
+
 	it.each(["submit", "supplement"] as const)(
 		"delivers %s with the original version, subject and private field",
 		async (operation) => {

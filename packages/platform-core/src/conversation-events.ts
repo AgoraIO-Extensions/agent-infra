@@ -23,6 +23,50 @@ export interface ConversationEventStateTransitionV1 {
 	readonly conversationStatus: "ready" | "active";
 }
 
+export type ConversationBrowserHandoffStatusV1 =
+	| "requested"
+	| "active"
+	| "returning"
+	| "completed"
+	| "revoked"
+	| "expired"
+	| "crashed"
+	| "unknown";
+
+export type ConversationBrowserHandoffReasonV1 =
+	| "login"
+	| "mfa"
+	| "captcha"
+	| "human_judgment";
+
+export interface ConversationBrowserHandoffBindingV1 {
+	readonly subjectId: string;
+	readonly agentId: string;
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly sessionGeneration: number;
+	readonly resourceFence: number;
+	readonly workloadRevision: number;
+	readonly imageDigest: string;
+	readonly capabilityVersion: number;
+	/** Web projection revision; Runtime V3 derives it from capabilityVersion. */
+	readonly capabilityRevision: number;
+	readonly pageRevision: number;
+}
+
+/** Internal bounded projection of an authenticated Runtime Browser handoff. */
+export interface ConversationBrowserHandoffEventV1 {
+	readonly type: "browser.handoff";
+	readonly handoffId: string;
+	readonly status: ConversationBrowserHandoffStatusV1;
+	readonly reason: ConversationBrowserHandoffReasonV1;
+	readonly requestedAt: string;
+	readonly expiresAt: string;
+	readonly operatorId?: string;
+	readonly terminalReason?: string;
+	readonly binding: ConversationBrowserHandoffBindingV1;
+}
+
 export type ConversationNormalizedEventV1 =
 	| ConversationOperationEventV2
 	| { readonly type: "text.delta"; readonly text: string }
@@ -48,7 +92,8 @@ export type ConversationNormalizedEventV1 =
 			readonly code: string;
 			readonly message: string;
 			readonly retryable: boolean;
-	  };
+	  }
+	| ConversationBrowserHandoffEventV1;
 
 export interface ConversationModelSelectionFallbackEventV1 {
 	readonly type: "model.selection.fell_back";
@@ -397,6 +442,120 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 			category: values.category,
 			summary: values.summary,
 			...(values.callId === undefined ? {} : { callId: values.callId }),
+		};
+	}
+	if (type === "browser.handoff") {
+		const values = snapshotObject(
+			input,
+			[
+				"type",
+				"handoffId",
+				"status",
+				"reason",
+				"requestedAt",
+				"expiresAt",
+				"binding",
+			],
+			["operatorId", "terminalReason"],
+		);
+		if (
+			!isText(values.handoffId) ||
+			![
+				"requested",
+				"active",
+				"returning",
+				"completed",
+				"revoked",
+				"expired",
+				"crashed",
+				"unknown",
+			].includes(values.status as string) ||
+			!["login", "mfa", "captcha", "human_judgment"].includes(
+				values.reason as string,
+			) ||
+			(values.operatorId !== undefined && !isText(values.operatorId)) ||
+			(values.terminalReason !== undefined &&
+				!isText(values.terminalReason, 256))
+		) {
+			invalidInput();
+		}
+		const binding = snapshotObject(values.binding, [
+			"subjectId",
+			"agentId",
+			"conversationId",
+			"executionId",
+			"sessionGeneration",
+			"resourceFence",
+			"workloadRevision",
+			"imageDigest",
+			"capabilityVersion",
+			"capabilityRevision",
+			"pageRevision",
+		]);
+		const subjectId = binding.subjectId;
+		const agentId = binding.agentId;
+		const conversationId = binding.conversationId;
+		const executionId = binding.executionId;
+		const sessionGeneration = binding.sessionGeneration;
+		const resourceFence = binding.resourceFence;
+		const workloadRevision = binding.workloadRevision;
+		const imageDigest = binding.imageDigest;
+		const capabilityVersion = binding.capabilityVersion;
+		const capabilityRevision = binding.capabilityRevision;
+		const pageRevision = binding.pageRevision;
+		if (
+			!["subjectId", "agentId", "conversationId", "executionId"].every((key) =>
+				isText(binding[key]),
+			) ||
+			![
+				"sessionGeneration",
+				"resourceFence",
+				"workloadRevision",
+				"capabilityVersion",
+				"capabilityRevision",
+				"pageRevision",
+			].every((key) => isPositiveSafeInteger(binding[key])) ||
+			!isText(imageDigest) ||
+			!/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(imageDigest) ||
+			!isText(subjectId) ||
+			!isText(agentId) ||
+			!isText(conversationId) ||
+			!isText(executionId) ||
+			!isPositiveSafeInteger(sessionGeneration) ||
+			!isPositiveSafeInteger(resourceFence) ||
+			!isPositiveSafeInteger(workloadRevision) ||
+			!isPositiveSafeInteger(capabilityVersion) ||
+			!isPositiveSafeInteger(capabilityRevision) ||
+			!isPositiveSafeInteger(pageRevision)
+		) {
+			invalidInput();
+		}
+		return {
+			type: "browser.handoff",
+			handoffId: values.handoffId,
+			status: values.status as ConversationBrowserHandoffStatusV1,
+			reason: values.reason as ConversationBrowserHandoffReasonV1,
+			requestedAt: validOccurredAt(values.requestedAt),
+			expiresAt: validOccurredAt(values.expiresAt),
+			...(values.operatorId === undefined
+				? {}
+				: { operatorId: values.operatorId }),
+			...(values.terminalReason === undefined
+				? {}
+				: { terminalReason: values.terminalReason }),
+			binding: {
+				subjectId,
+				agentId,
+				conversationId,
+				executionId,
+				sessionGeneration,
+				resourceFence,
+				workloadRevision,
+				imageDigest,
+				capabilityVersion,
+				capabilityRevision,
+				pageRevision,
+			},
 		};
 	}
 	if (type === "result.file") {

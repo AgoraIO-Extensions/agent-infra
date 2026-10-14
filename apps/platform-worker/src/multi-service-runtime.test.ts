@@ -1,6 +1,11 @@
 import { MultiServiceManifestDocumentV1Schema } from "@agent-infra/contracts/pilot";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
-import type { KubernetesObject, V1Job } from "@kubernetes/client-node";
+import type {
+	KubernetesObject,
+	V1ConfigMap,
+	V1Deployment,
+	V1Job,
+} from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
@@ -23,11 +28,15 @@ const manifest = MultiServiceManifestDocumentV1Schema.parse({
 				template: {
 					metadata: { labels: { app: "web" } },
 					spec: {
+						volumes: [{ name: "config", configMap: { name: "web-config" } }],
 						containers: [
 							{
 								name: "web",
 								image: `sha256:${"a".repeat(64)}`,
 								ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+								volumeMounts: [
+									{ name: "config", mountPath: "/etc/web", readOnly: true },
+								],
 							},
 						],
 					},
@@ -71,6 +80,12 @@ const manifest = MultiServiceManifestDocumentV1Schema.parse({
 				selector: { app: "worker" },
 				ports: [{ name: "http", port: 8080, targetPort: 8080 }],
 			},
+		},
+		{
+			apiVersion: "v1",
+			kind: "ConfigMap",
+			metadata: { name: "web-config" },
+			spec: { data: { "app.conf": "hello=world\n" } },
 		},
 	],
 });
@@ -233,10 +248,27 @@ describe("multi-service runtime operations", () => {
 		await operations.apply(value);
 		const deployment = [...fake.resources.values()].find(
 			(resource) => resource.kind === "Deployment",
-		);
+		) as V1Deployment | undefined;
 		expect(deployment?.metadata?.labels?.["agent-infra.agora.io/agent"]).toBe(
 			workloadResourceNameV1("agent-a"),
 		);
+		const configMap = [...fake.resources.values()].find(
+			(resource) => resource.kind === "ConfigMap",
+		) as V1ConfigMap | undefined;
+		expect(configMap?.immutable).toBe(true);
+		expect(configMap?.data).toEqual({ "app.conf": "hello=world\n" });
+		expect(deployment?.spec?.template.spec?.volumes).toEqual([
+			{
+				name: "config",
+				configMap: {
+					name: `${workloadResourceNameV1("agent-a")}-web-config`,
+					optional: false,
+				},
+			},
+		]);
+		expect(
+			deployment?.spec?.template.spec?.containers[0]?.volumeMounts,
+		).toEqual([{ name: "config", mountPath: "/etc/web", readOnly: true }]);
 		expect(
 			fake.resources.has(`ServiceAccount/${workloadResourceNameV1("agent-a")}`),
 		).toBe(true);
@@ -250,6 +282,38 @@ describe("multi-service runtime operations", () => {
 		expect(
 			fake.resources.has(`Ingress/${workloadResourceNameV1("agent-a")}`),
 		).toBe(true);
+	});
+
+	it("fails closed when an immutable ConfigMap is changed in place", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				namespace: "agents",
+				routeHostSuffix: "example.test",
+				ingressClassName: "nginx",
+				tlsSecretName: "tls",
+				routeSelector: { "app.kubernetes.io/name": "ingress" },
+			},
+		});
+		const value = desired();
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(value);
+		const configMap = fake.resources.get(
+			`ConfigMap/${workloadResourceNameV1("agent-a")}-web-config`,
+		) as V1ConfigMap | undefined;
+		if (!configMap) throw new Error("ConfigMap fixture missing");
+		fake.resources.set(
+			`ConfigMap/${workloadResourceNameV1("agent-a")}-web-config`,
+			{
+				...configMap,
+				data: { "app.conf": "tampered=true\n" },
+			} as V1ConfigMap,
+		);
+		await expect(operations.apply(value)).rejects.toThrow(
+			"ConfigMap is immutable and drifted",
+		);
 	});
 
 	it("runs a migration Job before services and reuses its completed result", async () => {

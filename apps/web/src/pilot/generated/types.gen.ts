@@ -980,6 +980,38 @@ export type TaskProjectionV1 = {
         schemaVersion: 2;
         sequence: number;
         type: 'execution.operation';
+    } | {
+        conversationCursor: string;
+        conversationId: string;
+        eventId: SseEventIdV1;
+        executionId: string;
+        kind: 'event';
+        occurredAt: string;
+        payload: {
+            binding: {
+                agentId: string;
+                capabilityRevision: number;
+                capabilityVersion: number;
+                conversationId: string;
+                executionId: string;
+                imageDigest: string;
+                pageRevision: number;
+                resourceFence: number;
+                sessionGeneration: number;
+                subjectId: string;
+                workloadRevision: number;
+            };
+            expiresAt: string;
+            handoffId: string;
+            operatorId?: string;
+            reason: 'login' | 'mfa' | 'captcha' | 'human_judgment';
+            requestedAt: string;
+            status: 'requested' | 'active' | 'returning' | 'completed' | 'revoked' | 'expired' | 'crashed' | 'unknown';
+            terminalReason?: string;
+        };
+        schemaVersion: 2;
+        sequence: number;
+        type: 'browser.handoff';
     } | TaskStatusEventV1>;
     executionId: string;
     output: string;
@@ -1059,6 +1091,38 @@ export type TaskSseMessageV1 = PersistedConversationEventV1 | {
     schemaVersion: 2;
     sequence: number;
     type: 'execution.operation';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        binding: {
+            agentId: string;
+            capabilityRevision: number;
+            capabilityVersion: number;
+            conversationId: string;
+            executionId: string;
+            imageDigest: string;
+            pageRevision: number;
+            resourceFence: number;
+            sessionGeneration: number;
+            subjectId: string;
+            workloadRevision: number;
+        };
+        expiresAt: string;
+        handoffId: string;
+        operatorId?: string;
+        reason: 'login' | 'mfa' | 'captcha' | 'human_judgment';
+        requestedAt: string;
+        status: 'requested' | 'active' | 'returning' | 'completed' | 'revoked' | 'expired' | 'crashed' | 'unknown';
+        terminalReason?: string;
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'browser.handoff';
 } | TaskStatusEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
 
 export type TaskStatusEventV1 = {

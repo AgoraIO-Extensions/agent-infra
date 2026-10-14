@@ -25,6 +25,51 @@ import {
 	TimelineReloadSignalV1Schema,
 } from "./sse.ts";
 
+const BrowserHandoffBindingV2Schema = z.strictObject({
+	subjectId: OpaqueIdV1Schema,
+	agentId: OpaqueIdV1Schema,
+	conversationId: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+	sessionGeneration: z.number().int().positive().safe(),
+	resourceFence: z.number().int().positive().safe(),
+	workloadRevision: z.number().int().positive().safe(),
+	imageDigest: z.string().regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u),
+	capabilityVersion: z.number().int().positive().safe(),
+	capabilityRevision: z.number().int().positive().safe(),
+	pageRevision: z.number().int().positive().safe(),
+});
+
+export const BrowserHandoffEventV2Schema = z.strictObject({
+	schemaVersion: z.literal(2),
+	kind: z.literal("event"),
+	eventId: SseEventIdV1Schema,
+	conversationId: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+	sequence: z.number().int().positive().safe(),
+	conversationCursor: OpaqueCursorV1Schema,
+	occurredAt: Rfc3339TimestampV1Schema,
+	type: z.literal("browser.handoff"),
+	payload: z.strictObject({
+		handoffId: OpaqueIdV1Schema,
+		status: z.enum([
+			"requested",
+			"active",
+			"returning",
+			"completed",
+			"revoked",
+			"expired",
+			"crashed",
+			"unknown",
+		]),
+		reason: z.enum(["login", "mfa", "captcha", "human_judgment"]),
+		requestedAt: Rfc3339TimestampV1Schema,
+		expiresAt: Rfc3339TimestampV1Schema,
+		operatorId: OpaqueIdV1Schema.optional(),
+		terminalReason: z.string().min(1).max(256).optional(),
+		binding: BrowserHandoffBindingV2Schema,
+	}),
+});
+
 /** The same public operation fact contract is used across Runtime and browser transports. */
 export const ExecutionOperationEventV2Schema = z.strictObject({
 	schemaVersion: z.literal(2),
@@ -43,6 +88,7 @@ export const ExecutionOperationEventV2Schema = z.strictObject({
 export const PersistedConversationEventV2Schema = z.union([
 	PersistedConversationEventV1Schema,
 	ExecutionOperationEventV2Schema,
+	BrowserHandoffEventV2Schema,
 ]);
 
 export const ConversationSseMessageV2Schema = z.union([
@@ -184,6 +230,7 @@ export const pilotOperationSseSchemasV2 = {
 	RuntimeOperationFailureV2: RuntimeOperationFailureV2Schema,
 	RuntimeOperationFactV2: RuntimeOperationFactV2Schema,
 	ExecutionOperationEventV2: ExecutionOperationEventV2Schema,
+	BrowserHandoffEventV2: BrowserHandoffEventV2Schema,
 	PersistedConversationEventV2: PersistedConversationEventV2Schema,
 	ConversationSseMessageV2: ConversationSseMessageV2Schema,
 };
@@ -198,6 +245,7 @@ export const pilotOperationSchemasV2 = {
 export type ExecutionOperationEventV2 = z.infer<
 	typeof ExecutionOperationEventV2Schema
 >;
+export type BrowserHandoffEventV2 = z.infer<typeof BrowserHandoffEventV2Schema>;
 export type PersistedConversationEventV2 = z.infer<
 	typeof PersistedConversationEventV2Schema
 >;

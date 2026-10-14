@@ -259,11 +259,23 @@ export function projectConversationExecutionV1(
 		.flatMap<ConversationExecutionProcessSummaryV1>((item) => {
 			if (
 				item.eventType !== "execution.status" &&
-				item.eventType !== "execution.detail"
+				item.eventType !== "execution.detail" &&
+				item.eventType !== "browser.handoff"
 			) {
 				return [];
 			}
 			const payload = eventPayload(item);
+			if (payload.type === "browser.handoff") {
+				return [
+					{
+						occurredAt: date(item.occurredAt),
+						kind: "agent_summary" as const,
+						category: "status" as const,
+						summary: `Browser handoff ${payload.status} (${payload.reason}).`,
+						callId: payload.handoffId,
+					},
+				];
+			}
 			if (payload.type === "execution.detail") {
 				return [
 					{
