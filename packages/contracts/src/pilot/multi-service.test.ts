@@ -48,6 +48,22 @@ const configMap = {
 	metadata: { name: "api-config" },
 	spec: { data: { "app.conf": "port=8080\n" } },
 };
+const migrationJob = {
+	apiVersion: "batch/v1",
+	kind: "Job",
+	metadata: { name: "migrate" },
+	spec: {
+		backoffLimit: 1,
+		activeDeadlineSeconds: 300,
+		template: {
+			metadata: { labels },
+			spec: {
+				restartPolicy: "Never",
+				containers: [{ name: "migrate", image: digest }],
+			},
+		},
+	},
+};
 
 const document = {
 	schemaVersion: 1 as const,
@@ -61,6 +77,29 @@ describe("multi-service Agent contract seam", () => {
 			document,
 		);
 		expect(MultiServiceResourceV1Schema.parse(deployment)).toEqual(deployment);
+	});
+
+	it("accepts one bounded pre-release migration Job", () => {
+		const withMigration = {
+			...document,
+			resources: [deployment, service, migrationJob],
+		};
+		expect(MultiServiceManifestDocumentV1Schema.parse(withMigration)).toEqual(
+			withMigration,
+		);
+		expect(() =>
+			MultiServiceManifestDocumentV1Schema.parse({
+				...withMigration,
+				resources: [
+					deployment,
+					service,
+					{
+						...migrationJob,
+						spec: { ...migrationJob.spec, activeDeadlineSeconds: 1_801 },
+					},
+				],
+			}),
+		).toThrow();
 	});
 
 	it("accepts a ConfigMap declared and mounted read-only by a service", () => {

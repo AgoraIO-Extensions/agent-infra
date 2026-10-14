@@ -6,6 +6,7 @@ import type {
 	V1ConfigMap,
 	V1Deployment,
 	V1Ingress,
+	V1Job,
 	V1NetworkPolicy,
 	V1Service,
 	V1ServiceAccount,
@@ -53,6 +54,37 @@ function serviceLabel(name: string): string {
 
 function fingerprint(value: unknown): string {
 	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function migrationJobName(value: MultiServiceDesired): string {
+	return serviceResourceName(
+		value.agentId,
+		`migration-${fingerprint(value.multiService).slice(0, 12)}`,
+	);
+}
+
+function migrationResource(value: MultiServiceDesired) {
+	return value.multiService.resources.find(
+		(resource) => resource.kind === "Job",
+	);
+}
+
+function jobSucceeded(job: V1Job): boolean {
+	return (
+		(job.status?.succeeded ?? 0) > 0 ||
+		job.status?.conditions?.some(
+			(condition) =>
+				condition.type === "Complete" && condition.status === "True",
+		) === true
+	);
+}
+
+function jobFailed(job: V1Job): boolean {
+	return (
+		job.status?.conditions?.some(
+			(condition) => condition.type === "Failed" && condition.status === "True",
+		) === true
+	);
 }
 
 function metadata(value: MultiServiceDesired, name: string, service?: string) {
@@ -172,6 +204,66 @@ function configMap(
 		),
 		immutable: true,
 		data: { ...resource.spec.data },
+	};
+}
+
+function migrationJob(
+	value: MultiServiceDesired,
+	resource: Extract<
+		MultiServiceDesired["multiService"]["resources"][number],
+		{ kind: "Job" }
+	>,
+): V1Job {
+	const labels = {
+		...resource.spec.template.metadata.labels,
+		[ownerLabel]: workloadResourceNameV1(value.agentId),
+		"agent-infra.agora.io/service": "migration",
+	};
+	return {
+		apiVersion: "batch/v1",
+		kind: "Job",
+		metadata: metadata(value, migrationJobName(value), "migration"),
+		spec: {
+			backoffLimit: resource.spec.backoffLimit,
+			activeDeadlineSeconds: resource.spec.activeDeadlineSeconds,
+			template: {
+				metadata: { labels },
+				spec: {
+					...resource.spec.template.spec,
+					restartPolicy: "Never",
+					serviceAccountName: workloadResourceNameV1(value.agentId),
+					automountServiceAccountToken: false,
+					containers: resource.spec.template.spec.containers.map(
+						(container) => ({
+							...container,
+							ports: container.ports?.map((port) => ({
+								name: port.name,
+								containerPort: port.targetPort,
+							})),
+						}),
+					),
+				},
+			},
+		},
+	};
+}
+
+function migrationNetworkPolicy(value: MultiServiceDesired): V1NetworkPolicy {
+	const name = migrationJobName(value);
+	return {
+		apiVersion: "networking.k8s.io/v1",
+		kind: "NetworkPolicy",
+		metadata: metadata(value, `${name}-network`, "migration"),
+		spec: {
+			podSelector: {
+				matchLabels: {
+					[ownerLabel]: workloadResourceNameV1(value.agentId),
+					"agent-infra.agora.io/service": "migration",
+				},
+			},
+			policyTypes: ["Ingress"],
+			ingress: [],
+		},
 	};
 }
 
@@ -316,6 +408,7 @@ export function createMultiServiceRuntimeOperations(options: {
 				throw new Error("multi-service ConfigMap is immutable and drifted");
 			return current;
 		}
+		if (object.kind === "Job") return current;
 		if (current.metadata?.resourceVersion && current.metadata.uid)
 			return client.replace({
 				...object,
@@ -332,6 +425,7 @@ export function createMultiServiceRuntimeOperations(options: {
 			| "Deployment"
 			| "Service"
 			| "ConfigMap"
+			| "Job"
 			| "ServiceAccount"
 			| "NetworkPolicy"
 			| "Ingress",
@@ -345,9 +439,30 @@ export function createMultiServiceRuntimeOperations(options: {
 		await client.delete(current);
 		return (await client.read(kind, name)) === null;
 	}
+	async function cleanupMigration(value: MultiServiceDesired) {
+		let complete = await remove(
+			"NetworkPolicy",
+			`${migrationJobName(value)}-network`,
+			value,
+		);
+		complete =
+			(await remove("Job", migrationJobName(value), value)) && complete;
+		return complete;
+	}
 	return {
 		isMultiService,
 		async apply(value: MultiServiceDesired) {
+			await put(serviceAccount(value), value);
+			const migration = migrationResource(value);
+			if (migration?.kind === "Job") {
+				await put(migrationNetworkPolicy(value), value);
+				const job = await put(migrationJob(value, migration), value);
+				if (!jobSucceeded(job as V1Job))
+					return {
+						uid: workloadResourceNameV1(value.agentId),
+						generation: value.workloadRevision,
+					};
+			}
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "ConfigMap")
 					await put(configMap(value, resource), value);
@@ -362,7 +477,6 @@ export function createMultiServiceRuntimeOperations(options: {
 				if (resource.kind === "Deployment")
 					await put(networkPolicy(value, resource, options.policy), value);
 			}
-			await put(serviceAccount(value), value);
 			return {
 				uid: workloadResourceNameV1(value.agentId),
 				generation: value.workloadRevision,
@@ -372,17 +486,21 @@ export function createMultiServiceRuntimeOperations(options: {
 			value: MultiServiceDesired,
 			_identity: { uid: string; generation: number },
 		) {
+			const migration = migrationResource(value);
+			if (migration?.kind === "Job") {
+				const job = await client.read<V1Job>("Job", migrationJobName(value));
+				if (!job) return "unreachable" as const;
+				if (jobFailed(job)) return "unhealthy" as const;
+				if (!jobSucceeded(job)) return "unreachable" as const;
+			}
 			for (const resource of value.multiService.resources) {
 				if (resource.kind !== "Deployment") continue;
 				const current = await client.read<V1Deployment>(
 					"Deployment",
 					serviceResourceName(value.agentId, resource.metadata.name),
 				);
-				if (
-					!current ||
-					!owned(current, value) ||
-					(current.status?.availableReplicas ?? 0) < 1
-				)
+				if (!current || !owned(current, value)) return "drifted" as const;
+				if ((current.status?.availableReplicas ?? 0) < 1)
 					return "unhealthy" as const;
 			}
 			return "healthy" as const;
@@ -399,6 +517,7 @@ export function createMultiServiceRuntimeOperations(options: {
 				workloadResourceNameV1(value.agentId),
 				value,
 			);
+			complete = (await cleanupMigration(value)) && complete;
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "ConfigMap")
 					complete =
@@ -437,5 +556,6 @@ export function createMultiServiceRuntimeOperations(options: {
 				)) && complete;
 			return complete;
 		},
+		cleanupMigration,
 	};
 }

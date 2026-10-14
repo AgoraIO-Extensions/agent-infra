@@ -292,14 +292,17 @@ function validMultiServiceTopology(
 	const services = manifest.resources.filter(
 		(resource) => resource.kind === "Service",
 	);
+	const jobs = manifest.resources.filter((resource) => resource.kind === "Job");
 	if (
 		manifest.resources.length < 4 ||
 		deployments.length !== 2 ||
 		services.length !== 2 ||
+		jobs.length > 1 ||
 		manifest.resources.some(
 			(resource) =>
 				resource.kind !== "Deployment" &&
 				resource.kind !== "Service" &&
+				resource.kind !== "Job" &&
 				resource.kind !== "ConfigMap",
 		)
 	)
