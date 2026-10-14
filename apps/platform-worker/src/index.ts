@@ -8,8 +8,11 @@ import {
 	startPlatformConversationWorkerFromDeploymentV2,
 } from "./conversation-worker.js";
 import { createPlatformNativeMetadataGatewayOptionsV1 } from "./native-metadata-deployment.js";
+import { createPlatformRuntimeModelDirectoryOptionsV1 } from "./runtime-model-directory-deployment.js";
 import {
+	type PlatformWorkerInternalGatewayServerOptionsV1,
 	type PlatformWorkerNativeMetadataGatewayServerOptionsV1,
+	startPlatformWorkerInternalGatewayServerV1,
 	startPlatformWorkerNativeMetadataGatewayServerV1,
 } from "./runtime-native-metadata-server.js";
 import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js";
@@ -24,6 +27,7 @@ export * from "./native-metadata-deployment.js";
 export * from "./native-metadata-deployment-assembly.js";
 export * from "./runtime-grant-signer.js";
 export * from "./runtime-model-directory-client.js";
+export * from "./runtime-model-directory-deployment.js";
 export * from "./runtime-model-directory-service.js";
 export * from "./runtime-native-metadata-client.js";
 export * from "./runtime-native-metadata-current-client.js";
@@ -186,6 +190,7 @@ interface StartOptions {
 	heartbeatMs?: number;
 	log?: (message: string) => void;
 	nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayServerOptionsV1;
+	modelDirectoryGateway?: PlatformWorkerInternalGatewayServerOptionsV1;
 }
 
 export function startPlatformWorker(options: StartOptions = {}) {
@@ -195,13 +200,22 @@ export function startPlatformWorker(options: StartOptions = {}) {
 	let gateway:
 		| ReturnType<typeof startPlatformWorkerNativeMetadataGatewayServerV1>
 		| undefined;
+	let modelDirectoryGateway:
+		| ReturnType<typeof startPlatformWorkerInternalGatewayServerV1>
+		| undefined;
 	try {
 		if (options.nativeMetadataGateway)
 			gateway = startPlatformWorkerNativeMetadataGatewayServerV1(
 				options.nativeMetadataGateway,
 			);
+		if (options.modelDirectoryGateway)
+			modelDirectoryGateway = startPlatformWorkerInternalGatewayServerV1(
+				options.modelDirectoryGateway,
+			);
 	} catch (error) {
 		clearInterval(heartbeat);
+		void modelDirectoryGateway?.stop().catch(() => undefined);
+		void gateway?.stop().catch(() => undefined);
 		throw error;
 	}
 
@@ -209,15 +223,20 @@ export function startPlatformWorker(options: StartOptions = {}) {
 
 	return {
 		nativeMetadataGatewayServer: gateway?.server,
+		modelDirectoryGatewayServer: modelDirectoryGateway?.server,
 		stop() {
 			if (stopped) return;
 			stopped = true;
 			clearInterval(heartbeat);
-			const closing = gateway?.stop();
+			const closing = Promise.all(
+				[gateway?.stop(), modelDirectoryGateway?.stop()].filter(
+					(value): value is Promise<void> => value !== undefined,
+				),
+			);
 			log(
 				JSON.stringify({ service: platformWorkerService, status: "stopped" }),
 			);
-			return closing;
+			return closing.then(() => undefined);
 		},
 	};
 }
@@ -401,10 +420,15 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	const wecomEnabled = wecomSetting === "true";
 	const nativeMetadataGateway =
 		await createPlatformNativeMetadataGatewayOptionsV1(termination.signal);
+	const modelDirectoryGateway =
+		await createPlatformRuntimeModelDirectoryOptionsV1(termination.signal);
 	let primary: ReturnType<typeof startPlatformWorker> | undefined;
 	const workerPromise = startPlatformWorkerFromDeploymentV2({
 		startPrimary: () => {
-			primary = startPlatformWorker({ nativeMetadataGateway });
+			primary = startPlatformWorker({
+				nativeMetadataGateway,
+				modelDirectoryGateway,
+			});
 			return primary;
 		},
 		startConversation: (observability) =>

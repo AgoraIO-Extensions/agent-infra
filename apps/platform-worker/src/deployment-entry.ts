@@ -24,6 +24,10 @@ import {
 	createWorkloadReadinessAuthorizationV1,
 } from "./workload-deployment.js";
 import {
+	createPlatformRuntimeModelDirectoryGatewayV1,
+	type PlatformWorkerRuntimeModelDirectoryPortsV1,
+} from "./runtime-model-directory-deployment.js";
+import {
 	createWorkloadReadinessLedgerV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
@@ -57,6 +61,7 @@ type DeploymentConfiguration = {
 	/** Optional production Store/object-storage Skill materialization assembly. */
 	readonly skillMaterialization?: DeploymentSkillMaterializationConfigurationV1;
 	readonly nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayPortsV1;
+	readonly modelDirectory?: PlatformWorkerRuntimeModelDirectoryPortsV1;
 };
 
 function resolveConnectionInstallation(
@@ -104,6 +109,7 @@ const {
 	createSkillMaterializer,
 	skillMaterialization,
 	nativeMetadataGateway,
+	modelDirectory,
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
@@ -394,5 +400,16 @@ export async function createPlatformNativeMetadataGatewayOptionsV1(
 	return createPlatformNativeMetadataGatewayAssemblyV1({
 		serviceToken,
 		ports: nativeMetadataGateway,
+	});
+}
+
+export async function createPlatformRuntimeModelDirectoryOptionsV1(
+	signal: AbortSignal,
+) {
+	signal.throwIfAborted();
+	if (!modelDirectory) return undefined;
+	return createPlatformRuntimeModelDirectoryGatewayV1({
+		serviceToken,
+		ports: modelDirectory,
 	});
 }

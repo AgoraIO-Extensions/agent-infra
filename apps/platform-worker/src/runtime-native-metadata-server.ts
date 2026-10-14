@@ -137,3 +137,11 @@ export function startPlatformWorkerNativeMetadataGatewayServerV1(
 		},
 	};
 }
+
+/** Generic alias for additional authenticated Worker internal gateways. */
+export type PlatformWorkerInternalGatewayAppV1 =
+	PlatformWorkerNativeMetadataGatewayAppV1;
+export type PlatformWorkerInternalGatewayServerOptionsV1 =
+	PlatformWorkerNativeMetadataGatewayServerOptionsV1;
+export const startPlatformWorkerInternalGatewayServerV1 =
+	startPlatformWorkerNativeMetadataGatewayServerV1;
