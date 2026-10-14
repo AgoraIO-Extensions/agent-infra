@@ -874,6 +874,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 								turn.modelResponse = { state: "unknown", endTurn: false };
 						}
 					}
+					if (state.turns.filter((turn) => !terminal(turn.status)).length > 1)
+						unavailable();
 				});
 				for (const turn of file.read().turns) {
 					if (
