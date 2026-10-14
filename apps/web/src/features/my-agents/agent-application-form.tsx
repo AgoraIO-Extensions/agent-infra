@@ -19,9 +19,9 @@ import type {
 	DeploymentConfigurationProjectionV2,
 	DeploymentModelEndpointProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
-import { agentSourceReferenceLabel } from "../agent-management-status.js";
 import type { AgentDefaultRelayKeyCheck } from "../agent-configuration/agent-configuration.js";
 import { useKeylessKeyCheck } from "../agent-configuration/use-keyless-key-check.js";
+import { agentSourceReferenceLabel } from "../agent-management-status.js";
 import { DirectoryPicker } from "../directory-fields.js";
 import {
 	type AgentApplicationEnvironmentDraft,
