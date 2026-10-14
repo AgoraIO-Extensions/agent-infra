@@ -219,6 +219,7 @@ export class FakeNativeCapabilityAdmissionStoreV1
 			plan.outbox.payload.capabilityId !== plan.capability.id ||
 			plan.outbox.payload.directoryRevision !==
 				plan.capability.directoryRevision ||
+			plan.outbox.payload.parameters !== plan.parameters ||
 			plan.outbox.payload.parametersDigest !== plan.parametersDigest ||
 			plan.result.executionId !== plan.executionId ||
 			plan.result.conversationId !== plan.conversationId ||
