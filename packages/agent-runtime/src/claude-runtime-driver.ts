@@ -132,6 +132,8 @@ interface Turn {
 		endTurn: boolean;
 	};
 	status: RuntimeStatusV1;
+	/** An uncertain Connection operation permanently occupies this Turn after restart. */
+	unknownHold?: true;
 	events: RuntimeEventV1[];
 	/** Durable metadata-only facts emitted at the Claude model/tool boundary. */
 	operationFacts?: RuntimeOperationFactV2[];
@@ -149,6 +151,26 @@ interface ConnectionOperation {
 	readonly consumerId: string;
 	readonly instanceRef: string;
 	readonly credentialRevision: string;
+}
+export function normalizeClaudeUncertainConnectionOperations(turn: {
+	connectionOperations?: ConnectionOperation[];
+	unknownHold?: true;
+}) {
+	const operations = turn.connectionOperations ?? [];
+	const uncertain = operations.some((operation) =>
+		["prepared", "started", "unknown"].includes(operation.phase),
+	);
+	if (uncertain) turn.unknownHold = true;
+	if (
+		operations.some((operation) =>
+			["prepared", "started"].includes(operation.phase),
+		)
+	)
+		turn.connectionOperations = operations.map((operation) =>
+			["prepared", "started"].includes(operation.phase)
+				? { ...operation, phase: "unknown" as const }
+				: operation,
+		);
 }
 interface Session {
 	schemaVersion: 1;
@@ -806,8 +828,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				)
 					unavailable();
 				await file.update((state) => {
-					for (const turn of state.turns)
+					for (const turn of state.turns) {
+						normalizeClaudeUncertainConnectionOperations(turn);
 						if (turn.status === "running") turn.status = "unknown";
+					}
 				});
 				for (const turn of file.read().turns) {
 					if (
@@ -820,6 +844,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					}
 					if (
 						terminal(turn.status) ||
+						turn.unknownHold ||
 						turn.configVersion !== this.options.configVersion ||
 						turn.modelResponse?.state !== "completed" ||
 						!turn.modelResponse.endTurn
