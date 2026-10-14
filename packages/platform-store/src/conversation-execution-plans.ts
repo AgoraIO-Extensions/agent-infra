@@ -221,6 +221,7 @@ export function validateMessagePlan(
 		outbox.messageId !== message.messageId ||
 		outbox.executionId !== message.executionId ||
 		outbox.traceId !== request.command.traceId ||
+		outbox.traceParent !== request.command.traceParent ||
 		outbox.requestId !== request.command.requestId ||
 		audit.actorId !== authority.actorId ||
 		audit.agentId !== authority.agentId ||
@@ -441,6 +442,7 @@ export function validateRegenerationPlan(
 		outbox.turnId !== execution.turnId ||
 		outbox.sessionGeneration !== execution.sessionGeneration ||
 		outbox.traceId !== request.command.traceId ||
+		outbox.traceParent !== request.command.traceParent ||
 		outbox.requestId !== request.command.requestId ||
 		audit.actorId !== authority.actorId ||
 		audit.agentId !== authority.agentId ||
@@ -530,6 +532,7 @@ export function validateStopPlan(
 		outbox.sessionGeneration !== persistedTarget.sessionGeneration ||
 		outbox.stopRequestId !== stopRequestId ||
 		outbox.traceId !== request.command.traceId ||
+		outbox.traceParent !== request.command.traceParent ||
 		outbox.requestId !== request.command.requestId ||
 		audit.actorId !== authority.actorId ||
 		audit.agentId !== authority.agentId ||

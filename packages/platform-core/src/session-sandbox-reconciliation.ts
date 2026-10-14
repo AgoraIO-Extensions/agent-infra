@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 import type {
 	SessionSandboxLifecycleV1,
@@ -337,4 +338,125 @@ export function isSessionSandboxReadyV1(facts: {
 		facts.resourceFence > 0 &&
 		facts.observationStatus === "ready"
 	);
+}
+
+/** 调谐重试的基础延迟；与历史固定值一致，正常 prepare/drain 的节奏不变。 */
+const sessionSandboxRetryBaseDelayMsV1 = 1_000;
+/** 同一次停滞里保持基础延迟的重试次数；第 6 次起按 2 倍增长。 */
+const sessionSandboxRetryBaseDelayRetriesV1 = 5;
+/** 证据长期不变时的重试间隔上限；条目始终保留，只是不再每秒重试。 */
+const sessionSandboxRetryMaxDelayMsV1 = 60_000;
+
+/**
+ * 同一次停滞里第 `retryCount` 次重试的延迟：前 5 次 1 s，之后 2、4、8、16、32 s
+ * 逐次翻倍，封顶 60 s。`retryCount` 是该次停滞内的重试序号（从 1 开始），不是条目的
+ * 总尝试次数；证据一旦变化就重新从 1 开始。
+ */
+export function sessionSandboxRetryDelayMsV1(retryCount: number): number {
+	if (!Number.isSafeInteger(retryCount) || retryCount < 1)
+		throw new TypeError("Sandbox retry count must be a positive integer");
+	if (retryCount <= sessionSandboxRetryBaseDelayRetriesV1)
+		return sessionSandboxRetryBaseDelayMsV1;
+	return Math.min(
+		sessionSandboxRetryMaxDelayMsV1,
+		sessionSandboxRetryBaseDelayMsV1 *
+			2 ** (retryCount - sessionSandboxRetryBaseDelayRetriesV1),
+	);
+}
+
+/**
+ * 一次调谐尝试的进度指纹。只包含决定“有没有进展”的事实：Sandbox 身份与代际
+ * （sandboxId、sessionGeneration、resourceFence，替换后的 Sandbox 不会继承上一代的
+ * 指纹）、分配状态、观测状态、资源身份集合（不含 resourceVersion，Pod 状态抖动不算
+ * 进展）、删除进度、停止回执和恢复请求（空闲回收后的恢复必须立刻重新计时，不能沿用
+ * 上一段停滞累积的退避）。
+ */
+export function sessionSandboxReconcileProgressV1(input: {
+	readonly sandboxId: string;
+	readonly sessionGeneration: number;
+	readonly resourceFence: number;
+	readonly status: string;
+	readonly finished: boolean;
+	readonly observation: SessionSandboxObservationV1;
+	readonly deletionProgress?: readonly SessionSandboxDeletionProgressV1[];
+	readonly hasStopReceipt: boolean;
+	readonly resumeRequested: boolean;
+}): string {
+	const resources = input.observation.resources
+		.map((resource) =>
+			[
+				resource.kind,
+				resource.namespace,
+				resource.name,
+				resource.uid,
+				resource.controllerUid ?? "",
+			].join("|"),
+		)
+		.sort();
+	const deletion = (input.deletionProgress ?? [])
+		.map((entry) =>
+			[
+				entry.resource.kind,
+				entry.resource.uid,
+				entry.state,
+				entry.deleteCallResult,
+			].join("|"),
+		)
+		.sort();
+	return createHash("sha256")
+		.update(
+			JSON.stringify([
+				input.sandboxId,
+				input.sessionGeneration,
+				input.resourceFence,
+				input.status,
+				input.finished,
+				input.observation.status,
+				input.hasStopReceipt,
+				input.resumeRequested,
+				resources,
+				deletion,
+			]),
+		)
+		.digest("hex")
+		.slice(0, 32);
+}
+
+/**
+ * 记录一次观测后的重试决定。`previous` 是上一次“有变化”的审计行：它的进度指纹，以及
+ * 写出该行时的 outbox 尝试次数（`attempt_count`）。指纹相同视为没有变化：不再写审计，
+ * 并且只有 `unknown` 按停滞期间的连续重试序号退避（其余状态是在等待就绪或删除，保持
+ * 基础延迟）。没有记录、或记录无法识别（例如旧版本写的审计行没有指纹或尝试次数），都按
+ * “有变化”处理。
+ */
+export function decideSessionSandboxRetryV1(input: {
+	readonly previous:
+		| { readonly progress: unknown; readonly attempt: unknown }
+		| undefined;
+	readonly progress: string;
+	readonly attemptCount: unknown;
+	readonly status: string;
+}): { readonly changed: boolean; readonly delayMs: number } {
+	const { previous } = input;
+	const attemptCount = input.attemptCount;
+	const unchanged =
+		previous !== undefined &&
+		previous.progress === input.progress &&
+		Number.isSafeInteger(previous.attempt) &&
+		(previous.attempt as number) >= 0 &&
+		Number.isSafeInteger(attemptCount) &&
+		(attemptCount as number) > (previous.attempt as number);
+	return {
+		changed: !unchanged,
+		delayMs:
+			unchanged && input.status === "unknown"
+				? sessionSandboxRetryDelayMsV1(
+						// 同一次停滞里的重试序号；乱序或异常的计数不会给出非法值。
+						Math.max(
+							1,
+							(attemptCount as number) - (previous.attempt as number),
+						),
+					)
+				: sessionSandboxRetryBaseDelayMsV1,
+	};
 }

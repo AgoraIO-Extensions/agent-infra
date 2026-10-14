@@ -14,6 +14,7 @@ import {
 	captureTaskAuthorizationBoundaryV1,
 	decideSessionSandboxDrainObservationV1,
 	decideSessionSandboxObservationV1,
+	decideSessionSandboxRetryV1,
 	isSessionSandboxDeletionProgressValidV1,
 	isTaskApiChannelV1,
 	resolveCurrentPersonalApiUserV1,
@@ -23,6 +24,7 @@ import {
 	type SessionSandboxPolicyV1,
 	type SessionSandboxReconciliationClaimV1,
 	type SessionSandboxVerifiedPolicyV1,
+	sessionSandboxReconcileProgressV1,
 	shouldContinueSessionSandboxPreparationV1,
 	type TaskApiChannelV1,
 	type TaskAuthorizationBoundaryV1,
@@ -619,10 +621,48 @@ export async function recordSandboxObservation(
 				: {}),
 		};
 	}
+	// 证据不变的重复观测不再每秒重试，也不再逐次写审计；条目仍保留到真正收敛（Spec §10.1.1）。
+	// 停滞状态取自上一次“有变化”的审计行（指纹和当时的首次尝试次数），而不是写进 outbox
+	// payload：旧版本 Worker 对 payload 做严格比较，多出的键会让回滚后的 Worker 认领不了
+	// 这些条目。审计查询同时按 Sandbox 身份和 session generation 限定，替换后的 Sandbox
+	// 不会继承上一代的指纹或退避。
+	const terminal = decision.finished && !continuePreparation;
+	const progress = sessionSandboxReconcileProgressV1({
+		sandboxId: context.sandbox.sandboxId,
+		sessionGeneration: context.sandbox.generation,
+		resourceFence: claim.resourceFence,
+		status: decision.status,
+		finished: decision.finished,
+		observation: decision.observation,
+		deletionProgress: (nextLifecycle ?? context.lifecycle)?.deletionProgress,
+		hasStopReceipt: Boolean((nextLifecycle ?? context.lifecycle)?.stopReceipt),
+		// 用户消息重新打开空闲回收后，恢复请求本身必须让退避立即重新计时。
+		resumeRequested: Boolean(
+			(nextLifecycle ?? context.lifecycle)?.resumeRequested,
+		),
+	});
+	const [lastChange] = await transaction<
+		{ progress: string | null; attempt: string | null }[]
+	>`select details->>'progress' as progress, details->>'progressAttempt' as attempt
+		from platform.conversation_audit_events
+		where conversation_id = ${context.sandbox.sessionId}
+			and action = 'conversation.sandbox.observed'
+			and details->>'sandboxId' = ${context.sandbox.sandboxId}
+			and details->>'sessionGeneration' = ${String(context.sandbox.generation)}
+		order by occurred_at desc, id desc limit 1`;
+	const retry = decideSessionSandboxRetryV1({
+		previous: lastChange && {
+			progress: lastChange.progress,
+			attempt: lastChange.attempt === null ? null : Number(lastChange.attempt),
+		},
+		progress,
+		attemptCount: Number(context.outbox.attempt_count),
+		status: decision.status,
+	});
 	const recorded = await transaction`update platform.outbox_items
 		set payload = payload || ${transaction.json((nextLifecycle ? { lifecycle: nextLifecycle } : {}) as unknown as Parameters<typeof transaction.json>[0])},
-		status = ${decision.finished && !continuePreparation ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
-		available_at = clock_timestamp() + interval '1 second', updated_at = clock_timestamp()
+		status = ${terminal ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
+		available_at = clock_timestamp() + (${terminal ? 1000 : retry.delayMs}::bigint * interval '1 millisecond'), updated_at = clock_timestamp()
 		where id = ${claim.itemId} and status = 'processing'
 			and lease_owner = ${claim.leaseOwner}
 			and delivery_fence = ${claim.deliveryFence}
@@ -631,10 +671,11 @@ export async function recordSandboxObservation(
 	await transaction`update platform.session_sandbox_allocations set status = ${decision.status},
 		resource_observation = ${transaction.json(decision.observation as unknown as Parameters<typeof transaction.json>[0])},
 		updated_at = clock_timestamp() where sandbox_id = ${claim.sandbox.sandboxId}`;
-	await transaction`insert into platform.conversation_audit_events
+	if (retry.changed)
+		await transaction`insert into platform.conversation_audit_events
 		(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)
 		values (${randomUUID()}, ${context.sandbox.sessionId}, null, ${context.sandbox.agentId}, ${context.sandbox.principal.id},
 			'conversation.sandbox.observed', ${context.outbox.trace_id}, ${context.outbox.request_id}, clock_timestamp(),
-			${transaction.json({ sandboxId: context.sandbox.sandboxId, sessionGeneration: context.sandbox.generation, resourceFence: claim.resourceFence, status: decision.status })})`;
+			${transaction.json({ sandboxId: context.sandbox.sandboxId, sessionGeneration: context.sandbox.generation, resourceFence: claim.resourceFence, status: decision.status, progress, progressAttempt: Number(context.outbox.attempt_count) })})`;
 	return unknown ? "unknown" : "committed";
 }

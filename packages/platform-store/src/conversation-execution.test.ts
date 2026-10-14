@@ -560,9 +560,51 @@ afterAll(async () => {
 	await testDatabase?.stop();
 });
 
+/** 包装事务端口：在 decide 返回的计划里改写 outbox 的 traceParent。 */
+function tamperedTransaction(
+	transaction: PostgresConversationExecutionTransactionV1,
+	tamper: {
+		readonly method: "executeMessage" | "executeRegeneration" | "executeStop";
+		readonly traceParent: string;
+	},
+) {
+	return new Proxy(transaction, {
+		get(target, property) {
+			const value = Reflect.get(target, property, target);
+			if (typeof value !== "function") return value;
+			if (property !== tamper.method) return value.bind(target);
+			return (
+				request: unknown,
+				decide: (state: unknown) => { outboxIntent: object },
+			) =>
+				(value as (...input: unknown[]) => unknown).call(
+					target,
+					request,
+					(state: unknown) => {
+						const plan = decide(state);
+						return {
+							...plan,
+							outboxIntent: {
+								...plan.outboxIntent,
+								traceParent: tamper.traceParent,
+							},
+						};
+					},
+				);
+		},
+	});
+}
+
 function createConversation(
 	resolvedAuthority: ConversationExecutionAuthorityV1 = authority,
-	options: { readonly sandbox?: "preparing" | "ready" } = {},
+	options: {
+		readonly sandbox?: "preparing" | "ready";
+		/** 让某类命令的计划带上与命令不一致的 outbox traceparent（#2473）。 */
+		readonly tamperTraceParent?: {
+			readonly method: "executeMessage" | "executeRegeneration" | "executeStop";
+			readonly traceParent: string;
+		};
+	} = {},
 ) {
 	let nextId = 1;
 	const transaction = new PostgresConversationExecutionTransactionV1({
@@ -587,7 +629,9 @@ function createConversation(
 					return { outcome: "allowed", authority: resolvedAuthority };
 				},
 			},
-			transaction,
+			transaction: options.tamperTraceParent
+				? tamperedTransaction(transaction, options.tamperTraceParent)
+				: transaction,
 		},
 		{
 			now: () => new Date("2026-09-04T00:00:00.000Z"),
@@ -1187,6 +1231,193 @@ describe("PostgreSQL Conversation command transaction", () => {
 		} finally {
 			await transaction.close();
 		}
+	});
+
+	describe("W3C traceparent on durable commands (#2473)", () => {
+		const messageParent =
+			"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+		const regenerateParent =
+			"00-1af7651916cd43dd8448eb211c80319c-c7ad6b7169203331-01";
+		const stopParent =
+			"00-2af7651916cd43dd8448eb211c80319c-d7ad6b7169203331-01";
+		const tampered = "00-3af7651916cd43dd8448eb211c80319c-e7ad6b7169203331-01";
+		const traceParents = () =>
+			client<{ operation: string; trace_parent: string | null }[]>`
+				select operation, trace_parent from platform.outbox_items
+				where operation like 'conversation.turn.%' order by created_at, operation`;
+
+		async function acceptMessage(
+			useCase: ReturnType<typeof createConversation>["useCase"],
+		) {
+			await useCase.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "create_trace",
+				requestId: "request_create_trace",
+				traceId: "trace_create_trace",
+			});
+			return useCase.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: "conversation_id_1",
+				text: "keep the trace",
+				idempotencyKey: "message_trace",
+				requestId: "request_message_trace",
+				traceId: "trace_message_trace",
+				traceParent: messageParent,
+			});
+		}
+
+		it("keeps the traceparent of an accepted message, regeneration and stop on their outbox rows", async () => {
+			const { transaction, useCase } = createConversation();
+			try {
+				await expect(acceptMessage(useCase)).resolves.toMatchObject({
+					outcome: "accepted",
+				});
+				await client`update platform.conversation_executions set status = 'completed' where execution_id = 'conversation_id_3'`;
+				await expect(
+					useCase.regenerate({
+						schemaVersion: 1,
+						command: "regenerate",
+						conversationId: "conversation_id_1",
+						sourceMessageId: "conversation_id_2",
+						idempotencyKey: "regenerate_trace",
+						requestId: "request_regenerate_trace",
+						traceId: "trace_regenerate_trace",
+						traceParent: regenerateParent,
+					}),
+				).resolves.toMatchObject({ outcome: "accepted" });
+				await expect(
+					useCase.stop({
+						schemaVersion: 1,
+						command: "stop",
+						conversationId: "conversation_id_1",
+						targetExecutionId: "conversation_id_5",
+						idempotencyKey: "stop_trace",
+						requestId: "request_stop_trace",
+						traceId: "trace_stop_trace",
+						traceParent: stopParent,
+					}),
+				).resolves.toMatchObject({ outcome: "accepted" });
+				expect(
+					Object.fromEntries(
+						(await traceParents()).map((row) => [
+							row.operation,
+							row.trace_parent,
+						]),
+					),
+				).toEqual({
+					"conversation.turn.submit.v1": messageParent,
+					"conversation.turn.regenerate.v1": regenerateParent,
+					"conversation.turn.stop.v1": stopParent,
+				});
+			} finally {
+				await transaction.close();
+			}
+		});
+
+		it("still accepts commands that carry no traceparent", async () => {
+			const { transaction, useCase } = createConversation();
+			try {
+				await useCase.createConversation({
+					schemaVersion: 1,
+					agentId: authority.agentId,
+					idempotencyKey: "create_no_trace",
+					requestId: "request_create_no_trace",
+					traceId: "trace_create_no_trace",
+				});
+				await expect(
+					useCase.accept({
+						schemaVersion: 1,
+						command: "message",
+						conversationId: "conversation_id_1",
+						text: "no trace",
+						idempotencyKey: "message_no_trace",
+						requestId: "request_message_no_trace",
+						traceId: "trace_message_no_trace",
+					}),
+				).resolves.toMatchObject({ outcome: "accepted" });
+				expect(await traceParents()).toEqual([
+					{ operation: "conversation.turn.submit.v1", trace_parent: null },
+				]);
+			} finally {
+				await transaction.close();
+			}
+		});
+
+		it.each(["executeMessage", "executeRegeneration", "executeStop"] as const)(
+			"refuses a %s plan whose outbox traceparent differs from the command's",
+			async (method) => {
+				const honest = createConversation();
+				const forged = createConversation(authority, {
+					tamperTraceParent: { method, traceParent: tampered },
+				});
+				try {
+					// 建立前置状态用不被篡改的用例；被篡改的用例只发最后一条命令。
+					let command: () => Promise<unknown>;
+					if (method === "executeMessage") {
+						await honest.useCase.createConversation({
+							schemaVersion: 1,
+							agentId: authority.agentId,
+							idempotencyKey: "create_forged",
+							requestId: "request_create_forged",
+							traceId: "trace_create_forged",
+						});
+						command = () =>
+							forged.useCase.accept({
+								schemaVersion: 1,
+								command: "message",
+								conversationId: "conversation_id_1",
+								text: "forged",
+								idempotencyKey: "message_forged",
+								requestId: "request_message_forged",
+								traceId: "trace_message_forged",
+								traceParent: messageParent,
+							});
+					} else {
+						await acceptMessage(honest.useCase);
+						if (method === "executeRegeneration") {
+							await client`update platform.conversation_executions set status = 'completed' where execution_id = 'conversation_id_3'`;
+							command = () =>
+								forged.useCase.regenerate({
+									schemaVersion: 1,
+									command: "regenerate",
+									conversationId: "conversation_id_1",
+									sourceMessageId: "conversation_id_2",
+									idempotencyKey: "regenerate_forged",
+									requestId: "request_regenerate_forged",
+									traceId: "trace_regenerate_forged",
+									traceParent: regenerateParent,
+								});
+						} else {
+							command = () =>
+								forged.useCase.stop({
+									schemaVersion: 1,
+									command: "stop",
+									conversationId: "conversation_id_1",
+									targetExecutionId: "conversation_id_3",
+									idempotencyKey: "stop_forged",
+									requestId: "request_stop_forged",
+									traceId: "trace_stop_forged",
+									traceParent: stopParent,
+								});
+						}
+					}
+					const before = await traceParents();
+					await expect(command()).rejects.toMatchObject({
+						name: "ConversationExecutionError",
+						code: "unavailable",
+					});
+					// 被拒绝的命令不留下 outbox 行，已有的行保持原样。
+					expect(await traceParents()).toEqual(before);
+				} finally {
+					await Promise.all([
+						honest.transaction.close(),
+						forged.transaction.close(),
+					]);
+				}
+			},
+		);
 	});
 
 	it.each(["ready", "active"] as const)(

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	createAgentManagementV1,
 	type SessionSandboxReconciliationClaimV1,
@@ -540,6 +540,269 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			// that remains unready returns to the paced retry and must not hot-loop.
 			expect(Number(retry?.delay_ms)).toBeGreaterThan(750);
 			expect(Number(retry?.delay_ms)).toBeLessThan(1_500);
+		} finally {
+			await store.close();
+		}
+	});
+
+	/** 一个待认领的 Sandbox 准备意图（沿用上面“唤醒仍在启动的 Sandbox”用例的装配）。 */
+	async function seedSandboxPrepareIntent(label: string) {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+		});
+		const [workload] =
+			await client`select state from platform.workload_reconciliations where agent_id = 'agent-dispatch'`;
+		if (!workload) throw new Error("Expected verified Workload fixture");
+		await client`insert into platform.agent_owners (agent_id, owner_id, created_at)
+			values ('agent-dispatch', 'actor-dispatch', now())`;
+		await client`update platform.session_sandbox_allocations
+			set resource_policy = jsonb_set(resource_policy, '{namespace}', to_jsonb(${workloadTestPolicy.namespace}::text))
+			where conversation_id = ${work.conversationId}`;
+		await client`update platform.session_sandbox_allocations
+			set resource_observation = jsonb_set(resource_observation, '{resources}',
+				coalesce((select jsonb_agg(jsonb_set(resource, '{namespace}', to_jsonb(${workloadTestPolicy.namespace}::text)))
+					from jsonb_array_elements(resource_observation->'resources') as resource), '[]'::jsonb))
+			where conversation_id = ${work.conversationId}`;
+		const itemId = `conversation:sandbox:${work.conversationId}:1`;
+		await client`insert into platform.outbox_items
+			(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+			 status, available_at, created_at, updated_at)
+			values (${itemId}, 'conversation', ${work.conversationId},
+			 'conversation.sandbox.reconcile.v1', ${client.json({
+					schemaVersion: 1,
+					conversationId: work.conversationId,
+					sessionGeneration: 1,
+					deployment: workload.state.verified.deployment,
+					modelProjection: null,
+				})}, ${`trace-${label}`}, ${`request-${label}`},
+			 'pending', now(), now(), now())`;
+		const store = new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			sandboxPolicy: {
+				namespace: workloadTestPolicy.namespace,
+				resourceConfigurationHash:
+					workloadResourceConfigurationHashV1(workloadTestPolicy),
+			},
+			userDirectory: {
+				async resolveUser(userId) {
+					return {
+						schemaVersion: 1,
+						userId,
+						accountStatus: "active",
+						organizationIds: [],
+						authorizationRevision: label,
+					};
+				},
+			},
+		});
+		return { work, itemId, store };
+	}
+
+	async function sandboxRetryState(itemId: string) {
+		const [row] = await client<
+			{
+				status: string;
+				attempt_count: number;
+				delay_s: number;
+				audits: number;
+				payload_keys: string;
+			}[]
+		>`select o.status, o.attempt_count,
+				round(extract(epoch from (o.available_at - clock_timestamp())))::int as delay_s,
+				(select count(*)::int from platform.conversation_audit_events a
+					where a.conversation_id = o.scope_id
+						and a.action = 'conversation.sandbox.observed') as audits,
+				(select string_agg(key, ',' order by key) from jsonb_object_keys(o.payload) as key) as payload_keys
+			from platform.outbox_items o where o.id = ${itemId}`;
+		if (!row) throw new Error(`Expected outbox item ${itemId}`);
+		return row;
+	}
+
+	/** 让下一次 claim 不受退避延迟影响，直接认领条目并记录一次观测。 */
+	async function recordSandboxAttempt(
+		store: PostgresConversationDispatchStoreV1,
+		itemId: string,
+		observation:
+			| { status: "unknown" }
+			| { status: "observed"; sameResources: true },
+	) {
+		await client`update platform.outbox_items set available_at = now() where id = ${itemId}`;
+		const claim = await store.claimSandboxReconciliation({
+			schemaVersion: 1,
+			itemId,
+			workerId: "sandbox-backoff-worker",
+			leaseDurationMs: 30_000,
+		});
+		if (!claim) throw new Error("Expected Sandbox claim");
+		await store.recordSandboxObservation({
+			claim,
+			observation:
+				observation.status === "unknown"
+					? { status: "unknown", resources: [] }
+					: {
+							status: "observed",
+							resources: claim.previousObservation?.resources ?? [],
+						},
+		});
+	}
+
+	it("paces an unknown Sandbox by consecutive retries up to 60 s without ending the item or auditing every attempt (#2456)", async () => {
+		const { work, itemId, store } =
+			await seedSandboxPrepareIntent("sandbox-backoff");
+		try {
+			const payloadKeys = (await sandboxRetryState(itemId)).payload_keys;
+			const delays: number[] = [];
+			for (let attempt = 1; attempt <= 13; attempt += 1) {
+				await recordSandboxAttempt(store, itemId, { status: "unknown" });
+				const state = await sandboxRetryState(itemId);
+				// 条目始终保留为待重试，不会失败或被当作收敛；只有首次观测写审计。
+				expect(state).toMatchObject({
+					status: "retry_scheduled",
+					attempt_count: attempt,
+					audits: 1,
+				});
+				delays.push(state.delay_s);
+			}
+			// 前 5 次重复重试保持 1 s，第 6 次起 2/4/8/16/32 s 翻倍并封顶 60 s。
+			expect(delays).toEqual([1, 1, 1, 1, 1, 1, 2, 4, 8, 16, 32, 60, 60]);
+			const [audit] = await client<{ progress: string }[]>`
+				select details->>'progress' as progress from platform.conversation_audit_events
+				where conversation_id = ${work.conversationId} and action = 'conversation.sandbox.observed'`;
+			expect(audit?.progress).toMatch(/^[0-9a-f]{32}$/);
+			// payload 形状不变：旧版本 Worker 对它做严格比较，回滚后仍能认领。
+			expect((await sandboxRetryState(itemId)).payload_keys).toBe(payloadKeys);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("returns to the base delay and audits again when the Sandbox evidence changes (#2456)", async () => {
+		const { itemId, store } = await seedSandboxPrepareIntent(
+			"sandbox-backoff-change",
+		);
+		try {
+			for (let attempt = 1; attempt <= 12; attempt += 1)
+				await recordSandboxAttempt(store, itemId, { status: "unknown" });
+			expect(await sandboxRetryState(itemId)).toMatchObject({
+				delay_s: 60,
+				audits: 1,
+			});
+			// 观测从 unknown 变为 observed：证据变化，立即回到 1 s 并再写一行审计。
+			await recordSandboxAttempt(store, itemId, {
+				status: "observed",
+				sameResources: true,
+			});
+			expect(await sandboxRetryState(itemId)).toMatchObject({
+				delay_s: 1,
+				audits: 2,
+			});
+			// 相同的 observed 继续停滞：等待就绪不退避，也不再逐次写审计。
+			await recordSandboxAttempt(store, itemId, {
+				status: "observed",
+				sameResources: true,
+			});
+			expect(await sandboxRetryState(itemId)).toMatchObject({
+				status: "retry_scheduled",
+				delay_s: 1,
+				audits: 2,
+			});
+			// 又回到 unknown：证据再次变化，重复重试的计数从 1 重新开始。
+			await recordSandboxAttempt(store, itemId, { status: "unknown" });
+			expect(await sandboxRetryState(itemId)).toMatchObject({
+				delay_s: 1,
+				audits: 3,
+			});
+			await recordSandboxAttempt(store, itemId, { status: "unknown" });
+			expect(await sandboxRetryState(itemId)).toMatchObject({
+				delay_s: 1,
+				audits: 3,
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("treats an audit row written before the progress fingerprint existed as a change (#2456)", async () => {
+		const { work, itemId, store } = await seedSandboxPrepareIntent(
+			"sandbox-backoff-legacy",
+		);
+		try {
+			const [binding] = await client<
+				{ sandbox_id: string; session_generation: string }[]
+			>`select sandbox_id, session_generation from platform.session_sandbox_allocations
+				where conversation_id = ${work.conversationId}`;
+			if (!binding) throw new Error("Expected Sandbox allocation");
+			// 旧版本 Worker 每次都写一行不带指纹的审计，且属于当前 Sandbox。
+			await client`insert into platform.conversation_audit_events
+				(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)
+				values (${"legacy-observed"}, ${work.conversationId}, null, 'agent-dispatch', 'actor-dispatch',
+					'conversation.sandbox.observed', 'trace-legacy', 'request-legacy', clock_timestamp(),
+					${client.json({ sandboxId: binding.sandbox_id, sessionGeneration: Number(binding.session_generation), resourceFence: 1, status: "unknown" })})`;
+			await recordSandboxAttempt(store, itemId, { status: "unknown" });
+			// 没有指纹的旧行不能证明证据没变：写审计并按基础延迟，而不是直接退避。
+			expect(await sandboxRetryState(itemId)).toMatchObject({
+				delay_s: 1,
+				audits: 2,
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("does not let a replacement Sandbox generation inherit the previous generation's audit or backoff (#2456)", async () => {
+		const { work, itemId, store } = await seedSandboxPrepareIntent(
+			"sandbox-backoff-generation",
+		);
+		try {
+			for (let attempt = 1; attempt <= 12; attempt += 1)
+				await recordSandboxAttempt(store, itemId, { status: "unknown" });
+			expect(await sandboxRetryState(itemId)).toMatchObject({
+				delay_s: 60,
+				audits: 1,
+			});
+			// 会话重启：同一个 Conversation 换成新一代 Sandbox 绑定（新的 sandboxId 与
+			// session generation），但原始证据相同（unknown、没有资源）。
+			const replacement = randomUUID();
+			await client`update platform.session_sandbox_allocations
+				set sandbox_id = ${replacement}, resource_name = ${`sandbox-${replacement}`},
+					workspace_scope = ${replacement}, session_generation = 2
+				where conversation_id = ${work.conversationId}`;
+			await client`update platform.conversations set session_generation = 2 where id = ${work.conversationId}`;
+			await client`update platform.outbox_items
+				set payload = payload || jsonb_build_object('sessionGeneration', 2)
+				where id = ${itemId}`;
+			await recordSandboxAttempt(store, itemId, { status: "unknown" });
+			// 新 Sandbox 的首次观测必须自己写审计，并从基础延迟重新开始退避。
+			expect(await sandboxRetryState(itemId)).toMatchObject({
+				delay_s: 1,
+				audits: 2,
+			});
+			await recordSandboxAttempt(store, itemId, { status: "unknown" });
+			expect(await sandboxRetryState(itemId)).toMatchObject({
+				delay_s: 1,
+				audits: 2,
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("ignores a matching fingerprint left by another Sandbox identity (#2456)", async () => {
+		const { work, itemId, store } = await seedSandboxPrepareIntent(
+			"sandbox-backoff-foreign",
+		);
+		try {
+			await recordSandboxAttempt(store, itemId, { status: "unknown" });
+			// 把这条仍然带相同指纹的审计改写成“另一个 Sandbox 写的”：即使指纹字符串相同，
+			// 它也不能证明当前 Sandbox 的证据没变，必须重新写审计并从基础延迟开始。
+			await client`update platform.conversation_audit_events
+				set details = details || jsonb_build_object('sandboxId', ${randomUUID()}::text)
+				where conversation_id = ${work.conversationId} and action = 'conversation.sandbox.observed'`;
+			await recordSandboxAttempt(store, itemId, { status: "unknown" });
+			expect(await sandboxRetryState(itemId)).toMatchObject({
+				delay_s: 1,
+				audits: 2,
+			});
 		} finally {
 			await store.close();
 		}
