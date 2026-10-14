@@ -6,6 +6,7 @@ import {
 	BrowserHandoffPanel,
 	type BrowserHandoffPanelStateV1,
 	type BrowserSideEffectConfirmationV1,
+	projectBrowserHandoffTimelineEventV1,
 } from "./browser-handoff-panel.js";
 
 const binding: BrowserHandoffBindingV1 = {
@@ -46,6 +47,85 @@ describe("Browser handoff and confirmation panel", () => {
 	afterEach(() => {
 		cleanup();
 		vi.useRealTimers();
+	});
+
+	it.each([
+		"requested",
+		"active",
+		"returning",
+		"completed",
+		"revoked",
+		"expired",
+		"crashed",
+		"unknown",
+	] as const)(
+		"projects the %s SSE state with the current binding",
+		(status) => {
+			const projected = projectBrowserHandoffTimelineEventV1(
+				{
+					type: "browser.handoff",
+					payload: {
+						handoffId: "handoff-1",
+						status,
+						reason: "mfa",
+						expiresAt: requested.expiresAt,
+						binding: {
+							subjectId: binding.subjectId,
+							agentId: binding.agentId,
+							conversationId: binding.conversationId,
+							executionId: binding.executionId,
+							sessionGeneration: binding.sessionGeneration,
+							resourceFence: binding.resourceFence,
+							workloadRevision: binding.workloadRevision,
+							imageDigest: binding.imageDigest,
+							capabilityVersion: binding.capabilityVersion,
+							pageRevision: binding.pageRevision,
+						},
+					},
+				},
+				binding,
+			);
+			expect(projected).toMatchObject({
+				handoffId: "handoff-1",
+				status,
+				binding,
+			});
+		},
+	);
+
+	it("rejects a foreign or stale SSE binding before panel actions", () => {
+		const { capabilityRevision, ...eventBinding } = binding;
+		void capabilityRevision;
+		const event = {
+			type: "browser.handoff" as const,
+			payload: {
+				handoffId: "handoff-1",
+				status: "requested" as const,
+				reason: "mfa" as const,
+				expiresAt: requested.expiresAt,
+				binding: eventBinding,
+			},
+		};
+		const foreign = {
+			...event,
+			payload: {
+				...event.payload,
+				binding: { ...event.payload.binding, agentId: "other" },
+			},
+		};
+		const stale = {
+			...event,
+			payload: {
+				...event.payload,
+				binding: { ...event.payload.binding, pageRevision: 3 },
+			},
+		};
+		expect(
+			projectBrowserHandoffTimelineEventV1(foreign, binding),
+		).toBeUndefined();
+		expect(
+			projectBrowserHandoffTimelineEventV1(stale, binding),
+		).toBeUndefined();
 	});
 
 	it("offers takeover and passes only the opaque id plus verified binding", () => {

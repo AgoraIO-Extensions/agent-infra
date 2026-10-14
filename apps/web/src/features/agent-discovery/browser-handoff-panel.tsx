@@ -74,6 +74,29 @@ export type BrowserHandoffActionInputV1 = Readonly<{
 	binding: BrowserHandoffBindingV1;
 }>;
 
+export type BrowserHandoffTimelineEventV1 = Readonly<{
+	type: "browser.handoff";
+	payload: Readonly<{
+		handoffId: string;
+		status: BrowserHandoffPanelStateV1["status"];
+		reason: BrowserHandoffReasonV1;
+		expiresAt: string;
+		operatorId?: string;
+		terminalReason?: string;
+		binding: Omit<BrowserHandoffBindingV1, "capabilityRevision">;
+	}>;
+}>;
+
+const terminalReasonCodes = new Set<
+	NonNullable<BrowserHandoffPanelStateV1["terminalReasonCode"]>
+>([
+	"BROWSER_HANDOFF_EXPIRED",
+	"BROWSER_HANDOFF_BROWSER_CRASHED",
+	"BROWSER_HANDOFF_AUTHORIZATION_REVOKED",
+	"BROWSER_HANDOFF_OPERATOR_CHANGED",
+	"BROWSER_HANDOFF_RETURN_UNCONFIRMED",
+]);
+
 type BrowserHandoffPanelProps = {
 	readonly browserAvailable?: boolean;
 	readonly confirmation?: BrowserSideEffectConfirmationV1;
@@ -145,6 +168,95 @@ function sameBinding(
 		left.capabilityRevision === right.capabilityRevision &&
 		left.pageRevision === right.pageRevision
 	);
+}
+
+function validTimelineBinding(
+	binding: BrowserHandoffTimelineEventV1["payload"]["binding"],
+): boolean {
+	return (
+		[
+			binding.subjectId,
+			binding.agentId,
+			binding.conversationId,
+			binding.executionId,
+		].every((value) => typeof value === "string" && value.length > 0) &&
+		[
+			binding.sessionGeneration,
+			binding.resourceFence,
+			binding.workloadRevision,
+			binding.capabilityVersion,
+			binding.pageRevision,
+		].every((value) => Number.isSafeInteger(value) && value >= 1) &&
+		/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(binding.imageDigest)
+	);
+}
+
+function sameTimelineBinding(
+	eventBinding: BrowserHandoffTimelineEventV1["payload"]["binding"],
+	currentBinding: BrowserHandoffBindingV1,
+): boolean {
+	return (
+		eventBinding.subjectId === currentBinding.subjectId &&
+		eventBinding.agentId === currentBinding.agentId &&
+		eventBinding.conversationId === currentBinding.conversationId &&
+		eventBinding.executionId === currentBinding.executionId &&
+		eventBinding.sessionGeneration === currentBinding.sessionGeneration &&
+		eventBinding.resourceFence === currentBinding.resourceFence &&
+		eventBinding.workloadRevision === currentBinding.workloadRevision &&
+		eventBinding.imageDigest === currentBinding.imageDigest &&
+		eventBinding.capabilityVersion === currentBinding.capabilityVersion &&
+		eventBinding.pageRevision === currentBinding.pageRevision
+	);
+}
+
+/**
+ * Converts the server-authenticated V2 timeline event into the existing panel
+ * state. The current binding remains the action authority; an event cannot
+ * replace it or open an action for a foreign/stale Browser session.
+ */
+export function projectBrowserHandoffTimelineEventV1(
+	input: unknown,
+	currentBinding?: BrowserHandoffBindingV1,
+): BrowserHandoffPanelStateV1 | undefined {
+	if (
+		!currentBinding ||
+		!validBinding(currentBinding) ||
+		typeof input !== "object" ||
+		input === null ||
+		(input as { readonly type?: unknown }).type !== "browser.handoff"
+	)
+		return undefined;
+	const payload = (input as { readonly payload?: unknown }).payload;
+	if (typeof payload !== "object" || payload === null) return undefined;
+	const value = payload as BrowserHandoffTimelineEventV1["payload"];
+	if (
+		typeof value.handoffId !== "string" ||
+		!Object.hasOwn(handoffLabels, value.status) ||
+		!Object.hasOwn(reasonLabels, value.reason) ||
+		typeof value.expiresAt !== "string" ||
+		!Number.isFinite(Date.parse(value.expiresAt)) ||
+		!value.binding ||
+		!validTimelineBinding(value.binding) ||
+		!sameTimelineBinding(value.binding, currentBinding)
+	)
+		return undefined;
+	const terminalReasonCode = terminalReasonCodes.has(
+		value.terminalReason as NonNullable<
+			BrowserHandoffPanelStateV1["terminalReasonCode"]
+		>,
+	)
+		? (value.terminalReason as NonNullable<
+				BrowserHandoffPanelStateV1["terminalReasonCode"]
+			>)
+		: undefined;
+	return {
+		handoffId: value.handoffId,
+		status: value.status,
+		reason: value.reason,
+		expiresAt: value.expiresAt,
+		binding: currentBinding,
+		...(terminalReasonCode ? { terminalReasonCode } : {}),
+	};
 }
 
 function safeOrigin(value: string): string | undefined {
