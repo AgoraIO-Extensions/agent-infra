@@ -336,67 +336,61 @@ describe("Agent application draft", () => {
 	});
 
 	describe("updating an application whose models the default Relay Key manages (#2421)", () => {
-		const keyState = { isSet: true, keyVersion: 2, configurationRevision: 7 };
-		const editing = {
-			...standardCreateDraft,
-			configureModels: true,
-			defaultRelayKey: "  agent-relay-key-value  ",
+		const replacement = {
+			defaultRelayKey: "agent-relay-key-value",
+			expectedConfigurationRevision: 7,
+			expectedKeyVersion: 2,
+			modelConfiguration: {
+				options: [
+					{
+						optionId: "endpoint-primary:gpt-5",
+						endpointId: "endpoint-primary",
+						modelId: "gpt-5",
+						reasoningLevels: ["high"],
+					},
+				],
+				defaultOptionId: "endpoint-primary:gpt-5",
+				defaultReasoningLevel: "high",
+			},
 		};
 
-		it("carries the Key and the versions the page saw when the model set is replaced", () => {
-			const body = buildAgentApplicationRequest("update", editing, keyState);
+		it("carries the Key, the checked versions and the model set chosen from the Key's candidates", () => {
+			const body = buildAgentApplicationRequest(
+				"update",
+				{ ...standardCreateDraft, configureModels: false },
+				replacement,
+			);
 			expect(body).toMatchObject({
 				schemaVersion: 2,
 				defaultRelayKey: "agent-relay-key-value",
 				expectedConfigurationRevision: 7,
 				expectedKeyVersion: 2,
-				modelConfiguration: { defaultOptionId: "model-primary" },
+				modelConfiguration: replacement.modelConfiguration,
 			});
 		});
 
-		it("keeps a null Key version for an application that has none yet", () => {
-			expect(
-				buildAgentApplicationRequest("update", editing, {
-					isSet: true,
-					keyVersion: null,
-					configurationRevision: 7,
-				}),
-			).toMatchObject({ expectedKeyVersion: null });
+		it("never mixes catalog rows into a replacement and keeps a null Key version", () => {
+			const body = buildAgentApplicationRequest(
+				"update",
+				// 即使草稿里还留着逐行模型，也以候选选择为准。
+				{ ...standardCreateDraft, configureModels: true },
+				{ ...replacement, expectedKeyVersion: null },
+			);
+			expect(body).toMatchObject({
+				expectedKeyVersion: null,
+				modelConfiguration: replacement.modelConfiguration,
+			});
 		});
 
-		it.each([
-			[
-				"the models are not replaced",
-				{ ...editing, configureModels: false },
-				keyState,
-			],
-			["no Key was entered", { ...editing, defaultRelayKey: "  " }, keyState],
-			[
-				"the Key does not manage the models",
-				editing,
-				{ ...keyState, isSet: false },
-			],
-			["no Key state was read", editing, undefined],
-		])("sends no Key or versions when %s", (_label, draft, state) => {
-			const body = buildAgentApplicationRequest("update", draft, state);
+		it("sends no Key or versions without a replacement", () => {
+			const body = buildAgentApplicationRequest("update", {
+				...standardCreateDraft,
+				configureModels: false,
+			});
 			expect(body).not.toHaveProperty("defaultRelayKey");
 			expect(body).not.toHaveProperty("expectedConfigurationRevision");
 			expect(body).not.toHaveProperty("expectedKeyVersion");
-		});
-
-		it("requires the Key whenever the managed model set is edited", () => {
-			const errors = validateAgentApplicationDraft(
-				{ ...editing, defaultRelayKey: "" },
-				{
-					modelConfigurationVisible: true,
-					requiresDefaultRelayKey: true,
-					staleModel: false,
-					staleTemplate: false,
-					standardChoicesBlocked: false,
-					defaultModelReasoningLevels: ["medium", "high"],
-				},
-			);
-			expect(errors.defaultRelayKey).toBe("请输入 Agent 默认 Relay Key。");
+			expect(body).not.toHaveProperty("modelConfiguration");
 		});
 	});
 });

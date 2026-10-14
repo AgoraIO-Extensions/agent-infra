@@ -30,7 +30,7 @@ import {
 	configurationDraftFromAgent,
 } from "./agent-configuration-draft.js";
 import { KeylessModelPicker } from "./keyless-model-picker.js";
-import type { KeylessModelSelection } from "./keyless-model-selection.js";
+import { useKeylessKeyCheck } from "./use-keyless-key-check.js";
 import { WecomAppSetup } from "./wecom-app-setup.js";
 import { WecomBotSetup } from "./wecom-bot-setup.js";
 
@@ -174,20 +174,7 @@ export function AgentConfigurationScreen({
 	const [draft, setDraft] = useState(() => configurationDraftFromAgent(agent));
 	const [ownerError, setOwnerError] = useState<string>();
 	const [imageReference, setImageReference] = useState("");
-	const [defaultRelayKey, setDefaultRelayKey] = useState("");
-	const [keyCandidates, setKeyCandidates] = useState<
-		AgentDefaultRelayKeyCheck["candidates"]
-	>([]);
-	// 检查时看到的配置修订和 Key 版本：保存时原样带回，由服务端判定是否已过期。
-	const [checkedVersions, setCheckedVersions] = useState<{
-		configurationRevision: number;
-		keyVersion: number | null;
-	}>();
-	const [keySelection, setKeySelection] =
-		useState<KeylessModelSelection | null>(null);
-	const [keyChecking, setKeyChecking] = useState(false);
-	const [keyCheckError, setKeyCheckError] = useState(false);
-	const [keySelectionError, setKeySelectionError] = useState(false);
+	const keyCheck = useKeylessKeyCheck(onPreviewDefaultRelayKeyCandidates);
 	const submittedResult =
 		commandResult?.agentId === agent.agentId ? commandResult : undefined;
 	const resultRef = useResultFocus(submittedResult);
@@ -211,36 +198,10 @@ export function AgentConfigurationScreen({
 		)
 		.join("、");
 	const isDisabled = submitting || agent.managementStatus === "disabled";
-	const checkDefaultRelayKey = async () => {
-		if (!onPreviewDefaultRelayKeyCandidates || !defaultRelayKey.trim()) return;
-		setKeyChecking(true);
-		setKeyCheckError(false);
-		setKeySelectionError(false);
-		try {
-			const result = await onPreviewDefaultRelayKeyCandidates(
-				defaultRelayKey.trim(),
-			);
-			setKeyCandidates(result.candidates);
-			setCheckedVersions({
-				configurationRevision: result.configurationRevision,
-				keyVersion: result.keyVersion,
-			});
-		} catch {
-			setKeyCandidates([]);
-			setCheckedVersions(undefined);
-			setKeyCheckError(true);
-		} finally {
-			setKeyChecking(false);
-		}
-	};
 	const replaceDefaultRelayKey = () => {
-		if (!onReplaceDefaultRelayKey || !defaultRelayKey.trim()) return;
-		onReplaceDefaultRelayKey(defaultRelayKey.trim());
-		setDefaultRelayKey("");
-		setKeyCandidates([]);
-		setCheckedVersions(undefined);
-		setKeySelection(null);
-		setKeySelectionError(false);
+		if (!onReplaceDefaultRelayKey || !keyCheck.typed) return;
+		onReplaceDefaultRelayKey(keyCheck.key.trim());
+		keyCheck.reset();
 	};
 	const updateModel = (
 		index: number,
@@ -265,13 +226,6 @@ export function AgentConfigurationScreen({
 			),
 		}));
 	const submitConfiguration = () => {
-		if (
-			defaultRelayKeyManaged &&
-			(keyChecking || (checkedVersions !== undefined && keySelection === null))
-		) {
-			setKeySelectionError(true);
-			return;
-		}
 		const request = buildAgentConfigurationRequest(draft);
 		if (!request.coOwnerIds?.length) {
 			setOwnerError("请选择至少一名有效 Owner。");
@@ -279,28 +233,21 @@ export function AgentConfigurationScreen({
 			return;
 		}
 		setOwnerError(undefined);
+		// 已经开始替换默认 Key：必须完成检查并选好模型，不能退回普通保存而静默丢掉用户正在
+		// 编辑的 Key 和模型集合。
+		if (defaultRelayKeyManaged && keyCheck.typed && !keyCheck.replacement) {
+			keyCheck.block();
+			document.getElementById("configuration-default-relay-key")?.focus();
+			return;
+		}
 		setDraft((current) => ({
 			...current,
 			secrets: [],
 		}));
 		// 填写了 Key 并选好模型：与页面其他修改一起，Key、模型集合和配置修订一次保存。
-		if (
-			defaultRelayKeyManaged &&
-			keySelection &&
-			checkedVersions &&
-			defaultRelayKey.trim()
-		) {
-			onSave({
-				...request,
-				defaultRelayKey: defaultRelayKey.trim(),
-				expectedConfigurationRevision: checkedVersions.configurationRevision,
-				expectedKeyVersion: checkedVersions.keyVersion,
-				modelConfiguration: keySelection,
-			});
-			setDefaultRelayKey("");
-			setKeyCandidates([]);
-			setCheckedVersions(undefined);
-			setKeySelection(null);
+		if (defaultRelayKeyManaged && keyCheck.replacement) {
+			onSave({ ...request, ...keyCheck.replacement });
+			keyCheck.reset();
 			return;
 		}
 		onSave(request);
@@ -497,35 +444,28 @@ export function AgentConfigurationScreen({
 														autoComplete="new-password"
 														disabled={isDisabled || relayKeySubmitting}
 														id="configuration-default-relay-key"
-														onChange={(event) => {
-															setDefaultRelayKey(event.target.value);
-															setKeyCandidates([]);
-															setCheckedVersions(undefined);
-															setKeySelection(null);
-															setKeyCheckError(false);
-															setKeySelectionError(false);
-														}}
+														onChange={(event) =>
+															keyCheck.setKey(event.target.value)
+														}
 														placeholder="输入新 Key"
 														type="password"
-														value={defaultRelayKey}
+														value={keyCheck.key}
 													/>
 													<Button
 														disabled={
-															isDisabled ||
-															keyChecking ||
-															!defaultRelayKey.trim()
+															isDisabled || keyCheck.checking || !keyCheck.typed
 														}
-														onClick={() => void checkDefaultRelayKey()}
+														onClick={() => void keyCheck.runCheck()}
 														type="button"
 														variant="outline"
 													>
-														{keyChecking ? "正在检查…" : "检查可用模型"}
+														{keyCheck.checking ? "正在检查…" : "检查可用模型"}
 													</Button>
 													<Button
 														disabled={
 															isDisabled ||
 															relayKeySubmitting ||
-															!defaultRelayKey.trim()
+															!keyCheck.typed
 														}
 														onClick={replaceDefaultRelayKey}
 														type="button"
@@ -548,19 +488,27 @@ export function AgentConfigurationScreen({
 														{relayKeyResult.keyVersion}。
 													</p>
 												) : null}
-												{keyCheckError || relayKeyError || keySelectionError ? (
+												{keyCheck.blocked ? (
 													<Alert variant="destructive">
 														<AlertDescription>
-															{keySelectionError
-																? "请等待 Key 检查完成，并选择至少一个有效模型和默认推理档位后再保存。"
-																: "Key 校验或替换失败，请刷新后重试。"}
+															已填写新
+															Key，但还没有可保存的模型选择：请先点击「检查可用模型」，选好模型（至少一个模型，每个模型至少一个推理档位）后再保存；不想更换
+															Key 请清空输入框。
 														</AlertDescription>
 													</Alert>
 												) : null}
-												{keyCandidates.length > 0 && !defaultRelayKeyManaged ? (
+												{keyCheck.error || relayKeyError ? (
+													<Alert variant="destructive">
+														<AlertDescription>
+															Key 校验或替换失败，请刷新后重试。
+														</AlertDescription>
+													</Alert>
+												) : null}
+												{keyCheck.candidates.length > 0 &&
+												!defaultRelayKeyManaged ? (
 													<p className="text-muted-foreground text-sm">
 														Key 可用模型：
-														{keyCandidates
+														{keyCheck.candidates
 															.map(
 																(candidate) =>
 																	`${candidate.endpointId} · ${candidate.modelId}`,
@@ -568,10 +516,11 @@ export function AgentConfigurationScreen({
 															.join("、")}
 													</p>
 												) : null}
-												{keyCandidates.length > 0 && defaultRelayKeyManaged ? (
+												{keyCheck.candidates.length > 0 &&
+												defaultRelayKeyManaged ? (
 													<>
 														<KeylessModelPicker
-															candidates={keyCandidates}
+															candidates={keyCheck.candidates}
 															current={agent.configuration.modelOptions}
 															currentDefault={{
 																optionId:
@@ -583,13 +532,13 @@ export function AgentConfigurationScreen({
 															}}
 															disabled={isDisabled}
 															idPrefix="configuration-keyless-model"
-															key={keyCandidates
+															key={keyCheck.candidates
 																.map(
 																	(candidate) =>
 																		`${candidate.endpointId}/${candidate.modelId}`,
 																)
 																.join("|")}
-															onChange={setKeySelection}
+															onChange={keyCheck.setSelection}
 														/>
 														<p className="text-muted-foreground text-sm">
 															选好后点击页面底部的「校验并保存」：新

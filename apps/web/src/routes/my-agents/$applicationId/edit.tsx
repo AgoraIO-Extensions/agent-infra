@@ -3,6 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 
+import { checkAgentDefaultRelayKey } from "../../../features/agent-configuration/agent-configuration.js";
 import { useAgentDefaultRelayKeyState } from "../../../features/agent-configuration/use-agent-default-relay-key-state.js";
 import { AgentApplicationSubmissionScreen } from "../../../features/my-agents/agent-application-submission-screen.js";
 import { projectDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
@@ -131,8 +132,15 @@ function EditAgentApplicationRoute() {
 			<AgentApplicationSubmissionScreen
 				action={action}
 				application={application}
-				defaultRelayKeyState={
-					defaultRelayKey.data?.isSet ? defaultRelayKey.data : undefined
+				defaultRelayKeyManaged={defaultRelayKey.data?.isSet === true}
+				onCheckDefaultRelayKey={
+					application.agentId
+						? (keyValue) =>
+								checkAgentDefaultRelayKey(
+									application.agentId as string,
+									keyValue,
+								)
+						: undefined
 				}
 				error={error}
 				mode="update"

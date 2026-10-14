@@ -21,6 +21,9 @@ vi.mock("../agent-administration/use-agent-lifecycle-command.js", () => ({
 vi.mock("./use-agent-configuration-submission.js", () => ({
 	useAgentConfigurationSubmission: vi.fn(),
 }));
+vi.mock("./use-agent-default-relay-key-state.js", () => ({
+	useAgentDefaultRelayKeyState: vi.fn(),
+}));
 vi.mock("./agent-authorization.js", () => ({
 	AgentAuthorizationRequestError: class extends Error {},
 	grantApplicationManager: vi.fn(),
@@ -28,9 +31,6 @@ vi.mock("./agent-authorization.js", () => ({
 	revokeApplicationManager: vi.fn(),
 	revokeApplicationUse: vi.fn(),
 	revokeUserApiUse: vi.fn(),
-}));
-vi.mock("./use-agent-default-relay-key-state.js", () => ({
-	useAgentDefaultRelayKeyState: vi.fn(),
 }));
 
 const ownerSession = BrowserSessionProjectionV1Schema.parse({
