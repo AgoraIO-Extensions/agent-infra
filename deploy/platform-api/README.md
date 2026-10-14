@@ -40,8 +40,9 @@ installation credential。外置 `platform-api` 的文件装配仍由其部署�
 
 Relay Key 策略必须作为配置模块顶层的 `agentDefaultRelayKeyPolicy` 和
 `personalRelayKeyValidation` 导出；把它们仅放在 `apiInput` 的 optional 字段中不能证明生产供给。
-任一字段缺失时，Platform API 以稳定的 `PLATFORM_RELAY_KEY_POLICY_MISSING` 诊断退出，并只列出缺失
-字段名，不输出 Relay Key、endpoint、billing URL 或 credential 内容。
+任一字段缺失时，Platform API 仍可启动，但以稳定的 `PLATFORM_RELAY_KEY_POLICY_MISSING` degraded
+warning 只列出缺失字段名，不输出 Relay Key、endpoint、billing URL 或 credential 内容；依赖缺失策略的
+标准模板申请保持失败关闭。
 
 内置模块从 `PLATFORM_DATABASE_URL` 取数据库 URL，从上述 Secret 文件读取高熵
 代理令牌，并覆盖 `apiInput` 中的
