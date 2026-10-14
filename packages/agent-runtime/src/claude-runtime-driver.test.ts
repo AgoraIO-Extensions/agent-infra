@@ -14,6 +14,7 @@ import { expect, it, vi } from "vitest";
 import {
 	type ClaudeNativeCommandReadContext,
 	ClaudeRuntimeDriver,
+	claudeNativeSkillLaunchOptions,
 	normalizeClaudeUncertainConnectionOperations,
 	parseClaudeNativeCommands,
 } from "./claude-runtime-driver.js";
@@ -76,6 +77,88 @@ const attachmentCommand = {
 	},
 	input: { text: "inspect", attachments: ["file-1"] },
 };
+
+it("keeps Claude native Skill loading disabled without a verified Applied root", () => {
+	const metadataOnly: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "a".repeat(64),
+		findSkills: () => [],
+		readSkill: async () => new Uint8Array(),
+	};
+	const disabled = { extraArgs: { "disable-slash-commands": null } };
+	expect(claudeNativeSkillLaunchOptions()).toEqual(disabled);
+	expect(claudeNativeSkillLaunchOptions(metadataOnly)).toEqual(disabled);
+});
+
+it("enables Claude native Skill loading only after the Applied root verifies", () => {
+	const nativeSkillPaths = vi.fn(() => [
+		"/opt/agent-infra-skill-hub/.agents/skills/workspace-summary/SKILL.md",
+	]);
+	const directory: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "a".repeat(64),
+		nativeRoot: "/opt/agent-infra-skill-hub",
+		nativeSkillPaths,
+		findSkills: () => [
+			{
+				schemaVersion: 1,
+				name: "workspace-summary",
+				version: "1.0.0",
+				packageDigest: "b".repeat(64),
+				manifestDigest: "c".repeat(64),
+				targetPath: ".agents/skills/workspace-summary",
+				readOnly: true,
+			},
+		],
+		readSkill: async () => new Uint8Array(),
+	};
+
+	expect(claudeNativeSkillLaunchOptions(directory)).toEqual({
+		additionalDirectories: ["/opt/agent-infra-skill-hub"],
+		skills: ["workspace-summary"],
+	});
+	expect(nativeSkillPaths).toHaveBeenCalledOnce();
+});
+
+it("fails closed when the Applied root cannot be revalidated", () => {
+	const directory: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "a".repeat(64),
+		nativeRoot: "/opt/agent-infra-skill-hub",
+		nativeSkillPaths: () => {
+			throw new Error("stale Applied root");
+		},
+		findSkills: () => [],
+		readSkill: async () => new Uint8Array(),
+	};
+
+	expect(() => claudeNativeSkillLaunchOptions(directory)).toThrow(
+		"stale Applied root",
+	);
+});
+
+it("fails closed when verified files do not match Applied Skill metadata", () => {
+	const directory: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "a".repeat(64),
+		nativeRoot: "/opt/agent-infra-skill-hub",
+		nativeSkillPaths: () => [
+			"/opt/agent-infra-skill-hub/.agents/skills/other/SKILL.md",
+		],
+		findSkills: () => [
+			{
+				schemaVersion: 1,
+				name: "workspace-summary",
+				version: "1.0.0",
+				packageDigest: "b".repeat(64),
+				manifestDigest: "c".repeat(64),
+				targetPath: ".agents/skills/workspace-summary",
+				readOnly: true,
+			},
+		],
+		readSkill: async () => new Uint8Array(),
+	};
+
+	expect(() => claudeNativeSkillLaunchOptions(directory)).toThrow(
+		"Runtime Skill directory is unavailable",
+	);
+});
 
 it("keeps uncertain Claude Connection operations held across restart", () => {
 	const turn: Parameters<
