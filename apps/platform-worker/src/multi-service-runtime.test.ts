@@ -54,7 +54,10 @@ const manifest = MultiServiceManifestDocumentV1Schema.parse({
 			kind: "Service",
 			metadata: {
 				name: "web",
-				annotations: { "agent-infra.agora.io/entry": "true" },
+				annotations: {
+					"agent-infra.agora.io/entry": "true",
+					"agent-infra.agora.io/resource-profile": "small",
+				},
 			},
 			spec: {
 				type: "ClusterIP",
@@ -65,7 +68,10 @@ const manifest = MultiServiceManifestDocumentV1Schema.parse({
 		{
 			apiVersion: "v1",
 			kind: "Service",
-			metadata: { name: "worker" },
+			metadata: {
+				name: "worker",
+				annotations: { "agent-infra.agora.io/resource-profile": "small" },
+			},
 			spec: {
 				type: "ClusterIP",
 				selector: { app: "worker" },
@@ -200,6 +206,21 @@ describe("multi-service runtime operations", () => {
 				ingressClassName: "nginx",
 				tlsSecretName: "tls",
 				routeSelector: { "app.kubernetes.io/name": "ingress" },
+				multiServiceResourceProfiles: [
+					{
+						profileId: "small",
+						displayName: "Small",
+						estimatedResources: {
+							cpuMillicores: 100,
+							memoryMiB: 128,
+							storageGiB: 1,
+						},
+						resources: {
+							requests: { cpu: "25m", memory: "32Mi" },
+							limits: { cpu: "100m", memory: "128Mi" },
+						},
+					},
+				],
 			},
 		});
 		const value = desired();
@@ -213,6 +234,18 @@ describe("multi-service runtime operations", () => {
 			workloadResourceNameV1("agent-a"),
 		);
 		expect(
+			(
+				deployment as {
+					spec?: {
+						template?: { spec?: { containers?: [{ resources?: unknown }] } };
+					};
+				}
+			).spec?.template?.spec?.containers?.[0]?.resources,
+		).toEqual({
+			requests: { cpu: "25m", memory: "32Mi" },
+			limits: { cpu: "100m", memory: "128Mi" },
+		});
+		expect(
 			fake.resources.has(`ServiceAccount/${workloadResourceNameV1("agent-a")}`),
 		).toBe(true);
 		const network = [...fake.resources.values()].find(
@@ -225,5 +258,64 @@ describe("multi-service runtime operations", () => {
 		expect(
 			fake.resources.has(`Ingress/${workloadResourceNameV1("agent-a")}`),
 		).toBe(true);
+	});
+
+	it("rejects user resource fields and aggregate profile caps", async () => {
+		const firstResource = manifest.resources[0];
+		if (firstResource?.kind !== "Deployment")
+			throw new Error("multi-service fixture missing Deployment");
+		const invalid = MultiServiceManifestDocumentV1Schema.safeParse({
+			...manifest,
+			resources: [
+				{
+					...firstResource,
+					spec: {
+						...firstResource.spec,
+						resources: {},
+					},
+				},
+				...manifest.resources.slice(1),
+			],
+		});
+		expect(invalid.success).toBe(false);
+
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				namespace: "agents",
+				routeHostSuffix: "example.test",
+				ingressClassName: "nginx",
+				tlsSecretName: "tls",
+				routeSelector: { "app.kubernetes.io/name": "ingress" },
+				multiServiceResourceProfiles: [
+					{
+						profileId: "small",
+						displayName: "Small",
+						estimatedResources: {
+							cpuMillicores: 1_000,
+							memoryMiB: 1_000,
+							storageGiB: 1,
+						},
+						resources: {
+							requests: { cpu: "25m", memory: "32Mi" },
+							limits: { cpu: "100m", memory: "128Mi" },
+						},
+					},
+				],
+				multiServiceResourceCap: {
+					cpuMillicores: 1_500,
+					memoryMiB: 2_000,
+					storageGiB: 2,
+				},
+			},
+		});
+		const value = desired();
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await expect(operations.apply(value)).rejects.toThrow(
+			"MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+		);
+		expect(fake.resources.size).toBe(0);
 	});
 });

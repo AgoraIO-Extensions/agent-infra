@@ -291,6 +291,32 @@
                     "maxLength": 262144,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entry": {
+                          "type": "boolean"
+                        },
+                        "name": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "resourceProfileRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "resourceProfileRef",
+                        "entry"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -479,6 +505,32 @@
                     "maxLength": 262144,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entry": {
+                          "type": "boolean"
+                        },
+                        "name": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "resourceProfileRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "resourceProfileRef",
+                        "entry"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -792,6 +844,32 @@
                     "maxLength": 262144,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entry": {
+                          "type": "boolean"
+                        },
+                        "name": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "resourceProfileRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "resourceProfileRef",
+                        "entry"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -1789,6 +1867,32 @@
                     "maxLength": 262144,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entry": {
+                          "type": "boolean"
+                        },
+                        "name": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "resourceProfileRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "resourceProfileRef",
+                        "entry"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
                   }
                 },
                 "required": [

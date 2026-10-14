@@ -5,6 +5,7 @@ import {
 	MultiServiceAgentSourceV1Schema,
 	MultiServiceEntryAnnotationV1,
 	MultiServiceManifestDocumentV1Schema,
+	MultiServiceResourceProfileAnnotationV1,
 	MultiServiceResourceV1Schema,
 } from "./index.ts";
 
@@ -55,6 +56,41 @@ describe("multi-service Agent contract seam", () => {
 			document,
 		);
 		expect(MultiServiceResourceV1Schema.parse(deployment)).toEqual(deployment);
+	});
+
+	it("uses a Service profile annotation and rejects user resource overrides", () => {
+		const profiled = MultiServiceManifestDocumentV1Schema.parse({
+			...document,
+			resources: [
+				deployment,
+				{
+					...service,
+					metadata: {
+						...service.metadata,
+						annotations: {
+							...service.metadata.annotations,
+							[MultiServiceResourceProfileAnnotationV1]: "small",
+						},
+					},
+				},
+			],
+		});
+		expect(
+			profiled.resources.find((resource) => resource.kind === "Service")
+				?.metadata.annotations?.[MultiServiceResourceProfileAnnotationV1],
+		).toBe("small");
+		expect(
+			MultiServiceManifestDocumentV1Schema.safeParse({
+				...document,
+				resources: [
+					{
+						...deployment,
+						spec: { ...deployment.spec, resources: {} },
+					},
+					service,
+				],
+			}).success,
+		).toBe(false);
 	});
 
 	it.each([
@@ -149,6 +185,7 @@ describe("multi-service Agent contract seam", () => {
 			"MULTI_SERVICE_ENTRY_SERVICE_MULTIPLE",
 			"MULTI_SERVICE_MANIFEST_TOO_LARGE",
 			"MULTI_SERVICE_RESOURCE_LIMIT_EXCEEDED",
+			"MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
 		]);
 	});
 });

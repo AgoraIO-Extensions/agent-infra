@@ -1,8 +1,12 @@
+import type { MultiServiceServiceProjectionV1 } from "@agent-infra/contracts/pilot";
 import {
 	AgentProjectionV1Schema,
 	AgentResourceProfileProjectionV1Schema,
+	MultiServiceManifestDocumentV1Schema,
+	MultiServiceResourceProfileAnnotationV1,
 } from "@agent-infra/contracts/pilot";
 import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-store";
+import { parseAllDocuments } from "yaml";
 
 import type { createDeploymentIdentityScope } from "./deployment-identity.js";
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
@@ -38,6 +42,8 @@ export function createDeploymentPresentation(input: {
 		"readRuntimePresentation"
 	>;
 	readonly resourceProfile: Presentation["resourceProfile"];
+	/** Optional deployment-owned default used when a legacy manifest has no annotation. */
+	readonly multiServiceDefaultResourceProfileRef?: string;
 	readonly imageRepository: string;
 	/** Runtime model capability is public only when the API reader is wired. */
 	readonly modelSelectionAvailable?: boolean;
@@ -73,11 +79,43 @@ export function createDeploymentPresentation(input: {
 		if (source.kind === "standard") {
 			browserSource = { kind: "standard", templateId: source.templateId };
 		} else if (source.manifest !== undefined) {
+			let services: readonly MultiServiceServiceProjectionV1[] | undefined;
+			try {
+				let documentInput: unknown;
+				try {
+					documentInput = JSON.parse(source.manifest);
+				} catch {
+					const documents = parseAllDocuments(source.manifest, {
+						prettyErrors: false,
+						maxAliasCount: 0,
+					} as never);
+					if (documents.length !== 1 || documents[0]?.errors.length)
+						throw new Error();
+					documentInput = documents[0]?.toJSON();
+				}
+				const document =
+					MultiServiceManifestDocumentV1Schema.parse(documentInput);
+				services = document.resources
+					.filter((resource) => resource.kind === "Service")
+					.map((resource) => ({
+						name: resource.metadata.name,
+						resourceProfileRef:
+							resource.metadata.annotations?.[
+								MultiServiceResourceProfileAnnotationV1
+							] ??
+							input.multiServiceDefaultResourceProfileRef ??
+							input.resourceProfile.profileId,
+						entry: resource.metadata.name === document.entryServiceName,
+					}));
+			} catch {
+				services = undefined;
+			}
 			browserSource = {
 				kind: "custom",
 				manifest: source.manifest,
 				interactionMode: "self-managed",
 				identityResponsibility: "self-managed",
+				...(services ? { services: [...services] } : {}),
 			};
 		} else if (source.interactionMode === "self-managed") {
 			if (!source.identityResponsibility) {

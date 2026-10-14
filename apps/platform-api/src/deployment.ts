@@ -316,8 +316,12 @@ export function createProductionPlatformApiAssemblyInputV1(
 		modelCatalog: { ...input.modelCatalog },
 		channelPolicy: structuredClone(input.channelPolicy),
 	};
-	const deploymentConfiguration =
-		createDeploymentConfigurationProjectionV2(input);
+	const deploymentConfiguration = createDeploymentConfigurationProjectionV2({
+		templates: input.templates,
+		modelCatalog: input.modelCatalog,
+		multiServiceResourceProfiles: input.multiServiceResourceProfiles,
+		multiServiceResourceCap: input.multiServiceResourceCap,
+	});
 	const connectionCapability = createConnectionCapability(
 		input.connectionConsumerProfile,
 		input.connectionConsumerProfileApproval,

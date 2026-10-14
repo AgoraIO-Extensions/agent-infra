@@ -1,4 +1,13 @@
 import { createHash } from "node:crypto";
+import type {
+	MultiServiceResourceCapV1,
+	MultiServiceResourceProfileV1,
+} from "@agent-infra/contracts/pilot";
+import {
+	MultiServiceResourceCapV1Schema,
+	MultiServiceResourceProfileAnnotationV1,
+	MultiServiceResourceProfileV1Schema,
+} from "@agent-infra/contracts/pilot";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import type {
 	KubernetesObject,
@@ -28,7 +37,25 @@ export interface MultiServiceRuntimePolicyV1 {
 	readonly ingressClassName: string;
 	readonly tlsSecretName: string;
 	readonly routeSelector: Readonly<Record<string, string>>;
+	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
+	readonly multiServiceResourceCap?: MultiServiceResourceCapV1;
 }
+
+export const defaultMultiServiceResourceProfileV1 = {
+	profileId: "default",
+	displayName: "Default multi-service",
+	estimatedResources: { cpuMillicores: 100, memoryMiB: 128, storageGiB: 1 },
+	resources: {
+		requests: { cpu: "25m", memory: "32Mi" },
+		limits: { cpu: "100m", memory: "128Mi" },
+	},
+	storageSize: "1Gi",
+} satisfies MultiServiceResourceProfileV1;
+export const defaultMultiServiceResourceCapV1 = {
+	cpuMillicores: 2_000,
+	memoryMiB: 4_096,
+	storageGiB: 20,
+} satisfies MultiServiceResourceCapV1;
 
 export function isMultiService(
 	value: AgentWorkloadDesiredV1,
@@ -51,6 +78,99 @@ function serviceLabel(name: string): string {
 
 function fingerprint(value: unknown): string {
 	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+type MultiServiceResource =
+	MultiServiceDesired["multiService"]["resources"][number];
+type MultiServiceWorkload = Extract<
+	MultiServiceResource,
+	{ kind: "Deployment" | "StatefulSet" | "Job" }
+>;
+type MultiServiceService = Extract<MultiServiceResource, { kind: "Service" }>;
+
+function serviceSelectsWorkload(
+	service: MultiServiceService,
+	workload: Extract<
+		MultiServiceWorkload,
+		{ kind: "Deployment" | "StatefulSet" }
+	>,
+) {
+	return Object.entries(service.spec.selector).every(
+		([key, expected]) =>
+			workload.spec.template.metadata.labels[key] === expected,
+	);
+}
+
+function profileRefForWorkload(
+	value: MultiServiceDesired,
+	workload: MultiServiceWorkload,
+) {
+	const direct =
+		workload.metadata.annotations?.[MultiServiceResourceProfileAnnotationV1];
+	if (direct) return direct;
+	if (workload.kind === "Job") return undefined;
+	const service = value.multiService.resources.find(
+		(resource): resource is MultiServiceService =>
+			resource.kind === "Service" && serviceSelectsWorkload(resource, workload),
+	);
+	return service?.metadata.annotations?.[
+		MultiServiceResourceProfileAnnotationV1
+	];
+}
+
+function profileForWorkload(
+	value: MultiServiceDesired,
+	workload: MultiServiceWorkload,
+	policy: MultiServiceRuntimePolicyV1,
+) {
+	const candidates = [
+		defaultMultiServiceResourceProfileV1,
+		...(policy.multiServiceResourceProfiles ?? []),
+	];
+	const profiles = new Map<string, MultiServiceResourceProfileV1>();
+	for (const candidate of candidates) {
+		const parsed = MultiServiceResourceProfileV1Schema.safeParse(candidate);
+		if (parsed.success) profiles.set(candidate.profileId, candidate);
+	}
+	const ref =
+		profileRefForWorkload(value, workload) ??
+		defaultMultiServiceResourceProfileV1.profileId;
+	const profile = profiles.get(ref);
+	if (!profile) throw new Error("multi-service resource profile unavailable");
+	return profile;
+}
+
+/** Validate the aggregate profile estimate before the first Kubernetes write. */
+export function validateMultiServiceResourceCapacityV1(
+	value: MultiServiceDesired,
+	policy: MultiServiceRuntimePolicyV1,
+) {
+	const cap = MultiServiceResourceCapV1Schema.parse(
+		policy.multiServiceResourceCap ?? defaultMultiServiceResourceCapV1,
+	);
+	let total = { cpuMillicores: 0, memoryMiB: 0, storageGiB: 0 };
+	for (const resource of value.multiService.resources) {
+		if (
+			resource.kind !== "Deployment" &&
+			resource.kind !== "StatefulSet" &&
+			resource.kind !== "Job"
+		)
+			continue;
+		const profile = profileForWorkload(value, resource, policy);
+		total = {
+			cpuMillicores:
+				total.cpuMillicores + profile.estimatedResources.cpuMillicores,
+			memoryMiB: total.memoryMiB + profile.estimatedResources.memoryMiB,
+			storageGiB: total.storageGiB + profile.estimatedResources.storageGiB,
+		};
+	}
+	if (
+		total.cpuMillicores > cap.cpuMillicores ||
+		total.memoryMiB > cap.memoryMiB ||
+		total.storageGiB > cap.storageGiB
+	)
+		throw new Error("MULTI_SERVICE_RESOURCE_CAP_EXCEEDED");
+	return { total, cap };
 }
 
 function metadata(value: MultiServiceDesired, name: string, service?: string) {
@@ -90,7 +210,9 @@ function deployment(
 		MultiServiceDesired["multiService"]["resources"][number],
 		{ kind: "Deployment" }
 	>,
+	policy: MultiServiceRuntimePolicyV1,
 ): V1Deployment {
+	const profile = profileForWorkload(value, resource, policy);
 	const name = serviceResourceName(value.agentId, resource.metadata.name);
 	const service = serviceLabel(resource.metadata.name);
 	const labels = {
@@ -117,6 +239,7 @@ function deployment(
 					containers: resource.spec.template.spec.containers.map(
 						(container) => ({
 							...container,
+							resources: profile.resources,
 							ports: container.ports?.map((port) => ({
 								name: port.name,
 								containerPort: port.targetPort,
@@ -292,9 +415,12 @@ export function createMultiServiceRuntimeOperations(options: {
 	return {
 		isMultiService,
 		async apply(value: MultiServiceDesired) {
+			// Capacity is checked before the first read/create so a rejected Agent
+			// cannot leave a partial multi-service installation behind.
+			validateMultiServiceResourceCapacityV1(value, options.policy);
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "Deployment")
-					await put(deployment(value, resource), value);
+					await put(deployment(value, resource, options.policy), value);
 				if (resource.kind === "Service")
 					await put(service(value, resource), value);
 			}

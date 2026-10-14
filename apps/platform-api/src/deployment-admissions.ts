@@ -3,6 +3,9 @@ import {
 	DeploymentConfigurationProjectionV2Schema,
 	MultiServiceAgentSourceV1Schema,
 	MultiServiceManifestDocumentV1Schema,
+	MultiServiceResourceCapV1Schema,
+	MultiServiceResourceProfileAnnotationV1,
+	MultiServiceResourceProfileV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
 	ImmutableOciDigestV1Schema,
@@ -51,6 +54,30 @@ type DeploymentTemplateProjectionV2 = z.infer<
 	typeof DeploymentConfigurationProjectionV2Schema
 >["templates"][number];
 
+export type MultiServiceResourceProfileV1 = z.infer<
+	typeof MultiServiceResourceProfileV1Schema
+>;
+export type MultiServiceResourceCapV1 = z.infer<
+	typeof MultiServiceResourceCapV1Schema
+>;
+
+/** Conservative defaults keep legacy manifests deployable without a bespoke profile. */
+export const defaultMultiServiceResourceProfileV1 = {
+	profileId: "default",
+	displayName: "Default multi-service",
+	estimatedResources: { cpuMillicores: 100, memoryMiB: 128, storageGiB: 1 },
+	resources: {
+		requests: { cpu: "25m", memory: "32Mi" },
+		limits: { cpu: "100m", memory: "128Mi" },
+	},
+	storageSize: "1Gi",
+} satisfies MultiServiceResourceProfileV1;
+export const defaultMultiServiceResourceCapV1 = {
+	cpuMillicores: 2_000,
+	memoryMiB: 4_096,
+	storageGiB: 20,
+} satisfies MultiServiceResourceCapV1;
+
 export interface DeploymentAdmissionInputV1 {
 	/** The fixed repository used by this deployment's Workload policy, when applicable. */
 	readonly imageRepository?: string;
@@ -90,6 +117,9 @@ export interface DeploymentAdmissionInputV1 {
 			readonly actorIds: readonly string[];
 		})[];
 	};
+	/** Profiles and the aggregate cap are deployment-owned; omitted values use safe defaults. */
+	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
+	readonly multiServiceResourceCap?: MultiServiceResourceCapV1;
 }
 
 function revision(prefix: string, value: unknown) {
@@ -150,9 +180,18 @@ async function readTemplateReadiness(template: Template) {
 export function createDeploymentConfigurationProjectionV2(input: {
 	readonly templates: DeploymentAdmissionInputV1["templates"];
 	readonly modelCatalog: DeploymentAdmissionInputV1["modelCatalog"];
+	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
+	readonly multiServiceResourceCap?: MultiServiceResourceCapV1;
 }) {
 	const templates = snapshotTemplates(input.templates);
 	const loadModelCatalog = input.modelCatalog.load;
+	const configuredProfiles = input.multiServiceResourceProfiles ?? [];
+	const multiServiceResourceProfiles = [
+		defaultMultiServiceResourceProfileV1,
+		...configuredProfiles,
+	];
+	const multiServiceResourceCap =
+		input.multiServiceResourceCap ?? defaultMultiServiceResourceCapV1;
 	return async () => {
 		const templateOptions: DeploymentTemplateProjectionV2[] = await Promise.all(
 			templates.map(async (template) => ({
@@ -240,6 +279,14 @@ export function createDeploymentConfigurationProjectionV2(input: {
 				revision: catalogRevision,
 				endpoints,
 			},
+			multiServiceResourceProfiles: multiServiceResourceProfiles.map(
+				({ resources: _resources, ...profile }) => profile,
+			),
+			multiServiceResourceCap,
+			multiServiceResourceDefaultProfileRef:
+				defaultMultiServiceResourceProfileV1.profileId,
+			multiServiceResourceProfilesSource:
+				configuredProfiles.length > 0 ? "deployment" : "default",
 		});
 	};
 }
@@ -321,6 +368,101 @@ function validMultiServiceTopology(
 	});
 }
 
+function multiServiceProfileRef(resource: {
+	readonly metadata: {
+		readonly annotations?: Readonly<Record<string, string>>;
+	};
+}) {
+	return (
+		resource.metadata.annotations?.[MultiServiceResourceProfileAnnotationV1] ??
+		defaultMultiServiceResourceProfileV1.profileId
+	);
+}
+
+function serviceSelectsWorkload(
+	service: Extract<
+		ReturnType<
+			typeof MultiServiceManifestDocumentV1Schema.parse
+		>["resources"][number],
+		{ kind: "Service" }
+	>,
+	workload: Extract<
+		ReturnType<
+			typeof MultiServiceManifestDocumentV1Schema.parse
+		>["resources"][number],
+		{ kind: "Deployment" | "StatefulSet" }
+	>,
+) {
+	return Object.entries(service.spec.selector).every(
+		([key, expected]) =>
+			workload.spec.template.metadata.labels[key] === expected,
+	);
+}
+
+/** Resolve profile refs and sum one replica of every workload before side effects. */
+export function calculateMultiServiceResourceCapacityV1(input: {
+	readonly manifest: ReturnType<
+		typeof MultiServiceManifestDocumentV1Schema.parse
+	>;
+	readonly profiles?: readonly MultiServiceResourceProfileV1[];
+	readonly cap?: MultiServiceResourceCapV1;
+}) {
+	const profiles = [
+		defaultMultiServiceResourceProfileV1,
+		...(input.profiles ?? []),
+	];
+	const byId = new Map<string, MultiServiceResourceProfileV1>();
+	for (const candidate of profiles) {
+		const parsed = MultiServiceResourceProfileV1Schema.safeParse(candidate);
+		if (parsed.success) byId.set(candidate.profileId, candidate);
+	}
+	const cap = input.cap ?? defaultMultiServiceResourceCapV1;
+	let total = { cpuMillicores: 0, memoryMiB: 0, storageGiB: 0 };
+	for (const resource of input.manifest.resources) {
+		if (
+			resource.kind !== "Deployment" &&
+			resource.kind !== "StatefulSet" &&
+			resource.kind !== "Job"
+		)
+			continue;
+		const service =
+			resource.kind === "Job"
+				? undefined
+				: (input.manifest.resources.find(
+						(candidate) =>
+							candidate.kind === "Service" &&
+							serviceSelectsWorkload(candidate, resource),
+					) ?? undefined);
+		const profileRef =
+			resource.metadata.annotations?.[
+				MultiServiceResourceProfileAnnotationV1
+			] ??
+			(service ? multiServiceProfileRef(service) : undefined) ??
+			defaultMultiServiceResourceProfileV1.profileId;
+		const profile = byId.get(profileRef);
+		if (!profile)
+			return {
+				ok: false as const,
+				reason: "unknown_profile" as const,
+				profileRef,
+			};
+		total = {
+			cpuMillicores:
+				total.cpuMillicores + profile.estimatedResources.cpuMillicores,
+			memoryMiB: total.memoryMiB + profile.estimatedResources.memoryMiB,
+			storageGiB: total.storageGiB + profile.estimatedResources.storageGiB,
+		};
+	}
+	return {
+		ok:
+			total.cpuMillicores <= cap.cpuMillicores &&
+			total.memoryMiB <= cap.memoryMiB &&
+			total.storageGiB <= cap.storageGiB,
+		total,
+		cap,
+	};
+}
+
 function replacement(
 	current?: AgentConfigurationSecretMetadataV1,
 ): AgentConfigurationSecretMetadataV1 {
@@ -346,6 +488,8 @@ export function createDeploymentAdmissionsV1(
 	let registry: ReturnType<typeof createOciImageRegistryAdapterV1>;
 	let templates: DeploymentAdmissionInputV1["templates"];
 	let channels: DeploymentAdmissionInputV1["channelPolicy"];
+	let multiServiceResourceProfiles: readonly MultiServiceResourceProfileV1[];
+	let multiServiceResourceCap: MultiServiceResourceCapV1;
 	// 只记录可安全输出的原因码与模板 ID，供启动日志定位（#2382）。
 	let diagnostic: DeploymentDiagnosticV1 | undefined;
 	try {
@@ -362,6 +506,18 @@ export function createDeploymentAdmissionsV1(
 			throw new Error();
 		templates = snapshotTemplates(input.templates);
 		channels = structuredClone(input.channelPolicy);
+		multiServiceResourceProfiles = [
+			defaultMultiServiceResourceProfileV1,
+			...(input.multiServiceResourceProfiles ?? []),
+		].map((profile) => MultiServiceResourceProfileV1Schema.parse(profile));
+		if (
+			new Set(multiServiceResourceProfiles.map((profile) => profile.profileId))
+				.size !== multiServiceResourceProfiles.length
+		)
+			throw new Error();
+		multiServiceResourceCap = MultiServiceResourceCapV1Schema.parse(
+			input.multiServiceResourceCap ?? defaultMultiServiceResourceCapV1,
+		);
 		if (
 			new Set(templates.map(({ templateId }) => templateId)).size !==
 			templates.length
@@ -592,6 +748,12 @@ export function createDeploymentAdmissionsV1(
 						!validMultiServiceTopology(multiServiceManifest)
 					)
 						return denied;
+					const capacity = calculateMultiServiceResourceCapacityV1({
+						manifest: multiServiceManifest,
+						profiles: multiServiceResourceProfiles,
+						cap: multiServiceResourceCap,
+					});
+					if (!capacity.ok) return denied;
 					const deployments = multiServiceManifest.resources.filter(
 						(resource) => resource.kind === "Deployment",
 					);

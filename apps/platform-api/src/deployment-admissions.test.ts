@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import {
+	MultiServiceManifestDocumentV1Schema,
+	MultiServiceResourceProfileAnnotationV1,
+} from "@agent-infra/contracts/pilot";
 import { standardTemplateReadinessV1 } from "@agent-infra/model-catalog";
 import type {
 	AgentConfigurationModelInputV1,
@@ -7,6 +11,7 @@ import type {
 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+	calculateMultiServiceResourceCapacityV1,
 	createDeploymentAdmissionsV1,
 	type DeploymentAdmissionInputV1,
 } from "./deployment-admissions.js";
@@ -329,6 +334,74 @@ describe("production deployment admissions", () => {
 			source: { kind: "custom", manifest, interactionMode: "self-managed" },
 		});
 		expect(f.fetch).toHaveBeenCalled();
+	});
+
+	it("resolves per-service profiles and rejects an aggregate cap before admission", () => {
+		const parsed = MultiServiceManifestDocumentV1Schema.parse({
+			schemaVersion: 1,
+			entryServiceName: "api",
+			resources: [
+				{
+					apiVersion: "apps/v1",
+					kind: "Deployment",
+					metadata: { name: "api" },
+					spec: {
+						replicas: 1,
+						selector: { matchLabels: { app: "api" } },
+						template: {
+							metadata: { labels: { app: "api" } },
+							spec: {
+								containers: [{ name: "api", image: digest("api") }],
+							},
+						},
+					},
+				},
+				{
+					apiVersion: "v1",
+					kind: "Service",
+					metadata: {
+						name: "api",
+						annotations: {
+							"agent-infra.agora.io/entry": "true",
+							[MultiServiceResourceProfileAnnotationV1]: "small",
+						},
+					},
+					spec: {
+						type: "ClusterIP",
+						selector: { app: "api" },
+						ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+					},
+				},
+			],
+		});
+		const profiles = [
+			{
+				profileId: "small",
+				displayName: "Small",
+				estimatedResources: {
+					cpuMillicores: 100,
+					memoryMiB: 128,
+					storageGiB: 1,
+				},
+				resources: {
+					requests: { cpu: "25m", memory: "32Mi" },
+					limits: { cpu: "100m", memory: "128Mi" },
+				},
+			},
+		] as const;
+		expect(
+			calculateMultiServiceResourceCapacityV1({
+				manifest: parsed,
+				profiles,
+			}).ok,
+		).toBe(true);
+		expect(
+			calculateMultiServiceResourceCapacityV1({
+				manifest: parsed,
+				profiles,
+				cap: { cpuMillicores: 50, memoryMiB: 128, storageGiB: 1 },
+			}).ok,
+		).toBe(false);
 	});
 
 	it("rejects images outside the repository the Worker can actually deploy", async () => {

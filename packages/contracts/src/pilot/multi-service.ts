@@ -1,11 +1,41 @@
 import { z } from "zod";
 
+import { OpaqueIdV1Schema } from "../index.ts";
+
 const kubernetesName = z
 	.string()
 	.regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/)
 	.min(1)
 	.max(63);
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+/** Platform-owned profile selected by a Service annotation. */
+export const MultiServiceResourceProfileRefV1Schema = OpaqueIdV1Schema;
+const quantity = z.string().regex(/^[1-9][0-9]*(?:m|Ki|Mi|Gi|Ti)?$/);
+const estimatedResources = z.strictObject({
+	cpuMillicores: z.number().int().positive(),
+	memoryMiB: z.number().int().positive(),
+	storageGiB: z.number().int().positive(),
+});
+const resourceQuantities = z.strictObject({
+	requests: z.strictObject({ cpu: quantity, memory: quantity }),
+	limits: z.strictObject({ cpu: quantity, memory: quantity }),
+});
+
+/** Deployment-owned resource settings for one multi-service workload. */
+export const MultiServiceResourceProfileV1Schema = z.strictObject({
+	profileId: MultiServiceResourceProfileRefV1Schema,
+	displayName: z.string().min(1).max(256),
+	estimatedResources,
+	resources: resourceQuantities,
+	/** Platform storage tier for StatefulSet/PVC workloads; user PVC sizes are ignored. */
+	storageSize: z
+		.string()
+		.regex(/^[1-9][0-9]*(Mi|Gi)$/)
+		.optional(),
+});
+export const MultiServiceResourceProfileProjectionV1Schema =
+	MultiServiceResourceProfileV1Schema.omit({ resources: true });
+export const MultiServiceResourceCapV1Schema = estimatedResources;
 const labelMap = z
 	.record(kubernetesName, z.string().min(1).max(256))
 	.optional();
@@ -18,6 +48,9 @@ const metadata = z.strictObject({
 	labels: labelMap,
 	annotations,
 });
+
+export const MultiServiceResourceProfileAnnotationV1 =
+	"agent-infra.agora.io/resource-profile" as const;
 const port = z.strictObject({
 	name: kubernetesName,
 	port: z.number().int().min(1).max(65_535),
@@ -156,13 +189,56 @@ export const MultiServiceManifestDocumentV1Schema = z
 				path: ["entryServiceName"],
 				message: "entryServiceName must match the annotated Service",
 			});
+		for (const [index, resource] of value.resources.entries()) {
+			const profile =
+				resource.metadata.annotations?.[
+					MultiServiceResourceProfileAnnotationV1
+				];
+			if (
+				profile !== undefined &&
+				!MultiServiceResourceProfileRefV1Schema.safeParse(profile).success
+			)
+				context.addIssue({
+					code: "custom",
+					path: [
+						"resources",
+						index,
+						"metadata",
+						"annotations",
+						MultiServiceResourceProfileAnnotationV1,
+					],
+					message: "resource profile reference is invalid",
+				});
+		}
 	});
+
+/** The API projection of one admitted Service and its platform-owned profile. */
+export const MultiServiceServiceProjectionV1Schema = z.strictObject({
+	name: OpaqueIdV1Schema,
+	resourceProfileRef: MultiServiceResourceProfileRefV1Schema,
+	entry: z.boolean(),
+});
+
+export type MultiServiceServiceProjectionV1 = z.infer<
+	typeof MultiServiceServiceProjectionV1Schema
+>;
+export type MultiServiceResourceProfileV1 = z.infer<
+	typeof MultiServiceResourceProfileV1Schema
+>;
+export type MultiServiceResourceProfileProjectionV1 = z.infer<
+	typeof MultiServiceResourceProfileProjectionV1Schema
+>;
+export type MultiServiceResourceCapV1 = z.infer<
+	typeof MultiServiceResourceCapV1Schema
+>;
 
 export const MultiServiceAgentSourceV1Schema = z.strictObject({
 	kind: z.literal("custom"),
 	interactionMode: z.literal("self-managed"),
 	identityResponsibility: z.literal("self-managed"),
 	manifest: z.string().min(1).max(262_144),
+	/** Server-derived service/profile summary; omitted on create requests. */
+	services: z.array(MultiServiceServiceProjectionV1Schema).max(64).optional(),
 });
 
 export const MultiServiceAdmissionErrorCodeV1Schema = z.enum([
@@ -174,6 +250,7 @@ export const MultiServiceAdmissionErrorCodeV1Schema = z.enum([
 	"MULTI_SERVICE_ENTRY_SERVICE_MULTIPLE",
 	"MULTI_SERVICE_MANIFEST_TOO_LARGE",
 	"MULTI_SERVICE_RESOURCE_LIMIT_EXCEEDED",
+	"MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
 ]);
 
 export const MultiServiceEntryAnnotationV1 =

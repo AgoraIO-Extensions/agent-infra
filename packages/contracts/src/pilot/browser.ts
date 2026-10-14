@@ -49,7 +49,11 @@ import {
 	PilotInternalErrorV1Schema,
 	PilotProtocolErrorV1Schema,
 } from "./errors.ts";
-import { MultiServiceAgentSourceV1Schema } from "./multi-service.ts";
+import {
+	MultiServiceAgentSourceV1Schema,
+	MultiServiceResourceCapV1Schema,
+	MultiServiceResourceProfileProjectionV1Schema,
+} from "./multi-service.ts";
 import {
 	PersonalApiCredentialIssueRequestV1Schema,
 	PersonalApiCredentialIssueResponseV1Schema,
@@ -764,6 +768,15 @@ export const DeploymentConfigurationProjectionV2Schema = z.strictObject({
 	status: DeploymentConfigurationStatusV2Schema,
 	templates: z.array(DeploymentTemplateProjectionV2Schema),
 	modelCatalog: DeploymentModelCatalogProjectionV2Schema,
+	/** Resource profile choices are deployment-owned and read-only. */
+	multiServiceResourceProfiles: z
+		.array(MultiServiceResourceProfileProjectionV1Schema)
+		.optional(),
+	multiServiceResourceCap: MultiServiceResourceCapV1Schema.optional(),
+	multiServiceResourceDefaultProfileRef: OpaqueIdV1Schema.optional(),
+	multiServiceResourceProfilesSource: z
+		.enum(["deployment", "default"])
+		.optional(),
 });
 
 const applicationPage = z.strictObject({
