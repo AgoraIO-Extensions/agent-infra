@@ -5,8 +5,12 @@ import {
 	decideSessionSandboxObservationV1,
 	isSessionSandboxDeletionProgressValidV1,
 	isSessionSandboxObservationValidV1,
+	nextSessionSandboxObservationBackoffV1,
+	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxReconciliationClaimV1,
+	sessionSandboxReconcileProgressV1,
+	sessionSandboxRetryDelayMsV1,
 } from "./session-sandbox-reconciliation.js";
 
 const sandbox = createSessionSandboxBindingV1(
@@ -284,5 +288,215 @@ describe("Session Sandbox observation decision", () => {
 			observation: refreshed,
 			finished: true,
 		});
+	});
+});
+
+describe("Session Sandbox reconcile retry pacing (#2456)", () => {
+	it("keeps the base delay through the grace attempts, then doubles up to the cap", () => {
+		expect(
+			[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 64].map(
+				sessionSandboxRetryDelayMsV1,
+			),
+		).toEqual([
+			1_000, 1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000, 16_000,
+			32_000, 60_000, 60_000, 60_000,
+		]);
+	});
+
+	it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+		"rejects the invalid streak %s",
+		(streak) => {
+			expect(() => sessionSandboxRetryDelayMsV1(streak)).toThrow(TypeError);
+		},
+	);
+
+	const progressOf = (
+		overrides: Partial<
+			Parameters<typeof sessionSandboxReconcileProgressV1>[0]
+		> = {},
+	) =>
+		sessionSandboxReconcileProgressV1({
+			status: "unknown",
+			finished: false,
+			observation: ready,
+			hasStopReceipt: false,
+			...overrides,
+		});
+	const deletion = (
+		kind: "Pod" | "Service",
+		state: SessionSandboxDeletionProgressV1["state"],
+	): SessionSandboxDeletionProgressV1 => {
+		const resource = ready.resources.find((item) => item.kind === kind);
+		if (!resource) throw new Error("fixture resource is missing");
+		return {
+			schemaVersion: 1,
+			state,
+			deleteAttemptId: `attempt-${kind}`,
+			deleteAttempted: state !== "delete-requested",
+			deleteCallResult:
+				state === "delete-requested" ? "not-attempted" : "acknowledged",
+			sourceGeneration: 1,
+			resourceFence: 1,
+			managementFence: 1,
+			resource: resource as SessionSandboxDeletionProgressV1["resource"],
+			preconditions: {
+				uid: resource.uid,
+				resourceVersion: resource.resourceVersion,
+			},
+			...(state === "absent"
+				? {
+						absence: {
+							kind,
+							namespace: resource.namespace,
+							name: resource.name,
+						},
+					}
+				: {}),
+		};
+	};
+
+	it("ignores resourceVersion churn and resource order, but not identity or state", () => {
+		const base = progressOf();
+		expect(base).toMatch(/^[0-9a-f]{32}$/);
+		expect(
+			progressOf({
+				observation: {
+					...ready,
+					resources: [...ready.resources]
+						.reverse()
+						.map((resource) => ({ ...resource, resourceVersion: "999" })),
+				},
+			}),
+		).toBe(base);
+		const changed = [
+			progressOf({ status: "ready" }),
+			progressOf({ finished: true }),
+			progressOf({ hasStopReceipt: true }),
+			progressOf({ observation: { ...ready, status: "unknown" } }),
+			progressOf({
+				observation: {
+					...ready,
+					resources: ready.resources.map((resource) =>
+						resource.kind === "Pod"
+							? { ...resource, uid: "replacement" }
+							: resource,
+					),
+				},
+			}),
+			progressOf({
+				observation: { ...ready, resources: ready.resources.slice(1) },
+			}),
+			progressOf({ deletionProgress: [deletion("Pod", "delete-requested")] }),
+		];
+		expect(new Set([base, ...changed]).size).toBe(changed.length + 1);
+		expect(
+			progressOf({ deletionProgress: [deletion("Pod", "absent")] }),
+		).not.toBe(
+			progressOf({ deletionProgress: [deletion("Pod", "delete-requested")] }),
+		);
+		// 删除进度的顺序不影响指纹。
+		expect(
+			progressOf({
+				deletionProgress: [
+					deletion("Pod", "absent"),
+					deletion("Service", "absent"),
+				],
+			}),
+		).toBe(
+			progressOf({
+				deletionProgress: [
+					deletion("Service", "absent"),
+					deletion("Pod", "absent"),
+				],
+			}),
+		);
+	});
+
+	it("backs off only while an unknown observation keeps the same evidence", () => {
+		const progress = progressOf();
+		let previous: unknown;
+		const delays: number[] = [];
+		const changes: boolean[] = [];
+		for (let attempt = 0; attempt < 13; attempt += 1) {
+			const next = nextSessionSandboxObservationBackoffV1({
+				previous,
+				progress,
+				status: "unknown",
+			});
+			delays.push(next.delayMs);
+			changes.push(next.changed);
+			previous = next.backoff;
+		}
+		// 首次观测写审计且按基础延迟；之后的相同证据不写审计，从第 6 次重复起翻倍。
+		expect(changes).toEqual([true, ...Array(12).fill(false)]);
+		expect(delays).toEqual([
+			1_000, 1_000, 1_000, 1_000, 1_000, 1_000, 2_000, 4_000, 8_000, 16_000,
+			32_000, 60_000, 60_000,
+		]);
+	});
+
+	it("returns to the base delay and writes an audit row when the evidence changes", () => {
+		let previous: unknown;
+		const progress = progressOf();
+		for (let attempt = 0; attempt < 10; attempt += 1)
+			previous = nextSessionSandboxObservationBackoffV1({
+				previous,
+				progress,
+				status: "unknown",
+			}).backoff;
+		const next = nextSessionSandboxObservationBackoffV1({
+			previous,
+			progress: progressOf({ hasStopReceipt: true }),
+			status: "unknown",
+		});
+		expect(next).toMatchObject({
+			changed: true,
+			delayMs: 1_000,
+			backoff: { unchanged: 0 },
+		});
+	});
+
+	it("never slows the wait for readiness or deletion, only the audit rows", () => {
+		let previous: unknown;
+		const progress = progressOf({ status: "observed" });
+		for (let attempt = 0; attempt < 30; attempt += 1) {
+			const next = nextSessionSandboxObservationBackoffV1({
+				previous,
+				progress,
+				status: "observed",
+			});
+			expect(next.delayMs).toBe(1_000);
+			expect(next.changed).toBe(attempt === 0);
+			previous = next.backoff;
+		}
+	});
+
+	it("treats unrecognized persisted state as a change and bounds the streak", () => {
+		const progress = progressOf();
+		for (const previous of [
+			undefined,
+			null,
+			"text",
+			[],
+			{},
+			{ progress: "short", unchanged: 3 },
+			{ progress, unchanged: -1 },
+			{ progress, unchanged: 1.5 },
+			{ progress: progress.toUpperCase(), unchanged: 2 },
+		])
+			expect(
+				nextSessionSandboxObservationBackoffV1({
+					previous,
+					progress,
+					status: "unknown",
+				}),
+			).toMatchObject({ changed: true, backoff: { unchanged: 0 } });
+		expect(
+			nextSessionSandboxObservationBackoffV1({
+				previous: { progress, unchanged: 1_000_000 },
+				progress,
+				status: "unknown",
+			}).backoff.unchanged,
+		).toBe(64);
 	});
 });

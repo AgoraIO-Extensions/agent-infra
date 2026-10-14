@@ -16,6 +16,7 @@ import {
 	decideSessionSandboxObservationV1,
 	isSessionSandboxDeletionProgressValidV1,
 	isTaskApiChannelV1,
+	nextSessionSandboxObservationBackoffV1,
 	resolveCurrentPersonalApiUserV1,
 	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxLifecycleV1,
@@ -23,6 +24,7 @@ import {
 	type SessionSandboxPolicyV1,
 	type SessionSandboxReconciliationClaimV1,
 	type SessionSandboxVerifiedPolicyV1,
+	sessionSandboxReconcileProgressV1,
 	shouldContinueSessionSandboxPreparationV1,
 	type TaskApiChannelV1,
 	type TaskAuthorizationBoundaryV1,
@@ -121,7 +123,8 @@ async function lockedContext(
 					([key]) =>
 						key !== "lifecycle" &&
 						key !== "deployment" &&
-						key !== "modelProjection",
+						key !== "modelProjection" &&
+						key !== "observationBackoff",
 				),
 			),
 			{
@@ -619,10 +622,29 @@ export async function recordSandboxObservation(
 				: {}),
 		};
 	}
+	// 证据不变的重复观测不再每秒重试，也不再逐次写审计；条目仍保留到真正收敛（Spec §10.1.1）。
+	const terminal = decision.finished && !continuePreparation;
+	const retry = nextSessionSandboxObservationBackoffV1({
+		previous: (context.outbox.payload as { observationBackoff?: unknown })
+			?.observationBackoff,
+		progress: sessionSandboxReconcileProgressV1({
+			status: decision.status,
+			finished: decision.finished,
+			observation: decision.observation,
+			deletionProgress: (nextLifecycle ?? context.lifecycle)?.deletionProgress,
+			hasStopReceipt: Boolean(
+				(nextLifecycle ?? context.lifecycle)?.stopReceipt,
+			),
+		}),
+		status: decision.status,
+	});
 	const recorded = await transaction`update platform.outbox_items
-		set payload = payload || ${transaction.json((nextLifecycle ? { lifecycle: nextLifecycle } : {}) as unknown as Parameters<typeof transaction.json>[0])},
-		status = ${decision.finished && !continuePreparation ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
-		available_at = clock_timestamp() + interval '1 second', updated_at = clock_timestamp()
+		set payload = payload || ${transaction.json({
+			...(nextLifecycle ? { lifecycle: nextLifecycle } : {}),
+			observationBackoff: retry.backoff,
+		} as unknown as Parameters<typeof transaction.json>[0])},
+		status = ${terminal ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
+		available_at = clock_timestamp() + (${terminal ? 1000 : retry.delayMs}::bigint * interval '1 millisecond'), updated_at = clock_timestamp()
 		where id = ${claim.itemId} and status = 'processing'
 			and lease_owner = ${claim.leaseOwner}
 			and delivery_fence = ${claim.deliveryFence}
@@ -631,7 +653,8 @@ export async function recordSandboxObservation(
 	await transaction`update platform.session_sandbox_allocations set status = ${decision.status},
 		resource_observation = ${transaction.json(decision.observation as unknown as Parameters<typeof transaction.json>[0])},
 		updated_at = clock_timestamp() where sandbox_id = ${claim.sandbox.sandboxId}`;
-	await transaction`insert into platform.conversation_audit_events
+	if (retry.changed)
+		await transaction`insert into platform.conversation_audit_events
 		(id, conversation_id, execution_id, agent_id, actor_id, action, trace_id, request_id, occurred_at, details)
 		values (${randomUUID()}, ${context.sandbox.sessionId}, null, ${context.sandbox.agentId}, ${context.sandbox.principal.id},
 			'conversation.sandbox.observed', ${context.outbox.trace_id}, ${context.outbox.request_id}, clock_timestamp(),

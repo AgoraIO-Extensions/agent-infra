@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 import type {
 	SessionSandboxLifecycleV1,
@@ -337,4 +338,129 @@ export function isSessionSandboxReadyV1(facts: {
 		facts.resourceFence > 0 &&
 		facts.observationStatus === "ready"
 	);
+}
+
+/** 调谐重试的基础延迟；与历史固定值一致，正常 prepare/drain 的节奏不变。 */
+const sessionSandboxRetryBaseDelayMsV1 = 1_000;
+/** 证据长期不变时的重试间隔上限；条目始终保留，只是不再每秒重试。 */
+const sessionSandboxRetryMaxDelayMsV1 = 60_000;
+/** 证据不变时仍按基础延迟重试的次数，足以覆盖正常的启动和删除等待。 */
+const sessionSandboxRetryGraceAttemptsV1 = 5;
+const sessionSandboxRetryUnchangedLimit = 64;
+
+/**
+ * 证据连续 `unchanged` 次没有变化时，下一次重试的延迟。
+ * 前 5 次保持基础延迟，之后每次翻倍，直到上限。
+ */
+export function sessionSandboxRetryDelayMsV1(unchanged: number): number {
+	if (!Number.isSafeInteger(unchanged) || unchanged < 0)
+		throw new TypeError("Sandbox retry streak must be a non-negative integer");
+	const doublings = Math.min(
+		Math.max(0, unchanged - sessionSandboxRetryGraceAttemptsV1),
+		32,
+	);
+	return Math.min(
+		sessionSandboxRetryMaxDelayMsV1,
+		sessionSandboxRetryBaseDelayMsV1 * 2 ** doublings,
+	);
+}
+
+/** 持久在调谐 outbox payload 里的退避状态；只含指纹和连续未变化次数。 */
+export interface SessionSandboxObservationBackoffV1 {
+	readonly progress: string;
+	readonly unchanged: number;
+}
+
+/**
+ * 一次调谐尝试的进度指纹。只包含决定“有没有进展”的事实：分配状态、观测状态、
+ * 资源身份集合（不含 resourceVersion，Pod 状态抖动不算进展）、删除进度和停止回执。
+ */
+export function sessionSandboxReconcileProgressV1(input: {
+	readonly status: string;
+	readonly finished: boolean;
+	readonly observation: SessionSandboxObservationV1;
+	readonly deletionProgress?: readonly SessionSandboxDeletionProgressV1[];
+	readonly hasStopReceipt: boolean;
+}): string {
+	const resources = input.observation.resources
+		.map((resource) =>
+			[
+				resource.kind,
+				resource.namespace,
+				resource.name,
+				resource.uid,
+				resource.controllerUid ?? "",
+			].join("|"),
+		)
+		.sort();
+	const deletion = (input.deletionProgress ?? [])
+		.map((entry) =>
+			[
+				entry.resource.kind,
+				entry.resource.uid,
+				entry.state,
+				entry.deleteCallResult,
+			].join("|"),
+		)
+		.sort();
+	return createHash("sha256")
+		.update(
+			JSON.stringify([
+				input.status,
+				input.finished,
+				input.observation.status,
+				input.hasStopReceipt,
+				resources,
+				deletion,
+			]),
+		)
+		.digest("hex")
+		.slice(0, 32);
+}
+
+function persistedObservationBackoff(
+	value: unknown,
+): SessionSandboxObservationBackoffV1 | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		return undefined;
+	const { progress, unchanged } = value as Record<string, unknown>;
+	return typeof progress === "string" &&
+		/^[0-9a-f]{32}$/.test(progress) &&
+		typeof unchanged === "number" &&
+		Number.isSafeInteger(unchanged) &&
+		unchanged >= 0
+		? { progress, unchanged }
+		: undefined;
+}
+
+/**
+ * 记录一次观测后的退避决定。进度指纹与上次相同视为“没有变化”：
+ * 只有 `unknown` 按连续次数退避（其余状态是在等待就绪或删除，保持基础延迟），
+ * 审计只在指纹变化时写。无法识别的旧状态按“有变化”处理。
+ */
+export function nextSessionSandboxObservationBackoffV1(input: {
+	readonly previous: unknown;
+	readonly progress: string;
+	readonly status: string;
+}): {
+	readonly backoff: SessionSandboxObservationBackoffV1;
+	readonly changed: boolean;
+	readonly delayMs: number;
+} {
+	const previous = persistedObservationBackoff(input.previous);
+	const changed = previous?.progress !== input.progress;
+	const unchanged = changed
+		? 0
+		: Math.min(
+				(previous?.unchanged ?? 0) + 1,
+				sessionSandboxRetryUnchangedLimit,
+			);
+	return {
+		backoff: { progress: input.progress, unchanged },
+		changed,
+		delayMs:
+			input.status === "unknown"
+				? sessionSandboxRetryDelayMsV1(unchanged)
+				: sessionSandboxRetryBaseDelayMsV1,
+	};
 }
