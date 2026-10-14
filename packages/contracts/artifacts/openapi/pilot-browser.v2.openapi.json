@@ -525,6 +525,21 @@
             "minLength": 1,
             "type": "string"
           },
+          "failureCode": {
+            "enum": [
+              "creation_not_ready",
+              "health_check_failed",
+              "workload_unavailable",
+              "reconciliation_failed"
+            ],
+            "type": "string"
+          },
+          "failureReason": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9 .,:'-]+$",
+            "type": "string"
+          },
           "revision": {
             "maximum": 9007199254740991,
             "minimum": 1,

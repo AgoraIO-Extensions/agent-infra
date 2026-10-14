@@ -281,6 +281,51 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 		expect(resolveUser).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		"creation_not_ready",
+		"health_check_failed",
+		"workload_unavailable",
+		"reconciliation_failed",
+	] as const)("reports bounded %s failure details", async (failureCode) => {
+		await sql`update platform.agent_applications
+			set status = 'creation_failed', service_availability = null,
+				failure_code = ${failureCode}, desired_state = 'running'
+			where agent_id = 'agent-a'`;
+		const response = await fetch(`${origin}/api/v2/agents/agent-a/state`, {
+			headers: { Authorization: `Bearer ${material.application}` },
+		});
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as Record<string, unknown>;
+		expect(body).toMatchObject({
+			status: "creation_failed",
+			failureCode,
+		});
+		expect(body.failureReason).toEqual(expect.any(String));
+		expect(String(body.failureReason).length).toBeLessThanOrEqual(128);
+		expect(JSON.stringify(body)).not.toContain(
+			"registry.internal.example/private?token=sentinel",
+		);
+		expect(JSON.stringify(body)).not.toContain(material.application);
+	});
+
+	it("reports the same bounded details for an unavailable upgraded workload", async () => {
+		await sql`update platform.agent_applications
+			set status = 'available', service_availability = 'unavailable',
+				failure_code = 'health_check_failed', desired_state = 'running'
+			where agent_id = 'agent-a'`;
+		const response = await fetch(`${origin}/api/v2/agents/agent-a/state`, {
+			headers: { Authorization: `Bearer ${material.application}` },
+		});
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			status: "available",
+			serviceAvailability: "unavailable",
+			failureCode: "health_check_failed",
+			failureReason:
+				"Agent interaction entry or health check timed out or failed",
+		});
+	});
+
 	function govern(
 		agentId: string,
 		granted: boolean,
