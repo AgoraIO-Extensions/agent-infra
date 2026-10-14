@@ -4126,6 +4126,151 @@ describe("Codex Runtime Driver", () => {
 		).toEqual(["intent", "started", "unknown"]);
 	});
 
+	it.each(["before-intent", "after-intent", "before-result"] as const)(
+		"does not duplicate Browser I/O across a %s durable fault and restart",
+		async (fault) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const bridge = new TestCodexBridge();
+			const driver = await openCodexRuntimeDriverForTest(
+				{
+					...driverOptions(path),
+					authorizeExternalAction: async () => ({ revalidate: () => {} }),
+				},
+				async () => bridge,
+			);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+			const calls = { value: 0 };
+			const browser = {
+				capabilityVersion: 3,
+				binding: {
+					agentId: command.agentId,
+					conversationId: command.conversationId,
+					sessionGeneration: command.sessionGeneration,
+					resourceFence: 7,
+					workloadRevision: 4,
+					imageDigest: `sha256:${"a".repeat(64)}`,
+				},
+				executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) => {
+					calls.value += 1;
+					return {
+						actionId: request.actionId,
+						operationRef: request.operationRef,
+						attemptRef: request.attemptRef,
+						binding: request.binding,
+						phase: "completed" as const,
+						contentItems: [],
+						success: true,
+					};
+				},
+			};
+			const request = {
+				tool: "browser_observe",
+				arguments: {},
+				pageRevision: 2,
+				actionId: `browser-durable-${fault}`,
+			};
+			let injected = false;
+			const originalUpdate = DurableJsonFile.prototype.update;
+			const failure = vi
+				.spyOn(DurableJsonFile.prototype, "update")
+				.mockImplementation(function (this: DurableJsonFile<unknown>, change) {
+					let rejectAfter = false;
+					return originalUpdate
+						.call(this, async (draft) => {
+							const result = await change(draft);
+							const state = draft as StoredCodexDriverState;
+							const journal =
+								state.sessions?.[accepted.nativeSessionRef]?.journals?.[
+									bridge.nativeTurnId
+								];
+							const phase = (
+								journal?.events.at(-1)?.payload as
+									| RuntimeOperationFactV2
+									| undefined
+							)?.phase;
+							const target = fault === "before-result" ? "completed" : "intent";
+							if (!injected && phase === target) {
+								injected = true;
+								if (fault === "after-intent") rejectAfter = true;
+								else throw new Error("synthetic Browser durable fault");
+							}
+							return result;
+						})
+						.then((result) => {
+							if (rejectAfter)
+								throw new Error("synthetic Browser process loss after commit");
+							return result;
+						});
+				});
+			if (fault === "before-result") {
+				await expect(
+					driver.executeBrowserTool(
+						accepted.nativeSessionRef,
+						command.executionId,
+						request,
+						{ browser },
+					),
+				).resolves.toMatchObject({
+					phase: "unknown",
+					success: false,
+				});
+			} else {
+				await expect(
+					driver.executeBrowserTool(
+						accepted.nativeSessionRef,
+						command.executionId,
+						request,
+						{ browser },
+					),
+				).rejects.toThrow();
+			}
+			failure.mockRestore();
+			expect(injected).toBe(true);
+			expect(calls.value).toBe(fault === "before-result" ? 1 : 0);
+			await driver.close();
+
+			const recoveredBridge = new TestCodexBridge();
+			const recovered = await openCodexRuntimeDriverForTest(
+				{
+					...driverOptions(path),
+					authorizeExternalAction: async () => ({ revalidate: () => {} }),
+				},
+				async () => recoveredBridge,
+			);
+			drivers.push(recovered);
+			const retry = await recovered.executeBrowserTool(
+				accepted.nativeSessionRef,
+				command.executionId,
+				request,
+				{ browser },
+			);
+			if (fault === "before-intent")
+				expect(retry).toMatchObject({ phase: "completed", success: true });
+			else expect(retry).toMatchObject({ phase: "unknown", success: false });
+			expect(calls.value).toBe(
+				fault === "before-intent" ? 1 : fault === "before-result" ? 1 : 0,
+			);
+			const facts = (
+				await recovered.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				)
+			).filter(
+				(event): event is RuntimeEventV2 =>
+					event.type === "operation" && event.payload.kind === "tool",
+			);
+			expect(
+				new Set(facts.map((event) => event.payload.operationRef)).size,
+			).toBe(1);
+			expect(facts.at(-1)?.payload.phase).toBe(
+				fault === "before-intent" ? "completed" : "unknown",
+			);
+		},
+	);
+
 	it.each([
 		["completed with success false", "completed", false],
 		["failed with success true", "failed", true],
