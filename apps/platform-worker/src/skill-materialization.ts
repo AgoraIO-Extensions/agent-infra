@@ -171,8 +171,11 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 				appliedBindings,
 			});
 			if (options.writeAppliedReceipt) {
-				for (const binding of appliedBindings)
+				for (const binding of appliedBindings) {
+					if (!binding.appliedReceipt)
+						throw new Error("Skill Applied receipt unavailable");
 					await options.writeAppliedReceipt(binding.appliedReceipt);
+				}
 			}
 			return validated;
 		},
