@@ -31,6 +31,11 @@ export type ConversationCommandTarget = {
 	conversationId?: string;
 	executionId?: string;
 };
+export type NativeCapabilityCommandBody = Readonly<{
+	capabilityId: string;
+	directoryRevision: string;
+	parameters: string;
+}>;
 export type ConversationCommand =
 	| {
 			kind: "create";
@@ -39,7 +44,8 @@ export type ConversationCommand =
 	| { kind: "message"; body: SubmitMessageData["body"] }
 	| { kind: "stop"; body: StopExecutionData["body"] }
 	| { kind: "regenerate"; body: RegenerateAnswerData["body"] }
-	| { kind: "selection"; body: UpdateConversationModelSelectionData["body"] };
+	| { kind: "selection"; body: UpdateConversationModelSelectionData["body"] }
+	| { kind: "native-capability"; body: NativeCapabilityCommandBody };
 export type ConversationCommandResult =
 	| { kind: "created"; agentId: string; conversationId: string }
 	| { kind: "accepted"; receipt: CommandAcceptedProjectionV1 }
@@ -51,6 +57,16 @@ export type ConversationCommandResult =
 			reasoningLevel: string | null;
 	  }
 	| { kind: "unknown"; code?: PilotProtocolErrorV1["code"] }
+	| {
+			kind: "native-accepted";
+			executionId: string;
+			capabilityId: string;
+			outcome: "accepted" | "replayed";
+	  }
+	| {
+			kind: "native-rejected";
+			outcome: string;
+	  }
 	| { kind: "denied"; code?: PilotProtocolErrorV1["code"] }
 	| {
 			kind: "rejected";
@@ -101,6 +117,37 @@ export async function performConversationCommand(
 		let result:
 			| Awaited<ReturnType<typeof createConversation<false>>>
 			| Awaited<ReturnType<typeof submitMessage<false>>>;
+		if (command.kind === "native-capability") {
+			if (!target.conversationId) return { kind: "unknown" };
+			const response = await client.post<unknown, unknown, false>({
+				...options,
+				url: "/api/v2/conversations/{conversationId}/native-capability/invoke",
+				path: { conversationId: target.conversationId },
+				body: command.body,
+			});
+			const payload = response.data as
+				| {
+						outcome?: string;
+						result?: { executionId?: string; capabilityId?: string };
+				  }
+				| undefined;
+			if (
+				response.response?.status === 202 &&
+				(payload?.outcome === "accepted" || payload?.outcome === "replayed") &&
+				typeof payload.result?.executionId === "string" &&
+				typeof payload.result.capabilityId === "string"
+			)
+				return {
+					kind: "native-accepted",
+					executionId: payload.result.executionId,
+					capabilityId: payload.result.capabilityId,
+					outcome: payload.outcome,
+				};
+			if (payload?.outcome === "unknown") return { kind: "unknown" };
+			if (typeof payload?.outcome === "string")
+				return { kind: "native-rejected", outcome: payload.outcome };
+			return { kind: "unknown" };
+		}
 		if (command.kind === "create") {
 			const body = CreateConversationRequestV1Schema.safeParse(command.body);
 			if (!body.success)

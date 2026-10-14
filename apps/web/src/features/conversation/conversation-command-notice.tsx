@@ -26,6 +26,14 @@ export function CommandNotice({
 				)}
 			</Alert>
 		);
+	if (result?.kind === "native-rejected")
+		return (
+			<Alert variant="destructive">
+				<AlertDescription>
+					能力请求未受理：{result.outcome}。请清除选择后重试。
+				</AlertDescription>
+			</Alert>
+		);
 	if (result?.kind === "rejected")
 		return (
 			<Alert variant="destructive" className="space-y-2">

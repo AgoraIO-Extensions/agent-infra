@@ -5,6 +5,7 @@ import { client as defaultClient } from "../../pilot/generated/client.gen.js";
 import {
 	type ConversationCommand,
 	type ConversationCommandTarget,
+	type NativeCapabilityCommandBody,
 	performConversationCommand,
 } from "./conversation-commands.js";
 
@@ -161,6 +162,8 @@ export function useConversationCommands({
 				"schemaVersion"
 			>,
 		) => start({ kind: "selection", body: { schemaVersion: 1, ...selection } }),
+		invokeCapability: (body: NativeCapabilityCommandBody) =>
+			start({ kind: "native-capability", body }),
 		retry: () => {
 			const attempt = scope.attempt;
 			if (!scope.active || scope.denied || !attempt || attempt.pending)

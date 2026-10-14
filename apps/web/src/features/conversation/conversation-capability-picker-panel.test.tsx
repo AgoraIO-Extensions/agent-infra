@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConversationCapabilityV1 } from "./conversation-capability-picker.js";
 import { ConversationCapabilityPickerPanel } from "./conversation-capability-picker-panel.js";
 
@@ -17,12 +17,14 @@ const capabilities: readonly ConversationCapabilityV1[] = [
 describe("ConversationCapabilityPickerPanel", () => {
 	afterEach(cleanup);
 
-	it("filters, selects and confirms without submitting a request", () => {
+	it("filters, selects and confirms once through the admission callback", () => {
+		const onConfirm = vi.fn();
 		render(
 			<ConversationCapabilityPickerPanel
 				capabilities={capabilities}
 				scopeKey="alice:agent-a:conversation-a"
 				disabled={false}
+				onConfirm={onConfirm}
 			/>,
 		);
 		fireEvent.click(screen.getByRole("button", { name: "打开" }));
@@ -38,10 +40,11 @@ describe("ConversationCapabilityPickerPanel", () => {
 		});
 		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
 		expect(
-			screen.getByText(
-				"选择已保存在当前草稿中；执行接缝尚未接入，未提交请求。",
-			),
+			screen.getByText("选择已确认，正在通过当前会话接缝提交。"),
 		).toBeTruthy();
+		expect(onConfirm).toHaveBeenCalledTimes(1);
+		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
+		expect(onConfirm).toHaveBeenCalledTimes(1);
 	});
 
 	it("does not expose an empty picker or controls for an unavailable scope", () => {
@@ -66,7 +69,7 @@ describe("ConversationCapabilityPickerPanel", () => {
 		fireEvent.click(screen.getByRole("button", { name: "打开" }));
 		fireEvent.click(screen.getByRole("button", { name: /workspace-summary/ }));
 		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
-		expect(screen.getByText(/选择已保存/)).toBeTruthy();
+		expect(screen.getByText(/选择已确认/)).toBeTruthy();
 		rerender(
 			<ConversationCapabilityPickerPanel
 				capabilities={capabilities.map((capability) => ({
@@ -77,7 +80,7 @@ describe("ConversationCapabilityPickerPanel", () => {
 				disabled={false}
 			/>,
 		);
-		expect(screen.queryByText(/选择已保存/)).toBeNull();
+		expect(screen.queryByText(/选择已确认/)).toBeNull();
 		expect(screen.queryByText(/workspace-summary 参数/)).toBeNull();
 	});
 
@@ -92,7 +95,7 @@ describe("ConversationCapabilityPickerPanel", () => {
 		fireEvent.click(screen.getByRole("button", { name: "打开" }));
 		fireEvent.click(screen.getByRole("button", { name: /workspace-summary/ }));
 		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
-		expect(screen.getByText(/选择已保存/)).toBeTruthy();
+		expect(screen.getByText(/选择已确认/)).toBeTruthy();
 		rerender(
 			<ConversationCapabilityPickerPanel
 				capabilities={capabilities}
@@ -100,7 +103,7 @@ describe("ConversationCapabilityPickerPanel", () => {
 				disabled
 			/>,
 		);
-		expect(screen.queryByText(/选择已保存/)).toBeNull();
+		expect(screen.queryByText(/选择已确认/)).toBeNull();
 		expect(screen.queryByText(/workspace-summary 参数/)).toBeNull();
 	});
 

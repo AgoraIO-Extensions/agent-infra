@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
 	type ConversationCapabilityPickerStateV1,
+	type ConversationCapabilitySelectionV1,
 	type ConversationCapabilityV1,
 	confirmConversationCapability,
 	createConversationCapabilityPickerState,
@@ -27,7 +28,8 @@ function sameCapability(
 		left.name === right.name &&
 		left.source === right.source &&
 		left.version === right.version &&
-		left.identity === right.identity
+		left.identity === right.identity &&
+		left.directoryRevision === right.directoryRevision
 	);
 }
 
@@ -64,10 +66,12 @@ export function ConversationCapabilityPickerPanel({
 	capabilities,
 	scopeKey,
 	disabled,
+	onConfirm,
 }: {
 	capabilities: readonly ConversationCapabilityV1[];
 	scopeKey: string;
 	disabled: boolean;
+	onConfirm?: (selection: ConversationCapabilitySelectionV1) => void;
 }) {
 	const [open, setOpen] = useState(false);
 	const [state, setState] = useState<ConversationCapabilityPickerStateV1>(() =>
@@ -205,11 +209,16 @@ export function ConversationCapabilityPickerPanel({
 									type="button"
 									disabled={
 										disabled ||
+										confirmed ||
 										confirmConversationCapability(scopedState) === undefined
 									}
-									onClick={() =>
-										update(markConversationCapabilityConfirmed(scopedState))
-									}
+									onClick={() => {
+										const next =
+											markConversationCapabilityConfirmed(scopedState);
+										update(next);
+										const selection = confirmConversationCapability(next);
+										if (selection) onConfirm?.(selection);
+									}}
 								>
 									确认选择
 								</Button>
@@ -223,7 +232,7 @@ export function ConversationCapabilityPickerPanel({
 					{confirmed && (
 						<Alert>
 							<AlertDescription>
-								选择已保存在当前草稿中；执行接缝尚未接入，未提交请求。
+								选择已确认，正在通过当前会话接缝提交。
 							</AlertDescription>
 						</Alert>
 					)}

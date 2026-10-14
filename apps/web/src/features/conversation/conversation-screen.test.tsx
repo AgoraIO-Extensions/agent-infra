@@ -186,9 +186,22 @@ function fileProjection(status: "pending" | "available" = "available") {
 }
 
 describe("functional conversation screen", () => {
-	it("shows authenticated native Skill metadata without submitting a request", async () => {
+	it("shows authenticated native Skill metadata and invokes confirmed selection", async () => {
 		const { requests } = setup((request) => {
 			const url = new URL(request.url);
+			if (url.pathname.endsWith("/native-capability/invoke"))
+				return Response.json(
+					{
+						outcome: "accepted",
+						result: {
+							status: "submitted",
+							executionId: "execution-1",
+							capabilityId: "e".repeat(64),
+							directoryRevision: "d".repeat(64),
+						},
+					},
+					{ status: 202 },
+				);
 			if (url.pathname.endsWith("/native-metadata")) {
 				if (url.searchParams.get("selector") === "commands")
 					return Response.json({
@@ -247,11 +260,8 @@ describe("functional conversation screen", () => {
 		fireEvent.click(screen.getByRole("button", { name: /workspace-summary/ }));
 		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
 		expect(
-			screen.getByText(
-				"选择已保存在当前草稿中；执行接缝尚未接入，未提交请求。",
-			),
+			screen.getByText("选择已确认，正在通过当前会话接缝提交。"),
 		).toBeTruthy();
-		expect(requests.some((request) => request.method === "POST")).toBe(false);
 	});
 
 	it("hides native capabilities when the current execution metadata is unavailable", async () => {
