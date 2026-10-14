@@ -425,6 +425,12 @@ function applicationCommandFields(
 	traceId: string,
 ) {
 	const modelConfiguration = modelInput(prepared, body, traceId);
+	// The multi-service source is a contract-only branch in this change. Its
+	// admission and persistence path is supplied by the follow-up implementation
+	// lane, so do not pass it into the single-image core command yet.
+	if ("manifest" in body.source) {
+		fail("DEPENDENCY_UNAVAILABLE", traceId);
+	}
 	return {
 		name: body.name,
 		description: body.description,

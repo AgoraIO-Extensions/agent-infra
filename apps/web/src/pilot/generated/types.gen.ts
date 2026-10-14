@@ -52,6 +52,11 @@ export type AgentApplicationCreateRequestV1 = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
 };
 
@@ -79,6 +84,11 @@ export type AgentApplicationProjectionV1 = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
     status: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
     submittedAt: string;
@@ -126,6 +136,11 @@ export type AgentApplicationUpdateRequestV1 = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
 };
 
@@ -287,6 +302,11 @@ export type AgentProjectionV1 = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
 };
 
@@ -1114,6 +1134,11 @@ export type AgentApplicationCreateRequestV1Writable = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
 };
 
@@ -1161,6 +1186,11 @@ export type AgentApplicationUpdateRequestV1Writable = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
 };
 

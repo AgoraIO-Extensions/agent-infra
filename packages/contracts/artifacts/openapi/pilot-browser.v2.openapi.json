@@ -171,6 +171,35 @@
                       "interactionMode"
                     ],
                     "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "identityResponsibility": {
+                        "const": "self-managed",
+                        "type": "string"
+                      },
+                      "interactionMode": {
+                        "const": "self-managed",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "custom",
+                        "type": "string"
+                      },
+                      "manifest": {
+                        "maxLength": 262144,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "interactionMode",
+                      "identityResponsibility",
+                      "manifest"
+                    ],
+                    "type": "object"
                   }
                 ]
               }
@@ -794,6 +823,35 @@
                   "interactionMode"
                 ],
                 "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "identityResponsibility": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  },
+                  "manifest": {
+                    "maxLength": 262144,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "interactionMode",
+                  "identityResponsibility",
+                  "manifest"
+                ],
+                "type": "object"
               }
             ]
           }
@@ -1048,6 +1106,35 @@
                   "kind",
                   "imageReference",
                   "interactionMode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "identityResponsibility": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  },
+                  "manifest": {
+                    "maxLength": 262144,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "interactionMode",
+                  "identityResponsibility",
+                  "manifest"
                 ],
                 "type": "object"
               }
@@ -1354,6 +1441,35 @@
                   "kind",
                   "imageReference",
                   "interactionMode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "identityResponsibility": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  },
+                  "manifest": {
+                    "maxLength": 262144,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "interactionMode",
+                  "identityResponsibility",
+                  "manifest"
                 ],
                 "type": "object"
               }
@@ -2406,6 +2522,35 @@
                   "kind",
                   "imageReference",
                   "interactionMode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "identityResponsibility": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  },
+                  "manifest": {
+                    "maxLength": 262144,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "interactionMode",
+                  "identityResponsibility",
+                  "manifest"
                 ],
                 "type": "object"
               }

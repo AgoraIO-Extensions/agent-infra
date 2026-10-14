@@ -29,7 +29,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { useResultFocus } from "@/hooks/use-result-focus";
 import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
-import { agentManagementStatusLabels } from "../agent-management-status.js";
+import {
+	agentManagementStatusLabels,
+	agentSourceReferenceLabel,
+} from "../agent-management-status.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import type {
 	AgentApplicationDecision,
@@ -173,9 +176,7 @@ function ApplicationReview({
 						<dl className="detail-list my-5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-3 text-sm">
 							<dt>{source.kind === "standard" ? "模板" : "镜像"}</dt>
 							<dd className="break-all">
-								{source.kind === "standard"
-									? source.templateId
-									: source.imageReference}
+								{agentSourceReferenceLabel({ source })}
 							</dd>
 							<dt>Owner</dt>
 							<dd className="break-words">

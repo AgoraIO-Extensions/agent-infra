@@ -33,6 +33,17 @@ export function agentSourceLabel(agent: Pick<AgentProjectionV2, "source">) {
 		: "自定义 Agent";
 }
 
+export function agentSourceReferenceLabel(
+	agent:
+		| Pick<AgentProjectionV2, "source">
+		| Pick<AgentApplicationProjectionV2, "source">,
+) {
+	if (agent.source.kind === "standard") return agent.source.templateId;
+	return "imageReference" in agent.source
+		? agent.source.imageReference
+		: "多服务资源清单";
+}
+
 export function agentConversationSourceLabel(
 	agent:
 		| Pick<AgentProjectionV2, "source">

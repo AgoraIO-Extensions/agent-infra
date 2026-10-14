@@ -32,6 +32,11 @@ export type AgentApiCreationRequestV1 = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
 } | {
     availability: Array<{
@@ -139,6 +144,11 @@ export type AgentApplicationCreateRequestV2 = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
 };
 
@@ -187,6 +197,11 @@ export type AgentApplicationProjectionV2 = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
     status: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
     submittedAt: string;
@@ -236,6 +251,11 @@ export type AgentApplicationUpdateRequestV2 = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
 };
 
@@ -407,6 +427,11 @@ export type AgentProjectionV2 = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
 };
 
@@ -1334,6 +1359,11 @@ export type AgentApiCreationRequestV1Writable = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
 } | {
     availability: Array<{
@@ -1417,6 +1447,11 @@ export type AgentApplicationCreateRequestV2Writable = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
 };
 
@@ -1467,6 +1502,11 @@ export type AgentApplicationUpdateRequestV2Writable = {
         imageReference: string;
         interactionMode: 'platform-adapter';
         kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
     };
 };
 

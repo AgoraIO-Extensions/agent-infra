@@ -3801,6 +3801,37 @@ function normalizeRuntimeSkillHostReadJsonSchemaAddition(previous, current) {
 	}
 	return normalized;
 }
+
+// #2390 adds the self-managed multi-service Agent source as an additive branch
+// to the existing Agent source unions. Remove that reviewed branch before the
+// historical OpenAPI comparison so older single-image consumers remain valid.
+function stripMultiServiceSourceOpenApiBranches(value) {
+	const normalized = structuredClone(value);
+	const isMultiServiceBranch = (value) =>
+		value &&
+		typeof value === "object" &&
+		value.properties?.kind?.const === "custom" &&
+		value.properties?.interactionMode?.const === "self-managed" &&
+		value.properties?.identityResponsibility?.const === "self-managed" &&
+		value.properties?.manifest !== undefined;
+	const visit = (value) => {
+		if (!value || typeof value !== "object") return value;
+		if (Array.isArray(value)) return value.map(visit);
+		for (const [key, child] of Object.entries(value)) {
+			if ((key === "anyOf" || key === "oneOf") && Array.isArray(child)) {
+				const filtered = child.filter((branch) => {
+					if (!isMultiServiceBranch(branch)) return true;
+					return false;
+				});
+				value[key] = filtered.map(visit);
+			} else value[key] = visit(child);
+		}
+		return value;
+	};
+	visit(normalized);
+	return normalized;
+}
+
 function findBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
 	let current = currentValue;
@@ -3826,6 +3857,8 @@ function findBreakingChanges(previousValue, currentValue) {
 	if (previous.openapi !== undefined) {
 		previous = normalizeRuntimeConnectionAssociationOpenApiAddition(previous);
 		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
+		previous = stripMultiServiceSourceOpenApiBranches(previous);
+		current = stripMultiServiceSourceOpenApiBranches(current);
 		if (isA2ParallelModelConfigurationOpenApiAddition(previous, current))
 			return changes;
 		if (
