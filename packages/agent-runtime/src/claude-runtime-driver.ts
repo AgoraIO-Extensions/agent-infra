@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+	chmod,
 	lstat,
 	mkdir,
 	readdir,
@@ -1661,7 +1662,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							verifiedRoot,
 							`${randomUUID()}-${basename(resourcePath)}`,
 						);
-						await writeFile(target, bytes, { mode: 0o600 });
+						await writeFile(target, bytes, { mode: 0o400 });
+						await chmod(target, 0o400);
 						return target;
 					}
 				: undefined;
@@ -1689,7 +1691,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 									resolveReadOnlyFile: resolveReadOnlySkillFile,
 								}
 							: toolOperations,
-						skillRoot ? [skillRoot] : [],
 					),
 					strictMcpConfig: true,
 					mcpServers: {

@@ -253,10 +253,19 @@ it("routes Applied Skill reads through a verified ephemeral file", async () => {
 	await mkdir(join(skillRoot, "workspace-summary"));
 	await writeFile(skillFile, "tamperable", "utf8");
 	try {
-		const tools = claudeWorkspaceTools(workspace, memory, undefined, {
-			resolveReadOnlyFile: async (filePath) =>
-				filePath === skillFile ? verified : undefined,
-		});
+		let verifiedReads = 0;
+		const tools = claudeWorkspaceTools(
+			workspace,
+			memory,
+			undefined,
+			{
+				resolveReadOnlyFile: async (filePath) =>
+					filePath === skillFile && verifiedReads++ === 0
+						? verified
+						: undefined,
+			},
+			[skillRoot],
+		);
 		const signal = new AbortController().signal;
 		const canUse = await tools.canUseTool?.(
 			"Read",
@@ -273,6 +282,12 @@ it("routes Applied Skill reads through a verified ephemeral file", async () => {
 			{ signal, toolUseID: "external", requestId: "request" },
 		);
 		expect(external).toMatchObject({ behavior: "deny" });
+		const stale = await tools.canUseTool?.(
+			"Read",
+			{ file_path: skillFile },
+			{ signal, toolUseID: "stale", requestId: "request" },
+		);
+		expect(stale).toMatchObject({ behavior: "deny" });
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

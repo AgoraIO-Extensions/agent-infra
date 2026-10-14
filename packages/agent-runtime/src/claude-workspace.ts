@@ -31,11 +31,12 @@ export function claudeWorkspaceTools(
 	onToolOperation?: ClaudeToolOperationCallbacks,
 	readOnlyRoots: readonly string[] = [],
 ): Pick<Options, "tools" | "hooks" | "canUseTool" | "settings"> {
-	const resolvedReadOnlyPaths = new Set<string>();
+	const approvedReadOnlyPaths = new Map<string, string>();
 	const resolveInput = async (
 		name: string,
 		input: unknown,
 		signal: AbortSignal,
+		toolUseId?: string,
 	): Promise<Record<string, unknown> | undefined> => {
 		if (
 			!["Read", "Write", "Edit"].includes(name) ||
@@ -47,8 +48,26 @@ export function claudeWorkspaceTools(
 		)
 			return undefined;
 		const filePath = input.file_path;
+		if (
+			name === "Read" &&
+			toolUseId !== undefined &&
+			approvedReadOnlyPaths.get(filePath) === toolUseId
+		) {
+			approvedReadOnlyPaths.delete(filePath);
+			return input as Record<string, unknown>;
+		}
 		if (await workspacePathAllowed(workspace, memory, filePath))
 			return input as Record<string, unknown>;
+		if (name === "Read" && onToolOperation?.resolveReadOnlyFile) {
+			const resolved = await onToolOperation.resolveReadOnlyFile(
+				filePath,
+				signal,
+			);
+			if (!resolved) return undefined;
+			if (toolUseId !== undefined)
+				approvedReadOnlyPaths.set(resolved, toolUseId);
+			return { ...(input as Record<string, unknown>), file_path: resolved };
+		}
 		if (
 			name === "Read" &&
 			(
@@ -60,23 +79,7 @@ export function claudeWorkspaceTools(
 			).some(Boolean)
 		)
 			return input as Record<string, unknown>;
-		if (name !== "Read" || !onToolOperation?.resolveReadOnlyFile)
-			return undefined;
-		if (resolvedReadOnlyPaths.has(filePath))
-			return input as Record<string, unknown>;
-		const resolved = await onToolOperation.resolveReadOnlyFile(
-			filePath,
-			signal,
-		);
-		if (!resolved) return undefined;
-		resolvedReadOnlyPaths.add(resolved);
-		return { ...(input as Record<string, unknown>), file_path: resolved };
-	};
-	const permits = async (name: string, input: unknown) => {
-		return (
-			(await resolveInput(name, input, new AbortController().signal)) !==
-			undefined
-		);
+		return undefined;
 	};
 	return {
 		tools: ["Read", "Write", "Edit"],
@@ -87,7 +90,12 @@ export function claudeWorkspaceTools(
 			claudeMdExcludes: ["**"],
 		},
 		canUseTool: async (name, input, options) => {
-			const updatedInput = await resolveInput(name, input, options.signal);
+			const updatedInput = await resolveInput(
+				name,
+				input,
+				options.signal,
+				options.toolUseID,
+			);
 			return updatedInput !== undefined &&
 				(!onToolOperation?.authorize || (await onToolOperation.authorize()))
 				? { behavior: "allow", updatedInput }
@@ -100,7 +108,14 @@ export function claudeWorkspaceTools(
 						async (input) => {
 							const allowed =
 								input.hook_event_name === "PreToolUse" &&
-								(await permits(input.tool_name, input.tool_input)) &&
+								(await resolveInput(
+									input.tool_name,
+									input.tool_input,
+									new AbortController().signal,
+									typeof input.tool_use_id === "string"
+										? input.tool_use_id
+										: undefined,
+								)) !== undefined &&
 								(!onToolOperation?.authorize ||
 									(await onToolOperation.authorize()));
 							if (
