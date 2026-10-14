@@ -34,13 +34,18 @@ Runtime、SQLite、global alias 和 Runtime token 不进入部署拓扑。[#301]
 正式契约见 [HLD](HLD-connection-M1.md#直接公司-oauth-入口)。源代码与真实启用分开验收：
 管理员 probe 不是普通入口，已有 callback 也不能证明 token/userInfo 或 LDAP 链路通过。
 
-启用前须完成 callback 原始 access/error/Referer 及采集链路的日志保护，并确认真实 userInfo
-字段与员工域契约。当前入口校验接受 `email` 或 `notifyemail` 中的公司邮箱（`agora.io`、
+日志默认门禁与本环境的具名风险接受以
+[HLD 日志风险接受](HLD-connection-M1.md#上海普通公司-oauth-入口日志风险接受) 为准。
+该例外允许上海普通入口在共享网关 callback 日志尚未脱敏时配置 client 并开展真实登录验证，
+不修改共享 Kong，不启用管理员 probe，也不把日志或采集链路记为已验收。
+正式可用前仍须确认真实 userInfo 字段与员工域契约。当前入口校验接受 `email` 或
+`notifyemail` 中的公司邮箱（`agora.io`、
 `shengwang.cn`），拒绝已报告的禁用/错误或缺失字段；这只是待真实验收的严格接收契约，
 不能以 fixture 或邮箱相同证明身份关联。字段不匹配须经 Identity Owner 说明后调整，不能
 为通过测试接受任意 JSON/邮箱或跳过校验。所有业务授权仍由 LDAP 完成。
 
-经上述验收后，由现有 `connection-config` Secret 注入 `CONNECTION_COMPANY_OAUTH_CLIENT_ID`
+满足 HLD 默认日志门禁或本环境具名例外后，由现有 `connection-config` Secret 注入
+`CONNECTION_COMPANY_OAUTH_CLIENT_ID`
 与 `CONNECTION_COMPANY_OAUTH_CLIENT_SECRET`，并在 API 通过具名 secretKeyRef 成对引用。
 Secret 值不进入源码、Helm values、命令参数或聊天。此 pair 与 `CONNECTION_IDENTITY_OAUTH_*`
 管理员探测配置独立，不启用 probe，也不新增 HCI Consumer；缺少整个 pair 时仍是原 LDAP
@@ -61,7 +66,8 @@ Connection 描述为已退出公司 SSO。
 生产验收分别记录：真实 token/userInfo/入口证明、LDAP 身份/角色与已有账号、不同账号、
 state/跨浏览器/重放/开放跳转负向，以及不带入口 Cookie 的 MCP、metadata、DCR、token/
 refresh/revoke、PAT Binding 后端与 Delegated。整个过程不触发 bootstrap、换库或扩大 Provider
-权限。日志或真实契约未通过时不注入 client，不启用；运行失败不自动重试旧 code。
+权限。默认日志门禁及具名例外均不适用时不注入 client；真实字段或完整流程未验收时不能
+宣称正式可用。运行失败不自动重试旧 code。管理员 probe 不继承普通入口的日志例外。
 
 ## 可选公司 OAuth/HCI 入口保护
 
