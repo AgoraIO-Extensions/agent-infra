@@ -20,6 +20,12 @@ Session Sandbox 的空闲计算回收属于同一 Worker 的会话生命周期�
 下一条消息会重新准备原 Sandbox。该策略与已验证 Workload 升级分开，
 不会改变 policy 或 Workload revision。
 
+Native metadata 的 Worker 网关还提供固定的当前确认入口
+`/internal/platform-worker/v1/native-metadata/current`。Runtime Host 只能使用部署注入的
+Worker origin 和 service token 调用该入口，并把 API request source ref 作为不透明关联值
+传递；调用方不能提交 URL、token、主体或 Host scope。缺少当前确认配置、关联失效或 Worker
+不可达时，读取保持 unavailable。
+
 ## 打包与启动
 
 在仓库根目录、Node.js 24 与仓库固定 pnpm 版本下执行：

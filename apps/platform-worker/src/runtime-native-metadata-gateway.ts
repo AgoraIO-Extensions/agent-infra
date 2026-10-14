@@ -16,11 +16,30 @@ import {
 } from "@agent-infra/contracts/runtime";
 
 const gatewayPath = "/internal/platform-worker/v1/native-metadata";
+const currentPath = "/internal/platform-worker/v1/native-metadata/current";
 const maximumRequestBytes = 1_048_576;
+
+function parseCurrentBody(value: unknown) {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		throw new Error("invalid");
+	const candidate = value as Record<string, unknown>;
+	if (
+		Object.keys(candidate).length !== 2 ||
+		typeof candidate.apiRequestSourceRef !== "string" ||
+		candidate.apiRequestSourceRef.length < 1 ||
+		candidate.apiRequestSourceRef.length > 256
+	)
+		throw new Error("invalid");
+	return {
+		apiRequestSourceRef: candidate.apiRequestSourceRef,
+		request: NativeMetadataCurrentRequestV1Schema.parse(candidate.request),
+	};
+}
 
 export interface WorkerRuntimeNativeMetadataProofIssuerV1 {
 	issue(input: {
 		readonly request: RuntimeNativeMetadataBindingResponseV1;
+		readonly apiRequestSourceRef?: string;
 		readonly signal: AbortSignal;
 	}): Promise<RuntimeNativeMetadataProofV1>;
 }
@@ -161,6 +180,9 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 			if (signal.aborted || !sameCurrent(current, parsedBinding)) unavailable();
 			const proof = await options.proofIssuer.issue({
 				request: parsedBinding,
+				...(request.apiRequestSourceRef
+					? { apiRequestSourceRef: request.apiRequestSourceRef }
+					: {}),
 				signal,
 			});
 			const transport = await options.transport.resolve({
@@ -169,7 +191,16 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 			});
 			if (signal.aborted || !transport) unavailable();
 			const response = RuntimeNativeMetadataReadResponseV1Schema.parse(
-				await transport.read({ ...parsedBinding, proof }, signal),
+				await transport.read(
+					{
+						...parsedBinding,
+						...(request.apiRequestSourceRef
+							? { apiRequestSourceRef: request.apiRequestSourceRef }
+							: {}),
+						proof,
+					},
+					signal,
+				),
 			);
 			const { projection: _projection, ...responseBinding } = response;
 			if (
@@ -196,14 +227,16 @@ export function createWorkerRuntimeNativeMetadataGatewayAppV1(options: {
 		ReturnType<typeof createWorkerRuntimeNativeMetadataGatewayV1>,
 		"read"
 	>;
+	readonly current?: WorkerRuntimeNativeMetadataCurrentCheckerV1;
 }) {
 	if (!/^[\x21-\x7e]{1,8192}$/.test(options.serviceToken))
 		throw new TypeError("Runtime native metadata service token is invalid");
 	return {
 		async fetch(request: Request): Promise<Response> {
+			const path = new URL(request.url).pathname;
 			if (
 				request.method !== "POST" ||
-				new URL(request.url).pathname !== gatewayPath
+				![gatewayPath, currentPath].includes(path)
 			)
 				return new Response(null, { status: 404 });
 			if (
@@ -213,12 +246,19 @@ export function createWorkerRuntimeNativeMetadataGatewayAppV1(options: {
 					{ code: "PLATFORM_WORKER_UNAUTHORIZED" },
 					{ status: 401 },
 				);
-			let value: PlatformNativeMetadataReadRequestV1;
+			let value:
+				| PlatformNativeMetadataReadRequestV1
+				| {
+						apiRequestSourceRef: string;
+						request: NativeMetadataCurrentRequestV1;
+				  };
 			try {
 				const body = await boundedRequestBody(request);
-				value = PlatformNativeMetadataReadRequestV1Schema.parse(
-					JSON.parse(body),
-				);
+				const parsed = JSON.parse(body);
+				value =
+					path === currentPath
+						? parseCurrentBody(parsed)
+						: PlatformNativeMetadataReadRequestV1Schema.parse(parsed);
 			} catch {
 				return Response.json(
 					{ code: "RUNTIME_REQUEST_INVALID" },
@@ -226,7 +266,24 @@ export function createWorkerRuntimeNativeMetadataGatewayAppV1(options: {
 				);
 			}
 			try {
-				const response = await options.gateway.read(value, request.signal);
+				if (path === currentPath) {
+					if (!options.current)
+						return Response.json({ outcome: "unavailable" }, { status: 503 });
+					const current = await options.current.check({
+						request: (value as { request: NativeMetadataCurrentRequestV1 })
+							.request,
+						apiRequestSourceRef: (value as { apiRequestSourceRef: string })
+							.apiRequestSourceRef,
+						signal: request.signal,
+					});
+					return Response.json(current, {
+						status: current.outcome === "denied" ? 403 : 200,
+					});
+				}
+				const response = await options.gateway.read(
+					value as PlatformNativeMetadataReadRequestV1,
+					request.signal,
+				);
 				return Response.json(response);
 			} catch {
 				return Response.json(
