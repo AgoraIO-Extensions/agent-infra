@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 
 export class PlatformUserDisableError extends Error {
 	readonly code:

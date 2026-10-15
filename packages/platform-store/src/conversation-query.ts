@@ -17,11 +17,10 @@ import {
 	type SessionSandboxBindingV1,
 	type TaskPrincipalV1,
 } from "@agent-infra/platform-core";
-
-import postgres from "postgres";
 import { exactRecord } from "./conversation-execution-common.js";
 import { readRecentPersonalConversations } from "./conversation-recent-query.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
+import postgres from "./observed-postgres.js";
 import {
 	conversationSandboxReadBindingSql,
 	sessionSandboxResumableSql,

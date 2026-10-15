@@ -1,4 +1,4 @@
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 
 export type BrowserSessionPrincipal = Record<string, unknown>;
 

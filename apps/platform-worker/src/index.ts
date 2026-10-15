@@ -51,6 +51,7 @@ import {
 	createSecretKeyRotationUseCaseV1,
 } from "@agent-infra/platform-core";
 import {
+	configureStoreQueryObservability,
 	openPostgresConversationDispatchStoreV1,
 	openPostgresSecretActivationStoreV1,
 	openPostgresSecretKeyRotationStoreV1,
@@ -297,6 +298,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 			: {}),
 		...options.observabilityOptions,
 	});
+	configureStoreQueryObservability({ observability });
 	let primary: { stop(): void | Promise<void> };
 	try {
 		primary = (options.startPrimary ?? startPlatformWorker)();

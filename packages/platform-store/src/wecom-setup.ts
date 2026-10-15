@@ -4,7 +4,7 @@ import type {
 	WecomSetupRecordV1,
 	WecomSetupStoreV1,
 } from "@agent-infra/platform-core";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 import { secretKeyAdvisoryLockName } from "./secret-key-lock.js";
 import type { WecomConnectionClaimV1 } from "./wecom-connections.js";
 

@@ -6,7 +6,7 @@ import {
 	type PlatformIdempotencyPortV1,
 	platformIdempotencyV1,
 } from "@agent-infra/platform-core";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 
 export interface PostgresPlatformIdempotencyOptionsV1 {
 	readonly databaseUrl: string;

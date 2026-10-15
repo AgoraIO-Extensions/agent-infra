@@ -44,7 +44,7 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 import { createPostgresOutboxStore } from "./outbox.js";
 import {
 	auditEvents,

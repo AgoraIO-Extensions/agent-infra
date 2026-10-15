@@ -16,7 +16,7 @@ import {
 } from "@agent-infra/platform-core";
 import { and, eq, inArray, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 import { agents } from "./schema-agents.js";
 import { idempotencyRecords } from "./schema-operations.js";
 import {

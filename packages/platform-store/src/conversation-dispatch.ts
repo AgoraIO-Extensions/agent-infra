@@ -20,7 +20,6 @@ import {
 	type TaskUserDirectoryV1,
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
-import postgres from "postgres";
 import { claimWork } from "./conversation-dispatch-claim.js";
 import {
 	type Client,
@@ -66,6 +65,7 @@ import {
 	type PlatformQueueResourceSnapshot,
 	readPlatformQueueResourceSnapshot,
 } from "./observability-snapshot.js";
+import postgres from "./observed-postgres.js";
 import {
 	isSessionSandboxPolicyCurrentV1,
 	readSessionSandboxRuntimeState,

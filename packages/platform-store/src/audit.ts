@@ -7,7 +7,7 @@ import {
 
 import { desc, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 
 import { auditEvents } from "./schema.js";
 

@@ -89,10 +89,12 @@ describe("platform-store package surface", () => {
 			"SkillHubAppliedReceiptErrorV1",
 			"TaskAuthorizationStoreError",
 			"TaskCurrentAuthorityUnavailableErrorV1",
+			"configureStoreQueryObservability",
 			"conversationEventWakeChannelV1",
 			"createPostgresOutboxStore",
 			"decodePlatformAuditRowV1",
 			"migratePlatformDatabase",
+			"observePostgresClient",
 			"openPostgresConversationDispatchStoreV1",
 			"openPostgresPlatformIdempotencyStore",
 			"openPostgresSecretActivationStoreV1",
@@ -110,6 +112,7 @@ describe("platform-store package surface", () => {
 			"resolveApiAuditCredentialIdentityV1",
 			"resolvePersonalApiTaskAdmissionAuthorityV1",
 			"resolveTimedOutUnknownStopInTransactionV1",
+			"storeSlowQueryThresholdMs",
 			"validateWecomSetupCredentialRecordV1",
 		]);
 		expect(surface.PostgresPersonalRelayKeyStoreV1).toBeTypeOf("function");

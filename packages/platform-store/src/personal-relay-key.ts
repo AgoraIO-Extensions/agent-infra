@@ -5,8 +5,8 @@ import {
 	type PersonalRelayKeyTransactionPortV1,
 	type PersonalRelayKeyTransactionV1,
 } from "@agent-infra/platform-core";
-import postgres from "postgres";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
+import postgres from "./observed-postgres.js";
 import {
 	currentRelayKeyVersionInTransaction,
 	replaceRelayKeyVersionInTransaction,

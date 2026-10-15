@@ -3,6 +3,7 @@ import {
 	type ObservabilityOptions,
 	startObservability,
 } from "@agent-infra/observability";
+import { configureStoreQueryObservability } from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
 
 import {
@@ -173,12 +174,12 @@ export async function loadPlatformApiAssembly(
 export async function startPlatformApiFromDeployment(
 	options: DeploymentStartOptions = {},
 ) {
-	const assembly = await loadPlatformApiAssembly(options.moduleSpecifier);
 	let server: ReturnType<typeof startPlatformApi> | undefined;
 	let observability: ReturnType<typeof startObservability> | undefined;
 	let resourceSampling:
 		| ReturnType<typeof startPlatformResourceSampling>
 		| undefined;
+	let assembly: LoadedPlatformApiAssembly | undefined;
 	const sseResources = new SseResourceTracker();
 	try {
 		observability = startObservability({
@@ -190,6 +191,8 @@ export async function startPlatformApiFromDeployment(
 				: {}),
 			...options.observabilityOptions,
 		});
+		configureStoreQueryObservability({ observability });
+		assembly = await loadPlatformApiAssembly(options.moduleSpecifier);
 		server = startPlatformApi({
 			dependencies: assembly.dependencies,
 			browserAuth: assembly.browserAuth,
@@ -215,6 +218,7 @@ export async function startPlatformApiFromDeployment(
 			server?.once("error", onError);
 			if (server?.listening) onListening();
 		});
+		if (!assembly) throw new Error("Platform API assembly is unavailable");
 		if (observability.status().enabled) {
 			resourceSampling = startPlatformResourceSampling(
 				assembly.readResourceSnapshot,
@@ -237,7 +241,7 @@ export async function startPlatformApiFromDeployment(
 			try {
 				await resourceSampling?.stop();
 			} finally {
-				await assembly.close();
+				await assembly?.close();
 			}
 		} finally {
 			await observability?.close();
