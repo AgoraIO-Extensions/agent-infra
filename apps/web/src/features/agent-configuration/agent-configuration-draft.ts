@@ -97,3 +97,57 @@ export function buildAgentConfigurationRequest(
 		...(draft.channels === undefined ? {} : { channels: draft.channels }),
 	};
 }
+
+function sortedJson(values: readonly string[]) {
+	return JSON.stringify([...values].sort());
+}
+
+/**
+ * 草稿相对已加载的配置是否真有改动（#2560）。服务端把「没有任何变更」的保存拒绝成 409，
+ * 页面再提示「权限或 Agent 状态已变化，请刷新页面」是误导，所以没有改动时不应发出保存请求。
+ * 比较方式与服务端一致：Owner、可使用范围、模型选项都按集合比较，与顺序无关；填写了
+ * Secret 或渠道变更一律算改动。
+ */
+export function agentConfigurationDraftChanged(
+	agent: AgentProjectionV2,
+	draft: AgentConfigurationDraft,
+): boolean {
+	const baseline = buildAgentConfigurationRequest(
+		configurationDraftFromAgent(agent),
+	);
+	const request = buildAgentConfigurationRequest(draft);
+	if (request.secrets?.length || request.channels !== undefined) return true;
+	if (
+		sortedJson(request.coOwnerIds ?? []) !==
+		sortedJson(baseline.coOwnerIds ?? [])
+	)
+		return true;
+	const targets = (value: typeof request) =>
+		sortedJson(
+			(value.availability ?? []).map((target) =>
+				target.kind === "user"
+					? `user:${target.userId}`
+					: `organization:${target.organizationId}`,
+			),
+		);
+	if (targets(request) !== targets(baseline)) return true;
+	const next = request.modelConfiguration;
+	if (next === undefined) return false;
+	const current = agent.configuration;
+	if (
+		next.defaultOptionId !== (current.defaultModelOptionId ?? "") ||
+		next.defaultReasoningLevel !== (current.defaultReasoningLevel ?? "")
+	)
+		return true;
+	// 当前投影里没有 endpointId；optionId 已经包含端点，所以按 optionId、模型和档位集合比较。
+	const option = (value: {
+		readonly optionId: string;
+		readonly modelId: string;
+		readonly reasoningLevels: readonly string[];
+	}) =>
+		`${value.optionId}|${value.modelId}|${sortedJson(value.reasoningLevels)}`;
+	return (
+		sortedJson(next.options.map(option)) !==
+		sortedJson(current.modelOptions.map(option))
+	);
+}

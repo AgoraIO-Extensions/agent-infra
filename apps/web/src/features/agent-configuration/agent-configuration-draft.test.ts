@@ -2,6 +2,7 @@ import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 
 import {
+	agentConfigurationDraftChanged,
 	buildAgentConfigurationRequest,
 	configurationDraftFromAgent,
 } from "./agent-configuration-draft.js";
@@ -115,5 +116,141 @@ describe("Agent configuration draft", () => {
 		});
 
 		expect(request.channels).toEqual([]);
+	});
+
+	describe("change detection (#2560)", () => {
+		const baseline = () => configurationDraftFromAgent(agent);
+
+		it("treats the loaded configuration as unchanged", () => {
+			expect(agentConfigurationDraftChanged(agent, baseline())).toBe(false);
+		});
+
+		it("compares Owners and availability as sets, like the server", () => {
+			expect(
+				agentConfigurationDraftChanged(agent, {
+					...baseline(),
+					coOwnerIds: " user-owner-1 \n",
+					userAvailabilityIds: "user-reader-1",
+				}),
+			).toBe(false);
+			expect(
+				agentConfigurationDraftChanged(agent, {
+					...baseline(),
+					coOwnerIds: "user-owner-1\nuser-owner-2",
+				}),
+			).toBe(true);
+			expect(
+				agentConfigurationDraftChanged(agent, {
+					...baseline(),
+					coOwnerIds: "user-owner-2",
+				}),
+			).toBe(true);
+			expect(
+				agentConfigurationDraftChanged(agent, {
+					...baseline(),
+					userAvailabilityIds: "user-reader-1\nuser-reader-2",
+				}),
+			).toBe(true);
+			expect(
+				agentConfigurationDraftChanged(agent, {
+					...baseline(),
+					organizationAvailabilityIds: "",
+				}),
+			).toBe(true);
+		});
+
+		it("does not care about the order of several Owners or readers", () => {
+			const crowded = {
+				...agent,
+				configuration: {
+					...agent.configuration,
+					owners: [
+						...agent.configuration.owners,
+						{
+							userId: "user-owner-2",
+							displayName: "Second",
+							roles: ["employee"],
+						},
+					],
+					availability: [
+						{ kind: "user", userId: "user-reader-1" },
+						{ kind: "user", userId: "user-reader-2" },
+						{ kind: "organization", organizationId: "organization-1" },
+					],
+				},
+			} as typeof agent;
+			expect(
+				agentConfigurationDraftChanged(crowded, {
+					...configurationDraftFromAgent(crowded),
+					coOwnerIds: "user-owner-2\nuser-owner-1",
+					userAvailabilityIds: "user-reader-2, user-reader-1",
+				}),
+			).toBe(false);
+		});
+
+		it("counts entered Secrets and channel changes as changes", () => {
+			expect(
+				agentConfigurationDraftChanged(agent, {
+					...baseline(),
+					secrets: [{ name: "NEW_SECRET", value: "value" }],
+				}),
+			).toBe(true);
+			expect(
+				agentConfigurationDraftChanged(agent, {
+					...baseline(),
+					channels: [],
+				}),
+			).toBe(true);
+		});
+
+		it("ignores a model replacement that selects what is already configured", () => {
+			const same = {
+				...baseline(),
+				replaceModels: true,
+				models: [
+					{
+						endpointId: "relay",
+						modelId: "gpt-5",
+						optionId: "model-option-1",
+						reasoningLevels: "high,medium",
+					},
+				],
+				defaultModelOptionId: "model-option-1",
+				defaultReasoningLevel: "medium",
+			};
+			expect(agentConfigurationDraftChanged(agent, same)).toBe(false);
+			expect(
+				agentConfigurationDraftChanged(agent, {
+					...same,
+					defaultReasoningLevel: "high",
+				}),
+			).toBe(true);
+			expect(
+				agentConfigurationDraftChanged(agent, {
+					...same,
+					defaultModelOptionId: "model-option-2",
+				}),
+			).toBe(true);
+			expect(
+				agentConfigurationDraftChanged(agent, {
+					...same,
+					models: [{ ...same.models[0], reasoningLevels: "medium" }],
+				} as never),
+			).toBe(true);
+			expect(
+				agentConfigurationDraftChanged(agent, {
+					...same,
+					models: [
+						...same.models,
+						{
+							endpointId: "relay",
+							modelId: "gpt-5-mini",
+							optionId: "model-option-2",
+							reasoningLevels: "medium",
+						},
+					],
+				}),
+			).toBe(true);
+		});
 	});
 });

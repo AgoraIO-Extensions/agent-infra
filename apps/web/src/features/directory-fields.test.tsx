@@ -191,6 +191,15 @@ describe("Agent detail and Owner configuration directory fields", () => {
 		await waitFor(() =>
 			expect(screen.getAllByText("目录记录不可用")).toHaveLength(3),
 		);
+		// 没有任何改动时保存不可用（#2560）；先做一次与 Owner、范围无关的真实改动，
+		// 再确认目录读取失败时未解析的选择仍随请求原样提交。
+		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
+		fireEvent.change(screen.getByLabelText("Secret 名称"), {
+			target: { value: "CHANGED_SECRET" },
+		});
+		fireEvent.change(screen.getByLabelText("新 Secret 值"), {
+			target: { value: "changed-secret-value" },
+		});
 		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 		expect(onSave).toHaveBeenCalledWith(
 			expect.objectContaining({
