@@ -3986,6 +3986,22 @@ function normalizeRuntimeConnectionAssociationOpenApiAddition(current) {
 	return normalized;
 }
 
+// #2528 adds the authenticated Browser command route. It is additive and
+// leaves all existing request/response schemas unchanged.
+function isBrowserCommandOpenApiAddition(previous, current) {
+	const path = "/api/v1/conversations/{conversationId}/browser/commands";
+	if (previous.paths?.[path] !== undefined || current.paths?.[path] === undefined)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of [
+		"BrowserCommandAcceptedProjectionV1",
+		"BrowserCommandRequestV1",
+	])
+		delete normalized.components?.schemas?.[name];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 // #2181 binds mounted Skill resources to the directory generation. Treat the
 // additive generation field as a reviewed compatibility extension for the
 // already published Runtime V1 host read contract.
@@ -4138,6 +4154,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRuntimeBrowserOperationFactOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserWorkloadIdentityOpenApiAddition(previous, current) &&
 			!isPilotBrowserProjectionOpenApiAddition(previous, current) &&
+			!isBrowserCommandOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isRuntimeNativeCapabilityV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
