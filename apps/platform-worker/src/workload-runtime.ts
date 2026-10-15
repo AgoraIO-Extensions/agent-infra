@@ -982,8 +982,17 @@ export function createWorkloadRuntimeV1(
 		observedCapabilities.delete(state);
 		if (!state.identity) return "pending" as const;
 		const observedWorkload = desired(state);
-		if (isMultiService(observedWorkload))
-			return multiService.observe(observedWorkload, state.identity);
+		if (isMultiService(observedWorkload)) {
+			const health = await multiService.observe(
+				observedWorkload,
+				state.identity,
+			);
+			// 多服务 Agent 是自有交互入口，没有平台适配能力；与单镜像 self-managed
+			// 一致，只对完全相同的一次健康晋升尝试保留空能力集。
+			if (health === "healthy" && state.phase === "promoting")
+				observedCapabilities.set(state, RuntimeCapabilitySetV1Schema.parse({}));
+			return health;
+		}
 		if (state.phase === "ready" && candidateKeyless(state))
 			await revalidateCandidateCatalog(state, true);
 		let capabilities: WorkloadCapabilitiesV1 | undefined;

@@ -6,6 +6,7 @@ import {
 import type { ImageRegistryAdapterV1 } from "@agent-infra/image-registry";
 import type {
 	KubernetesObject,
+	V1Deployment,
 	V1Pod,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
@@ -221,6 +222,17 @@ export function fakeKubernetesApi() {
 			)
 		)
 			updated.metadata.generation = (existing.metadata?.generation ?? 1) + 1;
+		if (updated.kind === "Deployment") {
+			// 模拟 Deployment 控制器：期望副本数即可用副本数，省略时沿用 Kubernetes 默认值 1。
+			const deployment = updated as V1Deployment;
+			const replicas = deployment.spec?.replicas ?? 1;
+			deployment.status = {
+				observedGeneration: updated.metadata.generation,
+				availableReplicas: replicas,
+				readyReplicas: replicas,
+				replicas,
+			};
+		}
 		if (updated.kind === "StatefulSet") {
 			const workload = updated as V1StatefulSet;
 			const templateSpec = workload.spec?.template.spec;
