@@ -436,12 +436,15 @@ export function createBrowserObserveControllerV1(input: {
 			request: BrowserActionRequestV1;
 		}
 	>();
+	const confirmationInFlight = new Set<string>();
 
 	function allowedOrigins(): ReadonlySet<string> {
 		return new Set(readCapability().policy.allowedOrigins.map(normalizeOrigin));
 	}
 
 	function pendingConfirmation(input_: BrowserSideEffectConfirmationInputV1) {
+		if (confirmationInFlight.has(input_.confirmationId))
+			throw new Error("BROWSER_SIDE_EFFECT_CONFIRMATION_INVALID");
 		const pending = confirmations.get(input_.confirmationId);
 		if (
 			!pending ||
@@ -456,7 +459,23 @@ export function createBrowserObserveControllerV1(input: {
 			pending.confirmation.executionId !== input_.authorization.executionId ||
 			pending.confirmation.capabilityVersion !==
 				input_.executionBinding.capabilityVersion ||
-			pending.confirmation.pageRevision !== input_.executionBinding.pageRevision
+			pending.confirmation.pageRevision !==
+				input_.executionBinding.pageRevision ||
+			!pending.request.executionBinding ||
+			pending.request.executionBinding.agentId !==
+				input_.executionBinding.agentId ||
+			pending.request.executionBinding.conversationId !==
+				input_.executionBinding.conversationId ||
+			pending.request.executionBinding.executionId !==
+				input_.executionBinding.executionId ||
+			pending.request.executionBinding.sessionGeneration !==
+				input_.executionBinding.sessionGeneration ||
+			pending.request.executionBinding.resourceFence !==
+				input_.executionBinding.resourceFence ||
+			pending.request.executionBinding.workloadRevision !==
+				input_.executionBinding.workloadRevision ||
+			pending.request.executionBinding.imageDigest !==
+				input_.executionBinding.imageDigest
 		)
 			throw new Error("BROWSER_SIDE_EFFECT_CONFIRMATION_INVALID");
 		return pending;
@@ -1437,16 +1456,22 @@ export function createBrowserObserveControllerV1(input: {
 		input_.signal?.throwIfAborted();
 		const pending = pendingConfirmation(input_);
 		if (input_.command === "confirm") {
-			const record = await executeAction({
-				...pending.request,
-				actionId: input_.actionId,
-				executionBinding: input_.executionBinding,
-				authorization: input_.authorization,
-				confirmation: pending.confirmation,
-				sideEffect: true,
-			});
-			input_.signal?.throwIfAborted();
-			return record;
+			confirmationInFlight.add(input_.confirmationId);
+			try {
+				const record = await executeAction({
+					...pending.request,
+					actionId: input_.actionId,
+					executionBinding: input_.executionBinding,
+					authorization: input_.authorization,
+					confirmation: pending.confirmation,
+					sideEffect: true,
+				});
+				input_.signal?.throwIfAborted();
+				return record;
+			} finally {
+				confirmations.delete(input_.confirmationId);
+				confirmationInFlight.delete(input_.confirmationId);
+			}
 		}
 		confirmations.delete(input_.confirmationId);
 		const reasonCode =

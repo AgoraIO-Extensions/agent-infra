@@ -869,18 +869,23 @@ describe("Browser action outcome readback", () => {
 				},
 			}),
 		).rejects.toThrow("BROWSER_SIDE_EFFECT_CONFIRMATION_INVALID");
-		await expect(
-			controller.confirmSideEffect({
-				command: "confirm",
-				confirmationId: confirmation.confirmationId,
-				actionId: confirmation.actionId,
-				operationRef: "operation-1",
-				attemptRef: "attempt-1",
-				subjectId: "subject-1",
-				authorization,
-				executionBinding: binding,
-			}),
-		).resolves.toMatchObject({ status: "completed" });
+		const confirmInput = {
+			command: "confirm" as const,
+			confirmationId: confirmation.confirmationId,
+			actionId: confirmation.actionId,
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			subjectId: "subject-1",
+			authorization,
+			executionBinding: binding,
+		};
+		const firstConfirmation = controller.confirmSideEffect(confirmInput);
+		await expect(controller.confirmSideEffect(confirmInput)).rejects.toThrow(
+			"BROWSER_SIDE_EFFECT_CONFIRMATION_INVALID",
+		);
+		await expect(firstConfirmation).resolves.toMatchObject({
+			status: "completed",
+		});
 		expect(page.pageLocator.click).toHaveBeenCalledOnce();
 		for (const command of ["reject", "cancel"] as const) {
 			const actionId = `${command}-action`;
