@@ -1,4 +1,7 @@
-import type { RuntimeBrowserSideEffectConfirmationRequestV3 } from "@agent-infra/contracts/runtime";
+import type {
+	RuntimeBrowserSideEffectConfirmationRequestV3,
+	RuntimeBrowserSideEffectConfirmationResponseV3,
+} from "@agent-infra/contracts/runtime";
 import type { ConversationEventUseCaseV1 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
 import { createBrowserSideEffectOperationAdapterV1 } from "./browser-side-effect-operation.js";
@@ -162,5 +165,41 @@ describe("Browser side-effect Worker operation adapter", () => {
 			}),
 		).rejects.toMatchObject({ failureCode: "authorization_denied" });
 		expect(runtime.browserSideEffect).not.toHaveBeenCalled();
+	});
+
+	it("does not treat a rejected outcome as completed", async () => {
+		const conversationEvents = events();
+		const runtime = {
+			browserSideEffect: vi.fn().mockResolvedValue({
+				...({
+					schemaVersion: 3,
+					hostSessionRef: "host-1",
+					executionId: "execution-1",
+					actionId: "action-1",
+					operationRef: "operation-1",
+					attemptRef: "attempt-1",
+					outcome: "rejected",
+					phase: "completed",
+				} as unknown),
+			} as RuntimeBrowserSideEffectConfirmationResponseV3),
+		};
+		const adapter = createBrowserSideEffectOperationAdapterV1({
+			events: conversationEvents,
+			runtime,
+		});
+		await expect(
+			adapter.execute({
+				request: request(),
+				attempt: { operationRef: "operation-1", attemptRef: "attempt-1" },
+				occurredAt: "2026-10-15T00:00:00.000Z",
+				adapterEventKeyPrefix: "browser-command:command-4",
+				runtimeCursorPrefix: "browser-command:command-4",
+				now: () => "2026-10-15T00:00:01.000Z",
+				signal: new AbortController().signal,
+			}),
+		).rejects.toMatchObject({
+			phase: "failed",
+			failureCode: "request_rejected",
+		});
 	});
 });

@@ -112,7 +112,8 @@ export function createBrowserSideEffectOperationAdapterV1(input: {
 							"Browser side-effect response identity is invalid",
 							"recovery_unconfirmed",
 						);
-					if (response.phase === "completed") return {};
+					if (response.phase === "completed" && response.outcome === "accepted")
+						return {};
 					if (response.phase === "unknown")
 						throw new ConversationBrowserActionExecutionError(
 							"unknown",
