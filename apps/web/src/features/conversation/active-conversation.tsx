@@ -20,12 +20,18 @@ import {
 } from "../../components/ui/select.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
-import { BrowserHandoffPanel } from "../agent-discovery/browser-handoff-panel.js";
+import {
+	type BrowserHandoffActionInputV1,
+	BrowserHandoffPanel,
+} from "../agent-discovery/browser-handoff-panel.js";
 import { BrowserOperationStatus } from "./browser-operation-status.js";
 import type { ConversationCapabilitySelectionV1 } from "./conversation-capability-picker.js";
 import { ConversationCapabilityPickerPanel } from "./conversation-capability-picker-panel.js";
 import { CommandNotice } from "./conversation-command-notice.js";
-import type { ConversationCommandResult } from "./conversation-commands.js";
+import type {
+	BrowserCommandBody,
+	ConversationCommandResult,
+} from "./conversation-commands.js";
 import {
 	ConversationFilePicker,
 	useConversationFiles,
@@ -41,6 +47,55 @@ import { useConversationTimeline } from "./use-conversation-timeline.js";
 // Readiness is still authoritative on the server; a short bounded poll keeps
 // the composer responsive while the Worker finishes the Session Sandbox.
 const preparingRefreshMs = 500;
+
+type BrowserCommandInvoker = (body: BrowserCommandBody) => boolean;
+
+/** Keep the Browser panel's opaque action ids mapped to the server command
+ * union in one place; the panel never constructs transport payloads itself. */
+export function createBrowserConversationHandlers(
+	invokeBrowser: BrowserCommandInvoker,
+) {
+	return {
+		onPauseAgent: ({ id }: BrowserHandoffActionInputV1) => {
+			void invokeBrowser({ schemaVersion: 1, command: "pause", handoffId: id });
+		},
+		onTakeOver: ({ id }: BrowserHandoffActionInputV1) => {
+			void invokeBrowser({
+				schemaVersion: 1,
+				command: "take_over",
+				handoffId: id,
+			});
+		},
+		onReturnToAgent: ({ id }: BrowserHandoffActionInputV1) => {
+			void invokeBrowser({
+				schemaVersion: 1,
+				command: "return_to_agent",
+				handoffId: id,
+			});
+		},
+		onConfirmSideEffect: ({ id }: BrowserHandoffActionInputV1) => {
+			void invokeBrowser({
+				schemaVersion: 1,
+				command: "confirm_side_effect",
+				confirmationId: id,
+			});
+		},
+		onRejectSideEffect: ({ id }: BrowserHandoffActionInputV1) => {
+			void invokeBrowser({
+				schemaVersion: 1,
+				command: "reject_side_effect",
+				confirmationId: id,
+			});
+		},
+		onCancelConfirmation: ({ id }: BrowserHandoffActionInputV1) => {
+			void invokeBrowser({
+				schemaVersion: 1,
+				command: "cancel_side_effect",
+				confirmationId: id,
+			});
+		},
+	};
+}
 
 export function ActiveConversation({
 	agentId,
@@ -295,6 +350,13 @@ export function ActiveConversation({
 			void reader.refresh();
 		} else if (result.kind === "native-rejected") {
 			setNotice(`能力请求未受理：${result.outcome}`);
+		} else if (result.kind === "browser-accepted") {
+			setNotice(
+				result.receipt.outcome === "replayed"
+					? "Browser 命令已恢复。"
+					: "Browser 命令已受理。",
+			);
+			void reader.refresh();
 		}
 	}, [command.result, reader.refresh, refreshAgent]);
 	const options = customPlatformAdapter
@@ -327,6 +389,11 @@ export function ActiveConversation({
 			timeline.status !== "reconnecting" &&
 			!refreshing);
 	const commandLocked = command.isPending || command.result?.kind === "unknown";
+	const browserEvent = reader.browserHandoffEvent;
+	const browserBinding = browserEvent?.payload.binding;
+	const browserHandlers = createBrowserConversationHandlers(
+		command.invokeBrowser,
+	);
 	// Keep the local draft editable while an Agent or its Session is becoming
 	// ready. Sending stays blocked by `blocked`/`preparing`; only an authorization
 	// or read failure should lock the text area itself (#1607).
@@ -638,6 +705,8 @@ export function ActiveConversation({
 							agent.capabilities.browser?.status === "available"
 						}
 						handoffEvent={reader.browserHandoffEvent}
+						currentBinding={browserBinding}
+						{...browserHandlers}
 					/>
 				) : null}
 				<CommandNotice
