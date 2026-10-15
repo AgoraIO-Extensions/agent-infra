@@ -124,6 +124,25 @@ describe("deployment configuration projection", () => {
 					},
 				],
 			},
+			multiServiceResourceCap: {
+				cpuMillicores: 2_000,
+				memoryMiB: 4_096,
+				storageGiB: 20,
+			},
+			multiServiceResourceDefaultProfileRef: "default",
+			multiServiceResourceProfiles: [
+				{
+					displayName: "Default multi-service",
+					estimatedResources: {
+						cpuMillicores: 100,
+						memoryMiB: 128,
+						storageGiB: 1,
+					},
+					profileId: "default",
+					storageSize: "1Gi",
+				},
+			],
+			multiServiceResourceProfilesSource: "default",
 		});
 		const text = JSON.stringify(body);
 		expect(text).not.toContain("secret.example.test");
