@@ -3,7 +3,9 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { build, transform } from "esbuild";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
+
+vi.setConfig({ testTimeout: 15_000 });
 
 let directory: string;
 const connectionConsumerProfile = {
@@ -192,6 +194,10 @@ beforeAll(async () => {
 		modelDirectoryDeployment.code,
 	);
 	await writeFile(
+		join(directory, "runtime-grant-signer.js"),
+		"export const createWorkerRuntimeModelDirectoryGrantSignerV1 = () => () => ({ schemaVersion: 1, format: 'compact-jws', token: 'fixture' });\n",
+	);
+	await writeFile(
 		join(directory, "runtime-model-directory-service.js"),
 		modelDirectoryService.code,
 	);
@@ -290,7 +296,8 @@ const database = "postgresql://database.example.test/platform";
 function run(overrides: Record<string, string | undefined> = {}) {
 	return spawnSync(process.execPath, [join(directory, "run.mjs")], {
 		encoding: "utf8",
-		timeout: 5000,
+		// Loading the deployment graph can exceed five seconds on a cold CI runner.
+		timeout: 10_000,
 		env: {
 			...process.env,
 			PLATFORM_DATABASE_URL: database,

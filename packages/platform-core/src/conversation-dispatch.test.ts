@@ -189,7 +189,8 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		| "available"
 		| "capacity_wait"
 		| "capacity_unavailable"
-		| "sandbox_wait" = "available";
+		| "sandbox_wait"
+		| "stop_changed" = "available";
 	released = 0;
 
 	constructor(seed = claim()) {
@@ -1152,6 +1153,18 @@ describe("Conversation Worker dispatch", () => {
 			expect(runtimeHost.sideEffectCount()).toBe(1);
 		},
 	);
+	it("abandons a claim whose Stop was accepted after the claim without scheduling a retry (#2534)", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.setEvents([runtimeEvent(1)]);
+		const f = setup({ runtimeHost });
+		f.store.capacity = "stop_changed";
+		// Store 已把条目释放为可重新认领；Core 不 retry、不 reject，也不碰 Runtime。
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "stale" });
+		expect(f.store.outboxStatus).toBe("processing");
+		expect(f.store.errorCode).toBeUndefined();
+		expect(f.store.current.executionStatus).toBe("submitted");
+		expect(runtimeHost.sideEffectCount()).toBe(0);
+	});
 	it.each([
 		["not sent", true, "submitted", 1],
 		["possibly sent", false, "unknown", 0],

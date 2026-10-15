@@ -2541,6 +2541,34 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		},
 	);
 
+	it("does not release a Turn whose lease belongs to another Worker when a Stop is accepted (#2534)", async () => {
+		const work = await seed();
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			await seedStop(work);
+			await client`
+				update platform.outbox_items set lease_owner = 'worker-other'
+				where id = ${work.itemId}
+			`;
+			await expect(
+				store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe(false);
+			const [item] = await client<
+				{ status: string; lease_owner: string | null }[]
+			>`select status, lease_owner from platform.outbox_items where id = ${work.itemId}`;
+			expect(item).toEqual({
+				status: "processing",
+				lease_owner: "worker-other",
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("returns a provably unsent Turn to its waiting position and frees its capacity (#1522)", async () => {
 		await seedCapacityAgent("agent-dispatch", 1);
 		const first = await seed();
@@ -2602,6 +2630,44 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			expect(await dispatchState(first)).toEqual(after);
 		} finally {
 			await Promise.all([firstClaim.store.close(), secondClaim.store.close()]);
+		}
+	});
+
+	it("releases a provably unsent Turn even when a Stop was accepted after the claim (#2534)", async () => {
+		const work = await seed();
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			expect(decision.claim.stopPending).toBe(false);
+			await expect(
+				store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe(true);
+			// 请求还没发出去时 stop 被受理：认领的 stop 视图过期，但「没有发送」这个事实不变。
+			await seedStop(work);
+			await expect(
+				store.releaseUnsentDispatch({
+					claim: decision.claim,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_ROUTE_STALE",
+				}),
+			).resolves.toBe(true);
+			expect(await dispatchState(work)).toMatchObject({
+				status: "retry_scheduled",
+				execution_status: "submitted",
+			});
+			// 下一次认领看到 stop，直接终结未投递的 Turn，不用等租约到期。
+			const next = await claim(work.itemId, "worker-2");
+			try {
+				expect(next.decision).toEqual({ outcome: "succeeded" });
+				expect((await dispatchState(work))?.execution_status).toBe("cancelled");
+			} finally {
+				await next.store.close();
+			}
+		} finally {
+			await store.close();
 		}
 	});
 
@@ -3701,23 +3767,41 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		},
 	);
 
-	it("invalidates a claim when stop becomes pending during authorization", async () => {
+	it("releases a claim at once when stop becomes pending during authorization (#2534)", async () => {
 		const work = await seed();
 		const { store, decision } = await claim(work.itemId);
 		try {
 			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			expect(decision.claim.stopPending).toBe(false);
+			// stop 在认领之后才被受理：认领作废，但租约没有丢。
 			await seedStop(work);
 			await expect(
 				store.prepareRuntimeDispatch({
 					claim: decision.claim,
 					leaseDurationMs: 30_000,
 				}),
-			).resolves.toBe(false);
-			await client`
-				update platform.outbox_items
-				set lease_expires_at = clock_timestamp() - interval '1 second'
-				where id = ${work.itemId}
+			).resolves.toBe("stop_changed");
+			// 条目立即可被重新认领，不用等租约到期；Execution 没有被占用容量。
+			const [item] = await client<
+				{
+					status: string;
+					lease_owner: string | null;
+					lease_expires_at: Date | null;
+					available: boolean;
+				}[]
+			>`
+				select status, lease_owner, lease_expires_at,
+					available_at <= clock_timestamp() as available
+				from platform.outbox_items where id = ${work.itemId}
 			`;
+			expect(item).toEqual({
+				status: "retry_scheduled",
+				lease_owner: null,
+				lease_expires_at: null,
+				available: true,
+			});
+			expect((await dispatchState(work))?.execution_status).toBe("submitted");
+			// 下一次认领看到 stop，在与认领互斥的事务里直接终结未投递的 Turn。
 			const takeover = await claim(work.itemId, "worker-2");
 			try {
 				expect(takeover.decision).toEqual({ outcome: "succeeded" });

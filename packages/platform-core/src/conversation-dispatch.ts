@@ -995,6 +995,8 @@ export function createConversationDispatchUseCaseV1(
 						{},
 					);
 				}
+				// false：租约已被别人拿走；"stop_changed"：认领之后 stop 才被受理，Store 已把
+				// 条目释放为可立即重新认领（下一次认领会看到 stop）。两种情况这里都只是放弃本次认领。
 				if (preparation !== true) {
 					return { schemaVersion: 1, outcome: "stale" };
 				}

@@ -12,7 +12,8 @@ import {
 } from "./native-metadata-deployment-assembly.js";
 import {
 	createPlatformRuntimeModelDirectoryGatewayV1,
-	type PlatformWorkerRuntimeModelDirectoryPortsV1,
+	createPlatformRuntimeModelDirectoryPortsV1,
+	type PlatformWorkerRuntimeModelDirectoryDeploymentPortsV1,
 } from "./runtime-model-directory-deployment.js";
 import type { PlatformWorkerInternalGatewayServerOptionsV1 } from "./runtime-native-metadata-server.js";
 import {
@@ -62,7 +63,7 @@ type DeploymentConfiguration = {
 	/** Optional production Store/object-storage Skill materialization assembly. */
 	readonly skillMaterialization?: DeploymentSkillMaterializationConfigurationV1;
 	readonly nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayPortsV1;
-	readonly modelDirectory?: PlatformWorkerRuntimeModelDirectoryPortsV1;
+	readonly modelDirectory?: PlatformWorkerRuntimeModelDirectoryDeploymentPortsV1;
 	/** Deployment-owned saved-Key candidate reader; it keeps decryptor access in Worker. */
 	readonly savedKeyCandidates?: PlatformWorkerInternalGatewayServerOptionsV1;
 };
@@ -415,7 +416,10 @@ export async function createPlatformRuntimeModelDirectoryOptionsV1(
 	if (!modelDirectory) return undefined;
 	return createPlatformRuntimeModelDirectoryGatewayV1({
 		serviceToken,
-		ports: modelDirectory,
+		ports: createPlatformRuntimeModelDirectoryPortsV1({
+			...modelDirectory,
+			signing,
+		}),
 	});
 }
 
