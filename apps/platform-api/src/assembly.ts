@@ -431,6 +431,11 @@ export function assemblePlatformApi(
 			? { eventWindow: 200 }
 			: { eventWindow: input.conversationEventWindow }),
 	});
+	if (
+		input.nativeMetadata !== undefined &&
+		input.nativeMetadataWorker !== undefined
+	)
+		throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
 	const assembledNativeMetadata =
 		input.nativeMetadata ??
 		(input.nativeMetadataWorker
