@@ -26,6 +26,7 @@ import type {
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
 import {
 	type AgentConfigurationSecretDraft,
+	agentConfigurationDraftChanged,
 	buildAgentConfigurationRequest,
 	configurationDraftFromAgent,
 } from "./agent-configuration-draft.js";
@@ -197,6 +198,11 @@ export function AgentConfigurationScreen({
 		)
 		.join("、");
 	const isDisabled = submitting || agent.managementStatus === "disabled";
+	// 正在替换默认 Key（已输入或已检查）也算改动：保存时要引导用户先完成检查（#2560）。
+	const hasChanges =
+		agentConfigurationDraftChanged(agent, draft) ||
+		keyCheck.typed ||
+		Boolean(keyCheck.replacement);
 	const catalogModelPicker = deploymentModelCandidates ? (
 		<KeylessModelPicker
 			candidates={deploymentModelCandidates}
@@ -658,9 +664,23 @@ export function AgentConfigurationScreen({
 									</Button>
 								</fieldset>
 								<div className="form-footer border-border border-t pt-5">
-									<Button disabled={isDisabled} type="submit">
+									<Button
+										aria-describedby={
+											hasChanges ? undefined : "agent-configuration-unchanged"
+										}
+										disabled={isDisabled || !hasChanges}
+										type="submit"
+									>
 										{submitting ? "校验并保存中…" : "校验并保存"}
 									</Button>
+									{hasChanges || isDisabled ? null : (
+										<p
+											className="text-muted-foreground text-sm"
+											id="agent-configuration-unchanged"
+										>
+											没有需要保存的变更。
+										</p>
+									)}
 								</div>
 							</fieldset>
 						</form>

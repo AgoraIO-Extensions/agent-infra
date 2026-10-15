@@ -113,6 +113,20 @@ describe("AgentConfigurationWorkflow", () => {
 		rerender(<AgentConfigurationWorkflow agent={secondAgent} />);
 
 		expect(screen.queryByLabelText("新 Secret 值")).toBeNull();
+		// 换成另一个 Agent 后草稿回到它自己的配置：没有改动，保存不可用（#2560）。
+		expect(
+			screen
+				.getByRole("button", { name: "校验并保存" })
+				.hasAttribute("disabled"),
+		).toBe(true);
+		// 做一次真实改动后保存，请求里的范围必须是第二个 Agent 的，而不是上一个的。
+		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
+		fireEvent.change(screen.getByLabelText("Secret 名称"), {
+			target: { value: "OTHER_SECRET" },
+		});
+		fireEvent.change(screen.getByLabelText("新 Secret 值"), {
+			target: { value: "other-secret" },
+		});
 		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 		expect(
 			vi.mocked(useAgentConfigurationSubmission).mock.results.at(-1)?.value

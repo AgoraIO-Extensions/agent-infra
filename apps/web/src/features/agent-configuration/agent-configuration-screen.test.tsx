@@ -410,6 +410,17 @@ it("shows group visibility and the self-built application setup contract", () =>
 	expect(screen.queryByLabelText("自建应用配置标识")).toBeNull();
 });
 
+/** 制造一次真实改动：新增一个 Secret（Owner 与范围没有变化时，保存按钮本来是禁用的，#2560）。 */
+function addSecretChange() {
+	fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
+	fireEvent.change(screen.getByLabelText("Secret 名称"), {
+		target: { value: "CHANGED_SECRET" },
+	});
+	fireEvent.change(screen.getByLabelText("新 Secret 值"), {
+		target: { value: "changed-secret-value" },
+	});
+}
+
 describe("agents whose models are managed by the default Relay Key (#2421)", () => {
 	const keyedAgent = AgentProjectionV2Schema.parse({
 		...agent,
@@ -565,6 +576,14 @@ describe("agents whose models are managed by the default Relay Key (#2421)", () 
 		expect(
 			screen.queryByText(/已填写新 Key，但还没有可保存的模型选择/),
 		).toBeNull();
+		// 清空 Key 后没有任何改动：保存不可用，并说明原因（#2560）。
+		expect(
+			screen
+				.getByRole("button", { name: "校验并保存" })
+				.hasAttribute("disabled"),
+		).toBe(true);
+		expect(screen.getByText("没有需要保存的变更。")).toBeTruthy();
+		addSecretChange();
 		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 		expect(onSave).toHaveBeenCalledTimes(1);
 		expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("defaultRelayKey");
@@ -583,6 +602,7 @@ describe("agents whose models are managed by the default Relay Key (#2421)", () 
 		fireEvent.change(screen.getByPlaceholderText("输入新 Key"), {
 			target: { value: "" },
 		});
+		addSecretChange();
 		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 		expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("defaultRelayKey");
 	});
@@ -705,5 +725,57 @@ describe("agents whose models are managed by the default Relay Key (#2421)", () 
 		fireEvent.click(screen.getByRole("checkbox", { name: "替换模型配置" }));
 		expect(screen.getAllByText("catalog · model-a").length).toBeGreaterThan(0);
 		expect(screen.queryByLabelText("选项 ID")).toBeNull();
+	});
+});
+
+describe("saving an unchanged configuration (#2560)", () => {
+	function renderPlain() {
+		const onSave = vi.fn();
+		render(
+			<AgentConfigurationScreen
+				agent={agent}
+				onSave={onSave}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+		return { onSave };
+	}
+	const saveButton = () => screen.getByRole("button", { name: "校验并保存" });
+
+	it("disables the save button and says why while nothing changed", () => {
+		const { onSave } = renderPlain();
+		expect(saveButton().hasAttribute("disabled")).toBe(true);
+		const hint = screen.getByText("没有需要保存的变更。");
+		expect(saveButton().getAttribute("aria-describedby")).toBe(hint.id);
+		fireEvent.click(saveButton());
+		expect(onSave).not.toHaveBeenCalled();
+	});
+
+	it("enables the save button for a real change and disables it again when the change is undone", () => {
+		const { onSave } = renderPlain();
+		addSecretChange();
+		expect(saveButton().hasAttribute("disabled")).toBe(false);
+		expect(screen.queryByText("没有需要保存的变更。")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: /^移除.*Secret/ }));
+		expect(saveButton().hasAttribute("disabled")).toBe(true);
+		expect(screen.getByText("没有需要保存的变更。")).toBeTruthy();
+		addSecretChange();
+		fireEvent.click(saveButton());
+		expect(onSave).toHaveBeenCalledOnce();
+	});
+
+	it("does not offer the hint while a save is already running", () => {
+		render(
+			<AgentConfigurationScreen
+				agent={agent}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting
+			/>,
+		);
+		expect(screen.queryByText("没有需要保存的变更。")).toBeNull();
 	});
 });
