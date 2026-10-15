@@ -2977,6 +2977,20 @@ describe("assembled Workload Runtime contracts", () => {
 			expect.objectContaining({ stage: "health", reason: "response" }),
 		]);
 	});
+	it("retries one transient health timeout for Session delivery (#2208)", async () => {
+		const health = vi
+			.fn<NonNullable<WorkloadRuntimeOptionsV1["fetch"]>>()
+			.mockRejectedValueOnce(
+				new DOMException("probe timed out", "TimeoutError"),
+			)
+			.mockResolvedValue(new Response("ok"));
+		const f = fixture({ fetch: health });
+		await f.tick(8);
+		if (!f.state) throw new Error("Expected ready state");
+		const runtime = createWorkloadRuntimeV1(f.options);
+		expect(await runtime.observeSession(f.state, undefined)).toBe("healthy");
+		expect(health.mock.calls.length).toBeGreaterThanOrEqual(2);
+	});
 	it("keeps a core-compatible candidate available when optional capability probing has no valid result", async () => {
 		const f = fixture({
 			probeRuntime: async () => ({
