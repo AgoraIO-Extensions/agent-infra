@@ -175,6 +175,19 @@ export async function performConversationCommand(
 				parsed.data.conversationId !== target.conversationId
 			)
 				return { kind: "unknown" };
+			const expectedId =
+				"handoffId" in command.body
+					? command.body.handoffId
+					: command.body.confirmationId;
+			const receiptId =
+				"handoffId" in parsed.data
+					? parsed.data.handoffId
+					: parsed.data.confirmationId;
+			if (
+				parsed.data.command !== command.body.command ||
+				receiptId !== expectedId
+			)
+				return { kind: "unknown" };
 			return { kind: "browser-accepted", receipt: parsed.data };
 		}
 		if (command.kind === "create") {
