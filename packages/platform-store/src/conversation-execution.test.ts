@@ -5,13 +5,17 @@ import {
 	type ConversationModelConfigurationV1,
 	createConversationEventUseCaseV1,
 	createConversationExecutionUseCaseV1,
+	createNativeCapabilityAdmissionUseCaseV1,
 	createSessionSandboxBindingV1,
+	nativeCapabilityAdmissionRequestDigestV1,
+	nativeCapabilityParametersDigestV1,
 } from "@agent-infra/platform-core";
 import {
 	type ConversationCommandConformanceHarnessV1,
 	type ConversationCommandConformanceSnapshotV1,
 	conversationCommandConformanceV1,
 	conversationConformanceAuthorityV1,
+	FakeNativeCapabilityMetadataRevalidationV1,
 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -702,6 +706,265 @@ async function commandEffectCounts() {
 }
 
 describe("PostgreSQL Conversation command transaction", () => {
+	it("persists and replays one native capability admission atomically", async () => {
+		await persistConformanceModelConfiguration(undefined, authority);
+		const { transaction, useCase } = createConversation();
+		try {
+			const created = await useCase.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "native-create",
+				requestId: "native-create",
+				traceId: "native-create",
+			});
+			if (created.outcome !== "accepted")
+				throw new Error("Expected native capability Conversation");
+			const capabilityId = "a".repeat(64);
+			const directoryRevision = "b".repeat(64);
+			const metadata = new FakeNativeCapabilityMetadataRevalidationV1({
+				projection: {
+					selector: "skills",
+					revision: directoryRevision,
+					capabilities: [
+						{
+							id: capabilityId,
+							kind: "skill",
+							name: "workspace-summary",
+							description: "Summarize workspace files",
+							source: { name: "skill-hub", version: "1.0.0" },
+							availability: "discovered",
+						},
+					],
+				},
+			});
+			const admission = createNativeCapabilityAdmissionUseCaseV1({
+				authorization: {
+					async authorize() {
+						return { outcome: "allowed", authority };
+					},
+				},
+				metadata,
+				transaction,
+				newId: (() => {
+					let id = 1;
+					return () => `native-execution-${id++}`;
+				})(),
+			});
+			const request = {
+				schemaVersion: 1 as const,
+				conversationId: created.result.conversationId,
+				capabilityId,
+				directoryRevision,
+				parameters: "summarize the workspace",
+				idempotencyKey: "native-invoke",
+				requestId: "native-request",
+				traceId: "native-trace",
+			};
+
+			const accepted = await admission.admit(request);
+			expect(accepted).toMatchObject({
+				outcome: "accepted",
+				result: {
+					status: "submitted",
+					conversationId: created.result.conversationId,
+					capabilityId,
+				},
+			});
+			await expect(admission.admit(request)).resolves.toMatchObject({
+				outcome: "replayed",
+			});
+			await expect(
+				admission.admit({ ...request, idempotencyKey: "native-busy" }),
+			).resolves.toEqual({ outcome: "busy" });
+			const foreignAuthority = { ...authority, actorId: "foreign-user" };
+			const foreignAdmission = createNativeCapabilityAdmissionUseCaseV1({
+				authorization: {
+					async authorize() {
+						return { outcome: "allowed", authority: foreignAuthority };
+					},
+				},
+				metadata,
+				transaction,
+			});
+			await expect(
+				foreignAdmission.admit({ ...request, idempotencyKey: "foreign" }),
+			).resolves.toEqual({
+				outcome: "denied",
+				reason: "authorization_lost",
+			});
+			const staleAuthority = {
+				...authority,
+				authorizationRevision: "stale-revision",
+			};
+			const staleAdmission = createNativeCapabilityAdmissionUseCaseV1({
+				authorization: {
+					async authorize() {
+						return { outcome: "allowed", authority: staleAuthority };
+					},
+				},
+				metadata,
+				transaction,
+			});
+			await expect(
+				staleAdmission.admit({ ...request, idempotencyKey: "stale" }),
+			).resolves.toEqual({
+				outcome: "denied",
+				reason: "authorization_lost",
+			});
+			if (accepted.outcome !== "accepted")
+				throw new Error("Expected accepted native plan");
+			const malformedRequest = {
+				...request,
+				idempotencyKey: "malformed",
+				requestId: "malformed",
+				traceId: "malformed",
+			};
+			await expect(
+				transaction.admitNativeCapability(
+					{
+						command: malformedRequest,
+						authority,
+						requestDigest:
+							nativeCapabilityAdmissionRequestDigestV1(malformedRequest),
+					},
+					async () => ({
+						...accepted.plan,
+						outbox: {
+							...accepted.plan.outbox,
+							payload: {
+								...accepted.plan.outbox.payload,
+								parametersDigest: "0".repeat(64),
+							},
+						},
+					}),
+					() => true,
+					async () => true,
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+			await expect(
+				admission.admit({ ...request, parameters: "different" }),
+			).resolves.toEqual({
+				outcome: "conflict",
+				reason: "idempotency_conflict",
+			});
+
+			expect(
+				await client`
+					select execution_id, status from platform.conversation_executions
+					where conversation_id = ${created.result.conversationId}
+				`,
+			).toHaveLength(1);
+			const [outbox] = await client<
+				{ operation: string; payload: Record<string, unknown> }[]
+			>`select operation, payload from platform.outbox_items
+				where id = ${"conversation:native-capability:native-execution-1"}`;
+			expect(outbox).toMatchObject({
+				operation: "conversation.native-capability.invoke.v1",
+				payload: {
+					schemaVersion: 1,
+					conversationId: created.result.conversationId,
+					executionId: "native-execution-1",
+					capabilityId,
+					capabilityKind: "skill",
+					directoryRevision,
+					parametersDigest: nativeCapabilityParametersDigestV1(
+						"summarize the workspace",
+					),
+				},
+			});
+			expect(
+				await client`
+					select action from platform.conversation_audit_events
+					where execution_id = ${"native-execution-1"}
+				`,
+			).toEqual([{ action: "conversation.native_capability.accepted" }]);
+		} finally {
+			await transaction.close();
+		}
+	});
+
+	it("rolls back native admission when the outbox write fails", async () => {
+		await persistConformanceModelConfiguration(undefined, authority);
+		const { transaction, useCase } = createConversation();
+		try {
+			const created = await useCase.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "native-rollback-create",
+				requestId: "native-rollback-create",
+				traceId: "native-rollback-create",
+			});
+			if (created.outcome !== "accepted")
+				throw new Error("Expected native capability Conversation");
+			const capabilityId = "c".repeat(64);
+			const directoryRevision = "d".repeat(64);
+			const metadata = new FakeNativeCapabilityMetadataRevalidationV1({
+				projection: {
+					selector: "commands",
+					revision: directoryRevision,
+					capabilities: [
+						{
+							id: capabilityId,
+							kind: "command",
+							name: "workspace.read",
+							description: "Read workspace",
+							source: { name: "runtime", version: "1.0.0" },
+							availability: "available",
+						},
+					],
+				},
+			});
+			const admission = createNativeCapabilityAdmissionUseCaseV1({
+				authorization: {
+					async authorize() {
+						return { outcome: "allowed", authority };
+					},
+				},
+				metadata,
+				transaction,
+				newId: () => "native-rollback-execution",
+			});
+			const request = {
+				schemaVersion: 1 as const,
+				conversationId: created.result.conversationId,
+				capabilityId,
+				directoryRevision,
+				parameters: "read workspace",
+				idempotencyKey: "native-rollback",
+				requestId: "native-rollback-request",
+				traceId: "native-rollback-trace",
+			};
+			await armFailure("outbox");
+			try {
+				await expect(admission.admit(request)).resolves.toMatchObject({
+					outcome: "unavailable",
+				});
+			} finally {
+				await disarmFailure("outbox");
+			}
+			expect(
+				await client`
+					select count(*)::int as count from platform.conversation_executions
+					where execution_id = ${"native-rollback-execution"}
+				`,
+			).toEqual([{ count: 0 }]);
+			expect(
+				await client`
+					select count(*)::int as count from platform.outbox_items
+					where operation = 'conversation.native-capability.invoke.v1'
+				`,
+			).toEqual([{ count: 0 }]);
+			expect(
+				await client`
+					select count(*)::int as count from platform.idempotency_records
+					where command_type = 'native-capability.invoke'
+				`,
+			).toEqual([{ count: 0 }]);
+		} finally {
+			await transaction.close();
+		}
+	});
+
 	it("accepts the next Web message on an idle-reclaimed Session and requests its resume (#2239)", async () => {
 		await persistConformanceModelConfiguration(
 			conformanceModelConfiguration,

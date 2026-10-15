@@ -13,6 +13,10 @@ import {
 	type ConversationTaskAdmissionTransactionPortV1,
 	type CreateConversationDecisionV1,
 	type FileRecordV1,
+	type NativeCapabilityAdmissionDecisionV1,
+	type NativeCapabilityAdmissionTransactionPortV1,
+	type NativeCapabilityInvocationPlanV1,
+	nativeCapabilityParametersDigestV1,
 	PersonalApiCredentialErrorV1,
 	parseConversationOperationEventV2,
 	parseTaskAuthorizationBoundaryV1,
@@ -121,6 +125,127 @@ function legacyWebExecutionBinding(
 		: undefined;
 }
 
+type NativeAdmissionRequest = Parameters<
+	NativeCapabilityAdmissionTransactionPortV1["admitNativeCapability"]
+>[0];
+type NativeAdmissionDecide = Parameters<
+	NativeCapabilityAdmissionTransactionPortV1["admitNativeCapability"]
+>[1];
+type NativeAdmissionCurrent = Parameters<
+	NativeCapabilityAdmissionTransactionPortV1["admitNativeCapability"]
+>[2];
+type NativeAdmissionAuthorized = Parameters<
+	NativeCapabilityAdmissionTransactionPortV1["admitNativeCapability"]
+>[3];
+
+function nativeAdmissionPlan(
+	value: unknown,
+	request: NativeAdmissionRequest,
+): NativeCapabilityInvocationPlanV1 {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		unavailable();
+	const envelope = value as Record<string, unknown>;
+	const plan = envelope.plan;
+	if (typeof plan !== "object" || plan === null || Array.isArray(plan))
+		unavailable();
+	const candidate = plan as Record<string, unknown>;
+	const capability =
+		typeof candidate.capability === "object" &&
+		candidate.capability !== null &&
+		!Array.isArray(candidate.capability)
+			? (candidate.capability as Record<string, unknown>)
+			: undefined;
+	const outbox =
+		typeof candidate.outbox === "object" &&
+		candidate.outbox !== null &&
+		!Array.isArray(candidate.outbox)
+			? (candidate.outbox as Record<string, unknown>)
+			: undefined;
+	const outboxPayload =
+		outbox &&
+		typeof outbox.payload === "object" &&
+		outbox.payload !== null &&
+		!Array.isArray(outbox.payload)
+			? (outbox.payload as Record<string, unknown>)
+			: undefined;
+	const idempotency =
+		typeof candidate.idempotency === "object" &&
+		candidate.idempotency !== null &&
+		!Array.isArray(candidate.idempotency)
+			? (candidate.idempotency as Record<string, unknown>)
+			: undefined;
+	const result =
+		typeof candidate.result === "object" &&
+		candidate.result !== null &&
+		!Array.isArray(candidate.result)
+			? (candidate.result as Record<string, unknown>)
+			: undefined;
+	const capabilitySource =
+		capability &&
+		typeof capability.source === "object" &&
+		capability.source !== null &&
+		!Array.isArray(capability.source)
+			? (capability.source as Record<string, unknown>)
+			: undefined;
+	const command = request.command;
+	if (
+		candidate.schemaVersion !== 1 ||
+		candidate.kind !== "native-capability" ||
+		candidate.conversationId !== command.conversationId ||
+		candidate.executionStatus !== "submitted" ||
+		typeof candidate.executionId !== "string" ||
+		candidate.parameters !== command.parameters ||
+		candidate.parametersDigest !==
+			nativeCapabilityParametersDigestV1(command.parameters) ||
+		capability?.id !== command.capabilityId ||
+		(capability?.kind !== "command" && capability?.kind !== "skill") ||
+		capability?.directoryRevision !== command.directoryRevision ||
+		typeof capabilitySource?.name !== "string" ||
+		typeof capabilitySource?.version !== "string" ||
+		outbox?.id !== `conversation:native-capability:${candidate.executionId}` ||
+		outbox?.operation !== "conversation.native-capability.invoke.v1" ||
+		outboxPayload?.parameters !== command.parameters ||
+		outboxPayload?.parametersDigest !== candidate.parametersDigest ||
+		outboxPayload?.executionId !== candidate.executionId ||
+		outboxPayload?.conversationId !== candidate.conversationId ||
+		outboxPayload?.capabilityId !== capability?.id ||
+		outboxPayload?.capabilityKind !== capability?.kind ||
+		outboxPayload?.directoryRevision !== capability?.directoryRevision ||
+		outboxPayload?.capabilitySourceVersion !== capabilitySource?.version ||
+		result?.executionId !== candidate.executionId ||
+		result?.conversationId !== candidate.conversationId ||
+		result?.capabilityId !== capability?.id ||
+		result?.capabilityKind !== capability?.kind ||
+		result?.directoryRevision !== capability?.directoryRevision ||
+		idempotency?.key !== command.idempotencyKey ||
+		idempotency?.requestDigest !== request.requestDigest ||
+		envelope.result === undefined
+	)
+		unavailable();
+	return structuredClone(
+		candidate,
+	) as unknown as NativeCapabilityInvocationPlanV1;
+}
+
+function nativeAdmissionAuthorityMatches(
+	plan: NativeCapabilityInvocationPlanV1,
+	authority: ConversationExecutionAuthorityV1,
+): boolean {
+	return (
+		plan.agentId === authority.agentId &&
+		plan.actorId === authority.actorId &&
+		plan.channelId === authority.channelId &&
+		plan.authorizationRevision === authority.authorizationRevision
+	);
+}
+
+function validateNativeAdmissionPlan(
+	plan: NativeCapabilityInvocationPlanV1,
+	request: NativeAdmissionRequest,
+): void {
+	nativeAdmissionPlan({ plan, result: plan.result }, request);
+}
+
 export interface PostgresConversationExecutionOptionsV1 {
 	readonly databaseUrl: string;
 	readonly userDirectory?: TaskUserDirectoryV1;
@@ -160,6 +285,147 @@ export class PostgresConversationExecutionTransactionV1
 		} catch {
 			unavailable();
 		}
+	}
+
+	async admitNativeCapability(
+		request: NativeAdmissionRequest,
+		decide: NativeAdmissionDecide,
+		isCurrent: NativeAdmissionCurrent,
+		isAuthorized: NativeAdmissionAuthorized,
+	): Promise<NativeCapabilityAdmissionDecisionV1> {
+		return this.#transaction(async (transaction) => {
+			const authority = parseAuthority(request.authority);
+			const command = request.command;
+			await transaction`
+				select id from platform.agents where id = ${authority.agentId} for share
+			`;
+			const conversation = await lockConversation(
+				transaction,
+				text(command.conversationId),
+			);
+			if (
+				!conversation ||
+				!matchesBinding(conversation, authority) ||
+				conversation.authorizationRevision !== authority.authorizationRevision
+			)
+				return { outcome: "denied", reason: "authorization_lost" };
+
+			const idempotencyScope = {
+				scopeType: "conversation",
+				scopeId: command.conversationId,
+				actorId: authority.actorId,
+				commandType: "native-capability.invoke",
+				key: command.idempotencyKey,
+			};
+			const existing = await readIdempotency(transaction, idempotencyScope);
+			if (existing) {
+				if (existing.request_digest !== request.requestDigest)
+					return {
+						outcome: "conflict",
+						reason: "idempotency_conflict",
+					};
+				if (existing.status !== "completed" || existing.result === null)
+					return {
+						outcome: "unavailable",
+						reason: "idempotency_in_progress",
+					};
+				if (!(await isAuthorized()))
+					return { outcome: "denied", reason: "authorization_lost" };
+				const replayed = nativeAdmissionPlan(existing.result, request);
+				if (!nativeAdmissionAuthorityMatches(replayed, authority))
+					return { outcome: "unavailable", reason: "metadata_unavailable" };
+				return {
+					outcome: "replayed",
+					result: structuredClone(replayed.result),
+					plan: replayed,
+				};
+			}
+
+			const state = await readMessageState(transaction, conversation);
+			const decision = await decide({
+				conversation,
+				activeExecution: state.activeExecution ?? null,
+				authorizationRevision: conversation.authorizationRevision,
+			});
+			if ("outcome" in decision) return decision;
+			const plan = decision;
+			validateNativeAdmissionPlan(plan, request);
+			if (!nativeAdmissionAuthorityMatches(plan, authority))
+				return { outcome: "denied", reason: "authorization_lost" };
+			if (
+				conversation.authorizationRevision !== authority.authorizationRevision
+			)
+				return { outcome: "denied", reason: "authorization_lost" };
+			if (!(await isAuthorized()))
+				return { outcome: "denied", reason: "authorization_lost" };
+			if (!isCurrent(plan)) return { outcome: "stale" };
+
+			const occurredAt = new Date();
+			const reservationId = await reserveIdempotency(transaction, {
+				...idempotencyScope,
+				requestDigest: request.requestDigest,
+				occurredAt,
+			});
+			if (!reservationId) unavailable();
+			const principalType = conversation.principal?.kind ?? "user";
+			await transaction`
+				insert into platform.conversation_executions
+					(execution_id, conversation_id, sandbox_id, agent_id, actor_id,
+					 channel_id, turn_id, status, session_generation, delivery_fence,
+					 authorization_revision, model_configuration_revision, model_option_id,
+					 reasoning_level, execution_source, relay_key_purpose,
+					 relay_key_subject_id, relay_key_id, relay_key_version,
+					 runtime_submit_protocol, original_operation_digest,
+					 original_submit_host_session_ref, principal_type, created_at, updated_at)
+				values
+					(${plan.executionId}, ${plan.conversationId},
+					 ${conversation.sandbox?.sandboxId ?? null}, ${plan.agentId},
+					 ${plan.actorId}, ${plan.channelId}, ${plan.turnId}, 'submitted',
+					 ${plan.sessionGeneration}, 0, ${plan.authorizationRevision},
+					 null, null, null, null, null, null, null, null, null, null, null,
+					 ${principalType}, ${occurredAt}, ${occurredAt})
+			`;
+			if (authority.taskBoundary) {
+				await insertTaskAuthorization(transaction, {
+					executionId: plan.executionId,
+					boundary: authority.taskBoundary,
+					traceId: command.traceId,
+					requestId: command.requestId,
+				});
+			}
+			await transaction`
+				insert into platform.outbox_items
+					(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+					 available_at, created_at, updated_at)
+				values
+					(${plan.outbox.id}, 'conversation', ${plan.conversationId},
+					 ${plan.outbox.operation}, ${transaction.json(
+							plan.outbox.payload as unknown as JsonValue,
+						)}, ${plan.outbox.traceId}, ${plan.outbox.requestId},
+					 ${occurredAt}, ${occurredAt}, ${occurredAt})
+			`;
+			await transaction`
+				insert into platform.conversation_audit_events
+					(id, conversation_id, execution_id, agent_id, actor_id, action,
+					 trace_id, request_id, occurred_at)
+				values
+					(${randomUUID()}, ${plan.conversationId}, ${plan.executionId},
+					 ${plan.agentId}, ${plan.actorId},
+					 'conversation.native_capability.accepted', ${plan.outbox.traceId},
+					 ${plan.outbox.requestId}, ${occurredAt})
+			`;
+			await completeIdempotency(
+				transaction,
+				reservationId,
+				{ schemaVersion: 1, result: plan.result, plan },
+				occurredAt,
+			);
+			return {
+				outcome: "accepted",
+				result: structuredClone(plan.result),
+				plan,
+			};
+		});
 	}
 
 	/** Reads the saved operation and Key tuple using this original Store instance. */
