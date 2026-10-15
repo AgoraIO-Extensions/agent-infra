@@ -112,6 +112,7 @@ export function startPlatformApi(options: StartOptions) {
 
 export async function loadPlatformApiAssembly(
 	moduleSpecifier = process.env.PLATFORM_API_DEPLOYMENT_MODULE,
+	storeObservability?: Pick<ReturnType<typeof startObservability>, "record">,
 ): Promise<LoadedPlatformApiAssembly> {
 	if (!moduleSpecifier) {
 		throw new Error("PLATFORM_API_DEPLOYMENT_MODULE is required");
@@ -147,7 +148,7 @@ export async function loadPlatformApiAssembly(
 			const diagnostic = deploymentDiagnosticV1(cause);
 			throw diagnostic ? withDeploymentDiagnosticV1(error, diagnostic) : error;
 		}
-		assembly = assemblePlatformApi(input);
+		assembly = assemblePlatformApi(input, storeObservability);
 	} catch (error) {
 		try {
 			await deployment.browserAuth?.close?.();
@@ -173,12 +174,12 @@ export async function loadPlatformApiAssembly(
 export async function startPlatformApiFromDeployment(
 	options: DeploymentStartOptions = {},
 ) {
-	const assembly = await loadPlatformApiAssembly(options.moduleSpecifier);
 	let server: ReturnType<typeof startPlatformApi> | undefined;
 	let observability: ReturnType<typeof startObservability> | undefined;
 	let resourceSampling:
 		| ReturnType<typeof startPlatformResourceSampling>
 		| undefined;
+	let assembly: LoadedPlatformApiAssembly | undefined;
 	const sseResources = new SseResourceTracker();
 	try {
 		observability = startObservability({
@@ -190,6 +191,10 @@ export async function startPlatformApiFromDeployment(
 				: {}),
 			...options.observabilityOptions,
 		});
+		assembly = await loadPlatformApiAssembly(
+			options.moduleSpecifier,
+			observability,
+		);
 		server = startPlatformApi({
 			dependencies: assembly.dependencies,
 			browserAuth: assembly.browserAuth,
@@ -215,6 +220,7 @@ export async function startPlatformApiFromDeployment(
 			server?.once("error", onError);
 			if (server?.listening) onListening();
 		});
+		if (!assembly) throw new Error("Platform API assembly is unavailable");
 		if (observability.status().enabled) {
 			resourceSampling = startPlatformResourceSampling(
 				assembly.readResourceSnapshot,
@@ -237,7 +243,7 @@ export async function startPlatformApiFromDeployment(
 			try {
 				await resourceSampling?.stop();
 			} finally {
-				await assembly.close();
+				await assembly?.close();
 			}
 		} finally {
 			await observability?.close();

@@ -192,6 +192,9 @@ export function createPlatformConversationWorkerV2(
 		databaseUrl: options.databaseUrl,
 		userDirectory: options.directory,
 		sandboxPolicy: options.sandboxPolicy,
+		...(options.observability
+			? { observability: { observability: options.observability } }
+			: {}),
 	});
 	const taskAuthorizationStore = new PostgresTaskAuthorizationStoreV1({
 		databaseUrl: options.databaseUrl,

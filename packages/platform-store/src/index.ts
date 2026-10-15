@@ -108,6 +108,12 @@ export {
 } from "./conversation-query.ts";
 export { PostgresFileStoreV1 } from "./files.js";
 export {
+	type StoreQueryObservability,
+	type StoreQueryObservabilityOptions,
+	observePostgresClient,
+	storeSlowQueryThresholdMs,
+} from "./query-observability.js";
+export {
 	openPostgresPlatformIdempotencyStore,
 	type PostgresPlatformIdempotencyOptionsV1,
 } from "./idempotency.ts";

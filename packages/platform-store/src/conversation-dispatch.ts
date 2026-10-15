@@ -66,6 +66,8 @@ import {
 	type PlatformQueueResourceSnapshot,
 	readPlatformQueueResourceSnapshot,
 } from "./observability-snapshot.js";
+import type { StoreQueryObservabilityOptions } from "./query-observability.js";
+import { observePostgresClient } from "./query-observability.js";
 import {
 	isSessionSandboxPolicyCurrentV1,
 	readSessionSandboxRuntimeState,
@@ -85,6 +87,7 @@ export interface PostgresConversationDispatchOptionsV1 {
 	readonly sandboxPolicy?: SessionSandboxPolicyV1;
 	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly databaseUrl: string;
+	readonly observability?: StoreQueryObservabilityOptions;
 }
 
 export class PostgresConversationDispatchStoreV1
@@ -110,10 +113,13 @@ export class PostgresConversationDispatchStoreV1
 		this.#sandboxPolicy = options.sandboxPolicy
 			? { ...options.sandboxPolicy }
 			: undefined;
-		this.#client = postgres(
-			platformDatabaseUrlFromEnvironment({
-				PLATFORM_DATABASE_URL: options.databaseUrl,
-			}),
+		this.#client = observePostgresClient(
+			postgres(
+				platformDatabaseUrlFromEnvironment({
+					PLATFORM_DATABASE_URL: options.databaseUrl,
+				}),
+			),
+			options.observability ?? {},
 		);
 	}
 
