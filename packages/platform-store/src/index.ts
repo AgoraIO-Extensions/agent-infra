@@ -107,13 +107,6 @@ export {
 	readPlatformQueueResourceSnapshot,
 } from "./conversation-query.ts";
 export { PostgresFileStoreV1 } from "./files.js";
-export { configureStoreQueryObservability } from "./observed-postgres.js";
-export {
-	type StoreQueryObservability,
-	type StoreQueryObservabilityOptions,
-	observePostgresClient,
-	storeSlowQueryThresholdMs,
-} from "./query-observability.js";
 export {
 	openPostgresPlatformIdempotencyStore,
 	type PostgresPlatformIdempotencyOptionsV1,
@@ -129,6 +122,7 @@ export {
 	type PlatformMigrationOptions,
 	platformDatabaseUrlFromEnvironment,
 } from "./migrate.ts";
+export { configureStoreQueryObservability } from "./observed-postgres.js";
 export {
 	type ClaimedOutboxItem,
 	type ClaimOutboxItemInput,
@@ -152,6 +146,12 @@ export {
 	resolvePersonalApiTaskAdmissionAuthorityV1,
 } from "./personal-api-task-authorization.ts";
 export { PostgresPersonalRelayKeyStoreV1 } from "./personal-relay-key.ts";
+export {
+	observePostgresClient,
+	type StoreQueryObservability,
+	type StoreQueryObservabilityOptions,
+	storeSlowQueryThresholdMs,
+} from "./query-observability.js";
 export { PostgresRelayKeyVersionStoreV1 } from "./relay-key-versions.ts";
 export {
 	PostgresScopedPlatformAuditQueryV1,

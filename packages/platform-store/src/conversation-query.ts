@@ -17,11 +17,10 @@ import {
 	type SessionSandboxBindingV1,
 	type TaskPrincipalV1,
 } from "@agent-infra/platform-core";
-
-import postgres from "./observed-postgres.js";
 import { exactRecord } from "./conversation-execution-common.js";
 import { readRecentPersonalConversations } from "./conversation-recent-query.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
+import postgres from "./observed-postgres.js";
 import {
 	conversationSandboxReadBindingSql,
 	sessionSandboxResumableSql,
@@ -1057,10 +1056,10 @@ export class PostgresConversationQueryV1 {
 				invalidRequest();
 			}
 			this.#client = postgres(
-					platformDatabaseUrlFromEnvironment({
-						PLATFORM_DATABASE_URL: options.databaseUrl,
-					}),
-					{ max: 10 },
+				platformDatabaseUrlFromEnvironment({
+					PLATFORM_DATABASE_URL: options.databaseUrl,
+				}),
+				{ max: 10 },
 			);
 			this.#replayWindow = options.replayWindow ?? 100;
 			this.#replayWindowMs = options.replayWindowMs ?? defaultReplayWindowMs;

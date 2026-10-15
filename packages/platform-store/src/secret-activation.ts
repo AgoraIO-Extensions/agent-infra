@@ -16,8 +16,8 @@ import type {
 	SecretActivationTransitionPlanV1,
 } from "@agent-infra/platform-core";
 import { immutableSecretNameV1 } from "@agent-infra/platform-core";
-import postgres from "./observed-postgres.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
+import postgres from "./observed-postgres.js";
 
 interface SecretActivationRow {
 	readonly agent_id: string;

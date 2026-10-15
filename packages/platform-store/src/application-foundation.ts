@@ -27,10 +27,10 @@ import {
 } from "@agent-infra/platform-core";
 import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "./observed-postgres.js";
 import { resolveAgentApiIdentityV1 } from "./agent-api-identity.js";
 import { decodeVersionedAgentConfigurationRecord as decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { readAgentManagementState } from "./agent-management.js";
+import postgres from "./observed-postgres.js";
 import { isPostgresError } from "./postgres-error.js";
 import { replaceRelayKeyVersionInTransaction } from "./relay-key-versions.js";
 import {

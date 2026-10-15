@@ -19,7 +19,6 @@ import {
 } from "@agent-infra/platform-core";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "./observed-postgres.js";
 import { readAgentManagementState } from "./agent-management.js";
 import {
 	readCurrentTaskApiUseGrantV1,
@@ -37,6 +36,7 @@ import {
 	readIdempotency,
 	reserveIdempotency,
 } from "./conversation-execution-sql.js";
+import postgres from "./observed-postgres.js";
 import {
 	agents,
 	conversationExecutions,

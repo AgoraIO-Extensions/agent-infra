@@ -15,9 +15,8 @@ import { snapshotApplicationRevisionWritePlanV1 } from "@agent-infra/platform-co
 import { and, eq } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "./observed-postgres.js";
-
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
+import postgres from "./observed-postgres.js";
 import {
 	advanceAgentConfigurationRevision,
 	agentManagementStateUpdate,

@@ -34,8 +34,8 @@ import {
 } from "@agent-infra/platform-core";
 import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import postgres from "./observed-postgres.js";
 import { resolveAgentApiIdentityV1 } from "./agent-api-identity.js";
+import postgres from "./observed-postgres.js";
 import {
 	agentManagementStateUpdate,
 	insertAgentManagementEffects,

@@ -1,6 +1,5 @@
-import postgres from "./observed-postgres.js";
-
 import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
+import postgres from "./observed-postgres.js";
 import { matchesPostgresErrorCode } from "./postgres-error.ts";
 
 export class OutboxStoreError extends Error {

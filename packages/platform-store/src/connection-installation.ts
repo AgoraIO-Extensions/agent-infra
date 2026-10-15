@@ -26,8 +26,8 @@ import {
 } from "@agent-infra/platform-core";
 import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "./observed-postgres.js";
 import { readAgentManagementState } from "./agent-management.js";
+import postgres from "./observed-postgres.js";
 import {
 	connectionInstallationAuthorizations as authorizations,
 	connectionInstallationCommands as commands,

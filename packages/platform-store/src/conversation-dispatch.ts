@@ -20,7 +20,6 @@ import {
 	type TaskUserDirectoryV1,
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
-import postgres from "./observed-postgres.js";
 import { claimWork } from "./conversation-dispatch-claim.js";
 import {
 	type Client,
@@ -66,6 +65,7 @@ import {
 	type PlatformQueueResourceSnapshot,
 	readPlatformQueueResourceSnapshot,
 } from "./observability-snapshot.js";
+import postgres from "./observed-postgres.js";
 import {
 	isSessionSandboxPolicyCurrentV1,
 	readSessionSandboxRuntimeState,
@@ -111,9 +111,9 @@ export class PostgresConversationDispatchStoreV1
 			? { ...options.sandboxPolicy }
 			: undefined;
 		this.#client = postgres(
-				platformDatabaseUrlFromEnvironment({
-					PLATFORM_DATABASE_URL: options.databaseUrl,
-				}),
+			platformDatabaseUrlFromEnvironment({
+				PLATFORM_DATABASE_URL: options.databaseUrl,
+			}),
 		);
 	}
 

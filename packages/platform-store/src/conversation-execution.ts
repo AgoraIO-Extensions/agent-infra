@@ -21,7 +21,6 @@ import {
 	type TaskApiChannelV1,
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
-import postgres from "./observed-postgres.js";
 import {
 	lockConversation as lockDispatchConversation,
 	lockExecution as lockDispatchExecution,
@@ -97,6 +96,7 @@ import {
 } from "./conversation-execution-sql.js";
 import { submitConversationTask } from "./conversation-execution-task.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
+import postgres from "./observed-postgres.js";
 import {
 	requireCurrentPersonalApiTaskAdmissionV1,
 	resolvePersonalApiTaskAdmissionAuthorityV1,
