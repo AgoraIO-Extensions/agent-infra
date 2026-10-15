@@ -63,6 +63,18 @@ describe("AgentConfigurationScreen", () => {
 		render(
 			<AgentConfigurationScreen
 				agent={configuredAgent}
+				deploymentModelCandidates={[
+					{
+						endpointId: "catalog",
+						modelId: "other",
+						reasoningLevels: ["low"],
+					},
+					{
+						endpointId: "catalog",
+						modelId: "current",
+						reasoningLevels: ["low", "high"],
+					},
+				]}
 				onSave={vi.fn()}
 				onUpgradeImage={vi.fn()}
 				session={{ kind: "ready", session: ownerSession }}
@@ -73,12 +85,8 @@ describe("AgentConfigurationScreen", () => {
 		expect(screen.getByText("当前默认：Current model · high")).toBeTruthy();
 		expect(screen.queryByLabelText("默认模型选项 ID")).toBeNull();
 		fireEvent.click(screen.getByRole("checkbox", { name: "替换模型配置" }));
-		expect(
-			screen.getByLabelText<HTMLInputElement>("默认模型选项 ID").value,
-		).toBe("");
-		expect(screen.getByLabelText<HTMLInputElement>("默认推理强度").value).toBe(
-			"",
-		);
+		expect(screen.getByLabelText("默认模型")).toBeTruthy();
+		expect(screen.getByLabelText("默认推理档位")).toBeTruthy();
 	});
 
 	it("lets an Owner submit configuration while clearing entered 新 Secret 值s", () => {
@@ -86,6 +94,13 @@ describe("AgentConfigurationScreen", () => {
 		render(
 			<AgentConfigurationScreen
 				agent={agent}
+				deploymentModelCandidates={[
+					{
+						endpointId: "approved-endpoint",
+						modelId: "release-model",
+						reasoningLevels: ["high"],
+					},
+				]}
 				onSave={onSave}
 				onUpgradeImage={vi.fn()}
 				session={{ kind: "ready", session: ownerSession }}
@@ -226,6 +241,13 @@ describe("AgentConfigurationScreen", () => {
 		render(
 			<AgentConfigurationScreen
 				agent={agent}
+				deploymentModelCandidates={[
+					{
+						endpointId: "approved-endpoint",
+						modelId: "release-model",
+						reasoningLevels: ["high"],
+					},
+				]}
 				onSave={onSave}
 				onUpgradeImage={vi.fn()}
 				session={{ kind: "ready", session: ownerSession }}
@@ -233,29 +255,24 @@ describe("AgentConfigurationScreen", () => {
 			/>,
 		);
 		fireEvent.click(screen.getByRole("checkbox", { name: "替换模型配置" }));
-		for (const [label, value] of [
-			["选项 ID", "primary"],
-			["端点 ID", "approved-endpoint"],
-			["模型 ID", "release-model"],
-			["可选推理强度", "high"],
-			["默认模型选项 ID", "primary"],
-			["默认推理强度", "high"],
-		]) {
-			fireEvent.change(screen.getByLabelText(label), { target: { value } });
-		}
+		fireEvent.click(
+			screen.getByRole("checkbox", {
+				name: "approved-endpoint · release-model",
+			}),
+		);
 		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 		expect(onSave).toHaveBeenCalledExactlyOnceWith(
 			expect.objectContaining({
 				modelConfiguration: {
 					options: [
 						{
-							optionId: "primary",
+							optionId: "approved-endpoint:release-model",
 							endpointId: "approved-endpoint",
 							modelId: "release-model",
 							reasoningLevels: ["high"],
 						},
 					],
-					defaultOptionId: "primary",
+					defaultOptionId: "approved-endpoint:release-model",
 					defaultReasoningLevel: "high",
 				},
 			}),

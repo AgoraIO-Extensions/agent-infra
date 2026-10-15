@@ -25,7 +25,6 @@ import type {
 } from "./agent-configuration.js";
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
 import {
-	type AgentConfigurationModelDraft,
 	type AgentConfigurationSecretDraft,
 	buildAgentConfigurationRequest,
 	configurationDraftFromAgent,
@@ -80,15 +79,6 @@ type DraftRowsProps<T extends string> = {
 	onRemove: (index: number) => void;
 	rows: readonly Record<T, string>[];
 };
-
-function blankModel(): AgentConfigurationModelDraft {
-	return {
-		optionId: "",
-		endpointId: "",
-		modelId: "",
-		reasoningLevels: "",
-	};
-}
 
 function blankSecret(): AgentConfigurationSecretDraft {
 	return { name: "", value: "" };
@@ -181,6 +171,7 @@ export function AgentConfigurationScreen({
 }: AgentConfigurationScreenProps) {
 	const [draft, setDraft] = useState(() => configurationDraftFromAgent(agent));
 	const [ownerError, setOwnerError] = useState<string>();
+	const [catalogSelectionError, setCatalogSelectionError] = useState(false);
 	const [imageReference, setImageReference] = useState("");
 	const keyCheck = useKeylessKeyCheck(onPreviewDefaultRelayKeyCandidates);
 	const submittedResult =
@@ -219,10 +210,11 @@ export function AgentConfigurationScreen({
 			key={deploymentModelCandidates
 				.map((candidate) => `${candidate.endpointId}/${candidate.modelId}`)
 				.join("|")}
-			onChange={(selection: KeylessModelSelection | null) =>
+			onChange={(selection: KeylessModelSelection | null) => {
+				setCatalogSelectionError(selection === null);
 				setDraft((current) => ({
 					...current,
-					replaceModels: selection !== null,
+					replaceModels: true,
 					models:
 						selection?.options.map((option) => ({
 							endpointId: option.endpointId,
@@ -232,8 +224,8 @@ export function AgentConfigurationScreen({
 						})) ?? [],
 					defaultModelOptionId: selection?.defaultOptionId ?? "",
 					defaultReasoningLevel: selection?.defaultReasoningLevel ?? "",
-				}))
-			}
+				}));
+			}}
 		/>
 	) : null;
 	const replaceDefaultRelayKey = () => {
@@ -241,17 +233,6 @@ export function AgentConfigurationScreen({
 		onReplaceDefaultRelayKey(keyCheck.key.trim());
 		keyCheck.reset();
 	};
-	const updateModel = (
-		index: number,
-		key: keyof AgentConfigurationModelDraft,
-		value: string,
-	) =>
-		setDraft((current) => ({
-			...current,
-			models: current.models.map((model, modelIndex) =>
-				modelIndex === index ? { ...model, [key]: value } : model,
-			),
-		}));
 	const updateSecret = (
 		index: number,
 		key: keyof AgentConfigurationSecretDraft,
@@ -264,6 +245,16 @@ export function AgentConfigurationScreen({
 			),
 		}));
 	const submitConfiguration = () => {
+		if (
+			!defaultRelayKeyManaged &&
+			draft.replaceModels &&
+			(deploymentModelCandidates === undefined ||
+				deploymentModelCandidates.length === 0 ||
+				catalogSelectionError)
+		) {
+			setCatalogSelectionError(true);
+			return;
+		}
 		const request = buildAgentConfigurationRequest(draft);
 		if (!request.coOwnerIds?.length) {
 			setOwnerError("请选择至少一名有效 Owner。");
@@ -592,114 +583,26 @@ export function AgentConfigurationScreen({
 													<Checkbox
 														disabled={isDisabled}
 														checked={draft.replaceModels}
-														onCheckedChange={(checked) =>
+														onCheckedChange={(checked) => {
+															setCatalogSelectionError(false);
 															setDraft((current) => ({
 																...current,
 																replaceModels: checked,
-																models: checked
-																	? current.models.length === 0
-																		? [blankModel()]
-																		: current.models
-																	: current.models,
-															}))
-														}
+																models: current.models,
+															}));
+														}}
 													/>
 													替换模型配置
 												</Label>
-												{draft.replaceModels && catalogModelPicker ? (
-													catalogModelPicker
-												) : draft.replaceModels ? (
-													<>
-														<DraftRows
-															fields={
-																[
-																	{
-																		key: "optionId",
-																		label: "选项 ID",
-																		required: true,
-																	},
-																	{
-																		key: "endpointId",
-																		label: "端点 ID",
-																		required: true,
-																	},
-																	{
-																		key: "modelId",
-																		label: "模型 ID",
-																		required: true,
-																	},
-																	{
-																		key: "reasoningLevels",
-																		label: "可选推理强度",
-																		required: true,
-																	},
-																] as const
-															}
-															idPrefix="model"
-															label="模型"
-															onChange={updateModel}
-															onRemove={(index) =>
-																setDraft((current) => ({
-																	...current,
-																	models: current.models.filter(
-																		(_, modelIndex) => modelIndex !== index,
-																	),
-																}))
-															}
-															rows={draft.models}
-														/>
-														<Button
-															variant="outline"
-															onClick={() =>
-																setDraft((current) => ({
-																	...current,
-																	models: [...current.models, blankModel()],
-																}))
-															}
-															type="button"
-														>
-															<PlusIcon
-																aria-hidden="true"
-																data-icon="inline-start"
-															/>
-															添加模型
-														</Button>
-														<div className="grid gap-4 sm:grid-cols-2">
-															<div className="space-y-2">
-																<Label htmlFor="configuration-default-model">
-																	默认模型选项 ID
-																</Label>
-																<Input
-																	id="configuration-default-model"
-																	onChange={(event) =>
-																		setDraft((current) => ({
-																			...current,
-																			defaultModelOptionId: event.target.value,
-																		}))
-																	}
-																	required
-																	value={draft.defaultModelOptionId}
-																/>
-															</div>
-															<div className="space-y-2">
-																<Label htmlFor="configuration-default-reasoning">
-																	默认推理强度
-																</Label>
-																<Input
-																	id="configuration-default-reasoning"
-																	onChange={(event) =>
-																		setDraft((current) => ({
-																			...current,
-																			defaultReasoningLevel: event.target.value,
-																		}))
-																	}
-																	required
-																	value={draft.defaultReasoningLevel}
-																/>
-															</div>
-														</div>
-													</>
-												) : null}
+												{draft.replaceModels
+													? (catalogModelPicker ?? (
+															<Alert variant="destructive">
+																<AlertDescription>
+																	模型目录暂时不可用，无法编辑模型配置；请刷新后重试。
+																</AlertDescription>
+															</Alert>
+														))
+													: null}
 											</>
 										)}
 									</fieldset>
