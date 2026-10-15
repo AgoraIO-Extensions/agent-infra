@@ -3990,7 +3990,10 @@ function normalizeRuntimeConnectionAssociationOpenApiAddition(current) {
 // leaves all existing request/response schemas unchanged.
 function isBrowserCommandOpenApiAddition(previous, current) {
 	const path = "/api/v1/conversations/{conversationId}/browser/commands";
-	if (previous.paths?.[path] !== undefined || current.paths?.[path] === undefined)
+	if (
+		previous.paths?.[path] !== undefined ||
+		current.paths?.[path] === undefined
+	)
 		return false;
 	const normalized = structuredClone(current);
 	delete normalized.paths[path];
