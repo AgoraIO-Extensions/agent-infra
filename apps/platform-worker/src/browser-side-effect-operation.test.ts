@@ -171,17 +171,15 @@ describe("Browser side-effect Worker operation adapter", () => {
 		const conversationEvents = events();
 		const runtime = {
 			browserSideEffect: vi.fn().mockResolvedValue({
-				...({
-					schemaVersion: 3,
-					hostSessionRef: "host-1",
-					executionId: "execution-1",
-					actionId: "action-1",
-					operationRef: "operation-1",
-					attemptRef: "attempt-1",
-					outcome: "rejected",
-					phase: "completed",
-				} as unknown),
-			} as RuntimeBrowserSideEffectConfirmationResponseV3),
+				schemaVersion: 3,
+				hostSessionRef: "host-1",
+				executionId: "execution-1",
+				actionId: "action-1",
+				operationRef: "operation-1",
+				attemptRef: "attempt-1",
+				outcome: "rejected",
+				phase: "completed",
+			} as unknown as RuntimeBrowserSideEffectConfirmationResponseV3),
 		};
 		const adapter = createBrowserSideEffectOperationAdapterV1({
 			events: conversationEvents,
