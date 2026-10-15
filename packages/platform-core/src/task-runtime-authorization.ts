@@ -550,11 +550,13 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			const { authority: result } = await current(
 				context,
 				state,
-				claim.operation === "conversation.native-capability.invoke.v1"
-					? "native-capability.invoke"
-					: claim.operation === "conversation.turn.stop.v1"
-						? "turn.stop"
-						: "session.status",
+				claim.operation === "conversation.browser.handoff.v1"
+					? "browser.handoff"
+					: claim.operation === "conversation.native-capability.invoke.v1"
+						? "native-capability.invoke"
+						: claim.operation === "conversation.turn.stop.v1"
+							? "turn.stop"
+							: "session.status",
 				signal,
 			);
 			if (
@@ -564,7 +566,8 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 				!state.stopPending &&
 				!terminalEventRecovery(claim, state) &&
 				!["processing", "unknown"].includes(state.executionStatus) &&
-				claim.operation !== "conversation.turn.stop.v1"
+				claim.operation !== "conversation.turn.stop.v1" &&
+				claim.operation !== "conversation.browser.handoff.v1"
 			)
 				return {
 					outcome: result.reason === "recovery" ? "unavailable" : "denied",

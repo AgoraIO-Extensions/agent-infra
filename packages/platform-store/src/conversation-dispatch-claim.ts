@@ -33,6 +33,7 @@ import {
 } from "./conversation-dispatch-task.js";
 import {
 	exactPayload,
+	isBrowserHandoff,
 	isTurn,
 	operation,
 	terminal,
@@ -125,6 +126,12 @@ export async function claimWork(
 	) {
 		return { outcome: "stale" };
 	}
+	if (
+		isBrowserHandoff(selectedOperation) &&
+		execution.status !== "submitted" &&
+		execution.status !== "processing"
+	)
+		return { outcome: "stale" };
 	if (execution.status === "waiting") {
 		if (selectedOperation !== "conversation.turn.submit.v1")
 			return { outcome: "stale" };
@@ -356,6 +363,9 @@ export async function claimWork(
 			: null,
 		...(payload.nativeCapability
 			? { nativeCapability: payload.nativeCapability }
+			: {}),
+		...(payload.browserHandoff
+			? { browserHandoff: payload.browserHandoff }
 			: {}),
 		executionStatus: currentExecutionStatus,
 		stopPending: stop?.status === "submitted",

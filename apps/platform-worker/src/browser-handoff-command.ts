@@ -1,4 +1,5 @@
 import type { BrowserCommandRequestV1 } from "@agent-infra/contracts/pilot";
+import type { ConversationDispatchAuthorityV1 } from "@agent-infra/platform-core";
 import type { ConversationRuntimeBrowserHandoffRequestV1 } from "./conversation-runtime.js";
 import type { PlatformConversationBrowserHandoffInputV1 } from "./conversation-worker.js";
 
@@ -10,6 +11,15 @@ export type BrowserHandoffCommandInvocationV1 = Readonly<{
 	readonly requestId: string;
 	readonly traceId: string;
 	readonly traceParent?: string;
+	/** Trusted Worker-only binding facts for a request-local resolver. */
+	readonly agentId?: string;
+	readonly channelId?: string;
+	readonly executionId?: string;
+	readonly turnId?: string;
+	readonly sessionGeneration?: number;
+	readonly deliveryFence?: number;
+	readonly hostSessionRef?: string | null;
+	readonly runtimeGrant?: ConversationDispatchAuthorityV1["runtimeGrant"];
 	readonly signal: AbortSignal;
 }>;
 
@@ -25,6 +35,45 @@ export interface BrowserHandoffCommandWorkerV1 {
 		readonly outcome: "accepted" | "replayed";
 		readonly event?: unknown;
 	}>;
+}
+
+function bindingMatchesInvocation(
+	request: ConversationRuntimeBrowserHandoffRequestV1,
+	invocation: BrowserHandoffCommandInvocationV1,
+) {
+	const runtime = request.handoff?.runtime;
+	if (!runtime) return false;
+	return (
+		request.requestId === invocation.requestId &&
+		request.traceId === invocation.traceId &&
+		request.conversationId === invocation.conversationId &&
+		(invocation.agentId === undefined ||
+			request.agentId === invocation.agentId) &&
+		(invocation.channelId === undefined ||
+			request.channelId === invocation.channelId) &&
+		(invocation.executionId === undefined ||
+			request.executionId === invocation.executionId) &&
+		(invocation.turnId === undefined || request.turnId === invocation.turnId) &&
+		(invocation.sessionGeneration === undefined ||
+			request.sessionGeneration === invocation.sessionGeneration) &&
+		(invocation.deliveryFence === undefined ||
+			request.deliveryFence === invocation.deliveryFence) &&
+		(invocation.hostSessionRef === undefined ||
+			request.hostSessionRef === invocation.hostSessionRef) &&
+		runtime.subjectId === request.actorId &&
+		runtime.agentId === request.agentId &&
+		runtime.conversationId === request.conversationId &&
+		runtime.executionId === request.executionId &&
+		runtime.sessionGeneration === request.sessionGeneration &&
+		runtime.resourceFence === request.deliveryFence &&
+		((request.handoff.kind === "take-over" &&
+			request.handoff.operatorId === request.actorId &&
+			request.handoff.subjectId === request.actorId) ||
+			(request.handoff.kind === "return-to-agent" &&
+				request.handoff.operatorId === request.actorId) ||
+			(request.handoff.kind !== "take-over" &&
+				request.handoff.kind !== "return-to-agent"))
+	);
 }
 
 export function createBrowserHandoffCommandExecutorV1(input: {
@@ -46,7 +95,25 @@ export function createBrowserHandoffCommandExecutorV1(input: {
 					conversationId: request.conversationId,
 				};
 			const resolved = await input.resolver.resolve(request);
-			if (!resolved || resolved.conversationId !== request.conversationId)
+			let bindingMatches = false;
+			try {
+				bindingMatches =
+					resolved !== null &&
+					bindingMatchesInvocation(resolved, request) &&
+					resolved.handoff.kind ===
+						(request.command.command === "take_over"
+							? "take-over"
+							: request.command.command === "return_to_agent"
+								? "return-to-agent"
+								: "revoke") &&
+					(request.command.command === "revoke" ||
+						("handoffId" in resolved.handoff &&
+							"handoffId" in request.command &&
+							resolved.handoff.handoffId === request.command.handoffId));
+			} catch {
+				bindingMatches = false;
+			}
+			if (!bindingMatches || !resolved)
 				return {
 					outcome: "unavailable" as const,
 					conversationId: request.conversationId,

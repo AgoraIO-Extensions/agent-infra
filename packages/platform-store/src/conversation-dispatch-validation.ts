@@ -24,6 +24,7 @@ export function exactPayload(
 	const isStop = operation === "conversation.turn.stop.v1";
 	const isNativeCapability =
 		operation === "conversation.native-capability.invoke.v1";
+	const isBrowserHandoff = operation === "conversation.browser.handoff.v1";
 	const selectionKeys = [
 		"modelConfigurationRevision",
 		"modelOptionId",
@@ -48,25 +49,92 @@ export function exactPayload(
 		}
 	}
 	const expected = new Set(
-		isStop
+		isBrowserHandoff
 			? [
 					"schemaVersion",
 					"conversationId",
+					"agentId",
+					"actorId",
+					"channelId",
 					"executionId",
-					"sessionGeneration",
-					"stopRequestId",
-				]
-			: [
-					"schemaVersion",
-					"conversationId",
-					"executionId",
-					"messageId",
 					"turnId",
 					"sessionGeneration",
-					...(hasSelection ? selectionKeys : []),
-					...(metadataRecovery ? ["metadataRecovery"] : []),
-				],
+					"deliveryFence",
+					"command",
+				]
+			: isStop
+				? [
+						"schemaVersion",
+						"conversationId",
+						"executionId",
+						"sessionGeneration",
+						"stopRequestId",
+					]
+				: [
+						"schemaVersion",
+						"conversationId",
+						"executionId",
+						"messageId",
+						"turnId",
+						"sessionGeneration",
+						...(hasSelection ? selectionKeys : []),
+						...(metadataRecovery ? ["metadataRecovery"] : []),
+					],
 	);
+	if (isBrowserHandoff) {
+		const command = input.command;
+		if (
+			Object.keys(input).length !== expected.size ||
+			Object.keys(input).some((key) => !expected.has(key)) ||
+			input.schemaVersion !== 1 ||
+			!validText(input.conversationId) ||
+			!validText(input.agentId) ||
+			!validText(input.actorId) ||
+			!validText(input.channelId) ||
+			!validText(input.executionId) ||
+			!validText(input.turnId) ||
+			safeCounter(input.sessionGeneration, 1) === undefined ||
+			safeCounter(input.deliveryFence, 0) === undefined ||
+			!command ||
+			typeof command !== "object" ||
+			Array.isArray(command)
+		)
+			return undefined;
+		const commandRecord = command as Record<string, unknown>;
+		if (
+			Object.keys(commandRecord).length !== 3 ||
+			commandRecord.schemaVersion !== 1 ||
+			(commandRecord.command !== "take_over" &&
+				commandRecord.command !== "return_to_agent" &&
+				commandRecord.command !== "revoke") ||
+			!validText(commandRecord.handoffId)
+		)
+			return undefined;
+		return {
+			schemaVersion: 1,
+			conversationId: input.conversationId as string,
+			agentId: input.agentId as string,
+			actorId: input.actorId as string,
+			channelId: input.channelId as string,
+			executionId: input.executionId as string,
+			messageId: null,
+			turnId: input.turnId as string,
+			sessionGeneration: safeCounter(input.sessionGeneration, 1) as number,
+			deliveryFence: safeCounter(input.deliveryFence, 0) as number,
+			stopRequestId: null,
+			modelConfigurationRevision: null,
+			modelOptionId: null,
+			reasoningLevel: null,
+			browserHandoff: {
+				schemaVersion: 1,
+				command: commandRecord.command as
+					| "take_over"
+					| "return_to_agent"
+					| "revoke",
+				handoffId: commandRecord.handoffId as string,
+			},
+		};
+	}
 	if (isNativeCapability) {
 		const capabilityId = input.capabilityId;
 		const capabilityKind = input.capabilityKind;
@@ -193,6 +261,10 @@ export function isTurn(operation: ConversationDispatchOperationV1) {
 	);
 }
 
+export function isBrowserHandoff(operation: ConversationDispatchOperationV1) {
+	return operation === "conversation.browser.handoff.v1";
+}
+
 export function requireCommand(input: {
 	readonly schemaVersion: 1;
 	readonly itemId: string;
@@ -220,6 +292,11 @@ export function requireCommand(input: {
 }
 
 export function requireClaim(claim: ConversationDispatchClaimV1) {
+	if (
+		claim.operation === "conversation.browser.handoff.v1" &&
+		claim.browserHandoff === undefined
+	)
+		throw new TypeError("Conversation Browser handoff claim is invalid");
 	if (
 		(claim.executionSource === undefined) !==
 		(claim.relayKeyBinding === undefined)

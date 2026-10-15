@@ -5,6 +5,7 @@ import type {
 } from "@agent-infra/observability";
 import { createObservedConversationEvents } from "@agent-infra/observability/worker";
 import {
+	type ConversationBrowserHandoffExecutorV1,
 	createConversationDispatchUseCaseV1,
 	createConversationEventUseCaseV1,
 	type SessionSandboxDeletionProgressV1,
@@ -21,6 +22,10 @@ import {
 	PostgresTaskAuthorizationStoreV1,
 	platformQueueResourceSnapshotTimeoutMs,
 } from "@agent-infra/platform-store";
+import {
+	type BrowserHandoffCommandInvocationV1,
+	createBrowserHandoffCommandExecutorV1,
+} from "./browser-handoff-command.js";
 import { createBrowserHandoffEventAdapterV1 } from "./browser-handoff-events.js";
 import {
 	type ConversationRuntimeBrowserHandoffRequestV1,
@@ -55,6 +60,11 @@ export interface PlatformConversationWorkerOptionsV2
 	readonly maximumConcurrentDispatches?: number;
 	readonly leaseDurationMs?: number;
 	readonly retryDelayMs?: number;
+	/** Deployment supplies only the current Browser binding snapshot; Runtime
+	 * grants and lease ownership remain Worker authorities. */
+	readonly resolveBrowserHandoff?: (
+		input: BrowserHandoffCommandInvocationV1,
+	) => Promise<ConversationRuntimeBrowserHandoffRequestV1["handoff"] | null>;
 	readonly log?: (message: string) => void;
 	readonly observability?: Pick<
 		ReturnType<typeof startObservability>,
@@ -251,6 +261,87 @@ export function createPlatformConversationWorkerV2(
 				return current;
 			},
 		});
+		const browserCommandExecutor = createBrowserHandoffCommandExecutorV1({
+			resolver: {
+				resolve: async (invocation) => {
+					if (
+						!options.resolveBrowserHandoff ||
+						!invocation.agentId ||
+						!invocation.channelId ||
+						!invocation.executionId ||
+						!invocation.turnId ||
+						invocation.sessionGeneration === undefined ||
+						invocation.deliveryFence === undefined ||
+						!invocation.hostSessionRef ||
+						invocation.runtimeGrant === undefined
+					)
+						return null;
+					const handoff = await options.resolveBrowserHandoff(invocation);
+					if (!handoff) return null;
+					return {
+						schemaVersion: 1,
+						requestId: invocation.requestId,
+						traceId: invocation.traceId,
+						agentId: invocation.agentId,
+						actorId: invocation.identity.userId,
+						channelId: invocation.channelId,
+						conversationId: invocation.conversationId,
+						executionId: invocation.executionId,
+						turnId: invocation.turnId,
+						sessionGeneration: invocation.sessionGeneration,
+						deliveryFence: invocation.deliveryFence,
+						hostSessionRef: invocation.hostSessionRef,
+						runtimeGrant: invocation.runtimeGrant,
+						handoff,
+					};
+				},
+			},
+			worker: {
+				browserHandoff: async (input) => {
+					const dispatched = await runtime?.browserHandoff(
+						input.request,
+						input.signal,
+					);
+					if (!dispatched)
+						throw new Error("BROWSER_HANDOFF_RUNTIME_UNAVAILABLE");
+					return browserHandoffEvents.persist({
+						request: dispatched.request,
+						response: dispatched.response,
+						occurredAt: input.occurredAt,
+						adapterEventKeyPrefix: input.adapterEventKeyPrefix,
+						runtimeCursorPrefix: input.runtimeCursorPrefix,
+					});
+				},
+			},
+		});
+		const browserHandoffExecutor: ConversationBrowserHandoffExecutorV1 = {
+			invoke: async ({ claim, authority, signal }) => {
+				if (!claim.browserHandoff) return { outcome: "unavailable" };
+				const result = await browserCommandExecutor.invoke({
+					identity: { userId: claim.actorId },
+					conversationId: claim.conversationId,
+					command: claim.browserHandoff,
+					idempotencyKey: claim.itemId,
+					requestId: claim.requestId,
+					traceId: claim.traceId,
+					...(claim.traceParent ? { traceParent: claim.traceParent } : {}),
+					signal: signal ?? AbortSignal.timeout(30_000),
+					agentId: claim.agentId,
+					channelId: claim.channelId,
+					executionId: claim.executionId,
+					turnId: claim.turnId,
+					sessionGeneration: claim.sessionGeneration,
+					deliveryFence: claim.executionDeliveryFence,
+					hostSessionRef: claim.hostSessionRef,
+					runtimeGrant: authority.runtimeGrant,
+				});
+				return result.outcome === "accepted" || result.outcome === "replayed"
+					? { outcome: result.outcome }
+					: result.outcome === "unknown"
+						? { outcome: "unknown" as const }
+						: { outcome: "unavailable" as const };
+			},
+		};
 		dispatch = createConversationDispatchUseCaseV1(
 			{
 				store,
@@ -260,6 +351,7 @@ export function createPlatformConversationWorkerV2(
 				runtimeHost: telemetry
 					? timedRuntimeSubmit(runtime.runtimeHost, telemetry)
 					: runtime.runtimeHost,
+				browserHandoff: browserHandoffExecutor,
 				events: conversationEvents,
 			},
 			{
@@ -673,7 +765,9 @@ export function createPlatformConversationWorkerV2(
 			// Advance after every scanned item; the Store wraps deferred work on the next lap.
 			afterItemId = item.itemId;
 			if (running.has(item.itemId)) continue;
-			const control = item.operation === "conversation.turn.stop.v1";
+			const control =
+				item.operation === "conversation.turn.stop.v1" ||
+				item.operation === "conversation.browser.handoff.v1";
 			const count = [...running.values()].filter(
 				(entry) => entry.control === control,
 			).length;

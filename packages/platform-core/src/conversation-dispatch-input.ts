@@ -1,3 +1,4 @@
+import type { BrowserHandoffCommandV1 } from "./browser-handoff-admission.js";
 import { isTurnOperation } from "./conversation-dispatch-runtime.js";
 import type {
 	ConversationDispatchAuthorityV1,
@@ -28,6 +29,27 @@ import {
 } from "./task-authorization.js";
 import { isTraceParentV1 } from "./trace-context.js";
 
+export function parseBrowserHandoffCommandV1(
+	value: unknown,
+): Extract<
+	BrowserHandoffCommandV1,
+	{ readonly command: "take_over" | "return_to_agent" | "revoke" }
+> {
+	const input = exactObject(value, ["schemaVersion", "command", "handoffId"]);
+	if (
+		input.schemaVersion !== 1 ||
+		(input.command !== "take_over" &&
+			input.command !== "return_to_agent" &&
+			input.command !== "revoke")
+	)
+		return unavailable();
+	return {
+		schemaVersion: 1,
+		command: input.command,
+		handoffId: text(input.handoffId),
+	};
+}
+
 export function parseConversationMetadataRecoveryV1(
 	value: unknown,
 ): ConversationMetadataRecoveryV1 {
@@ -47,7 +69,8 @@ function operation(value: unknown): ConversationDispatchOperationV1 {
 		value !== "conversation.turn.regenerate.v1" &&
 		value !== "conversation.turn.supplement.v1" &&
 		value !== "conversation.turn.stop.v1" &&
-		value !== "conversation.native-capability.invoke.v1"
+		value !== "conversation.native-capability.invoke.v1" &&
+		value !== "conversation.browser.handoff.v1"
 	) {
 		return unavailable();
 	}
@@ -182,6 +205,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"stopConfirmationTimedOut",
 			"nativeCapability",
 			"traceParent",
+			"browserHandoff",
 		],
 	);
 	if (
@@ -203,6 +227,10 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 	const parsedNativeCapability =
 		parsedOperation === "conversation.native-capability.invoke.v1"
 			? nativeCapabilityBinding(input.nativeCapability)
+			: undefined;
+	const parsedBrowserHandoff =
+		parsedOperation === "conversation.browser.handoff.v1"
+			? parseBrowserHandoffCommandV1(input.browserHandoff)
 			: undefined;
 	if (
 		parsedNativeCapability &&
@@ -343,17 +371,30 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 	const isStop = parsedOperation === "conversation.turn.stop.v1";
 	const isNativeCapability =
 		parsedOperation === "conversation.native-capability.invoke.v1";
+	const isBrowserHandoff =
+		parsedOperation === "conversation.browser.handoff.v1";
 	if (
-		(isNativeCapability
-			? stopRequestId !== null ||
-				messageId !== null ||
+		isBrowserHandoff !== (parsedBrowserHandoff !== undefined) ||
+		(isBrowserHandoff &&
+			(parsedNativeCapability !== undefined ||
 				runtimeInput !== null ||
+				messageId !== null ||
+				stopRequestId !== null ||
 				modelConfigurationRevision !== null ||
 				modelOptionId !== null ||
-				reasoningLevel !== null
-			: isStop !== (stopRequestId !== null) ||
-				isStop !== (runtimeInput === null) ||
-				isStop === (messageId !== null)) ||
+				reasoningLevel !== null)) ||
+		(isBrowserHandoff
+			? false
+			: isNativeCapability
+				? stopRequestId !== null ||
+					messageId !== null ||
+					runtimeInput !== null ||
+					modelConfigurationRevision !== null ||
+					modelOptionId !== null ||
+					reasoningLevel !== null
+				: isStop !== (stopRequestId !== null) ||
+					isStop !== (runtimeInput === null) ||
+					isStop === (messageId !== null)) ||
 		new Set([
 			modelConfigurationRevision === null,
 			modelOptionId === null,
@@ -410,6 +451,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		...(parsedNativeCapability
 			? { nativeCapability: parsedNativeCapability }
 			: {}),
+		...(parsedBrowserHandoff ? { browserHandoff: parsedBrowserHandoff } : {}),
 		executionStatus: executionStatus(input.executionStatus),
 		stopPending:
 			typeof input.stopPending === "boolean"

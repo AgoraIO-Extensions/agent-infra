@@ -319,6 +319,7 @@ export class PostgresConversationDispatchStoreV1
 					and operation in (
 						'conversation.turn.submit.v1', 'conversation.turn.regenerate.v1',
 						'conversation.turn.supplement.v1', 'conversation.turn.stop.v1'
+					, 'conversation.browser.handoff.v1'
 						, 'conversation.sandbox.reconcile.v1'
 					)
 					and (

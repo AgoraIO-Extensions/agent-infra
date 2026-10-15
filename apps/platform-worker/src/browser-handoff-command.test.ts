@@ -104,6 +104,23 @@ describe("Browser handoff command executor", () => {
 		expect(worker.browserHandoff).not.toHaveBeenCalled();
 	});
 
+	it("fails closed when the resolved Runtime binding drifts from the claim", async () => {
+		const worker = { browserHandoff: vi.fn() };
+		const executor = createBrowserHandoffCommandExecutorV1({
+			resolver: {
+				resolve: vi.fn().mockResolvedValue({
+					...request,
+					executionId: "foreign-execution",
+				}),
+			},
+			worker,
+		});
+		await expect(
+			executor.invoke({ ...invocation, executionId: "execution-1" }),
+		).resolves.toMatchObject({ outcome: "unavailable" });
+		expect(worker.browserHandoff).not.toHaveBeenCalled();
+	});
+
 	it("maps an uncertain Worker result without retrying Runtime locally", async () => {
 		const worker = {
 			browserHandoff: vi.fn().mockRejectedValue(new Error("lost response")),

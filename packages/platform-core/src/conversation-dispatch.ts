@@ -27,6 +27,7 @@ import {
 	transitionFromEvent,
 } from "./conversation-dispatch-transition.js";
 import {
+	type ConversationBrowserHandoffExecutorV1,
 	type ConversationDispatchAuthorityV1,
 	type ConversationDispatchAuthorizationPortV1,
 	type ConversationDispatchClaimDecisionV1,
@@ -57,6 +58,7 @@ export {
 	decideConversationStopConfirmationTimeoutV1,
 } from "./conversation-dispatch-transition.js";
 export {
+	type ConversationBrowserHandoffExecutorV1,
 	type ConversationDispatchAuthorityV1,
 	type ConversationDispatchAuthorizationPortV1,
 	type ConversationDispatchClaimDecisionV1,
@@ -103,6 +105,7 @@ export function createConversationDispatchUseCaseV1(
 		readonly store: ConversationDispatchStorePortV1;
 		readonly authorization: ConversationDispatchAuthorizationPortV1;
 		readonly runtimeHost: ConversationRuntimeHostPortV1;
+		readonly browserHandoff?: ConversationBrowserHandoffExecutorV1;
 		readonly events: {
 			persist(
 				command: ConversationEventCommandV1 & {
@@ -602,6 +605,74 @@ export function createConversationDispatchUseCaseV1(
 				return unavailable();
 			}
 			const authority = parseAuthority(authorization.authority, claim);
+			if (claim.operation === "conversation.browser.handoff.v1") {
+				const executor = dependencies.browserHandoff;
+				if (!executor || !claim.browserHandoff) {
+					const finished = await dependencies.store.finish({
+						claim,
+						status: "failed",
+						transition: {},
+						errorCode: "BROWSER_HANDOFF_UNAVAILABLE",
+					});
+					return finished
+						? { schemaVersion: 1, outcome: "rejected" }
+						: { schemaVersion: 1, outcome: "stale" };
+				}
+				const handoffHeartbeat = heartbeat(
+					dependencies.store,
+					claim,
+					leaseDurationMs,
+				);
+				let outcome: Awaited<
+					ReturnType<ConversationBrowserHandoffExecutorV1["invoke"]>
+				>;
+				try {
+					outcome = await executor.invoke({
+						claim,
+						authority,
+						signal: handoffHeartbeat.signal,
+					});
+				} catch {
+					outcome = { outcome: "unknown" };
+				} finally {
+					await handoffHeartbeat.stop();
+				}
+				if (outcome.outcome === "accepted" || outcome.outcome === "replayed") {
+					const finished = await dependencies.store.finish({
+						claim,
+						status: "succeeded",
+						transition: {},
+					});
+					return finished
+						? {
+								schemaVersion: 1,
+								outcome:
+									outcome.outcome === "replayed"
+										? "already_completed"
+										: "accepted",
+							}
+						: { schemaVersion: 1, outcome: "stale" };
+				}
+				if (outcome.outcome === "unavailable") {
+					const finished = await dependencies.store.finish({
+						claim,
+						status: "failed",
+						transition: {},
+						errorCode: "BROWSER_HANDOFF_UNAVAILABLE",
+					});
+					return finished
+						? { schemaVersion: 1, outcome: "rejected" }
+						: { schemaVersion: 1, outcome: "stale" };
+				}
+				return retry(
+					dependencies.store,
+					claim,
+					retryDelayMs,
+					"BROWSER_HANDOFF_ACCEPTANCE_UNKNOWN",
+					"unknown",
+					{},
+				);
+			}
 			if (claim.generationIsolation) {
 				const isolation = claim.generationIsolation;
 				const hostSessionRef = claim.hostSessionRef;
