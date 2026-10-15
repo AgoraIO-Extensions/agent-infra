@@ -1644,7 +1644,12 @@ export function createWorkloadRuntimeV1(
 				: health;
 		},
 		async observeSession(state, browserBinding) {
-			return observe(state, browserBinding);
+			// A newly started Runtime Host can miss the first bounded /healthz
+			// window while its bridge is still starting. Retry one incomplete probe
+			// for Session delivery; any second timeout remains fail-closed and is
+			// handled by the existing reconciliation retry/route closure policy.
+			const health = await observe(state, browserBinding);
+			return health === "unreachable" ? observe(state, browserBinding) : health;
 		},
 		async observe(state) {
 			return observe(state);

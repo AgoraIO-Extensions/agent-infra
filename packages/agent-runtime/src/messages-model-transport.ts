@@ -150,7 +150,7 @@ export async function openRuntimeMessagesTransport(
 						options.client === "pi"
 							? "agent-infra-pi/0.86.0"
 							: options.client === "opencode"
-								? "agent-infra-opencode/1.18.30"
+								? "agent-infra-opencode/1.19.0"
 								: "claude-cli/2.1.246 (external, sdk-ts, agent-sdk/0.3.246)",
 					"x-app": "cli",
 				};
