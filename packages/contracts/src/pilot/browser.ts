@@ -545,6 +545,22 @@ export const StopCommandRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	targetExecutionId: OpaqueIdV1Schema,
 });
+export const BrowserCommandRequestV1Schema = z.discriminatedUnion("command", [
+	z.strictObject({
+		schemaVersion: SchemaVersionV1Schema,
+		command: z.enum(["pause", "take_over", "return_to_agent", "revoke"]),
+		handoffId: OpaqueIdV1Schema,
+	}),
+	z.strictObject({
+		schemaVersion: SchemaVersionV1Schema,
+		command: z.enum([
+			"confirm_side_effect",
+			"reject_side_effect",
+			"cancel_side_effect",
+		]),
+		confirmationId: OpaqueIdV1Schema,
+	}),
+]);
 export const ModelSelectionUpdateRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	modelOptionId: OpaqueIdV1Schema,
@@ -574,6 +590,23 @@ export const CommandAcceptedProjectionV1Schema = z.strictObject({
 	status: z.enum(["submitted", "processing", "already_finished"]),
 	messageId: OpaqueIdV1Schema.nullable(),
 	executionId: OpaqueIdV1Schema.nullable(),
+});
+export const BrowserCommandAcceptedProjectionV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	outcome: z.enum(["accepted", "replayed", "unknown"]),
+	command: z.enum([
+		"pause",
+		"take_over",
+		"return_to_agent",
+		"revoke",
+		"confirm_side_effect",
+		"reject_side_effect",
+		"cancel_side_effect",
+	]),
+	conversationId: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+	handoffId: OpaqueIdV1Schema.optional(),
+	confirmationId: OpaqueIdV1Schema.optional(),
 });
 
 export const ExecutionProcessSummaryV1Schema = z.discriminatedUnion("kind", [
@@ -1304,6 +1337,20 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 			requestBody: requiredJsonRequestBody(StopCommandRequestV1Schema),
 			responses: {
 				"202": jsonResponse("Stop accepted", CommandAcceptedProjectionV1Schema),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v1/conversations/{conversationId}/browser/commands": {
+		post: {
+			operationId: "commandBrowserHandoffOrSideEffect",
+			requestParams: { path: conversationPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(BrowserCommandRequestV1Schema),
+			responses: {
+				"202": jsonResponse(
+					"Browser command accepted",
+					BrowserCommandAcceptedProjectionV1Schema,
+				),
 				...errorResponses,
 			},
 		},
@@ -2079,6 +2126,8 @@ export const pilotBrowserSchemasV1 = {
 	BrowserSessionProjectionV1: BrowserSessionProjectionV1Schema,
 	ConnectionCapabilityProjectionV1: ConnectionCapabilityProjectionV1Schema,
 	CommandAcceptedProjectionV1: CommandAcceptedProjectionV1Schema,
+	BrowserCommandAcceptedProjectionV1: BrowserCommandAcceptedProjectionV1Schema,
+	BrowserCommandRequestV1: BrowserCommandRequestV1Schema,
 	ChannelBindingInputV1: ChannelBindingInputV1Schema,
 	ChannelBindingProjectionV1: ChannelBindingProjectionV1Schema,
 	ConversationDetailProjectionV1: ConversationDetailProjectionV1Schema,

@@ -342,6 +342,26 @@ export type AuthorizationRevokedSignalV1 = {
     type: 'authorization.revoked';
 };
 
+export type BrowserCommandAcceptedProjectionV1 = {
+    command: 'pause' | 'take_over' | 'return_to_agent' | 'revoke' | 'confirm_side_effect' | 'reject_side_effect' | 'cancel_side_effect';
+    confirmationId?: string;
+    conversationId: string;
+    executionId: string;
+    handoffId?: string;
+    outcome: 'accepted' | 'replayed' | 'unknown';
+    schemaVersion: 1;
+};
+
+export type BrowserCommandRequestV1 = {
+    command: 'pause' | 'take_over' | 'return_to_agent' | 'revoke';
+    handoffId: string;
+    schemaVersion: 1;
+} | {
+    command: 'confirm_side_effect' | 'reject_side_effect' | 'cancel_side_effect';
+    confirmationId: string;
+    schemaVersion: 1;
+};
+
 export type BrowserSessionProjectionV1 = {
     schemaVersion: 1;
     user: {
@@ -2912,6 +2932,60 @@ export type GetConversationResponses = {
 };
 
 export type GetConversationResponse = GetConversationResponses[keyof GetConversationResponses];
+
+export type CommandBrowserHandoffOrSideEffectData = {
+    body: BrowserCommandRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        conversationId: string;
+    };
+    query?: never;
+    url: '/api/v1/conversations/{conversationId}/browser/commands';
+};
+
+export type CommandBrowserHandoffOrSideEffectErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CommandBrowserHandoffOrSideEffectError = CommandBrowserHandoffOrSideEffectErrors[keyof CommandBrowserHandoffOrSideEffectErrors];
+
+export type CommandBrowserHandoffOrSideEffectResponses = {
+    /**
+     * Browser command accepted
+     */
+    202: BrowserCommandAcceptedProjectionV1;
+};
+
+export type CommandBrowserHandoffOrSideEffectResponse = CommandBrowserHandoffOrSideEffectResponses[keyof CommandBrowserHandoffOrSideEffectResponses];
 
 export type StreamConversationEventsData = {
     body?: never;

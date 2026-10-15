@@ -41,6 +41,7 @@ const {
 	nativeMetadataResolveRequest,
 	nativeMetadataCurrent,
 	nativeCapabilityInvocation,
+	browserCommands,
 	providerImport,
 	directorySearch,
 } = await import(configurationModule);
@@ -150,6 +151,7 @@ export function createPlatformApiAssemblyInput() {
 		...(nativeCapabilityInvocation !== undefined
 			? { nativeCapabilityInvocation }
 			: {}),
+		...(browserCommands !== undefined ? { browserCommands } : {}),
 		...(providerImport !== undefined ? { providerImport } : {}),
 	});
 	return createProductionPlatformApiAssemblyInputV1({
