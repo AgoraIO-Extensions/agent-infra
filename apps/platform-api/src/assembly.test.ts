@@ -135,6 +135,10 @@ describe("Platform API production assembly", () => {
 		const unavailable = async () => {
 			throw new Error("unused test adapter");
 		};
+		const nativeCapabilityMetadata = {
+			revalidate: async () => ({ outcome: "unavailable" as const }),
+			isCurrent: () => false,
+		};
 		const assembly = assemblePlatformApi({
 			taskAdmissionPolicy: {
 				maximumWaitingTasksPerAgent: 2,
@@ -168,6 +172,7 @@ describe("Platform API production assembly", () => {
 				baseUrl: "http://worker.example.test",
 				serviceToken: "worker-service-token",
 			},
+			nativeCapabilityMetadata,
 		});
 		expect(assembly.dependencies.conversation.modelSelection).toBe(
 			modelSelection,
@@ -177,6 +182,7 @@ describe("Platform API production assembly", () => {
 			serviceToken: "worker-service-token",
 		});
 		expect(assembly.dependencies.nativeMetadataCurrent?.check).toBeDefined();
+		expect(assembly.dependencies.nativeCapabilityInvocation).toBeDefined();
 		return assembly.close();
 	});
 

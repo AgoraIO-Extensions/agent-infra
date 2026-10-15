@@ -145,6 +145,7 @@ export interface ProductionPlatformApiInputV1
 	/** Optional deployment-owned Worker current-confirmation route. */
 	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
 	readonly nativeCapabilityInvocation?: PlatformApiAssemblyInput["nativeCapabilityInvocation"];
+	readonly nativeCapabilityMetadata?: PlatformApiAssemblyInput["nativeCapabilityMetadata"];
 	readonly browserCommands?: ConversationBrowserCommandPortV1;
 	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 	/** Optional deployment-owned platform identity route for custom Agents. */
@@ -199,6 +200,7 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly nativeMetadataWorker?: PlatformApiAssemblyInput["nativeMetadataWorker"];
 	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
 	readonly nativeCapabilityInvocation?: PlatformApiAssemblyInput["nativeCapabilityInvocation"];
+	readonly nativeCapabilityMetadata?: PlatformApiAssemblyInput["nativeCapabilityMetadata"];
 	readonly browserCommands?: ConversationBrowserCommandPortV1;
 	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 }): ProductionPlatformApiInputV1 {
@@ -238,6 +240,11 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	)
 		throw new Error("PLATFORM_NATIVE_CAPABILITY_INVOCATION_DUPLICATE");
 	if (
+		input.nativeCapabilityMetadata !== undefined &&
+		input.apiInput.nativeCapabilityMetadata !== undefined
+	)
+		throw new Error("PLATFORM_NATIVE_CAPABILITY_METADATA_DUPLICATE");
+	if (
 		input.providerImport !== undefined &&
 		input.apiInput.providerImport !== undefined
 	)
@@ -264,6 +271,9 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 			: {}),
 		...(input.nativeCapabilityInvocation !== undefined
 			? { nativeCapabilityInvocation: input.nativeCapabilityInvocation }
+			: {}),
+		...(input.nativeCapabilityMetadata !== undefined
+			? { nativeCapabilityMetadata: input.nativeCapabilityMetadata }
 			: {}),
 		...(input.browserCommands !== undefined
 			? { browserCommands: input.browserCommands }
@@ -537,6 +547,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 			: {}),
 		...(input.nativeCapabilityInvocation
 			? { nativeCapabilityInvocation: input.nativeCapabilityInvocation }
+			: {}),
+		...(input.nativeCapabilityMetadata
+			? { nativeCapabilityMetadata: input.nativeCapabilityMetadata }
 			: {}),
 		...(input.browserCommands
 			? { browserCommands: input.browserCommands }

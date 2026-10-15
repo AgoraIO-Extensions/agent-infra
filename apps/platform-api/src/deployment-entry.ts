@@ -41,6 +41,7 @@ const {
 	nativeMetadataResolveRequest,
 	nativeMetadataCurrent,
 	nativeCapabilityInvocation,
+	nativeCapabilityMetadata,
 	browserCommands,
 	providerImport,
 	directorySearch,
@@ -154,6 +155,9 @@ export function createPlatformApiAssemblyInput() {
 		...(nativeMetadataCurrent !== undefined ? { nativeMetadataCurrent } : {}),
 		...(nativeCapabilityInvocation !== undefined
 			? { nativeCapabilityInvocation }
+			: {}),
+		...(nativeCapabilityMetadata !== undefined
+			? { nativeCapabilityMetadata }
 			: {}),
 		...(browserCommands !== undefined ? { browserCommands } : {}),
 		...(providerImport !== undefined ? { providerImport } : {}),
