@@ -118,4 +118,31 @@ describe("Browser handoff command executor", () => {
 		});
 		expect(worker.browserHandoff).toHaveBeenCalledOnce();
 	});
+
+	it("rejects unsupported pause and side-effect commands before resolving Runtime", async () => {
+		const resolve = vi.fn();
+		const worker = { browserHandoff: vi.fn() };
+		const executor = createBrowserHandoffCommandExecutorV1({
+			resolver: { resolve },
+			worker,
+		});
+		await expect(
+			executor.invoke({
+				...invocation,
+				command: { schemaVersion: 1, command: "pause", handoffId: "handoff-1" },
+			}),
+		).resolves.toMatchObject({ outcome: "unavailable" });
+		await expect(
+			executor.invoke({
+				...invocation,
+				command: {
+					schemaVersion: 1,
+					command: "confirm_side_effect",
+					confirmationId: "confirmation-1",
+				},
+			}),
+		).resolves.toMatchObject({ outcome: "unavailable" });
+		expect(resolve).not.toHaveBeenCalled();
+		expect(worker.browserHandoff).not.toHaveBeenCalled();
+	});
 });

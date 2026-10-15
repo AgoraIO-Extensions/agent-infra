@@ -35,6 +35,16 @@ export function createBrowserHandoffCommandExecutorV1(input: {
 	const now = input.now ?? (() => new Date().toISOString());
 	return {
 		async invoke(request: BrowserHandoffCommandInvocationV1) {
+			if (
+				request.command.command === "pause" ||
+				request.command.command === "confirm_side_effect" ||
+				request.command.command === "reject_side_effect" ||
+				request.command.command === "cancel_side_effect"
+			)
+				return {
+					outcome: "unavailable" as const,
+					conversationId: request.conversationId,
+				};
 			const resolved = await input.resolver.resolve(request);
 			if (!resolved || resolved.conversationId !== request.conversationId)
 				return {
