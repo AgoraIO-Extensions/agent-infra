@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createRuntimeNativeMetadataRequestRegistryV1 } from "./runtime-native-metadata-current.js";
 import { createRuntimeNativeMetadataWorkerReaderV1 } from "./runtime-native-metadata-reader.js";
 
 const identity = {
@@ -44,8 +45,12 @@ const response = {
 describe("Platform API Worker native metadata reader", () => {
 	it("uses the Worker gateway without an API proof issuer", async () => {
 		let request: unknown;
+		const registry = createRuntimeNativeMetadataRequestRegistryV1({
+			now: () => 10_000,
+		});
 		const reader = createRuntimeNativeMetadataWorkerReaderV1({
 			resolveRequest: async () => binding,
+			requestRegistry: registry,
 			gateway: {
 				read: async (value) => {
 					request = value;
@@ -63,6 +68,14 @@ describe("Platform API Worker native metadata reader", () => {
 		).resolves.toEqual(response.projection);
 		expect(request).toMatchObject({ apiRequestSourceRef: expect.any(String) });
 		expect(request).not.toHaveProperty("proof");
+		const sourceRef = (request as { apiRequestSourceRef: string })
+			.apiRequestSourceRef;
+		expect(
+			registry.lookup(sourceRef, {
+				...binding,
+				phase: "read_metadata",
+			}),
+		).toBeUndefined();
 	});
 
 	it("fails closed when Worker response crosses the binding", async () => {

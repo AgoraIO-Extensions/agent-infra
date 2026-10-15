@@ -10,6 +10,7 @@ import {
 	runtimeNativeMetadataRequestSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
 import type { IdentityContext } from "./http/identity.js";
+import type { RuntimeNativeMetadataRequestRegistryV1 } from "./runtime-native-metadata-current.js";
 
 export interface RuntimeNativeMetadataTransportV1 {
 	read(
@@ -135,6 +136,7 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 		typeof createRuntimeNativeMetadataReaderV1
 	>[0]["resolveRequest"];
 	readonly gateway: RuntimeNativeMetadataWorkerGatewayV1;
+	readonly requestRegistry?: RuntimeNativeMetadataRequestRegistryV1;
 }) {
 	if (
 		typeof options.resolveRequest !== "function" ||
@@ -151,6 +153,7 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 			selector: "status" | "commands" | "skills",
 		): Promise<NativeMetadataProjectionV1 | null> {
 			const controller = new AbortController();
+			let requestSourceRef: string | undefined;
 			try {
 				const resolved = await options.resolveRequest({
 					identity,
@@ -175,9 +178,13 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 					return null;
 				const { originalHostScopeRef: _hostScope, ...requestIdentity } =
 					binding;
+				requestSourceRef = options.requestRegistry?.register({
+					binding,
+					identity,
+				});
 				const request = PlatformNativeMetadataReadRequestV1Schema.parse({
 					...requestIdentity,
-					apiRequestSourceRef: randomUUID(),
+					apiRequestSourceRef: requestSourceRef ?? randomUUID(),
 				});
 				const response = RuntimeNativeMetadataReadResponseV1Schema.parse(
 					await options.gateway.read(request, controller.signal),
@@ -193,6 +200,8 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 			} catch {
 				return null;
 			} finally {
+				if (requestSourceRef)
+					options.requestRegistry?.release(requestSourceRef);
 				controller.abort();
 			}
 		},
