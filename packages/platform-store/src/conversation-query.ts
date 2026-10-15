@@ -123,7 +123,11 @@ export interface NativeMetadataObjectScopeRequestV1 {
 	readonly signal?: AbortSignal;
 }
 
-export type NativeMetadataObjectScopeResponseV1 = NativeMetadataObjectScopeV1;
+export type NativeMetadataObjectScopeResponseV1 =
+	NativeMetadataObjectScopeV1 & {
+		/** Internal-only immutable Host binding from the requested Execution. */
+		readonly originalHostScopeRef: string | null;
+	};
 
 export interface RuntimeModelDirectoryDispatchRequestInputV1 {
 	readonly scope: ConversationQueryScopeV1;
@@ -240,6 +244,7 @@ interface NativeMetadataObjectScopeRow {
 	readonly execution_principal_type: string;
 	readonly session_generation: string | number;
 	readonly authorization_revision: string;
+	readonly original_host_scope_ref: string | null;
 }
 
 interface RuntimeModelDirectoryDispatchRow {
@@ -1132,7 +1137,8 @@ export class PostgresConversationQueryV1 {
 								e.channel_id as execution_channel,
 								e.principal_type as execution_principal_type,
 								e.session_generation::text,
-								e.authorization_revision
+								e.authorization_revision,
+								e.original_submit_host_session_ref as original_host_scope_ref
 							from platform.conversations c
 							join platform.conversation_executions e
 								on e.conversation_id = c.id
@@ -1166,22 +1172,25 @@ export class PostgresConversationQueryV1 {
 						row.execution_channel !== readScope.channelId
 					)
 						return unavailable();
-					return NativeMetadataObjectScopeV1Schema.parse({
-						schemaVersion: 1,
-						principal: {
-							kind:
-								row.execution_principal_type === "application"
-									? "application"
-									: "user",
-							id: row.execution_actor,
-						},
-						agentId: row.execution_agent,
-						channelId: row.execution_channel,
-						conversationId: row.execution_conversation,
-						executionId: row.execution_id,
-						sessionGeneration: safeInteger(row.session_generation, 1),
-						authorizationRevision: row.authorization_revision,
-					});
+					return {
+						...NativeMetadataObjectScopeV1Schema.parse({
+							schemaVersion: 1,
+							principal: {
+								kind:
+									row.execution_principal_type === "application"
+										? "application"
+										: "user",
+								id: row.execution_actor,
+							},
+							agentId: row.execution_agent,
+							channelId: row.execution_channel,
+							conversationId: row.execution_conversation,
+							executionId: row.execution_id,
+							sessionGeneration: safeInteger(row.session_generation, 1),
+							authorizationRevision: row.authorization_revision,
+						}),
+						originalHostScopeRef: row.original_host_scope_ref,
+					};
 				},
 				request.signal,
 			);

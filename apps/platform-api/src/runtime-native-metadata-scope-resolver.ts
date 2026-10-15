@@ -1,25 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type {
-	NativeMetadataObjectScopeV1,
-	RuntimeNativeMetadataBindingResponseV1,
-} from "@agent-infra/contracts/runtime";
+import type { RuntimeNativeMetadataBindingResponseV1 } from "@agent-infra/contracts/runtime";
 import { RuntimeNativeMetadataProofMaximumLifetimeMsV1 } from "@agent-infra/contracts/runtime";
-import type { PostgresConversationQueryV1 } from "@agent-infra/platform-store";
+import type {
+	NativeMetadataObjectScopeResponseV1,
+	PostgresConversationQueryV1,
+} from "@agent-infra/platform-store";
 import type { IdentityContext } from "./http/identity.js";
 
 type Selector = "status" | "commands" | "skills";
-
-export interface RuntimeNativeMetadataExecutionBindingResolverV1 {
-	resolve(input: {
-		readonly identity: IdentityContext;
-		readonly conversationId: string;
-		readonly selector: Selector;
-		readonly signal: AbortSignal;
-	}): Promise<{
-		executionId: string;
-		originalHostScopeRef: string;
-	} | null>;
-}
 
 function requestId() {
 	return randomUUID();
@@ -27,22 +15,18 @@ function requestId() {
 
 /**
  * Resolves the persisted original Execution scope before native metadata is
- * signed. Store owns the historical generation/revision; deployment code owns
- * the mapping to the original Host scope and Execution id.
+ * signed. Store owns the historical generation/revision and original Host
+ * scope reference.
  */
 export function createRuntimeNativeMetadataScopeResolverV1(options: {
 	readonly query: Pick<
 		PostgresConversationQueryV1,
 		"readNativeMetadataObjectScopeV1"
 	>;
-	readonly execution: RuntimeNativeMetadataExecutionBindingResolverV1;
 	readonly now?: () => number;
 	readonly lifetimeMs?: number;
 }) {
-	if (
-		typeof options.query?.readNativeMetadataObjectScopeV1 !== "function" ||
-		typeof options.execution?.resolve !== "function"
-	)
+	if (typeof options.query?.readNativeMetadataObjectScopeV1 !== "function")
 		throw new TypeError("Runtime native metadata scope options are invalid");
 	const lifetimeMs =
 		options.lifetimeMs ?? RuntimeNativeMetadataProofMaximumLifetimeMsV1;
@@ -55,14 +39,13 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 	return async (input: {
 		readonly identity: IdentityContext;
 		readonly conversationId: string;
+		readonly executionId: string;
 		readonly selector: Selector;
 		readonly signal: AbortSignal;
 	}): Promise<RuntimeNativeMetadataBindingResponseV1 | null> => {
 		try {
 			if (input.identity.accountStatus !== "active") return null;
-			const execution = await options.execution.resolve(input);
-			if (!execution) return null;
-			const scope: NativeMetadataObjectScopeV1 | undefined =
+			const scope: NativeMetadataObjectScopeResponseV1 | undefined =
 				await options.query.readNativeMetadataObjectScopeV1({
 					scope: {
 						actorId: input.identity.userId,
@@ -70,10 +53,14 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 						principal: { kind: "user", id: input.identity.userId },
 					},
 					conversationId: input.conversationId,
-					executionId: execution.executionId,
+					executionId: input.executionId,
 					signal: input.signal,
 				});
 			if (scope?.channelId !== "web") return null;
+			const originalHostScopeRef = scope.originalHostScopeRef;
+			if (!originalHostScopeRef) return null;
+			const { originalHostScopeRef: _originalHostScopeRef, ...publicScope } =
+				scope;
 			const readStartedAt = (options.now ?? Date.now)();
 			if (!Number.isSafeInteger(readStartedAt) || readStartedAt < 1)
 				return null;
@@ -81,12 +68,12 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 				schemaVersion: 1,
 				readId: requestId(),
 				selector: input.selector,
-				scope,
+				scope: publicScope,
 				readStartedAt,
 				expiresAt: readStartedAt + lifetimeMs,
 				requestId: requestId(),
 				traceId: requestId(),
-				originalHostScopeRef: execution.originalHostScopeRef,
+				originalHostScopeRef,
 			};
 		} catch {
 			return null;

@@ -889,6 +889,7 @@ describe("PostgreSQL original native metadata scope", () => {
 				executionId: "execution-conversation-1",
 				sessionGeneration: 1,
 				authorizationRevision: "authorization-1",
+				originalHostScopeRef: null,
 			});
 		} finally {
 			await client`
@@ -897,6 +898,25 @@ describe("PostgreSQL original native metadata scope", () => {
 					authorization_revision = 'authorization-1',
 					host_session_ref = null
 				where id = 'conversation-1'
+			`;
+		}
+	});
+
+	it("returns the requested Execution's original Host scope", async () => {
+		await client`
+			update platform.conversation_executions
+			set original_submit_host_session_ref = 'historical-host'
+			where execution_id = 'execution-conversation-1'
+		`;
+		try {
+			expect(await read()).toMatchObject({
+				originalHostScopeRef: "historical-host",
+			});
+		} finally {
+			await client`
+				update platform.conversation_executions
+				set original_submit_host_session_ref = null
+				where execution_id = 'execution-conversation-1'
 			`;
 		}
 	});
@@ -963,7 +983,7 @@ describe("PostgreSQL original native metadata scope", () => {
 				`grant select (id, agent_id, actor_id, channel_id, principal_type) on platform.conversations to ${role}`,
 			);
 			await client.unsafe(
-				`grant select (execution_id, conversation_id, agent_id, actor_id, channel_id, principal_type, session_generation, authorization_revision) on platform.conversation_executions to ${role}`,
+				`grant select (execution_id, conversation_id, agent_id, actor_id, channel_id, principal_type, session_generation, authorization_revision, original_submit_host_session_ref) on platform.conversation_executions to ${role}`,
 			);
 			roleUrl.searchParams.set("options", `-c role=${role}`);
 			const limited = new PostgresConversationQueryV1({
