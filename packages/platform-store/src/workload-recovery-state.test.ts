@@ -74,6 +74,44 @@ describe("persisted Workload recovery state", () => {
 			),
 		).toEqual({ state, legacy: false });
 	});
+	it("accepts bounded failure details while keeping legacy states readable", () => {
+		const state = fixture();
+		const withFailure = {
+			...state,
+			phase: "cleaning" as const,
+			failureCode: "reconciliation_failed" as const,
+			lastFailure: {
+				schemaVersion: 1 as const,
+				code: "kubernetes_forbidden" as const,
+				phase: "applying" as const,
+				attempt: 3,
+				status: 403,
+				kind: "Deployment",
+				verb: "create",
+			},
+		};
+		expect(
+			decodePersistedWorkloadStateV1(
+				JSON.parse(JSON.stringify(withFailure)),
+				"agent_01",
+			),
+		).toEqual({ state: withFailure, legacy: false });
+		expect(
+			decodePersistedWorkloadStateV1(
+				JSON.parse(JSON.stringify(state)),
+				"agent_01",
+			),
+		).toEqual({ state, legacy: false });
+		expect(() =>
+			decodePersistedWorkloadStateV1(
+				{
+					...withFailure,
+					lastFailure: { ...withFailure.lastFailure, status: 700 },
+				},
+				"agent_01",
+			),
+		).toThrow();
+	});
 	it("round-trips verified Skill capabilities and rejects malformed entries", () => {
 		const secondSkill = {
 			schemaVersion: 1,

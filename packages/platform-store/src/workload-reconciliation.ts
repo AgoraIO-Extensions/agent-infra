@@ -8,6 +8,7 @@ import {
 	type AgentManagementStateV1,
 	parseWorkloadCapabilitiesV1,
 	parseWorkloadExecutionCapacityV1,
+	parseWorkloadReconciliationFailureV1,
 	parseWorkloadSecretRecoveriesV1,
 	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
@@ -112,7 +113,12 @@ export function decodePersistedWorkloadStateV1(
 		"failureCode",
 		"attempts",
 	];
-	const optional = ["fence", "cleanupInterrupted", "capabilities"];
+	const optional = [
+		"fence",
+		"cleanupInterrupted",
+		"capabilities",
+		"lastFailure",
+	];
 	if (
 		required.some((key) => !Object.hasOwn(value, key)) ||
 		Object.keys(value).some(
@@ -166,9 +172,13 @@ export function decodePersistedWorkloadStateV1(
 	const capabilities = Object.hasOwn(value, "capabilities")
 		? parseWorkloadCapabilitiesV1(value.capabilities)
 		: undefined;
+	const lastFailure = Object.hasOwn(value, "lastFailure")
+		? parseWorkloadReconciliationFailureV1(value.lastFailure)
+		: undefined;
 	const normalized = {
 		...value,
 		...(capabilities ? { capabilities } : {}),
+		...(lastFailure ? { lastFailure } : {}),
 		candidate: persistedWorkloadVersion(value.candidate, agentId),
 		verified:
 			value.verified === null
@@ -377,6 +387,16 @@ const workloadStepLockNamespace = "agent-infra:workload-reconciliation:";
 const workloadWriteBackLockTimeout = "5s";
 /** Bound how many in-flight Agents one poll skips before reporting idle. */
 const maximumBusyWorkloadSelections = 8;
+const maximumWorkloadRetryDelayMs = 60_000;
+
+export function workloadReconciliationRetryDelayMsV1(
+	attempts: number,
+	baseDelayMs: number,
+): number {
+	if (attempts <= 0 || baseDelayMs === 0) return baseDelayMs;
+	const exponent = Math.min(attempts - 1, 16);
+	return Math.min(maximumWorkloadRetryDelayMs, baseDelayMs * 2 ** exponent);
+}
 
 function transactionDatabase(sql: postgres.TransactionSql) {
 	const dialect = new PgDialect();
@@ -826,7 +846,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						next.phase,
 					)
 						? monitorDelayMs
-						: retryDelayMs;
+						: workloadReconciliationRetryDelayMsV1(next.attempts, retryDelayMs);
 					await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${agentId}, ${next.revision}, ${sql.json(next as unknown as postgres.JSONValue)}, clock_timestamp() + ${delay} * interval '1 millisecond') on conflict (agent_id) do update set revision = excluded.revision, state = excluded.state, next_attempt_at = excluded.next_attempt_at, updated_at = clock_timestamp()`;
 					// Idle Session Sandboxes follow a ready verified deployment in
 					// this same transaction; periodic monitor write-backs retry the

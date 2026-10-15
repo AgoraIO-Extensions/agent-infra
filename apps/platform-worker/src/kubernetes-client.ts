@@ -22,6 +22,13 @@ export const workloadApiVersions = {
 } as const;
 export type WorkloadResourceKind = keyof typeof workloadApiVersions;
 
+export type WorkloadKubernetesFailureCodeV1 =
+	| "kubernetes_forbidden"
+	| "kubernetes_not_found"
+	| "kubernetes_conflict"
+	| "kubernetes_unavailable"
+	| "unknown";
+
 export interface WorkerKubernetesClientV1 {
 	readonly namespace: string;
 	read<T extends KubernetesObject>(
@@ -43,8 +50,30 @@ export interface WorkerKubernetesClientV1 {
 }
 
 export class WorkloadKubernetesError extends Error {
-	constructor(readonly code: "conflict" | "unavailable" | "policy") {
+	readonly reasonCode: WorkloadKubernetesFailureCodeV1;
+	readonly status?: number;
+	readonly kind?: WorkloadResourceKind;
+	readonly verb?: string;
+	constructor(
+		readonly code: "conflict" | "unavailable" | "policy",
+		details: {
+			readonly reasonCode?: WorkloadKubernetesFailureCodeV1;
+			readonly status?: number;
+			readonly kind?: WorkloadResourceKind;
+			readonly verb?: string;
+		} = {},
+	) {
 		super("Kubernetes Workload operation failed");
+		this.reasonCode =
+			details.reasonCode ??
+			(code === "conflict"
+				? "kubernetes_conflict"
+				: code === "unavailable"
+					? "kubernetes_unavailable"
+					: "unknown");
+		this.status = details.status;
+		this.kind = details.kind;
+		this.verb = details.verb;
 	}
 }
 
@@ -90,13 +119,31 @@ export function createWorkerKubernetesClientV1(
 		)
 			throw new WorkloadKubernetesError("policy");
 	};
-	async function operation<T>(callback: () => Promise<T>): Promise<T> {
+	async function operation<T>(
+		kind: WorkloadResourceKind,
+		verb: string,
+		callback: () => Promise<T>,
+	): Promise<T> {
 		try {
 			return await callback();
 		} catch (error) {
 			if (error instanceof WorkloadKubernetesError) throw error;
+			const responseStatus = status(error);
 			throw new WorkloadKubernetesError(
-				status(error) === 409 ? "conflict" : "unavailable",
+				responseStatus === 409 ? "conflict" : "unavailable",
+				{
+					reasonCode:
+						responseStatus === 403
+							? "kubernetes_forbidden"
+							: responseStatus === 404
+								? "kubernetes_not_found"
+								: responseStatus === 409
+									? "kubernetes_conflict"
+									: "kubernetes_unavailable",
+					status: responseStatus,
+					kind,
+					verb,
+				},
 			);
 		}
 	}
@@ -106,7 +153,7 @@ export function createWorkerKubernetesClientV1(
 			kind: WorkloadResourceKind,
 			name: string,
 		) {
-			return operation(async () => {
+			return operation(kind, "get", async () => {
 				try {
 					return await api.read<T>(header(kind, name));
 				} catch (error) {
@@ -120,6 +167,8 @@ export function createWorkerKubernetesClientV1(
 			selector: string,
 		) {
 			return operation(
+				kind,
+				"list",
 				async () =>
 					(
 						await api.list<T>(
@@ -137,13 +186,17 @@ export function createWorkerKubernetesClientV1(
 		},
 		async create<T extends KubernetesObject>(object: T) {
 			check(object);
-			return operation(() => api.create(object));
+			return operation(object.kind as WorkloadResourceKind, "create", () =>
+				api.create(object),
+			);
 		},
 		async replace<T extends KubernetesObject>(object: T) {
 			check(object);
 			if (!object.metadata?.resourceVersion || !object.metadata.uid)
 				throw new WorkloadKubernetesError("policy");
-			return operation(() => api.replace(object));
+			return operation(object.kind as WorkloadResourceKind, "replace", () =>
+				api.replace(object),
+			);
 		},
 		async delete(object) {
 			await this.deleteResult?.(object);
@@ -159,23 +212,27 @@ export function createWorkerKubernetesClientV1(
 					resourceVersion: object.metadata.resourceVersion,
 				},
 			};
-			return operation(async () => {
-				try {
-					await api.delete(
-						object,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						options,
-					);
-					return "acknowledged" as const;
-				} catch (error) {
-					if (status(error) === 404) return "absent" as const;
-					throw error;
-				}
-			});
+			return operation(
+				object.kind as WorkloadResourceKind,
+				"delete",
+				async () => {
+					try {
+						await api.delete(
+							object,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							options,
+						);
+						return "acknowledged" as const;
+					} catch (error) {
+						if (status(error) === 404) return "absent" as const;
+						throw error;
+					}
+				},
+			);
 		},
 	};
 }
@@ -188,5 +245,19 @@ function status(error: unknown): number | undefined {
 		typeof error.code === "number"
 	)
 		return error.code;
+	if (
+		typeof error === "object" &&
+		error !== null &&
+		"statusCode" in error &&
+		typeof error.statusCode === "number"
+	)
+		return error.statusCode;
+	if (
+		typeof error === "object" &&
+		error !== null &&
+		"status" in error &&
+		typeof error.status === "number"
+	)
+		return error.status;
 	return undefined;
 }

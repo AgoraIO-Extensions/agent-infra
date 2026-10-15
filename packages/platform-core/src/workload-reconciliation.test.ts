@@ -3,7 +3,9 @@ import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
 import type { AgentManagementStateV1 } from "./agent-management.js";
 import {
 	createWorkloadReconciliationV1,
+	parseWorkloadReconciliationFailureV1,
 	WorkloadPreflightRejectedErrorV1,
+	type WorkloadReconciliationFailureV1,
 	type WorkloadReconciliationStateV1,
 	type WorkloadRuntimePortV1,
 } from "./workload-reconciliation.js";
@@ -13,6 +15,9 @@ function fixture(
 		kind: "standard",
 		imageDigest: "image-a",
 	} as AgentConfigurationRecordV2["source"],
+	reconciliationOptions: Partial<
+		Parameters<typeof createWorkloadReconciliationV1>[0]
+	> = {},
 ) {
 	let configuration = {
 		schemaVersion: 2,
@@ -63,6 +68,7 @@ function fixture(
 		store,
 		runtime,
 		maximumAttempts: 3,
+		...reconciliationOptions,
 	});
 	return {
 		runtime,
@@ -77,6 +83,7 @@ function fixture(
 				store,
 				runtime,
 				maximumAttempts: 3,
+				...reconciliationOptions,
 			});
 		},
 		upgrade(
@@ -114,6 +121,47 @@ function fixture(
 }
 
 describe("durable Workload reconciliation", () => {
+	it("persists bounded step failures, reports them, and stops repeated forbidden errors", async () => {
+		const failures: Array<
+			WorkloadReconciliationFailureV1 & { agentId: string }
+		> = [];
+		const f = fixture(undefined, {
+			onFailure: (failure) => failures.push(failure),
+		});
+		await f.tick(3);
+		vi.mocked(f.runtime.apply).mockRejectedValue(
+			Object.assign(new Error("private Kubernetes response"), {
+				reasonCode: "kubernetes_forbidden",
+				status: 403,
+				kind: "Deployment",
+				verb: "create",
+			}),
+		);
+		await f.tick(3);
+		expect(f.state).toMatchObject({
+			phase: "cleaning",
+			failureCode: "reconciliation_failed",
+			lastFailure: {
+				code: "kubernetes_forbidden",
+				phase: "applying",
+				attempt: 3,
+				status: 403,
+				kind: "Deployment",
+				verb: "create",
+			},
+		});
+		await f.tick();
+		expect(f.state).toMatchObject({
+			phase: "failed",
+			failureCode: "reconciliation_failed",
+			lastFailure: { code: "kubernetes_forbidden" },
+		});
+		expect(failures).toHaveLength(3);
+		expect(parseWorkloadReconciliationFailureV1(f.state?.lastFailure)).toEqual(
+			f.state?.lastFailure,
+		);
+	});
+
 	it("persists a prepared resource intention across a Worker restart before observing it", async () => {
 		const f = fixture();
 		await f.tick(3);

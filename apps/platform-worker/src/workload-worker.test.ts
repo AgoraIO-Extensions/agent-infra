@@ -27,6 +27,7 @@ vi.mock("@agent-infra/platform-store", () => ({
 
 import {
 	createPlatformWorkloadWorkerV1,
+	createWorkloadFailureLoggerV1,
 	startPlatformWorkloadWorkerFromDeploymentV1,
 } from "./workload-worker.js";
 
@@ -63,6 +64,50 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("Workload Worker lifecycle", () => {
+	it("logs bounded step failures with Kubernetes context and rate limits repeats", () => {
+		const log = vi.fn();
+		let now = 1_000;
+		const report = createWorkloadFailureLoggerV1(log, () => now);
+		const failure = {
+			schemaVersion: 1 as const,
+			code: "kubernetes_forbidden" as const,
+			phase: "applying" as const,
+			attempt: 1,
+			status: 403,
+			kind: "Deployment",
+			verb: "create",
+			agentId: "agent-a",
+		};
+		report(failure);
+		report({ ...failure, attempt: 2 });
+		now += 30_000;
+		report({ ...failure, attempt: 3 });
+		const entries = log.mock.calls.map(([message]) => JSON.parse(message));
+		expect(entries).toEqual([
+			{
+				service: "platform-worker",
+				code: "kubernetes_forbidden",
+				agentId: "agent-a",
+				phase: "applying",
+				attempt: 1,
+				status: 403,
+				kind: "Deployment",
+				verb: "create",
+			},
+			{
+				service: "platform-worker",
+				code: "kubernetes_forbidden",
+				agentId: "agent-a",
+				phase: "applying",
+				attempt: 3,
+				status: 403,
+				kind: "Deployment",
+				verb: "create",
+			},
+		]);
+		expect(log.mock.calls.join()).not.toContain("private Kubernetes response");
+	});
+
 	it("continues file cleanup when successive workload reconciliation attempts fail", async () => {
 		store.runNext.mockRejectedValue(new Error("workload unavailable"));
 		const worker = createPlatformWorkloadWorkerV1({

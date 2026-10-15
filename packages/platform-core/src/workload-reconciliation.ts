@@ -25,6 +25,37 @@ export type WorkloadPhaseV1 =
 	| "cleaning"
 	| "failed";
 
+export type WorkloadReconciliationFailureCodeV1 =
+	| "kubernetes_forbidden"
+	| "kubernetes_not_found"
+	| "kubernetes_conflict"
+	| "kubernetes_unavailable"
+	| "capabilities_unavailable"
+	| "preflight_rejected"
+	| "unknown";
+
+/** Bounded, credential-free detail for the most recent swallowed step failure. */
+export interface WorkloadReconciliationFailureV1 {
+	readonly schemaVersion: 1;
+	readonly code: WorkloadReconciliationFailureCodeV1;
+	readonly phase: WorkloadPhaseV1;
+	readonly attempt: number;
+	readonly status?: number;
+	readonly kind?: string;
+	readonly verb?: string;
+}
+
+const workloadReconciliationFailureCodes =
+	new Set<WorkloadReconciliationFailureCodeV1>([
+		"kubernetes_forbidden",
+		"kubernetes_not_found",
+		"kubernetes_conflict",
+		"kubernetes_unavailable",
+		"capabilities_unavailable",
+		"preflight_rejected",
+		"unknown",
+	]);
+
 export interface WorkloadIdentityV1 {
 	readonly uid: string;
 	readonly generation: number;
@@ -200,6 +231,7 @@ export interface WorkloadReconciliationStateV1 {
 	readonly cleanupInterrupted?: true;
 	readonly failureCode: "reconciliation_failed" | "health_check_failed" | null;
 	readonly attempts: number;
+	readonly lastFailure?: WorkloadReconciliationFailureV1;
 	readonly capabilities?: WorkloadCapabilitiesV1;
 }
 
@@ -250,6 +282,112 @@ export class WorkloadPreflightRejectedErrorV1 extends Error {
 	constructor() {
 		super("Workload preflight rejected");
 	}
+}
+
+export function parseWorkloadReconciliationFailureV1(
+	input: unknown,
+): WorkloadReconciliationFailureV1 {
+	if (!input || typeof input !== "object" || Array.isArray(input))
+		throw new TypeError("Workload reconciliation failure is invalid");
+	const value = input as Record<string, unknown>;
+	const required = ["schemaVersion", "code", "phase", "attempt"];
+	const optional = ["status", "kind", "verb"];
+	if (
+		Object.keys(value).some(
+			(key) => !required.includes(key) && !optional.includes(key),
+		) ||
+		required.some((key) => !Object.hasOwn(value, key)) ||
+		value.schemaVersion !== 1 ||
+		typeof value.code !== "string" ||
+		!workloadReconciliationFailureCodes.has(
+			value.code as WorkloadReconciliationFailureCodeV1,
+		) ||
+		typeof value.phase !== "string" ||
+		![
+			"preflight",
+			"closing",
+			"applying",
+			"observing",
+			"activating",
+			"promoting",
+			"ready",
+			"rejected",
+			"stopped",
+			"cleaning",
+			"failed",
+		].includes(value.phase) ||
+		!Number.isSafeInteger(value.attempt) ||
+		(value.attempt as number) < 1 ||
+		(Object.hasOwn(value, "status") &&
+			(!Number.isSafeInteger(value.status) ||
+				(value.status as number) < 100 ||
+				(value.status as number) > 599)) ||
+		(Object.hasOwn(value, "kind") &&
+			(typeof value.kind !== "string" ||
+				!/^[A-Za-z][A-Za-z0-9.-]{0,63}$/.test(value.kind))) ||
+		(Object.hasOwn(value, "verb") &&
+			(typeof value.verb !== "string" ||
+				!/^[a-z][a-z-]{0,31}$/.test(value.verb)))
+	)
+		throw new TypeError("Workload reconciliation failure is invalid");
+	return {
+		schemaVersion: 1,
+		code: value.code as WorkloadReconciliationFailureCodeV1,
+		phase: value.phase as WorkloadPhaseV1,
+		attempt: value.attempt as number,
+		...(Object.hasOwn(value, "status")
+			? { status: value.status as number }
+			: {}),
+		...(Object.hasOwn(value, "kind") ? { kind: value.kind as string } : {}),
+		...(Object.hasOwn(value, "verb") ? { verb: value.verb as string } : {}),
+	};
+}
+
+function failureFromError(
+	error: unknown,
+	state: WorkloadReconciliationStateV1,
+	attempt: number,
+): WorkloadReconciliationFailureV1 {
+	const value =
+		error && typeof error === "object"
+			? (error as Record<string, unknown>)
+			: undefined;
+	const code = value?.reasonCode;
+	const failureCode = workloadReconciliationFailureCodes.has(
+		code as WorkloadReconciliationFailureCodeV1,
+	)
+		? (code as WorkloadReconciliationFailureCodeV1)
+		: error instanceof WorkloadPreflightRejectedErrorV1
+			? "preflight_rejected"
+			: error instanceof Error &&
+					error.message === "Runtime capabilities are unavailable"
+				? "capabilities_unavailable"
+				: "unknown";
+	const status =
+		typeof value?.status === "number" &&
+		Number.isSafeInteger(value.status) &&
+		value.status >= 100 &&
+		value.status <= 599
+			? value.status
+			: undefined;
+	const kind =
+		typeof value?.kind === "string" &&
+		/^[A-Za-z][A-Za-z0-9.-]{0,63}$/.test(value.kind)
+			? value.kind
+			: undefined;
+	const verb =
+		typeof value?.verb === "string" && /^[a-z][a-z-]{0,31}$/.test(value.verb)
+			? value.verb
+			: undefined;
+	return {
+		schemaVersion: 1,
+		code: failureCode,
+		phase: state.phase,
+		attempt,
+		...(typeof status === "number" ? { status } : {}),
+		...(typeof kind === "string" ? { kind } : {}),
+		...(typeof verb === "string" ? { verb } : {}),
+	};
 }
 
 export interface WorkloadRuntimePortV1 {
@@ -307,6 +445,11 @@ export function createWorkloadReconciliationV1(dependencies: {
 	readonly store: WorkloadReconciliationStorePortV1;
 	readonly runtime: WorkloadRuntimePortV1;
 	readonly maximumAttempts?: number;
+	/** Consecutive forbidden Kubernetes failures before terminal cleanup. */
+	readonly forbiddenFailureThreshold?: number;
+	readonly onFailure?: (
+		failure: WorkloadReconciliationFailureV1 & { readonly agentId: string },
+	) => void;
 	/**
 	 * Consecutive monitor probes of a serving Workload that may fail to
 	 * complete before its route closes (#2046). An unhealthy answer, drift or a
@@ -317,6 +460,13 @@ export function createWorkloadReconciliationV1(dependencies: {
 	const maximumAttempts = dependencies.maximumAttempts ?? 60;
 	if (!Number.isSafeInteger(maximumAttempts) || maximumAttempts < 1)
 		throw new TypeError("Invalid Workload retry limit");
+	const forbiddenFailureThreshold = dependencies.forbiddenFailureThreshold ?? 3;
+	if (
+		!Number.isSafeInteger(forbiddenFailureThreshold) ||
+		forbiddenFailureThreshold < 1 ||
+		forbiddenFailureThreshold > maximumAttempts
+	)
+		throw new TypeError("Invalid Workload forbidden failure threshold");
 	const probeFailureThreshold = dependencies.probeFailureThreshold ?? 3;
 	if (
 		!Number.isSafeInteger(probeFailureThreshold) ||
@@ -420,10 +570,21 @@ export function createWorkloadReconciliationV1(dependencies: {
 				const advance = (
 					phase: WorkloadPhaseV1,
 					changes: Partial<WorkloadReconciliationStateV1> = {},
-				) => ({ ...state, phase, attempts: 0, ...changes });
+				) => {
+					const next = { ...state, phase, attempts: 0, ...changes };
+					if (!Object.hasOwn(changes, "lastFailure"))
+						delete (next as { lastFailure?: WorkloadReconciliationFailureV1 })
+							.lastFailure;
+					return next;
+				};
 				const failed = (
 					failureCode: "reconciliation_failed" | "health_check_failed",
-				) => advance("cleaning", { failureCode });
+					lastFailure?: WorkloadReconciliationFailureV1,
+				) =>
+					advance("cleaning", {
+						failureCode,
+						...(lastFailure ? { lastFailure } : {}),
+					});
 				try {
 					switch (state.phase) {
 						case "preflight": {
@@ -586,7 +747,12 @@ export function createWorkloadReconciliationV1(dependencies: {
 									rollback: true,
 								});
 							}
-							return advance("failed", { identity: null });
+							return advance("failed", {
+								identity: null,
+								...(state.lastFailure
+									? { lastFailure: state.lastFailure }
+									: {}),
+							});
 						}
 						case "stopped":
 							await runtime.closeRoute(state);
@@ -609,19 +775,39 @@ export function createWorkloadReconciliationV1(dependencies: {
 							}
 					}
 				} catch (error) {
+					const attempt = Math.min(state.attempts + 1, maximumAttempts);
+					const lastFailure = failureFromError(error, state, attempt);
+					try {
+						dependencies.onFailure?.({
+							...lastFailure,
+							agentId: state.agentId,
+						});
+					} catch {
+						// Failure reporting is observational and must not alter reconciliation.
+					}
+					const retrying = {
+						...state,
+						attempts: attempt,
+						lastFailure,
+					};
+					const forbiddenTerminal =
+						lastFailure.code === "kubernetes_forbidden" &&
+						attempt >= forbiddenFailureThreshold;
 					if (state.phase === "preflight") {
 						if (
 							!(error instanceof WorkloadPreflightRejectedErrorV1) &&
-							state.attempts + 1 < maximumAttempts
+							attempt < maximumAttempts &&
+							!forbiddenTerminal
 						)
-							return { ...state, attempts: state.attempts + 1 };
+							return retrying;
 						if (state.verified)
 							return advance("rejected", {
 								candidate: state.verified,
 								rollback: true,
 								failureCode: "reconciliation_failed",
+								lastFailure,
 							});
-						return failed("reconciliation_failed");
+						return failed("reconciliation_failed", lastFailure);
 					}
 					// Cleanup and route closure are retried durably, even after the
 					// bounded candidate budget is exhausted. Never report clean early.
@@ -630,13 +816,10 @@ export function createWorkloadReconciliationV1(dependencies: {
 						state.phase === "closing" ||
 						state.phase === "stopped"
 					)
-						return {
-							...state,
-							attempts: Math.min(state.attempts + 1, maximumAttempts),
-						};
-					if (state.attempts + 1 >= maximumAttempts)
-						return failed("reconciliation_failed");
-					return { ...state, attempts: state.attempts + 1 };
+						return retrying;
+					if (attempt >= maximumAttempts || forbiddenTerminal)
+						return failed("reconciliation_failed", lastFailure);
+					return retrying;
 				}
 			});
 		},

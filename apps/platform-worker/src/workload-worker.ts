@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { startObservability } from "@agent-infra/observability";
 import {
 	createWorkloadReconciliationV1,
+	type WorkloadReconciliationFailureV1,
 	type WorkloadReconciliationStateV1,
 	type WorkloadReconciliationStorePortV1,
 } from "@agent-infra/platform-core";
@@ -22,6 +23,7 @@ export interface PlatformWorkloadWorkerOptionsV1
 	readonly workerId?: string;
 	readonly pollIntervalMs?: number;
 	readonly maximumAttempts?: number;
+	readonly forbiddenFailureThreshold?: number;
 	/** Consecutive incomplete monitor probes a serving Workload tolerates (#2046). */
 	readonly probeFailureThreshold?: number;
 	/** Idle Session Sandbox reclaim threshold; defaults to 30 minutes. */
@@ -60,6 +62,41 @@ function observeWorkload(
 	}
 }
 
+const failureLogIntervalMs = 30_000;
+
+export function createWorkloadFailureLoggerV1(
+	log: (message: string) => void,
+	now: () => number = Date.now,
+) {
+	const failureLogAt = new Map<string, number>();
+	return function logWorkloadFailure(
+		failure: WorkloadReconciliationFailureV1 & { readonly agentId: string },
+	) {
+		const key = `${failure.agentId}:${failure.phase}:${failure.code}`;
+		const timestamp = now();
+		const previous = failureLogAt.get(key);
+		if (previous !== undefined && timestamp - previous < failureLogIntervalMs)
+			return;
+		failureLogAt.set(key, timestamp);
+		try {
+			log(
+				JSON.stringify({
+					service: "platform-worker",
+					code: failure.code,
+					agentId: failure.agentId,
+					phase: failure.phase,
+					attempt: failure.attempt,
+					...(failure.status === undefined ? {} : { status: failure.status }),
+					...(failure.kind === undefined ? {} : { kind: failure.kind }),
+					...(failure.verb === undefined ? {} : { verb: failure.verb }),
+				}),
+			);
+		} catch {
+			// Logging is observational and must not stop reconciliation.
+		}
+	};
+}
+
 export function createPlatformWorkloadWorkerV1(
 	options: PlatformWorkloadWorkerOptionsV1,
 ) {
@@ -81,6 +118,7 @@ export function createPlatformWorkloadWorkerV1(
 			// Logging is observational and must not stop reconciliation.
 		}
 	}
+	const logFailure = createWorkloadFailureLoggerV1(log);
 	const runtime = createWorkloadRuntimeV1({
 		...options,
 		workerId,
@@ -140,7 +178,9 @@ export function createPlatformWorkloadWorkerV1(
 			store: observedStore,
 			runtime,
 			maximumAttempts: options.maximumAttempts,
+			forbiddenFailureThreshold: options.forbiddenFailureThreshold,
 			probeFailureThreshold: options.probeFailureThreshold,
+			onFailure: logFailure,
 		});
 	} catch (error) {
 		void Promise.allSettled([store.close(), files?.close()]);
