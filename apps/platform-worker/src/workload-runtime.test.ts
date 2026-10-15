@@ -16,6 +16,7 @@ import type {
 import { RuntimeCapabilitiesResponseV1Schema } from "@agent-infra/contracts/runtime";
 import {
 	type PlatformSecretRecordV1,
+	RuntimeCapabilitySetV1Schema,
 	SkillWorkloadProjectionV1Schema,
 	validateAgentWorkloadDesiredV1,
 	validatePlatformSecretRecordV1,
@@ -42,6 +43,7 @@ import {
 } from "@agent-infra/platform-core";
 import { FakeAgentManagementV1 } from "@agent-infra/platform-core/testing";
 import type {
+	V1Deployment,
 	V1Ingress,
 	V1Pod,
 	V1Secret,
@@ -117,6 +119,65 @@ function configurationFixture(
 		},
 		...overrides,
 	};
+}
+
+function multiServiceConfigurationFixture(): AgentConfigurationRecordV2 {
+	const deployment = (name: string, digest: string) => ({
+		apiVersion: "apps/v1",
+		kind: "Deployment",
+		metadata: { name },
+		spec: {
+			replicas: 1,
+			selector: { matchLabels: { app: name } },
+			template: {
+				metadata: { labels: { app: name } },
+				spec: {
+					containers: [
+						{
+							name,
+							image: `sha256:${digest.repeat(64)}`,
+							ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+						},
+					],
+				},
+			},
+		},
+	});
+	const service = (name: string, entry: boolean) => ({
+		apiVersion: "v1",
+		kind: "Service",
+		metadata: {
+			name,
+			...(entry
+				? { annotations: { "agent-infra.agora.io/entry": "true" } }
+				: {}),
+		},
+		spec: {
+			type: "ClusterIP",
+			selector: { app: name },
+			ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+		},
+	});
+	return configurationFixture({
+		source: {
+			kind: "custom",
+			imageDigest: `sha256:${"c".repeat(64)}`,
+			admissionRevision: "admission-a",
+			interactionMode: "self-managed",
+			identityResponsibility: "self-managed",
+			connectionEnabled: false,
+			manifest: JSON.stringify({
+				schemaVersion: 1,
+				entryServiceName: "web",
+				resources: [
+					deployment("web", "a"),
+					deployment("worker", "b"),
+					service("web", true),
+					service("worker", false),
+				],
+			}),
+		},
+	});
 }
 
 function pendingSecretRecord(
@@ -2829,6 +2890,60 @@ describe("assembled Workload Runtime contracts", () => {
 		fetch.mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
 		expect(await runtime.observe(promoting)).toBe("unreachable");
 		fetch.mockResolvedValueOnce(new Response("missing", { status: 404 }));
+		expect(await runtime.observe(promoting)).toBe("unhealthy");
+		await expect(runtime.capabilities(promoting)).rejects.toThrow(
+			"Runtime capabilities are unavailable",
+		);
+	});
+	it("promotes a multi-service Agent with an empty capability set and publishes its entry route", async () => {
+		const f = fixture(
+			{},
+			{ configuration: multiServiceConfigurationFixture() },
+		);
+		await f.tick(10);
+		expect(f.state).toMatchObject({ phase: "ready" });
+		expect(f.state?.capabilities).toEqual(
+			RuntimeCapabilitySetV1Schema.parse({}),
+		);
+		const resources = [...f.resources.values()];
+		expect(resources.filter((item) => item.kind === "Deployment")).toHaveLength(
+			2,
+		);
+		expect(resources.filter((item) => item.kind === "Ingress")).toHaveLength(1);
+	});
+	it("retains multi-service capabilities only for the exact healthy promotion attempt", async () => {
+		const f = fixture(
+			{},
+			{ configuration: multiServiceConfigurationFixture() },
+		);
+		await f.tick(10);
+		const ready = f.state;
+		if (ready?.phase !== "ready") throw new Error();
+		const runtime = createWorkloadRuntimeV1(f.options);
+		const empty = RuntimeCapabilitySetV1Schema.parse({});
+		for (let i = 0; i < 3; i++) {
+			expect(await runtime.observe(ready)).toBe("healthy");
+			await expect(runtime.capabilities(ready)).rejects.toThrow(
+				"Runtime capabilities are unavailable",
+			);
+		}
+		const promoting = { ...ready, phase: "promoting" as const };
+		expect(await runtime.observe(promoting)).toBe("healthy");
+		await expect(runtime.capabilities({ ...promoting })).rejects.toThrow(
+			"Runtime capabilities are unavailable",
+		);
+		await expect(runtime.capabilities(promoting)).resolves.toEqual(empty);
+		await expect(runtime.capabilities(promoting)).rejects.toThrow(
+			"Runtime capabilities are unavailable",
+		);
+		const deploymentKey = [...f.resources.keys()].find((key) =>
+			key.startsWith("Deployment/"),
+		);
+		const deployment = deploymentKey
+			? (f.resources.get(deploymentKey) as V1Deployment)
+			: undefined;
+		if (!deployment) throw new Error();
+		deployment.status = { ...deployment.status, availableReplicas: 0 };
 		expect(await runtime.observe(promoting)).toBe("unhealthy");
 		await expect(runtime.capabilities(promoting)).rejects.toThrow(
 			"Runtime capabilities are unavailable",
