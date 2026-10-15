@@ -237,6 +237,8 @@ export function createBrowserHandoffAdmissionUseCaseV1(dependencies: {
 							outcome: "unavailable",
 							reason: "conversation_unavailable",
 						};
+					if (active.sessionGeneration !== conversation.sessionGeneration)
+						return { outcome: "stale" };
 					if (active.status === "unknown") return { outcome: "busy" };
 					const executionId = active.executionId;
 					const command = request.command;
@@ -254,7 +256,11 @@ export function createBrowserHandoffAdmissionUseCaseV1(dependencies: {
 						hostSessionRef: conversation.hostSessionRef,
 						command,
 						outbox: {
-							id: `conversation:browser-handoff:${executionId}:${command.handoffId}`,
+							id: `conversation:browser-handoff:${digest({
+								conversationId: conversation.conversationId,
+								actorId: authority.actorId,
+								idempotencyKey: request.idempotencyKey,
+							})}`,
 							operation: "conversation.browser.handoff.v1",
 							payload: {
 								schemaVersion: 1,
@@ -295,7 +301,14 @@ export function createBrowserHandoffAdmissionUseCaseV1(dependencies: {
 							operation: "browser.handoff",
 							conversationId: request.conversationId,
 						});
-						return current.outcome === "allowed";
+						return (
+							current.outcome === "allowed" &&
+							current.authority.actorId === authority.actorId &&
+							current.authority.agentId === authority.agentId &&
+							current.authority.channelId === authority.channelId &&
+							current.authority.authorizationRevision ===
+								authority.authorizationRevision
+						);
 					} catch {
 						return false;
 					}
