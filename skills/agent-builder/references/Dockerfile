@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim
+FROM registry.example.com/library/node@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev

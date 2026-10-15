@@ -16,7 +16,7 @@ Skill 只消费现有 CI 或用户构建流程产生的不可变 `sha256:<64 个
 1. 通过 Connection 解析当前用户、目标仓库、默认分支和可用 CI 能力。若身份、仓库或授权无法确认，停止并说明缺失项。
 2. 在最新默认分支上创建隔离分支和临时工作区。读取仓库的 `docker-compose.yml`；没有 Compose 时只读取用户授权的代码范围并说明推断依据。
 3. 先做输入门禁。遇到 `privileged`、`network_mode: host`、`devices`、bind mount、主机路径、Helm chart、动态下载依赖或无法固定的外部镜像时，停止生成部署结果并逐项解释原因。不要把不支持的输入静默改写成可部署配置。
-4. 生成 Dockerfile 和纯 Kubernetes YAML。YAML 必须通过仓库的 multi-service manifest 契约校验：只使用契约允许的 Deployment、StatefulSet、Service、ConfigMap、PersistentVolumeClaim 和受控迁移 Job；服务使用 ClusterIP，入口 Service 只有一个；容器镜像全部使用 immutable digest；不写 Secret、Ingress、NetworkPolicy、ServiceAccount 或 Helm 模板。
+4. 生成 Dockerfile 和纯 Kubernetes YAML。YAML 必须通过仓库的 multi-service manifest 契约校验：只使用契约允许的 Deployment、StatefulSet、Service、ConfigMap、PersistentVolumeClaim 和受控迁移 Job；服务使用 ClusterIP，入口 Service 只有一个；契约中的容器 `image` 使用裸 `sha256:<digest>`，平台 deployment-owned registry repository 会在 Worker 渲染实际 Kubernetes image；Dockerfile 的 `FROM` 必须使用 `name@sha256:<digest>`；不写 Secret、Ingress、NetworkPolicy、ServiceAccount 或 Helm 模板。
 5. 对每个服务给出资源 profile 引用；保留 StatefulSet 的 PVC 声明和数据路径。需要迁移时生成单个受控 Job，并在说明中写明它必须成功后才可切换。
 6. 在隔离分支提交 Dockerfile、YAML 和必要的非敏感说明，执行格式检查与契约校验，然后通过 Connection 创建 Pull Request。不得写受保护分支；没有 Pull Request 就不能宣称交付完成。
 7. 等待仓库 CI 或用户构建流程返回镜像 Digest。只接受 Connection 回读的真实 Digest 和对应 CI 证据；缺少 Digest 时保持等待，不猜测 tag、image ID 或 registry 地址。
