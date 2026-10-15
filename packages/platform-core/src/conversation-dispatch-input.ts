@@ -373,7 +373,11 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		parsedOperation === "conversation.native-capability.invoke.v1";
 	const isBrowserHandoff =
 		parsedOperation === "conversation.browser.handoff.v1";
-	if (isBrowserHandoff && typeof input.hostSessionRef !== "string")
+	if (
+		isBrowserHandoff &&
+		(typeof input.hostSessionRef !== "string" ||
+			input.hostSessionRef.length === 0)
+	)
 		return unavailable();
 	if (
 		isBrowserHandoff !== (parsedBrowserHandoff !== undefined) ||
