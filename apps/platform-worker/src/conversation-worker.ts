@@ -30,6 +30,12 @@ import {
 } from "./browser-handoff-command.js";
 import { createBrowserHandoffEventAdapterV1 } from "./browser-handoff-events.js";
 import {
+	type BrowserSideEffectCommandInvocationV1,
+	createBrowserSideEffectCommandExecutorV1,
+	createBrowserSideEffectOperationAdapterV1,
+} from "./browser-side-effect-operation.js";
+import type { ConversationRuntimeBrowserSideEffectRequestV1 } from "./conversation-runtime.js";
+import {
 	type ConversationRuntimeBrowserHandoffRequestV1,
 	type ConversationRuntimeOptionsV2,
 	createConversationRuntimeV2,
@@ -67,6 +73,10 @@ export interface PlatformConversationWorkerOptionsV2
 	readonly resolveBrowserHandoff?: (
 		input: BrowserHandoffCommandInvocationV1,
 	) => Promise<ConversationRuntimeBrowserHandoffRequestV1["handoff"] | null>;
+	/** Deployment supplies the current Browser side-effect binding. */
+	readonly resolveBrowserSideEffect?: (
+		input: BrowserSideEffectCommandInvocationV1,
+	) => Promise<ConversationRuntimeBrowserSideEffectRequestV1 | null>;
 	readonly log?: (message: string) => void;
 	readonly observability?: Pick<
 		ReturnType<typeof startObservability>,
@@ -333,9 +343,90 @@ export function createPlatformConversationWorkerV2(
 				},
 			},
 		});
+		const browserSideEffectOperation =
+			createBrowserSideEffectOperationAdapterV1({
+				events: conversationEvents,
+				runtime: {
+					browserSideEffect: async (request, commandSignal) => {
+						const runtimeRequest: ConversationRuntimeBrowserSideEffectRequestV1 =
+							{
+								schemaVersion: 1,
+								requestId: request.requestId,
+								traceId: request.traceId,
+								agentId: request.agentId,
+								actorId: request.principal.id,
+								channelId: request.channelId,
+								conversationId: request.conversationId,
+								executionId: request.executionId,
+								turnId: request.turnId,
+								sessionGeneration: request.sessionGeneration,
+								deliveryFence: request.operation.deliveryFence,
+								hostSessionRef: request.hostSessionRef,
+								runtimeGrant: request.grant,
+								command: request.command,
+								binding: request.binding,
+							};
+						const dispatched = await runtime?.browserSideEffect(
+							runtimeRequest,
+							commandSignal,
+						);
+						if (!dispatched)
+							throw new Error("BROWSER_SIDE_EFFECT_RUNTIME_UNAVAILABLE");
+						return dispatched.response;
+					},
+				},
+			});
+		const browserSideEffectExecutor = createBrowserSideEffectCommandExecutorV1({
+			resolver: {
+				resolve: async (invocation) => {
+					if (
+						!options.resolveBrowserSideEffect ||
+						!invocation.agentId ||
+						!invocation.channelId ||
+						!invocation.executionId ||
+						!invocation.turnId ||
+						invocation.sessionGeneration === undefined ||
+						invocation.deliveryFence === undefined ||
+						!invocation.hostSessionRef ||
+						invocation.runtimeGrant === undefined
+					)
+						return null;
+					return options.resolveBrowserSideEffect(invocation);
+				},
+			},
+			operation: browserSideEffectOperation,
+		});
 		const browserHandoffExecutor: ConversationBrowserHandoffExecutorV1 = {
 			invoke: async ({ claim, authority, signal }) => {
 				if (!claim.browserHandoff) return { outcome: "unavailable" };
+				if (
+					claim.browserHandoff.command === "confirm_side_effect" ||
+					claim.browserHandoff.command === "reject_side_effect" ||
+					claim.browserHandoff.command === "cancel_side_effect"
+				) {
+					const result = await browserSideEffectExecutor.invoke({
+						identity: { userId: claim.actorId },
+						conversationId: claim.conversationId,
+						command: claim.browserHandoff,
+						idempotencyKey: claim.itemId,
+						requestId: claim.requestId,
+						traceId: claim.traceId,
+						signal: signal ?? AbortSignal.timeout(30_000),
+						agentId: claim.agentId,
+						channelId: claim.channelId,
+						executionId: claim.executionId,
+						turnId: claim.turnId,
+						sessionGeneration: claim.sessionGeneration,
+						deliveryFence: claim.executionDeliveryFence,
+						hostSessionRef: claim.hostSessionRef,
+						runtimeGrant: authority.runtimeGrant,
+					});
+					return result.outcome === "accepted" || result.outcome === "replayed"
+						? { outcome: result.outcome }
+						: result.outcome === "unknown"
+							? { outcome: "unknown" as const }
+							: { outcome: "unavailable" as const };
+				}
 				const result = await browserCommandExecutor.invoke({
 					identity: { userId: claim.actorId },
 					conversationId: claim.conversationId,

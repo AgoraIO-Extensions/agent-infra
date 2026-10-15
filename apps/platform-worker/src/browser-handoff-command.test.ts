@@ -122,7 +122,11 @@ describe("Browser handoff command executor", () => {
 	});
 
 	it("fails closed before Runtime when the binding resolver has no current request", async () => {
-		const worker = { browserHandoff: vi.fn() };
+		const worker = {
+			browserHandoff: vi
+				.fn()
+				.mockResolvedValue({ outcome: "accepted" as const }),
+		};
 		const executor = createBrowserHandoffCommandExecutorV1({
 			resolver: { resolve: vi.fn().mockResolvedValue(null) },
 			worker,
@@ -134,7 +138,11 @@ describe("Browser handoff command executor", () => {
 	});
 
 	it("fails closed when the resolver returns another Conversation", async () => {
-		const worker = { browserHandoff: vi.fn() };
+		const worker = {
+			browserHandoff: vi
+				.fn()
+				.mockResolvedValue({ outcome: "accepted" as const }),
+		};
 		const foreign = { ...request, conversationId: "foreign-conversation" };
 		const executor = createBrowserHandoffCommandExecutorV1({
 			resolver: { resolve: vi.fn().mockResolvedValue(foreign) },
@@ -147,7 +155,11 @@ describe("Browser handoff command executor", () => {
 	});
 
 	it("fails closed when the resolved Runtime binding drifts from the claim", async () => {
-		const worker = { browserHandoff: vi.fn() };
+		const worker = {
+			browserHandoff: vi
+				.fn()
+				.mockResolvedValue({ outcome: "accepted" as const }),
+		};
 		const executor = createBrowserHandoffCommandExecutorV1({
 			resolver: {
 				resolve: vi.fn().mockResolvedValue({
@@ -178,9 +190,20 @@ describe("Browser handoff command executor", () => {
 		expect(worker.browserHandoff).toHaveBeenCalledOnce();
 	});
 
-	it("rejects unsupported pause and side-effect commands before resolving Runtime", async () => {
-		const resolve = vi.fn();
-		const worker = { browserHandoff: vi.fn() };
+	it("dispatches pause and rejects side-effect commands before their adapter exists", async () => {
+		const resolve = vi.fn().mockResolvedValue({
+			...request,
+			handoff: {
+				kind: "request" as const,
+				reason: "human_judgment" as const,
+				runtime: request.handoff.runtime,
+			},
+		});
+		const worker = {
+			browserHandoff: vi
+				.fn()
+				.mockResolvedValue({ outcome: "accepted" as const }),
+		};
 		const executor = createBrowserHandoffCommandExecutorV1({
 			resolver: { resolve },
 			worker,
@@ -190,7 +213,7 @@ describe("Browser handoff command executor", () => {
 				...invocation,
 				command: { schemaVersion: 1, command: "pause", handoffId: "handoff-1" },
 			}),
-		).resolves.toMatchObject({ outcome: "unavailable" });
+		).resolves.toMatchObject({ outcome: "accepted" });
 		await expect(
 			executor.invoke({
 				...invocation,
@@ -201,7 +224,7 @@ describe("Browser handoff command executor", () => {
 				},
 			}),
 		).resolves.toMatchObject({ outcome: "unavailable" });
-		expect(resolve).not.toHaveBeenCalled();
-		expect(worker.browserHandoff).not.toHaveBeenCalled();
+		expect(resolve).toHaveBeenCalledOnce();
+		expect(worker.browserHandoff).toHaveBeenCalledOnce();
 	});
 });
