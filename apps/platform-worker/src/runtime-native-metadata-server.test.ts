@@ -1,6 +1,6 @@
 import { once } from "node:events";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	startPlatformWorker,
 	startPlatformWorkerNativeMetadataGatewayServerV1,
@@ -41,6 +41,18 @@ describe("Platform Worker native metadata gateway server", () => {
 		await gateway.stop();
 		servers.splice(servers.indexOf(gateway), 1);
 		expect(gateway.server.listening).toBe(false);
+	});
+
+	it("closes deployment-owned resources with the listener", async () => {
+		const close = vi.fn(async () => undefined);
+		const gateway = startPlatformWorkerNativeMetadataGatewayServerV1({
+			port: 0,
+			app: { fetch: async () => new Response("ok") },
+			close,
+		});
+		servers.push(gateway);
+		await gateway.stop();
+		expect(close).toHaveBeenCalledOnce();
 	});
 
 	it("starts the optional server as part of the primary Worker lifecycle", async () => {

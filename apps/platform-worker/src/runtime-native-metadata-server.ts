@@ -13,6 +13,7 @@ export interface PlatformWorkerNativeMetadataGatewayServerOptionsV1 {
 	readonly app: PlatformWorkerNativeMetadataGatewayAppV1;
 	readonly port?: number;
 	readonly hostname?: string;
+	readonly close?: () => Promise<void>;
 }
 
 /** Compose the native metadata and model-directory apps behind one Worker listener. */
@@ -40,6 +41,19 @@ export function composePlatformWorkerInternalGatewayServerOptionsV1(options: {
 	].filter((hostname): hostname is string => hostname !== undefined);
 	if (new Set(hostnames).size > 1)
 		throw new Error("PLATFORM_WORKER_INTERNAL_GATEWAY_HOSTNAME_MISMATCH");
+	const close = async () => {
+		const results = await Promise.allSettled(
+			[nativeMetadata, modelDirectory, savedKeyCandidates]
+				.map((gateway) =>
+					gateway?.close
+						? Promise.resolve().then(() => gateway.close?.())
+						: undefined,
+				)
+				.filter((result): result is Promise<void> => result !== undefined),
+		);
+		if (results.some((result) => result.status === "rejected"))
+			throw new Error("PLATFORM_WORKER_INTERNAL_GATEWAY_CLOSE_FAILED");
+	};
 	return {
 		app: {
 			async fetch(request) {
@@ -72,6 +86,7 @@ export function composePlatformWorkerInternalGatewayServerOptionsV1(options: {
 				: nativeMetadata?.hostname !== undefined
 					? { hostname: nativeMetadata.hostname }
 					: {}),
+		close,
 	};
 }
 
@@ -190,7 +205,9 @@ export function startPlatformWorkerNativeMetadataGatewayServerV1(
 						!error ||
 						(error as NodeJS.ErrnoException).code === "ERR_SERVER_NOT_RUNNING"
 					)
-						resolve();
+						void Promise.resolve()
+							.then(() => options.close?.())
+							.then(resolve, reject);
 					else reject(error);
 				});
 			});

@@ -405,6 +405,9 @@ export async function createPlatformNativeMetadataGatewayOptionsV1(
 	return createPlatformNativeMetadataGatewayAssemblyV1({
 		serviceToken,
 		signing,
+		...(process.env.PLATFORM_DATABASE_URL
+			? { databaseUrl: process.env.PLATFORM_DATABASE_URL }
+			: {}),
 		ports: nativeMetadataGateway,
 	});
 }
