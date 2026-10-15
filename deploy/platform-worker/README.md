@@ -6,7 +6,8 @@
 每个进程生成独立的数据库 lease owner；Runtime 服务身份仍使用部署提供的稳定 Worker ID。
 配置模块可选导出 `modelDirectory`，由 `createPlatformRuntimeModelDirectoryGatewayV1`
 装配 API→Worker 的 ACP model-directory 内部入口（默认端口 3005）。该导出必须提供
-已绑定的 RuntimeHost resolver 与 Worker-only Grant signer；请求不能选择 URL、Session 或 Grant。
+已绑定的 RuntimeHost resolver；Grant signer 可省略，Worker 会使用同一份 `signing` 私钥
+创建 Worker-owned 的短时 signer。请求不能选择 URL、Session 或 Grant。
 入口使用同一 `serviceToken`，失败和绑定漂移均 fail closed；部署需要把端口作为 Worker 内部
 Service/NetworkPolicy 输入暴露给 Platform API，不能暴露给浏览器或 Agent。启用 native metadata
 时，两个入口共享同一个 Worker internal HTTP listener；显式配置的 port/hostname 必须一致，
