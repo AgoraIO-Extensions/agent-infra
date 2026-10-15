@@ -273,6 +273,8 @@ export function createPlatformConversationWorkerV2(
 						!invocation.turnId ||
 						invocation.sessionGeneration === undefined ||
 						invocation.deliveryFence === undefined ||
+						// Runtime V3 Event requests require a live Host session. The
+						// Core claim parser rejects Browser claims without this binding.
 						!invocation.hostSessionRef ||
 						invocation.runtimeGrant === undefined
 					)
