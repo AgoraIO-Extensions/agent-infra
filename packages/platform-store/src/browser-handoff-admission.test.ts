@@ -144,7 +144,8 @@ beforeAll(async () => {
 afterEach(async () => {
 	await client`truncate platform.conversation_audit_events,
 		platform.outbox_items, platform.idempotency_records,
-		platform.conversation_messages, platform.conversation_stops,
+		platform.conversation_events, platform.conversation_messages,
+		platform.conversation_stops,
 		platform.conversation_executions,
 		platform.conversations, platform.agents`;
 });
