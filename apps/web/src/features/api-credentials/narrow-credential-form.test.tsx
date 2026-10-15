@@ -6,7 +6,7 @@ import {
 	screen,
 	waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { PersonalApiCredentialMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
 import { NarrowCredentialForm } from "./narrow-credential-form.js";
 
@@ -150,6 +150,11 @@ describe("NarrowCredentialForm", () => {
 	});
 
 	it("keeps refresh feedback while syncing a readback that arrives during a request", async () => {
+		// 该用例不经过 setup()，同样固定当前时间，避免输入的到期时间随真实日期过期（#2513）。
+		const now = vi
+			.spyOn(Date, "now")
+			.mockReturnValue(Date.parse("2026-10-10T00:00:00Z"));
+		onTestFinished(() => now.mockRestore());
 		const onRefresh = vi.fn();
 		const onComplete = vi.fn();
 		const onCancel = vi.fn();
