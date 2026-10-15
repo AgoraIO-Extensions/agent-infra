@@ -142,12 +142,17 @@ beforeAll(async () => {
 }, 120_000);
 
 afterEach(async () => {
-	await client`truncate platform.conversation_audit_events,
+	await client`truncate platform.conversation_generation_tombstones,
+		platform.connection_installation_commands,
+		platform.connection_installation_authorizations,
+		platform.session_sandbox_allocations,
+		platform.task_control_records, platform.task_authorization_records,
+		platform.file_accesses, platform.files, platform.conversation_events,
+		platform.conversation_audit_events, platform.audit_events,
 		platform.outbox_items, platform.idempotency_records,
-		platform.conversation_events, platform.conversation_messages,
-		platform.conversation_stops,
-		platform.conversation_executions,
-		platform.conversations, platform.agents`;
+		platform.conversation_stops, platform.conversation_messages,
+		platform.conversation_executions, platform.conversations,
+		platform.agents`;
 });
 
 afterAll(async () => {
