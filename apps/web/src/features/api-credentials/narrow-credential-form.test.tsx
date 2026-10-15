@@ -150,6 +150,8 @@ describe("NarrowCredentialForm", () => {
 	});
 
 	it("keeps refresh feedback while syncing a readback that arrives during a request", async () => {
+		// 该用例不经过 setup()，同样固定当前时间，避免输入的到期时间随真实日期过期（#2513）。
+		vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-10T00:00:00Z"));
 		const onRefresh = vi.fn();
 		const onComplete = vi.fn();
 		const onCancel = vi.fn();
