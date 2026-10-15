@@ -284,13 +284,17 @@ describe("RuntimeHost environment assembly", () => {
 		expect(assembly?.resolveContext).toBeTypeOf("function");
 	});
 	it.each(["pi", "acp"] as const)(
-		"does not inject protected Connection MCP into the unsupported %s driver",
+		"injects protected Connection MCP into the gated %s driver",
 		async (binding) => {
 			const values: NodeJS.ProcessEnv = await environment();
 			const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
 			if (!dataDirectory) throw new Error("Missing test data directory");
 			values.AGENT_INFRA_RUNTIME_DRIVER = binding;
-			values.AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE = "verified-v1";
+			values[
+				binding === "pi"
+					? "AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE"
+					: "AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE"
+			] = "verified-v1";
 			values.AGENT_INFRA_RUNTIME_AGENT_ID = "agent-messages";
 			values.AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY =
 				"synthetic-model-credential";
@@ -349,7 +353,7 @@ describe("RuntimeHost environment assembly", () => {
 			const runtime = await assembleRuntimeHost(values);
 			try {
 				expect(openedWith).toBeDefined();
-				expect(openedWith).not.toHaveProperty("standardConnectionClient");
+				expect(openedWith).toHaveProperty("standardConnectionClient");
 			} finally {
 				await runtime.close();
 			}
