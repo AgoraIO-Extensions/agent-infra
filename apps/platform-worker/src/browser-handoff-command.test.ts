@@ -17,6 +17,7 @@ const request = {
 	turnId: "turn-1",
 	sessionGeneration: 1,
 	deliveryFence: 2,
+	hostSessionRef: "host-1",
 	runtimeGrant: {},
 	handoff: {
 		kind: "take-over",
