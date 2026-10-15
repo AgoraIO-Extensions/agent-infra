@@ -29,7 +29,10 @@ import {
 import { createDeploymentPresentation } from "./deployment-presentation.js";
 import { createDeploymentSecretPreparation } from "./deployment-secrets.js";
 import { HttpProtocolError } from "./http/common.js";
-import type { ConversationModelSelectionReaderV1 } from "./http/conversation-routes.js";
+import type {
+	ConversationBrowserCommandPortV1,
+	ConversationModelSelectionReaderV1,
+} from "./http/conversation-routes.js";
 import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
@@ -140,6 +143,7 @@ export interface ProductionPlatformApiInputV1
 	/** Optional deployment-owned Worker current-confirmation route. */
 	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
 	readonly nativeCapabilityInvocation?: PlatformApiAssemblyInput["nativeCapabilityInvocation"];
+	readonly browserCommands?: ConversationBrowserCommandPortV1;
 	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 	/** Optional deployment-owned platform identity route for custom Agents. */
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
@@ -192,6 +196,7 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
 	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
 	readonly nativeCapabilityInvocation?: PlatformApiAssemblyInput["nativeCapabilityInvocation"];
+	readonly browserCommands?: ConversationBrowserCommandPortV1;
 	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 }): ProductionPlatformApiInputV1 {
 	if (
@@ -248,6 +253,9 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 			: {}),
 		...(input.nativeCapabilityInvocation !== undefined
 			? { nativeCapabilityInvocation: input.nativeCapabilityInvocation }
+			: {}),
+		...(input.browserCommands !== undefined
+			? { browserCommands: input.browserCommands }
 			: {}),
 		...(input.providerImport !== undefined
 			? { providerImport: input.providerImport }
@@ -515,6 +523,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 			: {}),
 		...(input.nativeCapabilityInvocation
 			? { nativeCapabilityInvocation: input.nativeCapabilityInvocation }
+			: {}),
+		...(input.browserCommands
+			? { browserCommands: input.browserCommands }
 			: {}),
 		...(input.providerImport ? { providerImport: input.providerImport } : {}),
 		...(input.customAgentGateway

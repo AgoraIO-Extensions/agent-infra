@@ -438,6 +438,99 @@ describe("Conversation HTTP routes", () => {
 		);
 	});
 
+	it("maps Browser commands through the server-owned bridge and preserves replay outcomes", async () => {
+		const browserCommands = {
+			invoke: vi.fn().mockResolvedValue({
+				outcome: "accepted" as const,
+				conversationId: "conversation-1",
+				executionId: "execution-1",
+				handoffId: "handoff-1",
+			}),
+		};
+		const input = dependencies({ browserCommands });
+		const app = testApp(input).app;
+		const request = {
+			schemaVersion: 1,
+			command: "take_over",
+			handoffId: "handoff-1",
+		};
+		const first = await app.request(
+			"/api/v1/conversations/conversation-1/browser/commands",
+			{
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify(request),
+			},
+		);
+		browserCommands.invoke.mockResolvedValueOnce({
+			outcome: "replayed" as const,
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			handoffId: "handoff-1",
+		});
+		const replay = await app.request(
+			"/api/v1/conversations/conversation-1/browser/commands",
+			{
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify(request),
+			},
+		);
+		expect(first.status).toBe(202);
+		expect(replay.status).toBe(202);
+		expect(await replay.json()).toMatchObject({ outcome: "replayed" });
+		expect(browserCommands.invoke).toHaveBeenCalledWith(
+			expect.objectContaining({
+				identity,
+				conversationId: "conversation-1",
+				idempotencyKey: "Command.Aa-01",
+				command: request,
+			}),
+		);
+	});
+
+	it("fails closed when the Browser bridge is not mounted", async () => {
+		const response = await testApp().app.request(
+			"/api/v1/conversations/conversation-1/browser/commands",
+			{
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					command: "revoke",
+					handoffId: "handoff-1",
+				}),
+			},
+		);
+		expect(response.status).toBe(503);
+		expect(await response.json()).toMatchObject({
+			code: "RUNTIME_UNAVAILABLE",
+		});
+	});
+
+	it("rejects a bridge result for a different Conversation", async () => {
+		const browserCommands = {
+			invoke: vi.fn().mockResolvedValue({
+				outcome: "accepted" as const,
+				conversationId: "foreign-conversation",
+				executionId: "execution-1",
+				handoffId: "handoff-1",
+			}),
+		};
+		const response = await testApp(
+			dependencies({ browserCommands }),
+		).app.request("/api/v1/conversations/conversation-1/browser/commands", {
+			method: "POST",
+			headers: commandHeaders,
+			body: JSON.stringify({
+				schemaVersion: 1,
+				command: "take_over",
+				handoffId: "handoff-1",
+			}),
+		});
+		expect(response.status).toBe(503);
+	});
+
 	it("projects the authorized Runtime directory and rejects stale custom choices before selection or submit", async () => {
 		const reader = {
 			read: vi

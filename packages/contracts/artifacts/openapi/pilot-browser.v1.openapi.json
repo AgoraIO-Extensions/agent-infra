@@ -2068,6 +2068,119 @@
         ],
         "type": "object"
       },
+      "BrowserCommandAcceptedProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "enum": [
+              "pause",
+              "take_over",
+              "return_to_agent",
+              "revoke",
+              "confirm_side_effect",
+              "reject_side_effect",
+              "cancel_side_effect"
+            ],
+            "type": "string"
+          },
+          "confirmationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "conversationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "executionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "handoffId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "accepted",
+              "replayed",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "outcome",
+          "command",
+          "conversationId",
+          "executionId"
+        ],
+        "type": "object"
+      },
+      "BrowserCommandRequestV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "command": {
+                "enum": [
+                  "pause",
+                  "take_over",
+                  "return_to_agent",
+                  "revoke"
+                ],
+                "type": "string"
+              },
+              "handoffId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "command",
+              "handoffId"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "command": {
+                "enum": [
+                  "confirm_side_effect",
+                  "reject_side_effect",
+                  "cancel_side_effect"
+                ],
+                "type": "string"
+              },
+              "confirmationId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "command",
+              "confirmationId"
+            ],
+            "type": "object"
+          }
+        ],
+        "type": "object"
+      },
       "BrowserSessionProjectionV1": {
         "additionalProperties": false,
         "properties": {
@@ -10599,6 +10712,125 @@
               }
             },
             "description": "Conversation timeline"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/conversations/{conversationId}/browser/commands": {
+      "post": {
+        "operationId": "commandBrowserHandoffOrSideEffect",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversationId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserCommandRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserCommandAcceptedProjectionV1"
+                }
+              }
+            },
+            "description": "Browser command accepted"
           },
           "400": {
             "content": {

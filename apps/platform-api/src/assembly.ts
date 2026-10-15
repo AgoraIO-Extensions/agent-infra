@@ -61,6 +61,7 @@ import { createApplicationCredentialProcessDeliveryV1 } from "./http/application
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import type {
 	ConversationAuthorization,
+	ConversationBrowserCommandPortV1,
 	ConversationModelSelectionReaderV1,
 } from "./http/conversation-routes.js";
 import type { DeploymentConfigurationRoutesDependencies } from "./http/deployment-configuration-routes.js";
@@ -179,6 +180,8 @@ export interface PlatformApiAssemblyInput {
 	readonly nativeMetadata?: Pick<NativeMetadataRoutesDependenciesV1, "reader">;
 	/** Optional deployment-owned native capability admission route. */
 	readonly nativeCapabilityInvocation?: PlatformAppDependencies["nativeCapabilityInvocation"];
+	/** Deployment-owned API → Worker Browser command bridge. */
+	readonly browserCommands?: ConversationBrowserCommandPortV1;
 	/** Optional deployment-owned Worker current-confirmation route. */
 	readonly nativeMetadataCurrent?: NativeMetadataCurrentRouteDependenciesV1;
 	/** Optional deployment-owned Provider registry and admission pipeline. */
@@ -878,6 +881,9 @@ export function assemblePlatformApi(
 			: {}),
 		...(input.nativeCapabilityInvocation
 			? { nativeCapabilityInvocation: input.nativeCapabilityInvocation }
+			: {}),
+		...(input.browserCommands
+			? { browserCommands: input.browserCommands }
 			: {}),
 		sessionAudit: {
 			identity: input.identity,
