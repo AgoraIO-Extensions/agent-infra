@@ -6,6 +6,10 @@ import {
 	RuntimeBrowserHandoffRequestV3Schema,
 	type RuntimeBrowserHandoffResponseV3,
 	RuntimeBrowserHandoffResponseV3Schema,
+	type RuntimeBrowserSideEffectConfirmationRequestV3,
+	RuntimeBrowserSideEffectConfirmationRequestV3Schema,
+	type RuntimeBrowserSideEffectConfirmationResponseV3,
+	RuntimeBrowserSideEffectConfirmationResponseV3Schema,
 	type RuntimeEventAckRequestV3,
 	RuntimeEventAckRequestV3Schema,
 	type RuntimeEventPersistRequestV3,
@@ -63,6 +67,16 @@ interface Options {
 		claims: RuntimeExecutionGrantClaimsV2,
 		signal: AbortSignal,
 	) => Promise<RuntimeBrowserHandoffResponseV3["record"]>;
+	executeBrowserSideEffect?: (
+		request: RuntimeBrowserSideEffectConfirmationRequestV3,
+		claims: RuntimeExecutionGrantClaimsV2,
+		signal: AbortSignal,
+	) => Promise<
+		Pick<
+			RuntimeBrowserSideEffectConfirmationResponseV3,
+			"phase" | "failureCode"
+		>
+	>;
 }
 
 function nativeRequired(): never {
@@ -607,7 +621,8 @@ export class RuntimeHostV3 {
 			| RuntimeAuthorizationRenewRequestV3
 			| RuntimeEventPersistRequestV3
 			| RuntimeEventAckRequestV3
-			| RuntimeBrowserHandoffRequestV3,
+			| RuntimeBrowserHandoffRequestV3
+			| RuntimeBrowserSideEffectConfirmationRequestV3,
 		command: RuntimeExecutionGrantClaimsV2["allowedCommands"][0],
 		verification: unknown,
 	) {
@@ -643,6 +658,39 @@ export class RuntimeHostV3 {
 			executionId: request.executionId,
 			outcome: "accepted",
 			record,
+		});
+	}
+
+	async browserSideEffect(
+		value: RuntimeBrowserSideEffectConfirmationRequestV3,
+		verification: unknown,
+		signal: AbortSignal,
+	): Promise<RuntimeBrowserSideEffectConfirmationResponseV3> {
+		this.assertOpen();
+		const request = parseRequest(
+			RuntimeBrowserSideEffectConfirmationRequestV3Schema,
+			value,
+		);
+		const claims = this.validate(request, "browser.side_effect", verification);
+		if (
+			claims.purpose !== "control" ||
+			claims.reason !== "browser_side_effect" ||
+			!this.options.executeBrowserSideEffect
+		)
+			runtimeAuthorizationDenied();
+		const result = await abortable(
+			this.options.executeBrowserSideEffect(request, claims, signal),
+			signal,
+		);
+		return RuntimeBrowserSideEffectConfirmationResponseV3Schema.parse({
+			schemaVersion: 3,
+			hostSessionRef: request.hostSessionRef,
+			executionId: request.executionId,
+			actionId: request.binding.actionId,
+			operationRef: request.binding.operationRef,
+			attemptRef: request.binding.attemptRef,
+			outcome: "accepted",
+			...result,
 		});
 	}
 

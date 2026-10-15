@@ -85,6 +85,7 @@ type Command =
 	| "session.status"
 	| "generation.cancel"
 	| "browser.handoff"
+	| "browser.side_effect"
 	| "execution.renew"
 	| "events.persist"
 	| "events.ack";
@@ -354,6 +355,7 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 					"events.ack",
 					...(state.generationIsolation ? ["generation.cancel"] : []),
 					"browser.handoff",
+					"browser.side_effect",
 				].includes(command)
 			)
 				denied("TASK_AUTHORIZATION_CONTROL_ONLY");
@@ -388,7 +390,7 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			denied("TASK_AUTHORIZATION_BINDING_INVALID");
 		const isolation = isolationAuthority(context, state);
 		if (isolation) return { authority: isolation, record };
-		if (command === "browser.handoff")
+		if (command === "browser.handoff" || command === "browser.side_effect")
 			return {
 				authority: await control(context, "recovery", signal),
 				record,

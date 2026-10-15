@@ -3836,6 +3836,74 @@ describe("Codex Runtime Driver", () => {
 		).rejects.toThrow();
 	});
 
+	it("routes side-effect confirmation through the request-local Browser journal", async () => {
+		const directory = await runtimeDirectory();
+		const driver = await openCodexRuntimeDriverForTest(
+			driverOptions(join(directory, "driver.json")),
+			async () => new TestCodexBridge(),
+		);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const executeSideEffect = vi.fn().mockResolvedValue({
+			actionId: "action-1",
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			phase: "completed" as const,
+		});
+		const browser = {
+			capabilityVersion: 3,
+			binding: {
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: command.sessionGeneration,
+				resourceFence: 7,
+				workloadRevision: 4,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			executeSideEffect,
+		};
+		const binding = {
+			actionId: "action-1",
+			confirmationId: "confirmation-1",
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			executionId: command.executionId,
+			sessionGeneration: command.sessionGeneration,
+			capabilityVersion: 3,
+			pageRevision: 2,
+			resourceFence: 7,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		};
+		await expect(
+			driver.executeBrowserSideEffect(
+				accepted.nativeSessionRef,
+				command.executionId,
+				{ command: "confirm", binding },
+				{ browser },
+			),
+		).resolves.toMatchObject({ phase: "completed", actionId: "action-1" });
+		expect(executeSideEffect).toHaveBeenCalledWith(
+			expect.objectContaining({ command: "confirm", binding }),
+			expect.any(AbortSignal),
+		);
+		await expect(
+			driver.executeBrowserSideEffect(
+				accepted.nativeSessionRef,
+				command.executionId,
+				{
+					command: "confirm",
+					binding: { ...binding, executionId: "foreign-execution" },
+				},
+				{ browser },
+			),
+		).rejects.toThrow();
+		expect(executeSideEffect).toHaveBeenCalledOnce();
+	});
+
 	it("does not execute a Browser action twice when an actionId is replayed", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();

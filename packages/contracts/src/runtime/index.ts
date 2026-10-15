@@ -1,10 +1,15 @@
 export * from "./browser-capability.ts";
 export * from "./browser-handoff.ts";
+export * from "./browser-side-effect.ts";
 
 import {
 	RuntimeBrowserHandoffRequestV3Schema,
 	RuntimeBrowserHandoffResponseV3Schema,
 } from "./browser-handoff.ts";
+import {
+	RuntimeBrowserSideEffectConfirmationRequestV3Schema,
+	RuntimeBrowserSideEffectConfirmationResponseV3Schema,
+} from "./browser-side-effect.ts";
 
 export * from "./configuration.ts";
 export * from "./configuration-v4.ts";
@@ -244,6 +249,10 @@ import { RuntimeNativeCapabilityRequestV3Schema } from "./native-capability.ts";
 export const RuntimeHostV3SchemaDefinitions = {
 	RuntimeBrowserHandoffRequestV3: RuntimeBrowserHandoffRequestV3Schema,
 	RuntimeBrowserHandoffResponseV3: RuntimeBrowserHandoffResponseV3Schema,
+	RuntimeBrowserSideEffectConfirmationRequestV3:
+		RuntimeBrowserSideEffectConfirmationRequestV3Schema,
+	RuntimeBrowserSideEffectConfirmationResponseV3:
+		RuntimeBrowserSideEffectConfirmationResponseV3Schema,
 	RuntimeSubmitTurnRequestV3: RuntimeSubmitTurnRequestV3Schema,
 	RuntimeNativeCapabilityRequestV3: RuntimeNativeCapabilityRequestV3Schema,
 	RuntimeSupplementRequestV3: RuntimeSupplementRequestV3Schema,

@@ -5,6 +5,8 @@ import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/
 import type {
 	RuntimeBrowserHandoffRequestV3,
 	RuntimeBrowserHandoffResponseV3,
+	RuntimeBrowserSideEffectConfirmationRequestV3,
+	RuntimeBrowserSideEffectConfirmationResponseV3,
 	RuntimeBusinessCommandV2,
 	RuntimeBusinessRequestV4,
 	RuntimeControlCommandV2,
@@ -186,6 +188,15 @@ export type ConversationRuntimeBrowserHandoffRequestV1 =
 	ConversationRuntimeEventRequestV1 & {
 		readonly handoff: RuntimeBrowserHandoffRequestV3["handoff"];
 	};
+
+export type ConversationRuntimeBrowserSideEffectRequestV1 =
+	ConversationRuntimeEventRequestV1 &
+		Pick<RuntimeBrowserSideEffectConfirmationRequestV3, "command" | "binding">;
+
+export type ConversationRuntimeBrowserSideEffectDispatchV1 = Readonly<{
+	readonly request: RuntimeBrowserSideEffectConfirmationRequestV3;
+	readonly response: RuntimeBrowserSideEffectConfirmationResponseV3;
+}>;
 
 export type ConversationRuntimeBrowserHandoffDispatchV1 = Readonly<{
 	readonly request: RuntimeBrowserHandoffRequestV3;
@@ -1593,6 +1604,50 @@ export function createConversationRuntimeV2(
 			response: await client.browserHandoff(wire, active),
 		};
 	}
+	async function browserSideEffect(
+		request: ConversationRuntimeBrowserSideEffectRequestV1,
+		signal?: AbortSignal,
+	): Promise<ConversationRuntimeBrowserSideEffectDispatchV1> {
+		const active = combined(signal);
+		const context = contextFor(request);
+		if (request.deliveryFence !== context.claim.executionDeliveryFence)
+			denied("RUNTIME_FENCE_STALE");
+		const prepared = await prepare(request, "browser.side_effect", active);
+		const { state, authority, client, base } = prepared;
+		if (authority.purpose !== "control") {
+			await latch(prepared, active);
+			denied("TASK_AUTHORIZATION_CONTROL_ONLY");
+		}
+		if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+		const browserAuthority = {
+			...authority,
+			reason: "browser_side_effect" as const,
+		};
+		if (!client.browserSideEffect) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+		const wire = {
+			...base,
+			hostSessionRef: state.hostSessionRef,
+			command: request.command,
+			binding: request.binding,
+			grant: signRequest(
+				{
+					...base,
+					hostSessionRef: state.hostSessionRef,
+					command: request.command,
+					binding: request.binding,
+				},
+				browserAuthority,
+				"browser.side_effect",
+			),
+		} as RuntimeBrowserSideEffectConfirmationRequestV3;
+		return {
+			request: wire,
+			response: (await client.browserSideEffect(
+				wire,
+				active,
+			)) as RuntimeBrowserSideEffectConfirmationResponseV3,
+		};
+	}
 	const connectionInstallation = {
 		activeExecutionIds() {
 			return [...activeInstallations.keys()];
@@ -1914,6 +1969,7 @@ export function createConversationRuntimeV2(
 		authorization,
 		runtimeHost,
 		browserHandoff,
+		browserSideEffect,
 		async close() {
 			controller.abort();
 			await Promise.allSettled([...keyDependencies]);

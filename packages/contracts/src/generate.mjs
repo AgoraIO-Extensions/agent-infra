@@ -642,6 +642,12 @@ function buildArtifacts() {
 			"RuntimeBrowserHandoffRequestV3",
 			"RuntimeBrowserHandoffResponseV3",
 		],
+		[
+			"browser/side-effect",
+			"executeBrowserSideEffectV3",
+			"RuntimeBrowserSideEffectConfirmationRequestV3",
+			"RuntimeBrowserSideEffectConfirmationResponseV3",
+		],
 	];
 	const runtimeOpenapiV3 = createDocument({
 		openapi: "3.1.0",

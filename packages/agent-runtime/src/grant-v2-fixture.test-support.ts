@@ -47,7 +47,8 @@ export function signV3Fixture<
 			| "authorization_revoked"
 			| "recovery"
 			| "generation_isolation"
-			| "browser_handoff";
+			| "browser_handoff"
+			| "browser_side_effect";
 		claims?: Record<string, unknown>;
 	} = {},
 ) {

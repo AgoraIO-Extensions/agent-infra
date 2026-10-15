@@ -699,7 +699,9 @@ export type TaskSystemControlReasonV1 =
 	| "stop"
 	| "authorization_revoked"
 	| "recovery"
-	| "generation_isolation";
+	| "generation_isolation"
+	| "browser_handoff"
+	| "browser_side_effect";
 
 export interface TaskSystemControlBindingV1 {
 	readonly executionId: string;

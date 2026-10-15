@@ -429,6 +429,8 @@ export type ConversationRuntimeStatusResponseV2 = {
 );
 
 export interface ConversationRuntimeHostPortV1 {
+	/** Runtime V3 Browser side-effect confirmation transport. */
+	browserSideEffect?(request: unknown, signal?: AbortSignal): Promise<unknown>;
 	cancelGeneration?(
 		request: ConversationRuntimeEventRequestV1,
 		signal?: AbortSignal,
