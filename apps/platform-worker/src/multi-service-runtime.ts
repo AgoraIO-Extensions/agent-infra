@@ -359,9 +359,9 @@ function statefulSet(
 		[ownerLabel]: workloadResourceNameV1(value.agentId),
 		"agent-infra.agora.io/service": service,
 	};
-	const claimName = persistentVolumeClaim?.metadata?.name
-		? serviceResourceName(value.agentId, persistentVolumeClaim.metadata.name)
-		: undefined;
+	// 传入的是 persistentVolumeClaim() 构造好的对象，名字已经带 Agent 前缀并按 63 个字符截断，
+	// 不能再加一次前缀，否则 Pod 会引用一个不存在的 PVC 而永远 Pending。
+	const claimName = persistentVolumeClaim?.metadata?.name;
 	const volumeMount = claimName
 		? { name: "data", mountPath: "/data" }
 		: undefined;
