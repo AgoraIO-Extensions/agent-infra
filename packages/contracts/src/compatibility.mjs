@@ -1077,6 +1077,60 @@ function isRuntimeNativeCapabilityV3OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2583 extends the already published V3 native capability request with the
+// reviewed command kind and source-version binding. Existing Skill clients
+// remain represented by the normalized previous schema.
+function isRuntimeNativeCapabilityV3CommandExtension(previous, current) {
+	const requestName = "RuntimeNativeCapabilityRequestV3";
+	const previousRequest = previous.components?.schemas?.[requestName];
+	const currentRequest = current.components?.schemas?.[requestName];
+	if (!previousRequest || !currentRequest) return false;
+	const normalized = structuredClone(current);
+	const request = normalized.components.schemas[requestName];
+	if (
+		!request.properties?.capabilityKind ||
+		!request.properties?.capabilitySourceVersion ||
+		!Array.isArray(request.required) ||
+		!request.required.includes("capabilitySourceVersion")
+	)
+		return false;
+	request.properties.capabilityKind = structuredClone(
+		previousRequest.properties?.capabilityKind,
+	);
+	delete request.properties.capabilitySourceVersion;
+	request.required = request.required.filter(
+		(name) => name !== "capabilitySourceVersion",
+	);
+	return sameValue(previous, normalized);
+}
+
+function normalizeRuntimeNativeCapabilityV3CommandJsonSchemaAddition(
+	previous,
+	current,
+) {
+	const requestName = "RuntimeNativeCapabilityRequestV3";
+	const previousRequest = previous.$defs?.[requestName];
+	const currentRequest = current.$defs?.[requestName];
+	if (!previousRequest || !currentRequest) return current;
+	const normalized = structuredClone(current);
+	const request = normalized.$defs[requestName];
+	if (
+		!request.properties?.capabilityKind ||
+		!request.properties?.capabilitySourceVersion ||
+		!Array.isArray(request.required) ||
+		!request.required.includes("capabilitySourceVersion")
+	)
+		return current;
+	request.properties.capabilityKind = structuredClone(
+		previousRequest.properties?.capabilityKind,
+	);
+	delete request.properties.capabilitySourceVersion;
+	request.required = request.required.filter(
+		(name) => name !== "capabilitySourceVersion",
+	);
+	return normalized;
+}
+
 function isRuntimeStatusRecoveryOpenApiAddition(previous, current) {
 	const path = "/internal/runtime/v2/status";
 	const requestName = "RuntimeStatusRequestV2";
@@ -4168,6 +4222,8 @@ function findBreakingChanges(previousValue, currentValue) {
 	}
 	const changes = [];
 	if (previous.openapi !== undefined) {
+		if (isRuntimeNativeCapabilityV3CommandExtension(previous, current))
+			return [];
 		previous = normalizeRuntimeConnectionAssociationOpenApiAddition(previous);
 		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
 		previous = stripMultiServiceSourceOpenApiBranches(previous);
@@ -4274,9 +4330,12 @@ function findBreakingChanges(previousValue, currentValue) {
 		return changes.sort();
 	}
 	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
-	const normalized = normalizeRuntimeSkillHostReadJsonSchemaAddition(
+	const normalized = normalizeRuntimeNativeCapabilityV3CommandJsonSchemaAddition(
 		previous,
-		normalizeSkillPackageObjectVersions(previous, current, changes),
+		normalizeRuntimeSkillHostReadJsonSchemaAddition(
+			previous,
+			normalizeSkillPackageObjectVersions(previous, current, changes),
+		),
 	);
 	const currentSchemas =
 		normalized.$defs ?? normalized.components?.schemas ?? {};
