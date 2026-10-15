@@ -669,6 +669,8 @@ export class PostgresConversationDispatchStoreV1
 			const prepared = await transactionResult(
 				this.#client,
 				async (transaction) => {
+					// 回调若被重试，上一次尝试留下的标志不能带到这一次。
+					releasedForStopChange = false;
 					await lockWaitingTaskAuthority(transaction, input.claim.itemId);
 					// Governance precedes Agent; management uses this same Agent row.
 					// Never hold another Conversation's execution lock while waiting for it.
