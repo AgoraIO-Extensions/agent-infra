@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	type BrowserHandoffCommandInvocationV1,
+	browserHandoffFromRuntimeSnapshotV1,
 	createBrowserHandoffCommandExecutorV1,
 } from "./browser-handoff-command.js";
 import type { ConversationRuntimeBrowserHandoffRequestV1 } from "./conversation-runtime.js";
@@ -52,6 +53,47 @@ const invocation: BrowserHandoffCommandInvocationV1 = {
 };
 
 describe("Browser handoff command executor", () => {
+	it("projects a persisted runtime snapshot into the request-local V3 handoff", () => {
+		expect(
+			browserHandoffFromRuntimeSnapshotV1({
+				command: {
+					schemaVersion: 1,
+					command: "take_over",
+					handoffId: "handoff-1",
+				},
+				operatorId: "user-1",
+				snapshot: request.handoff.runtime,
+			}),
+		).toMatchObject({
+			kind: "take-over",
+			handoffId: "handoff-1",
+			subjectId: "user-1",
+			runtime: request.handoff.runtime,
+		});
+		expect(
+			browserHandoffFromRuntimeSnapshotV1({
+				command: {
+					schemaVersion: 1,
+					command: "take_over",
+					handoffId: "handoff-1",
+				},
+				operatorId: "user-1",
+				snapshot: { ...request.handoff.runtime, resourceFence: 0 },
+			}),
+		).toBeNull();
+		expect(
+			browserHandoffFromRuntimeSnapshotV1({
+				command: {
+					schemaVersion: 1,
+					command: "take_over",
+					handoffId: "handoff-1",
+				},
+				operatorId: "user-1",
+				snapshot: { ...request.handoff.runtime, authorized: false },
+			}),
+		).toBeNull();
+	});
+
 	it("resolves a current Runtime request and reuses the Worker event authority", async () => {
 		const worker = {
 			browserHandoff: vi

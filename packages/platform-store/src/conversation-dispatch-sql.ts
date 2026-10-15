@@ -460,6 +460,7 @@ function claimMatchesState(
 	)
 		return false;
 	const outboxFence = safeCounter(state.outbox.delivery_fence, 1);
+	const browserHandoff = claim.operation === "conversation.browser.handoff.v1";
 	const generation = safeCounter(state.conversation.session_generation, 1);
 	const executionGeneration = safeCounter(
 		state.execution.session_generation,
@@ -497,9 +498,10 @@ function claimMatchesState(
 		generation === claim.sessionGeneration &&
 		executionGeneration === claim.sessionGeneration &&
 		executionFence === claim.executionDeliveryFence &&
-		modelConfigurationRevision === claim.modelConfigurationRevision &&
-		state.execution.model_option_id === claim.modelOptionId &&
-		state.execution.reasoning_level === claim.reasoningLevel &&
+		(browserHandoff ||
+			(modelConfigurationRevision === claim.modelConfigurationRevision &&
+				state.execution.model_option_id === claim.modelOptionId &&
+				state.execution.reasoning_level === claim.reasoningLevel)) &&
 		(claim.nativeCapability === undefined ||
 			(claim.nativeCapability.agentId === claim.agentId &&
 				claim.nativeCapability.actorId === claim.actorId &&

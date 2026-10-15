@@ -1,5 +1,12 @@
 import type { BrowserCommandRequestV1 } from "@agent-infra/contracts/pilot";
-import type { ConversationDispatchAuthorityV1 } from "@agent-infra/platform-core";
+import {
+	type RuntimeBrowserHandoffRuntimeSnapshotV1,
+	RuntimeBrowserHandoffRuntimeSnapshotV1Schema,
+} from "@agent-infra/contracts/runtime";
+import type {
+	ConversationDispatchAuthorityV1,
+	ConversationDispatchClaimV1,
+} from "@agent-infra/platform-core";
 import type { ConversationRuntimeBrowserHandoffRequestV1 } from "./conversation-runtime.js";
 import type { PlatformConversationBrowserHandoffInputV1 } from "./conversation-worker.js";
 
@@ -20,7 +27,14 @@ export type BrowserHandoffCommandInvocationV1 = Readonly<{
 	readonly deliveryFence?: number;
 	readonly hostSessionRef?: string | null;
 	readonly runtimeGrant?: ConversationDispatchAuthorityV1["runtimeGrant"];
+	readonly claim?: ConversationDispatchClaimV1;
 	readonly signal: AbortSignal;
+}>;
+
+export type BrowserHandoffOperationCommandV1 = Readonly<{
+	readonly schemaVersion: 1;
+	readonly command: "take_over" | "return_to_agent" | "revoke";
+	readonly handoffId: string;
 }>;
 
 export interface BrowserHandoffCommandResolverV1 {
@@ -37,6 +51,35 @@ export interface BrowserHandoffCommandWorkerV1 {
 	}>;
 }
 
+export function browserHandoffFromRuntimeSnapshotV1(input: {
+	readonly command: BrowserHandoffOperationCommandV1;
+	readonly operatorId: string;
+	readonly snapshot: unknown;
+}): ConversationRuntimeBrowserHandoffRequestV1["handoff"] | null {
+	const parsed = RuntimeBrowserHandoffRuntimeSnapshotV1Schema.safeParse(
+		input.snapshot,
+	);
+	if (!parsed.success) return null;
+	const runtime: RuntimeBrowserHandoffRuntimeSnapshotV1 = parsed.data;
+	if (!runtime.browserAlive || !runtime.authorized) return null;
+	if (input.command.command === "take_over")
+		return {
+			kind: "take-over",
+			handoffId: input.command.handoffId,
+			subjectId: input.operatorId,
+			operatorId: input.operatorId,
+			runtime,
+		};
+	if (input.command.command === "return_to_agent")
+		return {
+			kind: "return-to-agent",
+			handoffId: input.command.handoffId,
+			operatorId: input.operatorId,
+			runtime,
+		};
+	return { kind: "revoke", runtime };
+}
+
 function bindingMatchesInvocation(
 	request: ConversationRuntimeBrowserHandoffRequestV1,
 	invocation: BrowserHandoffCommandInvocationV1,
@@ -44,6 +87,8 @@ function bindingMatchesInvocation(
 	const runtime = request.handoff?.runtime;
 	if (!runtime) return false;
 	return (
+		runtime.browserAlive &&
+		runtime.authorized &&
 		request.requestId === invocation.requestId &&
 		request.traceId === invocation.traceId &&
 		request.conversationId === invocation.conversationId &&

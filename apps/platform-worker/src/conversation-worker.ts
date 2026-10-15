@@ -24,6 +24,8 @@ import {
 } from "@agent-infra/platform-store";
 import {
 	type BrowserHandoffCommandInvocationV1,
+	type BrowserHandoffOperationCommandV1,
+	browserHandoffFromRuntimeSnapshotV1,
 	createBrowserHandoffCommandExecutorV1,
 } from "./browser-handoff-command.js";
 import { createBrowserHandoffEventAdapterV1 } from "./browser-handoff-events.js";
@@ -265,7 +267,6 @@ export function createPlatformConversationWorkerV2(
 			resolver: {
 				resolve: async (invocation) => {
 					if (
-						!options.resolveBrowserHandoff ||
 						!invocation.agentId ||
 						!invocation.channelId ||
 						!invocation.executionId ||
@@ -276,7 +277,23 @@ export function createPlatformConversationWorkerV2(
 						invocation.runtimeGrant === undefined
 					)
 						return null;
-					const handoff = await options.resolveBrowserHandoff(invocation);
+					let handoff:
+						| ConversationRuntimeBrowserHandoffRequestV1["handoff"]
+						| null;
+					if (options.resolveBrowserHandoff) {
+						handoff = await options.resolveBrowserHandoff(invocation);
+					} else if (invocation.claim && store.readBrowserHandoffBinding) {
+						const snapshot = await store.readBrowserHandoffBinding({
+							claim: invocation.claim,
+						});
+						handoff = browserHandoffFromRuntimeSnapshotV1({
+							command: invocation.command as BrowserHandoffOperationCommandV1,
+							operatorId: invocation.identity.userId,
+							snapshot,
+						});
+					} else {
+						return null;
+					}
 					if (!handoff) return null;
 					return {
 						schemaVersion: 1,
@@ -334,6 +351,7 @@ export function createPlatformConversationWorkerV2(
 					deliveryFence: claim.executionDeliveryFence,
 					hostSessionRef: claim.hostSessionRef,
 					runtimeGrant: authority.runtimeGrant,
+					claim,
 				});
 				return result.outcome === "accepted" || result.outcome === "replayed"
 					? { outcome: result.outcome }

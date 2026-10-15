@@ -189,6 +189,11 @@ export interface ConversationDispatchStateTransitionV1 {
 }
 
 export interface ConversationDispatchStorePortV1 {
+	/** Read-only Browser binding projection from the current Conversation event
+	 * stream while the existing outbox lease is held. */
+	readBrowserHandoffBinding?(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<unknown | null>;
 	beginGenerationIsolation?(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly failureCode: "RUNTIME_SESSION_RECOVERY_FAILED";

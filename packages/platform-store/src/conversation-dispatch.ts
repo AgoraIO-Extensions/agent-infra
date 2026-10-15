@@ -8,6 +8,7 @@ import {
 	type ConversationDispatchStorePortV1,
 	decideConversationDispatchCapacityV1,
 	decideConversationDispatchRetryTransitionV1,
+	parseConversationPersistedEventPayloadV1,
 	parseTaskAuthorizationBoundaryV1,
 	planConversationGenerationConfirmationV1,
 	planConversationGenerationIsolationV1,
@@ -277,6 +278,64 @@ export class PostgresConversationDispatchStoreV1
 									| "authorization_revoked",
 							}
 						: {}),
+				};
+			}),
+		);
+	}
+
+	/**
+	 * Resolve only the latest authenticated Browser binding already persisted in
+	 * Conversation events. This is a read projection under the current outbox
+	 * lease; it does not create another Browser or Runtime authority.
+	 */
+	async readBrowserHandoffBinding(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<unknown | null> {
+		if (input.claim.operation !== "conversation.browser.handoff.v1")
+			return null;
+		return databaseOperation(() =>
+			this.#client.begin(async (transaction) => {
+				const state = await ownedState(transaction, input.claim, true);
+				if (!state) return null;
+				const [row] = await transaction<{ event_payload: unknown }[]>`
+					select event_payload
+					from platform.conversation_events
+					where conversation_id = ${input.claim.conversationId}
+						and execution_id = ${input.claim.executionId}
+						and event_type = 'browser.handoff'
+					order by conversation_cursor desc, event_id desc
+					limit 1
+				`;
+				if (!row) return null;
+				let event: ReturnType<typeof parseConversationPersistedEventPayloadV1>;
+				try {
+					event = parseConversationPersistedEventPayloadV1(row.event_payload);
+				} catch {
+					return null;
+				}
+				if (
+					event.type !== "browser.handoff" ||
+					event.binding.subjectId !== input.claim.actorId ||
+					event.binding.agentId !== input.claim.agentId ||
+					event.binding.conversationId !== input.claim.conversationId ||
+					event.binding.executionId !== input.claim.executionId ||
+					event.binding.sessionGeneration !== input.claim.sessionGeneration ||
+					event.binding.resourceFence !== input.claim.executionDeliveryFence
+				)
+					return null;
+				return {
+					browserAlive: event.status !== "crashed",
+					authorized: !["revoked", "expired", "crashed"].includes(event.status),
+					subjectId: event.binding.subjectId,
+					agentId: event.binding.agentId,
+					conversationId: event.binding.conversationId,
+					executionId: event.binding.executionId,
+					sessionGeneration: event.binding.sessionGeneration,
+					resourceFence: event.binding.resourceFence,
+					workloadRevision: event.binding.workloadRevision,
+					imageDigest: event.binding.imageDigest,
+					capabilityVersion: event.binding.capabilityVersion,
+					pageRevision: event.binding.pageRevision,
 				};
 			}),
 		);
