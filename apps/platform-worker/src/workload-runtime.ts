@@ -70,6 +70,7 @@ import {
 	WorkloadProbeIncompleteErrorV1,
 	workloadProbeIncompleteReasonV1,
 } from "./workload-probe-failure.js";
+import { WorkloadStepErrorV1 } from "./workload-step-failure.js";
 
 export type WorkloadBrowserBindingResolverV1 = (input: {
 	readonly agentId: string;
@@ -1085,7 +1086,10 @@ export function createWorkloadRuntimeV1(
 		async capabilities(state) {
 			const capabilities = observedCapabilities.get(state);
 			if (!capabilities)
-				throw new Error("Runtime capabilities are unavailable");
+				throw new WorkloadStepErrorV1(
+					"capabilities_unavailable",
+					"Runtime capabilities are unavailable",
+				);
 			observedCapabilities.delete(state);
 			return capabilities;
 		},

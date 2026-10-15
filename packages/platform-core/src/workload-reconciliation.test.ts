@@ -6,6 +6,7 @@ import {
 	WorkloadPreflightRejectedErrorV1,
 	type WorkloadReconciliationStateV1,
 	type WorkloadRuntimePortV1,
+	type WorkloadStepFailureV1,
 } from "./workload-reconciliation.js";
 
 function fixture(
@@ -13,6 +14,7 @@ function fixture(
 		kind: "standard",
 		imageDigest: "image-a",
 	} as AgentConfigurationRecordV2["source"],
+	onStepFailure?: (failure: WorkloadStepFailureV1) => void,
 ) {
 	let configuration = {
 		schemaVersion: 2,
@@ -63,6 +65,7 @@ function fixture(
 		store,
 		runtime,
 		maximumAttempts: 3,
+		onStepFailure,
 	});
 	return {
 		runtime,
@@ -77,6 +80,7 @@ function fixture(
 				store,
 				runtime,
 				maximumAttempts: 3,
+				onStepFailure,
 			});
 		},
 		upgrade(
@@ -381,6 +385,97 @@ describe("durable Workload reconciliation", () => {
 		await f.tick(2);
 		expect(f.state?.phase).toBe("cleaning");
 		expect(f.runtime.preflight).toHaveBeenCalledOnce();
+	});
+	describe("swallowed step exceptions are observable (#2532)", () => {
+		it("reports every swallowed exception with its phase and consecutive attempt", async () => {
+			const failures: WorkloadStepFailureV1[] = [];
+			const f = fixture(undefined, (failure) => failures.push(failure));
+			const outage = new Error("temporary registry outage");
+			vi.mocked(f.runtime.preflight).mockRejectedValue(outage);
+			await f.tick(3);
+			expect(failures).toEqual([
+				{
+					agentId: "agent-a",
+					phase: "preflight",
+					attempts: 1,
+					terminal: false,
+					error: outage,
+				},
+				{
+					agentId: "agent-a",
+					phase: "preflight",
+					attempts: 2,
+					terminal: false,
+					error: outage,
+				},
+			]);
+		});
+		it("marks the exception that exhausts the budget as terminal", async () => {
+			const failures: WorkloadStepFailureV1[] = [];
+			const f = fixture(undefined, (failure) => failures.push(failure));
+			vi.mocked(f.runtime.preflight).mockRejectedValue(new Error("outage"));
+			await f.tick(4);
+			expect(
+				failures.map(({ attempts, terminal }) => [attempts, terminal]),
+			).toEqual([
+				[1, false],
+				[2, false],
+				[3, true],
+			]);
+			expect(f.state?.phase).toBe("cleaning");
+		});
+		it("marks a permanent preflight rejection as terminal at once", async () => {
+			const failures: WorkloadStepFailureV1[] = [];
+			const f = fixture(undefined, (failure) => failures.push(failure));
+			vi.mocked(f.runtime.preflight).mockRejectedValue(
+				new WorkloadPreflightRejectedErrorV1(),
+			);
+			await f.tick(2);
+			expect(failures).toMatchObject([
+				{ phase: "preflight", attempts: 1, terminal: true },
+			]);
+		});
+		it("reports durable cleanup retries without ending the run", async () => {
+			const failures: WorkloadStepFailureV1[] = [];
+			const f = fixture(undefined, (failure) => failures.push(failure));
+			vi.mocked(f.runtime.preflight).mockRejectedValue(
+				new WorkloadPreflightRejectedErrorV1(),
+			);
+			await f.tick(2);
+			failures.length = 0;
+			vi.mocked(f.runtime.closeRoute).mockRejectedValue(new Error("forbidden"));
+			await f.tick(5);
+			expect(f.state).toMatchObject({ phase: "cleaning", attempts: 3 });
+			expect(
+				failures.map(({ phase, attempts, terminal }) => [
+					phase,
+					attempts,
+					terminal,
+				]),
+			).toEqual([
+				["cleaning", 1, false],
+				["cleaning", 2, false],
+				["cleaning", 3, false],
+				["cleaning", 3, false],
+				["cleaning", 3, false],
+			]);
+		});
+		it("does not report steps that complete or keep waiting", async () => {
+			const failures: WorkloadStepFailureV1[] = [];
+			const f = fixture(undefined, (failure) => failures.push(failure));
+			vi.mocked(f.runtime.observe).mockResolvedValueOnce("pending");
+			await f.tick(8);
+			expect(f.state?.phase).toBe("ready");
+			expect(failures).toEqual([]);
+		});
+		it("never lets a throwing observer change the reconciliation result", async () => {
+			const f = fixture(undefined, () => {
+				throw new Error("broken diagnostics sink");
+			});
+			vi.mocked(f.runtime.preflight).mockRejectedValueOnce(new Error("outage"));
+			await f.tick(2);
+			expect(f.state).toMatchObject({ phase: "preflight", attempts: 1 });
+		});
 	});
 	it("keeps the management fence independent from local Workload revisions", async () => {
 		const f = fixture();

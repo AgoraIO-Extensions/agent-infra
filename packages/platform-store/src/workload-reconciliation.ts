@@ -393,6 +393,34 @@ function transactionDatabase(sql: postgres.TransactionSql) {
 	);
 }
 
+/** 清理与路由关闭的重试间隔上限。 */
+const durableRetryDelayCapMsV1 = 60_000;
+
+/**
+ * 下一次调谐的重试间隔。清理（cleaning）与路由关闭（closing）在重试预算耗尽后仍会
+ * 持久重试，失败原因（如 Kubernetes 权限不足）不会自己消失，所以不能一直按固定间隔去打
+ * apiserver：连续失败 5 次之后按 2、4、8、16、32 秒退避，上限 60 秒（与 #2456 一致）。
+ * 其余阶段的 attempts 表示等待就绪或有限的重试预算，保持固定间隔，避免拖慢就绪检测。
+ */
+export function workloadRetryDelayMsV1(
+	next: Pick<WorkloadReconciliationStateV1, "phase" | "attempts">,
+	baseDelayMs: number,
+): number {
+	if (
+		(next.phase !== "cleaning" && next.phase !== "closing") ||
+		next.attempts <= 5 ||
+		baseDelayMs <= 0
+	)
+		return baseDelayMs;
+	return Math.max(
+		baseDelayMs,
+		Math.min(
+			durableRetryDelayCapMsV1,
+			baseDelayMs * 2 ** Math.min(next.attempts - 5, 16),
+		),
+	);
+}
+
 export function openPostgresWorkloadReconciliationStoreV1(options: {
 	readonly databaseUrl: string;
 	readonly runtimeModelVersion?: 4;
@@ -826,7 +854,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						next.phase,
 					)
 						? monitorDelayMs
-						: retryDelayMs;
+						: workloadRetryDelayMsV1(next, retryDelayMs);
 					await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${agentId}, ${next.revision}, ${sql.json(next as unknown as postgres.JSONValue)}, clock_timestamp() + ${delay} * interval '1 millisecond') on conflict (agent_id) do update set revision = excluded.revision, state = excluded.state, next_attempt_at = excluded.next_attempt_at, updated_at = clock_timestamp()`;
 					// Idle Session Sandboxes follow a ready verified deployment in
 					// this same transaction; periodic monitor write-backs retry the

@@ -400,6 +400,44 @@ describe("PostgreSQL Workload steps", () => {
 		},
 	);
 
+	it("backs durable cleanup retries off but keeps waiting for readiness at a fixed interval (#2532)", async () => {
+		const store = openPostgresWorkloadReconciliationStoreV1({
+			...database,
+			retryDelayMs: 1_000,
+			monitorDelayMs: 30_000,
+		});
+		const scheduledIn = async (
+			phase: WorkloadReconciliationStateV1["phase"],
+			attempts: number,
+		) => {
+			await sql`update platform.workload_reconciliations set next_attempt_at = clock_timestamp() where agent_id = 'agent-a'`;
+			expect(
+				await store.runNext("worker-backoff", async (input) => ({
+					...preflightState(input, attempts),
+					phase,
+					...(phase === "cleaning"
+						? { failureCode: "reconciliation_failed" as const }
+						: {}),
+				})),
+			).toBe("advanced");
+			const [row] = await sql<{ seconds: number }[]>`
+				select extract(epoch from (next_attempt_at - clock_timestamp()))::float8 as seconds
+				from platform.workload_reconciliations where agent_id = 'agent-a'
+			`;
+			return Math.round(row?.seconds ?? Number.NaN);
+		};
+		try {
+			expect(await scheduledIn("cleaning", 1)).toBe(1);
+			expect(await scheduledIn("cleaning", 6)).toBe(2);
+			expect(await scheduledIn("cleaning", 11)).toBe(60);
+			// 等待就绪的 attempts 再大也不退避，否则会拖慢就绪检测。
+			expect(await scheduledIn("observing", 40)).toBe(1);
+			expect(await scheduledIn("ready", 0)).toBe(30);
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("starts a new fenced generation after an accepted management command", async () => {
 		const worker = createWorkloadReconciliationV1({
 			store: first,

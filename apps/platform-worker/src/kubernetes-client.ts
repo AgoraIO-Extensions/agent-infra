@@ -42,10 +42,52 @@ export interface WorkerKubernetesClientV1 {
 	deleteResult?(object: KubernetesObject): Promise<"acknowledged" | "absent">;
 }
 
+export type WorkloadKubernetesVerb =
+	| "get"
+	| "list"
+	| "create"
+	| "update"
+	| "delete";
+
+/** Credential-free facts about a failed call, for diagnostics only. */
+export interface WorkloadKubernetesFailureDetailsV1 {
+	/** HTTP status of the API response; absent when the call never got one. */
+	readonly status?: number;
+	readonly kind?: WorkloadResourceKind;
+	readonly verb?: WorkloadKubernetesVerb;
+}
+
 export class WorkloadKubernetesError extends Error {
-	constructor(readonly code: "conflict" | "unavailable" | "policy") {
+	constructor(
+		readonly code: "conflict" | "unavailable" | "policy",
+		/** Never the response body, resource names or credentials. */
+		readonly details: WorkloadKubernetesFailureDetailsV1 = {},
+	) {
 		super("Kubernetes Workload operation failed");
 	}
+}
+
+/**
+ * Map any failure of a Kubernetes call to the bounded error type, keeping only
+ * the HTTP status, the resource kind and the verb for diagnostics.
+ */
+export function workloadKubernetesFailureV1(
+	error: unknown,
+	context: {
+		readonly kind: WorkloadResourceKind;
+		readonly verb: WorkloadKubernetesVerb;
+	},
+): WorkloadKubernetesError {
+	if (error instanceof WorkloadKubernetesError) return error;
+	const httpStatus = status(error);
+	return new WorkloadKubernetesError(
+		httpStatus === 409 ? "conflict" : "unavailable",
+		{
+			...(httpStatus === undefined ? {} : { status: httpStatus }),
+			kind: context.kind,
+			verb: context.verb,
+		},
+	);
 }
 
 export function createWorkerKubernetesClientV1(
@@ -90,14 +132,17 @@ export function createWorkerKubernetesClientV1(
 		)
 			throw new WorkloadKubernetesError("policy");
 	};
-	async function operation<T>(callback: () => Promise<T>): Promise<T> {
+	async function operation<T>(
+		callback: () => Promise<T>,
+		context: {
+			readonly kind: WorkloadResourceKind;
+			readonly verb: WorkloadKubernetesVerb;
+		},
+	): Promise<T> {
 		try {
 			return await callback();
 		} catch (error) {
-			if (error instanceof WorkloadKubernetesError) throw error;
-			throw new WorkloadKubernetesError(
-				status(error) === 409 ? "conflict" : "unavailable",
-			);
+			throw workloadKubernetesFailureV1(error, context);
 		}
 	}
 	return {
@@ -106,14 +151,17 @@ export function createWorkerKubernetesClientV1(
 			kind: WorkloadResourceKind,
 			name: string,
 		) {
-			return operation(async () => {
-				try {
-					return await api.read<T>(header(kind, name));
-				} catch (error) {
-					if (status(error) === 404) return null;
-					throw error;
-				}
-			});
+			return operation(
+				async () => {
+					try {
+						return await api.read<T>(header(kind, name));
+					} catch (error) {
+						if (status(error) === 404) return null;
+						throw error;
+					}
+				},
+				{ kind, verb: "get" },
+			);
 		},
 		async list<T extends KubernetesObject>(
 			kind: WorkloadResourceKind,
@@ -133,17 +181,24 @@ export function createWorkerKubernetesClientV1(
 							selector,
 						)
 					).items,
+				{ kind, verb: "list" },
 			);
 		},
 		async create<T extends KubernetesObject>(object: T) {
 			check(object);
-			return operation(() => api.create(object));
+			return operation(() => api.create(object), {
+				kind: object.kind as WorkloadResourceKind,
+				verb: "create",
+			});
 		},
 		async replace<T extends KubernetesObject>(object: T) {
 			check(object);
 			if (!object.metadata?.resourceVersion || !object.metadata.uid)
 				throw new WorkloadKubernetesError("policy");
-			return operation(() => api.replace(object));
+			return operation(() => api.replace(object), {
+				kind: object.kind as WorkloadResourceKind,
+				verb: "update",
+			});
 		},
 		async delete(object) {
 			await this.deleteResult?.(object);
@@ -159,23 +214,26 @@ export function createWorkerKubernetesClientV1(
 					resourceVersion: object.metadata.resourceVersion,
 				},
 			};
-			return operation(async () => {
-				try {
-					await api.delete(
-						object,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						undefined,
-						options,
-					);
-					return "acknowledged" as const;
-				} catch (error) {
-					if (status(error) === 404) return "absent" as const;
-					throw error;
-				}
-			});
+			return operation(
+				async () => {
+					try {
+						await api.delete(
+							object,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							options,
+						);
+						return "acknowledged" as const;
+					} catch (error) {
+						if (status(error) === 404) return "absent" as const;
+						throw error;
+					}
+				},
+				{ kind: object.kind as WorkloadResourceKind, verb: "delete" },
+			);
 		},
 	};
 }

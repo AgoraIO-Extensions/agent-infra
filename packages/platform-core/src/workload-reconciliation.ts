@@ -252,6 +252,18 @@ export class WorkloadPreflightRejectedErrorV1 extends Error {
 	}
 }
 
+/** One exception swallowed by a reconciliation step, for diagnostics only. */
+export interface WorkloadStepFailureV1 {
+	readonly agentId: string;
+	/** The phase whose step threw. */
+	readonly phase: WorkloadPhaseV1;
+	/** Consecutive failed attempts in this phase, including this one. */
+	readonly attempts: number;
+	/** The failure ended the run: the Workload moves to cleanup or the candidate is rejected. */
+	readonly terminal: boolean;
+	readonly error: unknown;
+}
+
 export interface WorkloadRuntimePortV1 {
 	capabilities(
 		state: WorkloadReconciliationStateV1,
@@ -313,6 +325,12 @@ export function createWorkloadReconciliationV1(dependencies: {
 	 * changed Pod still closes it at once.
 	 */
 	readonly probeFailureThreshold?: number;
+	/**
+	 * Observes an exception that a step swallowed (the run retries or ends).
+	 * Purely diagnostic: its exceptions are ignored and nothing it receives is
+	 * persisted, so the raw error must not be stored by the caller.
+	 */
+	readonly onStepFailure?: (failure: WorkloadStepFailureV1) => void;
 }) {
 	const maximumAttempts = dependencies.maximumAttempts ?? 60;
 	if (!Number.isSafeInteger(maximumAttempts) || maximumAttempts < 1)
@@ -609,19 +627,37 @@ export function createWorkloadReconciliationV1(dependencies: {
 							}
 					}
 				} catch (error) {
+					// 步骤里的异常被吞掉后只会让 attempts 加一或进入失败处理；这里把它交给
+					// 观测回调，由调用方决定记录什么（正文不进入持久状态）。
+					const observe = (next: WorkloadReconciliationStateV1) => {
+						try {
+							dependencies.onStepFailure?.({
+								agentId: state.agentId,
+								phase: state.phase,
+								attempts: Math.min(state.attempts + 1, maximumAttempts),
+								terminal: next.phase !== state.phase,
+								error,
+							});
+						} catch {
+							// 观测只用于诊断，不能改变调谐结果。
+						}
+						return next;
+					};
 					if (state.phase === "preflight") {
 						if (
 							!(error instanceof WorkloadPreflightRejectedErrorV1) &&
 							state.attempts + 1 < maximumAttempts
 						)
-							return { ...state, attempts: state.attempts + 1 };
+							return observe({ ...state, attempts: state.attempts + 1 });
 						if (state.verified)
-							return advance("rejected", {
-								candidate: state.verified,
-								rollback: true,
-								failureCode: "reconciliation_failed",
-							});
-						return failed("reconciliation_failed");
+							return observe(
+								advance("rejected", {
+									candidate: state.verified,
+									rollback: true,
+									failureCode: "reconciliation_failed",
+								}),
+							);
+						return observe(failed("reconciliation_failed"));
 					}
 					// Cleanup and route closure are retried durably, even after the
 					// bounded candidate budget is exhausted. Never report clean early.
@@ -630,13 +666,13 @@ export function createWorkloadReconciliationV1(dependencies: {
 						state.phase === "closing" ||
 						state.phase === "stopped"
 					)
-						return {
+						return observe({
 							...state,
 							attempts: Math.min(state.attempts + 1, maximumAttempts),
-						};
+						});
 					if (state.attempts + 1 >= maximumAttempts)
-						return failed("reconciliation_failed");
-					return { ...state, attempts: state.attempts + 1 };
+						return observe(failed("reconciliation_failed"));
+					return observe({ ...state, attempts: state.attempts + 1 });
 				}
 			});
 		},

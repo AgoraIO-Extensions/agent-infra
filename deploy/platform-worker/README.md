@@ -63,6 +63,26 @@ Worker 按它注入容器资源并在调谐时再次校验。
   调谐失败关闭，观测为 `unhealthy`，Worker 不会自动扩缩 PVC。因此给已有 Agent 使用的档位
   新增或修改 `storageSize` 前，需先迁移其 PVC。
 
+## 调谐失败日志
+
+Workload 调谐的步骤抛出异常时，调谐只会让 `attempts` 加一后重试，预算耗尽后进入清理，原因不进入
+持久状态。Worker 为此输出一条结构化日志（`console.info`，可用 `log` 选项替换）：
+
+```json
+{"service":"platform-worker","code":"WORKLOAD_STEP_FAILED","agentId":"agent_…","phase":"applying","attempts":4,"terminal":false,"reason":"kubernetes_forbidden","kubernetes":{"status":403,"kind":"Deployment","verb":"create"}}
+```
+
+- `reason` 取自有界集合：`kubernetes_unauthorized`、`kubernetes_forbidden`、`kubernetes_not_found`、
+  `kubernetes_conflict`、`kubernetes_invalid`、`kubernetes_throttled`、`kubernetes_server_error`、
+  `kubernetes_unreachable`（没有拿到 HTTP 应答）、`kubernetes_policy`、`preflight_rejected`、
+  `capabilities_unavailable` 和 `unexpected_error`（附带过滤后的错误类名 `errorName`）。
+- `kubernetes` 只有 HTTP 状态、资源种类和动词，不含响应体、资源名、用户名或凭证；Worker 从不读取
+  未知错误的 `message`。
+- 同一个 Agent、阶段、原因在 30 秒内只记一条，被合并的次数放在 `suppressed`；`terminal` 为
+  `true`（预算耗尽或永久拒绝，Workload 转入清理或候选被拒绝）的记录总是输出。
+- 清理（`cleaning`）与路由关闭（`closing`）在预算耗尽后仍会持久重试：连续失败 5 次后，重试间隔
+  按 2、4、8、16、32 秒退避，上限 60 秒；其余阶段保持 `pollIntervalMs`，不拖慢就绪检测。
+
 ## 打包与启动
 
 在仓库根目录、Node.js 24 与仓库固定 pnpm 版本下执行：
