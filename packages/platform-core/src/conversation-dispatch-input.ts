@@ -31,22 +31,54 @@ import { isTraceParentV1 } from "./trace-context.js";
 
 export function parseBrowserHandoffCommandV1(
 	value: unknown,
-): Extract<
-	BrowserHandoffCommandV1,
-	{ readonly command: "take_over" | "return_to_agent" | "revoke" }
-> {
-	const input = exactObject(value, ["schemaVersion", "command", "handoffId"]);
+): BrowserHandoffCommandV1 {
+	const input = exactObject(
+		value,
+		["schemaVersion", "command"],
+		["handoffId", "confirmationId"],
+	);
+	if (input.schemaVersion !== 1) return unavailable();
 	if (
-		input.schemaVersion !== 1 ||
-		(input.command !== "take_over" &&
-			input.command !== "return_to_agent" &&
-			input.command !== "revoke")
+		input.command === "take_over" ||
+		input.command === "return_to_agent" ||
+		input.command === "revoke"
+	) {
+		if (
+			!Object.hasOwn(input, "handoffId") ||
+			Object.hasOwn(input, "confirmationId")
+		)
+			return unavailable();
+		return {
+			schemaVersion: 1,
+			command: input.command,
+			handoffId: text(input.handoffId),
+		};
+	}
+	if (input.command === "pause") {
+		if (Object.hasOwn(input, "confirmationId")) return unavailable();
+		return {
+			schemaVersion: 1,
+			command: "pause",
+			...(Object.hasOwn(input, "handoffId")
+				? { handoffId: text(input.handoffId) }
+				: {}),
+		};
+	}
+	if (
+		input.command !== "confirm_side_effect" &&
+		input.command !== "reject_side_effect" &&
+		input.command !== "cancel_side_effect"
+	)
+		return unavailable();
+	if (
+		!Object.hasOwn(input, "confirmationId") ||
+		Object.hasOwn(input, "handoffId")
 	)
 		return unavailable();
 	return {
 		schemaVersion: 1,
 		command: input.command,
-		handoffId: text(input.handoffId),
+		confirmationId: text(input.confirmationId),
 	};
 }
 

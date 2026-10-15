@@ -43,6 +43,24 @@ function command(
 	return { schemaVersion: 1, command: "take_over", handoffId };
 }
 
+function pause(handoffId?: string): BrowserHandoffCommandV1 {
+	return {
+		schemaVersion: 1,
+		command: "pause",
+		...(handoffId === undefined ? {} : { handoffId }),
+	};
+}
+
+function sideEffect(
+	commandValue:
+		| "confirm_side_effect"
+		| "reject_side_effect"
+		| "cancel_side_effect",
+	confirmationId = "confirmation-browser-handoff-store",
+): BrowserHandoffCommandV1 {
+	return { schemaVersion: 1, command: commandValue, confirmationId };
+}
+
 function request(
 	idempotencyKey = "browser-handoff-key",
 	commandValue = command(),
@@ -213,6 +231,41 @@ describe("Postgres Browser handoff admission", () => {
 			),
 		).resolves.toEqual({ outcome: "conflict", reason: "idempotency_conflict" });
 	});
+
+	it.each([
+		["pause without handoff identity", pause()],
+		["pause with handoff identity", pause("handoff-browser-handoff-store")],
+		["confirm side effect", sideEffect("confirm_side_effect")],
+		["reject side effect", sideEffect("reject_side_effect")],
+		["cancel side effect", sideEffect("cancel_side_effect")],
+	] as const)(
+		"commits and replays %s through the same outbox",
+		async (_name, commandValue) => {
+			await seed();
+			const { input } = request(
+				`browser-handoff-${commandValue.command}`,
+				commandValue,
+			);
+			const decide = async (state: BrowserHandoffAdmissionStateV1) =>
+				plan(input, state);
+			const accepted = await transaction.admit(input, decide, async () => true);
+			expect(accepted).toMatchObject({
+				outcome: "accepted",
+				plan: { command: commandValue },
+			});
+			const replayed = await transaction.admit(input, decide, async () => true);
+			expect(replayed).toEqual({
+				outcome: "replayed",
+				plan: (accepted as { plan: BrowserHandoffAdmissionPlanV1 }).plan,
+			});
+			const [counts] = await client<
+				[{ outbox: number; idempotency: number }][]
+			>`select
+				(select count(*)::int from platform.outbox_items where operation = 'conversation.browser.handoff.v1') as outbox,
+				(select count(*)::int from platform.idempotency_records where command_type = 'browser.handoff') as idempotency`;
+			expect(counts).toEqual({ outbox: 1, idempotency: 1 });
+		},
+	);
 
 	it("fails closed for an active execution in a ready conversation", async () => {
 		await seed("ready");

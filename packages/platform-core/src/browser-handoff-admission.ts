@@ -9,13 +9,16 @@ export type BrowserHandoffCommandV1 =
 	  }
 	| {
 			readonly schemaVersion: 1;
+			readonly command: "pause";
+			readonly handoffId?: string;
+	  }
+	| {
+			readonly schemaVersion: 1;
 			readonly command:
-				| "pause"
 				| "confirm_side_effect"
 				| "reject_side_effect"
 				| "cancel_side_effect";
-			readonly handoffId?: string;
-			readonly confirmationId?: string;
+			readonly confirmationId: string;
 	  };
 
 export type BrowserHandoffAdmissionRequestV1 = Readonly<{
@@ -161,19 +164,30 @@ function validText(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0 && value.length <= 256;
 }
 
-function validCommand(
-	command: BrowserHandoffCommandV1,
-): command is Extract<
-	BrowserHandoffCommandV1,
-	{ readonly command: "take_over" | "return_to_agent" | "revoke" }
-> {
-	return (
-		command.schemaVersion === 1 &&
-		(command.command === "take_over" ||
-			command.command === "return_to_agent" ||
-			command.command === "revoke") &&
-		validText(command.handoffId)
-	);
+function validCommand(command: BrowserHandoffCommandV1): boolean {
+	if (!command || typeof command !== "object" || command.schemaVersion !== 1)
+		return false;
+	if (
+		command.command === "take_over" ||
+		command.command === "return_to_agent" ||
+		command.command === "revoke"
+	)
+		return Object.keys(command).length === 3 && validText(command.handoffId);
+	if (command.command === "pause")
+		return (
+			Object.keys(command).length ===
+				(Object.hasOwn(command, "handoffId") ? 3 : 2) &&
+			(!Object.hasOwn(command, "handoffId") || validText(command.handoffId))
+		);
+	if (
+		command.command === "confirm_side_effect" ||
+		command.command === "reject_side_effect" ||
+		command.command === "cancel_side_effect"
+	)
+		return (
+			Object.keys(command).length === 3 && validText(command.confirmationId)
+		);
+	return false;
 }
 
 export function createBrowserHandoffAdmissionUseCaseV1(dependencies: {

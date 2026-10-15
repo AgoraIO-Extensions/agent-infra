@@ -37,7 +37,59 @@ describe("Conversation Browser handoff outbox payload", () => {
 		);
 	});
 
-	it("rejects a pause or side-effect command from the Runtime handoff outbox", () => {
+	it.each([
+		["pause without identity", { schemaVersion: 1, command: "pause" }],
+		[
+			"pause with handoff identity",
+			{ schemaVersion: 1, command: "pause", handoffId: "handoff-1" },
+		],
+		[
+			"confirm side effect",
+			{
+				schemaVersion: 1,
+				command: "confirm_side_effect",
+				confirmationId: "confirmation-1",
+			},
+		],
+		[
+			"reject side effect",
+			{
+				schemaVersion: 1,
+				command: "reject_side_effect",
+				confirmationId: "confirmation-1",
+			},
+		],
+		[
+			"cancel side effect",
+			{
+				schemaVersion: 1,
+				command: "cancel_side_effect",
+				confirmationId: "confirmation-1",
+			},
+		],
+	] as const)(
+		"accepts %s in the Conversation outbox parser",
+		(_label, command) => {
+			const payload = exactPayload(
+				{
+					schemaVersion: 1,
+					conversationId: "conversation-1",
+					agentId: "agent-1",
+					actorId: "actor-1",
+					channelId: "web",
+					executionId: "execution-1",
+					turnId: "turn-1",
+					sessionGeneration: 1,
+					deliveryFence: 2,
+					command,
+				},
+				"conversation.browser.handoff.v1",
+			);
+			expect(payload).toMatchObject({ browserHandoff: command });
+		},
+	);
+
+	it("rejects a side-effect command with a foreign handoff identity", () => {
 		expect(
 			exactPayload(
 				{
@@ -52,8 +104,9 @@ describe("Conversation Browser handoff outbox payload", () => {
 					deliveryFence: 2,
 					command: {
 						schemaVersion: 1,
-						command: "pause",
-						handoffId: "handoff-1",
+						command: "confirm_side_effect",
+						confirmationId: "confirmation-1",
+						handoffId: "foreign-handoff",
 					},
 				},
 				"conversation.browser.handoff.v1",
