@@ -653,13 +653,18 @@ export class PostgresConversationDispatchStoreV1
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
 	}): Promise<
-		boolean | "capacity_wait" | "capacity_unavailable" | "sandbox_wait"
+		| boolean
+		| "capacity_wait"
+		| "capacity_unavailable"
+		| "sandbox_wait"
+		| "stop_changed"
 	> {
 		requireClaim(input.claim);
 		if (input.claim.metadataRecovery)
 			throw new TypeError("Metadata recovery cannot dispatch business work");
 		requireLeaseDuration(input.leaseDurationMs);
 		let settledWaiting = false;
+		let releasedForStopChange = false;
 		try {
 			const prepared = await transactionResult(
 				this.#client,
@@ -691,7 +696,25 @@ export class PostgresConversationDispatchStoreV1
 					if (!agent)
 						throw new DispatchCapacityUnavailable("capacity_unavailable");
 					const state = await ownedState(transaction, input.claim);
-					if (!state) throw new StaleDispatchLease();
+					if (!state) {
+						// 认领之后 stop 才被受理：认领作废，但并没有丢失租约（放开 stop 比较后
+						// 其余认领条件仍成立）。立即把条目释放为可重新认领，让下一次认领看到
+						// stop；否则它会一直持有租约到期，而 stop 工作项在原始响应开始之前只能
+						// 重试，整个停止被拖满一个租约（#2534）。
+						const changed = await ownedState(transaction, input.claim, true);
+						if (changed) {
+							await retryOutbox(
+								transaction,
+								changed,
+								input.claim,
+								0,
+								"DISPATCH_STOP_CHANGED",
+							);
+							releasedForStopChange = true;
+							return;
+						}
+						throw new StaleDispatchLease();
+					}
 					const pendingIsolation = await readGenerationIsolation(
 						transaction,
 						input.claim.conversationId,
@@ -907,6 +930,7 @@ export class PostgresConversationDispatchStoreV1
 					await renewLease(transaction, input.claim, input.leaseDurationMs);
 				},
 			);
+			if (releasedForStopChange) return "stop_changed";
 			return prepared && !settledWaiting;
 		} catch (error) {
 			if (error instanceof DispatchCapacityUnavailable) return error.outcome;

@@ -200,7 +200,15 @@ export interface ConversationDispatchStorePortV1 {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
 	}): Promise<
-		boolean | "capacity_wait" | "capacity_unavailable" | "sandbox_wait"
+		| boolean
+		| "capacity_wait"
+		| "capacity_unavailable"
+		| "sandbox_wait"
+		/**
+		 * 认领之后 stop 才被受理：Store 已把条目释放为可立即重新认领，
+		 * 本次认领作废，调用方不再对该条目做任何事。
+		 */
+		| "stop_changed"
 	>;
 	/**
 	 * Return a just-prepared Turn to its pre-claim status when the Runtime
