@@ -1,4 +1,7 @@
-import { supportsProtectedOpenCodeMcpTransport } from "@agent-infra/agent-runtime";
+import {
+	supportsProtectedOpenCodeMcpTransport,
+	supportsProtectedPiMcpTransport,
+} from "@agent-infra/agent-runtime";
 import { resolveApprovedConnectionConsumerProfileV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type {
 	V1EnvVar,
@@ -18,6 +21,8 @@ export const runtimeConnectionInstallationRevisionEnvironment =
 	"AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION";
 export const runtimeConnectionAcpMcpBridgeEnvironment =
 	"AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE";
+export const runtimeConnectionPiMcpBridgeEnvironment =
+	"AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE";
 
 export function isRuntimeConnectionEnvironmentV1(name: string): boolean {
 	return [
@@ -25,6 +30,7 @@ export function isRuntimeConnectionEnvironmentV1(name: string): boolean {
 		runtimeConnectionConsumerRevisionEnvironment,
 		runtimeConnectionInstallationRevisionEnvironment,
 		runtimeConnectionAcpMcpBridgeEnvironment,
+		runtimeConnectionPiMcpBridgeEnvironment,
 	].includes(name);
 }
 
@@ -186,6 +192,17 @@ export function runtimeConnectionConsumerProjectionV1(
 				? [
 						{
 							name: runtimeConnectionAcpMcpBridgeEnvironment,
+							value: "verified-v1",
+						},
+					]
+				: []),
+			...(installationRevision != null &&
+			supportsProtectedPiMcpTransport() &&
+			templateBinding?.driver === "pi" &&
+			templateBinding.templateId === "pi"
+				? [
+						{
+							name: runtimeConnectionPiMcpBridgeEnvironment,
 							value: "verified-v1",
 						},
 					]

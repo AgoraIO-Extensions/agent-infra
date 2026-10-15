@@ -284,14 +284,19 @@ describe("RuntimeHost environment assembly", () => {
 		expect(assembly?.resolveContext).toBeTypeOf("function");
 	});
 	it.each(["pi", "acp"] as const)(
-		"does not inject protected Connection MCP into the unsupported %s driver",
+		"assembles the gated Connection MCP path for %s",
 		async (binding) => {
 			const values: NodeJS.ProcessEnv = await environment();
 			const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
 			if (!dataDirectory) throw new Error("Missing test data directory");
+			const fixture = await standardMcpFixture();
 			values.AGENT_INFRA_RUNTIME_DRIVER = binding;
-			values.AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE = "verified-v1";
-			values.AGENT_INFRA_RUNTIME_AGENT_ID = "agent-messages";
+			values[
+				binding === "pi"
+					? "AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE"
+					: "AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE"
+			] = "verified-v1";
+			values.AGENT_INFRA_RUNTIME_AGENT_ID = fixture.input.scope.agentId;
 			values.AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY =
 				"synthetic-model-credential";
 			values.AGENT_INFRA_RUNTIME_MODEL_CONFIG = JSON.stringify({
@@ -312,18 +317,11 @@ describe("RuntimeHost environment assembly", () => {
 					},
 				],
 			});
-			const profile = {
-				schemaVersion: 1 as const,
-				publicOrigin: "https://connection.example.test",
-				mcpPath: "/mcp",
-				consumerId: "platform",
-				audience: "fixture-resource",
-				egressProfile: { ref: "fixture-egress", revision: "r1" },
-			};
+			const profile = fixture.target.profile;
 			const approval = {
 				schemaVersion: 1 as const,
 				configFingerprint: connectionConsumerProfileFingerprintV1(profile),
-				source: { ref: "fixture-deployment", revision: "r1" },
+				source: fixture.target.source,
 				egressEnforced: true as const,
 			};
 			const profileFile = join(dataDirectory, "consumer.json");
@@ -334,6 +332,13 @@ describe("RuntimeHost environment assembly", () => {
 				approval.source.ref,
 				approval.source.revision,
 			]);
+			const exportReceipt = await writeStandardMcpExport(
+				dataDirectory,
+				fixture.target,
+				[fixture.input],
+			);
+			values.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION =
+				exportReceipt.revision;
 			let openedWith: Record<string, unknown> | undefined;
 			const open =
 				binding === "pi"
@@ -349,12 +354,35 @@ describe("RuntimeHost environment assembly", () => {
 			const runtime = await assembleRuntimeHost(values);
 			try {
 				expect(openedWith).toBeDefined();
-				expect(openedWith).not.toHaveProperty("standardConnectionClient");
+				expect(openedWith).toHaveProperty("standardConnectionClient");
 			} finally {
 				await runtime.close();
 			}
 		},
 	);
+
+	it("assembles the protected Connection MCP input for Pi", async () => {
+		const { values, dataDirectory, fixture } =
+			await claudeAssemblyFixture("available");
+		values.AGENT_INFRA_RUNTIME_DRIVER = "pi";
+		values.AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE = "verified-v1";
+		let openedWith: Record<string, unknown> | undefined;
+		runtimeAssemblyMocks.openPiRuntime.mockImplementation(
+			async (options: Record<string, unknown>) => {
+				openedWith = options;
+				return FakeRuntimeDriver.open(join(dataDirectory, "pi-driver.json"));
+			},
+		);
+		const runtime = await assembleRuntimeHost(values);
+		try {
+			expect(openedWith?.standardConnectionClient).toBeDefined();
+			expect(openedWith?.standardConnectionClient).toMatchObject({
+				target: { status: "available", url: fixture.target.url },
+			});
+		} finally {
+			await runtime.close();
+		}
+	});
 
 	it("assembles the protected Connection MCP input for Claude", async () => {
 		const { values, dataDirectory, fixture, approval } =

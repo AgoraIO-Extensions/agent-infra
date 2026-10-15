@@ -24,6 +24,7 @@ import {
 	RuntimeHost,
 	RuntimeHostError,
 	supportsProtectedOpenCodeMcpTransport,
+	supportsProtectedPiMcpTransport,
 	verifyCodexPilotInstallation,
 } from "@agent-infra/agent-runtime";
 import type {
@@ -414,7 +415,10 @@ export async function assembleRuntimeHost(
 		binding === "claude" ||
 		(binding === "acp" &&
 			environment.AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE === "verified-v1" &&
-			supportsProtectedOpenCodeMcpTransport());
+			supportsProtectedOpenCodeMcpTransport()) ||
+		(binding === "pi" &&
+			environment.AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE === "verified-v1" &&
+			supportsProtectedPiMcpTransport());
 	if (
 		installationRevision !== undefined &&
 		(!supportsProtectedStandardMcp ||
@@ -527,9 +531,8 @@ export async function assembleRuntimeHost(
 			keyId,
 			issuer: expectedIssuer,
 		});
-		// Protected Standard MCP is assembled only for the Codex and Claude Host
-		// seams. Pi and Generic ACP deliberately never receive this client: their
-		// pinned native transports do not provide a safe in-process MCP boundary.
+		// Protected Standard MCP is assembled only for a pinned, explicitly gated
+		// native transport. Connection credentials remain in this Host client.
 		const standardConnectionClient =
 			supportsProtectedStandardMcp &&
 			agentId !== undefined &&
@@ -635,11 +638,21 @@ export async function assembleRuntimeHost(
 						? await openPiRuntime({
 								...messagesConfiguration,
 								browserCapability: verifiedBrowserCapability,
+								...(standardConnectionClient
+									? { standardConnectionClient }
+									: {}),
 								...(skillDirectory ? { skillDirectory } : {}),
 								modelOptions: messagesRuntimeOptions ?? [],
 								...(messagesConfiguration.schemaVersion === 4
 									? {
 											authorizeModelAction: async (
+												action: RuntimeExternalActionAuthorization,
+											) => {
+												if (!assembledHost)
+													throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
+												return assembledHost.authorizeExternalAction(action);
+											},
+											authorizeToolAction: async (
 												action: RuntimeExternalActionAuthorization,
 											) => {
 												if (!assembledHost)

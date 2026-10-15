@@ -1,7 +1,8 @@
 {
-	"nativeVersion": "0.86.0",
+	"nativeVersion": "0.99.0",
 	"package": "@earendil-works/pi-coding-agent",
-	"upstreamCommit": "ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc",
-	"bundleFileCount": 54,
-	"bundleSha256": "01e2d340926e625c0886ee3c360a369a68b483c1414e79595741aab9ceef0b8a"
+	"upstreamCommit": "4b060d3a98618019adb9985d517516c8e99a2bbe",
+	"bundleFileCount": 69,
+	"bundleSha256": "a8bd1b68f89be76ecbe7d6ba43f601220bf26b3aded0388d42533b6416b15167",
+	"protectedMcpTransport": "pi-extension-loopback-v1"
 }
