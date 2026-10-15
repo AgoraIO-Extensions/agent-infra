@@ -32,7 +32,12 @@ rules:
     resources: ["configmaps", "persistentvolumeclaims", "secrets", "serviceaccounts", "services"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
   - apiGroups: ["apps"]
-    resources: ["statefulsets"]
+    # 多服务 Agent 的 Deployment 与 StatefulSet 由 Worker 直接创建、更新和回滚。
+    resources: ["deployments", "statefulsets"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: ["batch"]
+    # 多服务发布前的迁移 Job；Worker 每次发布都会先读取它。
+    resources: ["jobs"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses", "networkpolicies"]
