@@ -889,6 +889,7 @@ describe("PostgreSQL original native metadata scope", () => {
 				executionId: "execution-conversation-1",
 				sessionGeneration: 1,
 				authorizationRevision: "authorization-1",
+				originalHostScopeRef: null,
 			});
 		} finally {
 			await client`
@@ -897,6 +898,64 @@ describe("PostgreSQL original native metadata scope", () => {
 					authorization_revision = 'authorization-1',
 					host_session_ref = null
 				where id = 'conversation-1'
+			`;
+		}
+	});
+
+	it("returns the requested Execution's original Host scope", async () => {
+		const relayKeyId = `native-metadata-test-key-${process.pid}`;
+		await client`
+			insert into platform.relay_key_subjects
+				(purpose, subject_id, last_version, current_version)
+			values ('personal', 'actor-1', 1, 1)
+			on conflict (purpose, subject_id) do nothing
+		`;
+		await client`
+			insert into platform.relay_key_versions
+				(purpose, subject_id, key_version, key_id, ciphertext)
+			values ('personal', 'actor-1', 1, ${relayKeyId}, ${client.json({
+				purpose: "personal",
+				subjectId: "actor-1",
+				keyId: relayKeyId,
+				keyVersion: 1,
+			})})
+		`;
+		try {
+			await client`
+				update platform.conversation_executions
+				set runtime_submit_protocol = 'v4',
+					original_operation_digest = ${"a".repeat(43)},
+					original_submit_host_session_ref = 'historical-host',
+					execution_source = 'web',
+					relay_key_purpose = 'personal',
+					relay_key_subject_id = 'actor-1',
+					relay_key_id = ${relayKeyId},
+					relay_key_version = 1
+				where execution_id = 'execution-conversation-1'
+			`;
+			expect(await read()).toMatchObject({
+				originalHostScopeRef: "historical-host",
+			});
+		} finally {
+			await client`
+				update platform.conversation_executions
+				set runtime_submit_protocol = null,
+					original_operation_digest = null,
+					original_submit_host_session_ref = null,
+					execution_source = null,
+					relay_key_purpose = null,
+					relay_key_subject_id = null,
+					relay_key_id = null,
+					relay_key_version = null
+				where execution_id = 'execution-conversation-1'
+			`;
+			await client`
+				delete from platform.relay_key_versions
+				where purpose = 'personal' and subject_id = 'actor-1' and key_id = ${relayKeyId}
+			`;
+			await client`
+				delete from platform.relay_key_subjects
+				where purpose = 'personal' and subject_id = 'actor-1'
 			`;
 		}
 	});
@@ -963,7 +1022,7 @@ describe("PostgreSQL original native metadata scope", () => {
 				`grant select (id, agent_id, actor_id, channel_id, principal_type) on platform.conversations to ${role}`,
 			);
 			await client.unsafe(
-				`grant select (execution_id, conversation_id, agent_id, actor_id, channel_id, principal_type, session_generation, authorization_revision) on platform.conversation_executions to ${role}`,
+				`grant select (execution_id, conversation_id, agent_id, actor_id, channel_id, principal_type, session_generation, authorization_revision, original_submit_host_session_ref) on platform.conversation_executions to ${role}`,
 			);
 			roleUrl.searchParams.set("options", `-c role=${role}`);
 			const limited = new PostgresConversationQueryV1({
