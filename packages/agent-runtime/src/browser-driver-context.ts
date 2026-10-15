@@ -354,6 +354,7 @@ export function createBrowserSessionDriverContextV1(input: {
 					workloadRevision: request.binding.workloadRevision,
 					imageDigest: request.binding.imageDigest,
 				},
+				signal,
 			});
 			signal.throwIfAborted();
 			return {

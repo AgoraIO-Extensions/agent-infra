@@ -90,7 +90,7 @@ it("fails closed for an unbound Browser side-effect confirmation", async () => {
 		const request = signV3Fixture(
 			{
 				...base(accepted.hostSessionRef),
-				command: "confirm",
+				command: "confirm" as const,
 				binding: {
 					actionId: "action-fixture",
 					confirmationId: "confirmation-fixture",

@@ -123,6 +123,7 @@ export type BrowserSideEffectConfirmationInputV1 = Readonly<{
 	readonly subjectId: string;
 	readonly authorization: BrowserActionAuthorizationV1;
 	readonly executionBinding: BrowserActionExecutionBindingV1;
+	readonly signal?: AbortSignal;
 }>;
 
 export type BrowserActionRecordV1 = Readonly<{
@@ -1433,9 +1434,10 @@ export function createBrowserObserveControllerV1(input: {
 	async function confirmSideEffect(
 		input_: BrowserSideEffectConfirmationInputV1,
 	): Promise<BrowserActionRecordV1> {
+		input_.signal?.throwIfAborted();
 		const pending = pendingConfirmation(input_);
 		if (input_.command === "confirm") {
-			return executeAction({
+			const record = await executeAction({
 				...pending.request,
 				actionId: input_.actionId,
 				executionBinding: input_.executionBinding,
@@ -1443,6 +1445,8 @@ export function createBrowserObserveControllerV1(input: {
 				confirmation: pending.confirmation,
 				sideEffect: true,
 			});
+			input_.signal?.throwIfAborted();
+			return record;
 		}
 		confirmations.delete(input_.confirmationId);
 		const reasonCode =
