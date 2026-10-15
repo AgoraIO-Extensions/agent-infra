@@ -904,6 +904,40 @@ describe("multi-service runtime operations", () => {
 		expect(afterRollback?.metadata?.uid).toBe(before.metadata?.uid);
 	});
 
+	it("reports pending while a workload has no available replica", async () => {
+		const policy = {
+			namespace: "agents",
+			multiServiceResourceProfiles: [smallProfile],
+			routeHostSuffix: "example.test",
+			ingressClassName: "nginx",
+			tlsSecretName: "tls",
+			routeSelector: { "app.kubernetes.io/name": "ingress" },
+		};
+		for (const source of [manifest, statefulManifest]) {
+			const fake = fakeClient();
+			const operations = createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: { ...policy, storageSize: "1Gi" },
+			});
+			const value = desired(source);
+			if (!isMultiService(value))
+				throw new Error("multi-service fixture invalid");
+			const identity = await operations.apply(value);
+			// 刚创建的工作负载还没有可用副本：等待，而不是判定失败。
+			expect(await operations.observe(value, identity)).toBe("pending");
+			markWorkloadsReady(fake);
+			expect(await operations.observe(value, identity)).toBe("healthy");
+			// 其中一个工作负载失去可用副本时回到 pending。
+			const workload = [...fake.resources.values()].find(
+				(resource) =>
+					resource.kind === "Deployment" || resource.kind === "StatefulSet",
+			) as V1Deployment | V1StatefulSet | undefined;
+			if (!workload) throw new Error("workload fixture missing");
+			workload.status = { availableReplicas: 0, readyReplicas: 0, replicas: 1 };
+			expect(await operations.observe(value, identity)).toBe("pending");
+		}
+	});
+
 	it("runs a migration Job before services and reuses its completed result", async () => {
 		const fake = fakeClient();
 		const operations = createMultiServiceRuntimeOperations({

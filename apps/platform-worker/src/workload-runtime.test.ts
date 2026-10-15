@@ -2944,10 +2944,56 @@ describe("assembled Workload Runtime contracts", () => {
 			: undefined;
 		if (!deployment) throw new Error();
 		deployment.status = { ...deployment.status, availableReplicas: 0 };
-		expect(await runtime.observe(promoting)).toBe("unhealthy");
+		expect(await runtime.observe(promoting)).toBe("pending");
 		await expect(runtime.capabilities(promoting)).rejects.toThrow(
 			"Runtime capabilities are unavailable",
 		);
+	});
+	it("waits for a multi-service workload that is still starting instead of failing the creation", async () => {
+		const f = fixture(
+			{},
+			{ configuration: multiServiceConfigurationFixture() },
+		);
+		const setAvailable = (replicas: number) => {
+			for (const resource of f.resources.values())
+				if (resource.kind === "Deployment")
+					(resource as V1Deployment).status = {
+						availableReplicas: replicas,
+						readyReplicas: replicas,
+						replicas: 1,
+					};
+		};
+		// 推进到资源已应用、尚未观测。
+		for (let i = 0; i < 10 && f.state?.phase !== "observing"; i++)
+			await f.tick(1);
+		expect(f.state).toMatchObject({ phase: "observing", attempts: 0 });
+		// 工作负载还在启动：留在 observing 重试，不能以 health_check_failed 终止。
+		setAvailable(0);
+		await f.tick(1);
+		expect(f.state).toMatchObject({ phase: "observing", attempts: 1 });
+		expect(f.state?.failureCode ?? null).toBeNull();
+		setAvailable(1);
+		await f.tick(6);
+		expect(f.state).toMatchObject({ phase: "ready" });
+	});
+	it("fails the creation with a health failure when a multi-service workload never becomes available", async () => {
+		const f = fixture(
+			{},
+			{ configuration: multiServiceConfigurationFixture() },
+		);
+		for (let i = 0; i < 10 && f.state?.phase !== "observing"; i++)
+			await f.tick(1);
+		expect(f.state).toMatchObject({ phase: "observing", attempts: 0 });
+		for (const resource of f.resources.values())
+			if (resource.kind === "Deployment")
+				(resource as V1Deployment).status = {
+					availableReplicas: 0,
+					readyReplicas: 0,
+					replicas: 1,
+				};
+		await f.tick(2);
+		expect(f.state).toMatchObject({ failureCode: "health_check_failed" });
+		expect(f.state?.phase).not.toBe("ready");
 	});
 	it("closes a ready route when its health probe throws an unrecognised error", async () => {
 		const fetcher = vi.fn(async () => new Response("ok"));
