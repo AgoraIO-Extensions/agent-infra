@@ -4,6 +4,7 @@ import {
 	browserHandoffAdmissionRequestDigestV1,
 	createBrowserHandoffAdmissionUseCaseV1,
 } from "./browser-handoff-admission.js";
+import { parseBrowserHandoffCommandV1 } from "./conversation-dispatch-input.js";
 
 const request = {
 	schemaVersion: 1 as const,
@@ -89,12 +90,115 @@ describe("Browser handoff admission", () => {
 		expect(state.transaction.admit).toHaveBeenCalledTimes(2);
 	});
 
-	it("rejects unsupported pause/side-effect commands without a transaction plan", async () => {
+	it("admits a side-effect command with its confirmation identity", async () => {
 		const state = harness();
 		const result = await state.useCase.admit({
 			...request,
-			command: { schemaVersion: 1, command: "pause", handoffId: "handoff-1" },
+			command: {
+				schemaVersion: 1,
+				command: "confirm_side_effect",
+				confirmationId: "confirmation-1",
+			},
 		});
-		expect(result).toMatchObject({ outcome: "unavailable" });
+		expect(result).toMatchObject({ outcome: "accepted" });
+	});
+
+	it.each([
+		[{ schemaVersion: 1, command: "pause", handoffId: "handoff-1" }],
+		[
+			{
+				schemaVersion: 1,
+				command: "reject_side_effect",
+				confirmationId: "confirmation-1",
+			},
+		],
+		[
+			{
+				schemaVersion: 1,
+				command: "cancel_side_effect",
+				confirmationId: "confirmation-1",
+			},
+		],
+	] as const)("admits the command-specific identity shape", async (command) => {
+		const state = harness();
+		const result = await state.useCase.admit({
+			...request,
+			command,
+		});
+		expect(result).toMatchObject({ outcome: "accepted", plan: { command } });
+	});
+
+	it.each([
+		{ schemaVersion: 1, command: "pause" },
+		{
+			schemaVersion: 1,
+			command: "pause",
+			confirmationId: "confirmation-1",
+		},
+		{ schemaVersion: 1, command: "confirm_side_effect" },
+		{
+			schemaVersion: 1,
+			command: "confirm_side_effect",
+			confirmationId: "confirmation-1",
+			handoffId: "foreign-handoff",
+		},
+		{
+			schemaVersion: 1,
+			command: "pause",
+			handoffId: "",
+		},
+	] as const)(
+		"fails closed for a missing or foreign command identity",
+		async (command) => {
+			const state = harness();
+			const result = await state.useCase.admit({
+				...request,
+				command: command as never,
+			});
+			expect(result).toEqual({
+				outcome: "unavailable",
+				reason: "conversation_unavailable",
+			});
+			expect(state.transaction.admit).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		{ schemaVersion: 1, command: "pause", handoffId: "handoff-1" },
+		{
+			schemaVersion: 1,
+			command: "confirm_side_effect",
+			confirmationId: "confirmation-1",
+		},
+		{
+			schemaVersion: 1,
+			command: "reject_side_effect",
+			confirmationId: "confirmation-1",
+		},
+		{
+			schemaVersion: 1,
+			command: "cancel_side_effect",
+			confirmationId: "confirmation-1",
+		},
+	] as const)("parses %j as an exact Browser command", (command) => {
+		expect(parseBrowserHandoffCommandV1(command)).toEqual(command);
+	});
+
+	it("rejects mixed or missing command identity in the dispatch parser", () => {
+		expect(() =>
+			parseBrowserHandoffCommandV1({
+				schemaVersion: 1,
+				command: "confirm_side_effect",
+				confirmationId: "confirmation-1",
+				handoffId: "foreign-handoff",
+			}),
+		).toThrow();
+		expect(() =>
+			parseBrowserHandoffCommandV1({
+				schemaVersion: 1,
+				command: "pause",
+				handoffId: "",
+			}),
+		).toThrow();
 	});
 });

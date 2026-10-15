@@ -1,4 +1,5 @@
 import {
+	type BrowserHandoffCommandV1,
 	type ConversationDispatchClaimV1,
 	type ConversationDispatchExecutionStatusV1,
 	type ConversationDispatchOperationV1,
@@ -101,15 +102,32 @@ export function exactPayload(
 		)
 			return undefined;
 		const commandRecord = command as Record<string, unknown>;
-		if (
-			Object.keys(commandRecord).length !== 3 ||
-			commandRecord.schemaVersion !== 1 ||
-			(commandRecord.command !== "take_over" &&
-				commandRecord.command !== "return_to_agent" &&
-				commandRecord.command !== "revoke") ||
-			!validText(commandRecord.handoffId)
-		)
-			return undefined;
+		const commandName = commandRecord.command;
+		const isHandoff =
+			commandName === "take_over" ||
+			commandName === "return_to_agent" ||
+			commandName === "revoke";
+		const isPause = commandName === "pause";
+		const isSideEffect =
+			commandName === "confirm_side_effect" ||
+			commandName === "reject_side_effect" ||
+			commandName === "cancel_side_effect";
+		const validCommand =
+			commandRecord.schemaVersion === 1 &&
+			(isHandoff
+				? Object.keys(commandRecord).length === 3 &&
+					validText(commandRecord.handoffId) &&
+					!Object.hasOwn(commandRecord, "confirmationId")
+				: isPause
+					? Object.keys(commandRecord).length === 3 &&
+						validText(commandRecord.handoffId) &&
+						!Object.hasOwn(commandRecord, "confirmationId")
+					: isSideEffect &&
+						Object.keys(commandRecord).length === 3 &&
+						validText(commandRecord.confirmationId) &&
+						!Object.hasOwn(commandRecord, "handoffId"));
+		if (!validCommand) return undefined;
+		const browserCommand = commandRecord as BrowserHandoffCommandV1;
 		return {
 			schemaVersion: 1,
 			conversationId: input.conversationId as string,
@@ -125,14 +143,7 @@ export function exactPayload(
 			modelConfigurationRevision: null,
 			modelOptionId: null,
 			reasoningLevel: null,
-			browserHandoff: {
-				schemaVersion: 1,
-				command: commandRecord.command as
-					| "take_over"
-					| "return_to_agent"
-					| "revoke",
-				handoffId: commandRecord.handoffId as string,
-			},
+			browserHandoff: browserCommand,
 		};
 	}
 	if (isNativeCapability) {

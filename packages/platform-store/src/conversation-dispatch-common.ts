@@ -196,10 +196,7 @@ export interface ConversationPayload {
 	modelOptionId: string | null;
 	reasoningLevel: string | null;
 	nativeCapability?: import("@agent-infra/platform-core").ConversationNativeCapabilityBindingV1;
-	browserHandoff?: Extract<
-		BrowserHandoffCommandV1,
-		{ readonly command: "take_over" | "return_to_agent" | "revoke" }
-	>;
+	browserHandoff?: BrowserHandoffCommandV1;
 }
 
 export class ConversationDispatchStoreError extends Error {

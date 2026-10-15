@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type {
 	BrowserHandoffAdmissionDecisionV1,
 	BrowserHandoffAdmissionPlanV1,
@@ -34,20 +35,36 @@ function counter(value: unknown, minimum: number): value is number {
 	);
 }
 
-function admittedCommand(
-	value: unknown,
-): value is Extract<
-	BrowserHandoffCommandV1,
-	{ readonly command: "take_over" | "return_to_agent" | "revoke" }
-> {
+function admittedCommand(value: unknown): value is BrowserHandoffCommandV1 {
 	const command = record(value);
-	return (
-		command?.schemaVersion === 1 &&
-		(command.command === "take_over" ||
-			command.command === "return_to_agent" ||
-			command.command === "revoke") &&
-		text(command.handoffId)
-	);
+	if (command?.schemaVersion !== 1 || !text(command.command)) return false;
+	if (
+		command.command === "take_over" ||
+		command.command === "return_to_agent" ||
+		command.command === "revoke"
+	)
+		return (
+			Object.keys(command).length === 3 &&
+			text(command.handoffId) &&
+			!Object.hasOwn(command, "confirmationId")
+		);
+	if (command.command === "pause")
+		return (
+			Object.keys(command).length === 3 &&
+			text(command.handoffId) &&
+			!Object.hasOwn(command, "confirmationId")
+		);
+	if (
+		command.command === "confirm_side_effect" ||
+		command.command === "reject_side_effect" ||
+		command.command === "cancel_side_effect"
+	)
+		return (
+			Object.keys(command).length === 3 &&
+			text(command.confirmationId) &&
+			!Object.hasOwn(command, "handoffId")
+		);
+	return false;
 }
 
 function parsePlan(
@@ -73,6 +90,7 @@ function parsePlan(
 		!counter(plan.deliveryFence, 0) ||
 		!text(plan.hostSessionRef) ||
 		!admittedCommand(command) ||
+		!isDeepStrictEqual(command, request.command.command) ||
 		outbox?.id !==
 			`conversation:browser-handoff:${digest({
 				conversationId: plan.conversationId,
@@ -92,8 +110,7 @@ function parsePlan(
 		payload.sessionGeneration !== plan.sessionGeneration ||
 		payload.deliveryFence !== plan.deliveryFence ||
 		!admittedCommand(payload.command) ||
-		payload.command.command !== command.command ||
-		payload.command.handoffId !== command.handoffId ||
+		!isDeepStrictEqual(payload.command, command) ||
 		result?.schemaVersion !== 1 ||
 		result.status !== "submitted" ||
 		result.conversationId !== plan.conversationId ||

@@ -16,25 +16,69 @@ import type {
 } from "./http/conversation-routes.js";
 import type { IdentityContext } from "./http/identity.js";
 
-type AdmittedBrowserCommand = Extract<
-	BrowserHandoffCommandV1,
-	{ readonly command: "take_over" | "return_to_agent" | "revoke" }
->;
+type AdmittedBrowserCommand = BrowserHandoffCommandV1;
+
+function exactCommandKeys(
+	value: Record<string, unknown>,
+	identityKey: "handoffId" | "confirmationId",
+) {
+	const keys = Reflect.ownKeys(value);
+	return (
+		keys.length === 3 &&
+		keys.every(
+			(key) =>
+				typeof key === "string" &&
+				["schemaVersion", "command", identityKey].includes(key),
+		)
+	);
+}
+
+function validIdentity(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0;
+}
 
 function admittedCommand(
 	command: BrowserCommandRequestV1,
 ): AdmittedBrowserCommand | undefined {
-	if (
-		command.command !== "take_over" &&
-		command.command !== "return_to_agent" &&
-		command.command !== "revoke"
-	)
+	if (!command || typeof command !== "object") return undefined;
+	const value = command as unknown as Record<string, unknown>;
+	if (value.schemaVersion !== 1 || typeof value.command !== "string")
 		return undefined;
-	return {
-		schemaVersion: 1,
-		command: command.command,
-		handoffId: command.handoffId,
-	};
+	if (
+		(value.command === "take_over" ||
+			value.command === "return_to_agent" ||
+			value.command === "revoke") &&
+		exactCommandKeys(value, "handoffId") &&
+		validIdentity(value.handoffId)
+	)
+		return {
+			schemaVersion: 1,
+			command: value.command,
+			handoffId: value.handoffId,
+		};
+	if (
+		value.command === "pause" &&
+		exactCommandKeys(value, "handoffId") &&
+		validIdentity(value.handoffId)
+	)
+		return {
+			schemaVersion: 1,
+			command: "pause",
+			handoffId: value.handoffId,
+		};
+	if (
+		(value.command === "confirm_side_effect" ||
+			value.command === "reject_side_effect" ||
+			value.command === "cancel_side_effect") &&
+		exactCommandKeys(value, "confirmationId") &&
+		validIdentity(value.confirmationId)
+	)
+		return {
+			schemaVersion: 1,
+			command: value.command,
+			confirmationId: value.confirmationId,
+		};
+	return undefined;
 }
 
 function decision(
@@ -46,7 +90,13 @@ function decision(
 			outcome: result.outcome,
 			conversationId,
 			executionId: result.plan.executionId,
-			handoffId: result.plan.command.handoffId,
+			...("handoffId" in result.plan.command && result.plan.command.handoffId
+				? { handoffId: result.plan.command.handoffId }
+				: {}),
+			...("confirmationId" in result.plan.command &&
+			result.plan.command.confirmationId
+				? { confirmationId: result.plan.command.confirmationId }
+				: {}),
 		};
 	}
 	if (result.outcome === "denied") return { outcome: "denied", conversationId };

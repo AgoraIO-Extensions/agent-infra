@@ -168,11 +168,8 @@ export interface ConversationDispatchClaimV1 {
 		readonly attachments: readonly string[];
 	} | null;
 	readonly nativeCapability?: ConversationNativeCapabilityBindingV1;
-	/** Server-admitted Browser handoff command carried by the same outbox lease. */
-	readonly browserHandoff?: Extract<
-		BrowserHandoffCommandV1,
-		{ readonly command: "take_over" | "return_to_agent" | "revoke" }
-	>;
+	/** Server-admitted Browser command carried by the same outbox lease. */
+	readonly browserHandoff?: BrowserHandoffCommandV1;
 	readonly executionStatus: ConversationDispatchExecutionStatusV1;
 	readonly stopPending: boolean;
 	/** Set only when the Store durably marked the stop confirmation timeout. */
