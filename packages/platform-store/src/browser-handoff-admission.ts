@@ -123,6 +123,88 @@ export class PostgresBrowserHandoffAdmissionTransactionV1
 		this.#client = postgres(options.databaseUrl, { max: 10 });
 	}
 
+	/** Read the current binding for API preflight; admission rechecks it in one transaction. */
+	async read(
+		conversationId: string,
+	): Promise<BrowserHandoffAdmissionStateV1 | null> {
+		return this.#client.begin(async (transaction) => {
+			const conversations = await transaction<
+				{
+					id: string;
+					agent_id: string;
+					actor_id: string;
+					channel_id: string;
+					session_generation: number | string;
+					host_session_ref: string | null;
+					authorization_revision: string;
+					status: "ready" | "active" | "unavailable";
+				}[]
+			>`
+				select id, agent_id, actor_id, channel_id, session_generation,
+					host_session_ref, authorization_revision, status
+				from platform.conversations
+				where id = ${conversationId}
+				limit 1
+			`;
+			const conversation = conversations[0];
+			if (conversation?.status !== "active" || !conversation?.host_session_ref)
+				return null;
+			const executions = await transaction<
+				{
+					execution_id: string;
+					turn_id: string;
+					session_generation: number | string;
+					delivery_fence: number | string;
+					status: "submitted" | "processing" | "unknown";
+					agent_id: string;
+					actor_id: string;
+					channel_id: string;
+					authorization_revision: string;
+				}[]
+			>`
+				select execution_id, turn_id, session_generation, delivery_fence, status,
+					agent_id, actor_id, channel_id, authorization_revision
+				from platform.conversation_executions
+				where conversation_id = ${conversation.id}
+					and status in ('submitted', 'processing', 'unknown')
+				order by created_at desc
+				limit 1
+			`;
+			const execution = executions[0];
+			if (
+				!execution ||
+				execution.agent_id !== conversation.agent_id ||
+				execution.actor_id !== conversation.actor_id ||
+				execution.channel_id !== conversation.channel_id ||
+				execution.authorization_revision !==
+					conversation.authorization_revision ||
+				String(execution.session_generation) !==
+					String(conversation.session_generation)
+			)
+				return null;
+			return {
+				conversation: {
+					schemaVersion: 1,
+					conversationId: conversation.id,
+					agentId: conversation.agent_id,
+					actorId: conversation.actor_id,
+					channelId: conversation.channel_id,
+					sessionGeneration: Number(conversation.session_generation),
+					hostSessionRef: conversation.host_session_ref,
+					authorizationRevision: conversation.authorization_revision,
+					status: "active",
+				},
+				activeExecution: {
+					executionId: execution.execution_id,
+					turnId: execution.turn_id,
+					sessionGeneration: Number(execution.session_generation),
+					deliveryFence: Number(execution.delivery_fence),
+					status: execution.status,
+				},
+			};
+		});
+	}
+
 	async admit(
 		request: Parameters<BrowserHandoffAdmissionTransactionPortV1["admit"]>[0],
 		decide: Parameters<BrowserHandoffAdmissionTransactionPortV1["admit"]>[1],

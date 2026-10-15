@@ -98,7 +98,7 @@ export function createPostgresBrowserCommandAdmissionV1(input: {
 				authorization: {
 					authorize: () => authorize(request.identity),
 				},
-				state: { read: async () => null },
+				state: { read: (conversationId) => store.read(conversationId) },
 				transaction: store,
 			});
 			const admissionRequest: BrowserHandoffAdmissionRequestV1 = {
