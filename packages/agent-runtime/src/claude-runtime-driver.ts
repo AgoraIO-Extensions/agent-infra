@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import {
 	chmod,
 	lstat,
@@ -151,6 +151,14 @@ export function claudeNativeSkillLaunchOptions(
 			const within = relative(rootRealPath, path);
 			return within !== "" && !within.startsWith("..") && !isAbsolute(within);
 		};
+		const verifiedFileRealPath = (path: string) => {
+			const info = lstatSync(path);
+			if (!info.isFile() || info.isSymbolicLink())
+				throw new RuntimeSkillDirectoryErrorV1();
+			const realPath = realpathSync(path);
+			if (!contained(realPath)) throw new RuntimeSkillDirectoryErrorV1();
+			return realPath;
+		};
 		const skills = skillDirectory.findSkills();
 		skillNames = skills.map((entry) => entry.name);
 		const expectedSkillPaths = skills.map((entry) => {
@@ -160,6 +168,7 @@ export function claudeNativeSkillLaunchOptions(
 				!/^\.agents\/skills\/[a-z0-9][a-z0-9._-]{0,62}$/.test(
 					entry.targetPath,
 				) ||
+				entry.targetPath !== `.agents/skills/${entry.name}` ||
 				isAbsolute(entry.targetPath) ||
 				entry.targetPath.includes("\\") ||
 				entry.targetPath.split("/").some((part) => part === "..")
@@ -167,9 +176,7 @@ export function claudeNativeSkillLaunchOptions(
 				throw new RuntimeSkillDirectoryErrorV1();
 			const path = resolve(rootRealPath, entry.targetPath, "SKILL.md");
 			if (!contained(path)) throw new RuntimeSkillDirectoryErrorV1();
-			const realPath = realpathSync(path);
-			if (!contained(realPath)) throw new RuntimeSkillDirectoryErrorV1();
-			return realPath;
+			return verifiedFileRealPath(path);
 		});
 		let nativeSkillPaths: readonly string[];
 		try {
@@ -187,9 +194,7 @@ export function claudeNativeSkillLaunchOptions(
 			)
 				throw new RuntimeSkillDirectoryErrorV1();
 			const resolvedPath = resolve(path);
-			const realPath = realpathSync(resolvedPath);
-			if (!contained(realPath)) throw new RuntimeSkillDirectoryErrorV1();
-			return realPath;
+			return verifiedFileRealPath(resolvedPath);
 		});
 		const expectedSet = new Set(expectedSkillPaths);
 		const verifiedSet = new Set(verifiedSkillPaths);
