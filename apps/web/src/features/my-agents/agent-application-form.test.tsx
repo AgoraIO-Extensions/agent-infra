@@ -21,6 +21,8 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
+const digest = `sha256:${"a".repeat(64)}`;
+
 type FormTestProps<T> = T extends unknown
 	? Omit<T, "deploymentConfiguration"> & {
 			deploymentConfiguration?: DeploymentConfigurationProjectionV2;
@@ -164,6 +166,18 @@ describe("AgentApplicationForm", () => {
 				value: `schemaVersion: 1
 entryServiceName: api
 resources:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: api
+      labels: {app: payments}
+    spec:
+      replicas: 1
+      selector: {matchLabels: {app: payments}}
+      template:
+        metadata: {labels: {app: payments}}
+        spec:
+          containers: [{name: api, image: ${digest}, ports: [{name: http, port: 8080, targetPort: 8080}]}]
   - apiVersion: v1
     kind: Service
     metadata:
@@ -174,12 +188,27 @@ resources:
       type: ClusterIP
       selector: {app: payments}
       ports: [{name: http, port: 8080, targetPort: 8080}]
-  - apiVersion: v1
-    kind: ConfigMap
+  - apiVersion: apps/v1
+    kind: Deployment
     metadata:
-      name: payments
+      name: worker
+      labels: {app: worker}
     spec:
-      data: {MODE: production}
+      replicas: 1
+      selector: {matchLabels: {app: worker}}
+      template:
+        metadata: {labels: {app: worker}}
+        spec:
+          containers: [{name: worker, image: ${digest}, ports: [{name: http, port: 8080, targetPort: 8080}]}]
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: worker
+      labels: {app: worker}
+    spec:
+      type: ClusterIP
+      selector: {app: worker}
+      ports: [{name: http, port: 8080, targetPort: 8080}]
 `,
 			},
 		});
