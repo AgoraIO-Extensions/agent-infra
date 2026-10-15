@@ -52,6 +52,7 @@ import {
 	type WecomCallbackKeysV1,
 } from "@agent-infra/wecom";
 import type { PlatformAppDependencies } from "./app.js";
+import { createPostgresBrowserCommandAdmissionV1 } from "./browser-command-admission.js";
 import type { ConnectionCapabilityV1 } from "./connection-consumer-profile.js";
 import {
 	assemblePlatformFilesV1,
@@ -638,6 +639,20 @@ export function assemblePlatformApi(
 			};
 		},
 	};
+	const browserCommandAdmission =
+		input.browserCommands ??
+		createPostgresBrowserCommandAdmissionV1({
+			databaseUrl: input.databaseUrl,
+			authorization: conversationAuthorization,
+		});
+	const browserCommandStore =
+		input.browserCommands === undefined
+			? (
+					browserCommandAdmission as ReturnType<
+						typeof createPostgresBrowserCommandAdmissionV1
+					>
+				).store
+			: undefined;
 	const files = input.files
 		? assemblePlatformFilesV1({
 				databaseUrl: input.databaseUrl,
@@ -882,9 +897,7 @@ export function assemblePlatformApi(
 		...(input.nativeCapabilityInvocation
 			? { nativeCapabilityInvocation: input.nativeCapabilityInvocation }
 			: {}),
-		...(input.browserCommands
-			? { browserCommands: input.browserCommands }
-			: {}),
+		browserCommands: browserCommandAdmission,
 		sessionAudit: {
 			identity: input.identity,
 			audit: auditQuery,
@@ -992,6 +1005,7 @@ export function assemblePlatformApi(
 		skillHubBindingAdmission,
 		applicationApiCredentialStore,
 		...(installationStore ? [installationStore] : []),
+		...(browserCommandStore ? [browserCommandStore] : []),
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
 		...(input.userGovernance ? [input.userGovernance] : []),
 		...(agentDefaultRelayKeyStore ? [agentDefaultRelayKeyStore] : []),
