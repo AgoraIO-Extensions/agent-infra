@@ -142,6 +142,7 @@ beforeAll(async () => {
 }, 120_000);
 
 afterEach(async () => {
+	await client`truncate platform.conversations cascade`;
 	await client`truncate platform.agents cascade`;
 	await client`truncate platform.outbox_items, platform.idempotency_records`;
 });
