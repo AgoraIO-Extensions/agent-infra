@@ -2160,6 +2160,12 @@ test("Agent detail directory failure stays readable and configuration preserves 
 	await expect(page.getByRole("option")).toHaveCount(0);
 	await page.keyboard.press("Escape");
 	await capture(page, info, "directory-configuration-error");
+	// 没有任何改动时保存不可用（#2560）：先做一次与 Owner、范围无关的真实改动，
+	// 再确认目录读取失败时未解析的选择仍随请求原样提交。
+	await expect(page.getByRole("button", { name: "校验并保存" })).toBeDisabled();
+	await page.getByRole("button", { name: "添加 Secret" }).click();
+	await page.getByLabel("Secret 名称").fill("CHANGED_SECRET");
+	await page.getByLabel("新 Secret 值").fill("changed-secret-value");
 	await page.getByRole("button", { name: "校验并保存" }).click();
 	await expect(
 		page.getByRole("status").filter({ hasText: "配置已提交" }),
