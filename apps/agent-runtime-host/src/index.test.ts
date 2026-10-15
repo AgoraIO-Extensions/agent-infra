@@ -289,13 +289,14 @@ describe("RuntimeHost environment assembly", () => {
 			const values: NodeJS.ProcessEnv = await environment();
 			const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
 			if (!dataDirectory) throw new Error("Missing test data directory");
+			const fixture = await standardMcpFixture();
 			values.AGENT_INFRA_RUNTIME_DRIVER = binding;
 			values[
 				binding === "pi"
 					? "AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE"
 					: "AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE"
 			] = "verified-v1";
-			values.AGENT_INFRA_RUNTIME_AGENT_ID = "agent-messages";
+			values.AGENT_INFRA_RUNTIME_AGENT_ID = fixture.input.scope.agentId;
 			values.AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY =
 				"synthetic-model-credential";
 			values.AGENT_INFRA_RUNTIME_MODEL_CONFIG = JSON.stringify({
@@ -316,18 +317,11 @@ describe("RuntimeHost environment assembly", () => {
 					},
 				],
 			});
-			const profile = {
-				schemaVersion: 1 as const,
-				publicOrigin: "https://connection.example.test",
-				mcpPath: "/mcp",
-				consumerId: "platform",
-				audience: "fixture-resource",
-				egressProfile: { ref: "fixture-egress", revision: "r1" },
-			};
+			const profile = fixture.target.profile;
 			const approval = {
 				schemaVersion: 1 as const,
 				configFingerprint: connectionConsumerProfileFingerprintV1(profile),
-				source: { ref: "fixture-deployment", revision: "r1" },
+				source: fixture.target.source,
 				egressEnforced: true as const,
 			};
 			const profileFile = join(dataDirectory, "consumer.json");
@@ -338,6 +332,13 @@ describe("RuntimeHost environment assembly", () => {
 				approval.source.ref,
 				approval.source.revision,
 			]);
+			const exportReceipt = await writeStandardMcpExport(
+				dataDirectory,
+				fixture.target,
+				[fixture.input],
+			);
+			values.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION =
+				exportReceipt.revision;
 			let openedWith: Record<string, unknown> | undefined;
 			const open =
 				binding === "pi"
