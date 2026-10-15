@@ -22,13 +22,18 @@ import { workspacePathAllowed } from "./workspace-path.js";
 const nativeSkillPromptMaximumLength = 16 * 1024;
 const nativeSkillName = /^[a-z0-9][a-z0-9._-]{0,62}$/;
 const nativeSkillCommandToken = /^(?:\/|\.\.(?:[\\/]|$))/;
-const nativeSkillExternalTarget = /\b[A-Za-z][A-Za-z0-9+.-]{1,31}:\/\/\S*/;
+const nativeSkillExternalTarget = /\b[A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/\S*/;
 
 function validateOpenCodeNativeSkillParameters(parameters: string) {
 	if (
 		[...parameters].some((character) => {
 			const code = character.codePointAt(0) ?? 0;
-			return code < 0x20 || code === 0x7f || code === 0x2028 || code === 0x2029;
+			return (
+				code <= 0x1f ||
+				(code >= 0x7f && code <= 0x9f) ||
+				code === 0x2028 ||
+				code === 0x2029
+			);
 		})
 	)
 		throw new Error("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");

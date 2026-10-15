@@ -80,10 +80,13 @@ it("maps a verified Applied Skill to a bounded OpenCode slash prompt", () => {
 		"summarize\nfiles",
 		"summarize\tfiles",
 		"summarize\u0000files",
+		"summarize\u0085files",
+		"summarize\u009bfiles",
 		"/other-skill",
 		"/tmp/secret",
 		"../outside",
 		"..\\outside",
+		"a://external.example",
 		"https://external.example/target",
 		"inspect https://external.example/target",
 	])
