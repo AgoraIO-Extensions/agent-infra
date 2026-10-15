@@ -229,4 +229,24 @@ describe("Postgres Browser handoff admission", () => {
 			reason: "conversation_unavailable",
 		});
 	});
+
+	it("fails closed when the active Execution belongs to an older session", async () => {
+		await seed();
+		await client`
+			update platform.conversations
+			set session_generation = 2
+			where id = ${conversationId}
+		`;
+		const { input } = request();
+		await expect(
+			transaction.admit(
+				input,
+				async (state) => plan(input, state),
+				async () => true,
+			),
+		).resolves.toEqual({
+			outcome: "unavailable",
+			reason: "conversation_unavailable",
+		});
+	});
 });
