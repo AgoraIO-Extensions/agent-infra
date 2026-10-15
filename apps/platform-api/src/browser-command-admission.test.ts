@@ -74,4 +74,41 @@ describe("Platform API Browser command admission", () => {
 			await bridge.store.close();
 		},
 	);
+
+	it("rejects mixed identity fields instead of normalizing them", async () => {
+		const authorization = { authorize: vi.fn() };
+		const bridge = createPostgresBrowserCommandAdmissionV1({
+			databaseUrl: "postgres://invalid:invalid@127.0.0.1:1/invalid",
+			authorization,
+		});
+		await expect(
+			bridge.invoke({
+				identity: {
+					schemaVersion: 1,
+					userId: "user-1",
+					displayName: "Ada",
+					accountStatus: "active",
+					organizationIds: [],
+					roles: ["employee"],
+					authorizationRevision: "identity-1",
+				},
+				conversationId: "conversation-1",
+				command: {
+					schemaVersion: 1,
+					command: "confirm_side_effect",
+					confirmationId: "confirmation-1",
+					handoffId: "foreign-handoff",
+				} as unknown as import("@agent-infra/contracts/pilot").BrowserCommandRequestV1,
+				idempotencyKey: "browser-command-foreign-field",
+				requestId: "request-foreign-field",
+				traceId: "trace-foreign-field",
+				signal: new AbortController().signal,
+			}),
+		).resolves.toEqual({
+			outcome: "unavailable",
+			conversationId: "conversation-1",
+		});
+		expect(authorization.authorize).not.toHaveBeenCalled();
+		await bridge.store.close();
+	});
 });
