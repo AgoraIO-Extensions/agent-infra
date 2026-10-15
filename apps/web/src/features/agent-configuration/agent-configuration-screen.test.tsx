@@ -665,4 +665,28 @@ describe("agents whose models are managed by the default Relay Key (#2421)", () 
 		);
 		expect(screen.getByRole("checkbox", { name: "替换模型配置" })).toBeTruthy();
 	});
+
+	it("uses deployment catalog candidates instead of model ID text fields", () => {
+		render(
+			<AgentConfigurationScreen
+				agent={keyedAgent}
+				deploymentModelCandidates={[
+					{
+						endpointId: "catalog",
+						modelId: "model-a",
+						reasoningLevels: ["medium", "high"],
+					},
+				]}
+				onPreviewDefaultRelayKeyCandidates={vi.fn()}
+				onReplaceDefaultRelayKey={vi.fn()}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("checkbox", { name: "替换模型配置" }));
+		expect(screen.getAllByText("catalog · model-a").length).toBeGreaterThan(0);
+		expect(screen.queryByLabelText("选项 ID")).toBeNull();
+	});
 });

@@ -4,15 +4,18 @@ import { useBrowserSession } from "../use-browser-session.js";
 import { AgentAuthorizationControls } from "./agent-authorization-controls.js";
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
 import { AgentConfigurationScreen } from "./agent-configuration-screen.js";
+import type { KeylessModelCandidate } from "./keyless-model-selection.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
 import { useAgentDefaultRelayKeyState } from "./use-agent-default-relay-key-state.js";
 
 type AgentConfigurationWorkflowProps = {
 	agent: AgentProjectionV2;
+	deploymentModelCandidates?: readonly KeylessModelCandidate[];
 };
 
 export function AgentConfigurationWorkflow({
 	agent,
+	deploymentModelCandidates,
 }: AgentConfigurationWorkflowProps) {
 	const session = useBrowserSession();
 	const submission = useAgentConfigurationSubmission(agent.agentId);
@@ -47,6 +50,7 @@ export function AgentConfigurationWorkflow({
 			<AgentConfigurationScreen
 				lifecycle={isConfigurationOwner ? lifecycle : undefined}
 				agent={agent}
+				deploymentModelCandidates={deploymentModelCandidates}
 				authorization={isConfigurationOwner ? authorization : undefined}
 				commandError={commandError}
 				commandResult={submission.data}

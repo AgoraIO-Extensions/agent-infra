@@ -31,6 +31,10 @@ import {
 	configurationDraftFromAgent,
 } from "./agent-configuration-draft.js";
 import { KeylessModelPicker } from "./keyless-model-picker.js";
+import type {
+	KeylessModelCandidate,
+	KeylessModelSelection,
+} from "./keyless-model-selection.js";
 import { useKeylessKeyCheck } from "./use-keyless-key-check.js";
 import { WecomAppSetup } from "./wecom-app-setup.js";
 import { WecomBotSetup } from "./wecom-bot-setup.js";
@@ -46,6 +50,8 @@ type AgentConfigurationScreenProps = {
 	onSave: (body: AgentConfigurationUpdateRequestV2Writable) => void;
 	/** Agent 由默认 Relay Key 管理模型（配置 V3）：用候选模型选择代替自由文本字段。 */
 	defaultRelayKeyManaged?: boolean;
+	/** Deployment catalog candidates for non-Key-managed Agents. */
+	deploymentModelCandidates?: readonly KeylessModelCandidate[];
 	onPreviewDefaultRelayKeyCandidates?: (
 		keyValue: string,
 	) => Promise<AgentDefaultRelayKeyCheck>;
@@ -161,6 +167,7 @@ export function AgentConfigurationScreen({
 	commandError = null,
 	commandResult,
 	defaultRelayKeyManaged = false,
+	deploymentModelCandidates,
 	lifecycle,
 	onSave,
 	onPreviewDefaultRelayKeyCandidates,
@@ -199,6 +206,36 @@ export function AgentConfigurationScreen({
 		)
 		.join("、");
 	const isDisabled = submitting || agent.managementStatus === "disabled";
+	const catalogModelPicker = deploymentModelCandidates ? (
+		<KeylessModelPicker
+			candidates={deploymentModelCandidates}
+			current={agent.configuration.modelOptions}
+			currentDefault={{
+				optionId: agent.configuration.defaultModelOptionId ?? "",
+				level: agent.configuration.defaultReasoningLevel ?? "",
+			}}
+			disabled={isDisabled}
+			idPrefix="configuration-catalog-model"
+			key={deploymentModelCandidates
+				.map((candidate) => `${candidate.endpointId}/${candidate.modelId}`)
+				.join("|")}
+			onChange={(selection: KeylessModelSelection | null) =>
+				setDraft((current) => ({
+					...current,
+					replaceModels: selection !== null,
+					models:
+						selection?.options.map((option) => ({
+							endpointId: option.endpointId,
+							modelId: option.modelId,
+							optionId: option.optionId,
+							reasoningLevels: option.reasoningLevels.join(","),
+						})) ?? [],
+					defaultModelOptionId: selection?.defaultOptionId ?? "",
+					defaultReasoningLevel: selection?.defaultReasoningLevel ?? "",
+				}))
+			}
+		/>
+	) : null;
 	const replaceDefaultRelayKey = () => {
 		if (!onReplaceDefaultRelayKey || !keyCheck.typed) return;
 		onReplaceDefaultRelayKey(keyCheck.key.trim());
@@ -569,7 +606,9 @@ export function AgentConfigurationScreen({
 													/>
 													替换模型配置
 												</Label>
-												{draft.replaceModels ? (
+												{draft.replaceModels && catalogModelPicker ? (
+													catalogModelPicker
+												) : draft.replaceModels ? (
 													<>
 														<DraftRows
 															fields={
