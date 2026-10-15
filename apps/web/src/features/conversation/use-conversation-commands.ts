@@ -3,6 +3,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import type { Client } from "../../pilot/generated/client/index.js";
 import { client as defaultClient } from "../../pilot/generated/client.gen.js";
 import {
+	type BrowserCommandBody,
 	type ConversationCommand,
 	type ConversationCommandTarget,
 	type NativeCapabilityCommandBody,
@@ -164,6 +165,8 @@ export function useConversationCommands({
 		) => start({ kind: "selection", body: { schemaVersion: 1, ...selection } }),
 		invokeCapability: (body: NativeCapabilityCommandBody) =>
 			start({ kind: "native-capability", body }),
+		invokeBrowser: (body: BrowserCommandBody) =>
+			start({ kind: "browser", body }),
 		retry: () => {
 			const attempt = scope.attempt;
 			if (!scope.active || scope.denied || !attempt || attempt.pending)

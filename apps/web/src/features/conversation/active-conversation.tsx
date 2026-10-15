@@ -295,6 +295,13 @@ export function ActiveConversation({
 			void reader.refresh();
 		} else if (result.kind === "native-rejected") {
 			setNotice(`能力请求未受理：${result.outcome}`);
+		} else if (result.kind === "browser-accepted") {
+			setNotice(
+				result.receipt.outcome === "replayed"
+					? "Browser 命令已恢复。"
+					: "Browser 命令已受理。",
+			);
+			void reader.refresh();
 		}
 	}, [command.result, reader.refresh, refreshAgent]);
 	const options = customPlatformAdapter
@@ -327,6 +334,24 @@ export function ActiveConversation({
 			timeline.status !== "reconnecting" &&
 			!refreshing);
 	const commandLocked = command.isPending || command.result?.kind === "unknown";
+	const browserEvent = reader.browserHandoffEvent;
+	const browserBinding = browserEvent?.payload.binding;
+	const invokeBrowser = (
+		body:
+			| {
+					schemaVersion: 1;
+					command: "pause" | "take_over" | "return_to_agent" | "revoke";
+					handoffId: string;
+			  }
+			| {
+					schemaVersion: 1;
+					command:
+						| "confirm_side_effect"
+						| "reject_side_effect"
+						| "cancel_side_effect";
+					confirmationId: string;
+			  },
+	) => command.invokeBrowser(body);
 	// Keep the local draft editable while an Agent or its Session is becoming
 	// ready. Sending stays blocked by `blocked`/`preparing`; only an authorization
 	// or read failure should lock the text area itself (#1607).
@@ -638,6 +663,49 @@ export function ActiveConversation({
 							agent.capabilities.browser?.status === "available"
 						}
 						handoffEvent={reader.browserHandoffEvent}
+						currentBinding={browserBinding}
+						onPauseAgent={({ id }) =>
+							invokeBrowser({
+								schemaVersion: 1,
+								command: "pause",
+								handoffId: id,
+							})
+						}
+						onTakeOver={({ id }) =>
+							invokeBrowser({
+								schemaVersion: 1,
+								command: "take_over",
+								handoffId: id,
+							})
+						}
+						onReturnToAgent={({ id }) =>
+							invokeBrowser({
+								schemaVersion: 1,
+								command: "return_to_agent",
+								handoffId: id,
+							})
+						}
+						onConfirmSideEffect={({ id }) =>
+							invokeBrowser({
+								schemaVersion: 1,
+								command: "confirm_side_effect",
+								confirmationId: id,
+							})
+						}
+						onRejectSideEffect={({ id }) =>
+							invokeBrowser({
+								schemaVersion: 1,
+								command: "reject_side_effect",
+								confirmationId: id,
+							})
+						}
+						onCancelConfirmation={({ id }) =>
+							invokeBrowser({
+								schemaVersion: 1,
+								command: "cancel_side_effect",
+								confirmationId: id,
+							})
+						}
 					/>
 				) : null}
 				<CommandNotice

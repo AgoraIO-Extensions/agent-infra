@@ -1,4 +1,5 @@
 import {
+	BrowserCommandAcceptedProjectionV1Schema,
 	CommandAcceptedProjectionV1Schema,
 	ConversationProjectionV1Schema,
 	CreateConversationRequestV1Schema,
@@ -10,6 +11,7 @@ import {
 } from "@agent-infra/contracts/pilot";
 import type { Client } from "../../pilot/generated/client/index.js";
 import {
+	commandBrowserHandoffOrSideEffect,
 	createConversation,
 	regenerateAnswer,
 	stopExecution,
@@ -17,6 +19,8 @@ import {
 	updateConversationModelSelection,
 } from "../../pilot/generated/sdk.gen.js";
 import type {
+	BrowserCommandAcceptedProjectionV1,
+	BrowserCommandRequestV1,
 	CommandAcceptedProjectionV1,
 	CreateConversationData,
 	PilotProtocolErrorV1,
@@ -36,6 +40,7 @@ export type NativeCapabilityCommandBody = Readonly<{
 	directoryRevision: string;
 	parameters: string;
 }>;
+export type BrowserCommandBody = BrowserCommandRequestV1;
 export type ConversationCommand =
 	| {
 			kind: "create";
@@ -45,7 +50,8 @@ export type ConversationCommand =
 	| { kind: "stop"; body: StopExecutionData["body"] }
 	| { kind: "regenerate"; body: RegenerateAnswerData["body"] }
 	| { kind: "selection"; body: UpdateConversationModelSelectionData["body"] }
-	| { kind: "native-capability"; body: NativeCapabilityCommandBody };
+	| { kind: "native-capability"; body: NativeCapabilityCommandBody }
+	| { kind: "browser"; body: BrowserCommandBody };
 export type ConversationCommandResult =
 	| { kind: "created"; agentId: string; conversationId: string }
 	| { kind: "accepted"; receipt: CommandAcceptedProjectionV1 }
@@ -66,6 +72,10 @@ export type ConversationCommandResult =
 	| {
 			kind: "native-rejected";
 			outcome: string;
+	  }
+	| {
+			kind: "browser-accepted";
+			receipt: BrowserCommandAcceptedProjectionV1;
 	  }
 	| { kind: "denied"; code?: PilotProtocolErrorV1["code"] }
 	| {
@@ -147,6 +157,25 @@ export async function performConversationCommand(
 			if (typeof payload?.outcome === "string")
 				return { kind: "native-rejected", outcome: payload.outcome };
 			return { kind: "unknown" };
+		}
+		if (command.kind === "browser") {
+			if (!target.conversationId) return { kind: "unknown" };
+			const response = await commandBrowserHandoffOrSideEffect({
+				...options,
+				path: { conversationId: target.conversationId },
+				body: command.body,
+			});
+			if (response.response?.status !== 202 || !response.data)
+				return failure(response.response?.status, response.error);
+			const parsed = BrowserCommandAcceptedProjectionV1Schema.safeParse(
+				response.data,
+			);
+			if (
+				!parsed.success ||
+				parsed.data.conversationId !== target.conversationId
+			)
+				return { kind: "unknown" };
+			return { kind: "browser-accepted", receipt: parsed.data };
 		}
 		if (command.kind === "create") {
 			const body = CreateConversationRequestV1Schema.safeParse(command.body);

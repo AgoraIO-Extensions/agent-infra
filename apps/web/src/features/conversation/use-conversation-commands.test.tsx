@@ -1,4 +1,5 @@
 import {
+	BrowserCommandAcceptedProjectionV1Schema,
 	CommandAcceptedProjectionV1Schema,
 	ConversationProjectionV1Schema,
 	PilotProtocolErrorV1Schema,
@@ -66,6 +67,38 @@ afterEach(() => {
 });
 
 describe("Conversation commands through the generated client", () => {
+	it("sends a Browser command once with the server-bound Conversation path", async () => {
+		const receipt = BrowserCommandAcceptedProjectionV1Schema.parse({
+			schemaVersion: 1,
+			outcome: "accepted",
+			command: "take_over",
+			conversationId: "conversation-a",
+			executionId: "execution-a",
+			handoffId: "handoff-a",
+		});
+		const { result, requests } = setup(() =>
+			Response.json(receipt, { status: 202 }),
+		);
+		act(() => {
+			result.current.invokeBrowser({
+				schemaVersion: 1,
+				command: "take_over",
+				handoffId: "handoff-a",
+			});
+		});
+		await waitFor(() =>
+			expect(result.current.result).toEqual({
+				kind: "browser-accepted",
+				receipt,
+			}),
+		);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe(
+			"https://platform.example.test/api/v1/conversations/conversation-a/browser/commands",
+		);
+		expect(requests[0]?.headers.get("Idempotency-Key")).toBeTruthy();
+	});
+
 	it("treats a success body under an undocumented HTTP status as uncertain", async () => {
 		const { result } = setup(() =>
 			Response.json(conversation(), { status: 200 }),
