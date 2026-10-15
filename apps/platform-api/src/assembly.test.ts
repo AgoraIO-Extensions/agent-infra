@@ -121,7 +121,7 @@ describe("Platform API production assembly", () => {
 			"Platform API failed to start: codex_model_profiles_missing (template codex); see deploy/platform-api/README.md",
 		);
 	});
-	it("wires a deployment-owned Runtime model directory without deriving it from ModelCatalog", () => {
+	it("wires deployment-owned Runtime model and native metadata transports", () => {
 		const modelSelection = { read: vi.fn() };
 		const identity = {
 			schemaVersion: 1 as const,
@@ -164,10 +164,15 @@ describe("Platform API production assembly", () => {
 			prepareConfigurationSecrets: unavailable,
 			presentAgent: unavailable,
 			modelSelection,
+			nativeMetadataWorker: {
+				baseUrl: "http://worker.example.test",
+				serviceToken: "worker-service-token",
+			},
 		});
 		expect(assembly.dependencies.conversation.modelSelection).toBe(
 			modelSelection,
 		);
+		expect(assembly.dependencies.nativeMetadata?.reader).toBeDefined();
 		return assembly.close();
 	});
 

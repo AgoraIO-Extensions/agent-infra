@@ -112,8 +112,8 @@ if (
 )
 	throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
 if (
-	(nativeMetadataWorker === undefined) !==
-	(nativeMetadataResolveRequest === undefined)
+	nativeMetadataResolveRequest !== undefined &&
+	nativeMetadataWorker === undefined
 )
 	throw new Error("PLATFORM_NATIVE_METADATA_CONFIGURATION_INVALID");
 
@@ -146,6 +146,10 @@ export function createPlatformApiAssemblyInput() {
 		...(modelDirectory !== undefined ? { modelDirectory } : {}),
 		...(assembledNativeMetadata !== undefined
 			? { nativeMetadata: assembledNativeMetadata }
+			: {}),
+		...(nativeMetadataWorker !== undefined &&
+		nativeMetadataResolveRequest === undefined
+			? { nativeMetadataWorker }
 			: {}),
 		...(nativeMetadataCurrent !== undefined ? { nativeMetadataCurrent } : {}),
 		...(nativeCapabilityInvocation !== undefined

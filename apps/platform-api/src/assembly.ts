@@ -82,6 +82,9 @@ import {
 } from "./projection.js";
 import { createWorkerRuntimeModelDirectoryTransportV1 } from "./runtime-model-directory-transport.js";
 import { createRuntimeModelSelectionReaderFromStoreV1 } from "./runtime-model-selection-reader.js";
+import { createRuntimeNativeMetadataWorkerReaderV1 } from "./runtime-native-metadata-reader.js";
+import { createRuntimeNativeMetadataScopeResolverV1 } from "./runtime-native-metadata-scope-resolver.js";
+import { createPlatformWorkerNativeMetadataGatewayClientV1 } from "./runtime-native-metadata-worker-client.js";
 import {
 	assembleSkillHubReadApiV1,
 	type SkillHubProviderImportDeploymentV1,
@@ -178,6 +181,13 @@ export interface PlatformApiAssemblyInput {
 	};
 	/** Optional deployment-owned public native metadata reader. */
 	readonly nativeMetadata?: Pick<NativeMetadataRoutesDependenciesV1, "reader">;
+	/** Fixed API → Worker ingress; the Store scope resolver is assembled here. */
+	readonly nativeMetadataWorker?: {
+		readonly baseUrl: string;
+		readonly serviceToken: string;
+		readonly fetch?: typeof fetch;
+		readonly transportTimeoutMs?: number;
+	};
 	/** Optional deployment-owned native capability admission route. */
 	readonly nativeCapabilityInvocation?: PlatformAppDependencies["nativeCapabilityInvocation"];
 	/** Deployment-owned API → Worker Browser command bridge. */
@@ -421,6 +431,20 @@ export function assemblePlatformApi(
 			? { eventWindow: 200 }
 			: { eventWindow: input.conversationEventWindow }),
 	});
+	const assembledNativeMetadata =
+		input.nativeMetadata ??
+		(input.nativeMetadataWorker
+			? {
+					reader: createRuntimeNativeMetadataWorkerReaderV1({
+						resolveRequest: createRuntimeNativeMetadataScopeResolverV1({
+							query: conversationQuery,
+						}),
+						gateway: createPlatformWorkerNativeMetadataGatewayClientV1(
+							input.nativeMetadataWorker,
+						),
+					}),
+				}
+			: undefined);
 	if (input.modelSelection !== undefined && input.modelDirectory !== undefined)
 		throw new Error("PLATFORM_MODEL_SELECTION_DUPLICATE");
 	const modelSelection =
@@ -548,7 +572,7 @@ export function assemblePlatformApi(
 		managementQuery,
 		configurationQuery,
 		presentAgent,
-		nativeMetadataAvailable: input.nativeMetadata !== undefined,
+		nativeMetadataAvailable: assembledNativeMetadata !== undefined,
 	});
 	const conversationAuthorization: ConversationAuthorization = {
 		async authorize(identity, request) {
@@ -868,11 +892,11 @@ export function assemblePlatformApi(
 					resolveCurrentTaskUser(input.identity, actorId, randomUUID()),
 			}),
 		},
-		...(input.nativeMetadata
+		...(assembledNativeMetadata
 			? {
 					nativeMetadata: {
 						identity: input.identity,
-						reader: input.nativeMetadata.reader,
+						reader: assembledNativeMetadata.reader,
 					},
 				}
 			: {}),

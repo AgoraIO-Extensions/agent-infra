@@ -59,11 +59,10 @@ export const modelSelection = undefined;
 // Optional deployment-owned native metadata reader. Supply the existing
 // reader object only after its API/Worker/Host proof and Session routing are configured.
 export const nativeMetadata = undefined;
-// Production shortcut: export the fixed Worker ingress and the deployment
-// resolver for the persisted original Execution. The resolver must return the
-// Host scope reference produced by the same Worker/Host binding; it must never
-// trust a URL, Host Session, user or Agent supplied by HTTP.
+// Production shortcut: export only the fixed Worker ingress. Platform API
+// assembles the Store-backed exact Execution/Host scope resolver itself.
 export const nativeMetadataWorker = undefined;
+// Optional controlled override for tests or a reviewed deployment seam.
 export const nativeMetadataResolveRequest = undefined;
 
 // Optional controlled Skill Hub Provider import. This is a deployment-owned

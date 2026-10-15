@@ -99,6 +99,12 @@ describe("explicit custom Agent deployment ports", () => {
 			serviceToken: "worker-token",
 		} satisfies NonNullable<ProductionPlatformApiInputV1["modelDirectory"]>;
 		const nativeMetadata = {} as ProductionPlatformApiInputV1["nativeMetadata"];
+		const nativeMetadataWorker = {
+			baseUrl: "http://platform-worker.local",
+			serviceToken: "worker-token",
+		} satisfies NonNullable<
+			ProductionPlatformApiInputV1["nativeMetadataWorker"]
+		>;
 		const nativeMetadataCurrent =
 			{} as ProductionPlatformApiInputV1["nativeMetadataCurrent"];
 		const apiInput = {} as ProductionPlatformApiInputV1;
@@ -110,6 +116,7 @@ describe("explicit custom Agent deployment ports", () => {
 				modelSelection,
 				modelDirectory,
 				nativeMetadata,
+				nativeMetadataWorker,
 				nativeMetadataCurrent,
 			}),
 		).toMatchObject({
@@ -117,6 +124,7 @@ describe("explicit custom Agent deployment ports", () => {
 			modelSelection,
 			modelDirectory,
 			nativeMetadata,
+			nativeMetadataWorker,
 			nativeMetadataCurrent,
 		});
 	});
@@ -141,6 +149,7 @@ describe("explicit custom Agent deployment ports", () => {
 		["model reader", "modelSelection"],
 		["model directory transport", "modelDirectory"],
 		["native metadata reader", "nativeMetadata"],
+		["native metadata Worker", "nativeMetadataWorker"],
 		["native metadata current route", "nativeMetadataCurrent"],
 	] as const)("rejects duplicate %s authorities", (_label, field) => {
 		const value = {};
@@ -161,7 +170,9 @@ describe("explicit custom Agent deployment ports", () => {
 						? "PLATFORM_MODEL_DIRECTORY_DUPLICATE"
 						: field === "nativeMetadata"
 							? "PLATFORM_NATIVE_METADATA_DUPLICATE"
-							: "PLATFORM_NATIVE_METADATA_CURRENT_DUPLICATE",
+							: field === "nativeMetadataWorker"
+								? "PLATFORM_NATIVE_METADATA_WORKER_DUPLICATE"
+								: "PLATFORM_NATIVE_METADATA_CURRENT_DUPLICATE",
 		);
 	});
 });
