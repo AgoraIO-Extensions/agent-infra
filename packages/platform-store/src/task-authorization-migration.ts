@@ -4,7 +4,7 @@ import {
 	parseTaskAuthorizationBoundaryV1,
 	type TaskAuthorizationBoundaryV1,
 } from "@agent-infra/platform-core";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
 /** Immutable, body-free facts from the original Platform producer transaction. */

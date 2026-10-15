@@ -18,14 +18,10 @@ import {
 	type TaskPrincipalV1,
 } from "@agent-infra/platform-core";
 
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 import { exactRecord } from "./conversation-execution-common.js";
 import { readRecentPersonalConversations } from "./conversation-recent-query.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
-import {
-	observePostgresClient,
-	type StoreQueryObservabilityOptions,
-} from "./query-observability.js";
 import {
 	conversationSandboxReadBindingSql,
 	sessionSandboxResumableSql,
@@ -162,7 +158,6 @@ export type ConversationReplayResultV1 =
 
 export interface PostgresConversationQueryOptionsV1 {
 	readonly databaseUrl: string;
-	readonly observability?: StoreQueryObservabilityOptions;
 	readonly replayWindow?: number;
 	readonly replayWindowMs?: number;
 	/** Recent event window for detail reads; omitted keeps historical full reads. */
@@ -1061,14 +1056,11 @@ export class PostgresConversationQueryV1 {
 			) {
 				invalidRequest();
 			}
-			this.#client = observePostgresClient(
-				postgres(
+			this.#client = postgres(
 					platformDatabaseUrlFromEnvironment({
 						PLATFORM_DATABASE_URL: options.databaseUrl,
 					}),
 					{ max: 10 },
-				),
-				options.observability ?? {},
 			);
 			this.#replayWindow = options.replayWindow ?? 100;
 			this.#replayWindowMs = options.replayWindowMs ?? defaultReplayWindowMs;

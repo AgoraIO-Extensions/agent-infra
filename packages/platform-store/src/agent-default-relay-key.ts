@@ -5,7 +5,7 @@ import {
 	AgentDefaultRelayKeyErrorV1,
 	type AgentDefaultRelayKeyTransactionV1,
 } from "@agent-infra/platform-core";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import {

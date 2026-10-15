@@ -10,7 +10,7 @@ import {
 } from "@agent-infra/platform-core";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 import { applicationMaterialGrantTransactionV1 } from "./application-material-grant.js";
 import {
 	auditEvents,

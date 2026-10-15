@@ -19,7 +19,7 @@ import {
 	parseTaskAuthorizationBoundaryV1,
 	requireConversationOperationSuccessorV2,
 } from "@agent-infra/platform-core";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 import { readSessionSandboxBinding } from "./session-sandbox.js";
 
 type Transaction = postgres.TransactionSql;

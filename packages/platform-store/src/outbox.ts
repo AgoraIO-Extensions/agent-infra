@@ -1,4 +1,4 @@
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 
 import { platformDatabaseUrlFromEnvironment } from "./migrate.ts";
 import { matchesPostgresErrorCode } from "./postgres-error.ts";

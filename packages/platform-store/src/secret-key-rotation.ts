@@ -13,7 +13,7 @@ import type {
 	SecretKeyRotationProgressV1,
 	SecretKeyRotationStorePortV1,
 } from "@agent-infra/platform-core";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import { secretKeyAdvisoryLockName } from "./secret-key-lock.js";

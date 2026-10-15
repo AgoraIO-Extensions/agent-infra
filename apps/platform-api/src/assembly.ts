@@ -46,7 +46,6 @@ import {
 	PostgresScopedPlatformAuditQueryV1,
 	PostgresSkillHubAgentBindingAdmissionV1,
 	PostgresTaskAuthorizationStoreV1,
-	type StoreQueryObservability,
 } from "@agent-infra/platform-store";
 import {
 	createWecomChannelAdmissionV1,
@@ -199,7 +198,6 @@ export interface PlatformApiAssembly {
 
 export function assemblePlatformApi(
 	input: PlatformApiAssemblyInput,
-	storeObservability?: StoreQueryObservability,
 ): PlatformApiAssembly {
 	if (input.wecomApplicationSetup && !input.wecomCredentialEncryptionKeys)
 		throw new Error("WeCom application setup requires encryption keys");
@@ -410,9 +408,6 @@ export function assemblePlatformApi(
 		});
 	const conversationQuery = new PostgresConversationQueryV1({
 		databaseUrl: input.databaseUrl,
-		...(storeObservability
-			? { observability: { observability: storeObservability } }
-			: {}),
 		...(input.conversationReplayWindow === undefined
 			? {}
 			: { replayWindow: input.conversationReplayWindow }),

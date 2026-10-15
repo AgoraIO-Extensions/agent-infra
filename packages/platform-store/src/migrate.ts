@@ -1,7 +1,7 @@
 import { basename, resolve } from "node:path";
 
 import { readMigrationFiles } from "drizzle-orm/migrator";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 
 export interface PlatformMigrationOptions {
 	databaseUrl: string;

@@ -107,6 +107,7 @@ export {
 	readPlatformQueueResourceSnapshot,
 } from "./conversation-query.ts";
 export { PostgresFileStoreV1 } from "./files.js";
+export { configureStoreQueryObservability } from "./observed-postgres.js";
 export {
 	type StoreQueryObservability,
 	type StoreQueryObservabilityOptions,

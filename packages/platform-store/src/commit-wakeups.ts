@@ -1,4 +1,4 @@
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 
 /** Raised after a committed outbox item becomes available; carries no payload. */
 export const outboxWakeChannelV1 = "agent_infra_outbox_available";

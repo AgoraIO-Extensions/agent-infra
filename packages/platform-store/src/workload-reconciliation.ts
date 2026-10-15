@@ -20,7 +20,7 @@ import {
 	PostgresJsSession,
 	PostgresJsTransaction,
 } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 // 审批后的 Workload 与会话路径显式接收 V3（默认 Relay Key、无模型凭证）配置。
 import { decodeVersionedAgentConfigurationRecord as decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import {

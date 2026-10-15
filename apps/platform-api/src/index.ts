@@ -3,6 +3,7 @@ import {
 	type ObservabilityOptions,
 	startObservability,
 } from "@agent-infra/observability";
+import { configureStoreQueryObservability } from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
 
 import {
@@ -112,7 +113,6 @@ export function startPlatformApi(options: StartOptions) {
 
 export async function loadPlatformApiAssembly(
 	moduleSpecifier = process.env.PLATFORM_API_DEPLOYMENT_MODULE,
-	storeObservability?: Pick<ReturnType<typeof startObservability>, "record">,
 ): Promise<LoadedPlatformApiAssembly> {
 	if (!moduleSpecifier) {
 		throw new Error("PLATFORM_API_DEPLOYMENT_MODULE is required");
@@ -148,7 +148,7 @@ export async function loadPlatformApiAssembly(
 			const diagnostic = deploymentDiagnosticV1(cause);
 			throw diagnostic ? withDeploymentDiagnosticV1(error, diagnostic) : error;
 		}
-		assembly = assemblePlatformApi(input, storeObservability);
+		assembly = assemblePlatformApi(input);
 	} catch (error) {
 		try {
 			await deployment.browserAuth?.close?.();
@@ -191,10 +191,8 @@ export async function startPlatformApiFromDeployment(
 				: {}),
 			...options.observabilityOptions,
 		});
-		assembly = await loadPlatformApiAssembly(
-			options.moduleSpecifier,
-			observability,
-		);
+		configureStoreQueryObservability({ observability });
+		assembly = await loadPlatformApiAssembly(options.moduleSpecifier);
 		server = startPlatformApi({
 			dependencies: assembly.dependencies,
 			browserAuth: assembly.browserAuth,

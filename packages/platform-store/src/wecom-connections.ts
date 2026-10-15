@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WecomConnectionFenceV1 } from "@agent-infra/platform-core";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 export interface WecomConnectionClaimV1 extends WecomConnectionFenceV1 {
 	readonly agentId: string;
 	readonly bindingReference: string;

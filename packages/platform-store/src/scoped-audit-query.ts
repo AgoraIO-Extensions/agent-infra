@@ -28,7 +28,7 @@ import {
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 import { readAgentManagementState } from "./agent-management.js";
 import { resolveApiAuditCredentialIdentityV1 } from "./api-audit-identity.js";
 import { readCurrentTaskApiUseGrantV1 } from "./application-task-authorization.js";

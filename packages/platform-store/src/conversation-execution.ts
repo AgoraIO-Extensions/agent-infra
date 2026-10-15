@@ -21,7 +21,7 @@ import {
 	type TaskApiChannelV1,
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 import {
 	lockConversation as lockDispatchConversation,
 	lockExecution as lockDispatchExecution,

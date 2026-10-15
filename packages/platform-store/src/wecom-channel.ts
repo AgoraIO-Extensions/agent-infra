@@ -20,7 +20,7 @@ import {
 	type WecomIdentityPortV1,
 	type WecomScopeV1,
 } from "@agent-infra/platform-core";
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { PostgresAgentManagementTransactionV1 } from "./agent-management.js";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";

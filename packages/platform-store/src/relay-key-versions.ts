@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { types } from "node:util";
 
-import postgres from "postgres";
+import postgres from "./observed-postgres.js";
 
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 
