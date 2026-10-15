@@ -114,6 +114,17 @@ export type BrowserActionRequestV1 = Readonly<{
 	confirmation?: BrowserSideEffectConfirmationV1;
 }>;
 
+export type BrowserSideEffectConfirmationInputV1 = Readonly<{
+	readonly command: "confirm" | "reject" | "cancel";
+	readonly confirmationId: string;
+	readonly actionId: string;
+	readonly operationRef: string;
+	readonly attemptRef: string;
+	readonly subjectId: string;
+	readonly authorization: BrowserActionAuthorizationV1;
+	readonly executionBinding: BrowserActionExecutionBindingV1;
+}>;
+
 export type BrowserActionRecordV1 = Readonly<{
 	actionId: string;
 	operationRef?: string;
@@ -418,11 +429,36 @@ export function createBrowserObserveControllerV1(input: {
 	let downloadCount = 0;
 	const confirmations = new Map<
 		string,
-		{ confirmation: BrowserSideEffectConfirmationV1; digest: string }
+		{
+			confirmation: BrowserSideEffectConfirmationV1;
+			digest: string;
+			request: BrowserActionRequestV1;
+		}
 	>();
 
 	function allowedOrigins(): ReadonlySet<string> {
 		return new Set(readCapability().policy.allowedOrigins.map(normalizeOrigin));
+	}
+
+	function pendingConfirmation(input_: BrowserSideEffectConfirmationInputV1) {
+		const pending = confirmations.get(input_.confirmationId);
+		if (
+			!pending ||
+			pending.confirmation.actionId !== input_.actionId ||
+			pending.request.operationRef !== input_.operationRef ||
+			pending.request.attemptRef !== input_.attemptRef ||
+			pending.confirmation.subjectId !== input_.subjectId ||
+			pending.confirmation.subjectId !== input_.authorization.subjectId ||
+			pending.confirmation.agentId !== input_.authorization.agentId ||
+			pending.confirmation.conversationId !==
+				input_.authorization.conversationId ||
+			pending.confirmation.executionId !== input_.authorization.executionId ||
+			pending.confirmation.capabilityVersion !==
+				input_.executionBinding.capabilityVersion ||
+			pending.confirmation.pageRevision !== input_.executionBinding.pageRevision
+		)
+			throw new Error("BROWSER_SIDE_EFFECT_CONFIRMATION_INVALID");
+		return pending;
 	}
 
 	function applyActionTimeout(page: Page) {
@@ -970,6 +1006,7 @@ export function createBrowserObserveControllerV1(input: {
 				confirmations.set(preview.confirmationId, {
 					confirmation: preview,
 					digest: requestDigest,
+					request,
 				});
 				const record = actionRecord(
 					request,
@@ -1393,6 +1430,45 @@ export function createBrowserObserveControllerV1(input: {
 			throw new Error(result.reasonCode ?? "BROWSER_UPLOAD_UNAVAILABLE");
 	}
 
+	async function confirmSideEffect(
+		input_: BrowserSideEffectConfirmationInputV1,
+	): Promise<BrowserActionRecordV1> {
+		const pending = pendingConfirmation(input_);
+		if (input_.command === "confirm") {
+			return executeAction({
+				...pending.request,
+				actionId: input_.actionId,
+				executionBinding: input_.executionBinding,
+				authorization: input_.authorization,
+				confirmation: pending.confirmation,
+				sideEffect: true,
+			});
+		}
+		confirmations.delete(input_.confirmationId);
+		const reasonCode =
+			input_.command === "reject"
+				? "BROWSER_SIDE_EFFECT_REJECTED"
+				: "BROWSER_SIDE_EFFECT_CANCELLED";
+		const record = actionRecord(
+			{
+				...pending.request,
+				actionId: input_.actionId,
+				executionBinding: input_.executionBinding,
+				authorization: input_.authorization,
+				sideEffect: true,
+			},
+			"rejected",
+			pending.request.page,
+			new Date().toISOString(),
+			{ actionId: input_.actionId, sideEffect: true, reasonCode },
+		);
+		if (pending.request.idempotencyKey) {
+			actions.set(pending.request.idempotencyKey, record);
+			actionDigests.set(pending.request.idempotencyKey, pending.digest);
+		}
+		return record;
+	}
+
 	return {
 		navigate,
 		observe,
@@ -1406,5 +1482,6 @@ export function createBrowserObserveControllerV1(input: {
 		screenshot,
 		download,
 		upload,
+		confirmSideEffect,
 	};
 }

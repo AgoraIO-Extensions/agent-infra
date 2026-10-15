@@ -14,6 +14,7 @@ import type {
 	BrowserObservationV1,
 	BrowserPageRecoveryInputV1,
 	BrowserPageReferenceV1,
+	BrowserSideEffectConfirmationInputV1,
 } from "./browser-observe.js";
 import { createBrowserObserveControllerV1 } from "./browser-observe.js";
 
@@ -34,6 +35,9 @@ export type BrowserSessionControllerV1 = Readonly<{
 		readonly executionBinding: BrowserActionExecutionBindingV1;
 	}): BrowserActionRecordV1 | null;
 	cancelAction(actionId: string): boolean;
+	confirmSideEffect?(
+		input: BrowserSideEffectConfirmationInputV1,
+	): Promise<BrowserActionRecordV1>;
 	close(): Promise<void>;
 	snapshot(): BrowserContextManagerSnapshotV1;
 }>;
@@ -82,6 +86,13 @@ export function createBrowserSessionControllerV1(input: {
 	}): BrowserActionRecordV1 | null {
 		return observe?.readAction(input_) ?? null;
 	}
+	async function confirmSideEffect(
+		input_: BrowserSideEffectConfirmationInputV1,
+	): Promise<BrowserActionRecordV1> {
+		await start();
+		if (!observe) throw new Error("BROWSER_SESSION_UNAVAILABLE");
+		return observe.confirmSideEffect(input_);
+	}
 
 	return {
 		start,
@@ -123,6 +134,7 @@ export function createBrowserSessionControllerV1(input: {
 		},
 		readAction,
 		cancelAction,
+		confirmSideEffect,
 		async close() {
 			await input.manager.close(input.binding);
 			observe = undefined;

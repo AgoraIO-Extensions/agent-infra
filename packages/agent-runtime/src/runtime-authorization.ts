@@ -41,7 +41,8 @@ export interface RuntimeExecutionAuthority {
 			| "authorization_revoked"
 			| "recovery"
 			| "generation_isolation"
-			| "browser_handoff";
+			| "browser_handoff"
+			| "browser_side_effect";
 	};
 	confirmedCursor?: string;
 	deliveredCursors: string[];

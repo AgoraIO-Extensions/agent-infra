@@ -850,6 +850,41 @@ function isRuntimeBrowserHandoffOpenApiAddition(previous, current) {
 	return isDeepStrictEqual(previous, normalized);
 }
 
+// Browser side-effect confirmation is an additive authenticated V3 control
+// route; existing Runtime and handoff bytes remain unchanged.
+function isRuntimeBrowserSideEffectOpenApiAddition(previous, current) {
+	const path = "/internal/runtime/v3/browser/side-effect";
+	if (
+		previous.paths?.[path] !== undefined ||
+		current.paths?.[path] === undefined
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	const previousSchemas = previous.components?.schemas ?? {};
+	for (const name of [
+		"RuntimeBrowserSideEffectConfirmationRequestV3",
+		"RuntimeBrowserSideEffectConfirmationResponseV3",
+	]) {
+		if (previousSchemas[name] !== undefined) return false;
+		delete normalized.components.schemas[name];
+	}
+	for (const [name, addition] of [
+		["RuntimeControlCommandV2", "browser.side_effect"],
+		["RuntimeControlReasonV2", "browser_side_effect"],
+	]) {
+		const previousEnum = previousSchemas[name]?.enum;
+		const currentEnum = normalized.components?.schemas?.[name]?.enum;
+		if (!Array.isArray(previousEnum) || !Array.isArray(currentEnum))
+			return false;
+		if (previousEnum.includes(addition)) return false;
+		normalized.components.schemas[name].enum = currentEnum.filter(
+			(value) => value !== addition,
+		);
+	}
+	return isDeepStrictEqual(previous, normalized);
+}
+
 function stripRuntimeOperationIdentity(value) {
 	if (Array.isArray(value)) return value.map(stripRuntimeOperationIdentity);
 	if (!value || typeof value !== "object") return value;
@@ -4266,6 +4301,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isCustomAgentModelSelectionOpenApiAddition(previous, current) &&
 			!isRuntimeOperationIdentityOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserHandoffOpenApiAddition(previous, current) &&
+			!isRuntimeBrowserSideEffectOpenApiAddition(previous, current) &&
 			!isCustomAgentModelProjectionOpenApiAddition(previous, current) &&
 			!isStandardTemplateReleaseCompatibilityOpenApiAddition(previous, current)
 		) {

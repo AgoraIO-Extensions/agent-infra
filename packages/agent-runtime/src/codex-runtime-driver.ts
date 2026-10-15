@@ -122,6 +122,8 @@ import {
 } from "./codex-skill-launch.internal.js";
 import type {
 	RuntimeBrowserHandoffRequestV1,
+	RuntimeBrowserSideEffectConfirmationRequestV1,
+	RuntimeBrowserSideEffectConfirmationResultV1,
 	RuntimeBrowserToolExecutionRequestV1,
 	RuntimeBrowserToolExecutionResultV1,
 	RuntimeDriver,
@@ -5415,6 +5417,47 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				handoff.assertBinding(request.runtime);
 				return handoff.markBrowserCrashed();
 		}
+	}
+
+	async executeBrowserSideEffect(
+		nativeSessionRef: string,
+		executionId: string,
+		request: RuntimeBrowserSideEffectConfirmationRequestV1,
+		context: RuntimeDriverExecutionContextV1,
+		signal: AbortSignal = new AbortController().signal,
+	): Promise<RuntimeBrowserSideEffectConfirmationResultV1> {
+		const browser = context.browser;
+		if (!browser || typeof browser.executeSideEffect !== "function")
+			unavailable();
+		const state = this.readState();
+		const session = ownRecordValue(state.sessions, nativeSessionRef);
+		const execution = session
+			? ownRecordValue(session.executions, executionId)
+			: undefined;
+		if (
+			!session ||
+			!execution ||
+			session.agentId !== browser.binding.agentId ||
+			session.conversationId !== browser.binding.conversationId ||
+			session.sessionGeneration !== browser.binding.sessionGeneration ||
+			(request.command !== "reject" &&
+				(session.activeExecutionId !== executionId ||
+					execution.status !== "running"))
+		)
+			unavailable();
+		if (
+			request.binding.agentId !== browser.binding.agentId ||
+			request.binding.conversationId !== browser.binding.conversationId ||
+			request.binding.executionId !== executionId ||
+			request.binding.capabilityVersion !== browser.capabilityVersion ||
+			request.binding.sessionGeneration !== browser.binding.sessionGeneration ||
+			request.binding.resourceFence !== browser.binding.resourceFence ||
+			request.binding.workloadRevision !== browser.binding.workloadRevision ||
+			request.binding.imageDigest !== browser.binding.imageDigest
+		)
+			unavailable();
+		browser.handoff?.controller.assertAgentAccess();
+		return browser.executeSideEffect(request, signal);
 	}
 
 	/**

@@ -101,6 +101,10 @@ export interface RuntimeBrowserExecutionContextV1 {
 		request: RuntimeBrowserToolExecutionRequestV1,
 		signal: AbortSignal,
 	) => Promise<RuntimeBrowserToolExecutionResultV1>;
+	readonly executeSideEffect?: (
+		request: RuntimeBrowserSideEffectConfirmationRequestV1,
+		signal: AbortSignal,
+	) => Promise<RuntimeBrowserSideEffectConfirmationResultV1>;
 	readonly handoff?: RuntimeBrowserHandoffContextV1;
 }
 
@@ -137,6 +141,33 @@ export interface RuntimeBrowserToolExecutionResultV1 {
 		readonly text: string;
 	}[];
 	readonly success: boolean;
+	readonly failureCode?: string;
+}
+
+export interface RuntimeBrowserSideEffectConfirmationRequestV1 {
+	readonly command: "confirm" | "reject" | "cancel";
+	readonly binding: {
+		readonly actionId: string;
+		readonly confirmationId: string;
+		readonly operationRef: string;
+		readonly attemptRef: string;
+		readonly agentId: string;
+		readonly conversationId: string;
+		readonly executionId: string;
+		readonly capabilityVersion: number;
+		readonly pageRevision: number;
+		readonly sessionGeneration: number;
+		readonly resourceFence: number;
+		readonly workloadRevision: number;
+		readonly imageDigest: string;
+	};
+}
+
+export interface RuntimeBrowserSideEffectConfirmationResultV1 {
+	readonly actionId: string;
+	readonly operationRef: string;
+	readonly attemptRef: string;
+	readonly phase: "completed" | "failed" | "unknown";
 	readonly failureCode?: string;
 }
 
@@ -301,6 +332,13 @@ export interface RuntimeDriver {
 		context: RuntimeDriverExecutionContextV1,
 		signal?: AbortSignal,
 	): Promise<RuntimeBrowserToolExecutionResultV1>;
+	executeBrowserSideEffect?(
+		nativeSessionRef: string,
+		executionId: string,
+		request: RuntimeBrowserSideEffectConfirmationRequestV1,
+		context: RuntimeDriverExecutionContextV1,
+		signal?: AbortSignal,
+	): Promise<RuntimeBrowserSideEffectConfirmationResultV1>;
 	/** Validate the action refs against the Driver's durable operation journal. */
 	validateExternalAction?(
 		action: RuntimeExternalActionAuthorization,

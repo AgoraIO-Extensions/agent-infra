@@ -630,6 +630,7 @@
         "session.status",
         "generation.cancel",
         "browser.handoff",
+        "browser.side_effect",
         "events.persist",
         "events.ack"
       ],
@@ -649,6 +650,7 @@
               "session.status",
               "generation.cancel",
               "browser.handoff",
+              "browser.side_effect",
               "events.persist",
               "events.ack"
             ],
@@ -830,7 +832,8 @@
             "authorization_revoked",
             "recovery",
             "generation_isolation",
-            "browser_handoff"
+            "browser_handoff",
+            "browser_side_effect"
           ],
           "type": "string"
         },
@@ -892,7 +895,8 @@
         "authorization_revoked",
         "recovery",
         "generation_isolation",
-        "browser_handoff"
+        "browser_handoff",
+        "browser_side_effect"
       ],
       "type": "string"
     },
@@ -2481,6 +2485,7 @@
                   "session.status",
                   "generation.cancel",
                   "browser.handoff",
+                  "browser.side_effect",
                   "events.persist",
                   "events.ack"
                 ],
@@ -2662,7 +2667,8 @@
                 "authorization_revoked",
                 "recovery",
                 "generation_isolation",
-                "browser_handoff"
+                "browser_handoff",
+                "browser_side_effect"
               ],
               "type": "string"
             },
@@ -7469,6 +7475,7 @@
                       "session.status",
                       "generation.cancel",
                       "browser.handoff",
+                      "browser.side_effect",
                       "events.persist",
                       "events.ack"
                     ],
@@ -7650,7 +7657,8 @@
                     "authorization_revoked",
                     "recovery",
                     "generation_isolation",
-                    "browser_handoff"
+                    "browser_handoff",
+                    "browser_side_effect"
                   ],
                   "type": "string"
                 },

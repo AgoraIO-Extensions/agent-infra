@@ -12,6 +12,9 @@ import {
 	type RuntimeBrowserHandoffRequestV3,
 	RuntimeBrowserHandoffRequestV3Schema,
 	RuntimeBrowserHandoffResponseV3Schema,
+	type RuntimeBrowserSideEffectConfirmationRequestV3,
+	RuntimeBrowserSideEffectConfirmationRequestV3Schema,
+	RuntimeBrowserSideEffectConfirmationResponseV3Schema,
 	type RuntimeBusinessGrantClaimsV4,
 	type RuntimeBusinessRequestV4,
 	type RuntimeEventAckRequestV3,
@@ -1061,6 +1064,17 @@ export function createWorkerRuntimeHostClientV3(
 				value,
 				RuntimeBrowserHandoffRequestV3Schema,
 				RuntimeBrowserHandoffResponseV3Schema,
+				signal,
+			),
+		browserSideEffect: (
+			value: RuntimeBrowserSideEffectConfirmationRequestV3,
+			signal?: AbortSignal,
+		) =>
+			request(
+				"browser/side-effect",
+				value,
+				RuntimeBrowserSideEffectConfirmationRequestV3Schema,
+				RuntimeBrowserSideEffectConfirmationResponseV3Schema,
 				signal,
 			),
 		renewAuthorization: (

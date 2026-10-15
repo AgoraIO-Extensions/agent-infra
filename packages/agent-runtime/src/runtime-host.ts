@@ -658,6 +658,8 @@ export class RuntimeHost {
 				serialize: (key, work) => this.serialize(key, work),
 				executeBrowserHandoff: (request, claims, signal) =>
 					this.executeBrowserHandoffV3(request, claims, signal),
+				executeBrowserSideEffect: (request, claims, signal) =>
+					this.executeBrowserSideEffectV3(request, claims, signal),
 			});
 		if (options.validateGrantV4)
 			this.v4 = new RuntimeHostV4({
@@ -761,6 +763,40 @@ export class RuntimeHost {
 			{ browser },
 		);
 		return record ?? null;
+	}
+	private async executeBrowserSideEffectV3(
+		request: import("@agent-infra/contracts/runtime").RuntimeBrowserSideEffectConfirmationRequestV3,
+		claims: import("@agent-infra/contracts/runtime").RuntimeExecutionGrantClaimsV2,
+		signal: AbortSignal,
+	) {
+		if (!this.v3 || !this.options.driver.executeBrowserSideEffect)
+			runtimeAuthorizationDenied();
+		const session = await this.options.store.authorizeRequestV3(
+			claims,
+			"query",
+			this.options.grantValidationV2?.now ?? Date.now,
+		);
+		const nativeSessionRef =
+			session.session.nativeSessionRef ?? nativeSessionRequired();
+		const admitted = runtimeBrowserExecutionContextForCommand(
+			this.browserExecutionContext,
+			request,
+		);
+		const browser = await createBrowserExecutionContextForCommand(
+			this.options.createBrowserExecutionContext,
+			admitted,
+			request.executionId,
+			claims.principal,
+		);
+		if (!browser) runtimeAuthorizationDenied();
+		signal.throwIfAborted();
+		return this.options.driver.executeBrowserSideEffect(
+			nativeSessionRef,
+			request.executionId,
+			request,
+			{ browser },
+			signal,
+		);
 	}
 	async close() {
 		if (this.closed) return;
@@ -1040,6 +1076,13 @@ export class RuntimeHost {
 		signal: AbortSignal,
 	) {
 		return this.trustedHost().browserHandoff(value, verification, signal);
+	}
+	browserSideEffect(
+		value: import("@agent-infra/contracts/runtime").RuntimeBrowserSideEffectConfirmationRequestV3,
+		verification: unknown,
+		signal: AbortSignal,
+	) {
+		return this.trustedHost().browserSideEffect(value, verification, signal);
 	}
 	recoverStatusV3(
 		value: RuntimeStatusRequestV3,

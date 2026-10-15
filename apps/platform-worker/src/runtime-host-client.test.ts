@@ -1,6 +1,7 @@
 import type {
 	ExecutionGrantV1,
 	RuntimeBrowserHandoffRequestV3,
+	RuntimeBrowserSideEffectConfirmationRequestV3,
 	RuntimeSkillDirectoryEntryV1,
 	RuntimeSkillDirectoryRequestV1,
 	RuntimeSkillResourceReadRequestV1,
@@ -85,6 +86,49 @@ function statusRequest() {
 				modelOptionId: "model-option-client",
 				reasoningLevel: "medium",
 			},
+		},
+	};
+}
+
+function sideEffectRequest(): RuntimeBrowserSideEffectConfirmationRequestV3 {
+	return {
+		schemaVersion: 3,
+		requestId: "request-side-effect",
+		traceId: "trace-client",
+		principal: { kind: "user", id: "actor-client" },
+		channelId: "web",
+		agentId: "agent-client",
+		conversationId: "conversation-client",
+		executionId: "execution-client",
+		turnId: "turn-client",
+		sessionGeneration: 1,
+		hostSessionRef: "host-client",
+		operation: {
+			kind: "execution",
+			id: "execution-client",
+			deliveryFence: 3,
+			executionDeliveryFence: 3,
+		},
+		grant: {
+			schemaVersion: 2,
+			format: "runtime-execution-jws",
+			token: "header.payload.signature",
+		},
+		command: "confirm",
+		binding: {
+			actionId: "action-client",
+			confirmationId: "confirmation-client",
+			operationRef: "operation-client",
+			attemptRef: "attempt-client",
+			agentId: "agent-client",
+			conversationId: "conversation-client",
+			executionId: "execution-client",
+			sessionGeneration: 1,
+			capabilityVersion: 2,
+			pageRevision: 3,
+			resourceFence: 3,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
 		},
 	};
 }
@@ -294,6 +338,38 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 			code: "RUNTIME_RESPONSE_INVALID",
 			retryable: true,
 		});
+	});
+
+	it("sends Browser side-effect confirmation through the V3 endpoint", async () => {
+		const fetcher = vi.fn<typeof fetch>(
+			async () =>
+				new Response(
+					JSON.stringify({
+						schemaVersion: 3,
+						hostSessionRef: "host-client",
+						executionId: "execution-client",
+						actionId: "action-client",
+						operationRef: "operation-client",
+						attemptRef: "attempt-client",
+						outcome: "accepted",
+						phase: "completed",
+					}),
+					{ status: 200 },
+				),
+		);
+		const client = createWorkerRuntimeHostClientV3({
+			baseUrl: "http://runtime.internal",
+			serviceToken: "synthetic-service-token",
+			fetch: fetcher,
+		});
+		const request = sideEffectRequest();
+		await expect(client.browserSideEffect?.(request)).resolves.toMatchObject({
+			phase: "completed",
+		});
+		const [url] = fetcher.mock.calls[0] ?? [];
+		expect(String(url)).toBe(
+			"http://runtime.internal/internal/runtime/v3/browser/side-effect",
+		);
 	});
 	it.each(
 		[createWorkerRuntimeHostClientV1, createWorkerRuntimeHostClientV3].flatMap(

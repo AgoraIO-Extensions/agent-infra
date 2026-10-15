@@ -83,6 +83,45 @@ async function submit(host: RuntimeHost) {
 	return host.submitTurnV3(request, verifyRuntimeV2Fixture(request.grant));
 }
 
+it("fails closed for an unbound Browser side-effect confirmation", async () => {
+	const env = await setup();
+	try {
+		const accepted = await submit(env.host);
+		const request = signV3Fixture(
+			{
+				...base(accepted.hostSessionRef),
+				command: "confirm",
+				binding: {
+					actionId: "action-fixture",
+					confirmationId: "confirmation-fixture",
+					operationRef: "operation-fixture",
+					attemptRef: "attempt-fixture",
+					agentId: "agent-fixture",
+					conversationId: "conversation-fixture",
+					executionId: "execution-fixture",
+					sessionGeneration: 1,
+					capabilityVersion: 1,
+					pageRevision: 1,
+					resourceFence: 1,
+					workloadRevision: 1,
+					imageDigest: `sha256:${"a".repeat(64)}`,
+				},
+			},
+			"browser.side_effect",
+			{ purpose: "control", reason: "browser_side_effect" },
+		);
+		await expect(
+			env.host.browserSideEffect(
+				request,
+				verifyRuntimeV2Fixture(request.grant),
+				new AbortController().signal,
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+	} finally {
+		await env.host.close();
+	}
+});
+
 it("reports a durable busy result during V3 recovery", async () => {
 	const env = await setup();
 	try {
