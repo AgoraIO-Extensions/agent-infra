@@ -307,7 +307,12 @@ function validMultiServiceTopology(
 			(resource.spec.template.spec.restartPolicy === undefined ||
 				resource.spec.template.spec.restartPolicy === "Always") &&
 			services.some(
-				(service) => service.metadata.name === resource.spec.serviceName,
+				(service) =>
+					service.metadata.name === resource.spec.serviceName &&
+					Object.entries(service.spec.selector).every(
+						([key, expected]) =>
+							resource.spec.template.metadata.labels[key] === expected,
+					),
 			) &&
 			pvcNames.has(`${resource.metadata.name}-data`),
 	);
@@ -318,6 +323,8 @@ function validMultiServiceTopology(
 		workloads.length < 2 ||
 		workloads.length > MultiServiceMaxWorkloadsV1 ||
 		services.length !== workloads.length ||
+		new Set(services.map((service) => service.metadata.name)).size !==
+			services.length ||
 		statefulSets.length !== pvcs.length ||
 		!statefulTopologyValid ||
 		pvcs.some((pvc) => !expectedPvcNames.has(pvc.metadata.name)) ||
