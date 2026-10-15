@@ -34,6 +34,19 @@ export function isTurnOperation(operation: ConversationDispatchOperationV1) {
 	);
 }
 
+export function isNativeCapabilityOperation(
+	operation: ConversationDispatchOperationV1,
+) {
+	return operation === "conversation.native-capability.invoke.v1";
+}
+
+/** Runtime operations that produce durable event/status streams. */
+export function isRuntimeEventOperation(
+	operation: ConversationDispatchOperationV1,
+) {
+	return isTurnOperation(operation) || isNativeCapabilityOperation(operation);
+}
+
 export function operationId(claim: ConversationDispatchClaimV1): string {
 	if (claim.operation === "conversation.native-capability.invoke.v1")
 		return claim.executionId;

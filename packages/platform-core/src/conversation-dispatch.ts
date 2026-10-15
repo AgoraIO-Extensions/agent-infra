@@ -4,6 +4,8 @@ import {
 	parseCommand,
 } from "./conversation-dispatch-input.js";
 import {
+	isNativeCapabilityOperation,
+	isRuntimeEventOperation,
 	isTurnOperation,
 	operationId,
 	parseRuntimeEvent,
@@ -138,6 +140,9 @@ export function createConversationDispatchUseCaseV1(
 		claim.attemptCount !== undefined &&
 		claim.attemptCount >= maxRecoveryAttempts &&
 		(claim.executionStatus === "unknown" ||
+			claim.metadataRecovery !== undefined) &&
+		(isRuntimeEventOperation(claim.operation) ||
+			claim.operation === "conversation.turn.stop.v1" ||
 			claim.metadataRecovery !== undefined);
 	async function persistRuntimeEvents(
 		claim: ConversationDispatchClaimV1,
@@ -201,7 +206,7 @@ export function createConversationDispatchUseCaseV1(
 							// before its events were read is drained in this same claim
 							// once the Host confirms the finish (Spec §9.3).
 							if (
-								!isTurnOperation(claim.operation) ||
+								!isRuntimeEventOperation(claim.operation) ||
 								!dependencies.runtimeHost.recoverOriginalStatus ||
 								!(error instanceof ConversationRuntimeHostError) ||
 								error.code !== "RUNTIME_GRANT_INVALID"
@@ -741,7 +746,8 @@ export function createConversationDispatchUseCaseV1(
 				recoveryExhausted(claim) &&
 				(claim.operation === "conversation.turn.submit.v1" ||
 					claim.operation === "conversation.turn.regenerate.v1" ||
-					claim.operation === "conversation.turn.stop.v1")
+					claim.operation === "conversation.turn.stop.v1" ||
+					isNativeCapabilityOperation(claim.operation))
 			) {
 				const finished = await dependencies.store.finish({
 					claim,
@@ -791,6 +797,11 @@ export function createConversationDispatchUseCaseV1(
 						dependencies.runtimeHost.recoverOriginalStatus !== undefined)) &&
 				(claim.operation === "conversation.turn.submit.v1" ||
 					claim.operation === "conversation.turn.regenerate.v1");
+			const recoveringNativeCapability =
+				isNativeCapabilityOperation(claim.operation) &&
+				(claim.executionStatus === "unknown" ||
+					claim.executionStatus === "processing") &&
+				claim.hostSessionRef !== null;
 			if (
 				recoveringOriginalTurn &&
 				(claim.executionStatus === "waiting" ||
@@ -918,7 +929,7 @@ export function createConversationDispatchUseCaseV1(
 						"ORIGINAL_RESPONSE_ALREADY_FINISHED",
 					);
 				}
-				if (isTurnOperation(claim.operation) && claim.hostSessionRef) {
+				if (isRuntimeEventOperation(claim.operation) && claim.hostSessionRef) {
 					return persistRuntimeEvents(
 						claim,
 						authority,
@@ -997,7 +1008,12 @@ export function createConversationDispatchUseCaseV1(
 				leaseDurationMs,
 			);
 			try {
-				if (recoveringOriginalTurn || recoveringStop || recoveringMissingStop) {
+				if (
+					recoveringOriginalTurn ||
+					recoveringNativeCapability ||
+					recoveringStop ||
+					recoveringMissingStop
+				) {
 					const status = parseRuntimeStatusResponse(
 						dependencies.runtimeHost.recoverOriginalStatus
 							? await dependencies.runtimeHost.recoverOriginalStatus(
