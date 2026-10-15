@@ -90,6 +90,19 @@ describe("Browser handoff command executor", () => {
 		expect(worker.browserHandoff).not.toHaveBeenCalled();
 	});
 
+	it("fails closed when the resolver returns another Conversation", async () => {
+		const worker = { browserHandoff: vi.fn() };
+		const foreign = { ...request, conversationId: "foreign-conversation" };
+		const executor = createBrowserHandoffCommandExecutorV1({
+			resolver: { resolve: vi.fn().mockResolvedValue(foreign) },
+			worker,
+		});
+		await expect(executor.invoke(invocation)).resolves.toMatchObject({
+			outcome: "unavailable",
+		});
+		expect(worker.browserHandoff).not.toHaveBeenCalled();
+	});
+
 	it("maps an uncertain Worker result without retrying Runtime locally", async () => {
 		const worker = {
 			browserHandoff: vi.fn().mockRejectedValue(new Error("lost response")),

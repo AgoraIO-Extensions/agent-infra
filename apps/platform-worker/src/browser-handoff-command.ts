@@ -36,7 +36,7 @@ export function createBrowserHandoffCommandExecutorV1(input: {
 	return {
 		async invoke(request: BrowserHandoffCommandInvocationV1) {
 			const resolved = await input.resolver.resolve(request);
-			if (!resolved)
+			if (!resolved || resolved.conversationId !== request.conversationId)
 				return {
 					outcome: "unavailable" as const,
 					conversationId: request.conversationId,
