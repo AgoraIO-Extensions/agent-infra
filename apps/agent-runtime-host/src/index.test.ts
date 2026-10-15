@@ -284,7 +284,7 @@ describe("RuntimeHost environment assembly", () => {
 		expect(assembly?.resolveContext).toBeTypeOf("function");
 	});
 	it.each(["pi", "acp"] as const)(
-		"injects protected Connection MCP into the gated %s driver",
+		"assembles the gated Connection MCP path for %s",
 		async (binding) => {
 			const values: NodeJS.ProcessEnv = await environment();
 			const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
@@ -359,6 +359,29 @@ describe("RuntimeHost environment assembly", () => {
 			}
 		},
 	);
+
+	it("assembles the protected Connection MCP input for Pi", async () => {
+		const { values, dataDirectory, fixture } =
+			await claudeAssemblyFixture("available");
+		values.AGENT_INFRA_RUNTIME_DRIVER = "pi";
+		values.AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE = "verified-v1";
+		let openedWith: Record<string, unknown> | undefined;
+		runtimeAssemblyMocks.openPiRuntime.mockImplementation(
+			async (options: Record<string, unknown>) => {
+				openedWith = options;
+				return FakeRuntimeDriver.open(join(dataDirectory, "pi-driver.json"));
+			},
+		);
+		const runtime = await assembleRuntimeHost(values);
+		try {
+			expect(openedWith?.standardConnectionClient).toBeDefined();
+			expect(openedWith?.standardConnectionClient).toMatchObject({
+				target: { status: "available", url: fixture.target.url },
+			});
+		} finally {
+			await runtime.close();
+		}
+	});
 
 	it("assembles the protected Connection MCP input for Claude", async () => {
 		const { values, dataDirectory, fixture, approval } =
