@@ -70,9 +70,26 @@ it("maps a verified Applied Skill to a bounded OpenCode slash prompt", () => {
 	expect(
 		openCodeNativeSkillPrompt("workspace-summary", "summarize files"),
 	).toBe("/workspace-summary summarize files");
+	expect(
+		openCodeNativeSkillPrompt("workspace-summary", "summarize src/project.ts"),
+	).toBe("/workspace-summary summarize src/project.ts");
 	expect(openCodeNativeSkillPrompt("workspace-summary", "")).toBe(
 		"/workspace-summary",
 	);
+	for (const parameters of [
+		"summarize\nfiles",
+		"summarize\tfiles",
+		"summarize\u0000files",
+		"/other-skill",
+		"/tmp/secret",
+		"../outside",
+		"..\\outside",
+		"https://external.example/target",
+		"inspect https://external.example/target",
+	])
+		expect(() =>
+			openCodeNativeSkillPrompt("workspace-summary", parameters),
+		).toThrow("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
 	expect(() => openCodeNativeSkillPrompt("../outside", "summarize")).toThrow(
 		"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
 	);
