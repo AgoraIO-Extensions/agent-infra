@@ -48,6 +48,7 @@ const storeMocks = vi.hoisted(() => {
 });
 
 vi.mock("@agent-infra/platform-store", () => ({
+	configureStoreQueryObservability: vi.fn(),
 	outboxWakeChannelV1: "agent_infra_outbox_available",
 	PostgresCommitWakeupListenerV1: class {
 		start = async () => {};
