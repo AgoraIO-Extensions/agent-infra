@@ -579,6 +579,111 @@ describe("bounded unknown recovery", () => {
 });
 
 describe("Conversation Worker dispatch", () => {
+	it("recovers an unknown native capability without dispatching it twice", async () => {
+		const native = claim({
+			operation: "conversation.native-capability.invoke.v1",
+			itemId: "conversation:native-capability:execution-1",
+			input: null,
+			messageId: null,
+			modelConfigurationRevision: null,
+			modelOptionId: null,
+			reasoningLevel: null,
+			hostSessionRef: "host-session",
+			executionStatus: "unknown",
+			attemptCount: 1,
+			nativeCapability: {
+				agentId: "agent-1",
+				actorId: "actor-1",
+				channelId: "web",
+				turnId: "turn-1",
+				capabilityId: "a".repeat(64),
+				capabilityKind: "skill",
+				directoryRevision: "b".repeat(64),
+				parameters: "summarize files",
+				parametersDigest: "c".repeat(64),
+				capabilitySourceVersion: "1.0.0",
+			},
+		});
+		const store = new MemoryDispatchStore(native);
+		const runtimeDispatch = vi.fn(async () => {
+			throw new Error("native side effect must not be replayed");
+		});
+		const recoverOriginalStatus = vi.fn(async () => ({
+			schemaVersion: 2 as const,
+			hostSessionRef: "host-session",
+			executionId: "execution-1",
+			outcome: "found" as const,
+			status: "completed" as const,
+		}));
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			dispatch: runtimeDispatch,
+			recoverStatus: vi.fn(),
+			recoverOriginalStatus,
+			async *events() {
+				yield runtimeEvent(1, "completed");
+			},
+		};
+		const h = setup({ store, runtimeHost });
+
+		const decision = await dispatch(h.useCase, native.itemId);
+		expect(decision).toEqual({
+			schemaVersion: 1,
+			outcome: "accepted",
+		});
+		expect(runtimeDispatch).not.toHaveBeenCalled();
+		expect(recoverOriginalStatus).toHaveBeenCalledOnce();
+		expect(store.outboxStatus).toBe("succeeded");
+		expect(h.events.persisted).toHaveLength(1);
+	});
+
+	it("bounds repeated unknown native capability recovery", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				operation: "conversation.native-capability.invoke.v1",
+				itemId: "conversation:native-capability:execution-1",
+				input: null,
+				messageId: null,
+				modelConfigurationRevision: null,
+				modelOptionId: null,
+				reasoningLevel: null,
+				hostSessionRef: "host-session",
+				executionStatus: "unknown",
+				attemptCount: 3,
+				nativeCapability: {
+					agentId: "agent-1",
+					actorId: "actor-1",
+					channelId: "web",
+					turnId: "turn-1",
+					capabilityId: "a".repeat(64),
+					capabilityKind: "command",
+					directoryRevision: "b".repeat(64),
+					parameters: "noop",
+					parametersDigest: "c".repeat(64),
+					capabilitySourceVersion: "1.0.0",
+				},
+			}),
+		);
+		const recoverOriginalStatus = vi.fn(async () => {
+			throw new Error("recovery must be bounded");
+		});
+		const runtimeHost = {
+			dispatch: vi.fn(),
+			recoverOriginalStatus,
+			recoverStatus: vi.fn(),
+			async *events() {},
+		} as unknown as ConversationRuntimeHostPortV1;
+		const h = setup({ store, runtimeHost, maxRecoveryAttempts: 3 });
+
+		await expect(dispatch(h.useCase, store.current.itemId)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "rejected",
+		});
+		expect(recoverOriginalStatus).not.toHaveBeenCalled();
+		expect(runtimeHost.dispatch).not.toHaveBeenCalled();
+		expect(store.errorCode).toBe("RUNTIME_RECOVERY_TIMEOUT");
+		expect(store.outboxStatus).toBe("failed");
+	});
+
 	it.each([
 		"conversation.turn.submit.v1",
 		"conversation.turn.regenerate.v1",
