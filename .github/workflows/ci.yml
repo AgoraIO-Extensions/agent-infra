@@ -155,10 +155,6 @@ jobs:
                     source=true
                     add_image enterprise-directory-sync
                     ;;
-                  apps/connection-api/*)
-                    source=true
-                    add_image connection-api
-                    ;;
                   deploy/images/*|deploy/release/*)
                     # Release/image tooling changes can affect every image surface.
                     source=true

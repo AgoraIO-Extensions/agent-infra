@@ -4,7 +4,8 @@
 第二套 Platform 部署逻辑：数据库、API、Web 和 Worker 生命周期仍由
 [`platform.sh`](./platform.sh) 负责。
 
-固定运行还会在同一 Compose project 内启动 `enterprise-directory-sync` 和 `connection-api`。
+固定运行还会在同一 Compose project 内启动 `enterprise-directory-sync`。
+Connection 服务由独立仓库部署，本地平台不再启动其健康检查脚手架；真实 Connection 联调仍需单独配置消费者授权。
 目录同步服务使用本次运行自己的镜像、私有源适配、读取 Token、TLS 和数据库角色；Worker
 通过本次运行创建且带 ownership 标记的 kind `Service`/`EndpointSlice` 访问它。禁止把旧项目
 的目录容器或 EndpointSlice 接到当前 namespace。LDAP 与企业目录源的 host 映射只放在仓库外

@@ -82,18 +82,6 @@ services:
       enterprise-directory-migration:
         condition: service_completed_successfully
 
-  connection-api:
-    image: agent-infra-e2e-connection-api
-    build: !reset null
-    ports: !override
-      - "127.0.0.1:${PLATFORM_LOCAL_CONNECTION_API_PORT:-34432}:3002"
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 5s
-
   object-storage:
     image: cgr.dev/chainguard/minio@sha256:4d397a26fe49d7f9ed39b8b566534848936f7efa50ab6328ac97b2a44eeabf4c
     ports: !override

@@ -5,7 +5,6 @@ export const imageDockerfiles = {
   "platform-api": "apps/platform-api/Dockerfile",
   "platform-worker": "apps/platform-worker/Dockerfile",
   "enterprise-directory-sync": "apps/enterprise-directory-sync/Dockerfile",
-  "connection-api": "apps/connection-api/Dockerfile",
   "agent-runtime-host": "apps/agent-runtime-host/Dockerfile",
   "custom-agent-base": "deploy/images/custom-agent-base/Dockerfile",
 };

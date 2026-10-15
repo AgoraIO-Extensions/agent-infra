@@ -393,15 +393,11 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		);
 		assert.match(
 			up[13],
-			/^docker .* compose .* up --detach --wait connection-api$/,
-		);
-		assert.match(
-			up[14],
 			/^docker .* compose .* up --detach --wait --force-recreate --no-deps platform-api$/,
 		);
-		assert.match(up[15], /^node deploy\/local\/check-api-auth\.ts /);
+		assert.match(up[14], /^node deploy\/local\/check-api-auth\.ts /);
 		assert.match(
-			up[16],
+			up[15],
 			/^docker .* compose .* up --detach --wait --force-recreate --no-deps web$/,
 		);
 		assert.match(
@@ -414,7 +410,7 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			/^helm .* get values agent-infra-verify --all --output json$/,
 		);
 		assert.match(up[11], /kubectl .* scale .* --replicas=1$/);
-		assert.equal(up.length, 17);
+		assert.equal(up.length, 16);
 
 		await writeFile(f.log, "");
 		assert.equal(run("up", f.env).status, 0);
@@ -425,7 +421,7 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		const status = await readFile(f.log, "utf8");
 		assert.match(
 			status,
-			/compose .* ps postgres object-storage enterprise-directory-sync connection-api platform-api web/,
+			/compose .* ps postgres object-storage enterprise-directory-sync platform-api web/,
 		);
 		assert.match(status, /helm .* status agent-infra-verify/);
 		assert.match(
@@ -463,10 +459,7 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		assert.match(stopSteps[1], /kubectl .* scale .* --replicas=0/);
 		assert.match(stopSteps[2], /kubectl .* rollout status/);
 		assert.match(stopSteps[3], /helm .* uninstall/);
-		assert.match(
-			stopSteps[4],
-			/compose .* stop enterprise-directory-sync connection-api$/,
-		);
+		assert.match(stopSteps[4], /compose .* stop enterprise-directory-sync$/);
 		assert.match(stopSteps[5], /network disconnect kind fixture-directory/);
 		assert.match(
 			stopSteps[6],

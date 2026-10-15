@@ -34,10 +34,10 @@ M1 上线是独立验收层次，当前仍有未完成门禁，见 [阶段验收
 | Platform API | `apps/platform-api` | Agent 管理、配置、Conversation、审计 HTTP API 与 SSE；真实 Store/Registry/模型/Secret 和部署身份装配 |
 | Platform Worker | `apps/platform-worker` | 持久 Workload 调谐、Secret/模型候选验证、受控网络与就绪探测；任务生产循环单独交付 |
 | Agent RuntimeHost | `apps/agent-runtime-host` | HTTP/SSE Host、持久 store、Codex/Claude Driver 与不可变 Codex 镜像入口；只读 Workload 就绪授权 |
-| Connection API | `apps/connection-api` | 独立 Hono 服务与健康检查 |
 
-Connection 与 Platform 位于同一 monorepo。当前骨架已经分离进程、构建和镜像；后续实现按
-工程架构 Spec 保持独立部署、运行身份和数据边界。
+Connection 服务源码已迁至独立私有仓库 `AI/agora-connector`，本仓库不再提供其服务端脚手架。
+Agent 平台保留 Connection consumer 集成与共享调用契约；独立部署、运行身份和数据边界见
+[工程架构 Spec](docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#5-单仓库结构)。
 
 ## 本地验证
 

@@ -368,7 +368,6 @@ async function buildPlatformImages(source) {
 			["web", "apps/web/Dockerfile"],
 			["platform-api", "apps/platform-api/Dockerfile"],
 			["platform-worker", "apps/platform-worker/Dockerfile"],
-			["connection-api", "apps/connection-api/Dockerfile"],
 			["enterprise-directory-sync", "apps/enterprise-directory-sync/Dockerfile"],
 		]) {
 			const args = [
