@@ -125,6 +125,8 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		standardTemplateBinding,
 		egress,
 	} = dependencies;
+	const templateBinding =
+		standardTemplateBinding ?? modelProjection?.standardTemplateBinding;
 	const connection = runtimeConnectionConsumerProjectionV1(
 		dependencies.connectionConsumerControl
 			? undefined
@@ -132,6 +134,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		dependencies.connectionConsumerControl
 			? undefined
 			: policy.connectionInstallationRevision,
+		templateBinding,
 	);
 	function modelBindings(value: AgentWorkloadDesiredV1) {
 		if (!modelProjection || !modelInjection) return undefined;
@@ -165,8 +168,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		const skillHubRuntime = skillHubRuntimeEnvironmentV1(value);
 		if (Object.hasOwn(value.env, runtimeSkillHubBindingEnvironmentNameV1))
 			throw new WorkloadKubernetesError("policy");
-		const binding =
-			standardTemplateBinding ?? modelProjection?.standardTemplateBinding;
+		const binding = templateBinding;
 		if (
 			injection &&
 			(!binding ||
@@ -479,6 +481,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	} = createKubernetesPodValidationV1({
 		connectionConsumerControl: dependencies.connectionConsumerControl,
 		policy,
+		standardTemplateBinding: templateBinding,
 		workloadEnvironment,
 		environmentSecrets,
 	});

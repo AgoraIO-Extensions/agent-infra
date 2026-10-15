@@ -549,6 +549,151 @@ describe("production deployment admissions", () => {
 		expect(result).toMatchObject({ status: "admitted" });
 	});
 
+	it("admits four workloads with one Service and PVC per StatefulSet", async () => {
+		const f = fixture("self-managed");
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			imageRepository: "registry.example.test/agents/codex",
+		});
+		const image = f.imageDigest;
+		const workload = (name: string, kind: "Deployment" | "StatefulSet") => ({
+			apiVersion: "apps/v1",
+			kind,
+			metadata: { name },
+			spec: {
+				replicas: 1,
+				...(kind === "StatefulSet" ? { serviceName: name } : {}),
+				selector: { matchLabels: { app: name } },
+				template: {
+					metadata: { labels: { app: name } },
+					spec: {
+						containers: [
+							{
+								name,
+								image,
+								ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+							},
+						],
+					},
+				},
+			},
+		});
+		const service = (name: string, entry = false) => ({
+			apiVersion: "v1",
+			kind: "Service" as const,
+			metadata: {
+				name,
+				...(entry
+					? { annotations: { "agent-infra.agora.io/entry": "true" } }
+					: {}),
+			},
+			spec: {
+				type: "ClusterIP" as const,
+				selector: { app: name },
+				ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+			},
+		});
+		const pvc = (name: string) => ({
+			apiVersion: "v1" as const,
+			kind: "PersistentVolumeClaim" as const,
+			metadata: { name: `${name}-data` },
+			spec: {
+				accessModes: ["ReadWriteOnce" as const],
+				resources: { requests: { storage: "1Gi" } },
+			},
+		});
+		const resources = [
+			workload("web", "Deployment"),
+			workload("api", "Deployment"),
+			workload("postgres", "StatefulSet"),
+			workload("redis", "StatefulSet"),
+			service("web", true),
+			service("api"),
+			service("postgres"),
+			service("redis"),
+			pvc("postgres"),
+			pvc("redis"),
+		];
+		const result = await admissions.imageAdmission.admitImage({
+			...request,
+			requested: {
+				kind: "custom",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+				manifest: JSON.stringify({
+					schemaVersion: 1,
+					entryServiceName: "web",
+					resources,
+				}),
+			},
+		});
+		expect(result).toMatchObject({ status: "admitted" });
+	});
+
+	it("rejects a StatefulSet without its corresponding PVC before registry admission", async () => {
+		const f = fixture("self-managed");
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			imageRepository: "registry.example.test/agents/codex",
+		});
+		const result = await admissions.imageAdmission.admitImage({
+			...request,
+			requested: {
+				kind: "custom",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+				manifest: JSON.stringify({
+					schemaVersion: 1,
+					entryServiceName: "web",
+					resources: [
+						{
+							apiVersion: "apps/v1",
+							kind: "StatefulSet",
+							metadata: { name: "web" },
+							spec: {
+								replicas: 1,
+								serviceName: "web",
+								selector: { matchLabels: { app: "web" } },
+								template: {
+									metadata: { labels: { app: "web" } },
+									spec: {
+										containers: [
+											{
+												name: "web",
+												image: f.imageDigest,
+												ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+											},
+										],
+									},
+								},
+							},
+						},
+						{
+							apiVersion: "v1",
+							kind: "Service",
+							metadata: {
+								name: "web",
+								annotations: { "agent-infra.agora.io/entry": "true" },
+							},
+							spec: {
+								type: "ClusterIP",
+								selector: { app: "web" },
+								ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+							},
+						},
+					],
+				}),
+			},
+		});
+		expect(result).toEqual({
+			schemaVersion: 1,
+			agentId: request.agentId,
+			requestId: request.requestId,
+			status: "rejected",
+		});
+		expect(f.fetch).not.toHaveBeenCalled();
+	});
+
 	it("rejects images outside the repository the Worker can actually deploy", async () => {
 		const { input, fetch } = fixture();
 		const admissions = createDeploymentAdmissionsV1({
