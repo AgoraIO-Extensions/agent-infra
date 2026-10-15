@@ -904,6 +904,113 @@ describe("multi-service runtime operations", () => {
 		expect(afterRollback?.metadata?.uid).toBe(before.metadata?.uid);
 	});
 
+	it("mounts every StatefulSet on the PVC that apply created for it", async () => {
+		const web = manifest.resources.find(
+			(resource) =>
+				resource.kind === "Deployment" && resource.metadata.name === "web",
+		);
+		const worker = manifest.resources.find(
+			(resource) =>
+				resource.kind === "Deployment" && resource.metadata.name === "worker",
+		);
+		if (web?.kind !== "Deployment" || worker?.kind !== "Deployment")
+			throw new Error("stateful fixture missing");
+		const pvc = (name: string) => ({
+			apiVersion: "v1",
+			kind: "PersistentVolumeClaim",
+			metadata: { name: `${name}-data` },
+			spec: {
+				accessModes: ["ReadWriteOnce"],
+				resources: { requests: { storage: "1Gi" } },
+			},
+		});
+		const longName = "inventory-database-primary";
+		const twoStateful = MultiServiceManifestDocumentV1Schema.parse({
+			...manifest,
+			resources: [
+				{
+					...web,
+					kind: "StatefulSet",
+					spec: { ...web.spec, serviceName: "web" },
+				},
+				{
+					...worker,
+					kind: "StatefulSet",
+					metadata: { ...worker.metadata, name: longName },
+					spec: { ...worker.spec, serviceName: "worker" },
+				},
+				...manifest.resources.filter(
+					(resource) => resource !== web && resource !== worker,
+				),
+				pvc("web"),
+				pvc(longName),
+			],
+		});
+		for (const [source, count] of [
+			[statefulManifest, 1],
+			[twoStateful, 2],
+		] as const) {
+			const fake = fakeClient();
+			const operations = createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: { ...basePolicy, storageSize: "1Gi" },
+			});
+			const value = desired(source);
+			if (!isMultiService(value))
+				throw new Error("multi-service fixture invalid");
+			await operations.apply(value);
+			const statefulSets = [...fake.resources.values()].filter(
+				(resource) => resource.kind === "StatefulSet",
+			) as V1StatefulSet[];
+			expect(statefulSets).toHaveLength(count);
+			for (const set of statefulSets) {
+				const claims = (set.spec?.template.spec?.volumes ?? []).flatMap(
+					(volume) =>
+						volume.persistentVolumeClaim
+							? [volume.persistentVolumeClaim.claimName]
+							: [],
+				);
+				expect(claims).toHaveLength(1);
+				expect(fake.resources.has(`PersistentVolumeClaim/${claims[0]}`)).toBe(
+					true,
+				);
+				expect(claims[0]?.length).toBeLessThanOrEqual(63);
+			}
+		}
+	});
+
+	it("reports pending while a workload has no available replica", async () => {
+		const policy = {
+			namespace: "agents",
+			multiServiceResourceProfiles: [smallProfile],
+			routeHostSuffix: "example.test",
+			ingressClassName: "nginx",
+			tlsSecretName: "tls",
+			routeSelector: { "app.kubernetes.io/name": "ingress" },
+		};
+		for (const source of [manifest, statefulManifest]) {
+			const fake = fakeClient();
+			const operations = createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: { ...policy, storageSize: "1Gi" },
+			});
+			const value = desired(source);
+			if (!isMultiService(value))
+				throw new Error("multi-service fixture invalid");
+			const identity = await operations.apply(value);
+			expect(await operations.observe(value, identity)).toBe("pending");
+			markWorkloadsReady(fake);
+			expect(await operations.observe(value, identity)).toBe("healthy");
+			const workload = [...fake.resources.values()].find(
+				(resource) =>
+					resource.kind === "Deployment" || resource.kind === "StatefulSet",
+			) as V1Deployment | V1StatefulSet | undefined;
+			if (!workload) throw new Error("workload fixture missing");
+			workload.status = { availableReplicas: 0, readyReplicas: 0, replicas: 1 };
+			expect(await operations.observe(value, identity)).toBe("pending");
+		}
+	});
+
 	it("runs a migration Job before services and reuses its completed result", async () => {
 		const fake = fakeClient();
 		const operations = createMultiServiceRuntimeOperations({

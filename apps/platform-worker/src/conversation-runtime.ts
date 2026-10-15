@@ -1197,7 +1197,7 @@ export function createConversationRuntimeV2(
 		async dispatch(request, signal) {
 			const active = combined(signal);
 			const context = contextFor(request);
-			const expectedOperation =
+			const expectedOperation: ConversationRuntimeDispatchRequestV1["operation"] =
 				context.claim.operation === "conversation.native-capability.invoke.v1"
 					? "native-capability.invoke"
 					: context.claim.operation === "conversation.turn.stop.v1"
@@ -1228,7 +1228,7 @@ export function createConversationRuntimeV2(
 				await latch(prepared, active);
 				denied();
 			}
-			if ((request.operation as string) === "native-capability.invoke") {
+			if (request.operation === "native-capability.invoke") {
 				if (state.runtimeSubmitProtocol === "v4")
 					return dispatchBusinessV4(prepared, active);
 				if (
