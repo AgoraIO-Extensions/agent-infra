@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
 	type OpenCodeRuntimeOptions,
+	openCodeNativeSkillPrompt,
 	resolveOpenCodeSkillHome,
 	validateOpenCodeRuntimeOptions,
 } from "./opencode-bootstrap.js";
@@ -63,4 +64,25 @@ it("uses the verified Applied root as the private OpenCode Skill home", () => {
 		"/opt/agent-infra-skill-hub",
 	);
 	expect(resolveOpenCodeSkillHome("/tmp/session")).toBe("/tmp/session/home");
+});
+
+it("maps a verified Applied Skill to a bounded OpenCode slash prompt", () => {
+	expect(
+		openCodeNativeSkillPrompt("workspace-summary", "summarize files"),
+	).toBe("/workspace-summary summarize files");
+	expect(openCodeNativeSkillPrompt("workspace-summary", "")).toBe(
+		"/workspace-summary",
+	);
+	expect(() => openCodeNativeSkillPrompt("../outside", "summarize")).toThrow(
+		"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+	);
+	expect(() =>
+		openCodeNativeSkillPrompt("https://caller.example/skill", "summarize"),
+	).toThrow("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
+	expect(() =>
+		openCodeNativeSkillPrompt("workspace-summary", "\ud800"),
+	).toThrow("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
+	expect(() =>
+		openCodeNativeSkillPrompt("workspace-summary", "x".repeat(16 * 1024)),
+	).toThrow("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
 });
