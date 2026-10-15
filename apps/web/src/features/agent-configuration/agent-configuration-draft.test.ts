@@ -188,6 +188,17 @@ describe("Agent configuration draft", () => {
 			).toBe(false);
 		});
 
+		it("treats repeated IDs like the server does: as one member of the set", () => {
+			expect(
+				agentConfigurationDraftChanged(agent, {
+					...baseline(),
+					coOwnerIds: "user-owner-1\nuser-owner-1",
+					userAvailabilityIds: "user-reader-1, user-reader-1",
+					organizationAvailabilityIds: "organization-1\norganization-1",
+				}),
+			).toBe(false);
+		});
+
 		it("counts entered Secrets and channel changes as changes", () => {
 			expect(
 				agentConfigurationDraftChanged(agent, {

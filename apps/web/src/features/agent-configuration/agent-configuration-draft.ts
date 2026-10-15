@@ -98,8 +98,9 @@ export function buildAgentConfigurationRequest(
 	};
 }
 
+/** 按集合比较：服务端对 Owner 与范围去重后再比较，重复的 ID 不算改动。 */
 function sortedJson(values: readonly string[]) {
-	return JSON.stringify([...values].sort());
+	return JSON.stringify([...new Set(values)].sort());
 }
 
 /**
