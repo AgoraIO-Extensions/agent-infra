@@ -10,6 +10,7 @@ import {
 	type MultiServiceResourceConfigurationV1,
 	type MultiServiceResourceProfileV1,
 	parseMultiServiceResourceConfigurationV1,
+	validateMultiServiceTopologyV1,
 } from "@agent-infra/contracts/pilot";
 import {
 	ImmutableOciDigestV1Schema,
@@ -323,87 +324,7 @@ function multiServiceImageDigests(
 function validMultiServiceTopology(
 	manifest: ReturnType<typeof MultiServiceManifestDocumentV1Schema.parse>,
 ): boolean {
-	const deployments = manifest.resources.filter(
-		(resource) => resource.kind === "Deployment",
-	);
-	const statefulSets = manifest.resources.filter(
-		(resource) => resource.kind === "StatefulSet",
-	);
-	const services = manifest.resources.filter(
-		(resource) => resource.kind === "Service",
-	);
-	const jobs = manifest.resources.filter((resource) => resource.kind === "Job");
-	const pvcs = manifest.resources.filter(
-		(resource) => resource.kind === "PersistentVolumeClaim",
-	);
-	const workloads = [...deployments, ...statefulSets];
-	const pvcNames = new Set(pvcs.map((resource) => resource.metadata.name));
-	const statefulTopologyValid = statefulSets.every(
-		(resource) =>
-			(resource.spec.template.spec.restartPolicy === undefined ||
-				resource.spec.template.spec.restartPolicy === "Always") &&
-			services.some(
-				(service) =>
-					service.metadata.name === resource.spec.serviceName &&
-					Object.entries(service.spec.selector).every(
-						([key, expected]) =>
-							resource.spec.template.metadata.labels[key] === expected,
-					),
-			) &&
-			pvcNames.has(`${resource.metadata.name}-data`),
-	);
-	const expectedPvcNames = new Set(
-		statefulSets.map((resource) => `${resource.metadata.name}-data`),
-	);
-	if (
-		workloads.length < 2 ||
-		workloads.length > MultiServiceMaxWorkloadsV1 ||
-		services.length !== workloads.length ||
-		new Set(services.map((service) => service.metadata.name)).size !==
-			services.length ||
-		statefulSets.length !== pvcs.length ||
-		!statefulTopologyValid ||
-		pvcs.some((pvc) => !expectedPvcNames.has(pvc.metadata.name)) ||
-		jobs.length > 1 ||
-		manifest.resources.some(
-			(resource) =>
-				resource.kind !== "Deployment" &&
-				resource.kind !== "StatefulSet" &&
-				resource.kind !== "Service" &&
-				resource.kind !== "PersistentVolumeClaim" &&
-				resource.kind !== "Job" &&
-				resource.kind !== "ConfigMap",
-		)
-	)
-		return false;
-	const targets = services.map((service) => {
-		const matches = workloads.filter((workload) =>
-			Object.entries(service.spec.selector).every(
-				([key, expected]) =>
-					workload.spec.template.metadata.labels[key] === expected,
-			),
-		);
-		if (matches.length !== 1) return null;
-		const target = matches[0];
-		if (!target) return null;
-		return service.spec.ports.every((servicePort) =>
-			target.spec.template.spec.containers.some((container) =>
-				container.ports?.some(
-					(containerPort) =>
-						containerPort.targetPort === servicePort.targetPort,
-				),
-			),
-		)
-			? target.metadata.name
-			: null;
-	});
-	return (
-		targets.every((target): target is string => target !== null) &&
-		new Set(targets).size === workloads.length &&
-		statefulSets.every((statefulSet) =>
-			targets.includes(statefulSet.metadata.name),
-		)
-	);
+	return validateMultiServiceTopologyV1(manifest).ok;
 }
 
 function replacement(

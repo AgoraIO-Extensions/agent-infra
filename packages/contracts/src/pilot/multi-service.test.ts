@@ -7,6 +7,7 @@ import {
 	MultiServiceManifestDocumentV1Schema,
 	MultiServiceResourceProfileAnnotationV1,
 	MultiServiceResourceV1Schema,
+	validateMultiServiceTopologyV1,
 } from "./index.ts";
 
 const digest = `sha256:${"a".repeat(64)}`;
@@ -71,6 +72,35 @@ const document = {
 	entryServiceName: "api",
 	resources: [deployment, service],
 };
+
+const validTopologyDocument = MultiServiceManifestDocumentV1Schema.parse({
+	...document,
+	resources: [
+		deployment,
+		service,
+		{
+			...deployment,
+			metadata: { name: "worker", labels: { app: "worker" } },
+			spec: {
+				...deployment.spec,
+				selector: { matchLabels: { app: "worker" } },
+				template: {
+					...deployment.spec.template,
+					metadata: { labels: { app: "worker" } },
+				},
+			},
+		},
+		{
+			...service,
+			metadata: {
+				...service.metadata,
+				name: "worker",
+				annotations: undefined,
+			},
+			spec: { ...service.spec, selector: { app: "worker" } },
+		},
+	],
+});
 
 describe("multi-service Agent contract seam", () => {
 	it("accepts a two-service resource document with one entry Service", () => {
@@ -315,5 +345,67 @@ describe("multi-service Agent contract seam", () => {
 			"MULTI_SERVICE_RESOURCE_LIMIT_EXCEEDED",
 			"MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
 		]);
+	});
+
+	it("shares the accepted topology rules with API and Web", () => {
+		expect(validateMultiServiceTopologyV1(validTopologyDocument)).toEqual({
+			ok: true,
+		});
+	});
+
+	it.each([
+		[
+			"workload count",
+			{ ...validTopologyDocument, resources: [deployment, service] },
+			"MULTI_SERVICE_WORKLOAD_COUNT",
+		],
+		[
+			"service count",
+			{
+				...validTopologyDocument,
+				resources: validTopologyDocument.resources.slice(0, 3),
+			},
+			"MULTI_SERVICE_SERVICE_COUNT",
+		],
+		[
+			"selector target",
+			{
+				...validTopologyDocument,
+				resources: validTopologyDocument.resources.map((resource) =>
+					resource.kind === "Service" && resource.metadata.name === "worker"
+						? {
+								...resource,
+								spec: { ...resource.spec, selector: { app: "missing" } },
+							}
+						: resource,
+				),
+			},
+			"MULTI_SERVICE_SERVICE_SELECTOR",
+		],
+		[
+			"target port",
+			{
+				...validTopologyDocument,
+				resources: validTopologyDocument.resources.map((resource) =>
+					resource.kind === "Service" && resource.metadata.name === "worker"
+						? {
+								...resource,
+								spec: {
+									...resource.spec,
+									ports: [{ ...resource.spec.ports[0], targetPort: 9090 }],
+								},
+							}
+						: resource,
+				),
+			},
+			"MULTI_SERVICE_SERVICE_TARGET_PORT",
+		],
+	])("returns a stable reason for %s", (_label, candidate, code) => {
+		expect(
+			validateMultiServiceTopologyV1(candidate as typeof validTopologyDocument),
+		).toEqual({
+			ok: false,
+			code,
+		});
 	});
 });

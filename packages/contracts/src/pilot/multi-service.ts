@@ -424,6 +424,145 @@ export type MultiServiceAdmissionErrorCodeV1 = z.infer<
 	typeof MultiServiceAdmissionErrorCodeV1Schema
 >;
 
+/** Stable browser/API reasons for topology failures independent of image admission policy. */
+export const MultiServiceTopologyIssueCodeV1Schema = z.enum([
+	"MULTI_SERVICE_WORKLOAD_COUNT",
+	"MULTI_SERVICE_SERVICE_COUNT",
+	"MULTI_SERVICE_SERVICE_NAME_DUPLICATE",
+	"MULTI_SERVICE_STATEFULSET_RESTART_POLICY",
+	"MULTI_SERVICE_STATEFULSET_SERVICE",
+	"MULTI_SERVICE_STATEFULSET_PVC",
+	"MULTI_SERVICE_PVC_COUNT",
+	"MULTI_SERVICE_PVC_NAME",
+	"MULTI_SERVICE_JOB_COUNT",
+	"MULTI_SERVICE_RESOURCE_KIND",
+	"MULTI_SERVICE_SERVICE_SELECTOR",
+	"MULTI_SERVICE_SERVICE_TARGET_PORT",
+	"MULTI_SERVICE_SERVICE_TARGET_DUPLICATE",
+]);
+
+export type MultiServiceTopologyIssueCodeV1 = z.infer<
+	typeof MultiServiceTopologyIssueCodeV1Schema
+>;
+
+export type MultiServiceTopologyValidationV1 =
+	| { readonly ok: true }
+	| {
+			readonly ok: false;
+			readonly code: MultiServiceTopologyIssueCodeV1;
+	  };
+
+/**
+ * Validate topology rules shared by API admission and the browser form.
+ * Image/repository admission deliberately stays outside this pure function.
+ */
+export function validateMultiServiceTopologyV1(
+	manifest: MultiServiceManifestDocumentV1,
+): MultiServiceTopologyValidationV1 {
+	const deployments = manifest.resources.filter(
+		(resource) => resource.kind === "Deployment",
+	);
+	const statefulSets = manifest.resources.filter(
+		(resource) => resource.kind === "StatefulSet",
+	);
+	const services = manifest.resources.filter(
+		(resource) => resource.kind === "Service",
+	);
+	const jobs = manifest.resources.filter((resource) => resource.kind === "Job");
+	const pvcs = manifest.resources.filter(
+		(resource) => resource.kind === "PersistentVolumeClaim",
+	);
+	const workloads = [...deployments, ...statefulSets];
+	if (workloads.length < 2 || workloads.length > MultiServiceMaxWorkloadsV1)
+		return { ok: false, code: "MULTI_SERVICE_WORKLOAD_COUNT" };
+	if (services.length !== workloads.length)
+		return { ok: false, code: "MULTI_SERVICE_SERVICE_COUNT" };
+	if (
+		new Set(services.map((service) => service.metadata.name)).size !==
+		services.length
+	)
+		return { ok: false, code: "MULTI_SERVICE_SERVICE_NAME_DUPLICATE" };
+	if (jobs.length > 1) return { ok: false, code: "MULTI_SERVICE_JOB_COUNT" };
+	if (
+		manifest.resources.some(
+			(resource) =>
+				resource.kind !== "Deployment" &&
+				resource.kind !== "StatefulSet" &&
+				resource.kind !== "Service" &&
+				resource.kind !== "PersistentVolumeClaim" &&
+				resource.kind !== "Job" &&
+				resource.kind !== "ConfigMap",
+		)
+	)
+		return { ok: false, code: "MULTI_SERVICE_RESOURCE_KIND" };
+	if (statefulSets.length !== pvcs.length)
+		return { ok: false, code: "MULTI_SERVICE_PVC_COUNT" };
+	const pvcNames = new Set(pvcs.map((resource) => resource.metadata.name));
+	const expectedPvcNames = new Set(
+		statefulSets.map((resource) => `${resource.metadata.name}-data`),
+	);
+	if (pvcs.some((pvc) => !expectedPvcNames.has(pvc.metadata.name)))
+		return { ok: false, code: "MULTI_SERVICE_PVC_NAME" };
+	for (const statefulSet of statefulSets) {
+		if (
+			statefulSet.spec.template.spec.restartPolicy !== undefined &&
+			statefulSet.spec.template.spec.restartPolicy !== "Always"
+		)
+			return {
+				ok: false,
+				code: "MULTI_SERVICE_STATEFULSET_RESTART_POLICY",
+			};
+		const matchingService = services.find(
+			(service) => service.metadata.name === statefulSet.spec.serviceName,
+		);
+		if (
+			!matchingService ||
+			!Object.entries(matchingService.spec.selector).every(
+				([key, expected]) =>
+					statefulSet.spec.template.metadata.labels[key] === expected,
+			)
+		)
+			return { ok: false, code: "MULTI_SERVICE_STATEFULSET_SERVICE" };
+		if (!pvcNames.has(`${statefulSet.metadata.name}-data`))
+			return { ok: false, code: "MULTI_SERVICE_STATEFULSET_PVC" };
+	}
+	const targets = services.map((service) => {
+		const matches = workloads.filter((workload) =>
+			Object.entries(service.spec.selector).every(
+				([key, expected]) =>
+					workload.spec.template.metadata.labels[key] === expected,
+			),
+		);
+		if (matches.length !== 1) return null;
+		const target = matches[0];
+		if (!target) return null;
+		const portsMatch = service.spec.ports.every((servicePort) =>
+			target.spec.template.spec.containers.some((container) =>
+				container.ports?.some(
+					(containerPort) =>
+						containerPort.targetPort === servicePort.targetPort,
+				),
+			),
+		);
+		return portsMatch ? target.metadata.name : undefined;
+	});
+	if (targets.some((target) => target === null))
+		return { ok: false, code: "MULTI_SERVICE_SERVICE_SELECTOR" };
+	if (targets.some((target) => target === undefined))
+		return { ok: false, code: "MULTI_SERVICE_SERVICE_TARGET_PORT" };
+	if (
+		new Set(targets).size !== workloads.length ||
+		statefulSets.some(
+			(statefulSet) => !targets.includes(statefulSet.metadata.name),
+		)
+	)
+		return {
+			ok: false,
+			code: "MULTI_SERVICE_SERVICE_TARGET_DUPLICATE",
+		};
+	return { ok: true };
+}
+
 /**
  * 部署未配置档位时使用的默认档位。默认档位不声明 storageSize：PVC 沿用部署的全局
  * 存储策略，已有多服务 Agent 的 PVC 大小不会因本默认值改变。

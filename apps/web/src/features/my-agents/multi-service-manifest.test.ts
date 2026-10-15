@@ -28,6 +28,10 @@ resources:
           containers:
             - name: api
               image: ${digest}
+              ports:
+                - name: http
+                  port: 8080
+                  targetPort: 8080
   - apiVersion: v1
     kind: Service
     metadata:
@@ -45,6 +49,43 @@ resources:
         - name: http
           port: 8080
           targetPort: 8080
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: worker
+      labels:
+        app: worker
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: worker
+      template:
+        metadata:
+          labels:
+            app: worker
+        spec:
+          containers:
+            - name: worker
+              image: ${digest}
+              ports:
+                - name: http
+                  port: 8080
+                  targetPort: 8080
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: worker
+      labels:
+        app: worker
+    spec:
+      type: ClusterIP
+      selector:
+        app: worker
+      ports:
+        - name: http
+          port: 8080
+          targetPort: 8080
 `;
 
 describe("multi-service manifest parsing", () => {
@@ -54,8 +95,8 @@ describe("multi-service manifest parsing", () => {
 		if (!result.ok) return;
 		expect(result.summary).toEqual({
 			entryServiceName: "api",
-			resourceCount: 2,
-			serviceNames: ["api"],
+			resourceCount: 4,
+			serviceNames: ["api", "worker"],
 			resourceProfileRefs: ["small"],
 		});
 		expect(formatMultiServiceManifestSummary(result.summary)).toContain(
@@ -78,6 +119,17 @@ describe("multi-service manifest parsing", () => {
 			ok: false,
 			message:
 				"多服务 YAML 不符合受限资源清单格式，请检查资源、入口服务和镜像 Digest。",
+		});
+	});
+
+	it("reports the shared topology reason before submission", () => {
+		const workerStart = manifest.indexOf(
+			"  - apiVersion: apps/v1\n    kind: Deployment\n    metadata:\n      name: worker",
+		);
+		const result = parseMultiServiceManifest(manifest.slice(0, workerStart));
+		expect(result).toEqual({
+			ok: false,
+			message: "工作负载数量必须在 2 到 16 个之间。",
 		});
 	});
 
