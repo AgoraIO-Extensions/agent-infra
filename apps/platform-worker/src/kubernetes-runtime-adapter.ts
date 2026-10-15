@@ -190,14 +190,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		policy,
 	});
 	const connectionInstallationRevision = policy.connectionInstallationRevision;
-	const connection = runtimeConnectionConsumerProjectionV1(
-		options.connectionConsumerControl
-			? undefined
-			: policy.connectionConsumerSnapshot,
-		options.connectionConsumerControl
-			? undefined
-			: policy.connectionInstallationRevision,
-	);
 	const egress = workloadEgressRulesV1(policy);
 	if (policy.runtimeAuth) validateWorkloadRuntimeAuthV1(policy.runtimeAuth);
 	const modelProjection =
@@ -212,6 +204,17 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			: validateStandardTemplateModelBindingsV1([
 					options.standardTemplateBinding,
 				])[0];
+	const templateBinding =
+		standardTemplateBinding ?? modelProjection?.standardTemplateBinding;
+	const connection = runtimeConnectionConsumerProjectionV1(
+		options.connectionConsumerControl
+			? undefined
+			: policy.connectionConsumerSnapshot,
+		options.connectionConsumerControl
+			? undefined
+			: policy.connectionInstallationRevision,
+		templateBinding,
+	);
 	if (
 		standardTemplateBinding !== undefined &&
 		(!modelProjection ||

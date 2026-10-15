@@ -125,6 +125,8 @@ const configMapSpec = z.strictObject({
 
 /** ConfigMap data is intentionally bounded and is never a Secret transport. */
 export const MultiServiceConfigMapMaxBytesV1 = 65_536;
+/** Default admission bound for the number of Deployment/StatefulSet services. */
+export const MultiServiceMaxWorkloadsV1 = 16;
 
 const secretLikeConfigMapKey =
 	/(?:^|[_.-])(?:pass(?:word)?|secret|token|api[_-]?key|private[_-]?key|credential|oauth|access[_-]?key)(?:$|[_.-])/i;

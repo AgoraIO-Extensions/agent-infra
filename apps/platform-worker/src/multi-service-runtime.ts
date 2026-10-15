@@ -126,17 +126,31 @@ export function validateMultiServiceResourceCapacityV1(
 	return { total: capacity.total, cap: capacity.cap };
 }
 
+type MultiServicePvcResource = Extract<
+	MultiServiceDesired["multiService"]["resources"][number],
+	{ kind: "PersistentVolumeClaim" }
+>;
+
 /**
- * PVC 由唯一的 StatefulSet 挂载（API 拓扑准入保证）。PVC 大小取该 StatefulSet 档位的
- * storageSize，档位未声明时沿用部署的全局 storageSize；用户 PVC 中的大小不生效。
+ * 每个 PVC 归属名为 `<StatefulSet>-data` 的 StatefulSet（API 拓扑准入保证）。PVC 大小取
+ * 该 StatefulSet 档位的 storageSize，档位未声明时沿用部署的全局 storageSize；用户 PVC
+ * 中的大小不生效。
  */
 function multiServiceStorageSize(
 	value: MultiServiceDesired,
+	pvc: MultiServicePvcResource,
 	policy: MultiServiceRuntimePolicyV1,
 	resources: MultiServiceResourceConfigurationV1,
 ) {
 	const statefulSet = value.multiService.resources.find(
-		(resource) => resource.kind === "StatefulSet",
+		(
+			resource,
+		): resource is Extract<
+			MultiServiceDesired["multiService"]["resources"][number],
+			{ kind: "StatefulSet" }
+		> =>
+			resource.kind === "StatefulSet" &&
+			`${resource.metadata.name}-data` === pvc.metadata.name,
 	);
 	const size =
 		(statefulSet
@@ -414,14 +428,11 @@ function statefulSet(
 
 function persistentVolumeClaim(
 	value: MultiServiceDesired,
-	resource: Extract<
-		MultiServiceDesired["multiService"]["resources"][number],
-		{ kind: "PersistentVolumeClaim" }
-	>,
+	resource: MultiServicePvcResource,
 	policy: MultiServiceRuntimePolicyV1,
 	resources: MultiServiceResourceConfigurationV1,
 ): V1PersistentVolumeClaim {
-	const storage = multiServiceStorageSize(value, policy, resources);
+	const storage = multiServiceStorageSize(value, resource, policy, resources);
 	return {
 		apiVersion: "v1",
 		kind: "PersistentVolumeClaim",
@@ -442,6 +453,7 @@ function persistentVolumeClaim(
 function storageMatchesPolicy(
 	current: V1PersistentVolumeClaim,
 	value: MultiServiceDesired,
+	pvc: MultiServicePvcResource,
 	policy: MultiServiceRuntimePolicyV1,
 	resources: MultiServiceResourceConfigurationV1,
 ) {
@@ -449,7 +461,7 @@ function storageMatchesPolicy(
 		current.spec?.accessModes?.length === 1 &&
 		current.spec.accessModes[0] === "ReadWriteOnce" &&
 		current.spec.resources?.requests?.storage ===
-			multiServiceStorageSize(value, policy, resources) &&
+			multiServiceStorageSize(value, pvc, policy, resources) &&
 		(policy.storageClassName === undefined ||
 			current.spec.storageClassName === policy.storageClassName)
 	);
@@ -642,7 +654,7 @@ export function createMultiServiceRuntimeOperations(options: {
 		serviceResourceName(value.agentId, name);
 	const manifestPvc = (value: MultiServiceDesired, name: string) =>
 		value.multiService.resources.find(
-			(resource) =>
+			(resource): resource is MultiServicePvcResource =>
 				resource.kind === "PersistentVolumeClaim" &&
 				resourceName(value, resource.metadata.name) === name,
 		);
@@ -679,9 +691,16 @@ export function createMultiServiceRuntimeOperations(options: {
 		if (object.kind === "Job") return current;
 		if (current.kind === "PersistentVolumeClaim") {
 			const currentPvc = current as unknown as V1PersistentVolumeClaim;
+			const declaredPvc = manifestPvc(value, current.metadata?.name ?? "");
 			if (
-				!manifestPvc(value, current.metadata?.name ?? "") ||
-				!storageMatchesPolicy(currentPvc, value, options.policy, resources)
+				!declaredPvc ||
+				!storageMatchesPolicy(
+					currentPvc,
+					value,
+					declaredPvc,
+					options.policy,
+					resources,
+				)
 			)
 				throw new Error("multi-service PVC drifted");
 		}
@@ -905,17 +924,26 @@ export function createMultiServiceRuntimeOperations(options: {
 					);
 				if (resource.kind === "StatefulSet") {
 					const pvc = value.multiService.resources.find(
-						(candidate) => candidate.kind === "PersistentVolumeClaim",
+						(candidate) =>
+							candidate.kind === "PersistentVolumeClaim" &&
+							candidate.metadata.name === `${resource.metadata.name}-data`,
 					);
+					const statefulPvc =
+						pvc?.kind === "PersistentVolumeClaim" ? pvc : undefined;
+					if (!statefulPvc)
+						throw new Error("multi-service StatefulSet PVC is missing");
 					await put(
 						statefulSet(
 							value,
 							resource,
 							options.policy,
 							resources,
-							pvc
-								? persistentVolumeClaim(value, pvc, options.policy, resources)
-								: undefined,
+							persistentVolumeClaim(
+								value,
+								statefulPvc,
+								options.policy,
+								resources,
+							),
 						),
 						value,
 						ownership,
@@ -972,7 +1000,13 @@ export function createMultiServiceRuntimeOperations(options: {
 				if (
 					!current ||
 					!owned(current, value) ||
-					!storageMatchesPolicy(current, value, options.policy, resources)
+					!storageMatchesPolicy(
+						current,
+						value,
+						resource,
+						options.policy,
+						resources,
+					)
 				)
 					return "unhealthy" as const;
 			}

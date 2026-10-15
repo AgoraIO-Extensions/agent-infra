@@ -531,6 +531,62 @@ describe("multi-service resource policy", () => {
 		);
 	});
 
+	it("sizes each PVC from the profile of the StatefulSet that owns it (#2523)", async () => {
+		// web 使用 database 档位（5Gi），worker 改为第二个 StatefulSet 且档位无 storageSize。
+		const worker = databaseManifest.resources.find(
+			(resource) =>
+				resource.kind === "Deployment" && resource.metadata.name === "worker",
+		);
+		if (worker?.kind !== "Deployment")
+			throw new Error("worker fixture missing");
+		const twoStateful = MultiServiceManifestDocumentV1Schema.parse({
+			...databaseManifest,
+			resources: [
+				...databaseManifest.resources.filter((resource) => resource !== worker),
+				{
+					...worker,
+					kind: "StatefulSet",
+					spec: { ...worker.spec, serviceName: "worker" },
+				},
+				{
+					apiVersion: "v1",
+					kind: "PersistentVolumeClaim",
+					metadata: { name: "worker-data" },
+					spec: {
+						accessModes: ["ReadWriteOnce"],
+						resources: { requests: { storage: "9Gi" } },
+					},
+				},
+			],
+		});
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				...basePolicy,
+				multiServiceResourceProfiles: [smallProfile, databaseProfile],
+				storageSize: "2Gi",
+			},
+		});
+		const value = desired(twoStateful);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(value);
+		const prefix = workloadResourceNameV1("agent-a");
+		const storage = (name: string) =>
+			(
+				fake.resources.get(`PersistentVolumeClaim/${prefix}-${name}`) as
+					| V1PersistentVolumeClaim
+					| undefined
+			)?.spec?.resources?.requests?.storage;
+		expect(storage("web-data")).toBe("5Gi");
+		expect(storage("worker-data")).toBe("2Gi");
+		markWorkloadsReady(fake);
+		expect(await operations.observe(value, { uid: "u", generation: 1 })).toBe(
+			"healthy",
+		);
+	});
+
 	it("falls back to the deployment storage size when the StatefulSet profile has none", async () => {
 		const fake = fakeClient();
 		const operations = createMultiServiceRuntimeOperations({
