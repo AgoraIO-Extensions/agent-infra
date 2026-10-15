@@ -81,6 +81,31 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	const traces: string[] = [];
 	const admissions: { executionId: string; conversationId: string }[] = [];
 	const dispatchSnapshots: unknown[] = [];
+	// 失败诊断用的时间线（#2533）：只记录 Execution 状态、事件行和 submit 条目的变化，
+	// 用独立连接采样，不影响被测流程。
+	const timeline: unknown[] = [];
+	let observer: ReturnType<typeof postgres> | undefined;
+	let sampling = false;
+	let lastSample = "";
+	async function sampleTimeline() {
+		if (!observer) return;
+		try {
+			const [row] = await observer`
+				select
+					(select coalesce(jsonb_agg(jsonb_build_object('id', left(execution_id, 8), 'status', status) order by execution_id), '[]'::jsonb)
+						from platform.conversation_executions) as executions,
+					(select coalesce(jsonb_agg(jsonb_build_object('id', left(execution_id, 8), 'type', event_type, 'status', event_payload->>'status', 'source', source) order by persisted_at, sequence), '[]'::jsonb)
+						from platform.conversation_events) as events,
+					(select coalesce(jsonb_agg(jsonb_build_object('id', left(payload->>'executionId', 8), 'status', status, 'attempt', attempt_count) order by id), '[]'::jsonb)
+						from platform.outbox_items where operation = 'conversation.turn.submit.v1') as submits`;
+			const key = JSON.stringify(row);
+			if (key === lastSample) return;
+			lastSample = key;
+			timeline.push({ atMs: Math.round(performance.now()), ...row });
+		} catch {
+			/* observational only */
+		}
+	}
 	async function snapshotDispatch(
 		stage:
 			| "initial_workers"
@@ -717,6 +742,14 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		await sql.unsafe(
 			"create trigger test_event_failure before insert on platform.conversation_events for each row execute function platform.test_event_failure()",
 		);
+		observer = postgres(database.databaseUrl, { max: 1 });
+		sampling = true;
+		void (async () => {
+			while (sampling) {
+				await sampleTimeline();
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+		})();
 		start();
 		start();
 		await waitUntil(
@@ -751,13 +784,28 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			"drop trigger test_event_failure on platform.conversation_events",
 		);
 
+		// 注入的失败会让这次分发被重试并把 Execution 标成 unknown；触发器被删除之后，平台还会
+		// 补记一条 source=platform 的 execution.status=unknown 事件。它不是 Runtime 的运行事件，
+		// 只数事件行会把它当成「运行事件已落库」，随后读到 unknown 而不是 processing（#2533）。
+		// 所以这里只认 Runtime 发出的 processing 状态事件，并等 Execution 真正进入 processing。
 		await waitUntil(
 			async () =>
 				(
-					await sql`select 1 from platform.conversation_events where execution_id=${first.executionId} or execution_id=${second.executionId}`
+					await sql`
+						select 1 from platform.conversation_events
+						where (execution_id=${first.executionId} or execution_id=${second.executionId})
+							and source = 'runtime' and event_type = 'execution.status'
+							and event_payload->>'status' = 'processing'`
 				).length === 1,
 			"persisted running event",
 			600,
+		);
+		await waitUntil(
+			async () =>
+				(
+					await sql`select 1 from platform.conversation_executions where status='processing'`
+				).length === 1,
+			"running Execution",
 		);
 		const [active] =
 			await sql`select execution_id, conversation_id from platform.conversation_executions where status='processing'`;
@@ -1043,6 +1091,22 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		throw new Error(
 			JSON.stringify({
 				dispatchSnapshots,
+				timeline: timeline.slice(-60),
+				// 每个 unknown Execution 在 Worker 进程日志里的相关片段，说明它为什么没有确认。
+				unknownExecutions: await Promise.all(
+					(
+						await sql`select execution_id from platform.conversation_executions where status = 'unknown'`.catch(
+							() => [],
+						)
+					).map(async ({ execution_id }) => ({
+						executionId: execution_id,
+						workerLog: output
+							.join("")
+							.split("\n")
+							.filter((line) => line.includes(execution_id))
+							.slice(-12),
+					})),
+				),
 				traces: traces.slice(-30),
 				output: output.slice(-30),
 				processes: children.map((child) => ({
@@ -1071,6 +1135,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		} catch {
 			/* observational only */
 		}
+		sampling = false;
 		for (const child of children)
 			if (child.exitCode === null) child.kill("SIGKILL");
 		await Promise.all(
@@ -1083,6 +1148,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		await Promise.all([
 			execution?.close(),
 			authorization?.close(),
+			observer?.end({ timeout: 0 }),
 			sql.end({ timeout: 0 }),
 		]);
 		await host?.close();
