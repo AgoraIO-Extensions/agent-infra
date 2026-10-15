@@ -87,6 +87,7 @@ export function createBrowserSideEffectCommandExecutorV1(input: {
 			if (
 				!resolved ||
 				!sameCommand(command.command, resolved) ||
+				resolved.actorId !== command.identity.userId ||
 				resolved.conversationId !== command.conversationId ||
 				(command.agentId !== undefined &&
 					resolved.agentId !== command.agentId) ||

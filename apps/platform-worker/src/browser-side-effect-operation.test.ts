@@ -256,4 +256,54 @@ describe("Browser side-effect Worker operation adapter", () => {
 			failureCode: "request_rejected",
 		});
 	});
+
+	it("rejects a resolver binding owned by another caller", async () => {
+		const runtimeRequest = request();
+		const operation = { execute: vi.fn() };
+		const resolverRequest = {
+			schemaVersion: 1,
+			requestId: runtimeRequest.requestId,
+			traceId: runtimeRequest.traceId,
+			agentId: runtimeRequest.agentId,
+			actorId: "foreign-user",
+			channelId: runtimeRequest.channelId,
+			conversationId: runtimeRequest.conversationId,
+			executionId: runtimeRequest.executionId,
+			turnId: runtimeRequest.turnId,
+			sessionGeneration: runtimeRequest.sessionGeneration,
+			deliveryFence: runtimeRequest.operation.deliveryFence,
+			hostSessionRef: runtimeRequest.hostSessionRef,
+			runtimeGrant: runtimeRequest.grant,
+			command: runtimeRequest.command,
+			binding: runtimeRequest.binding,
+		};
+		const executor = createBrowserSideEffectCommandExecutorV1({
+			resolver: { resolve: vi.fn().mockResolvedValue(resolverRequest) },
+			operation: operation as never,
+		});
+		await expect(
+			executor.invoke({
+				identity: { userId: runtimeRequest.principal.id },
+				conversationId: runtimeRequest.conversationId,
+				command: {
+					schemaVersion: 1,
+					command: "confirm_side_effect",
+					confirmationId: runtimeRequest.binding.confirmationId,
+				},
+				idempotencyKey: "command-6",
+				requestId: runtimeRequest.requestId,
+				traceId: runtimeRequest.traceId,
+				agentId: runtimeRequest.agentId,
+				channelId: runtimeRequest.channelId,
+				executionId: runtimeRequest.executionId,
+				turnId: runtimeRequest.turnId,
+				sessionGeneration: runtimeRequest.sessionGeneration,
+				deliveryFence: runtimeRequest.operation.deliveryFence,
+				hostSessionRef: runtimeRequest.hostSessionRef,
+				runtimeGrant: runtimeRequest.grant,
+				signal: new AbortController().signal,
+			}),
+		).resolves.toMatchObject({ outcome: "unavailable" });
+		expect(operation.execute).not.toHaveBeenCalled();
+	});
 });
