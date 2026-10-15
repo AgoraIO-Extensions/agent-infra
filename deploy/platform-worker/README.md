@@ -17,16 +17,17 @@ Helm 的 `platformWorker.wecomEnabled=true` 还会在同一进程启动 WeCom �
 启用该开关须使用 `workloadTopology.enabled=false` 的正式 Worker 部署；受控 topology
 模式不运行渠道，组合启用会拒绝渲染。
 
-Native metadata 的正式 `configuration.mjs` 可导出 `nativeMetadataGateway`。它至少要提供
-`binding.resolve({ request, signal })`（从同一 Platform Store/Execution 记录返回完整的
-`originalHostScopeRef` 绑定）和 `transport.resolve({ binding, signal })`（只返回由部署
-固定 origin、token、Worker ID 组成的 `createWorkerRuntimeNativeMetadataClientV1`）。
+Native metadata 的正式 `configuration.mjs` 可导出 `nativeMetadataGateway`。默认会使用
+`PLATFORM_DATABASE_URL` 通过 Platform Store 查询原 Execution scope 并装配
+`binding.resolve({ request, signal })`；只有需要替换 Store 读取时才显式提供该 binding。
+`transport.resolve({ binding, signal })` 仍必须由部署提供（只返回由部署固定 origin、token、
+Worker ID 组成的 `createWorkerRuntimeNativeMetadataClientV1`），因为 Runtime 实例映射属于部署输入。
 `proofIssuer` 可以省略：deployment entry 会用同一份 `signing.privateKey`、`issuer`、
 `workerId` 和 `keyId` 创建 Worker-only proof issuer；也可以在密钥轮换期间显式提供已
 验证的 issuer/key 组合。`platformApiCurrent` 可提供固定 `{ baseUrl, serviceToken }`，由
 Worker 自动创建 Platform API current-confirmation client。请求本身不能选择 Runtime/API
 URL、token、Host Session 或主体；任一 binding、transport、current 或 proof 依赖缺失时
-网关保持 unavailable。
+网关保持 unavailable。Worker 停止 internal listener 时会一并关闭默认 Store query client。
 
 Session Sandbox 的空闲计算回收属于同一 Worker 的会话生命周期策略。部署配置模块的
 `workloadInput.idleSandboxReclaimAfterMs` 可以配置空闲阈值，设为 `null` 可关闭，未配置时默认

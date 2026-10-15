@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createPlatformNativeMetadataGatewayAssemblyV1 } from "./native-metadata-deployment-assembly.js";
+import {
+	createPlatformNativeMetadataBindingResolverV1,
+	createPlatformNativeMetadataGatewayAssemblyV1,
+} from "./native-metadata-deployment-assembly.js";
 
 const ports = {
 	binding: { resolve: vi.fn(async () => null) },
@@ -15,7 +18,77 @@ const ports = {
 	port: 3010,
 };
 
+const bindingRequest = {
+	schemaVersion: 1 as const,
+	readId: "read-default-binding",
+	selector: "commands" as const,
+	scope: {
+		schemaVersion: 1 as const,
+		principal: { kind: "user" as const, id: "user-default-binding" },
+		agentId: "agent-default-binding",
+		channelId: "web",
+		conversationId: "conversation-default-binding",
+		executionId: "execution-default-binding",
+		sessionGeneration: 3,
+		authorizationRevision: "authorization-default-binding",
+	},
+	readStartedAt: 1_000,
+	expiresAt: 20_000,
+	requestId: "request-default-binding",
+	traceId: "trace-default-binding",
+	apiRequestSourceRef: "api-default-binding",
+};
+
 describe("native metadata deployment assembly", () => {
+	it("resolves the original Host scope from the persisted Execution", async () => {
+		const read = vi.fn(async () => ({
+			...bindingRequest.scope,
+			originalHostScopeRef: "host-default-binding",
+		}));
+		const resolver = createPlatformNativeMetadataBindingResolverV1({
+			query: { readNativeMetadataObjectScopeV1: read },
+		});
+		await expect(
+			resolver.resolve({
+				request: bindingRequest,
+				signal: new AbortController().signal,
+			}),
+		).resolves.toMatchObject({
+			originalHostScopeRef: "host-default-binding",
+			scope: bindingRequest.scope,
+		});
+		expect(read).toHaveBeenCalledWith({
+			scope: {
+				actorId: "user-default-binding",
+				channelId: "web",
+				principal: bindingRequest.scope.principal,
+			},
+			conversationId: "conversation-default-binding",
+			executionId: "execution-default-binding",
+			signal: expect.any(AbortSignal),
+		});
+	});
+
+	it.each([
+		["missing original Host scope", { originalHostScopeRef: null }],
+		["cross-Conversation scope", { conversationId: "foreign-conversation" }],
+	] as const)("fails closed on %s", async (_label, change) => {
+		const read = vi.fn(async () => ({
+			...bindingRequest.scope,
+			originalHostScopeRef: "host-default-binding",
+			...change,
+		}));
+		const resolver = createPlatformNativeMetadataBindingResolverV1({
+			query: { readNativeMetadataObjectScopeV1: read },
+		});
+		await expect(
+			resolver.resolve({
+				request: bindingRequest,
+				signal: new AbortController().signal,
+			}),
+		).resolves.toBeNull();
+	});
+
 	it("builds the real Worker gateway app from deployment ports", async () => {
 		const options = createPlatformNativeMetadataGatewayAssemblyV1({
 			serviceToken: "worker-service-token",
@@ -33,6 +106,16 @@ describe("native metadata deployment assembly", () => {
 			}),
 		);
 		expect(response.status).toBe(400);
+	});
+
+	it("uses the Store binding resolver when deployment omits one", async () => {
+		const options = createPlatformNativeMetadataGatewayAssemblyV1({
+			serviceToken: "worker-service-token",
+			databaseUrl: "postgres://worker:worker@127.0.0.1:5432/platform",
+			ports: { ...ports, binding: undefined },
+		});
+		expect(options.close).toEqual(expect.any(Function));
+		await options.close?.();
 	});
 
 	it("assembles the optional Platform API current checker", async () => {
