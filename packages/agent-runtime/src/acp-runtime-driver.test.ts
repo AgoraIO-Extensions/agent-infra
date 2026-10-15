@@ -5,12 +5,88 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
+import type { RuntimeNativeSkillCommandV1 } from "./driver.js";
 import { createRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
 import {
 	closeStandardMcpFixtures,
 	reference,
 	standardMcpFixture,
 } from "./standard-mcp.fixture.js";
+
+it("forwards the controlled native Skill prompt through the Generic ACP driver", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-native-skill-prompt-"));
+	const nativeSkillPrompt = vi.fn(
+		(name: string, parameters: string) =>
+			`/${name}${parameters.length > 0 ? ` ${parameters}` : ""}`,
+	);
+	const skillDirectory = {
+		generationId: "a".repeat(64),
+		findSkills: () => [
+			{
+				schemaVersion: 1 as const,
+				name: "workspace-summary",
+				version: "1.0.0",
+				packageDigest: "b".repeat(64),
+				manifestDigest: "c".repeat(64),
+				targetPath: ".agents/skills/workspace-summary",
+				readOnly: true as const,
+			},
+		],
+		readSkill: async () => new Uint8Array(),
+	};
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		skillDirectory,
+		nativeSkillPrompt,
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: {},
+		}),
+	});
+	try {
+		const command = driver.createNativeSkillCommand({
+			schemaVersion: 1,
+			kind: "native-capability",
+			operationId: "operation-a",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			executionId: "execution-a",
+			turnId: "turn-a",
+			sessionGeneration: 1,
+			nativeSessionRef: "native-a",
+			capabilityId: "d".repeat(64),
+			directoryRevision: "e".repeat(64),
+			parameters: "summarize files",
+			parametersDigest: "f".repeat(64),
+			capabilityName: "workspace-summary",
+			capabilitySourceVersion: "1.0.0",
+		} satisfies RuntimeNativeSkillCommandV1);
+		expect(nativeSkillPrompt).toHaveBeenCalledWith(
+			"workspace-summary",
+			"summarize files",
+		);
+		expect(command.input).toEqual({
+			text: "/workspace-summary summarize files",
+			attachments: [],
+		});
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
 
 it("passes only a local bearer to an ACP protected MCP session", async () => {
 	const fixture = await standardMcpFixture();

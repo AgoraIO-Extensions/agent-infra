@@ -19,6 +19,27 @@ import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js
 import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
 import { workspacePathAllowed } from "./workspace-path.js";
 
+const nativeSkillPromptMaximumLength = 16 * 1024;
+const nativeSkillName = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+
+/**
+ * Map one verified Applied Skill identity to OpenCode's slash command prompt.
+ * The Runtime Host has already authenticated the directory, version, digest and
+ * grant; this seam intentionally accepts only that identity and bounded opaque
+ * parameters, never a caller-selected path, URL or credential.
+ */
+export function openCodeNativeSkillPrompt(name: string, parameters: string) {
+	if (
+		!nativeSkillName.test(name) ||
+		typeof parameters !== "string" ||
+		!parameters.isWellFormed() ||
+		name.length + parameters.length + (parameters.length > 0 ? 2 : 1) >
+			nativeSkillPromptMaximumLength
+	)
+		throw new Error("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
+	return `/${name}${parameters.length > 0 ? ` ${parameters}` : ""}`;
+}
+
 export interface OpenCodeRuntimeOptions {
 	readonly browserCapability?:
 		| BrowserCapabilityAvailableV1
@@ -95,6 +116,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 	await verifyOpenCodeInstallation(options.executable);
 	return GenericAcpRuntimeDriver.open({
 		...options,
+		nativeSkillPrompt: openCodeNativeSkillPrompt,
 		reuseNativeSession: !options.standardConnectionClient,
 		modelOptions: options.modelOptions.map((option) => ({
 			modelOptionId: option.modelOptionId,
