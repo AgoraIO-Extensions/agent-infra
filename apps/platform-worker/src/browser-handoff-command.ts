@@ -33,7 +33,7 @@ export type BrowserHandoffCommandInvocationV1 = Readonly<{
 
 export type BrowserHandoffOperationCommandV1 = Readonly<{
 	readonly schemaVersion: 1;
-	readonly command: "take_over" | "return_to_agent" | "revoke";
+	readonly command: "pause" | "take_over" | "return_to_agent" | "revoke";
 	readonly handoffId: string;
 }>;
 
@@ -62,6 +62,8 @@ export function browserHandoffFromRuntimeSnapshotV1(input: {
 	if (!parsed.success) return null;
 	const runtime: RuntimeBrowserHandoffRuntimeSnapshotV1 = parsed.data;
 	if (!runtime.browserAlive || !runtime.authorized) return null;
+	if (input.command.command === "pause")
+		return { kind: "request", reason: "human_judgment", runtime };
 	if (input.command.command === "take_over")
 		return {
 			kind: "take-over",
@@ -130,7 +132,6 @@ export function createBrowserHandoffCommandExecutorV1(input: {
 	return {
 		async invoke(request: BrowserHandoffCommandInvocationV1) {
 			if (
-				request.command.command === "pause" ||
 				request.command.command === "confirm_side_effect" ||
 				request.command.command === "reject_side_effect" ||
 				request.command.command === "cancel_side_effect"
@@ -146,12 +147,15 @@ export function createBrowserHandoffCommandExecutorV1(input: {
 					resolved !== null &&
 					bindingMatchesInvocation(resolved, request) &&
 					resolved.handoff.kind ===
-						(request.command.command === "take_over"
-							? "take-over"
-							: request.command.command === "return_to_agent"
-								? "return-to-agent"
-								: "revoke") &&
-					(request.command.command === "revoke" ||
+						(request.command.command === "pause"
+							? "request"
+							: request.command.command === "take_over"
+								? "take-over"
+								: request.command.command === "return_to_agent"
+									? "return-to-agent"
+									: "revoke") &&
+					(request.command.command === "pause" ||
+						request.command.command === "revoke" ||
 						("handoffId" in resolved.handoff &&
 							"handoffId" in request.command &&
 							resolved.handoff.handoffId === request.command.handoffId));
