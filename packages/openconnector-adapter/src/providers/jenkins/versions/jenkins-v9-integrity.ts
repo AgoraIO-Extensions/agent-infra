@@ -1,0 +1,2 @@
+export const jenkinsV9ExecutorDigest =
+	"sha256:1e719e60d8acfcf6c76b64ea1a73a93f2f2154de8a1917f3d8c4c11bdf9830b2";

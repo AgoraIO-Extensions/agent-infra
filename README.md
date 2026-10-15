@@ -7,6 +7,7 @@
 ## 文档
 
 - [Connection 使用说明书](docs/guides/connection-user-manual.md)
+- [Jenkins Pipeline 管理](docs/guides/connection-user-manual.md#25--jenkins-pipeline-管理)
 - [企业级 Agent 平台 M1 产品需求](docs/prd/PRD-agent-platform-M1.md)
 - [Connection M1 产品需求](docs/prd/PRD-connection-M1.md)
 - [M1 工程架构 Spec](docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md)

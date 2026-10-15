@@ -61,6 +61,7 @@ import {
 	jenkinsCiProfile,
 	jenkinsReleaseConnectionCatalog,
 	jenkinsReleaseProfile,
+	LegacyJenkinsAdapter,
 } from "@agent-infra/openconnector-adapter/providers/jenkins";
 import {
 	JiraServerAdapter,
@@ -382,17 +383,27 @@ export async function createConnectionRuntime(
 		maxRedirects: 0,
 	});
 	const jenkins = new JenkinsAdapter(jenkinsReleaseProfile, jenkinsFetch);
+	const jenkinsCiFetch = createGuardedFetch({
+		allowPrivateNetwork: false,
+		maxRedirects: 0,
+		fetch: observeProviderFetch(
+			"jenkins-ci",
+			providerFetch([jenkinsCiProfile.apiOrigin]),
+		),
+	});
+	const jenkinsCiGateway = new JiraServerOAuthTokenProvider(
+		jiraFetch,
+		config.jenkinsCiToken,
+	);
+	const legacyJenkinsCi = new LegacyJenkinsAdapter(
+		jenkinsCiProfile,
+		jenkinsCiFetch,
+		jenkinsCiGateway,
+	);
 	const jenkinsCi = new JenkinsAdapter(
 		jenkinsCiProfile,
-		createGuardedFetch({
-			allowPrivateNetwork: false,
-			maxRedirects: 0,
-			fetch: observeProviderFetch(
-				"jenkins-ci",
-				providerFetch([jenkinsCiProfile.apiOrigin]),
-			),
-		}),
-		new JiraServerOAuthTokenProvider(jiraFetch, config.jenkinsCiToken),
+		jenkinsCiFetch,
+		jenkinsCiGateway,
 	);
 	const rehoboam = new RehoboamAdapter(
 		createGuardedFetch({
@@ -514,6 +525,11 @@ export async function createConnectionRuntime(
 		[datalegoV4ConnectionCatalog.providerReleaseId]: datalegoOAuthV4,
 		[datalegoV5ConnectionCatalog.providerReleaseId]: datalegoOAuthV5,
 		[datalegoV6ConnectionCatalog.providerReleaseId]: datalegoOAuth,
+		"jenkins-ci-connection-v8": legacyJenkinsCi,
+		"jenkins-release-connection-v8": new LegacyJenkinsAdapter(
+			jenkinsReleaseProfile,
+			jenkinsFetch,
+		),
 		[jenkinsCiConnectionCatalog.providerReleaseId]: jenkinsCi,
 		[jenkinsReleaseConnectionCatalog.providerReleaseId]: jenkins,
 		[manhattanConnectionCatalog.providerReleaseId]: manhattan,

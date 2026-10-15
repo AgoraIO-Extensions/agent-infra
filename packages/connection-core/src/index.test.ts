@@ -6,6 +6,11 @@ import {
 	githubV11ConnectionCatalog,
 } from "../../openconnector-adapter/src/providers/github/versions/github-v11.ts";
 import {
+	JenkinsAdapter as JenkinsV9Adapter,
+	jenkinsCiProfile,
+	jenkinsCiConnectionCatalog as jenkinsV9Catalog,
+} from "../../openconnector-adapter/src/providers/jenkins/versions/jenkins-v9.ts";
+import {
 	channelPublishingActions,
 	RehoboamV13Adapter,
 } from "../../openconnector-adapter/src/providers/rehoboam/versions/rehoboam-v13.ts";
@@ -548,6 +553,88 @@ class MemoryRepository implements ConnectionRepository {
 }
 
 describe("Connection application service", () => {
+	it("requires explicit Jenkins v9 consent and rejects cross-user/Consumer/Connection before Pipeline writes", async () => {
+		const memory = new MemoryRepository();
+		const repository: ConnectionRepository = memory;
+		const action = jenkinsV9Catalog.actions.find(
+			(item) => item.name === "jenkins-ci.create_pipeline",
+		);
+		if (!action) throw new Error("Pipeline action missing");
+		const createCall = repository.createCall.bind(repository);
+		repository.createCall = (input) =>
+			createCall({ ...input, actionVersionId: action.id });
+		const invocation = {
+			...direct,
+			providerId: "jenkins-ci",
+			providerReleaseId: jenkinsV9Catalog.providerReleaseId,
+		};
+		let granted = false;
+		let requests = 0;
+		repository.resolveDirectIdentities = async (identity) => [
+			{ ...invocation, ...identity },
+		];
+		repository.listAuthorizedActions = async (current) =>
+			granted &&
+			current.principalId === direct.principalId &&
+			current.consumerId === direct.consumerId &&
+			current.connectionId === direct.connectionId
+				? [action]
+				: [];
+		repository.getCredential = async () => ({
+			accessToken: JSON.stringify({
+				username: "alice",
+				apiToken: "test-token",
+			}),
+		});
+		const adapter = new JenkinsV9Adapter(jenkinsCiProfile, async () => {
+			requests++;
+			return new Response();
+		});
+		const service = new ConnectionApplicationService(repository, adapter);
+		const input = {
+			idempotencyKey: "create-pipeline",
+			jobFullName: "new",
+			definition: { kind: "inline", script: "echo 'hello'" },
+		};
+		await expect(
+			service.executeDirectActionForIdentity(invocation, action.name, input),
+		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		granted = true;
+		for (const identity of [
+			{ ...invocation, principalId: "bob" },
+			{ ...invocation, consumerId: "other-consumer" },
+			{ ...invocation, connectionId: "other-connection" },
+		])
+			await expect(
+				service.executeDirectActionForIdentity(identity, action.name, input),
+			).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		for (const selector of [
+			{ connectionId: "other-connection" },
+			{ principalId: "bob" },
+			{ consumerId: "other-consumer" },
+		])
+			await expect(
+				service.executeDirectActionForIdentity(invocation, action.name, {
+					...input,
+					...selector,
+				}),
+			).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		expect(requests).toBe(0);
+		await expect(
+			service.executeDirectActionForIdentity(invocation, action.name, input),
+		).resolves.toMatchObject({
+			actionVersionId: action.id,
+			status: "SUCCEEDED",
+			result: { accepted: true },
+		});
+		await service.executeDirectActionForIdentity(
+			invocation,
+			action.name,
+			input,
+		);
+		expect(requests).toBe(1);
+	});
+
 	it("requires explicit Job log authorization and rejects cross-user/Consumer/Connection selectors before dispatch", async () => {
 		const memory = new MemoryRepository();
 		const repository: ConnectionRepository = memory;

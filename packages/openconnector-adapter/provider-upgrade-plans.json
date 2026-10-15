@@ -171,6 +171,24 @@
 			"toExecutorDigest": "sha256:08ac0209380239bfb46a21f4d53460fb077396b2f12c84535a37a59f4400c0e4",
 			"strategy": "REAPPROVAL_REQUIRED",
 			"reviewReference": "https://github.com/AgoraIO-Extensions/agent-infra/issues/1927"
+		},
+		{
+			"provider": "jenkins-ci",
+			"fromReleaseId": "jenkins-ci-connection-v8",
+			"toReleaseId": "jenkins-ci-connection-v9",
+			"fromExecutorDigest": "sha256:0038c81afec7a30cf1c17c937306ae2128fce3cce7fc670cd1a874ddb3e15720",
+			"toExecutorDigest": "sha256:1e719e60d8acfcf6c76b64ea1a73a93f2f2154de8a1917f3d8c4c11bdf9830b2",
+			"strategy": "REAPPROVAL_REQUIRED",
+			"reviewReference": "https://github.com/AgoraIO-Extensions/agent-infra/issues/2543"
+		},
+		{
+			"provider": "jenkins-release",
+			"fromReleaseId": "jenkins-release-connection-v8",
+			"toReleaseId": "jenkins-release-connection-v9",
+			"fromExecutorDigest": "sha256:0038c81afec7a30cf1c17c937306ae2128fce3cce7fc670cd1a874ddb3e15720",
+			"toExecutorDigest": "sha256:1e719e60d8acfcf6c76b64ea1a73a93f2f2154de8a1917f3d8c4c11bdf9830b2",
+			"strategy": "REAPPROVAL_REQUIRED",
+			"reviewReference": "https://github.com/AgoraIO-Extensions/agent-infra/issues/2543"
 		}
 	]
 }

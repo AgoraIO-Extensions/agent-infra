@@ -42,7 +42,9 @@ test("provider entry points preserve executor identity and published action arra
 		);
 	}
 	const jenkins = await import("./providers/jenkins/index.ts");
-	const legacyJenkins = await import("./jenkins.ts");
+	const legacyJenkins = await import(
+		"./providers/jenkins/versions/jenkins-v9.ts"
+	);
 	assert.equal(jenkins.JenkinsAdapter, legacyJenkins.JenkinsAdapter);
 	assert.equal(
 		jenkins.actions.ci,

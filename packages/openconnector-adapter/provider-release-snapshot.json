@@ -1078,124 +1078,204 @@
 		},
 		{
 			"provider": "jenkins-ci",
-			"providerReleaseId": "jenkins-ci-connection-v8",
-			"executorDigest": "sha256:0038c81afec7a30cf1c17c937306ae2128fce3cce7fc670cd1a874ddb3e15720",
+			"providerReleaseId": "jenkins-ci-connection-v9",
+			"executorDigest": "sha256:1e719e60d8acfcf6c76b64ea1a73a93f2f2154de8a1917f3d8c4c11bdf9830b2",
 			"sourceCommit": "connection-native",
 			"credentialUpgradeBehavior": "DIRECT",
 			"authDigest": "sha256:dea74cc4d694f9f13b5910c08b500333c7449515fe59d8b03c0baff374619e30",
 			"deploymentDigest": "sha256:3f4e6be655a84fde1d57065f371f93bb36a101c68beff7ae0b3ebc1c2b8b9074",
 			"actions": [
 				{
-					"id": "jenkins-ci.abort_build@v8",
+					"id": "jenkins-ci.abort_build@v9",
 					"name": "jenkins-ci.abort_build",
 					"authorizationDigest": "sha256:6f45ab84a4961aa39ce0e69df32f02eafd1e9ecc6531627126a584886c15db88"
 				},
 				{
-					"id": "jenkins-ci.build_job@v8",
+					"id": "jenkins-ci.build_job@v9",
 					"name": "jenkins-ci.build_job",
 					"authorizationDigest": "sha256:ccda73560f0fefca32e1b7806f068d308f7d9b619b91fbfec1db291b507a4654"
 				},
 				{
-					"id": "jenkins-ci.get_build@v8",
+					"id": "jenkins-ci.cancel_queue_item@v9",
+					"name": "jenkins-ci.cancel_queue_item",
+					"authorizationDigest": "sha256:efe3573b3b40f535149ed0f40bd393617f40bb3a7e2a1ef88651c7b201bdd8aa"
+				},
+				{
+					"id": "jenkins-ci.create_pipeline@v9",
+					"name": "jenkins-ci.create_pipeline",
+					"authorizationDigest": "sha256:e8a0fb86b5dccc2e2c11bb38673e8c17dc091ef10ab2f63d95d667d4753edc32"
+				},
+				{
+					"id": "jenkins-ci.disable_pipeline@v9",
+					"name": "jenkins-ci.disable_pipeline",
+					"authorizationDigest": "sha256:393517518300c2e019f5bdfd9d539f16e7164b24162d8180a49bb672e24b7dc9"
+				},
+				{
+					"id": "jenkins-ci.enable_pipeline@v9",
+					"name": "jenkins-ci.enable_pipeline",
+					"authorizationDigest": "sha256:9cfe4d28e303bf362424e3b0721705c35e805ba82349da5ab6bfabaff43d7119"
+				},
+				{
+					"id": "jenkins-ci.get_build@v9",
 					"name": "jenkins-ci.get_build",
 					"authorizationDigest": "sha256:8d372814cae5044a8c7d0bedbce01c1ee4967a8767a82463b66fbc9043d347fd"
 				},
 				{
-					"id": "jenkins-ci.get_build_artifact@v8",
+					"id": "jenkins-ci.get_build_artifact@v9",
 					"name": "jenkins-ci.get_build_artifact",
 					"authorizationDigest": "sha256:3a4951527ac71241e7d4b16632c2bb1336db54e1731547a2afaa67e9d898e5c2"
 				},
 				{
-					"id": "jenkins-ci.get_build_console@v8",
+					"id": "jenkins-ci.get_build_console@v9",
 					"name": "jenkins-ci.get_build_console",
 					"authorizationDigest": "sha256:9f89ee16ae8c9ee3b41b3e92e445c702e81e6b0307c170372d53df2c6e75bf77"
 				},
 				{
-					"id": "jenkins-ci.get_current_user@v8",
+					"id": "jenkins-ci.get_build_parameters@v9",
+					"name": "jenkins-ci.get_build_parameters",
+					"authorizationDigest": "sha256:509a96afaa7d94a5a3b0420ec86d1e515700eb14557765b6d3e74e9a4490c914"
+				},
+				{
+					"id": "jenkins-ci.get_current_user@v9",
 					"name": "jenkins-ci.get_current_user",
 					"authorizationDigest": "sha256:05b5ca8ce93cab04908a54f07e9556ff6c5c5332a11c5f236455ecdf891ed4c2"
 				},
 				{
-					"id": "jenkins-ci.get_job@v8",
+					"id": "jenkins-ci.get_job@v9",
 					"name": "jenkins-ci.get_job",
 					"authorizationDigest": "sha256:439432020d31a0e90dbed932f914040b4f1727b5557825ceabf8483676b4e0ee"
 				},
 				{
-					"id": "jenkins-ci.get_queue_item@v8",
+					"id": "jenkins-ci.get_pipeline_config@v9",
+					"name": "jenkins-ci.get_pipeline_config",
+					"authorizationDigest": "sha256:f61d7593e9c96962b03c95b3274f9a09a1135edcf4c08062a195d93dc932486e"
+				},
+				{
+					"id": "jenkins-ci.get_queue_item@v9",
 					"name": "jenkins-ci.get_queue_item",
 					"authorizationDigest": "sha256:e634ae8dee9b359d4cb36726eb130848249413b29d2187352083fcdc88017bf7"
 				},
 				{
-					"id": "jenkins-ci.list_jobs@v8",
+					"id": "jenkins-ci.list_folder_jobs@v9",
+					"name": "jenkins-ci.list_folder_jobs",
+					"authorizationDigest": "sha256:147a63ca53c4b8c3fa20d1b7560457089b20d1e8eeb084c0bd831117d06f8bdd"
+				},
+				{
+					"id": "jenkins-ci.list_jobs@v9",
 					"name": "jenkins-ci.list_jobs",
 					"authorizationDigest": "sha256:06bc97c37507660872720c75215d86fd57b7f3ce9ae7f30adc15d6bcc9f8f651"
 				},
 				{
-					"id": "jenkins-ci.rebuild_job@v8",
+					"id": "jenkins-ci.rebuild_job@v9",
 					"name": "jenkins-ci.rebuild_job",
 					"authorizationDigest": "sha256:fb382e66f0f36709afa3b2d130f33038f15d6b0c0d8157f1aa1d700acc1b1381"
+				},
+				{
+					"id": "jenkins-ci.update_pipeline@v9",
+					"name": "jenkins-ci.update_pipeline",
+					"authorizationDigest": "sha256:9d6782454334aee177b343382992e05459330dbe4c7e279b7dfadf9adca61e0b"
 				}
 			],
 			"compatibility": []
 		},
 		{
 			"provider": "jenkins-release",
-			"providerReleaseId": "jenkins-release-connection-v8",
-			"executorDigest": "sha256:0038c81afec7a30cf1c17c937306ae2128fce3cce7fc670cd1a874ddb3e15720",
+			"providerReleaseId": "jenkins-release-connection-v9",
+			"executorDigest": "sha256:1e719e60d8acfcf6c76b64ea1a73a93f2f2154de8a1917f3d8c4c11bdf9830b2",
 			"sourceCommit": "connection-native",
 			"credentialUpgradeBehavior": "DIRECT",
 			"authDigest": "sha256:dea74cc4d694f9f13b5910c08b500333c7449515fe59d8b03c0baff374619e30",
 			"deploymentDigest": "sha256:30910bfbc0e421f93f05c14bd696f86883909cb379840b00cfb757fdd5633f02",
 			"actions": [
 				{
-					"id": "jenkins-release.abort_build@v8",
+					"id": "jenkins-release.abort_build@v9",
 					"name": "jenkins-release.abort_build",
 					"authorizationDigest": "sha256:09aa58fbb9b397ddd2436c3c90ae0a76bcc57c0adc67687158f831e822c27482"
 				},
 				{
-					"id": "jenkins-release.build_job@v8",
+					"id": "jenkins-release.build_job@v9",
 					"name": "jenkins-release.build_job",
 					"authorizationDigest": "sha256:42b5d4efe46401569a6cc38078f2a1fcb59cb3e727d24b3464d187805b76bd4a"
 				},
 				{
-					"id": "jenkins-release.get_build@v8",
+					"id": "jenkins-release.cancel_queue_item@v9",
+					"name": "jenkins-release.cancel_queue_item",
+					"authorizationDigest": "sha256:c57fc329f5ac748cea3671857c921bb173df99c8d20c861ff2d10c4091100cad"
+				},
+				{
+					"id": "jenkins-release.create_pipeline@v9",
+					"name": "jenkins-release.create_pipeline",
+					"authorizationDigest": "sha256:628a62028a8782247a3d408f31421188f56c0e98e6ad68f28d398e3c0a107df2"
+				},
+				{
+					"id": "jenkins-release.disable_pipeline@v9",
+					"name": "jenkins-release.disable_pipeline",
+					"authorizationDigest": "sha256:436d04e2e70af889f2f0ce0501172cdc1dcbb92fb6a1e3cbbc5b40fe5660c386"
+				},
+				{
+					"id": "jenkins-release.enable_pipeline@v9",
+					"name": "jenkins-release.enable_pipeline",
+					"authorizationDigest": "sha256:7b45cbb1de2a60a1fac7c99b07b58230413bd64f35714eae4eb7f854cfd7718e"
+				},
+				{
+					"id": "jenkins-release.get_build@v9",
 					"name": "jenkins-release.get_build",
 					"authorizationDigest": "sha256:8bdbe64bf0fd95918e1c841fc39f64abe7d1bcfb1e2ffc6bda8a6e904d6aa51e"
 				},
 				{
-					"id": "jenkins-release.get_build_artifact@v8",
+					"id": "jenkins-release.get_build_artifact@v9",
 					"name": "jenkins-release.get_build_artifact",
 					"authorizationDigest": "sha256:ca3643d8ab8ecd6d417bec8f4bda199778d856ef4703969b10f87bcf44a5ce60"
 				},
 				{
-					"id": "jenkins-release.get_build_console@v8",
+					"id": "jenkins-release.get_build_console@v9",
 					"name": "jenkins-release.get_build_console",
 					"authorizationDigest": "sha256:41316a395f422d7f8100b8c0b7681d83be5d49c73fb4383a3c125b0c87c7b10b"
 				},
 				{
-					"id": "jenkins-release.get_current_user@v8",
+					"id": "jenkins-release.get_build_parameters@v9",
+					"name": "jenkins-release.get_build_parameters",
+					"authorizationDigest": "sha256:4a7716f50c90c9e2089a7affa2ae3a6d4d12a4521b6339ba1fd65da387aced75"
+				},
+				{
+					"id": "jenkins-release.get_current_user@v9",
 					"name": "jenkins-release.get_current_user",
 					"authorizationDigest": "sha256:f58d3cbeacad9716f17d55af89644899153ae327b0a2e26ed6282f03ad032735"
 				},
 				{
-					"id": "jenkins-release.get_job@v8",
+					"id": "jenkins-release.get_job@v9",
 					"name": "jenkins-release.get_job",
 					"authorizationDigest": "sha256:02e1860225d161ca7ca021c814ee3edeedad4c0727d427fee8587400470d33d4"
 				},
 				{
-					"id": "jenkins-release.get_queue_item@v8",
+					"id": "jenkins-release.get_pipeline_config@v9",
+					"name": "jenkins-release.get_pipeline_config",
+					"authorizationDigest": "sha256:93a311dae79dd9d5c47875efd7a64ec0a0b2a0ce203596834f69e430f258a500"
+				},
+				{
+					"id": "jenkins-release.get_queue_item@v9",
 					"name": "jenkins-release.get_queue_item",
 					"authorizationDigest": "sha256:f9ca9693a8775093f120dde306f8500d545b093f12fc98aa4fd521cb14c9bb98"
 				},
 				{
-					"id": "jenkins-release.list_jobs@v8",
+					"id": "jenkins-release.list_folder_jobs@v9",
+					"name": "jenkins-release.list_folder_jobs",
+					"authorizationDigest": "sha256:e9fe33a657077aa90327f2754bc6eca056b64df7e88f7dbf9b711e3da5fb9558"
+				},
+				{
+					"id": "jenkins-release.list_jobs@v9",
 					"name": "jenkins-release.list_jobs",
 					"authorizationDigest": "sha256:b806120d4237aab56abd6d3aee294600d23b52f7df9a6b24f83a7597d2f5d034"
 				},
 				{
-					"id": "jenkins-release.rebuild_job@v8",
+					"id": "jenkins-release.rebuild_job@v9",
 					"name": "jenkins-release.rebuild_job",
 					"authorizationDigest": "sha256:e36349ab49d4bfc85e07903aa7244f3a4c8e62d8bcb0f0bddef64ed5b18eb985"
+				},
+				{
+					"id": "jenkins-release.update_pipeline@v9",
+					"name": "jenkins-release.update_pipeline",
+					"authorizationDigest": "sha256:574a4e902bee916676a31f70ec14eb18c519f87dd685762905ba5e9814210a25"
 				}
 			],
 			"compatibility": []

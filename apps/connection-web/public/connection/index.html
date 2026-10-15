@@ -65,6 +65,12 @@
         <p>读取 GitHub Actions 日志需单独选择并授权 <code>github.get_workflow_job_logs</code>。原始日志会进入已授权客户端或模型上下文；分页和错误恢复见<a href="/connection/help?chapter=15">GitHub 接入帮助</a>。</p>
       </section>
     <p>遇到 429 请按 Retry-After 等待后重试，不要循环提交。完整管理 API 文档需 Connection 登录；MCP 发现仍使用公开 metadata，不要求公司入口 Cookie。</p>
+      <section class="install" aria-labelledby="jenkins-title">
+        <h2 id="jenkins-title">Jenkins Pipeline 管理</h2>
+        <p>以实际发布目录为准，支持普通 Pipeline 的发现、配置读取、创建与更新、启用/禁用、参数发现和取消排队。CI 与 Release 分别授权，新增能力需本人确认；Jenkins 原生权限仍须满足。</p>
+        <p>先读配置和预览，更新携带配置摘要；摘要预检不是原子 CAS，避免并发编辑。创建不自动构建，禁用不停止已有 Build。写入结果未知时先核验，不自动重试；不在脚本或 Git 地址中放入密码。</p>
+        <a href="/connection/help?chapter=25" target="_blank" rel="noopener noreferrer">查看 Jenkins 创建、更新与错误恢复</a>
+      </section>
     </main>
 
     <footer>

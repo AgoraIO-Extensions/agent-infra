@@ -9,7 +9,12 @@ import {
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import snapshot from "../../../../../packages/openconnector-adapter/provider-release-snapshot.json";
-import { guideChapter, guideMarkdown, guideText } from "./content";
+import {
+	guideChapter,
+	guideChapters,
+	guideMarkdown,
+	guideText,
+} from "./content";
 import { ConnectionGuide } from "./guide";
 import { guideLinkParts } from "./links";
 import { providerGuideChapters, providerGuideHref } from "./provider-guides";
@@ -29,6 +34,15 @@ function Guide({ initial = "01" }: { initial?: string }) {
 	return <ConnectionGuide chapter={chapter} onChapterChange={setChapter} />;
 }
 describe("Connection manual", () => {
+	it("keeps chapter links unique and opens the Pipeline workflow", () => {
+		expect(new Set(guideChapters.map((chapter) => chapter.id)).size).toBe(
+			guideChapters.length,
+		);
+		render(<Guide initial="25" />);
+		expect(
+			screen.getByRole("heading", { name: "Jenkins Pipeline 管理" }),
+		).toBeDefined();
+	});
 	it("covers every released provider and opens credential entry links in a new tab", () => {
 		expect(Object.keys(providerGuideChapters).sort()).toEqual(
 			snapshot.providers.map((item) => item.provider).sort(),

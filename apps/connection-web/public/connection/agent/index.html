@@ -143,6 +143,12 @@ Authorization: Bearer &lt;当前用户与实例的 Connection PAT&gt;</code></pr
         <p>以上逐用户 PAT Binding 仍属于 Direct MCP。需要以注册 workload 代表当前 Principal 调用的 Agent 平台，应与 Connection 管理员对接 HTTP/OpenAPI Delegated 契约、workload 身份和短期委托上下文；Agent Platform 还需绑定稳定 Agent Actor。不能用自报身份或共享 PAT 替代该契约，也不能从 MCP URL 推测 Delegated 接口。</p>
       </section>
     <p>遇到 429 请按 Retry-After 等待后重试，不要循环提交。完整管理 API 文档需 Connection 登录；MCP 发现仍使用公开 metadata，不要求公司入口 Cookie。</p>
+      <section class="install" aria-labelledby="jenkins-title">
+        <h2 id="jenkins-title">Jenkins Pipeline 管理</h2>
+        <p>以实际发布目录为准，支持普通 Pipeline 的发现、配置读取、创建与更新、启用/禁用、参数发现和取消排队。CI 与 Release 分别授权，新增能力需本人确认；Jenkins 原生权限仍须满足。</p>
+        <p>先读配置和预览，更新携带配置摘要；摘要预检不是原子 CAS，避免并发编辑。创建不自动构建，禁用不停止已有 Build。写入结果未知时先核验，不自动重试；不在脚本或 Git 地址中放入密码。</p>
+        <a href="/connection/help?chapter=25" target="_blank" rel="noopener noreferrer">查看 Jenkins 创建、更新与错误恢复</a>
+      </section>
     </main>
 
     <footer>

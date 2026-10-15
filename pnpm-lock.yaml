@@ -429,6 +429,9 @@ importers:
       '@cfworker/json-schema':
         specifier: 4.1.1
         version: 4.1.1
+      saxes:
+        specifier: 6.0.0
+        version: 6.0.0
       undici:
         specifier: 7.29.1
         version: 7.29.1

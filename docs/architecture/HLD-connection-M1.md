@@ -150,6 +150,13 @@ Jenkins v8 增加 `build_job`、`abort_build` 和 `rebuild_job` 三个 WRITE Act
 256 KiB；任意二进制页返回 Base64，只有完整且可安全解码的 UTF-8 文本额外返回 `text`。既有
 Connection/Grant 同样不自动获得该新增 Action。
 
+Jenkins v9 的 Pipeline 管理闭环经需求负责人于 2026-10-15 批准，边界见
+[Pipeline 管理 ADR](../adr/ADR-connection-jenkins-pipeline-management.md)。新增 Folder 内发现、
+有界配置读取、inline/Git SCM 创建与更新、启用/禁用、参数发现和取消排队。脚本强制 sandbox；
+不管理 Folder、凭证、Multibranch 或删除 Job。更新仅有摘要预检，没有 Jenkins 原子 CAS，
+必须避免与其他编辑者并发修改。创建和更新不自动构建，写入结果未知不重试；旧 v8 源码和路由保留，
+新增 Action 须显式授权。源码实现及审批不替代两个 deployment 的真实验收与生产发布门禁。
+
 Rehoboam 的首个 **[设计决策]** Provider profile 固定为
 `https://justinia.gz3.agoralab.co`。Kong `key-auth` 使用部署级 `apiKey` 放行机器请求，用户个人
 用户在 Rehoboam Security 创建 Personal Access Token；每枚 PAT 隐含 `metadata:read`，Connection 只把该 PAT 作为

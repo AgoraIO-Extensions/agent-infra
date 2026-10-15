@@ -420,6 +420,44 @@ export const guideChapters: GuideChapter[] = [
 		],
 	},
 	...Object.values(providerGuideChapters),
+	{
+		id: "25",
+		title: "Jenkins Pipeline 管理",
+		summary:
+			"按实际发布目录选择 Jenkins CI 或 Release，先读配置与预览，再执行写操作。",
+		sections: [
+			{
+				title: "连接与能力选择",
+				paragraphs: [
+					"在“我的 Connection”连接目标 Jenkins 账号，在目标客户端的“管理能力”选择需要的 Pipeline Actions 并确认授权。已有账号仅在系统提示升级或重连时处理恢复；新增能力不会自动加入原授权。实际功能以部署发布目录为准。公司审批仅在该连接器启用审批时需要。",
+					"创建要求 Jenkins Item/Create，配置更新和启停要求 Item/Configure，取消排队需要对应 Item/Cancel 等原生权限。Connection 授权不会提升 Jenkins 权限。CI 与 Release 是独立实例，必须核对目标。",
+				],
+			},
+			{
+				title: "发现、创建与运行",
+				paragraphs: [
+					"先用 list_folder_jobs 查询根目录或已有 Folder（每页最多 100 项，offset 从 0 开始），确认完整 Job 路径和类型。创建仅支持普通 Pipeline，父 Folder 须存在；不支持 Folder 管理、复制、删除、移动或 Multibranch。",
+					"create_pipeline 使用 jobFullName 和 definition。inline 定义包含 kind=inline、script，强制 sandbox；Git 定义包含 kind=git、url、branch、scriptPath，可选已有 credentialsId 和 lightweight（默认 true）。Git 地址只接受无密码的 HTTPS 或 SSH URL，不支持 scp 简写；HTTPS 不允许内嵌用户名，地址不能携带 query 或 fragment。Jenkinsfile 使用相对路径。不要在脚本、地址或描述中写入密码和 Token。",
+					"创建不覆盖同名 Job，也不自动运行。核对配置后通过 get_build_parameters 发现最多 100 个参数；密码及未知参数类型不返回默认值。再显式使用 build_job 运行，通过 Queue、Build、console 和 artifact 查询结果。凭证选择须使用 Jenkins 已配置的标识，本功能不创建、枚举或返回密钥。",
+				],
+			},
+			{
+				title: "更新与启停",
+				paragraphs: [
+					"get_pipeline_config 返回结构化定义、描述、disabled 和 configSha256，单份配置上限 256 KiB；原始 XML 不返回，脚本仍可能含敏感业务内容并进入已授权客户端或模型上下文。仅支持 sandbox inline 或单 remote/branch Git Pipeline。",
+					"修改前读取当前配置、核对差异，再使用 update_pipeline 携带 expectedConfigSha256 和新的完整 definition；description 省略时保留。definition 整体替换，非 definition 的参数和触发器等配置保留。摘要冲突时重新读取和预览，不能直接换摘要重试。Jenkins 没有原子 CAS，预检到提交仍有窗口，避免其他人在 UI 或自动化中同时编辑。",
+					"enable_pipeline/disable_pipeline 同样要求 expectedConfigSha256；启用不会自动构建，禁用不等于停止已经运行的 Build。停止运行用 abort_build；取消排队用 cancel_queue_item，同时提供 jobFullName 和 queueItemId，服务端核对归属。已开始运行时先查询 Build。",
+				],
+			},
+			{
+				title: "核验与错误恢复",
+				paragraphs: [
+					"每次写入核对目标、参数及副作用，使用 guide 的幂等要求。结果未知、断线或 5xx 时不得自动重试；创建后用 get_pipeline_config 核对定义，同名 Job 存在不能证明本次创建成功。更新与启停回读配置，取消回读 Queue/Build；核验不自动把未知调用改成成功。",
+					"403 检查 Jenkins 原生权限；400/409 检查同名冲突或配置、插件支持；404 核对实例、Folder、Job 和 Queue。插件缺失时联系 Jenkins 管理员，不切换管理员凭证或降级为任意 XML。",
+				],
+			},
+		],
+	},
 ];
 export function guideChapter(id: unknown) {
 	const chapterId = typeof id === "number" ? String(id).padStart(2, "0") : id;

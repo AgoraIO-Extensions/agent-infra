@@ -148,6 +148,7 @@ export const providerGuideChapters: Record<string, GuideChapter> = {
 			{
 				title: "Jenkins CI · 首次验证与排障",
 				paragraphs: [
+					"需要创建或维护 Pipeline 时，先按实际目录选择并授权能力，再查看 /connection/help?chapter=25 的发现、预览、更新、启停及结果核验步骤。",
 					"先调用 jenkins-ci.get_current_user，再用 list_jobs 查看获准 Job。目录读取不会启动构建。Job 权限仍由 Jenkins 控制；网关 IP restriction/403 可能是服务出口限制，不要因此反复更换个人 Token。",
 				],
 			},
@@ -176,6 +177,7 @@ export const providerGuideChapters: Record<string, GuideChapter> = {
 			{
 				title: "Jenkins Release · 首次验证与排障",
 				paragraphs: [
+					"需要创建或维护 Pipeline 时，先按实际目录选择并授权能力，再查看 /connection/help?chapter=25 的发现、预览、更新、启停及结果核验步骤。",
 					"先调用 jenkins-release.get_current_user，再用 list_jobs 查看获准 Job，不触发构建或发布。Release Job 的读取/执行权限与 CI 分开；连接成功不代表能发布。认证失败检查部署、用户名和 Token；网关拒绝则交由服务管理员排查出口。",
 				],
 			},
