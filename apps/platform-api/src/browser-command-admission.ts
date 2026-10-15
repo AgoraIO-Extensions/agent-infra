@@ -16,24 +16,32 @@ import type {
 } from "./http/conversation-routes.js";
 import type { IdentityContext } from "./http/identity.js";
 
-type AdmittedBrowserCommand = Extract<
-	BrowserHandoffCommandV1,
-	{ readonly command: "take_over" | "return_to_agent" | "revoke" }
->;
+type AdmittedBrowserCommand = BrowserHandoffCommandV1;
 
 function admittedCommand(
 	command: BrowserCommandRequestV1,
 ): AdmittedBrowserCommand | undefined {
 	if (
-		command.command !== "take_over" &&
-		command.command !== "return_to_agent" &&
-		command.command !== "revoke"
+		command.command === "take_over" ||
+		command.command === "return_to_agent" ||
+		command.command === "revoke"
 	)
-		return undefined;
+		return {
+			schemaVersion: 1,
+			command: command.command,
+			handoffId: command.handoffId,
+		};
+	if (command.command === "pause")
+		return {
+			schemaVersion: 1,
+			command: command.command,
+			...(command.handoffId ? { handoffId: command.handoffId } : {}),
+		};
+	if (!("confirmationId" in command)) return undefined;
 	return {
 		schemaVersion: 1,
 		command: command.command,
-		handoffId: command.handoffId,
+		confirmationId: command.confirmationId,
 	};
 }
 
@@ -46,7 +54,13 @@ function decision(
 			outcome: result.outcome,
 			conversationId,
 			executionId: result.plan.executionId,
-			handoffId: result.plan.command.handoffId,
+			...("handoffId" in result.plan.command && result.plan.command.handoffId
+				? { handoffId: result.plan.command.handoffId }
+				: {}),
+			...("confirmationId" in result.plan.command &&
+			result.plan.command.confirmationId
+				? { confirmationId: result.plan.command.confirmationId }
+				: {}),
 		};
 	}
 	if (result.outcome === "denied") return { outcome: "denied", conversationId };
