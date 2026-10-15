@@ -11,6 +11,7 @@ import {
 	createWorkloadRuntimeV1,
 	type WorkloadRuntimeOptionsV1,
 } from "./workload-runtime.js";
+import { createWorkloadStepFailureLoggerV1 } from "./workload-step-failure.js";
 
 export interface PlatformWorkloadWorkerOptionsV1
 	extends Omit<WorkloadRuntimeOptionsV1, "workerId"> {
@@ -141,6 +142,8 @@ export function createPlatformWorkloadWorkerV1(
 			runtime,
 			maximumAttempts: options.maximumAttempts,
 			probeFailureThreshold: options.probeFailureThreshold,
+			// 步骤里的异常被调谐吞掉后只会重试或终止；这里记录有界原因（不含正文）。
+			onStepFailure: createWorkloadStepFailureLoggerV1({ log: logSafely }),
 		});
 	} catch (error) {
 		void Promise.allSettled([store.close(), files?.close()]);
