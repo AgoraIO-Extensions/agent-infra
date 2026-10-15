@@ -15,6 +15,7 @@ import {
 	type PlatformWorkerNativeMetadataGatewayServerOptionsV1,
 	startPlatformWorkerInternalGatewayServerV1,
 } from "./runtime-native-metadata-server.js";
+import { createPlatformSavedKeyCandidatesOptionsV1 } from "./saved-key-candidates-deployment.js";
 import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
@@ -34,6 +35,8 @@ export * from "./runtime-native-metadata-current-client.js";
 export * from "./runtime-native-metadata-gateway.js";
 export * from "./runtime-native-metadata-proof.js";
 export * from "./runtime-native-metadata-server.js";
+export * from "./saved-key-candidates-deployment.js";
+export * from "./saved-key-candidates-service.js";
 export * from "./skill-materialization.js";
 export * from "./skill-materializer-production-assembly.js";
 export * from "./skill-materializer-store-adapter.js";
@@ -192,6 +195,7 @@ interface StartOptions {
 	log?: (message: string) => void;
 	nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayServerOptionsV1;
 	modelDirectoryGateway?: PlatformWorkerInternalGatewayServerOptionsV1;
+	savedKeyCandidatesGateway?: PlatformWorkerInternalGatewayServerOptionsV1;
 }
 
 export function startPlatformWorker(options: StartOptions = {}) {
@@ -208,6 +212,9 @@ export function startPlatformWorker(options: StartOptions = {}) {
 				: {}),
 			...(options.modelDirectoryGateway
 				? { modelDirectory: options.modelDirectoryGateway }
+				: {}),
+			...(options.savedKeyCandidatesGateway
+				? { savedKeyCandidates: options.savedKeyCandidatesGateway }
 				: {}),
 		});
 		if (gatewayOptions)
@@ -418,12 +425,15 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 		await createPlatformNativeMetadataGatewayOptionsV1(termination.signal);
 	const modelDirectoryGateway =
 		await createPlatformRuntimeModelDirectoryOptionsV1(termination.signal);
+	const savedKeyCandidatesGateway =
+		await createPlatformSavedKeyCandidatesOptionsV1(termination.signal);
 	let primary: ReturnType<typeof startPlatformWorker> | undefined;
 	const workerPromise = startPlatformWorkerFromDeploymentV2({
 		startPrimary: () => {
 			primary = startPlatformWorker({
 				nativeMetadataGateway,
 				modelDirectoryGateway,
+				savedKeyCandidatesGateway,
 			});
 			return primary;
 		},

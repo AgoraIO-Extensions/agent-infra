@@ -340,6 +340,7 @@ export {
 } from "./runtime-native-metadata-reader.js";
 export { createRuntimeNativeMetadataScopeResolverV1 } from "./runtime-native-metadata-scope-resolver.js";
 export { createPlatformWorkerNativeMetadataGatewayClientV1 } from "./runtime-native-metadata-worker-client.js";
+export { createWorkerSavedKeyCandidatesTransportV1 } from "./saved-key-candidates-transport.js";
 export {
 	createPendingSecretRecordAttachmentResolverV1,
 	type PreparedSecretPlaintextV1,
