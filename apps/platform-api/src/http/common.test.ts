@@ -185,6 +185,21 @@ describe("HTTP common boundary", () => {
 				retryable: false,
 			},
 		});
+		const resourceCap = new HttpProtocolError(
+			"MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+			traceId,
+		);
+		expect(resourceCap.status).toBe(409);
+		expect(resourceCap.body).toEqual({
+			schemaVersion: 1,
+			code: "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+			message: "The multi-service Agent exceeds the deployment resource cap.",
+			retryable: false,
+			traceId,
+		});
+		expect(PilotProtocolErrorV1Schema.safeParse(resourceCap.body).success).toBe(
+			true,
+		);
 
 		expect(new HttpProtocolError("BUSY", traceId).body).toMatchObject({
 			code: "AGENT_BUSY",

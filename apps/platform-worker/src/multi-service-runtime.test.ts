@@ -1,4 +1,5 @@
 import {
+	defaultMultiServiceResourceProfileV1,
 	MultiServiceManifestDocumentV1Schema,
 	MultiServiceResourceProfileAnnotationV1,
 } from "@agent-infra/contracts/pilot";
@@ -9,6 +10,7 @@ import type {
 	V1Deployment,
 	V1Job,
 	V1PersistentVolumeClaim,
+	V1StatefulSet,
 } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
@@ -16,6 +18,8 @@ import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 import {
 	createMultiServiceRuntimeOperations,
 	isMultiService,
+	type MultiServiceRuntimePolicyV1,
+	resolveMultiServiceResourceConfigurationV1,
 } from "./multi-service-runtime.js";
 
 const manifest = MultiServiceManifestDocumentV1Schema.parse({
@@ -313,6 +317,321 @@ function fakeClient() {
 	return { client, resources };
 }
 
+const basePolicy = {
+	namespace: "agents",
+	multiServiceResourceProfiles: [smallProfile],
+	routeHostSuffix: "example.test",
+	ingressClassName: "nginx",
+	tlsSecretName: "tls",
+	routeSelector: { "app.kubernetes.io/name": "ingress" },
+} satisfies MultiServiceRuntimePolicyV1;
+
+/** 记录每一次 Kubernetes 调用（含读取与列举），用于证明拒绝发生在任何调用之前。 */
+function recordingClient(client: WorkerKubernetesClientV1) {
+	const calls: string[] = [];
+	const recorded: WorkerKubernetesClientV1 = {
+		namespace: client.namespace,
+		read(kind, name) {
+			calls.push(`read ${kind}/${name}`);
+			return client.read(kind, name);
+		},
+		list(kind, selector) {
+			calls.push(`list ${kind}`);
+			return client.list(kind, selector);
+		},
+		create(object) {
+			calls.push(`create ${object.kind}/${object.metadata?.name}`);
+			return client.create(object);
+		},
+		replace(object) {
+			calls.push(`replace ${object.kind}/${object.metadata?.name}`);
+			return client.replace(object);
+		},
+		delete(object) {
+			calls.push(`delete ${object.kind}/${object.metadata?.name}`);
+			return client.delete(object);
+		},
+	};
+	return { client: recorded, calls };
+}
+
+/** 带存储档位的 StatefulSet 档位；资源量与 small 不同，便于断言注入来源。 */
+const databaseProfile = {
+	profileId: "database",
+	displayName: "Database",
+	estimatedResources: { cpuMillicores: 200, memoryMiB: 256, storageGiB: 5 },
+	resources: {
+		requests: { cpu: "50m", memory: "64Mi" },
+		limits: { cpu: "200m", memory: "256Mi" },
+	},
+	storageSize: "5Gi",
+} as const;
+
+/** StatefulSet 自身声明 database 档位，覆盖其 Service 上的 small。 */
+const databaseManifest = MultiServiceManifestDocumentV1Schema.parse({
+	...statefulManifest,
+	resources: statefulManifest.resources.map((resource) =>
+		resource.kind === "StatefulSet"
+			? {
+					...resource,
+					metadata: {
+						...resource.metadata,
+						annotations: {
+							[MultiServiceResourceProfileAnnotationV1]: "database",
+						},
+					},
+				}
+			: resource,
+	),
+});
+
+const pvcKey = `PersistentVolumeClaim/${workloadResourceNameV1("agent-a")}-web-data`;
+
+function storedPvc(fake: ReturnType<typeof fakeClient>) {
+	return fake.resources.get(pvcKey) as V1PersistentVolumeClaim | undefined;
+}
+
+/** 把已创建的 Deployment/StatefulSet 标记为就绪，使 observe 继续检查 PVC。 */
+function markWorkloadsReady(fake: ReturnType<typeof fakeClient>) {
+	for (const resource of fake.resources.values())
+		if (resource.kind === "Deployment" || resource.kind === "StatefulSet")
+			(resource as V1Deployment | V1StatefulSet).status = {
+				availableReplicas: 1,
+				readyReplicas: 1,
+				replicas: 1,
+			};
+}
+
+describe("multi-service resource policy", () => {
+	it("resolves the deployment profiles behind the contract default", () => {
+		expect(
+			resolveMultiServiceResourceConfigurationV1(basePolicy),
+		).toMatchObject({
+			profiles: [defaultMultiServiceResourceProfileV1, smallProfile],
+			source: "deployment",
+		});
+	});
+
+	it.each([
+		[
+			"duplicate profile IDs",
+			{ multiServiceResourceProfiles: [smallProfile, smallProfile] },
+		],
+		[
+			"the reserved default profile ID",
+			{
+				multiServiceResourceProfiles: [
+					{ ...smallProfile, profileId: "default" },
+				],
+			},
+		],
+		[
+			"a schema-invalid profile",
+			{
+				multiServiceResourceProfiles: [
+					{
+						...smallProfile,
+						resources: {
+							requests: { cpu: "1Gi", memory: "1m" },
+							limits: { cpu: "1Gi", memory: "1m" },
+						},
+					},
+				],
+			},
+		],
+		[
+			"a schema-invalid cap",
+			{
+				multiServiceResourceCap: {
+					cpuMillicores: 0,
+					memoryMiB: 1,
+					storageGiB: 1,
+				},
+			},
+		],
+	])("fails Worker assembly on %s", (_label, overrides) => {
+		const fake = recordingClient(fakeClient().client);
+		expect(() =>
+			createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: {
+					...basePolicy,
+					...overrides,
+				} as unknown as MultiServiceRuntimePolicyV1,
+			}),
+		).toThrow("multi-service resource policy invalid");
+		expect(fake.calls).toEqual([]);
+	});
+
+	it("rejects an over-cap Agent before any Kubernetes call, including stale-resource pruning", async () => {
+		const fake = fakeClient();
+		// small 档位每个工作负载 100m：两个服务 200m 在上限内，加迁移 Job 共 300m 超限。
+		const cap = { cpuMillicores: 250, memoryMiB: 4_096, storageGiB: 20 };
+		const recorded = recordingClient(fake.client);
+		const operations = createMultiServiceRuntimeOperations({
+			client: recorded.client,
+			policy: { ...basePolicy, multiServiceResourceCap: cap },
+		});
+		const twoServices = desired();
+		const withMigration = desired(migrationManifest);
+		if (!isMultiService(twoServices) || !isMultiService(withMigration))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(twoServices);
+		// 注入一个属于该 Agent、但不在期望清单中的旧 Deployment，作为 prune 的目标。
+		const web = [...fake.resources.values()].find(
+			(resource) =>
+				resource.kind === "Deployment" &&
+				resource.metadata?.name?.endsWith("-web"),
+		);
+		if (!web) throw new Error("Deployment fixture missing");
+		const staleName = `${workloadResourceNameV1("agent-a")}-legacy`;
+		fake.resources.set(`Deployment/${staleName}`, {
+			...web,
+			metadata: { ...web.metadata, name: staleName },
+		});
+		const before = structuredClone([...fake.resources.entries()]);
+		recorded.calls.length = 0;
+
+		await expect(
+			operations.apply(withMigration, { allowOwnershipTransition: true }),
+		).rejects.toThrow("MULTI_SERVICE_RESOURCE_CAP_EXCEEDED");
+		expect(recorded.calls).toEqual([]);
+		expect([...fake.resources.entries()]).toEqual(before);
+
+		// 对照：未超限时同一所有权交接会清理旧资源，证明上面的 prune 是被上限拦下的。
+		await operations.apply(twoServices, { allowOwnershipTransition: true });
+		expect(recorded.calls).toContain(`delete Deployment/${staleName}`);
+		expect(fake.resources.has(`Deployment/${staleName}`)).toBe(false);
+	});
+
+	it("sizes the PVC from the StatefulSet profile and injects that profile", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				...basePolicy,
+				multiServiceResourceProfiles: [smallProfile, databaseProfile],
+				storageSize: "1Gi",
+			},
+		});
+		const value = desired(databaseManifest);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(value);
+		expect(storedPvc(fake)?.spec?.resources?.requests?.storage).toBe("5Gi");
+		const statefulSet = fake.resources.get(
+			`StatefulSet/${workloadResourceNameV1("agent-a")}-web`,
+		) as V1StatefulSet | undefined;
+		expect(statefulSet?.spec?.template.spec?.containers[0]?.resources).toEqual(
+			databaseProfile.resources,
+		);
+		markWorkloadsReady(fake);
+		expect(await operations.observe(value, { uid: "u", generation: 1 })).toBe(
+			"healthy",
+		);
+	});
+
+	it("falls back to the deployment storage size when the StatefulSet profile has none", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: { ...basePolicy, storageSize: "2Gi" },
+		});
+		const value = desired(statefulManifest);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(value);
+		// 用户清单中的 PVC 请求 1Gi，平台以部署策略为准。
+		expect(storedPvc(fake)?.spec?.resources?.requests?.storage).toBe("2Gi");
+	});
+
+	it("fails closed when neither the profile nor the deployment sets a storage size", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: basePolicy,
+		});
+		const value = desired(statefulManifest);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await expect(operations.apply(value)).rejects.toThrow(
+			"multi-service storage policy missing",
+		);
+		expect(storedPvc(fake)).toBeUndefined();
+	});
+
+	it("treats an existing PVC whose size differs from the expected size as drift", async () => {
+		const fake = fakeClient();
+		const fallback = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: { ...basePolicy, storageSize: "1Gi" },
+		});
+		const value = desired(statefulManifest);
+		if (!isMultiService(value))
+			throw new Error("multi-service fixture invalid");
+		await fallback.apply(value);
+		markWorkloadsReady(fake);
+		expect(await fallback.observe(value, { uid: "u", generation: 1 })).toBe(
+			"healthy",
+		);
+
+		// 集群中的 PVC 被改成与策略不同的大小。
+		const pvc = storedPvc(fake);
+		if (!pvc?.spec?.resources) throw new Error("PVC fixture missing");
+		fake.resources.set(pvcKey, {
+			...pvc,
+			spec: {
+				...pvc.spec,
+				resources: { requests: { storage: "3Gi" } },
+			},
+		} as V1PersistentVolumeClaim);
+		await expect(fallback.apply(value)).rejects.toThrow(
+			"multi-service PVC drifted",
+		);
+		expect(await fallback.observe(value, { uid: "u", generation: 1 })).toBe(
+			"unhealthy",
+		);
+
+		// 部署改为由 StatefulSet 档位声明 5Gi 后，按旧策略创建的 1Gi PVC 同样视为漂移。
+		const profiledFake = fakeClient();
+		const { storageSize: _storageSize, ...databaseWithoutStorage } =
+			databaseProfile;
+		const before = createMultiServiceRuntimeOperations({
+			client: profiledFake.client,
+			policy: {
+				...basePolicy,
+				multiServiceResourceProfiles: [smallProfile, databaseWithoutStorage],
+				storageSize: "1Gi",
+			},
+		});
+		const databaseValue = desired(databaseManifest);
+		if (!isMultiService(databaseValue))
+			throw new Error("multi-service fixture invalid");
+		await before.apply(databaseValue);
+		markWorkloadsReady(profiledFake);
+		expect(storedPvc(profiledFake)?.spec?.resources?.requests?.storage).toBe(
+			"1Gi",
+		);
+		const after = createMultiServiceRuntimeOperations({
+			client: profiledFake.client,
+			policy: {
+				...basePolicy,
+				multiServiceResourceProfiles: [smallProfile, databaseProfile],
+				storageSize: "1Gi",
+			},
+		});
+		expect(
+			await after.observe(databaseValue, { uid: "u", generation: 1 }),
+		).toBe("unhealthy");
+		await expect(after.apply(databaseValue)).rejects.toThrow(
+			"multi-service PVC drifted",
+		);
+		expect(storedPvc(profiledFake)?.spec?.resources?.requests?.storage).toBe(
+			"1Gi",
+		);
+	});
+});
+
 describe("multi-service runtime operations", () => {
 	it("injects ownership, service accounts, network isolation and entry route", async () => {
 		const fake = fakeClient();
@@ -420,6 +739,7 @@ describe("multi-service runtime operations", () => {
 			client: fake.client,
 			policy: {
 				namespace: "agents",
+				multiServiceResourceProfiles: [smallProfile],
 				routeHostSuffix: "example.test",
 				ingressClassName: "nginx",
 				tlsSecretName: "tls",
@@ -471,6 +791,7 @@ describe("multi-service runtime operations", () => {
 			client: fake.client,
 			policy: {
 				namespace: "agents",
+				multiServiceResourceProfiles: [smallProfile],
 				storageSize: "1Gi",
 				routeHostSuffix: "example.test",
 				ingressClassName: "nginx",

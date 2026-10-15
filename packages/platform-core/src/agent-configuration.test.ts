@@ -1026,6 +1026,77 @@ describe("Initial Agent configuration admission", () => {
 			}),
 		).toThrow(AgentConfigurationError);
 	});
+
+	it("stops initial admission with resource_cap_exceeded when the image port reports the cap", async () => {
+		const { dependencies } = createInitialAdmissionDependencies();
+		const calls: string[] = [];
+		const { modelConfiguration: _model, ...customCommand } = initialCommand;
+		await expect(
+			completeInitialAgentConfiguration(
+				{
+					...customCommand,
+					source: {
+						kind: "custom",
+						interactionMode: "self-managed",
+						identityResponsibility: "self-managed",
+						manifest: '{"schemaVersion":1}',
+					},
+					channels: [],
+				},
+				initialActor,
+				{
+					...dependencies,
+					imageAdmission: {
+						async admitImage(input) {
+							calls.push("image");
+							return {
+								schemaVersion: 1,
+								status: "rejected",
+								agentId: input.agentId,
+								requestId: input.requestId,
+								reason: "multi_service_resource_cap_exceeded",
+							};
+						},
+					},
+					modelAdmission: {
+						async admitModels(input) {
+							calls.push("model");
+							return dependencies.modelAdmission.admitModels(input);
+						},
+					},
+					secretAdmission: {
+						async admitSecrets(input) {
+							calls.push("secret");
+							return dependencies.secretAdmission.admitSecrets(input);
+						},
+					},
+				},
+			),
+		).rejects.toEqual(
+			expect.objectContaining({ code: "resource_cap_exceeded" }),
+		);
+		// 超限在镜像准入处终止，后续模型与 Secret 准入不会运行。
+		expect(calls).toEqual(["image"]);
+	});
+
+	it("keeps an image rejection without a reason as not_admitted", async () => {
+		const { dependencies } = createInitialAdmissionDependencies();
+		await expect(
+			completeInitialAgentConfiguration(initialCommand, initialActor, {
+				...dependencies,
+				imageAdmission: {
+					async admitImage(input) {
+						return {
+							schemaVersion: 1,
+							status: "rejected",
+							agentId: input.agentId,
+							requestId: input.requestId,
+						};
+					},
+				},
+			}),
+		).rejects.toEqual(expect.objectContaining({ code: "not_admitted" }));
+	});
 });
 
 describe("Agent configuration policy", () => {
@@ -2332,6 +2403,53 @@ describe("Agent configuration policy", () => {
 				actor,
 			),
 		).rejects.toEqual(expect.objectContaining({ code: "invalid_command" }));
+	});
+
+	it("rejects an over-cap multi-service source update before any write", async () => {
+		const record: AgentConfigurationRecordV2 = {
+			...agentConfigurationConformanceRecordV1,
+			source: {
+				kind: "custom",
+				imageDigest: `sha256:${"b".repeat(64)}`,
+				admissionRevision: "multi_service_policy_1",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+				connectionEnabled: false,
+			},
+			modelConfiguration: null,
+		};
+		const harness = createHarness({ record });
+		const requested: unknown[] = [];
+		const useCase = harness.useCaseWithDependencies({
+			imageAdmission: {
+				async admitImage(input) {
+					requested.push(input.requested);
+					return {
+						schemaVersion: 1,
+						status: "rejected",
+						agentId: input.agentId,
+						requestId: input.requestId,
+						reason: "multi_service_resource_cap_exceeded",
+					};
+				},
+			},
+		});
+		const source = {
+			kind: "custom" as const,
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "self-managed" as const,
+			manifest: '{"schemaVersion":1}',
+		};
+		await expect(
+			useCase.update({ ...command, changes: { source } }, actor),
+		).rejects.toEqual(
+			expect.objectContaining({ code: "resource_cap_exceeded" }),
+		);
+		expect(requested).toEqual([source]);
+		expect(harness.transaction.snapshot()).toMatchObject({
+			commitCount: 0,
+			configuration: { source: record.source },
+		});
 	});
 
 	it("fails closed for unauthorized callers, self-managed channels, and plaintext admissions", async () => {

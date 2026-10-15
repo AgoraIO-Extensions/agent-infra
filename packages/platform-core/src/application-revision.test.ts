@@ -338,6 +338,38 @@ describe("Application revision input and plan boundary", () => {
 		expect(commits).toBe(0);
 	});
 
+	it("converts a multi-service resource cap rejection without a commit", async () => {
+		const transaction = new FakeApplicationRevisionTransactionV1(
+			applicationRevisionStateV1,
+		);
+		const error = await createApplicationRevisionUseCaseV1(
+			{
+				transaction,
+				...applicationRevisionAdmissionsV1(),
+				imageAdmission: {
+					async admitImage(input) {
+						return {
+							schemaVersion: 1,
+							status: "rejected",
+							agentId: input.agentId,
+							requestId: input.requestId,
+							reason: "multi_service_resource_cap_exceeded",
+						};
+					},
+				},
+			},
+			{ now: () => new Date("2026-09-02T04:00:00.000Z") },
+		)
+			.revise(applicationRevisionCommandV1, applicationRevisionActorContextV1)
+			.then(
+				() => expect.fail("Expected a resource cap rejection"),
+				(reason: unknown) => reason,
+			);
+		expect(error).toEqual(expect.any(ApplicationRevisionError));
+		expect(error).toMatchObject({ code: "resource_cap_exceeded" });
+		expect(transaction.snapshot().commitCount).toBe(0);
+	});
+
 	it("rejects an empty pending edit without a commit", async () => {
 		const transaction = new FakeApplicationRevisionTransactionV1(
 			applicationRevisionStateV1,

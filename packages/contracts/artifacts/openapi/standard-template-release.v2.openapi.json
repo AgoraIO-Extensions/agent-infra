@@ -394,7 +394,8 @@
                             "PROVIDER_REJECTED",
                             "DELEGATED_RESULT_REJECTED",
                             "ORIGINAL_RESPONSE_NOT_STARTED",
-                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED",
+                            "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
                           ],
                           "type": "string"
                         },
@@ -494,7 +495,8 @@
                             "PROVIDER_REJECTED",
                             "DELEGATED_RESULT_REJECTED",
                             "ORIGINAL_RESPONSE_NOT_STARTED",
-                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED",
+                            "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
                           ],
                           "type": "string"
                         },
@@ -594,7 +596,8 @@
                             "PROVIDER_REJECTED",
                             "DELEGATED_RESULT_REJECTED",
                             "ORIGINAL_RESPONSE_NOT_STARTED",
-                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED",
+                            "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
                           ],
                           "type": "string"
                         },
@@ -694,7 +697,8 @@
                             "PROVIDER_REJECTED",
                             "DELEGATED_RESULT_REJECTED",
                             "ORIGINAL_RESPONSE_NOT_STARTED",
-                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED",
+                            "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
                           ],
                           "type": "string"
                         },
@@ -794,7 +798,8 @@
                             "PROVIDER_REJECTED",
                             "DELEGATED_RESULT_REJECTED",
                             "ORIGINAL_RESPONSE_NOT_STARTED",
-                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED",
+                            "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
                           ],
                           "type": "string"
                         },
@@ -894,7 +899,8 @@
                             "PROVIDER_REJECTED",
                             "DELEGATED_RESULT_REJECTED",
                             "ORIGINAL_RESPONSE_NOT_STARTED",
-                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED",
+                            "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
                           ],
                           "type": "string"
                         },
@@ -994,7 +1000,8 @@
                             "PROVIDER_REJECTED",
                             "DELEGATED_RESULT_REJECTED",
                             "ORIGINAL_RESPONSE_NOT_STARTED",
-                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED",
+                            "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
                           ],
                           "type": "string"
                         },

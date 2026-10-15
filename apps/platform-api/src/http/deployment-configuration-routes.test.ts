@@ -139,7 +139,6 @@ describe("deployment configuration projection", () => {
 						storageGiB: 1,
 					},
 					profileId: "default",
-					storageSize: "1Gi",
 				},
 			],
 			multiServiceResourceProfilesSource: "default",
@@ -147,6 +146,66 @@ describe("deployment configuration projection", () => {
 		const text = JSON.stringify(body);
 		expect(text).not.toContain("secret.example.test");
 		expect(text).not.toContain(digest);
+	});
+
+	it("projects deployment-owned profiles and cap without Kubernetes quantities", async () => {
+		const read = createDeploymentConfigurationProjectionV2({
+			templates: [],
+			modelCatalog: {
+				revision: "catalog-a",
+				load: async () => snapshot(Date.now() + 60_000),
+			},
+			multiServiceResourceProfiles: [
+				{
+					profileId: "database",
+					displayName: "Database",
+					estimatedResources: {
+						cpuMillicores: 500,
+						memoryMiB: 1_024,
+						storageGiB: 10,
+					},
+					resources: {
+						requests: { cpu: "250m", memory: "512Mi" },
+						limits: { cpu: "500m", memory: "1Gi" },
+					},
+					storageSize: "10Gi",
+				},
+			],
+			multiServiceResourceCap: {
+				cpuMillicores: 1_000,
+				memoryMiB: 2_048,
+				storageGiB: 12,
+			},
+		});
+		const response = await createApp(read).request(
+			"/api/v2/deployment/configuration",
+		);
+		const body = DeploymentConfigurationProjectionV2Schema.parse(
+			await response.json(),
+		);
+		expect(body).toMatchObject({
+			multiServiceResourceDefaultProfileRef: "default",
+			multiServiceResourceProfilesSource: "deployment",
+			multiServiceResourceCap: {
+				cpuMillicores: 1_000,
+				memoryMiB: 2_048,
+				storageGiB: 12,
+			},
+			multiServiceResourceProfiles: [
+				{ profileId: "default" },
+				{
+					profileId: "database",
+					displayName: "Database",
+					estimatedResources: {
+						cpuMillicores: 500,
+						memoryMiB: 1_024,
+						storageGiB: 10,
+					},
+					storageSize: "10Gi",
+				},
+			],
+		});
+		expect(JSON.stringify(body)).not.toContain("512Mi");
 	});
 
 	it("marks a catalog empty when available endpoints have no selectable models", async () => {
