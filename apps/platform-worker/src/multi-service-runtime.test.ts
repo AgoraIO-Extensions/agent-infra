@@ -904,7 +904,6 @@ describe("multi-service runtime operations", () => {
 		expect(afterRollback?.metadata?.uid).toBe(before.metadata?.uid);
 	});
 
-
 	it("mounts every StatefulSet on the PVC that apply created for it", async () => {
 		const web = manifest.resources.find(
 			(resource) =>
@@ -973,8 +972,8 @@ describe("multi-service runtime operations", () => {
 				);
 				expect(claims).toHaveLength(1);
 				expect(fake.resources.has(`PersistentVolumeClaim/${claims[0]}`)).toBe(
-						true,
-					);
+					true,
+				);
 				expect(claims[0]?.length).toBeLessThanOrEqual(63);
 			}
 		}
@@ -1011,7 +1010,6 @@ describe("multi-service runtime operations", () => {
 			expect(await operations.observe(value, identity)).toBe("pending");
 		}
 	});
-
 
 	it("runs a migration Job before services and reuses its completed result", async () => {
 		const fake = fakeClient();
