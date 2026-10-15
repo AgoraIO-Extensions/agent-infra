@@ -11,6 +11,7 @@ export * from "./delegated.ts";
 export * from "./direct.ts";
 export * from "./errors.ts";
 export * from "./multi-service.ts";
+export * from "./native-capability.ts";
 export * from "./native-metadata.ts";
 export * from "./observability.ts";
 export * from "./operation-v2.ts";

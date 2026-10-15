@@ -27,6 +27,8 @@ import {
 	TraceIdV1Schema,
 } from "./index.ts";
 import {
+	nativeCapabilityInvocationOpenApiPathsV1,
+	nativeCapabilityInvocationSchemasV1,
 	nativeMetadataOpenApiPathsV1,
 	nativeMetadataSchemasV1,
 	pilotBrowserOpenApiPathsV1,
@@ -786,6 +788,7 @@ function buildArtifacts() {
 			...skillHubPublicationOpenApiPathsV1,
 			...skillHubAgentBindingOpenApiPathsV1,
 			...nativeMetadataOpenApiPathsV1,
+			...nativeCapabilityInvocationOpenApiPathsV1,
 			...connectionInstallationOpenApiPathsV1,
 		},
 		components: {
@@ -807,6 +810,7 @@ function buildArtifacts() {
 				...skillHubPublicationSchemasV1,
 				...skillHubAgentBindingSchemasV1,
 				...nativeMetadataSchemasV1,
+				...nativeCapabilityInvocationSchemasV1,
 			},
 		},
 	});

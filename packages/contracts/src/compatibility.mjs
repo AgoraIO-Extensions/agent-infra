@@ -2216,6 +2216,59 @@ function isNativeMetadataOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2562 publishes the existing native capability admission route and its
+// bounded request/receipt schemas as an additive Browser v2 contract.
+function isNativeCapabilityInvocationOpenApiAddition(previous, current) {
+	const path =
+		"/api/v2/conversations/{conversationId}/native-capability/invoke";
+	const schemas = [
+		"NativeCapabilityInvocationRequestV1",
+		"NativeCapabilityInvocationResponseV1",
+		"NativeCapabilityInvocationResultV1",
+	];
+	if (
+		previous.paths?.[path] !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
+function isNativeMetadataAndCapabilityOpenApiAddition(previous, current) {
+	const metadataPath =
+		"/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata";
+	const capabilityPath =
+		"/api/v2/conversations/{conversationId}/native-capability/invoke";
+	const metadataSchemas = ["NativeMetadataProjectionV1"];
+	const capabilitySchemas = [
+		"NativeCapabilityInvocationRequestV1",
+		"NativeCapabilityInvocationResponseV1",
+		"NativeCapabilityInvocationResultV1",
+	];
+	if (
+		previous.paths?.[metadataPath] !== undefined ||
+		previous.paths?.[capabilityPath] !== undefined ||
+		metadataSchemas.some((name) => previous.components?.schemas?.[name]) ||
+		capabilitySchemas.some((name) => previous.components?.schemas?.[name])
+	)
+		return false;
+	const withoutCapability = structuredClone(current);
+	delete withoutCapability.paths[capabilityPath];
+	for (const name of capabilitySchemas)
+		delete withoutCapability.components.schemas[name];
+	const withoutMetadata = structuredClone(current);
+	delete withoutMetadata.paths[metadataPath];
+	for (const name of metadataSchemas)
+		delete withoutMetadata.components.schemas[name];
+	return (
+		isNativeMetadataOpenApiAddition(previous, withoutCapability) &&
+		isNativeCapabilityInvocationOpenApiAddition(previous, withoutMetadata)
+	);
+}
+
 // #2206 publishes the Agent version Skill binding and status API additively.
 function isSkillHubAgentBindingOpenApiAddition(previous, current) {
 	const paths = ["/api/v2/agents/{agentId}/versions/{agentVersion}/skills"];
@@ -4195,7 +4248,9 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isSkillHubProjectOpenApiAddition(previous, current) &&
 			!isSkillHubImportOpenApiAddition(previous, current) &&
 			!isSkillHubAgentBindingOpenApiAddition(previous, current) &&
+			!isNativeMetadataAndCapabilityOpenApiAddition(previous, current) &&
 			!isNativeMetadataOpenApiAddition(previous, current) &&
+			!isNativeCapabilityInvocationOpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomQrAuthorizationOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&

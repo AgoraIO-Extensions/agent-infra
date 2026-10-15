@@ -790,6 +790,33 @@ export type ModelSelectionFallbackEventV1 = {
     type: 'model.selection.fell_back';
 };
 
+export type NativeCapabilityInvocationRequestV1 = {
+    capabilityId: string;
+    directoryRevision: string;
+    idempotencyKey: string;
+    parameters: string;
+    requestId: string;
+    traceId: string;
+};
+
+export type NativeCapabilityInvocationResponseV1 = {
+    outcome: 'accepted' | 'replayed';
+    result: NativeCapabilityInvocationResultV1;
+} | {
+    outcome: 'busy' | 'denied' | 'stale' | 'unknown' | 'disabled' | 'invalid_parameters' | 'unsupported' | 'unavailable' | 'conflict';
+    reason?: 'authorization_lost' | 'conversation_unavailable' | 'metadata_unavailable' | 'idempotency_in_progress' | 'idempotency_conflict';
+};
+
+export type NativeCapabilityInvocationResultV1 = {
+    capabilityId: string;
+    capabilityKind: 'command' | 'skill';
+    conversationId: string;
+    directoryRevision: string;
+    executionId: string;
+    schemaVersion: 1;
+    status: 'submitted';
+};
+
 export type NativeMetadataProjectionV1 = {
     readAt: string;
     selector: 'status';
@@ -3993,6 +4020,60 @@ export type ReadConversationNativeMetadataV1Responses = {
 };
 
 export type ReadConversationNativeMetadataV1Response = ReadConversationNativeMetadataV1Responses[keyof ReadConversationNativeMetadataV1Responses];
+
+export type InvokeNativeCapabilityV1Data = {
+    body: NativeCapabilityInvocationRequestV1;
+    path: {
+        conversationId: string;
+    };
+    query?: never;
+    url: '/api/v2/conversations/{conversationId}/native-capability/invoke';
+};
+
+export type InvokeNativeCapabilityV1Errors = {
+    /**
+     * Invalid native capability request
+     */
+    400: {
+        outcome: 'busy' | 'denied' | 'stale' | 'unknown' | 'disabled' | 'invalid_parameters' | 'unsupported' | 'unavailable' | 'conflict';
+        reason?: 'authorization_lost' | 'conversation_unavailable' | 'metadata_unavailable' | 'idempotency_in_progress' | 'idempotency_conflict';
+    };
+    /**
+     * Native capability admission denied
+     */
+    403: {
+        outcome: 'busy' | 'denied' | 'stale' | 'unknown' | 'disabled' | 'invalid_parameters' | 'unsupported' | 'unavailable' | 'conflict';
+        reason?: 'authorization_lost' | 'conversation_unavailable' | 'metadata_unavailable' | 'idempotency_in_progress' | 'idempotency_conflict';
+    };
+    /**
+     * Native capability admission conflicts with current state
+     */
+    409: {
+        outcome: 'busy' | 'denied' | 'stale' | 'unknown' | 'disabled' | 'invalid_parameters' | 'unsupported' | 'unavailable' | 'conflict';
+        reason?: 'authorization_lost' | 'conversation_unavailable' | 'metadata_unavailable' | 'idempotency_in_progress' | 'idempotency_conflict';
+    };
+    /**
+     * Native capability admission is unavailable
+     */
+    503: {
+        outcome: 'busy' | 'denied' | 'stale' | 'unknown' | 'disabled' | 'invalid_parameters' | 'unsupported' | 'unavailable' | 'conflict';
+        reason?: 'authorization_lost' | 'conversation_unavailable' | 'metadata_unavailable' | 'idempotency_in_progress' | 'idempotency_conflict';
+    };
+};
+
+export type InvokeNativeCapabilityV1Error = InvokeNativeCapabilityV1Errors[keyof InvokeNativeCapabilityV1Errors];
+
+export type InvokeNativeCapabilityV1Responses = {
+    /**
+     * Native capability admission accepted or replayed
+     */
+    202: {
+        outcome: 'accepted' | 'replayed';
+        result: NativeCapabilityInvocationResultV1;
+    };
+};
+
+export type InvokeNativeCapabilityV1Response = InvokeNativeCapabilityV1Responses[keyof InvokeNativeCapabilityV1Responses];
 
 export type GetDeploymentConfigurationV2Data = {
     body?: never;

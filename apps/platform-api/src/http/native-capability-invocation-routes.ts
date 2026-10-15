@@ -1,9 +1,10 @@
+import { NativeCapabilityInvocationRequestV1Schema } from "@agent-infra/contracts/pilot";
 import type {
 	NativeCapabilityAdmissionDecisionV1,
 	NativeCapabilityAdmissionRequestV1,
 } from "@agent-infra/platform-core";
 import type { Hono } from "hono";
-import { z } from "zod";
+import type { z } from "zod";
 import { requestMetadata } from "./common.js";
 import {
 	type IdentityAdapter,
@@ -12,15 +13,7 @@ import {
 } from "./identity.js";
 
 const path = "/api/v2/conversations/:conversationId/native-capability/invoke";
-const requestSchema = z.strictObject({
-	capabilityId: z.string().regex(/^[a-f0-9]{64}$/),
-	directoryRevision: z.string().regex(/^[a-f0-9]{64}$/),
-	parameters: z.string().max(16 * 1024),
-	idempotencyKey: z.string().regex(/^[A-Za-z0-9._~-]{1,128}$/),
-	requestId: z.string().min(1).max(256),
-	traceId: z.string().min(1).max(256),
-});
-
+const requestSchema = NativeCapabilityInvocationRequestV1Schema;
 type HttpRequest = z.infer<typeof requestSchema>;
 
 export interface NativeCapabilityInvocationRouteDependenciesV1 {
