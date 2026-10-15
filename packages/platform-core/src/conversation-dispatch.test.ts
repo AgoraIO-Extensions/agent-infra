@@ -190,6 +190,7 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		| "capacity_wait"
 		| "capacity_unavailable"
 		| "sandbox_wait" = "available";
+	prepareStopChanged = false;
 	released = 0;
 
 	constructor(seed = claim()) {
@@ -239,6 +240,11 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		leaseDurationMs: number;
 	}) {
 		if (!(await this.renew())) return false;
+		if (this.prepareStopChanged) {
+			this.outboxStatus = "retry_scheduled";
+			this.current = { ...this.current, executionStatus: "cancelled" };
+			return "stop_changed" as const;
+		}
 		if (this.capacity !== "available") return this.capacity;
 		if (
 			(input.claim.operation === "conversation.turn.submit.v1" ||
@@ -2367,6 +2373,19 @@ describe("Conversation Worker dispatch", () => {
 				outcome === "denied" ? "failed" : "submitted",
 			);
 		}
+	});
+
+	it("returns stale after Store releases a submit lease when stop changes during preparation (#2534)", async () => {
+		const store = new MemoryDispatchStore();
+		store.prepareStopChanged = true;
+		const h = setup({ store });
+
+		await expect(dispatch(h.useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "stale",
+		});
+		expect(store.outboxStatus).toBe("retry_scheduled");
+		expect(store.current.executionStatus).toBe("cancelled");
 	});
 
 	it("keeps acceptance unknown without submitting a stopped Turn again", async () => {

@@ -995,6 +995,8 @@ export function createConversationDispatchUseCaseV1(
 						{},
 					);
 				}
+				if (preparation === "stop_changed")
+					return { schemaVersion: 1, outcome: "stale" };
 				if (preparation !== true) {
 					return { schemaVersion: 1, outcome: "stale" };
 				}
@@ -1325,13 +1327,31 @@ export function createConversationDispatchUseCaseV1(
 					dependencies.store.releaseUnsentDispatch
 				) {
 					try {
-						return (await dependencies.store.releaseUnsentDispatch({
+						const released = await dependencies.store.releaseUnsentDispatch({
 							claim,
 							retryDelayMs,
 							errorCode: failure.code,
-						}))
-							? { schemaVersion: 1, outcome: "retry", retryScheduled: true }
-							: { schemaVersion: 1, outcome: "stale" };
+						});
+						if (released)
+							return {
+								schemaVersion: 1,
+								outcome: "retry",
+								retryScheduled: true,
+							};
+					} catch {
+						// A concurrent stop may have made the Execution terminal, so the
+						// pre-dispatch release no longer matches its original status.
+					}
+					try {
+						const scheduled = await retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							failure.code,
+							"retry",
+							{},
+						);
+						return scheduled;
 					} catch {
 						return {
 							schemaVersion: 1,

@@ -653,13 +653,18 @@ export class PostgresConversationDispatchStoreV1
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
 	}): Promise<
-		boolean | "capacity_wait" | "capacity_unavailable" | "sandbox_wait"
+		| boolean
+		| "capacity_wait"
+		| "capacity_unavailable"
+		| "sandbox_wait"
+		| "stop_changed"
 	> {
 		requireClaim(input.claim);
 		if (input.claim.metadataRecovery)
 			throw new TypeError("Metadata recovery cannot dispatch business work");
 		requireLeaseDuration(input.leaseDurationMs);
 		let settledWaiting = false;
+		let stopChanged = false;
 		try {
 			const prepared = await transactionResult(
 				this.#client,
@@ -691,7 +696,32 @@ export class PostgresConversationDispatchStoreV1
 					if (!agent)
 						throw new DispatchCapacityUnavailable("capacity_unavailable");
 					const state = await ownedState(transaction, input.claim);
-					if (!state) throw new StaleDispatchLease();
+					if (!state) {
+						const stopChangedState = await ownedState(
+							transaction,
+							input.claim,
+							true,
+						);
+						const stop = stopChangedState
+							? await readStop(transaction, input.claim.executionId)
+							: undefined;
+						if (
+							stopChangedState &&
+							stop &&
+							(stop.status === "submitted") !== input.claim.stopPending
+						) {
+							await retryOutbox(
+								transaction,
+								stopChangedState,
+								input.claim,
+								0,
+								"STOP_CHANGED",
+							);
+							stopChanged = true;
+							return;
+						}
+						throw new StaleDispatchLease();
+					}
 					const pendingIsolation = await readGenerationIsolation(
 						transaction,
 						input.claim.conversationId,
@@ -907,6 +937,7 @@ export class PostgresConversationDispatchStoreV1
 					await renewLease(transaction, input.claim, input.leaseDurationMs);
 				},
 			);
+			if (stopChanged) return "stop_changed";
 			return prepared && !settledWaiting;
 		} catch (error) {
 			if (error instanceof DispatchCapacityUnavailable) return error.outcome;

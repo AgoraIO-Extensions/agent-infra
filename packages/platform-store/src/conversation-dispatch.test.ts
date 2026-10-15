@@ -2481,6 +2481,30 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("releases the submit lease when a stop arrives after claim and before preparation (#2534)", async () => {
+		const work = await seed();
+		const result = await claim(work.itemId);
+		try {
+			if (result.decision.outcome !== "claimed")
+				throw new Error("Expected claimed Turn");
+			await seedStop(work);
+			expect(
+				await result.store.prepareRuntimeDispatch({
+					claim: result.decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe("stop_changed");
+			expect(await dispatchState(work)).toMatchObject({
+				status: "retry_scheduled",
+				lease_owner: null,
+				lease_expires_at: null,
+				execution_status: "submitted",
+			});
+		} finally {
+			await result.store.close();
+		}
+	});
+
 	it.each([
 		"configurationRevision",
 		"workloadRevision",

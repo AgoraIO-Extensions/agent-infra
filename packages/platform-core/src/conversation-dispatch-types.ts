@@ -200,7 +200,12 @@ export interface ConversationDispatchStorePortV1 {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
 	}): Promise<
-		boolean | "capacity_wait" | "capacity_unavailable" | "sandbox_wait"
+		| boolean
+		| "capacity_wait"
+		| "capacity_unavailable"
+		| "sandbox_wait"
+		/** Stop changed while the claim was preparing; the Store released its lease. */
+		| "stop_changed"
 	>;
 	/**
 	 * Return a just-prepared Turn to its pre-claim status when the Runtime
