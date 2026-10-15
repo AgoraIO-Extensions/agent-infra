@@ -6,6 +6,8 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { AgentConfigurationWorkflow } from "../../../features/agent-configuration/agent-configuration-workflow.js";
 import { isRetryableAgentDiscoveryError } from "../../../features/agent-discovery/agent-discovery.js";
 import { useAgentDetail } from "../../../features/agent-discovery/use-agent-detail.js";
+import { projectDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
+import { useDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
 import { PageLoadingState } from "../../../features/page-loading-state.js";
 
 export const Route = createFileRoute("/agents/$agentId/configuration")({
@@ -15,16 +17,33 @@ export const Route = createFileRoute("/agents/$agentId/configuration")({
 function AgentConfigurationRoute() {
 	const { agentId } = Route.useParams();
 	const query = useAgentDetail(agentId);
+	const deployment = useDeploymentConfiguration();
 	const retryable = query.isError
 		? isRetryableAgentDiscoveryError(query.error)
 		: query.data?.kind === "unavailable" && query.data.retryable;
-	if (query.isPending) {
+	if (query.isPending || deployment.isPending) {
 		return (
 			<main className="platform-content management-content">
 				<PageLoadingState title="Owner 配置" message="正在读取配置…" />
 			</main>
 		);
 	}
+	const { configuration: deploymentConfiguration } =
+		projectDeploymentConfiguration(
+			deployment.data,
+			deployment.error,
+			deployment.isError,
+		);
+	const deploymentModelCandidates =
+		deploymentConfiguration.modelCatalog.status === "populated"
+			? deploymentConfiguration.modelCatalog.endpoints.flatMap((endpoint) =>
+					endpoint.models.map((model) => ({
+						endpointId: endpoint.endpointId,
+						modelId: model.modelId,
+						reasoningLevels: model.reasoningLevels,
+					})),
+				)
+			: undefined;
 	if (query.isError || !query.data || query.data.kind !== "ready") {
 		return (
 			<main className="platform-content management-content">
@@ -68,7 +87,10 @@ function AgentConfigurationRoute() {
 
 	return (
 		<main className="platform-content management-content">
-			<AgentConfigurationWorkflow agent={query.data.agent} />
+			<AgentConfigurationWorkflow
+				agent={query.data.agent}
+				deploymentModelCandidates={deploymentModelCandidates}
+			/>
 		</main>
 	);
 }
