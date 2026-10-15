@@ -2,6 +2,7 @@ import type {
 	ConversationDispatchAuthorityV1,
 	ConversationDispatchClaimV1,
 	ConversationDispatchOperationV1,
+	ConversationRuntimeDispatchOperationV1,
 	ConversationRuntimeDispatchRequestV1,
 	ConversationRuntimeEvent,
 	ConversationRuntimeOperationResponseV1,
@@ -16,9 +17,11 @@ import {
 } from "./conversation-dispatch-values.js";
 import { parseConversationOperationFactV2 } from "./conversation-operation-facts.js";
 
-function runtimeOperation(claim: ConversationDispatchClaimV1) {
+function runtimeOperation(
+	claim: ConversationDispatchClaimV1,
+): ConversationRuntimeDispatchOperationV1 {
 	if (claim.operation === "conversation.native-capability.invoke.v1")
-		return "native-capability" as const;
+		return "native-capability.invoke";
 	if (claim.operation === "conversation.turn.supplement.v1") {
 		return "turn.supplement" as const;
 	}
@@ -99,7 +102,7 @@ export function runtimeRequest(
 	if (claim.operation === "conversation.native-capability.invoke.v1") {
 		return {
 			...base,
-			operation: "native-capability",
+			operation: "native-capability.invoke",
 			nativeCapability: claim.nativeCapability ?? unavailable(),
 		};
 	}
