@@ -4366,13 +4366,14 @@ function findBreakingChanges(previousValue, currentValue) {
 		return changes.sort();
 	}
 	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
-	const normalized = normalizeRuntimeNativeCapabilityV3CommandJsonSchemaAddition(
-		previous,
-		normalizeRuntimeSkillHostReadJsonSchemaAddition(
+	const normalized =
+		normalizeRuntimeNativeCapabilityV3CommandJsonSchemaAddition(
 			previous,
-			normalizeSkillPackageObjectVersions(previous, current, changes),
-		),
-	);
+			normalizeRuntimeSkillHostReadJsonSchemaAddition(
+				previous,
+				normalizeSkillPackageObjectVersions(previous, current, changes),
+			),
+		);
 	const currentSchemas =
 		normalized.$defs ?? normalized.components?.schemas ?? {};
 	for (const [name, schema] of Object.entries(previousSchemas)) {
