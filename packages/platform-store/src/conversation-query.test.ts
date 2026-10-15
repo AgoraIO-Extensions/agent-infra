@@ -903,19 +903,36 @@ describe("PostgreSQL original native metadata scope", () => {
 	});
 
 	it("returns the requested Execution's original Host scope", async () => {
+		const relayKeyId = `native-metadata-test-key-${process.pid}`;
 		await client`
-			update platform.conversation_executions
-			set runtime_submit_protocol = 'v4',
-				original_operation_digest = ${"a".repeat(43)},
-				original_submit_host_session_ref = 'historical-host',
-				execution_source = 'web',
-				relay_key_purpose = 'personal',
-				relay_key_subject_id = 'actor-1',
-				relay_key_id = 'fixture-key',
-				relay_key_version = 1
-			where execution_id = 'execution-conversation-1'
+			insert into platform.relay_key_subjects
+				(purpose, subject_id, last_version, current_version)
+			values ('personal', 'actor-1', 1, 1)
+			on conflict (purpose, subject_id) do nothing
+		`;
+		await client`
+			insert into platform.relay_key_versions
+				(purpose, subject_id, key_version, key_id, ciphertext)
+			values ('personal', 'actor-1', 1, ${relayKeyId}, ${client.json({
+				purpose: "personal",
+				subjectId: "actor-1",
+				keyId: relayKeyId,
+				keyVersion: 1,
+			})})
 		`;
 		try {
+			await client`
+				update platform.conversation_executions
+				set runtime_submit_protocol = 'v4',
+					original_operation_digest = ${"a".repeat(43)},
+					original_submit_host_session_ref = 'historical-host',
+					execution_source = 'web',
+					relay_key_purpose = 'personal',
+					relay_key_subject_id = 'actor-1',
+					relay_key_id = ${relayKeyId},
+					relay_key_version = 1
+				where execution_id = 'execution-conversation-1'
+			`;
 			expect(await read()).toMatchObject({
 				originalHostScopeRef: "historical-host",
 			});
@@ -931,6 +948,14 @@ describe("PostgreSQL original native metadata scope", () => {
 					relay_key_id = null,
 					relay_key_version = null
 				where execution_id = 'execution-conversation-1'
+			`;
+			await client`
+				delete from platform.relay_key_versions
+				where purpose = 'personal' and subject_id = 'actor-1' and key_id = ${relayKeyId}
+			`;
+			await client`
+				delete from platform.relay_key_subjects
+				where purpose = 'personal' and subject_id = 'actor-1'
 			`;
 		}
 	});
