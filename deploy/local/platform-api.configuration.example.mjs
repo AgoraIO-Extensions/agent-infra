@@ -67,6 +67,9 @@ export const nativeMetadata = undefined;
 export const nativeMetadataWorker = undefined;
 // Optional controlled override for tests or a reviewed deployment seam.
 export const nativeMetadataResolveRequest = undefined;
+// Optional trusted metadata revalidation port for native capability admission.
+// The API refuses to use a fake/default metadata source.
+export const nativeCapabilityMetadata = undefined;
 
 // Optional controlled Skill Hub Provider import. This is a deployment-owned
 // registry + admission pipeline; it must return candidates from approved

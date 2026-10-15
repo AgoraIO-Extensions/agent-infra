@@ -33,6 +33,7 @@ installation credential。外置 `platform-api` 的文件装配仍由其部署�
 | `nativeMetadataWorker` | 默认装配输入：固定 Worker `{ baseUrl, serviceToken }`。Platform API 使用自身的 Platform Store `PostgresConversationQueryV1` 自动解析 exact Execution→原始 Host scope，并创建 Worker gateway client；不再要求部署方实现 `resolveRequest` |
 | `nativeMetadataResolveRequest` | 可选的显式 resolver override，仅用于受控 deployment/test seam；必须与 `nativeMetadataWorker` 同时提供。生产默认路径不要配置它 |
 | `nativeMetadataCurrent` | 可选的 current-confirmation override。未配置时，API 自动使用 request-local registry、现有 ConversationAuthorization 和同一个 Worker service token 装配 current route；过期、释放、跨 binding、撤权和 authorization revision 变化均 fail closed |
+| `nativeCapabilityMetadata` | native command/Skill admission 的可信 metadata revalidation port；必须来自已认证的当前 Runtime metadata boundary，缺失时 admission 保持 unavailable，平台不提供 fake 默认值 |
 | `providerImport` | 可选的受控 Skill Hub Provider import port：部署方提供已获准 registry、ObjectStorage、source verifier、scanner 和 admission policy；HTTP 只提交 provider/name/version 选择，不能提交 archive bytes、存储路径、trust、policy 或 approval 事实；不要同时放入 `apiInput.providerImport` |
 | `directorySearch` | 查询当前用户和组织目录记录的函数，返回 canonical ID、可读名称及邮箱或组织路径；依赖不可用时抛错 |
 

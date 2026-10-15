@@ -23,9 +23,13 @@ export interface NativeCapabilityInvocationRouteDependenciesV1 {
 		readonly conversationId: string;
 		readonly body: HttpRequest;
 	}): Promise<NativeCapabilityAdmissionRequestV1>;
-	admit(
+	readonly admit?: (
 		request: NativeCapabilityAdmissionRequestV1,
-	): Promise<NativeCapabilityAdmissionDecisionV1>;
+	) => Promise<NativeCapabilityAdmissionDecisionV1>;
+	readonly admitWithIdentity?: (input: {
+		readonly identity: IdentityContext;
+		readonly request: NativeCapabilityAdmissionRequestV1;
+	}) => Promise<NativeCapabilityAdmissionDecisionV1>;
 }
 
 function outcomeStatus(
@@ -60,6 +64,11 @@ export function registerNativeCapabilityInvocationRoutesV1(
 	app: Hono,
 	dependencies: NativeCapabilityInvocationRouteDependenciesV1,
 ) {
+	if (
+		typeof dependencies.admit !== "function" &&
+		typeof dependencies.admitWithIdentity !== "function"
+	)
+		throw new TypeError("Native capability invocation admission is invalid");
 	app.post(path, async (context) => {
 		const metadata = requestMetadata(context.req.raw);
 		let identity: IdentityContext;
@@ -84,7 +93,10 @@ export function registerNativeCapabilityInvocationRoutesV1(
 				conversationId: context.req.param("conversationId"),
 				body,
 			});
-			const decision = await dependencies.admit(request);
+			const decision = dependencies.admitWithIdentity
+				? await dependencies.admitWithIdentity({ identity, request })
+				: await dependencies.admit?.(request);
+			if (!decision) throw new Error("Native capability admission unavailable");
 			return context.json(
 				sanitizedDecision(decision),
 				outcomeStatus(decision.outcome),

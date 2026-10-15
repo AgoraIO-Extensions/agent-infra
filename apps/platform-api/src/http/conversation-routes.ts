@@ -77,7 +77,13 @@ type AuthorizationInput =
 			readonly agentId?: string;
 			readonly conversationId?: string;
 	  }
-	| Parameters<ConversationExecutionAuthorizationPortV1["authorize"]>[0];
+	| Parameters<ConversationExecutionAuthorizationPortV1["authorize"]>[0]
+	| {
+			readonly schemaVersion: 1;
+			readonly operation: "native-capability.invoke";
+			readonly agentId?: string;
+			readonly conversationId: string;
+	  };
 
 type AuthorizationDecision =
 	| {

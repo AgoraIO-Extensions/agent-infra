@@ -16,11 +16,13 @@ import {
 	createApplicationRegistrationUseCaseV1,
 	createApplicationRevisionUseCaseV1,
 	createConversationExecutionUseCaseV1,
+	createNativeCapabilityAdmissionUseCaseV1,
 	createPersonalApiAgentReadUseCaseV1,
 	createPersonalApiCredentialUseCaseV1,
 	createPersonalRelayKeyUseCaseV1,
 	createRecentPersonalConversationsUseCaseV1,
 	createSkillHubAgentBindingUseCaseV1,
+	type NativeCapabilityMetadataRevalidationPortV1,
 	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
 import {
@@ -72,6 +74,7 @@ import {
 	resolveCurrentMaterialGrantActor,
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
+import type { NativeCapabilityInvocationRouteDependenciesV1 } from "./http/native-capability-invocation-routes.js";
 import type { NativeMetadataCurrentRouteDependenciesV1 } from "./http/native-metadata-current-routes.js";
 import type { NativeMetadataRoutesDependenciesV1 } from "./http/native-metadata-routes.js";
 import type { SkillHubAgentBindingRoutesDependenciesV1 } from "./http/skill-hub-agent-binding-routes.js";
@@ -195,6 +198,8 @@ export interface PlatformApiAssemblyInput {
 	};
 	/** Optional deployment-owned native capability admission route. */
 	readonly nativeCapabilityInvocation?: PlatformAppDependencies["nativeCapabilityInvocation"];
+	/** Trusted metadata revalidation for the default native capability admission path. */
+	readonly nativeCapabilityMetadata?: NativeCapabilityMetadataRevalidationPortV1;
 	/** Deployment-owned API → Worker Browser command bridge. */
 	readonly browserCommands?: ConversationBrowserCommandPortV1;
 	/** Optional deployment-owned Worker current-confirmation route. */
@@ -691,6 +696,44 @@ export function assemblePlatformApi(
 					}),
 				}
 			: undefined);
+	if (
+		input.nativeCapabilityInvocation !== undefined &&
+		input.nativeCapabilityMetadata !== undefined
+	)
+		throw new Error("PLATFORM_NATIVE_CAPABILITY_METADATA_DUPLICATE");
+	const nativeCapabilityMetadata = input.nativeCapabilityMetadata;
+	const assembledNativeCapabilityInvocation:
+		| NativeCapabilityInvocationRouteDependenciesV1
+		| undefined =
+		input.nativeCapabilityInvocation ??
+		(nativeCapabilityMetadata
+			? {
+					identity: input.identity,
+					buildRequest: async ({ conversationId, body }) => ({
+						...body,
+						schemaVersion: 1 as const,
+						conversationId,
+					}),
+					admitWithIdentity: async ({ identity, request }) => {
+						const admission = createNativeCapabilityAdmissionUseCaseV1({
+							authorization: {
+								async authorize(authorizationRequest) {
+									const decision = await conversationAuthorization.authorize(
+										identity,
+										authorizationRequest,
+									);
+									return decision.outcome === "allowed"
+										? decision
+										: { outcome: "denied" as const };
+								},
+							},
+							metadata: nativeCapabilityMetadata,
+							transaction: conversationTransaction,
+						});
+						return admission.admit(request);
+					},
+				}
+			: undefined);
 	const browserCommandAdmission =
 		input.browserCommands ??
 		createPostgresBrowserCommandAdmissionV1({
@@ -947,8 +990,8 @@ export function assemblePlatformApi(
 		...(assembledNativeMetadataCurrent
 			? { nativeMetadataCurrent: assembledNativeMetadataCurrent }
 			: {}),
-		...(input.nativeCapabilityInvocation
-			? { nativeCapabilityInvocation: input.nativeCapabilityInvocation }
+		...(assembledNativeCapabilityInvocation
+			? { nativeCapabilityInvocation: assembledNativeCapabilityInvocation }
 			: {}),
 		sessionAudit: {
 			identity: input.identity,

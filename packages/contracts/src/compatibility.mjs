@@ -1120,6 +1120,8 @@ function isRuntimeNativeCapabilityV3CommandExtension(previous, current) {
 	const previousRequest = previous.components?.schemas?.[requestName];
 	const currentRequest = current.components?.schemas?.[requestName];
 	if (!previousRequest || !currentRequest) return false;
+	if (previousRequest.properties?.capabilitySourceVersion !== undefined)
+		return false;
 	const normalized = structuredClone(current);
 	const request = normalized.components.schemas[requestName];
 	if (
@@ -1147,6 +1149,8 @@ function normalizeRuntimeNativeCapabilityV3CommandJsonSchemaAddition(
 	const previousRequest = previous.$defs?.[requestName];
 	const currentRequest = current.$defs?.[requestName];
 	if (!previousRequest || !currentRequest) return current;
+	if (previousRequest.properties?.capabilitySourceVersion !== undefined)
+		return current;
 	const normalized = structuredClone(current);
 	const request = normalized.$defs[requestName];
 	if (

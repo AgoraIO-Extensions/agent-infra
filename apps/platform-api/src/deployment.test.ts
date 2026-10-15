@@ -107,6 +107,8 @@ describe("explicit custom Agent deployment ports", () => {
 		>;
 		const nativeMetadataCurrent =
 			{} as ProductionPlatformApiInputV1["nativeMetadataCurrent"];
+		const nativeCapabilityMetadata =
+			{} as ProductionPlatformApiInputV1["nativeCapabilityMetadata"];
 		const apiInput = {} as ProductionPlatformApiInputV1;
 
 		expect(
@@ -118,6 +120,7 @@ describe("explicit custom Agent deployment ports", () => {
 				nativeMetadata,
 				nativeMetadataWorker,
 				nativeMetadataCurrent,
+				nativeCapabilityMetadata,
 			}),
 		).toMatchObject({
 			customAgentGateway,
@@ -126,6 +129,7 @@ describe("explicit custom Agent deployment ports", () => {
 			nativeMetadata,
 			nativeMetadataWorker,
 			nativeMetadataCurrent,
+			nativeCapabilityMetadata,
 		});
 	});
 
@@ -151,6 +155,7 @@ describe("explicit custom Agent deployment ports", () => {
 		["native metadata reader", "nativeMetadata"],
 		["native metadata Worker", "nativeMetadataWorker"],
 		["native metadata current route", "nativeMetadataCurrent"],
+		["native capability metadata", "nativeCapabilityMetadata"],
 	] as const)("rejects duplicate %s authorities", (_label, field) => {
 		const value = {};
 		const apiInput = {
@@ -172,7 +177,9 @@ describe("explicit custom Agent deployment ports", () => {
 							? "PLATFORM_NATIVE_METADATA_DUPLICATE"
 							: field === "nativeMetadataWorker"
 								? "PLATFORM_NATIVE_METADATA_WORKER_DUPLICATE"
-								: "PLATFORM_NATIVE_METADATA_CURRENT_DUPLICATE",
+								: field === "nativeMetadataCurrent"
+									? "PLATFORM_NATIVE_METADATA_CURRENT_DUPLICATE"
+									: "PLATFORM_NATIVE_CAPABILITY_METADATA_DUPLICATE",
 		);
 	});
 });
