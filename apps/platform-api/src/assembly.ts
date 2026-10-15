@@ -710,9 +710,9 @@ export function assemblePlatformApi(
 			? {
 					identity: input.identity,
 					buildRequest: async ({ conversationId, body }) => ({
+						...body,
 						schemaVersion: 1 as const,
 						conversationId,
-						...body,
 					}),
 					admitWithIdentity: async ({ identity, request }) => {
 						const admission = createNativeCapabilityAdmissionUseCaseV1({
