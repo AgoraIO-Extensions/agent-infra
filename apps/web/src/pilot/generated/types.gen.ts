@@ -57,6 +57,11 @@ export type AgentApplicationCreateRequestV1 = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
 };
 
@@ -89,6 +94,11 @@ export type AgentApplicationProjectionV1 = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
     status: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
     submittedAt: string;
@@ -141,6 +151,11 @@ export type AgentApplicationUpdateRequestV1 = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
 };
 
@@ -307,6 +322,11 @@ export type AgentProjectionV1 = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
 };
 
@@ -714,7 +734,7 @@ export type PilotProtocolErrorV1 = {
     schemaVersion: 1;
     traceId: string;
 } | {
-    code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED';
+    code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED' | 'MULTI_SERVICE_RESOURCE_CAP_EXCEEDED';
     message: string;
     retryable: false;
     schemaVersion: 1;
@@ -1203,6 +1223,11 @@ export type AgentApplicationCreateRequestV1Writable = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
 };
 
@@ -1255,6 +1280,11 @@ export type AgentApplicationUpdateRequestV1Writable = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
 };
 

@@ -39,6 +39,24 @@ Worker origin 和 service token 调用该入口，并把 API request source ref 
 传递；调用方不能提交 URL、token、主体或 Host scope。缺少当前确认配置、关联失效或 Worker
 不可达时，读取保持 unavailable。
 
+## 多服务资源档位
+
+`workloadInput.policy.multiServiceResourceProfiles` 与 `workloadInput.policy.multiServiceResourceCap`
+的字段形状、默认档位与默认上限见
+[API 部署说明](../platform-api/README.md#多服务-agent-资源档位)，两侧必须配置相同的值：API 按它准入，
+Worker 按它注入容器资源并在调谐时再次校验。
+
+- Worker 在装配阶段解析这两项配置；档位重复、使用 `default`、字段非法或上限非法时，
+  `createProductionWorkloadWorkerOptionsV1` 以 `WORKER_KUBERNETES_CONFIGURATION_INVALID`
+  失败，进程在打开数据库或修改 Kubernetes 资源前退出。
+- 每次创建或更新多服务资源前，Worker 先汇总全部 Deployment、StatefulSet 与迁移 Job 的
+  估算量。超过上限时该次调谐以 `MULTI_SERVICE_RESOURCE_CAP_EXCEEDED` 错误失败，不读写任何
+  Kubernetes 资源，也不清理旧版本资源。
+- PVC 大小取挂载它的 StatefulSet 所用档位的 `storageSize`；档位未设置时（包括 `default`
+  档位）沿用 `workloadInput.policy.storageSize`。已有 PVC 的大小与该结果不同时视为漂移：
+  调谐失败关闭，观测为 `unhealthy`，Worker 不会自动扩缩 PVC。因此给已有 Agent 使用的档位
+  新增或修改 `storageSize` 前，需先迁移其 PVC。
+
 ## 打包与启动
 
 在仓库根目录、Node.js 24 与仓库固定 pnpm 版本下执行：

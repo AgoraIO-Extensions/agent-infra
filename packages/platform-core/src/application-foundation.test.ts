@@ -370,6 +370,40 @@ describe("Application foundation use case", () => {
 		}
 	});
 
+	it("converts a multi-service resource cap rejection before persistence", async () => {
+		const commit = vi.fn();
+		const error = await createApplicationFoundationUseCaseV1(
+			{
+				...applicationFoundationAdmissionDependenciesV1(),
+				imageAdmission: {
+					async admitImage(input) {
+						return {
+							schemaVersion: 1,
+							status: "rejected",
+							agentId: input.agentId,
+							requestId: input.requestId,
+							reason: "multi_service_resource_cap_exceeded",
+						};
+					},
+				},
+				transaction: readyTransaction({ commit }),
+			},
+			{ now: () => new Date(serverInstant) },
+		)
+			.submit(
+				applicationFoundationCommandV1,
+				applicationFoundationActorContextV1,
+				pendingSecretRecordAttachmentFixtureV1(),
+			)
+			.then(
+				() => expect.fail("Expected a resource cap rejection"),
+				(reason: unknown) => reason,
+			);
+		expect(error).toEqual(expect.any(ApplicationFoundationError));
+		expect(error).toMatchObject({ code: "resource_cap_exceeded" });
+		expect(commit).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		[
 			"same-bundle conflict",

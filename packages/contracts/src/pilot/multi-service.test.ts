@@ -5,6 +5,7 @@ import {
 	MultiServiceAgentSourceV1Schema,
 	MultiServiceEntryAnnotationV1,
 	MultiServiceManifestDocumentV1Schema,
+	MultiServiceResourceProfileAnnotationV1,
 	MultiServiceResourceV1Schema,
 } from "./index.ts";
 
@@ -77,6 +78,30 @@ describe("multi-service Agent contract seam", () => {
 			document,
 		);
 		expect(MultiServiceResourceV1Schema.parse(deployment)).toEqual(deployment);
+	});
+
+	it("accepts a Service profile annotation", () => {
+		const profiled = MultiServiceManifestDocumentV1Schema.parse({
+			...document,
+			resources: [
+				deployment,
+				{
+					...service,
+					metadata: {
+						...service.metadata,
+						annotations: {
+							...service.metadata.annotations,
+							[MultiServiceResourceProfileAnnotationV1]: "small",
+						},
+					},
+				},
+			],
+		});
+		expect(
+			profiled.resources[1]?.metadata.annotations?.[
+				MultiServiceResourceProfileAnnotationV1
+			],
+		).toBe("small");
 	});
 
 	it("accepts one bounded pre-release migration Job", () => {
@@ -288,6 +313,7 @@ describe("multi-service Agent contract seam", () => {
 			"MULTI_SERVICE_ENTRY_SERVICE_MULTIPLE",
 			"MULTI_SERVICE_MANIFEST_TOO_LARGE",
 			"MULTI_SERVICE_RESOURCE_LIMIT_EXCEEDED",
+			"MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
 		]);
 	});
 });

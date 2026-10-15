@@ -1,8 +1,12 @@
 import {
 	AgentProjectionV1Schema,
 	AgentResourceProfileProjectionV1Schema,
+	MultiServiceManifestDocumentV1Schema,
+	type MultiServiceServiceProjectionV1,
+	multiServiceServiceProjectionsV1,
 } from "@agent-infra/contracts/pilot";
 import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-store";
+import { parseAllDocuments } from "yaml";
 
 import type { createDeploymentIdentityScope } from "./deployment-identity.js";
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
@@ -73,11 +77,33 @@ export function createDeploymentPresentation(input: {
 		if (source.kind === "standard") {
 			browserSource = { kind: "standard", templateId: source.templateId };
 		} else if (source.manifest !== undefined) {
+			let services: readonly MultiServiceServiceProjectionV1[] | undefined;
+			try {
+				let documentInput: unknown;
+				try {
+					documentInput = JSON.parse(source.manifest);
+				} catch {
+					const documents = parseAllDocuments(source.manifest, {
+						prettyErrors: false,
+						maxAliasCount: 0,
+					} as never);
+					if (documents.length !== 1 || documents[0]?.errors.length)
+						throw new Error();
+					documentInput = documents[0]?.toJSON();
+				}
+				const document =
+					MultiServiceManifestDocumentV1Schema.parse(documentInput);
+				// 与准入、Worker 注入使用同一档位解析规则；未声明时为默认档位。
+				services = multiServiceServiceProjectionsV1(document);
+			} catch {
+				services = undefined;
+			}
 			browserSource = {
 				kind: "custom",
 				manifest: source.manifest,
 				interactionMode: "self-managed",
 				identityResponsibility: "self-managed",
+				...(services ? { services: [...services] } : {}),
 			};
 		} else if (source.interactionMode === "self-managed") {
 			if (!source.identityResponsibility) {

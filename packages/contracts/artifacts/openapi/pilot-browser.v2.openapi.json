@@ -191,6 +191,32 @@
                         "maxLength": 262144,
                         "minLength": 1,
                         "type": "string"
+                      },
+                      "services": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "entry": {
+                              "type": "boolean"
+                            },
+                            "name": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "resourceProfileRef": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "resourceProfileRef",
+                            "entry"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
                       }
                     },
                     "required": [
@@ -858,6 +884,32 @@
                     "maxLength": 262144,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entry": {
+                          "type": "boolean"
+                        },
+                        "name": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "resourceProfileRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "resourceProfileRef",
+                        "entry"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -1143,6 +1195,32 @@
                     "maxLength": 262144,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entry": {
+                          "type": "boolean"
+                        },
+                        "name": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "resourceProfileRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "resourceProfileRef",
+                        "entry"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -1478,6 +1556,32 @@
                     "maxLength": 262144,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entry": {
+                          "type": "boolean"
+                        },
+                        "name": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "resourceProfileRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "resourceProfileRef",
+                        "entry"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -2559,6 +2663,32 @@
                     "maxLength": 262144,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entry": {
+                          "type": "boolean"
+                        },
+                        "name": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "resourceProfileRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "resourceProfileRef",
+                        "entry"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -3459,6 +3589,96 @@
         "properties": {
           "modelCatalog": {
             "$ref": "#/components/schemas/DeploymentModelCatalogProjectionV2"
+          },
+          "multiServiceResourceCap": {
+            "additionalProperties": false,
+            "properties": {
+              "cpuMillicores": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "memoryMiB": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "storageGiB": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "cpuMillicores",
+              "memoryMiB",
+              "storageGiB"
+            ],
+            "type": "object"
+          },
+          "multiServiceResourceDefaultProfileRef": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "multiServiceResourceProfiles": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "displayName": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "estimatedResources": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpuMillicores": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "memoryMiB": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "storageGiB": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "cpuMillicores",
+                    "memoryMiB",
+                    "storageGiB"
+                  ],
+                  "type": "object"
+                },
+                "profileId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "storageSize": {
+                  "pattern": "^[1-9][0-9]*(Mi|Gi)$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "profileId",
+                "displayName",
+                "estimatedResources"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "multiServiceResourceProfilesSource": {
+            "enum": [
+              "deployment",
+              "default"
+            ],
+            "type": "string"
           },
           "schemaVersion": {
             "const": 2,
@@ -5371,7 +5591,8 @@
                   "PROVIDER_REJECTED",
                   "DELEGATED_RESULT_REJECTED",
                   "ORIGINAL_RESPONSE_NOT_STARTED",
-                  "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                  "ORIGINAL_RESPONSE_ALREADY_FINISHED",
+                  "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
                 ],
                 "type": "string"
               },

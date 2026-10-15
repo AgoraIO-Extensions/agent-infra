@@ -3204,3 +3204,63 @@ it("admits only the exact approved opaque Skill package VersionId correction", a
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+it("admits only the appended multi-service resource cap error code (#2396)", async () => {
+	const code = "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED";
+	const current = JSON.parse(
+		await readFile(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v2.openapi.json",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	);
+	const enums: string[][] = [];
+	const collect = (value: unknown) => {
+		if (!value || typeof value !== "object") return;
+		const object = value as Record<string, unknown>;
+		if (Array.isArray(object.enum) && object.enum.includes(code))
+			enums.push(object.enum as string[]);
+		for (const child of Object.values(object)) collect(child);
+	};
+	collect(current);
+	expect(enums.length).toBeGreaterThan(0);
+	const previous = structuredClone(current);
+	const restore = (value: unknown) => {
+		if (!value || typeof value !== "object") return;
+		const object = value as Record<string, unknown>;
+		if (Array.isArray(object.enum))
+			object.enum = object.enum.filter((entry) => entry !== code);
+		for (const child of Object.values(object)) restore(child);
+	};
+	restore(previous);
+	const directory = await mkdtemp(resolve(tmpdir(), "cap-error-compat-"));
+	const before = resolve(directory, "previous.json");
+	const after = resolve(directory, "current.json");
+	try {
+		await writeFile(before, JSON.stringify(previous));
+		await writeFile(after, JSON.stringify(current));
+		expect(comparePaths(after, before).status).toBe(0);
+		// 同时删除既有错误码仍是破坏性变更。
+		const narrowed = structuredClone(current);
+		const removeExisting = (value: unknown) => {
+			if (!value || typeof value !== "object") return;
+			const object = value as Record<string, unknown>;
+			if (Array.isArray(object.enum) && object.enum.includes(code))
+				object.enum = object.enum.filter(
+					(entry) => entry !== "MODEL_SELECTION_INVALID",
+				);
+			for (const child of Object.values(object)) removeExisting(child);
+		};
+		removeExisting(narrowed);
+		await writeFile(after, JSON.stringify(narrowed));
+		expect(comparePaths(after, before).status).toBe(1);
+		// 基线已有该错误码时，删除它会被检测到。
+		await writeFile(before, JSON.stringify(current));
+		await writeFile(after, JSON.stringify(previous));
+		expect(comparePaths(after, before).status).toBe(1);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});

@@ -1,4 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import type {
+	MultiServiceResourceCapV1,
+	MultiServiceResourceProfileV1,
+} from "@agent-infra/contracts/pilot";
 import {
 	type AgentWorkloadDesiredV1,
 	type SecretActivationFenceV1,
@@ -154,6 +158,9 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	readonly ingressClassName: string;
 	readonly routeHostSuffix: string;
 	readonly tlsSecretName: string;
+	/** Deployment-owned profiles used only by multi-service workloads. */
+	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
+	readonly multiServiceResourceCap?: MultiServiceResourceCapV1;
 	/** Trusted deployment auth integration; applied only to platform-auth routes. */
 	readonly platformAuthAnnotations: Readonly<Record<string, string>>;
 	readonly runtimeAuth?: WorkloadRuntimeAuthV1;

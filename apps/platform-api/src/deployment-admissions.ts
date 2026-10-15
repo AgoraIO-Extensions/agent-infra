@@ -1,9 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+	calculateMultiServiceResourceCapacityV1,
 	DeploymentConfigurationProjectionV2Schema,
+	defaultMultiServiceResourceProfileV1,
 	MultiServiceAgentSourceV1Schema,
 	MultiServiceManifestDocumentV1Schema,
 	MultiServiceMaxWorkloadsV1,
+	type MultiServiceResourceCapV1,
+	type MultiServiceResourceConfigurationV1,
+	type MultiServiceResourceProfileV1,
+	parseMultiServiceResourceConfigurationV1,
 } from "@agent-infra/contracts/pilot";
 import {
 	ImmutableOciDigestV1Schema,
@@ -91,6 +97,12 @@ export interface DeploymentAdmissionInputV1 {
 			readonly actorIds: readonly string[];
 		})[];
 	};
+	/**
+	 * 多服务档位与单 Agent 总量上限由部署配置提供，必须与 Worker 的
+	 * `workloadInput.policy` 保持一致；省略时使用合约默认值。
+	 */
+	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
+	readonly multiServiceResourceCap?: MultiServiceResourceCapV1;
 }
 
 function revision(prefix: string, value: unknown) {
@@ -102,6 +114,20 @@ function snapshotTemplates(templates: readonly Template[]) {
 		...structuredClone(registration),
 		...(loadValidation ? { loadValidation } : {}),
 	}));
+}
+
+function parseMultiServiceResourceConfiguration(input: {
+	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
+	readonly multiServiceResourceCap?: MultiServiceResourceCapV1;
+}): MultiServiceResourceConfigurationV1 {
+	try {
+		return parseMultiServiceResourceConfigurationV1({
+			profiles: input.multiServiceResourceProfiles,
+			cap: input.multiServiceResourceCap,
+		});
+	} catch {
+		throw new Error("PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID");
+	}
 }
 
 async function readTemplateReadiness(template: Template) {
@@ -151,9 +177,12 @@ async function readTemplateReadiness(template: Template) {
 export function createDeploymentConfigurationProjectionV2(input: {
 	readonly templates: DeploymentAdmissionInputV1["templates"];
 	readonly modelCatalog: DeploymentAdmissionInputV1["modelCatalog"];
+	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
+	readonly multiServiceResourceCap?: MultiServiceResourceCapV1;
 }) {
 	const templates = snapshotTemplates(input.templates);
 	const loadModelCatalog = input.modelCatalog.load;
+	const multiServiceResources = parseMultiServiceResourceConfiguration(input);
 	return async () => {
 		const templateOptions: DeploymentTemplateProjectionV2[] = await Promise.all(
 			templates.map(async (template) => ({
@@ -241,6 +270,13 @@ export function createDeploymentConfigurationProjectionV2(input: {
 				revision: catalogRevision,
 				endpoints,
 			},
+			multiServiceResourceProfiles: multiServiceResources.profiles.map(
+				({ resources: _resources, ...profile }) => profile,
+			),
+			multiServiceResourceCap: multiServiceResources.cap,
+			multiServiceResourceDefaultProfileRef:
+				defaultMultiServiceResourceProfileV1.profileId,
+			multiServiceResourceProfilesSource: multiServiceResources.source,
 		});
 	};
 }
@@ -395,6 +431,7 @@ export function createDeploymentAdmissionsV1(
 	let registry: ReturnType<typeof createOciImageRegistryAdapterV1>;
 	let templates: DeploymentAdmissionInputV1["templates"];
 	let channels: DeploymentAdmissionInputV1["channelPolicy"];
+	let multiServiceResources: MultiServiceResourceConfigurationV1;
 	// 只记录可安全输出的原因码与模板 ID，供启动日志定位（#2382）。
 	let diagnostic: DeploymentDiagnosticV1 | undefined;
 	try {
@@ -411,6 +448,7 @@ export function createDeploymentAdmissionsV1(
 			throw new Error();
 		templates = snapshotTemplates(input.templates);
 		channels = structuredClone(input.channelPolicy);
+		multiServiceResources = parseMultiServiceResourceConfiguration(input);
 		if (
 			new Set(templates.map(({ templateId }) => templateId)).size !==
 			templates.length
@@ -641,6 +679,16 @@ export function createDeploymentAdmissionsV1(
 						!validMultiServiceTopology(multiServiceManifest)
 					)
 						return denied;
+					// 在镜像准入等任何外部调用前完成档位与总量校验；超限返回专用原因，
+					// 由 Core 映射为 MULTI_SERVICE_RESOURCE_CAP_EXCEEDED。
+					const capacity = calculateMultiServiceResourceCapacityV1({
+						manifest: multiServiceManifest,
+						configuration: multiServiceResources,
+					});
+					if (!capacity.ok)
+						return capacity.reason === "cap_exceeded"
+							? { ...denied, reason: "multi_service_resource_cap_exceeded" }
+							: denied;
 					const services = multiServiceManifest.resources.filter(
 						(resource) => resource.kind === "Service",
 					);

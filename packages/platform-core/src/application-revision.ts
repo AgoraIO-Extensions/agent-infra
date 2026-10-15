@@ -207,6 +207,7 @@ export type ApplicationRevisionErrorCode =
 	| "invalid_command"
 	| "not_authorized"
 	| "not_admitted"
+	| "resource_cap_exceeded"
 	| "no_change"
 	| "stale_revision"
 	| "key_version_conflict"
@@ -881,6 +882,7 @@ function configurationError(error: unknown): ApplicationRevisionError {
 		error.code === "invalid_command" ||
 		error.code === "not_authorized" ||
 		error.code === "not_admitted" ||
+		error.code === "resource_cap_exceeded" ||
 		error.code === "no_change" ||
 		error.code === "idempotency_conflict"
 	) {

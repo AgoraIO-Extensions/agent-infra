@@ -353,6 +353,11 @@ function createAgentConfigurationUseCaseV1Internal(
 			} catch {
 				throw new AgentConfigurationError("dependency_unavailable");
 			}
+			if (
+				admission.status === "rejected" &&
+				admission.reason === "multi_service_resource_cap_exceeded"
+			)
+				throw new AgentConfigurationError("resource_cap_exceeded");
 			const admittedSource =
 				admission.status === "admitted" ? admission.source : current.source;
 			const selectionMatches =

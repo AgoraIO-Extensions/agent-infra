@@ -37,6 +37,11 @@ export type AgentApiCreationRequestV1 = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
 } | {
     availability: Array<{
@@ -151,6 +156,11 @@ export type AgentApplicationCreateRequestV2 = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
 };
 
@@ -204,6 +214,11 @@ export type AgentApplicationProjectionV2 = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
     status: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
     submittedAt: string;
@@ -258,6 +273,11 @@ export type AgentApplicationUpdateRequestV2 = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
 };
 
@@ -434,6 +454,11 @@ export type AgentProjectionV2 = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
 };
 
@@ -597,6 +622,23 @@ export type ConversationSseMessageV2 = PersistedConversationEventV2 | HeartbeatS
 
 export type DeploymentConfigurationProjectionV2 = {
     modelCatalog: DeploymentModelCatalogProjectionV2;
+    multiServiceResourceCap?: {
+        cpuMillicores: number;
+        memoryMiB: number;
+        storageGiB: number;
+    };
+    multiServiceResourceDefaultProfileRef?: string;
+    multiServiceResourceProfiles?: Array<{
+        displayName: string;
+        estimatedResources: {
+            cpuMillicores: number;
+            memoryMiB: number;
+            storageGiB: number;
+        };
+        profileId: string;
+        storageSize?: string;
+    }>;
+    multiServiceResourceProfilesSource?: 'deployment' | 'default';
     schemaVersion: 2;
     status: DeploymentConfigurationStatusV2;
     templates: Array<DeploymentTemplateProjectionV2>;
@@ -947,7 +989,7 @@ export type PilotProtocolErrorV1 = {
     schemaVersion: 1;
     traceId: string;
 } | {
-    code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED';
+    code: 'INVALID_REQUEST' | 'AUTHENTICATION_REQUIRED' | 'RESOURCE_UNAVAILABLE' | 'AUTHORIZATION_REVOKED' | 'CONVERSATION_UNAVAILABLE' | 'EXECUTION_FAILED' | 'MODEL_SELECTION_INVALID' | 'CONNECTION_AUTHORIZATION_REQUIRED' | 'ACTION_UNAVAILABLE' | 'PROVIDER_REJECTED' | 'DELEGATED_RESULT_REJECTED' | 'ORIGINAL_RESPONSE_NOT_STARTED' | 'ORIGINAL_RESPONSE_ALREADY_FINISHED' | 'MULTI_SERVICE_RESOURCE_CAP_EXCEEDED';
     message: string;
     retryable: false;
     schemaVersion: 1;
@@ -1400,6 +1442,11 @@ export type AgentApiCreationRequestV1Writable = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
 } | {
     availability: Array<{
@@ -1488,6 +1535,11 @@ export type AgentApplicationCreateRequestV2Writable = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
 };
 
@@ -1543,6 +1595,11 @@ export type AgentApplicationUpdateRequestV2Writable = {
         interactionMode: 'self-managed';
         kind: 'custom';
         manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
     };
 };
 

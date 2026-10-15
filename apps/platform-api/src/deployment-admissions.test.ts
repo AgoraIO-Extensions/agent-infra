@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { MultiServiceResourceProfileAnnotationV1 } from "@agent-infra/contracts/pilot";
 import { standardTemplateReadinessV1 } from "@agent-infra/model-catalog";
 import type {
 	AgentConfigurationModelInputV1,
@@ -8,6 +9,7 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import {
 	createDeploymentAdmissionsV1,
+	createDeploymentConfigurationProjectionV2,
 	type DeploymentAdmissionInputV1,
 } from "./deployment-admissions.js";
 import { deploymentDiagnosticV1 } from "./deployment-diagnostic.js";
@@ -236,66 +238,83 @@ function modelInput(replaceCredential = true): AgentConfigurationModelInputV1 {
 	};
 }
 
-describe("production deployment admissions", () => {
-	it("admits a two-service digest-only manifest before Worker side effects", async () => {
-		const f = fixture("self-managed");
-		const admissions = createDeploymentAdmissionsV1({
-			...f.input,
-			imageRepository: "registry.example.test/agents/codex",
-		});
-		const image = f.imageDigest;
-		const manifest = JSON.stringify({
-			schemaVersion: 1,
-			entryServiceName: "web",
-			resources: [
-				{
-					apiVersion: "apps/v1",
-					kind: "Deployment",
-					metadata: { name: "web" },
-					spec: {
-						replicas: 1,
-						selector: { matchLabels: { app: "web" } },
-						template: {
-							metadata: { labels: { app: "web" } },
-							spec: {
-								volumes: [
-									{ name: "config", configMap: { name: "web-config" } },
-								],
-								containers: [
-									{
-										name: "web",
-										image,
-										ports: [{ name: "http", port: 8080, targetPort: 8080 }],
-										volumeMounts: [
-											{ name: "config", mountPath: "/etc/web", readOnly: true },
-										],
-									},
-								],
-							},
+/**
+ * 两个服务（web 入口 + worker）加一个迁移 Job 的 digest-only 清单。`annotations` 按资源名
+ * 合并到对应资源的 metadata，用于在 Service 或工作负载上声明档位。
+ */
+function twoServiceManifest(
+	image: string,
+	annotations: Readonly<Record<string, Record<string, string>>> = {},
+) {
+	const withAnnotations = <
+		T extends { metadata: { name: string; annotations?: object } },
+	>(
+		resource: T,
+		key = resource.metadata.name,
+	) =>
+		annotations[key]
+			? {
+					...resource,
+					metadata: {
+						...resource.metadata,
+						annotations: {
+							...resource.metadata.annotations,
+							...annotations[key],
+						},
+					},
+				}
+			: resource;
+	return JSON.stringify({
+		schemaVersion: 1,
+		entryServiceName: "web",
+		resources: [
+			withAnnotations({
+				apiVersion: "apps/v1",
+				kind: "Deployment",
+				metadata: { name: "web" },
+				spec: {
+					replicas: 1,
+					selector: { matchLabels: { app: "web" } },
+					template: {
+						metadata: { labels: { app: "web" } },
+						spec: {
+							volumes: [{ name: "config", configMap: { name: "web-config" } }],
+							containers: [
+								{
+									name: "web",
+									image,
+									ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+									volumeMounts: [
+										{ name: "config", mountPath: "/etc/web", readOnly: true },
+									],
+								},
+							],
 						},
 					},
 				},
-				{
-					apiVersion: "apps/v1",
-					kind: "Deployment",
-					metadata: { name: "worker" },
-					spec: {
-						replicas: 1,
-						selector: { matchLabels: { app: "worker" } },
-						template: {
-							metadata: { labels: { app: "worker" } },
-							spec: {
-								containers: [
-									{
-										name: "worker",
-										image,
-										ports: [{ name: "http", port: 8080, targetPort: 8080 }],
-									},
-								],
-							},
+			}),
+			withAnnotations({
+				apiVersion: "apps/v1",
+				kind: "Deployment",
+				metadata: { name: "worker" },
+				spec: {
+					replicas: 1,
+					selector: { matchLabels: { app: "worker" } },
+					template: {
+						metadata: { labels: { app: "worker" } },
+						spec: {
+							containers: [
+								{
+									name: "worker",
+									image,
+									ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+								},
+							],
 						},
 					},
 				},
+			}),
+			withAnnotations(
 				{
 					apiVersion: "v1",
 					kind: "Service",
@@ -309,6 +328,9 @@ describe("production deployment admissions", () => {
 						ports: [{ name: "http", port: 8080, targetPort: 8080 }],
 					},
 				},
+				"service/web",
+			),
+			withAnnotations(
 				{
 					apiVersion: "v1",
 					kind: "Service",
@@ -319,39 +341,141 @@ describe("production deployment admissions", () => {
 						ports: [{ name: "http", port: 8080, targetPort: 8080 }],
 					},
 				},
-				{
-					apiVersion: "v1",
-					kind: "ConfigMap",
-					metadata: { name: "web-config" },
-					spec: { data: { "app.conf": "port=8080\n" } },
-				},
-				{
-					apiVersion: "batch/v1",
-					kind: "Job",
-					metadata: { name: "migrate" },
-					spec: {
-						backoffLimit: 1,
-						activeDeadlineSeconds: 300,
-						template: {
-							metadata: { labels: { app: "migration" } },
-							spec: {
-								restartPolicy: "Never",
-								containers: [{ name: "migrate", image }],
-							},
+				"service/worker",
+			),
+			{
+				apiVersion: "v1",
+				kind: "ConfigMap",
+				metadata: { name: "web-config" },
+				spec: { data: { "app.conf": "port=8080\n" } },
+			},
+			withAnnotations({
+				apiVersion: "batch/v1",
+				kind: "Job",
+				metadata: { name: "migrate" },
+				spec: {
+					backoffLimit: 1,
+					activeDeadlineSeconds: 300,
+					template: {
+						metadata: { labels: { app: "migration" } },
+						spec: {
+							restartPolicy: "Never",
+							containers: [{ name: "migrate", image }],
 						},
 					},
 				},
-			],
-		});
-		const result = await admissions.imageAdmission.admitImage({
-			...request,
-			requested: {
-				kind: "custom",
-				interactionMode: "self-managed",
-				identityResponsibility: "self-managed",
-				manifest,
+			}),
+		],
+	});
+}
+
+const smallMultiServiceProfile = {
+	profileId: "small",
+	displayName: "Small",
+	estimatedResources: { cpuMillicores: 100, memoryMiB: 128, storageGiB: 1 },
+	resources: {
+		requests: { cpu: "25m", memory: "32Mi" },
+		limits: { cpu: "100m", memory: "128Mi" },
+	},
+} as const;
+
+function multiServiceRequest(manifest: string) {
+	return {
+		...request,
+		requested: {
+			kind: "custom" as const,
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "self-managed" as const,
+			manifest,
+		},
+	};
+}
+
+describe("production deployment admissions", () => {
+	it("rejects a manifest over the resource cap with its reason before any registry call", async () => {
+		const f = fixture("self-managed");
+		// 默认档位每个工作负载 100m；web + worker 恰为 200m，迁移 Job 使总量超限。
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			imageRepository: "registry.example.test/agents/codex",
+			multiServiceResourceCap: {
+				cpuMillicores: 250,
+				memoryMiB: 4_096,
+				storageGiB: 20,
 			},
 		});
+		const result = await admissions.imageAdmission.admitImage(
+			multiServiceRequest(twoServiceManifest(f.imageDigest)),
+		);
+		expect(result).toEqual({
+			schemaVersion: 1,
+			agentId: request.agentId,
+			requestId: request.requestId,
+			status: "rejected",
+			reason: "multi_service_resource_cap_exceeded",
+		});
+		expect(f.fetch).not.toHaveBeenCalled();
+		expect(f.authorize).not.toHaveBeenCalled();
+	});
+
+	it("rejects an unknown resource profile without a cap reason or registry call", async () => {
+		const f = fixture("self-managed");
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			imageRepository: "registry.example.test/agents/codex",
+			multiServiceResourceProfiles: [smallMultiServiceProfile],
+		});
+		const result = await admissions.imageAdmission.admitImage(
+			multiServiceRequest(
+				twoServiceManifest(f.imageDigest, {
+					"service/worker": {
+						[MultiServiceResourceProfileAnnotationV1]: "missing",
+					},
+				}),
+			),
+		);
+		expect(result).toEqual({
+			schemaVersion: 1,
+			agentId: request.agentId,
+			requestId: request.requestId,
+			status: "rejected",
+		});
+		expect(f.fetch).not.toHaveBeenCalled();
+		expect(f.authorize).not.toHaveBeenCalled();
+	});
+
+	it("admits Service and workload profiles configured by the deployment", async () => {
+		const f = fixture("self-managed");
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			imageRepository: "registry.example.test/agents/codex",
+			multiServiceResourceProfiles: [smallMultiServiceProfile],
+		});
+		const result = await admissions.imageAdmission.admitImage(
+			multiServiceRequest(
+				twoServiceManifest(f.imageDigest, {
+					"service/web": { [MultiServiceResourceProfileAnnotationV1]: "small" },
+					migrate: { [MultiServiceResourceProfileAnnotationV1]: "small" },
+				}),
+			),
+		);
+		expect(result).toMatchObject({
+			status: "admitted",
+			source: { kind: "custom", interactionMode: "self-managed" },
+		});
+		expect(f.fetch).toHaveBeenCalled();
+	});
+
+	it("admits a two-service digest-only manifest before Worker side effects", async () => {
+		const f = fixture("self-managed");
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			imageRepository: "registry.example.test/agents/codex",
+		});
+		const manifest = twoServiceManifest(f.imageDigest);
+		const result = await admissions.imageAdmission.admitImage(
+			multiServiceRequest(manifest),
+		);
 		expect(result).toMatchObject({
 			status: "admitted",
 			source: { kind: "custom", interactionMode: "self-managed" },
@@ -683,6 +807,75 @@ describe("production deployment admissions", () => {
 		);
 		expect(deploymentDiagnosticV1(caught)).toBeUndefined();
 	});
+	it.each([
+		[
+			"reserved default",
+			[
+				{
+					profileId: "default",
+					displayName: "Override",
+					estimatedResources: {
+						cpuMillicores: 100,
+						memoryMiB: 128,
+						storageGiB: 1,
+					},
+					resources: {
+						requests: { cpu: "25m", memory: "32Mi" },
+						limits: { cpu: "100m", memory: "128Mi" },
+					},
+				},
+			],
+		],
+		[
+			"duplicate custom IDs",
+			[
+				{
+					profileId: "small",
+					displayName: "Small",
+					estimatedResources: {
+						cpuMillicores: 100,
+						memoryMiB: 128,
+						storageGiB: 1,
+					},
+					resources: {
+						requests: { cpu: "25m", memory: "32Mi" },
+						limits: { cpu: "100m", memory: "128Mi" },
+					},
+				},
+				{
+					profileId: "small",
+					displayName: "Small again",
+					estimatedResources: {
+						cpuMillicores: 100,
+						memoryMiB: 128,
+						storageGiB: 1,
+					},
+					resources: {
+						requests: { cpu: "25m", memory: "32Mi" },
+						limits: { cpu: "100m", memory: "128Mi" },
+					},
+				},
+			],
+		],
+	] as const)(
+		"rejects %s in both admission and browser projection",
+		(_label, profiles) => {
+			const { input } = fixture();
+			expect(() =>
+				createDeploymentAdmissionsV1({
+					...input,
+					multiServiceResourceProfiles: profiles,
+				}),
+			).toThrow("PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID");
+			expect(() =>
+				createDeploymentConfigurationProjectionV2({
+					templates: input.templates,
+					modelCatalog: input.modelCatalog,
+					multiServiceResourceProfiles: profiles,
+				}),
+			).toThrow("PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID");
+		},
+	);
 	it("binds actual OCI content and policy evidence to the trusted actor and template", async () => {
 		const { input, authorize, imageDigest, fetch, templateRevision } =
 			fixture();

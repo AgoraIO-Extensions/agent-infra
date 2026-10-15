@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { parseAuthorizationDecision } from "./agent-configuration-admission.ts";
+import {
+	parseAuthorizationDecision,
+	parseImageDecision,
+	parseModelDecision,
+} from "./agent-configuration-admission.ts";
 import {
 	parseAvailability,
 	parseOwnerIds,
@@ -9,6 +13,63 @@ import {
 const authorityUser = (index: number) => ({
 	userId: `directory-user-${index}`,
 	accountStatus: "active" as const,
+});
+
+const rejection = {
+	schemaVersion: 1,
+	status: "rejected",
+	agentId: "agent-01",
+	requestId: "request-01",
+} as const;
+
+describe("agent configuration admission rejection reasons", () => {
+	it("accepts the resource cap reason only from the image port", () => {
+		expect(
+			parseImageDecision({
+				...rejection,
+				reason: "multi_service_resource_cap_exceeded",
+			}),
+		).toEqual({
+			...rejection,
+			reason: "multi_service_resource_cap_exceeded",
+		});
+		expect(parseImageDecision(rejection)).toEqual(rejection);
+	});
+
+	it.each(["codex_model_profile_unsupported", "unknown_profile", "", null])(
+		"treats image rejection reason %j as an invalid dependency value",
+		(reason) => {
+			expect(() => parseImageDecision({ ...rejection, reason })).toThrowError(
+				expect.objectContaining({ code: "dependency_unavailable" }),
+			);
+		},
+	);
+
+	it("rejects an image admission that carries a reason", () => {
+		expect(() =>
+			parseImageDecision({
+				...rejection,
+				status: "admitted",
+				reason: "multi_service_resource_cap_exceeded",
+				source: {},
+			}),
+		).toThrowError(expect.objectContaining({ code: "dependency_unavailable" }));
+	});
+
+	it("keeps the model port limited to its own rejection reason", () => {
+		expect(
+			parseModelDecision({
+				...rejection,
+				reason: "codex_model_profile_unsupported",
+			}),
+		).toEqual({ ...rejection, reason: "codex_model_profile_unsupported" });
+		expect(() =>
+			parseModelDecision({
+				...rejection,
+				reason: "multi_service_resource_cap_exceeded",
+			}),
+		).toThrowError(expect.objectContaining({ code: "dependency_unavailable" }));
+	});
 });
 
 describe("agent configuration authority admission", () => {

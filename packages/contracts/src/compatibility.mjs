@@ -1646,6 +1646,32 @@ function isDeploymentConfigurationV2OpenApiAddition(previous, current) {
 	);
 }
 
+// #2396 adds deployment-owned multi-service profile summaries and caps.
+function isMultiServiceResourceProfileOpenApiAddition(previous, current) {
+	const normalized = structuredClone(current);
+	let changed = false;
+	const schemas = normalized.components?.schemas ?? {};
+	for (const schema of Object.values(schemas)) {
+		if (schema?.properties?.services !== undefined) {
+			delete schema.properties.services;
+			changed = true;
+		}
+		if (schema?.properties?.multiServiceResourceCap !== undefined) {
+			delete schema.properties.multiServiceResourceCap;
+			delete schema.properties.multiServiceResourceDefaultProfileRef;
+			delete schema.properties.multiServiceResourceProfiles;
+			delete schema.properties.multiServiceResourceProfilesSource;
+			changed = true;
+		}
+	}
+	return (
+		changed &&
+		(sameValue(previous, normalized) ||
+			isAgentLifecycleV2OpenApiAddition(previous, normalized) ||
+			isDeploymentConfigurationV2OpenApiAddition(previous, normalized))
+	);
+}
+
 // #1765 adds the reviewed V4 Worker/File Authority request schema without
 // changing any previously published file path or schema.
 function isRuntimeFileExchangeOpenApiAddition(previous, current) {
@@ -4017,6 +4043,31 @@ function stripMultiServiceSourceOpenApiBranches(value) {
 	return normalized;
 }
 
+// #2396 在公共终止错误码末尾追加 MULTI_SERVICE_RESOURCE_CAP_EXCEEDED。只有基线完全
+// 没有该错误码时才从当前契约中剔除这一追加项；基线已有时照常比较，删除仍会被检测到。
+const multiServiceResourceCapErrorCode = "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED";
+function normalizeMultiServiceResourceCapErrorCodeAddition(previous, current) {
+	if (JSON.stringify(previous).includes(multiServiceResourceCapErrorCode))
+		return current;
+	const normalized = structuredClone(current);
+	const visit = (value) => {
+		if (!value || typeof value !== "object") return;
+		if (Array.isArray(value)) {
+			for (const child of value) visit(child);
+			return;
+		}
+		if (
+			Array.isArray(value.enum) &&
+			value.enum.at(-1) === multiServiceResourceCapErrorCode &&
+			value.enum.at(-2) === "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+		)
+			value.enum = value.enum.slice(0, -1);
+		for (const child of Object.values(value)) visit(child);
+	};
+	visit(normalized);
+	return normalized;
+}
+
 function findBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
 	let current = currentValue;
@@ -4049,6 +4100,10 @@ function findBreakingChanges(previousValue, currentValue) {
 		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
 		previous = stripMultiServiceSourceOpenApiBranches(previous);
 		current = stripMultiServiceSourceOpenApiBranches(current);
+		current = normalizeMultiServiceResourceCapErrorCodeAddition(
+			previous,
+			current,
+		);
 		if (!hasSelectedBrowserHandoffOpenApiOption(previous)) {
 			const browserNormalized = stripBrowserHandoffOpenApiAdditions(current);
 			if (previous.components?.schemas?.BrowserHandoffEventV2 === undefined)
@@ -4092,6 +4147,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isOwnApplicationDisableV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
+			!isMultiServiceResourceProfileOpenApiAddition(previous, current) &&
 			!isTemplateReadinessV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
 			!isAdministratorAgentReadV2OpenApiAddition(previous, current) &&

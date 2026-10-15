@@ -50,6 +50,99 @@ const management = {
 	failureCode: null,
 };
 
+/** 以持久化的多服务清单调用展示函数；单 Agent 档位刻意设为 profile_01 以区分多服务默认档位。 */
+function presentMultiServiceManifest(manifest: string) {
+	const request = new Request("https://platform.test/agents/agent_01");
+	return createDeploymentPresentation({
+		identityScope: {
+			currentRequest: () => request,
+			currentIdentity: async () => identity,
+		} as never,
+		configurationQuery: {
+			readRuntimePresentation: vi.fn().mockResolvedValue({
+				outcome: "found",
+				sourceReference: "sha256:multi-service",
+				capabilities: {},
+				interactionUrl: null,
+			}),
+		},
+		resourceProfile: {
+			profileId: "profile_01",
+			displayName: "Small",
+			estimatedResources: {
+				cpuMillicores: 100,
+				memoryMiB: 128,
+				storageGiB: 1,
+			},
+		},
+		imageRepository: "registry.example.test/agents",
+	})({
+		agentId: "agent_01",
+		configuration: {
+			...configuration,
+			source: {
+				kind: "custom",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+				connectionEnabled: false,
+				manifest,
+			},
+		},
+		management,
+	});
+}
+
+/** web（入口）与 worker 两个服务；按名称在工作负载或 Service 上声明档位。 */
+function twoServiceManifestJson(
+	profiles: {
+		readonly workload?: Readonly<Record<string, string>>;
+		readonly service?: Readonly<Record<string, string>>;
+	} = {},
+) {
+	const annotation = (ref: string | undefined) =>
+		ref === undefined ? {} : { "agent-infra.agora.io/resource-profile": ref };
+	return JSON.stringify({
+		schemaVersion: 1,
+		entryServiceName: "web",
+		resources: ["web", "worker"].flatMap((name) => [
+			{
+				apiVersion: "apps/v1",
+				kind: "Deployment",
+				metadata: {
+					name,
+					annotations: annotation(profiles.workload?.[name]),
+				},
+				spec: {
+					replicas: 1,
+					selector: { matchLabels: { app: name } },
+					template: {
+						metadata: { labels: { app: name } },
+						spec: {
+							containers: [{ name, image: `sha256:${"a".repeat(64)}` }],
+						},
+					},
+				},
+			},
+			{
+				apiVersion: "v1",
+				kind: "Service",
+				metadata: {
+					name,
+					annotations: {
+						...(name === "web" ? { "agent-infra.agora.io/entry": "true" } : {}),
+						...annotation(profiles.service?.[name]),
+					},
+				},
+				spec: {
+					type: "ClusterIP",
+					selector: { app: name },
+					ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+				},
+			},
+		]),
+	});
+}
+
 describe("deployment presentation platform identity route", () => {
 	it("keeps Runtime model selection hidden until the API reader is wired", async () => {
 		const request = new Request("https://platform.test/agents/agent_01");
@@ -168,6 +261,65 @@ describe("deployment presentation platform identity route", () => {
 			identityResponsibility: "self-managed",
 		});
 		expect(present.source).not.toHaveProperty("imageReference");
+	});
+
+	it("projects each Service profile from a persisted YAML manifest", async () => {
+		const present = await presentMultiServiceManifest(`schemaVersion: 1
+entryServiceName: api
+resources:
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: api
+      annotations:
+        agent-infra.agora.io/entry: "true"
+        agent-infra.agora.io/resource-profile: small
+    spec:
+      type: ClusterIP
+      selector: {app: api}
+      ports: [{name: http, port: 8080, targetPort: 8080}]
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata: {name: api}
+    spec:
+      replicas: 1
+      selector: {matchLabels: {app: api}}
+      template:
+        metadata: {labels: {app: api}}
+        spec:
+          containers:
+            - name: api
+              image: sha256:${"a".repeat(64)}
+`);
+		expect(present.source).toMatchObject({
+			services: [{ name: "api", resourceProfileRef: "small", entry: true }],
+		});
+	});
+
+	it("projects the multi-service default profile, not the single-Agent profile, when no annotation exists", async () => {
+		const present = await presentMultiServiceManifest(twoServiceManifestJson());
+		// 单 Agent 档位是 profile_01；多服务未声明时必须展示 Worker 实际注入的 default。
+		expect(present.source).toMatchObject({
+			services: [
+				{ name: "web", resourceProfileRef: "default", entry: true },
+				{ name: "worker", resourceProfileRef: "default", entry: false },
+			],
+		});
+	});
+
+	it("projects a workload annotation ahead of its Service annotation", async () => {
+		const present = await presentMultiServiceManifest(
+			twoServiceManifestJson({
+				workload: { web: "large" },
+				service: { web: "small", worker: "small" },
+			}),
+		);
+		expect(present.source).toMatchObject({
+			services: [
+				{ name: "web", resourceProfileRef: "large", entry: true },
+				{ name: "worker", resourceProfileRef: "small", entry: false },
+			],
+		});
 	});
 
 	it("uses only a resolver-provided canonical HTTPS origin", async () => {
