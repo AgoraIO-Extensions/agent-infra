@@ -60,7 +60,10 @@ export const modelSelection = undefined;
 // reader object only after its API/Worker/Host proof and Session routing are configured.
 export const nativeMetadata = undefined;
 // Production shortcut: export only the fixed Worker ingress. Platform API
-// assembles the Store-backed exact Execution/Host scope resolver itself.
+// assembles the Store-backed exact Execution/Host scope resolver and the
+// request-local current checker itself. The API current route reuses the
+// Worker service token unless an explicit nativeMetadataCurrent override is
+// supplied by a reviewed deployment seam.
 export const nativeMetadataWorker = undefined;
 // Optional controlled override for tests or a reviewed deployment seam.
 export const nativeMetadataResolveRequest = undefined;

@@ -83,6 +83,10 @@ import {
 } from "./projection.js";
 import { createWorkerRuntimeModelDirectoryTransportV1 } from "./runtime-model-directory-transport.js";
 import { createRuntimeModelSelectionReaderFromStoreV1 } from "./runtime-model-selection-reader.js";
+import {
+	createRuntimeNativeMetadataCurrentCheckerV1,
+	createRuntimeNativeMetadataRequestRegistryV1,
+} from "./runtime-native-metadata-current.js";
 import { createRuntimeNativeMetadataWorkerReaderV1 } from "./runtime-native-metadata-reader.js";
 import { createRuntimeNativeMetadataScopeResolverV1 } from "./runtime-native-metadata-scope-resolver.js";
 import { createPlatformWorkerNativeMetadataGatewayClientV1 } from "./runtime-native-metadata-worker-client.js";
@@ -437,6 +441,10 @@ export function assemblePlatformApi(
 		input.nativeMetadataWorker !== undefined
 	)
 		throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
+	const nativeMetadataRequestRegistry =
+		input.nativeMetadataWorker && input.nativeMetadataCurrent === undefined
+			? createRuntimeNativeMetadataRequestRegistryV1()
+			: undefined;
 	const assembledNativeMetadata =
 		input.nativeMetadata ??
 		(input.nativeMetadataWorker
@@ -448,6 +456,9 @@ export function assemblePlatformApi(
 						gateway: createPlatformWorkerNativeMetadataGatewayClientV1(
 							input.nativeMetadataWorker,
 						),
+						...(nativeMetadataRequestRegistry
+							? { requestRegistry: nativeMetadataRequestRegistry }
+							: {}),
 					}),
 				}
 			: undefined);
@@ -668,6 +679,18 @@ export function assemblePlatformApi(
 			};
 		},
 	};
+	const assembledNativeMetadataCurrent =
+		input.nativeMetadataCurrent ??
+		(nativeMetadataRequestRegistry && input.nativeMetadataWorker
+			? {
+					serviceToken: input.nativeMetadataWorker.serviceToken,
+					...createRuntimeNativeMetadataCurrentCheckerV1({
+						registry: nativeMetadataRequestRegistry,
+						authorize: (identity, request) =>
+							conversationAuthorization.authorize(identity, request),
+					}),
+				}
+			: undefined);
 	const browserCommandAdmission =
 		input.browserCommands ??
 		createPostgresBrowserCommandAdmissionV1({
@@ -921,8 +944,8 @@ export function assemblePlatformApi(
 					},
 				}
 			: {}),
-		...(input.nativeMetadataCurrent
-			? { nativeMetadataCurrent: input.nativeMetadataCurrent }
+		...(assembledNativeMetadataCurrent
+			? { nativeMetadataCurrent: assembledNativeMetadataCurrent }
 			: {}),
 		...(input.nativeCapabilityInvocation
 			? { nativeCapabilityInvocation: input.nativeCapabilityInvocation }
@@ -1044,6 +1067,7 @@ export function assemblePlatformApi(
 		readResourceSnapshot: (signal) =>
 			conversationQuery.readResourceSnapshot(signal),
 		async close() {
+			nativeMetadataRequestRegistry?.clear();
 			let failed = false;
 			for (const adapter of adapters.toReversed()) {
 				try {

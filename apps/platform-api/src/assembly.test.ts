@@ -173,6 +173,10 @@ describe("Platform API production assembly", () => {
 			modelSelection,
 		);
 		expect(assembly.dependencies.nativeMetadata?.reader).toBeDefined();
+		expect(assembly.dependencies.nativeMetadataCurrent).toMatchObject({
+			serviceToken: "worker-service-token",
+		});
+		expect(assembly.dependencies.nativeMetadataCurrent?.check).toBeDefined();
 		return assembly.close();
 	});
 
