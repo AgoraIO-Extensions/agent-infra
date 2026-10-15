@@ -971,7 +971,9 @@ export class PostgresConversationDispatchStoreV1
 		)
 			throw new TypeError("Conversation dispatch release is invalid");
 		return transactionResult(this.#client, async (transaction) => {
-			const state = await ownedState(transaction, input.claim);
+			// 请求确实没有发出，stop 在认领之后才被受理不影响这个事实：放开 stop 比较，
+			// 否则释放失败，条目一直持有租约，stop 工作项只能等它到期（#2534）。
+			const state = await ownedState(transaction, input.claim, true);
 			if (
 				state?.execution.status !== "unknown" ||
 				state.execution.last_runtime_cursor !== null ||

@@ -2633,6 +2633,44 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("releases a provably unsent Turn even when a Stop was accepted after the claim (#2534)", async () => {
+		const work = await seed();
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			expect(decision.claim.stopPending).toBe(false);
+			await expect(
+				store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe(true);
+			// 请求还没发出去时 stop 被受理：认领的 stop 视图过期，但「没有发送」这个事实不变。
+			await seedStop(work);
+			await expect(
+				store.releaseUnsentDispatch({
+					claim: decision.claim,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_ROUTE_STALE",
+				}),
+			).resolves.toBe(true);
+			expect(await dispatchState(work)).toMatchObject({
+				status: "retry_scheduled",
+				execution_status: "submitted",
+			});
+			// 下一次认领看到 stop，直接终结未投递的 Turn，不用等租约到期。
+			const next = await claim(work.itemId, "worker-2");
+			try {
+				expect(next.decision).toEqual({ outcome: "succeeded" });
+				expect((await dispatchState(work))?.execution_status).toBe("cancelled");
+			} finally {
+				await next.store.close();
+			}
+		} finally {
+			await store.close();
+		}
+	});
+
 	it.each(["not-prepared", "fence-moved", "foreign-lease"] as const)(
 		"refuses to release an unsent Turn when the claim is no longer current (%s) (#1522)",
 		async (mode) => {
