@@ -39,6 +39,7 @@ export const RuntimeControlCommandV2Schema = z.enum([
 	"session.status",
 	"generation.cancel",
 	"browser.handoff",
+	"browser.side_effect",
 	"events.persist",
 	"events.ack",
 ]);
@@ -49,6 +50,7 @@ export const RuntimeControlReasonV2Schema = z.enum([
 	"recovery",
 	"generation_isolation",
 	"browser_handoff",
+	"browser_side_effect",
 ]);
 
 const commonClaims = {

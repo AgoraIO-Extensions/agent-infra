@@ -816,4 +816,110 @@ describe("Browser action outcome readback", () => {
 			}),
 		).toEqual(failed);
 	});
+
+	it("confirms a pending side effect only with the original journal binding", async () => {
+		const page = new FakePage();
+		const controller = createBrowserObserveControllerV1({
+			context: fakeContext(page) as never,
+			capability: {
+				...capability,
+				operations: ["navigate", "observe", "interact", "side_effects"],
+			},
+		});
+		const reference = await controller.navigate("https://example.test/app");
+		const target = (await controller.observe(reference)).elements[0];
+		if (!target) throw new Error("expected element");
+		const binding = executionBinding(reference.pageRevision);
+		const authorization = {
+			subjectId: "subject-1",
+			agentId: binding.agentId,
+			conversationId: binding.conversationId,
+			executionId: binding.executionId,
+		};
+		const pending = await controller.executeAction({
+			actionId: "confirmed-action",
+			idempotencyKey: "confirmed-key",
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			kind: "click",
+			page: reference,
+			target,
+			sideEffect: true,
+			executionBinding: binding,
+			authorization,
+		});
+		expect(pending).toMatchObject({
+			status: "rejected",
+			reasonCode: "BROWSER_SIDE_EFFECT_CONFIRMATION_REQUIRED",
+		});
+		const confirmation = pending.confirmation;
+		if (!confirmation) throw new Error("expected confirmation");
+		await expect(
+			controller.confirmSideEffect({
+				command: "confirm",
+				confirmationId: confirmation.confirmationId,
+				actionId: confirmation.actionId,
+				operationRef: "operation-1",
+				attemptRef: "attempt-1",
+				subjectId: "subject-1",
+				authorization,
+				executionBinding: {
+					...binding,
+					pageRevision: binding.pageRevision + 1,
+				},
+			}),
+		).rejects.toThrow("BROWSER_SIDE_EFFECT_CONFIRMATION_INVALID");
+		const confirmInput = {
+			command: "confirm" as const,
+			confirmationId: confirmation.confirmationId,
+			actionId: confirmation.actionId,
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			subjectId: "subject-1",
+			authorization,
+			executionBinding: binding,
+		};
+		const firstConfirmation = controller.confirmSideEffect(confirmInput);
+		await expect(controller.confirmSideEffect(confirmInput)).rejects.toThrow(
+			"BROWSER_SIDE_EFFECT_CONFIRMATION_INVALID",
+		);
+		await expect(firstConfirmation).resolves.toMatchObject({
+			status: "completed",
+		});
+		expect(page.pageLocator.click).toHaveBeenCalledOnce();
+		for (const command of ["reject", "cancel"] as const) {
+			const actionId = `${command}-action`;
+			const operationRef = `${command}-operation`;
+			const attemptRef = `${command}-attempt`;
+			const rejected = await controller.executeAction({
+				actionId,
+				idempotencyKey: `${command}-key`,
+				operationRef,
+				attemptRef,
+				kind: "click",
+				page: reference,
+				target,
+				sideEffect: true,
+				executionBinding: binding,
+				authorization,
+			});
+			const pendingConfirmation = rejected.confirmation;
+			if (!pendingConfirmation) throw new Error("expected confirmation");
+			await expect(
+				controller.confirmSideEffect({
+					command,
+					confirmationId: pendingConfirmation.confirmationId,
+					actionId,
+					operationRef,
+					attemptRef,
+					subjectId: "subject-1",
+					authorization,
+					executionBinding: binding,
+				}),
+			).resolves.toMatchObject({ status: "rejected", actionId });
+			expect(
+				controller.readAction({ actionId, executionBinding: binding }),
+			).toMatchObject({ status: "rejected", actionId });
+		}
+	});
 });

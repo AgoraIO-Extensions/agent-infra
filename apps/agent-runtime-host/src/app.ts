@@ -11,6 +11,7 @@ import {
 	type ExecutionGrantV1,
 	RuntimeAuthorizationRenewRequestV3Schema,
 	RuntimeBrowserHandoffRequestV3Schema,
+	RuntimeBrowserSideEffectConfirmationRequestV3Schema,
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeEventAckRequestV3Schema,
 	RuntimeEventAckRequestV4Schema,
@@ -587,6 +588,12 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		RuntimeBrowserHandoffRequestV3Schema,
 		(request, verification, signal) =>
 			options.host.browserHandoff(request, verification, signal),
+	);
+	v3Route(
+		"browser/side-effect",
+		RuntimeBrowserSideEffectConfirmationRequestV3Schema,
+		(request, verification, signal) =>
+			options.host.browserSideEffect(request, verification, signal),
 	);
 	v3Route(
 		"authorizations/renew",

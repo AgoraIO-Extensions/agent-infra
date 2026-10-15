@@ -9,6 +9,8 @@ import type {
 import type { BrowserSessionControllerV1 } from "./browser-session.js";
 import type {
 	RuntimeBrowserExecutionContextV1,
+	RuntimeBrowserSideEffectConfirmationRequestV1,
+	RuntimeBrowserSideEffectConfirmationResultV1,
 	RuntimeBrowserToolExecutionRequestV1,
 	RuntimeBrowserToolExecutionResultV1,
 } from "./driver.js";
@@ -310,6 +312,63 @@ export function createBrowserSessionDriverContextV1(input: {
 			} finally {
 				signal.removeEventListener("abort", cancel);
 			}
+		},
+		executeSideEffect: async (
+			request: RuntimeBrowserSideEffectConfirmationRequestV1,
+			signal,
+		): Promise<RuntimeBrowserSideEffectConfirmationResultV1> => {
+			if (!input.session.confirmSideEffect || !input.subjectId)
+				throw new Error("BROWSER_SIDE_EFFECT_UNAVAILABLE");
+			if (
+				request.binding.agentId !== input.binding.agentId ||
+				request.binding.conversationId !== input.binding.conversationId ||
+				request.binding.capabilityVersion !==
+					input.capability.capabilityVersion ||
+				request.binding.sessionGeneration !== input.binding.sessionGeneration ||
+				request.binding.resourceFence !== input.binding.resourceFence ||
+				request.binding.workloadRevision !== input.binding.workloadRevision ||
+				request.binding.imageDigest !== input.binding.imageDigest
+			)
+				throw new Error("BROWSER_SIDE_EFFECT_BINDING_MISMATCH");
+			const record = await input.session.confirmSideEffect({
+				command: request.command,
+				confirmationId: request.binding.confirmationId,
+				actionId: request.binding.actionId,
+				operationRef: request.binding.operationRef,
+				attemptRef: request.binding.attemptRef,
+				subjectId: input.subjectId,
+				authorization: {
+					subjectId: input.subjectId,
+					agentId: request.binding.agentId,
+					conversationId: request.binding.conversationId,
+					executionId: request.binding.executionId,
+				},
+				executionBinding: {
+					agentId: request.binding.agentId,
+					conversationId: request.binding.conversationId,
+					executionId: request.binding.executionId,
+					capabilityVersion: request.binding.capabilityVersion,
+					pageRevision: request.binding.pageRevision,
+					sessionGeneration: request.binding.sessionGeneration,
+					resourceFence: request.binding.resourceFence,
+					workloadRevision: request.binding.workloadRevision,
+					imageDigest: request.binding.imageDigest,
+				},
+				signal,
+			});
+			signal.throwIfAborted();
+			return {
+				actionId: record.actionId,
+				operationRef: request.binding.operationRef,
+				attemptRef: request.binding.attemptRef,
+				phase:
+					record.status === "completed"
+						? "completed"
+						: record.status === "failed" || record.status === "rejected"
+							? "failed"
+							: "unknown",
+				...(record.reasonCode ? { failureCode: record.reasonCode } : {}),
+			};
 		},
 	};
 }

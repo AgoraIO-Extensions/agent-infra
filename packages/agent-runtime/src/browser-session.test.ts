@@ -183,6 +183,45 @@ it("composes one Session facade over Context lifecycle and observe controller", 
 	await session.close();
 });
 
+it("rejects a foreign side-effect confirmation before starting BrowserContext", async () => {
+	const fake = fakeBrowser();
+	const launch = vi.spyOn(fake.browserType, "launchPersistentContext");
+	const manager = createBrowserContextManagerV1({
+		sandboxRoot: "/tmp/browser-session-confirmation-test",
+		browserType: fake.browserType,
+	});
+	const session = createBrowserSessionControllerV1({
+		manager,
+		binding,
+		capability,
+	});
+	const confirmSideEffect = session.confirmSideEffect;
+	if (!confirmSideEffect) throw new Error("confirmation seam unavailable");
+	await expect(
+		confirmSideEffect({
+			command: "confirm",
+			confirmationId: "foreign-confirmation",
+			actionId: "foreign-action",
+			operationRef: "foreign-operation",
+			attemptRef: "foreign-attempt",
+			subjectId: "subject-1",
+			authorization: {
+				subjectId: "subject-1",
+				agentId: binding.agentId,
+				conversationId: binding.conversationId,
+				executionId: "execution-1",
+			},
+			executionBinding: {
+				...binding,
+				executionId: "execution-1",
+				capabilityVersion: 1,
+				pageRevision: 1,
+			},
+		}),
+	).rejects.toThrow("BROWSER_SIDE_EFFECT_CONFIRMATION_INVALID");
+	expect(launch).not.toHaveBeenCalled();
+});
+
 it("creates fresh page references after a Context crash rather than using the old controller", async () => {
 	const first = fakeBrowser();
 	const second = fakeBrowser();

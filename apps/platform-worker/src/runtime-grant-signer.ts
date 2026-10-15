@@ -86,7 +86,8 @@ export type WorkerRuntimeAuthorizationV2 =
 				| "authorization_revoked"
 				| "recovery"
 				| "generation_isolation"
-				| "browser_handoff";
+				| "browser_handoff"
+				| "browser_side_effect";
 	  };
 
 type Request = Omit<
