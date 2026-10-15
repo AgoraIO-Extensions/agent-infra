@@ -43,6 +43,7 @@ const requiredOperations = [
 	"submitMessage",
 	"regenerateAnswer",
 	"stopExecution",
+	"commandBrowserHandoffOrSideEffect",
 	"updateConversationModelSelection",
 	"getExecutionDetail",
 	"listPlatformAudit",

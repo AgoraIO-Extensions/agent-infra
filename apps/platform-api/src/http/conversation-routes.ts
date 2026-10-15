@@ -1,5 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import {
+	BrowserCommandAcceptedProjectionV1Schema,
+	BrowserCommandRequestV1Schema,
 	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
@@ -147,6 +149,8 @@ export interface ConversationRoutesDependencies {
 		| "selectModel"
 		| "stop"
 	>;
+	/** Deployment-owned Browser command bridge; the API remains the identity authority. */
+	readonly browserCommands?: ConversationBrowserCommandPortV1;
 	readonly query: ConversationQuery;
 	/** Idle reauthorization interval, 1–30,000 ms; default 1,000 ms. */
 	readonly streamPollIntervalMs?: number;
@@ -166,6 +170,37 @@ export interface ConversationRoutesDependencies {
 	 */
 	readonly streamTransientFailureLimit?: number;
 	readonly sseResources?: SseResourceTracker;
+}
+
+export type ConversationBrowserCommandRequestV1 = ReturnType<
+	typeof BrowserCommandRequestV1Schema.parse
+>;
+
+export type ConversationBrowserCommandDecisionV1 =
+	| {
+			readonly outcome: "accepted" | "replayed" | "unknown";
+			readonly conversationId: string;
+			readonly executionId: string;
+			readonly handoffId?: string;
+			readonly confirmationId?: string;
+	  }
+	| {
+			readonly outcome: "denied" | "conflict" | "stale" | "unavailable";
+			readonly conversationId: string;
+			readonly executionId?: string;
+	  };
+
+export interface ConversationBrowserCommandPortV1 {
+	invoke(input: {
+		identity: IdentityContext;
+		conversationId: string;
+		command: ConversationBrowserCommandRequestV1;
+		idempotencyKey: string;
+		requestId: string;
+		traceId: string;
+		traceParent?: string;
+		signal: AbortSignal;
+	}): Promise<ConversationBrowserCommandDecisionV1>;
 }
 
 type ConversationProjection = ReturnType<
@@ -1320,6 +1355,78 @@ export function registerConversationRoutes(
 				202,
 			);
 		}),
+	);
+
+	app.post(
+		"/api/v1/conversations/:conversationId/browser/commands",
+		(context) =>
+			boundary(context, async (metadata) => {
+				const identity = await resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				);
+				if (!dependencies.browserCommands)
+					return fail("RUNTIME_UNAVAILABLE", metadata.traceId);
+				await authorize(
+					dependencies,
+					identity,
+					{
+						schemaVersion: 1,
+						operation: "conversation.read",
+						conversationId: context.req.param("conversationId"),
+					},
+					metadata.traceId,
+				);
+				const { value: command } = await parseJson(
+					context.req.raw,
+					BrowserCommandRequestV1Schema,
+					metadata.traceId,
+				);
+				const decision = await dependencies.browserCommands.invoke({
+					identity,
+					conversationId: context.req.param("conversationId"),
+					command,
+					idempotencyKey: parseIdempotencyKey(
+						context.req.raw,
+						metadata.traceId,
+					),
+					requestId: metadata.requestId,
+					traceId: metadata.traceId,
+					...(metadata.traceParent === undefined
+						? {}
+						: { traceParent: metadata.traceParent }),
+					signal: context.req.raw.signal,
+				});
+				if (decision.outcome === "denied")
+					return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
+				if (decision.outcome === "conflict" || decision.outcome === "stale")
+					return fail("CONFLICT", metadata.traceId);
+				if (decision.outcome === "unavailable")
+					return fail("RUNTIME_UNAVAILABLE", metadata.traceId);
+				if (
+					decision.outcome !== "accepted" &&
+					decision.outcome !== "replayed" &&
+					decision.outcome !== "unknown"
+				)
+					return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+				return context.json(
+					BrowserCommandAcceptedProjectionV1Schema.parse({
+						schemaVersion: 1,
+						outcome: decision.outcome,
+						command: command.command,
+						conversationId: decision.conversationId,
+						executionId: decision.executionId,
+						...(decision.handoffId === undefined
+							? {}
+							: { handoffId: decision.handoffId }),
+						...(decision.confirmationId === undefined
+							? {}
+							: { confirmationId: decision.confirmationId }),
+					}),
+					202,
+				);
+			}),
 	);
 
 	for (const version of [1, 2] as const)
