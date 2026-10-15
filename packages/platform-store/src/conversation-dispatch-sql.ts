@@ -382,6 +382,8 @@ export function bindingMatches(
 			? null
 			: safeCounter(execution.model_configuration_revision, 1);
 	const selectedOperation = operation(outbox.operation);
+	const browserHandoff =
+		selectedOperation === "conversation.browser.handoff.v1";
 	const executionSelectionValid =
 		executionModelRevision !== undefined &&
 		new Set([
@@ -405,6 +407,13 @@ export function bindingMatches(
 		conversation.actor_id === execution.actor_id &&
 		conversation.principal_type === execution.principal_type &&
 		conversation.channel_id === execution.channel_id &&
+		(!browserHandoff ||
+			(payload.agentId === execution.agent_id &&
+				payload.actorId === execution.actor_id &&
+				payload.channelId === execution.channel_id &&
+				payload.turnId === execution.turn_id &&
+				payload.deliveryFence === safeCounter(execution.delivery_fence) &&
+				payload.browserHandoff !== undefined)) &&
 		(waitingCancellation ||
 			payload.metadataRecovery !== undefined ||
 			conversation.authorization_revision ===
@@ -417,7 +426,8 @@ export function bindingMatches(
 		validText(outbox.trace_id) &&
 		validText(outbox.request_id) &&
 		executionSelectionValid &&
-		(selectedOperation === "conversation.turn.stop.v1" ||
+		(browserHandoff ||
+			selectedOperation === "conversation.turn.stop.v1" ||
 			(payload.modelConfigurationRevision === executionModelRevision &&
 				payload.modelOptionId === execution.model_option_id &&
 				payload.reasoningLevel === execution.reasoning_level))
@@ -450,6 +460,7 @@ function claimMatchesState(
 	)
 		return false;
 	const outboxFence = safeCounter(state.outbox.delivery_fence, 1);
+	const browserHandoff = claim.operation === "conversation.browser.handoff.v1";
 	const generation = safeCounter(state.conversation.session_generation, 1);
 	const executionGeneration = safeCounter(
 		state.execution.session_generation,
@@ -487,14 +498,17 @@ function claimMatchesState(
 		generation === claim.sessionGeneration &&
 		executionGeneration === claim.sessionGeneration &&
 		executionFence === claim.executionDeliveryFence &&
-		modelConfigurationRevision === claim.modelConfigurationRevision &&
-		state.execution.model_option_id === claim.modelOptionId &&
-		state.execution.reasoning_level === claim.reasoningLevel &&
+		(browserHandoff ||
+			(modelConfigurationRevision === claim.modelConfigurationRevision &&
+				state.execution.model_option_id === claim.modelOptionId &&
+				state.execution.reasoning_level === claim.reasoningLevel)) &&
 		(claim.nativeCapability === undefined ||
 			(claim.nativeCapability.agentId === claim.agentId &&
 				claim.nativeCapability.actorId === claim.actorId &&
 				claim.nativeCapability.channelId === claim.channelId &&
-				claim.nativeCapability.turnId === claim.turnId))
+				claim.nativeCapability.turnId === claim.turnId)) &&
+		(claim.browserHandoff === undefined ||
+			isDeepStrictEqual(claim.browserHandoff, payload.browserHandoff))
 	);
 }
 

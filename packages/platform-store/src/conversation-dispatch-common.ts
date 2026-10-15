@@ -4,6 +4,7 @@ import {
 	RuntimeRelayKeyBindingV1Schema,
 } from "@agent-infra/contracts/runtime";
 import type {
+	BrowserHandoffCommandV1,
 	ConversationDispatchClaimV1,
 	ConversationDispatchExecutionStatusV1,
 	ConversationDispatchOperationV1,
@@ -182,15 +183,23 @@ export interface ConversationPayload {
 	metadataRecovery?: ConversationMetadataRecoveryV1;
 	schemaVersion: 1;
 	conversationId: string;
+	agentId?: string;
+	actorId?: string;
+	channelId?: string;
 	executionId: string;
 	messageId: string | null;
 	turnId: string | null;
 	sessionGeneration: number;
+	deliveryFence?: number;
 	stopRequestId: string | null;
 	modelConfigurationRevision: number | null;
 	modelOptionId: string | null;
 	reasoningLevel: string | null;
 	nativeCapability?: import("@agent-infra/platform-core").ConversationNativeCapabilityBindingV1;
+	browserHandoff?: Extract<
+		BrowserHandoffCommandV1,
+		{ readonly command: "take_over" | "return_to_agent" | "revoke" }
+	>;
 }
 
 export class ConversationDispatchStoreError extends Error {
@@ -220,6 +229,7 @@ export const operations = new Set<ConversationDispatchOperationV1>([
 	"conversation.turn.supplement.v1",
 	"conversation.turn.stop.v1",
 	"conversation.native-capability.invoke.v1",
+	"conversation.browser.handoff.v1",
 ]);
 
 const retryableDatabaseCodes = new Set([

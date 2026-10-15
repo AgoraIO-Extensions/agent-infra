@@ -1,3 +1,4 @@
+import type { BrowserHandoffCommandV1 } from "./browser-handoff-admission.js";
 import type { ConversationExecutionSourceV1 } from "./conversation-execution-types.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
@@ -8,7 +9,8 @@ export type ConversationDispatchOperationV1 =
 	| "conversation.turn.regenerate.v1"
 	| "conversation.turn.supplement.v1"
 	| "conversation.turn.stop.v1"
-	| "conversation.native-capability.invoke.v1";
+	| "conversation.native-capability.invoke.v1"
+	| "conversation.browser.handoff.v1";
 
 export type ConversationNativeCapabilityBindingV1 = Readonly<{
 	readonly agentId: string;
@@ -166,6 +168,11 @@ export interface ConversationDispatchClaimV1 {
 		readonly attachments: readonly string[];
 	} | null;
 	readonly nativeCapability?: ConversationNativeCapabilityBindingV1;
+	/** Server-admitted Browser handoff command carried by the same outbox lease. */
+	readonly browserHandoff?: Extract<
+		BrowserHandoffCommandV1,
+		{ readonly command: "take_over" | "return_to_agent" | "revoke" }
+	>;
 	readonly executionStatus: ConversationDispatchExecutionStatusV1;
 	readonly stopPending: boolean;
 	/** Set only when the Store durably marked the stop confirmation timeout. */
@@ -182,6 +189,11 @@ export interface ConversationDispatchStateTransitionV1 {
 }
 
 export interface ConversationDispatchStorePortV1 {
+	/** Read-only Browser binding projection from the current Conversation event
+	 * stream while the existing outbox lease is held. */
+	readBrowserHandoffBinding?(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<unknown | null>;
 	beginGenerationIsolation?(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly failureCode: "RUNTIME_SESSION_RECOVERY_FAILED";
@@ -282,6 +294,19 @@ export interface ConversationDispatchAuthorizationPortV1 {
 				readonly authority: ConversationDispatchAuthorityV1;
 		  }
 		| { readonly outcome: "denied" | "unavailable" }
+	>;
+}
+
+export interface ConversationBrowserHandoffExecutorV1 {
+	/** Execute one already claimed handoff. Runtime retries stay outside this port. */
+	invoke(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly authority: ConversationDispatchAuthorityV1;
+		readonly signal?: AbortSignal;
+	}): Promise<
+		| { readonly outcome: "accepted" | "replayed" }
+		| { readonly outcome: "unknown" }
+		| { readonly outcome: "unavailable" }
 	>;
 }
 
