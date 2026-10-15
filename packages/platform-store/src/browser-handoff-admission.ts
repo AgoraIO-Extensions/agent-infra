@@ -201,6 +201,8 @@ export class PostgresBrowserHandoffAdmissionTransactionV1
 				plan: parsePlan(existing.result, request),
 			};
 		}
+		if (conversation.status !== "active")
+			return { outcome: "unavailable", reason: "conversation_unavailable" };
 
 		const executions = await transaction<
 			{
@@ -230,7 +232,10 @@ export class PostgresBrowserHandoffAdmissionTransactionV1
 			execution.agent_id !== conversation.agent_id ||
 			execution.actor_id !== conversation.actor_id ||
 			execution.channel_id !== conversation.channel_id ||
-			execution.authorization_revision !== conversation.authorization_revision
+			execution.authorization_revision !==
+				conversation.authorization_revision ||
+			String(execution.session_generation) !==
+				String(conversation.session_generation)
 		)
 			return { outcome: "unavailable", reason: "conversation_unavailable" };
 		const state: BrowserHandoffAdmissionStateV1 = {
@@ -267,8 +272,6 @@ export class PostgresBrowserHandoffAdmissionTransactionV1
 			if (!raced || raced.request_digest !== request.requestDigest)
 				return { outcome: "conflict", reason: "idempotency_conflict" };
 			if (raced.status !== "completed")
-				return { outcome: "unavailable", reason: "conversation_unavailable" };
-			if (conversation.status === "ready")
 				return { outcome: "unavailable", reason: "conversation_unavailable" };
 			if (!(await isAuthorized()))
 				return { outcome: "denied", reason: "authorization_lost" };
