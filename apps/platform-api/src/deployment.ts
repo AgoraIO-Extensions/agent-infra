@@ -140,6 +140,8 @@ export interface ProductionPlatformApiInputV1
 	};
 	/** Optional deployment-owned authenticated native metadata reader. */
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
+	/** Fixed API → Worker native metadata ingress; Store scope is assembled by Platform API. */
+	readonly nativeMetadataWorker?: PlatformApiAssemblyInput["nativeMetadataWorker"];
 	/** Optional deployment-owned Worker current-confirmation route. */
 	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
 	readonly nativeCapabilityInvocation?: PlatformApiAssemblyInput["nativeCapabilityInvocation"];
@@ -166,9 +168,9 @@ export function createProductionNativeMetadataReaderV1(options: {
 }
 
 /**
- * Assemble the API reader from the fixed Worker ingress.  The resolver is
- * still deployment-owned because it must map the current API request to the
- * persisted Execution scope; the network client never accepts a request URL.
+ * Assemble the API reader from the fixed Worker ingress with an explicit
+ * resolver override. The default production assembly supplies the Store-backed
+ * resolver; this helper remains for controlled deployment/test seams.
  */
 export function createProductionNativeMetadataReaderFromWorkerV1(options: {
 	readonly resolveRequest: Parameters<
@@ -194,6 +196,7 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	readonly modelDirectory?: ProductionPlatformApiInputV1["modelDirectory"];
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
+	readonly nativeMetadataWorker?: PlatformApiAssemblyInput["nativeMetadataWorker"];
 	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
 	readonly nativeCapabilityInvocation?: PlatformApiAssemblyInput["nativeCapabilityInvocation"];
 	readonly browserCommands?: ConversationBrowserCommandPortV1;
@@ -219,6 +222,11 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 		input.apiInput.nativeMetadata !== undefined
 	)
 		throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
+	if (
+		input.nativeMetadataWorker !== undefined &&
+		input.apiInput.nativeMetadataWorker !== undefined
+	)
+		throw new Error("PLATFORM_NATIVE_METADATA_WORKER_DUPLICATE");
 	if (
 		input.nativeMetadataCurrent !== undefined &&
 		input.apiInput.nativeMetadataCurrent !== undefined
@@ -247,6 +255,9 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 			: {}),
 		...(input.nativeMetadata !== undefined
 			? { nativeMetadata: input.nativeMetadata }
+			: {}),
+		...(input.nativeMetadataWorker !== undefined
+			? { nativeMetadataWorker: input.nativeMetadataWorker }
 			: {}),
 		...(input.nativeMetadataCurrent !== undefined
 			? { nativeMetadataCurrent: input.nativeMetadataCurrent }
@@ -518,6 +529,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
 		...(input.modelDirectory ? { modelDirectory: input.modelDirectory } : {}),
 		...(input.nativeMetadata ? { nativeMetadata: input.nativeMetadata } : {}),
+		...(input.nativeMetadataWorker
+			? { nativeMetadataWorker: input.nativeMetadataWorker }
+			: {}),
 		...(input.nativeMetadataCurrent
 			? { nativeMetadataCurrent: input.nativeMetadataCurrent }
 			: {}),
