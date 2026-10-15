@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import {
 	chmod,
 	lstat,
@@ -143,25 +144,72 @@ export function claudeNativeSkillLaunchOptions(
 	// The filesystem-backed directory verifies the immutable Applied files,
 	// read-only mode and manifest digests here. A stale or revoked mount throws;
 	// the caller's existing native-session failure path then remains fail-closed.
-	const nativeSkillPaths = skillDirectory.nativeSkillPaths();
-	const skills = skillDirectory.findSkills();
-	const expectedSkillPaths = new Set(
-		skills.map((entry) => resolve(nativeRoot, entry.targetPath, "SKILL.md")),
-	);
-	const verifiedSkillPaths = new Set(
-		nativeSkillPaths.map((path) => resolve(path)),
-	);
-	const skillNames = new Set(skills.map((entry) => entry.name));
-	if (
-		expectedSkillPaths.size !== skills.length ||
-		verifiedSkillPaths.size !== expectedSkillPaths.size ||
-		[...expectedSkillPaths].some((path) => !verifiedSkillPaths.has(path)) ||
-		skillNames.size !== skills.length
-	)
+	let skillNames: string[] = [];
+	try {
+		const rootRealPath = realpathSync(nativeRoot);
+		const contained = (path: string) => {
+			const within = relative(rootRealPath, path);
+			return within !== "" && !within.startsWith("..") && !isAbsolute(within);
+		};
+		const skills = skillDirectory.findSkills();
+		skillNames = skills.map((entry) => entry.name);
+		const expectedSkillPaths = skills.map((entry) => {
+			if (
+				typeof entry.targetPath !== "string" ||
+				!/^[a-z0-9][a-z0-9._-]{0,62}$/.test(entry.name) ||
+				!/^\.agents\/skills\/[a-z0-9][a-z0-9._-]{0,62}$/.test(
+					entry.targetPath,
+				) ||
+				isAbsolute(entry.targetPath) ||
+				entry.targetPath.includes("\\") ||
+				entry.targetPath.split("/").some((part) => part === "..")
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			const path = resolve(rootRealPath, entry.targetPath, "SKILL.md");
+			if (!contained(path)) throw new RuntimeSkillDirectoryErrorV1();
+			const realPath = realpathSync(path);
+			if (!contained(realPath)) throw new RuntimeSkillDirectoryErrorV1();
+			return realPath;
+		});
+		let nativeSkillPaths: readonly string[];
+		try {
+			nativeSkillPaths = skillDirectory.nativeSkillPaths();
+		} catch {
+			throw new RuntimeSkillDirectoryErrorV1();
+		}
+		const verifiedSkillPaths = nativeSkillPaths.map((path) => {
+			if (
+				typeof path !== "string" ||
+				!isAbsolute(path) ||
+				path.includes("\\") ||
+				path.includes("\0") ||
+				path.split("/").some((part) => part === "..")
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			const resolvedPath = resolve(path);
+			const realPath = realpathSync(resolvedPath);
+			if (!contained(realPath)) throw new RuntimeSkillDirectoryErrorV1();
+			return realPath;
+		});
+		const expectedSet = new Set(expectedSkillPaths);
+		const verifiedSet = new Set(verifiedSkillPaths);
+		const skillNameSet = new Set(skillNames);
+		if (
+			expectedSet.size !== skills.length ||
+			nativeSkillPaths.length !== skills.length ||
+			verifiedSet.size !== nativeSkillPaths.length ||
+			verifiedSet.size !== expectedSet.size ||
+			[...expectedSet].some((path) => !verifiedSet.has(path)) ||
+			skillNameSet.size !== skills.length
+		)
+			throw new RuntimeSkillDirectoryErrorV1();
+	} catch (error) {
+		if (error instanceof RuntimeSkillDirectoryErrorV1) throw error;
 		throw new RuntimeSkillDirectoryErrorV1();
+	}
 	return {
 		additionalDirectories: [nativeRoot],
-		skills: skills.map((entry) => entry.name),
+		skills: skillNames,
 	};
 }
 interface Binding {
