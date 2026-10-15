@@ -425,6 +425,120 @@ export type MultiServiceAdmissionErrorCodeV1 = z.infer<
 >;
 
 /**
+ * 与部署策略无关的拓扑规则的稳定原因码（#2531）。Platform API 准入和 Web 本地校验共用
+ * 同一个判定函数，所以浏览器里「通过」的清单不会再被服务端以拓扑原因拒绝。
+ */
+export const MultiServiceTopologyIssueCodesV1 = [
+	"workload_count",
+	"service_count",
+	"job_count",
+	"stateful_service",
+	"stateful_restart_policy",
+	"stateful_storage",
+	"service_selector",
+	"service_port",
+	"service_target_shared",
+] as const;
+export type MultiServiceTopologyIssueCodeV1 =
+	(typeof MultiServiceTopologyIssueCodesV1)[number];
+
+/**
+ * 返回清单违反的拓扑规则，空数组表示拓扑合法；原因码只描述违反了哪条规则，不携带镜像、
+ * 资源内容或部署策略。镜像准入、资源规格上限等依赖部署策略的判断不在这里。
+ *
+ * Service 名称唯一和资源种类封闭已经由清单 schema 保证（资源 identity 唯一、种类是封闭联合），
+ * 不再单独给原因码。
+ */
+export function multiServiceTopologyIssuesV1(
+	manifest: MultiServiceManifestDocumentV1,
+): readonly MultiServiceTopologyIssueCodeV1[] {
+	const { resources } = manifest;
+	const deployments = resources.filter(
+		(resource) => resource.kind === "Deployment",
+	);
+	const statefulSets = resources.filter(
+		(resource) => resource.kind === "StatefulSet",
+	);
+	const services = resources.filter((resource) => resource.kind === "Service");
+	const jobs = resources.filter((resource) => resource.kind === "Job");
+	const pvcs = resources.filter(
+		(resource) => resource.kind === "PersistentVolumeClaim",
+	);
+	const workloads = [...deployments, ...statefulSets];
+	const issues = new Set<MultiServiceTopologyIssueCodeV1>();
+
+	if (workloads.length < 2 || workloads.length > MultiServiceMaxWorkloadsV1)
+		issues.add("workload_count");
+	if (services.length !== workloads.length) issues.add("service_count");
+	if (jobs.length > 1) issues.add("job_count");
+
+	const pvcNames = new Set(pvcs.map((pvc) => pvc.metadata.name));
+	const expectedPvcNames = new Set(
+		statefulSets.map((statefulSet) => `${statefulSet.metadata.name}-data`),
+	);
+	for (const statefulSet of statefulSets) {
+		const { restartPolicy } = statefulSet.spec.template.spec;
+		if (restartPolicy !== undefined && restartPolicy !== "Always")
+			issues.add("stateful_restart_policy");
+		const labels = statefulSet.spec.template.metadata.labels;
+		if (
+			!services.some(
+				(service) =>
+					service.metadata.name === statefulSet.spec.serviceName &&
+					Object.entries(service.spec.selector).every(
+						([key, expected]) => labels[key] === expected,
+					),
+			)
+		)
+			issues.add("stateful_service");
+		if (!pvcNames.has(`${statefulSet.metadata.name}-data`))
+			issues.add("stateful_storage");
+	}
+	if (
+		statefulSets.length !== pvcs.length ||
+		pvcs.some((pvc) => !expectedPvcNames.has(pvc.metadata.name))
+	)
+		issues.add("stateful_storage");
+
+	// 数量不对时 Service 与工作负载的对应关系没有意义，只报告数量问题，避免一串连带提示。
+	if (!issues.has("workload_count") && !issues.has("service_count")) {
+		const targets = services.map((service) => {
+			const matches = workloads.filter((workload) =>
+				Object.entries(service.spec.selector).every(
+					([key, expected]) =>
+						workload.spec.template.metadata.labels[key] === expected,
+				),
+			);
+			const target = matches[0];
+			if (matches.length !== 1 || !target) {
+				issues.add("service_selector");
+				return null;
+			}
+			const portsFound = service.spec.ports.every((servicePort) =>
+				target.spec.template.spec.containers.some((container) =>
+					container.ports?.some(
+						(containerPort) =>
+							containerPort.targetPort === servicePort.targetPort,
+					),
+				),
+			);
+			if (!portsFound) {
+				issues.add("service_port");
+				return null;
+			}
+			return target.metadata.name;
+		});
+		// 每个工作负载恰好对应一个 Service；两个 Service 指向同一个工作负载时集合会变小。
+		if (
+			targets.every((target) => target !== null) &&
+			new Set(targets).size !== workloads.length
+		)
+			issues.add("service_target_shared");
+	}
+	return MultiServiceTopologyIssueCodesV1.filter((code) => issues.has(code));
+}
+
+/**
  * 部署未配置档位时使用的默认档位。默认档位不声明 storageSize：PVC 沿用部署的全局
  * 存储策略，已有多服务 Agent 的 PVC 大小不会因本默认值改变。
  */

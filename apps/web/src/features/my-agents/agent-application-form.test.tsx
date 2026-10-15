@@ -137,6 +137,59 @@ function openAdvancedConfiguration() {
 		fireEvent.click(toggle);
 }
 
+const multiServiceDigest = `sha256:${"a".repeat(64)}`;
+
+/** JSON is valid YAML; two workloads, each behind its own Service. */
+function multiServiceManifest(workloads: readonly string[]) {
+	const resources = workloads.flatMap((name, index) => {
+		const labels = { app: name };
+		return [
+			{
+				apiVersion: "apps/v1",
+				kind: "Deployment",
+				metadata: { name },
+				spec: {
+					replicas: 1,
+					selector: { matchLabels: labels },
+					template: {
+						metadata: { labels },
+						spec: {
+							containers: [
+								{
+									name,
+									image: multiServiceDigest,
+									ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+								},
+							],
+						},
+					},
+				},
+			},
+			{
+				apiVersion: "v1",
+				kind: "Service",
+				metadata: {
+					name,
+					...(index === 0
+						? { annotations: { "agent-infra.agora.io/entry": "true" } }
+						: {}),
+				},
+				spec: {
+					type: "ClusterIP",
+					selector: labels,
+					ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+				},
+			},
+		];
+	});
+	return JSON.stringify({
+		schemaVersion: 1,
+		entryServiceName: workloads[0],
+		resources,
+	});
+}
+const twoServiceManifest = multiServiceManifest(["api", "worker"]);
+
 describe("AgentApplicationForm", () => {
 	it("accepts an inline multi-service YAML and shows its semantic summary", () => {
 		const onSubmit = vi.fn();
@@ -161,26 +214,7 @@ describe("AgentApplicationForm", () => {
 			throw new Error("multi-service manifest field not found");
 		fireEvent.change(manifestField, {
 			target: {
-				value: `schemaVersion: 1
-entryServiceName: api
-resources:
-  - apiVersion: v1
-    kind: Service
-    metadata:
-      name: api
-      labels: {app: payments}
-      annotations: {agent-infra.agora.io/entry: "true"}
-    spec:
-      type: ClusterIP
-      selector: {app: payments}
-      ports: [{name: http, port: 8080, targetPort: 8080}]
-  - apiVersion: v1
-    kind: ConfigMap
-    metadata:
-      name: payments
-    spec:
-      data: {MODE: production}
-`,
+				value: twoServiceManifest,
 			},
 		});
 		expect(screen.getByRole("status").textContent).toContain("入口服务：api");
@@ -189,7 +223,7 @@ resources:
 			expect.objectContaining({
 				source: expect.objectContaining({
 					interactionMode: "self-managed",
-					manifest: expect.stringContaining("entryServiceName: api"),
+					manifest: twoServiceManifest,
 				}),
 			}),
 		);
@@ -222,6 +256,43 @@ resources:
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 		expect(onSubmit).not.toHaveBeenCalled();
 		expect(screen.getByText(/多服务 YAML 不符合/)).toBeTruthy();
+	});
+
+	it("names the broken topology rule before a one-workload manifest is submitted (#2531)", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={onSubmit}
+				submitting={false}
+			/>,
+		);
+		fireEvent.change(screen.getByLabelText("Agent 名称"), {
+			target: { value: "Payments" },
+		});
+		fireEvent.change(screen.getByLabelText("用途说明"), {
+			target: { value: "Runs payment services" },
+		});
+		choose("Agent 来源", "多服务 Agent · 自有交互入口");
+		const manifestField = document.getElementById(
+			"application-multi-service-manifest",
+		);
+		if (!(manifestField instanceof HTMLTextAreaElement))
+			throw new Error("multi-service manifest field not found");
+		fireEvent.change(manifestField, {
+			target: { value: multiServiceManifest(["api"]) },
+		});
+		// 输入时就有具体提示，不必等到提交。
+		expect(screen.getByText(/需要 2 到 16 个/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText(/服务拓扑不符合要求/)).toBeTruthy();
+		expect(screen.queryByText(/准入|策略/)).toBeNull();
+		// 改成合法的两个服务后提示消失，申请照常提交。
+		fireEvent.change(manifestField, { target: { value: twoServiceManifest } });
+		expect(screen.queryByText(/服务拓扑不符合要求/)).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(onSubmit).toHaveBeenCalledOnce();
 	});
 
 	it("shows required model fields for a standard-template application", () => {
