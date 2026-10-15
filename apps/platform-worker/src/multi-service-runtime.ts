@@ -809,16 +809,20 @@ export function createMultiServiceRuntimeOperations(options: {
 					);
 				if (resource.kind === "StatefulSet") {
 					const pvc = value.multiService.resources.find(
-						(candidate) => candidate.kind === "PersistentVolumeClaim",
+						(candidate) =>
+							candidate.kind === "PersistentVolumeClaim" &&
+							candidate.metadata.name === `${resource.metadata.name}-data`,
 					);
+					const statefulPvc =
+						pvc?.kind === "PersistentVolumeClaim" ? pvc : undefined;
+					if (!statefulPvc)
+						throw new Error("multi-service StatefulSet PVC is missing");
 					await put(
 						statefulSet(
 							value,
 							resource,
 							options.policy,
-							pvc
-								? persistentVolumeClaim(value, pvc, options.policy)
-								: undefined,
+							persistentVolumeClaim(value, statefulPvc, options.policy),
 						),
 						value,
 						ownership,
