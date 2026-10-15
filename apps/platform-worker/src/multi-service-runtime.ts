@@ -984,12 +984,14 @@ export function createMultiServiceRuntimeOperations(options: {
 					serviceResourceName(value.agentId, resource.metadata.name),
 				);
 				if (!current || !owned(current, value)) return "drifted" as const;
+				// 工作负载还在启动：与单镜像路径一致返回 pending，由调谐按重试上限等待，
+				// 而不是在第一次观测时就判定失败。
 				if (
 					(resource.kind === "Deployment"
 						? (current.status?.availableReplicas ?? 0)
 						: (current.status?.readyReplicas ?? 0)) < 1
 				)
-					return "unhealthy" as const;
+					return "pending" as const;
 			}
 			for (const resource of value.multiService.resources) {
 				if (resource.kind !== "PersistentVolumeClaim") continue;

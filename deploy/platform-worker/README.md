@@ -33,6 +33,12 @@ Session Sandbox 的空闲计算回收属于同一 Worker 的会话生命周期�
 下一条消息会重新准备原 Sandbox。该策略与已验证 Workload 升级分开，
 不会改变 policy 或 Workload revision。
 
+配置模块也可选导出 `savedKeyCandidates`，由部署实现
+`createWorkerSavedKeyCandidatesApp` 的 `reader`；该 reader 在 Worker-only keyring
+边界内短暂解密当前 Agent 默认 Key，只返回候选 metadata。API 通过固定
+`serviceToken` 调用 `/internal/worker/v1/saved-key-candidates`；Key 明文和 ciphertext
+不得进入响应、日志或浏览器。未提供该部署 seam 时，saved-Key read 保持 unavailable。
+
 Native metadata 的 Worker 网关还提供固定的当前确认入口
 `/internal/platform-worker/v1/native-metadata/current`。Runtime Host 只能使用部署注入的
 Worker origin 和 service token 调用该入口，并把 API request source ref 作为不透明关联值

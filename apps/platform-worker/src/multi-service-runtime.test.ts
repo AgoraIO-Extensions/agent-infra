@@ -904,6 +904,7 @@ describe("multi-service runtime operations", () => {
 		expect(afterRollback?.metadata?.uid).toBe(before.metadata?.uid);
 	});
 
+
 	it("mounts every StatefulSet on the PVC that apply created for it", async () => {
 		const web = manifest.resources.find(
 			(resource) =>
@@ -924,7 +925,6 @@ describe("multi-service runtime operations", () => {
 				resources: { requests: { storage: "1Gi" } },
 			},
 		});
-		// 第二个 StatefulSet 的名字很长，PVC 名字会被截断到 63 个字符以内。
 		const longName = "inventory-database-primary";
 		const twoStateful = MultiServiceManifestDocumentV1Schema.parse({
 			...manifest,
@@ -971,15 +971,47 @@ describe("multi-service runtime operations", () => {
 							? [volume.persistentVolumeClaim.claimName]
 							: [],
 				);
-				// 每个 StatefulSet 只挂自己的 PVC，且该 PVC 确实已经创建。
 				expect(claims).toHaveLength(1);
 				expect(fake.resources.has(`PersistentVolumeClaim/${claims[0]}`)).toBe(
-					true,
-				);
+						true,
+					);
 				expect(claims[0]?.length).toBeLessThanOrEqual(63);
 			}
 		}
 	});
+
+	it("reports pending while a workload has no available replica", async () => {
+		const policy = {
+			namespace: "agents",
+			multiServiceResourceProfiles: [smallProfile],
+			routeHostSuffix: "example.test",
+			ingressClassName: "nginx",
+			tlsSecretName: "tls",
+			routeSelector: { "app.kubernetes.io/name": "ingress" },
+		};
+		for (const source of [manifest, statefulManifest]) {
+			const fake = fakeClient();
+			const operations = createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: { ...policy, storageSize: "1Gi" },
+			});
+			const value = desired(source);
+			if (!isMultiService(value))
+				throw new Error("multi-service fixture invalid");
+			const identity = await operations.apply(value);
+			expect(await operations.observe(value, identity)).toBe("pending");
+			markWorkloadsReady(fake);
+			expect(await operations.observe(value, identity)).toBe("healthy");
+			const workload = [...fake.resources.values()].find(
+				(resource) =>
+					resource.kind === "Deployment" || resource.kind === "StatefulSet",
+			) as V1Deployment | V1StatefulSet | undefined;
+			if (!workload) throw new Error("workload fixture missing");
+			workload.status = { availableReplicas: 0, readyReplicas: 0, replicas: 1 };
+			expect(await operations.observe(value, identity)).toBe("pending");
+		}
+	});
+
 
 	it("runs a migration Job before services and reuses its completed result", async () => {
 		const fake = fakeClient();
