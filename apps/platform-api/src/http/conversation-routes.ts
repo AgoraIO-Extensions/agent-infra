@@ -1383,9 +1383,10 @@ export function registerConversationRoutes(
 					BrowserCommandRequestV1Schema,
 					metadata.traceId,
 				);
+				const conversationId = context.req.param("conversationId");
 				const decision = await dependencies.browserCommands.invoke({
 					identity,
-					conversationId: context.req.param("conversationId"),
+					conversationId,
 					command,
 					idempotencyKey: parseIdempotencyKey(
 						context.req.raw,
@@ -1398,6 +1399,8 @@ export function registerConversationRoutes(
 						: { traceParent: metadata.traceParent }),
 					signal: context.req.raw.signal,
 				});
+				if (decision.conversationId !== conversationId)
+					return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 				if (decision.outcome === "denied")
 					return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
 				if (decision.outcome === "conflict" || decision.outcome === "stale")

@@ -508,6 +508,29 @@ describe("Conversation HTTP routes", () => {
 		});
 	});
 
+	it("rejects a bridge result for a different Conversation", async () => {
+		const browserCommands = {
+			invoke: vi.fn().mockResolvedValue({
+				outcome: "accepted" as const,
+				conversationId: "foreign-conversation",
+				executionId: "execution-1",
+				handoffId: "handoff-1",
+			}),
+		};
+		const response = await testApp(
+			dependencies({ browserCommands }),
+		).app.request("/api/v1/conversations/conversation-1/browser/commands", {
+			method: "POST",
+			headers: commandHeaders,
+			body: JSON.stringify({
+				schemaVersion: 1,
+				command: "take_over",
+				handoffId: "handoff-1",
+			}),
+		});
+		expect(response.status).toBe(503);
+	});
+
 	it("projects the authorized Runtime directory and rejects stale custom choices before selection or submit", async () => {
 		const reader = {
 			read: vi
