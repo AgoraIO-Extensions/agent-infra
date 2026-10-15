@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
 	createRuntimeConnectionInstallationRevisionV1,
+	runtimeConnectionAcpMcpBridgeEnvironment,
 	runtimeConnectionConsumerAnnotation,
 	runtimeConnectionConsumerFileEnvironment,
 	runtimeConnectionConsumerProjectionV1,
@@ -181,6 +182,35 @@ describe("runtime Connection snapshot projection", () => {
 				},
 			],
 		});
+	});
+	it("projects the protected ACP bridge only for an approved OpenCode installation", () => {
+		const revision = createRuntimeConnectionInstallationRevisionV1(
+			{ ref: "approved-installation", revision: "r1" },
+			snapshot(),
+		);
+		if (!revision) throw new Error("Missing installation revision");
+		const bridge = {
+			name: runtimeConnectionAcpMcpBridgeEnvironment,
+			value: "verified-v1",
+		};
+		expect(
+			runtimeConnectionConsumerProjectionV1(snapshot(), revision, {
+				driver: "acp",
+				templateId: "opencode",
+			}).env,
+		).toContainEqual(bridge);
+		expect(
+			runtimeConnectionConsumerProjectionV1(snapshot(), revision, {
+				driver: "acp",
+				templateId: "custom-acp",
+			}).env,
+		).not.toContainEqual(bridge);
+		expect(
+			runtimeConnectionConsumerProjectionV1(snapshot(), undefined, {
+				driver: "acp",
+				templateId: "opencode",
+			}).env,
+		).not.toContainEqual(bridge);
 	});
 	it("projects through the actual StatefulSet adapter and validates its observed resources", async () => {
 		const api = fakeKubernetesApi();

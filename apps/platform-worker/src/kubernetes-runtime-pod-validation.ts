@@ -1,5 +1,6 @@
 import { isIP } from "node:net";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
+import type { StandardTemplateModelBindingV1 } from "@agent-infra/model-catalog";
 import type {
 	V1EnvVar,
 	V1Pod,
@@ -24,6 +25,7 @@ import {
 export function createKubernetesPodValidationV1(dependencies: {
 	readonly connectionConsumerControl?: boolean;
 	readonly policy: KubernetesWorkloadPolicyV1;
+	readonly standardTemplateBinding?: StandardTemplateModelBindingV1;
 	readonly workloadEnvironment: (value: AgentWorkloadDesiredV1) => V1EnvVar[];
 	readonly environmentSecrets: (
 		value: AgentWorkloadDesiredV1,
@@ -37,6 +39,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 		dependencies.connectionConsumerControl
 			? undefined
 			: policy.connectionInstallationRevision,
+		dependencies.standardTemplateBinding,
 	);
 	function hasSafePodMetadata(
 		value: AgentWorkloadDesiredV1,

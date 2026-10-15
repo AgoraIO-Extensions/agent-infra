@@ -39,8 +39,8 @@ Generic ACP 采用以下固定上游叶子实现与协议库：
   路径，支持分组选项；移除默认模型回退和自动容错执行。Apache-2.0，许可证完整保留于
   [opendesign-LICENSE](third-party/opendesign-LICENSE)。
 
-OpenCode 使用未修改的官方 `1.18.30` 二进制，源码对应
-`anomalyco/opencode@3104c1428ec91f809e5ab86631300de41eb6952e`。Linux 镜像从官方固定
+OpenCode 使用未修改的官方 `1.19.0` 二进制，源码对应
+`anomalyco/opencode@733b2c627e5aec39cb33cc22373bdce33053ef2c`。Linux 镜像从官方固定
 平台 npm 包提取二进制，同时校验包 integrity、归档和可执行文件 SHA-256；macOS 原生
 验证使用同版本 release 二进制。来源和校验值在
 [src/opencode-release.json](src/opencode-release.json) 中维护，MIT 许可证保留于

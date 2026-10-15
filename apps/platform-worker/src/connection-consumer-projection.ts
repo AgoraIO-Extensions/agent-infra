@@ -1,3 +1,4 @@
+import { supportsProtectedOpenCodeMcpTransport } from "@agent-infra/agent-runtime";
 import { resolveApprovedConnectionConsumerProfileV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type {
 	V1EnvVar,
@@ -15,12 +16,15 @@ export const runtimeConnectionConsumerRevisionEnvironment =
 	"AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION";
 export const runtimeConnectionInstallationRevisionEnvironment =
 	"AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION";
+export const runtimeConnectionAcpMcpBridgeEnvironment =
+	"AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE";
 
 export function isRuntimeConnectionEnvironmentV1(name: string): boolean {
 	return [
 		runtimeConnectionConsumerFileEnvironment,
 		runtimeConnectionConsumerRevisionEnvironment,
 		runtimeConnectionInstallationRevisionEnvironment,
+		runtimeConnectionAcpMcpBridgeEnvironment,
 	].includes(name);
 }
 
@@ -105,6 +109,10 @@ export function createRuntimeConnectionInstallationRevisionV1(
 export function runtimeConnectionConsumerProjectionV1(
 	snapshot?: string | null,
 	installationRevision?: string | null,
+	templateBinding?: {
+		readonly driver: "codex" | "claude" | "acp" | "pi";
+		readonly templateId: string;
+	},
 ): {
 	annotations: Record<string, string>;
 	env: V1EnvVar[];
@@ -171,6 +179,17 @@ export function runtimeConnectionConsumerProjectionV1(
 				name: runtimeConnectionConsumerFileEnvironment,
 				value: `${directory}/${fileName}`,
 			},
+			...(installationRevision != null &&
+			supportsProtectedOpenCodeMcpTransport() &&
+			templateBinding?.driver === "acp" &&
+			templateBinding.templateId === "opencode"
+				? [
+						{
+							name: runtimeConnectionAcpMcpBridgeEnvironment,
+							value: "verified-v1",
+						},
+					]
+				: []),
 			// Immutable PodSpec assertion, never a configuration override.
 			{ name: runtimeConnectionConsumerRevisionEnvironment, value: revision },
 		],
