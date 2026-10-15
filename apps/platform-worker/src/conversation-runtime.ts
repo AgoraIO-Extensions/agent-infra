@@ -1255,8 +1255,6 @@ export function createConversationRuntimeV2(
 					context.claim.nativeCapability.capabilityKind !== "command"
 				)
 					unavailable("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
-				if (context.claim.nativeCapability.capabilityKind === "command")
-					unavailable("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
 				const body = {
 					...base,
 					hostSessionRef: state.hostSessionRef,
