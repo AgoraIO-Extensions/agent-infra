@@ -858,6 +858,7 @@ export function assemblePlatformApi(
 		conversation: {
 			identity: input.identity,
 			authorization: conversationAuthorization,
+			browserCommands: browserCommandAdmission,
 			...(modelSelection ? { modelSelection } : {}),
 			commands: (identity) =>
 				createConversationExecutionUseCaseV1({
@@ -897,7 +898,6 @@ export function assemblePlatformApi(
 		...(input.nativeCapabilityInvocation
 			? { nativeCapabilityInvocation: input.nativeCapabilityInvocation }
 			: {}),
-		browserCommands: browserCommandAdmission,
 		sessionAudit: {
 			identity: input.identity,
 			audit: auditQuery,
