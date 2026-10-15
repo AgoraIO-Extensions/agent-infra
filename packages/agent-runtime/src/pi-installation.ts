@@ -5,6 +5,14 @@ import { fileURLToPath } from "node:url";
 import release from "./pi-release.json" with { type: "json" };
 
 export const PI_NATIVE_PROVENANCE = release;
+
+/** The pinned Pi release exposes the reviewed extension-owned MCP registration seam. */
+export function supportsProtectedPiMcpTransport() {
+	return (
+		(release as typeof release & { protectedMcpTransport?: string })
+			.protectedMcpTransport === "pi-extension-loopback-v1"
+	);
+}
 export async function verifyPiInstallation() {
 	try {
 		const root = dirname(

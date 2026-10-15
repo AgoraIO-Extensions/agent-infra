@@ -18,6 +18,14 @@ import {
 	type SessionRuntimeModelOption,
 } from "./session-runtime-driver.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
+import {
+	createStandardMcpAcpBridge,
+	type StandardMcpAcpBridge,
+} from "./standard-mcp-acp-bridge.js";
+import {
+	StandardMcpClient,
+	type StandardMcpClientOptions,
+} from "./standard-mcp-client.js";
 
 export interface PiRuntimeDriverOptions {
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
@@ -30,6 +38,11 @@ export interface PiRuntimeDriverOptions {
 	defaultReasoningLevel: string;
 	modelOptions: readonly SessionRuntimeModelOption[];
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
+	/** Host-owned protected Connection client; only enabled by the verified Pi gate. */
+	readonly standardConnectionClient?: StandardMcpClientOptions;
+	readonly authorizeToolAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 	readonly authorizeModelAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
@@ -48,11 +61,12 @@ export const PiRuntimeDriver = {
 			...options,
 			nativeSkillPrompt: (name, parameters) =>
 				`/skill:${name}${parameters.length > 0 ? ` ${parameters}` : ""}`,
-			// The pinned Pi adapter has no verified Browser transport seam; keep the
-			// descriptor surface empty until an extension/ACP callback is available.
+			// The pinned Pi adapter still has no verified Browser transport seam; keep
+			// the descriptor surface empty until an extension/ACP callback is available.
 			browserCapability: undefined,
 			supportsAttachments: true,
 			supportsResultFiles: true,
+			supportsConnection: options.standardConnectionClient !== undefined,
 			cursorPrefix: "pi",
 			retireSession: (directory) =>
 				retireNativeProcess(directory, "AGENT_INFRA_PI_OWNER"),
@@ -65,9 +79,8 @@ export const PiRuntimeDriver = {
 							? "failed"
 							: "unknown",
 			openSession: async (session) => {
-				// Pi 0.86 has no MCP session configuration or trusted extension
-				// injection point in the pinned launch. Never expose Browser tools
-				// through a prompt-only or synthetic descriptor path.
+				// Pi's official MCP extension is enabled only for a Host-owned
+				// loopback bridge. Connection credentials never cross this boundary.
 				if (session.browser)
 					throw new Error("RUNTIME_BROWSER_EXECUTION_UNAVAILABLE");
 				const callbacks = {
@@ -95,33 +108,103 @@ export const PiRuntimeDriver = {
 							return resolver();
 						}
 					: undefined;
-				const native = await openPiSession({
-					...session,
-					recordOperationFact: async (fact: RuntimeOperationFactV2) => {
-						await callbacks.recordOperationFact?.(fact);
-					},
-					modelFact: () => callbacks.modelFact?.(),
-					recordToolOperation,
-					update: (event) => callbacks.update(event),
-					launch: await options.launch(
-						session.directory,
-						session.selection,
-						() => callbacks.admit(),
-						resolveModelCredential,
-					),
-				});
-				return {
-					...native,
-					startTurn: (next) => {
-						native.startTurn?.(next);
-						callbacks.admit = next.admit;
-						callbacks.update = next.update;
-						callbacks.resolveModelCredential = next.resolveModelCredential;
-						callbacks.recordOperationFact = next.recordOperationFact;
-						callbacks.modelFact = next.modelFact;
-						callbacks.recordToolOperation = next.recordToolOperation;
-					},
-				};
+				let nativeSessionRef = "";
+				let connectionClient: StandardMcpClient | undefined;
+				let connectionGateway: StandardMcpAcpBridge | undefined;
+				let nativeCancel: (() => Promise<void>) | undefined;
+				let nativeClose: (() => Promise<void>) | undefined;
+				const launch = await options.launch(
+					session.directory,
+					session.selection,
+					() => callbacks.admit(),
+					resolveModelCredential,
+				);
+				try {
+					if (options.standardConnectionClient) {
+						if (!session.connectionReference)
+							throw new Error("CONNECTION_STANDARD_CLIENT_UNAVAILABLE");
+						connectionClient = await StandardMcpClient.open(
+							options.standardConnectionClient,
+							session.connectionReference,
+							AbortSignal.timeout(10_000),
+						);
+						connectionGateway = await createStandardMcpAcpBridge({
+							client: connectionClient,
+							execution: session.connectionReference,
+							nativeSessionRef: () => nativeSessionRef,
+							recordOperationFact: callbacks.recordOperationFact,
+							authorizeToolAction: options.authorizeToolAction,
+							onBlocked: async () => {
+								try {
+									await session.markUnknown?.();
+								} finally {
+									try {
+										await nativeCancel?.();
+									} catch {
+										await nativeClose?.().catch(() => {});
+									} finally {
+										await connectionGateway?.close().catch(() => {});
+										await connectionClient?.close().catch(() => {});
+									}
+								}
+							},
+						});
+						const header = connectionGateway.server.headers[0];
+						if (header?.name !== "Authorization")
+							throw new Error("CONNECTION_STANDARD_CLIENT_UNAVAILABLE");
+						launch.args = [...launch.args, "--extension", "builtin:mcp"];
+						launch.env = {
+							...launch.env,
+							AGENT_INFRA_PI_CONNECTION_MCP_URL: connectionGateway.server.url,
+							AGENT_INFRA_PI_CONNECTION_MCP_TOKEN: header.value.replace(
+								/^Bearer /,
+								"",
+							),
+						};
+					}
+					const native = await openPiSession({
+						...session,
+						recordOperationFact: async (fact: RuntimeOperationFactV2) => {
+							await callbacks.recordOperationFact?.(fact);
+						},
+						modelFact: () => callbacks.modelFact?.(),
+						recordToolOperation,
+						update: (event) => callbacks.update(event),
+						launch,
+					});
+					nativeSessionRef = native.nativeId;
+					nativeCancel = native.cancel;
+					nativeClose = native.close;
+					return {
+						...native,
+						reusable: () =>
+							options.standardConnectionClient
+								? false
+								: (native.reusable?.() ?? true),
+						startTurn: (next) => {
+							native.startTurn?.(next);
+							callbacks.admit = next.admit;
+							callbacks.update = next.update;
+							callbacks.resolveModelCredential = next.resolveModelCredential;
+							callbacks.recordOperationFact = next.recordOperationFact;
+							callbacks.modelFact = next.modelFact;
+							callbacks.recordToolOperation = next.recordToolOperation;
+						},
+						close: async () => {
+							try {
+								await native.close();
+							} finally {
+								await connectionGateway?.close().catch(() => {});
+								await connectionClient?.close().catch(() => {});
+							}
+						},
+					};
+				} catch (error) {
+					await connectionGateway?.close().catch(() => {});
+					await connectionClient?.close().catch(() => {});
+					await launch.close?.().catch(() => {});
+					throw error;
+				}
 			},
 		});
 	},

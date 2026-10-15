@@ -5,11 +5,16 @@ import {
 	type BrowserCapabilityAvailableV1,
 	RuntimeModelConfigurationV3Schema,
 } from "@agent-infra/contracts/runtime";
+import type {
+	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
+} from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { PiRuntimeDriver } from "./pi-runtime-driver.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
+import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
 
 export interface PiRuntimeOptions {
 	readonly browserCapability?:
@@ -28,6 +33,10 @@ export interface PiRuntimeOptions {
 		authentication: "api-key" | "bearer";
 	}[];
 	skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
+	readonly standardConnectionClient?: StandardMcpClientOptions;
+	readonly authorizeToolAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 }
 
 /** Build explicit native Skill arguments from the trusted mounted projection. */

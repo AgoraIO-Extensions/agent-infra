@@ -11,9 +11,35 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "vitest";
-import { createPiWorkspaceTools } from "./pi-policy.js";
+import {
+	createPiWorkspaceTools,
+	piConnectionMcpConfiguration,
+} from "./pi-policy.js";
+
+it("accepts only a Host-owned loopback MCP bridge configuration", () => {
+	const value = piConnectionMcpConfiguration({
+		AGENT_INFRA_PI_CONNECTION_MCP_URL: "http://127.0.0.1:4321/mcp",
+		AGENT_INFRA_PI_CONNECTION_MCP_TOKEN: "synthetic-loopback-token",
+	});
+	expect(value).toEqual({
+		url: "http://127.0.0.1:4321/mcp",
+		headers: { Authorization: "Bearer synthetic-loopback-token" },
+		exposure: "direct",
+	});
+	for (const environment of [
+		{
+			AGENT_INFRA_PI_CONNECTION_MCP_URL: "https://connection.invalid/mcp",
+			AGENT_INFRA_PI_CONNECTION_MCP_TOKEN: "synthetic-loopback-token",
+		},
+		{
+			AGENT_INFRA_PI_CONNECTION_MCP_URL: "http://127.0.0.1:4321/mcp",
+			AGENT_INFRA_PI_CONNECTION_MCP_TOKEN: "short",
+		},
+	])
+		expect(() => piConnectionMcpConfiguration(environment)).toThrow();
+});
 
 it.each(["read", "write", "edit"] as const)(
 	"guards the real Pi %s operation after path transformations",
@@ -37,7 +63,11 @@ it.each(["read", "write", "edit"] as const)(
 				},
 				undefined,
 				undefined,
-				{ cwd: workspace } as ExtensionContext,
+				{
+					cwd: workspace,
+					tools: [],
+					executeTool: async () => ({ isError: true, content: [] }),
+				} as unknown as ExtensionToolContext,
 			);
 		try {
 			const owner = join(workspace, "owner.txt");
@@ -92,7 +122,11 @@ it("reports Pi file dispatch after authorization and before filesystem I/O", asy
 			{ path: "created.txt", content: "dispatch" },
 			undefined,
 			undefined,
-			{ cwd: workspace } as ExtensionContext,
+			{
+				cwd: workspace,
+				tools: [],
+				executeTool: async () => ({ isError: true, content: [] }),
+			} as unknown as ExtensionToolContext,
 		);
 		expect(events.at(-1)).toEqual({
 			operation: "write",

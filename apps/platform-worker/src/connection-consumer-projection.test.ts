@@ -10,6 +10,7 @@ import {
 	runtimeConnectionConsumerProjectionV1,
 	runtimeConnectionConsumerRevisionEnvironment,
 	runtimeConnectionInstallationRevisionEnvironment,
+	runtimeConnectionPiMcpBridgeEnvironment,
 } from "./connection-consumer-projection.js";
 import {
 	fakeKubernetesApi,
@@ -209,6 +210,29 @@ describe("runtime Connection snapshot projection", () => {
 			runtimeConnectionConsumerProjectionV1(snapshot(), undefined, {
 				driver: "acp",
 				templateId: "opencode",
+			}).env,
+		).not.toContainEqual(bridge);
+	});
+	it("projects the protected Pi bridge only for the pinned Pi template", () => {
+		const revision = createRuntimeConnectionInstallationRevisionV1(
+			{ ref: "approved-installation", revision: "r1" },
+			snapshot(),
+		);
+		if (!revision) throw new Error("Missing installation revision");
+		const bridge = {
+			name: runtimeConnectionPiMcpBridgeEnvironment,
+			value: "verified-v1",
+		};
+		expect(
+			runtimeConnectionConsumerProjectionV1(snapshot(), revision, {
+				driver: "pi",
+				templateId: "pi",
+			}).env,
+		).toContainEqual(bridge);
+		expect(
+			runtimeConnectionConsumerProjectionV1(snapshot(), revision, {
+				driver: "pi",
+				templateId: "other-pi",
 			}).env,
 		).not.toContainEqual(bridge);
 	});

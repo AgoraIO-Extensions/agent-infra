@@ -5,7 +5,10 @@ import {
 	OPENCODE_NATIVE_PROVENANCE,
 	supportsProtectedOpenCodeMcpTransport,
 } from "./opencode-installation.js";
-import { PI_NATIVE_PROVENANCE } from "./pi-installation.js";
+import {
+	PI_NATIVE_PROVENANCE,
+	supportsProtectedPiMcpTransport,
+} from "./pi-installation.js";
 
 describe("protected Connection MCP compatibility facts", () => {
 	it("stays tied to the pinned native metadata and package versions", async () => {
@@ -16,9 +19,10 @@ describe("protected Connection MCP compatibility facts", () => {
 			OPENCODE_NATIVE_PROVENANCE.sdkVersion,
 		);
 		expect(PI_NATIVE_PROVENANCE).toMatchObject({
-			nativeVersion: "0.86.0",
-			upstreamCommit: "ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc",
+			nativeVersion: "0.99.0",
+			upstreamCommit: "4b060d3a98618019adb9985d517516c8e99a2bbe",
 		});
+		expect(supportsProtectedPiMcpTransport()).toBe(true);
 		expect(OPENCODE_NATIVE_PROVENANCE).toMatchObject({
 			nativeVersion: "1.19.0",
 			sdkVersion: "1.4.0",

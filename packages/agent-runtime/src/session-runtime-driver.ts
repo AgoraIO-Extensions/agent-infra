@@ -110,6 +110,8 @@ export interface SessionRuntimeDriverOptions {
 	readonly supportsAttachments?: boolean;
 	/** Set only when the native adapter supplies a confirmed result-file callback. */
 	readonly supportsResultFiles?: boolean;
+	/** Host-owned protected Connection client is available to this Driver. */
+	readonly supportsConnection?: boolean;
 	/**
 	 * Per-peer image input negotiation for Drivers whose native protocol decides
 	 * it before a Session exists (ACP): `false` rejects attachment input before
@@ -2176,7 +2178,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			modelSelection: true,
 			attachments: this.options.supportsAttachments === true,
 			resultFiles: this.options.supportsResultFiles === true,
-			connection: false,
+			connection: this.options.supportsConnection === true,
 			supplementaryInstruction: false,
 			...(skills && skills.length > 0 ? { skills } : {}),
 			...(browserCapability
