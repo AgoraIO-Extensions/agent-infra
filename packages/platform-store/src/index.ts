@@ -58,6 +58,7 @@ export {
 	type PostgresPlatformAuditOptionsV1,
 	PostgresPlatformAuditQueryV1,
 } from "./audit.ts";
+export { PostgresBrowserHandoffAdmissionTransactionV1 } from "./browser-handoff-admission.ts";
 export {
 	type BrowserSessionPrincipal,
 	PostgresLdapSessionStoreV1,
