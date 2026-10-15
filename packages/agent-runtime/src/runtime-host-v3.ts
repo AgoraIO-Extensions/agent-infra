@@ -94,6 +94,13 @@ function invalidDriver(): never {
 		true,
 	);
 }
+function nativeUnsupported(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+		"Native capability execution is unavailable for this runtime",
+		409,
+	);
+}
 
 function parseRequest<T>(
 	schema: {
@@ -215,6 +222,7 @@ export class RuntimeHostV3 {
 				request.hostSessionRef,
 				request,
 				request.operation.deliveryFence,
+				true,
 			);
 			return binding;
 		};
@@ -224,6 +232,7 @@ export class RuntimeHostV3 {
 					request.hostSessionRef,
 					request,
 					request.operation.deliveryFence,
+					true,
 				).nativeSessionRef ?? nativeRequired(),
 			active,
 			signal: active,
@@ -279,13 +288,17 @@ export class RuntimeHostV3 {
 					409,
 				);
 			}
+			const selector =
+				request.capabilityKind === "command" ? "commands" : "skills";
+			const expectedAvailability =
+				request.capabilityKind === "command" ? "available" : "discovered";
 			const projection = await metadataReader.call(
 				this.options.driver,
-				"skills",
+				selector,
 				read,
 			);
 			await read.revalidate();
-			if (projection.selector !== "skills") invalidDriver();
+			if (projection.selector !== selector) invalidDriver();
 			if (projection.revision !== request.directoryRevision) {
 				throw new RuntimeHostError(
 					"RUNTIME_NATIVE_CAPABILITY_STALE",
@@ -294,12 +307,18 @@ export class RuntimeHostV3 {
 				);
 			}
 			const capability = projection.capabilities.find(
-				(entry) => entry.id === request.capabilityId && entry.kind === "skill",
+				(entry) =>
+					entry.id === request.capabilityId &&
+					entry.kind === request.capabilityKind,
 			);
-			if (capability?.availability !== "discovered") {
+			if (
+				!capability ||
+				capability.availability !== expectedAvailability ||
+				capability.source.version !== request.capabilitySourceVersion
+			) {
 				throw new RuntimeHostError(
 					"RUNTIME_NATIVE_CAPABILITY_UNAVAILABLE",
-					"Native Skill is unavailable",
+					"Native capability is unavailable",
 					409,
 				);
 			}
@@ -313,7 +332,7 @@ export class RuntimeHostV3 {
 					const latestProjection =
 						await this.options.driver.readNativeMetadataV1?.call(
 							this.options.driver,
-							"skills",
+							selector,
 							read,
 						);
 					if (!latestProjection)
@@ -323,7 +342,7 @@ export class RuntimeHostV3 {
 							409,
 						);
 					if (
-						latestProjection.selector !== "skills" ||
+						latestProjection.selector !== selector ||
 						latestProjection.revision !== request.directoryRevision
 					)
 						throw new RuntimeHostError(
@@ -333,12 +352,14 @@ export class RuntimeHostV3 {
 						);
 					const latestCapability = latestProjection.capabilities.find(
 						(entry) =>
-							entry.id === request.capabilityId && entry.kind === "skill",
+							entry.id === request.capabilityId &&
+							entry.kind === request.capabilityKind,
 					);
 					if (
 						!latestCapability ||
 						latestCapability.name !== capabilityName ||
-						latestCapability.availability !== "discovered"
+						latestCapability.availability !== expectedAvailability ||
+						latestCapability.source.version !== request.capabilitySourceVersion
 					)
 						throw new RuntimeHostError(
 							"RUNTIME_NATIVE_CAPABILITY_STALE",
@@ -351,7 +372,10 @@ export class RuntimeHostV3 {
 						requestedHostSessionRef: request.hostSessionRef,
 						binding: request,
 						operationId: request.executionId,
-						kind: "submit-turn",
+						kind:
+							request.capabilityKind === "command"
+								? "native-command"
+								: "submit-turn",
 						scope: `execution:${request.executionId}`,
 						deliveryFence: request.operation.deliveryFence,
 						requestDigest: requestDigest({
@@ -364,17 +388,34 @@ export class RuntimeHostV3 {
 							capabilityId: request.capabilityId,
 							directoryRevision: request.directoryRevision,
 							parametersDigest: request.parametersDigest,
+							capabilityKind: request.capabilityKind,
+							capabilitySourceVersion: request.capabilitySourceVersion,
 						}),
 						command: (nativeSessionRef) => {
 							if (!nativeSessionRef) nativeRequired();
-							const create = this.options.driver.createNativeSkillCommand;
-							if (!create) {
-								throw new RuntimeHostError(
-									"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
-									"Native Skill execution is unavailable for this runtime",
-									409,
-								);
+							if (request.capabilityKind === "command") {
+								const create = this.options.driver.createNativeCommandCommand;
+								if (!create) nativeUnsupported();
+								return create({
+									schemaVersion: 1,
+									kind: "native-command",
+									operationId: request.executionId,
+									agentId: request.agentId,
+									conversationId: request.conversationId,
+									executionId: request.executionId,
+									turnId: request.turnId,
+									sessionGeneration: request.sessionGeneration,
+									nativeSessionRef,
+									capabilityId: request.capabilityId,
+									directoryRevision: request.directoryRevision,
+									parameters: request.parameters,
+									parametersDigest: request.parametersDigest,
+									capabilityName,
+									capabilitySourceVersion: request.capabilitySourceVersion,
+								});
 							}
+							const create = this.options.driver.createNativeSkillCommand;
+							if (!create) nativeUnsupported();
 							return create({
 								schemaVersion: 1,
 								kind: "native-capability",

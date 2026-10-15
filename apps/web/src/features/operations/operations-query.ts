@@ -1,7 +1,4 @@
-import type {
-	OperationsEntryState,
-	OperationsStatus,
-} from "./operations-entry.js";
+import type { OperationsEntryState } from "./operations-entry.js";
 
 type ObservabilityStatusProjection = {
 	readonly schemaVersion: 1;

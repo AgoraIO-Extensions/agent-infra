@@ -1,10 +1,15 @@
+import { createHash } from "node:crypto";
 import { type FileHandle, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
-import { FakeRuntimeDriver } from "./fake-runtime-driver.js";
+import {
+	FakeRuntimeDriver,
+	fakeNativeCommandCapabilityId,
+	fakeNativeCommandDirectoryRevision,
+} from "./fake-runtime-driver.js";
 import { FileRuntimeStore, requestDigest } from "./file-runtime-store.js";
 import {
 	runtimeGrantFixture,
@@ -82,6 +87,50 @@ async function submit(host: RuntimeHost) {
 	const request = signV3Fixture(submitV3Fixture(), "turn.submit");
 	return host.submitTurnV3(request, verifyRuntimeV2Fixture(request.grant));
 }
+
+it("executes an admitted V3 native command through the Driver seam", async () => {
+	const env = await setup();
+	try {
+		const accepted = await submit(env.host);
+		await env.driver.setOperationStatus("execution-fixture", "completed");
+		const create = vi.spyOn(env.driver, "createNativeCommandCommand");
+		const request = signV3Fixture(
+			{
+				...base(accepted.hostSessionRef),
+				executionId: "execution-command",
+				turnId: "turn-command",
+				operation: {
+					kind: "execution" as const,
+					id: "execution-command",
+					deliveryFence: 2,
+					executionDeliveryFence: 2,
+				},
+				capabilityId: fakeNativeCommandCapabilityId,
+				capabilityKind: "command" as const,
+				directoryRevision: fakeNativeCommandDirectoryRevision,
+				capabilitySourceVersion: "1",
+				parameters: "",
+				parametersDigest: createHash("sha256").update("").digest("hex"),
+			},
+			"native-capability.invoke",
+		);
+		await expect(
+			env.host.nativeCapabilityV3(
+				request,
+				verifyRuntimeV2Fixture(request.grant),
+				new AbortController().signal,
+			),
+		).resolves.toMatchObject({ result: { outcome: "accepted" } });
+		expect(create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kind: "native-command",
+				capabilitySourceVersion: "1",
+			}),
+		);
+	} finally {
+		await env.host.close();
+	}
+});
 
 it("fails closed for an unbound Browser side-effect confirmation", async () => {
 	const env = await setup();

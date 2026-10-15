@@ -2486,7 +2486,15 @@
             "type": "string"
           },
           "capabilityKind": {
-            "const": "skill",
+            "enum": [
+              "command",
+              "skill"
+            ],
+            "type": "string"
+          },
+          "capabilitySourceVersion": {
+            "maxLength": 512,
+            "minLength": 1,
             "type": "string"
           },
           "channelId": {
@@ -2564,6 +2572,7 @@
           "capabilityId",
           "capabilityKind",
           "directoryRevision",
+          "capabilitySourceVersion",
           "parameters",
           "parametersDigest",
           "grant"
