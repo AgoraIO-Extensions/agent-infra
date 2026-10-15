@@ -89,8 +89,8 @@ export function createBrowserSessionControllerV1(input: {
 	async function confirmSideEffect(
 		input_: BrowserSideEffectConfirmationInputV1,
 	): Promise<BrowserActionRecordV1> {
-		await start();
-		if (!observe) throw new Error("BROWSER_SESSION_UNAVAILABLE");
+		if (!observe) throw new Error("BROWSER_SIDE_EFFECT_CONFIRMATION_INVALID");
+		observe.validateSideEffectConfirmation(input_);
 		return observe.confirmSideEffect(input_);
 	}
 

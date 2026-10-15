@@ -1466,11 +1466,18 @@ export function createBrowserObserveControllerV1(input: {
 			new Date().toISOString(),
 			{ actionId: input_.actionId, sideEffect: true, reasonCode },
 		);
+		actionsById.set(record.actionId, record);
 		if (pending.request.idempotencyKey) {
 			actions.set(pending.request.idempotencyKey, record);
 			actionDigests.set(pending.request.idempotencyKey, pending.digest);
 		}
 		return record;
+	}
+
+	function validateSideEffectConfirmation(
+		input_: BrowserSideEffectConfirmationInputV1,
+	): void {
+		pendingConfirmation(input_);
 	}
 
 	return {
@@ -1487,5 +1494,6 @@ export function createBrowserObserveControllerV1(input: {
 		download,
 		upload,
 		confirmSideEffect,
+		validateSideEffectConfirmation,
 	};
 }

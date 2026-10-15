@@ -882,5 +882,39 @@ describe("Browser action outcome readback", () => {
 			}),
 		).resolves.toMatchObject({ status: "completed" });
 		expect(page.pageLocator.click).toHaveBeenCalledOnce();
+		for (const command of ["reject", "cancel"] as const) {
+			const actionId = `${command}-action`;
+			const operationRef = `${command}-operation`;
+			const attemptRef = `${command}-attempt`;
+			const rejected = await controller.executeAction({
+				actionId,
+				idempotencyKey: `${command}-key`,
+				operationRef,
+				attemptRef,
+				kind: "click",
+				page: reference,
+				target,
+				sideEffect: true,
+				executionBinding: binding,
+				authorization,
+			});
+			const pendingConfirmation = rejected.confirmation;
+			if (!pendingConfirmation) throw new Error("expected confirmation");
+			await expect(
+				controller.confirmSideEffect({
+					command,
+					confirmationId: pendingConfirmation.confirmationId,
+					actionId,
+					operationRef,
+					attemptRef,
+					subjectId: "subject-1",
+					authorization,
+					executionBinding: binding,
+				}),
+			).resolves.toMatchObject({ status: "rejected", actionId });
+			expect(
+				controller.readAction({ actionId, executionBinding: binding }),
+			).toMatchObject({ status: "rejected", actionId });
+		}
 	});
 });
