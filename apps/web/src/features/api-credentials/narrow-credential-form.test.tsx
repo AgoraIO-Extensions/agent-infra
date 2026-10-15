@@ -6,7 +6,7 @@ import {
 	screen,
 	waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { PersonalApiCredentialMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
 import { NarrowCredentialForm } from "./narrow-credential-form.js";
 
