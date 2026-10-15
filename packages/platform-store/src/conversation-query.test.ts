@@ -905,7 +905,14 @@ describe("PostgreSQL original native metadata scope", () => {
 	it("returns the requested Execution's original Host scope", async () => {
 		await client`
 			update platform.conversation_executions
-			set original_submit_host_session_ref = 'historical-host'
+			set runtime_submit_protocol = 'v4',
+				original_operation_digest = ${"a".repeat(43)},
+				original_submit_host_session_ref = 'historical-host',
+				execution_source = 'web',
+				relay_key_purpose = 'personal',
+				relay_key_subject_id = 'actor-1',
+				relay_key_id = 'fixture-key',
+				relay_key_version = 1
 			where execution_id = 'execution-conversation-1'
 		`;
 		try {
@@ -915,7 +922,14 @@ describe("PostgreSQL original native metadata scope", () => {
 		} finally {
 			await client`
 				update platform.conversation_executions
-				set original_submit_host_session_ref = null
+				set runtime_submit_protocol = null,
+					original_operation_digest = null,
+					original_submit_host_session_ref = null,
+					execution_source = null,
+					relay_key_purpose = null,
+					relay_key_subject_id = null,
+					relay_key_id = null,
+					relay_key_version = null
 				where execution_id = 'execution-conversation-1'
 			`;
 		}
