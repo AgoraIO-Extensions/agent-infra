@@ -18,6 +18,7 @@ import type {
 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
 import { createConversationDispatchUseCaseV1 } from "../../../packages/platform-core/src/conversation-dispatch.js";
+import { runtimeRequest } from "../../../packages/platform-core/src/conversation-dispatch-runtime.js";
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import { createRuntimeOAuthGrantVerifier } from "../../agent-runtime-host/src/runtime-oauth-grant.js";
 import { resolveApprovedConnectionConsumerTargetV1 } from "./conversation-deployment.js";
@@ -222,6 +223,7 @@ function harness(
 			path.endsWith("/turns") ||
 			path.endsWith("/instructions") ||
 			path.endsWith("/stops") ||
+			path.endsWith("/native-capability") ||
 			path.endsWith("/generations/cancel")
 		)
 			return new Response(
@@ -330,6 +332,71 @@ function harness(
 }
 
 describe("Trusted conversation Runtime adapter", () => {
+	it("accepts the Core native capability operation at the Worker boundary", async () => {
+		const h = harness();
+		const record = h.record();
+		if (!record?.workload?.verified) throw new Error("missing workload");
+		const customSource = {
+			kind: "custom" as const,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+			admissionRevision: "admission-1",
+			interactionMode: "self-managed" as const,
+			connectionEnabled: false as const,
+		};
+		Object.assign(record.workload.candidate.configuration, {
+			source: customSource,
+		});
+		Object.assign(record.workload.verified.configuration, {
+			source: customSource,
+		});
+		Object.assign(h.claim, {
+			operation: "conversation.native-capability.invoke.v1",
+			input: null,
+			messageId: null,
+			modelConfigurationRevision: null,
+			modelOptionId: null,
+			reasoningLevel: null,
+			nativeCapability: {
+				agentId: "agent",
+				actorId: "user",
+				channelId: "web",
+				turnId: "turn",
+				capabilityId: "a".repeat(64),
+				capabilityKind: "skill",
+				directoryRevision: "b".repeat(64),
+				parameters: "summarize files",
+				parametersDigest: "c".repeat(64),
+				capabilitySourceVersion: "1.0.0",
+			},
+		});
+		const runtimeGrant = await h.authorize();
+		const request = runtimeRequest(h.claim, {
+			schemaVersion: 1,
+			agentId: h.claim.agentId,
+			actorId: h.claim.actorId,
+			channelId: h.claim.channelId,
+			conversationId: h.claim.conversationId,
+			executionId: h.claim.executionId,
+			turnId: h.claim.turnId,
+			sessionGeneration: h.claim.sessionGeneration,
+			authorizationRevision: h.claim.authorizationRevision,
+			runtimeGrant,
+		});
+
+		expect(request.operation).toBe("native-capability.invoke");
+		await expect(
+			h.runtime.runtimeHost.dispatch(request),
+		).resolves.toMatchObject({
+			result: { outcome: "accepted" },
+		});
+		expect(
+			h.fetcher.mock.calls.some(([url]) =>
+				String(url).endsWith("/native-capability"),
+			),
+		).toBe(true);
+		h.runtime.close();
+	});
+
 	it("records bounded event-drain stage timings without payloads", async () => {
 		const observations: ConversationDrainStageObservationV1[] = [];
 		const h = harness(1, async () => true, {

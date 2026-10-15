@@ -23,6 +23,12 @@ export type ConversationNativeCapabilityBindingV1 = Readonly<{
 	readonly parametersDigest: string;
 }>;
 
+export type ConversationRuntimeDispatchOperationV1 =
+	| "turn.submit"
+	| "turn.supplement"
+	| "turn.stop"
+	| "native-capability.invoke";
+
 export type ConversationDispatchExecutionStatusV1 =
 	| "waiting"
 	| "submitted"
@@ -273,11 +279,7 @@ export interface ConversationDispatchAuthorizationPortV1 {
 
 export interface ConversationRuntimeDispatchRequestV1 {
 	readonly schemaVersion: 1;
-	readonly operation:
-		| "turn.submit"
-		| "turn.supplement"
-		| "turn.stop"
-		| "native-capability";
+	readonly operation: ConversationRuntimeDispatchOperationV1;
 	readonly requestId: string;
 	readonly traceId: string;
 	readonly agentId: string;
