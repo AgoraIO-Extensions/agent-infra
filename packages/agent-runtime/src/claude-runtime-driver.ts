@@ -65,6 +65,7 @@ import type {
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeModelDirectory,
 	RuntimeNativeMetadataReadContextV1,
+	RuntimeNativeSkillCommandV1,
 	RuntimeOperationFactInputV1,
 } from "./driver.js";
 import {
@@ -320,6 +321,13 @@ function nativeMetadataUnsupported(): never {
 		"unavailable",
 	);
 }
+function nativeSkillUnsupported(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+		"Native Skill execution is unavailable for this runtime",
+		409,
+	);
+}
 function conflict(): never {
 	throw new RuntimeHostError(
 		"RUNTIME_OPERATION_CONFLICT",
@@ -535,6 +543,51 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			turn.attemptRef !== action.attemptRef
 		)
 			runtimeAuthorizationDenied();
+	}
+
+	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
+		const launchOptions = claudeNativeSkillLaunchOptions(
+			this.options.skillDirectory,
+		);
+		const directory = this.options.skillDirectory;
+		if (
+			!directory ||
+			!launchOptions.additionalDirectories ||
+			!launchOptions.skills
+		)
+			throw new RuntimeSkillDirectoryErrorV1();
+		const entry = directory
+			.findSkills()
+			.find(
+				(candidate) =>
+					candidate.name === command.capabilityName &&
+					candidate.version === command.capabilitySourceVersion,
+			);
+		if (!entry || !launchOptions.skills.includes(entry.name))
+			throw new RuntimeSkillDirectoryErrorV1();
+		if (
+			typeof command.parameters !== "string" ||
+			!command.parameters.isWellFormed() ||
+			command.parameters.length > 16 * 1024
+		)
+			nativeSkillUnsupported();
+		const text = `/${entry.name}${
+			command.parameters.length > 0 ? ` ${command.parameters}` : ""
+		}`;
+		if (text.length > 16 * 1024 || !text.isWellFormed())
+			nativeSkillUnsupported();
+		return {
+			schemaVersion: 1 as const,
+			kind: "submit-turn" as const,
+			operationId: command.operationId,
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			executionId: command.executionId,
+			turnId: command.turnId,
+			sessionGeneration: command.sessionGeneration,
+			nativeSessionRef: command.nativeSessionRef,
+			input: { text, attachments: [] },
+		};
 	}
 
 	/** Append one acknowledged Claude model/tool operation fact. */
