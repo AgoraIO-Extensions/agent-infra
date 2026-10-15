@@ -2988,7 +2988,19 @@ describe("assembled Workload Runtime contracts", () => {
 		await f.tick(8);
 		if (!f.state) throw new Error("Expected ready state");
 		const runtime = createWorkloadRuntimeV1(f.options);
-		expect(await runtime.observeSession(f.state, undefined)).toBe("healthy");
+		const deployment = validateAgentWorkloadDesiredV1(
+			f.state.candidate.deployment,
+		);
+		expect(
+			await runtime.observeSession(f.state, {
+				agentId: f.state.agentId,
+				sessionId: "session-a",
+				sessionGeneration: 1,
+				resourceFence: f.state.fence,
+				workloadRevision: deployment.workloadRevision,
+				imageDigest: deployment.imageDigest,
+			}),
+		).toBe("healthy");
 		expect(health.mock.calls.length).toBeGreaterThanOrEqual(2);
 	});
 	it("keeps a core-compatible candidate available when optional capability probing has no valid result", async () => {
