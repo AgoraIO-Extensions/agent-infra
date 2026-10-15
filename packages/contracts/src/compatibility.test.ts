@@ -2779,6 +2779,16 @@ describe("contract compatibility command", () => {
 			),
 		);
 		const previous = structuredClone(current);
+		const reviewedCurrent = structuredClone(current);
+		delete reviewedCurrent.paths[
+			"/api/v2/conversations/{conversationId}/native-capability/invoke"
+		];
+		for (const name of [
+			"NativeCapabilityInvocationRequestV1",
+			"NativeCapabilityInvocationResponseV1",
+			"NativeCapabilityInvocationResultV1",
+		])
+			delete reviewedCurrent.components.schemas[name];
 		const nativeMetadataPath =
 			"/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata";
 		for (const path of Object.keys(previous.paths)) {
@@ -2804,6 +2814,9 @@ describe("contract compatibility command", () => {
 			"RuntimeOperationFailureV2",
 			"SseEventIdV1",
 			"TimelineReloadSignalV1",
+			"NativeCapabilityInvocationRequestV1",
+			"NativeCapabilityInvocationResponseV1",
+			"NativeCapabilityInvocationResultV1",
 		])
 			delete previous.components.schemas[name];
 		const directory = await mkdtemp(
@@ -2813,7 +2826,7 @@ describe("contract compatibility command", () => {
 		const currentPath = resolve(directory, "current.json");
 		try {
 			await writeFile(previousPath, JSON.stringify(previous));
-			await writeFile(currentPath, JSON.stringify(current));
+			await writeFile(currentPath, JSON.stringify(reviewedCurrent));
 			expect(comparePaths(currentPath, previousPath).status).toBe(0);
 			for (const mutate of [
 				(document: typeof current) => {
@@ -2858,6 +2871,49 @@ describe("contract compatibility command", () => {
 				await writeFile(currentPath, JSON.stringify(changed));
 				expect(comparePaths(currentPath, previousPath).status).toBe(1);
 			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("does not bypass native metadata review when native admission is added together", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		delete previous.paths[
+			"/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata"
+		];
+		delete previous.paths[
+			"/api/v2/conversations/{conversationId}/native-capability/invoke"
+		];
+		for (const name of [
+			"NativeMetadataProjectionV1",
+			"NativeCapabilityInvocationRequestV1",
+			"NativeCapabilityInvocationResponseV1",
+			"NativeCapabilityInvocationResultV1",
+		])
+			delete previous.components.schemas[name];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "native-capability-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const changed = structuredClone(current);
+			changed.components.schemas.NativeMetadataProjectionV1.oneOf[0].properties.status.enum =
+				["changed"];
+			await writeFile(currentPath, JSON.stringify(changed));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}

@@ -4541,6 +4541,151 @@
         ],
         "type": "object"
       },
+      "NativeCapabilityInvocationRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilityId": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "directoryRevision": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "type": "string"
+          },
+          "parameters": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "requestId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "traceId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "capabilityId",
+          "directoryRevision",
+          "parameters",
+          "idempotencyKey",
+          "requestId",
+          "traceId"
+        ],
+        "type": "object"
+      },
+      "NativeCapabilityInvocationResponseV1": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "accepted",
+                  "replayed"
+                ],
+                "type": "string"
+              },
+              "result": {
+                "$ref": "#/components/schemas/NativeCapabilityInvocationResultV1"
+              }
+            },
+            "required": [
+              "outcome",
+              "result"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "busy",
+                  "denied",
+                  "stale",
+                  "unknown",
+                  "disabled",
+                  "invalid_parameters",
+                  "unsupported",
+                  "unavailable",
+                  "conflict"
+                ],
+                "type": "string"
+              },
+              "reason": {
+                "enum": [
+                  "authorization_lost",
+                  "conversation_unavailable",
+                  "metadata_unavailable",
+                  "idempotency_in_progress",
+                  "idempotency_conflict"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "NativeCapabilityInvocationResultV1": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilityId": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "capabilityKind": {
+            "enum": [
+              "command",
+              "skill"
+            ],
+            "type": "string"
+          },
+          "conversationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "directoryRevision": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "executionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "status": {
+            "const": "submitted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "status",
+          "conversationId",
+          "executionId",
+          "capabilityId",
+          "capabilityKind",
+          "directoryRevision"
+        ],
+        "type": "object"
+      },
       "NativeMetadataProjectionV1": {
         "oneOf": [
           {
@@ -13763,6 +13908,226 @@
               }
             },
             "description": "Native metadata is unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
+    "/api/v2/conversations/{conversationId}/native-capability/invoke": {
+      "post": {
+        "operationId": "invokeNativeCapabilityV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversationId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeCapabilityInvocationRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "accepted",
+                        "replayed"
+                      ],
+                      "type": "string"
+                    },
+                    "result": {
+                      "$ref": "#/components/schemas/NativeCapabilityInvocationResultV1"
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "result"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Native capability admission accepted or replayed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "busy",
+                        "denied",
+                        "stale",
+                        "unknown",
+                        "disabled",
+                        "invalid_parameters",
+                        "unsupported",
+                        "unavailable",
+                        "conflict"
+                      ],
+                      "type": "string"
+                    },
+                    "reason": {
+                      "enum": [
+                        "authorization_lost",
+                        "conversation_unavailable",
+                        "metadata_unavailable",
+                        "idempotency_in_progress",
+                        "idempotency_conflict"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid native capability request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "busy",
+                        "denied",
+                        "stale",
+                        "unknown",
+                        "disabled",
+                        "invalid_parameters",
+                        "unsupported",
+                        "unavailable",
+                        "conflict"
+                      ],
+                      "type": "string"
+                    },
+                    "reason": {
+                      "enum": [
+                        "authorization_lost",
+                        "conversation_unavailable",
+                        "metadata_unavailable",
+                        "idempotency_in_progress",
+                        "idempotency_conflict"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Native capability admission denied"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "busy",
+                        "denied",
+                        "stale",
+                        "unknown",
+                        "disabled",
+                        "invalid_parameters",
+                        "unsupported",
+                        "unavailable",
+                        "conflict"
+                      ],
+                      "type": "string"
+                    },
+                    "reason": {
+                      "enum": [
+                        "authorization_lost",
+                        "conversation_unavailable",
+                        "metadata_unavailable",
+                        "idempotency_in_progress",
+                        "idempotency_conflict"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Native capability admission conflicts with current state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "busy",
+                        "denied",
+                        "stale",
+                        "unknown",
+                        "disabled",
+                        "invalid_parameters",
+                        "unsupported",
+                        "unavailable",
+                        "conflict"
+                      ],
+                      "type": "string"
+                    },
+                    "reason": {
+                      "enum": [
+                        "authorization_lost",
+                        "conversation_unavailable",
+                        "metadata_unavailable",
+                        "idempotency_in_progress",
+                        "idempotency_conflict"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "outcome"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Native capability admission is unavailable"
           }
         },
         "security": [

@@ -251,6 +251,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/conversations/{conversationId}/events",
 			"/api/v2/conversations/{conversationId}/executions/{executionId}",
 			"/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata",
+			"/api/v2/conversations/{conversationId}/native-capability/invoke",
 			"/api/v2/deployment/configuration",
 			"/api/v2/me/api-credentials",
 			"/api/v2/me/api-credentials/{credentialId}",
@@ -267,6 +268,15 @@ describe("standard contract artifacts", () => {
 			"/api/v2/skills/versions/{skillVersionId}/review",
 			"/api/v2/skills/versions/{skillVersionId}/revoke",
 		]);
+		const nativeCapability =
+			artifacts.pilotBrowserOpenapiV2.paths[
+				"/api/v2/conversations/{conversationId}/native-capability/invoke"
+			].post;
+		expect(nativeCapability.operationId).toBe("invokeNativeCapabilityV1");
+		expect(
+			nativeCapability.responses["202"].content["application/json"].schema
+				.properties.outcome.enum,
+		).toEqual(["accepted", "replayed"]);
 		for (const path of [
 			"/api/v2/skills",
 			"/api/v2/skills/versions/{skillVersionId}",

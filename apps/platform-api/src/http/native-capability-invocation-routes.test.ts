@@ -108,3 +108,22 @@ it("rejects malformed input before admission", async () => {
 	expect(response.status).toBe(400);
 	expect(admit).not.toHaveBeenCalled();
 });
+
+it.each([
+	["replayed", 202],
+	["conflict", 409],
+	["unavailable", 503],
+] as const)(
+	"maps %s admission outcomes to bounded HTTP responses",
+	async (outcome, status) => {
+		const response = await app({
+			admit: async () => ({ outcome }) as never,
+		}).request("/api/v2/conversations/conversation/native-capability/invoke", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+		});
+		expect(response.status).toBe(status);
+		expect(await response.json()).toEqual({ outcome });
+	},
+);
