@@ -460,7 +460,10 @@ export function createWorkloadReconciliationV1(dependencies: {
 	const maximumAttempts = dependencies.maximumAttempts ?? 60;
 	if (!Number.isSafeInteger(maximumAttempts) || maximumAttempts < 1)
 		throw new TypeError("Invalid Workload retry limit");
-	const forbiddenFailureThreshold = dependencies.forbiddenFailureThreshold ?? 3;
+	const forbiddenFailureThreshold = Math.min(
+		dependencies.forbiddenFailureThreshold ?? 3,
+		maximumAttempts,
+	);
 	if (
 		!Number.isSafeInteger(forbiddenFailureThreshold) ||
 		forbiddenFailureThreshold < 1 ||

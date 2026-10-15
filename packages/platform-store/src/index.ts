@@ -201,7 +201,4 @@ export {
 	PostgresWecomSetupV1,
 	validateWecomSetupCredentialRecordV1,
 } from "./wecom-setup.ts";
-export {
-	openPostgresWorkloadReconciliationStoreV1,
-	workloadReconciliationRetryDelayMsV1,
-} from "./workload-reconciliation.js";
+export { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.js";

@@ -919,7 +919,12 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						next.phase,
 					)
 						? monitorDelayMs
-						: workloadReconciliationRetryDelayMsV1(next.attempts, retryDelayMs);
+						: next.lastFailure
+							? workloadReconciliationRetryDelayMsV1(
+									next.attempts,
+									retryDelayMs,
+								)
+							: retryDelayMs;
 					await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${agentId}, ${next.revision}, ${sql.json(next as unknown as postgres.JSONValue)}, clock_timestamp() + ${delay} * interval '1 millisecond') on conflict (agent_id) do update set revision = excluded.revision, state = excluded.state, next_attempt_at = excluded.next_attempt_at, updated_at = clock_timestamp()`;
 					// Idle Session Sandboxes follow a ready verified deployment in
 					// this same transaction; periodic monitor write-backs retry the
