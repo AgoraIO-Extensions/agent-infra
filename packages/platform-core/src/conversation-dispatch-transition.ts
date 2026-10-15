@@ -168,7 +168,8 @@ export function decideConversationDispatchRetryTransitionV1(input: {
 	readonly executionStatus: ConversationDispatchExecutionStatusV1;
 	readonly transition: ConversationDispatchStateTransitionV1;
 }): ConversationDispatchStateTransitionV1 {
-	return isTurnOperation(input.operation) &&
+	return (isTurnOperation(input.operation) ||
+		input.operation === "conversation.native-capability.invoke.v1") &&
 		executionTerminal(input.executionStatus) &&
 		input.transition.executionStatus === "unknown"
 		? {}
@@ -176,18 +177,20 @@ export function decideConversationDispatchRetryTransitionV1(input: {
 }
 
 export function retryTransition(claim: ConversationDispatchClaimV1) {
+	const eventOperation =
+		isTurnOperation(claim.operation) ||
+		claim.operation === "conversation.native-capability.invoke.v1";
 	return decideConversationDispatchRetryTransitionV1({
 		operation: claim.operation,
 		executionStatus: claim.executionStatus,
-		transition: isTurnOperation(claim.operation)
-			? transitionForStatus("unknown")
-			: {},
+		transition: eventOperation ? transitionForStatus("unknown") : {},
 	});
 }
 
 export function rejectedTransition(claim: ConversationDispatchClaimV1) {
 	return claim.operation === "conversation.turn.submit.v1" ||
-		claim.operation === "conversation.turn.regenerate.v1"
+		claim.operation === "conversation.turn.regenerate.v1" ||
+		claim.operation === "conversation.native-capability.invoke.v1"
 		? transitionForStatus("failed")
 		: {};
 }

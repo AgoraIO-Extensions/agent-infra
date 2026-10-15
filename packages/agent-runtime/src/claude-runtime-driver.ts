@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { lstatSync, realpathSync } from "node:fs";
 import {
 	chmod,
 	lstat,
@@ -64,6 +65,7 @@ import type {
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeModelDirectory,
 	RuntimeNativeMetadataReadContextV1,
+	RuntimeNativeSkillCommandV1,
 	RuntimeOperationFactInputV1,
 } from "./driver.js";
 import {
@@ -143,25 +145,77 @@ export function claudeNativeSkillLaunchOptions(
 	// The filesystem-backed directory verifies the immutable Applied files,
 	// read-only mode and manifest digests here. A stale or revoked mount throws;
 	// the caller's existing native-session failure path then remains fail-closed.
-	const nativeSkillPaths = skillDirectory.nativeSkillPaths();
-	const skills = skillDirectory.findSkills();
-	const expectedSkillPaths = new Set(
-		skills.map((entry) => resolve(nativeRoot, entry.targetPath, "SKILL.md")),
-	);
-	const verifiedSkillPaths = new Set(
-		nativeSkillPaths.map((path) => resolve(path)),
-	);
-	const skillNames = new Set(skills.map((entry) => entry.name));
-	if (
-		expectedSkillPaths.size !== skills.length ||
-		verifiedSkillPaths.size !== expectedSkillPaths.size ||
-		[...expectedSkillPaths].some((path) => !verifiedSkillPaths.has(path)) ||
-		skillNames.size !== skills.length
-	)
+	let skillNames: string[] = [];
+	try {
+		const rootRealPath = realpathSync(nativeRoot);
+		const contained = (path: string) => {
+			const within = relative(rootRealPath, path);
+			return within !== "" && !within.startsWith("..") && !isAbsolute(within);
+		};
+		const verifiedFileRealPath = (path: string) => {
+			const info = lstatSync(path);
+			if (!info.isFile() || info.isSymbolicLink())
+				throw new RuntimeSkillDirectoryErrorV1();
+			const realPath = realpathSync(path);
+			if (!contained(realPath)) throw new RuntimeSkillDirectoryErrorV1();
+			return realPath;
+		};
+		const skills = skillDirectory.findSkills();
+		skillNames = skills.map((entry) => entry.name);
+		const expectedSkillPaths = skills.map((entry) => {
+			if (
+				typeof entry.targetPath !== "string" ||
+				!/^[a-z0-9][a-z0-9._-]{0,62}$/.test(entry.name) ||
+				!/^\.agents\/skills\/[a-z0-9][a-z0-9._-]{0,62}$/.test(
+					entry.targetPath,
+				) ||
+				entry.targetPath !== `.agents/skills/${entry.name}` ||
+				isAbsolute(entry.targetPath) ||
+				entry.targetPath.includes("\\") ||
+				entry.targetPath.split("/").some((part) => part === "..")
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			const path = resolve(rootRealPath, entry.targetPath, "SKILL.md");
+			if (!contained(path)) throw new RuntimeSkillDirectoryErrorV1();
+			return verifiedFileRealPath(path);
+		});
+		let nativeSkillPaths: readonly string[];
+		try {
+			nativeSkillPaths = skillDirectory.nativeSkillPaths();
+		} catch {
+			throw new RuntimeSkillDirectoryErrorV1();
+		}
+		const verifiedSkillPaths = nativeSkillPaths.map((path) => {
+			if (
+				typeof path !== "string" ||
+				!isAbsolute(path) ||
+				path.includes("\\") ||
+				path.includes("\0") ||
+				path.split("/").some((part) => part === "..")
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			const resolvedPath = resolve(path);
+			return verifiedFileRealPath(resolvedPath);
+		});
+		const expectedSet = new Set(expectedSkillPaths);
+		const verifiedSet = new Set(verifiedSkillPaths);
+		const skillNameSet = new Set(skillNames);
+		if (
+			expectedSet.size !== skills.length ||
+			nativeSkillPaths.length !== skills.length ||
+			verifiedSet.size !== nativeSkillPaths.length ||
+			verifiedSet.size !== expectedSet.size ||
+			[...expectedSet].some((path) => !verifiedSet.has(path)) ||
+			skillNameSet.size !== skills.length
+		)
+			throw new RuntimeSkillDirectoryErrorV1();
+	} catch (error) {
+		if (error instanceof RuntimeSkillDirectoryErrorV1) throw error;
 		throw new RuntimeSkillDirectoryErrorV1();
+	}
 	return {
 		additionalDirectories: [nativeRoot],
-		skills: skills.map((entry) => entry.name),
+		skills: skillNames,
 	};
 }
 interface Binding {
@@ -265,6 +319,13 @@ function nativeMetadataUnsupported(): never {
 		503,
 		false,
 		"unavailable",
+	);
+}
+function nativeSkillUnsupported(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+		"Native Skill execution is unavailable for this runtime",
+		409,
 	);
 }
 function conflict(): never {
@@ -482,6 +543,51 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			turn.attemptRef !== action.attemptRef
 		)
 			runtimeAuthorizationDenied();
+	}
+
+	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
+		const launchOptions = claudeNativeSkillLaunchOptions(
+			this.options.skillDirectory,
+		);
+		const directory = this.options.skillDirectory;
+		if (
+			!directory ||
+			!launchOptions.additionalDirectories ||
+			!launchOptions.skills
+		)
+			throw new RuntimeSkillDirectoryErrorV1();
+		const entry = directory
+			.findSkills()
+			.find(
+				(candidate) =>
+					candidate.name === command.capabilityName &&
+					candidate.version === command.capabilitySourceVersion,
+			);
+		if (!entry || !launchOptions.skills.includes(entry.name))
+			throw new RuntimeSkillDirectoryErrorV1();
+		if (
+			typeof command.parameters !== "string" ||
+			!command.parameters.isWellFormed() ||
+			command.parameters.length > 16 * 1024
+		)
+			nativeSkillUnsupported();
+		const text = `/${entry.name}${
+			command.parameters.length > 0 ? ` ${command.parameters}` : ""
+		}`;
+		if (text.length > 16 * 1024 || !text.isWellFormed())
+			nativeSkillUnsupported();
+		return {
+			schemaVersion: 1 as const,
+			kind: "submit-turn" as const,
+			operationId: command.operationId,
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			executionId: command.executionId,
+			turnId: command.turnId,
+			sessionGeneration: command.sessionGeneration,
+			nativeSessionRef: command.nativeSessionRef,
+			input: { text, attachments: [] },
+		};
 	}
 
 	/** Append one acknowledged Claude model/tool operation fact. */

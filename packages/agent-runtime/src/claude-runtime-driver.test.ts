@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
 	access,
+	mkdir,
 	mkdtemp,
 	readFile,
 	realpath,
@@ -9,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import {
 	type ClaudeNativeCommandReadContext,
@@ -21,6 +22,7 @@ import {
 import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeNativeMetadataReadContextV1,
+	RuntimeNativeSkillCommandV1,
 } from "./driver.js";
 import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
@@ -78,6 +80,27 @@ const attachmentCommand = {
 	input: { text: "inspect", attachments: ["file-1"] },
 };
 
+const nativeSkillCommand = (
+	overrides: Partial<RuntimeNativeSkillCommandV1> = {},
+): RuntimeNativeSkillCommandV1 => ({
+	schemaVersion: 1,
+	kind: "native-capability",
+	operationId: "operation-skill",
+	agentId: "agent-skill",
+	conversationId: "conversation-skill",
+	executionId: "execution-skill",
+	turnId: "turn-skill",
+	sessionGeneration: 1,
+	nativeSessionRef: "native-skill",
+	capabilityId: "a".repeat(64),
+	directoryRevision: "b".repeat(64),
+	parameters: "summarize files",
+	parametersDigest: "c".repeat(64),
+	capabilityName: "workspace-summary",
+	capabilitySourceVersion: "1.0.0",
+	...overrides,
+});
+
 it("keeps Claude native Skill loading disabled without a verified Applied root", () => {
 	const metadataOnly: RuntimeFilesystemSkillDirectoryV1 = {
 		generationId: "a".repeat(64),
@@ -89,13 +112,15 @@ it("keeps Claude native Skill loading disabled without a verified Applied root",
 	expect(claudeNativeSkillLaunchOptions(metadataOnly)).toEqual(disabled);
 });
 
-it("enables Claude native Skill loading only after the Applied root verifies", () => {
-	const nativeSkillPaths = vi.fn(() => [
-		"/opt/agent-infra-skill-hub/.agents/skills/workspace-summary/SKILL.md",
-	]);
+it("enables Claude native Skill loading only after the Applied root verifies", async () => {
+	const root = await mkdtemp(join(tmpdir(), "claude-applied-skills-"));
+	const skillPath = join(root, ".agents/skills/workspace-summary/SKILL.md");
+	await mkdir(dirname(skillPath), { recursive: true });
+	await writeFile(skillPath, "# workspace summary\n");
+	const nativeSkillPaths = vi.fn(() => [skillPath]);
 	const directory: RuntimeFilesystemSkillDirectoryV1 = {
 		generationId: "a".repeat(64),
-		nativeRoot: "/opt/agent-infra-skill-hub",
+		nativeRoot: root,
 		nativeSkillPaths,
 		findSkills: () => [
 			{
@@ -111,11 +136,15 @@ it("enables Claude native Skill loading only after the Applied root verifies", (
 		readSkill: async () => new Uint8Array(),
 	};
 
-	expect(claudeNativeSkillLaunchOptions(directory)).toEqual({
-		additionalDirectories: ["/opt/agent-infra-skill-hub"],
-		skills: ["workspace-summary"],
-	});
-	expect(nativeSkillPaths).toHaveBeenCalledOnce();
+	try {
+		expect(claudeNativeSkillLaunchOptions(directory)).toEqual({
+			additionalDirectories: [root],
+			skills: ["workspace-summary"],
+		});
+		expect(nativeSkillPaths).toHaveBeenCalledOnce();
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });
 
 it("fails closed when the Applied root cannot be revalidated", () => {
@@ -130,7 +159,7 @@ it("fails closed when the Applied root cannot be revalidated", () => {
 	};
 
 	expect(() => claudeNativeSkillLaunchOptions(directory)).toThrow(
-		"stale Applied root",
+		"Runtime Skill directory is unavailable",
 	);
 });
 
@@ -158,6 +187,234 @@ it("fails closed when verified files do not match Applied Skill metadata", () =>
 	expect(() => claudeNativeSkillLaunchOptions(directory)).toThrow(
 		"Runtime Skill directory is unavailable",
 	);
+});
+
+async function appliedSkillRoot() {
+	const root = await mkdtemp(join(tmpdir(), "claude-applied-containment-"));
+	const skillPath = join(root, ".agents/skills/workspace-summary/SKILL.md");
+	await mkdir(dirname(skillPath), { recursive: true });
+	await writeFile(skillPath, "# workspace summary\n");
+	return { root, skillPath };
+}
+
+it.each(["../outside", "/outside"])(
+	"rejects an Applied target path replacement: %s",
+	async (targetPath) => {
+		const { root, skillPath } = await appliedSkillRoot();
+		const directory: RuntimeFilesystemSkillDirectoryV1 = {
+			generationId: "a".repeat(64),
+			nativeRoot: root,
+			nativeSkillPaths: () => [skillPath],
+			findSkills: () => [
+				{
+					schemaVersion: 1,
+					name: "workspace-summary",
+					version: "1.0.0",
+					packageDigest: "b".repeat(64),
+					manifestDigest: "c".repeat(64),
+					targetPath,
+					readOnly: true,
+				},
+			],
+			readSkill: async () => new Uint8Array(),
+		};
+		try {
+			expect(() => claudeNativeSkillLaunchOptions(directory)).toThrow(
+				"Runtime Skill directory is unavailable",
+			);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+);
+
+it("rejects duplicate and root-prefix-confusing native Skill paths", async () => {
+	const { root, skillPath } = await appliedSkillRoot();
+	const outsideRoot = await mkdtemp(`${root}-evil-`);
+	const outsidePath = join(
+		outsideRoot,
+		".agents/skills/workspace-summary/SKILL.md",
+	);
+	await mkdir(dirname(outsidePath), { recursive: true });
+	await writeFile(outsidePath, "outside\n");
+	const entry = {
+		schemaVersion: 1 as const,
+		name: "workspace-summary",
+		version: "1.0.0",
+		packageDigest: "b".repeat(64),
+		manifestDigest: "c".repeat(64),
+		targetPath: ".agents/skills/workspace-summary",
+		readOnly: true as const,
+	};
+	try {
+		for (const nativeSkillPaths of [[skillPath, skillPath], [outsidePath]]) {
+			const directory: RuntimeFilesystemSkillDirectoryV1 = {
+				generationId: "a".repeat(64),
+				nativeRoot: root,
+				nativeSkillPaths: () => nativeSkillPaths,
+				findSkills: () => [entry],
+				readSkill: async () => new Uint8Array(),
+			};
+			expect(() => claudeNativeSkillLaunchOptions(directory)).toThrow(
+				"Runtime Skill directory is unavailable",
+			);
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+		await rm(outsideRoot, { recursive: true, force: true });
+	}
+});
+
+async function openSkillExecutionDriver(
+	skillDirectory?: RuntimeFilesystemSkillDirectoryV1,
+) {
+	const path = await mkdtemp(join(tmpdir(), "claude-native-skill-command-"));
+	const driver = await ClaudeRuntimeDriver.open({
+		path,
+		configVersion: "configuration-skill",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				model: "claude-opus-5",
+				reasoningLevels: ["high"],
+				authentication: "bearer",
+				endpoint: "http://127.0.0.1:1",
+				credential: "synthetic-model-credential",
+			},
+		],
+		...(skillDirectory ? { skillDirectory } : {}),
+	});
+	return { driver, path };
+}
+
+it("creates a Claude Applied Skill submit command from the verified root", async () => {
+	const { root, skillPath } = await appliedSkillRoot();
+	const directory: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "a".repeat(64),
+		nativeRoot: root,
+		nativeSkillPaths: () => [skillPath],
+		findSkills: () => [
+			{
+				schemaVersion: 1,
+				name: "workspace-summary",
+				version: "1.0.0",
+				packageDigest: "b".repeat(64),
+				manifestDigest: "c".repeat(64),
+				targetPath: ".agents/skills/workspace-summary",
+				readOnly: true,
+			},
+		],
+		readSkill: async () => new Uint8Array(),
+	};
+	const { driver, path } = await openSkillExecutionDriver(directory);
+	try {
+		expect(driver.createNativeSkillCommand(nativeSkillCommand())).toMatchObject(
+			{
+				kind: "submit-turn",
+				operationId: "operation-skill",
+				nativeSessionRef: "native-skill",
+				input: {
+					text: "/workspace-summary summarize files",
+					attachments: [],
+				},
+			},
+		);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+it.each([
+	"missing-root",
+	"unknown-skill",
+	"version-mismatch",
+	"stale-native-paths",
+])("fails closed for Claude native Skill %s", async (failure) => {
+	const rootAndPath =
+		failure === "missing-root" ? undefined : await appliedSkillRoot();
+	const directory = rootAndPath
+		? ({
+				generationId: "a".repeat(64),
+				nativeRoot: rootAndPath.root,
+				nativeSkillPaths: () => {
+					if (failure === "stale-native-paths")
+						throw new Error("stale Applied root");
+					return [rootAndPath.skillPath];
+				},
+				findSkills: () => [
+					{
+						schemaVersion: 1 as const,
+						name: "workspace-summary",
+						version: "1.0.0",
+						packageDigest: "b".repeat(64),
+						manifestDigest: "c".repeat(64),
+						targetPath: ".agents/skills/workspace-summary",
+						readOnly: true as const,
+					},
+				],
+				readSkill: async () => new Uint8Array(),
+			} satisfies RuntimeFilesystemSkillDirectoryV1)
+		: undefined;
+	const { driver, path } = await openSkillExecutionDriver(directory);
+	try {
+		const command =
+			failure === "unknown-skill"
+				? nativeSkillCommand({ capabilityName: "unknown-skill" })
+				: failure === "version-mismatch"
+					? nativeSkillCommand({ capabilitySourceVersion: "9.9.9" })
+					: nativeSkillCommand();
+		expect(() => driver.createNativeSkillCommand(command)).toThrow(
+			"Runtime Skill directory is unavailable",
+		);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+		if (rootAndPath)
+			await rm(rootAndPath.root, { recursive: true, force: true });
+	}
+});
+
+it("rejects malformed and oversized Claude native Skill parameters", async () => {
+	const { root, skillPath } = await appliedSkillRoot();
+	const directory: RuntimeFilesystemSkillDirectoryV1 = {
+		nativeRoot: root,
+		nativeSkillPaths: () => [skillPath],
+		generationId: "a".repeat(64),
+		findSkills: () => [
+			{
+				schemaVersion: 1,
+				name: "workspace-summary",
+				version: "1.0.0",
+				packageDigest: "b".repeat(64),
+				manifestDigest: "c".repeat(64),
+				targetPath: ".agents/skills/workspace-summary",
+				readOnly: true,
+			},
+		],
+		readSkill: async () => new Uint8Array(),
+	};
+	const { driver, path } = await openSkillExecutionDriver(directory);
+	try {
+		for (const parameters of ["\ud800", "x".repeat(16 * 1024)]) {
+			let failure: unknown;
+			try {
+				driver.createNativeSkillCommand(nativeSkillCommand({ parameters }));
+			} catch (error) {
+				failure = error;
+			}
+			expect(failure).toMatchObject({
+				code: "RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+			});
+		}
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+		await rm(root, { recursive: true, force: true });
+	}
 });
 
 it("keeps uncertain Claude Connection operations held across restart", () => {

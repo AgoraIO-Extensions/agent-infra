@@ -8,6 +8,7 @@ import type {
 	V1ConfigMap,
 	V1Deployment,
 	V1Job,
+	V1PersistentVolumeClaim,
 } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
@@ -134,6 +135,65 @@ const migrationManifest = MultiServiceManifestDocumentV1Schema.parse({
 	],
 });
 
+const upgradedManifest = MultiServiceManifestDocumentV1Schema.parse({
+	...manifest,
+	resources: manifest.resources.map((resource) => {
+		if (resource.kind === "ConfigMap")
+			return {
+				...resource,
+				spec: { data: { "app.conf": "hello=upgraded\n" } },
+			};
+		if (resource.kind !== "Deployment" || resource.metadata.name !== "web")
+			return resource;
+		return {
+			...resource,
+			spec: {
+				...resource.spec,
+				template: {
+					...resource.spec.template,
+					spec: {
+						...resource.spec.template.spec,
+						containers: resource.spec.template.spec.containers.map(
+							(container) => ({
+								...container,
+								image: `sha256:${"e".repeat(64)}`,
+							}),
+						),
+					},
+				},
+			},
+		};
+	}),
+});
+
+const statefulManifest = (() => {
+	const web = manifest.resources.find(
+		(resource) =>
+			resource.kind === "Deployment" && resource.metadata.name === "web",
+	);
+	if (web?.kind !== "Deployment") throw new Error("stateful fixture missing");
+	return MultiServiceManifestDocumentV1Schema.parse({
+		...manifest,
+		resources: [
+			{
+				...web,
+				kind: "StatefulSet",
+				spec: { ...web.spec, serviceName: "web" },
+			},
+			...manifest.resources.filter((resource) => resource !== web),
+			{
+				apiVersion: "v1",
+				kind: "PersistentVolumeClaim",
+				metadata: { name: "web-data" },
+				spec: {
+					accessModes: ["ReadWriteOnce"],
+					resources: { requests: { storage: "1Gi" } },
+				},
+			},
+		],
+	});
+})();
+
 function desired(multiService = manifest) {
 	return validateAgentWorkloadDesiredV1({
 		schemaVersion: 1,
@@ -222,8 +282,13 @@ function fakeClient() {
 		async read(kind, name) {
 			return (resources.get(`${kind}/${name}`) ?? null) as never;
 		},
-		async list() {
-			return [];
+		async list(kind, selector) {
+			const [key, expected] = selector.split("=", 2);
+			return [...resources.values()].filter(
+				(resource) =>
+					resource.kind === kind &&
+					(key === undefined || resource.metadata?.labels?.[key] === expected),
+			) as never;
 		},
 		async create(object) {
 			const stored = {
@@ -347,6 +412,121 @@ describe("multi-service runtime operations", () => {
 		await expect(operations.apply(value)).rejects.toThrow(
 			"ConfigMap is immutable and drifted",
 		);
+	});
+
+	it("hands resources across manifest revisions and rolls back without losing state", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				namespace: "agents",
+				multiServiceResourceProfiles: [smallProfile],
+				routeHostSuffix: "example.test",
+				ingressClassName: "nginx",
+				tlsSecretName: "tls",
+				routeSelector: { "app.kubernetes.io/name": "ingress" },
+			},
+		});
+		const original = desired();
+		const upgraded = desired(upgradedManifest);
+		if (!isMultiService(original) || !isMultiService(upgraded))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(original);
+		await operations.apply(upgraded, { allowOwnershipTransition: true });
+		const upgradedDeployment = [...fake.resources.values()].find(
+			(resource) =>
+				resource.kind === "Deployment" &&
+				resource.metadata?.name?.endsWith("-web"),
+		) as V1Deployment | undefined;
+		expect(upgradedDeployment?.spec?.template.spec?.containers[0]?.image).toBe(
+			`sha256:${"e".repeat(64)}`,
+		);
+		expect(
+			(
+				fake.resources.get(
+					`ConfigMap/${workloadResourceNameV1("agent-a")}-web-config`,
+				) as V1ConfigMap
+			)?.data,
+		).toEqual({ "app.conf": "hello=upgraded\n" });
+		await operations.apply(original, { allowOwnershipTransition: true });
+		const rolledBackDeployment = [...fake.resources.values()].find(
+			(resource) =>
+				resource.kind === "Deployment" &&
+				resource.metadata?.name?.endsWith("-web"),
+		) as V1Deployment | undefined;
+		expect(
+			rolledBackDeployment?.spec?.template.spec?.containers[0]?.image,
+		).toBe(`sha256:${"a".repeat(64)}`);
+		expect(
+			(
+				fake.resources.get(
+					`ConfigMap/${workloadResourceNameV1("agent-a")}-web-config`,
+				) as V1ConfigMap
+			)?.data,
+		).toEqual({ "app.conf": "hello=world\n" });
+	});
+
+	it("keeps a StatefulSet PVC bound across an upgrade and rollback", async () => {
+		const fake = fakeClient();
+		const operations = createMultiServiceRuntimeOperations({
+			client: fake.client,
+			policy: {
+				namespace: "agents",
+				storageSize: "1Gi",
+				multiServiceResourceProfiles: [smallProfile],
+				routeHostSuffix: "example.test",
+				ingressClassName: "nginx",
+				tlsSecretName: "tls",
+				routeSelector: { "app.kubernetes.io/name": "ingress" },
+			},
+		});
+		const original = desired(statefulManifest);
+		const upgradedStatefulManifest = MultiServiceManifestDocumentV1Schema.parse(
+			{
+				...statefulManifest,
+				resources: statefulManifest.resources.map((resource) =>
+					resource.kind === "StatefulSet"
+						? {
+								...resource,
+								spec: {
+									...resource.spec,
+									template: {
+										...resource.spec.template,
+										spec: {
+											...resource.spec.template.spec,
+											containers: resource.spec.template.spec.containers.map(
+												(container) => ({
+													...container,
+													image: `sha256:${"e".repeat(64)}`,
+												}),
+											),
+										},
+									},
+								},
+							}
+						: resource,
+				),
+			},
+		);
+		const upgraded = desired(upgradedStatefulManifest);
+		if (!isMultiService(original) || !isMultiService(upgraded))
+			throw new Error("multi-service fixture invalid");
+		await operations.apply(original);
+		const pvcName = `${workloadResourceNameV1("agent-a")}-web-data`;
+		const before = fake.resources.get(`PersistentVolumeClaim/${pvcName}`) as
+			| V1PersistentVolumeClaim
+			| undefined;
+		if (!before) throw new Error("PVC fixture missing");
+		await operations.apply(upgraded, { allowOwnershipTransition: true });
+		const afterUpgrade = fake.resources.get(
+			`PersistentVolumeClaim/${pvcName}`,
+		) as V1PersistentVolumeClaim | undefined;
+		expect(afterUpgrade?.metadata?.uid).toBe(before.metadata?.uid);
+		await operations.apply(original, { allowOwnershipTransition: true });
+		const afterRollback = fake.resources.get(
+			`PersistentVolumeClaim/${pvcName}`,
+		) as V1PersistentVolumeClaim | undefined;
+		expect(afterRollback?.metadata?.uid).toBe(before.metadata?.uid);
 	});
 
 	it("runs a migration Job before services and reuses its completed result", async () => {

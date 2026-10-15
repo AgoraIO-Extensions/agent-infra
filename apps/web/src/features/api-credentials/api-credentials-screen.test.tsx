@@ -7,7 +7,7 @@ import {
 	waitFor,
 	within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
 	IssuePersonalApiCredentialV2Responses,
 	PersonalApiCredentialMetadataV1,
@@ -150,6 +150,11 @@ describe("ApiCredentialsScreen", () => {
 	});
 
 	it("keeps narrow failure feedback when a parent readback updates the row", async () => {
+		// 固定当前时间，避免 fixture 中写死的到期时间随真实日期过期（#2513）。
+		const now = vi
+			.spyOn(Date, "now")
+			.mockReturnValue(Date.parse("2026-10-10T00:00:00Z"));
+		onTestFinished(() => now.mockRestore());
 		const initialMetadata: PersonalApiCredentialMetadataV1 = {
 			...metadata,
 			expiresAt: "2026-11-01T00:00:00Z",
