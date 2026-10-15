@@ -565,6 +565,9 @@ export const BrowserCommandRequestV1Schema = z.discriminatedUnion("command", [
 		confirmationId: OpaqueIdV1Schema,
 	}),
 ]);
+export type BrowserCommandRequestV1 = z.infer<
+	typeof BrowserCommandRequestV1Schema
+>;
 export const ModelSelectionUpdateRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	modelOptionId: OpaqueIdV1Schema,

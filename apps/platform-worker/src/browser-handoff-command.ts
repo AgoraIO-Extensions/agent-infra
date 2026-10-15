@@ -1,5 +1,5 @@
 import type { BrowserCommandRequestV1 } from "@agent-infra/contracts/pilot";
-import type { RuntimeBrowserHandoffRequestV3 } from "@agent-infra/contracts/runtime";
+import type { ConversationRuntimeBrowserHandoffRequestV1 } from "./conversation-runtime.js";
 import type { PlatformConversationBrowserHandoffInputV1 } from "./conversation-worker.js";
 
 export type BrowserHandoffCommandInvocationV1 = Readonly<{
@@ -17,7 +17,7 @@ export interface BrowserHandoffCommandResolverV1 {
 	/** Resolve the current persisted Execution binding and Runtime V3 request. */
 	resolve(
 		input: BrowserHandoffCommandInvocationV1,
-	): Promise<RuntimeBrowserHandoffRequestV3 | null>;
+	): Promise<ConversationRuntimeBrowserHandoffRequestV1 | null>;
 }
 
 export interface BrowserHandoffCommandWorkerV1 {

@@ -1,29 +1,23 @@
-import type { RuntimeBrowserHandoffRequestV3 } from "@agent-infra/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
 	type BrowserHandoffCommandInvocationV1,
 	createBrowserHandoffCommandExecutorV1,
 } from "./browser-handoff-command.js";
+import type { ConversationRuntimeBrowserHandoffRequestV1 } from "./conversation-runtime.js";
 
 const request = {
-	schemaVersion: 3,
+	schemaVersion: 1,
 	requestId: "request-1",
 	traceId: "trace-1",
-	principal: { kind: "user", id: "user-1" },
+	actorId: "user-1",
 	channelId: "web",
 	agentId: "agent-1",
 	conversationId: "conversation-1",
 	executionId: "execution-1",
 	turnId: "turn-1",
 	sessionGeneration: 1,
-	hostSessionRef: "host-1",
-	operation: {
-		kind: "execution",
-		id: "execution-1",
-		deliveryFence: 2,
-		executionDeliveryFence: 2,
-	},
-	grant: { schemaVersion: 2, format: "runtime-execution-jws", token: "a.b.c" },
+	deliveryFence: 2,
+	runtimeGrant: {},
 	handoff: {
 		kind: "take-over",
 		handoffId: "handoff-1",
@@ -44,7 +38,7 @@ const request = {
 			pageRevision: 5,
 		},
 	},
-} satisfies RuntimeBrowserHandoffRequestV3;
+} satisfies ConversationRuntimeBrowserHandoffRequestV1;
 
 const invocation: BrowserHandoffCommandInvocationV1 = {
 	identity: { userId: "user-1" },
