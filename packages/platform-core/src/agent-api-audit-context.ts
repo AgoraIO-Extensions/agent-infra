@@ -1,3 +1,4 @@
+import type { AgentConfigurationError } from "./agent-configuration-types.js";
 import type { ApiPrincipalV1 } from "./audit-query.js";
 import type { PersonalApiCredentialErrorV1 } from "./personal-api-credentials.js";
 
@@ -19,10 +20,13 @@ export interface AgentApiAuditContextV1 {
 // Refusal attribution never becomes an error payload, log field, or caller authority.
 const contexts = new WeakMap<Error, AgentApiAuditContextV1>();
 
-export function withAgentApiAuditContextV1(
-	error: PersonalApiCredentialErrorV1,
-	context: AgentApiAuditContextV1,
-) {
+/**
+ * 为 API 管理拒绝附加审计归属。除 API 凭证错误外，只接受需要保留专用 HTTP 错误码的
+ * 配置终态拒绝（如多服务总量超限，#2396）。
+ */
+export function withAgentApiAuditContextV1<
+	E extends PersonalApiCredentialErrorV1 | AgentConfigurationError,
+>(error: E, context: AgentApiAuditContextV1): E {
 	contexts.set(
 		error,
 		Object.freeze({

@@ -423,3 +423,187 @@ export type MultiServiceAgentSourceV1 = z.infer<
 export type MultiServiceAdmissionErrorCodeV1 = z.infer<
 	typeof MultiServiceAdmissionErrorCodeV1Schema
 >;
+
+/**
+ * 部署未配置档位时使用的默认档位。默认档位不声明 storageSize：PVC 沿用部署的全局
+ * 存储策略，已有多服务 Agent 的 PVC 大小不会因本默认值改变。
+ */
+export const defaultMultiServiceResourceProfileV1 = {
+	profileId: "default",
+	displayName: "Default multi-service",
+	estimatedResources: { cpuMillicores: 100, memoryMiB: 128, storageGiB: 1 },
+	resources: {
+		requests: { cpu: "25m", memory: "32Mi" },
+		limits: { cpu: "100m", memory: "128Mi" },
+	},
+} as const satisfies MultiServiceResourceProfileV1;
+
+/** 部署未配置时的单 Agent 总量上限。 */
+export const defaultMultiServiceResourceCapV1 = {
+	cpuMillicores: 2_000,
+	memoryMiB: 4_096,
+	storageGiB: 20,
+} as const satisfies MultiServiceResourceCapV1;
+
+export interface MultiServiceResourceConfigurationV1 {
+	/** 默认档位在首位，其后为部署配置的档位。 */
+	readonly profiles: readonly MultiServiceResourceProfileV1[];
+	readonly cap: MultiServiceResourceCapV1;
+	readonly source: "deployment" | "default";
+}
+
+/**
+ * 解析部署方提供的档位与上限。API 与 Worker 共用同一规则：配置非法、档位 ID 重复或
+ * 覆盖默认档位时抛错，由调用方转换为各自的启动期配置错误（fail closed）。
+ */
+export function parseMultiServiceResourceConfigurationV1(input: {
+	readonly profiles?: unknown;
+	readonly cap?: unknown;
+}): MultiServiceResourceConfigurationV1 {
+	const configured = z
+		.array(MultiServiceResourceProfileV1Schema)
+		.max(64)
+		.parse(input.profiles ?? []);
+	const ids = configured.map((profile) => profile.profileId);
+	if (
+		ids.includes(defaultMultiServiceResourceProfileV1.profileId) ||
+		new Set(ids).size !== ids.length
+	)
+		throw new Error("multi-service resource profiles are invalid");
+	return {
+		profiles: [
+			structuredClone(defaultMultiServiceResourceProfileV1),
+			...configured,
+		],
+		cap: MultiServiceResourceCapV1Schema.parse(
+			input.cap ?? defaultMultiServiceResourceCapV1,
+		),
+		source: configured.length > 0 ? "deployment" : "default",
+	};
+}
+
+type MultiServiceManifestResourceV1 =
+	MultiServiceManifestDocumentV1["resources"][number];
+type MultiServiceServiceResourceV1 = Extract<
+	MultiServiceManifestResourceV1,
+	{ kind: "Service" }
+>;
+export type MultiServiceProfiledWorkloadV1 = Extract<
+	MultiServiceManifestResourceV1,
+	{ kind: "Deployment" | "StatefulSet" | "Job" }
+>;
+
+function serviceSelectsWorkload(
+	service: MultiServiceServiceResourceV1,
+	workload: MultiServiceProfiledWorkloadV1,
+) {
+	return Object.entries(service.spec.selector).every(
+		([key, expected]) =>
+			workload.spec.template.metadata.labels[key] === expected,
+	);
+}
+
+/**
+ * 解析一个工作负载引用的档位：工作负载自身 annotation 优先，其次是选中它的
+ * Service 的 annotation（迁移 Job 没有 Service），都没有时使用默认档位。
+ */
+export function multiServiceWorkloadProfileRefV1(
+	manifest: MultiServiceManifestDocumentV1,
+	workload: MultiServiceProfiledWorkloadV1,
+): string {
+	const direct =
+		workload.metadata.annotations?.[MultiServiceResourceProfileAnnotationV1];
+	if (direct !== undefined) return direct;
+	if (workload.kind !== "Job") {
+		const service = manifest.resources.find(
+			(resource): resource is MultiServiceServiceResourceV1 =>
+				resource.kind === "Service" &&
+				serviceSelectsWorkload(resource, workload),
+		);
+		const fromService =
+			service?.metadata.annotations?.[MultiServiceResourceProfileAnnotationV1];
+		if (fromService !== undefined) return fromService;
+	}
+	return defaultMultiServiceResourceProfileV1.profileId;
+}
+
+/** 每个 Service 展示其所选工作负载实际使用的档位，与准入和 Worker 注入一致。 */
+export function multiServiceServiceProjectionsV1(
+	manifest: MultiServiceManifestDocumentV1,
+): MultiServiceServiceProjectionV1[] {
+	return manifest.resources
+		.filter(
+			(resource): resource is MultiServiceServiceResourceV1 =>
+				resource.kind === "Service",
+		)
+		.map((service) => {
+			const workload = manifest.resources.find(
+				(resource): resource is MultiServiceProfiledWorkloadV1 =>
+					(resource.kind === "Deployment" || resource.kind === "StatefulSet") &&
+					serviceSelectsWorkload(service, resource),
+			);
+			return {
+				name: service.metadata.name,
+				resourceProfileRef: workload
+					? multiServiceWorkloadProfileRefV1(manifest, workload)
+					: (service.metadata.annotations?.[
+							MultiServiceResourceProfileAnnotationV1
+						] ?? defaultMultiServiceResourceProfileV1.profileId),
+				entry: service.metadata.name === manifest.entryServiceName,
+			};
+		});
+}
+
+export type MultiServiceResourceCapacityV1 =
+	| {
+			readonly ok: true;
+			readonly total: MultiServiceResourceCapV1;
+			readonly cap: MultiServiceResourceCapV1;
+	  }
+	| {
+			readonly ok: false;
+			readonly reason: "unknown_profile";
+			readonly profileRef: string;
+	  }
+	| {
+			readonly ok: false;
+			readonly reason: "cap_exceeded";
+			readonly total: MultiServiceResourceCapV1;
+			readonly cap: MultiServiceResourceCapV1;
+	  };
+
+/** 汇总全部工作负载（含迁移 Job）的档位估算量，并与单 Agent 上限比较。副本固定为 1。 */
+export function calculateMultiServiceResourceCapacityV1(input: {
+	readonly manifest: MultiServiceManifestDocumentV1;
+	readonly configuration: MultiServiceResourceConfigurationV1;
+}): MultiServiceResourceCapacityV1 {
+	const profiles = new Map(
+		input.configuration.profiles.map((profile) => [profile.profileId, profile]),
+	);
+	const total = { cpuMillicores: 0, memoryMiB: 0, storageGiB: 0 };
+	for (const resource of input.manifest.resources) {
+		if (
+			resource.kind !== "Deployment" &&
+			resource.kind !== "StatefulSet" &&
+			resource.kind !== "Job"
+		)
+			continue;
+		const profileRef = multiServiceWorkloadProfileRefV1(
+			input.manifest,
+			resource,
+		);
+		const profile = profiles.get(profileRef);
+		if (!profile) return { ok: false, reason: "unknown_profile", profileRef };
+		total.cpuMillicores += profile.estimatedResources.cpuMillicores;
+		total.memoryMiB += profile.estimatedResources.memoryMiB;
+		total.storageGiB += profile.estimatedResources.storageGiB;
+	}
+	const cap = input.configuration.cap;
+	if (
+		total.cpuMillicores > cap.cpuMillicores ||
+		total.memoryMiB > cap.memoryMiB ||
+		total.storageGiB > cap.storageGiB
+	)
+		return { ok: false, reason: "cap_exceeded", total, cap };
+	return { ok: true, total, cap };
+}

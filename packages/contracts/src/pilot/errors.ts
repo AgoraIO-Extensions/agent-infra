@@ -27,6 +27,8 @@ export const PilotTerminalErrorCodeV1Schema = z.enum([
 	"DELEGATED_RESULT_REJECTED",
 	"ORIGINAL_RESPONSE_NOT_STARTED",
 	"ORIGINAL_RESPONSE_ALREADY_FINISHED",
+	/** 多服务 Agent 的档位估算总量超过部署配置的单 Agent 上限（#2396）。 */
+	"MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
 ]);
 
 const errorShape = {

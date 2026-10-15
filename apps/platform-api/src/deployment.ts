@@ -338,6 +338,21 @@ export function createProductionPlatformApiAssemblyInputV1(
 		})),
 		modelCatalog: { ...input.modelCatalog },
 		channelPolicy: structuredClone(input.channelPolicy),
+		// API Token 创建路径必须使用与浏览器路径相同的多服务档位与上限（#2396）。
+		...(input.multiServiceResourceProfiles !== undefined
+			? {
+					multiServiceResourceProfiles: structuredClone(
+						input.multiServiceResourceProfiles,
+					),
+				}
+			: {}),
+		...(input.multiServiceResourceCap !== undefined
+			? {
+					multiServiceResourceCap: structuredClone(
+						input.multiServiceResourceCap,
+					),
+				}
+			: {}),
 	};
 	const deploymentConfiguration = createDeploymentConfigurationProjectionV2({
 		templates: input.templates,

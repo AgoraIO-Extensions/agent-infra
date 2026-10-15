@@ -525,6 +525,8 @@ export interface AgentConfigurationImageAdmissionPortV1 {
 				readonly status: "rejected";
 				readonly agentId: string;
 				readonly requestId: string;
+				/** 多服务档位估算总量超过部署上限；其他拒绝不带原因。 */
+				readonly reason?: "multi_service_resource_cap_exceeded";
 		  }
 	>;
 }
@@ -656,6 +658,7 @@ export type AgentConfigurationErrorCode =
 	| "not_authorized"
 	| "not_admitted"
 	| "model_profile_unsupported"
+	| "resource_cap_exceeded"
 	| "no_change"
 	| "stale_revision"
 	| "key_version_conflict"

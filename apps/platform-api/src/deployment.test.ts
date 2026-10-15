@@ -1384,6 +1384,75 @@ const apiBody = {
 	defaultRelayKey: "controlled-api-private-default-key",
 };
 
+/** web + worker 两个服务与一个迁移 Job；默认档位每个工作负载 100m，共 300m。 */
+function multiServiceApiManifest(image: string) {
+	const workload = (name: string) => ({
+		apiVersion: "apps/v1",
+		kind: "Deployment",
+		metadata: { name },
+		spec: {
+			replicas: 1,
+			selector: { matchLabels: { app: name } },
+			template: {
+				metadata: { labels: { app: name } },
+				spec: {
+					containers: [
+						{
+							name,
+							image,
+							ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+						},
+					],
+				},
+			},
+		},
+	});
+	const service = (name: string) => ({
+		apiVersion: "v1",
+		kind: "Service",
+		metadata: {
+			name,
+			annotations:
+				name === "web" ? { "agent-infra.agora.io/entry": "true" } : {},
+		},
+		spec: {
+			type: "ClusterIP",
+			selector: { app: name },
+			ports: [{ name: "http", port: 8080, targetPort: 8080 }],
+		},
+	});
+	return JSON.stringify({
+		schemaVersion: 1,
+		entryServiceName: "web",
+		resources: [
+			workload("web"),
+			workload("worker"),
+			service("web"),
+			service("worker"),
+			{
+				apiVersion: "batch/v1",
+				kind: "Job",
+				metadata: { name: "migrate" },
+				spec: {
+					backoffLimit: 1,
+					template: {
+						metadata: { labels: { app: "migration" } },
+						spec: {
+							restartPolicy: "Never",
+							containers: [{ name: "migrate", image }],
+						},
+					},
+				},
+			},
+		],
+	});
+}
+const smallMultiServiceCap = {
+	cpuMillicores: 250,
+	memoryMiB: 4_096,
+	storageGiB: 20,
+} as const;
+
 // These exercise the real production factory, loader, API/Store and Registry adapter.
 // Registry transport and standard model providers are controlled test inputs.
 describe("production API creation with user and application Tokens", () => {
@@ -1628,5 +1697,89 @@ describe("production API creation with user and application Tokens", () => {
 		]);
 		expect(candidates).not.toHaveBeenCalled();
 		expect(browserResolve).not.toHaveBeenCalled();
+	});
+	it("applies the deployment multi-service resource cap to API Token admissions", async () => {
+		const manifest = multiServiceApiManifest(fixture.imageDigest);
+		const admitWith = (input: ProductionPlatformApiInputV1) => {
+			const admissions =
+				createProductionPlatformApiAssemblyInputV1(input).agentApiCreation
+					?.admissions;
+			if (typeof admissions !== "function")
+				throw new Error("Missing API Token admissions");
+			return admissions({
+				principal: { kind: "application", id: "alice" },
+				ownerId: "alice",
+				agentId: "agent-api-cap",
+				applicationId: "application-api-cap",
+				authorizationRevision: "authorization-api-cap",
+				authorizationAdmission: { authorize: vi.fn() },
+			}).imageAdmission.admitImage({
+				schemaVersion: 1,
+				agentId: "agent-api-cap",
+				requestId: "request-api-cap",
+				traceId: "trace-api-cap",
+				requested: {
+					kind: "custom",
+					interactionMode: "self-managed",
+					identityResponsibility: "self-managed",
+					manifest,
+				},
+			});
+		};
+		const cap = { ...smallMultiServiceCap };
+		const capped = admitWith({
+			...fixture.input,
+			multiServiceResourceCap: cap,
+		});
+		// 装配时已捕获启动期策略；之后修改调用方对象不会放宽上限。
+		Object.assign(cap, { cpuMillicores: 100_000 });
+		await expect(capped).resolves.toEqual({
+			schemaVersion: 1,
+			agentId: "agent-api-cap",
+			requestId: "request-api-cap",
+			status: "rejected",
+			reason: "multi_service_resource_cap_exceeded",
+		});
+		expect(fixture.fetch).not.toHaveBeenCalled();
+		expect(fixture.authorize).not.toHaveBeenCalled();
+
+		// 对照：部署未配置上限时，同一清单在 API Token 路径按默认上限准入。
+		await expect(admitWith(fixture.input)).resolves.toMatchObject({
+			status: "admitted",
+			source: { kind: "custom", interactionMode: "self-managed" },
+		});
+		expect(fixture.fetch).toHaveBeenCalled();
+	});
+	it("returns the resource cap error for an over-cap API Token creation without effects", async () => {
+		await createPlatformApiShutdown(running)();
+		fixture.input = {
+			...fixture.input,
+			multiServiceResourceCap: smallMultiServiceCap,
+		};
+		await openApi();
+		const response = await create(apiTokens.application, "multi-service-cap", {
+			schemaVersion: 2,
+			name: apiBody.name,
+			description: apiBody.description,
+			source: {
+				kind: "custom",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+				manifest: multiServiceApiManifest(fixture.imageDigest),
+			},
+			coOwnerIds: [],
+			availability: [],
+			environment: [],
+			secrets: [],
+		});
+		expect(response.status).toBe(409);
+		expect(await response.json()).toMatchObject({
+			code: "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+			retryable: false,
+		});
+		expect(fixture.fetch).not.toHaveBeenCalled();
+		expect(await effects()).toEqual([
+			{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+		]);
 	});
 });

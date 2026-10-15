@@ -30,6 +30,12 @@ const protocolErrors = {
 		"The selected model or reasoning level is not supported by this Codex template.",
 		false,
 	],
+	MULTI_SERVICE_RESOURCE_CAP_EXCEEDED: [
+		409,
+		"MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+		"The multi-service Agent exceeds the deployment resource cap.",
+		false,
+	],
 	BUSY: [409, "AGENT_BUSY", "The conversation is busy.", true],
 	AGENT_STARTING: [
 		409,

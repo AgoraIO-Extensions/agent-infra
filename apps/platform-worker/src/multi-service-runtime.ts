@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type {
-	MultiServiceResourceCapV1,
-	MultiServiceResourceProfileV1,
-} from "@agent-infra/contracts/pilot";
 import {
-	MultiServiceResourceCapV1Schema,
-	MultiServiceResourceProfileAnnotationV1,
-	MultiServiceResourceProfileV1Schema,
+	calculateMultiServiceResourceCapacityV1,
+	type MultiServiceProfiledWorkloadV1,
+	type MultiServiceResourceCapV1,
+	type MultiServiceResourceConfigurationV1,
+	type MultiServiceResourceProfileV1,
+	multiServiceWorkloadProfileRefV1,
+	parseMultiServiceResourceConfigurationV1,
 } from "@agent-infra/contracts/pilot";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import type {
@@ -47,25 +47,25 @@ export interface MultiServiceRuntimePolicyV1 {
 	readonly ingressClassName: string;
 	readonly tlsSecretName: string;
 	readonly routeSelector: Readonly<Record<string, string>>;
+	/** 必须与 API `apiInput` 中的同名配置一致；省略时使用合约默认值。 */
 	readonly multiServiceResourceProfiles?: readonly MultiServiceResourceProfileV1[];
 	readonly multiServiceResourceCap?: MultiServiceResourceCapV1;
 }
 
-export const defaultMultiServiceResourceProfileV1 = {
-	profileId: "default",
-	displayName: "Default multi-service",
-	estimatedResources: { cpuMillicores: 100, memoryMiB: 128, storageGiB: 1 },
-	resources: {
-		requests: { cpu: "25m", memory: "32Mi" },
-		limits: { cpu: "100m", memory: "128Mi" },
-	},
-	storageSize: "1Gi",
-} satisfies MultiServiceResourceProfileV1;
-export const defaultMultiServiceResourceCapV1 = {
-	cpuMillicores: 2_000,
-	memoryMiB: 4_096,
-	storageGiB: 20,
-} satisfies MultiServiceResourceCapV1;
+/** 启动期解析部署档位与上限；非法配置使 Worker 装配失败（fail closed）。 */
+export function resolveMultiServiceResourceConfigurationV1(
+	policy: MultiServiceRuntimePolicyV1,
+): MultiServiceResourceConfigurationV1 {
+	try {
+		return parseMultiServiceResourceConfigurationV1({
+			profiles: policy.multiServiceResourceProfiles,
+			cap: policy.multiServiceResourceCap,
+		});
+	} catch {
+		throw new Error("multi-service resource policy invalid");
+	}
+}
+
 function imageReference(policy: MultiServiceRuntimePolicyV1, digest: string) {
 	return policy.imageRepository
 		? `${policy.imageRepository}@${digest}`
@@ -95,97 +95,69 @@ function fingerprint(value: unknown): string {
 	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-type MultiServiceResource =
-	MultiServiceDesired["multiService"]["resources"][number];
-type MultiServiceWorkload = Extract<
-	MultiServiceResource,
-	{ kind: "Deployment" | "StatefulSet" | "Job" }
->;
-type MultiServiceService = Extract<MultiServiceResource, { kind: "Service" }>;
-
-function serviceSelectsWorkload(
-	service: MultiServiceService,
-	workload: Extract<
-		MultiServiceWorkload,
-		{ kind: "Deployment" | "StatefulSet" }
-	>,
-) {
-	return Object.entries(service.spec.selector).every(
-		([key, expected]) =>
-			workload.spec.template.metadata.labels[key] === expected,
-	);
-}
-
-function profileRefForWorkload(
-	value: MultiServiceDesired,
-	workload: MultiServiceWorkload,
-) {
-	const direct =
-		workload.metadata.annotations?.[MultiServiceResourceProfileAnnotationV1];
-	if (direct) return direct;
-	if (workload.kind === "Job") return undefined;
-	const service = value.multiService.resources.find(
-		(resource): resource is MultiServiceService =>
-			resource.kind === "Service" && serviceSelectsWorkload(resource, workload),
-	);
-	return service?.metadata.annotations?.[
-		MultiServiceResourceProfileAnnotationV1
-	];
-}
-
 function profileForWorkload(
 	value: MultiServiceDesired,
-	workload: MultiServiceWorkload,
-	policy: MultiServiceRuntimePolicyV1,
+	workload: MultiServiceProfiledWorkloadV1,
+	resources: MultiServiceResourceConfigurationV1,
 ) {
-	const candidates = [
-		defaultMultiServiceResourceProfileV1,
-		...(policy.multiServiceResourceProfiles ?? []),
-	];
-	const profiles = new Map<string, MultiServiceResourceProfileV1>();
-	for (const candidate of candidates) {
-		const parsed = MultiServiceResourceProfileV1Schema.safeParse(candidate);
-		if (parsed.success) profiles.set(candidate.profileId, candidate);
-	}
-	const ref =
-		profileRefForWorkload(value, workload) ??
-		defaultMultiServiceResourceProfileV1.profileId;
-	const profile = profiles.get(ref);
+	const ref = multiServiceWorkloadProfileRefV1(value.multiService, workload);
+	const profile = resources.profiles.find(
+		(candidate) => candidate.profileId === ref,
+	);
 	if (!profile) throw new Error("multi-service resource profile unavailable");
 	return profile;
 }
 
-/** Validate the aggregate profile estimate before the first Kubernetes write. */
+/** 首次 Kubernetes 写入前校验全部工作负载（含迁移 Job）的估算总量。 */
 export function validateMultiServiceResourceCapacityV1(
 	value: MultiServiceDesired,
-	policy: MultiServiceRuntimePolicyV1,
+	resources: MultiServiceResourceConfigurationV1,
 ) {
-	const cap = MultiServiceResourceCapV1Schema.parse(
-		policy.multiServiceResourceCap ?? defaultMultiServiceResourceCapV1,
+	const capacity = calculateMultiServiceResourceCapacityV1({
+		manifest: value.multiService,
+		configuration: resources,
+	});
+	if (!capacity.ok)
+		throw new Error(
+			capacity.reason === "cap_exceeded"
+				? "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED"
+				: "multi-service resource profile unavailable",
+		);
+	return { total: capacity.total, cap: capacity.cap };
+}
+
+type MultiServicePvcResource = Extract<
+	MultiServiceDesired["multiService"]["resources"][number],
+	{ kind: "PersistentVolumeClaim" }
+>;
+
+/**
+ * 每个 PVC 归属名为 `<StatefulSet>-data` 的 StatefulSet（API 拓扑准入保证）。PVC 大小取
+ * 该 StatefulSet 档位的 storageSize，档位未声明时沿用部署的全局 storageSize；用户 PVC
+ * 中的大小不生效。
+ */
+function multiServiceStorageSize(
+	value: MultiServiceDesired,
+	pvc: MultiServicePvcResource,
+	policy: MultiServiceRuntimePolicyV1,
+	resources: MultiServiceResourceConfigurationV1,
+) {
+	const statefulSet = value.multiService.resources.find(
+		(
+			resource,
+		): resource is Extract<
+			MultiServiceDesired["multiService"]["resources"][number],
+			{ kind: "StatefulSet" }
+		> =>
+			resource.kind === "StatefulSet" &&
+			`${resource.metadata.name}-data` === pvc.metadata.name,
 	);
-	let total = { cpuMillicores: 0, memoryMiB: 0, storageGiB: 0 };
-	for (const resource of value.multiService.resources) {
-		if (
-			resource.kind !== "Deployment" &&
-			resource.kind !== "StatefulSet" &&
-			resource.kind !== "Job"
-		)
-			continue;
-		const profile = profileForWorkload(value, resource, policy);
-		total = {
-			cpuMillicores:
-				total.cpuMillicores + profile.estimatedResources.cpuMillicores,
-			memoryMiB: total.memoryMiB + profile.estimatedResources.memoryMiB,
-			storageGiB: total.storageGiB + profile.estimatedResources.storageGiB,
-		};
-	}
-	if (
-		total.cpuMillicores > cap.cpuMillicores ||
-		total.memoryMiB > cap.memoryMiB ||
-		total.storageGiB > cap.storageGiB
-	)
-		throw new Error("MULTI_SERVICE_RESOURCE_CAP_EXCEEDED");
-	return { total, cap };
+	const size =
+		(statefulSet
+			? profileForWorkload(value, statefulSet, resources).storageSize
+			: undefined) ?? policy.storageSize;
+	if (!size) throw new Error("multi-service storage policy missing");
+	return size;
 }
 
 function migrationJobName(value: MultiServiceDesired): string {
@@ -274,8 +246,9 @@ function deployment(
 		{ kind: "Deployment" | "StatefulSet" }
 	>,
 	policy: MultiServiceRuntimePolicyV1,
+	resources: MultiServiceResourceConfigurationV1,
 ): V1Deployment {
-	const profile = profileForWorkload(value, resource, policy);
+	const profile = profileForWorkload(value, resource, resources);
 	const name = serviceResourceName(value.agentId, resource.metadata.name);
 	const service = serviceLabel(resource.metadata.name);
 	const labels = {
@@ -367,6 +340,7 @@ function statefulSet(
 		{ kind: "StatefulSet" }
 	>,
 	policy: MultiServiceRuntimePolicyV1,
+	resources: MultiServiceResourceConfigurationV1,
 	persistentVolumeClaim?: V1PersistentVolumeClaim,
 ): V1StatefulSet {
 	const name = serviceResourceName(value.agentId, resource.metadata.name);
@@ -391,7 +365,7 @@ function statefulSet(
 	const volumeMount = claimName
 		? { name: "data", mountPath: "/data" }
 		: undefined;
-	const profile = profileForWorkload(value, resource, policy);
+	const profile = profileForWorkload(value, resource, resources);
 	const podSpecWithVolumes = resource.spec.template
 		.spec as typeof resource.spec.template.spec & Pick<V1PodSpec, "volumes">;
 	return {
@@ -454,14 +428,11 @@ function statefulSet(
 
 function persistentVolumeClaim(
 	value: MultiServiceDesired,
-	resource: Extract<
-		MultiServiceDesired["multiService"]["resources"][number],
-		{ kind: "PersistentVolumeClaim" }
-	>,
+	resource: MultiServicePvcResource,
 	policy: MultiServiceRuntimePolicyV1,
+	resources: MultiServiceResourceConfigurationV1,
 ): V1PersistentVolumeClaim {
-	if (!policy.storageSize)
-		throw new Error("multi-service storage policy missing");
+	const storage = multiServiceStorageSize(value, resource, policy, resources);
 	return {
 		apiVersion: "v1",
 		kind: "PersistentVolumeClaim",
@@ -474,20 +445,23 @@ function persistentVolumeClaim(
 			...(policy.storageClassName
 				? { storageClassName: policy.storageClassName }
 				: {}),
-			resources: { requests: { storage: policy.storageSize } },
+			resources: { requests: { storage } },
 		},
 	};
 }
 
 function storageMatchesPolicy(
 	current: V1PersistentVolumeClaim,
+	value: MultiServiceDesired,
+	pvc: MultiServicePvcResource,
 	policy: MultiServiceRuntimePolicyV1,
+	resources: MultiServiceResourceConfigurationV1,
 ) {
 	return (
 		current.spec?.accessModes?.length === 1 &&
 		current.spec.accessModes[0] === "ReadWriteOnce" &&
-		policy.storageSize !== undefined &&
-		current.spec.resources?.requests?.storage === policy.storageSize &&
+		current.spec.resources?.requests?.storage ===
+			multiServiceStorageSize(value, pvc, policy, resources) &&
 		(policy.storageClassName === undefined ||
 			current.spec.storageClassName === policy.storageClassName)
 	);
@@ -499,9 +473,9 @@ function migrationJob(
 		MultiServiceDesired["multiService"]["resources"][number],
 		{ kind: "Job" }
 	>,
-	policy: MultiServiceRuntimePolicyV1,
+	resources: MultiServiceResourceConfigurationV1,
 ): V1Job {
-	const profile = profileForWorkload(value, resource, policy);
+	const profile = profileForWorkload(value, resource, resources);
 	const labels = {
 		...resource.spec.template.metadata.labels,
 		[ownerLabel]: workloadResourceNameV1(value.agentId),
@@ -675,11 +649,12 @@ export function createMultiServiceRuntimeOperations(options: {
 	readonly policy: MultiServiceRuntimePolicyV1;
 }) {
 	const { client } = options;
+	const resources = resolveMultiServiceResourceConfigurationV1(options.policy);
 	const resourceName = (value: MultiServiceDesired, name: string) =>
 		serviceResourceName(value.agentId, name);
 	const manifestPvc = (value: MultiServiceDesired, name: string) =>
 		value.multiService.resources.find(
-			(resource) =>
+			(resource): resource is MultiServicePvcResource =>
 				resource.kind === "PersistentVolumeClaim" &&
 				resourceName(value, resource.metadata.name) === name,
 		);
@@ -716,9 +691,16 @@ export function createMultiServiceRuntimeOperations(options: {
 		if (object.kind === "Job") return current;
 		if (current.kind === "PersistentVolumeClaim") {
 			const currentPvc = current as unknown as V1PersistentVolumeClaim;
+			const declaredPvc = manifestPvc(value, current.metadata?.name ?? "");
 			if (
-				!manifestPvc(value, current.metadata?.name ?? "") ||
-				!storageMatchesPolicy(currentPvc, options.policy)
+				!declaredPvc ||
+				!storageMatchesPolicy(
+					currentPvc,
+					value,
+					declaredPvc,
+					options.policy,
+					resources,
+				)
 			)
 				throw new Error("multi-service PVC drifted");
 		}
@@ -902,16 +884,16 @@ export function createMultiServiceRuntimeOperations(options: {
 			value: MultiServiceDesired,
 			ownership: MultiServiceOwnershipOptionsV1 = {},
 		) {
-			// Capacity is checked before the first read/create so a rejected Agent
-			// cannot leave a partial multi-service installation behind.
-			validateMultiServiceResourceCapacityV1(value, options.policy);
+			// 总量上限必须在任何 Kubernetes 写入（含清理旧版本资源）之前校验，
+			// 被拒绝的 Agent 不能留下半安装或被部分清理的多服务资源。
+			validateMultiServiceResourceCapacityV1(value, resources);
 			await pruneStaleResources(value, ownership);
 			await put(serviceAccount(value), value, ownership);
 			const migration = migrationResource(value);
 			if (migration?.kind === "Job") {
 				await put(migrationNetworkPolicy(value), value, ownership);
 				const job = await put(
-					migrationJob(value, migration, options.policy),
+					migrationJob(value, migration, resources),
 					value,
 					ownership,
 				);
@@ -924,7 +906,7 @@ export function createMultiServiceRuntimeOperations(options: {
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "PersistentVolumeClaim")
 					await put(
-						persistentVolumeClaim(value, resource, options.policy),
+						persistentVolumeClaim(value, resource, options.policy, resources),
 						value,
 						ownership,
 					);
@@ -936,7 +918,7 @@ export function createMultiServiceRuntimeOperations(options: {
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "Deployment")
 					await put(
-						deployment(value, resource, options.policy),
+						deployment(value, resource, options.policy, resources),
 						value,
 						ownership,
 					);
@@ -955,7 +937,13 @@ export function createMultiServiceRuntimeOperations(options: {
 							value,
 							resource,
 							options.policy,
-							persistentVolumeClaim(value, statefulPvc, options.policy),
+							resources,
+							persistentVolumeClaim(
+								value,
+								statefulPvc,
+								options.policy,
+								resources,
+							),
 						),
 						value,
 						ownership,
@@ -1012,7 +1000,13 @@ export function createMultiServiceRuntimeOperations(options: {
 				if (
 					!current ||
 					!owned(current, value) ||
-					!storageMatchesPolicy(current, options.policy)
+					!storageMatchesPolicy(
+						current,
+						value,
+						resource,
+						options.policy,
+						resources,
+					)
 				)
 					return "unhealthy" as const;
 			}

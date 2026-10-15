@@ -77,6 +77,35 @@ docker run --rm -i --network none --entrypoint node \
 失败时只输出固定错误码。把生成的数组原样写入私有配置的 `codexModelProfiles`。Model Catalog
 的 `allowedModels` 仍只应列出该数组中存在、且模型端点实际可用的模型。
 
+## 多服务 Agent 资源档位
+
+多服务 Agent 的每个 Deployment、StatefulSet 和迁移 Job 都按平台档位注入资源；清单不能声明
+container `resources`，`replicas` 固定为 1，用户 PVC 中的大小也不生效。档位与单 Agent 总量
+上限由部署配置提供：
+
+| 字段 | 含义 |
+| --- | --- |
+| `apiInput.multiServiceResourceProfiles` | 可选的档位数组，最多 64 项。每项为 `{ profileId, displayName, estimatedResources: { cpuMillicores, memoryMiB, storageGiB }, resources: { requests, limits }, storageSize? }`；`resources` 是注入容器的 Kubernetes 量，`estimatedResources` 用于总量估算，`storageSize`（如 `10Gi`）只对挂载 PVC 的 StatefulSet 生效 |
+| `apiInput.multiServiceResourceCap` | 可选的单 Agent 估算总量上限 `{ cpuMillicores, memoryMiB, storageGiB }` |
+
+清单通过 annotation `agent-infra.agora.io/resource-profile: <profileId>` 选择档位：工作负载自身
+的 annotation 优先，其次是选中它的 Service；迁移 Job 只读取自身 annotation。都未声明时使用
+平台内置的 `default` 档位：估算 `100m` CPU、`128` MiB 内存、`1` GiB 存储，注入
+requests `25m`/`32Mi`、limits `100m`/`128Mi`，不设 `storageSize`。`default` 始终存在，
+配置的档位不能使用该 ID。未配置上限时默认 `2000m` CPU、`4096` MiB 内存、`20` GiB 存储。
+`GET /api/v2/deployment/configuration` 返回全部档位（不含 `resources`）、上限、默认档位 ID，
+以及 `multiServiceResourceProfilesSource`（配置了档位为 `deployment`，否则为 `default`）；
+Agent 详情的 `source.services` 返回每个 Service 实际使用的档位。
+
+创建、修订申请和更新配置时，API 汇总每个 Deployment、StatefulSet 与迁移 Job 各一份估算量，
+在调用 Registry 或写入任何数据前与上限比较。浏览器会话与 API Token 创建使用同一份配置；
+超限返回 HTTP 409 `MULTI_SERVICE_RESOURCE_CAP_EXCEEDED`（`retryable: false`），引用未配置
+的档位按普通准入拒绝处理。档位重复、使用 `default`、字段非法或上限非法时，生产 API 装配抛出
+`PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID`，进程拒绝启动。
+
+两项配置必须与 Worker 的 `workloadInput.policy` 同名字段取相同值，Worker 侧规则见
+[Worker 部署说明](../platform-worker/README.md#多服务资源档位)。
+
 ## 应用 Token 管理 Agent
 
 机器人或服务复用独立应用及其 API Token；同一应用可获得多个 Agent 的显式授权。

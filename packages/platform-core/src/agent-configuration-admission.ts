@@ -144,16 +144,24 @@ export function parseAuthorizationDecision(
 	});
 }
 
-function snapshotAdmissionDecision(
+type AdmissionRejectionReasonV1 =
+	| "codex_model_profile_unsupported"
+	| "multi_service_resource_cap_exceeded";
+
+function snapshotAdmissionDecision<
+	Reason extends AdmissionRejectionReasonV1 = never,
+>(
 	input: unknown,
 	admittedKeys: readonly string[],
 	optionalKeys: readonly string[] = [],
+	/** 每个准入端口只接受自己声明的拒绝原因，其余原因视为依赖返回非法值。 */
+	rejectionReasons: readonly Reason[] = [],
 ):
 	| {
 			status: "rejected";
 			agentId: string;
 			requestId: string;
-			reason?: "codex_model_profile_unsupported";
+			reason?: Reason;
 	  }
 	| {
 			status: "admitted";
@@ -181,7 +189,7 @@ function snapshotAdmissionDecision(
 			]);
 			if (
 				Object.hasOwn(values, "reason") &&
-				values.reason !== "codex_model_profile_unsupported"
+				!(rejectionReasons as readonly unknown[]).includes(values.reason)
 			)
 				invalidCommand();
 			return {
@@ -189,7 +197,7 @@ function snapshotAdmissionDecision(
 				agentId: values.agentId,
 				requestId: values.requestId,
 				...(Object.hasOwn(values, "reason")
-					? { reason: values.reason as "codex_model_profile_unsupported" }
+					? { reason: values.reason as Reason }
 					: {}),
 			};
 		}
@@ -207,7 +215,12 @@ function snapshotAdmissionDecision(
 export function parseImageDecision(
 	input: unknown,
 ): Awaited<ReturnType<AgentConfigurationImageAdmissionPortV1["admitImage"]>> {
-	const decision = snapshotAdmissionDecision(input, ["source"]);
+	const decision = snapshotAdmissionDecision(
+		input,
+		["source"],
+		["reason"],
+		["multi_service_resource_cap_exceeded"],
+	);
 	return decision.status === "rejected"
 		? { schemaVersion: 1, ...decision }
 		: dependencyValue(() => ({
@@ -226,6 +239,7 @@ export function parseModelDecision(
 		input,
 		["configuration"],
 		["reason"],
+		["codex_model_profile_unsupported"],
 	);
 	return decision.status === "rejected"
 		? { schemaVersion: 1, ...decision }

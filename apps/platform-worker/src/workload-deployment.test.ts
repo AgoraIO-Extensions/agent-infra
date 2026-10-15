@@ -271,6 +271,50 @@ describe("production Worker deployment", () => {
 		).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
 	});
 
+	it.each([
+		[
+			"a reserved default profile",
+			{
+				multiServiceResourceProfiles: [
+					{
+						profileId: "default",
+						displayName: "Override",
+						estimatedResources: {
+							cpuMillicores: 100,
+							memoryMiB: 128,
+							storageGiB: 1,
+						},
+						resources: {
+							requests: { cpu: "25m", memory: "32Mi" },
+							limits: { cpu: "100m", memory: "128Mi" },
+						},
+					},
+				],
+			},
+		],
+		[
+			"an invalid aggregate cap",
+			{
+				multiServiceResourceCap: {
+					cpuMillicores: 0,
+					memoryMiB: 1,
+					storageGiB: 1,
+				},
+			},
+		],
+	])(
+		"fails Worker assembly on %s in the multi-service resource policy",
+		async (_label, change) => {
+			const deployment = await input();
+			await expect(
+				createProductionWorkloadWorkerOptionsV1({
+					...deployment,
+					policy: { ...deployment.policy, ...change },
+				}),
+			).rejects.toThrow("WORKER_KUBERNETES_CONFIGURATION_INVALID");
+		},
+	);
+
 	it("uses the explicitly selected namespace client rather than kubeconfig current-context", async () => {
 		const requests: { url?: string; authorization?: string }[] = [];
 		const server = createServer((request, response) => {

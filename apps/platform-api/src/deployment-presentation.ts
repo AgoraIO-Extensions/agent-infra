@@ -1,9 +1,9 @@
-import type { MultiServiceServiceProjectionV1 } from "@agent-infra/contracts/pilot";
 import {
 	AgentProjectionV1Schema,
 	AgentResourceProfileProjectionV1Schema,
 	MultiServiceManifestDocumentV1Schema,
-	MultiServiceResourceProfileAnnotationV1,
+	type MultiServiceServiceProjectionV1,
+	multiServiceServiceProjectionsV1,
 } from "@agent-infra/contracts/pilot";
 import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-store";
 import { parseAllDocuments } from "yaml";
@@ -42,8 +42,6 @@ export function createDeploymentPresentation(input: {
 		"readRuntimePresentation"
 	>;
 	readonly resourceProfile: Presentation["resourceProfile"];
-	/** Optional deployment-owned default used when a legacy manifest has no annotation. */
-	readonly multiServiceDefaultResourceProfileRef?: string;
 	readonly imageRepository: string;
 	/** Runtime model capability is public only when the API reader is wired. */
 	readonly modelSelectionAvailable?: boolean;
@@ -95,18 +93,8 @@ export function createDeploymentPresentation(input: {
 				}
 				const document =
 					MultiServiceManifestDocumentV1Schema.parse(documentInput);
-				services = document.resources
-					.filter((resource) => resource.kind === "Service")
-					.map((resource) => ({
-						name: resource.metadata.name,
-						resourceProfileRef:
-							resource.metadata.annotations?.[
-								MultiServiceResourceProfileAnnotationV1
-							] ??
-							input.multiServiceDefaultResourceProfileRef ??
-							input.resourceProfile.profileId,
-						entry: resource.metadata.name === document.entryServiceName,
-					}));
+				// 与准入、Worker 注入使用同一档位解析规则；未声明时为默认档位。
+				services = multiServiceServiceProjectionsV1(document);
 			} catch {
 				services = undefined;
 			}

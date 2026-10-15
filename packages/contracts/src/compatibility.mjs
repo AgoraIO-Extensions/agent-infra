@@ -4043,6 +4043,31 @@ function stripMultiServiceSourceOpenApiBranches(value) {
 	return normalized;
 }
 
+// #2396 在公共终止错误码末尾追加 MULTI_SERVICE_RESOURCE_CAP_EXCEEDED。只有基线完全
+// 没有该错误码时才从当前契约中剔除这一追加项；基线已有时照常比较，删除仍会被检测到。
+const multiServiceResourceCapErrorCode = "MULTI_SERVICE_RESOURCE_CAP_EXCEEDED";
+function normalizeMultiServiceResourceCapErrorCodeAddition(previous, current) {
+	if (JSON.stringify(previous).includes(multiServiceResourceCapErrorCode))
+		return current;
+	const normalized = structuredClone(current);
+	const visit = (value) => {
+		if (!value || typeof value !== "object") return;
+		if (Array.isArray(value)) {
+			for (const child of value) visit(child);
+			return;
+		}
+		if (
+			Array.isArray(value.enum) &&
+			value.enum.at(-1) === multiServiceResourceCapErrorCode &&
+			value.enum.at(-2) === "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+		)
+			value.enum = value.enum.slice(0, -1);
+		for (const child of Object.values(value)) visit(child);
+	};
+	visit(normalized);
+	return normalized;
+}
+
 function findBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
 	let current = currentValue;
@@ -4075,6 +4100,10 @@ function findBreakingChanges(previousValue, currentValue) {
 		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
 		previous = stripMultiServiceSourceOpenApiBranches(previous);
 		current = stripMultiServiceSourceOpenApiBranches(current);
+		current = normalizeMultiServiceResourceCapErrorCodeAddition(
+			previous,
+			current,
+		);
 		if (!hasSelectedBrowserHandoffOpenApiOption(previous)) {
 			const browserNormalized = stripBrowserHandoffOpenApiAdditions(current);
 			if (previous.components?.schemas?.BrowserHandoffEventV2 === undefined)
