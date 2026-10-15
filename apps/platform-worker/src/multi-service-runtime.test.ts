@@ -904,6 +904,83 @@ describe("multi-service runtime operations", () => {
 		expect(afterRollback?.metadata?.uid).toBe(before.metadata?.uid);
 	});
 
+	it("mounts every StatefulSet on the PVC that apply created for it", async () => {
+		const web = manifest.resources.find(
+			(resource) =>
+				resource.kind === "Deployment" && resource.metadata.name === "web",
+		);
+		const worker = manifest.resources.find(
+			(resource) =>
+				resource.kind === "Deployment" && resource.metadata.name === "worker",
+		);
+		if (web?.kind !== "Deployment" || worker?.kind !== "Deployment")
+			throw new Error("stateful fixture missing");
+		const pvc = (name: string) => ({
+			apiVersion: "v1",
+			kind: "PersistentVolumeClaim",
+			metadata: { name: `${name}-data` },
+			spec: {
+				accessModes: ["ReadWriteOnce"],
+				resources: { requests: { storage: "1Gi" } },
+			},
+		});
+		// 第二个 StatefulSet 的名字很长，PVC 名字会被截断到 63 个字符以内。
+		const longName = "inventory-database-primary";
+		const twoStateful = MultiServiceManifestDocumentV1Schema.parse({
+			...manifest,
+			resources: [
+				{
+					...web,
+					kind: "StatefulSet",
+					spec: { ...web.spec, serviceName: "web" },
+				},
+				{
+					...worker,
+					kind: "StatefulSet",
+					metadata: { ...worker.metadata, name: longName },
+					spec: { ...worker.spec, serviceName: "worker" },
+				},
+				...manifest.resources.filter(
+					(resource) => resource !== web && resource !== worker,
+				),
+				pvc("web"),
+				pvc(longName),
+			],
+		});
+		for (const [source, count] of [
+			[statefulManifest, 1],
+			[twoStateful, 2],
+		] as const) {
+			const fake = fakeClient();
+			const operations = createMultiServiceRuntimeOperations({
+				client: fake.client,
+				policy: { ...basePolicy, storageSize: "1Gi" },
+			});
+			const value = desired(source);
+			if (!isMultiService(value))
+				throw new Error("multi-service fixture invalid");
+			await operations.apply(value);
+			const statefulSets = [...fake.resources.values()].filter(
+				(resource) => resource.kind === "StatefulSet",
+			) as V1StatefulSet[];
+			expect(statefulSets).toHaveLength(count);
+			for (const set of statefulSets) {
+				const claims = (set.spec?.template.spec?.volumes ?? []).flatMap(
+					(volume) =>
+						volume.persistentVolumeClaim
+							? [volume.persistentVolumeClaim.claimName]
+							: [],
+				);
+				// 每个 StatefulSet 只挂自己的 PVC，且该 PVC 确实已经创建。
+				expect(claims).toHaveLength(1);
+				expect(fake.resources.has(`PersistentVolumeClaim/${claims[0]}`)).toBe(
+					true,
+				);
+				expect(claims[0]?.length).toBeLessThanOrEqual(63);
+			}
+		}
+	});
+
 	it("runs a migration Job before services and reuses its completed result", async () => {
 		const fake = fakeClient();
 		const operations = createMultiServiceRuntimeOperations({
