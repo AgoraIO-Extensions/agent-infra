@@ -131,6 +131,23 @@ function owned(resource: KubernetesObject, value: MultiServiceDesired) {
 	);
 }
 
+function ownedByAgent(resource: KubernetesObject, value: MultiServiceDesired) {
+	if (
+		resource.metadata?.labels?.[ownerLabel] !==
+			workloadResourceNameV1(value.agentId) ||
+		resource.metadata?.annotations?.[agentAnnotation] !== value.agentId
+	)
+		return false;
+	const fence = Number(
+		resource.metadata?.annotations?.["agent-infra.agora.io/fence"],
+	);
+	return Number.isSafeInteger(fence) && fence <= value.fence;
+}
+
+interface MultiServiceOwnershipOptionsV1 {
+	readonly allowOwnershipTransition?: boolean;
+}
+
 function deployment(
 	value: MultiServiceDesired,
 	resource: Extract<
@@ -543,13 +560,17 @@ export function createMultiServiceRuntimeOperations(options: {
 	async function put<T extends KubernetesObject>(
 		object: T,
 		value: MultiServiceDesired,
+		ownership: MultiServiceOwnershipOptionsV1 = {},
 	) {
 		const current = await client.read<T>(
 			object.kind as never,
 			object.metadata?.name ?? "",
 		);
 		if (!current) return client.create(object);
-		if (!owned(current, value))
+		const transitioned =
+			ownership.allowOwnershipTransition === true &&
+			ownedByAgent(current, value);
+		if (!owned(current, value) && !transitioned)
 			throw new Error("multi-service resource drifted");
 		if (object.kind === "ConfigMap") {
 			if (
@@ -558,8 +579,12 @@ export function createMultiServiceRuntimeOperations(options: {
 					(current as V1ConfigMap).data ?? {},
 					(object as V1ConfigMap).data ?? {},
 				)
-			)
-				throw new Error("multi-service ConfigMap is immutable and drifted");
+			) {
+				if (!transitioned)
+					throw new Error("multi-service ConfigMap is immutable and drifted");
+				await client.delete(current);
+				return client.create(object);
+			}
 			return current;
 		}
 		if (object.kind === "Job") return current;
@@ -615,23 +640,94 @@ export function createMultiServiceRuntimeOperations(options: {
 			| "PersistentVolumeClaim",
 		name: string,
 		value: MultiServiceDesired,
+		ownership: MultiServiceOwnershipOptionsV1 = {},
 	) {
 		const current = await client.read(kind, name);
 		if (!current) return true;
-		if (!owned(current, value))
+		if (
+			!owned(current, value) &&
+			!(
+				ownership.allowOwnershipTransition === true &&
+				ownedByAgent(current, value)
+			)
+		)
 			throw new Error("multi-service resource drifted");
 		await client.delete(current);
 		return (await client.read(kind, name)) === null;
 	}
-	async function cleanupMigration(value: MultiServiceDesired) {
+	async function cleanupMigration(
+		value: MultiServiceDesired,
+		ownership: MultiServiceOwnershipOptionsV1 = {},
+	) {
 		let complete = await remove(
 			"NetworkPolicy",
 			`${migrationJobName(value)}-network`,
 			value,
+			ownership,
 		);
 		complete =
-			(await remove("Job", migrationJobName(value), value)) && complete;
+			(await remove("Job", migrationJobName(value), value, ownership)) &&
+			complete;
 		return complete;
+	}
+	async function pruneStaleResources(
+		value: MultiServiceDesired,
+		ownership: MultiServiceOwnershipOptionsV1,
+	) {
+		if (!ownership.allowOwnershipTransition) return;
+		const desiredNames = new Map<string, Set<string>>();
+		const add = (kind: string, name: string) => {
+			const names = desiredNames.get(kind) ?? new Set<string>();
+			names.add(name);
+			desiredNames.set(kind, names);
+		};
+		add("ServiceAccount", workloadResourceNameV1(value.agentId));
+		add("Ingress", workloadResourceNameV1(value.agentId));
+		for (const resource of value.multiService.resources) {
+			if (
+				resource.kind === "Deployment" ||
+				resource.kind === "StatefulSet" ||
+				resource.kind === "Service" ||
+				resource.kind === "ConfigMap" ||
+				resource.kind === "PersistentVolumeClaim"
+			)
+				add(resource.kind, resourceName(value, resource.metadata.name));
+			if (resource.kind === "Job") {
+				add("Job", migrationJobName(value));
+				add("NetworkPolicy", `${migrationJobName(value)}-network`);
+			}
+			if (resource.kind === "Deployment" || resource.kind === "StatefulSet")
+				add(
+					"NetworkPolicy",
+					`${resourceName(value, resource.metadata.name)}-network`,
+				);
+		}
+		const kinds = [
+			"Deployment",
+			"StatefulSet",
+			"Service",
+			"ConfigMap",
+			"Job",
+			"ServiceAccount",
+			"NetworkPolicy",
+			"Ingress",
+		] as const;
+		for (const kind of kinds) {
+			const current = await client.list(
+				kind,
+				`${ownerLabel}=${workloadResourceNameV1(value.agentId)}`,
+			);
+			for (const resource of current) {
+				const name = resource.metadata?.name;
+				if (
+					!name ||
+					desiredNames.get(kind)?.has(name) ||
+					!ownedByAgent(resource, value)
+				)
+					continue;
+				await client.delete(resource);
+			}
+		}
 	}
 	async function scaleDown(value: MultiServiceDesired) {
 		let pending = false;
@@ -676,12 +772,16 @@ export function createMultiServiceRuntimeOperations(options: {
 	}
 	return {
 		isMultiService,
-		async apply(value: MultiServiceDesired) {
-			await put(serviceAccount(value), value);
+		async apply(
+			value: MultiServiceDesired,
+			ownership: MultiServiceOwnershipOptionsV1 = {},
+		) {
+			await pruneStaleResources(value, ownership);
+			await put(serviceAccount(value), value, ownership);
 			const migration = migrationResource(value);
 			if (migration?.kind === "Job") {
-				await put(migrationNetworkPolicy(value), value);
-				const job = await put(migrationJob(value, migration), value);
+				await put(migrationNetworkPolicy(value), value, ownership);
+				const job = await put(migrationJob(value, migration), value, ownership);
 				if (!jobSucceeded(job as V1Job))
 					return {
 						uid: workloadResourceNameV1(value.agentId),
@@ -693,15 +793,20 @@ export function createMultiServiceRuntimeOperations(options: {
 					await put(
 						persistentVolumeClaim(value, resource, options.policy),
 						value,
+						ownership,
 					);
 			}
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "ConfigMap")
-					await put(configMap(value, resource), value);
+					await put(configMap(value, resource), value, ownership);
 			}
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "Deployment")
-					await put(deployment(value, resource, options.policy), value);
+					await put(
+						deployment(value, resource, options.policy),
+						value,
+						ownership,
+					);
 				if (resource.kind === "StatefulSet") {
 					const pvc = value.multiService.resources.find(
 						(candidate) => candidate.kind === "PersistentVolumeClaim",
@@ -716,14 +821,19 @@ export function createMultiServiceRuntimeOperations(options: {
 								: undefined,
 						),
 						value,
+						ownership,
 					);
 				}
 				if (resource.kind === "Service")
-					await put(service(value, resource), value);
+					await put(service(value, resource), value, ownership);
 			}
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "Deployment" || resource.kind === "StatefulSet")
-					await put(networkPolicy(value, resource, options.policy), value);
+					await put(
+						networkPolicy(value, resource, options.policy),
+						value,
+						ownership,
+					);
 			}
 			return {
 				uid: workloadResourceNameV1(value.agentId),
@@ -774,17 +884,30 @@ export function createMultiServiceRuntimeOperations(options: {
 		async promote(value: MultiServiceDesired) {
 			await put(ingress(value, options.policy), value);
 		},
-		async closeRoute(value: MultiServiceDesired) {
-			return remove("Ingress", workloadResourceNameV1(value.agentId), value);
+		async closeRoute(
+			value: MultiServiceDesired,
+			ownership: MultiServiceOwnershipOptionsV1 = {},
+		) {
+			return remove(
+				"Ingress",
+				workloadResourceNameV1(value.agentId),
+				value,
+				ownership,
+			);
 		},
 		scaleDown,
-		async cleanupAgent(value: MultiServiceDesired, deleteVolume = false) {
+		async cleanupAgent(
+			value: MultiServiceDesired,
+			deleteVolume = false,
+			ownership: MultiServiceOwnershipOptionsV1 = {},
+		) {
 			let complete = await remove(
 				"Ingress",
 				workloadResourceNameV1(value.agentId),
 				value,
+				ownership,
 			);
-			complete = (await cleanupMigration(value)) && complete;
+			complete = (await cleanupMigration(value, ownership)) && complete;
 			for (const resource of value.multiService.resources) {
 				if (resource.kind === "ConfigMap")
 					complete =
@@ -792,6 +915,7 @@ export function createMultiServiceRuntimeOperations(options: {
 							"ConfigMap",
 							serviceResourceName(value.agentId, resource.metadata.name),
 							value,
+							ownership,
 						)) && complete;
 				if (resource.kind === "Deployment" || resource.kind === "StatefulSet") {
 					complete =
@@ -799,12 +923,14 @@ export function createMultiServiceRuntimeOperations(options: {
 							"NetworkPolicy",
 							`${serviceResourceName(value.agentId, resource.metadata.name)}-network`,
 							value,
+							ownership,
 						)) && complete;
 					complete =
 						(await remove(
 							resource.kind,
 							serviceResourceName(value.agentId, resource.metadata.name),
 							value,
+							ownership,
 						)) && complete;
 				}
 				if (resource.kind === "Service")
@@ -813,6 +939,7 @@ export function createMultiServiceRuntimeOperations(options: {
 							"Service",
 							serviceResourceName(value.agentId, resource.metadata.name),
 							value,
+							ownership,
 						)) && complete;
 				if (resource.kind === "PersistentVolumeClaim" && deleteVolume)
 					complete =
@@ -820,6 +947,7 @@ export function createMultiServiceRuntimeOperations(options: {
 							"PersistentVolumeClaim",
 							resourceName(value, resource.metadata.name),
 							value,
+							ownership,
 						)) && complete;
 			}
 			complete =
@@ -827,6 +955,7 @@ export function createMultiServiceRuntimeOperations(options: {
 					"ServiceAccount",
 					workloadResourceNameV1(value.agentId),
 					value,
+					ownership,
 				)) && complete;
 			return complete;
 		},

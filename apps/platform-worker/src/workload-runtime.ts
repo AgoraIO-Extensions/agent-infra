@@ -1453,7 +1453,9 @@ export function createWorkloadRuntimeV1(
 				const workload = desired(state);
 				if (
 					!isMultiService(workload) ||
-					!(await multiService.closeRoute(workload))
+					!(await multiService.closeRoute(workload, {
+						allowOwnershipTransition: true,
+					}))
 				)
 					throw new Error("Workload route is closing");
 				return;
@@ -1480,7 +1482,9 @@ export function createWorkloadRuntimeV1(
 			if (stopped && "manifest" in state.candidate.configuration.source) {
 				const workload = desired(state);
 				if (!isMultiService(workload)) return null;
-				await multiService.closeRoute(workload);
+				await multiService.closeRoute(workload, {
+					allowOwnershipTransition: true,
+				});
 				return multiService.scaleDown(workload);
 			}
 			if (stopped)
@@ -1493,7 +1497,10 @@ export function createWorkloadRuntimeV1(
 			const adapter = createAdapter(undefined, state);
 			await revalidateCandidateCatalog(state);
 			const workload = desired(state);
-			if (isMultiService(workload)) return multiService.apply(workload);
+			if (isMultiService(workload))
+				return multiService.apply(workload, {
+					allowOwnershipTransition: true,
+				});
 			await adapter.assertStandardTemplateSelector(workload);
 			const activeBindingsToRepair: {
 				readonly reference: SecretActivationReferenceV1;
@@ -1766,6 +1773,7 @@ export function createWorkloadRuntimeV1(
 				resourcesRemoved = await multiService.cleanupAgent(
 					workload,
 					deleteNewVolume,
+					{ allowOwnershipTransition: true },
 				);
 				return resourcesRemoved;
 			}
