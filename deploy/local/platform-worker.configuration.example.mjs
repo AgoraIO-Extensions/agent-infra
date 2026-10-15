@@ -20,6 +20,11 @@ export const workloadInput = missing("workloadInput");
 // callers never choose a Runtime URL, Session, or Grant.
 export const modelDirectory = undefined;
 
+// Optional saved Agent default Relay Key candidate seam. The reader is
+// deployment-owned and must decrypt only inside Worker, returning endpoint,
+// model and reasoning metadata through the authenticated internal gateway.
+export const savedKeyCandidates = undefined;
+
 // Optional native metadata gateway. The deployment must provide only the
 // persisted Execution→Host binding resolver and a fixed Runtime target
 // resolver; proof signing defaults to the Worker `signing` key above. When

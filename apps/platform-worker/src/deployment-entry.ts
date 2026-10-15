@@ -14,6 +14,7 @@ import {
 	createPlatformRuntimeModelDirectoryGatewayV1,
 	type PlatformWorkerRuntimeModelDirectoryPortsV1,
 } from "./runtime-model-directory-deployment.js";
+import type { PlatformWorkerInternalGatewayServerOptionsV1 } from "./runtime-native-metadata-server.js";
 import {
 	type DeploymentSkillMaterializerFactoryV1,
 	resolveDeploymentSkillMaterializerV1,
@@ -62,6 +63,8 @@ type DeploymentConfiguration = {
 	readonly skillMaterialization?: DeploymentSkillMaterializationConfigurationV1;
 	readonly nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayPortsV1;
 	readonly modelDirectory?: PlatformWorkerRuntimeModelDirectoryPortsV1;
+	/** Deployment-owned saved-Key candidate reader; it keeps decryptor access in Worker. */
+	readonly savedKeyCandidates?: PlatformWorkerInternalGatewayServerOptionsV1;
 };
 
 function resolveConnectionInstallation(
@@ -110,6 +113,7 @@ const {
 	skillMaterialization,
 	nativeMetadataGateway,
 	modelDirectory,
+	savedKeyCandidates,
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
@@ -413,4 +417,11 @@ export async function createPlatformRuntimeModelDirectoryOptionsV1(
 		serviceToken,
 		ports: modelDirectory,
 	});
+}
+
+export async function createPlatformSavedKeyCandidatesOptionsV1(
+	signal: AbortSignal,
+) {
+	signal.throwIfAborted();
+	return savedKeyCandidates;
 }

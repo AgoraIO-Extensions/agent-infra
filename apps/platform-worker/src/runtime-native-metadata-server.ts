@@ -19,26 +19,36 @@ export interface PlatformWorkerNativeMetadataGatewayServerOptionsV1 {
 export function composePlatformWorkerInternalGatewayServerOptionsV1(options: {
 	readonly nativeMetadata?: PlatformWorkerInternalGatewayServerOptionsV1;
 	readonly modelDirectory?: PlatformWorkerInternalGatewayServerOptionsV1;
+	readonly savedKeyCandidates?: PlatformWorkerInternalGatewayServerOptionsV1;
 }): PlatformWorkerInternalGatewayServerOptionsV1 | undefined {
 	const nativeMetadata = options.nativeMetadata;
 	const modelDirectory = options.modelDirectory;
-	if (!nativeMetadata && !modelDirectory) return undefined;
-	if (
-		nativeMetadata?.port !== undefined &&
-		modelDirectory?.port !== undefined &&
-		nativeMetadata.port !== modelDirectory.port
-	)
+	const savedKeyCandidates = options.savedKeyCandidates;
+	if (!nativeMetadata && !modelDirectory && !savedKeyCandidates)
+		return undefined;
+	const ports = [
+		nativeMetadata?.port,
+		modelDirectory?.port,
+		savedKeyCandidates?.port,
+	].filter((port): port is number => port !== undefined);
+	if (new Set(ports).size > 1)
 		throw new Error("PLATFORM_WORKER_INTERNAL_GATEWAY_PORT_MISMATCH");
-	if (
-		nativeMetadata?.hostname !== undefined &&
-		modelDirectory?.hostname !== undefined &&
-		nativeMetadata.hostname !== modelDirectory.hostname
-	)
+	const hostnames = [
+		nativeMetadata?.hostname,
+		modelDirectory?.hostname,
+		savedKeyCandidates?.hostname,
+	].filter((hostname): hostname is string => hostname !== undefined);
+	if (new Set(hostnames).size > 1)
 		throw new Error("PLATFORM_WORKER_INTERNAL_GATEWAY_HOSTNAME_MISMATCH");
 	return {
 		app: {
 			async fetch(request) {
 				const pathname = new URL(request.url).pathname;
+				if (
+					pathname === "/internal/worker/v1/saved-key-candidates" &&
+					savedKeyCandidates
+				)
+					return savedKeyCandidates.app.fetch(request);
 				if (
 					pathname === "/internal/worker/v1/model-directory" &&
 					modelDirectory
@@ -50,14 +60,18 @@ export function composePlatformWorkerInternalGatewayServerOptionsV1(options: {
 		},
 		...(modelDirectory?.port !== undefined
 			? { port: modelDirectory.port }
-			: nativeMetadata?.port !== undefined
-				? { port: nativeMetadata.port }
-				: {}),
+			: savedKeyCandidates?.port !== undefined
+				? { port: savedKeyCandidates.port }
+				: nativeMetadata?.port !== undefined
+					? { port: nativeMetadata.port }
+					: {}),
 		...(modelDirectory?.hostname !== undefined
 			? { hostname: modelDirectory.hostname }
-			: nativeMetadata?.hostname !== undefined
-				? { hostname: nativeMetadata.hostname }
-				: {}),
+			: savedKeyCandidates?.hostname !== undefined
+				? { hostname: savedKeyCandidates.hostname }
+				: nativeMetadata?.hostname !== undefined
+					? { hostname: nativeMetadata.hostname }
+					: {}),
 	};
 }
 

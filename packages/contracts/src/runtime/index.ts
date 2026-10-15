@@ -25,6 +25,7 @@ export * from "./native-capability.ts";
 export * from "./native-metadata-v1.ts";
 export * from "./platform-entry-auth.ts";
 export * from "./readiness.ts";
+export * from "./saved-key-candidates.ts";
 export * from "./skill-hub.ts";
 
 import { RuntimeBrowserCapabilityProbeEvidenceV1Schema } from "./browser-capability.ts";

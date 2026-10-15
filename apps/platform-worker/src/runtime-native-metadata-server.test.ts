@@ -67,6 +67,10 @@ describe("Platform Worker native metadata gateway server", () => {
 				port: 0,
 				app: { fetch: async () => new Response("model") },
 			},
+			savedKeyCandidatesGateway: {
+				port: 0,
+				app: { fetch: async () => new Response("saved-key") },
+			},
 		});
 		const nativeServer = worker.nativeMetadataGatewayServer;
 		const modelServer = worker.modelDirectoryGatewayServer;
@@ -82,6 +86,10 @@ describe("Platform Worker native metadata gateway server", () => {
 			`http://127.0.0.1:${port}/internal/worker/v1/model-directory`,
 		);
 		expect(await modelResponse.text()).toBe("model");
+		const savedKeyResponse = await fetch(
+			`http://127.0.0.1:${port}/internal/worker/v1/saved-key-candidates`,
+		);
+		expect(await savedKeyResponse.text()).toBe("saved-key");
 		await worker.stop();
 	});
 
