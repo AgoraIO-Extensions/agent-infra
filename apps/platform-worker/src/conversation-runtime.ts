@@ -1250,8 +1250,10 @@ export function createConversationRuntimeV2(
 					...base,
 					hostSessionRef: state.hostSessionRef,
 					capabilityId: context.claim.nativeCapability.capabilityId,
-					capabilityKind: "skill" as const,
+					capabilityKind: context.claim.nativeCapability.capabilityKind,
 					directoryRevision: context.claim.nativeCapability.directoryRevision,
+					capabilitySourceVersion:
+						context.claim.nativeCapability.capabilitySourceVersion,
 					parameters: context.claim.nativeCapability.parameters,
 					parametersDigest: context.claim.nativeCapability.parametersDigest,
 				};

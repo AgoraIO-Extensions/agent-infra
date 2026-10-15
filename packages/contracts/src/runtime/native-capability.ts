@@ -9,7 +9,7 @@ import {
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 
-/** Authenticated Worker → RuntimeHost native Skill invocation. */
+/** Authenticated Worker → RuntimeHost native command or Skill invocation. */
 export const RuntimeNativeCapabilityRequestV3Schema = z.strictObject({
 	schemaVersion: z.literal(3),
 	requestId: RequestIdV1Schema,
@@ -24,8 +24,9 @@ export const RuntimeNativeCapabilityRequestV3Schema = z.strictObject({
 	hostSessionRef: OpaqueIdV1Schema,
 	operation: RuntimeOperationBindingV2Schema,
 	capabilityId: digest,
-	capabilityKind: z.literal("skill"),
+	capabilityKind: z.enum(["command", "skill"]),
 	directoryRevision: digest,
+	capabilitySourceVersion: z.string().min(1).max(512),
 	parameters: z.string().max(16 * 1024),
 	parametersDigest: digest,
 	grant: RuntimeExecutionGrantV2Schema,
