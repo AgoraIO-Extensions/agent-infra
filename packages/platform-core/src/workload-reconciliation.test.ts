@@ -3,7 +3,6 @@ import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
 import type { AgentManagementStateV1 } from "./agent-management.js";
 import {
 	createWorkloadReconciliationV1,
-	parseWorkloadReconciliationFailureV1,
 	WorkloadPreflightRejectedErrorV1,
 	type WorkloadReconciliationFailureV1,
 	type WorkloadReconciliationStateV1,
@@ -157,9 +156,6 @@ describe("durable Workload reconciliation", () => {
 			lastFailure: { code: "kubernetes_forbidden" },
 		});
 		expect(failures).toHaveLength(3);
-		expect(parseWorkloadReconciliationFailureV1(f.state?.lastFailure)).toEqual(
-			f.state?.lastFailure,
-		);
 	});
 
 	it("persists a prepared resource intention across a Worker restart before observing it", async () => {

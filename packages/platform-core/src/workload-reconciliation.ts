@@ -284,7 +284,7 @@ export class WorkloadPreflightRejectedErrorV1 extends Error {
 	}
 }
 
-export function parseWorkloadReconciliationFailureV1(
+function parseWorkloadReconciliationFailureV1(
 	input: unknown,
 ): WorkloadReconciliationFailureV1 {
 	if (!input || typeof input !== "object" || Array.isArray(input))
@@ -379,7 +379,7 @@ function failureFromError(
 		typeof value?.verb === "string" && /^[a-z][a-z-]{0,31}$/.test(value.verb)
 			? value.verb
 			: undefined;
-	return {
+	return parseWorkloadReconciliationFailureV1({
 		schemaVersion: 1,
 		code: failureCode,
 		phase: state.phase,
@@ -387,7 +387,7 @@ function failureFromError(
 		...(typeof status === "number" ? { status } : {}),
 		...(typeof kind === "string" ? { kind } : {}),
 		...(typeof verb === "string" ? { verb } : {}),
-	};
+	});
 }
 
 export interface WorkloadRuntimePortV1 {

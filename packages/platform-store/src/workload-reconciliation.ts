@@ -8,8 +8,8 @@ import {
 	type AgentManagementStateV1,
 	parseWorkloadCapabilitiesV1,
 	parseWorkloadExecutionCapacityV1,
-	parseWorkloadReconciliationFailureV1,
 	parseWorkloadSecretRecoveriesV1,
+	type WorkloadReconciliationFailureV1,
 	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
 	type WorkloadReconciliationStorePortV1,
@@ -33,6 +33,79 @@ import { PostgresSecretActivationStoreV1 } from "./secret-activation.js";
 import { persistSessionSandboxUpgradeIntents } from "./session-sandbox-upgrade.js";
 
 const defaultWorkloadLeaseMs = 300_000;
+
+function parsePersistedWorkloadReconciliationFailureV1(
+	input: unknown,
+): WorkloadReconciliationFailureV1 {
+	if (!input || typeof input !== "object" || Array.isArray(input))
+		throw new Error();
+	const value = input as Record<string, unknown>;
+	const phases = [
+		"preflight",
+		"closing",
+		"applying",
+		"observing",
+		"activating",
+		"promoting",
+		"ready",
+		"rejected",
+		"stopped",
+		"cleaning",
+		"failed",
+	];
+	const codes = [
+		"kubernetes_forbidden",
+		"kubernetes_not_found",
+		"kubernetes_conflict",
+		"kubernetes_unavailable",
+		"capabilities_unavailable",
+		"preflight_rejected",
+		"unknown",
+	];
+	if (
+		Object.keys(value).some(
+			(key) =>
+				![
+					"schemaVersion",
+					"code",
+					"phase",
+					"attempt",
+					"status",
+					"kind",
+					"verb",
+				].includes(key),
+		) ||
+		value.schemaVersion !== 1 ||
+		typeof value.code !== "string" ||
+		!codes.includes(value.code) ||
+		typeof value.phase !== "string" ||
+		!phases.includes(value.phase) ||
+		!Number.isSafeInteger(value.attempt) ||
+		(value.attempt as number) < 1 ||
+		(Object.hasOwn(value, "status") &&
+			(!Number.isSafeInteger(value.status) ||
+				(value.status as number) < 100 ||
+				(value.status as number) > 599)) ||
+		(Object.hasOwn(value, "kind") &&
+			(typeof value.kind !== "string" ||
+				!/^[A-Za-z][A-Za-z0-9.-]{0,63}$/.test(value.kind))) ||
+		(Object.hasOwn(value, "verb") &&
+			(typeof value.verb !== "string" ||
+				!/^[a-z][a-z-]{0,31}$/.test(value.verb)))
+	)
+		throw new Error();
+	return {
+		schemaVersion: 1,
+		code: value.code as WorkloadReconciliationFailureV1["code"],
+		phase: value.phase as WorkloadReconciliationFailureV1["phase"],
+		attempt: value.attempt as number,
+		...(Object.hasOwn(value, "status")
+			? { status: value.status as number }
+			: {}),
+		...(Object.hasOwn(value, "kind") ? { kind: value.kind as string } : {}),
+		...(Object.hasOwn(value, "verb") ? { verb: value.verb as string } : {}),
+	};
+}
 
 type LegacyWorkloadReconciliationStateV1 = Omit<
 	WorkloadReconciliationStateV1,
@@ -173,7 +246,7 @@ export function decodePersistedWorkloadStateV1(
 		? parseWorkloadCapabilitiesV1(value.capabilities)
 		: undefined;
 	const lastFailure = Object.hasOwn(value, "lastFailure")
-		? parseWorkloadReconciliationFailureV1(value.lastFailure)
+		? parsePersistedWorkloadReconciliationFailureV1(value.lastFailure)
 		: undefined;
 	const normalized = {
 		...value,
