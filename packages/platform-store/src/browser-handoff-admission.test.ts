@@ -43,11 +43,13 @@ function command(
 	return { schemaVersion: 1, command: "take_over", handoffId };
 }
 
-function pause(handoffId?: string): BrowserHandoffCommandV1 {
+function pause(
+	handoffId = "handoff-browser-handoff-store",
+): BrowserHandoffCommandV1 {
 	return {
 		schemaVersion: 1,
 		command: "pause",
-		...(handoffId === undefined ? {} : { handoffId }),
+		handoffId,
 	};
 }
 
@@ -233,7 +235,6 @@ describe("Postgres Browser handoff admission", () => {
 	});
 
 	it.each([
-		["pause without handoff identity", pause()],
 		["pause with handoff identity", pause("handoff-browser-handoff-store")],
 		["confirm side effect", sideEffect("confirm_side_effect")],
 		["reject side effect", sideEffect("reject_side_effect")],

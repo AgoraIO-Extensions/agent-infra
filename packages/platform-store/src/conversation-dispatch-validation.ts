@@ -119,10 +119,8 @@ export function exactPayload(
 					validText(commandRecord.handoffId) &&
 					!Object.hasOwn(commandRecord, "confirmationId")
 				: isPause
-					? (Object.keys(commandRecord).length === 2 ||
-							Object.keys(commandRecord).length === 3) &&
-						(!Object.hasOwn(commandRecord, "handoffId") ||
-							validText(commandRecord.handoffId)) &&
+					? Object.keys(commandRecord).length === 3 &&
+						validText(commandRecord.handoffId) &&
 						!Object.hasOwn(commandRecord, "confirmationId")
 					: isSideEffect &&
 						Object.keys(commandRecord).length === 3 &&

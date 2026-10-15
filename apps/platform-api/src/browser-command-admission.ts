@@ -35,7 +35,7 @@ function admittedCommand(
 		return {
 			schemaVersion: 1,
 			command: command.command,
-			...(command.handoffId ? { handoffId: command.handoffId } : {}),
+			handoffId: command.handoffId,
 		};
 	if (!("confirmationId" in command)) return undefined;
 	return {

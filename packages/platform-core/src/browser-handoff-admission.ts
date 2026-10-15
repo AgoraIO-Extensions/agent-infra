@@ -10,7 +10,7 @@ export type BrowserHandoffCommandV1 =
 	| {
 			readonly schemaVersion: 1;
 			readonly command: "pause";
-			readonly handoffId?: string;
+			readonly handoffId: string;
 	  }
 	| {
 			readonly schemaVersion: 1;
@@ -174,11 +174,7 @@ function validCommand(command: BrowserHandoffCommandV1): boolean {
 	)
 		return Object.keys(command).length === 3 && validText(command.handoffId);
 	if (command.command === "pause")
-		return (
-			Object.keys(command).length ===
-				(Object.hasOwn(command, "handoffId") ? 3 : 2) &&
-			(!Object.hasOwn(command, "handoffId") || validText(command.handoffId))
-		);
+		return Object.keys(command).length === 3 && validText(command.handoffId);
 	if (
 		command.command === "confirm_side_effect" ||
 		command.command === "reject_side_effect" ||

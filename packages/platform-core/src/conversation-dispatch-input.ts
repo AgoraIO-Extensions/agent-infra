@@ -55,13 +55,15 @@ export function parseBrowserHandoffCommandV1(
 		};
 	}
 	if (input.command === "pause") {
-		if (Object.hasOwn(input, "confirmationId")) return unavailable();
+		if (
+			Object.hasOwn(input, "confirmationId") ||
+			!Object.hasOwn(input, "handoffId")
+		)
+			return unavailable();
 		return {
 			schemaVersion: 1,
 			command: "pause",
-			...(Object.hasOwn(input, "handoffId")
-				? { handoffId: text(input.handoffId) }
-				: {}),
+			handoffId: text(input.handoffId),
 		};
 	}
 	if (

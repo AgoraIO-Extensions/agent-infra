@@ -50,9 +50,8 @@ function admittedCommand(value: unknown): value is BrowserHandoffCommandV1 {
 		);
 	if (command.command === "pause")
 		return (
-			(Object.keys(command).length === 2 ||
-				Object.keys(command).length === 3) &&
-			(!Object.hasOwn(command, "handoffId") || text(command.handoffId)) &&
+			Object.keys(command).length === 3 &&
+			text(command.handoffId) &&
 			!Object.hasOwn(command, "confirmationId")
 		);
 	if (

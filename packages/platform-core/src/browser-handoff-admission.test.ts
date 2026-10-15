@@ -104,7 +104,6 @@ describe("Browser handoff admission", () => {
 	});
 
 	it.each([
-		[{ schemaVersion: 1, command: "pause" }],
 		[{ schemaVersion: 1, command: "pause", handoffId: "handoff-1" }],
 		[
 			{
@@ -130,6 +129,7 @@ describe("Browser handoff admission", () => {
 	});
 
 	it.each([
+		{ schemaVersion: 1, command: "pause" },
 		{
 			schemaVersion: 1,
 			command: "pause",
@@ -164,7 +164,6 @@ describe("Browser handoff admission", () => {
 	);
 
 	it.each([
-		{ schemaVersion: 1, command: "pause" },
 		{ schemaVersion: 1, command: "pause", handoffId: "handoff-1" },
 		{
 			schemaVersion: 1,

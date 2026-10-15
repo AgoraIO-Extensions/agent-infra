@@ -38,7 +38,6 @@ describe("Conversation Browser handoff outbox payload", () => {
 	});
 
 	it.each([
-		["pause without identity", { schemaVersion: 1, command: "pause" }],
 		[
 			"pause with handoff identity",
 			{ schemaVersion: 1, command: "pause", handoffId: "handoff-1" },
