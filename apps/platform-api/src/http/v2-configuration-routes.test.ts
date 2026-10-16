@@ -145,8 +145,12 @@ describe("V2 configuration routes with a re-submitted default Relay Key (#2421)"
 		expectedKeyVersion: 2,
 		modelConfiguration,
 	};
-	const put = (app: ReturnType<typeof createApp>["app"], payload: unknown) =>
-		app.request("/api/v2/agents/agent-1/configuration", {
+	const put = (
+		app: ReturnType<typeof createApp>["app"],
+		payload: unknown,
+		path = "/api/v2/agents/agent-1/configuration",
+	) =>
+		app.request(path, {
 			method: "PUT",
 			headers: {
 				"content-type": "application/json",
@@ -226,6 +230,7 @@ describe("V2 configuration routes with a re-submitted default Relay Key (#2421)"
 				},
 			},
 		],
+		["expected versions without a Key", { defaultRelayKey: undefined }],
 	])("rejects %s before touching Core", async (_label, override) => {
 		const { app, update } = createApp();
 		const response = await put(app, { ...replacement, ...override });
@@ -238,10 +243,11 @@ describe("V2 configuration routes with a re-submitted default Relay Key (#2421)"
 
 	it("reports an unavailable saved-Key reader when no Key is submitted", async () => {
 		const { app, update } = createApp();
-		const response = await put(app, {
-			...replacement,
-			defaultRelayKey: undefined,
-		});
+		const response = await put(
+			app,
+			{ ...replacement, defaultRelayKey: undefined },
+			"/api/v2/agents/agent-1/configuration/saved-model",
+		);
 		expect(response.status).toBe(503);
 		expect(PilotProtocolErrorV1Schema.parse(await response.json()).code).toBe(
 			"DEPENDENCY_UNAVAILABLE",
