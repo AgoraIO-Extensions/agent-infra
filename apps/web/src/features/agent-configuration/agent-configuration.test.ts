@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { createClient } from "../../pilot/generated-v2/client/index.js";
 import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
 import {
+	loadAgentDefaultRelayKeySavedCandidates,
 	updateAgentConfiguration,
 	upgradeAgentCustomImage,
 } from "./agent-configuration.js";
@@ -119,5 +120,37 @@ describe("Agent configuration generated-client consumer", () => {
 				}),
 			),
 		).rejects.toMatchObject({ retryable: false });
+	});
+
+	it("reads saved default-Key candidates through the generated GET client", async () => {
+		const candidates = {
+			schemaVersion: 1 as const,
+			configurationRevision: 8,
+			keyVersion: 4,
+			candidates: [
+				{
+					endpointId: "endpoint-primary",
+					modelId: "model-a",
+					reasoningLevels: ["medium", "high"],
+				},
+			],
+		};
+		const requests: Request[] = [];
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async (input, init) => {
+				requests.push(new Request(input, init));
+				return Response.json(candidates);
+			},
+		});
+
+		await expect(
+			loadAgentDefaultRelayKeySavedCandidates(agent.agentId, client),
+		).resolves.toEqual(candidates);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.method).toBe("GET");
+		expect(requests[0]?.url).toBe(
+			"https://platform.example.test/api/v2/agents/agent-pilot-1/default-relay-key/candidates",
+		);
 	});
 });

@@ -52,6 +52,13 @@ type AgentConfigurationScreenProps = {
 	defaultRelayKeyManaged?: boolean;
 	/** Deployment catalog candidates for non-Key-managed Agents. */
 	deploymentModelCandidates?: readonly KeylessModelCandidate[];
+	/** Read-only candidates from the already persisted default Relay Key. */
+	savedRelayKeyCandidates?: readonly KeylessModelCandidate[];
+	savedRelayKeyConfigurationRevision?: number;
+	savedRelayKeyVersion?: number;
+	savedRelayKeyCandidatesError?: Error | null;
+	savedRelayKeyCandidatesLoading?: boolean;
+	onRetrySavedRelayKeyCandidates?: () => void;
 	onPreviewDefaultRelayKeyCandidates?: (
 		keyValue: string,
 	) => Promise<AgentDefaultRelayKeyCheck>;
@@ -159,8 +166,14 @@ export function AgentConfigurationScreen({
 	commandResult,
 	defaultRelayKeyManaged = false,
 	deploymentModelCandidates,
+	savedRelayKeyCandidates,
+	savedRelayKeyConfigurationRevision,
+	savedRelayKeyVersion,
+	savedRelayKeyCandidatesError = null,
+	savedRelayKeyCandidatesLoading = false,
 	lifecycle,
 	onSave,
+	onRetrySavedRelayKeyCandidates,
 	onPreviewDefaultRelayKeyCandidates,
 	onReplaceDefaultRelayKey,
 	onUpgradeImage,
@@ -173,6 +186,7 @@ export function AgentConfigurationScreen({
 	const [draft, setDraft] = useState(() => configurationDraftFromAgent(agent));
 	const [ownerError, setOwnerError] = useState<string>();
 	const [catalogSelectionError, setCatalogSelectionError] = useState(false);
+	const [savedSelectionError, setSavedSelectionError] = useState(false);
 	const [imageReference, setImageReference] = useState("");
 	const keyCheck = useKeylessKeyCheck(onPreviewDefaultRelayKeyCandidates);
 	const submittedResult =
@@ -234,6 +248,40 @@ export function AgentConfigurationScreen({
 			}}
 		/>
 	) : null;
+	const savedModelPicker =
+		defaultRelayKeyManaged &&
+		!keyCheck.typed &&
+		savedRelayKeyCandidates !== undefined ? (
+			<KeylessModelPicker
+				candidates={savedRelayKeyCandidates}
+				current={agent.configuration.modelOptions}
+				currentDefault={{
+					optionId: agent.configuration.defaultModelOptionId ?? "",
+					level: agent.configuration.defaultReasoningLevel ?? "",
+				}}
+				disabled={isDisabled}
+				idPrefix="configuration-saved-key-model"
+				key={savedRelayKeyCandidates
+					.map((candidate) => `${candidate.endpointId}/${candidate.modelId}`)
+					.join("|")}
+				onChange={(selection: KeylessModelSelection | null) => {
+					setSavedSelectionError(selection === null);
+					setDraft((current) => ({
+						...current,
+						replaceModels: true,
+						models:
+							selection?.options.map((option) => ({
+								endpointId: option.endpointId,
+								modelId: option.modelId,
+								optionId: option.optionId,
+								reasoningLevels: option.reasoningLevels.join(","),
+							})) ?? [],
+						defaultModelOptionId: selection?.defaultOptionId ?? "",
+						defaultReasoningLevel: selection?.defaultReasoningLevel ?? "",
+					}));
+				}}
+			/>
+		) : null;
 	const replaceDefaultRelayKey = () => {
 		if (!onReplaceDefaultRelayKey || !keyCheck.typed) return;
 		onReplaceDefaultRelayKey(keyCheck.key.trim());
@@ -275,14 +323,54 @@ export function AgentConfigurationScreen({
 			document.getElementById("configuration-default-relay-key")?.focus();
 			return;
 		}
+		if (
+			defaultRelayKeyManaged &&
+			!keyCheck.typed &&
+			savedRelayKeyCandidates !== undefined &&
+			draft.replaceModels &&
+			savedSelectionError
+		) {
+			return;
+		}
 		setDraft((current) => ({
 			...current,
 			secrets: [],
 		}));
+		const savedKeyExpectation =
+			defaultRelayKeyManaged &&
+			!keyCheck.typed &&
+			savedRelayKeyCandidates !== undefined &&
+			savedRelayKeyConfigurationRevision !== undefined &&
+			savedRelayKeyVersion !== undefined &&
+			draft.replaceModels
+				? {
+						expectedConfigurationRevision: savedRelayKeyConfigurationRevision,
+						expectedKeyVersion: savedRelayKeyVersion,
+						schemaVersion: 4 as const,
+					}
+				: undefined;
 		// 填写了 Key 并选好模型：与页面其他修改一起，Key、模型集合和配置修订一次保存。
 		if (defaultRelayKeyManaged && keyCheck.replacement) {
-			onSave({ ...request, ...keyCheck.replacement });
+			onSave({
+				...request,
+				schemaVersion: 2,
+				defaultRelayKey: keyCheck.replacement.defaultRelayKey,
+				expectedConfigurationRevision:
+					keyCheck.replacement.expectedConfigurationRevision,
+				expectedKeyVersion: keyCheck.replacement.expectedKeyVersion,
+				modelConfiguration: keyCheck.replacement.modelConfiguration,
+			});
 			keyCheck.reset();
+			return;
+		}
+		if (savedKeyExpectation && request.modelConfiguration) {
+			onSave({
+				...request,
+				schemaVersion: 4,
+				expectedConfigurationRevision:
+					savedKeyExpectation.expectedConfigurationRevision,
+				expectedKeyVersion: savedKeyExpectation.expectedKeyVersion,
+			});
 			return;
 		}
 		onSave(request);
@@ -580,6 +668,48 @@ export function AgentConfigurationScreen({
 															Key、模型集合和其他修改会在同一次保存中生效。
 														</p>
 													</>
+												) : null}
+											</div>
+										) : null}
+										{defaultRelayKeyManaged && !keyCheck.typed ? (
+											<div className="space-y-3">
+												{savedRelayKeyCandidatesLoading ? (
+													<p
+														className="text-muted-foreground text-sm"
+														role="status"
+													>
+														正在读取已保存 Key 的可用模型…
+													</p>
+												) : null}
+												{savedRelayKeyCandidatesError ? (
+													<Alert variant="destructive">
+														<AlertDescription className="flex flex-wrap items-center gap-3">
+															<span>
+																已保存的默认 Key 暂时无法读取可用模型。
+															</span>
+															{onRetrySavedRelayKeyCandidates ? (
+																<Button
+																	disabled={savedRelayKeyCandidatesLoading}
+																	onClick={onRetrySavedRelayKeyCandidates}
+																	type="button"
+																	variant="outline"
+																>
+																	{savedRelayKeyCandidatesLoading
+																		? "正在重试…"
+																		: "重新读取可用模型"}
+																</Button>
+															) : null}
+														</AlertDescription>
+													</Alert>
+												) : null}
+												{savedModelPicker}
+												{savedSelectionError ? (
+													<Alert variant="destructive">
+														<AlertDescription>
+															至少选择一个已保存 Key
+															可用的模型，并为每个模型保留一个推理档位。
+														</AlertDescription>
+													</Alert>
 												) : null}
 											</div>
 										) : null}

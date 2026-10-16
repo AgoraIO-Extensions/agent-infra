@@ -4,6 +4,7 @@ import {
 	AgentConfigurationUpdateRequestV1Schema,
 	AgentProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
+import type { RuntimeSavedKeyCandidatesRequestV1 } from "@agent-infra/contracts/runtime";
 import type {
 	AgentConfigurationUseCaseV1,
 	PendingSecretRecordAttachmentResolverV1,
@@ -66,6 +67,12 @@ export interface ConfigurationRoutesDependencies {
 		readonly modelCredentialOptionIds: readonly string[];
 		readonly attachment?: PendingSecretRecordAttachmentResolverV1;
 	}>;
+	readonly savedKeyCandidates?: {
+		read(
+			request: RuntimeSavedKeyCandidatesRequestV1,
+			signal?: AbortSignal,
+		): Promise<unknown>;
+	};
 }
 
 function configurationChanges(

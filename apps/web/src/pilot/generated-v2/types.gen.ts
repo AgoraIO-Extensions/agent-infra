@@ -354,6 +354,43 @@ export type AgentConfigurationUpdateRequestV2 = {
     secrets?: Array<{
         name: string;
     }>;
+} | {
+    availability?: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    channels?: Array<{
+        bindingReference: string;
+        enabled: true;
+        kind: 'wecom_bot' | 'wecom_app';
+    } | {
+        enabled: false;
+        kind: 'wecom_bot' | 'wecom_app';
+    }>;
+    coOwnerIds?: Array<string>;
+    environment?: Array<{
+        name: string;
+        value: string;
+    }>;
+    expectedConfigurationRevision: number;
+    expectedKeyVersion: number;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    schemaVersion: 4;
+    secrets?: Array<{
+        name: string;
+    }>;
 };
 
 export type AgentLifecycleCommandRequestV1 = {
@@ -1704,6 +1741,45 @@ export type AgentConfigurationUpdateRequestV2Writable = {
         }>;
     };
     schemaVersion: 2;
+    secrets?: Array<{
+        name: string;
+        value: string;
+    }>;
+} | {
+    availability?: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    channels?: Array<{
+        bindingReference: string;
+        enabled: true;
+        kind: 'wecom_bot' | 'wecom_app';
+    } | {
+        enabled: false;
+        kind: 'wecom_bot' | 'wecom_app';
+    }>;
+    coOwnerIds?: Array<string>;
+    environment?: Array<{
+        name: string;
+        value: string;
+    }>;
+    expectedConfigurationRevision: number;
+    expectedKeyVersion: number;
+    modelConfiguration?: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            credentialValue?: string;
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    schemaVersion: 4;
     secrets?: Array<{
         name: string;
         value: string;
@@ -3115,6 +3191,66 @@ export type ReplaceAgentDefaultRelayKeyV2Responses = {
 };
 
 export type ReplaceAgentDefaultRelayKeyV2Response = ReplaceAgentDefaultRelayKeyV2Responses[keyof ReplaceAgentDefaultRelayKeyV2Responses];
+
+export type GetAgentDefaultRelayKeySavedCandidatesV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/default-relay-key/candidates';
+};
+
+export type GetAgentDefaultRelayKeySavedCandidatesV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentDefaultRelayKeySavedCandidatesV2Error = GetAgentDefaultRelayKeySavedCandidatesV2Errors[keyof GetAgentDefaultRelayKeySavedCandidatesV2Errors];
+
+export type GetAgentDefaultRelayKeySavedCandidatesV2Responses = {
+    /**
+     * Saved-Key compatible candidates
+     */
+    200: {
+        candidates: Array<{
+            endpointId: string;
+            modelId: string;
+            reasoningLevels: Array<string>;
+        }>;
+        configurationRevision: number;
+        keyVersion: number;
+        schemaVersion: 1;
+    };
+};
+
+export type GetAgentDefaultRelayKeySavedCandidatesV2Response = GetAgentDefaultRelayKeySavedCandidatesV2Responses[keyof GetAgentDefaultRelayKeySavedCandidatesV2Responses];
 
 export type GetAgentDefaultRelayKeyCandidatesV2Data = {
     body: {

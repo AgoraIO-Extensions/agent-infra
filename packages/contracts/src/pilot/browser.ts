@@ -22,6 +22,7 @@ import {
 	AgentDefaultRelayKeyCandidatesRequestV1Schema,
 	AgentDefaultRelayKeyCandidatesV1Schema,
 	AgentDefaultRelayKeyReplaceRequestV1Schema,
+	AgentDefaultRelayKeySavedCandidatesV1Schema,
 	AgentDefaultRelayKeyStateV1Schema,
 } from "./agent-default-relay-key.ts";
 import {
@@ -447,11 +448,21 @@ export const AgentApplicationUpdateRequestV2Schema =
 		]),
 		...defaultRelayKeyReplacementShape,
 	});
-export const AgentConfigurationUpdateRequestV2Schema =
+const AgentConfigurationUpdateRequestV2BaseSchema =
 	AgentConfigurationUpdateRequestV1Schema.omit({ actions: true }).extend({
 		schemaVersion: z.literal(2),
 		...defaultRelayKeyReplacementShape,
 	});
+export const AgentConfigurationUpdateRequestV4Schema =
+	AgentConfigurationUpdateRequestV1Schema.omit({ actions: true }).extend({
+		schemaVersion: z.literal(4),
+		expectedConfigurationRevision: z.number().int().positive(),
+		expectedKeyVersion: z.number().int().positive(),
+	});
+export const AgentConfigurationUpdateRequestV2Schema = z.union([
+	AgentConfigurationUpdateRequestV2BaseSchema,
+	AgentConfigurationUpdateRequestV4Schema,
+]);
 export const AgentConfigurationProjectionV2Schema =
 	AgentConfigurationProjectionV1Schema.omit({ actions: true });
 export const AgentApplicationProjectionV2Schema =
@@ -1784,6 +1795,21 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 		},
 	},
 	"/api/v2/agents/{agentId}/default-relay-key/candidates": {
+		get: {
+			operationId: "getAgentDefaultRelayKeySavedCandidatesV2",
+			summary: "Read models visible to the persisted Agent default Relay Key",
+			description:
+				"Current Owner browser session only; the saved Key is decrypted transiently inside the Worker and no Key material is returned. No-store.",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"200": jsonResponse(
+					"Saved-Key compatible candidates",
+					AgentDefaultRelayKeySavedCandidatesV1Schema,
+				),
+				...errorResponses,
+			},
+		},
 		post: {
 			operationId: "getAgentDefaultRelayKeyCandidatesV2",
 			summary:
