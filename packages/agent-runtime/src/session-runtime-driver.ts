@@ -1989,12 +1989,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			},
 		};
 		if (selector === "commands") {
-			const directory = await this.discoverNativeCommands(nativeRead);
+			// Session-backed adapters expose native command discovery for diagnostics,
+			// but do not implement RuntimeDriver.createNativeCommandCommand. Keep the
+			// command selector empty so the Skill selector remains usable.
 			return projectNativeMetadataCommandsV1({
 				nativeSessionRef: read.nativeSessionRef,
 				configVersion: this.options.configVersion,
 				source: { name: this.options.cursorPrefix, version: "1" },
-				directory,
+				directory: { commands: [] },
 				assertCurrent: () => read.assertCurrent(),
 			});
 		}
