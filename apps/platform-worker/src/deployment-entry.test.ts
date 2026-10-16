@@ -210,6 +210,13 @@ beforeAll(async () => {
 		join(directory, "native-metadata-deployment-assembly.js"),
 		nativeMetadataAssembly.code,
 	);
+	// The deployment-entry fixture loads the assembly module without enabling
+	// native metadata. Keep its deployment graph self-contained while still
+	// satisfying the assembly's token-derivation import.
+	await writeFile(
+		join(directory, "session-workload-adapter.js"),
+		"export const sessionSandboxServiceTokenV1 = () => 'fixture-sandbox-token';\n",
+	);
 	await writeFile(
 		join(directory, "runtime-native-metadata-proof.js"),
 		nativeMetadataProof.code,
