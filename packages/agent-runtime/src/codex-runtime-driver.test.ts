@@ -13274,6 +13274,77 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 		});
 	});
 
+	it("coexists with the verified Hub root and rejects same-name collisions", async () => {
+		const hubEntry = {
+			schemaVersion: 1 as const,
+			name: "hub-summary",
+			version: "2.0.0",
+			packageDigest: "d".repeat(64),
+			manifestDigest: "e".repeat(64),
+			targetPath: ".agents/skills/hub-summary",
+			readOnly: true as const,
+		};
+		const f = await skillDiscoveryFixture(
+			(bridge) => {
+				bridge.result = {
+					data: [
+						{
+							cwd: bridge.launch?.cwd,
+							errors: [],
+							skills: [
+								bridge.metadata,
+								{
+									name: "hub-summary",
+									description: "Hub summary",
+									shortDescription: null,
+									interface: null,
+									dependencies: null,
+									path: "/opt/agent-infra-skill-hub/.agents/skills/hub-summary/SKILL.md",
+									scope: "project",
+									enabled: true,
+									pluginId: null,
+								},
+							],
+						},
+					],
+				};
+			},
+			{
+				skillDirectory: {
+					generationId: "f".repeat(64),
+					findSkills: () => [hubEntry],
+					nativeSkillPaths: () => [
+						"/opt/agent-infra-skill-hub/.agents/skills/hub-summary/SKILL.md",
+					],
+					readSkill: async () => new Uint8Array(),
+				},
+			},
+		);
+		const projection = await f.driver.discoverNativeSkills(f.read);
+		expect(projection.capabilities).toHaveLength(2);
+		expect(f.bridge.requests).toContainEqual({
+			method: "skills/extraRoots/set",
+			params: {
+				extraRoots: [
+					"/opt/codex/agent-infra-skills",
+					"/opt/agent-infra-skill-hub",
+				],
+			},
+		});
+		f.bridge.result = {
+			data: [
+				{
+					cwd: f.bridge.launch?.cwd,
+					errors: [],
+					skills: [f.bridge.metadata, f.bridge.metadata],
+				},
+			],
+		};
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_SKILL_DIRECTORY_INVALID",
+		});
+	});
+
 	it.each([true, undefined, "false", 0])(
 		"rejects actual bundled.enabled=%s before set",
 		async (value) => {
