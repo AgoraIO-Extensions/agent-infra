@@ -11,6 +11,7 @@ import {
 	updateAgentConfigurationV2 as requestUpdateAgentConfiguration,
 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
+	AgentApiLifecycleAcceptedResponseV1,
 	AgentConfigurationUpdateRequestV2Writable,
 	AgentProjectionV2,
 	CommandAgentLifecycleV2Errors,
@@ -168,7 +169,7 @@ export async function upgradeAgentCustomImage(
 	imageReference: string,
 	idempotencyKey: string,
 	client?: Client,
-): Promise<AgentProjectionV2> {
+): Promise<AgentProjectionV2 | AgentApiLifecycleAcceptedResponseV1> {
 	const result: Awaited<
 		RequestResult<
 			CommandAgentLifecycleV2Responses,

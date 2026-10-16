@@ -16,7 +16,10 @@ import {
 	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
 import type { BrowserSessionState } from "../browser-session.js";
-import type { AgentLifecycleCommand } from "./agent-administration.js";
+import type {
+	AgentLifecycleCommand,
+	AgentLifecycleCommandResult,
+} from "./agent-administration.js";
 
 type AdministrationSessionState = BrowserSessionState | { kind: "loading" };
 
@@ -30,7 +33,7 @@ type RequestError = Error & { readonly retryable?: boolean };
 type AgentLifecycleControlsProps = {
 	agent: AgentProjectionV2;
 	commandError?: RequestError | null;
-	commandResult?: AgentProjectionV2;
+	commandResult?: AgentLifecycleCommandResult;
 	onCommand: (command: AgentLifecycleCommand) => void;
 	pendingCommand?: PendingLifecycleCommand;
 	session: AdministrationSessionState;
@@ -253,7 +256,14 @@ export function AgentLifecycleControls({
 						role="status"
 					>
 						操作已提交：
-						{agentManagementStatusLabels[submittedResult.managementStatus]}。
+						{
+							agentManagementStatusLabels[
+								"managementStatus" in submittedResult
+									? submittedResult.managementStatus
+									: (submittedResult.status ?? agent.managementStatus)
+							]
+						}
+						。
 					</p>
 				) : null}
 				{commandError ? (

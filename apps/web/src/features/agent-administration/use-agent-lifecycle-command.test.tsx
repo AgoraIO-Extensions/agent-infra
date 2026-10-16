@@ -5,7 +5,10 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { pendingApplication } from "../my-agents/test-fixtures.js";
-import { commandAgentLifecycle } from "./agent-administration.js";
+import {
+	type AgentLifecycleCommandResult,
+	commandAgentLifecycle,
+} from "./agent-administration.js";
 import { useAgentLifecycleCommand } from "./use-agent-lifecycle-command.js";
 
 vi.mock("./agent-administration.js", () => ({
@@ -42,6 +45,7 @@ describe("useAgentLifecycleCommand", () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { mutations: { retry: 1, retryDelay: 0 } },
 		});
+		const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
 		vi.mocked(commandAgentLifecycle)
 			.mockRejectedValueOnce(new Error("transient transport failure"))
 			.mockResolvedValueOnce(lifecycleResult);
@@ -59,6 +63,15 @@ describe("useAgentLifecycleCommand", () => {
 			);
 		});
 		expect(commandAgentLifecycle).toHaveBeenCalledTimes(2);
+		expect(invalidateQueries).toHaveBeenCalledWith({
+			queryKey: ["agents"],
+		});
+		expect(invalidateQueries).toHaveBeenCalledWith({
+			queryKey: ["my-agents"],
+		});
+		expect(invalidateQueries).toHaveBeenCalledWith({
+			queryKey: ["admin", "agent-applications"],
+		});
 		expect(commandAgentLifecycle).toHaveBeenNthCalledWith(
 			1,
 			lifecycleResult.agentId,
@@ -89,7 +102,7 @@ describe("useAgentLifecycleCommand", () => {
 			({ agentId }: { agentId: string }) => useAgentLifecycleCommand(agentId),
 			{ initialProps: { agentId: lifecycleResult.agentId }, wrapper },
 		);
-		let lifecycle: Promise<typeof lifecycleResult> | undefined;
+		let lifecycle: Promise<AgentLifecycleCommandResult> | undefined;
 
 		await act(async () => {
 			lifecycle = result.current.mutateAsync("restart");
@@ -179,7 +192,7 @@ describe("useAgentLifecycleCommand", () => {
 			() => useAgentLifecycleCommand(lifecycleResult.agentId),
 			{ wrapper },
 		);
-		let firstCommand: Promise<typeof lifecycleResult> | undefined;
+		let firstCommand: Promise<AgentLifecycleCommandResult> | undefined;
 
 		await act(async () => {
 			firstCommand = result.current.mutateAsync("stop");

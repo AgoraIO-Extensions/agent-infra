@@ -1,4 +1,5 @@
 import {
+	AgentApiLifecycleAcceptedResponseV1Schema,
 	AgentApplicationCreateRequestV2Schema,
 	AgentApplicationProjectionV1Schema,
 	AgentApplicationProjectionV2Schema,
@@ -496,9 +497,44 @@ async function requireManagementAccepted(
 		ReturnType<AgentManagementInterfaceV1["executeManagementCommand"]>
 	>,
 	traceId: string,
-): Promise<void> {
+): Promise<
+	Extract<
+		Awaited<ReturnType<AgentManagementInterfaceV1["executeManagementCommand"]>>,
+		{ readonly outcome: "accepted" | "replayed" }
+	>
+> {
 	if (decision.outcome === "denied") fail("RESOURCE_UNAVAILABLE", traceId);
 	if (decision.outcome === "conflict") fail("CONFLICT", traceId);
+	return decision;
+}
+
+function committedProjection(
+	projection: AgentProjection,
+	status: AgentProjection["managementStatus"],
+): AgentProjection {
+	return {
+		...projection,
+		managementStatus: status,
+		...(status === "stopped" || status === "disabled"
+			? { serviceAvailability: null }
+			: {}),
+	};
+}
+
+function acceptedLifecycleResponse(input: {
+	readonly agentId: string;
+	readonly status?: AgentProjection["managementStatus"];
+	readonly revision?: number;
+	readonly replayed: boolean;
+}) {
+	return AgentApiLifecycleAcceptedResponseV1Schema.parse({
+		schemaVersion: 1,
+		accepted: true,
+		agentId: input.agentId,
+		...(input.status === undefined ? {} : { status: input.status }),
+		...(input.revision === undefined ? {} : { revision: input.revision }),
+		replayed: input.replayed,
+	});
 }
 
 export function registerV2ManagementRoutes(
@@ -1050,16 +1086,23 @@ export function registerV2ManagementRoutes(
 				const projectionScope = identity.roles.includes("system_admin")
 					? ({ kind: "administrator" } as const)
 					: ownerScope(identity);
-				const agent = await agentOrUnavailable(
-					dependencies,
-					projectionScope,
-					agentId,
-					metadata.traceId,
-				);
-				return context.json(
-					await projectAgent(dependencies, agent, identity, metadata),
-					202,
-				);
+				try {
+					const agent = await agentOrUnavailable(
+						dependencies,
+						projectionScope,
+						agentId,
+						metadata.traceId,
+					);
+					return context.json(
+						await projectAgent(dependencies, agent, identity, metadata),
+						202,
+					);
+				} catch {
+					return context.json(
+						acceptedLifecycleResponse({ agentId, replayed: false }),
+						202,
+					);
+				}
 			}
 			const scope =
 				identity.roles.includes("system_admin") &&
@@ -1072,13 +1115,19 @@ export function registerV2ManagementRoutes(
 				agentId,
 				metadata.traceId,
 			);
+			const fallbackPromise = projectAgent(
+				dependencies,
+				current,
+				identity,
+				metadata,
+			).catch(() => undefined);
 			const commands = {
 				stop: "stop_agent",
 				restart: "restart_agent",
 				retry_creation: "retry_agent_creation",
 				disable: "disable_agent",
 			} as const;
-			await requireManagementAccepted(
+			const decision = await requireManagementAccepted(
 				await dependencies.management.executeManagementCommand(
 					{
 						schemaVersion: 1,
@@ -1093,16 +1142,36 @@ export function registerV2ManagementRoutes(
 				),
 				metadata.traceId,
 			);
-			const agent = await agentOrUnavailable(
-				dependencies,
-				scope,
-				agentId,
-				metadata.traceId,
-			);
-			return context.json(
-				await projectAgent(dependencies, agent, identity, metadata),
-				202,
-			);
+			try {
+				const agent = await agentOrUnavailable(
+					dependencies,
+					scope,
+					agentId,
+					metadata.traceId,
+				);
+				return context.json(
+					await projectAgent(dependencies, agent, identity, metadata),
+					202,
+				);
+			} catch {
+				const fallback = await fallbackPromise;
+				if (decision.outcome === "replayed" && fallback !== undefined)
+					return context.json(fallback, 202);
+				if (fallback === undefined)
+					return context.json(
+						acceptedLifecycleResponse({
+							agentId,
+							status: decision.result.status,
+							revision: decision.result.revision,
+							replayed: decision.outcome === "replayed",
+						}),
+						202,
+					);
+				return context.json(
+					committedProjection(fallback, decision.result.status),
+					202,
+				);
+			}
 		}),
 	);
 }

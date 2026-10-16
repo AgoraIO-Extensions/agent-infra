@@ -205,6 +205,22 @@ describe("AgentLifecycleControls", () => {
 		rerender(
 			<AgentLifecycleControls
 				agent={failedAgent}
+				commandResult={{
+					schemaVersion: 1,
+					accepted: true,
+					agentId: failedAgent.agentId,
+					status: "available",
+					replayed: false,
+				}}
+				onCommand={vi.fn()}
+				session={{ kind: "ready", session: administratorSession }}
+			/>,
+		);
+		expect(screen.getByRole("status").textContent).toBe("操作已提交：可用。");
+
+		rerender(
+			<AgentLifecycleControls
+				agent={failedAgent}
 				commandError={Object.assign(new Error(), { retryable: false })}
 				onCommand={vi.fn()}
 				session={{ kind: "ready", session: administratorSession }}
