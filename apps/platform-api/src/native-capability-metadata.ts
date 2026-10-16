@@ -203,14 +203,15 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 						"skills",
 					),
 				]);
-				const projections = [commands, skills]
-					.map((projection) =>
-						projection ? coreProjection(projection) : undefined,
-					)
-					.filter(
-						(projection): projection is NativeCapabilityMetadataProjectionV1 =>
-							Boolean(projection),
-					);
+				if (!commands || !skills) return { outcome: "unavailable" };
+				const commandProjection = coreProjection(commands);
+				const skillProjection = coreProjection(skills);
+				if (!commandProjection || !skillProjection)
+					return { outcome: "unavailable" };
+				const projections: NativeCapabilityMetadataProjectionV1[] = [
+					commandProjection,
+					skillProjection,
+				];
 				const projectedRevisionMismatch = projections.some(
 					(projection) => projection.revision !== request.directoryRevision,
 				);

@@ -208,6 +208,28 @@ describe("native capability metadata revalidation", () => {
 		).resolves.toEqual({ outcome: "stale" });
 	});
 
+	it("fails closed when either required projection is unavailable", async () => {
+		const f = fixture();
+		f.reader.read.mockImplementation(
+			async (
+				_identity: IdentityContext,
+				_conversation: string,
+				_execution: string,
+				selector: "status" | "commands" | "skills",
+			) =>
+				selector === "commands"
+					? {
+							selector: "commands" as const,
+							revision,
+							capabilities: [],
+						}
+					: (null as never),
+		);
+		await expect(
+			f.adapter.revalidate({ request, authority, sessionGeneration: 3 }),
+		).resolves.toEqual({ outcome: "unavailable" });
+	});
+
 	it("expires the synchronous cache without a network recheck", async () => {
 		let now = 1000;
 		const f = fixture({ now: () => now, cacheTtlMs: 10 });
