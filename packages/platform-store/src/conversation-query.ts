@@ -585,24 +585,35 @@ const runStatement: RunStatement = (statement) => statement;
 
 /**
  * Statements of one read that stop when the caller aborts (#1732): an aborted
- * browser read no longer keeps a pooled connection busy. postgres-js removes a
- * queued statement and sends PostgreSQL a cancel request for the running one.
+ * browser read no longer keeps a pooled connection busy.
+ *
+ * postgres-js 只能安全地取消已经交给连接的语句（向 PostgreSQL 发取消请求）。对还没交给连接的语句
+ * 调用 cancel()，它只是从连接池队列里移除、标记已取消并 reject，并不阻止之后的 then() 再把它交给
+ * 事务连接；事务连接收到已取消的语句什么也不发，却把自己标成「流水线已满」，之后排队的语句和
+ * 回滚都不会再发送，事务永远停在 idle in transaction，连接永不归还（#2664）。所以这里：
+ * - 调用方已中止时直接失败，不再把新语句交给 postgres-js；
+ * - 同一个读取里的语句按顺序一条一条交付，任何时候至多一条在途，中止时只取消这一条。
  */
 function cancellableStatements(signal: AbortSignal | undefined) {
 	if (!signal) return { run: runStatement, dispose: () => {} };
-	const running = new Set<{ cancel(): unknown }>();
+	let current: { cancel(): unknown } | undefined;
+	let previous: Promise<unknown> = Promise.resolve();
 	const cancel = () => {
-		for (const statement of running) statement.cancel();
+		current?.cancel();
 	};
 	signal.addEventListener("abort", cancel, { once: true });
-	const run: RunStatement = async (statement) => {
-		running.add(statement);
-		try {
-			if (signal.aborted) statement.cancel();
-			return await statement;
-		} finally {
-			running.delete(statement);
-		}
+	const run: RunStatement = (statement) => {
+		const result = previous.then(async () => {
+			if (signal.aborted) return unavailable();
+			current = statement;
+			try {
+				return await statement;
+			} finally {
+				current = undefined;
+			}
+		});
+		previous = result.catch(() => undefined);
+		return result;
 	};
 	return {
 		run,
@@ -822,7 +833,8 @@ async function isWithinReplayTimeWindow(
 	return rows[0]?.within_window === true;
 }
 
-async function repeatableRead<T>(
+/** Exported for tests only; not part of the package surface. */
+export async function repeatableRead<T>(
 	client: ReturnType<typeof postgres>,
 	read: (transaction: postgres.TransactionSql, run: RunStatement) => Promise<T>,
 	signal?: AbortSignal,

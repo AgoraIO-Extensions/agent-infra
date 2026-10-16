@@ -7054,3 +7054,29 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 		}
 	});
 });
+
+describe("aborted dispatch polls (#2664)", () => {
+	it("does not strand pooled connections when polled with an already aborted signal", async () => {
+		const store = open();
+		try {
+			const controller = new AbortController();
+			controller.abort();
+			// 连接池默认 10 个连接；之前每次「先 cancel 再 await」都会让一个连接卡在「已满」。
+			for (let attempt = 0; attempt < 12; attempt++)
+				expect(
+					await store.findDispatchable({ limit: 1, signal: controller.signal }),
+				).toEqual([]);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const result = await Promise.race([
+				store.findDispatchable({ limit: 1 }).then(() => "resolved"),
+				new Promise<string>((resolve) => {
+					timer = setTimeout(() => resolve("hung"), 5_000);
+				}),
+			]);
+			clearTimeout(timer);
+			expect(result).toBe("resolved");
+		} finally {
+			await store.close();
+		}
+	});
+});
