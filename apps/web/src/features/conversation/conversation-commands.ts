@@ -77,7 +77,13 @@ export type ConversationCommandResult =
 			kind: "browser-accepted";
 			receipt: BrowserCommandAcceptedProjectionV1;
 	  }
-	| { kind: "denied"; code?: PilotProtocolErrorV1["code"] }
+	| {
+			kind: "denied";
+			code?: PilotProtocolErrorV1["code"];
+			/** 404 同时表示「没有权限/不存在」和「Agent 已停止」，服务端有意不区分；
+			 * 页面要先重新读取 Agent 状态再决定是否按失去访问权限处理（#2570）。 */
+			ambiguous?: true;
+	  }
 	| {
 			kind: "rejected";
 			code: PilotProtocolErrorV1["code"];
@@ -88,11 +94,13 @@ function failure(status?: number, error?: unknown): ConversationCommandResult {
 	const parsed = PilotProtocolErrorV1Schema.safeParse(error);
 	const code = parsed.success ? parsed.data.code : undefined;
 	if (
-		(status !== undefined && [401, 403, 404].includes(status)) ||
+		(status !== undefined && [401, 403].includes(status)) ||
 		code === "AUTHENTICATION_REQUIRED" ||
 		code === "AUTHORIZATION_REVOKED"
 	)
 		return { kind: "denied", ...(code ? { code } : {}) };
+	if (status === 404)
+		return { kind: "denied", ...(code ? { code } : {}), ambiguous: true };
 	// A runtime-unavailable response is a deliberate pre-acceptance refusal
 	// (the API uses 503 for this protocol code), so surface it as retryable
 	// instead of implying that the message may have been accepted (#1607).

@@ -105,6 +105,7 @@ export function ActiveConversation({
 	available,
 	onDenied,
 	refreshAgent,
+	verifyAgent,
 }: {
 	agentId: string;
 	identityKey: string;
@@ -113,6 +114,8 @@ export function ActiveConversation({
 	available: boolean;
 	onDenied: () => void;
 	refreshAgent: () => void;
+	/** 重新读取 Agent；返回 true 表示 Agent 仍然可用，命令被拒绝就是真的失去了访问权限。 */
+	verifyAgent: () => Promise<boolean>;
 }) {
 	const queryClient = useQueryClient();
 	const [selectedExecution, setSelectedExecution] = useState<string>();
@@ -258,6 +261,22 @@ export function ActiveConversation({
 		setDraft("");
 		onDenied();
 	}, [denialScope, denied, command.revoke, reader.abort, onDenied]);
+	// 命令得到 404：没有权限与 Agent 已停止在线上是同一个响应。先重新读取 Agent，
+	// Agent 确实不可用时保留草稿并由上方横幅说明；仍然可用才按失去访问权限处理（#2570）。
+	const ambiguousDenial =
+		command.result?.kind === "denied" && command.result.ambiguous === true
+			? command.result
+			: undefined;
+	useEffect(() => {
+		if (!ambiguousDenial) return;
+		let current = true;
+		void verifyAgent().then((denialStands) => {
+			if (current && denialStands) command.confirmDenied();
+		});
+		return () => {
+			current = false;
+		};
+	}, [ambiguousDenial, verifyAgent, command.confirmDenied]);
 	const lastRefreshEvent = useRef<string | undefined>(undefined);
 	useEffect(() => {
 		const event = timeline.events.findLast(

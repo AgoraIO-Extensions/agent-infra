@@ -105,12 +105,15 @@ export function NewConversation({
 	available,
 	onCreated,
 	onDenied,
+	verifyAgent,
 }: {
 	agentId: string;
 	identityKey: string;
 	available: boolean;
 	onCreated: (id: string) => void;
 	onDenied: () => void;
+	/** 见 ActiveConversation：true 表示 Agent 仍然可用，404 就是真的失去访问权限（#2570）。 */
+	verifyAgent: () => Promise<boolean>;
 }) {
 	const command = useConversationCommands({ agentId, identityKey });
 	const queryClient = useQueryClient();
@@ -124,8 +127,23 @@ export function NewConversation({
 			});
 			onCreated(command.result.conversationId);
 		}
-		if (command.result?.kind === "denied") onDenied();
+		if (command.result?.kind === "denied" && !command.result.ambiguous)
+			onDenied();
 	}, [command.result, identityKey, onCreated, onDenied, queryClient]);
+	const ambiguousDenial =
+		command.result?.kind === "denied" && command.result.ambiguous === true
+			? command.result
+			: undefined;
+	useEffect(() => {
+		if (!ambiguousDenial) return;
+		let current = true;
+		void verifyAgent().then((denialStands) => {
+			if (current && denialStands) onDenied();
+		});
+		return () => {
+			current = false;
+		};
+	}, [ambiguousDenial, verifyAgent, onDenied]);
 	return (
 		<Empty className="space-y-5 py-12">
 			<Bot aria-hidden="true" className="mx-auto size-10 text-primary" />

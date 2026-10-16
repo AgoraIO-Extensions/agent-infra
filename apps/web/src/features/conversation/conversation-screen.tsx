@@ -122,6 +122,17 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		[queryClient, queryKey],
 	);
 	const deny = useCallback(() => setDenied(true), []);
+	// 命令得到 404 时用它确认：Agent 已停止/停用/更新中时 404 只是「不可用」，不是失去访问权限。
+	// 读取失败或结果仍然可用时按原来的方式处理（#2570）。
+	const refetchAgent = agentQuery.refetch;
+	const verifyAgent = useCallback(async () => {
+		const result = await refetchAgent();
+		if (result.isError || !result.data) return true;
+		return (
+			result.data.managementStatus === "available" &&
+			result.data.serviceAvailability === "ready"
+		);
+	}, [refetchAgent]);
 	const deniedCallback = useRef(onAccessDenied);
 	deniedCallback.current = onAccessDenied;
 	useLayoutEffect(() => {
@@ -255,12 +266,19 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 					{!available && (
 						<Alert role="status" className="mb-5 bg-muted">
 							<AlertDescription>
-								{agent.serviceAvailability === "updating"
-									? "Agent 更新中"
-									: agent.serviceAvailability === "starting"
-										? "Agent 启动中"
-										: "Agent 当前不可用"}
-								，历史保持只读。
+								{agent.managementStatus === "stopped"
+									? "Agent 已停止"
+									: agent.managementStatus === "disabled"
+										? "Agent 已停用"
+										: agent.serviceAvailability === "updating"
+											? "Agent 更新中"
+											: agent.serviceAvailability === "starting"
+												? "Agent 启动中"
+												: "Agent 当前不可用"}
+								，历史保持只读
+								{agent.managementStatus === "stopped"
+									? "，请联系 Owner 重启后继续。"
+									: "。"}
 								<Button
 									variant="ghost"
 									onClick={() => void agentQuery.refetch()}
@@ -280,6 +298,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 							available={available}
 							onDenied={deny}
 							refreshAgent={() => void agentQuery.refetch()}
+							verifyAgent={verifyAgent}
 						/>
 					) : (
 						<NewConversation
@@ -288,6 +307,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 							available={available}
 							onCreated={onConversationChange}
 							onDenied={deny}
+							verifyAgent={verifyAgent}
 						/>
 					)}
 				</div>
