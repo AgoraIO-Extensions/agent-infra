@@ -18,9 +18,11 @@ import type {
 import { AssistantMarkdown } from "./assistant-markdown.js";
 import type { ResultFile } from "./conversation-files.js";
 import {
+	answerNotWrittenYet,
 	answerStatus,
 	answerText,
 	commandFailure,
+	emptyAnswerNotice,
 	executionStatus,
 	executionStatusLabels,
 } from "./conversation-screen-state.js";
@@ -136,8 +138,15 @@ export function ConversationMessages({
 													events,
 													selected.executionId,
 													selected.text,
-												) || "尚未输出正文。"
-											: selected.text || "尚未输出正文。"}
+												) ||
+												emptyAnswerNotice(
+													history,
+													events,
+													selected.executionId,
+													selectedStatus,
+													hasEarlier,
+												)
+											: selected.text || answerNotWrittenYet}
 									</AssistantMarkdown>
 									<Badge
 										variant={
