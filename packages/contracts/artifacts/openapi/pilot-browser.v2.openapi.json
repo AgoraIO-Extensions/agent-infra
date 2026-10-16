@@ -1842,249 +1842,486 @@
         "type": "object"
       },
       "AgentConfigurationUpdateRequestV2": {
-        "additionalProperties": false,
-        "properties": {
-          "availability": {
-            "items": {
-              "oneOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "kind": {
-                      "const": "user",
-                      "type": "string"
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "availability": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "user",
+                          "type": "string"
+                        },
+                        "userId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "userId"
+                      ],
+                      "type": "object"
                     },
-                    "userId": {
-                      "minLength": 1,
-                      "type": "string"
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "organization",
+                          "type": "string"
+                        },
+                        "organizationId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "organizationId"
+                      ],
+                      "type": "object"
                     }
-                  },
-                  "required": [
-                    "kind",
-                    "userId"
                   ],
                   "type": "object"
                 },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "kind": {
-                      "const": "organization",
-                      "type": "string"
-                    },
-                    "organizationId": {
-                      "minLength": 1,
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "kind",
-                    "organizationId"
-                  ],
-                  "type": "object"
-                }
-              ],
-              "type": "object"
-            },
-            "type": "array"
-          },
-          "channels": {
-            "items": {
-              "oneOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "bindingReference": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "enabled": {
-                      "const": true,
-                      "type": "boolean"
-                    },
-                    "kind": {
-                      "enum": [
-                        "wecom_bot",
-                        "wecom_app"
+                "type": "array"
+              },
+              "channels": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "bindingReference": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "enabled": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "kind": {
+                          "enum": [
+                            "wecom_bot",
+                            "wecom_app"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "enabled",
+                        "bindingReference"
                       ],
-                      "type": "string"
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "enabled": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "kind": {
+                          "enum": [
+                            "wecom_bot",
+                            "wecom_app"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "enabled"
+                      ],
+                      "type": "object"
                     }
-                  },
-                  "required": [
-                    "kind",
-                    "enabled",
-                    "bindingReference"
                   ],
                   "type": "object"
                 },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "enabled": {
-                      "const": false,
-                      "type": "boolean"
-                    },
-                    "kind": {
-                      "enum": [
-                        "wecom_bot",
-                        "wecom_app"
-                      ],
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "kind",
-                    "enabled"
-                  ],
-                  "type": "object"
-                }
-              ],
-              "type": "object"
-            },
-            "type": "array"
-          },
-          "coOwnerIds": {
-            "items": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "defaultRelayKey": {
-            "maxLength": 8192,
-            "minLength": 16,
-            "pattern": "^[\\x21-\\x7e]+$",
-            "type": "string",
-            "writeOnly": true
-          },
-          "environment": {
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "name": {
+                "type": "array"
+              },
+              "coOwnerIds": {
+                "items": {
                   "minLength": 1,
                   "type": "string"
                 },
-                "value": {
-                  "type": "string"
-                }
+                "type": "array"
               },
-              "required": [
-                "name",
-                "value"
-              ],
-              "type": "object"
-            },
-            "type": "array"
-          },
-          "expectedConfigurationRevision": {
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991,
-            "type": "integer"
-          },
-          "expectedKeyVersion": {
-            "anyOf": [
-              {
+              "defaultRelayKey": {
+                "maxLength": 8192,
+                "minLength": 16,
+                "pattern": "^[\\x21-\\x7e]+$",
+                "type": "string",
+                "writeOnly": true
+              },
+              "environment": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "expectedConfigurationRevision": {
                 "exclusiveMinimum": 0,
                 "maximum": 9007199254740991,
                 "type": "integer"
               },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "modelConfiguration": {
-            "additionalProperties": false,
-            "properties": {
-              "defaultOptionId": {
-                "minLength": 1,
-                "type": "string"
+              "expectedKeyVersion": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
-              "defaultReasoningLevel": {
-                "minLength": 1,
-                "type": "string"
+              "modelConfiguration": {
+                "additionalProperties": false,
+                "properties": {
+                  "defaultOptionId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "defaultReasoningLevel": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "options": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "credentialValue": {
+                          "minLength": 1,
+                          "type": "string",
+                          "writeOnly": true
+                        },
+                        "endpointId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "modelId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "optionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "reasoningLevels": {
+                          "items": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "optionId",
+                        "endpointId",
+                        "modelId",
+                        "reasoningLevels"
+                      ],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "options",
+                  "defaultOptionId",
+                  "defaultReasoningLevel"
+                ],
+                "type": "object"
               },
-              "options": {
+              "schemaVersion": {
+                "const": 2,
+                "type": "number"
+              },
+              "secrets": {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
-                    "credentialValue": {
+                    "name": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "value": {
                       "minLength": 1,
                       "type": "string",
                       "writeOnly": true
-                    },
-                    "endpointId": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "modelId": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "optionId": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "reasoningLevels": {
-                      "items": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "minItems": 1,
-                      "type": "array"
                     }
                   },
                   "required": [
-                    "optionId",
-                    "endpointId",
-                    "modelId",
-                    "reasoningLevels"
+                    "name",
+                    "value"
                   ],
                   "type": "object"
                 },
-                "minItems": 1,
                 "type": "array"
               }
             },
             "required": [
-              "options",
-              "defaultOptionId",
-              "defaultReasoningLevel"
+              "schemaVersion"
             ],
             "type": "object"
           },
-          "schemaVersion": {
-            "const": 2,
-            "type": "number"
-          },
-          "secrets": {
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "name": {
+          {
+            "additionalProperties": false,
+            "properties": {
+              "availability": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "user",
+                          "type": "string"
+                        },
+                        "userId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "userId"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "organization",
+                          "type": "string"
+                        },
+                        "organizationId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "organizationId"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "channels": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "bindingReference": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "enabled": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "kind": {
+                          "enum": [
+                            "wecom_bot",
+                            "wecom_app"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "enabled",
+                        "bindingReference"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "enabled": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "kind": {
+                          "enum": [
+                            "wecom_bot",
+                            "wecom_app"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "enabled"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "coOwnerIds": {
+                "items": {
                   "minLength": 1,
                   "type": "string"
                 },
-                "value": {
-                  "minLength": 1,
-                  "type": "string",
-                  "writeOnly": true
-                }
+                "type": "array"
               },
-              "required": [
-                "name",
-                "value"
-              ],
-              "type": "object"
+              "environment": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "expectedConfigurationRevision": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "expectedKeyVersion": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "modelConfiguration": {
+                "additionalProperties": false,
+                "properties": {
+                  "defaultOptionId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "defaultReasoningLevel": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "options": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "credentialValue": {
+                          "minLength": 1,
+                          "type": "string",
+                          "writeOnly": true
+                        },
+                        "endpointId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "modelId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "optionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "reasoningLevels": {
+                          "items": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "optionId",
+                        "endpointId",
+                        "modelId",
+                        "reasoningLevels"
+                      ],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "options",
+                  "defaultOptionId",
+                  "defaultReasoningLevel"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 4,
+                "type": "number"
+              },
+              "secrets": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "value": {
+                      "minLength": 1,
+                      "type": "string",
+                      "writeOnly": true
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
             },
-            "type": "array"
+            "required": [
+              "schemaVersion",
+              "expectedConfigurationRevision",
+              "expectedKeyVersion"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "schemaVersion"
-        ],
-        "type": "object"
+        ]
       },
       "AgentLifecycleCommandRequestV1": {
         "oneOf": [
@@ -11345,6 +11582,167 @@
       }
     },
     "/api/v2/agents/{agentId}/default-relay-key/candidates": {
+      "get": {
+        "description": "Current Owner browser session only; the saved Key is decrypted transiently inside the Worker and no Key material is returned. No-store.",
+        "operationId": "getAgentDefaultRelayKeySavedCandidatesV2",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidates": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "endpointId": {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "modelId": {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "reasoningLevels": {
+                            "items": {
+                              "maxLength": 1024,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxItems": 32,
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "endpointId",
+                          "modelId",
+                          "reasoningLevels"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32768,
+                      "type": "array"
+                    },
+                    "configurationRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "keyVersion": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "configurationRevision",
+                    "keyVersion",
+                    "candidates"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Saved-Key compatible candidates"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ],
+        "summary": "Read models visible to the persisted Agent default Relay Key"
+      },
       "post": {
         "description": "Preview is not a save authorization or proof of real model execution. The write independently revalidates. Current Owner browser session only; no-store.",
         "operationId": "getAgentDefaultRelayKeyCandidatesV2",

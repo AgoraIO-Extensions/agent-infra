@@ -138,6 +138,12 @@ export interface ProductionPlatformApiInputV1
 		readonly serviceToken: string;
 		readonly fetch?: typeof fetch;
 	};
+	/** Deployment-owned API → Worker saved-Key candidate read boundary. */
+	readonly savedKeyCandidates?: {
+		readonly baseUrl: string;
+		readonly serviceToken: string;
+		readonly fetch?: typeof fetch;
+	};
 	/** Optional deployment-owned authenticated native metadata reader. */
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
 	/** Fixed API → Worker native metadata ingress; Store scope is assembled by Platform API. */
@@ -196,6 +202,7 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	readonly modelDirectory?: ProductionPlatformApiInputV1["modelDirectory"];
+	readonly savedKeyCandidates?: ProductionPlatformApiInputV1["savedKeyCandidates"];
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
 	readonly nativeMetadataWorker?: PlatformApiAssemblyInput["nativeMetadataWorker"];
 	readonly nativeMetadataCurrent?: PlatformApiAssemblyInput["nativeMetadataCurrent"];
@@ -219,6 +226,11 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 		input.apiInput.modelDirectory !== undefined
 	)
 		throw new Error("PLATFORM_MODEL_DIRECTORY_DUPLICATE");
+	if (
+		input.savedKeyCandidates !== undefined &&
+		input.apiInput.savedKeyCandidates !== undefined
+	)
+		throw new Error("PLATFORM_SAVED_KEY_CANDIDATES_DUPLICATE");
 	if (
 		input.nativeMetadata !== undefined &&
 		input.apiInput.nativeMetadata !== undefined
@@ -259,6 +271,9 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 			: {}),
 		...(input.modelDirectory !== undefined
 			? { modelDirectory: input.modelDirectory }
+			: {}),
+		...(input.savedKeyCandidates !== undefined
+			? { savedKeyCandidates: input.savedKeyCandidates }
 			: {}),
 		...(input.nativeMetadata !== undefined
 			? { nativeMetadata: input.nativeMetadata }
@@ -538,6 +553,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
 		...(input.modelDirectory ? { modelDirectory: input.modelDirectory } : {}),
+		...(input.savedKeyCandidates
+			? { savedKeyCandidates: input.savedKeyCandidates }
+			: {}),
 		...(input.nativeMetadata ? { nativeMetadata: input.nativeMetadata } : {}),
 		...(input.nativeMetadataWorker
 			? { nativeMetadataWorker: input.nativeMetadataWorker }

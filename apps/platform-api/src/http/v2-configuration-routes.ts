@@ -5,6 +5,11 @@ import {
 	AgentProjectionV1Schema,
 	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
+import {
+	type RuntimeSavedKeyCandidatesRequestV1,
+	RuntimeSavedKeyCandidatesRequestV1Schema,
+	RuntimeSavedKeyCandidatesResponseV1Schema,
+} from "@agent-infra/contracts/runtime";
 import type {
 	AgentConfigurationUseCaseV1,
 	PendingSecretRecordAttachmentResolverV1,
@@ -66,6 +71,12 @@ export interface ConfigurationRoutesDependencies {
 		readonly modelCredentialOptionIds: readonly string[];
 		readonly attachment?: PendingSecretRecordAttachmentResolverV1;
 	}>;
+	readonly savedKeyCandidates?: {
+		read(
+			request: RuntimeSavedKeyCandidatesRequestV1,
+			signal?: AbortSignal,
+		): Promise<unknown>;
+	};
 }
 
 function configurationChanges(
@@ -217,6 +228,66 @@ export function registerV2ConfigurationRoutes(
 			body,
 			metadata.traceId,
 		);
+		if (keyReplacement?.kind === "saved") {
+			if (!dependencies.savedKeyCandidates || !body.modelConfiguration)
+				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			let current: AgentConfigurationQueryResultV1;
+			try {
+				current = await dependencies.configurationQuery.read({
+					agentId: context.req.param("agentId"),
+					actorId: identity.userId,
+					organizationIds: identity.organizationIds,
+					isAdministrator: identity.roles.includes("system_admin"),
+					intent: "manage",
+				});
+			} catch {
+				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			}
+			if (
+				current.outcome !== "found" ||
+				current.configuration.revision !==
+					keyReplacement.expectedConfigurationRevision
+			)
+				throw new HttpProtocolError("CONFLICT", metadata.traceId);
+			let saved: ReturnType<
+				typeof RuntimeSavedKeyCandidatesResponseV1Schema.parse
+			>;
+			try {
+				saved = RuntimeSavedKeyCandidatesResponseV1Schema.parse(
+					await dependencies.savedKeyCandidates.read(
+						RuntimeSavedKeyCandidatesRequestV1Schema.parse({
+							schemaVersion: 1,
+							requestId: metadata.requestId,
+							traceId: metadata.traceId,
+							actorId: identity.userId,
+							agentId: context.req.param("agentId"),
+							configurationRevision:
+								keyReplacement.expectedConfigurationRevision,
+							keyVersion: keyReplacement.expectedKeyVersion,
+						}),
+					),
+				);
+			} catch {
+				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			}
+			if (
+				saved.configurationRevision !==
+					keyReplacement.expectedConfigurationRevision ||
+				saved.keyVersion !== keyReplacement.expectedKeyVersion ||
+				body.modelConfiguration.options.some(
+					(option) =>
+						!saved.candidates.some(
+							(candidate) =>
+								candidate.endpointId === option.endpointId &&
+								candidate.modelId === option.modelId &&
+								option.reasoningLevels.every((level) =>
+									candidate.reasoningLevels.includes(level),
+								),
+						),
+				)
+			)
+				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+		}
 		let prepared: Awaited<
 			ReturnType<ConfigurationRoutesDependencies["prepareSecretReplacements"]>
 		> = { secrets: [], modelCredentialOptionIds: [] };
@@ -269,7 +340,7 @@ export function registerV2ConfigurationRoutes(
 		);
 		try {
 			await dependencies.configuration.update(
-				keyReplacement && body.modelConfiguration
+				keyReplacement?.kind === "replace" && body.modelConfiguration
 					? {
 							schemaVersion: 3,
 							agentId: context.req.param("agentId"),
@@ -297,17 +368,43 @@ export function registerV2ConfigurationRoutes(
 								},
 							},
 						}
-					: {
-							schemaVersion: 2,
-							agentId: context.req.param("agentId"),
-							idempotencyKey,
-							requestId: metadata.requestId,
-							traceId: metadata.traceId,
-							changes: configurationChanges(
-								body,
-								preparedSecrets.modelCredentialOptionIds,
-							),
-						},
+					: keyReplacement?.kind === "saved" && body.modelConfiguration
+						? {
+								schemaVersion: 4,
+								agentId: context.req.param("agentId"),
+								idempotencyKey,
+								requestId: metadata.requestId,
+								traceId: metadata.traceId,
+								expectedConfigurationRevision:
+									keyReplacement.expectedConfigurationRevision,
+								expectedKeyVersion: keyReplacement.expectedKeyVersion,
+								changes: {
+									...configurationChanges(
+										{ ...body, modelConfiguration: undefined },
+										preparedSecrets.modelCredentialOptionIds,
+									),
+									modelConfiguration: {
+										options: body.modelConfiguration.options.map(
+											({ credentialValue: _credentialValue, ...option }) =>
+												option,
+										),
+										defaultOptionId: body.modelConfiguration.defaultOptionId,
+										defaultReasoningLevel:
+											body.modelConfiguration.defaultReasoningLevel,
+									},
+								},
+							}
+						: {
+								schemaVersion: 2,
+								agentId: context.req.param("agentId"),
+								idempotencyKey,
+								requestId: metadata.requestId,
+								traceId: metadata.traceId,
+								changes: configurationChanges(
+									body,
+									preparedSecrets.modelCredentialOptionIds,
+								),
+							},
 				{
 					schemaVersion: 1,
 					actorId: identity.userId,

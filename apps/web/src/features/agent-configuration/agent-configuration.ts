@@ -6,6 +6,7 @@ import type {
 import {
 	commandAgentLifecycleV2,
 	getAgentDefaultRelayKeyCandidatesV2,
+	getAgentDefaultRelayKeySavedCandidatesV2,
 	getAgentDefaultRelayKeyV2,
 	replaceAgentDefaultRelayKeyV2,
 	updateAgentConfigurationV2 as requestUpdateAgentConfiguration,
@@ -17,6 +18,8 @@ import type {
 	CommandAgentLifecycleV2Responses,
 	GetAgentDefaultRelayKeyCandidatesV2Errors,
 	GetAgentDefaultRelayKeyCandidatesV2Responses,
+	GetAgentDefaultRelayKeySavedCandidatesV2Errors,
+	GetAgentDefaultRelayKeySavedCandidatesV2Responses,
 	GetAgentDefaultRelayKeyV2Errors,
 	GetAgentDefaultRelayKeyV2Responses,
 	ReplaceAgentDefaultRelayKeyV2Errors,
@@ -37,6 +40,8 @@ export function isAgentConfigurationOwner(
 export type AgentDefaultRelayKeyState = GetAgentDefaultRelayKeyV2Responses[200];
 export type AgentDefaultRelayKeyCandidates =
 	GetAgentDefaultRelayKeyCandidatesV2Responses[200];
+export type AgentDefaultRelayKeySavedCandidates =
+	GetAgentDefaultRelayKeySavedCandidatesV2Responses[200];
 /** 候选模型，连同检查时看到的 Key 版本；保存时与 `configurationRevision` 一起作为 expected 值。 */
 export type AgentDefaultRelayKeyCheck = AgentDefaultRelayKeyCandidates & {
 	keyVersion: number | null;
@@ -75,6 +80,31 @@ export async function previewAgentDefaultRelayKeyCandidates(
 		>
 	> = await getAgentDefaultRelayKeyCandidatesV2<false>({
 		body,
+		client,
+		path: { agentId },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	if (!result.data) throw requestError(result.error?.retryable !== false);
+	return result.data;
+}
+
+/**
+ * Read the metadata projection for the already persisted Agent default Relay Key.
+ * The generated endpoint is GET-only here: the browser never sends or receives
+ * Key material, and the Worker decrypts the saved value transiently.
+ */
+export async function loadAgentDefaultRelayKeySavedCandidates(
+	agentId: string,
+	client?: Client,
+): Promise<AgentDefaultRelayKeySavedCandidates> {
+	const result: Awaited<
+		RequestResult<
+			GetAgentDefaultRelayKeySavedCandidatesV2Responses,
+			GetAgentDefaultRelayKeySavedCandidatesV2Errors,
+			false
+		>
+	> = await getAgentDefaultRelayKeySavedCandidatesV2<false>({
 		client,
 		path: { agentId },
 		responseStyle: "fields",

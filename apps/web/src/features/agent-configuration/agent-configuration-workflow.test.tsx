@@ -11,6 +11,7 @@ import { grantApplicationManager } from "./agent-authorization.js";
 import { AgentConfigurationWorkflow } from "./agent-configuration-workflow.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
 import { useAgentDefaultRelayKeyState } from "./use-agent-default-relay-key-state.js";
+import { useAgentSavedRelayKeyCandidates } from "./use-agent-saved-relay-key-candidates.js";
 
 vi.mock("../use-browser-session.js", () => ({
 	useBrowserSession: vi.fn(),
@@ -23,6 +24,9 @@ vi.mock("./use-agent-configuration-submission.js", () => ({
 }));
 vi.mock("./use-agent-default-relay-key-state.js", () => ({
 	useAgentDefaultRelayKeyState: vi.fn(),
+}));
+vi.mock("./use-agent-saved-relay-key-candidates.js", () => ({
+	useAgentSavedRelayKeyCandidates: vi.fn(),
 }));
 vi.mock("./agent-authorization.js", () => ({
 	AgentAuthorizationRequestError: class extends Error {},
@@ -73,6 +77,13 @@ beforeEach(() => {
 	} as never);
 	vi.mocked(useAgentDefaultRelayKeyState).mockReturnValue({
 		data: undefined,
+	} as never);
+	vi.mocked(useAgentSavedRelayKeyCandidates).mockReturnValue({
+		data: undefined,
+		isError: false,
+		isPending: false,
+		error: null,
+		refetch: vi.fn(),
 	} as never);
 	vi.mocked(useAgentConfigurationSubmission).mockReturnValue({
 		isError: false,
@@ -171,6 +182,32 @@ describe("AgentConfigurationWorkflow", () => {
 		} as never);
 		render(<AgentConfigurationWorkflow agent={firstAgent} />);
 		expect(screen.queryByRole("checkbox", { name: "替换模型配置" })).toBeNull();
+	});
+
+	it("reads saved candidates only after the Owner default Key is confirmed", () => {
+		vi.mocked(useAgentDefaultRelayKeyState).mockReturnValue({
+			data: {
+				schemaVersion: 1,
+				isSet: true,
+				keyVersion: 2,
+				configurationRevision: 7,
+			},
+		} as never);
+		render(<AgentConfigurationWorkflow agent={firstAgent} />);
+		expect(vi.mocked(useAgentSavedRelayKeyCandidates)).toHaveBeenLastCalledWith(
+			firstAgent.agentId,
+			true,
+		);
+
+		cleanup();
+		vi.mocked(useBrowserSession).mockReturnValue({
+			state: { kind: "ready", session: administratorSession },
+		} as never);
+		render(<AgentConfigurationWorkflow agent={firstAgent} />);
+		expect(vi.mocked(useAgentSavedRelayKeyCandidates)).toHaveBeenLastCalledWith(
+			firstAgent.agentId,
+			false,
+		);
 	});
 
 	it("resets pending authorization controls when an administrator changes Agent", () => {

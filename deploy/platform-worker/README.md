@@ -41,6 +41,12 @@ Session Sandbox 的空闲计算回收属于同一 Worker 的会话生命周期�
 `serviceToken` 调用 `/internal/worker/v1/saved-key-candidates`；Key 明文和 ciphertext
 不得进入响应、日志或浏览器。未提供该部署 seam 时，saved-Key read 保持 unavailable。
 
+部署也可以导出 `savedKeyCandidatesPolicy`，由 Worker 生产入口组装
+`PostgresAgentDefaultRelayKeyStoreV1`、`PostgresRelayKeyVersionStoreV1`、Worker keyring、
+当前模板/image binding 和 model catalog。Policy 必须提供固定 Relay endpoint/base URL、
+catalog revision 及 approved billing validation；请求会重新检查 Owner、禁用状态、配置
+修订和 Key version。`savedKeyCandidates` 仍可作为受控部署 override。
+
 Native metadata 的 Worker 网关还提供固定的当前确认入口
 `/internal/platform-worker/v1/native-metadata/current`。Runtime Host 只能使用部署注入的
 Worker origin 和 service token 调用该入口，并把 API request source ref 作为不透明关联值

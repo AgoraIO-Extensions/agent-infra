@@ -25,6 +25,11 @@ export const modelDirectory = undefined;
 // model and reasoning metadata through the authenticated internal gateway.
 export const savedKeyCandidates = undefined;
 
+// Optional production reader policy. When supplied, Worker assembles the
+// Store-backed Owner/version check, Worker-only decryptor, and model visibility
+// validator. `catalogRevision` must match the deployment model snapshot.
+export const savedKeyCandidatesPolicy = undefined;
+
 // Optional native metadata gateway. The deployment must provide only the
 // persisted Execution→Host binding resolver and a fixed Runtime target
 // resolver; proof signing defaults to the Worker `signing` key above. When

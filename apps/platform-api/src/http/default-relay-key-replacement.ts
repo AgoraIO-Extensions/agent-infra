@@ -2,9 +2,15 @@ import { HttpProtocolError } from "./common.js";
 
 /** 带默认 Relay Key 的标准 Agent 更换模型集合时，请求里必须一并出现的三项（#2421）。 */
 export interface DefaultRelayKeyReplacementV1 {
+	readonly kind: "replace";
 	readonly defaultRelayKey: string;
 	readonly expectedConfigurationRevision: number;
 	readonly expectedKeyVersion: number | null;
+}
+export interface DefaultRelayKeyExpectationV1 {
+	readonly kind: "saved";
+	readonly expectedConfigurationRevision: number;
+	readonly expectedKeyVersion: number;
 }
 
 /**
@@ -26,7 +32,7 @@ export function parseDefaultRelayKeyReplacement(
 			| undefined;
 	},
 	traceId: string,
-): DefaultRelayKeyReplacementV1 | undefined {
+): DefaultRelayKeyReplacementV1 | DefaultRelayKeyExpectationV1 | undefined {
 	const {
 		defaultRelayKey,
 		expectedConfigurationRevision,
@@ -35,11 +41,24 @@ export function parseDefaultRelayKeyReplacement(
 	} = body;
 	if (defaultRelayKey === undefined) {
 		if (
-			expectedConfigurationRevision !== undefined ||
-			expectedKeyVersion !== undefined
+			expectedConfigurationRevision === undefined &&
+			expectedKeyVersion === undefined
+		)
+			return undefined;
+		if (
+			expectedConfigurationRevision === undefined ||
+			typeof expectedKeyVersion !== "number" ||
+			modelConfiguration === undefined ||
+			modelConfiguration.options.some(
+				({ credentialValue }) => credentialValue !== undefined,
+			)
 		)
 			throw new HttpProtocolError("INVALID_REQUEST", traceId);
-		return undefined;
+		return {
+			kind: "saved",
+			expectedConfigurationRevision,
+			expectedKeyVersion,
+		};
 	}
 	if (
 		expectedConfigurationRevision === undefined ||
@@ -50,5 +69,10 @@ export function parseDefaultRelayKeyReplacement(
 		)
 	)
 		throw new HttpProtocolError("INVALID_REQUEST", traceId);
-	return { defaultRelayKey, expectedConfigurationRevision, expectedKeyVersion };
+	return {
+		kind: "replace",
+		defaultRelayKey,
+		expectedConfigurationRevision,
+		expectedKeyVersion,
+	};
 }

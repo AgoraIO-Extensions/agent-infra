@@ -29,6 +29,7 @@ installation credential。外置 `platform-api` 的文件装配仍由其部署�
 | `customAgentGateway` | 可选的部署端 Gateway port：提供 `resolveDeployment`、`authorizeAgent`、签名 issuer/key version/private key；不要同时放入 `apiInput.customAgentGateway` |
 | `modelSelection` | 可选的 Runtime ACP model-directory reader；应由部署方用 `createRuntimeModelSelectionReaderV1` 和受认证 transport 组装；不要同时放入 `apiInput.modelSelection` |
 | `modelDirectory` | 可选的 `{ baseUrl, serviceToken }` Worker 内部模型目录服务输入；配置后 API 自动从 Platform Store 绑定当前 Web Conversation/Execution/Session/fence，并创建默认 `modelSelection` reader；不要同时提供 `modelSelection` |
+| `savedKeyCandidates` | 可选的 `{ baseUrl, serviceToken }` Worker 内部已保存 Agent default Relay Key 候选读取服务；API 只发送服务端解析的 Owner/Agent/配置修订/Key version，响应仅含候选 metadata；Key 明文与 ciphertext 不进入 API/Web |
 | `nativeMetadata` | 已经组装好的 API reader；它只能调用固定 Worker ingress，不能直连 RuntimeHost 或自行签发 proof |
 | `nativeMetadataWorker` | 默认装配输入：固定 Worker `{ baseUrl, serviceToken }`。Platform API 使用自身的 Platform Store `PostgresConversationQueryV1` 自动解析 exact Execution→原始 Host scope，并创建 Worker gateway client；不再要求部署方实现 `resolveRequest` |
 | `nativeMetadataResolveRequest` | 可选的显式 resolver override，仅用于受控 deployment/test seam；必须与 `nativeMetadataWorker` 同时提供。生产默认路径不要配置它 |

@@ -2887,6 +2887,35 @@ function isKeylessModelReplacementOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2612 adds the saved-Key read projection and a credential-free, version-bound
+// configuration update branch. Strip those additive branches before comparing
+// the historical V2 contract.
+function isSavedKeyCandidateOpenApiAddition(previous, current) {
+	const name = "AgentConfigurationUpdateRequestV2";
+	const currentSchema = current.components?.schemas?.[name];
+	if (!Array.isArray(currentSchema?.anyOf)) return false;
+	const base = currentSchema.anyOf.find(
+		(option) => option?.properties?.schemaVersion?.const === 2,
+	);
+	const saved = currentSchema.anyOf.find(
+		(option) => option?.properties?.schemaVersion?.const === 4,
+	);
+	if (!base || !saved) return false;
+	if (
+		saved.properties?.defaultRelayKey !== undefined ||
+		saved.properties?.expectedConfigurationRevision === undefined ||
+		saved.properties?.expectedKeyVersion === undefined
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas[name] = base;
+	const path = "/api/v2/agents/{agentId}/default-relay-key/candidates";
+	if (normalized.paths?.[path]?.get === undefined) return false;
+	delete normalized.paths[path].get;
+	delete normalized.components.schemas.AgentDefaultRelayKeySavedCandidatesV1;
+	return sameValue(previous, normalized);
+}
+
 // #1260 adds the same write-only key input to direct Agent creation custom requests.
 function isAgentDefaultRelayKeyInputOpenApiAddition(previous, current) {
 	const name = "AgentApiCreationRequestV1";
@@ -4327,6 +4356,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isAgentDefaultRelayKeyV2OpenApiAddition(previous, current) &&
 			!isApplicationDefaultRelayKeyV2OpenApiAddition(previous, current) &&
 			!isKeylessModelReplacementOpenApiAddition(previous, current) &&
+			!isSavedKeyCandidateOpenApiAddition(previous, current) &&
 			!isAgentDefaultRelayKeyInputOpenApiAddition(previous, current) &&
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isTaskHttpV1SseOpenApiAddition(previous, current) &&

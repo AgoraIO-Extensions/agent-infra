@@ -283,6 +283,15 @@ export interface UpdateAgentConfigurationCommandV3
 	};
 }
 
+/** Key-managed model update bound to an already persisted Relay Key version. */
+export interface UpdateAgentConfigurationCommandV4
+	extends Omit<
+		UpdateAgentConfigurationCommandV3,
+		"schemaVersion" | "defaultRelayKey"
+	> {
+	readonly schemaVersion: 4;
+}
+
 export interface AgentConfigurationRelayKeyAttachmentV1 {
 	readonly expectedVersion: number | null;
 	readonly encrypt: (
@@ -638,7 +647,8 @@ export interface AgentConfigurationUseCaseV1 {
 	update(
 		command:
 			| UpdateAgentConfigurationCommandV2
-			| UpdateAgentConfigurationCommandV3,
+			| UpdateAgentConfigurationCommandV3
+			| UpdateAgentConfigurationCommandV4,
 		actorContext: AgentConfigurationActorContextV1,
 		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<AgentConfigurationResultV1>;
@@ -680,7 +690,7 @@ export interface AgentConfigurationUseCaseDependenciesV1 {
 	readonly defaultRelayKey?: Pick<
 		AgentDefaultRelayKeyDependenciesV1,
 		"candidates" | "encrypt" | "currentIdentity"
-	>;
+	> & { readonly current?: (agentId: string) => Promise<number | null> };
 	readonly standardTemplateReleaseAuthorization?: StandardTemplateReleaseAuthorizationPortV1;
 	readonly transaction: AgentConfigurationTransactionPortV1;
 	readonly authorizationAdmission: AgentConfigurationAuthorizationAdmissionPortV1;

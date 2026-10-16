@@ -29,7 +29,11 @@ export {
 	type AgentDefaultModelRequestV1,
 	admitAgentDefaultModelsV1,
 } from "./agent-default-admission.js";
-export { createAgentDefaultRelayKeyModelCandidatesV1 } from "./agent-default-candidates.js";
+export {
+	type AgentDefaultRelayKeyCandidateV1,
+	createAgentDefaultRelayKeyCandidateReaderV1,
+	createAgentDefaultRelayKeyModelCandidatesV1,
+} from "./agent-default-candidates.js";
 export * from "./catalog.js";
 export {
 	assertCodexModelProfilesV1,
@@ -53,5 +57,6 @@ export {
 	validateRuntimeModelProjectionV4,
 	validateStandardTemplateModelBindingsV1,
 } from "./projection.js";
+export { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 export { standardTemplateDefinitionsV1 } from "./standard-templates.js";
 export { standardTemplateReadinessV1 } from "./template-readiness.js";

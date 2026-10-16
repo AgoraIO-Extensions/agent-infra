@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { RuntimeOAuthConfigurationV1Schema } from "@agent-infra/contracts/runtime";
+import type { StandardTemplateModelBindingV1 } from "@agent-infra/model-catalog";
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
 	createRuntimeConnectionInstallationRevisionV1,
@@ -16,6 +17,8 @@ import {
 	type PlatformWorkerRuntimeModelDirectoryDeploymentPortsV1,
 } from "./runtime-model-directory-deployment.js";
 import type { PlatformWorkerInternalGatewayServerOptionsV1 } from "./runtime-native-metadata-server.js";
+import { createProductionSavedKeyCandidatesReaderV1 } from "./saved-key-candidates-production.js";
+import { createWorkerSavedKeyCandidatesApp } from "./saved-key-candidates-service.js";
 import {
 	type DeploymentSkillMaterializerFactoryV1,
 	resolveDeploymentSkillMaterializerV1,
@@ -66,6 +69,17 @@ type DeploymentConfiguration = {
 	readonly modelDirectory?: PlatformWorkerRuntimeModelDirectoryDeploymentPortsV1;
 	/** Deployment-owned saved-Key candidate reader; it keeps decryptor access in Worker. */
 	readonly savedKeyCandidates?: PlatformWorkerInternalGatewayServerOptionsV1;
+	readonly savedKeyCandidatesPolicy?: {
+		readonly port?: number;
+		readonly hostname?: string;
+		readonly relayEndpointId: string;
+		readonly relayBaseUrl: string;
+		readonly catalogRevision: string;
+		readonly validation: Parameters<
+			typeof import("@agent-infra/model-catalog")["createPersonalRelayKeyValidatorV1"]
+		>[0];
+		readonly fetch?: typeof fetch;
+	};
 };
 
 function resolveConnectionInstallation(
@@ -115,6 +129,7 @@ const {
 	nativeMetadataGateway,
 	modelDirectory,
 	savedKeyCandidates,
+	savedKeyCandidatesPolicy,
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
@@ -430,5 +445,37 @@ export async function createPlatformSavedKeyCandidatesOptionsV1(
 	signal: AbortSignal,
 ) {
 	signal.throwIfAborted();
-	return savedKeyCandidates;
+	if (savedKeyCandidates) return savedKeyCandidates;
+	if (!savedKeyCandidatesPolicy) return undefined;
+	const deployment = await prepare(signal);
+	const decryptor = deployment.conversation.relayKeyDecryptor;
+	if (!decryptor) throw new Error("WORKER_EXECUTION_KEY_CONFIGURATION_INVALID");
+	const reader = createProductionSavedKeyCandidatesReaderV1({
+		databaseUrl: deployment.conversation.databaseUrl,
+		decryptor,
+		modelCatalog: {
+			revision: savedKeyCandidatesPolicy.catalogRevision,
+			load: (loadSignal) => workloadInput.modelCatalog.load(loadSignal),
+		},
+		templateBindings: deployment.workload
+			.templateModelBindings as readonly (StandardTemplateModelBindingV1 & {
+			readonly reasoningLevels: readonly string[];
+		})[],
+		relayEndpointId: savedKeyCandidatesPolicy.relayEndpointId,
+		relayBaseUrl: savedKeyCandidatesPolicy.relayBaseUrl,
+		validation: savedKeyCandidatesPolicy.validation,
+		...(savedKeyCandidatesPolicy.fetch
+			? { fetch: savedKeyCandidatesPolicy.fetch }
+			: {}),
+	});
+	return {
+		app: createWorkerSavedKeyCandidatesApp({ serviceToken, reader }),
+		...(savedKeyCandidatesPolicy.port === undefined
+			? {}
+			: { port: savedKeyCandidatesPolicy.port }),
+		...(savedKeyCandidatesPolicy.hostname === undefined
+			? {}
+			: { hostname: savedKeyCandidatesPolicy.hostname }),
+		close: reader.close,
+	};
 }
