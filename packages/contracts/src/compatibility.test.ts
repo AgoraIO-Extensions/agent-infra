@@ -1710,9 +1710,16 @@ describe("contract compatibility command", () => {
 		for (const path of [
 			"/api/v2/skills",
 			"/api/v2/skills/versions/{skillVersionId}",
+			"/api/v2/agents/{agentId}/configuration/saved-model",
+			"/api/v2/agents/{agentId}/default-relay-key/candidates",
 		])
 			delete current.paths[path];
-		for (const name of ["SkillHubVersionMetadataV1", "SkillHubDirectoryPageV1"])
+		for (const name of [
+			"SkillHubVersionMetadataV1",
+			"SkillHubDirectoryPageV1",
+			"AgentConfigurationUpdateRequestV4",
+			"AgentDefaultRelayKeySavedCandidatesV1",
+		])
 			delete current.components.schemas[name];
 		const latest = structuredClone(current);
 		restorePreRelayKeyContract(current);
