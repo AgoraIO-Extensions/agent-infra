@@ -69,7 +69,10 @@ async function boundedProtocolBody(response: Response) {
 			}
 			if (!value) continue;
 			total += value.byteLength;
-			if (total > maximumProtocolBodyBytes) return undefined;
+			if (total > maximumProtocolBodyBytes) {
+				await reader.cancel().catch(() => undefined);
+				return undefined;
+			}
 			chunks.push(value);
 		}
 	})();
