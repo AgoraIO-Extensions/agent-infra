@@ -1,6 +1,7 @@
 import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
 
+import { createDeploymentIdentityScope } from "./deployment-identity.js";
 import { createDeploymentPresentation } from "./deployment-presentation.js";
 
 const identity = {
@@ -57,6 +58,7 @@ function presentMultiServiceManifest(manifest: string) {
 		identityScope: {
 			currentRequest: () => request,
 			currentIdentity: async () => identity,
+			requestIdentity: async () => identity,
 		} as never,
 		configurationQuery: {
 			readRuntimePresentation: vi.fn().mockResolvedValue({
@@ -144,12 +146,79 @@ function twoServiceManifestJson(
 }
 
 describe("deployment presentation platform identity route", () => {
+	it("resolves the request identity once for all Agents presented in one request (#2632)", async () => {
+		let resolutions = 0;
+		const identityScope = createDeploymentIdentityScope({
+			async resolve() {
+				resolutions += 1;
+				return identity;
+			},
+			async hydrateUsers() {
+				return [];
+			},
+		});
+		const readRuntimePresentation = vi.fn().mockResolvedValue({
+			outcome: "found",
+			sourceReference: "sha256:custom",
+			capabilities: {},
+			interactionUrl: null,
+		});
+		const present = createDeploymentPresentation({
+			identityScope,
+			configurationQuery: { readRuntimePresentation },
+			resourceProfile: {
+				profileId: "profile_01",
+				displayName: "Small",
+				estimatedResources: {
+					cpuMillicores: 100,
+					memoryMiB: 128,
+					storageGiB: 1,
+				},
+			},
+			imageRepository: "registry.example.test/agents",
+		});
+		const agents = Array.from({ length: 6 }, (_, index) => `agent_0${index}`);
+		const presentAll = () =>
+			Promise.all(
+				agents.map((agentId) =>
+					present({
+						agentId,
+						configuration: { ...configuration, agentId },
+						management: { ...management, agentId },
+					}),
+				),
+			);
+
+		await identityScope.requestScope(
+			new Request("https://platform.test/api/v2/agents"),
+			presentAll,
+		);
+		// 之前每个 Agent 都完整重新解析一次请求身份（6 次）；现在一个请求只解析一次。
+		expect(resolutions).toBe(1);
+		expect(readRuntimePresentation).toHaveBeenCalledTimes(6);
+		for (const [call] of readRuntimePresentation.mock.calls)
+			expect(call).toMatchObject({
+				actorId: identity.userId,
+				organizationIds: identity.organizationIds,
+				isAdministrator: false,
+				accountStatus: "active",
+			});
+
+		// 下一个请求重新解析，不复用上一个请求的身份。
+		await identityScope.requestScope(
+			new Request("https://platform.test/api/v2/agents"),
+			presentAll,
+		);
+		expect(resolutions).toBe(2);
+	});
+
 	it("keeps Runtime model selection hidden until the API reader is wired", async () => {
 		const request = new Request("https://platform.test/agents/agent_01");
 		const base = {
 			identityScope: {
 				currentRequest: () => request,
 				currentIdentity: async () => identity,
+				requestIdentity: async () => identity,
 			} as never,
 			configurationQuery: {
 				readRuntimePresentation: vi.fn().mockResolvedValue({
@@ -220,6 +289,7 @@ describe("deployment presentation platform identity route", () => {
 			identityScope: {
 				currentRequest: () => request,
 				currentIdentity: async () => identity,
+				requestIdentity: async () => identity,
 			} as never,
 			configurationQuery: {
 				readRuntimePresentation: vi.fn().mockResolvedValue({
@@ -328,6 +398,7 @@ resources:
 			identityScope: {
 				currentRequest: () => request,
 				currentIdentity: async () => identity,
+				requestIdentity: async () => identity,
 			} as never,
 			configurationQuery: {
 				readRuntimePresentation: vi.fn().mockResolvedValue({
@@ -361,6 +432,7 @@ resources:
 			identityScope: {
 				currentRequest: () => request,
 				currentIdentity: async () => identity,
+				requestIdentity: async () => identity,
 			} as never,
 			configurationQuery: {
 				readRuntimePresentation: vi.fn().mockResolvedValue({
@@ -435,6 +507,14 @@ it("passes the verified Browser projection through the API presentation", async 
 		identityScope: {
 			currentRequest: () => new Request("https://api.example.test"),
 			currentIdentity: async () => ({
+				schemaVersion: 1,
+				userId: "owner-a",
+				accountStatus: "active",
+				organizationIds: [],
+				roles: ["employee"],
+				authorizationRevision: "identity-a",
+			}),
+			requestIdentity: async () => ({
 				schemaVersion: 1,
 				userId: "owner-a",
 				accountStatus: "active",
@@ -529,6 +609,7 @@ it("preserves an explicitly empty Skill capability list", async () => {
 		identityScope: {
 			currentRequest: () => new Request("https://api.example.test"),
 			currentIdentity: async () => identity,
+			requestIdentity: async () => identity,
 		} as never,
 		configurationQuery: {
 			readRuntimePresentation: async () => ({
