@@ -496,9 +496,28 @@ async function requireManagementAccepted(
 		ReturnType<AgentManagementInterfaceV1["executeManagementCommand"]>
 	>,
 	traceId: string,
-): Promise<void> {
+): Promise<
+	Extract<
+		Awaited<ReturnType<AgentManagementInterfaceV1["executeManagementCommand"]>>,
+		{ readonly outcome: "accepted" | "replayed" }
+	>
+> {
 	if (decision.outcome === "denied") fail("RESOURCE_UNAVAILABLE", traceId);
 	if (decision.outcome === "conflict") fail("CONFLICT", traceId);
+	return decision;
+}
+
+function committedProjection(
+	projection: AgentProjection,
+	status: AgentProjection["managementStatus"],
+): AgentProjection {
+	return {
+		...projection,
+		managementStatus: status,
+		...(status === "stopped" || status === "disabled"
+			? { serviceAvailability: null }
+			: {}),
+	};
 }
 
 export function registerV2ManagementRoutes(
@@ -1032,6 +1051,21 @@ export function registerV2ManagementRoutes(
 				metadata.traceId,
 			);
 			if (body.command === "upgrade_custom_image") {
+				const projectionScope = identity.roles.includes("system_admin")
+					? ({ kind: "administrator" } as const)
+					: ownerScope(identity);
+				const current = await agentOrUnavailable(
+					dependencies,
+					projectionScope,
+					agentId,
+					metadata.traceId,
+				);
+				const fallback = await projectAgent(
+					dependencies,
+					current,
+					identity,
+					metadata,
+				);
 				await dependencies.configuration.upgradeCustomImage(
 					{
 						schemaVersion: 1,
@@ -1047,19 +1081,20 @@ export function registerV2ManagementRoutes(
 						rawRequestDigest,
 					},
 				);
-				const projectionScope = identity.roles.includes("system_admin")
-					? ({ kind: "administrator" } as const)
-					: ownerScope(identity);
-				const agent = await agentOrUnavailable(
-					dependencies,
-					projectionScope,
-					agentId,
-					metadata.traceId,
-				);
-				return context.json(
-					await projectAgent(dependencies, agent, identity, metadata),
-					202,
-				);
+				try {
+					const agent = await agentOrUnavailable(
+						dependencies,
+						projectionScope,
+						agentId,
+						metadata.traceId,
+					);
+					return context.json(
+						await projectAgent(dependencies, agent, identity, metadata),
+						202,
+					);
+				} catch {
+					return context.json(fallback, 202);
+				}
 			}
 			const scope =
 				identity.roles.includes("system_admin") &&
@@ -1072,13 +1107,19 @@ export function registerV2ManagementRoutes(
 				agentId,
 				metadata.traceId,
 			);
+			const fallback = await projectAgent(
+				dependencies,
+				current,
+				identity,
+				metadata,
+			);
 			const commands = {
 				stop: "stop_agent",
 				restart: "restart_agent",
 				retry_creation: "retry_agent_creation",
 				disable: "disable_agent",
 			} as const;
-			await requireManagementAccepted(
+			const decision = await requireManagementAccepted(
 				await dependencies.management.executeManagementCommand(
 					{
 						schemaVersion: 1,
@@ -1093,16 +1134,23 @@ export function registerV2ManagementRoutes(
 				),
 				metadata.traceId,
 			);
-			const agent = await agentOrUnavailable(
-				dependencies,
-				scope,
-				agentId,
-				metadata.traceId,
-			);
-			return context.json(
-				await projectAgent(dependencies, agent, identity, metadata),
-				202,
-			);
+			try {
+				const agent = await agentOrUnavailable(
+					dependencies,
+					scope,
+					agentId,
+					metadata.traceId,
+				);
+				return context.json(
+					await projectAgent(dependencies, agent, identity, metadata),
+					202,
+				);
+			} catch {
+				return context.json(
+					committedProjection(fallback, decision.result.status),
+					202,
+				);
+			}
 		}),
 	);
 }

@@ -42,6 +42,7 @@ describe("useAgentLifecycleCommand", () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { mutations: { retry: 1, retryDelay: 0 } },
 		});
+		const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
 		vi.mocked(commandAgentLifecycle)
 			.mockRejectedValueOnce(new Error("transient transport failure"))
 			.mockResolvedValueOnce(lifecycleResult);
@@ -59,6 +60,15 @@ describe("useAgentLifecycleCommand", () => {
 			);
 		});
 		expect(commandAgentLifecycle).toHaveBeenCalledTimes(2);
+		expect(invalidateQueries).toHaveBeenCalledWith({
+			queryKey: ["agents"],
+		});
+		expect(invalidateQueries).toHaveBeenCalledWith({
+			queryKey: ["my-agents"],
+		});
+		expect(invalidateQueries).toHaveBeenCalledWith({
+			queryKey: ["admin", "agent-applications"],
+		});
 		expect(commandAgentLifecycle).toHaveBeenNthCalledWith(
 			1,
 			lifecycleResult.agentId,
