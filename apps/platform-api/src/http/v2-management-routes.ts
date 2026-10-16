@@ -508,19 +508,6 @@ async function requireManagementAccepted(
 	return decision;
 }
 
-function committedProjection(
-	projection: AgentProjection,
-	status: AgentProjection["managementStatus"],
-): AgentProjection {
-	return {
-		...projection,
-		managementStatus: status,
-		...(status === "stopped" || status === "disabled"
-			? { serviceAvailability: null }
-			: {}),
-	};
-}
-
 function acceptedLifecycleResponse(input: {
 	readonly agentId: string;
 	readonly status?: AgentProjection["managementStatus"];
@@ -1068,31 +1055,6 @@ export function registerV2ManagementRoutes(
 				metadata.traceId,
 			);
 			if (body.command === "upgrade_custom_image") {
-				const projectionScope = identity.roles.includes("system_admin")
-					? ({ kind: "administrator" } as const)
-					: ownerScope(identity);
-				const fallbackPromise = (async () => {
-					try {
-						const current = await agentOrUnavailable(
-							dependencies,
-							projectionScope,
-							agentId,
-							metadata.traceId,
-						);
-						return {
-							projection: await projectAgent(
-								dependencies,
-								current,
-								identity,
-								metadata,
-							),
-							status: current.management.status,
-							revision: current.management.revision,
-						};
-					} catch {
-						return undefined;
-					}
-				})();
 				await dependencies.configuration.upgradeCustomImage(
 					{
 						schemaVersion: 1,
@@ -1108,7 +1070,9 @@ export function registerV2ManagementRoutes(
 						rawRequestDigest,
 					},
 				);
-				const fallback = await fallbackPromise;
+				const projectionScope = identity.roles.includes("system_admin")
+					? ({ kind: "administrator" } as const)
+					: ownerScope(identity);
 				try {
 					const agent = await agentOrUnavailable(
 						dependencies,
@@ -1121,15 +1085,10 @@ export function registerV2ManagementRoutes(
 						202,
 					);
 				} catch {
-					if (fallback === undefined)
-						return context.json(
-							acceptedLifecycleResponse({
-								agentId,
-								replayed: false,
-							}),
-							202,
-						);
-					return context.json(fallback.projection, 202);
+					return context.json(
+						acceptedLifecycleResponse({ agentId, replayed: false }),
+						202,
+					);
 				}
 			}
 			const scope =
@@ -1143,12 +1102,6 @@ export function registerV2ManagementRoutes(
 				agentId,
 				metadata.traceId,
 			);
-			const fallbackPromise = projectAgent(
-				dependencies,
-				current,
-				identity,
-				metadata,
-			).catch(() => undefined);
 			const commands = {
 				stop: "stop_agent",
 				restart: "restart_agent",
@@ -1170,7 +1123,6 @@ export function registerV2ManagementRoutes(
 				),
 				metadata.traceId,
 			);
-			const fallback = await fallbackPromise;
 			try {
 				const agent = await agentOrUnavailable(
 					dependencies,
@@ -1183,18 +1135,13 @@ export function registerV2ManagementRoutes(
 					202,
 				);
 			} catch {
-				if (fallback === undefined)
-					return context.json(
-						acceptedLifecycleResponse({
-							agentId,
-							status: decision.result.status,
-							revision: decision.result.revision,
-							replayed: decision.outcome === "replayed",
-						}),
-						202,
-					);
 				return context.json(
-					committedProjection(fallback, decision.result.status),
+					acceptedLifecycleResponse({
+						agentId,
+						status: decision.result.status,
+						revision: decision.result.revision,
+						replayed: decision.outcome === "replayed",
+					}),
 					202,
 				);
 			}

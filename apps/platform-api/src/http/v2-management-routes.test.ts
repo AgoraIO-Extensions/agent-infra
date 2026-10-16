@@ -131,7 +131,6 @@ function createApp(
 		identityValue?: unknown;
 		queryFailure?: boolean;
 		projectionFailure?: boolean;
-		projectionFailureAfterCommand?: boolean;
 		personalApiAgentRead?: PersonalApiAgentReadUseCaseV1;
 		/** 与生产应用一样挂上 HTTP 遥测，事件收集到这个数组里（#2569）。 */
 		telemetry?: OperationalEvent[];
@@ -175,14 +174,8 @@ function createApp(
 	const readApplicationProjection = vi
 		.fn()
 		.mockResolvedValue(applicationProjection);
-	let projectionReads = 0;
 	const readAgentProjection = vi.fn().mockImplementation(async () => {
-		projectionReads += 1;
-		if (
-			options.projectionFailure ||
-			(options.projectionFailureAfterCommand && projectionReads > 1)
-		)
-			throw new Error("private projection detail");
+		if (options.projectionFailure) throw new Error("private projection detail");
 		return agentProjection;
 	});
 	const readApiAgentProjection = options.projectionFailure
@@ -790,10 +783,10 @@ describe("V2 management routes", () => {
 describe("lifecycle command failures are observable (#2569)", () => {
 	const restart = JSON.stringify({ schemaVersion: 1, command: "restart" });
 
-	it("returns the committed projection when the follow-up read fails", async () => {
+	it("returns an accepted envelope when the follow-up read fails", async () => {
 		const telemetry: OperationalEvent[] = [];
 		const { app, executeManagementCommand } = createApp({
-			projectionFailureAfterCommand: true,
+			projectionFailure: true,
 			telemetry,
 		});
 
@@ -804,9 +797,14 @@ describe("lifecycle command failures are observable (#2569)", () => {
 
 		expect(executeManagementCommand).toHaveBeenCalledOnce();
 		expect(response.status).toBe(202);
-		expect(AgentProjectionV2Schema.parse(await response.json())).toMatchObject({
-			agentId: "agent-1",
-			managementStatus: "available",
+		expect(
+			AgentApiLifecycleAcceptedResponseV1Schema.parse(await response.json()),
+		).toMatchObject({
+			accepted: true,
+			agentId: "agent-private-1",
+			status: "available",
+			revision: 2,
+			replayed: false,
 		});
 		expect(telemetry).toEqual([
 			{
@@ -817,28 +815,6 @@ describe("lifecycle command failures are observable (#2569)", () => {
 				traceId: expect.any(String),
 			},
 		]);
-	});
-
-	it("returns an accepted envelope when both lifecycle projection reads fail", async () => {
-		const { app, executeManagementCommand } = createApp({
-			projectionFailure: true,
-		});
-		const response = await app.request(
-			"/api/v2/agents/agent-private-1/lifecycle",
-			{ method: "POST", headers, body: restart },
-		);
-
-		expect(response.status).toBe(202);
-		expect(
-			AgentApiLifecycleAcceptedResponseV1Schema.parse(await response.json()),
-		).toMatchObject({
-			accepted: true,
-			agentId: "agent-private-1",
-			status: "available",
-			revision: 2,
-			replayed: false,
-		});
-		expect(executeManagementCommand).toHaveBeenCalledOnce();
 	});
 
 	it("keeps the log of an accepted lifecycle command free of failure fields", async () => {
@@ -859,31 +835,7 @@ describe("lifecycle command failures are observable (#2569)", () => {
 		expect(telemetry[0]).not.toHaveProperty("protocolCode");
 	});
 
-	it("returns the committed projection when an image upgrade follow-up read fails", async () => {
-		const { app, upgradeCustomImage } = createApp({
-			projectionFailureAfterCommand: true,
-		});
-		const response = await app.request(
-			"/api/v2/agents/agent-private-1/lifecycle",
-			{
-				method: "POST",
-				headers,
-				body: JSON.stringify({
-					schemaVersion: 1,
-					command: "upgrade_custom_image",
-					imageReference: "registry.example/agent:v2",
-				}),
-			},
-		);
-
-		expect(response.status).toBe(202);
-		expect(AgentProjectionV2Schema.parse(await response.json())).toMatchObject({
-			agentId: "agent-1",
-		});
-		expect(upgradeCustomImage).toHaveBeenCalledOnce();
-	});
-
-	it("returns an accepted envelope when an image-upgrade projection is unavailable", async () => {
+	it("returns an accepted envelope when an image upgrade follow-up read fails", async () => {
 		const { app, upgradeCustomImage } = createApp({
 			projectionFailure: true,
 		});
