@@ -4944,8 +4944,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					...(this.installedSkill
 						? [this.installedSkill.manifest.extraRoot]
 						: []),
-					...(this.skillDirectory?.nativeRoot
-						? [this.skillDirectory.nativeRoot]
+					...(this.skillDirectory
+						? [this.skillDirectory.nativeRoot ?? runtimeSkillHubMountRootV1]
 						: []),
 				];
 				if (new Set(extraRoots).size !== extraRoots.length)
