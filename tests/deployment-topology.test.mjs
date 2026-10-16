@@ -720,6 +720,9 @@ test("native metadata Worker gateway is opt-in and restricted to Platform API", 
 		"app.kubernetes.io/instance": "topology",
 		"app.kubernetes.io/component": "platform-api",
 	});
+	assert.deepEqual(policy.spec.ingress[1].from[0].podSelector.matchLabels, {
+		"agent-infra.agora.io/managed": "session-sandbox-v1",
+	});
 	assert.deepEqual(
 		policy.spec.ingress[1].from[0].podSelector.matchExpressions,
 		[
@@ -751,6 +754,11 @@ test("native metadata Worker gateway is opt-in and restricted to Platform API", 
 		"Deployment",
 		"topology-agent-infra-platform-api",
 	).spec.template.metadata.labels;
+	assert.equal(
+		apiLabels["agent-infra.agora.io/managed"],
+		undefined,
+		"Platform API must not carry the Sandbox managed marker",
+	);
 	for (const key of sandboxIngressKeys)
 		assert.equal(
 			Object.hasOwn(apiLabels, key),

@@ -260,6 +260,8 @@ spec:
           port: {{ .Values.platformWorker.nativeMetadataGateway.port }}
     - from:
         - podSelector:
+            matchLabels:
+              agent-infra.agora.io/managed: session-sandbox-v1
             matchExpressions:
               - key: agent-infra.agora.io/sandbox-id
                 operator: Exists

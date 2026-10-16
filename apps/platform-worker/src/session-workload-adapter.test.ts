@@ -481,6 +481,7 @@ describe("session sandbox workload adapter", () => {
 				for (const value of Object.values(selector))
 					expect(value).toMatch(kubernetesLabelValue);
 			expect(resource.metadata?.labels).toEqual({
+				"agent-infra.agora.io/managed": "session-sandbox-v1",
 				"agent-infra.agora.io/agent-ref": workloadResourceNameV1(agentId),
 				"agent-infra.agora.io/session-ref": expect.stringMatching(
 					/^session-[a-f0-9]{32}$/,

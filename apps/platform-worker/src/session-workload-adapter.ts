@@ -179,6 +179,9 @@ export function sessionSandboxLabelsV1(
 	identity: SessionSandboxLabelIdentityV1,
 ): Readonly<Record<string, string>> {
 	const labels = {
+		// This Worker-owned marker is also available to NetworkPolicy selectors;
+		// the exact Sandbox identity remains bound by the four labels below.
+		"agent-infra.agora.io/managed": "session-sandbox-v1",
 		"agent-infra.agora.io/agent-ref": boundedRef("agent", identity.agentId),
 		"agent-infra.agora.io/session-ref": boundedRef(
 			"session",
