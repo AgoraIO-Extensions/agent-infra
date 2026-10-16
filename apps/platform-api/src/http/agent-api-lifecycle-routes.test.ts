@@ -1,4 +1,9 @@
-import { PersonalApiCredentialErrorV1 } from "@agent-infra/platform-core";
+import { createHttpObservability } from "@agent-infra/observability/http";
+import type { OperationalEvent } from "@agent-infra/observability";
+import {
+	ApplicationFoundationError,
+	PersonalApiCredentialErrorV1,
+} from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { registerAgentApiLifecycleRoutes } from "./agent-api-lifecycle-routes.js";
@@ -162,6 +167,44 @@ describe("Agent API lifecycle HTTP", () => {
 		const response = await f.app.request(path, { method: "POST", body });
 		expect(response.status).toBe(503);
 		expect(await response.text()).not.toContain("private audit dependency");
+	});
+	it("records a bounded 503 lifecycle failure with its route template", async () => {
+		const events: OperationalEvent[] = [];
+		const app = new Hono();
+		app.use(
+			"*",
+			createHttpObservability({ record: (event) => events.push(event) }),
+		);
+		const execute = vi
+			.fn()
+			.mockRejectedValue(new ApplicationFoundationError("persistence_failed"));
+		registerAgentApiLifecycleRoutes(app, {
+			readState: vi.fn(),
+			lifecycle: { execute },
+			recordRefusal: vi.fn().mockResolvedValue(undefined),
+		});
+
+		const response = await app.request(
+			"/api/v2/agents/agent-private/commands",
+			{
+				method: "POST",
+				headers,
+				body,
+			},
+		);
+
+		expect(response.status).toBe(503);
+		expect(events).toEqual([
+			expect.objectContaining({
+				stage: "http",
+				outcome: "failed",
+				method: "POST",
+				routeTemplate: "/api/v2/agents/:agentId/commands",
+				statusCode: 503,
+				code: "DEPENDENCY_UNAVAILABLE",
+			}),
+		]);
+		expect(JSON.stringify(events)).not.toContain("agent-private");
 	});
 	it.each([
 		["authentication_required", 401],

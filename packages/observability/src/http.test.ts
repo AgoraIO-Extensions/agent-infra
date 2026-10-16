@@ -172,7 +172,10 @@ it.each([
 				},
 			}),
 		);
-		app.get("/request", () => new Response("original response", { status }));
+		app.get("/request", () => {
+			if (status === 403) recordHttpFailure("AUTHORIZATION_DENIED");
+			return new Response("original response", { status });
+		});
 		const response = await app.request("/request");
 		expect(response.status).toBe(status);
 		expect(await response.text()).toBe("original response");
@@ -184,6 +187,7 @@ it.each([
 				method: "GET",
 				routeTemplate: "/request",
 				statusCode: status,
+				...(status === 403 ? { code: "AUTHORIZATION_DENIED" } : {}),
 				requestId: expect.any(String),
 				traceId: expect.any(String),
 			},
