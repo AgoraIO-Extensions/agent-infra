@@ -15,7 +15,10 @@ import {
 	parseSessionSandboxBindingV1,
 	parseTaskPrincipalV1,
 	type SessionSandboxBindingV1,
+	type SessionSandboxPolicyV1,
+	type SessionSandboxRuntimeStateV1,
 	type TaskPrincipalV1,
+	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import { exactRecord } from "./conversation-execution-common.js";
 import { readRecentPersonalConversations } from "./conversation-recent-query.js";
@@ -23,9 +26,11 @@ import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import postgres from "./observed-postgres.js";
 import {
 	conversationSandboxReadBindingSql,
+	readSessionSandboxRuntimeState,
 	sessionSandboxResumableSql,
 	sessionSandboxUpgradingSql,
 } from "./session-sandbox.js";
+import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
 type Database = ReturnType<typeof postgres> | postgres.TransactionSql;
 
@@ -171,6 +176,34 @@ export interface NativeMetadataCallbackCredentialScopeResponseV1 {
 	readonly namespace: string | null;
 	/** Original Host binding re-read with the credential scope. */
 	readonly originalHostScopeRef: string | null;
+}
+
+/**
+ * Read-only current Runtime target scope for the Worker native-metadata route.
+ * The optional policy is deployment-owned and is required only for Session
+ * Sandbox rows; it is never taken from the native metadata request.
+ */
+export interface NativeMetadataRuntimeTargetScopeRequestV1 {
+	readonly scope: ConversationQueryScopeV1;
+	readonly agentId: string;
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly sandboxPolicy: SessionSandboxPolicyV1;
+	readonly signal?: AbortSignal;
+}
+
+export interface NativeMetadataRuntimeTargetScopeResponseV1 {
+	readonly agentId: string;
+	readonly actorId: string;
+	readonly channelId: string;
+	readonly principal: TaskPrincipalV1;
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly sessionGeneration: number;
+	readonly authorizationRevision: string;
+	readonly originalHostScopeRef: string;
+	readonly workload: WorkloadReconciliationStateV1;
+	readonly sandboxResource: SessionSandboxRuntimeStateV1 | null;
 }
 
 export interface RuntimeModelDirectoryDispatchRequestInputV1 {
@@ -330,6 +363,41 @@ interface NativeMetadataCallbackCredentialScopeRow {
 	readonly allocation_desired_state: string | null;
 	readonly allocation_observation_status: string | null;
 	readonly original_host_scope_ref: string | null;
+}
+
+interface NativeMetadataRuntimeTargetScopeRow {
+	readonly conversation_id: string;
+	readonly conversation_agent: string;
+	readonly conversation_actor: string;
+	readonly conversation_channel: string;
+	readonly conversation_principal_type: string;
+	readonly conversation_session_generation: string | number;
+	readonly conversation_authorization_revision: string;
+	readonly conversation_host_scope_ref: string | null;
+	readonly execution_id: string;
+	readonly execution_conversation: string;
+	readonly execution_agent: string;
+	readonly execution_actor: string;
+	readonly execution_channel: string;
+	readonly execution_principal_type: string;
+	readonly execution_session_generation: string | number;
+	readonly execution_authorization_revision: string;
+	readonly execution_host_scope_ref: string | null;
+	readonly execution_sandbox_id: string | null;
+	readonly allocation_sandbox_id: string | null;
+	readonly allocation_resource_name: string | null;
+	readonly allocation_workspace_scope: string | null;
+	readonly allocation_principal_type: string | null;
+	readonly allocation_actor: string | null;
+	readonly allocation_channel: string | null;
+	readonly allocation_agent: string | null;
+	readonly allocation_generation: string | number | null;
+	readonly workload_state: unknown;
+	readonly allocation_resource_fence: string | number | null;
+	readonly allocation_desired_state: string | null;
+	readonly allocation_status: string | null;
+	readonly allocation_resource_policy: SessionSandboxRuntimeStateV1["policy"];
+	readonly allocation_resource_observation: SessionSandboxRuntimeStateV1["observation"];
 }
 
 interface RuntimeModelDirectoryDispatchRow {
@@ -1391,6 +1459,201 @@ export class PostgresConversationQueryV1 {
 						),
 						authorizationRevision: row.conversation_authorization_revision,
 						currentHostScopeRef: row.conversation_host_scope_ref,
+					};
+				},
+				request.signal,
+			);
+		} catch (error) {
+			if (error instanceof ConversationQueryError) throw error;
+			return unavailable();
+		}
+	}
+
+	/**
+	 * Read the current Runtime target for one already-authorized native metadata
+	 * binding.  The query proves the persisted Conversation/Execution identity
+	 * and current generation/revision/Host binding in SQL, then reuses the
+	 * Session Sandbox receipt validator for policy, observation, and resource
+	 * fence checks.  It never returns a caller-selected URL or token.
+	 */
+	async readNativeMetadataRuntimeTargetScopeV1(
+		request: NativeMetadataRuntimeTargetScopeRequestV1,
+	): Promise<NativeMetadataRuntimeTargetScopeResponseV1 | undefined> {
+		const readScope = scope(request.scope);
+		const agentId = requestText(request.agentId);
+		const conversationId = requestText(request.conversationId);
+		const executionId = requestText(request.executionId);
+		if (readScope.channelId !== "web") return undefined;
+		try {
+			return await repeatableRead(
+				this.#client,
+				async (transaction, run) => {
+					const rows = await run(
+						transaction<NativeMetadataRuntimeTargetScopeRow[]>`
+							/* native_metadata_read.current_runtime_target */
+							select
+								c.id as conversation_id,
+								c.agent_id as conversation_agent,
+								c.actor_id as conversation_actor,
+								c.channel_id as conversation_channel,
+								c.principal_type as conversation_principal_type,
+								c.session_generation as conversation_session_generation,
+								c.authorization_revision as conversation_authorization_revision,
+								c.host_session_ref as conversation_host_scope_ref,
+								e.execution_id,
+								e.conversation_id as execution_conversation,
+								e.agent_id as execution_agent,
+								e.actor_id as execution_actor,
+								e.channel_id as execution_channel,
+								e.principal_type as execution_principal_type,
+								e.session_generation as execution_session_generation,
+								e.authorization_revision as execution_authorization_revision,
+								e.original_submit_host_session_ref as execution_host_scope_ref,
+								e.sandbox_id as execution_sandbox_id,
+								s.sandbox_id as allocation_sandbox_id,
+								s.resource_name as allocation_resource_name,
+								s.workspace_scope as allocation_workspace_scope,
+								s.principal_type as allocation_principal_type,
+								s.actor_id as allocation_actor,
+								s.channel_id as allocation_channel,
+								s.agent_id as allocation_agent,
+								s.session_generation as allocation_generation,
+								s.resource_fence as allocation_resource_fence,
+								s.desired_state as allocation_desired_state,
+								s.status as allocation_status,
+								s.resource_policy as allocation_resource_policy,
+								s.resource_observation as allocation_resource_observation,
+								w.state as workload_state
+							from platform.conversations c
+							join platform.conversation_executions e
+								on e.conversation_id = c.id
+								and e.agent_id = c.agent_id
+								and e.actor_id = c.actor_id
+								and e.channel_id = c.channel_id
+								and e.principal_type = c.principal_type
+								and e.session_generation = c.session_generation
+								and e.authorization_revision = c.authorization_revision
+								and e.original_submit_host_session_ref = c.host_session_ref
+								and e.execution_id = ${executionId}
+							left join platform.session_sandbox_allocations s
+								on s.sandbox_id = e.sandbox_id
+								and s.conversation_id = c.id
+								and s.agent_id = c.agent_id
+								and s.actor_id = c.actor_id
+								and s.channel_id = c.channel_id
+								and s.principal_type = c.principal_type
+								and s.session_generation = e.session_generation
+							join platform.workload_reconciliations w on w.agent_id = c.agent_id
+							where c.id = ${conversationId}
+								and c.agent_id = ${agentId}
+								and c.actor_id = ${readScope.actorId}
+								and c.channel_id = ${readScope.channelId}
+								and c.principal_type = ${readScope.principal?.kind ?? "user"}
+								and c.channel_id = 'web'
+								and c.principal_type = 'user'
+								and c.host_session_ref is not null
+							limit 2
+						`,
+					);
+					if (rows.length !== 1) return undefined;
+					const row = rows[0];
+					if (
+						!row ||
+						row.conversation_id !== conversationId ||
+						row.execution_id !== executionId ||
+						row.conversation_agent !== agentId ||
+						row.execution_agent !== agentId ||
+						row.execution_conversation !== row.conversation_id ||
+						row.conversation_agent !== row.execution_agent ||
+						row.conversation_actor !== row.execution_actor ||
+						row.conversation_channel !== row.execution_channel ||
+						row.conversation_principal_type !== row.execution_principal_type ||
+						row.conversation_actor !== readScope.actorId ||
+						row.conversation_channel !== readScope.channelId ||
+						row.conversation_principal_type !== "user" ||
+						row.conversation_host_scope_ref === null ||
+						row.execution_host_scope_ref !== row.conversation_host_scope_ref ||
+						row.execution_session_generation !==
+							row.conversation_session_generation ||
+						row.execution_authorization_revision !==
+							row.conversation_authorization_revision
+					)
+						return undefined;
+					const decoded = decodePersistedWorkloadStateV1(
+						row.workload_state,
+						agentId,
+					);
+					if (!decoded || decoded.legacy) return undefined;
+					const workload = decoded.state;
+					let sandboxResource: SessionSandboxRuntimeStateV1 | null = null;
+					if (row.execution_sandbox_id !== null) {
+						if (
+							row.allocation_sandbox_id !== row.execution_sandbox_id ||
+							row.allocation_resource_name === null ||
+							row.allocation_workspace_scope === null ||
+							row.allocation_principal_type === null ||
+							row.allocation_actor === null ||
+							row.allocation_channel === null ||
+							row.allocation_agent === null ||
+							row.allocation_generation === null
+						)
+							return undefined;
+						const sandbox = parseSessionSandboxBindingV1({
+							schemaVersion: 1,
+							sandboxId: row.allocation_sandbox_id,
+							sessionId: row.conversation_id,
+							agentId: row.allocation_agent,
+							principal: {
+								kind: row.allocation_principal_type,
+								id: row.allocation_actor,
+							},
+							channelId: row.allocation_channel,
+							generation: safeInteger(row.allocation_generation, 1),
+							resourceName: row.allocation_resource_name,
+							workspaceScope: row.allocation_workspace_scope,
+						});
+						if (
+							sandbox.agentId !== row.execution_agent ||
+							sandbox.principal.id !== row.execution_actor ||
+							sandbox.principal.kind !== row.execution_principal_type ||
+							sandbox.channelId !== row.execution_channel ||
+							sandbox.generation !==
+								safeInteger(row.execution_session_generation, 1)
+						)
+							return undefined;
+						sandboxResource = await readSessionSandboxRuntimeState(
+							transaction,
+							sandbox,
+							request.sandboxPolicy,
+						);
+						const service = sandboxResource?.observation?.resources.find(
+							(resource) => resource.kind === "Service",
+						);
+						if (
+							sandboxResource?.status !== "ready" ||
+							sandboxResource.desiredState !== "running" ||
+							sandboxResource.observation?.status !== "ready" ||
+							!service ||
+							service.name !== sandbox.resourceName ||
+							service.namespace !== request.sandboxPolicy.namespace
+						)
+							return undefined;
+					}
+					return {
+						agentId: row.execution_agent,
+						actorId: row.execution_actor,
+						channelId: row.execution_channel,
+						principal: parseTaskPrincipalV1({
+							kind: row.execution_principal_type,
+							id: row.execution_actor,
+						}),
+						conversationId: row.execution_conversation,
+						executionId: row.execution_id,
+						sessionGeneration: safeInteger(row.execution_session_generation, 1),
+						authorizationRevision: row.execution_authorization_revision,
+						originalHostScopeRef: row.execution_host_scope_ref,
+						workload,
+						sandboxResource,
 					};
 				},
 				request.signal,

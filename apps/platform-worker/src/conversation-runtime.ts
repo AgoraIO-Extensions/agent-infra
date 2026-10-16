@@ -159,6 +159,8 @@ export interface ConversationRuntimeOptionsV2 {
 		 * readiness（#2134）；未设置时按命令执行完整观测。
 		 */
 		readonly reuseSignedReadiness?: true;
+		/** Require a fresh Session Sandbox resource receipt for a control route. */
+		readonly requireSandboxObservation?: true;
 	}) => Promise<{
 		readonly baseUrl: string;
 		readonly serviceToken: string;

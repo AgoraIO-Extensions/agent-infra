@@ -418,10 +418,34 @@ export async function createPlatformNativeMetadataGatewayOptionsV1(
 ) {
 	signal.throwIfAborted();
 	if (!nativeMetadataGateway) return undefined;
+	let defaultRuntimeTarget:
+		| Parameters<
+				typeof createPlatformNativeMetadataGatewayAssemblyV1
+		  >[0]["defaultRuntimeTarget"]
+		| undefined;
+	if (
+		!nativeMetadataGateway.transport &&
+		!nativeMetadataGateway.runtimeTarget &&
+		process.env.PLATFORM_DATABASE_URL
+	) {
+		const deployment = await prepare(signal);
+		defaultRuntimeTarget = {
+			workload: deployment.workload,
+			resolveConversationRuntimeHost:
+				conversationDeployment.createProductionConversationRuntimeResolverV2({
+					workload: deployment.workload,
+					signing,
+					serviceToken,
+					connectionConsumerProfile: connectionConsumer?.profile,
+					connectionConsumerApproval: connectionConsumer?.approval,
+				}),
+		};
+	}
 	return createPlatformNativeMetadataGatewayAssemblyV1({
 		serviceToken,
 		namespace: process.env.PLATFORM_WORKER_NAMESPACE,
 		signing,
+		...(defaultRuntimeTarget ? { defaultRuntimeTarget } : {}),
 		...(process.env.PLATFORM_DATABASE_URL
 			? { databaseUrl: process.env.PLATFORM_DATABASE_URL }
 			: {}),

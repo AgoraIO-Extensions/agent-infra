@@ -1,13 +1,25 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { build, transform } from "esbuild";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 
 vi.setConfig({ testTimeout: 15_000 });
 
 let directory: string;
+const platformStoreDistPath = new URL(
+	"../../../packages/platform-store/dist/index.mjs",
+	import.meta.url,
+).pathname;
+let platformStoreDistOriginal: string | undefined;
 const connectionConsumerProfile = {
 	schemaVersion: 1,
 	publicOrigin: "https://connection.example.test",
@@ -24,6 +36,29 @@ const connectionConsumerApproval = {
 	source: { ref: "platform-deployment", revision: "r1" },
 };
 beforeAll(async () => {
+	try {
+		platformStoreDistOriginal = await readFile(platformStoreDistPath, "utf8");
+	} catch {
+		platformStoreDistOriginal = undefined;
+	}
+	await mkdir(dirname(platformStoreDistPath), { recursive: true });
+	if (platformStoreDistOriginal === undefined)
+		await writeFile(
+			platformStoreDistPath,
+			`${[
+				"export class PostgresConversationQueryV1 { constructor() {} close() { return Promise.resolve(); } }",
+				"export class PostgresAgentDefaultRelayKeyStoreV1 {}",
+				"export class PostgresRelayKeyVersionStoreV1 {}",
+				"export class PostgresAgentConfigurationQueryV1 {}",
+				"export class PostgresAgentConfigurationTransactionV1 {}",
+				"export class PostgresWecomConnectionsV1 {}",
+				"export class PostgresWecomSetupV1 {}",
+				"export class PostgresConversationExecutionTransactionV1 {}",
+				"export class PostgresConnectionInstallationAuthorizationTransactionV1 {}",
+				"export const validateWecomSetupCredentialRecordV1 = () => ({})",
+				"export const openPostgresWorkloadStateReaderV1 = () => ({ close: async () => {}, readCurrentState: async () => null })",
+			].join("\n")}\n`,
+		);
 	directory = await mkdtemp(join(tmpdir(), "worker-binding-"));
 	const source = await readFile(
 		new URL("./deployment-entry.ts", import.meta.url),
@@ -346,6 +381,9 @@ try {
 });
 afterAll(async () => {
 	if (directory) await rm(directory, { recursive: true, force: true });
+	if (platformStoreDistOriginal === undefined)
+		await rm(platformStoreDistPath, { force: true });
+	else await writeFile(platformStoreDistPath, platformStoreDistOriginal);
 });
 
 const database = "postgresql://database.example.test/platform";

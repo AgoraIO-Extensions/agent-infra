@@ -3,7 +3,11 @@ import {
 	type RuntimeNativeMetadataBindingResponseV1,
 	RuntimeNativeMetadataBindingResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
-import { PostgresConversationQueryV1 } from "@agent-infra/platform-store";
+import {
+	type NativeMetadataRuntimeTargetScopeResponseV1,
+	PostgresConversationQueryV1,
+} from "@agent-infra/platform-store";
+import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { createWorkerRuntimeNativeMetadataClientV1 } from "./runtime-native-metadata-client.js";
 import {
 	createPlatformApiNativeMetadataCurrentClientV1,
@@ -20,6 +24,8 @@ import {
 import { createWorkerRuntimeNativeMetadataProofIssuerV1 } from "./runtime-native-metadata-proof.js";
 import type { PlatformWorkerNativeMetadataGatewayServerOptionsV1 } from "./runtime-native-metadata-server.js";
 import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
+import type { WorkloadRuntimeOptionsV1 } from "./workload-runtime.js";
+import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
 
 type NativeMetadataObjectScopeQueryV1 = Pick<
 	PostgresConversationQueryV1,
@@ -28,6 +34,10 @@ type NativeMetadataObjectScopeQueryV1 = Pick<
 type NativeMetadataCallbackCredentialScopeQueryV1 = Pick<
 	PostgresConversationQueryV1,
 	"readNativeMetadataCallbackCredentialScopeV1"
+>;
+type NativeMetadataRuntimeTargetScopeQueryV1 = Pick<
+	PostgresConversationQueryV1,
+	"readNativeMetadataRuntimeTargetScopeV1"
 >;
 
 function validNamespace(value: unknown): value is string {
@@ -230,6 +240,107 @@ export function createPlatformNativeMetadataTransportResolverV1(options: {
 	};
 }
 
+/**
+ * Resolve a current, deployment-owned Runtime target from the Store scope and
+ * the existing production Conversation resolver.  The request cannot select
+ * an origin, token, namespace, or Sandbox resource.
+ */
+export function createPlatformNativeMetadataRuntimeTargetResolverV1(options: {
+	readonly query: NativeMetadataRuntimeTargetScopeQueryV1;
+	readonly workload: WorkloadRuntimeOptionsV1;
+	readonly resolveConversationRuntimeHost: ConversationRuntimeOptionsV2["resolveRuntimeHost"];
+}) {
+	if (
+		typeof options.query?.readNativeMetadataRuntimeTargetScopeV1 !==
+			"function" ||
+		typeof options.resolveConversationRuntimeHost !== "function" ||
+		!options.workload?.policy
+	)
+		throw new TypeError("Platform Runtime target resolver options are invalid");
+	return {
+		async resolve(input: {
+			readonly binding: RuntimeNativeMetadataBindingResponseV1;
+			readonly signal: AbortSignal;
+		}): Promise<PlatformNativeMetadataRuntimeTargetV1 | null> {
+			try {
+				const binding = RuntimeNativeMetadataBindingResponseV1Schema.parse(
+					input.binding,
+				);
+				const current =
+					await options.query.readNativeMetadataRuntimeTargetScopeV1({
+						scope: {
+							actorId: binding.scope.principal.id,
+							channelId: binding.scope.channelId,
+							principal: binding.scope.principal,
+						},
+						agentId: binding.scope.agentId,
+						conversationId: binding.scope.conversationId,
+						executionId: binding.scope.executionId,
+						sandboxPolicy: {
+							namespace: options.workload.policy.namespace,
+							resourceConfigurationHash: workloadResourceConfigurationHashV1(
+								options.workload.policy,
+							),
+						},
+						signal: input.signal,
+					});
+				if (
+					input.signal.aborted ||
+					!current ||
+					!sameRuntimeTargetScope(current, binding)
+				)
+					return null;
+				const host = await options.resolveConversationRuntimeHost({
+					agentId: current.agentId,
+					...(current.sandboxResource
+						? { conversationId: current.conversationId }
+						: {}),
+					actorId: current.actorId,
+					channelId: current.channelId,
+					principal: current.principal,
+					sessionGeneration: current.sessionGeneration,
+					signal: input.signal,
+					workload: current.workload,
+					...(current.sandboxResource
+						? { sandboxResource: current.sandboxResource }
+						: {}),
+					...(current.sandboxResource
+						? { requireSandboxObservation: true as const }
+						: {}),
+					purpose: "control",
+					command: "session.status",
+				});
+				if (input.signal.aborted) return null;
+				return {
+					baseUrl: host.baseUrl,
+					serviceToken: host.serviceToken,
+				};
+			} catch {
+				if (input.signal.aborted) return null;
+				return null;
+			}
+		},
+	};
+}
+
+function sameRuntimeTargetScope(
+	current: NativeMetadataRuntimeTargetScopeResponseV1,
+	binding: RuntimeNativeMetadataBindingResponseV1,
+) {
+	return (
+		current.agentId === binding.scope.agentId &&
+		current.actorId === binding.scope.principal.id &&
+		current.channelId === binding.scope.channelId &&
+		current.principal.kind === binding.scope.principal.kind &&
+		current.principal.id === binding.scope.principal.id &&
+		current.conversationId === binding.scope.conversationId &&
+		current.executionId === binding.scope.executionId &&
+		current.sessionGeneration === binding.scope.sessionGeneration &&
+		current.authorizationRevision === binding.scope.authorizationRevision &&
+		current.originalHostScopeRef === binding.originalHostScopeRef
+	);
+}
+
 export function createPlatformNativeMetadataGatewayAssemblyV1(options: {
 	readonly serviceToken: string;
 	/** Fixed Kubernetes namespace for current callback credential derivation. */
@@ -242,6 +353,11 @@ export function createPlatformNativeMetadataGatewayAssemblyV1(options: {
 		readonly keyId: string;
 		readonly privateKey: import("node:crypto").KeyObject;
 		readonly now?: () => number;
+	};
+	/** Worker-owned default target assembly used only when no transport override exists. */
+	readonly defaultRuntimeTarget?: {
+		readonly workload: WorkloadRuntimeOptionsV1;
+		readonly resolveConversationRuntimeHost: ConversationRuntimeOptionsV2["resolveRuntimeHost"];
 	};
 	readonly ports: PlatformWorkerNativeMetadataGatewayPortsV1;
 }): PlatformWorkerNativeMetadataGatewayServerOptionsV1 {
@@ -274,62 +390,80 @@ export function createPlatformNativeMetadataGatewayAssemblyV1(options: {
 		options.databaseUrl !== undefined &&
 		(options.ports.binding === undefined ||
 			(options.namespace !== undefined &&
-				options.ports.callbackCredential === undefined));
+				options.ports.callbackCredential === undefined) ||
+			(!options.ports.transport &&
+				!options.ports.runtimeTarget &&
+				options.defaultRuntimeTarget !== undefined));
 	if (needsDefaultQuery) {
 		defaultQuery = new PostgresConversationQueryV1({
 			databaseUrl: options.databaseUrl as string,
 		});
 	}
-	const defaultBinding =
-		options.ports.binding === undefined && defaultQuery
-			? (() => {
-					return createPlatformNativeMetadataBindingResolverV1({
+	try {
+		const defaultBinding =
+			options.ports.binding === undefined && defaultQuery
+				? (() => {
+						return createPlatformNativeMetadataBindingResolverV1({
+							query: defaultQuery,
+						});
+					})()
+				: undefined;
+		const binding = options.ports.binding ?? defaultBinding;
+		if (!binding)
+			throw new TypeError(
+				"Platform Worker native metadata binding resolver is unavailable",
+			);
+		const callbackCredential =
+			options.ports.callbackCredential ??
+			(options.namespace && defaultQuery
+				? createPlatformNativeMetadataSandboxCredentialResolverV1({
 						query: defaultQuery,
-					});
-				})()
-			: undefined;
-	const binding = options.ports.binding ?? defaultBinding;
-	if (!binding)
-		throw new TypeError(
-			"Platform Worker native metadata binding resolver is unavailable",
-		);
-	const callbackCredential =
-		options.ports.callbackCredential ??
-		(options.namespace && defaultQuery
-			? createPlatformNativeMetadataSandboxCredentialResolverV1({
-					query: defaultQuery,
-					deploymentServiceToken: options.serviceToken,
-					namespace: options.namespace,
-				})
-			: undefined);
-	const transport =
-		options.ports.transport ??
-		(options.ports.runtimeTarget
-			? createPlatformNativeMetadataTransportResolverV1({
-					resolveTarget: options.ports.runtimeTarget.resolve.bind(
-						options.ports.runtimeTarget,
-					),
-				})
-			: undefined);
-	if (!transport)
-		throw new TypeError(
-			"Platform Worker native metadata transport is unavailable",
-		);
-	const gateway = createWorkerRuntimeNativeMetadataGatewayV1({
-		...options.ports,
-		binding,
-		current,
-		proofIssuer,
-		transport,
-	});
-	return {
-		app: createWorkerRuntimeNativeMetadataGatewayAppV1({
-			serviceToken: options.serviceToken,
-			gateway,
-			...(callbackCredential ? { binding, callbackCredential } : {}),
+						deploymentServiceToken: options.serviceToken,
+						namespace: options.namespace,
+					})
+				: undefined);
+		const transport =
+			options.ports.transport ??
+			(options.ports.runtimeTarget
+				? createPlatformNativeMetadataTransportResolverV1({
+						resolveTarget: options.ports.runtimeTarget.resolve.bind(
+							options.ports.runtimeTarget,
+						),
+					})
+				: defaultQuery && options.defaultRuntimeTarget
+					? createPlatformNativeMetadataTransportResolverV1({
+							resolveTarget:
+								createPlatformNativeMetadataRuntimeTargetResolverV1({
+									query: defaultQuery,
+									workload: options.defaultRuntimeTarget.workload,
+									resolveConversationRuntimeHost:
+										options.defaultRuntimeTarget.resolveConversationRuntimeHost,
+								}).resolve,
+						})
+					: undefined);
+		if (!transport)
+			throw new TypeError(
+				"Platform Worker native metadata transport is unavailable",
+			);
+		const gateway = createWorkerRuntimeNativeMetadataGatewayV1({
+			...options.ports,
+			binding,
 			current,
-		}),
-		...(options.ports.port === undefined ? {} : { port: options.ports.port }),
-		...(defaultQuery ? { close: () => defaultQuery.close() } : {}),
-	};
+			proofIssuer,
+			transport,
+		});
+		return {
+			app: createWorkerRuntimeNativeMetadataGatewayAppV1({
+				serviceToken: options.serviceToken,
+				gateway,
+				...(callbackCredential ? { binding, callbackCredential } : {}),
+				current,
+			}),
+			...(options.ports.port === undefined ? {} : { port: options.ports.port }),
+			...(defaultQuery ? { close: () => defaultQuery.close() } : {}),
+		};
+	} catch (error) {
+		void defaultQuery?.close().catch(() => undefined);
+		throw error;
+	}
 }
