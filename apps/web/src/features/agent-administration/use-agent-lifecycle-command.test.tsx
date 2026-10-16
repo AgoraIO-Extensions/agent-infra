@@ -5,7 +5,10 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { pendingApplication } from "../my-agents/test-fixtures.js";
-import { commandAgentLifecycle } from "./agent-administration.js";
+import {
+	type AgentLifecycleCommandResult,
+	commandAgentLifecycle,
+} from "./agent-administration.js";
 import { useAgentLifecycleCommand } from "./use-agent-lifecycle-command.js";
 
 vi.mock("./agent-administration.js", () => ({
@@ -99,7 +102,7 @@ describe("useAgentLifecycleCommand", () => {
 			({ agentId }: { agentId: string }) => useAgentLifecycleCommand(agentId),
 			{ initialProps: { agentId: lifecycleResult.agentId }, wrapper },
 		);
-		let lifecycle: Promise<typeof lifecycleResult> | undefined;
+		let lifecycle: Promise<AgentLifecycleCommandResult> | undefined;
 
 		await act(async () => {
 			lifecycle = result.current.mutateAsync("restart");
@@ -189,7 +192,7 @@ describe("useAgentLifecycleCommand", () => {
 			() => useAgentLifecycleCommand(lifecycleResult.agentId),
 			{ wrapper },
 		);
-		let firstCommand: Promise<typeof lifecycleResult> | undefined;
+		let firstCommand: Promise<AgentLifecycleCommandResult> | undefined;
 
 		await act(async () => {
 			firstCommand = result.current.mutateAsync("stop");

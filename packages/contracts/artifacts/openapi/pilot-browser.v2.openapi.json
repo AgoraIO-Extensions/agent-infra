@@ -486,6 +486,51 @@
         ],
         "type": "object"
       },
+      "AgentApiLifecycleAcceptedResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted": {
+            "const": true,
+            "type": "boolean"
+          },
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "status": {
+            "enum": [
+              "pending_approval",
+              "withdrawn",
+              "rejected",
+              "creating",
+              "available",
+              "stopped",
+              "creation_failed",
+              "disabled"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "accepted",
+          "agentId",
+          "replayed"
+        ],
+        "type": "object"
+      },
       "AgentApiLifecycleRequestV1": {
         "additionalProperties": false,
         "properties": {
@@ -11774,7 +11819,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AgentProjectionV2"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AgentProjectionV2"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AgentApiLifecycleAcceptedResponseV1"
+                    }
+                  ]
                 }
               }
             },

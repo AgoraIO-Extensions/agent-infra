@@ -1,4 +1,5 @@
 import {
+	AgentApiLifecycleAcceptedResponseV1Schema,
 	AgentApplicationCreateRequestV2Schema,
 	AgentApplicationProjectionV1Schema,
 	AgentApplicationProjectionV2Schema,
@@ -518,6 +519,22 @@ function committedProjection(
 			? { serviceAvailability: null }
 			: {}),
 	};
+}
+
+function acceptedLifecycleResponse(input: {
+	readonly agentId: string;
+	readonly status?: AgentProjection["managementStatus"];
+	readonly revision?: number;
+	readonly replayed: boolean;
+}) {
+	return AgentApiLifecycleAcceptedResponseV1Schema.parse({
+		schemaVersion: 1,
+		accepted: true,
+		agentId: input.agentId,
+		...(input.status === undefined ? {} : { status: input.status }),
+		...(input.revision === undefined ? {} : { revision: input.revision }),
+		replayed: input.replayed,
+	});
 }
 
 export function registerV2ManagementRoutes(
@@ -1062,12 +1079,16 @@ export function registerV2ManagementRoutes(
 							agentId,
 							metadata.traceId,
 						);
-						return await projectAgent(
-							dependencies,
-							current,
-							identity,
-							metadata,
-						);
+						return {
+							projection: await projectAgent(
+								dependencies,
+								current,
+								identity,
+								metadata,
+							),
+							status: current.management.status,
+							revision: current.management.revision,
+						};
 					} catch {
 						return undefined;
 					}
@@ -1101,8 +1122,14 @@ export function registerV2ManagementRoutes(
 					);
 				} catch {
 					if (fallback === undefined)
-						fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
-					return context.json(fallback, 202);
+						return context.json(
+							acceptedLifecycleResponse({
+								agentId,
+								replayed: false,
+							}),
+							202,
+						);
+					return context.json(fallback.projection, 202);
 				}
 			}
 			const scope =
@@ -1157,7 +1184,15 @@ export function registerV2ManagementRoutes(
 				);
 			} catch {
 				if (fallback === undefined)
-					fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+					return context.json(
+						acceptedLifecycleResponse({
+							agentId,
+							status: decision.result.status,
+							revision: decision.result.revision,
+							replayed: decision.outcome === "replayed",
+						}),
+						202,
+					);
 				return context.json(
 					committedProjection(fallback, decision.result.status),
 					202,

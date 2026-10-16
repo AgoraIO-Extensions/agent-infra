@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+	AgentApiLifecycleAcceptedResponseV1Schema,
 	AgentApplicationProjectionV2Schema,
 	AgentProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
@@ -156,7 +157,7 @@ function createApp(
 		result: {
 			schemaVersion: 1,
 			applicationId: "application-1",
-			agentId: "agent-1",
+			agentId: "agent-private-1",
 			status: "available",
 			revision: 2,
 		},
@@ -818,6 +819,28 @@ describe("lifecycle command failures are observable (#2569)", () => {
 		]);
 	});
 
+	it("returns an accepted envelope when both lifecycle projection reads fail", async () => {
+		const { app, executeManagementCommand } = createApp({
+			projectionFailure: true,
+		});
+		const response = await app.request(
+			"/api/v2/agents/agent-private-1/lifecycle",
+			{ method: "POST", headers, body: restart },
+		);
+
+		expect(response.status).toBe(202);
+		expect(
+			AgentApiLifecycleAcceptedResponseV1Schema.parse(await response.json()),
+		).toMatchObject({
+			accepted: true,
+			agentId: "agent-private-1",
+			status: "available",
+			revision: 2,
+			replayed: false,
+		});
+		expect(executeManagementCommand).toHaveBeenCalledOnce();
+	});
+
 	it("keeps the log of an accepted lifecycle command free of failure fields", async () => {
 		const telemetry: OperationalEvent[] = [];
 		const { app } = createApp({ telemetry });
@@ -856,6 +879,34 @@ describe("lifecycle command failures are observable (#2569)", () => {
 		expect(response.status).toBe(202);
 		expect(AgentProjectionV2Schema.parse(await response.json())).toMatchObject({
 			agentId: "agent-1",
+		});
+		expect(upgradeCustomImage).toHaveBeenCalledOnce();
+	});
+
+	it("returns an accepted envelope when an image-upgrade projection is unavailable", async () => {
+		const { app, upgradeCustomImage } = createApp({
+			projectionFailure: true,
+		});
+		const response = await app.request(
+			"/api/v2/agents/agent-private-1/lifecycle",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					command: "upgrade_custom_image",
+					imageReference: "registry.example/agent:v2",
+				}),
+			},
+		);
+
+		expect(response.status).toBe(202);
+		expect(
+			AgentApiLifecycleAcceptedResponseV1Schema.parse(await response.json()),
+		).toMatchObject({
+			accepted: true,
+			agentId: "agent-private-1",
+			replayed: false,
 		});
 		expect(upgradeCustomImage).toHaveBeenCalledOnce();
 	});
