@@ -261,7 +261,8 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 					entry.expiresAt > timestamp &&
 					entry.scope.sessionGeneration === sessionGeneration &&
 					entry.scope.conversationId === request.conversationId &&
-					entry.scope.authorizationRevision.length > 0 &&
+					entry.scope.authorizationRevision ===
+						options.identity.authorizationRevision &&
 					sameRequest(entry.request, request) &&
 					sameCapability(entry.capability, capability),
 			);

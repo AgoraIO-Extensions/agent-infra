@@ -218,4 +218,28 @@ describe("native capability metadata revalidation", () => {
 		).toBe(false);
 		expect(f.query.readNativeCapabilityCurrentScopeV1).toHaveBeenCalledTimes(1);
 	});
+
+	it("invalidates the synchronous cache when the identity revision changes", async () => {
+		const currentIdentity = { ...identity };
+		const f = fixture();
+		const adapter = createNativeCapabilityMetadataRevalidationV1({
+			query: f.query,
+			reader: f.reader,
+			identity: currentIdentity,
+		});
+		const allowed = await adapter.revalidate({
+			request,
+			authority,
+			sessionGeneration: 3,
+		});
+		if (allowed.outcome !== "allowed") throw new Error("expected allowed");
+		Object.assign(currentIdentity, { authorizationRevision: "revoked" });
+		expect(
+			adapter.isCurrent({
+				request,
+				capability: allowed.capability,
+				sessionGeneration: 3,
+			}),
+		).toBe(false);
+	});
 });
