@@ -320,9 +320,11 @@ export function ActiveConversation({
 		if (!result || result === handled.current) return;
 		handled.current = result;
 		if (result.kind === "denied" && command.deniedStatus === 404) {
+			let cancelled = false;
 			setCheckingAgentAccess(true);
 			void refreshAgent()
 				.then((latest) => {
+					if (cancelled) return;
 					if (
 						latest?.managementStatus === "stopped" ||
 						latest?.managementStatus === "disabled"
@@ -335,10 +337,14 @@ export function ActiveConversation({
 					onDenied();
 				})
 				.catch(() => {
+					if (cancelled) return;
 					setCheckingAgentAccess(false);
 					onDenied();
 				});
-			return;
+			return () => {
+				cancelled = true;
+				if (handled.current === result) handled.current = undefined;
+			};
 		}
 		if (
 			result.kind === "rejected" &&
