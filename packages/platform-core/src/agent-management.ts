@@ -564,6 +564,28 @@ export function snapshotAgentManagementWritePlanV1(
 	};
 }
 
+/**
+ * 管理命令的幂等摘要只包含调用方定义的内容：命令、目标，以及驳回时的理由。
+ *
+ * `requestId`、`traceId` 每个请求都不同，`expectedRevision` 由服务端读取当前修订得到
+ * （见 v2-management-routes），它们不属于「同一个逻辑请求」；放进摘要会让同一个
+ * `Idempotency-Key` 的重放必然得到冲突，命令已经提交时也确认不了结果（#2607）。
+ * 幂等键本身已经按目标、操作者和操作绑定（Store 的幂等作用域），不需要再进摘要。
+ * 过期基线仍然由首次执行时的 `expectedRevision` 校验兜住，重放先于该校验返回原结果。
+ */
+function managementCommandDigest(command: AgentManagementCommandV1) {
+	return platformIdempotencyV1.canonicalRequestDigest({
+		schemaVersion: 1,
+		command: command.command,
+		...("applicationId" in command
+			? { applicationId: command.applicationId }
+			: { agentId: command.agentId }),
+		...(command.command === "reject_application"
+			? { reason: command.reason }
+			: {}),
+	});
+}
+
 const commandBaseKeys = [
 	"schemaVersion",
 	"command",
@@ -920,9 +942,7 @@ export function createAgentManagementV1(
 			const subjectId = applicationCommand
 				? command.applicationId
 				: command.agentId;
-			const requestDigest = platformIdempotencyV1.canonicalRequestDigest({
-				...command,
-			});
+			const requestDigest = managementCommandDigest(command);
 			return adapterResult(() =>
 				transaction.executeAgentManagementTransaction(
 					{

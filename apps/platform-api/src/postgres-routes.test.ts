@@ -908,18 +908,18 @@ describe("PostgreSQL Platform HTTP integration", () => {
 				code: "RESOURCE_UNAVAILABLE",
 			});
 		}
-		expect(
-			(
-				await app.request("/api/v2/agents/agent-run/lifecycle", {
-					method: "POST",
-					headers: {
-						...requestHeaders("admin", "disable-1"),
-						"content-type": "application/json",
-					},
-					body: JSON.stringify({ schemaVersion: 1, command: "disable" }),
-				})
-			).status,
-		).toBe(202);
+		const disableAgentRun = () =>
+			app.request("/api/v2/agents/agent-run/lifecycle", {
+				method: "POST",
+				headers: {
+					...requestHeaders("admin", "disable-1"),
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ schemaVersion: 1, command: "disable" }),
+			});
+		expect((await disableAgentRun()).status).toBe(202);
+		// 同一个 Idempotency-Key 重放已提交的命令：得到原结果而不是 409，也不再产生写入（#2607）。
+		expect((await disableAgentRun()).status).toBe(202);
 		const session = await app.request("/api/v1/session", {
 			headers: requestHeaders("owner"),
 		});
@@ -933,6 +933,14 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		expect(audit.status).toBe(200);
 		const auditItems = ((await audit.json()) as { items: unknown[] }).items;
 		expect(auditItems.length).toBeGreaterThan(0);
+		expect(
+			auditItems.filter(
+				(item) =>
+					(item as { action?: string; subjectId?: string }).action ===
+						"agent.lifecycle.disabled" &&
+					(item as { subjectId?: string }).subjectId === "agent-run",
+			),
+		).toHaveLength(1);
 		expect(
 			auditItems.every(
 				(item) => PlatformAuditProjectionV1Schema.safeParse(item).success,
