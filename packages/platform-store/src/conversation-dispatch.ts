@@ -416,35 +416,102 @@ export class PostgresConversationDispatchStoreV1
 					trace_parent: string | null;
 				}[]
 			>`
-				select id, operation, trace_parent from platform.outbox_items
+				select id, operation, trace_parent
+				from platform.outbox_items
 				where scope_type = 'conversation'
 					and operation in (
-						'conversation.turn.submit.v1', 'conversation.turn.regenerate.v1',
-						'conversation.turn.supplement.v1', 'conversation.turn.stop.v1'
-					, 'conversation.browser.handoff.v1'
-						, 'conversation.sandbox.reconcile.v1'
+						'conversation.turn.submit.v1',
+						'conversation.turn.regenerate.v1',
+						'conversation.turn.supplement.v1',
+						'conversation.turn.stop.v1',
+						'conversation.native-capability.invoke.v1',
+						'conversation.browser.handoff.v1',
+						'conversation.sandbox.reconcile.v1'
 					)
 					and (
-						(status in ('pending', 'retry_scheduled') and available_at <= clock_timestamp())
-						or (status = 'processing' and lease_expires_at <= clock_timestamp())
+						(status in ('pending', 'retry_scheduled') and available_at <= now())
+						or (status = 'processing' and lease_expires_at <= now())
 						or (status in ('pending', 'retry_scheduled') and exists (
 							select 1 from platform.conversation_executions e
 							where e.execution_id = outbox_items.payload->>'executionId'
 								and e.conversation_id = outbox_items.scope_id and e.status = 'waiting'
 								and ((outbox_items.status = 'pending' and outbox_items.available_at = 'infinity'::timestamptz)
-									or e.task_wait_deadline <= clock_timestamp())
+									or e.task_wait_deadline <= now())
 						))
 						or (status in ('pending', 'retry_scheduled', 'processing')
 							and operation = 'conversation.turn.stop.v1'
 							and exists (
 								select 1 from platform.conversation_stops s
 								where s.execution_id = outbox_items.payload->>'executionId'
-									and s.confirmation_deadline <= clock_timestamp()
+									and s.confirmation_deadline <= now()
 									and s.confirmation_timed_out_at is null
 							))
-            or (status in ('succeeded', 'failed') and exists (
-              select 1 from platform.conversation_generation_tombstones t where t.item_id = outbox_items.id and t.status = 'pending'
-            ))
+						or (status in ('succeeded', 'failed') and exists (
+							select 1 from platform.conversation_generation_tombstones t
+							where t.item_id = outbox_items.id and t.status = 'pending'
+						))
+					)
+					and (
+						-- Control and terminal recovery are never gated on business readiness.
+						operation = 'conversation.turn.stop.v1'
+						or (status = 'processing' and lease_expires_at <= now())
+						or (status in ('succeeded', 'failed') and exists (
+							select 1 from platform.conversation_generation_tombstones t
+							where t.item_id = outbox_items.id and t.status = 'pending'
+						))
+						or (
+							operation in (
+								'conversation.turn.submit.v1',
+								'conversation.turn.regenerate.v1',
+								'conversation.turn.supplement.v1',
+								'conversation.native-capability.invoke.v1',
+								'conversation.browser.handoff.v1'
+							)
+							and (
+								payload ? 'metadataRecovery'
+								or exists (
+									select 1 from platform.conversation_executions e
+									where e.execution_id = outbox_items.payload->>'executionId'
+										and e.conversation_id = outbox_items.scope_id
+										and e.status = 'waiting'
+										and e.task_wait_deadline <= now()
+								)
+								or exists (
+									select 1
+									from platform.conversations c
+									join platform.session_sandbox_allocations s
+										on s.conversation_id = c.id
+									where c.id = outbox_items.scope_id
+										and s.status = 'ready'
+										and s.desired_state = 'running'
+										and s.resource_fence > 0
+										and s.resource_observation->>'status' = 'ready'
+								)
+							)
+						)
+						or (
+							operation = 'conversation.sandbox.reconcile.v1'
+							and (
+								payload ? 'lifecycle'
+								or not exists (
+									select 1
+									from platform.agent_applications a
+									join platform.conversations c on c.agent_id = a.agent_id
+									where c.id = outbox_items.scope_id
+								)
+								or exists (
+									select 1
+									from platform.agent_applications a
+									join platform.conversations c on c.agent_id = a.agent_id
+									where c.id = outbox_items.scope_id
+										and (
+											a.status not in ('stopped', 'disabled')
+											or a.desired_state <> 'stopped'
+											or a.service_availability is not null
+										)
+									)
+							)
+						)
 					)
 				order by
 					case when ${input.afterItemId ?? null}::text is null
