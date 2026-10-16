@@ -508,6 +508,19 @@ async function requireManagementAccepted(
 	return decision;
 }
 
+function committedProjection(
+	projection: AgentProjection,
+	status: AgentProjection["managementStatus"],
+): AgentProjection {
+	return {
+		...projection,
+		managementStatus: status,
+		...(status === "stopped" || status === "disabled"
+			? { serviceAvailability: null }
+			: {}),
+	};
+}
+
 function acceptedLifecycleResponse(input: {
 	readonly agentId: string;
 	readonly status?: AgentProjection["managementStatus"];
@@ -1102,6 +1115,12 @@ export function registerV2ManagementRoutes(
 				agentId,
 				metadata.traceId,
 			);
+			const fallbackPromise = projectAgent(
+				dependencies,
+				current,
+				identity,
+				metadata,
+			).catch(() => undefined);
 			const commands = {
 				stop: "stop_agent",
 				restart: "restart_agent",
@@ -1135,13 +1154,21 @@ export function registerV2ManagementRoutes(
 					202,
 				);
 			} catch {
+				const fallback = await fallbackPromise;
+				if (decision.outcome === "replayed" && fallback !== undefined)
+					return context.json(fallback, 202);
+				if (fallback === undefined)
+					return context.json(
+						acceptedLifecycleResponse({
+							agentId,
+							status: decision.result.status,
+							revision: decision.result.revision,
+							replayed: decision.outcome === "replayed",
+						}),
+						202,
+					);
 				return context.json(
-					acceptedLifecycleResponse({
-						agentId,
-						status: decision.result.status,
-						revision: decision.result.revision,
-						replayed: decision.outcome === "replayed",
-					}),
+					committedProjection(fallback, decision.result.status),
 					202,
 				);
 			}

@@ -131,6 +131,7 @@ function createApp(
 		identityValue?: unknown;
 		queryFailure?: boolean;
 		projectionFailure?: boolean;
+		projectionFailureAfterCommand?: boolean;
 		personalApiAgentRead?: PersonalApiAgentReadUseCaseV1;
 		/** 与生产应用一样挂上 HTTP 遥测，事件收集到这个数组里（#2569）。 */
 		telemetry?: OperationalEvent[];
@@ -174,8 +175,14 @@ function createApp(
 	const readApplicationProjection = vi
 		.fn()
 		.mockResolvedValue(applicationProjection);
+	let projectionReads = 0;
 	const readAgentProjection = vi.fn().mockImplementation(async () => {
-		if (options.projectionFailure) throw new Error("private projection detail");
+		projectionReads += 1;
+		if (
+			options.projectionFailure ||
+			(options.projectionFailureAfterCommand && projectionReads > 1)
+		)
+			throw new Error("private projection detail");
 		return agentProjection;
 	});
 	const readApiAgentProjection = options.projectionFailure
@@ -783,10 +790,10 @@ describe("V2 management routes", () => {
 describe("lifecycle command failures are observable (#2569)", () => {
 	const restart = JSON.stringify({ schemaVersion: 1, command: "restart" });
 
-	it("returns an accepted envelope when the follow-up read fails", async () => {
+	it("returns the committed projection when the follow-up read fails", async () => {
 		const telemetry: OperationalEvent[] = [];
 		const { app, executeManagementCommand } = createApp({
-			projectionFailure: true,
+			projectionFailureAfterCommand: true,
 			telemetry,
 		});
 
@@ -797,14 +804,9 @@ describe("lifecycle command failures are observable (#2569)", () => {
 
 		expect(executeManagementCommand).toHaveBeenCalledOnce();
 		expect(response.status).toBe(202);
-		expect(
-			AgentApiLifecycleAcceptedResponseV1Schema.parse(await response.json()),
-		).toMatchObject({
-			accepted: true,
-			agentId: "agent-private-1",
-			status: "available",
-			revision: 2,
-			replayed: false,
+		expect(AgentProjectionV2Schema.parse(await response.json())).toMatchObject({
+			agentId: "agent-1",
+			managementStatus: "available",
 		});
 		expect(telemetry).toEqual([
 			{
@@ -815,6 +817,38 @@ describe("lifecycle command failures are observable (#2569)", () => {
 				traceId: expect.any(String),
 			},
 		]);
+	});
+
+	it("preserves the pre-command projection when a replay read fails", async () => {
+		const { app, executeManagementCommand } = createApp({
+			projectionFailureAfterCommand: true,
+		});
+		executeManagementCommand.mockResolvedValueOnce({
+			outcome: "replayed",
+			result: {
+				schemaVersion: 1,
+				applicationId: "application-1",
+				agentId: "agent-private-1",
+				status: "stopped",
+				revision: 2,
+			},
+			writePlan: null,
+		});
+		const response = await app.request(
+			"/api/v2/agents/agent-private-1/lifecycle",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({ schemaVersion: 1, command: "stop" }),
+			},
+		);
+
+		expect(response.status).toBe(202);
+		expect(AgentProjectionV2Schema.parse(await response.json())).toMatchObject({
+			agentId: "agent-1",
+			managementStatus: "available",
+			serviceAvailability: "ready",
+		});
 	});
 
 	it("keeps the log of an accepted lifecycle command free of failure fields", async () => {
