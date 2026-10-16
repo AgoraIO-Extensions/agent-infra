@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { MiddlewareHandler } from "hono";
 import {
+	operationalCodes,
 	createTraceParent,
 	type ObservabilitySpan,
+	type OperationalCode,
 	type startObservability,
 } from "./index.js";
 
@@ -18,8 +20,10 @@ interface RequestMetadata {
 const requests = new AsyncLocalStorage<{
 	readonly metadata: RequestMetadata;
 	active: boolean;
-	failureCode?: string;
+	failureCode?: OperationalCode;
 }>();
+
+const httpFailureCodes = new Set<string>(operationalCodes);
 
 export function currentRequestMetadata(): RequestMetadata | undefined {
 	const request = requests.getStore();
@@ -28,8 +32,13 @@ export function currentRequestMetadata(): RequestMetadata | undefined {
 
 export function recordHttpFailure(code: string): void {
 	const request = requests.getStore();
-	if (!request?.active || !/^[A-Z][A-Z0-9_]{0,63}$/.test(code)) return;
-	request.failureCode = code;
+	if (
+		!request?.active ||
+		!/^[A-Z][A-Z0-9_]{0,63}$/.test(code) ||
+		!httpFailureCodes.has(code)
+	)
+		return;
+	request.failureCode = code as OperationalCode;
 }
 
 /** Measures response-header readiness, not the lifetime of a streaming body. */
@@ -57,7 +66,11 @@ export function createHttpObservability(
 				enumerable: false,
 				writable: false,
 			});
-		const request = {
+		const request: {
+			readonly metadata: RequestMetadata;
+			active: boolean;
+			failureCode?: OperationalCode;
+		} = {
 			metadata: Object.freeze(metadata) as RequestMetadata,
 			active: true,
 		};
