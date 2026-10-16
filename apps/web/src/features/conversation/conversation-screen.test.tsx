@@ -1767,6 +1767,68 @@ describe("functional conversation screen", () => {
 		).toBe(true);
 	});
 
+	it("re-reads a stopped Agent after a command 404 and keeps the conversation read-only (#2570)", async () => {
+		let stopped = false;
+		const { requests } = setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (path === "/api/v2/agents/agent-1")
+				return Response.json({
+					...agent,
+					managementStatus: stopped ? "stopped" : "available",
+				});
+			if (request.method === "POST") {
+				stopped = true;
+				return new Response("concealed", { status: 404 });
+			}
+			if (path === "/api/v2/conversations/conversation-1")
+				return Response.json({
+					...history(),
+					messages: [userMessage("Retained question")],
+				});
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Follow-up" } });
+		fireEvent.click(screen.getByRole("button", { name: /^发送/ }));
+		await screen.findByText(/Agent 已停止，请 Owner 重启后继续/);
+		await screen.findByText("Retained question");
+		expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
+		expect(input.disabled).toBe(true);
+		expect(
+			requests.filter(
+				(request) =>
+					request.method === "GET" &&
+					new URL(request.url).pathname === "/api/v2/agents/agent-1",
+			).length,
+		).toBeGreaterThanOrEqual(2);
+	});
+
+	it("keeps a command 404 as a login denial when the Agent re-read is unauthorized (#2570)", async () => {
+		let commandFailed = false;
+		const onAccessDenied = vi.fn();
+		setup(
+			(request) => {
+				const path = new URL(request.url).pathname;
+				if (path === "/api/v2/agents/agent-1")
+					return commandFailed
+						? new Response("concealed", { status: 403 })
+						: Response.json(agent);
+				if (request.method === "POST") {
+					commandFailed = true;
+					return new Response("concealed", { status: 404 });
+				}
+			},
+			{ onAccessDenied },
+		);
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Permission check" } });
+		fireEvent.click(screen.getByRole("button", { name: /^发送/ }));
+		await screen.findByText(
+			"当前登录或访问权限已失效，请重新登录或返回 Agent 列表。",
+		);
+		expect(screen.queryByText(/Agent 已停止/)).toBeNull();
+		expect(onAccessDenied).toHaveBeenCalled();
+	});
+
 	it("preserves rejected busy text and reports the protocol reason", async () => {
 		setup((request) =>
 			request.method === "POST"

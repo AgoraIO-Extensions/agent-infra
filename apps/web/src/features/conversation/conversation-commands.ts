@@ -77,7 +77,12 @@ export type ConversationCommandResult =
 			kind: "browser-accepted";
 			receipt: BrowserCommandAcceptedProjectionV1;
 	  }
-	| { kind: "denied"; code?: PilotProtocolErrorV1["code"] }
+	| {
+			kind: "denied";
+			code?: PilotProtocolErrorV1["code"];
+			/** HTTP status is retained only to let the UI re-read Agent state after a 404. */
+			status?: number;
+	  }
 	| {
 			kind: "rejected";
 			code: PilotProtocolErrorV1["code"];
@@ -92,7 +97,11 @@ function failure(status?: number, error?: unknown): ConversationCommandResult {
 		code === "AUTHENTICATION_REQUIRED" ||
 		code === "AUTHORIZATION_REVOKED"
 	)
-		return { kind: "denied", ...(code ? { code } : {}) };
+		return {
+			kind: "denied",
+			...(code ? { code } : {}),
+			...(status !== undefined ? { status } : {}),
+		};
 	// A runtime-unavailable response is a deliberate pre-acceptance refusal
 	// (the API uses 503 for this protocol code), so surface it as retryable
 	// instead of implying that the message may have been accepted (#1607).

@@ -112,7 +112,7 @@ export function ActiveConversation({
 	agent: AgentProjectionV2;
 	available: boolean;
 	onDenied: () => void;
-	refreshAgent: () => void;
+	refreshAgent: () => Promise<AgentProjectionV2 | undefined>;
 }) {
 	const queryClient = useQueryClient();
 	const [selectedExecution, setSelectedExecution] = useState<string>();
@@ -144,6 +144,7 @@ export function ActiveConversation({
 	const [notice, setNotice] = useState("");
 	const [acceptedExecution, setAcceptedExecution] = useState<string>();
 	const [stopping, setStopping] = useState<string>();
+	const [checkingAgentAccess, setCheckingAgentAccess] = useState(false);
 	const [modelId, setModelId] = useState<string | undefined>();
 	const [reasoning, setReasoning] = useState<string | undefined>();
 	const composerId = useId();
@@ -242,7 +243,10 @@ export function ActiveConversation({
 		resultFilesEnabled: agent.capabilities.resultFiles,
 	});
 	const mismatched = Boolean(conversation && conversation.agentId !== agentId);
-	const denied = timeline.status === "denied" || command.isDenied || mismatched;
+	const denied =
+		timeline.status === "denied" ||
+		(command.isDenied && command.deniedStatus !== 404) ||
+		mismatched;
 	const denialScope = `${agentId}:${identityKey}:${conversationId}`;
 	const denialScopeRef = useRef(denialScope);
 	const denialHandled = useRef(false);
@@ -315,12 +319,33 @@ export function ActiveConversation({
 		const result = command.result;
 		if (!result || result === handled.current) return;
 		handled.current = result;
+		if (result.kind === "denied" && command.deniedStatus === 404) {
+			setCheckingAgentAccess(true);
+			void refreshAgent()
+				.then((latest) => {
+					if (
+						latest?.managementStatus === "stopped" ||
+						latest?.managementStatus === "disabled"
+					) {
+						command.clearDenied();
+						setCheckingAgentAccess(false);
+						return;
+					}
+					setCheckingAgentAccess(false);
+					onDenied();
+				})
+				.catch(() => {
+					setCheckingAgentAccess(false);
+					onDenied();
+				});
+			return;
+		}
 		if (
 			result.kind === "rejected" &&
 			(result.code === "AGENT_STARTING" || result.code === "AGENT_UPDATING")
 		) {
 			void reader.refresh();
-			refreshAgent();
+			void refreshAgent();
 			return;
 		}
 		if (result.kind === "accepted") {
@@ -358,7 +383,14 @@ export function ActiveConversation({
 			);
 			void reader.refresh();
 		}
-	}, [command.result, reader.refresh, refreshAgent]);
+	}, [
+		command.clearDenied,
+		command.deniedStatus,
+		command.result,
+		onDenied,
+		reader.refresh,
+		refreshAgent,
+	]);
 	const options = customPlatformAdapter
 		? (runtimeSelection.data?.options ?? [])
 		: agent.configuration.modelOptions;
@@ -388,7 +420,11 @@ export function ActiveConversation({
 		(timeline.status !== "ready" &&
 			timeline.status !== "reconnecting" &&
 			!refreshing);
-	const commandLocked = command.isPending || command.result?.kind === "unknown";
+	const commandLocked =
+		checkingAgentAccess ||
+		command.isPending ||
+		command.result?.kind === "unknown" ||
+		command.result?.kind === "denied";
 	const browserEvent = reader.browserHandoffEvent;
 	const browserBinding = browserEvent?.payload.binding;
 	const browserHandlers = createBrowserConversationHandlers(
@@ -519,7 +555,7 @@ export function ActiveConversation({
 						disabled={timeline.status === "loading"}
 						onClick={() => {
 							void reader.refresh();
-							refreshAgent();
+							void refreshAgent();
 						}}
 					>
 						刷新会话

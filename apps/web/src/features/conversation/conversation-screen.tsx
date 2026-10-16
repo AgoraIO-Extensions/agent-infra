@@ -14,6 +14,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "../../components/ui/button.js";
 import { getAgentV2 } from "../../pilot/generated-v2/sdk.gen.js";
+import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	agentConversationSourceLabel,
 	agentManagementStatusLabels,
@@ -110,6 +111,12 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 				? 2000
 				: false,
 	});
+	const refreshAgent = useCallback(async (): Promise<
+		AgentProjectionV2 | undefined
+	> => {
+		const result = await agentQuery.refetch();
+		return result.isSuccess ? result.data : undefined;
+	}, [agentQuery.refetch]);
 	useLayoutEffect(() => {
 		if (agentQuery.data && (showHistory || recentOpen))
 			historyPanel.current?.focus();
@@ -255,11 +262,15 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 					{!available && (
 						<Alert role="status" className="mb-5 bg-muted">
 							<AlertDescription>
-								{agent.serviceAvailability === "updating"
-									? "Agent 更新中"
-									: agent.serviceAvailability === "starting"
-										? "Agent 启动中"
-										: "Agent 当前不可用"}
+								{agent.managementStatus === "stopped"
+									? "Agent 已停止，请 Owner 重启后继续"
+									: agent.managementStatus === "disabled"
+										? "Agent 已禁用，请 Owner 启用后继续"
+										: agent.serviceAvailability === "updating"
+											? "Agent 更新中"
+											: agent.serviceAvailability === "starting"
+												? "Agent 启动中"
+												: "Agent 当前不可用"}
 								，历史保持只读。
 								<Button
 									variant="ghost"
@@ -279,7 +290,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 							agent={agent}
 							available={available}
 							onDenied={deny}
-							refreshAgent={() => void agentQuery.refetch()}
+							refreshAgent={refreshAgent}
 						/>
 					) : (
 						<NewConversation

@@ -38,6 +38,7 @@ export function useConversationCommands({
 			client,
 			active: false,
 			denied: false,
+			deniedStatus: undefined as number | undefined,
 			attempt: undefined as Attempt | undefined,
 			lastAttemptId: undefined as string | undefined,
 		};
@@ -70,13 +71,25 @@ export function useConversationCommands({
 			if (!scope.active || scope.attempt !== attempt) return undefined;
 			attempt.pending = false;
 			attempt.uncertain = result.kind === "unknown";
-			if (result.kind === "denied") scope.denied = true;
+			if (result.kind === "denied") {
+				scope.deniedStatus = result.status;
+				// The command remains locked while the conversation screen re-reads
+				// Agent state for a possible stop in another tab.
+				scope.denied = true;
+			}
+			const publishedResult =
+				result.kind === "denied"
+					? {
+							kind: result.kind,
+							...(result.code ? { code: result.code } : {}),
+						}
+					: result;
 			if (
 				result.kind !== "unknown" &&
 				!(result.kind === "rejected" && result.retryable)
 			)
 				scope.attempt = undefined;
-			return result;
+			return publishedResult;
 		},
 		onSettled: removeOwnMutations,
 	});
@@ -134,9 +147,19 @@ export function useConversationCommands({
 		mutation.reset();
 		removeOwnMutations();
 	}, [scope, mutation.reset, removeOwnMutations]);
+	const clearDenied = useCallback(() => {
+		if (!scope.active) return;
+		scope.denied = false;
+		scope.deniedStatus = undefined;
+		scope.attempt = undefined;
+		scope.lastAttemptId = undefined;
+		mutation.reset();
+		removeOwnMutations();
+	}, [scope, mutation.reset, removeOwnMutations]);
 	return {
 		isPending: visible && mutation.isPending,
 		isDenied: scope.denied,
+		deniedStatus: scope.deniedStatus,
 		canRetry:
 			scope.active &&
 			!scope.denied &&
@@ -144,6 +167,7 @@ export function useConversationCommands({
 			!scope.attempt.pending,
 		result: visible ? mutation.data : undefined,
 		revoke,
+		clearDenied,
 		create: () => start({ kind: "create", body: { schemaVersion: 1 } }),
 		submitText,
 		supplement: submitText,
