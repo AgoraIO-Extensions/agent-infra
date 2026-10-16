@@ -1690,7 +1690,7 @@ function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	) {
 		const responseSchema =
 			normalized.paths?.["/api/v2/agents/{agentId}/lifecycle"]?.post
-			?.responses?.["202"]?.content?.["application/json"]?.schema;
+				?.responses?.["202"]?.content?.["application/json"]?.schema;
 		if (Array.isArray(responseSchema?.anyOf)) {
 			const filtered = responseSchema.anyOf.filter(
 				(option) =>
