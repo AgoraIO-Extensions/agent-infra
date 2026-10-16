@@ -1,5 +1,5 @@
-import { createHttpObservability } from "@agent-infra/observability/http";
 import type { OperationalEvent } from "@agent-infra/observability";
+import { createHttpObservability } from "@agent-infra/observability/http";
 import {
 	ApplicationFoundationError,
 	PersonalApiCredentialErrorV1,

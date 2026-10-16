@@ -3,10 +3,10 @@ import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { MiddlewareHandler } from "hono";
 import {
-	operationalCodes,
 	createTraceParent,
 	type ObservabilitySpan,
 	type OperationalCode,
+	operationalCodes,
 	type startObservability,
 } from "./index.js";
 
