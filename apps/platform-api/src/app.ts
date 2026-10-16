@@ -145,6 +145,8 @@ type ApiObservability = Pick<
 	"record" | "status"
 >;
 
+export type PlatformApiReadiness = () => Promise<boolean>;
+
 export interface PlatformAppDependencies {
 	readonly connectionInstallations?: ConnectionInstallationRouteDependenciesV1;
 	readonly connectionInstallationCallback?: ConnectionInstallationCallbackRouteDependenciesV1;
@@ -196,7 +198,10 @@ export interface PlatformAppDependencies {
 	readonly userGovernance?: UserGovernanceRoutesDependencies;
 }
 
-export function createPlatformHealthApp(observability?: ApiObservability) {
+export function createPlatformHealthApp(
+	observability?: ApiObservability,
+	readiness?: PlatformApiReadiness,
+) {
 	const app = new Hono();
 	if (observability) app.use("*", createHttpObservability(observability));
 	app.onError((error, context) => {
@@ -217,6 +222,20 @@ export function createPlatformHealthApp(observability?: ApiObservability) {
 			...(observability ? { observability: observability.status() } : {}),
 		}),
 	);
+	app.get("/readyz", async (context) => {
+		let ready = readiness === undefined;
+		if (readiness !== undefined) {
+			try {
+				ready = await readiness();
+			} catch {
+				ready = false;
+			}
+		}
+		return context.json(
+			{ service: platformApiService, status: ready ? "ready" : "starting" },
+			ready ? 200 : 503,
+		);
+	});
 	return app;
 }
 
@@ -224,8 +243,9 @@ export function createPlatformApp(
 	dependencies: PlatformAppDependencies,
 	observability?: ApiObservability,
 	sseResources = new SseResourceTracker(),
+	readiness?: PlatformApiReadiness,
 ) {
-	const app = createPlatformHealthApp(observability);
+	const app = createPlatformHealthApp(observability, readiness);
 	const requestScope = dependencies.requestScope;
 	if (requestScope)
 		app.use("*", async (context, next) => {

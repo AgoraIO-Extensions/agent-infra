@@ -3,7 +3,10 @@ import {
 	type ObservabilityOptions,
 	startObservability,
 } from "@agent-infra/observability";
-import { configureStoreQueryObservability } from "@agent-infra/platform-store";
+import {
+	configureStoreQueryObservability,
+	platformQueueResourceSnapshotTimeoutMs,
+} from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
 
 import {
@@ -28,6 +31,7 @@ interface StartOptions {
 	dependencies: PlatformAppDependencies;
 	browserAuth?: BrowserAuthHandler;
 	observability?: ReturnType<typeof startObservability>;
+	readiness?: () => Promise<boolean>;
 	log?: (message: string) => void;
 	port?: number;
 	sseResources?: SseResourceTracker;
@@ -71,6 +75,29 @@ function authUnavailable(): Response {
 	});
 }
 
+async function platformApiReadiness(
+	readResourceSnapshot: LoadedPlatformApiAssembly["readResourceSnapshot"],
+): Promise<boolean> {
+	const controller = new AbortController();
+	const deadline = setTimeout(
+		() => controller.abort(),
+		platformQueueResourceSnapshotTimeoutMs,
+	);
+	try {
+		const snapshot = await readResourceSnapshot(controller.signal);
+		return (
+			Number.isSafeInteger(snapshot.taskWaiting) &&
+			snapshot.taskWaiting >= 0 &&
+			Number.isSafeInteger(snapshot.outboxPending) &&
+			snapshot.outboxPending >= 0
+		);
+	} catch {
+		return false;
+	} finally {
+		clearTimeout(deadline);
+	}
+}
+
 export function startPlatformApi(options: StartOptions) {
 	const port = options.port ?? runtimePort(process.env.PORT, 3000);
 	const log = options.log ?? console.info;
@@ -78,6 +105,7 @@ export function startPlatformApi(options: StartOptions) {
 		options.dependencies,
 		options.observability,
 		options.sseResources,
+		options.readiness,
 	);
 	const browserAuth = options.browserAuth;
 	return serve(
@@ -192,11 +220,16 @@ export async function startPlatformApiFromDeployment(
 			...options.observabilityOptions,
 		});
 		configureStoreQueryObservability({ observability });
-		assembly = await loadPlatformApiAssembly(options.moduleSpecifier);
+		const loadedAssembly = await loadPlatformApiAssembly(
+			options.moduleSpecifier,
+		);
+		assembly = loadedAssembly;
 		server = startPlatformApi({
-			dependencies: assembly.dependencies,
-			browserAuth: assembly.browserAuth,
+			dependencies: loadedAssembly.dependencies,
+			browserAuth: loadedAssembly.browserAuth,
 			observability,
+			readiness: () =>
+				platformApiReadiness(loadedAssembly.readResourceSnapshot),
 			sseResources,
 			log: options.log,
 			port: options.port,

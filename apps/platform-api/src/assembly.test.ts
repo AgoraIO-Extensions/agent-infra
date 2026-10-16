@@ -532,6 +532,62 @@ describe("Platform API production assembly", () => {
 		expect(lines.some((line) => line.includes('"stage":"http"'))).toBe(true);
 	});
 
+	it("uses the Store snapshot as the deployment readiness gate", async () => {
+		const readSnapshot = vi
+			.spyOn(PostgresConversationQueryV1.prototype, "readResourceSnapshot")
+			.mockResolvedValue({ taskWaiting: 0, outboxPending: 0 });
+		const running = await startPlatformApiFromDeployment({
+			log: () => {},
+			moduleSpecifier: new URL(
+				"../../../tests/fixtures/platform-api-deployment.mjs",
+				import.meta.url,
+			).href,
+			port: 0,
+		});
+		const address = running.server.address();
+		if (!address || typeof address === "string")
+			throw new Error("Platform API did not bind a TCP port");
+		try {
+			const response = await fetch(`http://127.0.0.1:${address.port}/readyz`);
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({
+				service: "platform-api",
+				status: "ready",
+			});
+			expect(readSnapshot).toHaveBeenCalledOnce();
+		} finally {
+			await createPlatformApiShutdown(running)();
+		}
+	});
+
+	it("keeps readiness unavailable when the Store snapshot fails", async () => {
+		const readSnapshot = vi
+			.spyOn(PostgresConversationQueryV1.prototype, "readResourceSnapshot")
+			.mockRejectedValue(new Error("private database detail"));
+		const running = await startPlatformApiFromDeployment({
+			log: () => {},
+			moduleSpecifier: new URL(
+				"../../../tests/fixtures/platform-api-deployment.mjs",
+				import.meta.url,
+			).href,
+			port: 0,
+		});
+		const address = running.server.address();
+		if (!address || typeof address === "string")
+			throw new Error("Platform API did not bind a TCP port");
+		try {
+			const response = await fetch(`http://127.0.0.1:${address.port}/readyz`);
+			expect(response.status).toBe(503);
+			expect(await response.json()).toEqual({
+				service: "platform-api",
+				status: "starting",
+			});
+			expect(readSnapshot).toHaveBeenCalledOnce();
+		} finally {
+			await createPlatformApiShutdown(running)();
+		}
+	});
+
 	it("automatically publishes fresh snapshots from each deployed query after an API assembly restart", async () => {
 		let complete: (snapshot: {
 			taskWaiting: number;

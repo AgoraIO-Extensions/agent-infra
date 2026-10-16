@@ -1,5 +1,5 @@
 import { PilotProtocolErrorV1Schema } from "@agent-infra/contracts/pilot";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createPlatformHealthApp } from "./app";
 import { requestMetadata } from "./http/common.js";
@@ -13,6 +13,29 @@ describe("platform API health", () => {
 			service: "platform-api",
 			status: "ok",
 		});
+	});
+
+	it("fails readiness closed until the deployment dependency is ready", async () => {
+		const readiness = vi
+			.fn()
+			.mockResolvedValueOnce(false)
+			.mockResolvedValue(true);
+		const app = createPlatformHealthApp(undefined, readiness);
+
+		const starting = await app.request("/readyz");
+		expect(starting.status).toBe(503);
+		expect(await starting.json()).toEqual({
+			service: "platform-api",
+			status: "starting",
+		});
+
+		const ready = await app.request("/readyz");
+		expect(ready.status).toBe(200);
+		expect(await ready.json()).toEqual({
+			service: "platform-api",
+			status: "ready",
+		});
+		expect(readiness).toHaveBeenCalledTimes(2);
 	});
 
 	it("serializes unexpected failures without private details", async () => {

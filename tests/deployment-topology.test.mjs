@@ -931,6 +931,16 @@ test("Web and Platform API are rendered only for explicit in-cluster placement",
 			deployment.spec.template.spec.automountServiceAccountToken,
 			false,
 		);
+		if (component === "platform-api") {
+			assert.deepEqual(
+				deployment.spec.template.spec.containers[0].livenessProbe.httpGet,
+				{ path: "/healthz", port: "http" },
+			);
+			assert.deepEqual(
+				deployment.spec.template.spec.containers[0].readinessProbe.httpGet,
+				{ path: "/readyz", port: "http" },
+			);
+		}
 	}
 	const web = resource(resources, "Deployment", "topology-agent-infra-web");
 	assert.equal(web.spec.template.spec.securityContext.runAsUser, 101);
