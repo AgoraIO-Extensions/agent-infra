@@ -505,8 +505,9 @@ export class PostgresConversationDispatchStoreV1
 									join platform.conversations c on c.agent_id = a.agent_id
 									where c.id = outbox_items.scope_id
 										and (
-											a.status not in ('stopped', 'disabled')
-											or a.desired_state <> 'stopped'
+										a.status is distinct from 'stopped'
+										and a.status is distinct from 'disabled'
+										or a.desired_state is distinct from 'stopped'
 											or a.service_availability is not null
 										)
 									)
