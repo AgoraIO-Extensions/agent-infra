@@ -1900,3 +1900,137 @@ describe("functional conversation screen", () => {
 		expect(screen.getAllByRole("button", { name: "执行详情" })).toHaveLength(2);
 	});
 });
+
+describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
+	const resourceUnavailable = () =>
+		Response.json(
+			PilotProtocolErrorV1Schema.parse({
+				schemaVersion: 1,
+				code: "RESOURCE_UNAVAILABLE",
+				message: "The resource is unavailable.",
+				retryable: false,
+				traceId: "trace-404",
+			}),
+			{ status: 404 },
+		);
+	const stoppedAgent = AgentProjectionV2Schema.parse({
+		...agent,
+		managementStatus: "stopped",
+		serviceAvailability: null,
+	});
+
+	/** The Agent starts out available; the test flips it the way an Owner would elsewhere. */
+	function scenario(changes: Partial<ConversationScreenProps> = {}) {
+		const state = {
+			agent: "available" as "available" | "stopped" | "failing",
+			post: resourceUnavailable as () => Response,
+		};
+		const posts: Request[] = [];
+		const view = setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (request.method === "POST") {
+				posts.push(request);
+				return state.post();
+			}
+			if (path === "/api/v2/agents/agent-1") {
+				if (state.agent === "stopped") return Response.json(stoppedAgent);
+				if (state.agent === "failing")
+					return new Response("down", { status: 500 });
+			}
+			return undefined;
+		}, changes);
+		return { ...view, state, posts };
+	}
+	const agentReads = (requests: readonly Request[]) =>
+		requests.filter(
+			(request) => new URL(request.url).pathname === "/api/v2/agents/agent-1",
+		).length;
+
+	it("keeps the draft and says the Agent is stopped instead of claiming lost access", async () => {
+		const onAccessDenied = vi.fn();
+		const { state, posts, requests } = scenario({ onAccessDenied });
+		const input = await composer();
+		await waitFor(() => expect(agentReads(requests)).toBe(1));
+		fireEvent.change(input, { target: { value: "Keep this draft" } });
+		state.agent = "stopped";
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await screen.findByText(/Agent 已停止，历史保持只读/);
+		expect(screen.getByText(/请联系 Owner 重启后继续/)).toBeTruthy();
+		expect(screen.getByText(/消息未送达，草稿已保留/)).toBeTruthy();
+		expect(input.value).toBe("Keep this draft");
+		expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
+		expect(onAccessDenied).not.toHaveBeenCalled();
+		expect(posts).toHaveLength(1);
+		// 只重新读取一次，不会因为反复确认而循环请求。
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(agentReads(requests)).toBe(2);
+		expect(
+			screen.getByRole("button", { name: "发送" }).hasAttribute("disabled"),
+		).toBe(true);
+	});
+
+	it("still treats the 404 as lost access while the Agent is available", async () => {
+		const onAccessDenied = vi.fn();
+		const { posts } = scenario({ onAccessDenied });
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Private draft" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await screen.findByText(/当前登录或访问权限已失效/);
+		expect(screen.queryByRole("textbox")).toBeNull();
+		expect(screen.queryByDisplayValue("Private draft")).toBeNull();
+		expect(onAccessDenied).toHaveBeenCalledOnce();
+		expect(posts).toHaveLength(1);
+	});
+
+	it("falls back to lost access when the Agent cannot be re-read", async () => {
+		const onAccessDenied = vi.fn();
+		const { state } = scenario({ onAccessDenied });
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Private draft" } });
+		state.agent = "failing";
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await screen.findByText(/当前登录或访问权限已失效/);
+		expect(screen.queryByDisplayValue("Private draft")).toBeNull();
+		expect(onAccessDenied).toHaveBeenCalledOnce();
+	});
+
+	it("sends again once the Agent is available, without reloading the page", async () => {
+		const { state, posts } = scenario();
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Resend me" } });
+		state.agent = "stopped";
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await screen.findByText(/Agent 已停止/);
+		state.agent = "available";
+		state.post = receipt;
+		fireEvent.click(screen.getByRole("button", { name: "刷新 Agent 状态" }));
+		await waitFor(() => expect(screen.queryByText(/Agent 已停止/)).toBeNull());
+		expect(input.value).toBe("Resend me");
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await waitFor(() => expect(posts).toHaveLength(2));
+		await waitFor(() => expect(input.value).toBe(""));
+		expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
+	});
+
+	it("explains a stopped Agent when a new Session is refused with 404", async () => {
+		const onAccessDenied = vi.fn();
+		const { state } = scenario({
+			conversationId: undefined,
+			onAccessDenied,
+		});
+		const create = await screen.findByRole("button", { name: "创建会话" });
+		state.agent = "stopped";
+		fireEvent.click(create);
+		await screen.findByText(/Agent 已停止，历史保持只读/);
+		expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
+		expect(onAccessDenied).not.toHaveBeenCalled();
+	});
+
+	it("still treats a refused new Session as lost access while the Agent is available", async () => {
+		const onAccessDenied = vi.fn();
+		scenario({ conversationId: undefined, onAccessDenied });
+		fireEvent.click(await screen.findByRole("button", { name: "创建会话" }));
+		await screen.findByText(/当前登录或访问权限已失效/);
+		expect(onAccessDenied).toHaveBeenCalledOnce();
+	});
+});

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Client } from "../../pilot/generated/client/index.js";
 import { client as defaultClient } from "../../pilot/generated/client.gen.js";
 import {
@@ -70,7 +70,9 @@ export function useConversationCommands({
 			if (!scope.active || scope.attempt !== attempt) return undefined;
 			attempt.pending = false;
 			attempt.uncertain = result.kind === "unknown";
-			if (result.kind === "denied") scope.denied = true;
+			// 待确认的 404 不立刻闭锁：Agent 被停止时同样是 404，先由页面重新读取 Agent，
+			// 确认确实失去访问权限才调用 confirmDenied（#2570）。
+			if (result.kind === "denied" && !result.ambiguous) scope.denied = true;
 			if (
 				result.kind !== "unknown" &&
 				!(result.kind === "rejected" && result.retryable)
@@ -125,6 +127,12 @@ export function useConversationCommands({
 		});
 	}
 	const visible = scope.active && scope.lastAttemptId === mutation.variables;
+	const [, setConfirmation] = useState(0);
+	const confirmDenied = useCallback(() => {
+		if (!scope.active || scope.denied) return;
+		scope.denied = true;
+		setConfirmation((value) => value + 1);
+	}, [scope]);
 	const revoke = useCallback(() => {
 		if (!scope.active) return;
 		scope.denied = true;
@@ -144,6 +152,7 @@ export function useConversationCommands({
 			!scope.attempt.pending,
 		result: visible ? mutation.data : undefined,
 		revoke,
+		confirmDenied,
 		create: () => start({ kind: "create", body: { schemaVersion: 1 } }),
 		submitText,
 		supplement: submitText,

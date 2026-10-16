@@ -447,6 +447,72 @@ describe("Conversation commands through the generated client", () => {
 	);
 
 	it.each([
+		["a RESOURCE_UNAVAILABLE body", "RESOURCE_UNAVAILABLE"],
+		["no body at all", undefined],
+	] as const)(
+		"leaves a 404 with %s open until the page confirms the denial (#2570)",
+		async (_name, code) => {
+			const { result, requests } = setup(() =>
+				code
+					? Response.json(
+							PilotProtocolErrorV1Schema.parse({
+								schemaVersion: 1,
+								code,
+								retryable: false,
+								message: "Synthetic private failure",
+								traceId: "trace-a",
+							}),
+							{ status: 404 },
+						)
+					: new Response(null, { status: 404 }),
+			);
+			act(() => {
+				result.current.submitText("Synthetic private input");
+			});
+			await waitFor(() =>
+				expect(result.current.result).toEqual({
+					kind: "denied",
+					...(code ? { code } : {}),
+					ambiguous: true,
+				}),
+			);
+			// 404 同时表示「Agent 已停止」：还没有证据证明失去了访问权限，所以不闭锁。
+			expect(result.current.isDenied).toBe(false);
+			act(() => {
+				expect(result.current.submitText("Second try")).toBe(true);
+			});
+			await waitFor(() => expect(requests).toHaveLength(2));
+			// 页面重新读取 Agent 后确认仍可用，才闭锁，之后不再发出任何命令。
+			act(() => result.current.confirmDenied());
+			expect(result.current.isDenied).toBe(true);
+			act(() => {
+				expect(result.current.submitText("Late")).toBe(false);
+				expect(result.current.create()).toBe(false);
+				expect(result.current.retry()).toBe(false);
+			});
+			expect(requests).toHaveLength(2);
+		},
+	);
+
+	it.each([401, 403])(
+		"latches HTTP %s at once even when the body is not a protocol error",
+		async (status) => {
+			const { result, requests } = setup(() => new Response(null, { status }));
+			act(() => {
+				result.current.submitText("Synthetic private input");
+			});
+			await waitFor(() =>
+				expect(result.current.result).toEqual({ kind: "denied" }),
+			);
+			expect(result.current.isDenied).toBe(true);
+			act(() => {
+				expect(result.current.submitText("Late")).toBe(false);
+			});
+			expect(requests).toHaveLength(1);
+		},
+	);
+
+	it.each([
 		["MODEL_SELECTION_INVALID", false],
 		["ORIGINAL_RESPONSE_NOT_STARTED", false],
 		["ORIGINAL_RESPONSE_ALREADY_FINISHED", false],
