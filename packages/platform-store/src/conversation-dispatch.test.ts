@@ -4159,6 +4159,88 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	describe("a stop accepted after the Runtime accepted the submit (#2675)", () => {
+		it("still records the Runtime response, leaving the stop pending for its own claim", async () => {
+			const work = await seed();
+			const { store, decision } = await claim(work.itemId);
+			try {
+				if (decision.outcome !== "claimed") throw new Error("Expected claim");
+				expect(decision.claim.stopPending).toBe(false);
+				expect(
+					await store.prepareRuntimeDispatch({
+						claim: decision.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				// Runtime 已受理这次提交、受理结果还没落库时，stop 被受理。
+				await seedStop(work);
+				await expect(
+					store.recordRuntimeResponse({
+						claim: decision.claim,
+						hostSessionRef: "host-session-dispatch",
+						transition: {
+							executionStatus: "processing",
+							conversationStatus: "active",
+						},
+					}),
+				).resolves.toBe(true);
+				const [state] = await client`
+					select c.host_session_ref, e.status as execution_status,
+						request.status as stop_status, stop_item.status as stop_outbox_status
+					from platform.conversations c
+					join platform.conversation_executions e on e.conversation_id = c.id
+					join platform.conversation_stops request on request.execution_id = e.execution_id
+					join platform.outbox_items stop_item
+						on stop_item.id = ${`conversation:stop:${work.stopRequestId}`}
+					where c.id = ${work.conversationId}
+				`;
+				// 记录下来之后，stop 工作项看到的是可停止的 processing Turn。
+				expect(state).toEqual({
+					host_session_ref: "host-session-dispatch",
+					execution_status: "processing",
+					stop_status: "submitted",
+					stop_outbox_status: "pending",
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("keeps the stop claim's own response strict when its stop changed", async () => {
+			const work = await seed("conversation.turn.submit.v1", {
+				executionStatus: "processing",
+				hostSessionRef: "host-session-existing",
+			});
+			await seedStop(work);
+			const { store, decision } = await claim(
+				`conversation:stop:${work.stopRequestId}`,
+			);
+			try {
+				if (decision.outcome !== "claimed")
+					throw new Error("Expected stop claim");
+				expect(decision.claim.stopPending).toBe(true);
+				// 这条 stop 已经被别的路径收口：stop 认领不能再记录自己的 Runtime 响应。
+				await client`update platform.conversation_stops set status = 'completed'
+					where execution_id = ${work.executionId}`;
+				await expect(
+					store.recordRuntimeResponse({
+						claim: decision.claim,
+						hostSessionRef: "host-session-existing",
+						transition: {
+							executionStatus: "cancelled",
+							conversationStatus: "ready",
+						},
+					}),
+				).resolves.toBe(false);
+				expect(await dispatchState(work)).toMatchObject({
+					execution_status: "processing",
+				});
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
 	it("persists the opaque Host ref and terminal result before completing outbox", async () => {
 		const work = await seed();
 		const { store, decision } = await claim(work.itemId);

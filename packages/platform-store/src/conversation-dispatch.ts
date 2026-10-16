@@ -1274,7 +1274,14 @@ export class PostgresConversationDispatchStoreV1
 			throw new TypeError("RuntimeHost Session reference is invalid");
 		}
 		return transactionResult(this.#client, async (transaction) => {
-			const state = await ownedState(transaction, input.claim);
+			// 提交/重新生成认领时没有 stop、现在有了：「Runtime 已受理这次提交」这个事实不受 stop
+			// 影响，照常记录，让已经在重试的 stop 工作项把停止送到 Runtime。否则本次认领作废、
+			// 租约一直占到期，stop 被拖约 40 秒后只能按已完成收口（#2675）。stop 认领仍严格比较。
+			const state = await ownedState(
+				transaction,
+				input.claim,
+				isTurn(input.claim.operation) && !input.claim.stopPending,
+			);
 			if (
 				!state ||
 				(state.conversation.host_session_ref !== null &&
