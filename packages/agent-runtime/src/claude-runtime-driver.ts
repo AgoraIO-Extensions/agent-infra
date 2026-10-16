@@ -65,6 +65,7 @@ import type {
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeModelDirectory,
 	RuntimeNativeMetadataReadContextV1,
+	RuntimeNativeSkillBindingRequestV1,
 	RuntimeNativeSkillCommandV1,
 	RuntimeOperationFactInputV1,
 } from "./driver.js";
@@ -546,6 +547,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	}
 
 	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
+		if (!command.packageDigest || !command.manifestDigest)
+			nativeSkillUnsupported();
 		const launchOptions = claudeNativeSkillLaunchOptions(
 			this.options.skillDirectory,
 		);
@@ -599,6 +602,23 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				packageDigest: entry.packageDigest,
 				manifestDigest: entry.manifestDigest,
 			},
+		};
+	}
+
+	resolveNativeSkillBinding(input: RuntimeNativeSkillBindingRequestV1) {
+		const directory = this.options.skillDirectory;
+		if (!directory) throw new RuntimeSkillDirectoryErrorV1();
+		const entry = directory
+			.findSkills()
+			.find(
+				(candidate) =>
+					candidate.name === input.capabilityName &&
+					candidate.version === input.capabilitySourceVersion,
+			);
+		if (!entry) throw new RuntimeSkillDirectoryErrorV1();
+		return {
+			packageDigest: entry.packageDigest,
+			manifestDigest: entry.manifestDigest,
 		};
 	}
 

@@ -31,6 +31,7 @@ import type {
 	RuntimeModelCredentialResolver,
 	RuntimeModelDirectory,
 	RuntimeNativeMetadataReadContextV1,
+	RuntimeNativeSkillBindingRequestV1,
 	RuntimeNativeSkillCommandV1,
 	RuntimeOperationFactInputV1,
 } from "./driver.js";
@@ -404,6 +405,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	}
 
 	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
+		if (!command.packageDigest || !command.manifestDigest)
+			nativeSkillUnsupported();
 		if (!this.options.nativeSkillPrompt || !this.options.skillDirectory)
 			nativeSkillUnsupported();
 		const entry = this.options.skillDirectory
@@ -452,6 +455,22 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				packageDigest: entry.packageDigest,
 				manifestDigest: entry.manifestDigest,
 			},
+		};
+	}
+
+	resolveNativeSkillBinding(input: RuntimeNativeSkillBindingRequestV1) {
+		if (!this.options.skillDirectory) nativeSkillUnsupported();
+		const entry = this.options.skillDirectory
+			.findSkills()
+			.find(
+				(candidate) =>
+					candidate.name === input.capabilityName &&
+					candidate.version === input.capabilitySourceVersion,
+			);
+		if (!entry) nativeSkillUnsupported();
+		return {
+			packageDigest: entry.packageDigest,
+			manifestDigest: entry.manifestDigest,
 		};
 	}
 

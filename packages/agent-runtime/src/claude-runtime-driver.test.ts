@@ -323,6 +323,11 @@ it("creates a Claude Applied Skill submit command from the verified root", async
 				},
 			},
 		);
+		expect(() =>
+			driver.createNativeSkillCommand(
+				nativeSkillCommand({ packageDigest: undefined }),
+			),
+		).toThrow();
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });

@@ -63,6 +63,18 @@ export type RuntimeNativeSkillCommandV1 = Readonly<{
 	capabilitySourceVersion: string;
 }>;
 
+export type RuntimeNativeSkillBindingRequestV1 = Readonly<{
+	readonly nativeSessionRef: string;
+	readonly capabilityName: string;
+	readonly capabilitySourceVersion: string;
+	readonly directoryRevision: string;
+}>;
+
+export type RuntimeNativeSkillBindingV1 = Readonly<{
+	readonly packageDigest: string;
+	readonly manifestDigest: string;
+}>;
+
 /** Request-local execution of one verified native command directory entry. */
 export type RuntimeNativeCommandCommandV1 = RuntimeDriverNativeCommandV1;
 
@@ -312,6 +324,10 @@ export interface RuntimeDriver {
 	createNativeSkillCommand?(
 		command: RuntimeNativeSkillCommandV1,
 	): Extract<RuntimeDriverCommand, { kind: "submit-turn" }>;
+	/** Resolve the immutable mounted Skill digests before creating a durable command. */
+	resolveNativeSkillBinding?(
+		input: RuntimeNativeSkillBindingRequestV1,
+	): RuntimeNativeSkillBindingV1;
 	/** Build a durable native command operation without ordinary text fallback. */
 	createNativeCommandCommand?(
 		command: RuntimeNativeCommandCommandV1,

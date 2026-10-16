@@ -137,6 +137,7 @@ import type {
 	RuntimeModelDirectory,
 	RuntimeNativeCommandCommandV1,
 	RuntimeNativeMetadataReadContextV1,
+	RuntimeNativeSkillBindingRequestV1,
 	RuntimeNativeSkillCommandV1,
 	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
@@ -5982,6 +5983,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
+		if (!command.packageDigest || !command.manifestDigest)
+			skillDirectoryInvalid();
 		const directory = this.skillDirectory;
 		if (!directory?.nativeRoot || !directory.nativeSkillPaths)
 			skillDirectoryInvalid();
@@ -6034,6 +6037,34 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				packageDigest: entry.packageDigest,
 				manifestDigest: entry.manifestDigest,
 			},
+		};
+	}
+
+	resolveNativeSkillBinding(input: RuntimeNativeSkillBindingRequestV1) {
+		const directory = this.skillDirectory;
+		if (!directory?.nativeRoot || !directory.nativeSkillPaths)
+			skillDirectoryInvalid();
+		const receipt = this.nativeSkillDirectoryReceipts.get(
+			input.nativeSessionRef,
+		);
+		if (
+			!receipt ||
+			receipt.revision !== input.directoryRevision ||
+			receipt.snapshot !==
+				JSON.stringify([directory.generationId, directory.findSkills()])
+		)
+			skillDirectoryInvalid();
+		const entry = directory
+			.findSkills()
+			.find(
+				(candidate) =>
+					candidate.name === input.capabilityName &&
+					candidate.version === input.capabilitySourceVersion,
+			);
+		if (!entry) skillDirectoryInvalid();
+		return {
+			packageDigest: entry.packageDigest,
+			manifestDigest: entry.manifestDigest,
 		};
 	}
 
