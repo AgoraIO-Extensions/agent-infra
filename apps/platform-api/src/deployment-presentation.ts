@@ -57,7 +57,8 @@ export function createDeploymentPresentation(input: {
 	);
 	return async ({ agentId, configuration, management }) => {
 		const { traceId } = requestMetadata(input.identityScope.currentRequest());
-		const identity = await input.identityScope.currentIdentity(traceId);
+		// 只读展示：同一个请求里的所有 Agent 共用一次身份解析（#2632）。
+		const identity = await input.identityScope.requestIdentity(traceId);
 		const runtime = await input.configurationQuery.readRuntimePresentation({
 			agentId,
 			actorId: identity.userId,

@@ -83,6 +83,32 @@ function sourceMatches(
 export function createPlatformProjectionReaders(
 	dependencies: ProjectionReaderDependencies,
 ) {
+	// 同一个请求里同一组 Owner 只解析一次：列表接口对每个 Agent 都要展示 Owner，之前每一项都
+	// 重新解析同一个 Owner（#2632）。键是路由为这个请求解析出的身份对象，请求结束后不再被引用，
+	// 记忆随之释放；下一个请求是新的身份对象，所以从不跨请求复用。
+	const ownersByRequest = new WeakMap<
+		object,
+		Map<string, ReturnType<typeof hydrateBrowserUsers>>
+	>();
+	function owners(
+		request: object,
+		ownerIds: readonly string[],
+		traceId: string,
+	): ReturnType<typeof hydrateBrowserUsers> {
+		let byOwners = ownersByRequest.get(request);
+		if (!byOwners) {
+			byOwners = new Map();
+			ownersByRequest.set(request, byOwners);
+		}
+		const key = JSON.stringify(ownerIds);
+		let hydrated = byOwners.get(key);
+		if (!hydrated) {
+			hydrated = hydrateBrowserUsers(dependencies.identity, ownerIds, traceId);
+			byOwners.set(key, hydrated);
+		}
+		return hydrated;
+	}
+
 	async function configurationProjection(
 		agentId: string,
 		management: AgentManagementStateV1,
@@ -101,12 +127,8 @@ export function createPlatformProjectionReaders(
 			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
 		}
 		const configuration = result.configuration;
-		const [owners, presentation] = await Promise.all([
-			hydrateBrowserUsers(
-				dependencies.identity,
-				configuration.ownerIds,
-				metadata.traceId,
-			),
+		const [hydratedOwners, presentation] = await Promise.all([
+			owners(user, configuration.ownerIds, metadata.traceId),
 			dependencies.presentAgent({ agentId, configuration, management }),
 		]);
 		if (!sourceMatches(configuration, presentation.source)) {
@@ -116,7 +138,7 @@ export function createPlatformProjectionReaders(
 			configuration,
 			presentation,
 			wire: {
-				owners,
+				owners: hydratedOwners,
 				availability: configuration.availability,
 				modelOptions: presentation.modelOptions,
 				defaultModelOptionId: configuration.defaultModelOptionId,
