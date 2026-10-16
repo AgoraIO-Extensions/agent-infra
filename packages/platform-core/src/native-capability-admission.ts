@@ -167,8 +167,8 @@ export interface NativeCapabilityAdmissionScopeV1 {
 	readonly conversationId: string;
 	readonly sessionGeneration: number;
 	readonly authorizationRevision: string;
-	/** Present for the production Store/Worker metadata authority. */
-	readonly hostScopeRef?: string;
+	/** Null for controlled legacy overrides without a bound Host. */
+	readonly hostScopeRef: string | null;
 }
 
 export interface NativeCapabilityMetadataRevalidationPortV1 {
@@ -522,6 +522,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							"conversationId",
 							"sessionGeneration",
 							"authorizationRevision",
+							"hostScopeRef",
 						]);
 						if (
 							scope.agentId !== authority.agentId ||
@@ -530,10 +531,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							scope.conversationId !== request.conversationId ||
 							scope.sessionGeneration !== conversation.sessionGeneration ||
 							scope.authorizationRevision !== authority.authorizationRevision ||
-							(scope.hostScopeRef !== undefined &&
-								(typeof scope.hostScopeRef !== "string" ||
-									scope.hostScopeRef.length === 0 ||
-									scope.hostScopeRef !== conversation.hostSessionRef)) ||
+							scope.hostScopeRef !== conversation.hostSessionRef ||
 							selected.id !== request.capabilityId ||
 							selected.directoryRevision !== request.directoryRevision
 						)
@@ -576,6 +574,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							"conversationId",
 							"sessionGeneration",
 							"authorizationRevision",
+							"hostScopeRef",
 						]);
 						const currentScope = {
 							agentId: latestScope.agentId as string,
@@ -585,14 +584,12 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							sessionGeneration: latestScope.sessionGeneration as number,
 							authorizationRevision:
 								latestScope.authorizationRevision as string,
-							...(typeof latestScope.hostScopeRef === "string"
-								? { hostScopeRef: latestScope.hostScopeRef }
-								: {}),
+							hostScopeRef: latestScope.hostScopeRef as string | null,
 						};
 						if (
 							!isDeepStrictEqual(latestSelected, selected) ||
 							!isDeepStrictEqual(currentScope, scope) ||
-							(currentScope.hostScopeRef !== undefined &&
+							(currentScope.hostScopeRef !== null &&
 								currentScope.hostScopeRef.length === 0)
 						)
 							return { outcome: "stale" };
@@ -695,9 +692,8 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 						latestScopeForCommit !== undefined &&
 						currentConversation.sessionGeneration ===
 							latestScopeForCommit.sessionGeneration &&
-						(latestScopeForCommit.hostScopeRef === undefined ||
-							currentConversation.hostSessionRef ===
-								latestScopeForCommit.hostScopeRef) &&
+						currentConversation.hostSessionRef ===
+							latestScopeForCommit.hostScopeRef &&
 						dependencies.metadata.isCurrent({
 							request,
 							capability: plan.capability,

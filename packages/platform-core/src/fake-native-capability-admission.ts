@@ -63,6 +63,7 @@ export class FakeNativeCapabilityMetadataRevalidationV1
 				conversationId: input.request.conversationId,
 				sessionGeneration: input.sessionGeneration,
 				authorizationRevision: input.authority.authorizationRevision,
+				hostScopeRef: null,
 			}),
 			capability: Object.freeze({
 				...selected,
