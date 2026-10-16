@@ -25,6 +25,7 @@ import {
 	BrowserHandoffPanel,
 	type BrowserSideEffectConfirmationV1,
 } from "../agent-discovery/browser-handoff-panel.js";
+import { BrowserAuditView } from "./browser-audit-view.js";
 import { BrowserOperationStatus } from "./browser-operation-status.js";
 import type { ConversationCapabilitySelectionV1 } from "./conversation-capability-picker.js";
 import { ConversationCapabilityPickerPanel } from "./conversation-capability-picker-panel.js";
@@ -731,6 +732,11 @@ export function ActiveConversation({
 					</p>
 				)}
 				<BrowserOperationStatus
+					events={timeline.events}
+					executionId={latestExecution}
+				/>
+				<BrowserAuditView
+					conversationId={conversationId}
 					events={timeline.events}
 					executionId={latestExecution}
 				/>
