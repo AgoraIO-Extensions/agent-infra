@@ -478,7 +478,8 @@ function createSessionSandboxAllocationResolverV1(
 			templateBinding.imageDigest !== deployment.imageDigest ||
 			templateBinding.driver !== "codex" ||
 			deployment.runtimeManifest.interactionMode !== "platform-adapter" ||
-			!isNativeMetadataWorkerOriginV1(auth.nativeMetadataWorkerOrigin) ||
+			(workload.policy.nativeMetadataWorkerEgress !== undefined &&
+				!isNativeMetadataWorkerOriginV1(auth.nativeMetadataWorkerOrigin)) ||
 			(requireCurrentTemplateTrust &&
 				!workload.templateModelBindings.some((trusted) =>
 					isDeepStrictEqual({ ...trusted }, templateBinding),

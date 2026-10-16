@@ -54,7 +54,7 @@ export interface SessionSandboxRuntimeInputV1 {
 	/** Per-Sandbox transport token from {@link sessionSandboxServiceTokenV1}. */
 	readonly serviceToken: string;
 	/** Deployment-approved in-cluster Worker origin for native metadata callbacks. */
-	readonly nativeMetadataWorkerOrigin: string;
+	readonly nativeMetadataWorkerOrigin?: string;
 }
 
 /**
@@ -293,6 +293,11 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 	)
 		throw new WorkloadKubernetesError("policy");
 	validateNativeMetadataWorkerEgressV1(value.egress.nativeMetadataWorkerEgress);
+	if (
+		value.egress.nativeMetadataWorkerEgress !== undefined &&
+		!isNativeMetadataWorkerOriginV1(value.runtime.nativeMetadataWorkerOrigin)
+	)
+		throw new WorkloadKubernetesError("policy");
 	// Rejects any destination the shared Agent-level compiler would reject.
 	workloadEgressRulesV1(value.egress);
 	validateRuntimeInput(value.runtime);
@@ -303,8 +308,10 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 		if (
 			!runtime ||
 			typeof runtime !== "object" ||
-			Object.keys(runtime).sort().join(",") !==
-				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,nativeMetadataWorkerOrigin,serviceToken,workerId" ||
+			![
+				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,serviceToken,workerId",
+				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,nativeMetadataWorkerOrigin,serviceToken,workerId",
+			].includes(Object.keys(runtime).sort().join(",")) ||
 			runtime.driver !== "codex" ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
 				(item) => typeof item === "string" && runtimeTextPattern.test(item),
@@ -315,7 +322,8 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 			typeof runtime.serviceToken !== "string" ||
 			!sessionSandboxTokenPattern.test(runtime.serviceToken) ||
 			typeof runtime.modelConfiguration !== "string" ||
-			!isNativeMetadataWorkerOriginV1(runtime.nativeMetadataWorkerOrigin)
+			(runtime.nativeMetadataWorkerOrigin !== undefined &&
+				!isNativeMetadataWorkerOriginV1(runtime.nativeMetadataWorkerOrigin))
 		)
 			throw new Error();
 		// Keyless V4 only: static model credentials are never projected here.
@@ -398,14 +406,18 @@ function runtimeEnvironment(
 			name: "AGENT_INFRA_RUNTIME_SERVICE_TOKEN",
 			valueFrom: secretRef("token"),
 		},
-		{
-			name: "AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN",
-			value: runtime.nativeMetadataWorkerOrigin,
-		},
-		{
-			name: "AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN",
-			valueFrom: secretRef("token"),
-		},
+		...(runtime.nativeMetadataWorkerOrigin === undefined
+			? []
+			: [
+					{
+						name: "AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN",
+						value: runtime.nativeMetadataWorkerOrigin,
+					},
+					{
+						name: "AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN",
+						valueFrom: secretRef("token"),
+					},
+				]),
 	];
 }
 

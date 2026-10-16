@@ -1514,10 +1514,6 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 		],
 		["another driver", { driver: "claude" }],
 		["an extra input", { credential: "synthetic" }],
-		[
-			"a missing native metadata Worker origin",
-			{ nativeMetadataWorkerOrigin: undefined },
-		],
 	])("rejects %s before any resource write", async (_name, override) => {
 		const client = api();
 		let writes = 0;
@@ -1534,6 +1530,42 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			adapter.apply({
 				...allocation,
 				runtime: { ...allocation.runtime, ...override },
+			} as SessionSandboxAllocationV1),
+		).rejects.toMatchObject({ code: "policy" });
+		expect(writes).toBe(0);
+	});
+
+	it("rejects a missing native metadata Worker origin when callback egress is enabled", async () => {
+		const client = api();
+		let writes = 0;
+		const adapter = createSessionSandboxWorkloadAdapterV1({
+			client: {
+				...client,
+				async create(object) {
+					writes++;
+					return client.create(object);
+				},
+			},
+		});
+		await expect(
+			adapter.apply({
+				...allocation,
+				runtime: {
+					...allocation.runtime,
+					nativeMetadataWorkerOrigin: undefined,
+				},
+				egress: {
+					...allocation.egress,
+					nativeMetadataWorkerEgress: [
+						{
+							destination: {
+								namespace: "platform",
+								podLabels: { "app.kubernetes.io/component": "platform-worker" },
+							},
+							port: 3004,
+						},
+					],
+				},
 			} as SessionSandboxAllocationV1),
 		).rejects.toMatchObject({ code: "policy" });
 		expect(writes).toBe(0);
