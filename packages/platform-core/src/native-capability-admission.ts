@@ -167,6 +167,8 @@ export interface NativeCapabilityAdmissionScopeV1 {
 	readonly conversationId: string;
 	readonly sessionGeneration: number;
 	readonly authorizationRevision: string;
+	/** Null for controlled legacy overrides without a bound Host. */
+	readonly hostScopeRef: string | null;
 }
 
 export interface NativeCapabilityMetadataRevalidationPortV1 {
@@ -185,7 +187,7 @@ export interface NativeCapabilityMetadataRevalidationPortV1 {
 	isCurrent(input: {
 		readonly request: NativeCapabilityAdmissionRequestV1;
 		readonly capability: NativeCapabilityAdmissionCapabilityV1;
-		readonly sessionGeneration: number;
+		readonly scope: NativeCapabilityAdmissionScopeV1;
 	}): boolean;
 }
 
@@ -208,7 +210,10 @@ export interface NativeCapabilityAdmissionTransactionPortV1 {
 					}
 			  >
 		>,
-		isCurrent: (plan: NativeCapabilityInvocationPlanV1) => boolean,
+		isCurrent: (
+			plan: NativeCapabilityInvocationPlanV1,
+			conversation: ConversationExecutionConversationStateV1,
+		) => boolean,
 		isAuthorized: () => Promise<boolean>,
 	): Promise<NativeCapabilityAdmissionDecisionV1>;
 }
@@ -477,6 +482,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 				return { outcome: "denied", reason: "authorization_lost" };
 			const requestDigest = nativeCapabilityAdmissionRequestDigestV1(request);
 			try {
+				let latestScopeForCommit: NativeCapabilityAdmissionScopeV1 | undefined;
 				return await dependencies.transaction.admitNativeCapability(
 					{ command: request, authority, requestDigest },
 					async (state) => {
@@ -516,6 +522,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							"conversationId",
 							"sessionGeneration",
 							"authorizationRevision",
+							"hostScopeRef",
 						]);
 						if (
 							scope.agentId !== authority.agentId ||
@@ -524,6 +531,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							scope.conversationId !== request.conversationId ||
 							scope.sessionGeneration !== conversation.sessionGeneration ||
 							scope.authorizationRevision !== authority.authorizationRevision ||
+							scope.hostScopeRef !== conversation.hostSessionRef ||
 							selected.id !== request.capabilityId ||
 							selected.directoryRevision !== request.directoryRevision
 						)
@@ -566,12 +574,26 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							"conversationId",
 							"sessionGeneration",
 							"authorizationRevision",
+							"hostScopeRef",
 						]);
+						const currentScope = {
+							agentId: latestScope.agentId as string,
+							actorId: latestScope.actorId as string,
+							channelId: latestScope.channelId as string,
+							conversationId: latestScope.conversationId as string,
+							sessionGeneration: latestScope.sessionGeneration as number,
+							authorizationRevision:
+								latestScope.authorizationRevision as string,
+							hostScopeRef: latestScope.hostScopeRef as string | null,
+						};
 						if (
 							!isDeepStrictEqual(latestSelected, selected) ||
-							!isDeepStrictEqual(latestScope, scope)
+							!isDeepStrictEqual(currentScope, scope) ||
+							(currentScope.hostScopeRef !== null &&
+								currentScope.hostScopeRef.length === 0)
 						)
 							return { outcome: "stale" };
+						latestScopeForCommit = currentScope;
 						const finalAuthority = await dependencies.authorization.authorize({
 							schemaVersion: 1,
 							operation: "native-capability.invoke",
@@ -589,7 +611,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							!dependencies.metadata.isCurrent({
 								request,
 								capability: latestSelected,
-								sessionGeneration: conversation.sessionGeneration,
+								scope: currentScope,
 							})
 						)
 							return { outcome: "stale" };
@@ -666,11 +688,16 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 						};
 						return freeze(plan);
 					},
-					(plan) =>
+					(plan, currentConversation) =>
+						latestScopeForCommit !== undefined &&
+						currentConversation.sessionGeneration ===
+							latestScopeForCommit.sessionGeneration &&
+						currentConversation.hostSessionRef ===
+							latestScopeForCommit.hostScopeRef &&
 						dependencies.metadata.isCurrent({
 							request,
 							capability: plan.capability,
-							sessionGeneration: plan.sessionGeneration,
+							scope: latestScopeForCommit,
 						}),
 					async () => {
 						try {

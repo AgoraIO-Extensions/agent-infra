@@ -80,6 +80,7 @@ import type { NativeMetadataRoutesDependenciesV1 } from "./http/native-metadata-
 import type { SkillHubAgentBindingRoutesDependenciesV1 } from "./http/skill-hub-agent-binding-routes.js";
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
+import { createNativeCapabilityMetadataRevalidationV1 } from "./native-capability-metadata.js";
 import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
@@ -719,15 +720,24 @@ export function assemblePlatformApi(
 			: undefined);
 	if (
 		input.nativeCapabilityInvocation !== undefined &&
-		input.nativeCapabilityMetadata !== undefined
+		(input.nativeCapabilityMetadata !== undefined ||
+			assembledNativeMetadata !== undefined)
 	)
 		throw new Error("PLATFORM_NATIVE_CAPABILITY_METADATA_DUPLICATE");
 	const nativeCapabilityMetadata = input.nativeCapabilityMetadata;
+	const createDefaultNativeCapabilityMetadata = assembledNativeMetadata
+		? (identity: import("./http/identity.js").IdentityContext) =>
+				createNativeCapabilityMetadataRevalidationV1({
+					query: conversationQuery,
+					reader: assembledNativeMetadata.reader,
+					identity,
+				})
+		: undefined;
 	const assembledNativeCapabilityInvocation:
 		| NativeCapabilityInvocationRouteDependenciesV1
 		| undefined =
 		input.nativeCapabilityInvocation ??
-		(nativeCapabilityMetadata
+		(nativeCapabilityMetadata || createDefaultNativeCapabilityMetadata
 			? {
 					identity: input.identity,
 					buildRequest: async ({ conversationId, body }) => ({
@@ -736,6 +746,11 @@ export function assemblePlatformApi(
 						conversationId,
 					}),
 					admitWithIdentity: async ({ identity, request }) => {
+						const metadata =
+							nativeCapabilityMetadata ??
+							createDefaultNativeCapabilityMetadata?.(identity);
+						if (!metadata)
+							throw new Error("Native capability metadata unavailable");
 						const admission = createNativeCapabilityAdmissionUseCaseV1({
 							authorization: {
 								async authorize(authorizationRequest) {
@@ -748,7 +763,7 @@ export function assemblePlatformApi(
 										: { outcome: "denied" as const };
 								},
 							},
-							metadata: nativeCapabilityMetadata,
+							metadata,
 							transaction: conversationTransaction,
 						});
 						return admission.admit(request);

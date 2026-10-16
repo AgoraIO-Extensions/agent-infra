@@ -67,7 +67,7 @@ const projection = {
 function createHarness(
 	options: Partial<FakeNativeCapabilityAdmissionStoreOptionsV1> = {},
 	metadata: NativeCapabilityMetadataRevalidationPortV1 = new FakeNativeCapabilityMetadataRevalidationV1(
-		{ projection },
+		{ projection, hostScopeRef: conversation.hostSessionRef },
 	),
 ) {
 	const store = new FakeNativeCapabilityAdmissionStoreV1({

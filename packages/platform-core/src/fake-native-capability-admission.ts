@@ -3,6 +3,7 @@ import type { ConversationExecutionAuthorityV1 } from "./conversation-execution-
 import {
 	type NativeCapabilityAdmissionCapabilityV1,
 	type NativeCapabilityAdmissionRequestV1,
+	type NativeCapabilityAdmissionScopeV1,
 	type NativeCapabilityMetadataProjectionV1,
 	type NativeCapabilityMetadataRevalidationPortV1,
 	parseNativeCapabilityMetadataProjectionV1,
@@ -14,16 +15,21 @@ export class FakeNativeCapabilityMetadataRevalidationV1
 {
 	#projection: NativeCapabilityMetadataProjectionV1;
 	#available: boolean;
+	#scope: NativeCapabilityAdmissionScopeV1 | undefined;
 
 	constructor(input: {
 		readonly projection: NativeCapabilityMetadataProjectionV1;
 		readonly available?: boolean;
+		readonly hostScopeRef?: string | null;
 	}) {
 		this.#projection = parseNativeCapabilityMetadataProjectionV1(
 			input.projection,
 		);
 		this.#available = input.available ?? true;
+		this.#hostScopeRef =
+			input.hostScopeRef === undefined ? "host-session-1" : input.hostScopeRef;
 	}
+	#hostScopeRef: string | null;
 
 	setProjection(projection: NativeCapabilityMetadataProjectionV1): void {
 		this.#projection = parseNativeCapabilityMetadataProjectionV1(projection);
@@ -53,16 +59,19 @@ export class FakeNativeCapabilityMetadataRevalidationV1
 			(selected.kind === "skill" && selected.availability !== "discovered")
 		)
 			return { outcome: "disabled" as const };
+		const scope = Object.freeze({
+			agentId: input.authority.agentId,
+			actorId: input.authority.actorId,
+			channelId: input.authority.channelId,
+			conversationId: input.request.conversationId,
+			sessionGeneration: input.sessionGeneration,
+			authorizationRevision: input.authority.authorizationRevision,
+			hostScopeRef: this.#hostScopeRef,
+		});
+		this.#scope = scope;
 		return {
 			outcome: "allowed" as const,
-			scope: Object.freeze({
-				agentId: input.authority.agentId,
-				actorId: input.authority.actorId,
-				channelId: input.authority.channelId,
-				conversationId: input.request.conversationId,
-				sessionGeneration: input.sessionGeneration,
-				authorizationRevision: input.authority.authorizationRevision,
-			}),
+			scope,
 			capability: Object.freeze({
 				...selected,
 				directoryRevision: projection.revision,
@@ -73,10 +82,11 @@ export class FakeNativeCapabilityMetadataRevalidationV1
 	isCurrent(input: {
 		readonly request: NativeCapabilityAdmissionRequestV1;
 		readonly capability: NativeCapabilityAdmissionCapabilityV1;
-		readonly sessionGeneration: number;
+		readonly scope: NativeCapabilityAdmissionScopeV1;
 	}): boolean {
 		if (!this.#available) return false;
-		void input.sessionGeneration;
+		if (!this.#scope || !isDeepStrictEqual(this.#scope, input.scope))
+			return false;
 		const projection = parseNativeCapabilityMetadataProjectionV1(
 			this.#projection,
 		);

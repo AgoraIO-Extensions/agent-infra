@@ -338,6 +338,7 @@ export {
 	type LdapSessionStore,
 } from "./ldap-browser.js";
 export { createPostgresLdapBrowserDeployment } from "./ldap-browser-deployment.js";
+export { createNativeCapabilityMetadataRevalidationV1 } from "./native-capability-metadata.js";
 export { createWorkerRuntimeModelDirectoryTransportV1 } from "./runtime-model-directory-transport.js";
 export {
 	createRuntimeModelSelectionReaderFromDispatchV1,
