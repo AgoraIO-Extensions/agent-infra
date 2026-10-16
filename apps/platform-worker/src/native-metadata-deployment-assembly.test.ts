@@ -85,7 +85,7 @@ describe("native metadata deployment assembly", () => {
 					sessionGeneration: bindingRequest.scope.sessionGeneration,
 					authorizationRevision: bindingRequest.scope.authorizationRevision,
 					originalHostScopeRef: "host-runtime-target",
-					workload: {} as never,
+					workloadState: { verified: {} } as never,
 					sandboxResource: sandboxResource as never,
 				})),
 			};
@@ -156,7 +156,7 @@ describe("native metadata deployment assembly", () => {
 						sessionGeneration: bindingRequest.scope.sessionGeneration,
 						authorizationRevision: bindingRequest.scope.authorizationRevision,
 						originalHostScopeRef: "new-host",
-						workload: {} as never,
+						workloadState: { verified: {} } as never,
 						sandboxResource: null,
 					}),
 			},

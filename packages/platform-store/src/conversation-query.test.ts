@@ -1481,7 +1481,7 @@ describe("PostgreSQL native metadata current Runtime target scope", () => {
 				executionId: "execution-conversation-1",
 				originalHostScopeRef: "native-runtime-target-host",
 				sandboxResource: null,
-				workload: { phase: "ready", agentId: "agent-1" },
+				workloadState: { phase: "ready", agentId: "agent-1" },
 			});
 		} finally {
 			await client`update platform.conversation_executions set sandbox_id=${sandbox.sandbox_id}
@@ -1506,7 +1506,7 @@ describe("PostgreSQL native metadata current Runtime target scope", () => {
 				await query.readNativeMetadataRuntimeTargetScopeV1(request);
 			expect(result).toMatchObject({
 				originalHostScopeRef: "native-runtime-target-host",
-				workload: { phase: "ready", agentId: "agent-1" },
+				workloadState: { phase: "ready", agentId: "agent-1" },
 				sandboxResource: {
 					status: "ready",
 					desiredState: "running",

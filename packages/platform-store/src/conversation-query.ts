@@ -202,7 +202,7 @@ export interface NativeMetadataRuntimeTargetScopeResponseV1 {
 	readonly sessionGeneration: number;
 	readonly authorizationRevision: string;
 	readonly originalHostScopeRef: string;
-	readonly workload: WorkloadReconciliationStateV1;
+	readonly workloadState: WorkloadReconciliationStateV1;
 	readonly sandboxResource: SessionSandboxRuntimeStateV1 | null;
 }
 
@@ -1652,7 +1652,7 @@ export class PostgresConversationQueryV1 {
 						sessionGeneration: safeInteger(row.execution_session_generation, 1),
 						authorizationRevision: row.execution_authorization_revision,
 						originalHostScopeRef: row.execution_host_scope_ref,
-						workload,
+						workloadState: workload,
 						sandboxResource,
 					};
 				},

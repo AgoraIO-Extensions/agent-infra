@@ -287,6 +287,7 @@ export function createPlatformNativeMetadataRuntimeTargetResolverV1(options: {
 				if (
 					input.signal.aborted ||
 					!current ||
+					!current.workloadState.verified ||
 					!sameRuntimeTargetScope(current, binding)
 				)
 					return null;
@@ -300,7 +301,7 @@ export function createPlatformNativeMetadataRuntimeTargetResolverV1(options: {
 					principal: current.principal,
 					sessionGeneration: current.sessionGeneration,
 					signal: input.signal,
-					workload: current.workload,
+					workload: current.workloadState,
 					...(current.sandboxResource
 						? { sandboxResource: current.sandboxResource }
 						: {}),
