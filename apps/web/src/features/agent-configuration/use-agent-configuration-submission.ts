@@ -2,17 +2,21 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLayoutEffect, useRef } from "react";
 
 import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
+import type { AgentSavedModelConfigurationUpdate } from "./agent-configuration.js";
 import {
 	checkAgentDefaultRelayKey,
 	loadAgentDefaultRelayKey,
 	replaceAgentDefaultRelayKey,
 	updateAgentConfiguration,
+	updateAgentSavedModelConfiguration,
 	upgradeAgentCustomImage,
 } from "./agent-configuration.js";
 
 type AgentConfigurationCommand =
 	| {
-			body: AgentConfigurationUpdateRequestV2Writable;
+			body:
+				| AgentConfigurationUpdateRequestV2Writable
+				| AgentSavedModelConfigurationUpdate;
 			kind: "configuration";
 	  }
 	| {
@@ -36,11 +40,17 @@ export function useAgentConfigurationSubmission(agentId: string) {
 			}
 			try {
 				return command.kind === "configuration"
-					? await updateAgentConfiguration(
-							agentId,
-							command.body,
-							attempt.idempotencyKey,
-						)
+					? command.body.schemaVersion === 4
+						? await updateAgentSavedModelConfiguration(
+								agentId,
+								command.body,
+								attempt.idempotencyKey,
+							)
+						: await updateAgentConfiguration(
+								agentId,
+								command.body,
+								attempt.idempotencyKey,
+							)
 					: await upgradeAgentCustomImage(
 							agentId,
 							command.imageReference,
@@ -106,8 +116,11 @@ export function useAgentConfigurationSubmission(agentId: string) {
 				? relayKeySubmission.error
 				: null,
 		relayKeySubmitting: relayKeySubmission.isPending,
-		saveConfiguration: (body: AgentConfigurationUpdateRequestV2Writable) =>
-			startSubmission({ kind: "configuration", body }),
+		saveConfiguration: (
+			body:
+				| AgentConfigurationUpdateRequestV2Writable
+				| AgentSavedModelConfigurationUpdate,
+		) => startSubmission({ kind: "configuration", body }),
 		upgradeImage: (imageReference: string) =>
 			startSubmission({ kind: "image", imageReference }),
 		/** 仅替换 Key 成功后的状态（含新版本），供页面给出确认提示。 */

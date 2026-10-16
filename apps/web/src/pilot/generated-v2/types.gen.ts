@@ -354,43 +354,6 @@ export type AgentConfigurationUpdateRequestV2 = {
     secrets?: Array<{
         name: string;
     }>;
-} | {
-    availability?: Array<{
-        kind: 'user';
-        userId: string;
-    } | {
-        kind: 'organization';
-        organizationId: string;
-    }>;
-    channels?: Array<{
-        bindingReference: string;
-        enabled: true;
-        kind: 'wecom_bot' | 'wecom_app';
-    } | {
-        enabled: false;
-        kind: 'wecom_bot' | 'wecom_app';
-    }>;
-    coOwnerIds?: Array<string>;
-    environment?: Array<{
-        name: string;
-        value: string;
-    }>;
-    expectedConfigurationRevision: number;
-    expectedKeyVersion: number;
-    modelConfiguration?: {
-        defaultOptionId: string;
-        defaultReasoningLevel: string;
-        options: Array<{
-            endpointId: string;
-            modelId: string;
-            optionId: string;
-            reasoningLevels: Array<string>;
-        }>;
-    };
-    schemaVersion: 4;
-    secrets?: Array<{
-        name: string;
-    }>;
 };
 
 export type AgentLifecycleCommandRequestV1 = {
@@ -1745,45 +1708,6 @@ export type AgentConfigurationUpdateRequestV2Writable = {
         name: string;
         value: string;
     }>;
-} | {
-    availability?: Array<{
-        kind: 'user';
-        userId: string;
-    } | {
-        kind: 'organization';
-        organizationId: string;
-    }>;
-    channels?: Array<{
-        bindingReference: string;
-        enabled: true;
-        kind: 'wecom_bot' | 'wecom_app';
-    } | {
-        enabled: false;
-        kind: 'wecom_bot' | 'wecom_app';
-    }>;
-    coOwnerIds?: Array<string>;
-    environment?: Array<{
-        name: string;
-        value: string;
-    }>;
-    expectedConfigurationRevision: number;
-    expectedKeyVersion: number;
-    modelConfiguration?: {
-        defaultOptionId: string;
-        defaultReasoningLevel: string;
-        options: Array<{
-            credentialValue?: string;
-            endpointId: string;
-            modelId: string;
-            optionId: string;
-            reasoningLevels: Array<string>;
-        }>;
-    };
-    schemaVersion: 4;
-    secrets?: Array<{
-        name: string;
-        value: string;
-    }>;
 };
 
 export type BeginPlatformConnectionInstallationV1Data = {
@@ -3065,6 +2989,99 @@ export type UpdateAgentConfigurationV2Responses = {
 };
 
 export type UpdateAgentConfigurationV2Response = UpdateAgentConfigurationV2Responses[keyof UpdateAgentConfigurationV2Responses];
+
+export type UpdateAgentSavedModelConfigurationV2Data = {
+    body: {
+        availability?: Array<{
+            kind: 'user';
+            userId: string;
+        } | {
+            kind: 'organization';
+            organizationId: string;
+        }>;
+        channels?: Array<{
+            bindingReference: string;
+            enabled: true;
+            kind: 'wecom_bot' | 'wecom_app';
+        } | {
+            enabled: false;
+            kind: 'wecom_bot' | 'wecom_app';
+        }>;
+        coOwnerIds?: Array<string>;
+        environment?: Array<{
+            name: string;
+            value: string;
+        }>;
+        expectedConfigurationRevision: number;
+        expectedKeyVersion: number;
+        modelConfiguration?: {
+            defaultOptionId: string;
+            defaultReasoningLevel: string;
+            options: Array<{
+                credentialValue?: string;
+                endpointId: string;
+                modelId: string;
+                optionId: string;
+                reasoningLevels: Array<string>;
+            }>;
+        };
+        schemaVersion: 4;
+        secrets?: Array<{
+            name: string;
+            value: string;
+        }>;
+    };
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/configuration/saved-model';
+};
+
+export type UpdateAgentSavedModelConfigurationV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type UpdateAgentSavedModelConfigurationV2Error = UpdateAgentSavedModelConfigurationV2Errors[keyof UpdateAgentSavedModelConfigurationV2Errors];
+
+export type UpdateAgentSavedModelConfigurationV2Responses = {
+    /**
+     * Agent configuration
+     */
+    200: AgentProjectionV2;
+};
+
+export type UpdateAgentSavedModelConfigurationV2Response = UpdateAgentSavedModelConfigurationV2Responses[keyof UpdateAgentSavedModelConfigurationV2Responses];
 
 export type GetAgentDefaultRelayKeyV2Data = {
     body?: never;

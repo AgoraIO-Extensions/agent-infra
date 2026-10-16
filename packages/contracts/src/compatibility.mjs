@@ -3025,27 +3025,18 @@ function isKeylessModelReplacementOpenApiAddition(previous, current) {
 // configuration update branch. Strip those additive branches before comparing
 // the historical V2 contract.
 function isSavedKeyCandidateOpenApiAddition(previous, current) {
-	const name = "AgentConfigurationUpdateRequestV2";
-	const currentSchema = current.components?.schemas?.[name];
-	if (!Array.isArray(currentSchema?.anyOf)) return false;
-	const base = currentSchema.anyOf.find(
-		(option) => option?.properties?.schemaVersion?.const === 2,
-	);
-	const saved = currentSchema.anyOf.find(
-		(option) => option?.properties?.schemaVersion?.const === 4,
-	);
-	if (!base || !saved) return false;
-	if (
-		saved.properties?.defaultRelayKey !== undefined ||
-		saved.properties?.expectedConfigurationRevision === undefined ||
-		saved.properties?.expectedKeyVersion === undefined
-	)
-		return false;
 	const normalized = structuredClone(current);
-	normalized.components.schemas[name] = base;
+	const savedPath =
+		normalized.paths?.["/api/v2/agents/{agentId}/configuration/saved-model"];
+	if (!savedPath?.put?.requestBody?.content?.["application/json"]?.schema)
+		return false;
+	const v4 = savedPath.put.requestBody.content["application/json"].schema;
+	if (v4.properties?.expectedKeyVersion === undefined) return false;
+	delete normalized.paths["/api/v2/agents/{agentId}/configuration/saved-model"];
 	const path = "/api/v2/agents/{agentId}/default-relay-key/candidates";
 	if (normalized.paths?.[path]?.get === undefined) return false;
 	delete normalized.paths[path].get;
+	delete normalized.components.schemas.AgentConfigurationUpdateRequestV4;
 	delete normalized.components.schemas.AgentDefaultRelayKeySavedCandidatesV1;
 	return sameValue(previous, normalized);
 }

@@ -10,6 +10,7 @@ import {
 	getAgentDefaultRelayKeyV2,
 	replaceAgentDefaultRelayKeyV2,
 	updateAgentConfigurationV2 as requestUpdateAgentConfiguration,
+	updateAgentSavedModelConfigurationV2,
 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
 	AgentConfigurationUpdateRequestV2Writable,
@@ -26,6 +27,9 @@ import type {
 	ReplaceAgentDefaultRelayKeyV2Responses,
 	UpdateAgentConfigurationV2Errors,
 	UpdateAgentConfigurationV2Responses,
+	UpdateAgentSavedModelConfigurationV2Data,
+	UpdateAgentSavedModelConfigurationV2Errors,
+	UpdateAgentSavedModelConfigurationV2Responses,
 } from "../../pilot/generated-v2/types.gen.js";
 
 export function isAgentConfigurationOwner(
@@ -46,6 +50,8 @@ export type AgentDefaultRelayKeySavedCandidates =
 export type AgentDefaultRelayKeyCheck = AgentDefaultRelayKeyCandidates & {
 	keyVersion: number | null;
 };
+export type AgentSavedModelConfigurationUpdate =
+	UpdateAgentSavedModelConfigurationV2Data["body"];
 
 export async function loadAgentDefaultRelayKey(
 	agentId: string,
@@ -190,6 +196,31 @@ export async function updateAgentConfiguration(
 	if (!result.data) throw requestError(result.error?.retryable !== false);
 	if (result.data.agentId !== agentId) throw requestError(false);
 
+	return result.data;
+}
+
+export async function updateAgentSavedModelConfiguration(
+	agentId: string,
+	body: AgentSavedModelConfigurationUpdate,
+	idempotencyKey: string,
+	client?: Client,
+): Promise<AgentProjectionV2> {
+	const result: Awaited<
+		RequestResult<
+			UpdateAgentSavedModelConfigurationV2Responses,
+			UpdateAgentSavedModelConfigurationV2Errors,
+			false
+		>
+	> = await updateAgentSavedModelConfigurationV2<false>({
+		body,
+		client,
+		headers: { "Idempotency-Key": idempotencyKey },
+		path: { agentId },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	if (!result.data) throw requestError(result.error?.retryable !== false);
+	if (result.data.agentId !== agentId) throw requestError(false);
 	return result.data;
 }
 
