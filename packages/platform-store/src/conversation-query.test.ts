@@ -6,6 +6,7 @@ import {
 	ConversationQueryError,
 	type ConversationQueryScopeV1,
 	PostgresConversationQueryV1,
+	repeatableRead,
 } from "./conversation-query.js";
 import { migratePlatformDatabase } from "./migrate.js";
 import {
@@ -1434,5 +1435,129 @@ describe("long Conversation reads (#1732)", () => {
 		await expect(
 			query.replay(longScope, "long-history", undefined, controller.signal),
 		).rejects.toBeInstanceOf(ConversationQueryError);
+	});
+});
+
+describe("aborted reads release their transaction (#2664)", () => {
+	/** 在期限内看 Promise 是结束了还是挂住了；挂住正是这个缺陷。 */
+	async function outcome(promise: Promise<unknown>, timeoutMs = 5_000) {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			return await Promise.race([
+				promise.then(
+					() => "resolved",
+					() => "rejected",
+				),
+				new Promise<string>((resolve) => {
+					timer = setTimeout(() => resolve("hung"), timeoutMs);
+				}),
+			]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	async function idleInTransaction(applicationName: string) {
+		const [row] = await client<{ count: number }[]>`
+			select count(*)::int as count from pg_stat_activity
+			where application_name = ${applicationName} and state = 'idle in transaction'`;
+		return row?.count ?? 0;
+	}
+
+	it("ends a read aborted between two statements and returns its only connection", async () => {
+		const applicationName = "kiro-2664-between";
+		const reader = postgres(databaseUrl, {
+			max: 1,
+			connection: { application_name: applicationName },
+		});
+		try {
+			const controller = new AbortController();
+			const read = repeatableRead(
+				reader,
+				async (transaction, run) => {
+					await run(transaction`select 1 as first`);
+					// 调用方在两条语句之间断开（例如浏览器关闭了标签页）。
+					controller.abort();
+					await run(transaction`select 2 as second`);
+					return "unreachable";
+				},
+				controller.signal,
+			);
+			expect(await outcome(read)).toBe("rejected");
+			// 唯一的连接已经归还：同一个客户端还能执行查询。
+			expect(
+				await outcome(reader`select 3 as value`.then((rows) => rows[0]?.value)),
+			).toBe("resolved");
+			expect(await idleInTransaction(applicationName)).toBe(0);
+		} finally {
+			await reader.end({ timeout: 1 });
+		}
+	});
+
+	it("ends a read aborted while parameterised statements queue behind a describe (#2664)", async () => {
+		// 新连接上第一次执行带参数的语句要先 describe，postgres-js 会把同一事务里随后的语句放进事务
+		// 本地队列，尚未交给连接；这正是线上会话读取（并行读取消息、执行和事件）的形状。
+		const applicationName = "kiro-2664-describe";
+		const reader = postgres(databaseUrl, {
+			max: 1,
+			connection: { application_name: applicationName },
+		});
+		try {
+			const controller = new AbortController();
+			const seconds = 30;
+			const read = repeatableRead(
+				reader,
+				async (transaction, run) => {
+					await Promise.all([
+						run(transaction`select pg_sleep(${seconds})`),
+						run(transaction`select ${2}::int as second`),
+						run(transaction`select ${3}::int as third`),
+					]);
+					return "unreachable";
+				},
+				controller.signal,
+			);
+			setTimeout(() => controller.abort(), 300);
+			expect(await outcome(read)).toBe("rejected");
+			expect(
+				await outcome(
+					reader`select ${4}::int as value`.then((rows) => rows[0]?.value),
+				),
+			).toBe("resolved");
+			expect(await idleInTransaction(applicationName)).toBe(0);
+		} finally {
+			await reader.end({ timeout: 1 });
+		}
+	});
+
+	it("ends a read aborted while later statements wait behind a running one", async () => {
+		const applicationName = "kiro-2664-queued";
+		const reader = postgres(databaseUrl, {
+			max: 1,
+			connection: { application_name: applicationName },
+		});
+		try {
+			const controller = new AbortController();
+			const read = repeatableRead(
+				reader,
+				async (transaction, run) => {
+					await Promise.all([
+						run(transaction`select pg_sleep(30)`),
+						run(transaction`select 2 as second`),
+						run(transaction`select 3 as third`),
+					]);
+					return "unreachable";
+				},
+				controller.signal,
+			);
+			setTimeout(() => controller.abort(), 300);
+			expect(await outcome(read)).toBe("rejected");
+			expect(
+				await outcome(reader`select 4 as value`.then((rows) => rows[0]?.value)),
+			).toBe("resolved");
+			expect(await idleInTransaction(applicationName)).toBe(0);
+		} finally {
+			await reader.end({ timeout: 1 });
+		}
 	});
 });

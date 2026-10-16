@@ -452,11 +452,11 @@ export class PostgresConversationDispatchStoreV1
 					id
 				limit ${input.limit}
 			`;
+			// 已中止时不触碰这条查询：postgres-js 对尚未执行的查询 cancel() 后再 await，会把
+			// 它交给一个连接，连接什么也不发却被标成「已满」，从此不再归还连接池（#2664）。
+			if (input.signal?.aborted) return [];
 			const onAbort = () => query.cancel();
-			if (input.signal) {
-				if (input.signal.aborted) query.cancel();
-				input.signal.addEventListener("abort", onAbort, { once: true });
-			}
+			input.signal?.addEventListener("abort", onAbort, { once: true });
 			try {
 				const rows = await query;
 				return rows.map((row) => ({
