@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { latestBrowserHandoffTimelineEventV1 } from "./browser-handoff-timeline.js";
+import {
+	latestBrowserHandoffTimelineEventV1,
+	latestBrowserSideEffectTimelineEventV1,
+} from "./browser-handoff-timeline.js";
 
 const event = (handoffId: string) => ({
 	type: "browser.handoff" as const,
@@ -44,5 +47,35 @@ describe("Browser handoff timeline projection", () => {
 				{ type: "browser.handoff", payload: { handoffId: "" } },
 			]),
 		).toBeUndefined();
+	});
+});
+
+describe("Browser side-effect timeline projection", () => {
+	it("retains the latest bounded confirmation event", () => {
+		const confirmation = {
+			type: "browser.side_effect" as const,
+			payload: {
+				confirmationId: "confirmation-1",
+				status: "pending" as const,
+				requestedAt: "2026-10-15T00:00:00.000Z",
+				expiresAt: "2026-10-15T00:05:00.000Z",
+				operation: "click",
+				targetOrigin: "https://example.test",
+				redactedTargetSummary: "提交公开表单",
+				binding: {
+					...event("handoff-1").payload.binding,
+					actionId: "action-1",
+					confirmationId: "confirmation-1",
+					operationRef: "operation-1",
+					attemptRef: "attempt-1",
+				},
+			},
+		};
+		expect(
+			latestBrowserSideEffectTimelineEventV1([
+				{ type: "execution.status", payload: {} },
+				confirmation,
+			]),
+		).toEqual(confirmation);
 	});
 });
