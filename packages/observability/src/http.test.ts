@@ -338,6 +338,60 @@ it("names an unmatched request without its path and ignores bodies that are not 
 	expect(JSON.stringify(events)).not.toMatch(/PRIVATE_/);
 });
 
+it("stops reading a large JSON error body without a length instead of buffering it (#2569)", async () => {
+	const { app, events } = observed();
+	let pulled = 0;
+	app.get("/endless", () => {
+		const chunk = new TextEncoder().encode(`${"x".repeat(1_023)}\n`);
+		return new Response(
+			new ReadableStream({
+				pull(controller) {
+					pulled += 1;
+					controller.enqueue(chunk);
+					// 有限的 2 MiB：回归成「读完整个正文」时用例清晰失败，而不是卡住。
+					if (pulled >= 2_048) controller.close();
+				},
+			}),
+			{ status: 503, headers: { "content-type": "application/json" } },
+		);
+	});
+	const response = await app.request("/endless");
+	expect(response.status).toBe(503);
+	expect(events).toHaveLength(1);
+	expect(events[0]).toMatchObject({
+		outcome: "failed",
+		status: 503,
+		operationRef: "GET.endless",
+	});
+	expect(events[0]?.protocolCode).toBeUndefined();
+	// 4 KiB 上限加上 tee 的预取，远小于「读完整个流」。
+	expect(pulled).toBeLessThan(32);
+	await response.body?.cancel();
+});
+
+it("does not wait for a JSON error body that never arrives (#2569)", async () => {
+	const { app, events } = observed();
+	app.get("/stalled", () => {
+		return new Response(new ReadableStream({ start() {} }), {
+			status: 502,
+			headers: { "content-type": "application/json" },
+		});
+	});
+	const began = performance.now();
+	const response = await app.request("/stalled");
+	const waited = performance.now() - began;
+	expect(response.status).toBe(502);
+	expect(events).toHaveLength(1);
+	expect(events[0]).toMatchObject({
+		outcome: "failed",
+		status: 502,
+		operationRef: "GET.stalled",
+	});
+	expect(events[0]?.protocolCode).toBeUndefined();
+	expect(waited).toBeLessThan(2_000);
+	await response.body?.cancel();
+});
+
 it("keeps the failure fields in the structured log line and out of metric labels (#2569)", async () => {
 	const lines: string[] = [];
 	const telemetry = startObservability({

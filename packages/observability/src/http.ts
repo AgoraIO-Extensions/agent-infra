@@ -28,6 +28,7 @@ export function currentRequestMetadata(): RequestMetadata | undefined {
 
 const protocolCodePattern = /^[A-Z][A-Z0-9_]{2,63}$/;
 const maximumProtocolBodyBytes = 4_096;
+const protocolBodyDeadlineMs = 100;
 
 /**
  * 路由模板转成日志里的操作引用：`POST /api/v2/agents/:agentId/lifecycle` 变成
@@ -46,22 +47,62 @@ function routeOperationRef(method: string, template: string) {
 	return reference.length <= 128 ? reference : undefined;
 }
 
-/** 只取协议错误响应里的 `code`，且必须是大写下划线的有界标识；正文本身不进入日志。 */
+/**
+ * 从克隆的响应里最多读 `maximumProtocolBodyBytes` 字节，超出或出错都当作没有错误码。
+ * 读取从不抛出：调用方在限时到达后会放弃等待，这里的读取还会继续收尾，不能产生未处理的拒绝。
+ */
+async function readBoundedBody(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+) {
+	try {
+		const decoder = new TextDecoder();
+		let text = "";
+		let bytes = 0;
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) return text + decoder.decode();
+			bytes += value.byteLength;
+			if (bytes > maximumProtocolBodyBytes) return undefined;
+			text += decoder.decode(value, { stream: true });
+		}
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * 只取协议错误响应里的 `code`，且必须是大写下划线的有界标识；正文本身不进入日志。
+ * 正文按块读取，超过 4 KiB 或 `protocolBodyDeadlineMs` 内没有读完就放弃，所以无限或停住的
+ * JSON 流既不会占用无界内存，也不会拖住这个请求的完成记录和响应。
+ */
 async function protocolCodeOf(response: Response) {
+	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		if (!response.headers.get("content-type")?.includes("application/json"))
 			return undefined;
 		const declared = Number(response.headers.get("content-length"));
 		if (Number.isFinite(declared) && declared > maximumProtocolBodyBytes)
 			return undefined;
-		const text = await response.clone().text();
-		if (text.length > maximumProtocolBodyBytes) return undefined;
+		reader = response.clone().body?.getReader();
+		if (reader === undefined) return undefined;
+		const text = await Promise.race([
+			readBoundedBody(reader),
+			new Promise<undefined>((resolve) => {
+				timer = setTimeout(() => resolve(undefined), protocolBodyDeadlineMs);
+			}),
+		]);
+		if (text === undefined) return undefined;
 		const code = (JSON.parse(text) as { code?: unknown } | null)?.code;
 		return typeof code === "string" && protocolCodePattern.test(code)
 			? code
 			: undefined;
 	} catch {
 		return undefined;
+	} finally {
+		clearTimeout(timer);
+		// 克隆出来的分支取消后不会影响原响应；这里不等待取消完成（tee 的取消要两个分支都取消才完成）。
+		void reader?.cancel().catch(() => undefined);
 	}
 }
 
