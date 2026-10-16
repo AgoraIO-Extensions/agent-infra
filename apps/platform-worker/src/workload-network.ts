@@ -21,6 +21,8 @@ export interface WorkloadEgressPolicyV1 {
 	}[];
 	/** Compiled from the approved Connection Consumer snapshot/profile, never Runtime input. */
 	readonly connectionEgress?: WorkloadEgressPolicyV1["modelEgress"];
+	/** Fixed Worker native metadata callback destination. */
+	readonly nativeMetadataWorkerEgress?: WorkloadEgressPolicyV1["modelEgress"];
 	readonly dnsEgress?: readonly WorkloadEgressDestinationV1[];
 }
 
@@ -269,18 +271,21 @@ export function workloadEgressRulesV1(
 ): V1NetworkPolicyEgressRule[] {
 	const models = policy.modelEgress ?? [];
 	const connections = policy.connectionEgress ?? [];
+	const nativeMetadata = policy.nativeMetadataWorkerEgress ?? [];
 	const dns = policy.dnsEgress ?? [];
 	if (
 		!Array.isArray(models) ||
 		!Array.isArray(connections) ||
+		!Array.isArray(nativeMetadata) ||
 		!Array.isArray(dns) ||
 		models.length > 128 ||
 		connections.length > 128 ||
+		nativeMetadata.length > 1 ||
 		dns.length > 16
 	)
 		throw new WorkloadKubernetesError("policy");
 	return [
-		...[...models, ...connections].map((entry) => {
+		...[...models, ...connections, ...nativeMetadata].map((entry) => {
 			if (
 				!entry ||
 				Object.keys(entry).sort().join(",") !== "destination,port" ||
