@@ -431,12 +431,17 @@ export function createWorkloadReconciliationV1(dependencies: {
 	const maximumAttempts = dependencies.maximumAttempts ?? 60;
 	if (!Number.isSafeInteger(maximumAttempts) || maximumAttempts < 1)
 		throw new TypeError("Invalid Workload retry limit");
+	const configuredAuthorizationFailureThreshold =
+		dependencies.authorizationFailureThreshold ?? 3;
+	if (
+		!Number.isSafeInteger(configuredAuthorizationFailureThreshold) ||
+		configuredAuthorizationFailureThreshold < 1
+	)
+		throw new TypeError("Invalid Workload authorization failure threshold");
 	const authorizationFailureThreshold = Math.min(
-		dependencies.authorizationFailureThreshold ?? 3,
+		configuredAuthorizationFailureThreshold,
 		maximumAttempts,
 	);
-	if (authorizationFailureThreshold < 1)
-		throw new TypeError("Invalid Workload authorization failure threshold");
 	const probeFailureThreshold = dependencies.probeFailureThreshold ?? 3;
 	if (
 		!Number.isSafeInteger(probeFailureThreshold) ||
@@ -753,7 +758,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 					const previousFailure = state.lastFailure;
 					const consecutiveAttempts =
 						previousFailure?.reason === reason
-							? previousFailure.attempts + 1
+							? Math.min(previousFailure.attempts + 1, maximumAttempts)
 							: 1;
 					const lastFailure = classifyWorkloadFailureDetailsV1(
 						error,
