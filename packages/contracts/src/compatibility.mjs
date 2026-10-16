@@ -1679,27 +1679,84 @@ function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	const normalizedAgentsPath = withoutAgentOwnerScope(
 		current.paths["/api/v2/agents"]?.get,
 	);
+	const normalized = structuredClone(current);
+	// #2618 adds an additive accepted envelope to the existing lifecycle 202
+	// response. Keep the original #2618 lifecycle addition hash stable while
+	// allowing this later response branch to be reviewed independently.
+	const acceptedResponseName = "AgentApiLifecycleAcceptedResponseV1";
+	if (
+		previous.components?.schemas?.[acceptedResponseName] === undefined &&
+		normalized.components?.schemas?.[acceptedResponseName] !== undefined
+	) {
+		const responseSchema =
+			normalized.paths?.["/api/v2/agents/{agentId}/lifecycle"]?.post
+			?.responses?.["202"]?.content?.["application/json"]?.schema;
+		if (Array.isArray(responseSchema?.anyOf)) {
+			const filtered = responseSchema.anyOf.filter(
+				(option) =>
+					option?.$ref !==
+					"#/components/schemas/AgentApiLifecycleAcceptedResponseV1",
+			);
+			if (filtered.length === 1)
+				normalized.paths["/api/v2/agents/{agentId}/lifecycle"].post.responses[
+					"202"
+				].content["application/json"].schema = filtered[0];
+			else responseSchema.anyOf = filtered;
+		} else return false;
+		delete normalized.components.schemas[acceptedResponseName];
+	}
 	const addition = {
 		paths: Object.fromEntries(
 			paths.map((path) => [
 				path,
 				path === "/api/v2/agents"
-					? { ...current.paths?.[path], get: normalizedAgentsPath }
-					: current.paths?.[path],
+					? { ...normalized.paths?.[path], get: normalizedAgentsPath }
+					: normalized.paths?.[path],
 			]),
 		),
 		schemas: Object.fromEntries(
-			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+			schemas.map((name) => [name, normalized.components?.schemas?.[name]]),
 		),
 	};
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
 		"75bcba81cd9d5ab09407ea0ad48f23bc086bb9d9545f25796a0e1fce737a8a58"
+	) {
+		return false;
+	}
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
+// #2618 adds a disjoint accepted envelope to the existing lifecycle 202
+// response. It does not narrow the existing AgentProjectionV2 response.
+function isAgentLifecycleAcceptedResponseOpenApiAddition(previous, current) {
+	const name = "AgentApiLifecycleAcceptedResponseV1";
+	const path = "/api/v2/agents/{agentId}/lifecycle";
+	const before =
+		previous.paths?.[path]?.post?.responses?.["202"]?.content?.[
+			"application/json"
+		]?.schema;
+	const after =
+		current.paths?.[path]?.post?.responses?.["202"]?.content?.[
+			"application/json"
+		]?.schema;
+	if (
+		previous.components?.schemas?.[name] !== undefined ||
+		current.components?.schemas?.[name] === undefined ||
+		!Array.isArray(after?.anyOf) ||
+		!sameValue(after.anyOf[0], {
+			$ref: "#/components/schemas/AgentProjectionV2",
+		}) ||
+		!sameValue(after.anyOf[1], { $ref: `#/components/schemas/${name}` })
 	)
 		return false;
 	const normalized = structuredClone(current);
-	for (const path of paths) delete normalized.paths[path];
-	for (const name of schemas) delete normalized.components.schemas[name];
+	delete normalized.components.schemas[name];
+	normalized.paths[path].post.responses["202"].content[
+		"application/json"
+	].schema = before;
 	return sameValue(previous, normalized);
 }
 
@@ -4458,6 +4515,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isRuntimeNativeCapabilityV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
+			!isAgentLifecycleAcceptedResponseOpenApiAddition(previous, current) &&
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
 			!isApplicationMaterialGrantV2OpenApiAddition(previous, current) &&
 			!isApplicationCredentialIssuerV2OpenApiAddition(previous, current) &&
