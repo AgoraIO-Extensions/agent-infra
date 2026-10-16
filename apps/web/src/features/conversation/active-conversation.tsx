@@ -412,7 +412,7 @@ export function ActiveConversation({
 	const browserEvent = reader.browserHandoffEvent;
 	const browserSideEffectEvent = reader.browserSideEffectEvent;
 	const browserBinding =
-		browserEvent?.payload.binding ?? browserSideEffectEvent?.payload.binding;
+		browserSideEffectEvent?.payload.binding ?? browserEvent?.payload.binding;
 	const browserConfirmation: BrowserSideEffectConfirmationV1 | undefined =
 		browserSideEffectEvent
 			? {

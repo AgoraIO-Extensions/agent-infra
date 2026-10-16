@@ -357,6 +357,7 @@ export class PostgresConversationDispatchStoreV1
 					where conversation_id = ${input.claim.conversationId}
 						and execution_id = ${input.claim.executionId}
 						and event_type = 'browser.side_effect'
+						and event_payload->>'confirmationId' = ${input.confirmationId}
 					order by conversation_cursor desc, event_id desc
 					limit 1
 				`;
