@@ -101,7 +101,25 @@ export const BrowserSideEffectEventV2Schema = z
 			requestedAt: Rfc3339TimestampV1Schema,
 			expiresAt: Rfc3339TimestampV1Schema,
 			operation: z.string().min(1).max(128),
-			targetOrigin: z.string().url().max(2048),
+			targetOrigin: z
+				.string()
+				.url()
+				.max(2048)
+				.refine((value) => {
+					try {
+						const url = new URL(value);
+						return (
+							(url.protocol === "http:" || url.protocol === "https:") &&
+							url.username === "" &&
+							url.password === "" &&
+							url.pathname === "/" &&
+							url.search === "" &&
+							url.hash === ""
+						);
+					} catch {
+						return false;
+					}
+				}, "targetOrigin must be an HTTP(S) origin"),
 			redactedTargetSummary: z.string().min(1).max(1024),
 			binding: BrowserSideEffectBindingV2Schema,
 		}),
@@ -109,7 +127,8 @@ export const BrowserSideEffectEventV2Schema = z
 	.superRefine((value, context) => {
 		if (
 			value.conversationId !== value.payload.binding.conversationId ||
-			value.executionId !== value.payload.binding.executionId
+			value.executionId !== value.payload.binding.executionId ||
+			value.payload.confirmationId !== value.payload.binding.confirmationId
 		) {
 			context.addIssue({
 				code: z.ZodIssueCode.custom,

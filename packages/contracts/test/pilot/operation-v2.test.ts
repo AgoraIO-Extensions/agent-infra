@@ -183,6 +183,12 @@ describe("Pilot mixed-version operation contracts", () => {
 		for (const payload of [
 			{ ...sideEffect.payload, redactedTargetSummary: "x".repeat(1025) },
 			{ ...sideEffect.payload, targetOrigin: "not an origin" },
+			{ ...sideEffect.payload, targetOrigin: "https://example.test/path" },
+			{ ...sideEffect.payload, targetOrigin: "ftp://example.test" },
+			{
+				...sideEffect.payload,
+				confirmationId: "foreign-confirmation",
+			},
 			{
 				...sideEffect.payload,
 				binding: {

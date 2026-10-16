@@ -2191,7 +2191,11 @@ function stripBrowserSideEffectJsonSchemaAdditions(value) {
 			.filter(
 				(item) =>
 					item?.$ref !== "#/$defs/BrowserSideEffectEventV2" &&
-					item?.$ref !== "#/components/schemas/BrowserSideEffectEventV2",
+					item?.$ref !== "#/components/schemas/BrowserSideEffectEventV2" &&
+					!(
+						item?.properties?.type?.const === "browser.side_effect" &&
+						item?.properties?.schemaVersion?.const === 2
+					),
 			)
 			.map(stripBrowserSideEffectJsonSchemaAdditions);
 	if (value !== null && typeof value === "object") {
