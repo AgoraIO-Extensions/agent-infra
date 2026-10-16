@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { createServer } from "node:net";
 import { PassThrough } from "node:stream";
 
+import type { NativeCapabilityInvocationRequestV1 } from "@agent-infra/contracts/pilot";
 import * as telemetryModule from "@agent-infra/observability";
 import {
 	PostgresAgentManagementQueryV1,
@@ -135,11 +136,7 @@ describe("Platform API production assembly", () => {
 		const unavailable = async () => {
 			throw new Error("unused test adapter");
 		};
-		const nativeCapabilityMetadata = {
-			revalidate: async () => ({ outcome: "unavailable" as const }),
-			isCurrent: () => false,
-		};
-		const assembly = assemblePlatformApi({
+		const baseInput = {
 			taskAdmissionPolicy: {
 				maximumWaitingTasksPerAgent: 2,
 				waitingTimeoutMs: 60_000,
@@ -172,8 +169,8 @@ describe("Platform API production assembly", () => {
 				baseUrl: "http://worker.example.test",
 				serviceToken: "worker-service-token",
 			},
-			nativeCapabilityMetadata,
-		});
+		};
+		const assembly = assemblePlatformApi(baseInput);
 		expect(assembly.dependencies.conversation.modelSelection).toBe(
 			modelSelection,
 		);
@@ -184,6 +181,63 @@ describe("Platform API production assembly", () => {
 		expect(assembly.dependencies.nativeMetadataCurrent?.check).toBeDefined();
 		expect(assembly.dependencies.nativeCapabilityInvocation).toBeDefined();
 		return assembly.close();
+	});
+
+	it("rejects a duplicate explicit native capability authority", () => {
+		const unavailable = async () => {
+			throw new Error("unused test adapter");
+		};
+		const identity = {
+			schemaVersion: 1 as const,
+			userId: "user-duplicate",
+			displayName: "Duplicate User",
+			accountStatus: "active" as const,
+			organizationIds: [],
+			roles: ["employee" as const],
+			authorizationRevision: "authorization-duplicate",
+		};
+		const nativeCapabilityMetadata = {
+			revalidate: async () => ({ outcome: "unavailable" as const }),
+			isCurrent: () => false,
+		};
+		const nativeCapabilityInvocation = {
+			identity: {
+				resolve: vi.fn().mockResolvedValue(identity),
+				hydrateUsers: vi.fn().mockResolvedValue([]),
+			},
+			buildRequest: async (input: {
+				readonly conversationId: string;
+				readonly body: NativeCapabilityInvocationRequestV1;
+			}) => ({
+				...input.body,
+				schemaVersion: 1 as const,
+				conversationId: input.conversationId,
+			}),
+			admit: async () => ({ outcome: "unavailable" as const }),
+		};
+		expect(() =>
+			assemblePlatformApi({
+				taskAdmissionPolicy: {
+					maximumWaitingTasksPerAgent: 2,
+					waitingTimeoutMs: 60_000,
+				},
+				databaseUrl: "postgres://invalid:invalid@127.0.0.1:1/invalid",
+				identity: nativeCapabilityInvocation.identity,
+				admissions: {
+					authorizationAdmission: { authorize: unavailable },
+					imageAdmission: { admitImage: unavailable },
+					modelAdmission: { admitModels: unavailable },
+					secretAdmission: { admitSecrets: unavailable },
+					channelAdmission: { admitChannels: unavailable },
+				},
+				allocateApplicationIds: unavailable,
+				prepareApplicationSecrets: unavailable,
+				prepareConfigurationSecrets: unavailable,
+				presentAgent: unavailable,
+				nativeCapabilityInvocation,
+				nativeCapabilityMetadata,
+			}),
+		).toThrow("PLATFORM_NATIVE_CAPABILITY_METADATA_DUPLICATE");
 	});
 
 	it("passes a deployment-owned custom Agent gateway into PlatformAppDependencies", async () => {

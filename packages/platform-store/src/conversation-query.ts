@@ -130,6 +130,29 @@ export type NativeMetadataObjectScopeResponseV1 =
 	};
 
 /**
+ * Store-owned current scope for native capability admission.  The selected
+ * Execution is returned only after the database proves it belongs to the
+ * current Conversation generation, authorization revision and Host binding.
+ */
+export interface NativeCapabilityCurrentScopeRequestV1 {
+	readonly scope: ConversationQueryScopeV1;
+	readonly agentId: string;
+	readonly conversationId: string;
+	readonly signal?: AbortSignal;
+}
+
+export interface NativeCapabilityCurrentScopeResponseV1 {
+	readonly agentId: string;
+	readonly actorId: string;
+	readonly channelId: string;
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly sessionGeneration: number;
+	readonly authorizationRevision: string;
+	readonly currentHostScopeRef: string;
+}
+
+/**
  * Internal callback credential scope for one already-bound native metadata
  * request.  Sandbox identity never enters the public metadata scope DTO.
  */
@@ -266,6 +289,26 @@ interface NativeMetadataObjectScopeRow {
 	readonly session_generation: string | number;
 	readonly authorization_revision: string;
 	readonly original_host_scope_ref: string | null;
+}
+
+interface NativeCapabilityCurrentScopeRow {
+	readonly conversation_id: string;
+	readonly conversation_agent: string;
+	readonly conversation_actor: string;
+	readonly conversation_channel: string;
+	readonly conversation_principal_type: string;
+	readonly conversation_session_generation: string | number;
+	readonly conversation_authorization_revision: string;
+	readonly conversation_host_scope_ref: string | null;
+	readonly execution_id: string;
+	readonly execution_conversation: string;
+	readonly execution_agent: string;
+	readonly execution_actor: string;
+	readonly execution_channel: string;
+	readonly execution_principal_type: string;
+	readonly execution_session_generation: string | number;
+	readonly execution_authorization_revision: string;
+	readonly execution_host_scope_ref: string | null;
 }
 
 interface NativeMetadataCallbackCredentialScopeRow {
@@ -1244,6 +1287,110 @@ export class PostgresConversationQueryV1 {
 							authorizationRevision: row.authorization_revision,
 						}),
 						originalHostScopeRef: row.original_host_scope_ref,
+					};
+				},
+				request.signal,
+			);
+		} catch (error) {
+			if (error instanceof ConversationQueryError) throw error;
+			return unavailable();
+		}
+	}
+
+	/**
+	 * Resolve the current Web Host execution used to revalidate a native
+	 * capability.  Every identity/fence comparison is intentionally repeated in
+	 * SQL and in the result guard so cross-scope, generation, revision, or Host
+	 * drift returns no scope.
+	 */
+	async readNativeCapabilityCurrentScopeV1(
+		request: NativeCapabilityCurrentScopeRequestV1,
+	): Promise<NativeCapabilityCurrentScopeResponseV1 | undefined> {
+		const readScope = scope(request.scope);
+		const agentId = requestText(request.agentId);
+		const conversationId = requestText(request.conversationId);
+		if (readScope.channelId !== "web") return undefined;
+		try {
+			return await repeatableRead(
+				this.#client,
+				async (transaction, run) => {
+					const rows = await run(
+						transaction<NativeCapabilityCurrentScopeRow[]>`
+							/* native_capability_admission.current_scope */
+							select
+								c.id as conversation_id,
+								c.agent_id as conversation_agent,
+								c.actor_id as conversation_actor,
+								c.channel_id as conversation_channel,
+								c.principal_type as conversation_principal_type,
+								c.session_generation as conversation_session_generation,
+								c.authorization_revision as conversation_authorization_revision,
+								c.host_session_ref as conversation_host_scope_ref,
+								e.execution_id,
+								e.conversation_id as execution_conversation,
+								e.agent_id as execution_agent,
+								e.actor_id as execution_actor,
+								e.channel_id as execution_channel,
+								e.principal_type as execution_principal_type,
+								e.session_generation as execution_session_generation,
+								e.authorization_revision as execution_authorization_revision,
+								e.original_submit_host_session_ref as execution_host_scope_ref
+							from platform.conversations c
+							join platform.conversation_executions e
+								on e.conversation_id = c.id
+								and e.agent_id = c.agent_id
+								and e.actor_id = c.actor_id
+								and e.channel_id = c.channel_id
+								and e.principal_type = c.principal_type
+								and e.session_generation = c.session_generation
+								and e.authorization_revision = c.authorization_revision
+								and e.original_submit_host_session_ref = c.host_session_ref
+							where c.id = ${conversationId}
+								and c.agent_id = ${agentId}
+								and c.actor_id = ${readScope.actorId}
+								and c.channel_id = ${readScope.channelId}
+								and c.principal_type = ${readScope.principal?.kind ?? "user"}
+								and c.channel_id = 'web'
+								and c.principal_type = 'user'
+								and c.host_session_ref is not null
+							order by e.updated_at desc, e.execution_id
+							limit 2
+						`,
+					);
+					if (rows.length !== 1) return undefined;
+					const row = rows[0];
+					if (
+						!row ||
+						row.conversation_id !== conversationId ||
+						row.execution_conversation !== row.conversation_id ||
+						row.conversation_agent !== row.execution_agent ||
+						row.conversation_actor !== row.execution_actor ||
+						row.conversation_channel !== row.execution_channel ||
+						row.conversation_principal_type !== row.execution_principal_type ||
+						row.conversation_agent !== agentId ||
+						row.conversation_actor !== readScope.actorId ||
+						row.conversation_channel !== readScope.channelId ||
+						row.conversation_principal_type !== "user" ||
+						row.conversation_host_scope_ref === null ||
+						row.execution_host_scope_ref !== row.conversation_host_scope_ref ||
+						row.execution_session_generation !==
+							row.conversation_session_generation ||
+						row.execution_authorization_revision !==
+							row.conversation_authorization_revision
+					)
+						return undefined;
+					return {
+						agentId: row.conversation_agent,
+						actorId: row.conversation_actor,
+						channelId: row.conversation_channel,
+						conversationId: row.conversation_id,
+						executionId: row.execution_id,
+						sessionGeneration: safeInteger(
+							row.conversation_session_generation,
+							1,
+						),
+						authorizationRevision: row.conversation_authorization_revision,
+						currentHostScopeRef: row.conversation_host_scope_ref,
 					};
 				},
 				request.signal,

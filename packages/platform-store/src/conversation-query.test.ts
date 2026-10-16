@@ -1,6 +1,14 @@
 import { wecomChannelIdV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+} from "vitest";
 
 import {
 	ConversationQueryError,
@@ -1060,6 +1068,152 @@ describe("PostgreSQL original native metadata scope", () => {
 			await client.unsafe(`drop role ${role}`);
 		}
 		expect(await snapshot()).toBe(before);
+	});
+});
+
+describe("PostgreSQL current native capability scope", () => {
+	const relayKeyId = `native-capability-current-${process.pid}`;
+	beforeEach(async () => {
+		await client`
+			insert into platform.relay_key_subjects
+				(purpose, subject_id, last_version, current_version)
+			values ('personal', 'actor-1', 1, 1)
+			on conflict (purpose, subject_id) do nothing
+		`;
+		await client`
+			insert into platform.relay_key_versions
+				(purpose, subject_id, key_version, key_id, ciphertext)
+			values ('personal', 'actor-1', 1, ${relayKeyId}, ${client.json({
+				purpose: "personal",
+				subjectId: "actor-1",
+				keyId: relayKeyId,
+				keyVersion: 1,
+			})})
+			on conflict (purpose, subject_id, key_version) do nothing
+		`;
+		await client`
+			update platform.conversation_executions
+			set runtime_submit_protocol = 'v4',
+				original_operation_digest = ${"a".repeat(43)},
+				execution_source = 'web',
+				relay_key_purpose = 'personal',
+				relay_key_subject_id = 'actor-1',
+				relay_key_id = ${relayKeyId},
+				relay_key_version = 1,
+				original_submit_host_session_ref = 'native-current-host',
+				status = 'completed',
+				session_generation = 1,
+				authorization_revision = 'authorization-1'
+			where execution_id = 'execution-conversation-1'
+		`;
+	});
+	afterEach(async () => {
+		await client`
+			update platform.conversations
+			set status = 'active', session_generation = 1,
+				authorization_revision = 'authorization-1', host_session_ref = null
+			where id = 'conversation-1'
+		`;
+		await client`
+			update platform.conversation_executions
+			set runtime_submit_protocol = null,
+				original_operation_digest = null,
+				execution_source = null,
+				relay_key_purpose = null,
+				relay_key_subject_id = null,
+				relay_key_id = null,
+				relay_key_version = null,
+				original_submit_host_session_ref = null,
+				session_generation = 1,
+				authorization_revision = 'authorization-1',
+				status = 'completed'
+			where execution_id = 'execution-conversation-1'
+		`;
+		await client`
+			delete from platform.relay_key_versions
+			where purpose = 'personal' and subject_id = 'actor-1' and key_id = ${relayKeyId}
+		`;
+	});
+	it("returns only an Execution bound to the current generation, revision and Host", async () => {
+		await client`
+			update platform.conversations
+			set status = 'ready',
+				host_session_ref = 'native-current-host'
+			where id = 'conversation-1'
+		`;
+		try {
+			expect(
+				await query.readNativeCapabilityCurrentScopeV1({
+					scope: actorOne,
+					agentId: "agent-1",
+					conversationId: "conversation-1",
+				}),
+			).toEqual({
+				agentId: "agent-1",
+				actorId: "actor-1",
+				channelId: "web",
+				conversationId: "conversation-1",
+				executionId: "execution-conversation-1",
+				sessionGeneration: 1,
+				authorizationRevision: "authorization-1",
+				currentHostScopeRef: "native-current-host",
+			});
+		} finally {
+			await client`
+				update platform.conversations
+				set status = 'active', host_session_ref = null
+				where id = 'conversation-1'
+			`;
+		}
+	});
+
+	it.each([
+		["cross actor", { actorId: "actor-2", channelId: "web" }],
+		["cross channel", { actorId: "actor-1", channelId: "wecom" }],
+	] as const)("fails closed for %s", async (_label, scope) => {
+		await client`
+			update platform.conversations
+			set host_session_ref = 'native-current-host'
+			where id = 'conversation-1'
+		`;
+		try {
+			expect(
+				await query.readNativeCapabilityCurrentScopeV1({
+					scope,
+					agentId: "agent-1",
+					conversationId: "conversation-1",
+				}),
+			).toBeUndefined();
+		} finally {
+			await client`
+				update platform.conversations
+				set host_session_ref = null
+				where id = 'conversation-1'
+			`;
+		}
+	});
+
+	it("fails closed when generation or Host drifts", async () => {
+		await client`
+			update platform.conversations
+			set host_session_ref = 'native-current-host', session_generation = 2
+			where id = 'conversation-1'
+		`;
+		try {
+			expect(
+				await query.readNativeCapabilityCurrentScopeV1({
+					scope: actorOne,
+					agentId: "agent-1",
+					conversationId: "conversation-1",
+				}),
+			).toBeUndefined();
+		} finally {
+			await client`
+				update platform.conversations
+				set session_generation = 1, host_session_ref = null
+				where id = 'conversation-1'
+			`;
+		}
 	});
 });
 

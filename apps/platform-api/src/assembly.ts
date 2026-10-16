@@ -80,6 +80,7 @@ import type { NativeMetadataRoutesDependenciesV1 } from "./http/native-metadata-
 import type { SkillHubAgentBindingRoutesDependenciesV1 } from "./http/skill-hub-agent-binding-routes.js";
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
+import { createNativeCapabilityMetadataRevalidationV1 } from "./native-capability-metadata.js";
 import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
@@ -722,7 +723,14 @@ export function assemblePlatformApi(
 		input.nativeCapabilityMetadata !== undefined
 	)
 		throw new Error("PLATFORM_NATIVE_CAPABILITY_METADATA_DUPLICATE");
-	const nativeCapabilityMetadata = input.nativeCapabilityMetadata;
+	const nativeCapabilityMetadata =
+		input.nativeCapabilityMetadata ??
+		(assembledNativeMetadata
+			? createNativeCapabilityMetadataRevalidationV1({
+					query: conversationQuery,
+					reader: assembledNativeMetadata.reader,
+				})
+			: undefined);
 	const assembledNativeCapabilityInvocation:
 		| NativeCapabilityInvocationRouteDependenciesV1
 		| undefined =
