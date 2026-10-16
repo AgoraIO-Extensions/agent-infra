@@ -21,11 +21,21 @@ Platform Worker 通过固定轮询发现到期的 Conversation outbox，再在�
 
 2. **发现过滤使用持久、可查询的条件。**
 
-   Store 在 `findDispatchable` 内以窄 SQL `EXISTS` 子查询读取上述 allocation 和 management 字段；不复制完整的 TypeScript 状态机，也不把内存中的 Worker 观测当作权威。普通业务分支的核心谓词固定为：
+   Store 在 `findDispatchable` 内以窄 SQL `EXISTS` 子查询读取上述 allocation 和 management 字段；不复制完整的 TypeScript 状态机，也不把内存中的 Worker 观测当作权威。三类分支彼此互斥，普通业务分支的核心谓词固定为：
 
    ```sql
    and (
      o.operation = 'conversation.turn.stop.v1'
+     or (
+       o.operation in (
+         'conversation.turn.submit.v1',
+         'conversation.turn.regenerate.v1',
+         'conversation.turn.supplement.v1',
+         'conversation.native-capability.invoke.v1',
+         'conversation.browser.handoff.v1'
+       )
+       and o.payload ? 'metadataRecovery'
+     )
      or (
        o.operation = 'conversation.sandbox.reconcile.v1'
        and (
@@ -46,15 +56,23 @@ Platform Worker 通过固定轮询发现到期的 Conversation outbox，再在�
          )
        )
      )
-     or o.payload ? 'metadataRecovery'
-     or exists (
-       select 1
-       from platform.session_sandbox_allocations s
-       where s.conversation_id = c.id
-         and s.status = 'ready'
-         and s.desired_state = 'running'
-         and s.resource_fence > 0
-         and s.resource_observation->>'status' = 'ready'
+     or (
+       o.operation in (
+         'conversation.turn.submit.v1',
+         'conversation.turn.regenerate.v1',
+         'conversation.turn.supplement.v1',
+         'conversation.native-capability.invoke.v1',
+         'conversation.browser.handoff.v1'
+       )
+       and exists (
+         select 1
+         from platform.session_sandbox_allocations s
+         where s.conversation_id = c.id
+           and s.status = 'ready'
+           and s.desired_state = 'running'
+           and s.resource_fence > 0
+           and s.resource_observation->>'status' = 'ready'
+       )
      )
    )
    ```
