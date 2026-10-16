@@ -1060,12 +1060,12 @@ export function registerV2ManagementRoutes(
 					agentId,
 					metadata.traceId,
 				);
-				const fallback = await projectAgent(
+				const fallbackPromise = projectAgent(
 					dependencies,
 					current,
 					identity,
 					metadata,
-				);
+				).catch(() => undefined);
 				await dependencies.configuration.upgradeCustomImage(
 					{
 						schemaVersion: 1,
@@ -1081,6 +1081,7 @@ export function registerV2ManagementRoutes(
 						rawRequestDigest,
 					},
 				);
+				const fallback = await fallbackPromise;
 				try {
 					const agent = await agentOrUnavailable(
 						dependencies,
@@ -1093,6 +1094,8 @@ export function registerV2ManagementRoutes(
 						202,
 					);
 				} catch {
+					if (fallback === undefined)
+						fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 					return context.json(fallback, 202);
 				}
 			}
@@ -1107,12 +1110,12 @@ export function registerV2ManagementRoutes(
 				agentId,
 				metadata.traceId,
 			);
-			const fallback = await projectAgent(
+			const fallbackPromise = projectAgent(
 				dependencies,
 				current,
 				identity,
 				metadata,
-			);
+			).catch(() => undefined);
 			const commands = {
 				stop: "stop_agent",
 				restart: "restart_agent",
@@ -1134,6 +1137,7 @@ export function registerV2ManagementRoutes(
 				),
 				metadata.traceId,
 			);
+			const fallback = await fallbackPromise;
 			try {
 				const agent = await agentOrUnavailable(
 					dependencies,
@@ -1146,6 +1150,8 @@ export function registerV2ManagementRoutes(
 					202,
 				);
 			} catch {
+				if (fallback === undefined)
+					fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 				return context.json(
 					committedProjection(fallback, decision.result.status),
 					202,

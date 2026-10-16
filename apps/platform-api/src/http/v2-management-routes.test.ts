@@ -860,6 +860,53 @@ describe("lifecycle command failures are observable (#2569)", () => {
 		expect(upgradeCustomImage).toHaveBeenCalledOnce();
 	});
 
+	it("does not let a failed projection cache mask a denied command", async () => {
+		const { app, executeManagementCommand } = createApp({
+			projectionFailure: true,
+		});
+		executeManagementCommand.mockResolvedValueOnce({
+			outcome: "denied",
+			writePlan: null,
+		});
+
+		const response = await app.request("/api/v2/agents/agent-1/lifecycle", {
+			method: "POST",
+			headers,
+			body: restart,
+		});
+
+		expect(response.status).toBe(404);
+		expect(PilotProtocolErrorV1Schema.parse(await response.json()).code).toBe(
+			"RESOURCE_UNAVAILABLE",
+		);
+		expect(executeManagementCommand).toHaveBeenCalledOnce();
+	});
+
+	it("keeps image-upgrade failures mapped when the projection cache is unavailable", async () => {
+		const { app, upgradeCustomImage } = createApp({
+			projectionFailure: true,
+		});
+		upgradeCustomImage.mockRejectedValueOnce(
+			new Error("private upgrade failure"),
+		);
+
+		const response = await app.request("/api/v2/agents/agent-1/lifecycle", {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				schemaVersion: 1,
+				command: "upgrade_custom_image",
+				imageReference: "registry.example/agent:v2",
+			}),
+		});
+
+		expect(response.status).toBe(500);
+		expect(PilotProtocolErrorV1Schema.parse(await response.json()).code).toBe(
+			"INTERNAL_ERROR",
+		);
+		expect(upgradeCustomImage).toHaveBeenCalledOnce();
+	});
+
 	it.each([
 		[
 			"denied",
