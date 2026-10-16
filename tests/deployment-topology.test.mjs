@@ -741,6 +741,22 @@ test("native metadata Worker gateway is opt-in and restricted to Platform API", 
 			},
 		],
 	);
+	const sandboxIngressKeys = new Set(
+		policy.spec.ingress[1].from[0].podSelector.matchExpressions.map(
+			(expression) => expression.key,
+		),
+	);
+	const apiLabels = resource(
+		resources,
+		"Deployment",
+		"topology-agent-infra-platform-api",
+	).spec.template.metadata.labels;
+	for (const key of sandboxIngressKeys)
+		assert.equal(
+			Object.hasOwn(apiLabels, key),
+			false,
+			`Platform API must not satisfy Sandbox ingress selector ${key}`,
+		);
 	const apiEgress = resource(
 		resources,
 		"NetworkPolicy",
