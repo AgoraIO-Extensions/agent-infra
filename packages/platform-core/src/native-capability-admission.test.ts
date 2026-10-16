@@ -126,6 +126,31 @@ function useCase(
 }
 
 describe("native capability admission contract", () => {
+	it("keeps the fake metadata scope bound for synchronous current checks", async () => {
+		const fake = new FakeNativeCapabilityMetadataRevalidationV1({ projection });
+		const allowed = await fake.revalidate({
+			request,
+			authority,
+			sessionGeneration: conversation.sessionGeneration,
+		});
+		if (allowed.outcome !== "allowed") throw new Error("Expected metadata");
+		const capability = allowed.capability;
+		expect(
+			fake.isCurrent({
+				request,
+				capability,
+				scope: allowed.scope,
+			}),
+		).toBe(true);
+		expect(
+			fake.isCurrent({
+				request,
+				capability,
+				scope: { ...allowed.scope, hostScopeRef: "foreign-host" },
+			}),
+		).toBe(false);
+	});
+
 	it("strictly snapshots bounded requests and rejects extra fields", () => {
 		expect(parseNativeCapabilityAdmissionRequestV1(request)).toEqual(request);
 		expect(() =>

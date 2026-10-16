@@ -15,6 +15,7 @@ export class FakeNativeCapabilityMetadataRevalidationV1
 {
 	#projection: NativeCapabilityMetadataProjectionV1;
 	#available: boolean;
+	#scope: NativeCapabilityAdmissionScopeV1 | undefined;
 
 	constructor(input: {
 		readonly projection: NativeCapabilityMetadataProjectionV1;
@@ -58,17 +59,19 @@ export class FakeNativeCapabilityMetadataRevalidationV1
 			(selected.kind === "skill" && selected.availability !== "discovered")
 		)
 			return { outcome: "disabled" as const };
+		const scope = Object.freeze({
+			agentId: input.authority.agentId,
+			actorId: input.authority.actorId,
+			channelId: input.authority.channelId,
+			conversationId: input.request.conversationId,
+			sessionGeneration: input.sessionGeneration,
+			authorizationRevision: input.authority.authorizationRevision,
+			hostScopeRef: this.#hostScopeRef,
+		});
+		this.#scope = scope;
 		return {
 			outcome: "allowed" as const,
-			scope: Object.freeze({
-				agentId: input.authority.agentId,
-				actorId: input.authority.actorId,
-				channelId: input.authority.channelId,
-				conversationId: input.request.conversationId,
-				sessionGeneration: input.sessionGeneration,
-				authorizationRevision: input.authority.authorizationRevision,
-				hostScopeRef: this.#hostScopeRef,
-			}),
+			scope,
 			capability: Object.freeze({
 				...selected,
 				directoryRevision: projection.revision,
@@ -82,7 +85,8 @@ export class FakeNativeCapabilityMetadataRevalidationV1
 		readonly scope: NativeCapabilityAdmissionScopeV1;
 	}): boolean {
 		if (!this.#available) return false;
-		void input.scope;
+		if (!this.#scope || !isDeepStrictEqual(this.#scope, input.scope))
+			return false;
 		const projection = parseNativeCapabilityMetadataProjectionV1(
 			this.#projection,
 		);
