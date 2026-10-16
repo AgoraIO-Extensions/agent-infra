@@ -412,8 +412,7 @@ export function createPlatformConversationWorkerV2(
 						targetOrigin: string;
 						redactedTargetSummary: string;
 					} | null;
-					if (sideEffectEvent?.type !== "browser.side_effect")
-						return null;
+					if (sideEffectEvent?.type !== "browser.side_effect") return null;
 					const binding = sideEffectEvent.binding;
 					if (!binding || typeof binding !== "object") return null;
 					const command =
