@@ -32,14 +32,15 @@ export function createAgentDefaultRelayKeyCandidatesV1(input: {
 	});
 	return async (keyValue, configuration) => {
 		const signal = AbortSignal.timeout(10_000);
-		const validity = await validate(keyValue, signal);
-		if (validity !== "valid")
-			throw new AgentDefaultRelayKeyErrorV1(
-				validity === "invalid" ? "invalid_input" : "unavailable",
-			);
 		try {
+			const validity = await validate(keyValue, signal);
+			if (validity !== "valid")
+				throw new AgentDefaultRelayKeyErrorV1(
+					validity === "invalid" ? "invalid_input" : "unavailable",
+				);
 			return await read(keyValue, configuration, signal);
-		} catch {
+		} catch (error) {
+			if (error instanceof AgentDefaultRelayKeyErrorV1) throw error;
 			throw new AgentDefaultRelayKeyErrorV1("unavailable");
 		}
 	};
