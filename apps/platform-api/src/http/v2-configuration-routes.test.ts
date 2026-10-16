@@ -226,13 +226,25 @@ describe("V2 configuration routes with a re-submitted default Relay Key (#2421)"
 				},
 			},
 		],
-		["expected versions without a Key", { defaultRelayKey: undefined }],
 	])("rejects %s before touching Core", async (_label, override) => {
 		const { app, update } = createApp();
 		const response = await put(app, { ...replacement, ...override });
 		expect(response.status).toBe(400);
 		expect(PilotProtocolErrorV1Schema.parse(await response.json()).code).toBe(
 			"INVALID_REQUEST",
+		);
+		expect(update).not.toHaveBeenCalled();
+	});
+
+	it("reports an unavailable saved-Key reader when no Key is submitted", async () => {
+		const { app, update } = createApp();
+		const response = await put(app, {
+			...replacement,
+			defaultRelayKey: undefined,
+		});
+		expect(response.status).toBe(503);
+		expect(PilotProtocolErrorV1Schema.parse(await response.json()).code).toBe(
+			"DEPENDENCY_UNAVAILABLE",
 		);
 		expect(update).not.toHaveBeenCalled();
 	});
