@@ -117,6 +117,9 @@ export interface OperationalEvent {
 	/** A W3C parent retained only for a durable asynchronous operation. */
 	readonly traceParent?: string;
 	readonly browserCategory?: OperationalBrowserCategory;
+	readonly method?: string;
+	readonly routeTemplate?: string;
+	readonly statusCode?: number;
 }
 
 export interface ModelTokenUsage {
@@ -516,6 +519,9 @@ export function startObservability(options: ObservabilityOptions) {
 					attemptRef,
 					traceParent,
 					browserCategory,
+					method,
+					routeTemplate,
+					statusCode,
 				} = event;
 				const eventTraceParent = traceParent ?? traceParentStorage.getStore();
 				if (
@@ -537,11 +543,38 @@ export function startObservability(options: ObservabilityOptions) {
 					invalidRecords++;
 					return;
 				}
+				if (
+					method !== undefined &&
+					(!/^[A-Z]+$/.test(method) || method.length > 16)
+				) {
+					invalidRecords++;
+					return;
+				}
+				if (
+					routeTemplate !== undefined &&
+					(!/^\/[A-Za-z0-9_./:{}$-]*$/.test(routeTemplate) ||
+						routeTemplate.length > 256)
+				) {
+					invalidRecords++;
+					return;
+				}
+				if (
+					statusCode !== undefined &&
+					(!Number.isSafeInteger(statusCode) ||
+						statusCode < 100 ||
+						statusCode > 599)
+				) {
+					invalidRecords++;
+					return;
+				}
 				const labels = {
 					service,
 					stage,
 					outcome,
 					...(browserCategory === undefined ? {} : { browserCategory }),
+					...(method === undefined ? {} : { method }),
+					...(routeTemplate === undefined ? {} : { routeTemplate }),
+					...(statusCode === undefined ? {} : { statusCode }),
 				};
 				const details = {
 					...labels,

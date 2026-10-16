@@ -4,7 +4,10 @@ import {
 	OpaqueCursorV1Schema,
 } from "@agent-infra/contracts";
 import type { PilotProtocolErrorV1 } from "@agent-infra/contracts/pilot";
-import { currentRequestMetadata } from "@agent-infra/observability/http";
+import {
+	currentRequestMetadata,
+	recordHttpFailure,
+} from "@agent-infra/observability/http";
 
 export type HttpErrorStatus = 400 | 401 | 403 | 404 | 409 | 500 | 503;
 
@@ -114,6 +117,7 @@ export class HttpProtocolError extends Error {
 			retryable,
 			traceId,
 		} as PilotProtocolErrorV1;
+		recordHttpFailure(this.body.code);
 	}
 }
 

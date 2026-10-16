@@ -1,7 +1,11 @@
 import { Writable } from "node:stream";
 import { Hono } from "hono";
 import { expect, it } from "vitest";
-import { createHttpObservability, currentRequestMetadata } from "./http.js";
+import {
+	createHttpObservability,
+	currentRequestMetadata,
+	recordHttpFailure,
+} from "./http.js";
 import {
 	isTraceParent,
 	type OperationalEvent,
@@ -42,11 +46,40 @@ it("keeps platform correlation stable within a request and ignores external head
 			stage: "http",
 			outcome: "completed",
 			durationMs: expect.any(Number),
+			method: "GET",
+			routeTemplate: "/request",
+			statusCode: 200,
 			...metadata,
 		},
 	]);
 	expect(JSON.stringify(events)).not.toContain("PRIVATE_SENTINEL");
 	expect(currentRequestMetadata()).toBeUndefined();
+});
+
+it("records bounded HTTP method, route template, status and protocol code", async () => {
+	const events: OperationalEvent[] = [];
+	const app = new Hono();
+	app.use(
+		"*",
+		createHttpObservability({ record: (event) => events.push(event) }),
+	);
+	app.get("/api/v2/agents/:agentId/lifecycle", (context) => {
+		recordHttpFailure("DEPENDENCY_UNAVAILABLE");
+		return context.text("unavailable", 503);
+	});
+	const response = await app.request("/api/v2/agents/agent-private/lifecycle");
+	expect(response.status).toBe(503);
+	expect(events).toEqual([
+		expect.objectContaining({
+			stage: "http",
+			outcome: "failed",
+			method: "GET",
+			routeTemplate: "/api/v2/agents/:agentId/lifecycle",
+			statusCode: 503,
+			code: "DEPENDENCY_UNAVAILABLE",
+		}),
+	]);
+	expect(JSON.stringify(events)).not.toContain("agent-private");
 });
 
 it("creates a server-owned W3C context without exposing it in the response object", async () => {
@@ -148,6 +181,9 @@ it.each([
 				stage: "http",
 				outcome,
 				durationMs: expect.any(Number),
+				method: "GET",
+				routeTemplate: "/request",
+				statusCode: status,
 				requestId: expect.any(String),
 				traceId: expect.any(String),
 			},

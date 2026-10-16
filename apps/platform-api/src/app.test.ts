@@ -1,8 +1,9 @@
 import { PilotProtocolErrorV1Schema } from "@agent-infra/contracts/pilot";
+import type { OperationalEvent } from "@agent-infra/observability";
 import { describe, expect, it } from "vitest";
 
 import { createPlatformHealthApp } from "./app";
-import { requestMetadata } from "./http/common.js";
+import { HttpProtocolError, requestMetadata } from "./http/common.js";
 
 describe("platform API health", () => {
 	it("reports the service as ready", async () => {
@@ -74,5 +75,46 @@ describe("platform API health", () => {
 			status: "ok",
 			observability: status,
 		});
+	});
+
+	it("records protocol failures with the route template and status", async () => {
+		const records: OperationalEvent[] = [];
+		const app = createPlatformHealthApp({
+			record: (event) => {
+				records.push(event);
+			},
+			status: () => ({
+				enabled: false,
+				state: "active" as const,
+				captureFailures: 0,
+				exportFailures: 0,
+				lastExportFailureAt: undefined,
+				droppedLogs: 0,
+				invalidRecords: 0,
+			}),
+		});
+		app.get("/api/v2/agents/:agentId/lifecycle", (context) => {
+			throw new HttpProtocolError(
+				"DEPENDENCY_UNAVAILABLE",
+				requestMetadata(context.req.raw).traceId,
+			);
+		});
+
+		const response = await app.request(
+			"/api/v2/agents/agent-private/lifecycle",
+		);
+
+		expect(response.status).toBe(503);
+		expect(records).toEqual([
+			expect.objectContaining({
+				stage: "http",
+				outcome: "failed",
+				method: "GET",
+				routeTemplate: "/api/v2/agents/:agentId/lifecycle",
+				statusCode: 503,
+				code: "DEPENDENCY_UNAVAILABLE",
+			}),
+		]);
+		expect(JSON.stringify(records)).not.toContain("agent-private");
 	});
 });

@@ -18,11 +18,18 @@ interface RequestMetadata {
 const requests = new AsyncLocalStorage<{
 	readonly metadata: RequestMetadata;
 	active: boolean;
+	failureCode?: string;
 }>();
 
 export function currentRequestMetadata(): RequestMetadata | undefined {
 	const request = requests.getStore();
 	return request?.active ? request.metadata : undefined;
+}
+
+export function recordHttpFailure(code: string): void {
+	const request = requests.getStore();
+	if (!request?.active || !/^[A-Z][A-Z0-9_]{0,63}$/.test(code)) return;
+	request.failureCode = code;
 }
 
 /** Measures response-header readiness, not the lifetime of a streaming body. */
@@ -74,6 +81,12 @@ export function createHttpObservability(
 									? "rejected"
 									: "completed",
 						durationMs: performance.now() - began,
+						method: context.req.method,
+						...(context.req.routePath
+							? { routeTemplate: context.req.routePath }
+							: {}),
+						statusCode: context.res.status,
+						...(request.failureCode ? { code: request.failureCode } : {}),
 						...request.metadata,
 						...(traceParent === undefined ? {} : { traceParent }),
 					});
