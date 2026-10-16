@@ -6,10 +6,7 @@ import type {
 	AgentManagementTransactionPortV1,
 	SessionSandboxReconciliationClaimV1,
 } from "@agent-infra/platform-core";
-import {
-	createAgentManagementV1,
-	platformIdempotencyV1,
-} from "@agent-infra/platform-core";
+import { createAgentManagementV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import {
 	afterAll,
@@ -288,6 +285,23 @@ async function waitForBlockedQuery(includes: readonly string[]): Promise<void> {
 	throw new Error(
 		`Timed out waiting for blocked query: ${includes.join(", ")}`,
 	);
+}
+
+/** 取得 Core 对这条命令实际算出的幂等摘要，用来种入伪造的幂等记录（#2607）。 */
+async function coreDigestOf(
+	original: AgentManagementCommandV1,
+	actor: AgentManagementActorContextV1,
+) {
+	let digest: string | undefined;
+	await createAgentManagementV1({
+		executeAgentManagementTransaction: async (request) => {
+			digest = request.requestDigest;
+			return { outcome: "denied", writePlan: null };
+		},
+		resolveAgentAccessState: async () => undefined,
+	}).executeManagementCommand(original, actor);
+	if (digest === undefined) throw new Error("摘要没有被计算");
+	return digest;
 }
 
 function command(
@@ -1114,9 +1128,7 @@ describe("PostgreSQL Agent-management Adapter", () => {
 			ownerIds: ["user_other"],
 		});
 		const original = command("stop_agent", state, "malicious-replay");
-		const requestDigest = platformIdempotencyV1.canonicalRequestDigest({
-			...original,
-		});
+		const requestDigest = await coreDigestOf(original, applicant);
 		const adapter = new PostgresAgentManagementTransactionV1({ databaseUrl });
 		adapters.push(adapter);
 		const management = createAgentManagementV1(adapter);
@@ -1180,9 +1192,10 @@ describe("PostgreSQL Agent-management Adapter", () => {
 			pending,
 			"cross-agent-application-replay",
 		);
-		const applicationDigest = platformIdempotencyV1.canonicalRequestDigest({
-			...applicationCommand,
-		});
+		const applicationDigest = await coreDigestOf(
+			applicationCommand,
+			administrator,
+		);
 		await seedStates([pending]);
 		await adminClient`
 			insert into platform.idempotency_records

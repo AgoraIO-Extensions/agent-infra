@@ -1606,15 +1606,22 @@ export function agentManagementV1Conformance(
 			result: { revision: 3 },
 			writePlan: null,
 		});
+		// requestId/traceId 每个请求都不同，不属于「同一个逻辑请求」：换了也是重放（#2607）。
 		expect(
 			await management.executeManagementCommand(
 				commandFixture("update_application", state, {
 					idempotencyKey: "negative-update",
 					requestId: "changed_request",
+					traceId: "changed_trace",
+					expectedRevision: 3,
 				}),
 				applicant,
 			),
-		).toEqual(conflict("idempotency_conflict"));
+		).toMatchObject({
+			outcome: "replayed",
+			result: { revision: 3 },
+			writePlan: null,
+		});
 
 		await expect(
 			management.executeManagementCommand(
@@ -1628,6 +1635,96 @@ export function agentManagementV1Conformance(
 				administrator,
 			),
 		).rejects.toMatchObject({ code: "invalid_input" });
+	});
+
+	it("replays every committed command for the same key whatever its per-request fields are (#2607)", async () => {
+		const scenarios = [
+			["update_application", "pending_approval", applicant],
+			["withdraw_application", "pending_approval", applicant],
+			["approve_application", "pending_approval", administrator],
+			["reject_application", "pending_approval", administrator],
+			["stop_agent", "available", applicant],
+			["restart_agent", "stopped", applicant],
+			["retry_agent_creation", "creation_failed", applicant],
+			["disable_agent", "available", administrator],
+		] as const;
+		const states = scenarios.map(([command, status]) =>
+			stateFixture({
+				applicationId: `application_replay_${command}`,
+				agentId: `agent_replay_${command}`,
+				status,
+			}),
+		);
+		const management = await createManagement({ states });
+		for (const [index, [command, , actor]] of scenarios.entries()) {
+			const state = states[index] as AgentManagementStateV1;
+			const idempotencyKey = `replay-${command}`;
+			const first = await management.executeManagementCommand(
+				commandFixture(command, state, {
+					idempotencyKey,
+					requestId: "request_first",
+					traceId: "trace_first",
+				}),
+				actor,
+			);
+			expect(first, command).toMatchObject({ outcome: "accepted" });
+			if (first.outcome !== "accepted") continue;
+			// 服务端每次都用刚读到的当前修订，重试时它已经前进了：重放先于旧基线校验返回原结果。
+			for (const expectedRevision of [first.result.revision, state.revision]) {
+				const replay = await management.executeManagementCommand(
+					commandFixture(command, state, {
+						idempotencyKey,
+						expectedRevision,
+						requestId: `request_retry_${expectedRevision}`,
+						traceId: `trace_retry_${expectedRevision}`,
+					}),
+					actor,
+				);
+				expect(replay, `${command} @${expectedRevision}`).toEqual({
+					outcome: "replayed",
+					result: first.result,
+					writePlan: null,
+				});
+			}
+		}
+	});
+
+	it("still rejects a replay whose caller-defined content changed (#2607)", async () => {
+		const state = stateFixture({
+			applicationId: "application_replay_reason",
+			agentId: "agent_replay_reason",
+			status: "pending_approval",
+		});
+		const management = await createManagement({ states: [state] });
+		const key = "replay-reason";
+		expect(
+			await management.executeManagementCommand(
+				commandFixture("reject_application", state, {
+					idempotencyKey: key,
+					reason: "Capacity is unavailable",
+				}),
+				administrator,
+			),
+		).toMatchObject({ outcome: "accepted" });
+		expect(
+			await management.executeManagementCommand(
+				commandFixture("reject_application", state, {
+					idempotencyKey: key,
+					reason: "A different reason",
+					requestId: "request_other",
+					traceId: "trace_other",
+				}),
+				administrator,
+			),
+		).toEqual(conflict("idempotency_conflict"));
+		expect(
+			await management.executeManagementCommand(
+				commandFixture("approve_application", state, {
+					idempotencyKey: key,
+				}),
+				administrator,
+			),
+		).toEqual(conflict("idempotency_conflict"));
 	});
 
 	it("binds idempotency to subject, actor, and key across operations", async () => {
