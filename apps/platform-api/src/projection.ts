@@ -2,6 +2,7 @@ import {
 	AgentApplicationProjectionV1Schema,
 	AgentProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
+import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import type {
 	AgentManagementStateV1,
 	CurrentTaskUserV1,
@@ -13,7 +14,6 @@ import type {
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentManagementQueryV1,
 } from "@agent-infra/platform-store";
-
 import { HttpProtocolError } from "./http/common.js";
 import {
 	hydrateBrowserUsers,
@@ -133,26 +133,31 @@ export function createPlatformProjectionReaders(
 		agent: AgentManagementAgentProjectionV1,
 		metadata: ProjectionMetadata | ApiProjectionMetadata,
 	): Promise<AgentProjection> {
-		const { presentation, wire } = await configurationProjection(
-			agent.agentId,
-			agent.management,
-			metadata,
-		);
-		return AgentProjectionV1Schema.parse({
-			schemaVersion: 1,
-			agentId: agent.agentId,
-			name: agent.name,
-			description: agent.description,
-			source: presentation.source,
-			managementStatus: agent.management.status,
-			serviceAvailability: agent.management.serviceAvailability,
-			configuration: wire,
-			capabilities: {
-				...presentation.capabilities,
-				nativeMetadata: dependencies.nativeMetadataAvailable === true,
-			},
-			interactionUrl: presentation.interactionUrl,
-		});
+		try {
+			const { presentation, wire } = await configurationProjection(
+				agent.agentId,
+				agent.management,
+				metadata,
+			);
+			return AgentProjectionV1Schema.parse({
+				schemaVersion: 1,
+				agentId: agent.agentId,
+				name: agent.name,
+				description: agent.description,
+				source: presentation.source,
+				managementStatus: agent.management.status,
+				serviceAvailability: agent.management.serviceAvailability,
+				configuration: wire,
+				capabilities: {
+					...presentation.capabilities,
+					nativeMetadata: dependencies.nativeMetadataAvailable === true,
+				},
+				interactionUrl: presentation.interactionUrl,
+			});
+		} catch (error) {
+			recordHttpFailureContext({ failureStep: "projection.read", error });
+			throw error;
+		}
 	}
 
 	return {

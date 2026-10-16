@@ -9,6 +9,7 @@ import {
 	AgentProjectionV2Schema,
 	ApprovalDecisionRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
+import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import type {
 	AgentConfigurationModelInputV1,
 	AgentConfigurationSecretReplacementInputV1,
@@ -256,7 +257,8 @@ async function projectApplication(
 			identity,
 			...metadata,
 		});
-	} catch {
+	} catch (error) {
+		recordHttpFailureContext({ failureStep: "projection.read", error });
 		fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	}
 	const parsed = AgentApplicationProjectionV1Schema.safeParse(value);
@@ -282,7 +284,8 @@ async function projectAgent(
 			identity,
 			...metadata,
 		});
-	} catch {
+	} catch (error) {
+		recordHttpFailureContext({ failureStep: "projection.read", error });
 		fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	}
 	const parsed = AgentProjectionV1Schema.safeParse(value);

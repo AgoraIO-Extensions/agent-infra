@@ -3,6 +3,7 @@ import {
 	type ObservabilityOptions,
 	startObservability,
 } from "@agent-infra/observability";
+import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import { configureStoreQueryObservability } from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
 
@@ -191,7 +192,21 @@ export async function startPlatformApiFromDeployment(
 				: {}),
 			...options.observabilityOptions,
 		});
-		configureStoreQueryObservability({ observability });
+		configureStoreQueryObservability({
+			observability: {
+				record(event) {
+					observability?.record(event);
+					if (event.outcome === "failed")
+						recordHttpFailureContext({
+							failureStep: event.operationRef,
+							error: event.errorClass
+								? { constructor: { name: event.errorClass } }
+								: undefined,
+							sqlState: event.sqlState,
+						});
+				},
+			},
+		});
 		assembly = await loadPlatformApiAssembly(options.moduleSpecifier);
 		server = startPlatformApi({
 			dependencies: assembly.dependencies,

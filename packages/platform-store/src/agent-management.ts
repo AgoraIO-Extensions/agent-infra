@@ -41,6 +41,7 @@ import {
 	insertAgentManagementEffects,
 	insertAgentManagementHistory,
 } from "./plan-writes.js";
+import { runStoreQueryOperation } from "./query-observability.js";
 import {
 	agentApplications,
 	agentAvailability,
@@ -454,30 +455,32 @@ export class PostgresAgentManagementTransactionV1
 		) => AgentManagementDecisionV1,
 	): Promise<AgentManagementDecisionV1> {
 		try {
-			return await this.#database.transaction(async (transaction) => {
-				const firstReplay = await replay(
-					transaction,
-					await readIdempotency(transaction, request),
-					request,
-				);
-				if (firstReplay) return firstReplay;
-				const state = await lockState(transaction, request);
-				const secondReplay = await replay(
-					transaction,
-					await readIdempotency(transaction, request),
-					request,
-				);
-				if (secondReplay) return secondReplay;
-				const decision = decide(state && structuredClone(state));
-				if (decision.outcome !== "accepted") return decision;
-				if (!state) throw new AgentManagementError("unavailable");
-				return persistAcceptedAgentManagement(
-					transaction,
-					request,
-					state,
-					decision,
-				);
-			});
+			return await runStoreQueryOperation("store.management_transaction", () =>
+				this.#database.transaction(async (transaction) => {
+					const firstReplay = await replay(
+						transaction,
+						await readIdempotency(transaction, request),
+						request,
+					);
+					if (firstReplay) return firstReplay;
+					const state = await lockState(transaction, request);
+					const secondReplay = await replay(
+						transaction,
+						await readIdempotency(transaction, request),
+						request,
+					);
+					if (secondReplay) return secondReplay;
+					const decision = decide(state && structuredClone(state));
+					if (decision.outcome !== "accepted") return decision;
+					if (!state) throw new AgentManagementError("unavailable");
+					return persistAcceptedAgentManagement(
+						transaction,
+						request,
+						state,
+						decision,
+					);
+				}),
+			);
 		} catch {
 			throw new AgentManagementError("unavailable");
 		}

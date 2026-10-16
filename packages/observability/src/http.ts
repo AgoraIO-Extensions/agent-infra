@@ -5,6 +5,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import { routePath } from "hono/route";
 import {
 	createTraceParent,
+	isOperationalFailureStep,
 	type ObservabilitySpan,
 	type startObservability,
 } from "./index.js";
@@ -19,11 +20,52 @@ interface RequestMetadata {
 const requests = new AsyncLocalStorage<{
 	readonly metadata: RequestMetadata;
 	active: boolean;
+	failureStep?: string;
+	errorClass?: string;
+	sqlState?: string;
 }>();
 
 export function currentRequestMetadata(): RequestMetadata | undefined {
 	const request = requests.getStore();
 	return request?.active ? request.metadata : undefined;
+}
+
+export function recordHttpFailureContext(input: {
+	readonly failureStep: string;
+	readonly error?: unknown;
+	readonly sqlState?: string;
+}): void {
+	const request = requests.getStore();
+	if (!request?.active || !isOperationalFailureStep(input.failureStep)) return;
+	request.failureStep ??= input.failureStep;
+	if (input.sqlState && /^[0-9A-Z]{5}$/.test(input.sqlState))
+		request.sqlState = input.sqlState;
+	let current = input.error;
+	for (
+		let depth = 0;
+		depth < 4 && current && typeof current === "object";
+		depth++
+	) {
+		const value = current as {
+			constructor?: { name?: unknown };
+			code?: unknown;
+			cause?: unknown;
+		};
+		const name = value.constructor?.name;
+		if (
+			request.errorClass === undefined &&
+			typeof name === "string" &&
+			/^[A-Za-z][A-Za-z0-9_$.-]{0,63}$/.test(name)
+		)
+			request.errorClass = name;
+		if (
+			request.sqlState === undefined &&
+			typeof value.code === "string" &&
+			/^[0-9A-Z]{5}$/.test(value.code)
+		)
+			request.sqlState = value.code;
+		current = value.cause;
+	}
 }
 
 const protocolCodePattern = /^[A-Z][A-Z0-9_]{2,63}$/;
@@ -145,7 +187,13 @@ export function createHttpObservability(
 				enumerable: false,
 				writable: false,
 			});
-		const request = {
+		const request: {
+			readonly metadata: RequestMetadata;
+			active: boolean;
+			failureStep?: string;
+			errorClass?: string;
+			sqlState?: string;
+		} = {
 			metadata: Object.freeze(metadata) as RequestMetadata,
 			active: true,
 		};
@@ -178,6 +226,15 @@ export function createHttpObservability(
 						durationMs: performance.now() - began,
 						...failure,
 						...request.metadata,
+						...(request.failureStep === undefined
+							? {}
+							: { failureStep: request.failureStep }),
+						...(request.errorClass === undefined
+							? {}
+							: { errorClass: request.errorClass }),
+						...(request.sqlState === undefined
+							? {}
+							: { sqlState: request.sqlState }),
 						...(traceParent === undefined ? {} : { traceParent }),
 					});
 				} catch {
