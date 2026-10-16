@@ -22,6 +22,7 @@ import { DirectoryPicker } from "../directory-fields.js";
 import type {
 	AgentDefaultRelayKeyCheck,
 	AgentDefaultRelayKeyState,
+	AgentSavedModelConfigurationUpdate,
 } from "./agent-configuration.js";
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
 import {
@@ -47,7 +48,11 @@ type AgentConfigurationScreenProps = {
 	commandError?: (Error & { readonly retryable?: boolean }) | null;
 	commandResult?: AgentProjectionV2;
 	lifecycle?: ReactNode;
-	onSave: (body: AgentConfigurationUpdateRequestV2Writable) => void;
+	onSave: (
+		body:
+			| AgentConfigurationUpdateRequestV2Writable
+			| AgentSavedModelConfigurationUpdate,
+	) => void;
 	/** Agent 由默认 Relay Key 管理模型（配置 V3）：用候选模型选择代替自由文本字段。 */
 	defaultRelayKeyManaged?: boolean;
 	/** Deployment catalog candidates for non-Key-managed Agents. */

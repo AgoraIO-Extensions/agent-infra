@@ -459,10 +459,8 @@ export const AgentConfigurationUpdateRequestV4Schema =
 		expectedConfigurationRevision: z.number().int().positive(),
 		expectedKeyVersion: z.number().int().positive(),
 	});
-export const AgentConfigurationUpdateRequestV2Schema = z.union([
-	AgentConfigurationUpdateRequestV2BaseSchema,
-	AgentConfigurationUpdateRequestV4Schema,
-]);
+export const AgentConfigurationUpdateRequestV2Schema =
+	AgentConfigurationUpdateRequestV2BaseSchema;
 export const AgentConfigurationProjectionV2Schema =
 	AgentConfigurationProjectionV1Schema.omit({ actions: true });
 export const AgentApplicationProjectionV2Schema =
@@ -2116,6 +2114,22 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			requestParams: { path: agentPath, header: idempotencyHeader },
 			requestBody: requiredJsonRequestBody(
 				AgentConfigurationUpdateRequestV2Schema,
+			),
+			responses: {
+				"200": jsonResponse("Agent configuration", AgentProjectionV2Schema),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/configuration/saved-model": {
+		put: {
+			operationId: "updateAgentSavedModelConfigurationV2",
+			summary: "Update models bound to the persisted Agent default Relay Key",
+			description:
+				"Owner browser session only. The saved Key is never submitted; configuration and Key versions are compare-and-swap guards.",
+			requestParams: { path: agentPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				AgentConfigurationUpdateRequestV4Schema,
 			),
 			responses: {
 				"200": jsonResponse("Agent configuration", AgentProjectionV2Schema),
