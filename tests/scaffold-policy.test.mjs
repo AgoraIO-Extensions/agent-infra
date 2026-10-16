@@ -8,7 +8,6 @@ const dockerfiles = new Map([
 	["web", "apps/web/Dockerfile"],
 	["platform-api", "apps/platform-api/Dockerfile"],
 	["platform-worker", "apps/platform-worker/Dockerfile"],
-	["connection-api", "apps/connection-api/Dockerfile"],
 	["custom-agent-base", "deploy/images/custom-agent-base/Dockerfile"],
 ]);
 
@@ -51,7 +50,6 @@ test("deployment images select an explicit non-root runtime user", async () => {
 		["web", "nginx"],
 		["platform-api", "node"],
 		["platform-worker", "node"],
-		["connection-api", "node"],
 		["custom-agent-base", "node"],
 	]);
 
@@ -96,12 +94,8 @@ test("Node runtime images contain only production deployment artifacts", async (
 			"platform-worker",
 			"pnpm --config.inject-workspace-packages=true --filter @agent-infra/platform-worker deploy --prod /prod/platform-worker",
 		],
-		[
-			"connection-api",
-			"pnpm --filter @agent-infra/connection-api deploy --prod --legacy /prod/connection-api",
-		],
 	]);
-	for (const service of ["platform-api", "platform-worker", "connection-api"]) {
+	for (const service of ["platform-api", "platform-worker"]) {
 		const path = dockerfiles.get(service);
 		const dockerfile = await readFile(path, "utf8");
 		const manifest = JSON.parse(

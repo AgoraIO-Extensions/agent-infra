@@ -160,22 +160,23 @@ M1 不单独部署审批、企微渠道、审计、附件、任务调度、Eval 
 
 ## 5. 单仓库结构
 
+Connection 服务源码已迁至独立私有仓库 `AI/agora-connector`。本仓库保留 Agent 平台及其
+Connection consumer 集成、共享 Wire 契约和部署配置，不再构建或启动 Connection 服务。
+Connection 的身份、授权、数据和独立部署边界保持不变，其服务端实现与发布由独立仓库维护。
+下图只列本仓库维护的模块；其他章节中的 Connection 服务职责仍描述跨系统契约。
+
 ```text
 agent-infra/
   apps/
     web/                     React SPA
-    connection-web/          独立 Connection React SPA
     platform-api/            Hono HTTP API、SSE、企微和查询入口
     platform-worker/         调谐、outbox、RuntimeHost Client、投递和 Eval 工作项
     enterprise-directory-sync/  企微目录同步服务入口
     agent-runtime-host/      Agent Pod 内的薄 RuntimeHost 进程入口
-    connection-api/          Connection 独立 Web、MCP/API 与外部操作执行
   packages/
     platform-core/           单一深 Platform 领域 Module、Use Case 与 Port
-    connection-core/         Connection 领域规则与用例
     contracts/               Wire-only OpenAPI、内部 HTTP、SSE 与 RuntimeHost Schema
     platform-store/          用例级事务 Port 的 Drizzle/PostgreSQL Adapter
-    connection-store/        Connection DB 的 Drizzle Adapter
     identity/                Platform IdentityAdapter、IdentityContext 与测试 Fake
     enterprise-directory/    企微快照、完整性与内网读取契约
     enterprise-directory-store/  目录快照的 Drizzle/PostgreSQL Adapter
@@ -189,7 +190,6 @@ agent-infra/
   migrations/
     platform/
     enterprise-directory/
-    connection/
   deploy/
     helm/
     environments/

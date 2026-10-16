@@ -38,7 +38,7 @@ Issues 与 specs 使用 `AgoraIO-Extensions/agent-infra` GitHub Issues；规划�
 
 ## Repository Layout
 
-- `apps/`：Web、Platform API、Platform Worker 与 Connection API 的进程入口。
+- `apps/`：Agent 平台 Web、API、Worker、RuntimeHost 与目录同步的进程入口；Connection 服务源码在独立私有仓库维护。
 - `packages/`：被多个真实调用方复用的配置、领域或 Adapter 模块。
 - `tests/`：跨应用 smoke、契约、集成、端到端和负载测试入口。
 - `docs/prd/`：正式产品需求，只写已确认的产品结论。

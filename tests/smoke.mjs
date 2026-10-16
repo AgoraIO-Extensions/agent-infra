@@ -6,28 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { startConnectionApi } from "../apps/connection-api/dist/index.mjs";
 import { startPlatformApiFromDeployment } from "../apps/platform-api/dist/index.mjs";
 import { startPlatformWorker } from "../apps/platform-worker/dist/index.mjs";
-
-async function verifyApi(start, expectedService) {
-	const server = start({ log: () => undefined, port: 0 });
-	await once(server, "listening");
-	const address = server.address();
-	assert(address && typeof address === "object");
-
-	try {
-		const response = await fetch(`http://127.0.0.1:${address.port}/healthz`);
-		assert.equal(response.status, 200);
-		assert.deepEqual(await response.json(), {
-			service: expectedService,
-			status: "ok",
-		});
-	} finally {
-		server.close();
-		await once(server, "close");
-	}
-}
 
 async function verifyPlatformApi() {
 	const { assembly, server } = await startPlatformApiFromDeployment({
@@ -157,7 +137,6 @@ await deployment.browserAuth.close();`,
 await verifyPlatformApi();
 verifyPackagedApiEntrypoint();
 await verifyPackagedApiDeployment();
-await verifyApi(startConnectionApi, "connection-api");
 
 const workerMessages = [];
 const worker = startPlatformWorker({

@@ -389,6 +389,7 @@ async function fixture() {
 				token: "e30.e30.AA",
 			},
 		};
+		const issuedAt = Date.now();
 		const claims = {
 			...scope,
 			reference,
@@ -402,8 +403,8 @@ async function fixture() {
 			authorizationId: request.authorizationId,
 			confirmationRevision: request.confirmationRevision,
 			grantId: "grant-a",
-			issuedAt: Date.now(),
-			expiresAt: Date.now() + 30_000,
+			issuedAt,
+			expiresAt: issuedAt + 30_000,
 			requestDigest: createHash("sha256")
 				.update(canonicalRuntimeRequestSigningPayload(request))
 				.digest("hex"),

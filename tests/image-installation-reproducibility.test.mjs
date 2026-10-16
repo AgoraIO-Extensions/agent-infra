@@ -27,9 +27,7 @@ for (const name of names) {
 	test(`${name} production installation produces identical OCI Digests`, {
 		skip: !context,
 	}, async () => {
-		assert.ok(
-			Object.hasOwn(imageDockerfiles, name) && name !== "connection-api",
-		);
+		assert.ok(Object.hasOwn(imageDockerfiles, name));
 		const source = await readFile(join(root, imageDockerfiles[name]), "utf8");
 		const stage = name === "agent-runtime-host" ? "runtime" : "runner";
 		const match =

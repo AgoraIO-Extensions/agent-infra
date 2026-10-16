@@ -675,7 +675,7 @@ delete_owned_agent_pvcs() {
 
 case "${1:-}" in
   build)
-    read -r -a build_services <<< "${PLATFORM_LOCAL_BUILD_SERVICES:-web platform-api platform-worker connection-api enterprise-directory-sync agent-runtime-host}"
+    read -r -a build_services <<< "${PLATFORM_LOCAL_BUILD_SERVICES:-web platform-api platform-worker enterprise-directory-sync agent-runtime-host}"
     [[ ${#build_services[@]} -gt 0 ]] || { echo "PLATFORM_LOCAL_BUILD_SERVICES must not be empty" >&2; exit 1; }
     "${compose[@]}" --profile runtime build "${build_services[@]}"
     ;;
@@ -712,7 +712,6 @@ case "${1:-}" in
     ')
     "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas="$worker_replicas"
     "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
-    "${compose[@]}" up --detach --wait connection-api
     "${compose[@]}" up --detach --wait --force-recreate --no-deps platform-api
     if ! node deploy/local/check-api-auth.ts "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "${PLATFORM_LOCAL_API_PORT:-3000}" "${PLATFORM_LOCAL_WEB_PORT:-3001}"; then
       "${compose[@]}" stop platform-api
@@ -723,7 +722,7 @@ case "${1:-}" in
     ;;
   status)
     worker_context
-    "${compose[@]}" ps postgres object-storage enterprise-directory-sync connection-api platform-api web
+    "${compose[@]}" ps postgres object-storage enterprise-directory-sync platform-api web
     "${helm_target[@]}" status "$worker_release"
     "${kube_target[@]}" get deployment "$worker_deployment"
     "${kube_target[@]}" get "service/$database_service" "endpointslice/$database_endpoint" "secret/$database_service" "service/$directory_service" "endpointslice/$directory_endpoint"
@@ -741,7 +740,7 @@ case "${1:-}" in
       fi
       ensure_agents_stopped
       "${compose[@]}" stop web platform-api
-      "${compose[@]}" stop enterprise-directory-sync connection-api
+      "${compose[@]}" stop enterprise-directory-sync
       disconnect_directory_sync
       disconnect_worker_database
       "${compose[@]}" stop object-storage postgres
@@ -765,7 +764,7 @@ case "${1:-}" in
     if ! ensure_agents_stopped || ! "${helm_target[@]}" uninstall "$worker_release" --ignore-not-found --wait --timeout 5m; then
       abort_stop
     fi
-    "${compose[@]}" stop enterprise-directory-sync connection-api
+    "${compose[@]}" stop enterprise-directory-sync
     disconnect_directory_sync
     disconnect_worker_database
     "${compose[@]}" stop object-storage postgres
