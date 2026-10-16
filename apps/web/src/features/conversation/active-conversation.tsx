@@ -23,6 +23,7 @@ import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	type BrowserHandoffActionInputV1,
 	BrowserHandoffPanel,
+	type BrowserSideEffectConfirmationV1,
 } from "../agent-discovery/browser-handoff-panel.js";
 import { BrowserOperationStatus } from "./browser-operation-status.js";
 import type { ConversationCapabilitySelectionV1 } from "./conversation-capability-picker.js";
@@ -409,7 +410,22 @@ export function ActiveConversation({
 			!refreshing);
 	const commandLocked = command.isPending || command.result?.kind === "unknown";
 	const browserEvent = reader.browserHandoffEvent;
-	const browserBinding = browserEvent?.payload.binding;
+	const browserSideEffectEvent = reader.browserSideEffectEvent;
+	const browserBinding =
+		browserSideEffectEvent?.payload.binding ?? browserEvent?.payload.binding;
+	const browserConfirmation: BrowserSideEffectConfirmationV1 | undefined =
+		browserSideEffectEvent
+			? {
+					confirmationId: browserSideEffectEvent.payload.confirmationId,
+					status: browserSideEffectEvent.payload.status,
+					expiresAt: browserSideEffectEvent.payload.expiresAt,
+					operation: browserSideEffectEvent.payload.operation,
+					targetOrigin: browserSideEffectEvent.payload.targetOrigin,
+					redactedTargetSummary:
+						browserSideEffectEvent.payload.redactedTargetSummary,
+					binding: browserSideEffectEvent.payload.binding,
+				}
+			: undefined;
 	const browserHandlers = createBrowserConversationHandlers(
 		command.invokeBrowser,
 	);
@@ -718,12 +734,13 @@ export function ActiveConversation({
 					events={timeline.events}
 					executionId={latestExecution}
 				/>
-				{reader.browserHandoffEvent ? (
+				{reader.browserHandoffEvent || browserConfirmation ? (
 					<BrowserHandoffPanel
 						browserAvailable={
 							agent.capabilities.browser?.status === "available"
 						}
 						handoffEvent={reader.browserHandoffEvent}
+						confirmation={browserConfirmation}
 						currentBinding={browserBinding}
 						{...browserHandlers}
 					/>

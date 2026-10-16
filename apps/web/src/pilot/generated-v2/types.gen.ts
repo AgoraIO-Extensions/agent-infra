@@ -86,6 +86,15 @@ export type AgentApiCreationResponseV1 = {
     status: 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
 };
 
+export type AgentApiLifecycleAcceptedResponseV1 = {
+    accepted: true;
+    agentId: string;
+    replayed: boolean;
+    revision?: number;
+    schemaVersion: 1;
+    status?: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
+};
+
 export type AgentApiLifecycleRequestV1 = {
     command: 'start' | 'stop' | 'restart';
     schemaVersion: 1;
@@ -3380,7 +3389,7 @@ export type CommandAgentLifecycleV2Responses = {
     /**
      * Lifecycle command accepted
      */
-    202: AgentProjectionV2;
+    202: AgentProjectionV2 | AgentApiLifecycleAcceptedResponseV1;
 };
 
 export type CommandAgentLifecycleV2Response = CommandAgentLifecycleV2Responses[keyof CommandAgentLifecycleV2Responses];

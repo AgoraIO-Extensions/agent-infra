@@ -13,6 +13,7 @@ import {
 	decideAgentApplicationV2 as requestApplicationDecision,
 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
+	AgentApiLifecycleAcceptedResponseV1,
 	AgentApplicationProjectionV2,
 	AgentProjectionV2,
 	CommandAgentLifecycleV2Errors,
@@ -55,6 +56,10 @@ export type AgentLifecycleCommand = Exclude<
 	AgentLifecycleCommandRequestV1["command"],
 	"upgrade_custom_image"
 >;
+
+export type AgentLifecycleCommandResult =
+	| AgentProjectionV2
+	| AgentApiLifecycleAcceptedResponseV1;
 
 const maximumPendingApplicationPages = 100;
 const pendingApplicationPageSchema =
@@ -165,7 +170,7 @@ export async function commandAgentLifecycle(
 	command: AgentLifecycleCommand,
 	idempotencyKey: string,
 	client?: Client,
-): Promise<AgentProjectionV2> {
+): Promise<AgentLifecycleCommandResult> {
 	const result: Awaited<
 		RequestResult<
 			CommandAgentLifecycleV2Responses,

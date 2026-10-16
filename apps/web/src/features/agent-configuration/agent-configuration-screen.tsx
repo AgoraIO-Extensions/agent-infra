@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { useResultFocus } from "@/hooks/use-result-focus";
 
 import type {
+	AgentApiLifecycleAcceptedResponseV1,
 	AgentConfigurationUpdateRequestV2Writable,
 	AgentProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
@@ -46,7 +47,7 @@ type AgentConfigurationScreenProps = {
 	agent: AgentProjectionV2;
 	authorization?: ReactNode;
 	commandError?: (Error & { readonly retryable?: boolean }) | null;
-	commandResult?: AgentProjectionV2;
+	commandResult?: AgentProjectionV2 | AgentApiLifecycleAcceptedResponseV1;
 	lifecycle?: ReactNode;
 	onSave: (
 		body:
@@ -428,7 +429,14 @@ export function AgentConfigurationScreen({
 							role="status"
 						>
 							配置已提交：
-							{agentManagementStatusLabels[submittedResult.managementStatus]}。
+							{
+								agentManagementStatusLabels[
+									"managementStatus" in submittedResult
+										? submittedResult.managementStatus
+										: (submittedResult.status ?? agent.managementStatus)
+								]
+							}
+							。
 						</p>
 					) : null}
 					{commandError ? (

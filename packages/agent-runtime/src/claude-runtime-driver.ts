@@ -2239,7 +2239,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			},
 		};
 		if (selector === "commands") {
-			const directory = await this.discoverNativeCommands(nativeRead);
 			return projectNativeMetadataCommandsV1({
 				nativeSessionRef: read.nativeSessionRef,
 				configVersion: this.options.configVersion,
@@ -2247,7 +2246,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					name: "Claude",
 					version: CLAUDE_NATIVE_PROVENANCE.nativeVersion,
 				},
-				directory,
+				directory: { commands: [] },
 				assertCurrent: () => read.assertCurrent(),
 			});
 		}

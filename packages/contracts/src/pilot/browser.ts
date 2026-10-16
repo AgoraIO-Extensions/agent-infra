@@ -10,6 +10,7 @@ import {
 import { BrowserCapabilityProjectionV1Schema } from "../runtime/browser-capability.ts";
 import { RuntimeSkillCapabilityV1Schema } from "../runtime/events.ts";
 import {
+	AgentApiLifecycleAcceptedResponseV1Schema,
 	AgentApiLifecycleRequestV1Schema,
 	AgentApiLifecycleResponseV1Schema,
 	AgentApiStateResponseV1Schema,
@@ -2147,7 +2148,10 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			responses: {
 				"202": jsonResponse(
 					"Lifecycle command accepted",
-					AgentProjectionV2Schema,
+					z.union([
+						AgentProjectionV2Schema,
+						AgentApiLifecycleAcceptedResponseV1Schema,
+					]),
 				),
 				...errorResponses,
 			},
@@ -2214,6 +2218,8 @@ export const pilotBrowserSchemasV2 = {
 	AgentUserUseGrantRequestV1: AgentUserUseGrantRequestV1Schema,
 	AgentUserUseGrantResponseV1: AgentUserUseGrantResponseV1Schema,
 	AgentApiLifecycleRequestV1: AgentApiLifecycleRequestV1Schema,
+	AgentApiLifecycleAcceptedResponseV1:
+		AgentApiLifecycleAcceptedResponseV1Schema,
 	AgentApiLifecycleResponseV1: AgentApiLifecycleResponseV1Schema,
 	AgentApiCreationRequestV1: AgentApiCreationRequestV1Schema,
 	AgentApiCreationResponseV1: AgentApiCreationResponseV1Schema,

@@ -2656,6 +2656,13 @@ describe("contract compatibility command", () => {
 				delete schema.properties.capabilities.properties.skills;
 		}
 		const previous = structuredClone(current);
+		delete previous.components.schemas.AgentApiLifecycleAcceptedResponseV1;
+		previous.paths["/api/v2/agents/{agentId}/lifecycle"].post.responses[
+			"202"
+		].content["application/json"].schema =
+			previous.paths["/api/v2/agents/{agentId}/lifecycle"].post.responses[
+				"202"
+			].content["application/json"].schema.anyOf[0];
 		for (const path of Object.keys(previous.paths)) {
 			if (
 				path !== "/api/v2/admin/audit" &&

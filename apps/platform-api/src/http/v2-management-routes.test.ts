@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+	AgentApiLifecycleAcceptedResponseV1Schema,
 	AgentApplicationProjectionV2Schema,
 	AgentProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
@@ -130,6 +131,7 @@ function createApp(
 		identityValue?: unknown;
 		queryFailure?: boolean;
 		projectionFailure?: boolean;
+		projectionFailureAfterCommand?: boolean;
 		personalApiAgentRead?: PersonalApiAgentReadUseCaseV1;
 		/** 与生产应用一样挂上 HTTP 遥测，事件收集到这个数组里（#2569）。 */
 		telemetry?: OperationalEvent[];
@@ -152,7 +154,13 @@ function createApp(
 	const submit = vi.fn().mockResolvedValue({});
 	const executeManagementCommand = vi.fn().mockResolvedValue({
 		outcome: "accepted",
-		result: {},
+		result: {
+			schemaVersion: 1,
+			applicationId: "application-1",
+			agentId: "agent-private-1",
+			status: "available",
+			revision: 2,
+		},
 		writePlan: {},
 	});
 	const listApplications = vi.fn().mockResolvedValue({
@@ -167,9 +175,16 @@ function createApp(
 	const readApplicationProjection = vi
 		.fn()
 		.mockResolvedValue(applicationProjection);
-	const readAgentProjection = options.projectionFailure
-		? vi.fn().mockRejectedValue(new Error("private projection detail"))
-		: vi.fn().mockResolvedValue(agentProjection);
+	let projectionReads = 0;
+	const readAgentProjection = vi.fn().mockImplementation(async () => {
+		projectionReads += 1;
+		if (
+			options.projectionFailure ||
+			(options.projectionFailureAfterCommand && projectionReads > 1)
+		)
+			throw new Error("private projection detail");
+		return agentProjection;
+	});
 	const readApiAgentProjection = options.projectionFailure
 		? vi.fn().mockRejectedValue(new Error("private API projection detail"))
 		: vi.fn().mockResolvedValue(agentProjection);
@@ -177,6 +192,7 @@ function createApp(
 		.fn()
 		.mockResolvedValue({ applicationId: "application-1", agentId: "agent-1" });
 	const revise = vi.fn().mockResolvedValue({});
+	const upgradeCustomImage = vi.fn().mockResolvedValue({});
 
 	const resolve = options.identityFailure
 		? vi.fn().mockRejectedValue(new Error("private identity detail"))
@@ -201,7 +217,7 @@ function createApp(
 		foundation: { submit },
 		revision: { revise },
 		management: { executeManagementCommand },
-		configuration: { upgradeCustomImage: vi.fn().mockResolvedValue({}) },
+		configuration: { upgradeCustomImage },
 		query: { listApplications, getApplication, listAgents, getAgent },
 		allocateApplicationIds,
 		prepareSecretReplacements: vi.fn().mockResolvedValue({ secrets: [] }),
@@ -220,6 +236,7 @@ function createApp(
 		getAgent,
 		resolve,
 		readAgentProjection,
+		upgradeCustomImage,
 	};
 }
 
@@ -773,10 +790,10 @@ describe("V2 management routes", () => {
 describe("lifecycle command failures are observable (#2569)", () => {
 	const restart = JSON.stringify({ schemaVersion: 1, command: "restart" });
 
-	it("logs the route template, status and error code when the projection read after a committed command fails", async () => {
+	it("returns the committed projection when the follow-up read fails", async () => {
 		const telemetry: OperationalEvent[] = [];
 		const { app, executeManagementCommand } = createApp({
-			projectionFailure: true,
+			projectionFailureAfterCommand: true,
 			telemetry,
 		});
 
@@ -785,29 +802,53 @@ describe("lifecycle command failures are observable (#2569)", () => {
 			{ method: "POST", headers, body: restart },
 		);
 
-		// 命令已经提交，响应却是 503：提交之后读取投影失败被映射成依赖不可用。
-		// 这里只固定当前行为并让它可观测；是否改成仍返回已提交的结果见后续 Issue。
 		expect(executeManagementCommand).toHaveBeenCalledOnce();
-		expect(response.status).toBe(503);
-		const failure = PilotProtocolErrorV1Schema.parse(await response.json());
-		expect(failure.code).toBe("DEPENDENCY_UNAVAILABLE");
-		// 响应里的 traceId 与日志里的一致，可以据此对应到这一次失败。
-		expect(telemetry[0]?.traceId).toBe(failure.traceId);
+		expect(response.status).toBe(202);
+		expect(AgentProjectionV2Schema.parse(await response.json())).toMatchObject({
+			agentId: "agent-1",
+			managementStatus: "available",
+		});
 		expect(telemetry).toEqual([
 			{
 				stage: "http",
-				outcome: "failed",
+				outcome: "completed",
 				durationMs: expect.any(Number),
-				status: 503,
-				operationRef: "POST.api.v2.agents.:agentId.lifecycle",
-				protocolCode: "DEPENDENCY_UNAVAILABLE",
 				requestId: expect.any(String),
 				traceId: expect.any(String),
 			},
 		]);
-		expect(JSON.stringify(telemetry)).not.toMatch(
-			/agent-private-1|PRIVATE_QUERY|private projection detail/,
+	});
+
+	it("preserves the pre-command projection when a replay read fails", async () => {
+		const { app, executeManagementCommand } = createApp({
+			projectionFailureAfterCommand: true,
+		});
+		executeManagementCommand.mockResolvedValueOnce({
+			outcome: "replayed",
+			result: {
+				schemaVersion: 1,
+				applicationId: "application-1",
+				agentId: "agent-private-1",
+				status: "stopped",
+				revision: 2,
+			},
+			writePlan: null,
+		});
+		const response = await app.request(
+			"/api/v2/agents/agent-private-1/lifecycle",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({ schemaVersion: 1, command: "stop" }),
+			},
 		);
+
+		expect(response.status).toBe(202);
+		expect(AgentProjectionV2Schema.parse(await response.json())).toMatchObject({
+			agentId: "agent-1",
+			managementStatus: "available",
+			serviceAvailability: "ready",
+		});
 	});
 
 	it("keeps the log of an accepted lifecycle command free of failure fields", async () => {
@@ -826,5 +867,130 @@ describe("lifecycle command failures are observable (#2569)", () => {
 		expect(telemetry[0]).not.toHaveProperty("status");
 		expect(telemetry[0]).not.toHaveProperty("operationRef");
 		expect(telemetry[0]).not.toHaveProperty("protocolCode");
+	});
+
+	it("returns an accepted envelope when an image upgrade follow-up read fails", async () => {
+		const { app, upgradeCustomImage } = createApp({
+			projectionFailure: true,
+		});
+		const response = await app.request(
+			"/api/v2/agents/agent-private-1/lifecycle",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					command: "upgrade_custom_image",
+					imageReference: "registry.example/agent:v2",
+				}),
+			},
+		);
+
+		expect(response.status).toBe(202);
+		expect(
+			AgentApiLifecycleAcceptedResponseV1Schema.parse(await response.json()),
+		).toMatchObject({
+			accepted: true,
+			agentId: "agent-private-1",
+			replayed: false,
+		});
+		expect(upgradeCustomImage).toHaveBeenCalledOnce();
+	});
+
+	it("does not let a failed projection cache mask a denied command", async () => {
+		const { app, executeManagementCommand } = createApp({
+			projectionFailure: true,
+		});
+		executeManagementCommand.mockResolvedValueOnce({
+			outcome: "denied",
+			writePlan: null,
+		});
+
+		const response = await app.request("/api/v2/agents/agent-1/lifecycle", {
+			method: "POST",
+			headers,
+			body: restart,
+		});
+
+		expect(response.status).toBe(404);
+		expect(PilotProtocolErrorV1Schema.parse(await response.json()).code).toBe(
+			"RESOURCE_UNAVAILABLE",
+		);
+		expect(executeManagementCommand).toHaveBeenCalledOnce();
+	});
+
+	it("keeps image-upgrade failures mapped when the projection cache is unavailable", async () => {
+		const { app, upgradeCustomImage } = createApp({
+			projectionFailure: true,
+		});
+		upgradeCustomImage.mockRejectedValueOnce(
+			new Error("private upgrade failure"),
+		);
+
+		const response = await app.request("/api/v2/agents/agent-1/lifecycle", {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				schemaVersion: 1,
+				command: "upgrade_custom_image",
+				imageReference: "registry.example/agent:v2",
+			}),
+		});
+
+		expect(response.status).toBe(500);
+		expect(PilotProtocolErrorV1Schema.parse(await response.json()).code).toBe(
+			"INTERNAL_ERROR",
+		);
+		expect(upgradeCustomImage).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		[
+			"denied",
+			{ outcome: "denied", writePlan: null },
+			404,
+			"RESOURCE_UNAVAILABLE",
+		],
+		[
+			"conflict",
+			{ outcome: "conflict", reason: "stale_revision", writePlan: null },
+			409,
+			"INVALID_REQUEST",
+		],
+	] as const)(
+		"preserves %s lifecycle command mapping",
+		async (_label, decision, status, code) => {
+			const { app, executeManagementCommand } = createApp();
+			executeManagementCommand.mockResolvedValueOnce(decision as never);
+			const response = await app.request("/api/v2/agents/agent-1/lifecycle", {
+				method: "POST",
+				headers,
+				body: restart,
+			});
+
+			expect(response.status).toBe(status);
+			expect(PilotProtocolErrorV1Schema.parse(await response.json()).code).toBe(
+				code,
+			);
+		},
+	);
+
+	it("maps a command execution failure without exposing private details", async () => {
+		const { app, executeManagementCommand } = createApp();
+		executeManagementCommand.mockRejectedValueOnce(
+			new Error("private command failure"),
+		);
+		const response = await app.request("/api/v2/agents/agent-1/lifecycle", {
+			method: "POST",
+			headers,
+			body: restart,
+		});
+
+		expect(response.status).toBe(500);
+		const text = await response.text();
+		expect(PilotProtocolErrorV1Schema.parse(JSON.parse(text)).code).toBe(
+			"INTERNAL_ERROR",
+		);
+		expect(text).not.toContain("private command failure");
 	});
 });

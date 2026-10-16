@@ -556,6 +556,51 @@ describe("Browser handoff event parsing", () => {
 	});
 });
 
+describe("Browser side-effect event parsing", () => {
+	it("accepts a bounded pending confirmation and rejects scope drift", () => {
+		const payload = {
+			type: "browser.side_effect" as const,
+			confirmationId: "confirmation-1",
+			status: "pending" as const,
+			requestedAt: "2026-10-14T00:00:00.000Z",
+			expiresAt: "2026-10-14T00:05:00.000Z",
+			operation: "click",
+			targetOrigin: "https://example.test",
+			redactedTargetSummary: "提交公开表单",
+			binding: {
+				subjectId: "subject-1",
+				agentId: "agent-1",
+				conversationId: "conversation-1",
+				executionId: "execution-1",
+				sessionGeneration: 2,
+				resourceFence: 7,
+				workloadRevision: 3,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				capabilityVersion: 4,
+				capabilityRevision: 4,
+				pageRevision: 5,
+				actionId: "action-1",
+				confirmationId: "confirmation-1",
+				operationRef: "operation-1",
+				attemptRef: "attempt-1",
+			},
+		};
+		expect(parseConversationPersistedEventPayloadV1(payload)).toEqual(payload);
+		expect(() =>
+			parseConversationPersistedEventPayloadV1({
+				...payload,
+				binding: { ...payload.binding, confirmationId: "foreign" },
+			}),
+		).toThrow(ConversationEventError);
+		expect(() =>
+			parseConversationPersistedEventPayloadV1({
+				...payload,
+				targetOrigin: "https://example.test/path",
+			}),
+		).toThrow(ConversationEventError);
+	});
+});
+
 describe("waiting control event ownership", () => {
 	it("reads the platform cancellation event without exposing its internal reason", () => {
 		const payload = publicTaskStatusEventV1({

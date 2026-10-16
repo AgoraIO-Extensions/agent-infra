@@ -128,7 +128,7 @@ describe("SessionRuntimeDriver native metadata selectors", () => {
 				await fixture.driver.readNativeMetadataV1("commands", read),
 			).toMatchObject({
 				selector: "commands",
-				capabilities: [{ name: "compact" }],
+				capabilities: [],
 			});
 			expect(
 				await fixture.driver.readNativeMetadataV1("skills", read),

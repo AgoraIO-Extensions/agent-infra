@@ -141,6 +141,31 @@ export function answerText(
 	);
 }
 
+export const answerNotWrittenYet = "尚未输出正文。";
+export const answerNotLoaded =
+	"较早的内容还没有加载，点上方的「加载更早内容」查看。";
+
+/**
+ * 回复没有正文时显示什么。会话详情只返回最近一个事件窗口，窗口之外的 Execution 没有任何已加载
+ * 的事件，它们的正文要点「加载更早内容」才有；这时说「尚未输出正文」会让已完成的回复看起来是空的
+ * （#2635）。只有已经结束、窗口里确实没有它的任何事件、并且还有更早内容时才这样说。
+ */
+export function emptyAnswerNotice(
+	history: ConversationDetailProjectionV2,
+	events: readonly PersistedConversationEventV2[],
+	executionId: string | null,
+	status: ExecutionStatus | undefined,
+	hasEarlier: boolean,
+) {
+	if (!hasEarlier || executionId === null || !isTerminal(status))
+		return answerNotWrittenYet;
+	const loaded = (list: readonly PersistedConversationEventV2[]) =>
+		list.some((event) => event.executionId === executionId);
+	return loaded(history.events) || loaded(events)
+		? answerNotWrittenYet
+		: answerNotLoaded;
+}
+
 export function commandFailure(code: PilotProtocolErrorV1["code"]): string {
 	switch (code) {
 		case "AGENT_BUSY":

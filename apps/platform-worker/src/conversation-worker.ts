@@ -365,6 +365,9 @@ export function createPlatformConversationWorkerV2(
 								runtimeGrant: request.grant,
 								command: request.command,
 								binding: request.binding,
+								...(request.confirmation
+									? { confirmation: request.confirmation }
+									: {}),
 							};
 						const dispatched = await runtime?.browserSideEffect(
 							runtimeRequest,
@@ -380,7 +383,6 @@ export function createPlatformConversationWorkerV2(
 			resolver: {
 				resolve: async (invocation) => {
 					if (
-						!options.resolveBrowserSideEffect ||
 						!invocation.agentId ||
 						!invocation.channelId ||
 						!invocation.executionId ||
@@ -391,7 +393,70 @@ export function createPlatformConversationWorkerV2(
 						invocation.runtimeGrant === undefined
 					)
 						return null;
-					return options.resolveBrowserSideEffect(invocation);
+					if (options.resolveBrowserSideEffect)
+						return options.resolveBrowserSideEffect(invocation);
+					if (!invocation.claim || !store.readBrowserSideEffectBinding)
+						return null;
+					const event = await store.readBrowserSideEffectBinding({
+						claim: invocation.claim,
+						confirmationId: invocation.command.confirmationId,
+					});
+					const sideEffectEvent = event as {
+						type: "browser.side_effect";
+						binding: ConversationRuntimeBrowserSideEffectRequestV1["binding"] & {
+							capabilityRevision: number;
+						};
+						requestedAt: string;
+						expiresAt: string;
+						operation: string;
+						targetOrigin: string;
+						redactedTargetSummary: string;
+					} | null;
+					if (sideEffectEvent?.type !== "browser.side_effect") return null;
+					const binding = sideEffectEvent.binding;
+					if (!binding || typeof binding !== "object") return null;
+					const command =
+						invocation.command.command === "confirm_side_effect"
+							? ("confirm" as const)
+							: invocation.command.command === "reject_side_effect"
+								? ("reject" as const)
+								: ("cancel" as const);
+					const { capabilityRevision: _capabilityRevision, ...runtimeBinding } =
+						binding as Record<string, unknown>;
+					const confirmation = sideEffectEvent;
+					if (
+						typeof confirmation.requestedAt !== "string" ||
+						typeof confirmation.expiresAt !== "string" ||
+						typeof confirmation.operation !== "string" ||
+						typeof confirmation.targetOrigin !== "string" ||
+						typeof confirmation.redactedTargetSummary !== "string"
+					)
+						return null;
+					return {
+						schemaVersion: 1,
+						requestId: invocation.requestId,
+						traceId: invocation.traceId,
+						agentId: invocation.agentId,
+						actorId: invocation.identity.userId,
+						channelId: invocation.channelId,
+						conversationId: invocation.conversationId,
+						executionId: invocation.executionId,
+						turnId: invocation.turnId,
+						sessionGeneration: invocation.sessionGeneration,
+						deliveryFence: invocation.deliveryFence,
+						hostSessionRef: invocation.hostSessionRef,
+						runtimeGrant: invocation.runtimeGrant,
+						command,
+						binding:
+							runtimeBinding as unknown as ConversationRuntimeBrowserSideEffectRequestV1["binding"],
+						confirmation: {
+							requestedAt: confirmation.requestedAt,
+							expiresAt: confirmation.expiresAt,
+							operation: confirmation.operation,
+							targetOrigin: confirmation.targetOrigin,
+							redactedTargetSummary: confirmation.redactedTargetSummary,
+						},
+					};
 				},
 			},
 			operation: browserSideEffectOperation,
@@ -420,6 +485,7 @@ export function createPlatformConversationWorkerV2(
 						deliveryFence: claim.executionDeliveryFence,
 						hostSessionRef: claim.hostSessionRef,
 						runtimeGrant: authority.runtimeGrant,
+						claim,
 					});
 					return result.outcome === "accepted" || result.outcome === "replayed"
 						? { outcome: result.outcome }
