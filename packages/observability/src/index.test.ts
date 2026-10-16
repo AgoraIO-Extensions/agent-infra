@@ -557,3 +557,50 @@ it("rejects an unbounded service metric label at runtime", () => {
 		startObservability({ service: "platform-api:private" as "platform-api" }),
 	).toThrow("Invalid observability service");
 });
+
+it("accepts a bounded HTTP status and protocol code only on the http stage (#2569)", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-api",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	telemetry.record({
+		stage: "http",
+		outcome: "failed",
+		status: 503,
+		protocolCode: "DEPENDENCY_UNAVAILABLE",
+	});
+	for (const status of [99, 600, 503.5, Number.NaN, "503" as unknown as number])
+		telemetry.record({ stage: "http", outcome: "failed", status });
+	for (const protocolCode of [
+		"lowercase",
+		"HAS SPACE",
+		"X",
+		"A".repeat(65),
+		"PRIVATE\nSENTINEL",
+	])
+		telemetry.record({ stage: "http", outcome: "failed", protocolCode });
+	telemetry.record({
+		stage: "worker",
+		outcome: "failed",
+		status: 503,
+		protocolCode: "DEPENDENCY_UNAVAILABLE",
+	});
+	expect(lines).toHaveLength(12);
+	expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+		status: 503,
+		protocolCode: "DEPENDENCY_UNAVAILABLE",
+	});
+	for (const line of lines.slice(1)) {
+		expect(JSON.parse(line)).not.toHaveProperty("status");
+		expect(JSON.parse(line)).not.toHaveProperty("protocolCode");
+		expect(line).not.toContain("PRIVATE");
+	}
+	expect(telemetry.status().invalidRecords).toBe(0);
+});

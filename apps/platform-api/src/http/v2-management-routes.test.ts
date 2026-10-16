@@ -4,6 +4,7 @@ import {
 	AgentProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
+import type { OperationalEvent } from "@agent-infra/observability";
 import {
 	ApplicationRevisionError,
 	createPersonalApiAgentReadUseCaseV1,
@@ -13,6 +14,7 @@ import {
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
+import { createPlatformHealthApp } from "../app.js";
 import { registerV2ManagementRoutes } from "./v2-management-routes.js";
 
 const identity = {
@@ -129,9 +131,24 @@ function createApp(
 		queryFailure?: boolean;
 		projectionFailure?: boolean;
 		personalApiAgentRead?: PersonalApiAgentReadUseCaseV1;
+		/** 与生产应用一样挂上 HTTP 遥测，事件收集到这个数组里（#2569）。 */
+		telemetry?: OperationalEvent[];
 	} = {},
 ) {
-	const app = new Hono();
+	const app = options.telemetry
+		? createPlatformHealthApp({
+				record: (event) => options.telemetry?.push(event),
+				status: () => ({
+					enabled: true,
+					state: "active" as const,
+					captureFailures: 0,
+					exportFailures: 0,
+					lastExportFailureAt: undefined,
+					droppedLogs: 0,
+					invalidRecords: 0,
+				}),
+			})
+		: new Hono();
 	const submit = vi.fn().mockResolvedValue({});
 	const executeManagementCommand = vi.fn().mockResolvedValue({
 		outcome: "accepted",
@@ -750,5 +767,64 @@ describe("V2 management routes", () => {
 		const error = PilotProtocolErrorV1Schema.parse(await unavailable.json());
 		expect(error.code).toBe("DEPENDENCY_UNAVAILABLE");
 		expect(JSON.stringify(error)).not.toContain("private identity detail");
+	});
+});
+
+describe("lifecycle command failures are observable (#2569)", () => {
+	const restart = JSON.stringify({ schemaVersion: 1, command: "restart" });
+
+	it("logs the route template, status and error code when the projection read after a committed command fails", async () => {
+		const telemetry: OperationalEvent[] = [];
+		const { app, executeManagementCommand } = createApp({
+			projectionFailure: true,
+			telemetry,
+		});
+
+		const response = await app.request(
+			"/api/v2/agents/agent-private-1/lifecycle?token=PRIVATE_QUERY",
+			{ method: "POST", headers, body: restart },
+		);
+
+		// 命令已经提交，响应却是 503：提交之后读取投影失败被映射成依赖不可用。
+		// 这里只固定当前行为并让它可观测；是否改成仍返回已提交的结果见后续 Issue。
+		expect(executeManagementCommand).toHaveBeenCalledOnce();
+		expect(response.status).toBe(503);
+		const failure = PilotProtocolErrorV1Schema.parse(await response.json());
+		expect(failure.code).toBe("DEPENDENCY_UNAVAILABLE");
+		// 响应里的 traceId 与日志里的一致，可以据此对应到这一次失败。
+		expect(telemetry[0]?.traceId).toBe(failure.traceId);
+		expect(telemetry).toEqual([
+			{
+				stage: "http",
+				outcome: "failed",
+				durationMs: expect.any(Number),
+				status: 503,
+				operationRef: "POST.api.v2.agents.:agentId.lifecycle",
+				protocolCode: "DEPENDENCY_UNAVAILABLE",
+				requestId: expect.any(String),
+				traceId: expect.any(String),
+			},
+		]);
+		expect(JSON.stringify(telemetry)).not.toMatch(
+			/agent-private-1|PRIVATE_QUERY|private projection detail/,
+		);
+	});
+
+	it("keeps the log of an accepted lifecycle command free of failure fields", async () => {
+		const telemetry: OperationalEvent[] = [];
+		const { app } = createApp({ telemetry });
+
+		const response = await app.request("/api/v2/agents/agent-1/lifecycle", {
+			method: "POST",
+			headers,
+			body: restart,
+		});
+
+		expect(response.status).toBe(202);
+		expect(telemetry).toHaveLength(1);
+		expect(telemetry[0]).toMatchObject({ stage: "http", outcome: "completed" });
+		expect(telemetry[0]).not.toHaveProperty("status");
+		expect(telemetry[0]).not.toHaveProperty("operationRef");
+		expect(telemetry[0]).not.toHaveProperty("protocolCode");
 	});
 });

@@ -109,6 +109,20 @@ Agent 详情的 `source.services` 返回每个 Service 实际使用的档位。
 两项配置必须与 Worker 的 `workloadInput.policy` 同名字段取相同值，Worker 侧规则见
 [Worker 部署说明](../platform-worker/README.md#多服务资源档位)。
 
+## HTTP 失败日志
+
+每个请求结束时 Platform API 输出一条 `stage=http` 的结构化日志（5xx 为 error 级，4xx 为 info 级的
+`outcome=rejected`）。被拒绝或失败的请求额外带有：
+
+| 字段 | 含义 |
+| --- | --- |
+| `status` | HTTP 状态码 |
+| `operationRef` | 方法加路由模板，例如 `POST.api.v2.agents.:agentId.lifecycle`；没有匹配到路由的请求是 `GET.unmatched`，不含具体 ID 和查询串 |
+| `protocolCode` | 响应里的协议错误码，例如 `DEPENDENCY_UNAVAILABLE`、`RESOURCE_UNAVAILABLE`；只取这个有界标识，不记录响应正文 |
+
+完成的请求（2xx、3xx）不带这些字段。日志不包含请求或响应正文、凭证、用户标识和 Agent ID。同一个请求
+的 `requestId`、`traceId` 与响应里的 `traceId` 一致，可以用来对应一次具体的失败。
+
 ## 应用 Token 管理 Agent
 
 机器人或服务复用独立应用及其 API Token；同一应用可获得多个 Agent 的显式授权。
