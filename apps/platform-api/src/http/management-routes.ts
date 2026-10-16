@@ -75,6 +75,7 @@ interface ProjectionInput<T> extends RequestMetadata {
 	readonly identity: IdentityContext;
 	readonly application?: T;
 	readonly agent?: T;
+	readonly projectionScope?: object;
 }
 
 export interface SecretPreparationInput extends RequestMetadata {
@@ -224,6 +225,7 @@ async function projectApplication(
 		value = await dependencies.readApplicationProjection({
 			application,
 			identity,
+			projectionScope: metadata,
 			...metadata,
 		});
 	} catch {
@@ -245,6 +247,7 @@ async function projectAgent(
 		value = await dependencies.readAgentProjection({
 			agent,
 			identity,
+			projectionScope: metadata,
 			...metadata,
 		});
 	} catch {

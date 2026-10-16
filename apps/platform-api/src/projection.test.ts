@@ -117,6 +117,7 @@ describe("Agent projection owners (#2632)", () => {
 			["agent_00", "agent_01", "agent_02", "agent_03"].map((agentId) =>
 				projections.readManagementAgentProjection({
 					...metadata,
+					requestScope: metadata,
 					agent: agent(agentId),
 				}),
 			),
@@ -136,9 +137,10 @@ describe("Agent projection owners (#2632)", () => {
 
 		// 下一个请求有自己的身份对象：重新解析，不复用上一个请求的 Owner。
 		await projections.readManagementAgentProjection({
-			identity: { ...identity },
+			identity,
 			requestId: "request_02",
 			traceId: "trace_02",
+			requestScope: {},
 			agent: agent("agent_00"),
 		});
 		expect(hydrateUsers).toHaveBeenCalledTimes(3);
@@ -152,14 +154,16 @@ describe("Agent projection owners (#2632)", () => {
 				identity,
 				requestId: "request_01",
 				traceId: "trace_01",
+				requestScope: {},
 				agent: agent("agent_00"),
 			}),
 		).rejects.toMatchObject({ body: { code: "DEPENDENCY_UNAVAILABLE" } });
 		await expect(
 			projections.readManagementAgentProjection({
-				identity: { ...identity },
+				identity,
 				requestId: "request_02",
 				traceId: "trace_02",
+				requestScope: {},
 				agent: agent("agent_00"),
 			}),
 		).resolves.toMatchObject({ agentId: "agent_00" });

@@ -52,12 +52,16 @@ interface ProjectionMetadata {
 	readonly identity: IdentityContext;
 	readonly requestId: string;
 	readonly traceId: string;
+	/** Explicit per-request cache scope; never inferred from an identity object. */
+	readonly requestScope?: object;
 }
 
 interface ApiProjectionMetadata {
 	readonly apiUser: CurrentTaskUserV1;
 	readonly requestId: string;
 	readonly traceId: string;
+	/** Explicit per-request cache scope; never inferred from an identity object. */
+	readonly requestScope?: object;
 }
 
 function sourceMatches(
@@ -84,8 +88,8 @@ export function createPlatformProjectionReaders(
 	dependencies: ProjectionReaderDependencies,
 ) {
 	// 同一个请求里同一组 Owner 只解析一次：列表接口对每个 Agent 都要展示 Owner，之前每一项都
-	// 重新解析同一个 Owner（#2632）。键是路由为这个请求解析出的身份对象，请求结束后不再被引用，
-	// 记忆随之释放；下一个请求是新的身份对象，所以从不跨请求复用。
+	// 重新解析同一个 Owner（#2632）。键由路由显式传入的请求 scope 提供，绝不依赖 identity
+	// 对象实例恰好每请求唯一。
 	const ownersByRequest = new WeakMap<
 		object,
 		Map<string, ReturnType<typeof hydrateBrowserUsers>>
@@ -128,7 +132,11 @@ export function createPlatformProjectionReaders(
 		}
 		const configuration = result.configuration;
 		const [hydratedOwners, presentation] = await Promise.all([
-			owners(user, configuration.ownerIds, metadata.traceId),
+			owners(
+				metadata.requestScope ?? metadata,
+				configuration.ownerIds,
+				metadata.traceId,
+			),
 			dependencies.presentAgent({ agentId, configuration, management }),
 		]);
 		if (!sourceMatches(configuration, presentation.source)) {
