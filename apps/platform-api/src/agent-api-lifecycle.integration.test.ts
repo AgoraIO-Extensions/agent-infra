@@ -333,7 +333,7 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 		expect(response.status).toBe(200);
 		const body = (await response.json()) as Record<string, unknown>;
 		expect(body.failureReason).toBe(
-			"Agent workload reconciliation failed (kubernetes-forbidden)",
+			"Agent workload reconciliation failed - kubernetes-forbidden",
 		);
 	});
 

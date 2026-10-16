@@ -681,7 +681,7 @@ export class PostgresAgentManagementTransactionV1
 								failureReason: `${agentApiFailureReasonV1(state.failureCode)}${
 									recentWorkloadFailure &&
 									/^[a-z][a-z0-9_]{1,63}$/.test(recentWorkloadFailure)
-										? ` (${recentWorkloadFailure.replaceAll("_", "-")})`
+										? ` - ${recentWorkloadFailure.replaceAll("_", "-")}`
 										: ""
 								}`,
 							}
