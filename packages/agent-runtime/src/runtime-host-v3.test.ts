@@ -132,6 +132,48 @@ it("executes an admitted V3 native command through the Driver seam", async () =>
 	}
 });
 
+it("allows V3 metadata revalidation for a new execution on the bound native Session", async () => {
+	const env = await setup();
+	try {
+		const accepted = await submit(env.host);
+		await env.driver.setOperationStatus("execution-fixture", "completed");
+		const read = vi.spyOn(env.driver, "readNativeMetadataV1");
+		const request = signV3Fixture(
+			{
+				...base(accepted.hostSessionRef),
+				executionId: "execution-command",
+				turnId: "turn-command",
+				operation: {
+					kind: "execution" as const,
+					id: "execution-command",
+					deliveryFence: 2,
+					executionDeliveryFence: 2,
+				},
+				capabilityId: fakeNativeCommandCapabilityId,
+				capabilityKind: "command" as const,
+				directoryRevision: fakeNativeCommandDirectoryRevision,
+				capabilitySourceVersion: "1",
+				parameters: "",
+				parametersDigest: createHash("sha256").update("").digest("hex"),
+			},
+			"native-capability.invoke",
+		);
+		await expect(
+			env.host.nativeCapabilityV3(
+				request,
+				verifyRuntimeV2Fixture(request.grant),
+				new AbortController().signal,
+			),
+		).resolves.toMatchObject({ result: { outcome: "accepted" } });
+		expect(read).toHaveBeenCalledWith(
+			"commands",
+			expect.objectContaining({ allowUnboundExecution: true }),
+		);
+	} finally {
+		await env.host.close();
+	}
+});
+
 it("fails closed for an unbound Browser side-effect confirmation", async () => {
 	const env = await setup();
 	try {
