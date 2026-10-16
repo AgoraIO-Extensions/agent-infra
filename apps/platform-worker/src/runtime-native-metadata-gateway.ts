@@ -61,6 +61,17 @@ export interface WorkerRuntimeNativeMetadataCurrentCheckerV1 {
 	}): Promise<NativeMetadataCurrentResponseV1>;
 }
 
+export interface WorkerRuntimeNativeMetadataCallbackCredentialResolverV1 {
+	/** Resolve the credential for the already Store-bound current callback. */
+	resolve(input: {
+		readonly binding: RuntimeNativeMetadataBindingResponseV1;
+		readonly signal: AbortSignal;
+	}): Promise<{
+		readonly kind: "sandbox" | "deployment";
+		readonly token: string;
+	} | null>;
+}
+
 export interface WorkerRuntimeNativeMetadataTransportV1 {
 	read(
 		request: RuntimeNativeMetadataReadRequestV1,
@@ -227,10 +238,66 @@ export function createWorkerRuntimeNativeMetadataGatewayAppV1(options: {
 		ReturnType<typeof createWorkerRuntimeNativeMetadataGatewayV1>,
 		"read"
 	>;
+	/** Store-backed resolver used only by the Runtime Host current callback. */
+	readonly binding?: WorkerRuntimeNativeMetadataBindingResolverV1;
+	readonly callbackCredential?: WorkerRuntimeNativeMetadataCallbackCredentialResolverV1;
 	readonly current?: WorkerRuntimeNativeMetadataCurrentCheckerV1;
 }) {
 	if (!/^[\x21-\x7e]{1,8192}$/.test(options.serviceToken))
 		throw new TypeError("Runtime native metadata service token is invalid");
+	if (
+		(options.binding === undefined) !==
+		(options.callbackCredential === undefined)
+	)
+		throw new TypeError(
+			"Runtime native metadata callback credential is invalid",
+		);
+	const currentAuthorization = async (input: {
+		readonly header: string | null;
+		readonly value: {
+			readonly apiRequestSourceRef: string;
+			readonly request: NativeMetadataCurrentRequestV1;
+		};
+		readonly signal: AbortSignal;
+	}) => {
+		if (
+			!options.binding ||
+			!options.callbackCredential ||
+			input.value.request.phase !== "read_metadata"
+		)
+			return false;
+		try {
+			const {
+				phase: _phase,
+				originalHostScopeRef: _host,
+				...identity
+			} = input.value.request;
+			const readRequest = PlatformNativeMetadataReadRequestV1Schema.parse({
+				...identity,
+				apiRequestSourceRef: input.value.apiRequestSourceRef,
+			});
+			const binding = await options.binding.resolve({
+				request: readRequest,
+				signal: input.signal,
+			});
+			if (
+				input.signal.aborted ||
+				!binding ||
+				!sameIdentity(readRequest, binding) ||
+				binding.originalHostScopeRef !==
+					input.value.request.originalHostScopeRef
+			)
+				return false;
+			const credential = await options.callbackCredential.resolve({
+				binding,
+				signal: input.signal,
+			});
+			if (!credential || input.signal.aborted) return false;
+			return authorized(input.header, credential.token);
+		} catch {
+			return false;
+		}
+	};
 	return {
 		async fetch(request: Request): Promise<Response> {
 			const path = new URL(request.url).pathname;
@@ -239,13 +306,6 @@ export function createWorkerRuntimeNativeMetadataGatewayAppV1(options: {
 				![gatewayPath, currentPath].includes(path)
 			)
 				return new Response(null, { status: 404 });
-			if (
-				!authorized(request.headers.get("authorization"), options.serviceToken)
-			)
-				return Response.json(
-					{ code: "PLATFORM_WORKER_UNAUTHORIZED" },
-					{ status: 401 },
-				);
 			let value:
 				| PlatformNativeMetadataReadRequestV1
 				| {
@@ -253,6 +313,17 @@ export function createWorkerRuntimeNativeMetadataGatewayAppV1(options: {
 						request: NativeMetadataCurrentRequestV1;
 				  };
 			try {
+				if (
+					path === gatewayPath &&
+					!authorized(
+						request.headers.get("authorization"),
+						options.serviceToken,
+					)
+				)
+					return Response.json(
+						{ code: "PLATFORM_WORKER_UNAUTHORIZED" },
+						{ status: 401 },
+					);
 				const body = await boundedRequestBody(request);
 				const parsed = JSON.parse(body);
 				value =
@@ -267,8 +338,26 @@ export function createWorkerRuntimeNativeMetadataGatewayAppV1(options: {
 			}
 			try {
 				if (path === currentPath) {
-					if (!options.current)
+					if (
+						!options.current ||
+						!options.binding ||
+						!options.callbackCredential
+					)
 						return Response.json({ outcome: "unavailable" }, { status: 503 });
+					if (
+						!(await currentAuthorization({
+							header: request.headers.get("authorization"),
+							value: value as {
+								readonly apiRequestSourceRef: string;
+								readonly request: NativeMetadataCurrentRequestV1;
+							},
+							signal: request.signal,
+						}))
+					)
+						return Response.json(
+							{ code: "PLATFORM_WORKER_UNAUTHORIZED" },
+							{ status: 401 },
+						);
 					const current = await options.current.check({
 						request: (value as { request: NativeMetadataCurrentRequestV1 })
 							.request,

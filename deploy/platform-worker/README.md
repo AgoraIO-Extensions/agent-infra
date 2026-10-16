@@ -49,10 +49,12 @@ catalog revision 及 approved billing validation；请求会重新检查 Owner�
 修订和 Key version。`savedKeyCandidates` 仍可作为受控部署 override。
 
 Native metadata 的 Worker 网关还提供固定的当前确认入口
-`/internal/platform-worker/v1/native-metadata/current`。Runtime Host 只能使用部署注入的
-Worker origin 和 service token 调用该入口，并把 API request source ref 作为不透明关联值
-传递；调用方不能提交 URL、token、主体或 Host scope。缺少当前确认配置、关联失效或 Worker
-不可达时，读取保持 unavailable。
+`/internal/platform-worker/v1/native-metadata/current`。Runtime Host 使用固定 Worker origin；
+Session Sandbox 使用由当前 Store allocation、固定 Worker namespace 和
+`sessionSandboxServiceTokenV1` 派生的 Sandbox token，未绑定 Sandbox 的 Agent-level Execution
+才使用部署 service token。Worker 先按 body 的 Conversation/Execution scope 重新解析权威 binding，
+再校验对应 credential；调用方不能提交 URL、namespace、token、主体或 Host scope。缺少当前确认配置、
+关联失效、Sandbox allocation 非 ready/running 或 Worker 不可达时，读取保持 unavailable。
 
 Session Sandbox 也使用同一固定 Worker origin，但其 token 由 Worker 按
 `sessionSandboxServiceTokenV1` 为每个 Sandbox 派生，并通过该 Sandbox 自己的 Secret

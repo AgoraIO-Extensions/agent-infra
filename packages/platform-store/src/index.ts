@@ -97,6 +97,8 @@ export {
 	type ConversationQueryReadOptionsV1,
 	type ConversationQueryScopeV1,
 	type ConversationReplayResultV1,
+	type NativeMetadataCallbackCredentialScopeRequestV1,
+	type NativeMetadataCallbackCredentialScopeResponseV1,
 	type NativeMetadataObjectScopeRequestV1,
 	type NativeMetadataObjectScopeResponseV1,
 	type PlatformQueueResourceSnapshot,

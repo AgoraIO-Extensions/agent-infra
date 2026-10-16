@@ -19,11 +19,25 @@ import {
 } from "./runtime-native-metadata-gateway.js";
 import { createWorkerRuntimeNativeMetadataProofIssuerV1 } from "./runtime-native-metadata-proof.js";
 import type { PlatformWorkerNativeMetadataGatewayServerOptionsV1 } from "./runtime-native-metadata-server.js";
+import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
 
-type NativeMetadataScopeQueryV1 = Pick<
+type NativeMetadataObjectScopeQueryV1 = Pick<
 	PostgresConversationQueryV1,
 	"readNativeMetadataObjectScopeV1"
 >;
+type NativeMetadataCallbackCredentialScopeQueryV1 = Pick<
+	PostgresConversationQueryV1,
+	"readNativeMetadataCallbackCredentialScopeV1"
+>;
+
+function validNamespace(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.length >= 1 &&
+		value.length <= 63 &&
+		/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(value)
+	);
+}
 
 function sameScope(
 	left: PlatformNativeMetadataReadRequestV1["scope"],
@@ -53,7 +67,7 @@ function sameScope(
 
 /** Build the default Store-backed binding resolver; transport stays deployment-owned. */
 export function createPlatformNativeMetadataBindingResolverV1(options: {
-	readonly query: NativeMetadataScopeQueryV1;
+	readonly query: NativeMetadataObjectScopeQueryV1;
 	readonly close?: () => Promise<void>;
 }) {
 	if (typeof options.query?.readNativeMetadataObjectScopeV1 !== "function")
@@ -92,6 +106,69 @@ export function createPlatformNativeMetadataBindingResolverV1(options: {
 	};
 }
 
+/**
+ * Resolve the callback credential from the authoritative current Sandbox
+ * allocation.  The deployment namespace is fixed by the Worker process; a
+ * request cannot select a namespace or derive a token from caller metadata.
+ */
+export function createPlatformNativeMetadataSandboxCredentialResolverV1(options: {
+	readonly query: NativeMetadataCallbackCredentialScopeQueryV1;
+	readonly deploymentServiceToken: string;
+	readonly namespace: string;
+}) {
+	if (
+		!/^[\x21-\x7e]{1,8192}$/.test(options.deploymentServiceToken) ||
+		!validNamespace(options.namespace) ||
+		typeof options.query?.readNativeMetadataCallbackCredentialScopeV1 !==
+			"function"
+	)
+		throw new TypeError(
+			"Platform native metadata callback credential is invalid",
+		);
+	return {
+		async resolve(input: {
+			readonly binding: RuntimeNativeMetadataBindingResponseV1;
+			readonly signal: AbortSignal;
+		}): Promise<{
+			readonly kind: "sandbox" | "deployment";
+			readonly token: string;
+		} | null> {
+			try {
+				const scope =
+					await options.query.readNativeMetadataCallbackCredentialScopeV1({
+						scope: {
+							actorId: input.binding.scope.principal.id,
+							channelId: input.binding.scope.channelId,
+							principal: input.binding.scope.principal,
+						},
+						conversationId: input.binding.scope.conversationId,
+						executionId: input.binding.scope.executionId,
+						signal: input.signal,
+					});
+				if (
+					!scope ||
+					scope.originalHostScopeRef !== input.binding.originalHostScopeRef
+				)
+					return null;
+				if (scope.sandboxId === null && scope.namespace === null)
+					return { kind: "deployment", token: options.deploymentServiceToken };
+				if (scope.sandboxId === null || scope.namespace !== options.namespace)
+					return null;
+				return {
+					kind: "sandbox",
+					token: sessionSandboxServiceTokenV1(
+						options.deploymentServiceToken,
+						scope.namespace,
+						scope.sandboxId,
+					),
+				};
+			} catch {
+				return null;
+			}
+		},
+	};
+}
+
 export interface PlatformWorkerNativeMetadataGatewayPortsV1 {
 	/** Explicit deployment seam; when absent the Store-backed resolver is used. */
 	readonly binding?: WorkerRuntimeNativeMetadataBindingResolverV1;
@@ -103,6 +180,8 @@ export interface PlatformWorkerNativeMetadataGatewayPortsV1 {
 	readonly proofIssuer?: WorkerRuntimeNativeMetadataProofIssuerV1;
 	/** Explicit transport override; takes precedence over runtimeTarget. */
 	readonly transport?: WorkerRuntimeNativeMetadataTransportResolverV1;
+	/** Current Runtime Host callback credential, resolved from Store allocation. */
+	readonly callbackCredential?: import("./runtime-native-metadata-gateway.js").WorkerRuntimeNativeMetadataCallbackCredentialResolverV1;
 	/** Deployment-resolved fixed Runtime target keyed by the verified binding. */
 	readonly runtimeTarget?: PlatformNativeMetadataRuntimeTargetResolverV1;
 	readonly port?: number;
@@ -152,6 +231,8 @@ export function createPlatformNativeMetadataTransportResolverV1(options: {
 
 export function createPlatformNativeMetadataGatewayAssemblyV1(options: {
 	readonly serviceToken: string;
+	/** Fixed Kubernetes namespace for current callback credential derivation. */
+	readonly namespace?: string;
 	/** Used only when the deployment omits an explicit binding resolver. */
 	readonly databaseUrl?: string;
 	readonly signing?: {
@@ -187,15 +268,22 @@ export function createPlatformNativeMetadataGatewayAssemblyV1(options: {
 					options.ports.platformApiCurrent,
 				)
 			: { check: async () => ({ outcome: "unavailable" as const }) });
+	let defaultQuery: PostgresConversationQueryV1 | undefined;
+	const needsDefaultQuery =
+		options.databaseUrl !== undefined &&
+		(options.ports.binding === undefined ||
+			(options.namespace !== undefined &&
+				options.ports.callbackCredential === undefined));
+	if (needsDefaultQuery) {
+		defaultQuery = new PostgresConversationQueryV1({
+			databaseUrl: options.databaseUrl as string,
+		});
+	}
 	const defaultBinding =
-		options.ports.binding === undefined && options.databaseUrl
+		options.ports.binding === undefined && defaultQuery
 			? (() => {
-					const query = new PostgresConversationQueryV1({
-						databaseUrl: options.databaseUrl,
-					});
 					return createPlatformNativeMetadataBindingResolverV1({
-						query,
-						close: () => query.close(),
+						query: defaultQuery,
 					});
 				})()
 			: undefined;
@@ -204,6 +292,15 @@ export function createPlatformNativeMetadataGatewayAssemblyV1(options: {
 		throw new TypeError(
 			"Platform Worker native metadata binding resolver is unavailable",
 		);
+	const callbackCredential =
+		options.ports.callbackCredential ??
+		(options.namespace && defaultQuery
+			? createPlatformNativeMetadataSandboxCredentialResolverV1({
+					query: defaultQuery,
+					deploymentServiceToken: options.serviceToken,
+					namespace: options.namespace,
+				})
+			: undefined);
 	const transport =
 		options.ports.transport ??
 		(options.ports.runtimeTarget
@@ -228,9 +325,10 @@ export function createPlatformNativeMetadataGatewayAssemblyV1(options: {
 		app: createWorkerRuntimeNativeMetadataGatewayAppV1({
 			serviceToken: options.serviceToken,
 			gateway,
+			...(callbackCredential ? { binding, callbackCredential } : {}),
 			current,
 		}),
 		...(options.ports.port === undefined ? {} : { port: options.ports.port }),
-		...(defaultBinding?.close ? { close: defaultBinding.close } : {}),
+		...(defaultQuery ? { close: () => defaultQuery.close() } : {}),
 	};
 }

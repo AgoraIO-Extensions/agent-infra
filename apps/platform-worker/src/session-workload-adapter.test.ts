@@ -1571,6 +1571,27 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 		expect(writes).toBe(0);
 	});
 
+	it("accepts the allocation namespace for native metadata egress", () => {
+		expect(() =>
+			sessionSandboxResourcesV1({
+				...allocation,
+				egress: {
+					nativeMetadataWorkerEgress: [
+						{
+							destination: {
+								namespace: "workload-test",
+								podLabels: {
+									"app.kubernetes.io/component": "platform-worker",
+								},
+							},
+							port: 3004,
+						},
+					],
+				},
+			} as SessionSandboxAllocationV1),
+		).not.toThrow();
+	});
+
 	it.each([
 		{
 			destination: { ip: "203.0.113.10" },

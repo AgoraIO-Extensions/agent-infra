@@ -696,6 +696,12 @@ test("native metadata Worker gateway is opt-in and restricted to Platform API", 
 		"topology-agent-infra-platform-worker-native-metadata",
 	);
 	assert.equal(service.spec.ports[0].port, 3010);
+	const sandboxService = resource(
+		resources,
+		"Service",
+		"platform-worker-native-metadata",
+	);
+	assert.equal(sandboxService.spec.ports[0].port, 3010);
 	const deployment = resource(
 		resources,
 		"Deployment",
@@ -714,6 +720,15 @@ test("native metadata Worker gateway is opt-in and restricted to Platform API", 
 		"app.kubernetes.io/instance": "topology",
 		"app.kubernetes.io/component": "platform-api",
 	});
+	assert.deepEqual(
+		policy.spec.ingress[1].from[0].podSelector.matchExpressions,
+		[
+			{
+				key: "agent-infra.agora.io/sandbox-id",
+				operator: "Exists",
+			},
+		],
+	);
 	const apiEgress = resource(
 		resources,
 		"NetworkPolicy",

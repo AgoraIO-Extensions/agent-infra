@@ -1063,6 +1063,84 @@ describe("PostgreSQL original native metadata scope", () => {
 	});
 });
 
+describe("PostgreSQL native metadata callback credential scope", () => {
+	const read = () =>
+		query.readNativeMetadataCallbackCredentialScopeV1({
+			scope: actorOne,
+			conversationId: "conversation-1",
+			executionId: "execution-conversation-1",
+			signal: new AbortController().signal,
+		});
+
+	it("returns the ready execution Sandbox and its policy namespace", async () => {
+		const [original] = await client<
+			{ resource_policy: Record<string, unknown> | null }[]
+		>`select resource_policy from platform.session_sandbox_allocations
+			where conversation_id='conversation-1'`;
+		await client`
+			update platform.session_sandbox_allocations
+			set resource_policy=jsonb_set(coalesce(resource_policy, '{}'::jsonb), '{namespace}', '"fixture-sandboxes"')
+			where conversation_id='conversation-1'`;
+		const [allocation] = await client<
+			{ sandbox_id: string; namespace: string | null }[]
+		>`select sandbox_id, resource_policy->>'namespace' as namespace
+			from platform.session_sandbox_allocations where conversation_id='conversation-1'`;
+		try {
+			if (!allocation?.sandbox_id || !allocation.namespace)
+				throw new Error("Expected ready Sandbox fixture");
+			await expect(read()).resolves.toEqual({
+				sandboxId: allocation.sandbox_id,
+				namespace: allocation.namespace,
+				originalHostScopeRef: null,
+			});
+		} finally {
+			await client`
+				update platform.session_sandbox_allocations set resource_policy=${
+					original?.resource_policy
+						? client.json(
+								original.resource_policy as Parameters<typeof client.json>[0],
+							)
+						: null
+				}
+				where conversation_id='conversation-1'`;
+		}
+	});
+
+	it("returns an explicit deployment scope for an unbound Agent execution", async () => {
+		const [original] = await client<{ sandbox_id: string | null }[]>`
+			select sandbox_id from platform.conversation_executions
+			where execution_id='execution-conversation-1'`;
+		if (original === undefined) throw new Error("Missing execution fixture");
+		await client`
+			update platform.conversation_executions set sandbox_id=null
+			where execution_id='execution-conversation-1'`;
+		try {
+			await expect(read()).resolves.toEqual({
+				sandboxId: null,
+				namespace: null,
+				originalHostScopeRef: null,
+			});
+		} finally {
+			await client`
+				update platform.conversation_executions set sandbox_id=${original.sandbox_id}
+				where execution_id='execution-conversation-1'`;
+		}
+	});
+
+	it("rejects a Sandbox allocation that is no longer ready", async () => {
+		await client`
+			update platform.session_sandbox_allocations set status='stopped'
+			where conversation_id='conversation-1'`;
+		try {
+			await expect(read()).resolves.toBeUndefined();
+		} finally {
+			await client`
+				update platform.session_sandbox_allocations set status='ready'
+				where conversation_id='conversation-1'`;
+		}
+	});
+});
+
 describe("PostgreSQL current model-directory dispatch scope", () => {
 	it("binds the active Web execution to its Conversation session and fence", async () => {
 		await client`

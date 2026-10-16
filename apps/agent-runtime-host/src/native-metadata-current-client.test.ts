@@ -51,6 +51,9 @@ describe("Runtime native metadata current client", () => {
 			apiRequestSourceRef: "api-source-host-client",
 			request,
 		});
+		expect(init?.headers).toMatchObject({
+			authorization: "Bearer worker-service-token",
+		});
 	});
 
 	it("fails closed on unavailable Worker responses", async () => {
