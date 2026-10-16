@@ -68,6 +68,7 @@ export const operationalStages = [
 export type OperationalStage = (typeof operationalStages)[number];
 export type OperationalOutcome =
 	| "completed"
+	| "waiting"
 	| "rejected"
 	| "failed"
 	| "unknown";
@@ -181,6 +182,7 @@ export interface ObservabilityOptions {
 
 const outcomes = new Set<OperationalOutcome>([
 	"completed",
+	"waiting",
 	"rejected",
 	"failed",
 	"unknown",

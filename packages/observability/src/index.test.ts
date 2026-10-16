@@ -116,6 +116,26 @@ it("logs a bounded stage duration for latency comparison (#1525)", () => {
 	expect(JSON.parse(lines[1] ?? "{}")).not.toHaveProperty("durationMs");
 });
 
+it("accepts waiting as a non-error operational outcome", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-worker",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	telemetry.record({ stage: "task_dispatch", outcome: "waiting" });
+	expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+		stage: "task_dispatch",
+		outcome: "waiting",
+	});
+	expect(telemetry.status().invalidRecords).toBe(0);
+});
+
 it("writes the service key once per operation log line (#2306)", () => {
 	const lines: string[] = [];
 	const telemetry = startObservability({
