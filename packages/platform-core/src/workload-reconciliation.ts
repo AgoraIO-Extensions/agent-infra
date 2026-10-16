@@ -200,6 +200,8 @@ export interface WorkloadReconciliationStateV1 {
 	readonly cleanupInterrupted?: true;
 	readonly failureCode: "reconciliation_failed" | "health_check_failed" | null;
 	readonly attempts: number;
+	/** Latest bounded swallowed-step failure; absent on legacy states. */
+	readonly lastFailure?: WorkloadReconciliationFailureV1;
 	readonly capabilities?: WorkloadCapabilitiesV1;
 }
 
@@ -264,6 +266,98 @@ export interface WorkloadStepFailureV1 {
 	readonly error: unknown;
 }
 
+export type WorkloadFailureReasonCodeV1 =
+	| "kubernetes_unauthorized"
+	| "kubernetes_forbidden"
+	| "kubernetes_not_found"
+	| "kubernetes_conflict"
+	| "kubernetes_invalid"
+	| "kubernetes_throttled"
+	| "kubernetes_server_error"
+	| "kubernetes_unreachable"
+	| "kubernetes_policy"
+	| "preflight_rejected"
+	| "capabilities_unavailable"
+	| "unexpected_error";
+
+/** Credential-free persisted explanation of a swallowed Workload step failure. */
+export interface WorkloadReconciliationFailureV1 {
+	readonly schemaVersion: 1;
+	readonly reason: WorkloadFailureReasonCodeV1;
+	readonly attempts: number;
+	readonly status?: number;
+	readonly kind?: string;
+	readonly verb?: string;
+}
+
+function classifyWorkloadFailureReasonV1(
+	error: unknown,
+): WorkloadFailureReasonCodeV1 {
+	if (error instanceof WorkloadPreflightRejectedErrorV1)
+		return "preflight_rejected";
+	if (!error || typeof error !== "object") return "unexpected_error";
+	const value = error as Record<string, unknown>;
+	if (value.reason === "capabilities_unavailable")
+		return "capabilities_unavailable";
+	const code = value.code;
+	if (code === "policy") return "kubernetes_policy";
+	if (code === "conflict") return "kubernetes_conflict";
+	if (code !== "unavailable") return "unexpected_error";
+	const details = value.details;
+	const status =
+		details && typeof details === "object"
+			? (details as Record<string, unknown>).status
+			: undefined;
+	if (typeof status !== "number") return "kubernetes_unreachable";
+	if (status === 401) return "kubernetes_unauthorized";
+	if (status === 403) return "kubernetes_forbidden";
+	if (status === 404) return "kubernetes_not_found";
+	if (status === 409) return "kubernetes_conflict";
+	if (status === 400 || status === 422) return "kubernetes_invalid";
+	if (status === 429) return "kubernetes_throttled";
+	if (status >= 500) return "kubernetes_server_error";
+	return "kubernetes_unreachable";
+}
+
+function classifyWorkloadFailureDetailsV1(
+	error: unknown,
+	reason: WorkloadFailureReasonCodeV1,
+	attempts: number,
+): WorkloadReconciliationFailureV1 {
+	const value =
+		error && typeof error === "object"
+			? (error as Record<string, unknown>)
+			: {};
+	const details =
+		value.details && typeof value.details === "object"
+			? (value.details as Record<string, unknown>)
+			: {};
+	const status =
+		typeof details.status === "number" &&
+		Number.isSafeInteger(details.status) &&
+		details.status >= 100 &&
+		details.status <= 599
+			? details.status
+			: undefined;
+	const kind =
+		typeof details.kind === "string" &&
+		/^[A-Za-z][A-Za-z0-9.-]{0,63}$/.test(details.kind)
+			? details.kind
+			: undefined;
+	const verb =
+		typeof details.verb === "string" && /^[a-z][a-z-]{0,31}$/.test(details.verb)
+			? details.verb
+			: undefined;
+	return {
+		schemaVersion: 1,
+		reason,
+		attempts,
+		...(status === undefined ? {} : { status }),
+		...(kind === undefined ? {} : { kind }),
+		...(verb === undefined ? {} : { verb }),
+	};
+}
+
 export interface WorkloadRuntimePortV1 {
 	capabilities(
 		state: WorkloadReconciliationStateV1,
@@ -319,6 +413,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 	readonly store: WorkloadReconciliationStorePortV1;
 	readonly runtime: WorkloadRuntimePortV1;
 	readonly maximumAttempts?: number;
+	/** Consecutive Kubernetes 401/403 failures before existing failure cleanup. */
+	readonly authorizationFailureThreshold?: number;
 	/**
 	 * Consecutive monitor probes of a serving Workload that may fail to
 	 * complete before its route closes (#2046). An unhealthy answer, drift or a
@@ -335,6 +431,12 @@ export function createWorkloadReconciliationV1(dependencies: {
 	const maximumAttempts = dependencies.maximumAttempts ?? 60;
 	if (!Number.isSafeInteger(maximumAttempts) || maximumAttempts < 1)
 		throw new TypeError("Invalid Workload retry limit");
+	const authorizationFailureThreshold = Math.min(
+		dependencies.authorizationFailureThreshold ?? 3,
+		maximumAttempts,
+	);
+	if (authorizationFailureThreshold < 1)
+		throw new TypeError("Invalid Workload authorization failure threshold");
 	const probeFailureThreshold = dependencies.probeFailureThreshold ?? 3;
 	if (
 		!Number.isSafeInteger(probeFailureThreshold) ||
@@ -349,8 +451,12 @@ export function createWorkloadReconciliationV1(dependencies: {
 		state: WorkloadReconciliationStateV1,
 		health: Awaited<ReturnType<WorkloadRuntimePortV1["observe"]>>,
 	) => health === "unreachable" && state.attempts + 1 < probeFailureThreshold;
-	const servingProbeCompleted = (state: WorkloadReconciliationStateV1) =>
-		state.attempts === 0 ? state : { ...state, attempts: 0 };
+	const servingProbeCompleted = (state: WorkloadReconciliationStateV1) => {
+		const { lastFailure: _, ...retained } = state;
+		return state.attempts === 0 && state.lastFailure === undefined
+			? state
+			: { ...retained, attempts: 0 };
+	};
 	const runtime = dependencies.runtime;
 	return {
 		async tick(workerId: string): Promise<"idle" | "advanced"> {
@@ -438,10 +544,21 @@ export function createWorkloadReconciliationV1(dependencies: {
 				const advance = (
 					phase: WorkloadPhaseV1,
 					changes: Partial<WorkloadReconciliationStateV1> = {},
-				) => ({ ...state, phase, attempts: 0, ...changes });
+				) => {
+					const next = { ...state, phase, attempts: 0, ...changes };
+					if (!Object.hasOwn(changes, "lastFailure"))
+						delete (next as { lastFailure?: WorkloadReconciliationFailureV1 })
+							.lastFailure;
+					return next;
+				};
 				const failed = (
 					failureCode: "reconciliation_failed" | "health_check_failed",
-				) => advance("cleaning", { failureCode });
+					lastFailure?: WorkloadReconciliationFailureV1,
+				) =>
+					advance("cleaning", {
+						failureCode,
+						...(lastFailure ? { lastFailure } : {}),
+					});
 				try {
 					switch (state.phase) {
 						case "preflight": {
@@ -604,7 +721,12 @@ export function createWorkloadReconciliationV1(dependencies: {
 									rollback: true,
 								});
 							}
-							return advance("failed", { identity: null });
+							return advance("failed", {
+								identity: null,
+								...(state.lastFailure
+									? { lastFailure: state.lastFailure }
+									: {}),
+							});
 						}
 						case "stopped":
 							await runtime.closeRoute(state);
@@ -627,6 +749,26 @@ export function createWorkloadReconciliationV1(dependencies: {
 							}
 					}
 				} catch (error) {
+					const reason = classifyWorkloadFailureReasonV1(error);
+					const previousFailure = state.lastFailure;
+					const consecutiveAttempts =
+						previousFailure?.reason === reason
+							? previousFailure.attempts + 1
+							: 1;
+					const lastFailure = classifyWorkloadFailureDetailsV1(
+						error,
+						reason,
+						consecutiveAttempts,
+					);
+					const authorizationTerminal =
+						(reason === "kubernetes_unauthorized" ||
+							reason === "kubernetes_forbidden") &&
+						consecutiveAttempts >= authorizationFailureThreshold;
+					const retrying = {
+						...state,
+						attempts: Math.min(state.attempts + 1, maximumAttempts),
+						lastFailure,
+					};
 					// 步骤里的异常被吞掉后只会让 attempts 加一或进入失败处理；这里把它交给
 					// 观测回调，由调用方决定记录什么（正文不进入持久状态）。
 					const observe = (next: WorkloadReconciliationStateV1) => {
@@ -646,18 +788,20 @@ export function createWorkloadReconciliationV1(dependencies: {
 					if (state.phase === "preflight") {
 						if (
 							!(error instanceof WorkloadPreflightRejectedErrorV1) &&
-							state.attempts + 1 < maximumAttempts
+							state.attempts + 1 < maximumAttempts &&
+							!authorizationTerminal
 						)
-							return observe({ ...state, attempts: state.attempts + 1 });
+							return observe(retrying);
 						if (state.verified)
 							return observe(
 								advance("rejected", {
 									candidate: state.verified,
 									rollback: true,
 									failureCode: "reconciliation_failed",
+									lastFailure,
 								}),
 							);
-						return observe(failed("reconciliation_failed"));
+						return observe(failed("reconciliation_failed", lastFailure));
 					}
 					// Cleanup and route closure are retried durably, even after the
 					// bounded candidate budget is exhausted. Never report clean early.
@@ -666,13 +810,10 @@ export function createWorkloadReconciliationV1(dependencies: {
 						state.phase === "closing" ||
 						state.phase === "stopped"
 					)
-						return observe({
-							...state,
-							attempts: Math.min(state.attempts + 1, maximumAttempts),
-						});
-					if (state.attempts + 1 >= maximumAttempts)
-						return observe(failed("reconciliation_failed"));
-					return observe({ ...state, attempts: state.attempts + 1 });
+						return observe(retrying);
+					if (state.attempts + 1 >= maximumAttempts || authorizationTerminal)
+						return observe(failed("reconciliation_failed", lastFailure));
+					return observe(retrying);
 				}
 			});
 		},
