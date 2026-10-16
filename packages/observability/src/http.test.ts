@@ -148,6 +148,10 @@ it.each([
 				stage: "http",
 				outcome,
 				durationMs: expect.any(Number),
+				// 被拒绝或失败的请求带上状态码和路由模板（#2569）；完成的请求保持不变。
+				...(outcome === "completed"
+					? {}
+					: { status, operationRef: "GET.request" }),
 				requestId: expect.any(String),
 				traceId: expect.any(String),
 			},
@@ -218,4 +222,151 @@ it("expires request context after headers and does not observe a streaming body"
 	expect(events).toHaveLength(1);
 	expect(JSON.stringify(events)).not.toContain("SENTINEL");
 	expect(currentRequestMetadata()).toBeUndefined();
+});
+
+const failureBody = (code: string, message = "PRIVATE_BODY_SENTINEL") => ({
+	schemaVersion: 1,
+	code,
+	message,
+	retryable: true,
+	traceId: "trace",
+});
+
+function observed() {
+	const events: OperationalEvent[] = [];
+	const app = new Hono();
+	app.use(
+		"*",
+		createHttpObservability({ record: (event) => events.push(event) }),
+	);
+	return { app, events };
+}
+
+it("records the route template, status and protocol code of a failed request without identifiers (#2569)", async () => {
+	const { app, events } = observed();
+	app.post("/api/v2/agents/:agentId/lifecycle", (context) =>
+		context.json(failureBody("DEPENDENCY_UNAVAILABLE"), 503),
+	);
+	const response = await app.request(
+		"/api/v2/agents/agent_PRIVATE_ID/lifecycle?token=PRIVATE_QUERY",
+		{
+			method: "POST",
+			headers: { Authorization: "Bearer PRIVATE_TOKEN" },
+			body: "PRIVATE_REQUEST_BODY",
+		},
+	);
+	expect(response.status).toBe(503);
+	// 读取协议错误码不能消耗客户端要读的响应正文。
+	expect(await response.json()).toMatchObject({
+		code: "DEPENDENCY_UNAVAILABLE",
+		message: "PRIVATE_BODY_SENTINEL",
+	});
+	expect(events).toEqual([
+		{
+			stage: "http",
+			outcome: "failed",
+			durationMs: expect.any(Number),
+			status: 503,
+			operationRef: "POST.api.v2.agents.:agentId.lifecycle",
+			protocolCode: "DEPENDENCY_UNAVAILABLE",
+			requestId: expect.any(String),
+			traceId: expect.any(String),
+		},
+	]);
+	const text = JSON.stringify(events);
+	for (const secret of [
+		"PRIVATE_ID",
+		"PRIVATE_QUERY",
+		"PRIVATE_TOKEN",
+		"PRIVATE_REQUEST_BODY",
+		"PRIVATE_BODY_SENTINEL",
+	])
+		expect(text).not.toContain(secret);
+});
+
+it("records a rejected request the same way and leaves completed requests untouched (#2569)", async () => {
+	const { app, events } = observed();
+	app.get("/api/v2/conversations/:conversationId", (context) =>
+		context.json(failureBody("RESOURCE_UNAVAILABLE"), 404),
+	);
+	app.get("/ok", (context) => context.json({ ok: true }));
+	await app.request("/api/v2/conversations/conversation-PRIVATE");
+	await app.request("/ok");
+	expect(events[0]).toMatchObject({
+		outcome: "rejected",
+		status: 404,
+		operationRef: "GET.api.v2.conversations.:conversationId",
+		protocolCode: "RESOURCE_UNAVAILABLE",
+	});
+	expect(events[1]).toEqual({
+		stage: "http",
+		outcome: "completed",
+		durationMs: expect.any(Number),
+		requestId: expect.any(String),
+		traceId: expect.any(String),
+	});
+});
+
+it("names an unmatched request without its path and ignores bodies that are not protocol errors (#2569)", async () => {
+	const { app, events } = observed();
+	app.get("/text", (context) => context.text("PRIVATE_TEXT_SENTINEL", 500));
+	app.get("/loose", (context) =>
+		context.json({ code: "private failure text" }, 500),
+	);
+	app.get("/large", (context) =>
+		context.json(
+			{ code: "DEPENDENCY_UNAVAILABLE", pad: "x".repeat(5_000) },
+			503,
+		),
+	);
+	await app.request("/missing/PRIVATE_PATH_SENTINEL");
+	await app.request("/text");
+	await app.request("/loose");
+	await app.request("/large");
+	expect(
+		events.map(({ operationRef, status, protocolCode }) => ({
+			operationRef,
+			status,
+			protocolCode,
+		})),
+	).toEqual([
+		{ operationRef: "GET.unmatched", status: 404, protocolCode: undefined },
+		{ operationRef: "GET.text", status: 500, protocolCode: undefined },
+		{ operationRef: "GET.loose", status: 500, protocolCode: undefined },
+		{ operationRef: "GET.large", status: 503, protocolCode: undefined },
+	]);
+	expect(JSON.stringify(events)).not.toMatch(/PRIVATE_/);
+});
+
+it("keeps the failure fields in the structured log line and out of metric labels (#2569)", async () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-api",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	const app = new Hono();
+	app.use("*", createHttpObservability(telemetry));
+	app.post("/api/v2/agents/:agentId/lifecycle", (context) =>
+		context.json(failureBody("DEPENDENCY_UNAVAILABLE"), 503),
+	);
+	await app.request("/api/v2/agents/agent_PRIVATE_ID/lifecycle", {
+		method: "POST",
+	});
+	expect(lines).toHaveLength(1);
+	expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+		level: 50,
+		stage: "http",
+		outcome: "failed",
+		status: 503,
+		protocolCode: "DEPENDENCY_UNAVAILABLE",
+		operationRef: "POST.api.v2.agents.:agentId.lifecycle",
+	});
+	expect(lines[0]).not.toContain("PRIVATE_");
+	expect(telemetry.status().invalidRecords).toBe(0);
+	await telemetry.close();
 });

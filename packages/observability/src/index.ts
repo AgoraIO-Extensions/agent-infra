@@ -107,6 +107,10 @@ export interface OperationalEvent {
 	readonly outcome: OperationalOutcome;
 	readonly durationMs?: number;
 	readonly code?: OperationalCode;
+	/** HTTP 状态码，仅 `http` 阶段的被拒绝或失败请求使用（#2569）。 */
+	readonly status?: number;
+	/** 响应里的协议错误码（如 `DEPENDENCY_UNAVAILABLE`），仅 `http` 阶段使用；不是错误正文。 */
+	readonly protocolCode?: string;
 	readonly requestId?: string;
 	readonly traceId?: string;
 	readonly agentId?: string;
@@ -169,6 +173,7 @@ const knownResourceKinds = new Set<string>(resourceKinds);
 const identifier =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const operationIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const protocolCodePattern = /^[A-Z][A-Z0-9_]{2,63}$/;
 
 function safeId(value: unknown) {
 	return typeof value === "string" && identifier.test(value)
@@ -507,6 +512,8 @@ export function startObservability(options: ObservabilityOptions) {
 					outcome,
 					durationMs,
 					code,
+					status,
+					protocolCode,
 					requestId,
 					traceId,
 					agentId,
@@ -546,6 +553,18 @@ export function startObservability(options: ObservabilityOptions) {
 				const details = {
 					...labels,
 					...(code && codes.has(code) ? { code } : {}),
+					// 状态码和协议错误码只对 http 阶段有意义，且必须是有界的值；其余一律丢弃。
+					...(stage === "http" &&
+					Number.isInteger(status) &&
+					(status as number) >= 100 &&
+					(status as number) <= 599
+						? { status }
+						: {}),
+					...(stage === "http" &&
+					typeof protocolCode === "string" &&
+					protocolCodePattern.test(protocolCode)
+						? { protocolCode }
+						: {}),
 					...(safeId(requestId) ? { requestId } : {}),
 					...(safeId(traceId) ? { traceId } : {}),
 					...(safeId(agentId) ? { agentId } : {}),
