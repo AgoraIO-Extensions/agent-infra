@@ -666,14 +666,16 @@ export function createPlatformConversationWorkerV2(
 							? "completed"
 							: decision.outcome === "unknown"
 								? "unknown"
-								: decision.outcome === "busy" || decision.outcome === "retry"
-									? "failed"
-									: "rejected";
+								: decision.outcome === "busy"
+									? "waiting"
+									: decision.outcome === "retry"
+										? "failed"
+										: "rejected";
 					record(options.observability, {
 						stage: "task_dispatch",
 						outcome,
 						durationMs: performance.now() - began,
-						...(decision.outcome === "busy" || decision.outcome === "retry"
+						...(decision.outcome === "retry"
 							? { code: "TASK_UNAVAILABLE" as const }
 							: {}),
 						// The operation is a bounded Store value. Item IDs stay out of

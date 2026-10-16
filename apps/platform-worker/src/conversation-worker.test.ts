@@ -779,7 +779,7 @@ describe("conversation dispatch observability", () => {
 		[{ schemaVersion: 1, outcome: "accepted" }, { outcome: "completed" }],
 		[
 			{ schemaVersion: 1, outcome: "busy", retryScheduled: false },
-			{ outcome: "failed", code: "TASK_UNAVAILABLE" },
+			{ outcome: "waiting" },
 		],
 		[
 			{ schemaVersion: 1, outcome: "retry", retryScheduled: true },
