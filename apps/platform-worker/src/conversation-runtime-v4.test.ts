@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { createRuntimeExecutionGrantVerifierV2 } from "@agent-infra/agent-runtime";
 import {
 	type ConversationDispatchStorePortV1,
+	type ConversationRuntimeDispatchRequestV1,
 	ConversationRuntimeHostError,
 	createConversationDispatchUseCaseV1,
 } from "@agent-infra/platform-core";
@@ -69,6 +71,159 @@ const terminal = {
 } as const;
 
 describe("Execution-bound V4 in the production conversation adapter", () => {
+	it.each(["command", "skill"] as const)(
+		"dispatches an admitted V4 native %s plan with its exact binding",
+		async (capabilityKind) => {
+			const h = runtimeV4Harness();
+			const parameters = JSON.stringify({ path: "workspace/file.txt" });
+			const nativeCapability = {
+				agentId: "agent",
+				actorId: "user",
+				channelId: "web",
+				turnId: "turn",
+				capabilityId: "a".repeat(64),
+				capabilityKind,
+				directoryRevision: "b".repeat(64),
+				capabilitySourceVersion: "1.0.0",
+				parameters,
+				parametersDigest: createHash("sha256").update(parameters).digest("hex"),
+			} as const;
+			Object.assign(h.claim, {
+				operation: "conversation.native-capability.invoke.v1",
+				messageId: null,
+				modelConfigurationRevision: null,
+				modelOptionId: null,
+				reasoningLevel: null,
+				input: null,
+				nativeCapability,
+			});
+			const accepted = h.accepted();
+			if (!accepted) throw new Error("Missing accepted execution");
+			h.setAccepted({
+				...accepted,
+				trustedHostSessionRef: "host",
+				scope: { ...accepted.scope, hostSessionRef: "host" },
+				selection: undefined,
+			});
+			try {
+				const reference = await h.authorize();
+				const request: ConversationRuntimeDispatchRequestV1 = {
+					schemaVersion: 1,
+					operation: "native-capability.invoke",
+					requestId: "request",
+					traceId: "trace",
+					agentId: "agent",
+					actorId: "user",
+					channelId: "web",
+					conversationId: "conversation",
+					executionId: "execution",
+					turnId: "turn",
+					sessionGeneration: 1,
+					deliveryFence: 2,
+					executionDeliveryFence: 2,
+					hostSessionRef: "host",
+					runtimeGrant: reference,
+					nativeCapability,
+				};
+				await expect(
+					h.runtime.runtimeHost.dispatch(request),
+				).resolves.toMatchObject({
+					result: { outcome: "accepted" },
+				});
+				const sent = h.sent();
+				expect(sent.url).toContain("/v4/native-capability");
+				expect(sent.body.businessRequest).toMatchObject({
+					capabilityId: nativeCapability.capabilityId,
+					capabilityKind,
+					directoryRevision: nativeCapability.directoryRevision,
+					capabilitySourceVersion: nativeCapability.capabilitySourceVersion,
+					parameters: nativeCapability.parameters,
+					parametersDigest: nativeCapability.parametersDigest,
+				});
+				expect(sent.body.businessRequest).not.toHaveProperty("input");
+				expect(sent.body.businessRequest).not.toHaveProperty("selection");
+				expect(sent.body.businessRequest.operation).toMatchObject({
+					kind: "execution",
+					id: "execution",
+				});
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
+
+	it("fails closed on a mismatched V4 native response without retrying the operation", async () => {
+		const h = runtimeV4Harness();
+		const parameters = "{}";
+		const nativeCapability = {
+			agentId: "agent",
+			actorId: "user",
+			channelId: "web",
+			turnId: "turn",
+			capabilityId: "a".repeat(64),
+			capabilityKind: "skill" as const,
+			directoryRevision: "b".repeat(64),
+			capabilitySourceVersion: "1.0.0",
+			parameters,
+			parametersDigest: createHash("sha256").update(parameters).digest("hex"),
+		};
+		Object.assign(h.claim, {
+			operation: "conversation.native-capability.invoke.v1",
+			messageId: null,
+			modelConfigurationRevision: null,
+			modelOptionId: null,
+			reasoningLevel: null,
+			input: null,
+			nativeCapability,
+		});
+		const accepted = h.accepted();
+		if (!accepted) throw new Error("Missing accepted execution");
+		h.setAccepted({
+			...accepted,
+			trustedHostSessionRef: "host",
+			scope: { ...accepted.scope, hostSessionRef: "host" },
+			selection: undefined,
+		});
+		h.fetcher.mockImplementationOnce(async () =>
+			Response.json({
+				schemaVersion: 4,
+				hostSessionRef: "host",
+				executionId: "foreign-execution",
+				operationId: "foreign-execution",
+				result: { outcome: "accepted", status: "running" },
+			}),
+		);
+		try {
+			const reference = await h.authorize();
+			const request: ConversationRuntimeDispatchRequestV1 = {
+				schemaVersion: 1,
+				operation: "native-capability.invoke",
+				requestId: "request",
+				traceId: "trace",
+				agentId: "agent",
+				actorId: "user",
+				channelId: "web",
+				conversationId: "conversation",
+				executionId: "execution",
+				turnId: "turn",
+				sessionGeneration: 1,
+				deliveryFence: 2,
+				executionDeliveryFence: 2,
+				hostSessionRef: "host",
+				runtimeGrant: reference,
+				nativeCapability,
+			};
+			await expect(
+				h.runtime.runtimeHost.dispatch(request),
+			).rejects.toMatchObject({
+				code: "RUNTIME_RESPONSE_INVALID",
+			});
+			expect(h.fetcher).toHaveBeenCalledTimes(1);
+		} finally {
+			h.runtime.close();
+		}
+	});
+
 	it("routes Browser handoff through the existing control grant and V3 client", async () => {
 		const h = runtimeV4Harness();
 		try {
