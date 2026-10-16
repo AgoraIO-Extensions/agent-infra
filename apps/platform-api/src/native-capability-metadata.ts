@@ -231,6 +231,7 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 						conversationId: current.conversationId,
 						sessionGeneration: current.sessionGeneration,
 						authorizationRevision: current.authorizationRevision,
+						hostScopeRef: current.currentHostScopeRef,
 					};
 					const timestamp = now();
 					if (!Number.isSafeInteger(timestamp) || timestamp < 0)
@@ -265,6 +266,7 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 					entry.scope.conversationId === scope.conversationId &&
 					entry.scope.sessionGeneration === scope.sessionGeneration &&
 					entry.scope.authorizationRevision === scope.authorizationRevision &&
+					entry.scope.hostScopeRef === scope.hostScopeRef &&
 					entry.scope.authorizationRevision ===
 						options.identity.authorizationRevision &&
 					sameRequest(entry.request, request) &&

@@ -167,6 +167,7 @@ export interface NativeCapabilityAdmissionScopeV1 {
 	readonly conversationId: string;
 	readonly sessionGeneration: number;
 	readonly authorizationRevision: string;
+	readonly hostScopeRef: string;
 }
 
 export interface NativeCapabilityMetadataRevalidationPortV1 {
@@ -477,6 +478,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 				return { outcome: "denied", reason: "authorization_lost" };
 			const requestDigest = nativeCapabilityAdmissionRequestDigestV1(request);
 			try {
+				let latestScopeForCommit: NativeCapabilityAdmissionScopeV1 | undefined;
 				return await dependencies.transaction.admitNativeCapability(
 					{ command: request, authority, requestDigest },
 					async (state) => {
@@ -516,6 +518,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							"conversationId",
 							"sessionGeneration",
 							"authorizationRevision",
+							"hostScopeRef",
 						]);
 						if (
 							scope.agentId !== authority.agentId ||
@@ -524,6 +527,8 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							scope.conversationId !== request.conversationId ||
 							scope.sessionGeneration !== conversation.sessionGeneration ||
 							scope.authorizationRevision !== authority.authorizationRevision ||
+							typeof scope.hostScopeRef !== "string" ||
+							scope.hostScopeRef.length === 0 ||
 							selected.id !== request.capabilityId ||
 							selected.directoryRevision !== request.directoryRevision
 						)
@@ -566,6 +571,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							"conversationId",
 							"sessionGeneration",
 							"authorizationRevision",
+							"hostScopeRef",
 						]);
 						const currentScope: NativeCapabilityAdmissionScopeV1 = {
 							agentId: latestScope.agentId as string,
@@ -575,12 +581,15 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							sessionGeneration: latestScope.sessionGeneration as number,
 							authorizationRevision:
 								latestScope.authorizationRevision as string,
+							hostScopeRef: latestScope.hostScopeRef as string,
 						};
 						if (
 							!isDeepStrictEqual(latestSelected, selected) ||
-							!isDeepStrictEqual(currentScope, scope)
+							!isDeepStrictEqual(currentScope, scope) ||
+							currentScope.hostScopeRef.length === 0
 						)
 							return { outcome: "stale" };
+						latestScopeForCommit = currentScope;
 						const finalAuthority = await dependencies.authorization.authorize({
 							schemaVersion: 1,
 							operation: "native-capability.invoke",
@@ -676,17 +685,11 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 						return freeze(plan);
 					},
 					(plan) =>
+						latestScopeForCommit !== undefined &&
 						dependencies.metadata.isCurrent({
 							request,
 							capability: plan.capability,
-							scope: {
-								agentId: plan.agentId,
-								actorId: plan.actorId,
-								channelId: plan.channelId,
-								conversationId: plan.conversationId,
-								sessionGeneration: plan.sessionGeneration,
-								authorizationRevision: plan.authorizationRevision,
-							},
+							scope: latestScopeForCommit,
 						}),
 					async () => {
 						try {

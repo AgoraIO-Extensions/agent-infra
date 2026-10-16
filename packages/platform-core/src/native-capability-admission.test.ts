@@ -225,6 +225,7 @@ describe("native capability admission contract", () => {
 						conversationId: request.conversationId,
 						sessionGeneration: conversation.sessionGeneration,
 						authorizationRevision: authority.authorizationRevision,
+						hostScopeRef: "host-session-1",
 					},
 				};
 			},
@@ -319,6 +320,7 @@ describe("native capability admission contract", () => {
 						conversationId: request.conversationId,
 						sessionGeneration: conversation.sessionGeneration,
 						authorizationRevision: authority.authorizationRevision,
+						hostScopeRef: "host-session-1",
 					},
 				};
 			},

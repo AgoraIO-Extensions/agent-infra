@@ -48,6 +48,7 @@ const scope = {
 	conversationId: current.conversationId,
 	sessionGeneration: current.sessionGeneration,
 	authorizationRevision: current.authorizationRevision,
+	hostScopeRef: current.currentHostScopeRef,
 };
 
 function fixture(options: { now?: () => number; cacheTtlMs?: number } = {}) {
@@ -247,6 +248,23 @@ describe("native capability metadata revalidation", () => {
 				request,
 				capability: allowed.capability,
 				scope,
+			}),
+		).toBe(false);
+	});
+
+	it("rejects a Host binding drift at the synchronous commit check", async () => {
+		const f = fixture();
+		const allowed = await f.adapter.revalidate({
+			request,
+			authority,
+			sessionGeneration: 3,
+		});
+		if (allowed.outcome !== "allowed") throw new Error("expected allowed");
+		expect(
+			f.adapter.isCurrent({
+				request,
+				capability: allowed.capability,
+				scope: { ...scope, hostScopeRef: "rebound-host" },
 			}),
 		).toBe(false);
 	});
