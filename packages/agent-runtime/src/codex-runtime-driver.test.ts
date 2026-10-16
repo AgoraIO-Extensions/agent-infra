@@ -69,6 +69,7 @@ import {
 import type {
 	RuntimeBrowserToolExecutionRequestV1,
 	RuntimeBrowserToolExecutionResultV1,
+	RuntimeNativeSkillCommandV1,
 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
@@ -12841,6 +12842,46 @@ describe("Codex model started Driver state guard", () => {
 });
 
 describe("Codex structured Skill input", () => {
+	function nativeSkillCommand(
+		fixture: Awaited<ReturnType<typeof skillDiscoveryFixture>>,
+		projection: {
+			revision: string;
+			capabilities: readonly {
+				id: string;
+				kind: "skill";
+				name: string;
+				source: { version: string };
+			}[];
+		},
+		overrides: Partial<RuntimeNativeSkillCommandV1> = {},
+	): RuntimeNativeSkillCommandV1 {
+		const capability = projection.capabilities.find(
+			(entry) => entry.name === "workspace-summary",
+		);
+		if (!capability) throw new Error("missing fixture Skill capability");
+		const parameters = "summarize files";
+		return {
+			schemaVersion: 1,
+			kind: "native-capability",
+			operationId: "skill-execution",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "skill-execution",
+			turnId: "skill-turn",
+			sessionGeneration: 1,
+			nativeSessionRef: fixture.nativeSessionRef,
+			capabilityId: capability.id,
+			directoryRevision: projection.revision,
+			packageDigest: installedSkillDescriptor().manifest.packageDigest.sha256,
+			manifestDigest: installedSkillDescriptor().manifestSha256,
+			parameters,
+			parametersDigest: createHash("sha256").update(parameters).digest("hex"),
+			capabilityName: capability.name,
+			capabilitySourceVersion: capability.source.version,
+			...overrides,
+		};
+	}
+
 	it("binds the verified mounted entry path and version", () => {
 		const root = "/opt/agent-infra-skill-hub";
 		const path = `${root}/.agents/skills/workspace-summary/SKILL.md`;
@@ -12882,7 +12923,162 @@ describe("Codex structured Skill input", () => {
 				text: "$workspace-summary summarize files",
 			}),
 		).toThrow();
+		const unmounted = {
+			...directory,
+			nativeSkillPaths: () => [],
+		};
+		expect(() =>
+			createCodexNativeSkillInputV1(unmounted, {
+				name: "workspace-summary",
+				version: "1.0.0",
+				packageDigest: "b".repeat(64),
+				manifestDigest: "c".repeat(64),
+				text: "$workspace-summary summarize files",
+			}),
+		).toThrow();
+		const replaced = {
+			...directory,
+			findSkills: () => [
+				{
+					schemaVersion: 1 as const,
+					name: "workspace-summary",
+					version: "1.0.0",
+					packageDigest: "d".repeat(64),
+					manifestDigest: "c".repeat(64),
+					targetPath: ".agents/skills/workspace-summary",
+					readOnly: true as const,
+				},
+			],
+		};
+		expect(() =>
+			createCodexNativeSkillInputV1(replaced, {
+				name: "workspace-summary",
+				version: "1.0.0",
+				packageDigest: "b".repeat(64),
+				manifestDigest: "c".repeat(64),
+				text: "$workspace-summary summarize files",
+			}),
+		).toThrow();
 	});
+
+	it.each([1, 2] as const)(
+		"projects V%s native Skill selection into one structured turn/start input",
+		async (schemaVersion) => {
+			const fixture = await skillDiscoveryFixture();
+			const projection = await fixture.driver.discoverNativeSkills(
+				fixture.read,
+			);
+			const native = fixture.driver.createNativeSkillCommand(
+				nativeSkillCommand(fixture, projection),
+			);
+			const command =
+				schemaVersion === 1
+					? native
+					: {
+							...native,
+							schemaVersion: 2 as const,
+							selection: {
+								schemaVersion: 1 as const,
+								modelOptionId: "model-option-primary",
+								reasoningLevel: "high",
+							},
+						};
+			const response = await fixture.driver.execute(command);
+			const starts = fixture.bridge.requests.filter(
+				(request) => request.method === "turn/start",
+			);
+			expect(starts).toHaveLength(1);
+			expect(starts[0]?.params).toEqual({
+				threadId: "codex-native-thread-private",
+				clientUserMessageId: "skill-execution",
+				input: [
+					{ type: "text", text: "$workspace-summary summarize files" },
+					{
+						type: "skill",
+						name: "workspace-summary",
+						path: installedSkillDescriptor().manifest.entryPath,
+					},
+				],
+				model: expect.stringMatching(/^[a-f0-9]{64}\/gpt-5\.3-codex$/),
+				effort: "high",
+			});
+			expect(response).toMatchObject({
+				result: { outcome: "accepted", status: "running" },
+			});
+		},
+	);
+
+	it("replays one Skill operation and reports an active-turn conflict without a second dispatch", async () => {
+		const fixture = await skillDiscoveryFixture();
+		const projection = await fixture.driver.discoverNativeSkills(fixture.read);
+		const native = fixture.driver.createNativeSkillCommand(
+			nativeSkillCommand(fixture, projection),
+		);
+		const first = await fixture.driver.execute(native);
+		const replay = await fixture.driver.execute(native);
+		expect(replay).toEqual(first);
+		const conflict = fixture.driver.createNativeSkillCommand(
+			nativeSkillCommand(fixture, projection, {
+				operationId: "second-skill-execution",
+				executionId: "second-skill-execution",
+				turnId: "second-skill-turn",
+			}),
+		);
+		await expect(fixture.driver.execute(conflict)).resolves.toMatchObject({
+			result: { outcome: "busy" },
+		});
+		expect(
+			fixture.bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(1);
+	});
+
+	it("keeps a Skill response-loss operation uncertain without leaking the native error", async () => {
+		const fixture = await skillDiscoveryFixture();
+		const projection = await fixture.driver.discoverNativeSkills(fixture.read);
+		const native = fixture.driver.createNativeSkillCommand(
+			nativeSkillCommand(fixture, projection),
+		);
+		fixture.bridge.rejectNextSelectedTurn({
+			code: -32_600,
+			message: "synthetic native response loss",
+		});
+		await expect(fixture.driver.execute(native)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+		});
+		const state = await readFile(fixture.path, "utf8");
+		expect(state).toContain("acceptanceUncertainOperationKey");
+		expect(state).not.toContain("synthetic native response loss");
+	});
+
+	it.each([
+		["revision", { directoryRevision: "f".repeat(64) }],
+		["package digest", { packageDigest: "d".repeat(64) }],
+		["manifest digest", { manifestDigest: "e".repeat(64) }],
+		["same-name replacement", { capabilitySourceVersion: "9.9.9" }],
+	] as const)(
+		"fails closed before turn/start when the Skill %s binding drifts",
+		async (_reason, override) => {
+			const fixture = await skillDiscoveryFixture();
+			const projection = await fixture.driver.discoverNativeSkills(
+				fixture.read,
+			);
+			const command = nativeSkillCommand(fixture, projection, override);
+			let error: unknown;
+			try {
+				fixture.driver.createNativeSkillCommand(command);
+			} catch (caught) {
+				error = caught;
+			}
+			expect(error).toMatchObject({
+				code: "RUNTIME_CODEX_SKILL_DIRECTORY_INVALID",
+			});
+			expect(
+				fixture.bridge.requests.some(
+					(request) => request.method === "turn/start",
+				),
+			).toBe(false);
+		},
+	);
 });
 
 // Complete-entry scripted tests. These mappings/configs are not native acceptance.
