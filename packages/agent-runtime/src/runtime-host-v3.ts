@@ -234,7 +234,7 @@ export class RuntimeHostV3 {
 					request.operation.deliveryFence,
 					true,
 				).nativeSessionRef ?? nativeRequired(),
-			allowUnboundExecution: true,
+			allowUnboundExecution: request.operation.kind === "execution",
 			active,
 			signal: active,
 			expiresAt,
