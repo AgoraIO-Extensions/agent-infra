@@ -2038,3 +2038,128 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 		expect(onAccessDenied).toHaveBeenCalledOnce();
 	});
 });
+
+describe("answers outside the loaded event window (#2635)", () => {
+	function exchange(
+		suffix: "old" | "new",
+		status: "completed" | "cancelled" | "processing",
+		answer = "",
+	) {
+		const user = {
+			...userMessage(`${suffix} question`),
+			messageId: `message-${suffix}`,
+			executionId: `execution-${suffix}`,
+		};
+		const assistant = {
+			...user,
+			role: "assistant" as const,
+			messageId: `answer-${suffix}`,
+			replyToMessageId: `message-${suffix}`,
+			text: answer,
+			status,
+			answerVersion: 1,
+			isCurrentAnswer: true,
+		};
+		return [user, assistant];
+	}
+	function windowEvent(
+		sequence: number,
+		executionId: string,
+		body:
+			| { type: "text.delta"; payload: { text: string } }
+			| {
+					type: "execution.status";
+					payload: { status: "completed" | "cancelled" };
+			  },
+	) {
+		return PersistedConversationEventV2Schema.parse({
+			...event(sequence),
+			executionId,
+			...body,
+		});
+	}
+	function windowed(options: {
+		hasEarlier: boolean;
+		oldStatus?: "completed" | "cancelled" | "processing";
+		newestEvents?: ReturnType<typeof windowEvent>[];
+	}) {
+		const newest = windowEvent(2, "execution-new", {
+			type: "execution.status",
+			payload: { status: "completed" },
+		});
+		const older = windowEvent(1, "execution-old", {
+			type: "text.delta",
+			payload: { text: "Old answer" },
+		});
+		return (request: Request) => {
+			const url = new URL(request.url);
+			if (url.pathname !== "/api/v2/conversations/conversation-1")
+				return undefined;
+			if (url.searchParams.has("beforeCursor"))
+				return Response.json({
+					...history("conversation-1", [older]),
+					messages: [],
+					eventWindow: { hasEarlier: false, beforeCursor: null },
+				});
+			return Response.json({
+				...history("conversation-1", options.newestEvents ?? [newest]),
+				messages: [
+					...exchange("old", options.oldStatus ?? "completed"),
+					...exchange("new", "completed", "Newest answer"),
+				],
+				eventWindow: options.hasEarlier
+					? { hasEarlier: true, beforeCursor: "before-cursor" }
+					: { hasEarlier: false, beforeCursor: null },
+			});
+		};
+	}
+
+	it("says the content is not loaded instead of 'not output yet', then shows it after loading earlier content", async () => {
+		setup(windowed({ hasEarlier: true }));
+
+		expect(await screen.findByText("Newest answer")).toBeTruthy();
+		expect(screen.getByText(/较早的内容还没有加载/)).toBeTruthy();
+		expect(screen.queryByText("尚未输出正文。")).toBeNull();
+
+		fireEvent.click(screen.getByRole("button", { name: "加载更早内容" }));
+		expect(await screen.findByText("Old answer")).toBeTruthy();
+		expect(screen.queryByText(/较早的内容还没有加载/)).toBeNull();
+	});
+
+	it("keeps 'not output yet' when the earlier content is already loaded or there is none", async () => {
+		const { unmount } = setup(windowed({ hasEarlier: false }));
+		expect(await screen.findByText("Newest answer")).toBeTruthy();
+		expect(screen.getAllByText("尚未输出正文。")).toHaveLength(1);
+		expect(screen.queryByText(/较早的内容还没有加载/)).toBeNull();
+		unmount();
+		cleanup();
+
+		// 窗口里已经有这条回复的 Execution 事件（比如被停止、没有正文）：不是「没有加载」。
+		const stopped = windowEvent(1, "execution-old", {
+			type: "execution.status",
+			payload: { status: "cancelled" },
+		});
+		const newest = windowEvent(2, "execution-new", {
+			type: "execution.status",
+			payload: { status: "completed" },
+		});
+		setup(
+			windowed({
+				hasEarlier: true,
+				oldStatus: "cancelled",
+				newestEvents: [stopped, newest],
+			}),
+		);
+		expect(await screen.findByText("Newest answer")).toBeTruthy();
+		expect(screen.getAllByText("尚未输出正文。")).toHaveLength(1);
+		expect(screen.queryByText(/较早的内容还没有加载/)).toBeNull();
+	});
+
+	it("does not call a running reply that has no events yet 'not loaded'", async () => {
+		setup(windowed({ hasEarlier: true, oldStatus: "processing" }));
+
+		expect(await screen.findByText("Newest answer")).toBeTruthy();
+		expect(screen.getAllByText("尚未输出正文。")).toHaveLength(1);
+		expect(screen.queryByText(/较早的内容还没有加载/)).toBeNull();
+	});
+});
