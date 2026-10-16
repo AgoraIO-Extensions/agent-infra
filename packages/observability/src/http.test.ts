@@ -255,6 +255,10 @@ it("records a bounded failure step and SQLSTATE without private error details", 
 				code: "40P01",
 			}),
 		});
+		recordHttpFailureContext({
+			failureStep: "projection.read",
+			error: new TypeError("PRIVATE_OUTER_ERROR"),
+		});
 		return context.json({ code: "DEPENDENCY_UNAVAILABLE" }, 503);
 	});
 	const response = await app.request("/failure");

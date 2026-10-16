@@ -37,7 +37,7 @@ export function recordHttpFailureContext(input: {
 }): void {
 	const request = requests.getStore();
 	if (!request?.active || !isOperationalFailureStep(input.failureStep)) return;
-	request.failureStep = input.failureStep;
+	request.failureStep ??= input.failureStep;
 	if (input.sqlState && /^[0-9A-Z]{5}$/.test(input.sqlState))
 		request.sqlState = input.sqlState;
 	let current = input.error;
