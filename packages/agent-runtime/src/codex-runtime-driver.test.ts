@@ -12948,10 +12948,13 @@ describe("Codex structured Skill input", () => {
 							},
 						};
 			const response = await fixture.driver.execute(command);
-			const start = fixture.bridge.requests.find(
+			const starts = fixture.bridge.requests.filter(
 				(request) => request.method === "turn/start",
 			);
-			expect(start?.params).toMatchObject({
+			expect(starts).toHaveLength(1);
+			expect(starts[0]?.params).toEqual({
+				threadId: "codex-native-thread-private",
+				clientUserMessageId: "skill-execution",
 				input: [
 					{ type: "text", text: "$workspace-summary summarize files" },
 					{
@@ -12960,12 +12963,56 @@ describe("Codex structured Skill input", () => {
 						path: installedSkillDescriptor().manifest.entryPath,
 					},
 				],
+				model: expect.stringMatching(/^[a-f0-9]{64}\/gpt-5\.3-codex$/),
+				effort: "high",
 			});
 			expect(response).toMatchObject({
 				result: { outcome: "accepted", status: "running" },
 			});
 		},
 	);
+
+	it("replays one Skill operation and reports an active-turn conflict without a second dispatch", async () => {
+		const fixture = await skillDiscoveryFixture();
+		const projection = await fixture.driver.discoverNativeSkills(fixture.read);
+		const native = fixture.driver.createNativeSkillCommand(
+			nativeSkillCommand(fixture, projection),
+		);
+		const first = await fixture.driver.execute(native);
+		const replay = await fixture.driver.execute(native);
+		expect(replay).toEqual(first);
+		const conflict = fixture.driver.createNativeSkillCommand(
+			nativeSkillCommand(fixture, projection, {
+				operationId: "second-skill-execution",
+				executionId: "second-skill-execution",
+				turnId: "second-skill-turn",
+			}),
+		);
+		await expect(fixture.driver.execute(conflict)).resolves.toMatchObject({
+			result: { outcome: "busy" },
+		});
+		expect(
+			fixture.bridge.requests.filter(({ method }) => method === "turn/start"),
+		).toHaveLength(1);
+	});
+
+	it("keeps a Skill response-loss operation uncertain without leaking the native error", async () => {
+		const fixture = await skillDiscoveryFixture();
+		const projection = await fixture.driver.discoverNativeSkills(fixture.read);
+		const native = fixture.driver.createNativeSkillCommand(
+			nativeSkillCommand(fixture, projection),
+		);
+		fixture.bridge.rejectNextSelectedTurn({
+			code: -32_600,
+			message: "synthetic native response loss",
+		});
+		await expect(fixture.driver.execute(native)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+		});
+		const state = await readFile(fixture.path, "utf8");
+		expect(state).toContain("acceptanceUncertainOperationKey");
+		expect(state).not.toContain("synthetic native response loss");
+	});
 
 	it.each([
 		["revision", { directoryRevision: "f".repeat(64) }],
