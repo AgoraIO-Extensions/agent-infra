@@ -2601,6 +2601,8 @@ describe("contract compatibility command", () => {
 		delete current.paths[
 			"/api/v2/agents/{agentId}/default-relay-key/candidates"
 		];
+		delete current.paths["/api/v2/agents/{agentId}/configuration/saved-model"];
+		delete current.components.schemas.AgentDefaultRelayKeySavedCandidatesV1;
 		delete current.paths["/api/v2/applications"];
 		delete current.paths["/api/v2/applications/{applicationId}"];
 		delete current.paths["/api/v2/agents/{agentId}/default-relay-key"];
@@ -2616,13 +2618,15 @@ describe("contract compatibility command", () => {
 		for (const name of [
 			"AgentApplicationUpdateRequestV2",
 			"AgentConfigurationUpdateRequestV2",
-		])
+		]) {
+			if (!current.components.schemas[name]?.properties) continue;
 			for (const property of [
 				"defaultRelayKey",
 				"expectedConfigurationRevision",
 				"expectedKeyVersion",
 			])
 				delete current.components.schemas[name].properties[property];
+		}
 		delete current.components.schemas.DeploymentTemplateProjectionV2.properties
 			.readiness;
 		for (const name of [
