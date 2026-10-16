@@ -28,6 +28,7 @@ export function currentRequestMetadata(): RequestMetadata | undefined {
 
 const protocolCodePattern = /^[A-Z][A-Z0-9_]{2,63}$/;
 const maximumProtocolBodyBytes = 4_096;
+const protocolBodyReadTimeoutMs = 100;
 
 /**
  * 路由模板转成日志里的操作引用：`POST /api/v2/agents/:agentId/lifecycle` 变成
@@ -46,6 +47,50 @@ function routeOperationRef(method: string, template: string) {
 	return reference.length <= 128 ? reference : undefined;
 }
 
+/** Reads only a bounded prefix of an error response and never waits indefinitely. */
+async function boundedProtocolBody(response: Response) {
+	const body = response.clone().body;
+	if (!body) return undefined;
+	const reader = body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const read = (async () => {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) {
+				const bytes = new Uint8Array(total);
+				let offset = 0;
+				for (const chunk of chunks) {
+					bytes.set(chunk, offset);
+					offset += chunk.byteLength;
+				}
+				return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+			}
+			if (!value) continue;
+			total += value.byteLength;
+			if (total > maximumProtocolBodyBytes) return undefined;
+			chunks.push(value);
+		}
+	})();
+	try {
+		return await Promise.race([
+			read,
+			new Promise<undefined>((resolve) => {
+				timer = setTimeout(() => {
+					void reader.cancel().catch(() => undefined);
+					resolve(undefined);
+				}, protocolBodyReadTimeoutMs);
+			}),
+		]);
+	} catch {
+		return undefined;
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+		reader.releaseLock();
+	}
+}
+
 /** 只取协议错误响应里的 `code`，且必须是大写下划线的有界标识；正文本身不进入日志。 */
 async function protocolCodeOf(response: Response) {
 	try {
@@ -54,8 +99,8 @@ async function protocolCodeOf(response: Response) {
 		const declared = Number(response.headers.get("content-length"));
 		if (Number.isFinite(declared) && declared > maximumProtocolBodyBytes)
 			return undefined;
-		const text = await response.clone().text();
-		if (text.length > maximumProtocolBodyBytes) return undefined;
+		const text = await boundedProtocolBody(response);
+		if (text === undefined) return undefined;
 		const code = (JSON.parse(text) as { code?: unknown } | null)?.code;
 		return typeof code === "string" && protocolCodePattern.test(code)
 			? code

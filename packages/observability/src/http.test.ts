@@ -338,6 +338,39 @@ it("names an unmatched request without its path and ignores bodies that are not 
 	expect(JSON.stringify(events)).not.toMatch(/PRIVATE_/);
 });
 
+it("does not wait for an unbounded error response body", async () => {
+	const { app, events } = observed();
+	app.get(
+		"/hanging",
+		() =>
+			new Response(
+				new ReadableStream({
+					start(controller) {
+						controller.enqueue(
+							new TextEncoder().encode(
+								JSON.stringify(failureBody("DEPENDENCY_UNAVAILABLE")),
+							),
+						);
+						// Deliberately leave the stream open to exercise the read timeout.
+					},
+				}),
+				{
+					status: 503,
+					headers: { "content-type": "application/json" },
+				},
+			),
+	);
+
+	const response = await app.request("/hanging");
+	expect(response.status).toBe(503);
+	expect(events[0]).toMatchObject({
+		outcome: "failed",
+		status: 503,
+		operationRef: "GET.hanging",
+	});
+	expect(events[0]).not.toHaveProperty("protocolCode");
+});
+
 it("keeps the failure fields in the structured log line and out of metric labels (#2569)", async () => {
 	const lines: string[] = [];
 	const telemetry = startObservability({
