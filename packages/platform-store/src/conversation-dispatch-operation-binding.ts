@@ -194,8 +194,10 @@ export async function originalOperationBinding(
 		operation: {
 			kind: "execution",
 			id: claim.executionId,
-			deliveryFence: claim.executionDeliveryFence,
-			executionDeliveryFence: claim.executionDeliveryFence,
+			// fence 不进入原操作摘要（runtimeOperationDigestInputV4 会去掉），这里只需满足 V4 形状。
+			// 提交从未被认领过的 Execution 上，stop 等非提交认领看到的 fence 仍是 0（#2674）。
+			deliveryFence: Math.max(claim.executionDeliveryFence, 1),
+			executionDeliveryFence: Math.max(claim.executionDeliveryFence, 1),
 		},
 		executionSource: key.executionSource,
 		keyBinding: {
