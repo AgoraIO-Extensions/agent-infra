@@ -493,13 +493,6 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 }
 
 export {
-	type BrowserActionOperationControllerRecordV1,
-	type BrowserActionOperationControllerRequestV1,
-	type BrowserActionOperationInputV1,
-	type BrowserActionOperationResultV1,
-	createBrowserActionOperationAdapterV1,
-} from "./browser-action-operation.js";
-export {
 	type BrowserFileExecutionBindingV1,
 	type BrowserFileGrantBridgeV1,
 	createBrowserFileGrantBridgeV1,
@@ -510,16 +503,6 @@ export {
 	type BrowserHandoffRuntimeClientV1,
 	createBrowserHandoffEventAdapterV1,
 } from "./browser-handoff-events.js";
-export {
-	type BrowserRecoveryBindingV1,
-	type BrowserRecoveryResultV1,
-	type BrowserRecoveryStatusV1,
-	createBrowserRecoveryConsumerV1,
-} from "./browser-recovery-consumer.js";
-export {
-	type BrowserRecoveryEventInputV1,
-	createBrowserRecoveryEventAdapterV1,
-} from "./browser-recovery-events.js";
 export {
 	type BrowserResultFileEventBindingV1,
 	type BrowserResultFileEventInputV1,
