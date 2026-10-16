@@ -25,6 +25,7 @@ import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import {
 	createSessionSandboxWorkloadAdapterV1,
+	isNativeMetadataWorkerOriginV1,
 	type SessionSandboxAllocationV1,
 	type SessionSandboxRuntimeInputV1,
 	sessionSandboxIdentityAnnotationsV1,
@@ -427,6 +428,9 @@ function sessionSandboxEgressPolicyV1(
 		...(policy.connectionEgress
 			? { connectionEgress: policy.connectionEgress }
 			: {}),
+		...(policy.nativeMetadataWorkerEgress
+			? { nativeMetadataWorkerEgress: policy.nativeMetadataWorkerEgress }
+			: {}),
 		...(policy.dnsEgress ? { dnsEgress: policy.dnsEgress } : {}),
 	};
 }
@@ -474,6 +478,7 @@ function createSessionSandboxAllocationResolverV1(
 			templateBinding.imageDigest !== deployment.imageDigest ||
 			templateBinding.driver !== "codex" ||
 			deployment.runtimeManifest.interactionMode !== "platform-adapter" ||
+			!isNativeMetadataWorkerOriginV1(auth.nativeMetadataWorkerOrigin) ||
 			(requireCurrentTemplateTrust &&
 				!workload.templateModelBindings.some((trusted) =>
 					isDeepStrictEqual({ ...trusted }, templateBinding),
@@ -489,6 +494,7 @@ function createSessionSandboxAllocationResolverV1(
 			grantKeyId: auth.grantKeyId,
 			grantPublicKey: auth.grantPublicKey,
 			grantIssuer: auth.grantIssuer,
+			nativeMetadataWorkerOrigin: auth.nativeMetadataWorkerOrigin,
 			serviceToken: sessionSandboxServiceTokenV1(
 				options.serviceToken,
 				policy.namespace,

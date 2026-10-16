@@ -1418,6 +1418,8 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 				"AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY",
 				"AGENT_INFRA_RUNTIME_GRANT_ISSUER",
 				"AGENT_INFRA_RUNTIME_SERVICE_TOKEN",
+				"AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN",
+				"AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN",
 			].sort(),
 		);
 		expect(env.get("AGENT_INFRA_RUNTIME_DATA_DIR")?.value).toBe(
@@ -1428,12 +1430,16 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 		for (const [name, key] of [
 			["AGENT_INFRA_RUNTIME_MODEL_CONFIG", "model-config"],
 			["AGENT_INFRA_RUNTIME_SERVICE_TOKEN", "token"],
+			["AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN", "token"],
 		] as const) {
 			expect(env.get(name)?.value).toBeUndefined();
 			expect(env.get(name)?.valueFrom).toEqual({
 				secretKeyRef: { name: allocation.secretName, key, optional: false },
 			});
 		}
+		expect(
+			env.get("AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN")?.value,
+		).toBe("http://platform-worker-native-metadata");
 		// No static model Key and no deployment-level token anywhere in the Pod.
 		const podJson = JSON.stringify(pod);
 		expect(podJson).not.toContain("MODEL_CREDENTIAL");
@@ -1508,6 +1514,10 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 		],
 		["another driver", { driver: "claude" }],
 		["an extra input", { credential: "synthetic" }],
+		[
+			"a missing native metadata Worker origin",
+			{ nativeMetadataWorkerOrigin: undefined },
+		],
 	])("rejects %s before any resource write", async (_name, override) => {
 		const client = api();
 		let writes = 0;
@@ -1527,6 +1537,24 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			} as SessionSandboxAllocationV1),
 		).rejects.toMatchObject({ code: "policy" });
 		expect(writes).toBe(0);
+	});
+
+	it.each([
+		{
+			destination: { ip: "203.0.113.10" },
+			port: 3004,
+		},
+		{
+			destination: { cidr: "8.8.8.0/24" },
+			port: 3004,
+		},
+	])("rejects non-Worker native metadata egress destinations", (entry) => {
+		expect(() =>
+			sessionSandboxResourcesV1({
+				...allocation,
+				egress: { nativeMetadataWorkerEgress: [entry] },
+			}),
+		).toThrow();
 	});
 
 	it.each([

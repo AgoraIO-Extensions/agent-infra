@@ -53,6 +53,8 @@ export interface SessionSandboxRuntimeInputV1 {
 	readonly grantIssuer: string;
 	/** Per-Sandbox transport token from {@link sessionSandboxServiceTokenV1}. */
 	readonly serviceToken: string;
+	/** Deployment-approved in-cluster Worker origin for native metadata callbacks. */
+	readonly nativeMetadataWorkerOrigin: string;
 }
 
 /**
@@ -74,6 +76,26 @@ export function sessionSandboxServiceTokenV1(
 
 const sessionSandboxTokenPattern = /^[A-Za-z0-9_-]{43}$/;
 const runtimeTextPattern = /^[\x21-\x7e]{1,256}$/;
+export function isNativeMetadataWorkerOriginV1(
+	value: unknown,
+): value is string {
+	if (typeof value !== "string") return false;
+	try {
+		const origin = new URL(value);
+		return (
+			origin.protocol === "http:" &&
+			origin.username === "" &&
+			origin.password === "" &&
+			origin.hostname === "platform-worker-native-metadata" &&
+			(origin.port === "" || origin.port === "80") &&
+			(origin.pathname === "/" || origin.pathname === "") &&
+			origin.search === "" &&
+			origin.hash === ""
+		);
+	} catch {
+		return false;
+	}
+}
 const runtimeTmpVolume = {
 	name: "runtime-tmp",
 	emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
@@ -260,10 +282,17 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		typeof value.egress !== "object" ||
 		Array.isArray(value.egress) ||
 		Object.keys(value.egress).some(
-			(key) => !["modelEgress", "connectionEgress", "dnsEgress"].includes(key),
+			(key) =>
+				![
+					"modelEgress",
+					"connectionEgress",
+					"nativeMetadataWorkerEgress",
+					"dnsEgress",
+				].includes(key),
 		)
 	)
 		throw new WorkloadKubernetesError("policy");
+	validateNativeMetadataWorkerEgressV1(value.egress.nativeMetadataWorkerEgress);
 	// Rejects any destination the shared Agent-level compiler would reject.
 	workloadEgressRulesV1(value.egress);
 	validateRuntimeInput(value.runtime);
@@ -275,7 +304,7 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 			!runtime ||
 			typeof runtime !== "object" ||
 			Object.keys(runtime).sort().join(",") !==
-				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,serviceToken,workerId" ||
+				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,nativeMetadataWorkerOrigin,serviceToken,workerId" ||
 			runtime.driver !== "codex" ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
 				(item) => typeof item === "string" && runtimeTextPattern.test(item),
@@ -285,7 +314,8 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 			// Only the derived per-Sandbox token shape (32-byte HMAC, base64url).
 			typeof runtime.serviceToken !== "string" ||
 			!sessionSandboxTokenPattern.test(runtime.serviceToken) ||
-			typeof runtime.modelConfiguration !== "string"
+			typeof runtime.modelConfiguration !== "string" ||
+			!isNativeMetadataWorkerOriginV1(runtime.nativeMetadataWorkerOrigin)
 		)
 			throw new Error();
 		// Keyless V4 only: static model credentials are never projected here.
@@ -295,6 +325,31 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 	} catch {
 		throw new WorkloadKubernetesError("policy");
 	}
+}
+
+/**
+ * Session Sandboxes may reach native metadata only through the deployment-owned
+ * Worker Service selector. IP/CIDR destinations are rejected so a Store claim
+ * or generic model egress cannot widen this callback path.
+ */
+function validateNativeMetadataWorkerEgressV1(
+	egress: SessionSandboxAllocationV1["egress"]["nativeMetadataWorkerEgress"],
+) {
+	if (egress === undefined) return;
+	if (
+		!Array.isArray(egress) ||
+		egress.length !== 1 ||
+		!egress.every((entry) => {
+			const destination = entry?.destination;
+			return (
+				destination !== null &&
+				typeof destination === "object" &&
+				!Array.isArray(destination) &&
+				Object.keys(destination).sort().join(",") === "namespace,podLabels"
+			);
+		})
+	)
+		throw new WorkloadKubernetesError("policy");
 }
 
 /** Runtime Host inputs; both credentials are references into this Sandbox's Secret. */
@@ -326,6 +381,14 @@ function runtimeEnvironment(
 		{ name: "AGENT_INFRA_RUNTIME_GRANT_ISSUER", value: runtime.grantIssuer },
 		{
 			name: "AGENT_INFRA_RUNTIME_SERVICE_TOKEN",
+			valueFrom: secretRef("token"),
+		},
+		{
+			name: "AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN",
+			value: runtime.nativeMetadataWorkerOrigin,
+		},
+		{
+			name: "AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN",
 			valueFrom: secretRef("token"),
 		},
 	];

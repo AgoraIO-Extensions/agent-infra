@@ -233,6 +233,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				.export({ type: "spki", format: "pem" })
 				.toString(),
 			serviceTokenSecret: { name: "runtime-transport", key: "token" },
+			nativeMetadataWorkerOrigin: "http://platform-worker-native-metadata",
 		},
 	};
 	const {
