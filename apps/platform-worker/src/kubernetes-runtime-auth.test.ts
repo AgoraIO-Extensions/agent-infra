@@ -7,6 +7,7 @@ import {
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
+import { validateWorkloadRuntimeAuthV1 } from "./workload-runtime-auth.js";
 
 function fixture() {
 	const api = fakeKubernetesApi();
@@ -81,6 +82,26 @@ it("injects a fixed native metadata Worker origin and shared token", async () =>
 			},
 		},
 	});
+});
+
+it.each([
+	"http://attacker.example",
+	"http://platform-worker-native-metadata:3005",
+	"http://platform-worker-native-metadata/private",
+])("rejects an unfixed native metadata Worker origin: %s", (origin) => {
+	const { publicKey } = generateKeyPairSync("ed25519");
+	expect(() =>
+		validateWorkloadRuntimeAuthV1({
+			workerId: "worker-a",
+			grantKeyId: "grant-a",
+			grantPublicKey: publicKey
+				.export({ format: "pem", type: "spki" })
+				.toString(),
+			grantIssuer: "platform-worker",
+			serviceTokenSecret: { name: "runtime-transport", key: "token" },
+			nativeMetadataWorkerOrigin: origin,
+		}),
+	).toThrow();
 });
 
 it("binds custom platform-adapter authentication without a standard-template model projection", async () => {

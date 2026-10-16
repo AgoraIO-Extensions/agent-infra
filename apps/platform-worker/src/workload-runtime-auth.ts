@@ -55,6 +55,8 @@ export function validateWorkloadRuntimeAuthV1(
 							origin.protocol !== "http:" ||
 							origin.username !== "" ||
 							origin.password !== "" ||
+							origin.hostname !== "platform-worker-native-metadata" ||
+							(origin.port !== "" && origin.port !== "80") ||
 							(origin.pathname !== "/" && origin.pathname !== "") ||
 							origin.search !== "" ||
 							origin.hash !== ""
