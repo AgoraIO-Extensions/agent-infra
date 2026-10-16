@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createDeploymentIdentityScope } from "./deployment-identity.js";
 import { createDeploymentPresentation } from "./deployment-presentation.js";
+import { HttpProtocolError, StaleProjectionError } from "./http/common.js";
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -210,6 +211,47 @@ describe("deployment presentation platform identity route", () => {
 			presentAll,
 		);
 		expect(resolutions).toBe(2);
+	});
+
+	it("reports a snapshot that changed during the read as stale, still a retryable dependency failure on the wire (#2661)", async () => {
+		const identityScope = createDeploymentIdentityScope({
+			async resolve() {
+				return identity;
+			},
+			async hydrateUsers() {
+				return [];
+			},
+		});
+		const present = createDeploymentPresentation({
+			identityScope,
+			configurationQuery: {
+				readRuntimePresentation: vi
+					.fn()
+					.mockResolvedValue({ outcome: "stale" }),
+			},
+			resourceProfile: {
+				profileId: "profile_01",
+				displayName: "Small",
+				estimatedResources: {
+					cpuMillicores: 100,
+					memoryMiB: 128,
+					storageGiB: 1,
+				},
+			},
+			imageRepository: "registry.example.test/agents",
+		});
+		const failure = await identityScope
+			.requestScope(new Request("https://platform.test/api/v2/agents"), () =>
+				present({ agentId: "agent_01", configuration, management }),
+			)
+			.catch((error: unknown) => error);
+		expect(failure).toBeInstanceOf(StaleProjectionError);
+		expect(failure).toBeInstanceOf(HttpProtocolError);
+		expect((failure as StaleProjectionError).status).toBe(503);
+		expect((failure as StaleProjectionError).body).toMatchObject({
+			code: "DEPENDENCY_UNAVAILABLE",
+			retryable: true,
+		});
 	});
 
 	it("keeps Runtime model selection hidden until the API reader is wired", async () => {
