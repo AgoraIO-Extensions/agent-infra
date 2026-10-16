@@ -4,6 +4,7 @@ import {
 	RuntimeNativeMetadataBindingResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
 import { PostgresConversationQueryV1 } from "@agent-infra/platform-store";
+import { createWorkerRuntimeNativeMetadataClientV1 } from "./runtime-native-metadata-client.js";
 import {
 	createPlatformApiNativeMetadataCurrentClientV1,
 	type PlatformApiNativeMetadataCurrentClientOptionsV1,
@@ -100,8 +101,53 @@ export interface PlatformWorkerNativeMetadataGatewayPortsV1 {
 	readonly platformApiCurrent?: PlatformApiNativeMetadataCurrentClientOptionsV1;
 	/** Optional when deployment uses the same Worker signing key for proof. */
 	readonly proofIssuer?: WorkerRuntimeNativeMetadataProofIssuerV1;
-	readonly transport: WorkerRuntimeNativeMetadataTransportResolverV1;
+	/** Explicit transport override; takes precedence over runtimeTarget. */
+	readonly transport?: WorkerRuntimeNativeMetadataTransportResolverV1;
+	/** Deployment-resolved fixed Runtime target keyed by the verified binding. */
+	readonly runtimeTarget?: PlatformNativeMetadataRuntimeTargetResolverV1;
 	readonly port?: number;
+}
+
+export interface PlatformNativeMetadataRuntimeTargetV1 {
+	readonly baseUrl: string;
+	readonly serviceToken: string;
+}
+
+export interface PlatformNativeMetadataRuntimeTargetResolverV1 {
+	resolve(input: {
+		readonly binding: RuntimeNativeMetadataBindingResponseV1;
+		readonly signal: AbortSignal;
+	}): Promise<PlatformNativeMetadataRuntimeTargetV1 | null>;
+}
+
+/**
+ * Assemble the default Worker → Runtime metadata transport from a
+ * deployment-owned, already-bound target. Request fields never select the
+ * Runtime origin or credential.
+ */
+export function createPlatformNativeMetadataTransportResolverV1(options: {
+	readonly resolveTarget: PlatformNativeMetadataRuntimeTargetResolverV1["resolve"];
+	readonly fetch?: typeof fetch;
+}): WorkerRuntimeNativeMetadataTransportResolverV1 {
+	if (typeof options.resolveTarget !== "function")
+		throw new TypeError("Platform Runtime target resolver is invalid");
+	return {
+		async resolve({ binding, signal }) {
+			if (signal.aborted) return null;
+			try {
+				const target = await options.resolveTarget({ binding, signal });
+				if (signal.aborted || !target || typeof target !== "object")
+					return null;
+				return createWorkerRuntimeNativeMetadataClientV1({
+					baseUrl: target.baseUrl,
+					serviceToken: target.serviceToken,
+					...(options.fetch ? { fetch: options.fetch } : {}),
+				});
+			} catch {
+				return null;
+			}
+		},
+	};
 }
 
 export function createPlatformNativeMetadataGatewayAssemblyV1(options: {
@@ -158,11 +204,25 @@ export function createPlatformNativeMetadataGatewayAssemblyV1(options: {
 		throw new TypeError(
 			"Platform Worker native metadata binding resolver is unavailable",
 		);
+	const transport =
+		options.ports.transport ??
+		(options.ports.runtimeTarget
+			? createPlatformNativeMetadataTransportResolverV1({
+					resolveTarget: options.ports.runtimeTarget.resolve.bind(
+						options.ports.runtimeTarget,
+					),
+				})
+			: undefined);
+	if (!transport)
+		throw new TypeError(
+			"Platform Worker native metadata transport is unavailable",
+		);
 	const gateway = createWorkerRuntimeNativeMetadataGatewayV1({
 		...options.ports,
 		binding,
 		current,
 		proofIssuer,
+		transport,
 	});
 	return {
 		app: createWorkerRuntimeNativeMetadataGatewayAppV1({
