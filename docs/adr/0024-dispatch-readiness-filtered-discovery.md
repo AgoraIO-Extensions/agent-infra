@@ -21,7 +21,45 @@ Platform Worker 通过固定轮询发现到期的 Conversation outbox，再在�
 
 2. **发现过滤使用持久、可查询的条件。**
 
-   Store 在 `findDispatchable` 内以窄 SQL JOIN/EXISTS 读取上述 allocation 和 management 字段；不复制完整的 TypeScript 状态机，也不把内存中的 Worker 观测当作权威。查询计划和必要索引在实现票中以真实 PostgreSQL `EXPLAIN` 证据确认。
+   Store 在 `findDispatchable` 内以窄 SQL JOIN/EXISTS 读取上述 allocation 和 management 字段；不复制完整的 TypeScript 状态机，也不把内存中的 Worker 观测当作权威。普通业务分支的核心谓词固定为：
+
+   ```sql
+   and (
+     o.operation = 'conversation.turn.stop.v1'
+     or o.operation = 'conversation.sandbox.reconcile.v1'
+     or o.payload ? 'metadataRecovery'
+     or exists (
+       select 1
+       from platform.session_sandbox_allocations s
+       where s.conversation_id = c.id
+         and s.status = 'ready'
+         and s.desired_state = 'running'
+         and s.resource_fence > 0
+         and s.resource_observation->>'status' = 'ready'
+     )
+   )
+   ```
+
+   Generation tombstones and stop confirmation deadlines remain separate top-level discovery branches, so they bypass this predicate. The first implementation uses the existing indexes: `outbox_eligibility_idx(status, available_at)` or the ordered `outbox_items` primary key for the paged `id` scan, `conversations` primary key, `session_sandbox_conversation_unique(conversation_id)`, and `agent_application_agent_unique(agent_id)`. No JSON expression index is proposed because `resource_observation` is read only after the unique conversation lookup; a migration is required only if the implementation's real `EXPLAIN (ANALYZE, BUFFERS)` shows a broader scan.
+
+   A representative `EXPLAIN (COSTS OFF, SUMMARY OFF)` against a controlled PostgreSQL schema with those indexes produced the expected bounded shape:
+
+   ```text
+   Limit
+     -> Nested Loop
+          -> Index Scan using outbox_items_pkey on outbox_items
+               Index Cond: (id > 'item-000000')
+               Filter: (status/operation/scope/available_at predicates)
+          -> Index Only Scan using conversations_pkey on conversations
+               Index Cond: (id = o.scope_id)
+               Filter: (stop/reconcile exception OR readiness subplan)
+               SubPlan 1
+                 -> Index Scan using session_sandbox_allocations_conversation_id_key
+                      Index Cond: (conversation_id = c.id)
+                      Filter: (resource_fence/status/desired_state/observation)
+   ```
+
+   The implementation PR must repeat this check on the migrated repository schema with `EXPLAIN (ANALYZE, BUFFERS)` and record the plan plus row counts; the controlled plan is design evidence, not production acceptance.
 
 3. **claim 仍是唯一权威边界。**
 
