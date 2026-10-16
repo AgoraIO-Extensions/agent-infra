@@ -12923,6 +12923,42 @@ describe("Codex structured Skill input", () => {
 				text: "$workspace-summary summarize files",
 			}),
 		).toThrow();
+		const unmounted = {
+			...directory,
+			nativeSkillPaths: () => [],
+		};
+		expect(() =>
+			createCodexNativeSkillInputV1(unmounted, {
+				name: "workspace-summary",
+				version: "1.0.0",
+				packageDigest: "b".repeat(64),
+				manifestDigest: "c".repeat(64),
+				text: "$workspace-summary summarize files",
+			}),
+		).toThrow();
+		const replaced = {
+			...directory,
+			findSkills: () => [
+				{
+					schemaVersion: 1 as const,
+					name: "workspace-summary",
+					version: "1.0.0",
+					packageDigest: "d".repeat(64),
+					manifestDigest: "c".repeat(64),
+					targetPath: ".agents/skills/workspace-summary",
+					readOnly: true as const,
+				},
+			],
+		};
+		expect(() =>
+			createCodexNativeSkillInputV1(replaced, {
+				name: "workspace-summary",
+				version: "1.0.0",
+				packageDigest: "b".repeat(64),
+				manifestDigest: "c".repeat(64),
+				text: "$workspace-summary summarize files",
+			}),
+		).toThrow();
 	});
 
 	it.each([1, 2] as const)(
