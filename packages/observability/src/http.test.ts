@@ -1,7 +1,11 @@
 import { Writable } from "node:stream";
 import { Hono } from "hono";
 import { expect, it } from "vitest";
-import { createHttpObservability, currentRequestMetadata } from "./http.js";
+import {
+	createHttpObservability,
+	currentRequestMetadata,
+	recordHttpFailureContext,
+} from "./http.js";
 import {
 	isTraceParent,
 	type OperationalEvent,
@@ -241,6 +245,27 @@ function observed() {
 	);
 	return { app, events };
 }
+
+it("records a bounded failure step and SQLSTATE without private error details", async () => {
+	const { app, events } = observed();
+	app.get("/failure", (context) => {
+		recordHttpFailureContext({
+			failureStep: "store.management_transaction",
+			error: Object.assign(new Error("PRIVATE_SQL_AND_PARAMS"), {
+				code: "40P01",
+			}),
+		});
+		return context.json({ code: "DEPENDENCY_UNAVAILABLE" }, 503);
+	});
+	const response = await app.request("/failure");
+	expect(response.status).toBe(503);
+	expect(events[0]).toMatchObject({
+		failureStep: "store.management_transaction",
+		errorClass: "Error",
+		sqlState: "40P01",
+	});
+	expect(JSON.stringify(events)).not.toContain("PRIVATE_SQL_AND_PARAMS");
+});
 
 it("records the route template, status and protocol code of a failed request without identifiers (#2569)", async () => {
 	const { app, events } = observed();

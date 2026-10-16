@@ -3,6 +3,7 @@ import { types } from "node:util";
 
 import { BrowserUserProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
+import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import type {
 	ApplicationMaterialGrantActorV1,
 	CurrentTaskUserV1,
@@ -10,7 +11,6 @@ import type {
 	TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import { parseDirectorySnapshotBindingV1 } from "@agent-infra/platform-core";
-
 import { HttpProtocolError } from "./common";
 
 export interface IdentityContext {
@@ -244,7 +244,8 @@ export async function resolveIdentity(
 	let value: unknown | null;
 	try {
 		value = await adapter.resolve(request);
-	} catch {
+	} catch (error) {
+		recordHttpFailureContext({ failureStep: "identity.resolve", error });
 		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}
 	if (value === null) {
@@ -253,7 +254,8 @@ export async function resolveIdentity(
 	let identity: ResolvedIdentity;
 	try {
 		identity = parseIdentity(value);
-	} catch {
+	} catch (error) {
+		recordHttpFailureContext({ failureStep: "identity.parse", error });
 		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}
 	if (identity.accountStatus === "disabled") {
@@ -278,7 +280,8 @@ export async function hydrateBrowserUsers(
 	let value: unknown;
 	try {
 		value = await adapter.hydrateUsers(userIds);
-	} catch {
+	} catch (error) {
+		recordHttpFailureContext({ failureStep: "identity.hydrate", error });
 		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}
 	let items: unknown[];
