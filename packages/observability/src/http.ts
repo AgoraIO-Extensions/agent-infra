@@ -81,7 +81,6 @@ async function boundedProtocolBody(response: Response) {
 			read,
 			new Promise<undefined>((resolve) => {
 				timer = setTimeout(() => {
-					void reader.cancel().catch(() => undefined);
 					resolve(undefined);
 				}, protocolBodyReadTimeoutMs);
 			}),
@@ -90,6 +89,14 @@ async function boundedProtocolBody(response: Response) {
 		return undefined;
 	} finally {
 		if (timer !== undefined) clearTimeout(timer);
+		let cancelTimer: ReturnType<typeof setTimeout> | undefined;
+		await Promise.race([
+			reader.cancel().catch(() => undefined),
+			new Promise<void>((resolve) => {
+				cancelTimer = setTimeout(resolve, protocolBodyReadTimeoutMs);
+			}),
+		]);
+		if (cancelTimer !== undefined) clearTimeout(cancelTimer);
 		reader.releaseLock();
 	}
 }
