@@ -720,7 +720,8 @@ export function assemblePlatformApi(
 			: undefined);
 	if (
 		input.nativeCapabilityInvocation !== undefined &&
-		input.nativeCapabilityMetadata !== undefined
+		(input.nativeCapabilityMetadata !== undefined ||
+			assembledNativeMetadata !== undefined)
 	)
 		throw new Error("PLATFORM_NATIVE_CAPABILITY_METADATA_DUPLICATE");
 	const nativeCapabilityMetadata = input.nativeCapabilityMetadata;

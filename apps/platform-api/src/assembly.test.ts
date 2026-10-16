@@ -234,6 +234,10 @@ describe("Platform API production assembly", () => {
 				prepareApplicationSecrets: unavailable,
 				prepareConfigurationSecrets: unavailable,
 				presentAgent: unavailable,
+				nativeMetadataWorker: {
+					baseUrl: "http://worker.example.test",
+					serviceToken: "worker-service-token",
+				},
 				nativeCapabilityInvocation,
 				nativeCapabilityMetadata,
 			}),
