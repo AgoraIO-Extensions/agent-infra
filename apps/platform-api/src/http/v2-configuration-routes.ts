@@ -271,6 +271,7 @@ export function registerV2ConfigurationRoutes(
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
 			if (
+				saved.agentId !== context.req.param("agentId") ||
 				saved.configurationRevision !==
 					keyReplacement.expectedConfigurationRevision ||
 				saved.keyVersion !== keyReplacement.expectedKeyVersion ||

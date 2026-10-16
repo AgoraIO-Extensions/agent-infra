@@ -27,12 +27,18 @@ export function createAgentDefaultRelayKeyCandidatesV1(input: {
 		templateBindings: input.templateBindings,
 		relayEndpointId: input.relayEndpointId,
 		relayBaseUrl: input.relayBaseUrl,
-		validateKey: validate,
+		validateKey: async () => "valid",
 		...(input.validation.fetch ? { fetch: input.validation.fetch } : {}),
 	});
 	return async (keyValue, configuration) => {
+		const signal = AbortSignal.timeout(10_000);
+		const validity = await validate(keyValue, signal);
+		if (validity !== "valid")
+			throw new AgentDefaultRelayKeyErrorV1(
+				validity === "invalid" ? "invalid_input" : "unavailable",
+			);
 		try {
-			return await read(keyValue, configuration, AbortSignal.timeout(10_000));
+			return await read(keyValue, configuration, signal);
 		} catch {
 			throw new AgentDefaultRelayKeyErrorV1("unavailable");
 		}
