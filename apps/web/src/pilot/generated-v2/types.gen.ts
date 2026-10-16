@@ -569,6 +569,44 @@ export type BrowserHandoffEventV2 = {
     type: 'browser.handoff';
 };
 
+export type BrowserSideEffectEventV2 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        binding: {
+            actionId: string;
+            agentId: string;
+            attemptRef: string;
+            capabilityRevision: number;
+            capabilityVersion: number;
+            confirmationId: string;
+            conversationId: string;
+            executionId: string;
+            imageDigest: string;
+            operationRef: string;
+            pageRevision: number;
+            resourceFence: number;
+            sessionGeneration: number;
+            subjectId: string;
+            workloadRevision: number;
+        };
+        confirmationId: string;
+        expiresAt: string;
+        operation: string;
+        redactedTargetSummary: string;
+        requestedAt: string;
+        status: 'pending' | 'confirmed' | 'rejected' | 'cancelled' | 'expired' | 'unknown';
+        targetOrigin: string;
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'browser.side_effect';
+};
+
 export type ConversationDetailProjectionV2 = {
     conversation: {
         agentId: string;
@@ -925,7 +963,7 @@ export type PersistedConversationEventV1 = {
     type: 'conversation.error';
 } | ModelSelectionFallbackEventV1;
 
-export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2 | BrowserHandoffEventV2;
+export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2 | BrowserHandoffEventV2 | BrowserSideEffectEventV2;
 
 export type PersonalApiCredentialIssueRequestV1 = {
     expiresAt: string | null;
