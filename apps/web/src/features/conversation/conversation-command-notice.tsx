@@ -30,8 +30,7 @@ export function CommandNotice({
 		return (
 			<Alert className="bg-muted">
 				<AlertDescription>
-					消息未送达，草稿已保留。正在确认 Agent 状态，Agent
-					恢复可用后请重新发送。
+					消息未送达，草稿已保留。请在 Agent 恢复可用后重新发送。
 				</AlertDescription>
 			</Alert>
 		);

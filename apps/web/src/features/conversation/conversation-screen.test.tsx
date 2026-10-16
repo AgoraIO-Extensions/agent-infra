@@ -1956,7 +1956,9 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
 		await screen.findByText(/Agent 已停止，历史保持只读/);
 		expect(screen.getByText(/请联系 Owner 重启后继续/)).toBeTruthy();
-		expect(screen.getByText(/消息未送达，草稿已保留/)).toBeTruthy();
+		expect(
+			screen.getByText("消息未送达，草稿已保留。请在 Agent 恢复可用后重新发送。"),
+		).toBeTruthy();
 		expect(input.value).toBe("Keep this draft");
 		expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
 		expect(onAccessDenied).not.toHaveBeenCalled();
