@@ -3271,6 +3271,110 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("filters unready business work until the Sandbox is ready", async () => {
+		const work = await seed();
+		const store = new PostgresConversationDispatchStoreV1({ databaseUrl });
+		try {
+			await client`update platform.session_sandbox_allocations
+				set status = 'stopped', desired_state = 'stopped', resource_observation = ${client.json({ status: "stopped" })}
+				where conversation_id = ${work.conversationId}`;
+			expect(
+				(await store.findDispatchable({ limit: 256 })).some(
+					(item) => item.itemId === work.itemId,
+				),
+			).toBe(false);
+			expect(
+				await client`select attempt_count from platform.outbox_items where id = ${work.itemId}`,
+			).toEqual([{ attempt_count: 0 }]);
+
+			await markSessionSandboxReadyFixture(client, work.conversationId);
+			expect(await store.findDispatchable({ limit: 256 })).toContainEqual({
+				itemId: work.itemId,
+				operation: "conversation.turn.submit.v1",
+			});
+			await client`update platform.outbox_items
+				set operation = 'conversation.native-capability.invoke.v1'
+				where id = ${work.itemId}`;
+			expect(await store.findDispatchable({ limit: 256 })).toContainEqual({
+				itemId: work.itemId,
+				operation: "conversation.native-capability.invoke.v1",
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("filters stopped lifecycle-free reconciliation even with stale ready allocation", async () => {
+		const { work, itemId, store } =
+			await seedSandboxPrepareIntent("discovery-stopped");
+		try {
+			await client`update platform.agent_applications
+				set status = 'stopped', desired_state = 'stopped', service_availability = null
+				where agent_id = 'agent-dispatch'`;
+			// Keep a stale ready-looking allocation to prove reconciliation does not
+			// fall through to the business readiness branch.
+			await client`update platform.session_sandbox_allocations
+				set status = 'ready', desired_state = 'running', resource_fence = 1,
+					resource_observation = ${client.json({ status: "ready" })}
+				where conversation_id = ${work.conversationId}`;
+			expect(
+				(await store.findDispatchable({ limit: 256 })).some(
+					(item) => item.itemId === itemId,
+				),
+			).toBe(false);
+
+			await client`update platform.agent_applications
+				set status = 'available', desired_state = 'running', service_availability = 'ready'
+				where agent_id = 'agent-dispatch'`;
+			expect(await store.findDispatchable({ limit: 256 })).toContainEqual({
+				itemId,
+				operation: "conversation.sandbox.reconcile.v1",
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("keeps lifecycle and expired waiting exceptions discoverable", async () => {
+		const { itemId, store } = await seedSandboxPrepareIntent(
+			"discovery-lifecycle",
+		);
+		try {
+			await client`update platform.agent_applications
+				set status = 'stopped', desired_state = 'stopped', service_availability = null
+				where agent_id = 'agent-dispatch'`;
+			await client`update platform.outbox_items
+				set payload = payload || ${client.json({
+					lifecycle: { schemaVersion: 1 },
+				})}
+				where id = ${itemId}`;
+			expect(await store.findDispatchable({ limit: 256 })).toContainEqual({
+				itemId,
+				operation: "conversation.sandbox.reconcile.v1",
+			});
+
+			const waiting = await seed("conversation.turn.submit.v1", {
+				executionStatus: "waiting",
+			});
+			await client`update platform.session_sandbox_allocations
+				set status = 'stopped', desired_state = 'stopped', resource_observation = ${client.json({ status: "stopped" })}
+				where conversation_id = ${waiting.conversationId}`;
+			await client`update platform.outbox_items
+				set available_at = 'infinity'
+				where id = ${waiting.itemId}`;
+			await client`update platform.conversation_executions
+				set created_at = clock_timestamp() - interval '2 minutes',
+					task_wait_deadline = clock_timestamp() - interval '1 second'
+				where execution_id = ${waiting.executionId}`;
+			expect(await store.findDispatchable({ limit: 256 })).toContainEqual({
+				itemId: waiting.itemId,
+				operation: "conversation.turn.submit.v1",
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("rotates bounded discovery past an outstanding item and includes stop work", async () => {
 		const store = new PostgresConversationDispatchStoreV1({ databaseUrl });
 		try {

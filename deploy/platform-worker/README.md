@@ -54,6 +54,13 @@ Worker origin 和 service token 调用该入口，并把 API request source ref 
 传递；调用方不能提交 URL、token、主体或 Host scope。缺少当前确认配置、关联失效或 Worker
 不可达时，读取保持 unavailable。
 
+Session Sandbox 也使用同一固定 Worker origin，但其 token 由 Worker 按
+`sessionSandboxServiceTokenV1` 为每个 Sandbox 派生，并通过该 Sandbox 自己的 Secret
+以 `AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN` 注入 Runtime；部署级
+service token 永不写入 Sandbox。Session 的 `nativeMetadataWorkerEgress` 只能使用部署批准的
+namespace/pod-label selector 与单一 TCP port，缺失策略保持 NetworkPolicy deny-all，IP/CIDR
+目标会在资源写入前拒绝。
+
 ## 多服务资源档位
 
 `workloadInput.policy.multiServiceResourceProfiles` 与 `workloadInput.policy.multiServiceResourceCap`
