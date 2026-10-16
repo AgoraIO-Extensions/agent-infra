@@ -13136,6 +13136,61 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 		});
 	});
 
+	it("uses the default Hub root when the verified directory omits nativeRoot", async () => {
+		const hubEntry = {
+			schemaVersion: 1 as const,
+			name: "hub-skill",
+			version: "1.0.0",
+			packageDigest: "d".repeat(64),
+			manifestDigest: "e".repeat(64),
+			targetPath: ".agents/skills/hub-skill",
+			readOnly: true as const,
+		};
+		const f = await skillDiscoveryFixture(undefined, {
+			skillDirectory: {
+				generationId: "f".repeat(64),
+				findSkills: () => [hubEntry],
+				nativeSkillPaths: () => [
+					"/opt/agent-infra-skill-hub/.agents/skills/hub-skill/SKILL.md",
+				],
+				readSkill: async () => new Uint8Array(),
+			},
+		});
+		f.bridge.result = {
+			data: [
+				{
+					cwd: join(f.directory, "actual-spawn-workspace"),
+					errors: [],
+					skills: [
+						f.bridge.metadata,
+						{
+							name: "hub-skill",
+							description: "verified hub skill",
+							path: "/opt/agent-infra-skill-hub/.agents/skills/hub-skill/SKILL.md",
+							scope: "project",
+							enabled: true,
+							pluginId: null,
+						},
+					],
+				},
+			],
+		};
+		const discovered = await f.driver.discoverNativeSkills(f.read);
+		expect(discovered.capabilities.map((entry) => entry.name)).toContain(
+			"hub-skill",
+		);
+		expect(
+			f.bridge.requests.find(
+				(request) => request.method === "skills/extraRoots/set",
+			)?.params,
+		).toEqual({
+			extraRoots: [
+				"/opt/codex/agent-infra-skills",
+				"/opt/agent-infra-skill-hub",
+			],
+		});
+	});
+
 	it.each(["null metadata", "null interface fields"])(
 		"admits the official absent %s shape without accepting assets or dependencies",
 		async (kind) => {
