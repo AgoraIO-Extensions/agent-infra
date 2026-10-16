@@ -185,7 +185,7 @@ export interface NativeCapabilityMetadataRevalidationPortV1 {
 	isCurrent(input: {
 		readonly request: NativeCapabilityAdmissionRequestV1;
 		readonly capability: NativeCapabilityAdmissionCapabilityV1;
-		readonly sessionGeneration: number;
+		readonly scope: NativeCapabilityAdmissionScopeV1;
 	}): boolean;
 }
 
@@ -567,9 +567,18 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							"sessionGeneration",
 							"authorizationRevision",
 						]);
+						const currentScope: NativeCapabilityAdmissionScopeV1 = {
+							agentId: latestScope.agentId as string,
+							actorId: latestScope.actorId as string,
+							channelId: latestScope.channelId as string,
+							conversationId: latestScope.conversationId as string,
+							sessionGeneration: latestScope.sessionGeneration as number,
+							authorizationRevision:
+								latestScope.authorizationRevision as string,
+						};
 						if (
 							!isDeepStrictEqual(latestSelected, selected) ||
-							!isDeepStrictEqual(latestScope, scope)
+							!isDeepStrictEqual(currentScope, scope)
 						)
 							return { outcome: "stale" };
 						const finalAuthority = await dependencies.authorization.authorize({
@@ -589,7 +598,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							!dependencies.metadata.isCurrent({
 								request,
 								capability: latestSelected,
-								sessionGeneration: conversation.sessionGeneration,
+								scope: currentScope,
 							})
 						)
 							return { outcome: "stale" };
@@ -670,7 +679,14 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 						dependencies.metadata.isCurrent({
 							request,
 							capability: plan.capability,
-							sessionGeneration: plan.sessionGeneration,
+							scope: {
+								agentId: plan.agentId,
+								actorId: plan.actorId,
+								channelId: plan.channelId,
+								conversationId: plan.conversationId,
+								sessionGeneration: plan.sessionGeneration,
+								authorizationRevision: plan.authorizationRevision,
+							},
 						}),
 					async () => {
 						try {

@@ -1354,7 +1354,7 @@ export class PostgresConversationQueryV1 {
 								and c.principal_type = 'user'
 								and c.host_session_ref is not null
 							order by e.updated_at desc, e.execution_id
-							limit 2
+							limit 1
 						`,
 					);
 					if (rows.length !== 1) return undefined;

@@ -251,7 +251,7 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 				return { outcome: "unavailable" };
 			}
 		},
-		isCurrent({ request, capability, sessionGeneration }) {
+		isCurrent({ request, capability, scope }) {
 			const timestamp = now();
 			if (!Number.isSafeInteger(timestamp) || timestamp < 0) return false;
 			prune(timestamp);
@@ -259,8 +259,12 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 			return Boolean(
 				entry &&
 					entry.expiresAt > timestamp &&
-					entry.scope.sessionGeneration === sessionGeneration &&
-					entry.scope.conversationId === request.conversationId &&
+					entry.scope.agentId === scope.agentId &&
+					entry.scope.actorId === scope.actorId &&
+					entry.scope.channelId === scope.channelId &&
+					entry.scope.conversationId === scope.conversationId &&
+					entry.scope.sessionGeneration === scope.sessionGeneration &&
+					entry.scope.authorizationRevision === scope.authorizationRevision &&
 					entry.scope.authorizationRevision ===
 						options.identity.authorizationRevision &&
 					sameRequest(entry.request, request) &&

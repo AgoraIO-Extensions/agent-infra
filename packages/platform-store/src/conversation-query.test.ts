@@ -1167,6 +1167,46 @@ describe("PostgreSQL current native capability scope", () => {
 		}
 	});
 
+	it("selects the latest matching Execution when history shares the same Host", async () => {
+		await client`
+			update platform.conversations
+			set status = 'ready', host_session_ref = 'native-current-host'
+			where id = 'conversation-1'
+		`;
+		await client`
+			insert into platform.conversation_executions
+				(execution_id, conversation_id, agent_id, actor_id, channel_id,
+				 turn_id, status, session_generation, delivery_fence,
+				 authorization_revision, execution_source, relay_key_purpose,
+				 relay_key_subject_id, relay_key_id, relay_key_version,
+				 runtime_submit_protocol, original_operation_digest,
+				 original_submit_host_session_ref, principal_type, created_at, updated_at)
+			values
+				('execution-conversation-1-latest', 'conversation-1', 'agent-1', 'actor-1',
+				 'web', 'turn-conversation-1-latest', 'completed', 1, 1,
+				 'authorization-1', 'web', 'personal', 'actor-1', ${relayKeyId}, 1,
+				 'v4', ${"b".repeat(43)}, 'native-current-host', 'user',
+				 '2026-09-06T00:00:05.000Z', '2026-09-06T00:00:05.000Z')
+		`;
+		try {
+			expect(
+				await query.readNativeCapabilityCurrentScopeV1({
+					scope: actorOne,
+					agentId: "agent-1",
+					conversationId: "conversation-1",
+				}),
+			).toMatchObject({
+				executionId: "execution-conversation-1-latest",
+				currentHostScopeRef: "native-current-host",
+			});
+		} finally {
+			await client`
+				delete from platform.conversation_executions
+				where execution_id = 'execution-conversation-1-latest'
+			`;
+		}
+	});
+
 	it.each([
 		["cross actor", { actorId: "actor-2", channelId: "web" }],
 		["cross channel", { actorId: "actor-1", channelId: "wecom" }],

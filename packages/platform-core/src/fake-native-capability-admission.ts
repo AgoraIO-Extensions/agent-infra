@@ -3,6 +3,7 @@ import type { ConversationExecutionAuthorityV1 } from "./conversation-execution-
 import {
 	type NativeCapabilityAdmissionCapabilityV1,
 	type NativeCapabilityAdmissionRequestV1,
+	type NativeCapabilityAdmissionScopeV1,
 	type NativeCapabilityMetadataProjectionV1,
 	type NativeCapabilityMetadataRevalidationPortV1,
 	parseNativeCapabilityMetadataProjectionV1,
@@ -73,10 +74,10 @@ export class FakeNativeCapabilityMetadataRevalidationV1
 	isCurrent(input: {
 		readonly request: NativeCapabilityAdmissionRequestV1;
 		readonly capability: NativeCapabilityAdmissionCapabilityV1;
-		readonly sessionGeneration: number;
+		readonly scope: NativeCapabilityAdmissionScopeV1;
 	}): boolean {
 		if (!this.#available) return false;
-		void input.sessionGeneration;
+		void input.scope;
 		const projection = parseNativeCapabilityMetadataProjectionV1(
 			this.#projection,
 		);

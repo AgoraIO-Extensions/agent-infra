@@ -41,6 +41,14 @@ const current = {
 	authorizationRevision: authority.authorizationRevision,
 	currentHostScopeRef: "native-host",
 };
+const scope = {
+	agentId: current.agentId,
+	actorId: current.actorId,
+	channelId: current.channelId,
+	conversationId: current.conversationId,
+	sessionGeneration: current.sessionGeneration,
+	authorizationRevision: current.authorizationRevision,
+};
 
 function fixture(options: { now?: () => number; cacheTtlMs?: number } = {}) {
 	const query = {
@@ -130,7 +138,7 @@ describe("native capability metadata revalidation", () => {
 					availability: "available",
 					directoryRevision: revision,
 				},
-				sessionGeneration: 3,
+				scope,
 			}),
 		).toBe(true);
 	});
@@ -213,7 +221,7 @@ describe("native capability metadata revalidation", () => {
 			f.adapter.isCurrent({
 				request,
 				capability: allowed.capability,
-				sessionGeneration: 3,
+				scope,
 			}),
 		).toBe(false);
 		expect(f.query.readNativeCapabilityCurrentScopeV1).toHaveBeenCalledTimes(1);
@@ -238,7 +246,7 @@ describe("native capability metadata revalidation", () => {
 			adapter.isCurrent({
 				request,
 				capability: allowed.capability,
-				sessionGeneration: 3,
+				scope,
 			}),
 		).toBe(false);
 	});
