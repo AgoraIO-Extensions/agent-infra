@@ -83,7 +83,7 @@ interface ProjectionInput<T> extends RequestMetadata {
 	readonly identity: IdentityContext;
 	readonly application?: T;
 	readonly agent?: T;
-	readonly projectionScope?: object;
+	readonly requestScope?: object;
 }
 
 export interface SecretPreparationInput extends RequestMetadata {
@@ -110,7 +110,7 @@ export interface ManagementRouteDependencies {
 		input: RequestMetadata & {
 			readonly apiUser: CurrentTaskUserV1;
 			readonly agent: AgentManagementAgentProjectionV1;
-			readonly projectionScope?: object;
+			readonly requestScope?: object;
 		},
 	) => Promise<unknown>;
 	readonly foundation: Pick<ApplicationFoundationUseCaseV1, "submit">;
@@ -257,7 +257,7 @@ async function projectApplication(
 		value = await dependencies.readApplicationProjection({
 			application,
 			identity,
-			projectionScope: metadata,
+			requestScope: metadata,
 			...metadata,
 		});
 	} catch (error) {
@@ -285,7 +285,7 @@ async function projectAgent(
 		value = await dependencies.readAgentProjection({
 			agent,
 			identity,
-			projectionScope: metadata,
+			requestScope: metadata,
 			...metadata,
 		});
 	} catch (error) {
@@ -997,7 +997,7 @@ export function registerV2ManagementRoutes(
 									...metadata,
 									apiUser,
 									agent,
-									projectionScope: metadata,
+									requestScope: metadata,
 								});
 								const parsed = AgentProjectionV1Schema.safeParse(value);
 								if (!parsed.success)
