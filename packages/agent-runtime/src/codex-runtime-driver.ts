@@ -438,6 +438,84 @@ function approveMountedSkillResponse(
 	};
 }
 
+function approveCombinedSkillResponse(
+	value: unknown,
+	cwd: string,
+	descriptor: CodexInstalledSkillDescriptorV1 | undefined,
+	entries:
+		| ReadonlyArray<
+				ReturnType<RuntimeFilesystemSkillDirectoryV1["findSkills"]>[number]
+		  >
+		| undefined,
+) {
+	if (
+		!isPlainRecord(value) ||
+		!hasOnlyKeys(value, ["data"]) ||
+		!Array.isArray(value.data) ||
+		value.data.length !== 1
+	)
+		skillDirectoryInvalid();
+	const record = value.data[0];
+	if (
+		!isPlainRecord(record) ||
+		!hasOnlyKeys(record, ["cwd", "skills", "errors"]) ||
+		record.cwd !== cwd ||
+		!Array.isArray(record.errors) ||
+		record.errors.length !== 0 ||
+		!Array.isArray(record.skills)
+	)
+		skillDirectoryInvalid();
+	const skills = record.skills;
+	const names = skills.map((skill) =>
+		isPlainRecord(skill) && typeof skill.name === "string" ? skill.name : "",
+	);
+	if (
+		names.some((name) => name.length === 0) ||
+		new Set(names).size !== names.length
+	)
+		skillDirectoryInvalid();
+	const fixedName = descriptor?.manifest.name;
+	const fixedSkills = fixedName
+		? skills.filter((skill) => isPlainRecord(skill) && skill.name === fixedName)
+		: [];
+	const mountedSkills = fixedName
+		? skills.filter(
+				(skill) => !isPlainRecord(skill) || skill.name !== fixedName,
+			)
+		: skills;
+	if (descriptor && fixedSkills.length !== 1) skillDirectoryInvalid();
+	if (!entries && mountedSkills.length !== 0) skillDirectoryInvalid();
+	if (entries && mountedSkills.length !== entries.length)
+		skillDirectoryInvalid();
+	const descriptions = new Map<string, string>();
+	let digest = createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	if (descriptor) {
+		const approved = approveSkillResponse(
+			{ data: [{ ...record, skills: fixedSkills }] },
+			cwd,
+			descriptor,
+		);
+		digest = createHash("sha256")
+			.update(`${digest}:${approved.digest}`)
+			.digest("hex");
+		for (const [name, description] of approved.descriptionByName)
+			descriptions.set(name, description);
+	}
+	if (entries) {
+		const approved = approveMountedSkillResponse(
+			{ data: [{ ...record, skills: mountedSkills }] },
+			cwd,
+			entries,
+		);
+		digest = createHash("sha256")
+			.update(`${digest}:${approved.digest}`)
+			.digest("hex");
+		for (const [name, description] of approved.descriptionByName)
+			descriptions.set(name, description);
+	}
+	return { digest, descriptionByName: descriptions };
+}
+
 /** Trusted deployment input; shape receipt does not verify installation or image provenance. */
 export interface CodexInstalledSkillDescriptorV1 {
 	readonly schemaVersion: 1;
@@ -4847,9 +4925,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			assertCurrent?.();
 			if (skillProcess && (this.installedSkill || this.skillDirectory)) {
 				if (metadataRead) await metadataRead.revalidate();
-				const extraRoots = this.installedSkill
-					? [this.installedSkill.manifest.extraRoot]
-					: [runtimeSkillHubMountRootV1];
+				const extraRoots = [
+					...(this.installedSkill
+						? [this.installedSkill.manifest.extraRoot]
+						: []),
+					...(this.skillDirectory ? [runtimeSkillHubMountRootV1] : []),
+				];
 				const roots = rpc.request(
 					"skills/extraRoots/set",
 					{ extraRoots },
@@ -4917,11 +4998,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		options: CodexRuntimeDriverOptions,
 		openBridge: OpenCodexBridge,
 	) {
-		if (
-			options.installedSkill !== undefined &&
-			options.skillDirectory !== undefined
-		)
-			configurationInvalid();
 		const installedSkillInput = options.installedSkill;
 		const installedSkill =
 			installedSkillInput === undefined
@@ -6190,13 +6266,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				read.signal,
 			),
 		);
-		const approved = descriptor
-			? approveSkillResponse(response, process.launch.cwd, descriptor)
-			: approveMountedSkillResponse(
-					response,
-					process.launch.cwd,
-					mountedEntries ?? [],
-				);
+		const approved = approveCombinedSkillResponse(
+			response,
+			process.launch.cwd,
+			descriptor,
+			mountedEntries,
+		);
 		assertMountedCurrent();
 		const revision = createHash("sha256")
 			.update(
@@ -6204,7 +6279,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					"codex-installed-skill-directory-v1",
 					binding,
 					binding.requiredRuntime,
-					descriptor ?? mountedEntries,
+					{ fixed: descriptor ?? null, hub: mountedEntries ?? null },
 					mountedGenerationId,
 					process.launch.processId,
 					process.launch.cwd,
@@ -6213,33 +6288,36 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				]),
 			)
 			.digest("hex");
-		const capabilities = descriptor
-			? [
-					{
-						id: createHash("sha256")
-							.update(`installed-skill:${revision}`)
-							.digest("hex"),
-						kind: "skill" as const,
-						name: descriptor.manifest.name,
-						description:
-							approved.descriptionByName.get(descriptor.manifest.name) ?? "",
-						source: {
-							name: descriptor.manifest.source.repository,
-							version: descriptor.manifest.version,
+		const capabilities = [
+			...(descriptor
+				? [
+						{
+							id: createHash("sha256")
+								.update(`installed-skill:${revision}`)
+								.digest("hex"),
+							kind: "skill" as const,
+							name: descriptor.manifest.name,
+							description:
+								approved.descriptionByName.get(descriptor.manifest.name) ?? "",
+							source: {
+								name: descriptor.manifest.source.repository,
+								version: descriptor.manifest.version,
+							},
+							availability: "discovered" as const,
 						},
-						availability: "discovered" as const,
-					},
-				]
-			: (mountedEntries ?? []).map((entry) => ({
-					id: createHash("sha256")
-						.update(`mounted-skill:${revision}:${entry.name}`)
-						.digest("hex"),
-					kind: "skill" as const,
-					name: entry.name,
-					description: approved.descriptionByName.get(entry.name) ?? "",
-					source: { name: "agent-infra-skill-hub", version: entry.version },
-					availability: "discovered" as const,
-				}));
+					]
+				: []),
+			...(mountedEntries ?? []).map((entry) => ({
+				id: createHash("sha256")
+					.update(`mounted-skill:${revision}:${entry.name}`)
+					.digest("hex"),
+				kind: "skill" as const,
+				name: entry.name,
+				description: approved.descriptionByName.get(entry.name) ?? "",
+				source: { name: "agent-infra-skill-hub", version: entry.version },
+				availability: "discovered" as const,
+			})),
+		];
 		const directory = {
 			revision,
 			capabilities,
