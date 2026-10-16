@@ -476,6 +476,8 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 				record: latest,
 			};
 		const workload = latest.workload;
+		const nativeCapability =
+			context.claim.operation === "conversation.native-capability.invoke.v1";
 		if (
 			latest.agent.status !== "available" ||
 			latest.agent.desiredState !== "running" ||
@@ -490,8 +492,9 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 			workload.verified.configuration.revision !==
 				latest.configurationRevision ||
 			(workload.verified.configuration.source.kind === "standard"
-				? context.claim.modelConfigurationRevision !==
-					latest.configurationRevision
+				? !nativeCapability &&
+					context.claim.modelConfigurationRevision !==
+						latest.configurationRevision
 				: workload.verified.configuration.source.kind !== "custom" ||
 					context.claim.modelConfigurationRevision !== null) ||
 			workload.sourceLifecycleRevision !== latest.agent.workloadRevision ||
