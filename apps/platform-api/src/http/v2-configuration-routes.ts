@@ -240,6 +240,11 @@ export function registerV2ConfigurationRoutes(
 			body,
 			metadata.traceId,
 		);
+		if (
+			keyReplacement?.kind === "saved" &&
+			!context.req.path.endsWith("/configuration/saved-model")
+		)
+			throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
 		if (keyReplacement?.kind === "saved") {
 			if (!dependencies.savedKeyCandidates || !body.modelConfiguration)
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
