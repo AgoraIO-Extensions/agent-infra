@@ -1,7 +1,13 @@
+import type {
+	RuntimeNativeMetadataBindingResponseV1,
+	RuntimeNativeMetadataReadRequestV1,
+	RuntimeNativeMetadataReadResponseV1,
+} from "@agent-infra/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createPlatformNativeMetadataBindingResolverV1,
 	createPlatformNativeMetadataGatewayAssemblyV1,
+	createPlatformNativeMetadataTransportResolverV1,
 } from "./native-metadata-deployment-assembly.js";
 
 const ports = {
@@ -250,5 +256,110 @@ describe("native metadata deployment assembly", () => {
 				ports,
 			}),
 		).toThrow("Platform Worker service token is invalid");
+	});
+
+	it("builds a fixed Runtime client from the verified binding", async () => {
+		const { apiRequestSourceRef: _source, ...bindingIdentity } = bindingRequest;
+		const binding = {
+			...bindingIdentity,
+			originalHostScopeRef: "host-assembly-transport",
+		} as const satisfies RuntimeNativeMetadataBindingResponseV1;
+		const request = {
+			...binding,
+			proof: {
+				schemaVersion: 1 as const,
+				format: "native-metadata-jws" as const,
+				token: "proof-assembly-transport",
+			},
+		} satisfies RuntimeNativeMetadataReadRequestV1;
+		const response: RuntimeNativeMetadataReadResponseV1 = {
+			...binding,
+			projection: {
+				selector: "commands",
+				revision: "a".repeat(64),
+				capabilities: [],
+			},
+		};
+		const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+			new Response(JSON.stringify(response), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			}),
+		);
+		const resolveTarget = vi.fn(
+			async (input: {
+				readonly binding: RuntimeNativeMetadataBindingResponseV1;
+				readonly signal: AbortSignal;
+			}) => {
+				expect(input.binding).toEqual(binding);
+				return {
+					baseUrl: "http://runtime.fixed.internal/",
+					serviceToken: "runtime-fixed-token",
+				};
+			},
+		);
+		const transport = createPlatformNativeMetadataTransportResolverV1({
+			resolveTarget,
+			fetch: fetcher,
+		});
+		const client = await transport.resolve({
+			binding,
+			signal: new AbortController().signal,
+		});
+		await expect(
+			client?.read(request, new AbortController().signal),
+		).resolves.toEqual(response);
+		const [url, init] = fetcher.mock.calls[0] ?? [];
+		expect(String(url)).toBe(
+			"http://runtime.fixed.internal/internal/runtime/v1/native-metadata",
+		);
+		expect(init?.headers).toMatchObject({
+			authorization: "Bearer runtime-fixed-token",
+		});
+		const sent = JSON.parse(String(init?.body)) as Record<string, unknown>;
+		expect(sent).toMatchObject(request);
+		expect(sent).not.toHaveProperty("baseUrl");
+		expect(sent).not.toHaveProperty("serviceToken");
+	});
+
+	it.each([
+		["missing target", null],
+		[
+			"invalid URL",
+			{ baseUrl: "https://runtime.fixed.internal", serviceToken: "token" },
+		],
+		[
+			"invalid token",
+			{ baseUrl: "http://runtime.fixed.internal", serviceToken: "" },
+		],
+	] as const)("fails closed for a %s", async (_label, target) => {
+		const transport = createPlatformNativeMetadataTransportResolverV1({
+			resolveTarget: async () => target,
+		});
+		await expect(
+			transport.resolve({
+				binding: {
+					...bindingRequest,
+					originalHostScopeRef: "host-invalid-target",
+				},
+				signal: new AbortController().signal,
+			}),
+		).resolves.toBeNull();
+	});
+
+	it("keeps an explicit transport override authoritative", () => {
+		const transport = { resolve: vi.fn(async () => null) };
+		const runtimeTarget = {
+			resolve: vi.fn(async () => ({
+				baseUrl: "http://runtime.fixed.internal",
+				serviceToken: "runtime-fixed-token",
+			})),
+		};
+		const options = createPlatformNativeMetadataGatewayAssemblyV1({
+			serviceToken: "worker-service-token",
+			ports: { ...ports, transport, runtimeTarget },
+		});
+		expect(options.app).toBeDefined();
+		expect(runtimeTarget.resolve).not.toHaveBeenCalled();
 	});
 });
