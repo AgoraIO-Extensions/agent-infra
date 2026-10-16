@@ -118,7 +118,7 @@ Agent 详情的 `source.services` 返回每个 Service 实际使用的档位。
 | --- | --- |
 | `status` | HTTP 状态码 |
 | `operationRef` | 方法加路由模板，例如 `POST.api.v2.agents.:agentId.lifecycle`；没有匹配到路由的请求是 `GET.unmatched`，不含具体 ID 和查询串 |
-| `protocolCode` | 响应里的协议错误码，例如 `DEPENDENCY_UNAVAILABLE`、`RESOURCE_UNAVAILABLE`；只取这个有界标识，不记录响应正文 |
+| `protocolCode` | 响应里的协议错误码，例如 `DEPENDENCY_UNAVAILABLE`、`RESOURCE_UNAVAILABLE`；只取这个有界标识，不记录响应正文；响应不是 JSON、正文超过 4 KiB 或 100 毫秒内没有读完时没有这一项 |
 
 完成的请求（2xx、3xx）不带这些字段。日志不包含请求或响应正文、凭证、用户标识和 Agent ID。同一个请求
 的 `requestId`、`traceId` 与响应里的 `traceId` 一致，可以用来对应一次具体的失败。
