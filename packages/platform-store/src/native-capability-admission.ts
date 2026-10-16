@@ -87,7 +87,10 @@ export class FakeNativeCapabilityAdmissionStoreV1
 					}
 			  >
 		>,
-		isCurrent: (plan: NativeCapabilityInvocationPlanV1) => boolean,
+		isCurrent: (
+			plan: NativeCapabilityInvocationPlanV1,
+			conversation: ConversationExecutionConversationStateV1,
+		) => boolean,
 		isAuthorized: () => Promise<boolean>,
 	): Promise<NativeCapabilityAdmissionDecisionV1> {
 		return this.#serialize(() =>
@@ -122,7 +125,10 @@ export class FakeNativeCapabilityAdmissionStoreV1
 					}
 			  >
 		>,
-		isCurrent: (plan: NativeCapabilityInvocationPlanV1) => boolean,
+		isCurrent: (
+			plan: NativeCapabilityInvocationPlanV1,
+			conversation: ConversationExecutionConversationStateV1,
+		) => boolean,
 		isAuthorized: () => Promise<boolean>,
 	): Promise<NativeCapabilityAdmissionDecisionV1> {
 		const authority = request.authority;
@@ -168,7 +174,7 @@ export class FakeNativeCapabilityAdmissionStoreV1
 		if (this.#authorizationRevision !== authority.authorizationRevision)
 			return { outcome: "denied", reason: "authorization_lost" };
 		if (this.#activeExecution) return { outcome: "busy" };
-		if (!isCurrent(decision)) return { outcome: "stale" };
+		if (!isCurrent(decision, this.#conversation)) return { outcome: "stale" };
 		this.#validatePlan(decision, request);
 		const plan = freeze(structuredClone(decision));
 		this.#idempotency.set(idempotencyKey, {

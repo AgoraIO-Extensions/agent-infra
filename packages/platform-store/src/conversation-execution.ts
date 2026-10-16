@@ -358,7 +358,7 @@ export class PostgresConversationExecutionTransactionV1
 				return { outcome: "denied", reason: "authorization_lost" };
 			if (!(await isAuthorized()))
 				return { outcome: "denied", reason: "authorization_lost" };
-			if (!isCurrent(plan)) return { outcome: "stale" };
+			if (!isCurrent(plan, conversation)) return { outcome: "stale" };
 
 			const occurredAt = new Date();
 			const reservationId = await reserveIdempotency(transaction, {

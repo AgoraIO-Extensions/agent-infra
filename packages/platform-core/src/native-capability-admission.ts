@@ -209,7 +209,10 @@ export interface NativeCapabilityAdmissionTransactionPortV1 {
 					}
 			  >
 		>,
-		isCurrent: (plan: NativeCapabilityInvocationPlanV1) => boolean,
+		isCurrent: (
+			plan: NativeCapabilityInvocationPlanV1,
+			conversation: ConversationExecutionConversationStateV1,
+		) => boolean,
 		isAuthorized: () => Promise<boolean>,
 	): Promise<NativeCapabilityAdmissionDecisionV1>;
 }
@@ -684,8 +687,12 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 						};
 						return freeze(plan);
 					},
-					(plan) =>
+					(plan, currentConversation) =>
 						latestScopeForCommit !== undefined &&
+						currentConversation.sessionGeneration ===
+							latestScopeForCommit.sessionGeneration &&
+						currentConversation.hostSessionRef ===
+							latestScopeForCommit.hostScopeRef &&
 						dependencies.metadata.isCurrent({
 							request,
 							capability: plan.capability,
