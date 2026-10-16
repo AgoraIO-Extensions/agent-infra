@@ -84,27 +84,32 @@ export function createPlatformProjectionReaders(
 	dependencies: ProjectionReaderDependencies,
 ) {
 	// 同一个请求里同一组 Owner 只解析一次：列表接口对每个 Agent 都要展示 Owner，之前每一项都
-	// 重新解析同一个 Owner（#2632）。键是路由为这个请求解析出的身份对象，请求结束后不再被引用，
-	// 记忆随之释放；下一个请求是新的身份对象，所以从不跨请求复用。
+	// 重新解析同一个 Owner（#2632）。记忆挂在路由为这个请求解析出的身份对象上（请求结束后不再被
+	// 引用，随之释放），并且只在服务端为这个请求生成的 requestId 相同时复用：身份对象即使被复用，
+	// 不同请求也从不共享结果，失败也不会跨请求复用（#2655）。
 	const ownersByRequest = new WeakMap<
 		object,
-		Map<string, ReturnType<typeof hydrateBrowserUsers>>
+		{
+			readonly requestId: string;
+			readonly byOwners: Map<string, ReturnType<typeof hydrateBrowserUsers>>;
+		}
 	>();
 	function owners(
-		request: object,
+		identity: object,
+		requestId: string,
 		ownerIds: readonly string[],
 		traceId: string,
 	): ReturnType<typeof hydrateBrowserUsers> {
-		let byOwners = ownersByRequest.get(request);
-		if (!byOwners) {
-			byOwners = new Map();
-			ownersByRequest.set(request, byOwners);
+		let memo = ownersByRequest.get(identity);
+		if (memo?.requestId !== requestId) {
+			memo = { requestId, byOwners: new Map() };
+			ownersByRequest.set(identity, memo);
 		}
 		const key = JSON.stringify(ownerIds);
-		let hydrated = byOwners.get(key);
+		let hydrated = memo.byOwners.get(key);
 		if (!hydrated) {
 			hydrated = hydrateBrowserUsers(dependencies.identity, ownerIds, traceId);
-			byOwners.set(key, hydrated);
+			memo.byOwners.set(key, hydrated);
 		}
 		return hydrated;
 	}
@@ -128,7 +133,12 @@ export function createPlatformProjectionReaders(
 		}
 		const configuration = result.configuration;
 		const [hydratedOwners, presentation] = await Promise.all([
-			owners(user, configuration.ownerIds, metadata.traceId),
+			owners(
+				user,
+				metadata.requestId,
+				configuration.ownerIds,
+				metadata.traceId,
+			),
 			dependencies.presentAgent({ agentId, configuration, management }),
 		]);
 		if (!sourceMatches(configuration, presentation.source)) {

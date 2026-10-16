@@ -144,6 +144,51 @@ describe("Agent projection owners (#2632)", () => {
 		expect(hydrateUsers).toHaveBeenCalledTimes(3);
 	});
 
+	it("keeps requests apart even when they share one identity object (#2655)", async () => {
+		const { projections, hydrateUsers } = readers();
+		// 身份 Adapter 将来可能复用同一个身份对象实例；请求边界只能由每个请求唯一的 requestId 判定。
+		const shared = { ...identity };
+		hydrateUsers.mockRejectedValueOnce(new Error("PRIVATE_DIRECTORY_DETAIL"));
+		await expect(
+			projections.readManagementAgentProjection({
+				identity: shared,
+				requestId: "request_01",
+				traceId: "trace_01",
+				agent: agent("agent_00"),
+			}),
+		).rejects.toMatchObject({ body: { code: "DEPENDENCY_UNAVAILABLE" } });
+		// 第二个请求用同一个身份对象：不复用第一个请求失败的解析，重新解析一次。
+		await expect(
+			projections.readManagementAgentProjection({
+				identity: shared,
+				requestId: "request_02",
+				traceId: "trace_02",
+				agent: agent("agent_00"),
+			}),
+		).resolves.toMatchObject({ agentId: "agent_00" });
+		expect(hydrateUsers).toHaveBeenCalledTimes(2);
+		// 同一个请求里仍然只解析一次。
+		await Promise.all(
+			["agent_01", "agent_03"].map((agentId) =>
+				projections.readManagementAgentProjection({
+					identity: shared,
+					requestId: "request_02",
+					traceId: "trace_02",
+					agent: agent(agentId),
+				}),
+			),
+		);
+		expect(hydrateUsers).toHaveBeenCalledTimes(2);
+		// 第三个请求，同一个身份对象：重新解析。
+		await projections.readManagementAgentProjection({
+			identity: shared,
+			requestId: "request_03",
+			traceId: "trace_03",
+			agent: agent("agent_00"),
+		});
+		expect(hydrateUsers).toHaveBeenCalledTimes(3);
+	});
+
 	it("does not reuse a failed owner hydration across requests", async () => {
 		const { projections, hydrateUsers } = readers();
 		hydrateUsers.mockRejectedValueOnce(new Error("PRIVATE_DIRECTORY_DETAIL"));
