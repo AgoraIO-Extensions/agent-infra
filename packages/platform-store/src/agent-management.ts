@@ -54,6 +54,7 @@ import {
 	platformApiCredentials,
 	platformApplications,
 	platformUserDisables,
+	workloadReconciliations,
 } from "./schema.js";
 
 export interface PostgresAgentManagementOptionsV1 {
@@ -661,6 +662,12 @@ export class PostgresAgentManagementTransactionV1
 					request.agentId,
 				);
 				if (!state) throw new PersonalApiCredentialErrorV1("not_found");
+				const [workload] = await transaction
+					.select({ state: workloadReconciliations.state })
+					.from(workloadReconciliations)
+					.where(eq(workloadReconciliations.agentId, request.agentId))
+					.limit(1);
+				const recentWorkloadFailure = workload?.state.lastFailure?.reason;
 				auditContext = { ...auditContext, agentId: state.agentId };
 				const result = {
 					schemaVersion: 1 as const,
@@ -671,7 +678,12 @@ export class PostgresAgentManagementTransactionV1
 					...(isAgentApiFailureStateV1(state) && state.failureCode
 						? {
 								failureCode: state.failureCode,
-								failureReason: agentApiFailureReasonV1(state.failureCode),
+								failureReason: `${agentApiFailureReasonV1(state.failureCode)}${
+									recentWorkloadFailure &&
+									/^[a-z][a-z0-9_]{1,63}$/.test(recentWorkloadFailure)
+										? ` - ${recentWorkloadFailure.replaceAll("_", "-")}`
+										: ""
+								}`,
 							}
 						: {}),
 				};

@@ -387,6 +387,51 @@ describe("durable Workload reconciliation", () => {
 		expect(f.runtime.preflight).toHaveBeenCalledOnce();
 	});
 	describe("swallowed step exceptions are observable (#2532)", () => {
+		it("persists bounded failure details and terminates repeated Kubernetes forbidden errors", async () => {
+			const failures: WorkloadStepFailureV1[] = [];
+			const f = fixture(undefined, (failure) => failures.push(failure));
+			await f.tick(3);
+			vi.mocked(f.runtime.apply).mockRejectedValue({
+				code: "unavailable",
+				details: { status: 403, kind: "Deployment", verb: "create" },
+			});
+			await f.tick(3);
+			expect(f.state).toMatchObject({
+				phase: "cleaning",
+				failureCode: "reconciliation_failed",
+				lastFailure: {
+					schemaVersion: 1,
+					reason: "kubernetes_forbidden",
+					attempts: 3,
+					status: 403,
+					kind: "Deployment",
+					verb: "create",
+				},
+			});
+			expect(
+				failures.map(({ attempts, terminal }) => [attempts, terminal]),
+			).toEqual([
+				[1, false],
+				[2, false],
+				[3, true],
+			]);
+		});
+
+		it("clears the persisted failure after a successful step", async () => {
+			const f = fixture();
+			await f.tick(3);
+			vi.mocked(f.runtime.apply)
+				.mockRejectedValueOnce({
+					code: "unavailable",
+					details: { status: 403, kind: "Deployment", verb: "create" },
+				})
+				.mockResolvedValueOnce({ uid: "uid-a", generation: 1 });
+			await f.tick();
+			expect(f.state?.lastFailure?.reason).toBe("kubernetes_forbidden");
+			await f.tick();
+			expect(f.state?.lastFailure).toBeUndefined();
+		});
+
 		it("reports every swallowed exception with its phase and consecutive attempt", async () => {
 			const failures: WorkloadStepFailureV1[] = [];
 			const f = fixture(undefined, (failure) => failures.push(failure));

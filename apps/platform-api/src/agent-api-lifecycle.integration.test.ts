@@ -308,6 +308,35 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 		expect(JSON.stringify(body)).not.toContain(material.application);
 	});
 
+	it("reports the bounded Workload failure reason after reconciliation fails", async () => {
+		await sql`update platform.agent_applications
+			set status = 'creation_failed', service_availability = null,
+				failure_code = 'reconciliation_failed', desired_state = 'running'
+			where agent_id = 'agent-a'`;
+		await sql`insert into platform.workload_reconciliations(agent_id, revision, state, next_attempt_at)
+			values ('agent-a', 1, ${sql.json({
+				schemaVersion: 1,
+				agentId: "agent-a",
+				revision: 1,
+				lastFailure: {
+					schemaVersion: 1,
+					reason: "kubernetes_forbidden",
+					attempts: 3,
+					status: 403,
+					kind: "Deployment",
+					verb: "create",
+				},
+			})}, clock_timestamp())`;
+		const response = await fetch(`${origin}/api/v2/agents/agent-a/state`, {
+			headers: { Authorization: `Bearer ${material.application}` },
+		});
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as Record<string, unknown>;
+		expect(body.failureReason).toBe(
+			"Agent workload reconciliation failed - kubernetes-forbidden",
+		);
+	});
+
 	it("reports the same bounded details for an unavailable upgraded workload", async () => {
 		await sql`update platform.agent_applications
 			set status = 'available', service_availability = 'unavailable',

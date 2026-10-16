@@ -9,6 +9,7 @@ import {
 	parseWorkloadCapabilitiesV1,
 	parseWorkloadExecutionCapacityV1,
 	parseWorkloadSecretRecoveriesV1,
+	type WorkloadReconciliationFailureV1,
 	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
 	type WorkloadReconciliationStorePortV1,
@@ -32,6 +33,67 @@ import { PostgresSecretActivationStoreV1 } from "./secret-activation.js";
 import { persistSessionSandboxUpgradeIntents } from "./session-sandbox-upgrade.js";
 
 const defaultWorkloadLeaseMs = 300_000;
+
+function parsePersistedWorkloadReconciliationFailureV1(
+	input: unknown,
+): WorkloadReconciliationFailureV1 {
+	if (!input || typeof input !== "object" || Array.isArray(input))
+		throw new Error();
+	const value = input as Record<string, unknown>;
+	const reasons = [
+		"kubernetes_unauthorized",
+		"kubernetes_forbidden",
+		"kubernetes_not_found",
+		"kubernetes_conflict",
+		"kubernetes_invalid",
+		"kubernetes_throttled",
+		"kubernetes_server_error",
+		"kubernetes_unreachable",
+		"kubernetes_policy",
+		"preflight_rejected",
+		"capabilities_unavailable",
+		"unexpected_error",
+	];
+	if (
+		Object.keys(value).some(
+			(key) =>
+				![
+					"schemaVersion",
+					"reason",
+					"attempts",
+					"status",
+					"kind",
+					"verb",
+				].includes(key),
+		) ||
+		value.schemaVersion !== 1 ||
+		typeof value.reason !== "string" ||
+		!reasons.includes(value.reason) ||
+		!Number.isSafeInteger(value.attempts) ||
+		(value.attempts as number) < 1 ||
+		(Object.hasOwn(value, "status") &&
+			(!Number.isSafeInteger(value.status) ||
+				(value.status as number) < 100 ||
+				(value.status as number) > 599)) ||
+		(Object.hasOwn(value, "kind") &&
+			(typeof value.kind !== "string" ||
+				!/^[A-Za-z][A-Za-z0-9.-]{0,63}$/.test(value.kind))) ||
+		(Object.hasOwn(value, "verb") &&
+			(typeof value.verb !== "string" ||
+				!/^[a-z][a-z-]{0,31}$/.test(value.verb)))
+	)
+		throw new Error();
+	return {
+		schemaVersion: 1,
+		reason: value.reason as WorkloadReconciliationFailureV1["reason"],
+		attempts: value.attempts as number,
+		...(Object.hasOwn(value, "status")
+			? { status: value.status as number }
+			: {}),
+		...(Object.hasOwn(value, "kind") ? { kind: value.kind as string } : {}),
+		...(Object.hasOwn(value, "verb") ? { verb: value.verb as string } : {}),
+	};
+}
 
 type LegacyWorkloadReconciliationStateV1 = Omit<
 	WorkloadReconciliationStateV1,
@@ -112,7 +174,12 @@ export function decodePersistedWorkloadStateV1(
 		"failureCode",
 		"attempts",
 	];
-	const optional = ["fence", "cleanupInterrupted", "capabilities"];
+	const optional = [
+		"fence",
+		"cleanupInterrupted",
+		"capabilities",
+		"lastFailure",
+	];
 	if (
 		required.some((key) => !Object.hasOwn(value, key)) ||
 		Object.keys(value).some(
@@ -166,9 +233,13 @@ export function decodePersistedWorkloadStateV1(
 	const capabilities = Object.hasOwn(value, "capabilities")
 		? parseWorkloadCapabilitiesV1(value.capabilities)
 		: undefined;
+	const lastFailure = Object.hasOwn(value, "lastFailure")
+		? parsePersistedWorkloadReconciliationFailureV1(value.lastFailure)
+		: undefined;
 	const normalized = {
 		...value,
 		...(capabilities ? { capabilities } : {}),
+		...(lastFailure ? { lastFailure } : {}),
 		candidate: persistedWorkloadVersion(value.candidate, agentId),
 		verified:
 			value.verified === null
