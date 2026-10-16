@@ -25,7 +25,7 @@ const conversation = {
 	channelId: "web",
 	status: "ready" as const,
 	sessionGeneration: 3,
-	hostSessionRef: null,
+	hostSessionRef: "host-session-1",
 	authorizationRevision: "auth-1",
 	lastConversationCursor: 0,
 	selectedModelOptionId: null,
@@ -225,7 +225,7 @@ describe("native capability admission contract", () => {
 						conversationId: request.conversationId,
 						sessionGeneration: conversation.sessionGeneration,
 						authorizationRevision: authority.authorizationRevision,
-						hostScopeRef: null,
+						hostScopeRef: "host-session-1",
 					},
 				};
 			},
@@ -320,7 +320,7 @@ describe("native capability admission contract", () => {
 						conversationId: request.conversationId,
 						sessionGeneration: conversation.sessionGeneration,
 						authorizationRevision: authority.authorizationRevision,
-						hostScopeRef: null,
+						hostScopeRef: "host-session-1",
 					},
 				};
 			},
