@@ -77,6 +77,7 @@ function fixture(options: { now?: () => number; cacheTtlMs?: number } = {}) {
 	const adapter = createNativeCapabilityMetadataRevalidationV1({
 		query,
 		reader,
+		identity,
 		...(options.now ? { now: options.now } : {}),
 		...(options.cacheTtlMs ? { cacheTtlMs: options.cacheTtlMs } : {}),
 	});
@@ -144,6 +145,19 @@ describe("native capability metadata revalidation", () => {
 			f.adapter.revalidate({ request, authority, sessionGeneration: 3 }),
 		).resolves.toEqual({ outcome: "stale" });
 		expect(f.reader.read).not.toHaveBeenCalled();
+	});
+
+	it("does not synthesize a reader identity for a different actor", async () => {
+		const f = createNativeCapabilityMetadataRevalidationV1({
+			query: {
+				readNativeCapabilityCurrentScopeV1: vi.fn().mockResolvedValue(current),
+			},
+			reader: { read: vi.fn() },
+			identity: { ...identity, userId: "different-user" },
+		});
+		await expect(
+			f.revalidate({ request, authority, sessionGeneration: 3 }),
+		).resolves.toEqual({ outcome: "unavailable" });
 	});
 
 	it("expires the synchronous cache without a network recheck", async () => {

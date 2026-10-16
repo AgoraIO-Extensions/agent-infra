@@ -723,19 +723,20 @@ export function assemblePlatformApi(
 		input.nativeCapabilityMetadata !== undefined
 	)
 		throw new Error("PLATFORM_NATIVE_CAPABILITY_METADATA_DUPLICATE");
-	const nativeCapabilityMetadata =
-		input.nativeCapabilityMetadata ??
-		(assembledNativeMetadata
-			? createNativeCapabilityMetadataRevalidationV1({
+	const nativeCapabilityMetadata = input.nativeCapabilityMetadata;
+	const createDefaultNativeCapabilityMetadata = assembledNativeMetadata
+		? (identity: import("./http/identity.js").IdentityContext) =>
+				createNativeCapabilityMetadataRevalidationV1({
 					query: conversationQuery,
 					reader: assembledNativeMetadata.reader,
+					identity,
 				})
-			: undefined);
+		: undefined;
 	const assembledNativeCapabilityInvocation:
 		| NativeCapabilityInvocationRouteDependenciesV1
 		| undefined =
 		input.nativeCapabilityInvocation ??
-		(nativeCapabilityMetadata
+		(nativeCapabilityMetadata || createDefaultNativeCapabilityMetadata
 			? {
 					identity: input.identity,
 					buildRequest: async ({ conversationId, body }) => ({
@@ -744,6 +745,11 @@ export function assemblePlatformApi(
 						conversationId,
 					}),
 					admitWithIdentity: async ({ identity, request }) => {
+						const metadata =
+							nativeCapabilityMetadata ??
+							createDefaultNativeCapabilityMetadata?.(identity);
+						if (!metadata)
+							throw new Error("Native capability metadata unavailable");
 						const admission = createNativeCapabilityAdmissionUseCaseV1({
 							authorization: {
 								async authorize(authorizationRequest) {
@@ -756,7 +762,7 @@ export function assemblePlatformApi(
 										: { outcome: "denied" as const };
 								},
 							},
-							metadata: nativeCapabilityMetadata,
+							metadata,
 							transaction: conversationTransaction,
 						});
 						return admission.admit(request);

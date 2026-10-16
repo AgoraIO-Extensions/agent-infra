@@ -57,24 +57,6 @@ function sameCapability(
 	);
 }
 
-function identityForAuthority(authority: {
-	readonly actorId: string;
-	readonly authorizationRevision: string;
-}): IdentityContext {
-	// This is a reader transport identity only.  The authoritative actor,
-	// revision, and conversation scope still come from ConversationAuthorization
-	// and the Store current-scope query below.
-	return {
-		schemaVersion: 1,
-		userId: authority.actorId,
-		displayName: authority.actorId,
-		accountStatus: "active",
-		organizationIds: [],
-		roles: ["employee"],
-		authorizationRevision: authority.authorizationRevision,
-	};
-}
-
 function projectionSelector(selector: Selector): "commands" | "skills" {
 	return selector;
 }
@@ -144,13 +126,16 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 		"readNativeCapabilityCurrentScopeV1"
 	>;
 	readonly reader: RuntimeNativeMetadataPublicReaderV1;
+	readonly identity: IdentityContext;
 	readonly now?: () => number;
 	readonly cacheTtlMs?: number;
 	readonly maximumEntries?: number;
 }): NativeCapabilityMetadataRevalidationPortV1 {
 	if (
 		typeof options.query?.readNativeCapabilityCurrentScopeV1 !== "function" ||
-		typeof options.reader?.read !== "function"
+		typeof options.reader?.read !== "function" ||
+		typeof options.identity?.userId !== "string" ||
+		options.identity.accountStatus !== "active"
 	)
 		throw new TypeError("Native capability metadata options are invalid");
 	const now = options.now ?? Date.now;
@@ -190,6 +175,11 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 					authority.authorizationRevision.length === 0
 				)
 					return { outcome: "unavailable" };
+				if (
+					options.identity.userId !== authority.actorId ||
+					options.identity.authorizationRevision.length === 0
+				)
+					return { outcome: "unavailable" };
 				const current = await options.query.readNativeCapabilityCurrentScopeV1({
 					scope: scopeForQuery(authority),
 					agentId: authority.agentId,
@@ -198,16 +188,15 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 				if (!current) return { outcome: "unavailable" };
 				if (!isCurrentScope(current, authority, request, sessionGeneration))
 					return { outcome: "stale" };
-				const identity = identityForAuthority(authority);
 				const [commands, skills] = await Promise.all([
 					options.reader.read(
-						identity,
+						options.identity,
 						request.conversationId,
 						current.executionId,
 						"commands",
 					),
 					options.reader.read(
-						identity,
+						options.identity,
 						request.conversationId,
 						current.executionId,
 						"skills",
