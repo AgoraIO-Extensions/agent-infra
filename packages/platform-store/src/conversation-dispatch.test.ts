@@ -3974,6 +3974,117 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	describe("stop on a V4 Turn whose submit was never claimed (#2674)", () => {
+		it("reads the Runtime state, with the same original digest as after a delivery", async () => {
+			// 默认夹具：Web V4 Execution，submitted，delivery_fence=0（提交还没被认领过）。
+			const work = await seed("conversation.turn.submit.v1");
+			await seedStop(work);
+			const stopItem = `conversation:stop:${work.stopRequestId}`;
+			const stop = await claim(stopItem);
+			let stopDigest: string | undefined;
+			try {
+				if (stop.decision.outcome !== "claimed")
+					throw new Error("Expected stop claim");
+				expect(stop.decision.claim).toMatchObject({
+					executionStatus: "submitted",
+					stopPending: true,
+					executionDeliveryFence: 0,
+				});
+				const state = await stop.store.readRuntimeState({
+					claim: stop.decision.claim,
+				});
+				expect(state).toMatchObject({
+					executionStatus: "submitted",
+					stopPending: true,
+				});
+				stopDigest = state?.originalOperationDigest;
+				expect(stopDigest).toMatch(/^[A-Za-z0-9_-]{43}$/);
+			} finally {
+				await stop.store.close();
+			}
+			// fence 不进入原操作摘要：投递过一次（fence 为 1）之后再读，摘要不变。
+			await client`update platform.outbox_items
+				set lease_expires_at = now() - interval '1 second' where id = ${stopItem}`;
+			await client`update platform.conversation_executions
+				set delivery_fence = 1 where execution_id = ${work.executionId}`;
+			const again = await claim(stopItem);
+			try {
+				if (again.decision.outcome !== "claimed")
+					throw new Error("Expected stop claim");
+				expect(again.decision.claim.executionDeliveryFence).toBe(1);
+				expect(
+					(await again.store.readRuntimeState({ claim: again.decision.claim }))
+						?.originalOperationDigest,
+				).toBe(stopDigest);
+			} finally {
+				await again.store.close();
+			}
+		});
+
+		it("lets the stop claim cancel the unaccepted Turn locally", async () => {
+			const work = await seed("conversation.turn.submit.v1");
+			await seedStop(work);
+			const { store, decision } = await claim(
+				`conversation:stop:${work.stopRequestId}`,
+			);
+			try {
+				if (decision.outcome !== "claimed")
+					throw new Error("Expected stop claim");
+				// 授权被拒时 Core 先读运行时状态，再按 #2662 本地取消；读取不能先抛异常。
+				await expect(
+					store.readRuntimeState({ claim: decision.claim }),
+				).resolves.toMatchObject({ stopPending: true });
+				await expect(
+					store.cancelUnaccepted({ claim: decision.claim }),
+				).resolves.toBe(true);
+				expect(await dispatchState(work)).toMatchObject({
+					execution_status: "cancelled",
+					execution_fence: 0,
+				});
+				const [stop] = await client`
+					select request.status, outbox.status as outbox_status
+					from platform.conversation_stops request
+					join platform.outbox_items outbox
+						on outbox.id = ${`conversation:stop:${work.stopRequestId}`}
+					where request.execution_id = ${work.executionId}
+				`;
+				expect(stop).toEqual({
+					status: "completed",
+					outbox_status: "succeeded",
+				});
+				await expectPlatformCancellationEvent(work);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("leaves a submit that another Worker is delivering to its own claim", async () => {
+			const work = await seed("conversation.turn.submit.v1");
+			await seedStop(work);
+			// 提交正被另一个 Worker 持有（投递中）：由它自己的认领看到 stop 再处理（#2548）。
+			await client`update platform.outbox_items
+				set status = 'processing', lease_owner = 'worker-delivering',
+					lease_expires_at = now() + interval '30 seconds'
+				where id = ${work.itemId}`;
+			const { store, decision } = await claim(
+				`conversation:stop:${work.stopRequestId}`,
+			);
+			try {
+				if (decision.outcome !== "claimed")
+					throw new Error("Expected stop claim");
+				await expect(
+					store.cancelUnaccepted({ claim: decision.claim }),
+				).resolves.toBe(false);
+				expect(await dispatchState(work)).toMatchObject({
+					status: "processing",
+					execution_status: "submitted",
+				});
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
 	it("cancels an unknown Turn after RuntimeHost confirms it was not accepted", async () => {
 		const work = await seed("conversation.turn.submit.v1", {
 			executionStatus: "unknown",

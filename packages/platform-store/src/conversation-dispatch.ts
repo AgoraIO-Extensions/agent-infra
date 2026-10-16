@@ -27,9 +27,11 @@ import {
 	DispatchCapacityUnavailable,
 	databaseOperation,
 	executionPrincipalProjection,
+	type OutboxRow,
 	requireSafeCounter,
 	StaleDispatchLease,
 	symbolicCode,
+	type Transaction,
 	validText,
 } from "./conversation-dispatch-common.js";
 import { originalOperationBinding } from "./conversation-dispatch-operation-binding.js";
@@ -39,6 +41,7 @@ import {
 	closeOutbox,
 	insertPlatformExecutionStatusForFailure,
 	isolationProjection,
+	lockOutbox,
 	ownedState,
 	readGenerationIsolation,
 	readStop,
@@ -56,6 +59,7 @@ import {
 import {
 	exactPayload,
 	isTurn,
+	operation,
 	requireClaim,
 	requireCommand,
 	requireLeaseDuration,
@@ -86,6 +90,31 @@ export interface PostgresConversationDispatchOptionsV1 {
 	readonly sandboxPolicy?: SessionSandboxPolicyV1;
 	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly databaseUrl: string;
+}
+
+/**
+ * stop 认领本地取消时要结算的原 Turn 条目（提交或重新生成，只能有一个）。只在它没有被 Worker
+ * 持有时返回：正在投递的提交由它自己的认领看到 stop 再处理（#2548），这里不与之竞争（#2674）。
+ */
+async function lockUnleasedTurnOutbox(
+	transaction: Transaction,
+	claim: ConversationDispatchClaimV1,
+): Promise<OutboxRow | undefined> {
+	const submit = await lockOutbox(
+		transaction,
+		`conversation:turn:${claim.executionId}`,
+		claim.conversationId,
+	);
+	const regenerate = await lockOutbox(
+		transaction,
+		`conversation:regenerate:${claim.executionId}`,
+		claim.conversationId,
+	);
+	const turn =
+		submit && !regenerate ? submit : !submit ? regenerate : undefined;
+	return turn?.status === "pending" || turn?.status === "retry_scheduled"
+		? turn
+		: undefined;
 }
 
 export class PostgresConversationDispatchStoreV1
@@ -1187,16 +1216,25 @@ export class PostgresConversationDispatchStoreV1
 		requireClaim(input.claim);
 		return transactionResult(this.#client, async (transaction) => {
 			const state = await ownedState(transaction, input.claim);
-			const payload = state
-				? exactPayload(state.outbox.payload, input.claim.operation)
+			// stop 认领（授权被拒时 Core 用它本地取消，#2662）要结算的是原 Turn 的条目（#2674）。
+			const turnOutbox =
+				state && input.claim.operation === "conversation.turn.stop.v1"
+					? await lockUnleasedTurnOutbox(transaction, input.claim)
+					: state?.outbox;
+			const turnOperation = turnOutbox
+				? operation(turnOutbox.operation)
 				: undefined;
+			const payload =
+				turnOutbox && turnOperation && isTurn(turnOperation)
+					? exactPayload(turnOutbox.payload, turnOperation)
+					: undefined;
 			const stop = state
 				? await readStop(transaction, input.claim.executionId)
 				: undefined;
 			if (
 				!state ||
+				!turnOutbox ||
 				!payload ||
-				!isTurn(input.claim.operation) ||
 				(state.execution.status !== "unknown" &&
 					state.execution.status !== "submitted" &&
 					state.execution.status !== "waiting") ||
@@ -1206,7 +1244,7 @@ export class PostgresConversationDispatchStoreV1
 			}
 			await cancelStoppedTurn(
 				transaction,
-				state.outbox,
+				turnOutbox,
 				state.conversation,
 				state.execution,
 				stop,
