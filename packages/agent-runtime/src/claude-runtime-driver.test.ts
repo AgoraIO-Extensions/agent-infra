@@ -94,6 +94,8 @@ const nativeSkillCommand = (
 	nativeSessionRef: "native-skill",
 	capabilityId: "a".repeat(64),
 	directoryRevision: "b".repeat(64),
+	packageDigest: "b".repeat(64),
+	manifestDigest: "c".repeat(64),
 	parameters: "summarize files",
 	parametersDigest: "c".repeat(64),
 	capabilityName: "workspace-summary",
@@ -321,6 +323,11 @@ it("creates a Claude Applied Skill submit command from the verified root", async
 				},
 			},
 		);
+		expect(() =>
+			driver.createNativeSkillCommand(
+				nativeSkillCommand({ packageDigest: undefined }),
+			),
+		).toThrow();
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });

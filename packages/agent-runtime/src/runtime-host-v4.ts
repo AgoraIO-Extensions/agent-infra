@@ -321,6 +321,15 @@ export class RuntimeHostV4 {
 							}
 							const skillCreate = this.options.driver.createNativeSkillCommand;
 							if (!skillCreate) nativeUnsupported();
+							const resolveSkill =
+								this.options.driver.resolveNativeSkillBinding;
+							if (!resolveSkill) nativeUnsupported();
+							const skillBinding = resolveSkill({
+								nativeSessionRef: commandNativeSessionRef,
+								capabilityName,
+								capabilitySourceVersion: request.capabilitySourceVersion,
+								directoryRevision: request.directoryRevision,
+							});
 							return skillCreate({
 								schemaVersion: 1,
 								kind: "native-capability",
@@ -337,6 +346,8 @@ export class RuntimeHostV4 {
 								parametersDigest: request.parametersDigest,
 								capabilityName,
 								capabilitySourceVersion: request.capabilitySourceVersion,
+								packageDigest: skillBinding.packageDigest,
+								manifestDigest: skillBinding.manifestDigest,
 							});
 						},
 					});

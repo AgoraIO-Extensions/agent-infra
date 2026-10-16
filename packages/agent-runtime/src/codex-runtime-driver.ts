@@ -137,6 +137,7 @@ import type {
 	RuntimeModelDirectory,
 	RuntimeNativeCommandCommandV1,
 	RuntimeNativeMetadataReadContextV1,
+	RuntimeNativeSkillBindingRequestV1,
 	RuntimeNativeSkillCommandV1,
 	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
@@ -940,17 +941,28 @@ export function createCodexNativeSkillInputV1(
 	command: {
 		readonly name: string;
 		readonly version: string;
+		readonly packageDigest?: string;
+		readonly manifestDigest?: string;
 		readonly text: string;
 	},
 ): readonly CodexNativeInputItem[] {
-	if (!directory.nativeRoot || !directory.nativeSkillPaths)
+	if (
+		!directory.nativeRoot ||
+		!directory.nativeSkillPaths ||
+		!command.packageDigest ||
+		!command.manifestDigest
+	)
 		skillDirectoryInvalid();
 	const entry = directory
 		.findSkills()
 		.find(
 			(candidate) =>
 				candidate.name === command.name &&
-				candidate.version === command.version,
+				candidate.version === command.version &&
+				(command.packageDigest === undefined ||
+					candidate.packageDigest === command.packageDigest) &&
+				(command.manifestDigest === undefined ||
+					candidate.manifestDigest === command.manifestDigest),
 		);
 	if (!entry) skillDirectoryInvalid();
 	const path = `${directory.nativeRoot}/${entry.targetPath}/SKILL.md`;
@@ -5971,6 +5983,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
+		if (!command.packageDigest || !command.manifestDigest)
+			skillDirectoryInvalid();
 		const directory = this.skillDirectory;
 		if (!directory?.nativeRoot || !directory.nativeSkillPaths)
 			skillDirectoryInvalid();
@@ -5989,7 +6003,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			.find(
 				(candidate) =>
 					candidate.name === command.capabilityName &&
-					candidate.version === command.capabilitySourceVersion,
+					candidate.version === command.capabilitySourceVersion &&
+					(command.packageDigest === undefined ||
+						candidate.packageDigest === command.packageDigest) &&
+					(command.manifestDigest === undefined ||
+						candidate.manifestDigest === command.manifestDigest),
 			);
 		if (!entry) skillDirectoryInvalid();
 		const expectedPath = `${directory.nativeRoot}/${entry.targetPath}/SKILL.md`;
@@ -6016,7 +6034,37 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				directoryRevision: command.directoryRevision,
 				name: command.capabilityName,
 				version: command.capabilitySourceVersion,
+				packageDigest: entry.packageDigest,
+				manifestDigest: entry.manifestDigest,
 			},
+		};
+	}
+
+	resolveNativeSkillBinding(input: RuntimeNativeSkillBindingRequestV1) {
+		const directory = this.skillDirectory;
+		if (!directory?.nativeRoot || !directory.nativeSkillPaths)
+			skillDirectoryInvalid();
+		const receipt = this.nativeSkillDirectoryReceipts.get(
+			input.nativeSessionRef,
+		);
+		if (
+			!receipt ||
+			receipt.revision !== input.directoryRevision ||
+			receipt.snapshot !==
+				JSON.stringify([directory.generationId, directory.findSkills()])
+		)
+			skillDirectoryInvalid();
+		const entry = directory
+			.findSkills()
+			.find(
+				(candidate) =>
+					candidate.name === input.capabilityName &&
+					candidate.version === input.capabilitySourceVersion,
+			);
+		if (!entry) skillDirectoryInvalid();
+		return {
+			packageDigest: entry.packageDigest,
+			manifestDigest: entry.manifestDigest,
 		};
 	}
 
@@ -6543,6 +6591,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			items: createCodexNativeSkillInputV1(this.skillDirectory, {
 				name: command.nativeSkill.name,
 				version: command.nativeSkill.version,
+				packageDigest: command.nativeSkill.packageDigest,
+				manifestDigest: command.nativeSkill.manifestDigest,
 				text,
 			}),
 			cleanup: async () => {},

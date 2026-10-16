@@ -65,6 +65,7 @@ import type {
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeModelDirectory,
 	RuntimeNativeMetadataReadContextV1,
+	RuntimeNativeSkillBindingRequestV1,
 	RuntimeNativeSkillCommandV1,
 	RuntimeOperationFactInputV1,
 } from "./driver.js";
@@ -546,6 +547,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	}
 
 	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
+		if (!command.packageDigest || !command.manifestDigest)
+			nativeSkillUnsupported();
 		const launchOptions = claudeNativeSkillLaunchOptions(
 			this.options.skillDirectory,
 		);
@@ -561,7 +564,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			.find(
 				(candidate) =>
 					candidate.name === command.capabilityName &&
-					candidate.version === command.capabilitySourceVersion,
+					candidate.version === command.capabilitySourceVersion &&
+					(command.packageDigest === undefined ||
+						candidate.packageDigest === command.packageDigest) &&
+					(command.manifestDigest === undefined ||
+						candidate.manifestDigest === command.manifestDigest),
 			);
 		if (!entry || !launchOptions.skills.includes(entry.name))
 			throw new RuntimeSkillDirectoryErrorV1();
@@ -587,6 +594,31 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			sessionGeneration: command.sessionGeneration,
 			nativeSessionRef: command.nativeSessionRef,
 			input: { text, attachments: [] },
+			nativeSkill: {
+				capabilityId: command.capabilityId,
+				directoryRevision: command.directoryRevision,
+				name: command.capabilityName,
+				version: command.capabilitySourceVersion,
+				packageDigest: entry.packageDigest,
+				manifestDigest: entry.manifestDigest,
+			},
+		};
+	}
+
+	resolveNativeSkillBinding(input: RuntimeNativeSkillBindingRequestV1) {
+		const directory = this.options.skillDirectory;
+		if (!directory) throw new RuntimeSkillDirectoryErrorV1();
+		const entry = directory
+			.findSkills()
+			.find(
+				(candidate) =>
+					candidate.name === input.capabilityName &&
+					candidate.version === input.capabilitySourceVersion,
+			);
+		if (!entry) throw new RuntimeSkillDirectoryErrorV1();
+		return {
+			packageDigest: entry.packageDigest,
+			manifestDigest: entry.manifestDigest,
 		};
 	}
 

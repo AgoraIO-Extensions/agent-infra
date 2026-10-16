@@ -21,6 +21,14 @@ const nativeSkillInput = z.strictObject({
 	directoryRevision: z.string().regex(/^[a-f0-9]{64}$/),
 	name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
 	version: z.string().min(1).max(512),
+	packageDigest: z
+		.string()
+		.regex(/^[a-f0-9]{64}$/)
+		.optional(),
+	manifestDigest: z
+		.string()
+		.regex(/^[a-f0-9]{64}$/)
+		.optional(),
 });
 
 const nativeCommandInput = z.strictObject({

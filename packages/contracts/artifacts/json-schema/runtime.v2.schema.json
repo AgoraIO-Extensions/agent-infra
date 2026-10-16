@@ -76,8 +76,16 @@
               "pattern": "^[a-f0-9]{64}$",
               "type": "string"
             },
+            "manifestDigest": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
             "name": {
               "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            },
+            "packageDigest": {
+              "pattern": "^[a-f0-9]{64}$",
               "type": "string"
             },
             "version": {
