@@ -372,6 +372,48 @@ describe("Browser action operation adapter", () => {
 		expect(events).toContain("browser.side_effect");
 	});
 
+	it("does not project a foreign controller confirmation", async () => {
+		const events: string[] = [];
+		const state = setup({
+			persist: async (command) => {
+				events.push(command.event.type);
+				return { outcome: "accepted", event: acceptedEvent(command) };
+			},
+			executeAction: async (request) => ({
+				actionId: request.actionId,
+				operationRef: request.operationRef,
+				attemptRef: request.attemptRef,
+				kind: request.kind,
+				status: "rejected",
+				page: request.page,
+				sideEffect: true,
+				reasonCode: "BROWSER_SIDE_EFFECT_CONFIRMATION_REQUIRED",
+				confirmation: {
+					confirmationId: "confirmation-foreign",
+					actionId: request.actionId,
+					subjectId: "subject-1",
+					agentId: "other-agent",
+					conversationId: request.executionBinding.conversationId,
+					executionId: request.executionBinding.executionId,
+					origin: "https://example.test",
+					pageRevision: request.executionBinding.pageRevision,
+					parameterDigest: "digest",
+					capabilityVersion: request.executionBinding.capabilityVersion,
+					preview: { kind: "click", name: "Submit" },
+				},
+				executionBinding: {
+					...request.executionBinding,
+					agentId: "other-agent",
+				},
+				createdAt: "2026-10-07T00:00:00.000Z",
+			}),
+		});
+		await expect(state.adapter.execute(state.input)).rejects.toMatchObject({
+			failureCode: "recovery_unconfirmed",
+		});
+		expect(events).not.toContain("browser.side_effect");
+	});
+
 	it.each([
 		["agent", { agentId: "other-agent" }],
 		["conversation", { conversationId: "other-conversation" }],

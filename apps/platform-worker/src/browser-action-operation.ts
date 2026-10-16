@@ -234,8 +234,8 @@ export function createBrowserActionOperationAdapterV1(input: {
 						executionBinding: request.controllerBinding,
 						sideEffect: request.action.sideEffect === true,
 					});
-					await persistPendingConfirmation();
 					assertReturnedIdentity(actionRecord, request);
+					await persistPendingConfirmation();
 					if (actionRecord.status === "unknown") {
 						const recovered = input.controller.readAction?.({
 							actionId: request.actionId,
