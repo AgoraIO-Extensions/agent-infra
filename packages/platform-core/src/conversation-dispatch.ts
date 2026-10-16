@@ -584,6 +584,19 @@ export function createConversationDispatchUseCaseV1(
 			if (authorization.outcome === "denied") {
 				if (authorization.authority !== undefined) return unavailable();
 				if (
+					claim.operation === "conversation.turn.stop.v1" &&
+					claim.stopPending &&
+					(claim.executionStatus === "submitted" ||
+						claim.executionStatus === "waiting")
+				) {
+					const cancelled = await dependencies.store.cancelUnaccepted({
+						claim,
+					});
+					return cancelled
+						? { schemaVersion: 1, outcome: "already_completed" }
+						: { schemaVersion: 1, outcome: "stale" };
+				}
+				if (
 					claim.executionStatus === "processing" ||
 					claim.executionStatus === "unknown" ||
 					executionTerminal(claim.executionStatus)

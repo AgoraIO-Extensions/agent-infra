@@ -255,7 +255,9 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		if (
 			!this.#owned(input.claim) ||
 			!this.current.stopPending ||
-			this.current.executionStatus !== "unknown"
+			(this.current.executionStatus !== "unknown" &&
+				this.current.executionStatus !== "submitted" &&
+				this.current.executionStatus !== "waiting")
 		) {
 			return false;
 		}
@@ -425,6 +427,14 @@ class MemoryEvents implements Pick<ConversationEventUseCaseV1, "persist"> {
 	}
 }
 
+function deniedAuthorization(): ConversationDispatchAuthorizationPortV1 {
+	return {
+		async authorize() {
+			return { outcome: "denied" };
+		},
+	};
+}
+
 function authorization(
 	overrides: Partial<{
 		agentId: string;
@@ -580,6 +590,65 @@ describe("bounded unknown recovery", () => {
 });
 
 describe("Conversation Worker dispatch", () => {
+	it.each(["submitted", "waiting"] as const)(
+		"locally cancels an unaccepted stop after authorization denial (%s)",
+		async (executionStatus) => {
+			const store = new MemoryDispatchStore(
+				claim({
+					operation: "conversation.turn.stop.v1",
+					itemId: "conversation:stop:stop-1",
+					messageId: null,
+					stopRequestId: "stop-1",
+					input: null,
+					executionStatus,
+					stopPending: true,
+					taskWaitOrder: executionStatus === "waiting" ? 1 : undefined,
+				}),
+			);
+			const runtimeDispatch = vi.fn();
+			const h = setup({
+				store,
+				authorization: deniedAuthorization(),
+				runtimeHost: {
+					dispatch: runtimeDispatch,
+					recoverStatus: vi.fn(),
+					events: vi.fn(),
+				},
+			});
+
+			await expect(dispatch(h.useCase, store.current.itemId)).resolves.toEqual({
+				schemaVersion: 1,
+				outcome: "already_completed",
+			});
+			expect(runtimeDispatch).not.toHaveBeenCalled();
+			expect(store.outboxStatus).toBe("succeeded");
+			expect(store.current.executionStatus).toBe("cancelled");
+		},
+	);
+
+	it("keeps unknown stops on the existing recovery path after authorization denial", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				operation: "conversation.turn.stop.v1",
+				itemId: "conversation:stop:stop-1",
+				messageId: null,
+				stopRequestId: "stop-1",
+				input: null,
+				executionStatus: "unknown",
+				stopPending: true,
+			}),
+		);
+		const h = setup({ store, authorization: deniedAuthorization() });
+
+		await expect(
+			dispatch(h.useCase, store.current.itemId),
+		).resolves.toMatchObject({
+			outcome: "retry",
+		});
+		expect(store.outboxStatus).toBe("retry_scheduled");
+		expect(store.current.executionStatus).toBe("unknown");
+	});
+
 	it("recovers an unknown native capability without dispatching it twice", async () => {
 		const native = claim({
 			operation: "conversation.native-capability.invoke.v1",
