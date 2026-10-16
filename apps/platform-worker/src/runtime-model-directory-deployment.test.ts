@@ -1,6 +1,9 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { createPlatformRuntimeModelDirectoryPortsV1 } from "./runtime-model-directory-deployment.js";
+import {
+	createPlatformRuntimeModelDirectoryPortsV1,
+	createPlatformRuntimeModelDirectoryResolverV1,
+} from "./runtime-model-directory-deployment.js";
 
 const request = {
 	schemaVersion: 1 as const,
@@ -55,5 +58,45 @@ describe("production model-directory assembly", () => {
 		expect(ports.resolveRuntimeHost).toBe(resolveRuntimeHost);
 		expect(ports.signGrant).toBe(signGrant);
 		expect(ports.port).toBe(3_006);
+	});
+
+	it("maps Store Workload state into the existing Conversation resolver", async () => {
+		const workload = { agentId: "agent-1", phase: "ready" } as never;
+		const readWorkloadState = vi.fn().mockResolvedValue(workload);
+		const resolveConversationRuntimeHost = vi.fn().mockResolvedValue({
+			baseUrl: "http://agent-runtime",
+			serviceToken: "service-token",
+			workerId: "worker",
+		});
+		const resolver = createPlatformRuntimeModelDirectoryResolverV1({
+			readWorkloadState,
+			resolveConversationRuntimeHost,
+		});
+		const signal = new AbortController().signal;
+		await expect(resolver(request, signal)).resolves.toMatchObject({
+			modelDirectory: expect.any(Function),
+		});
+		expect(readWorkloadState).toHaveBeenCalledWith("agent-1", signal);
+		expect(resolveConversationRuntimeHost).toHaveBeenCalledWith(
+			expect.objectContaining({
+				agentId: "agent-1",
+				actorId: "user-1",
+				sessionGeneration: 2,
+				deliveryFence: 7,
+				purpose: "control",
+				command: "session.status",
+				workload,
+			}),
+		);
+	});
+
+	it("fails closed when no current Workload state exists", async () => {
+		const resolver = createPlatformRuntimeModelDirectoryResolverV1({
+			readWorkloadState: vi.fn().mockResolvedValue(null),
+			resolveConversationRuntimeHost: vi.fn(),
+		});
+		await expect(
+			resolver(request, new AbortController().signal),
+		).rejects.toThrow("RUNTIME_WORKLOAD_UNAVAILABLE");
 	});
 });

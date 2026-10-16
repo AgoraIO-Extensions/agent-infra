@@ -198,6 +198,10 @@ beforeAll(async () => {
 		"export const createWorkerRuntimeModelDirectoryGrantSignerV1 = () => () => ({ schemaVersion: 1, format: 'compact-jws', token: 'fixture' });\n",
 	);
 	await writeFile(
+		join(directory, "runtime-host-client.js"),
+		"export const createWorkerRuntimeHostClientV1 = () => ({});\n",
+	);
+	await writeFile(
 		join(directory, "runtime-model-directory-service.js"),
 		modelDirectoryService.code,
 	);

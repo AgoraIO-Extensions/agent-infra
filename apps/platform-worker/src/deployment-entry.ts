@@ -13,6 +13,7 @@ import {
 import {
 	createPlatformRuntimeModelDirectoryGatewayV1,
 	createPlatformRuntimeModelDirectoryPortsV1,
+	createPlatformRuntimeModelDirectoryResolverV1,
 	type PlatformWorkerRuntimeModelDirectoryDeploymentPortsV1,
 } from "./runtime-model-directory-deployment.js";
 import type { PlatformWorkerInternalGatewayServerOptionsV1 } from "./runtime-native-metadata-server.js";
@@ -417,13 +418,44 @@ export async function createPlatformRuntimeModelDirectoryOptionsV1(
 ) {
 	signal.throwIfAborted();
 	if (!modelDirectory) return undefined;
-	return createPlatformRuntimeModelDirectoryGatewayV1({
-		serviceToken,
-		ports: createPlatformRuntimeModelDirectoryPortsV1({
-			...modelDirectory,
-			signing,
-		}),
-	});
+	let close: (() => Promise<void>) | undefined;
+	try {
+		let resolveRuntimeHost = modelDirectory.resolveRuntimeHost;
+		if (!resolveRuntimeHost) {
+			const databaseUrl = process.env.PLATFORM_DATABASE_URL;
+			if (!databaseUrl) throw new Error("PLATFORM_DATABASE_URL is unavailable");
+			const { openPostgresWorkloadStateReaderV1 } = await import(
+				"@agent-infra/platform-store"
+			);
+			const stateReader = openPostgresWorkloadStateReaderV1({ databaseUrl });
+			close = stateReader.close;
+			const prepared = await prepare(signal);
+			const conversationResolver =
+				conversationDeployment.createProductionConversationRuntimeResolverV2({
+					workload: prepared.workload,
+					signing,
+					serviceToken,
+					connectionConsumerProfile: connectionConsumer?.profile,
+					connectionConsumerApproval: connectionConsumer?.approval,
+				});
+			resolveRuntimeHost = createPlatformRuntimeModelDirectoryResolverV1({
+				readWorkloadState: stateReader.readCurrentState,
+				resolveConversationRuntimeHost: conversationResolver,
+			});
+		}
+		const gateway = createPlatformRuntimeModelDirectoryGatewayV1({
+			serviceToken,
+			ports: createPlatformRuntimeModelDirectoryPortsV1({
+				...modelDirectory,
+				resolveRuntimeHost,
+				signing,
+			}),
+		});
+		return close ? { ...gateway, close } : gateway;
+	} catch (error) {
+		await close?.().catch(() => undefined);
+		throw error;
+	}
 }
 
 export async function createPlatformSavedKeyCandidatesOptionsV1(

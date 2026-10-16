@@ -984,3 +984,51 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 		},
 	};
 }
+
+export interface PostgresWorkloadStateReaderV1 {
+	readCurrentState(
+		agentId: string,
+		signal?: AbortSignal,
+	): Promise<WorkloadReconciliationStateV1 | null>;
+	close(): Promise<void>;
+}
+
+/** Read the current Store-owned Workload state without starting a reconciliation poller. */
+export function openPostgresWorkloadStateReaderV1(options: {
+	readonly databaseUrl: string;
+}): PostgresWorkloadStateReaderV1 {
+	if (
+		typeof options?.databaseUrl !== "string" ||
+		options.databaseUrl.length === 0
+	)
+		throw new TypeError("Workload state reader database URL is invalid");
+	const client = postgres(
+		platformDatabaseUrlFromEnvironment({
+			PLATFORM_DATABASE_URL: options.databaseUrl,
+		}),
+		{ max: 1 },
+	);
+	return {
+		async readCurrentState(agentId, signal) {
+			if (
+				typeof agentId !== "string" ||
+				agentId.length === 0 ||
+				agentId.includes("\0")
+			)
+				throw new TypeError("Workload state reader Agent ID is invalid");
+			signal?.throwIfAborted();
+			return client.begin(async (sql) => {
+				const [row] = await sql<{ state: unknown }[]>`
+					select state from platform.workload_reconciliations
+					where agent_id = ${agentId}
+				`;
+				signal?.throwIfAborted();
+				const decoded = decodePersistedWorkloadStateV1(row?.state, agentId);
+				return decoded?.legacy ? null : (decoded?.state ?? null);
+			});
+		},
+		async close() {
+			await client.end({ timeout: 5 });
+		},
+	};
+}

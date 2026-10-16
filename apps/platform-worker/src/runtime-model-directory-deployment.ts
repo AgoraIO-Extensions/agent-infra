@@ -1,7 +1,12 @@
 import type { KeyObject } from "node:crypto";
 import type { RuntimeModelDirectoryDispatchRequestV1 } from "@agent-infra/contracts/runtime";
+import type { WorkloadReconciliationStateV1 } from "@agent-infra/platform-core";
+import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { createWorkerRuntimeModelDirectoryGrantSignerV1 } from "./runtime-grant-signer.js";
-import type { WorkerRuntimeHostClientV1 } from "./runtime-host-client.js";
+import {
+	createWorkerRuntimeHostClientV1,
+	type WorkerRuntimeHostClientV1,
+} from "./runtime-host-client.js";
 import {
 	createWorkerRuntimeModelDirectoryApp,
 	createWorkerRuntimeModelDirectoryReaderV1,
@@ -26,6 +31,44 @@ export type PlatformWorkerRuntimeModelDirectoryDeploymentPortsV1 = Omit<
 > & {
 	readonly signGrant?: PlatformWorkerRuntimeModelDirectoryPortsV1["signGrant"];
 };
+
+/**
+ * Adapt the existing production Conversation resolver to model-directory
+ * dispatch. The Host route comes from Store-owned Workload state; request
+ * Session and Grant fields remain bound in the signed V1 dispatch.
+ */
+export function createPlatformRuntimeModelDirectoryResolverV1(options: {
+	readonly readWorkloadState: (
+		agentId: string,
+		signal: AbortSignal,
+	) => Promise<WorkloadReconciliationStateV1 | null>;
+	readonly resolveConversationRuntimeHost: ConversationRuntimeOptionsV2["resolveRuntimeHost"];
+}) {
+	if (
+		typeof options.readWorkloadState !== "function" ||
+		typeof options.resolveConversationRuntimeHost !== "function"
+	)
+		throw new TypeError("Runtime model-directory resolver options are invalid");
+	return async (
+		request: RuntimeModelDirectoryDispatchRequestV1,
+		signal: AbortSignal,
+	) => {
+		const workload = await options.readWorkloadState(request.agentId, signal);
+		if (!workload) throw new Error("RUNTIME_WORKLOAD_UNAVAILABLE");
+		const binding = await options.resolveConversationRuntimeHost({
+			agentId: request.agentId,
+			actorId: request.actorId,
+			channelId: request.channelId,
+			sessionGeneration: request.sessionGeneration,
+			deliveryFence: request.deliveryFence,
+			signal,
+			workload,
+			purpose: "control",
+			command: "session.status",
+		});
+		return createWorkerRuntimeHostClientV1(binding);
+	};
+}
 
 /**
  * Complete the deployment seam with the Worker-owned Grant signer. The Host
