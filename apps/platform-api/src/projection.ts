@@ -52,12 +52,16 @@ interface ProjectionMetadata {
 	readonly identity: IdentityContext;
 	readonly requestId: string;
 	readonly traceId: string;
+	/** Explicit per-request cache scope; never inferred from identity object reuse. */
+	readonly requestScope?: object;
 }
 
 interface ApiProjectionMetadata {
 	readonly apiUser: CurrentTaskUserV1;
 	readonly requestId: string;
 	readonly traceId: string;
+	/** Explicit per-request cache scope; never inferred from identity object reuse. */
+	readonly requestScope?: object;
 }
 
 function sourceMatches(
@@ -89,27 +93,23 @@ export function createPlatformProjectionReaders(
 	// 不同请求也从不共享结果，失败也不会跨请求复用（#2655）。
 	const ownersByRequest = new WeakMap<
 		object,
-		{
-			readonly requestId: string;
-			readonly byOwners: Map<string, ReturnType<typeof hydrateBrowserUsers>>;
-		}
+		Map<string, ReturnType<typeof hydrateBrowserUsers>>
 	>();
 	function owners(
-		identity: object,
-		requestId: string,
+		request: object,
 		ownerIds: readonly string[],
 		traceId: string,
 	): ReturnType<typeof hydrateBrowserUsers> {
-		let memo = ownersByRequest.get(identity);
-		if (memo?.requestId !== requestId) {
-			memo = { requestId, byOwners: new Map() };
-			ownersByRequest.set(identity, memo);
+		let byOwners = ownersByRequest.get(request);
+		if (!byOwners) {
+			byOwners = new Map();
+			ownersByRequest.set(request, byOwners);
 		}
 		const key = JSON.stringify(ownerIds);
-		let hydrated = memo.byOwners.get(key);
+		let hydrated = byOwners.get(key);
 		if (!hydrated) {
 			hydrated = hydrateBrowserUsers(dependencies.identity, ownerIds, traceId);
-			memo.byOwners.set(key, hydrated);
+			byOwners.set(key, hydrated);
 		}
 		return hydrated;
 	}
@@ -134,8 +134,7 @@ export function createPlatformProjectionReaders(
 		const configuration = result.configuration;
 		const [hydratedOwners, presentation] = await Promise.all([
 			owners(
-				user,
-				metadata.requestId,
+				metadata.requestScope ?? metadata,
 				configuration.ownerIds,
 				metadata.traceId,
 			),
