@@ -191,7 +191,18 @@ export type ConversationRuntimeBrowserHandoffRequestV1 =
 
 export type ConversationRuntimeBrowserSideEffectRequestV1 =
 	ConversationRuntimeEventRequestV1 &
-		Pick<RuntimeBrowserSideEffectConfirmationRequestV3, "command" | "binding">;
+		Pick<
+			RuntimeBrowserSideEffectConfirmationRequestV3,
+			"command" | "binding"
+		> & {
+			readonly confirmation?: {
+				readonly requestedAt: string;
+				readonly expiresAt: string;
+				readonly operation: string;
+				readonly targetOrigin: string;
+				readonly redactedTargetSummary: string;
+			};
+		};
 
 export type ConversationRuntimeBrowserSideEffectDispatchV1 = Readonly<{
 	readonly request: RuntimeBrowserSideEffectConfirmationRequestV3;

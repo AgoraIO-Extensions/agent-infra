@@ -143,6 +143,58 @@ export function createBrowserActionOperationAdapterV1(input: {
 		): Promise<BrowserActionOperationResultV1> {
 			assertBinding(request);
 			let actionRecord: BrowserActionOperationControllerRecordV1 | undefined;
+			const persistPendingConfirmation = async () => {
+				if (
+					!actionRecord?.confirmation ||
+					actionRecord.reasonCode !==
+						"BROWSER_SIDE_EFFECT_CONFIRMATION_REQUIRED"
+				)
+					return;
+				const confirmation = actionRecord.confirmation;
+				const expiresAt = new Date(
+					Date.parse(actionRecord.createdAt) + 5 * 60_000,
+				).toISOString();
+				const decision = await input.events.persist({
+					schemaVersion: 1,
+					conversationId: request.conversationId,
+					executionId: request.executionId,
+					sessionGeneration: request.sessionGeneration,
+					deliveryFence: request.deliveryFence,
+					adapterEventKey: `${request.adapterEventKeyPrefix}:side-effect:pending`,
+					runtimeCursor: `${request.runtimeCursorPrefix}:side-effect:pending`,
+					occurredAt: request.occurredAt,
+					event: {
+						type: "browser.side_effect",
+						confirmationId: confirmation.confirmationId,
+						status: "pending",
+						requestedAt: actionRecord.createdAt,
+						expiresAt,
+						operation: confirmation.preview.name || confirmation.preview.kind,
+						targetOrigin: confirmation.origin,
+						redactedTargetSummary:
+							confirmation.preview.name || confirmation.preview.kind,
+						binding: {
+							subjectId: confirmation.subjectId,
+							agentId: request.agentId,
+							conversationId: request.conversationId,
+							executionId: request.executionId,
+							sessionGeneration: request.sessionGeneration,
+							resourceFence: request.deliveryFence,
+							workloadRevision: request.controllerBinding.workloadRevision,
+							imageDigest: request.controllerBinding.imageDigest,
+							capabilityVersion: request.capabilityVersion,
+							capabilityRevision: request.capabilityVersion,
+							pageRevision: request.page.pageRevision,
+							actionId: confirmation.actionId,
+							confirmationId: confirmation.confirmationId,
+							operationRef: request.attempt.operationRef,
+							attemptRef: request.attempt.attemptRef,
+						},
+					},
+				});
+				if (decision.outcome === "stale")
+					throw new Error("BROWSER_SIDE_EFFECT_EVENT_STALE");
+			};
 			const result = await executeConversationBrowserActionV1(input.events, {
 				conversationId: request.conversationId,
 				executionId: request.executionId,
@@ -182,6 +234,7 @@ export function createBrowserActionOperationAdapterV1(input: {
 						executionBinding: request.controllerBinding,
 						sideEffect: request.action.sideEffect === true,
 					});
+					await persistPendingConfirmation();
 					assertReturnedIdentity(actionRecord, request);
 					if (actionRecord.status === "unknown") {
 						const recovered = input.controller.readAction?.({
@@ -211,6 +264,7 @@ export function createBrowserActionOperationAdapterV1(input: {
 					);
 				},
 			});
+			await persistPendingConfirmation();
 			return { ...result, record: actionRecord };
 		},
 	};

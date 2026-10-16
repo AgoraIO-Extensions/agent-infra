@@ -191,6 +191,12 @@ export interface ConversationDispatchStorePortV1 {
 	readBrowserHandoffBinding?(input: {
 		readonly claim: ConversationDispatchClaimV1;
 	}): Promise<unknown | null>;
+	/** Read-only Browser side-effect confirmation projection under the current
+	 * outbox lease; the Worker still owns Runtime grants and dispatch. */
+	readBrowserSideEffectBinding?(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly confirmationId: string;
+	}): Promise<unknown | null>;
 	beginGenerationIsolation?(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly failureCode: "RUNTIME_SESSION_RECOVERY_FAILED";

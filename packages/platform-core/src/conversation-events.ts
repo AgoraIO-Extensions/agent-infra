@@ -67,6 +67,34 @@ export interface ConversationBrowserHandoffEventV1 {
 	readonly binding: ConversationBrowserHandoffBindingV1;
 }
 
+export type ConversationBrowserSideEffectStatusV1 =
+	| "pending"
+	| "confirmed"
+	| "rejected"
+	| "cancelled"
+	| "expired"
+	| "unknown";
+
+export interface ConversationBrowserSideEffectBindingV1
+	extends ConversationBrowserHandoffBindingV1 {
+	readonly actionId: string;
+	readonly confirmationId: string;
+	readonly operationRef: string;
+	readonly attemptRef: string;
+}
+
+export interface ConversationBrowserSideEffectEventV1 {
+	readonly type: "browser.side_effect";
+	readonly confirmationId: string;
+	readonly status: ConversationBrowserSideEffectStatusV1;
+	readonly requestedAt: string;
+	readonly expiresAt: string;
+	readonly operation: string;
+	readonly targetOrigin: string;
+	readonly redactedTargetSummary: string;
+	readonly binding: ConversationBrowserSideEffectBindingV1;
+}
+
 export type ConversationNormalizedEventV1 =
 	| ConversationOperationEventV2
 	| { readonly type: "text.delta"; readonly text: string }
@@ -93,7 +121,8 @@ export type ConversationNormalizedEventV1 =
 			readonly message: string;
 			readonly retryable: boolean;
 	  }
-	| ConversationBrowserHandoffEventV1;
+	| ConversationBrowserHandoffEventV1
+	| ConversationBrowserSideEffectEventV1;
 
 export interface ConversationModelSelectionFallbackEventV1 {
 	readonly type: "model.selection.fell_back";
@@ -556,6 +585,97 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 				capabilityRevision,
 				pageRevision,
 			},
+		};
+	}
+	if (type === "browser.side_effect") {
+		const values = snapshotObject(input, [
+			"type",
+			"confirmationId",
+			"status",
+			"requestedAt",
+			"expiresAt",
+			"operation",
+			"targetOrigin",
+			"redactedTargetSummary",
+			"binding",
+		]);
+		if (
+			!isText(values.confirmationId) ||
+			![
+				"pending",
+				"confirmed",
+				"rejected",
+				"cancelled",
+				"expired",
+				"unknown",
+			].includes(values.status as string) ||
+			!isText(values.operation, 128) ||
+			!isText(values.targetOrigin, 2048) ||
+			!isText(values.redactedTargetSummary, 1024)
+		)
+			invalidInput();
+		let origin: URL;
+		try {
+			origin = new URL(values.targetOrigin);
+		} catch {
+			invalidInput();
+		}
+		if (
+			(origin.protocol !== "http:" && origin.protocol !== "https:") ||
+			origin.username !== "" ||
+			origin.password !== "" ||
+			origin.pathname !== "/" ||
+			origin.search !== "" ||
+			origin.hash !== ""
+		)
+			invalidInput();
+		const binding = snapshotObject(values.binding, [
+			"subjectId",
+			"agentId",
+			"conversationId",
+			"executionId",
+			"sessionGeneration",
+			"resourceFence",
+			"workloadRevision",
+			"imageDigest",
+			"capabilityVersion",
+			"capabilityRevision",
+			"pageRevision",
+			"actionId",
+			"confirmationId",
+			"operationRef",
+			"attemptRef",
+		]);
+		if (
+			!isText(binding.subjectId) ||
+			!isText(binding.agentId) ||
+			!isText(binding.conversationId) ||
+			!isText(binding.executionId) ||
+			!isText(binding.actionId) ||
+			!isText(binding.confirmationId) ||
+			!isText(binding.operationRef) ||
+			!isText(binding.attemptRef) ||
+			!isPositiveSafeInteger(binding.sessionGeneration) ||
+			!isPositiveSafeInteger(binding.resourceFence) ||
+			!isPositiveSafeInteger(binding.workloadRevision) ||
+			!isPositiveSafeInteger(binding.capabilityVersion) ||
+			!isPositiveSafeInteger(binding.capabilityRevision) ||
+			!isPositiveSafeInteger(binding.pageRevision) ||
+			!isText(binding.imageDigest) ||
+			!/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(binding.imageDigest) ||
+			values.confirmationId !== binding.confirmationId
+		)
+			invalidInput();
+		return {
+			type: "browser.side_effect",
+			confirmationId: values.confirmationId,
+			status: values.status as ConversationBrowserSideEffectStatusV1,
+			requestedAt: validOccurredAt(values.requestedAt),
+			expiresAt: validOccurredAt(values.expiresAt),
+			operation: values.operation,
+			targetOrigin: origin.origin,
+			redactedTargetSummary: values.redactedTargetSummary,
+			binding: binding as unknown as ConversationBrowserSideEffectBindingV1,
 		};
 	}
 	if (type === "result.file") {

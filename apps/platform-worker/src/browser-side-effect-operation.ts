@@ -6,20 +6,32 @@ import type {
 import {
 	type ConversationBrowserActionAttemptV1,
 	ConversationBrowserActionExecutionError,
+	type ConversationDispatchClaimV1,
 	type ConversationEventUseCaseV1,
 	executeConversationBrowserActionV1,
 } from "@agent-infra/platform-core";
 import type { ConversationRuntimeBrowserSideEffectRequestV1 } from "./conversation-runtime.js";
 
+type BrowserSideEffectRuntimeRequestV1 =
+	RuntimeBrowserSideEffectConfirmationRequestV3 & {
+		readonly confirmation?: {
+			readonly requestedAt: string;
+			readonly expiresAt: string;
+			readonly operation: string;
+			readonly targetOrigin: string;
+			readonly redactedTargetSummary: string;
+		};
+	};
+
 export type BrowserSideEffectRuntimeV1 = Readonly<{
 	browserSideEffect(
-		request: RuntimeBrowserSideEffectConfirmationRequestV3,
+		request: BrowserSideEffectRuntimeRequestV1,
 		signal?: AbortSignal,
 	): Promise<RuntimeBrowserSideEffectConfirmationResponseV3>;
 }>;
 
 export type BrowserSideEffectOperationInputV1 = Readonly<{
-	readonly request: RuntimeBrowserSideEffectConfirmationRequestV3;
+	readonly request: BrowserSideEffectRuntimeRequestV1;
 	readonly attempt: ConversationBrowserActionAttemptV1;
 	readonly occurredAt: string;
 	readonly adapterEventKeyPrefix: string;
@@ -51,6 +63,7 @@ export type BrowserSideEffectCommandInvocationV1 = Readonly<{
 	readonly deliveryFence?: number;
 	readonly hostSessionRef?: string | null;
 	readonly runtimeGrant?: import("@agent-infra/platform-core").ConversationDispatchAuthorityV1["runtimeGrant"];
+	readonly claim?: ConversationDispatchClaimV1;
 	readonly signal: AbortSignal;
 }>;
 
@@ -184,6 +197,14 @@ function sameRequestIdentity(
 	);
 }
 
+function sideEffectStatus(
+	command: RuntimeBrowserSideEffectConfirmationRequestV3["command"],
+): "confirmed" | "rejected" | "cancelled" {
+	if (command === "confirm") return "confirmed";
+	if (command === "reject") return "rejected";
+	return "cancelled";
+}
+
 /**
  * Consume one authenticated Runtime V3 Browser confirmation through the
  * existing Conversation operation-event barrier. The Runtime port is the
@@ -284,6 +305,49 @@ export function createBrowserSideEffectOperationAdapterV1(input: {
 					);
 				},
 			});
+			if (runtimeRequest.confirmation) {
+				const status = sideEffectStatus(runtimeRequest.command);
+				const decision = await input.events.persist({
+					schemaVersion: 1,
+					conversationId: runtimeRequest.conversationId,
+					executionId: runtimeRequest.executionId,
+					sessionGeneration: runtimeRequest.sessionGeneration,
+					deliveryFence: binding.resourceFence,
+					adapterEventKey: `${request.adapterEventKeyPrefix}:side-effect:${status}`,
+					runtimeCursor: `${request.runtimeCursorPrefix}:side-effect:${status}`,
+					occurredAt: request.now(),
+					event: {
+						type: "browser.side_effect",
+						confirmationId: binding.confirmationId,
+						status,
+						requestedAt: runtimeRequest.confirmation.requestedAt,
+						expiresAt: runtimeRequest.confirmation.expiresAt,
+						operation: runtimeRequest.confirmation.operation,
+						targetOrigin: runtimeRequest.confirmation.targetOrigin,
+						redactedTargetSummary:
+							runtimeRequest.confirmation.redactedTargetSummary,
+						binding: {
+							subjectId: runtimeRequest.principal.id,
+							agentId: binding.agentId,
+							conversationId: binding.conversationId,
+							executionId: binding.executionId,
+							sessionGeneration: binding.sessionGeneration,
+							resourceFence: binding.resourceFence,
+							workloadRevision: binding.workloadRevision,
+							imageDigest: binding.imageDigest,
+							capabilityVersion: binding.capabilityVersion,
+							capabilityRevision: binding.capabilityVersion,
+							pageRevision: binding.pageRevision,
+							actionId: binding.actionId,
+							confirmationId: binding.confirmationId,
+							operationRef: binding.operationRef,
+							attemptRef: binding.attemptRef,
+						},
+					},
+				});
+				if (decision.outcome === "stale")
+					throw new Error("BROWSER_SIDE_EFFECT_EVENT_STALE");
+			}
 			return {
 				...result,
 				outcome: intentOutcome === "replayed" ? "replayed" : "accepted",

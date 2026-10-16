@@ -333,6 +333,45 @@ describe("Browser action operation adapter", () => {
 		});
 	});
 
+	it("projects a pending side-effect confirmation into the Conversation timeline", async () => {
+		const events: string[] = [];
+		const state = setup({
+			persist: async (command) => {
+				events.push(command.event.type);
+				return { outcome: "accepted", event: acceptedEvent(command) };
+			},
+			executeAction: async (request) => ({
+				actionId: request.actionId,
+				operationRef: request.operationRef,
+				attemptRef: request.attemptRef,
+				kind: request.kind,
+				status: "rejected",
+				page: request.page,
+				sideEffect: true,
+				reasonCode: "BROWSER_SIDE_EFFECT_CONFIRMATION_REQUIRED",
+				confirmation: {
+					confirmationId: "confirmation-1",
+					actionId: request.actionId,
+					subjectId: "subject-1",
+					agentId: request.executionBinding.agentId,
+					conversationId: request.executionBinding.conversationId,
+					executionId: request.executionBinding.executionId,
+					origin: "https://example.test",
+					pageRevision: request.executionBinding.pageRevision,
+					parameterDigest: "digest",
+					capabilityVersion: request.executionBinding.capabilityVersion,
+					preview: { kind: "click", name: "Submit" },
+				},
+				executionBinding: request.executionBinding,
+				createdAt: "2026-10-07T00:00:00.000Z",
+			}),
+		});
+		await expect(state.adapter.execute(state.input)).rejects.toMatchObject({
+			failureCode: "request_rejected",
+		});
+		expect(events).toContain("browser.side_effect");
+	});
+
 	it.each([
 		["agent", { agentId: "other-agent" }],
 		["conversation", { conversationId: "other-conversation" }],

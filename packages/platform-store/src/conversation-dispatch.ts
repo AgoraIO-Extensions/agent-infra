@@ -341,6 +341,48 @@ export class PostgresConversationDispatchStoreV1
 		);
 	}
 
+	async readBrowserSideEffectBinding(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly confirmationId: string;
+	}): Promise<unknown | null> {
+		if (input.claim.operation !== "conversation.browser.handoff.v1")
+			return null;
+		return databaseOperation(() =>
+			this.#client.begin(async (transaction) => {
+				const state = await ownedState(transaction, input.claim, true);
+				if (!state) return null;
+				const [row] = await transaction<{ event_payload: unknown }[]>`
+					select event_payload
+					from platform.conversation_events
+					where conversation_id = ${input.claim.conversationId}
+						and execution_id = ${input.claim.executionId}
+						and event_type = 'browser.side_effect'
+					order by conversation_cursor desc, event_id desc
+					limit 1
+				`;
+				if (!row) return null;
+				let event: ReturnType<typeof parseConversationPersistedEventPayloadV1>;
+				try {
+					event = parseConversationPersistedEventPayloadV1(row.event_payload);
+				} catch {
+					return null;
+				}
+				if (
+					event.type !== "browser.side_effect" ||
+					event.confirmationId !== input.confirmationId ||
+					event.binding.subjectId !== input.claim.actorId ||
+					event.binding.agentId !== input.claim.agentId ||
+					event.binding.conversationId !== input.claim.conversationId ||
+					event.binding.executionId !== input.claim.executionId ||
+					event.binding.sessionGeneration !== input.claim.sessionGeneration ||
+					event.binding.resourceFence !== input.claim.executionDeliveryFence
+				)
+					return null;
+				return event;
+			}),
+		);
+	}
+
 	/** Discovery grants no lease; claim rechecks eligibility under database locks. */
 	async findDispatchable(input: {
 		readonly limit: number;
