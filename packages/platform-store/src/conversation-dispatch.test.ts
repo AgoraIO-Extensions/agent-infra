@@ -3912,6 +3912,38 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("completes the stop record when recovery timeout fails the claim", async () => {
+		const work = await seed("conversation.turn.stop.v1", {
+			executionStatus: "unknown",
+			hostSessionRef: "host-session-existing",
+		});
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			await expect(
+				store.finish({
+					claim: decision.claim,
+					status: "failed",
+					transition: {
+						executionStatus: "failed",
+						conversationStatus: "ready",
+					},
+					errorCode: "RUNTIME_RECOVERY_TIMEOUT",
+				}),
+			).resolves.toBe(true);
+			const [stop] = await client`
+				select request.status, outbox.status as outbox_status
+				from platform.conversation_stops request
+				join platform.outbox_items outbox
+					on outbox.id = ${work.itemId}
+				where request.execution_id = ${work.executionId}
+			`;
+			expect(stop).toEqual({ status: "completed", outbox_status: "failed" });
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("persists the opaque Host ref and terminal result before completing outbox", async () => {
 		const work = await seed();
 		const { store, decision } = await claim(work.itemId);
