@@ -52,6 +52,37 @@ describe("deployment-owned Workload egress", () => {
 			},
 		]);
 	});
+	it("compiles the fixed native metadata Worker destination", () => {
+		expect(
+			workloadEgressRulesV1({
+				nativeMetadataWorkerEgress: [
+					{
+						destination: {
+							namespace: "platform",
+							podLabels: { "app.kubernetes.io/component": "platform-worker" },
+						},
+						port: 3004,
+					},
+				],
+			}),
+		).toEqual([
+			{
+				to: [
+					{
+						namespaceSelector: {
+							matchLabels: { "kubernetes.io/metadata.name": "platform" },
+						},
+						podSelector: {
+							matchLabels: {
+								"app.kubernetes.io/component": "platform-worker",
+							},
+						},
+					},
+				],
+				ports: [{ protocol: "TCP", port: 3004 }],
+			},
+		]);
+	});
 	it("compiles bounded public CIDRs for model and Connection egress", () => {
 		expect(
 			workloadEgressRulesV1({

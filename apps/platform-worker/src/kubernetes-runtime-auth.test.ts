@@ -31,6 +31,58 @@ function fixture() {
 	return { ...api, adapter, runtimeAuth };
 }
 
+it("injects a fixed native metadata Worker origin and shared token", async () => {
+	const api = fakeKubernetesApi();
+	const { publicKey } = generateKeyPairSync("ed25519");
+	const runtimeAuth = {
+		workerId: "worker-a",
+		grantKeyId: "grant-a",
+		grantPublicKey: publicKey
+			.export({ format: "pem", type: "spki" })
+			.toString(),
+		grantIssuer: "platform-worker",
+		serviceTokenSecret: { name: "runtime-transport", key: "token" },
+		nativeMetadataWorkerOrigin: "http://platform-worker-native-metadata",
+	};
+	const adapter = createKubernetesRuntimeAdapterV1({
+		client: api.client,
+		policy: { ...workloadTestPolicy, runtimeAuth },
+		probe: async () => true,
+	});
+	const desired = workloadDesiredFixture(2, "custom-agent", "internal-only");
+	await adapter.apply(desired);
+	const workload = await api.client.read<V1StatefulSet>(
+		"StatefulSet",
+		desired.service.name,
+	);
+	const env = workload?.spec?.template.spec?.containers[0]?.env ?? [];
+	expect(
+		env.find(
+			(entry) =>
+				entry.name === "AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN",
+		),
+	).toEqual({
+		name: "AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN",
+		value: runtimeAuth.nativeMetadataWorkerOrigin,
+	});
+	expect(
+		env.find(
+			(entry) =>
+				entry.name ===
+				"AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN",
+		),
+	).toEqual({
+		name: "AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN",
+		valueFrom: {
+			secretKeyRef: {
+				name: "runtime-transport",
+				key: "token",
+				optional: false,
+			},
+		},
+	});
+});
+
 it("binds custom platform-adapter authentication without a standard-template model projection", async () => {
 	const { adapter, client, runtimeAuth } = fixture();
 	const desired = workloadDesiredFixture(2, "custom-agent", "internal-only");

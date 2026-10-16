@@ -10,6 +10,8 @@ export interface WorkloadRuntimeAuthV1 {
 	readonly grantPublicKey: string;
 	readonly grantIssuer: string;
 	readonly serviceTokenSecret: { readonly name: string; readonly key: string };
+	/** Fixed Worker origin for the Runtime native metadata callback. */
+	readonly nativeMetadataWorkerOrigin?: string;
 }
 
 export function validateWorkloadRuntimeAuthV1(
@@ -17,8 +19,17 @@ export function validateWorkloadRuntimeAuthV1(
 ): void {
 	try {
 		if (
-			Object.keys(input).sort().join(",") !==
-				"grantIssuer,grantKeyId,grantPublicKey,serviceTokenSecret,workerId" ||
+			Object.keys(input).some(
+				(key) =>
+					![
+						"grantIssuer",
+						"grantKeyId",
+						"grantPublicKey",
+						"serviceTokenSecret",
+						"workerId",
+						"nativeMetadataWorkerOrigin",
+					].includes(key),
+			) ||
 			![input.grantKeyId, input.grantIssuer, input.workerId].every(
 				(value) =>
 					typeof value === "string" && /^[\x21-\x7e]{1,256}$/.test(value),
@@ -35,7 +46,23 @@ export function validateWorkloadRuntimeAuthV1(
 				.split(".")
 				.every((part) => /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(part)) ||
 			input.serviceTokenSecret.name.length > 253 ||
-			!/^[-A-Za-z0-9_.]{1,253}$/.test(input.serviceTokenSecret.key)
+			!/^[-A-Za-z0-9_.]{1,253}$/.test(input.serviceTokenSecret.key) ||
+			(input.nativeMetadataWorkerOrigin !== undefined &&
+				(() => {
+					try {
+						const origin = new URL(input.nativeMetadataWorkerOrigin);
+						return (
+							origin.protocol !== "http:" ||
+							origin.username !== "" ||
+							origin.password !== "" ||
+							(origin.pathname !== "/" && origin.pathname !== "") ||
+							origin.search !== "" ||
+							origin.hash !== ""
+						);
+					} catch {
+						return true;
+					}
+				})())
 		)
 			throw new Error();
 	} catch {
@@ -76,5 +103,19 @@ export function workloadRuntimeAuthEnvironmentV1(
 				secretKeyRef: { ...auth.serviceTokenSecret, optional: false },
 			},
 		},
+		...(auth.nativeMetadataWorkerOrigin === undefined
+			? []
+			: ([
+					{
+						name: "AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_ORIGIN",
+						value: auth.nativeMetadataWorkerOrigin,
+					},
+					{
+						name: "AGENT_INFRA_RUNTIME_NATIVE_METADATA_WORKER_SERVICE_TOKEN",
+						valueFrom: {
+							secretKeyRef: { ...auth.serviceTokenSecret, optional: false },
+						},
+					},
+				] satisfies V1EnvVar[])),
 	];
 }
