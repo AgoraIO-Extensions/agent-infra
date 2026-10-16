@@ -19,12 +19,16 @@ export class FakeNativeCapabilityMetadataRevalidationV1
 	constructor(input: {
 		readonly projection: NativeCapabilityMetadataProjectionV1;
 		readonly available?: boolean;
+		readonly hostScopeRef?: string | null;
 	}) {
 		this.#projection = parseNativeCapabilityMetadataProjectionV1(
 			input.projection,
 		);
 		this.#available = input.available ?? true;
+		this.#hostScopeRef =
+			input.hostScopeRef === undefined ? "host-session-1" : input.hostScopeRef;
 	}
+	#hostScopeRef: string | null;
 
 	setProjection(projection: NativeCapabilityMetadataProjectionV1): void {
 		this.#projection = parseNativeCapabilityMetadataProjectionV1(projection);
@@ -63,7 +67,7 @@ export class FakeNativeCapabilityMetadataRevalidationV1
 				conversationId: input.request.conversationId,
 				sessionGeneration: input.sessionGeneration,
 				authorizationRevision: input.authority.authorizationRevision,
-				hostScopeRef: null,
+				hostScopeRef: this.#hostScopeRef,
 			}),
 			capability: Object.freeze({
 				...selected,

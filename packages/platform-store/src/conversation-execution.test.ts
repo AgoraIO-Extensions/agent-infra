@@ -722,6 +722,7 @@ describe("PostgreSQL Conversation command transaction", () => {
 			const capabilityId = "a".repeat(64);
 			const directoryRevision = "b".repeat(64);
 			const metadata = new FakeNativeCapabilityMetadataRevalidationV1({
+				hostScopeRef: null,
 				projection: {
 					selector: "skills",
 					revision: directoryRevision,
@@ -899,6 +900,7 @@ describe("PostgreSQL Conversation command transaction", () => {
 			const capabilityId = "c".repeat(64);
 			const directoryRevision = "d".repeat(64);
 			const metadata = new FakeNativeCapabilityMetadataRevalidationV1({
+				hostScopeRef: null,
 				projection: {
 					selector: "commands",
 					revision: directoryRevision,
