@@ -24,6 +24,7 @@ export const sessionSandboxRuntimeAuthFixture: WorkloadRuntimeAuthV1 = {
 		.toString(),
 	grantIssuer: "platform",
 	serviceTokenSecret: { name: "platform-runtime-transport", key: "token" },
+	nativeMetadataWorkerOrigin: "http://platform-worker-native-metadata",
 };
 
 export function sessionSandboxTemplateBindingFixture(
@@ -104,6 +105,7 @@ export function sessionSandboxRuntimeInputFixture(input: {
 		grantKeyId: sessionSandboxRuntimeAuthFixture.grantKeyId,
 		grantPublicKey: sessionSandboxRuntimeAuthFixture.grantPublicKey,
 		grantIssuer: sessionSandboxRuntimeAuthFixture.grantIssuer,
+		nativeMetadataWorkerOrigin: "http://platform-worker-native-metadata",
 		serviceToken: sessionSandboxServiceTokenV1(
 			sessionSandboxDeploymentTokenFixture,
 			input.namespace,

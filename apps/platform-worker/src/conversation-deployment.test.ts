@@ -226,6 +226,8 @@ describe("production SessionSandbox resource receiver", () => {
 							.export({ type: "spki", format: "pem" })
 							.toString(),
 						serviceTokenSecret: { name: "transport", key: "token" },
+						nativeMetadataWorkerOrigin:
+							"http://platform-worker-native-metadata",
 					},
 				},
 			},
@@ -295,6 +297,15 @@ describe("production SessionSandbox resource receiver", () => {
 				{ namespace: "kube-system", podLabels: { "k8s-app": "kube-dns" } },
 			],
 			modelEgress: [{ destination: { ip: "203.0.113.10" }, port: 443 }],
+			nativeMetadataWorkerEgress: [
+				{
+					destination: {
+						namespace: "platform",
+						podLabels: { "app.kubernetes.io/component": "platform-worker" },
+					},
+					port: 3004,
+				},
+			],
 		};
 		const receive = createProductionSessionSandboxReceiverV1(
 			{
@@ -318,6 +329,25 @@ describe("production SessionSandbox resource receiver", () => {
 			"NetworkPolicy/sandbox-allocation-a",
 		) as V1NetworkPolicy;
 		expect(policy.spec?.egress).toEqual(workloadEgressRulesV1(approved));
+	});
+	it("rejects an arbitrary native metadata destination before writing a Sandbox", async () => {
+		const f = fixture();
+		const receive = createProductionSessionSandboxReceiverV1(
+			{
+				...f.options,
+				policy: {
+					...f.options.policy,
+					nativeMetadataWorkerEgress: [
+						{ destination: { ip: "203.0.113.10" }, port: 3004 },
+					],
+				},
+			},
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		);
+		await expect(
+			receive(f.claim, new AbortController().signal),
+		).rejects.toThrow();
+		expect(f.resources.size).toBe(0);
 	});
 	it("denies all Session egress when the deployment approves none", async () => {
 		const f = fixture();
