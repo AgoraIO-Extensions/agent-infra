@@ -561,7 +561,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			.find(
 				(candidate) =>
 					candidate.name === command.capabilityName &&
-					candidate.version === command.capabilitySourceVersion,
+					candidate.version === command.capabilitySourceVersion &&
+					(command.packageDigest === undefined ||
+						candidate.packageDigest === command.packageDigest) &&
+					(command.manifestDigest === undefined ||
+						candidate.manifestDigest === command.manifestDigest),
 			);
 		if (!entry || !launchOptions.skills.includes(entry.name))
 			throw new RuntimeSkillDirectoryErrorV1();
@@ -587,6 +591,14 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			sessionGeneration: command.sessionGeneration,
 			nativeSessionRef: command.nativeSessionRef,
 			input: { text, attachments: [] },
+			nativeSkill: {
+				capabilityId: command.capabilityId,
+				directoryRevision: command.directoryRevision,
+				name: command.capabilityName,
+				version: command.capabilitySourceVersion,
+				packageDigest: entry.packageDigest,
+				manifestDigest: entry.manifestDigest,
+			},
 		};
 	}
 

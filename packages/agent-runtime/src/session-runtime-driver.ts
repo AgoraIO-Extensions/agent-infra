@@ -406,15 +406,20 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	createNativeSkillCommand(command: RuntimeNativeSkillCommandV1) {
 		if (!this.options.nativeSkillPrompt || !this.options.skillDirectory)
 			nativeSkillUnsupported();
+		const entry = this.options.skillDirectory
+			.findSkills()
+			.find(
+				(candidate) =>
+					candidate.name === command.capabilityName &&
+					candidate.version === command.capabilitySourceVersion &&
+					(command.packageDigest === undefined ||
+						candidate.packageDigest === command.packageDigest) &&
+					(command.manifestDigest === undefined ||
+						candidate.manifestDigest === command.manifestDigest),
+			);
 		if (
 			!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(command.capabilityName) ||
-			!this.options.skillDirectory
-				.findSkills()
-				.some(
-					(entry) =>
-						entry.name === command.capabilityName &&
-						entry.version === command.capabilitySourceVersion,
-				)
+			!entry
 		)
 			nativeSkillUnsupported();
 		const text = this.options.nativeSkillPrompt(
@@ -439,6 +444,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			sessionGeneration: command.sessionGeneration,
 			nativeSessionRef: command.nativeSessionRef,
 			input: { text, attachments: [] },
+			nativeSkill: {
+				capabilityId: command.capabilityId,
+				directoryRevision: command.directoryRevision,
+				name: command.capabilityName,
+				version: command.capabilitySourceVersion,
+				packageDigest: entry.packageDigest,
+				manifestDigest: entry.manifestDigest,
+			},
 		};
 	}
 

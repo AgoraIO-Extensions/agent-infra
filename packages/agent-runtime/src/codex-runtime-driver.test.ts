@@ -12864,12 +12864,23 @@ describe("Codex structured Skill input", () => {
 			createCodexNativeSkillInputV1(directory, {
 				name: "workspace-summary",
 				version: "1.0.0",
+				packageDigest: "b".repeat(64),
+				manifestDigest: "c".repeat(64),
 				text: "$workspace-summary summarize files",
 			}),
 		).toEqual([
 			{ type: "text", text: "$workspace-summary summarize files" },
 			{ type: "skill", name: "workspace-summary", path },
 		]);
+		expect(() =>
+			createCodexNativeSkillInputV1(directory, {
+				name: "workspace-summary",
+				version: "1.0.0",
+				packageDigest: "d".repeat(64),
+				manifestDigest: "c".repeat(64),
+				text: "$workspace-summary summarize files",
+			}),
+		).toThrow();
 	});
 });
 

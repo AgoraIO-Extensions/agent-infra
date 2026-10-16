@@ -246,6 +246,8 @@ it("builds the bounded Pi native Skill command from the mounted directory", asyn
 			nativeSessionRef: "native-a",
 			capabilityId: "d".repeat(64),
 			directoryRevision: "e".repeat(64),
+			packageDigest: "b".repeat(64),
+			manifestDigest: "c".repeat(64),
 			parameters: "summarize files",
 			parametersDigest: "f".repeat(64),
 			capabilityName: "workspace-summary",

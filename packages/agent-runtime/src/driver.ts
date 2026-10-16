@@ -55,6 +55,8 @@ export type RuntimeNativeSkillCommandV1 = Readonly<{
 	nativeSessionRef: string;
 	capabilityId: string;
 	directoryRevision: string;
+	packageDigest?: string;
+	manifestDigest?: string;
 	parameters: string;
 	parametersDigest: string;
 	capabilityName: string;
