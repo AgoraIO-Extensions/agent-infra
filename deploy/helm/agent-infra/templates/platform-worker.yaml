@@ -263,6 +263,12 @@ spec:
             matchExpressions:
               - key: agent-infra.agora.io/sandbox-id
                 operator: Exists
+              - key: agent-infra.agora.io/agent-ref
+                operator: Exists
+              - key: agent-infra.agora.io/session-ref
+                operator: Exists
+              - key: agent-infra.agora.io/generation
+                operator: Exists
       ports:
         - protocol: TCP
           port: {{ .Values.platformWorker.nativeMetadataGateway.port }}

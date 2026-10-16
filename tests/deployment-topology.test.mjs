@@ -727,6 +727,18 @@ test("native metadata Worker gateway is opt-in and restricted to Platform API", 
 				key: "agent-infra.agora.io/sandbox-id",
 				operator: "Exists",
 			},
+			{
+				key: "agent-infra.agora.io/agent-ref",
+				operator: "Exists",
+			},
+			{
+				key: "agent-infra.agora.io/session-ref",
+				operator: "Exists",
+			},
+			{
+				key: "agent-infra.agora.io/generation",
+				operator: "Exists",
+			},
 		],
 	);
 	const apiEgress = resource(
