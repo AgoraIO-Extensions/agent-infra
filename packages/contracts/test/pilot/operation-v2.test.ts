@@ -75,6 +75,38 @@ const handoff = {
 		},
 	},
 } as const;
+const sideEffect = {
+	...original,
+	schemaVersion: 2,
+	eventId: "side-effect-event",
+	type: "browser.side_effect",
+	payload: {
+		confirmationId: "confirmation-1",
+		status: "pending",
+		requestedAt: "2026-09-14T12:00:00Z",
+		expiresAt: "2026-09-14T12:05:00Z",
+		operation: "click",
+		targetOrigin: "https://example.test",
+		redactedTargetSummary: "提交公开表单（已脱敏）",
+		binding: {
+			actionId: "action-1",
+			confirmationId: "confirmation-1",
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			subjectId: "subject-1",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			sessionGeneration: 2,
+			resourceFence: 7,
+			workloadRevision: 3,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+			capabilityVersion: 4,
+			capabilityRevision: 4,
+			pageRevision: 5,
+		},
+	},
+} as const;
 
 describe("Pilot mixed-version operation contracts", () => {
 	it("reuses the public Runtime fact schema and preserves all original V1 event bytes", () => {
@@ -139,6 +171,38 @@ describe("Pilot mixed-version operation contracts", () => {
 				},
 			}).success,
 		).toBe(false);
+	});
+
+	it("projects bounded Browser side-effect confirmation state through V2 SSE", () => {
+		expect(PersistedConversationEventV2Schema.parse(sideEffect)).toEqual(
+			sideEffect,
+		);
+		expect(ConversationSseMessageV2Schema.parse(sideEffect)).toEqual(
+			sideEffect,
+		);
+		for (const payload of [
+			{ ...sideEffect.payload, redactedTargetSummary: "x".repeat(1025) },
+			{ ...sideEffect.payload, targetOrigin: "not an origin" },
+			{ ...sideEffect.payload, targetOrigin: "https://example.test/path" },
+			{ ...sideEffect.payload, targetOrigin: "ftp://example.test" },
+			{
+				...sideEffect.payload,
+				confirmationId: "foreign-confirmation",
+			},
+			{
+				...sideEffect.payload,
+				binding: {
+					...sideEffect.payload.binding,
+					conversationId: "foreign-conversation",
+				},
+			},
+		])
+			expect(
+				PersistedConversationEventV2Schema.safeParse({
+					...sideEffect,
+					payload,
+				}).success,
+			).toBe(false);
 	});
 
 	it("adds complete events to V2 execution detail without changing V1 detail", () => {

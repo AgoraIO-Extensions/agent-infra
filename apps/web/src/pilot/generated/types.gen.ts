@@ -1052,6 +1052,42 @@ export type TaskProjectionV1 = {
         schemaVersion: 2;
         sequence: number;
         type: 'browser.handoff';
+    } | {
+        conversationCursor: string;
+        conversationId: string;
+        eventId: SseEventIdV1;
+        executionId: string;
+        kind: 'event';
+        occurredAt: string;
+        payload: {
+            binding: {
+                actionId: string;
+                agentId: string;
+                attemptRef: string;
+                capabilityRevision: number;
+                capabilityVersion: number;
+                confirmationId: string;
+                conversationId: string;
+                executionId: string;
+                imageDigest: string;
+                operationRef: string;
+                pageRevision: number;
+                resourceFence: number;
+                sessionGeneration: number;
+                subjectId: string;
+                workloadRevision: number;
+            };
+            confirmationId: string;
+            expiresAt: string;
+            operation: string;
+            redactedTargetSummary: string;
+            requestedAt: string;
+            status: 'pending' | 'confirmed' | 'rejected' | 'cancelled' | 'expired' | 'unknown';
+            targetOrigin: string;
+        };
+        schemaVersion: 2;
+        sequence: number;
+        type: 'browser.side_effect';
     } | TaskStatusEventV1>;
     executionId: string;
     output: string;
@@ -1163,6 +1199,42 @@ export type TaskSseMessageV1 = PersistedConversationEventV1 | {
     schemaVersion: 2;
     sequence: number;
     type: 'browser.handoff';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        binding: {
+            actionId: string;
+            agentId: string;
+            attemptRef: string;
+            capabilityRevision: number;
+            capabilityVersion: number;
+            confirmationId: string;
+            conversationId: string;
+            executionId: string;
+            imageDigest: string;
+            operationRef: string;
+            pageRevision: number;
+            resourceFence: number;
+            sessionGeneration: number;
+            subjectId: string;
+            workloadRevision: number;
+        };
+        confirmationId: string;
+        expiresAt: string;
+        operation: string;
+        redactedTargetSummary: string;
+        requestedAt: string;
+        status: 'pending' | 'confirmed' | 'rejected' | 'cancelled' | 'expired' | 'unknown';
+        targetOrigin: string;
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'browser.side_effect';
 } | TaskStatusEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
 
 export type TaskStatusEventV1 = {

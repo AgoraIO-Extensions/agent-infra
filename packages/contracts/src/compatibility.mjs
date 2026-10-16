@@ -1897,7 +1897,9 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	const persistedEvents = addition.schemas.PersistedConversationEventV2;
 	if (Array.isArray(persistedEvents?.anyOf))
 		persistedEvents.anyOf = persistedEvents.anyOf.filter(
-			(option) => option?.$ref !== "#/components/schemas/BrowserHandoffEventV2",
+			(option) =>
+				option?.$ref !== "#/components/schemas/BrowserHandoffEventV2" &&
+				option?.$ref !== "#/components/schemas/BrowserSideEffectEventV2",
 		);
 	// The bounded event window is a later additive field on this V2 detail;
 	// keep the original #508 publication digest stable when checking the
@@ -2117,6 +2119,138 @@ function isBrowserHandoffEventV2Addition(previous, current) {
 	const normalized = stripBrowserHandoffOpenApiAdditions(current);
 	delete normalized.components.schemas[schemaName];
 	return sameValue(previous, normalized);
+}
+
+function isBrowserSideEffectOpenApiOption(value) {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		!Array.isArray(value) &&
+		((value.properties?.type?.const === "browser.side_effect" &&
+			value.properties?.schemaVersion?.const === 2) ||
+			value.$ref === "#/components/schemas/BrowserSideEffectEventV2")
+	);
+}
+
+function stripBrowserSideEffectSchemaOptions(value) {
+	if (Array.isArray(value))
+		return value
+			.filter((item) => !isBrowserSideEffectOpenApiOption(item))
+			.map(stripBrowserSideEffectSchemaOptions);
+	if (value !== null && typeof value === "object") {
+		const result = {};
+		for (const [key, item] of Object.entries(value))
+			result[key] = stripBrowserSideEffectSchemaOptions(item);
+		return result;
+	}
+	return value;
+}
+
+function stripBrowserSideEffectOpenApiAdditions(value) {
+	const normalized = structuredClone(value);
+	const schemas = normalized.components?.schemas;
+	for (const name of [
+		"PersistedConversationEventV2",
+		"TaskProjectionV1",
+		"TaskSseMessageV1",
+	]) {
+		if (schemas?.[name] !== undefined)
+			schemas[name] = stripBrowserSideEffectSchemaOptions(schemas[name]);
+	}
+	return normalized;
+}
+
+function isBrowserSideEffectEventV2Addition(previous, current) {
+	const schemaName = "BrowserSideEffectEventV2";
+	if (
+		hasSelectedBrowserSideEffectEventOpenApiOption(previous) ||
+		!hasSelectedBrowserSideEffectEventOpenApiOption(current)
+	)
+		return false;
+	const normalized = stripBrowserSideEffectOpenApiAdditions(current);
+	if (normalized.components?.schemas?.[schemaName] !== undefined)
+		delete normalized.components.schemas[schemaName];
+	return sameValue(previous, normalized);
+}
+
+function hasSelectedBrowserSideEffectOpenApiOption(value) {
+	if (Array.isArray(value))
+		return value.some(hasSelectedBrowserSideEffectOpenApiOption);
+	if (value !== null && typeof value === "object")
+		return (
+			(value.properties?.type?.const === "browser.side_effect" &&
+				value.properties?.schemaVersion?.const === 2) ||
+			value.$ref === "#/components/schemas/BrowserSideEffectEventV2" ||
+			Object.values(value).some(hasSelectedBrowserSideEffectOpenApiOption)
+		);
+	return false;
+}
+
+function hasSelectedBrowserSideEffectEventOpenApiOption(value) {
+	return (
+		value.components?.schemas?.BrowserSideEffectEventV2 !== undefined ||
+		[
+			"PersistedConversationEventV2",
+			"TaskProjectionV1",
+			"TaskSseMessageV1",
+		].some((name) =>
+			hasSelectedBrowserSideEffectOpenApiOption(
+				value.components?.schemas?.[name],
+			),
+		)
+	);
+}
+
+function stripBrowserSideEffectJsonSchemaAdditions(value) {
+	if (Array.isArray(value))
+		return value
+			.filter(
+				(item) =>
+					item?.$ref !== "#/$defs/BrowserSideEffectEventV2" &&
+					item?.$ref !== "#/components/schemas/BrowserSideEffectEventV2" &&
+					!(
+						item?.properties?.type?.const === "browser.side_effect" &&
+						item?.properties?.schemaVersion?.const === 2
+					),
+			)
+			.map(stripBrowserSideEffectJsonSchemaAdditions);
+	if (value !== null && typeof value === "object") {
+		const result = {};
+		for (const [key, item] of Object.entries(value))
+			result[key] = stripBrowserSideEffectJsonSchemaAdditions(item);
+		return result;
+	}
+	return value;
+}
+
+function isBrowserSideEffectEventV2JsonSchemaAddition(previous, current) {
+	const schemaName = "BrowserSideEffectEventV2";
+	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
+	const currentSchemas = current.$defs ?? current.components?.schemas ?? {};
+	if (
+		previousSchemas[schemaName] !== undefined ||
+		currentSchemas[schemaName] === undefined
+	)
+		return false;
+	const normalized = stripBrowserSideEffectJsonSchemaAdditions(current);
+	delete (normalized.$defs ?? normalized.components?.schemas)?.[schemaName];
+	return sameValue(previous, normalized);
+}
+
+function hasSelectedBrowserSideEffectEventJsonSchemaAddition(value) {
+	const schemas = value.$defs ?? value.components?.schemas ?? {};
+	if (schemas.BrowserSideEffectEventV2 !== undefined) return true;
+	const hasInline = (item) => {
+		if (Array.isArray(item)) return item.some(hasInline);
+		if (item !== null && typeof item === "object")
+			return (
+				(item.properties?.type?.const === "browser.side_effect" &&
+					item.properties?.schemaVersion?.const === 2) ||
+				Object.values(item).some(hasInline)
+			);
+		return false;
+	};
+	return Object.values(schemas).some(hasInline);
 }
 
 const preparingSessionAvailability = {
@@ -4238,7 +4372,8 @@ function findBreakingChanges(previousValue, currentValue) {
 	let current = currentValue;
 	if (
 		previous.openapi !== undefined &&
-		isBrowserHandoffEventV2Addition(previous, current)
+		(isBrowserHandoffEventV2Addition(previous, current) ||
+			isBrowserSideEffectEventV2Addition(previous, current))
 	)
 		return [];
 	const before =
@@ -4271,12 +4406,26 @@ function findBreakingChanges(previousValue, currentValue) {
 			previous,
 			current,
 		);
+		if (!hasSelectedBrowserSideEffectEventOpenApiOption(previous)) {
+			const sideEffectNormalized =
+				stripBrowserSideEffectOpenApiAdditions(current);
+			if (!sameValue(sideEffectNormalized, current)) {
+				if (sideEffectNormalized.components?.schemas?.BrowserSideEffectEventV2)
+					delete sideEffectNormalized.components.schemas
+						.BrowserSideEffectEventV2;
+				current = sideEffectNormalized;
+			}
+		}
 		if (!hasSelectedBrowserHandoffOpenApiOption(previous)) {
 			const browserNormalized = stripBrowserHandoffOpenApiAdditions(current);
 			if (previous.components?.schemas?.BrowserHandoffEventV2 === undefined)
 				delete browserNormalized.components?.schemas?.BrowserHandoffEventV2;
 			if (!sameValue(browserNormalized, current)) {
-				if (isBrowserHandoffEventV2Addition(previous, current)) return changes;
+				if (
+					isBrowserHandoffEventV2Addition(previous, current) ||
+					isBrowserSideEffectEventV2Addition(previous, current)
+				)
+					return changes;
 				current = browserNormalized;
 			}
 		}
@@ -4370,16 +4519,28 @@ function findBreakingChanges(previousValue, currentValue) {
 		return changes.sort();
 	}
 	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
-	const normalized =
-		normalizeRuntimeNativeCapabilityV3CommandJsonSchemaAddition(
+	let normalized = normalizeRuntimeNativeCapabilityV3CommandJsonSchemaAddition(
+		previous,
+		normalizeRuntimeSkillHostReadJsonSchemaAddition(
 			previous,
-			normalizeRuntimeSkillHostReadJsonSchemaAddition(
-				previous,
-				normalizeSkillPackageObjectVersions(previous, current, changes),
-			),
-		);
+			normalizeSkillPackageObjectVersions(previous, current, changes),
+		),
+	);
 	const currentSchemas =
 		normalized.$defs ?? normalized.components?.schemas ?? {};
+	if (!hasSelectedBrowserSideEffectEventJsonSchemaAddition(previous)) {
+		const sideEffectNormalized =
+			stripBrowserSideEffectJsonSchemaAdditions(normalized);
+		const sideEffectSchemas =
+			sideEffectNormalized.$defs ??
+			sideEffectNormalized.components?.schemas ??
+			{};
+		if (sideEffectSchemas.BrowserSideEffectEventV2 !== undefined)
+			delete sideEffectSchemas.BrowserSideEffectEventV2;
+		normalized = sideEffectNormalized;
+	}
+	if (isBrowserSideEffectEventV2JsonSchemaAddition(previous, normalized))
+		return [];
 	for (const [name, schema] of Object.entries(previousSchemas)) {
 		const currentSchema = currentSchemas[name];
 		if (currentSchema === undefined) {

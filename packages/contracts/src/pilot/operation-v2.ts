@@ -70,6 +70,73 @@ export const BrowserHandoffEventV2Schema = z.strictObject({
 	}),
 });
 
+const BrowserSideEffectBindingV2Schema = BrowserHandoffBindingV2Schema.extend({
+	actionId: OpaqueIdV1Schema,
+	confirmationId: OpaqueIdV1Schema,
+	operationRef: OpaqueIdV1Schema,
+	attemptRef: OpaqueIdV1Schema,
+});
+
+export const BrowserSideEffectEventV2Schema = z
+	.strictObject({
+		schemaVersion: z.literal(2),
+		kind: z.literal("event"),
+		eventId: SseEventIdV1Schema,
+		conversationId: OpaqueIdV1Schema,
+		executionId: OpaqueIdV1Schema,
+		sequence: z.number().int().positive().safe(),
+		conversationCursor: OpaqueCursorV1Schema,
+		occurredAt: Rfc3339TimestampV1Schema,
+		type: z.literal("browser.side_effect"),
+		payload: z.strictObject({
+			confirmationId: OpaqueIdV1Schema,
+			status: z.enum([
+				"pending",
+				"confirmed",
+				"rejected",
+				"cancelled",
+				"expired",
+				"unknown",
+			]),
+			requestedAt: Rfc3339TimestampV1Schema,
+			expiresAt: Rfc3339TimestampV1Schema,
+			operation: z.string().min(1).max(128),
+			targetOrigin: z
+				.string()
+				.url()
+				.max(2048)
+				.refine((value) => {
+					try {
+						const url = new URL(value);
+						return (
+							(url.protocol === "http:" || url.protocol === "https:") &&
+							url.username === "" &&
+							url.password === "" &&
+							url.pathname === "/" &&
+							url.search === "" &&
+							url.hash === ""
+						);
+					} catch {
+						return false;
+					}
+				}, "targetOrigin must be an HTTP(S) origin"),
+			redactedTargetSummary: z.string().min(1).max(1024),
+			binding: BrowserSideEffectBindingV2Schema,
+		}),
+	})
+	.superRefine((value, context) => {
+		if (
+			value.conversationId !== value.payload.binding.conversationId ||
+			value.executionId !== value.payload.binding.executionId ||
+			value.payload.confirmationId !== value.payload.binding.confirmationId
+		) {
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: "Browser side-effect binding scope does not match event scope",
+			});
+		}
+	});
+
 /** The same public operation fact contract is used across Runtime and browser transports. */
 export const ExecutionOperationEventV2Schema = z.strictObject({
 	schemaVersion: z.literal(2),
@@ -89,6 +156,7 @@ export const PersistedConversationEventV2Schema = z.union([
 	PersistedConversationEventV1Schema,
 	ExecutionOperationEventV2Schema,
 	BrowserHandoffEventV2Schema,
+	BrowserSideEffectEventV2Schema,
 ]);
 
 export const ConversationSseMessageV2Schema = z.union([
@@ -231,6 +299,7 @@ export const pilotOperationSseSchemasV2 = {
 	RuntimeOperationFactV2: RuntimeOperationFactV2Schema,
 	ExecutionOperationEventV2: ExecutionOperationEventV2Schema,
 	BrowserHandoffEventV2: BrowserHandoffEventV2Schema,
+	BrowserSideEffectEventV2: BrowserSideEffectEventV2Schema,
 	PersistedConversationEventV2: PersistedConversationEventV2Schema,
 	ConversationSseMessageV2: ConversationSseMessageV2Schema,
 };
@@ -246,6 +315,9 @@ export type ExecutionOperationEventV2 = z.infer<
 	typeof ExecutionOperationEventV2Schema
 >;
 export type BrowserHandoffEventV2 = z.infer<typeof BrowserHandoffEventV2Schema>;
+export type BrowserSideEffectEventV2 = z.infer<
+	typeof BrowserSideEffectEventV2Schema
+>;
 export type PersistedConversationEventV2 = z.infer<
 	typeof PersistedConversationEventV2Schema
 >;
