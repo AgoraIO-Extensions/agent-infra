@@ -160,6 +160,45 @@ describe("native capability metadata revalidation", () => {
 		).resolves.toEqual({ outcome: "unavailable" });
 	});
 
+	it("fails closed when the authenticated identity revision drifts", async () => {
+		const adapter = createNativeCapabilityMetadataRevalidationV1({
+			query: {
+				readNativeCapabilityCurrentScopeV1: vi.fn().mockResolvedValue(current),
+			},
+			reader: { read: vi.fn() },
+			identity: { ...identity, authorizationRevision: "identity-revision" },
+		});
+		await expect(
+			adapter.revalidate({ request, authority, sessionGeneration: 3 }),
+		).resolves.toEqual({ outcome: "unavailable" });
+	});
+
+	it("rejects a mixed directory revision across command and skill projections", async () => {
+		const f = fixture();
+		f.reader.read.mockImplementation(
+			async (
+				_identity: IdentityContext,
+				_conversation: string,
+				_execution: string,
+				selector: "status" | "commands" | "skills",
+			) =>
+				selector === "commands"
+					? {
+							selector: "commands" as const,
+							revision,
+							capabilities: [],
+						}
+					: {
+							selector: "skills" as const,
+							revision: "c".repeat(64),
+							capabilities: [],
+						},
+		);
+		await expect(
+			f.adapter.revalidate({ request, authority, sessionGeneration: 3 }),
+		).resolves.toEqual({ outcome: "stale" });
+	});
+
 	it("expires the synchronous cache without a network recheck", async () => {
 		let now = 1000;
 		const f = fixture({ now: () => now, cacheTtlMs: 10 });

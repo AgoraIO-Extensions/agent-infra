@@ -177,7 +177,8 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 					return { outcome: "unavailable" };
 				if (
 					options.identity.userId !== authority.actorId ||
-					options.identity.authorizationRevision.length === 0
+					options.identity.authorizationRevision !==
+						authority.authorizationRevision
 				)
 					return { outcome: "unavailable" };
 				const current = await options.query.readNativeCapabilityCurrentScopeV1({
@@ -213,13 +214,12 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 				const projectedRevisionMismatch = projections.some(
 					(projection) => projection.revision !== request.directoryRevision,
 				);
+				if (projectedRevisionMismatch) return { outcome: "stale" };
 				for (const projection of projections) {
 					const selected = projection.capabilities.find(
 						(capability) => capability.id === request.capabilityId,
 					);
 					if (!selected) continue;
-					if (projection.revision !== request.directoryRevision)
-						return { outcome: "stale" };
 					const capability = {
 						...selected,
 						directoryRevision: projection.revision,
@@ -246,9 +246,7 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 					prune(timestamp);
 					return { outcome: "allowed", capability, scope };
 				}
-				return projectedRevisionMismatch
-					? { outcome: "stale" }
-					: { outcome: "unknown" };
+				return { outcome: "unknown" };
 			} catch {
 				return { outcome: "unavailable" };
 			}
