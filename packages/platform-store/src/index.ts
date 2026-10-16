@@ -149,6 +149,8 @@ export {
 export { PostgresPersonalRelayKeyStoreV1 } from "./personal-relay-key.ts";
 export {
 	observePostgresClient,
+	runStoreQueryOperation,
+	type StoreQueryEvent,
 	type StoreQueryObservability,
 	type StoreQueryObservabilityOptions,
 	storeSlowQueryThresholdMs,

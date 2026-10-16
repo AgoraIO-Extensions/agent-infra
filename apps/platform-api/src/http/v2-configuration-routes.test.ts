@@ -49,7 +49,9 @@ const agentProjection = {
 	interactionUrl: null,
 };
 
-function createApp() {
+function createApp(savedKeyCandidates?: {
+	read: (...args: never[]) => Promise<unknown>;
+}) {
 	const app = createPlatformHealthApp();
 	const update = vi.fn().mockResolvedValue({});
 	const read = vi.fn().mockResolvedValue({
@@ -70,6 +72,7 @@ function createApp() {
 			secrets: [],
 			modelCredentialOptionIds: [],
 		}),
+		...(savedKeyCandidates ? { savedKeyCandidates } : {}),
 	});
 
 	return { app, update, read, readAgentProjection };
@@ -142,8 +145,12 @@ describe("V2 configuration routes with a re-submitted default Relay Key (#2421)"
 		expectedKeyVersion: 2,
 		modelConfiguration,
 	};
-	const put = (app: ReturnType<typeof createApp>["app"], payload: unknown) =>
-		app.request("/api/v2/agents/agent-1/configuration", {
+	const put = (
+		app: ReturnType<typeof createApp>["app"],
+		payload: unknown,
+		path = "/api/v2/agents/agent-1/configuration",
+	) =>
+		app.request(path, {
 			method: "PUT",
 			headers: {
 				"content-type": "application/json",
@@ -234,6 +241,20 @@ describe("V2 configuration routes with a re-submitted default Relay Key (#2421)"
 		expect(update).not.toHaveBeenCalled();
 	});
 
+	it("reports an unavailable saved-Key reader when no Key is submitted", async () => {
+		const { app, update } = createApp();
+		const response = await put(
+			app,
+			{ ...replacement, defaultRelayKey: undefined },
+			"/api/v2/agents/agent-1/configuration/saved-model",
+		);
+		expect(response.status).toBe(503);
+		expect(PilotProtocolErrorV1Schema.parse(await response.json()).code).toBe(
+			"DEPENDENCY_UNAVAILABLE",
+		);
+		expect(update).not.toHaveBeenCalled();
+	});
+
 	it("keeps V2-shaped model changes on the V2 command so Core can refuse them for keyless Agents", async () => {
 		const { app, update } = createApp();
 		await put(app, { schemaVersion: 2, modelConfiguration });
@@ -264,4 +285,39 @@ describe("V2 configuration routes with a re-submitted default Relay Key (#2421)"
 			expect(text).not.toContain(key);
 		},
 	);
+
+	it("rejects a saved response bound to another Agent", async () => {
+		const savedKeyCandidates = {
+			read: vi.fn().mockResolvedValue({
+				schemaVersion: 1,
+				agentId: "agent-2",
+				configurationRevision: 7,
+				keyVersion: 2,
+				candidates: [
+					{
+						endpointId: "ep",
+						modelId: "gpt-5",
+						reasoningLevels: ["high", "medium"],
+					},
+				],
+			}),
+		};
+		const { app, update } = createApp(savedKeyCandidates);
+		const response = await app.request(
+			"/api/v2/agents/agent-1/configuration/saved-model",
+			{
+				method: "PUT",
+				headers: {
+					"content-type": "application/json",
+					"Idempotency-Key": "Command.Aa-05",
+				},
+				body: JSON.stringify({ ...replacement, defaultRelayKey: undefined }),
+			},
+		);
+		expect(response.status).toBe(400);
+		expect(PilotProtocolErrorV1Schema.parse(await response.json()).code).toBe(
+			"INVALID_REQUEST",
+		);
+		expect(update).not.toHaveBeenCalled();
+	});
 });

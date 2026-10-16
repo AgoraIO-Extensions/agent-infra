@@ -790,6 +790,25 @@ describe("V2 management routes", () => {
 describe("lifecycle command failures are observable (#2569)", () => {
 	const restart = JSON.stringify({ schemaVersion: 1, command: "restart" });
 
+	it.each([
+		["identity.resolve", { identityFailure: true }, "/api/v2/agents"],
+		["projection.read", { projectionFailure: true }, "/api/v2/agents"],
+	] as const)(
+		"records the bounded %s failure step without private details",
+		async (failureStep, options, path) => {
+			const telemetry: OperationalEvent[] = [];
+			const { app } = createApp({ ...options, telemetry });
+			const response = await app.request(path);
+
+			expect(response.status).toBe(503);
+			expect(telemetry[0]).toMatchObject({
+				failureStep,
+				errorClass: "Error",
+			});
+			expect(JSON.stringify(telemetry)).not.toMatch(/private/);
+		},
+	);
+
 	it("returns the committed projection when the follow-up read fails", async () => {
 		const telemetry: OperationalEvent[] = [];
 		const { app, executeManagementCommand } = createApp({
@@ -813,6 +832,8 @@ describe("lifecycle command failures are observable (#2569)", () => {
 				stage: "http",
 				outcome: "completed",
 				durationMs: expect.any(Number),
+				failureStep: "projection.read",
+				errorClass: "Error",
 				requestId: expect.any(String),
 				traceId: expect.any(String),
 			},

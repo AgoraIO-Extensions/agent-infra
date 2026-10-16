@@ -166,6 +166,28 @@ beforeAll(async () => {
 			target: "node24",
 		},
 	);
+	const savedKeyCandidatesProduction = await transform(
+		await readFile(
+			new URL("./saved-key-candidates-production.ts", import.meta.url),
+			"utf8",
+		),
+		{
+			loader: "ts",
+			format: "esm",
+			target: "node24",
+		},
+	);
+	const savedKeyCandidatesService = await transform(
+		await readFile(
+			new URL("./saved-key-candidates-service.ts", import.meta.url),
+			"utf8",
+		),
+		{
+			loader: "ts",
+			format: "esm",
+			target: "node24",
+		},
+	);
 	await writeFile(join(directory, "package.json"), '{"type":"module"}');
 	await writeFile(join(directory, "deployment.mjs"), code);
 	await writeFile(
@@ -203,6 +225,14 @@ beforeAll(async () => {
 	await writeFile(
 		join(directory, "runtime-native-metadata-client.js"),
 		nativeMetadataClient.code,
+	);
+	await writeFile(
+		join(directory, "saved-key-candidates-production.js"),
+		savedKeyCandidatesProduction.code,
+	);
+	await writeFile(
+		join(directory, "saved-key-candidates-service.js"),
+		savedKeyCandidatesService.code,
 	);
 	await writeFile(
 		join(directory, "runtime-model-directory-deployment.js"),

@@ -6,7 +6,8 @@ import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
 
 let sessionId;
 let count = 0;
-let model = "provider/model";
+const controlledCustomAcp = process.env.ACP_TEST_MODE === "custom-acp";
+let model = controlledCustomAcp ? "fixture/custom-model" : "provider/model";
 let effort = "high";
 let finishPrompt;
 const configOptions = () => [
@@ -30,7 +31,16 @@ const configOptions = () => [
 								).map((value) => ({ value, name: value })),
 							},
 						]
-					: [{ value: "provider/model", name: "Synthetic model" }],
+					: [
+							{
+								value: controlledCustomAcp
+									? "fixture/custom-model"
+									: "provider/model",
+								name: controlledCustomAcp
+									? "Controlled Custom ACP"
+									: "Synthetic model",
+							},
+						],
 	},
 	{
 		id: "effort",
@@ -62,6 +72,7 @@ const connection = new AgentSideConnection(
 				JSON.stringify({
 					sessionId,
 					count,
+					...(controlledCustomAcp ? { peer: "controlled-custom-acp-v1" } : {}),
 					...(process.env.ACP_TEST_MODE === "mcp-servers"
 						? { mcpServers: params.mcpServers }
 						: {}),
@@ -151,7 +162,12 @@ const connection = new AgentSideConnection(
 				sessionId,
 				update: {
 					sessionUpdate: "agent_message_chunk",
-					content: { type: "text", text: `synthetic result ${count}` },
+					content: {
+						type: "text",
+						text: controlledCustomAcp
+							? `controlled custom ACP result ${count}`
+							: `synthetic result ${count}`,
+					},
 				},
 			});
 			if (process.env.ACP_TEST_MODE === "result-file") {

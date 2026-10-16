@@ -38,6 +38,21 @@ function fixture() {
 				candidates: [],
 			}),
 		},
+		savedCandidates: {
+			read: vi.fn(async () => ({
+				schemaVersion: 1,
+				agentId: "agent_01",
+				configurationRevision: 7,
+				keyVersion: 2,
+				candidates: [
+					{
+						endpointId: "endpoint_01",
+						modelId: "model_01",
+						reasoningLevels: ["medium"],
+					},
+				],
+			})),
+		},
 	};
 	const app = new Hono();
 	registerAgentDefaultRelayKeyRoutes(app, deps);
@@ -46,6 +61,23 @@ function fixture() {
 const url = "/api/v2/agents/agent_01/default-relay-key";
 const key = "SYNTHETIC_DEFAULT_RELAY_KEY";
 const body = { keyValue: key, expectedVersion: 1, configurationRevision: 7 };
+it("reads saved-Key candidates through the server-bound Worker projection", async () => {
+	const f = fixture();
+	const response = await f.app.request(`${url}/candidates`, { method: "GET" });
+	expect(response.status).toBe(200);
+	expect(await response.json()).toEqual({
+		schemaVersion: 1,
+		configurationRevision: 7,
+		keyVersion: 2,
+		candidates: [
+			{
+				endpointId: "endpoint_01",
+				modelId: "model_01",
+				reasoningLevels: ["medium"],
+			},
+		],
+	});
+});
 it("passes server identity and returns only the committed public state with no-store", async () => {
 	const f = fixture();
 	const response = await f.app.request(url, {

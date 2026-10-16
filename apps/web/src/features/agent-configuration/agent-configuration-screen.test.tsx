@@ -726,6 +726,80 @@ describe("agents whose models are managed by the default Relay Key (#2421)", () 
 		expect(screen.getAllByText("catalog · model-a").length).toBeGreaterThan(0);
 		expect(screen.queryByLabelText("选项 ID")).toBeNull();
 	});
+
+	it("uses saved default-Key candidates without asking for Key material", async () => {
+		const onSave = vi.fn();
+		render(
+			<AgentConfigurationScreen
+				agent={keyedAgent}
+				defaultRelayKeyManaged
+				savedRelayKeyCandidates={candidates.candidates}
+				savedRelayKeyConfigurationRevision={candidates.configurationRevision}
+				savedRelayKeyVersion={candidates.keyVersion}
+				onPreviewDefaultRelayKeyCandidates={vi.fn()}
+				onReplaceDefaultRelayKey={vi.fn()}
+				onSave={onSave}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+
+		expect(screen.getByText("选择允许的模型")).toBeTruthy();
+		expect(
+			screen.getByPlaceholderText<HTMLInputElement>("输入新 Key").value,
+		).toBe("");
+		fireEvent.click(screen.getByRole("checkbox", { name: "relay · model-b" }));
+		fireEvent.change(screen.getByLabelText("默认模型"), {
+			target: { value: "relay:model-b" },
+		});
+		await waitFor(() =>
+			expect(
+				screen
+					.getByRole("button", { name: "校验并保存" })
+					.hasAttribute("disabled"),
+			).toBe(false),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
+		expect(onSave).toHaveBeenCalledWith(
+			expect.objectContaining({
+				schemaVersion: 4,
+				expectedConfigurationRevision: candidates.configurationRevision,
+				expectedKeyVersion: candidates.keyVersion,
+				coOwnerIds: ["user-owner-1"],
+				availability: [
+					{ kind: "organization", organizationId: "org-platform" },
+				],
+				modelConfiguration: expect.objectContaining({
+					defaultOptionId: "relay:model-b",
+				}),
+			}),
+		);
+		expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("defaultRelayKey");
+	});
+
+	it("keeps saved-Key read failures actionable", () => {
+		const onRetry = vi.fn();
+		render(
+			<AgentConfigurationScreen
+				agent={keyedAgent}
+				defaultRelayKeyManaged
+				savedRelayKeyCandidatesError={new Error("opaque failure")}
+				onRetrySavedRelayKeyCandidates={onRetry}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+
+		expect(
+			screen.getByText("已保存的默认 Key 暂时无法读取可用模型。"),
+		).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "重新读取可用模型" }));
+		expect(onRetry).toHaveBeenCalledOnce();
+		expect(screen.queryByText("opaque failure")).toBeNull();
+	});
 });
 
 describe("saving an unchanged configuration (#2560)", () => {

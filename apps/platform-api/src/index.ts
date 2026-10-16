@@ -3,6 +3,7 @@ import {
 	type ObservabilityOptions,
 	startObservability,
 } from "@agent-infra/observability";
+import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import {
 	configureStoreQueryObservability,
 	platformQueueResourceSnapshotTimeoutMs,
@@ -219,7 +220,21 @@ export async function startPlatformApiFromDeployment(
 				: {}),
 			...options.observabilityOptions,
 		});
-		configureStoreQueryObservability({ observability });
+		configureStoreQueryObservability({
+			observability: {
+				record(event) {
+					observability?.record(event);
+					if (event.outcome === "failed")
+						recordHttpFailureContext({
+							failureStep: event.operationRef,
+							error: event.errorClass
+								? { constructor: { name: event.errorClass } }
+								: undefined,
+							sqlState: event.sqlState,
+						});
+				},
+			},
+		});
 		const loadedAssembly = await loadPlatformApiAssembly(
 			options.moduleSpecifier,
 		);

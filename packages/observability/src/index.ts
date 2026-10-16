@@ -111,6 +111,12 @@ export interface OperationalEvent {
 	readonly status?: number;
 	/** 响应里的协议错误码（如 `DEPENDENCY_UNAVAILABLE`），仅 `http` 阶段使用；不是错误正文。 */
 	readonly protocolCode?: string;
+	/** Bounded server-side failure stage, never a free-form error message. */
+	readonly failureStep?: string;
+	/** Bounded error class name, without message or stack. */
+	readonly errorClass?: string;
+	/** PostgreSQL SQLSTATE, when a Store dependency exposes one. */
+	readonly sqlState?: string;
 	readonly requestId?: string;
 	readonly traceId?: string;
 	readonly agentId?: string;
@@ -121,6 +127,19 @@ export interface OperationalEvent {
 	/** A W3C parent retained only for a durable asynchronous operation. */
 	readonly traceParent?: string;
 	readonly browserCategory?: OperationalBrowserCategory;
+}
+
+const operationalFailureSteps = new Set([
+	"identity.resolve",
+	"identity.parse",
+	"identity.hydrate",
+	"projection.read",
+	"store.query",
+	"store.management_transaction",
+]);
+
+export function isOperationalFailureStep(value: unknown): value is string {
+	return typeof value === "string" && operationalFailureSteps.has(value);
 }
 
 export interface ModelTokenUsage {
@@ -514,6 +533,9 @@ export function startObservability(options: ObservabilityOptions) {
 					code,
 					status,
 					protocolCode,
+					failureStep,
+					errorClass,
+					sqlState,
 					requestId,
 					traceId,
 					agentId,
@@ -564,6 +586,14 @@ export function startObservability(options: ObservabilityOptions) {
 					typeof protocolCode === "string" &&
 					protocolCodePattern.test(protocolCode)
 						? { protocolCode }
+						: {}),
+					...(isOperationalFailureStep(failureStep) ? { failureStep } : {}),
+					...(errorClass !== undefined &&
+					/^[A-Za-z][A-Za-z0-9_$.-]{0,63}$/.test(errorClass)
+						? { errorClass }
+						: {}),
+					...(sqlState !== undefined && /^[0-9A-Z]{5}$/.test(sqlState)
+						? { sqlState }
 						: {}),
 					...(safeId(requestId) ? { requestId } : {}),
 					...(safeId(traceId) ? { traceId } : {}),

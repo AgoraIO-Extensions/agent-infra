@@ -3,6 +3,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { RuntimeManifestV1Schema } from "@agent-infra/contracts/workload";
 import { expect, it, vi } from "vitest";
 import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
 import type { RuntimeNativeSkillCommandV1 } from "./driver.js";
@@ -12,6 +13,79 @@ import {
 	reference,
 	standardMcpFixture,
 } from "./standard-mcp.fixture.js";
+
+// Controlled fixture for #2648; it is development evidence, not real Registry/ACP acceptance.
+it("runs a controlled custom ACP peer through the platform-adapter contract", async () => {
+	const manifest = RuntimeManifestV1Schema.parse({
+		schemaVersion: 1,
+		interactionMode: "platform-adapter",
+		protocol: "acp",
+		service: { port: 3003 },
+		health: { path: "/healthz" },
+		capabilities: { modelSelection: true },
+	});
+	expect(manifest.interactionMode).toBe("platform-adapter");
+	if (manifest.interactionMode !== "platform-adapter") throw new Error();
+	expect(manifest.protocol).toBe("acp");
+	const path = await mkdtemp(join(tmpdir(), "controlled-custom-acp-"));
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "controlled-custom-acp-v1",
+		defaultModelOptionId: "custom-primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "custom-primary",
+				nativeModelId: "fixture/custom-model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "custom-acp", NATIVE_PEER_KEEP_ALIVE: "true" },
+		}),
+	});
+	try {
+		const accepted = await driver.execute({
+			schemaVersion: 2,
+			kind: "submit-turn",
+			agentId: "custom-agent-fixture",
+			conversationId: "custom-conversation",
+			sessionGeneration: 1,
+			executionId: "custom-execution",
+			turnId: "custom-turn",
+			operationId: "custom-operation",
+			input: { text: "controlled fixture prompt", attachments: [] },
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "custom-primary",
+				reasoningLevel: "high",
+			},
+		});
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, "custom-execution"),
+			).toBe("completed"),
+		);
+		expect(
+			(await driver.replayEvents(accepted.nativeSessionRef, "custom-execution"))
+				.filter((event) => event.type === "text")
+				.map((event) => event.payload.delta)
+				.join(""),
+		).toContain("controlled custom ACP result");
+		expect(
+			await driver.getModelDirectory(accepted.nativeSessionRef),
+		).toMatchObject({
+			current: { modelOptionId: "custom-primary", reasoningLevel: "high" },
+		});
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
 
 it("forwards the controlled native Skill prompt through the Generic ACP driver", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-native-skill-prompt-"));

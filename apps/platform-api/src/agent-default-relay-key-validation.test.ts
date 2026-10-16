@@ -96,6 +96,11 @@ describe("default Key visibility with controlled Relay responses", () => {
 			).rejects.toThrow("Agent default Relay Key operation failed");
 		},
 	);
+	it("preserves invalid Key classification for the API write path", async () => {
+		await expect(
+			fixture("invalid key").candidates(key, configuration),
+		).rejects.toMatchObject({ code: "invalid_input" });
+	});
 	it("revalidates the exact template and image rather than keeping old compatible choices", async () => {
 		for (const source of [
 			{ ...configuration.source, templateId: "changed" },

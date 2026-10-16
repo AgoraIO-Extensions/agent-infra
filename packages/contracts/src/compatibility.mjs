@@ -3078,6 +3078,26 @@ function isKeylessModelReplacementOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2612 adds the saved-Key read projection and a credential-free, version-bound
+// configuration update branch. Strip those additive branches before comparing
+// the historical V2 contract.
+function isSavedKeyCandidateOpenApiAddition(previous, current) {
+	const normalized = structuredClone(current);
+	const savedPath =
+		normalized.paths?.["/api/v2/agents/{agentId}/configuration/saved-model"];
+	if (!savedPath?.put?.requestBody?.content?.["application/json"]?.schema)
+		return false;
+	const v4 = savedPath.put.requestBody.content["application/json"].schema;
+	if (v4.properties?.expectedKeyVersion === undefined) return false;
+	delete normalized.paths["/api/v2/agents/{agentId}/configuration/saved-model"];
+	const path = "/api/v2/agents/{agentId}/default-relay-key/candidates";
+	if (normalized.paths?.[path]?.get === undefined) return false;
+	delete normalized.paths[path].get;
+	delete normalized.components.schemas.AgentConfigurationUpdateRequestV4;
+	delete normalized.components.schemas.AgentDefaultRelayKeySavedCandidatesV1;
+	return sameValue(previous, normalized);
+}
+
 // #1260 adds the same write-only key input to direct Agent creation custom requests.
 function isAgentDefaultRelayKeyInputOpenApiAddition(previous, current) {
 	const name = "AgentApiCreationRequestV1";
@@ -4534,6 +4554,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isAgentDefaultRelayKeyV2OpenApiAddition(previous, current) &&
 			!isApplicationDefaultRelayKeyV2OpenApiAddition(previous, current) &&
 			!isKeylessModelReplacementOpenApiAddition(previous, current) &&
+			!isSavedKeyCandidateOpenApiAddition(previous, current) &&
 			!isAgentDefaultRelayKeyInputOpenApiAddition(previous, current) &&
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isTaskHttpV1SseOpenApiAddition(previous, current) &&

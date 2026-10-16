@@ -82,7 +82,13 @@ export function createWorkerSavedKeyCandidatesTransportV1(options: {
 					? AbortSignal.any([signal, AbortSignal.timeout(30_000)])
 					: AbortSignal.timeout(30_000),
 			});
-			if (!response.ok || response.redirected)
+			if (
+				!response.ok ||
+				response.redirected ||
+				!/^application\/json(?:\s*;|$)/i.test(
+					response.headers.get("content-type") ?? "",
+				)
+			)
 				throw new Error("PLATFORM_WORKER_SAVED_KEY_CANDIDATES_UNAVAILABLE");
 			return RuntimeSavedKeyCandidatesResponseV1Schema.parse(
 				await boundedJson(response),

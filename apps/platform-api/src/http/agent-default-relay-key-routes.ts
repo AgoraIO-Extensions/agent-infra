@@ -1,9 +1,15 @@
 import {
 	AgentDefaultRelayKeyCandidatesV1Schema,
+	AgentDefaultRelayKeySavedCandidatesV1Schema,
 	AgentDefaultRelayKeyStateV1Schema,
 	AgentDefaultRelayKeyCandidatesRequestV1Schema as candidates,
 	AgentDefaultRelayKeyReplaceRequestV1Schema as replace,
 } from "@agent-infra/contracts/pilot";
+import {
+	type RuntimeSavedKeyCandidatesRequestV1,
+	RuntimeSavedKeyCandidatesRequestV1Schema,
+	RuntimeSavedKeyCandidatesResponseV1Schema,
+} from "@agent-infra/contracts/runtime";
 import type { createAgentDefaultRelayKeyUseCaseV1 } from "@agent-infra/platform-core";
 import { AgentDefaultRelayKeyErrorV1 } from "@agent-infra/platform-core";
 import type { Context, Hono } from "hono";
@@ -13,6 +19,12 @@ import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 export interface AgentDefaultRelayKeyRoutesDependencies {
 	readonly identity: IdentityAdapter;
 	readonly keys: ReturnType<typeof createAgentDefaultRelayKeyUseCaseV1>;
+	readonly savedCandidates?: {
+		read(
+			request: RuntimeSavedKeyCandidatesRequestV1,
+			signal: AbortSignal,
+		): Promise<unknown>;
+	};
 }
 export function registerAgentDefaultRelayKeyRoutes(
 	app: Hono,
@@ -20,7 +32,7 @@ export function registerAgentDefaultRelayKeyRoutes(
 ) {
 	async function handle(
 		context: Context,
-		operation: "read" | "replace" | "candidates",
+		operation: "read" | "replace" | "candidates" | "read-saved-candidates",
 	) {
 		const request = context.req.raw;
 		const metadata = requestMetadata(request);
@@ -52,6 +64,50 @@ export function registerAgentDefaultRelayKeyRoutes(
 						await dependencies.keys.current(trusted),
 					),
 				);
+			}
+			if (operation === "read-saved-candidates") {
+				if (request.body !== null)
+					throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+				if (!dependencies.savedCandidates)
+					throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
+				const state = AgentDefaultRelayKeyStateV1Schema.parse(
+					await dependencies.keys.current(trusted),
+				);
+				if (!state.isSet || state.keyVersion === null)
+					throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
+				const controller = new AbortController();
+				try {
+					const response = RuntimeSavedKeyCandidatesResponseV1Schema.parse(
+						await dependencies.savedCandidates.read(
+							RuntimeSavedKeyCandidatesRequestV1Schema.parse({
+								schemaVersion: 1,
+								requestId: metadata.requestId,
+								traceId: metadata.traceId,
+								actorId: identity.userId,
+								agentId: trusted.agentId,
+								configurationRevision: state.configurationRevision,
+								keyVersion: state.keyVersion,
+							}),
+							controller.signal,
+						),
+					);
+					if (
+						response.agentId !== trusted.agentId ||
+						response.configurationRevision !== state.configurationRevision ||
+						response.keyVersion !== state.keyVersion
+					)
+						throw new Error("SAVED_RELAY_KEY_BINDING_INVALID");
+					return context.json(
+						AgentDefaultRelayKeySavedCandidatesV1Schema.parse({
+							schemaVersion: response.schemaVersion,
+							configurationRevision: response.configurationRevision,
+							keyVersion: response.keyVersion,
+							candidates: response.candidates,
+						}),
+					);
+				} finally {
+					controller.abort();
+				}
 			}
 			const { value } = await parseJson(
 				request,
@@ -86,6 +142,9 @@ export function registerAgentDefaultRelayKeyRoutes(
 	}
 	app.get("/api/v2/agents/:agentId/default-relay-key", (c) =>
 		handle(c, "read"),
+	);
+	app.get("/api/v2/agents/:agentId/default-relay-key/candidates", (c) =>
+		handle(c, "read-saved-candidates"),
 	);
 	app.put("/api/v2/agents/:agentId/default-relay-key", (c) =>
 		handle(c, "replace"),

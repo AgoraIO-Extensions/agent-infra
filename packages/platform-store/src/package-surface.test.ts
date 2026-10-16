@@ -114,6 +114,7 @@ describe("platform-store package surface", () => {
 			"resolveApiAuditCredentialIdentityV1",
 			"resolvePersonalApiTaskAdmissionAuthorityV1",
 			"resolveTimedOutUnknownStopInTransactionV1",
+			"runStoreQueryOperation",
 			"storeSlowQueryThresholdMs",
 			"validateWecomSetupCredentialRecordV1",
 		]);

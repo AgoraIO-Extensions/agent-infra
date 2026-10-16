@@ -7,6 +7,7 @@ import { AgentConfigurationScreen } from "./agent-configuration-screen.js";
 import type { KeylessModelCandidate } from "./keyless-model-selection.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
 import { useAgentDefaultRelayKeyState } from "./use-agent-default-relay-key-state.js";
+import { useAgentSavedRelayKeyCandidates } from "./use-agent-saved-relay-key-candidates.js";
 
 type AgentConfigurationWorkflowProps = {
 	agent: AgentProjectionV2;
@@ -34,6 +35,13 @@ export function AgentConfigurationWorkflow({
 		agent.agentId,
 		isConfigurationOwner && agent.source.kind === "standard",
 	);
+	const defaultRelayKeyManaged = defaultRelayKey.data?.isSet === true;
+	const savedRelayKeyCandidates = useAgentSavedRelayKeyCandidates(
+		agent.agentId,
+		isConfigurationOwner &&
+			agent.source.kind === "standard" &&
+			defaultRelayKeyManaged,
+	);
 	const lifecycle = (
 		<AgentLifecycleWorkflow key={agent.agentId} agent={agent} />
 	);
@@ -54,7 +62,24 @@ export function AgentConfigurationWorkflow({
 				authorization={isConfigurationOwner ? authorization : undefined}
 				commandError={commandError}
 				commandResult={submission.data}
-				defaultRelayKeyManaged={defaultRelayKey.data?.isSet === true}
+				defaultRelayKeyManaged={defaultRelayKeyManaged}
+				savedRelayKeyCandidates={savedRelayKeyCandidates.data?.candidates}
+				savedRelayKeyConfigurationRevision={
+					savedRelayKeyCandidates.data?.configurationRevision
+				}
+				savedRelayKeyVersion={savedRelayKeyCandidates.data?.keyVersion}
+				savedRelayKeyCandidatesLoading={
+					defaultRelayKeyManaged && savedRelayKeyCandidates.isFetching
+				}
+				savedRelayKeyCandidatesError={
+					savedRelayKeyCandidates.isError &&
+					savedRelayKeyCandidates.error instanceof Error
+						? savedRelayKeyCandidates.error
+						: null
+				}
+				onRetrySavedRelayKeyCandidates={() =>
+					void savedRelayKeyCandidates.refetch()
+				}
 				key={agent.agentId}
 				onSave={submission.saveConfiguration}
 				onPreviewDefaultRelayKeyCandidates={

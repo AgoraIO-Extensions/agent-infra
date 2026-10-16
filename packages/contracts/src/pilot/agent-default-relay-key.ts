@@ -29,16 +29,23 @@ export const AgentDefaultRelayKeyReplaceRequestV1Schema =
 	AgentDefaultRelayKeyCandidatesRequestV1Schema.extend({
 		expectedVersion: version.nullable(),
 	});
+
+const candidateSchema = z.strictObject({
+	endpointId: id,
+	modelId: id,
+	reasoningLevels: z.array(id).min(1).max(32),
+});
+
 export const AgentDefaultRelayKeyCandidatesV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
 	configurationRevision: version,
-	candidates: z
-		.array(
-			z.strictObject({
-				endpointId: id,
-				modelId: id,
-				reasoningLevels: z.array(id).min(1).max(32),
-			}),
-		)
-		.max(32768),
+	candidates: z.array(candidateSchema).max(32768),
+});
+
+/** Read-only projection for an already persisted Agent default Relay Key. */
+export const AgentDefaultRelayKeySavedCandidatesV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	configurationRevision: version,
+	keyVersion: version,
+	candidates: z.array(candidateSchema).max(32768),
 });

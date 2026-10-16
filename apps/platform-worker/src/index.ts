@@ -37,6 +37,7 @@ export * from "./runtime-native-metadata-gateway.js";
 export * from "./runtime-native-metadata-proof.js";
 export * from "./runtime-native-metadata-server.js";
 export * from "./saved-key-candidates-deployment.js";
+export * from "./saved-key-candidates-production.js";
 export * from "./saved-key-candidates-service.js";
 export * from "./skill-materialization.js";
 export * from "./skill-materializer-production-assembly.js";
@@ -493,13 +494,6 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 }
 
 export {
-	type BrowserActionOperationControllerRecordV1,
-	type BrowserActionOperationControllerRequestV1,
-	type BrowserActionOperationInputV1,
-	type BrowserActionOperationResultV1,
-	createBrowserActionOperationAdapterV1,
-} from "./browser-action-operation.js";
-export {
 	type BrowserFileExecutionBindingV1,
 	type BrowserFileGrantBridgeV1,
 	createBrowserFileGrantBridgeV1,
@@ -510,16 +504,6 @@ export {
 	type BrowserHandoffRuntimeClientV1,
 	createBrowserHandoffEventAdapterV1,
 } from "./browser-handoff-events.js";
-export {
-	type BrowserRecoveryBindingV1,
-	type BrowserRecoveryResultV1,
-	type BrowserRecoveryStatusV1,
-	createBrowserRecoveryConsumerV1,
-} from "./browser-recovery-consumer.js";
-export {
-	type BrowserRecoveryEventInputV1,
-	createBrowserRecoveryEventAdapterV1,
-} from "./browser-recovery-events.js";
 export {
 	type BrowserResultFileEventBindingV1,
 	type BrowserResultFileEventInputV1,

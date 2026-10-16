@@ -18,6 +18,7 @@ import type {
 	StandardTemplateReleaseTargetV1,
 	UpdateAgentConfigurationCommandV2,
 	UpdateAgentConfigurationCommandV3,
+	UpdateAgentConfigurationCommandV4,
 	UpgradeCustomAgentImageCommandV1,
 } from "./agent-configuration-types.js";
 import {
@@ -697,6 +698,64 @@ export function parseKeylessUpdateCommand(
 			values.expectedConfigurationRevision as number,
 		expectedKeyVersion: values.expectedKeyVersion as number | null,
 		defaultRelayKey: values.defaultRelayKey,
+		changes: {
+			...common.changes,
+			modelConfiguration: parseModelConfigurationVersion(
+				modelConfiguration,
+				true,
+			) as AgentConfigurationModelInputV2,
+		},
+	};
+}
+
+export function parseSavedKeyUpdateCommand(
+	input: unknown,
+): UpdateAgentConfigurationCommandV4 {
+	const values = exactObject(input, [
+		"schemaVersion",
+		"agentId",
+		"idempotencyKey",
+		"requestId",
+		"traceId",
+		"changes",
+		"expectedConfigurationRevision",
+		"expectedKeyVersion",
+	]);
+	if (
+		values.schemaVersion !== 4 ||
+		!Number.isSafeInteger(values.expectedConfigurationRevision) ||
+		(values.expectedConfigurationRevision as number) < 1 ||
+		!Number.isSafeInteger(values.expectedKeyVersion) ||
+		(values.expectedKeyVersion as number) < 1
+	)
+		invalidCommand();
+	const changes = exactObject(
+		values.changes,
+		["modelConfiguration"],
+		[
+			"coOwnerIds",
+			"availability",
+			"source",
+			"environment",
+			"secrets",
+			"channels",
+		],
+	);
+	const { modelConfiguration, ...commonChanges } = changes;
+	const common = parseCommand({
+		schemaVersion: 2,
+		agentId: values.agentId,
+		idempotencyKey: values.idempotencyKey,
+		requestId: values.requestId,
+		traceId: values.traceId,
+		changes: commonChanges,
+	});
+	return {
+		...common,
+		schemaVersion: 4,
+		expectedConfigurationRevision:
+			values.expectedConfigurationRevision as number,
+		expectedKeyVersion: values.expectedKeyVersion as number,
 		changes: {
 			...common.changes,
 			modelConfiguration: parseModelConfigurationVersion(

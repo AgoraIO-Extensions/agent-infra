@@ -93,6 +93,7 @@ import {
 import { createRuntimeNativeMetadataWorkerReaderV1 } from "./runtime-native-metadata-reader.js";
 import { createRuntimeNativeMetadataScopeResolverV1 } from "./runtime-native-metadata-scope-resolver.js";
 import { createPlatformWorkerNativeMetadataGatewayClientV1 } from "./runtime-native-metadata-worker-client.js";
+import { createWorkerSavedKeyCandidatesTransportV1 } from "./saved-key-candidates-transport.js";
 import {
 	assembleSkillHubReadApiV1,
 	type SkillHubProviderImportDeploymentV1,
@@ -183,6 +184,12 @@ export interface PlatformApiAssemblyInput {
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	/** Deployment-owned API → Worker model-directory service boundary. */
 	readonly modelDirectory?: {
+		readonly baseUrl: string;
+		readonly serviceToken: string;
+		readonly fetch?: typeof fetch;
+	};
+	/** Deployment-owned API → Worker saved-Key candidate read boundary. */
+	readonly savedKeyCandidates?: {
 		readonly baseUrl: string;
 		readonly serviceToken: string;
 		readonly fetch?: typeof fetch;
@@ -412,6 +419,17 @@ export function assemblePlatformApi(
 					transaction: agentDefaultRelayKeyStore,
 				})
 			: undefined;
+	const agentDefaultRelayKeyPorts = input.agentDefaultRelayKeys
+		? {
+				...input.agentDefaultRelayKeys,
+				current: (agentId: string) =>
+					agentDefaultRelayKeyStore
+						? agentDefaultRelayKeyStore.execute((transaction) =>
+								transaction.current(agentId),
+							)
+						: Promise.resolve(null),
+			}
+		: undefined;
 	const personalApiCredentials = createPersonalApiCredentialUseCaseV1({
 		transaction: personalApiCredentialStore,
 		userDirectory,
@@ -479,6 +497,9 @@ export function assemblePlatformApi(
 					),
 				})
 			: undefined);
+	const savedKeyCandidatesTransport = input.savedKeyCandidates
+		? createWorkerSavedKeyCandidatesTransportV1(input.savedKeyCandidates)
+		: undefined;
 	// Commit wakeups shorten SSE waits; streams keep polling without them (#1561).
 	const conversationEventWake = new ConversationEventWakeHubV1();
 	const conversationWakeups = new PostgresCommitWakeupListenerV1({
@@ -526,8 +547,8 @@ export function assemblePlatformApi(
 		transaction: foundationTransaction,
 		...admissions,
 		...channelAdmission,
-		...(input.agentDefaultRelayKeys
-			? { defaultRelayKey: input.agentDefaultRelayKeys }
+		...(agentDefaultRelayKeyPorts
+			? { defaultRelayKey: agentDefaultRelayKeyPorts }
 			: {}),
 	});
 	const agentApiCreation = input.agentApiCreation
@@ -543,8 +564,8 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	// 重新提交 Key 并更换模型集合（V3）与创建共用同一组 Key 端口（#2421）。
-	const defaultRelayKeyPorts = input.agentDefaultRelayKeys
-		? { defaultRelayKey: input.agentDefaultRelayKeys }
+	const defaultRelayKeyPorts = agentDefaultRelayKeyPorts
+		? { defaultRelayKey: agentDefaultRelayKeyPorts }
 		: {};
 	const revision = createApplicationRevisionUseCaseV1({
 		transaction: revisionTransaction,
@@ -854,6 +875,9 @@ export function assemblePlatformApi(
 					agentDefaultRelayKeys: {
 						identity: input.identity,
 						keys: agentDefaultRelayKeys,
+						...(savedKeyCandidatesTransport
+							? { savedCandidates: savedKeyCandidatesTransport }
+							: {}),
 					},
 				}
 			: {}),
@@ -933,6 +957,9 @@ export function assemblePlatformApi(
 			configurationQuery,
 			prepareSecretReplacements: input.prepareConfigurationSecrets,
 			readAgentProjection: projections.readConfigurationAgentProjection,
+			...(savedKeyCandidatesTransport
+				? { savedKeyCandidates: savedKeyCandidatesTransport }
+				: {}),
 		},
 		applications: { identity: input.identity, applications },
 		applicationApiCredentials: {
