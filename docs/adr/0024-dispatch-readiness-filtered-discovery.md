@@ -17,16 +17,35 @@ Platform Worker 通过固定轮询发现到期的 Conversation outbox，再在�
    - `conversation.turn.submit.v1`、`conversation.turn.regenerate.v1`、`conversation.turn.supplement.v1`、`conversation.native-capability.invoke.v1` 和 `conversation.browser.handoff.v1` 只有在同一 Conversation 的 Session Sandbox 具有可查询的就绪事实时才进入普通发现结果。就绪事实沿 `readSessionSandboxReadiness` 的四个持久字段定义：allocation `status = ready`、`desired_state = running`、`resource_fence > 0`，以及 `resource_observation.status = ready`。
    - `conversation.turn.stop.v1` 始终保留在发现结果中。停止确认、已提交控制操作和恢复核实不能被业务就绪过滤饿死。
    - 带 `metadataRecovery` 的任务、generation tombstone 重试和已有停止确认期限的条目走现有例外分支，继续发现；它们的 claim 事务仍按原执行和代次核实。
-   - `conversation.sandbox.reconcile.v1` 在没有 lifecycle drain/preparation 描述且 Agent 管理状态不是 `available/running` 时过滤。带有合法 lifecycle 的 drain 或 preparation 条目始终保留，因为停止期间的排空和恢复本身就是它的进展条件。
+   - `conversation.sandbox.reconcile.v1` 只有在 Agent 管理记录明确为 `stopped/disabled`、`desired_state = stopped`、`service_availability is null`，且 payload 明确没有 lifecycle 时过滤。任何 lifecycle 字段（包括未知或格式非法的值）都保留给 claim 做完整校验；缺失或未知的 Agent 管理记录也保留。带有合法且与当前 Agent、Conversation、generation 匹配的 schema 1 lifecycle 的 drain 或 preparation 条目始终保留，因为停止期间的排空和恢复本身就是它的进展条件。
 
 2. **发现过滤使用持久、可查询的条件。**
 
-   Store 在 `findDispatchable` 内以窄 SQL JOIN/EXISTS 读取上述 allocation 和 management 字段；不复制完整的 TypeScript 状态机，也不把内存中的 Worker 观测当作权威。普通业务分支的核心谓词固定为：
+   Store 在 `findDispatchable` 内以窄 SQL `EXISTS` 子查询读取上述 allocation 和 management 字段；不复制完整的 TypeScript 状态机，也不把内存中的 Worker 观测当作权威。普通业务分支的核心谓词固定为：
 
    ```sql
    and (
      o.operation = 'conversation.turn.stop.v1'
-     or o.operation = 'conversation.sandbox.reconcile.v1'
+     or (
+       o.operation = 'conversation.sandbox.reconcile.v1'
+       and (
+         o.payload ? 'lifecycle'
+         or not exists (
+           select 1 from platform.agent_applications a
+           join platform.conversations c2 on c2.agent_id = a.agent_id
+           where c2.id = c.id
+         )
+         or exists (
+           select 1 from platform.agent_applications a
+           where a.agent_id = c.agent_id
+             and not (
+               a.status in ('stopped', 'disabled')
+               and a.desired_state = 'stopped'
+               and a.service_availability is null
+             )
+         )
+       )
+     )
      or o.payload ? 'metadataRecovery'
      or exists (
        select 1
@@ -40,7 +59,7 @@ Platform Worker 通过固定轮询发现到期的 Conversation outbox，再在�
    )
    ```
 
-   Generation tombstones and stop confirmation deadlines remain separate top-level discovery branches, so they bypass this predicate. The first implementation uses the existing indexes: `outbox_eligibility_idx(status, available_at)` or the ordered `outbox_items` primary key for the paged `id` scan, `conversations` primary key, `session_sandbox_conversation_unique(conversation_id)`, and `agent_application_agent_unique(agent_id)`. No JSON expression index is proposed because `resource_observation` is read only after the unique conversation lookup; a migration is required only if the implementation's real `EXPLAIN (ANALYZE, BUFFERS)` shows a broader scan.
+   Generation tombstones and stop confirmation deadlines remain separate top-level discovery branches, so they bypass this predicate. A readiness subquery that returns no row, NULL, or missing JSON status is false and therefore filters the ordinary business item. If the discovery SQL itself errors, `findDispatchable` propagates the error and the Worker returns no candidates for that pass; it never treats the error as ready. The first implementation uses the existing indexes: `outbox_eligibility_idx(status, available_at)` or the ordered `outbox_items` primary key for the paged `id` scan, `conversations` primary key, `session_sandbox_conversation_unique(conversation_id)`, and `agent_application_agent_unique(agent_id)`. The `EXISTS` shape guarantees at most one result row per outbox item even if future tables gain history rows. No JSON expression index is proposed because `resource_observation` is read only after the unique conversation lookup; a migration is required only if the implementation's real `EXPLAIN (ANALYZE, BUFFERS)` shows a broader scan.
 
    A representative `EXPLAIN (COSTS OFF, SUMMARY OFF)` against a controlled PostgreSQL schema with those indexes produced the expected bounded shape:
 
@@ -58,6 +77,8 @@ Platform Worker 通过固定轮询发现到期的 Conversation outbox，再在�
                       Index Cond: (conversation_id = c.id)
                       Filter: (resource_fence/status/desired_state/observation)
    ```
+
+   The reconcile branch uses the same one-row `agent_application_agent_unique` lookup and treats missing/unknown management or lifecycle values as candidates for claim validation, so the discovery optimization can produce false positives but never filters a control/recovery item on an untrusted interpretation.
 
    The implementation PR must repeat this check on the migrated repository schema with `EXPLAIN (ANALYZE, BUFFERS)` and record the plan plus row counts; the controlled plan is design evidence, not production acceptance.
 
