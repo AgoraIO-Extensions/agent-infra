@@ -21,8 +21,13 @@ Helm 的 `platformWorker.wecomEnabled=true` 还会在同一进程启动 WeCom �
 Native metadata 的正式 `configuration.mjs` 可导出 `nativeMetadataGateway`。默认会使用
 `PLATFORM_DATABASE_URL` 通过 Platform Store 查询原 Execution scope 并装配
 `binding.resolve({ request, signal })`；只有需要替换 Store 读取时才显式提供该 binding。
-`transport.resolve({ binding, signal })` 仍必须由部署提供（只返回由部署固定 origin、token、
-Worker ID 组成的 `createWorkerRuntimeNativeMetadataClientV1`），因为 Runtime 实例映射属于部署输入。
+当没有显式 `transport` 或 `runtimeTarget` 且存在 `PLATFORM_DATABASE_URL` 时，Worker 会读取
+当前 Conversation/Execution、Workload 与 Session Sandbox receipt，并复用生产
+Conversation resolver：Agent-level 走 verified control Service，Session Sandbox 只使用当前
+allocation 的已验证 Service、namespace、generation、resource fence 和 Sandbox token。缺少
+数据库、Store scope、就绪 receipt、Service/Pod/readiness 或任一 binding/auth revision 漂移时
+保持 unavailable。部署仍可通过显式 `transport` 或 `runtimeTarget` 覆盖该默认目标；显式 override
+优先且不会重复装配默认 query。
 `proofIssuer` 可以省略：deployment entry 会用同一份 `signing.privateKey`、`issuer`、
 `workerId` 和 `keyId` 创建 Worker-only proof issuer；也可以在密钥轮换期间显式提供已
 验证的 issuer/key 组合。`platformApiCurrent` 可提供固定 `{ baseUrl, serviceToken }`，由

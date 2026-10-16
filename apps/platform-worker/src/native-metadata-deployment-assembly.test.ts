@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	createPlatformNativeMetadataBindingResolverV1,
 	createPlatformNativeMetadataGatewayAssemblyV1,
+	createPlatformNativeMetadataRuntimeTargetResolverV1,
 	createPlatformNativeMetadataSandboxCredentialResolverV1,
 	createPlatformNativeMetadataTransportResolverV1,
 } from "./native-metadata-deployment-assembly.js";
@@ -48,6 +49,153 @@ const bindingRequest = {
 };
 
 describe("native metadata deployment assembly", () => {
+	it.each([
+		["Agent", null, false],
+		[
+			"Session Sandbox",
+			{
+				status: "ready",
+				desiredState: "running",
+				sandbox: {
+					sessionId: bindingRequest.scope.conversationId,
+					agentId: bindingRequest.scope.agentId,
+					generation: bindingRequest.scope.sessionGeneration,
+				},
+			},
+			true,
+		],
+	] as const)(
+		"resolves the current %s route through Conversation",
+		async (_label, sandboxResource, sessionRoute) => {
+			const resolveConversationRuntimeHost = vi.fn(async () => ({
+				baseUrl: sessionRoute
+					? "http://sandbox-runtime"
+					: "http://agent-runtime-probe",
+				serviceToken: sessionRoute ? "sandbox-token" : "worker-token",
+				workerId: "worker",
+			}));
+			const query = {
+				readNativeMetadataRuntimeTargetScopeV1: vi.fn(async () => ({
+					agentId: bindingRequest.scope.agentId,
+					actorId: bindingRequest.scope.principal.id,
+					channelId: bindingRequest.scope.channelId,
+					principal: bindingRequest.scope.principal,
+					conversationId: bindingRequest.scope.conversationId,
+					executionId: bindingRequest.scope.executionId,
+					sessionGeneration: bindingRequest.scope.sessionGeneration,
+					authorizationRevision: bindingRequest.scope.authorizationRevision,
+					originalHostScopeRef: "host-runtime-target",
+					workloadState: { verified: {} } as never,
+					sandboxResource: sandboxResource as never,
+				})),
+			};
+			const resolver = createPlatformNativeMetadataRuntimeTargetResolverV1({
+				query,
+				workload: {
+					policy: {
+						namespace: "fixture",
+						resourceProfileRef: "profile",
+						resources: {
+							requests: { cpu: "1", memory: "1Gi" },
+							limits: { cpu: "1", memory: "1Gi" },
+						},
+					},
+				} as never,
+				resolveConversationRuntimeHost,
+			});
+			await expect(
+				resolver.resolve({
+					binding: {
+						schemaVersion: 1 as const,
+						readId: bindingRequest.readId,
+						selector: bindingRequest.selector,
+						scope: bindingRequest.scope,
+						readStartedAt: bindingRequest.readStartedAt,
+						expiresAt: bindingRequest.expiresAt,
+						requestId: bindingRequest.requestId,
+						traceId: bindingRequest.traceId,
+						originalHostScopeRef: "host-runtime-target",
+					},
+					signal: new AbortController().signal,
+				}),
+			).resolves.toMatchObject({
+				baseUrl: sessionRoute
+					? "http://sandbox-runtime"
+					: "http://agent-runtime-probe",
+			});
+			expect(resolveConversationRuntimeHost).toHaveBeenCalledWith(
+				expect.objectContaining({
+					purpose: "control",
+					command: "session.status",
+					...(sessionRoute
+						? {
+								conversationId: bindingRequest.scope.conversationId,
+								sandboxResource,
+								requireSandboxObservation: true,
+							}
+						: {}),
+				}),
+			);
+		},
+	);
+
+	it("fails closed for missing current scope, Host drift, and transport abort", async () => {
+		const resolveConversationRuntimeHost = vi.fn();
+		const resolver = createPlatformNativeMetadataRuntimeTargetResolverV1({
+			query: {
+				readNativeMetadataRuntimeTargetScopeV1: vi
+					.fn()
+					.mockResolvedValueOnce(null)
+					.mockResolvedValueOnce({
+						agentId: bindingRequest.scope.agentId,
+						actorId: bindingRequest.scope.principal.id,
+						channelId: bindingRequest.scope.channelId,
+						principal: bindingRequest.scope.principal,
+						conversationId: bindingRequest.scope.conversationId,
+						executionId: bindingRequest.scope.executionId,
+						sessionGeneration: bindingRequest.scope.sessionGeneration,
+						authorizationRevision: bindingRequest.scope.authorizationRevision,
+						originalHostScopeRef: "new-host",
+						workloadState: { verified: {} } as never,
+						sandboxResource: null,
+					}),
+			},
+			workload: {
+				policy: {
+					namespace: "fixture",
+					resourceProfileRef: "profile",
+					resources: {
+						requests: { cpu: "1", memory: "1Gi" },
+						limits: { cpu: "1", memory: "1Gi" },
+					},
+				},
+			} as never,
+			resolveConversationRuntimeHost,
+		});
+		const input = {
+			binding: {
+				schemaVersion: 1 as const,
+				readId: bindingRequest.readId,
+				selector: bindingRequest.selector,
+				scope: bindingRequest.scope,
+				readStartedAt: bindingRequest.readStartedAt,
+				expiresAt: bindingRequest.expiresAt,
+				requestId: bindingRequest.requestId,
+				traceId: bindingRequest.traceId,
+				originalHostScopeRef: "old-host",
+			},
+			signal: new AbortController().signal,
+		};
+		await expect(resolver.resolve(input)).resolves.toBeNull();
+		await expect(resolver.resolve(input)).resolves.toBeNull();
+		expect(resolveConversationRuntimeHost).not.toHaveBeenCalled();
+		const controller = new AbortController();
+		controller.abort();
+		await expect(
+			resolver.resolve({ ...input, signal: controller.signal }),
+		).resolves.toBeNull();
+	});
+
 	it("resolves the original Host scope from the persisted Execution", async () => {
 		const read = vi.fn(async () => ({
 			...bindingRequest.scope,

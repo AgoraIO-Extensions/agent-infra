@@ -9,7 +9,12 @@ import {
 	expect,
 	it,
 } from "vitest";
-
+import {
+	workloadDesiredFixture,
+	workloadTestPolicy,
+} from "../../../apps/platform-worker/src/kubernetes.fixture.ts";
+import { workloadResourceConfigurationHashV1 } from "../../../apps/platform-worker/src/workload-runtime.ts";
+import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import {
 	ConversationQueryError,
 	type ConversationQueryScopeV1,
@@ -191,6 +196,103 @@ afterAll(async () => {
 });
 
 const actorOne = { actorId: "actor-1", channelId: "web" };
+
+async function seedCurrentRuntimeTargetFixture() {
+	const agentId = "agent-1";
+	const deployment = workloadDesiredFixture(1, agentId, "internal-only");
+	const configuration = {
+		...structuredClone(agentConfigurationConformanceRecordV1),
+		agentId,
+		revision: 1,
+	};
+	const executionCapacity = {
+		schemaVersion: 1,
+		imageDigest: deployment.imageDigest,
+		resourceProfileRef: deployment.resourceProfileRef,
+		resourceConfigurationHash:
+			workloadResourceConfigurationHashV1(workloadTestPolicy),
+		maximumConcurrentExecutions: 8,
+		conformanceEvidenceHash: "c".repeat(64),
+	};
+	const version = { configuration, deployment, executionCapacity };
+	const state = {
+		schemaVersion: 1,
+		agentId,
+		sourceConfigurationRevision: 1,
+		sourceLifecycleRevision: 1,
+		revision: 1,
+		fence: 1,
+		phase: "ready",
+		candidate: version,
+		verified: version,
+		verifiedRevision: 1,
+		identity: { uid: `workload-${agentId}`, generation: 1 },
+		rollback: false,
+		failureCode: null,
+		attempts: 0,
+	};
+	const relayKeyId = "native-runtime-target-key";
+	await client`insert into platform.relay_key_subjects
+		(purpose, subject_id, last_version, current_version)
+		values ('personal', 'actor-1', 1, 1)
+		on conflict (purpose, subject_id) do update set last_version=1, current_version=1`;
+	await client`insert into platform.relay_key_versions
+		(purpose, subject_id, key_version, key_id, ciphertext)
+		values ('personal', 'actor-1', 1, ${relayKeyId}, ${client.json({
+			purpose: "personal",
+			subjectId: "actor-1",
+			keyId: relayKeyId,
+			keyVersion: 1,
+		})})
+		on conflict (purpose, subject_id, key_version) do nothing`;
+	await client`insert into platform.agents (id, current_configuration_revision, authorization_revision)
+		values (${agentId}, 1, 'authorization-1')
+		on conflict (id) do update set current_configuration_revision=excluded.current_configuration_revision,
+			authorization_revision=excluded.authorization_revision`;
+	await client`insert into platform.agent_applications
+		(id, agent_id, applicant_id, name, description, status, trace_id, request_id,
+		 submitted_at, management_revision, approval_revision, desired_state,
+		 service_availability, workload_revision, fence)
+		values ('application-native-target', ${agentId}, 'actor-1', 'Agent', 'Fixture',
+			'available', 'trace-native-target', 'request-native-target', now(), 1, 1,
+			'running', 'ready', 1, 1)
+		on conflict (id) do update set desired_state='running', workload_revision=1, fence=1`;
+	await client`insert into platform.workload_reconciliations
+		(agent_id, revision, state, next_attempt_at)
+		values (${agentId}, 1, ${client.json(state as unknown as postgres.JSONValue)}, now())
+		on conflict (agent_id) do update set revision=excluded.revision, state=excluded.state`;
+	const [allocation] = await client<{ sandbox_id: string }[]>`
+		select sandbox_id from platform.session_sandbox_allocations
+		where conversation_id='conversation-1'`;
+	if (!allocation?.sandbox_id) throw new Error("Missing Sandbox fixture");
+	const policy = {
+		namespace: "fixture-sandboxes",
+		resourceConfigurationHash:
+			workloadResourceConfigurationHashV1(workloadTestPolicy),
+		configurationRevision: 1,
+		workloadRevision: 1,
+		managementFence: 1,
+		imageDigest: deployment.imageDigest,
+	};
+	await client`update platform.session_sandbox_allocations
+		set status='ready', desired_state='running', resource_fence=1,
+		resource_policy=${client.json(policy)},
+		resource_observation=jsonb_build_object('status','ready','resources',
+			(select jsonb_agg(jsonb_build_object('kind', kind, 'namespace', 'fixture-sandboxes',
+				'name', 'sandbox-' || ${allocation.sandbox_id}, 'uid', ${allocation.sandbox_id} || '-' || kind,
+				'resourceVersion', '1'))
+			 from unnest(array['Pod','Service','ServiceAccount','PersistentVolumeClaim','NetworkPolicy','Secret']) as kind))
+		where conversation_id='conversation-1'`;
+	await client`update platform.conversations set host_session_ref='native-runtime-target-host'
+		where id='conversation-1'`;
+	await client`update platform.conversation_executions
+		set runtime_submit_protocol='v4', original_operation_digest=${"a".repeat(43)},
+			execution_source='web', relay_key_purpose='personal', relay_key_subject_id='actor-1',
+			relay_key_id=${relayKeyId}, relay_key_version=1,
+			original_submit_host_session_ref='native-runtime-target-host'
+		where execution_id='execution-conversation-1'`;
+	return { allocation, policy, deployment };
+}
 
 describe("API Conversation principal binding", () => {
 	const apiScope = (kind: "user" | "application", channelId = "api") => ({
@@ -1344,6 +1446,137 @@ describe("PostgreSQL native metadata callback credential scope", () => {
 			await client`
 				update platform.session_sandbox_allocations set status='ready'
 				where conversation_id='conversation-1'`;
+		}
+	});
+});
+
+describe("PostgreSQL native metadata current Runtime target scope", () => {
+	const request = {
+		scope: actorOne,
+		agentId: "agent-1",
+		conversationId: "conversation-1",
+		executionId: "execution-conversation-1",
+		sandboxPolicy: {
+			namespace: "fixture-sandboxes",
+			resourceConfigurationHash:
+				workloadResourceConfigurationHashV1(workloadTestPolicy),
+		},
+		signal: new AbortController().signal,
+	};
+
+	it("returns the verified Agent-level current route", async () => {
+		const [sandbox] = await client<{ sandbox_id: string | null }[]>`
+			select sandbox_id from platform.conversation_executions
+			where execution_id='execution-conversation-1'`;
+		if (!sandbox?.sandbox_id) throw new Error("Missing execution Sandbox");
+		await seedCurrentRuntimeTargetFixture();
+		await client`update platform.conversation_executions set sandbox_id=null
+			where execution_id='execution-conversation-1'`;
+		try {
+			await expect(
+				query.readNativeMetadataRuntimeTargetScopeV1(request),
+			).resolves.toMatchObject({
+				agentId: "agent-1",
+				conversationId: "conversation-1",
+				executionId: "execution-conversation-1",
+				originalHostScopeRef: "native-runtime-target-host",
+				sandboxResource: null,
+				workloadState: { phase: "ready", agentId: "agent-1" },
+			});
+		} finally {
+			await client`update platform.conversation_executions set sandbox_id=${sandbox.sandbox_id}
+				where execution_id='execution-conversation-1'`;
+			await client`update platform.session_sandbox_allocations
+				set resource_policy=null, resource_observation=null, status='allocated',
+					desired_state='running', resource_fence=0 where conversation_id='conversation-1'`;
+			await client`update platform.conversations set host_session_ref=null
+				where id='conversation-1'`;
+			await client`update platform.conversation_executions
+				set runtime_submit_protocol=null, original_operation_digest=null,
+					execution_source=null, relay_key_purpose=null, relay_key_subject_id=null,
+					relay_key_id=null, relay_key_version=null, original_submit_host_session_ref=null
+				where execution_id='execution-conversation-1'`;
+		}
+	});
+
+	it("returns the complete ready Session Sandbox receipt", async () => {
+		await seedCurrentRuntimeTargetFixture();
+		try {
+			const result =
+				await query.readNativeMetadataRuntimeTargetScopeV1(request);
+			expect(result).toMatchObject({
+				originalHostScopeRef: "native-runtime-target-host",
+				workloadState: { phase: "ready", agentId: "agent-1" },
+				sandboxResource: {
+					status: "ready",
+					desiredState: "running",
+					policy: { namespace: "fixture-sandboxes" },
+					observation: { status: "ready" },
+				},
+			});
+			const service = result?.sandboxResource?.observation?.resources.find(
+				(resource) => resource.kind === "Service",
+			);
+			expect(service?.name).toBe(result?.sandboxResource?.sandbox.resourceName);
+		} finally {
+			await client`update platform.session_sandbox_allocations
+				set resource_policy=null, resource_observation=null, status='allocated',
+					desired_state='running', resource_fence=0 where conversation_id='conversation-1'`;
+			await client`update platform.conversations set host_session_ref=null
+				where id='conversation-1'`;
+			await client`update platform.conversation_executions
+				set runtime_submit_protocol=null, original_operation_digest=null,
+					execution_source=null, relay_key_purpose=null, relay_key_subject_id=null,
+					relay_key_id=null, relay_key_version=null, original_submit_host_session_ref=null
+				where execution_id='execution-conversation-1'`;
+		}
+	});
+
+	it.each([
+		["cross actor", { scope: { actorId: "actor-2", channelId: "web" } }],
+		["cross conversation", { conversationId: "conversation-2" }],
+	] as const)("fails closed for %s", async (_label, change) => {
+		await seedCurrentRuntimeTargetFixture();
+		try {
+			await expect(
+				query.readNativeMetadataRuntimeTargetScopeV1({
+					...request,
+					...change,
+				}),
+			).resolves.toBeUndefined();
+		} finally {
+			await client`update platform.session_sandbox_allocations
+				set resource_policy=null, resource_observation=null, status='allocated',
+					desired_state='running', resource_fence=0 where conversation_id='conversation-1'`;
+			await client`update platform.conversations set host_session_ref=null
+				where id='conversation-1'`;
+			await client`update platform.conversation_executions
+				set runtime_submit_protocol=null, original_operation_digest=null,
+					execution_source=null, relay_key_purpose=null, relay_key_subject_id=null,
+					relay_key_id=null, relay_key_version=null, original_submit_host_session_ref=null
+				where execution_id='execution-conversation-1'`;
+		}
+	});
+
+	it("fails closed when the persisted Sandbox is stopped or not ready", async () => {
+		await seedCurrentRuntimeTargetFixture();
+		try {
+			await client`update platform.session_sandbox_allocations
+				set status='stopped' where conversation_id='conversation-1'`;
+			await expect(
+				query.readNativeMetadataRuntimeTargetScopeV1(request),
+			).resolves.toBeUndefined();
+		} finally {
+			await client`update platform.session_sandbox_allocations
+				set resource_policy=null, resource_observation=null, status='allocated',
+					desired_state='running', resource_fence=0 where conversation_id='conversation-1'`;
+			await client`update platform.conversations set host_session_ref=null
+				where id='conversation-1'`;
+			await client`update platform.conversation_executions
+				set runtime_submit_protocol=null, original_operation_digest=null,
+					execution_source=null, relay_key_purpose=null, relay_key_subject_id=null,
+					relay_key_id=null, relay_key_version=null, original_submit_host_session_ref=null
+				where execution_id='execution-conversation-1'`;
 		}
 	});
 });

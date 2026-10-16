@@ -352,7 +352,13 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					liveService.spec.externalName
 				)
 					throw new Error();
-				if (input.purpose === "business" && connectionDeliveryConfigured) {
+				const requireSandboxObservation =
+					input.purpose === "control" &&
+					input.requireSandboxObservation === true;
+				if (
+					(input.purpose === "business" && connectionDeliveryConfigured) ||
+					requireSandboxObservation
+				) {
 					// Both principal facts come from the server's original execution/Store.
 					if (
 						!input.principal ||
@@ -377,7 +383,9 @@ export function createProductionConversationRuntimeResolverV2(options: {
 							sandboxResource.policy,
 							deployment,
 							// The verified projection the Sandbox was prepared from (#1466).
-							state.candidate.modelProjection,
+							requireSandboxObservation
+								? state.verified?.modelProjection
+								: state.candidate.modelProjection,
 							"running",
 							sandboxResource.sandbox.generation,
 							sandboxResource.resourceFence,

@@ -103,6 +103,8 @@ export {
 	type NativeMetadataCallbackCredentialScopeResponseV1,
 	type NativeMetadataObjectScopeRequestV1,
 	type NativeMetadataObjectScopeResponseV1,
+	type NativeMetadataRuntimeTargetScopeRequestV1,
+	type NativeMetadataRuntimeTargetScopeResponseV1,
 	type PlatformQueueResourceSnapshot,
 	type PostgresConversationQueryOptionsV1,
 	PostgresConversationQueryV1,
