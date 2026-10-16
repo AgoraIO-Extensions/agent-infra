@@ -349,7 +349,7 @@ function validateNativeMetadataWorkerEgressV1(
 					? destination.podLabels
 					: undefined;
 			return (
-				entry.port === 3004 &&
+				entry?.port === 3004 &&
 				destination !== null &&
 				typeof destination === "object" &&
 				!Array.isArray(destination) &&
