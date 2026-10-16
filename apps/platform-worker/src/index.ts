@@ -37,6 +37,7 @@ export * from "./runtime-native-metadata-gateway.js";
 export * from "./runtime-native-metadata-proof.js";
 export * from "./runtime-native-metadata-server.js";
 export * from "./saved-key-candidates-deployment.js";
+export * from "./saved-key-candidates-production.js";
 export * from "./saved-key-candidates-service.js";
 export * from "./skill-materialization.js";
 export * from "./skill-materializer-production-assembly.js";

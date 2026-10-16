@@ -46,6 +46,7 @@ export type {
 	StandardTemplateReleaseTargetV1,
 	UpdateAgentConfigurationCommandV2,
 	UpdateAgentConfigurationCommandV3,
+	UpdateAgentConfigurationCommandV4,
 	UpgradeCustomAgentImageCommandV1,
 } from "./agent-configuration.js";
 export {

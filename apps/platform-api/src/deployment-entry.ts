@@ -36,6 +36,7 @@ const {
 	customAgentGateway,
 	modelSelection,
 	modelDirectory,
+	savedKeyCandidates,
 	nativeMetadata,
 	nativeMetadataWorker,
 	nativeMetadataResolveRequest,
@@ -145,6 +146,7 @@ export function createPlatformApiAssemblyInput() {
 		...(customAgentGateway !== undefined ? { customAgentGateway } : {}),
 		...(modelSelection !== undefined ? { modelSelection } : {}),
 		...(modelDirectory !== undefined ? { modelDirectory } : {}),
+		...(savedKeyCandidates !== undefined ? { savedKeyCandidates } : {}),
 		...(assembledNativeMetadata !== undefined
 			? { nativeMetadata: assembledNativeMetadata }
 			: {}),

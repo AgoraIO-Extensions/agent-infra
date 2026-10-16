@@ -700,6 +700,8 @@ export function registerV2ManagementRoutes(
 				body,
 				metadata.traceId,
 			);
+			if (keyReplacement?.kind === "saved")
+				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
 			if (keyReplacement && body.source.kind !== "standard")
 				fail("INVALID_REQUEST", metadata.traceId);
 			const current = await applicationOrUnavailable(
