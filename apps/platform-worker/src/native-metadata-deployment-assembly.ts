@@ -141,6 +141,7 @@ export function createPlatformNativeMetadataSandboxCredentialResolverV1(options:
 							channelId: input.binding.scope.channelId,
 							principal: input.binding.scope.principal,
 						},
+						agentId: input.binding.scope.agentId,
 						conversationId: input.binding.scope.conversationId,
 						executionId: input.binding.scope.executionId,
 						signal: input.signal,

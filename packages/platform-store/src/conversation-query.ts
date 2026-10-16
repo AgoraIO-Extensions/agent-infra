@@ -135,6 +135,7 @@ export type NativeMetadataObjectScopeResponseV1 =
  */
 export interface NativeMetadataCallbackCredentialScopeRequestV1 {
 	readonly scope: ConversationQueryScopeV1;
+	readonly agentId: string;
 	readonly conversationId: string;
 	readonly executionId: string;
 	readonly signal?: AbortSignal;
@@ -1262,6 +1263,7 @@ export class PostgresConversationQueryV1 {
 		request: NativeMetadataCallbackCredentialScopeRequestV1,
 	): Promise<NativeMetadataCallbackCredentialScopeResponseV1 | undefined> {
 		const readScope = scope(request.scope);
+		const agentId = requestText(request.agentId);
 		const conversationId = requestText(request.conversationId);
 		const executionId = requestText(request.executionId);
 		if (readScope.channelId !== "web") return undefined;
@@ -1308,6 +1310,7 @@ export class PostgresConversationQueryV1 {
 								and s.principal_type = c.principal_type
 								and s.session_generation = e.session_generation
 							where c.id = ${conversationId}
+								and c.agent_id = ${agentId}
 								and c.actor_id = ${readScope.actorId}
 								and c.channel_id = ${readScope.channelId}
 								and c.principal_type = ${readScope.principal?.kind ?? "user"}
@@ -1320,6 +1323,8 @@ export class PostgresConversationQueryV1 {
 						!row ||
 						row.conversation_id !== conversationId ||
 						row.execution_id !== executionId ||
+						row.conversation_agent !== agentId ||
+						row.execution_agent !== agentId ||
 						row.execution_conversation !== row.conversation_id ||
 						row.conversation_agent !== row.execution_agent ||
 						row.conversation_actor !== row.execution_actor ||

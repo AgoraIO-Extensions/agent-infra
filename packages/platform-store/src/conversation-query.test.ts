@@ -1067,6 +1067,7 @@ describe("PostgreSQL native metadata callback credential scope", () => {
 	const read = () =>
 		query.readNativeMetadataCallbackCredentialScopeV1({
 			scope: actorOne,
+			agentId: "agent-1",
 			conversationId: "conversation-1",
 			executionId: "execution-conversation-1",
 			signal: new AbortController().signal,
@@ -1104,6 +1105,18 @@ describe("PostgreSQL native metadata callback credential scope", () => {
 				}
 				where conversation_id='conversation-1'`;
 		}
+	});
+
+	it("rejects a callback request for a foreign Agent", async () => {
+		await expect(
+			query.readNativeMetadataCallbackCredentialScopeV1({
+				scope: actorOne,
+				agentId: "agent-foreign",
+				conversationId: "conversation-1",
+				executionId: "execution-conversation-1",
+				signal: new AbortController().signal,
+			}),
+		).resolves.toBeUndefined();
 	});
 
 	it("returns an explicit deployment scope for an unbound Agent execution", async () => {
