@@ -341,11 +341,26 @@ function validateNativeMetadataWorkerEgressV1(
 		egress.length !== 1 ||
 		!egress.every((entry) => {
 			const destination = entry?.destination;
+			const labels =
+				destination &&
+				typeof destination === "object" &&
+				!Array.isArray(destination) &&
+				"podLabels" in destination
+					? destination.podLabels
+					: undefined;
 			return (
+				entry.port === 3004 &&
 				destination !== null &&
 				typeof destination === "object" &&
 				!Array.isArray(destination) &&
-				Object.keys(destination).sort().join(",") === "namespace,podLabels"
+				Object.keys(destination).sort().join(",") === "namespace,podLabels" &&
+				"namespace" in destination &&
+				destination.namespace === "platform" &&
+				labels !== null &&
+				typeof labels === "object" &&
+				!Array.isArray(labels) &&
+				Object.keys(labels).length === 1 &&
+				labels["app.kubernetes.io/component"] === "platform-worker"
 			);
 		})
 	)

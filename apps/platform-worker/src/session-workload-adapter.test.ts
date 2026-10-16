@@ -1548,6 +1548,27 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			destination: { cidr: "8.8.8.0/24" },
 			port: 3004,
 		},
+		{
+			destination: {
+				namespace: "other",
+				podLabels: { "app.kubernetes.io/component": "platform-worker" },
+			},
+			port: 3004,
+		},
+		{
+			destination: {
+				namespace: "platform",
+				podLabels: { "app.kubernetes.io/component": "other" },
+			},
+			port: 3004,
+		},
+		{
+			destination: {
+				namespace: "platform",
+				podLabels: { "app.kubernetes.io/component": "platform-worker" },
+			},
+			port: 22,
+		},
 	])("rejects non-Worker native metadata egress destinations", (entry) => {
 		expect(() =>
 			sessionSandboxResourcesV1({
