@@ -1054,18 +1054,24 @@ export function registerV2ManagementRoutes(
 				const projectionScope = identity.roles.includes("system_admin")
 					? ({ kind: "administrator" } as const)
 					: ownerScope(identity);
-				const current = await agentOrUnavailable(
-					dependencies,
-					projectionScope,
-					agentId,
-					metadata.traceId,
-				);
-				const fallbackPromise = projectAgent(
-					dependencies,
-					current,
-					identity,
-					metadata,
-				).catch(() => undefined);
+				const fallbackPromise = (async () => {
+					try {
+						const current = await agentOrUnavailable(
+							dependencies,
+							projectionScope,
+							agentId,
+							metadata.traceId,
+						);
+						return await projectAgent(
+							dependencies,
+							current,
+							identity,
+							metadata,
+						);
+					} catch {
+						return undefined;
+					}
+				})();
 				await dependencies.configuration.upgradeCustomImage(
 					{
 						schemaVersion: 1,
