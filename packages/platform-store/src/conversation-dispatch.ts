@@ -1129,7 +1129,9 @@ export class PostgresConversationDispatchStoreV1
 				!state ||
 				!payload ||
 				!isTurn(input.claim.operation) ||
-				state.execution.status !== "unknown" ||
+				(state.execution.status !== "unknown" &&
+					state.execution.status !== "submitted" &&
+					state.execution.status !== "waiting") ||
 				stop?.status !== "submitted"
 			) {
 				throw new StaleDispatchLease();
