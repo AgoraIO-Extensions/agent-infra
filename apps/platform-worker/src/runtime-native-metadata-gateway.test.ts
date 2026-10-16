@@ -10,6 +10,7 @@ import {
 	createWorkerRuntimeNativeMetadataGatewayAppV1,
 	createWorkerRuntimeNativeMetadataGatewayV1,
 } from "./runtime-native-metadata-gateway.js";
+import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
 
 const request = {
 	schemaVersion: 1,
@@ -73,6 +74,10 @@ function setup(
 	const transportRead = vi.fn(async () => response);
 	const resolveTransport = vi.fn(async () => ({ read: transportRead }));
 	const issue = vi.fn(async () => proof);
+	const callbackCredential = vi.fn(async () => ({
+		kind: "deployment" as "deployment" | "sandbox",
+		token: "worker-gateway-token",
+	}));
 	const gateway = createWorkerRuntimeNativeMetadataGatewayV1({
 		binding: { resolve: resolveBinding },
 		current: { check: current },
@@ -86,6 +91,7 @@ function setup(
 		resolveBinding,
 		resolveTransport,
 		transportRead,
+		callbackCredential,
 	};
 }
 
@@ -155,6 +161,8 @@ describe("Worker native metadata gateway", () => {
 		const app = createWorkerRuntimeNativeMetadataGatewayAppV1({
 			serviceToken: "worker-gateway-token",
 			gateway: f.gateway,
+			binding: { resolve: f.resolveBinding },
+			callbackCredential: { resolve: f.callbackCredential },
 		});
 		const body = JSON.stringify(
 			PlatformNativeMetadataReadRequestV1Schema.parse(request),
@@ -212,6 +220,8 @@ describe("Worker native metadata gateway", () => {
 		const app = createWorkerRuntimeNativeMetadataGatewayAppV1({
 			serviceToken: "worker-gateway-token",
 			gateway: f.gateway,
+			binding: { resolve: f.resolveBinding },
+			callbackCredential: { resolve: f.callbackCredential },
 			current: { check: f.current },
 		});
 		const currentRequest = { ...binding, phase: "read_metadata" as const };
@@ -237,5 +247,90 @@ describe("Worker native metadata gateway", () => {
 			apiRequestSourceRef: request.apiRequestSourceRef,
 			signal: expect.any(AbortSignal),
 		});
+	});
+
+	it("requires the derived Sandbox token on a current callback", async () => {
+		const f = setup();
+		const sandboxToken = sessionSandboxServiceTokenV1(
+			"worker-gateway-token",
+			"fixture-sandboxes",
+			"11111111-1111-1111-1111-111111111111",
+		);
+		f.callbackCredential.mockResolvedValue({
+			kind: "sandbox",
+			token: sandboxToken,
+		});
+		const app = createWorkerRuntimeNativeMetadataGatewayAppV1({
+			serviceToken: "worker-gateway-token",
+			gateway: f.gateway,
+			binding: { resolve: f.resolveBinding },
+			callbackCredential: { resolve: f.callbackCredential },
+			current: { check: f.current },
+		});
+		const currentRequest = { ...binding, phase: "read_metadata" as const };
+		const body = JSON.stringify({
+			apiRequestSourceRef: request.apiRequestSourceRef,
+			request: currentRequest,
+		});
+		const post = (token: string) =>
+			app.fetch(
+				new Request(
+					"http://worker/internal/platform-worker/v1/native-metadata/current",
+					{
+						method: "POST",
+						headers: {
+							authorization: `Bearer ${token}`,
+							"content-type": "application/json",
+						},
+						body,
+					},
+				),
+			);
+		await expect(post("worker-gateway-token")).resolves.toMatchObject({
+			status: 401,
+		});
+		await expect(post(sandboxToken)).resolves.toMatchObject({ status: 200 });
+	});
+
+	it("does not let a Sandbox callback token cross its bound request", async () => {
+		const f = setup();
+		const sandboxToken = sessionSandboxServiceTokenV1(
+			"worker-gateway-token",
+			"fixture-sandboxes",
+			"11111111-1111-1111-1111-111111111111",
+		);
+		f.callbackCredential.mockResolvedValue({
+			kind: "sandbox",
+			token: sandboxToken,
+		});
+		const app = createWorkerRuntimeNativeMetadataGatewayAppV1({
+			serviceToken: "worker-gateway-token",
+			gateway: f.gateway,
+			binding: { resolve: f.resolveBinding },
+			callbackCredential: { resolve: f.callbackCredential },
+			current: { check: f.current },
+		});
+		const responseValue = await app.fetch(
+			new Request(
+				"http://worker/internal/platform-worker/v1/native-metadata/current",
+				{
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${sandboxToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						apiRequestSourceRef: request.apiRequestSourceRef,
+						request: {
+							...binding,
+							scope: { ...binding.scope, conversationId: "foreign" },
+							phase: "read_metadata" as const,
+						},
+					}),
+				},
+			),
+		);
+		expect(responseValue.status).toBe(401);
+		expect(f.current).toHaveBeenCalledTimes(0);
 	});
 });

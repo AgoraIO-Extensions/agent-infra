@@ -179,6 +179,9 @@ export function sessionSandboxLabelsV1(
 	identity: SessionSandboxLabelIdentityV1,
 ): Readonly<Record<string, string>> {
 	const labels = {
+		// This Worker-owned marker is also available to NetworkPolicy selectors;
+		// the exact Sandbox identity remains bound by the four labels below.
+		"agent-infra.agora.io/managed": "session-sandbox-v1",
 		"agent-infra.agora.io/agent-ref": boundedRef("agent", identity.agentId),
 		"agent-infra.agora.io/session-ref": boundedRef(
 			"session",
@@ -292,7 +295,10 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		)
 	)
 		throw new WorkloadKubernetesError("policy");
-	validateNativeMetadataWorkerEgressV1(value.egress.nativeMetadataWorkerEgress);
+	validateNativeMetadataWorkerEgressV1(
+		value.egress.nativeMetadataWorkerEgress,
+		value.namespace,
+	);
 	if (
 		value.egress.nativeMetadataWorkerEgress !== undefined &&
 		!isNativeMetadataWorkerOriginV1(value.runtime.nativeMetadataWorkerOrigin)
@@ -342,6 +348,7 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
  */
 function validateNativeMetadataWorkerEgressV1(
 	egress: SessionSandboxAllocationV1["egress"]["nativeMetadataWorkerEgress"],
+	namespace: SessionSandboxAllocationV1["namespace"],
 ) {
 	if (egress === undefined) return;
 	if (
@@ -363,7 +370,7 @@ function validateNativeMetadataWorkerEgressV1(
 				!Array.isArray(destination) &&
 				Object.keys(destination).sort().join(",") === "namespace,podLabels" &&
 				"namespace" in destination &&
-				destination.namespace === "platform" &&
+				destination.namespace === namespace &&
 				labels !== null &&
 				typeof labels === "object" &&
 				!Array.isArray(labels) &&

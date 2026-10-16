@@ -300,7 +300,7 @@ describe("production SessionSandbox resource receiver", () => {
 			nativeMetadataWorkerEgress: [
 				{
 					destination: {
-						namespace: "platform",
+						namespace: workloadTestPolicy.namespace,
 						podLabels: { "app.kubernetes.io/component": "platform-worker" },
 					},
 					port: 3004,

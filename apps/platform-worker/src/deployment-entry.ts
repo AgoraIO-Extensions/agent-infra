@@ -420,6 +420,7 @@ export async function createPlatformNativeMetadataGatewayOptionsV1(
 	if (!nativeMetadataGateway) return undefined;
 	return createPlatformNativeMetadataGatewayAssemblyV1({
 		serviceToken,
+		namespace: process.env.PLATFORM_WORKER_NAMESPACE,
 		signing,
 		...(process.env.PLATFORM_DATABASE_URL
 			? { databaseUrl: process.env.PLATFORM_DATABASE_URL }

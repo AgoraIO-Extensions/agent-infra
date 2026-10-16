@@ -696,6 +696,12 @@ test("native metadata Worker gateway is opt-in and restricted to Platform API", 
 		"topology-agent-infra-platform-worker-native-metadata",
 	);
 	assert.equal(service.spec.ports[0].port, 3010);
+	const sandboxService = resource(
+		resources,
+		"Service",
+		"platform-worker-native-metadata",
+	);
+	assert.equal(sandboxService.spec.ports[0].port, 3010);
 	const deployment = resource(
 		resources,
 		"Deployment",
@@ -714,6 +720,51 @@ test("native metadata Worker gateway is opt-in and restricted to Platform API", 
 		"app.kubernetes.io/instance": "topology",
 		"app.kubernetes.io/component": "platform-api",
 	});
+	assert.deepEqual(policy.spec.ingress[1].from[0].podSelector.matchLabels, {
+		"agent-infra.agora.io/managed": "session-sandbox-v1",
+	});
+	assert.deepEqual(
+		policy.spec.ingress[1].from[0].podSelector.matchExpressions,
+		[
+			{
+				key: "agent-infra.agora.io/sandbox-id",
+				operator: "Exists",
+			},
+			{
+				key: "agent-infra.agora.io/agent-ref",
+				operator: "Exists",
+			},
+			{
+				key: "agent-infra.agora.io/session-ref",
+				operator: "Exists",
+			},
+			{
+				key: "agent-infra.agora.io/generation",
+				operator: "Exists",
+			},
+		],
+	);
+	const sandboxIngressKeys = new Set(
+		policy.spec.ingress[1].from[0].podSelector.matchExpressions.map(
+			(expression) => expression.key,
+		),
+	);
+	const apiLabels = resource(
+		resources,
+		"Deployment",
+		"topology-agent-infra-platform-api",
+	).spec.template.metadata.labels;
+	assert.equal(
+		apiLabels["agent-infra.agora.io/managed"],
+		undefined,
+		"Platform API must not carry the Sandbox managed marker",
+	);
+	for (const key of sandboxIngressKeys)
+		assert.equal(
+			Object.hasOwn(apiLabels, key),
+			false,
+			`Platform API must not satisfy Sandbox ingress selector ${key}`,
+		);
 	const apiEgress = resource(
 		resources,
 		"NetworkPolicy",

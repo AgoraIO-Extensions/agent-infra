@@ -481,6 +481,7 @@ describe("session sandbox workload adapter", () => {
 				for (const value of Object.values(selector))
 					expect(value).toMatch(kubernetesLabelValue);
 			expect(resource.metadata?.labels).toEqual({
+				"agent-infra.agora.io/managed": "session-sandbox-v1",
 				"agent-infra.agora.io/agent-ref": workloadResourceNameV1(agentId),
 				"agent-infra.agora.io/session-ref": expect.stringMatching(
 					/^session-[a-f0-9]{32}$/,
@@ -1569,6 +1570,27 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			} as SessionSandboxAllocationV1),
 		).rejects.toMatchObject({ code: "policy" });
 		expect(writes).toBe(0);
+	});
+
+	it("accepts the allocation namespace for native metadata egress", () => {
+		expect(() =>
+			sessionSandboxResourcesV1({
+				...allocation,
+				egress: {
+					nativeMetadataWorkerEgress: [
+						{
+							destination: {
+								namespace: "workload-test",
+								podLabels: {
+									"app.kubernetes.io/component": "platform-worker",
+								},
+							},
+							port: 3004,
+						},
+					],
+				},
+			} as SessionSandboxAllocationV1),
+		).not.toThrow();
 	});
 
 	it.each([

@@ -7,8 +7,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	createPlatformNativeMetadataBindingResolverV1,
 	createPlatformNativeMetadataGatewayAssemblyV1,
+	createPlatformNativeMetadataSandboxCredentialResolverV1,
 	createPlatformNativeMetadataTransportResolverV1,
 } from "./native-metadata-deployment-assembly.js";
+import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
 
 const ports = {
 	binding: { resolve: vi.fn(async () => null) },
@@ -73,6 +75,86 @@ describe("native metadata deployment assembly", () => {
 			executionId: "execution-default-binding",
 			signal: expect.any(AbortSignal),
 		});
+	});
+
+	it("derives a Sandbox callback token only from the Store allocation", async () => {
+		const query = {
+			readNativeMetadataCallbackCredentialScopeV1: vi.fn().mockResolvedValue({
+				sandboxId: "11111111-1111-1111-1111-111111111111",
+				namespace: "fixture-sandboxes",
+				originalHostScopeRef: "host-callback-credential",
+			}),
+		};
+		const resolver = createPlatformNativeMetadataSandboxCredentialResolverV1({
+			query,
+			deploymentServiceToken: "worker-service-token",
+			namespace: "fixture-sandboxes",
+		});
+		await expect(
+			resolver.resolve({
+				binding: {
+					...bindingRequest,
+					originalHostScopeRef: "host-callback-credential",
+				},
+				signal: new AbortController().signal,
+			}),
+		).resolves.toEqual({
+			kind: "sandbox",
+			token: sessionSandboxServiceTokenV1(
+				"worker-service-token",
+				"fixture-sandboxes",
+				"11111111-1111-1111-1111-111111111111",
+			),
+		});
+	});
+
+	it("keeps the deployment token for an unbound Agent execution", async () => {
+		const resolver = createPlatformNativeMetadataSandboxCredentialResolverV1({
+			query: {
+				readNativeMetadataCallbackCredentialScopeV1: vi.fn(async () => ({
+					sandboxId: null,
+					namespace: null,
+					originalHostScopeRef: "host-deployment-credential",
+				})),
+			},
+			deploymentServiceToken: "worker-service-token",
+			namespace: "fixture-sandboxes",
+		});
+		await expect(
+			resolver.resolve({
+				binding: {
+					...bindingRequest,
+					originalHostScopeRef: "host-deployment-credential",
+				},
+				signal: new AbortController().signal,
+			}),
+		).resolves.toEqual({
+			kind: "deployment",
+			token: "worker-service-token",
+		});
+	});
+
+	it("rejects a credential scope whose Host binding drifted", async () => {
+		const resolver = createPlatformNativeMetadataSandboxCredentialResolverV1({
+			query: {
+				readNativeMetadataCallbackCredentialScopeV1: vi.fn(async () => ({
+					sandboxId: "11111111-1111-1111-1111-111111111111",
+					namespace: "fixture-sandboxes",
+					originalHostScopeRef: "new-host",
+				})),
+			},
+			deploymentServiceToken: "worker-service-token",
+			namespace: "fixture-sandboxes",
+		});
+		await expect(
+			resolver.resolve({
+				binding: {
+					...bindingRequest,
+					originalHostScopeRef: "old-host",
+				},
+				signal: new AbortController().signal,
+			}),
+		).resolves.toBeNull();
 	});
 
 	it.each([

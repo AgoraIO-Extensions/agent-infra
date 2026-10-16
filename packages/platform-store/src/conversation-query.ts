@@ -129,6 +129,27 @@ export type NativeMetadataObjectScopeResponseV1 =
 		readonly originalHostScopeRef: string | null;
 	};
 
+/**
+ * Internal callback credential scope for one already-bound native metadata
+ * request.  Sandbox identity never enters the public metadata scope DTO.
+ */
+export interface NativeMetadataCallbackCredentialScopeRequestV1 {
+	readonly scope: ConversationQueryScopeV1;
+	readonly agentId: string;
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly signal?: AbortSignal;
+}
+
+export interface NativeMetadataCallbackCredentialScopeResponseV1 {
+	/** Persisted Session Sandbox identity, not caller-provided metadata. */
+	readonly sandboxId: string | null;
+	/** Namespace captured by the authoritative Sandbox resource policy. */
+	readonly namespace: string | null;
+	/** Original Host binding re-read with the credential scope. */
+	readonly originalHostScopeRef: string | null;
+}
+
 export interface RuntimeModelDirectoryDispatchRequestInputV1 {
 	readonly scope: ConversationQueryScopeV1;
 	readonly conversationId: string;
@@ -244,6 +265,27 @@ interface NativeMetadataObjectScopeRow {
 	readonly execution_principal_type: string;
 	readonly session_generation: string | number;
 	readonly authorization_revision: string;
+	readonly original_host_scope_ref: string | null;
+}
+
+interface NativeMetadataCallbackCredentialScopeRow {
+	readonly conversation_id: string;
+	readonly conversation_agent: string;
+	readonly conversation_actor: string;
+	readonly conversation_channel: string;
+	readonly conversation_principal_type: string;
+	readonly execution_id: string;
+	readonly execution_conversation: string;
+	readonly execution_agent: string;
+	readonly execution_actor: string;
+	readonly execution_channel: string;
+	readonly execution_principal_type: string;
+	readonly execution_sandbox_id: string | null;
+	readonly allocation_sandbox_id: string | null;
+	readonly allocation_namespace: string | null;
+	readonly allocation_status: string | null;
+	readonly allocation_desired_state: string | null;
+	readonly allocation_observation_status: string | null;
 	readonly original_host_scope_ref: string | null;
 }
 
@@ -1201,6 +1243,111 @@ export class PostgresConversationQueryV1 {
 							sessionGeneration: safeInteger(row.session_generation, 1),
 							authorizationRevision: row.authorization_revision,
 						}),
+						originalHostScopeRef: row.original_host_scope_ref,
+					};
+				},
+				request.signal,
+			);
+		} catch (error) {
+			if (error instanceof ConversationQueryError) throw error;
+			return unavailable();
+		}
+	}
+
+	/**
+	 * Resolve only the current persisted Session Sandbox needed to authenticate
+	 * a Runtime Host callback.  This is a private credential seam: the Sandbox
+	 * id and namespace are never added to the public native metadata scope.
+	 */
+	async readNativeMetadataCallbackCredentialScopeV1(
+		request: NativeMetadataCallbackCredentialScopeRequestV1,
+	): Promise<NativeMetadataCallbackCredentialScopeResponseV1 | undefined> {
+		const readScope = scope(request.scope);
+		const agentId = requestText(request.agentId);
+		const conversationId = requestText(request.conversationId);
+		const executionId = requestText(request.executionId);
+		if (readScope.channelId !== "web") return undefined;
+		try {
+			return await repeatableRead(
+				this.#client,
+				async (transaction, run) => {
+					const rows = await run(
+						transaction<NativeMetadataCallbackCredentialScopeRow[]>`
+							/* native_metadata_read.current_sandbox_credential */
+							select
+								c.id as conversation_id,
+								c.agent_id as conversation_agent,
+								c.actor_id as conversation_actor,
+								c.channel_id as conversation_channel,
+								c.principal_type as conversation_principal_type,
+								e.execution_id,
+								e.conversation_id as execution_conversation,
+								e.agent_id as execution_agent,
+								e.actor_id as execution_actor,
+								e.channel_id as execution_channel,
+								e.principal_type as execution_principal_type,
+								e.sandbox_id as execution_sandbox_id,
+								s.sandbox_id as allocation_sandbox_id,
+								s.resource_policy->>'namespace' as allocation_namespace,
+								s.status as allocation_status,
+								s.desired_state as allocation_desired_state,
+								s.resource_observation->>'status' as allocation_observation_status,
+								e.original_submit_host_session_ref as original_host_scope_ref
+							from platform.conversations c
+							join platform.conversation_executions e
+								on e.conversation_id = c.id
+								and e.agent_id = c.agent_id
+								and e.actor_id = c.actor_id
+								and e.channel_id = c.channel_id
+								and e.principal_type = c.principal_type
+								and e.execution_id = ${executionId}
+							left join platform.session_sandbox_allocations s
+								on s.sandbox_id = e.sandbox_id
+								and s.conversation_id = c.id
+								and s.agent_id = c.agent_id
+								and s.actor_id = c.actor_id
+								and s.channel_id = c.channel_id
+								and s.principal_type = c.principal_type
+								and s.session_generation = e.session_generation
+							where c.id = ${conversationId}
+								and c.agent_id = ${agentId}
+								and c.actor_id = ${readScope.actorId}
+								and c.channel_id = ${readScope.channelId}
+								and c.principal_type = ${readScope.principal?.kind ?? "user"}
+							limit 2
+						`,
+					);
+					if (rows.length !== 1) return undefined;
+					const row = rows[0];
+					if (
+						!row ||
+						row.conversation_id !== conversationId ||
+						row.execution_id !== executionId ||
+						row.conversation_agent !== agentId ||
+						row.execution_agent !== agentId ||
+						row.execution_conversation !== row.conversation_id ||
+						row.conversation_agent !== row.execution_agent ||
+						row.conversation_actor !== row.execution_actor ||
+						row.conversation_channel !== row.execution_channel ||
+						row.conversation_principal_type !== row.execution_principal_type ||
+						row.execution_actor !== readScope.actorId ||
+						row.execution_channel !== readScope.channelId ||
+						row.execution_principal_type !== "user" ||
+						(row.execution_sandbox_id !== null &&
+							(row.execution_sandbox_id !== row.allocation_sandbox_id ||
+								row.allocation_namespace === null ||
+								row.allocation_namespace.length === 0 ||
+								row.allocation_status !== "ready" ||
+								row.allocation_desired_state !== "running" ||
+								row.allocation_observation_status !== "ready"))
+					)
+						return undefined;
+					return {
+						sandboxId: row.execution_sandbox_id,
+						namespace:
+							row.execution_sandbox_id === null
+								? null
+								: row.allocation_namespace,
 						originalHostScopeRef: row.original_host_scope_ref,
 					};
 				},
