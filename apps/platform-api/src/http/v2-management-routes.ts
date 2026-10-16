@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
 	AgentApiLifecycleAcceptedResponseV1Schema,
 	AgentApplicationCreateRequestV2Schema,
@@ -40,6 +41,7 @@ import {
 	parsePageQuery,
 	type RequestMetadata,
 	requestMetadata,
+	StaleProjectionError,
 } from "./common.js";
 import { mapCoreError } from "./core-errors.js";
 import { parseDefaultRelayKeyReplacement } from "./default-relay-key-replacement.js";
@@ -262,6 +264,8 @@ async function projectApplication(
 		});
 	} catch (error) {
 		recordHttpFailureContext({ failureStep: "projection.read", error });
+		// 快照过期原样抛出，由读取路由决定是否重读（#2661）。
+		if (error instanceof StaleProjectionError) throw error;
 		fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	}
 	const parsed = AgentApplicationProjectionV1Schema.safeParse(value);
@@ -290,6 +294,8 @@ async function projectAgent(
 		});
 	} catch (error) {
 		recordHttpFailureContext({ failureStep: "projection.read", error });
+		// 快照过期原样抛出，由读取路由决定是否重读（#2661）。
+		if (error instanceof StaleProjectionError) throw error;
 		fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 	}
 	const parsed = AgentProjectionV1Schema.safeParse(value);
@@ -300,6 +306,75 @@ async function projectAgent(
 		schemaVersion: 2,
 		configuration,
 	});
+}
+
+/**
+ * 投影期间快照过期时最多重读几次（#2661）。一次重读只重新投影变化了的项，窗口只有几十毫秒，
+ * 而 Agent 的状态变化（命令、Worker 观测）通常间隔数百毫秒以上，两次足够收敛。
+ */
+const STALE_PROJECTION_REREADS = 2;
+
+/**
+ * 读取一页并逐项投影。某一项的快照在投影期间过期（读取之后 Agent 的状态或配置刚变化）时，
+ * 用同一个查询（同一可见范围、同一分页参数）重读这一页再投影，最多重读
+ * STALE_PROJECTION_REREADS 次（#2661）：
+ * - 重读后不在这一页里的项不再出现，不会扩大可见范围；
+ * - 快照没有变化的项沿用上一轮的投影（列表各项本来就是分别投影的），只重新投影变化了的项；
+ * - 其他失败照旧直接失败，不重读。
+ */
+async function projectPage<Item, Projection>(
+	read: () => Promise<AgentManagementPageV1<Item>>,
+	key: (item: Item) => string,
+	project: (item: Item) => Promise<Projection>,
+): Promise<{
+	items: Projection[];
+	nextCursor: AgentManagementPageV1<Item>["nextAfterId"];
+}> {
+	const projected = new Map<string, { item: Item; projection: Projection }>();
+	for (let rereads = 0; ; rereads += 1) {
+		const page = await read();
+		// 等全部投影结束再决定：不让上一轮还在进行的投影和重读叠在一起。
+		const settled = await Promise.allSettled(
+			page.items.map(async (item) => {
+				const previous = projected.get(key(item));
+				if (previous && isDeepStrictEqual(previous.item, item)) {
+					return previous.projection;
+				}
+				const projection = await project(item);
+				projected.set(key(item), { item, projection });
+				return projection;
+			}),
+		);
+		const items: Projection[] = [];
+		let stale: StaleProjectionError | undefined;
+		for (const result of settled) {
+			if (result.status === "fulfilled") items.push(result.value);
+			else if (result.reason instanceof StaleProjectionError)
+				stale ??= result.reason;
+			else throw result.reason;
+		}
+		if (!stale) return { items, nextCursor: page.nextAfterId };
+		if (rereads >= STALE_PROJECTION_REREADS) throw stale;
+	}
+}
+
+/** 单项读取：快照过期时用同一个查询重读再投影，上限与列表相同（#2661）。 */
+async function projectCurrent<Item, Projection>(
+	read: () => Promise<Item>,
+	project: (item: Item) => Promise<Projection>,
+): Promise<Projection> {
+	for (let rereads = 0; ; rereads += 1) {
+		const item = await read();
+		try {
+			return await project(item);
+		} catch (error) {
+			if (
+				!(error instanceof StaleProjectionError) ||
+				rereads >= STALE_PROJECTION_REREADS
+			)
+				throw error;
+		}
+	}
 }
 
 async function applicationOrUnavailable(
@@ -643,22 +718,18 @@ export function registerV2ManagementRoutes(
 				metadata.traceId,
 			);
 			const queryPage = pageInput(context.req.raw, metadata.traceId);
-			const page = await queryOrUnavailable(
-				() =>
-					dependencies.query.listApplications(
-						applicantScope(identity),
-						queryPage,
-					),
-				metadata.traceId,
-			);
-			return context.json({
-				items: await Promise.all(
-					page.items.map((item) =>
-						projectApplication(dependencies, item, identity, metadata),
-					),
+			const scope = applicantScope(identity);
+			return context.json(
+				await projectPage(
+					() =>
+						queryOrUnavailable(
+							() => dependencies.query.listApplications(scope, queryPage),
+							metadata.traceId,
+						),
+					(item) => item.applicationId,
+					(item) => projectApplication(dependencies, item, identity, metadata),
 				),
-				nextCursor: page.nextAfterId,
-			});
+			);
 		}),
 	);
 
@@ -669,14 +740,20 @@ export function registerV2ManagementRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
-			const application = await applicationOrUnavailable(
-				dependencies,
-				applicantScope(identity),
-				context.req.param("applicationId"),
-				metadata.traceId,
-			);
+			const scope = applicantScope(identity);
+			const applicationId = context.req.param("applicationId");
 			return context.json(
-				await projectApplication(dependencies, application, identity, metadata),
+				await projectCurrent(
+					() =>
+						applicationOrUnavailable(
+							dependencies,
+							scope,
+							applicationId,
+							metadata.traceId,
+						),
+					(application) =>
+						projectApplication(dependencies, application, identity, metadata),
+				),
 			);
 		}),
 	);
@@ -814,22 +891,21 @@ export function registerV2ManagementRoutes(
 			);
 			requireAdministrator(identity, metadata.traceId);
 			const queryPage = pageInput(context.req.raw, metadata.traceId);
-			const page = await queryOrUnavailable(
-				() =>
-					dependencies.query.listApplications(
-						{ kind: "administrator" },
-						queryPage,
-					),
-				metadata.traceId,
-			);
-			return context.json({
-				items: await Promise.all(
-					page.items.map((item) =>
-						projectApplication(dependencies, item, identity, metadata),
-					),
+			return context.json(
+				await projectPage(
+					() =>
+						queryOrUnavailable(
+							() =>
+								dependencies.query.listApplications(
+									{ kind: "administrator" },
+									queryPage,
+								),
+							metadata.traceId,
+						),
+					(item) => item.applicationId,
+					(item) => projectApplication(dependencies, item, identity, metadata),
 				),
-				nextCursor: page.nextAfterId,
-			});
+			);
 		}),
 	);
 
@@ -921,19 +997,21 @@ export function registerV2ManagementRoutes(
 				fail("FORBIDDEN", metadata.traceId);
 			}
 			const queryPage = pageInput(context.req.raw, metadata.traceId);
-			const page = await queryOrUnavailable(
-				() =>
-					dependencies.query.listAgents({ kind: "administrator" }, queryPage),
-				metadata.traceId,
-			);
-			return context.json({
-				items: await Promise.all(
-					page.items.map((item) =>
-						projectAgent(dependencies, item, identity, metadata),
-					),
+			return context.json(
+				await projectPage(
+					() =>
+						queryOrUnavailable(
+							() =>
+								dependencies.query.listAgents(
+									{ kind: "administrator" },
+									queryPage,
+								),
+							metadata.traceId,
+						),
+					(item) => item.agentId,
+					(item) => projectAgent(dependencies, item, identity, metadata),
 				),
-				nextCursor: page.nextAfterId,
-			});
+			);
 		}),
 	);
 
@@ -987,12 +1065,14 @@ export function registerV2ManagementRoutes(
 					metadata,
 					material,
 					async (apiUser) => {
-						const page = await dependencies.query.listAgents(
-							{ kind: "api_user", userId: apiUser.userId },
-							queryPage,
-						);
-						const items = await Promise.all(
-							page.items.map(async (agent) => {
+						const apiScope = {
+							kind: "api_user",
+							userId: apiUser.userId,
+						} as const;
+						const projectedPage = await projectPage(
+							() => dependencies.query.listAgents(apiScope, queryPage),
+							(agent) => agent.agentId,
+							async (agent) => {
 								const value = await project({
 									...metadata,
 									apiUser,
@@ -1009,11 +1089,13 @@ export function registerV2ManagementRoutes(
 									schemaVersion: 2,
 									configuration,
 								});
-							}),
+							},
 						);
 						return {
-							result: { items, nextCursor: page.nextAfterId },
-							returnedAgentIds: items.map(({ agentId }) => agentId),
+							result: projectedPage,
+							returnedAgentIds: projectedPage.items.map(
+								({ agentId }) => agentId,
+							),
 						};
 					},
 				);
@@ -1026,22 +1108,19 @@ export function registerV2ManagementRoutes(
 			);
 			const scope = agentListScope(context.req.raw, metadata.traceId);
 			const queryPage = pageInput(context.req.raw, metadata.traceId, ["scope"]);
-			const page = await queryOrUnavailable(
-				() =>
-					dependencies.query.listAgents(
-						scope === "owner" ? ownerScope(identity) : userScope(identity),
-						queryPage,
-					),
-				metadata.traceId,
-			);
-			return context.json({
-				items: await Promise.all(
-					page.items.map((item) =>
-						projectAgent(dependencies, item, identity, metadata),
-					),
+			const visibleScope =
+				scope === "owner" ? ownerScope(identity) : userScope(identity);
+			return context.json(
+				await projectPage(
+					() =>
+						queryOrUnavailable(
+							() => dependencies.query.listAgents(visibleScope, queryPage),
+							metadata.traceId,
+						),
+					(item) => item.agentId,
+					(item) => projectAgent(dependencies, item, identity, metadata),
 				),
-				nextCursor: page.nextAfterId,
-			});
+			);
 		}),
 	);
 
@@ -1052,14 +1131,14 @@ export function registerV2ManagementRoutes(
 				context.req.raw,
 				metadata.traceId,
 			);
-			const agent = await agentOrUnavailable(
-				dependencies,
-				userScope(identity),
-				context.req.param("agentId"),
-				metadata.traceId,
-			);
+			const scope = userScope(identity);
+			const agentId = context.req.param("agentId");
 			return context.json(
-				await projectAgent(dependencies, agent, identity, metadata),
+				await projectCurrent(
+					() =>
+						agentOrUnavailable(dependencies, scope, agentId, metadata.traceId),
+					(agent) => projectAgent(dependencies, agent, identity, metadata),
+				),
 			);
 		}),
 	);

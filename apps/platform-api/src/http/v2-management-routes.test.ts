@@ -16,6 +16,7 @@ import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
 import { createPlatformHealthApp } from "../app.js";
+import { StaleProjectionError } from "./common.js";
 import { registerV2ManagementRoutes } from "./v2-management-routes.js";
 
 const identity = {
@@ -234,8 +235,12 @@ function createApp(
 		executeManagementCommand,
 		listAgents,
 		getAgent,
+		listApplications,
+		getApplication,
 		resolve,
 		readAgentProjection,
+		readApplicationProjection,
+		readApiAgentProjection,
 		upgradeCustomImage,
 	};
 }
@@ -1013,5 +1018,324 @@ describe("lifecycle command failures are observable (#2569)", () => {
 			"INTERNAL_ERROR",
 		);
 		expect(text).not.toContain("private command failure");
+	});
+});
+
+describe("reads re-read a snapshot that went stale while projecting (#2661)", () => {
+	const agentAt = (agentId: string, revision: number) => ({
+		...agentRecord,
+		agentId,
+		applicationId: `application-${agentId}`,
+		management: {
+			...management,
+			agentId,
+			applicationId: `application-${agentId}`,
+			status: "available" as const,
+			serviceAvailability: "ready" as const,
+			revision,
+		},
+	});
+	type AgentAt = ReturnType<typeof agentAt>;
+	type ListedAgent = { agentId: string; description: string };
+
+	/** 与生产的展示层一样：快照里的管理修订已不是当前修订时，报告快照过期。 */
+	const projectAgainst =
+		(current: Map<string, number>) =>
+		async ({ agent }: { agent: AgentAt }) => {
+			if (agent.management.revision !== current.get(agent.agentId))
+				throw new StaleProjectionError("trace-stale");
+			return {
+				...agentProjection,
+				agentId: agent.agentId,
+				description: `revision ${agent.management.revision}`,
+			};
+		};
+
+	/** 每次列表读取都按「当前」修订返回；afterRead 模拟读取之后、投影之前发生的状态变化。 */
+	const listFrom =
+		(
+			current: Map<string, number>,
+			afterRead: (read: number) => void,
+			visible: () => readonly string[] = () => [...current.keys()],
+		) =>
+		async () => {
+			const items = visible().map((agentId) =>
+				agentAt(agentId, current.get(agentId) ?? 0),
+			);
+			reads += 1;
+			afterRead(reads);
+			return { items, nextAfterId: null };
+		};
+	let reads = 0;
+
+	it("returns 200 with the re-read snapshot when an Agent changes while the list is projected", async () => {
+		reads = 0;
+		const h = createApp();
+		const current = new Map([
+			["agent-1", 1],
+			["agent-2", 1],
+		]);
+		// 第一次读取之后 agent-2 被停止/重启：管理修订前进。
+		h.listAgents.mockImplementation(
+			listFrom(current, (read) => {
+				if (read === 1) current.set("agent-2", 2);
+			}),
+		);
+		h.readAgentProjection.mockImplementation(projectAgainst(current));
+
+		const response = await h.app.request("/api/v2/agents?limit=10");
+
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as {
+			items: ListedAgent[];
+			nextCursor: string | null;
+		};
+		expect(
+			body.items.map(({ agentId, description }) => [agentId, description]),
+		).toEqual([
+			["agent-1", "revision 1"],
+			["agent-2", "revision 2"],
+		]);
+		expect(body.nextCursor).toBeNull();
+		expect(h.listAgents).toHaveBeenCalledTimes(2);
+		expect(h.listAgents.mock.calls[1]).toEqual(h.listAgents.mock.calls[0]);
+		// 快照没变的 agent-1 沿用第一次的投影，只重新投影 agent-2。
+		expect(
+			h.readAgentProjection.mock.calls.map(([input]) => input.agent.agentId),
+		).toEqual(["agent-1", "agent-2", "agent-2"]);
+	});
+
+	it("fails with the retryable dependency error only after the bounded re-reads", async () => {
+		reads = 0;
+		const h = createApp();
+		const current = new Map([["agent-2", 1]]);
+		// 每次读取之后都又变了。
+		h.listAgents.mockImplementation(
+			listFrom(current, () =>
+				current.set("agent-2", (current.get("agent-2") ?? 0) + 1),
+			),
+		);
+		h.readAgentProjection.mockImplementation(projectAgainst(current));
+
+		const response = await h.app.request("/api/v2/agents");
+
+		expect(response.status).toBe(503);
+		expect(
+			PilotProtocolErrorV1Schema.parse(await response.json()),
+		).toMatchObject({ code: "DEPENDENCY_UNAVAILABLE", retryable: true });
+		// 一次读取 + 两次重读。
+		expect(h.listAgents).toHaveBeenCalledTimes(3);
+		expect(h.readAgentProjection).toHaveBeenCalledTimes(3);
+	});
+
+	it("re-reads with the same visible scope and page, and leaves out an Agent the re-read no longer returns", async () => {
+		reads = 0;
+		const h = createApp();
+		const current = new Map([
+			["agent-1", 1],
+			["agent-2", 1],
+		]);
+		let visible = ["agent-1", "agent-2"];
+		// 第一次读取之后 agent-2 对这个用户不再可见（例如 Owner 被移除）。
+		h.listAgents.mockImplementation(
+			listFrom(
+				current,
+				(read) => {
+					if (read === 1) {
+						current.set("agent-2", 2);
+						visible = ["agent-1"];
+					}
+				},
+				() => visible,
+			),
+		);
+		h.readAgentProjection.mockImplementation(projectAgainst(current));
+
+		const response = await h.app.request(
+			"/api/v2/agents?scope=owner&limit=2&cursor=agent-0",
+		);
+
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as { items: ListedAgent[] };
+		expect(body.items.map(({ agentId }) => agentId)).toEqual(["agent-1"]);
+		expect(h.listAgents.mock.calls).toEqual([
+			[
+				{ kind: "owner", ownerId: "user-1" },
+				{ limit: 2, afterId: "agent-0" },
+			],
+			[
+				{ kind: "owner", ownerId: "user-1" },
+				{ limit: 2, afterId: "agent-0" },
+			],
+		]);
+	});
+
+	it("does not re-read for any other projection failure", async () => {
+		const h = createApp({ projectionFailure: true });
+
+		const response = await h.app.request("/api/v2/agents");
+
+		expect(response.status).toBe(503);
+		expect(h.listAgents).toHaveBeenCalledTimes(1);
+		expect(h.readAgentProjection).toHaveBeenCalledTimes(1);
+	});
+
+	it("re-reads the administrator Agent list with the administrator scope", async () => {
+		const h = createApp({ administrator: true });
+		h.readAgentProjection.mockRejectedValueOnce(
+			new StaleProjectionError("trace-stale"),
+		);
+
+		const response = await h.app.request("/api/v2/admin/agents");
+
+		expect(response.status).toBe(200);
+		expect(
+			((await response.json()) as { items: unknown[] }).items,
+		).toHaveLength(1);
+		expect(h.listAgents.mock.calls).toEqual([
+			[{ kind: "administrator" }, { limit: 50 }],
+			[{ kind: "administrator" }, { limit: 50 }],
+		]);
+	});
+
+	it("re-reads the applicant's application list with the applicant scope", async () => {
+		const h = createApp();
+		h.readApplicationProjection.mockRejectedValueOnce(
+			new StaleProjectionError("trace-stale"),
+		);
+
+		const response = await h.app.request("/api/v2/agent-applications");
+
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as { items: unknown[] };
+		expect(body.items).toHaveLength(1);
+		AgentApplicationProjectionV2Schema.parse(body.items[0]);
+		expect(h.listApplications.mock.calls).toEqual([
+			[{ kind: "applicant", applicantId: "user-1" }, { limit: 50 }],
+			[{ kind: "applicant", applicantId: "user-1" }, { limit: 50 }],
+		]);
+	});
+
+	it("leaves out an application that left the pending-approval list while it was projected", async () => {
+		const h = createApp({ administrator: true });
+		// 投影期间申请已被批准：重读的待审批列表里不再有它。
+		h.listApplications
+			.mockResolvedValueOnce({ items: [applicationRecord], nextAfterId: null })
+			.mockResolvedValueOnce({ items: [], nextAfterId: null });
+		h.readApplicationProjection.mockRejectedValueOnce(
+			new StaleProjectionError("trace-stale"),
+		);
+
+		const response = await h.app.request("/api/v2/admin/agent-applications");
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ items: [], nextCursor: null });
+		expect(h.listApplications).toHaveBeenCalledTimes(2);
+		expect(h.listApplications.mock.calls[1]).toEqual(
+			h.listApplications.mock.calls[0],
+		);
+		expect(h.readApplicationProjection).toHaveBeenCalledTimes(1);
+	});
+
+	it("re-reads one Agent with the same scope and returns its current snapshot", async () => {
+		reads = 0;
+		const h = createApp();
+		const current = new Map([["agent-1", 1]]);
+		h.getAgent.mockImplementation(async () => {
+			const agent = agentAt("agent-1", current.get("agent-1") ?? 0);
+			if (h.getAgent.mock.calls.length === 1) current.set("agent-1", 2);
+			return agent;
+		});
+		h.readAgentProjection.mockImplementation(projectAgainst(current));
+
+		const response = await h.app.request("/api/v2/agents/agent-1");
+
+		expect(response.status).toBe(200);
+		expect(((await response.json()) as ListedAgent).description).toBe(
+			"revision 2",
+		);
+		expect(h.getAgent.mock.calls).toEqual([
+			[
+				{ kind: "user", userId: "user-1", organizationIds: ["org-1"] },
+				"agent-1",
+			],
+			[
+				{ kind: "user", userId: "user-1", organizationIds: ["org-1"] },
+				"agent-1",
+			],
+		]);
+	});
+
+	it("answers 404 when the re-read Agent is no longer visible", async () => {
+		const h = createApp();
+		h.getAgent
+			.mockResolvedValueOnce(agentAt("agent-1", 1))
+			.mockResolvedValueOnce(undefined);
+		h.readAgentProjection.mockRejectedValueOnce(
+			new StaleProjectionError("trace-stale"),
+		);
+
+		const response = await h.app.request("/api/v2/agents/agent-1");
+
+		expect(response.status).toBe(404);
+		expect(PilotProtocolErrorV1Schema.parse(await response.json()).code).toBe(
+			"RESOURCE_UNAVAILABLE",
+		);
+		expect(h.readAgentProjection).toHaveBeenCalledTimes(1);
+	});
+
+	it("re-reads one application with the applicant scope", async () => {
+		const h = createApp();
+		h.readApplicationProjection.mockRejectedValueOnce(
+			new StaleProjectionError("trace-stale"),
+		);
+
+		const response = await h.app.request(
+			"/api/v2/agent-applications/application-1",
+		);
+
+		expect(response.status).toBe(200);
+		expect(h.getApplication.mock.calls).toEqual([
+			[{ kind: "applicant", applicantId: "user-1" }, "application-1"],
+			[{ kind: "applicant", applicantId: "user-1" }, "application-1"],
+		]);
+	});
+
+	it("re-reads the personal API list with the credential user's scope and audits only the returned Agents", async () => {
+		reads = 0;
+		const api = apiReader();
+		const h = createApp({ personalApiAgentRead: api.reader });
+		const current = new Map([
+			["agent-1", 1],
+			["agent-2", 1],
+		]);
+		h.listAgents.mockImplementation(
+			listFrom(current, (read) => {
+				if (read === 1) current.set("agent-2", 2);
+			}),
+		);
+		h.readApiAgentProjection.mockImplementation(projectAgainst(current));
+
+		const response = await h.app.request("/api/v2/agents", {
+			headers: { Authorization: `Bearer ${api.material}` },
+		});
+
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as { items: ListedAgent[] };
+		expect(
+			body.items.map(({ agentId, description }) => [agentId, description]),
+		).toEqual([
+			["agent-1", "revision 1"],
+			["agent-2", "revision 2"],
+		]);
+		expect(h.listAgents.mock.calls.map(([scope]) => scope)).toEqual([
+			{ kind: "api_user", userId: "user-api" },
+			{ kind: "api_user", userId: "user-api" },
+		]);
+		expect(api.audits).toHaveLength(1);
+		expect(api.audits[0]).toMatchObject({
+			outcome: "succeeded",
+			details: { returnedAgentIds: ["agent-1", "agent-2"] },
+		});
 	});
 });

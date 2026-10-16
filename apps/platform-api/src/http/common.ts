@@ -117,6 +117,17 @@ export class HttpProtocolError extends Error {
 	}
 }
 
+/**
+ * 投影所依据的 Agent 快照在读取期间过期：Agent 的管理状态或配置修订刚刚变化（#2661）。
+ * 对外仍是可重试的 DEPENDENCY_UNAVAILABLE；读取路由可以用同一个查询重读后再投影。
+ */
+export class StaleProjectionError extends HttpProtocolError {
+	constructor(traceId: string) {
+		super("DEPENDENCY_UNAVAILABLE", traceId);
+		this.name = "StaleProjectionError";
+	}
+}
+
 export interface RequestMetadata {
 	requestId: string;
 	traceId: string;

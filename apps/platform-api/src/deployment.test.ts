@@ -933,7 +933,14 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 				200,
 			);
 			release();
-			await json(await stale, 503);
+			// 读取期间配置已变：不把旧配置和新的运行时事实拼在一起；详情读取用同一个查询重读，
+			// 整体返回新快照（#2661，之前是 503）。
+			const current = AgentProjectionV2Schema.parse(
+				await json(await stale, 200),
+			);
+			expect(current.configuration.environment).toEqual([
+				{ name: "LANG", value: "en_GB.UTF-8" },
+			]);
 		} finally {
 			release();
 			spy.mockRestore();

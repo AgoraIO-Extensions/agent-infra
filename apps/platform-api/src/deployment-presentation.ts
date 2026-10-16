@@ -9,7 +9,11 @@ import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-st
 import { parseAllDocuments } from "yaml";
 
 import type { createDeploymentIdentityScope } from "./deployment-identity.js";
-import { HttpProtocolError, requestMetadata } from "./http/common.js";
+import {
+	HttpProtocolError,
+	requestMetadata,
+	StaleProjectionError,
+} from "./http/common.js";
 import type { IdentityContext } from "./http/identity.js";
 import type { PresentPlatformAgent } from "./projection.js";
 
@@ -68,7 +72,8 @@ export function createDeploymentPresentation(input: {
 			expected: { configurationRevision: configuration.revision, management },
 		});
 		if (runtime.outcome === "stale") {
-			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+			// 读取期间 Agent 状态或配置刚变化：交给读取路由按同一查询重读（#2661）。
+			throw new StaleProjectionError(traceId);
 		}
 		if (runtime.outcome !== "found") {
 			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
