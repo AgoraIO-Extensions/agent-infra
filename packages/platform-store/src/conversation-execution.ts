@@ -597,6 +597,10 @@ export class PostgresConversationExecutionTransactionV1
 	): Promise<ConversationStateDecisionV1> {
 		return this.#transaction(async (transaction) => {
 			const authority = parseAuthority(request.authority);
+			// Agent 先于 Conversation：生命周期命令先锁 Agent 再逐个锁会话（FOR UPDATE），
+			// 这里如果先持有会话的共享锁、再等 Agent 的共享锁，两边会互相等待，
+			// PostgreSQL 终止其中一个，读取就返回 503（#2629）。
+			await transaction`select id from platform.agents where id = ${authority.agentId} for share`;
 			const conversation = await lockConversationForRead(
 				transaction,
 				text(request.query.conversationId),

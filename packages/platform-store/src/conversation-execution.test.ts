@@ -965,6 +965,70 @@ describe("PostgreSQL Conversation command transaction", () => {
 		}
 	});
 
+	it("reads a Conversation without deadlocking against an Agent lifecycle fan-out (#2629)", async () => {
+		await persistConformanceModelConfiguration(
+			conformanceModelConfiguration,
+			authority,
+		);
+		const { transaction, useCase } = createConversation(authority, {
+			sandbox: "preparing",
+		});
+		// 生命周期事务和轮询用的连接要与 `client`（max: 1）分开，否则互相排队。
+		const lifecycle = postgres(databaseUrl, { max: 2 });
+		try {
+			const created = await useCase.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "deadlock-create",
+				requestId: "deadlock-create",
+				traceId: "deadlock",
+			});
+			if (created.outcome !== "accepted")
+				throw new Error("Expected Session creation");
+			const conversationId = created.result.conversationId;
+			await markSessionSandboxReadyFixture(client, conversationId);
+
+			// 与 Agent 生命周期命令一样的加锁顺序：先锁 Agent 行，再逐个锁该 Agent 的会话。
+			const agentLocked = Promise.withResolvers<void>();
+			const mayFanOut = Promise.withResolvers<void>();
+			const fanOut = lifecycle.begin(async (sql) => {
+				await sql`select id from platform.agents where id = ${authority.agentId} for update`;
+				agentLocked.resolve();
+				await mayFanOut.promise;
+				await sql`select id from platform.conversations where agent_id = ${authority.agentId} order by id for update`;
+				return "fanned out" as const;
+			});
+			// 提前挂上拒绝处理，避免等待期间出现未处理的拒绝。
+			fanOut.catch(() => undefined);
+			await agentLocked.promise;
+
+			const read = useCase.readConversation({
+				schemaVersion: 1,
+				conversationId,
+			});
+			read.catch(() => undefined);
+			// 等读取事务卡在 Agent 行上：修复前它此时已经持有会话的共享锁，修复后什么都没持有。
+			let blocked = false;
+			for (let attempt = 0; attempt < 100 && !blocked; attempt++) {
+				const [row] = await lifecycle`
+					select count(*)::int as waiting from pg_stat_activity
+					where datname = current_database() and wait_event_type = 'Lock'
+						and query ilike '%platform.agents%for share%'`;
+				blocked = (row?.waiting ?? 0) > 0;
+				if (!blocked) await new Promise((resolve) => setTimeout(resolve, 50));
+			}
+			expect(blocked).toBe(true);
+
+			mayFanOut.resolve();
+			// 修复前其中一个事务被 PostgreSQL 作为死锁牺牲者终止（40P01）。
+			await expect(fanOut).resolves.toBe("fanned out");
+			await expect(read).resolves.toMatchObject({ outcome: "found" });
+		} finally {
+			await lifecycle.end({ timeout: 5 });
+			await transaction.close();
+		}
+	});
+
 	it("accepts the next Web message on an idle-reclaimed Session and requests its resume (#2239)", async () => {
 		await persistConformanceModelConfiguration(
 			conformanceModelConfiguration,
