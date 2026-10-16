@@ -597,6 +597,27 @@ export function createConversationDispatchUseCaseV1(
 						: { schemaVersion: 1, outcome: "stale" };
 				}
 				if (
+					!claim.metadataRecovery &&
+					recoveryExhausted(claim) &&
+					(claim.operation === "conversation.turn.submit.v1" ||
+						claim.operation === "conversation.turn.regenerate.v1" ||
+						claim.operation === "conversation.turn.stop.v1" ||
+						isNativeCapabilityOperation(claim.operation))
+				) {
+					const finished = await dependencies.store.finish({
+						claim,
+						status: "failed",
+						transition: {
+							executionStatus: "failed",
+							conversationStatus: "ready",
+						},
+						errorCode: "RUNTIME_RECOVERY_TIMEOUT",
+					});
+					return finished
+						? { schemaVersion: 1, outcome: "rejected" }
+						: { schemaVersion: 1, outcome: "stale" };
+				}
+				if (
 					claim.executionStatus === "processing" ||
 					claim.executionStatus === "unknown" ||
 					executionTerminal(claim.executionStatus)

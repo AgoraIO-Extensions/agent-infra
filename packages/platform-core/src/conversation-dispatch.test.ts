@@ -530,6 +530,34 @@ function dispatch(
 }
 
 describe("bounded unknown recovery", () => {
+	it("closes a denied unknown stop after the durable attempt limit", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				operation: "conversation.turn.stop.v1",
+				itemId: "conversation:stop:stop-1",
+				messageId: null,
+				stopRequestId: "stop-1",
+				input: null,
+				executionStatus: "unknown",
+				stopPending: true,
+				attemptCount: 3,
+			}),
+		);
+		const h = setup({
+			store,
+			maxRecoveryAttempts: 3,
+			authorization: deniedAuthorization(),
+		});
+
+		await expect(dispatch(h.useCase, store.current.itemId)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "rejected",
+		});
+		expect(store.outboxStatus).toBe("failed");
+		expect(store.errorCode).toBe("RUNTIME_RECOVERY_TIMEOUT");
+		expect(store.current.executionStatus).toBe("failed");
+	});
+
 	it("fails an occupied unknown execution after the durable attempt limit", async () => {
 		const store = new MemoryDispatchStore(
 			claim({ executionStatus: "unknown", attemptCount: 3 }),
