@@ -14,6 +14,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- printf "%s-%s" $base .suffix -}}
 {{- end -}}
 
+{{/* Runtime auth contract: this release-scoped name is shared by API and Worker. */}}
+{{- define "agent-infra.nativeMetadataServiceName" -}}
+{{- include "agent-infra.componentName" (dict "root" . "suffix" "platform-worker-native-metadata") -}}
+{{- end -}}
+
 {{- define "agent-infra.image" -}}
 {{- printf "%s@%s" .repository .digest -}}
 {{- end -}}

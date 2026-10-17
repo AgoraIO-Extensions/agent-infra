@@ -16,6 +16,15 @@ local_state_root=${PLATFORM_LOCAL_STATE_DIRECTORY:-${XDG_STATE_HOME:-$HOME/.loca
 }
 export PLATFORM_LOCAL_NGINX_CONFIG="$local_state_root/$PLATFORM_LOCAL_PROJECT/nginx.conf"
 export PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE="$local_state_root/$PLATFORM_LOCAL_PROJECT/proxy-token"
+export PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE="$local_state_root/$PLATFORM_LOCAL_PROJECT/native-metadata-worker-token"
+export PLATFORM_LOCAL_NATIVE_METADATA_WORKER_ORIGIN=""
+export PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS="${PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS:-}"
+mkdir -p "$local_state_root/$PLATFORM_LOCAL_PROJECT"
+chmod 700 "$local_state_root/$PLATFORM_LOCAL_PROJECT"
+if [[ ! -e "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE" ]]; then
+  (umask 077 && : > "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE")
+fi
+chmod 600 "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE"
 build_context_root=${PLATFORM_LOCAL_BUILD_CONTEXT:-$repository_root}
 [[ "$build_context_root" = /* && -f "$build_context_root/docker-compose.yml" ]] || {
   echo "PLATFORM_LOCAL_BUILD_CONTEXT must contain a docker-compose.yml" >&2
@@ -169,6 +178,197 @@ worker_values() {
   fi
 }
 
+native_metadata_route_enabled=false
+native_metadata_token_secret=
+native_metadata_token_key=
+native_metadata_service_name=
+native_metadata_forward_pid_file="$local_state_root/$PLATFORM_LOCAL_PROJECT/native-metadata-worker-port-forward.pid"
+native_metadata_forward_log="$local_state_root/$PLATFORM_LOCAL_PROJECT/native-metadata-worker-port-forward.log"
+native_metadata_proxy_pid_file="$local_state_root/$PLATFORM_LOCAL_PROJECT/native-metadata-worker-proxy.pid"
+native_metadata_proxy_log="$local_state_root/$PLATFORM_LOCAL_PROJECT/native-metadata-worker-proxy.log"
+native_metadata_forward_bind_address=
+
+read_native_metadata_worker_route() {
+  native_metadata_route_enabled=false
+  native_metadata_token_secret=
+  native_metadata_token_key=
+  native_metadata_service_name=
+  local route
+  route=$(printf '%s' "$worker_manifest" | node --input-type=module -e '
+    import { parseAllDocuments } from "yaml";
+    let input = "";
+    process.stdin.on("data", (chunk) => { input += chunk; });
+    process.stdin.on("end", () => {
+      try {
+        const documents = parseAllDocuments(input).map((document) => document.toJS()).filter(Boolean);
+        const deployment = documents.find((item) => item.kind === "Deployment" && item.spec?.template?.spec?.containers?.some((container) => container.name === "platform-worker"));
+        const container = deployment?.spec?.template?.spec?.containers?.find((item) => item.name === "platform-worker");
+        const enabled = container?.env?.find((item) => item.name === "PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED")?.value === "true";
+        if (!enabled) process.exit(0);
+        const volume = deployment?.spec?.template?.spec?.volumes?.find((item) => item.name === "runtime-auth");
+        const secretName = volume?.secret?.secretName;
+        const key = volume?.secret?.items?.find((item) => item.path === "service-token")?.key;
+        const service = documents.find((item) => item.kind === "Service" && item.metadata?.labels?.["app.kubernetes.io/component"] === "platform-worker" && item.spec?.ports?.some((port) => port.targetPort === "native-metadata"));
+        const serviceName = service?.metadata?.name;
+        if (typeof secretName !== "string" || typeof key !== "string" || typeof serviceName !== "string") process.exit(2);
+        process.stdout.write(`${secretName}\t${key}\t${serviceName}`);
+      } catch { process.exit(2); }
+    });
+  ') || {
+    echo "Local Worker native metadata manifest could not be inspected" >&2
+    return 1
+  }
+  if [[ -z "$route" ]]; then return 0; fi
+  native_metadata_route_enabled=true
+  native_metadata_token_secret=${route%%$'\t'*}
+  route=${route#*$'\t'}
+  native_metadata_token_key=${route%%$'\t'*}
+  native_metadata_service_name=${route#*$'\t'}
+  [[ -n "$native_metadata_token_secret" && -n "$native_metadata_token_key" && -n "$native_metadata_service_name" ]] || {
+    echo "Local Worker native metadata token reference is invalid" >&2
+    return 1
+  }
+}
+
+stop_native_metadata_forward() {
+  local pid command
+  if [[ -r "$native_metadata_forward_pid_file" ]]; then
+    pid=$(cat "$native_metadata_forward_pid_file")
+    if [[ "$pid" =~ ^[0-9]+$ ]]; then
+      command=$(ps -p "$pid" -o command= 2>/dev/null || true)
+      if [[ "$command" == *"port-forward"*"native-metadata"* ]]; then
+        kill "$pid" >/dev/null 2>&1 || true
+      fi
+    fi
+  fi
+  if [[ -r "$native_metadata_proxy_pid_file" ]]; then
+    pid=$(cat "$native_metadata_proxy_pid_file")
+    if [[ "$pid" =~ ^[0-9]+$ ]]; then
+      command=$(ps -p "$pid" -o command= 2>/dev/null || true)
+      if [[ "$command" == *"native-metadata-proxy.mjs"* ]]; then
+        kill "$pid" >/dev/null 2>&1 || true
+      fi
+    fi
+  fi
+  rm -f "$native_metadata_forward_pid_file" "$native_metadata_forward_log" "$native_metadata_proxy_pid_file" "$native_metadata_proxy_log"
+  (umask 077 && : > "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE")
+  export PLATFORM_LOCAL_NATIVE_METADATA_WORKER_ORIGIN=""
+}
+
+resolve_native_metadata_forward_bind_address() {
+  local address candidate
+  candidate=${PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS:-}
+  if [[ -z "$candidate" ]]; then
+    if command -v ipconfig >/dev/null 2>&1; then
+      candidate=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)
+    else
+      candidate=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+  fi
+  [[ -n "$candidate" ]] || {
+    echo "Local native metadata host address could not be resolved; set PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS" >&2
+    return 1
+  }
+  address=$candidate
+  [[ "$address" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "Local native metadata host address could not be resolved" >&2
+    return 1
+  }
+  [[ "$address" =~ ^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[0-1])\. ]] || {
+    echo "Local native metadata host address is not private" >&2
+    return 1
+  }
+  printf '%s' "$address"
+}
+
+prepare_native_metadata_forward() {
+  stop_native_metadata_forward
+  : > "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE"
+  if [[ "$native_metadata_route_enabled" != true ]]; then return 0; fi
+  local secret_json token encoded port
+  if ! secret_json=$("${kube_target[@]}" get "secret/$native_metadata_token_secret" --ignore-not-found -o json); then
+    echo "Local native metadata Worker Secret could not be read" >&2
+    stop_native_metadata_forward
+    return 1
+  fi
+  token=$(printf '%s' "$secret_json" | node -e '
+    try {
+      const input = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+      const value = input.data?.[process.argv[1]];
+      if (typeof value !== "string" || value.length === 0) process.exit(1);
+      process.stdout.write(Buffer.from(value, "base64").toString("utf8"));
+    } catch { process.exit(1); }
+  ' "$native_metadata_token_key") || {
+    echo "Local native metadata Worker Secret is missing its service token" >&2
+    stop_native_metadata_forward
+    return 1
+  }
+  if [[ -z "$token" || ${#token} -gt 8192 || "$token" =~ [[:space:]] ]]; then
+    echo "Local native metadata Worker service token is invalid" >&2
+    stop_native_metadata_forward
+    return 1
+  fi
+  (umask 077 && printf '%s' "$token" > "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE")
+  port=${PLATFORM_LOCAL_NATIVE_METADATA_WORKER_PORT:-3004}
+  [[ "$port" =~ ^[1-9][0-9]{0,4}$ && "$port" -le 65535 ]] || {
+    echo "PLATFORM_LOCAL_NATIVE_METADATA_WORKER_PORT must be a valid port" >&2
+    stop_native_metadata_forward
+    return 1
+  }
+  native_metadata_forward_bind_address=$(resolve_native_metadata_forward_bind_address) || {
+    stop_native_metadata_forward
+    return 1
+  }
+  export PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS="$native_metadata_forward_bind_address"
+  local forward_port=$((port + 1))
+  [[ "$forward_port" -le 65535 ]] || {
+    echo "PLATFORM_LOCAL_NATIVE_METADATA_WORKER_PORT leaves no internal forward port" >&2
+    stop_native_metadata_forward
+    return 1
+  }
+  local compose_subnet
+  compose_subnet=$("${docker_target[@]}" network inspect "${PLATFORM_LOCAL_PROJECT}_default" --format '{{(index .IPAM.Config 0).Subnet}}') || {
+    echo "Local Compose network subnet could not be resolved" >&2
+    stop_native_metadata_forward
+    return 1
+  }
+  [[ "$compose_subnet" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.).*/([0-9]|[12][0-9]|3[0-2])$ ]] || {
+    echo "Local Compose network subnet is not a private IPv4 CIDR" >&2
+    stop_native_metadata_forward
+    return 1
+  }
+  # Keep kubectl on loopback. The host proxy is the only listener reachable
+  # from Compose and rejects every source outside the project subnet.
+  "${kube_target[@]}" port-forward --address 127.0.0.1 "service/$native_metadata_service_name" "$forward_port:80" >"$native_metadata_forward_log" 2>&1 &
+  local pid=$!
+  printf '%s' "$pid" > "$native_metadata_forward_pid_file"
+  for _ in {1..50}; do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      echo "Local native metadata Worker port-forward exited" >&2
+      stop_native_metadata_forward
+      return 1
+    fi
+    if (echo >/dev/tcp/127.0.0.1/"$forward_port") >/dev/null 2>&1; then break; fi
+    sleep 0.1
+  done
+  if ! (echo >/dev/tcp/127.0.0.1/"$forward_port") >/dev/null 2>&1; then
+    echo "Local native metadata Worker port-forward did not become ready" >&2
+    stop_native_metadata_forward
+    return 1
+  fi
+  node deploy/local/native-metadata-proxy.mjs "$native_metadata_forward_bind_address" "$port" "$forward_port" "$compose_subnet" >"$native_metadata_proxy_log" 2>&1 &
+  pid=$!
+  printf '%s' "$pid" > "$native_metadata_proxy_pid_file"
+  sleep 0.1
+  if ! kill -0 "$pid" >/dev/null 2>&1; then
+    echo "Local native metadata host proxy exited" >&2
+    stop_native_metadata_forward
+    return 1
+  fi
+  export PLATFORM_LOCAL_NATIVE_METADATA_WORKER_ORIGIN="http://platform-worker-native-metadata:$port"
+  return 0
+}
+
 validate_deployment_material() {
   : "${PLATFORM_LOCAL_API_DIRECTORY:?Set the API-only deployment directory}"
   : "${PLATFORM_LOCAL_WORKER_VALUES:?Set an absolute local Worker values file}"
@@ -189,6 +389,7 @@ validate_deployment_material() {
     echo "Local Worker values are missing or invalid" >&2
     return 1
   fi
+  read_native_metadata_worker_route
 }
 
 check_worker_secret_material() {
@@ -712,13 +913,21 @@ case "${1:-}" in
     ')
     "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas="$worker_replicas"
     "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
-    "${compose[@]}" up --detach --wait --force-recreate --no-deps platform-api
+    prepare_native_metadata_forward
+    if ! "${compose[@]}" up --detach --wait --force-recreate --no-deps platform-api; then
+      stop_native_metadata_forward
+      exit 1
+    fi
     if ! node deploy/local/check-api-auth.ts "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "${PLATFORM_LOCAL_API_PORT:-3000}" "${PLATFORM_LOCAL_WEB_PORT:-3001}"; then
       "${compose[@]}" stop platform-api
+      stop_native_metadata_forward
       echo "Local API login boundary is unavailable; Web remains stopped" >&2
       exit 1
     fi
-    "${compose[@]}" up --detach --wait --force-recreate --no-deps web
+    if ! "${compose[@]}" up --detach --wait --force-recreate --no-deps web; then
+      stop_native_metadata_forward
+      exit 1
+    fi
     ;;
   status)
     worker_context
@@ -728,6 +937,7 @@ case "${1:-}" in
     "${kube_target[@]}" get "service/$database_service" "endpointslice/$database_endpoint" "secret/$database_service" "service/$directory_service" "endpointslice/$directory_endpoint"
     ;;
   stop)
+    stop_native_metadata_forward
     worker_context
     check_database_resource_ownership
     check_database_network_ownership
@@ -744,7 +954,7 @@ case "${1:-}" in
       disconnect_directory_sync
       disconnect_worker_database
       "${compose[@]}" stop object-storage postgres
-      rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE"
+      rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE"
       exit 0
     fi
     [[ "$worker_replicas" =~ ^[0-9]+$ ]] || { echo "Worker deployment has no valid replica count" >&2; exit 1; }
@@ -768,7 +978,7 @@ case "${1:-}" in
     disconnect_directory_sync
     disconnect_worker_database
     "${compose[@]}" stop object-storage postgres
-    rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE"
+    rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE"
     ;;
   reset)
     [[ "${2:-}" == "$PLATFORM_LOCAL_PROJECT" ]] || {

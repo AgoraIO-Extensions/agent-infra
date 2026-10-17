@@ -12,6 +12,16 @@
 API 与 Worker 的数据库地址由本入口统一生成；Worker 的环境变量优先级及 namespace
 约束见[正式 Worker 部署说明](../platform-worker/README.md#打包与启动)。
 
+本地 kind 默认开启 native metadata：`platform.sh up` 在 Worker rollout 后读取部署自身的
+runtime service-token Secret，启动带 PID/日志回收的受控 `kubectl port-forward`，并通过
+固定 `platform-worker-native-metadata` host alias 把 origin 传给 Compose API；必须提供
+`PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS`，它是从选定 Docker context 的 Compose
+容器可达的 RFC1918 host IPv4；省略时脚本从本机 en0/en1 或首个 RFC1918 接口发现。脚本用同一地址作为 `kubectl --address` 和 Compose
+host alias，拒绝 Docker VM bridge-only 地址推测（不是 Kubernetes Service 的公网入口），只由当前
+选定 kind context 和 project 生命周期持有。token 只写入当前 project 的私有状态
+文件，不进入环境变量、日志或请求；脚本停止时会回收转发和文件。Worker values 显式设置
+`platformWorker.nativeMetadataGateway.enabled=false` 时，不建立转发，也不向 API 提供 origin。
+
 ## 配置
 
 复制 [.env.example](.env.example) 到仓库外的本地配置文件，填写本地 Docker context、独立

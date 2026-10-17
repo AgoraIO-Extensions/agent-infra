@@ -668,7 +668,7 @@ test("production Worker requires a private module and runtime authorization moun
 	assert.match(invalidCaRef.stderr, /trustedCaSecretRef/);
 });
 
-test("native metadata Worker gateway is opt-in and restricted to Platform API", () => {
+test("native metadata Worker gateway is disabled for topology and restricted to Platform API", () => {
 	const disabled = objects(render().stdout);
 	assert.equal(
 		resource(
@@ -695,13 +695,11 @@ test("native metadata Worker gateway is opt-in and restricted to Platform API", 
 		"Service",
 		"topology-agent-infra-platform-worker-native-metadata",
 	);
-	assert.equal(service.spec.ports[0].port, 3010);
-	const sandboxService = resource(
-		resources,
-		"Service",
-		"platform-worker-native-metadata",
-	);
-	assert.equal(sandboxService.spec.ports[0].port, 3010);
+	assert.equal(service.spec.ports[0].port, 80);
+	assert.deepEqual(service.spec.selector, {
+		"app.kubernetes.io/instance": "topology",
+		"app.kubernetes.io/component": "platform-worker",
+	});
 	const deployment = resource(
 		resources,
 		"Deployment",
@@ -779,8 +777,163 @@ test("native metadata Worker gateway is opt-in and restricted to Platform API", 
 		"--set",
 		"platformWorker.nativeMetadataGateway.enabled=true",
 	);
-	assert.notEqual(external.status, 0);
-	assert.match(external.stderr, /requires platformApi\.placement=in-cluster/);
+	assert.equal(external.status, 0, external.stderr);
+	assert.ok(
+		resource(
+			objects(external.stdout),
+			"Service",
+			"topology-agent-infra-platform-worker-native-metadata",
+		),
+	);
+});
+
+test("in-cluster native metadata defaults derive fixed API and Worker inputs", () => {
+	const result = render(
+		"--set",
+		"workloadTopology.enabled=false",
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set",
+		"platformWorker.nativeMetadataGateway.enabled=true",
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+		"--set-string",
+		"platformWorker.deploymentModule=file:///app/dist/deployment.mjs",
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.name=worker-configuration",
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.key=configuration.mjs",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.name=worker-auth",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.privateKeyKey=runtime-grant.pem",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.serviceTokenKey=service-token",
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const resources = objects(result.stdout);
+	const stableService = resource(
+		resources,
+		"Service",
+		"topology-agent-infra-platform-worker-native-metadata",
+	);
+	assert.equal(stableService.spec.ports[0].port, 80);
+	assert.deepEqual(stableService.spec.selector, {
+		"app.kubernetes.io/instance": "topology",
+		"app.kubernetes.io/component": "platform-worker",
+	});
+	const api = resource(
+		resources,
+		"Deployment",
+		"topology-agent-infra-platform-api",
+	);
+	const apiContainer = api.spec.template.spec.containers[0];
+	assert.equal(
+		apiContainer.env.find(
+			(entry) => entry.name === "PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN",
+		)?.value,
+		"http://topology-agent-infra-platform-worker-native-metadata",
+	);
+	assert.equal(
+		new URL(
+			apiContainer.env.find(
+				(entry) => entry.name === "PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN",
+			)?.value,
+		).hostname,
+		stableService.metadata.name,
+	);
+	assert.equal(
+		apiContainer.env.find(
+			(entry) =>
+				entry.name === "PLATFORM_API_NATIVE_METADATA_WORKER_SERVICE_TOKEN_FILE",
+		)?.value,
+		"/var/run/agent-infra/native-metadata-worker/service-token",
+	);
+	assert.deepEqual(
+		api.spec.template.spec.volumes.find(
+			(volume) => volume.name === "native-metadata-worker-token",
+		)?.secret,
+		{
+			secretName: "worker-auth",
+			defaultMode: 288,
+			items: [{ key: "service-token", path: "service-token" }],
+		},
+	);
+	assert.equal(api.spec.template.spec.securityContext.fsGroup, 1000);
+	const worker = resource(
+		resources,
+		"Deployment",
+		"topology-agent-infra-platform-worker",
+	);
+	assert.equal(
+		worker.spec.template.spec.containers[0].env.find(
+			(entry) =>
+				entry.name === "PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED",
+		)?.value,
+		"true",
+	);
+	assert.equal(
+		worker.spec.template.spec.containers[0].env.find(
+			(entry) => entry.name === "PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT",
+		)?.value,
+		"3004",
+	);
+	assert.equal(
+		worker.spec.template.spec.containers[0].env.find(
+			(entry) =>
+				entry.name === "PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ORIGIN",
+		)?.value,
+		"http://topology-agent-infra-platform-worker-native-metadata",
+	);
+	assert.equal(
+		worker.spec.template.spec.containers[0].env.find(
+			(entry) => entry.name === "PLATFORM_WORKER_RELEASE_NAME",
+		)?.value,
+		"topology",
+	);
+	const disabled = render(
+		"--set",
+		"workloadTopology.enabled=false",
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set",
+		"platformWorker.nativeMetadataGateway.enabled=false",
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+		"--set-string",
+		"platformWorker.deploymentModule=file:///app/dist/deployment.mjs",
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.name=worker-configuration",
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.key=configuration.mjs",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.name=worker-auth",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.privateKeyKey=runtime-grant.pem",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.serviceTokenKey=service-token",
+	);
+	assert.equal(disabled.status, 0, disabled.stderr);
+	const disabledResources = objects(disabled.stdout);
+	assert.equal(
+		resource(
+			disabledResources,
+			"Service",
+			"topology-agent-infra-platform-worker-native-metadata",
+		),
+		undefined,
+	);
+	const disabledApi = resource(
+		disabledResources,
+		"Deployment",
+		"topology-agent-infra-platform-api",
+	);
+	assert.equal(
+		disabledApi.spec.template.spec.containers[0].env.some((entry) =>
+			entry.name.startsWith("PLATFORM_API_NATIVE_METADATA_WORKER_"),
+		),
+		false,
+	);
 });
 
 test("enterprise directory deployment keeps migration ahead of its runtime resources", () => {

@@ -32,7 +32,7 @@ function fixture() {
 	return { ...api, adapter, runtimeAuth };
 }
 
-it("injects a fixed native metadata Worker origin and shared token", async () => {
+it("injects a release-scoped native metadata Worker origin and shared token", async () => {
 	const api = fakeKubernetesApi();
 	const { publicKey } = generateKeyPairSync("ed25519");
 	const runtimeAuth = {
@@ -43,7 +43,8 @@ it("injects a fixed native metadata Worker origin and shared token", async () =>
 			.toString(),
 		grantIssuer: "platform-worker",
 		serviceTokenSecret: { name: "runtime-transport", key: "token" },
-		nativeMetadataWorkerOrigin: "http://platform-worker-native-metadata",
+		nativeMetadataWorkerOrigin:
+			"http://topology-agent-infra-platform-worker-native-metadata",
 	};
 	const adapter = createKubernetesRuntimeAdapterV1({
 		client: api.client,
@@ -86,6 +87,7 @@ it("injects a fixed native metadata Worker origin and shared token", async () =>
 
 it.each([
 	"http://attacker.example",
+	"http://platform-worker-native-metadata-attacker",
 	"http://platform-worker-native-metadata:3005",
 	"http://platform-worker-native-metadata/private",
 ])("rejects an unfixed native metadata Worker origin: %s", (origin) => {

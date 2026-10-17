@@ -419,6 +419,17 @@ it("uses the selected deployment database for all Worker consumers and prepares 
 	});
 });
 
+it("fails closed when native metadata is enabled without runtime auth", () => {
+	const result = run({
+		PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED: "true",
+	});
+	expect(result.status).toBe(1);
+	expect(JSON.parse(result.stdout)).toEqual({
+		error: "PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID",
+		calls: [],
+	});
+});
+
 it("assembles the optional Store-backed Skill materializer in deployment entry", async () => {
 	const path = join(directory, "configuration.mjs");
 	const original = await readFile(path, "utf8");

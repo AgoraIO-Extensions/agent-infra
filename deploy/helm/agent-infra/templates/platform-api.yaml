@@ -1,6 +1,16 @@
 {{- $callbackAuthRef := .Values.platformApi.connectionCallbackAuthSecretRef | default dict -}}
+{{- $workerAuthRef := .Values.platformWorker.runtimeAuthSecretRef | default dict -}}
+{{- $nativeMetadataServiceName := include "agent-infra.nativeMetadataServiceName" . -}}
 {{- if and (ne .Values.platformApi.placement "in-cluster") $callbackAuthRef.name -}}
 {{- fail "platformApi.connectionCallbackAuthSecretRef requires platformApi.placement=in-cluster" -}}
+{{- end -}}
+{{- if and .Values.platformWorker.nativeMetadataGateway.enabled (eq .Values.platformApi.placement "in-cluster") (not .Values.workloadTopology.enabled) -}}
+{{- if not $workerAuthRef.name -}}
+{{- fail "platformWorker.runtimeAuthSecretRef.name is required for native metadata" -}}
+{{- end -}}
+{{- if not $workerAuthRef.serviceTokenKey -}}
+{{- fail "platformWorker.runtimeAuthSecretRef.serviceTokenKey is required for native metadata" -}}
+{{- end -}}
 {{- end -}}
 {{- if eq .Values.platformApi.placement "in-cluster" -}}
 {{- $name := include "agent-infra.componentName" (dict "root" . "suffix" "platform-api") -}}
@@ -49,6 +59,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -81,6 +92,12 @@ spec:
             - name: PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE
               value: /var/run/agent-infra/connection-callback-auth/callback.auth
             {{- end }}
+            {{- if and .Values.platformWorker.nativeMetadataGateway.enabled (not .Values.workloadTopology.enabled) }}
+            - name: PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN
+              value: http://{{ $nativeMetadataServiceName }}
+            - name: PLATFORM_API_NATIVE_METADATA_WORKER_SERVICE_TOKEN_FILE
+              value: /var/run/agent-infra/native-metadata-worker/service-token
+            {{- end }}
             {{- include "agent-infra.connectionEnv" . | nindent 12 }}
           envFrom:
             - configMapRef:
@@ -94,6 +111,12 @@ spec:
             - name: connection-callback-auth
               mountPath: /var/run/agent-infra/connection-callback-auth/callback.auth
               subPath: callback.auth
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.platformWorker.nativeMetadataGateway.enabled (not .Values.workloadTopology.enabled) }}
+            - name: native-metadata-worker-token
+              mountPath: /var/run/agent-infra/native-metadata-worker/service-token
+              subPath: service-token
               readOnly: true
             {{- end }}
       volumes:
@@ -111,5 +134,14 @@ spec:
             items:
               - key: {{ required "platformApi.connectionCallbackAuthSecretRef.key is required" $callbackAuthRef.key }}
                 path: callback.auth
+        {{- end }}
+        {{- if and .Values.platformWorker.nativeMetadataGateway.enabled (not .Values.workloadTopology.enabled) }}
+        - name: native-metadata-worker-token
+          secret:
+            secretName: {{ $workerAuthRef.name }}
+            defaultMode: 288
+            items:
+              - key: {{ $workerAuthRef.serviceTokenKey }}
+                path: service-token
         {{- end }}
 {{- end }}

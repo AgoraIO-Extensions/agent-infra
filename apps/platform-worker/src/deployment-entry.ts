@@ -20,6 +20,7 @@ import {
 import type { PlatformWorkerInternalGatewayServerOptionsV1 } from "./runtime-native-metadata-server.js";
 import { createProductionSavedKeyCandidatesReaderV1 } from "./saved-key-candidates-production.js";
 import { createWorkerSavedKeyCandidatesApp } from "./saved-key-candidates-service.js";
+import { isNativeMetadataWorkerOriginV1 } from "./session-workload-adapter.js";
 import {
 	type DeploymentSkillMaterializerFactoryV1,
 	resolveDeploymentSkillMaterializerV1,
@@ -115,7 +116,7 @@ function resolveConnectionInstallation(
 // Deployment-owned code supplies current IdentityAdapter facts and Worker-only material.
 // The adjacent configuration.mjs is mounted by the deployment, never bundled into the image.
 const {
-	workloadInput,
+	workloadInput: configuredWorkloadInput,
 	signing,
 	serviceToken,
 	directory,
@@ -127,13 +128,118 @@ const {
 	connectionInstallation: configuredConnectionInstallation,
 	createSkillMaterializer,
 	skillMaterialization,
-	nativeMetadataGateway,
+	nativeMetadataGateway: configuredNativeMetadataGateway,
 	modelDirectory,
 	savedKeyCandidates,
 	savedKeyCandidatesPolicy,
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
+
+function nativeMetadataGatewayPortFromEnvironment() {
+	const enabled = process.env.PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED;
+	if (enabled === undefined || enabled === "false") return undefined;
+	if (enabled !== "true")
+		throw new Error(
+			"PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID",
+		);
+	const value =
+		process.env.PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT ?? "3004";
+	const port = Number(value);
+	if (!Number.isSafeInteger(port) || port < 1 || port > 65_535)
+		throw new Error(
+			"PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID",
+		);
+	return port;
+}
+
+const configuredNativeMetadataGatewayPort =
+	configuredNativeMetadataGateway?.port;
+const environmentNativeMetadataGatewayPort =
+	nativeMetadataGatewayPortFromEnvironment();
+const nativeMetadataGatewayEnabled =
+	configuredNativeMetadataGateway !== undefined ||
+	environmentNativeMetadataGatewayPort !== undefined;
+const nativeMetadataGatewayPort =
+	configuredNativeMetadataGatewayPort ??
+	environmentNativeMetadataGatewayPort ??
+	(nativeMetadataGatewayEnabled ? 3004 : undefined);
+if (nativeMetadataGatewayEnabled && !configuredWorkloadInput.policy.runtimeAuth)
+	throw new Error(
+		"PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID",
+	);
+const configuredNativeMetadataWorkerOrigin =
+	process.env.PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ORIGIN;
+if (
+	configuredNativeMetadataWorkerOrigin !== undefined &&
+	!isNativeMetadataWorkerOriginV1(configuredNativeMetadataWorkerOrigin)
+)
+	throw new Error(
+		"PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID",
+	);
+const nativeMetadataWorkerOrigin =
+	configuredNativeMetadataWorkerOrigin ??
+	"http://platform-worker-native-metadata";
+const nativeMetadataGatewaySelectorInstance =
+	process.env.PLATFORM_WORKER_RELEASE_NAME;
+if (
+	nativeMetadataGatewayEnabled &&
+	(!nativeMetadataGatewaySelectorInstance ||
+		!/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(
+			nativeMetadataGatewaySelectorInstance,
+		))
+)
+	throw new Error(
+		"PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID",
+	);
+const validatedNativeMetadataGatewaySelectorInstance =
+	nativeMetadataGatewaySelectorInstance as string;
+const nativeMetadataGateway =
+	configuredNativeMetadataGateway ??
+	(nativeMetadataGatewayPort === undefined
+		? undefined
+		: { port: nativeMetadataGatewayPort });
+const workloadInput =
+	nativeMetadataGatewayPort === undefined
+		? configuredWorkloadInput
+		: {
+				...configuredWorkloadInput,
+				policy: {
+					...configuredWorkloadInput.policy,
+					...(configuredWorkloadInput.policy.runtimeAuth
+						? {
+								runtimeAuth: {
+									...configuredWorkloadInput.policy.runtimeAuth,
+									...(configuredWorkloadInput.policy.runtimeAuth
+										.nativeMetadataWorkerOrigin === undefined
+										? {
+												nativeMetadataWorkerOrigin: nativeMetadataWorkerOrigin,
+											}
+										: {}),
+								},
+							}
+						: {}),
+					...(nativeMetadataGatewayEnabled &&
+					configuredWorkloadInput.policy.nativeMetadataWorkerEgress ===
+						undefined
+						? {
+								nativeMetadataWorkerEgress: [
+									{
+										destination: {
+											namespace: process.env.PLATFORM_WORKER_NAMESPACE ?? "",
+											podLabels: {
+												"app.kubernetes.io/component": "platform-worker",
+												"app.kubernetes.io/instance":
+													validatedNativeMetadataGatewaySelectorInstance as string,
+											},
+										},
+										port: nativeMetadataGatewayPort,
+									},
+								],
+							}
+						: {}),
+				},
+			};
 
 // Both the Pod file and Runtime HTTP assertion consume this captured source.
 const connectionConsumerSnapshot = createRuntimeConnectionConsumerSnapshotV1(

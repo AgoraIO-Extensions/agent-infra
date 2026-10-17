@@ -9,7 +9,7 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -23,6 +23,16 @@ async function executable(directory, name, body) {
 }
 
 async function fixture() {
+	const nativeBindAddress = Object.values(networkInterfaces())
+		.flatMap((entries) => entries ?? [])
+		.find(
+			(entry) =>
+				entry.family === "IPv4" &&
+				!entry.internal &&
+				/^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(entry.address),
+		)?.address;
+	if (!nativeBindAddress)
+		throw new Error("native metadata fixture host address unavailable");
 	const directory = await mkdtemp(
 		join(tmpdir(), "agent-infra-local-lifecycle-"),
 	);
@@ -31,6 +41,7 @@ async function fixture() {
 	await mkdir(bin);
 	await mkdir(api);
 	const log = join(directory, "commands.log");
+	const nativeMetadataRecord = join(directory, "native-metadata-record");
 	const manifest = join(directory, "database-route.yaml");
 	const networkState = join(directory, "kind-network-connected");
 	const routeState = join(directory, "database-route.json");
@@ -44,6 +55,7 @@ async function fixture() {
 	const localState = join(directory, "state");
 	await Promise.all([
 		writeFile(log, ""),
+		writeFile(nativeMetadataRecord, ""),
 		writeFile(kubeconfig, "fixture"),
 		writeFile(
 			values,
@@ -73,6 +85,9 @@ if [[ "$1" == "deploy/local/check-api-auth.ts" ]]; then
   printf 'node %s\\n' "$*" >> "$COMMAND_LOG"
   exit "\${FAKE_AUTH_PROBE_EXIT:-0}"
 fi
+if [[ "$1" == "deploy/local/native-metadata-proxy.mjs" ]]; then
+  printf 'native proxy %s\\n' "$*" >> "$COMMAND_LOG"
+fi
 exec "$REAL_NODE" "$@"`,
 	);
 	await executable(
@@ -85,15 +100,25 @@ elif [[ "$*" == *"container inspect isolated-control-plane"* ]]; then
   printf '%s\\n' "$FAKE_KIND_LABEL"
 elif [[ "$*" == *"port isolated-control-plane 6443/tcp"* ]]; then
   printf '%s\\n' "$FAKE_KIND_PORT"
+elif [[ "$*" == *"network inspect agent-infra-verify_default"* ]]; then
+  printf '192.168.65.0/24\\n'
 elif [[ "$*" == *"compose"*"ps --all -q postgres"* ]]; then
   printf 'fixture-postgres\\n'
 elif [[ "$*" == *"compose"*"ps -q postgres"* ]]; then
   [[ "$FAKE_CONTAINER_RUNNING" == 1 ]] && printf 'fixture-postgres\\n'
 elif [[ "$*" == *"compose"*"config --format json"* ]]; then
+  if [[ -n "$NATIVE_METADATA_RECORD" && -n "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_ORIGIN" ]]; then
+    printf '%s|%s\\n' "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_ORIGIN" "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE" >> "$NATIVE_METADATA_RECORD"
+  fi
   printf '{"services":{"platform-api":{"environment":{"PLATFORM_DATABASE_URL":"%s"}}}}\\n' "$FAKE_DATABASE_URL"
 elif [[ "$*" == *"compose"*"run --rm --no-deps platform-api"* ]]; then
   [[ -r "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" ]] || exit 9
   printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
+elif [[ "$*" == *"compose"*"up --detach --wait --force-recreate --no-deps platform-api"* ]]; then
+  printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
+  if [[ -n "$NATIVE_METADATA_RECORD" && -n "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_ORIGIN" ]]; then
+    printf '%s|%s\\n' "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_ORIGIN" "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE" >> "$NATIVE_METADATA_RECORD"
+  fi
 elif [[ "$*" == *"container inspect fixture-postgres"*"IPAddress"* ]]; then
   printf '172.18.0.42\\n'
 elif [[ "$*" == *"container inspect fixture-postgres"* ]]; then
@@ -133,7 +158,7 @@ fi`,
 		`
 printf 'helm %s\\n' "$*" >> "$COMMAND_LOG"
 if [[ "$*" == *" template "* ]]; then
-  cat <<'YAML'
+  cat <<YAML
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -144,6 +169,10 @@ spec:
       containers:
         - name: platform-worker
           env:
+            - name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED
+              value: "\${FAKE_NATIVE_METADATA_ENABLED:+true}"
+            - name: PLATFORM_WORKER_RELEASE_NAME
+              value: agent-infra-verify
             - name: PLATFORM_DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -165,12 +194,30 @@ spec:
             secretName: fixture-worker-auth
             items:
               - key: runtime-grant.pem
-              - key: service-token
+                path: runtime-grant.pem
+              - key: \${FAKE_NATIVE_METADATA_TOKEN_KEY:-service-token}
+                path: service-token
         - name: decryption-keyring
           secret:
             secretName: agent-infra-worker-decryption-keyring
             items:
               - key: keyring.pem
+YAML
+cat <<YAML
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fixture-worker-native-metadata
+  labels:
+    app.kubernetes.io/component: platform-worker
+spec:
+  selector:
+    app.kubernetes.io/component: platform-worker
+  ports:
+    - name: native-metadata
+      port: 80
+      targetPort: native-metadata
 YAML
 elif [[ "$*" == *"uninstall"* && -n "$FAKE_HELM_UNINSTALL_EXIT" ]]; then
   exit "$FAKE_HELM_UNINSTALL_EXIT"
@@ -200,13 +247,13 @@ elif [[ "$*" == *"--ignore-not-found -o json" ]]; then
     secret_name="\${command#*get secret/}"
     secret_name="\${secret_name%% *}"
     if [[ "$secret_name" == agent-infra-verify-postgres ]]; then
-      printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify","labels":{"app.kubernetes.io/managed-by":"agent-infra-local","agent-infra.agora.io/local-project":"agent-infra-verify"}},"data":{"url":"eA==","configuration.mjs":"eA==","runtime-grant.pem":"eA==","service-token":"eA==","keyring.pem":"eA=="}}\\n' "$secret_name"
+      printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify","labels":{"app.kubernetes.io/managed-by":"agent-infra-local","agent-infra.agora.io/local-project":"agent-infra-verify"}},"data":{"url":"eA==","configuration.mjs":"eA==","runtime-grant.pem":"eA==","service-token":"eA==","runtime-token":"eA==","keyring.pem":"eA=="}}\\n' "$secret_name"
     elif [[ "$secret_name" == fixture-worker-configuration && "$FAKE_SECRET_MISSING_KEY" == 1 ]]; then
       printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify"},"data":{"other":"eA=="}}\\n' "$secret_name"
     elif [[ "$secret_name" == fixture-worker-configuration ]]; then
       printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify"},"data":{"worker-config":"eA=="}}\\n' "$secret_name"
     else
-      printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify"},"data":{"url":"eA==","configuration.mjs":"eA==","runtime-grant.pem":"eA==","service-token":"eA==","keyring.pem":"eA=="}}\\n' "$secret_name"
+      printf '{"kind":"Secret","metadata":{"name":"%s","namespace":"agent-infra-verify"},"data":{"url":"eA==","configuration.mjs":"eA==","runtime-grant.pem":"eA==","service-token":"eA==","runtime-token":"eA==","keyring.pem":"eA=="}}\\n' "$secret_name"
     fi
   elif [[ "$*" == *"get endpointslice/agent-infra-verify-postgres-docker "* && -f "$FAKE_ROUTE_STATE" ]]; then
     cat "$FAKE_ROUTE_STATE"
@@ -215,6 +262,13 @@ elif [[ "$*" == *"--ignore-not-found -o json" ]]; then
   fi
 elif [[ "$*" == *"get deployment agent-infra-verify-agent-infra-platform-worker"*"-o jsonpath="* ]]; then
   printf '%s' "$FAKE_WORKER_REPLICAS"
+elif [[ "$*" == *"port-forward"*"service/"*"native-metadata"* ]]; then
+  command="$*"
+  port="\${command##* }"
+  port="\${port%%:*}"
+  printf 'kubectl %s\\n' "$*" >> "$COMMAND_LOG"
+  printf 'forward-port=%s real-node=%s\\n' "$port" "$REAL_NODE" >> "$COMMAND_LOG"
+  exec "$REAL_NODE" -e 'require("net").createServer().listen(Number(process.argv[1]), "0.0.0.0")' "$port" "port-forward service/native-metadata" >> "$COMMAND_LOG" 2>&1
 elif [[ "$*" == *"get pods -l app.kubernetes.io/instance=agent-infra-verify,app.kubernetes.io/component=platform-worker"* ]]; then
   printf '%s' "$FAKE_WORKER_PODS"
 elif [[ "$*" == *"get statefulsets -l agent-infra.agora.io/agent"* ]]; then
@@ -257,6 +311,7 @@ fi`,
 		PATH: `${bin}:${process.env.PATH}`,
 		REAL_NODE: process.execPath,
 		COMMAND_LOG: log,
+		NATIVE_METADATA_RECORD: nativeMetadataRecord,
 		MANIFEST_LOG: manifest,
 		FAKE_NETWORK_STATE: networkState,
 		FAKE_ROUTE_STATE: routeState,
@@ -279,6 +334,7 @@ fi`,
 		FAKE_HELM_UPGRADE_EXIT: "",
 		FAKE_CONFIGURED_WORKER_REPLICAS: "1",
 		FAKE_HELM_LIST_RESULT: "",
+		FAKE_NATIVE_METADATA_ENABLED: "",
 		FAKE_AUTH_PROBE_EXIT: "",
 		FAKE_AGENT_PVC_JSON: "",
 		FAKE_AGENT_STATEFULSET_JSON: "",
@@ -300,6 +356,8 @@ fi`,
 	return {
 		env,
 		log,
+		nativeBindAddress,
+		nativeMetadataRecord,
 		manifest,
 		async close() {
 			await rm(directory, { recursive: true, force: true });
@@ -325,6 +383,11 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		);
 		await writeFile(f.log, "");
 		assert.equal(run("up", f.env).status, 0);
+		assert.doesNotMatch(
+			await readFile(f.log, "utf8"),
+			/port-forward service\/platform-worker-native-metadata/,
+		);
+		assert.equal(await readFile(f.nativeMetadataRecord, "utf8"), "");
 		const nginxConfig = join(
 			f.env.PLATFORM_LOCAL_STATE_DIRECTORY,
 			"agent-infra-verify/nginx.conf",
@@ -477,6 +540,64 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		);
 		await assert.rejects(readFile(nginxConfig, "utf8"), { code: "ENOENT" });
 		await assert.rejects(readFile(runtimeToken, "utf8"), { code: "ENOENT" });
+	} finally {
+		await f.close();
+	}
+});
+
+test("local native metadata default reads the Worker token and owns the port-forward lifecycle", async () => {
+	const f = await fixture();
+	try {
+		const env = {
+			...f.env,
+			FAKE_NATIVE_METADATA_ENABLED: "1",
+			FAKE_NATIVE_METADATA_TOKEN_KEY: "runtime-token",
+			PLATFORM_LOCAL_NATIVE_METADATA_WORKER_PORT: "3304",
+			PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS: f.nativeBindAddress,
+		};
+		const started = run("up", env);
+		assert.equal(
+			started.status,
+			0,
+			`${started.stderr}\n${await readFile(f.log, "utf8")}`,
+		);
+		assert.match(
+			await readFile(f.log, "utf8"),
+			/kubectl .* port-forward --address 127\.0\.0\.1 service\/fixture-worker-native-metadata 3305:80/,
+		);
+		assert.match(
+			await readFile(f.log, "utf8"),
+			/native proxy deploy\/local\/native-metadata-proxy\.mjs .*192\.168\.65\.0\/24/,
+		);
+		assert.equal(
+			(await readFile(f.nativeMetadataRecord, "utf8")).trim(),
+			`http://platform-worker-native-metadata:3304|${join(
+				env.PLATFORM_LOCAL_STATE_DIRECTORY,
+				"agent-infra-verify/native-metadata-worker-token",
+			)}`,
+			await readFile(f.log, "utf8"),
+		);
+		assert.equal(
+			await readFile(
+				join(
+					env.PLATFORM_LOCAL_STATE_DIRECTORY,
+					"agent-infra-verify/native-metadata-worker-token",
+				),
+				"utf8",
+			),
+			"x",
+		);
+		const stopped = run("stop", env);
+		assert.equal(stopped.status, 0, stopped.stderr);
+		await assert.rejects(
+			readFile(
+				join(
+					env.PLATFORM_LOCAL_STATE_DIRECTORY,
+					"agent-infra-verify/native-metadata-worker-token",
+				),
+				"utf8",
+			),
+		);
 	} finally {
 		await f.close();
 	}

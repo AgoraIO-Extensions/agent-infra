@@ -1,10 +1,8 @@
 {{- if and .Values.workloadTopology.enabled .Values.platformWorker.wecomEnabled -}}
 {{- fail "platformWorker.wecomEnabled requires production Worker deployment (workloadTopology.enabled=false)" -}}
 {{- end -}}
-{{- if and .Values.platformWorker.nativeMetadataGateway.enabled (ne .Values.platformApi.placement "in-cluster") -}}
-{{- fail "platformWorker.nativeMetadataGateway.enabled requires platformApi.placement=in-cluster" -}}
-{{- end -}}
 {{- $name := include "agent-infra.componentName" (dict "root" . "suffix" "platform-worker") -}}
+{{- $nativeMetadataServiceName := include "agent-infra.nativeMetadataServiceName" . -}}
 {{- $bindings := include "agent-infra.componentName" (dict "root" . "suffix" "adapter-bindings") -}}
 {{- $moduleRef := .Values.platformWorker.configurationModuleSecretRef | default dict -}}
 {{- $authRef := .Values.platformWorker.runtimeAuthSecretRef | default dict -}}
@@ -119,6 +117,16 @@ spec:
               value: {{ .Values.platformWorker.wecomEnabled | quote }}
             - name: PLATFORM_WORKER_SERVICE_TOKEN_FILE
               value: /var/run/agent-infra/runtime-auth/service-token
+            {{- if .Values.platformWorker.nativeMetadataGateway.enabled }}
+            - name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED
+              value: "true"
+            - name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_PORT
+              value: {{ .Values.platformWorker.nativeMetadataGateway.port | quote }}
+            - name: PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ORIGIN
+              value: http://{{ $nativeMetadataServiceName }}
+            - name: PLATFORM_WORKER_RELEASE_NAME
+              value: {{ .Release.Name | quote }}
+            {{- end }}
             {{- if .Values.platformWorker.runtimeImageRepository }}
             - name: AGENT_INFRA_RUNTIME_IMAGE_REPOSITORY
               value: {{ .Values.platformWorker.runtimeImageRepository | quote }}
@@ -212,28 +220,7 @@ spec:
     app.kubernetes.io/component: platform-worker
   ports:
     - name: native-metadata
-      port: {{ .Values.platformWorker.nativeMetadataGateway.port }}
-      targetPort: native-metadata
-      protocol: TCP
----
-# Stable in-cluster origin used by Session Sandbox Runtime Hosts. Keep the
-# release-scoped Service above for existing Platform API configuration while
-# exposing the fixed DNS name required by the Runtime auth policy.
-apiVersion: v1
-kind: Service
-metadata:
-  name: platform-worker-native-metadata
-  labels:
-    {{- include "agent-infra.labels" . | nindent 4 }}
-    app.kubernetes.io/component: platform-worker
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/component: platform-worker
-  ports:
-    - name: native-metadata
-      port: {{ .Values.platformWorker.nativeMetadataGateway.port }}
+      port: 80
       targetPort: native-metadata
       protocol: TCP
 ---
