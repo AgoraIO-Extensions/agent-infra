@@ -232,6 +232,16 @@ function failure(code: string, retryable: boolean): never {
 	throw new ConversationRuntimeHostError(code, retryable);
 }
 
+/**
+ * 发送之前的失败：没有任何请求到达 RuntimeHost。可重试的失败标为确定未发送，Core 据此把 Turn
+ * 退回原来的等待位置，stop 已被受理时随后由 stop 在本地取消（#2713）。
+ */
+function unsent(error: ConversationRuntimeHostError) {
+	return error.retryable && !error.notSent
+		? new ConversationRuntimeHostError(error.code, true, { notSent: true })
+		: error;
+}
+
 async function responseFailure(response: Response): Promise<never> {
 	let text: string;
 	try {
@@ -1165,7 +1175,20 @@ export function createWorkerRuntimeHostClientV4(
 		options.fetch ?? runtimeFetch,
 		connectionConsumer,
 	);
+	/**
+	 * 取 Key 时 Execution 不再处于可投递状态。先用发送前复核区分两种情况：准备之后状态变了（例如
+	 * stop 刚被受理），复核抛出可重试的过期错误；状态没变，就是授权本身无效（不可重试）。两种情况
+	 * 都还没有发出请求（#2713）。之前一律是不可重试的 RUNTIME_GRANT_INVALID，用户主动停止的回复
+	 * 会被记为执行失败。
+	 */
+	async function acceptanceLost(signal?: AbortSignal): Promise<never> {
+		await interruptedDependency(options.assertCurrentAuthorization(), signal);
+		return failure("RUNTIME_GRANT_INVALID", false);
+	}
 	async function send(value: RuntimeBusinessRequestV4, signal?: AbortSignal) {
+		// 在 post 之前置位；在此之前的失败都确定没有发出请求。下面的 return await 让复核的
+		// 拒绝也经过这里的 catch。
+		let sending = false;
 		try {
 			signal?.throwIfAborted();
 			const request =
@@ -1188,7 +1211,7 @@ export function createWorkerRuntimeHostClientV4(
 				reader.readAcceptedExecution(request),
 				signal,
 			);
-			if (!accepted) return failure("RUNTIME_GRANT_INVALID", false);
+			if (!accepted) return await acceptanceLost(signal);
 			validateRuntimePinnedExecutionKeyScopeV4(
 				accepted.scope,
 				request,
@@ -1241,7 +1264,7 @@ export function createWorkerRuntimeHostClientV4(
 				signal,
 			);
 			if (!current || !isDeepStrictEqual(current, original))
-				return failure("RUNTIME_GRANT_INVALID", false);
+				return await acceptanceLost(signal);
 			const privateKeyField = RuntimePrivateRelayKeyFieldV1Schema.parse({
 				schemaVersion: 1,
 				context: {
@@ -1284,6 +1307,7 @@ export function createWorkerRuntimeHostClientV4(
 			const finalClaims = options.verifyGrant(request.grant);
 			if (!isDeepStrictEqual(finalClaims, claims))
 				return failure("RUNTIME_GRANT_INVALID", false);
+			sending = true;
 			const response = await post(
 				fetcher,
 				new URL(
@@ -1316,7 +1340,8 @@ export function createWorkerRuntimeHostClientV4(
 				return failure("RUNTIME_RESPONSE_INVALID", true);
 			}
 		} catch (error) {
-			if (error instanceof ConversationRuntimeHostError) throw error;
+			if (error instanceof ConversationRuntimeHostError)
+				throw sending ? error : unsent(error);
 			return failure("RUNTIME_REQUEST_INVALID", false);
 		}
 	}
