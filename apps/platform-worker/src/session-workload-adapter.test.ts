@@ -1771,6 +1771,16 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 				namespace: "platform",
 				podLabels: {
 					"app.kubernetes.io/component": "platform-worker",
+					"app.kubernetes.io/instance": "a".repeat(64),
+				},
+			},
+			port: 3004,
+		},
+		{
+			destination: {
+				namespace: "platform",
+				podLabels: {
+					"app.kubernetes.io/component": "platform-worker",
 					"app.kubernetes.io/instance": "agent-infra-e2e",
 					extra: "selector-widening",
 				},
