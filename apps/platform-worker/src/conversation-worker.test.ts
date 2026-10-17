@@ -794,6 +794,39 @@ describe("conversation dispatch observability", () => {
 			expect(JSON.stringify(events)).not.toContain("sandbox-secret-name");
 		});
 
+		it("still records the unknown observation when building the telemetry event throws", async () => {
+			const claim = { schemaVersion: 1, execution: null } as never;
+			mocks.find.mockResolvedValueOnce([
+				{ itemId: "sandbox-a", operation: "conversation.sandbox.reconcile.v1" },
+			]);
+			mocks.claimSandbox.mockResolvedValueOnce(claim);
+			mocks.recordSandbox.mockResolvedValueOnce(undefined);
+			const worker = createPlatformConversationWorkerV2({
+				...options,
+				receiveSandbox: async () => {
+					// 读取类名本身就抛出：事件构造失败也不能妨碍记录观测。
+					const error = new WorkloadKubernetesError("policy");
+					Object.defineProperty(error, "constructor", {
+						get() {
+							throw new Error("hostile constructor");
+						},
+					});
+					throw error;
+				},
+				observability: { record: vi.fn() },
+			});
+			try {
+				expect(await worker.tick()).toBe(1);
+				await vi.waitFor(() => expect(mocks.recordSandbox).toHaveBeenCalled());
+			} finally {
+				await worker.stop();
+			}
+			expect(mocks.recordSandbox).toHaveBeenCalledWith({
+				claim,
+				observation: { status: "unknown", resources: [] },
+			});
+		});
+
 		it("records nothing when the receiver returns an observation", async () => {
 			mocks.find.mockResolvedValueOnce([
 				{ itemId: "sandbox-a", operation: "conversation.sandbox.reconcile.v1" },
