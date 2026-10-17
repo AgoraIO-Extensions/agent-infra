@@ -1181,6 +1181,17 @@ export function createConversationRuntimeV2(
 				);
 				if (decision.outcome !== "allowed") return decision;
 				const { context } = decision;
+				// A business stop claimed while the Turn is still submitted/waiting
+				// can only precede Runtime acceptance: dispatch commits an `unknown`
+				// write-ahead before it may send anything, and a pending stop blocks
+				// later sends. Classify it control-only so Platform Core settles it
+				// locally instead of retrying against a Runtime that never accepted it.
+				const controlOnlyStop =
+					context.kind === "business" &&
+					claim.operation === "conversation.turn.stop.v1" &&
+					claim.stopPending &&
+					(claim.executionStatus === "submitted" ||
+						claim.executionStatus === "waiting");
 				const reference = Object.freeze({
 					...(context.kind === "business"
 						? { authorizationRecordId: context.authorizationRecordId }
@@ -1201,7 +1212,9 @@ export function createConversationRuntimeV2(
 						sessionGeneration: claim.sessionGeneration,
 						authorizationRevision: claim.authorizationRevision,
 						runtimeGrant: reference,
-						...(context.kind === "legacy-control" || claim.metadataRecovery
+						...(context.kind === "legacy-control" ||
+						claim.metadataRecovery ||
+						controlOnlyStop
 							? { controlOnly: true as const }
 							: {}),
 					},
