@@ -1274,6 +1274,28 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					});
 					continue;
 				}
+				if (!current) {
+					const prior = previousByKind.get(kind);
+					if (!prior) throw new WorkloadKubernetesError("unavailable");
+					const identity = existing?.resource ?? prior;
+					const absence = {
+						kind: identity.kind,
+						namespace: identity.namespace,
+						name: identity.name,
+					};
+					if (!existing)
+						await record(identity, "delete-requested", "not-attempted");
+					await record(identity, "absent", "unknown", absence);
+					deletedResources.push({
+						resource: identity,
+						preconditions: existing?.preconditions ?? {
+							uid: prior.uid,
+							resourceVersion: prior.resourceVersion,
+						},
+						absence,
+					});
+					continue;
+				}
 				if (!current) throw new WorkloadKubernetesError("unavailable");
 				if (!owned(current, expected, allocation))
 					throw new WorkloadKubernetesError("conflict");
@@ -1387,6 +1409,26 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					deletedResources.push({
 						resource: existing.resource,
 						preconditions: existing.preconditions,
+						absence,
+					});
+					continue;
+				}
+				if (!current) {
+					const identity = existing?.resource ?? prior;
+					const absence = {
+						kind: identity.kind,
+						namespace: identity.namespace,
+						name: identity.name,
+					};
+					if (!existing)
+						await record(identity, "delete-requested", "not-attempted");
+					await record(identity, "absent", "unknown", absence);
+					deletedResources.push({
+						resource: identity,
+						preconditions: existing?.preconditions ?? {
+							uid: prior.uid,
+							resourceVersion: prior.resourceVersion,
+						},
 						absence,
 					});
 					continue;

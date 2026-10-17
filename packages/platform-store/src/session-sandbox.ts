@@ -311,8 +311,9 @@ export async function requestSessionSandboxResume(
 }
 
 /**
- * 空闲回收后尚未收到恢复请求的 Sandbox（Spec §10.1.1）。`c` 是 Conversation 别名。
- * Web 会话应受理下一条消息并以此触发恢复；它本身不代表就绪，也不授予任何执行权。
+ * 空闲回收后尚未收到恢复请求，或管理停止已完成回收的 Sandbox（Spec §10.1.1）。`c` 是 Conversation 别名。
+ * 空闲回收分支可由下一条消息触发恢复；管理停止分支只清除“准备中”展示，Agent
+ * 仍未恢复时不会授予任何执行权。
  */
 export const sessionSandboxResumableSql = `exists (
  select 1 from platform.outbox_items resume
@@ -324,6 +325,25 @@ export const sessionSandboxResumableSql = `exists (
    and resume.payload->'lifecycle'->>'reason' = 'idle_reclaim'
    and resume.payload->'lifecycle'->'authority'->>'targetDesiredState' = 'running'
    and coalesce(resume.payload->'lifecycle'->>'resumeRequested', 'false') <> 'true'
+) or exists (
+ select 1 from platform.outbox_items stopped
+ join platform.session_sandbox_allocations reclaimed
+   on reclaimed.conversation_id = stopped.scope_id
+ where stopped.scope_type = 'conversation' and stopped.scope_id = c.id
+   and stopped.operation = 'conversation.sandbox.reconcile.v1'
+   and stopped.status = 'succeeded'
+   and reclaimed.desired_state = 'stopped'
+   and stopped.payload->'lifecycle'->'authority'->>'targetDesiredState' = 'stopped'
+   and stopped.payload->'lifecycle' ? 'stopReceipt'
+   and not exists (
+     select 1
+     from platform.outbox_items newer
+     where newer.scope_type = 'conversation'
+       and newer.scope_id = stopped.scope_id
+       and newer.operation = 'conversation.sandbox.reconcile.v1'
+       and (newer.created_at > stopped.created_at
+         or (newer.created_at = stopped.created_at and newer.id > stopped.id))
+   )
 )`;
 
 export async function readSessionSandboxResumable(

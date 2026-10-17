@@ -530,9 +530,8 @@ export class PostgresConversationDispatchStoreV1
 											and e.conversation_id = outbox_items.scope_id
 											and e.status in ('processing', 'unknown')
 											and (
-												ap.status is distinct from 'available'
-												or ap.desired_state is distinct from 'running'
-												or ap.service_availability is distinct from 'ready'
+												ap.status in ('stopped', 'disabled')
+												or ap.desired_state = 'stopped'
 											)
 									)
 								)
@@ -974,9 +973,17 @@ export class PostgresConversationDispatchStoreV1
 						if (decision.outcome === "wait")
 							throw new DispatchCapacityUnavailable("capacity_wait");
 					}
+					const stoppedRecovery =
+						isTurn(input.claim.operation) &&
+						(input.claim.executionStatus === "processing" ||
+							input.claim.executionStatus === "unknown") &&
+						(agent.status === "stopped" ||
+							agent.status === "disabled" ||
+							agent.desired_state === "stopped");
 					if (
 						!state.conversation.sandbox_ready &&
-						input.claim.operation !== "conversation.turn.stop.v1"
+						input.claim.operation !== "conversation.turn.stop.v1" &&
+						!stoppedRecovery
 					)
 						// An upgrading Sandbox is this Session's own wait, not
 						// Agent capacity (ADR 0023).
