@@ -27,6 +27,7 @@ export function cidr(value) {
 }
 
 export function isAllowedSource(address, network, bindAddress) {
+	if (typeof address === "string" && address.includes(":")) return false;
 	const source = ipv4(address);
 	if (!source || !network) return false;
 	const sourceInteger =

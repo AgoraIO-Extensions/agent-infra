@@ -29,7 +29,7 @@ test("rejects an unrelated private source", () => {
 test("rejects IPv6 and malformed addresses", () => {
 	assert.equal(
 		isAllowedSource("::ffff:192.168.31.32", composeNetwork, "192.168.31.32"),
-		true,
+		false,
 	);
 	assert.equal(isAllowedSource("::1", composeNetwork, "192.168.31.32"), false);
 	assert.equal(
