@@ -22,9 +22,13 @@ import type {
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import {
 	createSessionSandboxWorkloadAdapterV1,
+	hasSessionSandboxIdentityV1,
 	type SessionSandboxAllocationV1,
+	sessionSandboxIdentityAnnotationsV1,
+	sessionSandboxLabelsMatchV1,
 	sessionSandboxLabelsV1,
 	sessionSandboxResourcesV1,
+	sessionSandboxSelectorMatchesV1,
 	sessionSandboxServiceTokenV1,
 } from "./session-workload-adapter.js";
 import {
@@ -125,6 +129,72 @@ const allocation: SessionSandboxAllocationV1 = {
 	}),
 	desiredState: "running",
 };
+
+describe("Sandbox identity for resources created before the managed label (#2691)", () => {
+	const managedLabel = "agent-infra.agora.io/managed";
+	const object = (labels: Record<string, string>) => ({
+		metadata: {
+			labels,
+			annotations: { ...sessionSandboxIdentityAnnotationsV1(allocation) },
+		},
+	});
+	const { [managedLabel]: _marker, ...legacy } =
+		sessionSandboxLabelsV1(allocation);
+
+	it("accepts the current labels and a legacy object without the marker", () => {
+		expect(
+			hasSessionSandboxIdentityV1(
+				object({ ...sessionSandboxLabelsV1(allocation) }),
+				allocation,
+			),
+		).toBe(true);
+		expect(hasSessionSandboxIdentityV1(object(legacy), allocation)).toBe(true);
+		expect(
+			sessionSandboxSelectorMatchesV1(
+				legacy,
+				sessionSandboxLabelsV1(allocation),
+			),
+		).toBe(true);
+	});
+
+	it("rejects a foreign marker value, a missing identity label or an extra selector key", () => {
+		expect(
+			hasSessionSandboxIdentityV1(
+				object({ ...legacy, [managedLabel]: "someone-else" }),
+				allocation,
+			),
+		).toBe(false);
+		const { "agent-infra.agora.io/generation": _generation, ...partial } =
+			legacy;
+		expect(hasSessionSandboxIdentityV1(object(partial), allocation)).toBe(
+			false,
+		);
+		expect(
+			sessionSandboxSelectorMatchesV1(
+				{ ...legacy, extra: "x" },
+				sessionSandboxLabelsV1(allocation),
+			),
+		).toBe(false);
+		expect(
+			sessionSandboxLabelsMatchV1(
+				{ ...legacy, [managedLabel]: "someone-else" },
+				sessionSandboxLabelsV1(allocation),
+			),
+		).toBe(false);
+		// 没有 selector 的 Service 不能当作升级前的 Sandbox 路由，即使期望里只剩 managed 一个键。
+		expect(
+			sessionSandboxSelectorMatchesV1(undefined, {
+				[managedLabel]: "session-sandbox-v1",
+			}),
+		).toBe(false);
+		expect(
+			sessionSandboxSelectorMatchesV1(
+				undefined,
+				sessionSandboxLabelsV1(allocation),
+			),
+		).toBe(false);
+	});
+});
 
 describe("session sandbox workload adapter", () => {
 	it("projects a complete approved file on the real Session Pod and rejects drift without changing cleanup authority", async () => {

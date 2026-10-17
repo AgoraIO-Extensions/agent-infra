@@ -29,7 +29,9 @@ import {
 	type SessionSandboxAllocationV1,
 	type SessionSandboxRuntimeInputV1,
 	sessionSandboxIdentityAnnotationsV1,
+	sessionSandboxLabelsMatchV1,
 	sessionSandboxLabelsV1,
+	sessionSandboxSelectorMatchesV1,
 	sessionSandboxServiceTokenV1,
 } from "./session-workload-adapter.js";
 import {
@@ -179,17 +181,19 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						"session-sandbox-v1" ||
 					liveService.metadata.annotations?.["agent-infra.agora.io/fence"] !==
 						String(controlSource.resourceFence) ||
-					Object.entries(expectedLabels).some(
-						([key, value]) =>
-							liveService.metadata?.labels?.[key] !== value ||
-							liveService.spec?.selector?.[key] !== value,
+					// 升级前创建的 Service 没有 managed 标签和 selector 项（#2691）。
+					!sessionSandboxLabelsMatchV1(
+						liveService.metadata?.labels,
+						expectedLabels,
+					) ||
+					!sessionSandboxSelectorMatchesV1(
+						liveService.spec?.selector,
+						expectedLabels,
 					) ||
 					Object.entries(expectedIdentity).some(
 						([key, value]) =>
 							liveService.metadata?.annotations?.[key] !== value,
 					) ||
-					Object.keys(liveService.spec?.selector ?? {}).length !==
-						Object.keys(expectedLabels).length ||
 					liveService.spec?.type !== "ClusterIP" ||
 					liveService.spec.ports?.length !== 1 ||
 					port?.name !== "runtime" ||
@@ -331,17 +335,19 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						"session-sandbox-v1" ||
 					liveService.metadata.annotations?.["agent-infra.agora.io/fence"] !==
 						String(sandboxResource.resourceFence) ||
-					Object.entries(expectedLabels).some(
-						([key, value]) =>
-							liveService.metadata?.labels?.[key] !== value ||
-							liveService.spec?.selector?.[key] !== value,
+					// 升级前创建的 Service 没有 managed 标签和 selector 项（#2691）。
+					!sessionSandboxLabelsMatchV1(
+						liveService.metadata?.labels,
+						expectedLabels,
+					) ||
+					!sessionSandboxSelectorMatchesV1(
+						liveService.spec?.selector,
+						expectedLabels,
 					) ||
 					Object.entries(expectedIdentity).some(
 						([key, value]) =>
 							liveService.metadata?.annotations?.[key] !== value,
 					) ||
-					Object.keys(liveService.spec?.selector ?? {}).length !==
-						Object.keys(expectedLabels).length ||
 					liveService.spec?.type !== "ClusterIP" ||
 					liveService.spec.ports?.length !== 1 ||
 					livePort?.name !== "runtime" ||

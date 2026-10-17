@@ -4248,6 +4248,141 @@ it("routes a ready Session business call with only that Sandbox's token (#1466)"
 	).toBe(3);
 });
 
+it.each([
+	["predates the managed label", "legacy"],
+	["carries a foreign managed label", "foreign"],
+	["has an extra selector key", "extra"],
+] as const)(
+	"routes a ready Session whose Service %s only when the marker is absent (#2691)",
+	async (_name, variant) => {
+		const keys = generateKeyPairSync("ed25519");
+		const signing = {
+			workerId: "worker-a",
+			issuer: "platform",
+			keyId: "key",
+			privateKey: keys.privateKey,
+		};
+		const f = fixture({
+			policy: {
+				...workloadTestPolicy,
+				runtimeAuth: {
+					workerId: signing.workerId,
+					grantIssuer: signing.issuer,
+					grantKeyId: signing.keyId,
+					grantPublicKey: keys.publicKey
+						.export({ type: "spki", format: "pem" })
+						.toString(),
+					serviceTokenSecret: { name: "transport", key: "token" },
+				},
+			},
+		});
+		await f.tick(8);
+		const ready = f.state;
+		if (ready?.phase !== "ready") throw Error("Expected ready fixture");
+		const deployment = validateAgentWorkloadDesiredV1(
+			ready.candidate.deployment,
+		);
+		const resolver = createProductionConversationRuntimeResolverV2({
+			workload: f.options,
+			signing,
+			serviceToken: "synthetic-transport",
+		});
+		const sandboxId = "00000000-0000-4000-8000-000000002691";
+		const sandbox = {
+			schemaVersion: 1 as const,
+			sandboxId,
+			sessionId: `conversation-${sandboxId}`,
+			agentId: ready.agentId,
+			principal: { kind: "user" as const, id: "actor-a" },
+			channelId: "web",
+			generation: 1,
+			resourceName: `sandbox-${sandboxId}`,
+			workspaceScope: sandboxId,
+		};
+		// #2684 之前的 Worker 创建的 Service 只有 managed 注解，没有同名标签和 selector 项。
+		const { "agent-infra.agora.io/managed": _marker, ...legacyLabels } =
+			sessionSandboxLabelsV1(sandbox);
+		const labels =
+			variant === "legacy"
+				? legacyLabels
+				: variant === "extra"
+					? { ...legacyLabels, extra: "x" }
+					: { ...legacyLabels, "agent-infra.agora.io/managed": "someone-else" };
+		const live = await f.client.create<V1Service>({
+			apiVersion: "v1",
+			kind: "Service",
+			metadata: {
+				name: sandbox.resourceName,
+				namespace: f.options.policy.namespace,
+				labels,
+				annotations: {
+					...sessionSandboxIdentityAnnotationsV1(sandbox),
+					"agent-infra.agora.io/managed": "session-sandbox-v1",
+					"agent-infra.agora.io/fence": "1",
+				},
+			},
+			spec: {
+				type: "ClusterIP",
+				selector: labels,
+				ports: [
+					{
+						name: "runtime",
+						port: deployment.service.port,
+						targetPort: deployment.service.port,
+					},
+				],
+			},
+		});
+		const policy = {
+			namespace: f.options.policy.namespace,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(
+				f.options.policy,
+			),
+			configurationRevision: ready.sourceConfigurationRevision,
+			workloadRevision: ready.sourceLifecycleRevision,
+			managementFence: 1,
+			imageDigest: deployment.imageDigest,
+		};
+		const route = resolver({
+			agentId: ready.agentId,
+			conversationId: sandbox.sessionId,
+			sessionGeneration: 1,
+			workload: ready,
+			signal: new AbortController().signal,
+			purpose: "business",
+			command: "session.status",
+			sandboxResource: {
+				sandbox,
+				resourceFence: 1,
+				desiredState: "running",
+				status: "ready",
+				policy,
+				observation: {
+					status: "ready",
+					resources: [
+						{
+							kind: "Service",
+							namespace: policy.namespace,
+							name: sandbox.resourceName,
+							uid: live.metadata?.uid ?? "",
+							resourceVersion: live.metadata?.resourceVersion ?? "",
+						},
+					],
+				},
+			},
+		});
+		if (variant === "legacy")
+			expect((await route).serviceToken).toBe(
+				sessionSandboxServiceTokenV1(
+					"synthetic-transport",
+					f.options.policy.namespace,
+					sandboxId,
+				),
+			);
+		else await expect(route).rejects.toThrow();
+	},
+);
+
 it("preserves cancellation and only reopens a closing verified route", async () => {
 	const keys = generateKeyPairSync("ed25519");
 	const signing = {
