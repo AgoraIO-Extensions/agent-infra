@@ -1,3 +1,6 @@
+import type { OperationalEvent } from "@agent-infra/observability";
+import { createHttpObservability } from "@agent-infra/observability/http";
+import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
 import { createDeploymentAuthorizationAdmission } from "./deployment-authorization.js";
@@ -231,5 +234,82 @@ describe("deployment authorization admission", () => {
 				);
 			},
 		);
+	});
+
+	describe("failure context when the current authority cannot be loaded (#2696)", () => {
+		/** 与生产一样：准入在 HTTP 观测中间件的请求上下文里运行，失败时返回 503。 */
+		const observedSubmission = (
+			loadAuthorityContext: () => Promise<typeof authorityContext>,
+		) => {
+			const events: OperationalEvent[] = [];
+			const app = new Hono();
+			app.use(
+				"*",
+				createHttpObservability({ record: (event) => events.push(event) }),
+			);
+			const admission = createDeploymentAuthorizationAdmission({
+				identityScope: scope,
+				configurationQuery: { readVersionedAuthority: vi.fn() },
+				loadAuthorityContext,
+			});
+			app.post("/api/v2/agent-applications", (context) =>
+				scope.requestScope(context.req.raw, async () => {
+					const ids = await allocateDeploymentApplicationIds({
+						identity,
+						idempotencyKey: "create_2696",
+					});
+					try {
+						await admission.authorize({ ...request, agentId: ids.agentId });
+						return context.json({ status: "admitted" }, 201);
+					} catch {
+						return context.json(
+							{
+								schemaVersion: 1,
+								code: "DEPENDENCY_UNAVAILABLE",
+								message: "A required service is temporarily unavailable.",
+								retryable: true,
+								traceId: "trace",
+							},
+							503,
+						);
+					}
+				}),
+			);
+			const submit = () =>
+				app.request("/api/v2/agent-applications", {
+					method: "POST",
+					headers: { "Idempotency-Key": "create_2696" },
+				});
+			return { events, submit };
+		};
+
+		it("records the bounded authority.load step and error class without private details", async () => {
+			const { events, submit } = observedSubmission(async () => {
+				throw new TypeError("PRIVATE_DIRECTORY_MEMBER_alice@example.test");
+			});
+			const response = await submit();
+			expect(response.status).toBe(503);
+			expect(events).toHaveLength(1);
+			expect(events[0]).toMatchObject({
+				outcome: "failed",
+				status: 503,
+				protocolCode: "DEPENDENCY_UNAVAILABLE",
+				failureStep: "authority.load",
+				errorClass: "TypeError",
+			});
+			expect(JSON.stringify(events)).not.toContain("PRIVATE_DIRECTORY_MEMBER");
+			expect(JSON.stringify(events)).not.toContain("example.test");
+		});
+
+		it("leaves a successful admission without failure fields", async () => {
+			const { events, submit } = observedSubmission(
+				async () => authorityContext,
+			);
+			const response = await submit();
+			expect(response.status).toBe(201);
+			expect(events).toHaveLength(1);
+			expect(events[0]).not.toHaveProperty("failureStep");
+			expect(events[0]).not.toHaveProperty("errorClass");
+		});
 	});
 });
