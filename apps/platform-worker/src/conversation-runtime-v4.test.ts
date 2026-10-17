@@ -515,6 +515,106 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		},
 	);
 
+	describe("a stop accepted while the Key is being read (#2713)", () => {
+		const submits = (h: ReturnType<typeof runtimeV4Harness>) =>
+			h.fetcher.mock.calls.filter(([url]) => String(url).endsWith("/turns"));
+
+		it.each([
+			["before the Key read", 1],
+			["after the decrypt, at the re-read", 2],
+		] as const)(
+			"rejects without sending, retryable and not sent, when the stop lands %s",
+			async (_when, read) => {
+				const h = runtimeV4Harness();
+				try {
+					const reference = await h.authorize();
+					// Store 侧的取 Key 在 stop 待处理时不再返回已受理的 Execution。
+					let reads = 0;
+					h.executionKeys.readAcceptedExecution.mockImplementation(async () => {
+						reads++;
+						if (reads < read) return structuredClone(h.accepted());
+						Object.assign(h.state, { stopPending: true });
+						return null;
+					});
+					// 之前：不可重试的 RUNTIME_GRANT_INVALID，Core 把这条回复记为执行失败。
+					await expect(
+						h.runtime.runtimeHost.dispatch(h.request(reference)),
+					).rejects.toMatchObject({
+						code: "RUNTIME_ROUTE_STALE",
+						retryable: true,
+						notSent: true,
+					});
+					expect(submits(h)).toHaveLength(0);
+				} finally {
+					h.runtime.close();
+				}
+			},
+		);
+
+		it("marks a stop caught by the final pre-send check as not sent", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				h.relayKeyDecryptor.decrypt.mockImplementationOnce(async () => {
+					Object.assign(h.state, { stopPending: true });
+					const plaintext = new TextEncoder().encode(keySentinel);
+					h.plaintexts.push(plaintext);
+					return { outcome: "decrypted", plaintext };
+				});
+				await expect(
+					h.runtime.runtimeHost.dispatch(h.request(reference)),
+				).rejects.toMatchObject({
+					code: "RUNTIME_ROUTE_STALE",
+					retryable: true,
+					notSent: true,
+				});
+				expect(submits(h)).toHaveLength(0);
+				expect(h.plaintexts[0]?.every((byte) => byte === 0)).toBe(true);
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("never marks a failure once the request may have been sent", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				// 连接在请求发出后中断：Runtime 可能已经受理，不能让 Core 当作未发送而重发。
+				h.fetcher.mockImplementationOnce(async () => {
+					throw new TypeError("socket hang up");
+				});
+				const failure = await h.runtime.runtimeHost
+					.dispatch(h.request(reference))
+					.catch((error: unknown) => error);
+				expect(failure).toMatchObject({
+					code: "RUNTIME_UNAVAILABLE",
+					retryable: true,
+					notSent: false,
+				});
+				expect(submits(h)).toHaveLength(1);
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("keeps an invalid acceptance with no state change a non-retryable grant failure", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				h.setAccepted(null);
+				await expect(
+					h.runtime.runtimeHost.dispatch(h.request(reference)),
+				).rejects.toMatchObject({
+					code: "RUNTIME_GRANT_INVALID",
+					retryable: false,
+				});
+				expect(submits(h)).toHaveLength(0);
+			} finally {
+				h.runtime.close();
+			}
+		});
+	});
+
 	it.each([
 		"absent version",
 		"historical protocol",
