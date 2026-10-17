@@ -592,6 +592,29 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			}
 		});
 
+		it("treats a revocation found when the Key read fails like one found during preparation", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				h.executionKeys.readAcceptedExecution.mockImplementationOnce(
+					async () => {
+						h.setUser(null);
+						return null;
+					},
+				);
+				// 撤销照旧被记录、请求照旧不发出；失败按确定未发送交还 Core，由撤销的 control 收口。
+				await expect(
+					h.runtime.runtimeHost.dispatch(h.request(reference)),
+				).rejects.toMatchObject({ retryable: true, notSent: true });
+				expect(submits(h)).toHaveLength(0);
+				expect(h.taskAuthorizationStore.recordControl).toHaveBeenCalledWith(
+					expect.objectContaining({ reason: "authorization_revoked" }),
+				);
+			} finally {
+				h.runtime.close();
+			}
+		});
+
 		it("never marks a failure once the request may have been sent", async () => {
 			const h = runtimeV4Harness();
 			try {
