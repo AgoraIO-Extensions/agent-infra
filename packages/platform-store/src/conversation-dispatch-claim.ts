@@ -64,7 +64,7 @@ export async function claimWork(
 		join platform.outbox_items o on o.scope_id = c.id and o.scope_type = 'conversation'
 		join platform.agent_applications aa on aa.agent_id = a.id
 		where o.id = ${input.itemId}
-		for share of a
+		for share of a, aa
 	`;
 	const outbox = await lockOutbox(transaction, input.itemId);
 	if (outbox?.scope_type !== "conversation") return { outcome: "stale" };
