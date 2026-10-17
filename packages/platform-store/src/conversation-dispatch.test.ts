@@ -466,6 +466,33 @@ async function dispatchState(work: { itemId: string; executionId: string }) {
 }
 
 describe("PostgreSQL Conversation dispatch Store", () => {
+	it("claims unknown Turn recovery after Agent stop without a ready Sandbox", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "unknown",
+			hostSessionRef: "historical-host",
+		});
+		await client`update platform.agent_applications
+			set status = 'stopped', desired_state = 'stopped',
+				service_availability = null
+			where agent_id = 'agent-dispatch'`;
+		await client`update platform.session_sandbox_allocations
+			set status = 'unknown', desired_state = 'stopped'
+			where conversation_id = ${work.conversationId}`;
+		const { decision, store } = await claim(
+			work.itemId,
+			"historical-recovery-worker",
+		);
+		try {
+			expect(decision.outcome).toBe("claimed");
+			if (decision.outcome === "claimed") {
+				expect(decision.claim.executionStatus).toBe("unknown");
+				expect(decision.claim.stopPending).toBe(false);
+			}
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("wakes a still-starting Session Sandbox without the fixed retry delay", async () => {
 		const work = await seed("conversation.turn.submit.v1", {
 			executionStatus: "completed",
