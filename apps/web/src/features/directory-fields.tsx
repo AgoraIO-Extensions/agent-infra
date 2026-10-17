@@ -217,6 +217,9 @@ export function DirectoryPicker({
 			});
 		return () => controller.abort();
 	}, [kind, open, query, selectedKey]);
+	useEffect(() => {
+		if (open && selectedIds.length > 0 && !query) setOpen(false);
+	}, [open, query, selectedIds.length]);
 	const options = directoryOptions;
 	const selected = selectedIds.map(
 		(id) =>
@@ -228,20 +231,14 @@ export function DirectoryPicker({
 			},
 	);
 	const add = (option: DirectoryPickerOption | undefined) => {
-		if (
-			disabled ||
-			!open ||
-			loading ||
-			directoryError ||
-			!option ||
-			selectedIds.includes(option.id)
-		)
-			return;
+		if (disabled || !open || !option) return;
+		setOpen(false);
+		if (directoryError || selectedIds.includes(option.id)) return;
 		onChange([...selectedIds, option.id].join("\n"));
 		setQuery("");
 		setActiveIndex(0);
-		setOpen(true);
-		requestAnimationFrame(() => inputRef.current?.focus());
+		// Keep the next search available through the input, while closing the
+		// results layer so it cannot cover adjacent form controls.
 	};
 	const remove = (id: string) => {
 		if (!disabled)
@@ -304,7 +301,9 @@ export function DirectoryPicker({
 						setActiveIndex(0);
 						setOpen(true);
 					}}
-					onFocus={() => setOpen(true)}
+					onFocus={() => {
+						if (query.length > 0 || selectedIds.length === 0) setOpen(true);
+					}}
 					onKeyDown={(event) => {
 						if (event.key === "ArrowDown") {
 							event.preventDefault();
