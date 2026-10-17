@@ -1594,6 +1594,7 @@ export function createConversationRuntimeV2(
 			});
 			try {
 				let previous: Awaited<ReturnType<typeof prepare>> | undefined;
+				let controlReprepareAttempts = 0;
 				for (;;) {
 					active.throwIfAborted();
 					const prepared = await prepareEventStep(
@@ -1622,6 +1623,15 @@ export function createConversationRuntimeV2(
 						)
 							throw error;
 						streamFailure = error;
+					}
+					if (!streamFailure) controlReprepareAttempts = 0;
+					if (authority.purpose === "control" && streamFailure) {
+						if (await stopInvalidated(streamFailure, request, active)) {
+							controlReprepareAttempts++;
+							if (controlReprepareAttempts > eventPreparationAttempts)
+								throw streamFailure;
+							continue;
+						}
 					}
 					if (authority.purpose === "business" && !terminal) {
 						// Stop invalidates the old business stream. Re-enter the existing

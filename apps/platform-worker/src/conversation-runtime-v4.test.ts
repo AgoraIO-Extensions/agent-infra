@@ -958,6 +958,96 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			}
 		});
 
+		it("re-prepares a control drain when stop delivery changes the fence", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				Object.assign(h.state, { stopPending: true });
+				let reads = 0;
+				h.fetcher.mockImplementation(async (url, init) => {
+					if (String(url).endsWith("/events/read") && reads++ === 0) {
+						Object.assign(h.state, {
+							stopPending: false,
+							executionStatus: "cancelled",
+						});
+						return Response.json(
+							{
+								schemaVersion: 1,
+								code: "RUNTIME_FENCE_STALE",
+								message: "Runtime fence is stale",
+								retryable: true,
+								traceId: "trace",
+							},
+							{ status: 409 },
+						);
+					}
+					const body = JSON.parse(init?.body as string);
+					return Response.json({
+						schemaVersion: 4,
+						hostSessionRef: "host",
+						executionId: "execution",
+						events: [terminal],
+						...(String(url).endsWith("/events/ack")
+							? { confirmedCursor: body.confirmedCursor }
+							: {}),
+					});
+				});
+				const stream = h.runtime.runtimeHost
+					.events(h.events(reference))
+					[Symbol.asyncIterator]();
+				expect((await stream.next()).value).toEqual(terminal);
+				expect(reads).toBe(2);
+				await stream.return?.();
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("returns a control fence failure after the bounded reprepare limit", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				Object.assign(h.state, { stopPending: true });
+				h.fetcher.mockImplementation(async (url) => {
+					if (String(url).endsWith("/events/read")) {
+						Object.assign(h.state, {
+							stopPending: false,
+							executionStatus: "cancelled",
+						});
+						return Response.json(
+							{
+								schemaVersion: 1,
+								code: "RUNTIME_FENCE_STALE",
+								message: "Runtime fence is stale",
+								retryable: true,
+								traceId: "trace",
+							},
+							{ status: 409 },
+						);
+					}
+					return Response.json({
+						schemaVersion: 4,
+						hostSessionRef: "host",
+						executionId: "execution",
+						events: [],
+					});
+				});
+				const stream = h.runtime.runtimeHost
+					.events(h.events(reference))
+					[Symbol.asyncIterator]();
+				await expect(stream.next()).rejects.toMatchObject({
+					code: "RUNTIME_FENCE_STALE",
+				});
+				expect(
+					h.fetcher.mock.calls.filter(([url]) =>
+						String(url).endsWith("/events/read"),
+					).length,
+				).toBe(4);
+			} finally {
+				h.runtime.close();
+			}
+		});
+
 		it("gives up after a bounded number of preparations that keep going stale", async () => {
 			const h = runtimeV4Harness();
 			try {
