@@ -9,18 +9,59 @@ import { expect, it } from "vitest";
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const fixtureRoot = join(repositoryRoot, "tests/fixtures/custom-agent-acp");
 
-function nextFrame(input: ReturnType<typeof createInterface>) {
-	return new Promise<Record<string, unknown>>((resolve, reject) => {
-		const onLine = (line: string) => {
+function createFrameReader(input: ReturnType<typeof createInterface>) {
+	const queue: Record<string, unknown>[] = [];
+	const waiters: {
+		resolve: (frame: Record<string, unknown>) => void;
+		reject: (error: Error) => void;
+		timer: ReturnType<typeof setTimeout>;
+	}[] = [];
+	let closed = false;
+	const onLine = (line: string) => {
+		let frame: Record<string, unknown>;
+		try {
+			frame = JSON.parse(line) as Record<string, unknown>;
+		} catch (error) {
+			waiters.shift()?.reject(error as Error);
+			return;
+		}
+		const waiter = waiters.shift();
+		if (waiter) {
+			clearTimeout(waiter.timer);
+			waiter.resolve(frame);
+		} else queue.push(frame);
+	};
+	const onClose = () => {
+		closed = true;
+		for (const waiter of waiters.splice(0)) {
+			clearTimeout(waiter.timer);
+			waiter.reject(new Error("ACP peer closed before sending a frame"));
+		}
+	};
+	input.on("line", onLine);
+	input.once("close", onClose);
+	return {
+		next(label: string, timeoutMs = 5000) {
+			if (queue.length > 0)
+				return Promise.resolve(queue.shift() as Record<string, unknown>);
+			if (closed)
+				return Promise.reject(
+					new Error(`ACP peer closed before sending a frame: ${label}`),
+				);
+			return new Promise<Record<string, unknown>>((resolve, reject) => {
+				const timer = setTimeout(() => {
+					const index = waiters.findIndex((waiter) => waiter.timer === timer);
+					if (index >= 0) waiters.splice(index, 1);
+					reject(new Error(`Timed out waiting for ACP frame: ${label}`));
+				}, timeoutMs);
+				waiters.push({ resolve, reject, timer });
+			});
+		},
+		close() {
 			input.off("line", onLine);
-			try {
-				resolve(JSON.parse(line) as Record<string, unknown>);
-			} catch (error) {
-				reject(error);
-			}
-		};
-		input.on("line", onLine);
-	});
+			input.off("close", onClose);
+		},
+	};
 }
 
 it("packages a controlled custom ACP image with a valid platform manifest", async () => {
@@ -47,6 +88,7 @@ it("packages a controlled custom ACP image with a valid platform manifest", asyn
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 	const output = createInterface({ input: peer.stdout });
+	const frames = createFrameReader(output);
 	try {
 		peer.stdin.write(
 			`${JSON.stringify({
@@ -56,7 +98,7 @@ it("packages a controlled custom ACP image with a valid platform manifest", asyn
 				params: { protocolVersion: 1 },
 			})}\n`,
 		);
-		expect(await nextFrame(output)).toMatchObject({
+		expect(await frames.next("initialize")).toMatchObject({
 			id: 1,
 			result: { protocolVersion: 1, agentCapabilities: { loadSession: true } },
 		});
@@ -69,7 +111,7 @@ it("packages a controlled custom ACP image with a valid platform manifest", asyn
 				params: { cwd: "/fixture", mcpServers: [] },
 			})}\n`,
 		);
-		expect(await nextFrame(output)).toMatchObject({
+		expect(await frames.next("session/new")).toMatchObject({
 			id: 2,
 			result: {
 				sessionId: "controlled-custom-acp-image-v1",
@@ -87,7 +129,7 @@ it("packages a controlled custom ACP image with a valid platform manifest", asyn
 				params: { sessionId: "controlled-custom-acp-image-v1", prompt: [] },
 			})}\n`,
 		);
-		expect(await nextFrame(output)).toMatchObject({
+		expect(await frames.next("session/update")).toMatchObject({
 			method: "session/update",
 			params: {
 				update: {
@@ -96,13 +138,17 @@ it("packages a controlled custom ACP image with a valid platform manifest", asyn
 				},
 			},
 		});
-		expect(await nextFrame(output)).toMatchObject({
+		expect(await frames.next("session/prompt")).toMatchObject({
 			id: 3,
 			result: { stopReason: "end_turn" },
 		});
 	} finally {
+		const exited = new Promise<void>((resolve) =>
+			peer.once("close", () => resolve()),
+		);
+		frames.close();
 		output.close();
 		peer.kill();
-		await new Promise<void>((resolve) => peer.once("close", () => resolve()));
+		await exited;
 	}
 });
