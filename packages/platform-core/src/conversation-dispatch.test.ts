@@ -266,6 +266,19 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		return true;
 	}
 
+	async cancelAccepted(input: { claim: ConversationDispatchClaimV1 }) {
+		if (
+			!this.#owned(input.claim) ||
+			(this.current.executionStatus !== "unknown" &&
+				this.current.executionStatus !== "processing") ||
+			input.claim.executionDeliveryFence < 1
+		)
+			return false;
+		this.outboxStatus = "succeeded";
+		this.current = { ...this.current, executionStatus: "cancelled" };
+		return true;
+	}
+
 	async recordRuntimeResponse(input: {
 		claim: ConversationDispatchClaimV1;
 		hostSessionRef: string;
@@ -618,6 +631,26 @@ describe("bounded unknown recovery", () => {
 });
 
 describe("Conversation Worker dispatch", () => {
+	it("cancels an accepted Turn when stop wins during Runtime key delivery", async () => {
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "processing", hostSessionRef: "host" }),
+		);
+		const runtimeHost =
+			new FakeConversationRuntimeHostV1() as unknown as ConversationRuntimeHostPortV1;
+		runtimeHost.dispatch = vi.fn(async () => {
+			throw new ConversationRuntimeHostError("RUNTIME_STOP_PENDING", false);
+		});
+		const h = setup({ store, runtimeHost });
+
+		await expect(dispatch(h.useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "already_completed",
+		});
+		expect(store.current.executionStatus).toBe("cancelled");
+		expect(store.outboxStatus).toBe("succeeded");
+		expect(store.errorCode).toBeUndefined();
+	});
+
 	it.each(["submitted", "waiting"] as const)(
 		"locally cancels an unaccepted stop after authorization denial (%s)",
 		async (executionStatus) => {

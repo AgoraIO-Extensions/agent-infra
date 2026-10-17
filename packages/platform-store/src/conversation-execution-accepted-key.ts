@@ -32,6 +32,8 @@ export interface AcceptedExecutionKeyProjectionV4 {
 	readonly trustedHostSessionRef: string | null;
 	readonly authorizationRecordId: string;
 	readonly selection?: RuntimeSelectionV1;
+	/** The stop was accepted after the submit claim, before key delivery. */
+	readonly stopPending?: true;
 }
 
 /** The original Store transaction owns all reads; the request only locates the operation. */
@@ -86,6 +88,8 @@ export async function readAcceptedExecutionKeyInTransactionV4(
 	const parsedOperation = operation(outbox.operation);
 	if (!parsedOperation) return null;
 	const payload = exactPayload(outbox.payload, parsedOperation);
+	const stopPending =
+		(await readStop(transaction, request.executionId))?.status === "submitted";
 	if (
 		!payload ||
 		!bindingMatches(outbox, payload, conversation, execution) ||
@@ -118,8 +122,7 @@ export async function readAcceptedExecutionKeyInTransactionV4(
 	)
 		return null;
 	if (
-		(await readStop(transaction, execution.execution_id))?.status ===
-			"submitted" ||
+		(!submit && stopPending) ||
 		(await readGenerationIsolation(
 			transaction,
 			conversation.id,
@@ -194,5 +197,6 @@ export async function readAcceptedExecutionKeyInTransactionV4(
 		trustedHostSessionRef: conversation.host_session_ref,
 		authorizationRecordId: authorization.id,
 		selection,
+		...(stopPending && submit ? { stopPending: true as const } : {}),
 	};
 }

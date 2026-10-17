@@ -232,7 +232,7 @@ it("rejects crossed principal namespace, Session, Key and operation fences", asy
 		expect(await store.readAcceptedExecution(value)).toBeNull();
 });
 
-it("rejects revoked authorization, expired lease, pending stop and unpinned protocol", async () => {
+it("rejects revoked authorization, expired lease and unpinned protocol, while marking a pending submit stop", async () => {
 	const { store, request } = await accepted();
 	await client`update platform.task_authorization_records set revoked_at=clock_timestamp()`;
 	expect(await store.readAcceptedExecution(request)).toBeNull();
@@ -242,7 +242,9 @@ it("rejects revoked authorization, expired lease, pending stop and unpinned prot
 	await client`update platform.outbox_items set lease_expires_at=clock_timestamp()+interval '1 minute'`;
 	await client`insert into platform.conversation_stops(execution_id, stop_request_id, status, created_at)
   values (${request.executionId}, 'stop-request', 'submitted', clock_timestamp())`;
-	expect(await store.readAcceptedExecution(request)).toBeNull();
+	expect(await store.readAcceptedExecution(request)).toMatchObject({
+		stopPending: true,
+	});
 	await client`delete from platform.conversation_stops`;
 	await client`update platform.conversation_executions set runtime_submit_protocol=null, original_operation_digest=null,
   original_submit_host_session_ref=null`;

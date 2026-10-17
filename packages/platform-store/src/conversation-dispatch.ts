@@ -37,6 +37,7 @@ import {
 import { originalOperationBinding } from "./conversation-dispatch-operation-binding.js";
 import {
 	applyTransition,
+	cancelAcceptedTurn,
 	cancelStoppedTurn,
 	closeOutbox,
 	insertPlatformExecutionStatusForFailure,
@@ -1283,6 +1284,23 @@ export class PostgresConversationDispatchStoreV1
 				"cancelled",
 				input.claim.leaseOwner,
 			);
+		});
+	}
+
+	async cancelAccepted(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<boolean> {
+		requireClaim(input.claim);
+		if (
+			(input.claim.operation !== "conversation.turn.submit.v1" &&
+				input.claim.operation !== "conversation.turn.regenerate.v1") ||
+			input.claim.executionDeliveryFence < 1
+		)
+			return false;
+		return transactionResult(this.#client, async (transaction) => {
+			const state = await ownedState(transaction, input.claim, true);
+			if (!state) throw new StaleDispatchLease();
+			await cancelAcceptedTurn(transaction, state, input.claim);
 		});
 	}
 

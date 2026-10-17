@@ -302,6 +302,115 @@ export async function cancelStoppedTurn(
 	);
 }
 
+/**
+ * Cancel a Turn whose Runtime submission was already prepared when a stop was
+ * accepted, but whose key delivery was rejected by that stop. The submit claim
+ * still owns its processing outbox; the stop outbox must remain unclaimed so
+ * this transaction can settle both records together.
+ */
+export async function cancelAcceptedTurn(
+	transaction: Transaction,
+	state: DispatchState,
+	claim: ConversationDispatchClaimV1,
+) {
+	const payload = exactPayload(state.outbox.payload, claim.operation);
+	const stop = await readStop(transaction, claim.executionId);
+	const stopOutbox = stop
+		? await lockOutbox(
+				transaction,
+				`conversation:stop:${stop.stop_request_id}`,
+				claim.conversationId,
+			)
+		: undefined;
+	const stopPayload = stopOutbox
+		? exactPayload(stopOutbox.payload, "conversation.turn.stop.v1")
+		: undefined;
+	if (
+		!payload ||
+		!stop ||
+		stop.status !== "submitted" ||
+		!stopOutbox ||
+		!stopPayload ||
+		stopOutbox.operation !== "conversation.turn.stop.v1" ||
+		(stopOutbox.status !== "pending" &&
+			stopOutbox.status !== "retry_scheduled") ||
+		stopPayload.stopRequestId !== stop.stop_request_id ||
+		!bindingMatches(
+			stopOutbox,
+			stopPayload,
+			state.conversation,
+			state.execution,
+		) ||
+		state.outbox.status !== "processing" ||
+		(state.execution.status !== "unknown" &&
+			state.execution.status !== "processing") ||
+		(safeCounter(state.execution.delivery_fence, 1) ?? 0) < 1
+	)
+		throw new StaleDispatchLease();
+	const cancelled = await transaction<{ execution_id: string }[]>`
+		update platform.conversation_executions
+		set status = 'cancelled', updated_at = clock_timestamp()
+		where execution_id = ${state.execution.execution_id}
+			and conversation_id = ${state.conversation.id}
+			and status = ${state.execution.status}
+			and delivery_fence = ${state.execution.delivery_fence}
+		returning execution_id
+	`;
+	const readied = await transaction<{ id: string }[]>`
+		update platform.conversations
+		set status = 'ready', updated_at = clock_timestamp()
+		where id = ${state.conversation.id}
+			and session_generation = ${payload.sessionGeneration}
+			and authorization_revision = ${state.execution.authorization_revision}
+		returning id
+	`;
+	const completedTurn = await transaction<{ id: string }[]>`
+		update platform.outbox_items
+		set status = 'succeeded', lease_owner = null, lease_expires_at = null,
+			updated_at = clock_timestamp()
+		where id = ${state.outbox.id} and status = 'processing'
+			and lease_owner = ${claim.leaseOwner}
+			and delivery_fence = ${state.outbox.delivery_fence}
+		returning id
+	`;
+	const completedStop = await transaction<{ id: string }[]>`
+		update platform.outbox_items
+		set status = 'succeeded', lease_owner = null, lease_expires_at = null,
+			updated_at = clock_timestamp()
+		where id = ${stopOutbox.id} and status = ${stopOutbox.status}
+			and delivery_fence = ${stopOutbox.delivery_fence}
+		returning id
+	`;
+	const completedStopRequest = await transaction<{ execution_id: string }[]>`
+		update platform.conversation_stops
+		set status = 'completed', updated_at = clock_timestamp()
+		where execution_id = ${state.execution.execution_id}
+			and stop_request_id = ${stop.stop_request_id}
+			and status = 'submitted'
+		returning execution_id
+	`;
+	await failPendingSupplements(
+		transaction,
+		state.conversation.id,
+		state.execution.execution_id,
+		payload.sessionGeneration,
+	);
+	if (
+		cancelled.length !== 1 ||
+		readied.length !== 1 ||
+		completedTurn.length !== 1 ||
+		completedStop.length !== 1 ||
+		completedStopRequest.length !== 1
+	)
+		throw new StaleDispatchLease();
+	await insertPlatformExecutionStatus(
+		transaction,
+		state.conversation.id,
+		state.execution.execution_id,
+		"cancelled",
+	);
+}
+
 /** Append a Platform-sourced execution.status event with no Runtime cursor. */
 async function insertPlatformExecutionStatus(
 	transaction: Transaction,

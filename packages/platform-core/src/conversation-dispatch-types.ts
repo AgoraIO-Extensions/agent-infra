@@ -243,6 +243,10 @@ export interface ConversationDispatchStorePortV1 {
 	cancelUnaccepted(input: {
 		readonly claim: ConversationDispatchClaimV1;
 	}): Promise<boolean>;
+	/** Atomically cancel a submitted Turn when its stop wins during key delivery. */
+	cancelAccepted?(input: {
+		readonly claim: ConversationDispatchClaimV1;
+	}): Promise<boolean>;
 	recordRuntimeResponse(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly hostSessionRef: string;

@@ -1442,6 +1442,41 @@ export function createConversationDispatchUseCaseV1(
 					}
 				}
 				const failure = runtimeFailure(error);
+				if (
+					failure.code === "RUNTIME_STOP_PENDING" &&
+					(claim.operation === "conversation.turn.submit.v1" ||
+						claim.operation === "conversation.turn.regenerate.v1") &&
+					claim.executionDeliveryFence > 0
+				) {
+					if (!dependencies.store.cancelAccepted)
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"STOP_PENDING",
+							"retry",
+							{},
+						);
+					try {
+						if (
+							await dependencies.store.cancelAccepted({
+								claim,
+							})
+						)
+							return { schemaVersion: 1, outcome: "already_completed" };
+					} catch {
+						// A concurrently claimed stop keeps ownership of the decision;
+						// retry until either side can settle the pair atomically.
+					}
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						"STOP_PENDING",
+						"retry",
+						{},
+					);
+				}
 				// The Store wrote unknown before the request as a write-ahead of
 				// possible delivery. When the Worker proves nothing was sent, return
 				// the Turn to its original waiting position instead (HLD §8.4).
