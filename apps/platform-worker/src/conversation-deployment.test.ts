@@ -827,6 +827,46 @@ describe("production SessionSandbox resource receiver", () => {
 		);
 	});
 
+	it("replays a persisted stop receipt as stopped", async () => {
+		const f = fixture();
+		const claim = drainClaim(f, { status: "ready", resources: [] });
+		if (!claim.lifecycle) throw new Error("Expected management lifecycle");
+		const retainedPVC = {
+			kind: "PersistentVolumeClaim" as const,
+			namespace: claim.policy.namespace,
+			name: claim.sandbox.resourceName,
+			uid: "retained-pvc",
+			resourceVersion: "1",
+		};
+		const receipt = {
+			schemaVersion: 1 as const,
+			sandboxId: claim.sandbox.sandboxId,
+			sessionId: claim.sandbox.sessionId,
+			sourceGeneration: claim.lifecycle.source.sandbox.generation,
+			sourceResourceFence: claim.lifecycle.source.resourceFence,
+			targetGeneration: claim.sandbox.generation,
+			targetResourceFence: claim.resourceFence,
+			removed: [],
+			retainedPVC,
+		};
+		const receive = createProductionSessionSandboxReceiverV1(f.options, {
+			serviceToken: "synthetic-token",
+		});
+		await expect(
+			receive(
+				{
+					...claim,
+					lifecycle: { ...claim.lifecycle, stopReceipt: receipt },
+				},
+				new AbortController().signal,
+			),
+		).resolves.toEqual({
+			status: "stopped",
+			sourceStop: receipt,
+			resources: [retainedPVC],
+		});
+	});
+
 	it("refreshes a source whose Pod resourceVersion moved before any delete (#1523)", async () => {
 		const f = fixture();
 		const signal = new AbortController().signal;

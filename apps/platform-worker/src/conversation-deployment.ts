@@ -604,6 +604,12 @@ export function createProductionSessionSandboxReceiverV1(
 				false,
 			);
 			const sourceResources = source.observation?.resources ?? [];
+			if (lifecycle.stopReceipt)
+				return {
+					status: "stopped" as const,
+					sourceStop: lifecycle.stopReceipt,
+					resources: [lifecycle.stopReceipt.retainedPVC],
+				};
 			const completeSource =
 				sourceResources.length >= 6 &&
 				[
@@ -634,11 +640,7 @@ export function createProductionSessionSandboxReceiverV1(
 							: observed.resources,
 				};
 			}
-			if (
-				!claim.drainComputeAllowed ||
-				lifecycle.stopReceipt ||
-				lifecycle.preparation
-			)
+			if (!claim.drainComputeAllowed || lifecycle.preparation)
 				return {
 					status: "unknown" as const,
 					resources: sourceResources,

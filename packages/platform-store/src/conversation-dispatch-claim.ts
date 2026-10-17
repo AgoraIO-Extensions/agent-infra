@@ -51,11 +51,20 @@ export async function claimWork(
 ): Promise<ConversationDispatchClaimDecisionV1> {
 	// Application/use governance precedes the original Agent -> Conversation -> Outbox locks.
 	await lockWaitingTaskAuthority(transaction, input.itemId);
-	await transaction`
-		select a.id from platform.agents a
+	const [agent] = await transaction<
+		{
+			status: string;
+			desired_state: string;
+			service_availability: string | null;
+		}[]
+	>`
+		select aa.status, aa.desired_state, aa.service_availability
+		from platform.agents a
 		join platform.conversations c on c.agent_id = a.id
 		join platform.outbox_items o on o.scope_id = c.id and o.scope_type = 'conversation'
-		where o.id = ${input.itemId} for share of a
+		join platform.agent_applications aa on aa.agent_id = a.id
+		where o.id = ${input.itemId}
+		for share of a, aa
 	`;
 	const outbox = await lockOutbox(transaction, input.itemId);
 	if (outbox?.scope_type !== "conversation") return { outcome: "stale" };
@@ -173,11 +182,19 @@ export async function claimWork(
 		}
 		if (decision.outcome === "wait") return { outcome: "busy" };
 	}
+	const stoppedRecovery =
+		isTurn(selectedOperation) &&
+		(execution.status === "processing" || execution.status === "unknown") &&
+		agent !== undefined &&
+		(agent.status !== "available" ||
+			agent.desired_state !== "running" ||
+			agent.service_availability !== "ready");
 	if (
 		!conversation.sandbox_ready &&
 		!isolationWork &&
 		selectedOperation !== "conversation.turn.stop.v1" &&
-		!payload.metadataRecovery
+		!payload.metadataRecovery &&
+		!stoppedRecovery
 	)
 		return { outcome: "busy" };
 	if (

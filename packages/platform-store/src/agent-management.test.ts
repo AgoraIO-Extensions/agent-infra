@@ -456,6 +456,28 @@ describe("PostgreSQL Agent-management Adapter", () => {
 			},
 		});
 		adapters.push(dispatch);
+		await adminClient`update platform.outbox_items
+			set payload = jsonb_set(payload, '{lifecycle,authority,targetDesiredState}', '"running"'::jsonb)
+			where id = 'conversation:sandbox:unknown-session:1'`;
+		const refreshed = await dispatch.claimSandboxReconciliation({
+			schemaVersion: 1,
+			itemId: "conversation:sandbox:unknown-session:1",
+			workerId: "stale-lifecycle-worker",
+			leaseDurationMs: 30_000,
+		});
+		expect(refreshed).toMatchObject({
+			purpose: "drain",
+			lifecycle: {
+				authority: {
+					targetDesiredState: "stopped",
+					managementFence: 2,
+				},
+			},
+		});
+		await adminClient`update platform.outbox_items
+			set status = 'pending', lease_owner = null, lease_expires_at = null,
+				available_at = now()
+			where id = 'conversation:sandbox:unknown-session:1'`;
 		const claimInput = {
 			schemaVersion: 1 as const,
 			itemId: "conversation:sandbox:ready-session:1",

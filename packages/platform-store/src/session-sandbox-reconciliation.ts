@@ -139,10 +139,32 @@ async function lockedContext(
 	>`select resource_fence, desired_state, status, resource_policy, resource_observation
 		from platform.session_sandbox_allocations where sandbox_id = ${sandbox.sandboxId} for update`;
 	if (!allocation) return null;
-	const lifecycle =
+	let lifecycle =
 		(payload as { lifecycle?: SessionSandboxLifecycleV1 }).lifecycle ?? null;
 	let preparationAllowed = false;
 	if (lifecycle) {
+		if (
+			lifecycle.authority &&
+			management.desiredState === "stopped" &&
+			lifecycle.authority.targetDesiredState === "running" &&
+			lifecycle.authority.applicationId === management.applicationId &&
+			lifecycle.authority.managementFence <= management.fence
+		) {
+			lifecycle = {
+				...lifecycle,
+				authority: {
+					...lifecycle.authority,
+					managementRevision: management.revision,
+					managementFence: management.fence,
+					workloadRevision: management.workloadRevision,
+					targetDesiredState: "stopped",
+				},
+			};
+			await transaction`update platform.outbox_items
+				set payload = payload || ${transaction.json({ lifecycle } as unknown as Parameters<typeof transaction.json>[0])},
+					updated_at = clock_timestamp()
+				where id = ${itemId}`;
+		}
 		const authority = lifecycle.authority;
 		const source = lifecycle.source;
 		if (
