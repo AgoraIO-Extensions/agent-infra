@@ -68,6 +68,7 @@ export const PiRuntimeDriver = {
 			supportsResultFiles: true,
 			supportsConnection: options.standardConnectionClient !== undefined,
 			cursorPrefix: "pi",
+			nativeCommandSourceVersion: "0.99.0",
 			retireSession: (directory) =>
 				retireNativeProcess(directory, "AGENT_INFRA_PI_OWNER"),
 			completionStatus: (reason): RuntimeStatusV1 =>

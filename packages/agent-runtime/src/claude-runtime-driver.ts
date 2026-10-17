@@ -64,6 +64,7 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeModelDirectory,
+	RuntimeNativeCommandCommandV1,
 	RuntimeNativeMetadataReadContextV1,
 	RuntimeNativeSkillBindingRequestV1,
 	RuntimeNativeSkillCommandV1,
@@ -231,6 +232,7 @@ interface Operation {
 	record?: RuntimeDriverOperationRecord;
 }
 interface Turn {
+	kind?: "submit-turn" | "native-command";
 	executionId: string;
 	turnId: string;
 	operationKey: string;
@@ -301,6 +303,7 @@ interface Handle {
 	retiring: boolean;
 }
 type Submit = Extract<RuntimeDriverCommand, { kind: "submit-turn" }>;
+type NativeCommand = Extract<RuntimeDriverCommand, { kind: "native-command" }>;
 const terminal = (status: RuntimeStatusV1) =>
 	["completed", "cancelled", "failed"].includes(status);
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -449,6 +452,27 @@ export function parseClaudeNativeCommands(
 		});
 	});
 	return Object.freeze(commands);
+}
+
+function projectClaudeNativeCommands(input: {
+	readonly nativeSessionRef: string;
+	readonly configVersion: string;
+	readonly commands: readonly ClaudeNativeCommandV1[];
+	readonly skillNames?: ReadonlySet<string>;
+}) {
+	return projectNativeMetadataCommandsV1({
+		nativeSessionRef: input.nativeSessionRef,
+		configVersion: input.configVersion,
+		source: {
+			name: "Claude",
+			version: CLAUDE_NATIVE_PROVENANCE.nativeVersion,
+		},
+		directory: {
+			commands: input.commands
+				.filter((command) => !input.skillNames?.has(command.name))
+				.map((command) => ({ ...command, source: "claude" })),
+		},
+	});
 }
 
 async function boundedNativeCommandRead<T>(
@@ -620,6 +644,26 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			packageDigest: entry.packageDigest,
 			manifestDigest: entry.manifestDigest,
 		};
+	}
+
+	createNativeCommandCommand(command: RuntimeNativeCommandCommandV1) {
+		if (
+			command.capabilitySourceVersion !==
+				CLAUDE_NATIVE_PROVENANCE.nativeVersion ||
+			!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(command.capabilityName) ||
+			!command.parameters.isWellFormed() ||
+			command.parameters.length > 16 * 1024 ||
+			createHash("sha256").update(command.parameters).digest("hex") !==
+				command.parametersDigest
+		)
+			nativeSkillUnsupported();
+		if (
+			this.options.skillDirectory
+				?.findSkills()
+				.some((entry) => entry.name === command.capabilityName)
+		)
+			nativeSkillUnsupported();
+		return command;
 	}
 
 	/** Append one acknowledged Claude model/tool operation fact. */
@@ -890,6 +934,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						key.length !== 2 ||
 						![
 							"submit-turn",
+							"native-command",
 							"supplement",
 							"stop",
 							"generation-cancel",
@@ -934,7 +979,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						turns.has(turn.turnId) ||
 						users.has(turn.userMessageId) ||
 						!operationKeys.has(turn.operationKey) ||
-						JSON.parse(turn.operationKey)[0] !== "submit-turn"
+						!["submit-turn", "native-command"].includes(
+							JSON.parse(turn.operationKey)[0],
+						) ||
+						(turn.kind !== undefined &&
+							turn.kind !== JSON.parse(turn.operationKey)[0])
 					)
 						unavailable();
 					if (
@@ -1046,6 +1095,23 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				await file.update((state) => {
 					for (const turn of state.turns) {
 						normalizeClaudeUncertainConnectionOperations(turn);
+						if (turn.kind === "native-command" && !terminal(turn.status)) {
+							turn.unknownHold = true;
+							if (!turn.events.some((event) => event.type === "status")) {
+								state.sequence++;
+								turn.events.push(
+									RuntimeEventV1Schema.parse({
+										schemaVersion: 1,
+										executionId: turn.executionId,
+										adapterEventKey: randomUUID(),
+										cursor: `claude-${state.sequence}`,
+										occurredAt: new Date().toISOString(),
+										type: "status",
+										payload: { status: "unknown" },
+									}),
+								);
+							}
+						}
 						if (turn.status === "running") turn.status = "unknown";
 						if (turn.unknownHold && terminal(turn.status)) {
 							const completed = turn.events.at(-1);
@@ -1252,6 +1318,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					context?.fileBridge,
 					context?.browser,
 				);
+			if (command.kind === "native-command") return this.submit(file, command);
 			if (command.kind === "supplement")
 				return this.resolve(file, command, { outcome: "busy" });
 			const turn = file
@@ -1304,7 +1371,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	}
 	private async submit(
 		file: DurableJsonFile<Session>,
-		command: Submit,
+		command: Submit | NativeCommand,
 		fileBridge?: RuntimeFileBridgePortV1,
 		browser?: RuntimeDriverExecutionContextV1["browser"],
 	) {
@@ -1319,20 +1386,27 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			unavailable();
 		if (before.cancelled) unavailable();
 		const selection =
-			command.schemaVersion === 2
+			command.kind === "submit-turn" && command.schemaVersion === 2
 				? command.selection
-				: {
-						schemaVersion: 1 as const,
-						modelOptionId: this.options.defaultModelOptionId,
-						reasoningLevel: this.options.defaultReasoningLevel,
-					};
+				: command.kind === "native-command"
+					? (before.turns.at(-1)?.selection ?? {
+							schemaVersion: 1 as const,
+							modelOptionId: this.options.defaultModelOptionId,
+							reasoningLevel: this.options.defaultReasoningLevel,
+						})
+					: {
+							schemaVersion: 1 as const,
+							modelOptionId: this.options.defaultModelOptionId,
+							reasoningLevel: this.options.defaultReasoningLevel,
+						};
 		const option = this.options.modelOptions.find(
 			(option) =>
 				option.modelOptionId === selection.modelOptionId &&
 				option.reasoningLevels.includes(selection.reasoningLevel),
 		);
 		if (!option) {
-			if (command.schemaVersion === 1) unavailable();
+			if (command.kind === "native-command" || command.schemaVersion === 1)
+				unavailable();
 			return this.resolve(file, command, {
 				outcome: "rejected",
 				code: "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
@@ -1350,12 +1424,30 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			)
 		)
 			conflict();
-		if (!("text" in command.input)) unavailable();
+		const nativeCommandInput =
+			command.kind === "native-command"
+				? `/${command.capabilityName}${
+						command.parameters.length > 0 ? ` ${command.parameters}` : ""
+					}`
+				: undefined;
+		if (command.kind === "submit-turn" && !("text" in command.input))
+			unavailable();
 		const content: Exclude<
 			Parameters<typeof claudeQuery>[1]["message"]["content"],
 			string
-		> = [{ type: "text", text: command.input.text }];
-		for (const fileId of command.input.attachments) {
+		> = [
+			{
+				type: "text",
+				text:
+					nativeCommandInput ??
+					(command.kind === "submit-turn" && "text" in command.input
+						? command.input.text
+						: unavailable()),
+			},
+		];
+		for (const fileId of command.kind === "submit-turn"
+			? command.input.attachments
+			: []) {
 			if (!fileBridge) unavailable();
 			const input = await fileBridge.readInput(fileId);
 			if (
@@ -1441,6 +1533,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				digest: digest(command),
 			});
 			state.turns.push({
+				...(command.kind === "native-command"
+					? { kind: "native-command" as const }
+					: {}),
 				executionId: command.executionId,
 				turnId: command.turnId,
 				operationKey: operationKey(command),
@@ -1912,6 +2007,54 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			await transport.close();
 			return result(command, ref, unknownResult);
 		}
+		if (command.kind === "native-command") {
+			try {
+				const current = parseClaudeNativeCommands(
+					await boundedNativeCommandRead(native.query.supportedCommands(), {
+						signal: AbortSignal.timeout(30_000),
+						expiresAt: Date.now() + 30_000,
+					}),
+				);
+				const skillNames = this.options.skillDirectory
+					? new Set(
+							this.options.skillDirectory
+								.findSkills()
+								.map((entry) => entry.name),
+						)
+					: undefined;
+				const projection = projectClaudeNativeCommands({
+					nativeSessionRef: command.nativeSessionRef,
+					configVersion: this.options.configVersion,
+					commands: current,
+					...(skillNames ? { skillNames } : {}),
+				});
+				if (
+					projection.selector !== "commands" ||
+					projection.revision !== command.directoryRevision ||
+					!projection.capabilities.some(
+						(entry) =>
+							entry.id === command.capabilityId &&
+							entry.name === command.capabilityName &&
+							entry.source.version === command.capabilitySourceVersion,
+					)
+				)
+					throw new Error("RUNTIME_NATIVE_CAPABILITY_STALE");
+			} catch {
+				await native.close().catch(() => {});
+				if (standardMcp) await standardMcp.close().catch(() => {});
+				browserAbortController.abort();
+				await transport.close();
+				await file.update((state) => {
+					state.operations = state.operations.filter(
+						(entry) => entry.key !== operationKey(command),
+					);
+					state.turns = state.turns.filter(
+						(entry) => entry.executionId !== command.executionId,
+					);
+				});
+				nativeSkillUnsupported();
+			}
+		}
 		handle = {
 			native,
 			transport,
@@ -2239,16 +2382,21 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			},
 		};
 		if (selector === "commands") {
-			return projectNativeMetadataCommandsV1({
+			const commands = await this.discoverNativeCommands(nativeRead);
+			const skillNames = this.options.skillDirectory
+				? new Set(
+						this.options.skillDirectory.findSkills().map((entry) => entry.name),
+					)
+				: undefined;
+			const projection = projectClaudeNativeCommands({
 				nativeSessionRef: read.nativeSessionRef,
 				configVersion: this.options.configVersion,
-				source: {
-					name: "Claude",
-					version: CLAUDE_NATIVE_PROVENANCE.nativeVersion,
-				},
-				directory: { commands: [] },
-				assertCurrent: () => read.assertCurrent(),
+				commands,
+				...(skillNames ? { skillNames } : {}),
 			});
+			if (projection.selector !== "commands") nativeMetadataUnsupported();
+			read.assertCurrent();
+			return projection;
 		}
 		if (selector === "skills") {
 			const directory = await this.discoverNativeSkills(nativeRead);

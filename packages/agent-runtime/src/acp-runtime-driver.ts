@@ -95,6 +95,7 @@ export const GenericAcpRuntimeDriver = {
 			supportsResultFiles: true,
 			attachmentsNegotiated: () => negotiatedImageInput === true,
 			cursorPrefix: "acp",
+			nativeCommandSourceVersion: "1.4.0",
 			retireSession: retireAcpProcess,
 			completionStatus: (reason): RuntimeStatusV1 =>
 				reason === "end_turn"

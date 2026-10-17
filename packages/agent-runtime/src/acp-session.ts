@@ -19,6 +19,7 @@ import {
 } from "./acp-native-command.js";
 import { spawnAcpProcess } from "./acp-process.js";
 import { acpStream } from "./acp-stream.js";
+import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
 import type { NativePromptV1 } from "./session-runtime-driver.js";
 
 export interface AcpLaunch {
@@ -364,6 +365,24 @@ export async function openAcpSession(options: {
 						});
 					throw error;
 				}
+			},
+			async executeNativeCommand(command: RuntimeNativeCommandCommandV1) {
+				if (
+					commandDirectoryUnavailable ||
+					!commandDirectory?.commands.some(
+						(entry) => entry.name === command.capabilityName,
+					)
+				)
+					throw new Error("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
+				const text = `/${command.capabilityName}${
+					command.parameters.length > 0 ? ` ${command.parameters}` : ""
+				}`;
+				const response = await connection.agent.request("session/prompt", {
+					sessionId: nativeId,
+					prompt: [{ type: "text", text }],
+				});
+				await updates;
+				return response as { stopReason: string; checkpoint?: string };
 			},
 			async discoverCommands(input: {
 				readonly signal: AbortSignal;

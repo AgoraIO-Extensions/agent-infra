@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type {
 	RuntimeDriverCommand,
+	RuntimeNativeCommandCommandV1,
+	RuntimeNativeMetadataReadContextV1,
 	RuntimeNativeSkillCommandV1,
 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
@@ -261,6 +263,95 @@ it("builds the bounded Pi native Skill command from the mounted directory", asyn
 				attachments: [],
 			},
 		});
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("executes a bound native command once and rejects directory drift", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-native-command-"));
+	const executeNativeCommand = vi.fn(async () => ({ stopReason: "completed" }));
+	const runtime = await driver(path, async () => ({
+		nativeId: "native-a",
+		select: async () => {},
+		prompt: async () => ({ stopReason: "completed" }),
+		discoverCommands: async () => ({
+			nativeId: "native-a",
+			commands: [{ name: "compact", description: "Compact", source: "acp" }],
+			readAt: Date.now(),
+		}),
+		executeNativeCommand,
+		cancel: async () => {},
+		close: async () => {},
+	}));
+	try {
+		const turn = await runtime.execute(command([]));
+		const binding: RuntimeNativeMetadataReadContextV1 = {
+			nativeSessionRef: turn.nativeSessionRef,
+			signal: new AbortController().signal,
+			expiresAt: Date.now() + 30_000,
+			assertCurrent: () => ({
+				principal: { kind: "user", id: "user-a" },
+				scope: {
+					agentId: "agent-a",
+					conversationId: "conversation-a",
+					executionId: "metadata-a",
+					sessionGeneration: 1,
+				},
+			}),
+			revalidate: async () => ({
+				principal: { kind: "user", id: "user-a" },
+				scope: {
+					agentId: "agent-a",
+					conversationId: "conversation-a",
+					executionId: "metadata-a",
+					sessionGeneration: 1,
+				},
+			}),
+		};
+		const projection = await runtime.readNativeMetadataV1("commands", binding);
+		expect(projection.selector).toBe("commands");
+		if (projection.selector !== "commands") throw new Error("wrong selector");
+		const capability = projection.capabilities[0];
+		if (!capability) throw new Error("missing compact command");
+		const native = {
+			schemaVersion: 1 as const,
+			kind: "native-command" as const,
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "native-execution-a",
+			turnId: "native-turn-a",
+			operationId: "native-execution-a",
+			nativeSessionRef: turn.nativeSessionRef,
+			capabilityId: capability.id,
+			directoryRevision: projection.revision,
+			capabilityName: capability.name,
+			capabilitySourceVersion: capability.source.version,
+			parameters: "",
+			parametersDigest: createHash("sha256").update("").digest("hex"),
+		} satisfies RuntimeNativeCommandCommandV1;
+		expect(runtime.createNativeCommandCommand(native)).toEqual(native);
+		const accepted = await runtime.execute(native);
+		expect(accepted.result).toEqual({
+			outcome: "accepted",
+			status: "completed",
+		});
+		expect(executeNativeCommand).toHaveBeenCalledOnce();
+		expect(await runtime.execute(native)).toEqual(accepted);
+		expect(executeNativeCommand).toHaveBeenCalledOnce();
+		const stale = {
+			...native,
+			executionId: "native-execution-stale",
+			turnId: "native-turn-stale",
+			operationId: "native-execution-stale",
+			directoryRevision: "f".repeat(64),
+		};
+		await expect(runtime.execute(stale)).rejects.toMatchObject({
+			code: "RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+		});
+		expect(executeNativeCommand).toHaveBeenCalledOnce();
 	} finally {
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });

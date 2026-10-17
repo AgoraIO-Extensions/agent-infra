@@ -13,6 +13,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import {
+	claudeCommand,
+	claudeNativeFixture,
+} from "./claude-native.test-support.js";
+import {
 	type ClaudeNativeCommandReadContext,
 	ClaudeRuntimeDriver,
 	claudeNativeSkillLaunchOptions,
@@ -21,6 +25,7 @@ import {
 } from "./claude-runtime-driver.js";
 import type {
 	RuntimeExternalActionAuthorization,
+	RuntimeNativeCommandCommandV1,
 	RuntimeNativeMetadataReadContextV1,
 	RuntimeNativeSkillCommandV1,
 } from "./driver.js";
@@ -576,6 +581,87 @@ it("rejects discovery for a missing Claude native session", async () => {
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("binds Claude native commands to the fixed SDK provenance and parameter digest", async () => {
+	const path = await mkdtemp(join(tmpdir(), "claude-native-command-binding-"));
+	const driver = await ClaudeRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				model: "claude-opus-5",
+				reasoningLevels: ["high"],
+				authentication: "bearer",
+				endpoint: "http://127.0.0.1:1",
+				credential: "synthetic-model-credential",
+			},
+		],
+	});
+	try {
+		const command = {
+			schemaVersion: 1 as const,
+			kind: "native-command" as const,
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-a",
+			turnId: "turn-a",
+			operationId: "operation-a",
+			nativeSessionRef: "native-a",
+			capabilityId: "a".repeat(64),
+			directoryRevision: "b".repeat(64),
+			capabilityName: "compact",
+			capabilitySourceVersion: "2.1.246",
+			parameters: "",
+			parametersDigest: createHash("sha256").update("").digest("hex"),
+		} satisfies RuntimeNativeCommandCommandV1;
+		expect(driver.createNativeCommandCommand(command)).toEqual(command);
+		await expect(
+			Promise.resolve().then(() =>
+				driver.createNativeCommandCommand({
+					...command,
+					capabilitySourceVersion: "drifted",
+				}),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED" });
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("rejects an unknown Claude command before sending a model request", async () => {
+	const fixture = await claudeNativeFixture();
+	try {
+		const first = await fixture.driver.execute(claudeCommand());
+		await fixture.settled(first.nativeSessionRef, "execution-one");
+		await expect(
+			fixture.driver.execute({
+				schemaVersion: 1,
+				kind: "native-command",
+				agentId: "agent-one",
+				conversationId: "conversation-one",
+				sessionGeneration: 1,
+				executionId: "execution-unknown-command",
+				turnId: "turn-unknown-command",
+				operationId: "execution-unknown-command",
+				nativeSessionRef: first.nativeSessionRef,
+				capabilityId: "a".repeat(64),
+				directoryRevision: "b".repeat(64),
+				capabilityName: "unknown-command",
+				capabilitySourceVersion: "2.1.246",
+				parameters: "",
+				parametersDigest: createHash("sha256").update("").digest("hex"),
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED" });
+		expect(fixture.calls).toHaveLength(1);
+	} finally {
+		await fixture.close();
 	}
 });
 

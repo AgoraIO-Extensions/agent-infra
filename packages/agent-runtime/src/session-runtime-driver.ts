@@ -30,6 +30,7 @@ import type {
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeModelCredentialResolver,
 	RuntimeModelDirectory,
+	RuntimeNativeCommandCommandV1,
 	RuntimeNativeMetadataReadContextV1,
 	RuntimeNativeSkillBindingRequestV1,
 	RuntimeNativeSkillCommandV1,
@@ -124,6 +125,8 @@ export interface SessionRuntimeDriverOptions {
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	/** Native prompt expansion supplied by the pinned Driver adapter (Pi only for now). */
 	readonly nativeSkillPrompt?: (name: string, parameters: string) => string;
+	/** Fixed provenance version for the native command directory. */
+	readonly nativeCommandSourceVersion?: string;
 	readonly cursorPrefix: string;
 	readonly openSession: (
 		options: NativeSessionOptions,
@@ -206,6 +209,10 @@ export interface NativeSession {
 		readonly expiresAt: number;
 		readonly allowedRoots: readonly string[];
 	}): Promise<unknown>;
+	/** Execute one already bound native command through the provider protocol. */
+	executeNativeCommand?(
+		command: RuntimeNativeCommandCommandV1,
+	): Promise<{ stopReason: string; checkpoint?: string }>;
 }
 
 export type SessionNativeCommandReadContext = Readonly<{
@@ -233,6 +240,7 @@ interface Index {
 	barriers?: (Operation & { ref: string })[];
 }
 interface Turn {
+	kind?: "submit-turn" | "native-command";
 	executionId: string;
 	turnId: string;
 	operationKey: string;
@@ -738,6 +746,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						key.length !== 2 ||
 						![
 							"submit-turn",
+							"native-command",
 							"supplement",
 							"stop",
 							"generation-cancel",
@@ -779,7 +788,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						executions.has(turn.executionId) ||
 						turns.has(turn.turnId) ||
 						!operationKeys.has(turn.operationKey) ||
-						JSON.parse(turn.operationKey)[0] !== "submit-turn"
+						!["submit-turn", "native-command"].includes(
+							JSON.parse(turn.operationKey)[0],
+						) ||
+						(turn.kind !== undefined &&
+							turn.kind !== JSON.parse(turn.operationKey)[0])
 					)
 						unavailable();
 					executions.add(turn.executionId);
@@ -918,6 +931,33 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				state = file.read();
 				if (!recover) return file;
 				const active = state.turns.find((turn) => !terminal(turn.status));
+				if (active?.kind === "native-command") {
+					// A native command has no replay-safe provider receipt. Retain the
+					// durable operation as unknown after restart; never invoke it twice.
+					await file.update((draft) => {
+						const turn = draft.turns.find(
+							(entry) => entry.executionId === active.executionId,
+						);
+						if (!turn) return;
+						turn.unknownHold = true;
+						if (!hasUnknownStatusEvent(turn)) {
+							draft.sequence++;
+							turn.events.push(
+								RuntimeEventV1Schema.parse({
+									schemaVersion: 1,
+									executionId: turn.executionId,
+									adapterEventKey: randomUUID(),
+									cursor: `${this.options.cursorPrefix}-${draft.sequence}`,
+									occurredAt: new Date().toISOString(),
+									type: "status",
+									payload: { status: "unknown" },
+								}),
+							);
+						}
+					});
+					state = file.read();
+					return file;
+				}
 				const latest = active ?? state.turns.at(-1);
 				const recoverable = active && !active.unknownHold ? active : undefined;
 				if (
@@ -1183,6 +1223,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					context?.fileBridge,
 					context?.browser,
 				);
+			if (command.kind === "native-command")
+				return this.executeNativeCommand(file, command);
 			if (command.kind === "supplement")
 				return this.resolve(file, command, { outcome: "busy" });
 			const turn = file
@@ -1752,6 +1794,71 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				?.record ?? result(command, ref, unknownResult)
 		);
 	}
+
+	private async executeNativeCommand(
+		file: DurableJsonFile<Session>,
+		command: RuntimeNativeCommandCommandV1,
+	) {
+		const before = file.read();
+		const ref = before.binding.ref;
+		if (before.cancelled) unavailable();
+		if (before.turns.some((turn) => !terminal(turn.status)))
+			return this.resolve(file, command, { outcome: "busy" });
+		if (
+			before.turns.some(
+				(turn) =>
+					turn.executionId === command.executionId ||
+					turn.turnId === command.turnId,
+			)
+		)
+			conflict();
+		const handle = this.handles.get(ref);
+		if (!handle?.native.executeNativeCommand) nativeSkillUnsupported();
+		await this.assertNativeCommandBinding(handle, command);
+		const selection = handle.selection;
+		await file.update((state) => {
+			state.operations.push({
+				key: operationKey(command),
+				digest: digest(command),
+			});
+			state.turns.push({
+				kind: "native-command",
+				executionId: command.executionId,
+				turnId: command.turnId,
+				operationKey: operationKey(command),
+				configVersion: this.options.configVersion,
+				selection,
+				status: "unknown",
+				events: [],
+			});
+		});
+		try {
+			const response = await handle.native.executeNativeCommand(command);
+			if (
+				!response ||
+				typeof response.stopReason !== "string" ||
+				(response.checkpoint !== undefined &&
+					typeof response.checkpoint !== "string")
+			)
+				throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+			const status = this.options.completionStatus(response.stopReason);
+			if (status === "unknown") throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+			await this.status(
+				file,
+				command.executionId,
+				status,
+				response.stopReason,
+				response.checkpoint,
+			);
+			return this.resolve(file, command, {
+				outcome: "accepted",
+				status,
+			});
+		} catch {
+			await this.status(file, command.executionId, "unknown").catch(() => {});
+			return this.resolve(file, command, unknownResult);
+		}
+	}
 	private async event(
 		file: DurableJsonFile<Session>,
 		executionId: string,
@@ -1989,14 +2096,33 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			},
 		};
 		if (selector === "commands") {
-			// Session-backed adapters expose native command discovery for diagnostics,
-			// but do not implement RuntimeDriver.createNativeCommandCommand. Keep the
-			// command selector empty so the Skill selector remains usable.
+			const handle = this.handles.get(read.nativeSessionRef);
+			const directory =
+				handle?.native.executeNativeCommand === undefined
+					? { commands: [] }
+					: await this.discoverNativeCommands(nativeRead);
+			const commands =
+				directory && typeof directory === "object" && !Array.isArray(directory)
+					? {
+							...(directory as Record<string, unknown>),
+							commands: Array.isArray(
+								(directory as Record<string, unknown>).commands,
+							)
+								? (
+										(directory as Record<string, unknown>)
+											.commands as readonly Record<string, unknown>[]
+									).filter((command) => command.source !== "skill")
+								: [],
+						}
+					: directory;
 			return projectNativeMetadataCommandsV1({
 				nativeSessionRef: read.nativeSessionRef,
 				configVersion: this.options.configVersion,
-				source: { name: this.options.cursorPrefix, version: "1" },
-				directory: { commands: [] },
+				source: {
+					name: this.options.cursorPrefix,
+					version: this.options.nativeCommandSourceVersion ?? "1",
+				},
+				directory: commands,
 				assertCurrent: () => read.assertCurrent(),
 			});
 		}
@@ -2011,6 +2137,19 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			});
 		}
 		nativeMetadataUnsupported();
+	}
+
+	createNativeCommandCommand(command: RuntimeNativeCommandCommandV1) {
+		const sourceVersion = this.options.nativeCommandSourceVersion ?? "1";
+		if (
+			command.capabilitySourceVersion !== sourceVersion ||
+			!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(command.capabilityName) ||
+			command.parameters.length > 16 * 1024 ||
+			createHash("sha256").update(command.parameters).digest("hex") !==
+				command.parametersDigest
+		)
+			nativeSkillUnsupported();
+		return command;
 	}
 
 	async discoverNativeCommands(read: SessionNativeCommandReadContext) {
@@ -2047,6 +2186,54 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		}
 		assertCurrent();
 		return result;
+	}
+
+	private async assertNativeCommandBinding(
+		handle: Handle,
+		command: RuntimeNativeCommandCommandV1,
+	) {
+		if (!handle.native.discoverCommands || !handle.native.executeNativeCommand)
+			nativeSkillUnsupported();
+		const signal = AbortSignal.timeout(30_000);
+		const directory = await handle.native.discoverCommands({
+			signal,
+			expiresAt: Date.now() + 30_000,
+			allowedRoots: [
+				join(this.options.path, command.nativeSessionRef, "workspace"),
+			],
+		});
+		const projection = projectNativeMetadataCommandsV1({
+			nativeSessionRef: command.nativeSessionRef,
+			configVersion: this.options.configVersion,
+			source: {
+				name: this.options.cursorPrefix,
+				version: this.options.nativeCommandSourceVersion ?? "1",
+			},
+			directory:
+				directory && typeof directory === "object" && !Array.isArray(directory)
+					? {
+							...(directory as Record<string, unknown>),
+							commands: Array.isArray(
+								(directory as Record<string, unknown>).commands,
+							)
+								? (
+										(directory as Record<string, unknown>)
+											.commands as readonly Record<string, unknown>[]
+									).filter((entry) => entry.source !== "skill")
+								: [],
+						}
+					: directory,
+		});
+		if (projection.selector !== "commands") nativeSkillUnsupported();
+		const entry = projection.capabilities.find(
+			(capability) =>
+				capability.kind === "command" &&
+				capability.id === command.capabilityId &&
+				capability.name === command.capabilityName &&
+				capability.source.version === command.capabilitySourceVersion,
+		);
+		if (!entry || projection.revision !== command.directoryRevision)
+			nativeSkillUnsupported();
 	}
 	/** Return the deployment-owned Hub projection without consulting native state. */
 	async discoverNativeSkills(read: SessionNativeCommandReadContext) {
