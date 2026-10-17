@@ -20,8 +20,12 @@ import {
 	type RuntimeStatusV1,
 	RuntimeStatusV1Schema,
 } from "@agent-infra/contracts/runtime";
+import type { BrowserHandoffRecordV1 } from "./browser-handoff.js";
 import { createCodexBrowserToolDescriptorsV1 } from "./codex-browser-tools.js";
 import type {
+	RuntimeBrowserHandoffRequestV1,
+	RuntimeBrowserSideEffectConfirmationRequestV1,
+	RuntimeBrowserSideEffectConfirmationResultV1,
 	RuntimeDriver,
 	RuntimeDriverCommand,
 	RuntimeDriverLookup,
@@ -2273,6 +2277,111 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				reasoningLevel: currentReasoning,
 			},
 		};
+	}
+
+	/** Execute Browser handoff through the existing request-local controller. */
+	async executeBrowserHandoff(
+		nativeSessionRef: string,
+		executionId: string,
+		request: RuntimeBrowserHandoffRequestV1,
+		context: import("./driver.js").RuntimeDriverExecutionContextV1,
+	): Promise<BrowserHandoffRecordV1 | undefined> {
+		const browser = context.browser;
+		const handoff = browser?.handoff?.controller;
+		if (!browser || !handoff) unavailable();
+		const binding = this.index
+			.read()
+			.sessions.find((entry) => entry.ref === nativeSessionRef);
+		if (!binding) unavailable();
+		const file = await this.file(binding);
+		const state = file.read();
+		const turn = state.turns.find((entry) => entry.executionId === executionId);
+		const requiresActiveExecution =
+			request.kind !== "revoke" && request.kind !== "browser-crashed";
+		if (
+			!turn ||
+			state.cancelled ||
+			binding.agentId !== browser.binding.agentId ||
+			binding.conversationId !== browser.binding.conversationId ||
+			binding.sessionGeneration !== browser.binding.sessionGeneration ||
+			(requiresActiveExecution && turn.status !== "running")
+		)
+			unavailable();
+		const runtime = request.runtime;
+		if (
+			runtime.agentId !== browser.binding.agentId ||
+			runtime.conversationId !== browser.binding.conversationId ||
+			runtime.executionId !== executionId ||
+			runtime.sessionGeneration !== browser.binding.sessionGeneration ||
+			runtime.resourceFence !== browser.binding.resourceFence ||
+			runtime.capabilityVersion !== browser.capabilityVersion
+		)
+			unavailable();
+		switch (request.kind) {
+			case "request":
+				return handoff.request(request.reason, request.runtime);
+			case "take-over":
+				return handoff.takeOver({
+					handoffId: request.handoffId,
+					operatorId: request.operatorId,
+					subjectId: request.subjectId,
+					runtime: request.runtime,
+				});
+			case "return-to-agent":
+				return handoff.returnToAgent({
+					handoffId: request.handoffId,
+					operatorId: request.operatorId,
+					runtime: request.runtime,
+				});
+			case "revoke":
+				handoff.assertBinding(request.runtime);
+				return handoff.revoke(request.reason);
+			case "browser-crashed":
+				handoff.assertBinding(request.runtime);
+				return handoff.markBrowserCrashed();
+		}
+	}
+
+	/** Execute Browser side-effect confirmation through the existing controller. */
+	async executeBrowserSideEffect(
+		nativeSessionRef: string,
+		executionId: string,
+		request: RuntimeBrowserSideEffectConfirmationRequestV1,
+		context: import("./driver.js").RuntimeDriverExecutionContextV1,
+		signal: AbortSignal = new AbortController().signal,
+	): Promise<RuntimeBrowserSideEffectConfirmationResultV1> {
+		const browser = context.browser;
+		if (!browser || typeof browser.executeSideEffect !== "function")
+			unavailable();
+		const binding = this.index
+			.read()
+			.sessions.find((entry) => entry.ref === nativeSessionRef);
+		if (!binding) unavailable();
+		const file = await this.file(binding);
+		const state = file.read();
+		const turn = state.turns.find((entry) => entry.executionId === executionId);
+		if (
+			!turn ||
+			state.cancelled ||
+			binding.agentId !== browser.binding.agentId ||
+			binding.conversationId !== browser.binding.conversationId ||
+			binding.sessionGeneration !== browser.binding.sessionGeneration ||
+			(request.command !== "reject" && turn.status !== "running")
+		)
+			unavailable();
+		if (
+			request.binding.agentId !== browser.binding.agentId ||
+			request.binding.conversationId !== browser.binding.conversationId ||
+			request.binding.executionId !== executionId ||
+			request.binding.capabilityVersion !== browser.capabilityVersion ||
+			request.binding.sessionGeneration !== browser.binding.sessionGeneration ||
+			request.binding.resourceFence !== browser.binding.resourceFence ||
+			request.binding.workloadRevision !== browser.binding.workloadRevision ||
+			request.binding.imageDigest !== browser.binding.imageDigest
+		)
+			unavailable();
+		browser.handoff?.controller.assertAgentAccess();
+		return browser.executeSideEffect(request, signal);
 	}
 
 	/** Return bounded Browser descriptors from the deployment-owned projection. */
