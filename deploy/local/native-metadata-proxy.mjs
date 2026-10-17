@@ -26,6 +26,26 @@ export function cidr(value) {
 	return { network: (integer & mask) >>> 0, mask };
 }
 
+export function isAllowedSource(address, network, bindAddress) {
+	if (typeof address === "string" && address.includes(":")) return false;
+	const source = ipv4(address);
+	if (!source || !network) return false;
+	const sourceInteger =
+		((source[0] << 24) +
+			source[1] * 2 ** 16 +
+			source[2] * 2 ** 8 +
+			source[3]) >>> 0;
+	if (((sourceInteger & network.mask) >>> 0) === network.network) return true;
+	const bind = ipv4(bindAddress);
+	if (!bind) return false;
+	const bindInteger =
+		((bind[0] << 24) +
+			bind[1] * 2 ** 16 +
+			bind[2] * 2 ** 8 +
+			bind[3]) >>> 0;
+	return sourceInteger === bindInteger;
+}
+
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
 	const [bindAddress, listenPortText, targetPortText, subnet] = process.argv.slice(2);
 	const port = Number(listenPortText);
@@ -46,14 +66,7 @@ if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
 	if (!network) throw new Error("LOCAL_NATIVE_METADATA_PROXY_CONFIGURATION_INVALID");
 
 	const server = net.createServer((client) => {
-		const source = ipv4(client.remoteAddress);
-		const sourceInteger = source
-			? ((source[0] << 24) + (source[1] << 16) + (source[2] << 8) + source[3]) >>> 0
-			: null;
-		if (
-			sourceInteger === null ||
-			((sourceInteger & network.mask) >>> 0) !== network.network
-		) {
+		if (!isAllowedSource(client.remoteAddress, network, bindAddress)) {
 			client.destroy();
 			return;
 		}
