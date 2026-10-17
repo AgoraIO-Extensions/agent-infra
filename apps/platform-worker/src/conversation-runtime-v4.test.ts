@@ -641,6 +641,212 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		}
 	});
 
+	describe("a stop accepted while an event step is being prepared (#2712)", () => {
+		/** 每次事件读取都返回 Runtime 已经给出的终态（停止之后 Host 交回的取消）。 */
+		const terminalReads = (h: ReturnType<typeof runtimeV4Harness>) =>
+			h.fetcher.mockImplementation(async (url, init) => {
+				const body = JSON.parse(init?.body as string);
+				if (String(url).endsWith("/events/ack"))
+					return Response.json({
+						schemaVersion: body.schemaVersion,
+						executionId: "execution",
+						confirmedCursor: body.confirmedCursor,
+					});
+				return Response.json({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					executionId: "execution",
+					events: [terminal],
+				});
+			});
+		/** 第 n 次路由解析时 stop 被受理：授权目的在同一次准备的两次检查之间从 business 变成 control。 */
+		const stopDuringRoute = (
+			h: ReturnType<typeof runtimeV4Harness>,
+			n: number,
+		) => {
+			let calls = 0;
+			h.resolveRuntimeHost.mockImplementation(async () => {
+				calls++;
+				if (calls === n) Object.assign(h.state, { stopPending: true });
+				return { ...h.target };
+			});
+		};
+		const reads = (h: ReturnType<typeof runtimeV4Harness>) =>
+			h.fetcher.mock.calls
+				.filter(([url]) => String(url).endsWith("/events/read"))
+				.map(([, init]) => JSON.parse(init?.body as string));
+
+		it.each([
+			["the first route observation", 1],
+			["the last route observation", 3],
+		] as const)(
+			"keeps draining under the stop control Grant when the stop lands during %s",
+			async (_where, n) => {
+				const h = runtimeV4Harness();
+				try {
+					const reference = await h.authorize();
+					terminalReads(h);
+					stopDuringRoute(h, n);
+					const stream = h.runtime.runtimeHost
+						.events(h.events(reference))
+						[Symbol.asyncIterator]();
+					// 之前：这次准备以 RUNTIME_ROUTE_STALE 失败，整次排空退回 Core 按退避重试，
+					// Runtime 上的 Turn 继续跑完（停止丢失）。
+					expect((await stream.next()).value).toEqual(terminal);
+					expect(reads(h)).toHaveLength(1);
+					expect(verifyControl(reads(h)[0]?.grant).claims).toMatchObject({
+						purpose: "control",
+						reason: "stop",
+						controlRecordId: "control-stop",
+					});
+					expect(h.relayKeyDecryptor.decrypt).not.toHaveBeenCalled();
+					await stream.return?.();
+				} finally {
+					h.runtime.close();
+				}
+			},
+		);
+
+		it("keeps draining under the recovery control Grant when a Host-confirmed finish is recorded during the preparation", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				terminalReads(h);
+				let calls = 0;
+				h.resolveRuntimeHost.mockImplementation(async () => {
+					calls++;
+					if (calls === 1)
+						Object.assign(h.state, { executionStatus: "completed" });
+					return { ...h.target };
+				});
+				const stream = h.runtime.runtimeHost
+					.events(h.events(reference))
+					[Symbol.asyncIterator]();
+				expect((await stream.next()).value).toEqual(terminal);
+				expect(verifyControl(reads(h)[0]?.grant).claims).toMatchObject({
+					purpose: "control",
+					reason: "recovery",
+				});
+				await stream.return?.();
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("ACKs under the stop control Grant when the stop lands during the ACK's preparation", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				terminalReads(h);
+				// ACK 只确认 Platform 已提交的游标。
+				Object.assign(h.state, { runtimeCursor: "terminal-cursor" });
+				stopDuringRoute(h, 1);
+				await h.runtime.runtimeHost.acknowledge?.({
+					...h.events(reference),
+					confirmedCursor: "terminal-cursor",
+				});
+				const acksSent = h.fetcher.mock.calls.filter(([url]) =>
+					String(url).endsWith("/events/ack"),
+				);
+				expect(acksSent).toHaveLength(1);
+				expect(
+					verifyControl(JSON.parse(acksSent[0]?.[1]?.body as string).grant)
+						.claims,
+				).toMatchObject({ purpose: "control", reason: "stop" });
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("ACKs under the stop control Grant when the stop lands between the ACK's preparation and its send", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				terminalReads(h);
+				Object.assign(h.state, { runtimeCursor: "terminal-cursor" });
+				// 准备做完三次路由解析之后，第二次读状态发生在发送前的复核里：stop 在这时被受理。
+				let routes = 0;
+				let statesAfterRoutes = 0;
+				h.resolveRuntimeHost.mockImplementation(async () => {
+					routes++;
+					return { ...h.target };
+				});
+				h.dispatchStore.readRuntimeState.mockImplementation(async () => {
+					if (routes >= 3 && ++statesAfterRoutes === 2)
+						Object.assign(h.state, { stopPending: true });
+					return h.state;
+				});
+				await h.runtime.runtimeHost.acknowledge?.({
+					...h.events(reference),
+					confirmedCursor: "terminal-cursor",
+				});
+				const acksSent = h.fetcher.mock.calls.filter(([url]) =>
+					String(url).endsWith("/events/ack"),
+				);
+				expect(acksSent).toHaveLength(1);
+				expect(
+					verifyControl(JSON.parse(acksSent[0]?.[1]?.body as string).grant)
+						.claims,
+				).toMatchObject({ purpose: "control", reason: "stop" });
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("still fails the step for a route change that is not a stop", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				terminalReads(h);
+				// 最后一次路由解析换了目标：真正的路由变化，没有 stop，也没有终态。
+				let calls = 0;
+				h.resolveRuntimeHost.mockImplementation(async () => {
+					calls++;
+					return calls === 3
+						? { ...h.target, serviceToken: "rotated-service-token" }
+						: { ...h.target };
+				});
+				const stream = h.runtime.runtimeHost
+					.events(h.events(reference))
+					[Symbol.asyncIterator]();
+				await expect(stream.next()).rejects.toMatchObject({
+					code: "RUNTIME_ROUTE_STALE",
+				});
+				expect(reads(h)).toHaveLength(0);
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("gives up after a bounded number of preparations that keep going stale", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				terminalReads(h);
+				Object.assign(h.state, { stopPending: true });
+				// 每次准备的最后一次路由解析都换目标：stop 已经待处理，但准备永远过期。
+				let calls = 0;
+				h.resolveRuntimeHost.mockImplementation(async () => {
+					calls++;
+					return calls % 3 === 0
+						? { ...h.target, serviceToken: `rotated-${calls}` }
+						: { ...h.target };
+				});
+				const stream = h.runtime.runtimeHost
+					.events(h.events(reference))
+					[Symbol.asyncIterator]();
+				await expect(stream.next()).rejects.toMatchObject({
+					code: "RUNTIME_ROUTE_STALE",
+				});
+				expect(reads(h)).toHaveLength(0);
+				// 三次准备、每次三次路由解析，然后把失败交还 Core。
+				expect(calls).toBe(9);
+			} finally {
+				h.runtime.close();
+			}
+		});
+	});
+
 	it("keeps revoked unknown original-binding recovery independent of the Key or directory", async () => {
 		const h = runtimeV4Harness();
 		try {
