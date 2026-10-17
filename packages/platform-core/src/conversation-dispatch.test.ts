@@ -654,6 +654,38 @@ describe("Conversation Worker dispatch", () => {
 		},
 	);
 
+	it("locally cancels an unaccepted stop after control-only authorization", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				operation: "conversation.turn.stop.v1",
+				itemId: "conversation:stop:stop-1",
+				messageId: null,
+				stopRequestId: "stop-1",
+				input: null,
+				executionStatus: "submitted",
+				stopPending: true,
+			}),
+		);
+		const runtimeDispatch = vi.fn();
+		const h = setup({
+			store,
+			authorization: authorization({ controlOnly: true }),
+			runtimeHost: {
+				dispatch: runtimeDispatch,
+				recoverStatus: vi.fn(),
+				events: vi.fn(),
+			},
+		});
+
+		await expect(dispatch(h.useCase, store.current.itemId)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "already_completed",
+		});
+		expect(runtimeDispatch).not.toHaveBeenCalled();
+		expect(store.outboxStatus).toBe("succeeded");
+		expect(store.current.executionStatus).toBe("cancelled");
+	});
+
 	it("keeps unknown stops on the existing recovery path after authorization denial", async () => {
 		const store = new MemoryDispatchStore(
 			claim({

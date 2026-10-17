@@ -581,6 +581,30 @@ export function createConversationDispatchUseCaseV1(
 					{},
 				);
 			}
+			// A stop on a submitted/waiting Turn may be authorized as a durable
+			// control record (for example after Agent lifecycle stop/revocation),
+			// rather than as an outright denied decision. The Runtime has never
+			// accepted this Turn, so settle it locally before the generic
+			// control-only recovery barrier turns it into an endless retry.
+			if (
+				authorization.outcome === "allowed" &&
+				authorization.authority !== undefined &&
+				typeof authorization.authority === "object" &&
+				authorization.authority !== null &&
+				"controlOnly" in authorization.authority &&
+				authorization.authority.controlOnly === true &&
+				claim.operation === "conversation.turn.stop.v1" &&
+				claim.stopPending &&
+				(claim.executionStatus === "submitted" ||
+					claim.executionStatus === "waiting")
+			) {
+				const cancelled = await dependencies.store.cancelUnaccepted({
+					claim,
+				});
+				return cancelled
+					? { schemaVersion: 1, outcome: "already_completed" }
+					: { schemaVersion: 1, outcome: "stale" };
+			}
 			if (authorization.outcome === "denied") {
 				if (authorization.authority !== undefined) return unavailable();
 				if (
