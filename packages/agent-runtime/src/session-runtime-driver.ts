@@ -1803,21 +1803,24 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const ref = before.binding.ref;
 		if (before.cancelled) unavailable();
 		if (command.nativeSessionRef !== ref) nativeSkillUnsupported();
-		if (before.turns.some((turn) => !terminal(turn.status)))
-			return this.resolve(file, command, { outcome: "busy" });
-		if (
-			before.turns.some(
-				(turn) =>
-					turn.executionId === command.executionId ||
-					turn.turnId === command.turnId,
-			)
-		)
-			conflict();
 		const handle = this.handles.get(ref);
 		if (!handle?.native.executeNativeCommand) nativeSkillUnsupported();
-		await this.assertNativeCommandBinding(handle, command);
 		const selection = handle.selection;
+		let busy = false;
 		await file.update((state) => {
+			if (state.cancelled) unavailable();
+			if (state.turns.some((turn) => !terminal(turn.status))) {
+				busy = true;
+				return;
+			}
+			if (
+				state.turns.some(
+					(turn) =>
+						turn.executionId === command.executionId ||
+						turn.turnId === command.turnId,
+				)
+			)
+				conflict();
 			state.operations.push({
 				key: operationKey(command),
 				digest: digest(command),
@@ -1833,6 +1836,22 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				events: [],
 			});
 		});
+		if (busy) return this.resolve(file, command, { outcome: "busy" });
+		const discardReservation = () =>
+			file.update((state) => {
+				state.operations = state.operations.filter(
+					(entry) => entry.key !== operationKey(command),
+				);
+				state.turns = state.turns.filter(
+					(turn) => turn.executionId !== command.executionId,
+				);
+			});
+		try {
+			await this.assertNativeCommandBinding(handle, command);
+		} catch (error) {
+			await discardReservation();
+			throw error;
+		}
 		try {
 			const response = await handle.native.executeNativeCommand(command);
 			if (
