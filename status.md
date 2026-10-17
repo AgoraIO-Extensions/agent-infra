@@ -301,3 +301,4 @@
 - 2026-10-17：rebase 到 `6d38e9bb` 后重新执行 Web 全量单测，90/90 文件、1085/1085 通过。
 - 2026-10-17：origin/main 再前进到 `245bf068`（#2692）后将 UI 提交 rebase 到最新基线；无冲突。
 - 2026-10-17：G-07 UI 闭环在固定 Kiro E2E 的真实完成 Execution 中回读；请求模型与实际模型均为 `gpt-5.6-sol`，执行详情 Dialog 和保护文案可见，正式 fallback fixture 仍不虚构。
+- 2026-10-17：`#2692` 更新 Runtime operation 联合类型后，收紧模型事实判定为 `payload.kind === "model"`；最新 `pnpm --filter @agent-infra/web check-types` 与 G-07 定向测试均通过（1/1）。

@@ -55,7 +55,7 @@ export function ConversationExecutionDetails({
 		"未提供";
 	const requestedModel = modelLabel(requestedModelOptionId);
 	const actualModel =
-		modelFact?.type === "execution.operation"
+		modelFact?.payload.kind === "model"
 			? modelLabel(
 					modelFact.payload.model.modelOptionId,
 					modelFact.payload.model.modelId,
