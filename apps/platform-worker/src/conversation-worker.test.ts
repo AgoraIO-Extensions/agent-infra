@@ -106,6 +106,7 @@ vi.mock("./conversation-runtime.js", () => ({
 afterEach(() => vi.useRealTimers());
 
 import { createPlatformConversationWorkerV2 } from "./conversation-worker.js";
+import { WorkloadKubernetesError } from "./kubernetes-client.js";
 
 const keys = generateKeyPairSync("ed25519");
 const options = {
@@ -727,6 +728,131 @@ describe("conversation dispatch observability", () => {
 		} finally {
 			await worker.stop();
 		}
+	});
+
+	describe("a Session Sandbox receiver failure (#2733)", () => {
+		async function reconcileWith(receiveSandbox: () => Promise<never>) {
+			const claim = { schemaVersion: 1, execution: null } as never;
+			mocks.find.mockResolvedValueOnce([
+				{ itemId: "sandbox-a", operation: "conversation.sandbox.reconcile.v1" },
+			]);
+			mocks.claimSandbox.mockResolvedValueOnce(claim);
+			mocks.recordSandbox.mockResolvedValueOnce(undefined);
+			const telemetry = { record: vi.fn() };
+			const worker = createPlatformConversationWorkerV2({
+				...options,
+				receiveSandbox,
+				observability: telemetry,
+			});
+			try {
+				expect(await worker.tick()).toBe(1);
+				await vi.waitFor(() => expect(mocks.recordSandbox).toHaveBeenCalled());
+			} finally {
+				await worker.stop();
+			}
+			// 观测与重试照旧：记为 unknown，由同一个 outbox 条目恢复。
+			expect(mocks.recordSandbox).toHaveBeenCalledWith({
+				claim,
+				observation: { status: "unknown", resources: [] },
+			});
+			return telemetry.record.mock.calls
+				.map(([event]) => event)
+				.filter((event) => event.stage === "workload");
+		}
+
+		it("records a bounded failure for a Kubernetes workload policy rejection", async () => {
+			const events = await reconcileWith(async () => {
+				throw new WorkloadKubernetesError("policy");
+			});
+			expect(events).toEqual([
+				{
+					stage: "workload",
+					outcome: "failed",
+					code: "WORKLOAD_RECONCILIATION_FAILED",
+					failureStep: "workload.policy",
+					errorClass: "WorkloadKubernetesError",
+					operationRef: "conversation.sandbox.reconcile.v1",
+					durationMs: expect.any(Number),
+				},
+			]);
+		});
+
+		it("records only the class of any other failure, never its message", async () => {
+			const events = await reconcileWith(async () => {
+				throw new TypeError("sandbox-secret-name must never be logged");
+			});
+			expect(events).toEqual([
+				{
+					stage: "workload",
+					outcome: "failed",
+					code: "WORKLOAD_RECONCILIATION_FAILED",
+					errorClass: "TypeError",
+					operationRef: "conversation.sandbox.reconcile.v1",
+					durationMs: expect.any(Number),
+				},
+			]);
+			expect(JSON.stringify(events)).not.toContain("sandbox-secret-name");
+		});
+
+		it("still records the unknown observation when building the telemetry event throws", async () => {
+			const claim = { schemaVersion: 1, execution: null } as never;
+			mocks.find.mockResolvedValueOnce([
+				{ itemId: "sandbox-a", operation: "conversation.sandbox.reconcile.v1" },
+			]);
+			mocks.claimSandbox.mockResolvedValueOnce(claim);
+			mocks.recordSandbox.mockResolvedValueOnce(undefined);
+			const worker = createPlatformConversationWorkerV2({
+				...options,
+				receiveSandbox: async () => {
+					// 读取类名本身就抛出：事件构造失败也不能妨碍记录观测。
+					const error = new WorkloadKubernetesError("policy");
+					Object.defineProperty(error, "constructor", {
+						get() {
+							throw new Error("hostile constructor");
+						},
+					});
+					throw error;
+				},
+				observability: { record: vi.fn() },
+			});
+			try {
+				expect(await worker.tick()).toBe(1);
+				await vi.waitFor(() => expect(mocks.recordSandbox).toHaveBeenCalled());
+			} finally {
+				await worker.stop();
+			}
+			expect(mocks.recordSandbox).toHaveBeenCalledWith({
+				claim,
+				observation: { status: "unknown", resources: [] },
+			});
+		});
+
+		it("records nothing when the receiver returns an observation", async () => {
+			mocks.find.mockResolvedValueOnce([
+				{ itemId: "sandbox-a", operation: "conversation.sandbox.reconcile.v1" },
+			]);
+			mocks.claimSandbox.mockResolvedValueOnce({
+				schemaVersion: 1,
+				execution: null,
+			} as never);
+			mocks.recordSandbox.mockResolvedValueOnce(undefined);
+			const telemetry = { record: vi.fn() };
+			const worker = createPlatformConversationWorkerV2({
+				...options,
+				observability: telemetry,
+			});
+			try {
+				expect(await worker.tick()).toBe(1);
+				await vi.waitFor(() => expect(mocks.recordSandbox).toHaveBeenCalled());
+			} finally {
+				await worker.stop();
+			}
+			expect(
+				telemetry.record.mock.calls.some(
+					([event]) => event.stage === "workload",
+				),
+			).toBe(false);
+		});
 	});
 
 	it("records a failed task wait while preserving discovery errors", async () => {

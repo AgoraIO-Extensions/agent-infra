@@ -139,6 +139,10 @@ const operationalFailureSteps = new Set([
 	"projection.read",
 	"store.query",
 	"store.management_transaction",
+	// Session Sandbox 调谐被 Kubernetes Workload 校验或调用拒绝（WorkloadKubernetesError 的原因，#2733）。
+	"workload.policy",
+	"workload.conflict",
+	"workload.unavailable",
 ]);
 
 export function isOperationalFailureStep(value: unknown): value is string {

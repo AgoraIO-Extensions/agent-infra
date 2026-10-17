@@ -40,6 +40,7 @@ import {
 	type ConversationRuntimeOptionsV2,
 	createConversationRuntimeV2,
 } from "./conversation-runtime.js";
+import { WorkloadKubernetesError } from "./kubernetes-client.js";
 
 export interface PlatformConversationWorkerOptionsV2
 	extends Omit<
@@ -716,6 +717,7 @@ export function createPlatformConversationWorkerV2(
 			return;
 		let observation: SessionSandboxObservationV1;
 		let renewal: ReturnType<typeof setInterval> | undefined;
+		const began = performance.now();
 		try {
 			// Renew the original Store lease immediately before and after the Kubernetes
 			// mutation and periodically while it runs; a lost lease never gets to
@@ -777,8 +779,29 @@ export function createPlatformConversationWorkerV2(
 				}))
 			)
 				return;
-		} catch {
+		} catch (error) {
 			if (renewal) clearInterval(renewal);
+			// 只记录有界的类名与失败原因，不记录消息、栈或资源名（#2733）。之前这里静默吞掉，
+			// 调谐一直失败时 Worker 日志里一行都没有。
+			try {
+				if (options.observability)
+					record(options.observability, {
+						stage: "workload",
+						outcome: "failed",
+						code: "WORKLOAD_RECONCILIATION_FAILED",
+						...(error instanceof WorkloadKubernetesError
+							? { failureStep: `workload.${error.code}` }
+							: {}),
+						// 与 recordHttpFailureContext 相同：只取类名，sink 再按有界模式过滤。
+						...(error instanceof Error
+							? { errorClass: error.constructor.name }
+							: {}),
+						operationRef: item.operation,
+						durationMs: performance.now() - began,
+					});
+			} catch {
+				// 遥测只是观测：构造或写入失败都不能妨碍下面记录 unknown 观测。
+			}
 			// Keep the original binding and occupancy; the same outbox owns recovery.
 			observation = {
 				status: "unknown",
