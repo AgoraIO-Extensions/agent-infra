@@ -1,5 +1,7 @@
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "../../components/ui/badge.js";
 import { Button, buttonVariants } from "../../components/ui/button.js";
+import { formatRelativeDate } from "../../lib/format-date.js";
 import { useRecentPersonalConversations } from "../workbench/use-recent-personal-conversations.js";
 
 export function RecentConversationHistory({
@@ -18,8 +20,13 @@ export function RecentConversationHistory({
 	return (
 		<section aria-label="最近对话" className="space-y-3">
 			<div>
-				<p className="text-muted-foreground text-xs">个人历史</p>
-				<h2 className="font-semibold">最近对话</h2>
+				<h2 className="flex items-center gap-2 font-semibold">
+					个人历史{" "}
+					{state.kind === "ready" ? (
+						<Badge variant="outline">{state.conversations.length}</Badge>
+					) : null}
+				</h2>
+				<p className="text-muted-foreground text-xs">只显示你的会话</p>
 			</div>
 			{state.kind === "loading" && <p role="status">正在读取最近对话…</p>}
 			{state.kind === "unavailable" && (
@@ -70,11 +77,11 @@ export function RecentConversationHistory({
 										}}
 									>
 										<span className="min-w-0 break-words">
-											{item.title || "未命名会话"}
+											{item.title || "未命名对话"}
 											<small>
 												{current && "当前对话 · "}
 												<time dateTime={item.updatedAt}>
-													{new Date(item.updatedAt).toLocaleString("zh-CN")}
+													{formatRelativeDate(item.updatedAt)}
 												</time>
 												{item.status === "unavailable" && " · 会话不可用"}
 											</small>

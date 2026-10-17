@@ -65,7 +65,7 @@ describe("AgentDetailScreen", () => {
 			screen.getByRole("region", { name: "运行与渠道" }).textContent,
 		).toContain("Web可用企微机器人未配置");
 		expect(screen.getByText("模型范围", { selector: "dt" })).toBeTruthy();
-		expect(screen.getByText("默认选项", { selector: "dt" })).toBeTruthy();
+		expect(screen.getByText("默认推理档位", { selector: "dt" })).toBeTruthy();
 		expect(screen.getByText(/Primary model.*medium、high/)).toBeTruthy();
 		expect(
 			screen.getByText(
@@ -74,7 +74,7 @@ describe("AgentDetailScreen", () => {
 		).toBeTruthy();
 		expect(
 			screen
-				.getByRole("link", { name: "返回 Agent 列表" })
+				.getByRole("link", { name: "返回 Agent 目录" })
 				.getAttribute("href"),
 		).toBe("/agents");
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
@@ -170,7 +170,7 @@ describe("AgentDetailScreen", () => {
 			);
 
 			expect(screen.queryByText("模型范围", { selector: "dt" })).toBeNull();
-			expect(screen.queryByText("默认选项", { selector: "dt" })).toBeNull();
+			expect(screen.queryByText("默认推理档位", { selector: "dt" })).toBeNull();
 			for (const option of agent.configuration.modelOptions) {
 				expect(
 					screen.queryByText(option.displayName, { exact: false }),
@@ -180,7 +180,7 @@ describe("AgentDetailScreen", () => {
 			}
 			expect(screen.getByText("Owner", { selector: "dt" })).toBeTruthy();
 			expect(
-				screen.getByRole("link", { name: "返回 Agent 列表" }),
+				screen.getByRole("link", { name: "返回 Agent 目录" }),
 			).toBeTruthy();
 		},
 	);
@@ -204,7 +204,7 @@ describe("AgentDetailScreen", () => {
 		expect(screen.getByText("自定义 Agent · 平台交互入口")).toBeTruthy();
 		expect(screen.getByText("由平台校验")).toBeTruthy();
 		expect(screen.getByText("模型范围", { selector: "dt" })).toBeTruthy();
-		expect(screen.getByText("默认选项", { selector: "dt" })).toBeTruthy();
+		expect(screen.getByText("默认推理档位", { selector: "dt" })).toBeTruthy();
 		expect(screen.getByText(/Primary model.*medium、high/)).toBeTruthy();
 	});
 
@@ -253,8 +253,6 @@ describe("AgentDetailScreen", () => {
 			<AgentDetailScreen state={{ kind: "loading" }} />,
 		);
 
-		expect(
-			screen.getByText("正在加载 Agent 详情…").getAttribute("aria-live"),
-		).toBe("polite");
+		expect(screen.getByRole("status").getAttribute("aria-live")).toBe("polite");
 	});
 });

@@ -434,7 +434,7 @@ function HandoffPanel({
 								onClick={() => invokeIfCurrent(onPauseAgent)}
 								type="button"
 							>
-								暂停 Agent
+								拒绝接管
 							</Button>
 						) : null}
 						{onTakeOver ? (
@@ -448,15 +448,27 @@ function HandoffPanel({
 						) : null}
 					</div>
 				) : null}
-				{status === "active" && onReturnToAgent ? (
-					<Button
-						className="mt-3"
-						variant="outline"
-						onClick={() => invokeIfCurrent(onReturnToAgent)}
-						type="button"
-					>
-						交回 Agent
-					</Button>
+				{status === "active" ? (
+					<div className="mt-3 flex flex-wrap gap-2">
+						{onReturnToAgent ? (
+							<Button
+								variant="outline"
+								onClick={() => invokeIfCurrent(onReturnToAgent)}
+								type="button"
+							>
+								交还 Agent
+							</Button>
+						) : null}
+						{onPauseAgent ? (
+							<Button
+								variant="destructive"
+								onClick={() => invokeIfCurrent(onPauseAgent)}
+								type="button"
+							>
+								停止操作
+							</Button>
+						) : null}
+					</div>
 				) : null}
 				{status === "returning" ? (
 					<span className="mt-2 block text-muted-foreground">

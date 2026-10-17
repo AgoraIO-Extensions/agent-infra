@@ -91,6 +91,8 @@ describe("SkillHubDirectoryScreen", () => {
 			target: { value: "my_library" },
 		});
 		expect(screen.queryByRole("link", { name: "incident-summary" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
+		expect(screen.getByRole("link", { name: "incident-summary" })).toBeTruthy();
 		expect(router.state.location.pathname).toBe("/");
 	});
 

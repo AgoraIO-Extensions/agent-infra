@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "../../components/ui/button.js";
+import { formatDateTime } from "../../lib/format-date.js";
 import type {
 	ExecutionDetailProjectionV2,
 	PersistedConversationEventV2,
@@ -11,10 +12,16 @@ import {
 	executionStatusLabels,
 } from "./conversation-screen-state.js";
 
+function shortIdentifier(value: string) {
+	return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
+}
+
 export function ConversationExecutionDetails({
 	data,
 	conversationId,
 	client,
+	modelOptions = [],
+	requestedModelOptionId,
 	loading,
 	failed,
 	onRetry,
@@ -23,12 +30,39 @@ export function ConversationExecutionDetails({
 	data?: ExecutionDetailProjectionV2;
 	conversationId: string;
 	client?: import("../../pilot/generated-v2/client/index.js").Client;
+	modelOptions?: readonly { optionId: string; displayName?: string }[];
+	requestedModelOptionId?: string | null;
 	loading: boolean;
 	failed: boolean;
 	onRetry: () => void;
 	onClose: () => void;
 }) {
 	const title = useRef<HTMLHeadingElement>(null);
+	const fallbackEvent = data?.events.find(
+		(event) => event.type === "model.selection.fell_back",
+	);
+	const modelFact = data?.events.find(
+		(
+			event,
+		): event is Extract<
+			PersistedConversationEventV2,
+			{ type: "execution.operation" }
+		> => event.type === "execution.operation" && event.payload.kind === "model",
+	);
+	const modelLabel = (optionId: string | null | undefined, fallback?: string) =>
+		modelOptions.find((option) => option.optionId === optionId)?.displayName ??
+		fallback ??
+		"未提供";
+	const requestedModel = modelLabel(requestedModelOptionId);
+	const actualModel =
+		modelFact?.type === "execution.operation"
+			? modelLabel(
+					modelFact.payload.model.modelOptionId,
+					modelFact.payload.model.modelId,
+				)
+			: fallbackEvent?.type === "model.selection.fell_back"
+				? modelLabel(fallbackEvent.payload.modelOptionId)
+				: "未提供";
 	useEffect(() => {
 		title.current?.focus();
 	}, []);
@@ -59,12 +93,43 @@ export function ConversationExecutionDetails({
 					<p>{executionStatusLabels[data.status]}</p>
 					<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
 						<dt>执行标识</dt>
-						<dd className="break-all font-mono">{data.executionId}</dd>
+						<dd className="break-all font-mono">
+							<code title={data.executionId}>
+								{shortIdentifier(data.executionId)}
+							</code>
+						</dd>
 						<dt>开始时间</dt>
-						<dd>{data.startedAt ?? "未提供"}</dd>
+						<dd>{formatDateTime(data.startedAt)}</dd>
 						<dt>结束时间</dt>
-						<dd>{data.finishedAt ?? "尚未确认结束"}</dd>
+						<dd>
+							{data.finishedAt
+								? formatDateTime(data.finishedAt)
+								: "尚未确认结束"}
+						</dd>
 					</dl>
+					{fallbackEvent || modelFact ? (
+						<section
+							aria-label="模型状态"
+							className="space-y-2 rounded-[12px] border border-border bg-muted/30 p-3"
+						>
+							<h3 className="font-semibold">模型状态</h3>
+							<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
+								<dt>请求模型</dt>
+								<dd>{requestedModel}</dd>
+								<dt>实际模型</dt>
+								<dd>{actualModel}</dd>
+								{fallbackEvent ? (
+									<>
+										<dt>回退原因</dt>
+										<dd>请求模型选项不可用</dd>
+									</>
+								) : null}
+							</dl>
+							<p className="text-muted-foreground text-xs">
+								不会静默切换到个人 Key 或未授权模型。
+							</p>
+						</section>
+					) : null}
 					{data.error && (
 						<Alert variant="destructive">
 							<AlertDescription>
@@ -85,7 +150,7 @@ export function ConversationExecutionDetails({
 										{item.kind === "agent_summary"
 											? "Agent 提供的摘要"
 											: "Platform 记录"}{" "}
-										· {item.occurredAt}
+										· {formatDateTime(item.occurredAt)}
 									</p>
 								</li>
 							))}
@@ -147,10 +212,8 @@ function OperationFacts({
 						className="space-y-2 border-border border-l-2 pl-3"
 					>
 						<p className="break-words font-medium">
-							{fact.kind === "model"
-								? `模型 · ${fact.model.modelId}`
-								: `工具 · ${fact.toolId}`}{" "}
-							· {phases[fact.phase]}
+							{fact.kind === "model" ? "模型调用" : "浏览器/工具操作"} ·{" "}
+							{phases[fact.phase]}
 						</p>
 						<p className="text-sm">
 							耗时：
@@ -178,12 +241,17 @@ function OperationFacts({
 							<p className="break-all text-sm">
 								Connection 原调用关联：
 								{fact.connection.verification === "verified"
-									? `已核实 · ${fact.connection.callRef}`
+									? `已核实 · ${shortIdentifier(fact.connection.callRef)}`
 									: "待核实；不能据此判定外部操作成功"}
 							</p>
 						)}
 						{fact.kind === "tool" && fact.resultRef && (
-							<p className="break-all text-sm">结果引用：{fact.resultRef}</p>
+							<p className="break-all text-sm">
+								结果引用：
+								<code title={fact.resultRef}>
+									{shortIdentifier(fact.resultRef)}
+								</code>
+							</p>
 						)}
 					</li>
 				);

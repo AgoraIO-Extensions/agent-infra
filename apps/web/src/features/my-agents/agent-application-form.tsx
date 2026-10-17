@@ -242,7 +242,7 @@ function recomputeDuplicateModelErrors(
 
 function FieldError({ id, message }: { id: string; message?: string }) {
 	return message ? (
-		<p aria-live="assertive" className="text-destructive text-sm" id={id}>
+		<p aria-live="polite" className="field-error" id={id}>
 			{message}
 		</p>
 	) : null;
@@ -1363,8 +1363,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		>
 			{serverFormError ? (
 				<p
-					aria-live="assertive"
-					className="text-destructive text-sm"
+					aria-live="polite"
+					className="field-error"
 					id="application-form-error"
 				>
 					{serverFormError}

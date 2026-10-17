@@ -3,7 +3,7 @@ import type * as React from "react";
 import { cn } from "@/lib/utils";
 
 const alertVariants = cva(
-	"group/alert relative grid w-full gap-0.5 rounded-none border px-2.5 py-2 text-left text-xs has-data-[slot=alert-action]:relative has-[>svg]:grid-cols-[auto_1fr] has-[>svg]:gap-x-2 has-data-[slot=alert-action]:pr-18 *:[svg:not([class*='size-'])]:size-4 *:[svg]:row-span-2 *:[svg]:translate-y-0 *:[svg]:text-current",
+	"group/alert relative grid w-full gap-1 rounded-[12px] border px-3.5 py-[13px] text-left text-[13px] leading-[1.3] has-data-[slot=alert-action]:relative has-[>svg]:grid-cols-[auto_1fr] has-[>svg]:gap-x-2 has-data-[slot=alert-action]:pr-18 *:[svg:not([class*='size-'])]:size-[17px] *:[svg]:row-span-2 *:[svg]:translate-y-0 *:[svg]:text-current",
 	{
 		variants: {
 			variant: {
@@ -21,12 +21,13 @@ const alertVariants = cva(
 function Alert({
 	className,
 	variant,
+	role,
 	...props
 }: React.ComponentProps<"div"> & VariantProps<typeof alertVariants>) {
 	return (
 		<div
 			data-slot="alert"
-			role="alert"
+			role={role ?? "alert"}
 			className={cn(alertVariants({ variant }), className)}
 			{...props}
 		/>
@@ -38,7 +39,7 @@ function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
 		<div
 			data-slot="alert-title"
 			className={cn(
-				"font-medium group-has-[>svg]/alert:col-start-2 [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground",
+				"font-[650] group-has-[>svg]/alert:col-start-2 [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground",
 				className,
 			)}
 			{...props}

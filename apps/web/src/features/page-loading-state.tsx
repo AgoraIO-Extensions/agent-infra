@@ -12,9 +12,10 @@ export function PageLoadingState({
 					<h1>{title}</h1>
 				</div>
 			</header>
-			<p aria-live="polite" className="text-muted-foreground" role="status">
-				{message}
-			</p>
+			<div className="state-card" aria-live="polite" role="status">
+				<span className="loading-spinner" aria-hidden="true" />
+				<span>{message}</span>
+			</div>
 		</section>
 	);
 }

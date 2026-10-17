@@ -13,11 +13,12 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `c278d81ade83e5e2237d852cbca1f9930759652811ddd6ef99fef099a4405940` |
-| `DESIGN.md` | `f0d87a857af95f9be912cb832ede9764a521639313f56ef14ff9ce2495904021` |
-| `IMPLEMENTATION.md` | `364e9ffcb2f5b60a5b1974ff2359f63e69423cb5f9c59356cd4e26a2d7ea8111` |
-| `DESIGN-HANDOFF.md` | `25af7c1631e9051b93b25d34c5f4882c5f8b47e04bae9d5ea89dae9ecb7eacda` |
-| `DESIGN-MANIFEST.json` | `1a89acc1289824518ab2b40012145cade03e6c7e899c909475e0078f3f47e4e5` |
+| `index.html` | `f66a8694aecee90322161e9a31d682073919ae846d488312e225edf03232aaaf` |
+| `login.html` | `6e04830e…` |
+| `DESIGN.md` | `162e8fb0…` |
+| `IMPLEMENTATION.md` | `3ee03b85…` |
+| `DESIGN-HANDOFF.md` | `3f2313d6…` |
+| `DESIGN-MANIFEST.json` | `3c78fd40…` |
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量。页面共享内容宽度、标题和表单样式；桌面侧栏为 248px，

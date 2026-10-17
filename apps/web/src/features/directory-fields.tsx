@@ -167,6 +167,7 @@ export function DirectoryPicker({
 	>({});
 	const [directoryError, setDirectoryError] = useState(false);
 	const pickerRef = useRef<HTMLDivElement>(null);
+	const inputRef = useRef<HTMLInputElement>(null);
 	useEffect(() => {
 		if (!open) return;
 		const closeOnOutsidePointer = (event: PointerEvent) => {
@@ -239,11 +240,13 @@ export function DirectoryPicker({
 		onChange([...selectedIds, option.id].join("\n"));
 		setQuery("");
 		setActiveIndex(0);
-		setOpen(false);
+		setOpen(true);
+		requestAnimationFrame(() => inputRef.current?.focus());
 	};
 	const remove = (id: string) => {
 		if (!disabled)
 			onChange(selectedIds.filter((item) => item !== id).join("\n"));
+		requestAnimationFrame(() => inputRef.current?.focus());
 	};
 	return (
 		<div className="directory-field" ref={pickerRef}>
@@ -260,7 +263,11 @@ export function DirectoryPicker({
 							</span>
 							<Button
 								disabled={disabled}
-								aria-label={`移除 ${item.name}`}
+								aria-label={
+									label.includes("Owner")
+										? `移除 Owner：${item.name}`
+										: `移除 ${label}：${item.name}`
+								}
 								className="directory-chip-remove"
 								onClick={() => remove(item.id)}
 								size="icon-xs"
@@ -272,6 +279,7 @@ export function DirectoryPicker({
 					))}
 				</div>
 				<Input
+					ref={inputRef}
 					disabled={disabled}
 					aria-required={required || undefined}
 					role="combobox"
@@ -354,6 +362,20 @@ export function DirectoryPicker({
 								{query
 									? "试试姓名、邮箱、组织名称或路径。"
 									: "输入关键词后开始搜索。"}
+								{query ? (
+									<Button
+										className="directory-clear"
+										variant="ghost"
+										size="sm"
+										onClick={() => {
+											setQuery("");
+											requestAnimationFrame(() => inputRef.current?.focus());
+										}}
+										type="button"
+									>
+										清空搜索
+									</Button>
+								) : null}
 							</p>
 						</div>
 					) : (

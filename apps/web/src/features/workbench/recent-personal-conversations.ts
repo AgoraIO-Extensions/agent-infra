@@ -37,7 +37,7 @@ export async function loadRecentPersonalConversationsPage({
 	try {
 		const result = await listRecentPersonalConversationsV2({
 			client,
-			query: { limit: 50, ...(cursor === null ? {} : { cursor }) },
+			query: { limit: 5, ...(cursor === null ? {} : { cursor }) },
 			signal,
 			responseStyle: "fields",
 			throwOnError: false,
@@ -50,7 +50,7 @@ export async function loadRecentPersonalConversationsPage({
 		const page = ConversationPageV1Schema.safeParse(result.data);
 		if (
 			!page.success ||
-			page.data.items.length > 50 ||
+			page.data.items.length > 5 ||
 			(page.data.nextCursor !== null && page.data.nextCursor === cursor)
 		)
 			throw invalidRecentPage();

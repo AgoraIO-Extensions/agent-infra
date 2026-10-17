@@ -28,10 +28,15 @@ export function CommandNotice({
 		);
 	if (result?.kind === "denied" && result.ambiguous)
 		return (
-			<Alert className="bg-muted">
+			<Alert className="space-y-2 bg-muted">
 				<AlertDescription>
 					消息未送达，草稿已保留。请在 Agent 恢复可用后重新发送。
 				</AlertDescription>
+				{retry && (
+					<Button variant="outline" onClick={retry}>
+						重新发送
+					</Button>
+				)}
 			</Alert>
 		);
 	if (result?.kind === "native-rejected")

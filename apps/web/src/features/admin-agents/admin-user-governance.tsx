@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
 	getPlatformUserDisabledV2,
 	setPlatformUserDisabledV2,
@@ -128,13 +129,13 @@ export function AdminUserGovernance() {
 								: "选择员工后读取当前服务端状态。"}
 			</p>
 			<div className="flex flex-wrap gap-3">
-				<Button
+				<ConfirmDialog
 					disabled={busy || status === "loading" || !userId}
-					onClick={() => void updateDisabled(true)}
-					variant="destructive"
-				>
-					{busy ? "提交中…" : "禁用员工"}
-				</Button>
+					label={busy ? "提交中…" : "禁用员工"}
+					title="禁用员工？"
+					description="禁用后该员工将失去平台访问权限，直到管理员解除禁用。"
+					onConfirm={() => void updateDisabled(true)}
+				/>
 				<Button
 					disabled={busy || status === "loading" || !userId}
 					onClick={() => void updateDisabled(false)}

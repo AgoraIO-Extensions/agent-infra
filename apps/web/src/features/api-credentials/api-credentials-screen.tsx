@@ -11,6 +11,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -430,17 +431,16 @@ function CredentialRow({
 						</Button>
 					) : null}
 					{!revoked && onRevoke ? (
-						<Button
-							type="button"
-							variant="destructive"
-							onClick={() => {
+						<ConfirmDialog
+							disabled={busy || pending}
+							label={pending ? "正在撤销…" : "撤销"}
+							title="撤销应用凭证？"
+							description="撤销后使用此凭证的调用会立即失效，且不能恢复。"
+							onConfirm={() => {
 								setEditing(false);
 								void onRevoke(credential.credentialId).catch(() => undefined);
 							}}
-							disabled={busy}
-						>
-							{pending ? "正在撤销…" : "撤销"}
-						</Button>
+						/>
 					) : null}
 				</div>
 			</div>

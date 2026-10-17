@@ -1,11 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { Plus, RefreshCw } from "lucide-react";
-import { useId } from "react";
+import { Plus, RefreshCw, Settings2 } from "lucide-react";
+import { useId, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { formatRelativeDate } from "../../lib/format-date.js";
 
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentChannelKindLabels } from "../agent-discovery/agent-discovery-screen.js";
@@ -46,6 +47,7 @@ export function MyAgentsScreen({
 	retryingOwnedAgents = false,
 }: MyAgentsScreenProps) {
 	const id = useId();
+	const [showAllApplications, setShowAllApplications] = useState(false);
 	return (
 		<section aria-labelledby={`${id}-heading`}>
 			<header className="page-heading">
@@ -66,7 +68,14 @@ export function MyAgentsScreen({
 					className="tabs"
 					aria-label="我的 Agent 视图"
 				>
-					<TabsTrigger value="applications">申请</TabsTrigger>
+					<TabsTrigger value="applications">
+						申请
+						{state.kind === "ready" ? (
+							<Badge variant="outline" className="ml-1">
+								{state.applications.length}
+							</Badge>
+						) : null}
+					</TabsTrigger>
 					<TabsTrigger value="agents">已创建 Agent</TabsTrigger>
 				</TabsList>
 				<TabsContent value="applications">
@@ -102,79 +111,106 @@ export function MyAgentsScreen({
 							</EmptyDescription>
 						</Empty>
 					) : (
-						<ul className="application-list" aria-label="我的申请">
-							{state.applications.map((application) => {
-								const editAction = getAgentApplicationEditAction(application);
-								return (
-									<li
-										className="application-row"
-										key={application.applicationId}
-									>
-										<div className="min-w-0 flex-1">
-											<div className="tag-row">
-												<Badge
-													variant="outline"
-													data-status={application.status}
-												>
-													{agentManagementStatusLabels[application.status]}
-												</Badge>
-												<Badge
-													variant="outline"
-													className="max-w-full whitespace-normal rounded-[7px] [overflow-wrap:anywhere]"
-												>
-													{application.source.kind === "standard"
-														? application.source.templateId
-														: agentConversationSourceLabel(application)}
-												</Badge>
-											</div>
-											<Link
-												params={{ applicationId: application.applicationId }}
-												to="/my-agents/$applicationId"
+						<div>
+							<ul className="application-list" aria-label="我的申请">
+								{state.applications
+									.slice(0, showAllApplications ? undefined : 20)
+									.map((application) => {
+										const editAction =
+											getAgentApplicationEditAction(application);
+										return (
+											<li
+												className="application-row"
+												key={application.applicationId}
 											>
-												<h2>{application.name}</h2>
-											</Link>
-											<p>{application.description}</p>
-											<p className="text-sm">
-												提交于{" "}
-												<time dateTime={application.submittedAt}>
-													{application.submittedAt}
-												</time>
-											</p>
-										</div>
+												<div className="min-w-0 flex-1">
+													<div className="tag-row">
+														<Badge
+															variant="outline"
+															data-status={application.status}
+														>
+															{agentManagementStatusLabels[application.status]}
+														</Badge>
+														<Badge
+															variant="outline"
+															className="max-w-full whitespace-normal rounded-[7px] [overflow-wrap:anywhere]"
+														>
+															{application.source.kind === "standard"
+																? application.source.templateId
+																: agentConversationSourceLabel(application)}
+														</Badge>
+													</div>
+													<Link
+														params={{
+															applicationId: application.applicationId,
+														}}
+														to="/my-agents/$applicationId"
+													>
+														<h2>{application.name}</h2>
+													</Link>
+													<p>{application.description}</p>
+													<p className="text-sm">
+														提交于{" "}
+														<time dateTime={application.submittedAt}>
+															{formatRelativeDate(application.submittedAt)}
+														</time>
+													</p>
+												</div>
 
-										<div className="actions">
-											<Link
-												className={buttonVariants({ variant: "ghost" })}
-												params={{ applicationId: application.applicationId }}
-												to="/my-agents/$applicationId"
-											>
-												查看申请
-											</Link>
-											{editAction ? (
-												<Link
-													className={buttonVariants({ variant: "outline" })}
-													params={{ applicationId: application.applicationId }}
-													to="/my-agents/$applicationId/edit"
-												>
-													{agentApplicationEditActionLabels[editAction]}
-												</Link>
-											) : null}
-											{hasCreatedAgent(application) ? (
-												<Link
-													className={buttonVariants({ variant: "link" })}
-													params={{ agentId: application.agentId }}
-													to="/agents/$agentId"
-												>
-													查看 Agent
-												</Link>
-											) : null}
-										</div>
-									</li>
-								);
-							})}
-						</ul>
+												<div className="actions">
+													<Link
+														className={buttonVariants({ variant: "ghost" })}
+														params={{
+															applicationId: application.applicationId,
+														}}
+														to="/my-agents/$applicationId"
+													>
+														查看申请
+													</Link>
+													{editAction ? (
+														<Link
+															className={buttonVariants({ variant: "outline" })}
+															params={{
+																applicationId: application.applicationId,
+															}}
+															to="/my-agents/$applicationId/edit"
+														>
+															{agentApplicationEditActionLabels[editAction]}
+														</Link>
+													) : null}
+													{hasCreatedAgent(application) ? (
+														<Link
+															className={buttonVariants({ variant: "link" })}
+															params={{ agentId: application.agentId }}
+															to="/agents/$agentId"
+														>
+															查看 Agent
+														</Link>
+													) : null}
+												</div>
+											</li>
+										);
+									})}
+							</ul>
+							{state.applications.length > 20 ? (
+								<Button
+									className="mt-4"
+									variant="outline"
+									onClick={() => setShowAllApplications((value) => !value)}
+								>
+									{showAllApplications
+										? "收起申请"
+										: `查看全部申请（${state.applications.length}）`}
+								</Button>
+							) : null}
+						</div>
 					)}
 				</TabsContent>
+				<Alert className="mt-4" role="status">
+					<AlertDescription>
+						审批记录会保留；驳回后可以修改并重新提交。
+					</AlertDescription>
+				</Alert>
 				<TabsContent value="agents">
 					{ownedAgentsLoading ? (
 						<p role="status" className="py-8">
@@ -226,7 +262,7 @@ export function MyAgentsScreen({
 											<p>
 												Owner ·{" "}
 												{agent.configuration.owners
-													.map((owner) => owner.displayName || owner.userId)
+													.map((owner) => owner.displayName || "目录记录不可用")
 													.join("、")}
 											</p>
 										</div>
@@ -249,13 +285,9 @@ export function MyAgentsScreen({
 									<dl className="metadata-facts">
 										<dt>可用范围</dt>
 										<dd>
-											{agent.configuration.availability
-												.map((target) =>
-													target.kind === "user"
-														? `用户 ${target.userId}`
-														: `组织 ${target.organizationId}`,
-												)
-												.join("、") || "未额外指定"}
+											{agent.configuration.availability.length > 0
+												? `${agent.configuration.availability.filter((target) => target.kind === "user").length} 名员工、${agent.configuration.availability.filter((target) => target.kind === "organization").length} 个组织`
+												: "未额外指定"}
 										</dd>
 										<dt>渠道</dt>
 										<dd>
@@ -276,6 +308,7 @@ export function MyAgentsScreen({
 											params={{ agentId: agent.agentId }}
 											to="/agents/$agentId/configuration"
 										>
+											<Settings2 aria-hidden="true" />
 											配置与管理
 										</Link>
 										<Link

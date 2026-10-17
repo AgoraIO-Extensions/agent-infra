@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { Button, buttonVariants } from "../../components/ui/button.js";
+import { formatRelativeDate } from "../../lib/format-date.js";
 import { CommandNotice } from "./conversation-command-notice.js";
 import type { ConversationCommandResult } from "./conversation-commands.js";
 import { useConversationCommands } from "./use-conversation-commands.js";
@@ -71,10 +72,10 @@ export function PersonalHistory({
 							}}
 						>
 							<span className="min-w-0 break-words">
-								{item.title || "未命名会话"}
+								{item.title || "未命名对话"}
 								<small>
 									{current === item.conversationId && "当前对话 · "}
-									{new Date(item.updatedAt).toLocaleString("zh-CN")}
+									{formatRelativeDate(item.updatedAt)}
 								</small>
 							</span>
 						</a>

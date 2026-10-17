@@ -90,8 +90,25 @@ describe("LoginAction", () => {
 			(screen.getByRole("button", { name: "登录" }) as HTMLButtonElement)
 				.disabled,
 		).toBe(false);
-		expect((screen.getByLabelText("密码") as HTMLInputElement).value).toBe(
-			"wrong",
+		expect((screen.getByLabelText("密码") as HTMLInputElement).value).toBe("");
+	});
+
+	it("distinguishes an invalid platform entry from bad credentials", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(new Response(null, { status: 403 })),
+		);
+		render(<LoginAction endpoint="/auth/login" onLoggedIn={vi.fn()} />);
+		fireEvent.change(screen.getByLabelText("账号"), {
+			target: { value: "alice" },
+		});
+		fireEvent.change(screen.getByLabelText("密码"), {
+			target: { value: "wrong" },
+		});
+		fireEvent.submit(screen.getByRole("button", { name: "登录" }));
+
+		expect((await screen.findByRole("alert")).textContent).toContain(
+			"请从平台入口地址访问后重试。",
 		);
 	});
 
@@ -186,8 +203,6 @@ describe("LoginAction", () => {
 		fireEvent.submit(screen.getByRole("button", { name: "登录" }));
 
 		await screen.findByRole("status");
-		expect((screen.getByLabelText("密码") as HTMLInputElement).value).toBe(
-			"secret",
-		);
+		expect((screen.getByLabelText("密码") as HTMLInputElement).value).toBe("");
 	});
 });

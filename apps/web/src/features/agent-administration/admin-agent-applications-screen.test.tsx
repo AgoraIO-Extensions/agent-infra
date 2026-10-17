@@ -73,11 +73,9 @@ describe("AdminAgentApplicationsScreen", () => {
 			within(dialog).getByText("250m CPU / 512 MiB 内存 / 1 GiB 存储"),
 		).toBeTruthy();
 		expect(within(dialog).getByText("Applicant")).toBeTruthy();
-		expect(within(dialog).getByText("组织：org-release")).toBeTruthy();
-		expect(
-			within(dialog).getByText("Release model（release-model）"),
-		).toBeTruthy();
-		expect(within(dialog).getByText("model-primary")).toBeTruthy();
+		expect(within(dialog).getByText("0 名员工、1 个组织")).toBeTruthy();
+		expect(within(dialog).getAllByText("Release model")).toHaveLength(2);
+		expect(within(dialog).queryByText("model-primary")).toBeNull();
 		expect(within(dialog).queryByRole("textbox")).toBeNull();
 		expect(onDecision).not.toHaveBeenCalled();
 		fireEvent.click(within(dialog).getByRole("button", { name: "批准并创建" }));
@@ -103,9 +101,7 @@ describe("AdminAgentApplicationsScreen", () => {
 		fireEvent.change(reason, { target: { value: "   " } });
 		fireEvent.click(within(dialog).getByRole("button", { name: "确认驳回" }));
 		expect(onDecision).not.toHaveBeenCalled();
-		expect(within(dialog).getByRole("alert").textContent).toBe(
-			"请输入驳回原因。",
-		);
+		expect(within(dialog).getByText("请填写驳回原因。")).toBeTruthy();
 		expect(reason.getAttribute("aria-invalid")).toBe("true");
 		expect(document.activeElement).toBe(reason);
 		fireEvent.change(reason, { target: { value: "  请补充使用范围。  " } });
@@ -279,6 +275,24 @@ describe("AdminAgentApplicationsScreen", () => {
 		);
 		expect(screen.getByRole("alert").textContent).toBe(
 			"审批列表暂时无法读取，请稍后重试。",
+		);
+		rerender(
+			<AdminAgentApplicationsScreen
+				decisionResult={{
+					...pendingApplication,
+					status: "rejected",
+					decision: {
+						decidedAt: "2026-09-04T08:00:00Z",
+						reason: "请补充使用范围。",
+					},
+				}}
+				onDecision={vi.fn()}
+				session={{ kind: "ready", session: administratorSession }}
+				state={{ kind: "ready", applications: [] }}
+			/>,
+		);
+		expect(screen.getByRole("status").textContent).toBe(
+			"已驳回，申请人会看到修改原因。",
 		);
 	});
 
