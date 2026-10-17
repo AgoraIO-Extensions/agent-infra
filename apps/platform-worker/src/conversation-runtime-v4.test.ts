@@ -350,6 +350,23 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		},
 	);
 
+	it("reports a stop-pending key race without sending the business request", async () => {
+		const h = runtimeV4Harness();
+		try {
+			const reference = await h.authorize();
+			const accepted = h.accepted();
+			if (!accepted) throw new Error("Missing fixture acceptance");
+			h.setAccepted({ ...accepted, stopPending: true });
+			await expect(
+				h.runtime.runtimeHost.dispatch(h.request(reference)),
+			).rejects.toMatchObject({ code: "RUNTIME_STOP_PENDING" });
+			expect(h.fetcher).not.toHaveBeenCalled();
+			expect(h.executionKeys.readCiphertext).not.toHaveBeenCalled();
+		} finally {
+			h.runtime.close();
+		}
+	});
+
 	it("preserves the original null submit reference after the Host has assigned its Session", async () => {
 		const h = runtimeV4Harness();
 		try {

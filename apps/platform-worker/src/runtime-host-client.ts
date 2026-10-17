@@ -115,6 +115,7 @@ export interface WorkerAcceptedExecutionV4 {
 	readonly trustedHostSessionRef: string | null;
 	readonly authorizationRecordId: string;
 	readonly selection?: RuntimeSelectionV1;
+	readonly stopPending?: true;
 }
 
 export interface WorkerExecutionKeyReaderV4 {
@@ -1194,6 +1195,7 @@ export function createWorkerRuntimeHostClientV4(
 				request,
 				accepted.trustedHostSessionRef,
 			);
+			if (accepted.stopPending) return failure("RUNTIME_STOP_PENDING", false);
 			if (
 				accepted.authorizationRecordId !== claims.authorizationRecordId ||
 				("selection" in request &&
@@ -1358,6 +1360,7 @@ export function createWorkerRuntimeHostClientV4(
 					!isDeepStrictEqual(accepted.selection, request.selection)
 				)
 					return failure("RUNTIME_GRANT_INVALID", false);
+				if (accepted.stopPending) return failure("RUNTIME_STOP_PENDING", false);
 				const binding: RuntimeRelayKeyBindingV1 = {
 					purpose: accepted.scope.keyBinding.purpose,
 					subjectId: accepted.scope.keyBinding.subjectId,

@@ -4220,6 +4220,40 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("atomically cancels a prepared Turn when stop wins during key delivery", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "unknown",
+			executionFence: 1,
+			hostSessionRef: "host-session-existing",
+		});
+		await client`update platform.outbox_items
+			set delivery_fence = 1 where id = ${work.itemId}`;
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			await seedStop(work);
+			expect(decision.claim.stopPending).toBe(false);
+			await expect(
+				store.cancelAccepted({ claim: decision.claim }),
+			).resolves.toBe(true);
+			expect(await dispatchState(work)).toMatchObject({
+				status: "succeeded",
+				execution_status: "cancelled",
+				execution_fence: 2,
+			});
+			const [stop] = await client`
+				select request.status, outbox.status as outbox_status
+				from platform.conversation_stops request
+				join platform.outbox_items outbox
+					on outbox.id = ${`conversation:stop:${work.stopRequestId}`}
+				where request.execution_id = ${work.executionId}`;
+			expect(stop).toEqual({ status: "completed", outbox_status: "succeeded" });
+			await expectPlatformCancellationEvent(work);
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("completes the stop record when recovery timeout fails the claim", async () => {
 		const work = await seed("conversation.turn.stop.v1", {
 			executionStatus: "unknown",
