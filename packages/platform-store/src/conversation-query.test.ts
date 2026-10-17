@@ -592,8 +592,8 @@ describe("PostgreSQL Conversation query", () => {
 				})}
 				where id = ${intentId}`;
 			expect(await query.get(actorOne, "conversation-1")).toMatchObject({
-			conversation: { sandboxReady: false, sandboxResumable: true },
-		});
+				conversation: { sandboxReady: false, sandboxResumable: true },
+			});
 		} finally {
 			await client`update platform.session_sandbox_allocations
 				set status = ${originalAllocation.status}, desired_state = ${originalAllocation.desired_state},
