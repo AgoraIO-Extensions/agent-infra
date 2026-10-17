@@ -137,7 +137,10 @@ export const PiRuntimeDriver = {
 							executionId: session.executionId,
 						});
 						const header = browserGateway.server.headers[0];
-						if (header?.name !== "Authorization")
+						if (
+							header?.name !== "Authorization" ||
+							!/^Bearer [\x21-\x7e]{16,4096}$/.test(header.value)
+						)
 							throw new Error("RUNTIME_BROWSER_MCP_UNAVAILABLE");
 						launch.args = [...launch.args, "--extension", "builtin:mcp"];
 						launch.env = {
