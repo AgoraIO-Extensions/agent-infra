@@ -26,13 +26,19 @@ services:
       PLATFORM_API_PROXY_TOKEN_FILE: /run/secrets/platform_proxy_token
       PLATFORM_PUBLIC_ORIGIN: ${PLATFORM_PUBLIC_ORIGIN:-https://localhost:3001}
       NODE_EXTRA_CA_CERTS: /run/secrets/directory_ca
+      PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN: ${PLATFORM_LOCAL_NATIVE_METADATA_WORKER_ORIGIN:-}
+      PLATFORM_API_NATIVE_METADATA_WORKER_SERVICE_TOKEN_FILE: /run/secrets/platform_native_metadata_worker_token
+      PLATFORM_API_NATIVE_METADATA_WORKER_LOCAL: "true"
     extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "platform-worker-native-metadata:${PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS:-host-gateway}"
       - "${PLATFORM_LOCAL_LDAP_HOST:?Set the private LDAP host name}:${PLATFORM_LOCAL_LDAP_HOST_IP:?Set the private LDAP host IP}"
     volumes:
       - ${PLATFORM_LOCAL_API_DIRECTORY:?Set the API-only deployment directory}:/app/deployment:ro
       - ${PLATFORM_LOCAL_DIRECTORY_SOURCE_DIR:?Set the private directory source directory}/tls.crt:/run/secrets/directory_ca:ro
     secrets:
       - platform_proxy_token
+      - platform_native_metadata_worker_token
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,3 +99,5 @@ services:
 secrets:
   platform_proxy_token:
     file: ${PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE:?Render the local proxy token first}
+  platform_native_metadata_worker_token:
+    file: ${PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE:?Prepare the local native metadata Worker token first}

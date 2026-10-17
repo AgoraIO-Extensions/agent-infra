@@ -21,6 +21,12 @@ Helm 的 `platformWorker.wecomEnabled=true` 还会在同一进程启动 WeCom �
 Native metadata 的正式 `configuration.mjs` 可导出 `nativeMetadataGateway`。默认会使用
 `PLATFORM_DATABASE_URL` 通过 Platform Store 查询原 Execution scope 并装配
 `binding.resolve({ request, signal })`；只有需要替换 Store 读取时才显式提供该 binding。
+
+Helm 的 `platformWorker.nativeMetadataGateway.enabled` 默认开启时，Worker 入口会从
+固定环境变量装配网关端口，并把 `http://platform-worker-native-metadata`、当前 namespace、
+Worker Pod selector 和网关端口写入默认 Session Sandbox egress。`configuration.mjs` 显式导出
+`nativeMetadataGateway` 或显式提供 workload policy 字段时优先使用部署模块输入；显式关闭开关
+不会注入这些默认值。
 当没有显式 `transport` 或 `runtimeTarget` 且存在 `PLATFORM_DATABASE_URL` 时，Worker 会读取
 当前 Conversation/Execution、Workload 与 Session Sandbox receipt，并复用生产
 Conversation resolver：Agent-level 走 verified control Service，Session Sandbox 只使用当前

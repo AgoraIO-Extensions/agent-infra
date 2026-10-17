@@ -250,7 +250,19 @@ beforeAll(async () => {
 	// satisfying the assembly's token-derivation import.
 	await writeFile(
 		join(directory, "session-workload-adapter.js"),
-		"export const sessionSandboxServiceTokenV1 = () => 'fixture-sandbox-token';\n",
+		`export const sessionSandboxServiceTokenV1 = () => 'fixture-sandbox-token';
+export const isNativeMetadataWorkerOriginV1 = (value) => {
+  if (typeof value !== 'string') return false;
+  try {
+    const origin = new URL(value);
+    const releaseScopedService = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?-platform-worker-native-metadata$/.test(origin.hostname);
+    return origin.protocol === 'http:' && origin.username === '' && origin.password === '' &&
+      (origin.hostname === 'platform-worker-native-metadata' || releaseScopedService) &&
+      (origin.port === '' || origin.port === '80') &&
+      (origin.pathname === '/' || origin.pathname === '') && origin.search === '' && origin.hash === '';
+  } catch { return false; }
+};
+`,
 	);
 	await writeFile(
 		join(directory, "runtime-native-metadata-proof.js"),
@@ -416,6 +428,17 @@ it("uses the selected deployment database for all Worker consumers and prepares 
 			approval: connectionConsumerApproval,
 		},
 		installationConfigured: false,
+	});
+});
+
+it("fails closed when native metadata is enabled without runtime auth", () => {
+	const result = run({
+		PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED: "true",
+	});
+	expect(result.status).toBe(1);
+	expect(JSON.parse(result.stdout)).toEqual({
+		error: "PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID",
+		calls: [],
 	});
 });
 

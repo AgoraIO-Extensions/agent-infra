@@ -87,7 +87,7 @@ platformWorker:
   replicas: 1
   wecomEnabled: false
   nativeMetadataGateway:
-    enabled: false
+    enabled: true
     port: 3004
 
 enterpriseDirectorySync:

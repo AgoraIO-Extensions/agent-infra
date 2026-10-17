@@ -10,6 +10,13 @@ Compose 固定 `PLATFORM_API_CONFIGURATION_MODULE=file:///app/deployment/configu
 和 `PLATFORM_API_PROXY_TOKEN_FILE=/run/secrets/platform_proxy_token`；模块只接受本地
 文件 URL 和绝对令牌路径。`configuration.mjs` 必须导出：
 
+当 Helm 的 `platformWorker.nativeMetadataGateway.enabled=true` 且 API 使用
+`platformApi.placement=in-cluster` 时，Chart 会把固定的
+`http://platform-worker-native-metadata` origin 和 Worker runtime service-token Secret
+只读投影到 API，并由内置入口自动组装 `nativeMetadataWorker`。部署模块显式导出的
+`nativeMetadataWorker` 或 `nativeMetadata` 仍优先；请求不能选择 origin、token 或主体。
+关闭该开关时不会注入环境变量、Secret volume 或 API→Worker 入口。
+
 Kubernetes Helm 部署可选配置 `platformApi.connectionCallbackAuthSecretRef`，由部署 owner
 提供只用于 Runtime OAuth callback 的 Secret name/key。`platformApi.placement=in-cluster` 时，
 Chart 以只读 `0600` 文件投影该 Secret key，并设置

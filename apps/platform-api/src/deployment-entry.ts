@@ -38,7 +38,7 @@ const {
 	modelDirectory,
 	savedKeyCandidates,
 	nativeMetadata,
-	nativeMetadataWorker,
+	nativeMetadataWorker: configuredNativeMetadataWorker,
 	nativeMetadataResolveRequest,
 	nativeMetadataCurrent,
 	nativeCapabilityInvocation,
@@ -47,6 +47,66 @@ const {
 	providerImport,
 	directorySearch,
 } = await import(configurationModule);
+
+async function nativeMetadataWorkerFromEnvironment() {
+	const baseUrl = process.env.PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN;
+	const tokenFile =
+		process.env.PLATFORM_API_NATIVE_METADATA_WORKER_SERVICE_TOKEN_FILE;
+	if (baseUrl === undefined || baseUrl === "") return undefined;
+	let origin: URL;
+	try {
+		origin = new URL(baseUrl ?? "");
+	} catch {
+		throw new Error(
+			"PLATFORM_API_NATIVE_METADATA_WORKER_CONFIGURATION_INVALID",
+		);
+	}
+	const localOrigin =
+		process.env.PLATFORM_API_NATIVE_METADATA_WORKER_LOCAL === "true";
+	const localPort = Number(origin.port);
+	const releaseScopedService =
+		/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?-platform-worker-native-metadata$/.test(
+			origin.hostname,
+		);
+	if (
+		origin.protocol !== "http:" ||
+		(origin.hostname !== "platform-worker-native-metadata" &&
+			!releaseScopedService) ||
+		(localOrigin
+			? !Number.isSafeInteger(localPort) || localPort < 1 || localPort > 65_535
+			: origin.port !== "") ||
+		origin.pathname !== "/" ||
+		origin.username ||
+		origin.password ||
+		origin.search ||
+		origin.hash ||
+		!tokenFile?.startsWith("/")
+	)
+		throw new Error(
+			"PLATFORM_API_NATIVE_METADATA_WORKER_CONFIGURATION_INVALID",
+		);
+	let serviceToken: string;
+	try {
+		serviceToken = (await readFile(tokenFile, "utf8")).trim();
+	} catch {
+		throw new Error(
+			"PLATFORM_API_NATIVE_METADATA_WORKER_CONFIGURATION_INVALID",
+		);
+	}
+	if (!serviceToken)
+		throw new Error(
+			"PLATFORM_API_NATIVE_METADATA_WORKER_CONFIGURATION_INVALID",
+		);
+	return { baseUrl, serviceToken };
+}
+
+// Helm/local deployment inputs may provide the fixed Worker ingress without
+// editing the deployment module. A module export remains authoritative.
+const nativeMetadataWorker =
+	configuredNativeMetadataWorker ??
+	(nativeMetadata === undefined
+		? await nativeMetadataWorkerFromEnvironment()
+		: undefined);
 const databaseUrl = process.env.PLATFORM_DATABASE_URL;
 if (!databaseUrl) throw new Error("PLATFORM_DATABASE_URL is required");
 const configuredDatabaseUrl = databaseUrl;

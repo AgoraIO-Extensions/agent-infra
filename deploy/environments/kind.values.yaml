@@ -26,3 +26,9 @@ workloadTopology:
     enabled: true
     host: agent.kind.example.invalid
     tlsSecretName: agent-infra-kind-topology-tls
+
+# The topology fixture has no in-cluster API/Runtime process. Production
+# Worker deployments inherit the chart default (enabled).
+platformWorker:
+  nativeMetadataGateway:
+    enabled: false

@@ -82,11 +82,16 @@ export function isNativeMetadataWorkerOriginV1(
 	if (typeof value !== "string") return false;
 	try {
 		const origin = new URL(value);
+		const releaseScopedService =
+			/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?-platform-worker-native-metadata$/.test(
+				origin.hostname,
+			);
 		return (
 			origin.protocol === "http:" &&
 			origin.username === "" &&
 			origin.password === "" &&
-			origin.hostname === "platform-worker-native-metadata" &&
+			(origin.hostname === "platform-worker-native-metadata" ||
+				releaseScopedService) &&
 			(origin.port === "" || origin.port === "80") &&
 			(origin.pathname === "/" || origin.pathname === "") &&
 			origin.search === "" &&
