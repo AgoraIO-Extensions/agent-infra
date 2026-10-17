@@ -597,7 +597,7 @@ describe("PostgreSQL Conversation query", () => {
 		} finally {
 			await client`update platform.session_sandbox_allocations
 				set status = ${originalAllocation.status}, desired_state = ${originalAllocation.desired_state},
-					resource_observation = ${client.json(originalAllocation.resource_observation)}
+					resource_observation = ${client.json(originalAllocation.resource_observation as Parameters<typeof client.json>[0])}
 				where conversation_id = 'conversation-1'`;
 			await client`delete from platform.outbox_items where id = ${intentId}`;
 		}
