@@ -794,6 +794,23 @@ describe("conversation dispatch observability", () => {
 			expect(JSON.stringify(events)).not.toContain("sandbox-secret-name");
 		});
 
+		it("uses a fixed class for non-Error thrown values", async () => {
+			const events = await reconcileWith(async () => {
+				throw "sandbox-secret-name must never be logged";
+			});
+			expect(events).toEqual([
+				{
+					stage: "workload",
+					outcome: "failed",
+					code: "WORKLOAD_RECONCILIATION_FAILED",
+					errorClass: "NonErrorThrown",
+					operationRef: "conversation.sandbox.reconcile.v1",
+					durationMs: expect.any(Number),
+				},
+			]);
+			expect(JSON.stringify(events)).not.toContain("sandbox-secret-name");
+		});
+
 		it("still records the unknown observation when building the telemetry event throws", async () => {
 			const claim = { schemaVersion: 1, execution: null } as never;
 			mocks.find.mockResolvedValueOnce([

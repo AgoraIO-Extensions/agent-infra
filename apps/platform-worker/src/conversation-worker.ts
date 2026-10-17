@@ -793,9 +793,12 @@ export function createPlatformConversationWorkerV2(
 							? { failureStep: `workload.${error.code}` }
 							: {}),
 						// 与 recordHttpFailureContext 相同：只取类名，sink 再按有界模式过滤。
-						...(error instanceof Error
-							? { errorClass: error.constructor.name }
-							: {}),
+						// JavaScript 允许抛出非 Error 值；用固定类别保留可聚合性，
+						// 不读取它的内容或调用方自定义的 toString。
+						errorClass:
+							error instanceof Error
+								? error.constructor.name
+								: "NonErrorThrown",
 						operationRef: item.operation,
 						durationMs: performance.now() - began,
 					});
