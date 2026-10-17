@@ -19,6 +19,7 @@ import {
 } from "./acp-native-command.js";
 import { spawnAcpProcess } from "./acp-process.js";
 import { acpStream } from "./acp-stream.js";
+import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
 import type { NativePromptV1 } from "./session-runtime-driver.js";
 
 export interface AcpLaunch {
@@ -35,6 +36,8 @@ export interface AcpLaunch {
 	) => Promise<boolean>;
 	/** Session-scoped MCP servers assembled by the trusted Runtime adapter. */
 	mcpServers?: readonly McpServer[];
+	/** OpenCode exposes command and compaction RPCs beyond generic ACP prompt. */
+	nativeCommandMode?: "opencode";
 }
 
 export async function openAcpSession(options: {
@@ -364,6 +367,70 @@ export async function openAcpSession(options: {
 						});
 					throw error;
 				}
+			},
+			async executeNativeCommand(command: RuntimeNativeCommandCommandV1) {
+				if (
+					commandDirectoryUnavailable ||
+					!commandDirectory?.commands.some(
+						(entry) => entry.name === command.capabilityName,
+					)
+				)
+					throw new Error("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
+				const response =
+					options.launch.nativeCommandMode === "opencode"
+						? await (
+								connection.agent.request as unknown as (
+									method: string,
+									params: Record<string, unknown>,
+								) => Promise<unknown>
+							)(
+								command.capabilityName === "compact"
+									? "session/summarize"
+									: "session/command",
+								{
+									sessionId: nativeId,
+									...(command.capabilityName === "compact"
+										? {
+												customInstructions:
+													command.parameters.length > 0
+														? command.parameters
+														: undefined,
+											}
+										: {
+												name: command.capabilityName,
+												args: command.parameters,
+											}),
+								},
+							)
+						: await connection.agent.request("session/prompt", {
+								sessionId: nativeId,
+								prompt: [
+									{
+										type: "text",
+										text: `/${command.capabilityName}${
+											command.parameters.length > 0
+												? ` ${command.parameters}`
+												: ""
+										}`,
+									},
+								],
+							});
+				await updates;
+				return {
+					stopReason:
+						response &&
+						typeof response === "object" &&
+						"stopReason" in response &&
+						typeof response.stopReason === "string"
+							? response.stopReason
+							: "end_turn",
+					...(response &&
+					typeof response === "object" &&
+					"checkpoint" in response &&
+					typeof response.checkpoint === "string"
+						? { checkpoint: response.checkpoint }
+						: {}),
+				};
 			},
 			async discoverCommands(input: {
 				readonly signal: AbortSignal;

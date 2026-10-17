@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { openAcpSession } from "./acp-session.js";
+import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
 
 it("discovers grouped native models, reads the current choice, and rejects choices removed by the peer", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "acp-models-"));
@@ -120,6 +121,25 @@ it("captures bounded ACP available command updates for the live session", async 
 				},
 			],
 		});
+		await expect(
+			session.executeNativeCommand?.({
+				schemaVersion: 1,
+				kind: "native-command",
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-a",
+				turnId: "turn-a",
+				operationId: "operation-a",
+				nativeSessionRef: session.nativeId,
+				capabilityId: "a".repeat(64),
+				directoryRevision: "b".repeat(64),
+				capabilityName: "compact",
+				capabilitySourceVersion: "1.4.0",
+				parameters: "",
+				parametersDigest: "c".repeat(64),
+			} satisfies RuntimeNativeCommandCommandV1),
+		).resolves.toMatchObject({ stopReason: "end_turn" });
 	} finally {
 		await session.close();
 		await rm(cwd, { recursive: true, force: true });

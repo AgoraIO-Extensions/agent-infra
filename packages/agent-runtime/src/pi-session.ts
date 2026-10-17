@@ -6,6 +6,7 @@ import { lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { buildSessionContext } from "@earendil-works/pi-coding-agent";
+import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
 import type { NativeProcessLaunch } from "./native-process.js";
 import { readPiNativeCommandsV1 } from "./pi-native-command.js";
 import { openPiRpc, type PiFrame, piRecord } from "./pi-rpc.js";
@@ -810,6 +811,79 @@ export async function openPiSession(
 							active = undefined;
 						}
 					});
+				return terminal.promise;
+			},
+			async executeNativeCommand(command: RuntimeNativeCommandCommandV1) {
+				if (active || exited || !currentCheckpoint)
+					throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+				if (command.capabilityName === "compact") {
+					if (command.parameters.length > 16 * 1024)
+						throw new Error("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
+					await rpc.request("compact", {
+						...(command.parameters.length > 0
+							? { customInstructions: command.parameters }
+							: {}),
+					});
+					return {
+						stopReason: "stop",
+						checkpoint: await (async () => {
+							const response = piRecord(await rpc.request("get_messages"));
+							if (!Array.isArray(response?.messages))
+								throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+							currentCheckpoint = historyCheckpoint(response.messages);
+							return currentCheckpoint;
+						})(),
+					};
+				}
+				const checkpoint = currentCheckpoint;
+				const content: PiUserContent = {
+					text: `/${command.capabilityName}${
+						command.parameters.length > 0 ? ` ${command.parameters}` : ""
+					}`,
+					images: [],
+				};
+				started = false;
+				phases.clear();
+				toolCalls.clear();
+				const terminal = Promise.withResolvers<{
+					stopReason: string;
+					checkpoint: string;
+				}>();
+				const target = {
+					content,
+					resolve: terminal.resolve,
+					reject: terminal.reject,
+				};
+				active = target;
+				void terminal.promise.catch(() => {});
+				try {
+					const binding = await open(promptBindingFile, "w", 0o600);
+					try {
+						await binding.writeFile(
+							promptBinding(nativeId, checkpoint, content),
+						);
+						await binding.sync();
+					} finally {
+						await binding.close();
+					}
+					const parent = await open(directory, "r");
+					try {
+						await parent.sync();
+					} finally {
+						await parent.close();
+					}
+					if (exited || active !== target)
+						throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
+				} catch (error) {
+					if (active === target) active = undefined;
+					throw error;
+				}
+				void rpc.request("prompt", { message: content.text }).catch(() => {
+					if (active === target) {
+						active?.reject(new Error("RUNTIME_ACCEPTANCE_UNKNOWN"));
+						active = undefined;
+					}
+				});
 				return terminal.promise;
 			},
 			async cancel() {

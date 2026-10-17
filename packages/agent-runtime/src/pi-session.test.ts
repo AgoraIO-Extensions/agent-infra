@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
+import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
 import { openPiSession } from "./pi-session.js";
 
 const { openRpc } = vi.hoisted(() => ({ openRpc: vi.fn() }));
@@ -72,6 +73,35 @@ it("rejects a concurrent prompt before the first binding persistence finishes", 
 	} finally {
 		await f.session.close();
 		await Promise.allSettled([first, second]);
+		await rm(f.directory, { recursive: true, force: true });
+	}
+});
+
+it("executes Pi compact through the native RPC", async () => {
+	const f = await fixture();
+	try {
+		await expect(
+			f.session.executeNativeCommand?.({
+				schemaVersion: 1,
+				kind: "native-command",
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-a",
+				turnId: "turn-a",
+				operationId: "operation-a",
+				nativeSessionRef: "native-a",
+				capabilityId: "a".repeat(64),
+				directoryRevision: "b".repeat(64),
+				capabilityName: "compact",
+				capabilitySourceVersion: "0.99.0",
+				parameters: "",
+				parametersDigest: "c".repeat(64),
+			} satisfies RuntimeNativeCommandCommandV1),
+		).resolves.toMatchObject({ stopReason: "stop" });
+		expect(f.request).toHaveBeenCalledWith("compact", {});
+	} finally {
+		await f.session.close();
 		await rm(f.directory, { recursive: true, force: true });
 	}
 });

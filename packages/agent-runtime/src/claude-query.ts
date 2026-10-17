@@ -8,12 +8,17 @@ import {
 	type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 
-export function claudeQuery(options: Options, message: SDKUserMessage) {
+export function claudeQuery(options: Options, message?: SDKUserMessage) {
 	let child: ChildProcessWithoutNullStreams | undefined;
 	let finishInput: () => void = () => {};
 	const inputEnded = new Promise<void>((resolve) => {
 		finishInput = resolve;
 	});
+	let resolveMessage: (message?: SDKUserMessage) => void = () => {};
+	const messageReady = new Promise<SDKUserMessage | undefined>((resolve) => {
+		resolveMessage = resolve;
+	});
+	let messageSent = message !== undefined;
 	let finishExit: () => void = () => {};
 	let childClosed = false;
 	const exited = new Promise<void>((resolve) => {
@@ -21,7 +26,11 @@ export function claudeQuery(options: Options, message: SDKUserMessage) {
 	});
 	const native = query({
 		prompt: (async function* () {
-			yield message;
+			const first =
+				message ??
+				(await Promise.race([messageReady, inputEnded.then(() => undefined)]));
+			if (!first) return;
+			yield first;
 			await inputEnded;
 		})(),
 		options: {
@@ -53,6 +62,11 @@ export function claudeQuery(options: Options, message: SDKUserMessage) {
 	return {
 		query: native,
 		exited,
+		send(next: SDKUserMessage) {
+			if (messageSent) throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+			messageSent = true;
+			resolveMessage(next);
+		},
 		close() {
 			closing ??= (async () => {
 				finishInput();
