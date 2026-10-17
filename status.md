@@ -257,7 +257,7 @@
 
 ## 未闭环项的证据边界
 
-- **R4-16**：已使用 Kiro 固定本地 E2E 账号回读登录态、已有 Agent、真实新会话写入和成功模型回复；已启用受控 `workspace-summary@1.0.0` Provider fixture，真实导入、ClamAV 扫描、MinIO 持久化和 Skill 详情回读均成功，版本 `skill-version-4f4412db781fa8853eaa52825ae61aecd0e3fa29f90cf6c7` 已发布。模板配置仍明确 `connectionEnabled: false`，固定环境没有 OAuth callback 入口，因此只保留 OAuth 未勾选。真实回执：会话 `273756c6-cb0c-4fe7-87e4-e34b6b3604b6`，成功回复显示「UIUX E2E 已成功。当前模型：GPT-5。」；未打印或提交任何密钥。
+- **R4-16**：已使用 Kiro 固定本地 E2E 账号回读登录态、已有 Agent、真实新会话写入和成功模型回复；已启用受控 `workspace-summary@1.0.0` Provider fixture，真实导入、ClamAV 扫描、MinIO 持久化和 Skill 详情回读均成功，版本 `skill-version-4f4412db781fa8853eaa52825ae61aecd0e3fa29f90cf6c7` 已发布。Connection Developers/接入指南明确当前 OpenAPI 是 Browser API，不是多用户 Delegated 服务协议；Consumer 注册、declaration 管理不在该 OpenAPI，默认运行时也未装配 `delegatedIdentity`，因此 OAuth/PAT Binding 的 Agent Infra 机器链路仍未就绪。真实回执：会话 `273756c6-cb0c-4fe7-87e4-e34b6b3604b6`，成功回复显示「UIUX E2E 已成功。当前模型：GPT-5。」；未打印或提交任何密钥。
 - **V-01**：代码侧已修复表格窄屏溢出，桌面管理矩阵子集通过；完整 24 路由 × 320/360/390/430/600/820/1366/1920 矩阵仍未完成。
 - **G-07**：UI 已闭环并在固定 Kiro E2E 的真实已完成 Execution 中回读请求模型/实际模型（均为 `gpt-5.6-sol`）与「不会静默切换到个人 Key 或未授权模型」保护文案；回退事件存在时会按平台事件映射用户文案。当前正式契约仍只保存 fallback payload 的实际 `modelOptionId`、`reasoningLevel` 和固定 `reason=selection_unavailable`，因此没有伪造未提供的逐 Execution 请求模型或回退原因；若要补充回退场景的真实 E2E，需要后端提供可控的 fallback fixture/契约。
 - 2026-10-17：对话页窄视口头部压缩：≤430px 隐藏非关键来源文字但保留可访问名称，收紧状态行与内容顶距；对话桌面九视口矩阵现已通过。
@@ -305,4 +305,5 @@
 - 2026-10-17：origin/main 前进到 `413ad84e`（#2702/#2703/#2704/#2705）后 rebase 无冲突；固定 E2E 尝试创建并停用临时 Skill 项目，Provider 导入返回失败，回读当前 API 配置确认无 Skill Provider 导入器且模板 `connectionEnabled=false`。
 - 2026-10-17：已在固定 E2E 私有目录准备受控 `workspace-summary@1.0.0` 包、MinIO `skill-packages/` bucket、ClamAV 数据库和 API overlay；部署前被既有 `run.lock` 拦截，该锁属于另一条 Kiro 回归窗口且记录的 PID 已失效，未越权清理或替换其 Worker/API/Web。
 - 2026-10-17：API assembly 修复 Provider selection 的 `schemaVersion` 边界；API overlay 加入 ClamAV，扫描临时目录迁到 `/dev/shm` 并将 API shm 调到 256MB；真实 Skill 导入和详情页回读成功，OAuth callback 仍因 `connectionEnabled=false` 保留未闭环。
+- 2026-10-17：读取 Connection Developers 与帮助第 29 章；确认当前页面仅提供 Browser API 参考，Consumer/declaration 管理未纳入 OpenAPI，Delegated action-calls/发现/状态查询尚未在默认运行时装配，不能把 Browser Cookie API 当作 Agent Infra 服务协议。
 - 2026-10-17：读取 `/var/folders/k1/181yvqs97nz8r3sy62r007m40000gn/T/agent-infra-connection-handoff.md` 后确认应接 Connection Agent PAT Binding；Consumer 注册、declaration 配置和服务凭据由 Connection 管理员控制，handoff 未提供现成 Consumer/credential，当前账号访问管理员页会回到「我的 Connection」。
