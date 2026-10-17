@@ -806,7 +806,7 @@ export function createConversationRuntimeV2(
 	 * 事件读取或 ACK 的这一步是否因 stop 而过期（#2712）。stop 在一次准备的多个 await 之间（或
 	 * 准备与发送之间）被受理时，授权目的会从 business 变成 control，prepareCore / 发送前复核以
 	 * RUNTIME_ROUTE_STALE / RUNTIME_FENCE_STALE 结束这一步。这只说明这一步过期，不是排空失败：
-	 * 只要 Turn 已有 stop 待处理或已经结束，就用同一个租约重新准备，拿到 control 授权后继续，
+	 * 只要 Turn 的 stop 待处理、已送达（锁存了 stop 控制记录）或 Turn 已经结束，就用同一个租约重新准备，按当前授权继续，
 	 * 和流中途遇到 stop 时一样（见 events）。其他失败照旧交还 Core 重试。
 	 */
 	async function stopInvalidated(
@@ -825,6 +825,9 @@ export function createConversationRuntimeV2(
 		const state = await stateFor(contextFor(request), signal);
 		return (
 			state.stopPending ||
+			// stop 已送达：Store 把 stop 记为 completed，stopPending 翻为 false，但 Execution 要等
+			// Runtime 的终态事件落库才结束；锁存的 stop 控制记录说明这次过期仍是 stop 引起的（#2720）。
+			state.latchedControlReason === "stop" ||
 			["completed", "failed", "cancelled"].includes(state.executionStatus)
 		);
 	}
