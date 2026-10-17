@@ -243,6 +243,14 @@ describe.each([
 					context,
 				),
 			).rejects.toThrow();
+			await expect(
+				driver.executeBrowserHandoff(
+					ref,
+					"execution-1",
+					handoffRequest,
+					{} as RuntimeDriverExecutionContextV1,
+				),
+			).rejects.toThrow();
 			expect(calls).toBe(0);
 		} finally {
 			await rm(path, { recursive: true, force: true });
