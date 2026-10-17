@@ -433,6 +433,8 @@ function validateNativeMetadataWorkerEgressV1(
 				Object.keys(labels).length <= 2 &&
 				labels["app.kubernetes.io/component"] === "platform-worker" &&
 				(labels["app.kubernetes.io/instance"] === undefined ||
+					typeof labels["app.kubernetes.io/instance"] === "string") &&
+				(labels["app.kubernetes.io/instance"] === undefined ||
 					/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(
 						labels["app.kubernetes.io/instance"],
 					))
