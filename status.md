@@ -303,3 +303,4 @@
 - 2026-10-17：G-07 UI 闭环在固定 Kiro E2E 的真实完成 Execution 中回读；请求模型与实际模型均为 `gpt-5.6-sol`，执行详情 Dialog 和保护文案可见，正式 fallback fixture 仍不虚构。
 - 2026-10-17：`#2692` 更新 Runtime operation 联合类型后，收紧模型事实判定为 `payload.kind === "model"`；最新 `pnpm --filter @agent-infra/web check-types` 与 G-07 定向测试均通过（1/1）。
 - 2026-10-17：origin/main 前进到 `413ad84e`（#2702/#2703/#2704/#2705）后 rebase 无冲突；固定 E2E 尝试创建并停用临时 Skill 项目，Provider 导入返回失败，回读当前 API 配置确认无 Skill Provider 导入器且模板 `connectionEnabled=false`。
+- 2026-10-17：已在固定 E2E 私有目录准备受控 `workspace-summary@1.0.0` 包、MinIO `skill-packages/` bucket、ClamAV 数据库和 API overlay；部署前被既有 `run.lock` 拦截，该锁属于另一条 Kiro 回归窗口且记录的 PID 已失效，未越权清理或替换其 Worker/API/Web。
