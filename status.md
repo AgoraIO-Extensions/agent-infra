@@ -298,3 +298,4 @@
 - 2026-10-17：origin/main 再前进到 `2e85c834` 后已在本 worktree fast-forward 同步；UI 暂存改动 stash/pop 再次恢复无冲突。
 - 2026-10-17：使用固定 Kiro E2E 环境部署 Web 提交 `af20d54e`；真实账号回读 Agent 详情、创建会话、SSE 处理中态、成功模型回复和执行详情 Dialog。Skill 目录授权版本为 0，OAuth 回调与 Skill 详情仍保留未闭环。
 - 2026-10-17：origin/main 再前进到 `6d38e9bb`（#2694）后将 UI 提交 rebase 到最新基线；Worker 变更与本 UI 差异无冲突。
+- 2026-10-17：rebase 到 `6d38e9bb` 后重新执行 Web 全量单测，90/90 文件、1085/1085 通过。
