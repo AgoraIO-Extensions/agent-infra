@@ -305,3 +305,4 @@
 - 2026-10-17：origin/main 前进到 `413ad84e`（#2702/#2703/#2704/#2705）后 rebase 无冲突；固定 E2E 尝试创建并停用临时 Skill 项目，Provider 导入返回失败，回读当前 API 配置确认无 Skill Provider 导入器且模板 `connectionEnabled=false`。
 - 2026-10-17：已在固定 E2E 私有目录准备受控 `workspace-summary@1.0.0` 包、MinIO `skill-packages/` bucket、ClamAV 数据库和 API overlay；部署前被既有 `run.lock` 拦截，该锁属于另一条 Kiro 回归窗口且记录的 PID 已失效，未越权清理或替换其 Worker/API/Web。
 - 2026-10-17：API assembly 修复 Provider selection 的 `schemaVersion` 边界；API overlay 加入 ClamAV，扫描临时目录迁到 `/dev/shm` 并将 API shm 调到 256MB；真实 Skill 导入和详情页回读成功，OAuth callback 仍因 `connectionEnabled=false` 保留未闭环。
+- 2026-10-17：读取 `/var/folders/k1/181yvqs97nz8r3sy62r007m40000gn/T/agent-infra-connection-handoff.md` 后确认应接 Connection Agent PAT Binding；Consumer 注册、declaration 配置和服务凭据由 Connection 管理员控制，handoff 未提供现成 Consumer/credential，当前账号访问管理员页会回到「我的 Connection」。
