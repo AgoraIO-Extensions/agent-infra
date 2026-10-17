@@ -236,8 +236,16 @@ stop_native_metadata_forward() {
     pid=$(cat "$native_metadata_forward_pid_file")
     if [[ "$pid" =~ ^[0-9]+$ ]]; then
       command=$(ps -p "$pid" -o command= 2>/dev/null || true)
-      if [[ "$command" == *"port-forward"*"native-metadata"* ]]; then
+      if [[ "$command" == *"native-metadata-port-forward-supervisor"* ]]; then
         kill "$pid" >/dev/null 2>&1 || true
+        # The supervisor owns the kubectl child. Wait until its trap has
+        # delivered TERM to that child before a new forward reuses the port.
+        for _ in {1..40}; do
+          local state
+          state=$(ps -p "$pid" -o stat= 2>/dev/null || true)
+          [[ -z "$state" || "$state" == Z* ]] && break
+          sleep 0.05
+        done
       fi
     fi
   fi
@@ -344,7 +352,16 @@ prepare_native_metadata_forward() {
   # stop 时它连同当前的 kubectl 一起退出。
   : > "$native_metadata_forward_log"
   bash -c '
-    trap '"'"'kill "$child" "$sleeper" 2>/dev/null; exit 0'"'"' TERM INT
+    child=
+    sleeper=
+    stop() {
+      [[ -z "$child" ]] || kill "$child" 2>/dev/null || true
+      [[ -z "$sleeper" ]] || kill "$sleeper" 2>/dev/null || true
+      [[ -z "$child" ]] || wait "$child" 2>/dev/null || true
+      [[ -z "$sleeper" ]] || wait "$sleeper" 2>/dev/null || true
+      exit 0
+    }
+    trap stop TERM INT
     delay=1
     while :; do
       "$@" &
