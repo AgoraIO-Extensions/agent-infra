@@ -1003,6 +1003,92 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			}
 		});
 
+		it("keeps draining when the stop is delivered during a control read's pre-send check (#2720)", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				// 与 a4db4f8c 一致：stop 已受理、stop 控制记录已签发（Host 已被闩住），Execution 仍在处理中。
+				Object.assign(h.state, {
+					stopPending: true,
+					latchedControlReason: "stop",
+				});
+				// 真实 Store 每次读取都返回新的快照：翻转只影响之后的读取，不改变已读出的状态。
+				h.dispatchStore.readRuntimeState.mockImplementation(async () =>
+					structuredClone(h.state),
+				);
+				let served = 0;
+				let deliverStop = false;
+				h.fetcher.mockImplementation(async (url) => {
+					if (String(url).endsWith("/events/read")) served++;
+					// 第一页读完之后，下一次读取的发送前复核期间 stop 被送达。
+					if (served === 1) deliverStop = true;
+					return Response.json({
+						schemaVersion: 4,
+						hostSessionRef: "host",
+						executionId: "execution",
+						events: served === 1 ? [modelFact] : [terminal],
+					});
+				});
+				const resolveUser = h.directory.resolveUser.getMockImplementation();
+				h.directory.resolveUser.mockImplementation(async (...args) => {
+					if (deliverStop) {
+						deliverStop = false;
+						// stop 条目成功：Store 把 stop 记为 completed（stopPending 翻为 false），
+						// Execution 要等 Runtime 的终态事件落库才结束。
+						Object.assign(h.state, { stopPending: false });
+					}
+					return resolveUser?.(...args) ?? null;
+				});
+				const stream = h.runtime.runtimeHost
+					.events(h.events(reference))
+					[Symbol.asyncIterator]();
+				expect((await stream.next()).value).toEqual(modelFact);
+				// 之前：发送前复核以 RUNTIME_FENCE_STALE 失败，stop 已不再待处理、Execution 也没结束，
+				// 这次失败被交还 Core 退避重试（a4db4f8c 停止到结束 9.7 秒）。
+				expect((await stream.next()).value).toEqual(terminal);
+				expect(served).toBe(2);
+				await stream.return?.();
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("ACKs once when the stop is delivered between the ACK's preparation and its send (#2720)", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				Object.assign(h.state, {
+					stopPending: true,
+					latchedControlReason: "stop",
+					runtimeCursor: "terminal-cursor",
+				});
+				terminalReads(h);
+				let routes = 0;
+				let statesAfterRoutes = 0;
+				h.resolveRuntimeHost.mockImplementation(async () => {
+					routes++;
+					return { ...h.target };
+				});
+				h.dispatchStore.readRuntimeState.mockImplementation(async () => {
+					// 准备做完三次路由解析之后，发送前复核读状态时 stop 已送达。
+					if (routes >= 3 && ++statesAfterRoutes === 2)
+						Object.assign(h.state, { stopPending: false });
+					return structuredClone(h.state);
+				});
+				await h.runtime.runtimeHost.acknowledge?.({
+					...h.events(reference),
+					confirmedCursor: "terminal-cursor",
+				});
+				expect(
+					h.fetcher.mock.calls.filter(([url]) =>
+						String(url).endsWith("/events/ack"),
+					),
+				).toHaveLength(1);
+			} finally {
+				h.runtime.close();
+			}
+		});
+
 		it("returns a control fence failure after the bounded reprepare limit", async () => {
 			const h = runtimeV4Harness();
 			try {
