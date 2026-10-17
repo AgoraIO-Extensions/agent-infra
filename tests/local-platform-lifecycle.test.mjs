@@ -9,6 +9,7 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
+import { createConnection } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -268,7 +269,9 @@ elif [[ "$*" == *"port-forward"*"service/"*"native-metadata"* ]]; then
   port="\${port%%:*}"
   printf 'kubectl %s\\n' "$*" >> "$COMMAND_LOG"
   printf 'forward-port=%s real-node=%s\\n' "$port" "$REAL_NODE" >> "$COMMAND_LOG"
-  exec "$REAL_NODE" -e 'require("net").createServer().listen(Number(process.argv[1]), "0.0.0.0")' "$port" "port-forward service/native-metadata" >> "$COMMAND_LOG" 2>&1
+  # 与真实 kubectl 一样：本地监听就绪后打印 Forwarding from（进入 platform.sh 的转发日志）。
+  # FAKE_NATIVE_METADATA_FORWARD_EXITS=1 时接受一个连接后很快退出，与真实 kubectl 在上游拒绝连接时一样（#2726）。
+  exec "$REAL_NODE" -e 'const port = Number(process.argv[1]); const exits = process.env.FAKE_NATIVE_METADATA_FORWARD_EXITS === "1"; require("net").createServer((socket) => { socket.end(); if (exits) setTimeout(() => process.exit(1), 100); }).listen(port, "0.0.0.0", () => console.log("Forwarding from 127.0.0.1:" + port + " -> 3004"))' "$port" "port-forward service/native-metadata"
 elif [[ "$*" == *"get pods -l app.kubernetes.io/instance=agent-infra-verify,app.kubernetes.io/component=platform-worker"* ]]; then
   printf '%s' "$FAKE_WORKER_PODS"
 elif [[ "$*" == *"get statefulsets -l agent-infra.agora.io/agent"* ]]; then
@@ -599,6 +602,77 @@ test("local native metadata default reads the Worker token and owns the port-for
 			),
 		);
 	} finally {
+		await f.close();
+	}
+});
+
+test("local native metadata forward is restarted after kubectl exits (#2726)", async () => {
+	const f = await fixture();
+	let env = f.env;
+	try {
+		env = {
+			...f.env,
+			FAKE_NATIVE_METADATA_ENABLED: "1",
+			FAKE_NATIVE_METADATA_TOKEN_KEY: "runtime-token",
+			FAKE_NATIVE_METADATA_FORWARD_EXITS: "1",
+			PLATFORM_LOCAL_NATIVE_METADATA_WORKER_PORT: "3304",
+			PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS: f.nativeBindAddress,
+		};
+		const started = run("up", env);
+		assert.equal(
+			started.status,
+			0,
+			`${started.stderr}\n${await readFile(f.log, "utf8")}`,
+		);
+		// 每个连接都会让这个 kubectl 退出；之前退出后再也没有转发，API 一直 503。
+		const connect = () =>
+			new Promise((resolve) => {
+				const socket = createConnection({ host: "127.0.0.1", port: 3305 });
+				socket.once("connect", () => {
+					socket.destroy();
+					resolve(true);
+				});
+				socket.once("error", () => resolve(false));
+			});
+		assert.equal(await connect(), true, await readFile(f.log, "utf8"));
+		let reachable = false;
+		for (let attempt = 0; attempt < 60 && !reachable; attempt++) {
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			reachable = attempt >= 5 && (await connect());
+		}
+		assert.equal(reachable, true, await readFile(f.log, "utf8"));
+		assert.ok(
+			((await readFile(f.log, "utf8")).match(/forward-port=3305/g) ?? [])
+				.length >= 2,
+			await readFile(f.log, "utf8"),
+		);
+		const supervisor = Number(
+			await readFile(
+				join(
+					env.PLATFORM_LOCAL_STATE_DIRECTORY,
+					"agent-infra-verify/native-metadata-worker-port-forward.pid",
+				),
+				"utf8",
+			),
+		);
+		const stopped = run("stop", env);
+		assert.equal(stopped.status, 0, stopped.stderr);
+		const alive = () => {
+			try {
+				process.kill(supervisor, 0);
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		for (let attempt = 0; attempt < 20 && alive(); attempt++)
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		// 监督循环必须随 stop 退出，否则它会在退避后重新打开转发。
+		assert.equal(alive(), false, "stop must reclaim the forward supervisor");
+		assert.equal(await connect(), false, "stop must reclaim the forward");
+	} finally {
+		// 断言失败时也回收转发与代理，避免占住端口影响后续用例。
+		run("stop", env);
 		await f.close();
 	}
 });
