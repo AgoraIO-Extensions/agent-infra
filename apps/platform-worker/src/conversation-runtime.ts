@@ -222,6 +222,8 @@ type Command = RuntimeBusinessCommandV2 | RuntimeControlCommandV2;
 /** Bounded reuse of one drain's live Kubernetes route observation (#1611). */
 const eventRouteProofMaxAgeMs = 2_000;
 const eventCommands: readonly Command[] = ["events.persist", "events.ack"];
+/** 一次事件读取或 ACK 在停止翻转后最多准备几次（首次 + 2 次重试，#2712）。 */
+const eventPreparationAttempts = 3;
 
 function unavailable(code = "AUTHORIZATION_UNAVAILABLE"): never {
 	throw new ConversationRuntimeHostError(code, true);
@@ -799,6 +801,57 @@ export function createConversationRuntimeV2(
 			...previous,
 			state: structuredClone(state) as ConversationRuntimeStateV2,
 		};
+	}
+	/**
+	 * 事件读取或 ACK 的这一步是否因 stop 而过期（#2712）。stop 在一次准备的多个 await 之间（或
+	 * 准备与发送之间）被受理时，授权目的会从 business 变成 control，prepareCore / 发送前复核以
+	 * RUNTIME_ROUTE_STALE / RUNTIME_FENCE_STALE 结束这一步。这只说明这一步过期，不是排空失败：
+	 * 只要 Turn 已有 stop 待处理或已经结束，就用同一个租约重新准备，拿到 control 授权后继续，
+	 * 和流中途遇到 stop 时一样（见 events）。其他失败照旧交还 Core 重试。
+	 */
+	async function stopInvalidated(
+		error: unknown,
+		request: Request,
+		signal: AbortSignal,
+	) {
+		if (
+			signal.aborted ||
+			!(error instanceof ConversationRuntimeHostError) ||
+			!error.retryable ||
+			(error.code !== "RUNTIME_ROUTE_STALE" &&
+				error.code !== "RUNTIME_FENCE_STALE")
+		)
+			return false;
+		const state = await stateFor(contextFor(request), signal);
+		return (
+			state.stopPending ||
+			["completed", "failed", "cancelled"].includes(state.executionStatus)
+		);
+	}
+	/**
+	 * 准备一次事件读取或 ACK；因 stop 过期时重新准备，最多 eventPreparationAttempts 次（#2712）。
+	 * 之前这个失败会让整次排空退回 Core 按退避重试，并把 Execution 记为 unknown；这段时间 stop
+	 * 送不到 Runtime，Turn 会照常跑完。
+	 */
+	async function prepareEventStep(
+		request: Request,
+		command: "events.persist" | "events.ack",
+		signal: AbortSignal,
+		previous?: Awaited<ReturnType<typeof prepare>>,
+	) {
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return previous && attempt === 1
+					? await continuePrepared(previous, request, command, signal)
+					: await prepare(request, command, signal);
+			} catch (error) {
+				if (
+					attempt >= eventPreparationAttempts ||
+					!(await stopInvalidated(error, request, signal))
+				)
+					throw error;
+			}
+		}
 	}
 	function v4Client(
 		prepared: Awaited<ReturnType<typeof prepare>>,
@@ -1471,11 +1524,11 @@ export function createConversationRuntimeV2(
 			if (proven) {
 				// An ACK inside a drain continues the preparation its reads proved;
 				// the V4 client still re-checks it before sending (#1611).
-				const prepared = await continuePrepared(
-					proven,
+				const prepared = await prepareEventStep(
 					request,
 					"events.ack",
 					active,
+					proven,
 				);
 				const reusing = prepared.routeProof === proven.routeProof;
 				let reuseRejected = false;
@@ -1495,14 +1548,31 @@ export function createConversationRuntimeV2(
 					drains.set(prepared.context, prepared);
 					return;
 				} catch (error) {
-					// Nothing was sent. A changed authority, such as a revocation
-					// since the last read, is signed by a full preparation below.
-					if (!reuseRejected || active.aborted) throw error;
+					// Nothing was sent. A changed authority, such as a revocation or a
+					// stop since the last read, is signed by a full preparation below.
+					if (
+						active.aborted ||
+						(!reuseRejected && !(await stopInvalidated(error, request, active)))
+					)
+						throw error;
 				}
 			}
-			const prepared = await prepare(request, "events.ack", active);
-			drains.set(prepared.context, prepared);
-			await acknowledgePrepared(prepared, request.confirmedCursor, active);
+			for (let attempt = 1; ; attempt++) {
+				const prepared = await prepareEventStep(request, "events.ack", active);
+				drains.set(prepared.context, prepared);
+				try {
+					await acknowledgePrepared(prepared, request.confirmedCursor, active);
+					return;
+				} catch (error) {
+					// The pre-send check failed, so nothing was sent; a stop that landed
+					// after this preparation is signed by the next one (#2712).
+					if (
+						attempt >= eventPreparationAttempts ||
+						!(await stopInvalidated(error, request, active))
+					)
+						throw error;
+				}
+			}
 		},
 		async *events(request, signal) {
 			const active = combined(signal);
@@ -1526,14 +1596,12 @@ export function createConversationRuntimeV2(
 				let previous: Awaited<ReturnType<typeof prepare>> | undefined;
 				for (;;) {
 					active.throwIfAborted();
-					const prepared = previous
-						? await continuePrepared(
-								previous,
-								request,
-								"events.persist",
-								active,
-							)
-						: await prepare(request, "events.persist", active);
+					const prepared = await prepareEventStep(
+						request,
+						"events.persist",
+						active,
+						previous,
+					);
 					previous = undefined;
 					drains.set(prepared.context, prepared);
 					const { state, authority } = prepared;
