@@ -5,7 +5,13 @@ import type {
 	SessionSandboxObservationV1,
 	SessionSandboxReconciliationClaimV1,
 } from "@agent-infra/platform-core";
-import type { V1NetworkPolicy, V1Pod, V1Secret } from "@kubernetes/client-node";
+import type {
+	KubernetesObject,
+	V1NetworkPolicy,
+	V1Pod,
+	V1Secret,
+	V1Service,
+} from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
@@ -682,6 +688,144 @@ describe("production SessionSandbox resource receiver", () => {
 			).toBe(sourcePVC?.uid);
 		},
 	);
+
+	describe("resources created before the managed selector label (#2691)", () => {
+		const managedLabel = "agent-infra.agora.io/managed";
+		/** 模拟 #2684 之前的 Worker 创建的资源：只有 managed 注解，没有同名标签和 selector 项。 */
+		const asLegacy = (f: ReturnType<typeof fixture>) => {
+			for (const object of f.resources.values()) {
+				if (object.metadata?.name !== f.claim.sandbox.resourceName) continue;
+				delete object.metadata.labels?.[managedLabel];
+				if (object.kind === "Service")
+					delete (object as V1Service).spec?.selector?.[managedLabel];
+				if (object.kind === "NetworkPolicy")
+					delete (object as V1NetworkPolicy).spec?.podSelector?.matchLabels?.[
+						managedLabel
+					];
+			}
+		};
+		const readyRunning = async (f: ReturnType<typeof fixture>) => {
+			const signal = new AbortController().signal;
+			await f.receive(f.claim, signal);
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				f.claim.sandbox.resourceName,
+			);
+			if (!pod) throw new Error("Expected prepared Pod");
+			pod.status = {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+			};
+			await f.client.replace(pod);
+			return signal;
+		};
+		/** 空闲回收（drain）之后用保留的 PVC 恢复的认领（与上面 token-rotated 的恢复一致）。 */
+		const resumeAfterDrain = async (
+			f: ReturnType<typeof fixture>,
+			observation: SessionSandboxObservationV1,
+			signal: AbortSignal,
+		) => {
+			const claim = drainClaim(f, observation);
+			if (!claim.lifecycle) throw new Error("Expected management lifecycle");
+			const progress = new Map<string, SessionSandboxDeletionProgressV1>();
+			const stopped = await f.receive(claim, signal, async (entry) => {
+				progress.set(entry.resource.kind, entry);
+				return "committed";
+			});
+			if (stopped.status !== "stopped" || !("sourceStop" in stopped))
+				throw new Error(`Expected a complete stop, got ${stopped.status}`);
+			const replacement: SessionSandboxReconciliationClaimV1 = {
+				...claim,
+				purpose: "prepare",
+				desiredState: "running",
+				drainComputeAllowed: false,
+				policy: { ...f.claim.policy, workloadRevision: 2, managementFence: 2 },
+				deployment: {
+					...(f.claim.deployment as ReturnType<typeof workloadDesiredFixture>),
+					workloadRevision: 2,
+				},
+				previousObservation: stopped,
+				lifecycle: {
+					...claim.lifecycle,
+					stopReceipt: stopped.sourceStop ?? null,
+					deletionProgress: [...progress.values()],
+					preparation: {
+						generation: claim.sandbox.generation,
+						resourceFence: claim.resourceFence,
+					},
+				},
+			};
+			return { claim, stopped, replacement };
+		};
+
+		it("keeps a running legacy Sandbox ready, reclaims it and resumes it from the retained PVC", async () => {
+			const f = fixture();
+			const signal = await readyRunning(f);
+			asLegacy(f);
+			// 升级前创建、仍在运行的 Sandbox：观测仍为 ready，apply 不判冲突。
+			const observation = await f.receive(f.claim, signal);
+			expect(observation.status).toBe("ready");
+			const sourcePVC = observation.resources.find(
+				(resource) => resource.kind === "PersistentVolumeClaim",
+			);
+			// 空闲回收删除旧资源、保留 PVC；随后从保留的 PVC 恢复。
+			const { claim, stopped, replacement } = await resumeAfterDrain(
+				f,
+				observation,
+				signal,
+			);
+			expect(stopped.status).toBe("stopped");
+			expect(
+				await f.client.read("Pod", f.claim.sandbox.resourceName),
+			).toBeNull();
+			await f.receive(replacement, signal);
+			const pvc = await f.client.read<KubernetesObject>(
+				"PersistentVolumeClaim",
+				f.claim.sandbox.resourceName,
+			);
+			expect(pvc?.metadata?.uid).toBe(sourcePVC?.uid);
+			expect(pvc?.metadata?.labels?.[managedLabel]).toBe("session-sandbox-v1");
+			expect(pvc?.metadata?.annotations?.["agent-infra.agora.io/fence"]).toBe(
+				String(claim.resourceFence),
+			);
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				f.claim.sandbox.resourceName,
+			);
+			expect(pod?.metadata?.labels?.[managedLabel]).toBe("session-sandbox-v1");
+		});
+
+		it.each([
+			["a foreign managed label", "label"],
+			["no managed annotation", "annotation"],
+		] as const)(
+			"still refuses to resume from a retained PVC with %s",
+			async (_name, drift) => {
+				const f = fixture();
+				const signal = await readyRunning(f);
+				const observation = await f.receive(f.claim, signal);
+				const { replacement } = await resumeAfterDrain(f, observation, signal);
+				const pvc = f.resources.get(
+					`PersistentVolumeClaim/${f.claim.sandbox.resourceName}`,
+				);
+				if (!pvc?.metadata) throw new Error("Expected retained PVC");
+				if (drift === "label")
+					pvc.metadata.labels = {
+						...pvc.metadata.labels,
+						[managedLabel]: "someone-else",
+					};
+				else delete pvc.metadata.annotations?.[managedLabel];
+				const writes = f.writes.length;
+				await expect(f.receive(replacement, signal)).rejects.toMatchObject({
+					code: "conflict",
+				});
+				expect(f.writes).toHaveLength(writes);
+				expect(
+					await f.client.read("Pod", f.claim.sandbox.resourceName),
+				).toBeNull();
+			},
+		);
+	});
 
 	it("refreshes a source whose Pod resourceVersion moved before any delete (#1523)", async () => {
 		const f = fixture();

@@ -213,13 +213,56 @@ export function hasSessionSandboxIdentityV1(
 	const labels = object?.metadata?.labels ?? {};
 	const annotations = object?.metadata?.annotations ?? {};
 	return (
-		Object.entries(sessionSandboxLabelsV1(identity)).every(
-			([key, value]) => labels[key] === value,
-		) &&
+		sessionSandboxLabelsMatchV1(labels, sessionSandboxLabelsV1(identity)) &&
 		Object.entries(sessionSandboxIdentityAnnotationsV1(identity)).every(
 			([key, value]) => annotations[key] === value,
 		)
 	);
+}
+
+const sessionSandboxManagedLabel = "agent-infra.agora.io/managed";
+
+/**
+ * 实际标签（或 selector）是否包含全部期望项。`managed` 标签只是给 NetworkPolicy 用的标记
+ * （#2684），不是 Sandbox 身份：#2684 之前创建的资源没有它（只有同名注解），所以允许它缺失，
+ * 但不允许取别的值；其余标签照旧严格匹配（#2691）。
+ */
+export function sessionSandboxLabelsMatchV1(
+	actual: Readonly<Record<string, string>> | undefined,
+	expected: Readonly<Record<string, string>>,
+): boolean {
+	return Object.entries(expected).every(
+		([key, value]) =>
+			actual?.[key] === value ||
+			(key === sessionSandboxManagedLabel && actual?.[key] === undefined),
+	);
+}
+
+/** selector 与期望完全相同；#2684 之前创建的对象可以少 managed 这一项（#2691）。 */
+export function sessionSandboxSelectorMatchesV1(
+	actual: Readonly<Record<string, string>> | undefined,
+	expected: Readonly<Record<string, string>>,
+): boolean {
+	const comparable = legacyComparableLabels(actual, expected) ?? {};
+	return (
+		Object.keys(actual ?? {}).length === Object.keys(comparable).length &&
+		Object.entries(comparable).every(([key, value]) => actual?.[key] === value)
+	);
+}
+
+/** 期望的 selector/matchLabels；实际对象是 #2684 之前创建的（没有 managed 项）时去掉这一项（#2691）。 */
+function legacyComparableLabels(
+	actual: Readonly<Record<string, string>> | undefined,
+	expected: Readonly<Record<string, string>> | undefined,
+) {
+	if (
+		!expected ||
+		expected[sessionSandboxManagedLabel] === undefined ||
+		actual?.[sessionSandboxManagedLabel] !== undefined
+	)
+		return expected;
+	const { [sessionSandboxManagedLabel]: _marker, ...legacy } = expected;
+	return legacy;
 }
 
 const labels = (allocation: SessionSandboxAllocationV1) =>
@@ -753,15 +796,27 @@ function resourceSpecMatches(
 				stableJson(actual.data ?? {}) === stableJson(wanted.data ?? {})
 			);
 		}
-		case "NetworkPolicy":
+		case "NetworkPolicy": {
+			const actual = (current as V1NetworkPolicy).spec;
+			const wanted = (expected as V1NetworkPolicy).spec;
+			const matchLabels = legacyComparableLabels(
+				actual?.podSelector?.matchLabels,
+				wanted?.podSelector?.matchLabels,
+			);
 			return (
+				stableJson(normalizeNetworkPolicySpec(actual)) ===
 				stableJson(
-					normalizeNetworkPolicySpec((current as V1NetworkPolicy).spec),
-				) ===
-				stableJson(
-					normalizeNetworkPolicySpec((expected as V1NetworkPolicy).spec),
+					normalizeNetworkPolicySpec(
+						wanted && matchLabels !== wanted.podSelector?.matchLabels
+							? {
+									...wanted,
+									podSelector: { ...wanted.podSelector, matchLabels },
+								}
+							: wanted,
+					),
 				)
 			);
+		}
 		case "Service": {
 			const actual = (current as V1Service).spec;
 			const wanted = (expected as V1Service).spec;
@@ -774,7 +829,10 @@ function resourceSpecMatches(
 				}));
 			return (
 				actual?.type === wanted?.type &&
-				stableJson(actual?.selector) === stableJson(wanted?.selector) &&
+				stableJson(actual?.selector) ===
+					stableJson(
+						legacyComparableLabels(actual?.selector, wanted?.selector),
+					) &&
 				stableJson(ports(actual)) === stableJson(ports(wanted)) &&
 				!actual?.externalIPs?.length &&
 				!actual?.externalName
@@ -814,9 +872,7 @@ function owned(
 		current.metadata?.annotations?.["agent-infra.agora.io/managed"];
 	return (
 		managed === "session-sandbox-v1" &&
-		Object.entries(expectedLabels).every(
-			([key, value]) => currentLabels[key] === value,
-		) &&
+		sessionSandboxLabelsMatchV1(currentLabels, expectedLabels) &&
 		hasSessionSandboxIdentityV1(current, allocation) &&
 		currentFence === String(allocation.resourceFence)
 	);

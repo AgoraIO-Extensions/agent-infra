@@ -209,6 +209,37 @@ describe("Session Sandbox egress enforcement (Kubernetes fixture, not CNI eviden
 		expect(await api.client.read("NetworkPolicy", denied.name)).toBeNull();
 	});
 
+	it("still revokes a policy written before the managed label existed (#2691)", async () => {
+		const { api, adapter } = setup();
+		const known = await adapter.apply(binding);
+		// #2684 之前的 Worker 写的 egress 策略没有 managed 标签，也不在 podSelector 里。
+		const legacy = api.resources.get(`NetworkPolicy/${known.name}`) as
+			| V1NetworkPolicy
+			| undefined;
+		if (!legacy?.metadata) throw new Error("Expected written policy");
+		delete legacy.metadata.labels?.["agent-infra.agora.io/managed"];
+		delete legacy.spec?.podSelector?.matchLabels?.[
+			"agent-infra.agora.io/managed"
+		];
+		const denied = await adapter.revoke(binding, known);
+		expect(
+			(await api.client.read<V1NetworkPolicy>("NetworkPolicy", denied.name))
+				?.spec?.egress,
+		).toEqual([]);
+	});
+
+	it("rejects a policy whose managed label names another owner (#2691)", async () => {
+		const { api, adapter } = setup();
+		const known = await adapter.apply(binding);
+		const foreign = api.resources.get(`NetworkPolicy/${known.name}`);
+		if (!foreign?.metadata) throw new Error("Expected written policy");
+		foreign.metadata.labels = {
+			...foreign.metadata.labels,
+			"agent-infra.agora.io/managed": "someone-else",
+		};
+		await expect(adapter.revoke(binding, known)).rejects.toThrow();
+	});
+
 	it("advances the same Sandbox under the current fence and rejects a stale writer afterwards", async () => {
 		const { api, adapter } = setup();
 		const known = await adapter.apply(binding);

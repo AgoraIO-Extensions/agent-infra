@@ -7,6 +7,7 @@ import {
 import { matchesNetworkPolicySpec } from "./kubernetes-runtime-comparison.js";
 import {
 	sessionSandboxIdentityAnnotationsV1,
+	sessionSandboxLabelsMatchV1,
 	sessionSandboxLabelsV1,
 } from "./session-workload-adapter.js";
 import {
@@ -141,8 +142,10 @@ export function createSessionSandboxEgressV1(options: {
 			actual.metadata?.name !== desired.metadata?.name ||
 			actual.metadata?.deletionTimestamp ||
 			actual.metadata?.ownerReferences?.length ||
-			!Object.entries(desired.metadata?.labels ?? {}).every(
-				([key, value]) => actual.metadata?.labels?.[key] === value,
+			// 升级前创建的 egress NetworkPolicy 没有 managed 标签（#2691）。
+			!sessionSandboxLabelsMatchV1(
+				actual.metadata?.labels,
+				desired.metadata?.labels ?? {},
 			) ||
 			!Object.entries(desired.metadata?.annotations ?? {}).every(
 				([key, value]) => {
