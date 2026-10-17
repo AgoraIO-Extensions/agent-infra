@@ -2450,14 +2450,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		};
 		if (selector === "commands") {
 			const commands = await this.discoverNativeCommands(nativeRead);
-			const skillNames = verifiedClaudeNativeSkillNames(
-				this.options.skillDirectory,
-			);
 			const projection = projectClaudeNativeCommands({
 				nativeSessionRef: read.nativeSessionRef,
 				configVersion: this.options.configVersion,
 				commands,
-				...(skillNames ? { skillNames } : {}),
 			});
 			if (projection.selector !== "commands") nativeMetadataUnsupported();
 			read.assertCurrent();
