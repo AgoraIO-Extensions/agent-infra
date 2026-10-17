@@ -1437,7 +1437,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		if (command.kind === "submit-turn" && !("text" in command.input))
 			unavailable();
 		const content: Exclude<
-			Parameters<typeof claudeQuery>[1]["message"]["content"],
+			NonNullable<Parameters<typeof claudeQuery>[1]>["message"]["content"],
 			string
 		> = [
 			{
@@ -1493,7 +1493,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					data: bytes.toString("base64"),
 				},
 			} as Exclude<
-				Parameters<typeof claudeQuery>[1]["message"]["content"],
+				NonNullable<Parameters<typeof claudeQuery>[1]>["message"]["content"],
 				string
 			>[number]);
 		}
@@ -1917,6 +1917,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			}
 		};
 		let native: ReturnType<typeof claudeQuery>;
+		let initialMessage: Parameters<typeof claudeQuery>[1];
 		try {
 			const skillLaunchOptions = claudeNativeSkillLaunchOptions(
 				this.options.skillDirectory,
@@ -1951,6 +1952,16 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						return target;
 					}
 				: undefined;
+			initialMessage = {
+				type: "user" as const,
+				session_id: before.nativeId,
+				uuid: userMessageId,
+				parent_tool_use_id: null,
+				message: {
+					role: "user" as const,
+					content,
+				},
+			};
 			native = claudeQuery(
 				{
 					pathToClaudeCodeExecutable: this.executable,
@@ -1994,16 +2005,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						? { resume: before.nativeId }
 						: { sessionId: before.nativeId }),
 				},
-				{
-					type: "user",
-					session_id: before.nativeId,
-					uuid: userMessageId,
-					parent_tool_use_id: null,
-					message: {
-						role: "user",
-						content,
-					},
-				},
+				command.kind === "native-command" ? undefined : initialMessage,
 			);
 		} catch {
 			if (standardMcp) await standardMcp.close().catch(() => {});
@@ -2058,6 +2060,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				});
 				nativeSkillUnsupported();
 			}
+			native.send(initialMessage);
 		}
 		handle = {
 			native,
