@@ -1785,6 +1785,24 @@ describe("Trusted conversation Runtime adapter", () => {
 		expect(h.fetcher).not.toHaveBeenCalled();
 		h.runtime.close();
 	});
+	it("marks an unaccepted business stop as control-only", async () => {
+		const h = harness();
+		Object.assign(h.claim, {
+			operation: "conversation.turn.stop.v1",
+			executionStatus: "submitted",
+			stopPending: true,
+			stopRequestId: "stop",
+		});
+		const decision = await h.runtime.authorization.authorize({
+			...h.claim,
+			claim: h.claim,
+		});
+		expect(decision).toMatchObject({
+			outcome: "allowed",
+			authority: { controlOnly: true },
+		});
+		h.runtime.close();
+	});
 	it("rechecks identity before sending a previously authorized user stop", async () => {
 		const h = harness();
 		Object.assign(h.claim, {

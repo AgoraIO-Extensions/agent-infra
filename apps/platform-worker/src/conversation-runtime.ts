@@ -1181,6 +1181,11 @@ export function createConversationRuntimeV2(
 				);
 				if (decision.outcome !== "allowed") return decision;
 				const { context } = decision;
+				const controlOnlyStop =
+					claim.operation === "conversation.turn.stop.v1" &&
+					claim.stopPending &&
+					(claim.executionStatus === "submitted" ||
+						claim.executionStatus === "waiting");
 				const reference = Object.freeze({
 					...(context.kind === "business"
 						? { authorizationRecordId: context.authorizationRecordId }
@@ -1201,7 +1206,9 @@ export function createConversationRuntimeV2(
 						sessionGeneration: claim.sessionGeneration,
 						authorizationRevision: claim.authorizationRevision,
 						runtimeGrant: reference,
-						...(context.kind === "legacy-control" || claim.metadataRecovery
+						...(context.kind === "legacy-control" ||
+							claim.metadataRecovery ||
+							controlOnlyStop
 							? { controlOnly: true as const }
 							: {}),
 					},
