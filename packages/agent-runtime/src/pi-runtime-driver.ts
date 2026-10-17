@@ -4,6 +4,10 @@ import type {
 	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
+import {
+	type BrowserMcpGatewayV1,
+	createBrowserMcpGatewayV1,
+} from "./browser-mcp-gateway.js";
 import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
@@ -61,9 +65,7 @@ export const PiRuntimeDriver = {
 			...options,
 			nativeSkillPrompt: (name, parameters) =>
 				`/skill:${name}${parameters.length > 0 ? ` ${parameters}` : ""}`,
-			// The pinned Pi adapter still has no verified Browser transport seam; keep
-			// the descriptor surface empty until an extension/ACP callback is available.
-			browserCapability: undefined,
+			browserCapability: options.browserCapability,
 			supportsAttachments: true,
 			supportsResultFiles: true,
 			supportsConnection: options.standardConnectionClient !== undefined,
@@ -80,10 +82,9 @@ export const PiRuntimeDriver = {
 							? "failed"
 							: "unknown",
 			openSession: async (session) => {
-				// Pi's official MCP extension is enabled only for a Host-owned
-				// loopback bridge. Connection credentials never cross this boundary.
-				if (session.browser)
-					throw new Error("RUNTIME_BROWSER_EXECUTION_UNAVAILABLE");
+				// Pi's official MCP extension is enabled only for Host-owned
+				// loopback bridges. Connection credentials and Browser state never
+				// cross this boundary.
 				const callbacks = {
 					admit: session.admit,
 					update: session.update,
@@ -112,6 +113,8 @@ export const PiRuntimeDriver = {
 				let nativeSessionRef = "";
 				let connectionClient: StandardMcpClient | undefined;
 				let connectionGateway: StandardMcpAcpBridge | undefined;
+				let browserGateway: BrowserMcpGatewayV1 | undefined;
+				let mcpExtensionEnabled = false;
 				let nativeCancel: (() => Promise<void>) | undefined;
 				let nativeClose: (() => Promise<void>) | undefined;
 				const launch = await options.launch(
@@ -121,6 +124,35 @@ export const PiRuntimeDriver = {
 					resolveModelCredential,
 				);
 				try {
+					if (session.browser) {
+						const capability =
+							typeof options.browserCapability === "function"
+								? options.browserCapability()
+								: options.browserCapability;
+						if (capability?.status !== "available" || !session.executionId)
+							throw new Error("RUNTIME_BROWSER_MCP_UNAVAILABLE");
+						browserGateway = await createBrowserMcpGatewayV1({
+							capability,
+							context: session.browser,
+							executionId: session.executionId,
+						});
+						const header = browserGateway.server.headers[0];
+						if (
+							header?.name !== "Authorization" ||
+							!/^Bearer [\x21-\x7e]{16,4096}$/.test(header.value)
+						)
+							throw new Error("RUNTIME_BROWSER_MCP_UNAVAILABLE");
+						launch.args = [...launch.args, "--extension", "builtin:mcp"];
+						launch.env = {
+							...launch.env,
+							AGENT_INFRA_PI_BROWSER_MCP_URL: browserGateway.server.url,
+							AGENT_INFRA_PI_BROWSER_MCP_TOKEN: header.value.replace(
+								/^Bearer /,
+								"",
+							),
+						};
+						mcpExtensionEnabled = true;
+					}
 					if (options.standardConnectionClient) {
 						if (!session.connectionReference)
 							throw new Error("CONNECTION_STANDARD_CLIENT_UNAVAILABLE");
@@ -146,6 +178,7 @@ export const PiRuntimeDriver = {
 									} finally {
 										await connectionGateway?.close().catch(() => {});
 										await connectionClient?.close().catch(() => {});
+										await browserGateway?.close().catch(() => {});
 									}
 								}
 							},
@@ -153,7 +186,8 @@ export const PiRuntimeDriver = {
 						const header = connectionGateway.server.headers[0];
 						if (header?.name !== "Authorization")
 							throw new Error("CONNECTION_STANDARD_CLIENT_UNAVAILABLE");
-						launch.args = [...launch.args, "--extension", "builtin:mcp"];
+						if (!mcpExtensionEnabled)
+							launch.args = [...launch.args, "--extension", "builtin:mcp"];
 						launch.env = {
 							...launch.env,
 							AGENT_INFRA_PI_CONNECTION_MCP_URL: connectionGateway.server.url,
@@ -179,7 +213,7 @@ export const PiRuntimeDriver = {
 					return {
 						...native,
 						reusable: () =>
-							options.standardConnectionClient
+							options.standardConnectionClient || browserGateway
 								? false
 								: (native.reusable?.() ?? true),
 						startTurn: (next) => {
@@ -195,12 +229,14 @@ export const PiRuntimeDriver = {
 							try {
 								await native.close();
 							} finally {
+								await browserGateway?.close().catch(() => {});
 								await connectionGateway?.close().catch(() => {});
 								await connectionClient?.close().catch(() => {});
 							}
 						},
 					};
 				} catch (error) {
+					await browserGateway?.close().catch(() => {});
 					await connectionGateway?.close().catch(() => {});
 					await connectionClient?.close().catch(() => {});
 					await launch.close?.().catch(() => {});

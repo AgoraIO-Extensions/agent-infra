@@ -23,6 +23,8 @@ export interface PiWorkspaceToolOptionsV1 {
 
 const piConnectionMcpUrlEnvironment = "AGENT_INFRA_PI_CONNECTION_MCP_URL";
 const piConnectionMcpTokenEnvironment = "AGENT_INFRA_PI_CONNECTION_MCP_TOKEN";
+const piBrowserMcpUrlEnvironment = "AGENT_INFRA_PI_BROWSER_MCP_URL";
+const piBrowserMcpTokenEnvironment = "AGENT_INFRA_PI_BROWSER_MCP_TOKEN";
 
 /** Resolve the Host-owned loopback MCP bridge without accepting a native URL or token input. */
 export function piConnectionMcpConfiguration(
@@ -53,6 +55,43 @@ export function piConnectionMcpConfiguration(
 			throw new Error();
 	} catch {
 		throw new Error("RUNTIME_CONNECTION_MCP_UNAVAILABLE");
+	}
+	return {
+		url,
+		headers: { Authorization: `Bearer ${token}` },
+		exposure: "direct",
+	};
+}
+
+/** Resolve the Host-owned loopback Browser MCP bridge without accepting native input. */
+export function piBrowserMcpConfiguration(
+	environment: NodeJS.ProcessEnv = process.env,
+): McpServerConfig | undefined {
+	const url = environment[piBrowserMcpUrlEnvironment];
+	const token = environment[piBrowserMcpTokenEnvironment];
+	if (url === undefined && token === undefined) return undefined;
+	if (
+		typeof url !== "string" ||
+		typeof token !== "string" ||
+		!/^[\x21-\x7e]{16,4096}$/.test(token)
+	)
+		throw new Error("RUNTIME_BROWSER_MCP_UNAVAILABLE");
+	try {
+		const parsed = new URL(url);
+		if (
+			parsed.protocol !== "http:" ||
+			!(
+				(parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") &&
+				parsed.pathname === "/mcp"
+			) ||
+			parsed.username ||
+			parsed.password ||
+			parsed.search ||
+			parsed.hash
+		)
+			throw new Error();
+	} catch {
+		throw new Error("RUNTIME_BROWSER_MCP_UNAVAILABLE");
 	}
 	return {
 		url,
@@ -121,11 +160,13 @@ export default function piWorkspacePolicy(pi: ExtensionAPI) {
 	const memory = join(workspace, ".memory");
 	const tools = createPiWorkspaceTools(workspace);
 	const connectionMcp = piConnectionMcpConfiguration();
+	const browserMcp = piBrowserMcpConfiguration();
 	pi.registerTool(tools.read);
 	pi.registerTool(tools.write);
 	pi.registerTool(tools.edit);
 	if (connectionMcp)
 		pi.registerMcpServer("agent-infra-connection", connectionMcp);
+	if (browserMcp) pi.registerMcpServer("agent-infra-browser", browserMcp);
 	pi.on("session_start", async (_event, context) => {
 		context.ui.setTitle("agent-infra-policy-v1");
 	});
@@ -133,9 +174,13 @@ export default function piWorkspacePolicy(pi: ExtensionAPI) {
 		const connectionTool = /^mcp__agent[-_]infra[-_]connection__/.test(
 			event.toolName,
 		);
+		const browserTool = /^mcp__agent[-_]infra[-_]browser__/.test(
+			event.toolName,
+		);
 		if (
 			!["read", "write", "edit"].includes(event.toolName) &&
-			!(connectionMcp && connectionTool)
+			!(connectionMcp && connectionTool) &&
+			!(browserMcp && browserTool)
 		)
 			return { block: true, reason: "RUNTIME_WORKSPACE_ACCESS_DENIED" };
 	});

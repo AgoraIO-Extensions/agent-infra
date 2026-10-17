@@ -46,45 +46,76 @@ const capability: BrowserCapabilityAvailableV1 = {
 	},
 };
 
-it.each([undefined, capability])(
-	"fails closed without a pinned Pi Browser transport seam (%s)",
-	async (browserCapability) => {
-		const path = await mkdtemp(join(tmpdir(), "pi-browser-tools-"));
-		const launch = vi.fn(async () => {
-			throw new Error("Descriptor discovery must not launch a native peer");
-		});
-		const driver = await PiRuntimeDriver.open({
-			path,
-			configVersion: "controlled",
-			defaultModelOptionId: "primary",
-			defaultReasoningLevel: "high",
-			modelOptions: [
-				{
-					modelOptionId: "primary",
-					nativeModelId: "configured/model",
-					reasoningLevels: ["high"],
-				},
-			],
-			browserCapability,
-			launch,
-		});
-		try {
-			const tools = driver.getBrowserToolDescriptors();
-			expect(tools).toEqual([]);
-			for (const tool of tools) {
-				expect(tool.capabilityVersion).toBe(1);
-				expect(tool.inputSchema).toMatchObject({
-					type: "object",
-					additionalProperties: false,
-				});
-			}
-			expect(JSON.stringify(tools)).not.toMatch(
-				/credential|playwright|chromium|imageDigest|example\.test|selector|javascript/i,
-			);
-			expect(launch).not.toHaveBeenCalled();
-		} finally {
-			await driver.close();
-			await rm(path, { recursive: true, force: true });
+it("keeps the Browser descriptor surface empty without a verified capability", async () => {
+	const path = await mkdtemp(join(tmpdir(), "pi-browser-tools-"));
+	const launch = vi.fn(async () => {
+		throw new Error("Descriptor discovery must not launch a native peer");
+	});
+	const driver = await PiRuntimeDriver.open({
+		path,
+		configVersion: "controlled",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "configured/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		browserCapability: undefined,
+		launch,
+	});
+	try {
+		const tools = driver.getBrowserToolDescriptors();
+		expect(tools).toEqual([]);
+		for (const tool of tools) {
+			expect(tool.capabilityVersion).toBe(1);
+			expect(tool.inputSchema).toMatchObject({
+				type: "object",
+				additionalProperties: false,
+			});
 		}
-	},
-);
+		expect(JSON.stringify(tools)).not.toMatch(
+			/credential|playwright|chromium|imageDigest|example\.test|selector|javascript/i,
+		);
+		expect(launch).not.toHaveBeenCalled();
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("publishes bounded Browser descriptors from the verified Pi capability", async () => {
+	const path = await mkdtemp(join(tmpdir(), "pi-browser-tools-"));
+	const launch = vi.fn(async () => {
+		throw new Error("Descriptor discovery must not launch a native peer");
+	});
+	const driver = await PiRuntimeDriver.open({
+		path,
+		configVersion: "controlled",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "configured/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		browserCapability: capability,
+		launch,
+	});
+	try {
+		const tools = driver.getBrowserToolDescriptors();
+		expect(tools.map((tool) => tool.name)).toContain("browser_navigate");
+		expect(tools.map((tool) => tool.name)).toContain("browser_observe");
+		expect(JSON.stringify(tools)).not.toMatch(
+			/credential|playwright|imageDigest|example\.test|selector|javascript/i,
+		);
+		expect(launch).not.toHaveBeenCalled();
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});

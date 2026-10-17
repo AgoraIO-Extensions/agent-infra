@@ -15,6 +15,7 @@ import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "vitest";
 import {
 	createPiWorkspaceTools,
+	piBrowserMcpConfiguration,
 	piConnectionMcpConfiguration,
 } from "./pi-policy.js";
 
@@ -39,6 +40,29 @@ it("accepts only a Host-owned loopback MCP bridge configuration", () => {
 		},
 	])
 		expect(() => piConnectionMcpConfiguration(environment)).toThrow();
+});
+
+it("accepts only a Host-owned loopback Browser MCP bridge configuration", () => {
+	const value = piBrowserMcpConfiguration({
+		AGENT_INFRA_PI_BROWSER_MCP_URL: "http://127.0.0.1:4322/mcp",
+		AGENT_INFRA_PI_BROWSER_MCP_TOKEN: "synthetic-browser-token",
+	});
+	expect(value).toEqual({
+		url: "http://127.0.0.1:4322/mcp",
+		headers: { Authorization: "Bearer synthetic-browser-token" },
+		exposure: "direct",
+	});
+	for (const environment of [
+		{
+			AGENT_INFRA_PI_BROWSER_MCP_URL: "https://browser.invalid/mcp",
+			AGENT_INFRA_PI_BROWSER_MCP_TOKEN: "synthetic-browser-token",
+		},
+		{
+			AGENT_INFRA_PI_BROWSER_MCP_URL: "http://127.0.0.1:4322/mcp",
+			AGENT_INFRA_PI_BROWSER_MCP_TOKEN: "short",
+		},
+	])
+		expect(() => piBrowserMcpConfiguration(environment)).toThrow();
 });
 
 it.each(["read", "write", "edit"] as const)(
