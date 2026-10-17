@@ -516,6 +516,26 @@ export class PostgresConversationDispatchStoreV1
 										and s.resource_fence > 0
 										and s.resource_observation->>'status' = 'ready'
 								)
+								or (
+									operation in (
+										'conversation.turn.submit.v1',
+										'conversation.turn.regenerate.v1'
+									)
+									and exists (
+										select 1
+										from platform.conversation_executions e
+										join platform.agent_applications ap
+											on ap.agent_id = e.agent_id
+										where e.execution_id = outbox_items.payload->>'executionId'
+											and e.conversation_id = outbox_items.scope_id
+											and e.status in ('processing', 'unknown')
+											and (
+												ap.status is distinct from 'available'
+												or ap.desired_state is distinct from 'running'
+												or ap.service_availability is distinct from 'ready'
+											)
+									)
+								)
 							)
 						)
 						or (
