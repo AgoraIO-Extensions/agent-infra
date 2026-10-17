@@ -2,7 +2,7 @@
 
 - 报告：`/private/var/folders/k1/181yvqs97nz8r3sy62r007m40000gn/T/architecture-review-20261016-110358.html`
 - 工作区：`/Users/admin/agent-infra/.worktrees/uiux-review-20261017`
-- 基线：`origin/main` @ `2e85c834b9e1f3b9119de55bf084889560e56dc4`；原 `/Users/admin/agent-infra` 脏工作区未改动。
+- 基线：`origin/main` @ `6d38e9bb2ecbe1a3dfc5230f74cfc43dc6958d1c`；原 `/Users/admin/agent-infra` 脏工作区未改动。
 - 设计基线：index.html SHA-256 `f66a8694aecee90322161e9a31d682073919ae846d488312e225edf03232aaaf`
 - 开始时间：2026-10-16
 - 规则：每个报告编号只在此处登记一次；完成前保留证据（文件/测试/截图）。
@@ -297,3 +297,4 @@
 - 2026-10-17：origin/main 再前进到 `b2c5af3` 后已在本 worktree fast-forward 同步；UI 暂存改动 stash/pop 再次恢复无冲突。
 - 2026-10-17：origin/main 再前进到 `2e85c834` 后已在本 worktree fast-forward 同步；UI 暂存改动 stash/pop 再次恢复无冲突。
 - 2026-10-17：使用固定 Kiro E2E 环境部署 Web 提交 `af20d54e`；真实账号回读 Agent 详情、创建会话、SSE 处理中态、成功模型回复和执行详情 Dialog。Skill 目录授权版本为 0，OAuth 回调与 Skill 详情仍保留未闭环。
+- 2026-10-17：origin/main 再前进到 `6d38e9bb`（#2694）后将 UI 提交 rebase 到最新基线；Worker 变更与本 UI 差异无冲突。
