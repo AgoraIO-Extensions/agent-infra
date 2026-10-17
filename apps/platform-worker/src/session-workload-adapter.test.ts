@@ -708,6 +708,32 @@ describe("session sandbox workload adapter", () => {
 		});
 	});
 
+	it("records an already-absent owned resource without a prior delete attempt", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const observed = await adapter.observe(allocation);
+		const pod = observed.resources.find((resource) => resource.kind === "Pod");
+		if (!pod) throw new Error("Missing Pod observation");
+		await client.delete({
+			kind: "Pod",
+			metadata: { name: allocation.podName },
+		});
+		const progress: SessionSandboxDeletionProgressV1[] = [];
+		await adapter.cleanup(allocation, observed.resources, {
+			managementFence: 4,
+			recordDeletionProgress: async (entry) => {
+				progress.push(entry);
+				return "committed";
+			},
+		});
+		expect(progress.find((entry) => entry.resource.kind === "Pod")).toMatchObject({
+			state: "absent",
+			deleteAttempted: true,
+			deleteCallResult: "unknown",
+		});
+	});
+
 	it("fails closed when an existing delete attempt sees resourceVersion drift", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
