@@ -2,7 +2,7 @@
 
 - 报告：`/private/var/folders/k1/181yvqs97nz8r3sy62r007m40000gn/T/architecture-review-20261016-110358.html`
 - 工作区：`/Users/admin/agent-infra/.worktrees/uiux-review-20261017`
-- 基线：`origin/main` @ `245bf0683c33420d23dc3b743596bdf3e66ecba4`；原 `/Users/admin/agent-infra` 脏工作区未改动。
+- 基线：`origin/main` @ `413ad84e846044f8cbee0fcd1f471b6754dca2bf`；原 `/Users/admin/agent-infra` 脏工作区未改动。
 - 设计基线：index.html SHA-256 `f66a8694aecee90322161e9a31d682073919ae846d488312e225edf03232aaaf`
 - 开始时间：2026-10-16
 - 规则：每个报告编号只在此处登记一次；完成前保留证据（文件/测试/截图）。
@@ -257,7 +257,7 @@
 
 ## 未闭环项的证据边界
 
-- **R4-16**：已使用 Kiro 固定本地 E2E 账号回读登录态、已有 Agent、真实新会话写入和成功模型回复；Skill 目录当前服务端授权版本为 0 个，无法取得 Skill 详情，OAuth 回调也未在本轮触发，因此仍保留未勾选。真实回执：会话 `273756c6-cb0c-4fe7-87e4-e34b6b3604b6`，成功回复显示「UIUX E2E 已成功。当前模型：GPT-5。」；未打印或提交任何密钥。
+- **R4-16**：已使用 Kiro 固定本地 E2E 账号回读登录态、已有 Agent、真实新会话写入和成功模型回复；Skill 项目创建后已停用清理，但固定环境没有启用 Skill Provider 导入器，导入返回失败，目录授权版本仍为 0，无法取得 Skill 详情。模板配置明确 `connectionEnabled: false`，OAuth 回调在这套环境没有入口，因此仍保留未勾选。真实回执：会话 `273756c6-cb0c-4fe7-87e4-e34b6b3604b6`，成功回复显示「UIUX E2E 已成功。当前模型：GPT-5。」；未打印或提交任何密钥。
 - **V-01**：代码侧已修复表格窄屏溢出，桌面管理矩阵子集通过；完整 24 路由 × 320/360/390/430/600/820/1366/1920 矩阵仍未完成。
 - **G-07**：UI 已闭环并在固定 Kiro E2E 的真实已完成 Execution 中回读请求模型/实际模型（均为 `gpt-5.6-sol`）与「不会静默切换到个人 Key 或未授权模型」保护文案；回退事件存在时会按平台事件映射用户文案。当前正式契约仍只保存 fallback payload 的实际 `modelOptionId`、`reasoningLevel` 和固定 `reason=selection_unavailable`，因此没有伪造未提供的逐 Execution 请求模型或回退原因；若要补充回退场景的真实 E2E，需要后端提供可控的 fallback fixture/契约。
 - 2026-10-17：对话页窄视口头部压缩：≤430px 隐藏非关键来源文字但保留可访问名称，收紧状态行与内容顶距；对话桌面九视口矩阵现已通过。
@@ -302,3 +302,4 @@
 - 2026-10-17：origin/main 再前进到 `245bf068`（#2692）后将 UI 提交 rebase 到最新基线；无冲突。
 - 2026-10-17：G-07 UI 闭环在固定 Kiro E2E 的真实完成 Execution 中回读；请求模型与实际模型均为 `gpt-5.6-sol`，执行详情 Dialog 和保护文案可见，正式 fallback fixture 仍不虚构。
 - 2026-10-17：`#2692` 更新 Runtime operation 联合类型后，收紧模型事实判定为 `payload.kind === "model"`；最新 `pnpm --filter @agent-infra/web check-types` 与 G-07 定向测试均通过（1/1）。
+- 2026-10-17：origin/main 前进到 `413ad84e`（#2702/#2703/#2704/#2705）后 rebase 无冲突；固定 E2E 尝试创建并停用临时 Skill 项目，Provider 导入返回失败，回读当前 API 配置确认无 Skill Provider 导入器且模板 `connectionEnabled=false`。
