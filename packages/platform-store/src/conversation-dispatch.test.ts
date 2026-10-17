@@ -3331,6 +3331,55 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("discovers stopped-Agent recovery for a processing Turn without a ready Sandbox", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "historical-host",
+		});
+		const store = new PostgresConversationDispatchStoreV1({ databaseUrl });
+		try {
+			await client`update platform.agent_applications
+				set status = 'stopped', desired_state = 'stopped', service_availability = null
+				where agent_id = 'agent-dispatch'`;
+			await client`update platform.session_sandbox_allocations
+				set status = 'unknown', desired_state = 'stopped',
+					resource_observation = ${client.json({ status: "ready", resources: [] })}
+				where conversation_id = ${work.conversationId}`;
+			expect(await store.findDispatchable({ limit: 256 })).toContainEqual({
+				itemId: work.itemId,
+				operation: "conversation.turn.submit.v1",
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("prepares stopped-Agent recovery without reserving an unready Sandbox", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "historical-host",
+		});
+		await client`update platform.agent_applications
+			set status = 'stopped', desired_state = 'stopped', service_availability = null
+			where agent_id = 'agent-dispatch'`;
+		await client`update platform.session_sandbox_allocations
+			set status = 'unknown', desired_state = 'stopped',
+				resource_observation = ${client.json({ status: "ready", resources: [] })}
+			where conversation_id = ${work.conversationId}`;
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			expect(
+				await store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("filters stopped lifecycle-free reconciliation even with stale ready allocation", async () => {
 		const { work, itemId, store } =
 			await seedSandboxPrepareIntent("discovery-stopped");

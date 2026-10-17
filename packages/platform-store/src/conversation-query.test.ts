@@ -565,6 +565,44 @@ describe("PostgreSQL Conversation query", () => {
 		}
 	});
 
+	it("treats a completed management stop as settled instead of preparing", async () => {
+		const [originalAllocation] = await client<
+			{ status: string; desired_state: string; resource_observation: unknown }[]
+		>`select status, desired_state, resource_observation
+			from platform.session_sandbox_allocations where conversation_id = 'conversation-1'`;
+		const intentId = "conversation:sandbox:management-stop-query";
+		await client`delete from platform.outbox_items where id = ${intentId}`;
+		await client`insert into platform.outbox_items
+			(id, scope_type, scope_id, operation, payload, trace_id, request_id, status, available_at, created_at, updated_at)
+			values (${intentId}, 'conversation', 'conversation-1', 'conversation.sandbox.reconcile.v1',
+				${client.json({ schemaVersion: 1, conversationId: "conversation-1", sessionGeneration: 1 })},
+				'management-stop-query', 'management-stop-query', 'succeeded', now(), now(), now())`;
+		if (!originalAllocation) throw new Error("Expected Sandbox fixture");
+		try {
+			await client`update platform.session_sandbox_allocations
+				set status = 'stopped', desired_state = 'stopped'
+				where conversation_id = 'conversation-1'`;
+			await client`update platform.outbox_items
+				set status = 'succeeded', payload = payload || ${client.json({
+					lifecycle: {
+						schemaVersion: 1,
+						authority: { targetDesiredState: "stopped" },
+						stopReceipt: {},
+					},
+				})}
+				where id = ${intentId}`;
+			expect(await query.get(actorOne, "conversation-1")).toMatchObject({
+			conversation: { sandboxReady: false, sandboxResumable: true },
+		});
+		} finally {
+			await client`update platform.session_sandbox_allocations
+				set status = ${originalAllocation.status}, desired_state = ${originalAllocation.desired_state},
+					resource_observation = ${client.json(originalAllocation.resource_observation)}
+				where conversation_id = 'conversation-1'`;
+			await client`delete from platform.outbox_items where id = ${intentId}`;
+		}
+	});
+
 	it("hides all query paths for a Session with an unbound persisted Execution", async () => {
 		const [original] =
 			await client`select sandbox_id from platform.conversation_executions
