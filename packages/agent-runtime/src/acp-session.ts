@@ -36,6 +36,8 @@ export interface AcpLaunch {
 	) => Promise<boolean>;
 	/** Session-scoped MCP servers assembled by the trusted Runtime adapter. */
 	mcpServers?: readonly McpServer[];
+	/** OpenCode exposes command and compaction RPCs beyond generic ACP prompt. */
+	nativeCommandMode?: "opencode";
 }
 
 export async function openAcpSession(options: {
@@ -374,15 +376,61 @@ export async function openAcpSession(options: {
 					)
 				)
 					throw new Error("RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED");
-				const text = `/${command.capabilityName}${
-					command.parameters.length > 0 ? ` ${command.parameters}` : ""
-				}`;
-				const response = await connection.agent.request("session/prompt", {
-					sessionId: nativeId,
-					prompt: [{ type: "text", text }],
-				});
+				const response =
+					options.launch.nativeCommandMode === "opencode"
+						? await (
+								connection.agent.request as unknown as (
+									method: string,
+									params: Record<string, unknown>,
+								) => Promise<unknown>
+							)(
+								command.capabilityName === "compact"
+									? "session/summarize"
+									: "session/command",
+								{
+									sessionId: nativeId,
+									...(command.capabilityName === "compact"
+										? {
+												customInstructions:
+													command.parameters.length > 0
+														? command.parameters
+														: undefined,
+											}
+										: {
+												name: command.capabilityName,
+												args: command.parameters,
+											}),
+								},
+							)
+						: await connection.agent.request("session/prompt", {
+								sessionId: nativeId,
+								prompt: [
+									{
+										type: "text",
+										text: `/${command.capabilityName}${
+											command.parameters.length > 0
+												? ` ${command.parameters}`
+												: ""
+										}`,
+									},
+								],
+							});
 				await updates;
-				return response as { stopReason: string; checkpoint?: string };
+				return {
+					stopReason:
+						response &&
+						typeof response === "object" &&
+						"stopReason" in response &&
+						typeof response.stopReason === "string"
+							? response.stopReason
+							: "end_turn",
+					...(response &&
+					typeof response === "object" &&
+					"checkpoint" in response &&
+					typeof response.checkpoint === "string"
+						? { checkpoint: response.checkpoint }
+						: {}),
+				};
 			},
 			async discoverCommands(input: {
 				readonly signal: AbortSignal;

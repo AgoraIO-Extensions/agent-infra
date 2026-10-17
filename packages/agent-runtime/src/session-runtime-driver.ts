@@ -1802,6 +1802,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const before = file.read();
 		const ref = before.binding.ref;
 		if (before.cancelled) unavailable();
+		if (command.nativeSessionRef !== ref) nativeSkillUnsupported();
 		if (before.turns.some((turn) => !terminal(turn.status)))
 			return this.resolve(file, command, { outcome: "busy" });
 		if (
