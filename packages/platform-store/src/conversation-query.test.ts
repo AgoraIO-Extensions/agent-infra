@@ -571,7 +571,9 @@ describe("PostgreSQL Conversation query", () => {
 		>`select status, desired_state, resource_observation
 			from platform.session_sandbox_allocations where conversation_id = 'conversation-1'`;
 		const intentId = "conversation:sandbox:management-stop-query";
+		const newerIntentId = "conversation:sandbox:management-stop-query:newer";
 		await client`delete from platform.outbox_items where id = ${intentId}`;
+		await client`delete from platform.outbox_items where id = ${newerIntentId}`;
 		await client`insert into platform.outbox_items
 			(id, scope_type, scope_id, operation, payload, trace_id, request_id, status, available_at, created_at, updated_at)
 			values (${intentId}, 'conversation', 'conversation-1', 'conversation.sandbox.reconcile.v1',
@@ -594,12 +596,21 @@ describe("PostgreSQL Conversation query", () => {
 			expect(await query.get(actorOne, "conversation-1")).toMatchObject({
 				conversation: { sandboxReady: false, sandboxResumable: true },
 			});
+			await client`insert into platform.outbox_items
+				(id, scope_type, scope_id, operation, payload, trace_id, request_id, status, available_at, created_at, updated_at)
+				values (${newerIntentId}, 'conversation', 'conversation-1', 'conversation.sandbox.reconcile.v1',
+					${client.json({ schemaVersion: 1, conversationId: "conversation-1", sessionGeneration: 1 })},
+					'management-stop-query-newer', 'management-stop-query-newer', 'pending', now(), now() + interval '1 second', now() + interval '1 second')`;
+			expect(
+				(await query.get(actorOne, "conversation-1"))?.conversation,
+			).not.toHaveProperty("sandboxResumable");
 		} finally {
 			await client`update platform.session_sandbox_allocations
 				set status = ${originalAllocation.status}, desired_state = ${originalAllocation.desired_state},
 					resource_observation = ${client.json(originalAllocation.resource_observation as Parameters<typeof client.json>[0])}
 				where conversation_id = 'conversation-1'`;
 			await client`delete from platform.outbox_items where id = ${intentId}`;
+			await client`delete from platform.outbox_items where id = ${newerIntentId}`;
 		}
 	});
 

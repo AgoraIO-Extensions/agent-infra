@@ -335,6 +335,15 @@ export const sessionSandboxResumableSql = `exists (
    and reclaimed.desired_state = 'stopped'
    and stopped.payload->'lifecycle'->'authority'->>'targetDesiredState' = 'stopped'
    and stopped.payload->'lifecycle' ? 'stopReceipt'
+   and not exists (
+     select 1
+     from platform.outbox_items newer
+     where newer.scope_type = 'conversation'
+       and newer.scope_id = stopped.scope_id
+       and newer.operation = 'conversation.sandbox.reconcile.v1'
+       and (newer.created_at > stopped.created_at
+         or (newer.created_at = stopped.created_at and newer.id > stopped.id))
+   )
 )`;
 
 export async function readSessionSandboxResumable(
