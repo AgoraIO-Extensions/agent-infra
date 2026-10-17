@@ -33,6 +33,14 @@ const ordinarySession = BrowserSessionProjectionV1Schema.parse({
 		roles: ["employee"],
 	},
 });
+const administratorSession = BrowserSessionProjectionV1Schema.parse({
+	schemaVersion: 1,
+	user: {
+		userId: "user-admin-1",
+		displayName: "Administrator",
+		roles: ["employee", "system_admin"],
+	},
+});
 
 afterEach(cleanup);
 
@@ -128,6 +136,34 @@ describe("AgentConfigurationScreen", () => {
 		expect(screen.queryByLabelText("新 Secret 值")).toBeNull();
 	});
 
+	it("replaces a configured Secret through a write-only dialog", () => {
+		const onSave = vi.fn();
+		render(
+			<AgentConfigurationScreen
+				agent={agent}
+				onSave={onSave}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "替换 Secret" }));
+		expect(screen.getByRole("dialog", { name: "替换 Secret" })).toBeTruthy();
+		fireEvent.change(screen.getByLabelText("新 Secret 值"), {
+			target: { value: "replacement-value" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "校验并替换" }));
+		expect(screen.queryByRole("dialog", { name: "替换 Secret" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
+		expect(onSave).toHaveBeenCalledWith(
+			expect.objectContaining({
+				secrets: [{ name: "MODEL_API_KEY", value: "replacement-value" }],
+			}),
+		);
+		expect(screen.queryByText("replacement-value")).toBeNull();
+	});
+
 	it("does not render configuration data or controls for an ordinary-user projection", () => {
 		render(
 			<AgentConfigurationScreen
@@ -141,6 +177,24 @@ describe("AgentConfigurationScreen", () => {
 
 		expect(screen.getByRole("heading", { name: "配置不可用" })).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "校验并保存" })).toBeNull();
+		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
+	});
+
+	it("explains the separate administrator view without exposing Owner fields", () => {
+		render(
+			<AgentConfigurationScreen
+				agent={agent}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: administratorSession }}
+				submitting={false}
+			/>,
+		);
+
+		expect(
+			screen.getByRole("heading", { name: "管理员管理视图" }),
+		).toBeTruthy();
+		expect(screen.getByText(/当前账号不是此 Agent 的 Owner/)).toBeTruthy();
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
 	});
 

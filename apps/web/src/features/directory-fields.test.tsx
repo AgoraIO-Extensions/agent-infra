@@ -162,7 +162,9 @@ describe("Agent detail and Owner configuration directory fields", () => {
 		fireEvent.change(input, { target: { value: "New" } });
 		fireEvent.click(await screen.findByRole("option", { name: /New Owner/ }));
 		fireEvent.click(
-			screen.getByRole("button", { name: "移除 Directory User" }),
+			screen.getByRole("button", {
+				name: "移除 可使用的用户：Directory User",
+			}),
 		);
 		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 		expect(onSave).toHaveBeenCalledWith(
@@ -214,7 +216,9 @@ describe("Agent detail and Owner configuration directory fields", () => {
 		if (!(ownerField instanceof HTMLElement))
 			throw new Error("Missing Owner field");
 		fireEvent.click(
-			within(ownerField).getByRole("button", { name: "移除 目录记录不可用" }),
+			within(ownerField).getByRole("button", {
+				name: "移除 Owner：目录记录不可用",
+			}),
 		);
 		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 		expect(onSave).not.toHaveBeenCalled();
@@ -277,7 +281,9 @@ it.each(["pending", "disabled"])(
 			expect(input.hasAttribute("disabled")).toBe(true);
 		expect(
 			screen
-				.getByRole("button", { name: "移除 Current Owner" })
+				.getByRole("button", {
+					name: "移除 Owner：Current Owner",
+				})
 				.hasAttribute("disabled"),
 		).toBe(true);
 	},

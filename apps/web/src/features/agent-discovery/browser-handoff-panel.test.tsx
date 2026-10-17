@@ -147,14 +147,14 @@ describe("Browser handoff and confirmation panel", () => {
 			"Agent、Session 和授权绑定由服务端维护。",
 		);
 		expect(screen.getByRole("alert").textContent).toContain("页面版本：4");
-		screen.getByRole("button", { name: "暂停 Agent" }).click();
+		screen.getByRole("button", { name: "拒绝接管" }).click();
 		screen.getByRole("button", { name: "接管浏览器" }).click();
 		expect(onPauseAgent).toHaveBeenCalledWith({ id: "handoff-1", binding });
 		expect(onTakeOver).toHaveBeenCalledWith({ id: "handoff-1", binding });
 	});
 
 	it.each([
-		["active", "交回 Agent"],
+		["active", "交还 Agent"],
 		["returning", "正在重新校验页面、Session 和授权状态。"],
 		["completed", "本次接管已经结束，不能重复使用原请求。"],
 		["revoked", "本次接管已经结束，不能重复使用原请求。"],
@@ -180,7 +180,7 @@ describe("Browser handoff and confirmation panel", () => {
 		);
 		expect(screen.getByRole("alert").textContent).toContain(detail);
 		if (status === "active") {
-			screen.getByRole("button", { name: "交回 Agent" }).click();
+			screen.getByRole("button", { name: "交还 Agent" }).click();
 			expect(onReturnToAgent).toHaveBeenCalledWith({
 				id: "handoff-1",
 				binding,

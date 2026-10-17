@@ -8,9 +8,10 @@ import {
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
-import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
+import { formatRelativeDate } from "../../lib/format-date.js";
 import type {
 	ConversationDetailProjectionV2,
 	PersistedConversationEventV2,
@@ -110,7 +111,11 @@ export function ConversationMessages({
 					: undefined;
 				return (
 					<div className="exchange space-y-6" key={message.messageId}>
-						<MessageFrame name="你" user>
+						<MessageFrame
+							name="你"
+							user
+							time={formatRelativeDate(message.createdAt)}
+						>
 							<p className="message-text whitespace-pre-wrap break-words">
 								{message.text}
 							</p>
@@ -123,13 +128,16 @@ export function ConversationMessages({
 										variant="outline"
 										onClick={() => onResend(message.text)}
 									>
-										准备重新发送
+										重新发送
 									</Button>
 								</Alert>
 							)}
 						</MessageFrame>
 						{selected ? (
-							<MessageFrame name={agentName}>
+							<MessageFrame
+								name={agentName}
+								time={formatRelativeDate(selected.createdAt)}
+							>
 								<div className="answer space-y-3">
 									<AssistantMarkdown>
 										{selected.executionId
@@ -148,18 +156,16 @@ export function ConversationMessages({
 												)
 											: selected.text || answerNotWrittenYet}
 									</AssistantMarkdown>
-									<Badge
-										variant={
-											selectedStatus === "failed" ? "destructive" : "secondary"
-										}
-									>
-										{selectedStatus
-											? executionStatusLabels[selectedStatus]
-											: "等待处理"}
-									</Badge>
-									{selected.status === "failed" && (
-										<p>{commandFailure(selected.error.code)}</p>
-									)}
+									{selectedStatus === "failed" ? (
+										<div className="answer-status space-y-1">
+											<Badge variant="destructive">执行失败</Badge>
+											<p>请求未完成，请稍后重试或联系 Owner。</p>
+										</div>
+									) : selectedStatus ? (
+										<p className="answer-status">
+											{executionStatusLabels[selectedStatus]}
+										</p>
+									) : null}
 								</div>
 								<div className="answer-tools flex flex-wrap items-center gap-2">
 									<Button
@@ -268,13 +274,15 @@ export function ConversationMessages({
 								downloadingFileId={downloadingFileId}
 							/>
 						)}
-						<p className="text-muted-foreground text-sm">
+						<p className="flex items-center gap-2 text-muted-foreground text-sm">
+							<span className="loading-spinner" aria-hidden="true" />
 							{
 								executionStatusLabels[
 									executionStatus(events, id, "processing") ?? "processing"
 								]
 							}
 						</p>
+						<p className="text-muted-foreground text-sm">正在整理结果…</p>
 						<Button variant="ghost" onClick={() => onExecution(id)}>
 							执行详情
 						</Button>
@@ -348,10 +356,12 @@ function formatResultSize(value: number) {
 
 function MessageFrame({
 	name,
+	time,
 	user = false,
 	children,
 }: {
 	name: string;
+	time?: string;
 	user?: boolean;
 	children: ReactNode;
 }) {
@@ -364,7 +374,10 @@ function MessageFrame({
 				{user ? <User className="size-4" /> : <Bot className="size-4" />}
 			</div>
 			<div className="chat-message-body space-y-3">
-				<div className="message-heading font-semibold">{name}</div>
+				<div className="message-heading font-semibold">
+					{name}
+					{time ? <time className="message-time"> · {time}</time> : null}
+				</div>
 				{children}
 			</div>
 		</article>

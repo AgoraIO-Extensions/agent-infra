@@ -114,7 +114,9 @@ export function SkillHubDirectoryScreen({
 			</header>
 
 			{state.kind === "loading" ? (
-				<p aria-live="polite">正在加载 Skill 目录…</p>
+				<p className="loading-line" role="status">
+					正在加载 Skill 目录…
+				</p>
 			) : state.kind === "unavailable" ? (
 				<Alert>
 					<AlertDescription>
@@ -255,6 +257,19 @@ export function SkillHubDirectoryScreen({
 							<EmptyDescription>
 								没有匹配当前筛选条件的 Skill 版本。
 							</EmptyDescription>
+							{normalizedQuery || provider !== "all" || visibility !== "all" ? (
+								<Button
+									className="mt-4"
+									variant="outline"
+									onClick={() => {
+										setQuery("");
+										setProvider("all");
+										setVisibility("all");
+									}}
+								>
+									清除筛选
+								</Button>
+							) : null}
 						</Empty>
 					)}
 					<p className="mt-6 text-muted-foreground text-sm">

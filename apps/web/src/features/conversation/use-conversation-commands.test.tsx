@@ -478,6 +478,7 @@ describe("Conversation commands through the generated client", () => {
 			);
 			// 404 同时表示「Agent 已停止」：还没有证据证明失去了访问权限，所以不闭锁。
 			expect(result.current.isDenied).toBe(false);
+			expect(result.current.canRetry).toBe(true);
 			act(() => {
 				expect(result.current.submitText("Second try")).toBe(true);
 			});

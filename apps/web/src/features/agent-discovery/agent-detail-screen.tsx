@@ -5,6 +5,7 @@ import {
 	Bot,
 	ExternalLink,
 	History,
+	KeyRound,
 	MessageCircle,
 	RefreshCw,
 	Settings,
@@ -39,6 +40,7 @@ import type {
 } from "./browser-handoff-panel.js";
 
 type AgentDetailScreenProps = {
+	connectionUrl?: string;
 	browserCapability?: BrowserCapabilityProjectionV1;
 	browserWorkflow?: BrowserWorkflowState;
 	browserHandoff?: BrowserHandoffPanelStateV1;
@@ -98,6 +100,7 @@ function interactionReadiness(
 }
 
 export function AgentDetailScreen({
+	connectionUrl,
 	browserCapability,
 	browserWorkflow,
 	browserHandoff,
@@ -145,11 +148,11 @@ export function AgentDetailScreen({
 					) : null}
 				</Alert>
 				<Link
-					className={buttonVariants({ variant: "link", className: "px-0" })}
+					className={buttonVariants({ variant: "ghost", size: "sm" })}
 					to="/agents"
 				>
 					<ArrowLeft aria-hidden="true" />
-					返回 Agent 列表
+					返回 Agent 目录
 				</Link>
 			</section>
 		);
@@ -171,11 +174,11 @@ export function AgentDetailScreen({
 		<section aria-labelledby="agent-detail-heading" className="agent-detail">
 			<div className="agent-detail-back">
 				<Link
-					className={buttonVariants({ variant: "link", className: "px-0" })}
+					className={buttonVariants({ variant: "ghost", size: "sm" })}
 					to="/agents"
 				>
 					<ArrowLeft aria-hidden="true" />
-					返回 Agent 列表
+					返回 Agent 目录
 				</Link>
 			</div>
 			<header className="page-heading flex flex-wrap items-start justify-between gap-6">
@@ -258,6 +261,9 @@ export function AgentDetailScreen({
 							: "历史保留，当前不可发送消息。"}
 					</span>
 				)}
+				{agent.capabilities.connection ? (
+					<Badge variant="outline">支持 Connection</Badge>
+				) : null}
 			</div>
 			<div className="agent-detail-grid">
 				<div className="agent-detail-panel">
@@ -318,7 +324,7 @@ export function AgentDetailScreen({
 											)
 											.join("；") || "无可选择模型"}
 									</dd>
-									<dt className="text-muted-foreground">默认选项</dt>
+									<dt className="text-muted-foreground">默认推理档位</dt>
 									<dd className="break-words">
 										{defaultModel
 											? `${defaultModel.displayName}${agent.configuration.defaultReasoningLevel ? ` · ${agent.configuration.defaultReasoningLevel}` : ""}`
@@ -359,11 +365,35 @@ export function AgentDetailScreen({
 								: "当前 Agent 未提供 Connection 能力。"}
 						</p>
 						{agent.capabilities.connection && (
-							<p className="text-muted-foreground text-sm">
-								登录、OAuth、客户端授权和原调用查询均在独立 Connection
-								中完成。能力说明不代表当前主体已经获得授权，Owner
-								不能替其他主体授权。
-							</p>
+							<div
+								className={`connection-notice ${connectionUrl ? "" : "connection-notice-pending"}`}
+							>
+								<KeyRound aria-hidden="true" />
+								<div className="min-w-0 flex-1">
+									<strong>
+										{connectionUrl
+											? "需要 Connection 授权"
+											: "等待 Connection 授权返回"}
+									</strong>
+									<p>
+										登录、OAuth、客户端授权和原调用查询均在独立 Connection
+										中完成。当前主体需要单独完成授权。
+									</p>
+									<p className="connection-action-scope">
+										操作范围 · 当前 Agent 的受控外部能力
+									</p>
+									{connectionUrl && (
+										<a
+											className={buttonVariants({ variant: "outline" })}
+											href={connectionUrl}
+											target="_blank"
+											rel="noopener noreferrer"
+										>
+											打开 Connection
+										</a>
+									)}
+								</div>
+							</div>
 						)}
 					</section>
 					{browserCapability && (
@@ -395,7 +425,13 @@ export function AgentDetailScreen({
 						<ul className="detail-list">
 							{agent.configuration.owners.map((owner) => (
 								<li key={owner.userId}>
-									<strong>{owner.displayName}</strong>
+									<div>
+										<strong>主要 Owner · {owner.displayName}</strong>
+										<small>负责配置与运行范围</small>
+									</div>
+									<Badge variant="outline" data-status="ready">
+										有效
+									</Badge>
 								</li>
 							))}
 							{agent.configuration.owners.length === 0 && <li>未提供 Owner</li>}

@@ -71,6 +71,7 @@ describe("Administrator employee access control", () => {
 		fireEvent.click(screen.getByRole("option", { name: /Alice/ }));
 		await screen.findByText("当前状态：未禁用");
 		fireEvent.click(screen.getByRole("button", { name: "禁用员工" }));
+		fireEvent.click(screen.getByRole("button", { name: "确认" }));
 		await waitFor(() =>
 			expect(setPlatformUserDisabledV2).toHaveBeenCalledWith({
 				path: { userId: "11111111-1111-4111-8111-111111111111" },

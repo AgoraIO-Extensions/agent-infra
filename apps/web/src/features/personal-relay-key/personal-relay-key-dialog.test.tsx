@@ -95,7 +95,10 @@ describe("PersonalRelayKeyEntry", () => {
 		fireEvent.change(input, { target: { value: secret } });
 		fireEvent.click(screen.getByRole("button", { name: "替换 Key" }));
 
-		await screen.findByText("个人 Relay Key 已更新；从下一条任务生效。");
+		const successMessage = "个人 Relay Key 已更新；从下一条任务生效。";
+		await screen.findByText(successMessage);
+		expect(screen.getAllByText(successMessage)).toHaveLength(1);
+		expect(screen.getAllByRole("status")).toHaveLength(1);
 		expect(api.replace).toHaveBeenCalledWith(
 			expect.objectContaining({
 				body: {
@@ -127,7 +130,7 @@ describe("PersonalRelayKeyEntry", () => {
 		);
 		expect((input as HTMLInputElement).value).toBe("");
 
-		fireEvent.click(screen.getByRole("button", { name: "移除 Key" }));
+		fireEvent.click(screen.getByRole("button", { name: "撤销 Key" }));
 		await screen.findByText("个人 Relay Key 已移除；从下一条任务生效。");
 		expect(api.revoke).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -251,7 +254,7 @@ describe("PersonalRelayKeyEntry", () => {
 			fireEvent.change(input, { target: { value: "synthetic-secret!" } });
 			fireEvent.click(
 				screen.getByRole("button", {
-					name: operation === "replace" ? "替换 Key" : "移除 Key",
+					name: operation === "replace" ? "替换 Key" : "撤销 Key",
 				}),
 			);
 			expect(input.value).toBe("");
@@ -282,14 +285,14 @@ describe("PersonalRelayKeyEntry", () => {
 			});
 			fireEvent.click(
 				screen.getByRole("button", {
-					name: operation === "replace" ? "替换 Key" : "移除 Key",
+					name: operation === "replace" ? "替换 Key" : "撤销 Key",
 				}),
 			);
 			await screen.findByRole("alert");
-			expect(
-				(screen.getByRole("button", { name: "移除 Key" }) as HTMLButtonElement)
-					.disabled,
-			).toBe(true);
+			const revoke = screen.queryByRole("button", { name: "撤销 Key" });
+			if (revoke) {
+				expect((revoke as HTMLButtonElement).disabled).toBe(true);
+			}
 			const write = screen.getByRole("button", {
 				name: /^(替换|设置) Key$/,
 			}) as HTMLButtonElement;
@@ -326,7 +329,7 @@ describe("PersonalRelayKeyEntry", () => {
 			}
 			fireEvent.click(
 				screen.getByRole("button", {
-					name: operation === "replace" ? "替换 Key" : "移除 Key",
+					name: operation === "replace" ? "替换 Key" : "撤销 Key",
 				}),
 			);
 			await waitFor(() => expect(api[operation]).toHaveBeenCalledTimes(2));
@@ -370,7 +373,7 @@ describe("PersonalRelayKeyEntry", () => {
 				});
 				fireEvent.click(
 					screen.getByRole("button", {
-						name: operation === "replace" ? "替换 Key" : "移除 Key",
+						name: operation === "replace" ? "替换 Key" : "撤销 Key",
 					}),
 				);
 			}

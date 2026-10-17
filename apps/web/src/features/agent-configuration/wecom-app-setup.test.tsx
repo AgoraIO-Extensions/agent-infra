@@ -214,6 +214,10 @@ it("clears the displayed application state immediately when unbinding", async ()
 		expect(screen.getByRole("button", { name: "解除应用绑定" })).toBeTruthy(),
 	);
 	fireEvent.click(screen.getByRole("button", { name: "解除应用绑定" }));
+	expect(
+		screen.getByRole("dialog", { name: "解除企微机器人绑定？" }),
+	).toBeTruthy();
+	fireEvent.click(screen.getByRole("button", { name: "确认解除" }));
 	expect(screen.getByText("未配置")).toBeTruthy();
 	expect(screen.queryByText(/callback.test/)).toBeNull();
 	expect(onUnbind).toHaveBeenCalledWith({

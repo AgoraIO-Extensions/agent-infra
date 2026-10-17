@@ -1486,7 +1486,7 @@ describe("functional conversation screen", () => {
 				: undefined,
 		);
 		fireEvent.change(await composer(), { target: { value: "Kept draft" } });
-		await screen.findByRole("heading", { name: "最近对话" });
+		await screen.findByRole("heading", { name: /个人历史/ });
 		await waitFor(() => expect(streams).toHaveLength(1));
 		fireEvent.click(
 			screen.getByRole("button", { name: "此 Agent 的全部历史" }),
@@ -2010,6 +2010,7 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 		fireEvent.click(screen.getByRole("button", { name: "刷新 Agent 状态" }));
 		await waitFor(() => expect(screen.queryByText(/Agent 已停止/)).toBeNull());
 		expect(input.value).toBe("Resend me");
+		expect(screen.getByRole("button", { name: "重新发送" })).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
 		await waitFor(() => expect(posts).toHaveLength(2));
 		await waitFor(() => expect(input.value).toBe(""));

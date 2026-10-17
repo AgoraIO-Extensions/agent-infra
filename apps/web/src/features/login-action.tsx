@@ -1,7 +1,10 @@
-import { type FormEvent, useState } from "react";
+import { Eye, EyeOff, LoaderCircle } from "lucide-react";
+import { type FormEvent, useRef, useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Toast } from "@/components/ui/toast";
 
 type LoginActionProps = {
 	endpoint: string;
@@ -31,10 +34,23 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 	const [login, setLogin] = useState("");
 	const [password, setPassword] = useState("");
 	const [state, setState] = useState<LoginState>("idle");
+	const [errorStatus, setErrorStatus] = useState<number | null>(null);
+	const [showPassword, setShowPassword] = useState(false);
+	const loginRef = useRef<HTMLInputElement>(null);
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
+		if (!login.trim()) {
+			setErrorStatus(400);
+			loginRef.current?.focus();
+			return;
+		}
+		if (!password) {
+			setErrorStatus(422);
+			return;
+		}
 		setState("submitting");
+		setErrorStatus(null);
 		try {
 			const target = new URL(endpoint, window.location.href);
 			if (!isSafeLoginEndpoint(endpoint, window.location.origin))
@@ -48,22 +64,41 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ login, password }),
 			});
-			if (!response.ok) throw new Error(`Login failed: ${response.status}`);
+			if (!response.ok) {
+				setErrorStatus(response.status);
+				throw new Error(`Login failed: ${response.status}`);
+			}
 			await onLoggedIn();
 			setPassword("");
 			setState("idle");
 		} catch {
 			setState("error");
+			setPassword("");
 		}
 	}
+	const loginError =
+		!login.trim() && errorStatus === 400 ? "请输入公司账号。" : undefined;
+	const passwordError =
+		!password && errorStatus === 422 ? "请输入密码。" : undefined;
+	const serverError =
+		state === "error" && errorStatus !== 400 && errorStatus !== 422
+			? errorStatus === 503 || (errorStatus !== null && errorStatus >= 500)
+				? "登录服务暂时不可用，请稍后重试。"
+				: errorStatus === 403
+					? "请从平台入口地址访问后重试。"
+					: "账号或密码不正确，请检查后重试。"
+			: undefined;
 
 	return (
-		<form className="max-w-sm space-y-4" onSubmit={submit}>
+		<form className="login-form space-y-4" onSubmit={submit} noValidate>
 			<div className="space-y-2">
 				<Label htmlFor="platform-login">账号</Label>
 				<Input
 					id="platform-login"
 					name="login"
+					placeholder="输入公司账号"
+					autoCapitalize="none"
+					spellCheck={false}
 					autoComplete="username"
 					maxLength={256}
 					aria-invalid={state === "error" || undefined}
@@ -72,17 +107,20 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 					}
 					value={login}
 					onChange={(event) => setLogin(event.target.value)}
-					required
+					ref={loginRef}
 					disabled={state === "submitting"}
 				/>
+				{loginError && <p className="field-error">{loginError}</p>}
 			</div>
 			<div className="space-y-2">
 				<Label htmlFor="platform-password">密码</Label>
 				<Input
 					id="platform-password"
 					name="password"
-					type="password"
+					type={showPassword ? "text" : "password"}
 					autoComplete="current-password"
+					placeholder="输入密码"
+					spellCheck={false}
 					maxLength={4096}
 					aria-invalid={state === "error" || undefined}
 					aria-describedby={
@@ -90,21 +128,43 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 					}
 					value={password}
 					onChange={(event) => setPassword(event.target.value)}
-					required
 					disabled={state === "submitting"}
 				/>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon"
+					className="login-password-toggle"
+					aria-label={showPassword ? "隐藏密码" : "显示密码"}
+					onClick={() => setShowPassword((value) => !value)}
+				>
+					{showPassword ? (
+						<EyeOff aria-hidden="true" />
+					) : (
+						<Eye aria-hidden="true" />
+					)}
+				</Button>
+				{passwordError && <p className="field-error">{passwordError}</p>}
 			</div>
-			<Button type="submit" disabled={state === "submitting"}>
+			<Button
+				className="login-submit"
+				type="submit"
+				disabled={state === "submitting"}
+			>
+				{state === "submitting" && (
+					<LoaderCircle className="animate-spin" aria-hidden="true" />
+				)}
 				{state === "submitting" ? "正在登录…" : "登录"}
 			</Button>
-			{state === "error" && (
-				<p
+			{serverError && (
+				<Alert
 					id="platform-login-error"
-					className="text-destructive text-sm"
-					role="status"
+					className="login-error"
+					variant="destructive"
 				>
-					登录失败，请检查账号或稍后重试。
-				</p>
+					<AlertDescription>{serverError}</AlertDescription>
+					<Toast className="sr-only">{serverError}</Toast>
+				</Alert>
 			)}
 		</form>
 	);

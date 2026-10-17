@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Bot, Plus } from "lucide-react";
+import { ArrowRight, Bot, Plus } from "lucide-react";
 import type { ReactNode } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -93,7 +93,13 @@ function ReadNotice({
 	onRetry: () => void;
 	refreshing?: boolean;
 }) {
-	if (state.kind === "loading") return <p role="status">正在加载{label}…</p>;
+	if (state.kind === "loading")
+		return (
+			<p className="loading-line" role="status">
+				<span className="loading-spinner" aria-hidden="true" />
+				正在加载{label}…
+			</p>
+		);
 	const reason = state.reason;
 	const message =
 		reason === "authentication-required"
@@ -212,12 +218,18 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 													</Badge>
 												) : agent ? (
 													<AgentStatus agent={agent} />
+												) : agents.kind === "loading" ? (
+													<Badge variant="outline">正在确认 Agent</Badge>
 												) : (
 													<Badge variant="outline">状态暂时无法确认</Badge>
 												)}
 												<h3>{conversation.title ?? "未命名对话"}</h3>
 												<p>
-													{agent?.name ?? "所属 Agent 暂时无法读取"} ·{" "}
+													{agent?.name ??
+														(agents.kind === "loading"
+															? "正在确认 Agent"
+															: "所属 Agent 暂时无法读取")}{" "}
+													·{" "}
 													<time dateTime={conversation.updatedAt}>
 														{new Date(conversation.updatedAt).toLocaleString(
 															"zh-CN",
@@ -230,7 +242,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 												)}
 											</div>
 											<Link
-												className={linkClass}
+												className={buttonVariants({ variant: "ghost" })}
 												to="/chat/$agentId/{-$conversationId}"
 												params={{
 													agentId: conversation.agentId,
@@ -407,7 +419,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 				title="可用 Agent"
 				action={
 					<Link className={buttonVariants({ variant: "ghost" })} to="/agents">
-						查看全部 Agent
+						查看全部 Agent <ArrowRight aria-hidden="true" />
 					</Link>
 				}
 			>
@@ -460,6 +472,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 				title="我的申请"
 				action={
 					<Link className={linkClass} to="/my-agents/new">
+						<Plus aria-hidden="true" />
 						创建申请
 					</Link>
 				}

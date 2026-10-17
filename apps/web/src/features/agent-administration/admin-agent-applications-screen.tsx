@@ -1,4 +1,4 @@
-import { RefreshCwIcon } from "lucide-react";
+import { RefreshCwIcon, Search } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -26,7 +26,9 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { Toast } from "@/components/ui/toast";
 import { useResultFocus } from "@/hooks/use-result-focus";
+import { formatDateTime } from "../../lib/format-date.js";
 import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -88,15 +90,11 @@ function DecisionFeedback({
 }) {
 	const resultRef = useResultFocus(decision);
 	return decision ? (
-		<p
-			ref={resultRef}
-			tabIndex={-1}
-			className="mt-4 font-medium text-sm"
-			role="status"
-		>
-			已提交 {decision.name} 的审批结果：
-			{agentManagementStatusLabels[decision.status]}。
-		</p>
+		<Toast ref={resultRef} tabIndex={-1} className="mt-4 font-medium text-sm">
+			{decision.status === "rejected"
+				? "已驳回，申请人会看到修改原因。"
+				: `已提交 ${decision.name} 的审批结果：${agentManagementStatusLabels[decision.status]}。`}
+		</Toast>
 	) : null;
 }
 
@@ -115,6 +113,7 @@ function ApplicationReview({
 	const [localDecisionPending, setLocalDecisionPending] = useState(false);
 	const lastDecisionError = useRef(decisionError);
 	const reasonId = useId();
+	const dialogTitleId = useId();
 	const reasonInput = useRef<HTMLTextAreaElement>(null);
 	const matchingPendingDecision =
 		pendingDecision?.applicationId === application.applicationId
@@ -168,8 +167,13 @@ function ApplicationReview({
 			>
 				{currentDecision ? "审批提交中…" : "审阅申请"}
 			</DialogTrigger>
-			<DialogContent showCloseButton={!decisionSubmitting}>
-				<DialogTitle>{rejecting ? "驳回申请" : "审阅创建申请"}</DialogTitle>
+			<DialogContent
+				showCloseButton={!decisionSubmitting}
+				initialFocus={() => document.getElementById(dialogTitleId)}
+			>
+				<DialogTitle id={dialogTitleId} tabIndex={-1}>
+					{rejecting ? "驳回申请" : "审阅创建申请"}
+				</DialogTitle>
 				<DialogDescription>
 					{rejecting
 						? "请输入申请人可以据此修改的具体原因。"
@@ -205,28 +209,27 @@ function ApplicationReview({
 							<dt>Owner</dt>
 							<dd className="break-words">
 								{configuration.owners
-									.map((owner) => owner.displayName || owner.userId)
+									.map((owner) => owner.displayName || "目录记录不可用")
 									.join("、") || "未提供"}
 							</dd>
 							<dt>使用范围</dt>
 							<dd className="break-all">
-								{configuration.availability
-									.map((target) =>
-										target.kind === "user"
-											? `员工：${target.userId}`
-											: `组织：${target.organizationId}`,
-									)
-									.join("；") || "未提供额外范围"}
+								{configuration.availability.length
+									? `${configuration.availability.filter((target) => target.kind === "user").length} 名员工、${configuration.availability.filter((target) => target.kind === "organization").length} 个组织`
+									: "未提供额外范围"}
 							</dd>
 							<dt>模型</dt>
 							<dd className="break-words">
 								{configuration.modelOptions
-									.map((model) => `${model.displayName}（${model.modelId}）`)
+									.map((model) => model.displayName)
 									.join("、") || "未提供模型选项"}
 							</dd>
 							<dt>默认模型</dt>
 							<dd className="break-all">
-								{configuration.defaultModelOptionId ?? "未提供"}
+								{configuration.modelOptions.find(
+									(model) =>
+										model.optionId === configuration.defaultModelOptionId,
+								)?.displayName ?? "未提供"}
 							</dd>
 							<dt>默认推理强度</dt>
 							<dd className="break-words">
@@ -303,6 +306,7 @@ function ApplicationReview({
 								disabled={decisionSubmitting}
 								required
 								value={reason}
+								placeholder="说明需要修改的范围、模型或渠道"
 								aria-invalid={reasonError || undefined}
 								aria-describedby={reasonError ? `${reasonId}-error` : undefined}
 								onChange={(event) => {
@@ -311,9 +315,9 @@ function ApplicationReview({
 								}}
 							/>
 							{reasonError && (
-								<Alert id={`${reasonId}-error`} variant="destructive">
-									<AlertDescription>请输入驳回原因。</AlertDescription>
-								</Alert>
+								<p id={`${reasonId}-error`} className="field-error">
+									请填写驳回原因。
+								</p>
 							)}
 						</div>
 						<div className="flex flex-wrap gap-3">
@@ -376,7 +380,7 @@ export function AdminAgentApplicationsScreen({
 			[
 				a.name,
 				a.description,
-				...a.configuration.owners.map((o) => o.displayName || o.userId),
+				...a.configuration.owners.map((o) => o.displayName || "目录记录不可用"),
 			]
 				.join(" ")
 				.toLocaleLowerCase()
@@ -415,12 +419,21 @@ export function AdminAgentApplicationsScreen({
 					<p>审批信息保持紧凑：来源、Owner、范围、模型与渠道一屏完成判断。</p>
 				</div>
 				{state.kind === "ready" && (
-					<Badge variant="outline" data-status="pending_approval">
-						{applications.filter((a) => a.status === "pending_approval").length}{" "}
-						项待处理
-					</Badge>
+					<div className="flex flex-wrap items-center gap-2">
+						<Badge variant="outline">系统管理员 · 只读审计</Badge>
+						<Badge variant="outline" data-status="pending_approval">
+							{
+								applications.filter((a) => a.status === "pending_approval")
+									.length
+							}{" "}
+							项待处理
+						</Badge>
+					</div>
 				)}
 			</header>
+			<p className="page-note">
+				审批记录会保留；驳回后申请人可以修改并重新提交。
+			</p>
 			<DecisionFeedback decision={decisionResult} />
 			{state.kind === "loading" ? (
 				<p role="status">正在读取审批申请…</p>
@@ -447,12 +460,15 @@ export function AdminAgentApplicationsScreen({
 			) : (
 				<>
 					<div className="approval-filters">
-						<div>
-							<Label htmlFor={`${filterId}-search`}>搜索申请或 Owner</Label>
+						<div className="approval-search-field">
+							<Label className="sr-only" htmlFor={`${filterId}-search`}>
+								搜索申请或 Owner
+							</Label>
+							<Search aria-hidden="true" />
 							<Input
 								id={`${filterId}-search`}
 								type="search"
-								placeholder="搜索申请名称或 Owner"
+								placeholder="搜索申请、Owner 或风险"
 								value={search}
 								onChange={(event) => setSearch(event.target.value)}
 							/>
@@ -496,14 +512,18 @@ export function AdminAgentApplicationsScreen({
 							<TableBody>
 								{filteredApplications.map((application) => (
 									<TableRow key={application.applicationId}>
-										<TableCell>
+										<TableCell data-label="申请">
 											<strong>{application.name}</strong>
+											<small>
+												编号 · {application.applicationId.slice(0, 12)} ·
+												申请人由当前会话确定
+											</small>
 											<small>{application.description}</small>
 											<Badge variant="outline" data-status={application.status}>
 												{agentManagementStatusLabels[application.status]}
 											</Badge>
 										</TableCell>
-										<TableCell>
+										<TableCell data-label="来源 / Owner">
 											{application.source.kind === "standard"
 												? application.source.templateId
 												: "manifest" in application.source
@@ -512,30 +532,26 @@ export function AdminAgentApplicationsScreen({
 											<small>
 												Owner ·{" "}
 												{application.configuration.owners
-													.map((o) => o.displayName || o.userId)
+													.map((o) => o.displayName || "目录记录不可用")
 													.join("、") || "未提供"}
 											</small>
 										</TableCell>
-										<TableCell>
-											{application.configuration.availability
-												.map((target) =>
-													target.kind === "user"
-														? `用户 ${target.userId}`
-														: `组织 ${target.organizationId}`,
-												)
-												.join("、") || "未额外指定"}
+										<TableCell data-label="可用范围">
+											{application.configuration.availability.length > 0
+												? `${application.configuration.availability.filter((target) => target.kind === "user").length} 名员工、${application.configuration.availability.filter((target) => target.kind === "organization").length} 个组织`
+												: "未额外指定"}
 										</TableCell>
-										<TableCell>
+										<TableCell data-label="模型">
 											{application.configuration.modelOptions
 												.map((model) => model.displayName)
 												.join("、") || "未提供模型选项"}
 										</TableCell>
-										<TableCell>
+										<TableCell data-label="提交时间">
 											<time dateTime={application.submittedAt}>
-												{new Date(application.submittedAt).toLocaleString()}
+												{formatDateTime(application.submittedAt)}
 											</time>
 										</TableCell>
-										<TableCell>
+										<TableCell data-label="操作">
 											{application.status === "pending_approval" && (
 												<ApplicationReview
 													application={application}

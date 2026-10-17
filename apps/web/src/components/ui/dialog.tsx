@@ -29,7 +29,7 @@ function DialogOverlay({
 		<DialogPrimitive.Backdrop
 			data-slot="dialog-overlay"
 			className={cn(
-				"data-open:fade-in-0 data-closed:fade-out-0 fixed inset-0 isolate z-50 bg-black/10 duration-100 data-closed:animate-out data-open:animate-in supports-backdrop-filter:backdrop-blur-xs",
+				"data-open:fade-in-0 data-closed:fade-out-0 fixed inset-0 isolate z-[80] bg-foreground/36 duration-180 data-closed:animate-out data-open:animate-in",
 				className,
 			)}
 			{...props}
@@ -51,9 +51,10 @@ function DialogContent({
 			<DialogPrimitive.Popup
 				data-slot="dialog-content"
 				className={cn(
-					"fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100dvh-40px)] w-[calc(100%-32px)] max-w-[620px] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-auto rounded-md bg-popover p-6 text-popover-foreground text-sm outline-none ring-1 ring-foreground/10 sm:p-7",
+					"fixed top-1/2 left-1/2 z-[81] grid max-h-[calc(100dvh-40px)] w-[calc(100%-32px)] max-w-[620px] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-auto rounded-[16px] border border-foreground/25 bg-popover p-6 text-[13px] text-popover-foreground shadow-[0_24px_80px_color-mix(in_oklch,var(--foreground)_25%,transparent)] outline-none",
 					className,
 				)}
+				aria-modal="true"
 				{...props}
 			>
 				{children}
@@ -99,7 +100,7 @@ function DialogFooter({
 		<div
 			data-slot="dialog-footer"
 			className={cn(
-				"flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
+				"mt-2 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
 				className,
 			)}
 			{...props}
@@ -118,7 +119,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
 	return (
 		<DialogPrimitive.Title
 			data-slot="dialog-title"
-			className={cn("pr-10 font-semibold text-xl", className)}
+			className={cn("pr-10 font-[620] text-[19px] leading-[1.35]", className)}
 			{...props}
 		/>
 	);

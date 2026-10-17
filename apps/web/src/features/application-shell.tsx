@@ -19,6 +19,7 @@ import {
 	MessageCircle,
 	Plus,
 	Settings2,
+	Sparkles,
 	X,
 } from "lucide-react";
 import {
@@ -202,7 +203,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 															: normalizedPathname === "/my-settings/relay-key"
 																? "个人 Relay Key"
 																: normalizedPathname === "/skills/manage"
-																	? "Skill Hub 管理"
+																	? "我的 Skill"
 																	: normalizedPathname === "/skills" ||
 																			normalizedPathname.startsWith("/skills/")
 																		? "Skill Hub"
@@ -213,6 +214,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 																				: normalizedPathname === "/agents"
 																					? "Agent 目录"
 																					: "Agent 详情";
+	useEffect(() => {
+		document.title = `${title} · Agent Infra`;
+	}, [title]);
 	const navigation = (
 		<>
 			<Link className="platform-brand" to="/" onClick={() => setSheet(false)}>
@@ -261,6 +265,20 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						<MessageCircle size={17} strokeWidth={1.8} aria-hidden="true" />
 						对话
 					</Link>
+					<Link
+						aria-current={
+							normalizedPathname.startsWith("/skills") &&
+							normalizedPathname !== "/skills/manage"
+								? "page"
+								: undefined
+						}
+						className={`platform-nav-item ${normalizedPathname.startsWith("/skills") && normalizedPathname !== "/skills/manage" ? "selected" : ""}`}
+						to="/skills"
+						onClick={() => setSheet(false)}
+					>
+						<Sparkles size={17} strokeWidth={1.8} aria-hidden="true" />
+						Skill Hub
+					</Link>
 				</nav>
 				<nav aria-label="我的管理" className="platform-nav-group">
 					<p className="platform-nav-label">我的管理</p>
@@ -300,14 +318,14 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					</Link>
 					<Link
 						aria-current={
-							normalizedPathname.startsWith("/skills") ? "page" : undefined
+							normalizedPathname === "/skills/manage" ? "page" : undefined
 						}
-						className={`platform-nav-item ${normalizedPathname.startsWith("/skills") ? "selected" : ""}`}
+						className={`platform-nav-item ${normalizedPathname === "/skills/manage" ? "selected" : ""}`}
 						to="/skills/manage"
 						onClick={() => setSheet(false)}
 					>
 						<Layers size={17} strokeWidth={1.8} aria-hidden="true" />
-						Skill Hub 管理
+						我的 Skill
 					</Link>
 					<Link
 						aria-current={
@@ -446,6 +464,56 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 			</div>
 		</>
 	);
+	if (session.state.kind !== "ready") {
+		return (
+			<main className="login-page">
+				<section className="login-panel" aria-labelledby="login-heading">
+					<div className="login-brand" aria-hidden="true">
+						A
+					</div>
+					<p className="login-eyebrow">AGORA AGENT PLATFORM</p>
+					<h1 id="login-heading">登录工作空间</h1>
+					<p className="login-lead">
+						{session.isFetching
+							? "正在确认登录状态…"
+							: session.state.kind !== "loading" &&
+								(session.state.retryable
+									? "暂时无法确认登录状态，请重试。"
+									: "请先登录，再查看 Agent、提交申请或继续对话。")}
+					</p>
+					{session.state.kind !== "loading" && (
+						<div className="space-y-4">
+							{loginUrl ? (
+								development ? (
+									<a className={buttonVariants()} href={loginUrl}>
+										选择开发测试身份
+									</a>
+								) : (
+									<LoginAction
+										endpoint={loginUrl}
+										onLoggedIn={async () => {
+											const result = await session.refetch();
+											if (result.data?.kind !== "ready")
+												throw new Error("Login session was not established");
+										}}
+									/>
+								)
+							) : (
+								<p role="status">登录入口尚未配置。</p>
+							)}
+							<Button
+								variant="outline"
+								onClick={() => void session.refetch()}
+								disabled={session.isFetching}
+							>
+								{session.isFetching ? "正在检查…" : "重新检查"}
+							</Button>
+						</div>
+					)}
+				</section>
+			</main>
+		);
+	}
 	return (
 		<div
 			className={
@@ -532,59 +600,14 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					)}
 				</header>
 				<div id="main-content" tabIndex={-1} className="min-w-0 flex-1">
-					{session.state.kind === "ready" ? (
-						<AuthenticatedContent
-							// A login generation can outlive a role change. Both boundaries
-							// must reset feature caches and drafts, including older deployments.
-							key={sessionBoundaryKey}
-							session={session.state.session}
-						>
-							{children}
-						</AuthenticatedContent>
-					) : (
-						<main className="platform-content max-w-2xl">
-							<h1 className="font-semibold text-[28px]">登录工作空间</h1>
-							<p className="mt-5 text-muted-foreground" role="status">
-								{session.isFetching
-									? "正在确认登录状态…"
-									: session.state.kind !== "loading" &&
-										(session.state.retryable
-											? "暂时无法确认登录状态，请重试。"
-											: "请先登录，再查看 Agent、提交申请或继续对话。")}
-							</p>
-							{session.state.kind !== "loading" && (
-								<div className="mt-5 space-y-4">
-									{loginUrl ? (
-										development ? (
-											<a className={buttonVariants()} href={loginUrl}>
-												选择开发测试身份
-											</a>
-										) : (
-											<LoginAction
-												endpoint={loginUrl}
-												onLoggedIn={async () => {
-													const result = await session.refetch();
-													if (result.data?.kind !== "ready")
-														throw new Error(
-															"Login session was not established",
-														);
-												}}
-											/>
-										)
-									) : (
-										<p role="status">登录入口尚未配置。</p>
-									)}
-									<Button
-										variant="outline"
-										onClick={() => void session.refetch()}
-										disabled={session.isFetching}
-									>
-										{session.isFetching ? "正在检查…" : "重新检查"}
-									</Button>
-								</div>
-							)}
-						</main>
-					)}
+					<AuthenticatedContent
+						// A login generation can outlive a role change. Both boundaries
+						// must reset feature caches and drafts, including older deployments.
+						key={sessionBoundaryKey}
+						session={session.state.session}
+					>
+						{children}
+					</AuthenticatedContent>
 				</div>
 			</div>
 		</div>

@@ -104,8 +104,7 @@ export function AgentAuthorizationControls({
 					Agent 授权控制
 				</h2>
 				<p className="mt-1 text-muted-foreground text-sm">
-					填写明确的用户或应用 ID，执行由服务端最终授权的
-					grant/revoke。页面不推断完整授权列表，也不显示凭证。
+					选择明确的用户或应用；提交时平台会重新检查当前权限。页面不显示凭证。
 				</p>
 			</div>
 			<div className="grid gap-3 sm:grid-cols-2">
