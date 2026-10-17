@@ -25,10 +25,12 @@ function nextFrame(input: ReturnType<typeof createInterface>) {
 
 it("packages a controlled custom ACP image with a valid platform manifest", async () => {
 	const dockerfile = await readFile(join(fixtureRoot, "Dockerfile"), "utf8");
+	const peerSource = await readFile(join(fixtureRoot, "peer.mjs"), "utf8");
 	const manifestText = dockerfile.match(
 		/LABEL io\.agora\.agent\.runtime\.manifest='([^']+)'/,
 	)?.[1];
 	expect(dockerfile).toMatch(/^FROM node@sha256:[a-f0-9]{64}$/m);
+	expect(peerSource).not.toMatch(/open\s*code/i);
 	expect(manifestText).toBeDefined();
 	const manifest = RuntimeManifestV1Schema.parse(
 		JSON.parse(manifestText ?? "{}"),
