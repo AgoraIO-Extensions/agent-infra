@@ -134,6 +134,8 @@ const operationalFailureSteps = new Set([
 	"identity.resolve",
 	"identity.parse",
 	"identity.hydrate",
+	// 准入时读取当前权限事实（目录成员与组织）失败（#2696）。
+	"authority.load",
 	"projection.read",
 	"store.query",
 	"store.management_transaction",
