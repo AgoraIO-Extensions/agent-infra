@@ -2,7 +2,7 @@
 
 - 报告：`/private/var/folders/k1/181yvqs97nz8r3sy62r007m40000gn/T/architecture-review-20261016-110358.html`
 - 工作区：`/Users/admin/agent-infra/.worktrees/uiux-review-20261017`
-- 基线：`origin/main` @ `af675024a212248617b8a5fecf3763b9a9041deb`；原 `/Users/admin/agent-infra` 脏工作区未改动。
+- 基线：`origin/main` @ `c7de551fb6cd2542174dc320d6d5cbd60bb88f25`；原 `/Users/admin/agent-infra` 脏工作区未改动。
 - 设计基线：index.html SHA-256 `f66a8694aecee90322161e9a31d682073919ae846d488312e225edf03232aaaf`
 - 开始时间：2026-10-16
 - 规则：每个报告编号只在此处登记一次；完成前保留证据（文件/测试/截图）。
@@ -307,4 +307,5 @@
 - 2026-10-17：API assembly 修复 Provider selection 的 `schemaVersion` 边界；API overlay 加入 ClamAV，扫描临时目录迁到 `/dev/shm` 并将 API shm 调到 256MB；真实 Skill 导入和详情页回读成功，OAuth callback 仍因 `connectionEnabled=false` 保留未闭环。
 - 2026-10-17：读取 Connection Developers 与帮助第 29 章；确认当前页面仅提供 Browser API 参考，Consumer/declaration 管理未纳入 OpenAPI，Delegated action-calls/发现/状态查询尚未在默认运行时装配，不能把 Browser Cookie API 当作 Agent Infra 服务协议。
 - 2026-10-17：按用户要求跳过 Connection OAuth/Delegated 缺口，origin/main 前进到 `af675024` 后 rebase 无冲突，继续进行 UI/UX 回归。
+- 2026-10-17：origin/main 再前进到 `c7de551f`（#2725）后 rebase 无冲突；最新 Web 全量单测 90/90 文件、1085/1085 通过，desktop exported design viewport matrix 13/13 通过，mobile 项目按测试配置 13 项跳过，Web check-types 通过。
 - 2026-10-17：读取 `/var/folders/k1/181yvqs97nz8r3sy62r007m40000gn/T/agent-infra-connection-handoff.md` 后确认应接 Connection Agent PAT Binding；Consumer 注册、declaration 配置和服务凭据由 Connection 管理员控制，handoff 未提供现成 Consumer/credential，当前账号访问管理员页会回到「我的 Connection」。
