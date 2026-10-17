@@ -367,9 +367,11 @@ prepare_native_metadata_forward() {
       "$@" &
       child=$!
       wait "$child"
+      child=
       sleep "$delay" &
       sleeper=$!
       wait "$sleeper"
+      sleeper=
       if [ "$delay" -lt 5 ]; then delay=$((delay + 1)); fi
     done
   ' native-metadata-port-forward-supervisor "${kube_target[@]}" port-forward --address 127.0.0.1 "service/$native_metadata_service_name" "$forward_port:80" \
