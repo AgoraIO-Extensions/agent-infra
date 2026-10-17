@@ -306,6 +306,10 @@ type Submit = Extract<RuntimeDriverCommand, { kind: "submit-turn" }>;
 type NativeCommand = Extract<RuntimeDriverCommand, { kind: "native-command" }>;
 const terminal = (status: RuntimeStatusV1) =>
 	["completed", "cancelled", "failed"].includes(status);
+const hasUnknownStatusEvent = (turn: Turn) => {
+	const event = turn.events.at(-1);
+	return event?.type === "status" && event.payload.status === "unknown";
+};
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 function unavailable(): never {
 	throw new RuntimeHostError(
@@ -1097,7 +1101,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						normalizeClaudeUncertainConnectionOperations(turn);
 						if (turn.kind === "native-command" && !terminal(turn.status)) {
 							turn.unknownHold = true;
-							if (!turn.events.some((event) => event.type === "status")) {
+							if (!hasUnknownStatusEvent(turn)) {
 								state.sequence++;
 								turn.events.push(
 									RuntimeEventV1Schema.parse({
