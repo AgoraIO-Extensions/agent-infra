@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { AgentApplicationSubmissionScreen as AgentApplicationSubmissionScreenView } from "./agent-application-submission-screen.js";
@@ -41,12 +41,6 @@ function AgentApplicationSubmissionScreen(
 	);
 }
 
-function creationHeader() {
-	const header = screen.getByRole("heading", { level: 1 }).closest("header");
-	if (!header) throw new Error("Missing creation header");
-	return within(header);
-}
-
 describe("AgentApplicationSubmissionScreen", () => {
 	it("renders a server-projected create result without exposing request values", async () => {
 		await renderWithMyAgentsRouter(
@@ -65,12 +59,7 @@ describe("AgentApplicationSubmissionScreen", () => {
 		).toBe("/my-agents/application%3Atenant%2F01%3Fdraft%23one%25");
 		expect(screen.queryByRole("button", { name: "提交申请" })).toBeNull();
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
-		expect(
-			creationHeader()
-				.getByRole("link", { name: "退出创建" })
-				.getAttribute("href"),
-		).toBe("/my-agents");
-		expect(screen.getAllByRole("link", { name: "退出创建" })).toHaveLength(1);
+		expect(screen.queryByRole("link", { name: "退出创建" })).toBeNull();
 	});
 
 	it("distinguishes retryable submission errors from changed application state", async () => {
@@ -89,9 +78,7 @@ describe("AgentApplicationSubmissionScreen", () => {
 		);
 		expect(screen.queryByText("private transport detail")).toBeNull();
 		expect(
-			creationHeader()
-				.getByRole("link", { name: "退出创建" })
-				.getAttribute("href"),
+			screen.getByRole("link", { name: "退出创建" }).getAttribute("href"),
 		).toBe("/my-agents");
 		first.unmount();
 
@@ -109,9 +96,7 @@ describe("AgentApplicationSubmissionScreen", () => {
 			"申请已变更或当前不可用，请刷新页面后核对。",
 		);
 		expect(
-			creationHeader()
-				.getByRole("link", { name: "退出创建" })
-				.getAttribute("href"),
+			screen.getByRole("link", { name: "退出创建" }).getAttribute("href"),
 		).toBe("/my-agents");
 		second.unmount();
 
@@ -130,13 +115,11 @@ describe("AgentApplicationSubmissionScreen", () => {
 			"申请内容未通过服务端校验，请检查字段后重试。",
 		);
 		expect(
-			creationHeader()
-				.getByRole("link", { name: "退出创建" })
-				.getAttribute("href"),
+			screen.getByRole("link", { name: "退出创建" }).getAttribute("href"),
 		).toBe("/my-agents");
 	});
 
-	it("offers matching header and footer exits and leaves without submitting", async () => {
+	it("offers one creation exit and leaves without submitting", async () => {
 		const onSubmit = vi.fn();
 		await renderWithMyAgentsRouter(
 			<AgentApplicationSubmissionScreen
@@ -146,12 +129,12 @@ describe("AgentApplicationSubmissionScreen", () => {
 			/>,
 		);
 		const exits = screen.getAllByRole("link", { name: "退出创建" });
-		expect(exits).toHaveLength(2);
+		expect(exits).toHaveLength(1);
 		for (const exit of exits) {
 			expect(exit.getAttribute("href")).toBe("/my-agents");
 		}
 		expect(screen.queryByRole("link", { name: "取消" })).toBeNull();
-		fireEvent.click(creationHeader().getByRole("link", { name: "退出创建" }));
+		fireEvent.click(screen.getByRole("link", { name: "退出创建" }));
 		await waitFor(() => {
 			expect(
 				screen.queryByRole("heading", { name: "创建一个新的 Agent。" }),
@@ -192,14 +175,14 @@ describe("AgentApplicationSubmissionScreen", () => {
 		);
 		expect(screen.queryByRole("link", { name: "退出创建" })).toBeNull();
 		const exits = screen.getAllByText("退出创建");
-		expect(exits).toHaveLength(2);
+		expect(exits).toHaveLength(1);
 		for (const exit of exits) {
 			expect(exit.getAttribute("aria-disabled")).toBe("true");
 			expect(exit.getAttribute("href")).toBeNull();
 			expect(exit.tabIndex).toBe(-1);
 			fireEvent.click(exit);
 		}
-		expect(creationHeader().getByText("退出创建")).toBeTruthy();
+		expect(screen.getByText("退出创建")).toBeTruthy();
 		expect(onSubmit).not.toHaveBeenCalled();
 		expect(
 			screen

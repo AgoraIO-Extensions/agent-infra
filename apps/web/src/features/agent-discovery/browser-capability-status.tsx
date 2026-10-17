@@ -70,6 +70,14 @@ const workflowLabels = {
 	handed_off: "用户已接管",
 	unknown: "待核实",
 } as const;
+const operationLabels: Record<string, string> = {
+	navigate: "读取当前仓库页面",
+	observe: "查看页面状态",
+	interact: "与页面交互",
+	files: "处理浏览器文件",
+	handoff: "接管浏览器",
+	side_effects: "执行外部操作",
+};
 
 export function BrowserWorkflowStatus({
 	workflow,
@@ -80,13 +88,13 @@ export function BrowserWorkflowStatus({
 	const label = workflowLabels[workflow.kind];
 	const detail =
 		workflow.kind === "intent" || workflow.kind === "action"
-			? `操作：${workflow.operation}`
+			? `操作：${operationLabels[workflow.operation] ?? "浏览器操作"}`
 			: workflow.kind === "approval_pending"
-				? `操作：${workflow.operation} · 目标 origin：${workflow.origin}`
+				? `操作：${operationLabels[workflow.operation] ?? "浏览器操作"} · 域名：${workflow.origin.replace(/^https?:\/\//, "")}`
 				: workflow.kind === "handoff_pending"
 					? workflow.reason
 					: workflow.kind === "unknown"
-						? `操作：${workflow.operation}，已阻断自动重试。`
+						? `操作：${operationLabels[workflow.operation] ?? "浏览器操作"}，已阻断自动重试。`
 						: undefined;
 	const destructive = workflow.kind === "unknown";
 	return (
@@ -94,7 +102,7 @@ export function BrowserWorkflowStatus({
 			aria-live="polite"
 			aria-atomic="true"
 			variant={destructive ? "destructive" : "default"}
-			className="mt-3"
+			className="browser-capability-card mt-3"
 		>
 			{destructive ? (
 				<AlertTriangle aria-hidden="true" />
@@ -130,7 +138,7 @@ function BrowserCapabilityUnavailable({
 		<Alert
 			aria-labelledby="browser-capability-heading"
 			variant="destructive"
-			className="space-y-1"
+			className="browser-capability-card space-y-1"
 		>
 			<AlertTriangle aria-hidden="true" />
 			<AlertTitle id="browser-capability-heading">

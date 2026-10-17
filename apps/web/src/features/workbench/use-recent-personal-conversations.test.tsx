@@ -171,7 +171,7 @@ describe("Personal recent login and continuation lifetime", () => {
 			hook.requests.every(
 				(request) =>
 					request.method === "GET" &&
-					new URL(request.url).searchParams.get("limit") === "50",
+					new URL(request.url).searchParams.get("limit") === "5",
 			),
 		).toBe(true);
 	});

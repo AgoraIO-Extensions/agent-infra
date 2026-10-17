@@ -13,6 +13,7 @@ import {
 	submitWecomAppCredentials,
 } from "../../pilot/generated/sdk.gen.js";
 import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
+import { WecomUnbindDialog } from "./wecom-unbind-dialog.js";
 
 const labels = {
 	not_configured: "未配置",
@@ -293,6 +294,9 @@ export function WecomAppSetup({
 						value={corporationId}
 						disabled={busy}
 						onChange={(e) => setCorporationId(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") e.preventDefault();
+						}}
 						autoComplete="off"
 					/>
 					{fieldErrors.corporationId ? (
@@ -317,6 +321,9 @@ export function WecomAppSetup({
 						value={applicationId}
 						disabled={busy}
 						onChange={(e) => setApplicationId(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") e.preventDefault();
+						}}
 						inputMode="numeric"
 						autoComplete="off"
 					/>
@@ -341,6 +348,9 @@ export function WecomAppSetup({
 						value={secret}
 						disabled={busy}
 						onChange={(e) => setSecret(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") e.preventDefault();
+						}}
 						autoComplete="new-password"
 					/>
 					{fieldErrors.secret ? (
@@ -361,6 +371,9 @@ export function WecomAppSetup({
 						value={token}
 						disabled={busy}
 						onChange={(e) => setToken(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") e.preventDefault();
+						}}
 						autoComplete="new-password"
 					/>
 					{fieldErrors.token ? (
@@ -383,6 +396,9 @@ export function WecomAppSetup({
 						value={encodingAesKey}
 						disabled={busy}
 						onChange={(e) => setEncodingAesKey(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") e.preventDefault();
+						}}
 						autoComplete="new-password"
 					/>
 					{fieldErrors.encodingAesKey ? (
@@ -443,11 +459,10 @@ export function WecomAppSetup({
 					刷新状态
 				</Button>
 				{status && status !== "not_configured" ? (
-					<Button
-						type="button"
-						variant="outline"
+					<WecomUnbindDialog
 						disabled={busy}
-						onClick={() => {
+						label="解除应用绑定"
+						onConfirm={() => {
 							setStatus("not_configured");
 							setCallbackUrl("");
 							onUnbind({
@@ -455,9 +470,7 @@ export function WecomAppSetup({
 								channels: [{ kind: "wecom_app", enabled: false }],
 							});
 						}}
-					>
-						解除应用绑定
-					</Button>
+					/>
 				) : null}
 			</div>
 		</section>

@@ -48,7 +48,7 @@ describe("Personal recent generated Client read", () => {
 		const url = new URL(request?.url ?? "");
 		expect(url.pathname).toBe("/api/v2/me/conversations/recent");
 		expect(Object.fromEntries(url.searchParams)).toEqual({
-			limit: "50",
+			limit: "5",
 			cursor: page.nextCursor,
 		});
 	});

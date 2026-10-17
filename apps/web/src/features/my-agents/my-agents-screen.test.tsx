@@ -129,7 +129,7 @@ describe("MyAgentsScreen", () => {
 			/>,
 		);
 		const applications = screen.getByRole("tab", {
-			name: "申请",
+			name: /^申请/,
 			selected: true,
 		});
 		const agents = screen.getByRole("tab", {

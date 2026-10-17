@@ -23,11 +23,18 @@ function AgentDetailRoute() {
 		(isAgentConfigurationOwner(agent, session.state.session) ||
 			session.state.session.user.roles.includes("system_admin"));
 	const ownerSettings = canManage ? { agentId } : undefined;
+	const connectionUrl =
+		agent?.capabilities.connection &&
+		session.state.kind === "ready" &&
+		session.state.connection?.status === "available"
+			? session.state.connection.publicOrigin + session.state.connection.mcpPath
+			: undefined;
 
 	return (
 		<main className="platform-content management-content">
 			<div className="space-y-6">
 				<AgentDetailScreen
+					connectionUrl={connectionUrl}
 					state={
 						query.isPending
 							? { kind: "loading" }

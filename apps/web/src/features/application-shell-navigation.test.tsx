@@ -37,10 +37,15 @@ const clients: QueryClient[] = [];
 afterEach(() => {
 	cleanup();
 	for (const client of clients.splice(0)) client.clear();
+	document.title = "Agent Infra";
 	vi.unstubAllGlobals();
 });
 
-async function showShell(administrator: boolean, initialEntry = "/agents") {
+async function showShell(
+	administrator: boolean,
+	initialEntry = "/agents",
+	ready = true,
+) {
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(() => {
@@ -53,18 +58,25 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 		},
 	});
 	clients.push(client);
-	client.setQueryData(["browser-session"], {
-		kind: "ready",
-		sessionGeneration: "g".repeat(43),
-		session: {
-			schemaVersion: 1,
-			user: {
-				userId: "controlled-person",
-				displayName: "受控用户",
-				roles: administrator ? ["employee", "system_admin"] : ["employee"],
-			},
-		},
-	});
+	client.setQueryData(
+		["browser-session"],
+		ready
+			? {
+					kind: "ready",
+					sessionGeneration: "g".repeat(43),
+					session: {
+						schemaVersion: 1,
+						user: {
+							userId: "controlled-person",
+							displayName: "受控用户",
+							roles: administrator
+								? ["employee", "system_admin"]
+								: ["employee"],
+						},
+					},
+				}
+			: { kind: "unavailable", retryable: false },
+	);
 	const root = createRootRoute({
 		component: () => (
 			<ApplicationShell>
@@ -112,11 +124,23 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 			<RouterProvider router={router} />
 		</QueryClientProvider>,
 	);
-	await screen.findByRole("navigation", { name: "工作区" });
+	if (ready) await screen.findByRole("navigation", { name: "工作区" });
+	else await screen.findByRole("heading", { name: "登录工作空间" });
 	return { history, client };
 }
 
 describe("Original IA workbench navigation", () => {
+	it("updates the document title from the active route", async () => {
+		await showShell(false, "/agents");
+		expect(document.title).toBe("Agent 目录 · Agent Infra");
+	});
+
+	it("uses a standalone login screen without the application shell", async () => {
+		await showShell(false, "/agents", false);
+		expect(screen.getByRole("heading", { name: "登录工作空间" })).toBeTruthy();
+		expect(screen.queryByRole("navigation", { name: "工作区" })).toBeNull();
+	});
+
 	it.each(["/no-such-page", "/admin/no-such-page", "/agents/a/b/c"])(
 		"shows a Chinese not-found page inside the shell for %s (#2297)",
 		async (entry) => {
@@ -138,8 +162,8 @@ describe("Original IA workbench navigation", () => {
 		},
 	);
 	it.each([
-		["/skills/manage", "Skill Hub 管理"],
-		["/skills/manage/", "Skill Hub 管理"],
+		["/skills/manage", "我的 Skill"],
+		["/skills/manage/", "我的 Skill"],
 	])("maps Skill Hub route %s to the management IA", async (entry, label) => {
 		await showShell(false, entry);
 		const management = screen.getByRole("navigation", { name: "我的管理" });

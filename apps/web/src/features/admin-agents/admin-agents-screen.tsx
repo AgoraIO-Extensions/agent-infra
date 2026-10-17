@@ -22,7 +22,6 @@ import {
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	agentManagementStatusLabels,
-	agentServiceAvailabilityLabel,
 	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
 import type { AdminAgentsState } from "./admin-agents.js";
@@ -236,32 +235,16 @@ export function AdminAgentsScreen({
 											</TableCell>
 											<TableCell data-label="Owner">
 												{agent.configuration.owners
-													.map(
-														(owner) => `${owner.displayName} (${owner.userId})`,
-													)
+													.map((owner) => owner.displayName || "目录记录不可用")
 													.join("、")}
 											</TableCell>
 											<TableCell data-label="状态">
-												<div className="space-y-2">
-													<Badge
-														variant="outline"
-														data-status={agent.managementStatus}
-													>
-														{
-															agentManagementStatusLabels[
-																agent.managementStatus
-															]
-														}
-													</Badge>
-													{agent.serviceAvailability !== null && (
-														<p className="text-muted-foreground">
-															服务：
-															{agentServiceAvailabilityLabel(
-																agent.serviceAvailability,
-															)}
-														</p>
-													)}
-												</div>
+												<Badge
+													variant="outline"
+													data-status={agent.managementStatus}
+												>
+													{agentManagementStatusLabels[agent.managementStatus]}
+												</Badge>
 											</TableCell>
 											<TableCell
 												data-label="系统操作"

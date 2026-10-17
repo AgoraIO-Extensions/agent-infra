@@ -106,8 +106,8 @@ describe("MyAgentApplicationDetailScreen", () => {
 			screen.getByText("Resource capacity is currently unavailable."),
 		).toBeTruthy();
 		expect(screen.getByText(/提交于/)).toBeTruthy();
-		expect(screen.getByText("2026-09-03T08:00:00Z").tagName).toBe("TIME");
-		expect(screen.getByText("2026-09-03T09:00:00Z").tagName).toBe("TIME");
+		expect(screen.getByText("2026年9月3日 16:00").tagName).toBe("TIME");
+		expect(screen.getByText("2026年9月3日 17:00").tagName).toBe("TIME");
 		expect(screen.queryByRole("button", { name: "撤回申请" })).toBeNull();
 		expect(
 			screen.getByRole("link", { name: "修改并重新提交" }).getAttribute("href"),
@@ -136,7 +136,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 
 		expect(screen.getByText("创建中")).toBeTruthy();
 		expect(screen.getByText("审批时间")).toBeTruthy();
-		expect(screen.getByText("2026-09-03T10:00:00Z").tagName).toBe("TIME");
+		expect(screen.getByText("2026年9月3日 18:00").tagName).toBe("TIME");
 		expect(screen.queryByText("审批原因：")).toBeNull();
 	});
 
@@ -276,8 +276,8 @@ describe("MyAgentApplicationDetailScreen", () => {
 		);
 		expect(screen.getByText(application.description)).toBeTruthy();
 		expect(screen.getByText("Applicant")).toBeTruthy();
-		expect(screen.getByText("用户 user-release-2")).toBeTruthy();
-		expect(screen.getByText("组织 org-platform")).toBeTruthy();
+		expect(screen.getByText("员工范围")).toBeTruthy();
+		expect(screen.getByText("组织范围")).toBeTruthy();
 		expect(
 			screen.getByText("Release model · release-model-v1 · medium、high"),
 		).toBeTruthy();

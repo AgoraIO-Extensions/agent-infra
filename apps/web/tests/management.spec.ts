@@ -2086,7 +2086,11 @@ for (const route of [
 					.click();
 				await expect(page.locator(".owned-agent-card").first()).toBeVisible();
 				await captureDesignContract(page, info, "my-agents-owned");
-				await page.getByRole("tab", { name: "申请", exact: true }).click();
+				const applicationsTab = page.getByRole("tab", {
+					name: /^申请(?:\s+\d+)?$/,
+				});
+				await applicationsTab.scrollIntoViewIfNeeded();
+				await applicationsTab.click();
 			}
 		}
 	});

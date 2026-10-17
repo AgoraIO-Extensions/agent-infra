@@ -46,6 +46,11 @@ import type { AuditFilters, AuditScope } from "./audit-query.js";
 import { AuditRecordDetail } from "./audit-record-detail.js";
 import { useAuditQuery } from "./use-audit-query.js";
 
+function shortIdentifier(value: string | null | undefined) {
+	if (!value) return "未提供";
+	return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
+}
+
 export function AuditWorkflow({ scope }: { scope: AuditScope }) {
 	const { identityKey, session } = useApplicationSession();
 	const admin = session.user.roles.includes("system_admin");
@@ -353,20 +358,19 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 												{auditActionLabels[record.action]}
 											</strong>
 											<small className="mt-1 block">{record.summary}</small>
-											<small className="mt-1 block break-all text-muted-foreground">
-												{record.action}
-											</small>
 										</TableCell>
 										<TableCell data-label="对象">
 											<span>{auditSubjectLabels[record.subject.kind]}</span>
 											<small className="mt-1 block break-all">
-												{record.subject.subjectId}
+												<code title={record.subject.subjectId}>
+													{shortIdentifier(record.subject.subjectId)}
+												</code>
 											</small>
 											<small className="mt-1 block break-all text-muted-foreground">
-												Agent：{record.agentId ?? "未提供"}
+												Agent：{shortIdentifier(record.agentId)}
 											</small>
 											<small className="mt-1 block break-all text-muted-foreground">
-												Execution：{record.executionId ?? "未提供"}
+												Execution：{shortIdentifier(record.executionId)}
 											</small>
 										</TableCell>
 										<TableCell data-label="操作主体">
@@ -374,7 +378,9 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 												可信操作主体 · {auditPrincipalLabels[record.actor.kind]}
 											</span>
 											<small className="mt-1 block break-all">
-												{record.actor.actorId}
+												<code title={record.actor.actorId}>
+													{shortIdentifier(record.actor.actorId)}
+												</code>
 											</small>
 											{record.originalPrincipal && (
 												<small className="mt-1 block break-all text-muted-foreground">

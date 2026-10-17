@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Toast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import type { PersonalRelayKeyStateV1 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -239,14 +240,18 @@ function PersonalRelayKeyForm({
 					: notice;
 	const actionButtons = (
 		<>
-			<Button
-				variant="outline"
-				type="button"
-				disabled={state !== "ready" || !projection?.isSet}
-				onClick={() => void remove()}
-			>
-				{state === "saving" && operation === "revoke" ? "移除中…" : "移除 Key"}
-			</Button>
+			{projection?.isSet ? (
+				<Button
+					variant="destructive"
+					type="button"
+					disabled={state !== "ready"}
+					onClick={() => void remove()}
+				>
+					{state === "saving" && operation === "revoke"
+						? "撤销中…"
+						: "撤销 Key"}
+				</Button>
+			) : null}
 			<Button
 				type="button"
 				disabled={state !== "ready" || !projection}
@@ -294,7 +299,7 @@ function PersonalRelayKeyForm({
 							? "未配置"
 							: "尚未读取"}
 				</div>
-				{statusText && (
+				{statusText && !notice && (
 					<p
 						className={cn(
 							"text-sm",
@@ -305,6 +310,7 @@ function PersonalRelayKeyForm({
 						{statusText}
 					</p>
 				)}
+				{notice ? <Toast>{notice}</Toast> : null}
 				{hasFailure && (
 					<div className="flex flex-wrap gap-2">
 						{kind === "authentication" && onSessionExpired ? (

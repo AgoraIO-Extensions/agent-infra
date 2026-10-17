@@ -1,4 +1,4 @@
-import { AlertCircle, Building2, RefreshCw, ShieldOff } from "lucide-react";
+import { AlertCircle, Building2, RefreshCw } from "lucide-react";
 import {
 	type FormEvent,
 	useId,
@@ -10,6 +10,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -361,15 +362,15 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 						</p>
 					</div>
 					{!disabled && props.onDisable ? (
-						<Button
-							variant="destructive"
-							type="button"
+						<ConfirmDialog
 							disabled={props.isDisabling}
-							onClick={() => void props.onDisable?.(application.applicationId)}
-						>
-							<ShieldOff aria-hidden="true" />
-							{props.isDisabling ? "正在停用…" : "停用应用"}
-						</Button>
+							label={props.isDisabling ? "正在停用…" : "停用应用"}
+							title="停用应用？"
+							description="停用后不能再签发或轮换应用凭证，已有凭证也会停止工作。"
+							onConfirm={() =>
+								void props.onDisable?.(application.applicationId)
+							}
+						/>
 					) : null}
 				</div>
 				<dl className="mt-5 grid gap-3 text-sm sm:grid-cols-3">

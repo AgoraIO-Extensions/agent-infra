@@ -73,11 +73,11 @@ export function useConversationCommands({
 			// 待确认的 404 不立刻闭锁：Agent 被停止时同样是 404，先由页面重新读取 Agent，
 			// 确认确实失去访问权限才调用 confirmDenied（#2570）。
 			if (result.kind === "denied" && !result.ambiguous) scope.denied = true;
-			if (
-				result.kind !== "unknown" &&
-				!(result.kind === "rejected" && result.retryable)
-			)
-				scope.attempt = undefined;
+			const retryable =
+				result.kind === "unknown" ||
+				(result.kind === "denied" && result.ambiguous === true) ||
+				(result.kind === "rejected" && result.retryable);
+			if (!retryable) scope.attempt = undefined;
 			return result;
 		},
 		onSettled: removeOwnMutations,

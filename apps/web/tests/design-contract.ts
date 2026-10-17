@@ -1,7 +1,7 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
 
 // OpenDesign export index.html SHA-256:
-// c278d81ade83e5e2237d852cbca1f9930759652811ddd6ef99fef099a4405940
+// f66a8694aecee90322161e9a31d682073919ae846d488312e225edf03232aaaf
 export const designViewports = [
 	{ width: 360, height: 800 },
 	{ width: 390, height: 844 },
@@ -61,6 +61,11 @@ export async function captureDesignContract(
 					"--success",
 					"--warning",
 					"--destructive",
+					"--accent-ink",
+					"--success-ink",
+					"--warning-ink",
+					"--danger-ink",
+					"--muted-ink",
 				].map((key) => [key, root.getPropertyValue(key).trim()]),
 			),
 			controls: [button, input]
@@ -70,6 +75,13 @@ export async function captureDesignContract(
 					radius: getComputedStyle(node).borderTopLeftRadius,
 					height: node.getBoundingClientRect().height,
 				})),
+			primitiveCounts: {
+				buttons: document.querySelectorAll('main [data-slot="button"]').length,
+				inputs: document.querySelectorAll(
+					'main [data-slot="input"], main [data-slot="select-trigger"], main [data-slot="native-select"]',
+				).length,
+				tables: document.querySelectorAll('main [data-slot="table"]').length,
+			},
 		};
 	});
 	expect(measured.pageWidth).toBeLessThanOrEqual(measured.viewport.width);
@@ -101,6 +113,11 @@ export async function captureDesignContract(
 		"--success": [0.63, 0.14, 145],
 		"--warning": [0.74, 0.14, 82],
 		"--destructive": [0.58, 0.17, 27],
+		"--accent-ink": [0.46, 0.15, 248],
+		"--success-ink": [0.45, 0.12, 145],
+		"--warning-ink": [0.49, 0.11, 82],
+		"--danger-ink": [0.46, 0.14, 27],
+		"--muted-ink": [0.42, 0.03, 255],
 	});
 
 	for (const control of measured.controls) {

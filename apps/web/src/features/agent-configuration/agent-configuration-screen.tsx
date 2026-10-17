@@ -4,6 +4,13 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogDescription,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useResultFocus } from "@/hooks/use-result-focus";
@@ -146,7 +153,11 @@ function DraftRows<T extends string>({
 	);
 }
 
-function unavailableScreen() {
+function unavailableScreen({
+	administratorView = false,
+}: {
+	administratorView?: boolean;
+} = {}) {
 	return (
 		<section
 			aria-labelledby="agent-configuration-heading"
@@ -156,10 +167,14 @@ function unavailableScreen() {
 				id="agent-configuration-heading"
 				className="font-semibold text-[28px]"
 			>
-				配置不可用
+				{administratorView ? "管理员管理视图" : "配置不可用"}
 			</h1>
 			<Alert>
-				<AlertDescription>当前无法访问此配置。</AlertDescription>
+				<AlertDescription>
+					{administratorView
+						? "当前账号不是此 Agent 的 Owner；配置字段保持只读，请使用下方管理员操作区处理授权与生命周期。"
+						: "当前无法访问此配置。"}
+				</AlertDescription>
 			</Alert>
 		</section>
 	);
@@ -190,6 +205,9 @@ export function AgentConfigurationScreen({
 	submitting,
 }: AgentConfigurationScreenProps) {
 	const [draft, setDraft] = useState(() => configurationDraftFromAgent(agent));
+	const [secretDialogName, setSecretDialogName] = useState<string>();
+	const [secretDialogValue, setSecretDialogValue] = useState("");
+	const [secretDialogError, setSecretDialogError] = useState(false);
 	const [ownerError, setOwnerError] = useState<string>();
 	const [catalogSelectionError, setCatalogSelectionError] = useState(false);
 	const [savedSelectionError, setSavedSelectionError] = useState(false);
@@ -202,7 +220,11 @@ export function AgentConfigurationScreen({
 		session.kind !== "ready" ||
 		!isAgentConfigurationOwner(agent, session.session)
 	) {
-		return unavailableScreen();
+		return unavailableScreen({
+			administratorView:
+				session.kind === "ready" &&
+				session.session.user.roles.includes("system_admin"),
+		});
 	}
 
 	const currentModels = agent.configuration.modelOptions
@@ -211,12 +233,6 @@ export function AgentConfigurationScreen({
 	const currentDefaultModel = agent.configuration.modelOptions.find(
 		(model) => model.optionId === agent.configuration.defaultModelOptionId,
 	);
-	const currentSecrets = agent.configuration.secrets
-		.map(
-			(secret) =>
-				`${secret.name}（${secret.isSet ? "已设置" : "未设置"}${secret.version === null ? "" : `，版本 ${secret.version}`}）`,
-		)
-		.join("、");
 	const isDisabled = submitting || agent.managementStatus === "disabled";
 	// 正在替换默认 Key（已输入或已检查）也算改动：保存时要引导用户先完成检查（#2560）。
 	const hasChanges =
@@ -304,6 +320,34 @@ export function AgentConfigurationScreen({
 				secretIndex === index ? { ...secret, [key]: value } : secret,
 			),
 		}));
+	const closeSecretDialog = () => {
+		setSecretDialogName(undefined);
+		setSecretDialogValue("");
+		setSecretDialogError(false);
+	};
+	const replaceSecret = () => {
+		if (!secretDialogName || !secretDialogValue.trim()) {
+			setSecretDialogError(true);
+			return;
+		}
+		setDraft((current) => {
+			const index = current.secrets.findIndex(
+				(secret) => secret.name.trim() === secretDialogName,
+			);
+			if (index === -1)
+				return {
+					...current,
+					secrets: [
+						...current.secrets,
+						{ name: secretDialogName, value: secretDialogValue },
+					],
+				};
+			const secrets = [...current.secrets];
+			secrets[index] = { name: secretDialogName, value: secretDialogValue };
+			return { ...current, secrets };
+		});
+		closeSecretDialog();
+	};
 	const submitConfiguration = () => {
 		if (
 			!defaultRelayKeyManaged &&
@@ -760,13 +804,42 @@ export function AgentConfigurationScreen({
 									<legend className="font-semibold text-foreground text-sm">
 										Secrets
 									</legend>
-									<p className="text-muted-foreground text-sm">
-										{currentSecrets || "尚未配置 Secret"}
-									</p>
+									{agent.configuration.secrets.length === 0 ? (
+										<p className="text-muted-foreground text-sm">
+											尚未配置 Secret
+										</p>
+									) : null}
 									<p className="text-muted-foreground text-sm">
 										Secret
 										仅显示设置状态与版本。填写同名的新值进行替换，原值不会回显。
 									</p>
+									{agent.configuration.secrets.map((secret) => (
+										<div
+											className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-border px-3 py-2"
+											key={secret.name}
+										>
+											<span className="text-sm">
+												{secret.name}（{secret.isSet ? "已设置" : "未设置"}
+												{secret.version === null
+													? ""
+													: `，版本 ${secret.version}`}
+												）
+											</span>
+											<Button
+												variant="outline"
+												size="sm"
+												disabled={isDisabled}
+												onClick={() => {
+													setSecretDialogName(secret.name);
+													setSecretDialogValue("");
+													setSecretDialogError(false);
+												}}
+												type="button"
+											>
+												替换 Secret
+											</Button>
+										</div>
+									))}
 									<DraftRows
 										fields={
 											[
@@ -806,6 +879,48 @@ export function AgentConfigurationScreen({
 										添加 Secret
 									</Button>
 								</fieldset>
+								<Dialog
+									open={secretDialogName !== undefined}
+									onOpenChange={(open) => {
+										if (!open) closeSecretDialog();
+									}}
+								>
+									<DialogContent>
+										<DialogTitle>替换 Secret</DialogTitle>
+										<DialogDescription>
+											{secretDialogName} 仅本次提交使用，不会回显。
+										</DialogDescription>
+										<div className="mt-5 space-y-2">
+											<Label htmlFor="configuration-secret-replacement">
+												新 Secret 值
+											</Label>
+											<Input
+												autoComplete="new-password"
+												id="configuration-secret-replacement"
+												onChange={(event) => {
+													setSecretDialogValue(event.target.value);
+													setSecretDialogError(false);
+												}}
+												placeholder="仅本次提交使用，不会回显"
+												type="password"
+												value={secretDialogValue}
+											/>
+											{secretDialogError && (
+												<p className="field-error">请输入 Secret 值。</p>
+											)}
+										</div>
+										<div className="mt-5 flex flex-wrap justify-end gap-3">
+											<DialogClose
+												className={buttonVariants({ variant: "ghost" })}
+											>
+												取消
+											</DialogClose>
+											<Button type="button" onClick={replaceSecret}>
+												校验并替换
+											</Button>
+										</div>
+									</DialogContent>
+								</Dialog>
 								<div className="form-footer border-border border-t pt-5">
 									<Button
 										aria-describedby={
@@ -860,10 +975,12 @@ export function AgentConfigurationScreen({
 							</div>
 						</section>
 					) : null}
+					{lifecycle ? (
+						<section className="detail-section lifecycle-panel border-border border-t pt-5">
+							{lifecycle}
+						</section>
+					) : null}
 				</div>
-				{lifecycle ? (
-					<section className="form-aside lifecycle-panel">{lifecycle}</section>
-				) : null}
 			</div>
 		</section>
 	);

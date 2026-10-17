@@ -95,6 +95,7 @@ function visibleLifecycleCommands(
 	}
 	if (
 		isAdministrator &&
+		!isOwner &&
 		["creating", "available", "stopped", "creation_failed"].includes(
 			agent.managementStatus,
 		)

@@ -268,7 +268,11 @@ describe("OpenDesign workbench presentation", () => {
 				},
 			};
 			const view = await showWorkbench(<WorkbenchScreen {...props} />);
-			expect(screen.getByText("状态暂时无法确认")).toBeTruthy();
+			expect(
+				screen.getByText(
+					agents.kind === "loading" ? "正在确认 Agent" : "状态暂时无法确认",
+				),
+			).toBeTruthy();
 			expect(
 				screen.queryByText("历史仍可查看，当前不能继续发送消息。"),
 			).toBeNull();

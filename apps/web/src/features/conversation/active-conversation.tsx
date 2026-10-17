@@ -10,6 +10,7 @@ import {
 } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "../../components/ui/button.js";
+import { Dialog, DialogContent } from "../../components/ui/dialog.js";
 import { Label } from "../../components/ui/label.js";
 import {
 	Select,
@@ -861,22 +862,41 @@ export function ActiveConversation({
 					</div>
 				</form>
 			</div>
-			{selectedExecution && (
-				<ConversationExecutionDetails
-					data={reader.execution.data}
-					conversationId={conversationId}
-					loading={reader.execution.isFetching}
-					failed={reader.execution.isError || timeline.failure?.kind === "http"}
-					onRetry={() => {
-						if (timeline.failure?.kind === "http") void reader.reconnect();
-						else void reader.execution.refetch();
-					}}
-					onClose={() => {
+			<Dialog
+				open={selectedExecution !== undefined}
+				onOpenChange={(open) => {
+					if (!open) {
 						returnExecutionFocus.current = true;
 						setSelectedExecution(undefined);
-					}}
-				/>
-			)}
+					}
+				}}
+			>
+				<DialogContent aria-label="执行详情" className="max-w-[760px]">
+					{selectedExecution ? (
+						<ConversationExecutionDetails
+							data={reader.execution.data}
+							conversationId={conversationId}
+							modelOptions={options.map((item) => ({
+								optionId: item.optionId,
+								displayName: item.displayName,
+							}))}
+							requestedModelOptionId={conversation?.selectedModelOptionId}
+							loading={reader.execution.isFetching}
+							failed={
+								reader.execution.isError || timeline.failure?.kind === "http"
+							}
+							onRetry={() => {
+								if (timeline.failure?.kind === "http") void reader.reconnect();
+								else void reader.execution.refetch();
+							}}
+							onClose={() => {
+								returnExecutionFocus.current = true;
+								setSelectedExecution(undefined);
+							}}
+						/>
+					) : null}
+				</DialogContent>
+			</Dialog>
 		</>
 	);
 }

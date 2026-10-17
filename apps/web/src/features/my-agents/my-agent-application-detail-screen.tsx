@@ -13,6 +13,7 @@ import {
 	DialogTrigger,
 } from "@/components/ui/dialog";
 import { useResultFocus } from "@/hooks/use-result-focus";
+import { formatDateTime } from "../../lib/format-date.js";
 
 import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -150,7 +151,7 @@ export function MyAgentApplicationDetailScreen({
 								<small>
 									提交于{" "}
 									<time dateTime={application.submittedAt}>
-										{application.submittedAt}
+										{formatDateTime(application.submittedAt)}
 									</time>
 								</small>
 							</div>
@@ -164,7 +165,7 @@ export function MyAgentApplicationDetailScreen({
 										<span>
 											审批时间{" "}
 											<time dateTime={application.decision.decidedAt}>
-												{application.decision.decidedAt}
+												{formatDateTime(application.decision.decidedAt)}
 											</time>
 										</span>
 									) : application.status === "withdrawn" ? (
@@ -180,6 +181,24 @@ export function MyAgentApplicationDetailScreen({
 									: application.status === "withdrawn"
 										? "不再审批"
 										: "等待"}
+							</Badge>
+						</li>
+						<li>
+							<div>
+								<strong>运行实例</strong>
+								<small>
+									{hasCreatedAgent(application)
+										? "Agent 已创建，可进入详情。"
+										: "审批通过后开始创建。"}
+								</small>
+							</div>
+							<Badge
+								variant="outline"
+								data-status={
+									hasCreatedAgent(application) ? "ready" : application.status
+								}
+							>
+								{hasCreatedAgent(application) ? "已完成" : "待创建"}
 							</Badge>
 						</li>
 					</ul>
@@ -301,9 +320,7 @@ export function MyAgentApplicationDetailScreen({
 									<ul>
 										{configuration.availability.map((target) => (
 											<li key={JSON.stringify(target)}>
-												{target.kind === "user"
-													? `用户 ${target.userId}`
-													: `组织 ${target.organizationId}`}
+												{target.kind === "user" ? "员工范围" : "组织范围"}
 											</li>
 										))}
 									</ul>
@@ -335,6 +352,16 @@ export function MyAgentApplicationDetailScreen({
 							<dt>默认推理档位</dt>
 							<dd>{configuration.defaultReasoningLevel ?? "未提供"}</dd>
 						</dl>
+					</section>
+					<section className="form-aside" aria-label="下一步">
+						<h2>下一步</h2>
+						<p>
+							{hasCreatedAgent(application)
+								? "进入 Agent 详情查看运行状态。"
+								: application.status === "rejected"
+									? "修改申请后重新提交。"
+									: "等待系统管理员完成审批。"}
+						</p>
 					</section>
 					<section className="form-aside">
 						<h2>资源预设</h2>
