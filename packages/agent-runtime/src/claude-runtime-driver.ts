@@ -130,10 +130,19 @@ export interface ClaudeRuntimeDriverOptions {
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 }
 
+/** Keep every Claude Query independent from user, project and local settings. */
+export function claudeNativeQuerySettings(): Pick<
+	ClaudeQueryOptions,
+	"settingSources"
+> {
+	return { settingSources: [] };
+}
+
 /**
  * Keep Claude's native Skill entry point closed unless Host supplied the
  * verified, filesystem-backed Applied directory. Metadata-only directories are
  * still useful for discovery/read APIs, but they must not become a native path.
+ * Claude's built-in session commands remain available without an Applied root.
  */
 export function claudeNativeSkillLaunchOptions(
 	skillDirectory?: RuntimeFilesystemSkillDirectoryV1,
@@ -146,7 +155,7 @@ export function claudeNativeSkillLaunchOptions(
 		nativeRoot !== resolve(nativeRoot) ||
 		typeof skillDirectory?.nativeSkillPaths !== "function"
 	)
-		return { extraArgs: { "disable-slash-commands": null } };
+		return {};
 
 	// The filesystem-backed directory verifies the immutable Applied files,
 	// read-only mode and manifest digests here. A stale or revoked mount throws;
@@ -365,6 +374,22 @@ const claudeAttachmentMediaTypes = new Set([
 	"image/webp",
 ]);
 
+// Claude exposes commands and Skills through one flat supportedCommands() list.
+// Keep the fixed Paseo session-control set as commands and treat all other
+// entries as Skills. Skill Hub remains the only source of applied Skills.
+const CLAUDE_NATIVE_COMMAND_NAMES = new Set([
+	"clear",
+	"compact",
+	"context",
+	"debug",
+	"extra-usage",
+	"heapdump",
+	"init",
+	"loop",
+	"schedule",
+	"usage",
+]);
+
 export type ClaudeNativeCommandReadContext = Readonly<{
 	nativeSessionRef: string;
 	signal: AbortSignal;
@@ -477,10 +502,39 @@ function projectClaudeNativeCommands(input: {
 		},
 		directory: {
 			commands: input.commands
-				.filter((command) => !input.skillNames?.has(command.name))
+				.filter(
+					(command) =>
+						CLAUDE_NATIVE_COMMAND_NAMES.has(command.name) &&
+						!input.skillNames?.has(command.name),
+				)
 				.map((command) => ({ ...command, source: "claude" })),
 		},
 	});
+}
+
+function selectClaudeNativeCommandRecords(
+	value: readonly unknown[],
+	skillNames?: ReadonlySet<string>,
+) {
+	if (!Array.isArray(value)) return value;
+	return value.filter((entry) => {
+		if (typeof entry !== "object" || entry === null) return false;
+		const name = (entry as Record<string, unknown>).name;
+		return (
+			typeof name === "string" &&
+			CLAUDE_NATIVE_COMMAND_NAMES.has(name) &&
+			!skillNames?.has(name)
+		);
+	});
+}
+
+function verifiedClaudeNativeSkillNames(
+	skillDirectory?: RuntimeFilesystemSkillDirectoryV1,
+) {
+	const launchOptions = claudeNativeSkillLaunchOptions(skillDirectory);
+	return launchOptions.skills === undefined
+		? undefined
+		: new Set(launchOptions.skills);
 }
 
 async function boundedNativeCommandRead<T>(
@@ -658,6 +712,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		if (
 			command.capabilitySourceVersion !==
 				CLAUDE_NATIVE_PROVENANCE.nativeVersion ||
+			!CLAUDE_NATIVE_COMMAND_NAMES.has(command.capabilityName) ||
 			!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(command.capabilityName) ||
 			!command.parameters.isWellFormed() ||
 			command.parameters.length > 16 * 1024 ||
@@ -666,9 +721,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		)
 			nativeSkillUnsupported();
 		if (
-			this.options.skillDirectory
-				?.findSkills()
-				.some((entry) => entry.name === command.capabilityName)
+			verifiedClaudeNativeSkillNames(this.options.skillDirectory)?.has(
+				command.capabilityName,
+			)
 		)
 			nativeSkillUnsupported();
 		return command;
@@ -1578,6 +1633,18 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const admission = new Promise<void>((resolve) => {
 			admitted = resolve;
 		});
+		const admit = async () => {
+			if (this.closed) unavailable();
+			await file.update((state) => {
+				state.started = true;
+			});
+			await this.resolve(file, command, {
+				outcome: "accepted",
+				status: "running",
+			});
+			await this.status(file, command.executionId, "running");
+			admitted();
+		};
 		const transport = await openRuntimeMessagesTransport({
 			...option,
 			effort: selection.reasoningLevel,
@@ -1636,18 +1703,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					turn.modelResponse = { state: response, endTurn };
 				});
 			},
-			admit: async () => {
-				if (this.closed) unavailable();
-				await file.update((state) => {
-					state.started = true;
-				});
-				await this.resolve(file, command, {
-					outcome: "accepted",
-					status: "running",
-				});
-				await this.status(file, command.executionId, "running");
-				admitted();
-			},
+			admit,
 		});
 		if (this.closed) {
 			await transport.close();
@@ -1979,7 +2035,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						ANTHROPIC_AUTH_TOKEN: transport.modelAccess.credential,
 						CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
 					},
-					settingSources: [],
+					...claudeNativeQuerySettings(),
 					...claudeWorkspaceTools(
 						workspace,
 						join(directory, "memory"),
@@ -2019,19 +2075,18 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		}
 		if (command.kind === "native-command") {
 			try {
-				const current = parseClaudeNativeCommands(
-					await boundedNativeCommandRead(native.query.supportedCommands(), {
-						signal: AbortSignal.timeout(30_000),
-						expiresAt: Date.now() + 30_000,
-					}),
+				const skillNames = verifiedClaudeNativeSkillNames(
+					this.options.skillDirectory,
 				);
-				const skillNames = this.options.skillDirectory
-					? new Set(
-							this.options.skillDirectory
-								.findSkills()
-								.map((entry) => entry.name),
-						)
-					: undefined;
+				const current = parseClaudeNativeCommands(
+					selectClaudeNativeCommandRecords(
+						await boundedNativeCommandRead(native.query.supportedCommands(), {
+							signal: AbortSignal.timeout(30_000),
+							expiresAt: Date.now() + 30_000,
+						}),
+						skillNames,
+					),
+				);
 				const projection = projectClaudeNativeCommands({
 					nativeSessionRef: command.nativeSessionRef,
 					configVersion: this.options.configVersion,
@@ -2064,6 +2119,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				});
 				nativeSkillUnsupported();
 			}
+			await admit();
 			native.send(initialMessage);
 		}
 		handle = {
@@ -2394,16 +2450,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		};
 		if (selector === "commands") {
 			const commands = await this.discoverNativeCommands(nativeRead);
-			const skillNames = this.options.skillDirectory
-				? new Set(
-						this.options.skillDirectory.findSkills().map((entry) => entry.name),
-					)
-				: undefined;
 			const projection = projectClaudeNativeCommands({
 				nativeSessionRef: read.nativeSessionRef,
 				configVersion: this.options.configVersion,
 				commands,
-				...(skillNames ? { skillNames } : {}),
 			});
 			if (projection.selector !== "commands") nativeMetadataUnsupported();
 			read.assertCurrent();
@@ -2452,7 +2502,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			read,
 		);
 		await revalidate();
-		return parseClaudeNativeCommands(commands);
+		const skillNames = verifiedClaudeNativeSkillNames(
+			this.options.skillDirectory,
+		);
+		return parseClaudeNativeCommands(
+			selectClaudeNativeCommandRecords(commands, skillNames),
+		);
 	}
 	/** Return the deployment-owned Hub projection without consulting Claude. */
 	async discoverNativeSkills(read: ClaudeNativeCommandReadContext) {

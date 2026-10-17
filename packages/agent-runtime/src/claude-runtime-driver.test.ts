@@ -19,6 +19,7 @@ import {
 import {
 	type ClaudeNativeCommandReadContext,
 	ClaudeRuntimeDriver,
+	claudeNativeQuerySettings,
 	claudeNativeSkillLaunchOptions,
 	normalizeClaudeUncertainConnectionOperations,
 	parseClaudeNativeCommands,
@@ -114,9 +115,12 @@ it("keeps Claude native Skill loading disabled without a verified Applied root",
 		findSkills: () => [],
 		readSkill: async () => new Uint8Array(),
 	};
-	const disabled = { extraArgs: { "disable-slash-commands": null } };
-	expect(claudeNativeSkillLaunchOptions()).toEqual(disabled);
-	expect(claudeNativeSkillLaunchOptions(metadataOnly)).toEqual(disabled);
+	expect(claudeNativeSkillLaunchOptions()).toEqual({});
+	expect(claudeNativeSkillLaunchOptions(metadataOnly)).toEqual({});
+});
+
+it("keeps Claude Query setting sources empty", () => {
+	expect(claudeNativeQuerySettings()).toEqual({ settingSources: [] });
 });
 
 it("enables Claude native Skill loading only after the Applied root verifies", async () => {
@@ -153,6 +157,55 @@ it("enables Claude native Skill loading only after the Applied root verifies", a
 		await rm(root, { recursive: true, force: true });
 	}
 });
+
+it("keeps an Applied Skill name out of Claude's command projection", async () => {
+	const root = await mkdtemp(join(tmpdir(), "claude-applied-command-dedupe-"));
+	const skillPath = join(root, ".agents/skills/compact/SKILL.md");
+	await mkdir(dirname(skillPath), { recursive: true });
+	await writeFile(skillPath, "# compact skill\n");
+	const directory: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "a".repeat(64),
+		nativeRoot: root,
+		nativeSkillPaths: () => [skillPath],
+		findSkills: () => [
+			{
+				schemaVersion: 1,
+				name: "compact",
+				version: "1.0.0",
+				packageDigest: "b".repeat(64),
+				manifestDigest: "c".repeat(64),
+				targetPath: ".agents/skills/compact",
+				readOnly: true,
+			},
+		],
+		readSkill: async () => new Uint8Array(),
+	};
+	const fixture = await claudeNativeFixture();
+	try {
+		await fixture.restart({ ...fixture.options, skillDirectory: directory });
+		const accepted = await fixture.driver.execute(claudeCommand("dedupe"));
+		await fixture.settled(accepted.nativeSessionRef, "execution-dedupe");
+		const metadata = await fixture.driver.readNativeMetadataV1(
+			"commands",
+			metadataRead(accepted.nativeSessionRef),
+		);
+		if (metadata.selector !== "commands")
+			throw new Error("commands unavailable");
+		expect(
+			metadata.capabilities.some((entry) => entry.name === "compact"),
+		).toBe(false);
+		expect(
+			(
+				await fixture.driver.discoverNativeSkills(
+					commandRead(accepted.nativeSessionRef),
+				)
+			).entries.map((entry) => entry.name),
+		).toEqual(["compact"]);
+	} finally {
+		await fixture.close();
+		await rm(root, { recursive: true, force: true });
+	}
+}, 30000);
 
 it("fails closed when the Applied root cannot be revalidated", () => {
 	const directory: RuntimeFilesystemSkillDirectoryV1 = {
@@ -629,6 +682,14 @@ it("binds Claude native commands to the fixed SDK provenance and parameter diges
 				}),
 			),
 		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED" });
+		await expect(
+			Promise.resolve().then(() =>
+				driver.createNativeCommandCommand({
+					...command,
+					capabilityName: "workspace-summary",
+				}),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED" });
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });
@@ -828,7 +889,65 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 		const commands = await driver.discoverNativeCommands(
 			commandRead(accepted.nativeSessionRef),
 		);
-		expect(commands).toEqual([]);
+		expect(commands.map((entry) => entry.name)).toContain("compact");
+		expect(
+			commands.every((entry) =>
+				[
+					"clear",
+					"compact",
+					"context",
+					"debug",
+					"extra-usage",
+					"heapdump",
+					"init",
+					"loop",
+					"schedule",
+					"usage",
+				].includes(entry.name),
+			),
+		).toBe(true);
+		const commandMetadata = await driver.readNativeMetadataV1(
+			"commands",
+			metadataRead(accepted.nativeSessionRef),
+		);
+		if (commandMetadata.selector !== "commands")
+			throw new Error("commands unavailable");
+		const compact = commandMetadata.capabilities.find(
+			(entry) => entry.name === "compact",
+		);
+		expect(compact).toBeDefined();
+		const compactCommand = {
+			schemaVersion: 1 as const,
+			kind: "native-command" as const,
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			sessionGeneration: command.sessionGeneration,
+			executionId: "execution-compact",
+			turnId: "turn-compact",
+			operationId: "operation-compact",
+			nativeSessionRef: accepted.nativeSessionRef,
+			capabilityId: compact?.id ?? "",
+			directoryRevision: commandMetadata.revision,
+			capabilityName: "compact",
+			capabilitySourceVersion: compact?.source.version ?? "",
+			parameters: "",
+			parametersDigest: createHash("sha256").update("").digest("hex"),
+		};
+		const compactAccepted = await driver.execute(compactCommand);
+		expect(compactAccepted.result).toEqual({
+			outcome: "accepted",
+			status: "running",
+		});
+		await vi.waitFor(
+			async () =>
+				expect(
+					await driver.getStatus(
+						accepted.nativeSessionRef,
+						compactCommand.executionId,
+					),
+				).toBe("completed"),
+			{ timeout: 10000 },
+		);
 		expect(
 			await driver.discoverNativeSkills(commandRead(accepted.nativeSessionRef)),
 		).toEqual({
@@ -840,7 +959,12 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 				"commands",
 				metadataRead(accepted.nativeSessionRef),
 			),
-		).toMatchObject({ selector: "commands", capabilities: [] });
+		).toMatchObject({
+			selector: "commands",
+			capabilities: expect.arrayContaining([
+				expect.objectContaining({ name: "compact" }),
+			]),
+		});
 		expect(
 			await driver.readNativeMetadataV1(
 				"skills",
