@@ -308,4 +308,5 @@
 - 2026-10-17：读取 Connection Developers 与帮助第 29 章；确认当前页面仅提供 Browser API 参考，Consumer/declaration 管理未纳入 OpenAPI，Delegated action-calls/发现/状态查询尚未在默认运行时装配，不能把 Browser Cookie API 当作 Agent Infra 服务协议。
 - 2026-10-17：按用户要求跳过 Connection OAuth/Delegated 缺口，origin/main 前进到 `af675024` 后 rebase 无冲突，继续进行 UI/UX 回归。
 - 2026-10-17：origin/main 再前进到 `c7de551f`（#2725）后 rebase 无冲突；最新 Web 全量单测 90/90 文件、1085/1085 通过，desktop exported design viewport matrix 13/13 通过，mobile 项目按测试配置 13 项跳过，Web check-types 通过。
+- 2026-10-17：广义 Playwright 浏览器回归基线为 268 项：208 通过、40 失败、20 跳过；失败主要是旧测试断言与已定版 UI 不一致、无 API fixture 的超时及移动测试配置边界。针对真实 UI 问题修复目录选择结果层在选中后遮挡后续表单控件，管理目录 recovery 用例定向通过；修复移动 Sheet backdrop 抢占导航点击，移动导航 focus-trap 用例定向通过。
 - 2026-10-17：读取 `/var/folders/k1/181yvqs97nz8r3sy62r007m40000gn/T/agent-infra-connection-handoff.md` 后确认应接 Connection Agent PAT Binding；Consumer 注册、declaration 配置和服务凭据由 Connection 管理员控制，handoff 未提供现成 Consumer/credential，当前账号访问管理员页会回到「我的 Connection」。
