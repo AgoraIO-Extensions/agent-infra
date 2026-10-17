@@ -243,10 +243,12 @@ export function sessionSandboxSelectorMatchesV1(
 	actual: Readonly<Record<string, string>> | undefined,
 	expected: Readonly<Record<string, string>>,
 ): boolean {
+	// 没有 selector 的 Service 不是任何 Sandbox 的路由，不论期望里还剩哪些键。
+	if (!actual) return false;
 	const comparable = legacyComparableLabels(actual, expected) ?? {};
 	return (
-		Object.keys(actual ?? {}).length === Object.keys(comparable).length &&
-		Object.entries(comparable).every(([key, value]) => actual?.[key] === value)
+		Object.keys(actual).length === Object.keys(comparable).length &&
+		Object.entries(comparable).every(([key, value]) => actual[key] === value)
 	);
 }
 

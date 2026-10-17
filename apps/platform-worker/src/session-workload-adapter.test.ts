@@ -181,6 +181,18 @@ describe("Sandbox identity for resources created before the managed label (#2691
 				sessionSandboxLabelsV1(allocation),
 			),
 		).toBe(false);
+		// 没有 selector 的 Service 不能当作升级前的 Sandbox 路由，即使期望里只剩 managed 一个键。
+		expect(
+			sessionSandboxSelectorMatchesV1(undefined, {
+				[managedLabel]: "session-sandbox-v1",
+			}),
+		).toBe(false);
+		expect(
+			sessionSandboxSelectorMatchesV1(
+				undefined,
+				sessionSandboxLabelsV1(allocation),
+			),
+		).toBe(false);
 	});
 });
 
