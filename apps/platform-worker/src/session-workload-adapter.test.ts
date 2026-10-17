@@ -727,7 +727,9 @@ describe("session sandbox workload adapter", () => {
 				return "committed";
 			},
 		});
-		expect(progress.find((entry) => entry.resource.kind === "Pod")).toMatchObject({
+		expect(
+			progress.filter((entry) => entry.resource.kind === "Pod").at(-1),
+		).toMatchObject({
 			state: "absent",
 			deleteAttempted: true,
 			deleteCallResult: "unknown",

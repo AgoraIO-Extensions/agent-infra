@@ -1283,6 +1283,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						namespace: identity.namespace,
 						name: identity.name,
 					};
+					if (!existing)
+						await record(identity, "delete-requested", "not-attempted");
 					await record(identity, "absent", "unknown", absence);
 					deletedResources.push({
 						resource: identity,
@@ -1418,6 +1420,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						namespace: identity.namespace,
 						name: identity.name,
 					};
+					if (!existing)
+						await record(identity, "delete-requested", "not-attempted");
 					await record(identity, "absent", "unknown", absence);
 					deletedResources.push({
 						resource: identity,
