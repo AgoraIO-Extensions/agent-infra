@@ -1207,8 +1207,8 @@ export function createConversationRuntimeV2(
 						authorizationRevision: claim.authorizationRevision,
 						runtimeGrant: reference,
 						...(context.kind === "legacy-control" ||
-							claim.metadataRecovery ||
-							controlOnlyStop
+						claim.metadataRecovery ||
+						controlOnlyStop
 							? { controlOnly: true as const }
 							: {}),
 					},
