@@ -35,7 +35,10 @@ import {
 	sessionSandboxDeploymentTokenFixture,
 	sessionSandboxRuntimeInputFixture,
 } from "./test-support/session-sandbox-v4.js";
-import { workloadEgressRulesV1 } from "./workload-network.js";
+import {
+	type WorkloadEgressDestinationV1,
+	workloadEgressRulesV1,
+} from "./workload-network.js";
 
 const api = () => {
 	const resources = new Map<string, KubernetesObject>();
@@ -1691,6 +1694,28 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 		).not.toThrow();
 	});
 
+	it("accepts the release-scoped Worker selector", () => {
+		expect(() =>
+			sessionSandboxResourcesV1({
+				...allocation,
+				egress: {
+					nativeMetadataWorkerEgress: [
+						{
+							destination: {
+								namespace: "workload-test",
+								podLabels: {
+									"app.kubernetes.io/component": "platform-worker",
+									"app.kubernetes.io/instance": "agent-infra-e2e",
+								},
+							},
+							port: 3004,
+						},
+					],
+				},
+			} as SessionSandboxAllocationV1),
+		).not.toThrow();
+	});
+
 	it.each([
 		{
 			destination: { ip: "203.0.113.10" },
@@ -1721,7 +1746,31 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			},
 			port: 22,
 		},
-	])("rejects non-Worker native metadata egress destinations", (entry) => {
+		{
+			destination: {
+				namespace: "platform",
+				podLabels: {
+					"app.kubernetes.io/component": "platform-worker",
+					"app.kubernetes.io/instance": "bad instance",
+				},
+			},
+			port: 3004,
+		},
+		{
+			destination: {
+				namespace: "platform",
+				podLabels: {
+					"app.kubernetes.io/component": "platform-worker",
+					"app.kubernetes.io/instance": "agent-infra-e2e",
+					extra: "selector-widening",
+				},
+			},
+			port: 3004,
+		},
+	] as Array<{
+		destination: WorkloadEgressDestinationV1;
+		port: number;
+	}>)("rejects non-Worker native metadata egress destinations", (entry) => {
 		expect(() =>
 			sessionSandboxResourcesV1({
 				...allocation,
