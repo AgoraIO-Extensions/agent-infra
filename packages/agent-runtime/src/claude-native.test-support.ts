@@ -176,7 +176,9 @@ export async function claudeNativeFixture() {
 				{ timeout: 10000 },
 			);
 		},
-		async restart(config = options) {
+		async restart(
+			config: Parameters<typeof ClaudeRuntimeDriver.open>[0] = options,
+		) {
 			await driver.close();
 			driver = await ClaudeRuntimeDriver.open(config);
 		},
