@@ -1181,7 +1181,13 @@ export function createConversationRuntimeV2(
 				);
 				if (decision.outcome !== "allowed") return decision;
 				const { context } = decision;
+				// A business stop claimed while the Turn is still submitted/waiting
+				// can only precede Runtime acceptance: dispatch commits an `unknown`
+				// write-ahead before it may send anything, and a pending stop blocks
+				// later sends. Classify it control-only so Platform Core settles it
+				// locally instead of retrying against a Runtime that never accepted it.
 				const controlOnlyStop =
+					context.kind === "business" &&
 					claim.operation === "conversation.turn.stop.v1" &&
 					claim.stopPending &&
 					(claim.executionStatus === "submitted" ||

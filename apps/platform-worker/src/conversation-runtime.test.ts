@@ -1803,6 +1803,23 @@ describe("Trusted conversation Runtime adapter", () => {
 		});
 		h.runtime.close();
 	});
+	it("leaves a stop on an accepted Turn on the Runtime path", async () => {
+		const h = harness();
+		Object.assign(h.claim, {
+			operation: "conversation.turn.stop.v1",
+			executionStatus: "processing",
+			stopPending: true,
+			stopRequestId: "stop",
+		});
+		const decision = await h.runtime.authorization.authorize({
+			...h.claim,
+			claim: h.claim,
+		});
+		expect(decision).toMatchObject({ outcome: "allowed" });
+		if (decision.outcome !== "allowed") throw new Error("stop was not allowed");
+		expect(decision.authority).not.toHaveProperty("controlOnly");
+		h.runtime.close();
+	});
 	it("rechecks identity before sending a previously authorized user stop", async () => {
 		const h = harness();
 		Object.assign(h.claim, {
