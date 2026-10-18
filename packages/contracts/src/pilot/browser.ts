@@ -27,6 +27,12 @@ import {
 	AgentDefaultRelayKeyStateV1Schema,
 } from "./agent-default-relay-key.ts";
 import {
+	AgentUserManageGrantRequestV1Schema,
+	AgentUserManageGrantResponseV1Schema,
+	AgentUserManageRevokeRequestV1Schema,
+	AgentUserManageRevokeResponseV1Schema,
+} from "./agent-user-manage-grants.ts";
+import {
 	AgentUserUseGrantRequestV1Schema,
 	AgentUserUseGrantResponseV1Schema,
 	AgentUserUseRevokeRequestV1Schema,
@@ -1583,6 +1589,42 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+	"/api/v2/agents/{agentId}/api-manage-grants/{userId}": {
+		put: {
+			operationId: "grantAgentUserApiManageV1",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ agentId: pathId(), userId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(AgentUserManageGrantRequestV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Explicit user API manage grant",
+					AgentUserManageGrantResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		delete: {
+			operationId: "revokeAgentUserApiManageV1",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ agentId: pathId(), userId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(
+				AgentUserManageRevokeRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Explicit user API manage revocation",
+					AgentUserManageRevokeResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agents/{agentId}/commands": {
 		post: {
 			operationId: "commandAgentApiLifecycleV1",
@@ -2217,6 +2259,10 @@ export const pilotBrowserSchemasV2 = {
 	AgentUserUseRevokeResponseV1: AgentUserUseRevokeResponseV1Schema,
 	AgentUserUseGrantRequestV1: AgentUserUseGrantRequestV1Schema,
 	AgentUserUseGrantResponseV1: AgentUserUseGrantResponseV1Schema,
+	AgentUserManageGrantRequestV1: AgentUserManageGrantRequestV1Schema,
+	AgentUserManageGrantResponseV1: AgentUserManageGrantResponseV1Schema,
+	AgentUserManageRevokeRequestV1: AgentUserManageRevokeRequestV1Schema,
+	AgentUserManageRevokeResponseV1: AgentUserManageRevokeResponseV1Schema,
 	AgentApiLifecycleRequestV1: AgentApiLifecycleRequestV1Schema,
 	AgentApiLifecycleAcceptedResponseV1:
 		AgentApiLifecycleAcceptedResponseV1Schema,

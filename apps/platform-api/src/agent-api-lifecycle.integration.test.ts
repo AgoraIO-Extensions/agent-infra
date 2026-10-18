@@ -415,6 +415,37 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 		);
 	}
 
+	function changeUserManage(
+		granted: boolean,
+		key: string,
+		{
+			agentId = "agent-b",
+			userId = "same-id",
+			expectedRevision = 2,
+			cookie = "session=owner",
+			authorization,
+		}: {
+			agentId?: string;
+			userId?: string;
+			expectedRevision?: number;
+			cookie?: string;
+			authorization?: string;
+		} = {},
+	) {
+		return fetch(
+			`${origin}/api/v2/agents/${agentId}/api-manage-grants/${userId}`,
+			{
+				method: granted ? "PUT" : "DELETE",
+				headers: {
+					Cookie: cookie,
+					"Idempotency-Key": key,
+					"Content-Type": "application/json",
+					...(authorization ? { Authorization: authorization } : {}),
+				},
+				body: JSON.stringify({ schemaVersion: 1, expectedRevision }),
+			},
+		);
+	}
 	async function seedUnknownStop(
 		stopTimedOut = true,
 		conversationId = "unknown-stop-conversation",
@@ -689,6 +720,91 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 			where agent_id='agent-a' and principal_type='user'
 				and principal_id='same-id' and grant_type='use'`;
 		expect(grant?.revoked_at).not.toBeNull();
+	});
+
+	it("Owner grants and revokes a user's API manage grant for an Agent the user did not create through the API (#2759)", async () => {
+		const lifecycle = (command: string, key: string) =>
+			request("agent-b", command, key, material.user);
+		// Web 创建的 Agent：Owner 身份本身不给 API 管理权。
+		expect((await lifecycle("start", "before-grant")).status).toBe(404);
+		const granted = await changeUserManage(true, "manage-grant-1");
+		expect(granted.status, await granted.clone().text()).toBe(200);
+		const grant = (await granted.json()) as { authorizationRevision: string };
+		expect(grant).toMatchObject({
+			schemaVersion: 1,
+			agentId: "agent-b",
+			userId: "same-id",
+			granted: true,
+			replayed: false,
+		});
+		expect(
+			await (await changeUserManage(true, "manage-grant-1")).json(),
+		).toMatchObject({
+			granted: true,
+			authorizationRevision: grant.authorizationRevision,
+			replayed: true,
+		});
+		expect((await lifecycle("start", "after-grant")).status).toBe(202);
+		const revoked = await changeUserManage(false, "manage-revoke-1", {
+			expectedRevision: 3,
+		});
+		expect(revoked.status, await revoked.clone().text()).toBe(200);
+		expect(await revoked.json()).toMatchObject({
+			granted: false,
+			replayed: false,
+		});
+		expect(
+			await sql`select grant_type, revoked_at is not null revoked from platform.agent_principal_grants
+				where agent_id='agent-b' and principal_type='user' and principal_id='same-id'`,
+		).toEqual([{ grant_type: "manage", revoked: true }]);
+		expect((await lifecycle("stop", "after-revoke")).status).toBe(404);
+		// 负向：Bearer 凭证、非 Owner、期望修订不符、撤销从未授予的管理权。
+		expect(
+			(
+				await changeUserManage(true, "manage-bearer", {
+					authorization: `Bearer ${material.user}`,
+				})
+			).status,
+		).toBe(401);
+		expect(
+			(
+				await changeUserManage(true, "manage-responsible", {
+					cookie: "session=responsible",
+					expectedRevision: 3,
+				})
+			).status,
+		).toBe(404);
+		expect(
+			(await changeUserManage(true, "manage-stale", { expectedRevision: 1 }))
+				.status,
+		).toBe(404);
+		expect(
+			(
+				await changeUserManage(false, "manage-never", {
+					userId: "never-granted",
+					expectedRevision: 3,
+				})
+			).status,
+		).toBe(404);
+		// 授予、撤销、重放与拒绝都写入审计，且管理员审计页仍可读取。
+		for (const path of ["/api/v2/admin/audit", "/api/v3/admin/audit"]) {
+			const response = await fetch(`${origin}${path}?limit=100`, {
+				headers: { Cookie: "session=administrator" },
+			});
+			expect(response.status, path).toBe(200);
+			const page = (await response.json()) as {
+				items: Array<{ action: string }>;
+			};
+			expect(page.items.map((row) => row.action)).toEqual(
+				expect.arrayContaining([
+					"api.agent.manager.granted",
+					"api.agent.manager.replayed",
+					"api.agent.manager.revoked",
+					"api.agent.manager.refused",
+				]),
+			);
+			expect(JSON.stringify(page)).not.toContain(material.user);
+		}
 	});
 
 	it("Owner grants and re-grants a typed user API-use grant idempotently", async () => {

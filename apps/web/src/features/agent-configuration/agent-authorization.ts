@@ -5,22 +5,30 @@ import type {
 import {
 	grantAgentApplicationManagerV1,
 	grantAgentApplicationUseV1,
+	grantAgentUserApiManageV1,
 	grantAgentUserApiUseV1,
 	revokeAgentApplicationManagerV1,
 	revokeAgentApplicationUseV1,
+	revokeAgentUserApiManageV1,
 	revokeAgentUserApiUseV1,
 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
 	AgentApplicationManagerResponseV1,
+	AgentUserManageGrantRequestV1,
+	AgentUserManageGrantResponseV1,
+	AgentUserManageRevokeRequestV1,
+	AgentUserManageRevokeResponseV1,
 	AgentUserUseGrantRequestV1,
 	AgentUserUseGrantResponseV1,
 	AgentUserUseRevokeRequestV1,
 	AgentUserUseRevokeResponseV1,
 	GrantAgentApplicationManagerV1Responses,
 	GrantAgentApplicationUseV1Responses,
+	GrantAgentUserApiManageV1Responses,
 	GrantAgentUserApiUseV1Responses,
 	RevokeAgentApplicationManagerV1Responses,
 	RevokeAgentApplicationUseV1Responses,
+	RevokeAgentUserApiManageV1Responses,
 	RevokeAgentUserApiUseV1Responses,
 } from "../../pilot/generated-v2/types.gen.js";
 
@@ -173,5 +181,50 @@ export function grantUserApiUse(
 		throwOnError: false,
 	}).then((result: ApplicationRequestResult<GrantAgentUserApiUseV1Responses>) =>
 		requireData(result),
+	);
+}
+
+/** Owner 给用户授予某个 Agent 的 API 管理权（#2759），服务端校验 Owner 身份与管理修订。 */
+export function grantUserApiManage(
+	agentId: string,
+	userId: string,
+	expectedRevision: number,
+	client?: Client,
+): Promise<AgentUserManageGrantResponseV1> {
+	return grantAgentUserApiManageV1<false>({
+		client,
+		body: {
+			expectedRevision,
+			schemaVersion: 1,
+		} satisfies AgentUserManageGrantRequestV1,
+		headers: { "Idempotency-Key": operationKey() },
+		path: { agentId, userId },
+		responseStyle: "fields",
+		throwOnError: false,
+	}).then(
+		(result: ApplicationRequestResult<GrantAgentUserApiManageV1Responses>) =>
+			requireData(result),
+	);
+}
+
+export function revokeUserApiManage(
+	agentId: string,
+	userId: string,
+	expectedRevision: number,
+	client?: Client,
+): Promise<AgentUserManageRevokeResponseV1> {
+	return revokeAgentUserApiManageV1<false>({
+		client,
+		body: {
+			expectedRevision,
+			schemaVersion: 1,
+		} satisfies AgentUserManageRevokeRequestV1,
+		headers: { "Idempotency-Key": operationKey() },
+		path: { agentId, userId },
+		responseStyle: "fields",
+		throwOnError: false,
+	}).then(
+		(result: ApplicationRequestResult<RevokeAgentUserApiManageV1Responses>) =>
+			requireData(result),
 	);
 }

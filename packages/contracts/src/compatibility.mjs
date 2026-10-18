@@ -3520,6 +3520,37 @@ function isAgentUserUseGrantOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2759 只接受 Owner 给用户授予 / 撤销 API 管理权这一组新增路径与组件，其余契约必须完全不变。
+function isAgentUserManageGrantOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents/{agentId}/api-manage-grants/{userId}";
+	const schemas = [
+		"AgentUserManageGrantRequestV1",
+		"AgentUserManageGrantResponseV1",
+		"AgentUserManageRevokeRequestV1",
+		"AgentUserManageRevokeResponseV1",
+	];
+	if (
+		previous.paths?.[path] !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: { [path]: current.paths?.[path] },
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"9d318eeeffd58469a1d8af9e0c16401932ac1f6aa17150da83817081b6cc1c02"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #481 admits only this exact machine/personal lifecycle contract and its audit variants.
 function isAgentApiManagementOpenApiAddition(previous, current) {
 	const actions = [
@@ -4513,6 +4544,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isAgentApplicationUseGrantOpenApiAddition(previous, current) &&
 			!isAgentUserUseRevokeOpenApiAddition(previous, current) &&
 			!isAgentUserUseGrantOpenApiAddition(previous, current) &&
+			!isAgentUserManageGrantOpenApiAddition(previous, current) &&
 			!isAgentApiManagementOpenApiAddition(previous, current) &&
 			!isAgentApiStateFailureReasonOpenApiAddition(previous, current) &&
 			!isAgentApiCreationOpenApiAddition(previous, current) &&

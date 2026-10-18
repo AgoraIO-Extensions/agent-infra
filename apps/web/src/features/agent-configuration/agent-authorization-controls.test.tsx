@@ -10,8 +10,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	grantApplicationManager,
 	grantApplicationUse,
+	grantUserApiManage,
 	grantUserApiUse,
 	revokeApplicationUse,
+	revokeUserApiManage,
 	revokeUserApiUse,
 } from "./agent-authorization.js";
 import { AgentAuthorizationControls } from "./agent-authorization-controls.js";
@@ -19,9 +21,11 @@ import { AgentAuthorizationControls } from "./agent-authorization-controls.js";
 vi.mock("./agent-authorization.js", () => ({
 	grantApplicationManager: vi.fn(),
 	grantApplicationUse: vi.fn(),
+	grantUserApiManage: vi.fn(),
 	grantUserApiUse: vi.fn(),
 	revokeApplicationManager: vi.fn(),
 	revokeApplicationUse: vi.fn(),
+	revokeUserApiManage: vi.fn(),
 	revokeUserApiUse: vi.fn(),
 	AgentAuthorizationRequestError: class extends Error {
 		status?: number;
@@ -35,6 +39,48 @@ afterEach(() => {
 });
 
 describe("AgentAuthorizationControls", () => {
+	it("grants and revokes a user's API management with the entered revision", async () => {
+		vi.mocked(grantUserApiManage).mockResolvedValue({
+			agentId: "agent-1",
+			userId: "user-2",
+			authorizationRevision: "manage-2",
+			granted: true,
+			replayed: false,
+			schemaVersion: 1,
+		});
+		vi.mocked(revokeUserApiManage).mockResolvedValue({
+			agentId: "agent-1",
+			userId: "user-2",
+			authorizationRevision: "manage-3",
+			granted: false,
+			replayed: false,
+			schemaVersion: 1,
+		});
+		render(<AgentAuthorizationControls agentId="agent-1" enabled />);
+		fireEvent.click(screen.getByRole("button", { name: "用户" }));
+		fireEvent.change(screen.getByLabelText("用户 ID"), {
+			target: { value: "user-2" },
+		});
+		const grant = screen.getByRole("button", { name: "授权用户 API 管理" });
+		// 没有授权版本时不发请求。
+		expect((grant as HTMLButtonElement).disabled).toBe(true);
+		fireEvent.change(screen.getByLabelText("授权版本"), {
+			target: { value: "7" },
+		});
+		fireEvent.click(grant);
+		await waitFor(() =>
+			expect(grantUserApiManage).toHaveBeenCalledWith("agent-1", "user-2", 7),
+		);
+		expect(await screen.findByText("manage-2")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "撤销用户 API 管理" }));
+		await waitFor(() =>
+			expect(revokeUserApiManage).toHaveBeenCalledWith("agent-1", "user-2", 7),
+		);
+		expect(await screen.findByText("已撤销")).toBeTruthy();
+		expect(grantUserApiUse).not.toHaveBeenCalled();
+		expect(revokeUserApiUse).not.toHaveBeenCalled();
+	});
+
 	it("grants application management and renders returned metadata", async () => {
 		vi.mocked(grantApplicationManager).mockResolvedValue({
 			agentId: "agent-1",

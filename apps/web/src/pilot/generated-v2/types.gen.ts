@@ -471,6 +471,34 @@ export type AgentProjectionV2 = {
     };
 };
 
+export type AgentUserManageGrantRequestV1 = {
+    expectedRevision: number;
+    schemaVersion: 1;
+};
+
+export type AgentUserManageGrantResponseV1 = {
+    agentId: string;
+    authorizationRevision: string;
+    granted: true;
+    replayed: boolean;
+    schemaVersion: 1;
+    userId: string;
+};
+
+export type AgentUserManageRevokeRequestV1 = {
+    expectedRevision: number;
+    schemaVersion: 1;
+};
+
+export type AgentUserManageRevokeResponseV1 = {
+    agentId: string;
+    authorizationRevision: string | null;
+    granted: false;
+    replayed: boolean;
+    schemaVersion: 1;
+    userId: string;
+};
+
 export type AgentUserUseGrantRequestV1 = {
     expectedRevision: number;
     schemaVersion: 1;
@@ -2560,6 +2588,116 @@ export type GetAgentV2Responses = {
 };
 
 export type GetAgentV2Response = GetAgentV2Responses[keyof GetAgentV2Responses];
+
+export type RevokeAgentUserApiManageV1Data = {
+    body: AgentUserManageRevokeRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+        userId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/api-manage-grants/{userId}';
+};
+
+export type RevokeAgentUserApiManageV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokeAgentUserApiManageV1Error = RevokeAgentUserApiManageV1Errors[keyof RevokeAgentUserApiManageV1Errors];
+
+export type RevokeAgentUserApiManageV1Responses = {
+    /**
+     * Explicit user API manage revocation
+     */
+    200: AgentUserManageRevokeResponseV1;
+};
+
+export type RevokeAgentUserApiManageV1Response = RevokeAgentUserApiManageV1Responses[keyof RevokeAgentUserApiManageV1Responses];
+
+export type GrantAgentUserApiManageV1Data = {
+    body: AgentUserManageGrantRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+        userId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/api-manage-grants/{userId}';
+};
+
+export type GrantAgentUserApiManageV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GrantAgentUserApiManageV1Error = GrantAgentUserApiManageV1Errors[keyof GrantAgentUserApiManageV1Errors];
+
+export type GrantAgentUserApiManageV1Responses = {
+    /**
+     * Explicit user API manage grant
+     */
+    200: AgentUserManageGrantResponseV1;
+};
+
+export type GrantAgentUserApiManageV1Response = GrantAgentUserApiManageV1Responses[keyof GrantAgentUserApiManageV1Responses];
 
 export type RevokeAgentUserApiUseV1Data = {
     body: AgentUserUseRevokeRequestV1;
