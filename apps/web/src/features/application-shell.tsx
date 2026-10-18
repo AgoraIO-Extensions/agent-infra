@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import {
 	createContext,
+	Fragment,
 	type ReactNode,
 	type RefObject,
 	useContext,
@@ -209,23 +210,24 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const connectionUnavailable = (surface: string) => {
 		const reasonId = `${navigationId}-${surface}-connection-reason`;
 		return (
-			<span
-				key="connection"
-				className="platform-nav-item platform-nav-unavailable"
-				aria-disabled="true"
-				aria-describedby={reasonId}
-			>
-				<KeyRound {...navigationIconProps} />
-				{navigationLabels.connection}
-				{/* 设计宽度 219px 内保持单行：chip 用「不可用」且不带状态圆点。 */}
-				<Badge variant="outline" className="platform-nav-chip">
-					不可用
-				</Badge>
-				{/* 不展示原始 reason 值，只给出中文说明。 */}
+			<Fragment key="connection">
+				<span
+					className="platform-nav-item platform-nav-unavailable"
+					aria-disabled="true"
+					aria-describedby={reasonId}
+				>
+					<KeyRound {...navigationIconProps} />
+					{navigationLabels.connection}
+					{/* 设计宽度 219px 内保持单行：chip 用「不可用」且不带状态圆点。 */}
+					<Badge variant="outline" className="platform-nav-chip">
+						不可用
+					</Badge>
+				</span>
+				{/* 说明放在项外，避免读屏把内容与描述各读一遍；不展示原始 reason 值。 */}
 				<span id={reasonId} className="sr-only">
 					Connection 服务当前不可用。
 				</span>
-			</span>
+			</Fragment>
 		);
 	};
 	const renderNavigationItem = (key: NavigationKey, surface: string) => {

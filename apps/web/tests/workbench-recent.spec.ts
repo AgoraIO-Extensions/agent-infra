@@ -540,10 +540,10 @@ for (const agentCollection of ["held", "unavailable"] as const) {
 				}),
 			).toHaveCount(0);
 			await expect(
-				recent.getByRole("link", { name: /^查看历史：/ }),
+				recent.getByRole("link", { name: /^查看历史(：|$)/ }),
 			).toHaveCount(0);
 			await expect(
-				recent.getByRole("link", { name: /^继续对话：/ }),
+				recent.getByRole("link", { name: /^继续对话(：|$)/ }),
 			).toHaveCount(0);
 			const original = recent
 				.getByRole("link", { name: /^打开对话：/ })

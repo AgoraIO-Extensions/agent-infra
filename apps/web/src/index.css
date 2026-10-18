@@ -1817,7 +1817,7 @@ a[class~="group/button"] {
 [data-slot="button"]:focus-visible,
 [class~="group/button"]:focus-visible,
 [data-slot="checkbox"]:focus-visible,
-[role="dialog"] [data-slot="textarea"]:focus-visible,
+[role="dialog"] :is([data-slot="textarea"]):focus-visible,
 [data-slot="input"]:focus-visible,
 [data-slot="select-trigger"]:focus-visible,
 [data-slot="native-select"]:focus-visible {
@@ -2661,7 +2661,7 @@ a[class~="group/button"] {
 	}
 	/* 设计稿 .page-head .btn{width:100%}；纯图标按钮（size-11）保持 44px。 */
 	.page-heading
-	:is([data-slot="button"], a[class~="group/button"]):not(.size-11) {
+	:is([data-slot="button"], [class~="group/button"]):not(.size-11) {
 		width: 100%;
 		max-width: 100%;
 	}

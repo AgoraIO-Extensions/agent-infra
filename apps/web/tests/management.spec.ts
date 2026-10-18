@@ -1358,6 +1358,12 @@ for (const viewport of [
 			{ path: "/agents", actions: ["创建申请"] },
 			{ path: "/my-agents", actions: ["新建申请"] },
 			{ path: "/agents/agent-pilot-1", actions: ["开始对话", "配置与管理"] },
+			{
+				path: "/agents/agent-pilot-1/configuration",
+				actions: ["返回 Agent 详情"],
+			},
+			{ path: "/my-agents/application-browser-1", actions: ["返回我的 Agent"] },
+			{ path: "/my-agents/new", actions: ["退出创建"] },
 		]) {
 			await page.goto(path);
 			const heading = page.locator("main .page-heading").first();

@@ -383,7 +383,9 @@ test("employee direct administrator audit route neither requests nor displays ad
 	await expect(
 		page.getByText("当前无权访问平台审计。", { exact: true }),
 	).toBeVisible();
-	await expect(page.getByRole("button", { name: /^详情：/ })).toHaveCount(0);
+	await expect(page.getByRole("button", { name: /^详情(：|$)/ })).toHaveCount(
+		0,
+	);
 	expect(
 		api.requests.filter((request) =>
 			request.path.startsWith("/api/v3/admin/audit"),
@@ -508,7 +510,9 @@ test("same-user administrator role revocation clears list and detail despite a l
 		await expect(
 			page.getByText(governance.subject.subjectId, { exact: true }),
 		).toHaveCount(0);
-		await expect(page.getByRole("button", { name: /^详情：/ })).toHaveCount(0);
+		await expect(page.getByRole("button", { name: /^详情(：|$)/ })).toHaveCount(
+			0,
+		);
 		expect(api.requests.filter((request) => request.method !== "GET")).toEqual(
 			[],
 		);
