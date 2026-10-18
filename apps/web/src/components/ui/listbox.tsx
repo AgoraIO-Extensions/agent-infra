@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 
 type ListboxProps = {
 	"aria-busy"?: boolean;
+	"aria-label"?: string;
 	children: ReactNode;
 	className?: string;
 	id?: string;
@@ -21,8 +22,20 @@ type ListboxOptionProps = ComponentProps<typeof Button> & {
 	"aria-selected"?: boolean;
 };
 
-function ListboxOption({ className, ...props }: ListboxOptionProps) {
-	return <Button className={cn(className)} role="option" {...props} />;
+// 候选默认不进入 Tab 序列：焦点留在输入框，通过 aria-activedescendant 导航。
+function ListboxOption({
+	className,
+	tabIndex = -1,
+	...props
+}: ListboxOptionProps) {
+	return (
+		<Button
+			className={cn(className)}
+			role="option"
+			tabIndex={tabIndex}
+			{...props}
+		/>
+	);
 }
 
 export { Listbox, ListboxOption };

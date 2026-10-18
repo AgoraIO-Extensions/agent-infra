@@ -5,6 +5,12 @@ import {
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, test } from "@playwright/test";
 import { captureDesignContract, designViewports } from "./design-contract";
+import {
+	expectCardTable,
+	expectDesktopTable,
+	expectFieldControl,
+	expectFieldLabel,
+} from "./primitive-styles";
 
 const session = (role: "employee" | "admin") => ({
 	schemaVersion: 1,
@@ -99,6 +105,24 @@ async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 				path: url.pathname,
 				search: url.search,
 			});
+	});
+	// 审计主体按目录显示姓名；目录只返回已知用户。
+	await page.route("**/api/v2/directory/search?**", (route) => {
+		const ids =
+			new URL(route.request().url()).searchParams.get("ids")?.split(",") ?? [];
+		return route.fulfill({
+			json: {
+				schemaVersion: 1,
+				items: (["admin", "employee"] as const)
+					.map((item) => ({
+						kind: "user",
+						canonicalId: session(item).user.userId,
+						displayName: session(item).user.displayName,
+						email: `${session(item).user.userId}@example.test`,
+					}))
+					.filter((item) => ids.includes(item.canonicalId)),
+			},
+		});
 	});
 	await page.route(/\/api\/v1\/session$/, (route) =>
 		route.fulfill({
@@ -199,9 +223,7 @@ test("own audit page filters, paginates, opens detail, and fits mobile", async (
 	await expect(
 		page.getByRole("heading", { name: "只看自己的执行事实。", exact: true }),
 	).toBeVisible();
-	await expect(page.getByRole("button", { name: "查看审计详情" })).toHaveCount(
-		1,
-	);
+	await expect(page.getByRole("button", { name: /^详情：/ })).toHaveCount(1);
 	await page
 		.getByLabel("动作", { exact: true })
 		.selectOption("task.api.access");
@@ -212,14 +234,12 @@ test("own audit page filters, paginates, opens detail, and fits mobile", async (
 	await expect(
 		page.getByText("Execution：未提供", { exact: true }),
 	).toBeVisible();
-	await page.getByRole("button", { name: "查看审计详情" }).click();
+	await page.getByRole("button", { name: /^详情：/ }).click();
 	await expect(
 		page.getByRole("region", { name: "审计详情", exact: true }),
 	).toContainText("agent-audit-b");
 	await page.keyboard.press("Escape");
-	await expect(
-		page.getByRole("button", { name: "查看审计详情" }),
-	).toBeFocused();
+	await expect(page.getByRole("button", { name: /^详情：/ })).toBeFocused();
 	await expect(
 		page.evaluate(
 			() => document.documentElement.scrollWidth <= window.innerWidth,
@@ -254,12 +274,55 @@ for (const compact of [false, true]) {
 		).toBeVisible();
 		const row = page.getByRole("row").filter({ hasText: governance.summary });
 		await expect(row).toContainText(governance.subject.subjectId);
+		// 时间位于 <time dateTime title> 中，按本地时区显示，不出现 ISO 原文或秒。
+		const occurred = row.locator(`time[datetime="${governance.occurredAt}"]`);
+		await expect(occurred).toHaveAttribute(
+			"title",
+			/^\d{4} 年 \d{1,2} 月 \d{1,2} 日 \d{2}:\d{2}:\d{2}$/,
+		);
+		await expect(occurred).not.toHaveText(/T\d\d:|:\d\d:\d\d/);
 		await expect(row).toContainText("创建申请");
 		await expect(row).toContainText("Execution：未提供");
 		await expect(row.getByText("已受理", { exact: true })).toBeVisible();
 		await expect(row.getByText("成功", { exact: true })).toHaveCount(0);
 		await expect(page.getByText("最小审计数据", { exact: true })).toBeVisible();
 		await expect(page.getByText(/关联引用不授予查询权限/)).toBeVisible();
+		// 审计范围是首屏静态说明（B-10）：info notice，不设 live 角色，首屏没有 role="alert"。
+		const scopeNotice = page.locator('[data-slot="alert"]', {
+			hasText: "最小审计数据",
+		});
+		await expect(scopeNotice).not.toHaveAttribute("role");
+		await expect(scopeNotice).not.toHaveAttribute("aria-live");
+		await expect(page.getByRole("alert")).toHaveCount(0);
+		if (!compact) {
+			await expect(scopeNotice).toHaveCSS("display", "flex");
+			await expect(scopeNotice).toHaveCSS("column-gap", "10px");
+			await expect(scopeNotice).toHaveCSS("padding", "13px 14px");
+			await expect(scopeNotice).toHaveCSS("border-top-left-radius", "12px");
+			await expect(scopeNotice).toHaveCSS("font-size", "13px");
+			const accent = await page.evaluate(() => {
+				const probe = document.createElement("span");
+				probe.style.color = "var(--accent)";
+				document.body.append(probe);
+				const color = getComputedStyle(probe).color;
+				probe.remove();
+				return color;
+			});
+			const icon = scopeNotice.locator(":scope > svg");
+			await expect(icon).toHaveCSS("width", "17px");
+			await expect(icon).toHaveCSS("height", "17px");
+			await expect(icon).toHaveCSS("margin-top", "2px");
+			await expect(icon).toHaveCSS("color", accent);
+			const title = scopeNotice.getByText("最小审计数据", { exact: true });
+			expect(await title.evaluate((element) => element.tagName)).toBe("STRONG");
+			await expect(title).toHaveCSS("display", "block");
+			await expect(title).toHaveCSS("font-weight", "650");
+			const description = scopeNotice.locator(
+				'[data-slot="alert-description"]',
+			);
+			await expect(description).toHaveCSS("font-size", "13px");
+			await expect(description).toHaveCSS("line-height", "21.45px");
+		}
 		expect(
 			await page.evaluate(
 				() => document.documentElement.scrollWidth <= innerWidth,
@@ -281,14 +344,21 @@ for (const compact of [false, true]) {
 			"platform_worker",
 		);
 		await expect(worker.locator('[data-label="操作主体"]')).toContainText(
-			"原发起主体 · 用户：audit-user-a",
+			"原发起主体 · 用户：审计用户",
+		);
+		await expect(worker.locator('[data-label="操作主体"]')).not.toContainText(
+			"audit-user-a",
 		);
 		await expect(worker.getByText("结果待核实", { exact: true })).toBeVisible();
-		await worker.getByRole("button", { name: "查看审计详情" }).click();
+		await worker.getByRole("button", { name: /^详情：/ }).click();
 		const dialog = page.getByRole("region", { name: "审计详情", exact: true });
 		await expect(dialog).toContainText(background.summary);
 		await expect(dialog).toContainText("后台组件 · platform_worker");
-		await expect(dialog).toContainText("用户 · audit-user-a");
+		await expect(dialog).toContainText("用户 · 审计用户");
+		// 详情面板保留可复制的完整主体 ID 以便核对。
+		await expect(
+			dialog.getByText("audit-user-a", { exact: true }),
+		).toHaveAttribute("title", "audit-user-a");
 		await expect(dialog).toContainText("实际后台组件");
 		await info.attach("controlled-original-audit-detail-viewport", {
 			body: await page.screenshot({ animations: "disabled" }),
@@ -310,9 +380,7 @@ for (const compact of [false, true]) {
 			contentType: "image/png",
 		});
 		await page.keyboard.press("Escape");
-		await expect(
-			worker.getByRole("button", { name: "查看审计详情" }),
-		).toBeFocused();
+		await expect(worker.getByRole("button", { name: /^详情：/ })).toBeFocused();
 		await page.getByLabel("起始时间", { exact: true }).fill("2026-09-27T00:00");
 		await page.getByLabel("结束时间", { exact: true }).fill("2026-09-29T00:00");
 		await page.getByLabel("主体类型", { exact: true }).selectOption("user");
@@ -362,10 +430,9 @@ for (const compact of [false, true]) {
 		await expect(
 			page.getByRole("heading", { name: "只看自己的执行事实。", exact: true }),
 		).toBeVisible();
-		await expect(page.locator(".audit-table")).toContainText("audit-admin");
-		await expect(page.locator(".audit-table")).not.toContainText(
-			"audit-user-a",
-		);
+		await expect(page.locator(".audit-table")).toContainText("审计管理员");
+		await expect(page.locator(".audit-table")).not.toContainText("审计用户");
+		await expect(page.locator(".audit-table")).not.toContainText("audit-admin");
 		await expect(
 			page.getByText(governance.summary, { exact: true }),
 		).toHaveCount(0);
@@ -389,7 +456,7 @@ test("employee direct administrator audit route neither requests nor displays ad
 	await expect(
 		page.getByText("当前无权访问平台审计。", { exact: true }),
 	).toBeVisible();
-	await expect(page.getByRole("button", { name: "查看审计详情" })).toHaveCount(
+	await expect(page.getByRole("button", { name: /^详情(：|$)/ })).toHaveCount(
 		0,
 	);
 	expect(
@@ -465,7 +532,7 @@ test("same-user administrator role revocation clears list and detail despite a l
 		await expect(
 			page.getByText(governance.summary, { exact: true }),
 		).toBeVisible();
-		await page.getByRole("button", { name: "查看审计详情" }).click();
+		await page.getByRole("button", { name: /^详情：/ }).click();
 		await expect(
 			page.getByRole("region", { name: "审计详情", exact: true }),
 		).toContainText(governance.summary);
@@ -516,9 +583,9 @@ test("same-user administrator role revocation clears list and detail despite a l
 		await expect(
 			page.getByText(governance.subject.subjectId, { exact: true }),
 		).toHaveCount(0);
-		await expect(
-			page.getByRole("button", { name: "查看审计详情" }),
-		).toHaveCount(0);
+		await expect(page.getByRole("button", { name: /^详情(：|$)/ })).toHaveCount(
+			0,
+		);
 		expect(api.requests.filter((request) => request.method !== "GET")).toEqual(
 			[],
 		);
@@ -536,11 +603,46 @@ for (const route of ["/audit", "/admin/audit"]) {
 		await fixture(page, route === "/audit" ? "employee" : "admin");
 		await page.goto(route);
 		await expect(
-			page.getByRole("button", { name: "查看审计详情" }).first(),
+			page.getByRole("button", { name: /^详情：/ }).first(),
 		).toBeVisible();
 		for (const viewport of designViewports) {
 			await page.setViewportSize(viewport);
 			await captureDesignContract(page, info, route.replaceAll("/", "-"));
+		}
+	});
+}
+
+for (const administrator of [false, true]) {
+	test(`${administrator ? "platform" : "personal"} audit filters and table follow the exported design, with mobile cards`, async ({
+		page,
+	}) => {
+		await fixture(page, administrator ? "admin" : "employee");
+		await page.goto(administrator ? "/admin/audit" : "/audit");
+		const table = page.locator("table.audit-table");
+		await expect(table).toBeVisible();
+		for (const viewport of [
+			{ width: 1440, height: 900 },
+			{ width: 768, height: 1024 },
+		]) {
+			await page.setViewportSize(viewport);
+			// B-04 / B-05：审计筛选的字段标签与输入框。
+			await expectFieldLabel(
+				page,
+				page.locator("label", { hasText: "起始时间" }),
+			);
+			await expectFieldControl(page, page.getByLabel("Agent ID"));
+			await expectDesktopTable(page, table);
+		}
+		for (const viewport of [
+			{ width: 390, height: 844 },
+			{ width: 320, height: 640 },
+		]) {
+			await page.setViewportSize(viewport);
+			await expectCardTable(
+				page,
+				table,
+				page.getByRole("button", { name: /^详情：/ }).first(),
+			);
 		}
 	});
 }

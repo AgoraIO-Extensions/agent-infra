@@ -1,24 +1,35 @@
 import { AlertCircle, Building2, RefreshCw, ShieldOff } from "lucide-react";
 import {
 	type FormEvent,
+	useEffect,
 	useId,
 	useLayoutEffect,
 	useRef,
 	useState,
 } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
+import { Field, FieldLegend } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { LoadingLine } from "@/components/ui/spinner";
+import { Timestamp } from "@/components/ui/timestamp";
+import { withObjectName } from "@/lib/accessible-name";
 import type { ApplicationMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	type PersonalApiCredentialScope,
 	personalApiCredentialScopeLabels,
 	personalApiCredentialScopes,
 } from "../api-credentials/api-credentials.js";
+import {
+	DirectoryNameText,
+	DirectoryReadAlert,
+	useDirectoryNames,
+} from "../directory-names.js";
 import { ApplicationCredentialResult } from "./application-credential-result.js";
 import type {
 	ApplicationCredentialRequest,
@@ -47,10 +58,6 @@ type ApplicationManagementScreenProps = {
 };
 
 const defaultScopes: PersonalApiCredentialScope[] = ["agent:read"];
-
-function formatDate(value: string) {
-	return new Date(value).toLocaleString("zh-CN");
-}
 
 function errorMessage(error: unknown, fallback: string) {
 	return error instanceof Error && error.message ? error.message : fallback;
@@ -86,6 +93,7 @@ export function ApplicationManagementScreen({
 	const headingId = useId();
 	const [name, setName] = useState("");
 	const [applicationId, setApplicationId] = useState("");
+	const focusTitleAfterDisable = useRef(false);
 
 	async function submitRegistration(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -115,8 +123,11 @@ export function ApplicationManagementScreen({
 			</header>
 
 			{actionError ? (
-				<Alert variant="destructive">
-					<AlertCircle aria-hidden="true" />
+				<Alert
+					tone="danger"
+					role="alert"
+					icon={<AlertCircle aria-hidden="true" />}
+				>
 					<AlertDescription>
 						{errorMessage(actionError, "应用操作失败，请稍后重试。")}
 					</AlertDescription>
@@ -131,7 +142,7 @@ export function ApplicationManagementScreen({
 					}}
 				>
 					<h2 className="font-semibold text-base">打开既有应用</h2>
-					<div className="space-y-2">
+					<Field>
 						<Label htmlFor={`${headingId}-application`}>既有应用 ID</Label>
 						<Input
 							id={`${headingId}-application`}
@@ -146,7 +157,7 @@ export function ApplicationManagementScreen({
 						>
 							输入你负责的应用 ID，读取详情后再管理凭证。
 						</p>
-					</div>
+					</Field>
 					<Button type="submit" disabled={!applicationId.trim()}>
 						打开应用
 					</Button>
@@ -154,28 +165,23 @@ export function ApplicationManagementScreen({
 			) : null}
 
 			{state.kind === "loading" ? (
-				<p role="status" className="py-8 text-muted-foreground text-sm">
-					正在读取应用…
-				</p>
+				<LoadingLine className="py-8">正在读取应用…</LoadingLine>
 			) : null}
 			{state.kind === "denied" ? (
-				<Alert variant="destructive">
+				<Alert tone="warn">
 					<AlertDescription>当前账号无权管理应用。</AlertDescription>
 				</Alert>
 			) : null}
 			{state.kind === "unavailable" ? (
-				<Alert variant="destructive">
+				<Alert tone="danger" role="alert">
 					<AlertDescription>{unavailableMessage(state)}</AlertDescription>
 					{state.retryable && onRetry ? (
-						<Button
-							className="mt-3"
-							variant="outline"
-							type="button"
-							onClick={onRetry}
-						>
-							<RefreshCw aria-hidden="true" data-icon="inline-start" />
-							重新加载
-						</Button>
+						<AlertAction>
+							<Button variant="outline" type="button" onClick={onRetry}>
+								<RefreshCw aria-hidden="true" data-icon="inline-start" />
+								重新加载
+							</Button>
+						</AlertAction>
 					) : null}
 				</Alert>
 			) : null}
@@ -190,7 +196,7 @@ export function ApplicationManagementScreen({
 							应用负责人由当前登录会话决定，不需要填写 userId。
 						</p>
 					</div>
-					<div className="space-y-2">
+					<Field>
 						<Label htmlFor={`${headingId}-name`}>应用名称</Label>
 						<Input
 							id={`${headingId}-name`}
@@ -206,7 +212,7 @@ export function ApplicationManagementScreen({
 						>
 							使用团队成员能识别的名称。
 						</p>
-					</div>
+					</Field>
 					<Button
 						type="submit"
 						disabled={!onRegister || !name.trim() || isRegistering}
@@ -223,7 +229,23 @@ export function ApplicationManagementScreen({
 						state.application.status,
 					])}
 					application={state.application}
-					onDisable={onDisable}
+					onDisable={
+						onDisable
+							? (applicationId) => {
+									focusTitleAfterDisable.current = true;
+									return onDisable(applicationId).catch((error: unknown) => {
+										// 停用失败时不保留焦点标记，避免之后的状态变化抢焦点。
+										focusTitleAfterDisable.current = false;
+										throw error;
+									});
+								}
+							: undefined
+					}
+					consumeTitleFocus={() => {
+						const pendingFocus = focusTitleAfterDisable.current;
+						focusTitleAfterDisable.current = false;
+						return pendingFocus;
+					}}
 					isDisabling={isDisabling}
 					onIssueCredential={onIssueCredential}
 					isIssuingCredential={isIssuingCredential}
@@ -236,6 +258,8 @@ export function ApplicationManagementScreen({
 type ApplicationDetailsProps = {
 	application: ApplicationMetadataV1;
 	onDisable?: (applicationId: string) => Promise<ApplicationMetadataV1>;
+	// 停用成功后详情会按新状态重新挂载，由它把焦点放回应用名标题。
+	consumeTitleFocus?: () => boolean;
 	isDisabling: boolean;
 	onIssueCredential?: ApplicationManagementScreenProps["onIssueCredential"];
 	isIssuingCredential: boolean;
@@ -245,6 +269,11 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 	const { application } = props;
 	const id = useId();
 	const disabled = application.status === "disabled";
+	const title = useRef<HTMLHeadingElement>(null);
+	const { consumeTitleFocus } = props;
+	useEffect(() => {
+		if (disabled && consumeTitleFocus?.()) title.current?.focus();
+	}, [consumeTitleFocus, disabled]);
 	const active = useRef(false);
 	const pending = useRef(false);
 	const [recipientType, setRecipientType] = useState<"user" | "application">(
@@ -259,6 +288,12 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 	const [credentialResult, setCredentialResult] =
 		useState<ApplicationCredentialResponse | null>(null);
 	const [submitting, setSubmitting] = useState(false);
+	// 负责人与凭证接收用户合并读取一次目录，页面不显示用户 ID。
+	const recipient = credentialResult?.delivery.recipient;
+	const userNames = useDirectoryNames("user", [
+		application.responsibleUserId,
+		...(recipient?.principalType === "user" ? [recipient.principalId] : []),
+	]);
 	useLayoutEffect(() => {
 		active.current = true;
 		return () => {
@@ -345,11 +380,10 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 				<div className="flex flex-wrap items-start justify-between gap-4">
 					<div>
 						<div className="flex flex-wrap items-center gap-2">
-							<h2 className="font-semibold text-lg">{application.name}</h2>
-							<Badge
-								variant="outline"
-								data-status={disabled ? "disabled" : "available"}
-							>
+							<h2 ref={title} tabIndex={-1} className="font-semibold text-lg">
+								{application.name}
+							</h2>
+							<Badge tone={disabled ? "red" : "green"}>
 								{disabled ? "已停用" : "运行中"}
 							</Badge>
 						</div>
@@ -361,34 +395,63 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 						</p>
 					</div>
 					{!disabled && props.onDisable ? (
-						<Button
-							variant="destructive"
-							type="button"
+						<ConfirmDialog
 							disabled={props.isDisabling}
-							onClick={() => void props.onDisable?.(application.applicationId)}
-						>
-							<ShieldOff aria-hidden="true" />
-							{props.isDisabling ? "正在停用…" : "停用应用"}
-						</Button>
+							trigger={
+								<Button
+									variant="outline"
+									type="button"
+									aria-label={withObjectName(
+										props.isDisabling ? "正在停用…" : "停用应用",
+										application.name,
+									)}
+								>
+									<ShieldOff aria-hidden="true" />
+									{props.isDisabling ? "正在停用…" : "停用应用"}
+								</Button>
+							}
+							title="停用这个应用？"
+							subject={{ name: application.name }}
+							description="停用后平台拒绝该应用的新任务，并向进行中的任务发出取消请求；已发生的外部效果不会撤回。"
+							confirmLabel="停用应用"
+							finalFocus={title}
+							onConfirm={() =>
+								// 失败由 actionError 就地呈现。
+								void props
+									.onDisable?.(application.applicationId)
+									.catch(() => undefined)
+							}
+						/>
 					) : null}
 				</div>
 				<dl className="mt-5 grid gap-3 text-sm sm:grid-cols-3">
 					<div>
 						<dt className="text-muted-foreground">负责人</dt>
-						<dd>{application.responsibleUserId}</dd>
+						<dd>
+							<DirectoryNameText
+								name={userNames.resolve(application.responsibleUserId)}
+								status={userNames.status}
+							/>
+						</dd>
 					</div>
 					<div>
 						<dt className="text-muted-foreground">创建时间</dt>
-						<dd>{formatDate(application.createdAt)}</dd>
+						<dd>
+							<Timestamp value={application.createdAt} />
+						</dd>
 					</div>
 					<div>
 						<dt className="text-muted-foreground">更新时间</dt>
-						<dd>{formatDate(application.updatedAt)}</dd>
+						<dd>
+							<Timestamp value={application.updatedAt} />
+						</dd>
 					</div>
 				</dl>
 			</div>
+			<DirectoryReadAlert names={[userNames]} />
 			{credentialResult ? (
 				<ApplicationCredentialResult
+					names={userNames}
 					result={credentialResult}
 					onPrepareRotation={
 						props.onIssueCredential ? prepareRotation : undefined
@@ -413,7 +476,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 						</p>
 					</div>
 					<fieldset className="space-y-3">
-						<legend className="font-medium text-sm">操作</legend>
+						<FieldLegend>操作</FieldLegend>
 						<div className="flex flex-wrap gap-2">
 							<Button
 								type="button"
@@ -434,7 +497,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 						</div>
 					</fieldset>
 					{operation === "rotate" ? (
-						<div className="space-y-2">
+						<Field>
 							<Label htmlFor={`${id}-credential`}>要轮换的凭证 ID</Label>
 							<Input
 								id={`${id}-credential`}
@@ -442,11 +505,11 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 								onChange={(event) => setCredentialId(event.target.value)}
 								required
 							/>
-						</div>
+						</Field>
 					) : null}
 					<div className="grid gap-4 sm:grid-cols-2">
 						<fieldset className="space-y-2">
-							<legend className="font-medium text-sm">接收主体类型</legend>
+							<FieldLegend>接收主体类型</FieldLegend>
 							<div className="flex gap-2">
 								<Button
 									type="button"
@@ -468,7 +531,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 								</Button>
 							</div>
 						</fieldset>
-						<div className="space-y-2">
+						<Field>
 							<Label htmlFor={`${id}-recipient`}>接收主体 ID</Label>
 							<Input
 								id={`${id}-recipient`}
@@ -476,10 +539,10 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 								onChange={(event) => setRecipientId(event.target.value)}
 								required
 							/>
-						</div>
+						</Field>
 					</div>
 					<fieldset className="space-y-3">
-						<legend className="font-medium text-sm">权限范围</legend>
+						<FieldLegend>权限范围</FieldLegend>
 						<div className="grid gap-2 sm:grid-cols-2">
 							{personalApiCredentialScopes.map((scope) => {
 								const checkboxId = `${id}-${scope.replace(":", "-")}`;
@@ -493,7 +556,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 											checked={scopes.includes(scope)}
 											onCheckedChange={() => toggleScope(scope)}
 										/>
-										<Label htmlFor={checkboxId} className="font-normal">
+										<Label htmlFor={checkboxId} variant="option">
 											{personalApiCredentialScopeLabels[scope]}
 										</Label>
 										<code className="ml-auto text-[11px] text-muted-foreground">
@@ -504,12 +567,12 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 							})}
 						</div>
 						{scopes.length === 0 ? (
-							<Alert variant="destructive" className="p-2 text-sm">
-								至少选择一项权限范围。
+							<Alert tone="danger" role="alert">
+								<AlertDescription>至少选择一项权限范围。</AlertDescription>
 							</Alert>
 						) : null}
 					</fieldset>
-					<div className="space-y-2">
+					<Field>
 						<Label htmlFor={`${id}-expiry`}>过期时间（可选）</Label>
 						<Input
 							id={`${id}-expiry`}
@@ -518,7 +581,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 							value={expiresAt}
 							onChange={(event) => setExpiresAt(event.target.value)}
 						/>
-					</div>
+					</Field>
 					<Button
 						type="submit"
 						disabled={

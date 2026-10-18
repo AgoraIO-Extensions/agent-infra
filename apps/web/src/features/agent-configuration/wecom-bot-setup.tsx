@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { withObjectName } from "@/lib/accessible-name";
 import {
 	beginWecomSetup,
 	cancelWecomSetup,
@@ -14,6 +16,8 @@ import {
 import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
 import { openWecomQrAuthorizationV1 } from "./wecom-qr-authorization.js";
 
+// 卡片标题即页面上的对象名，用于区分两张企微卡片里的同名按钮（N-12）。
+const setupTitle = "智能机器人";
 const labels = {
 	not_configured: "未配置",
 	callback: "已配置回调模式",
@@ -328,13 +332,14 @@ export function WecomBotSetup({
 		}
 	}
 
+	const submitLabel = busy ? "验证中…" : "验证并绑定";
 	return (
 		<section
 			aria-label="智能机器人配置"
 			className="space-y-4 rounded-lg border border-slate-200 p-4"
 		>
 			<div className="flex flex-wrap items-center justify-between gap-3">
-				<h3 className="font-semibold">智能机器人</h3>
+				<h3 className="font-semibold">{setupTitle}</h3>
 				<p aria-live="polite" className="text-sm">
 					{status ? labels[status] : "连接状态暂不可用"}
 				</p>
@@ -352,7 +357,7 @@ export function WecomBotSetup({
 				</p>
 			</div>
 			<div className="grid gap-4 sm:grid-cols-2">
-				<div className="space-y-2">
+				<Field>
 					<Label htmlFor="wecom-bot-id">Bot ID</Label>
 					<Input
 						id="wecom-bot-id"
@@ -361,8 +366,8 @@ export function WecomBotSetup({
 						onChange={(e) => setBotId(e.target.value)}
 						autoComplete="off"
 					/>
-				</div>
-				<div className="space-y-2">
+				</Field>
+				<Field>
 					<Label htmlFor="wecom-bot-secret">Secret</Label>
 					<Input
 						id="wecom-bot-secret"
@@ -372,11 +377,11 @@ export function WecomBotSetup({
 						onChange={(e) => setSecret(e.target.value)}
 						autoComplete="new-password"
 					/>
-				</div>
+				</Field>
 			</div>
-			<Label className="min-h-11 flex-nowrap items-start gap-3 text-sm leading-6">
+			<Label variant="option" className="items-start">
 				<Checkbox
-					className="mt-1"
+					className="mt-0.5"
 					checked={confirmed}
 					disabled={busy}
 					onCheckedChange={(value) => setConfirmed(value)}
@@ -390,7 +395,7 @@ export function WecomBotSetup({
 				提交后清空。
 			</p>
 			{error ? (
-				<Alert variant="destructive">
+				<Alert tone="danger" role="alert">
 					<AlertDescription>{error}</AlertDescription>
 				</Alert>
 			) : null}
@@ -398,16 +403,18 @@ export function WecomBotSetup({
 				<Button
 					type="button"
 					disabled={busy}
+					aria-label={withObjectName(submitLabel, setupTitle)}
 					onClick={() => {
 						void submit();
 					}}
 				>
-					{busy ? "验证中…" : "验证并绑定"}
+					{submitLabel}
 				</Button>
 				{busy ? (
 					<Button
 						type="button"
 						variant="outline"
+						aria-label={withObjectName("取消配置", setupTitle)}
 						onClick={() => {
 							void cancel();
 						}}
@@ -419,6 +426,7 @@ export function WecomBotSetup({
 					type="button"
 					variant="outline"
 					disabled={busy}
+					aria-label={withObjectName("刷新状态", setupTitle)}
 					onClick={() => {
 						void refresh();
 					}}

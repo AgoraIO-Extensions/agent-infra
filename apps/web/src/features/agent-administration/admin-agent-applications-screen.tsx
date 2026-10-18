@@ -1,22 +1,28 @@
 import { RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
+	DialogFooter,
+	DialogHeader,
 	DialogTitle,
 	DialogTrigger,
 } from "@/components/ui/dialog";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
+import { Field } from "@/components/ui/field";
+import { IdentifierText } from "@/components/ui/identifier-text";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { SearchInput } from "@/components/ui/search-input";
+import { LoadingLine } from "@/components/ui/spinner";
 import {
 	Table,
 	TableBody,
@@ -26,7 +32,10 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { Timestamp } from "@/components/ui/timestamp";
 import { useResultFocus } from "@/hooks/use-result-focus";
+import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
+import { statusTone } from "@/lib/status-tone";
 import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -34,6 +43,13 @@ import {
 	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
 import type { BrowserSessionState } from "../browser-session.js";
+import {
+	AvailabilityNameList,
+	type AvailabilityNames,
+	DirectoryReadAlert,
+	formatPerson,
+	useAvailabilityNames,
+} from "../directory-names.js";
 import {
 	formatMultiServiceManifestSummary,
 	parseMultiServiceManifest,
@@ -65,6 +81,7 @@ type AdminAgentApplicationsScreenProps = {
 
 type ApplicationReviewProps = {
 	application: AgentApplicationProjectionV2;
+	names: AvailabilityNames;
 	onDecision: AdminAgentApplicationsScreenProps["onDecision"];
 	pendingDecision?: PendingDecision;
 	decisionError?: RequestError | null;
@@ -72,6 +89,30 @@ type ApplicationReviewProps = {
 	onOpenChange?: (open: boolean) => void;
 };
 
+/** Owner 显示投影中的姓名；姓名缺失时，系统管理员页面附 ID 短形式以便核对。 */
+function OwnerNames({
+	owners,
+}: {
+	owners: AgentApplicationProjectionV2["configuration"]["owners"];
+}) {
+	if (!owners.length) return <>未提供</>;
+	return (
+		<>
+			{owners.map((owner, index) => (
+				<span key={owner.userId}>
+					{index ? "、" : null}
+					{formatPerson({ displayName: owner.displayName }).name}
+					{owner.displayName.trim() ? null : (
+						<>
+							{" "}
+							<IdentifierText label="Owner ID" value={owner.userId} />
+						</>
+					)}
+				</span>
+			))}
+		</>
+	);
+}
 function isSystemAdministrator(session: BrowserSessionProjectionV1) {
 	// This controls visibility only. The Platform authorizes every decision command.
 	return session.user.roles.includes("system_admin");
@@ -102,6 +143,7 @@ function DecisionFeedback({
 
 function ApplicationReview({
 	application,
+	names,
 	onDecision,
 	pendingDecision,
 	decisionError,
@@ -169,16 +211,20 @@ function ApplicationReview({
 				{currentDecision ? "审批提交中…" : "审阅申请"}
 			</DialogTrigger>
 			<DialogContent showCloseButton={!decisionSubmitting}>
-				<DialogTitle>{rejecting ? "驳回申请" : "审阅创建申请"}</DialogTitle>
-				<DialogDescription>
-					{rejecting
-						? "请输入申请人可以据此修改的具体原因。"
-						: "确认用途、Owner、使用范围与平台给出的只读资源规格。"}
-				</DialogDescription>
-				<h3 className="mt-5 break-words font-semibold">{application.name}</h3>
-				<p className="break-words text-muted-foreground">
-					{application.description}
-				</p>
+				<DialogHeader>
+					<DialogTitle>{rejecting ? "驳回申请" : "审阅创建申请"}</DialogTitle>
+				</DialogHeader>
+				<DialogBody>
+					<DialogDescription>
+						{rejecting
+							? "请输入申请人可以据此修改的具体原因。"
+							: "确认用途、Owner、使用范围与平台给出的只读资源规格。"}
+					</DialogDescription>
+					<h3 className="mt-5 break-words font-semibold">{application.name}</h3>
+					<p className="break-words text-muted-foreground">
+						{application.description}
+					</p>
+				</DialogBody>
 				{!rejecting ? (
 					<>
 						<dl className="detail-list my-5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-3 text-sm">
@@ -204,19 +250,16 @@ function ApplicationReview({
 							) : null}
 							<dt>Owner</dt>
 							<dd className="break-words">
-								{configuration.owners
-									.map((owner) => owner.displayName || owner.userId)
-									.join("、") || "未提供"}
+								<OwnerNames owners={configuration.owners} />
 							</dd>
 							<dt>使用范围</dt>
-							<dd className="break-all">
-								{configuration.availability
-									.map((target) =>
-										target.kind === "user"
-											? `员工：${target.userId}`
-											: `组织：${target.organizationId}`,
-									)
-									.join("；") || "未提供额外范围"}
+							<dd className="break-words">
+								<AvailabilityNameList
+									targets={configuration.availability}
+									names={names}
+									identifier
+									empty="未提供额外范围"
+								/>
 							</dd>
 							<dt>模型</dt>
 							<dd className="break-words">
@@ -230,7 +273,9 @@ function ApplicationReview({
 							</dd>
 							<dt>默认推理强度</dt>
 							<dd className="break-words">
-								{configuration.defaultReasoningLevel ?? "未提供"}
+								{configuration.defaultReasoningLevel
+									? reasoningLevelLabel(configuration.defaultReasoningLevel)
+									: "未提供"}
 							</dd>
 							<dt>预设规格</dt>
 							<dd>{resourceProfile.displayName}（只读）</dd>
@@ -243,7 +288,7 @@ function ApplicationReview({
 						<p className="text-muted-foreground text-sm">
 							批准后才开始创建 Agent；审批受理不表示服务已就绪。
 						</p>
-						<div className="mt-5 flex flex-wrap gap-3">
+						<DialogFooter>
 							<Button
 								disabled={decisionSubmitting || resolved}
 								onClick={() => {
@@ -273,7 +318,7 @@ function ApplicationReview({
 							>
 								取消
 							</Button>
-						</div>
+						</DialogFooter>
 					</>
 				) : (
 					<form
@@ -295,7 +340,7 @@ function ApplicationReview({
 							});
 						}}
 					>
-						<div className="space-y-2">
+						<Field>
 							<Label htmlFor={reasonId}>驳回原因</Label>
 							<Textarea
 								ref={reasonInput}
@@ -311,12 +356,12 @@ function ApplicationReview({
 								}}
 							/>
 							{reasonError && (
-								<Alert id={`${reasonId}-error`} variant="destructive">
+								<Alert id={`${reasonId}-error`} tone="danger" role="alert">
 									<AlertDescription>请输入驳回原因。</AlertDescription>
 								</Alert>
 							)}
-						</div>
-						<div className="flex flex-wrap gap-3">
+						</Field>
+						<DialogFooter>
 							<Button disabled={decisionSubmitting || resolved} type="submit">
 								{currentDecision?.decision === "reject"
 									? "提交中…"
@@ -330,11 +375,11 @@ function ApplicationReview({
 							>
 								返回审阅
 							</Button>
-						</div>
+						</DialogFooter>
 					</form>
 				)}
 				{decisionError && (
-					<Alert variant="destructive" className="mt-4">
+					<Alert tone="danger" role="alert" className="mt-4">
 						<AlertDescription>
 							{decisionFailure(decisionError)}
 						</AlertDescription>
@@ -359,6 +404,12 @@ export function AdminAgentApplicationsScreen({
 	const [source, setSource] = useState("all");
 	const filterId = useId();
 	const applications = state.kind === "ready" ? state.applications : [];
+	// 表格与审阅弹窗共用同一次目录读取。
+	const names = useAvailabilityNames(
+		applications.flatMap(
+			(application) => application.configuration.availability,
+		),
+	);
 	const sources = [
 		...new Set(
 			applications.map((a) =>
@@ -399,10 +450,10 @@ export function AdminAgentApplicationsScreen({
 			setOpenApplicationId(null);
 	}, [openApplicationId, session, state]);
 	if (session.kind === "loading")
-		return <p aria-live="polite">正在读取审批申请…</p>;
+		return <LoadingLine>正在读取审批申请…</LoadingLine>;
 	if (session.kind !== "ready" || !isSystemAdministrator(session.session))
 		return (
-			<Alert>
+			<Alert tone="warn">
 				<AlertDescription>当前无法访问审批。</AlertDescription>
 			</Alert>
 		);
@@ -415,49 +466,50 @@ export function AdminAgentApplicationsScreen({
 					<p>审批信息保持紧凑：来源、Owner、范围、模型与渠道一屏完成判断。</p>
 				</div>
 				{state.kind === "ready" && (
-					<Badge variant="outline" data-status="pending_approval">
+					<Badge tone="amber">
 						{applications.filter((a) => a.status === "pending_approval").length}{" "}
 						项待处理
 					</Badge>
 				)}
 			</header>
 			<DecisionFeedback decision={decisionResult} />
+			{state.kind === "ready" ? (
+				<DirectoryReadAlert names={[names]} className="mt-4" />
+			) : null}
 			{state.kind === "loading" ? (
-				<p role="status">正在读取审批申请…</p>
+				<LoadingLine>正在读取审批申请…</LoadingLine>
 			) : state.kind === "unavailable" ? (
-				<Alert className="mt-5">
+				<Alert tone="danger" role="alert" className="mt-5">
 					<AlertDescription>
 						{state.retryable
 							? "审批列表暂时无法读取，请稍后重试。"
 							: "审批列表不可用，请联系管理员。"}
 					</AlertDescription>
 					{state.retryable && onRetry ? (
-						<Button
-							className="mt-4"
-							variant="outline"
-							disabled={retrying}
-							onClick={onRetry}
-							type="button"
-						>
-							<RefreshCwIcon aria-hidden="true" data-icon="inline-start" />
-							{retrying ? "正在重试…" : "重新加载审批"}
-						</Button>
+						<AlertAction>
+							<Button
+								variant="outline"
+								disabled={retrying}
+								onClick={onRetry}
+								type="button"
+							>
+								<RefreshCwIcon aria-hidden="true" data-icon="inline-start" />
+								{retrying ? "正在重试…" : "重新加载审批"}
+							</Button>
+						</AlertAction>
 					) : null}
 				</Alert>
 			) : (
 				<>
 					<div className="approval-filters">
-						<div>
-							<Label htmlFor={`${filterId}-search`}>搜索申请或 Owner</Label>
-							<Input
-								id={`${filterId}-search`}
-								type="search"
-								placeholder="搜索申请名称或 Owner"
-								value={search}
-								onChange={(event) => setSearch(event.target.value)}
-							/>
-						</div>
-						<div>
+						<SearchInput
+							label="搜索申请或 Owner"
+							id={`${filterId}-search`}
+							placeholder="搜索申请名称或 Owner"
+							value={search}
+							onChange={(event) => setSearch(event.target.value)}
+						/>
+						<Field>
 							<Label htmlFor={`${filterId}-source`}>来源</Label>
 							<NativeSelect
 								id={`${filterId}-source`}
@@ -471,16 +523,20 @@ export function AdminAgentApplicationsScreen({
 									</NativeSelectOption>
 								))}
 							</NativeSelect>
-						</div>
+						</Field>
 					</div>
 					{filteredApplications.length === 0 ? (
-						<Empty className="py-12">
+						<Empty>
 							<EmptyDescription>
 								{applications.length ? "没有匹配的申请。" : "暂无待审批申请。"}
 							</EmptyDescription>
 						</Empty>
 					) : (
-						<Table className="approval-table" aria-label="创建审批">
+						<Table
+							className="approval-table"
+							mobileLayout="cards"
+							aria-label="创建审批"
+						>
 							<TableHeader>
 								<TableRow>
 									<TableHead>申请</TableHead>
@@ -496,14 +552,14 @@ export function AdminAgentApplicationsScreen({
 							<TableBody>
 								{filteredApplications.map((application) => (
 									<TableRow key={application.applicationId}>
-										<TableCell>
+										<TableCell data-label="申请">
 											<strong>{application.name}</strong>
 											<small>{application.description}</small>
-											<Badge variant="outline" data-status={application.status}>
+											<Badge tone={statusTone(application.status)}>
 												{agentManagementStatusLabels[application.status]}
 											</Badge>
 										</TableCell>
-										<TableCell>
+										<TableCell data-label="来源 / Owner">
 											{application.source.kind === "standard"
 												? application.source.templateId
 												: "manifest" in application.source
@@ -511,33 +567,29 @@ export function AdminAgentApplicationsScreen({
 													: "自定义 Agent"}
 											<small>
 												Owner ·{" "}
-												{application.configuration.owners
-													.map((o) => o.displayName || o.userId)
-													.join("、") || "未提供"}
+												<OwnerNames owners={application.configuration.owners} />
 											</small>
 										</TableCell>
-										<TableCell>
-											{application.configuration.availability
-												.map((target) =>
-													target.kind === "user"
-														? `用户 ${target.userId}`
-														: `组织 ${target.organizationId}`,
-												)
-												.join("、") || "未额外指定"}
+										<TableCell data-label="可用范围">
+											<AvailabilityNameList
+												targets={application.configuration.availability}
+												names={names}
+												identifier
+												empty="未额外指定"
+											/>
 										</TableCell>
-										<TableCell>
+										<TableCell data-label="模型">
 											{application.configuration.modelOptions
 												.map((model) => model.displayName)
 												.join("、") || "未提供模型选项"}
 										</TableCell>
-										<TableCell>
-											<time dateTime={application.submittedAt}>
-												{new Date(application.submittedAt).toLocaleString()}
-											</time>
+										<TableCell data-label="提交时间">
+											<Timestamp value={application.submittedAt} />
 										</TableCell>
-										<TableCell>
+										<TableCell data-cell="actions">
 											{application.status === "pending_approval" && (
 												<ApplicationReview
+													names={names}
 													application={application}
 													onDecision={onDecision}
 													pendingDecision={pendingDecision}
@@ -563,7 +615,7 @@ export function AdminAgentApplicationsScreen({
 				</>
 			)}
 			{decisionError && openApplicationId === null && (
-				<Alert variant="destructive" className="mt-4">
+				<Alert tone="danger" role="alert" className="mt-4">
 					<AlertDescription>{decisionFailure(decisionError)}</AlertDescription>
 				</Alert>
 			)}

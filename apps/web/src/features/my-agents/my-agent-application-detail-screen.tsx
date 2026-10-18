@@ -1,18 +1,18 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+	Alert,
+	AlertAction,
+	AlertDescription,
+	AlertTitle,
+} from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import {
-	Dialog,
-	DialogClose,
-	DialogContent,
-	DialogDescription,
-	DialogTitle,
-	DialogTrigger,
-} from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Timestamp } from "@/components/ui/timestamp";
 import { useResultFocus } from "@/hooks/use-result-focus";
+import { statusTone } from "@/lib/status-tone";
 
 import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -21,6 +21,7 @@ import {
 	agentManagementStatusLabels,
 	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
+import { DirectoryRecords } from "../directory-fields.js";
 import { PageLoadingState } from "../page-loading-state.js";
 import {
 	agentApplicationEditActionLabels,
@@ -83,23 +84,24 @@ export function MyAgentApplicationDetailScreen({
 				<header className="page-heading">
 					<h1 id="my-agent-application-detail-heading">申请详情暂不可用</h1>
 				</header>
-				<Alert className="my-3">
+				<Alert tone="danger" role="alert" className="my-3">
 					<AlertDescription>
 						{state.retryable
 							? "暂时无法读取申请，请稍后重试。"
 							: "当前无法查看此申请。"}
 					</AlertDescription>
 					{state.retryable && onRetry ? (
-						<Button
-							className="mt-4"
-							variant="outline"
-							disabled={retrying}
-							onClick={onRetry}
-							type="button"
-						>
-							<RefreshCw aria-hidden="true" data-icon="inline-start" />
-							{retrying ? "正在重新加载…" : "重新加载申请"}
-						</Button>
+						<AlertAction>
+							<Button
+								variant="outline"
+								disabled={retrying}
+								onClick={onRetry}
+								type="button"
+							>
+								<RefreshCw aria-hidden="true" data-icon="inline-start" />
+								{retrying ? "正在重新加载…" : "重新加载申请"}
+							</Button>
+						</AlertAction>
 					) : null}
 				</Alert>
 				<Link
@@ -121,7 +123,7 @@ export function MyAgentApplicationDetailScreen({
 			<header className="page-heading">
 				<div>
 					<Link
-						className={buttonVariants({ variant: "ghost" })}
+						className={buttonVariants({ variant: "ghost", size: "sm" })}
 						to="/my-agents"
 					>
 						<ArrowLeft aria-hidden="true" />
@@ -139,7 +141,7 @@ export function MyAgentApplicationDetailScreen({
 							<h2>审批进度</h2>
 							<p>状态以最新申请记录为准</p>
 						</div>
-						<Badge variant="outline" data-status={application.status}>
+						<Badge tone={statusTone(application.status)}>
 							{agentManagementStatusLabels[application.status]}
 						</Badge>
 					</div>
@@ -148,13 +150,10 @@ export function MyAgentApplicationDetailScreen({
 							<div>
 								<strong>申请已提交</strong>
 								<small>
-									提交于{" "}
-									<time dateTime={application.submittedAt}>
-										{application.submittedAt}
-									</time>
+									提交于 <Timestamp value={application.submittedAt} />
 								</small>
 							</div>
-							<Badge variant="outline">已提交</Badge>
+							<Badge tone="green">已提交</Badge>
 						</li>
 						<li>
 							<div>
@@ -163,9 +162,7 @@ export function MyAgentApplicationDetailScreen({
 									{application.decision ? (
 										<span>
 											审批时间{" "}
-											<time dateTime={application.decision.decidedAt}>
-												{application.decision.decidedAt}
-											</time>
+											<Timestamp value={application.decision.decidedAt} />
 										</span>
 									) : application.status === "withdrawn" ? (
 										"申请已撤回，不再等待审批。"
@@ -174,7 +171,7 @@ export function MyAgentApplicationDetailScreen({
 									)}
 								</small>
 							</div>
-							<Badge variant="outline" data-status={application.status}>
+							<Badge tone={statusTone(application.status)}>
 								{application.decision
 									? "已审批"
 									: application.status === "withdrawn"
@@ -184,11 +181,9 @@ export function MyAgentApplicationDetailScreen({
 						</li>
 					</ul>
 					{application.decision?.reason ? (
-						<Alert variant="destructive" role="status" className="my-3">
-							<AlertDescription>
-								<strong>审批原因：</strong>
-								<span>{application.decision.reason}</span>
-							</AlertDescription>
+						<Alert tone="danger" className="my-3">
+							<AlertTitle>审批原因：</AlertTitle>
+							<AlertDescription>{application.decision.reason}</AlertDescription>
 						</Alert>
 					) : null}
 
@@ -203,45 +198,32 @@ export function MyAgentApplicationDetailScreen({
 							</Link>
 						) : null}
 						{application.status === "pending_approval" ? (
-							<Dialog
+							<ConfirmDialog
 								open={confirmationFor === confirmationKey}
 								onOpenChange={(open) =>
 									setConfirmationFor(open ? confirmationKey : null)
 								}
-							>
-								<DialogTrigger
-									className={buttonVariants({ variant: "outline" })}
-									disabled={withdrawalPending}
-									ref={withdrawButtonRef}
-								>
-									{withdrawalPending ? "正在撤回…" : "撤回申请"}
-								</DialogTrigger>
-								<DialogContent>
-									<DialogTitle>撤回这项申请？</DialogTitle>
-									<DialogDescription>
+								disabled={withdrawalPending}
+								trigger={
+									<Button variant="outline" ref={withdrawButtonRef}>
+										{withdrawalPending ? "正在撤回…" : "撤回申请"}
+									</Button>
+								}
+								title="撤回这条申请？"
+								description={
+									<>
 										“{application.name}
 										”撤回后保留为只读历史，不再等待审批。再次申请需要新建申请。
-									</DialogDescription>
-									<div className="mt-6 flex flex-wrap gap-3">
-										<DialogClose
-											className={buttonVariants({ variant: "outline" })}
-										>
-											继续保留申请
-										</DialogClose>
-										<Button
-											disabled={withdrawalPending}
-											onClick={() => {
-												if (withdrawalPending) return;
-												setWithdrawalLatched(true);
-												setConfirmationFor(null);
-												onWithdraw();
-											}}
-										>
-											确认撤回
-										</Button>
-									</div>
-								</DialogContent>
-							</Dialog>
+									</>
+								}
+								cancelLabel="继续保留申请"
+								confirmLabel="确认撤回"
+								onConfirm={() => {
+									if (withdrawalPending) return;
+									setWithdrawalLatched(true);
+									onWithdraw();
+								}}
+							/>
 						) : null}
 						{hasCreatedAgent(application) ? (
 							<Link
@@ -259,7 +241,13 @@ export function MyAgentApplicationDetailScreen({
 						</p>
 					) : null}
 					{submittedResult ? (
-						<Alert ref={resultRef} tabIndex={-1} className="my-3" role="status">
+						<Alert
+							tone="info"
+							ref={resultRef}
+							tabIndex={-1}
+							className="my-3"
+							role="status"
+						>
 							<AlertDescription>
 								撤回请求已提交：
 								{agentManagementStatusLabels[submittedResult.status]}。
@@ -267,7 +255,7 @@ export function MyAgentApplicationDetailScreen({
 						</Alert>
 					) : null}
 					{withdrawalError ? (
-						<Alert variant="destructive" className="my-3">
+						<Alert tone="danger" role="alert" className="my-3">
 							<AlertDescription>
 								暂未确认撤回结果，请先查看申请的最新状态。
 							</AlertDescription>
@@ -297,19 +285,10 @@ export function MyAgentApplicationDetailScreen({
 							</dd>
 							<dt>使用范围</dt>
 							<dd>
-								{configuration.availability.length ? (
-									<ul>
-										{configuration.availability.map((target) => (
-											<li key={JSON.stringify(target)}>
-												{target.kind === "user"
-													? `用户 ${target.userId}`
-													: `组织 ${target.organizationId}`}
-											</li>
-										))}
-									</ul>
-								) : (
-									"未额外指定"
-								)}
+								<DirectoryRecords
+									targets={configuration.availability}
+									empty="未额外指定"
+								/>
 							</dd>
 							<dt>模型范围</dt>
 							<dd>

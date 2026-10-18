@@ -23,14 +23,18 @@ import {
 } from "lucide-react";
 import {
 	createContext,
+	Fragment,
 	type ReactNode,
+	type RefObject,
 	useContext,
 	useEffect,
+	useId,
 	useLayoutEffect,
 	useRef,
 	useState,
 } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import {
 	Breadcrumb,
 	BreadcrumbItem,
@@ -52,9 +56,22 @@ import type { BrowserSessionProjectionV1 } from "../pilot/generated/types.gen";
 import { LoginAction } from "./login-action";
 import { LogoutAction } from "./logout-action";
 import {
+	type NavigationKey,
+	navigationGroups,
+	navigationLabels,
+	resolvePageChrome,
+	signInDocumentTitle,
+} from "./page-chrome";
+import {
 	BrowserSessionQueryContext,
 	useBrowserSession,
 } from "./use-browser-session";
+
+const navigationIconProps = {
+	size: 17,
+	strokeWidth: 1.8,
+	"aria-hidden": true,
+} as const;
 
 const SessionContext = createContext<{
 	identityKey: string;
@@ -124,14 +141,12 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		sessionProjection,
 	]);
 	const pathname = useLocation({ select: (location) => location.pathname });
-	const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
 	const conversationSelection = useLocation({
 		select: (location) => location.search.mode === "conversation",
 	});
-	const selectingConversation =
-		normalizedPathname === "/agents" && conversationSelection;
-	const chatContext = pathname.startsWith("/chat/") || selectingConversation;
 	const [sheet, setSheet] = useState(false);
+	const sheetBrand = useRef<HTMLAnchorElement>(null);
+	const navigationId = useId();
 	const routeHref = useLocation({ select: (location) => location.href });
 	const previousRoute = useRef(routeHref);
 	useEffect(() => {
@@ -168,54 +183,211 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const notFound = useRouterState({
 		select: (state) => state.matches.some((match) => match.globalNotFound),
 	});
-	const title = notFound
-		? "页面不存在"
-		: normalizedPathname === "/"
-			? "工作台"
-			: selectingConversation
-				? "选择 Agent 开始对话"
-				: chatContext || pathname.includes("/conversations")
-					? "对话"
-					: pathname.includes("/configuration")
-						? "配置与生命周期"
-						: normalizedPathname === "/admin/audit"
-							? "平台审计"
-							: normalizedPathname === "/audit"
-								? "我的执行审计"
-								: normalizedPathname === "/admin/agents"
-									? "Agent 管理"
-									: normalizedPathname.startsWith("/admin")
-										? "创建审批"
-										: normalizedPathname === "/my-agents/new"
-											? "创建申请"
-											: normalizedPathname.startsWith("/my-agents/") &&
-													normalizedPathname.endsWith("/edit")
-												? "编辑申请"
-												: normalizedPathname.startsWith("/my-agents/") &&
-														normalizedPathname !== "/my-agents"
-													? "申请详情"
-													: normalizedPathname.startsWith("/my-agents")
-														? "我的 Agent"
-														: normalizedPathname ===
-																"/my-settings/api-credentials"
-															? "API 凭证与应用"
-															: normalizedPathname === "/my-settings/relay-key"
-																? "个人 Relay Key"
-																: normalizedPathname === "/skills/manage"
-																	? "Skill Hub 管理"
-																	: normalizedPathname === "/skills" ||
-																			normalizedPathname.startsWith("/skills/")
-																		? "Skill Hub"
-																		: normalizedPathname === "/eval"
-																			? "评测"
-																			: normalizedPathname === "/ops"
-																				? "运维观测"
-																				: normalizedPathname === "/agents"
-																					? "Agent 目录"
-																					: "Agent 详情";
-	const navigation = (
+	const chrome = resolvePageChrome({
+		pathname,
+		conversationSelection,
+		notFound,
+	});
+	// 未登录时整页是登录入口，标签页标题与登录页一致。
+	const documentTitle =
+		session.state.kind === "unavailable"
+			? signInDocumentTitle
+			: chrome.documentTitle;
+	useEffect(() => {
+		document.title = documentTitle;
+	}, [documentTitle]);
+	const closeSheet = () => setSheet(false);
+	// 当前项只由路由外观表决定；exact 防止 Link 按前缀自动补 aria-current（N-21）。
+	const navigationItemProps = (key: NavigationKey) => {
+		const current = chrome.navKey === key;
+		return {
+			"aria-current": current ? ("page" as const) : undefined,
+			className: current ? "platform-nav-item selected" : "platform-nav-item",
+			activeOptions: { exact: true },
+			onClick: closeSheet,
+		};
+	};
+	const connectionUnavailable = (surface: string) => {
+		const reasonId = `${navigationId}-${surface}-connection-reason`;
+		return (
+			<Fragment key="connection">
+				<span
+					className="platform-nav-item platform-nav-unavailable"
+					aria-disabled="true"
+					aria-describedby={reasonId}
+				>
+					<KeyRound {...navigationIconProps} />
+					{navigationLabels.connection}
+					{/* 设计宽度 219px 内保持单行：chip 用「不可用」且不带状态圆点。 */}
+					<Badge tone="gray" className="platform-nav-chip before:hidden">
+						不可用
+					</Badge>
+				</span>
+				{/* 说明放在项外，避免读屏把内容与描述各读一遍；不展示原始 reason 值。 */}
+				<span id={reasonId} className="sr-only">
+					Connection 服务当前不可用。
+				</span>
+			</Fragment>
+		);
+	};
+	const renderNavigationItem = (key: NavigationKey, surface: string) => {
+		const label = navigationLabels[key];
+		switch (key) {
+			case "workbench":
+				return (
+					<Link key={key} {...navigationItemProps(key)} to="/">
+						<House {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "agents":
+				return (
+					<Link
+						key={key}
+						{...navigationItemProps(key)}
+						to="/agents"
+						search={{ mode: undefined }}
+						activeOptions={{ exact: true, explicitUndefined: true }}
+					>
+						<Bot {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "chat":
+				return (
+					<Link
+						key={key}
+						{...navigationItemProps(key)}
+						to="/agents"
+						search={{ mode: "conversation" }}
+					>
+						<MessageCircle {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "skills":
+				return (
+					<Link key={key} {...navigationItemProps(key)} to="/skills">
+						<Layers {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "my-agents":
+				return (
+					<Link key={key} {...navigationItemProps(key)} to="/my-agents">
+						<Layers {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "application-form":
+				return (
+					<Link key={key} {...navigationItemProps(key)} to="/my-agents/new">
+						<Plus {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "my-skills":
+				return (
+					<Link key={key} {...navigationItemProps(key)} to="/skills/manage">
+						<Layers {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "personal-keys":
+				return (
+					<Link
+						key={key}
+						{...navigationItemProps(key)}
+						to="/my-settings/relay-key"
+					>
+						<KeyRound {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "credentials":
+				return (
+					<Link
+						key={key}
+						{...navigationItemProps(key)}
+						to="/my-settings/api-credentials"
+					>
+						<Settings2 {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "audit":
+				return (
+					<Link key={key} {...navigationItemProps(key)} to="/audit">
+						<ClipboardMinus {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "connection":
+				return connectionUrl ? (
+					<a
+						key={key}
+						className="platform-nav-item platform-nav-external"
+						href={connectionUrl}
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						<span>
+							<KeyRound {...navigationIconProps} />
+							{label}
+						</span>
+						<ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
+					</a>
+				) : (
+					connectionUnavailable(surface)
+				);
+			case "approvals":
+				return (
+					<Link key={key} {...navigationItemProps(key)} to="/admin/approvals">
+						<Check {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "admin-agents":
+				return (
+					<Link key={key} {...navigationItemProps(key)} to="/admin/agents">
+						<List {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "eval":
+				return (
+					<Link key={key} {...navigationItemProps(key)} to="/eval">
+						<FlaskConical {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "platform-audit":
+				return (
+					<Link key={key} {...navigationItemProps(key)} to="/admin/audit">
+						<ClipboardMinus {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "ops":
+				return (
+					<Link key={key} {...navigationItemProps(key)} to="/ops">
+						<Activity {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+		}
+	};
+	const renderNavigation = (
+		surface: "sidebar" | "sheet",
+		brandRef?: RefObject<HTMLAnchorElement | null>,
+	) => (
 		<>
-			<Link className="platform-brand" to="/" onClick={() => setSheet(false)}>
+			<Link
+				ref={brandRef}
+				className="platform-brand"
+				to="/"
+				onClick={closeSheet}
+			>
 				<span className="platform-brand-mark" aria-hidden="true">
 					A
 				</span>
@@ -225,203 +397,18 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				</div>
 			</Link>
 			<nav aria-label="主导航">
-				<nav aria-label="工作区" className="platform-nav-group">
-					<p className="platform-nav-label">工作区</p>
-					<Link
-						aria-current={normalizedPathname === "/" ? "page" : undefined}
-						className={`platform-nav-item ${normalizedPathname === "/" ? "selected" : ""}`}
-						to="/"
-						onClick={() => setSheet(false)}
-					>
-						<House size={17} strokeWidth={1.8} aria-hidden="true" />
-						工作台
-					</Link>
-					<Link
-						aria-current={
-							pathname.startsWith("/agents") && !selectingConversation
-								? "page"
-								: undefined
-						}
-						className={`platform-nav-item ${pathname.startsWith("/agents") && !selectingConversation ? "selected" : ""}`}
-						to="/agents"
-						search={{ mode: undefined }}
-						activeOptions={{ explicitUndefined: true }}
-						onClick={() => setSheet(false)}
-					>
-						<Bot size={17} strokeWidth={1.8} aria-hidden="true" />
-						Agent 目录
-					</Link>
-					<Link
-						aria-current={chatContext ? "page" : undefined}
-						className={`platform-nav-item ${chatContext ? "selected" : ""}`}
-						to="/agents"
-						search={{ mode: "conversation" }}
-						onClick={() => setSheet(false)}
-					>
-						<MessageCircle size={17} strokeWidth={1.8} aria-hidden="true" />
-						对话
-					</Link>
-				</nav>
-				<nav aria-label="我的管理" className="platform-nav-group">
-					<p className="platform-nav-label">我的管理</p>
-					<Link
-						aria-current={
-							normalizedPathname.startsWith("/my-agents") &&
-							normalizedPathname !== "/my-agents/new"
-								? "page"
-								: undefined
-						}
-						className={`platform-nav-item ${normalizedPathname.startsWith("/my-agents") && normalizedPathname !== "/my-agents/new" ? "selected" : ""}`}
-						to="/my-agents"
-						onClick={() => setSheet(false)}
-					>
-						<Layers size={17} strokeWidth={1.8} aria-hidden="true" />
-						我的 Agent
-					</Link>
-					<Link
-						aria-current={
-							normalizedPathname === "/my-agents/new" ? "page" : undefined
-						}
-						className={`platform-nav-item ${normalizedPathname === "/my-agents/new" ? "selected" : ""}`}
-						to="/my-agents/new"
-						onClick={() => setSheet(false)}
-					>
-						<Plus size={17} strokeWidth={1.8} aria-hidden="true" />
-						创建申请
-					</Link>
-					<Link
-						aria-current={normalizedPathname === "/audit" ? "page" : undefined}
-						className={`platform-nav-item ${normalizedPathname === "/audit" ? "selected" : ""}`}
-						to="/audit"
-						onClick={() => setSheet(false)}
-					>
-						<ClipboardMinus size={17} strokeWidth={1.8} aria-hidden="true" />
-						我的执行审计
-					</Link>
-					<Link
-						aria-current={
-							normalizedPathname.startsWith("/skills") ? "page" : undefined
-						}
-						className={`platform-nav-item ${normalizedPathname.startsWith("/skills") ? "selected" : ""}`}
-						to="/skills/manage"
-						onClick={() => setSheet(false)}
-					>
-						<Layers size={17} strokeWidth={1.8} aria-hidden="true" />
-						Skill Hub 管理
-					</Link>
-					<Link
-						aria-current={
-							normalizedPathname === "/my-settings/api-credentials"
-								? "page"
-								: undefined
-						}
-						className={`platform-nav-item ${normalizedPathname === "/my-settings/api-credentials" ? "selected" : ""}`}
-						to="/my-settings/api-credentials"
-						onClick={() => setSheet(false)}
-					>
-						<Settings2 size={17} strokeWidth={1.8} aria-hidden="true" />
-						API 凭证与应用
-					</Link>
-					<Link
-						aria-current={
-							normalizedPathname === "/my-settings/relay-key"
-								? "page"
-								: undefined
-						}
-						className={`platform-nav-item ${normalizedPathname === "/my-settings/relay-key" ? "selected" : ""}`}
-						to="/my-settings/relay-key"
-						onClick={() => setSheet(false)}
-					>
-						<KeyRound size={17} strokeWidth={1.8} aria-hidden="true" />
-						个人 Relay Key
-					</Link>
-					{connectionUrl ? (
-						<a
-							className="platform-nav-item platform-nav-external"
-							href={connectionUrl}
-							target="_blank"
-							rel="noopener noreferrer"
+				{navigationGroups
+					.filter((group) => admin || !group.administratorOnly)
+					.map((group) => (
+						<nav
+							key={group.label}
+							aria-label={group.label}
+							className="platform-nav-group"
 						>
-							<span>
-								<KeyRound size={17} strokeWidth={1.8} aria-hidden="true" />
-								我的 Connection
-							</span>
-							<ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
-						</a>
-					) : (
-						<span
-							className="platform-nav-item"
-							aria-disabled="true"
-							title={
-								session.state.kind === "ready" &&
-								session.state.connection?.status === "unavailable"
-									? `Connection: ${session.state.connection.reason}`
-									: "Connection: unavailable"
-							}
-						>
-							<KeyRound size={17} strokeWidth={1.8} aria-hidden="true" />
-							我的 Connection（暂不可用）
-						</span>
-					)}
-				</nav>
-				{admin && (
-					<nav aria-label="系统管理" className="platform-nav-group">
-						<p className="platform-nav-label">系统管理</p>
-						<Link
-							aria-current={
-								normalizedPathname.startsWith("/admin/approvals")
-									? "page"
-									: undefined
-							}
-							className={`platform-nav-item ${normalizedPathname.startsWith("/admin/approvals") ? "selected" : ""}`}
-							to="/admin/approvals"
-							onClick={() => setSheet(false)}
-						>
-							<Check size={17} strokeWidth={1.8} aria-hidden="true" />
-							创建审批
-						</Link>
-						<Link
-							aria-current={
-								normalizedPathname === "/admin/agents" ? "page" : undefined
-							}
-							className={`platform-nav-item ${normalizedPathname === "/admin/agents" ? "selected" : ""}`}
-							to="/admin/agents"
-							onClick={() => setSheet(false)}
-						>
-							<List size={17} strokeWidth={1.8} aria-hidden="true" />
-							Agent 管理
-						</Link>
-						<Link
-							aria-current={
-								normalizedPathname === "/admin/audit" ? "page" : undefined
-							}
-							className={`platform-nav-item ${normalizedPathname === "/admin/audit" ? "selected" : ""}`}
-							to="/admin/audit"
-							onClick={() => setSheet(false)}
-						>
-							<ClipboardMinus size={17} strokeWidth={1.8} aria-hidden="true" />
-							平台审计
-						</Link>
-						<Link
-							aria-current={normalizedPathname === "/eval" ? "page" : undefined}
-							className={`platform-nav-item ${normalizedPathname === "/eval" ? "selected" : ""}`}
-							to="/eval"
-							onClick={() => setSheet(false)}
-						>
-							<FlaskConical size={17} strokeWidth={1.8} aria-hidden="true" />
-							评测
-						</Link>
-						<Link
-							aria-current={normalizedPathname === "/ops" ? "page" : undefined}
-							className={`platform-nav-item ${normalizedPathname === "/ops" ? "selected" : ""}`}
-							to="/ops"
-							onClick={() => setSheet(false)}
-						>
-							<Activity size={17} strokeWidth={1.8} aria-hidden="true" />
-							运维观测
-						</Link>
-					</nav>
-				)}
+							<p className="platform-nav-label">{group.label}</p>
+							{group.items.map((key) => renderNavigationItem(key, surface))}
+						</nav>
+					))}
 			</nav>
 			<div className="platform-nav-bottom">
 				<div className="platform-identity">
@@ -431,7 +418,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						</AvatarFallback>
 					</Avatar>
 					<div>
-						{user?.displayName ?? "尚未登录"}
+						<strong>{user?.displayName ?? "尚未登录"}</strong>
 						<small>
 							{user ? (admin ? "系统管理员" : "员工") : "登录后进入工作空间"}
 						</small>
@@ -457,7 +444,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 			<a className="platform-skip-link" href="#main-content">
 				跳至主要内容
 			</a>
-			<Sidebar className="platform-sidebar">{navigation}</Sidebar>
+			<Sidebar className="platform-sidebar">
+				{renderNavigation("sidebar")}
+			</Sidebar>
 			<div className="platform-workspace">
 				<header className="platform-topbar">
 					<Sheet open={sheet} onOpenChange={setSheet}>
@@ -477,6 +466,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							side="left"
 							showCloseButton={false}
 							className="platform-nav-sheet"
+							aria-modal="true"
+							// 设计稿：打开后焦点落在品牌链接，Esc 关闭后回到「打开导航」。
+							initialFocus={sheetBrand}
 						>
 							<SheetHeader className="sr-only">
 								<SheetTitle>主导航</SheetTitle>
@@ -494,26 +486,14 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							>
 								<X aria-hidden="true" />
 							</SheetClose>
-							{navigation}
+							{renderNavigation("sheet", sheetBrand)}
 						</SheetContent>
 					</Sheet>
 					<Breadcrumb className="platform-breadcrumb">
 						<BreadcrumbList>
+							<BreadcrumbItem>{chrome.crumbParent}</BreadcrumbItem>
 							<BreadcrumbItem>
-								{normalizedPathname.startsWith("/admin")
-									? "系统管理"
-									: normalizedPathname.startsWith("/my-agents") ||
-											normalizedPathname === "/audit" ||
-											normalizedPathname.startsWith("/my-settings") ||
-											normalizedPathname.startsWith("/skills")
-										? "我的管理"
-										: normalizedPathname === "/eval" ||
-												normalizedPathname === "/ops"
-											? "系统管理"
-											: "工作区"}
-							</BreadcrumbItem>
-							<BreadcrumbItem>
-								<BreadcrumbPage>{title}</BreadcrumbPage>
+								<BreadcrumbPage>{chrome.title}</BreadcrumbPage>
 							</BreadcrumbItem>
 						</BreadcrumbList>
 					</Breadcrumb>
@@ -543,7 +523,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						</AuthenticatedContent>
 					) : (
 						<main className="platform-content max-w-2xl">
-							<h1 className="font-semibold text-[28px]">登录工作空间</h1>
+							<h1 className="text-balance font-semibold text-[28px] tracking-normal">
+								登录工作空间
+							</h1>
 							<p className="mt-5 text-muted-foreground" role="status">
 								{session.isFetching
 									? "正在确认登录状态…"

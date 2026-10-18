@@ -2,6 +2,12 @@ import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import { captureDesignContract, designViewports } from "./design-contract";
+import {
+	expectCardTable,
+	expectDesktopTable,
+	expectFieldLabel,
+	expectSearchInput,
+} from "./primitive-styles";
 
 const baseline = AgentProjectionV2Schema.parse(
 	pilotFakeScenariosV2.starting.response.body,
@@ -277,4 +283,115 @@ test("exported design viewport matrix admin Agents", async ({ page }, info) => {
 		await page.setViewportSize(viewport);
 		await captureDesignContract(page, info, "admin-agents");
 	}
+});
+
+test("admin Agent filters and table follow the exported design, with mobile cards", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/admin/agents");
+	const table = page.getByRole("table", { name: "已创建 Agent" });
+	await expect(table).toBeVisible();
+	const search = page.getByRole("searchbox", { name: "搜索 Agent 或 Owner" });
+	for (const viewport of [
+		{ width: 1440, height: 900 },
+		{ width: 768, height: 1024 },
+	]) {
+		await page.setViewportSize(viewport);
+		await expectSearchInput(search);
+		await expectFieldLabel(
+			page,
+			page.locator("label", { hasText: "产品状态" }),
+		);
+		await expectDesktopTable(page, table);
+	}
+	for (const viewport of [
+		{ width: 390, height: 844 },
+		{ width: 320, height: 640 },
+	]) {
+		await page.setViewportSize(viewport);
+		await expectSearchInput(search);
+		await expectCardTable(
+			page,
+			table,
+			page.getByRole("link", { name: "处理 Owner 交接" }).first(),
+		);
+	}
+});
+
+// F-11：禁用员工先确认对象（姓名与邮箱）与后果；解除禁用仍直接提交。
+test("disabling an employee is confirmed with the person before one request", async ({
+	page,
+}) => {
+	await fixture(page);
+	const userId = "11111111-1111-4111-8111-111111111111";
+	const writes: unknown[] = [];
+	await page.route("**/api/v2/directory/search?**", (route) =>
+		route.fulfill({
+			json: {
+				schemaVersion: 1,
+				items: [
+					{
+						kind: "user",
+						canonicalId: userId,
+						displayName: "验收员工",
+						email: "employee@example.test",
+					},
+				],
+			},
+		}),
+	);
+	await page.route(`**/api/v2/admin/users/${userId}/disable`, (route) => {
+		const request = route.request();
+		if (request.method() === "PUT") {
+			writes.push(request.postDataJSON());
+			return route.fulfill({
+				json: {
+					schemaVersion: 1,
+					userId,
+					disabled: true,
+					changed: true,
+					auditOutcome: "recorded",
+				},
+			});
+		}
+		return route.fulfill({
+			json: { schemaVersion: 1, userId, disabled: false },
+		});
+	});
+	await page.goto("/admin/agents");
+	const picker = page.getByRole("combobox", { name: "员工" });
+	await picker.click();
+	await page.getByRole("option", { name: /验收员工/ }).click();
+	await expect(page.getByText("当前状态：未禁用")).toBeVisible();
+	// 触发按钮名称带员工姓名（「禁用员工：{姓名}」），确认钮仍是「禁用员工」。
+	const trigger = page.getByRole("button", {
+		name: "禁用员工：验收员工",
+		exact: true,
+	});
+	await trigger.click();
+	const dialog = page.getByRole("dialog", { name: "禁用这名员工？" });
+	await expect(dialog).toBeVisible();
+	await expect(dialog).toContainText("验收员工");
+	await expect(dialog).toContainText("employee@example.test");
+	await expect(dialog).toContainText("立即不能登录平台");
+	expect(writes).toHaveLength(0);
+	await dialog.getByRole("button", { name: "取消" }).click();
+	await expect(dialog).not.toBeVisible();
+	expect(writes).toHaveLength(0);
+	await trigger.click();
+	await dialog.getByRole("button", { name: "禁用员工", exact: true }).click();
+	await expect
+		.poll(() => writes)
+		.toEqual([{ schemaVersion: 1, disabled: true }]);
+	// 确认后触发器因提交中被禁用，焦点回到分区标题而不是 body。
+	await expect(
+		page.getByRole("heading", { name: "员工访问控制" }),
+	).toBeFocused();
+	await expect(
+		page
+			.locator("#main-content")
+			.getByRole("status")
+			.filter({ hasText: "禁用已确认" }),
+	).toBeVisible();
 });

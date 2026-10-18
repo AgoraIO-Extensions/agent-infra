@@ -121,6 +121,36 @@ test("assistant Markdown stays readable through history reload and version switc
 		.toBeGreaterThan(0);
 	const table = page.getByRole("region", { name: "表格" });
 	await expect(table).toBeVisible();
+	// Table 组件默认类改为管理表设计值后，对话 Markdown 表格的排版保持不变。
+	for (const cell of ["th", "td"] as const)
+		expect(
+			await table
+				.locator(cell)
+				.first()
+				.evaluate((element) => {
+					const style = getComputedStyle(element);
+					return {
+						fontFamily:
+							style.fontFamily === getComputedStyle(document.body).fontFamily,
+						fontSize: style.fontSize,
+						fontWeight: style.fontWeight,
+						lineHeight: Math.round(Number.parseFloat(style.lineHeight) * 100),
+						padding: style.padding,
+						whiteSpace: style.whiteSpace,
+						verticalAlign: style.verticalAlign,
+						letterSpacing: style.letterSpacing,
+					};
+				}),
+		).toEqual({
+			fontFamily: true,
+			fontSize: "14px",
+			fontWeight: cell === "th" ? "500" : "400",
+			lineHeight: 1867,
+			padding: "10px 14px",
+			whiteSpace: "nowrap",
+			verticalAlign: "middle",
+			letterSpacing: "normal",
+		});
 	if (testInfo.project.name === "mobile") {
 		await table.focus();
 		await page.keyboard.press("ArrowRight");

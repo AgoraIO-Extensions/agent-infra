@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { RefreshCw } from "lucide-react";
+import { ArrowLeft, RefreshCw } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 
@@ -57,7 +57,7 @@ function AgentConfigurationRoute() {
 					>
 						配置暂不可用
 					</h1>
-					<Alert>
+					<Alert tone="danger" role="alert">
 						<AlertDescription>
 							{retryable ? "请稍后重试。" : "请联系管理员。"}
 						</AlertDescription>
@@ -74,10 +74,11 @@ function AgentConfigurationRoute() {
 						</Button>
 					) : null}
 					<Link
-						className={buttonVariants({ variant: "link", className: "px-0" })}
+						className={buttonVariants({ variant: "ghost", size: "sm" })}
 						params={{ agentId }}
 						to="/agents/$agentId"
 					>
+						<ArrowLeft aria-hidden="true" />
 						返回 Agent 详情
 					</Link>
 				</section>

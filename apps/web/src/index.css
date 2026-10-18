@@ -19,8 +19,15 @@
 	--color-card-foreground: var(--foreground);
 	--color-popover: var(--surface);
 	--color-popover-foreground: var(--foreground);
-	--color-accent: var(--muted);
-	--color-accent-foreground: var(--foreground);
+	/* 与设计 --accent 同名同义：信号蓝；背景灰请用 bg-muted。 */
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--primary-foreground);
+	--color-accent-ink: var(--accent-ink);
+	--color-success-ink: var(--success-ink);
+	--color-warning-ink: var(--warning-ink);
+	--color-danger-ink: var(--danger-ink);
+	--color-muted-ink: var(--muted-ink);
+	--font-mono: var(--font-mono);
 	--color-sidebar: var(--muted);
 	--color-sidebar-foreground: var(--foreground);
 	--color-sidebar-border: var(--border);
@@ -36,7 +43,7 @@
 	--primary: oklch(0.58 0.16 248);
 	--primary-foreground: var(--surface);
 	--secondary: color-mix(in oklch, var(--primary) 11%, var(--surface));
-	--secondary-foreground: oklch(0.205 0 0);
+	--secondary-foreground: var(--foreground);
 	--muted: color-mix(in oklch, var(--surface) 90%, var(--background));
 	--muted-foreground: oklch(0.52 0.03 255);
 	--destructive: oklch(0.58 0.17 27);
@@ -45,18 +52,43 @@
 	--ring: var(--primary);
 	--success: oklch(0.63 0.14 145);
 	--warning: oklch(0.74 0.14 82);
+	/* 设计 X-06 ink 色：小字、主按钮与状态文字；原语义色只用于焦点环、图标和浅底混色。 */
+	--accent-ink: oklch(0.46 0.15 248);
+	--success-ink: oklch(0.45 0.12 145);
+	--warning-ink: oklch(0.49 0.11 82);
+	--danger-ink: oklch(0.46 0.14 27);
+	--muted-ink: oklch(0.42 0.03 255);
 	--font-display: "Iowan Old Style", "Songti SC", "STSong", Georgia, serif;
+	--font-body:
+		ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+		"PingFang SC", "Microsoft YaHei", sans-serif;
+	/* 等宽文字只能引用该 token 或 Tailwind font-mono，不得手写字体栈。 */
+	--font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 	--platform-topbar-height: 72px;
 	--surface-shadow: 0 16px 40px
 		color-mix(in oklch, var(--foreground) 8%, transparent);
-	font-family:
-		ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-		"PingFang SC", "Microsoft YaHei", sans-serif;
+	/* 设计同名别名：便于与设计稿对照；设计 --muted（文字色）对应 --muted-foreground，不另设别名。 */
+	--bg: var(--background);
+	--fg: var(--foreground);
+	--surface-raised: var(--muted);
+	--accent: var(--primary);
+	--accent-soft: var(--secondary);
+	--danger: var(--destructive);
+	--shadow: var(--surface-shadow);
+	font-family: var(--font-body);
 	font-size: 16px;
 	line-height: 1.65;
 	letter-spacing: 0;
 	color: var(--foreground);
 	background: var(--background);
+}
+
+/* 设计 h1：-0.01em 字距、pretty 换行；放在组件类之前，对话页标题在组件类中显式取消字距。 */
+@layer base {
+	h1 {
+		letter-spacing: -0.01em;
+		text-wrap: pretty;
+	}
 }
 
 /* OpenDesign #1208: warm surfaces, 248px navigation, shared page rhythm. */
@@ -77,6 +109,8 @@
 }
 .platform-brand {
 	display: flex;
+	/* 导航项多时侧栏滚动，品牌块不得被 flex 压扁（S-04）。 */
+	flex: none;
 	align-items: center;
 	gap: 11px;
 	min-height: 44px;
@@ -85,22 +119,26 @@
 	font-family: var(--font-display);
 	font-size: 17px;
 	font-weight: 650;
-	line-height: 1.35;
 	margin: 0 0 20px;
+}
+.platform-brand:hover,
+.platform-brand:active {
+	background: var(--surface-raised);
+	color: var(--foreground);
+	text-decoration: none;
 }
 .platform-brand:focus-visible {
 	outline: 2px solid var(--ring);
-	outline-offset: 4px;
+	outline-offset: 3px;
 	border-radius: 8px;
 }
 .platform-brand small,
 .platform-identity small {
 	display: block;
 	color: var(--muted-foreground);
-	font-size: 12px;
+	font-size: 11px;
 	font-family: ui-sans-serif, system-ui, sans-serif;
 	font-weight: 400;
-	margin-top: 5px;
 }
 .platform-brand-mark {
 	display: grid;
@@ -113,26 +151,23 @@
 	line-height: 1.5;
 	background: var(--foreground);
 	color: var(--surface);
-	border: 1px solid var(--foreground);
 	border-radius: 10px;
 }
 .platform-brand strong {
 	display: block;
 	font-size: 17px;
 	font-weight: 700;
-	line-height: 1;
+	line-height: 1.15;
 }
 .platform-brand small {
-	margin-top: 5px;
-	font-size: 11px;
-	line-height: 1.5;
+	margin-top: 3px;
 }
 .platform-nav-label {
-	font-family: ui-monospace, "SF Mono", Menlo, monospace;
-	font-size: 11px;
+	font: 11px / 1.4 var(--font-mono);
+	letter-spacing: 0.08em;
 	color: var(--muted-foreground);
-	padding: 0 12px;
-	margin-bottom: 8px;
+	padding: 0 11px 6px;
+	margin: 0;
 }
 .platform-nav-group + .platform-nav-group {
 	margin-top: 22px;
@@ -171,16 +206,26 @@
 	color: var(--foreground);
 	text-decoration: none;
 }
+/* 选中项只改底色、边框与左侧指示，字重不变（S-07）。 */
 .platform-nav-item.selected {
 	background: var(--secondary);
 	border-color: color-mix(in oklch, var(--primary) 20%, var(--border));
 	box-shadow: inset 2px 0 var(--primary);
 	color: var(--foreground);
-	font-weight: 650;
 }
 .platform-nav-item:focus-visible {
 	outline: 2px solid var(--ring);
-	outline-offset: 2px;
+	outline-offset: 3px;
+}
+/* 不可用入口：单行名称加灰色 chip，原因只给读屏（S-08）。 */
+.platform-nav-unavailable:hover {
+	background: transparent;
+	color: var(--muted-foreground);
+}
+.platform-nav-chip {
+	flex: none;
+	margin-left: auto;
+	color: var(--muted-foreground);
 }
 .platform-nav-bottom {
 	margin-top: auto;
@@ -190,16 +235,28 @@
 	align-items: center;
 	gap: 10px;
 	border-top: 1px solid var(--border);
-	padding: 19px 9px 0;
-	font-size: 14px;
+	padding: 12px 10px;
+	font-size: 13px;
 }
 .platform-identity > div {
 	min-width: 0;
-	overflow-wrap: anywhere;
+}
+.platform-identity strong,
+.platform-identity small {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.platform-identity strong {
+	font-weight: 700;
+}
+.platform-identity small {
+	margin-top: 2px;
 }
 .platform-avatar {
-	width: 36px;
-	height: 36px;
+	width: 34px;
+	height: 34px;
 }
 .platform-workspace {
 	margin-left: 248px;
@@ -237,12 +294,14 @@
 	flex-direction: column;
 	align-items: flex-start;
 	gap: 0;
+	font-size: 11px;
 	line-height: 1.25;
 }
-.platform-breadcrumb li:last-child {
-	margin-top: 3px;
+.platform-breadcrumb li:last-child,
+.platform-breadcrumb [data-slot="breadcrumb-page"] {
 	font-size: 14px;
-	font-weight: 650;
+	font-weight: 700;
+	line-height: 1.65;
 	color: var(--foreground);
 }
 .platform-breadcrumb span {
@@ -265,7 +324,7 @@
 	width: min(290px, calc(100% - 40px));
 	height: 100dvh;
 	max-height: 100dvh;
-	padding: 50px 16px 24px;
+	padding: 22px 14px 16px;
 	background: var(--surface);
 	display: flex;
 	flex-direction: column;
@@ -282,18 +341,6 @@
 }
 .platform-skip-link:focus {
 	top: 10px;
-}
-[data-slot="button"],
-a[class~="group/button"] {
-	min-height: 44px;
-	min-width: 44px;
-	border-radius: 10px;
-	letter-spacing: 0.02em;
-}
-[data-slot="input"],
-[data-slot="textarea"],
-[data-slot="native-select"] {
-	border-radius: 10px;
 }
 @media (max-width: 1023px) {
 	.platform-sidebar {
@@ -329,19 +376,6 @@ a[class~="group/button"] {
 .audit-filters > div {
 	min-width: 0;
 }
-.audit-filters [data-slot="label"] {
-	display: block;
-	margin-bottom: 8px;
-}
-.audit-table {
-	table-layout: fixed;
-	font-size: 14px;
-}
-.audit-table [data-slot="table-cell"] {
-	white-space: normal;
-	overflow-wrap: anywhere;
-	vertical-align: top;
-}
 .audit-table [data-slot="table-head"]:last-child {
 	width: 120px;
 }
@@ -352,9 +386,7 @@ a[class~="group/button"] {
 	font-family: var(--font-display);
 	font-weight: 620;
 	font-size: clamp(30px, 3vw, 38px);
-	text-wrap: balance;
 	line-height: 1.35;
-	letter-spacing: 0;
 	overflow-wrap: anywhere;
 }
 .management-content .page-heading {
@@ -417,37 +449,15 @@ a[class~="group/button"] {
 	color: var(--muted-foreground);
 	margin-top: 9px;
 }
-.management-content .tabs {
-	width: 100%;
-	height: auto;
-	padding: 0;
-	justify-content: start;
+/* 用链接或按钮切换范围的导航（审计范围、评测区域），外观同设计稿 .tabs 容器。 */
+.scope-tabs {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 4px;
+	width: 100%;
 	max-width: 100%;
 	border-bottom: 1px solid var(--border);
-	margin-bottom: 10px;
-}
-.management-content .tabs [role="tab"] {
-	flex: none;
-	height: auto;
-	border: 0;
-	border-bottom: 2px solid transparent;
-	box-shadow: none;
-	min-height: 44px;
-	min-width: 0;
-	padding: 9px 2px;
-	margin-right: 18px;
-	color: var(--muted-foreground);
-	font-size: 14px;
-	white-space: normal;
-	overflow-wrap: anywhere;
-}
-.management-content .tabs [aria-selected="true"] {
-	border-bottom: 2px solid var(--primary);
-	color: var(--foreground);
-	font-weight: 600;
+	margin-bottom: 20px;
 }
 .management-content .record-row {
 	display: flex;
@@ -464,22 +474,6 @@ a[class~="group/button"] {
 	font-size: 14px;
 	color: var(--muted-foreground);
 	margin-top: 7px;
-}
-.management-content .form-section,
-.management-content .detail-section {
-	padding: 22px 0;
-	border-bottom: 1px solid var(--border);
-}
-.management-content .form-section:first-child {
-	padding-top: 0;
-}
-.management-content .form-section > p {
-	color: var(--muted-foreground);
-	font-size: 14px;
-	margin-top: 6px;
-}
-.management-content .detail-section h2 {
-	margin-bottom: 14px;
 }
 .management-content .form-aside {
 	font-size: 14px;
@@ -582,7 +576,7 @@ a[class~="group/button"] {
 }
 .conversation-agent-switch:focus-visible {
 	outline: 2px solid var(--ring);
-	outline-offset: 4px;
+	outline-offset: 3px;
 }
 .conversation-heading-copy {
 	min-width: 0;
@@ -605,6 +599,8 @@ a[class~="group/button"] {
 	font-size: 28px;
 	line-height: 1.35;
 	font-weight: 620;
+	/* 设计 .chat-page h1 例外：对话页标题不收紧字距。 */
+	letter-spacing: 0;
 	overflow-wrap: anywhere;
 }
 .chat-layout .conversation-header p {
@@ -612,13 +608,12 @@ a[class~="group/button"] {
 	color: var(--muted-foreground);
 	margin-top: 4px;
 }
-.conversation-header .conversation-eyebrow {
+/* 设计 .page-head-copy .eyebrow：优先级高于页头段落规则，保持 11px 信号蓝 ink。 */
+.chat-layout .conversation-header .conversation-eyebrow {
 	margin: 0 0 4px;
-	font:
-		11px / 1.4 ui-monospace,
-		monospace;
+	font: 11px / 1.4 var(--font-mono);
 	letter-spacing: 0.08em;
-	color: var(--primary);
+	color: var(--accent-ink);
 }
 .conversation-history-toggle {
 	display: none;
@@ -947,12 +942,13 @@ a[class~="group/button"] {
 }
 .assistant-markdown :is(.markdown-code, .markdown-table):focus-visible {
 	outline: 2px solid var(--ring);
-	outline-offset: 2px;
+	outline-offset: 3px;
 }
 .assistant-markdown table {
 	width: 100%;
 	border-collapse: collapse;
 	font-size: 14px;
+	line-height: calc(1 / 0.75);
 }
 .assistant-markdown .markdown-table [data-slot="table-container"] {
 	min-width: max-content;
@@ -963,9 +959,19 @@ a[class~="group/button"] {
 	border: 1px solid var(--border);
 	text-align: left;
 	min-width: 120px;
+	/* Table 组件默认类改为管理表设计值后，对话 Markdown 表格固定为原有排版。 */
+	font-family: inherit;
+	font-size: 14px;
+	line-height: calc(1 / 0.75);
+	letter-spacing: normal;
+	white-space: nowrap;
+	vertical-align: middle;
 }
 .assistant-markdown th {
+	height: 40px;
 	background: var(--muted);
+	color: var(--foreground);
+	font-weight: 500;
 }
 /* Very short viewports use document scrolling for focus and error recovery. */
 @media (max-height: 600px) {
@@ -995,12 +1001,16 @@ a[class~="group/button"] {
 	}
 }
 @media (prefers-reduced-motion: reduce) {
+	/* 设计规则：保留动画与过渡属性，只把时长压到 .001ms，并压过组件 transition-* 工具类。 */
 	*,
 	*::before,
 	*::after {
-		animation: none;
-		transition: none;
-		scroll-behavior: auto;
+		/* biome-ignore lint/complexity/noImportantStyles: reduced-motion 必须覆盖组件与工具类的时长。 */
+		animation-duration: 0.001ms !important;
+		/* biome-ignore lint/complexity/noImportantStyles: reduced-motion 必须覆盖组件与工具类的时长。 */
+		transition-duration: 0.001ms !important;
+		/* biome-ignore lint/complexity/noImportantStyles: reduced-motion 必须覆盖平滑滚动设置。 */
+		scroll-behavior: auto !important;
 	}
 }
 
@@ -1061,8 +1071,9 @@ body {
 	main {
 		overflow-wrap: anywhere;
 	}
-	a:focus-visible {
-		@apply outline-2 outline-ring outline-offset-2;
+	/* 全局焦点环：2px accent、offset 3px（设计稿 :focus-visible，S-11/N-18）。 */
+	:focus-visible {
+		@apply outline-2 outline-ring outline-offset-3;
 	}
 }
 
@@ -1094,7 +1105,6 @@ body {
 	font-weight: 620;
 	font-size: clamp(30px, 3vw, 38px);
 	line-height: 1.35;
-	text-wrap: balance;
 }
 .ia-workbench .page-heading p {
 	font-size: 14px;
@@ -1173,10 +1183,6 @@ body {
 	align-items: start;
 	gap: 12px;
 	min-width: 0;
-	padding: 18px;
-	border: 1px solid var(--border);
-	border-radius: 14px;
-	background: var(--surface);
 	overflow-wrap: anywhere;
 }
 .workbench-card h3 {
@@ -1279,80 +1285,12 @@ body {
 	width: 100%;
 	gap: 12px;
 }
-.workbench-agent-symbol,
-.ia-agent-directory .directory-symbol {
-	display: grid;
-	place-items: center;
-	flex-shrink: 0;
-	width: 40px;
-	height: 40px;
-	border: 1px solid var(--border);
-	border-radius: 11px;
-	background: var(--secondary);
-	color: var(--primary);
-}
 .workbench-agent-copy {
 	min-width: 0;
 	width: 100%;
 }
 .workbench-agent-grid .workbench-card a {
 	align-self: start;
-}
-.ia-workbench [data-slot="badge"],
-.ia-agent-directory [data-slot="badge"],
-.agent-detail [data-slot="badge"],
-[data-slot="badge"][data-status],
-[data-slot="badge"][data-result] {
-	height: auto;
-	min-height: 24px;
-	max-width: 100%;
-	gap: 6px;
-	padding: 3px 9px;
-	border-radius: 999px;
-	border-color: var(--border);
-	background: var(--surface);
-	color: var(--muted-foreground);
-	font-size: 11px;
-	font-weight: 500;
-	line-height: 1.5;
-	white-space: normal;
-	overflow-wrap: anywhere;
-}
-.ia-workbench .pill-live,
-[data-slot="badge"][data-status="ready"],
-[data-slot="badge"][data-status="available"],
-[data-slot="badge"][data-result="succeeded"] {
-	color: var(--success);
-	border-color: color-mix(in oklch, var(--success) 25%, var(--border));
-	background: color-mix(in oklch, var(--success) 8%, var(--surface));
-}
-.ia-workbench .pill-wait,
-[data-slot="badge"][data-status="starting"],
-[data-slot="badge"][data-status="updating"],
-[data-slot="badge"][data-status="pending_approval"],
-[data-slot="badge"][data-status="creating"] {
-	color: color-mix(in oklch, var(--warning) 78%, var(--foreground));
-	border-color: color-mix(in oklch, var(--warning) 32%, var(--border));
-	background: color-mix(in oklch, var(--warning) 10%, var(--surface));
-}
-.ia-workbench .pill-danger,
-[data-slot="badge"][data-status="unavailable"],
-[data-slot="badge"][data-status="creation_failed"],
-[data-slot="badge"][data-status="disabled"],
-[data-slot="badge"][data-status="rejected"],
-[data-slot="badge"][data-result="failed"] {
-	color: var(--destructive);
-	border-color: color-mix(in oklch, var(--destructive) 28%, var(--border));
-	background: color-mix(in oklch, var(--destructive) 8%, var(--surface));
-}
-.workbench-read-notice {
-	display: flex;
-	flex-direction: column;
-	align-items: start;
-	gap: 12px;
-}
-.ia-workbench .workbench-read-notice p {
-	text-wrap: wrap;
 }
 .ia-agent-directory .page-heading {
 	align-items: end;
@@ -1374,10 +1312,6 @@ body {
 	gap: 18px;
 	margin-bottom: 14px;
 }
-.ia-agent-directory .directory-card {
-	border-radius: 14px;
-	background: var(--surface);
-}
 .ia-agent-directory .directory-card h3 {
 	font-size: 17px;
 	line-height: 1.4;
@@ -1385,11 +1319,6 @@ body {
 .ia-agent-directory .directory-card p {
 	font-size: 13px;
 	line-height: 1.65;
-}
-.ia-workbench .workbench-agent-tags [data-slot="badge"],
-.ia-agent-directory .directory-tags [data-slot="badge"] {
-	border-radius: 7px;
-	padding-inline: 8px;
 }
 .ia-agent-directory .directory-card-foot {
 	justify-content: space-between;
@@ -1401,15 +1330,6 @@ body {
 	border-radius: 14px;
 	background: var(--surface);
 }
-.management-content .form-layout .form-section:last-child {
-	border-bottom: 0;
-}
-.management-content .form-section > legend {
-	padding-right: 8px;
-}
-.management-content .form-section > p {
-	margin-bottom: 20px;
-}
 .management-content .record-row {
 	background: var(--surface);
 	padding: 20px;
@@ -1417,65 +1337,22 @@ body {
 	border-radius: 14px;
 	margin-block: 12px;
 }
-.management-content .tabs {
-	margin-bottom: 20px;
-}
-.management-content .tabs [aria-selected="true"] {
-	border-bottom-color: var(--primary);
-	color: var(--foreground);
-}
-.management-content :not(.markdown-table) > [data-slot="table-container"] {
-	border: 1px solid var(--border);
-	border-radius: 14px;
-	background: var(--surface);
-}
-.management-content [data-slot="table-head"] {
-	background: var(--surface);
-	font:
-		11px / 1.4 ui-monospace,
-		monospace;
-	letter-spacing: 0.05em;
-	color: var(--muted-foreground);
-	height: auto;
-}
 .management-content :is(.audit-filters, .admin-agent-filters) {
 	padding: 0;
 	border: 0;
 	gap: 10px;
 	margin: 0 0 20px;
 }
-[data-slot="input"],
-[data-slot="select-trigger"],
-[data-slot="native-select"] {
-	background: var(--surface);
-	min-height: 44px;
-}
-[data-slot="textarea"] {
-	background: var(--surface);
-}
-[data-slot="select-trigger"],
-[data-slot="alert"] {
-	border-radius: 10px;
-}
-[data-slot="empty"] {
-	border: 1px dashed var(--border);
-	border-radius: 14px;
-	background: var(--surface);
-}
-[data-slot="dialog-content"],
-[data-slot="select-content"] {
-	border-radius: 14px;
-}
-[data-slot="button"],
-a[class~="group/button"] {
-	font-size: 13px;
-}
 .platform-topbar [data-slot="avatar-fallback"],
 .platform-identity [data-slot="avatar-fallback"] {
 	background: var(--foreground);
 	color: var(--surface);
+	font-size: 12px;
+	font-weight: 700;
 }
 .platform-user {
+	width: 34px;
+	height: 34px;
 	margin-left: auto;
 	flex-shrink: 0;
 }
@@ -1490,16 +1367,6 @@ a[class~="group/button"] {
 	gap: 16px;
 	min-width: 0;
 	flex: 1;
-}
-.agent-detail-symbol {
-	display: grid;
-	place-items: center;
-	flex-shrink: 0;
-	width: 42px;
-	height: 42px;
-	border-radius: 12px;
-	color: var(--primary-foreground);
-	background: var(--primary);
 }
 .agent-detail-grid {
 	display: grid;
@@ -1592,10 +1459,6 @@ a[class~="group/button"] {
 	.agent-detail dd {
 		margin-bottom: 10px;
 	}
-	.agent-detail-symbol {
-		width: 40px;
-		height: 40px;
-	}
 }
 
 .admin-agent-filters {
@@ -1607,11 +1470,6 @@ a[class~="group/button"] {
 .admin-agent-filters > div {
 	min-width: 0;
 }
-.ia-admin-agents [data-slot="button"],
-.ia-admin-agents [data-slot="input"],
-.ia-admin-agents select {
-	min-height: 44px;
-}
 .admin-agent-summary,
 .admin-agent-pagination {
 	display: flex;
@@ -1621,16 +1479,6 @@ a[class~="group/button"] {
 	gap: 12px;
 	margin: 20px 0;
 	font-size: 14px;
-}
-.admin-agent-table {
-	table-layout: fixed;
-	font-size: 14px;
-}
-.admin-agent-table [data-slot="table-cell"] {
-	white-space: normal;
-	overflow-wrap: anywhere;
-	vertical-align: top;
-	padding-block: 16px;
 }
 .admin-agent-table [data-slot="table-head"]:first-child {
 	width: 28%;
@@ -1648,10 +1496,8 @@ a[class~="group/button"] {
 .page-eyebrow,
 .ia-workbench .page-heading .workbench-eyebrow,
 .ia-agent-directory .directory-eyebrow {
-	color: var(--primary);
-	font:
-		11px / 1.4 ui-monospace,
-		monospace;
+	color: var(--accent-ink);
+	font: 11px / 1.4 var(--font-mono);
 	letter-spacing: 0.08em;
 }
 .agent-detail-aside {
@@ -1660,6 +1506,7 @@ a[class~="group/button"] {
 	min-width: 0;
 }
 .agent-detail .detail-section h2 {
+	margin-bottom: 14px;
 	font-family: inherit;
 	font-size: 16px;
 	letter-spacing: 0;
@@ -1716,15 +1563,6 @@ a[class~="group/button"] {
 	gap: 10px;
 	margin-bottom: 20px;
 }
-.directory-filter {
-	display: grid;
-	gap: 7px;
-	min-width: 0;
-}
-.directory-filter [data-slot="label"] {
-	color: var(--muted-foreground);
-	font-size: 12px;
-}
 @media (max-width: 767px) {
 	.directory-filters {
 		grid-template-columns: minmax(0, 1fr);
@@ -1769,17 +1607,10 @@ a[class~="group/button"] {
 	margin-top: 6px;
 }
 
-[data-slot="input"],
-[data-slot="select-trigger"],
-[data-slot="native-select"],
-[data-slot="textarea"] {
-	font-size: 15px;
-}
-[data-slot="button"]:disabled {
-	opacity: 0.48;
-}
 [data-slot="button"]:focus-visible,
-a[class~="group/button"]:focus-visible,
+[class~="group/button"]:focus-visible,
+[data-slot="checkbox"]:focus-visible,
+[role="dialog"] :is([data-slot="textarea"]):focus-visible,
 [data-slot="input"]:focus-visible,
 [data-slot="select-trigger"]:focus-visible,
 [data-slot="native-select"]:focus-visible {
@@ -1798,18 +1629,6 @@ a[class~="group/button"]:focus-visible,
 	outline-offset: 3px;
 	box-shadow: none;
 }
-[data-slot="badge"][data-status]::before,
-[data-slot="badge"][data-result]::before,
-.pill-live::before,
-.pill-wait::before,
-.pill-danger::before {
-	content: "";
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	background: currentColor;
-	flex: none;
-}
 
 /* Exported management surfaces, with real application and audit projections. */
 .management-content .page-heading > div:first-child {
@@ -1818,10 +1637,8 @@ a[class~="group/button"]:focus-visible,
 }
 .management-content .page-heading .page-eyebrow {
 	margin-bottom: 9px;
-	color: var(--primary);
-	font:
-		11px / 1.4 ui-monospace,
-		monospace;
+	color: var(--accent-ink);
+	font: 11px / 1.4 var(--font-mono);
 	letter-spacing: 0.08em;
 }
 .management-content .form-layout.full-width-form {
@@ -1940,9 +1757,7 @@ a[class~="group/button"]:focus-visible,
 	place-items: center;
 	border: 1px solid var(--border);
 	border-radius: 50%;
-	font:
-		11px ui-monospace,
-		monospace;
+	font: 11px var(--font-mono);
 }
 .form-stepper li.done {
 	color: var(--foreground);
@@ -1959,32 +1774,8 @@ a[class~="group/button"]:focus-visible,
 	border-color: var(--primary);
 	color: var(--primary);
 }
-.management-content .form-section > legend,
-.management-content .full-width-form legend {
-	font-family: inherit;
-	font-weight: 650;
-	font-size: 16px;
-	line-height: 1.4;
-}
-.management-content .full-width-form .form-section {
-	border-bottom: 0;
-	border-top: 1px solid var(--border);
-}
-.management-content .full-width-form .form-section:first-child {
-	border-top: 0;
-}
 .management-content .form-grid {
 	margin-top: 16px;
-}
-.management-content .form-section > p {
-	font-size: 13px;
-	margin-top: 5px;
-	margin-bottom: 0;
-}
-.management-content .full-width-form [data-slot="label"] {
-	font-size: 12px;
-	color: var(--muted-foreground);
-	font-weight: 650;
 }
 .management-content .full-width-form .form-footer {
 	justify-content: space-between;
@@ -2031,23 +1822,11 @@ a[class~="group/button"]:focus-visible,
 .application-form-fields > .form-footer {
 	order: 5;
 }
-.application-form .form-section {
-	min-width: 0;
-	padding: 22px 0;
-	border-top: 1px solid var(--border);
-}
-.application-form .form-section:first-child {
-	padding-top: 0;
-	border-top: 0;
-}
 .application-form .form-grid {
 	margin-top: 16px;
 }
-.application-form .form-section > p {
-	margin-top: 5px;
-}
 .application-form .field-help {
-	color: var(--muted-foreground);
+	color: var(--muted-ink);
 	font-size: 11px;
 }
 .application-form .application-optional-section {
@@ -2059,11 +1838,11 @@ a[class~="group/button"]:focus-visible,
 	line-height: 1.45;
 }
 .application-form .application-optional-section > [data-slot="button"] {
-	min-height: 36px;
 	margin-top: 8px;
 }
 .application-form .application-advanced-section {
 	padding: 14px 0;
+	border-top: 1px solid var(--border);
 }
 .application-advanced-heading {
 	display: flex;
@@ -2081,20 +1860,6 @@ a[class~="group/button"]:focus-visible,
 	margin-top: 4px;
 	color: var(--muted-foreground);
 	font-size: 11px;
-}
-.application-advanced-toggle {
-	min-height: 36px;
-	padding: 7px 11px;
-	border: 1px solid var(--border);
-	border-radius: 10px;
-	color: var(--muted-foreground);
-	font-size: 12px;
-	font-weight: 650;
-}
-.application-advanced-toggle:hover {
-	border-color: var(--foreground);
-	color: var(--foreground);
-	background: var(--muted);
 }
 .application-advanced-content {
 	margin-top: 14px;
@@ -2191,28 +1956,11 @@ a[class~="group/button"]:focus-visible,
 	display: grid;
 	gap: 7px;
 }
-.approval-filters [data-slot="label"] {
-	font-size: 12px;
-	color: var(--muted-foreground);
-}
-.management-content :is(.audit-table, .admin-agent-table, .approval-table) {
-	min-width: 700px;
-	font-size: 13px;
-	table-layout: fixed;
-}
-.management-content :is([data-slot="table-head"], [data-slot="table-cell"]) {
-	padding: 14px 15px;
-	vertical-align: top;
-}
-.management-content [data-slot="table-cell"] {
-	white-space: normal;
-	overflow-wrap: anywhere;
-}
-.management-content [data-slot="table-cell"] small {
-	display: block;
-	margin-top: 3px;
-	color: var(--muted-foreground);
-	font-size: 11px;
+@media (min-width: 768px) {
+	.management-content :is(.audit-table, .admin-agent-table, .approval-table) {
+		min-width: 700px;
+		table-layout: fixed;
+	}
 }
 .management-content [data-slot="table-row"]:hover {
 	background: var(--muted);
@@ -2264,28 +2012,11 @@ a[class~="group/button"]:focus-visible,
 	.metadata-facts dd {
 		margin-bottom: 4px;
 	}
-	.management-content :not(.markdown-table) > [data-slot="table-container"] {
-		border-radius: 12px;
-	}
-	.management-content :is([data-slot="table-head"], [data-slot="table-cell"]) {
-		padding: 12px 11px;
-	}
 	.management-content .form-grid > .sm\:col-span-2 {
 		grid-column: auto;
 	}
 }
 
-.management-content .tabs [role="tab"]::after {
-	display: none;
-}
-
-.owned-agent-card {
-	min-width: 0;
-	padding: 18px;
-	border: 1px solid var(--border);
-	border-radius: 14px;
-	background: var(--surface);
-}
 .owned-card-heading {
 	display: flex;
 	align-items: start;
@@ -2413,16 +2144,18 @@ a[class~="group/button"]:focus-visible,
 	font-size: 10px;
 	line-height: 1.2;
 }
+/* X-05 / G-02：命中区 44×44，负外边距保持 chip 的视觉密度。 */
 .directory-chip-remove {
 	display: grid;
 	place-items: center;
-	width: 24px;
-	height: 24px;
-	min-width: 0;
-	min-height: 24px;
+	width: 44px;
+	height: 44px;
+	min-width: 44px;
+	min-height: 44px;
+	margin: -8px -8px -8px 0;
 	flex: none;
 	border: 0;
-	border-radius: 6px;
+	border-radius: 10px;
 	background: transparent;
 	color: var(--muted-foreground);
 }
@@ -2432,13 +2165,13 @@ a[class~="group/button"]:focus-visible,
 }
 .directory-chip-remove:focus-visible {
 	outline: 2px solid var(--primary);
-	outline-offset: 1px;
+	outline-offset: 3px;
 }
 .directory-control .directory-input {
 	flex: 1 1 150px;
 	min-width: 120px;
-	min-height: 28px;
-	height: 28px;
+	min-height: 30px;
+	height: 30px;
 	padding: 1px 4px;
 	background: transparent;
 	color: var(--foreground);
@@ -2452,7 +2185,7 @@ a[class~="group/button"]:focus-visible,
 	box-shadow: none;
 }
 .directory-input::placeholder {
-	color: color-mix(in oklch, var(--muted-foreground) 82%, var(--surface));
+	color: var(--muted-ink);
 }
 .directory-menu {
 	position: absolute;
@@ -2486,10 +2219,6 @@ a[class~="group/button"]:focus-visible,
 .directory-result.directory-result-active {
 	border-color: color-mix(in oklch, var(--primary) 22%, var(--border));
 	background: color-mix(in oklch, var(--primary) 11%, var(--surface));
-}
-.directory-result[aria-selected="true"] {
-	opacity: 0.55;
-	cursor: default;
 }
 .directory-result-mark {
 	display: grid;
@@ -2543,10 +2272,11 @@ a[class~="group/button"]:focus-visible,
 	color: var(--foreground);
 	font-size: 12px;
 }
+/* 「清空搜索」位于结果列表之外，命中区不小于 44px。 */
 .directory-clear {
 	display: inline-flex;
 	align-items: center;
-	min-height: 32px;
+	min-height: 44px;
 	margin-top: 4px;
 	padding: 5px 8px;
 	border: 0;
@@ -2579,13 +2309,13 @@ a[class~="group/button"]:focus-visible,
 	justify-content: space-between;
 	gap: 8px;
 	margin-top: 6px;
-	color: var(--muted-foreground);
+	color: var(--muted-ink);
 	font-size: 11px;
 	line-height: 1.45;
 }
 .directory-help span:last-child {
 	flex: none;
-	color: color-mix(in oklch, var(--muted-foreground) 78%, var(--surface));
+	color: var(--muted-ink);
 }
 @media (max-width: 767px) {
 	.directory-menu {
@@ -2607,5 +2337,24 @@ a[class~="group/button"]:focus-visible,
 @media (max-width: 767px) {
 	.management-content .owned-agent-card .metadata-facts {
 		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+/* 320–374px 档：放在所有 ≤767 / ≤1023 档之后，覆盖壳层边距与页头主操作（G-03）。 */
+@media (max-width: 374px) {
+	.platform-topbar {
+		padding-inline: 12px;
+	}
+	.platform-content,
+	.ia-agent-directory,
+	.ia-admin-agents,
+	.ia-workbench {
+		padding-inline: 12px;
+	}
+	/* 设计稿 .page-head .btn{width:100%}；纯图标按钮（size-11）保持 44px。 */
+	.page-heading
+	:is([data-slot="button"], [class~="group/button"]):not(.size-11) {
+		width: 100%;
+		max-width: 100%;
 	}
 }

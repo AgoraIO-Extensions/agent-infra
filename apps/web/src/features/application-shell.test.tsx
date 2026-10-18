@@ -95,10 +95,14 @@ describe("application session boundary", () => {
 		const client = setup({ kind: "unavailable", retryable: false });
 		expect(screen.queryByText("受保护内容")).toBeNull();
 		expect(screen.getByRole("heading", { name: "登录工作空间" })).toBeTruthy();
+		// F-10：未登录时标签页标题与设计稿登录页一致。
+		expect(document.title).toBe("登录 · Agora Agent");
 		await act(async () => {
 			client.setQueryData(["browser-session"], identity("owner"));
 		});
 		await screen.findByText("受保护内容");
+		expect(document.title).not.toBe("登录 · Agora Agent");
+		expect(document.title).toMatch(/ · Agora Agent$/);
 		await act(async () => {
 			client.setQueryData(["browser-session"], {
 				kind: "unavailable",
@@ -283,14 +287,48 @@ describe("deployment links", () => {
 		).toBe("https://connection.example.test/mcp");
 	});
 
-	it("keeps an unavailable Connection entry without an outbound link", () => {
+	it.each([
+		undefined,
+		"missing",
+		"invalid",
+		"unapproved",
+		"unavailable",
+	] as const)(
+		"keeps an unavailable Connection entry (%s) on one line without an outbound link or raw reason",
+		(reason) => {
+			setup({
+				...identity("user-1"),
+				...(reason
+					? { connection: { schemaVersion: 1, status: "unavailable", reason } }
+					: {}),
+			});
+			// 设计稿：单行「我的 Connection」+ 灰色 chip，不再拼接「（暂不可用）」（S-08）。
+			const entry = screen.getByText("我的 Connection");
+			expect(entry.getAttribute("aria-disabled")).toBe("true");
+			expect(entry.hasAttribute("title")).toBe(false);
+			expect(entry.querySelector('[data-slot="badge"]')?.textContent).toBe(
+				"不可用",
+			);
+			const description = document.getElementById(
+				entry.getAttribute("aria-describedby") ?? "",
+			);
+			expect(description?.textContent).toBe("Connection 服务当前不可用。");
+			expect(screen.queryByText(/我的 Connection（暂不可用）/)).toBeNull();
+			expect(document.body.textContent).not.toContain("Connection:");
+			if (reason && reason !== "unavailable")
+				expect(document.body.textContent).not.toContain(reason);
+			expect(
+				screen.queryByRole("link", { name: /我的 Connection/ }),
+			).toBeNull();
+		},
+	);
+	it("does not invent a platform health state without a server projection", () => {
 		setup(identity("user-1"));
-		expect(
-			screen
-				.getByText("我的 Connection（暂不可用）")
-				.getAttribute("aria-disabled"),
-		).toBe("true");
-		expect(screen.queryByRole("link", { name: /我的 Connection/ })).toBeNull();
+		// S-01：服务端尚无平台健康投影，顶栏不得伪造「平台就绪」。
+		expect(screen.queryByText("平台就绪")).toBeNull();
+		expect(document.querySelector(".platform-topbar")?.textContent).not.toMatch(
+			/就绪/,
+		);
 	});
 	it.each(["/\n/evil.test", "/\t/evil.test", "/\r/evil.test"])(
 		"does not normalize unsafe path %j into an external link",

@@ -7,13 +7,23 @@ import {
 	Shield,
 } from "lucide-react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+	Alert,
+	AlertAction,
+	AlertDescription,
+	AlertTitle,
+} from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
+import { Field, FieldLegend } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { LoadingLine } from "@/components/ui/spinner";
+import { Timestamp } from "@/components/ui/timestamp";
+import { withObjectName } from "@/lib/accessible-name";
 import type {
 	IssuePersonalApiCredentialV2Responses,
 	PersonalApiCredentialIssueRequestV1,
@@ -52,10 +62,6 @@ type ApiCredentialsScreenProps = {
 };
 
 const defaultScopes: PersonalApiCredentialScope[] = ["agent:read"];
-
-function formatDate(value: string | null) {
-	return value ? new Date(value).toLocaleString("zh-CN") : "永不过期";
-}
 
 function stateMessage(
 	state: Extract<ApiCredentialsViewState, { kind: "unavailable" }>,
@@ -151,11 +157,11 @@ export function ApiCredentialsScreen({
 			</header>
 
 			{issuedCredential ? (
-				<Alert>
-					<KeyRound aria-hidden="true" />
+				// 只让提示段落承担 status，避免读屏整段播报凭证明文。
+				<Alert tone="info" icon={<KeyRound aria-hidden="true" />}>
 					<AlertTitle>已签发个人 API 凭证</AlertTitle>
 					<AlertDescription className="space-y-3">
-						<p>{issueNotice}</p>
+						<p role="status">{issueNotice}</p>
 						<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
 							<code className="min-w-0 flex-1 overflow-auto rounded border bg-muted px-3 py-2 text-xs [overflow-wrap:anywhere]">
 								{issuedCredential}
@@ -183,20 +189,23 @@ export function ApiCredentialsScreen({
 					</AlertDescription>
 				</Alert>
 			) : issueNotice ? (
-				<Alert>
-					<AlertCircle aria-hidden="true" />
+				<Alert
+					tone="info"
+					role="status"
+					icon={<AlertCircle aria-hidden="true" />}
+				>
 					<AlertDescription>{issueNotice}</AlertDescription>
 				</Alert>
 			) : null}
 			{issueError ? (
-				<Alert variant="destructive">
+				<Alert tone="danger" role="alert">
 					<AlertDescription>
 						{errorMessage(issueError, "签发个人 API 凭证失败，请稍后重试。")}
 					</AlertDescription>
 				</Alert>
 			) : null}
 			{revokeError ? (
-				<Alert variant="destructive">
+				<Alert tone="danger" role="alert">
 					<AlertDescription>
 						{errorMessage(revokeError, "撤销个人 API 凭证失败，请稍后重试。")}
 					</AlertDescription>
@@ -215,7 +224,7 @@ export function ApiCredentialsScreen({
 						</p>
 					</div>
 					<fieldset className="space-y-3" aria-describedby={`${scopesId}-hint`}>
-						<legend className="font-medium text-sm">权限范围</legend>
+						<FieldLegend>权限范围</FieldLegend>
 						<p
 							id={`${scopesId}-hint`}
 							className="text-muted-foreground text-xs"
@@ -235,7 +244,7 @@ export function ApiCredentialsScreen({
 									/>
 									<Label
 										htmlFor={`${scopesId}-${scope.replace(":", "-")}`}
-										className="font-normal"
+										variant="option"
 									>
 										{personalApiCredentialScopeLabels[scope]}
 									</Label>
@@ -246,12 +255,12 @@ export function ApiCredentialsScreen({
 							))}
 						</div>
 						{scopes.length === 0 ? (
-							<Alert variant="destructive" className="p-2 text-sm">
-								至少选择一项权限范围。
+							<Alert tone="danger" role="alert">
+								<AlertDescription>至少选择一项权限范围。</AlertDescription>
 							</Alert>
 						) : null}
 					</fieldset>
-					<div className="space-y-2">
+					<Field>
 						<Label htmlFor={expiryId}>过期时间（可选）</Label>
 						<Input
 							id={expiryId}
@@ -262,7 +271,7 @@ export function ApiCredentialsScreen({
 						<p className="text-muted-foreground text-xs">
 							留空表示不过期；签发后只能进一步收窄权限或提前过期。
 						</p>
-					</div>
+					</Field>
 					<Button
 						type="submit"
 						disabled={!onIssue || scopes.length === 0 || isIssuing}
@@ -274,30 +283,25 @@ export function ApiCredentialsScreen({
 				<div className="space-y-3">
 					<h2 className="font-semibold text-base">已有凭证</h2>
 					{state.kind === "loading" ? (
-						<p role="status" className="py-8 text-muted-foreground text-sm">
-							正在读取个人凭证…
-						</p>
+						<LoadingLine className="py-8">正在读取个人凭证…</LoadingLine>
 					) : null}
 					{state.kind === "denied" ? (
-						<Alert variant="destructive">
+						<Alert tone="warn">
 							<AlertDescription>
 								当前账号无权查看个人 API 凭证。
 							</AlertDescription>
 						</Alert>
 					) : null}
 					{state.kind === "unavailable" ? (
-						<Alert variant="destructive">
+						<Alert tone="danger" role="alert">
 							<AlertDescription>{stateMessage(state)}</AlertDescription>
 							{state.retryable && onRetry ? (
-								<Button
-									className="mt-3"
-									variant="outline"
-									type="button"
-									onClick={onRetry}
-								>
-									<RefreshCw aria-hidden="true" data-icon="inline-start" />
-									重新加载
-								</Button>
+								<AlertAction>
+									<Button variant="outline" type="button" onClick={onRetry}>
+										<RefreshCw aria-hidden="true" data-icon="inline-start" />
+										重新加载
+									</Button>
+								</AlertAction>
 							) : null}
 						</Alert>
 					) : null}
@@ -350,6 +354,8 @@ function CredentialRow({
 	const [editing, setEditing] = useState(false);
 	const [notice, setNotice] = useState(false);
 	const narrowButton = useRef<HTMLButtonElement>(null);
+	// 撤销确认关闭时触发器已禁用、成功后会消失，焦点落到卡片内的凭证标识上。
+	const credentialLabel = useRef<HTMLElement>(null);
 	const restoreFocus = useRef(false);
 	const expiry = credential.expiresAt
 		? new Date(credential.expiresAt).getTime()
@@ -365,6 +371,7 @@ function CredentialRow({
 	}, [expiry, now, revoked]);
 	const active = !revoked && !expired;
 	const busy = pending || Boolean(narrowingCredentialId);
+	const revokeLabel = pending ? "正在撤销…" : "撤销";
 	useEffect(() => {
 		if (restoreFocus.current && !editing && !busy) {
 			narrowButton.current?.focus();
@@ -380,13 +387,14 @@ function CredentialRow({
 			<div className="flex flex-wrap items-start justify-between gap-3">
 				<div className="min-w-0">
 					<div className="flex flex-wrap items-center gap-2">
-						<code className="text-sm [overflow-wrap:anywhere]">
+						<code
+							ref={credentialLabel}
+							tabIndex={-1}
+							className="text-sm [overflow-wrap:anywhere]"
+						>
 							{credential.credentialId}
 						</code>
-						<Badge
-							variant="outline"
-							data-status={revoked || expired ? "disabled" : "available"}
-						>
+						<Badge tone={revoked || expired ? "red" : "green"}>
 							{revoked ? "已撤销" : expired ? "已过期" : "有效"}
 						</Badge>
 					</div>
@@ -397,18 +405,28 @@ function CredentialRow({
 						</div>
 						<div>
 							<dt className="text-muted-foreground">过期时间</dt>
-							<dd>{formatDate(credential.expiresAt)}</dd>
+							<dd>
+								{credential.expiresAt ? (
+									<Timestamp value={credential.expiresAt} style="absolute" />
+								) : (
+									"永不过期"
+								)}
+							</dd>
 						</div>
 						<div>
 							<dt className="text-muted-foreground">创建时间</dt>
-							<dd>{formatDate(credential.createdAt)}</dd>
+							<dd>
+								<Timestamp value={credential.createdAt} />
+							</dd>
 						</div>
 						<div>
 							<dt className="text-muted-foreground">最近使用</dt>
 							<dd>
-								{credential.lastUsedAt
-									? formatDate(credential.lastUsedAt)
-									: "尚未使用"}
+								{credential.lastUsedAt ? (
+									<Timestamp value={credential.lastUsedAt} />
+								) : (
+									"尚未使用"
+								)}
 							</dd>
 						</div>
 					</dl>
@@ -420,6 +438,10 @@ function CredentialRow({
 							variant="outline"
 							ref={narrowButton}
 							aria-expanded={editing}
+							aria-label={withObjectName(
+								"收窄权限与有效期",
+								credential.credentialId,
+							)}
 							disabled={busy}
 							onClick={() => {
 								setNotice(false);
@@ -430,17 +452,33 @@ function CredentialRow({
 						</Button>
 					) : null}
 					{!revoked && onRevoke ? (
-						<Button
-							type="button"
-							variant="destructive"
-							onClick={() => {
+						<ConfirmDialog
+							disabled={busy}
+							trigger={
+								<Button
+									type="button"
+									variant="outline"
+									aria-label={withObjectName(
+										revokeLabel,
+										credential.credentialId,
+									)}
+								>
+									{revokeLabel}
+								</Button>
+							}
+							title="撤销这张 API 凭证？"
+							subject={{
+								name: credential.credentialId,
+								detail: `权限：${credential.scopes.join("、")}`,
+							}}
+							description="撤销后，使用这张凭证的 API 访问和结果流会立即终止，已受理的任务继续执行。撤销后不能恢复，需要时请签发新凭证。"
+							confirmLabel="撤销凭证"
+							finalFocus={credentialLabel}
+							onConfirm={() => {
 								setEditing(false);
 								void onRevoke(credential.credentialId).catch(() => undefined);
 							}}
-							disabled={busy}
-						>
-							{pending ? "正在撤销…" : "撤销"}
-						</Button>
+						/>
 					) : null}
 				</div>
 			</div>

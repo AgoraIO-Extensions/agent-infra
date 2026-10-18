@@ -1,16 +1,61 @@
 import { BrowserSessionProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	cleanup,
 	fireEvent,
-	render,
+	render as renderView,
 	screen,
 	waitFor,
 	within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactElement, ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { pendingApplication } from "../my-agents/test-fixtures.js";
 import { AdminAgentApplicationsScreen } from "./admin-agent-applications-screen.js";
+
+// 页面按需读取目录显示名：测试与生产一样提供 QueryClient，并以固定目录记录响应。
+const directoryRecords = [
+	{
+		kind: "user",
+		canonicalId: "user-1",
+		displayName: "负责人一",
+		email: "owner.one@example.test",
+	},
+	{
+		kind: "organization",
+		canonicalId: "org-release",
+		displayName: "发布工程",
+		organizationPath: "研发 / 发布工程",
+	},
+];
+beforeEach(() => {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: string | URL | Request) => {
+			const url = new URL(String(input), "http://localhost");
+			const ids = url.searchParams.get("ids")?.split(",") ?? [];
+			return Response.json({
+				items: directoryRecords.filter(
+					(item) =>
+						item.kind === url.searchParams.get("kind") &&
+						ids.includes(item.canonicalId),
+				),
+			});
+		}),
+	);
+});
+afterEach(() => vi.unstubAllGlobals());
+function render(ui: ReactElement) {
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false, gcTime: 0 } },
+	});
+	return renderView(ui, {
+		wrapper: ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={client}>{children}</QueryClientProvider>
+		),
+	});
+}
 
 const administratorSession = BrowserSessionProjectionV1Schema.parse({
 	schemaVersion: 1,
@@ -32,6 +77,32 @@ const ordinaryUserSession = BrowserSessionProjectionV1Schema.parse({
 afterEach(cleanup);
 
 describe("AdminAgentApplicationsScreen", () => {
+	it("labels every non-action approval cell with its column header for mobile cards", () => {
+		render(
+			<AdminAgentApplicationsScreen
+				onDecision={vi.fn()}
+				session={{ kind: "ready", session: administratorSession }}
+				state={{ kind: "ready", applications: [pendingApplication] }}
+			/>,
+		);
+		const table = screen.getByRole("table", { name: "创建审批" });
+		const headers = within(table)
+			.getAllByRole("columnheader")
+			.map((header) => header.textContent);
+		const [row] = within(table).getAllByRole("row").slice(1);
+		const cells = within(row as HTMLElement).getAllByRole("cell");
+		expect(cells.map((cell) => cell.getAttribute("data-label"))).toEqual([
+			...headers.slice(0, 5),
+			null,
+		]);
+		expect(cells.at(-1)?.getAttribute("data-cell")).toBe("actions");
+		expect(
+			within(cells.at(-1) as HTMLElement).getByRole("button", {
+				name: "审阅申请",
+			}),
+		).toBeTruthy();
+	});
+
 	it("reviews real projected resource, Owner, model and scope details before approving", async () => {
 		const onDecision = vi.fn();
 		const application = {
@@ -73,7 +144,9 @@ describe("AdminAgentApplicationsScreen", () => {
 			within(dialog).getByText("250m CPU / 512 MiB 内存 / 1 GiB 存储"),
 		).toBeTruthy();
 		expect(within(dialog).getByText("Applicant")).toBeTruthy();
-		expect(within(dialog).getByText("组织：org-release")).toBeTruthy();
+		// 使用范围显示目录名称，不再显示组织 ID。
+		expect(await within(dialog).findByText("发布工程")).toBeTruthy();
+		expect(dialog.textContent).not.toContain("org-release");
 		expect(
 			within(dialog).getByText("Release model（release-model）"),
 		).toBeTruthy();
@@ -141,7 +214,7 @@ describe("AdminAgentApplicationsScreen", () => {
 		expect(
 			screen.getByRole("button", { name: "取消" }).getAttribute("disabled"),
 		).not.toBeNull();
-		expect(screen.queryByRole("button", { name: "关闭窗口" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "关闭" })).toBeNull();
 		fireEvent.click(approve);
 		expect(onDecision).toHaveBeenCalledTimes(1);
 		rerender(
@@ -225,7 +298,9 @@ describe("AdminAgentApplicationsScreen", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("alert").textContent).toBe("当前无法访问审批。");
+		// 无权访问是首屏静态边界，不再用 role="alert" 打断读屏。
+		expect(screen.getByText("当前无法访问审批。")).toBeTruthy();
+		expect(screen.queryByRole("alert")).toBeNull();
 		expect(screen.queryByText("Release assistant request")).toBeNull();
 		expect(screen.queryByRole("button", { name: "批准并创建" })).toBeNull();
 	});

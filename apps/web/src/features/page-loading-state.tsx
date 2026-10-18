@@ -1,3 +1,5 @@
+import { LoadingLine } from "@/components/ui/spinner";
+
 export function PageLoadingState({
 	title,
 	message,
@@ -12,9 +14,7 @@ export function PageLoadingState({
 					<h1>{title}</h1>
 				</div>
 			</header>
-			<p aria-live="polite" className="text-muted-foreground" role="status">
-				{message}
-			</p>
+			<LoadingLine>{message}</LoadingLine>
 		</section>
 	);
 }

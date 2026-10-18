@@ -4,13 +4,16 @@ import { useId } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Empty, EmptyDescription } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
+import { Empty, EmptyContent, EmptyDescription } from "@/components/ui/empty";
+import { Field } from "@/components/ui/field";
+import { IdentifierText } from "@/components/ui/identifier-text";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { SearchInput } from "@/components/ui/search-input";
+import { LoadingLine } from "@/components/ui/spinner";
 import {
 	Table,
 	TableBody,
@@ -19,12 +22,15 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import { withObjectName } from "@/lib/accessible-name";
+import { statusTone } from "@/lib/status-tone";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
 	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
+import { formatPerson } from "../directory-names.js";
 import type { AdminAgentsState } from "./admin-agents.js";
 import { AdminUserGovernance } from "./admin-user-governance.js";
 import { ApplicationMaterialGovernance } from "./application-material-governance.js";
@@ -117,7 +123,7 @@ export function AdminAgentsScreen({
 				)}
 			</header>
 			{denied ? (
-				<Alert>
+				<Alert tone="warn">
 					<AlertDescription>当前无权访问 Agent 管理。</AlertDescription>
 				</Alert>
 			) : (
@@ -125,7 +131,7 @@ export function AdminAgentsScreen({
 					<AdminUserGovernance />
 					<ApplicationMaterialGovernance />
 					<div className="admin-agent-filters">
-						<div className="space-y-2">
+						<Field>
 							<Label htmlFor={`${id}-status`}>产品状态</Label>
 							<NativeSelect
 								id={`${id}-status`}
@@ -147,33 +153,32 @@ export function AdminAgentsScreen({
 									</NativeSelectOption>
 								))}
 							</NativeSelect>
-						</div>
-						<div className="space-y-2">
-							<Label htmlFor={`${id}-search`}>搜索 Agent 或 Owner</Label>
-							<Input
-								id={`${id}-search`}
-								type="search"
-								maxLength={adminAgentQueryMaxLength}
-								value={filters.q ?? ""}
-								placeholder="输入名称、说明、来源或 Owner 标识"
-								onChange={(event) =>
-									onFiltersChange({
-										...filters,
-										q: event.target.value || undefined,
-										page: undefined,
-									})
-								}
-							/>
-						</div>
+						</Field>
+						<SearchInput
+							label="搜索 Agent 或 Owner"
+							id={`${id}-search`}
+							maxLength={adminAgentQueryMaxLength}
+							value={filters.q ?? ""}
+							placeholder="输入名称、说明、来源或 Owner 标识"
+							onChange={(event) =>
+								onFiltersChange({
+									...filters,
+									q: event.target.value || undefined,
+									page: undefined,
+								})
+							}
+						/>
 					</div>
 					<div className="admin-agent-summary">
-						<p role="status" aria-live="polite">
-							{state.kind === "loading"
-								? "正在加载 Agent…"
-								: state.kind === "error"
-									? "Agent 列表暂时无法读取。"
-									: `${agents.length} 个已创建 Agent，匹配 ${matches.length} 个${refreshing ? "，正在刷新…" : ""}`}
-						</p>
+						<div role="status" aria-live="polite">
+							{state.kind === "loading" ? (
+								<LoadingLine announce={false}>正在加载 Agent…</LoadingLine>
+							) : state.kind === "error" ? (
+								"Agent 列表暂时无法读取。"
+							) : (
+								`${agents.length} 个已创建 Agent，匹配 ${matches.length} 个${refreshing ? "，正在刷新…" : ""}`
+							)}
+						</div>
 						<Button
 							variant="outline"
 							disabled={
@@ -188,7 +193,7 @@ export function AdminAgentsScreen({
 						</Button>
 					</div>
 					{state.kind === "error" ? (
-						<Alert>
+						<Alert tone="danger" role="alert">
 							<AlertDescription>
 								{state.retryable
 									? "请重试读取列表。"
@@ -202,13 +207,19 @@ export function AdminAgentsScreen({
 					) : state.kind === "ready" && !matches.length ? (
 						<Empty>
 							<EmptyDescription>未找到匹配的 Agent。</EmptyDescription>
-							<Button variant="outline" onClick={() => onFiltersChange({})}>
-								清除筛选
-							</Button>
+							<EmptyContent>
+								<Button variant="outline" onClick={() => onFiltersChange({})}>
+									清除筛选
+								</Button>
+							</EmptyContent>
 						</Empty>
 					) : state.kind === "ready" ? (
 						<>
-							<Table className="admin-agent-table" aria-label="已创建 Agent">
+							<Table
+								className="admin-agent-table"
+								mobileLayout="cards"
+								aria-label="已创建 Agent"
+							>
 								<TableHeader>
 									<TableRow>
 										{["Agent", "来源", "Owner", "状态", "系统操作"].map(
@@ -235,18 +246,25 @@ export function AdminAgentsScreen({
 												{sourceLabel(agent)}
 											</TableCell>
 											<TableCell data-label="Owner">
-												{agent.configuration.owners
-													.map(
-														(owner) => `${owner.displayName} (${owner.userId})`,
-													)
-													.join("、")}
+												{agent.configuration.owners.map((owner, index) => (
+													<span key={owner.userId}>
+														{index ? "、" : null}
+														{
+															formatPerson({ displayName: owner.displayName })
+																.name
+														}{" "}
+														{/* 系统管理员需要区分同名 Owner：ID 只以等宽短形式作次要信息。 */}
+														<IdentifierText
+															className="text-muted-foreground"
+															label="Owner ID"
+															value={owner.userId}
+														/>
+													</span>
+												))}
 											</TableCell>
 											<TableCell data-label="状态">
 												<div className="space-y-2">
-													<Badge
-														variant="outline"
-														data-status={agent.managementStatus}
-													>
+													<Badge tone={statusTone(agent.managementStatus)}>
 														{
 															agentManagementStatusLabels[
 																agent.managementStatus
@@ -274,6 +292,10 @@ export function AdminAgentsScreen({
 														className={buttonVariants({ variant: "outline" })}
 														params={{ agentId: agent.agentId }}
 														to="/agents/$agentId/configuration"
+														aria-label={withObjectName(
+															"处理 Owner 交接",
+															agent.name,
+														)}
 													>
 														处理 Owner 交接
 													</Link>

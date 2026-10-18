@@ -37,6 +37,52 @@ describe("ApiCredentialsScreen", () => {
 		expect(screen.queryByText(/papi_/)).toBeNull();
 	});
 
+	it("confirms a revocation with the credential and its consequence before requesting it", async () => {
+		const second = { ...metadata, credentialId: "credential-2" };
+		const onRevoke = vi
+			.fn<(credentialId: string) => Promise<unknown>>()
+			.mockResolvedValue(undefined);
+		render(
+			<ApiCredentialsScreen
+				state={{ kind: "ready", credentials: [metadata, second] }}
+				onRevoke={onRevoke}
+			/>,
+		);
+		// 每张卡的撤销按钮可访问名称都带凭证标识，且不是实心 danger。
+		const trigger = screen.getByRole("button", {
+			name: "撤销：credential-1",
+		});
+		expect(
+			screen.getByRole("button", { name: "撤销：credential-2" }),
+		).toBeTruthy();
+		expect(trigger.className).not.toContain("bg-destructive");
+		fireEvent.click(trigger);
+		let dialog = await screen.findByRole("dialog", {
+			name: "撤销这张 API 凭证？",
+		});
+		expect(within(dialog).getByText("credential-1")).toBeTruthy();
+		expect(within(dialog).getByText(/撤销后不能恢复/)).toBeTruthy();
+		expect(onRevoke).not.toHaveBeenCalled();
+		fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		fireEvent.click(trigger);
+		dialog = await screen.findByRole("dialog");
+		fireEvent.keyDown(dialog, { key: "Escape" });
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(onRevoke).not.toHaveBeenCalled();
+		fireEvent.click(trigger);
+		dialog = await screen.findByRole("dialog");
+		fireEvent.click(within(dialog).getByRole("button", { name: "撤销凭证" }));
+		expect(onRevoke).toHaveBeenCalledExactlyOnceWith("credential-1");
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		// 触发器在撤销进行中会禁用、成功后消失，焦点落在该凭证卡片内而不是 body。
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByText("credential-1", { selector: "code" }),
+			),
+		);
+	});
+
 	it("shows first-delivery material once and explains replay behavior", async () => {
 		const onIssue = vi
 			.fn<
@@ -94,7 +140,7 @@ describe("ApiCredentialsScreen", () => {
 		expect(within(rows[1]).getByText("已过期")).toBeTruthy();
 		expect(within(rows[2]).getByText("已撤销")).toBeTruthy();
 		expect(
-			screen.getAllByRole("button", { name: "收窄权限与有效期" }),
+			screen.getAllByRole("button", { name: /^收窄权限与有效期：/ }),
 		).toHaveLength(1);
 	});
 
@@ -115,7 +161,7 @@ describe("ApiCredentialsScreen", () => {
 			act(() => vi.advanceTimersByTime(1000));
 			expect(screen.getByText("已过期")).toBeTruthy();
 			expect(
-				screen.queryByRole("button", { name: "收窄权限与有效期" }),
+				screen.queryByRole("button", { name: /^收窄权限与有效期/ }),
 			).toBeNull();
 		} finally {
 			cleanup();
@@ -133,7 +179,9 @@ describe("ApiCredentialsScreen", () => {
 				onNarrow={vi.fn().mockResolvedValue(undefined)}
 			/>,
 		);
-		const button = screen.getByRole("button", { name: "收窄权限与有效期" });
+		const button = screen.getByRole("button", {
+			name: `收窄权限与有效期：${metadata.credentialId}`,
+		});
 		fireEvent.click(button);
 		fireEvent.click(
 			within(screen.getByRole("form", { name: /收窄凭证/ })).getByRole(
@@ -181,7 +229,11 @@ describe("ApiCredentialsScreen", () => {
 			/>,
 		);
 
-		fireEvent.click(screen.getByRole("button", { name: "收窄权限与有效期" }));
+		fireEvent.click(
+			screen.getByRole("button", {
+				name: `收窄权限与有效期：${metadata.credentialId}`,
+			}),
+		);
 		const form = screen.getByRole("form", { name: /收窄凭证/ });
 		fireEvent.click(within(form).getByRole("checkbox", { name: "读取 Agent" }));
 		fireEvent.click(within(form).getByRole("checkbox", { name: "使用 Agent" }));

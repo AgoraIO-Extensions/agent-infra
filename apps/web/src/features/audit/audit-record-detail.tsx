@@ -1,10 +1,14 @@
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
+import { IdentifierText } from "@/components/ui/identifier-text";
+import { Timestamp } from "@/components/ui/timestamp";
+import { type DirectoryNames, DirectoryNameText } from "../directory-names.js";
 import {
 	auditActionLabels,
 	auditOutcomeLabel,
 	auditPrincipalLabels,
-	auditTimestamp,
+	auditResultTone,
+	auditSubjectLabels,
 	taskAuditReasonLabels,
 } from "./audit-labels.js";
 import type { AuditRecord } from "./audit-query.js";
@@ -28,7 +32,60 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 	);
 }
 
-export function AuditRecordDetail({ record }: { record: AuditRecord }) {
+/** 列表与详情中需要按目录解析的用户主体 ID。 */
+export function auditUserIds(records: readonly AuditRecord[]) {
+	return records.flatMap((record) => [
+		...(record.actor.kind === "user" ? [record.actor.actorId] : []),
+		...(record.originalPrincipal?.kind === "user"
+			? [record.originalPrincipal.id]
+			: []),
+	]);
+}
+
+/**
+ * 审计主体：用户显示目录姓名，未解析时附 ID 短形式；详情面板附可复制的完整 ID 以便核对。
+ * 后台组件与应用主体不在目录中，保持原标识。
+ */
+export function AuditPrincipalName({
+	kind,
+	id,
+	names,
+	detail = false,
+	label = "主体 ID",
+}: {
+	kind: AuditRecord["actor"]["kind"];
+	id: string;
+	names: DirectoryNames;
+	detail?: boolean;
+	/** 详情面板复制按钮的对象名，同一面板内的多个主体需要不同名称。 */
+	label?: string;
+}) {
+	if (kind !== "user") return <>{id}</>;
+	const name = names.resolve(id);
+	return (
+		<>
+			<DirectoryNameText
+				name={name}
+				status={names.status}
+				identifier={!detail}
+			/>
+			{detail ? (
+				<>
+					{" "}
+					<IdentifierText value={id} label={label} copyable />
+				</>
+			) : null}
+		</>
+	);
+}
+
+export function AuditRecordDetail({
+	record,
+	names,
+}: {
+	record: AuditRecord;
+	names: DirectoryNames;
+}) {
 	const fact = record.operation?.fact;
 	const connection = fact?.kind === "tool" ? fact.connection : undefined;
 	return (
@@ -37,24 +94,44 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 				<h2 className="font-semibold text-base">
 					{auditActionLabels[record.action]}
 				</h2>
-				<Badge variant="outline" data-result={record.result}>
+				<Badge tone={auditResultTone(record.result)}>
 					{auditOutcomeLabel(record)}
 				</Badge>
 			</div>
 			<Section title="操作与身份">
 				<Field label="操作摘要">{record.summary}</Field>
 				<Field label="审计 ID">{record.auditId}</Field>
-				<Field label="发生时间">{auditTimestamp(record.occurredAt)}</Field>
+				<Field label="发生时间">
+					<Timestamp value={record.occurredAt} style="absolute" />
+				</Field>
 				<Field label="可信操作主体">
-					{auditPrincipalLabels[record.actor.kind]} · {record.actor.actorId}
+					{auditPrincipalLabels[record.actor.kind]} ·{" "}
+					<AuditPrincipalName
+						kind={record.actor.kind}
+						id={record.actor.actorId}
+						names={names}
+						detail
+						label="可信操作主体 ID"
+					/>
 				</Field>
 				<Field label="原发起主体">
-					{record.originalPrincipal
-						? `${auditPrincipalLabels[record.originalPrincipal.kind]} · ${record.originalPrincipal.id}`
-						: null}
+					{record.originalPrincipal ? (
+						<>
+							{auditPrincipalLabels[record.originalPrincipal.kind]} ·{" "}
+							<AuditPrincipalName
+								kind={record.originalPrincipal.kind}
+								id={record.originalPrincipal.id}
+								names={names}
+								detail
+								label="原发起主体 ID"
+							/>
+						</>
+					) : null}
 				</Field>
 				<Field label="实际后台组件">{record.executor}</Field>
-				<Field label="对象类型">{record.subject.kind}</Field>
+				<Field label="对象类型">
+					{auditSubjectLabels[record.subject.kind]}
+				</Field>
 				<Field label="对象 ID">{record.subject.subjectId}</Field>
 				<Field label="授权记录引用">{record.authorizationRecordId}</Field>
 			</Section>
@@ -114,10 +191,14 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 					<Field label="父操作引用">{fact.parentOperationRef}</Field>
 					<Field label="事件 ID">{record.operation?.eventId}</Field>
 					<Field label="开始时间">
-						{fact.startedAt ? auditTimestamp(fact.startedAt) : null}
+						{fact.startedAt ? (
+							<Timestamp value={fact.startedAt} style="absolute" />
+						) : null}
 					</Field>
 					<Field label="完成时间">
-						{fact.finishedAt ? auditTimestamp(fact.finishedAt) : null}
+						{fact.finishedAt ? (
+							<Timestamp value={fact.finishedAt} style="absolute" />
+						) : null}
 					</Field>
 					<Field label="已确认耗时">
 						{fact.durationMs === undefined ? "未采集" : `${fact.durationMs} ms`}

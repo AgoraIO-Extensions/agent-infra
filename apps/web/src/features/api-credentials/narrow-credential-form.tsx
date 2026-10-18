@@ -6,11 +6,13 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Field, FieldLegend } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { withObjectName } from "@/lib/accessible-name";
 import type {
 	PersonalApiCredentialMetadataV1,
 	PersonalApiCredentialNarrowRequestV1,
@@ -147,8 +149,13 @@ export function NarrowCredentialForm({
 			<p className="text-muted-foreground text-sm">
 				只可减少当前权限或提前到期。留空保留当前过期时间；服务端会校验最新权限和时间。
 			</p>
-			<fieldset disabled={busy} aria-describedby={`${id}-scope-hint`}>
-				<legend className="mb-2 font-medium text-sm">保留的权限</legend>
+			{/* 多张凭证可同时展开收窄表单，分组名带凭证标识以便区分（N-12）。 */}
+			<fieldset
+				disabled={busy}
+				aria-label={withObjectName("保留的权限", credential.credentialId)}
+				aria-describedby={`${id}-scope-hint`}
+			>
+				<FieldLegend className="mb-2">保留的权限</FieldLegend>
 				<p
 					id={`${id}-scope-hint`}
 					className="mb-3 text-muted-foreground text-xs"
@@ -178,7 +185,7 @@ export function NarrowCredentialForm({
 									setScopeError(null);
 								}}
 							/>
-							<Label htmlFor={`${id}-${scope}`} className="font-normal">
+							<Label htmlFor={`${id}-${scope}`} variant="option">
 								{personalApiCredentialScopeLabels[scope]}
 							</Label>
 						</div>
@@ -187,14 +194,15 @@ export function NarrowCredentialForm({
 				{scopeError ? (
 					<Alert
 						id={`${id}-scope-error`}
-						variant="destructive"
+						tone="danger"
+						role="alert"
 						className="mt-2"
 					>
 						<AlertDescription>{scopeError}</AlertDescription>
 					</Alert>
 				) : null}
 			</fieldset>
-			<div className="space-y-2">
+			<Field>
 				<Label htmlFor={`${id}-expiry`}>提前到期时间（可选）</Label>
 				<Input
 					id={`${id}-expiry`}
@@ -214,24 +222,25 @@ export function NarrowCredentialForm({
 					使用本地时间；留空不会取消或延长当前有效期。
 				</p>
 				{expiryError ? (
-					<Alert id={`${id}-expiry-error`} variant="destructive">
+					<Alert id={`${id}-expiry-error`} tone="danger" role="alert">
 						<AlertDescription>{expiryError}</AlertDescription>
 					</Alert>
 				) : null}
-			</div>
+			</Field>
 			{requestError ? (
-				<Alert variant="destructive">
+				<Alert tone="danger" role="alert">
 					<AlertDescription>{requestError}</AlertDescription>
 					{onRefresh ? (
-						<Button
-							type="button"
-							variant="outline"
-							disabled={busy}
-							onClick={onRefresh}
-							className="mt-2"
-						>
-							重新加载凭证
-						</Button>
+						<AlertAction>
+							<Button
+								type="button"
+								variant="outline"
+								disabled={busy}
+								onClick={onRefresh}
+							>
+								重新加载凭证
+							</Button>
+						</AlertAction>
 					) : null}
 				</Alert>
 			) : null}

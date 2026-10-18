@@ -82,7 +82,7 @@ describe("AgentLifecycleControls", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "重启 Agent" }));
 		const dialog = await screen.findByRole("dialog", {
-			name: "重新启动 Agent？",
+			name: "重启Release assistant？",
 		});
 		expect(onCommand).not.toHaveBeenCalled();
 		expect(
@@ -234,8 +234,8 @@ describe("AgentLifecycleControls", () => {
 		{
 			command: "stop",
 			trigger: "停止 Agent",
-			title: "停止 Agent？",
-			confirm: "确认停止",
+			title: "停止这个 Agent？",
+			confirm: "停止 Agent",
 			session: ownerSession,
 		},
 		{
@@ -301,7 +301,7 @@ describe("AgentLifecycleControls", () => {
 		};
 		const { rerender } = render(<AgentLifecycleControls {...props} />);
 		fireEvent.click(screen.getByRole("button", { name: "停止 Agent" }));
-		await screen.findByRole("dialog");
+		const dialog = await screen.findByRole("dialog");
 		rerender(
 			<AgentLifecycleControls
 				{...props}
@@ -311,7 +311,7 @@ describe("AgentLifecycleControls", () => {
 				}}
 			/>,
 		);
-		const confirm = screen.getByRole("button", { name: "确认停止" });
+		const confirm = within(dialog).getByRole("button", { name: "停止 Agent" });
 		expect(confirm.getAttribute("disabled")).not.toBeNull();
 		fireEvent.click(confirm);
 		expect(onCommand).not.toHaveBeenCalled();
@@ -328,8 +328,10 @@ describe("AgentLifecycleControls", () => {
 		);
 
 		fireEvent.click(screen.getByRole("button", { name: "停止 Agent" }));
-		const dialog = await screen.findByRole("dialog", { name: "停止 Agent？" });
-		fireEvent.click(within(dialog).getByRole("button", { name: "确认停止" }));
+		const dialog = await screen.findByRole("dialog", {
+			name: "停止这个 Agent？",
+		});
+		fireEvent.click(within(dialog).getByRole("button", { name: "停止 Agent" }));
 
 		expect(onCommand).toHaveBeenCalledExactlyOnceWith("stop");
 		expect(
@@ -352,8 +354,10 @@ describe("AgentLifecycleControls", () => {
 		const { rerender } = render(<AgentLifecycleControls {...props} />);
 
 		fireEvent.click(screen.getByRole("button", { name: "停止 Agent" }));
-		const dialog = await screen.findByRole("dialog", { name: "停止 Agent？" });
-		fireEvent.click(within(dialog).getByRole("button", { name: "确认停止" }));
+		const dialog = await screen.findByRole("dialog", {
+			name: "停止这个 Agent？",
+		});
+		fireEvent.click(within(dialog).getByRole("button", { name: "停止 Agent" }));
 
 		rerender(
 			<AgentLifecycleControls
@@ -369,8 +373,8 @@ describe("AgentLifecycleControls", () => {
 		fireEvent.click(screen.getByRole("button", { name: "停止 Agent" }));
 		fireEvent.click(
 			within(
-				await screen.findByRole("dialog", { name: "停止 Agent？" }),
-			).getByRole("button", { name: "确认停止" }),
+				await screen.findByRole("dialog", { name: "停止这个 Agent？" }),
+			).getByRole("button", { name: "停止 Agent" }),
 		);
 		expect(onCommand).toHaveBeenCalledTimes(2);
 	});
@@ -391,8 +395,8 @@ describe("AgentLifecycleControls", () => {
 		fireEvent.click(screen.getByRole("button", { name: "停止 Agent" }));
 		fireEvent.click(
 			within(
-				await screen.findByRole("dialog", { name: "停止 Agent？" }),
-			).getByRole("button", { name: "确认停止" }),
+				await screen.findByRole("dialog", { name: "停止这个 Agent？" }),
+			).getByRole("button", { name: "停止 Agent" }),
 		);
 		expect(
 			screen.getByRole("button", { name: "停止中…" }).hasAttribute("disabled"),

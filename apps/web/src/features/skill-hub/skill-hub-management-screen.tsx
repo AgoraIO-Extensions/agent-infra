@@ -6,8 +6,8 @@ import {
 	PackageOpen,
 	RefreshCw,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useRef, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { type FormEvent, type ReactNode, useId, useRef, useState } from "react";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -17,12 +17,14 @@ import {
 	EmptyMedia,
 	EmptyTitle,
 } from "@/components/ui/empty";
+import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { LoadingLine } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import type {
 	SkillHubAgentBindingCommandV1,
@@ -79,6 +81,17 @@ type SkillHubPublicationDraft = Omit<
 	"packageObjectVersion"
 >;
 
+// Skill 版本状态的穷举中文映射，页面不直接显示英文枚举。
+const skillVersionStateLabels: Record<
+	SkillHubPublicationResponseV1["version"]["state"],
+	string
+> = {
+	published: "已发布",
+	pending_review: "待审核",
+	rejected: "已驳回",
+	revoked: "已撤销",
+};
+
 function publicationMessage(
 	action: string,
 	result: SkillHubPublicationResponseV1,
@@ -87,7 +100,8 @@ function publicationMessage(
 	const reason = result.version.reviewReason
 		? `，原因：${result.version.reviewReason}`
 		: "";
-	return `${action}成功：服务端状态 ${result.version.state}${replay}${reason}。`;
+	const state = skillVersionStateLabels[result.version.state] ?? "其他";
+	return `${action}成功：服务端状态 ${state}${replay}${reason}。`;
 }
 
 function bindingMessage(
@@ -237,8 +251,10 @@ export function SkillHubManagementScreen({
 		<section aria-labelledby="skill-hub-management-heading">
 			<header className="page-heading">
 				<div className="min-w-0">
-					<p className="page-eyebrow">我的管理 / Skill Hub</p>
-					<h1 id="skill-hub-management-heading">管理固定版本与 Agent 配置。</h1>
+					<p className="page-eyebrow">我的管理 / 我的 Skill</p>
+					<h1 id="skill-hub-management-heading" className="tracking-normal">
+						管理固定版本与 Agent 配置。
+					</h1>
 					<p>
 						项目、发布、审核和 Agent
 						配置共用同一版本事实；每次写入都由服务端授权并带幂等键。
@@ -255,7 +271,9 @@ export function SkillHubManagementScreen({
 						disabled={retrying}
 					>
 						<RefreshCw
-							className={retrying ? "animate-spin" : ""}
+							className={
+								retrying ? "animate-spin motion-reduce:animate-none" : ""
+							}
 							aria-hidden="true"
 						/>
 						刷新
@@ -263,16 +281,18 @@ export function SkillHubManagementScreen({
 				</div>
 			</header>
 			{state.kind === "loading" ? (
-				<p role="status">正在加载 Skill 版本…</p>
+				<LoadingLine>正在加载 Skill 版本…</LoadingLine>
 			) : state.kind === "unavailable" ? (
-				<Alert>
+				<Alert tone="danger" role="alert">
 					<AlertDescription>
 						{state.retryable
 							? "Skill Hub 状态暂时无法读取。"
 							: "当前账号无法读取 Skill Hub 状态。"}
 					</AlertDescription>
 					{state.retryable && onRetry ? (
-						<Button onClick={onRetry}>重试</Button>
+						<AlertAction>
+							<Button onClick={onRetry}>重试</Button>
+						</AlertAction>
 					) : null}
 				</Alert>
 			) : (
@@ -284,7 +304,7 @@ export function SkillHubManagementScreen({
 							description="创建项目或从受控 Provider 导入固定版本。"
 						>
 							<form className="mt-4 space-y-3" onSubmit={submitProject}>
-								<Field
+								<TextField
 									label="项目名称"
 									value={projectName}
 									onChange={setProjectName}
@@ -324,35 +344,38 @@ export function SkillHubManagementScreen({
 								}}
 							>
 								<p className="font-medium text-sm">编辑/停用项目</p>
-								<Field
+								<TextField
 									label="项目 ID"
 									value={projectId}
 									onChange={setProjectId}
 									required
 								/>
-								<Field
+								<TextField
 									label="新名称"
 									value={projectName}
 									onChange={setProjectName}
 									required
 								/>
-								<Label>
-									状态
-									<NativeSelect
-										className="mt-1"
-										value={projectStatus}
-										onChange={(event) =>
-											setProjectStatus(
-												event.target.value as "active" | "disabled",
-											)
-										}
-									>
-										<NativeSelectOption value="active">启用</NativeSelectOption>
-										<NativeSelectOption value="disabled">
-											停用
-										</NativeSelectOption>
-									</NativeSelect>
-								</Label>
+								<FieldControl label="状态">
+									{(id) => (
+										<NativeSelect
+											id={id}
+											value={projectStatus}
+											onChange={(event) =>
+												setProjectStatus(
+													event.target.value as "active" | "disabled",
+												)
+											}
+										>
+											<NativeSelectOption value="active">
+												启用
+											</NativeSelectOption>
+											<NativeSelectOption value="disabled">
+												停用
+											</NativeSelectOption>
+										</NativeSelect>
+									)}
+								</FieldControl>
 								<Button
 									type="submit"
 									variant="outline"
@@ -393,7 +416,7 @@ export function SkillHubManagementScreen({
 								}}
 							>
 								<p className="font-medium text-sm">受控 Provider 导入</p>
-								<Field
+								<TextField
 									label="名称"
 									value={importForm.name}
 									onChange={(value) =>
@@ -401,7 +424,7 @@ export function SkillHubManagementScreen({
 									}
 									required
 								/>
-								<Field
+								<TextField
 									label="Provider 版本/选择器"
 									value={importForm.version}
 									onChange={(value) =>
@@ -461,7 +484,7 @@ export function SkillHubManagementScreen({
 									});
 								}}
 							>
-								<Field
+								<TextField
 									label="名称"
 									value={publishForm.name}
 									onChange={(value) =>
@@ -469,7 +492,7 @@ export function SkillHubManagementScreen({
 									}
 									required
 								/>
-								<Field
+								<TextField
 									label="Skill ID"
 									value={publishForm.skillId}
 									onChange={(value) =>
@@ -477,7 +500,7 @@ export function SkillHubManagementScreen({
 									}
 									required
 								/>
-								<Field
+								<TextField
 									label="版本 ID"
 									value={publishForm.skillVersionId}
 									onChange={(value) =>
@@ -485,7 +508,7 @@ export function SkillHubManagementScreen({
 									}
 									required
 								/>
-								<Field
+								<TextField
 									label="版本"
 									value={publishForm.version}
 									onChange={(value) =>
@@ -514,7 +537,7 @@ export function SkillHubManagementScreen({
 										setPublishForm({ ...publishForm, visibility: value })
 									}
 								/>
-								<Field
+								<TextField
 									label="Package digest"
 									value={publishForm.packageDigest}
 									onChange={(value) =>
@@ -522,7 +545,7 @@ export function SkillHubManagementScreen({
 									}
 									required
 								/>
-								<Field
+								<TextField
 									label="Manifest digest"
 									value={publishForm.manifestDigest}
 									onChange={(value) =>
@@ -530,7 +553,7 @@ export function SkillHubManagementScreen({
 									}
 									required
 								/>
-								<Field
+								<TextField
 									label="Signature digest"
 									value={publishForm.signatureDigest}
 									onChange={(value) =>
@@ -582,7 +605,7 @@ export function SkillHubManagementScreen({
 									});
 								}}
 							>
-								<Field
+								<TextField
 									label="Skill 版本 ID"
 									value={reviewForm.skillVersionId}
 									onChange={(value) =>
@@ -592,42 +615,46 @@ export function SkillHubManagementScreen({
 								/>
 								<p className="text-muted-foreground text-sm" role="status">
 									{publishedVersionIds.has(reviewForm.skillVersionId.trim())
-										? "当前授权目录确认该版本为 published，可申请撤销。"
-										: "当前授权目录未确认 published 状态，撤销按钮保持不可用。"}
+										? "当前授权目录确认该版本已发布，可申请撤销。"
+										: "当前授权目录未确认已发布状态，撤销按钮保持不可用。"}
 								</p>
-								<Label>
-									决定
-									<NativeSelect
-										className="mt-1"
-										value={reviewForm.decision}
-										onChange={(event) =>
-											setReviewForm({
-												...reviewForm,
-												decision: event.target
-													.value as SkillHubReviewRequestV1["decision"],
-											})
-										}
-									>
-										<NativeSelectOption value="approve">
-											批准
-										</NativeSelectOption>
-										<NativeSelectOption value="reject">驳回</NativeSelectOption>
-									</NativeSelect>
-								</Label>
-								<Label>
-									原因
-									<Textarea
-										className="mt-1"
-										value={reviewForm.reason}
-										onChange={(event) =>
-											setReviewForm({
-												...reviewForm,
-												reason: event.target.value,
-											})
-										}
-										maxLength={1024}
-									/>
-								</Label>
+								<FieldControl label="决定">
+									{(id) => (
+										<NativeSelect
+											id={id}
+											value={reviewForm.decision}
+											onChange={(event) =>
+												setReviewForm({
+													...reviewForm,
+													decision: event.target
+														.value as SkillHubReviewRequestV1["decision"],
+												})
+											}
+										>
+											<NativeSelectOption value="approve">
+												批准
+											</NativeSelectOption>
+											<NativeSelectOption value="reject">
+												驳回
+											</NativeSelectOption>
+										</NativeSelect>
+									)}
+								</FieldControl>
+								<FieldControl label="原因">
+									{(id) => (
+										<Textarea
+											id={id}
+											value={reviewForm.reason}
+											onChange={(event) =>
+												setReviewForm({
+													...reviewForm,
+													reason: event.target.value,
+												})
+											}
+											maxLength={1024}
+										/>
+									)}
+								</FieldControl>
 								<div className="flex gap-2">
 									<Button
 										type="submit"
@@ -705,7 +732,7 @@ export function SkillHubManagementScreen({
 									});
 								}}
 							>
-								<Field
+								<TextField
 									label="Agent ID"
 									value={bindingForm.agentId}
 									onChange={(value) =>
@@ -713,7 +740,7 @@ export function SkillHubManagementScreen({
 									}
 									required
 								/>
-								<Field
+								<TextField
 									label="Agent 版本"
 									value={bindingForm.agentVersion}
 									onChange={(value) =>
@@ -721,7 +748,7 @@ export function SkillHubManagementScreen({
 									}
 									required
 								/>
-								<Field
+								<TextField
 									label="配置 revision"
 									value={bindingForm.revision}
 									onChange={(value) =>
@@ -730,7 +757,7 @@ export function SkillHubManagementScreen({
 									type="number"
 									required
 								/>
-								<Field
+								<TextField
 									label="Skill 版本 ID"
 									value={bindingForm.skillVersionId}
 									onChange={(value) =>
@@ -738,19 +765,21 @@ export function SkillHubManagementScreen({
 									}
 									required
 								/>
-								<Label>
-									Grant JSON
-									<Textarea
-										className="mt-1 font-mono text-xs"
-										value={bindingForm.grant}
-										onChange={(event) =>
-											setBindingForm({
-												...bindingForm,
-												grant: event.target.value,
-											})
-										}
-									/>
-								</Label>
+								<FieldControl label="Grant JSON">
+									{(id) => (
+										<Textarea
+											id={id}
+											className="font-mono text-xs"
+											value={bindingForm.grant}
+											onChange={(event) =>
+												setBindingForm({
+													...bindingForm,
+													grant: event.target.value,
+												})
+											}
+										/>
+									)}
+								</FieldControl>
 								<div className="flex gap-2">
 									<Button
 										type="submit"
@@ -805,12 +834,12 @@ export function SkillHubManagementScreen({
 									已发布版本
 								</h2>
 							</div>
-							<Badge variant="outline">{versions.length} 个版本</Badge>
+							<Badge variant="tag">{versions.length} 个版本</Badge>
 						</div>
 						{versions.length === 0 ? (
-							<Empty className="min-h-40">
+							<Empty>
 								<EmptyHeader>
-									<EmptyMedia variant="icon">
+									<EmptyMedia>
 										<PackageOpen aria-hidden="true" />
 									</EmptyMedia>
 									<EmptyTitle>暂无已发布版本</EmptyTitle>
@@ -842,13 +871,15 @@ export function SkillHubManagementScreen({
 												</p>
 											</div>
 											<div className="flex flex-wrap gap-2">
-												<Badge variant="secondary">
+												<Badge variant="tag">
 													{skillHubProviderLabels[version.provider]}
 												</Badge>
-												<Badge variant="outline">
+												<Badge variant="tag">
 													{skillHubVisibilityLabels[version.visibility]}
 												</Badge>
-												<Badge variant="outline">published</Badge>
+												<Badge tone="gray">
+													{skillVersionStateLabels.published}
+												</Badge>
 											</div>
 										</div>
 										<p className="mt-3 break-all text-muted-foreground text-xs">
@@ -865,7 +896,7 @@ export function SkillHubManagementScreen({
 	);
 }
 
-function Field({
+function TextField({
 	label,
 	value,
 	onChange,
@@ -879,16 +910,34 @@ function Field({
 	type?: string;
 }) {
 	return (
-		<Label>
-			{label}
-			<Input
-				className="mt-1"
-				type={type}
-				value={value}
-				required={required}
-				onChange={(event) => onChange(event.target.value)}
-			/>
-		</Label>
+		<FieldControl label={label}>
+			{(id) => (
+				<Input
+					id={id}
+					type={type}
+					value={value}
+					required={required}
+					onChange={(event) => onChange(event.target.value)}
+				/>
+			)}
+		</FieldControl>
+	);
+}
+
+// 字段标签与控件分开渲染（htmlFor 关联），控件不继承标签的字号、字重与颜色。
+function FieldControl({
+	label,
+	children,
+}: {
+	label: string;
+	children: (id: string) => ReactNode;
+}) {
+	const id = useId();
+	return (
+		<Field>
+			<Label htmlFor={id}>{label}</Label>
+			{children(id)}
+		</Field>
 	);
 }
 
@@ -900,24 +949,25 @@ function ProviderSelect({
 	onChange: (value: SkillHubProviderImportRequestV1["provider"]) => void;
 }) {
 	return (
-		<Label>
-			Provider
-			<NativeSelect
-				className="mt-1"
-				value={value}
-				onChange={(event) =>
-					onChange(
-						event.target.value as SkillHubProviderImportRequestV1["provider"],
-					)
-				}
-			>
-				{Object.entries(skillHubProviderLabels).map(([provider, label]) => (
-					<NativeSelectOption key={provider} value={provider}>
-						{label}
-					</NativeSelectOption>
-				))}
-			</NativeSelect>
-		</Label>
+		<FieldControl label="Provider">
+			{(id) => (
+				<NativeSelect
+					id={id}
+					value={value}
+					onChange={(event) =>
+						onChange(
+							event.target.value as SkillHubProviderImportRequestV1["provider"],
+						)
+					}
+				>
+					{Object.entries(skillHubProviderLabels).map(([provider, label]) => (
+						<NativeSelectOption key={provider} value={provider}>
+							{label}
+						</NativeSelectOption>
+					))}
+				</NativeSelect>
+			)}
+		</FieldControl>
 	);
 }
 
@@ -929,24 +979,27 @@ function VisibilitySelect({
 	onChange: (value: SkillHubPublicationRequestV1["visibility"]) => void;
 }) {
 	return (
-		<Label>
-			可见范围
-			<NativeSelect
-				className="mt-1"
-				value={value}
-				onChange={(event) =>
-					onChange(
-						event.target.value as SkillHubPublicationRequestV1["visibility"],
-					)
-				}
-			>
-				{Object.entries(skillHubVisibilityLabels).map(([visibility, label]) => (
-					<NativeSelectOption key={visibility} value={visibility}>
-						{label}
-					</NativeSelectOption>
-				))}
-			</NativeSelect>
-		</Label>
+		<FieldControl label="可见范围">
+			{(id) => (
+				<NativeSelect
+					id={id}
+					value={value}
+					onChange={(event) =>
+						onChange(
+							event.target.value as SkillHubPublicationRequestV1["visibility"],
+						)
+					}
+				>
+					{Object.entries(skillHubVisibilityLabels).map(
+						([visibility, label]) => (
+							<NativeSelectOption key={visibility} value={visibility}>
+								{label}
+							</NativeSelectOption>
+						),
+					)}
+				</NativeSelect>
+			)}
+		</FieldControl>
 	);
 }
 

@@ -1,16 +1,18 @@
 import { Link } from "@tanstack/react-router";
-import { RefreshCw, Search } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useId, useMemo, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
+import { Field } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { SearchInput } from "@/components/ui/search-input";
+import { LoadingLine } from "@/components/ui/spinner";
 import type { SkillHubVersionMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
 import type {
 	SkillHubDirectoryState,
@@ -45,13 +47,11 @@ type SkillHubDirectoryScreenProps = {
 function VersionBadges({ version }: { version: SkillHubVersionMetadataV1 }) {
 	return (
 		<div className="flex flex-wrap gap-2">
-			<Badge variant="secondary">
-				{skillHubProviderLabels[version.provider]}
-			</Badge>
-			<Badge variant="outline">
+			<Badge variant="tag">{skillHubProviderLabels[version.provider]}</Badge>
+			<Badge variant="tag">
 				{skillHubVisibilityLabels[version.visibility]}
 			</Badge>
-			<Badge variant="outline">已发布</Badge>
+			<Badge tone="gray">已发布</Badge>
 		</div>
 	);
 }
@@ -95,8 +95,11 @@ export function SkillHubDirectoryScreen({
 		<section aria-labelledby="skill-hub-heading">
 			<header className="page-heading">
 				<div>
-					<p className="page-eyebrow">我的管理 / Skill Hub</p>
-					<h1 id="skill-hub-heading" className="font-semibold text-[28px]">
+					<p className="page-eyebrow">工作区 / Skill Hub</p>
+					<h1
+						id="skill-hub-heading"
+						className="font-semibold text-[28px] tracking-normal"
+					>
 						Skill 目录
 					</h1>
 					<p className="mt-2 text-muted-foreground">
@@ -105,7 +108,7 @@ export function SkillHubDirectoryScreen({
 				</div>
 				{state.kind === "ready" ? (
 					<Badge
-						variant="outline"
+						variant="tag"
 						aria-label={`共 ${versions.length} 个 Skill 版本`}
 					>
 						{versions.length} 个版本
@@ -116,7 +119,7 @@ export function SkillHubDirectoryScreen({
 			{state.kind === "loading" ? (
 				<p aria-live="polite">正在加载 Skill 目录…</p>
 			) : state.kind === "unavailable" ? (
-				<Alert>
+				<Alert tone="danger" role="alert">
 					<AlertDescription>
 						{state.retryable
 							? "Skill 目录暂时无法读取，请稍后重试。"
@@ -125,44 +128,32 @@ export function SkillHubDirectoryScreen({
 								: "Skill 目录暂时无法访问，请联系管理员。"}
 					</AlertDescription>
 					{state.retryable && onRetry ? (
-						<Button
-							className="mt-4"
-							variant="outline"
-							onClick={onRetry}
-							disabled={retrying}
-						>
-							<RefreshCw
-								aria-hidden="true"
-								className={retrying ? "animate-spin" : ""}
-							/>
-							重试
-						</Button>
+						<AlertAction>
+							<Button variant="outline" onClick={onRetry} disabled={retrying}>
+								<RefreshCw
+									aria-hidden="true"
+									className={
+										retrying ? "animate-spin motion-reduce:animate-none" : ""
+									}
+								/>
+								重试
+							</Button>
+						</AlertAction>
 					) : null}
 				</Alert>
 			) : (
 				<>
 					<div className="directory-filters">
-						<div className="directory-search w-full space-y-2">
-							<Label className="sr-only" htmlFor={searchId}>
-								搜索 Skill
-							</Label>
-							<div className="search relative">
-								<Search
-									aria-hidden="true"
-									className="pointer-events-none absolute top-3 left-3 size-5 text-muted-foreground"
-								/>
-								<Input
-									id={searchId}
-									className="pl-10"
-									type="search"
-									placeholder="搜索名称、版本或来源"
-									maxLength={skillHubSearchMaxLength}
-									value={query}
-									onChange={(event) => setQuery(event.target.value)}
-								/>
-							</div>
-						</div>
-						<div className="directory-filter">
+						<SearchInput
+							wrapperClassName="directory-search w-full"
+							label="搜索 Skill"
+							id={searchId}
+							placeholder="搜索名称、版本或来源"
+							maxLength={skillHubSearchMaxLength}
+							value={query}
+							onChange={(event) => setQuery(event.target.value)}
+						/>
+						<Field>
 							<Label htmlFor={`${searchId}-provider`}>来源</Label>
 							<NativeSelect
 								id={`${searchId}-provider`}
@@ -184,8 +175,8 @@ export function SkillHubDirectoryScreen({
 									),
 								)}
 							</NativeSelect>
-						</div>
-						<div className="directory-filter">
+						</Field>
+						<Field>
 							<Label htmlFor={`${searchId}-visibility`}>可见范围</Label>
 							<NativeSelect
 								id={`${searchId}-visibility`}
@@ -207,7 +198,7 @@ export function SkillHubDirectoryScreen({
 									),
 								)}
 							</NativeSelect>
-						</div>
+						</Field>
 					</div>
 					<div className="mt-4" role="status" aria-live="polite">
 						{normalizedQuery || provider !== "all" || visibility !== "all"
@@ -279,11 +270,11 @@ export function SkillHubVersionScreen({
 	retrying = false,
 }: SkillHubVersionScreenProps) {
 	if (state.kind === "loading") {
-		return <p aria-live="polite">正在加载 Skill 版本…</p>;
+		return <LoadingLine>正在加载 Skill 版本…</LoadingLine>;
 	}
 	if (state.kind === "unavailable") {
 		return (
-			<Alert>
+			<Alert tone="danger" role="alert">
 				<AlertDescription>
 					{state.retryable
 						? "Skill 版本暂时无法读取，请稍后重试。"
@@ -292,18 +283,17 @@ export function SkillHubVersionScreen({
 							: "Skill 版本暂时无法访问，请联系管理员。"}
 				</AlertDescription>
 				{state.retryable && onRetry ? (
-					<Button
-						className="mt-4"
-						variant="outline"
-						onClick={onRetry}
-						disabled={retrying}
-					>
-						<RefreshCw
-							aria-hidden="true"
-							className={retrying ? "animate-spin" : ""}
-						/>
-						重试
-					</Button>
+					<AlertAction>
+						<Button variant="outline" onClick={onRetry} disabled={retrying}>
+							<RefreshCw
+								aria-hidden="true"
+								className={
+									retrying ? "animate-spin motion-reduce:animate-none" : ""
+								}
+							/>
+							重试
+						</Button>
+					</AlertAction>
 				) : null}
 			</Alert>
 		);
@@ -317,7 +307,10 @@ export function SkillHubVersionScreen({
 			<header className="page-heading mt-6">
 				<div>
 					<p className="page-eyebrow">Skill Hub / 版本详情</p>
-					<h1 id="skill-version-heading" className="font-semibold text-[28px]">
+					<h1
+						id="skill-version-heading"
+						className="font-semibold text-[28px] tracking-normal"
+					>
 						{version.name}
 					</h1>
 					<p className="mt-2 text-muted-foreground">
