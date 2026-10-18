@@ -90,7 +90,7 @@ export function BrowserWorkflowStatus({
 		workflow.kind === "intent" || workflow.kind === "action"
 			? `操作：${operationLabels[workflow.operation] ?? "浏览器操作"}`
 			: workflow.kind === "approval_pending"
-				? `操作：${operationLabels[workflow.operation] ?? "浏览器操作"} · 域名：${workflow.origin.replace(/^https?:\/\//, "")}`
+				? `操作：${operationLabels[workflow.operation] ?? "浏览器操作"} · 目标 origin：${workflow.origin}`
 				: workflow.kind === "handoff_pending"
 					? workflow.reason
 					: workflow.kind === "unknown"

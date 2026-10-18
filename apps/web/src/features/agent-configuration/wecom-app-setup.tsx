@@ -462,6 +462,7 @@ export function WecomAppSetup({
 					<WecomUnbindDialog
 						disabled={busy}
 						label="解除应用绑定"
+						title="解除企微应用绑定？"
 						onConfirm={() => {
 							setStatus("not_configured");
 							setCallbackUrl("");

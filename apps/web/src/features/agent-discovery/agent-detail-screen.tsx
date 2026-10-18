@@ -41,6 +41,7 @@ import type {
 
 type AgentDetailScreenProps = {
 	connectionUrl?: string;
+	connectionStatus?: "available" | "unavailable";
 	browserCapability?: BrowserCapabilityProjectionV1;
 	browserWorkflow?: BrowserWorkflowState;
 	browserHandoff?: BrowserHandoffPanelStateV1;
@@ -101,6 +102,7 @@ function interactionReadiness(
 
 export function AgentDetailScreen({
 	connectionUrl,
+	connectionStatus,
 	browserCapability,
 	browserWorkflow,
 	browserHandoff,
@@ -373,11 +375,14 @@ export function AgentDetailScreen({
 									<strong>
 										{connectionUrl
 											? "需要 Connection 授权"
-											: "等待 Connection 授权返回"}
+											: connectionStatus === "unavailable"
+												? "Connection 暂不可用"
+												: "需要 Connection 授权"}
 									</strong>
 									<p>
-										登录、OAuth、客户端授权和原调用查询均在独立 Connection
-										中完成。当前主体需要单独完成授权。
+										{connectionStatus === "unavailable"
+											? "Connection 当前没有可用的受控入口，请稍后重试。"
+											: "登录、OAuth、客户端授权和原调用查询均在独立 Connection 中完成。当前主体需要单独完成授权。"}
 									</p>
 									<p className="connection-action-scope">
 										操作范围 · 当前 Agent 的受控外部能力
@@ -426,12 +431,11 @@ export function AgentDetailScreen({
 							{agent.configuration.owners.map((owner) => (
 								<li key={owner.userId}>
 									<div>
-										<strong>主要 Owner · {owner.displayName}</strong>
-										<small>负责配置与运行范围</small>
+										<strong>{owner.displayName}</strong>
+										{owner.roles.includes("system_admin") ? (
+											<small>系统管理员</small>
+										) : null}
 									</div>
-									<Badge variant="outline" data-status="ready">
-										有效
-									</Badge>
 								</li>
 							))}
 							{agent.configuration.owners.length === 0 && <li>未提供 Owner</li>}

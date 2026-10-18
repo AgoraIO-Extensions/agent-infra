@@ -138,7 +138,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 			/>,
 		);
 
-		expect(screen.getByText("创建中")).toBeTruthy();
+		expect(screen.getAllByText("创建中").length).toBeGreaterThanOrEqual(1);
 		expect(screen.getByText("审批时间")).toBeTruthy();
 		expect(
 			screen.getByText(formatDateTime("2026-09-03T10:00:00Z")).tagName,

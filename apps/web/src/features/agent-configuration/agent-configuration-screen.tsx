@@ -330,22 +330,29 @@ export function AgentConfigurationScreen({
 			setSecretDialogError(true);
 			return;
 		}
-		setDraft((current) => {
-			const index = current.secrets.findIndex(
+		const nextSecrets = (() => {
+			const index = draft.secrets.findIndex(
 				(secret) => secret.name.trim() === secretDialogName,
 			);
 			if (index === -1)
-				return {
-					...current,
-					secrets: [
-						...current.secrets,
-						{ name: secretDialogName, value: secretDialogValue },
-					],
-				};
-			const secrets = [...current.secrets];
+				return [
+					...draft.secrets,
+					{ name: secretDialogName, value: secretDialogValue },
+				];
+			const secrets = [...draft.secrets];
 			secrets[index] = { name: secretDialogName, value: secretDialogValue };
-			return { ...current, secrets };
+			return secrets;
+		})();
+		const request = buildAgentConfigurationRequest({
+			...draft,
+			secrets: nextSecrets,
 		});
+		if (!request.coOwnerIds?.length) {
+			setOwnerError("请选择至少一名有效 Owner。");
+			return;
+		}
+		onSave(request);
+		setDraft((current) => ({ ...current, secrets: [] }));
 		closeSecretDialog();
 	};
 	const submitConfiguration = () => {
@@ -916,7 +923,7 @@ export function AgentConfigurationScreen({
 												取消
 											</DialogClose>
 											<Button type="button" onClick={replaceSecret}>
-												校验并替换
+												保存替换
 											</Button>
 										</div>
 									</DialogContent>

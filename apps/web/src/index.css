@@ -402,8 +402,14 @@ a[class~="group/button"] {
 }
 .login-password-toggle {
 	position: absolute;
-	right: 0;
-	bottom: 0;
+	top: 50%;
+	right: 4px;
+	transform: translateY(-50%);
+	width: 44px;
+	height: 44px;
+}
+.password-control {
+	position: relative;
 }
 .login-submit {
 	width: 100%;
@@ -2317,6 +2323,12 @@ a[class~="group/button"] {
 	padding: 15px 0;
 	font-size: 14px;
 	border-bottom: 1px solid var(--border);
+}
+.detail-list li small {
+	display: block;
+	margin-top: 4px;
+	color: var(--muted-foreground);
+	font-size: 12px;
 }
 .detail-list li:first-child {
 	padding-top: 0;

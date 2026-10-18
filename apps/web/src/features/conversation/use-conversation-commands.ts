@@ -149,7 +149,8 @@ export function useConversationCommands({
 			scope.active &&
 			!scope.denied &&
 			scope.attempt !== undefined &&
-			!scope.attempt.pending,
+			!scope.attempt.pending &&
+			scope.attempt.command.kind !== "create",
 		result: visible ? mutation.data : undefined,
 		revoke,
 		confirmDenied,
@@ -176,10 +177,16 @@ export function useConversationCommands({
 			start({ kind: "native-capability", body }),
 		invokeBrowser: (body: BrowserCommandBody) =>
 			start({ kind: "browser", body }),
-		retry: () => {
+		retry: (text?: string) => {
 			const attempt = scope.attempt;
 			if (!scope.active || scope.denied || !attempt || attempt.pending)
 				return false;
+			if (text !== undefined && attempt.command.kind === "message") {
+				attempt.command = {
+					...attempt.command,
+					body: { ...attempt.command.body, text },
+				};
+			}
 			attempt.controller = new AbortController();
 			attempt.pending = true;
 			mutation.mutate(attempt.id);

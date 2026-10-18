@@ -169,53 +169,59 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const notFound = useRouterState({
 		select: (state) => state.matches.some((match) => match.globalNotFound),
 	});
-	const title = notFound
-		? "页面不存在"
-		: normalizedPathname === "/"
-			? "工作台"
-			: selectingConversation
-				? "选择 Agent 开始对话"
-				: chatContext || pathname.includes("/conversations")
-					? "对话"
-					: pathname.includes("/configuration")
-						? "配置与生命周期"
-						: normalizedPathname === "/admin/audit"
-							? "平台审计"
-							: normalizedPathname === "/audit"
-								? "我的执行审计"
-								: normalizedPathname === "/admin/agents"
-									? "Agent 管理"
-									: normalizedPathname.startsWith("/admin")
-										? "创建审批"
-										: normalizedPathname === "/my-agents/new"
-											? "创建申请"
-											: normalizedPathname.startsWith("/my-agents/") &&
-													normalizedPathname.endsWith("/edit")
-												? "编辑申请"
-												: normalizedPathname.startsWith("/my-agents/") &&
-														normalizedPathname !== "/my-agents"
-													? "申请详情"
-													: normalizedPathname.startsWith("/my-agents")
-														? "我的 Agent"
-														: normalizedPathname ===
-																"/my-settings/api-credentials"
-															? "API 凭证与应用"
-															: normalizedPathname === "/my-settings/relay-key"
-																? "个人 Relay Key"
-																: normalizedPathname === "/skills/manage"
-																	? "我的 Skill"
-																	: normalizedPathname === "/skills" ||
-																			normalizedPathname.startsWith("/skills/")
-																		? "Skill Hub"
-																		: normalizedPathname === "/eval"
-																			? "评测"
-																			: normalizedPathname === "/ops"
-																				? "运维观测"
-																				: normalizedPathname === "/agents"
-																					? "Agent 目录"
-																					: "Agent 详情";
+	const title =
+		session.state.kind !== "ready"
+			? "登录"
+			: notFound
+				? "页面不存在"
+				: normalizedPathname === "/"
+					? "工作台"
+					: selectingConversation
+						? "选择 Agent 开始对话"
+						: chatContext || pathname.includes("/conversations")
+							? "对话"
+							: pathname.includes("/configuration")
+								? "配置与生命周期"
+								: normalizedPathname === "/admin/audit"
+									? "平台审计"
+									: normalizedPathname === "/audit"
+										? "我的执行审计"
+										: normalizedPathname === "/admin/agents"
+											? "Agent 管理"
+											: normalizedPathname.startsWith("/admin")
+												? "创建审批"
+												: normalizedPathname === "/my-agents/new"
+													? "创建申请"
+													: normalizedPathname.startsWith("/my-agents/") &&
+															normalizedPathname.endsWith("/edit")
+														? "编辑申请"
+														: normalizedPathname.startsWith("/my-agents/") &&
+																normalizedPathname !== "/my-agents"
+															? "申请详情"
+															: normalizedPathname.startsWith("/my-agents")
+																? "我的 Agent"
+																: normalizedPathname ===
+																		"/my-settings/api-credentials"
+																	? "API 凭证与应用"
+																	: normalizedPathname ===
+																			"/my-settings/relay-key"
+																		? "个人 Relay Key"
+																		: normalizedPathname === "/skills/manage"
+																			? "我的 Skill"
+																			: normalizedPathname === "/skills" ||
+																					normalizedPathname.startsWith(
+																						"/skills/",
+																					)
+																				? "Skill Hub"
+																				: normalizedPathname === "/eval"
+																					? "评测"
+																					: normalizedPathname === "/ops"
+																						? "运维观测"
+																						: normalizedPathname === "/agents"
+																							? "Agent 目录"
+																							: "Agent 详情";
 	useEffect(() => {
-		document.title = `${title} · Agent Infra`;
+		document.title = `${title} · Agora Agent`;
 	}, [title]);
 	const navigation = (
 		<>
@@ -274,6 +280,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						}
 						className={`platform-nav-item ${normalizedPathname.startsWith("/skills") && normalizedPathname !== "/skills/manage" ? "selected" : ""}`}
 						to="/skills"
+						activeOptions={{ exact: true }}
 						onClick={() => setSheet(false)}
 					>
 						<Sparkles size={17} strokeWidth={1.8} aria-hidden="true" />
@@ -473,7 +480,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					</div>
 					<p className="login-eyebrow">AGORA AGENT PLATFORM</p>
 					<h1 id="login-heading">登录工作空间</h1>
-					<p className="login-lead">
+					<p className="login-lead" role="status" aria-live="polite">
 						{session.isFetching
 							? "正在确认登录状态…"
 							: session.state.kind !== "loading" &&

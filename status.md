@@ -1,12 +1,11 @@
 # UI/UX 整改进度
 
-- 报告：架构评审 HTML（本地临时输入，未提交）
-- 工作区：隔离 worktree（本地路径未提交）
-- 基线：`origin/main` @ `3d208de3b40ac6b099c90f412d30600d3fd693f0`；原始工作区未改动。
+- 报告：架构评审 HTML（本地输入，未提交）
+- 工作区：隔离 worktree
+- 基线：最新 `origin/main`；未修改其他工作区。
 - 设计基线：index.html SHA-256 `f66a8694aecee90322161e9a31d682073919ae846d488312e225edf03232aaaf`
 - 开始时间：2026-10-16
 - 规则：每个报告编号只在此处登记一次；完成前保留证据（文件/测试/截图）。
-- 当前工作区另有 platform-worker 冲突与未跟踪目录，本次 UI 修改只触碰 `apps/web` 与本文件。
 
 ## 总览
 
@@ -66,14 +65,14 @@
 - [x] **H-03** · P2 · Tab 悬停与光标 — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
 - [x] **H-04** · 通过 · 按钮、导航、表格行悬停与按下 — 已实现，待复核 · 代码/复核已完成，待浏览器矩阵复核
 - [x] **R4-01** · 说明 · N-01 真实复现 — 已实现，待复核 · 代码/复核已完成，待浏览器矩阵复核
-- [x] **R4-02** · P1 · 会话确认期闪现登录页 — 已实现，待复核 · ApplicationShell 保留壳层并按 session boundary key 重置已认证内容
+- [x] **R4-02** · P1 · 会话确认期闪现登录页 — 已实现，待复核 · 未认证状态使用独立登录壳层并保留可访问状态提示
 - [x] **R4-03** · P0 · 工作台最近对话把“加载中”显示成“读取失败” — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
 - [x] **R4-04** · P1 · 工作台列表不截断 — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
 - [x] **R4-05** · P1 · 时间格式三套并存，且 UTC 未换算 — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
 - [x] **R4-06** · P1 · 会话标题全部“未命名”，且两种叫法 — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
-- [x] **R4-07** · P1 · 对话处理中（真实 SSE） — 已实现，真实 SSE 已回读 · 固定 Kiro E2E 新会话真实发送后先显示「处理中/正在整理结果…」，终态回读为已完成
+- [x] **R4-07** · P1 · 对话处理中（真实 SSE） — 已实现，真实 SSE 已回读 · 受控真实环境中新会话先显示「处理中/正在整理结果…」，终态回读为已完成
 - [x] **R4-08** · P2 · 对话失败态 — 已实现，待真实失败数据复核 · 失败状态改为红色徽章+可读状态行，原始失败分类仅在执行详情展示；重新生成入口保留
-- [x] **R4-09** · P1 · 执行详情（真实数据） — 已实现，真实数据已回读 · 固定 Kiro E2E 的真实 Execution 在 Dialog 中显示已完成、起止时间、模型与工具调用事实，关闭入口保留
+- [x] **R4-09** · P1 · 执行详情（真实数据） — 已实现，真实数据已回读 · 受控真实 Execution 在 Dialog 中显示已完成、起止时间、模型与工具调用事实，关闭入口保留
 - [x] **R4-10** · P1 · Owner 配置：目录降级文案进入按钮名称 — 已实现，待复核 · Owner chip 移除按钮统一为「移除 Owner：名称」，授权说明改为用户语言；目录/授权定向测试通过
 - [x] **R4-11** · P1 · 我的 Agent 列表规模 — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
 - [x] **R4-12** · P1 · 登录失败把 403 也说成“检查账号” — 已实现，待复核 · 403 单独提示平台入口，登录相关测试覆盖
@@ -203,111 +202,18 @@
 
 ## 变更日志
 
-- 2026-10-17：切换到从最新 `origin/main` 创建的隔离 worktree；保留最新 main 的 Browser Audit、Skill Hub、`/ops`、`/eval` 实现，重新迁移兼容的 UI 修复。
-- 2026-10-17：补齐迁移遗漏的日期格式化、企微解绑/确认、管理员只读视图；Owner 与 system_admin 同时具备时不再在 Owner 配置页显示重复“停用 Agent”。
-
-- 2026-10-16：完成共享视觉原语、登录独立页、响应式表格、对话 Composer/折叠上下文、Connection 提示、Skill Hub 路由、企微解绑确认、时间与加载态收敛；`pnpm --filter @agent-infra/web check-types` 通过。
-- 2026-10-16：补充 Owner 管理员只读视图、默认 Relay Key 替换弹窗、企微双卡布局/扫码失败回退/解绑确认、审批筛选与审计标签、时间格式化和目录选择器焦点保持。
-- 2026-10-16：全量 Web 单测当前仍有 47 个旧契约断言失败，主要是报告要求的行为已改变（登录文案、对话自动保存、表格分页、退出创建重复按钮、生命周期按钮名称）；这些失败已记录，不能作为整体验收通过。
-- 2026-10-16：`pnpm --filter @agent-infra/web check-types` 与 Web Biome 定向检查通过；仓库级 `pnpm check`/`git diff --check` 仍被工作区原有 platform-worker 冲突标记和多个嵌套 worktree 的 Biome 配置阻断，本次未触碰这些文件。
-- 2026-10-16：继续收敛 Skill Agent 维度绑定页、浏览器状态卡文案/样式、个人 Relay Key 撤销危险态、凭证/应用/员工禁用确认弹窗；Web 类型检查通过。
-- 2026-10-16：补充顶栏平台状态、管理员品牌不收缩、Skill 版本面包屑、Agent Skill 绑定阶段卡和不可逆操作确认弹窗；Web 类型检查通过。
-- 2026-10-16：对话页头副标题、Composer 输入提示/移动发送按钮、工具栏边界继续对齐设计基线；类型检查保持通过。
-- 2026-10-16：继续移除 Agent/Owner/范围界面的内部 ID 外露，并保持目录显示名优先；Web 类型检查通过。
-- 2026-10-16：收敛移动导航 Sheet 的遮罩、阴影、焦点、aria-modal 与内边距；同步清理管理列表内部 ID 展示。
-- 2026-10-16：补充申请列表/详情的相对时间、三段审批进度、下一步卡片、范围脱敏和表单键盘顺序/字段错误样式；类型检查通过。
-- 2026-10-16：我的 Agent 列表增加首屏 20 条与“查看全部”折叠，已创建 Agent 范围与申请详情继续使用脱敏摘要；类型检查通过。
-- 2026-10-16：新增统一 Toast 原语并接入个人 Relay Key 反馈；统一最近对话命名。
-- 2026-10-16：Agent 详情补齐 Skill/Connection 动作和目录返回文案，历史面板补计数与统一标题，申请 Tabs 增加申请计数。
-- 2026-10-16：审批表时间、审阅弹窗焦点/几何、Agent 详情动作、历史 Tabs 计数和申请详情状态继续收敛；Web 类型检查通过。
-- 2026-10-16：Skill 审核页增加必填驳回理由和自审安全提示，审计详情/列表对长 ID 做截断并保留 title 原值；类型检查通过。
-- 2026-10-16：会话重新校验期间保留上一版应用壳，新增非阻断状态提示，避免短暂闪现登录页。
-- 2026-10-16：新增会话确认期保壳、Skill 审核理由输入、审计 ID 安全截断；Web 类型检查和定向 Biome 检查通过。
-- 2026-10-16：Skill 来源/范围徽章增加语义前缀，审批模型和审计动作不再直接展示内部枚举或模型 ID。
-- 2026-10-16：审批模型/审计动作显示进一步脱敏，Skill 来源/范围语义标签继续完善；Web 类型检查通过。
-- 2026-10-16：对话消息卡补充姓名/相对时间元信息，继续收敛消息卡层级；类型检查通过。
-- 2026-10-16：短视口对话保持消息区独立滚动和输入区可见，移除原先的整页滚动回退。
-- 2026-10-16：执行详情中的 Execution/工具引用统一截断显示，过程摘要使用本地化时间与可读操作文案。
-- 2026-10-16：消息失败态按钮统一为“重新发送”，生命周期提交反馈改为先读回最新状态，避免误报当前状态；类型检查通过。
-- 2026-10-16：Skill 审核安全流程补齐必填理由、自审阻断提示及升级/回滚确认入口，K-04 UI 项完成，服务端写入仍以现有 API 契约为准。
-- 2026-10-16：N-13 相关的审计、执行详情、审批、Agent/范围列表内部 ID 展示统一为目录名称、数量摘要或截断标识。
-- 2026-10-16：对话停止/停用横幅增加警示图标、明确标题和 Owner 操作入口。
-- 2026-10-16：Skill Hub 工具栏增加来源/范围筛选，空结果和清除筛选路径保持可操作；类型检查通过。
-- 2026-10-16：对话处理中状态收成助手消息卡内 spinner/状态行，移除重复的全局受理提示；类型检查通过。
-- 2026-10-16：浏览器接管卡动作文案统一为拒绝接管、接管浏览器、交还 Agent、停止操作，保留服务端绑定校验。
-- 2026-10-16：Owner 配置 Secret 增加替换弹窗，提交值只进入待保存变更，页面不回显明文。
-- 2026-10-16：完成 Owner Secret 替换弹窗和相关缺失确认弹窗收敛，类型检查通过。
-- 2026-10-16：将报告中已由共享 token、输入高度、无溢出、Relay Key 分区和状态矩阵代码覆盖的说明性条目标为已完成，保留浏览器矩阵复核证据要求。
+- 2026-10-18：CI 暴露的 Web 单测、浏览器回归和 Sheet 遮罩问题已修复；Web 单测 90/90 文件、1086/1086 通过，完整 Browser Playwright 248 个可运行项通过、20 个按测试配置跳过，Hosted CI 全部 required checks 通过。
+- 2026-10-18：补齐审计长标识、日期自然日、登录 400 错误、执行事实末次事件、应用/Owner 文案和移动窄视口回归；Connection OAuth/Delegated 仍按用户要求保留外部边界。
+- 2026-10-18：按终审 NI 清单补齐 safe Connection URL、Connection unavailable 文案、失败码恢复指引、当前草稿重试、创建命令不可重试、自然日时间、登录错误播报/密码按钮、Owner 来源文案、企微应用解绑标题、申请创建状态、执行详情上下文、Skill 导航 exact active 和浏览器 origin 显示；定向 102/102 单测与 Web 类型检查通过。
 
 ## 当前外部/契约缺口
 
-- 最新 `origin/main` 已包含 `browser-audit-view.tsx`、`browser-operation-status.tsx`、Browser 接管/副作用事件流和对应测试；之前关于 NW-01~NW-12 缺少源文件的结论已撤销。本 worktree 仍需跑浏览器矩阵核对其真实呈现。
-- S-08、M-10、F-12、R-04 等条目涉及 Builder、评测、运维或导航范围的产品/PRD 决策；当前先保留待处理，不提前新增 M1 产品能力。
-- 2026-10-16：面包屑层级/字重、Owner 侧栏主要 Owner/有效状态继续对齐。
-- 2026-10-16：统一品牌、导航、Agent 切换链接的焦点环 offset；底部身份卡头像/角色密度进一步贴合设计。
-- 2026-10-16：工作台动作按钮、对话新会话文案、我的 Agent Tab/配置动作继续对齐设计文案和图标；类型检查通过。
-- 2026-10-16：Agent 管理状态列收成单一状态 Chip，审批首列增加编号/申请人提示，类型检查通过。
-- 2026-10-16：目录移除按钮 aria-label 增加字段上下文，失败回答状态改为轻量状态行；类型检查通过。
-- 2026-10-16：审批驳回改为带占位和字段级错误提示，避免使用整块 destructive Alert 打断表单。
-- 2026-10-16：推理档位中文映射、按钮 sm/icon-sm 尺寸档、Agent 详情默认推理档位文案继续对齐；类型检查通过。
+- **R4-16**：Connection Developers 当前提供 Browser API；Consumer/declaration 管理和默认 Delegated runtime 未装配，OAuth/Delegated 机器链路无法在本仓库独立完成，按用户要求跳过。
+- **V-01**：现有 Browser Playwright 可运行项和导出矩阵已通过；报告要求的完整设计导出逐页对照仍需独立证据，不能以现有 13 个桌面导出项替代。
+- **报告终审 NI-01~NI-67**：本文件的原始整改清单记录早期实现状态；终审新增问题正在按 P1/P2 分批复核，修复后以代码、单测和浏览器证据更新对应条目。
+- 当前仍需继续复核的终审项包括 Browser handoff 命令语义、Owner/管理员停用入口、审计完整 ID 展示、审批信息可核对性、执行详情与页面 CSS 分层、标题/设计文档一致性，以及平台 Skill 导入回归测试拆分。
 
-- 2026-10-17：`pnpm --filter @agent-infra/contracts build` 与 `pnpm --filter @agent-infra/web check-types` 通过；Browser Playwright 矩阵运行 268 项，198 通过、50 失败、20 跳过。失败主要分为旧测试仍断言已删除的“退出创建”重复入口/旧文案、无 Platform API 时的真实读取超时，以及 360px 审计/管理页仍有横向溢出；这些不伪报为已通过。
-- 2026-10-17：修复管理表格窄屏 `min-width:700px` 覆盖卡片布局的问题；admin Agents、/audit、/admin/audit 的桌面九视口矩阵已 3/3 通过（移动项目按测试配置跳过）。
-- 2026-10-17：管理桌面设计矩阵 8 个入口中 7 个通过；`/my-agents` 的已创建 Agent Tab 需要后端集合 fixture 才能完成，移动矩阵按测试配置跳过。
+## 证据边界
 
-## 未闭环项的证据边界
-
-- **R4-16**：已使用 Kiro 固定本地 E2E 账号回读登录态、已有 Agent、真实新会话写入和成功模型回复；已启用受控 `workspace-summary@1.0.0` Provider fixture，真实导入、ClamAV 扫描、MinIO 持久化和 Skill 详情回读均成功，版本 `skill-version-4f4412db781fa8853eaa52825ae61aecd0e3fa29f90cf6c7` 已发布。Connection Developers/接入指南明确当前 OpenAPI 是 Browser API，不是多用户 Delegated 服务协议；Consumer 注册、declaration 管理不在该 OpenAPI，默认运行时也未装配 `delegatedIdentity`，因此 OAuth/PAT Binding 的 Agent Infra 机器链路仍未就绪。真实回执：会话 `273756c6-cb0c-4fe7-87e4-e34b6b3604b6`，成功回复显示「UIUX E2E 已成功。当前模型：GPT-5。」；未打印或提交任何密钥。
-- **V-01**：代码侧已修复表格窄屏溢出，桌面管理矩阵子集通过；完整 24 路由 × 320/360/390/430/600/820/1366/1920 矩阵仍未完成。
-- **G-07**：UI 已闭环并在固定 Kiro E2E 的真实已完成 Execution 中回读请求模型/实际模型（均为 `gpt-5.6-sol`）与「不会静默切换到个人 Key 或未授权模型」保护文案；回退事件存在时会按平台事件映射用户文案。当前正式契约仍只保存 fallback payload 的实际 `modelOptionId`、`reasoningLevel` 和固定 `reason=selection_unavailable`，因此没有伪造未提供的逐 Execution 请求模型或回退原因；若要补充回退场景的真实 E2E，需要后端提供可控的 fallback fixture/契约。
-- 2026-10-17：对话页窄视口头部压缩：≤430px 隐藏非关键来源文字但保留可访问名称，收紧状态行与内容顶距；对话桌面九视口矩阵现已通过。
-- 2026-10-17：补齐 `/my-agents` 视口矩阵 fixture 交互：Tab 名称与申请计数兼容、切换前滚动回 Tab；`/my-agents` 桌面九视口矩阵现已通过，管理桌面矩阵达到 8/8。
-- 2026-10-17：完整 `--grep "exported design viewport matrix" --project=desktop` 13/13 通过（admin、audit、conversation、agents、my-agents、configuration、approvals、workbench）。
-- 2026-10-17：`MyAgentsScreen` 的已创建 Tab 恢复明确 accessible name「已创建 Agent」，Owned Agent 主操作统一为「配置与管理」；对应单测 22/22 通过，矩阵 13/13 继续通过。
-- 2026-10-17：Relay Key 成功写入/撤销反馈移除重复的 inline status，只保留 Toast；对应单测 48/48 通过。
-- 2026-10-17：同步报告驱动的现有交互契约测试：目录 chip 使用带字段上下文的 aria-label、Browser 操作使用用户可读映射、登录失败清空密码、企微解绑先确认；目录 9/9、Browser 12/12、登录 7/7、企微 16/16 通过。
-- 2026-10-17：最近个人对话分页测试与当前安全上限 5 条对齐；相关 26/26 通过。
-- 2026-10-17：同步申请详情/审批、目录字段、工作台状态、企微解绑和管理员员工禁用的现有行为断言；申请详情/审批 32/32、目录 9/9、工作台与对话定向矩阵 79/79、员工治理 2/2 通过。
-- 2026-10-17：全量 Web 单测 90/90 文件、1085/1085 测试通过；Node 版本仍显示仓库要求 Node 24 而当前环境为 Node 26 的 engine warning，不影响本次 Vitest 结果。
-- 2026-10-17：G-04/G-05、F-10、G-07 局部状态区、K-06、L-03、N-08/O-10/O-11 修复后再次执行 Web 全量单测，为 90/90 文件、1085/1085 通过。
-- 2026-10-17：对 67 个变更 Web TS/TSX 文件执行 Biome check 通过；`@agent-infra/web check-types`（含 Vite build 与 tsc）通过。
-- 2026-10-17：仓库级 `pnpm check` 通过；Biome 保留 67 条既有 warning（CSS specificity、platform-core 测试断言与运行时探针环境变量），Web UI component policy 通过。登录错误提示改用 Alert/Toast 组合后定向单测 7/7 通过。
-- 2026-10-17：补齐 G-04 的「重新发送」动作；404 歧义结果在 Agent 恢复可用前保留草稿与原命令，恢复后允许安全重试，不重复创建幂等键；对话命令/页面定向测试 101/101 通过。
-- 2026-10-17：补齐 G-05 的审批驳回 Toast；成功驳回明确提示申请人会看到修改原因，保留字段级错误和焦点回收。
-- 2026-10-17：调整 O-11 生命周期布局：从右侧 form-aside 移入配置主栏独立分区，避免卡中卡并保持停止/停用确认。
-- 2026-10-17：O-11 调整后重新执行 exported design viewport matrix，桌面 13/13 通过。
-- 2026-10-17：F-10、O-10 Secret Dialog 改动后再次执行 exported design viewport matrix，桌面 13/13 通过。
-- 2026-10-17：K-06、L-03 与登录壳层调整后再次执行 exported design viewport matrix，桌面 13/13 通过。
-- 2026-10-17：补齐 F-10 页面标题：ApplicationShell 路由切换同步 document.title，登录/404 也使用当前上下文标题。
-- 2026-10-17：补充 R4-12 的 403 登录错误回归，明确区分平台入口错误与凭据错误。
-- 2026-10-17：补齐 N-08/O-10 的 Secret 替换 Dialog；已配置 Secret 只显示状态/版本，提交值只在受控弹窗中输入并写入待保存草稿，环境变量仍按 PRD 边界保留待确认。
-- 2026-10-17：补齐 K-06 Skill Hub 工具栏与状态：移除多余空轨、统一 loading-line，并为筛选空结果增加「清除筛选」。
-- 2026-10-17：补齐 L-03 登录壳层隔离；未认证会话不渲染应用导航，增加独立登录页回归测试。
-- 2026-10-17：补齐 R4-10 Owner 降级可访问名称与授权说明，避免把 grant/revoke 实现术语暴露给用户。
-- 2026-10-17：R4-10 变更后再次执行 Web 全量单测，89/89 文件、1084/1084 通过。
-- 2026-10-17：补齐 R4-09 执行详情 Dialog；打开时聚焦详情标题，关闭时恢复原执行按钮焦点，保留真实数据缺失时的未知态。
-- 2026-10-17：R4-09 Dialog 改动后对话命令/页面定向测试 101/101 通过。
-- 2026-10-17：R4-09 Dialog 改动后再次执行 exported design viewport matrix，桌面 13/13 通过。
-- 2026-10-17：G-07 模型状态区改动后再次执行 exported design viewport matrix，桌面 13/13 通过。
-- 2026-10-17：G-07 补充可信模型状态区，显示会话请求模型、执行事实实际模型和用户化回退原因；逐 Execution 请求模型仍受正式契约边界限制，保留未闭环。
-- 2026-10-17：收敛 R4-07/R4-08 对话状态：处理中卡片补「正在整理结果…」，失败回答使用「执行失败」徽章与可读状态行；对话页面 65/65 定向测试通过。
-- 2026-10-17：只读探测现有 real-platform 网关：TLS 端点健康/API 路径均为 502；未执行登录、申请、审批、模型或 Connection 写入。
-- 2026-10-17：将已有代码与矩阵证据回填到 R4-02、NW-14/NW-16、F-06/F-07、B-15/B-16、CH-04/CH-11/CH-12，避免 status.md 把已实现项继续标成待处理。
-- 2026-10-17：origin/main 前进到 `9044f702` 后已在本 worktree fast-forward 同步；UI 暂存改动 stash/pop 恢复无冲突。
-- 2026-10-17：origin/main 再前进到 `b2c5af3` 后已在本 worktree fast-forward 同步；UI 暂存改动 stash/pop 再次恢复无冲突。
-- 2026-10-17：origin/main 再前进到 `2e85c834` 后已在本 worktree fast-forward 同步；UI 暂存改动 stash/pop 再次恢复无冲突。
-- 2026-10-17：使用固定 Kiro E2E 环境部署 Web 提交 `af20d54e`；真实账号回读 Agent 详情、创建会话、SSE 处理中态、成功模型回复和执行详情 Dialog。Skill 目录授权版本为 0，OAuth 回调与 Skill 详情仍保留未闭环。
-- 2026-10-17：origin/main 再前进到 `6d38e9bb`（#2694）后将 UI 提交 rebase 到最新基线；Worker 变更与本 UI 差异无冲突。
-- 2026-10-17：rebase 到 `6d38e9bb` 后重新执行 Web 全量单测，90/90 文件、1085/1085 通过。
-- 2026-10-17：origin/main 再前进到 `245bf068`（#2692）后将 UI 提交 rebase 到最新基线；无冲突。
-- 2026-10-17：G-07 UI 闭环在固定 Kiro E2E 的真实完成 Execution 中回读；请求模型与实际模型均为 `gpt-5.6-sol`，执行详情 Dialog 和保护文案可见，正式 fallback fixture 仍不虚构。
-- 2026-10-17：`#2692` 更新 Runtime operation 联合类型后，收紧模型事实判定为 `payload.kind === "model"`；最新 `pnpm --filter @agent-infra/web check-types` 与 G-07 定向测试均通过（1/1）。
-- 2026-10-17：origin/main 前进到 `413ad84e`（#2702/#2703/#2704/#2705）后 rebase 无冲突；固定 E2E 尝试创建并停用临时 Skill 项目，Provider 导入返回失败，回读当前 API 配置确认无 Skill Provider 导入器且模板 `connectionEnabled=false`。
-- 2026-10-17：已在固定 E2E 私有目录准备受控 `workspace-summary@1.0.0` 包、MinIO `skill-packages/` bucket、ClamAV 数据库和 API overlay；部署前被既有 `run.lock` 拦截，该锁属于另一条 Kiro 回归窗口且记录的 PID 已失效，未越权清理或替换其 Worker/API/Web。
-- 2026-10-17：API assembly 修复 Provider selection 的 `schemaVersion` 边界；API overlay 加入 ClamAV，扫描临时目录迁到 `/dev/shm` 并将 API shm 调到 256MB；真实 Skill 导入和详情页回读成功，OAuth callback 仍因 `connectionEnabled=false` 保留未闭环。
-- 2026-10-17：读取 Connection Developers 与帮助第 29 章；确认当前页面仅提供 Browser API 参考，Consumer/declaration 管理未纳入 OpenAPI，Delegated action-calls/发现/状态查询尚未在默认运行时装配，不能把 Browser Cookie API 当作 Agent Infra 服务协议。
-- 2026-10-17：按用户要求跳过 Connection OAuth/Delegated 缺口，origin/main 前进到 `af675024` 后 rebase 无冲突，继续进行 UI/UX 回归。
-- 2026-10-17：origin/main 再前进到 `c7de551f`（#2725）后 rebase 无冲突；最新 Web 全量单测 90/90 文件、1085/1085 通过，desktop exported design viewport matrix 13/13 通过，mobile 项目按测试配置 13 项跳过，Web check-types 通过。
-- 2026-10-17：广义 Playwright 浏览器回归基线为 268 项：208 通过、40 失败、20 跳过；失败主要是旧测试断言与已定版 UI 不一致、无 API fixture 的超时及移动测试配置边界。针对真实 UI 问题修复目录选择结果层在选中后遮挡后续表单控件，管理目录 recovery 用例定向通过；修复移动 Sheet backdrop 抢占导航点击，移动导航 focus-trap 用例定向通过。
-- 2026-10-17：读取 `/var/folders/k1/181yvqs97nz8r3sy62r007m40000gn/T/agent-infra-connection-handoff.md` 后确认应接 Connection Agent PAT Binding；Consumer 注册、declaration 配置和服务凭据由 Connection 管理员控制，handoff 未提供现成 Consumer/credential，当前账号访问管理员页会回到「我的 Connection」。
-- 2026-10-18：修复 CI 暴露的日期断言时区不稳定、Sheet 关闭动画遗留遮罩、审计长标识断言、重复退出入口/返回文案/Owner 文案和最近对话分页断言；执行详情改为读取最后一条模型/回退事实。Web 单测 90/90 文件、1086/1086 通过，Web check-types/build/Biome 通过；完整 Browser Playwright 248/248 可运行项通过、20 项按现有配置跳过。
+- 受控 fixture、快照和合成浏览器数据只证明交互契约，不替代真实 API/PG、权限、部署、Connection、OAuth、Provider 或人工验收。
+- 不在仓库记录本地临时路径、进程/锁状态、普通用户会话正文、访问凭证或机器专属信息。

@@ -10,9 +10,6 @@ export const Route = createRootRoute({
 	head: () => ({
 		meta: [
 			{
-				title: "Agent Infra",
-			},
-			{
 				name: "description",
 				content: "企业级 Agent 平台",
 			},

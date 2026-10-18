@@ -543,10 +543,7 @@ export function ActiveConversation({
 						)}
 					</div>
 				)}
-			<div
-				hidden={Boolean(selectedExecution)}
-				className="chat-thread space-y-5"
-			>
+			<div className="chat-thread space-y-5">
 				<div className="chat-status flex flex-wrap items-center justify-between gap-2">
 					<h2 ref={conversationTitle} tabIndex={-1} className="font-medium">
 						{conversation?.title || "新会话"}
@@ -755,7 +752,11 @@ export function ActiveConversation({
 				<CommandNotice
 					result={command.result}
 					pending={command.isPending}
-					retry={command.canRetry ? () => command.retry() : undefined}
+					retry={
+						command.canRetry && available
+							? () => command.retry(draft)
+							: undefined
+					}
 				/>
 				{selectionDirty && (
 					<p role="status" className="text-sm">
@@ -871,7 +872,7 @@ export function ActiveConversation({
 					}
 				}}
 			>
-				<DialogContent aria-label="执行详情" className="max-w-[760px]">
+				<DialogContent aria-label="执行详情" className="max-w-[620px]">
 					{selectedExecution ? (
 						<ConversationExecutionDetails
 							data={reader.execution.data}
@@ -880,7 +881,6 @@ export function ActiveConversation({
 								optionId: item.optionId,
 								displayName: item.displayName,
 							}))}
-							requestedModelOptionId={conversation?.selectedModelOptionId}
 							loading={reader.execution.isFetching}
 							failed={
 								reader.execution.isError || timeline.failure?.kind === "http"

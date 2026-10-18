@@ -84,7 +84,7 @@ describe("LoginAction", () => {
 		});
 		fireEvent.submit(screen.getByRole("button", { name: "登录" }));
 
-		await screen.findByRole("status");
+		await screen.findByRole("alert");
 		expect(onLoggedIn).not.toHaveBeenCalled();
 		expect(
 			(screen.getByRole("button", { name: "登录" }) as HTMLButtonElement)
@@ -131,7 +131,7 @@ describe("LoginAction", () => {
 		});
 		fireEvent.submit(screen.getByRole("button", { name: "登录" }));
 
-		await screen.findByRole("status");
+		await screen.findByRole("alert");
 		expect(fetchMock).not.toHaveBeenCalled();
 		expect(onLoggedIn).not.toHaveBeenCalled();
 	});
@@ -155,7 +155,7 @@ describe("LoginAction", () => {
 		});
 		fireEvent.submit(screen.getByRole("button", { name: "登录" }));
 
-		await screen.findByRole("status");
+		await screen.findByRole("alert");
 		expect(fetchMock).not.toHaveBeenCalled();
 		expect(onLoggedIn).not.toHaveBeenCalled();
 	});
@@ -179,7 +179,7 @@ describe("LoginAction", () => {
 		});
 		fireEvent.submit(screen.getByRole("button", { name: "登录" }));
 
-		await screen.findByRole("status");
+		await screen.findByRole("alert");
 		expect(fetchMock).not.toHaveBeenCalled();
 		expect(onLoggedIn).not.toHaveBeenCalled();
 	});
@@ -202,7 +202,7 @@ describe("LoginAction", () => {
 		});
 		fireEvent.submit(screen.getByRole("button", { name: "登录" }));
 
-		await screen.findByRole("status");
+		await screen.findByRole("alert");
 		expect((screen.getByLabelText("密码") as HTMLInputElement).value).toBe("");
 	});
 });

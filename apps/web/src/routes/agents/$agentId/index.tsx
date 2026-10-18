@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { isAgentConfigurationOwner } from "../../../features/agent-configuration/agent-configuration.js";
+import { safeDeploymentUrl } from "../../../features/application-shell.js";
 import { AgentDetailScreen } from "../../../features/agent-discovery/agent-detail-screen.js";
 import { isRetryableAgentDiscoveryError } from "../../../features/agent-discovery/agent-discovery.js";
 import { useAgentDetail } from "../../../features/agent-discovery/use-agent-detail.js";
@@ -27,14 +28,28 @@ function AgentDetailRoute() {
 		agent?.capabilities.connection &&
 		session.state.kind === "ready" &&
 		session.state.connection?.status === "available"
-			? session.state.connection.publicOrigin + session.state.connection.mcpPath
+			? (() => {
+					try {
+						return safeDeploymentUrl(
+							new URL(
+								session.state.connection.mcpPath,
+								session.state.connection.publicOrigin,
+							).href,
+						);
+					} catch {
+						return undefined;
+					}
+				})()
 			: undefined;
+	const connectionStatus =
+		session.state.kind === "ready" ? session.state.connection?.status : undefined;
 
 	return (
 		<main className="platform-content management-content">
 			<div className="space-y-6">
 				<AgentDetailScreen
 					connectionUrl={connectionUrl}
+					connectionStatus={connectionStatus}
 					state={
 						query.isPending
 							? { kind: "loading" }

@@ -4,7 +4,6 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Toast } from "@/components/ui/toast";
 
 type LoginActionProps = {
 	endpoint: string;
@@ -35,21 +34,27 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 	const [password, setPassword] = useState("");
 	const [state, setState] = useState<LoginState>("idle");
 	const [errorStatus, setErrorStatus] = useState<number | null>(null);
+	const [clientError, setClientError] = useState<"login" | "password" | null>(
+		null,
+	);
 	const [showPassword, setShowPassword] = useState(false);
 	const loginRef = useRef<HTMLInputElement>(null);
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!login.trim()) {
-			setErrorStatus(400);
+			setClientError("login");
+			setErrorStatus(null);
 			loginRef.current?.focus();
 			return;
 		}
 		if (!password) {
-			setErrorStatus(422);
+			setClientError("password");
+			setErrorStatus(null);
 			return;
 		}
 		setState("submitting");
+		setClientError(null);
 		setErrorStatus(null);
 		try {
 			const target = new URL(endpoint, window.location.href);
@@ -72,16 +77,15 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 			setPassword("");
 			setState("idle");
 		} catch {
+			setErrorStatus((value) => value ?? 0);
 			setState("error");
 			setPassword("");
 		}
 	}
-	const loginError =
-		!login.trim() && errorStatus === 400 ? "请输入公司账号。" : undefined;
-	const passwordError =
-		!password && errorStatus === 422 ? "请输入密码。" : undefined;
+	const loginError = clientError === "login" ? "请输入公司账号。" : undefined;
+	const passwordError = clientError === "password" ? "请输入密码。" : undefined;
 	const serverError =
-		state === "error" && errorStatus !== 400 && errorStatus !== 422
+		state === "error" && errorStatus !== null
 			? errorStatus === 503 || (errorStatus !== null && errorStatus >= 500)
 				? "登录服务暂时不可用，请稍后重试。"
 				: errorStatus === 403
@@ -91,7 +95,7 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 
 	return (
 		<form className="login-form space-y-4" onSubmit={submit} noValidate>
-			<div className="space-y-2">
+			<div className="password-control space-y-2">
 				<Label htmlFor="platform-login">账号</Label>
 				<Input
 					id="platform-login"
@@ -102,9 +106,7 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 					autoComplete="username"
 					maxLength={256}
 					aria-invalid={state === "error" || undefined}
-					aria-describedby={
-						state === "error" ? "platform-login-error" : undefined
-					}
+					aria-describedby={serverError ? "platform-login-error" : undefined}
 					value={login}
 					onChange={(event) => setLogin(event.target.value)}
 					ref={loginRef}
@@ -123,10 +125,9 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 					spellCheck={false}
 					maxLength={4096}
 					aria-invalid={state === "error" || undefined}
-					aria-describedby={
-						state === "error" ? "platform-login-error" : undefined
-					}
+					aria-describedby={serverError ? "platform-login-error" : undefined}
 					value={password}
+					className="pr-14"
 					onChange={(event) => setPassword(event.target.value)}
 					disabled={state === "submitting"}
 				/>
@@ -135,6 +136,9 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 					variant="ghost"
 					size="icon"
 					className="login-password-toggle"
+					aria-pressed={showPassword}
+					aria-controls="platform-password"
+					disabled={state === "submitting"}
 					aria-label={showPassword ? "隐藏密码" : "显示密码"}
 					onClick={() => setShowPassword((value) => !value)}
 				>
@@ -159,11 +163,11 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 			{serverError && (
 				<Alert
 					id="platform-login-error"
+					role="alert"
 					className="login-error"
 					variant="destructive"
 				>
 					<AlertDescription>{serverError}</AlertDescription>
-					<Toast className="sr-only">{serverError}</Toast>
 				</Alert>
 			)}
 		</form>

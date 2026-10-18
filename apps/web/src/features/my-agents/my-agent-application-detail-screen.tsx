@@ -114,6 +114,30 @@ export function MyAgentApplicationDetailScreen({
 	const { application } = state;
 	const { configuration } = application;
 	const editAction = getAgentApplicationEditAction(application);
+	const runtimeStep =
+		application.status === "creating"
+			? { label: "创建中", description: "正在创建 Agent。", status: "creating" }
+			: application.status === "creation_failed"
+				? {
+						label: "创建失败",
+						description: "Agent 创建未完成，请查看状态或重新提交申请。",
+						status: "creation_failed",
+					}
+				: hasCreatedAgent(application)
+					? {
+							label: "已完成",
+							description: "Agent 已创建，可进入详情。",
+							status: "ready",
+						}
+					: {
+							label: "待创建",
+							description:
+								application.status === "rejected" ||
+								application.status === "withdrawn"
+									? "当前申请不会创建 Agent。"
+									: "审批通过后开始创建。",
+							status: application.status,
+						};
 	const defaultModel = configuration.modelOptions.find(
 		(model) => model.optionId === configuration.defaultModelOptionId,
 	);
@@ -186,19 +210,10 @@ export function MyAgentApplicationDetailScreen({
 						<li>
 							<div>
 								<strong>运行实例</strong>
-								<small>
-									{hasCreatedAgent(application)
-										? "Agent 已创建，可进入详情。"
-										: "审批通过后开始创建。"}
-								</small>
+								<small>{runtimeStep.description}</small>
 							</div>
-							<Badge
-								variant="outline"
-								data-status={
-									hasCreatedAgent(application) ? "ready" : application.status
-								}
-							>
-								{hasCreatedAgent(application) ? "已完成" : "待创建"}
+							<Badge variant="outline" data-status={runtimeStep.status}>
+								{runtimeStep.label}
 							</Badge>
 						</li>
 					</ul>

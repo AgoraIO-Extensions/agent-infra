@@ -128,7 +128,7 @@ export function ConversationMessages({
 										variant="outline"
 										onClick={() => onResend(message.text)}
 									>
-										重新发送
+										填回输入框
 									</Button>
 								</Alert>
 							)}
@@ -159,7 +159,11 @@ export function ConversationMessages({
 									{selectedStatus === "failed" ? (
 										<div className="answer-status space-y-1">
 											<Badge variant="destructive">执行失败</Badge>
-											<p>请求未完成，请稍后重试或联系 Owner。</p>
+											<p>
+												{selected.error
+													? commandFailure(selected.error.code)
+													: "请求未完成，请稍后重试或联系 Owner。"}
+											</p>
 										</div>
 									) : selectedStatus ? (
 										<p className="answer-status">

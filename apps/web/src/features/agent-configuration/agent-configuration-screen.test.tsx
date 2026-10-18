@@ -153,9 +153,8 @@ describe("AgentConfigurationScreen", () => {
 		fireEvent.change(screen.getByLabelText("新 Secret 值"), {
 			target: { value: "replacement-value" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "校验并替换" }));
+		fireEvent.click(screen.getByRole("button", { name: "保存替换" }));
 		expect(screen.queryByRole("dialog", { name: "替换 Secret" })).toBeNull();
-		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 		expect(onSave).toHaveBeenCalledWith(
 			expect.objectContaining({
 				secrets: [{ name: "MODEL_API_KEY", value: "replacement-value" }],

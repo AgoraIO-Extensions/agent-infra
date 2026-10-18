@@ -21,7 +21,6 @@ export function ConversationExecutionDetails({
 	conversationId,
 	client,
 	modelOptions = [],
-	requestedModelOptionId,
 	loading,
 	failed,
 	onRetry,
@@ -53,7 +52,7 @@ export function ConversationExecutionDetails({
 		modelOptions.find((option) => option.optionId === optionId)?.displayName ??
 		fallback ??
 		"未提供";
-	const requestedModel = modelLabel(requestedModelOptionId);
+	const requestedModel = "未提供";
 	const actualModel =
 		modelFact?.payload.kind === "model"
 			? modelLabel(
@@ -67,17 +66,11 @@ export function ConversationExecutionDetails({
 		title.current?.focus();
 	}, []);
 	return (
-		<section
-			aria-label="执行详情"
-			className="space-y-4 border-border border-t py-6"
-		>
+		<section aria-label="执行详情" className="space-y-4">
 			<div className="flex flex-wrap items-center justify-between gap-3">
 				<h2 ref={title} tabIndex={-1} className="font-semibold text-xl">
 					执行详情
 				</h2>
-				<Button variant="outline" onClick={onClose}>
-					返回对话
-				</Button>
 			</div>
 			{loading && <p role="status">正在读取执行记录…</p>}
 			{failed && (
