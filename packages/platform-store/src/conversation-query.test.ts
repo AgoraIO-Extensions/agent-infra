@@ -1182,7 +1182,7 @@ describe("PostgreSQL original native metadata scope", () => {
 				`grant select (id, agent_id, actor_id, channel_id, principal_type) on platform.conversations to ${role}`,
 			);
 			await client.unsafe(
-				`grant select (execution_id, conversation_id, agent_id, actor_id, channel_id, principal_type, session_generation, authorization_revision, original_submit_host_session_ref) on platform.conversation_executions to ${role}`,
+				`grant select (execution_id, conversation_id, agent_id, actor_id, channel_id, principal_type, session_generation, authorization_revision, original_submit_host_session_ref, accepted_original_host_session_ref) on platform.conversation_executions to ${role}`,
 			);
 			roleUrl.searchParams.set("options", `-c role=${role}`);
 			const limited = new PostgresConversationQueryV1({
@@ -1513,40 +1513,64 @@ describe("PostgreSQL native metadata current Runtime target scope", () => {
 		signal: new AbortController().signal,
 	};
 
-	it("returns the verified Agent-level current route", async () => {
-		const [sandbox] = await client<{ sandbox_id: string | null }[]>`
+	it.each(["submitted-host", "accepted-first-host"] as const)(
+		"returns the verified Agent-level current route using %s",
+		async (bindingKind) => {
+			const [sandbox] = await client<{ sandbox_id: string | null }[]>`
 			select sandbox_id from platform.conversation_executions
 			where execution_id='execution-conversation-1'`;
-		if (!sandbox?.sandbox_id) throw new Error("Missing execution Sandbox");
-		await seedCurrentRuntimeTargetFixture();
-		await client`update platform.conversation_executions set sandbox_id=null
-			where execution_id='execution-conversation-1'`;
-		try {
-			await expect(
-				query.readNativeMetadataRuntimeTargetScopeV1(request),
-			).resolves.toMatchObject({
-				agentId: "agent-1",
-				conversationId: "conversation-1",
-				executionId: "execution-conversation-1",
-				originalHostScopeRef: "native-runtime-target-host",
-				sandboxResource: null,
-				workloadState: { phase: "ready", agentId: "agent-1" },
-			});
-		} finally {
-			await client`update platform.conversation_executions set sandbox_id=${sandbox.sandbox_id}
+			if (!sandbox?.sandbox_id) throw new Error("Missing execution Sandbox");
+			await seedCurrentRuntimeTargetFixture();
+			if (bindingKind === "accepted-first-host") {
+				await client`update platform.conversation_executions
+				set original_submit_host_session_ref=null,
+					accepted_original_host_session_ref='native-runtime-target-host'
 				where execution_id='execution-conversation-1'`;
-			await client`update platform.session_sandbox_allocations
+			}
+			await client`update platform.conversation_executions set sandbox_id=null
+			where execution_id='execution-conversation-1'`;
+			try {
+				await expect(
+					query.readNativeMetadataObjectScopeV1({
+						scope: actorOne,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+					}),
+				).resolves.toMatchObject({
+					originalHostScopeRef: "native-runtime-target-host",
+				});
+				await expect(
+					query.readNativeMetadataCallbackCredentialScopeV1(request),
+				).resolves.toMatchObject({
+					originalHostScopeRef: "native-runtime-target-host",
+				});
+				await expect(
+					query.readNativeMetadataRuntimeTargetScopeV1(request),
+				).resolves.toMatchObject({
+					agentId: "agent-1",
+					conversationId: "conversation-1",
+					executionId: "execution-conversation-1",
+					originalHostScopeRef: "native-runtime-target-host",
+					sandboxResource: null,
+					workloadState: { phase: "ready", agentId: "agent-1" },
+				});
+			} finally {
+				await client`update platform.conversation_executions set accepted_original_host_session_ref=null where execution_id='execution-conversation-1'`;
+				await client`update platform.conversation_executions set sandbox_id=${sandbox.sandbox_id}
+				where execution_id='execution-conversation-1'`;
+				await client`update platform.session_sandbox_allocations
 				set resource_policy=null, resource_observation=null, status='allocated',
 					desired_state='running', resource_fence=0 where conversation_id='conversation-1'`;
-			await client`update platform.conversations set host_session_ref=null
+				await client`update platform.conversations set host_session_ref=null
 				where id='conversation-1'`;
-			await client`update platform.conversation_executions
+				await client`update platform.conversation_executions
 				set runtime_submit_protocol=null, original_operation_digest=null,
 					execution_source=null, relay_key_purpose=null, relay_key_subject_id=null,
 					relay_key_id=null, relay_key_version=null, original_submit_host_session_ref=null
 				where execution_id='execution-conversation-1'`;
-		}
-	});
+			}
+		},
+	);
 
 	it("returns the complete ready Session Sandbox receipt", async () => {
 		await seedCurrentRuntimeTargetFixture();

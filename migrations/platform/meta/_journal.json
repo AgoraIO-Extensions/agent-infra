@@ -379,6 +379,13 @@
       "when": 1791956246384,
       "tag": "0057_trace_context",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1792293935493,
+      "tag": "0058_accepted_original_host",
+      "breakpoints": true
     }
   ]
 }

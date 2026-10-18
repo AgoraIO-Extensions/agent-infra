@@ -271,6 +271,9 @@ export function createConversationDispatchUseCaseV1(
 					!(await dependencies.store.recordRuntimeResponse({
 						claim,
 						hostSessionRef,
+						...(isTurnOperation(claim.operation)
+							? { originalOperationAccepted: true as const }
+							: {}),
 						transition,
 					}))
 				)
@@ -1542,6 +1545,10 @@ export function createConversationDispatchUseCaseV1(
 				!(await dependencies.store.recordRuntimeResponse({
 					claim,
 					hostSessionRef: response.hostSessionRef,
+					...(response.result.outcome === "accepted" &&
+					isTurnOperation(claim.operation)
+						? { originalOperationAccepted: true as const }
+						: {}),
 					transition: responseTransition ?? {},
 				}))
 			) {

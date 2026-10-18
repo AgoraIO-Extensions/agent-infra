@@ -2417,6 +2417,36 @@ describe("Conversation Worker dispatch", () => {
 		},
 	);
 
+	it.each([
+		[{ outcome: "accepted", status: "running" }, true],
+		[{ outcome: "busy" }, false],
+		[
+			{
+				outcome: "unknown",
+				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				message: "Runtime command acceptance could not be confirmed",
+			},
+			false,
+		],
+	] as const)(
+		"records original acceptance only from an accepted Turn response %j",
+		async (result, accepted) => {
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.setResult(result);
+			const { useCase, store } = setup({ runtimeHost });
+			const responses = vi.spyOn(store, "recordRuntimeResponse");
+			await dispatch(useCase);
+			expect(responses).toHaveBeenCalled();
+			expect(
+				responses.mock.calls.some(
+					([input]) =>
+						"originalOperationAccepted" in input &&
+						input.originalOperationAccepted === true,
+				),
+			).toBe(accepted);
+		},
+	);
+
 	it("maps a Runtime-ended supplement to the product failure reason", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
 		runtimeHost.setResult({
