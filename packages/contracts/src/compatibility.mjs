@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { serialize } from "node:v8";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageRoot, "../..");
@@ -4444,7 +4445,31 @@ function normalizeMultiServiceResourceCapErrorCodeAddition(previous, current) {
 	return normalized;
 }
 
+let comparisonCache;
+
 function findBreakingChanges(previousValue, currentValue) {
+	const isRoot = comparisonCache === undefined;
+	comparisonCache ??= new Map();
+	try {
+		let key;
+		try {
+			// Keep property/array order and own undefined values in normalized states.
+			key = serialize([previousValue, currentValue]).toString("base64");
+		} catch {
+			return evaluateBreakingChanges(previousValue, currentValue);
+		}
+		const cached = comparisonCache.get(key);
+		if (cached !== undefined) return [...cached];
+		const changes = evaluateBreakingChanges(previousValue, currentValue);
+		comparisonCache.set(key, [...changes]);
+		return changes;
+	} finally {
+		// Normalizer permutations share results only within this comparison.
+		if (isRoot) comparisonCache = undefined;
+	}
+}
+
+function evaluateBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
 	let current = currentValue;
 	if (
