@@ -220,15 +220,16 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 					commandProjection,
 					skillProjection,
 				];
-				const projectedRevisionMismatch = projections.some(
-					(projection) => projection.revision !== request.directoryRevision,
-				);
-				if (projectedRevisionMismatch) return { outcome: "stale" };
-				for (const projection of projections) {
+				const matches = projections.flatMap((projection) => {
 					const selected = projection.capabilities.find(
 						(capability) => capability.id === request.capabilityId,
 					);
-					if (!selected) continue;
+					return selected ? [{ projection, selected }] : [];
+				});
+				if (matches.length > 1) return { outcome: "stale" };
+				for (const { projection, selected } of matches) {
+					if (projection.revision !== request.directoryRevision)
+						return { outcome: "stale" };
 					const capability = {
 						...selected,
 						directoryRevision: projection.revision,
