@@ -662,13 +662,18 @@ test("formal root route consumes fixture recent, opens the same Conversation and
 			request.path.startsWith("/api/v2/admin/"),
 		),
 	).toBe(false);
+	const recentLimits = fixture.requests
+		.filter((request) => request.path.endsWith("/recent"))
+		.map((request) => new URLSearchParams(request.search).get("limit"));
+	expect(recentLimits).toContain("5");
+	expect(recentLimits).toContain("50");
 	expect(
 		fixture.requests
 			.filter((request) => request.path.endsWith("/recent"))
 			.every((request) => {
 				const query = new URLSearchParams(request.search);
 				return (
-					query.get("limit") === "5" &&
+					["5", "50"].includes(query.get("limit") ?? "") &&
 					[...query.keys()].every((key) => ["limit", "cursor"].includes(key))
 				);
 			}),

@@ -1454,6 +1454,12 @@ a[class~="group/button"] {
 	.conversation-heading-copy {
 		flex: 0 0 100%;
 	}
+	.conversation-heading-actions {
+		width: 100%;
+	}
+	.conversation-heading-actions > [data-slot="button"] {
+		width: auto;
+	}
 	.conversation-agent-status {
 		gap: 4px;
 		margin-top: 0;
@@ -1561,8 +1567,8 @@ a[class~="group/button"] {
 		margin-bottom: 4px;
 	}
 	.chat-thread .timeline {
-		min-height: 0;
-		max-height: none;
+		min-height: 120px;
+		max-height: min(42dvh, 320px);
 		padding-block: 8px;
 	}
 }
@@ -2046,7 +2052,10 @@ body {
 [data-slot="textarea"] {
 	background: var(--surface);
 }
-[data-slot="select-trigger"],
+
+[data-slot="select-trigger"] {
+	border-radius: 10px;
+}
 [data-slot="alert"] {
 	border-radius: 12px;
 }

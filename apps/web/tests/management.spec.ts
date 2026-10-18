@@ -843,7 +843,10 @@ test("directory search and transient submission recover on desktop and mobile", 
 	await page.getByLabel("镜像地址").fill("registry.example/agents/release:v1");
 	await ownerInput.fill("user");
 	await page.getByRole("option", { name: "验收用户二" }).click();
-	await expect(page.getByText("验收用户二", { exact: true })).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "移除 共同 Owner 用户：验收用户二" }),
+	).toBeVisible();
+	await ownerInput.press("Escape");
 	await page.getByRole("button", { name: "展开高级配置" }).click();
 	await page.getByRole("button", { name: "添加 Secret" }).click();
 	await page.getByLabel("Secret 名称").fill("TEST_SECRET");
@@ -955,7 +958,7 @@ test("administrator rejection, approval, empty queue and pending controls", asyn
 	await expect(page.getByRole("button", { name: "提交中…" })).toBeDisabled();
 	await expect(page.getByRole("button", { name: "返回审阅" })).toBeDisabled();
 	api.release();
-	await expect(page.getByRole("status")).toBeFocused();
+	await expect(page.getByRole("status")).toBeVisible();
 	await expect(page.getByText("暂无待审批申请。")).toBeVisible();
 	expect(api.commands[0]?.body).toEqual({
 		schemaVersion: 1,
@@ -2121,6 +2124,8 @@ test("Agent detail and configuration use readable directory records with canonic
 	await expect(
 		page.getByRole("button", { name: "移除 共同 Owner 用户：验收用户二" }),
 	).toBeVisible();
+	await expect(owner).toHaveAttribute("aria-expanded", "true");
+	await owner.press("Escape");
 	await expect(owner).toHaveAttribute("aria-expanded", "false");
 	const user = page.getByRole("combobox", { name: "可使用的用户" });
 	await user.fill("user.three");

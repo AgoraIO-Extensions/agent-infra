@@ -1187,7 +1187,9 @@ for (const source of ["standard", "custom"] as const) {
 				timeline.getByText("执行失败", { exact: true }),
 			).toBeVisible();
 			await expect(timeline).toContainText(
-				"请求未完成，请稍后重试或联系 Owner",
+				code === "PROVIDER_RATE_LIMITED"
+					? "模型服务限流或额度不足。"
+					: "模型请求被拒绝。",
 			);
 			await input.fill("下一条草稿");
 			await page.getByRole("button", { name: "刷新会话", exact: true }).click();
@@ -1217,10 +1219,7 @@ for (const source of ["standard", "custom"] as const) {
 					},
 				);
 			}
-			await details
-				.getByRole("button", { name: "返回对话", exact: true })
-				.focus();
-			await page.keyboard.press("Enter");
+			await page.getByRole("button", { name: "关闭窗口", exact: true }).click();
 			for (
 				let index = 0;
 				index < 12 &&
