@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { RefreshCw, Search } from "lucide-react";
+import { ArrowRight, RefreshCw, Search, Sparkles } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -231,32 +231,36 @@ export function SkillHubDirectoryScreen({
 							: ["当前授权 ", versions.length, " 个版本"].join("")}
 					</div>
 					{visibleVersions.length > 0 ? (
-						<div className="directory-grid mt-4">
+						<div className="skill-directory mt-4">
 							{visibleVersions.map((version) => (
 								<article
-									className="directory-card"
+									className="skill-row"
 									key={version.skillVersionId}
 								>
-									<div className="space-y-3">
-										<div>
-											<h2 className="font-semibold text-lg">
-												<Link
-													className={buttonVariants({ variant: "link" })}
-													to="/skills/$skillVersionId"
-													params={{ skillVersionId: version.skillVersionId }}
-												>
-													{version.name}
-												</Link>
-											</h2>
-											<p className="text-muted-foreground text-sm">
-												版本 {version.version}
-											</p>
-										</div>
-										<SkillHubVersionBadges version={version} />
-										<p className="truncate text-muted-foreground text-xs">
-											版本 ID：{version.skillVersionId}
-										</p>
+									<div className="skill-mark" aria-hidden="true">
+										<Sparkles size={20} />
 									</div>
+									<div className="min-w-0">
+										<h2>
+											<Link
+												className="skill-row-link"
+												to="/skills/$skillVersionId"
+												params={{ skillVersionId: version.skillVersionId }}
+											>
+												{version.name}
+											</Link>
+										</h2>
+										<p>版本 {version.version}</p>
+										<p className="truncate">版本 ID：{version.skillVersionId}</p>
+									</div>
+									<SkillHubVersionBadges version={version} />
+									<Link
+										className={buttonVariants({ variant: "ghost" })}
+										to="/skills/$skillVersionId"
+										params={{ skillVersionId: version.skillVersionId }}
+									>
+										查看详情 <ArrowRight aria-hidden="true" />
+									</Link>
 								</article>
 							))}
 						</div>

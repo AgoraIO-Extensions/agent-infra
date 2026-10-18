@@ -2057,6 +2057,7 @@ body {
 [data-slot="native-select"] {
 	background: var(--surface);
 	min-height: 44px;
+	line-height: 1.5rem;
 }
 [data-slot="textarea"] {
 	background: var(--surface);
@@ -2395,24 +2396,19 @@ a[class~="group/button"] {
 	opacity: 0.48;
 }
 [data-slot="button"]:focus-visible,
-a[class~="group/button"]:focus-visible,
-[data-slot="input"]:focus-visible,
-[data-slot="select-trigger"]:focus-visible,
-[data-slot="native-select"]:focus-visible {
+a[class~="group/button"]:focus-visible {
 	outline: 2px solid var(--primary);
 	outline-offset: 3px;
 	box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 25%, transparent);
 }
-.management-content
-	:is(
-		[data-slot="input"],
-		[data-slot="textarea"],
-		[data-slot="select-trigger"],
-		[data-slot="native-select"]
-	):focus-visible {
-	outline: 2px solid var(--primary);
+
+[data-slot="input"]:focus-visible,
+[data-slot="select-trigger"]:focus-visible,
+[data-slot="native-select"]:focus-visible {
+	border-color: var(--primary);
+	outline: 2px solid color-mix(in oklch, var(--primary) 26%, transparent);
 	outline-offset: 3px;
-	box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 25%, transparent);
+	box-shadow: none;
 }
 [data-slot="badge"][data-status]::before,
 [data-slot="badge"][data-result]::before,
@@ -3116,7 +3112,7 @@ a[class~="group/button"]:focus-visible,
 	box-shadow: none;
 }
 .directory-input::placeholder {
-	color: color-mix(in oklch, var(--muted-foreground) 82%, var(--surface));
+	color: var(--muted-ink);
 }
 .directory-menu {
 	position: absolute;
