@@ -220,6 +220,7 @@
 - 2026-10-18：补齐 N-10：Owner 配置、申请表单和 keyless model picker 的分区改为 section+h2，保留外层 fieldset 的字段禁用与内嵌字段语义；定向配置/申请测试 91/91 通过。
 - 2026-10-18：补强 C-02/T-04：design-contract 增加页面标题、分区、surface、控件、primitive count、hover/focus/pressed/reduced-motion 的 computed-style 契约；对话矩阵 1/1、管理矩阵 8/8 通过。
 - 2026-10-18：继续修复 N-14：高级配置展开与目录清空操作统一为至少 44px 触控高度。
+- 2026-10-18：补齐 N-14 申请行标题链接命中区，申请列表标题链接统一为至少 44px 高。
 - 2026-10-18：补齐 W-03：工作台读取失败通知增加语义图标，401/authentication-required 提供 primary「重新登录」动作；定向 WorkBench 单测 13/13、401/403/404 E2E 3/3 通过。
 - 2026-10-18：补齐 B-05/B-06：表单 placeholder/focus token、Select 弹层下方定位与控件行高统一；Select 定向单测和 Web build 通过。
 - 2026-10-18：将 Platform API Skill importer 协议修复移出 UI 分支，避免 UI/Provider 契约混合；该后端回归应由独立 Issue/PR 承担。

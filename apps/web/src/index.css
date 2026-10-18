@@ -2497,6 +2497,11 @@ a[class~="group/button"]:focus-visible {
 	font-weight: 650;
 	line-height: 1.65;
 }
+.management-content .application-row > div:first-child > a {
+	display: inline-flex;
+	min-height: 44px;
+	align-items: center;
+}
 .management-content .application-row p,
 .application-progress small {
 	display: block;
