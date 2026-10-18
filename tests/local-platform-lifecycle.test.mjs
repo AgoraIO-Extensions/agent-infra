@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmod,
@@ -672,6 +672,75 @@ test("local native metadata forward is restarted after kubectl exits (#2726)", a
 		assert.equal(await connect(), false, "stop must reclaim the forward");
 	} finally {
 		// 断言失败时也回收转发与代理，避免占住端口影响后续用例。
+		run("stop", env);
+		await f.close();
+	}
+});
+
+test("local native metadata forward and proxy outlive the caller's process group (#2741)", async () => {
+	const f = await fixture();
+	let env = f.env;
+	try {
+		env = {
+			...f.env,
+			FAKE_NATIVE_METADATA_ENABLED: "1",
+			FAKE_NATIVE_METADATA_TOKEN_KEY: "runtime-token",
+			PLATFORM_LOCAL_NATIVE_METADATA_WORKER_PORT: "3304",
+			PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS: f.nativeBindAddress,
+		};
+		// 在独立进程组里运行 up；返回后整组终止，模拟终端关闭或执行器清理进程树。
+		const caller = spawn("bash", [script, "up"], {
+			cwd: process.cwd(),
+			env,
+			detached: true,
+			stdio: ["ignore", "ignore", "pipe"],
+		});
+		let stderr = "";
+		caller.stderr.on("data", (chunk) => {
+			stderr += chunk;
+		});
+		const status = await new Promise((resolve) => caller.once("exit", resolve));
+		assert.equal(status, 0, `${stderr}\n${await readFile(f.log, "utf8")}`);
+		try {
+			process.kill(-caller.pid, "SIGTERM");
+		} catch {
+			// 进程组里已经没有进程：后台进程都已脱离调用方。
+		}
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+		const connect = (host, port) =>
+			new Promise((resolve) => {
+				const socket = createConnection({ host, port });
+				socket.once("connect", () => {
+					socket.destroy();
+					resolve(true);
+				});
+				socket.once("error", () => resolve(false));
+			});
+		// 之前：转发与代理和调用方同属一个进程组，随整组终止一起退出，API 读 native metadata 失败。
+		assert.equal(
+			await connect("127.0.0.1", 3305),
+			true,
+			"the forward must outlive the caller",
+		);
+		assert.equal(
+			await connect(f.nativeBindAddress, 3304),
+			true,
+			"the proxy must outlive the caller",
+		);
+		const stopped = run("stop", env);
+		assert.equal(stopped.status, 0, stopped.stderr);
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+		assert.equal(
+			await connect("127.0.0.1", 3305),
+			false,
+			"stop must reclaim the forward",
+		);
+		assert.equal(
+			await connect(f.nativeBindAddress, 3304),
+			false,
+			"stop must reclaim the proxy",
+		);
+	} finally {
 		run("stop", env);
 		await f.close();
 	}
