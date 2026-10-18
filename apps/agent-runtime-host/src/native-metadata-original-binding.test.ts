@@ -85,12 +85,20 @@ it.each([
 				"events.persist",
 				{ purpose: "control", reason: "recovery" },
 			);
-			for await (const _event of await host.streamEventsV3(
+			const controller = new AbortController();
+			const stream = await host.streamEventsV3(
 				control,
 				verifyRuntimeV2Fixture(control.grant),
-				new AbortController().signal,
-			)) {
-			}
+				controller.signal,
+			);
+			controller.abort();
+			await stream[Symbol.asyncIterator]().return?.();
+			const journal = JSON.parse(await readFile(path, "utf8"));
+			expect(
+				journal.sessions[accepted.hostSessionRef].executionAuthorities[
+					submit.executionId
+				].control.reason,
+			).toBe("recovery");
 		}
 		if (mode === "expired") clock += 30_001;
 		vi.setSystemTime(clock);
