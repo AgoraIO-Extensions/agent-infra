@@ -166,6 +166,7 @@ async function workbenchFixture(
 	const unexpected: string[] = [];
 	const held: string[] = [];
 	let continuationStatus = 200;
+	let firstStatus: number | null = null;
 	let recovery = false;
 	let session: ControlledSession = {
 		tag: "old",
@@ -303,23 +304,24 @@ async function workbenchFixture(
 				held.push(url.pathname + url.search);
 				await pending;
 			}
-			if (more && continuationStatus !== 200)
+			const failureStatus = more ? continuationStatus : firstStatus;
+			if (failureStatus !== null && failureStatus !== 200 && !recovery)
 				return route.fulfill({
-					status: continuationStatus,
+					status: failureStatus,
 					json: PilotProtocolErrorV1Schema.parse({
 						schemaVersion: 1,
 						code:
-							continuationStatus === 401
+							failureStatus === 401
 								? "AUTHENTICATION_REQUIRED"
-								: continuationStatus === 403
+								: failureStatus === 403
 									? "AUTHORIZATION_REVOKED"
-									: continuationStatus >= 500
+									: failureStatus >= 500
 										? "DEPENDENCY_UNAVAILABLE"
-										: continuationStatus === 429
+										: failureStatus === 429
 											? "PROVIDER_RATE_LIMITED"
 											: "RESOURCE_UNAVAILABLE",
 						message: "Controlled recent failure",
-						retryable: continuationStatus === 429 || continuationStatus >= 500,
+						retryable: failureStatus === 429 || failureStatus >= 500,
 						traceId: "controlled-recent-failure",
 					}),
 				});
@@ -487,6 +489,9 @@ async function workbenchFixture(
 		failMore: (status: number) => {
 			continuationStatus = status;
 		},
+		failFirst: (status: number) => {
+			firstStatus = status;
+		},
 		recover: () => {
 			recovery = true;
 		},
@@ -623,12 +628,13 @@ test("formal root route consumes fixture recent, opens the same Conversation and
 		"href",
 		"/chat/agent-a/conversation-a",
 	);
-	await recent.getByRole("button", { name: "加载更多对话" }).click();
-	await expect(recent.getByRole("heading", { level: 3 })).toHaveText([
-		"受控最近对话 conversation-z",
-		"受控最近对话 conversation-a",
-		"受控最近对话 conversation-m",
-	]);
+	await expect(recent.getByRole("link", { name: "查看全部" })).toHaveAttribute(
+		"href",
+		"/agents?mode=conversation",
+	);
+	await expect(
+		recent.getByRole("button", { name: "加载更多对话" }),
+	).toHaveCount(0);
 	expect(
 		fixture.requests.some(
 			(request) =>
@@ -665,7 +671,7 @@ test("formal root route consumes fixture recent, opens the same Conversation and
 	const recentLimits = fixture.requests
 		.filter((request) => request.path.endsWith("/recent"))
 		.map((request) => new URLSearchParams(request.search).get("limit"));
-	expect(recentLimits).toContain("5");
+	expect(recentLimits).toContain("3");
 	expect(recentLimits).toContain("50");
 	expect(
 		fixture.requests
@@ -673,7 +679,7 @@ test("formal root route consumes fixture recent, opens the same Conversation and
 			.every((request) => {
 				const query = new URLSearchParams(request.search);
 				return (
-					["5", "50"].includes(query.get("limit") ?? "") &&
+					["3", "50"].includes(query.get("limit") ?? "") &&
 					[...query.keys()].every((key) => ["limit", "cursor"].includes(key))
 				);
 			}),
@@ -692,15 +698,13 @@ test("formal root route consumes fixture recent, opens the same Conversation and
 	expect(fixture.unexpected).toEqual([]);
 });
 
-test("a failed continuation hides old rows and retry uses a new first page", async ({
+test("a failed first page hides old rows and retry uses a new first page", async ({
 	page,
 }, info) => {
 	const fixture = await workbenchFixture(page);
+	fixture.failFirst(503);
 	await page.goto("/");
 	const recent = recentRegion(page);
-	await expect(recent.getByRole("heading", { level: 3 })).toHaveCount(2);
-	fixture.failMore(503);
-	await recent.getByRole("button", { name: "加载更多对话" }).click();
 	await expect(
 		recent.getByText("最近的个人对话暂时无法读取。", { exact: true }),
 	).toBeVisible();
@@ -731,15 +735,13 @@ for (const [status, message] of [
 	[401, "最近的个人对话无法读取，请重新登录。"],
 	[403, "当前无权读取最近的个人对话。"],
 ] as const) {
-	test(`recent ${status} removes old rows and continuation without replacing the authenticated root`, async ({
+	test(`recent ${status} keeps the authenticated root readable`, async ({
 		page,
 	}) => {
 		const fixture = await workbenchFixture(page);
+		fixture.failFirst(status);
 		await page.goto("/");
 		const recent = recentRegion(page);
-		await expect(recent.getByRole("heading", { level: 3 })).toHaveCount(2);
-		fixture.failMore(status);
-		await recent.getByRole("button", { name: "加载更多对话" }).click();
 		await expect(recent.getByText(message, { exact: true })).toBeVisible();
 		await expect(recent.getByRole("heading", { level: 3 })).toHaveCount(0);
 		await expect(
@@ -761,7 +763,7 @@ for (const [status, message] of [
 		await expect(recent.getByText(message, { exact: true })).toBeVisible();
 		expect(
 			fixture.requests.filter((request) => request.path.endsWith("/recent")),
-		).toHaveLength(2);
+		).toHaveLength(1);
 		expect(fixture.requests.every((request) => request.method === "GET")).toBe(
 			true,
 		);
@@ -871,7 +873,7 @@ for (const boundary of [
 	"same-user roles",
 	"login generation",
 ] as const) {
-	for (const holdRecent of ["first", "continuation"] as const) {
+	for (const holdRecent of ["first"] as const) {
 		test(`${boundary} change cancels the old recent ${holdRecent} page and ignores late success and cursor`, async ({
 			page,
 		}) => {
@@ -882,20 +884,6 @@ for (const boundary of [
 			});
 			await page.goto("/");
 			const recent = recentRegion(page);
-			if (holdRecent === "continuation") {
-				await expect(recent.getByRole("heading", { level: 3 })).toHaveCount(2);
-				await expect(
-					page
-						.getByRole("region", { name: "需要管理员处理" })
-						.getByText("1 项申请等待系统管理员审阅", { exact: true }),
-				).toBeVisible();
-				await expect(
-					page
-						.getByRole("complementary", { name: "待处理" })
-						.getByRole("link", { name: "查看失败清单" }),
-				).toBeVisible();
-				await recent.getByRole("button", { name: "加载更多对话" }).click();
-			}
 			await expect
 				.poll(
 					() =>
@@ -1040,7 +1028,7 @@ for (const boundary of [
 							).length,
 					),
 				)
-				.toBe(holdRecent === "first" ? 2 : 3);
+				.toBe(2);
 			if (holdRecent === "first")
 				await expect
 					.poll(async () =>
@@ -1092,8 +1080,6 @@ for (const boundary of [
 					(request) =>
 						request.tag === "new" && request.path.startsWith("/api/v2/admin/"),
 				);
-				if (holdRecent === "continuation")
-					expect(revalidationReads.length).toBeGreaterThan(0);
 				expect(
 					administratorReads.filter((request) => request.status === 403),
 				).toHaveLength(revalidationReads.length);

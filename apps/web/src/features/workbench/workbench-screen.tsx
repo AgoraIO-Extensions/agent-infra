@@ -46,7 +46,6 @@ export type WorkbenchScreenProps = {
 	administrator: boolean;
 	onRetry: () => void;
 	refreshing?: boolean;
-	onLoadMoreRecent?: () => void;
 };
 
 function WorkbenchSection({
@@ -266,15 +265,14 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 					) : (
 						<ReadNotice {...props} state={recent} label="最近的个人对话" />
 					)}
-					{recent.kind === "ready" && recent.nextCursor !== null && (
-						<Button
-							className="mt-4"
-							variant="outline"
-							onClick={props.onLoadMoreRecent}
-							disabled={props.refreshing || !props.onLoadMoreRecent}
+					{recent.kind === "ready" && recent.conversations.length > 0 && (
+						<Link
+							className={buttonVariants({ variant: "ghost" })}
+							to="/agents"
+							search={{ mode: "conversation" }}
 						>
-							加载更多对话
-						</Button>
+							查看全部 <ArrowRight aria-hidden="true" />
+						</Link>
 					)}
 				</WorkbenchSection>
 				<aside className="workbench-attention" aria-label="待处理">

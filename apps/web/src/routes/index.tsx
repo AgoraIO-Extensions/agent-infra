@@ -12,7 +12,7 @@ function WorkbenchRoute() {
 	const { identityKey, session } = useApplicationSession();
 	const administrator = session.user.roles.includes("system_admin");
 	const collections = useWorkbenchCollections({ identityKey, administrator });
-	const recent = useRecentPersonalConversations({ identityKey });
+	const recent = useRecentPersonalConversations({ identityKey, limit: 3 });
 	return (
 		<main className="platform-content management-content">
 			<WorkbenchScreen
@@ -24,7 +24,6 @@ function WorkbenchRoute() {
 					collections.onRetry();
 					void recent.refresh();
 				}}
-				onLoadMoreRecent={() => void recent.loadMore()}
 			/>
 		</main>
 	);

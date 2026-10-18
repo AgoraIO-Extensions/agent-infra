@@ -446,9 +446,8 @@ describe("OpenDesign workbench presentation", () => {
 		).toBeTruthy();
 	});
 
-	it("offers continuation only for a supplied cursor and disables it during refresh", async () => {
-		const more = vi.fn();
-		const view = await showWorkbench(
+	it("offers a ghost link to the full Agent conversation directory", async () => {
+		await showWorkbench(
 			<WorkbenchScreen
 				{...empty}
 				recent={{
@@ -456,31 +455,10 @@ describe("OpenDesign workbench presentation", () => {
 					conversations: [conversation],
 					nextCursor: "opaque-recent/+?=",
 				}}
-				onLoadMoreRecent={more}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: "加载更多对话" }));
-		expect(more).toHaveBeenCalledOnce();
-		view.rerender(
-			<WorkbenchScreen
-				{...empty}
-				recent={{
-					kind: "ready",
-					conversations: [conversation],
-					nextCursor: "opaque-recent/+?=",
-				}}
-				onLoadMoreRecent={more}
-				refreshing
-			/>,
-		);
-		expect(
-			(
-				screen.getByRole("button", {
-					name: "加载更多对话",
-				}) as HTMLButtonElement
-			).disabled,
-		).toBe(true);
-		view.rerender(<WorkbenchScreen {...empty} onLoadMoreRecent={more} />);
+		const all = screen.getByRole("link", { name: "查看全部" });
+		expect(all.getAttribute("href")).toBe("/agents?mode=conversation");
 		expect(screen.queryByRole("button", { name: "加载更多对话" })).toBeNull();
 	});
 });
