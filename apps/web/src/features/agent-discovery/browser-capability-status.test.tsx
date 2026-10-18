@@ -66,7 +66,7 @@ describe("BrowserCapabilityStatus", () => {
 	});
 
 	it.each([
-		["intent", "正在受理", "操作：读取当前仓库页面"],
+		["intent", "正在受理", "操作：浏览器导航"],
 		["observing", "正在观察", "Browser 工作流正在推进。"],
 		["action", "正在执行", "操作：浏览器操作"],
 		[
