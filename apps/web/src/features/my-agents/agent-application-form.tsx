@@ -1,4 +1,4 @@
-import { PlusIcon, Trash2Icon } from "lucide-react";
+import { ArrowRightIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -242,9 +242,15 @@ function recomputeDuplicateModelErrors(
 	}
 }
 
+// 设计 .field-error：12px / 1.5 / --danger-ink，与上方控件之间是字段 gap 7px + 6px 外边距；
+// 校验结果礼貌播报，不打断读屏（焦点已移到首个错误字段）。
 function FieldError({ id, message }: { id: string; message?: string }) {
 	return message ? (
-		<p aria-live="assertive" className="text-destructive text-sm" id={id}>
+		<p
+			aria-live="polite"
+			className="field-error mt-[6px] text-(--danger-ink) text-[12px] leading-[1.5]"
+			id={id}
+		>
 			{message}
 		</p>
 	) : null;
@@ -448,7 +454,7 @@ function ModelRows({
 									errors[`model.${index}.reasoningLevels`] ? true : undefined
 								}
 								aria-labelledby={`application-model-option-reasoning-label-${index}`}
-								className="model-reasoning flex min-h-11 flex-wrap items-center gap-4"
+								className="model-reasoning flex min-h-11 flex-wrap items-center gap-x-[22px] gap-y-3"
 								id={`application-model-option-reasoning-${index}`}
 								tabIndex={
 									errors[`model.${index}.reasoningLevels`] ? -1 : undefined
@@ -1478,166 +1484,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						/>
 					</div>
 				</FormSection>
-				<section
-					className="application-advanced-section"
-					aria-labelledby="application-advanced-heading"
-				>
-					<div className="application-advanced-heading">
-						<div>
-							<h2 id="application-advanced-heading">高级配置</h2>
-							<p>环境变量和 Secret 只在部署需要时填写。</p>
-						</div>
-						<Button
-							aria-expanded={advancedConfigurationOpen}
-							className="application-advanced-toggle"
-							onClick={() => setAdvancedConfigurationOpen((open) => !open)}
-							size="sm"
-							type="button"
-							variant="outline"
-						>
-							{advancedConfigurationOpen ? "收起高级配置" : "展开高级配置"}
-						</Button>
-					</div>
-					<div
-						className="application-advanced-content"
-						hidden={!advancedConfigurationOpen}
-					>
-						<FormSection
-							title="环境变量"
-							headingLevel={3}
-							className="application-optional-section"
-							description="仅填写部署允许的配置项；凭证请使用 Secret 或模型凭证字段。"
-						>
-							<DraftRows
-								fields={[
-									{
-										key: "name",
-										label: "变量名称",
-										required: true,
-									},
-									{ key: "value", label: "变量值", required: true },
-								]}
-								idPrefix="environment"
-								label="环境变量"
-								errorFor={(index, key) =>
-									fieldErrors[`environment.${index}.${key}`]
-								}
-								onChange={(index, key, value) => {
-									const next = environment.map((item, itemIndex) =>
-										itemIndex === index
-											? {
-													...item,
-													[key]: value,
-												}
-											: item,
-									);
-									setEnvironment(next);
-									updateNameField("environment", next, index, key);
-								}}
-								onRemove={(index) => {
-									dismissServerFormError();
-									const next = environment.filter(
-										(_, itemIndex) => itemIndex !== index,
-									);
-									setEnvironment(next);
-									setFieldErrors((current) => {
-										const nextErrors = reindexRowErrors(
-											current,
-											"environment",
-											index,
-										);
-										recomputeDuplicateNameErrors(
-											nextErrors,
-											"environment",
-											next,
-										);
-										return nextErrors;
-									});
-								}}
-								rows={environment}
-							/>
-							<Button
-								variant="outline"
-								onClick={() => {
-									dismissServerFormError();
-									setEnvironment((current) => [...current, blankEnvironment()]);
-								}}
-								type="button"
-							>
-								<PlusIcon aria-hidden="true" data-icon="inline-start" />
-								添加环境变量
-							</Button>
-						</FormSection>
-						<FormSection
-							title="Secret"
-							headingLevel={3}
-							className="application-optional-section"
-							description="只提交新增或替换值，已有 Secret 不回显。提交后会清空输入，重试时需重新填写替换值。"
-						>
-							<DraftRows
-								fields={[
-									{
-										key: "name",
-										label: "Secret 名称",
-										options:
-											sourceKind === "standard" ? secretOptions : undefined,
-										required: true,
-									},
-									{
-										key: "value",
-										label: "替换值",
-										required: true,
-										type: "password",
-									},
-								]}
-								idPrefix="secret"
-								label="Secret"
-								errorFor={(index, key) => fieldErrors[`secret.${index}.${key}`]}
-								onChange={(index, key, value) => {
-									const next = secrets.map((item, itemIndex) =>
-										itemIndex === index
-											? {
-													...item,
-													[key]: value,
-													...(key === "name" ? { value: "" } : {}),
-												}
-											: item,
-									);
-									setSecrets(next);
-									updateNameField("secret", next, index, key);
-								}}
-								onRemove={(index) => {
-									dismissServerFormError();
-									const next = secrets.filter(
-										(_, itemIndex) => itemIndex !== index,
-									);
-									setSecrets(next);
-									setFieldErrors((current) => {
-										const nextErrors = reindexRowErrors(
-											current,
-											"secret",
-											index,
-										);
-										recomputeDuplicateNameErrors(nextErrors, "secret", next);
-										return nextErrors;
-									});
-								}}
-								rows={secrets}
-							/>
-							<Button
-								variant="outline"
-								onClick={() => {
-									dismissServerFormError();
-									setSecrets((current) => [...current, blankEnvironment()]);
-								}}
-								type="button"
-							>
-								<PlusIcon aria-hidden="true" data-icon="inline-start" />
-								添加 Secret
-							</Button>
-						</FormSection>
-					</div>
-				</section>
+				{/* DOM 顺序即视觉顺序：模型与推理紧跟范围，高级配置在其后（WCAG 2.4.3，不用 CSS order 重排）。 */}
 				{sourceKind === "standard" ? (
 					<FormSection
 						title="模型与推理"
@@ -1922,6 +1769,166 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						</div>
 					</FormSection>
 				) : null}
+				<section
+					className="application-advanced-section"
+					aria-labelledby="application-advanced-heading"
+				>
+					<div className="application-advanced-heading">
+						<div>
+							<h2 id="application-advanced-heading">高级配置</h2>
+							<p>环境变量和 Secret 只在部署需要时填写。</p>
+						</div>
+						<Button
+							aria-expanded={advancedConfigurationOpen}
+							className="application-advanced-toggle"
+							onClick={() => setAdvancedConfigurationOpen((open) => !open)}
+							size="sm"
+							type="button"
+							variant="outline"
+						>
+							{advancedConfigurationOpen ? "收起高级配置" : "展开高级配置"}
+						</Button>
+					</div>
+					<div
+						className="application-advanced-content"
+						hidden={!advancedConfigurationOpen}
+					>
+						<FormSection
+							title="环境变量"
+							headingLevel={3}
+							className="application-optional-section"
+							description="仅填写部署允许的配置项；凭证请使用 Secret 或模型凭证字段。"
+						>
+							<DraftRows
+								fields={[
+									{
+										key: "name",
+										label: "变量名称",
+										required: true,
+									},
+									{ key: "value", label: "变量值", required: true },
+								]}
+								idPrefix="environment"
+								label="环境变量"
+								errorFor={(index, key) =>
+									fieldErrors[`environment.${index}.${key}`]
+								}
+								onChange={(index, key, value) => {
+									const next = environment.map((item, itemIndex) =>
+										itemIndex === index
+											? {
+													...item,
+													[key]: value,
+												}
+											: item,
+									);
+									setEnvironment(next);
+									updateNameField("environment", next, index, key);
+								}}
+								onRemove={(index) => {
+									dismissServerFormError();
+									const next = environment.filter(
+										(_, itemIndex) => itemIndex !== index,
+									);
+									setEnvironment(next);
+									setFieldErrors((current) => {
+										const nextErrors = reindexRowErrors(
+											current,
+											"environment",
+											index,
+										);
+										recomputeDuplicateNameErrors(
+											nextErrors,
+											"environment",
+											next,
+										);
+										return nextErrors;
+									});
+								}}
+								rows={environment}
+							/>
+							<Button
+								variant="outline"
+								onClick={() => {
+									dismissServerFormError();
+									setEnvironment((current) => [...current, blankEnvironment()]);
+								}}
+								type="button"
+							>
+								<PlusIcon aria-hidden="true" data-icon="inline-start" />
+								添加环境变量
+							</Button>
+						</FormSection>
+						<FormSection
+							title="Secret"
+							headingLevel={3}
+							className="application-optional-section"
+							description="只提交新增或替换值，已有 Secret 不回显。提交后会清空输入，重试时需重新填写替换值。"
+						>
+							<DraftRows
+								fields={[
+									{
+										key: "name",
+										label: "Secret 名称",
+										options:
+											sourceKind === "standard" ? secretOptions : undefined,
+										required: true,
+									},
+									{
+										key: "value",
+										label: "替换值",
+										required: true,
+										type: "password",
+									},
+								]}
+								idPrefix="secret"
+								label="Secret"
+								errorFor={(index, key) => fieldErrors[`secret.${index}.${key}`]}
+								onChange={(index, key, value) => {
+									const next = secrets.map((item, itemIndex) =>
+										itemIndex === index
+											? {
+													...item,
+													[key]: value,
+													...(key === "name" ? { value: "" } : {}),
+												}
+											: item,
+									);
+									setSecrets(next);
+									updateNameField("secret", next, index, key);
+								}}
+								onRemove={(index) => {
+									dismissServerFormError();
+									const next = secrets.filter(
+										(_, itemIndex) => itemIndex !== index,
+									);
+									setSecrets(next);
+									setFieldErrors((current) => {
+										const nextErrors = reindexRowErrors(
+											current,
+											"secret",
+											index,
+										);
+										recomputeDuplicateNameErrors(nextErrors, "secret", next);
+										return nextErrors;
+									});
+								}}
+								rows={secrets}
+							/>
+							<Button
+								variant="outline"
+								onClick={() => {
+									dismissServerFormError();
+									setSecrets((current) => [...current, blankEnvironment()]);
+								}}
+								type="button"
+							>
+								<PlusIcon aria-hidden="true" data-icon="inline-start" />
+								添加 Secret
+							</Button>
+						</FormSection>
+					</div>
+				</section>
 				<div className="form-footer">
 					{props.cancelAction}
 					<div className="form-footer-actions">
@@ -1931,6 +1938,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								: props.mode === "update"
 									? agentApplicationEditActionLabels[props.action]
 									: "提交申请"}
+							{/* 设计 .form-footer 主按钮：16px 箭头在文字后。 */}
+							{props.submitting ? null : (
+								<ArrowRightIcon aria-hidden="true" data-icon="inline-end" />
+							)}
 						</Button>
 					</div>
 				</div>

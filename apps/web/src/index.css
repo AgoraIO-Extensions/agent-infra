@@ -534,7 +534,6 @@
 	}
 	.management-content .form-grid {
 		grid-template-columns: minmax(0, 1fr);
-		gap: 16px;
 	}
 }
 
@@ -1713,8 +1712,23 @@ body {
 	justify-content: flex-end;
 	gap: 8px;
 }
-.application-progress {
-	margin-bottom: 18px;
+/* 设计 #application-detail：审批进度在 surface 内，驳回原因 notice 与列表间距 18px。 */
+.application-progress-panel {
+	padding: 20px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--surface);
+}
+.application-progress-panel .application-decision-reason {
+	margin-top: 18px;
+}
+.application-detail-feedback {
+	margin-bottom: 20px;
+}
+/* 设计 #my-agents：说明 notice 与「显示更多」都在申请列表之后 16px。 */
+.my-agents-note,
+.application-list-more {
+	margin-top: 16px;
 }
 .tag-row {
 	display: flex;
@@ -1801,26 +1815,6 @@ body {
 }
 .application-form-fields {
 	min-width: 0;
-	display: flex;
-	flex-direction: column;
-}
-.application-form-fields > .application-basic-section {
-	order: 1;
-}
-.application-form-fields > .application-scope-section {
-	order: 2;
-}
-.application-form-fields > .application-model-section {
-	order: 3;
-}
-.application-form-fields > .application-optional-section {
-	order: 4;
-}
-.application-form-fields > .application-advanced-section {
-	order: 4;
-}
-.application-form-fields > .form-footer {
-	order: 5;
 }
 .application-form .form-grid {
 	margin-top: 16px;
@@ -1853,7 +1847,7 @@ body {
 .application-advanced-heading h2 {
 	font-family: inherit;
 	font-size: 16px;
-	font-weight: 650;
+	font-weight: 620;
 	letter-spacing: 0;
 }
 .application-form .application-advanced-heading p {
@@ -1882,7 +1876,7 @@ body {
 .application-form .form-footer {
 	align-items: center;
 	margin-top: 0;
-	padding: 20px 0 0;
+	padding: 20px 0;
 	border-top: 1px solid var(--border);
 }
 .application-form .form-footer-actions {
@@ -1926,10 +1920,6 @@ body {
 	.application-form .model-option-fieldset .model-remove {
 		grid-column: 1;
 		grid-row: auto;
-	}
-	.application-form .form-footer-actions {
-		width: 100%;
-		justify-content: flex-end;
 	}
 }
 .metadata-facts {
@@ -2039,11 +2029,34 @@ body {
 	color: var(--muted-foreground);
 	font-size: 13px;
 }
-.owned-agent-card .actions {
+.management-content .owned-agent-card .metadata-facts,
+.management-content .application-detail-aside .metadata-facts {
+	grid-template-columns: 150px minmax(0, 1fr);
+}
+/* 设计 .card-actions：卡片与页头操作 gap 8px、上边距 16px，按钮 40px（不是表单主操作的 44px）。 */
+.owned-agent-card .card-actions,
+.application-detail-heading .card-actions,
+.application-next-step .card-actions,
+.application-submitted-actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
 	margin-top: 16px;
 }
-.management-content .owned-agent-card .metadata-facts {
-	grid-template-columns: 100px minmax(0, 1fr);
+.owned-agent-card .card-actions > [class~="group/button"],
+.application-detail-heading .card-actions > [class~="group/button"],
+.application-next-step .card-actions > [class~="group/button"],
+.card-actions.application-submitted-actions > [class~="group/button"] {
+	min-height: 40px;
+}
+.application-detail-heading .page-eyebrow {
+	margin-top: 16px;
+}
+.management-content .application-next-step .page-note {
+	margin: 16px 0 0;
+	color: var(--muted-ink);
+	font-size: 12px;
 }
 .lifecycle-panel .actions {
 	align-items: stretch;
@@ -2335,7 +2348,8 @@ body {
 	}
 }
 @media (max-width: 767px) {
-	.management-content .owned-agent-card .metadata-facts {
+	.management-content .owned-agent-card .metadata-facts,
+	.management-content .application-detail-aside .metadata-facts {
 		grid-template-columns: minmax(0, 1fr);
 	}
 }

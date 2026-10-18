@@ -12,6 +12,7 @@ import type {
 	AgentApplicationUpdateRequestV2Writable,
 } from "../../pilot/generated-v2/types.gen.js";
 import {
+	applicationProgressSteps,
 	createMyAgentApplication,
 	getAgentApplicationEditAction,
 	loadMyAgentApplication,
@@ -542,4 +543,37 @@ describe("My Agents generated-client consumer", () => {
 			retryable: true,
 		});
 	});
+});
+
+describe("applicationProgressSteps", () => {
+	// 申请详情三步进度只由申请状态决定，覆盖契约中的全部 8 个状态。
+	it.each([
+		["pending_approval", "等待", "gray", "等待", "gray"],
+		["withdrawn", "不再审批", "gray", "不再创建", "gray"],
+		["rejected", "已驳回", "red", "不再创建", "gray"],
+		["creating", "已通过", "green", "处理中", "amber"],
+		["available", "已通过", "green", "完成", "green"],
+		["stopped", "已通过", "green", "完成", "green"],
+		["creation_failed", "已通过", "green", "失败", "red"],
+		["disabled", "已通过", "green", "已停用", "gray"],
+	] as const)(
+		"maps %s to its approval and creation steps",
+		(status, approvalLabel, approvalTone, creationLabel, creationTone) => {
+			expect(applicationProgressSteps(status)).toEqual([
+				{ key: "submitted", title: "申请已提交", label: "完成", tone: "green" },
+				{
+					key: "approval",
+					title: "系统管理员审批",
+					label: approvalLabel,
+					tone: approvalTone,
+				},
+				{
+					key: "creation",
+					title: "创建 Agent",
+					label: creationLabel,
+					tone: creationTone,
+				},
+			]);
+		},
+	);
 });

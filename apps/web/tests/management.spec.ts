@@ -666,21 +666,28 @@ async function capture(page: Page, info: TestInfo, name: string) {
 	});
 }
 
-test("creation header exit supports deep links, refresh, click, keyboard and back", async ({
+test("creation footer cancel supports deep links, refresh, click, keyboard and back", async ({
 	page,
 }, info) => {
 	const api = await fixture(page);
 	await page.goto("/my-agents/new");
-	const headerExit = page
-		.locator("main header.page-heading")
-		.getByRole("link", { name: "退出创建", exact: true });
-	await expect(headerExit).toBeVisible();
-	await expect(headerExit).toHaveAttribute("href", "/my-agents");
-	await expect(page.getByRole("link", { name: "退出创建" })).toHaveCount(2);
-	const bounds = await headerExit.boundingBox();
+	// N-03：页头没有退出操作；全页唯一的取消入口是 footer 左侧的 ghost「取消」。
+	const footerCancel = page
+		.locator("main form .form-footer")
+		.getByRole("link", { name: "取消", exact: true });
+	await expect(footerCancel).toBeVisible();
+	await expect(footerCancel).toHaveAttribute("href", "/my-agents");
+	await expect(page.getByRole("link", { name: "取消" })).toHaveCount(1);
+	await expect(page.getByText("退出创建", { exact: true })).toHaveCount(0);
+	await expect(
+		page.locator("main header.page-heading").locator("a, button"),
+	).toHaveCount(0);
+	await expect(footerCancel).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+	await expect(footerCancel).toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
+	const bounds = await footerCancel.boundingBox();
 	expect(bounds?.height).toBeGreaterThanOrEqual(44);
-	await capture(page, info, "create-header-exit");
-	await headerExit.click();
+	await capture(page, info, "create-footer-cancel");
+	await footerCancel.click();
 	await expect(page).toHaveURL(/\/my-agents$/);
 	await expect(
 		page.getByRole("heading", { name: "跟进申请，也维护你负责的 Agent。" }),
@@ -689,21 +696,24 @@ test("creation header exit supports deep links, refresh, click, keyboard and bac
 
 	await page.goBack();
 	await expect(page).toHaveURL(/\/my-agents\/new$/);
-	await expect(headerExit).toBeVisible();
+	await expect(footerCancel).toBeVisible();
 	await page.reload();
-	await expect(headerExit).toBeVisible();
-	await expect(headerExit).toHaveAttribute("href", "/my-agents");
-	await headerExit.focus();
-	await page.keyboard.press("Tab");
-	await expect(page.getByLabel("Agent 名称")).toBeFocused();
+	await expect(footerCancel).toBeVisible();
+	await expect(footerCancel).toHaveAttribute("href", "/my-agents");
+	// 键盘：取消之前是收起的高级配置开关；Shift+Tab 到它，再 Tab 回到取消，Enter 离开。
+	await footerCancel.focus();
 	await page.keyboard.press("Shift+Tab");
-	await expect(headerExit).toBeFocused();
+	await expect(
+		page.getByRole("button", { name: "展开高级配置" }),
+	).toBeFocused();
+	await page.keyboard.press("Tab");
+	await expect(footerCancel).toBeFocused();
 	expect(
-		await headerExit.evaluate(
+		await footerCancel.evaluate(
 			(element) => getComputedStyle(element).outlineStyle,
 		),
 	).not.toBe("none");
-	await capture(page, info, "create-header-exit-refreshed-focus");
+	await capture(page, info, "create-footer-cancel-refreshed-focus");
 	await page.keyboard.press("Enter");
 	await expect(page).toHaveURL(/\/my-agents$/);
 	await expect(
@@ -751,9 +761,9 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await page.keyboard.press("Enter");
 	await expect(page.getByRole("button", { name: "正在提交…" })).toBeDisabled();
 	await expect(page.getByLabel("Agent 名称")).toBeDisabled();
-	await expect(page.getByRole("link", { name: "退出创建" })).toHaveCount(0);
-	const disabledExits = page.getByText("退出创建", { exact: true });
-	await expect(disabledExits).toHaveCount(2);
+	await expect(page.getByRole("link", { name: "取消" })).toHaveCount(0);
+	const disabledExits = page.getByText("取消", { exact: true });
+	await expect(disabledExits).toHaveCount(1);
 	for (const exit of await disabledExits.all()) {
 		await expect(exit).toHaveAttribute("aria-disabled", "true");
 		expect(await exit.evaluate((element) => element.tabIndex)).toBe(-1);
@@ -786,12 +796,12 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await expect(
 		page.getByRole("link", { name: "查看申请详情", exact: true }),
 	).toHaveAttribute("href", "/my-agents/application-browser-1");
-	await expect(page.getByRole("link", { name: "退出创建" })).toHaveCount(1);
-	await capture(page, info, "create-header-exit-success");
-	await page
-		.locator("main header.page-heading")
-		.getByRole("link", { name: "退出创建", exact: true })
-		.click();
+	await expect(page.getByText("退出创建", { exact: true })).toHaveCount(0);
+	await expect(
+		page.locator("main header.page-heading").locator("a, button"),
+	).toHaveCount(0);
+	await capture(page, info, "create-result-return");
+	await page.getByRole("link", { name: "返回我的 Agent", exact: true }).click();
 	await expect(page).toHaveURL(/\/my-agents$/);
 	await page.getByRole("link", { name: /^查看申请：/ }).click();
 	await page.getByRole("link", { name: "修改申请" }).click();
@@ -940,11 +950,11 @@ test("authorization rejection keeps non-sensitive input and clears Secret", asyn
 	await expect(page.getByLabel("替换值")).toHaveCount(0);
 	expect(api.commands).toHaveLength(1);
 	await capture(page, info, "application-authorization-rejected");
-	const headerExit = page
-		.locator("main header.page-heading")
-		.getByRole("link", { name: "退出创建", exact: true });
-	await expect(headerExit).toHaveAttribute("href", "/my-agents");
-	await headerExit.focus();
+	const footerCancel = page
+		.locator("main form .form-footer")
+		.getByRole("link", { name: "取消", exact: true });
+	await expect(footerCancel).toHaveAttribute("href", "/my-agents");
+	await footerCancel.focus();
 	await page.keyboard.press("Enter");
 	await expect(page).toHaveURL(/\/my-agents$/);
 	await expect(
@@ -1332,7 +1342,7 @@ test("my Agent tabs and their panel show the shared focus ring", async ({
 	test.skip(info.project.name !== "desktop", "Keyboard focus walk");
 	await fixture(page, "owner");
 	await page.goto("/my-agents");
-	const tab = page.getByRole("tab", { name: "申请", exact: true });
+	const tab = page.getByRole("tab", { name: "申请 1", exact: true });
 	await tab.focus();
 	await page.keyboard.press("ArrowRight");
 	await page.keyboard.press("ArrowLeft");
@@ -1384,12 +1394,20 @@ for (const viewport of [
 				path: "/agents/agent-pilot-1/configuration",
 				actions: ["返回 Agent 详情"],
 			},
-			{ path: "/my-agents/application-browser-1", actions: ["返回我的 Agent"] },
-			{ path: "/my-agents/new", actions: ["退出创建"] },
+			{
+				path: "/my-agents/application-browser-1",
+				actions: ["返回我的 Agent", "修改申请", "撤回申请"],
+			},
+			{ path: "/my-agents/new", actions: [] },
 		]) {
 			await page.goto(path);
 			const heading = page.locator("main .page-heading").first();
 			await expect(heading).toBeVisible();
+			// N-03：创建申请页头没有任何操作。
+			if (actions.length === 0) {
+				await expect(page.getByLabel("Agent 名称")).toBeVisible();
+				await expect(heading.locator("a, button")).toHaveCount(0);
+			}
 			await expect(page.locator(".platform-topbar")).toHaveCSS(
 				"padding-left",
 				narrow ? "12px" : "18px",
@@ -1404,7 +1422,8 @@ for (const viewport of [
 			);
 			for (const name of actions) {
 				const action = heading
-					.locator('[data-slot="button"], a[class~="group/button"]')
+					// 撤回申请是 ConfirmDialog 触发器（data-slot=dialog-trigger），按按钮类名匹配。
+					.locator('[data-slot="button"], [class~="group/button"]')
 					.filter({ hasText: name });
 				await expect(action).toHaveCount(1);
 				const width = (await action.boundingBox())?.width ?? 0;
@@ -1586,15 +1605,17 @@ test("owned Agent tab consumes the authorized collection and supports keyboard n
 }, info) => {
 	await fixture(page);
 	await page.goto("/my-agents");
-	const applications = page.getByRole("tab", { name: "申请", exact: true });
+	const applications = page.getByRole("tab", { name: "申请 1", exact: true });
 	await applications.focus();
 	await page.keyboard.press("ArrowRight");
-	await expect(page.getByRole("tab", { name: "已创建 Agent" })).toBeFocused();
+	await expect(
+		page.getByRole("tab", { name: "已创建", exact: true }),
+	).toBeFocused();
 	await expect(
 		page.getByRole("list", { name: "我管理的 Agent" }),
 	).toContainText("Release assistant");
 	await capture(page, info, "owned-agents");
-	await page.getByRole("link", { name: "配置与管理" }).click();
+	await page.getByRole("link", { name: "配置与生命周期" }).click();
 	await expect(page).toHaveURL(/\/agents\/agent-pilot-1\/configuration$/);
 });
 
@@ -1603,14 +1624,16 @@ test("employee collection is not presented as owned Agents", async ({
 }) => {
 	await fixture(page, "employee");
 	await page.goto("/my-agents");
-	await page.getByRole("tab", { name: "已创建 Agent" }).click();
+	await page.getByRole("tab", { name: "已创建", exact: true }).click();
 	// 空态标题按设计改为 strong（B-11），不再是 heading。
 	const empty = page.locator('[data-slot="empty"]', {
 		hasText: "暂无你管理的 Agent",
 	});
 	await expect(empty).toBeVisible();
 	await expect(empty.getByRole("heading")).toHaveCount(0);
-	await expect(page.getByRole("link", { name: "配置与管理" })).toHaveCount(0);
+	await expect(page.getByRole("link", { name: "配置与生命周期" })).toHaveCount(
+		0,
+	);
 });
 
 test("retryable management reads recover through explicit browser actions", async ({
@@ -1639,7 +1662,7 @@ test("retryable management reads recover through explicit browser actions", asyn
 	await expect(page.getByRole("link", { name: "查看申请" })).toBeVisible();
 	api.unavailableAgentList();
 	await page.reload();
-	await page.getByRole("tab", { name: "已创建 Agent" }).click();
+	await page.getByRole("tab", { name: "已创建", exact: true }).click();
 	await expect(page.getByRole("alert")).toContainText(
 		"暂时无法读取你管理的 Agent，请稍后重试。",
 	);
@@ -1810,7 +1833,7 @@ test("owned Agent authorization failures do not offer a retry action", async ({
 	const api = await fixture(page);
 	api.unauthorizedOwnedAgentList();
 	await page.goto("/my-agents");
-	await page.getByRole("tab", { name: "已创建 Agent" }).click();
+	await page.getByRole("tab", { name: "已创建", exact: true }).click();
 	await expect(page.getByRole("alert")).toContainText(
 		"当前无法查看你管理的 Agent，请联系管理员。",
 	);
@@ -2369,12 +2392,10 @@ for (const route of [
 				route.replaceAll("/", "-") || "workbench",
 			);
 			if (route === "/my-agents") {
-				await page
-					.getByRole("tab", { name: "已创建 Agent", exact: true })
-					.click();
+				await page.getByRole("tab", { name: "已创建", exact: true }).click();
 				await expect(page.locator(".owned-agent-card").first()).toBeVisible();
 				await captureDesignContract(page, info, "my-agents-owned");
-				await page.getByRole("tab", { name: "申请", exact: true }).click();
+				await page.getByRole("tab", { name: "申请 1", exact: true }).click();
 			}
 		}
 	});
@@ -2939,8 +2960,8 @@ test("my Agent tabs use one underline style with pointer cursor and body-size pa
 }) => {
 	await fixture(page);
 	await page.goto("/my-agents");
-	const applications = page.getByRole("tab", { name: "申请", exact: true });
-	const owned = page.getByRole("tab", { name: "已创建 Agent" });
+	const applications = page.getByRole("tab", { name: "申请 1", exact: true });
+	const owned = page.getByRole("tab", { name: "已创建", exact: true });
 	await expect(applications).toHaveAttribute("aria-selected", "true");
 	for (const tab of [applications, owned]) {
 		expect(await computed(tab, ["fontSize", "fontWeight", "cursor"])).toEqual({
@@ -2985,7 +3006,7 @@ test("an unselected my Agent tab turns foreground on hover", async ({
 	test.skip(info.project.name !== "desktop", "Hover needs a pointer device");
 	await fixture(page);
 	await page.goto("/my-agents");
-	const owned = page.getByRole("tab", { name: "已创建 Agent" });
+	const owned = page.getByRole("tab", { name: "已创建", exact: true });
 	await owned.hover();
 	await expect
 		.poll(async () => (await computed(owned, ["color"])).color)
@@ -3318,7 +3339,7 @@ test("empty states use the design surface and a non-display title", async ({
 }) => {
 	await fixture(page, "employee");
 	await page.goto("/my-agents");
-	await page.getByRole("tab", { name: "已创建 Agent" }).click();
+	await page.getByRole("tab", { name: "已创建", exact: true }).click();
 	const empty = page.locator('[data-slot="empty"]', {
 		hasText: "暂无你管理的 Agent",
 	});

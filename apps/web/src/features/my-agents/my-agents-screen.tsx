@@ -1,11 +1,29 @@
 import { Link } from "@tanstack/react-router";
-import { Plus, RefreshCw } from "lucide-react";
-import { useId } from "react";
-import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
+import {
+	ArrowRight,
+	Bot,
+	Inbox,
+	Plus,
+	RefreshCw,
+	Settings2,
+} from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import {
+	Alert,
+	AlertAction,
+	AlertDescription,
+	AlertTitle,
+} from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
+import {
+	Empty,
+	EmptyDescription,
+	EmptyHeader,
+	EmptyMedia,
+	EmptyTitle,
+} from "@/components/ui/empty";
 import { LoadingLine } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Timestamp } from "@/components/ui/timestamp";
@@ -33,6 +51,11 @@ import {
 	type MyAgentApplicationsState,
 } from "./my-agent-applications.js";
 
+export type MyAgentsTab = "applications" | "owned";
+
+/** 申请列表每次渲染的条数；超过时由「显示更多申请」逐批追加。 */
+export const myAgentApplicationsPageSize = 20;
+
 type MyAgentsScreenProps = {
 	state: MyAgentApplicationsState | { kind: "loading" };
 	/** The caller supplies Agents for which the current session is an Owner. */
@@ -44,7 +67,23 @@ type MyAgentsScreenProps = {
 	onRetryOwnedAgents?: () => void;
 	retryingApplications?: boolean;
 	retryingOwnedAgents?: boolean;
+	/** 由路由的 search 参数提供；未提供时页面自己记住当前 Tab。 */
+	tab?: MyAgentsTab;
+	onTabChange?: (tab: MyAgentsTab) => void;
 };
+
+/** 已创建 Agent 卡只显示一个状态：有服务可用性时显示它，否则显示管理状态（与 Agent 详情一致）。 */
+function ownedAgentStatus(agent: AgentProjectionV2) {
+	return agent.serviceAvailability
+		? {
+				label: agentServiceAvailabilityLabel(agent.serviceAvailability),
+				tone: statusTone(agent.serviceAvailability),
+			}
+		: {
+				label: agentManagementStatusLabels[agent.managementStatus],
+				tone: statusTone(agent.managementStatus),
+			};
+}
 
 export function MyAgentsScreen({
 	state,
@@ -56,12 +95,33 @@ export function MyAgentsScreen({
 	onRetryOwnedAgents,
 	retryingApplications = false,
 	retryingOwnedAgents = false,
+	tab,
+	onTabChange,
 }: MyAgentsScreenProps) {
 	const id = useId();
+	const [localTab, setLocalTab] = useState<MyAgentsTab>("applications");
+	const selectedTab = tab ?? localTab;
+	const [visibleApplications, setVisibleApplications] = useState(
+		myAgentApplicationsPageSize,
+	);
+	// 追加后把焦点移到新出现的第一行，避免键盘用户回到列表开头。
+	const [focusRow, setFocusRow] = useState<number | null>(null);
+	const listRef = useRef<HTMLUListElement>(null);
+	useEffect(() => {
+		if (focusRow === null) return;
+		listRef.current
+			?.querySelectorAll<HTMLElement>(".application-row")
+			[focusRow]?.querySelector<HTMLElement>("[data-application-detail]")
+			?.focus();
+		setFocusRow(null);
+	}, [focusRow]);
 	// 同一页面的全部使用范围合并后读取一次目录。
 	const names = useAvailabilityNames(
 		(ownedAgents ?? []).flatMap((agent) => agent.configuration.availability),
 	);
+	const applications = state.kind === "ready" ? state.applications : [];
+	const shownApplications = applications.slice(0, visibleApplications);
+	const remainingApplications = applications.length - shownApplications.length;
 	return (
 		<section aria-labelledby={`${id}-heading`}>
 			<header className="page-heading">
@@ -75,10 +135,27 @@ export function MyAgentsScreen({
 					新建申请
 				</Link>
 			</header>
-			<Tabs defaultValue="applications">
+			<Tabs
+				value={selectedTab}
+				onValueChange={(value) => {
+					const next: MyAgentsTab =
+						value === "owned" ? "owned" : "applications";
+					setLocalTab(next);
+					onTabChange?.(next);
+				}}
+			>
 				<TabsList activateOnFocus aria-label="我的 Agent 视图">
-					<TabsTrigger value="applications">申请</TabsTrigger>
-					<TabsTrigger value="agents">已创建 Agent</TabsTrigger>
+					<TabsTrigger value="applications">
+						{/* 计数只在申请读取成功后出现；空格让可访问名称读作「申请 N」。 */}
+						申请
+						{state.kind === "ready" ? (
+							<>
+								{" "}
+								<Badge tone="gray">{applications.length}</Badge>
+							</>
+						) : null}
+					</TabsTrigger>
+					<TabsTrigger value="owned">已创建</TabsTrigger>
 				</TabsList>
 				<TabsContent value="applications">
 					{state.kind === "loading" ? (
@@ -104,87 +181,137 @@ export function MyAgentsScreen({
 								</AlertAction>
 							) : null}
 						</Alert>
-					) : state.applications.length === 0 ? (
-						<Empty>
-							<EmptyTitle>暂无 Agent 申请</EmptyTitle>
-							<EmptyDescription>
-								提交申请后，可在这里查看审批与创建进度。
-							</EmptyDescription>
-						</Empty>
 					) : (
-						<ul className="application-list" aria-label="我的申请">
-							{state.applications.map((application) => {
-								const editAction = getAgentApplicationEditAction(application);
-								return (
-									<li
-										className="application-row"
-										key={application.applicationId}
+						<>
+							{applications.length === 0 ? (
+								<Empty>
+									<EmptyHeader>
+										<EmptyMedia>
+											<Inbox aria-hidden="true" />
+										</EmptyMedia>
+										<EmptyTitle>暂无 Agent 申请</EmptyTitle>
+										<EmptyDescription>
+											提交申请后，可在这里查看审批与创建进度。
+										</EmptyDescription>
+									</EmptyHeader>
+								</Empty>
+							) : (
+								<>
+									<ul
+										className="application-list"
+										aria-label="我的申请"
+										ref={listRef}
 									>
-										<div className="min-w-0 flex-1">
-											<div className="tag-row">
-												<Badge tone={statusTone(application.status)}>
-													{agentManagementStatusLabels[application.status]}
-												</Badge>
-												<Badge variant="tag">
-													{application.source.kind === "standard"
-														? application.source.templateId
-														: agentConversationSourceLabel(application)}
-												</Badge>
-											</div>
-											{/* 设计稿标题不是链接，入口为同行的「查看申请」（≥44px）。 */}
-											<h2>{application.name}</h2>
-											<p>{application.description}</p>
-											<p className="text-sm">
-												提交于 <Timestamp value={application.submittedAt} />
-											</p>
-										</div>
+										{shownApplications.map((application) => {
+											const editAction =
+												getAgentApplicationEditAction(application);
+											return (
+												<li
+													className="application-row"
+													key={application.applicationId}
+												>
+													<div className="min-w-0 flex-1">
+														<div className="tag-row">
+															<Badge tone={statusTone(application.status)}>
+																{
+																	agentManagementStatusLabels[
+																		application.status
+																	]
+																}
+															</Badge>
+															<Badge variant="tag">
+																{application.source.kind === "standard"
+																	? application.source.templateId
+																	: agentConversationSourceLabel(application)}
+															</Badge>
+														</div>
+														{/* 设计稿标题不是链接，详情入口只有同行的「查看申请」。 */}
+														<h2>{application.name}</h2>
+														{/* 契约只有提交时间，没有更新时间，因此写「提交于」。 */}
+														<p>
+															{application.description} · 提交于{" "}
+															<Timestamp value={application.submittedAt} />
+														</p>
+													</div>
 
-										<div className="actions">
-											<Link
-												className={buttonVariants({ variant: "ghost" })}
-												params={{ applicationId: application.applicationId }}
-												to="/my-agents/$applicationId"
-												aria-label={withObjectName(
-													"查看申请",
-													application.name,
-												)}
-											>
-												查看申请
-											</Link>
-											{editAction ? (
-												<Link
-													className={buttonVariants({ variant: "outline" })}
-													params={{ applicationId: application.applicationId }}
-													to="/my-agents/$applicationId/edit"
-													aria-label={withObjectName(
-														agentApplicationEditActionLabels[editAction],
-														application.name,
-													)}
-												>
-													{agentApplicationEditActionLabels[editAction]}
-												</Link>
-											) : null}
-											{hasCreatedAgent(application) ? (
-												<Link
-													className={buttonVariants({ variant: "link" })}
-													params={{ agentId: application.agentId }}
-													to="/agents/$agentId"
-													aria-label={withObjectName(
-														"查看 Agent",
-														application.name,
-													)}
-												>
-													查看 Agent
-												</Link>
-											) : null}
-										</div>
-									</li>
-								);
-							})}
-						</ul>
+													<div className="actions">
+														<Link
+															className={buttonVariants({ variant: "ghost" })}
+															data-application-detail=""
+															params={{
+																applicationId: application.applicationId,
+															}}
+															to="/my-agents/$applicationId"
+															aria-label={withObjectName(
+																"查看申请",
+																application.name,
+															)}
+														>
+															查看申请
+														</Link>
+														{editAction ? (
+															<Link
+																className={buttonVariants({
+																	variant: "outline",
+																})}
+																params={{
+																	applicationId: application.applicationId,
+																}}
+																to="/my-agents/$applicationId/edit"
+																aria-label={withObjectName(
+																	agentApplicationEditActionLabels[editAction],
+																	application.name,
+																)}
+															>
+																{agentApplicationEditActionLabels[editAction]}
+															</Link>
+														) : null}
+														{hasCreatedAgent(application) ? (
+															<Link
+																className={buttonVariants({ variant: "link" })}
+																params={{ agentId: application.agentId }}
+																to="/agents/$agentId"
+																aria-label={withObjectName(
+																	"查看 Agent",
+																	application.name,
+																)}
+															>
+																查看 Agent
+															</Link>
+														) : null}
+													</div>
+												</li>
+											);
+										})}
+									</ul>
+									{remainingApplications > 0 ? (
+										<Button
+											variant="outline"
+											className="application-list-more"
+											onClick={() => {
+												setFocusRow(shownApplications.length);
+												setVisibleApplications(
+													(count) => count + myAgentApplicationsPageSize,
+												);
+											}}
+											type="button"
+										>
+											显示更多申请（剩余 {remainingApplications}）
+										</Button>
+									) : null}
+								</>
+							)}
+							{/* 设计 .notice：只在申请读取成功时出现在申请面板内、列表之后；静态说明不设 live 角色。 */}
+							<Alert tone="info" className="my-agents-note">
+								<AlertTitle>审批记录会保留</AlertTitle>
+								<AlertDescription>
+									驳回后可以修改范围或模型，再次提交申请。
+								</AlertDescription>
+							</Alert>
+						</>
 					)}
 				</TabsContent>
-				<TabsContent value="agents">
+				<TabsContent value="owned">
 					{ownedAgentsLoading ? (
 						<LoadingLine className="py-8">正在读取你管理的 Agent…</LoadingLine>
 					) : ownedAgentsUnavailable ? (
@@ -216,92 +343,102 @@ export function MyAgentsScreen({
 						</p>
 					) : ownedAgents.length === 0 ? (
 						<Empty>
-							<EmptyTitle>暂无你管理的 Agent</EmptyTitle>
-							<EmptyDescription>
-								你担任 Owner 的 Agent 会显示在这里。
-							</EmptyDescription>
+							<EmptyHeader>
+								<EmptyMedia>
+									<Bot aria-hidden="true" />
+								</EmptyMedia>
+								<EmptyTitle>暂无你管理的 Agent</EmptyTitle>
+								<EmptyDescription>
+									你担任 Owner 的 Agent 会显示在这里。
+								</EmptyDescription>
+							</EmptyHeader>
 						</Empty>
 					) : (
 						<>
 							<DirectoryReadAlert names={[names]} className="mb-4" />
 							<ul className="owned-agent-grid" aria-label="我管理的 Agent">
-								{ownedAgents.map((agent) => (
-									<Card
-										render={<li />}
-										className="owned-agent-card"
-										key={agent.agentId}
-									>
-										<div className="owned-card-heading">
-											<AgentMark name={agent.name} agentId={agent.agentId} />
-											<div>
-												<h2>{agent.name}</h2>
-												<p>
-													Owner ·{" "}
-													{agent.configuration.owners
-														.map(
-															(owner) =>
-																formatPerson({ displayName: owner.displayName })
-																	.name,
-														)
-														.join("、")}
-												</p>
+								{ownedAgents.map((agent) => {
+									const status = ownedAgentStatus(agent);
+									return (
+										<Card
+											render={<li />}
+											className="owned-agent-card"
+											key={agent.agentId}
+										>
+											<div className="owned-card-heading">
+												<AgentMark name={agent.name} agentId={agent.agentId} />
+												<div>
+													<h2>{agent.name}</h2>
+													<p>
+														Owner ·{" "}
+														{agent.configuration.owners
+															.map(
+																(owner) =>
+																	formatPerson({
+																		displayName: owner.displayName,
+																	}).name,
+															)
+															.join("、")}
+													</p>
+												</div>
+												<Badge tone={status.tone}>{status.label}</Badge>
 											</div>
-											<Badge tone={statusTone(agent.managementStatus)}>
-												{agentManagementStatusLabels[agent.managementStatus]}
-											</Badge>
-										</div>
-										{agent.serviceAvailability && (
-											<Badge tone={statusTone(agent.serviceAvailability)}>
-												服务：
-												{agentServiceAvailabilityLabel(
-													agent.serviceAvailability,
-												)}
-											</Badge>
-										)}
-										<dl className="metadata-facts">
-											<dt>可用范围</dt>
-											<dd>
-												<AvailabilityNameList
-													targets={agent.configuration.availability}
-													names={names}
-													empty="未额外指定"
-												/>
-											</dd>
-											<dt>渠道</dt>
-											<dd>
-												{agent.configuration.channels
-													.map(
-														(channel) => agentChannelKindLabels[channel.kind],
-													)
-													.join("、") || "未配置"}
-											</dd>
-											<dt>模型</dt>
-											<dd>
-												{agent.configuration.modelOptions
-													.map((model) => model.displayName)
-													.join("、") || "未提供模型选项"}
-											</dd>
-										</dl>
-										<div className="actions">
-											<Link
-												className={buttonVariants({ variant: "outline" })}
-												params={{ agentId: agent.agentId }}
-												to="/agents/$agentId/configuration"
-												aria-label={withObjectName("配置与管理", agent.name)}
-											>
-												配置与管理
-											</Link>
-											<Link
-												className={buttonVariants({ variant: "ghost" })}
-												params={{ agentId: agent.agentId }}
-												to="/agents/$agentId"
-												aria-label={withObjectName("查看详情", agent.name)}
-											>
-												查看详情
-											</Link>
-										</div>
-									</Card>
-								))}
+											<dl className="metadata-facts">
+												<dt>可用范围</dt>
+												<dd>
+													<AvailabilityNameList
+														targets={agent.configuration.availability}
+														names={names}
+														empty="未额外指定"
+													/>
+												</dd>
+												<dt>渠道</dt>
+												<dd>
+													{agent.configuration.channels
+														.map(
+															(channel) => agentChannelKindLabels[channel.kind],
+														)
+														.join("、") || "未配置"}
+												</dd>
+												<dt>模型</dt>
+												<dd>
+													{agent.configuration.modelOptions
+														.map((model) => model.displayName)
+														.join("、") || "未提供模型选项"}
+												</dd>
+											</dl>
+											<div className="card-actions">
+												<Link
+													className={buttonVariants({ variant: "outline" })}
+													params={{ agentId: agent.agentId }}
+													to="/agents/$agentId/configuration"
+													aria-label={withObjectName(
+														"配置与生命周期",
+														agent.name,
+													)}
+												>
+													<Settings2
+														aria-hidden="true"
+														data-icon="inline-start"
+													/>
+													配置与生命周期
+												</Link>
+												<Link
+													className={buttonVariants({ variant: "ghost" })}
+													params={{ agentId: agent.agentId }}
+													to="/agents/$agentId"
+													aria-label={withObjectName("查看详情", agent.name)}
+												>
+													<ArrowRight
+														aria-hidden="true"
+														data-icon="inline-start"
+													/>
+													查看详情
+												</Link>
+											</div>
+										</Card>
+									);
+								})}
 							</ul>
 						</>
 					)}
