@@ -2225,8 +2225,10 @@ body {
 	}
 }
 
-/* 个人 Relay Key 与 API 凭证（设计 .surface.surface-pad.section、.roadmap-card、.credential-table）。 */
-.settings-surface {
+/* 个人 Relay Key 与 API 凭证（设计 .surface.surface-pad.section、.roadmap-card、.credential-table）。
+   评测页的分段卡（设计 #eval section.surface.surface-pad.section）共用同一外框。 */
+.settings-surface,
+.evaluation-surface {
 	min-width: 0;
 	margin-top: 32px;
 	padding: 20px;
@@ -2236,6 +2238,34 @@ body {
 }
 .settings-status {
 	margin-bottom: 14px;
+}
+/* 评测分段（设计 .eval-tabs / .eval-tab，R-03）：分段在卡内，不是下划线 Tab。 */
+.evaluation-tabs {
+	gap: 4px;
+	margin-bottom: 14px;
+	border-bottom: 0;
+}
+.evaluation-tab {
+	min-height: 42px;
+	margin-right: 0;
+	padding: 8px 12px;
+	border: 1px solid transparent;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 400;
+}
+.evaluation-tab[aria-selected="true"] {
+	border-color: var(--border);
+	background: var(--surface-raised);
+	color: var(--foreground);
+	font-weight: 650;
+}
+.management-content .evaluation-note {
+	margin-top: 14px;
+	color: var(--muted-ink);
+	font-size: 11px;
 }
 .settings-form-grid {
 	display: grid;
@@ -2301,6 +2331,7 @@ body {
 }
 @media (max-width: 767px) {
 	.settings-surface,
+	.evaluation-surface,
 	.roadmap-grid {
 		margin-top: 26px;
 	}
