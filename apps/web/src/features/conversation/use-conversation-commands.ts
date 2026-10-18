@@ -149,8 +149,7 @@ export function useConversationCommands({
 			scope.active &&
 			!scope.denied &&
 			scope.attempt !== undefined &&
-			!scope.attempt.pending &&
-			scope.attempt.command.kind !== "create",
+			!scope.attempt.pending,
 		result: visible ? mutation.data : undefined,
 		revoke,
 		confirmDenied,

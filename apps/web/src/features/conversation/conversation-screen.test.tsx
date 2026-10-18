@@ -1647,6 +1647,57 @@ describe("functional conversation screen", () => {
 		expect(onViewChange).toHaveBeenLastCalledWith("history");
 	});
 
+	it("keeps an uncertain new conversation recoverable without changing its idempotency key", async () => {
+		let createAttempts = 0;
+		const { props, requests } = setup(
+			(request) => {
+				const path = new URL(request.url).pathname;
+				if (
+					request.method === "POST" &&
+					path.endsWith("/agents/agent-1/conversations")
+				) {
+					createAttempts += 1;
+					if (createAttempts === 1)
+						return Promise.reject(new TypeError("offline"));
+					return Response.json(history().conversation, { status: 201 });
+				}
+				if (
+					request.method === "POST" &&
+					path === "/api/v1/conversations/conversation-1/messages"
+				)
+					return receipt();
+			},
+			{ conversationId: undefined },
+		);
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Keep this first task" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		const verify = await screen.findByRole("button", { name: "核实原请求" });
+		expect(input.value).toBe("Keep this first task");
+		expect(createAttempts).toBe(1);
+		fireEvent.click(verify);
+		await waitFor(() =>
+			expect(props.onConversationChange).toHaveBeenCalledWith("conversation-1"),
+		);
+		const creates = requests.filter(
+			(request) =>
+				request.method === "POST" &&
+				new URL(request.url).pathname.endsWith("/agents/agent-1/conversations"),
+		);
+		expect(creates).toHaveLength(2);
+		expect(creates[1]?.headers.get("Idempotency-Key")).toBe(
+			creates[0]?.headers.get("Idempotency-Key"),
+		);
+		expect(
+			requests.filter(
+				(request) =>
+					request.method === "POST" &&
+					new URL(request.url).pathname ===
+						"/api/v1/conversations/conversation-1/messages",
+			),
+		).toHaveLength(1);
+	});
+
 	it("creates a durable conversation and refreshes recent history before navigating", async () => {
 		let created = false;
 		const { props, requests } = setup(
