@@ -132,7 +132,6 @@ export async function captureDesignContract(
 		const surface = firstVisible([
 			"main .directory-card",
 			"main .owned-agent-card",
-			"main .surface-card",
 			"main .workbench-attention",
 			"main .workbench-applications",
 			"main .agent-detail-panel",
@@ -197,7 +196,7 @@ export async function captureDesignContract(
 				).length,
 				tables: document.querySelectorAll('main [data-slot="table"]').length,
 				cards: document.querySelectorAll(
-					'main .directory-card, main .owned-agent-card, main .record-row, main .application-row, main .surface-card, main .workbench-attention, main .workbench-applications, main .agent-detail-panel, main .application-form-card, main .audit-detail-panel, main .state-card, main [data-slot="empty"], main [data-slot="alert"], main .connection-notice, main .browser-capability-card',
+					'main .directory-card, main .owned-agent-card, main .record-row, main .application-row, main .workbench-attention, main .workbench-applications, main .agent-detail-panel, main .application-form-card, main .audit-detail-panel, main .state-card, main [data-slot="empty"], main [data-slot="alert"], main .connection-notice, main .browser-capability-card',
 				).length,
 				headings: document.querySelectorAll("main h1, main h2, main h3").length,
 			},
