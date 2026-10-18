@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LoadingLine } from "@/components/ui/spinner";
 import { Timestamp } from "@/components/ui/timestamp";
+import { withObjectName } from "@/lib/accessible-name";
 import type { ApplicationMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	type PersonalApiCredentialScope,
@@ -400,7 +401,10 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 								<Button
 									variant="outline"
 									type="button"
-									aria-label={`${props.isDisabling ? "正在停用…" : "停用应用"} ${application.name}`}
+									aria-label={withObjectName(
+										props.isDisabling ? "正在停用…" : "停用应用",
+										application.name,
+									)}
 								>
 									<ShieldOff aria-hidden="true" />
 									{props.isDisabling ? "正在停用…" : "停用应用"}

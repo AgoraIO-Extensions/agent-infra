@@ -164,7 +164,7 @@ describe("ApplicationManagementScreen", () => {
 			/>,
 		);
 		const trigger = screen.getByRole("button", {
-			name: "停用应用 Build service",
+			name: "停用应用：Build service",
 		});
 		expect(trigger.className).not.toContain("bg-destructive");
 		fireEvent.click(trigger);

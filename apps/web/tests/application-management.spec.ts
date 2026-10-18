@@ -330,7 +330,7 @@ test("disabling an application is confirmed before one PATCH and returns focus t
 		`/my-settings/api-credentials?applicationId=${application.applicationId}`,
 	);
 	const trigger = page.getByRole("button", {
-		name: `停用应用 ${application.name}`,
+		name: `停用应用：${application.name}`,
 		exact: true,
 	});
 	await expect(trigger).toBeVisible();

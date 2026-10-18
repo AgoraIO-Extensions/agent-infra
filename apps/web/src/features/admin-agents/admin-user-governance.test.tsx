@@ -88,8 +88,8 @@ describe("Administrator employee access control", () => {
 		).toBe("false");
 		expect(screen.queryByRole("listbox")).toBeNull();
 		await screen.findByText("当前状态：未禁用");
-		// 触发按钮的可访问名称带上所选员工（F-11：「禁用员工 {姓名}」）。
-		const trigger = screen.getByRole("button", { name: "禁用员工 Alice" });
+		// 触发按钮的可访问名称带上所选员工（F-11：「禁用员工：{姓名}」）。
+		const trigger = screen.getByRole("button", { name: "禁用员工：Alice" });
 		expect(trigger.textContent).toBe("禁用员工");
 		// 禁用先确认对象与后果：打开与取消都不发请求。
 		fireEvent.click(trigger);
@@ -101,7 +101,7 @@ describe("Administrator employee access control", () => {
 		fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 		expect(setPlatformUserDisabledV2).not.toHaveBeenCalled();
-		fireEvent.click(screen.getByRole("button", { name: "禁用员工 Alice" }));
+		fireEvent.click(screen.getByRole("button", { name: "禁用员工：Alice" }));
 		dialog = await screen.findByRole("dialog", { name: "禁用这名员工？" });
 		fireEvent.click(within(dialog).getByRole("button", { name: "禁用员工" }));
 		fireEvent.click(within(dialog).getByRole("button", { name: "禁用员工" }));
@@ -140,7 +140,9 @@ describe("Administrator employee access control", () => {
 		await screen.findByText(/操作未确认/);
 		expect(screen.queryByRole("dialog")).toBeNull();
 		expect(screen.getByRole("alert").textContent).toContain("操作未确认");
-		expect(screen.getByRole("button", { name: "禁用员工 Alice" })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "禁用员工：Alice" }),
+		).toBeTruthy();
 		expect(screen.getByRole("button", { name: "解除禁用" })).toBeTruthy();
 	});
 });
