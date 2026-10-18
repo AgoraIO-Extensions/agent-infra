@@ -808,6 +808,18 @@ a[class~="group/button"] {
 	.management-content [data-slot="table"] [data-slot="table-cell"] > * {
 		min-width: 0;
 	}
+	.management-content .approval-table [data-slot="table-cell"] {
+		display: block;
+		text-align: left;
+	}
+	.management-content .approval-table [data-slot="table-cell"]::before {
+		display: block;
+		margin-bottom: 4px;
+	}
+	.management-content .approval-table [data-slot="table-cell"] > * {
+		display: block;
+		max-width: 100%;
+	}
 }
 
 @media (max-width: 374px) {
