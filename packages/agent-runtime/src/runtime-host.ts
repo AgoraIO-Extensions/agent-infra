@@ -1300,14 +1300,13 @@ export class RuntimeHost {
 	 * native metadata; it does not create or renew a Runtime Session.
 	 */
 	async resolveNativeMetadataSessionRef(
-		reference: RuntimeOriginalExecutionRef,
+		reference: NativeMetadataObjectScopeV1,
 		hostSessionRef: string,
 	) {
 		this.trustedHost();
 		return this.options.store.resolveNativeSessionRefForOriginalExecution(
 			reference,
 			hostSessionRef,
-			this.options.grantValidationV2?.now ?? Date.now,
 		);
 	}
 
@@ -1924,7 +1923,11 @@ export class RuntimeHost {
 		} catch {
 			nativeMetadataReadDenied();
 		}
-		const { proof: _proof, ...identity } = request;
+		const {
+			proof: _proof,
+			apiRequestSourceRef: _source,
+			...identity
+		} = request;
 		const response = RuntimeNativeMetadataReadResponseV1Schema.safeParse({
 			...identity,
 			projection: parsedProjection.data,

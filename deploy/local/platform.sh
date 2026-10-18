@@ -232,6 +232,29 @@ read_native_metadata_worker_route() {
   }
 }
 
+# 终止一个后台进程并等它退出，最多约 2 秒，避免新的转发复用端口时撞上旧进程。
+# 由 start_detached 启动的进程是自己进程组的组长，按进程组终止，连同监督循环正在运行的
+# kubectl / sleep 一起回收：监督循环刚启动 kubectl、还没记下子进程 PID 时收到 TERM，会漏掉
+# 这个子进程（#2741）。旧版脚本启动的进程不是组长，照旧只终止它本身。
+stop_detached() {
+  local pid=$1 target pgid state
+  # PID 文件损坏或被篡改为 0 / 负数时，`kill -- -0` 会向调用方自己的进程组发信号。
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 0
+  pgid=$(ps -p "$pid" -o pgid= 2>/dev/null | tr -d ' ')
+  target=$pid
+  [[ "$pgid" == "$pid" ]] && target=-$pid
+  kill -TERM -- "$target" >/dev/null 2>&1 || true
+  for _ in {1..40}; do
+    if [[ "$target" == -* ]]; then
+      kill -0 -- "$target" >/dev/null 2>&1 || return 0
+    else
+      state=$(ps -p "$pid" -o stat= 2>/dev/null || true)
+      [[ -z "$state" || "$state" == Z* ]] && return 0
+    fi
+    sleep 0.05
+  done
+}
+
 stop_native_metadata_forward() {
   local pid command
   if [[ -r "$native_metadata_forward_pid_file" ]]; then
@@ -239,15 +262,7 @@ stop_native_metadata_forward() {
     if [[ "$pid" =~ ^[0-9]+$ ]]; then
       command=$(ps -p "$pid" -o command= 2>/dev/null || true)
       if [[ "$command" == *"native-metadata-port-forward-supervisor"* ]]; then
-        kill "$pid" >/dev/null 2>&1 || true
-        # The supervisor owns the kubectl child. Wait until its trap has
-        # delivered TERM to that child before a new forward reuses the port.
-        for _ in {1..40}; do
-          local state
-          state=$(ps -p "$pid" -o stat= 2>/dev/null || true)
-          [[ -z "$state" || "$state" == Z* ]] && break
-          sleep 0.05
-        done
+        stop_detached "$pid"
       fi
     fi
   fi
@@ -256,7 +271,7 @@ stop_native_metadata_forward() {
     if [[ "$pid" =~ ^[0-9]+$ ]]; then
       command=$(ps -p "$pid" -o command= 2>/dev/null || true)
       if [[ "$command" == *"native-metadata-proxy.mjs"* ]]; then
-        kill "$pid" >/dev/null 2>&1 || true
+        stop_detached "$pid"
       fi
     fi
   fi
@@ -289,6 +304,25 @@ resolve_native_metadata_forward_bind_address() {
     return 1
   }
   printf '%s' "$address"
+}
+
+# 在新会话里启动一个长驻后台进程，标准输出与错误追加到日志，打印它的 PID（#2741）。
+# 用 `&` 启动的进程和调用方同属一个会话和进程组：终端关闭（SIGHUP）或执行器在命令结束时
+# 整组终止，都会让它们跟着退出。macOS 没有 setsid 命令，这里用 node 的 detached spawn
+# （setsid）脱离调用方；stop 仍按 PID 文件校验命令行后回收。
+start_detached() {
+  local log=$1
+  shift
+  node -e '
+    const { spawn } = require("node:child_process");
+    const { openSync } = require("node:fs");
+    const [log, command, ...args] = process.argv.slice(1);
+    const output = openSync(log, "a");
+    const child = spawn(command, args, { detached: true, stdio: ["ignore", output, output] });
+    if (!child.pid) process.exit(1);
+    child.unref();
+    process.stdout.write(String(child.pid));
+  ' "$log" "$@"
 }
 
 prepare_native_metadata_forward() {
@@ -353,7 +387,8 @@ prepare_native_metadata_forward() {
   # 会退出，之后 API 一直 503（#2726）。由监督循环有界退避地重启它；PID 文件记录监督循环，
   # stop 时它连同当前的 kubectl 一起退出。
   : > "$native_metadata_forward_log"
-  bash -c '
+  local pid
+  pid=$(start_detached "$native_metadata_forward_log" bash -c '
     child=
     sleeper=
     stop() {
@@ -376,9 +411,11 @@ prepare_native_metadata_forward() {
       sleeper=
       if [ "$delay" -lt 5 ]; then delay=$((delay + 1)); fi
     done
-  ' native-metadata-port-forward-supervisor "${kube_target[@]}" port-forward --address 127.0.0.1 "service/$native_metadata_service_name" "$forward_port:80" \
-    >>"$native_metadata_forward_log" 2>&1 </dev/null &
-  local pid=$!
+  ' native-metadata-port-forward-supervisor "${kube_target[@]}" port-forward --address 127.0.0.1 "service/$native_metadata_service_name" "$forward_port:80") || {
+    echo "Local native metadata Worker port-forward could not start" >&2
+    stop_native_metadata_forward
+    return 1
+  }
   printf '%s' "$pid" > "$native_metadata_forward_pid_file"
   # 等 kubectl 报告本地监听就绪；不在这里连接转发端口：每个连接都会让 kubectl 去连 Worker
   # 网关，网关还没监听时 kubectl 会退出（#2726）。
@@ -400,8 +437,12 @@ prepare_native_metadata_forward() {
     stop_native_metadata_forward
     return 1
   fi
-  node deploy/local/native-metadata-proxy.mjs "$native_metadata_forward_bind_address" "$port" "$forward_port" "$compose_subnet" >"$native_metadata_proxy_log" 2>&1 &
-  pid=$!
+  : > "$native_metadata_proxy_log"
+  pid=$(start_detached "$native_metadata_proxy_log" node deploy/local/native-metadata-proxy.mjs "$native_metadata_forward_bind_address" "$port" "$forward_port" "$compose_subnet") || {
+    echo "Local native metadata host proxy could not start" >&2
+    stop_native_metadata_forward
+    return 1
+  }
   printf '%s' "$pid" > "$native_metadata_proxy_pid_file"
   sleep 0.1
   if ! kill -0 "$pid" >/dev/null 2>&1; then
