@@ -57,11 +57,11 @@ it("requires takeover acknowledgement and clears the Secret before submitting th
 	fireEvent.change(screen.getByLabelText("Secret"), {
 		target: { value: "fixture-secret" },
 	});
-	fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
+	fireEvent.click(screen.getByRole("button", { name: "验证并绑定企微机器人" }));
 	expect(bodies).toHaveLength(0);
 	expect(screen.getByRole("alert").textContent).toContain("确认连接影响");
 	fireEvent.click(screen.getByRole("checkbox"));
-	fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
+	fireEvent.click(screen.getByRole("button", { name: "验证并绑定企微机器人" }));
 	expect((screen.getByLabelText("Secret") as HTMLInputElement).value).toBe("");
 	await waitFor(() =>
 		expect(bodies).toEqual([
@@ -87,7 +87,7 @@ it("explains unavailable QR without fabricating a successful binding", async () 
 	});
 	render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />);
 	fireEvent.click(screen.getByRole("checkbox"));
-	fireEvent.click(screen.getByRole("button", { name: "扫码授权" }));
+	fireEvent.click(screen.getByRole("button", { name: "扫码授权企微机器人" }));
 	await waitFor(() =>
 		expect(screen.getByRole("alert").textContent).toBe(
 			"扫码授权暂不可用，请使用下方手动配置。",
@@ -136,7 +136,7 @@ it("submits configured QR credentials only after takeover confirmation", async (
 	);
 	render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />);
 	fireEvent.click(screen.getByRole("checkbox"));
-	fireEvent.click(screen.getByRole("button", { name: "扫码授权" }));
+	fireEvent.click(screen.getByRole("button", { name: "扫码授权企微机器人" }));
 	await waitFor(() => expect(openPopup).toHaveBeenCalled());
 	window.dispatchEvent(
 		new MessageEvent("message", {
@@ -203,7 +203,9 @@ it.each([0, 408, 429, 500, 503])(
 			target: { value: "fixture" },
 		});
 		fireEvent.click(screen.getByRole("checkbox"));
-		fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "验证并绑定企微机器人" }),
+		);
 		await waitFor(() => expect(reads).toBe(1));
 		await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
 		expect(screen.queryByRole("alert")).toBeNull();
@@ -250,9 +252,11 @@ it("keeps the pending configuration when cancellation is unconfirmed", async () 
 		target: { value: "fixture" },
 	});
 	fireEvent.click(screen.getByRole("checkbox"));
-	fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
+	fireEvent.click(screen.getByRole("button", { name: "验证并绑定企微机器人" }));
 	await waitFor(() =>
-		expect(screen.getByRole("button", { name: "取消配置" })).toBeTruthy(),
+		expect(
+			screen.getByRole("button", { name: "取消企微机器人配置" }),
+		).toBeTruthy(),
 	);
 	// Wait for submission before testing cancellation.
 	await waitFor(() =>
@@ -261,12 +265,14 @@ it("keeps the pending configuration when cancellation is unconfirmed", async () 
 		),
 	);
 	await new Promise((resolve) => setTimeout(resolve, 20));
-	fireEvent.click(screen.getByRole("button", { name: "取消配置" }));
+	fireEvent.click(screen.getByRole("button", { name: "取消企微机器人配置" }));
 	await waitFor(() =>
 		expect(screen.getByRole("alert").textContent).toContain("取消结果未确认"),
 	);
 	await waitFor(() => expect(setupReads).toBeGreaterThan(2));
-	expect(screen.getByRole("button", { name: "取消配置" })).toBeTruthy();
+	expect(
+		screen.getByRole("button", { name: "取消企微机器人配置" }),
+	).toBeTruthy();
 });
 it("ignores a late cancellation response after switching Agents", async () => {
 	client.setConfig({ baseUrl: "https://platform.test" });
@@ -310,11 +316,13 @@ it("ignores a late cancellation response after switching Agents", async () => {
 		target: { value: "fixture" },
 	});
 	fireEvent.click(screen.getByRole("checkbox"));
-	fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
+	fireEvent.click(screen.getByRole("button", { name: "验证并绑定企微机器人" }));
 	await waitFor(() =>
-		expect(screen.getByRole("button", { name: "取消配置" })).toBeTruthy(),
+		expect(
+			screen.getByRole("button", { name: "取消企微机器人配置" }),
+		).toBeTruthy(),
 	);
-	fireEvent.click(screen.getByRole("button", { name: "取消配置" }));
+	fireEvent.click(screen.getByRole("button", { name: "取消企微机器人配置" }));
 	await cancelRequest;
 	rendered.rerender(<WecomBotSetup agentId="agent-b" onUnbind={vi.fn()} />);
 	cancellation.resolve(Response.json({ status: "cancelled" }));
@@ -333,7 +341,7 @@ it("clears a previously connected status when refresh fails", async () => {
 	render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />);
 	await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
 	online = false;
-	fireEvent.click(screen.getByRole("button", { name: "刷新状态" }));
+	fireEvent.click(screen.getByRole("button", { name: "刷新企微机器人状态" }));
 	await waitFor(() =>
 		expect(screen.getByText("连接状态暂不可用")).toBeTruthy(),
 	);
@@ -370,18 +378,25 @@ it.each([400, 403, 409])(
 			target: { value: "fixture" },
 		});
 		fireEvent.click(screen.getByRole("checkbox"));
-		fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "验证并绑定企微机器人" }),
+		);
 		await waitFor(() =>
 			expect(screen.getByRole("alert").textContent).toContain("提交被拒绝"),
 		);
 		expect(
-			(screen.getByRole("button", { name: "验证并绑定" }) as HTMLButtonElement)
-				.disabled,
+			(
+				screen.getByRole("button", {
+					name: "验证并绑定企微机器人",
+				}) as HTMLButtonElement
+			).disabled,
 		).toBe(false);
 		expect((screen.getByLabelText("Secret") as HTMLInputElement).value).toBe(
 			"",
 		);
-		expect(screen.queryByRole("button", { name: "取消配置" })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: "取消企微机器人配置" }),
+		).toBeNull();
 		expect(reads).toBe(0);
 	},
 );
@@ -397,7 +412,7 @@ it("ignores an older connection status response after a newer refresh", async ()
 	);
 	render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />);
 	await waitFor(() => expect(reads).toBe(1));
-	fireEvent.click(screen.getByRole("button", { name: "刷新状态" }));
+	fireEvent.click(screen.getByRole("button", { name: "刷新企微机器人状态" }));
 	await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
 	initial.resolve(Response.json({ status: "not_configured" }));
 	await new Promise((resolve) => setTimeout(resolve, 20));

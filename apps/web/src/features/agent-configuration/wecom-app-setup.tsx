@@ -419,7 +419,6 @@ export function WecomAppSetup({
 			<Label className="min-h-11 flex-nowrap items-start gap-3 text-sm leading-6">
 				<Checkbox
 					id="wecom-app-takeover"
-					aria-label="确认企微自建应用连接影响"
 					className="mt-1"
 					checked={confirmed}
 					disabled={busy}
