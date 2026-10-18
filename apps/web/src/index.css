@@ -1628,9 +1628,17 @@ a[class~="group/button"] {
 /* Short viewports keep the timeline independently scrollable so the composer
  * remains available while focus returns from execution details. */
 @media (max-height: 600px) {
+	.platform-content.chat-content {
+		padding-top: 8px;
+		padding-bottom: 8px;
+	}
+	.conversation-header {
+		margin-bottom: 4px;
+	}
 	.chat-thread .timeline {
-		min-height: 120px;
-		max-height: min(42dvh, 320px);
+		min-height: 0;
+		max-height: none;
+		padding-block: 8px;
 	}
 }
 @media (prefers-reduced-motion: reduce) {

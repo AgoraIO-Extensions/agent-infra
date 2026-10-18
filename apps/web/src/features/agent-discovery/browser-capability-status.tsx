@@ -71,7 +71,7 @@ const workflowLabels = {
 	unknown: "待核实",
 } as const;
 const operationLabels: Record<string, string> = {
-	navigate: "读取当前仓库页面",
+	navigate: "浏览器导航",
 	observe: "查看页面状态",
 	interact: "与页面交互",
 	files: "处理浏览器文件",
