@@ -1,4 +1,6 @@
 import { once } from "node:events";
+import { request as httpRequest } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -24,6 +26,123 @@ async function listeningPort(
 }
 
 describe("Platform Worker native metadata gateway server", () => {
+	it("aborts a completed-body request when its caller disconnects before the response", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const finished = Promise.withResolvers<void>();
+		let signal: AbortSignal | undefined;
+		let nativeCalls = 0;
+		const gateway = startPlatformWorkerNativeMetadataGatewayServerV1({
+			port: 0,
+			app: {
+				async fetch(request) {
+					await request.text();
+					signal = request.signal;
+					entered.resolve();
+					await release.promise;
+					if (!request.signal.aborted) nativeCalls++;
+					finished.resolve();
+					return new Response("done");
+				},
+			},
+		});
+		servers.push(gateway);
+		const port = await listeningPort(gateway.server);
+		const client = httpRequest({
+			host: "127.0.0.1",
+			port,
+			method: "POST",
+			path: "/probe",
+		});
+		client.on("error", () => {});
+		client.end("{}");
+		try {
+			await entered.promise;
+			client.destroy();
+			await vi.waitFor(() => expect(signal?.aborted).toBe(true), {
+				timeout: 1_000,
+			});
+			release.resolve();
+			await finished.promise;
+			expect(nativeCalls).toBe(0);
+		} finally {
+			client.destroy();
+			release.resolve();
+		}
+	});
+
+	it("keeps a fully read request live while awaiting a normal response", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let signal: AbortSignal | undefined;
+		const gateway = startPlatformWorkerNativeMetadataGatewayServerV1({
+			port: 0,
+			app: {
+				async fetch(request) {
+					await request.text();
+					signal = request.signal;
+					entered.resolve();
+					await release.promise;
+					return new Response(request.signal.aborted ? "cancelled" : "ok");
+				},
+			},
+		});
+		servers.push(gateway);
+		const port = await listeningPort(gateway.server);
+		const response = fetch(`http://127.0.0.1:${port}/probe`, {
+			method: "POST",
+			body: "{}",
+		});
+		try {
+			await entered.promise;
+			await delay(30);
+			expect(signal?.aborted).toBe(false);
+			release.resolve();
+			expect(await (await response).text()).toBe("ok");
+		} finally {
+			release.resolve();
+		}
+	});
+
+	it("aborts active requests when the gateway stops", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let signal: AbortSignal | undefined;
+		const gateway = startPlatformWorkerNativeMetadataGatewayServerV1({
+			port: 0,
+			app: {
+				async fetch(request) {
+					await request.text();
+					signal = request.signal;
+					entered.resolve();
+					await release.promise;
+					return new Response("done");
+				},
+			},
+		});
+		servers.push(gateway);
+		const port = await listeningPort(gateway.server);
+		const client = httpRequest({
+			host: "127.0.0.1",
+			port,
+			method: "POST",
+			path: "/probe",
+		});
+		client.on("error", () => {});
+		client.end("{}");
+		await entered.promise;
+		const stopping = gateway.stop();
+		try {
+			await vi.waitFor(() => expect(signal?.aborted).toBe(true), {
+				timeout: 1_000,
+			});
+		} finally {
+			client.destroy();
+			release.resolve();
+			await stopping;
+		}
+	});
+
 	it("forwards HTTP requests to the deployment-owned fetch app and closes", async () => {
 		const gateway = startPlatformWorkerNativeMetadataGatewayServerV1({
 			port: 0,

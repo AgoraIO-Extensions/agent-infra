@@ -142,6 +142,7 @@ async function respond(response: ServerResponse, value: Response) {
 		}
 		response.end();
 	} finally {
+		await reader.cancel().catch(() => undefined);
 		reader.releaseLock();
 	}
 }
@@ -150,7 +151,19 @@ async function handle(
 	request: IncomingMessage,
 	response: ServerResponse,
 	app: PlatformWorkerNativeMetadataGatewayAppV1,
+	lifetime: AbortSignal,
 ) {
+	const controller = new AbortController();
+	const abort = () => controller.abort();
+	const disconnect = () => {
+		if (!response.writableEnded) abort();
+	};
+	// IncomingMessage's normal close/EOF only means its body was consumed.
+	// A caller can still disconnect while the gateway is awaiting downstream I/O.
+	request.once("aborted", abort);
+	response.once("close", disconnect);
+	lifetime.addEventListener("abort", abort, { once: true });
+	if (request.aborted || response.destroyed || lifetime.aborted) abort();
 	try {
 		const host = request.headers.host ?? "127.0.0.1";
 		const method = request.method ?? "GET";
@@ -158,6 +171,7 @@ async function handle(
 			method,
 			headers: headers(request),
 			duplex: "half",
+			signal: controller.signal,
 			...(method === "GET" || method === "HEAD" ? {} : { body: request }),
 		};
 		const value = await app.fetch(
@@ -170,6 +184,10 @@ async function handle(
 			response.statusCode = 500;
 			response.end();
 		}
+	} finally {
+		request.off("aborted", abort);
+		response.off("close", disconnect);
+		lifetime.removeEventListener("abort", abort);
 	}
 }
 
@@ -190,8 +208,9 @@ export function startPlatformWorkerNativeMetadataGatewayServerV1(
 		throw new TypeError(
 			"Platform Worker native metadata gateway port is invalid",
 		);
+	const lifetime = new AbortController();
 	const server: Server = createServer((request, response) => {
-		void handle(request, response, options.app);
+		void handle(request, response, options.app, lifetime.signal);
 	});
 	server.headersTimeout = 15_000;
 	server.requestTimeout = 15_000;
@@ -199,6 +218,7 @@ export function startPlatformWorkerNativeMetadataGatewayServerV1(
 	return {
 		server,
 		stop() {
+			lifetime.abort();
 			return new Promise<void>((resolve, reject) => {
 				server.close((error) => {
 					if (
@@ -210,6 +230,7 @@ export function startPlatformWorkerNativeMetadataGatewayServerV1(
 							.then(resolve, reject);
 					else reject(error);
 				});
+				server.closeAllConnections();
 			});
 		},
 	};
