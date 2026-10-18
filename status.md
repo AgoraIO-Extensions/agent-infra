@@ -202,6 +202,7 @@
 
 ## 变更日志
 
+- 2026-10-18：修复 NI-15：审计列表与详情统一使用 `AuditIdentifier`，长 ID 可通过共享 Button 展开完整值，详情提供复制动作；组件单测 2/2、审计 Browser 14 passed/2 skipped、Web 类型检查、Biome 和 UI policy 通过。
 - 2026-10-18：修复 NI-17：审批表/审阅弹窗和申请详情按审批者可核对的目录记录展示员工与组织名称（含邮箱/组织路径，目录读取失败时保留安全状态），不再只显示数量或固定范围文案；审批模型统一显示 displayName · modelId，默认模型同样保留必要标识；移除与审批职责不符的「系统管理员 · 只读审计」徽章。审批与申请详情定向测试 32/32、Biome 和 Web 类型检查通过。
 - 2026-10-18：修复 NI-11/N-01：Owner 兼系统管理员的 Owner 生命周期区只保留停止/重启，停用迁入独立「管理员操作」区并复用原确认弹窗；纯管理员沿用同一管理员区；`/admin/agents` 入口改为「管理 Agent」以明确包含生命周期操作。Agent lifecycle、配置 workflow、管理员列表定向单测 26/26 通过，待浏览器矩阵复核。
 - 2026-10-18：继续修复 NI-09/BR-03：浏览器接管请求态改为 primary「允许这次操作」+ ghost「拒绝」，已接管态改为 primary「交还给 Agent」+ ghost「停止」；revoke 回调改名 `onRevoke`，保持 `take_over`/`return_to_agent`/`revoke` 命令映射；handoff 定向单测 52/52 通过。
@@ -240,7 +241,7 @@
 - **R4-16**：Connection Developers 当前提供 Browser API；Consumer/declaration 管理和默认 Delegated runtime 未装配，OAuth/Delegated 机器链路无法在本仓库独立完成，按用户要求跳过。
 - **V-01**：现有 Browser Playwright 可运行项和导出矩阵已通过；报告要求的完整设计导出逐页对照仍需独立证据，不能以现有 13 个桌面导出项替代。
 - **报告终审 NI-01~NI-67**：本文件的原始整改清单记录早期实现状态；终审新增问题正在按 P1/P2 分批复核，修复后以代码、单测和浏览器证据更新对应条目。
-- 当前仍需继续复核的终审项包括 Browser handoff 命令语义、Owner/管理员停用入口的浏览器矩阵、审计完整 ID 展示、审批信息可核对性、执行详情与页面 CSS 分层、标题/设计文档一致性，以及平台 Skill 导入回归测试拆分。
+- 当前仍需继续复核的终审项包括 DirectoryPicker 多结果层收起、创建会话 unknown 出口、Secret 替换与草稿重试边界、登录字段错误清理、Skill 管理页标题、短视口与焦点环细节、审批结果焦点、执行详情与页面 CSS 分层、标题/设计文档一致性，以及平台 Skill 导入回归测试拆分。
 
 ## 证据边界
 
