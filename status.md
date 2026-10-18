@@ -202,6 +202,7 @@
 
 ## 变更日志
 
+- 2026-10-18：修复 CI 暴露的 Web 设计契约 TypeScript 类型错误；同时收敛 CH-01/02/03：模型与推理档位移入 composer 工具栏并自动保存，`/` 命令/Skill 使用可键盘操作的 combobox，会话上下文与文件改为默认折叠 disclosure；定向 capability/conversation 测试 70/70、Web 类型检查和构建通过。
 - 2026-10-18：CI 暴露的 Web 单测、浏览器回归和 Sheet 遮罩问题已修复；Web 单测 90/90 文件、1086/1086 通过，完整 Browser Playwright 248 个可运行项通过、20 个按测试配置跳过，Hosted CI 全部 required checks 通过。
 - 2026-10-18：补齐审计长标识、日期自然日、登录 400 错误、执行事实末次事件、应用/Owner 文案和移动窄视口回归；Connection OAuth/Delegated 仍按用户要求保留外部边界。
 - 2026-10-18：按终审 NI 清单补齐 safe Connection URL、Connection unavailable 文案、失败码恢复指引、当前草稿重试、创建命令不可重试、自然日时间、登录错误播报/密码按钮、Owner 来源文案、企微应用解绑标题、申请创建状态、执行详情上下文、Skill 导航 exact active 和浏览器 origin 显示；定向 102/102 单测与 Web 类型检查通过。

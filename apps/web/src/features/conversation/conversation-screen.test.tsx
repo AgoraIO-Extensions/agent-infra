@@ -142,6 +142,14 @@ async function composer() {
 		name: "消息",
 	})) as HTMLTextAreaElement;
 }
+async function openConversationContext() {
+	const toggle = await screen.findByRole("button", { name: /^会话上下文/ });
+	if (toggle.getAttribute("aria-expanded") !== "true") fireEvent.click(toggle);
+}
+async function openConversationFiles() {
+	const toggle = await screen.findByRole("button", { name: /^会话文件/ });
+	if (toggle.getAttribute("aria-expanded") !== "true") fireEvent.click(toggle);
+}
 function receipt() {
 	return Response.json(
 		CommandAcceptedProjectionV1Schema.parse({
@@ -242,11 +250,10 @@ describe("functional conversation screen", () => {
 			if (url.pathname === "/api/v2/conversations/conversation-1")
 				return Response.json(history("conversation-1"));
 		});
-		fireEvent.click(await screen.findByRole("button", { name: "打开" }));
-		expect(screen.getByText("workspace-summary")).toBeTruthy();
-		expect(screen.getByText("list-files")).toBeTruthy();
-		expect(screen.getByText(/skillhub/)).toBeTruthy();
-		expect(screen.getAllByText(/1\.0\.0/)).toHaveLength(2);
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "/workspace-s" } });
+		await screen.findByRole("option", { name: /\/workspace-summary/ });
+		expect(screen.getByText("Summarize approved workspace files")).toBeTruthy();
 		const metadataRequests = requests.filter((request) =>
 			new URL(request.url).pathname.endsWith("/native-metadata"),
 		);
@@ -257,11 +264,10 @@ describe("functional conversation screen", () => {
 				),
 			),
 		).toEqual(new Set(["commands", "skills"]));
-		fireEvent.click(screen.getByRole("button", { name: /workspace-summary/ }));
-		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
-		expect(
-			screen.getByText("选择已确认，正在通过当前会话接缝提交。"),
-		).toBeTruthy();
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(input.value).toBe("/workspace-summary");
+		fireEvent.keyDown(input, { key: "Enter" });
+		await screen.findByText("能力请求已受理。");
 	});
 
 	it("hides native capabilities when the current execution metadata is unavailable", async () => {
@@ -273,7 +279,7 @@ describe("functional conversation screen", () => {
 				return Response.json(history("conversation-1"));
 		});
 		await screen.findByText("当前执行的命令或 Skill 暂不可用，已隐藏旧数据。");
-		expect(screen.queryByRole("button", { name: "打开" })).toBeNull();
+		expect(screen.queryByRole("option")).toBeNull();
 	});
 
 	it("shows a partial-unavailable notice when one native selector fails", async () => {
@@ -299,6 +305,7 @@ describe("functional conversation screen", () => {
 
 	it("rejects unsupported and oversized files before creating an upload", async () => {
 		const { requests } = setup();
+		await openConversationFiles();
 		const input = await screen.findByLabelText("添加附件");
 		fireEvent.change(input, {
 			target: {
@@ -322,6 +329,7 @@ describe("functional conversation screen", () => {
 				? Response.json({ items: [], nextCursor: null })
 				: undefined,
 		);
+		await openConversationFiles();
 		await screen.findByText("文件限制暂不可用，上传入口已关闭。");
 		expect(
 			(screen.getByRole("button", { name: "添加附件" }) as HTMLButtonElement)
@@ -331,6 +339,7 @@ describe("functional conversation screen", () => {
 
 	it("reads the read-only file limits before the attachment entry opens", async () => {
 		const { requests } = setup();
+		await openConversationFiles();
 		await screen.findByText(/支持 text\/plain/);
 		expect(
 			(screen.getByRole("button", { name: "添加附件" }) as HTMLButtonElement)
@@ -374,6 +383,7 @@ describe("functional conversation screen", () => {
 					return receipt();
 				return undefined;
 			});
+			await openConversationFiles();
 			fireEvent.change(await screen.findByLabelText("添加附件"), {
 				target: {
 					files: [new File(["hello"], "notes.txt", { type: "text/plain" })],
@@ -1020,6 +1030,7 @@ describe("functional conversation screen", () => {
 		const input = await composer();
 		fireEvent.change(input, { target: { value: "Early question" } });
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await openConversationContext();
 		await screen.findByText(
 			"会话尚未准备完成，消息未发送，草稿已保留。准备完成后请重新发送。",
 		);
@@ -1050,6 +1061,7 @@ describe("functional conversation screen", () => {
 		const input = await composer();
 		fireEvent.change(input, { target: { value: "Keep this draft" } });
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await openConversationContext();
 		await screen.findByText("Agent 暂时不可用，请稍后重试或联系 Owner。");
 		expect(input.value).toBe("Keep this draft");
 		expect(
@@ -1129,7 +1141,7 @@ describe("functional conversation screen", () => {
 		expect(screen.queryByText("处理中")).toBeNull();
 		expect(screen.queryByRole("button", { name: "停止回复" })).toBeNull();
 	});
-	it("requires saving a changed model before sending and applies the confirmed future selection", async () => {
+	it("autosaves a changed model before sending and applies the confirmed future selection", async () => {
 		let saved = false;
 		const config = {
 			...agent.configuration,
@@ -1180,24 +1192,14 @@ describe("functional conversation screen", () => {
 		const modelOption = await screen.findByRole("option", { name: "Model B" });
 		fireEvent.pointerDown(modelOption, { pointerType: "mouse" });
 		fireEvent.click(modelOption, { detail: 1 });
-		expect(screen.getByRole("button", { name: "保存模型选择" })).toHaveProperty(
-			"type",
-			"button",
-		);
-		await waitFor(() =>
-			expect(
-				(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
-					.disabled,
-			).toBe(true),
-		);
-		fireEvent.click(screen.getByRole("button", { name: "保存模型选择" }));
-		await screen.findByText("模型选择已保存，从下一条消息开始生效。");
+		expect(screen.queryByRole("button", { name: "保存模型选择" })).toBeNull();
 		await waitFor(() =>
 			expect(
 				(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
 					.disabled,
 			).toBe(false),
 		);
+		expect(screen.queryByText("请先保存模型选择，再发送消息。")).toBeNull();
 		const update = requests.find((request) =>
 			request.url.endsWith("/model-selection"),
 		);
@@ -1341,6 +1343,7 @@ describe("functional conversation screen", () => {
 		const input = await composer();
 		fireEvent.change(input, { target: { value: "one operation" } });
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await openConversationContext();
 		const verify = await screen.findByRole("button", { name: "核实原请求" });
 		expect(input.value).toBe("one operation");
 		expect(
@@ -1802,6 +1805,7 @@ describe("functional conversation screen", () => {
 		const input = await composer();
 		fireEvent.change(input, { target: { value: "Busy draft" } });
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await openConversationContext();
 		await screen.findByText(/当前回复仍在处理，暂不支持补充指令/);
 		expect(input.value).toBe("Busy draft");
 		expect(screen.queryByText("Do not render raw error")).toBeNull();
@@ -1973,6 +1977,7 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
 		await screen.findByText(/Agent 已停止，历史保持只读/);
 		expect(screen.getByText(/请联系 Owner 重启后继续/)).toBeTruthy();
+		await openConversationContext();
 		expect(
 			screen.getByText(
 				"消息未送达，草稿已保留。请在 Agent 恢复可用后重新发送。",
@@ -2027,6 +2032,7 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 		fireEvent.click(screen.getByRole("button", { name: "刷新 Agent 状态" }));
 		await waitFor(() => expect(screen.queryByText(/Agent 已停止/)).toBeNull());
 		expect(input.value).toBe("Resend me");
+		await openConversationContext();
 		expect(screen.getByRole("button", { name: "重新发送" })).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
 		await waitFor(() => expect(posts).toHaveLength(2));

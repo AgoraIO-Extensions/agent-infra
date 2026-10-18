@@ -1280,16 +1280,70 @@ a[class~="group/button"] {
 	color: var(--surface);
 }
 .chat-thread .model-controls {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr);
-	min-width: 0;
-	gap: 8px;
+	display: flex;
 	align-items: center;
-	padding: 0 0 8px;
-	border-bottom: 1px solid var(--border);
+	min-width: 0;
+	gap: 2px;
+	padding: 0;
+	border: 0;
 }
-.chat-thread .model-controls .model-save {
-	grid-column: 1 / -1;
+.chat-thread .model-control-field {
+	min-width: 0;
+}
+.chat-thread .model-control-trigger {
+	min-height: 44px;
+	height: 44px;
+	max-width: 100%;
+	border-color: transparent;
+	background: transparent;
+	padding: 8px 24px 8px 8px;
+	font-size: 12px;
+	line-height: 28px;
+}
+.chat-thread .model-control-trigger:hover {
+	background: var(--muted);
+}
+.chat-thread .model-control-trigger:focus-visible {
+	border-color: var(--primary);
+}
+.chat-thread .model-control-model {
+	max-width: 180px;
+}
+.chat-thread .model-control-reasoning {
+	max-width: 110px;
+}
+.chat-thread .model-selection-saving,
+.chat-thread .model-selection-error {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	min-height: 44px;
+	white-space: nowrap;
+	font-size: 12px;
+}
+.chat-thread .model-selection-saving {
+	color: var(--muted-foreground);
+}
+.chat-thread .model-selection-spinner {
+	width: 12px;
+	height: 12px;
+}
+.chat-thread .model-selection-error {
+	color: var(--destructive);
+}
+.chat-thread .model-selection-retry {
+	min-height: 32px;
+	height: 32px;
+	padding-inline: 6px;
+	color: var(--primary);
+}
+@keyframes model-selection-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+.chat-thread .model-selection-spinner {
+	animation: model-selection-spin 0.8s linear infinite;
 }
 .chat-thread .composer-zone {
 	position: relative;
@@ -1325,6 +1379,15 @@ a[class~="group/button"] {
 	gap: 8px;
 	padding: 8px 10px;
 	border-top: 0;
+}
+.composer-tools {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	gap: 6px;
+}
+.composer-tools > p {
+	min-width: 0;
 }
 @media (max-width: 767px) {
 	.composer-actions [data-c02-send-button="send"] {

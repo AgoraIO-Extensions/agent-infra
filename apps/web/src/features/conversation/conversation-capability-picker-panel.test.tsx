@@ -1,7 +1,12 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConversationCapabilityV1 } from "./conversation-capability-picker.js";
-import { ConversationCapabilityPickerPanel } from "./conversation-capability-picker-panel.js";
+import {
+	ConversationCapabilityMenu,
+	ConversationCapabilityPickerPanel,
+	useConversationCapabilityCombobox,
+} from "./conversation-capability-picker-panel.js";
 
 const capabilities: readonly ConversationCapabilityV1[] = [
 	{
@@ -12,7 +17,39 @@ const capabilities: readonly ConversationCapabilityV1[] = [
 		version: "1.0.0",
 		parameterHint: "file",
 	},
+	{
+		kind: "command",
+		name: "list-files",
+		description: "List approved workspace files",
+		source: "codex",
+		version: "1.0.0",
+	},
 ];
+
+function ComboboxHarness() {
+	const [draft, setDraft] = useState("");
+	const anchor = useRef<HTMLTextAreaElement>(null);
+	const state = useConversationCapabilityCombobox({
+		capabilities,
+		draft,
+		disabled: false,
+		anchorRef: anchor,
+		onDraftChange: setDraft,
+	});
+	return (
+		<div>
+			<textarea
+				ref={anchor}
+				value={draft}
+				role={state.slashDraft ? "combobox" : undefined}
+				onChange={(event) => setDraft(event.target.value)}
+				onKeyDown={state.handleKeyDown}
+			/>
+			<ConversationCapabilityMenu state={state} />
+			<output>{state.selection?.name ?? "none"}</output>
+		</div>
+	);
+}
 
 describe("ConversationCapabilityPickerPanel", () => {
 	afterEach(cleanup);
@@ -119,5 +156,25 @@ describe("ConversationCapabilityPickerPanel", () => {
 		const input = screen.getByRole("textbox", { name: "搜索命令或 Skill" });
 		fireEvent.keyDown(input, { key: "Enter", isComposing: true });
 		expect(screen.queryByText(/workspace-summary 参数/)).toBeNull();
+	});
+
+	it("opens from slash and supports Home/End, Tab, and Escape keyboard controls", () => {
+		render(<ComboboxHarness />);
+		const input = screen.getByRole("textbox");
+		fireEvent.change(input, { target: { value: "/" } });
+		expect(screen.getByRole("listbox", { name: "命令或 Skill" })).toBeTruthy();
+		fireEvent.keyDown(input, { key: "End" });
+		expect(
+			screen
+				.getByRole("option", { name: /\/list-files/ })
+				.getAttribute("aria-selected"),
+		).toBe("true");
+		fireEvent.keyDown(input, { key: "Home" });
+		fireEvent.keyDown(input, { key: "Tab" });
+		expect((input as HTMLTextAreaElement).value).toBe("/workspace-summary");
+		expect(screen.getByText("workspace-summary")).toBeTruthy();
+		fireEvent.change(input, { target: { value: "/" } });
+		fireEvent.keyDown(input, { key: "Escape" });
+		expect(screen.queryByRole("listbox")).toBeNull();
 	});
 });

@@ -1,6 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Square } from "lucide-react";
+import { ArrowUp, ChevronDown, LoaderCircle, Square } from "lucide-react";
+import type { ReactNode } from "react";
 import {
+	useCallback,
 	useEffect,
 	useId,
 	useLayoutEffect,
@@ -20,6 +22,7 @@ import {
 	SelectValue,
 } from "../../components/ui/select.js";
 import { Textarea } from "../../components/ui/textarea.js";
+import { client as conversationClient } from "../../pilot/generated-v2/client.gen.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	type BrowserHandoffActionInputV1,
@@ -28,8 +31,11 @@ import {
 } from "../agent-discovery/browser-handoff-panel.js";
 import { BrowserAuditView } from "./browser-audit-view.js";
 import { BrowserOperationStatus } from "./browser-operation-status.js";
-import type { ConversationCapabilitySelectionV1 } from "./conversation-capability-picker.js";
-import { ConversationCapabilityPickerPanel } from "./conversation-capability-picker-panel.js";
+import { ConnectionInstallationPanel } from "./connection-installation-panel.js";
+import {
+	ConversationCapabilityMenu,
+	useConversationCapabilityCombobox,
+} from "./conversation-capability-picker-panel.js";
 import { CommandNotice } from "./conversation-command-notice.js";
 import type {
 	BrowserCommandBody,
@@ -52,6 +58,44 @@ import { useConversationTimeline } from "./use-conversation-timeline.js";
 const preparingRefreshMs = 500;
 
 type BrowserCommandInvoker = (body: BrowserCommandBody) => boolean;
+
+function ConversationDisclosure({
+	id,
+	label,
+	open,
+	onOpenChange,
+	children,
+}: {
+	id: string;
+	label: string;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	children: ReactNode;
+}) {
+	return (
+		<section className="rounded-[12px] border bg-card">
+			<Button
+				type="button"
+				variant="ghost"
+				className="min-h-11 w-full justify-between rounded-[12px] px-3 text-left"
+				aria-expanded={open}
+				aria-controls={id}
+				onClick={() => onOpenChange(!open)}
+			>
+				<span className="truncate">{label}</span>
+				<ChevronDown
+					aria-hidden="true"
+					className={`size-4 shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+				/>
+			</Button>
+			{open && (
+				<div id={id} className="space-y-3 border-t p-3">
+					{children}
+				</div>
+			)}
+		</section>
+	);
+}
 
 /** Keep the Browser panel's opaque action ids mapped to the server command
  * union in one place; the panel never constructs transport payloads itself. */
@@ -151,11 +195,24 @@ export function ActiveConversation({
 	});
 	const { timeline } = reader;
 	const [draft, setDraft] = useState("");
+	const [contextOpen, setContextOpen] = useState(false);
+	const [filesOpen, setFilesOpen] = useState(false);
 	const [notice, setNotice] = useState("");
 	const [acceptedExecution, setAcceptedExecution] = useState<string>();
 	const [stopping, setStopping] = useState<string>();
 	const [modelId, setModelId] = useState<string | undefined>();
 	const [reasoning, setReasoning] = useState<string | undefined>();
+	const [selectionSaveState, setSelectionSaveState] = useState<
+		"idle" | "saving" | "error"
+	>("idle");
+	const selectionSaveStateRef = useRef<"idle" | "saving" | "error">("idle");
+	const updateSelectionSaveState = useCallback(
+		(state: "idle" | "saving" | "error") => {
+			selectionSaveStateRef.current = state;
+			setSelectionSaveState(state);
+		},
+		[],
+	);
 	const composerId = useId();
 	const composer = useRef<HTMLTextAreaElement>(null);
 	const composing = useRef(false);
@@ -197,12 +254,6 @@ export function ActiveConversation({
 		],
 		[nativeMetadataCommands.capabilities, nativeMetadataSkills.capabilities],
 	);
-	const nativeMetadataScopeKey = JSON.stringify([
-		identityKey,
-		agentId,
-		conversationId,
-		latestExecution ?? null,
-	]);
 	const nativeMetadataLoading =
 		latestExecution !== undefined &&
 		(nativeMetadataCommands.isPending || nativeMetadataSkills.isPending);
@@ -216,10 +267,6 @@ export function ActiveConversation({
 		latestExecution !== undefined &&
 		!nativeMetadataLoading &&
 		nativeMetadataCommands.available !== nativeMetadataSkills.available;
-	const nativeMetadataReady =
-		latestExecution !== undefined &&
-		nativeMetadataCommands.available &&
-		nativeMetadataSkills.available;
 	const active = Boolean(latestExecution && !isTerminal(status));
 	const visibleNotice =
 		notice ||
@@ -342,6 +389,23 @@ export function ActiveConversation({
 		if (!result || result === handled.current) return;
 		handled.current = result;
 		if (
+			selectionSaveStateRef.current === "saving" &&
+			(result.kind === "unknown" ||
+				result.kind === "denied" ||
+				result.kind === "rejected")
+		) {
+			updateSelectionSaveState("error");
+			setNotice("");
+			if (
+				result.kind === "rejected" &&
+				(result.code === "AGENT_STARTING" || result.code === "AGENT_UPDATING")
+			) {
+				void reader.refresh();
+				refreshAgent();
+			}
+			return;
+		}
+		if (
 			result.kind === "rejected" &&
 			(result.code === "AGENT_STARTING" || result.code === "AGENT_UPDATING")
 		) {
@@ -366,7 +430,8 @@ export function ActiveConversation({
 		} else if (result.kind === "selection-updated") {
 			// Keep the confirmed values while the projection refreshes; falling back
 			// to the stale conversation would briefly show and submit the old choice.
-			setNotice("模型选择已保存，从下一条消息开始生效。");
+			updateSelectionSaveState("idle");
+			setNotice("");
 			void reader.refresh();
 		} else if (result.kind === "native-accepted") {
 			action.current = "native";
@@ -384,7 +449,7 @@ export function ActiveConversation({
 			);
 			void reader.refresh();
 		}
-	}, [command.result, reader.refresh, refreshAgent]);
+	}, [command.result, reader.refresh, refreshAgent, updateSelectionSaveState]);
 	const options = customPlatformAdapter
 		? (runtimeSelection.data?.options ?? [])
 		: agent.configuration.modelOptions;
@@ -402,6 +467,28 @@ export function ActiveConversation({
 		conversation?.selectedReasoningLevel ??
 		agent.configuration.defaultReasoningLevel ??
 		"";
+	function saveSelection(nextModelId: string, nextReasoning: string) {
+		if (!nextModelId || !nextReasoning) return;
+		setNotice("");
+		if (
+			command.selectModel({
+				modelOptionId: nextModelId,
+				reasoningLevel: nextReasoning,
+			})
+		) {
+			action.current = "selection";
+			updateSelectionSaveState("saving");
+		} else {
+			updateSelectionSaveState("error");
+		}
+	}
+	function retrySelection() {
+		if (selectionSaveStateRef.current !== "error" || !command.canRetry) return;
+		if (command.retry()) {
+			action.current = "selection";
+			updateSelectionSaveState("saving");
+		}
+	}
 	// 已有投影时的刷新（例如回复结束后的重读）不锁住发送；服务端仍做准入校验（#2136）。
 	const refreshing = timeline.status === "loading" && Boolean(timeline.history);
 	const blocked =
@@ -453,23 +540,40 @@ export function ActiveConversation({
 		conversation?.status === "unavailable" ||
 		readLocked ||
 		(!available && !agentTransitioning);
-	const selectionDirty =
-		(modelId !== undefined &&
-			modelId !== conversation?.selectedModelOptionId) ||
-		(reasoning !== undefined &&
-			reasoning !== conversation?.selectedReasoningLevel);
+	const capabilityMenu = useConversationCapabilityCombobox({
+		capabilities: nativeMetadataCapabilities,
+		draft,
+		disabled: draftDisabled,
+		anchorRef: composer,
+		onDraftChange: setDraft,
+	});
 	const canSend =
 		!blocked &&
 		!preparing &&
 		!commandLocked &&
-		!selectionDirty &&
+		selectionSaveState === "idle" &&
 		!uncertainExecution &&
 		!(active && stopping === latestExecution) &&
 		(!active || agent.capabilities.supplementaryInstruction) &&
 		!files.uploading &&
+		(!capabilityMenu.slashDraft || capabilityMenu.selection !== undefined) &&
 		Boolean(draft.trim());
 	async function send() {
 		if (!canSend) return;
+		if (capabilityMenu.selection) {
+			if (
+				command.invokeCapability({
+					capabilityId: capabilityMenu.selection.capabilityId ?? "",
+					directoryRevision: capabilityMenu.selection.directoryRevision ?? "",
+					parameters: capabilityMenu.selection.parameterText,
+				})
+			) {
+				action.current = "native";
+				setDraft("");
+				setNotice("");
+			}
+			return;
+		}
 		if (customPlatformAdapter) {
 			let latest: Awaited<ReturnType<typeof runtimeSelection.refresh>>;
 			try {
@@ -510,9 +614,7 @@ export function ActiveConversation({
 	return (
 		<>
 			{latestExecution &&
-				(nativeMetadataUnavailable ||
-					nativeMetadataPartiallyUnavailable ||
-					(nativeMetadataReady && nativeMetadataCapabilities.length > 0)) && (
+				(nativeMetadataUnavailable || nativeMetadataPartiallyUnavailable) && (
 					<div aria-live="polite">
 						{nativeMetadataUnavailable && (
 							<Alert role="status">
@@ -527,23 +629,6 @@ export function ActiveConversation({
 									部分命令或 Skill 目录暂不可用，已隐藏对应旧数据。
 								</AlertDescription>
 							</Alert>
-						)}
-						{nativeMetadataReady && nativeMetadataCapabilities.length > 0 && (
-							<ConversationCapabilityPickerPanel
-								key={nativeMetadataScopeKey}
-								capabilities={nativeMetadataCapabilities}
-								scopeKey={nativeMetadataScopeKey}
-								disabled={!available}
-								onConfirm={(selection: ConversationCapabilitySelectionV1) => {
-									if (!selection.capabilityId || !selection.directoryRevision)
-										return;
-									command.invokeCapability({
-										capabilityId: selection.capabilityId,
-										directoryRevision: selection.directoryRevision,
-										parameters: selection.parameterText,
-									});
-								}}
-							/>
 						)}
 					</div>
 				)}
@@ -589,99 +674,6 @@ export function ActiveConversation({
 						</AlertDescription>
 					</Alert>
 				)}
-				{agent.capabilities.modelSelection &&
-					(!customPlatformAdapter || runtimeSelection.data?.available) && (
-						<fieldset
-							className="model-controls"
-							disabled={blocked || commandLocked}
-						>
-							<legend className="sr-only">下一条消息的模型</legend>
-							<div className="min-w-0 space-y-1">
-								<Label className="sr-only" htmlFor={`${composerId}-model`}>
-									模型
-								</Label>
-								<Select
-									disabled={blocked || commandLocked}
-									value={currentModelId || null}
-									itemToStringLabel={(value) =>
-										(!option && value === currentModelId
-											? "当前选项已移除"
-											: options.find((item) => item.optionId === value)
-													?.displayName) ?? String(value)
-									}
-									onValueChange={(value) => {
-										if (!value) return;
-										setModelId(value);
-										setReasoning(
-											options.find((item) => item.optionId === value)
-												?.reasoningLevels[0],
-										);
-									}}
-								>
-									<SelectTrigger
-										id={`${composerId}-model`}
-										className="min-h-11 w-full text-base md:text-sm"
-									>
-										<SelectValue placeholder="请选择模型" />
-									</SelectTrigger>
-									<SelectContent>
-										{!option && currentModelId && (
-											<SelectItem value={currentModelId} disabled>
-												当前选项已移除
-											</SelectItem>
-										)}
-										{options.map((item) => (
-											<SelectItem key={item.optionId} value={item.optionId}>
-												{item.displayName}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							</div>
-							<div className="min-w-0 space-y-1">
-								<Label className="sr-only" htmlFor={`${composerId}-reasoning`}>
-									推理强度
-								</Label>
-								<Select
-									disabled={blocked || commandLocked}
-									value={currentReasoning || null}
-									onValueChange={(value) => setReasoning(value ?? undefined)}
-								>
-									<SelectTrigger
-										id={`${composerId}-reasoning`}
-										className="min-h-11 w-full text-base md:text-sm"
-									>
-										<SelectValue placeholder="请选择推理强度" />
-									</SelectTrigger>
-									<SelectContent>
-										{option?.reasoningLevels.map((value) => (
-											<SelectItem key={value} value={value}>
-												{value}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							</div>
-							<Button
-								type="button"
-								variant="default"
-								className="model-save"
-								hidden={!selectionDirty}
-								disabled={!option?.reasoningLevels.includes(currentReasoning)}
-								onClick={() => {
-									if (
-										command.selectModel({
-											modelOptionId: currentModelId,
-											reasoningLevel: currentReasoning,
-										})
-									)
-										action.current = "selection";
-								}}
-							>
-								保存模型选择
-							</Button>
-						</fieldset>
-					)}
 				{timeline.history && (
 					<ConversationMessages
 						agentName={agent.name}
@@ -733,45 +725,65 @@ export function ActiveConversation({
 						{visibleNotice}
 					</p>
 				)}
-				<BrowserOperationStatus
-					events={timeline.events}
-					executionId={latestExecution}
-				/>
-				<BrowserAuditView
-					conversationId={conversationId}
-					events={timeline.events}
-					executionId={latestExecution}
-				/>
-				{reader.browserHandoffEvent || browserConfirmation ? (
-					<BrowserHandoffPanel
-						browserAvailable={
-							agent.capabilities.browser?.status === "available"
-						}
-						handoffEvent={reader.browserHandoffEvent}
-						confirmation={browserConfirmation}
-						currentBinding={browserBinding}
-						{...browserHandlers}
+				<ConversationDisclosure
+					id={`${composerId}-context`}
+					label={`会话上下文 · Connection ${agent.capabilities.connection ? "已启用" : "未启用"} · 浏览器操作 ${reader.browserHandoffEvent || browserConfirmation ? "有活动" : "无"}`}
+					open={contextOpen}
+					onOpenChange={setContextOpen}
+				>
+					<BrowserOperationStatus
+						events={timeline.events}
+						executionId={latestExecution}
 					/>
-				) : null}
-				<CommandNotice
-					result={command.result}
-					pending={command.isPending}
-					retry={
-						command.canRetry && available
-							? () => command.retry(draft)
-							: undefined
-					}
-				/>
-				{selectionDirty && (
-					<p role="status" className="text-sm">
-						请先保存模型选择，再发送消息。
-					</p>
-				)}
+					<BrowserAuditView
+						conversationId={conversationId}
+						events={timeline.events}
+						executionId={latestExecution}
+					/>
+					{reader.browserHandoffEvent || browserConfirmation ? (
+						<BrowserHandoffPanel
+							browserAvailable={
+								agent.capabilities.browser?.status === "available"
+							}
+							handoffEvent={reader.browserHandoffEvent}
+							confirmation={browserConfirmation}
+							currentBinding={browserBinding}
+							{...browserHandlers}
+						/>
+					) : null}
+					<CommandNotice
+						result={selectionSaveState === "idle" ? command.result : undefined}
+						pending={selectionSaveState === "idle" && command.isPending}
+						retry={
+							selectionSaveState === "idle" && command.canRetry && available
+								? () => command.retry(draft)
+								: undefined
+						}
+					/>
+				</ConversationDisclosure>
 				{agent.capabilities.modelSelection && !option && currentModelId && (
 					<p className="text-muted-foreground text-sm">
 						原模型选项已移除；提交消息时，标准模板将使用 Owner
 						的默认选项。你也可以刷新并重新选择。
 					</p>
+				)}
+				{agent.capabilities.attachments && (
+					<ConversationDisclosure
+						id={`${composerId}-files`}
+						label={`会话文件 · ${files.uploads.length} 个文件 · ${files.uploads.filter((item) => item.status === "failed" || item.status === "expired").length} 个待重试`}
+						open={filesOpen}
+						onOpenChange={setFilesOpen}
+					>
+						<ConversationFilePicker
+							attachmentsEnabled={agent.capabilities.attachments}
+							limits={files.limits}
+							limitsError={files.limitsError}
+							uploads={files.uploads}
+							onSelect={(selected) => void files.addFiles(selected)}
+							onRemove={files.remove}
+							onRetry={files.retry}
+						/>
+					</ConversationDisclosure>
 				)}
 				<form
 					className="composer-zone composer"
@@ -786,15 +798,7 @@ export function ActiveConversation({
 						send();
 					}}
 				>
-					<ConversationFilePicker
-						attachmentsEnabled={agent.capabilities.attachments}
-						limits={files.limits}
-						limitsError={files.limitsError}
-						uploads={files.uploads}
-						onSelect={(selected) => void files.addFiles(selected)}
-						onRemove={files.remove}
-						onRetry={files.retry}
-					/>
+					<ConversationCapabilityMenu state={capabilityMenu} />
 					<Label className="sr-only" htmlFor={composerId}>
 						消息
 					</Label>
@@ -804,6 +808,19 @@ export function ActiveConversation({
 						rows={3}
 						value={draft}
 						disabled={draftDisabled}
+						role={capabilityMenu.slashDraft ? "combobox" : undefined}
+						aria-expanded={
+							capabilityMenu.slashDraft ? capabilityMenu.open : undefined
+						}
+						aria-controls={
+							capabilityMenu.slashDraft ? capabilityMenu.listboxId : undefined
+						}
+						aria-activedescendant={
+							capabilityMenu.open
+								? `${capabilityMenu.listboxId}-${capabilityMenu.activeIndex}`
+								: undefined
+						}
+						aria-autocomplete={capabilityMenu.slashDraft ? "list" : undefined}
 						placeholder={`给 ${agent.name} 发一条消息…`}
 						onFocus={(event) => {
 							const input = event.currentTarget;
@@ -820,6 +837,8 @@ export function ActiveConversation({
 							composing.current = false;
 						}}
 						onKeyDown={(event) => {
+							capabilityMenu.handleKeyDown(event);
+							if (event.defaultPrevented) return;
 							if (
 								event.key === "Enter" &&
 								!event.shiftKey &&
@@ -832,11 +851,150 @@ export function ActiveConversation({
 							}
 						}}
 					/>
+					{capabilityMenu.slashDraft && !capabilityMenu.selection && (
+						<p role="status" className="text-muted-foreground text-xs">
+							请选择一个命令或 Skill 后再发送。
+						</p>
+					)}
 
 					<div className="composer-controls">
-						<p className="text-muted-foreground text-xs">
-							Enter 发送 · Shift + Enter 换行
-						</p>
+						<div className="composer-tools">
+							{agent.capabilities.modelSelection &&
+								(!customPlatformAdapter ||
+									runtimeSelection.data?.available) && (
+									<fieldset
+										className="model-controls"
+										disabled={
+											blocked ||
+											commandLocked ||
+											selectionSaveState === "saving"
+										}
+									>
+										<legend className="sr-only">下一条消息的模型</legend>
+										<div className="model-control-field">
+											<Label
+												className="sr-only"
+												htmlFor={`${composerId}-model`}
+											>
+												模型
+											</Label>
+											<Select
+												disabled={
+													blocked ||
+													commandLocked ||
+													selectionSaveState === "saving"
+												}
+												value={currentModelId || null}
+												itemToStringLabel={(value) =>
+													(!option && value === currentModelId
+														? "当前选项已移除"
+														: options.find((item) => item.optionId === value)
+																?.displayName) ?? String(value)
+												}
+												onValueChange={(value) => {
+													if (!value) return;
+													const nextOption = options.find(
+														(item) => item.optionId === value,
+													);
+													const nextReasoning = nextOption?.reasoningLevels[0];
+													setModelId(value);
+													setReasoning(nextReasoning);
+													if (nextReasoning)
+														saveSelection(value, nextReasoning);
+												}}
+											>
+												<SelectTrigger
+													id={`${composerId}-model`}
+													className="model-control-trigger model-control-model"
+												>
+													<SelectValue placeholder="请选择模型" />
+												</SelectTrigger>
+												<SelectContent>
+													{!option && currentModelId && (
+														<SelectItem value={currentModelId} disabled>
+															当前选项已移除
+														</SelectItem>
+													)}
+													{options.map((item) => (
+														<SelectItem
+															key={item.optionId}
+															value={item.optionId}
+														>
+															{item.displayName}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+										</div>
+										<div className="model-control-field">
+											<Label
+												className="sr-only"
+												htmlFor={`${composerId}-reasoning`}
+											>
+												推理强度
+											</Label>
+											<Select
+												disabled={
+													blocked ||
+													commandLocked ||
+													selectionSaveState === "saving"
+												}
+												value={currentReasoning || null}
+												onValueChange={(value) => {
+													if (!value) return;
+													setReasoning(value);
+													saveSelection(currentModelId, value);
+												}}
+											>
+												<SelectTrigger
+													id={`${composerId}-reasoning`}
+													className="model-control-trigger model-control-reasoning"
+												>
+													<SelectValue placeholder="推理强度" />
+												</SelectTrigger>
+												<SelectContent>
+													{option?.reasoningLevels.map((value) => (
+														<SelectItem key={value} value={value}>
+															{value}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+										</div>
+										{selectionSaveState === "saving" && (
+											<span
+												className="model-selection-saving"
+												role="status"
+												aria-label="正在保存模型选择"
+											>
+												<LoaderCircle
+													className="model-selection-spinner"
+													aria-hidden="true"
+												/>
+												<span className="sr-only">正在保存模型选择…</span>
+											</span>
+										)}
+										{selectionSaveState === "error" && (
+											<span className="model-selection-error" role="status">
+												<span>保存失败</span>
+												{command.canRetry && (
+													<Button
+														type="button"
+														variant="ghost"
+														className="model-selection-retry"
+														onClick={retrySelection}
+													>
+														重试
+													</Button>
+												)}
+											</span>
+										)}
+									</fieldset>
+								)}
+							<p className="text-muted-foreground text-xs">
+								Enter 发送 · Shift + Enter 换行
+							</p>
+						</div>
 						<div className="composer-actions flex gap-2">
 							{active && (
 								<Button
