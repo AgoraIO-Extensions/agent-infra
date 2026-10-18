@@ -1,7 +1,9 @@
 import { ExecutionDetailProjectionV2Schema } from "@agent-infra/contracts/pilot";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConversationExecutionDetails } from "./conversation-screen-details.js";
+
+afterEach(cleanup);
 
 describe("ConversationExecutionDetails", () => {
 	it("shows requested, actual and fallback reason from trusted facts", () => {
@@ -190,8 +192,7 @@ describe("ConversationExecutionDetails", () => {
 			/>,
 		);
 
-		const status = screen.getAllByRole("region", { name: "模型状态" }).at(-1);
-		if (!status) throw new Error("模型状态区域未渲染");
+		const status = screen.getByRole("region", { name: "模型状态" });
 		expect(status.textContent).toContain("最终模型");
 		expect(status.textContent).not.toContain("旧模型");
 	});

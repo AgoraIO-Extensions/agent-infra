@@ -253,6 +253,8 @@ describe("AgentDetailScreen", () => {
 			<AgentDetailScreen state={{ kind: "loading" }} />,
 		);
 
-		expect(screen.getByRole("status").getAttribute("aria-live")).toBe("polite");
+		const status = screen.getByRole("status");
+		expect(status.textContent).toContain("正在加载 Agent 详情…");
+		expect(status.getAttribute("aria-live")).toBe("polite");
 	});
 });

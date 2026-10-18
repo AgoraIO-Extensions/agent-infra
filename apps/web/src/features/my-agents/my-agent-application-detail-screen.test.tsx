@@ -1,5 +1,5 @@
 import { AgentApplicationProjectionV2Schema } from "@agent-infra/contracts/pilot";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatDateTime } from "../../lib/format-date.js";
 import { MyAgentApplicationDetailScreen } from "./my-agent-application-detail-screen.js";
@@ -170,7 +170,15 @@ describe("MyAgentApplicationDetailScreen", () => {
 			/>,
 		);
 
-		expect(screen.getAllByText("创建中").length).toBeGreaterThanOrEqual(1);
+		const runtimeRow = screen.getByText("运行实例").closest("li");
+		expect(runtimeRow).not.toBeNull();
+		if (!runtimeRow) throw new Error("运行实例行未渲染");
+		expect(
+			within(runtimeRow).getByText("创建中", { exact: true }),
+		).toBeTruthy();
+		expect(
+			within(runtimeRow).getByText("正在创建 Agent。", { exact: true }),
+		).toBeTruthy();
 		expect(screen.getByText("审批时间")).toBeTruthy();
 		expect(
 			screen.getByText(formatDateTime("2026-09-03T10:00:00Z")).tagName,

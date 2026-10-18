@@ -289,9 +289,16 @@ describe("PersonalRelayKeyEntry", () => {
 				}),
 			);
 			await screen.findByRole("alert");
-			const revoke = screen.queryByRole("button", { name: "撤销 Key" });
-			if (revoke) {
-				expect((revoke as HTMLButtonElement).disabled).toBe(true);
+			if (status === 401 || status === 403) {
+				expect(screen.queryByRole("button", { name: "撤销 Key" })).toBeNull();
+			} else {
+				expect(
+					(
+						screen.getByRole("button", {
+							name: "撤销 Key",
+						}) as HTMLButtonElement
+					).disabled,
+				).toBe(true);
 			}
 			const write = screen.getByRole("button", {
 				name: /^(替换|设置) Key$/,

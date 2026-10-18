@@ -191,7 +191,10 @@ test("assistant Markdown stays readable through history reload and version switc
 			details.getByRole("button", { name: "核实原执行状态" }),
 		).toBeVisible();
 		await checkSurface("execution");
-		await page.getByRole("button", { name: "关闭窗口" }).click();
+		const closeDetails = details.getByRole("button", { name: "关闭窗口" });
+		await closeDetails.focus();
+		await page.keyboard.press("Enter");
+		await expect(details).toHaveCount(0);
 	}
 	expect(
 		await page.evaluate(

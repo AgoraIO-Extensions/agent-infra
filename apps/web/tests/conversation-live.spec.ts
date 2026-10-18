@@ -1219,7 +1219,13 @@ for (const source of ["standard", "custom"] as const) {
 					},
 				);
 			}
-			await page.getByRole("button", { name: "关闭窗口", exact: true }).click();
+			const closeDetails = details.getByRole("button", {
+				name: "关闭窗口",
+				exact: true,
+			});
+			await closeDetails.focus();
+			await page.keyboard.press("Enter");
+			await expect(details).toHaveCount(0);
 			for (
 				let index = 0;
 				index < 12 &&
