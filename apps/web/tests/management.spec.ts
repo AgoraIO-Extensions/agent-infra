@@ -680,6 +680,11 @@ test("creation header exit supports deep links, refresh, click, keyboard and bac
 	await expect(headerExit).toBeVisible();
 	await expect(headerExit).toHaveAttribute("href", "/my-agents");
 	await headerExit.focus();
+	await page.keyboard.press("Tab");
+	await expect(
+		page.getByRole("button", { name: "提交申请", exact: true }),
+	).toBeFocused();
+	await page.keyboard.press("Shift+Tab");
 	await expect(headerExit).toBeFocused();
 	expect(
 		await headerExit.evaluate(

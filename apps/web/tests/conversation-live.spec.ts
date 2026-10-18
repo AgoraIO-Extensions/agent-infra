@@ -1210,7 +1210,7 @@ for (const source of ["standard", "custom"] as const) {
 				if (!viewport) throw new Error("Expected configured browser viewport");
 				await page.setViewportSize(viewport);
 				await alert.scrollIntoViewIfNeeded();
-				await expect(alert).toBeInViewport({ ratio: 0.99 });
+				await expect(alert).toBeInViewport({ ratio: 1 });
 				await info.attach(
 					`personal-key-recovery-${source}-${code}-${viewport.width}`,
 					{
