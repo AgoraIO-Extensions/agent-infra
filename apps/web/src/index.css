@@ -2066,6 +2066,242 @@ body {
 	color: var(--muted-foreground);
 	font-size: 13px;
 }
+/* Owner 配置页（设计 #owner-config）：页头之后是说明、一张表单卡，卡外是危险区与管理员操作区。 */
+.agent-configuration .configuration-notices {
+	display: grid;
+	gap: 12px;
+}
+.configuration-form-card {
+	min-width: 0;
+	margin-top: 32px;
+	padding: 20px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--surface);
+}
+/* 授权控制等分区位于表单之前时，表单首个分区仍需上方分隔线（相邻分区只有一条线，O-03）。 */
+.configuration-form-card
+	> :not(form)
+	~ form
+	> fieldset
+	> [data-slot="form-section"]:first-child {
+	padding-top: 22px;
+	border-top-width: 1px;
+}
+.configuration-card-feedback {
+	margin-bottom: 22px;
+}
+.management-content .configuration-form-footer {
+	justify-content: space-between;
+	gap: 14px;
+	border-top: 1px solid var(--border);
+}
+.configuration-footer-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-left: auto;
+}
+.configuration-form-footer > [data-slot="alert"] {
+	flex-basis: 100%;
+}
+.management-content
+	:is(.configuration-danger-zone, .configuration-admin-actions)
+	h2 {
+	font: 620 16px / 1.35 var(--font-body);
+	letter-spacing: 0;
+}
+.management-content .configuration-danger-zone > p,
+.management-content .configuration-admin-actions > p {
+	margin: 6px 0 0;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+.configuration-danger-zone > [data-slot="alert"],
+.configuration-admin-actions > [data-slot="alert"] {
+	margin-top: 14px;
+}
+.configuration-danger-zone .card-actions,
+.configuration-admin-actions .card-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-top: 16px;
+}
+/* 管理员操作区：中性卡片，不复用危险区的红色边框与底色（N-01）。 */
+.configuration-admin-actions {
+	margin-top: 16px;
+	padding: 18px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--surface);
+}
+/* 企微渠道卡片（设计 .wecom-channel-*，O-07）。 */
+.wecom-channel-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+	margin-top: 16px;
+}
+.wecom-channel-card {
+	min-width: 0;
+	padding: 16px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface);
+}
+.wecom-channel-card[data-status="connected"] {
+	border-color: color-mix(in oklch, var(--success) 28%, var(--border));
+}
+.wecom-channel-card[data-status="auth_failed"] {
+	border-color: color-mix(in oklch, var(--danger) 32%, var(--border));
+}
+.wecom-channel-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+.wecom-channel-title {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+}
+.wecom-channel-icon {
+	display: grid;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	flex: none;
+	border-radius: 9px;
+	background: var(--surface-raised);
+	color: var(--foreground);
+}
+.wecom-channel-title h3 {
+	font-size: 14px;
+	font-weight: 650;
+	line-height: 1.4;
+}
+.management-content .wecom-channel-title p {
+	margin-top: 2px;
+	color: var(--muted-foreground);
+	font-size: 11px;
+}
+.wecom-channel-copy {
+	margin-top: 13px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.65;
+}
+.wecom-channel-fields {
+	display: grid;
+	gap: 10px;
+	margin-top: 14px;
+}
+.wecom-channel-card > [data-slot="label"] {
+	margin-top: 10px;
+}
+.wecom-channel-card > [data-slot="alert"],
+.wecom-channel-card > .text-destructive {
+	margin-top: 10px;
+}
+.wecom-channel-callback {
+	margin-top: 10px;
+	padding: 9px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--surface-raised);
+	font: 11px / 1.5 var(--font-mono);
+	overflow-wrap: anywhere;
+}
+.wecom-channel-callback strong {
+	display: block;
+	margin-bottom: 3px;
+	color: var(--foreground);
+	font: 550 11px / 1.5 var(--font-body);
+}
+.wecom-channel-actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 7px;
+	margin-top: 14px;
+}
+.wecom-qr-panel {
+	margin-top: 14px;
+	padding: 13px;
+	border: 1px solid color-mix(in oklch, var(--warning) 24%, var(--border));
+	border-radius: 11px;
+	background: color-mix(in oklch, var(--warning) 4%, var(--surface));
+}
+.wecom-qr-head strong {
+	display: block;
+	font-size: 13px;
+	font-weight: 650;
+}
+.management-content .wecom-qr-head p,
+.management-content .wecom-qr-hint {
+	margin-top: 3px;
+	color: var(--muted-foreground);
+	font-size: 11px;
+	line-height: 1.5;
+}
+.wecom-qr-unavailable {
+	display: flex;
+	align-items: flex-start;
+	gap: 9px;
+	margin-top: 12px;
+	padding: 11px;
+	border: 1px dashed color-mix(in oklch, var(--warning) 30%, var(--border));
+	border-radius: 9px;
+	background: var(--surface);
+}
+.wecom-qr-unavailable svg {
+	flex: none;
+	margin-top: 1px;
+	color: var(--warning);
+}
+.wecom-qr-unavailable strong {
+	display: block;
+	font-size: 12px;
+	font-weight: 650;
+}
+.management-content .wecom-qr-unavailable p {
+	margin-top: 4px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.6;
+	overflow-wrap: anywhere;
+}
+.wecom-qr-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 7px;
+	margin-top: 12px;
+}
+@media (max-width: 767px) {
+	.configuration-form-card {
+		margin-top: 26px;
+	}
+	.management-content .configuration-form-footer {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+	.configuration-footer-actions {
+		margin-left: 0;
+	}
+	.wecom-channel-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.wecom-channel-card {
+		padding: 14px;
+	}
+	.wecom-qr-unavailable {
+		padding: 10px;
+	}
+}
 .audit-detail-panel {
 	margin-top: 32px;
 	padding: 20px;

@@ -35,6 +35,10 @@ function pageStatus(page: Page) {
 	return page.locator("#main-content").getByRole("status");
 }
 
+function toastHost(page: Page) {
+	return page.locator('[data-slot="toast"]');
+}
+
 const deploymentConfiguration: DeploymentConfigurationProjectionV2 = {
 	modelCatalog: {
 		endpoints: [
@@ -67,7 +71,7 @@ const deploymentConfiguration: DeploymentConfigurationProjectionV2 = {
 
 async function fixture(
 	page: Page,
-	role: "owner" | "admin" | "employee" = "owner",
+	role: "owner" | "admin" | "employee" | "owner-admin" = "owner",
 ) {
 	let application = AgentApplicationProjectionV2Schema.parse({
 		...pendingApplication,
@@ -93,6 +97,12 @@ async function fixture(
 	let applicationDetailUnauthorized = false;
 	let deploymentUnavailable = false;
 	let deploymentUnauthorized = false;
+	// 生命周期受理响应只带受理元数据（不带 status），以及延后回读：用于 NW-16。
+	let lifecycleAcceptedOnly = false;
+	let deferLifecycleReadback = false;
+	let pendingLifecycleReadback: (() => void) | undefined;
+	let failNextConfigurationUpdate = false;
+	const isOwnerSession = role === "owner" || role === "owner-admin";
 	const retryableReadFailure = {
 		schemaVersion: 1 as const,
 		code: "DEPENDENCY_UNAVAILABLE" as const,
@@ -103,9 +113,12 @@ async function fixture(
 	const session = {
 		schemaVersion: 1,
 		user: {
-			userId: role === "owner" ? "user-owner-1" : `user-${role}`,
+			userId: isOwnerSession ? "user-owner-1" : `user-${role}`,
 			displayName: role,
-			roles: role === "admin" ? ["employee", "system_admin"] : ["employee"],
+			roles:
+				role === "admin" || role === "owner-admin"
+					? ["employee", "system_admin"]
+					: ["employee"],
 		},
 	};
 	const server = createPilotAgentMockServerV2({
@@ -147,7 +160,7 @@ async function fixture(
 				status: 200,
 				body: {
 					items:
-						ownerScope && role !== "owner" ? [] : [agent, ...additionalAgents],
+						ownerScope && !isOwnerSession ? [] : [agent, ...additionalAgents],
 					nextCursor: null,
 				},
 			};
@@ -238,7 +251,17 @@ async function fixture(
 		},
 		decideAgentApplication: () => ({ status: 200, body: application }),
 		updateAgentConfiguration: () => ({ status: 200, body: agent }),
-		commandAgentLifecycle: () => ({ status: 202, body: agent }),
+		commandAgentLifecycle: () => ({
+			status: 202,
+			body: lifecycleAcceptedOnly
+				? {
+						schemaVersion: 1,
+						accepted: true,
+						agentId: agent.agentId,
+						replayed: false,
+					}
+				: agent,
+		}),
 	});
 	let release: (() => void) | undefined;
 	let nextGate: Promise<void> | undefined;
@@ -410,19 +433,35 @@ async function fixture(
 				};
 			} else if (pathname.endsWith("/lifecycle")) {
 				const command = body as AgentLifecycleCommandRequestV1;
-				agent = {
-					...agent,
-					managementStatus:
-						command.command === "stop"
-							? "stopped"
-							: command.command === "disable"
-								? "disabled"
-								: "available",
-					serviceAvailability:
-						command.command === "stop" || command.command === "disable"
-							? null
-							: "starting",
+				const applyReadback = () => {
+					agent = {
+						...agent,
+						managementStatus:
+							command.command === "stop"
+								? "stopped"
+								: command.command === "disable"
+									? "disabled"
+									: "available",
+						serviceAvailability:
+							command.command === "stop" || command.command === "disable"
+								? null
+								: "starting",
+					};
 				};
+				// 延后回读只对下一条命令生效。
+				if (deferLifecycleReadback) pendingLifecycleReadback = applyReadback;
+				else applyReadback();
+				deferLifecycleReadback = false;
+			} else if (
+				pathname.endsWith("/configuration") &&
+				failNextConfigurationUpdate
+			) {
+				failNextConfigurationUpdate = false;
+				await route.fulfill({
+					status: 503,
+					json: retryableReadFailure,
+				});
+				return;
 			}
 		}
 		const response = await server.fetch(
@@ -613,6 +652,25 @@ async function fixture(
 					interactionMode: "platform-adapter",
 				},
 			};
+		},
+		agentState(
+			managementStatus: (typeof agent)["managementStatus"],
+			serviceAvailability: (typeof agent)["serviceAvailability"] = null,
+		) {
+			agent = { ...agent, managementStatus, serviceAvailability };
+		},
+		acceptLifecycleWithoutStatus() {
+			lifecycleAcceptedOnly = true;
+		},
+		deferNextLifecycleReadback() {
+			deferLifecycleReadback = true;
+		},
+		applyLifecycleReadback() {
+			pendingLifecycleReadback?.();
+			pendingLifecycleReadback = undefined;
+		},
+		failNextConfigurationUpdate() {
+			failNextConfigurationUpdate = true;
 		},
 	};
 }
@@ -1060,8 +1118,9 @@ test("Owner configuration, Secret clearing, lifecycle and custom image upgrade",
 		"password",
 	);
 	await expect(page.getByText(/群消息和 Agent 回复对群成员可见/)).toBeVisible();
+	// 企微卡片按设计标题命名区域（O-07）。
 	await expect(
-		page.getByRole("region", { name: "自建应用配置" }),
+		page.getByRole("region", { name: "企微应用", exact: true }),
 	).toBeVisible();
 	await capture(page, info, "owner-configuration");
 	api.holdNextCommand();
@@ -1094,10 +1153,20 @@ test("Owner configuration, Secret clearing, lifecycle and custom image upgrade",
 	await expect(page.getByRole("button", { name: "停止中…" })).toBeDisabled();
 	await expect(page.getByRole("button", { name: "重启 Agent" })).toBeDisabled();
 	api.release();
-	await expect(pageStatus(page)).toBeFocused();
+	// NW-16：受理结果用 Toast，不再内联「操作已提交：{状态}」；回读为已停止后给结束态提示，
+	// 危险区随之卸载，焦点落在页面 h1 而不是 body（O-11 AC-10）。
+	await expect(toastHost(page)).toHaveText("Agent 已停止，历史会话转为只读");
+	await expect(page.getByRole("region", { name: "停止 Agent" })).toHaveCount(0);
+	await expect(
+		page.getByRole("heading", {
+			level: 1,
+			name: "配置 Agent 的 Owner、范围和运行方式。",
+		}),
+	).toBeFocused();
+	await expect(page.locator("#main-content")).not.toContainText("操作已提交");
 	await page.getByRole("button", { name: "重启 Agent" }).click();
 	await page.getByRole("button", { name: "确认重启" }).click();
-	await expect(pageStatus(page)).toContainText("可用");
+	await expect(toastHost(page)).toHaveText("Agent 正在重启…");
 	api.customAgent();
 	await page.goto("/agents/agent-pilot-1/configuration");
 	await expect(page.getByRole("button", { name: "升级镜像" })).toBeDisabled();
@@ -1107,7 +1176,10 @@ test("Owner configuration, Secret clearing, lifecycle and custom image upgrade",
 	await expect(page.getByRole("button", { name: "升级中…" })).toBeDisabled();
 	await expect(page.getByLabel("新镜像引用")).toBeDisabled();
 	api.release();
-	await expect(pageStatus(page)).toContainText("配置已提交");
+	// NW-16：镜像升级受理只提示「已提交」，不把受理响应当作配置保存结果替换表单。
+	await expect(toastHost(page)).toHaveText("已提交镜像升级请求");
+	await expect(page.locator("#main-content")).not.toContainText("配置已提交");
+	await expect(page.getByLabel("新镜像引用")).toHaveValue("");
 	expect(api.commands.at(-1)?.body).toEqual({
 		schemaVersion: 1,
 		command: "upgrade_custom_image",
@@ -1131,6 +1203,14 @@ test("employee has no Owner or administrator controls, with loading and error st
 	// 无权访问是首屏静态边界（B-10 角色规则①），显示说明但不再用 role="alert" 打断读屏。
 	await expect(page.getByText("当前无法访问此配置。")).toBeVisible();
 	await expect(page.getByRole("alert")).toHaveCount(0);
+	// N-02 负向：员工仍是不可用页，主内容里没有按钮、输入框、授权控件与权限边界说明。
+	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+		"配置不可用",
+	);
+	await expect(page.locator("main").getByRole("button")).toHaveCount(0);
+	await expect(page.locator("main").getByRole("textbox")).toHaveCount(0);
+	await expect(page.locator("main")).not.toContainText("Agent 授权控制");
+	await expect(page.locator("main")).not.toContainText("权限边界");
 	await page.goto("/admin/approvals");
 	await expect(page.getByText("当前无法访问审批。")).toBeVisible();
 	await expect(page.getByRole("alert")).toHaveCount(0);
@@ -1546,17 +1626,62 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 		}
 		return route.fulfill({ json: { ...session, status: "active" } });
 	});
+	await page.addInitScript(() => {
+		const opened: string[] = [];
+		Object.assign(window, { __openedWindows: opened });
+		window.open = (url?: string | URL) => {
+			opened.push(String(url ?? ""));
+			return null;
+		};
+	});
+	const setupRequests: string[] = [];
+	page.on("request", (request) => {
+		if (/\/wecom-setup/.test(request.url()))
+			setupRequests.push(
+				`${request.method()} ${new URL(request.url()).pathname}`,
+			);
+	});
 	await page.goto("/agents/agent-pilot-1");
 	await page.getByRole("link", { name: "配置与管理" }).click();
+	// CK-09：扫码入口不要求先勾选「我已知悉」；O-08：不可用时显示面板，不打开窗口。
+	const qrTrigger = page.getByRole("button", { name: "扫码授权" });
+	await qrTrigger.click();
+	const bot = page.getByRole("region", { name: "企微机器人", exact: true });
+	await expect(
+		bot.getByText("扫码授权暂不可用", { exact: true }),
+	).toBeVisible();
+	await expect(
+		bot.getByRole("status").filter({ hasText: "请使用手动配置" }),
+	).toContainText("当前平台尚未完成授权关联校验。");
+	await expect(page.locator("main")).not.toContainText(
+		"authorization_correlation_unverified",
+	);
+	await expect(page.locator("main")).not.toContainText("请先确认连接影响");
+	await expect(bot.getByRole("alert")).toHaveCount(0);
+	expect(
+		await page.evaluate(
+			() =>
+				(window as unknown as { __openedWindows: string[] }).__openedWindows,
+		),
+	).toEqual([]);
+	await expect
+		.poll(() => setupRequests)
+		.toEqual([
+			"POST /api/v1/agents/agent-pilot-1/wecom-setup",
+			"POST /api/v1/agents/agent-pilot-1/wecom-setup/fixture-setup/cancel",
+		]);
+	await bot.getByRole("button", { name: "改用手动配置" }).click();
+	await expect(page.getByLabel("Bot ID", { exact: true })).toBeFocused();
+	await qrTrigger.click();
+	await bot.getByRole("button", { name: "关闭", exact: true }).click();
+	await expect(qrTrigger).toBeFocused();
+	// 已知扫码不可用后再次打开不再创建 setup session。
+	expect(setupRequests).toHaveLength(2);
 	await page
 		.getByRole("checkbox", {
 			name: "我已知悉：连接此机器人可能断开它在其他服务中的现有连接。",
 		})
 		.check();
-	await page.getByRole("button", { name: "扫码授权" }).click();
-	await expect(
-		page.getByText("扫码授权暂不可用，请使用下方手动配置。"),
-	).toBeVisible();
 	await page.getByLabel("Bot ID", { exact: true }).fill("fixture-bot");
 	const secret = "synthetic-bot-secret";
 	await page.getByLabel("Secret", { exact: true }).fill(secret);
@@ -1565,19 +1690,16 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	});
 	await capture(page, info, "wecom-manual");
 	await page.getByLabel("Secret", { exact: true }).fill(secret);
-	await page
-		.getByRole("region", { name: "智能机器人配置" })
-		.getByRole("button", { name: "验证并绑定" })
-		.click();
+	await bot.getByRole("button", { name: "验证并绑定：企微机器人" }).click();
 	await expect(page.getByLabel("Secret", { exact: true })).toHaveValue("");
-	await expect(page.getByText("已连接", { exact: true })).toBeVisible();
+	await expect(bot.getByText("已连接", { exact: true })).toBeVisible();
 	expect(saved).toEqual({
 		state: "fixture-state",
 		botId: "fixture-bot",
 		secret,
 		takeoverConfirmed: true,
 	});
-	await expect(page.getByLabel("智能机器人配置标识")).toHaveCount(0);
+	await expect(page.getByLabel(/配置标识/)).toHaveCount(0);
 	await capture(page, info, "wecom-connected");
 });
 
@@ -1723,7 +1845,9 @@ test("configuration reads recover through the explicit browser action", async ({
 	api.recoverAgentDetail();
 	await page.getByRole("button", { name: "重新加载配置" }).click();
 	await expect(
-		page.getByRole("heading", { name: "让 Agent 在正确的范围内运行。" }),
+		page.getByRole("heading", {
+			name: "配置 Agent 的 Owner、范围和运行方式。",
+		}),
 	).toBeVisible();
 });
 
@@ -2859,11 +2983,18 @@ test("Owner configuration sections, option checkboxes, back link and disabled sa
 }) => {
 	await fixture(page);
 	await page.goto("/agents/agent-pilot-1/configuration");
+	// O-03：表单卡首节是「Agent 授权控制」（无上边线与上内边距）；共同 Owner、可用范围按设计命名。
 	await expect(
-		page.getByRole("region", { name: "Owner", exact: true }),
+		page.getByRole("region", { name: "共同 Owner", exact: true }),
 	).toBeVisible();
-	await expectFormSection(page, "Owner", { first: true });
-	for (const name of ["使用范围", "企微渠道", "模型配置", "Secrets"])
+	await expectFormSection(page, "Agent 授权控制", { first: true });
+	for (const name of [
+		"共同 Owner",
+		"可用范围",
+		"企微渠道",
+		"模型配置",
+		"Secrets",
+	])
 		await expectFormSection(page, name);
 	await expectNoLegendOnBorder(page);
 
@@ -3476,4 +3607,792 @@ test("lifecycle confirmations use the design titles and button variants", async 
 		await resolvedColor(page, "var(--primary)"),
 		await resolvedColor(page, "var(--accent-ink)"),
 	]).toContain(restartFill);
+});
+
+// ---------------------------------------------------------------------------
+// Owner 配置设计对齐（O-03、O-04、O-05、O-11、O-12、N-01、N-02、R4-14、NW-16）。
+// ---------------------------------------------------------------------------
+
+const configurationTitle = "配置 Agent 的 Owner、范围和运行方式。";
+
+async function bodyFontFamily(page: Page) {
+	return page.evaluate(() => getComputedStyle(document.body).fontFamily);
+}
+
+test("Owner configuration follows the design heading, boundary notice and section skeleton", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const heading = page.getByRole("heading", { level: 1 });
+	await expect(heading).toHaveText(configurationTitle);
+	await expect(page.locator("main .page-heading")).toContainText(
+		"保存后更新运行实例；Secret 只显示状态和版本。",
+	);
+
+	// O-12：返回入口为 ghost sm，图标 16px，href 不变。
+	const back = page.getByRole("link", { name: "返回 Agent 详情" });
+	await expect(back).toHaveAttribute("href", "/agents/agent-pilot-1");
+	expect(
+		await computed(back, [
+			"fontSize",
+			"paddingTop",
+			"paddingLeft",
+			"minHeight",
+		]),
+	).toEqual({
+		fontSize: "12px",
+		paddingTop: "7px",
+		paddingLeft: "11px",
+		minHeight: "44px",
+	});
+	const backIcon = await back.locator("svg").boundingBox();
+	expect([backIcon?.width, backIcon?.height]).toEqual([16, 16]);
+
+	// O-05：页头之后紧跟一个权限边界 notice。
+	const notice = page.locator('.configuration-notices > [data-slot="alert"]');
+	await expect(notice).toHaveCount(1);
+	expect(
+		await computed(notice, [
+			"paddingTop",
+			"paddingLeft",
+			"borderTopLeftRadius",
+			"fontSize",
+		]),
+	).toEqual({
+		paddingTop: "13px",
+		paddingLeft: "14px",
+		borderTopLeftRadius: "12px",
+		fontSize: "13px",
+	});
+	const noticeIcon = notice.locator("svg");
+	await expect(noticeIcon).toHaveAttribute("aria-hidden", "true");
+	const iconBox = await noticeIcon.boundingBox();
+	expect([iconBox?.width, iconBox?.height]).toEqual([17, 17]);
+	expect((await computed(noticeIcon, ["color"])).color).toBe(
+		await resolvedColor(page, "var(--accent)"),
+	);
+	const title = notice.locator('[data-slot="alert-title"]');
+	await expect(title).toHaveText("权限边界");
+	expect((await computed(title, ["fontWeight"])).fontWeight).toBe("650");
+	await expect(notice).toContainText("Connection 授权由使用者自己完成。");
+	await expect(page.locator("main")).not.toContainText(
+		"配置变更不需要重新审批",
+	);
+
+	// O-03：一张表单卡，分区为 section + h2；首节无上边线，相邻分区内容到标题为 22 + 1 + 22。
+	const card = page.locator(".configuration-form-card");
+	await expect(card).toHaveCount(1);
+	// 分区标题不再是 legend；授权控制里「目标类型」的字段组标题仍是 FieldLegend。
+	await expect(
+		card.locator('legend:not([data-slot="field-legend"])'),
+	).toHaveCount(0);
+	await expect(page.locator(".form-aside, .lifecycle-panel")).toHaveCount(0);
+	const sections = await card.locator('[data-slot="form-section"]').all();
+	expect(sections.length).toBeGreaterThanOrEqual(6);
+	for (const [index, section] of sections.entries()) {
+		expect(
+			await computed(section, [
+				"paddingTop",
+				"paddingBottom",
+				"borderTopWidth",
+				"borderBottomWidth",
+			]),
+		).toEqual({
+			paddingTop: index === 0 ? "0px" : "22px",
+			paddingBottom: "22px",
+			borderTopWidth: index === 0 ? "0px" : "1px",
+			borderBottomWidth: "0px",
+		});
+		if (index === 0) continue;
+		const gap = await page.evaluate(
+			([previous, current]) => {
+				const last = previous?.lastElementChild?.getBoundingClientRect();
+				const title = current
+					?.querySelector('[data-slot="form-section-title"]')
+					?.getBoundingClientRect();
+				return last && title ? title.top - last.bottom : Number.NaN;
+			},
+			[
+				await sections[index - 1]?.elementHandle(),
+				await section.elementHandle(),
+			],
+		);
+		expect(Math.abs(gap - 45), `section ${index}`).toBeLessThanOrEqual(1);
+	}
+	const fieldset = page.locator('fieldset[aria-label="Agent 配置"]');
+	expect(
+		await computed(fieldset, ["borderTopWidth", "paddingTop", "paddingLeft"]),
+	).toEqual({ borderTopWidth: "0px", paddingTop: "0px", paddingLeft: "0px" });
+
+	// O-03 / O-04：前两个配置分区按设计命名；主内容里所有 h2 都是正文字体 16px / 620、字距 0。
+	await expect(
+		card.locator('[data-slot="form-section-title"]').nth(1),
+	).toHaveText("共同 Owner");
+	await expect(
+		card.locator('[data-slot="form-section-title"]').nth(2),
+	).toHaveText("可用范围");
+	const description = card
+		.getByRole("region", { name: "共同 Owner", exact: true })
+		.locator('[data-slot="form-section-description"]');
+	await expect(description).toHaveText(
+		"从目录选择共同 Owner；页面不显示内部 ID，提交时保存服务端 ID。",
+	);
+	expect(await computed(description, ["fontSize", "marginTop"])).toEqual({
+		fontSize: "13px",
+		marginTop: "5px",
+	});
+	const bodyFont = await bodyFontFamily(page);
+	for (const h2 of await page.locator("#main-content h2").all())
+		expect(
+			await computed(h2, [
+				"fontSize",
+				"fontWeight",
+				"fontFamily",
+				"letterSpacing",
+			]),
+			await h2.innerText(),
+		).toEqual({
+			fontSize: "16px",
+			fontWeight: "620",
+			fontFamily: bodyFont,
+			letterSpacing: "normal",
+		});
+	await expect(page.locator("#main-content")).not.toContainText("生命周期");
+
+	// O-12：授权控制未填写目标时，全部操作都是 outline，不出现浅蓝实心的禁用主按钮。
+	const authorization = page.getByRole("region", {
+		name: "Agent 授权控制",
+		exact: true,
+	});
+	const outlineFill = await resolved(page, "backgroundColor", "var(--surface)");
+	for (const target of ["应用", "用户"]) {
+		await authorization
+			.getByRole("button", { name: target, exact: true })
+			.click();
+		const actions = authorization.getByRole("button", { name: /^(授权|撤销)/ });
+		await expect(actions).toHaveCount(4);
+		for (const action of await actions.all()) {
+			await expect(action).toBeDisabled();
+			expect(
+				(await computed(action, ["backgroundColor"])).backgroundColor,
+				await action.innerText(),
+			).toBe(outlineFill);
+		}
+	}
+	// 说明动词与手填控件一致，不出现实现用语（NI-26）。
+	await expect(authorization).toContainText("填写需要授权的用户或应用标识");
+	for (const term of [
+		"选择明确的用户或应用",
+		"SDK",
+		"revoke",
+		"grant",
+		"revision",
+	])
+		await expect(page.locator("#main-content")).not.toContainText(term);
+});
+
+test("Owner configuration puts restart in the footer and stop in a standalone danger zone", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	api.agentState("available", "ready");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const card = page.locator(".configuration-form-card");
+	const footer = card.locator(".configuration-form-footer");
+	const save = footer.getByRole("button", { name: "校验并保存" });
+	const restart = footer.getByRole("button", { name: "重启 Agent" });
+	await expect(restart).toBeVisible();
+	await expect(restart.locator("svg")).toHaveAttribute("aria-hidden", "true");
+	expect((await computed(restart, ["backgroundColor"])).backgroundColor).toBe(
+		await resolved(page, "backgroundColor", "var(--surface)"),
+	);
+	if (info.project.name === "desktop") {
+		const [saveBox, restartBox] = [
+			await save.boundingBox(),
+			await restart.boundingBox(),
+		];
+		expect(restartBox?.y).toBe(saveBox?.y);
+		expect(
+			Math.round(
+				(restartBox?.x ?? 0) - ((saveBox?.x ?? 0) + (saveBox?.width ?? 0)),
+			),
+		).toBe(8);
+	}
+	// 保存可用时，Tab 从保存移到重启；重启只打开确认，不发配置保存请求。
+	await page.getByRole("button", { name: "添加 Secret" }).click();
+	await page.getByLabel("Secret 名称").fill("RELEASE_KEY");
+	await page.getByLabel("新 Secret 值").fill("synthetic-tab-secret");
+	await save.focus();
+	await page.keyboard.press("Tab");
+	await expect(restart).toBeFocused();
+	await page.keyboard.press("Enter");
+	const restartDialog = page.getByRole("dialog", { name: /^重启.+？$/ });
+	await expect(restartDialog).toBeVisible();
+	await page.keyboard.press("Escape");
+	await expect(restartDialog).toBeHidden();
+	expect(api.commands).toEqual([]);
+
+	// 表单卡之后、不在卡内只有一个危险区：设计几何、正文字体 16px 标题、带图标的实心危险按钮。
+	const danger = page.getByRole("region", { name: "停止 Agent", exact: true });
+	await expect(danger).toHaveCount(1);
+	expect(
+		await danger.evaluate(
+			(element) => element.closest(".configuration-form-card") === null,
+		),
+	).toBe(true);
+	expect(
+		await computed(danger, [
+			"marginTop",
+			"paddingTop",
+			"paddingLeft",
+			"borderTopLeftRadius",
+		]),
+	).toEqual({
+		marginTop: "16px",
+		paddingTop: "18px",
+		paddingLeft: "18px",
+		borderTopLeftRadius: "14px",
+	});
+	const dangerTitle = danger.getByRole("heading", { level: 2 });
+	expect(await computed(dangerTitle, ["fontSize", "fontFamily"])).toEqual({
+		fontSize: "16px",
+		fontFamily: await bodyFontFamily(page),
+	});
+	const dangerCopy = danger.locator("p");
+	await expect(dangerCopy).toHaveText(
+		"停止会释放运行资源，但保留配置、渠道绑定、平台会话历史与用户数据。停止后历史只读。",
+	);
+	expect((await computed(dangerCopy, ["fontSize"])).fontSize).toBe("13px");
+	const stop = danger.getByRole("button", { name: "停止 Agent" });
+	expect(await dangerFills(page)).toContain(
+		(await computed(stop, ["backgroundColor"])).backgroundColor,
+	);
+	await expect(stop.locator("svg")).toHaveAttribute("aria-hidden", "true");
+	// R4-14：状态只在页头显示，危险区只有标题、说明和按钮。
+	for (const text of ["Agent 状态", "服务状态", "服务已就绪。", "停用"])
+		await expect(danger).not.toContainText(text);
+	await expect(page.locator("#main-content")).not.toContainText("Agent 状态");
+	// Owner（非管理员）不渲染任何仅属于管理员的元素。
+	await expect(page.getByRole("button", { name: "停用 Agent" })).toHaveCount(0);
+	await expect(page.getByText("管理员操作")).toHaveCount(0);
+	await capture(page, info, "owner-lifecycle-layout");
+
+	// 保存结果替换表单期间，重启仍可见可用（O-11）。
+	await save.click();
+	await expect(pageStatus(page)).toContainText("配置已提交");
+	await expect(page.getByRole("button", { name: "重启 Agent" })).toBeEnabled();
+
+	// 已停止：页脚仍有重启，页面没有危险区。
+	api.agentState("stopped");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(
+		page.locator(".configuration-form-footer").getByRole("button", {
+			name: "重启 Agent",
+		}),
+	).toBeVisible();
+	await expect(page.getByRole("region", { name: "停止 Agent" })).toHaveCount(0);
+	// 创建失败：页脚是「重试创建」。
+	api.agentState("creation_failed");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(
+		page.locator(".configuration-form-footer").getByRole("button", {
+			name: "重试创建",
+		}),
+	).toBeVisible();
+	await expect(page.getByRole("button", { name: "重试创建" })).toHaveCount(1);
+});
+
+test("an Owner administrator gets one danger zone and a neutral administrator action in every available service state", async ({
+	page,
+}, info) => {
+	const api = await fixture(page, "owner-admin");
+	for (const service of [
+		"ready",
+		"starting",
+		"updating",
+		"unavailable",
+	] as const) {
+		api.agentState("available", service);
+		await page.goto("/agents/agent-pilot-1/configuration");
+		const admin = page.getByRole("region", { name: "管理员操作", exact: true });
+		await expect(admin).toBeVisible();
+		const surface = await resolved(page, "backgroundColor", "var(--surface)");
+		await expect(admin).toBeVisible();
+		await expect(page.locator(".lifecycle-danger-zone")).toHaveCount(1);
+		expect(
+			await admin.evaluate(
+				(element) => element.closest(".lifecycle-danger-zone") === null,
+			),
+		).toBe(true);
+		expect(
+			await computed(admin, ["backgroundColor", "borderTopColor"]),
+		).toEqual({
+			backgroundColor: surface,
+			borderTopColor: await resolvedColor(page, "var(--border)"),
+		});
+		// 页面上只有一个实心危险按钮；两个「停…Agent」按钮名称不同、图标不同。
+		const fills = await dangerFills(page);
+		const solid = await page
+			.locator("#main-content button")
+			.evaluateAll(
+				(buttons, fills) =>
+					buttons
+						.filter((button) =>
+							fills.includes(getComputedStyle(button).backgroundColor),
+						)
+						.map((button) => button.textContent),
+				fills,
+			);
+		expect(solid, service).toEqual(["停止 Agent"]);
+		const disable = admin.getByRole("button", { name: "停用 Agent" });
+		expect((await computed(disable, ["backgroundColor"])).backgroundColor).toBe(
+			await resolved(page, "backgroundColor", "var(--surface)"),
+		);
+		const icons = await page
+			.getByRole("button", { name: /^停(止|用) Agent$/ })
+			.evaluateAll((buttons) =>
+				buttons.map((button) => button.querySelector("svg")?.outerHTML),
+			);
+		expect(icons).toHaveLength(2);
+		expect(icons[0]).not.toBe(icons[1]);
+		await expect(admin).toContainText("以下操作仅对系统管理员显示。");
+		await expect(page.locator("#main-content")).not.toContainText(
+			"停用将撤销运行资格。Owner 不能恢复，个人历史仍保留。",
+		);
+		await expect(page.locator("#main-content")).not.toContainText("服务状态");
+	}
+	await capture(page, info, "owner-admin-lifecycle");
+	// 已停用：没有可用的管理员操作，也不渲染管理员区。
+	api.agentState("disabled");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+		configurationTitle,
+	);
+	await expect(page.getByText("管理员操作")).toHaveCount(0);
+	await expect(
+		page.locator('.configuration-notices > [data-slot="alert"]').first(),
+	).toContainText("运行资格已撤销，Owner 无法恢复。");
+});
+
+test("an Owner administrator can disable in every eligible state and a pending stop blocks every other command", async ({
+	page,
+}) => {
+	const api = await fixture(page, "owner-admin");
+	for (const status of [
+		"creating",
+		"available",
+		"stopped",
+		"creation_failed",
+	] as const) {
+		api.agentState(status, status === "available" ? "ready" : null);
+		await page.goto("/agents/agent-pilot-1/configuration");
+		await expect(page.getByRole("button", { name: "停用 Agent" })).toHaveCount(
+			1,
+		);
+		await expect(
+			page.getByRole("button", { name: "停用 Agent" }),
+		).toBeEnabled();
+		await expect(page.getByRole("button", { name: "重试创建" })).toHaveCount(
+			status === "creation_failed" ? 1 : 0,
+		);
+	}
+	await page.getByRole("button", { name: "停用 Agent" }).click();
+	await page
+		.getByRole("dialog", { name: "停用 Agent？" })
+		.getByRole("button", { name: "确认停用" })
+		.click();
+	await expect(toastHost(page)).toHaveText(/已提交停用请求|Agent 已停用/);
+	expect(api.commands.map((command) => command.body)).toEqual([
+		{ schemaVersion: 1, command: "disable" },
+	]);
+
+	// NI-88：停止挂起期间，停止 / 重启 / 停用全部禁用，只发出一条 stop。
+	api.agentState("available", "ready");
+	api.commands.length = 0;
+	await page.goto("/agents/agent-pilot-1/configuration");
+	api.holdNextCommand();
+	await page.getByRole("button", { name: "停止 Agent" }).click();
+	await page
+		.getByRole("dialog", { name: "停止这个 Agent？" })
+		.getByRole("button", { name: "停止 Agent" })
+		.click();
+	for (const name of ["停止中…", "重启 Agent", "停用 Agent"])
+		await expect(page.getByRole("button", { name })).toBeDisabled();
+	expect(api.commands.map((command) => command.body)).toEqual([
+		{ schemaVersion: 1, command: "stop" },
+	]);
+	api.release();
+	await expect(toastHost(page)).toHaveText("Agent 已停止，历史会话转为只读");
+	expect(api.commands).toHaveLength(1);
+	await expect(page.locator("#main-content")).not.toContainText("操作已提交");
+});
+
+test("a pure administrator reaches the same configuration page with authorization and administrator actions only", async ({
+	page,
+}, info) => {
+	const api = await fixture(page, "admin");
+	api.agentState("creation_failed");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+		configurationTitle,
+	);
+	await expect(page.locator("main")).not.toContainText("配置不可用");
+	await expect(page.locator("main")).not.toContainText("当前无法访问此配置。");
+	await expect(
+		page.locator('.configuration-notices > [data-slot="alert"]'),
+	).toContainText("权限边界");
+	await expect(
+		page.getByRole("region", { name: "Agent 授权控制", exact: true }),
+	).toBeVisible();
+	const admin = page.getByRole("region", { name: "管理员操作", exact: true });
+	await expect(admin.getByRole("button")).toHaveText([
+		"重试创建",
+		"停用 Agent",
+	]);
+	await expect(page.locator(".form-aside")).toHaveCount(0);
+	await expect(
+		page.getByRole("combobox", { name: "共同 Owner 用户" }),
+	).toHaveCount(0);
+	await expect(page.getByRole("button", { name: "校验并保存" })).toHaveCount(0);
+	await expect(
+		page.getByRole("button", { name: /停止 Agent|重启 Agent/ }),
+	).toHaveCount(0);
+	// 卡片嵌套不超过两层：授权控制所在的卡片不包含管理员区。
+	expect(
+		await admin.evaluate(
+			(element) => element.closest(".configuration-form-card") === null,
+		),
+	).toBe(true);
+	for (const h2 of await page.locator("#main-content h2").all())
+		expect(
+			(await computed(h2, ["fontSize", "fontFamily"])).fontFamily,
+			await h2.innerText(),
+		).toBe(await bodyFontFamily(page));
+	await capture(page, info, "administrator-configuration");
+
+	// 挂起重试创建时停用也禁用（共享进行中状态）。
+	api.holdNextCommand();
+	await admin.getByRole("button", { name: "重试创建" }).click();
+	await page
+		.getByRole("dialog", { name: "重试创建 Agent？" })
+		.getByRole("button", { name: "确认重试创建" })
+		.click();
+	await expect(
+		admin.getByRole("button", { name: "停用 Agent" }),
+	).toBeDisabled();
+	api.release();
+	await expect(toastHost(page)).toHaveText("已提交重试创建请求");
+	expect(api.commands.map((command) => command.body)).toEqual([
+		{ schemaVersion: 1, command: "retry_creation" },
+	]);
+});
+
+test("lifecycle feedback follows the command and the detail read-back, not the accepted response", async ({
+	page,
+}) => {
+	// 默认 Agent 服务为 starting，详情每 2 秒回读一次。
+	const api = await fixture(page);
+	api.acceptLifecycleWithoutStatus();
+	api.deferNextLifecycleReadback();
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await page.getByRole("button", { name: "停止 Agent" }).click();
+	await page
+		.getByRole("dialog", { name: "停止这个 Agent？" })
+		.getByRole("button", { name: "停止 Agent" })
+		.click();
+	const toast = toastHost(page);
+	// 受理响应不带 status：只说明已提交停止请求，不出现「操作已提交：可用」。
+	await expect(toast).toHaveText("已提交停止请求");
+	await expect(toast).toHaveAttribute("role", "status");
+	await expect(toast).toHaveAttribute("aria-live", "polite");
+	expect(
+		await page.evaluate(
+			() =>
+				document
+					.querySelector('[data-slot="toast"]')
+					?.contains(document.activeElement) ?? false,
+		),
+	).toBe(false);
+	await expect(page.locator("#main-content")).not.toContainText("操作已提交");
+	await expect(pageStatus(page)).toHaveCount(0);
+	// 回读为已停止后才给结束态提示。
+	api.applyLifecycleReadback();
+	await expect(toast).toHaveText("Agent 已停止，历史会话转为只读", {
+		timeout: 6000,
+	});
+	await expect(page.getByRole("region", { name: "停止 Agent" })).toHaveCount(0);
+
+	// 重启：受理 → 回读 starting → ready 后才提示完成。
+	api.agentState("available", "ready");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await page.getByRole("button", { name: "重启 Agent" }).click();
+	await page.getByRole("button", { name: "确认重启" }).click();
+	await expect(toast).toHaveText("Agent 正在重启…");
+	await expect(page.locator("main .page-heading")).toContainText("启动中");
+	api.agentState("available", "ready");
+	await expect(toast).toHaveText("重启完成，Agent 已就绪", { timeout: 6000 });
+});
+
+// 企微渠道（O-01、O-07、O-09）：两张卡片的状态由各自的连接接口提供。
+async function wecomStatuses(
+	page: Page,
+	initial: { bot: string; app: string; callbackUrl?: string },
+) {
+	const state = { ...initial };
+	const setupRequests: string[] = [];
+	await page.route(/\/api\/v1\/agents\/[^/]+\/wecom-/, async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (path.endsWith("/wecom-bot"))
+			return route.fulfill({ json: { status: state.bot } });
+		if (path.endsWith("/wecom-app"))
+			return route.fulfill({
+				json: {
+					status: state.app,
+					...(state.app === "connected" && state.callbackUrl
+						? { callbackUrl: state.callbackUrl }
+						: {}),
+				},
+			});
+		setupRequests.push(`${route.request().method()} ${path}`);
+		return route.fulfill({ status: 503, json: {} });
+	});
+	return { setupRequests, state };
+}
+
+// 先移除一个组织范围 chip（不保存），制造一处未保存的修改。
+async function removeOrganizationChip(page: Page) {
+	await page.getByRole("button", { name: "移除 平台工程" }).click();
+	await expect(page.getByRole("button", { name: "移除 平台工程" })).toHaveCount(
+		0,
+	);
+	await expect(page.getByRole("button", { name: "校验并保存" })).toBeEnabled();
+}
+
+test("WeCom unbind asks for confirmation and sends only its own channel request", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	const wecom = await wecomStatuses(page, {
+		bot: "connected",
+		app: "connected",
+		callbackUrl: "https://callback.example.test/wecom",
+	});
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await removeOrganizationChip(page);
+
+	const bot = page.getByRole("region", { name: "企微机器人", exact: true });
+	const trigger = bot.getByRole("button", { name: "解除绑定：企微机器人" });
+	await expect(trigger).toHaveText("解除绑定");
+	expect((await computed(trigger, ["backgroundColor"])).backgroundColor).toBe(
+		"rgba(0, 0, 0, 0)",
+	);
+	// 取消、Esc、点遮罩都不发请求，焦点回到触发按钮。
+	for (const dismiss of ["cancel", "escape", "backdrop"] as const) {
+		await trigger.click();
+		const dialog = page.getByRole("dialog", { name: "解除企微机器人绑定？" });
+		await expect(dialog).toBeVisible();
+		await expect(dialog).toHaveAttribute("aria-modal", "true");
+		await expect(dialog).toContainText(
+			"解除后平台停止向该入口投递新消息；已有会话和历史保留。",
+		);
+		const footer = dialog.locator('[data-slot="dialog-footer"]');
+		await expect(footer.getByRole("button")).toHaveText(["取消", "确认解除"]);
+		expect(await dangerFills(page)).toContain(
+			(
+				await computed(footer.getByRole("button", { name: "确认解除" }), [
+					"backgroundColor",
+				])
+			).backgroundColor,
+		);
+		if (dismiss === "cancel")
+			await footer.getByRole("button", { name: "取消" }).click();
+		else if (dismiss === "escape") await page.keyboard.press("Escape");
+		else await page.mouse.click(5, 5);
+		await expect(dialog).toBeHidden();
+		await expect(trigger).toBeFocused();
+	}
+	expect(api.commands).toEqual([]);
+
+	await trigger.click();
+	// 服务端解除后，连接状态回读为未配置。
+	wecom.state.bot = "not_configured";
+	await page
+		.getByRole("dialog", { name: "解除企微机器人绑定？" })
+		.getByRole("button", { name: "确认解除" })
+		.click();
+	await expect(toastHost(page)).toHaveText("企微机器人已解除绑定");
+	expect(api.commands.map(({ path, body }) => ({ path, body }))).toEqual([
+		{
+			path: "/api/v2/agents/agent-pilot-1/configuration",
+			body: {
+				schemaVersion: 2,
+				channels: [{ kind: "wecom_bot", enabled: false }],
+			},
+		},
+	]);
+	await expect(bot.getByText("未配置", { exact: true })).toBeVisible();
+	await expect(bot.getByRole("button", { name: /^解除绑定/ })).toHaveCount(0);
+	await expect(bot.getByRole("heading", { name: "企微机器人" })).toBeFocused();
+	// 页面其余内容不变：表单仍在，未保存的范围修改保留，保存仍可用。
+	await expect(page.locator("#main-content")).not.toContainText("配置已提交");
+	await expect(page.getByRole("button", { name: "校验并保存" })).toBeEnabled();
+	await expect(page.getByRole("button", { name: "移除 平台工程" })).toHaveCount(
+		0,
+	);
+
+	// 应用卡：标题对应对象；确认前 chip 与回调 URL 不变。
+	const app = page.getByRole("region", { name: "企微应用", exact: true });
+	await expect(app).toContainText("https://callback.example.test/wecom");
+	await app.getByRole("button", { name: "解除绑定：企微应用" }).click();
+	const appDialog = page.getByRole("dialog", { name: "解除企微应用绑定？" });
+	await expect(appDialog).toBeVisible();
+	await expect(page.getByText("解除企微机器人绑定？")).toHaveCount(0);
+	await expect(app.getByText("已连接", { exact: true })).toBeVisible();
+	await expect(app).toContainText("https://callback.example.test/wecom");
+	await capture(page, info, "wecom-unbind-dialog");
+	api.failNextConfigurationUpdate();
+	await appDialog.getByRole("button", { name: "确认解除" }).click();
+	// 失败时状态保持原值，卡内提示，不写页面级错误，也没有 Toast。
+	await expect(app.getByRole("alert")).toHaveText("解除绑定未完成，请重试。");
+	await expect(app.getByText("已连接", { exact: true })).toBeVisible();
+	await expect(page.locator("#main-content")).not.toContainText("配置未能保存");
+	expect(api.commands.at(-1)?.body).toEqual({
+		schemaVersion: 2,
+		channels: [{ kind: "wecom_app", enabled: false }],
+	});
+	expect(wecom.setupRequests).toEqual([]);
+});
+
+test("WeCom channel cards follow the design grid, chip and status border", async ({
+	page,
+}, info) => {
+	await fixture(page);
+	await wecomStatuses(page, { bot: "connected", app: "auth_failed" });
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const grid = page.locator(".wecom-channel-grid");
+	const bot = page.getByRole("region", { name: "企微机器人", exact: true });
+	const app = page.getByRole("region", { name: "企微应用", exact: true });
+	await expect(bot.getByText("已连接", { exact: true })).toBeVisible();
+	const mobile = info.project.name === "mobile";
+	const gridStyle = await computed(grid, ["display", "columnGap"]);
+	expect(gridStyle).toEqual({ display: "grid", columnGap: "14px" });
+	const [botBox, appBox] = [await bot.boundingBox(), await app.boundingBox()];
+	if (mobile) expect(appBox?.y).toBeGreaterThan(botBox?.y ?? 0);
+	else {
+		expect(appBox?.y).toBe(botBox?.y);
+		expect(
+			Math.abs((appBox?.width ?? 0) - (botBox?.width ?? 0)),
+		).toBeLessThanOrEqual(1);
+	}
+	for (const card of [bot, app])
+		expect(
+			await computed(card, [
+				"borderTopLeftRadius",
+				"paddingTop",
+				"paddingLeft",
+			]),
+		).toEqual({
+			borderTopLeftRadius: "12px",
+			paddingTop: mobile ? "14px" : "16px",
+			paddingLeft: mobile ? "14px" : "16px",
+		});
+	const icon = bot.locator(".wecom-channel-icon");
+	const iconBox = await icon.boundingBox();
+	expect([iconBox?.width, iconBox?.height]).toEqual([32, 32]);
+	const title = bot.getByRole("heading", { level: 3, name: "企微机器人" });
+	expect(await computed(title, ["fontSize", "fontWeight"])).toEqual({
+		fontSize: "14px",
+		fontWeight: "650",
+	});
+	const subtitle = bot.getByText("智能机器人 · 长连接", { exact: true });
+	expect(await computed(subtitle, ["fontSize", "color"])).toEqual({
+		fontSize: "11px",
+		color: await resolvedColor(page, "var(--muted-foreground)"),
+	});
+	const botChip = bot.locator('[data-slot="badge"][data-variant="chip"]');
+	await expect(botChip).toHaveAttribute("data-tone", "green");
+	await expect(
+		app.locator('[data-slot="badge"][data-variant="chip"]'),
+	).toHaveAttribute("data-tone", "red");
+	expect((await computed(bot, ["borderTopColor"])).borderTopColor).toBe(
+		await resolvedColor(
+			page,
+			"color-mix(in oklch, var(--success) 28%, var(--border))",
+		),
+	);
+	expect((await computed(app, ["borderTopColor"])).borderTopColor).toBe(
+		await resolvedColor(
+			page,
+			"color-mix(in oklch, var(--danger) 32%, var(--border))",
+		),
+	);
+	// 区分同名控件的名称以可见文字开头，输入框仍以 <label> 为名（NI-107）。
+	for (const [card, name] of [
+		[bot, "企微机器人"],
+		[app, "企微应用"],
+	] as const)
+		for (const visible of ["验证并绑定", "刷新状态"])
+			await expect(
+				card.getByRole("button", { name: `${visible}：${name}` }),
+			).toHaveText(visible);
+	await expect(page.getByLabel("Bot ID", { exact: true })).toHaveCount(1);
+	await expect(page.getByLabel("Secret", { exact: true })).toHaveCount(1);
+	await capture(page, info, "wecom-cards");
+});
+
+test("Enter inside WeCom card fields never submits the page configuration", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	const wecom = await wecomStatuses(page, {
+		bot: "not_configured",
+		app: "not_configured",
+	});
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await removeOrganizationChip(page);
+	for (const label of ["Bot ID", "Secret", "企业 ID", "应用 Secret"]) {
+		const input = page.getByLabel(label, { exact: true });
+		await input.fill("fixture-value");
+		await input.press("Enter");
+		await expect(input).toBeFocused();
+	}
+	await page.waitForTimeout(300);
+	expect(api.commands).toEqual([]);
+	expect(wecom.setupRequests).toEqual([]);
+	await expect(page.locator("#main-content")).not.toContainText("配置已提交");
+});
+
+test("a pending stop on one Agent does not leak into another Agent's configuration", async ({
+	page,
+}, info) => {
+	test.skip(info.project.name !== "desktop", "In-app navigation flow");
+	const api = await fixture(page);
+	api.agentState("available", "ready");
+	api.threeAgents();
+	await page.goto("/agents/agent-pilot-1/configuration");
+	api.holdNextCommand();
+	await page.getByRole("button", { name: "停止 Agent" }).click();
+	await page
+		.getByRole("dialog", { name: "停止这个 Agent？" })
+		.getByRole("button", { name: "停止 Agent" })
+		.click();
+	await expect(page.getByRole("button", { name: "停止中…" })).toBeDisabled();
+	// 应用内导航到另一个 Agent 的配置页，A 的停止仍挂起。
+	await page.getByRole("link", { name: "Agent 目录" }).click();
+	await page.getByRole("link", { name: "查看 Visible Agent 2 详情" }).click();
+	await page.getByRole("link", { name: "配置与管理" }).click();
+	await expect(page).toHaveURL(/\/agents\/agent-visible-2\/configuration$/);
+	await expect(page.locator("main .page-eyebrow")).toContainText(
+		"Visible Agent 2",
+	);
+	for (const name of ["停止 Agent", "重启 Agent"])
+		await expect(page.getByRole("button", { name })).toBeEnabled();
+	api.release();
+	await expect.poll(() => api.commands.length).toBe(1);
+	await page.waitForTimeout(300);
+	// A 的受理结果不显示在 B 的页面上。
+	await expect(toastHost(page)).toHaveText("");
+	await expect(page.locator("#main-content")).not.toContainText("操作已提交");
+	await expect(page.getByRole("button", { name: "停止 Agent" })).toBeEnabled();
 });

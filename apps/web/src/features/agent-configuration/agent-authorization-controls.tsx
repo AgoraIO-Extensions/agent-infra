@@ -107,11 +107,10 @@ export function AgentAuthorizationControls({
 	}
 
 	return (
-		// 位于配置卡片顶部、Owner 分区之前：用下边线与后面的配置表单分开。
+		// 位于配置卡片顶部、共同 Owner 分区之前；与后面分区之间只有后者的一条上边线（O-03）。
 		<FormSection
 			title="Agent 授权控制"
 			description="填写需要授权的用户或应用标识；提交时平台会重新检查当前权限。页面不显示凭证。"
-			className="border-border border-b"
 		>
 			<div className="mt-4 space-y-4">
 				<div className="grid gap-3 sm:grid-cols-2">
@@ -175,9 +174,11 @@ export function AgentAuthorizationControls({
 						</p>
 					</Field>
 				) : null}
+				{/* 授权与撤销都用 outline：页面唯一的主按钮是页脚保存，未填写目标时不出现浅蓝实心禁用按钮（O-12）。 */}
 				{targetKind === "application" ? (
 					<div className="flex flex-wrap gap-3">
 						<Button
+							variant="outline"
 							disabled={busy || !target}
 							onClick={() => void run("manage", false)}
 						>
@@ -191,6 +192,7 @@ export function AgentAuthorizationControls({
 							撤销管理
 						</Button>
 						<Button
+							variant="outline"
 							disabled={busy || !target}
 							onClick={() => void run("use", false)}
 						>
@@ -207,6 +209,7 @@ export function AgentAuthorizationControls({
 				) : (
 					<div className="flex flex-wrap gap-3">
 						<Button
+							variant="outline"
 							disabled={busy || !target || !validRevision}
 							onClick={() => void run("api-use", false)}
 						>
@@ -220,6 +223,7 @@ export function AgentAuthorizationControls({
 							撤销用户 API 使用
 						</Button>
 						<Button
+							variant="outline"
 							disabled={busy || !target || !validRevision}
 							onClick={() => void run("api-manage", false)}
 						>
