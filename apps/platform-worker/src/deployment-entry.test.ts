@@ -369,6 +369,11 @@ try {
    configuration.connectionInstallationSupply.revision = 'r99';
  }
  const signal = new AbortController().signal;
+ if (process.env.RUN_NATIVE_PORTS === 'true') {
+   const options = await entry.createPlatformNativeMetadataGatewayOptionsV1(signal);
+   console.log(JSON.stringify(options?.ports ?? null));
+   process.exit(0);
+ }
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
 	const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
 	if (process.env.RUN_SKILL_CHECK === "true") {
@@ -440,6 +445,60 @@ it("fails closed when native metadata is enabled without runtime auth", () => {
 		error: "PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_CONFIGURATION_INVALID",
 		calls: [],
 	});
+});
+
+it("wires the deployment API origin and keeps explicit current-confirmation ports", async () => {
+	const configurationPath = join(directory, "configuration.mjs");
+	const assemblyPath = join(
+		directory,
+		"native-metadata-deployment-assembly.js",
+	);
+	const configuration = await readFile(configurationPath, "utf8");
+	const assembly = await readFile(assemblyPath, "utf8");
+	const overrides = {
+		RUN_NATIVE_PORTS: "true",
+		PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED: "true",
+		PLATFORM_WORKER_RELEASE_NAME: "worker-binding",
+		PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN:
+			"http://worker-binding-native-metadata-api:3000",
+	};
+	try {
+		await writeFile(
+			assemblyPath,
+			"export const createPlatformNativeMetadataGatewayAssemblyV1 = (options) => ({ ports: options.ports });",
+		);
+		const common = `${configuration}\nworkloadInput.policy.runtimeAuth = {};\nexport const serviceToken = 'fixture-service-token';\n`;
+		await writeFile(configurationPath, common);
+		let result = run(overrides);
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			port: 3004,
+			platformApiCurrent: {
+				baseUrl: overrides.PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN,
+				serviceToken: "fixture-service-token",
+			},
+		});
+		await writeFile(
+			configurationPath,
+			`${common}\nexport const nativeMetadataGateway = { platformApiCurrent: { baseUrl: 'http://explicit-api:3000', serviceToken: 'explicit-token' } };`,
+		);
+		result = run(overrides);
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout).platformApiCurrent).toEqual({
+			baseUrl: "http://explicit-api:3000",
+			serviceToken: "explicit-token",
+		});
+		await writeFile(configurationPath, common);
+		result = run({
+			...overrides,
+			PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED: "false",
+		});
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toBeNull();
+	} finally {
+		await writeFile(configurationPath, configuration);
+		await writeFile(assemblyPath, assembly);
+	}
 });
 
 it("assembles the optional Store-backed Skill materializer in deployment entry", async () => {

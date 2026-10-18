@@ -50,6 +50,7 @@ database_service="$worker_release-postgres"
 database_endpoint="$database_service-docker"
 directory_service="enterprise-directory-sync"
 directory_endpoint="enterprise-directory-sync-e2e"
+native_metadata_api_service="$worker_release-native-metadata-api"
 helm_target=(helm)
 
 worker_context() {
@@ -155,6 +156,7 @@ worker_values() {
     --set enterpriseDirectorySync.enabled=false
     --set web.placement=external
     --set platformApi.placement=external
+    --set-string "platformWorker.nativeMetadataGateway.platformApiOrigin=http://$native_metadata_api_service:3000"
     --set-string "database.secretRef.name=$database_service"
     --set-string database.secretRef.key=url
     --set-string platformWorker.deploymentModule=file:///app/dist/deployment.mjs
@@ -588,6 +590,115 @@ render_proxy_config() {
   node deploy/local/render-nginx.ts "$PLATFORM_LOCAL_PROXY_TOKEN_FILE" "$PLATFORM_LOCAL_NGINX_CONFIG"
 }
 
+check_native_metadata_api_ownership() {
+  local resource
+  for resource in service endpointslice; do
+    if ! "${kube_target[@]}" get "$resource/$native_metadata_api_service" --ignore-not-found -o json |
+      node -e '
+        let input = "";
+        process.stdin.on("data", (chunk) => { input += chunk; });
+        process.stdin.on("end", () => {
+          if (!input.trim()) return;
+          try {
+            const labels = JSON.parse(input).metadata?.labels ?? {};
+            if (labels["app.kubernetes.io/managed-by"] !== "agent-infra-local" ||
+                labels["agent-infra.agora.io/local-project"] !== process.argv[1]) process.exitCode = 1;
+          } catch { process.exitCode = 1; }
+        });
+      ' "$PLATFORM_LOCAL_PROJECT"; then
+      echo "Local native metadata API $resource is not owned by this project" >&2
+      return 1
+    fi
+  done
+}
+
+check_native_metadata_api_network_ownership() {
+  local container aliases network_alias
+  container=$("${compose[@]}" ps --all -q platform-api) || return 1
+  if [[ -n "$container" ]]; then
+    network_alias="$native_metadata_api_service-${container:0:12}"
+    aliases=$("${docker_target[@]}" container inspect "$container" --format '{{with index .NetworkSettings.Networks "kind"}}{{join .Aliases " "}}{{end}}') || return 1
+    if [[ -n "$aliases" ]]; then
+      [[ "$aliases" == "$network_alias" ]] || {
+        echo "Local Platform API is connected to kind outside this project" >&2
+        return 1
+      }
+    fi
+  fi
+}
+
+disconnect_native_metadata_api() {
+  check_native_metadata_api_ownership || return 1
+  check_native_metadata_api_network_ownership || return 1
+  local container aliases
+  container=$("${compose[@]}" ps --all -q platform-api) || return 1
+  if [[ -n "$container" ]]; then
+    aliases=$("${docker_target[@]}" container inspect "$container" --format '{{with index .NetworkSettings.Networks "kind"}}{{join .Aliases " "}}{{end}}') || return 1
+    if [[ -n "$aliases" ]]; then
+      "${docker_target[@]}" network disconnect kind "$container" || return 1
+    fi
+  fi
+  "${kube_target[@]}" delete "endpointslice/$native_metadata_api_service" "service/$native_metadata_api_service" --ignore-not-found
+}
+
+connect_native_metadata_api() {
+  check_native_metadata_api_ownership || return 1
+  if [[ "$native_metadata_route_enabled" != true ]]; then
+    disconnect_native_metadata_api
+    return
+  fi
+  local container aliases network_alias api_ip
+  container=$("${compose[@]}" ps -q platform-api) || return 1
+  [[ -n "$container" ]] || { echo "Local Platform API container is missing" >&2; return 1; }
+  network_alias="$native_metadata_api_service-${container:0:12}"
+  aliases=$("${docker_target[@]}" container inspect "$container" --format '{{with index .NetworkSettings.Networks "kind"}}{{join .Aliases " "}}{{end}}') || return 1
+  if [[ -z "$aliases" ]]; then
+    "${docker_target[@]}" network connect --alias "$network_alias" kind "$container" || return 1
+  elif [[ "$aliases" != "$network_alias" ]]; then
+    echo "Local Platform API is connected to kind outside this project" >&2
+    return 1
+  fi
+  api_ip=$("${docker_target[@]}" container inspect "$container" --format '{{(index .NetworkSettings.Networks "kind").IPAddress}}') || return 1
+  [[ "$api_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "Local Platform API has no IPv4 address on the kind network" >&2
+    return 1
+  }
+  "${kube_target[@]}" apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: $native_metadata_api_service
+  labels:
+    app.kubernetes.io/managed-by: agent-infra-local
+    agent-infra.agora.io/local-project: $PLATFORM_LOCAL_PROJECT
+spec:
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: $native_metadata_api_service
+  labels:
+    app.kubernetes.io/managed-by: agent-infra-local
+    agent-infra.agora.io/local-project: $PLATFORM_LOCAL_PROJECT
+    kubernetes.io/service-name: $native_metadata_api_service
+    endpointslice.kubernetes.io/managed-by: agent-infra-local
+addressType: IPv4
+ports:
+  - name: http
+    port: 3000
+    protocol: TCP
+endpoints:
+  - addresses: ["$api_ip"]
+    conditions:
+      ready: true
+EOF
+}
+
 check_database_resource_ownership() {
   local resource name
   for resource in service endpointslice secret; do
@@ -974,6 +1085,8 @@ case "${1:-}" in
     check_database_resource_ownership
     check_database_network_ownership
     validate_deployment_material
+    check_native_metadata_api_ownership
+    check_native_metadata_api_network_ownership
     render_proxy_config
     "${compose[@]}" stop web platform-api
     "${compose[@]}" up --detach --wait postgres object-storage
@@ -996,6 +1109,11 @@ case "${1:-}" in
     "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
     prepare_native_metadata_forward
     if ! "${compose[@]}" up --detach --wait --force-recreate --no-deps platform-api; then
+      stop_native_metadata_forward
+      exit 1
+    fi
+    if ! connect_native_metadata_api; then
+      "${compose[@]}" stop platform-api
       stop_native_metadata_forward
       exit 1
     fi
@@ -1034,6 +1152,7 @@ case "${1:-}" in
       "${compose[@]}" stop enterprise-directory-sync
       disconnect_directory_sync
       disconnect_worker_database
+      disconnect_native_metadata_api
       "${compose[@]}" stop object-storage postgres
       rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE"
       exit 0
@@ -1058,6 +1177,7 @@ case "${1:-}" in
     "${compose[@]}" stop enterprise-directory-sync
     disconnect_directory_sync
     disconnect_worker_database
+    disconnect_native_metadata_api
     "${compose[@]}" stop object-storage postgres
     rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE"
     ;;
