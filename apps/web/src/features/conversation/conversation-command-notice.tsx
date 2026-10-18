@@ -34,14 +34,7 @@ export function CommandNotice({
 				</AlertDescription>
 			</Alert>
 		);
-	if (result?.kind === "native-rejected")
-		return (
-			<Alert variant="destructive">
-				<AlertDescription>
-					能力请求未受理：{result.outcome}。请清除选择后重试。
-				</AlertDescription>
-			</Alert>
-		);
+	// 命令 / Skill 被拒绝的原因只在 composer 内显示一次（CK-02），这里不重复。
 	if (result?.kind === "rejected")
 		return (
 			<Alert variant="destructive" className="space-y-2">

@@ -72,6 +72,8 @@ export type ConversationCommandResult =
 	| {
 			kind: "native-rejected";
 			outcome: string;
+			/** 契约内的拒绝原因（如 authorization_lost）；只用于映射可读文案。 */
+			reason?: string;
 	  }
 	| {
 			kind: "browser-accepted";
@@ -143,9 +145,10 @@ export async function performConversationCommand(
 				path: { conversationId: target.conversationId },
 				body: command.body,
 			});
-			const payload = response.data as
+			const payload = (response.data ?? response.error) as
 				| {
 						outcome?: string;
+						reason?: string;
 						result?: { executionId?: string; capabilityId?: string };
 				  }
 				| undefined;
@@ -163,7 +166,13 @@ export async function performConversationCommand(
 				};
 			if (payload?.outcome === "unknown") return { kind: "unknown" };
 			if (typeof payload?.outcome === "string")
-				return { kind: "native-rejected", outcome: payload.outcome };
+				return {
+					kind: "native-rejected",
+					outcome: payload.outcome,
+					...(typeof payload.reason === "string"
+						? { reason: payload.reason }
+						: {}),
+				};
 			return { kind: "unknown" };
 		}
 		if (command.kind === "browser") {

@@ -7,24 +7,6 @@ export type ConversationCapabilityV1 = Readonly<{
 	/** Stable service-provided identity used to invalidate replaced metadata. */
 	identity?: string;
 	directoryRevision?: string;
-	parameterHint?: string;
-}>;
-
-export type ConversationCapabilitySelectionV1 = Readonly<{
-	kind: ConversationCapabilityV1["kind"];
-	name: string;
-	parameterText: string;
-	capabilityId?: string;
-	directoryRevision?: string;
-}>;
-
-export type ConversationCapabilityPickerStateV1 = Readonly<{
-	scopeKey: string;
-	query: string;
-	selectedIndex: number;
-	selected: ConversationCapabilityV1 | undefined;
-	parameterText: string;
-	confirmed: boolean;
 }>;
 
 const maximumCapabilities = 150;
@@ -38,6 +20,11 @@ function bounded(value: string, maximum: number) {
 	);
 }
 
+/** 草稿以 / 开头时，「/」之后的全部文本是目录搜索词；否则不是命令查询。 */
+export function capabilityQuery(draft: string): string | undefined {
+	return draft.startsWith("/") ? draft.slice(1) : undefined;
+}
+
 export function filterConversationCapabilities(
 	capabilities: readonly ConversationCapabilityV1[],
 	query: string,
@@ -48,113 +35,66 @@ export function filterConversationCapabilities(
 	)
 		return [] as readonly ConversationCapabilityV1[];
 	const normalized = query.trim().replace(/^\/+/, "").toLocaleLowerCase();
-	return capabilities
-		.filter((capability) => {
-			const haystack =
-				`${capability.name} ${capability.description} ${capability.source}`.toLocaleLowerCase();
-			return normalized.length === 0 || haystack.includes(normalized);
-		})
-		.slice(0, maximumCapabilities);
+	return capabilities.filter((capability) => {
+		const haystack =
+			`${capability.name} ${capability.description} ${capability.source}`.toLocaleLowerCase();
+		return normalized.length === 0 || haystack.includes(normalized);
+	});
 }
 
-export function createConversationCapabilityPickerState(
-	scopeKey: string,
-): ConversationCapabilityPickerStateV1 {
-	return {
-		scopeKey,
-		query: "",
-		selectedIndex: 0,
-		selected: undefined,
-		parameterText: "",
-		confirmed: false,
-	};
-}
-
-export function updateConversationCapabilityQuery(
-	state: ConversationCapabilityPickerStateV1,
-	query: string,
-): ConversationCapabilityPickerStateV1 {
-	return {
-		...state,
-		query: bounded(query, maximumQueryBytes) ? query : "",
-		selectedIndex: 0,
-		selected: undefined,
-		parameterText: "",
-		confirmed: false,
-	};
-}
-
-export function moveConversationCapabilitySelection(
-	state: ConversationCapabilityPickerStateV1,
-	capabilities: readonly ConversationCapabilityV1[],
+/** ↑↓ 在首尾停住，不循环（设计 skill-interactions）。 */
+export function moveCapabilityIndex(
+	index: number,
 	delta: -1 | 1,
+	length: number,
 ) {
-	const filtered = filterConversationCapabilities(capabilities, state.query);
-	if (filtered.length === 0) return { ...state, selectedIndex: 0 };
-	return {
-		...state,
-		selectedIndex:
-			(state.selectedIndex + delta + filtered.length) % filtered.length,
-	};
+	if (length === 0) return 0;
+	return Math.min(length - 1, Math.max(0, index + delta));
 }
 
-export function selectConversationCapability(
-	state: ConversationCapabilityPickerStateV1,
-	capability: ConversationCapabilityV1 | undefined,
+export function sameCapability(
+	left: ConversationCapabilityV1,
+	right: ConversationCapabilityV1,
 ) {
-	return {
-		...state,
-		selected: capability,
-		parameterText: "",
-		confirmed: false,
-	};
+	return (
+		left.kind === right.kind &&
+		left.name === right.name &&
+		left.source === right.source &&
+		left.version === right.version &&
+		left.identity === right.identity &&
+		left.directoryRevision === right.directoryRevision
+	);
 }
 
-export function updateConversationCapabilityParameter(
-	state: ConversationCapabilityPickerStateV1,
+export type CapabilityInvocationBody = Readonly<{
+	capabilityId: string;
+	directoryRevision: string;
+	parameters: string;
+}>;
+
+/**
+ * 提交前校验：Skill 需要用输入框补充目标与范围（与服务端 invalid_parameters 规则一致）；
+ * 命令参数固定为空。返回错误文案或可提交的请求体。
+ */
+export function prepareCapabilityInvocation(
+	selected: ConversationCapabilityV1,
 	parameterText: string,
-) {
+): { error: string } | { body: CapabilityInvocationBody } {
+	if (!selected.identity || !selected.directoryRevision)
+		return { error: "所选版本已失效，请重新选择；不会作为普通消息发送。" };
+	if (selected.kind === "skill" && parameterText.trim() === "")
+		return { error: "请在输入框补充这次任务的目标与范围。" };
+	// 只读命令没有参数：输入框里有内容时不静默丢弃，请用户先清空。
+	if (selected.kind === "command" && parameterText.trim() !== "")
+		return { error: "这项只读命令不需要额外参数，请清空输入框后再发送。" };
+	const parameters = selected.kind === "command" ? "" : parameterText;
+	if (!bounded(parameters, maximumParameterBytes))
+		return { error: "补充内容过长，请缩短后再发送。" };
 	return {
-		...state,
-		parameterText: bounded(parameterText, maximumParameterBytes)
-			? parameterText
-			: "",
-		confirmed: false,
+		body: {
+			capabilityId: selected.identity,
+			directoryRevision: selected.directoryRevision,
+			parameters,
+		},
 	};
-}
-
-export function confirmConversationCapability(
-	state: ConversationCapabilityPickerStateV1,
-): ConversationCapabilitySelectionV1 | undefined {
-	if (!state.selected || !bounded(state.parameterText, maximumParameterBytes))
-		return undefined;
-	return {
-		kind: state.selected.kind,
-		name: state.selected.name,
-		parameterText: state.parameterText,
-		...(state.selected.identity
-			? { capabilityId: state.selected.identity }
-			: {}),
-		...(state.selected.directoryRevision
-			? { directoryRevision: state.selected.directoryRevision }
-			: {}),
-	};
-}
-
-export function markConversationCapabilityConfirmed(
-	state: ConversationCapabilityPickerStateV1,
-) {
-	return {
-		...state,
-		confirmed: confirmConversationCapability(state) !== undefined,
-	};
-}
-
-export function resetConversationCapabilityScope(
-	state: ConversationCapabilityPickerStateV1,
-	scopeKey: string,
-) {
-	return state.scopeKey === scopeKey
-		? state
-		: createConversationCapabilityPickerState(scopeKey);
 }

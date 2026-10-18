@@ -18,12 +18,6 @@ export function nativeMetadataCapabilities(
 		version: capability.source.version,
 		identity: capability.id,
 		directoryRevision: projection.revision,
-		...(capability.kind === "command"
-			? {
-					parameterHint:
-						capability.parameters.length === 0 ? "无参数" : undefined,
-				}
-			: {}),
 	}));
 }
 

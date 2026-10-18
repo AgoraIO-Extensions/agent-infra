@@ -1,6 +1,10 @@
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button, buttonVariants } from "../../components/ui/button.js";
+import { Button } from "../../components/ui/button.js";
 import { useRecentPersonalConversations } from "../workbench/use-recent-personal-conversations.js";
+import {
+	ConversationHistoryHeading,
+	ConversationHistoryLink,
+} from "./conversation-history-item.js";
 
 export function RecentConversationHistory({
 	agentId,
@@ -17,10 +21,10 @@ export function RecentConversationHistory({
 	const { state } = recent;
 	return (
 		<section aria-label="最近对话" className="space-y-3">
-			<div>
-				<p className="text-muted-foreground text-xs">个人历史</p>
-				<h2 className="font-semibold">最近对话</h2>
-			</div>
+			<ConversationHistoryHeading
+				count={state.kind === "ready" ? state.conversations.length : undefined}
+				hasMore={state.kind === "ready" && state.nextCursor !== null}
+			/>
 			{state.kind === "loading" && <p role="status">正在读取最近对话…</p>}
 			{state.kind === "unavailable" && (
 				<Alert>
@@ -40,46 +44,26 @@ export function RecentConversationHistory({
 			{state.kind === "ready" && (
 				<>
 					{state.conversations.length === 0 && <p>暂无个人对话。</p>}
-					<ul className="space-y-1">
+					<ul className="conversation-history-list">
 						{state.conversations.map((item) => {
 							const current =
 								item.agentId === agentId &&
 								item.conversationId === conversationId;
 							return (
 								<li key={JSON.stringify([item.agentId, item.conversationId])}>
-									<a
+									<ConversationHistoryLink
 										href={`/chat/${encodeURIComponent(item.agentId)}/${encodeURIComponent(item.conversationId)}`}
-										aria-current={current ? "page" : undefined}
-										className={buttonVariants({
-											variant: current ? "secondary" : "ghost",
-											className:
-												"h-auto min-h-11 w-full justify-start whitespace-normal text-left",
-										})}
-										onClick={(event) => {
-											if (
-												item.agentId !== agentId ||
-												event.button !== 0 ||
-												event.metaKey ||
-												event.ctrlKey ||
-												event.shiftKey ||
-												event.altKey
-											)
-												return;
-											event.preventDefault();
+										title={item.title}
+										updatedAt={item.updatedAt}
+										current={current}
+										unavailable={item.status === "unavailable"}
+										onNavigate={() => {
+											// 跨 Agent 的记录走浏览器默认跳转，进入原 Agent 的会话页。
+											if (item.agentId !== agentId) return false;
 											onSelect(item.conversationId);
+											return true;
 										}}
-									>
-										<span className="min-w-0 break-words">
-											{item.title || "未命名会话"}
-											<small>
-												{current && "当前对话 · "}
-												<time dateTime={item.updatedAt}>
-													{new Date(item.updatedAt).toLocaleString("zh-CN")}
-												</time>
-												{item.status === "unavailable" && " · 会话不可用"}
-											</small>
-										</span>
-									</a>
+									/>
 								</li>
 							);
 						})}
