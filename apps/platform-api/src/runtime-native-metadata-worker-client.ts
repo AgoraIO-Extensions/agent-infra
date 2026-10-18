@@ -2,11 +2,14 @@ import { Buffer } from "node:buffer";
 import {
 	type PlatformNativeMetadataReadRequestV1,
 	PlatformNativeMetadataReadRequestV1Schema,
+	RuntimeNativeMetadataProofMaximumLifetimeMsV1,
 	RuntimeNativeMetadataReadResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
 
 const maximumResponseBytes = 1_048_576;
-const transportTimeoutMs = 10_000;
+// Current-confirmation callbacks share the original request's fixed deadline.
+// A shorter transport default can reject a healthy chain before that deadline.
+const transportTimeoutMs = RuntimeNativeMetadataProofMaximumLifetimeMsV1;
 
 function endpoint(baseUrl: string) {
 	let origin: URL;

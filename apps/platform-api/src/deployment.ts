@@ -36,6 +36,7 @@ import type {
 import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
+import type { RuntimeNativeMetadataRequestRegistryV1 } from "./runtime-native-metadata-current.js";
 import {
 	createRuntimeNativeMetadataWorkerReaderV1,
 	type RuntimeNativeMetadataWorkerGatewayV1,
@@ -166,6 +167,7 @@ export interface ProductionPlatformApiInputV1
  * fixed Worker gateway. The Worker remains the only proof issuer.
  */
 export function createProductionNativeMetadataReaderV1(options: {
+	readonly requestRegistry: RuntimeNativeMetadataRequestRegistryV1;
 	readonly resolveRequest: Parameters<
 		typeof createRuntimeNativeMetadataWorkerReaderV1
 	>[0]["resolveRequest"];
@@ -180,6 +182,7 @@ export function createProductionNativeMetadataReaderV1(options: {
  * resolver; this helper remains for controlled deployment/test seams.
  */
 export function createProductionNativeMetadataReaderFromWorkerV1(options: {
+	readonly requestRegistry: RuntimeNativeMetadataRequestRegistryV1;
 	readonly resolveRequest: Parameters<
 		typeof createRuntimeNativeMetadataWorkerReaderV1
 	>[0]["resolveRequest"];
@@ -191,6 +194,7 @@ export function createProductionNativeMetadataReaderFromWorkerV1(options: {
 	};
 }) {
 	return createProductionNativeMetadataReaderV1({
+		requestRegistry: options.requestRegistry,
 		resolveRequest: options.resolveRequest,
 		gateway: createPlatformWorkerNativeMetadataGatewayClientV1(options.worker),
 	});

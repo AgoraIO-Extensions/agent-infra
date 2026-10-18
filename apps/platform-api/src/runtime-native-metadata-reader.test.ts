@@ -4,6 +4,7 @@ import {
 } from "@agent-infra/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeNativeMetadataReaderV1 } from "./runtime-native-metadata-reader.js";
+import { nativeMetadataTestContext } from "./runtime-native-metadata-test-context.js";
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -73,6 +74,7 @@ describe("Runtime native metadata producer adapter", () => {
 				binding.scope.conversationId,
 				binding.scope.executionId,
 				"status",
+				nativeMetadataTestContext(identity, binding),
 			),
 		).resolves.toEqual(response.projection);
 		expect(fixture.issue).toHaveBeenCalledWith(
@@ -94,9 +96,6 @@ describe("Runtime native metadata producer adapter", () => {
 		{ scope: { ...binding.scope, conversationId: "foreign-conversation" } },
 		{ scope: { ...binding.scope, channelId: "api" } },
 		{ scope: { ...binding.scope, executionId: "foreign-execution" } },
-		{
-			scope: { ...binding.scope, authorizationRevision: "stale-revision" },
-		},
 	])(
 		"rejects a resolver binding outside the current request: %j",
 		async (patch) => {
@@ -116,6 +115,7 @@ describe("Runtime native metadata producer adapter", () => {
 					binding.scope.conversationId,
 					binding.scope.executionId,
 					"status",
+					nativeMetadataTestContext(identity, binding),
 				),
 			).resolves.toBeNull();
 			expect(fixture.issue).not.toHaveBeenCalled();
@@ -135,6 +135,7 @@ describe("Runtime native metadata producer adapter", () => {
 				binding.scope.conversationId,
 				binding.scope.executionId,
 				"status",
+				nativeMetadataTestContext(identity, binding),
 			),
 		).resolves.toBeNull();
 	});
@@ -153,6 +154,7 @@ describe("Runtime native metadata producer adapter", () => {
 				binding.scope.conversationId,
 				binding.scope.executionId,
 				"status",
+				nativeMetadataTestContext(identity, binding),
 			),
 		).resolves.toBeNull();
 		expect(transport).not.toHaveBeenCalled();

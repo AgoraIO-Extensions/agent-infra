@@ -90,6 +90,7 @@ import { createRuntimeModelSelectionReaderFromStoreV1 } from "./runtime-model-se
 import {
 	createRuntimeNativeMetadataCurrentCheckerV1,
 	createRuntimeNativeMetadataRequestRegistryV1,
+	type RuntimeNativeMetadataRequestRegistryV1,
 } from "./runtime-native-metadata-current.js";
 import { createRuntimeNativeMetadataWorkerReaderV1 } from "./runtime-native-metadata-reader.js";
 import { createRuntimeNativeMetadataScopeResolverV1 } from "./runtime-native-metadata-scope-resolver.js";
@@ -203,6 +204,7 @@ export interface PlatformApiAssemblyInput {
 		readonly serviceToken: string;
 		readonly fetch?: typeof fetch;
 		readonly transportTimeoutMs?: number;
+		readonly requestRegistry?: RuntimeNativeMetadataRequestRegistryV1;
 	};
 	/** Optional deployment-owned native capability admission route. */
 	readonly nativeCapabilityInvocation?: PlatformAppDependencies["nativeCapabilityInvocation"];
@@ -230,6 +232,12 @@ export interface PlatformApiAssembly {
 export function assemblePlatformApi(
 	input: PlatformApiAssemblyInput,
 ): PlatformApiAssembly {
+	if (
+		input.nativeMetadataWorker &&
+		input.nativeMetadataCurrent &&
+		!input.nativeMetadataWorker.requestRegistry
+	)
+		throw new Error("PLATFORM_NATIVE_METADATA_REQUEST_REGISTRY_REQUIRED");
 	if (input.wecomApplicationSetup && !input.wecomCredentialEncryptionKeys)
 		throw new Error("WeCom application setup requires encryption keys");
 	if (
@@ -465,10 +473,10 @@ export function assemblePlatformApi(
 		input.nativeMetadataWorker !== undefined
 	)
 		throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
-	const nativeMetadataRequestRegistry =
-		input.nativeMetadataWorker && input.nativeMetadataCurrent === undefined
-			? createRuntimeNativeMetadataRequestRegistryV1()
-			: undefined;
+	const nativeMetadataRequestRegistry = input.nativeMetadataWorker
+		? (input.nativeMetadataWorker.requestRegistry ??
+			createRuntimeNativeMetadataRequestRegistryV1())
+		: undefined;
 	const assembledNativeMetadata =
 		input.nativeMetadata ??
 		(input.nativeMetadataWorker
@@ -476,6 +484,8 @@ export function assemblePlatformApi(
 					reader: createRuntimeNativeMetadataWorkerReaderV1({
 						resolveRequest: createRuntimeNativeMetadataScopeResolverV1({
 							query: conversationQuery,
+							authorize: (identity, request) =>
+								conversationAuthorization.authorize(identity, request),
 						}),
 						gateway: createPlatformWorkerNativeMetadataGatewayClientV1(
 							input.nativeMetadataWorker,
@@ -726,11 +736,15 @@ export function assemblePlatformApi(
 		throw new Error("PLATFORM_NATIVE_CAPABILITY_METADATA_DUPLICATE");
 	const nativeCapabilityMetadata = input.nativeCapabilityMetadata;
 	const createDefaultNativeCapabilityMetadata = assembledNativeMetadata
-		? (identity: import("./http/identity.js").IdentityContext) =>
+		? (
+				identity: import("./http/identity.js").IdentityContext,
+				requestContext: import("./runtime-native-metadata-request-context.js").RuntimeNativeMetadataRequestContextV1,
+			) =>
 				createNativeCapabilityMetadataRevalidationV1({
 					query: conversationQuery,
 					reader: assembledNativeMetadata.reader,
 					identity,
+					requestContext,
 				})
 		: undefined;
 	const assembledNativeCapabilityInvocation:
@@ -745,19 +759,29 @@ export function assemblePlatformApi(
 						schemaVersion: 1 as const,
 						conversationId,
 					}),
-					admitWithIdentity: async ({ identity, request }) => {
+					admitWithIdentity: async ({ identity, request, requestContext }) => {
 						const metadata =
 							nativeCapabilityMetadata ??
-							createDefaultNativeCapabilityMetadata?.(identity);
+							createDefaultNativeCapabilityMetadata?.(identity, requestContext);
 						if (!metadata)
 							throw new Error("Native capability metadata unavailable");
 						const admission = createNativeCapabilityAdmissionUseCaseV1({
 							authorization: {
 								async authorize(authorizationRequest) {
-									const decision = await conversationAuthorization.authorize(
-										identity,
-										authorizationRequest,
+									const currentIdentity =
+										await requestContext.revalidate(identity);
+									const decision = await requestContext.run(() =>
+										conversationAuthorization.authorize(
+											currentIdentity,
+											authorizationRequest,
+										),
 									);
+									if (decision.outcome === "allowed")
+										requestContext.confirmPolicy(
+											decision.authority,
+											request.conversationId,
+										);
+									await requestContext.revalidate(identity);
 									return decision.outcome === "allowed"
 										? decision
 										: { outcome: "denied" as const };

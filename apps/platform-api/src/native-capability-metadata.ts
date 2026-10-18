@@ -18,6 +18,7 @@ import type {
 } from "@agent-infra/platform-store";
 import type { IdentityContext } from "./http/identity.js";
 import type { RuntimeNativeMetadataPublicReaderV1 } from "./http/native-metadata-routes.js";
+import type { RuntimeNativeMetadataRequestContextV1 } from "./runtime-native-metadata-request-context.js";
 
 const maximumCacheEntries = 128;
 const maximumCacheTtlMs = 30_000;
@@ -127,6 +128,7 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 	>;
 	readonly reader: RuntimeNativeMetadataPublicReaderV1;
 	readonly identity: IdentityContext;
+	readonly requestContext: RuntimeNativeMetadataRequestContextV1;
 	readonly now?: () => number;
 	readonly cacheTtlMs?: number;
 	readonly maximumEntries?: number;
@@ -150,6 +152,7 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 		maximumEntries > maximumCacheEntries
 	)
 		throw new TypeError("Native capability metadata cache options are invalid");
+	const identityRevision = options.identity.authorizationRevision;
 	const cache = new Map<string, CacheEntry>();
 	const cacheKey = (request: NativeCapabilityAdmissionRequestV1) =>
 		nativeCapabilityAdmissionRequestDigestV1(request);
@@ -177,15 +180,18 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 					return { outcome: "unavailable" };
 				if (
 					options.identity.userId !== authority.actorId ||
-					options.identity.authorizationRevision !==
-						authority.authorizationRevision
+					options.identity.authorizationRevision !== identityRevision
 				)
 					return { outcome: "unavailable" };
-				const current = await options.query.readNativeCapabilityCurrentScopeV1({
-					scope: scopeForQuery(authority),
-					agentId: authority.agentId,
-					conversationId: request.conversationId,
-				});
+				await options.requestContext.revalidate(options.identity);
+				const current = await options.requestContext.run(() =>
+					options.query.readNativeCapabilityCurrentScopeV1({
+						scope: scopeForQuery(authority),
+						agentId: authority.agentId,
+						conversationId: request.conversationId,
+						signal: options.requestContext.signal,
+					}),
+				);
 				if (!current) return { outcome: "unavailable" };
 				if (!isCurrentScope(current, authority, request, sessionGeneration))
 					return { outcome: "stale" };
@@ -195,12 +201,14 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 						request.conversationId,
 						current.executionId,
 						"commands",
+						options.requestContext,
 					),
 					options.reader.read(
 						options.identity,
 						request.conversationId,
 						current.executionId,
 						"skills",
+						options.requestContext,
 					),
 				]);
 				if (!commands || !skills) return { outcome: "unavailable" };
@@ -243,7 +251,10 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 						request,
 						capability,
 						scope,
-						expiresAt: timestamp + cacheTtlMs,
+						expiresAt: Math.min(
+							timestamp + cacheTtlMs,
+							options.requestContext.expiresAt,
+						),
 					});
 					prune(timestamp);
 					return { outcome: "allowed", capability, scope };
@@ -254,6 +265,11 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 			}
 		},
 		isCurrent({ request, capability, scope }) {
+			try {
+				options.requestContext.assertCurrent();
+			} catch {
+				return false;
+			}
 			const timestamp = now();
 			if (!Number.isSafeInteger(timestamp) || timestamp < 0) return false;
 			prune(timestamp);
@@ -268,8 +284,7 @@ export function createNativeCapabilityMetadataRevalidationV1(options: {
 					entry.scope.sessionGeneration === scope.sessionGeneration &&
 					entry.scope.authorizationRevision === scope.authorizationRevision &&
 					entry.scope.hostScopeRef === scope.hostScopeRef &&
-					entry.scope.authorizationRevision ===
-						options.identity.authorizationRevision &&
+					options.identity.authorizationRevision === identityRevision &&
 					sameRequest(entry.request, request) &&
 					sameCapability(entry.capability, capability),
 			);
