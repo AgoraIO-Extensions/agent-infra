@@ -116,6 +116,40 @@ it("logs a bounded stage duration for latency comparison (#1525)", () => {
 	expect(JSON.parse(lines[1] ?? "{}")).not.toHaveProperty("durationMs");
 });
 
+it("keeps the bounded Session Sandbox workload failure steps (#2733)", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-worker",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	for (const failureStep of [
+		"workload.policy",
+		"workload.conflict",
+		"workload.unavailable",
+		"workload.sandbox-secret-name",
+	])
+		telemetry.record({
+			stage: "workload",
+			outcome: "failed",
+			code: "WORKLOAD_RECONCILIATION_FAILED",
+			failureStep,
+			errorClass: "WorkloadKubernetesError",
+		});
+	const steps = lines.map((line) => JSON.parse(line).failureStep);
+	expect(steps).toEqual([
+		"workload.policy",
+		"workload.conflict",
+		"workload.unavailable",
+		undefined,
+	]);
+});
+
 it("accepts waiting as a non-error operational outcome", () => {
 	const lines: string[] = [];
 	const telemetry = startObservability({
