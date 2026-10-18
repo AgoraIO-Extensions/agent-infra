@@ -17,6 +17,7 @@ export function ConfirmDialog({
 	label,
 	onConfirm,
 	title,
+	triggerVariant,
 	variant = "destructive",
 }: {
 	confirmLabel?: string;
@@ -26,6 +27,13 @@ export function ConfirmDialog({
 	label: string;
 	onConfirm: () => void;
 	title: string;
+	triggerVariant?:
+		| "default"
+		| "outline"
+		| "secondary"
+		| "ghost"
+		| "destructive"
+		| "link";
 	variant?: "destructive" | "default";
 }) {
 	const [open, setOpen] = useState(false);
@@ -34,7 +42,11 @@ export function ConfirmDialog({
 			<DialogTrigger
 				disabled={disabled}
 				render={
-					<Button type="button" variant={variant} aria-label={ariaLabel} />
+					<Button
+						type="button"
+						variant={triggerVariant ?? variant}
+						aria-label={ariaLabel}
+					/>
 				}
 			>
 				{label}
