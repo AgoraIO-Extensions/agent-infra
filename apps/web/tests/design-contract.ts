@@ -353,6 +353,10 @@ export async function captureDesignContract(
 		).toBe(true);
 		expect(focused?.outlineWidth).toMatch(/^\d+(?:\.\d+)?px$/);
 		expect(focused?.outlineOffset).toMatch(/^(?:auto|(?:0|1|2|3)px)$/);
+		// The handoff uses one outline ring. A focus-visible box-shadow would
+		// stack a second halo on top of it, which is especially distracting for
+		// compact controls.
+		expect(focused?.boxShadow).toBe("none");
 
 		const box = await stateProbe.boundingBox();
 		let pressed = resting;
@@ -386,6 +390,26 @@ export async function captureDesignContract(
 		await page.emulateMedia({ reducedMotion: "no-preference" });
 		await stateProbe.evaluate((node) => (node as HTMLElement).blur());
 		interactiveStates = { resting, hover, focused, pressed, reducedMotion };
+	}
+	const fieldCandidates = page.locator(
+		'main [data-slot="input"], main [data-slot="textarea"], main [data-slot="select-trigger"], main [data-slot="native-select"]',
+	);
+	for (let index = 0; index < (await fieldCandidates.count()); index += 1) {
+		const fieldCandidate = fieldCandidates.nth(index);
+		if (!(await fieldCandidate.isVisible())) continue;
+		await fieldCandidate.focus();
+		expect(
+			await fieldCandidate.evaluate(
+				(node) =>
+					node === document.activeElement ||
+					node.contains(document.activeElement),
+			),
+		).toBe(true);
+		expect(
+			await fieldCandidate.evaluate((node) => getComputedStyle(node).boxShadow),
+		).toBe("none");
+		await fieldCandidate.evaluate((node) => (node as HTMLElement).blur());
+		break;
 	}
 	const name = `${screen}-${measured.viewport.width}x${measured.viewport.height}`;
 	await info.attach(`${name}-measurements`, {

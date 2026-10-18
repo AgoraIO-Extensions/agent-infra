@@ -2467,7 +2467,7 @@ a[class~="group/button"] {
 a[class~="group/button"]:focus-visible {
 	outline: 2px solid var(--primary);
 	outline-offset: 3px;
-	box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 25%, transparent);
+	box-shadow: none;
 }
 
 [data-slot="input"]:focus-visible,
