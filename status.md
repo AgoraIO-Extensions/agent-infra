@@ -202,6 +202,8 @@
 
 ## 变更日志
 
+- 2026-10-18：修复 NI-77/NI-78：全站 Button/Input/Textarea/Select focus 统一为单一 outline，移除重复光晕；sm/lg/icon-sm/icon-lg 统一至少 44px，保留 icon-xs 紧凑例外；Button variant、design-contract、Web 类型检查通过。
+- 2026-10-18：修复 NI-70：新会话创建返回 unknown 时保留「核实原请求」出口，重试沿用原 Idempotency-Key，成功后只提交一次原草稿；conversation 定向 66/66、Biome 和 Web 类型检查通过。
 - 2026-10-18：修复 NI-69/O-06：DirectoryPicker 选中后收起候选层并恢复输入焦点，复合字段失焦时关闭结果层，候选 option 移出 Tab 顺序，避免结果层叠加和逐项穿过候选；目录定向测试 11/11、申请表目录交互回归 1/1、Biome 与 Web 类型检查通过。
 - 2026-10-18：修复 NI-15：审计列表与详情统一使用 `AuditIdentifier`，长 ID 可通过共享 Button 展开完整值，详情提供复制动作；组件单测 2/2、审计 Browser 14 passed/2 skipped、Web 类型检查、Biome 和 UI policy 通过。
 - 2026-10-18：修复 NI-17：审批表/审阅弹窗和申请详情按审批者可核对的目录记录展示员工与组织名称（含邮箱/组织路径，目录读取失败时保留安全状态），不再只显示数量或固定范围文案；审批模型统一显示 displayName · modelId，默认模型同样保留必要标识；移除与审批职责不符的「系统管理员 · 只读审计」徽章。审批与申请详情定向测试 32/32、Biome 和 Web 类型检查通过。
@@ -242,7 +244,7 @@
 - **R4-16**：Connection Developers 当前提供 Browser API；Consumer/declaration 管理和默认 Delegated runtime 未装配，OAuth/Delegated 机器链路无法在本仓库独立完成，按用户要求跳过。
 - **V-01**：现有 Browser Playwright 可运行项和导出矩阵已通过；报告要求的完整设计导出逐页对照仍需独立证据，不能以现有 13 个桌面导出项替代。
 - **报告终审 NI-01~NI-67**：本文件的原始整改清单记录早期实现状态；终审新增问题正在按 P1/P2 分批复核，修复后以代码、单测和浏览器证据更新对应条目。
-- 当前仍需继续复核的终审项包括 DirectoryPicker 多结果层收起、创建会话 unknown 出口、Secret 替换与草稿重试边界、登录字段错误清理、Skill 管理页标题、短视口与焦点环细节、审批结果焦点、执行详情与页面 CSS 分层、标题/设计文档一致性，以及平台 Skill 导入回归测试拆分。
+- 当前仍需继续复核的终审项包括 Secret 替换与草稿重试边界、登录字段错误清理、Skill 管理页标题、短视口细节、审批结果焦点、执行详情与页面 CSS 分层、标题/设计文档一致性，以及平台 Skill 导入回归测试拆分。
 
 ## 证据边界
 
