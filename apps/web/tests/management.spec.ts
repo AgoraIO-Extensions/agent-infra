@@ -1958,9 +1958,14 @@ for (const available of [true, false]) {
 			await expect(unavailable).toHaveCount(1);
 			await expect(unavailable).toContainText("我的 Connection");
 			await expect(unavailable).not.toContainText("（暂不可用）");
-			await expect(
-				unavailable.getByText("不可用", { exact: true }),
-			).toBeVisible();
+			const chip = unavailable.getByText("不可用", { exact: true });
+			await expect(chip).toBeVisible();
+			// 灰色 chip 不带状态圆点（Badge chip 的 ::before 被隐藏）。
+			expect(
+				await chip.evaluate(
+					(node) => getComputedStyle(node, "::before").display,
+				),
+			).toBe("none");
 			await expect(unavailable).not.toHaveAttribute("title");
 			const reasonId = await unavailable.getAttribute("aria-describedby");
 			expect(reasonId).toBeTruthy();

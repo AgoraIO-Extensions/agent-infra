@@ -3,7 +3,6 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FormSection } from "@/components/ui/form-section";
-import { withObjectName } from "@/lib/accessible-name";
 import {
 	getPlatformUserDisabledV2,
 	setPlatformUserDisabledV2,
@@ -24,7 +23,8 @@ function oneUser(value: string) {
 
 export function AdminUserGovernance() {
 	const [userId, setUserId] = useState("");
-	// 禁用触发按钮的可访问名称带上所选员工姓名（F-11 / N-12）；未解析的目录记录不写进名称。
+	// 禁用触发按钮的可访问名称带上所选员工姓名（F-11），与「停用应用 {应用名}」同一写法；
+	// 未解析的目录记录不写进名称。
 	const [userName, setUserName] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [message, setMessage] = useState("");
@@ -142,10 +142,9 @@ export function AdminUserGovernance() {
 						trigger={
 							<Button
 								variant="outline"
-								aria-label={withObjectName(
-									busy ? "提交中…" : "禁用员工",
-									userName,
-								)}
+								aria-label={[busy ? "提交中…" : "禁用员工", userName]
+									.filter(Boolean)
+									.join(" ")}
 							>
 								{busy ? "提交中…" : "禁用员工"}
 							</Button>

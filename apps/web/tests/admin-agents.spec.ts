@@ -364,9 +364,9 @@ test("disabling an employee is confirmed with the person before one request", as
 	await picker.click();
 	await page.getByRole("option", { name: /验收员工/ }).click();
 	await expect(page.getByText("当前状态：未禁用")).toBeVisible();
-	// 触发按钮名称带员工姓名（「{可见文字}：{对象名}」），确认钮仍是「禁用员工」。
+	// 触发按钮名称带员工姓名（「禁用员工 {姓名}」），确认钮仍是「禁用员工」。
 	const trigger = page.getByRole("button", {
-		name: "禁用员工：验收员工",
+		name: "禁用员工 验收员工",
 		exact: true,
 	});
 	await trigger.click();
@@ -384,6 +384,10 @@ test("disabling an employee is confirmed with the person before one request", as
 	await expect
 		.poll(() => writes)
 		.toEqual([{ schemaVersion: 1, disabled: true }]);
+	// 确认后触发器因提交中被禁用，焦点回到分区标题而不是 body。
+	await expect(
+		page.getByRole("heading", { name: "员工访问控制" }),
+	).toBeFocused();
 	await expect(
 		page
 			.locator("#main-content")

@@ -148,6 +148,9 @@ describe("Agent detail and Owner configuration directory fields", () => {
 		);
 		const alert = await screen.findByRole("alert");
 		expect(alert.textContent).toContain("目录暂时无法读取");
+		// 读取失败是 danger notice（带图标），不走对话页的 Alert 兼容层。
+		expect(alert.getAttribute("data-tone")).toBe("danger");
+		expect(alert.querySelector(":scope > svg")).not.toBeNull();
 		expect(screen.getAllByRole("alert")).toHaveLength(1);
 		expect(
 			screen

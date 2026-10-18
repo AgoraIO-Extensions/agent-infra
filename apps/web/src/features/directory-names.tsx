@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { IdentifierText } from "@/components/ui/identifier-text";
 
@@ -215,21 +215,22 @@ export function DirectoryReadAlert({
 	const failed = names.filter((item) => item.status === "error");
 	if (!failed.length) return null;
 	return (
-		<Alert className={className}>
+		<Alert tone="danger" role="alert" className={className}>
 			<AlertDescription>
 				目录暂时无法读取，人员和组织名称暂不显示。
 			</AlertDescription>
-			<Button
-				className="mt-3"
-				type="button"
-				variant="outline"
-				onClick={() => {
-					for (const item of failed) item.retry();
-				}}
-			>
-				<RefreshCw aria-hidden="true" data-icon="inline-start" />
-				重新读取目录
-			</Button>
+			<AlertAction>
+				<Button
+					type="button"
+					variant="outline"
+					onClick={() => {
+						for (const item of failed) item.retry();
+					}}
+				>
+					<RefreshCw aria-hidden="true" data-icon="inline-start" />
+					重新读取目录
+				</Button>
+			</AlertAction>
 		</Alert>
 	);
 }

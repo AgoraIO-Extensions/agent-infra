@@ -21,13 +21,10 @@ const buttonStyles = cva(
 			},
 			size: {
 				default: "min-h-[44px] min-w-11 gap-[8px] px-[14px] py-[9px]",
-				// xs / icon-xs 只剩目录 chip 的移除与清空按钮（尺寸由 directory-fields 的样式决定）。
-				xs: "h-6 gap-1 rounded-none px-2 text-xs has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
 				// 设计稿 .btn-sm 为 38px，DESIGN.md 要求操作至少 44px：待设计定版前保持 44px 最小高度，
 				// 内边距与字号按 .btn-sm。
 				sm: "min-h-[44px] min-w-11 gap-[8px] px-[11px] py-[7px] text-[12px]",
 				icon: "size-11 p-0",
-				"icon-xs": "size-6 rounded-none [&_svg:not([class*='size-'])]:size-3",
 			},
 		},
 		defaultVariants: {
