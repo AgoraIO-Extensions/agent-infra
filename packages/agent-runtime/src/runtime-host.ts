@@ -1923,7 +1923,11 @@ export class RuntimeHost {
 		} catch {
 			nativeMetadataReadDenied();
 		}
-		const { proof: _proof, ...identity } = request;
+		const {
+			proof: _proof,
+			apiRequestSourceRef: _source,
+			...identity
+		} = request;
 		const response = RuntimeNativeMetadataReadResponseV1Schema.safeParse({
 			...identity,
 			projection: parsedProjection.data,
