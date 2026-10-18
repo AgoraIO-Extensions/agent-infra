@@ -66,16 +66,17 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `Toast` | 根布局常驻的补充确认，页面通过 `useToast()` 调用 |
 | `Card` / `AgentMark` | 独立卡片的悬停，Agent 标识的字形与 tone |
 | `Table` | Agent 输出的 Markdown 表格 |
-| `Timestamp` | 工作台、审批、审计、应用管理、个人 API 凭证、我的 Agent 与申请详情的时间 |
+| `Timestamp` | 工作台、审批、审计、应用管理、个人 API 凭证、我的 Agent、申请详情与对话历史的时间 |
 | `IdentifierText` | Agent 管理 Owner、审批与审计中未解析人员的 ID 短形式，审计详情的可复制主体 ID |
-| `Listbox` / `ListboxOption` | 目录选择器结果层；候选不进入 Tab 序列，由输入框的 `aria-activedescendant` 导航 |
+| `Listbox` / `ListboxOption` | 目录选择器结果层与对话 `/` 命令弹层；候选不进入 Tab 序列，由输入框的 `aria-activedescendant` 导航 |
+| `DropdownMenu` | 对话输入框工具栏的模型与思考菜单（`menuitemradio`，向上展开，无入场动画） |
 
 时间统一由 `src/lib/format-time.ts` 按浏览器本地时区与自然日格式化，`<Timestamp>` 渲染
 `<time dateTime title>`，`title` 为带秒的完整本地时间。人员与组织显示名由
 `src/features/directory-names.tsx` 的 `useDirectoryNames` 页面级批量读取：单元格和 chip 不放
 `role="status"`，读取失败时页面只显示一条提示与「重新读取目录」，主文字不回退到内部 ID。
 
-`Card`、`ConfirmDialog`、`Spinner`、`Toast` 与 `features/agent-mark.tsx` 为手写组件，不由 CLI 生成。
+`Card`、`ConfirmDialog`、`DropdownMenu`、`Spinner`、`Toast` 与 `features/agent-mark.tsx` 为手写组件，不由 CLI 生成。
 `Alert` 不设默认 role：首屏静态说明不设 role，异步结果用 `role="status"`，失败用 `role="alert"`。
 Badge、Alert 的旧变体名只作兼容层，供未迁移的对话页与浏览器面板使用，新代码使用 `tone` 或 `variant="tag"`。
 

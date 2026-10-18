@@ -491,9 +491,8 @@ test("recovers an ordinary conversation 404 through read-only reconnect", async 
 	const readsBeforeReconnect = historyReads;
 	missing = false;
 	await page.getByRole("button", { name: "重新连接" }).click();
-	await expect(
-		page.getByRole("heading", { name: "Test conversation" }),
-	).toBeVisible();
+	// 会话标题行已按设计删除（CH-05）：以时间线重新出现确认读取恢复。
+	await expect(page.getByRole("region", { name: "会话时间线" })).toBeVisible();
 	await expect(page.getByRole("button", { name: "重新连接" })).toHaveCount(0);
 	await expect.poll(() => historyReads).toBe(readsBeforeReconnect + 1);
 	await expect.poll(() => streamReads).toBe(1);
@@ -730,48 +729,40 @@ test("saves the next-message model and stops the bound execution", async ({
 		`/agents/${agentId}/conversations?conversation=${conversationId}`,
 	);
 	await expect(page.getByRole("button", { name: "停止回复" })).toBeVisible();
-	await page
-		.getByRole("textbox", { name: "消息", exact: true })
-		.fill("保留下一条草稿");
-	const controls = page.getByRole("group", { name: "下一条消息的模型" });
-	await expect(controls).toBeVisible();
-	expect(await controls.evaluate((node) => node.closest("form"))).toBeNull();
+	const input = page.getByRole("textbox", { name: "消息", exact: true });
+	await input.fill("保留下一条草稿");
+	// CH-01：模型与思考入口在 composer 工具栏内，选中即保存；没有独立的模型行和保存按钮。
+	const toolbar = page.locator("form.composer-zone .composer-controls");
+	const modelTrigger = toolbar.locator(".composer-setting-trigger").first();
+	await expect(modelTrigger).toHaveAccessibleName(
+		"选择模型，当前 Primary model，思考均衡，下一条消息生效",
+	);
+	await expect(page.getByRole("button", { name: "保存模型选择" })).toHaveCount(
+		0,
+	);
+	await expect(
+		page.getByRole("group", { name: "下一条消息的模型" }),
+	).toHaveCount(0);
+	expect(
+		await modelTrigger.evaluate((node) => {
+			const timeline = document.querySelector(".timeline");
+			return Boolean(
+				timeline &&
+					node.compareDocumentPosition(timeline) &
+						Node.DOCUMENT_POSITION_PRECEDING,
+			);
+		}),
+	).toBe(true);
 	for (const viewport of [
 		info.project.use.viewport,
 		{ width: 320, height: 370 },
 	]) {
 		if (!viewport) throw new Error("Expected configured viewport");
 		await page.setViewportSize(viewport);
-		const geometry = await controls.evaluate((node) => {
-			const timeline = document.querySelector(".timeline");
-			const title = document.querySelector(".chat-status h2");
-			if (!timeline || !title)
-				throw new Error("Expected conversation title and timeline");
-			return {
-				controls: node.getBoundingClientRect().toJSON(),
-				title: title.getBoundingClientRect().toJSON(),
-				timeline: timeline.getBoundingClientRect().toJSON(),
-				viewport: { width: innerWidth, height: innerHeight },
-				precedesTimeline: Boolean(
-					node.compareDocumentPosition(timeline) &
-						Node.DOCUMENT_POSITION_FOLLOWING,
-				),
-			};
-		});
-		await info.attach(`model-controls-${viewport.width}-geometry`, {
-			body: JSON.stringify(geometry),
-			contentType: "application/json",
-		});
-		expect(geometry.precedesTimeline).toBe(true);
-		expect(geometry.title.bottom).toBeLessThanOrEqual(geometry.controls.top);
-		expect(geometry.timeline.width).toBeGreaterThan(0);
-		expect(geometry.timeline.height).toBeGreaterThan(0);
-		expect(geometry.controls.bottom).toBeLessThanOrEqual(geometry.timeline.top);
 		for (const [index, control] of [
-			controls.getByRole("combobox", { name: "模型", exact: true }),
-			controls.getByRole("combobox", { name: "推理强度", exact: true }),
+			modelTrigger,
 			page.getByText("继续检查当前任务", { exact: true }),
-			page.getByRole("textbox", { name: "消息", exact: true }),
+			input,
 			page.getByRole("button", { name: "发送补充指令", exact: true }),
 		].entries()) {
 			await control.evaluate((node) =>
@@ -782,31 +773,6 @@ test("saves the next-message model and stops the bound execution", async ({
 				}),
 			);
 			await info.attach(
-				`model-controls-and-composer-${viewport.width}-${index}-geometry`,
-				{
-					body: JSON.stringify(
-						await control.evaluate((node) => ({
-							target: node.getBoundingClientRect().toJSON(),
-							viewport: { width: innerWidth, height: innerHeight },
-							scroll: { x: scrollX, y: scrollY },
-							ancestors: [".timeline", ".chat-workspace"].map((selector) => {
-								const ancestor = node.closest(selector);
-								return ancestor
-									? {
-											selector,
-											rect: ancestor.getBoundingClientRect().toJSON(),
-											scrollTop: ancestor.scrollTop,
-											clientHeight: ancestor.clientHeight,
-											scrollHeight: ancestor.scrollHeight,
-										}
-									: null;
-							}),
-						})),
-					),
-					contentType: "application/json",
-				},
-			);
-			await info.attach(
 				`model-controls-and-composer-${viewport.width}-${index}`,
 				{
 					body: await page.screenshot({ animations: "disabled" }),
@@ -814,7 +780,7 @@ test("saves the next-message model and stops the bound execution", async ({
 				},
 			);
 			await expect(control).toBeInViewport({ ratio: 1 });
-			if (index !== 2) {
+			if (index !== 1) {
 				expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(
 					44,
 				);
@@ -831,25 +797,27 @@ test("saves the next-message model and stops the bound execution", async ({
 			),
 		).toBe(true);
 	}
-
-	await page
-		.getByRole("combobox", { name: "模型", exact: true })
-		.press("Space");
-	await page.getByRole("option", { name: "Secondary model" }).press("Enter");
+	await page.setViewportSize(
+		info.project.use.viewport ?? { width: 1440, height: 1000 },
+	);
+	await modelTrigger.click();
+	const menu = page.getByRole("menu", { name: "模型与思考设置" });
+	await expect(menu).toBeVisible();
 	await expect(
-		page.getByRole("button", { name: "发送补充指令", exact: true }),
-	).toBeDisabled();
-	await page.getByRole("combobox", { name: "推理强度" }).click();
-	await page.getByRole("option", { name: "high" }).click();
-	await page.getByRole("button", { name: "保存模型选择" }).click();
+		menu.getByRole("menuitemradio", { name: "Primary model" }),
+	).toHaveAttribute("aria-checked", "true");
+	await menu.getByRole("menuitemradio", { name: "Secondary model" }).click();
+	await expect(menu).toBeHidden();
+	// 保存后焦点回到触发器，草稿保持不变；成功只有读屏状态，没有常驻「已保存」。
+	await expect(modelTrigger).toBeFocused();
+	await expect(modelTrigger).toHaveAccessibleName(
+		"选择模型，当前 Secondary model，思考高，下一条消息生效",
+	);
+	await expect(page.getByText("设置已保存，对下一条消息生效")).toHaveCount(1);
 	await expect(
-		page.getByRole("status").filter({
-			hasText: "模型选择已保存，从下一条消息开始生效。",
-		}),
-	).toBeVisible();
-	await expect(
-		page.getByRole("textbox", { name: "消息", exact: true }),
-	).toHaveValue("保留下一条草稿");
+		page.getByText("模型选择已保存，从下一条消息开始生效。"),
+	).toHaveCount(0);
+	await expect(input).toHaveValue("保留下一条草稿");
 	await page.getByRole("button", { name: "停止回复" }).click();
 	await expect(
 		page.getByRole("status").filter({ hasText: "原回复已结束。" }),
@@ -1190,7 +1158,7 @@ for (const source of ["standard", "custom"] as const) {
 				"使用标准模板时，请检查个人 Relay Key",
 			);
 			await input.fill("下一条草稿");
-			await page.getByRole("button", { name: "刷新会话", exact: true }).click();
+			// 「刷新会话」按钮已按设计删除（CH-05），这里只确认草稿保留。
 			await expect(input).toHaveValue("下一条草稿");
 			await page.getByRole("button", { name: "执行详情", exact: true }).click();
 			const details = page.getByRole("region", { name: "执行详情" });
@@ -1231,12 +1199,12 @@ for (const source of ["standard", "custom"] as const) {
 			await expect(input).toBeFocused();
 			await page.keyboard.type(" / 继续");
 			await expect(input).toHaveValue("下一条草稿 / 继续");
+			// 模型与思考入口在 composer 工具栏内（CH-01），名称同时说明模型与思考档位（CH-12）。
 			await expect(
-				page.getByRole("combobox", { name: "模型", exact: true }),
-			).toContainText("Secondary model");
-			await expect(
-				page.getByRole("combobox", { name: "推理强度", exact: true }),
-			).toContainText("high");
+				page.locator("form.composer-zone .composer-setting-trigger").first(),
+			).toHaveAccessibleName(
+				"选择模型，当前 Secondary model，思考高，下一条消息生效",
+			);
 			await expect(page).toHaveURL(
 				new RegExp(`/chat/${agentId}/${conversationId}$`),
 			);

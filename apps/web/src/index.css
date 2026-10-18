@@ -538,7 +538,7 @@
 	}
 }
 
-/* Exported chat layout: header, model controls and composer frame a scrollable timeline. */
+/* Exported chat layout: header, notice and composer frame a scrollable timeline. */
 .platform-shell-chat .platform-workspace {
 	height: 100dvh;
 	min-height: 0;
@@ -569,30 +569,8 @@
 	gap: 12px;
 	margin-bottom: 16px;
 }
-.conversation-agent-switch {
-	display: block;
-	min-height: 44px;
-	border-radius: 4px;
-}
-.conversation-agent-switch:focus-visible {
-	outline: 2px solid var(--ring);
-	outline-offset: 3px;
-}
 .conversation-heading-copy {
 	min-width: 0;
-}
-.conversation-agent-status {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 6px;
-	margin-top: 8px;
-	color: var(--muted-foreground);
-	font-size: 12px;
-}
-.conversation-agent-status > span {
-	min-width: 0;
-	overflow-wrap: anywhere;
 }
 .conversation-header h1 {
 	font-family: var(--font-display);
@@ -621,8 +599,14 @@
 .conversation-heading-actions {
 	display: flex;
 	flex-wrap: wrap;
+	flex-shrink: 0;
 	gap: 8px;
 	align-items: center;
+}
+/* 设计 .chat-page > .notice：页头与对话栅格之间横跨全宽。 */
+.chat-layout > .conversation-unavailable {
+	flex: none;
+	margin-bottom: 12px;
 }
 .conversation-columns {
 	display: grid;
@@ -646,9 +630,6 @@
 :where(.chat-thread) > * {
 	flex-shrink: 0;
 	margin-block: 0;
-}
-.chat-status {
-	font-size: 13px;
 }
 .chat-thread .timeline {
 	flex: 1;
@@ -708,18 +689,6 @@
 	background: var(--primary);
 	color: var(--surface);
 }
-.chat-thread .model-controls {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr);
-	min-width: 0;
-	gap: 8px;
-	padding-bottom: 12px;
-	border-bottom: 1px solid var(--border);
-}
-.model-controls .model-save {
-	grid-column: 1 / -1;
-	justify-self: start;
-}
 .chat-thread .composer-zone {
 	flex: none;
 	border: 1px solid var(--border);
@@ -746,18 +715,302 @@
 	outline: 2px solid var(--primary);
 	outline-offset: -3px;
 }
+/* 设计 .composer-actions:has(#chat-settings)：无上边线，间距只写在工具栏容器上（NI-48）。 */
 .composer-controls {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	gap: 8px;
-	padding: 8px 10px;
-	border-top: 1px solid var(--border);
+	gap: 4px;
+	padding: 6px 8px;
 }
-.chat-layout .composer-controls > p {
-	min-width: 0;
+.composer-toolbar {
+	display: flex;
+	align-items: center;
 	flex: 1;
+	gap: 2px;
+	min-width: 0;
+}
+.composer-actions {
+	display: flex;
+	align-items: center;
+	flex: none;
+	gap: 8px;
+}
+.composer-controls [data-c02-send-button] svg {
+	width: 15px;
+	height: 15px;
+}
+/* 设计 #chat-toolbar-controls [data-od-id=chat-open-capabilities]。 */
+.composer-toolbar .capability-trigger {
+	flex: none;
+	gap: 6px;
+	min-height: 44px;
+	padding: 8px;
+	font-weight: 400;
+	letter-spacing: 0;
+}
+.composer-toolbar .capability-trigger svg {
+	width: 16px;
+	height: 16px;
+}
+/* 设计 #chat-settings：透明入口，视觉面 28px，命中区 44px。 */
+.composer-model-controls {
+	display: inline-flex;
+	align-items: center;
+	flex: 0 1 auto;
+	gap: 2px;
+	min-width: 0;
+	padding: 0;
+}
+.composer-setting-trigger {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 0;
+	min-height: 44px;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--muted-foreground);
+	font: 400 13px / 1.5 var(--font-body);
+	cursor: pointer;
+}
+.composer-setting-trigger:disabled {
+	cursor: not-allowed;
+	opacity: 0.48;
+}
+.composer-setting-trigger .control-face {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	min-width: 0;
+	min-height: 28px;
+	padding: 4px 7px;
+	border-radius: 10px;
+}
+.composer-setting-trigger:hover:not(:disabled) .control-face,
+.composer-setting-trigger[data-popup-open] .control-face {
+	background: var(--surface-raised);
+	color: var(--fg);
+}
+.composer-setting-trigger .control-glyph {
+	flex: none;
+	width: 16px;
+	height: 16px;
+}
+.composer-setting-trigger .control-caret {
+	flex: none;
+	width: 12px;
+	height: 12px;
+}
+.composer-setting-trigger .control-value {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.composer-setting-trigger .compact-thinking {
+	flex: none;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	white-space: nowrap;
+}
+.model-preference-status {
+	display: grid;
+	place-items: center;
+	flex: none;
+	min-width: 28px;
+	height: 44px;
+}
+.composer-model-controls .model-preference-retry {
+	flex: none;
+	gap: 4px;
+	min-width: 44px;
+	min-height: 44px;
+	padding: 4px;
+	color: color-mix(in oklch, var(--danger) 78%, var(--fg));
 	font-size: 11px;
+	font-weight: 400;
+	letter-spacing: 0;
+}
+.composer-model-controls .model-preference-retry svg {
+	width: 13px;
+	height: 13px;
+}
+.model-preference-failure {
+	margin: 4px 12px 0;
+	color: var(--danger-ink);
+	font-size: 12px;
+}
+/* 设计 #capability-options：composer 上方的 fixed 弹层，位置由脚本按 positionCapabilityPicker 计算。 */
+.capability-menu {
+	position: fixed;
+	z-index: 24;
+	left: 16px;
+	width: min(320px, calc(100vw - 32px));
+	max-height: min(248px, 40dvh);
+	margin: 0;
+	padding: 5px;
+	overflow: auto;
+	overscroll-behavior: contain;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface);
+	box-shadow: var(--shadow);
+}
+.capability-menu-title {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	min-height: 30px;
+	padding: 2px 8px;
+	color: var(--muted-foreground);
+	font-size: 11px;
+}
+.capability-menu-title span {
+	min-width: 0;
+}
+.capability-menu .capability-menu-close {
+	flex: none;
+	border-radius: 8px;
+	color: var(--muted-foreground);
+}
+.capability-menu .capability-menu-close:hover {
+	background: var(--surface-raised);
+	color: var(--fg);
+}
+.capability-menu .capability-menu-close svg {
+	width: 15px;
+	height: 15px;
+}
+.capability-menu .capability-option {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	width: 100%;
+	min-height: 44px;
+	height: auto;
+	padding: 8px 9px;
+	border: 1px solid transparent;
+	border-radius: 8px;
+	color: var(--fg);
+	font-weight: 400;
+	letter-spacing: 0;
+	text-align: left;
+	white-space: normal;
+}
+.capability-menu .capability-option[aria-selected="true"] {
+	border-color: var(--border);
+	background: var(--surface-raised);
+}
+.capability-option-copy {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+.capability-option-copy strong {
+	font-size: 13px;
+	font-weight: 550;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+.capability-option-copy small {
+	margin-top: 2px;
+	color: var(--muted-foreground);
+	font-size: 11px;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+.capability-option-kind {
+	flex: none;
+	color: var(--muted-foreground);
+	font-size: 10px;
+	letter-spacing: 0.02em;
+	white-space: nowrap;
+}
+.capability-menu-footer {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	margin-top: 4px;
+	padding: 7px 9px 3px;
+	border-top: 1px solid var(--border);
+	color: var(--muted-foreground);
+	font-size: 10px;
+}
+.capability-menu-state {
+	padding: 12px 9px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.7;
+}
+/* 设计 .cap-selection / .cap-error：选择条与错误在输入框上方，错误只出现一次。 */
+.capability-selection {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 9px;
+	margin: 10px 12px 0;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface-raised);
+	font-size: 12px;
+}
+.capability-selection > div {
+	min-width: 0;
+}
+.capability-selection strong {
+	display: block;
+	font-weight: 600;
+}
+.capability-selection small {
+	display: block;
+	margin-top: 2px;
+	color: var(--muted-foreground);
+	overflow-wrap: anywhere;
+}
+/* 设计 .cap-error：12px 危险色文字行，不是带边框的提示框。 */
+.composer-zone .capability-inline-alert,
+.capability-menu .capability-inline-alert {
+	display: block;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	color: var(--danger-ink);
+	font-size: 12px;
+	line-height: 1.6;
+}
+.composer-zone .capability-error {
+	width: auto;
+	margin: 8px 12px 0;
+}
+/* 设计 .cap-receipt：消息流内的调用回执。 */
+.capability-receipt {
+	max-width: 760px;
+	margin-top: 10px;
+	padding-top: 10px;
+	border-top: 1px solid var(--border);
+	font-size: 12px;
+}
+.capability-receipt strong {
+	font-weight: 550;
+}
+.capability-receipt .capability-receipt-text {
+	margin: 5px 0;
+	font-size: 12px;
+	line-height: 1.7;
+}
+.capability-receipt .capability-receipt-error {
+	color: var(--danger-ink);
+}
+.capability-receipt-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
 }
 .conversation-history-panel {
 	min-width: 0;
@@ -774,31 +1027,57 @@
 	outline: 2px solid var(--ring);
 	outline-offset: -2px;
 }
+/* 设计 .history-panel .section-head：h2 15px + 13px 说明 + 计数 chip。 */
+.conversation-history-head {
+	display: flex;
+	align-items: end;
+	justify-content: space-between;
+	gap: 18px;
+}
+.conversation-history-head > div {
+	min-width: 0;
+}
 .conversation-history-panel h2 {
 	font-family: inherit;
 	font-size: 15px;
+	font-weight: 620;
+	letter-spacing: 0;
 }
-.conversation-history-panel a {
+.conversation-history-head .conversation-history-hint {
+	margin-top: 4px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+.conversation-history-list {
+	display: grid;
+	gap: 4px;
+}
+/* 设计 .history-item：标题单行省略，时间在前、「当前」在后。 */
+.conversation-history-item {
 	display: block;
-	height: auto;
-	white-space: normal;
-	border-radius: 10px;
-	padding: 10px;
 	min-height: 44px;
+	padding: 10px;
+	border-radius: 10px;
+	color: var(--muted-foreground);
 	font-size: 12px;
-	background: transparent;
-	border: 0;
 }
-.conversation-history-panel a small {
+.conversation-history-item strong {
+	display: block;
+	overflow: hidden;
+	font-size: 12px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.conversation-history-item small {
 	display: block;
 	margin-top: 3px;
+	color: inherit;
 	font-size: 11px;
-	font-weight: normal;
-	color: var(--muted-foreground);
 }
-.conversation-history-panel a:hover,
-.conversation-history-panel a[aria-current="page"] {
-	background: var(--muted);
+.conversation-history-item:hover,
+.conversation-history-item[aria-current="page"] {
+	background: var(--surface-raised);
+	color: var(--fg);
 }
 @media (max-width: 1023px) {
 	.conversation-history-toggle {
@@ -810,15 +1089,11 @@
 	.conversation-history-panel {
 		display: none;
 	}
-	.conversation-columns[data-history-open="true"] {
-		grid-template-rows: auto minmax(0, 1fr);
-	}
 	.conversation-columns[data-history-open="true"] .conversation-history-panel {
 		display: block;
 	}
-	.conversation-columns[data-history-open="true"]
-		.chat-workspace
-		> :not(.conversation-header) {
+	/* 页头在栅格之外：打开历史时只收起对话列，页头与横幅保留（设计 history-visible）。 */
+	.conversation-columns[data-history-open="true"] > .chat-workspace {
 		display: none;
 	}
 }
@@ -849,6 +1124,33 @@
 	.conversation-heading-actions > * {
 		padding-inline: 10px;
 	}
+	.chat-layout .conversation-header .conversation-subtitle {
+		display: none;
+	}
+	.composer-toolbar .capability-trigger {
+		width: 44px;
+		padding: 0;
+	}
+	.composer-toolbar .capability-trigger-label {
+		display: none;
+	}
+	/* 设计紧凑态：视口 ≤767 且 composer 宽 ≤440 时发送为 44×44 纯图标，可访问名称不变。 */
+	.composer-zone[data-compact="true"] [data-c02-send-button],
+	.composer-zone[data-compact="true"] .composer-stop {
+		width: 44px;
+		height: 44px;
+		padding: 0;
+	}
+	.composer-zone[data-compact="true"] .composer-send-label,
+	.composer-zone[data-compact="true"] .composer-stop-label {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		margin: -1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
 	.chat-thread .timeline {
 		padding: 16px 0;
 	}
@@ -875,12 +1177,8 @@
 		margin-bottom: 8px;
 	}
 	.conversation-heading-copy {
-		flex: 0 0 100%;
-	}
-	.conversation-agent-status {
-		gap: 4px;
-		margin-top: 4px;
-		font-size: 11px;
+		flex: 1;
+		min-width: 100px;
 	}
 	.chat-thread.space-y-5 > :not([hidden]) ~ :not([hidden]) {
 		margin-top: 8px;
@@ -973,31 +1271,90 @@
 	color: var(--foreground);
 	font-weight: 500;
 }
-/* Very short viewports use document scrolling for focus and error recovery. */
+/* 短视口：只保留时间线一处滚动，composer 固定在底部（CH-11、NI-47）。只压缩非滚动区，
+ * 时间线保留一条单行消息的最小高度，不再改成整页滚动（NI-102）。 */
 @media (max-height: 600px) {
-	.platform-shell-chat .platform-topbar {
-		position: static;
+	.platform-content.chat-content {
+		padding-top: 8px;
+		padding-bottom: max(8px, env(safe-area-inset-bottom));
 	}
-	.platform-shell-chat .platform-workspace {
-		height: auto;
+	.conversation-header {
+		flex-wrap: nowrap;
+		margin-bottom: 8px;
 	}
-	.chat-thread .timeline {
-		flex: none;
-		min-height: 200px;
+	.chat-layout .conversation-header .conversation-eyebrow,
+	.chat-layout .conversation-header .conversation-subtitle {
+		display: none;
 	}
-}
-/* Short viewports use page scrolling so keyboard focus cannot be clipped. */
-@media (max-height: 600px) {
-	.chat-layout,
-	.conversation-columns > .chat-workspace {
-		height: auto;
+	/* 标题行压成一行：长 Agent 名称省略显示，可访问名称仍是完整名称。 */
+	.conversation-header h1 {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
-	.conversation-columns > .chat-workspace {
-		overflow: visible;
+	.chat-layout > .conversation-unavailable {
+		margin-bottom: 8px;
 	}
 	.chat-thread:not([hidden]) {
-		flex: none;
-		min-height: auto;
+		gap: 6px;
+	}
+	/* 执行详情等替换对话列的内容在列内滚动，不撑出整页；对话视图本身恰好放下，不产生第二处滚动。 */
+	.conversation-columns > .chat-workspace {
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		scroll-padding-block: 8px;
+	}
+	.chat-thread .timeline {
+		min-height: 80px;
+		padding-block: 8px;
+	}
+	/* 附件说明排在「添加附件」右侧，不单独占一行。 */
+	.composer-zone [data-testid="conversation-file-picker"] > div:first-child {
+		flex-wrap: nowrap;
+	}
+	.composer-zone
+		[data-testid="conversation-file-picker"]
+		> div:first-child
+		> p {
+		flex: 1 1 0;
+		min-width: 0;
+		line-height: 1.4;
+	}
+}
+/* 极短视口（如 320×370）：再压缩边距、输入框与工具栏，给时间线留出一条完整消息。 */
+@media (max-height: 420px) {
+	.platform-content.chat-content {
+		padding-top: 6px;
+		padding-bottom: max(6px, env(safe-area-inset-bottom));
+	}
+	.conversation-header {
+		margin-bottom: 6px;
+	}
+	.chat-thread .timeline {
+		padding-block: 6px;
+	}
+	/* 消息署名压成一行，长 Agent 名称不把一条消息撑出时间线；文章的可访问名称仍是完整名称。 */
+	.chat-message .message-heading {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.chat-thread .composer-zone [data-slot="textarea"] {
+		height: 44px;
+		padding-block: 10px;
+	}
+	.composer-controls {
+		padding-block: 0;
+	}
+	.composer-zone
+		[data-testid="conversation-file-picker"]
+		> div:first-child
+		> p {
+		display: -webkit-box;
+		overflow: hidden;
+		font-size: 11px;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 2;
 	}
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1021,16 +1378,14 @@
 	.chat-layout,
 	.chat-workspace,
 	.chat-thread,
-	.chat-status,
 	.composer-zone,
 	.composer,
-	.model-controls,
 	.composer-controls
 ) {
 	min-width: 0;
 	max-width: 100%;
 }
-:where(.platform-topbar > *, .chat-status > *, .composer-controls > *) {
+:where(.platform-topbar > *, .composer-controls > *) {
 	min-width: 0;
 	max-width: 100%;
 	overflow-wrap: anywhere;
