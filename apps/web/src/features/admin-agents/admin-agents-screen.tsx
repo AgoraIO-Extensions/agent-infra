@@ -248,13 +248,14 @@ export function AdminAgentsScreen({
 											</TableCell>
 											<TableCell
 												data-label="系统操作"
-												aria-label="Owner 交接入口"
+												aria-label={`Owner 交接入口：${agent.name}`}
 											>
 												{agent.managementStatus === "disabled" ? (
 													<span aria-hidden="true">—</span>
 												) : (
 													<Link
 														className={buttonVariants({ variant: "outline" })}
+														aria-label={`处理 ${agent.name} 的 Owner 交接`}
 														params={{ agentId: agent.agentId }}
 														to="/agents/$agentId/configuration"
 													>

@@ -79,7 +79,7 @@ describe("Administrator inventory presentation", () => {
 		fireEvent.click(screen.getByRole("button", { name: "上一页" }));
 		expect(change).toHaveBeenLastCalledWith({ page: 1 });
 	});
-	it("renders all five created states with a narrow Owner handoff entry", () => {
+	it("renders all five created states with an Agent-specific Owner handoff entry", () => {
 		render(
 			<AdminAgentsScreen
 				state={{
@@ -87,6 +87,7 @@ describe("Administrator inventory presentation", () => {
 					agents: adminAgentStatuses.map((managementStatus) => ({
 						...baseline,
 						agentId: managementStatus,
+						name: `${managementStatus} Agent`,
 						managementStatus,
 					})),
 				}}
@@ -98,7 +99,13 @@ describe("Administrator inventory presentation", () => {
 		expect(
 			screen.getAllByRole("columnheader").map((cell) => cell.textContent),
 		).toEqual(["Agent", "来源", "Owner", "状态", "系统操作"]);
-		expect(screen.getAllByLabelText("Owner 交接入口")).toHaveLength(5);
+		expect(screen.getAllByLabelText(/^Owner 交接入口：/)).toHaveLength(5);
+		expect(
+			screen.getAllByRole("link", { name: /处理 .* Agent 的 Owner 交接/ }),
+		).toHaveLength(4);
+		expect(
+			screen.getByRole("link", { name: "处理 available Agent 的 Owner 交接" }),
+		).toBeTruthy();
 		expect(
 			screen.getAllByRole("link").map((link) => link.getAttribute("href")),
 		).toEqual([

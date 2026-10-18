@@ -343,6 +343,7 @@ export function WecomBotSetup({
 				<Button
 					type="button"
 					variant="outline"
+					aria-label="扫码授权企微机器人"
 					onClick={() => void authorizeQr()}
 				>
 					扫码授权
@@ -356,6 +357,7 @@ export function WecomBotSetup({
 					<Label htmlFor="wecom-bot-id">Bot ID</Label>
 					<Input
 						id="wecom-bot-id"
+						aria-label="企微机器人 Bot ID"
 						value={botId}
 						disabled={busy}
 						onChange={(e) => setBotId(e.target.value)}
@@ -366,6 +368,7 @@ export function WecomBotSetup({
 					<Label htmlFor="wecom-bot-secret">Secret</Label>
 					<Input
 						id="wecom-bot-secret"
+						aria-label="企微机器人 Secret"
 						type="password"
 						value={secret}
 						disabled={busy}
@@ -376,6 +379,7 @@ export function WecomBotSetup({
 			</div>
 			<Label className="min-h-11 flex-nowrap items-start gap-3 text-sm leading-6">
 				<Checkbox
+					aria-label="确认企微机器人连接影响"
 					className="mt-1"
 					checked={confirmed}
 					disabled={busy}
@@ -397,6 +401,7 @@ export function WecomBotSetup({
 			<div className="flex flex-wrap gap-3">
 				<Button
 					type="button"
+					aria-label="验证并绑定企微机器人"
 					disabled={busy}
 					onClick={() => {
 						void submit();
@@ -408,6 +413,7 @@ export function WecomBotSetup({
 					<Button
 						type="button"
 						variant="outline"
+						aria-label="取消企微机器人配置"
 						onClick={() => {
 							void cancel();
 						}}
@@ -418,6 +424,7 @@ export function WecomBotSetup({
 				<Button
 					type="button"
 					variant="outline"
+					aria-label="刷新企微机器人状态"
 					disabled={busy}
 					onClick={() => {
 						void refresh();

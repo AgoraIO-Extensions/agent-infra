@@ -285,6 +285,7 @@ export function WecomAppSetup({
 					<Label htmlFor="wecom-app-corporation-id">企业 ID</Label>
 					<Input
 						id="wecom-app-corporation-id"
+						aria-label="企微自建应用企业 ID"
 						aria-invalid={!!fieldErrors.corporationId}
 						aria-describedby={
 							fieldErrors.corporationId
@@ -312,6 +313,7 @@ export function WecomAppSetup({
 					<Label htmlFor="wecom-app-application-id">应用 ID</Label>
 					<Input
 						id="wecom-app-application-id"
+						aria-label="企微自建应用 ID"
 						aria-invalid={!!fieldErrors.applicationId}
 						aria-describedby={
 							fieldErrors.applicationId
@@ -340,6 +342,7 @@ export function WecomAppSetup({
 					<Label htmlFor="wecom-app-secret">应用 Secret</Label>
 					<Input
 						id="wecom-app-secret"
+						aria-label="企微自建应用 Secret"
 						aria-invalid={!!fieldErrors.secret}
 						aria-describedby={
 							fieldErrors.secret ? "wecom-app-secret-error" : undefined
@@ -363,6 +366,7 @@ export function WecomAppSetup({
 					<Label htmlFor="wecom-app-token">回调 Token</Label>
 					<Input
 						id="wecom-app-token"
+						aria-label="企微自建应用回调 Token"
 						aria-invalid={!!fieldErrors.token}
 						aria-describedby={
 							fieldErrors.token ? "wecom-app-token-error" : undefined
@@ -386,6 +390,7 @@ export function WecomAppSetup({
 					<Label htmlFor="wecom-app-encoding-aes-key">EncodingAESKey</Label>
 					<Input
 						id="wecom-app-encoding-aes-key"
+						aria-label="企微自建应用 EncodingAESKey"
 						aria-invalid={!!fieldErrors.encodingAesKey}
 						aria-describedby={
 							fieldErrors.encodingAesKey
@@ -414,6 +419,7 @@ export function WecomAppSetup({
 			<Label className="min-h-11 flex-nowrap items-start gap-3 text-sm leading-6">
 				<Checkbox
 					id="wecom-app-takeover"
+					aria-label="确认企微自建应用连接影响"
 					className="mt-1"
 					checked={confirmed}
 					disabled={busy}
@@ -442,17 +448,28 @@ export function WecomAppSetup({
 				</Alert>
 			) : null}
 			<div className="flex flex-wrap gap-3">
-				<Button type="button" disabled={busy} onClick={() => void submit()}>
+				<Button
+					type="button"
+					aria-label="验证并绑定企微自建应用"
+					disabled={busy}
+					onClick={() => void submit()}
+				>
 					{busy ? "验证中…" : "验证并绑定"}
 				</Button>
 				{busy ? (
-					<Button type="button" variant="outline" onClick={() => void cancel()}>
+					<Button
+						type="button"
+						variant="outline"
+						aria-label="取消企微自建应用配置"
+						onClick={() => void cancel()}
+					>
 						取消配置
 					</Button>
 				) : null}
 				<Button
 					type="button"
 					variant="outline"
+					aria-label="刷新企微自建应用状态"
 					disabled={busy}
 					onClick={() => void refresh()}
 				>
