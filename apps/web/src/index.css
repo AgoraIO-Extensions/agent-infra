@@ -985,12 +985,14 @@ a[class~="group/button"] {
 	height: auto;
 	border: 0;
 	border-bottom: 2px solid transparent;
+	border-radius: 0;
 	min-height: 44px;
 	min-width: 0;
 	padding: 9px 2px;
 	margin-right: 18px;
 	color: var(--muted-foreground);
-	font-size: 14px;
+	font-size: 13px;
+	font-weight: 650;
 	white-space: normal;
 	overflow-wrap: anywhere;
 }
@@ -999,9 +1001,9 @@ a[class~="group/button"] {
 	outline-offset: 3px;
 }
 .management-content .tabs [aria-selected="true"] {
-	border-bottom: 2px solid var(--primary);
+	border-bottom: 2px solid var(--accent-ink);
 	color: var(--foreground);
-	font-weight: 600;
+	font-weight: 650;
 }
 .management-content .record-row {
 	display: flex;
