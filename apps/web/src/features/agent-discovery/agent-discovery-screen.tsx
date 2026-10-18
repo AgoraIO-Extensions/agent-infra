@@ -307,7 +307,7 @@ export function AgentDiscoveryScreen({
 											</Badge>
 											{agent.serviceAvailability && (
 												<Badge
-													variant="secondary"
+													variant="outline"
 													data-status={agent.serviceAvailability}
 												>
 													{agentServiceAvailabilityLabel(

@@ -252,7 +252,7 @@ export function AgentDetailScreen({
 					{agentManagementStatusLabels[agent.managementStatus]}
 				</Badge>
 				{agent.serviceAvailability && (
-					<Badge variant="secondary" data-status={agent.serviceAvailability}>
+					<Badge variant="outline" data-status={agent.serviceAvailability}>
 						{agentServiceAvailabilityLabel(agent.serviceAvailability)}
 					</Badge>
 				)}
