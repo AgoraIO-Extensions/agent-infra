@@ -103,7 +103,7 @@ export function createBrowserConversationHandlers(
 	invokeBrowser: BrowserCommandInvoker,
 ) {
 	return {
-		onPauseAgent: ({ id }: BrowserHandoffActionInputV1) => {
+		onRevoke: ({ id }: BrowserHandoffActionInputV1) => {
 			void invokeBrowser({
 				schemaVersion: 1,
 				command: "revoke",

@@ -27,7 +27,7 @@ describe("ActiveConversation Browser command wiring", () => {
 		);
 		const handlers = createBrowserConversationHandlers(invokeBrowser);
 
-		handlers.onPauseAgent(input);
+		handlers.onRevoke(input);
 		handlers.onTakeOver(input);
 		handlers.onReturnToAgent(input);
 		handlers.onConfirmSideEffect(input);

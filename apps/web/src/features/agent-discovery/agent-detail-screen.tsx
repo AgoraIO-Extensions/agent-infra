@@ -50,7 +50,7 @@ type AgentDetailScreenProps = {
 	browserCurrentBinding?: BrowserHandoffBindingV1;
 	onBrowserCancelConfirmation?: (input: BrowserHandoffActionInputV1) => void;
 	onBrowserConfirmSideEffect?: (input: BrowserHandoffActionInputV1) => void;
-	onBrowserPauseAgent?: (input: BrowserHandoffActionInputV1) => void;
+	onBrowserRevoke?: (input: BrowserHandoffActionInputV1) => void;
 	onBrowserRejectSideEffect?: (input: BrowserHandoffActionInputV1) => void;
 	onBrowserReturnToAgent?: (input: BrowserHandoffActionInputV1) => void;
 	onBrowserTakeOver?: (input: BrowserHandoffActionInputV1) => void;
@@ -111,7 +111,7 @@ export function AgentDetailScreen({
 	browserCurrentBinding,
 	onBrowserCancelConfirmation,
 	onBrowserConfirmSideEffect,
-	onBrowserPauseAgent,
+	onBrowserRevoke,
 	onBrowserRejectSideEffect,
 	onBrowserReturnToAgent,
 	onBrowserTakeOver,
@@ -411,7 +411,7 @@ export function AgentDetailScreen({
 							currentBinding={browserCurrentBinding}
 							onCancelConfirmation={onBrowserCancelConfirmation}
 							onConfirmSideEffect={onBrowserConfirmSideEffect}
-							onPauseAgent={onBrowserPauseAgent}
+							onRevoke={onBrowserRevoke}
 							onRejectSideEffect={onBrowserRejectSideEffect}
 							onReturnToAgent={onBrowserReturnToAgent}
 							onTakeOver={onBrowserTakeOver}

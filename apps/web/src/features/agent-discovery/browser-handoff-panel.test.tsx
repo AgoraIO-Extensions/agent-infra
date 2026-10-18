@@ -131,13 +131,13 @@ describe("Browser handoff and confirmation panel", () => {
 
 	it("offers takeover and passes only the opaque id plus verified binding", () => {
 		const onTakeOver = vi.fn();
-		const onPauseAgent = vi.fn();
+		const onRevoke = vi.fn();
 		render(
 			<BrowserHandoffPanel
 				browserAvailable
 				currentBinding={binding}
 				handoff={requested}
-				onPauseAgent={onPauseAgent}
+				onRevoke={onRevoke}
 				onTakeOver={onTakeOver}
 			/>,
 		);
@@ -147,14 +147,15 @@ describe("Browser handoff and confirmation panel", () => {
 			"Agent、Session 和授权绑定由服务端维护。",
 		);
 		expect(screen.getByRole("alert").textContent).toContain("页面版本：4");
-		screen.getByRole("button", { name: "拒绝接管" }).click();
-		screen.getByRole("button", { name: "接管浏览器" }).click();
-		expect(onPauseAgent).toHaveBeenCalledWith({ id: "handoff-1", binding });
+		expect(screen.queryByRole("button", { name: "拒绝接管" })).toBeNull();
+		screen.getByRole("button", { name: "允许这次操作" }).click();
+		screen.getByRole("button", { name: "拒绝" }).click();
+		expect(onRevoke).toHaveBeenCalledWith({ id: "handoff-1", binding });
 		expect(onTakeOver).toHaveBeenCalledWith({ id: "handoff-1", binding });
 	});
 
 	it.each([
-		["active", "交还 Agent"],
+		["active", "交还给 Agent"],
 		["returning", "正在重新校验页面、Session 和授权状态。"],
 		["completed", "本次接管已经结束，不能重复使用原请求。"],
 		["revoked", "本次接管已经结束，不能重复使用原请求。"],
@@ -163,6 +164,7 @@ describe("Browser handoff and confirmation panel", () => {
 		["unknown", "状态待核实"],
 	] as const)("renders the %s handoff state safely", (status, detail) => {
 		const onReturnToAgent = vi.fn();
+		const onRevoke = vi.fn();
 		const handoff = {
 			...requested,
 			status,
@@ -175,16 +177,19 @@ describe("Browser handoff and confirmation panel", () => {
 				browserAvailable
 				handoff={handoff}
 				currentBinding={binding}
+				onRevoke={onRevoke}
 				onReturnToAgent={onReturnToAgent}
 			/>,
 		);
 		expect(screen.getByRole("alert").textContent).toContain(detail);
 		if (status === "active") {
-			screen.getByRole("button", { name: "交还 Agent" }).click();
+			screen.getByRole("button", { name: "交还给 Agent" }).click();
+			screen.getByRole("button", { name: "停止" }).click();
 			expect(onReturnToAgent).toHaveBeenCalledWith({
 				id: "handoff-1",
 				binding,
 			});
+			expect(onRevoke).toHaveBeenCalledWith({ id: "handoff-1", binding });
 		} else {
 			expect(screen.queryByRole("button")).toBeNull();
 		}
@@ -309,12 +314,12 @@ describe("Browser handoff and confirmation panel", () => {
 				onTakeOver={onTakeOver}
 			/>,
 		);
-		expect(screen.getByRole("button", { name: "接管浏览器" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "允许这次操作" })).toBeTruthy();
 		act(() => {
 			vi.advanceTimersByTime(2 * 60 * 60 * 1000 + 1);
 		});
 		expect(screen.getByRole("alert").textContent).toContain("已过期");
-		expect(screen.queryByRole("button", { name: "接管浏览器" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "允许这次操作" })).toBeNull();
 		expect(onTakeOver).not.toHaveBeenCalled();
 	});
 

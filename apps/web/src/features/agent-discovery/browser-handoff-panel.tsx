@@ -97,7 +97,8 @@ type BrowserHandoffPanelProps = {
 	readonly now?: () => number;
 	readonly onCancelConfirmation?: (input: BrowserHandoffActionInputV1) => void;
 	readonly onConfirmSideEffect?: (input: BrowserHandoffActionInputV1) => void;
-	readonly onPauseAgent?: (input: BrowserHandoffActionInputV1) => void;
+	/** Revoke the current handoff request or active takeover. */
+	readonly onRevoke?: (input: BrowserHandoffActionInputV1) => void;
 	readonly onRejectSideEffect?: (input: BrowserHandoffActionInputV1) => void;
 	readonly onReturnToAgent?: (input: BrowserHandoffActionInputV1) => void;
 	readonly onTakeOver?: (input: BrowserHandoffActionInputV1) => void;
@@ -344,7 +345,7 @@ function HandoffPanel({
 	currentBinding,
 	handoff,
 	now,
-	onPauseAgent,
+	onRevoke,
 	onReturnToAgent,
 	onTakeOver,
 }: Pick<
@@ -353,7 +354,7 @@ function HandoffPanel({
 	| "currentBinding"
 	| "handoff"
 	| "now"
-	| "onPauseAgent"
+	| "onRevoke"
 	| "onReturnToAgent"
 	| "onTakeOver"
 >) {
@@ -429,21 +430,18 @@ function HandoffPanel({
 				) : null}
 				{status === "requested" ? (
 					<div className="mt-3 flex flex-col gap-2 sm:flex-row">
-						{onPauseAgent ? (
-							<Button
-								onClick={() => invokeIfCurrent(onPauseAgent)}
-								type="button"
-							>
-								拒绝接管
+						{onTakeOver ? (
+							<Button onClick={() => invokeIfCurrent(onTakeOver)} type="button">
+								允许这次操作
 							</Button>
 						) : null}
-						{onTakeOver ? (
+						{onRevoke ? (
 							<Button
-								variant="outline"
-								onClick={() => invokeIfCurrent(onTakeOver)}
+								variant="ghost"
+								onClick={() => invokeIfCurrent(onRevoke)}
 								type="button"
 							>
-								接管浏览器
+								拒绝
 							</Button>
 						) : null}
 					</div>
@@ -452,20 +450,19 @@ function HandoffPanel({
 					<div className="mt-3 flex flex-wrap gap-2">
 						{onReturnToAgent ? (
 							<Button
-								variant="outline"
 								onClick={() => invokeIfCurrent(onReturnToAgent)}
 								type="button"
 							>
-								交还 Agent
+								交还给 Agent
 							</Button>
 						) : null}
-						{onPauseAgent ? (
+						{onRevoke ? (
 							<Button
-								variant="destructive"
-								onClick={() => invokeIfCurrent(onPauseAgent)}
+								variant="ghost"
+								onClick={() => invokeIfCurrent(onRevoke)}
 								type="button"
 							>
-								停止操作
+								停止
 							</Button>
 						) : null}
 					</div>
@@ -666,7 +663,7 @@ export function BrowserHandoffPanel(props: BrowserHandoffPanelProps) {
 				currentBinding={props.currentBinding}
 				handoff={handoff}
 				now={props.now}
-				onPauseAgent={props.onPauseAgent}
+				onRevoke={props.onRevoke}
 				onReturnToAgent={props.onReturnToAgent}
 				onTakeOver={props.onTakeOver}
 			/>

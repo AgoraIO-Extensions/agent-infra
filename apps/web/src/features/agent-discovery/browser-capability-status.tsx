@@ -41,7 +41,7 @@ type BrowserCapabilityStatusProps = {
 	readonly currentBinding?: BrowserHandoffBindingV1;
 	readonly onCancelConfirmation?: (input: BrowserHandoffActionInputV1) => void;
 	readonly onConfirmSideEffect?: (input: BrowserHandoffActionInputV1) => void;
-	readonly onPauseAgent?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onRevoke?: (input: BrowserHandoffActionInputV1) => void;
 	readonly onRejectSideEffect?: (input: BrowserHandoffActionInputV1) => void;
 	readonly onReturnToAgent?: (input: BrowserHandoffActionInputV1) => void;
 	readonly onTakeOver?: (input: BrowserHandoffActionInputV1) => void;
@@ -225,7 +225,7 @@ export function BrowserCapabilityStatus({
 	currentBinding,
 	onCancelConfirmation,
 	onConfirmSideEffect,
-	onPauseAgent,
+	onRevoke,
 	onRejectSideEffect,
 	onReturnToAgent,
 	onTakeOver,
@@ -246,7 +246,7 @@ export function BrowserCapabilityStatus({
 				browserAvailable={capability.status === "available"}
 				onCancelConfirmation={onCancelConfirmation}
 				onConfirmSideEffect={onConfirmSideEffect}
-				onPauseAgent={onPauseAgent}
+				onRevoke={onRevoke}
 				onRejectSideEffect={onRejectSideEffect}
 				onReturnToAgent={onReturnToAgent}
 				onTakeOver={onTakeOver}

@@ -202,6 +202,7 @@
 
 ## 变更日志
 
+- 2026-10-18：继续修复 NI-09/BR-03：浏览器接管请求态改为 primary「允许这次操作」+ ghost「拒绝」，已接管态改为 primary「交还给 Agent」+ ghost「停止」；revoke 回调改名 `onRevoke`，保持 `take_over`/`return_to_agent`/`revoke` 命令映射；handoff 定向单测 52/52 通过。
 - 2026-10-18：收敛 NI-67：企微解绑确认复用共享 `ConfirmDialog`，新增独立触发器变体以保留 outline 入口与 destructive 确认动作；企微配置定向 22/22 通过。
 - 2026-10-18：修复 NI-80 执行详情模型状态：只有存在可信请求模型 option 时才展示「请求模型」，使用真实 option displayName，不再用固定「未提供」覆盖事实；测试改用与标签不同的模型名，执行详情定向 2/2 通过。
 - 2026-10-18：修复 slash 菜单触发的 Web UI policy CI 失败：菜单容器与选项统一复用 `Listbox`/`ListboxOption` primitive；`pnpm check`、Web 类型检查、构建和会话定向 71/71 通过。
