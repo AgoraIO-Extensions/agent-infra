@@ -1303,7 +1303,7 @@ export class PostgresConversationQueryV1 {
 								e.principal_type as execution_principal_type,
 								e.session_generation::text,
 								e.authorization_revision,
-								e.original_submit_host_session_ref as original_host_scope_ref
+								coalesce(e.accepted_original_host_session_ref, e.original_submit_host_session_ref) as original_host_scope_ref
 							from platform.conversations c
 							join platform.conversation_executions e
 								on e.conversation_id = c.id
@@ -1402,7 +1402,7 @@ export class PostgresConversationQueryV1 {
 								e.principal_type as execution_principal_type,
 								e.session_generation as execution_session_generation,
 								e.authorization_revision as execution_authorization_revision,
-								e.original_submit_host_session_ref as execution_host_scope_ref
+								coalesce(e.accepted_original_host_session_ref, e.original_submit_host_session_ref) as execution_host_scope_ref
 							from platform.conversations c
 							join platform.conversation_executions e
 								on e.conversation_id = c.id
@@ -1412,7 +1412,7 @@ export class PostgresConversationQueryV1 {
 								and e.principal_type = c.principal_type
 								and e.session_generation = c.session_generation
 								and e.authorization_revision = c.authorization_revision
-								and e.original_submit_host_session_ref = c.host_session_ref
+								and coalesce(e.accepted_original_host_session_ref, e.original_submit_host_session_ref) = c.host_session_ref
 							where c.id = ${conversationId}
 								and c.agent_id = ${agentId}
 								and c.actor_id = ${readScope.actorId}
@@ -1508,7 +1508,7 @@ export class PostgresConversationQueryV1 {
 								e.principal_type as execution_principal_type,
 								e.session_generation as execution_session_generation,
 								e.authorization_revision as execution_authorization_revision,
-								e.original_submit_host_session_ref as execution_host_scope_ref,
+								coalesce(e.accepted_original_host_session_ref, e.original_submit_host_session_ref) as execution_host_scope_ref,
 								e.sandbox_id as execution_sandbox_id,
 								s.sandbox_id as allocation_sandbox_id,
 								s.resource_name as allocation_resource_name,
@@ -1533,7 +1533,7 @@ export class PostgresConversationQueryV1 {
 								and e.principal_type = c.principal_type
 								and e.session_generation = c.session_generation
 								and e.authorization_revision = c.authorization_revision
-								and e.original_submit_host_session_ref = c.host_session_ref
+								and coalesce(e.accepted_original_host_session_ref, e.original_submit_host_session_ref) = c.host_session_ref
 								and e.execution_id = ${executionId}
 							left join platform.session_sandbox_allocations s
 								on s.sandbox_id = e.sandbox_id
@@ -1702,7 +1702,7 @@ export class PostgresConversationQueryV1 {
 								s.status as allocation_status,
 								s.desired_state as allocation_desired_state,
 								s.resource_observation->>'status' as allocation_observation_status,
-								e.original_submit_host_session_ref as original_host_scope_ref
+								coalesce(e.accepted_original_host_session_ref, e.original_submit_host_session_ref) as original_host_scope_ref
 							from platform.conversations c
 							join platform.conversation_executions e
 								on e.conversation_id = c.id

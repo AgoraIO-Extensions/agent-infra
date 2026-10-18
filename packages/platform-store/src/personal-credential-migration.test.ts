@@ -153,6 +153,7 @@ beforeAll(async () => {
 		{ idx: 55, tag: "0055_platform_execution_failure_events" },
 		{ idx: 56, tag: "0056_wecom_connection_authorization" },
 		{ idx: 57, tag: "0057_trace_context" },
+		{ idx: 58, tag: "0058_accepted_original_host" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
@@ -406,6 +407,9 @@ describe("personal credential disable authority append", () => {
 						if (table === "conversation_executions") {
 							if ("sandbox_id" in copy) expect(copy.sandbox_id).toBeNull();
 							delete copy.sandbox_id;
+							if ("accepted_original_host_session_ref" in copy)
+								expect(copy.accepted_original_host_session_ref).toBeNull();
+							delete copy.accepted_original_host_session_ref;
 						}
 						return copy;
 					}),

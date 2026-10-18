@@ -1307,6 +1307,7 @@ export class PostgresConversationDispatchStoreV1
 	async recordRuntimeResponse(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly hostSessionRef: string;
+		readonly originalOperationAccepted?: true;
 		readonly transition: ConversationDispatchStateTransitionV1;
 	}): Promise<boolean> {
 		requireClaim(input.claim);
@@ -1318,6 +1319,8 @@ export class PostgresConversationDispatchStoreV1
 		if (!validText(input.hostSessionRef)) {
 			throw new TypeError("RuntimeHost Session reference is invalid");
 		}
+		if (input.originalOperationAccepted && !isTurn(input.claim.operation))
+			throw new TypeError("Only original Turns can record Runtime acceptance");
 		return transactionResult(this.#client, async (transaction) => {
 			// 提交/重新生成认领时没有 stop、现在有了：「Runtime 已受理这次提交」这个事实不受 stop
 			// 影响，照常记录，让已经在重试的 stop 工作项把停止送到 Runtime。否则本次认领作废、
@@ -1333,6 +1336,27 @@ export class PostgresConversationDispatchStoreV1
 					state.conversation.host_session_ref !== input.hostSessionRef)
 			) {
 				throw new StaleDispatchLease();
+			}
+			if (
+				input.originalOperationAccepted &&
+				state.execution.runtime_submit_protocol === "v4"
+			) {
+				// The owned original claim and pinned digest identify the accepted
+				// operation. Never infer this fact from Conversation's current Host.
+				const accepted = await transaction<{ execution_id: string }[]>`
+					update platform.conversation_executions
+					set accepted_original_host_session_ref = ${input.hostSessionRef}
+					where execution_id = ${input.claim.executionId}
+						and conversation_id = ${input.claim.conversationId}
+						and session_generation = ${input.claim.sessionGeneration}
+						and authorization_revision = ${input.claim.authorizationRevision}
+						and runtime_submit_protocol = 'v4'
+						and original_operation_digest = ${state.execution.original_operation_digest}
+						and (original_submit_host_session_ref is null or original_submit_host_session_ref = ${input.hostSessionRef})
+						and (accepted_original_host_session_ref is null or accepted_original_host_session_ref = ${input.hostSessionRef})
+					returning execution_id
+				`;
+				if (accepted.length !== 1) throw new StaleDispatchLease();
 			}
 			await applyTransition(transaction, state, input.claim, input.transition);
 			const rows = await transaction<{ id: string }[]>`
