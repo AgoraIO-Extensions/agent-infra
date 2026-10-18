@@ -132,12 +132,10 @@ export function assembleSkillHubReadApiV1(input: {
 							const policy =
 								await input.providerImport?.resolveAdmissionPolicy();
 							if (!policy) throw new SkillHubOperationErrorV1("unavailable");
-							const { schemaVersion: _schemaVersion, ...packageSelection } =
-								selection;
 							return providerImport.admitVersion(
 								context,
 								{
-									...packageSelection,
+									...selection,
 									sourceVersion: candidate.sourceVersion,
 									sourceDigest: candidate.sourceDigest,
 									approvalRef: candidate.approvalRef,
