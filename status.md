@@ -256,7 +256,7 @@
 - **R4-16**：Connection Developers 当前提供 Browser API；Consumer/declaration 管理和默认 Delegated runtime 未装配，OAuth/Delegated 机器链路无法在本仓库独立完成，按用户要求跳过。
 - **V-01**：现有 Browser Playwright 可运行项和导出矩阵已通过；报告要求的完整设计导出逐页对照仍需独立证据，不能以现有 13 个桌面导出项替代。
 - **报告终审 NI-01~NI-67**：本文件的原始整改清单记录早期实现状态；终审新增问题正在按 P1/P2 分批复核，修复后以代码、单测和浏览器证据更新对应条目。
-- 当前仍需继续复核的终审项包括短视口细节、执行详情与页面 CSS 分层、标题/设计文档一致性、平台 Skill 导入回归测试拆分，以及 Connection OAuth/Delegated 与完整设计导出证据。
+- 当前仍需继续复核的终审项包括执行详情与页面 CSS 分层、平台 Skill 导入回归测试拆分，以及 Connection OAuth/Delegated 与完整设计导出证据。
 
 ## 证据边界
 
