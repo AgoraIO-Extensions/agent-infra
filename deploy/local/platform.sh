@@ -315,6 +315,7 @@ start_detached() {
     const [log, command, ...args] = process.argv.slice(1);
     const output = openSync(log, "a");
     const child = spawn(command, args, { detached: true, stdio: ["ignore", output, output] });
+    if (!child.pid) process.exit(1);
     child.unref();
     process.stdout.write(String(child.pid));
   ' "$log" "$@"

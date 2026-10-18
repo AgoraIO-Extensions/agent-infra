@@ -88,6 +88,7 @@ if [[ "$1" == "deploy/local/check-api-auth.ts" ]]; then
 fi
 if [[ "$1" == "deploy/local/native-metadata-proxy.mjs" ]]; then
   printf 'native proxy %s\\n' "$*" >> "$COMMAND_LOG"
+  if [[ -n "\${FAKE_NATIVE_METADATA_PROXY_EXITS:-}" ]]; then exit 1; fi
 fi
 exec "$REAL_NODE" "$@"`,
 	);
@@ -739,6 +740,52 @@ test("local native metadata forward and proxy outlive the caller's process group
 			await connect(f.nativeBindAddress, 3304),
 			false,
 			"stop must reclaim the proxy",
+		);
+	} finally {
+		run("stop", env);
+		await f.close();
+	}
+});
+
+test("local native metadata proxy failure reclaims the detached forward and token (#2741)", async () => {
+	const f = await fixture();
+	let env = f.env;
+	try {
+		env = {
+			...f.env,
+			FAKE_NATIVE_METADATA_ENABLED: "1",
+			FAKE_NATIVE_METADATA_TOKEN_KEY: "runtime-token",
+			FAKE_NATIVE_METADATA_PROXY_EXITS: "1",
+			PLATFORM_LOCAL_NATIVE_METADATA_WORKER_PORT: "3304",
+			PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS: f.nativeBindAddress,
+		};
+		const started = run("up", env);
+		assert.notEqual(started.status, 0, await readFile(f.log, "utf8"));
+		assert.match(started.stderr, /Local native metadata host proxy exited/);
+		const connect = () =>
+			new Promise((resolve) => {
+				const socket = createConnection({ host: "127.0.0.1", port: 3305 });
+				socket.once("connect", () => {
+					socket.destroy();
+					resolve(true);
+				});
+				socket.once("error", () => resolve(false));
+			});
+		// 已脱离调用方的转发不会随 up 退出，必须由失败路径回收。
+		assert.equal(
+			await connect(),
+			false,
+			"the detached forward must be reclaimed",
+		);
+		assert.equal(
+			await readFile(
+				join(
+					env.PLATFORM_LOCAL_STATE_DIRECTORY,
+					"agent-infra-verify/native-metadata-worker-token",
+				),
+				"utf8",
+			),
+			"",
 		);
 	} finally {
 		run("stop", env);
