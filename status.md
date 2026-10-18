@@ -202,6 +202,7 @@
 
 ## 变更日志
 
+- 2026-10-18：修复 NI-58/NI-59：删除全仓库确认无组件引用的 `platform-status*`、`session-revalidating*`、`login-state/login-retry`、`skill-page*`、`surface-card*`、`skill-binding*`、`skill-sync-stages*` CSS 规则；保留 `skill-row`/`skill-row-link` 等实际目录样式，并同步移除设计契约中的过期 surface 选择器。`pnpm check`、`pnpm check-types` 通过（既有 Biome warning 未新增）。
 - 2026-10-18：修复 NI-19/NI-58/NI-59：执行详情使用 DialogHeader/Title/Footer，主按钮「关闭」、max-height 760px、标题焦点恢复；移除执行详情组件内未使用的关闭参数，避免旧整页结构继续覆盖 Dialog 语义。Conversation detail 70/70、Biome、Web 类型检查通过。
 - 2026-10-18：修复 NI-47/CH-11：短视口下工作区占满视口，composer 保持在视口内，timeline 作为唯一滚动区；Connection/文件 disclosure 在 ≤600px 并排收纳；1366×500、820×600、390×560 Browser geometry 3/3 通过。
 - 2026-10-18：修复 NI-64/NI-65：静态入口标题改为「Agora Agent」，页面标题与面包屑收敛到同一份路由映射并对齐 Owner 配置、Skill 详情、API 凭证等设计文案；补充设计快照追溯与短视口 CSS 说明，新增标题/面包屑回归矩阵。
