@@ -200,7 +200,7 @@ describe("AdminAgentApplicationsScreen", () => {
 		);
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 		expect(screen.getByRole("status").textContent).toContain("创建中");
-		expect(document.activeElement).not.toBe(screen.getByRole("status"));
+		expect(document.activeElement).toBe(screen.getByRole("status"));
 	});
 
 	it("latches a decision before the parent rerenders and releases on error", async () => {
@@ -340,6 +340,7 @@ describe("AdminAgentApplicationsScreen", () => {
 		expect(screen.getByRole("status").textContent).toBe(
 			"已驳回，申请人会看到修改原因。",
 		);
+		expect(document.activeElement).toBe(screen.getByRole("status"));
 	});
 
 	it("distinguishes retryable and permission-lost decision failures", () => {

@@ -202,6 +202,7 @@
 
 ## 变更日志
 
+- 2026-10-18：修复 NI-79：审批批准/驳回结果 Toast 设为可聚焦反馈并复用结果焦点 Hook，Dialog 关闭或申请行刷新后焦点回到审批结果而不落到 body；审批屏幕定向单测 12/12、Biome 与 Web 类型检查通过。
 - 2026-10-18：修复 NI-77/NI-78：全站 Button/Input/Textarea/Select focus 统一为单一 outline，移除重复光晕；sm/lg/icon-sm/icon-lg 统一至少 44px，保留 icon-xs 紧凑例外；Button variant、design-contract、Web 类型检查通过。
 - 2026-10-18：修复 NI-70：新会话创建返回 unknown 时保留「核实原请求」出口，重试沿用原 Idempotency-Key，成功后只提交一次原草稿；conversation 定向 66/66、Biome 和 Web 类型检查通过。
 - 2026-10-18：修复 NI-69/O-06：DirectoryPicker 选中后收起候选层并恢复输入焦点，复合字段失焦时关闭结果层，候选 option 移出 Tab 顺序，避免结果层叠加和逐项穿过候选；目录定向测试 11/11、申请表目录交互回归 1/1、Biome 与 Web 类型检查通过。

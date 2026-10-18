@@ -1,4 +1,5 @@
 import { RefreshCwIcon, Search } from "lucide-react";
+import type { RefObject } from "react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +28,7 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { Toast } from "@/components/ui/toast";
+import { useResultFocus } from "@/hooks/use-result-focus";
 import { formatDateTime } from "../../lib/format-date.js";
 import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
@@ -121,11 +123,13 @@ function ApplicationAvailability({
 }
 function DecisionFeedback({
 	decision,
+	resultRef,
 }: {
 	decision?: AgentApplicationProjectionV2;
+	resultRef: RefObject<HTMLDivElement | null>;
 }) {
 	return decision ? (
-		<Toast className="mt-4 font-medium text-sm">
+		<Toast ref={resultRef} tabIndex={-1} className="mt-4 font-medium text-sm">
 			{decision.status === "rejected"
 				? "已驳回，申请人会看到修改原因。"
 				: `已提交 ${decision.name} 的审批结果：${agentManagementStatusLabels[decision.status]}。`}
@@ -402,6 +406,7 @@ export function AdminAgentApplicationsScreen({
 	const [source, setSource] = useState("all");
 	const filterId = useId();
 	const applications = state.kind === "ready" ? state.applications : [];
+	const decisionFeedbackRef = useResultFocus<HTMLDivElement>(decisionResult);
 	const sources = [
 		...new Set(
 			applications.map((a) =>
@@ -469,7 +474,10 @@ export function AdminAgentApplicationsScreen({
 					</div>
 				)}
 			</header>
-			<DecisionFeedback decision={decisionResult} />
+			<DecisionFeedback
+				decision={decisionResult}
+				resultRef={decisionFeedbackRef}
+			/>
 			{state.kind === "loading" ? (
 				<p role="status">正在读取审批申请…</p>
 			) : state.kind === "unavailable" ? (
