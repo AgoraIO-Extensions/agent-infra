@@ -486,11 +486,11 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						{loginExpired
 							? "登录已过期，请重新登录；已提交的任务会继续处理。"
 							: session.isFetching
-							? "正在确认登录状态…"
-							: session.state.kind !== "loading" &&
-								(session.state.retryable
-									? "暂时无法确认登录状态，请重试。"
-									: "请先登录，再查看 Agent、提交申请或继续对话。")}
+								? "正在确认登录状态…"
+								: session.state.kind !== "loading" &&
+									(session.state.retryable
+										? "暂时无法确认登录状态，请重试。"
+										: "请先登录，再查看 Agent、提交申请或继续对话。")}
 					</p>
 					{session.state.kind !== "loading" && (
 						<div className="space-y-4">

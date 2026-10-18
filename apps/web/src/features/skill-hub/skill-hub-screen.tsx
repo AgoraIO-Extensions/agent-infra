@@ -233,10 +233,7 @@ export function SkillHubDirectoryScreen({
 					{visibleVersions.length > 0 ? (
 						<div className="skill-directory mt-4">
 							{visibleVersions.map((version) => (
-								<article
-									className="skill-row"
-									key={version.skillVersionId}
-								>
+								<article className="skill-row" key={version.skillVersionId}>
 									<div className="skill-mark" aria-hidden="true">
 										<Sparkles size={20} />
 									</div>
@@ -251,7 +248,9 @@ export function SkillHubDirectoryScreen({
 											</Link>
 										</h2>
 										<p>版本 {version.version}</p>
-										<p className="truncate">版本 ID：{version.skillVersionId}</p>
+										<p className="truncate">
+											版本 ID：{version.skillVersionId}
+										</p>
 									</div>
 									<SkillHubVersionBadges version={version} />
 									<Link
