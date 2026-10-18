@@ -208,7 +208,9 @@ test("own audit page filters, paginates, opens detail, and fits mobile", async (
 	await page.getByRole("button", { name: "查询", exact: true }).click();
 	await expect(page.getByText("访问获准", { exact: true })).toBeVisible();
 	await page.getByRole("button", { name: "下一页", exact: true }).click();
-	await expect(page.getByText("agent-audit-b", { exact: true })).toBeVisible();
+	await expect(page.locator('[data-label="对象"] code').first()).toHaveText(
+		"agent-audit-b",
+	);
 	await expect(
 		page.getByText("Execution：未提供", { exact: true }),
 	).toBeVisible();
@@ -256,6 +258,10 @@ for (const compact of [false, true]) {
 		await expect(row.getByTitle(governance.subject.subjectId)).toHaveText(
 			"applicat…fesafe",
 		);
+		await row.getByRole("button", { name: "展开完整对象 ID" }).click();
+		await expect(
+			row.getByText(governance.subject.subjectId, { exact: true }),
+		).toBeVisible();
 		await expect(row).toContainText("创建申请");
 		await expect(row).toContainText("Execution：未提供");
 		await expect(row.getByText("已受理", { exact: true })).toBeVisible();
@@ -275,9 +281,9 @@ for (const compact of [false, true]) {
 		const worker = page
 			.getByRole("row")
 			.filter({ hasText: background.summary });
-		await expect(worker.getByTitle(background.subject.subjectId)).toHaveText(
-			"executio…fesafe",
-		);
+		await expect(
+			worker.getByRole("button", { name: "展开完整对象 ID" }),
+		).toHaveText("executio…fesafe");
 		await expect(worker.locator('[data-label="操作主体"]')).toContainText(
 			"可信操作主体 · 后台组件",
 		);
@@ -291,6 +297,12 @@ for (const compact of [false, true]) {
 		await worker.getByRole("button", { name: "查看审计详情" }).click();
 		const dialog = page.getByRole("region", { name: "审计详情", exact: true });
 		await expect(dialog).toContainText(background.summary);
+		await expect(
+			dialog.getByText(background.subject.subjectId, { exact: true }).first(),
+		).toBeVisible();
+		await expect(
+			dialog.getByRole("button", { name: "复制原 Execution ID" }),
+		).toBeVisible();
 		await expect(dialog).toContainText("后台组件 · platform_worker");
 		await expect(dialog).toContainText("用户 · audit-user-a");
 		await expect(dialog).toContainText("实际后台组件");

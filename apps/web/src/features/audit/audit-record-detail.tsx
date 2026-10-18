@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
+import { AuditIdentifier } from "./audit-identifier.js";
 import {
 	auditActionLabels,
 	auditOutcomeLabel,
@@ -27,20 +28,14 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 		</section>
 	);
 }
-function shortIdentifier(value: string | null | undefined) {
-	if (!value) return "未提供";
-	return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
-}
 function Identifier({
 	value,
-	full = false,
+	label,
 }: {
 	value: string | null | undefined;
-	full?: boolean;
+	label: string;
 }) {
-	return value ? (
-		<code title={value}>{full ? value : shortIdentifier(value)}</code>
-	) : null;
+	return <AuditIdentifier value={value} label={label} />;
 }
 
 export function AuditRecordDetail({ record }: { record: AuditRecord }) {
@@ -59,45 +54,51 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 			<Section title="操作与身份">
 				<Field label="操作摘要">{record.summary}</Field>
 				<Field label="审计 ID">
-					<Identifier value={record.auditId} />
+					<Identifier value={record.auditId} label="审计 ID" />
 				</Field>
 				<Field label="发生时间">{auditTimestamp(record.occurredAt)}</Field>
 				<Field label="可信操作主体">
 					{auditPrincipalLabels[record.actor.kind]} ·{" "}
-					<Identifier value={record.actor.actorId} />
+					<Identifier value={record.actor.actorId} label="可信操作主体 ID" />
 				</Field>
 				<Field label="原发起主体">
 					{record.originalPrincipal ? (
 						<>
 							{auditPrincipalLabels[record.originalPrincipal.kind]} ·{" "}
-							<Identifier value={record.originalPrincipal.id} />
+							<Identifier
+								value={record.originalPrincipal.id}
+								label="原发起主体 ID"
+							/>
 						</>
 					) : null}
 				</Field>
 				<Field label="实际后台组件">{record.executor}</Field>
 				<Field label="对象类型">{record.subject.kind}</Field>
 				<Field label="对象 ID">
-					<Identifier value={record.subject.subjectId} full />
+					<Identifier value={record.subject.subjectId} label="对象 ID" />
 				</Field>
 				<Field label="授权记录引用">
-					<Identifier value={record.authorizationRecordId} />
+					<Identifier
+						value={record.authorizationRecordId}
+						label="授权记录引用"
+					/>
 				</Field>
 			</Section>
 			<Section title="请求与执行关联">
 				<Field label="请求尝试 ID">
-					<Identifier value={record.requestId} />
+					<Identifier value={record.requestId} label="请求尝试 ID" />
 				</Field>
 				<Field label="原 Execution ID">
-					<Identifier value={record.executionId} full />
+					<Identifier value={record.executionId} label="原 Execution ID" />
 				</Field>
 				<Field label="Agent ID">
-					<Identifier value={record.agentId} full />
+					<Identifier value={record.agentId} label="Agent ID" />
 				</Field>
 				<Field label="Conversation ID">
-					<Identifier value={record.conversationId} full />
+					<Identifier value={record.conversationId} label="Conversation ID" />
 				</Field>
 				<Field label="Trace ID">
-					<Identifier value={record.traceId} />
+					<Identifier value={record.traceId} label="Trace ID" />
 				</Field>
 				<Field label="动作代码">{record.action}</Field>
 			</Section>
@@ -126,7 +127,7 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 						{taskAuditReasonLabels[record.taskApi.reason]}
 					</Field>
 					<Field label="订阅 ID">
-						<Identifier value={record.taskApi.subscriptionId} />
+						<Identifier value={record.taskApi.subscriptionId} label="订阅 ID" />
 					</Field>
 				</Section>
 			)}
@@ -147,16 +148,16 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 						}
 					</Field>
 					<Field label="操作引用">
-						<Identifier value={fact.operationRef} />
+						<Identifier value={fact.operationRef} label="操作引用" />
 					</Field>
 					<Field label="尝试引用">
-						<Identifier value={fact.attemptRef} />
+						<Identifier value={fact.attemptRef} label="尝试引用" />
 					</Field>
 					<Field label="父操作引用">
-						<Identifier value={fact.parentOperationRef} />
+						<Identifier value={fact.parentOperationRef} label="父操作引用" />
 					</Field>
 					<Field label="事件 ID">
-						<Identifier value={record.operation?.eventId} />
+						<Identifier value={record.operation?.eventId} label="事件 ID" />
 					</Field>
 					<Field label="开始时间">
 						{fact.startedAt ? auditTimestamp(fact.startedAt) : null}
@@ -170,9 +171,15 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 					<Field label="失败或未知原因">{fact.failureCode}</Field>
 					{fact.kind === "model" ? (
 						<>
-							<Field label="模型 ID">{fact.model.modelId}</Field>
-							<Field label="模型选项">{fact.model.modelOptionId}</Field>
-							<Field label="配置版本">{fact.model.configVersion}</Field>
+							<Field label="模型 ID">
+								<Identifier value={fact.model.modelId} label="模型 ID" />
+							</Field>
+							<Field label="模型选项">
+								<Identifier value={fact.model.modelOptionId} label="模型选项" />
+							</Field>
+							<Field label="配置版本">
+								<Identifier value={fact.model.configVersion} label="配置版本" />
+							</Field>
 							<Field label="推理强度">{fact.model.reasoningLevel}</Field>
 							<Field label="输入 Token">
 								{fact.usage?.inputTokens ?? "未采集"}
@@ -187,10 +194,10 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 					) : (
 						<>
 							<Field label="工具 ID">
-								<Identifier value={fact.toolId} />
+								<Identifier value={fact.toolId} label="工具 ID" />
 							</Field>
 							<Field label="结果引用">
-								<Identifier value={fact.resultRef} />
+								<Identifier value={fact.resultRef} label="结果引用" />
 							</Field>
 						</>
 					)}
@@ -198,8 +205,12 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 			)}
 			{connection && (
 				<Section title="Connection 关联">
-					<Field label="服务引用">{connection.serviceRef}</Field>
-					<Field label="调用引用">{connection.callRef}</Field>
+					<Field label="服务引用">
+						<Identifier value={connection.serviceRef} label="服务引用" />
+					</Field>
+					<Field label="调用引用">
+						<Identifier value={connection.callRef} label="调用引用" />
+					</Field>
 					<Field label="核实状态">
 						{connection.verification === "verified"
 							? "关联已核实"

@@ -34,6 +34,7 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { useApplicationSession } from "../application-shell.js";
+import { AuditIdentifier } from "./audit-identifier.js";
 import {
 	auditActionLabels,
 	auditOutcomeLabel,
@@ -45,11 +46,6 @@ import {
 import type { AuditFilters, AuditScope } from "./audit-query.js";
 import { AuditRecordDetail } from "./audit-record-detail.js";
 import { useAuditQuery } from "./use-audit-query.js";
-
-function shortIdentifier(value: string | null | undefined) {
-	if (!value) return "未提供";
-	return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
-}
 
 export function AuditWorkflow({ scope }: { scope: AuditScope }) {
 	const { identityKey, session } = useApplicationSession();
@@ -358,19 +354,39 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 												{auditActionLabels[record.action]}
 											</strong>
 											<small className="mt-1 block">{record.summary}</small>
+											<small className="mt-1 block break-all text-muted-foreground">
+												审计 ID：
+												<AuditIdentifier
+													value={record.auditId}
+													label="审计 ID"
+													compact
+												/>
+											</small>
 										</TableCell>
 										<TableCell data-label="对象">
 											<span>{auditSubjectLabels[record.subject.kind]}</span>
 											<small className="mt-1 block break-all">
-												<code title={record.subject.subjectId}>
-													{shortIdentifier(record.subject.subjectId)}
-												</code>
+												<AuditIdentifier
+													value={record.subject.subjectId}
+													label="对象 ID"
+													compact
+												/>
 											</small>
 											<small className="mt-1 block break-all text-muted-foreground">
-												Agent：{shortIdentifier(record.agentId)}
+												Agent：
+												<AuditIdentifier
+													value={record.agentId}
+													label="Agent ID"
+													compact
+												/>
 											</small>
 											<small className="mt-1 block break-all text-muted-foreground">
-												Execution：{shortIdentifier(record.executionId)}
+												Execution：
+												<AuditIdentifier
+													value={record.executionId}
+													label="Execution ID"
+													compact
+												/>
 											</small>
 										</TableCell>
 										<TableCell data-label="操作主体">
@@ -378,9 +394,11 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 												可信操作主体 · {auditPrincipalLabels[record.actor.kind]}
 											</span>
 											<small className="mt-1 block break-all">
-												<code title={record.actor.actorId}>
-													{shortIdentifier(record.actor.actorId)}
-												</code>
+												<AuditIdentifier
+													value={record.actor.actorId}
+													label="可信操作主体 ID"
+													compact
+												/>
 											</small>
 											{record.originalPrincipal && (
 												<small className="mt-1 block break-all text-muted-foreground">
