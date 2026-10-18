@@ -80,6 +80,143 @@ export function safeDeploymentUrl(value: unknown): string | undefined {
 	}
 }
 
+type PageChrome = {
+	parent: string;
+	title: string;
+};
+
+type PageChromeRule = PageChrome & {
+	match: (pathname: string) => boolean;
+};
+
+// Keep the browser title and its breadcrumb in one route table. The sidebar
+// may expose a broader navigation label, but the top bar follows the page IA.
+const pageChromeRules: readonly PageChromeRule[] = [
+	{ match: (pathname) => pathname === "/", parent: "工作区", title: "工作台" },
+	{
+		match: (pathname) => pathname === "/agents",
+		parent: "工作区",
+		title: "Agent 目录",
+	},
+	{
+		match: (pathname) => /^\/agents\/[^/]+\/configuration$/.test(pathname),
+		parent: "Agent 目录",
+		title: "Owner 配置",
+	},
+	{
+		match: (pathname) => /^\/agents\/[^/]+$/.test(pathname),
+		parent: "Agent 目录",
+		title: "Agent 详情",
+	},
+	{
+		match: (pathname) =>
+			pathname.startsWith("/chat/") || pathname.includes("/conversations"),
+		parent: "工作区",
+		title: "对话",
+	},
+	{
+		match: (pathname) => pathname === "/skills/manage",
+		parent: "我的管理",
+		title: "我的 Skill",
+	},
+	{
+		match: (pathname) => pathname === "/skills",
+		parent: "工作区",
+		title: "Skill Hub",
+	},
+	{
+		match: (pathname) => pathname.startsWith("/skills/"),
+		parent: "Skill Hub",
+		title: "Skill 详情",
+	},
+	{
+		match: (pathname) => pathname === "/my-agents/new",
+		parent: "我的管理",
+		title: "创建申请",
+	},
+	{
+		match: (pathname) => /^\/my-agents\/[^/]+\/edit$/.test(pathname),
+		parent: "我的管理",
+		title: "编辑申请",
+	},
+	{
+		match: (pathname) => /^\/my-agents\/[^/]+$/.test(pathname),
+		parent: "我的管理",
+		title: "申请详情",
+	},
+	{
+		match: (pathname) => pathname === "/my-agents",
+		parent: "我的管理",
+		title: "我的 Agent",
+	},
+	{
+		match: (pathname) => pathname === "/audit",
+		parent: "我的管理",
+		title: "我的执行审计",
+	},
+	{
+		match: (pathname) => pathname === "/my-settings/api-credentials",
+		parent: "我的管理",
+		title: "API 凭证",
+	},
+	{
+		match: (pathname) => pathname === "/my-settings/relay-key",
+		parent: "我的管理",
+		title: "个人 Relay Key",
+	},
+	{
+		match: (pathname) => pathname === "/admin/approvals",
+		parent: "系统管理",
+		title: "创建审批",
+	},
+	{
+		match: (pathname) => pathname === "/admin/agents",
+		parent: "系统管理",
+		title: "Agent 管理",
+	},
+	{
+		match: (pathname) => pathname === "/admin/audit",
+		parent: "系统管理",
+		title: "平台审计",
+	},
+	{
+		match: (pathname) => pathname === "/eval",
+		parent: "系统管理",
+		title: "评测",
+	},
+	{
+		match: (pathname) => pathname === "/ops",
+		parent: "系统管理",
+		title: "运维观测",
+	},
+];
+
+export function resolvePageChrome({
+	notFound,
+	pathname,
+	selectingConversation = false,
+}: {
+	notFound?: boolean;
+	pathname: string;
+	selectingConversation?: boolean;
+}): PageChrome {
+	if (notFound) {
+		return {
+			parent: pathname.startsWith("/admin") ? "系统管理" : "工作区",
+			title: "页面不存在",
+		};
+	}
+	if (selectingConversation) {
+		return { parent: "工作区", title: "选择 Agent 开始对话" };
+	}
+	return (
+		pageChromeRules.find((rule) => rule.match(pathname)) ?? {
+			parent: "工作区",
+			title: "Agent 详情",
+		}
+	);
+}
+
 function AuthenticatedContent({
 	session,
 	children,
@@ -177,41 +314,12 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const notFound = useRouterState({
 		select: (state) => state.matches.some((match) => match.globalNotFound),
 	});
-	const title = (() => {
-		if (session.state.kind !== "ready") return "登录";
-		if (notFound) return "页面不存在";
-		if (normalizedPathname === "/") return "工作台";
-		if (selectingConversation) return "选择 Agent 开始对话";
-		if (skillHubRoute === "directory") return "Skill Hub";
-		if (skillHubRoute === "version") return "版本详情";
-		if (skillHubRoute === "management") return "我的 Skill";
-		if (chatContext || pathname.includes("/conversations")) return "对话";
-		if (pathname.includes("/configuration")) return "配置与生命周期";
-		if (normalizedPathname === "/admin/audit") return "平台审计";
-		if (normalizedPathname === "/audit") return "我的执行审计";
-		if (normalizedPathname === "/admin/agents") return "Agent 管理";
-		if (normalizedPathname.startsWith("/admin")) return "创建审批";
-		if (normalizedPathname === "/my-agents/new") return "创建申请";
-		if (
-			normalizedPathname.startsWith("/my-agents/") &&
-			normalizedPathname.endsWith("/edit")
-		)
-			return "编辑申请";
-		if (
-			normalizedPathname.startsWith("/my-agents/") &&
-			normalizedPathname !== "/my-agents"
-		)
-			return "申请详情";
-		if (normalizedPathname.startsWith("/my-agents")) return "我的 Agent";
-		if (normalizedPathname === "/my-settings/api-credentials")
-			return "API 凭证与应用";
-		if (normalizedPathname === "/my-settings/relay-key")
-			return "个人 Relay Key";
-		if (normalizedPathname === "/eval") return "评测";
-		if (normalizedPathname === "/ops") return "运维观测";
-		if (normalizedPathname === "/agents") return "Agent 目录";
-		return "Agent 详情";
-	})();
+	const pageChrome = resolvePageChrome({
+		notFound,
+		pathname: normalizedPathname,
+		selectingConversation,
+	});
+	const title = session.state.kind === "ready" ? pageChrome.title : "登录";
 	useEffect(() => {
 		document.title = `${title} · Agora Agent`;
 	}, [title]);
@@ -565,25 +673,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					</Sheet>
 					<Breadcrumb className="platform-breadcrumb">
 						<BreadcrumbList>
-							<BreadcrumbItem>
-								{normalizedPathname.startsWith("/admin")
-									? "系统管理"
-									: skillHubRoute === "directory"
-										? "工作区"
-										: skillHubRoute === "version"
-											? "Skill Hub"
-											: skillHubRoute === "management"
-												? "我的管理"
-												: normalizedPathname.startsWith("/my-agents") ||
-														normalizedPathname === "/audit" ||
-														normalizedPathname.startsWith("/my-settings") ||
-														normalizedPathname.startsWith("/skills")
-													? "我的管理"
-													: normalizedPathname === "/eval" ||
-															normalizedPathname === "/ops"
-														? "系统管理"
-														: "工作区"}
-							</BreadcrumbItem>
+							<BreadcrumbItem>{pageChrome.parent}</BreadcrumbItem>
 							<BreadcrumbItem>
 								<BreadcrumbPage>{title}</BreadcrumbPage>
 							</BreadcrumbItem>

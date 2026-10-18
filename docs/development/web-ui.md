@@ -20,12 +20,31 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 | `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
 | `DESIGN-MANIFEST.json` | `3c78fd40eac65ac1659f0ab4934a3b9285a5cb67f85038a42dfdb17df95ffdea` |
 
+基线追溯：设计项目由 [#1208](https://github.com/AgoraIO-Extensions/agent-infra/issues/1208)
+定义；当前导出快照的复核和实现差异记录在
+[#2736](https://github.com/AgoraIO-Extensions/agent-infra/pull/2736)。PR 链接只记录工程复核，
+不替代产品对设计版本的批准。
+
+应用壳层从同一份路由映射生成页面标题和顶栏面包屑，避免导航标签与页面标题漂移：
+
+| 路由 | 面包屑 | 页面标题 |
+| --- | --- | --- |
+| `/agents/:id` | `Agent 目录 / Agent 详情` | `Agent 详情` |
+| `/agents/:id/configuration` | `Agent 目录 / Owner 配置` | `Owner 配置` |
+| `/skills` | `工作区 / Skill Hub` | `Skill Hub` |
+| `/skills/:version` | `Skill Hub / Skill 详情` | `Skill 详情` |
+| `/skills/manage` | `我的管理 / 我的 Skill` | `我的 Skill` |
+| `/my-settings/api-credentials` | `我的管理 / API 凭证` | `API 凭证` |
+
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量。页面共享内容宽度、标题和表单样式；桌面侧栏为 248px，
 低于 1024px 使用现有 Sheet。工作台先展示最近对话和职责事项，再展示 Agent 与申请。
 Agent 详情中的 Owner、渠道、模型和范围均取自实际投影；Owner 配置入口仍由权限结果控制。
+Connection 卡片的「操作范围」行是授权边界说明，不代表固定能力清单；实际能力和当前主体授权仍以 Agent
+projection 与服务端校验结果为准。
 对话时间线独立滚动，保留消息输入区及代码、表格的局部滚动。
-短视口下时间线保持局部滚动并收紧页面顶距，输入区仍可通过页面滚动访问，避免从执行详情返回后的键盘焦点被聊天容器裁切。
+短视口（高度不超过 600px）下，聊天壳层继续使用 `100dvh`，只收紧页面顶/底距；时间线保持独立滚动，
+输入区留在同一布局中并持续可访问，避免从执行详情返回后的键盘焦点被聊天容器裁切。代码块与表格另有局部滚动。
 
 原型中的示例人员、模型、就绪提示和演示操作不作为生产数据或新增能力。
 申请、审批、配置、生命周期及审计继续复用现有组件、请求和权限校验。

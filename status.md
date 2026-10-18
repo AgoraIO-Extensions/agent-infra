@@ -44,7 +44,7 @@
 - [x] **N-13** · P1 · 原始数据外露（实测补全） — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
 - [x] **N-14** · P1 · 触控目标不足 — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
 - [x] **N-15** · P1 · 窄屏操作在视口外 — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
-- [x] **N-16** · P1 · Skill 导航高亮与面包屑 — 已实现，待复核 · /skills 与版本详情仅高亮工作区 Skill Hub；/skills/manage 仅高亮「我的 Skill」，面包屑/eyebrow 对齐工作区、Skill Hub 与系统管理；导航 32/32、SkillHub screen 42/42 通过，待浏览器矩阵复核
+- [x] **N-16** · P1 · Skill 导航高亮与面包屑 — 已实现，待复核 · /skills 与 Skill 详情仅高亮工作区 Skill Hub；/skills/manage 仅高亮「我的 Skill」，面包屑/eyebrow 对齐工作区、Skill Hub 与系统管理；导航 32/32、SkillHub screen 42/42 通过，待浏览器矩阵复核
 - [x] **N-17** · P2 · Tab 面板焦点 — 已实现，待复核 · TabsContent 统一提供可见 focus-visible ring，Tab 面板继续可键盘聚焦
 - [x] **N-18** · P2 · 焦点环 offset 混用 — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
 - [x] **N-19** · P2 · 加载态纯文本 — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
@@ -105,7 +105,7 @@
 - [x] **F-07** · P2 · Agent 详情细节 — 已实现，待复核 · 详情入口、标识和动作尺寸已对齐，桌面矩阵通过
 - [x] **F-08** · P2 · 对话页头细节 — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
 - [x] **F-09** · P2 · 我的 Agent 文案 — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
-- [x] **F-10** · P2 · 页面标题（document.title） — 已实现，待复核 · ApplicationShell 按当前路由同步「页面 · Agent Infra」document.title
+- [x] **F-10** · P2 · 页面标题（document.title） — 已实现，待复核 · ApplicationShell 按当前路由同步「页面 · Agora Agent」document.title；静态入口标题同为「Agora Agent」
 - [x] **F-11** · P1 · 不可逆操作无确认 — 已实现，待复核 · 代码已完成，待浏览器矩阵复核
 - [x] **F-12** · P2 · 运维观测 /ops 没有设计 — 已实现，待复核 · 最新 main 已有实现，待浏览器矩阵复核
 - [ ] **V-01** · 说明 · 新视口核查（360 / 430 / 600 / 820 / 1366 / 1920 / 320） — 部分完成，完整逐页证据待补 · exported design viewport matrix 桌面项目 13/13 通过，覆盖代表性页面；320px 另由对话/管理窄视口用例覆盖，完整设计导出逐页对照仍未完成
@@ -202,6 +202,7 @@
 
 ## 变更日志
 
+- 2026-10-18：修复 NI-64/NI-65：静态入口标题改为「Agora Agent」，页面标题与面包屑收敛到同一份路由映射并对齐 Owner 配置、Skill 详情、API 凭证等设计文案；补充设计快照追溯与短视口 CSS 说明，新增标题/面包屑回归矩阵。
 - 2026-10-18：修复 NI-76：登录错误框 selector 提升为 `.login-form .login-error`，抵消全局 Alert 圆角覆盖并锁定 10px；Biome、登录单测 11/11、Web 类型检查通过；完整 auth 浏览器用例受共享端口/既有 validity 断言阻塞，未等待 CI。
 - 2026-10-18：修复 NI-82/NI-63：恢复运行实例、执行详情关闭作用域/键盘路径、Agent loading 文案、Relay Key 失败状态等被削弱的行为断言；定向 85/85、Biome、Web build 通过。
 - 2026-10-18：修复 NI-81：补个人历史分页 cursor、identity 切换和迟到响应隔离的 ConversationScreen UI 测试；定向 68/68、Biome、Web 类型检查通过。

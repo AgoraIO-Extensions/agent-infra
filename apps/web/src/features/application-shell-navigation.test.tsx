@@ -37,7 +37,7 @@ const clients: QueryClient[] = [];
 afterEach(() => {
 	cleanup();
 	for (const client of clients.splice(0)) client.clear();
-	document.title = "Agent Infra";
+	document.title = "Agora Agent";
 	vi.unstubAllGlobals();
 });
 
@@ -98,6 +98,8 @@ async function showShell(
 	const targets = [
 		"/my-agents",
 		"/my-agents/new",
+		"/agents/$agentId",
+		"/agents/$agentId/configuration",
 		"/my-settings/api-credentials",
 		"/my-settings/relay-key",
 		"/skills",
@@ -135,6 +137,43 @@ describe("Original IA workbench navigation", () => {
 		await showShell(false, "/agents");
 		expect(document.title).toBe("Agent 目录 · Agora Agent");
 	});
+
+	it.each([
+		{
+			entry: "/agents/agent-1",
+			parent: "Agent 目录",
+			title: "Agent 详情",
+		},
+		{
+			entry: "/agents/agent-1/configuration",
+			parent: "Agent 目录",
+			title: "Owner 配置",
+		},
+		{
+			entry: "/my-settings/api-credentials",
+			parent: "我的管理",
+			title: "API 凭证",
+		},
+	])(
+		"uses the design page title and breadcrumb map at $entry",
+		async ({ entry, parent, title }) => {
+			await showShell(false, entry);
+			const breadcrumb = screen.getByRole("navigation", {
+				name: "breadcrumb",
+			});
+			expect(
+				within(breadcrumb).getByText(parent, {
+					selector: '[data-slot="breadcrumb-item"]',
+				}),
+			).toBeTruthy();
+			expect(
+				within(breadcrumb).getByText(title, {
+					selector: '[data-slot="breadcrumb-page"]',
+				}),
+			).toBeTruthy();
+			expect(document.title).toBe(`${title} · Agora Agent`);
+		},
+	);
 
 	it("uses a standalone login screen without the application shell", async () => {
 		await showShell(false, "/agents", false);
@@ -192,7 +231,7 @@ describe("Original IA workbench navigation", () => {
 			group: "工作区",
 			label: "Skill Hub",
 			parent: "Skill Hub",
-			title: "版本详情",
+			title: "Skill 详情",
 		},
 		{
 			entry: "/skills/manage",
@@ -285,7 +324,7 @@ describe("Original IA workbench navigation", () => {
 			entry: "/my-settings/api-credentials/",
 			group: "我的管理",
 			label: "API 凭证与应用",
-			title: "API 凭证与应用",
+			title: "API 凭证",
 			administrator: false,
 		},
 		{
@@ -406,11 +445,16 @@ describe("Original IA workbench navigation", () => {
 		{
 			entry: "/my-settings/api-credentials",
 			label: "API 凭证与应用",
+			pageTitle: "API 凭证",
 		},
-		{ entry: "/my-settings/relay-key", label: "个人 Relay Key" },
+		{
+			entry: "/my-settings/relay-key",
+			label: "个人 Relay Key",
+			pageTitle: "个人 Relay Key",
+		},
 	])(
 		"keeps personal settings in the original management IA: %s",
-		async ({ entry, label }) => {
+		async ({ entry, label, pageTitle }) => {
 			await showShell(false, entry);
 			const management = screen.getByRole("navigation", { name: "我的管理" });
 			const link = within(management).getByRole("link", { name: label });
@@ -423,7 +467,7 @@ describe("Original IA workbench navigation", () => {
 				}),
 			).toBeTruthy();
 			expect(
-				screen.getByText(label, {
+				screen.getByText(pageTitle, {
 					selector: '[data-slot="breadcrumb-page"]',
 				}),
 			).toBeTruthy();
