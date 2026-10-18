@@ -355,7 +355,7 @@ export async function captureDesignContract(
 		expect(focused?.outlineOffset).toMatch(/^(?:auto|(?:0|1|2|3)px)$/);
 
 		const box = await stateProbe.boundingBox();
-		let pressed: Awaited<ReturnType<typeof readInteractiveStyle>> = null;
+		let pressed = resting;
 		if (box) {
 			await stateProbe.evaluate((node) => {
 				node.addEventListener(
