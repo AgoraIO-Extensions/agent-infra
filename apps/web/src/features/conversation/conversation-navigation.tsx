@@ -272,7 +272,19 @@ export function NewConversation({
 			<CommandNotice
 				result={command.result}
 				pending={command.isPending}
-				retry={command.canRetry ? () => command.retry(draft) : undefined}
+				retry={command.canRetry ? () => command.retry() : undefined}
+				resend={
+					command.canRetry && available
+						? () => {
+								if (createdConversationId) {
+									if (messageCommand.submitText(draft)) setMessageStarted(true);
+									return;
+								}
+								if (createCommand.create()) setPendingDraft(draft);
+							}
+						: undefined
+				}
+				resendDisabled={!draft.trim()}
 			/>
 		</section>
 	);

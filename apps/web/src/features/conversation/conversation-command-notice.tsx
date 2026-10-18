@@ -7,10 +7,14 @@ export function CommandNotice({
 	result,
 	pending,
 	retry,
+	resend,
+	resendDisabled = false,
 }: {
 	result?: ConversationCommandResult;
 	pending: boolean;
 	retry?: () => void;
+	resend?: () => void;
+	resendDisabled?: boolean;
 }) {
 	if (pending) return <p role="status">正在提交，请勿重复操作…</p>;
 	if (result?.kind === "unknown")
@@ -32,8 +36,8 @@ export function CommandNotice({
 				<AlertDescription>
 					消息未送达，草稿已保留。请在 Agent 恢复可用后重新发送。
 				</AlertDescription>
-				{retry && (
-					<Button variant="outline" onClick={retry}>
+				{resend && (
+					<Button variant="outline" disabled={resendDisabled} onClick={resend}>
 						重新发送
 					</Button>
 				)}

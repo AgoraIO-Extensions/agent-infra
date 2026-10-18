@@ -764,9 +764,20 @@ export function ActiveConversation({
 						pending={selectionSaveState === "idle" && command.isPending}
 						retry={
 							selectionSaveState === "idle" && command.canRetry && available
-								? () => command.retry(draft)
+								? () => command.retry()
 								: undefined
 						}
+						resend={
+							selectionSaveState === "idle" && command.canRetry && available
+								? () => {
+										if (command.submitText(draft, files.attachments)) {
+											action.current = "message";
+											setNotice("");
+										}
+									}
+								: undefined
+						}
+						resendDisabled={!draft.trim()}
 					/>
 				</ConversationDisclosure>
 				{agent.capabilities.modelSelection && !option && currentModelId && (

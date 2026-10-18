@@ -1071,6 +1071,48 @@ describe("functional conversation screen", () => {
 		).toBeNull();
 	});
 
+	it("retries the original message when the current draft was edited", async () => {
+		let posts = 0;
+		const { requests } = setup((request) => {
+			if (request.method !== "POST") return undefined;
+			posts++;
+			return posts === 1
+				? Response.json(
+						PilotProtocolErrorV1Schema.parse({
+							schemaVersion: 1,
+							code: "AGENT_BUSY",
+							message: "Synthetic retryable refusal",
+							retryable: true,
+							traceId: "trace-retryable",
+						}),
+						{ status: 409 },
+					)
+				: receipt();
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Original message" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await openConversationContext();
+		const retry = await screen.findByRole("button", { name: "重试原请求" });
+		fireEvent.change(input, { target: { value: "Edited draft" } });
+		fireEvent.click(retry);
+		await waitFor(() => expect(posts).toBe(2));
+		const postRequests = requests.filter(
+			(request) => request.method === "POST",
+		);
+		expect(postRequests[1]?.headers.get("Idempotency-Key")).toBe(
+			postRequests[0]?.headers.get("Idempotency-Key"),
+		);
+		expect(await postRequests[0]?.json()).toMatchObject({
+			schemaVersion: 1,
+			text: "Original message",
+		});
+		expect(await postRequests[1]?.json()).toMatchObject({
+			schemaVersion: 1,
+			text: "Original message",
+		});
+	});
+
 	it("settles a stop whose reply had already finished (#1524)", async () => {
 		const { requests } = setup((request) => {
 			const path = new URL(request.url).pathname;
@@ -2084,10 +2126,24 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 		await waitFor(() => expect(screen.queryByText(/Agent 已停止/)).toBeNull());
 		expect(input.value).toBe("Resend me");
 		await openConversationContext();
-		expect(screen.getByRole("button", { name: "重新发送" })).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		const resend = screen.getByRole("button", {
+			name: "重新发送",
+		}) as HTMLButtonElement;
+		expect(resend.disabled).toBe(false);
+		fireEvent.change(input, { target: { value: "" } });
+		expect(resend.disabled).toBe(true);
+		fireEvent.change(input, { target: { value: "Edited draft" } });
+		expect(resend.disabled).toBe(false);
+		fireEvent.click(resend);
 		await waitFor(() => expect(posts).toHaveLength(2));
 		await waitFor(() => expect(input.value).toBe(""));
+		expect(posts[1]?.headers.get("Idempotency-Key")).not.toBe(
+			posts[0]?.headers.get("Idempotency-Key"),
+		);
+		expect(await posts[1]?.json()).toMatchObject({
+			schemaVersion: 1,
+			text: "Edited draft",
+		});
 		expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
 	});
 

@@ -12,7 +12,7 @@ import {
 
 type Attempt = {
 	id: string;
-	command: ConversationCommand;
+	readonly command: ConversationCommand;
 	target: ConversationCommandTarget;
 	controller: AbortController;
 	pending: boolean;
@@ -176,16 +176,10 @@ export function useConversationCommands({
 			start({ kind: "native-capability", body }),
 		invokeBrowser: (body: BrowserCommandBody) =>
 			start({ kind: "browser", body }),
-		retry: (text?: string) => {
+		retry: () => {
 			const attempt = scope.attempt;
 			if (!scope.active || scope.denied || !attempt || attempt.pending)
 				return false;
-			if (text !== undefined && attempt.command.kind === "message") {
-				attempt.command = {
-					...attempt.command,
-					body: { ...attempt.command.body, text },
-				};
-			}
 			attempt.controller = new AbortController();
 			attempt.pending = true;
 			mutation.mutate(attempt.id);
