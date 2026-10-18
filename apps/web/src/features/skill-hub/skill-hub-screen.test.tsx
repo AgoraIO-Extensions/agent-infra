@@ -73,6 +73,7 @@ describe("SkillHubDirectoryScreen", () => {
 			/>,
 		);
 		expect(screen.getByRole("heading", { name: "Skill 目录" })).toBeTruthy();
+		expect(screen.getByText("工作区 / Skill Hub")).toBeTruthy();
 		expect(screen.getByRole("status").textContent).toBe("当前授权 2 个版本");
 		expect(
 			screen.getByRole("link", { name: "release-notes" }).getAttribute("href"),
@@ -133,6 +134,7 @@ describe("SkillHubVersionScreen", () => {
 		await renderWithRouter(
 			<SkillHubVersionScreen state={{ kind: "ready", version }} />,
 		);
+		expect(screen.getByText("Skill Hub / 版本详情")).toBeTruthy();
 		expect(screen.getByRole("heading", { name: "release-notes" })).toBeTruthy();
 		expect(screen.getByText("版本 ID")).toBeTruthy();
 		expect(screen.getByText(version.packageDigest)).toBeTruthy();

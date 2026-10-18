@@ -63,6 +63,7 @@ describe("SkillHubManagementScreen", () => {
 				}}
 			/>,
 		);
+		expect(screen.getByText("系统管理 / 我的 Skill")).toBeTruthy();
 		expect(
 			screen.getByRole("heading", { name: "管理固定版本与 Agent 配置。" }),
 		).toBeTruthy();
