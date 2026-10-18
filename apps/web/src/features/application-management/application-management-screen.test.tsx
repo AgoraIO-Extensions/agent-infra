@@ -135,6 +135,32 @@ const changedScopes: {
 describe("ApplicationManagementScreen", () => {
 	afterEach(cleanup);
 
+	it("is an h2 section of the API credentials page with distinct field names (R-02, N-12)", () => {
+		const headingRef = { current: null as HTMLHeadingElement | null };
+		render(
+			<ApplicationManagementScreen
+				state={{ kind: "ready", application: metadata }}
+				onOpenApplication={vi.fn()}
+				onIssueCredential={vi.fn()}
+				headingRef={headingRef}
+			/>,
+		);
+		// API 凭证页只有一个 h1；应用管理是分区 h2，应用名是其下的 h3。
+		expect(screen.queryAllByRole("heading", { level: 1 })).toHaveLength(0);
+		const heading = screen.getByRole("heading", { level: 2, name: "应用管理" });
+		expect(headingRef.current).toBe(heading);
+		expect(heading.getAttribute("tabindex")).toBe("-1");
+		expect(
+			screen.getByRole("heading", { level: 3, name: "Build service" }),
+		).toBeTruthy();
+		expect(document.body.textContent).not.toContain("安全设置");
+		// 与个人凭证签发表单同页：同名分组和过期时间带上对象名。
+		expect(
+			screen.getByRole("group", { name: "权限范围：应用凭证" }),
+		).toBeTruthy();
+		expect(screen.getByLabelText("过期时间（可选）：应用凭证")).toBeTruthy();
+	});
+
 	it("registers an application using the current-session owner", async () => {
 		const onRegister = vi.fn().mockResolvedValue(metadata);
 		render(

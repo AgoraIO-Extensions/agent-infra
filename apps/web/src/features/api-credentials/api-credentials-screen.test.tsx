@@ -133,12 +133,25 @@ describe("ApiCredentialsScreen", () => {
 				onNarrow={onNarrow}
 			/>,
 		);
-		const rows = screen.getAllByRole("listitem");
+		// 凭证列表是表格（R-02），首行为表头。
+		const table = screen.getByRole("table", { name: "个人 API 凭证" });
+		const rows = within(table).getAllByRole("row").slice(1);
+		expect(
+			within(table)
+				.getAllByRole("columnheader")
+				.map((cell) => cell.textContent),
+		).toEqual(["名称", "主体", "范围", "状态", "有效期", "操作"]);
 		expect(within(rows[0]).getByText("有效")).toBeTruthy();
 		expect(within(rows[0]).getByText("永不过期")).toBeTruthy();
 		expect(within(rows[0]).getByText("尚未使用")).toBeTruthy();
 		expect(within(rows[1]).getByText("已过期")).toBeTruthy();
-		expect(within(rows[2]).getByText("已撤销")).toBeTruthy();
+		// 设计中已撤销行的状态 chip 与有效期列都显示「已撤销」。
+		expect(
+			within(rows[2]).getByText("已撤销", { selector: '[data-slot="badge"]' }),
+		).toBeTruthy();
+		expect(
+			within(rows[2]).getByText("已撤销", { selector: "td" }).dataset.label,
+		).toBe("有效期");
 		expect(
 			screen.getAllByRole("button", { name: /^收窄权限与有效期：/ }),
 		).toHaveLength(1);
@@ -268,5 +281,96 @@ describe("ApiCredentialsScreen", () => {
 		).toBe(false);
 		fireEvent.click(screen.getByRole("button", { name: "重新加载凭证" }));
 		expect(onRefresh).toHaveBeenCalledOnce();
+	});
+
+	it("renders the design page head, notice and credential table (R-02)", () => {
+		const onCreate = vi.fn();
+		const longId = "personal-credential-0123456789";
+		render(
+			<ApiCredentialsScreen
+				state={{
+					kind: "ready",
+					credentials: [
+						{
+							...metadata,
+							credentialId: longId,
+							scopes: ["agent:read", "agent:use"],
+							expiresAt: "2099-12-31T00:00:00Z",
+						},
+						{
+							...metadata,
+							credentialId: "expired",
+							expiresAt: "2020-01-01T00:00:00Z",
+						},
+						{
+							...metadata,
+							credentialId: "revoked",
+							revokedAt: "2026-10-01T00:00:00Z",
+						},
+					],
+				}}
+				subjectName="凭证管理员"
+				onCreateApplicationCredential={onCreate}
+				onNarrow={vi.fn()}
+				onRevoke={vi.fn()}
+			/>,
+		);
+		expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+		expect(
+			screen.getByRole("heading", { level: 1, name: "API 凭证" }),
+		).toBeTruthy();
+		expect(screen.getByText("我的管理 / API 凭证")).toBeTruthy();
+		expect(
+			screen.getByText("管理个人和应用凭证的范围、有效期与撤销状态。"),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("heading", { level: 2, name: "签发个人凭证" }),
+		).toBeTruthy();
+		expect(document.body.textContent).not.toMatch(/安全设置|userId/);
+		const notice = screen
+			.getByText("凭证值不会回显")
+			.closest('[data-slot="alert"]') as HTMLElement;
+		expect(notice.getAttribute("role")).toBeNull();
+		expect(
+			within(notice).getByText(
+				"本页只展示元数据；发放、轮换和接收者授权由服务端校验。",
+			),
+		).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "创建应用凭证" }));
+		expect(onCreate).toHaveBeenCalledOnce();
+
+		const table = screen.getByRole("table", { name: "个人 API 凭证" });
+		expect(table.className).toContain("credential-table");
+		const [active, expired, revoked] = within(table)
+			.getAllByRole("row")
+			.slice(1);
+		// 完整 ID 只出现在 title 与可访问名称里，可见文字是缩写。
+		expect(table.textContent).not.toContain(longId);
+		expect(within(active as HTMLElement).getByText("个人凭证")).toBeTruthy();
+		expect(within(active as HTMLElement).getByTitle(longId).textContent).toBe(
+			"personal…",
+		);
+		expect(within(active as HTMLElement).getByText("凭证管理员")).toBeTruthy();
+		expect(
+			within(active as HTMLElement).getByText("agent:read · agent:use"),
+		).toBeTruthy();
+		const tone = (row: HTMLElement, text: string) =>
+			within(row)
+				.getByText(text, { selector: '[data-slot="badge"]' })
+				.getAttribute("data-tone");
+		expect(tone(active as HTMLElement, "有效")).toBe("green");
+		expect(tone(expired as HTMLElement, "已过期")).toBe("amber");
+		expect(tone(revoked as HTMLElement, "已撤销")).toBe("red");
+		expect(
+			within(active as HTMLElement)
+				.getByRole("button", { name: `收窄权限与有效期：${longId}` })
+				.getAttribute("data-slot"),
+		).toBe("button");
+		expect(screen.queryByRole("button", { name: /轮换|查看详情/ })).toBeNull();
+		// 同页还有应用凭证表单：分组与过期时间的名称带对象（N-12）。
+		expect(
+			screen.getByRole("group", { name: "权限范围：个人凭证" }),
+		).toBeTruthy();
+		expect(screen.getByLabelText("过期时间（可选）：个人凭证")).toBeTruthy();
 	});
 });

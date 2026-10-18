@@ -146,11 +146,22 @@ async function fixture(
 async function openForm(page: Page) {
 	await page.goto("/my-settings/api-credentials");
 	await expect(
-		page.getByRole("heading", { name: "个人 API 凭证" }),
+		page.getByRole("heading", { level: 1, name: "API 凭证" }),
 	).toBeVisible();
-	const rows = page.getByRole("list", { name: "个人 API 凭证列表" });
-	await expect(rows.getByText("已过期", { exact: true })).toBeVisible();
-	await expect(rows.getByText("已撤销", { exact: true })).toBeVisible();
+	// R-02：个人凭证是表格；已撤销行的状态 chip 与有效期列都写「已撤销」，按 chip 定位。
+	const rows = page.getByRole("table", { name: "个人 API 凭证" });
+	await expect(
+		rows.locator('[data-slot="badge"]', { hasText: /^已过期$/ }),
+	).toBeVisible();
+	await expect(
+		rows.locator('[data-slot="badge"]', { hasText: /^已撤销$/ }),
+	).toBeVisible();
+	// 收窄前的范围先可见，之后「不再出现」的断言才有意义。
+	await expect(
+		rows
+			.locator(`tr[data-credential-id="${initial.credentialId}"]`)
+			.getByText("agent:read · agent:use", { exact: true }),
+	).toBeVisible();
 	// 凭证时间按本地时区显示在 <time> 中，悬停为完整时间，不出现 ISO 原文。
 	const times = rows.locator("time");
 	expect(await times.count()).toBeGreaterThan(0);
@@ -230,12 +241,11 @@ test("uses the SDK PATCH, retries the same request key and reads back narrowed m
 	control.release();
 	await expect(page.getByText("凭证已收窄，已读取最新元数据。")).toBeVisible();
 	await expect(action).toBeFocused();
-	const row = page
-		.getByRole("listitem")
-		.filter({ hasText: initial.credentialId });
+	// 表格只显示缩写 ID，按行上的完整 ID 属性定位；范围列用「 · 」连接。
+	const row = page.locator(`tr[data-credential-id="${initial.credentialId}"]`);
 	await expect(row.getByText("agent:read", { exact: true })).toBeVisible();
 	await expect(
-		row.getByText("agent:read、agent:use", { exact: true }),
+		row.getByText("agent:read · agent:use", { exact: true }),
 	).toHaveCount(0);
 	await expect(row.getByText("永不过期")).toHaveCount(0);
 	expect(control.requests).toHaveLength(2);
@@ -250,8 +260,7 @@ test("uses the SDK PATCH, retries the same request key and reads back narrowed m
 	await page.reload();
 	await expect(
 		page
-			.getByRole("listitem")
-			.filter({ hasText: initial.credentialId })
+			.locator(`tr[data-credential-id="${initial.credentialId}"]`)
 			.getByText("agent:read", { exact: true }),
 	).toBeVisible();
 	const stored = await page.evaluate(() =>
@@ -366,7 +375,7 @@ test("revocation is confirmed with the credential and its consequence before one
 		});
 	});
 	await page.goto("/my-settings/api-credentials");
-	const rows = page.getByRole("list", { name: "个人 API 凭证列表" });
+	const rows = page.getByRole("table", { name: "个人 API 凭证" });
 	const trigger = rows.getByRole("button", {
 		name: `撤销：${initial.credentialId}`,
 		exact: true,
@@ -423,4 +432,122 @@ test("revocation is confirmed with the credential and its consequence before one
 		.poll(() => page.evaluate(() => document.activeElement === document.body))
 		.toBe(false);
 	await capture(page, "credential-revoke-confirmed");
+});
+
+// R-02：页头、notice 与 credential-table；窄屏按 X-07 转为行卡片。
+test("lays out the API credential page head, notice and credential table", async ({
+	page,
+}, info) => {
+	test.skip(info.project.name !== "desktop", "Sets its own viewports.");
+	await fixture(page);
+	const writes: string[] = [];
+	page.on("request", (request) => {
+		if (request.method() !== "GET") writes.push(request.url());
+	});
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await page.goto("/my-settings/api-credentials");
+	const main = page.locator("#main-content");
+	await expect(main.getByRole("heading", { level: 1 })).toHaveCount(1);
+	await expect(
+		main.getByRole("heading", { level: 1, name: "API 凭证" }),
+	).toBeVisible();
+	await expect(main.locator(".page-eyebrow")).toHaveText("我的管理 / API 凭证");
+	await expect(main).not.toContainText(/安全设置|userId/);
+	const notice = main.locator('[data-slot="alert"]', {
+		hasText: "凭证值不会回显",
+	});
+	await expect(notice).not.toHaveAttribute("role");
+	await expect(notice).toContainText(
+		"本页只展示元数据；发放、轮换和接收者授权由服务端校验。",
+	);
+	const table = main.getByRole("table", { name: "个人 API 凭证" });
+	await expect(table).toBeVisible();
+	const surface = main.locator("section.settings-surface", {
+		has: page.locator("table.credential-table"),
+	});
+	await expect(surface).toHaveCSS("border-top-left-radius", "14px");
+	await expect(surface).toHaveCSS("padding-top", "20px");
+	await expect(table.locator("thead th")).toHaveText([
+		"名称",
+		"主体",
+		"范围",
+		"状态",
+		"有效期",
+		"操作",
+	]);
+	await expect(
+		table.locator("thead th").last().locator(".sr-only"),
+	).toHaveCount(1);
+	const cell = table.locator("tbody td").first();
+	await expect(cell).toHaveCSS("padding", "12px 14px");
+	await expect(cell).toHaveCSS("font-size", "12px");
+	await expect(cell).toHaveCSS("border-bottom-width", "1px");
+	await expect(cell.locator("small")).toHaveCSS("font-size", "11px");
+	await expect(table).not.toContainText(initial.credentialId);
+	const tone = (text: string) =>
+		table
+			.locator('[data-slot="badge"]', { hasText: new RegExp(`^${text}$`) })
+			.getAttribute("data-tone");
+	expect(await tone("有效")).toBe("green");
+	expect(await tone("已过期")).toBe("amber");
+	expect(await tone("已撤销")).toBe("red");
+	await expect(table.getByText("永不过期")).toBeVisible();
+	await expect(
+		main.getByRole("button", { name: /^(轮换|查看详情)/ }),
+	).toHaveCount(0);
+
+	// 页头的「创建应用凭证」只做页内跳转。
+	const create = main.getByRole("button", { name: "创建应用凭证" });
+	const head = await main.locator(".page-heading > div").first().boundingBox();
+	const createBox = await create.boundingBox();
+	expect(
+		Math.abs(
+			(head?.y ?? 0) +
+				(head?.height ?? 0) -
+				((createBox?.y ?? 0) + (createBox?.height ?? 0)),
+		),
+	).toBeLessThanOrEqual(2);
+	await create.press("Enter");
+	const applications = main.getByRole("heading", {
+		level: 2,
+		name: "应用管理",
+	});
+	await expect(applications).toBeFocused();
+	await expect(applications).toBeInViewport();
+	expect(writes).toEqual([]);
+
+	// 窄屏行卡片：隐藏表头，左侧显示列名，页面不横向滚动。
+	for (const [width, height] of [
+		[390, 844],
+		[360, 640],
+		[320, 568],
+	] as const) {
+		await page.setViewportSize({ width, height });
+		await expect(table.locator("thead")).toHaveCSS("display", "none");
+		const narrow = await page.evaluate(() => {
+			const cell = document.querySelector<HTMLElement>(
+				".credential-table tbody td",
+			);
+			const before = cell ? getComputedStyle(cell, "::before") : null;
+			const actions = [
+				...document.querySelectorAll<HTMLElement>(
+					".credential-table [data-slot='button']",
+				),
+			].map((button) => button.getBoundingClientRect().toJSON());
+			return {
+				fits: document.documentElement.scrollWidth <= innerWidth,
+				label: before?.content,
+				labelSize: before?.fontSize,
+				actionsInside: actions.every(
+					(rect) => rect.left >= 0 && rect.right <= innerWidth,
+				),
+			};
+		});
+		expect(narrow).toEqual({
+			fits: true,
+			label: '"名称"',
+			labelSize: "11px",
+			actionsInside: true,
+		});
+	}
 });

@@ -43,6 +43,10 @@ it("submits the application setup contract and clears write-only fields", async 
 	);
 	render(<WecomAppSetup agentId="agent" onUnbind={vi.fn()} />);
 	await waitFor(() => expect(screen.getByText("未配置")).toBeTruthy());
+	// Owner 配置同页还有授权目标的「应用 ID」，这里的名称带卡片标题（N-12）。
+	expect(screen.getByRole("textbox", { name: "应用 ID：自建应用" }).id).toBe(
+		"wecom-app-application-id",
+	);
 	for (const [label, value] of [
 		["企业 ID", "corp"],
 		["应用 ID", "123"],

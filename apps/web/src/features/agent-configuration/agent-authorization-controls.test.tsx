@@ -39,6 +39,17 @@ afterEach(() => {
 });
 
 describe("AgentAuthorizationControls", () => {
+	it("names the target ID field after its section so it differs from the WeCom app ID (N-12)", () => {
+		render(<AgentAuthorizationControls agentId="agent-1" enabled />);
+		expect(
+			screen.getByRole("textbox", { name: "应用 ID：Agent 授权控制" }).id,
+		).toBe("agent-authorization-target-id");
+		fireEvent.click(screen.getByRole("button", { name: "用户" }));
+		expect(
+			screen.getByRole("textbox", { name: "用户 ID：Agent 授权控制" }),
+		).toBeTruthy();
+	});
+
 	it("grants and revokes a user's API management with the entered revision", async () => {
 		vi.mocked(grantUserApiManage).mockResolvedValue({
 			agentId: "agent-1",

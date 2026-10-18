@@ -42,12 +42,12 @@ export function ApplicationCredentialResult({
 	return (
 		<section
 			aria-labelledby={headingId}
-			className="space-y-4 rounded border bg-card p-5"
+			className="space-y-4 rounded-[12px] border bg-card p-5"
 		>
 			<div className="flex flex-wrap items-center justify-between gap-3">
-				<h2 id={headingId} className="font-semibold text-base">
+				<h3 id={headingId} className="font-semibold text-base">
 					应用凭证结果
-				</h2>
+				</h3>
 				<Badge
 					tone={
 						delivery.status === "accepted"

@@ -1844,6 +1844,128 @@ body {
 	}
 }
 
+/* 个人 Relay Key 与 API 凭证（设计 .surface.surface-pad.section、.roadmap-card、.credential-table）。 */
+.settings-surface {
+	min-width: 0;
+	margin-top: 32px;
+	padding: 20px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--surface);
+}
+.settings-status {
+	margin-bottom: 14px;
+}
+.settings-form-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 14px;
+	margin-top: 16px;
+}
+.settings-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-top: 16px;
+}
+.settings-field-error {
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--danger-ink);
+	font-size: 12px;
+	line-height: 1.5;
+}
+.roadmap-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+	margin-top: 32px;
+}
+.roadmap-card {
+	padding: 16px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface);
+}
+.roadmap-card h3 {
+	font-size: 15px;
+	font-weight: 650;
+	line-height: 1.4;
+}
+.management-content .roadmap-card p {
+	margin-top: 5px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.6;
+}
+.credential-table :is(th, td) {
+	padding: 12px 14px;
+	border-bottom: 1px solid var(--border);
+	font-size: 12px;
+	vertical-align: top;
+	text-align: left;
+}
+.credential-table th {
+	font-weight: 550;
+	color: var(--muted-foreground);
+}
+.credential-table td strong {
+	display: block;
+	font-weight: 700;
+}
+.credential-table tr:hover {
+	background: transparent;
+}
+@media (max-width: 767px) {
+	.settings-surface,
+	.roadmap-grid {
+		margin-top: 26px;
+	}
+	.roadmap-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	/* X-07：窄屏每行一张无外框的行卡片，左侧 72px 列名。 */
+	.credential-table,
+	.credential-table tbody,
+	.credential-table tr,
+	.credential-table td {
+		display: block;
+		width: 100%;
+	}
+	.credential-table thead {
+		display: none;
+	}
+	.credential-table tr {
+		padding: 14px 0;
+		border-bottom: 1px solid var(--border);
+	}
+	.credential-table tr:last-child {
+		border-bottom: 0;
+	}
+	.credential-table td {
+		display: grid;
+		grid-template-columns: 72px minmax(0, 1fr);
+		gap: 10px;
+		padding: 5px 0;
+		border: 0;
+		overflow-wrap: anywhere;
+	}
+	.credential-table td::before {
+		content: attr(data-label);
+		color: var(--muted-ink);
+		font-size: 11px;
+	}
+	.credential-table td:last-child {
+		display: block;
+		padding-top: 10px;
+	}
+	.credential-table td:last-child::before {
+		content: none;
+	}
+}
+
 .workbench-attention .workbench-section-head {
 	margin-bottom: 2px;
 }
