@@ -14,7 +14,12 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+	Alert,
+	AlertAction,
+	AlertDescription,
+	AlertTitle,
+} from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
@@ -25,7 +30,7 @@ import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
-
+import { LoadingLine } from "@/components/ui/spinner";
 import {
 	Table,
 	TableBody,
@@ -40,6 +45,7 @@ import {
 	auditOutcomeLabel,
 	auditPrincipalLabels,
 	auditResultLabels,
+	auditResultTone,
 	auditSubjectLabels,
 	auditTimestamp,
 } from "./audit-labels.js";
@@ -51,7 +57,7 @@ export function AuditWorkflow({ scope }: { scope: AuditScope }) {
 	const { identityKey, session } = useApplicationSession();
 	const admin = session.user.roles.includes("system_admin");
 	return scope === "administrator" && !admin ? (
-		<Alert>
+		<Alert tone="warn">
 			<AlertDescription>当前无权访问平台审计。</AlertDescription>
 		</Alert>
 	) : (
@@ -266,7 +272,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					/>
 				</Field>
 				{formFailure && (
-					<Alert className="col-span-full" variant="destructive">
+					<Alert className="col-span-full" tone="danger" role="alert">
 						<AlertDescription>{formFailure}</AlertDescription>
 					</Alert>
 				)}
@@ -302,26 +308,24 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					)}
 				</div>
 				{denied ? (
-					<Alert variant="destructive">
+					<Alert tone="danger" role="alert">
 						<AlertDescription>
 							当前无权访问审计记录，权限或会话可能已变化。
 						</AlertDescription>
 					</Alert>
 				) : query.status === "error" ? (
-					<Alert variant="destructive">
-						<AlertDescription>
-							审计查询失败，请稍后重试。
-							{query.canRetry && (
+					<Alert tone="danger" role="alert">
+						<AlertDescription>审计查询失败，请稍后重试。</AlertDescription>
+						{query.canRetry && (
+							<AlertAction>
 								<Button variant="outline" onClick={() => void query.retry()}>
 									重试
 								</Button>
-							)}
-						</AlertDescription>
+							</AlertAction>
+						)}
 					</Alert>
 				) : busy ? (
-					<p role="status" className="py-8 text-muted-foreground">
-						正在读取审计记录…
-					</p>
+					<LoadingLine className="py-8">正在读取审计记录…</LoadingLine>
 				) : !formFailure && items.length === 0 ? (
 					<Empty>
 						<EmptyDescription>暂无审计记录</EmptyDescription>
@@ -386,7 +390,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 											)}
 										</TableCell>
 										<TableCell data-label="结果">
-											<Badge variant="outline" data-result={record.result}>
+											<Badge tone={auditResultTone(record.result)}>
 												{auditOutcomeLabel(record)}
 											</Badge>
 										</TableCell>
@@ -472,7 +476,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 						</Button>
 					</header>
 					{query.failure || query.detailStatus === "denied" ? (
-						<Alert variant="destructive">
+						<Alert tone="danger" role="alert">
 							<AlertDescription>
 								{denied || query.detailStatus === "denied"
 									? "当前无权访问审计详情，资源或权限可能已变化。"
@@ -480,21 +484,23 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 							</AlertDescription>
 						</Alert>
 					) : query.detailStatus === "error" ? (
-						<Alert variant="destructive">
+						<Alert tone="danger" role="alert">
 							<AlertDescription>
 								审计详情读取失败，请稍后重试。
+							</AlertDescription>
+							<AlertAction>
 								<Button
 									variant="outline"
 									onClick={() => void query.retryDetail()}
 								>
 									重试详情
 								</Button>
-							</AlertDescription>
+							</AlertAction>
 						</Alert>
 					) : query.detailStatus === "loading" ||
 						query.isDetailFetching ||
 						busy ? (
-						<p role="status">正在读取审计详情…</p>
+						<LoadingLine>正在读取审计详情…</LoadingLine>
 					) : query.detail ? (
 						<>
 							<div className="mb-4 flex justify-end">
@@ -514,14 +520,13 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 				</section>
 			)}
 			{administrator && (
-				<Alert className="mt-5">
-					<AlertDescription className="space-y-1">
-						<strong>最小审计数据</strong>
-						<p>
-							记录谁在何时对哪个对象做了什么及其结果，不保存对话正文、凭证值或模型内部思考。
-							Connection 授权与外部效果由独立 Connection
-							审计核实，关联引用不授予查询权限。
-						</p>
+				// 首屏即存在的审计范围说明，不设 live 角色。
+				<Alert tone="info" className="mt-5">
+					<AlertTitle>最小审计数据</AlertTitle>
+					<AlertDescription>
+						记录谁在何时对哪个对象做了什么及其结果，不保存对话正文、凭证值或模型内部思考。
+						Connection 授权与外部效果由独立 Connection
+						审计核实，关联引用不授予查询权限。
 					</AlertDescription>
 				</Alert>
 			)}

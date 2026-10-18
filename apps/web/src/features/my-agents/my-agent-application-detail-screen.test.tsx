@@ -70,7 +70,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 		expect(screen.queryByText("Approve application")).toBeNull();
 		const withdraw = screen.getByRole("button", { name: "撤回申请" });
 		fireEvent.click(withdraw);
-		expect(screen.getByRole("dialog", { name: "撤回这项申请？" })).toBeTruthy();
+		expect(screen.getByRole("dialog", { name: "撤回这条申请？" })).toBeTruthy();
 		expect(onWithdraw).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("button", { name: "继续保留申请" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

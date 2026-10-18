@@ -7,7 +7,7 @@ import {
 	RefreshCw,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useId, useRef, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -24,6 +24,7 @@ import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { LoadingLine } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import type {
 	SkillHubAgentBindingCommandV1,
@@ -268,16 +269,18 @@ export function SkillHubManagementScreen({
 				</div>
 			</header>
 			{state.kind === "loading" ? (
-				<p role="status">正在加载 Skill 版本…</p>
+				<LoadingLine>正在加载 Skill 版本…</LoadingLine>
 			) : state.kind === "unavailable" ? (
-				<Alert>
+				<Alert tone="danger" role="alert">
 					<AlertDescription>
 						{state.retryable
 							? "Skill Hub 状态暂时无法读取。"
 							: "当前账号无法读取 Skill Hub 状态。"}
 					</AlertDescription>
 					{state.retryable && onRetry ? (
-						<Button onClick={onRetry}>重试</Button>
+						<AlertAction>
+							<Button onClick={onRetry}>重试</Button>
+						</AlertAction>
 					) : null}
 				</Alert>
 			) : (
@@ -819,12 +822,12 @@ export function SkillHubManagementScreen({
 									已发布版本
 								</h2>
 							</div>
-							<Badge variant="outline">{versions.length} 个版本</Badge>
+							<Badge variant="tag">{versions.length} 个版本</Badge>
 						</div>
 						{versions.length === 0 ? (
-							<Empty className="min-h-40">
+							<Empty>
 								<EmptyHeader>
-									<EmptyMedia variant="icon">
+									<EmptyMedia>
 										<PackageOpen aria-hidden="true" />
 									</EmptyMedia>
 									<EmptyTitle>暂无已发布版本</EmptyTitle>
@@ -856,13 +859,13 @@ export function SkillHubManagementScreen({
 												</p>
 											</div>
 											<div className="flex flex-wrap gap-2">
-												<Badge variant="secondary">
+												<Badge variant="tag">
 													{skillHubProviderLabels[version.provider]}
 												</Badge>
-												<Badge variant="outline">
+												<Badge variant="tag">
 													{skillHubVisibilityLabels[version.visibility]}
 												</Badge>
-												<Badge variant="outline">published</Badge>
+												<Badge tone="gray">published</Badge>
 											</div>
 										</div>
 										<p className="mt-3 break-all text-muted-foreground text-xs">

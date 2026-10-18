@@ -205,7 +205,11 @@ export function ApplicationMaterialGovernance() {
 					</Button>
 				</div>
 				{message ? (
-					<Alert role="status">
+					// 失败（status 变为 unavailable）用 role="alert"，确认结果用 role="status"。
+					<Alert
+						tone={status === "unavailable" ? "danger" : "info"}
+						role={status === "unavailable" ? "alert" : "status"}
+					>
 						<AlertDescription>{message}</AlertDescription>
 					</Alert>
 				) : null}

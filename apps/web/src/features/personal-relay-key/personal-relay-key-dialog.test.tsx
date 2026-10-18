@@ -204,7 +204,7 @@ describe("PersonalRelayKeyEntry", () => {
 		fireEvent.change(screen.getByLabelText("替换个人 Relay Key"), {
 			target: { value: "prior-dialog-secret" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "关闭窗口" }));
+		fireEvent.click(screen.getByRole("button", { name: "关闭" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 		api.get.mockResolvedValueOnce(configured(8));
 		fireEvent.click(screen.getByRole("button", { name: "个人 Key 设置" }));
@@ -380,7 +380,7 @@ describe("PersonalRelayKeyEntry", () => {
 				).toHaveBeenCalledTimes(1),
 			);
 			if (boundary === "close-reopen") {
-				fireEvent.click(screen.getByRole("button", { name: "关闭窗口" }));
+				fireEvent.click(screen.getByRole("button", { name: "关闭" }));
 				await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 				fireEvent.click(screen.getByRole("button", { name: "个人 Key 设置" }));
 			} else if (boundary === "other-user") {

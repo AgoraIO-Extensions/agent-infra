@@ -46,6 +46,7 @@ export function AgentAuthorizationControls({
 	const [busy, setBusy] = useState(false);
 	const [metadata, setMetadata] = useState<Metadata>();
 	const [message, setMessage] = useState("");
+	const [failed, setFailed] = useState(false);
 
 	if (!enabled) return null;
 
@@ -66,6 +67,7 @@ export function AgentAuthorizationControls({
 			return;
 		setBusy(true);
 		setMessage("");
+		setFailed(false);
 		try {
 			const result =
 				targetKind === "user"
@@ -97,6 +99,7 @@ export function AgentAuthorizationControls({
 			);
 		} catch (error) {
 			setMetadata(undefined);
+			setFailed(true);
 			setMessage(errorMessage(error));
 		} finally {
 			setBusy(false);
@@ -254,7 +257,10 @@ export function AgentAuthorizationControls({
 					</dl>
 				) : null}
 				{message ? (
-					<Alert role="status">
+					<Alert
+						tone={failed ? "danger" : "info"}
+						role={failed ? "alert" : "status"}
+					>
 						<AlertDescription>{message}</AlertDescription>
 					</Alert>
 				) : null}

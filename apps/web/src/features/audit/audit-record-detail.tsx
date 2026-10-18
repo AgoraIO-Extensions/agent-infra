@@ -4,6 +4,7 @@ import {
 	auditActionLabels,
 	auditOutcomeLabel,
 	auditPrincipalLabels,
+	auditResultTone,
 	auditTimestamp,
 	taskAuditReasonLabels,
 } from "./audit-labels.js";
@@ -37,7 +38,7 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 				<h2 className="font-semibold text-base">
 					{auditActionLabels[record.action]}
 				</h2>
-				<Badge variant="outline" data-result={record.result}>
+				<Badge tone={auditResultTone(record.result)}>
 					{auditOutcomeLabel(record)}
 				</Badge>
 			</div>

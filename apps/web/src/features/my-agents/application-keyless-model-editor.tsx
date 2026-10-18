@@ -67,7 +67,7 @@ export function ApplicationKeylessModelEditor({
 					可见的模型里选择。保存后不会回显。
 				</p>
 				{keyCheck.error ? (
-					<Alert variant="destructive">
+					<Alert tone="danger" role="alert">
 						<AlertDescription>
 							Key 校验失败或暂时无法读取可用模型，请检查后重试。
 						</AlertDescription>

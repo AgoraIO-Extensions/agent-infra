@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowLeft, RefreshCw } from "lucide-react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 
 import { checkAgentDefaultRelayKey } from "../../../features/agent-configuration/agent-configuration.js";
@@ -57,21 +57,22 @@ function EditAgentApplicationRoute() {
 					>
 						申请暂不可用
 					</h1>
-					<Alert>
+					<Alert tone="danger" role="alert">
 						<AlertDescription>
 							{retryable ? "请稍后重试。" : "请联系管理员。"}
 						</AlertDescription>
 						{retryable ? (
-							<Button
-								className="mt-4"
-								variant="outline"
-								disabled={query.isFetching}
-								onClick={() => void query.refetch()}
-								type="button"
-							>
-								<RefreshCw aria-hidden="true" data-icon="inline-start" />
-								{query.isFetching ? "正在重新加载…" : "重新加载申请"}
-							</Button>
+							<AlertAction>
+								<Button
+									variant="outline"
+									disabled={query.isFetching}
+									onClick={() => void query.refetch()}
+									type="button"
+								>
+									<RefreshCw aria-hidden="true" data-icon="inline-start" />
+									{query.isFetching ? "正在重新加载…" : "重新加载申请"}
+								</Button>
+							</AlertAction>
 						) : null}
 					</Alert>
 				</section>

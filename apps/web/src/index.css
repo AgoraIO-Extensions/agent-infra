@@ -1155,10 +1155,6 @@ body {
 	align-items: start;
 	gap: 12px;
 	min-width: 0;
-	padding: 18px;
-	border: 1px solid var(--border);
-	border-radius: 14px;
-	background: var(--surface);
 	overflow-wrap: anywhere;
 }
 .workbench-card h3 {
@@ -1261,80 +1257,12 @@ body {
 	width: 100%;
 	gap: 12px;
 }
-.workbench-agent-symbol,
-.ia-agent-directory .directory-symbol {
-	display: grid;
-	place-items: center;
-	flex-shrink: 0;
-	width: 40px;
-	height: 40px;
-	border: 1px solid var(--border);
-	border-radius: 11px;
-	background: var(--secondary);
-	color: var(--primary);
-}
 .workbench-agent-copy {
 	min-width: 0;
 	width: 100%;
 }
 .workbench-agent-grid .workbench-card a {
 	align-self: start;
-}
-.ia-workbench [data-slot="badge"],
-.ia-agent-directory [data-slot="badge"],
-.agent-detail [data-slot="badge"],
-[data-slot="badge"][data-status],
-[data-slot="badge"][data-result] {
-	height: auto;
-	min-height: 24px;
-	max-width: 100%;
-	gap: 6px;
-	padding: 3px 9px;
-	border-radius: 999px;
-	border-color: var(--border);
-	background: var(--surface);
-	color: var(--muted-foreground);
-	font-size: 11px;
-	font-weight: 500;
-	line-height: 1.5;
-	white-space: normal;
-	overflow-wrap: anywhere;
-}
-.ia-workbench .pill-live,
-[data-slot="badge"][data-status="ready"],
-[data-slot="badge"][data-status="available"],
-[data-slot="badge"][data-result="succeeded"] {
-	color: var(--success);
-	border-color: color-mix(in oklch, var(--success) 25%, var(--border));
-	background: color-mix(in oklch, var(--success) 8%, var(--surface));
-}
-.ia-workbench .pill-wait,
-[data-slot="badge"][data-status="starting"],
-[data-slot="badge"][data-status="updating"],
-[data-slot="badge"][data-status="pending_approval"],
-[data-slot="badge"][data-status="creating"] {
-	color: color-mix(in oklch, var(--warning) 78%, var(--foreground));
-	border-color: color-mix(in oklch, var(--warning) 32%, var(--border));
-	background: color-mix(in oklch, var(--warning) 10%, var(--surface));
-}
-.ia-workbench .pill-danger,
-[data-slot="badge"][data-status="unavailable"],
-[data-slot="badge"][data-status="creation_failed"],
-[data-slot="badge"][data-status="disabled"],
-[data-slot="badge"][data-status="rejected"],
-[data-slot="badge"][data-result="failed"] {
-	color: var(--destructive);
-	border-color: color-mix(in oklch, var(--destructive) 28%, var(--border));
-	background: color-mix(in oklch, var(--destructive) 8%, var(--surface));
-}
-.workbench-read-notice {
-	display: flex;
-	flex-direction: column;
-	align-items: start;
-	gap: 12px;
-}
-.ia-workbench .workbench-read-notice p {
-	text-wrap: wrap;
 }
 .ia-agent-directory .page-heading {
 	align-items: end;
@@ -1356,10 +1284,6 @@ body {
 	gap: 18px;
 	margin-bottom: 14px;
 }
-.ia-agent-directory .directory-card {
-	border-radius: 14px;
-	background: var(--surface);
-}
 .ia-agent-directory .directory-card h3 {
 	font-size: 17px;
 	line-height: 1.4;
@@ -1367,11 +1291,6 @@ body {
 .ia-agent-directory .directory-card p {
 	font-size: 13px;
 	line-height: 1.65;
-}
-.ia-workbench .workbench-agent-tags [data-slot="badge"],
-.ia-agent-directory .directory-tags [data-slot="badge"] {
-	border-radius: 7px;
-	padding-inline: 8px;
 }
 .ia-agent-directory .directory-card-foot {
 	justify-content: space-between;
@@ -1396,17 +1315,6 @@ body {
 	gap: 10px;
 	margin: 0 0 20px;
 }
-[data-slot="alert"] {
-	border-radius: 10px;
-}
-[data-slot="empty"] {
-	border: 1px dashed var(--border);
-	border-radius: 14px;
-	background: var(--surface);
-}
-[data-slot="dialog-content"] {
-	border-radius: 14px;
-}
 .platform-topbar [data-slot="avatar-fallback"],
 .platform-identity [data-slot="avatar-fallback"] {
 	background: var(--foreground);
@@ -1427,16 +1335,6 @@ body {
 	gap: 16px;
 	min-width: 0;
 	flex: 1;
-}
-.agent-detail-symbol {
-	display: grid;
-	place-items: center;
-	flex-shrink: 0;
-	width: 42px;
-	height: 42px;
-	border-radius: 12px;
-	color: var(--primary-foreground);
-	background: var(--primary);
 }
 .agent-detail-grid {
 	display: grid;
@@ -1528,10 +1426,6 @@ body {
 	}
 	.agent-detail dd {
 		margin-bottom: 10px;
-	}
-	.agent-detail-symbol {
-		width: 40px;
-		height: 40px;
 	}
 }
 
@@ -1700,18 +1594,6 @@ a[class~="group/button"]:focus-visible,
 	outline: 2px solid var(--primary);
 	outline-offset: 3px;
 	box-shadow: none;
-}
-[data-slot="badge"][data-status]::before,
-[data-slot="badge"][data-result]::before,
-.pill-live::before,
-.pill-wait::before,
-.pill-danger::before {
-	content: "";
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	background: currentColor;
-	flex: none;
 }
 
 /* Exported management surfaces, with real application and audit projections. */
@@ -2101,13 +1983,6 @@ a[class~="group/button"]:focus-visible,
 	}
 }
 
-.owned-agent-card {
-	min-width: 0;
-	padding: 18px;
-	border: 1px solid var(--border);
-	border-radius: 14px;
-	background: var(--surface);
-}
 .owned-card-heading {
 	display: flex;
 	align-items: start;

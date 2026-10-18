@@ -391,7 +391,7 @@ export function WecomBotSetup({
 				提交后清空。
 			</p>
 			{error ? (
-				<Alert variant="destructive">
+				<Alert tone="danger" role="alert">
 					<AlertDescription>{error}</AlertDescription>
 				</Alert>
 			) : null}

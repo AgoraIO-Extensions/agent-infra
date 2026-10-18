@@ -422,7 +422,7 @@ export function WecomAppSetup({
 				提交后清空；平台加密保存用于渠道收发。
 			</p>
 			{error ? (
-				<Alert variant="destructive">
+				<Alert tone="danger" role="alert">
 					<AlertDescription>{error}</AlertDescription>
 				</Alert>
 			) : null}

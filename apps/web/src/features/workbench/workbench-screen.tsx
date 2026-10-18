@@ -1,9 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { Bot, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import type { ReactNode } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { LoadingLine } from "@/components/ui/spinner";
+import { statusTone } from "@/lib/status-tone";
 import type {
 	AgentProjectionV2,
 	ConversationDetailProjectionV2,
@@ -19,6 +22,7 @@ import {
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
+import { AgentMark } from "../agent-mark.js";
 import type {
 	CollectionReadFailureReason,
 	CollectionReadUnavailable,
@@ -93,7 +97,8 @@ function ReadNotice({
 	onRetry: () => void;
 	refreshing?: boolean;
 }) {
-	if (state.kind === "loading") return <p role="status">正在加载{label}…</p>;
+	if (state.kind === "loading")
+		return <LoadingLine>正在加载{label}…</LoadingLine>;
 	const reason = state.reason;
 	const message =
 		reason === "authentication-required"
@@ -105,33 +110,34 @@ function ReadNotice({
 					: reason === "invalid-response"
 						? `${label}返回的数据无法读取。`
 						: `${label}暂时无法读取。`;
+	const denied = state.kind === "denied";
 	return (
-		<Alert>
-			<AlertDescription className="workbench-read-notice">
-				<p>{message}</p>
-				{state.kind !== "denied" && state.retryable && (
+		// 无权读取是权限边界，不打断读屏；其余读取失败用 role="alert"。
+		<Alert
+			tone={denied ? "warn" : "danger"}
+			role={denied ? undefined : "alert"}
+		>
+			<AlertDescription>{message}</AlertDescription>
+			{!denied && state.retryable && (
+				<AlertAction>
 					<Button variant="outline" onClick={onRetry} disabled={refreshing}>
 						重新加载{label}
 					</Button>
-				)}
-			</AlertDescription>
+				</AlertAction>
+			)}
 		</Alert>
 	);
 }
 
 function AgentStatus({ agent }: { agent: AgentProjectionV2 }) {
 	const available = canStartPlatformConversation(agent);
+	const status = available
+		? "ready"
+		: agent.managementStatus === "available"
+			? (agent.serviceAvailability ?? "unavailable")
+			: agent.managementStatus;
 	return (
-		<Badge
-			variant="outline"
-			data-status={
-				available
-					? "ready"
-					: agent.managementStatus === "available"
-						? (agent.serviceAvailability ?? "unavailable")
-						: agent.managementStatus
-			}
-		>
+		<Badge tone={statusTone(status)}>
 			{available
 				? "可用"
 				: agent.managementStatus === "available" &&
@@ -207,13 +213,11 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 										>
 											<div className="workbench-recent-copy">
 												{conversation.status === "unavailable" ? (
-													<Badge variant="outline" className="pill-danger">
-														会话不可用
-													</Badge>
+													<Badge tone="red">会话不可用</Badge>
 												) : agent ? (
 													<AgentStatus agent={agent} />
 												) : (
-													<Badge variant="outline">状态暂时无法确认</Badge>
+													<Badge tone="gray">状态暂时无法确认</Badge>
 												)}
 												<h3>{conversation.title ?? "未命名对话"}</h3>
 												<p>
@@ -417,11 +421,9 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 					) : (
 						<div className="workbench-grid workbench-agent-grid">
 							{agents.agents.slice(0, 3).map((agent) => (
-								<article className="workbench-card" key={agent.agentId}>
+								<Card className="workbench-card" key={agent.agentId}>
 									<div className="workbench-agent-top">
-										<span className="workbench-agent-symbol">
-											<Bot size={20} aria-hidden="true" />
-										</span>
+										<AgentMark name={agent.name} agentId={agent.agentId} />
 										<AgentStatus agent={agent} />
 									</div>
 									<div className="workbench-agent-copy">
@@ -429,13 +431,13 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 										<p>{agent.description}</p>
 									</div>
 									<div className="workbench-agent-tags">
-										<Badge variant="outline">
+										<Badge variant="tag">
 											{agent.source.kind === "standard"
 												? agent.source.templateId
 												: "自定义 Agent"}
 										</Badge>
 										{agent.configuration.channels.map((channel) => (
-											<Badge variant="outline" key={channel.kind}>
+											<Badge variant="tag" key={channel.kind}>
 												{agentChannelKindLabels[channel.kind]}
 											</Badge>
 										))}
@@ -447,7 +449,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 									>
 										查看详情
 									</Link>
-								</article>
+								</Card>
 							))}
 						</div>
 					)
@@ -476,16 +478,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 								>
 									<div className="workbench-application-copy">
 										<div className="workbench-application-title">
-											<Badge
-												variant="outline"
-												className={
-													application.status === "rejected"
-														? "pill-danger"
-														: application.status === "pending_approval"
-															? "pill-wait"
-															: undefined
-												}
-											>
+											<Badge tone={statusTone(application.status)}>
 												{agentManagementStatusLabels[application.status]}
 											</Badge>
 											<h3>{application.name}</h3>

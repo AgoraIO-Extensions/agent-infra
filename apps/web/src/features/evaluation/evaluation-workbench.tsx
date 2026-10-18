@@ -62,7 +62,7 @@ export function EvaluationWorkbench({
 						的评测材料、实验和线上反馈将在同一处汇总；正文、凭证和思考不会进入评测摘要。
 					</p>
 				</div>
-				<Badge variant="outline">
+				<Badge variant="tag">
 					{isAdministrator ? "管理员视图" : "个人视图"}
 				</Badge>
 			</header>
@@ -98,9 +98,9 @@ export function EvaluationWorkbench({
 							aria-hidden="true"
 						/>
 					</div>
-					<Empty className="min-h-56 border">
+					<Empty>
 						<EmptyHeader>
-							<EmptyMedia variant="icon">
+							<EmptyMedia>
 								<LockKeyhole aria-hidden="true" />
 							</EmptyMedia>
 							<EmptyTitle>评测 API 尚未接入</EmptyTitle>

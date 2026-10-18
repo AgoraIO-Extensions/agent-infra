@@ -167,7 +167,7 @@ describe("AdminAgentApplicationsScreen", () => {
 		expect(
 			screen.getByRole("button", { name: "取消" }).getAttribute("disabled"),
 		).not.toBeNull();
-		expect(screen.queryByRole("button", { name: "关闭窗口" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "关闭" })).toBeNull();
 		fireEvent.click(approve);
 		expect(onDecision).toHaveBeenCalledTimes(1);
 		rerender(
@@ -251,7 +251,9 @@ describe("AdminAgentApplicationsScreen", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("alert").textContent).toBe("当前无法访问审批。");
+		// 无权访问是首屏静态边界，不再用 role="alert" 打断读屏。
+		expect(screen.getByText("当前无法访问审批。")).toBeTruthy();
+		expect(screen.queryByRole("alert")).toBeNull();
 		expect(screen.queryByText("Release assistant request")).toBeNull();
 		expect(screen.queryByRole("button", { name: "批准并创建" })).toBeNull();
 	});

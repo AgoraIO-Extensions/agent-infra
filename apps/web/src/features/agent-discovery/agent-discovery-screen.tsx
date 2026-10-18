@@ -1,10 +1,11 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowRight, Bot, Plus, RefreshCw } from "lucide-react";
+import { ArrowRight, Plus, RefreshCw } from "lucide-react";
 import { useId, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Empty, EmptyDescription } from "@/components/ui/empty";
+import { Card } from "@/components/ui/card";
+import { Empty, EmptyContent, EmptyDescription } from "@/components/ui/empty";
 import { Field } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
 import {
@@ -12,6 +13,8 @@ import {
 	NativeSelectOption,
 } from "@/components/ui/native-select";
 import { SearchInput } from "@/components/ui/search-input";
+import { LoadingLine } from "@/components/ui/spinner";
+import { statusTone } from "@/lib/status-tone";
 import { cn } from "@/lib/utils";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -19,7 +22,7 @@ import {
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
-
+import { AgentMark } from "../agent-mark.js";
 import {
 	type AgentDiscoveryState,
 	canStartPlatformConversation,
@@ -216,25 +219,26 @@ export function AgentDiscoveryScreen({
 				</div>
 			) : null}
 			{state.kind === "loading" ? (
-				<p aria-live="polite">正在加载 Agent…</p>
+				<LoadingLine>正在加载 Agent…</LoadingLine>
 			) : state.kind === "unavailable" ? (
-				<Alert>
+				<Alert tone="danger" role="alert">
 					<AlertDescription>
 						{state.retryable
 							? "Agent 列表暂时无法读取，请稍后重试。"
 							: "Agent 列表暂时无法访问，请联系管理员。"}
 					</AlertDescription>
 					{state.retryable && onRetry ? (
-						<Button
-							className="mt-4"
-							variant="outline"
-							disabled={retrying}
-							onClick={onRetry}
-							type="button"
-						>
-							<RefreshCw aria-hidden="true" data-icon="inline-start" />
-							{retrying ? "正在重新加载…" : "重新加载 Agent"}
-						</Button>
+						<AlertAction>
+							<Button
+								variant="outline"
+								disabled={retrying}
+								onClick={onRetry}
+								type="button"
+							>
+								<RefreshCw aria-hidden="true" data-icon="inline-start" />
+								{retrying ? "正在重新加载…" : "重新加载 Agent"}
+							</Button>
+						</AlertAction>
 					) : null}
 				</Alert>
 			) : (
@@ -255,24 +259,26 @@ export function AgentDiscoveryScreen({
 						</p>
 					</div>
 					{!agents.length ? (
-						<Empty className="py-8">
+						<Empty>
 							<EmptyDescription>暂无你有权访问的 Agent。</EmptyDescription>
 						</Empty>
 					) : !visible.length ? (
-						<Empty className="py-8">
+						<Empty>
 							<EmptyDescription>未找到匹配的 Agent。</EmptyDescription>
-							<Button
-								variant="outline"
-								onClick={() => {
-									setLocalQuery("");
-									onQueryChange?.("");
-									setStatusFilter("all");
-									setTemplateFilter("all");
-									setModelFilter("all");
-								}}
-							>
-								清除筛选
-							</Button>
+							<EmptyContent>
+								<Button
+									variant="outline"
+									onClick={() => {
+										setLocalQuery("");
+										onQueryChange?.("");
+										setStatusFilter("all");
+										setTemplateFilter("all");
+										setModelFilter("all");
+									}}
+								>
+									清除筛选
+								</Button>
+							</EmptyContent>
 						</Empty>
 					) : (
 						<ul
@@ -280,26 +286,19 @@ export function AgentDiscoveryScreen({
 							className="agent-list grid grid-cols-1 gap-4 min-[768px]:grid-cols-3"
 						>
 							{visible.map((agent) => (
-								<li
-									className="directory-card flex min-w-0 flex-col gap-4 border border-border bg-background p-[18px]"
+								<Card
+									render={<li />}
+									className="directory-card flex flex-col gap-4"
 									key={agent.agentId}
 								>
 									<div className="flex items-start justify-between gap-3">
-										<span className="directory-symbol flex shrink-0 items-center justify-center border border-foreground bg-background">
-											<Bot aria-hidden="true" className="size-5" />
-										</span>
+										<AgentMark name={agent.name} agentId={agent.agentId} />
 										<div className="flex flex-wrap justify-end gap-2">
-											<Badge
-												variant="outline"
-												data-status={agent.managementStatus}
-											>
+											<Badge tone={statusTone(agent.managementStatus)}>
 												{agentManagementStatusLabels[agent.managementStatus]}
 											</Badge>
 											{agent.serviceAvailability && (
-												<Badge
-													variant="secondary"
-													data-status={agent.serviceAvailability}
-												>
+												<Badge tone={statusTone(agent.serviceAvailability)}>
 													{agentServiceAvailabilityLabel(
 														agent.serviceAvailability,
 													)}
@@ -316,12 +315,10 @@ export function AgentDiscoveryScreen({
 										</p>
 									</div>
 									<div className="directory-tags flex flex-wrap gap-2">
-										<Badge variant="outline">
+										<Badge variant="tag">
 											{agentConversationSourceLabel(agent)}
 										</Badge>
-										<Badge variant="outline">
-											{agentChannelSummary(agent)}
-										</Badge>
+										<Badge variant="tag">{agentChannelSummary(agent)}</Badge>
 									</div>
 									<div className="directory-card-foot mt-auto flex flex-wrap items-center gap-3 border-border border-t pt-3">
 										<span className="min-w-0 break-words text-muted-foreground text-xs">
@@ -361,7 +358,7 @@ export function AgentDiscoveryScreen({
 											</Link>
 										)}
 									</div>
-								</li>
+								</Card>
 							))}
 						</ul>
 					)}

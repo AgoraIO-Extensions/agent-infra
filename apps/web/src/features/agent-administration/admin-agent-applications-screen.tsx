@@ -1,12 +1,15 @@
 import { RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
+	DialogFooter,
+	DialogHeader,
 	DialogTitle,
 	DialogTrigger,
 } from "@/components/ui/dialog";
@@ -18,6 +21,7 @@ import {
 	NativeSelectOption,
 } from "@/components/ui/native-select";
 import { SearchInput } from "@/components/ui/search-input";
+import { LoadingLine } from "@/components/ui/spinner";
 import {
 	Table,
 	TableBody,
@@ -28,6 +32,7 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useResultFocus } from "@/hooks/use-result-focus";
+import { statusTone } from "@/lib/status-tone";
 import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -170,16 +175,20 @@ function ApplicationReview({
 				{currentDecision ? "审批提交中…" : "审阅申请"}
 			</DialogTrigger>
 			<DialogContent showCloseButton={!decisionSubmitting}>
-				<DialogTitle>{rejecting ? "驳回申请" : "审阅创建申请"}</DialogTitle>
-				<DialogDescription>
-					{rejecting
-						? "请输入申请人可以据此修改的具体原因。"
-						: "确认用途、Owner、使用范围与平台给出的只读资源规格。"}
-				</DialogDescription>
-				<h3 className="mt-5 break-words font-semibold">{application.name}</h3>
-				<p className="break-words text-muted-foreground">
-					{application.description}
-				</p>
+				<DialogHeader>
+					<DialogTitle>{rejecting ? "驳回申请" : "审阅创建申请"}</DialogTitle>
+				</DialogHeader>
+				<DialogBody>
+					<DialogDescription>
+						{rejecting
+							? "请输入申请人可以据此修改的具体原因。"
+							: "确认用途、Owner、使用范围与平台给出的只读资源规格。"}
+					</DialogDescription>
+					<h3 className="mt-5 break-words font-semibold">{application.name}</h3>
+					<p className="break-words text-muted-foreground">
+						{application.description}
+					</p>
+				</DialogBody>
 				{!rejecting ? (
 					<>
 						<dl className="detail-list my-5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-3 text-sm">
@@ -244,7 +253,7 @@ function ApplicationReview({
 						<p className="text-muted-foreground text-sm">
 							批准后才开始创建 Agent；审批受理不表示服务已就绪。
 						</p>
-						<div className="mt-5 flex flex-wrap gap-3">
+						<DialogFooter>
 							<Button
 								disabled={decisionSubmitting || resolved}
 								onClick={() => {
@@ -274,7 +283,7 @@ function ApplicationReview({
 							>
 								取消
 							</Button>
-						</div>
+						</DialogFooter>
 					</>
 				) : (
 					<form
@@ -312,12 +321,12 @@ function ApplicationReview({
 								}}
 							/>
 							{reasonError && (
-								<Alert id={`${reasonId}-error`} variant="destructive">
+								<Alert id={`${reasonId}-error`} tone="danger" role="alert">
 									<AlertDescription>请输入驳回原因。</AlertDescription>
 								</Alert>
 							)}
 						</Field>
-						<div className="flex flex-wrap gap-3">
+						<DialogFooter>
 							<Button disabled={decisionSubmitting || resolved} type="submit">
 								{currentDecision?.decision === "reject"
 									? "提交中…"
@@ -331,11 +340,11 @@ function ApplicationReview({
 							>
 								返回审阅
 							</Button>
-						</div>
+						</DialogFooter>
 					</form>
 				)}
 				{decisionError && (
-					<Alert variant="destructive" className="mt-4">
+					<Alert tone="danger" role="alert" className="mt-4">
 						<AlertDescription>
 							{decisionFailure(decisionError)}
 						</AlertDescription>
@@ -400,10 +409,10 @@ export function AdminAgentApplicationsScreen({
 			setOpenApplicationId(null);
 	}, [openApplicationId, session, state]);
 	if (session.kind === "loading")
-		return <p aria-live="polite">正在读取审批申请…</p>;
+		return <LoadingLine>正在读取审批申请…</LoadingLine>;
 	if (session.kind !== "ready" || !isSystemAdministrator(session.session))
 		return (
-			<Alert>
+			<Alert tone="warn">
 				<AlertDescription>当前无法访问审批。</AlertDescription>
 			</Alert>
 		);
@@ -416,7 +425,7 @@ export function AdminAgentApplicationsScreen({
 					<p>审批信息保持紧凑：来源、Owner、范围、模型与渠道一屏完成判断。</p>
 				</div>
 				{state.kind === "ready" && (
-					<Badge variant="outline" data-status="pending_approval">
+					<Badge tone="amber">
 						{applications.filter((a) => a.status === "pending_approval").length}{" "}
 						项待处理
 					</Badge>
@@ -424,25 +433,26 @@ export function AdminAgentApplicationsScreen({
 			</header>
 			<DecisionFeedback decision={decisionResult} />
 			{state.kind === "loading" ? (
-				<p role="status">正在读取审批申请…</p>
+				<LoadingLine>正在读取审批申请…</LoadingLine>
 			) : state.kind === "unavailable" ? (
-				<Alert className="mt-5">
+				<Alert tone="danger" role="alert" className="mt-5">
 					<AlertDescription>
 						{state.retryable
 							? "审批列表暂时无法读取，请稍后重试。"
 							: "审批列表不可用，请联系管理员。"}
 					</AlertDescription>
 					{state.retryable && onRetry ? (
-						<Button
-							className="mt-4"
-							variant="outline"
-							disabled={retrying}
-							onClick={onRetry}
-							type="button"
-						>
-							<RefreshCwIcon aria-hidden="true" data-icon="inline-start" />
-							{retrying ? "正在重试…" : "重新加载审批"}
-						</Button>
+						<AlertAction>
+							<Button
+								variant="outline"
+								disabled={retrying}
+								onClick={onRetry}
+								type="button"
+							>
+								<RefreshCwIcon aria-hidden="true" data-icon="inline-start" />
+								{retrying ? "正在重试…" : "重新加载审批"}
+							</Button>
+						</AlertAction>
 					) : null}
 				</Alert>
 			) : (
@@ -472,7 +482,7 @@ export function AdminAgentApplicationsScreen({
 						</Field>
 					</div>
 					{filteredApplications.length === 0 ? (
-						<Empty className="py-12">
+						<Empty>
 							<EmptyDescription>
 								{applications.length ? "没有匹配的申请。" : "暂无待审批申请。"}
 							</EmptyDescription>
@@ -501,7 +511,7 @@ export function AdminAgentApplicationsScreen({
 										<TableCell data-label="申请">
 											<strong>{application.name}</strong>
 											<small>{application.description}</small>
-											<Badge variant="outline" data-status={application.status}>
+											<Badge tone={statusTone(application.status)}>
 												{agentManagementStatusLabels[application.status]}
 											</Badge>
 										</TableCell>
@@ -565,7 +575,7 @@ export function AdminAgentApplicationsScreen({
 				</>
 			)}
 			{decisionError && openApplicationId === null && (
-				<Alert variant="destructive" className="mt-4">
+				<Alert tone="danger" role="alert" className="mt-4">
 					<AlertDescription>{decisionFailure(decisionError)}</AlertDescription>
 				</Alert>
 			)}

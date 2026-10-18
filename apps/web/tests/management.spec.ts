@@ -30,6 +30,11 @@ import {
 	resolved,
 } from "./primitive-styles";
 
+// 根布局常驻一个 role="status" 的 Toast 宿主（B-13），页面自身的结果状态只在主内容区内查找。
+function pageStatus(page: Page) {
+	return page.locator("#main-content").getByRole("status");
+}
+
 const deploymentConfiguration: DeploymentConfigurationProjectionV2 = {
 	modelCatalog: {
 		endpoints: [
@@ -777,7 +782,7 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	expect(api.commands[0]?.key).toMatch(/^[0-9a-f-]{36}$/);
 	await capture(page, info, "application-pending");
 	api.release();
-	await expect(page.getByRole("status")).toBeFocused();
+	await expect(pageStatus(page)).toBeFocused();
 	await expect(
 		page.getByRole("link", { name: "查看申请详情", exact: true }),
 	).toHaveAttribute("href", "/my-agents/application-browser-1");
@@ -802,7 +807,7 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 		.getByLabel("用途说明", { exact: true })
 		.fill("Updated release workflow");
 	await page.getByRole("button", { name: "修改申请", exact: true }).click();
-	await expect(page.getByRole("status")).toContainText("申请已提交");
+	await expect(pageStatus(page)).toContainText("申请已提交");
 	api.rejectApplication();
 	await page.goto("/my-agents/application-browser-1/edit");
 	await expect(page.getByText("退出创建", { exact: true })).toHaveCount(0);
@@ -815,7 +820,7 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await page
 		.getByRole("button", { name: "修改并重新提交", exact: true })
 		.click();
-	await expect(page.getByRole("status")).toContainText("待审批");
+	await expect(pageStatus(page)).toContainText("待审批");
 	await page.getByRole("link", { name: "查看申请" }).click();
 	const withdraw = page.getByRole("button", { name: "撤回申请" });
 	api.rejectNextWithdrawal();
@@ -834,8 +839,8 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await expect(page.getByRole("button", { name: "正在撤回…" })).toBeDisabled();
 	api.release();
 	await expect(page.getByText("已撤回", { exact: true })).toBeVisible();
-	await expect(page.getByRole("status")).toBeFocused();
-	await expect(page.getByRole("status")).toHaveText("撤回请求已提交：已撤回。");
+	await expect(pageStatus(page)).toBeFocused();
+	await expect(pageStatus(page)).toHaveText("撤回请求已提交：已撤回。");
 	await expect(page.getByRole("button", { name: "撤回申请" })).toHaveCount(0);
 });
 
@@ -879,7 +884,7 @@ test("directory search and transient submission recover on desktop and mobile", 
 	await page.getByLabel("替换值").fill("synthetic-retry-value");
 	await submit.focus();
 	await page.keyboard.press("Enter");
-	await expect(page.getByRole("status")).toBeFocused();
+	await expect(pageStatus(page)).toBeFocused();
 	expect(api.commands).toHaveLength(2);
 	expect(api.commands[1]?.body).toMatchObject({
 		name: "中文发布 Agent",
@@ -967,7 +972,7 @@ test("administrator rejection, approval, empty queue and pending controls", asyn
 	await expect(page.getByRole("button", { name: "提交中…" })).toBeDisabled();
 	await expect(page.getByRole("button", { name: "返回审阅" })).toBeDisabled();
 	api.release();
-	await expect(page.getByRole("status")).toBeFocused();
+	await expect(pageStatus(page)).toBeFocused();
 	await expect(page.getByText("暂无待审批申请。")).toBeVisible();
 	expect(api.commands[0]?.body).toEqual({
 		schemaVersion: 1,
@@ -979,11 +984,11 @@ test("administrator rejection, approval, empty queue and pending controls", asyn
 	await page
 		.getByRole("button", { name: "修改并重新提交", exact: true })
 		.click();
-	await expect(page.getByRole("status")).toBeVisible();
+	await expect(pageStatus(page)).toBeVisible();
 	await page.goto("/admin/approvals");
 	await page.getByRole("button", { name: "审阅申请" }).click();
 	await page.getByRole("button", { name: "批准并创建" }).click();
-	await expect(page.getByRole("status")).toContainText("创建中");
+	await expect(pageStatus(page)).toContainText("创建中");
 	expect(api.commands.at(-1)?.body).toEqual({
 		schemaVersion: 1,
 		decision: "approve",
@@ -1058,7 +1063,7 @@ test("Owner configuration, Secret clearing, lifecycle and custom image upgrade",
 	await expect(replaceModels).toBeDisabled();
 	await expect(page.getByLabel("新 Secret 值")).toHaveCount(0);
 	api.release();
-	await expect(page.getByRole("status")).toBeFocused();
+	await expect(pageStatus(page)).toBeFocused();
 	await expect(page.locator("body")).not.toContainText(
 		"synthetic-browser-secret",
 	);
@@ -1072,14 +1077,18 @@ test("Owner configuration, Secret clearing, lifecycle and custom image upgrade",
 	api.holdNextCommand();
 	await page.getByRole("button", { name: "停止 Agent" }).focus();
 	await page.keyboard.press("Enter");
-	await page.getByRole("button", { name: "确认停止" }).click();
+	// 停止确认按钮按设计写明动作「停止 Agent」（N-07），只在弹窗内查找。
+	await page
+		.getByRole("dialog", { name: "停止这个 Agent？" })
+		.getByRole("button", { name: "停止 Agent" })
+		.click();
 	await expect(page.getByRole("button", { name: "停止中…" })).toBeDisabled();
 	await expect(page.getByRole("button", { name: "重启 Agent" })).toBeDisabled();
 	api.release();
-	await expect(page.getByRole("status")).toBeFocused();
+	await expect(pageStatus(page)).toBeFocused();
 	await page.getByRole("button", { name: "重启 Agent" }).click();
 	await page.getByRole("button", { name: "确认重启" }).click();
-	await expect(page.getByRole("status")).toContainText("可用");
+	await expect(pageStatus(page)).toContainText("可用");
 	api.customAgent();
 	await page.goto("/agents/agent-pilot-1/configuration");
 	await expect(page.getByRole("button", { name: "升级镜像" })).toBeDisabled();
@@ -1089,7 +1098,7 @@ test("Owner configuration, Secret clearing, lifecycle and custom image upgrade",
 	await expect(page.getByRole("button", { name: "升级中…" })).toBeDisabled();
 	await expect(page.getByLabel("新镜像引用")).toBeDisabled();
 	api.release();
-	await expect(page.getByRole("status")).toContainText("配置已提交");
+	await expect(pageStatus(page)).toContainText("配置已提交");
 	expect(api.commands.at(-1)?.body).toEqual({
 		schemaVersion: 1,
 		command: "upgrade_custom_image",
@@ -1110,9 +1119,12 @@ test("employee has no Owner or administrator controls, with loading and error st
 		page.getByRole("button", { name: /停止 Agent|重启 Agent|停用 Agent/ }),
 	).toHaveCount(0);
 	await page.goto("/agents/agent-pilot-1/configuration");
-	await expect(page.getByRole("alert")).toHaveText("当前无法访问此配置。");
+	// 无权访问是首屏静态边界（B-10 角色规则①），显示说明但不再用 role="alert" 打断读屏。
+	await expect(page.getByText("当前无法访问此配置。")).toBeVisible();
+	await expect(page.getByRole("alert")).toHaveCount(0);
 	await page.goto("/admin/approvals");
-	await expect(page.getByRole("alert")).toHaveText("当前无法访问审批。");
+	await expect(page.getByText("当前无法访问审批。")).toBeVisible();
+	await expect(page.getByRole("alert")).toHaveCount(0);
 	let release: (() => void) | undefined;
 	const gate = new Promise<void>((resolve) => {
 		release = resolve;
@@ -1146,6 +1158,7 @@ test("mobile navigation traps focus and returns it on Escape", async ({
 	await trigger.click();
 	const dialog = page.getByRole("dialog", { name: "主导航" });
 	await expect(dialog).toBeVisible();
+	await expect(dialog).toHaveAttribute("aria-modal", "true");
 	for (let index = 0; index < 8; index++) {
 		await page.keyboard.press("Tab");
 		await expect
@@ -1351,9 +1364,12 @@ test("employee collection is not presented as owned Agents", async ({
 	await fixture(page, "employee");
 	await page.goto("/my-agents");
 	await page.getByRole("tab", { name: "已创建 Agent" }).click();
-	await expect(
-		page.getByRole("heading", { name: "暂无你管理的 Agent" }),
-	).toBeVisible();
+	// 空态标题按设计改为 strong（B-11），不再是 heading。
+	const empty = page.locator('[data-slot="empty"]', {
+		hasText: "暂无你管理的 Agent",
+	});
+	await expect(empty).toBeVisible();
+	await expect(empty.getByRole("heading")).toHaveCount(0);
 	await expect(page.getByRole("link", { name: "配置与管理" })).toHaveCount(0);
 });
 
@@ -1570,7 +1586,7 @@ test("withdraw confirmation traps focus and cancellation sends no request", asyn
 	await page.goto("/my-agents/application-browser-1");
 	const trigger = page.getByRole("button", { name: "撤回申请" });
 	await trigger.click();
-	const dialog = page.getByRole("dialog", { name: "撤回这项申请？" });
+	const dialog = page.getByRole("dialog", { name: "撤回这条申请？" });
 	await expect(dialog).toBeVisible();
 	for (let i = 0; i < 6; i++) {
 		await page.keyboard.press("Tab");
@@ -2495,4 +2511,442 @@ test("approval table becomes readable cards on narrow screens with the review ac
 		expect(geometry.dot).toEqual(["6px", "6px", "block"]);
 		expect(geometry.rightGap).toBeLessThanOrEqual(1);
 	}
+});
+
+// 设计基础组件（chip / tag / notice / empty / card / Agent 标识 / 加载态 / 弹窗）的计算样式。
+async function resolvedColor(page: Page, expression: string) {
+	return page.evaluate((value) => {
+		const probe = document.createElement("span");
+		probe.style.color = value;
+		document.body.append(probe);
+		const color = getComputedStyle(probe).color;
+		probe.remove();
+		return color;
+	}, expression);
+}
+
+// 危险确认按钮的底色：当前为 --destructive，tokens 流合并后为 --danger-ink。
+async function dangerFills(page: Page) {
+	return [
+		await resolvedColor(page, "var(--destructive)"),
+		await resolvedColor(page, "var(--danger-ink)"),
+	];
+}
+
+test("status chips, tags, Agent marks and catalog cards follow the design primitives", async ({
+	page,
+}, info) => {
+	test.skip(
+		info.project.name !== "desktop",
+		"Hover geometry is measured at 1440",
+	);
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await fixture(page, "employee");
+	await page.goto("/agents");
+	const card = page.locator('[data-slot="card"].directory-card').first();
+	await expect(card).toBeVisible();
+	const chips = page.locator('main [data-slot="badge"][data-variant="chip"]');
+	expect(await chips.count()).toBeGreaterThan(0);
+	for (const chip of await chips.all()) {
+		const style = await chip.evaluate((element) => {
+			const computed = getComputedStyle(element);
+			const dot = getComputedStyle(element, "::before");
+			return {
+				fontSize: computed.fontSize,
+				fontWeight: computed.fontWeight,
+				lineHeight: computed.lineHeight,
+				minHeight: computed.minHeight,
+				height: element.getBoundingClientRect().height,
+				padding: computed.padding,
+				radius: Number.parseFloat(computed.borderTopLeftRadius),
+				color: computed.color,
+				dotWidth: dot.width,
+				dotHeight: dot.height,
+				dotColor: dot.backgroundColor,
+			};
+		});
+		expect(style).toMatchObject({
+			fontSize: "11px",
+			fontWeight: "400",
+			lineHeight: "18.15px",
+			minHeight: "24px",
+			padding: "3px 9px",
+			dotWidth: "6px",
+			dotHeight: "6px",
+		});
+		expect(Math.abs(style.height - 26.15)).toBeLessThanOrEqual(0.5);
+		expect(style.radius).toBeGreaterThanOrEqual(999);
+		expect(style.dotColor).toBe(style.color);
+	}
+	const available = card.locator('[data-slot="badge"]', { hasText: "可用" });
+	await expect(available).toHaveCSS(
+		"color",
+		await resolvedColor(page, "var(--success-ink)"),
+	);
+	await expect(available).toHaveCSS(
+		"background-color",
+		await resolvedColor(
+			page,
+			"color-mix(in oklch, var(--success) 8%, var(--surface))",
+		),
+	);
+	const starting = card.locator('[data-slot="badge"]', { hasText: "启动中" });
+	await expect(starting).toHaveCSS(
+		"color",
+		await resolvedColor(page, "var(--warning-ink)"),
+	);
+	const tags = card.locator('[data-slot="badge"][data-variant="tag"]');
+	expect(await tags.count()).toBeGreaterThan(0);
+	for (const tag of await tags.all()) {
+		await expect(tag).toHaveCSS("border-top-left-radius", "7px");
+		await expect(tag).toHaveCSS("padding", "3px 8px");
+		await expect(tag).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+		await expect(tag).toHaveCSS(
+			"color",
+			await resolvedColor(page, "var(--muted-foreground)"),
+		);
+		expect(
+			await tag.evaluate(
+				(element) => getComputedStyle(element, "::before").content,
+			),
+		).toBe("none");
+	}
+	// 设计没有实心主色徽章，也没有 oklch(0.205 0 0) 文字（检测器 R8）。
+	const filled = await page.evaluate(() => {
+		const probe = document.createElement("span");
+		probe.style.color = "var(--accent)";
+		document.body.append(probe);
+		const accent = getComputedStyle(probe).color;
+		probe.style.color = "oklch(0.205 0 0)";
+		const darkInk = getComputedStyle(probe).color;
+		probe.remove();
+		return Array.from(document.querySelectorAll('[data-slot="badge"]')).filter(
+			(element) => {
+				const style = getComputedStyle(element);
+				return style.backgroundColor === accent || style.color === darkInk;
+			},
+		).length;
+	});
+	expect(filled).toBe(0);
+
+	const mark = card.locator('[data-slot="agent-mark"]');
+	await expect(mark).toHaveAttribute("aria-hidden", "true");
+	await expect(mark).toHaveCSS("width", "42px");
+	await expect(mark).toHaveCSS("height", "42px");
+	await expect(mark).toHaveCSS("border-top-left-radius", "12px");
+	await expect(mark).toHaveCSS("font-size", "19px");
+	await expect(mark).toHaveCSS("font-weight", "400");
+	await expect(mark).toHaveCSS("font-family", /Iowan Old Style/);
+	await expect(mark.locator("svg")).toHaveCount(0);
+	await expect(mark).toHaveText(/^\S$/u);
+
+	await expect(card).toHaveCSS("padding", "18px");
+	await expect(card).toHaveCSS("border-top-left-radius", "14px");
+	await expect(card).toHaveCSS("box-shadow", "none");
+	await expect(card).toHaveCSS(
+		"border-top-color",
+		await resolvedColor(page, "var(--border)"),
+	);
+	expect(
+		await card.evaluate((element) => {
+			const style = getComputedStyle(element);
+			// 时长列表按属性列表循环取值。
+			const durations = style.transitionDuration.split(",");
+			return Object.fromEntries(
+				style.transitionProperty
+					.split(",")
+					.map((property, index) => [
+						property.trim(),
+						durations[index % durations.length]?.trim(),
+					]),
+			);
+		}),
+	).toMatchObject({ "border-color": "0.18s", "box-shadow": "0.18s" });
+	await card.hover();
+	await expect(card).toHaveCSS(
+		"border-top-color",
+		await resolvedColor(
+			page,
+			"color-mix(in oklch, var(--accent) 30%, var(--border))",
+		),
+	);
+	await expect(card).toHaveCSS("box-shadow", /0px 8px 24px 0px$/);
+	await capture(page, info, "design-primitives-directory");
+});
+
+test("workbench Agent cards hover while panel rows stay flat", async ({
+	page,
+}, info) => {
+	test.skip(
+		info.project.name !== "desktop",
+		"Hover geometry is measured at 1440",
+	);
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await fixture(page, "owner");
+	await page.goto("/");
+	const card = page.locator('[data-slot="card"].workbench-card').first();
+	await expect(card).toBeVisible();
+	await card.hover();
+	await expect(card).toHaveCSS("box-shadow", /0px 8px 24px 0px$/);
+	await expect(card.locator('[data-slot="agent-mark"]')).toHaveCount(1);
+	const row = page.locator(".workbench-application-row").first();
+	await expect(row).toBeVisible();
+	await expect(row).not.toHaveAttribute("data-slot", "card");
+	const before = await row.evaluate((element) => {
+		const style = getComputedStyle(element);
+		return [style.borderTopColor, style.boxShadow];
+	});
+	await row.hover();
+	expect(
+		await row.evaluate((element) => {
+			const style = getComputedStyle(element);
+			return [style.borderTopColor, style.boxShadow];
+		}),
+	).toEqual(before);
+	expect(before[1]).toBe("none");
+});
+
+test("loading lines show the design spinner while reads are pending", async ({
+	page,
+}) => {
+	await fixture(page, "employee");
+	let release: (() => void) | undefined;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	await page.route(/\/api\/v2\/agents(\?.*)?$/, async (route) => {
+		await gate;
+		await route.fallback();
+	});
+	await page.goto("/agents");
+	const line = page.locator('[data-slot="loading-line"]', {
+		hasText: "正在加载 Agent…",
+	});
+	await expect(line).toBeVisible();
+	await expect(line).toHaveAttribute("role", "status");
+	await expect(line).toHaveCSS("display", "flex");
+	await expect(line).toHaveCSS("column-gap", "9px");
+	await expect(line).toHaveCSS("font-size", "13px");
+	await expect(line).toHaveCSS(
+		"color",
+		await resolvedColor(page, "var(--muted-foreground)"),
+	);
+	const spinner = line.locator('[data-slot="spinner"]');
+	await expect(spinner).toHaveAttribute("aria-hidden", "true");
+	await expect(spinner).toHaveCSS("width", "15px");
+	await expect(spinner).toHaveCSS("height", "15px");
+	await expect(spinner).toHaveCSS("border-top-width", "2px");
+	await expect(spinner).toHaveCSS(
+		"border-top-color",
+		await resolvedColor(page, "var(--accent-ink)"),
+	);
+	await expect(spinner).toHaveCSS(
+		"border-right-color",
+		await resolvedColor(page, "var(--border)"),
+	);
+	await expect(spinner).toHaveCSS("animation-duration", "0.8s");
+	await expect(spinner).toHaveCSS("animation-iteration-count", "infinite");
+	release?.();
+	await expect(line).toHaveCount(0);
+});
+
+test("read failures use a danger notice with role=alert and muted text", async ({
+	page,
+}) => {
+	const api = await fixture(page, "employee");
+	api.unavailableAgentList();
+	await page.goto("/agents");
+	const notice = page.getByRole("alert");
+	await expect(notice).toContainText("Agent 列表暂时无法读取");
+	await expect(notice).toHaveCSS("display", "flex");
+	await expect(notice).toHaveCSS("column-gap", "10px");
+	await expect(notice).toHaveCSS("padding", "13px 14px");
+	await expect(notice).toHaveCSS("border-top-left-radius", "12px");
+	await expect(notice).toHaveCSS("font-size", "13px");
+	await expect(notice).toHaveCSS(
+		"background-color",
+		await resolvedColor(page, "var(--surface)"),
+	);
+	const icon = notice.locator(":scope > svg");
+	await expect(icon).toHaveCSS("width", "17px");
+	await expect(icon).toHaveCSS("margin-top", "2px");
+	await expect(icon).toHaveCSS(
+		"color",
+		await resolvedColor(page, "var(--danger)"),
+	);
+	const description = notice.locator('[data-slot="alert-description"]');
+	await expect(description).toHaveCSS("font-size", "13px");
+	await expect(description).toHaveCSS("line-height", "21.45px");
+	await expect(description).toHaveCSS(
+		"color",
+		await resolvedColor(page, "var(--muted-foreground)"),
+	);
+	await expect(
+		notice.getByRole("button", { name: "重新加载 Agent" }),
+	).toBeVisible();
+});
+
+test("empty states use the design surface and a non-display title", async ({
+	page,
+}) => {
+	await fixture(page, "employee");
+	await page.goto("/my-agents");
+	await page.getByRole("tab", { name: "已创建 Agent" }).click();
+	const empty = page.locator('[data-slot="empty"]', {
+		hasText: "暂无你管理的 Agent",
+	});
+	await expect(empty).toBeVisible();
+	await expect(empty).toHaveCSS("display", "grid");
+	await expect(empty).toHaveCSS("min-height", "220px");
+	await expect(empty).toHaveCSS("padding", "28px");
+	await expect(empty).toHaveCSS("border-top-style", "dashed");
+	await expect(empty).toHaveCSS("border-top-width", "1px");
+	await expect(empty).toHaveCSS("border-top-left-radius", "14px");
+	const title = empty.locator('[data-slot="empty-title"]');
+	expect(await title.evaluate((element) => element.tagName)).toBe("STRONG");
+	await expect(title).toHaveCSS("font-size", "15px");
+	await expect(title).toHaveCSS("font-weight", "700");
+	await expect(title).not.toHaveCSS("font-family", /Iowan Old Style/);
+	await expect(title).toHaveCSS(
+		"color",
+		await resolvedColor(page, "var(--foreground)"),
+	);
+	await expect(empty.locator('[data-slot="empty-description"]')).toHaveCSS(
+		"font-size",
+		"13px",
+	);
+});
+
+test("confirmation dialogs follow the design modal geometry and focus contract", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	const mobile = info.project.name === "mobile";
+	await page.goto("/my-agents/application-browser-1");
+	const trigger = page.getByRole("button", { name: "撤回申请" });
+	await trigger.click();
+	const dialog = page.getByRole("dialog", { name: "撤回这条申请？" });
+	await expect(dialog).toBeVisible();
+	await expect(dialog).toHaveAttribute("aria-modal", "true");
+	await expect(dialog).toBeFocused();
+	await page.keyboard.press("Enter");
+	expect(api.commands).toHaveLength(0);
+	const viewport = page.viewportSize();
+	const box = await dialog.boundingBox();
+	expect(box).not.toBeNull();
+	expect(
+		Math.abs((box?.width ?? 0) - Math.min((viewport?.width ?? 0) - 40, 620)),
+	).toBeLessThanOrEqual(1);
+	const padding = mobile ? "19px" : "24px";
+	await expect(dialog).toHaveCSS("padding", padding);
+	await expect(dialog).toHaveCSS("border-top-left-radius", "16px");
+	await expect(dialog).toHaveCSS("border-top-width", "1px");
+	await expect(dialog).toHaveCSS(
+		"border-top-color",
+		await resolvedColor(page, "var(--border)"),
+	);
+	await expect(dialog).toHaveCSS("box-shadow", /0px 24px 80px 0px$/);
+	const backdrop = page.locator('[data-slot="dialog-overlay"]');
+	await expect(backdrop).toHaveCSS("z-index", "80");
+	await expect(backdrop).toHaveCSS("backdrop-filter", "none");
+	await expect(backdrop).toHaveCSS(
+		"background-color",
+		await resolvedColor(
+			page,
+			"color-mix(in oklch, var(--foreground) 36%, transparent)",
+		),
+	);
+	const title = dialog.getByRole("heading", { name: "撤回这条申请？" });
+	await expect(title).toHaveCSS("font-size", "19px");
+	await expect(title).toHaveCSS("font-weight", "620");
+	await expect(title).toHaveCSS("line-height", "25.65px");
+	await expect(title).not.toHaveCSS("font-family", /Iowan Old Style/);
+	const close = dialog.getByRole("button", { name: "关闭" });
+	await expect(close).toHaveCount(1);
+	await expect(close).toHaveCSS("position", "static");
+	const closeBox = await close.boundingBox();
+	expect(closeBox?.width).toBe(44);
+	expect(closeBox?.height).toBe(44);
+	if (!mobile) {
+		expect(
+			Math.abs((closeBox?.x ?? 0) - (box?.x ?? 0) - 551),
+		).toBeLessThanOrEqual(1);
+		expect(
+			Math.abs((closeBox?.y ?? 0) - (box?.y ?? 0) - 25),
+		).toBeLessThanOrEqual(1);
+	}
+	expect(
+		await close.evaluate(
+			(element) => element.closest('[data-slot="dialog-header"]') !== null,
+		),
+	).toBe(true);
+	const footer = dialog.locator('[data-slot="dialog-footer"]');
+	await expect(footer).toHaveCSS("justify-content", "flex-end");
+	await expect(footer).toHaveCSS("column-gap", "8px");
+	await expect(footer).toHaveCSS("margin-top", "24px");
+	const confirm = footer.getByRole("button", { name: "确认撤回" });
+	const confirmBox = await confirm.boundingBox();
+	expect(
+		Math.abs(
+			(box?.x ?? 0) +
+				(box?.width ?? 0) -
+				1 -
+				Number.parseFloat(padding) -
+				((confirmBox?.x ?? 0) + (confirmBox?.width ?? 0)),
+		),
+	).toBeLessThanOrEqual(1);
+	expect(await dangerFills(page)).toContain(
+		await confirm.evaluate(
+			(element) => getComputedStyle(element).backgroundColor,
+		),
+	);
+	await expect(footer.getByRole("button", { name: "继续保留申请" })).toHaveCSS(
+		"background-color",
+		"rgba(0, 0, 0, 0)",
+	);
+	for (const key of ["Tab", "Shift+Tab"]) {
+		for (let index = 0; index < 20; index++) {
+			await page.keyboard.press(key);
+			await expect
+				.poll(() =>
+					dialog.evaluate((element) =>
+						element.contains(document.activeElement),
+					),
+				)
+				.toBe(true);
+		}
+	}
+	await page.keyboard.press("Escape");
+	await expect(dialog).not.toBeVisible();
+	await expect(trigger).toBeFocused();
+	expect(api.commands).toHaveLength(0);
+	await capture(page, info, "design-confirmation-dialog");
+});
+
+test("lifecycle confirmations use the design titles and button variants", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await page.getByRole("button", { name: "停止 Agent" }).click();
+	let dialog = page.getByRole("dialog", { name: "停止这个 Agent？" });
+	await expect(dialog).toBeVisible();
+	await expect(dialog).toHaveAttribute("aria-modal", "true");
+	expect(await dangerFills(page)).toContain(
+		await dialog
+			.getByRole("button", { name: "停止 Agent" })
+			.evaluate((element) => getComputedStyle(element).backgroundColor),
+	);
+	await page.keyboard.press("Escape");
+	await expect(dialog).not.toBeVisible();
+	await page.getByRole("button", { name: "重启 Agent" }).click();
+	dialog = page.getByRole("dialog", { name: /^重启.+？$/ });
+	await expect(dialog).toBeVisible();
+	const restartFill = await dialog
+		.getByRole("button", { name: "确认重启" })
+		.evaluate((element) => getComputedStyle(element).backgroundColor);
+	expect([
+		await resolvedColor(page, "var(--primary)"),
+		await resolvedColor(page, "var(--accent-ink)"),
+	]).toContain(restartFill);
 });

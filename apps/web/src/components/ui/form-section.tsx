@@ -7,6 +7,8 @@ type FormSectionProps = Omit<React.ComponentProps<"section">, "title"> & {
 	// 说明文字需要被字段 aria-describedby 引用时提供。
 	descriptionId?: string;
 	headingLevel?: 2 | 3;
+	// 确认弹窗等关闭后需要把焦点交回本分区时提供；标题随之可被程序聚焦（tabIndex=-1）。
+	headingRef?: React.Ref<HTMLHeadingElement>;
 };
 
 // 设计稿 .form-section：section + 标题，分隔线在标题上方；
@@ -17,6 +19,7 @@ function FormSection({
 	description,
 	descriptionId,
 	headingLevel = 2,
+	headingRef,
 	id,
 	children,
 	...props
@@ -37,6 +40,8 @@ function FormSection({
 		>
 			{/* 管理页未分层的 `.management-content h2` 会压过工具类，字体、字号与字距用 !important 固定为分区标题设计值。 */}
 			<Heading
+				ref={headingRef}
+				tabIndex={headingRef ? -1 : undefined}
 				id={titleId}
 				data-slot="form-section-title"
 				className="!font-[inherit] !text-[16px] !tracking-normal font-[620] text-foreground leading-[1.35]"

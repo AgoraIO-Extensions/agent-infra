@@ -1,11 +1,14 @@
 import { Link } from "@tanstack/react-router";
 import { Plus, RefreshCw } from "lucide-react";
 import { useId } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
+import { LoadingLine } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { statusTone } from "@/lib/status-tone";
 
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentChannelKindLabels } from "../agent-discovery/agent-discovery-screen.js";
@@ -14,6 +17,7 @@ import {
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
+import { AgentMark } from "../agent-mark.js";
 import {
 	agentApplicationEditActionLabels,
 	getAgentApplicationEditAction,
@@ -66,27 +70,26 @@ export function MyAgentsScreen({
 				</TabsList>
 				<TabsContent value="applications">
 					{state.kind === "loading" ? (
-						<p role="status" className="py-8">
-							正在读取申请…
-						</p>
+						<LoadingLine className="py-8">正在读取申请…</LoadingLine>
 					) : state.kind === "unavailable" ? (
-						<Alert className="my-5">
+						<Alert tone="danger" role="alert" className="my-5">
 							<AlertDescription>
 								{state.retryable
 									? "暂时无法读取申请，请稍后重试。"
 									: "当前无法查看申请，请联系管理员。"}
 							</AlertDescription>
 							{state.retryable && onRetryApplications ? (
-								<Button
-									className="mt-4"
-									variant="outline"
-									disabled={retryingApplications}
-									onClick={onRetryApplications}
-									type="button"
-								>
-									<RefreshCw aria-hidden="true" data-icon="inline-start" />
-									{retryingApplications ? "正在重新加载…" : "重新加载申请"}
-								</Button>
+								<AlertAction>
+									<Button
+										variant="outline"
+										disabled={retryingApplications}
+										onClick={onRetryApplications}
+										type="button"
+									>
+										<RefreshCw aria-hidden="true" data-icon="inline-start" />
+										{retryingApplications ? "正在重新加载…" : "重新加载申请"}
+									</Button>
+								</AlertAction>
 							) : null}
 						</Alert>
 					) : state.applications.length === 0 ? (
@@ -107,16 +110,10 @@ export function MyAgentsScreen({
 									>
 										<div className="min-w-0 flex-1">
 											<div className="tag-row">
-												<Badge
-													variant="outline"
-													data-status={application.status}
-												>
+												<Badge tone={statusTone(application.status)}>
 													{agentManagementStatusLabels[application.status]}
 												</Badge>
-												<Badge
-													variant="outline"
-													className="max-w-full whitespace-normal rounded-[7px] [overflow-wrap:anywhere]"
-												>
+												<Badge variant="tag">
 													{application.source.kind === "standard"
 														? application.source.templateId
 														: agentConversationSourceLabel(application)}
@@ -168,29 +165,28 @@ export function MyAgentsScreen({
 				</TabsContent>
 				<TabsContent value="agents">
 					{ownedAgentsLoading ? (
-						<p role="status" className="py-8">
-							正在读取你管理的 Agent…
-						</p>
+						<LoadingLine className="py-8">正在读取你管理的 Agent…</LoadingLine>
 					) : ownedAgentsUnavailable ? (
-						<Alert className="my-5">
+						<Alert tone="danger" role="alert" className="my-5">
 							<AlertDescription>
 								{ownedAgentsRetryable
 									? "暂时无法读取你管理的 Agent，请稍后重试。"
 									: "当前无法查看你管理的 Agent，请联系管理员。"}
 							</AlertDescription>
 							{ownedAgentsRetryable && onRetryOwnedAgents ? (
-								<Button
-									className="mt-4"
-									variant="outline"
-									disabled={retryingOwnedAgents}
-									onClick={onRetryOwnedAgents}
-									type="button"
-								>
-									<RefreshCw aria-hidden="true" data-icon="inline-start" />
-									{retryingOwnedAgents
-										? "正在重新加载…"
-										: "重新加载已创建 Agent"}
-								</Button>
+								<AlertAction>
+									<Button
+										variant="outline"
+										disabled={retryingOwnedAgents}
+										onClick={onRetryOwnedAgents}
+										type="button"
+									>
+										<RefreshCw aria-hidden="true" data-icon="inline-start" />
+										{retryingOwnedAgents
+											? "正在重新加载…"
+											: "重新加载已创建 Agent"}
+									</Button>
+								</AlertAction>
 							) : null}
 						</Alert>
 					) : ownedAgents === undefined ? (
@@ -207,11 +203,13 @@ export function MyAgentsScreen({
 					) : (
 						<ul className="owned-agent-grid" aria-label="我管理的 Agent">
 							{ownedAgents.map((agent) => (
-								<li className="owned-agent-card" key={agent.agentId}>
+								<Card
+									render={<li />}
+									className="owned-agent-card"
+									key={agent.agentId}
+								>
 									<div className="owned-card-heading">
-										<span className="agent-detail-mark" aria-hidden="true">
-											{Array.from(agent.name)[0]}
-										</span>
+										<AgentMark name={agent.name} agentId={agent.agentId} />
 										<div>
 											<h2>{agent.name}</h2>
 											<p>
@@ -221,18 +219,12 @@ export function MyAgentsScreen({
 													.join("、")}
 											</p>
 										</div>
-										<Badge
-											variant="outline"
-											data-status={agent.managementStatus}
-										>
+										<Badge tone={statusTone(agent.managementStatus)}>
 											{agentManagementStatusLabels[agent.managementStatus]}
 										</Badge>
 									</div>
 									{agent.serviceAvailability && (
-										<Badge
-											variant="outline"
-											data-status={agent.serviceAvailability}
-										>
+										<Badge tone={statusTone(agent.serviceAvailability)}>
 											服务：
 											{agentServiceAvailabilityLabel(agent.serviceAvailability)}
 										</Badge>
@@ -277,7 +269,7 @@ export function MyAgentsScreen({
 											查看详情
 										</Link>
 									</div>
-								</li>
+								</Card>
 							))}
 						</ul>
 					)}
