@@ -19,8 +19,15 @@
 	--color-card-foreground: var(--foreground);
 	--color-popover: var(--surface);
 	--color-popover-foreground: var(--foreground);
-	--color-accent: var(--muted);
-	--color-accent-foreground: var(--foreground);
+	/* 与设计 --accent 同名同义：信号蓝；背景灰请用 bg-muted。 */
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--primary-foreground);
+	--color-accent-ink: var(--accent-ink);
+	--color-success-ink: var(--success-ink);
+	--color-warning-ink: var(--warning-ink);
+	--color-danger-ink: var(--danger-ink);
+	--color-muted-ink: var(--muted-ink);
+	--font-mono: var(--font-mono);
 	--color-sidebar: var(--muted);
 	--color-sidebar-foreground: var(--foreground);
 	--color-sidebar-border: var(--border);
@@ -36,7 +43,7 @@
 	--primary: oklch(0.58 0.16 248);
 	--primary-foreground: var(--surface);
 	--secondary: color-mix(in oklch, var(--primary) 11%, var(--surface));
-	--secondary-foreground: oklch(0.205 0 0);
+	--secondary-foreground: var(--foreground);
 	--muted: color-mix(in oklch, var(--surface) 90%, var(--background));
 	--muted-foreground: oklch(0.52 0.03 255);
 	--destructive: oklch(0.58 0.17 27);
@@ -45,18 +52,43 @@
 	--ring: var(--primary);
 	--success: oklch(0.63 0.14 145);
 	--warning: oklch(0.74 0.14 82);
+	/* 设计 X-06 ink 色：小字、主按钮与状态文字；原语义色只用于焦点环、图标和浅底混色。 */
+	--accent-ink: oklch(0.46 0.15 248);
+	--success-ink: oklch(0.45 0.12 145);
+	--warning-ink: oklch(0.49 0.11 82);
+	--danger-ink: oklch(0.46 0.14 27);
+	--muted-ink: oklch(0.42 0.03 255);
 	--font-display: "Iowan Old Style", "Songti SC", "STSong", Georgia, serif;
+	--font-body:
+		ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+		"PingFang SC", "Microsoft YaHei", sans-serif;
+	/* 等宽文字只能引用该 token 或 Tailwind font-mono，不得手写字体栈。 */
+	--font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 	--platform-topbar-height: 72px;
 	--surface-shadow: 0 16px 40px
 		color-mix(in oklch, var(--foreground) 8%, transparent);
-	font-family:
-		ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-		"PingFang SC", "Microsoft YaHei", sans-serif;
+	/* 设计同名别名：便于与设计稿对照；设计 --muted（文字色）对应 --muted-foreground，不另设别名。 */
+	--bg: var(--background);
+	--fg: var(--foreground);
+	--surface-raised: var(--muted);
+	--accent: var(--primary);
+	--accent-soft: var(--secondary);
+	--danger: var(--destructive);
+	--shadow: var(--surface-shadow);
+	font-family: var(--font-body);
 	font-size: 16px;
 	line-height: 1.65;
 	letter-spacing: 0;
 	color: var(--foreground);
 	background: var(--background);
+}
+
+/* 设计 h1：-0.01em 字距、pretty 换行；放在组件类之前，对话页标题在组件类中显式取消字距。 */
+@layer base {
+	h1 {
+		letter-spacing: -0.01em;
+		text-wrap: pretty;
+	}
 }
 
 /* OpenDesign #1208: warm surfaces, 248px navigation, shared page rhythm. */
@@ -128,7 +160,7 @@
 	line-height: 1.5;
 }
 .platform-nav-label {
-	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-family: var(--font-mono);
 	font-size: 11px;
 	color: var(--muted-foreground);
 	padding: 0 12px;
@@ -352,9 +384,7 @@ a[class~="group/button"] {
 	font-family: var(--font-display);
 	font-weight: 620;
 	font-size: clamp(30px, 3vw, 38px);
-	text-wrap: balance;
 	line-height: 1.35;
-	letter-spacing: 0;
 	overflow-wrap: anywhere;
 }
 .management-content .page-heading {
@@ -605,6 +635,8 @@ a[class~="group/button"] {
 	font-size: 28px;
 	line-height: 1.35;
 	font-weight: 620;
+	/* 设计 .chat-page h1 例外：对话页标题不收紧字距。 */
+	letter-spacing: 0;
 	overflow-wrap: anywhere;
 }
 .chat-layout .conversation-header p {
@@ -612,13 +644,12 @@ a[class~="group/button"] {
 	color: var(--muted-foreground);
 	margin-top: 4px;
 }
-.conversation-header .conversation-eyebrow {
+/* 设计 .page-head-copy .eyebrow：优先级高于页头段落规则，保持 11px 信号蓝 ink。 */
+.chat-layout .conversation-header .conversation-eyebrow {
 	margin: 0 0 4px;
-	font:
-		11px / 1.4 ui-monospace,
-		monospace;
+	font: 11px / 1.4 var(--font-mono);
 	letter-spacing: 0.08em;
-	color: var(--primary);
+	color: var(--accent-ink);
 }
 .conversation-history-toggle {
 	display: none;
@@ -995,12 +1026,16 @@ a[class~="group/button"] {
 	}
 }
 @media (prefers-reduced-motion: reduce) {
+	/* 设计规则：保留动画与过渡属性，只把时长压到 .001ms，并压过组件 transition-* 工具类。 */
 	*,
 	*::before,
 	*::after {
-		animation: none;
-		transition: none;
-		scroll-behavior: auto;
+		/* biome-ignore lint/complexity/noImportantStyles: reduced-motion 必须覆盖组件与工具类的时长。 */
+		animation-duration: 0.001ms !important;
+		/* biome-ignore lint/complexity/noImportantStyles: reduced-motion 必须覆盖组件与工具类的时长。 */
+		transition-duration: 0.001ms !important;
+		/* biome-ignore lint/complexity/noImportantStyles: reduced-motion 必须覆盖平滑滚动设置。 */
+		scroll-behavior: auto !important;
 	}
 }
 
@@ -1094,7 +1129,6 @@ body {
 	font-weight: 620;
 	font-size: clamp(30px, 3vw, 38px);
 	line-height: 1.35;
-	text-wrap: balance;
 }
 .ia-workbench .page-heading p {
 	font-size: 14px;
@@ -1431,9 +1465,7 @@ body {
 }
 .management-content [data-slot="table-head"] {
 	background: var(--surface);
-	font:
-		11px / 1.4 ui-monospace,
-		monospace;
+	font: 11px / 1.4 var(--font-mono);
 	letter-spacing: 0.05em;
 	color: var(--muted-foreground);
 	height: auto;
@@ -1648,10 +1680,8 @@ a[class~="group/button"] {
 .page-eyebrow,
 .ia-workbench .page-heading .workbench-eyebrow,
 .ia-agent-directory .directory-eyebrow {
-	color: var(--primary);
-	font:
-		11px / 1.4 ui-monospace,
-		monospace;
+	color: var(--accent-ink);
+	font: 11px / 1.4 var(--font-mono);
 	letter-spacing: 0.08em;
 }
 .agent-detail-aside {
@@ -1818,10 +1848,8 @@ a[class~="group/button"]:focus-visible,
 }
 .management-content .page-heading .page-eyebrow {
 	margin-bottom: 9px;
-	color: var(--primary);
-	font:
-		11px / 1.4 ui-monospace,
-		monospace;
+	color: var(--accent-ink);
+	font: 11px / 1.4 var(--font-mono);
 	letter-spacing: 0.08em;
 }
 .management-content .form-layout.full-width-form {
@@ -1940,9 +1968,7 @@ a[class~="group/button"]:focus-visible,
 	place-items: center;
 	border: 1px solid var(--border);
 	border-radius: 50%;
-	font:
-		11px ui-monospace,
-		monospace;
+	font: 11px var(--font-mono);
 }
 .form-stepper li.done {
 	color: var(--foreground);
@@ -2047,7 +2073,7 @@ a[class~="group/button"]:focus-visible,
 	margin-top: 5px;
 }
 .application-form .field-help {
-	color: var(--muted-foreground);
+	color: var(--muted-ink);
 	font-size: 11px;
 }
 .application-form .application-optional-section {
@@ -2452,7 +2478,7 @@ a[class~="group/button"]:focus-visible,
 	box-shadow: none;
 }
 .directory-input::placeholder {
-	color: color-mix(in oklch, var(--muted-foreground) 82%, var(--surface));
+	color: var(--muted-ink);
 }
 .directory-menu {
 	position: absolute;
@@ -2579,13 +2605,13 @@ a[class~="group/button"]:focus-visible,
 	justify-content: space-between;
 	gap: 8px;
 	margin-top: 6px;
-	color: var(--muted-foreground);
+	color: var(--muted-ink);
 	font-size: 11px;
 	line-height: 1.45;
 }
 .directory-help span:last-child {
 	flex: none;
-	color: color-mix(in oklch, var(--muted-foreground) 78%, var(--surface));
+	color: var(--muted-ink);
 }
 @media (max-width: 767px) {
 	.directory-menu {

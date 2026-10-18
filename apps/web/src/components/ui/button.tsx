@@ -8,7 +8,7 @@ const buttonStyles = cva(
 		variants: {
 			variant: {
 				default:
-					"border-primary bg-primary text-primary-foreground hover:border-[color-mix(in_oklch,var(--primary)_84%,var(--foreground))] hover:bg-[color-mix(in_oklch,var(--primary)_84%,var(--foreground))]",
+					"border-accent-ink bg-accent-ink text-primary-foreground hover:border-[color-mix(in_oklch,var(--accent-ink)_84%,var(--foreground))] hover:bg-[color-mix(in_oklch,var(--accent-ink)_84%,var(--foreground))]",
 				outline:
 					"border-border bg-card hover:border-foreground hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
 				secondary:
@@ -16,7 +16,7 @@ const buttonStyles = cva(
 				ghost:
 					"text-muted-foreground hover:bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
 				destructive:
-					"border-destructive bg-destructive text-primary-foreground hover:bg-[color-mix(in_oklch,var(--destructive)_84%,var(--foreground))] focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 dark:hover:bg-destructive/30",
+					"border-danger-ink bg-danger-ink text-primary-foreground hover:bg-[color-mix(in_oklch,var(--danger-ink)_84%,var(--foreground))] focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 dark:hover:bg-destructive/30",
 				link: "text-primary underline-offset-4 hover:underline",
 			},
 			size: {
