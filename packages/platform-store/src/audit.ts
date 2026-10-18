@@ -495,6 +495,7 @@ function validDate(input: unknown): input is Date {
 function changedFields(
 	action: PlatformAuditActionV1,
 	details: unknown,
+	targetId: string,
 ): readonly PlatformAuditChangedFieldV1[] {
 	if (action === "audit.query.completed" || action === "audit.query.failed") {
 		if (
@@ -655,9 +656,41 @@ function changedFields(
 				throw new PlatformAuditQueryError("unavailable");
 			return [];
 		}
+		const personal =
+			action.startsWith("api.agent.use.") &&
+			typeof details === "object" &&
+			details !== null &&
+			Object.hasOwn(details, "userId");
+		if (personal && Object.hasOwn(details, "schemaVersion")) {
+			if (
+				!exactObject(details, [
+					"schemaVersion",
+					"agentId",
+					"userId",
+					"granted",
+					"authorizationRevision",
+					"replayed",
+				])
+			)
+				throw new PlatformAuditQueryError("unavailable");
+			const value = details as Record<string, unknown>;
+			if (
+				value.schemaVersion !== 1 ||
+				value.agentId !== targetId ||
+				!validText(value.userId) ||
+				typeof value.granted !== "boolean" ||
+				value.replayed !== false ||
+				!validText(value.authorizationRevision) ||
+				(action.endsWith(".granted") && value.granted !== true) ||
+				(action.endsWith(".revoked") && value.granted !== false)
+			)
+				throw new PlatformAuditQueryError("unavailable");
+			return [];
+		}
+		const principalKey = personal ? "userId" : "applicationId";
 		if (
 			!exactObject(details, [
-				"applicationId",
+				principalKey,
 				"grantType",
 				"granted",
 				"authorizationRevision",
@@ -666,7 +699,8 @@ function changedFields(
 			throw new PlatformAuditQueryError("unavailable");
 		const value = details as Record<string, unknown>;
 		if (
-			!validText(value.applicationId) ||
+			!validText(value[principalKey]) ||
+			(personal && !validText(value.authorizationRevision)) ||
 			value.grantType !==
 				(action.startsWith("api.agent.use.") ? "use" : "manage") ||
 			typeof value.granted !== "boolean" ||
@@ -772,6 +806,7 @@ function changedFields(
 }
 
 export interface AuditRow {
+	readonly agentId?: string | null;
 	readonly auditId: string;
 	readonly traceId: string;
 	readonly requestId?: string | null;
@@ -933,7 +968,15 @@ export function decodePlatformAuditRowV1(
 	) {
 		throw new PlatformAuditQueryError("unavailable");
 	}
-	const fields = changedFields(action, row.details);
+	if (
+		api &&
+		action.startsWith("api.agent.use.") &&
+		row.agentId !== undefined &&
+		row.agentId !== null &&
+		row.agentId !== row.targetId
+	)
+		throw new PlatformAuditQueryError("unavailable");
+	const fields = changedFields(action, row.details, row.targetId);
 	return {
 		schemaVersion: 1,
 		auditId: row.auditId,
@@ -952,6 +995,7 @@ export function decodePlatformAuditRowV1(
 
 const auditSelection = {
 	auditId: auditEvents.id,
+	agentId: auditEvents.agentId,
 	traceId: auditEvents.traceId,
 	requestId: auditEvents.requestId,
 	actorType: auditEvents.actorType,
