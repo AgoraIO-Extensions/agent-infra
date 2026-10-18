@@ -559,7 +559,19 @@ describe("Platform PostgreSQL migration foundation", () => {
 			const authoredTables = Object.fromEntries(
 				platformInfrastructureTables.map((table) => {
 					const config = getTableConfig(table);
-					return [config.name, config.columns.map((column) => column.name)];
+					const columns = config.columns.map((column) => column.name);
+					const acceptedHostIndex = columns.indexOf(
+						"accepted_original_host_session_ref",
+					);
+					// 0058 appends this column; retain the exact order of every older column.
+					if (
+						config.name === "conversation_executions" &&
+						acceptedHostIndex >= 0
+					) {
+						columns.splice(acceptedHostIndex, 1);
+						columns.push("accepted_original_host_session_ref");
+					}
+					return [config.name, columns];
 				}),
 			);
 			expect(actualTables).toEqual(authoredTables);
@@ -1977,6 +1989,7 @@ describe("published Relay authority migration", () => {
 			55,
 			56,
 			57,
+			58,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -1998,37 +2011,41 @@ describe("published Relay authority migration", () => {
 			idx: 49,
 			tag: "0049_connection_installation_authorization",
 		});
-		expect(journal.entries.at(-8)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 50)).toMatchObject({
 			idx: 50,
 			tag: "0050_connection_installation_attempts",
 		});
-		expect(journal.entries.at(-7)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 51)).toMatchObject({
 			idx: 51,
 			tag: "0051_connection_installation_attempt_expiry",
 		});
-		expect(journal.entries.at(-6)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 52)).toMatchObject({
 			idx: 52,
 			tag: "0052_stop_confirmation_deadline",
 		});
-		expect(journal.entries.at(-5)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 53)).toMatchObject({
 			idx: 53,
 			tag: "0053_conversation_audit_execution_index",
 		});
-		expect(journal.entries.at(-4)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 54)).toMatchObject({
 			idx: 54,
 			tag: "0054_skill_agent_binding_applied_receipt",
 		});
-		expect(journal.entries.at(-3)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 55)).toMatchObject({
 			idx: 55,
 			tag: "0055_platform_execution_failure_events",
 		});
-		expect(journal.entries.at(-2)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 56)).toMatchObject({
 			idx: 56,
 			tag: "0056_wecom_connection_authorization",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 57)).toMatchObject({
 			idx: 57,
 			tag: "0057_trace_context",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 58,
+			tag: "0058_accepted_original_host",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2245,6 +2262,7 @@ describe("published Relay authority migration", () => {
 					...skillHubColumns,
 					"wecom_receipts:connection_authorization_fact",
 					"outbox_items:trace_parent",
+					"conversation_executions:accepted_original_host_session_ref",
 				],
 				checks: [
 					...(kind === "original27"
@@ -2289,6 +2307,7 @@ describe("published Relay authority migration", () => {
 
 			expectedDelta.checks.push(
 				"agent_configuration_revisions:agent_configuration_identity_matches",
+				"conversation_executions:conversation_execution_accepted_original_host",
 			);
 			expectedDelta.checks.push(
 				"agent_applications:agent_application_creation_provenance",
@@ -2396,7 +2415,8 @@ describe("published Relay authority migration", () => {
 				await client`select count(*)::int as count from platform.session_sandbox_allocations`,
 			).toEqual([{ count: 0 }]);
 			expect(
-				await client`select count(*)::int as count from platform.conversation_executions where sandbox_id is not null`,
+				await client`select count(*)::int as count from platform.conversation_executions
+					where sandbox_id is not null or accepted_original_host_session_ref is not null`,
 			).toEqual([{ count: 0 }]);
 			expect(await records(kind !== "original27")).toEqual(data);
 			await builtStore.migratePlatformDatabase({ databaseUrl });
