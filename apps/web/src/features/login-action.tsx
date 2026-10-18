@@ -34,27 +34,29 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 	const [password, setPassword] = useState("");
 	const [state, setState] = useState<LoginState>("idle");
 	const [errorStatus, setErrorStatus] = useState<number | null>(null);
-	const [clientError, setClientError] = useState<"login" | "password" | null>(
-		null,
-	);
+	const [clientErrors, setClientErrors] = useState({
+		login: false,
+		password: false,
+	});
 	const [showPassword, setShowPassword] = useState(false);
 	const loginRef = useRef<HTMLInputElement>(null);
+	const passwordRef = useRef<HTMLInputElement>(null);
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!login.trim()) {
-			setClientError("login");
+		const nextClientErrors = {
+			login: !login.trim(),
+			password: !password,
+		};
+		if (nextClientErrors.login || nextClientErrors.password) {
+			setClientErrors(nextClientErrors);
 			setErrorStatus(null);
-			loginRef.current?.focus();
-			return;
-		}
-		if (!password) {
-			setClientError("password");
-			setErrorStatus(null);
+			if (nextClientErrors.login) loginRef.current?.focus();
+			else passwordRef.current?.focus();
 			return;
 		}
 		setState("submitting");
-		setClientError(null);
+		setClientErrors({ login: false, password: false });
 		setErrorStatus(null);
 		try {
 			const target = new URL(endpoint, window.location.href);
@@ -82,8 +84,8 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 			setPassword("");
 		}
 	}
-	const loginError = clientError === "login" ? "请输入公司账号。" : undefined;
-	const passwordError = clientError === "password" ? "请输入密码。" : undefined;
+	const loginError = clientErrors.login ? "请输入公司账号。" : undefined;
+	const passwordError = clientErrors.password ? "请输入密码。" : undefined;
 	const serverError =
 		state === "error" && errorStatus !== null
 			? errorStatus === 0 ||
@@ -108,14 +110,28 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 					spellCheck={false}
 					autoComplete="username"
 					maxLength={256}
-					aria-invalid={state === "error" || undefined}
-					aria-describedby={serverError ? "platform-login-error" : undefined}
+					aria-invalid={clientErrors.login || state === "error" || undefined}
+					aria-describedby={
+						[
+							loginError ? "platform-login-field-error" : undefined,
+							serverError ? "platform-login-error" : undefined,
+						]
+							.filter(Boolean)
+							.join(" ") || undefined
+					}
 					value={login}
-					onChange={(event) => setLogin(event.target.value)}
+					onChange={(event) => {
+						setLogin(event.target.value);
+						setClientErrors((current) => ({ ...current, login: false }));
+					}}
 					ref={loginRef}
 					disabled={state === "submitting"}
 				/>
-				{loginError && <p className="field-error">{loginError}</p>}
+				{loginError && (
+					<p className="field-error" id="platform-login-field-error">
+						{loginError}
+					</p>
+				)}
 			</div>
 			<div className="space-y-2">
 				<Label htmlFor="platform-password">密码</Label>
@@ -127,11 +143,22 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 					placeholder="输入密码"
 					spellCheck={false}
 					maxLength={4096}
-					aria-invalid={state === "error" || undefined}
-					aria-describedby={serverError ? "platform-login-error" : undefined}
+					aria-invalid={clientErrors.password || state === "error" || undefined}
+					aria-describedby={
+						[
+							passwordError ? "platform-password-field-error" : undefined,
+							serverError ? "platform-login-error" : undefined,
+						]
+							.filter(Boolean)
+							.join(" ") || undefined
+					}
 					value={password}
 					className="pr-14"
-					onChange={(event) => setPassword(event.target.value)}
+					onChange={(event) => {
+						setPassword(event.target.value);
+						setClientErrors((current) => ({ ...current, password: false }));
+					}}
+					ref={passwordRef}
 					disabled={state === "submitting"}
 				/>
 				<Button
@@ -151,7 +178,11 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 						<Eye aria-hidden="true" />
 					)}
 				</Button>
-				{passwordError && <p className="field-error">{passwordError}</p>}
+				{passwordError && (
+					<p className="field-error" id="platform-password-field-error">
+						{passwordError}
+					</p>
+				)}
 			</div>
 			<Button
 				className="login-submit"

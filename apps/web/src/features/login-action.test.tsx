@@ -68,6 +68,52 @@ describe("LoginAction", () => {
 		expect((screen.getByLabelText("密码") as HTMLInputElement).value).toBe("");
 	});
 
+	it("reports both empty fields and focuses the account field", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		render(<LoginAction endpoint="/auth/login" onLoggedIn={vi.fn()} />);
+
+		fireEvent.submit(screen.getByRole("button", { name: "登录" }));
+
+		await screen.findByText("请输入公司账号。");
+		expect(screen.getByText("请输入密码。")).toBeTruthy();
+		const loginInput = screen.getByLabelText("账号") as HTMLInputElement;
+		const passwordInput = screen.getByLabelText("密码") as HTMLInputElement;
+		expect(document.activeElement).toBe(loginInput);
+		expect(loginInput.getAttribute("aria-invalid")).toBe("true");
+		expect(passwordInput.getAttribute("aria-invalid")).toBe("true");
+		expect(loginInput.getAttribute("aria-describedby")).toBe(
+			"platform-login-field-error",
+		);
+		expect(passwordInput.getAttribute("aria-describedby")).toBe(
+			"platform-password-field-error",
+		);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("focuses the password field when only the password is missing", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		render(<LoginAction endpoint="/auth/login" onLoggedIn={vi.fn()} />);
+
+		fireEvent.change(screen.getByLabelText("账号"), {
+			target: { value: "alice" },
+		});
+		fireEvent.submit(screen.getByRole("button", { name: "登录" }));
+
+		await screen.findByText("请输入密码。");
+		const loginInput = screen.getByLabelText("账号") as HTMLInputElement;
+		const passwordInput = screen.getByLabelText("密码") as HTMLInputElement;
+		expect(document.activeElement).toBe(passwordInput);
+		expect(loginInput.getAttribute("aria-invalid")).toBeNull();
+		expect(passwordInput.getAttribute("aria-invalid")).toBe("true");
+		expect(loginInput.getAttribute("aria-describedby")).toBeNull();
+		expect(passwordInput.getAttribute("aria-describedby")).toBe(
+			"platform-password-field-error",
+		);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it("keeps the form retryable and does not report login on failure", async () => {
 		const fetchMock = vi
 			.fn()

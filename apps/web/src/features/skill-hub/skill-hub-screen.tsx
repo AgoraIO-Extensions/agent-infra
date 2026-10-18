@@ -42,14 +42,22 @@ type SkillHubDirectoryScreenProps = {
 	retrying?: boolean;
 };
 
-function VersionBadges({ version }: { version: SkillHubVersionMetadataV1 }) {
+export function SkillHubVersionBadges({
+	version,
+}: {
+	version: SkillHubVersionMetadataV1;
+}) {
+	const providerLabel = skillHubProviderLabels[version.provider];
+	const visibilityLabel = skillHubVisibilityLabels[version.visibility];
+
 	return (
 		<div className="flex flex-wrap gap-2">
-			<Badge variant="secondary">
-				{skillHubProviderLabels[version.provider]}
-			</Badge>
-			<Badge variant="outline">
-				{skillHubVisibilityLabels[version.visibility]}
+			<Badge
+				variant="outline"
+				className="min-h-0 rounded-[7px] bg-muted/40 px-2 py-[3px] text-muted-foreground leading-4"
+				aria-label={`可见范围：${visibilityLabel}；来源：${providerLabel}`}
+			>
+				范围：{visibilityLabel} · 来源：{providerLabel}
 			</Badge>
 			<Badge variant="outline">已发布</Badge>
 		</div>
@@ -244,7 +252,7 @@ export function SkillHubDirectoryScreen({
 												版本 {version.version}
 											</p>
 										</div>
-										<VersionBadges version={version} />
+										<SkillHubVersionBadges version={version} />
 										<p className="truncate text-muted-foreground text-xs">
 											版本 ID：{version.skillVersionId}
 										</p>
@@ -339,7 +347,7 @@ export function SkillHubVersionScreen({
 						固定版本 {version.version}
 					</p>
 				</div>
-				<VersionBadges version={version} />
+				<SkillHubVersionBadges version={version} />
 			</header>
 			<dl className="mt-6 grid gap-4 sm:grid-cols-2">
 				<Detail label="版本 ID" value={version.skillVersionId} />

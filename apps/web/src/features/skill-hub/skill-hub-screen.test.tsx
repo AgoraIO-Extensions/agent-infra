@@ -77,6 +77,11 @@ describe("SkillHubDirectoryScreen", () => {
 		expect(
 			screen.getByRole("link", { name: "release-notes" }).getAttribute("href"),
 		).toBe("/skills/release-notes-v1");
+		expect(screen.getByText("范围：私人 · 来源：我的库")).toBeTruthy();
+		expect(screen.getByText("范围：市场 · 来源：市场")).toBeTruthy();
+		expect(
+			screen.getByText("范围：市场 · 来源：市场").getAttribute("aria-label"),
+		).toBe("可见范围：市场；来源：市场");
 
 		fireEvent.change(screen.getByRole("searchbox", { name: "搜索 Skill" }), {
 			target: { value: "incident" },

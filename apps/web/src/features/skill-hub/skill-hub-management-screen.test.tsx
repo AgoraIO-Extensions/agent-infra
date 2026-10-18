@@ -67,6 +67,8 @@ describe("SkillHubManagementScreen", () => {
 			screen.getByRole("heading", { name: "管理固定版本与 Agent 配置。" }),
 		).toBeTruthy();
 		expect(screen.getByText("release-notes")).toBeTruthy();
+		expect(screen.getByText("范围：私人 · 来源：我的库")).toBeTruthy();
+		expect(screen.getByText("已发布")).toBeTruthy();
 		expect(
 			screen
 				.getByRole("link", { name: "打开 Skill 目录" })

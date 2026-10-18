@@ -45,6 +45,7 @@ import {
 	updateSkillHubProject,
 } from "./skill-hub-management.js";
 import {
+	SkillHubVersionBadges,
 	skillHubProviderLabels,
 	skillHubVisibilityLabels,
 } from "./skill-hub-screen.js";
@@ -841,15 +842,7 @@ export function SkillHubManagementScreen({
 													版本 {version.version} · {version.skillVersionId}
 												</p>
 											</div>
-											<div className="flex flex-wrap gap-2">
-												<Badge variant="secondary">
-													{skillHubProviderLabels[version.provider]}
-												</Badge>
-												<Badge variant="outline">
-													{skillHubVisibilityLabels[version.visibility]}
-												</Badge>
-												<Badge variant="outline">published</Badge>
-											</div>
+											<SkillHubVersionBadges version={version} />
 										</div>
 										<p className="mt-3 break-all text-muted-foreground text-xs">
 											digest: {version.packageDigest}
