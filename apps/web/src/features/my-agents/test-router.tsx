@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -61,5 +62,13 @@ export async function renderWithMyAgentsRouter(content: ReactNode) {
 		]),
 	});
 	await router.load();
-	return render(<RouterProvider router={router} />);
+	// 页面会按需读取目录显示名，测试路由与生产一样提供 QueryClient。
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false, gcTime: 0 } },
+	});
+	return render(
+		<QueryClientProvider client={client}>
+			<RouterProvider router={router} />
+		</QueryClientProvider>,
+	);
 }

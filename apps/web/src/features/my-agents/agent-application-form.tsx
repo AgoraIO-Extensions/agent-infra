@@ -687,6 +687,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const [coOwnerIds, setCoOwnerIds] = useState(
 		configuration?.owners.map((owner) => owner.userId).join("\n") ?? "",
 	);
+	// 编辑申请时，目录缺少 Owner 记录也显示申请投影中的 Owner 显示名。
+	const ownerLabels = Object.fromEntries(
+		(configuration?.owners ?? []).map((owner) => [
+			owner.userId,
+			owner.displayName,
+		]),
+	);
 	const [userAvailabilityIds, setUserAvailabilityIds] = useState(
 		configuration?.availability
 			.filter((target) => target.kind === "user")
@@ -1442,6 +1449,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								label="共同 Owner 用户"
 								help="至少保留一名有效 Owner"
 								value={coOwnerIds}
+								fallbackLabels={ownerLabels}
 								onChange={(value) => {
 									setCoOwnerIds(value);
 									clearFieldErrors("coOwnerIds");

@@ -218,6 +218,13 @@ export function AgentConfigurationScreen({
 		)
 		.join("、");
 	const isDisabled = submitting || agent.managementStatus === "disabled";
+	// 目录缺少 Owner 记录或读取失败时，chip 仍显示 Agent 投影中的 Owner 显示名。
+	const ownerLabels = Object.fromEntries(
+		agent.configuration.owners.map((owner) => [
+			owner.userId,
+			owner.displayName,
+		]),
+	);
 	// 正在替换默认 Key（已输入或已检查）也算改动：保存时要引导用户先完成检查（#2560）。
 	const hasChanges =
 		agentConfigurationDraftChanged(agent, draft) ||
@@ -466,23 +473,26 @@ export function AgentConfigurationScreen({
 									<legend className="font-semibold text-foreground text-sm">
 										Owner
 									</legend>
-									<DirectoryPicker
-										id="configuration-owner-ids"
-										kind="user"
-										label="共同 Owner 用户"
-										required
-										help="至少保留一名有效 Owner"
-										value={draft.coOwnerIds}
-										disabled={isDisabled}
-										error={ownerError}
-										onChange={(value) => {
-											setDraft((current) => ({
-												...current,
-												coOwnerIds: value,
-											}));
-											setOwnerError(undefined);
-										}}
-									/>
+									<div className="max-w-[720px]">
+										<DirectoryPicker
+											id="configuration-owner-ids"
+											kind="user"
+											label="共同 Owner 用户"
+											required
+											help="至少保留一名有效 Owner"
+											value={draft.coOwnerIds}
+											disabled={isDisabled}
+											error={ownerError}
+											fallbackLabels={ownerLabels}
+											onChange={(value) => {
+												setDraft((current) => ({
+													...current,
+													coOwnerIds: value,
+												}));
+												setOwnerError(undefined);
+											}}
+										/>
+									</div>
 								</fieldset>
 								<fieldset className="detail-section min-w-0 space-y-4 border-border border-t pt-5">
 									<legend className="font-semibold text-foreground text-sm">

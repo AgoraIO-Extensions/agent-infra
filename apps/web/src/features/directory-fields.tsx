@@ -1,4 +1,3 @@
-import { useQuery } from "@tanstack/react-query";
 import { SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -6,118 +5,36 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Listbox, ListboxOption } from "@/components/ui/listbox";
 import { cn } from "@/lib/utils";
+import {
+	AvailabilityNameList,
+	type DirectoryKind,
+	type DirectoryOption,
+	DirectoryReadAlert,
+	type DirectoryTarget,
+	readDirectory,
+	unresolvedDirectoryLabels,
+	useAvailabilityNames,
+} from "./directory-names.js";
 
-type DirectoryPickerKind = "user" | "organization";
-type DirectoryPickerOption = {
-	id: string;
-	name: string;
-	secondary: string;
-	detail?: string;
-	type: DirectoryPickerKind;
-};
-
-async function readDirectory(
-	kind: DirectoryPickerKind,
-	query: string,
-	ids: readonly string[],
-	signal: AbortSignal,
-): Promise<DirectoryPickerOption[]> {
-	const batches: readonly string[][] = ids.length
-		? Array.from({ length: Math.ceil(ids.length / 50) }, (_, index) =>
-				ids.slice(index * 50, (index + 1) * 50),
-			)
-		: [[]];
-	const results = await Promise.all(
-		batches.map(async (batch) => {
-			const params = new URLSearchParams({ kind, q: query, limit: "50" });
-			if (batch.length) params.set("ids", batch.join(","));
-			const response = await fetch(`/api/v2/directory/search?${params}`, {
-				signal,
-				headers: { Accept: "application/json" },
-			});
-			if (!response.ok) throw new Error("directory search unavailable");
-			const body = (await response.json()) as {
-				items?: {
-					kind: DirectoryPickerKind;
-					canonicalId: string;
-					displayName: string;
-					email?: string;
-					organizationPath?: string;
-				}[];
-			};
-			if (
-				!Array.isArray(body.items) ||
-				body.items.some(
-					(item) =>
-						!item ||
-						typeof item.canonicalId !== "string" ||
-						typeof item.displayName !== "string" ||
-						(item.email !== undefined && typeof item.email !== "string") ||
-						(item.organizationPath !== undefined &&
-							typeof item.organizationPath !== "string"),
-				)
-			)
-				throw new Error("directory response invalid");
-			return body.items
-				.filter(
-					(item) =>
-						item.kind === kind &&
-						(!batch.length || batch.includes(item.canonicalId)),
-				)
-				.map((item) => ({
-					id: item.canonicalId,
-					name: item.displayName,
-					secondary:
-						kind === "user"
-							? (item.email ?? "")
-							: (item.organizationPath ?? ""),
-					detail: kind === "user" ? item.organizationPath : undefined,
-					type: item.kind,
-				}));
-		}),
-	);
-	return results.flat();
-}
-
+/** 只读的使用范围：用户与组织合并读取，读取失败时只出现一条提示。 */
 export function DirectoryRecords({
-	kind,
-	ids,
+	targets,
+	empty = "未提供范围信息",
 }: {
-	kind: DirectoryPickerKind;
-	ids: readonly string[];
+	targets: readonly DirectoryTarget[];
+	empty?: string;
 }) {
-	const directory = useQuery({
-		queryKey: ["directory-records", kind, ids],
-		queryFn: ({ signal }) => readDirectory(kind, "", ids, signal),
-		gcTime: 0,
-		retry: false,
-	});
-	if (directory.isPending || directory.isFetching)
-		return <span role="status">正在读取目录…</span>;
-	if (directory.isError) return <span role="status">目录暂时无法读取</span>;
-
+	const names = useAvailabilityNames(targets);
 	return (
-		<ul className="space-y-2">
-			{ids.map((id) => {
-				const item = directory.data.find((item) => item.id === id);
-				return (
-					<li key={id}>
-						{item ? (
-							<>
-								<span>{item.name}</span>
-								{item.secondary ? (
-									<small className="block break-words text-muted-foreground">
-										{item.secondary}
-									</small>
-								) : null}
-							</>
-						) : (
-							"目录记录不可用"
-						)}
-					</li>
-				);
-			})}
-		</ul>
+		<div className="space-y-2">
+			<DirectoryReadAlert names={[names]} />
+			<AvailabilityNameList
+				targets={targets}
+				names={names}
+				layout="list"
+				empty={empty}
+			/>
+		</div>
 	);
 }
 
@@ -127,6 +44,41 @@ function splitDirectoryValue(value: string) {
 		.map((item) => item.trim())
 		.filter(Boolean);
 }
+
+function remember(
+	current: Record<string, DirectoryOption>,
+	nextOptions: readonly DirectoryOption[],
+) {
+	const merged = { ...current };
+	for (const option of nextOptions) merged[option.id] = option;
+	return merged;
+}
+
+export type DirectorySelection = {
+	id: string;
+	name: string;
+	secondary: string;
+	resolved: boolean;
+};
+type UnresolvedReason = "missing" | "failed";
+
+// 未解析记录的占位序号按 ID 固定：移除其他 chip 不会改名，同页不同选择器也不会重名。
+const placeholderNumbers: Record<DirectoryKind, Map<string, number>> = {
+	user: new Map(),
+	organization: new Map(),
+};
+function placeholderNumber(kind: DirectoryKind, item: string) {
+	const numbers = placeholderNumbers[kind];
+	const known = numbers.get(item);
+	if (known) return known;
+	const next = numbers.size + 1;
+	numbers.set(item, next);
+	return next;
+}
+const pendingDirectoryLabels: Record<DirectoryKind, string> = {
+	user: "用户",
+	organization: "组织",
+};
 
 export function DirectoryPicker({
 	id,
@@ -140,18 +92,24 @@ export function DirectoryPicker({
 	errorId: validationErrorId = `${id}-error`,
 	disabled = false,
 	required = false,
+	fallbackLabels,
+	closeOnSelect = false,
 }: {
 	id: string;
 	label: string;
 	help: string;
-	kind: DirectoryPickerKind;
+	kind: DirectoryKind;
 	value: string;
-	onChange: (value: string) => void;
+	onChange: (value: string, selection: readonly DirectorySelection[]) => void;
 	error?: string;
 	describedBy?: string;
 	errorId?: string;
 	disabled?: boolean;
 	required?: boolean;
+	/** 调用方已知的显示名，只在目录未返回该记录时使用。 */
+	fallbackLabels?: Readonly<Record<string, string>>;
+	/** 只取一项的调用方（例如员工访问控制）选中后收起，避免结果层盖住后续操作。 */
+	closeOnSelect?: boolean;
 }) {
 	const selectedIds = splitDirectoryValue(value);
 	const selectedKey = selectedIds.join(",");
@@ -159,48 +117,72 @@ export function DirectoryPicker({
 	const [open, setOpen] = useState(false);
 	const [activeIndex, setActiveIndex] = useState(0);
 	const [loading, setLoading] = useState(false);
-	const [directoryOptions, setDirectoryOptions] = useState<
-		DirectoryPickerOption[]
-	>([]);
+	const [directoryOptions, setDirectoryOptions] = useState<DirectoryOption[]>(
+		[],
+	);
 	const [knownDirectoryOptions, setKnownDirectoryOptions] = useState<
-		Record<string, DirectoryPickerOption>
+		Record<string, DirectoryOption>
 	>({});
+	const knownRef = useRef(knownDirectoryOptions);
+	knownRef.current = knownDirectoryOptions;
+	const [unresolvedReasons, setUnresolvedReasons] = useState<
+		Record<string, UnresolvedReason>
+	>({});
+	const reasonsRef = useRef(unresolvedReasons);
+	reasonsRef.current = unresolvedReasons;
 	const [directoryError, setDirectoryError] = useState(false);
 	const pickerRef = useRef<HTMLDivElement>(null);
+	const inputRef = useRef<HTMLInputElement>(null);
+	const expanded = open && !disabled;
+	// 收起时机：Esc；点击选择器之外；键盘把焦点移出选择器（例如 Tab 到下一个字段）。
+	// 指针操作在 click 之后才收起：窄屏结果层在文档流中，按下时收起会让下方控件位移、点击落空。
 	useEffect(() => {
-		if (!open) return;
-		const closeOnOutsidePointer = (event: PointerEvent) => {
-			if (
-				event.target instanceof Node &&
-				!pickerRef.current?.contains(event.target)
-			)
-				setOpen(false);
+		const picker = pickerRef.current;
+		if (!expanded || !picker) return;
+		let pointerOutside = false;
+		const inside = (target: EventTarget | null) =>
+			target instanceof Node && picker.contains(target);
+		const markPointer = (event: PointerEvent) => {
+			pointerOutside = !inside(event.target);
 		};
-		document.addEventListener("pointerdown", closeOnOutsidePointer);
-		return () =>
-			document.removeEventListener("pointerdown", closeOnOutsidePointer);
-	}, [open]);
+		const closeOnOutsideClick = (event: MouseEvent) => {
+			pointerOutside = false;
+			// 选中或移除会在冒泡途中卸载被点击的节点，按派发时的事件路径判断是否在选择器内。
+			if (!event.composedPath().includes(picker)) setOpen(false);
+		};
+		const resetPointer = () => {
+			pointerOutside = false;
+		};
+		const closeOnFocusLeave = (event: FocusEvent) => {
+			const next = event.relatedTarget;
+			if (inside(next) || pointerOutside) return;
+			if (next) setOpen(false);
+		};
+		document.addEventListener("pointerdown", markPointer, true);
+		// 捕获阶段监听：外部元素阻止冒泡时也能收起。
+		document.addEventListener("click", closeOnOutsideClick, true);
+		document.addEventListener("keydown", resetPointer, true);
+		picker.addEventListener("focusout", closeOnFocusLeave);
+		return () => {
+			document.removeEventListener("pointerdown", markPointer, true);
+			document.removeEventListener("click", closeOnOutsideClick, true);
+			document.removeEventListener("keydown", resetPointer, true);
+			picker.removeEventListener("focusout", closeOnFocusLeave);
+		};
+	}, [expanded]);
+	// 搜索结果：只在展开时读取。
 	useEffect(() => {
-		if (!open && !selectedKey) return;
+		if (!expanded) return;
 		const controller = new AbortController();
 		setDirectoryOptions([]);
 		setActiveIndex(0);
 		setLoading(true);
 		setDirectoryError(false);
-		readDirectory(
-			kind,
-			open ? query : "",
-			open ? [] : selectedKey.split(","),
-			controller.signal,
-		)
+		readDirectory(kind, query, [], controller.signal)
 			.then((nextOptions) => {
 				if (controller.signal.aborted) return;
 				setDirectoryOptions(nextOptions);
-				setKnownDirectoryOptions((current) => {
-					const merged = { ...current };
-					for (const option of nextOptions) merged[option.id] = option;
-					return merged;
-				});
+				setKnownDirectoryOptions((current) => remember(current, nextOptions));
 			})
 			.catch((error: unknown) => {
 				if (
@@ -215,36 +197,135 @@ export function DirectoryPicker({
 				if (!controller.signal.aborted) setLoading(false);
 			});
 		return () => controller.abort();
-	}, [kind, open, query, selectedKey]);
-	const options = directoryOptions;
-	const selected = selectedIds.map(
-		(id) =>
-			knownDirectoryOptions[id] ?? {
-				id,
-				name: "目录记录不可用",
-				secondary: "无法读取目录详情，请重新搜索",
-				type: kind,
-			},
+	}, [expanded, kind, query]);
+	// 已选记录：按 canonical ID 反查新出现或上次读取失败的条目，区分「缺失」与「读取失败」；
+	// 已确认缺失的条目不再重复请求。
+	useEffect(() => {
+		const missing = selectedKey
+			? selectedKey
+					.split(",")
+					.filter(
+						(item) =>
+							!knownRef.current[item] && reasonsRef.current[item] !== "missing",
+					)
+			: [];
+		if (!missing.length) return;
+		const controller = new AbortController();
+		setUnresolvedReasons((current) => {
+			const next = { ...current };
+			for (const item of missing) delete next[item];
+			return next;
+		});
+		readDirectory(kind, "", missing, controller.signal)
+			.then((found) => {
+				if (controller.signal.aborted) return;
+				setKnownDirectoryOptions((current) => remember(current, found));
+				const foundIds = new Set(found.map((option) => option.id));
+				setUnresolvedReasons((current) => {
+					const next = { ...current };
+					for (const item of missing)
+						if (!foundIds.has(item)) next[item] = "missing";
+					return next;
+				});
+			})
+			.catch((error: unknown) => {
+				if (
+					controller.signal.aborted ||
+					(error instanceof DOMException && error.name === "AbortError")
+				)
+					return;
+				setUnresolvedReasons((current) => {
+					const next = { ...current };
+					for (const item of missing) next[item] = "failed";
+					return next;
+				});
+			});
+		return () => controller.abort();
+	}, [kind, selectedKey]);
+	const visibleOptions = directoryOptions.filter(
+		(option) => !selectedIds.includes(option.id),
 	);
-	const add = (option: DirectoryPickerOption | undefined) => {
+	const listboxId = `${id}-options`;
+	const showListbox =
+		expanded && !loading && !directoryError && visibleOptions.length > 0;
+	const describe = (
+		ids: readonly string[],
+		extra?: DirectoryOption,
+	): DirectorySelection[] => {
+		return ids.map((item) => {
+			const option = extra?.id === item ? extra : knownDirectoryOptions[item];
+			if (option)
+				return {
+					id: item,
+					name: option.name,
+					secondary: option.secondary,
+					resolved: true,
+				};
+			const fallback = fallbackLabels?.[item]?.trim();
+			const reason = unresolvedReasons[item];
+			// 没有已知显示名时用可区分的序号占位，不显示内部 ID，也不让多个移除钮同名；
+			// 读取完成前不下「未识别」的结论。
+			return {
+				id: item,
+				name:
+					fallback ||
+					`${
+						reason
+							? unresolvedDirectoryLabels[kind]
+							: pendingDirectoryLabels[kind]
+					} ${placeholderNumber(kind, item)}`,
+				secondary:
+					reason === "failed"
+						? "目录详情暂时无法读取"
+						: reason === "missing"
+							? "目录中暂未找到该记录"
+							: "正在读取目录详情…",
+				resolved: false,
+			};
+		});
+	};
+	const selected = describe(selectedIds);
+	const focusInput = () =>
+		requestAnimationFrame(() => {
+			const input = inputRef.current;
+			if (!input) return;
+			input.focus();
+			const end = input.value.length;
+			input.setSelectionRange(end, end);
+		});
+	const add = (option: DirectoryOption | undefined) => {
 		if (
 			disabled ||
-			!open ||
+			!expanded ||
 			loading ||
 			directoryError ||
 			!option ||
 			selectedIds.includes(option.id)
 		)
 			return;
-		onChange([...selectedIds, option.id].join("\n"));
+		const next = [...selectedIds, option.id];
+		onChange(next.join("\n"), describe(next, option));
+		// 选中后保持展开，焦点回到输入框，便于连续多选。
 		setQuery("");
 		setActiveIndex(0);
-		setOpen(false);
+		setOpen(!closeOnSelect);
+		focusInput();
 	};
-	const remove = (id: string) => {
-		if (!disabled)
-			onChange(selectedIds.filter((item) => item !== id).join("\n"));
+	const remove = (item: string) => {
+		if (disabled) return;
+		const next = selectedIds.filter((selectedId) => selectedId !== item);
+		onChange(next.join("\n"), describe(next));
+		setOpen(true);
+		focusInput();
 	};
+	const clearQuery = () => {
+		setQuery("");
+		setActiveIndex(0);
+		setOpen(true);
+		focusInput();
+	};
+	const keepInputFocus = (event: { preventDefault: () => void }) =>
+		event.preventDefault();
 	return (
 		<div className="directory-field" ref={pickerRef}>
 			<Label htmlFor={id}>{label}</Label>
@@ -253,18 +334,24 @@ export function DirectoryPicker({
 			>
 				<div className="directory-chips">
 					{selected.map((item) => (
-						<span className="directory-chip" key={item.id}>
+						<span
+							className="directory-chip"
+							data-resolved={item.resolved || undefined}
+							key={item.id}
+						>
 							<span className="directory-chip-label">
 								<span className="directory-chip-name">{item.name}</span>
-								<small>{item.secondary}</small>
+								{item.secondary ? <small>{item.secondary}</small> : null}
 							</span>
 							<Button
 								disabled={disabled}
 								aria-label={`移除 ${item.name}`}
 								className="directory-chip-remove"
 								onClick={() => remove(item.id)}
-								size="icon-xs"
+								onMouseDown={keepInputFocus}
+								size="icon"
 								type="button"
+								variant="ghost"
 							>
 								<XIcon aria-hidden="true" size={14} />
 							</Button>
@@ -272,21 +359,24 @@ export function DirectoryPicker({
 					))}
 				</div>
 				<Input
+					ref={inputRef}
+					autoComplete="off"
 					disabled={disabled}
 					aria-required={required || undefined}
 					role="combobox"
 					aria-activedescendant={
-						open && options[activeIndex]
-							? `${id}-${options[activeIndex].id}`
+						showListbox && visibleOptions[activeIndex]
+							? `${id}-${visibleOptions[activeIndex].id}`
 							: undefined
 					}
-					aria-controls={`${id}-options`}
+					aria-autocomplete="list"
+					aria-controls={showListbox ? listboxId : undefined}
 					aria-describedby={
 						[describedBy, error ? validationErrorId : undefined]
 							.filter(Boolean)
 							.join(" ") || undefined
 					}
-					aria-expanded={open}
+					aria-expanded={expanded}
 					aria-invalid={error ? true : undefined}
 					aria-label={label}
 					className="directory-input"
@@ -296,21 +386,25 @@ export function DirectoryPicker({
 						setActiveIndex(0);
 						setOpen(true);
 					}}
+					onClick={() => setOpen(true)}
 					onFocus={() => setOpen(true)}
 					onKeyDown={(event) => {
 						if (event.key === "ArrowDown") {
 							event.preventDefault();
 							setOpen(true);
 							setActiveIndex((index) =>
-								Math.min(index + 1, Math.max(options.length - 1, 0)),
+								Math.min(index + 1, Math.max(visibleOptions.length - 1, 0)),
 							);
 						} else if (event.key === "ArrowUp") {
 							event.preventDefault();
+							setOpen(true);
 							setActiveIndex((index) => Math.max(index - 1, 0));
 						} else if (event.key === "Enter") {
 							event.preventDefault();
-							add(options[activeIndex]);
-						} else if (event.key === "Escape") {
+							add(visibleOptions[activeIndex]);
+						} else if (event.key === "Escape" && expanded) {
+							event.preventDefault();
+							event.stopPropagation();
 							setOpen(false);
 						}
 					}}
@@ -324,12 +418,8 @@ export function DirectoryPicker({
 					value={query}
 				/>
 			</div>
-			{open && !disabled && (
-				<Listbox
-					aria-busy={loading}
-					className="directory-menu"
-					id={`${id}-options`}
-				>
+			{expanded && (
+				<div className="directory-menu">
 					{loading ? (
 						<div className="directory-status" role="status" aria-live="polite">
 							<span className="directory-status-spinner" aria-hidden="true" />
@@ -346,7 +436,7 @@ export function DirectoryPicker({
 								请稍后重试或联系管理员。
 							</p>
 						</div>
-					) : options.length === 0 ? (
+					) : visibleOptions.length === 0 ? (
 						<div className="directory-status" role="status" aria-live="polite">
 							<SearchIcon aria-hidden="true" size={16} />
 							<p>
@@ -357,10 +447,14 @@ export function DirectoryPicker({
 							</p>
 						</div>
 					) : (
-						<>
-							{options.map((option, index) => (
+						<Listbox
+							aria-label={`${label}搜索结果`}
+							className="directory-results"
+							id={listboxId}
+						>
+							{visibleOptions.map((option, index) => (
 								<ListboxOption
-									aria-selected={selectedIds.includes(option.id)}
+									aria-selected={false}
 									className={cn(
 										"directory-result",
 										index === activeIndex && "directory-result-active",
@@ -368,6 +462,7 @@ export function DirectoryPicker({
 									id={`${id}-${option.id}`}
 									key={option.id}
 									onClick={() => add(option)}
+									onMouseDown={keepInputFocus}
 									onMouseEnter={() => setActiveIndex(index)}
 									type="button"
 									variant="ghost"
@@ -390,18 +485,21 @@ export function DirectoryPicker({
 									</span>
 								</ListboxOption>
 							))}
-							<Button
-								className="directory-clear"
-								onClick={() => setQuery("")}
-								size="xs"
-								type="button"
-								variant="ghost"
-							>
-								清空搜索
-							</Button>
-						</>
+						</Listbox>
 					)}
-				</Listbox>
+					{query && !loading ? (
+						<Button
+							className="directory-clear"
+							onClick={clearQuery}
+							onMouseDown={keepInputFocus}
+							tabIndex={-1}
+							type="button"
+							variant="ghost"
+						>
+							清空搜索
+						</Button>
+					) : null}
+				</div>
 			)}
 			<div className="directory-help">
 				<span>{help}</span>

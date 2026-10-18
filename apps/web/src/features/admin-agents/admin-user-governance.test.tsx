@@ -69,6 +69,13 @@ describe("Administrator employee access control", () => {
 		fireEvent.focus(screen.getByRole("combobox", { name: "员工" }));
 		await screen.findByRole("option", { name: /Alice/ });
 		fireEvent.click(screen.getByRole("option", { name: /Alice/ }));
+		// 单选场景选中后收起结果层，避免盖住状态与操作按钮。
+		expect(
+			screen
+				.getByRole("combobox", { name: "员工" })
+				.getAttribute("aria-expanded"),
+		).toBe("false");
+		expect(screen.queryByRole("listbox")).toBeNull();
 		await screen.findByText("当前状态：未禁用");
 		fireEvent.click(screen.getByRole("button", { name: "禁用员工" }));
 		await waitFor(() =>

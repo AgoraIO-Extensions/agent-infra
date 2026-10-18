@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Timestamp } from "@/components/ui/timestamp";
 import type {
 	AgentProjectionV2,
 	ConversationDetailProjectionV2,
@@ -218,12 +219,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 												<h3>{conversation.title ?? "未命名对话"}</h3>
 												<p>
 													{agent?.name ?? "所属 Agent 暂时无法读取"} ·{" "}
-													<time dateTime={conversation.updatedAt}>
-														{new Date(conversation.updatedAt).toLocaleString(
-															"zh-CN",
-															{ dateStyle: "medium", timeStyle: "short" },
-														)}
-													</time>
+													<Timestamp value={conversation.updatedAt} />
 												</p>
 												{readOnly && (
 													<p>历史仍可查看，当前不能继续发送消息。</p>

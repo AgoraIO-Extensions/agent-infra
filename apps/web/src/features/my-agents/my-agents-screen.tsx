@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Timestamp } from "@/components/ui/timestamp";
 
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentChannelKindLabels } from "../agent-discovery/agent-discovery-screen.js";
@@ -14,6 +15,12 @@ import {
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
+import {
+	AvailabilityNameList,
+	DirectoryReadAlert,
+	formatPerson,
+	useAvailabilityNames,
+} from "../directory-names.js";
 import {
 	agentApplicationEditActionLabels,
 	getAgentApplicationEditAction,
@@ -46,6 +53,10 @@ export function MyAgentsScreen({
 	retryingOwnedAgents = false,
 }: MyAgentsScreenProps) {
 	const id = useId();
+	// 同一页面的全部使用范围合并后读取一次目录。
+	const names = useAvailabilityNames(
+		(ownedAgents ?? []).flatMap((agent) => agent.configuration.availability),
+	);
 	return (
 		<section aria-labelledby={`${id}-heading`}>
 			<header className="page-heading">
@@ -135,10 +146,7 @@ export function MyAgentsScreen({
 											</Link>
 											<p>{application.description}</p>
 											<p className="text-sm">
-												提交于{" "}
-												<time dateTime={application.submittedAt}>
-													{application.submittedAt}
-												</time>
+												提交于 <Timestamp value={application.submittedAt} />
 											</p>
 										</div>
 
@@ -214,81 +222,90 @@ export function MyAgentsScreen({
 							</EmptyDescription>
 						</Empty>
 					) : (
-						<ul className="owned-agent-grid" aria-label="我管理的 Agent">
-							{ownedAgents.map((agent) => (
-								<li className="owned-agent-card" key={agent.agentId}>
-									<div className="owned-card-heading">
-										<span className="agent-detail-mark" aria-hidden="true">
-											{Array.from(agent.name)[0]}
-										</span>
-										<div>
-											<h2>{agent.name}</h2>
-											<p>
-												Owner ·{" "}
-												{agent.configuration.owners
-													.map((owner) => owner.displayName || owner.userId)
-													.join("、")}
-											</p>
+						<>
+							<DirectoryReadAlert names={[names]} className="mb-4" />
+							<ul className="owned-agent-grid" aria-label="我管理的 Agent">
+								{ownedAgents.map((agent) => (
+									<li className="owned-agent-card" key={agent.agentId}>
+										<div className="owned-card-heading">
+											<span className="agent-detail-mark" aria-hidden="true">
+												{Array.from(agent.name)[0]}
+											</span>
+											<div>
+												<h2>{agent.name}</h2>
+												<p>
+													Owner ·{" "}
+													{agent.configuration.owners
+														.map(
+															(owner) =>
+																formatPerson({ displayName: owner.displayName })
+																	.name,
+														)
+														.join("、")}
+												</p>
+											</div>
+											<Badge
+												variant="outline"
+												data-status={agent.managementStatus}
+											>
+												{agentManagementStatusLabels[agent.managementStatus]}
+											</Badge>
 										</div>
-										<Badge
-											variant="outline"
-											data-status={agent.managementStatus}
-										>
-											{agentManagementStatusLabels[agent.managementStatus]}
-										</Badge>
-									</div>
-									{agent.serviceAvailability && (
-										<Badge
-											variant="outline"
-											data-status={agent.serviceAvailability}
-										>
-											服务：
-											{agentServiceAvailabilityLabel(agent.serviceAvailability)}
-										</Badge>
-									)}
-									<dl className="metadata-facts">
-										<dt>可用范围</dt>
-										<dd>
-											{agent.configuration.availability
-												.map((target) =>
-													target.kind === "user"
-														? `用户 ${target.userId}`
-														: `组织 ${target.organizationId}`,
-												)
-												.join("、") || "未额外指定"}
-										</dd>
-										<dt>渠道</dt>
-										<dd>
-											{agent.configuration.channels
-												.map((channel) => agentChannelKindLabels[channel.kind])
-												.join("、") || "未配置"}
-										</dd>
-										<dt>模型</dt>
-										<dd>
-											{agent.configuration.modelOptions
-												.map((model) => model.displayName)
-												.join("、") || "未提供模型选项"}
-										</dd>
-									</dl>
-									<div className="actions">
-										<Link
-											className={buttonVariants({ variant: "outline" })}
-											params={{ agentId: agent.agentId }}
-											to="/agents/$agentId/configuration"
-										>
-											配置与管理
-										</Link>
-										<Link
-											className={buttonVariants({ variant: "ghost" })}
-											params={{ agentId: agent.agentId }}
-											to="/agents/$agentId"
-										>
-											查看详情
-										</Link>
-									</div>
-								</li>
-							))}
-						</ul>
+										{agent.serviceAvailability && (
+											<Badge
+												variant="outline"
+												data-status={agent.serviceAvailability}
+											>
+												服务：
+												{agentServiceAvailabilityLabel(
+													agent.serviceAvailability,
+												)}
+											</Badge>
+										)}
+										<dl className="metadata-facts">
+											<dt>可用范围</dt>
+											<dd>
+												<AvailabilityNameList
+													targets={agent.configuration.availability}
+													names={names}
+													empty="未额外指定"
+												/>
+											</dd>
+											<dt>渠道</dt>
+											<dd>
+												{agent.configuration.channels
+													.map(
+														(channel) => agentChannelKindLabels[channel.kind],
+													)
+													.join("、") || "未配置"}
+											</dd>
+											<dt>模型</dt>
+											<dd>
+												{agent.configuration.modelOptions
+													.map((model) => model.displayName)
+													.join("、") || "未提供模型选项"}
+											</dd>
+										</dl>
+										<div className="actions">
+											<Link
+												className={buttonVariants({ variant: "outline" })}
+												params={{ agentId: agent.agentId }}
+												to="/agents/$agentId/configuration"
+											>
+												配置与管理
+											</Link>
+											<Link
+												className={buttonVariants({ variant: "ghost" })}
+												params={{ agentId: agent.agentId }}
+												to="/agents/$agentId"
+											>
+												查看详情
+											</Link>
+										</div>
+									</li>
+								))}
+							</ul>
+						</>
 					)}
 				</TabsContent>
 			</Tabs>

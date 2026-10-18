@@ -1,10 +1,25 @@
 import { AgentApplicationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MyAgentApplicationDetailScreen } from "./my-agent-application-detail-screen.js";
 import { pendingApplication } from "./test-fixtures.js";
 import { renderWithMyAgentsRouter } from "./test-router.js";
+
+const originalTimeZone = process.env.TZ;
+afterEach(() => {
+	// 原值为空时删除变量，避免写入字符串 "undefined"。
+	if (originalTimeZone === undefined) delete process.env.TZ;
+	else process.env.TZ = originalTimeZone;
+	vi.unstubAllGlobals();
+});
+
+/** 时间按本地时区显示在 <time> 中，悬停 title 为完整本地时间，不出现 ISO 原文。 */
+function expectLocalTimestamp(value: string, full: string) {
+	const time = document.querySelector(`time[datetime="${value}"]`);
+	expect(time?.getAttribute("title")).toBe(full);
+	expect(document.body.textContent).not.toContain(value);
+}
 
 describe("MyAgentApplicationDetailScreen", () => {
 	it.each([
@@ -83,6 +98,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 	});
 
 	it("renders a rejected application history without lifecycle controls", async () => {
+		process.env.TZ = "Asia/Shanghai";
 		const rejectedApplication = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			applicationId: "application-pilot-rejected",
@@ -106,8 +122,8 @@ describe("MyAgentApplicationDetailScreen", () => {
 			screen.getByText("Resource capacity is currently unavailable."),
 		).toBeTruthy();
 		expect(screen.getByText(/提交于/)).toBeTruthy();
-		expect(screen.getByText("2026-09-03T08:00:00Z").tagName).toBe("TIME");
-		expect(screen.getByText("2026-09-03T09:00:00Z").tagName).toBe("TIME");
+		expectLocalTimestamp("2026-09-03T08:00:00Z", "2026 年 9 月 3 日 16:00:00");
+		expectLocalTimestamp("2026-09-03T09:00:00Z", "2026 年 9 月 3 日 17:00:00");
 		expect(screen.queryByRole("button", { name: "撤回申请" })).toBeNull();
 		expect(
 			screen.getByRole("link", { name: "修改并重新提交" }).getAttribute("href"),
@@ -116,6 +132,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 	});
 
 	it("renders an approved decision history without inventing a rejection reason", async () => {
+		process.env.TZ = "Asia/Shanghai";
 		const approvedApplication = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			applicationId: "application-pilot-approved",
@@ -136,7 +153,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 
 		expect(screen.getByText("创建中")).toBeTruthy();
 		expect(screen.getByText("审批时间")).toBeTruthy();
-		expect(screen.getByText("2026-09-03T10:00:00Z").tagName).toBe("TIME");
+		expectLocalTimestamp("2026-09-03T10:00:00Z", "2026 年 9 月 3 日 18:00:00");
 		expect(screen.queryByText("审批原因：")).toBeNull();
 	});
 
@@ -267,6 +284,35 @@ describe("MyAgentApplicationDetailScreen", () => {
 				secrets: [{ name: "MODEL_API_KEY", isSet: true, version: 2 }],
 			},
 		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request) => {
+				const kind = new URL(
+					String(input),
+					"http://localhost",
+				).searchParams.get("kind");
+				return Response.json({
+					items:
+						kind === "user"
+							? [
+									{
+										kind,
+										canonicalId: "user-release-2",
+										displayName: "发布用户二",
+										email: "release.two@example.test",
+									},
+								]
+							: [
+									{
+										kind,
+										canonicalId: "org-platform",
+										displayName: "平台工程",
+										organizationPath: "研发 / 平台工程",
+									},
+								],
+				});
+			}),
+		);
 		await renderWithMyAgentsRouter(
 			<MyAgentApplicationDetailScreen
 				onWithdraw={vi.fn()}
@@ -276,8 +322,12 @@ describe("MyAgentApplicationDetailScreen", () => {
 		);
 		expect(screen.getByText(application.description)).toBeTruthy();
 		expect(screen.getByText("Applicant")).toBeTruthy();
-		expect(screen.getByText("用户 user-release-2")).toBeTruthy();
-		expect(screen.getByText("组织 org-platform")).toBeTruthy();
+		// 使用范围按目录显示姓名与组织名，不显示内部 ID。
+		expect(await screen.findByText("发布用户二")).toBeTruthy();
+		expect(screen.getByText("平台工程")).toBeTruthy();
+		expect(document.body.textContent).not.toMatch(
+			/user-release-2|org-platform/,
+		);
 		expect(
 			screen.getByText("Release model · release-model-v1 · medium、high"),
 		).toBeTruthy();

@@ -110,6 +110,7 @@ export function AdminUserGovernance() {
 				id="admin-user-governance-user"
 				kind="user"
 				label="员工"
+				closeOnSelect
 				onChange={(value) => setUserId(oneUser(value))}
 				value={userId}
 			/>

@@ -165,7 +165,3 @@ export function auditOutcomeLabel(record: AuditRecord) {
 		return "访问获准";
 	return auditResultLabels[record.result];
 }
-
-export function auditTimestamp(value: string) {
-	return new Date(value).toLocaleString("zh-CN", { hour12: false });
-}

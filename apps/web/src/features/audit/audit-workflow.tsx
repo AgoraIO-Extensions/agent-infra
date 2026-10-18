@@ -33,17 +33,26 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import { Timestamp } from "@/components/ui/timestamp";
 import { useApplicationSession } from "../application-shell.js";
+import {
+	DirectoryReadAlert,
+	formatPerson,
+	useDirectoryNames,
+} from "../directory-names.js";
 import {
 	auditActionLabels,
 	auditOutcomeLabel,
 	auditPrincipalLabels,
 	auditResultLabels,
 	auditSubjectLabels,
-	auditTimestamp,
 } from "./audit-labels.js";
 import type { AuditFilters, AuditScope } from "./audit-query.js";
-import { AuditRecordDetail } from "./audit-record-detail.js";
+import {
+	AuditPrincipalName,
+	AuditRecordDetail,
+	auditUserIds,
+} from "./audit-record-detail.js";
 import { useAuditQuery } from "./use-audit-query.js";
 
 export function AuditWorkflow({ scope }: { scope: AuditScope }) {
@@ -80,6 +89,11 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 	const denied = query.status === "denied";
 	const items = busy || formFailure ? [] : query.items;
 	const administrator = scope === "administrator";
+	// 列表与详情中的用户主体合并读取一次目录；后台组件与应用主体不是目录记录。
+	const userNames = useDirectoryNames(
+		"user",
+		auditUserIds([...items, ...(query.detail ? [query.detail] : [])]),
+	);
 	const admin = session.user.roles.includes("system_admin");
 	const fieldId = (name: string) => `${formId}-${name}`;
 	function apply(event: FormEvent<HTMLFormElement>) {
@@ -191,7 +205,8 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 			)}
 			{!administrator && (
 				<p className="mb-5 break-words text-muted-foreground text-sm">
-					审计范围：当前用户 · {session.user.displayName || session.user.userId}
+					审计范围：当前用户 ·{" "}
+					{formatPerson({ displayName: session.user.displayName }).name}
 				</p>
 			)}
 			<form
@@ -300,6 +315,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 						</p>
 					)}
 				</div>
+				<DirectoryReadAlert names={[userNames]} className="mb-4" />
 				{denied ? (
 					<Alert variant="destructive">
 						<AlertDescription>
@@ -344,9 +360,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 								{items.map((record) => (
 									<TableRow key={record.auditId}>
 										<TableCell data-label="时间">
-											<time dateTime={record.occurredAt}>
-												{auditTimestamp(record.occurredAt)}
-											</time>
+											<Timestamp value={record.occurredAt} />
 										</TableCell>
 										<TableCell data-label="事件">
 											<strong className="font-medium">
@@ -374,13 +388,22 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 												可信操作主体 · {auditPrincipalLabels[record.actor.kind]}
 											</span>
 											<small className="mt-1 block break-all">
-												{record.actor.actorId}
+												<AuditPrincipalName
+													kind={record.actor.kind}
+													id={record.actor.actorId}
+													names={userNames}
+												/>
 											</small>
 											{record.originalPrincipal && (
 												<small className="mt-1 block break-all text-muted-foreground">
 													原发起主体 ·{" "}
 													{auditPrincipalLabels[record.originalPrincipal.kind]}
-													：{record.originalPrincipal.id}
+													：
+													<AuditPrincipalName
+														kind={record.originalPrincipal.kind}
+														id={record.originalPrincipal.id}
+														names={userNames}
+													/>
 												</small>
 											)}
 										</TableCell>
@@ -507,7 +530,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 									<RotateCcw aria-hidden="true" />
 								</Button>
 							</div>
-							<AuditRecordDetail record={query.detail} />
+							<AuditRecordDetail record={query.detail} names={userNames} />
 						</>
 					) : null}
 				</section>

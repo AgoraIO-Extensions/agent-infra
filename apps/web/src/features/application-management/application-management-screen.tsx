@@ -13,12 +13,18 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Timestamp } from "@/components/ui/timestamp";
 import type { ApplicationMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	type PersonalApiCredentialScope,
 	personalApiCredentialScopeLabels,
 	personalApiCredentialScopes,
 } from "../api-credentials/api-credentials.js";
+import {
+	DirectoryNameText,
+	DirectoryReadAlert,
+	useDirectoryNames,
+} from "../directory-names.js";
 import { ApplicationCredentialResult } from "./application-credential-result.js";
 import type {
 	ApplicationCredentialRequest,
@@ -47,10 +53,6 @@ type ApplicationManagementScreenProps = {
 };
 
 const defaultScopes: PersonalApiCredentialScope[] = ["agent:read"];
-
-function formatDate(value: string) {
-	return new Date(value).toLocaleString("zh-CN");
-}
 
 function errorMessage(error: unknown, fallback: string) {
 	return error instanceof Error && error.message ? error.message : fallback;
@@ -259,6 +261,12 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 	const [credentialResult, setCredentialResult] =
 		useState<ApplicationCredentialResponse | null>(null);
 	const [submitting, setSubmitting] = useState(false);
+	// 负责人与凭证接收用户合并读取一次目录，页面不显示用户 ID。
+	const recipient = credentialResult?.delivery.recipient;
+	const userNames = useDirectoryNames("user", [
+		application.responsibleUserId,
+		...(recipient?.principalType === "user" ? [recipient.principalId] : []),
+	]);
 	useLayoutEffect(() => {
 		active.current = true;
 		return () => {
@@ -375,20 +383,31 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 				<dl className="mt-5 grid gap-3 text-sm sm:grid-cols-3">
 					<div>
 						<dt className="text-muted-foreground">负责人</dt>
-						<dd>{application.responsibleUserId}</dd>
+						<dd>
+							<DirectoryNameText
+								name={userNames.resolve(application.responsibleUserId)}
+								status={userNames.status}
+							/>
+						</dd>
 					</div>
 					<div>
 						<dt className="text-muted-foreground">创建时间</dt>
-						<dd>{formatDate(application.createdAt)}</dd>
+						<dd>
+							<Timestamp value={application.createdAt} />
+						</dd>
 					</div>
 					<div>
 						<dt className="text-muted-foreground">更新时间</dt>
-						<dd>{formatDate(application.updatedAt)}</dd>
+						<dd>
+							<Timestamp value={application.updatedAt} />
+						</dd>
 					</div>
 				</dl>
 			</div>
+			<DirectoryReadAlert names={[userNames]} />
 			{credentialResult ? (
 				<ApplicationCredentialResult
+					names={userNames}
 					result={credentialResult}
 					onPrepareRotation={
 						props.onIssueCredential ? prepareRotation : undefined
