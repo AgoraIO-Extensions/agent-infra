@@ -27,6 +27,7 @@ import {
 	expectFieldLabel,
 	expectFormSection,
 	expectNoLegendOnBorder,
+	expectSearchInput,
 	resolved,
 } from "./primitive-styles";
 
@@ -968,31 +969,86 @@ test("administrator rejection, approval, empty queue and pending controls", asyn
 }, info) => {
 	const api = await fixture(page, "admin");
 	await page.goto("/admin/approvals");
-	await page.getByRole("button", { name: "审阅申请" }).click();
-	await page.getByRole("button", { name: "驳回", exact: true }).click();
+	const review = page.getByRole("button", { name: /^审阅：/ });
+	await expect(review).toHaveText("审阅");
+	// N-06（安全）：键盘打开后焦点在弹窗容器；直接按 Enter、Space 不会提交决定。
+	await review.focus();
+	await page.keyboard.press("Enter");
+	const dialog = page.getByRole("dialog", { name: "审阅创建申请" });
+	await expect(dialog).toBeFocused();
+	await page.keyboard.press("Enter");
+	await page.keyboard.press("Space");
+	await page.waitForTimeout(500);
+	expect(api.commands).toHaveLength(0);
+	await expect(dialog).toBeVisible();
+	await page.keyboard.press("Tab");
+	await expect(dialog.getByRole("button", { name: "关闭" })).toBeFocused();
+	// G-05：「驳回并说明」切到「填写驳回原因」，焦点回到弹窗容器。
+	await dialog.getByRole("button", { name: "驳回并说明" }).click();
+	const rejectDialog = page.getByRole("dialog", { name: "填写驳回原因" });
+	await expect(rejectDialog).toBeFocused();
 	const reject = page.getByRole("button", { name: "确认驳回" });
 	await reject.click();
-	await expect(page.getByLabel("驳回原因")).toBeFocused();
+	await expect(page.getByLabel("驳回原因", { exact: true })).toBeFocused();
+	expect(api.commands).toHaveLength(0);
+	const error = rejectDialog.getByRole("alert");
+	await expect(error).toHaveText("请填写驳回原因。");
+	expect(
+		await error.evaluate((element) => ({
+			fontSize: getComputedStyle(element).fontSize,
+			color: getComputedStyle(element).color,
+			marginTop: getComputedStyle(element).marginTop,
+		})),
+	).toEqual({
+		fontSize: "12px",
+		color: await resolved(page, "color", "var(--danger-ink)"),
+		marginTop: "6px",
+	});
+	await expect(page.getByLabel("驳回原因", { exact: true })).toHaveAttribute(
+		"aria-invalid",
+		"true",
+	);
+	await expect(page.getByText("请输入驳回原因。")).toHaveCount(0);
 	// N-18：弹窗（Portal）内的 textarea 与页面字段一致，为 2px、offset 3px 的 outline，不叠加 ring。
 	expect(
-		await page.getByLabel("驳回原因").evaluate((element) => ({
+		await page.getByLabel("驳回原因", { exact: true }).evaluate((element) => ({
 			style: getComputedStyle(element).outlineStyle,
 			width: getComputedStyle(element).outlineWidth,
 			offset: getComputedStyle(element).outlineOffset,
 			shadow: getComputedStyle(element).boxShadow,
 		})),
 	).toEqual({ style: "solid", width: "2px", offset: "3px", shadow: "none" });
-	await page.getByLabel("驳回原因").fill("  Capacity is unavailable  ");
+	await page
+		.getByLabel("驳回原因", { exact: true })
+		.fill("  Capacity is unavailable  ");
+	// 设计 footer 顺序为 [ghost 取消][primary 确认驳回]。
+	await page.keyboard.press("Tab");
+	await expect(
+		rejectDialog.getByRole("button", { name: "取消" }),
+	).toBeFocused();
 	await page.keyboard.press("Tab");
 	await expect(reject).toBeFocused();
 	await capture(page, info, "approvals");
 	api.holdNextCommand();
 	await page.keyboard.press("Enter");
 	await expect(page.getByRole("button", { name: "提交中…" })).toBeDisabled();
-	await expect(page.getByRole("button", { name: "返回审阅" })).toBeDisabled();
+	await expect(
+		rejectDialog.getByRole("button", { name: "取消" }),
+	).toBeDisabled();
 	api.release();
-	await expect(pageStatus(page)).toBeFocused();
+	// NI-79 / NI-105：队列清空后焦点落到页面 h1，Toast 只播报不抢焦点；越过 Toast 时长后仍不落到 body。
+	const heading = page.getByRole("heading", { level: 1 });
+	await expect(heading).toBeFocused();
 	await expect(page.getByText("暂无待审批申请。")).toBeVisible();
+	const toast = page.locator('[data-slot="toast"]');
+	await expect(toast).toHaveText("已驳回，申请人会看到修改原因");
+	for (const wait of [1_200, 1_800]) {
+		await page.waitForTimeout(wait);
+		await expect(heading).toBeFocused();
+	}
+	await expect(toast).toHaveText("");
+	await expect(toast.locator("[tabindex]")).toHaveCount(0);
+	await expect(page.getByText(/已提交 .* 的审批结果/)).toHaveCount(0);
 	expect(api.commands[0]?.body).toEqual({
 		schemaVersion: 1,
 		decision: "reject",
@@ -1005,13 +1061,106 @@ test("administrator rejection, approval, empty queue and pending controls", asyn
 		.click();
 	await expect(pageStatus(page)).toBeVisible();
 	await page.goto("/admin/approvals");
-	await page.getByRole("button", { name: "审阅申请" }).click();
-	await page.getByRole("button", { name: "批准并创建" }).click();
-	await expect(pageStatus(page)).toContainText("创建中");
+	await page.getByRole("button", { name: /^审阅：/ }).click();
+	await page.getByRole("button", { name: "批准申请" }).click();
+	await expect(toast).toHaveText("申请已批准，创建任务已进入后台");
+	await expect(heading).toBeFocused();
 	expect(api.commands.at(-1)?.body).toEqual({
 		schemaVersion: 1,
 		decision: "approve",
 	});
+});
+
+test("approval review dialog follows the design facts, notice and footer", async ({
+	page,
+}) => {
+	await fixture(page, "admin");
+	const narrow = test.info().project.name === "mobile";
+	await page.goto("/admin/approvals");
+	await page.getByRole("button", { name: /^审阅：/ }).click();
+	const dialog = page.getByRole("dialog", { name: "审阅创建申请" });
+	await expect(dialog).toBeVisible();
+	// AP-03：facts 标签列 150px、gap 10px 18px、13px，dt muted；390 下单列。
+	const facts = dialog.locator("dl");
+	const style = await facts.evaluate((element) => {
+		const css = getComputedStyle(element);
+		const dt = element.querySelector("dt") as HTMLElement;
+		return {
+			columns: css.gridTemplateColumns.split(" "),
+			gap: css.gap,
+			fontSize: css.fontSize,
+			dtColor: getComputedStyle(dt).color,
+			terms: [...element.querySelectorAll("dt")].map(
+				(node) => node.textContent,
+			),
+		};
+	});
+	if (narrow) expect(style.columns).toHaveLength(1);
+	else {
+		expect(style.columns[0]).toBe("150px");
+		expect(style.gap).toBe("10px 18px");
+	}
+	expect(style.fontSize).toBe("13px");
+	expect(style.dtColor).toBe(
+		await resolved(page, "color", "var(--muted-foreground)"),
+	);
+	expect(style.terms.slice(0, 2)).toEqual(["申请", "说明"]);
+	expect(style.terms).toEqual(
+		expect.arrayContaining(["预设规格", "预计资源占用"]),
+	);
+	// facts 之后是静态 warn notice「审批判断」（margin-top 18px、17px 图标为 --warning、无 role）。
+	const notice = dialog.locator('[data-slot="alert"][data-tone="warn"]');
+	await expect(notice).toContainText("审批判断");
+	const noticeStyle = await notice.evaluate((element) => {
+		const svg = element.querySelector("svg") as SVGElement;
+		let role: string | null = null;
+		for (
+			let node: Element | null = element;
+			node && node.getAttribute("role") !== "dialog";
+			node = node.parentElement
+		)
+			role ??= node.getAttribute("role");
+		return {
+			marginTop: getComputedStyle(element).marginTop,
+			icon: [svg.getBoundingClientRect().width, getComputedStyle(svg).color],
+			role,
+		};
+	});
+	expect(noticeStyle).toEqual({
+		marginTop: "18px",
+		icon: [17, await resolved(page, "color", "var(--warning)")],
+		role: null,
+	});
+	// AP-03：footer 右对齐，依次为 outline「驳回并说明」、primary「批准申请」，右缘距弹窗内边 24px（窄屏 19px）。
+	const footer = dialog.locator('[data-slot="dialog-footer"]');
+	await expect(footer.getByRole("button")).toHaveText([
+		"驳回并说明",
+		"批准申请",
+	]);
+	expect(
+		await footer.evaluate(
+			(element) => getComputedStyle(element).justifyContent,
+		),
+	).toBe("flex-end");
+	const dialogBox = await dialog.boundingBox();
+	const approveBox = await footer
+		.getByRole("button", { name: "批准申请" })
+		.boundingBox();
+	expect(
+		Math.abs(
+			(dialogBox?.x ?? 0) +
+				(dialogBox?.width ?? 0) -
+				((approveBox?.x ?? 0) + (approveBox?.width ?? 0)) -
+				(narrow ? 20 : 25),
+		),
+	).toBeLessThanOrEqual(1);
+	for (const name of ["取消", "批准并创建", "驳回"])
+		await expect(dialog.getByRole("button", { name, exact: true })).toHaveCount(
+			0,
+		);
+	// F-02：模型以显示名为主，modelId 只作等宽次要文字；默认模型不出现 optionId 原值。
+	await expect(dialog).not.toContainText("（gpt-5）");
+	await expect(dialog).not.toContainText("model-primary");
 });
 
 test("administrator can recover a temporarily unavailable pending queue", async ({
@@ -1029,7 +1178,7 @@ test("administrator can recover a temporarily unavailable pending queue", async 
 	api.recoverPendingQueue();
 	await retry.focus();
 	await page.keyboard.press("Enter");
-	await expect(page.getByRole("button", { name: "审阅申请" })).toBeVisible();
+	await expect(page.getByRole("button", { name: /^审阅：/ })).toBeVisible();
 	await capture(page, info, "approvals-recovered");
 });
 
@@ -2368,7 +2517,7 @@ for (const route of [
 			).toBeVisible();
 		else if (route === "/admin/approvals")
 			await expect(
-				page.getByRole("button", { name: "审阅申请", exact: true }).first(),
+				page.getByRole("button", { name: /^审阅：/ }).first(),
 			).toBeVisible();
 		else if (route === "/my-agents")
 			await expect(
@@ -2616,7 +2765,7 @@ test("approvals show local submitted times with full titles", async ({
 	await fixture(page, "admin");
 	await page.goto("/admin/approvals");
 	await expect(
-		page.getByRole("button", { name: "审阅申请", exact: true }).first(),
+		page.getByRole("button", { name: /^审阅：/ }).first(),
 	).toBeVisible();
 	await expectLocalTimes(page);
 });
@@ -3020,7 +3169,10 @@ test("approval table becomes readable cards on narrow screens with the review ac
 	await page.goto("/admin/approvals");
 	const table = page.getByRole("table", { name: "创建审批" });
 	await expect(table).toBeVisible();
-	const badge = table.locator('[data-slot="badge"]').first();
+	// F-05：首列只有申请名称，没有状态徽章（NI-99 的徽章几何断言随之迁到 admin-agents.spec.ts 的状态 chip）。
+	await expect(
+		table.locator("tbody td:first-child [data-slot=badge]"),
+	).toHaveCount(0);
 	for (const viewport of [
 		{ width: 1440, height: 900 },
 		{ width: 768, height: 1024 },
@@ -3028,37 +3180,132 @@ test("approval table becomes readable cards on narrow screens with the review ac
 		await page.setViewportSize(viewport);
 		await expectDesktopTable(page, table);
 	}
-	await page.setViewportSize({ width: 1440, height: 900 });
-	const desktopBadgeWidth = (await badge.boundingBox())?.width;
-	expect(desktopBadgeWidth).toBeGreaterThan(0);
 	for (const viewport of [
 		{ width: 390, height: 844 },
 		{ width: 320, height: 640 },
 	]) {
 		await page.setViewportSize(viewport);
-		const review = page.getByRole("button", { name: "审阅申请" });
+		const review = page.getByRole("button", { name: /^审阅：/ });
 		await expectCardTable(page, table, review);
-		// NI-99：状态徽章仍是带圆点的行内块，宽度与桌面一致，右缘与值容器对齐。
-		const geometry = await badge.evaluate((element) => {
-			const value = element.closest('[data-slot="table-cell-value"]');
-			const dot = getComputedStyle(element, "::before");
-			return {
-				display: getComputedStyle(element).display,
-				dot: [dot.width, dot.height, dot.display],
-				width: element.getBoundingClientRect().width,
-				rightGap: Math.abs(
-					(value?.getBoundingClientRect().right ?? 0) -
-						element.getBoundingClientRect().right,
-				),
-			};
-		});
-		expect(geometry.display).not.toBe("block");
-		expect(
-			Math.abs(geometry.width - (desktopBadgeWidth ?? 0)),
-		).toBeLessThanOrEqual(1);
-		expect(geometry.dot).toEqual(["6px", "6px", "block"]);
-		expect(geometry.rightGap).toBeLessThanOrEqual(1);
 	}
+});
+
+test("approval filters, columns and page chrome follow the exported design", async ({
+	page,
+}) => {
+	await fixture(page, "admin");
+	await page.goto("/admin/approvals");
+	const table = page.getByRole("table", { name: "创建审批" });
+	await expect(table).toBeVisible();
+	const main = page.locator("main");
+	const narrow = test.info().project.name === "mobile";
+	// AP-01：四轨 466/204/204/204、gap 10、mb 20；搜索框 18px 图标、无可见 label、底边与「来源」对齐；窄屏单列。
+	const filters = main.locator(".approval-filters");
+	const grid = await filters.evaluate((element) => {
+		const css = getComputedStyle(element);
+		return {
+			columns: css.gridTemplateColumns
+				.split(" ")
+				.map((value) => Math.round(Number.parseFloat(value))),
+			gap: css.columnGap,
+			marginBottom: css.marginBottom,
+		};
+	});
+	if (narrow) expect(grid.columns).toHaveLength(1);
+	else {
+		expect(grid.columns).toHaveLength(4);
+		for (const [index, width] of [466, 204, 204, 204].entries())
+			expect(Math.abs((grid.columns[index] ?? 0) - width)).toBeLessThanOrEqual(
+				1,
+			);
+	}
+	expect(grid.gap).toBe("10px");
+	expect(grid.marginBottom).toBe("20px");
+	const search = page.getByRole("searchbox", { name: "搜索申请" });
+	await expectSearchInput(search);
+	await expect(search).toHaveAttribute("placeholder", "搜索申请名称或 Owner");
+	if (!narrow) {
+		const searchBox = await search.boundingBox();
+		const sourceBox = await page.getByLabel("来源").boundingBox();
+		expect(
+			Math.abs(
+				(searchBox?.y ?? 0) +
+					(searchBox?.height ?? 0) -
+					((sourceBox?.y ?? 0) + (sourceBox?.height ?? 0)),
+			),
+		).toBeLessThanOrEqual(1);
+	}
+	// 风险字段尚无数据来源，页面不出现「风险」（AP-01 / AP-02 风险部分待接口）。
+	await expect(main.getByText(/风险/)).toHaveCount(0);
+	// AP-02：表头、模型只有显示名、提交时间为 time 元素；「审阅」带 16px 图标。
+	await expect(table.locator("thead th")).toHaveText([
+		"申请",
+		"来源 / Owner",
+		"可用范围",
+		"模型",
+		"提交时间",
+		"操作",
+	]);
+	await expect(table).not.toContainText("gpt-5");
+	const time = table.locator("tbody time").first();
+	expect(await time.getAttribute("datetime")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+	await expect(table).not.toContainText(/\d+\/\d+\/\d{4}/);
+	const review = table.getByRole("button", { name: /^审阅：/ }).first();
+	expect(
+		await review.locator("svg").evaluate((svg) => {
+			const box = svg.getBoundingClientRect();
+			return [box.width, box.height];
+		}),
+	).toEqual([16, 16]);
+	await expect(page.getByText("审阅申请")).toHaveCount(0);
+	// F-05：首列 strong 13px / 700，且没有说明文字。
+	const name = table.locator("tbody td:first-child strong").first();
+	expect(
+		await name.evaluate((element) => [
+			getComputedStyle(element).fontSize,
+			getComputedStyle(element).fontWeight,
+		]),
+	).toEqual(["13px", "700"]);
+	expect(await table.locator("tbody td:first-child small").count()).toBe(0);
+	await expect(main.getByText("申请人由当前会话确定")).toHaveCount(0);
+	await expect(main.getByText(/application-/)).toHaveCount(0);
+	// AP-04 / NI-42：先 amber chip，再 tag（radius 7、透明底、11px、无圆点）。
+	const header = main.locator("header.page-heading");
+	const badges = header.locator('[data-slot="badge"]');
+	await expect(badges).toHaveText(["1 项待处理", "系统管理员 · 只读审计"]);
+	await expect(badges.first()).toHaveAttribute("data-tone", "amber");
+	const tag = badges.nth(1);
+	await expect(tag).toHaveAttribute("data-variant", "tag");
+	expect(
+		await tag.evaluate((element) => ({
+			radius: getComputedStyle(element).borderTopLeftRadius,
+			background: getComputedStyle(element).backgroundColor,
+			fontSize: getComputedStyle(element).fontSize,
+			dot: getComputedStyle(element, "::before").content,
+		})),
+	).toEqual({
+		radius: "7px",
+		background: "rgba(0, 0, 0, 0)",
+		fontSize: "11px",
+		dot: "none",
+	});
+	// AP-04：page-note 在表格之后，12px、--muted-ink、margin-top 16px、无 role。
+	const note = main.getByText(
+		"审批只决定平台资源与准入，Connection 授权仍由使用者独立完成。",
+	);
+	expect(
+		await note.evaluate((element) => ({
+			fontSize: getComputedStyle(element).fontSize,
+			color: getComputedStyle(element).color,
+			marginTop: getComputedStyle(element).marginTop,
+			role: element.getAttribute("role"),
+		})),
+	).toEqual({
+		fontSize: "12px",
+		color: await resolved(page, "color", "var(--muted-ink)"),
+		marginTop: "16px",
+		role: null,
+	});
 });
 
 // 设计基础组件（chip / tag / notice / empty / card / Agent 标识 / 加载态 / 弹窗）的计算样式。

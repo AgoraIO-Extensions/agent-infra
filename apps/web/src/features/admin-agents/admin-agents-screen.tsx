@@ -1,12 +1,10 @@
-import { Link } from "@tanstack/react-router";
 import { RefreshCw } from "lucide-react";
-import { useId } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useId, useState } from "react";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyDescription } from "@/components/ui/empty";
 import { Field } from "@/components/ui/field";
-import { IdentifierText } from "@/components/ui/identifier-text";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
@@ -22,7 +20,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
-import { withObjectName } from "@/lib/accessible-name";
+import { useToast } from "@/components/ui/toast";
 import { statusTone } from "@/lib/status-tone";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -30,7 +28,13 @@ import {
 	agentServiceAvailabilityLabel,
 	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
-import { formatPerson } from "../directory-names.js";
+import {
+	AvailabilityNameList,
+	DirectoryReadAlert,
+	formatPerson,
+	useAvailabilityNames,
+} from "../directory-names.js";
+import { AdminAgentRowActions } from "./admin-agent-row-actions.js";
 import type { AdminAgentsState } from "./admin-agents.js";
 import { AdminUserGovernance } from "./admin-user-governance.js";
 import { ApplicationMaterialGovernance } from "./application-material-governance.js";
@@ -42,13 +46,19 @@ export const adminAgentStatuses = [
 	"creation_failed",
 	"disabled",
 ] as const;
+export const adminAgentSources = ["standard", "custom"] as const;
 export type AdminAgentFilters = {
 	q?: string;
 	status?: (typeof adminAgentStatuses)[number];
+	source?: (typeof adminAgentSources)[number];
 	page?: number;
 };
 export const adminAgentQueryMaxLength = 256;
 const pageSize = 10;
+const sourceFilterLabels = {
+	standard: "标准模板",
+	custom: "自定义 Agent",
+} as const satisfies Record<(typeof adminAgentSources)[number], string>;
 
 export function validateAdminAgentSearch(
 	search: Record<string, unknown>,
@@ -64,6 +74,7 @@ export function validateAdminAgentSearch(
 				? search.q
 				: undefined,
 		status: adminAgentStatuses.find((status) => status === search.status),
+		source: adminAgentSources.find((source) => source === search.source),
 		page:
 			Number.isInteger(page) && page >= 1 && page <= 1000 ? page : undefined,
 	};
@@ -74,6 +85,27 @@ function sourceLabel(agent: AgentProjectionV2) {
 		? `标准模板 · ${agent.source.templateId}`
 		: `自定义 Agent · ${agentSourceReferenceLabel(agent)}`;
 }
+
+// 与 Agent 详情一致：有服务可用性时显示服务可用性，否则显示管理状态，只出一个 chip。
+function AgentStatusChip({ agent }: { agent: AgentProjectionV2 }) {
+	return (
+		<Badge
+			tone={statusTone(agent.serviceAvailability ?? agent.managementStatus)}
+		>
+			{agent.serviceAvailability
+				? agentServiceAvailabilityLabel(agent.serviceAvailability)
+				: agentManagementStatusLabels[agent.managementStatus]}
+		</Badge>
+	);
+}
+
+function ownerNames(agent: AgentProjectionV2) {
+	return agent.configuration.owners
+		.map((owner) => formatPerson({ displayName: owner.displayName }).name)
+		.join("、");
+}
+
+const columns = ["Agent", "Owner", "来源", "状态", "可用范围"] as const;
 
 export function AdminAgentsScreen({
 	state,
@@ -89,19 +121,29 @@ export function AdminAgentsScreen({
 	refreshing?: boolean;
 }) {
 	const id = useId();
+	const toast = useToast();
+	const [actionFailure, setActionFailure] = useState<string | null>(null);
 	const agents = state.kind === "ready" ? state.agents : [];
 	const search = (filters.q ?? "").trim().toLocaleLowerCase();
+	// 只匹配页面上可见的文字：名称、说明、来源文案与 Owner 显示名。
 	const matches = agents.filter(
 		(agent) =>
 			(!filters.status || filters.status === agent.managementStatus) &&
-			`${agent.name}\n${agent.description}\n${sourceLabel(agent)}\n${agent.configuration.owners.map((owner) => `${owner.displayName}\n${owner.userId}`).join("\n")}`
+			(!filters.source || filters.source === agent.source.kind) &&
+			`${agent.name}\n${agent.description}\n${sourceLabel(agent)}\n${ownerNames(agent)}`
 				.toLocaleLowerCase()
 				.includes(search),
 	);
 	const pageCount = Math.max(1, Math.ceil(matches.length / pageSize));
 	const page = Math.min(filters.page ?? 1, pageCount);
 	const rows = matches.slice((page - 1) * pageSize, page * pageSize);
+	// 当前页的可用范围合并为员工、组织各一次目录读取。
+	const names = useAvailabilityNames(
+		rows.flatMap((agent) => agent.configuration.availability),
+	);
+	const filtered = Boolean(search || filters.status || filters.source);
 	const denied = state.kind === "denied";
+	const failed = state.kind === "error";
 	return (
 		<section aria-labelledby={`${id}-heading`}>
 			<header className="page-heading">
@@ -113,26 +155,67 @@ export function AdminAgentsScreen({
 						和管理状态。创建申请请在“创建审批”中处理。
 					</p>
 				</div>
-				{!denied && (
-					<Link
-						to="/admin/approvals"
-						className={buttonVariants({ variant: "outline" })}
-					>
-						创建审批
-					</Link>
+				{denied || failed ? null : (
+					<div className="tag-row admin-agent-heading-tools">
+						{state.kind === "ready" ? (
+							<Badge tone="gray">{agents.length} 个 Agent</Badge>
+						) : null}
+						<Button
+							variant="ghost"
+							size="icon"
+							aria-label="刷新 Agent 列表"
+							title="刷新 Agent 列表"
+							disabled={refreshing || state.kind === "loading"}
+							onClick={onRefresh}
+						>
+							<RefreshCw aria-hidden="true" />
+						</Button>
+					</div>
 				)}
 			</header>
 			{denied ? (
 				<Alert tone="warn">
 					<AlertDescription>当前无权访问 Agent 管理。</AlertDescription>
 				</Alert>
+			) : failed ? (
+				// N-20：列表读取失败时只保留标题与一条失败提示，筛选、表格与治理区都收起。
+				<Alert tone="danger" role="alert">
+					<AlertDescription>
+						{state.retryable
+							? "暂时无法读取 Agent 列表，请稍后重试。"
+							: "暂时无法访问此列表，请联系管理员。"}
+					</AlertDescription>
+					{state.retryable ? (
+						<AlertAction>
+							<Button
+								variant="outline"
+								disabled={refreshing}
+								onClick={onRefresh}
+							>
+								重新加载
+							</Button>
+						</AlertAction>
+					) : null}
+				</Alert>
 			) : (
 				<>
-					<AdminUserGovernance />
-					<ApplicationMaterialGovernance />
 					<div className="admin-agent-filters">
+						<SearchInput
+							label="搜索 Agent"
+							id={`${id}-search`}
+							maxLength={adminAgentQueryMaxLength}
+							value={filters.q ?? ""}
+							placeholder="搜索 Agent、Owner 或来源"
+							onChange={(event) =>
+								onFiltersChange({
+									...filters,
+									q: event.target.value || undefined,
+									page: undefined,
+								})
+							}
+						/>
 						<Field>
-							<Label htmlFor={`${id}-status`}>产品状态</Label>
+							<Label htmlFor={`${id}-status`}>运行状态</Label>
 							<NativeSelect
 								id={`${id}-status`}
 								value={filters.status ?? "all"}
@@ -154,57 +237,51 @@ export function AdminAgentsScreen({
 								))}
 							</NativeSelect>
 						</Field>
-						<SearchInput
-							label="搜索 Agent 或 Owner"
-							id={`${id}-search`}
-							maxLength={adminAgentQueryMaxLength}
-							value={filters.q ?? ""}
-							placeholder="输入名称、说明、来源或 Owner 标识"
-							onChange={(event) =>
-								onFiltersChange({
-									...filters,
-									q: event.target.value || undefined,
-									page: undefined,
-								})
-							}
-						/>
+						<Field>
+							<Label htmlFor={`${id}-source`}>来源</Label>
+							<NativeSelect
+								id={`${id}-source`}
+								value={filters.source ?? "all"}
+								onChange={(event) =>
+									onFiltersChange({
+										...filters,
+										source: adminAgentSources.find(
+											(value) => value === event.target.value,
+										),
+										page: undefined,
+									})
+								}
+							>
+								<NativeSelectOption value="all">全部来源</NativeSelectOption>
+								{adminAgentSources.map((source) => (
+									<NativeSelectOption key={source} value={source}>
+										{sourceFilterLabels[source]}
+									</NativeSelectOption>
+								))}
+							</NativeSelect>
+						</Field>
 					</div>
-					<div className="admin-agent-summary">
-						<div role="status" aria-live="polite">
-							{state.kind === "loading" ? (
-								<LoadingLine announce={false}>正在加载 Agent…</LoadingLine>
-							) : state.kind === "error" ? (
-								"Agent 列表暂时无法读取。"
-							) : (
-								`${agents.length} 个已创建 Agent，匹配 ${matches.length} 个${refreshing ? "，正在刷新…" : ""}`
-							)}
-						</div>
-						<Button
-							variant="outline"
-							disabled={
-								refreshing ||
-								state.kind === "loading" ||
-								(state.kind === "error" && !state.retryable)
-							}
-							onClick={onRefresh}
-						>
-							<RefreshCw aria-hidden="true" />
-							{state.kind === "error" ? "重新加载" : "刷新列表"}
-						</Button>
-					</div>
-					{state.kind === "error" ? (
-						<Alert tone="danger" role="alert">
-							<AlertDescription>
-								{state.retryable
-									? "请重试读取列表。"
-									: "暂时无法访问此列表，请联系管理员。"}
-							</AlertDescription>
+					{/* 筛选结果只给读屏播报；总数在页头 chip。 */}
+					<p className="sr-only" role="status" aria-live="polite">
+						{state.kind === "ready" && filtered
+							? `匹配 ${matches.length} 个`
+							: ""}
+					</p>
+					{actionFailure ? (
+						<Alert tone="danger" role="alert" className="mb-4">
+							<AlertDescription>{actionFailure}</AlertDescription>
 						</Alert>
-					) : state.kind === "ready" && !agents.length ? (
+					) : null}
+					{state.kind === "ready" ? (
+						<DirectoryReadAlert names={[names]} className="mb-4" />
+					) : null}
+					{state.kind === "loading" ? (
+						<LoadingLine className="py-8">正在加载 Agent…</LoadingLine>
+					) : !agents.length ? (
 						<Empty>
 							<EmptyDescription>暂无已创建的 Agent。</EmptyDescription>
 						</Empty>
-					) : state.kind === "ready" && !matches.length ? (
+					) : !matches.length ? (
 						<Empty>
 							<EmptyDescription>未找到匹配的 Agent。</EmptyDescription>
 							<EmptyContent>
@@ -213,7 +290,7 @@ export function AdminAgentsScreen({
 								</Button>
 							</EmptyContent>
 						</Empty>
-					) : state.kind === "ready" ? (
+					) : (
 						<>
 							<Table
 								className="admin-agent-table"
@@ -222,84 +299,56 @@ export function AdminAgentsScreen({
 							>
 								<TableHeader>
 									<TableRow>
-										{["Agent", "来源", "Owner", "状态", "系统操作"].map(
-											(label) => (
-												<TableHead key={label} scope="col">
-													{label}
-												</TableHead>
-											),
-										)}
+										{columns.map((label) => (
+											<TableHead key={label} scope="col">
+												{label}
+											</TableHead>
+										))}
+										<TableHead scope="col">
+											<span className="sr-only">操作</span>
+										</TableHead>
 									</TableRow>
 								</TableHeader>
 								<TableBody>
 									{rows.map((agent) => (
 										<TableRow key={agent.agentId}>
 											<TableCell data-label="Agent">
-												<div>
-													<strong>{agent.name}</strong>
-													<p className="mt-1 text-muted-foreground">
-														{agent.description}
-													</p>
-												</div>
+												<strong>{agent.name}</strong>
+												<small>{agent.description}</small>
+											</TableCell>
+											<TableCell data-label="Owner">
+												{ownerNames(agent) || "未提供"}
 											</TableCell>
 											<TableCell data-label="来源">
 												{sourceLabel(agent)}
 											</TableCell>
-											<TableCell data-label="Owner">
-												{agent.configuration.owners.map((owner, index) => (
-													<span key={owner.userId}>
-														{index ? "、" : null}
-														{
-															formatPerson({ displayName: owner.displayName })
-																.name
-														}{" "}
-														{/* 系统管理员需要区分同名 Owner：ID 只以等宽短形式作次要信息。 */}
-														<IdentifierText
-															className="text-muted-foreground"
-															label="Owner ID"
-															value={owner.userId}
-														/>
-													</span>
-												))}
-											</TableCell>
 											<TableCell data-label="状态">
-												<div className="space-y-2">
-													<Badge tone={statusTone(agent.managementStatus)}>
-														{
-															agentManagementStatusLabels[
-																agent.managementStatus
-															]
-														}
-													</Badge>
-													{agent.serviceAvailability !== null && (
-														<p className="text-muted-foreground">
-															服务：
-															{agentServiceAvailabilityLabel(
-																agent.serviceAvailability,
-															)}
-														</p>
-													)}
-												</div>
+												<AgentStatusChip agent={agent} />
 											</TableCell>
-											<TableCell
-												data-label="系统操作"
-												aria-label="Owner 交接入口"
-											>
-												{agent.managementStatus === "disabled" ? (
-													<span aria-hidden="true">—</span>
-												) : (
-													<Link
-														className={buttonVariants({ variant: "outline" })}
-														params={{ agentId: agent.agentId }}
-														to="/agents/$agentId/configuration"
-														aria-label={withObjectName(
-															"处理 Owner 交接",
-															agent.name,
-														)}
-													>
-														处理 Owner 交接
-													</Link>
-												)}
+											<TableCell data-label="可用范围">
+												<AvailabilityNameList
+													targets={agent.configuration.availability}
+													names={names}
+													identifier
+													empty="未额外指定"
+												/>
+											</TableCell>
+											<TableCell data-cell="actions">
+												<AdminAgentRowActions
+													agent={agent}
+													onActionStart={() => setActionFailure(null)}
+													onRetryAccepted={() => {
+														toast("已提交重试，创建状态会在后台更新");
+														onRefresh();
+													}}
+													onRetryFailed={(_agent, error) =>
+														setActionFailure(
+															error.retryable === false
+																? "权限或 Agent 状态已变化，请刷新页面。"
+																: "操作未能提交，请稍后重试。",
+														)
+													}
+												/>
 											</TableCell>
 										</TableRow>
 									))}
@@ -332,7 +381,12 @@ export function AdminAgentsScreen({
 								</Button>
 							</nav>
 						</>
-					) : null}
+					)}
+					{/* 治理区不依赖 Agent 列表，放在列表之后；h2 由 FormSection 固定为正文字体 16px。 */}
+					<div className="admin-agent-governance">
+						<AdminUserGovernance />
+						<ApplicationMaterialGovernance />
+					</div>
 				</>
 			)}
 		</section>
