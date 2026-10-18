@@ -312,6 +312,41 @@ describe("formal deployment issued Bearer Agent reads over real PostgreSQL and g
 		expect(revoked.data?.items).toEqual([]);
 	});
 
+	it.each(["manage", "use"] as const)(
+		"presents a stopped API-created Agent for an explicit %s grant",
+		async (kind) => {
+			await client`update platform.agent_applications set creation_channel='api',
+				creator_principal_type='user',creator_principal_id='user_alice',
+				approval_revision=null,status='stopped',service_availability=null,
+				desired_state='stopped' where agent_id='agent_1'`;
+			await client`delete from platform.agent_availability where agent_id='agent_1'`;
+			const service = await start();
+			const issued = await issue(service, "api-created.issue", "session_bob");
+			const read = () =>
+				listAgentsV2({ ...service.options, auth: issued.credential });
+			expect((await read()).data?.items).toEqual([]);
+			await grant("agent_1", kind, "user_bob");
+			const allowed = await read();
+			expect(allowed.response?.status).toBe(200);
+			expect(allowed.data?.items.map((agent) => agent.agentId)).toEqual([
+				"agent_1",
+			]);
+			expect(service.requests.at(-1)?.headers.has("Cookie")).toBe(false);
+			await client`update platform.agent_principal_grants set revoked_at=clock_timestamp()
+				where agent_id='agent_1' and principal_id='user_bob'`;
+			expect((await read()).data?.items).toEqual([]);
+		},
+	);
+
+	it("rejects an unapproved Web Agent at the persistence boundary", async () => {
+		await expect(client`update platform.agent_applications set approval_revision=null,
+			status='stopped',service_availability=null,desired_state='stopped'
+			where agent_id='agent_1'`).rejects.toMatchObject({
+			code: "23514",
+			constraint_name: "agent_application_management_state_valid",
+		});
+	});
+
 	it("filters before paging, isolates users, and preserves browser Owner and administrator discovery", async () => {
 		await seedAgent("agent_2");
 		await seedAgent("agent_3");
