@@ -213,6 +213,7 @@
 - 2026-10-18：补齐 L-04 登录空提交语义：账号与密码同时展示错误，焦点定位到首个缺失字段，输入控件补齐 aria-invalid/aria-describedby；定向登录单测 10/10 通过。
 - 2026-10-18：补齐 N-04 Skill 来源/范围徽章：合并为可区分的「范围 · 来源」quiet pill，管理页与目录页共用同一组件。
 - 2026-10-18：继续修复 K-01 Skill 目录卡片：改为带标识、版本信息、来源范围和「查看详情」动作的 skill-row 列表，移动端沿用紧凑栅格。
+- 2026-10-18：补齐 C-01/NI-65 文档证据：web-ui.md 补全 5 个设计文件的 64 位 SHA，并同步短视口滚动说明。
 - 2026-10-18：补齐 W-03：工作台读取失败通知增加语义图标，401/authentication-required 提供 primary「重新登录」动作；定向 WorkBench 单测 13/13、401/403/404 E2E 3/3 通过。
 - 2026-10-18：补齐 B-05/B-06：表单 placeholder/focus token、Select 弹层下方定位与控件行高统一；Select 定向单测和 Web build 通过。
 - 2026-10-18：将 Platform API Skill importer 协议修复移出 UI 分支，避免 UI/Provider 契约混合；该后端回归应由独立 Issue/PR 承担。

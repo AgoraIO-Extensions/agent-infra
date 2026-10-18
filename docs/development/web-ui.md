@@ -14,18 +14,18 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 | 文件 | SHA-256 |
 | --- | --- |
 | `index.html` | `f66a8694aecee90322161e9a31d682073919ae846d488312e225edf03232aaaf` |
-| `login.html` | `6e04830e…` |
-| `DESIGN.md` | `162e8fb0…` |
-| `IMPLEMENTATION.md` | `3ee03b85…` |
-| `DESIGN-HANDOFF.md` | `3f2313d6…` |
-| `DESIGN-MANIFEST.json` | `3c78fd40…` |
+| `login.html` | `6e04830eb0aac86e7ffea6dc6f3db0faab7942e2379c6230efe0512519d0c0a7` |
+| `DESIGN.md` | `162e8fb0c381cb96da71a0f838c8ce80b7076ebb6b08071cc2845961e481da18` |
+| `IMPLEMENTATION.md` | `3ee03b85afb5567576ff2ac64c1459b811490591d52e16c048809d173bc75a3b` |
+| `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
+| `DESIGN-MANIFEST.json` | `3c78fd40eac65ac1659f0ab4934a3b9285a5cb67f85038a42dfdb17df95ffdea` |
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量。页面共享内容宽度、标题和表单样式；桌面侧栏为 248px，
 低于 1024px 使用现有 Sheet。工作台先展示最近对话和职责事项，再展示 Agent 与申请。
 Agent 详情中的 Owner、渠道、模型和范围均取自实际投影；Owner 配置入口仍由权限结果控制。
 对话时间线独立滚动，保留消息输入区及代码、表格的局部滚动。
-视口高度不超过 600px 时改用页面滚动，避免从执行详情返回后的键盘焦点被聊天容器裁切。
+短视口下时间线保持局部滚动并收紧页面顶距，输入区仍可通过页面滚动访问，避免从执行详情返回后的键盘焦点被聊天容器裁切。
 
 原型中的示例人员、模型、就绪提示和演示操作不作为生产数据或新增能力。
 申请、审批、配置、生命周期及审计继续复用现有组件、请求和权限校验。
