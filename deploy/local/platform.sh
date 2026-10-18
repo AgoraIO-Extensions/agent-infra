@@ -238,6 +238,8 @@ read_native_metadata_worker_route() {
 # 这个子进程（#2741）。旧版脚本启动的进程不是组长，照旧只终止它本身。
 stop_detached() {
   local pid=$1 target pgid state
+  # PID 文件损坏或被篡改为 0 / 负数时，`kill -- -0` 会向调用方自己的进程组发信号。
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 0
   pgid=$(ps -p "$pid" -o pgid= 2>/dev/null | tr -d ' ')
   target=$pid
   [[ "$pgid" == "$pid" ]] && target=-$pid

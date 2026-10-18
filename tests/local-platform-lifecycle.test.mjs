@@ -895,6 +895,33 @@ test("local native metadata proxy failure reclaims the detached forward and toke
 	}
 });
 
+test("local stop ignores a native metadata PID file that names PID 0 (#2741)", async () => {
+	const f = await fixture();
+	try {
+		const env = {
+			...f.env,
+			FAKE_NATIVE_METADATA_ENABLED: "1",
+			FAKE_NATIVE_METADATA_TOKEN_KEY: "runtime-token",
+		};
+		const state = join(
+			env.PLATFORM_LOCAL_STATE_DIRECTORY,
+			"agent-infra-verify",
+		);
+		await mkdir(state, { recursive: true });
+		await writeFile(
+			join(state, "native-metadata-worker-port-forward.pid"),
+			"0",
+		);
+		await writeFile(join(state, "native-metadata-worker-proxy.pid"), "0");
+		// 如果按进程组终止 PID 0，stop 会给自己所在的进程组发 TERM，命令被打断。
+		const stopped = run("stop", env);
+		assert.equal(stopped.signal, null, stopped.stderr);
+		assert.equal(stopped.status, 0, stopped.stderr);
+	} finally {
+		await f.close();
+	}
+});
+
 test("local up rejects an invalid proxy token before stopping services", async () => {
 	const f = await fixture();
 	try {
