@@ -220,7 +220,7 @@ describe("native capability metadata revalidation", () => {
 		).resolves.toEqual({ outcome: "unavailable" });
 	});
 
-	it("rejects a mixed directory revision across command and skill projections", async () => {
+	it("accepts selector-specific revisions across command and skill projections", async () => {
 		const f = fixture();
 		f.reader.read.mockImplementation(
 			async (
@@ -233,12 +233,105 @@ describe("native capability metadata revalidation", () => {
 					? {
 							selector: "commands" as const,
 							revision,
-							capabilities: [],
+							capabilities: [
+								{
+									id: capabilityId,
+									kind: "command" as const,
+									name: "read_native",
+									description: "Read native metadata",
+									source: { name: "runtime", version: "1" },
+									parameters: [],
+									effect: "read_only" as const,
+									availability: "available" as const,
+								},
+							],
 						}
 					: {
 							selector: "skills" as const,
 							revision: "c".repeat(64),
 							capabilities: [],
+						},
+		);
+		await expect(
+			f.adapter.revalidate({ request, authority, sessionGeneration: 3 }),
+		).resolves.toMatchObject({
+			outcome: "allowed",
+			capability: { id: capabilityId, directoryRevision: revision },
+		});
+	});
+
+	it("rejects a changed revision for the selected projection", async () => {
+		const f = fixture();
+		f.reader.read.mockImplementation(
+			async (
+				_identity: IdentityContext,
+				_conversation: string,
+				_execution: string,
+				selector: "status" | "commands" | "skills",
+			) =>
+				selector === "commands"
+					? {
+							selector: "commands" as const,
+							revision: "c".repeat(64),
+							capabilities: [
+								{
+									id: capabilityId,
+									kind: "command" as const,
+									name: "read_native",
+									description: "Read native metadata",
+									source: { name: "runtime", version: "1" },
+									parameters: [],
+									effect: "read_only" as const,
+									availability: "available" as const,
+								},
+							],
+						}
+					: { selector: "skills" as const, revision, capabilities: [] },
+		);
+		await expect(
+			f.adapter.revalidate({ request, authority, sessionGeneration: 3 }),
+		).resolves.toEqual({ outcome: "stale" });
+	});
+
+	it("rejects an ambiguous capability id across projections", async () => {
+		const f = fixture();
+		f.reader.read.mockImplementation(
+			async (
+				_identity: IdentityContext,
+				_conversation: string,
+				_execution: string,
+				selector: "status" | "commands" | "skills",
+			) =>
+				selector === "commands"
+					? {
+							selector: "commands" as const,
+							revision,
+							capabilities: [
+								{
+									id: capabilityId,
+									kind: "command" as const,
+									name: "read_native",
+									description: "Read native metadata",
+									source: { name: "runtime", version: "1" },
+									parameters: [],
+									effect: "read_only" as const,
+									availability: "available" as const,
+								},
+							],
+						}
+					: {
+							selector: "skills" as const,
+							revision,
+							capabilities: [
+								{
+									id: capabilityId,
+									kind: "skill" as const,
+									name: "same-id",
+									description: "",
+									source: { name: "runtime", version: "1" },
+									availability: "discovered" as const,
+								},
+							] as never,
 						},
 		);
 		await expect(
