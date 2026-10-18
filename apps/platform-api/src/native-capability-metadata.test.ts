@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { IdentityContext } from "./http/identity.js";
 import { createNativeCapabilityMetadataRevalidationV1 } from "./native-capability-metadata.js";
+import { nativeMetadataTestContext } from "./runtime-native-metadata-test-context.js";
 
 const revision = "a".repeat(64);
 const capabilityId = "b".repeat(64);
@@ -51,7 +52,14 @@ const scope = {
 	hostScopeRef: current.currentHostScopeRef,
 };
 
-function fixture(options: { now?: () => number; cacheTtlMs?: number } = {}) {
+function fixture(
+	options: {
+		now?: () => number;
+		cacheTtlMs?: number;
+		identity?: IdentityContext;
+	} = {},
+) {
+	const requestIdentity = options.identity ?? identity;
 	const query = {
 		readNativeCapabilityCurrentScopeV1: vi.fn().mockResolvedValue(current),
 	};
@@ -84,9 +92,14 @@ function fixture(options: { now?: () => number; cacheTtlMs?: number } = {}) {
 		),
 	};
 	const adapter = createNativeCapabilityMetadataRevalidationV1({
+		requestContext: nativeMetadataTestContext(
+			requestIdentity,
+			undefined,
+			options.now,
+		),
 		query,
 		reader,
-		identity,
+		identity: requestIdentity,
 		...(options.now ? { now: options.now } : {}),
 		...(options.cacheTtlMs ? { cacheTtlMs: options.cacheTtlMs } : {}),
 	});
@@ -94,6 +107,29 @@ function fixture(options: { now?: () => number; cacheTtlMs?: number } = {}) {
 }
 
 describe("native capability metadata revalidation", () => {
+	it("keeps shared-user Identity revision separate from Agent admission scope", async () => {
+		const sharedIdentity = {
+			...identity,
+			authorizationRevision: "different-ldap-identity-revision",
+		};
+		const f = fixture({ identity: sharedIdentity });
+		const result = await f.adapter.revalidate({
+			request,
+			authority,
+			sessionGeneration: 3,
+		});
+		expect(result.outcome).toBe("allowed");
+		if (result.outcome !== "allowed")
+			throw new Error("Expected authorized shared metadata");
+		expect(
+			f.adapter.isCurrent({
+				request,
+				capability: result.capability,
+				scope: result.scope,
+			}),
+		).toBe(true);
+	});
+
 	it("binds the current Store execution and projects the selected command", async () => {
 		const f = fixture();
 		await expect(
@@ -158,6 +194,7 @@ describe("native capability metadata revalidation", () => {
 
 	it("does not synthesize a reader identity for a different actor", async () => {
 		const f = createNativeCapabilityMetadataRevalidationV1({
+			requestContext: nativeMetadataTestContext(identity),
 			query: {
 				readNativeCapabilityCurrentScopeV1: vi.fn().mockResolvedValue(current),
 			},
@@ -171,6 +208,7 @@ describe("native capability metadata revalidation", () => {
 
 	it("fails closed when the authenticated identity revision drifts", async () => {
 		const adapter = createNativeCapabilityMetadataRevalidationV1({
+			requestContext: nativeMetadataTestContext(identity),
 			query: {
 				readNativeCapabilityCurrentScopeV1: vi.fn().mockResolvedValue(current),
 			},
@@ -254,6 +292,7 @@ describe("native capability metadata revalidation", () => {
 		const currentIdentity = { ...identity };
 		const f = fixture();
 		const adapter = createNativeCapabilityMetadataRevalidationV1({
+			requestContext: nativeMetadataTestContext(identity),
 			query: f.query,
 			reader: f.reader,
 			identity: currentIdentity,

@@ -23,6 +23,16 @@ const persistedScope = {
 	authorizationRevision: "execution-revision",
 };
 
+const authorize = async () => ({
+	outcome: "allowed" as const,
+	authority: {
+		actorId: identity.userId,
+		agentId: persistedScope.agentId,
+		channelId: "web",
+		authorizationRevision: identity.authorizationRevision,
+	},
+});
+
 describe("native metadata Store scope resolver", () => {
 	it("uses persisted Execution generation/revision and binds the original Host scope", async () => {
 		const query = {
@@ -32,6 +42,7 @@ describe("native metadata Store scope resolver", () => {
 			}),
 		};
 		const resolver = createRuntimeNativeMetadataScopeResolverV1({
+			authorize,
 			query,
 			now: () => 10_000,
 		});
@@ -63,7 +74,10 @@ describe("native metadata Store scope resolver", () => {
 				.fn()
 				.mockResolvedValue(persistedScope),
 		};
-		const resolver = createRuntimeNativeMetadataScopeResolverV1({ query });
+		const resolver = createRuntimeNativeMetadataScopeResolverV1({
+			authorize,
+			query,
+		});
 		await expect(
 			resolver({
 				identity,
@@ -81,6 +95,7 @@ describe("native metadata Store scope resolver", () => {
 	])("rejects an inactive current identity: %j", async (patch) => {
 		const query = { readNativeMetadataObjectScopeV1: vi.fn() };
 		const resolver = createRuntimeNativeMetadataScopeResolverV1({
+			authorize,
 			query,
 		});
 		await expect(
@@ -100,6 +115,7 @@ describe("native metadata Store scope resolver", () => {
 			readNativeMetadataObjectScopeV1: vi.fn().mockResolvedValue(undefined),
 		};
 		const resolver = createRuntimeNativeMetadataScopeResolverV1({
+			authorize,
 			query,
 		});
 		await expect(

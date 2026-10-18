@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
 import { createWorkerRuntimeNativeMetadataClientV1 } from "../../platform-worker/src/runtime-native-metadata-client.js";
 import { createRuntimeNativeMetadataReaderV1 } from "./runtime-native-metadata-reader.js";
+import { nativeMetadataTestContext } from "./runtime-native-metadata-test-context.js";
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -91,6 +92,7 @@ describe("native metadata API → Worker → RuntimeHost transport", () => {
 				binding.scope.conversationId,
 				binding.scope.executionId,
 				"status",
+				nativeMetadataTestContext(identity, binding),
 			),
 		).resolves.toEqual(response.projection);
 	});
@@ -103,6 +105,7 @@ describe("native metadata API → Worker → RuntimeHost transport", () => {
 				binding.scope.conversationId,
 				binding.scope.executionId,
 				"status",
+				nativeMetadataTestContext(identity, binding),
 			),
 		).resolves.toBeNull();
 	});
@@ -120,6 +123,7 @@ describe("native metadata API → Worker → RuntimeHost transport", () => {
 				binding.scope.conversationId,
 				binding.scope.executionId,
 				"status",
+				nativeMetadataTestContext(identity, binding),
 			),
 		).resolves.toBeNull();
 	});
@@ -140,6 +144,7 @@ describe("native metadata API → Worker → RuntimeHost transport", () => {
 				binding.scope.conversationId,
 				binding.scope.executionId,
 				"status",
+				nativeMetadataTestContext(identity, binding),
 			),
 		).resolves.toBeNull();
 	});
