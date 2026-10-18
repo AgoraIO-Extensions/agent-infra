@@ -19,6 +19,7 @@ import {
 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { PostgresConversationDispatchStoreV1 } from "./conversation-dispatch.ts";
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
@@ -879,6 +880,38 @@ describe("PostgreSQL Conversation command transaction", () => {
 					where execution_id = ${"native-execution-1"}
 				`,
 			).toEqual([{ action: "conversation.native_capability.accepted" }]);
+			const dispatch = new PostgresConversationDispatchStoreV1({ databaseUrl });
+			try {
+				await expect
+					.poll(async () => {
+						const [row] = await client<
+							{ available: boolean }[]
+						>`select available_at <= clock_timestamp() as available from platform.outbox_items where id = 'conversation:native-capability:native-execution-1'`;
+						return row?.available;
+					})
+					.toBe(true);
+				const claimed = await dispatch.claim({
+					schemaVersion: 1,
+					itemId: "conversation:native-capability:native-execution-1",
+					workerId: "native-worker",
+					leaseDurationMs: 30_000,
+				});
+				expect(claimed.outcome).toBe("claimed");
+				if (claimed.outcome !== "claimed")
+					throw new Error("Expected native dispatch claim");
+				expect(claimed.claim.executionDeliveryFence).toBe(
+					claimed.claim.deliveryFence,
+				);
+				expect(
+					await dispatch.readRuntimeState({ claim: claimed.claim }),
+				).toMatchObject({
+					executionStatus: "submitted",
+					stopPending: false,
+					originalOperationDigest: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+				});
+			} finally {
+				await dispatch.close();
+			}
 		} finally {
 			await transaction.close();
 		}

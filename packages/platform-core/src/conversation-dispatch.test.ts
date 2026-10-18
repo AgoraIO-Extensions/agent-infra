@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseClaim } from "./conversation-dispatch-input.js";
-import { parseRuntimeStatusResponse } from "./conversation-dispatch-runtime.js";
+import {
+	isRuntimeEventOperation,
+	parseRuntimeStatusResponse,
+} from "./conversation-dispatch-runtime.js";
 import { ConversationRuntimeHostError } from "./conversation-dispatch-types.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 import { FakeConversationRuntimeHostV1 } from "./fake-conversation-runtime-host.js";
@@ -209,9 +212,7 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		this.outboxStatus = "processing";
 		const nextFence =
 			this.current.deliveryFence + (this.current.deliveryFence > 0 ? 1 : 0);
-		const turn =
-			this.current.operation === "conversation.turn.submit.v1" ||
-			this.current.operation === "conversation.turn.regenerate.v1";
+		const turn = isRuntimeEventOperation(this.current.operation);
 		this.current = {
 			...this.current,
 			itemId: input.itemId,
@@ -242,8 +243,7 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		if (!(await this.renew())) return false;
 		if (this.capacity !== "available") return this.capacity;
 		if (
-			(input.claim.operation === "conversation.turn.submit.v1" ||
-				input.claim.operation === "conversation.turn.regenerate.v1") &&
+			isRuntimeEventOperation(input.claim.operation) &&
 			this.current.executionStatus === "submitted"
 		) {
 			this.current = { ...this.current, executionStatus: "unknown" };
@@ -363,8 +363,7 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 	}) {
 		const recoveringUnacceptedTurn =
 			input.claim.executionStatus === "unknown" &&
-			(input.claim.operation === "conversation.turn.submit.v1" ||
-				input.claim.operation === "conversation.turn.regenerate.v1");
+			isRuntimeEventOperation(input.claim.operation);
 		const restoredStatus = recoveringUnacceptedTurn
 			? input.claim.taskWaitOrder === undefined
 				? "submitted"
@@ -742,62 +741,78 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.current.executionStatus).toBe("unknown");
 	});
 
-	it("recovers an unknown native capability without dispatching it twice", async () => {
-		const native = claim({
-			operation: "conversation.native-capability.invoke.v1",
-			itemId: "conversation:native-capability:execution-1",
-			input: null,
-			messageId: null,
-			modelConfigurationRevision: null,
-			modelOptionId: null,
-			reasoningLevel: null,
-			hostSessionRef: "host-session",
-			executionStatus: "unknown",
-			attemptCount: 1,
-			nativeCapability: {
-				agentId: "agent-1",
-				actorId: "actor-1",
-				channelId: "web",
-				turnId: "turn-1",
-				capabilityId: "a".repeat(64),
-				capabilityKind: "skill",
-				directoryRevision: "b".repeat(64),
-				parameters: "summarize files",
-				parametersDigest: "c".repeat(64),
-				capabilitySourceVersion: "1.0.0",
-			},
-		});
-		const store = new MemoryDispatchStore(native);
-		const runtimeDispatch = vi.fn(async () => {
-			throw new Error("native side effect must not be replayed");
-		});
-		const recoverOriginalStatus = vi.fn(async () => ({
-			schemaVersion: 2 as const,
-			hostSessionRef: "host-session",
-			executionId: "execution-1",
-			outcome: "found" as const,
-			status: "completed" as const,
-		}));
-		const runtimeHost: ConversationRuntimeHostPortV1 = {
-			dispatch: runtimeDispatch,
-			recoverStatus: vi.fn(),
-			recoverOriginalStatus,
-			async *events() {
-				yield runtimeEvent(1, "completed");
-			},
-		};
-		const h = setup({ store, runtimeHost });
+	it.each([
+		[
+			{ outcome: "found", status: "completed" },
+			"accepted",
+			"completed",
+			"succeeded",
+			1,
+		],
+		[{ outcome: "not_found" }, "retry", "submitted", "retry_scheduled", 0],
+		[
+			{ outcome: "found", status: "unknown", operationOutcome: "busy" },
+			"rejected",
+			"failed",
+			"failed",
+			0,
+		],
+	] as const)(
+		"recovers an unknown native capability from %j without dispatching it twice",
+		async (recovered, outcome, executionStatus, outboxStatus, eventCount) => {
+			const native = claim({
+				operation: "conversation.native-capability.invoke.v1",
+				itemId: "conversation:native-capability:execution-1",
+				input: null,
+				messageId: null,
+				modelConfigurationRevision: null,
+				modelOptionId: null,
+				reasoningLevel: null,
+				hostSessionRef: "host-session",
+				executionStatus: "unknown",
+				attemptCount: 1,
+				nativeCapability: {
+					agentId: "agent-1",
+					actorId: "actor-1",
+					channelId: "web",
+					turnId: "turn-1",
+					capabilityId: "a".repeat(64),
+					capabilityKind: "skill",
+					directoryRevision: "b".repeat(64),
+					parameters: "summarize files",
+					parametersDigest: "c".repeat(64),
+					capabilitySourceVersion: "1.0.0",
+				},
+			});
+			const store = new MemoryDispatchStore(native);
+			const runtimeDispatch = vi.fn(async () => {
+				throw new Error("native side effect must not be replayed");
+			});
+			const recoverOriginalStatus = vi.fn(async () => ({
+				schemaVersion: 2 as const,
+				hostSessionRef: "host-session",
+				executionId: "execution-1",
+				...recovered,
+			}));
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				dispatch: runtimeDispatch,
+				recoverStatus: vi.fn(),
+				recoverOriginalStatus,
+				async *events() {
+					yield runtimeEvent(1, "completed");
+				},
+			};
+			const h = setup({ store, runtimeHost });
 
-		const decision = await dispatch(h.useCase, native.itemId);
-		expect(decision).toEqual({
-			schemaVersion: 1,
-			outcome: "accepted",
-		});
-		expect(runtimeDispatch).not.toHaveBeenCalled();
-		expect(recoverOriginalStatus).toHaveBeenCalledOnce();
-		expect(store.outboxStatus).toBe("succeeded");
-		expect(h.events.persisted).toHaveLength(1);
-	});
+			const decision = await dispatch(h.useCase, native.itemId);
+			expect(decision).toMatchObject({ schemaVersion: 1, outcome });
+			expect(runtimeDispatch).not.toHaveBeenCalled();
+			expect(recoverOriginalStatus).toHaveBeenCalledOnce();
+			expect(store.outboxStatus).toBe(outboxStatus);
+			expect(store.current.executionStatus).toBe(executionStatus);
+			expect(h.events.persisted).toHaveLength(eventCount);
+		},
+	);
 
 	it("bounds repeated unknown native capability recovery", async () => {
 		const store = new MemoryDispatchStore(
@@ -1351,6 +1366,43 @@ describe("Conversation Worker dispatch", () => {
 			expect(runtimeHost.sideEffectCount()).toBe(1);
 		},
 	);
+	it("releases a native invocation only when delivery is proven unsent", async () => {
+		const native = claim({
+			operation: "conversation.native-capability.invoke.v1",
+			itemId: "conversation:native-capability:execution-1",
+			input: null,
+			messageId: null,
+			modelConfigurationRevision: null,
+			modelOptionId: null,
+			reasoningLevel: null,
+			hostSessionRef: "host-session",
+			executionStatus: "submitted",
+			nativeCapability: {
+				agentId: "agent-1",
+				actorId: "actor-1",
+				channelId: "web",
+				turnId: "turn-1",
+				capabilityId: "a".repeat(64),
+				capabilityKind: "skill",
+				directoryRevision: "b".repeat(64),
+				parameters: "summary",
+				parametersDigest: "c".repeat(64),
+				capabilitySourceVersion: "1.0.0",
+			},
+		});
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.failNext("RUNTIME_WORKLOAD_UNAVAILABLE", true, true);
+		const store = new MemoryDispatchStore(native);
+		const f = setup({ runtimeHost, store });
+		expect(await dispatch(f.useCase, native.itemId)).toMatchObject({
+			outcome: "retry",
+			retryScheduled: true,
+		});
+		expect(store.current.executionStatus).toBe("submitted");
+		expect(store.released).toBe(1);
+		expect(runtimeHost.sideEffectCount()).toBe(0);
+	});
+
 	it("keeps a recovering unknown Turn unknown even when the retry was not sent (#1522)", async () => {
 		const runtimeHost = new FakeConversationRuntimeHostV1();
 		runtimeHost.failNext("RUNTIME_WORKLOAD_UNAVAILABLE", true, true);

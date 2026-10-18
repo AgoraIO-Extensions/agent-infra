@@ -59,7 +59,7 @@ import {
 } from "./conversation-dispatch-task.js";
 import {
 	exactPayload,
-	isTurn,
+	isExecutionOperation,
 	operation,
 	requireClaim,
 	requireCommand,
@@ -94,10 +94,10 @@ export interface PostgresConversationDispatchOptionsV1 {
 }
 
 /**
- * stop 认领本地取消时要结算的原 Turn 条目（提交或重新生成，只能有一个）。只在它没有被 Worker
+ * stop 认领本地取消时要结算的原执行条目（提交、重新生成或原生调用，只能有一个）。只在它没有被 Worker
  * 持有时返回：正在投递的提交由它自己的认领看到 stop 再处理（#2548），这里不与之竞争（#2674）。
  */
-async function lockUnleasedTurnOutbox(
+async function lockUnleasedExecutionOutbox(
 	transaction: Transaction,
 	claim: ConversationDispatchClaimV1,
 ): Promise<OutboxRow | undefined> {
@@ -111,8 +111,15 @@ async function lockUnleasedTurnOutbox(
 		`conversation:regenerate:${claim.executionId}`,
 		claim.conversationId,
 	);
-	const turn =
-		submit && !regenerate ? submit : !submit ? regenerate : undefined;
+	const native = await lockOutbox(
+		transaction,
+		`conversation:native-capability:${claim.executionId}`,
+		claim.conversationId,
+	);
+	const origins = [submit, regenerate, native].filter(
+		(origin) => origin !== undefined,
+	);
+	const turn = origins.length === 1 ? origins[0] : undefined;
 	return turn?.status === "pending" || turn?.status === "retry_scheduled"
 		? turn
 		: undefined;
@@ -520,7 +527,8 @@ export class PostgresConversationDispatchStoreV1
 								or (
 									operation in (
 										'conversation.turn.submit.v1',
-										'conversation.turn.regenerate.v1'
+										'conversation.turn.regenerate.v1',
+										'conversation.native-capability.invoke.v1'
 									)
 									and exists (
 										select 1
@@ -975,7 +983,7 @@ export class PostgresConversationDispatchStoreV1
 							throw new DispatchCapacityUnavailable("capacity_wait");
 					}
 					const stoppedRecovery =
-						isTurn(input.claim.operation) &&
+						isExecutionOperation(input.claim.operation) &&
 						(input.claim.executionStatus === "processing" ||
 							input.claim.executionStatus === "unknown") &&
 						(agent.status === "stopped" ||
@@ -1004,11 +1012,12 @@ export class PostgresConversationDispatchStoreV1
 					if (
 						input.claim.operation ===
 							"conversation.native-capability.invoke.v1" &&
+						state.execution.status === "submitted" &&
 						state.conversation.status !== "ready"
 					)
 						throw new DispatchCapacityUnavailable("capacity_wait");
 					if (
-						isTurn(input.claim.operation) &&
+						isExecutionOperation(input.claim.operation) &&
 						(state.execution.status === "submitted" ||
 							state.execution.status === "waiting")
 					) {
@@ -1045,6 +1054,7 @@ export class PostgresConversationDispatchStoreV1
 						try {
 							// The Core decision consumes this locked snapshot, before any occupied state is written.
 							capacityDecision = decideConversationDispatchCapacityV1({
+								operation: input.claim.operation,
 								agentId: input.claim.agentId,
 								modelConfigurationRevision:
 									input.claim.modelConfigurationRevision,
@@ -1182,7 +1192,7 @@ export class PostgresConversationDispatchStoreV1
 		const recoveringUnacceptedTurn =
 			input.claim.executionStatus === "unknown" &&
 			!input.claim.metadataRecovery &&
-			isTurn(input.claim.operation);
+			isExecutionOperation(input.claim.operation);
 		const original = recoveringUnacceptedTurn
 			? input.claim.taskWaitOrder === undefined
 				? "submitted"
@@ -1190,7 +1200,7 @@ export class PostgresConversationDispatchStoreV1
 			: input.claim.executionStatus;
 		if (
 			input.claim.metadataRecovery ||
-			!isTurn(input.claim.operation) ||
+			!isExecutionOperation(input.claim.operation) ||
 			(!recoveringUnacceptedTurn &&
 				input.claim.executionStatus !== "submitted" &&
 				input.claim.executionStatus !== "waiting") ||
@@ -1247,13 +1257,13 @@ export class PostgresConversationDispatchStoreV1
 			// stop 认领（授权被拒时 Core 用它本地取消，#2662）要结算的是原 Turn 的条目（#2674）。
 			const turnOutbox =
 				state && input.claim.operation === "conversation.turn.stop.v1"
-					? await lockUnleasedTurnOutbox(transaction, input.claim)
+					? await lockUnleasedExecutionOutbox(transaction, input.claim)
 					: state?.outbox;
 			const turnOperation = turnOutbox
 				? operation(turnOutbox.operation)
 				: undefined;
 			const payload =
-				turnOutbox && turnOperation && isTurn(turnOperation)
+				turnOutbox && turnOperation && isExecutionOperation(turnOperation)
 					? exactPayload(turnOutbox.payload, turnOperation)
 					: undefined;
 			const stop = state
@@ -1292,8 +1302,7 @@ export class PostgresConversationDispatchStoreV1
 	}): Promise<boolean> {
 		requireClaim(input.claim);
 		if (
-			(input.claim.operation !== "conversation.turn.submit.v1" &&
-				input.claim.operation !== "conversation.turn.regenerate.v1") ||
+			!isExecutionOperation(input.claim.operation) ||
 			input.claim.executionDeliveryFence < 1
 		)
 			return false;
@@ -1319,8 +1328,13 @@ export class PostgresConversationDispatchStoreV1
 		if (!validText(input.hostSessionRef)) {
 			throw new TypeError("RuntimeHost Session reference is invalid");
 		}
-		if (input.originalOperationAccepted && !isTurn(input.claim.operation))
-			throw new TypeError("Only original Turns can record Runtime acceptance");
+		if (
+			input.originalOperationAccepted &&
+			!isExecutionOperation(input.claim.operation)
+		)
+			throw new TypeError(
+				"Only original executions can record Runtime acceptance",
+			);
 		return transactionResult(this.#client, async (transaction) => {
 			// 提交/重新生成认领时没有 stop、现在有了：「Runtime 已受理这次提交」这个事实不受 stop
 			// 影响，照常记录，让已经在重试的 stop 工作项把停止送到 Runtime。否则本次认领作废、
@@ -1328,7 +1342,7 @@ export class PostgresConversationDispatchStoreV1
 			const state = await ownedState(
 				transaction,
 				input.claim,
-				isTurn(input.claim.operation) && !input.claim.stopPending,
+				isExecutionOperation(input.claim.operation) && !input.claim.stopPending,
 			);
 			if (
 				!state ||

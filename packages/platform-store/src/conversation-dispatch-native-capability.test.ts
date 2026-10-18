@@ -20,6 +20,19 @@ const payload = {
 };
 
 describe("Conversation Dispatch native capability payload", () => {
+	it("accepts an admitted command with no parameters", () => {
+		expect(
+			exactPayload(
+				{
+					...payload,
+					capabilityKind: "command",
+					parameters: "",
+					parametersDigest: nativeCapabilityParametersDigestV1(""),
+				},
+				"conversation.native-capability.invoke.v1",
+			),
+		).toMatchObject({ nativeCapability: { parameters: "" } });
+	});
 	it("projects the immutable plan binding into a claim payload", () => {
 		expect(
 			exactPayload(payload, "conversation.native-capability.invoke.v1"),
@@ -39,6 +52,21 @@ describe("Conversation Dispatch native capability payload", () => {
 			},
 		});
 	});
+	it.each(["\0", "\ud800", "a".repeat(16 * 1024 + 1)])(
+		"rejects malformed or oversized native parameters",
+		(parameters) => {
+			expect(
+				exactPayload(
+					{
+						...payload,
+						parameters,
+						parametersDigest: nativeCapabilityParametersDigestV1(parameters),
+					},
+					"conversation.native-capability.invoke.v1",
+				),
+			).toBeUndefined();
+		},
+	);
 
 	it.each([
 		"parameters",

@@ -34,6 +34,7 @@ import {
 import {
 	exactPayload,
 	isBrowserHandoff,
+	isExecutionOperation,
 	isTurn,
 	operation,
 	terminal,
@@ -183,7 +184,7 @@ export async function claimWork(
 		if (decision.outcome === "wait") return { outcome: "busy" };
 	}
 	const stoppedRecovery =
-		isTurn(selectedOperation) &&
+		isExecutionOperation(selectedOperation) &&
 		(execution.status === "processing" || execution.status === "unknown") &&
 		agent !== undefined &&
 		(agent.status !== "available" ||
@@ -240,7 +241,7 @@ export async function claimWork(
 		return { outcome: "stale" };
 	}
 	if (
-		isTurn(selectedOperation) &&
+		isExecutionOperation(selectedOperation) &&
 		execution.status === "submitted" &&
 		stop?.status === "submitted"
 	) {
@@ -274,7 +275,7 @@ export async function claimWork(
 		previousFence >= maximumSafeCounter ||
 		previousAttempt >= maximumSafeCounter ||
 		(isolationWork && executionFence > previousFence) ||
-		(isTurn(selectedOperation) &&
+		(isExecutionOperation(selectedOperation) &&
 			!isolationWork &&
 			(terminal(execution.status)
 				? executionFence > previousFence
@@ -297,7 +298,7 @@ export async function claimWork(
 	let currentExecutionFence = executionFence;
 	const currentExecutionStatus = execution.status;
 	if (
-		isTurn(selectedOperation) &&
+		isExecutionOperation(selectedOperation) &&
 		(!terminal(execution.status) || isolationWork)
 	) {
 		const updated = await transaction<{ execution_id: string }[]>`
