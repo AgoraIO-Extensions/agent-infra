@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type NativeMetadataProjectionV1,
 	PlatformNativeMetadataReadRequestV1Schema,
@@ -11,6 +11,7 @@ import {
 } from "@agent-infra/contracts/runtime";
 import type { IdentityContext } from "./http/identity.js";
 import type { RuntimeNativeMetadataRequestRegistryV1 } from "./runtime-native-metadata-current.js";
+import type { RuntimeNativeMetadataRequestContextV1 } from "./runtime-native-metadata-request-context.js";
 
 export interface RuntimeNativeMetadataTransportV1 {
 	read(
@@ -46,6 +47,68 @@ function sameBinding(
 	);
 }
 
+type ResolveRequest = (input: {
+	readonly identity: IdentityContext;
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly selector: "status" | "commands" | "skills";
+	readonly signal: AbortSignal;
+	readonly requestContext?: RuntimeNativeMetadataRequestContextV1;
+}) => Promise<RuntimeNativeMetadataBindingResponseV1 | null>;
+
+async function prepareRead(
+	resolveRequest: ResolveRequest,
+	identity: IdentityContext,
+	conversationId: string,
+	executionId: string,
+	selector: "status" | "commands" | "skills",
+	requestContext: RuntimeNativeMetadataRequestContextV1,
+) {
+	const input = {
+		identity,
+		conversationId,
+		executionId,
+		selector,
+		signal: requestContext.signal,
+		requestContext,
+	};
+	const current = await requestContext.revalidate(identity);
+	const resolved = await requestContext.run(() =>
+		resolveRequest({ ...input, identity: current }),
+	);
+	if (!resolved) throw new Error("NATIVE_METADATA_REQUEST_UNAVAILABLE");
+	const binding = RuntimeNativeMetadataBindingResponseV1Schema.parse(resolved);
+	if (
+		binding.selector !== selector ||
+		binding.scope.principal.kind !== "user" ||
+		binding.scope.principal.id !== identity.userId ||
+		binding.scope.conversationId !== conversationId ||
+		binding.scope.executionId !== executionId ||
+		binding.scope.channelId !== "web" ||
+		binding.readStartedAt !== requestContext.readStartedAt
+	)
+		throw new Error("NATIVE_METADATA_REQUEST_UNAVAILABLE");
+	requestContext.limit(binding.expiresAt);
+	const revalidate = async () => {
+		const fresh = await requestContext.revalidate(identity);
+		const original = await requestContext.run(() =>
+			resolveRequest({ ...input, identity: fresh }),
+		);
+		if (
+			!original ||
+			!isDeepStrictEqual(original.scope, binding.scope) ||
+			original.originalHostScopeRef !== binding.originalHostScopeRef ||
+			original.readStartedAt !== binding.readStartedAt ||
+			original.expiresAt !== binding.expiresAt
+		) {
+			requestContext.close();
+			throw new Error("NATIVE_METADATA_REQUEST_UNAVAILABLE");
+		}
+		return requestContext.revalidate(identity);
+	};
+	return { binding, revalidate };
+}
+
 /**
  * API-side producer adapter for request-local native metadata reads.
  * Deployment code owns proof signing and Worker transport; this seam owns
@@ -58,6 +121,7 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 		readonly executionId: string;
 		readonly selector: "status" | "commands" | "skills";
 		readonly signal: AbortSignal;
+		readonly requestContext?: RuntimeNativeMetadataRequestContextV1;
 	}) => Promise<RuntimeNativeMetadataBindingResponseV1 | null>;
 	readonly proofIssuer: RuntimeNativeMetadataProofIssuerV1;
 	readonly transport: RuntimeNativeMetadataTransportV1;
@@ -74,40 +138,33 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 			conversationId: string,
 			executionId: string,
 			selector: "status" | "commands" | "skills",
+			requestContext: RuntimeNativeMetadataRequestContextV1,
 		): Promise<NativeMetadataProjectionV1 | null> {
-			const controller = new AbortController();
+			if (!requestContext) return null;
 			try {
-				const resolved = await options.resolveRequest({
+				const { binding, revalidate } = await prepareRead(
+					options.resolveRequest,
 					identity,
 					conversationId,
 					executionId,
 					selector,
-					signal: controller.signal,
-				});
-				if (!resolved) return null;
-				const binding =
-					RuntimeNativeMetadataBindingResponseV1Schema.parse(resolved);
-				if (
-					binding.selector !== selector ||
-					binding.scope.principal.kind !== "user" ||
-					binding.scope.principal.id !== identity.userId ||
-					binding.scope.authorizationRevision !==
-						identity.authorizationRevision ||
-					binding.scope.conversationId !== conversationId ||
-					binding.scope.executionId !== executionId ||
-					binding.scope.channelId !== "web"
-				)
-					return null;
-				const proof = RuntimeNativeMetadataProofV1Schema.parse(
-					await options.proofIssuer.issue({
-						request: binding,
-						signal: controller.signal,
-					}),
+					requestContext,
 				);
+				const proof = RuntimeNativeMetadataProofV1Schema.parse(
+					await requestContext.run((signal) =>
+						options.proofIssuer.issue({
+							request: binding,
+							signal,
+						}),
+					),
+				);
+				await revalidate();
 				const response = RuntimeNativeMetadataReadResponseV1Schema.parse(
-					await options.transport.read(
-						{ ...binding, proof },
-						controller.signal,
+					await requestContext.run(() =>
+						options.transport.read(
+							{ ...binding, proof },
+							requestContext.signal,
+						),
 					),
 				);
 				const { projection: _projection, ...responseBindingInput } = response;
@@ -119,12 +176,13 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 					!sameBinding(binding, responseBinding) ||
 					response.projection.selector !== selector
 				)
-					return null;
+					throw new Error("NATIVE_METADATA_REQUEST_UNAVAILABLE");
+				await revalidate();
+				requestContext.beforeDelivery(revalidate);
 				return response.projection;
 			} catch {
+				requestContext.close();
 				return null;
-			} finally {
-				controller.abort();
 			}
 		},
 	};
@@ -151,43 +209,40 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 			conversationId: string,
 			executionId: string,
 			selector: "status" | "commands" | "skills",
+			requestContext: RuntimeNativeMetadataRequestContextV1,
 		): Promise<NativeMetadataProjectionV1 | null> {
-			const controller = new AbortController();
+			if (!requestContext) return null;
+			const registry = options.requestRegistry;
+			if (!registry) {
+				requestContext.close();
+				return null;
+			}
 			let requestSourceRef: string | undefined;
 			try {
-				const resolved = await options.resolveRequest({
+				const { binding, revalidate } = await prepareRead(
+					options.resolveRequest,
 					identity,
 					conversationId,
 					executionId,
 					selector,
-					signal: controller.signal,
-				});
-				if (!resolved) return null;
-				const binding =
-					RuntimeNativeMetadataBindingResponseV1Schema.parse(resolved);
-				if (
-					binding.selector !== selector ||
-					binding.scope.principal.kind !== "user" ||
-					binding.scope.principal.id !== identity.userId ||
-					binding.scope.authorizationRevision !==
-						identity.authorizationRevision ||
-					binding.scope.conversationId !== conversationId ||
-					binding.scope.executionId !== executionId ||
-					binding.scope.channelId !== "web"
-				)
-					return null;
+					requestContext,
+				);
 				const { originalHostScopeRef: _hostScope, ...requestIdentity } =
 					binding;
-				requestSourceRef = options.requestRegistry?.register({
+				requestSourceRef = registry.register({
 					binding,
 					identity,
+					requestContext,
+					revalidate,
 				});
 				const request = PlatformNativeMetadataReadRequestV1Schema.parse({
 					...requestIdentity,
-					apiRequestSourceRef: requestSourceRef ?? randomUUID(),
+					apiRequestSourceRef: requestSourceRef,
 				});
 				const response = RuntimeNativeMetadataReadResponseV1Schema.parse(
-					await options.gateway.read(request, controller.signal),
+					await requestContext.run((signal) =>
+						options.gateway.read(request, signal),
+					),
 				);
 				const { projection: _projection, ...responseBinding } = response;
 				if (
@@ -195,14 +250,15 @@ export function createRuntimeNativeMetadataWorkerReaderV1(options: {
 						runtimeNativeMetadataRequestSigningPayloadV1(binding) ||
 					response.projection.selector !== selector
 				)
-					return null;
+					throw new Error("NATIVE_METADATA_REQUEST_UNAVAILABLE");
+				await revalidate();
+				requestContext.beforeDelivery(revalidate);
 				return response.projection;
 			} catch {
+				requestContext.close();
 				return null;
 			} finally {
-				if (requestSourceRef)
-					options.requestRegistry?.release(requestSourceRef);
-				controller.abort();
+				if (requestSourceRef) registry.release(requestSourceRef);
 			}
 		},
 	};

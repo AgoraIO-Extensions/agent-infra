@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRuntimeNativeMetadataRequestRegistryV1 } from "./runtime-native-metadata-current.js";
 import { createRuntimeNativeMetadataWorkerReaderV1 } from "./runtime-native-metadata-reader.js";
+import { nativeMetadataTestContext } from "./runtime-native-metadata-test-context.js";
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -64,6 +65,7 @@ describe("Platform API Worker native metadata reader", () => {
 				binding.scope.conversationId,
 				binding.scope.executionId,
 				"skills",
+				nativeMetadataTestContext(identity, binding),
 			),
 		).resolves.toEqual(response.projection);
 		expect(request).toMatchObject({ apiRequestSourceRef: expect.any(String) });
@@ -80,6 +82,9 @@ describe("Platform API Worker native metadata reader", () => {
 
 	it("fails closed when Worker response crosses the binding", async () => {
 		const reader = createRuntimeNativeMetadataWorkerReaderV1({
+			requestRegistry: createRuntimeNativeMetadataRequestRegistryV1({
+				now: () => binding.readStartedAt,
+			}),
 			resolveRequest: async () => binding,
 			gateway: {
 				read: async () => ({
@@ -94,6 +99,7 @@ describe("Platform API Worker native metadata reader", () => {
 				binding.scope.conversationId,
 				binding.scope.executionId,
 				"skills",
+				nativeMetadataTestContext(identity, binding),
 			),
 		).resolves.toBeNull();
 	});
