@@ -14,6 +14,7 @@ import {
 	resolveCurrentPersonalApiUserV1,
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
+import { agentManagementStateJsonSql } from "./agent-management-state-sql.js";
 import {
 	readCurrentTaskApiUseGrantV1,
 	readCurrentTaskApplicationV1,
@@ -86,18 +87,8 @@ export async function revalidateWaitingTask(
 	let revoked = record.revoked_at !== null;
 	if (!revoked) {
 		const [management] = await transaction<{ agent: AgentManagementStateV1 }[]>`
-			select jsonb_build_object(
-				'schemaVersion', 1, 'applicationId', a.id, 'agentId', a.agent_id,
-				'applicantId', a.applicant_id, 'status', a.status, 'revision', a.management_revision,
-				'approvalRevision', a.approval_revision, 'decisionReason', a.decision_reason,
-				'serviceAvailability', a.service_availability, 'desiredState', a.desired_state,
-				'workloadRevision', a.workload_revision, 'fence', a.fence, 'failureCode', a.failure_code,
-				'ownerIds', (select coalesce(jsonb_agg(owner_id order by owner_id), '[]'::jsonb) from platform.agent_owners where agent_id = a.agent_id),
-				'availability', (select coalesce(jsonb_agg(case when target_type = 'user'
-					then jsonb_build_object('kind', 'user', 'userId', target_id)
-					else jsonb_build_object('kind', 'organization', 'organizationId', target_id) end order by target_type, target_id), '[]'::jsonb)
-					from platform.agent_availability where agent_id = a.agent_id)
-			) as agent from platform.agent_applications a where a.agent_id = ${boundary.agentId}
+			select ${transaction.unsafe(agentManagementStateJsonSql("a"))} as agent
+			from platform.agent_applications a where a.agent_id = ${boundary.agentId}
 		`;
 		const agent = management?.agent;
 		if (boundary.principal.kind === "application") {

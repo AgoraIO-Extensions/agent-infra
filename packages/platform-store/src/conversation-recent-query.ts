@@ -5,6 +5,7 @@ import {
 	type RecentPersonalConversationsQueryV1,
 } from "@agent-infra/platform-core";
 import type postgres from "postgres";
+import { agentManagementStateJsonSql } from "./agent-management-state-sql.js";
 import type { ConversationQueryProjectionV1 } from "./conversation-query.js";
 import { conversationSandboxReadBindingSql } from "./session-sandbox.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
@@ -113,20 +114,7 @@ export async function readRecentPersonalConversations(
 					c.last_conversation_cursor, c.created_at, c.updated_at,
 					to_char(c.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as exact_updated_at,
 					a.current_configuration_revision::text as configuration_revision, a.workload,
-					jsonb_build_object(
-						'schemaVersion', 1, 'applicationId', a.id, 'agentId', c.agent_id,
-						'applicantId', a.applicant_id, 'status', a.status, 'revision', a.management_revision,
-						'approvalRevision', a.approval_revision, 'decisionReason', a.decision_reason,
-						'serviceAvailability', a.service_availability, 'desiredState', a.desired_state,
-						'workloadRevision', a.workload_revision, 'fence', a.fence, 'failureCode', a.failure_code,
-						'ownerIds', coalesce((select jsonb_agg(o.owner_id order by o.owner_id)
-							from platform.agent_owners o where o.agent_id = c.agent_id), '[]'::jsonb),
-						'availability', coalesce((select jsonb_agg(case when av.target_type = 'user'
-							then jsonb_build_object('kind', 'user', 'userId', av.target_id)
-							else jsonb_build_object('kind', 'organization', 'organizationId', av.target_id) end
-							order by av.target_type, av.target_id)
-							from platform.agent_availability av where av.agent_id = c.agent_id), '[]'::jsonb)
-					) as management
+					${agentManagementStateJsonSql("a")} as management
 				from platform.conversations c
 				left join platform.session_sandbox_allocations s on s.conversation_id = c.id
 				join current_agents a on a.agent_id = c.agent_id and a.channel_state = 'included'
