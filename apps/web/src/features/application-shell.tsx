@@ -573,7 +573,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 										: skillHubRoute === "version"
 											? "Skill Hub"
 											: skillHubRoute === "management"
-												? "系统管理"
+												? "我的管理"
 												: normalizedPathname.startsWith("/my-agents") ||
 														normalizedPathname === "/audit" ||
 														normalizedPathname.startsWith("/my-settings") ||

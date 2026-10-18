@@ -198,7 +198,7 @@ describe("Original IA workbench navigation", () => {
 			entry: "/skills/manage",
 			group: "我的管理",
 			label: "我的 Skill",
-			parent: "系统管理",
+			parent: "我的管理",
 			title: "我的 Skill",
 		},
 	])(
