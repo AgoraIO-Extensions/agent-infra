@@ -1578,8 +1578,11 @@ a[class~="group/button"] {
 	*,
 	*::before,
 	*::after {
+		/* biome-ignore lint/complexity/noImportantStyles: reduced-motion must override component transitions */
 		animation: none !important;
+		/* biome-ignore lint/complexity/noImportantStyles: reduced-motion must override component transitions */
 		transition: none !important;
+		/* biome-ignore lint/complexity/noImportantStyles: reduced-motion must override component scrolling */
 		scroll-behavior: auto !important;
 	}
 }
@@ -2930,11 +2933,59 @@ a[class~="group/button"]:focus-visible {
 		margin-bottom: 4px;
 	}
 	.management-content :not(.markdown-table) > [data-slot="table-container"] {
+		border: 0;
 		border-radius: 12px;
+		background: transparent;
 	}
 	.management-content :is(.audit-table, .admin-agent-table, .approval-table) {
 		width: 100%;
 		min-width: 0;
+	}
+	.management-content
+		:is(.audit-table, .admin-agent-table, .approval-table)
+		[data-slot="table-cell"] {
+		display: grid;
+		grid-template-columns: minmax(0, 34%) minmax(0, 1fr);
+		align-items: baseline;
+		justify-content: initial;
+		column-gap: 12px;
+		text-align: right;
+	}
+	.management-content
+		:is(.audit-table, .admin-agent-table, .approval-table)
+		[data-slot="table-cell"]::before {
+		grid-column: 1;
+		align-self: start;
+	}
+	.management-content
+		:is(.audit-table, .admin-agent-table, .approval-table)
+		[data-slot="table-cell"]
+		> * {
+		display: block;
+		grid-column: 2;
+		min-width: 0;
+		max-width: 100%;
+		text-align: right;
+	}
+	.management-content
+		:is(.audit-table, .admin-agent-table, .approval-table)
+		[data-slot="table-cell"]:last-child {
+		display: flex;
+		align-items: center;
+		justify-content: flex-start;
+		text-align: left;
+	}
+	.management-content
+		:is(.audit-table, .admin-agent-table, .approval-table)
+		[data-slot="table-cell"]:last-child::before {
+		display: none;
+	}
+	.management-content
+		:is(.audit-table, .admin-agent-table, .approval-table)
+		[data-slot="table-cell"]:last-child
+		> * {
+		display: inline-flex;
+		text-align: left;
 	}
 	.management-content :is([data-slot="table-head"], [data-slot="table-cell"]) {
 		padding: 12px 11px;

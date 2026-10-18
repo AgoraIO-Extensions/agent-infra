@@ -219,6 +219,7 @@
 - 2026-10-18：补齐 N-12 的企微与 Agent 管理范围：企微动作/字段和 Owner 交接入口均加入对象上下文 aria-label；定向测试 26/26 通过。
 - 2026-10-18：补齐 CH-10：新会话直接渲染 composer，首条消息先创建会话再提交原草稿，placeholder 改为命令/Skill 入口提示；conversation-screen 65/65 通过。
 - 2026-10-18：补齐 N-16：Skill 目录/详情/管理页拆分导航高亮、标题和面包屑，/skills/manage 统一为「我的 Skill」；定向导航/管理测试 39/39 通过。
+- 2026-10-18：补齐 N-15/B-01：移动端审计、Agent 管理和审批表格改为纵向 label/value 卡片，操作按钮留在卡片内，Markdown 表格保持独立滚动规则。
 - 2026-10-18：补齐 N-10：Owner 配置、申请表单和 keyless model picker 的分区改为 section+h2，保留外层 fieldset 的字段禁用与内嵌字段语义；定向配置/申请测试 91/91 通过。
 - 2026-10-18：补强 C-02/T-04：design-contract 增加页面标题、分区、surface、控件、primitive count、hover/focus/pressed/reduced-motion 的 computed-style 契约；对话矩阵 1/1、管理矩阵 8/8 通过。
 - 2026-10-18：继续修复 N-14：高级配置展开与目录清空操作统一为至少 44px 触控高度。
