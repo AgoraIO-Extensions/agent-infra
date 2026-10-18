@@ -46,6 +46,7 @@ async function fixture() {
 	const manifest = join(directory, "database-route.yaml");
 	const networkState = join(directory, "kind-network-connected");
 	const routeState = join(directory, "database-route.json");
+	const apiNetworkState = join(directory, "api-network-connected");
 	const directoryNetworkState = join(directory, "directory-network-connected");
 	const directoryRouteState = join(directory, "directory-route.json");
 	const kubeconfig = join(directory, "kubeconfig");
@@ -120,6 +121,21 @@ elif [[ "$*" == *"compose"*"up --detach --wait --force-recreate --no-deps platfo
   if [[ -n "$NATIVE_METADATA_RECORD" && -n "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_ORIGIN" ]]; then
     printf '%s|%s\\n' "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_ORIGIN" "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE" >> "$NATIVE_METADATA_RECORD"
   fi
+elif [[ "$*" == *"compose"*"ps -q platform-api"* || "$*" == *"compose"*"ps --all -q platform-api"* ]]; then
+  printf 'fixture-api\\n'
+elif [[ "$*" == *"container inspect fixture-api"*"IPAddress"* ]]; then
+  printf '%s\\n' "\${FAKE_API_IP:-172.18.0.44}"
+elif [[ "$*" == *"container inspect fixture-api"* ]]; then
+  if [[ -f "$FAKE_API_NETWORK_STATE" ]]; then cat "$FAKE_API_NETWORK_STATE"; else printf '%s' "\${FAKE_API_PRECONNECTED_ALIASES:-}"; fi
+elif [[ "$*" == *"network connect --alias "*" kind fixture-api"* ]]; then
+  command="$*"
+  alias="\${command#*--alias }"
+  alias="\${alias%% kind fixture-api*}"
+  printf '%s' "$alias" > "$FAKE_API_NETWORK_STATE"
+  printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
+elif [[ "$*" == *"network disconnect kind fixture-api"* ]]; then
+  rm -f "$FAKE_API_NETWORK_STATE"
+  printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
 elif [[ "$*" == *"container inspect fixture-postgres"*"IPAddress"* ]]; then
   printf '172.18.0.42\\n'
 elif [[ "$*" == *"container inspect fixture-postgres"* ]]; then
@@ -319,6 +335,7 @@ fi`,
 		FAKE_NETWORK_STATE: networkState,
 		FAKE_ROUTE_STATE: routeState,
 		FAKE_DIRECTORY_NETWORK_STATE: directoryNetworkState,
+		FAKE_API_NETWORK_STATE: apiNetworkState,
 		FAKE_DIRECTORY_ROUTE_STATE: directoryRouteState,
 		FAKE_KUBE_SERVER: "https://127.0.0.1:6443",
 		FAKE_KIND_LABEL: "isolated",
@@ -461,9 +478,13 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			up[13],
 			/^docker .* compose .* up --detach --wait --force-recreate --no-deps platform-api$/,
 		);
-		assert.match(up[14], /^node deploy\/local\/check-api-auth\.ts /);
 		assert.match(
-			up[15],
+			up[14],
+			/delete endpointslice\/agent-infra-verify-native-metadata-api service\/agent-infra-verify-native-metadata-api --ignore-not-found/,
+		);
+		assert.match(up[15], /^node deploy\/local\/check-api-auth\.ts /);
+		assert.match(
+			up[16],
 			/^docker .* compose .* up --detach --wait --force-recreate --no-deps web$/,
 		);
 		assert.match(
@@ -476,7 +497,7 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			/^helm .* get values agent-infra-verify --all --output json$/,
 		);
 		assert.match(up[11], /kubectl .* scale .* --replicas=1$/);
-		assert.equal(up.length, 16);
+		assert.equal(up.length, 17);
 
 		await writeFile(f.log, "");
 		assert.equal(run("up", f.env).status, 0);
@@ -536,7 +557,11 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			stopSteps[8],
 			/delete endpointslice\/agent-infra-verify-postgres-docker service\/agent-infra-verify-postgres secret\/agent-infra-verify-postgres/,
 		);
-		assert.match(stopSteps[9], /compose .* stop object-storage postgres/);
+		assert.match(
+			stopSteps[9],
+			/delete endpointslice\/agent-infra-verify-native-metadata-api service\/agent-infra-verify-native-metadata-api --ignore-not-found/,
+		);
+		assert.match(stopSteps[10], /compose .* stop object-storage postgres/);
 		assert.doesNotMatch(
 			stop,
 			/--volumes|compose .* down|delete (persistentvolumeclaim|pvc|namespace)/,
@@ -572,6 +597,24 @@ test("local native metadata default reads the Worker token and owns the port-for
 			await readFile(f.log, "utf8"),
 			/native proxy deploy\/local\/native-metadata-proxy\.mjs .*192\.168\.65\.0\/24/,
 		);
+		const commands = await readFile(f.log, "utf8");
+		assert.match(
+			commands,
+			/platformWorker\.nativeMetadataGateway\.platformApiOrigin=http:\/\/agent-infra-verify-native-metadata-api:3000/,
+		);
+		assert.match(
+			commands,
+			/network connect --alias agent-infra-verify-native-metadata-api-fixture-api kind fixture-api/,
+		);
+		assert.ok(
+			commands.indexOf("--force-recreate --no-deps platform-api") <
+				commands.indexOf(
+					"network connect --alias agent-infra-verify-native-metadata-api",
+				),
+		);
+		const manifest = await readFile(f.manifest, "utf8");
+		assert.match(manifest, /name: agent-infra-verify-native-metadata-api/);
+		assert.match(manifest, /addresses: \["172\.18\.0\.44"\]/);
 		assert.equal(
 			(await readFile(f.nativeMetadataRecord, "utf8")).trim(),
 			`http://platform-worker-native-metadata:3304|${join(
@@ -592,6 +635,10 @@ test("local native metadata default reads the Worker token and owns the port-for
 		);
 		const stopped = run("stop", env);
 		assert.equal(stopped.status, 0, stopped.stderr);
+		assert.match(
+			await readFile(f.log, "utf8"),
+			/network disconnect kind fixture-api/,
+		);
 		await assert.rejects(
 			readFile(
 				join(
@@ -600,6 +647,61 @@ test("local native metadata default reads the Worker token and owns the port-for
 				),
 				"utf8",
 			),
+		);
+	} finally {
+		await f.close();
+	}
+});
+
+test("native metadata API route rejects foreign resources before stopping services", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", {
+			...f.env,
+			FAKE_FOREIGN_RESOURCE: "service/agent-infra-verify-native-metadata-api",
+		});
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /native metadata API service is not owned/);
+		assert.doesNotMatch(
+			await readFile(f.log, "utf8"),
+			/stop web platform-api|network connect.*fixture-api/,
+		);
+	} finally {
+		await f.close();
+	}
+});
+
+test("disabled native metadata has no API kind route", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", f.env);
+		assert.equal(result.status, 0, result.stderr);
+		const commands = await readFile(f.log, "utf8");
+		assert.doesNotMatch(commands, /network connect.*fixture-api/);
+		assert.match(
+			commands,
+			/delete endpointslice\/agent-infra-verify-native-metadata-api service\/agent-infra-verify-native-metadata-api --ignore-not-found/,
+		);
+	} finally {
+		await f.close();
+	}
+});
+
+test("local up rejects unknown API kind aliases before replacing the container", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", {
+			...f.env,
+			FAKE_API_PRECONNECTED_ALIASES: "unowned-api",
+		});
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/Platform API is connected to kind outside this project/,
+		);
+		assert.doesNotMatch(
+			await readFile(f.log, "utf8"),
+			/stop web platform-api|--force-recreate|network disconnect kind fixture-api/,
 		);
 	} finally {
 		await f.close();

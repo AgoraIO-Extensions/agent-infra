@@ -89,6 +89,9 @@ platformWorker:
   nativeMetadataGateway:
     enabled: true
     port: 3004
+    # In-cluster API uses this release's Service; external API deployments supply
+    # a fixed internal HTTP origin. Credentials still come from runtime-auth.
+    platformApiOrigin: ""
 
 enterpriseDirectorySync:
   enabled: false

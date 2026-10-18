@@ -891,6 +891,15 @@ test("in-cluster native metadata defaults derive fixed API and Worker inputs", (
 		)?.value,
 		"topology",
 	);
+	assert.equal(
+		worker.spec.template.spec.containers[0].env.find(
+			(entry) =>
+				entry.name === "PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN",
+		)?.value,
+		"http://topology-agent-infra-platform-api:3000",
+	);
+	assert.equal(api.spec.replicas, 1);
+	assert.equal(api.spec.strategy?.type, "Recreate");
 	const disabled = render(
 		"--set",
 		"workloadTopology.enabled=false",
