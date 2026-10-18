@@ -327,7 +327,11 @@
 .platform-skip-link:focus {
 	top: 10px;
 }
-[data-slot="button"],
+[data-slot="button"] {
+	min-width: 44px;
+	border-radius: 10px;
+	letter-spacing: 0.02em;
+}
 a[class~="group/button"] {
 	min-height: 44px;
 	min-width: 44px;
@@ -2111,16 +2115,12 @@ body {
 }
 [data-slot="select-trigger"],
 [data-slot="alert"] {
-	border-radius: 10px;
+	border-radius: 12px;
 }
 [data-slot="empty"] {
 	border: 1px dashed var(--border);
 	border-radius: 14px;
 	background: var(--surface);
-}
-[data-slot="dialog-content"],
-[data-slot="select-content"] {
-	border-radius: 14px;
 }
 [data-slot="button"],
 a[class~="group/button"] {
@@ -2450,7 +2450,7 @@ a[class~="group/button"]:focus-visible,
 [data-slot="native-select"]:focus-visible {
 	outline: 2px solid var(--primary);
 	outline-offset: 3px;
-	box-shadow: none;
+	box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 25%, transparent);
 }
 .management-content
 	:is(
@@ -2461,7 +2461,7 @@ a[class~="group/button"]:focus-visible,
 	):focus-visible {
 	outline: 2px solid var(--primary);
 	outline-offset: 3px;
-	box-shadow: none;
+	box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 25%, transparent);
 }
 [data-slot="badge"][data-status]::before,
 [data-slot="badge"][data-result]::before,
