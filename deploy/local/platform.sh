@@ -236,8 +236,16 @@ stop_native_metadata_forward() {
     pid=$(cat "$native_metadata_forward_pid_file")
     if [[ "$pid" =~ ^[0-9]+$ ]]; then
       command=$(ps -p "$pid" -o command= 2>/dev/null || true)
-      if [[ "$command" == *"port-forward"*"native-metadata"* ]]; then
+      if [[ "$command" == *"native-metadata-port-forward-supervisor"* ]]; then
         kill "$pid" >/dev/null 2>&1 || true
+        # The supervisor owns the kubectl child. Wait until its trap has
+        # delivered TERM to that child before a new forward reuses the port.
+        for _ in {1..40}; do
+          local state
+          state=$(ps -p "$pid" -o stat= 2>/dev/null || true)
+          [[ -z "$state" || "$state" == Z* ]] && break
+          sleep 0.05
+        done
       fi
     fi
   fi
@@ -339,19 +347,53 @@ prepare_native_metadata_forward() {
   }
   # Keep kubectl on loopback. The host proxy is the only listener reachable
   # from Compose and rejects every source outside the project subnet.
-  "${kube_target[@]}" port-forward --address 127.0.0.1 "service/$native_metadata_service_name" "$forward_port:80" >"$native_metadata_forward_log" 2>&1 &
+  # kubectl port-forward 在上游拒绝连接（Worker 网关晚于 Pod 就绪才监听）或所选 Pod 被替换时
+  # 会退出，之后 API 一直 503（#2726）。由监督循环有界退避地重启它；PID 文件记录监督循环，
+  # stop 时它连同当前的 kubectl 一起退出。
+  : > "$native_metadata_forward_log"
+  bash -c '
+    child=
+    sleeper=
+    stop() {
+      [[ -z "$child" ]] || kill "$child" 2>/dev/null || true
+      [[ -z "$sleeper" ]] || kill "$sleeper" 2>/dev/null || true
+      [[ -z "$child" ]] || wait "$child" 2>/dev/null || true
+      [[ -z "$sleeper" ]] || wait "$sleeper" 2>/dev/null || true
+      exit 0
+    }
+    trap stop TERM INT
+    delay=1
+    while :; do
+      "$@" &
+      child=$!
+      wait "$child"
+      child=
+      sleep "$delay" &
+      sleeper=$!
+      wait "$sleeper"
+      sleeper=
+      if [ "$delay" -lt 5 ]; then delay=$((delay + 1)); fi
+    done
+  ' native-metadata-port-forward-supervisor "${kube_target[@]}" port-forward --address 127.0.0.1 "service/$native_metadata_service_name" "$forward_port:80" \
+    >>"$native_metadata_forward_log" 2>&1 </dev/null &
   local pid=$!
   printf '%s' "$pid" > "$native_metadata_forward_pid_file"
-  for _ in {1..50}; do
+  # 等 kubectl 报告本地监听就绪；不在这里连接转发端口：每个连接都会让 kubectl 去连 Worker
+  # 网关，网关还没监听时 kubectl 会退出（#2726）。
+  local ready=false
+  for _ in {1..100}; do
     if ! kill -0 "$pid" >/dev/null 2>&1; then
       echo "Local native metadata Worker port-forward exited" >&2
       stop_native_metadata_forward
       return 1
     fi
-    if (echo >/dev/tcp/127.0.0.1/"$forward_port") >/dev/null 2>&1; then break; fi
+    if grep -q "Forwarding from 127.0.0.1:$forward_port " "$native_metadata_forward_log" 2>/dev/null; then
+      ready=true
+      break
+    fi
     sleep 0.1
   done
-  if ! (echo >/dev/tcp/127.0.0.1/"$forward_port") >/dev/null 2>&1; then
+  if [[ "$ready" != true ]]; then
     echo "Local native metadata Worker port-forward did not become ready" >&2
     stop_native_metadata_forward
     return 1
