@@ -3,6 +3,7 @@ import {
 	type ApiPrincipalV1,
 	createConversationEventUseCaseV1,
 	createPersonalApiCredentialUseCaseV1,
+	type PersonalApiAgentReadAuditV1,
 	type PlatformAuditQueryScopeV1,
 	type TaskAuthorizationBoundaryV1,
 } from "@agent-infra/platform-core";
@@ -889,6 +890,169 @@ describe("controlled PostgreSQL audit query", () => {
 			}
 		},
 	);
+
+	it("projects Agent read producer records only to administrator audit without raw details", async () => {
+		const f = await fixture();
+		const adapter = new PostgresPersonalApiCredentialStoreV1({
+			databaseUrl: database.databaseUrl,
+		});
+		const credentialId = randomUUID();
+		const events: PersonalApiAgentReadAuditV1[] = [
+			...[[], [randomUUID(), randomUUID()]].map((returnedAgentIds) => ({
+				...request(),
+				userId: f.principal.id,
+				credentialId,
+				action: "api.agent.metadata.read" as const,
+				outcome: "succeeded" as const,
+				details: { returnedAgentIds, grantFilter: "manage_or_use" as const },
+			})),
+		];
+		for (const reason of [
+			"invalid_input",
+			"authentication_required",
+			"forbidden",
+			"not_found",
+			"idempotency_conflict",
+			"unavailable",
+		] as const)
+			for (const userId of [null, f.principal.id])
+				events.push({
+					...request(),
+					userId,
+					credentialId:
+						userId === null && reason !== "authentication_required"
+							? null
+							: credentialId,
+					action: "api.agent.metadata.read",
+					outcome: reason === "unavailable" ? "failed" : "rejected",
+					details: { reason },
+				});
+		try {
+			for (const event of events) {
+				await adapter.recordAgentReadAudit(event);
+				const [stored] =
+					await sql`select id from platform.audit_events where request_id=${event.requestId}`;
+				if (!stored) throw new Error("Missing producer record");
+				const record = await query.getAudit(
+					admin,
+					stored.id,
+					detail,
+					request(),
+				);
+				expect(record).toMatchObject({
+					action: event.action,
+					result: event.outcome,
+					actor: {
+						kind: event.userId === null ? "unknown" : "user",
+						actorId: event.userId ?? "unknown",
+					},
+					subject: {
+						kind: event.credentialId === null ? "unknown" : "api_credential",
+						subjectId: event.credentialId ?? "unknown",
+					},
+					summary:
+						event.outcome === "succeeded"
+							? event.action
+							: `${event.action}: reason=${event.details.reason}`,
+					agentId: null,
+					conversationId: null,
+					executionId: null,
+					originalPrincipal: null,
+				});
+				expect(record).not.toHaveProperty("details");
+				for (const id of event.details.returnedAgentIds ?? [])
+					expect(JSON.stringify(record)).not.toContain(id);
+				expect(
+					(
+						await query.listAudit(
+							admin,
+							{ ...page, filters: { action: event.action } },
+							request(),
+						)
+					).items.map((item) => item.auditId),
+				).toContain(stored.id);
+				await expect(
+					query.getAudit(f.scope, stored.id, detail, request()),
+				).rejects.toMatchObject({ code: "access_denied" });
+				expect(
+					(
+						await query.listAudit(
+							f.scope,
+							{ ...page, filters: { action: event.action } },
+							request(),
+						)
+					).items,
+				).toEqual([]);
+			}
+		} finally {
+			await adapter.close();
+		}
+	});
+
+	it("fails closed for malformed Agent read envelopes without changing legacy actions", async () => {
+		for (const change of [
+			{ actorType: "application" },
+			{ actorType: "unknown", actorId: "invented" },
+			{ actorType: "unknown", actorId: "unknown" },
+			{ targetType: "agent" },
+			{ targetId: "unknown" },
+			{ requestId: null },
+			{ agentId: "invented-agent" },
+			{ details: null },
+			{ details: [] },
+			{ details: { returnedAgentIds: [], grantFilter: "use" } },
+			{ details: { returnedAgentIds: [] } },
+			{
+				details: {
+					returnedAgentIds: ["duplicate", "duplicate"],
+					grantFilter: "manage_or_use",
+				},
+			},
+			{ details: { returnedAgentIds: [""], grantFilter: "manage_or_use" } },
+			{
+				details: {
+					returnedAgentIds: Array.from({ length: 101 }, () => randomUUID()),
+					grantFilter: "manage_or_use",
+				},
+			},
+			{
+				details: {
+					returnedAgentIds: [],
+					grantFilter: "manage_or_use",
+					credential: "PRIVATE_SENTINEL",
+				},
+			},
+			{ outcome: "failed", details: { reason: "forbidden" } },
+			{ outcome: "rejected", details: { reason: "unavailable" } },
+			{ outcome: "rejected", details: { reason: "PRIVATE_SENTINEL" } },
+			{
+				outcome: "rejected",
+				details: { reason: "forbidden", returnedAgentIds: [] },
+			},
+		]) {
+			const id = randomUUID();
+			const row = {
+				actorType: "user",
+				actorId: "agent-read-user",
+				targetType: "api_credential",
+				targetId: randomUUID(),
+				requestId: randomUUID(),
+				agentId: null,
+				outcome: "succeeded",
+				details: { returnedAgentIds: [], grantFilter: "manage_or_use" },
+				...change,
+			};
+			await sql`insert into platform.audit_events(id,trace_id,request_id,actor_type,actor_id,action,target_type,target_id,outcome,agent_id,details)
+				values (${id},'agent-read-negative',${row.requestId},${row.actorType},${row.actorId},'api.agent.metadata.read',${row.targetType},${row.targetId},${row.outcome},${row.agentId},${sql.json(row.details)})`;
+			try {
+				await expect(
+					query.getAudit(admin, id, detail, request()),
+				).rejects.toMatchObject({ code: "unavailable" });
+			} finally {
+				await sql`delete from platform.audit_events where id=${id}`;
+			}
+		}
+	});
 
 	it("reads actual credential metadata list audits only as redacted administrator records", async () => {
 		const f = await fixture();
