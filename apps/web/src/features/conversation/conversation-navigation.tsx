@@ -1,9 +1,11 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Bot, History, Plus } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { ArrowUp, Bot, History } from "lucide-react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { Button, buttonVariants } from "../../components/ui/button.js";
+import { Label } from "../../components/ui/label.js";
+import { Textarea } from "../../components/ui/textarea.js";
 import { formatRelativeDate } from "../../lib/format-date.js";
 import { CommandNotice } from "./conversation-command-notice.js";
 import type { ConversationCommandResult } from "./conversation-commands.js";
@@ -116,25 +118,76 @@ export function NewConversation({
 	/** 见 ActiveConversation：true 表示 Agent 仍然可用，404 就是真的失去访问权限（#2570）。 */
 	verifyAgent: () => Promise<boolean>;
 }) {
-	const command = useConversationCommands({ agentId, identityKey });
+	const createCommand = useConversationCommands({ agentId, identityKey });
+	const [createdConversationId, setCreatedConversationId] = useState<string>();
+	const [pendingDraft, setPendingDraft] = useState<string>();
+	const [messageStarted, setMessageStarted] = useState(false);
+	const [draft, setDraft] = useState("");
+	const composerId = useId();
+	const composing = useRef(false);
+	const messageCommand = useConversationCommands({
+		agentId,
+		identityKey,
+		conversationId: createdConversationId,
+	});
 	const queryClient = useQueryClient();
-	const handled = useRef<ConversationCommandResult | undefined>(undefined);
+	const handledCreate = useRef<ConversationCommandResult | undefined>(
+		undefined,
+	);
+	const handledMessage = useRef<ConversationCommandResult | undefined>(
+		undefined,
+	);
+	const createResult = createCommand.result;
+	const messageResult = messageCommand.result;
 	useEffect(() => {
-		if (command.result === handled.current) return;
-		handled.current = command.result;
-		if (command.result?.kind === "created") {
-			void queryClient.resetQueries({
-				queryKey: ["personal-recent", identityKey],
-			});
-			onCreated(command.result.conversationId);
+		if (createResult === handledCreate.current) return;
+		handledCreate.current = createResult;
+		if (createResult?.kind === "created") {
+			setCreatedConversationId(createResult.conversationId);
 		}
-		if (command.result?.kind === "denied" && !command.result.ambiguous)
+		if (createResult?.kind === "denied" && !createResult.ambiguous) onDenied();
+	}, [createResult, onDenied]);
+	useEffect(() => {
+		if (messageResult?.kind === "denied" && !messageResult.ambiguous)
 			onDenied();
-	}, [command.result, identityKey, onCreated, onDenied, queryClient]);
+	}, [messageResult, onDenied]);
+	useEffect(() => {
+		if (
+			!createdConversationId ||
+			!pendingDraft ||
+			messageStarted ||
+			createResult?.kind !== "created"
+		)
+			return;
+		if (messageCommand.submitText(pendingDraft)) setMessageStarted(true);
+	}, [
+		createdConversationId,
+		createResult,
+		messageCommand.submitText,
+		messageStarted,
+		pendingDraft,
+	]);
+	useEffect(() => {
+		if (messageResult === handledMessage.current) return;
+		handledMessage.current = messageResult;
+		if (messageResult?.kind !== "accepted" || !createdConversationId) return;
+		void queryClient.resetQueries({
+			queryKey: ["personal-recent", identityKey],
+		});
+		onCreated(createdConversationId);
+	}, [
+		createdConversationId,
+		identityKey,
+		messageResult,
+		onCreated,
+		queryClient,
+	]);
 	const ambiguousDenial =
-		command.result?.kind === "denied" && command.result.ambiguous === true
-			? command.result
-			: undefined;
+		createResult?.kind === "denied" && createResult.ambiguous === true
+			? createResult
+			: messageResult?.kind === "denied" && messageResult.ambiguous === true
+				? messageResult
+				: undefined;
 	useEffect(() => {
 		if (!ambiguousDenial) return;
 		let current = true;
@@ -145,27 +198,82 @@ export function NewConversation({
 			current = false;
 		};
 	}, [ambiguousDenial, verifyAgent, onDenied]);
+	const command = createdConversationId ? messageCommand : createCommand;
+	const commandLocked = command.isPending || command.result?.kind === "unknown";
+	const canSend = available && !commandLocked && Boolean(draft.trim());
+	function send() {
+		if (!canSend) return;
+		if (createdConversationId) {
+			if (messageCommand.submitText(draft)) {
+				setMessageStarted(true);
+				return;
+			}
+			return;
+		}
+		if (createCommand.create()) setPendingDraft(draft);
+	}
 	return (
-		<Empty className="space-y-5 py-12">
-			<Bot aria-hidden="true" className="mx-auto size-10 text-primary" />
-			<h2 className="font-semibold text-xl">从一个明确的任务开始</h2>
-			<p className="text-muted-foreground">
-				新建个人会话，然后描述任务和期望结果。
-			</p>
-			<Button
-				disabled={
-					!available || command.isPending || command.result?.kind === "unknown"
-				}
-				onClick={() => command.create()}
+		<section className="chat-thread space-y-5" aria-label="新会话">
+			<div className="chat-welcome space-y-3 py-8">
+				<Bot aria-hidden="true" className="mx-auto size-10 text-primary" />
+				<h2 className="text-center font-semibold text-xl">
+					从一个明确的任务开始
+				</h2>
+				<p className="text-center text-muted-foreground">
+					输入第一条消息即可创建个人会话并开始任务。
+				</p>
+			</div>
+			<form
+				className="composer-zone composer"
+				onSubmit={(event) => {
+					event.preventDefault();
+					send();
+				}}
 			>
-				<Plus aria-hidden="true" />
-				创建会话
-			</Button>
+				<Label className="sr-only" htmlFor={composerId}>
+					消息
+				</Label>
+				<Textarea
+					id={composerId}
+					rows={3}
+					value={draft}
+					disabled={commandLocked || !available}
+					placeholder="输入消息，或 / 搜索命令与 Skill…"
+					onChange={(event) => setDraft(event.target.value)}
+					onCompositionStart={() => {
+						composing.current = true;
+					}}
+					onCompositionEnd={() => {
+						composing.current = false;
+					}}
+					onKeyDown={(event) => {
+						if (
+							event.key === "Enter" &&
+							!event.shiftKey &&
+							!event.nativeEvent.isComposing &&
+							event.keyCode !== 229 &&
+							!composing.current
+						) {
+							event.preventDefault();
+							send();
+						}
+					}}
+				/>
+				<div className="composer-controls">
+					<p className="text-muted-foreground text-xs">
+						Enter 发送 · Shift + Enter 换行
+					</p>
+					<Button type="submit" data-c02-send-button="send" disabled={!canSend}>
+						<ArrowUp aria-hidden="true" />
+						发送
+					</Button>
+				</div>
+			</form>
 			<CommandNotice
 				result={command.result}
 				pending={command.isPending}
-				retry={command.canRetry ? () => command.retry() : undefined}
+				retry={command.canRetry ? () => command.retry(draft) : undefined}
 			/>
-		</Empty>
+		</section>
 	);
 }

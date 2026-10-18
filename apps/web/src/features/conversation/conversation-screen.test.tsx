@@ -1648,10 +1648,19 @@ describe("functional conversation screen", () => {
 		let created = false;
 		const { props, requests } = setup(
 			(request) => {
-				if (request.method === "POST") {
+				const path = new URL(request.url).pathname;
+				if (
+					request.method === "POST" &&
+					path.endsWith("/agents/agent-1/conversations")
+				) {
 					created = true;
 					return Response.json(history().conversation, { status: 201 });
 				}
+				if (
+					request.method === "POST" &&
+					path === "/api/v1/conversations/conversation-1/messages"
+				)
+					return receipt();
 				if (new URL(request.url).pathname === "/api/v2/me/conversations/recent")
 					return Response.json({
 						items: created ? [history().conversation] : [],
@@ -1660,14 +1669,22 @@ describe("functional conversation screen", () => {
 			},
 			{ conversationId: undefined },
 		);
-		await screen.findByText("暂无个人对话。");
-		fireEvent.click(await screen.findByRole("button", { name: "创建会话" }));
+		const input = await composer();
+		expect(input.placeholder).toBe("输入消息，或 / 搜索命令与 Skill…");
+		fireEvent.change(input, { target: { value: "Start this task" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
 		await waitFor(() =>
 			expect(props.onConversationChange).toHaveBeenCalledWith("conversation-1"),
 		);
 		expect(
 			requests.filter((request) => request.method === "POST"),
-		).toHaveLength(1);
+		).toHaveLength(2);
+		const posts = requests.filter((request) => request.method === "POST");
+		expect(await posts[0].json()).toEqual({ schemaVersion: 1 });
+		expect(await posts[1].json()).toEqual({
+			schemaVersion: 1,
+			text: "Start this task",
+		});
 		expect(
 			await screen.findByRole("link", { name: /Test conversation/ }),
 		).toBeTruthy();
@@ -2023,9 +2040,10 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 			conversationId: undefined,
 			onAccessDenied,
 		});
-		const create = await screen.findByRole("button", { name: "创建会话" });
+		const input = await composer();
 		state.agent = "stopped";
-		fireEvent.click(create);
+		fireEvent.change(input, { target: { value: "Start while stopped" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
 		await screen.findByText(/Agent 已停止，历史保持只读/);
 		expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
 		expect(onAccessDenied).not.toHaveBeenCalled();
@@ -2034,7 +2052,9 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 	it("still treats a refused new Session as lost access while the Agent is available", async () => {
 		const onAccessDenied = vi.fn();
 		scenario({ conversationId: undefined, onAccessDenied });
-		fireEvent.click(await screen.findByRole("button", { name: "创建会话" }));
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Private first message" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
 		await screen.findByText(/当前登录或访问权限已失效/);
 		expect(onAccessDenied).toHaveBeenCalledOnce();
 	});
