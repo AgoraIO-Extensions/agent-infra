@@ -57,31 +57,33 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `NativeSelect` / `NativeSelectOption` | 申请来源、身份责任；保留原生选择和禁用语义 |
 | `Checkbox` | 申请和 Owner 的模型配置开关 |
 | `Label` | 上述表单的可访问名称 |
+| `Field` / `FieldError` | 字段标签与控件的容器；`FieldError` 为字段下方的校验错误（`role="alert"`），如审批驳回原因 |
 | `Badge` | 状态 chip（`tone`，服务端状态经 `lib/status-tone.ts` 的 `statusTone()` 映射）与非状态标签（`variant="tag"`） |
 | `Sidebar` / `Sheet` / `Breadcrumb` / `Avatar` | 桌面与移动导航、当前位置及登录身份 |
-| `Tabs` | 我的申请与已创建 Agent 切换 |
-| `Dialog` / `ConfirmDialog` | 审批、个人 Relay Key；撤回、生命周期、撤销凭证、停用应用、禁用员工等确认 |
+| `Tabs` | 我的申请与已创建 Agent 切换，Skill 详情的用途与版本 |
+| `Dialog` / `ConfirmDialog` | 审批、Skill 审阅；撤回、生命周期、撤销凭证、撤销 Skill 版本、停用应用、禁用员工等确认 |
 | `Alert` / `Empty` | 设计 notice（`tone` 与默认图标）与空态 |
 | `Spinner` / `LoadingLine` | 读取中的加载态，`PageLoadingState` 内部使用 |
 | `Toast` | 根布局常驻的补充确认，页面通过 `useToast()` 调用 |
 | `Card` / `AgentMark` | 独立卡片的悬停，Agent 标识的字形与 tone |
-| `Table` | Agent 输出的 Markdown 表格 |
-| `Timestamp` | 工作台、审批、审计、应用管理、个人 API 凭证、我的 Agent 与申请详情的时间 |
-| `IdentifierText` | Agent 管理 Owner、审批与审计中未解析人员的 ID 短形式，审计详情的可复制主体 ID |
-| `Listbox` / `ListboxOption` | 目录选择器结果层；候选不进入 Tab 序列，由输入框的 `aria-activedescendant` 导航 |
+| `Table` | Agent 输出的 Markdown 表格，API 凭证页的个人凭证表格（窄屏按页面样式转行卡片） |
+| `Timestamp` | 工作台、审批、审计、应用管理、个人 API 凭证、我的 Agent、申请详情与对话历史的时间 |
+| `IdentifierText` | 审批与审计中未解析人员的 ID 短形式；审计列表对象 ID 用 `shortIdentifier` 等宽短形式，完整值只在记录详情 |
+| `Listbox` / `ListboxOption` | 目录选择器结果层与对话 `/` 命令弹层；候选不进入 Tab 序列，由输入框的 `aria-activedescendant` 导航 |
+| `DropdownMenu` | 对话输入框工具栏的模型与思考菜单（`menuitemradio`，向上展开，无入场动画） |
 
 时间统一由 `src/lib/format-time.ts` 按浏览器本地时区与自然日格式化，`<Timestamp>` 渲染
 `<time dateTime title>`，`title` 为带秒的完整本地时间。人员与组织显示名由
 `src/features/directory-names.tsx` 的 `useDirectoryNames` 页面级批量读取：单元格和 chip 不放
 `role="status"`，读取失败时页面只显示一条提示与「重新读取目录」，主文字不回退到内部 ID。
 
-`Card`、`ConfirmDialog`、`Spinner`、`Toast` 与 `features/agent-mark.tsx` 为手写组件，不由 CLI 生成。
+`Card`、`ConfirmDialog`、`DropdownMenu`、`Spinner`、`Toast` 与 `features/agent-mark.tsx` 为手写组件，不由 CLI 生成。
 `Alert` 不设默认 role：首屏静态说明不设 role，异步结果用 `role="status"`，失败用 `role="alert"`。
 Badge、Alert 的旧变体名只作兼容层，供未迁移的对话页与浏览器面板使用，新代码使用 `tone` 或 `variant="tag"`。
 
 普通导航保留 TanStack `Link` 或语义链接；需要控件外观时使用 `buttonVariants`，不改变链接角色。
 段落、列表、定义列表、表单和 fieldset 保持语义 HTML。
-申请详情和 Agent 详情使用索引路由，确保编辑和配置子路径能渲染对应页面。
+申请详情、Agent 详情和我的 Skill 使用索引路由，确保编辑、配置和创建子路径能渲染对应页面。
 
 ## 静态规则
 
@@ -145,6 +147,8 @@ PR 的人工 UI 验收仍遵循[工作流 §7.4](../architecture/SPEC-ai-native-
 
 - `management.spec.ts`：申请/审批/配置的 pending、loading、empty、error、权限拒绝、长字段，
   移动 Sheet 的焦点、Escape、导航关闭及桌面断点关闭。
+- `my-agents-design.spec.ts`：我的 Agent `?tab=owned` 深链、刷新与返回，申请列表分批显示与带对象名的入口，
+  申请表单 Tab 顺序（高级配置收起与展开）、字段错误，以及申请详情的页头操作、三步进度和「下一步」。
 - `conversation-routing.spec.ts`：加载与 503 恢复、403 拒绝、不可用历史只读、深链/返回、
   窄屏历史切换与消息输入区。失败状态沿用对话标题层级，返回目录不产生业务写入。
 - `conversation-live.spec.ts`、`conversation-markdown.spec.ts`：消息、模型保存、执行详情、

@@ -1,6 +1,7 @@
-import { AlertCircle, Building2, RefreshCw, ShieldOff } from "lucide-react";
+import { AlertCircle, RefreshCw, ShieldOff } from "lucide-react";
 import {
 	type FormEvent,
+	type Ref,
 	useEffect,
 	useId,
 	useLayoutEffect,
@@ -55,6 +56,8 @@ type ApplicationManagementScreenProps = {
 	isDisabling?: boolean;
 	isIssuingCredential?: boolean;
 	actionError?: unknown;
+	/** 页头「创建应用凭证」跳到这里时聚焦的分区标题。 */
+	headingRef?: Ref<HTMLHeadingElement>;
 };
 
 const defaultScopes: PersonalApiCredentialScope[] = ["agent:read"];
@@ -89,6 +92,7 @@ export function ApplicationManagementScreen({
 	isDisabling = false,
 	isIssuingCredential = false,
 	actionError,
+	headingRef,
 }: ApplicationManagementScreenProps) {
 	const headingId = useId();
 	const [name, setName] = useState("");
@@ -107,20 +111,18 @@ export function ApplicationManagementScreen({
 	}
 
 	return (
-		<section aria-labelledby={headingId} className="space-y-8">
-			<header className="page-heading">
+		// API 凭证页的一个分区：页面只有一个 h1，这里是 h2，其下的小节用 h3。
+		<section aria-labelledby={headingId} className="settings-surface space-y-6">
+			<div className="section-heading">
 				<div>
-					<p className="page-eyebrow">安全设置</p>
-					<h1 id={headingId}>应用管理</h1>
+					<h2 id={headingId} ref={headingRef} tabIndex={-1}>
+						应用管理
+					</h2>
 					<p>
 						应用责任人可以维护自己的应用和凭证元数据。应用凭证材料始终通过受控投递，不会从管理响应中返回。
 					</p>
 				</div>
-				<Building2
-					aria-hidden="true"
-					className="size-6 text-muted-foreground"
-				/>
-			</header>
+			</div>
 
 			{actionError ? (
 				<Alert
@@ -135,13 +137,13 @@ export function ApplicationManagementScreen({
 			) : null}
 			{onOpenApplication && state.kind !== "denied" ? (
 				<form
-					className="max-w-xl space-y-4 rounded border bg-card p-5"
+					className="max-w-xl space-y-4 border-border border-t pt-5"
 					onSubmit={(event) => {
 						event.preventDefault();
 						if (applicationId.trim()) onOpenApplication(applicationId.trim());
 					}}
 				>
-					<h2 className="font-semibold text-base">打开既有应用</h2>
+					<h3 className="font-semibold text-base">打开既有应用</h3>
 					<Field>
 						<Label htmlFor={`${headingId}-application`}>既有应用 ID</Label>
 						<Input
@@ -187,13 +189,13 @@ export function ApplicationManagementScreen({
 			) : null}
 			{state.kind === "empty" ? (
 				<form
-					className="max-w-xl space-y-5 rounded border bg-card p-5"
+					className="max-w-xl space-y-5 border-border border-t pt-5"
 					onSubmit={submitRegistration}
 				>
 					<div>
-						<h2 className="font-semibold text-base">注册一个应用</h2>
+						<h3 className="font-semibold text-base">注册一个应用</h3>
 						<p className="mt-1 text-muted-foreground text-sm">
-							应用负责人由当前登录会话决定，不需要填写 userId。
+							应用负责人由当前登录会话决定，无需填写负责人。
 						</p>
 					</div>
 					<Field>
@@ -376,13 +378,13 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 	}
 	return (
 		<div className="space-y-6">
-			<div className="rounded border bg-card p-5">
+			<div className="border-border border-t pt-5">
 				<div className="flex flex-wrap items-start justify-between gap-4">
 					<div>
 						<div className="flex flex-wrap items-center gap-2">
-							<h2 ref={title} tabIndex={-1} className="font-semibold text-lg">
+							<h3 ref={title} tabIndex={-1} className="font-semibold text-lg">
 								{application.name}
-							</h2>
+							</h3>
 							<Badge tone={disabled ? "red" : "green"}>
 								{disabled ? "已停用" : "运行中"}
 							</Badge>
@@ -465,11 +467,11 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 				</Empty>
 			) : (
 				<form
-					className="max-w-3xl space-y-5 rounded border bg-card p-5"
+					className="max-w-3xl space-y-5 border-border border-t pt-5"
 					onSubmit={submitCredential}
 				>
 					<div>
-						<h2 className="font-semibold text-base">应用凭证元数据</h2>
+						<h3 className="font-semibold text-base">应用凭证元数据</h3>
 						<p className="mt-1 text-muted-foreground text-sm">
 							当前接口只返回元数据和投递状态。请先由管理员授予 recipient
 							获取材料的权限。
@@ -541,7 +543,11 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 							/>
 						</Field>
 					</div>
-					<fieldset className="space-y-3">
+					{/* 与个人凭证签发表单同页，分组与字段名称带上对象以便区分（N-12）。 */}
+					<fieldset
+						className="space-y-3"
+						aria-label={withObjectName("权限范围", "应用凭证")}
+					>
 						<FieldLegend>权限范围</FieldLegend>
 						<div className="grid gap-2 sm:grid-cols-2">
 							{personalApiCredentialScopes.map((scope) => {
@@ -549,7 +555,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 								return (
 									<div
 										key={scope}
-										className="flex min-h-11 items-center gap-2 rounded border px-3 py-2 text-sm"
+										className="flex min-h-11 items-center gap-2 rounded-[10px] border px-3 py-2 text-sm"
 									>
 										<Checkbox
 											id={checkboxId}
@@ -577,6 +583,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 						<Input
 							id={`${id}-expiry`}
 							type="datetime-local"
+							aria-label={withObjectName("过期时间（可选）", "应用凭证")}
 							step="0.001"
 							value={expiresAt}
 							onChange={(event) => setExpiresAt(event.target.value)}

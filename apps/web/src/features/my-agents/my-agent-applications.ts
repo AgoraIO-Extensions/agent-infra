@@ -1,4 +1,5 @@
 import { pilotBrowserHttpOpenApiPathsV2 } from "@agent-infra/contracts/pilot";
+import type { ChipTone } from "@/lib/status-tone";
 import type {
 	Client,
 	RequestResult,
@@ -75,6 +76,67 @@ export function hasCreatedAgent(
 			application.status === "creation_failed" ||
 			application.status === "disabled")
 	);
+}
+
+export type ApplicationProgressStepKey = "submitted" | "approval" | "creation";
+export type ApplicationProgressStep = {
+	key: ApplicationProgressStepKey;
+	title: string;
+	label: string;
+	tone: ChipTone;
+};
+
+const approvalStep = {
+	waiting: { label: "等待", tone: "gray" },
+	withdrawn: { label: "不再审批", tone: "gray" },
+	rejected: { label: "已驳回", tone: "red" },
+	approved: { label: "已通过", tone: "green" },
+} as const satisfies Record<
+	string,
+	Pick<ApplicationProgressStep, "label" | "tone">
+>;
+
+const creationStep = {
+	waiting: { label: "等待", tone: "gray" },
+	cancelled: { label: "不再创建", tone: "gray" },
+	creating: { label: "处理中", tone: "amber" },
+	done: { label: "完成", tone: "green" },
+	failed: { label: "失败", tone: "red" },
+	disabled: { label: "已停用", tone: "gray" },
+} as const satisfies Record<
+	string,
+	Pick<ApplicationProgressStep, "label" | "tone">
+>;
+
+// 每个申请状态对应「系统管理员审批」「创建 Agent」两步的结果；首步提交总是完成。
+// 只按申请状态判断，不用 agentId 是否存在推断（创建中、创建失败也会带 agentId）。
+const progressByStatus = {
+	pending_approval: [approvalStep.waiting, creationStep.waiting],
+	withdrawn: [approvalStep.withdrawn, creationStep.cancelled],
+	rejected: [approvalStep.rejected, creationStep.cancelled],
+	creating: [approvalStep.approved, creationStep.creating],
+	available: [approvalStep.approved, creationStep.done],
+	stopped: [approvalStep.approved, creationStep.done],
+	creation_failed: [approvalStep.approved, creationStep.failed],
+	disabled: [approvalStep.approved, creationStep.disabled],
+} satisfies Record<
+	AgentApplicationProjectionV2["status"],
+	readonly [
+		Pick<ApplicationProgressStep, "label" | "tone">,
+		Pick<ApplicationProgressStep, "label" | "tone">,
+	]
+>;
+
+/** 申请详情的三步进度：申请已提交 → 系统管理员审批 → 创建 Agent。 */
+export function applicationProgressSteps(
+	status: AgentApplicationProjectionV2["status"],
+): readonly ApplicationProgressStep[] {
+	const [approval, creation] = progressByStatus[status];
+	return [
+		{ key: "submitted", title: "申请已提交", label: "完成", tone: "green" },
+		{ key: "approval", title: "系统管理员审批", ...approval },
+		{ key: "creation", title: "创建 Agent", ...creation },
+	];
 }
 
 function requestError(input: { retryable?: boolean; code?: string } = {}) {

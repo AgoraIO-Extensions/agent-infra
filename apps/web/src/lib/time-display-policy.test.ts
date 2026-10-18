@@ -8,8 +8,6 @@ const sourceRoot = fileURLToPath(new URL("..", import.meta.url));
 // 对话页的时间调用点由对话页 Issue 迁移；迁移后从这里删除对应文件，不得新增条目。
 const pendingConversationMigrations = new Set([
 	"features/conversation/browser-audit-view.tsx",
-	"features/conversation/conversation-navigation.tsx",
-	"features/conversation/recent-conversation-history.tsx",
 ]);
 const allowed = (path: string) =>
 	path === "lib/format-time.ts" ||

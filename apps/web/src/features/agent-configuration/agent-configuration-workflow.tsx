@@ -1,9 +1,18 @@
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
-import { AgentLifecycleWorkflow } from "../agent-administration/agent-lifecycle-workflow.js";
 import { useBrowserSession } from "../use-browser-session.js";
 import { AgentAuthorizationControls } from "./agent-authorization-controls.js";
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
-import { AgentConfigurationScreen } from "./agent-configuration-screen.js";
+import {
+	AgentAdministratorConfigurationScreen,
+	AgentConfigurationScreen,
+} from "./agent-configuration-screen.js";
+import {
+	ConfigurationAdministratorActions,
+	ConfigurationFooterLifecycleActions,
+	ConfigurationFooterLifecycleFailure,
+	ConfigurationStopDangerZone,
+	useConfigurationLifecycle,
+} from "./configuration-lifecycle.js";
 import type { KeylessModelCandidate } from "./keyless-model-selection.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
 import { useAgentDefaultRelayKeyState } from "./use-agent-default-relay-key-state.js";
@@ -14,12 +23,23 @@ type AgentConfigurationWorkflowProps = {
 	deploymentModelCandidates?: readonly KeylessModelCandidate[];
 };
 
-export function AgentConfigurationWorkflow({
+// 切换 Agent 时整页按 Agent 重新挂载：草稿、生命周期进行中状态与结果都不会带到另一个 Agent。
+export function AgentConfigurationWorkflow(
+	props: AgentConfigurationWorkflowProps,
+) {
+	return (
+		<AgentConfigurationWorkflowContent key={props.agent.agentId} {...props} />
+	);
+}
+
+function AgentConfigurationWorkflowContent({
 	agent,
 	deploymentModelCandidates,
 }: AgentConfigurationWorkflowProps) {
 	const session = useBrowserSession();
 	const submission = useAgentConfigurationSubmission(agent.agentId);
+	// 整页只有一个生命周期 mutation，页脚、危险区与管理员区共享进行中状态（NI-88）。
+	const lifecycle = useConfigurationLifecycle(agent, session.state);
 	const commandError =
 		submission.isError && submission.error instanceof Error
 			? submission.error
@@ -42,65 +62,78 @@ export function AgentConfigurationWorkflow({
 			agent.source.kind === "standard" &&
 			defaultRelayKeyManaged,
 	);
-	const lifecycle = (
-		<AgentLifecycleWorkflow key={agent.agentId} agent={agent} />
-	);
 	const authorization = (
 		<AgentAuthorizationControls
-			key={agent.agentId}
 			agentId={agent.agentId}
 			enabled={isConfigurationOwner || isSystemAdministrator}
 		/>
 	);
+	const afterForm = (
+		<>
+			<ConfigurationStopDangerZone lifecycle={lifecycle} />
+			<ConfigurationAdministratorActions lifecycle={lifecycle} />
+		</>
+	);
+
+	if (!isConfigurationOwner && isSystemAdministrator) {
+		return (
+			<AgentAdministratorConfigurationScreen
+				agent={agent}
+				authorization={authorization}
+				afterForm={afterForm}
+			/>
+		);
+	}
 
 	return (
-		<>
-			<AgentConfigurationScreen
-				lifecycle={isConfigurationOwner ? lifecycle : undefined}
-				agent={agent}
-				deploymentModelCandidates={deploymentModelCandidates}
-				authorization={isConfigurationOwner ? authorization : undefined}
-				commandError={commandError}
-				commandResult={submission.data}
-				defaultRelayKeyManaged={defaultRelayKeyManaged}
-				savedRelayKeyCandidates={savedRelayKeyCandidates.data?.candidates}
-				savedRelayKeyConfigurationRevision={
-					savedRelayKeyCandidates.data?.configurationRevision
-				}
-				savedRelayKeyVersion={savedRelayKeyCandidates.data?.keyVersion}
-				savedRelayKeyCandidatesLoading={
-					defaultRelayKeyManaged && savedRelayKeyCandidates.isFetching
-				}
-				savedRelayKeyCandidatesError={
-					savedRelayKeyCandidates.isError &&
-					savedRelayKeyCandidates.error instanceof Error
-						? savedRelayKeyCandidates.error
-						: null
-				}
-				onRetrySavedRelayKeyCandidates={() =>
-					void savedRelayKeyCandidates.refetch()
-				}
-				key={agent.agentId}
-				onSave={submission.saveConfiguration}
-				onPreviewDefaultRelayKeyCandidates={
-					submission.previewDefaultRelayKeyCandidates
-				}
-				onReplaceDefaultRelayKey={submission.replaceDefaultRelayKey}
-				relayKeyError={submission.relayKeyError}
-				relayKeyResult={submission.relayKeyResult}
-				relayKeySubmitting={submission.relayKeySubmitting}
-				onUpgradeImage={submission.upgradeImage}
-				session={session.state}
-				submitting={submission.isPending}
-			/>
-			{isSystemAdministrator && !isConfigurationOwner ? (
-				<div className="form-layout">
-					<div className="min-w-0 space-y-6">
-						{authorization}
-						<aside className="form-aside">{lifecycle}</aside>
-					</div>
-				</div>
-			) : null}
-		</>
+		<AgentConfigurationScreen
+			afterForm={isConfigurationOwner ? afterForm : undefined}
+			agent={agent}
+			deploymentModelCandidates={deploymentModelCandidates}
+			authorization={isConfigurationOwner ? authorization : undefined}
+			commandError={commandError}
+			// 镜像升级的受理结果只给 Toast，不当作配置保存结果替换表单（NW-16）。
+			commandResult={
+				submission.variables?.kind === "configuration"
+					? submission.data
+					: undefined
+			}
+			defaultRelayKeyManaged={defaultRelayKeyManaged}
+			footerActions={
+				<ConfigurationFooterLifecycleActions lifecycle={lifecycle} />
+			}
+			footerFeedback={
+				<ConfigurationFooterLifecycleFailure lifecycle={lifecycle} />
+			}
+			savedRelayKeyCandidates={savedRelayKeyCandidates.data?.candidates}
+			savedRelayKeyConfigurationRevision={
+				savedRelayKeyCandidates.data?.configurationRevision
+			}
+			savedRelayKeyVersion={savedRelayKeyCandidates.data?.keyVersion}
+			savedRelayKeyCandidatesLoading={
+				defaultRelayKeyManaged && savedRelayKeyCandidates.isFetching
+			}
+			savedRelayKeyCandidatesError={
+				savedRelayKeyCandidates.isError &&
+				savedRelayKeyCandidates.error instanceof Error
+					? savedRelayKeyCandidates.error
+					: null
+			}
+			onRetrySavedRelayKeyCandidates={() =>
+				void savedRelayKeyCandidates.refetch()
+			}
+			onSave={submission.saveConfiguration}
+			onPreviewDefaultRelayKeyCandidates={
+				submission.previewDefaultRelayKeyCandidates
+			}
+			onReplaceDefaultRelayKey={submission.replaceDefaultRelayKey}
+			onUnbindChannel={submission.unbindWecomChannel}
+			relayKeyError={submission.relayKeyError}
+			relayKeyResult={submission.relayKeyResult}
+			relayKeySubmitting={submission.relayKeySubmitting}
+			onUpgradeImage={submission.upgradeImage}
+			session={session.state}
+			submitting={submission.isPending}
+		/>
 	);
 }

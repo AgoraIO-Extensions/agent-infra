@@ -18,7 +18,7 @@ import {
 	Menu,
 	MessageCircle,
 	Plus,
-	Settings2,
+	Shield,
 	X,
 } from "lucide-react";
 import {
@@ -311,7 +311,8 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						{...navigationItemProps(key)}
 						to="/my-settings/api-credentials"
 					>
-						<Settings2 {...navigationIconProps} />
+						{/* 设计 renderSidebar：item('credentials','API 凭证','key')。 */}
+						<KeyRound {...navigationIconProps} />
 						{label}
 					</Link>
 				);
@@ -351,6 +352,18 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				return (
 					<Link key={key} {...navigationItemProps(key)} to="/admin/agents">
 						<List {...navigationIconProps} />
+						{label}
+					</Link>
+				);
+			case "skill-reviews":
+				// 设计 renderSidebar：item('skill-reviews','Skill 审核','shield')。
+				return (
+					<Link
+						key={key}
+						{...navigationItemProps(key)}
+						to="/admin/skill-reviews"
+					>
+						<Shield {...navigationIconProps} />
 						{label}
 					</Link>
 				);

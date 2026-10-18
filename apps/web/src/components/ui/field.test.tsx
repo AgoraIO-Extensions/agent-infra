@@ -2,7 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { Checkbox } from "./checkbox.js";
-import { Field, FieldLegend } from "./field.js";
+import { Field, FieldError, FieldLegend } from "./field.js";
 import { Input } from "./input.js";
 import { Label } from "./label.js";
 import { SearchInput } from "./search-input.js";
@@ -49,6 +49,29 @@ describe("Field", () => {
 		expect(
 			group.querySelector('[data-slot="field-legend"]')?.tagName.toLowerCase(),
 		).toBe("legend");
+	});
+});
+
+describe("FieldError", () => {
+	it("announces a field validation error referenced by the control", () => {
+		render(
+			<Field>
+				<Label htmlFor="reason">驳回原因</Label>
+				<Input id="reason" aria-invalid aria-describedby="reason-error" />
+				<FieldError id="reason-error">请填写驳回原因。</FieldError>
+			</Field>,
+		);
+
+		const error = screen.getByRole("alert");
+		expect(error.textContent).toBe("请填写驳回原因。");
+		expect(error.dataset.slot).toBe("field-error");
+		expect(error.className).toContain("text-[12px]");
+		expect(error.className).toContain("text-(--danger-ink)");
+		expect(
+			screen
+				.getByRole("textbox", { name: "驳回原因" })
+				.getAttribute("aria-describedby"),
+		).toBe(error.id);
 	});
 });
 

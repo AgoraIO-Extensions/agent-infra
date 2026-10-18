@@ -26,4 +26,20 @@ function FieldLegend({ className, ...props }: React.ComponentProps<"legend">) {
 	);
 }
 
-export { Field, FieldLegend };
+// 设计稿 p.field-error[role=alert]：字段下方 12px、--danger-ink 的校验错误，上距 6px。
+// 只在提交校验失败后渲染；控件用 aria-invalid 与 aria-describedby 指向它的 id。
+function FieldError({ className, ...props }: React.ComponentProps<"p">) {
+	return (
+		<p
+			data-slot="field-error"
+			role="alert"
+			className={cn(
+				"mt-[6px] text-(--danger-ink) text-[12px] leading-[1.5]",
+				className,
+			)}
+			{...props}
+		/>
+	);
+}
+
+export { Field, FieldError, FieldLegend };

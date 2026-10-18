@@ -29,6 +29,7 @@ import type {
 	CollectionReadFailureReason,
 	CollectionReadUnavailable,
 } from "../collection-read-failure.js";
+import { conversationDisplayTitle } from "../conversation/conversation-display-title.js";
 import type { MyAgentApplicationsState } from "../my-agents/my-agent-applications.js";
 
 type Loading = { kind: "loading" };
@@ -208,7 +209,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 										(agent !== undefined &&
 											!canStartPlatformConversation(agent)) ||
 										conversation.status === "unavailable";
-									const title = conversation.title ?? "未命名对话";
+									const title = conversationDisplayTitle(conversation.title);
 									const action = readOnly
 										? "查看历史"
 										: agent

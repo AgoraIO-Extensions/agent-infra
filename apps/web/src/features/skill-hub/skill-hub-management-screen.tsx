@@ -1,207 +1,306 @@
 import { Link } from "@tanstack/react-router";
-import {
-	CheckCircle2,
-	ClipboardCheck,
-	FolderKanban,
-	PackageOpen,
-	RefreshCw,
-} from "lucide-react";
+import { ArrowLeft, Layers, Plus, Settings, ShieldCheck } from "lucide-react";
 import { type FormEvent, type ReactNode, useId, useRef, useState } from "react";
-import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import {
-	Empty,
-	EmptyDescription,
-	EmptyHeader,
-	EmptyMedia,
-	EmptyTitle,
-} from "@/components/ui/empty";
 import { Field } from "@/components/ui/field";
+import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
-import { LoadingLine } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast";
+import { withObjectName } from "@/lib/accessible-name";
 import type {
-	SkillHubAgentBindingCommandV1,
-	SkillHubProjectCreateV1,
+	SkillHubProjectV1,
 	SkillHubProviderImportRequestV1,
-	SkillHubPublicationRequestV1,
 	SkillHubPublicationResponseV1,
-	SkillHubReviewRequestV1,
+	SkillHubVersionMetadataV1,
 } from "../../pilot/generated-v2/types.gen.js";
+import type { CollectionReadUnavailable } from "../collection-read-failure.js";
 import type { SkillHubDirectoryState } from "./skill-hub.js";
 import {
-	bindSkillHubAgentVersion,
+	latestVersionPerSkill,
+	skillHubProviderLabels,
+	skillHubVersionStateLabels,
+	skillHubVisibilityLabels,
+} from "./skill-hub-labels.js";
+import {
 	createSkillHubProject,
 	importSkillHubVersion,
-	listSkillHubProjects,
-	publishSkillHubVersion,
-	readSkillHubAgentBindings,
-	reviewSkillHubVersion,
-	revokeSkillHubVersion,
 	updateSkillHubProject,
 } from "./skill-hub-management.js";
+import { SkillHubStateChip } from "./skill-hub-scope-pill.js";
 import {
-	skillHubProviderLabels,
-	skillHubVisibilityLabels,
+	SkillHubEmpty,
+	SkillHubLoading,
+	SkillHubReadFailure,
 } from "./skill-hub-screen.js";
 
-export type SkillHubManagementActions = {
-	createProject: typeof createSkillHubProject;
-	listProjects: typeof listSkillHubProjects;
-	updateProject: typeof updateSkillHubProject;
-	importVersion: typeof importSkillHubVersion;
-	publishVersion: typeof publishSkillHubVersion;
-	reviewVersion: typeof reviewSkillHubVersion;
-	revokeVersion: typeof revokeSkillHubVersion;
-	readBindings: typeof readSkillHubAgentBindings;
-	bindVersion: typeof bindSkillHubAgentVersion;
-};
+/** 契约 packageName：小写字母或数字开头，最长 63 位。 */
+export const skillPackageNamePattern = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+// 设计 import-source：拒绝 latest、HEAD、通配符与分支名这类会漂移的引用。
+const floatingReference = /latest|HEAD|\*|:main$|@main$/i;
+// 导入只支持受控的外部来源；平台预置、我的库与内部市场不是导入来源。
+const importProviders = ["clawhub", "skillhub", "npx", "github"] as const;
 
-const defaultActions: SkillHubManagementActions = {
-	createProject: createSkillHubProject,
-	listProjects: listSkillHubProjects,
-	updateProject: updateSkillHubProject,
-	importVersion: importSkillHubVersion,
-	publishVersion: publishSkillHubVersion,
-	reviewVersion: reviewSkillHubVersion,
-	revokeVersion: revokeSkillHubVersion,
-	readBindings: readSkillHubAgentBindings,
-	bindVersion: bindSkillHubAgentVersion,
-};
+export type SkillHubProjectsState =
+	| { kind: "loading" }
+	| { kind: "ready"; items: SkillHubProjectV1[] }
+	| CollectionReadUnavailable;
 
-type FormState = { busy: boolean; message?: string };
-type SkillHubPublicationDraft = Omit<
-	SkillHubPublicationRequestV1,
-	"packageObjectVersion"
->;
+type RequestFailure = { status?: number; retryable?: boolean };
 
-// Skill 版本状态的穷举中文映射，页面不直接显示英文枚举。
-const skillVersionStateLabels: Record<
-	SkillHubPublicationResponseV1["version"]["state"],
-	string
-> = {
-	published: "已发布",
-	pending_review: "待审核",
-	rejected: "已驳回",
-	revoked: "已撤销",
-};
-
-function publicationMessage(
-	action: string,
-	result: SkillHubPublicationResponseV1,
-) {
-	const replay = result.replayed ? "（服务端重放）" : "";
-	const reason = result.version.reviewReason
-		? `，原因：${result.version.reviewReason}`
-		: "";
-	const state = skillVersionStateLabels[result.version.state] ?? "其他";
-	return `${action}成功：服务端状态 ${state}${replay}${reason}。`;
+// 写操作失败文案：不显示错误码与原始枚举。
+export function skillWriteFailureMessage(error: unknown) {
+	const { status, retryable } =
+		error && typeof error === "object" ? (error as RequestFailure) : {};
+	if (status === 401) return "登录状态已失效，请重新登录后再试。";
+	if (status === 403) return "当前账号不能执行这个操作。";
+	if (status === 409) return "名称或版本已被使用，或状态已变化，请刷新后重试。";
+	if (status === 503 || retryable) return "Skill Hub 暂时不可用，可稍后重试。";
+	return "请求未完成，请检查输入后重试。";
 }
 
-function bindingMessage(
-	bindings: Awaited<ReturnType<typeof readSkillHubAgentBindings>>["bindings"],
-) {
-	if (bindings.length === 0) return "服务端绑定状态：暂无绑定。";
-	return `服务端绑定状态：${bindings
-		.map((binding) => {
-			if (binding.state === "synced" && binding.appliedReceipt) {
-				return `synced / Applied（${binding.appliedReceipt.targetPath}）`;
-			}
-			if (binding.state === "failed")
-				return `failed（${binding.failureReason}）`;
-			return binding.state;
-		})
-		.join("、")}。`;
+function importResultText(result: SkillHubPublicationResponseV1) {
+	const { version, replayed } = result;
+	const replay = replayed ? "这是重复提交，已返回第一次的结果。" : "";
+	const text = {
+		published: `v${version.version} 已发布，可以在 Skill Hub 中查看。`,
+		pending_review: `v${version.version} 已提交审核，审核通过前不能安装。`,
+		rejected: `v${version.version} 未通过审核${version.reviewReason ? `：${version.reviewReason}` : "。"}`,
+		revoked: `v${version.version} 已撤销。`,
+	}[version.state];
+	return `${text}${replay}`;
 }
 
-function actionFailureMessage(error: unknown) {
-	const requestError =
-		error && typeof error === "object"
-			? (error as { code?: string; retryable?: boolean; status?: number })
-			: {};
-	if (requestError.status === 503)
-		return "Skill Hub 后端暂时不可用，可稍后重试。";
-	if (requestError.retryable) return "Skill Hub 操作暂时失败，可稍后重试。";
-	if (requestError.status === 409)
-		return "操作冲突，当前状态或配置 revision 已变化，请刷新后重试。";
-	return requestError.code
-		? `操作被拒绝（${requestError.code}）。`
-		: "操作失败，请检查输入后重试。";
-}
-
-export function SkillHubManagementScreen({
-	state,
-	isAdministrator,
+export function MySkillsScreen({
+	projects,
+	catalog,
 	onRetry,
 	retrying = false,
-	actions = defaultActions,
-	publicationSource,
 }: {
-	state: SkillHubDirectoryState | { kind: "loading" };
-	isAdministrator: boolean;
+	projects: SkillHubProjectsState;
+	catalog: SkillHubDirectoryState | { kind: "loading" };
 	onRetry?: () => void;
 	retrying?: boolean;
-	actions?: SkillHubManagementActions;
-	/** Server-provided object version; storage locations never come from user input. */
-	publicationSource?: string;
 }) {
-	const versions = state.kind === "ready" ? state.versions : [];
-	const publishedVersionIds = new Set(
-		versions.map((version) => version.skillVersionId),
+	const id = useId();
+	// 目录只含已发布版本；用它补全每个项目的最新已发布版本。
+	const published =
+		catalog.kind === "ready" ? latestVersionPerSkill(catalog.versions) : [];
+	return (
+		<section className="skill-page" aria-labelledby={`${id}-heading`}>
+			<header className="page-heading">
+				<div>
+					<p className="page-eyebrow">我的管理 / 我的 Skill</p>
+					<h1 id={`${id}-heading`}>我的 Skill</h1>
+					<p>管理自己创建的 Skill 项目和已发布版本。</p>
+				</div>
+				<div className="skill-actions">
+					<Link className={buttonVariants()} to="/skills/manage/new">
+						<Plus aria-hidden="true" />
+						创建或导入
+					</Link>
+				</div>
+			</header>
+
+			<div className="section-heading">
+				<div>
+					<h2>我创建的</h2>
+					<p>新版本独立保存，旧版本和已有执行记录继续保留</p>
+				</div>
+			</div>
+			{projects.kind === "loading" ||
+			(projects.kind === "unavailable" && retrying) ? (
+				<SkillHubLoading>正在读取我的 Skill…</SkillHubLoading>
+			) : projects.kind === "unavailable" ? (
+				<SkillHubReadFailure
+					retryable={projects.retryable}
+					reason={projects.reason}
+					retryTitle="暂时无法读取我的 Skill"
+					retryDescription="已发布的版本和 Agent 绑定不受影响。"
+					deniedText="当前账号没有管理 Skill 项目的权限。"
+					unavailableText="Skill 项目暂时无法访问，请联系管理员。"
+					onRetry={onRetry}
+					retrying={retrying}
+				/>
+			) : projects.items.length === 0 ? (
+				<SkillHubEmpty
+					title="还没有创建 Skill"
+					description="创建项目，或从固定来源导入一个版本。"
+					action={
+						<Link
+							className={buttonVariants({ variant: "outline" })}
+							to="/skills/manage/new"
+						>
+							创建或导入
+						</Link>
+					}
+				/>
+			) : (
+				<div className="skill-surface">
+					{projects.items.map((project) => (
+						<OwnedSkillRow
+							key={project.projectId}
+							project={project}
+							latest={published.find(
+								(version) => version.skillId === project.projectId,
+							)}
+						/>
+					))}
+				</div>
+			)}
+
+			<section
+				className="skill-section-block"
+				aria-labelledby={`${id}-bindings`}
+			>
+				<div className="section-heading">
+					<div>
+						<h2 id={`${id}-bindings`}>Agent 绑定</h2>
+						<p>已安装版本不会自动变化，绑定和运行状态分开显示</p>
+					</div>
+					<Link
+						className={buttonVariants({ variant: "outline" })}
+						to="/my-agents"
+					>
+						<Settings aria-hidden="true" />
+						Agent 绑定
+					</Link>
+				</div>
+				{/* 静态说明，不设 role。 */}
+				<Alert tone="info" icon={<ShieldCheck aria-hidden="true" />}>
+					<AlertTitle>在 Agent 的 Owner 配置中绑定</AlertTitle>
+					<AlertDescription>
+						先在版本详情把固定版本加入我的库，再到 Owner 配置绑定到 Agent
+						版本；同步完成后才能在对话中使用。
+					</AlertDescription>
+				</Alert>
+			</section>
+		</section>
 	);
-	const [project, setProject] = useState<FormState>({ busy: false });
-	const [projectName, setProjectName] = useState("");
-	const [projectId, setProjectId] = useState("");
-	const [projectStatus, setProjectStatus] = useState<"active" | "disabled">(
-		"active",
+}
+
+function OwnedSkillRow({
+	project,
+	latest,
+}: {
+	project: SkillHubProjectV1;
+	latest?: SkillHubVersionMetadataV1;
+}) {
+	const disabled = project.status === "disabled";
+	return (
+		<article className="skill-row">
+			<span className="skill-mark" aria-hidden="true">
+				<Layers />
+			</span>
+			<div className="skill-row-copy">
+				<h2>{project.name}</h2>
+				<div className="skill-row-badges">
+					{disabled ? (
+						<Badge tone="red">已停用</Badge>
+					) : latest ? (
+						<SkillHubStateChip state="published" />
+					) : (
+						<Badge tone="gray">暂无已发布版本</Badge>
+					)}
+				</div>
+			</div>
+			<div className="skill-row-meta">
+				{latest ? (
+					<>
+						<strong>v{latest.version}</strong>
+						{skillHubVisibilityLabels[latest.visibility]}
+					</>
+				) : (
+					"尚无可安装的版本"
+				)}
+			</div>
+			<div className="skill-actions">
+				<Link
+					className={buttonVariants({ variant: "ghost" })}
+					to="/skills/manage/new"
+					search={{ project: project.projectId }}
+					aria-label={withObjectName("编辑新版本", project.name)}
+				>
+					编辑新版本
+				</Link>
+				{latest ? (
+					<Link
+						className={buttonVariants({ variant: "ghost" })}
+						to="/skills/$skillVersionId"
+						params={{ skillVersionId: latest.skillVersionId }}
+						aria-label={withObjectName("详情", project.name)}
+					>
+						详情
+					</Link>
+				) : null}
+			</div>
+		</article>
 	);
-	const [projects, setProjects] = useState<
-		Awaited<ReturnType<typeof listSkillHubProjects>>["items"]
-	>([]);
-	const [importState, setImportState] = useState<FormState>({ busy: false });
-	const [importForm, setImportForm] = useState({
-		name: "",
-		provider: "my_library" as SkillHubProviderImportRequestV1["provider"],
-		version: "",
-	});
-	const [publishState, setPublishState] = useState<FormState>({ busy: false });
-	const [publishForm, setPublishForm] = useState<SkillHubPublicationDraft>({
-		schemaVersion: 1,
-		name: "",
-		skillId: "",
-		skillVersionId: "",
-		visibility: "PRIVATE",
-		provider: "my_library",
-		version: "",
-		packageDigest: "",
-		manifestDigest: "",
-		signatureDigest: "",
-	});
-	const [reviewState, setReviewState] = useState<FormState>({ busy: false });
-	const [reviewForm, setReviewForm] = useState({
-		skillVersionId: "",
-		decision: "approve" as SkillHubReviewRequestV1["decision"],
-		reason: "",
-	});
-	const [bindingState, setBindingState] = useState<FormState>({ busy: false });
-	const [bindingForm, setBindingForm] = useState({
-		agentId: "",
-		agentVersion: "",
-		revision: "1",
-		skillVersionId: "",
-		grant:
-			'{"schemaVersion":1,"tools":[],"connections":[],"fileRoots":[],"networkOrigins":[],"scripts":false}',
-	});
+}
+
+export type SkillEditorActions = {
+	createProject: typeof createSkillHubProject;
+	updateProject: typeof updateSkillHubProject;
+	importVersion: typeof importSkillHubVersion;
+};
+
+const defaultEditorActions: SkillEditorActions = {
+	createProject: createSkillHubProject,
+	updateProject: updateSkillHubProject,
+	importVersion: importSkillHubVersion,
+};
+
+type Feedback = { tone: "status" | "alert"; text: string };
+
+export function SkillEditorScreen({
+	project,
+	projectMissing = false,
+	actions = defaultEditorActions,
+	onProjectsChanged,
+}: {
+	/** 从「编辑新版本」进入时的项目；新建时为空。 */
+	project?: SkillHubProjectV1;
+	/** 地址里的项目不在当前用户的项目列表中。 */
+	projectMissing?: boolean;
+	actions?: SkillEditorActions;
+	onProjectsChanged?: () => void;
+}) {
+	const id = useId();
+	const toast = useToast();
 	const operationKeys = useRef(
 		new Map<string, { fingerprint: string; key: string }>(),
 	);
+	const [projectName, setProjectName] = useState(project?.name ?? "");
+	const [projectStatus, setProjectStatus] = useState<"active" | "disabled">(
+		project?.status ?? "active",
+	);
+	const [projectError, setProjectError] = useState("");
+	const [projectFeedback, setProjectFeedback] = useState<Feedback>();
+	const [projectBusy, setProjectBusy] = useState(false);
+	const [importForm, setImportForm] = useState({
+		name: project?.name ?? "",
+		provider: "github" as SkillHubProviderImportRequestV1["provider"],
+		version: "",
+	});
+	const [importErrors, setImportErrors] = useState<{
+		name?: string;
+		version?: string;
+	}>({});
+	const [importFeedback, setImportFeedback] = useState<Feedback>();
+	const [importResult, setImportResult] =
+		useState<SkillHubPublicationResponseV1>();
+	const [importBusy, setImportBusy] = useState(false);
+	const projectInput = useRef<HTMLInputElement>(null);
+	const importNameInput = useRef<HTMLInputElement>(null);
+	const importVersionInput = useRef<HTMLInputElement>(null);
 
+	// 同一写操作在输入不变时重试复用幂等键；成功后丢弃。
 	function idempotencyKey(scope: string, input: unknown) {
 		const fingerprint = JSON.stringify(input);
 		const previous = operationKeys.current.get(scope);
@@ -211,827 +310,366 @@ export function SkillHubManagementScreen({
 		return key;
 	}
 
-	async function run(
-		scope: string,
-		setState: (state: FormState | ((previous: FormState) => FormState)) => void,
-		operation: () => Promise<string | undefined>,
-	) {
-		setState({ busy: true });
+	async function submitProject(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (projectBusy) return;
+		const name = projectName.trim();
+		if (!skillPackageNamePattern.test(name)) {
+			setProjectError("请填写 1–63 位小写字母、数字、点、短横线或下划线。");
+			projectInput.current?.focus();
+			return;
+		}
+		setProjectError("");
+		setProjectBusy(true);
+		setProjectFeedback(undefined);
+		const scope = project ? "project-update" : "project-create";
 		try {
-			const message = await operation();
+			if (project) {
+				const body = {
+					schemaVersion: 1 as const,
+					name,
+					status: projectStatus,
+				};
+				const result = await actions.updateProject(
+					project.projectId,
+					body,
+					idempotencyKey(scope, { projectId: project.projectId, body }),
+				);
+				const text =
+					result.status === "disabled"
+						? "Skill 项目已停用"
+						: "Skill 项目已保存";
+				setProjectFeedback({
+					tone: "status",
+					text: `${text}：${result.name}。`,
+				});
+				toast(text);
+			} else {
+				const body = { schemaVersion: 1 as const, name };
+				const result = await actions.createProject(
+					body,
+					idempotencyKey(scope, body),
+				);
+				setProjectFeedback({
+					tone: "status",
+					text: `Skill 项目已创建：${result.name}。可以继续导入第一个版本。`,
+				});
+				setImportForm((current) => ({ ...current, name: result.name }));
+				toast("Skill 项目已创建");
+			}
 			operationKeys.current.delete(scope);
-			setState((previous) => ({
-				busy: false,
-				message:
-					message ?? previous.message ?? "操作已提交，服务端状态已更新。",
-			}));
+			onProjectsChanged?.();
 		} catch (error) {
-			setState({ busy: false, message: actionFailureMessage(error) });
+			setProjectFeedback({
+				tone: "alert",
+				text: skillWriteFailureMessage(error),
+			});
+		} finally {
+			setProjectBusy(false);
 		}
 	}
 
-	async function submitProject(event: FormEvent<HTMLFormElement>) {
+	async function submitImport(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		const body: SkillHubProjectCreateV1 = {
-			schemaVersion: 1,
-			name: projectName.trim(),
+		if (importBusy) return;
+		const name = importForm.name.trim();
+		const version = importForm.version.trim();
+		const errors: typeof importErrors = {};
+		if (!skillPackageNamePattern.test(name))
+			errors.name = "请填写 1–63 位小写字母、数字、点、短横线或下划线。";
+		if (!version || floatingReference.test(version))
+			errors.version = "请填写可核验的固定版本引用。";
+		setImportErrors(errors);
+		if (errors.name) {
+			importNameInput.current?.focus();
+			return;
+		}
+		if (errors.version) {
+			importVersionInput.current?.focus();
+			return;
+		}
+		setImportBusy(true);
+		setImportFeedback(undefined);
+		setImportResult(undefined);
+		const body = {
+			schemaVersion: 1 as const,
+			name,
+			provider: importForm.provider,
+			version,
 		};
-		await run("project-create", setProject, async () => {
-			const result = await actions.createProject(
+		try {
+			const result = await actions.importVersion(
 				body,
-				idempotencyKey("project-create", body),
+				idempotencyKey("provider-import", body),
 			);
-			setProjects((await actions.listProjects()).items);
-			setProjectName("");
-			return `项目已创建：${result.name}。`;
-		});
+			operationKeys.current.delete("provider-import");
+			setImportResult(result);
+			setImportFeedback({ tone: "status", text: importResultText(result) });
+			setImportForm((current) => ({ ...current, version: "" }));
+			toast(
+				result.version.state === "published"
+					? "固定版本已发布"
+					: result.version.state === "pending_review"
+						? "已提交审核，尚未进入可用目录"
+						: `导入结果：${skillHubVersionStateLabels[result.version.state]}`,
+			);
+			onProjectsChanged?.();
+		} catch (error) {
+			setImportFeedback({
+				tone: "alert",
+				text: skillWriteFailureMessage(error),
+			});
+		} finally {
+			setImportBusy(false);
+		}
 	}
 
 	return (
-		<section aria-labelledby="skill-hub-management-heading">
+		<section className="skill-page" aria-labelledby={`${id}-heading`}>
+			<Link
+				className={buttonVariants({ variant: "ghost" })}
+				to="/skills/manage"
+			>
+				<ArrowLeft aria-hidden="true" />
+				返回我的 Skill
+			</Link>
 			<header className="page-heading">
-				<div className="min-w-0">
-					<p className="page-eyebrow">我的管理 / 我的 Skill</p>
-					<h1 id="skill-hub-management-heading" className="tracking-normal">
-						管理固定版本与 Agent 配置。
-					</h1>
+				<div>
+					<p className="page-eyebrow">我的管理 / 创建 Skill</p>
+					<h1 id={`${id}-heading`}>创建与发布 Skill</h1>
 					<p>
-						项目、发布、审核和 Agent
-						配置共用同一版本事实；每次写入都由服务端授权并带幂等键。
+						创建 Skill
+						项目，或从固定来源导入版本。版本一经提交即固定，修改时导入新版本。
 					</p>
 				</div>
-				<div className="flex flex-wrap items-center gap-2">
-					<Link className={buttonVariants({ variant: "outline" })} to="/skills">
-						打开 Skill 目录
-					</Link>
-					<Button
-						type="button"
-						variant="ghost"
-						onClick={onRetry}
-						disabled={retrying}
-					>
-						<RefreshCw
-							className={
-								retrying ? "animate-spin motion-reduce:animate-none" : ""
-							}
-							aria-hidden="true"
-						/>
-						刷新
-					</Button>
-				</div>
 			</header>
-			{state.kind === "loading" ? (
-				<LoadingLine>正在加载 Skill 版本…</LoadingLine>
-			) : state.kind === "unavailable" ? (
-				<Alert tone="danger" role="alert">
+
+			{projectMissing ? (
+				<Alert tone="warn" role="status">
+					<AlertTitle>找不到这个 Skill 项目</AlertTitle>
 					<AlertDescription>
-						{state.retryable
-							? "Skill Hub 状态暂时无法读取。"
-							: "当前账号无法读取 Skill Hub 状态。"}
+						它可能已被删除，或不属于当前账号。可以新建项目，或返回我的 Skill
+						重新选择。
 					</AlertDescription>
-					{state.retryable && onRetry ? (
-						<AlertAction>
-							<Button onClick={onRetry}>重试</Button>
-						</AlertAction>
-					) : null}
 				</Alert>
-			) : (
-				<div className="space-y-5">
-					<div className="grid gap-4 md:grid-cols-2">
-						<ManagementCard
-							icon={<FolderKanban aria-hidden="true" />}
-							title="项目与导入"
-							description="创建项目或从受控 Provider 导入固定版本。"
-						>
-							<form className="mt-4 space-y-3" onSubmit={submitProject}>
-								<TextField
-									label="项目名称"
-									value={projectName}
-									onChange={setProjectName}
-									required
-								/>
-								<Button
-									type="submit"
-									disabled={project.busy || !projectName.trim()}
-								>
-									创建项目
-								</Button>
-								{project.message ? (
-									<ActionMessage value={project.message} />
-								) : null}
-							</form>
-							<form
-								className="mt-5 space-y-3 border-t pt-4"
-								onSubmit={(event) => {
-									event.preventDefault();
-									void run("project-update", setProject, async () => {
-										const body = {
-											schemaVersion: 1 as const,
-											name: projectName.trim(),
-											status: projectStatus,
-										};
-										const result = await actions.updateProject(
-											projectId.trim(),
-											body,
-											idempotencyKey("project-update", {
-												projectId: projectId.trim(),
-												body,
-											}),
-										);
-										setProjects((await actions.listProjects()).items);
-										return `项目已${result.status === "disabled" ? "停用" : "更新"}：${result.name}。`;
-									});
-								}}
-							>
-								<p className="font-medium text-sm">编辑/停用项目</p>
-								<TextField
-									label="项目 ID"
-									value={projectId}
-									onChange={setProjectId}
-									required
-								/>
-								<TextField
-									label="新名称"
-									value={projectName}
-									onChange={setProjectName}
-									required
-								/>
-								<FieldControl label="状态">
-									{(id) => (
-										<NativeSelect
-											id={id}
-											value={projectStatus}
-											onChange={(event) =>
-												setProjectStatus(
-													event.target.value as "active" | "disabled",
-												)
-											}
-										>
-											<NativeSelectOption value="active">
-												启用
-											</NativeSelectOption>
-											<NativeSelectOption value="disabled">
-												停用
-											</NativeSelectOption>
-										</NativeSelect>
-									)}
-								</FieldControl>
-								<Button
-									type="submit"
-									variant="outline"
-									disabled={
-										project.busy || !projectId.trim() || !projectName.trim()
-									}
-								>
-									保存项目
-								</Button>
-							</form>
-							{projects.length ? (
-								<ul className="mt-4 space-y-1 text-sm" aria-label="Skill 项目">
-									{projects.map((item) => (
-										<li key={item.projectId}>
-											{item.name} · {item.status}
-										</li>
-									))}
-								</ul>
-							) : null}
-							<form
-								className="mt-5 space-y-3 border-t pt-4"
-								onSubmit={(event) => {
-									event.preventDefault();
-									void run("provider-import", setImportState, async () => {
-										const body = {
-											schemaVersion: 1 as const,
-											name: importForm.name.trim(),
-											provider: importForm.provider,
-											version: importForm.version.trim(),
-										};
-										const result = await actions.importVersion(
-											body,
-											idempotencyKey("provider-import", body),
-										);
-										setImportForm({ ...importForm, name: "", version: "" });
-										return publicationMessage("Provider 导入", result);
-									});
-								}}
-							>
-								<p className="font-medium text-sm">受控 Provider 导入</p>
-								<TextField
-									label="名称"
-									value={importForm.name}
-									onChange={(value) =>
-										setImportForm({ ...importForm, name: value })
-									}
-									required
-								/>
-								<TextField
-									label="Provider 版本/选择器"
-									value={importForm.version}
-									onChange={(value) =>
-										setImportForm({ ...importForm, version: value })
-									}
-									required
-								/>
-								<ProviderSelect
-									value={importForm.provider}
-									onChange={(value) =>
-										setImportForm({ ...importForm, provider: value })
-									}
-								/>
-								<Button
-									type="submit"
-									disabled={
-										importState.busy ||
-										!importForm.name.trim() ||
-										!importForm.version.trim()
-									}
-								>
-									导入版本
-								</Button>
-								{importState.message ? (
-									<ActionMessage value={importState.message} />
-								) : null}
-							</form>
-						</ManagementCard>
+			) : null}
 
-						<ManagementCard
-							icon={<PackageOpen aria-hidden="true" />}
-							title="发布与版本"
-							description="发布不可变版本；包来源由服务端受控提供。"
-						>
-							<form
-								className="mt-4 grid gap-3"
-								onSubmit={(event) => {
-									event.preventDefault();
-									if (!publicationSource) {
-										setPublishState({
-											busy: false,
-											message:
-												"Skill Hub 后端暂时不可用：当前会话没有受控包来源，请稍后重试。",
-										});
-										return;
-									}
-									const body: SkillHubPublicationRequestV1 = {
-										...publishForm,
-										packageObjectVersion: publicationSource,
-									};
-									void run("publication", setPublishState, async () => {
-										const result = await actions.publishVersion(
-											body,
-											idempotencyKey("publication", body),
-										);
-										return publicationMessage("版本发布", result);
-									});
-								}}
-							>
-								<TextField
-									label="名称"
-									value={publishForm.name}
-									onChange={(value) =>
-										setPublishForm({ ...publishForm, name: value })
-									}
-									required
-								/>
-								<TextField
-									label="Skill ID"
-									value={publishForm.skillId}
-									onChange={(value) =>
-										setPublishForm({ ...publishForm, skillId: value })
-									}
-									required
-								/>
-								<TextField
-									label="版本 ID"
-									value={publishForm.skillVersionId}
-									onChange={(value) =>
-										setPublishForm({ ...publishForm, skillVersionId: value })
-									}
-									required
-								/>
-								<TextField
-									label="版本"
-									value={publishForm.version}
-									onChange={(value) =>
-										setPublishForm({ ...publishForm, version: value })
-									}
-									required
-								/>
-								{publicationSource ? (
-									<p className="text-muted-foreground text-sm" role="status">
-										已使用服务端受控包来源。
-									</p>
-								) : (
-									<p className="text-muted-foreground text-sm" role="status">
-										当前会话尚未取得受控包来源，发布暂不可用。
-									</p>
-								)}
-								<ProviderSelect
-									value={publishForm.provider}
-									onChange={(value) =>
-										setPublishForm({ ...publishForm, provider: value })
-									}
-								/>
-								<VisibilitySelect
-									value={publishForm.visibility}
-									onChange={(value) =>
-										setPublishForm({ ...publishForm, visibility: value })
-									}
-								/>
-								<TextField
-									label="Package digest"
-									value={publishForm.packageDigest}
-									onChange={(value) =>
-										setPublishForm({ ...publishForm, packageDigest: value })
-									}
-									required
-								/>
-								<TextField
-									label="Manifest digest"
-									value={publishForm.manifestDigest}
-									onChange={(value) =>
-										setPublishForm({ ...publishForm, manifestDigest: value })
-									}
-									required
-								/>
-								<TextField
-									label="Signature digest"
-									value={publishForm.signatureDigest}
-									onChange={(value) =>
-										setPublishForm({ ...publishForm, signatureDigest: value })
-									}
-									required
-								/>
-								<Button
-									type="submit"
-									disabled={publishState.busy || !publicationSource}
-								>
-									发布版本
-								</Button>
-								{publishState.message ? (
-									<ActionMessage value={publishState.message} />
-								) : null}
-							</form>
-						</ManagementCard>
-
-						<ManagementCard
-							icon={<ClipboardCheck aria-hidden="true" />}
-							title="共享审核"
-							description={
-								isAdministrator
-									? "审核共享发布，或撤销已授权版本。"
-									: "共享审核需要管理员；版本撤销由服务端校验 Owner 授权。"
-							}
-						>
-							<form
-								className="mt-4 space-y-3"
-								onSubmit={(event) => {
-									event.preventDefault();
-									void run("review", setReviewState, async () => {
-										const body = {
-											decision: reviewForm.decision,
-											...(reviewForm.reason.trim()
-												? { reason: reviewForm.reason.trim() }
-												: {}),
-										};
-										const result = await actions.reviewVersion(
-											reviewForm.skillVersionId.trim(),
-											body,
-											idempotencyKey("review", {
-												skillVersionId: reviewForm.skillVersionId.trim(),
-												body,
-											}),
-										);
-										return publicationMessage("审核", result);
-									});
-								}}
-							>
-								<TextField
-									label="Skill 版本 ID"
-									value={reviewForm.skillVersionId}
-									onChange={(value) =>
-										setReviewForm({ ...reviewForm, skillVersionId: value })
-									}
-									required
-								/>
-								<p className="text-muted-foreground text-sm" role="status">
-									{publishedVersionIds.has(reviewForm.skillVersionId.trim())
-										? "当前授权目录确认该版本已发布，可申请撤销。"
-										: "当前授权目录未确认已发布状态，撤销按钮保持不可用。"}
-								</p>
-								<FieldControl label="决定">
-									{(id) => (
-										<NativeSelect
-											id={id}
-											value={reviewForm.decision}
-											onChange={(event) =>
-												setReviewForm({
-													...reviewForm,
-													decision: event.target
-														.value as SkillHubReviewRequestV1["decision"],
-												})
-											}
-										>
-											<NativeSelectOption value="approve">
-												批准
-											</NativeSelectOption>
-											<NativeSelectOption value="reject">
-												驳回
-											</NativeSelectOption>
-										</NativeSelect>
-									)}
-								</FieldControl>
-								<FieldControl label="原因">
-									{(id) => (
-										<Textarea
-											id={id}
-											value={reviewForm.reason}
-											onChange={(event) =>
-												setReviewForm({
-													...reviewForm,
-													reason: event.target.value,
-												})
-											}
-											maxLength={1024}
-										/>
-									)}
-								</FieldControl>
-								<div className="flex gap-2">
-									<Button
-										type="submit"
-										disabled={
-											!isAdministrator ||
-											reviewState.busy ||
-											!reviewForm.skillVersionId.trim()
-										}
-									>
-										提交审核
-									</Button>
-									<Button
-										type="button"
-										variant="outline"
-										disabled={
-											reviewState.busy ||
-											!reviewForm.skillVersionId.trim() ||
-											!publishedVersionIds.has(reviewForm.skillVersionId.trim())
-										}
-										onClick={() =>
-											void run("revoke", setReviewState, async () => {
-												const skillVersionId = reviewForm.skillVersionId.trim();
-												const result = await actions.revokeVersion(
-													skillVersionId,
-													idempotencyKey("revoke", skillVersionId),
-												);
-												return publicationMessage("撤销", result);
-											})
-										}
-									>
-										撤销版本
-									</Button>
-								</div>
-								{reviewState.message ? (
-									<ActionMessage value={reviewState.message} />
-								) : null}
-							</form>
-						</ManagementCard>
-
-						<ManagementCard
-							icon={<CheckCircle2 aria-hidden="true" />}
-							title="Agent 配置"
-							description="绑定固定版本并读取 pending_sync、synced、failed 与 Applied 状态。"
-						>
-							<form
-								className="mt-4 space-y-3"
-								onSubmit={(event) => {
-									event.preventDefault();
-									void run("binding", setBindingState, async () => {
-										const grant = JSON.parse(
-											bindingForm.grant,
-										) as SkillHubAgentBindingCommandV1["bindings"][number]["grant"];
-										await actions.bindVersion(
-											bindingForm.agentId.trim(),
-											bindingForm.agentVersion.trim(),
-											{
-												schemaVersion: 1,
-												expectedConfigurationRevision: Number(
-													bindingForm.revision,
-												),
-												bindings: [
-													{
-														skillVersionId: bindingForm.skillVersionId.trim(),
-														grant,
-													},
-												],
-											},
-											idempotencyKey("binding", bindingForm),
-										);
-										const status = await actions.readBindings(
-											bindingForm.agentId.trim(),
-											bindingForm.agentVersion.trim(),
-										);
-										return bindingMessage(status.bindings);
-									});
-								}}
-							>
-								<TextField
-									label="Agent ID"
-									value={bindingForm.agentId}
-									onChange={(value) =>
-										setBindingForm({ ...bindingForm, agentId: value })
-									}
-									required
-								/>
-								<TextField
-									label="Agent 版本"
-									value={bindingForm.agentVersion}
-									onChange={(value) =>
-										setBindingForm({ ...bindingForm, agentVersion: value })
-									}
-									required
-								/>
-								<TextField
-									label="配置 revision"
-									value={bindingForm.revision}
-									onChange={(value) =>
-										setBindingForm({ ...bindingForm, revision: value })
-									}
-									type="number"
-									required
-								/>
-								<TextField
-									label="Skill 版本 ID"
-									value={bindingForm.skillVersionId}
-									onChange={(value) =>
-										setBindingForm({ ...bindingForm, skillVersionId: value })
-									}
-									required
-								/>
-								<FieldControl label="Grant JSON">
-									{(id) => (
-										<Textarea
-											id={id}
-											className="font-mono text-xs"
-											value={bindingForm.grant}
-											onChange={(event) =>
-												setBindingForm({
-													...bindingForm,
-													grant: event.target.value,
-												})
-											}
-										/>
-									)}
-								</FieldControl>
-								<div className="flex gap-2">
-									<Button
-										type="submit"
-										disabled={
-											bindingState.busy ||
-											!bindingForm.agentId.trim() ||
-											!bindingForm.agentVersion.trim() ||
-											!bindingForm.skillVersionId.trim()
-										}
-									>
-										保存绑定
-									</Button>
-									<Button
-										type="button"
-										variant="outline"
-										disabled={
-											bindingState.busy ||
-											!bindingForm.agentId.trim() ||
-											!bindingForm.agentVersion.trim()
-										}
-										onClick={() =>
-											void run("binding-read", setBindingState, async () => {
-												const status = await actions.readBindings(
-													bindingForm.agentId.trim(),
-													bindingForm.agentVersion.trim(),
-												);
-												return bindingMessage(status.bindings);
-											})
-										}
-									>
-										读取状态
-									</Button>
-								</div>
-								{bindingState.message ? (
-									<ActionMessage value={bindingState.message} />
-								) : null}
-							</form>
-						</ManagementCard>
-					</div>
-
-					<section
-						className="rounded-[14px] border bg-card p-5"
-						aria-labelledby="skill-hub-published-heading"
+			<div className="skill-surface skill-editor-surface">
+				<FormSection
+					title={project ? "项目信息" : "Skill 项目"}
+					description={
+						project
+							? "修改包名称或停用项目；已发布的版本和执行记录保持不变。"
+							: "项目是版本的归属；包名称会作为导入与发布的名称。"
+					}
+				>
+					<form
+						className="skill-editor-form"
+						onSubmit={submitProject}
+						noValidate
 					>
-						<div className="flex flex-wrap items-center justify-between gap-3">
-							<div>
-								<p className="page-eyebrow">服务端授权 metadata</p>
-								<h2
-									id="skill-hub-published-heading"
-									className="mt-1 font-semibold text-lg"
-								>
-									已发布版本
-								</h2>
-							</div>
-							<Badge variant="tag">{versions.length} 个版本</Badge>
-						</div>
-						{versions.length === 0 ? (
-							<Empty>
-								<EmptyHeader>
-									<EmptyMedia>
-										<PackageOpen aria-hidden="true" />
-									</EmptyMedia>
-									<EmptyTitle>暂无已发布版本</EmptyTitle>
-									<EmptyDescription>
-										发布成功的固定版本会显示在这里。
-									</EmptyDescription>
-								</EmptyHeader>
-							</Empty>
-						) : (
-							<ul className="mt-4 grid gap-3" aria-label="已发布 Skill 版本">
-								{versions.map((version) => (
-									<li
-										key={version.skillVersionId}
-										className="rounded-[10px] border p-4"
+						<div className="skill-editor-grid">
+							<Field>
+								<Label htmlFor={`${id}-project-name`}>包名称</Label>
+								<Input
+									ref={projectInput}
+									id={`${id}-project-name`}
+									value={projectName}
+									maxLength={63}
+									autoComplete="off"
+									spellCheck={false}
+									aria-invalid={projectError ? "true" : undefined}
+									aria-describedby={`${id}-project-name-help${projectError ? ` ${id}-project-name-error` : ""}`}
+									onChange={(event) => {
+										setProjectName(event.target.value);
+										setProjectError("");
+									}}
+								/>
+								<p id={`${id}-project-name-help`} className="skill-field-help">
+									小写字母、数字、点、短横线和下划线
+								</p>
+								{projectError ? (
+									<FieldErrorText id={`${id}-project-name-error`}>
+										{projectError}
+									</FieldErrorText>
+								) : null}
+							</Field>
+							{project ? (
+								<Field>
+									<Label htmlFor={`${id}-project-status`}>项目状态</Label>
+									<NativeSelect
+										id={`${id}-project-status`}
+										value={projectStatus}
+										onChange={(event) =>
+											setProjectStatus(
+												event.target.value as "active" | "disabled",
+											)
+										}
 									>
-										<div className="flex flex-wrap items-start justify-between gap-3">
-											<div className="min-w-0">
-												<h3 className="break-all font-medium">
-													<Link
-														className={buttonVariants({ variant: "link" })}
-														to="/skills/$skillVersionId"
-														params={{ skillVersionId: version.skillVersionId }}
-													>
-														{version.name}
-													</Link>
-												</h3>
-												<p className="mt-1 break-all text-muted-foreground text-sm">
-													版本 {version.version} · {version.skillVersionId}
-												</p>
-											</div>
-											<div className="flex flex-wrap gap-2">
-												<Badge variant="tag">
-													{skillHubProviderLabels[version.provider]}
-												</Badge>
-												<Badge variant="tag">
-													{skillHubVisibilityLabels[version.visibility]}
-												</Badge>
-												<Badge tone="gray">
-													{skillVersionStateLabels.published}
-												</Badge>
-											</div>
-										</div>
-										<p className="mt-3 break-all text-muted-foreground text-xs">
-											digest: {version.packageDigest}
-										</p>
-									</li>
-								))}
-							</ul>
-						)}
-					</section>
-				</div>
-			)}
-		</section>
-	);
-}
+										<NativeSelectOption value="active">启用</NativeSelectOption>
+										<NativeSelectOption value="disabled">
+											停用
+										</NativeSelectOption>
+									</NativeSelect>
+								</Field>
+							) : null}
+						</div>
+						<div className="skill-actions skill-form-actions">
+							<Button type="submit" disabled={projectBusy}>
+								{projectBusy ? "正在保存…" : project ? "保存项目" : "创建项目"}
+							</Button>
+						</div>
+						<FeedbackText feedback={projectFeedback} />
+					</form>
+				</FormSection>
 
-function TextField({
-	label,
-	value,
-	onChange,
-	required = false,
-	type = "text",
-}: {
-	label: string;
-	value: string;
-	onChange: (value: string) => void;
-	required?: boolean;
-	type?: string;
-}) {
-	return (
-		<FieldControl label={label}>
-			{(id) => (
-				<Input
-					id={id}
-					type={type}
-					value={value}
-					required={required}
-					onChange={(event) => onChange(event.target.value)}
-				/>
-			)}
-		</FieldControl>
-	);
-}
-
-// 字段标签与控件分开渲染（htmlFor 关联），控件不继承标签的字号、字重与颜色。
-function FieldControl({
-	label,
-	children,
-}: {
-	label: string;
-	children: (id: string) => ReactNode;
-}) {
-	const id = useId();
-	return (
-		<Field>
-			<Label htmlFor={id}>{label}</Label>
-			{children(id)}
-		</Field>
-	);
-}
-
-function ProviderSelect({
-	value,
-	onChange,
-}: {
-	value: SkillHubProviderImportRequestV1["provider"];
-	onChange: (value: SkillHubProviderImportRequestV1["provider"]) => void;
-}) {
-	return (
-		<FieldControl label="Provider">
-			{(id) => (
-				<NativeSelect
-					id={id}
-					value={value}
-					onChange={(event) =>
-						onChange(
-							event.target.value as SkillHubProviderImportRequestV1["provider"],
-						)
-					}
+				<FormSection
+					title="导入固定来源"
+					description="来源由平台提供，外部包需完成检查与审核。"
 				>
-					{Object.entries(skillHubProviderLabels).map(([provider, label]) => (
-						<NativeSelectOption key={provider} value={provider}>
-							{label}
-						</NativeSelectOption>
-					))}
-				</NativeSelect>
-			)}
-		</FieldControl>
-	);
-}
-
-function VisibilitySelect({
-	value,
-	onChange,
-}: {
-	value: SkillHubPublicationRequestV1["visibility"];
-	onChange: (value: SkillHubPublicationRequestV1["visibility"]) => void;
-}) {
-	return (
-		<FieldControl label="可见范围">
-			{(id) => (
-				<NativeSelect
-					id={id}
-					value={value}
-					onChange={(event) =>
-						onChange(
-							event.target.value as SkillHubPublicationRequestV1["visibility"],
-						)
-					}
-				>
-					{Object.entries(skillHubVisibilityLabels).map(
-						([visibility, label]) => (
-							<NativeSelectOption key={visibility} value={visibility}>
-								{label}
-							</NativeSelectOption>
-						),
-					)}
-				</NativeSelect>
-			)}
-		</FieldControl>
-	);
-}
-
-function ActionMessage({ value }: { value?: string }) {
-	return value ? (
-		<p role="status" className="text-muted-foreground text-sm">
-			{value}
-		</p>
-	) : null;
-}
-
-function ManagementCard({
-	icon,
-	title,
-	description,
-	children,
-}: {
-	icon: ReactNode;
-	title: string;
-	description: string;
-	children: ReactNode;
-}) {
-	return (
-		<section className="rounded-[14px] border bg-card p-5">
-			<div className="flex items-start gap-3">
-				<div className="text-muted-foreground">{icon}</div>
-				<div className="min-w-0">
-					<h2 className="font-medium">{title}</h2>
-					<p className="mt-2 text-muted-foreground text-sm">{description}</p>
-				</div>
+					<form
+						className="skill-editor-form"
+						onSubmit={submitImport}
+						noValidate
+					>
+						<div className="skill-editor-grid">
+							<Field>
+								<Label htmlFor={`${id}-import-provider`}>来源</Label>
+								<NativeSelect
+									id={`${id}-import-provider`}
+									value={importForm.provider}
+									onChange={(event) =>
+										setImportForm({
+											...importForm,
+											provider: event.target
+												.value as SkillHubProviderImportRequestV1["provider"],
+										})
+									}
+								>
+									{importProviders.map((provider) => (
+										<NativeSelectOption key={provider} value={provider}>
+											{skillHubProviderLabels[provider]}
+										</NativeSelectOption>
+									))}
+								</NativeSelect>
+							</Field>
+							<Field>
+								<Label htmlFor={`${id}-import-name`}>包名称</Label>
+								<Input
+									ref={importNameInput}
+									id={`${id}-import-name`}
+									value={importForm.name}
+									maxLength={63}
+									autoComplete="off"
+									spellCheck={false}
+									aria-invalid={importErrors.name ? "true" : undefined}
+									aria-describedby={
+										importErrors.name ? `${id}-import-name-error` : undefined
+									}
+									onChange={(event) => {
+										setImportForm({ ...importForm, name: event.target.value });
+										setImportErrors({ ...importErrors, name: undefined });
+									}}
+								/>
+								{importErrors.name ? (
+									<FieldErrorText id={`${id}-import-name-error`}>
+										{importErrors.name}
+									</FieldErrorText>
+								) : null}
+							</Field>
+							<Field className="skill-editor-full">
+								<Label htmlFor={`${id}-import-version`}>固定版本引用</Label>
+								<Input
+									ref={importVersionInput}
+									id={`${id}-import-version`}
+									value={importForm.version}
+									maxLength={256}
+									autoComplete="off"
+									spellCheck={false}
+									placeholder="包名称与固定版本，不使用 latest"
+									aria-invalid={importErrors.version ? "true" : undefined}
+									aria-describedby={
+										importErrors.version
+											? `${id}-import-version-error`
+											: undefined
+									}
+									onChange={(event) => {
+										setImportForm({
+											...importForm,
+											version: event.target.value,
+										});
+										setImportErrors({ ...importErrors, version: undefined });
+									}}
+								/>
+								{importErrors.version ? (
+									<FieldErrorText id={`${id}-import-version-error`}>
+										{importErrors.version}
+									</FieldErrorText>
+								) : null}
+							</Field>
+						</div>
+						<div className="skill-actions skill-form-actions">
+							<Button type="submit" variant="outline" disabled={importBusy}>
+								{importBusy ? "正在导入…" : "导入为待检查草稿"}
+							</Button>
+						</div>
+						<FeedbackText feedback={importFeedback}>
+							{importResult ? (
+								<SkillHubStateChip state={importResult.version.state} />
+							) : null}
+						</FeedbackText>
+					</form>
+				</FormSection>
+				{/* 静态说明，不设 role。 */}
+				<Alert tone="info" icon={<ShieldCheck aria-hidden="true" />}>
+					<AlertTitle>权限不会扩大</AlertTitle>
+					<AlertDescription>
+						脚本保持禁用，Skill 只消费已授予 Agent 的文件、工具与 Connection
+						权限。
+					</AlertDescription>
+				</Alert>
 			</div>
-			{children}
 		</section>
+	);
+}
+
+/** 设计 .field-error：12px --danger-ink，字段下方就地提示。 */
+export function FieldErrorText({
+	id,
+	children,
+}: {
+	id: string;
+	children: string;
+}) {
+	return (
+		<Alert
+			id={id}
+			tone="danger"
+			role="alert"
+			icon={null}
+			className="skill-field-error"
+		>
+			{children}
+		</Alert>
+	);
+}
+
+function FeedbackText({
+	feedback,
+	children,
+}: {
+	feedback?: Feedback;
+	children?: ReactNode;
+}) {
+	if (!feedback) return null;
+	return (
+		<Alert
+			tone={feedback.tone === "alert" ? "danger" : "info"}
+			role={feedback.tone}
+			className="mt-4"
+		>
+			<AlertDescription>{feedback.text}</AlertDescription>
+			{children ? <div className="mt-2">{children}</div> : null}
+		</Alert>
 	);
 }

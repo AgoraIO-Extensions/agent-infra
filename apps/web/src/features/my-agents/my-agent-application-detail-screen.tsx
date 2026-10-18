@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft, ArrowRight, RefreshCw, Settings2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
 	Alert,
@@ -22,9 +22,12 @@ import {
 	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
 import { DirectoryRecords } from "../directory-fields.js";
+import { formatPerson } from "../directory-names.js";
 import { PageLoadingState } from "../page-loading-state.js";
 import {
+	type ApplicationProgressStepKey,
 	agentApplicationEditActionLabels,
+	applicationProgressSteps,
 	getAgentApplicationEditAction,
 	hasCreatedAgent,
 	type MyAgentApplicationState,
@@ -39,6 +42,59 @@ type MyAgentApplicationDetailScreenProps = {
 	withdrawalResult?: AgentApplicationProjectionV2;
 	withdrawing: boolean;
 };
+
+type ApplicationStatus = AgentApplicationProjectionV2["status"];
+
+// 「创建 Agent」一步的说明，与步骤 chip 一样只按申请状态取值。
+const creationDetails: Record<ApplicationStatus, string> = {
+	pending_approval: "审批通过后开始创建。",
+	withdrawn: "当前申请不会创建 Agent。",
+	rejected: "当前申请不会创建 Agent。",
+	creating: "正在创建长期运行实例。",
+	available: "Agent 已创建，可进入详情。",
+	stopped: "Agent 已创建，当前已停止。",
+	creation_failed: "创建未完成，Agent 尚不可用。",
+	disabled: "Agent 已被系统管理员停用。",
+};
+
+// 侧栏「下一步」的说明；设计只画了待审批，其余状态按申请状态给出可执行的去向。
+const nextStepNotes: Record<ApplicationStatus, string> = {
+	pending_approval:
+		"审批通过后，平台会创建长期运行实例并在完成健康检查后显示“就绪”。",
+	creating: "审批通过后，平台会创建长期运行实例并在完成健康检查后显示“就绪”。",
+	rejected: "查看审批原因，修改后重新提交。",
+	withdrawn: "此记录为只读历史。再次申请请从“我的 Agent”新建。",
+	available: "进入 Agent 详情查看运行状态。",
+	stopped: "进入 Agent 详情查看运行状态。",
+	creation_failed: "Owner 可以在 Agent 配置中重试创建。",
+	disabled: "Agent 已被系统管理员停用。",
+};
+
+function ProgressDetail({
+	step,
+	application,
+}: {
+	step: ApplicationProgressStepKey;
+	application: AgentApplicationProjectionV2;
+}) {
+	if (step === "submitted")
+		return (
+			<>
+				提交于 <Timestamp value={application.submittedAt} />
+			</>
+		);
+	if (step === "approval")
+		return application.decision ? (
+			<span>
+				审批时间 <Timestamp value={application.decision.decidedAt} />
+			</span>
+		) : application.status === "withdrawn" ? (
+			"申请已撤回，不再等待审批。"
+		) : (
+			"等待管理员审阅资源与配置。"
+		);
+	return creationDetails[application.status];
+}
 
 export function MyAgentApplicationDetailScreen({
 	onRetry,
@@ -105,6 +161,7 @@ export function MyAgentApplicationDetailScreen({
 					) : null}
 				</Alert>
 				<Link
+					activeOptions={{ exact: true }}
 					className={buttonVariants({ variant: "outline" })}
 					to="/my-agents"
 				>
@@ -118,11 +175,16 @@ export function MyAgentApplicationDetailScreen({
 	const defaultModel = configuration.modelOptions.find(
 		(model) => model.optionId === configuration.defaultModelOptionId,
 	);
+	const withdrawable = application.status === "pending_approval";
+	const agentEntrance = hasCreatedAgent(application) ? application : null;
+	const hasActions = Boolean(editAction || withdrawable || agentEntrance);
 	return (
 		<section aria-labelledby="my-agent-application-detail-heading">
-			<header className="page-heading">
+			{/* 设计 .page-head：操作在页头右侧，≤767 换到标题下方。 */}
+			<header className="page-heading application-detail-heading">
 				<div>
 					<Link
+						activeOptions={{ exact: true }}
 						className={buttonVariants({ variant: "ghost", size: "sm" })}
 						to="/my-agents"
 					>
@@ -133,71 +195,19 @@ export function MyAgentApplicationDetailScreen({
 					<h1 id="my-agent-application-detail-heading">{application.name}</h1>
 					<p>{application.description}</p>
 				</div>
-			</header>
-			<div className="form-layout application-detail-layout">
-				<div className="min-w-0">
-					<div className="section-heading">
-						<div>
-							<h2>审批进度</h2>
-							<p>状态以最新申请记录为准</p>
-						</div>
-						<Badge tone={statusTone(application.status)}>
-							{agentManagementStatusLabels[application.status]}
-						</Badge>
-					</div>
-					<ul className="application-progress">
-						<li>
-							<div>
-								<strong>申请已提交</strong>
-								<small>
-									提交于 <Timestamp value={application.submittedAt} />
-								</small>
-							</div>
-							<Badge tone="green">已提交</Badge>
-						</li>
-						<li>
-							<div>
-								<strong>系统管理员审批</strong>
-								<small>
-									{application.decision ? (
-										<span>
-											审批时间{" "}
-											<Timestamp value={application.decision.decidedAt} />
-										</span>
-									) : application.status === "withdrawn" ? (
-										"申请已撤回，不再等待审批。"
-									) : (
-										"等待管理员审阅资源与配置。"
-									)}
-								</small>
-							</div>
-							<Badge tone={statusTone(application.status)}>
-								{application.decision
-									? "已审批"
-									: application.status === "withdrawn"
-										? "不再审批"
-										: "等待"}
-							</Badge>
-						</li>
-					</ul>
-					{application.decision?.reason ? (
-						<Alert tone="danger" className="my-3">
-							<AlertTitle>审批原因：</AlertTitle>
-							<AlertDescription>{application.decision.reason}</AlertDescription>
-						</Alert>
-					) : null}
-
-					<div className="actions">
+				{hasActions ? (
+					<div className="card-actions">
 						{editAction ? (
 							<Link
 								className={buttonVariants()}
 								params={{ applicationId: application.applicationId }}
 								to="/my-agents/$applicationId/edit"
 							>
+								<Settings2 aria-hidden="true" data-icon="inline-start" />
 								{agentApplicationEditActionLabels[editAction]}
 							</Link>
 						) : null}
-						{application.status === "pending_approval" ? (
+						{withdrawable ? (
 							<ConfirmDialog
 								open={confirmationFor === confirmationKey}
 								onOpenChange={(open) =>
@@ -225,45 +235,78 @@ export function MyAgentApplicationDetailScreen({
 								}}
 							/>
 						) : null}
-						{hasCreatedAgent(application) ? (
+						{agentEntrance ? (
 							<Link
 								className={buttonVariants({ variant: "outline" })}
-								params={{ agentId: application.agentId }}
+								params={{ agentId: agentEntrance.agentId }}
 								to="/agents/$agentId"
 							>
 								查看 Agent
 							</Link>
 						) : null}
 					</div>
-					{application.status === "withdrawn" ? (
-						<p className="mt-5 text-muted-foreground">
-							此记录为只读历史。再次申请请从“我的 Agent”新建。
-						</p>
-					) : null}
-					{submittedResult ? (
-						<Alert
-							tone="info"
-							ref={resultRef}
-							tabIndex={-1}
-							className="my-3"
-							role="status"
-						>
-							<AlertDescription>
-								撤回请求已提交：
-								{agentManagementStatusLabels[submittedResult.status]}。
-							</AlertDescription>
+				) : null}
+			</header>
+			{submittedResult ? (
+				<Alert
+					tone="info"
+					ref={resultRef}
+					tabIndex={-1}
+					className="application-detail-feedback"
+					role="status"
+				>
+					<AlertDescription>
+						撤回请求已提交：
+						{agentManagementStatusLabels[submittedResult.status]}。
+					</AlertDescription>
+				</Alert>
+			) : null}
+			{withdrawalError ? (
+				<Alert
+					tone="danger"
+					role="alert"
+					className="application-detail-feedback"
+				>
+					<AlertDescription>
+						暂未确认撤回结果，请先查看申请的最新状态。
+					</AlertDescription>
+				</Alert>
+			) : null}
+			<div className="form-layout application-detail-layout">
+				<section
+					className="application-progress-panel min-w-0"
+					aria-labelledby="application-progress-heading"
+				>
+					<div className="section-heading">
+						<div>
+							<h2 id="application-progress-heading">审批进度</h2>
+							<p>状态以最新申请记录为准</p>
+						</div>
+						<Badge tone={statusTone(application.status)}>
+							{agentManagementStatusLabels[application.status]}
+						</Badge>
+					</div>
+					<ul className="application-progress">
+						{applicationProgressSteps(application.status).map((step) => (
+							<li key={step.key} data-step={step.key}>
+								<div>
+									<strong>{step.title}</strong>
+									<small>
+										<ProgressDetail step={step.key} application={application} />
+									</small>
+								</div>
+								<Badge tone={step.tone}>{step.label}</Badge>
+							</li>
+						))}
+					</ul>
+					{application.decision?.reason ? (
+						<Alert tone="danger" className="application-decision-reason">
+							<AlertTitle>审批原因：</AlertTitle>
+							<AlertDescription>{application.decision.reason}</AlertDescription>
 						</Alert>
 					) : null}
-					{withdrawalError ? (
-						<Alert tone="danger" role="alert" className="my-3">
-							<AlertDescription>
-								暂未确认撤回结果，请先查看申请的最新状态。
-							</AlertDescription>
-						</Alert>
-					) : null}
-				</div>
+				</section>
 				<aside className="application-detail-aside">
-					{" "}
 					<section className="form-aside" aria-label="申请配置摘要">
 						<h2>申请配置</h2>
 						<dl className="metadata-facts">
@@ -280,7 +323,10 @@ export function MyAgentApplicationDetailScreen({
 							<dt>Owner</dt>
 							<dd>
 								{configuration.owners
-									.map((owner) => owner.displayName)
+									.map(
+										(owner) =>
+											formatPerson({ displayName: owner.displayName }).name,
+									)
 									.join("、") || "未提供"}
 							</dd>
 							<dt>使用范围</dt>
@@ -307,13 +353,31 @@ export function MyAgentApplicationDetailScreen({
 							</dd>
 							<dt>默认模型</dt>
 							<dd>
+								{/* 找不到对应选项时不显示内部选项 ID。 */}
 								{defaultModel?.displayName ??
-									configuration.defaultModelOptionId ??
-									"未提供"}
+									(configuration.defaultModelOptionId
+										? "未识别的模型选项"
+										: "未提供")}
 							</dd>
 							<dt>默认推理档位</dt>
 							<dd>{configuration.defaultReasoningLevel ?? "未提供"}</dd>
 						</dl>
+					</section>
+					<section
+						className="form-aside application-next-step"
+						aria-labelledby="application-next-step-heading"
+					>
+						<h2 id="application-next-step-heading">下一步</h2>
+						<p className="page-note">{nextStepNotes[application.status]}</p>
+						<div className="card-actions">
+							<Link
+								className={buttonVariants({ variant: "ghost" })}
+								to="/agents"
+							>
+								<ArrowRight aria-hidden="true" data-icon="inline-start" />
+								查看 Agent 目录
+							</Link>
+						</div>
 					</section>
 					<section className="form-aside">
 						<h2>资源预设</h2>

@@ -15,6 +15,7 @@ import {
 } from "@testing-library/react";
 import { type ReactElement, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ToastProvider } from "@/components/ui/toast";
 import { AgentConfigurationScreen } from "./agent-configuration/agent-configuration-screen.js";
 import { AgentDetailScreen } from "./agent-discovery/agent-detail-screen.js";
 import { renderWithAgentRouter } from "./agent-discovery/test-router.js";
@@ -28,14 +29,19 @@ function render(element: ReactElement) {
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false, gcTime: 0 } },
 	});
+	// 配置页的企微卡片与镜像升级会调用 Toast，页面在根布局的 ToastProvider 内渲染。
 	const result = renderView(
-		<QueryClientProvider client={client}>{element}</QueryClientProvider>,
+		<QueryClientProvider client={client}>
+			<ToastProvider>{element}</ToastProvider>
+		</QueryClientProvider>,
 	);
 	return {
 		...result,
 		rerender(element: ReactElement) {
 			result.rerender(
-				<QueryClientProvider client={client}>{element}</QueryClientProvider>,
+				<QueryClientProvider client={client}>
+					<ToastProvider>{element}</ToastProvider>
+				</QueryClientProvider>,
 			);
 		},
 	};

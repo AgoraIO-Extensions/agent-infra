@@ -7,10 +7,16 @@ import { MyAgentsScreen } from "../../features/my-agents/my-agents-screen.js";
 import { useMyAgentApplications } from "../../features/my-agents/use-my-agent-applications.js";
 
 export const Route = createFileRoute("/my-agents/")({
+	// 只认「已创建」一个值；默认的「申请」不写参数，其他值一律忽略。
+	validateSearch: (search: Record<string, unknown>): { tab?: "owned" } => ({
+		tab: search.tab === "owned" ? "owned" : undefined,
+	}),
 	component: MyAgentsRoute,
 });
 
 function MyAgentsRoute() {
+	const { tab } = Route.useSearch();
+	const navigate = Route.useNavigate();
 	const { identityKey } = useApplicationSession();
 	const query = useMyAgentApplications({ identityKey });
 	const owned = useAgentDiscovery({ identityKey, scope: "owner" });
@@ -24,6 +30,14 @@ function MyAgentsRoute() {
 	return (
 		<main className="platform-content management-content">
 			<MyAgentsScreen
+				tab={tab === "owned" ? "owned" : "applications"}
+				onTabChange={(next) => {
+					void navigate({
+						search: { tab: next === "owned" ? "owned" : undefined },
+						replace: true,
+						resetScroll: false,
+					});
+				}}
 				ownedAgents={
 					owned.data?.kind === "ready" ? owned.data.agents : undefined
 				}

@@ -6,7 +6,11 @@ import {
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+	focusManager,
+	QueryClient,
+	QueryClientProvider,
+} from "@tanstack/react-query";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -23,6 +27,7 @@ import {
 	within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ToastProvider } from "../../components/ui/toast.js";
 import { client as v1 } from "../../pilot/generated/client.gen.js";
 import { client as v2 } from "../../pilot/generated-v2/client.gen.js";
 import {
@@ -34,6 +39,7 @@ import {
 	event,
 	execution,
 	history,
+	reload,
 	sse,
 	timestamp,
 } from "./conversation-test-fixtures.js";
@@ -52,7 +58,9 @@ const originalV1 = v1.getConfig();
 const originalV2 = v2.getConfig();
 const queries: QueryClient[] = [];
 function setup(
-	handler?: (request: Request) => Response | Promise<Response> | undefined,
+	handler?: (
+		request: Request,
+	) => Response | Promise<Response | undefined> | undefined,
 	changes: Partial<ConversationScreenProps> = {},
 ) {
 	const requests: Request[] = [];
@@ -116,7 +124,9 @@ function setup(
 	const view = (value: ConversationScreenProps) => (
 		<RouterContextProvider router={router}>
 			<QueryClientProvider client={queryClient}>
-				<ConversationScreen {...value} />
+				<ToastProvider>
+					<ConversationScreen {...value} />
+				</ToastProvider>
 			</QueryClientProvider>
 		</RouterContextProvider>
 	);
@@ -185,116 +195,394 @@ function fileProjection(status: "pending" | "available" = "available") {
 	};
 }
 
+const completedExecution = {
+	...event(2),
+	schemaVersion: 1 as const,
+	type: "execution.status" as const,
+	payload: { status: "completed" as const },
+};
+/** 已有终态 Execution 的就绪会话：命令与 Skill 目录可按该 Execution 读取。 */
+function idleHistory() {
+	return {
+		...history("conversation-1", [event(1), completedExecution]),
+		conversation: { ...history().conversation, status: "ready" },
+	};
+}
+function nativeCatalog(url: URL) {
+	if (url.searchParams.get("selector") === "commands")
+		return Response.json({
+			selector: "commands",
+			revision: "c".repeat(64),
+			capabilities: [
+				{
+					id: "f".repeat(64),
+					kind: "command",
+					name: "list-files",
+					description: "List approved workspace files",
+					source: { name: "codex", version: "1.0.0" },
+					parameters: [],
+					effect: "read_only",
+					availability: "available",
+				},
+			],
+		});
+	return Response.json({
+		selector: "skills",
+		revision: "d".repeat(64),
+		capabilities: [
+			{
+				id: "e".repeat(64),
+				kind: "skill",
+				name: "workspace-summary",
+				description: "Summarize approved workspace files",
+				source: { name: "skillhub", version: "1.0.0" },
+				availability: "discovered",
+			},
+		],
+	});
+}
+
 describe("functional conversation screen", () => {
-	it("shows authenticated native Skill metadata and invokes confirmed selection", async () => {
-		const { requests } = setup((request) => {
+	it("searches native commands and Skills inside the composer and invokes a confirmed Skill", async () => {
+		let invoked: unknown;
+		// 服务端快照随 SSE 一起包含该 Execution 的状态事件，重读后阶段不回退。
+		const nativeEvents: ReturnType<typeof event>[] = [];
+		const { requests, streams } = setup((request) => {
 			const url = new URL(request.url);
-			if (url.pathname.endsWith("/native-capability/invoke"))
+			if (url.pathname.endsWith("/native-capability/invoke")) {
+				invoked = true;
 				return Response.json(
 					{
 						outcome: "accepted",
 						result: {
+							schemaVersion: 1,
 							status: "submitted",
-							executionId: "execution-1",
+							executionId: "execution-native",
 							capabilityId: "e".repeat(64),
+							capabilityKind: "skill",
+							conversationId: "conversation-1",
 							directoryRevision: "d".repeat(64),
 						},
 					},
 					{ status: 202 },
 				);
-			if (url.pathname.endsWith("/native-metadata")) {
-				if (url.searchParams.get("selector") === "commands")
-					return Response.json({
-						selector: "commands",
-						revision: "c".repeat(64),
-						capabilities: [
-							{
-								id: "f".repeat(64),
-								kind: "command",
-								name: "list-files",
-								description: "List approved workspace files",
-								source: { name: "codex", version: "1.0.0" },
-								parameters: [],
-								effect: "read_only",
-								availability: "available",
-							},
-						],
-					});
+			}
+			if (url.pathname.endsWith("/native-metadata")) return nativeCatalog(url);
+			if (url.pathname === "/api/v2/conversations/conversation-1") {
+				const idle = idleHistory();
 				return Response.json({
-					selector: "skills",
-					revision: "d".repeat(64),
-					capabilities: [
-						{
-							id: "e".repeat(64),
-							kind: "skill",
-							name: "workspace-summary",
-							description: "Summarize approved workspace files",
-							source: { name: "skillhub", version: "1.0.0" },
-							availability: "discovered",
-						},
-					],
+					...idle,
+					events: [...idle.events, ...nativeEvents],
 				});
 			}
-			if (url.pathname === "/api/v2/agents/agent-1")
-				return Response.json({
-					...agent,
-				});
-			if (url.pathname === "/api/v2/conversations/conversation-1")
-				return Response.json(history("conversation-1"));
 		});
-		fireEvent.click(await screen.findByRole("button", { name: "打开" }));
-		expect(screen.getByText("workspace-summary")).toBeTruthy();
-		expect(screen.getByText("list-files")).toBeTruthy();
-		expect(screen.getByText(/skillhub/)).toBeTruthy();
-		expect(screen.getAllByText(/1\.0\.0/)).toHaveLength(2);
-		const metadataRequests = requests.filter((request) =>
-			new URL(request.url).pathname.endsWith("/native-metadata"),
-		);
+		function nativeStatus(
+			sequence: number,
+			status: "processing" | "completed",
+		) {
+			const next = PersistedConversationEventV2Schema.parse({
+				...event(sequence),
+				executionId: "execution-native",
+				type: "execution.status",
+				payload: { status },
+			});
+			nativeEvents.push(next);
+			act(() => streams.at(-1)?.send(next));
+		}
+		function receiptStatus() {
+			const receipt = screen
+				.getByText("Skill · workspace-summary · v1.0.0")
+				.closest(".capability-receipt");
+			if (!(receipt instanceof HTMLElement)) throw new Error("Missing receipt");
+			return within(receipt).getByRole("status").textContent;
+		}
+		const input = await composer();
+		expect(input.getAttribute("role")).toBeNull();
+		expect(input.placeholder).toBe("输入消息，或 / 搜索命令与 Skill…");
+		fireEvent.change(input, { target: { value: "/" } });
+		const listbox = await screen.findByRole("listbox", {
+			name: "命令与 Skill 搜索结果",
+		});
+		// 唯一输入框：没有独立搜索框与旧能力卡片。
+		expect(
+			screen.queryByRole("textbox", { name: "搜索命令或 Skill" }),
+		).toBeNull();
+		expect(screen.queryByRole("region", { name: "对话能力" })).toBeNull();
+		expect(input.getAttribute("role")).toBe("combobox");
+		expect(input.getAttribute("aria-expanded")).toBe("true");
+		expect(input.getAttribute("aria-controls")).toBe(listbox.id);
+		const options = within(listbox).getAllByRole("option");
+		expect(options).toHaveLength(2);
+		expect(input.getAttribute("aria-activedescendant")).toBe(options[0].id);
+		expect(options[0].getAttribute("aria-selected")).toBe("true");
+		expect(within(listbox).getByText("只读命令")).toBeTruthy();
+		expect(within(listbox).getByText("Skill")).toBeTruthy();
+		expect(within(listbox).queryByText("command")).toBeNull();
+		expect(within(listbox).queryByText("skill")).toBeNull();
+		expect(screen.getByText("命令 / Skill · 输入 / 搜索")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "关闭命令选择" })).toBeTruthy();
 		expect(
 			new Set(
-				metadataRequests.map((request) =>
-					new URL(request.url).searchParams.get("selector"),
-				),
+				requests
+					.filter((request) =>
+						new URL(request.url).pathname.endsWith("/native-metadata"),
+					)
+					.map((request) => new URL(request.url).searchParams.get("selector")),
 			),
 		).toEqual(new Set(["commands", "skills"]));
-		fireEvent.click(screen.getByRole("button", { name: /workspace-summary/ }));
-		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
+		// ↑↓ 在首尾停住，不循环。
+		fireEvent.keyDown(input, { key: "ArrowUp" });
+		expect(options[0].getAttribute("aria-selected")).toBe("true");
+		fireEvent.keyDown(input, { key: "ArrowDown" });
+		fireEvent.keyDown(input, { key: "ArrowDown" });
 		expect(
-			screen.getByText("选择已确认，正在通过当前会话接缝提交。"),
-		).toBeTruthy();
-	});
-
-	it("hides native capabilities when the current execution metadata is unavailable", async () => {
-		setup((request) => {
-			const url = new URL(request.url);
-			if (url.pathname.endsWith("/native-metadata"))
-				return new Response(null, { status: 503 });
-			if (url.pathname === "/api/v2/conversations/conversation-1")
-				return Response.json(history("conversation-1"));
+			within(listbox).getAllByRole("option")[1].getAttribute("aria-selected"),
+		).toBe("true");
+		// 输入法组合中的 Enter 不选择、不发送。
+		fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+		expect(screen.getByRole("listbox")).toBeTruthy();
+		fireEvent.keyDown(input, { key: "Escape" });
+		expect(screen.queryByRole("listbox")).toBeNull();
+		expect(input.getAttribute("role")).toBeNull();
+		expect(document.activeElement === input || input.value === "/").toBe(true);
+		fireEvent.change(input, { target: { value: "/summary" } });
+		await screen.findByRole("listbox");
+		expect(screen.getAllByRole("option")).toHaveLength(1);
+		fireEvent.keyDown(input, { key: "Tab" });
+		expect(screen.queryByRole("listbox")).toBeNull();
+		expect(input.value).toBe("");
+		expect(screen.getByText("Skill · workspace-summary")).toBeTruthy();
+		expect(screen.getByText("skillhub · v1.0.0 · 等待发送确认")).toBeTruthy();
+		expect(input.placeholder).toBe("补充这次任务的目标与范围…");
+		const confirm = screen.getByRole("button", { name: "确认发送" });
+		fireEvent.click(confirm);
+		expect((await screen.findByRole("alert")).textContent).toBe(
+			"请在输入框补充这次任务的目标与范围。",
+		);
+		expect(invoked).toBeUndefined();
+		expect(document.activeElement).toBe(input);
+		fireEvent.change(input, { target: { value: "梳理当前工作区" } });
+		fireEvent.click(confirm);
+		await screen.findByText("已受理，尚未开始");
+		const invoke = requests.find((request) =>
+			request.url.endsWith("/native-capability/invoke"),
+		);
+		expect(await invoke?.json()).toEqual({
+			capabilityId: "e".repeat(64),
+			directoryRevision: "d".repeat(64),
+			parameters: "梳理当前工作区",
 		});
-		await screen.findByText("当前执行的命令或 Skill 暂不可用，已隐藏旧数据。");
-		expect(screen.queryByRole("button", { name: "打开" })).toBeNull();
+		expect(screen.getByText("Skill · workspace-summary · v1.0.0")).toBeTruthy();
+		expect(screen.queryByText("能力请求已受理。")).toBeNull();
+		await waitFor(() => expect(input.value).toBe(""));
+		// 受理、执行中期间发送与入口都不可用，草稿保留。
+		fireEvent.change(input, { target: { value: "下一条" } });
+		expect(
+			(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(true);
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "选择命令或 Skill",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+		expect(receiptStatus()).toBe("已受理，尚未开始");
+		await waitFor(() => expect(streams.length).toBeGreaterThan(1));
+		nativeStatus(5, "processing");
+		await waitFor(() => expect(receiptStatus()).toBe("正在执行"));
+		nativeStatus(6, "completed");
+		await waitFor(() => expect(receiptStatus()).toBe("已完成"));
+		await waitFor(() =>
+			expect(
+				(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
+					.disabled,
+			).toBe(false),
+		);
+		expect(input.value).toBe("下一条");
+		expect(
+			requests.filter((request) =>
+				request.url.endsWith("/native-capability/invoke"),
+			),
+		).toHaveLength(1);
 	});
 
-	it("shows a partial-unavailable notice when one native selector fails", async () => {
+	it("keeps an unselected slash draft out of plain messages while the catalog is available", async () => {
+		const { requests } = setup((request) => {
+			const url = new URL(request.url);
+			if (url.pathname.endsWith("/native-metadata")) return nativeCatalog(url);
+			if (url.pathname === "/api/v2/conversations/conversation-1")
+				return Response.json(idleHistory());
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "/xyz" } });
+		await screen.findByText("没有匹配项，换一个关键词试试。");
+		// 没有可选项时 Enter 不被弹层拦截，但目录可用时也不作为普通消息发出。
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect((await screen.findByRole("alert")).textContent).toBe(
+			"请先选择目录中的命令或 Skill。",
+		);
+		expect(requests.filter((request) => request.method === "POST")).toEqual([]);
+	});
+
+	it.each([
+		["busy", undefined],
+		["stale", undefined],
+		["disabled", undefined],
+		["invalid_parameters", undefined],
+		["unsupported", undefined],
+		["unavailable", "metadata_unavailable"],
+		["conflict", "idempotency_conflict"],
+		["denied", "authorization_lost"],
+	] as const)(
+		"explains a %s capability rejection once without downgrading it to a message",
+		async (outcome, reason) => {
+			const { requests } = setup((request) => {
+				const url = new URL(request.url);
+				if (url.pathname.endsWith("/native-capability/invoke"))
+					return Response.json(
+						{ outcome, ...(reason ? { reason } : {}) },
+						{ status: outcome === "unavailable" ? 503 : 409 },
+					);
+				if (url.pathname.endsWith("/native-metadata"))
+					return nativeCatalog(url);
+				if (url.pathname === "/api/v2/conversations/conversation-1")
+					return Response.json(idleHistory());
+			});
+			const input = await composer();
+			fireEvent.change(input, { target: { value: "/list" } });
+			await screen.findByRole("listbox");
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(screen.getByText("原生命令 · list-files")).toBeTruthy();
+			expect(input.placeholder).toBe("这项只读命令不需要额外参数");
+			fireEvent.click(screen.getByRole("button", { name: "确认发送" }));
+			const alert = await screen.findByRole("alert");
+			expect(alert.textContent).toContain("没有降级为普通消息");
+			expect(alert.closest("form")).toBeTruthy();
+			expect(screen.getAllByRole("alert")).toHaveLength(1);
+			expect(document.body.textContent).not.toContain(outcome);
+			expect(screen.getByText("原生命令 · list-files")).toBeTruthy();
+			const invoke = requests.find((request) =>
+				request.url.endsWith("/native-capability/invoke"),
+			);
+			expect(await invoke?.json()).toMatchObject({ parameters: "" });
+			expect(
+				requests.filter(
+					(request) =>
+						request.method === "POST" &&
+						new URL(request.url).pathname.endsWith("/messages"),
+				),
+			).toHaveLength(0);
+		},
+	);
+
+	it.each([
+		["not integrated", false, 200, "当前模板尚未接入命令与 Skill。"],
+		["unreadable", true, 503, "目录读取失败"],
+	] as const)(
+		"sends a slash message normally when the catalog is %s",
+		async (_label, nativeMetadata, status, notice) => {
+			const { requests } = setup((request) => {
+				const url = new URL(request.url);
+				if (url.pathname === "/api/v2/agents/agent-1")
+					return Response.json({
+						...agent,
+						capabilities: { ...agent.capabilities, nativeMetadata },
+					});
+				if (url.pathname.endsWith("/native-metadata"))
+					return status === 200
+						? nativeCatalog(url)
+						: new Response(null, { status });
+				if (url.pathname === "/api/v2/conversations/conversation-1")
+					return Response.json(idleHistory());
+				if (request.method === "POST") return receipt();
+			});
+			const input = await composer();
+			fireEvent.click(screen.getByRole("button", { name: "选择命令或 Skill" }));
+			expect(input.value).toBe("/");
+			await screen.findByText(notice);
+			expect(screen.queryAllByRole("option")).toHaveLength(0);
+			expect(input.getAttribute("aria-controls")).toBe(
+				screen.getByRole("listbox").id,
+			);
+			if (!nativeMetadata) {
+				expect(
+					requests.some((request) =>
+						new URL(request.url).pathname.endsWith("/native-metadata"),
+					),
+				).toBe(false);
+				fireEvent.keyDown(input, { key: "Escape" });
+				expect(input.value).toBe("");
+			} else {
+				fireEvent.click(screen.getByRole("button", { name: "重试" }));
+				await waitFor(() =>
+					expect(
+						requests.filter((request) =>
+							new URL(request.url).pathname.endsWith("/native-metadata"),
+						).length,
+					).toBeGreaterThan(2),
+				);
+			}
+			fireEvent.change(input, {
+				target: { value: "/etc/hosts 这个文件是做什么的？" },
+			});
+			expect(
+				screen.queryByText("请选择一个命令或 Skill 后再发送。"),
+			).toBeNull();
+			fireEvent.click(screen.getByRole("button", { name: "发送" }));
+			await waitFor(() =>
+				expect(
+					requests.filter((request) => request.method === "POST"),
+				).toHaveLength(1),
+			);
+			const posts = requests.filter((request) => request.method === "POST");
+			expect(new URL(posts[0].url).pathname).toBe(
+				"/api/v1/conversations/conversation-1/messages",
+			);
+			expect(await posts[0].json()).toEqual({
+				schemaVersion: 1,
+				text: "/etc/hosts 这个文件是做什么的？",
+			});
+		},
+	);
+
+	it("explains that commands need a first message when the conversation has no execution", async () => {
+		const { requests } = setup((request) =>
+			new URL(request.url).pathname === "/api/v2/conversations/conversation-1"
+				? Response.json({
+						...history("conversation-1", []),
+						conversation: { ...history().conversation, status: "ready" },
+					})
+				: undefined,
+		);
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "/" } });
+		await screen.findByText("发送第一条消息后可使用命令与 Skill。");
+		expect(
+			requests.some((request) =>
+				new URL(request.url).pathname.endsWith("/native-metadata"),
+			),
+		).toBe(false);
+	});
+
+	it("shows a partial-unavailable notice inside the command menu when one native selector fails", async () => {
 		setup((request) => {
 			const url = new URL(request.url);
 			if (url.pathname.endsWith("/native-metadata")) {
 				if (url.searchParams.get("selector") === "commands")
-					return Response.json({
-						selector: "commands",
-						revision: "c".repeat(64),
-						capabilities: [],
-					});
+					return nativeCatalog(url);
 				return new Response(null, { status: 503 });
 			}
 			if (url.pathname === "/api/v2/conversations/conversation-1")
-				return Response.json(history("conversation-1"));
+				return Response.json(idleHistory());
 		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "/" } });
 		await screen.findByText(
 			"部分命令或 Skill 目录暂不可用，已隐藏对应旧数据。",
 		);
-		expect(screen.queryByText("当前执行没有可用命令或 Skill。")).toBeNull();
+		expect(screen.getAllByRole("option")).toHaveLength(1);
 	});
 
 	it("rejects unsupported and oversized files before creating an upload", async () => {
@@ -507,7 +795,8 @@ describe("functional conversation screen", () => {
 			await screen.findByRole("link", { name: /Pending task/ });
 			completed = true;
 			if (source === "stream") act(() => streams.at(-1)?.send(completedEvent));
-			else fireEvent.click(screen.getByRole("button", { name: "刷新会话" }));
+			// 页面不再提供「刷新会话」：快照由服务端要求的重读（timeline.reload）带回。
+			else act(() => streams.at(-1)?.send(reload()));
 			await screen.findByText("已完成");
 			expect(screen.queryByText("消息已受理，等待处理结果。")).toBeNull();
 			expect(
@@ -627,7 +916,7 @@ describe("functional conversation screen", () => {
 			fireEvent.click(back);
 			const target =
 				entry === "removed-unknown"
-					? screen.getByRole("heading", { name: "Test conversation" })
+					? screen.getByRole("heading", { name: agent.name, level: 1 })
 					: trigger;
 			expect(target.isConnected).toBe(true);
 			await waitFor(() => expect(document.activeElement).toBe(target));
@@ -982,7 +1271,7 @@ describe("functional conversation screen", () => {
 						phase === "session-updating" ? "updating" : "ready",
 				});
 		});
-		await screen.findByText(/Agent 更新中/);
+		await screen.findByText("可以查看历史，草稿仍可编辑；更新完成后才能发送。");
 		// The ready Agent commits the Session's Sandbox upgrade with it; the
 		// page polls the updating Agent and then re-reads the Session.
 		phase = "session-updating";
@@ -1129,24 +1418,27 @@ describe("functional conversation screen", () => {
 		expect(screen.queryByText("处理中")).toBeNull();
 		expect(screen.queryByRole("button", { name: "停止回复" })).toBeNull();
 	});
-	it("requires saving a changed model before sending and applies the confirmed future selection", async () => {
+	function modelScenario(
+		respond: (attempt: number) => Response | Promise<Response>,
+	) {
 		let saved = false;
+		let attempts = 0;
 		const config = {
 			...agent.configuration,
 			defaultModelOptionId: "option-a",
-			defaultReasoningLevel: "low",
+			defaultReasoningLevel: "medium",
 			modelOptions: [
 				{
 					optionId: "option-a",
 					displayName: "Model A",
 					modelId: "model-a",
-					reasoningLevels: ["low"],
+					reasoningLevels: ["medium"],
 				},
 				{
 					optionId: "option-b",
 					displayName: "Model B",
 					modelId: "model-b",
-					reasoningLevels: ["high"],
+					reasoningLevels: ["high", "max"],
 				},
 			],
 		};
@@ -1154,9 +1446,9 @@ describe("functional conversation screen", () => {
 			...history("conversation-1", []).conversation,
 			status: "ready",
 			selectedModelOptionId: saved ? "option-b" : "option-a",
-			selectedReasoningLevel: saved ? "high" : "low",
+			selectedReasoningLevel: saved ? "high" : "medium",
 		});
-		const { requests } = setup((request) => {
+		const view = setup(async (request) => {
 			const path = new URL(request.url).pathname;
 			if (path === "/api/v2/agents/agent-1")
 				return Response.json({
@@ -1165,8 +1457,12 @@ describe("functional conversation screen", () => {
 					configuration: config,
 				});
 			if (path.endsWith("/model-selection")) {
-				saved = true;
-				return Response.json(conversation());
+				attempts += 1;
+				const response = await respond(attempts);
+				if (response.status === 200) saved = true;
+				return response.status === 200
+					? Response.json(conversation())
+					: response;
 			}
 			if (path === "/api/v2/conversations/conversation-1")
 				return Response.json({
@@ -1174,39 +1470,154 @@ describe("functional conversation screen", () => {
 					conversation: conversation(),
 				});
 		});
+		return {
+			...view,
+			selections: () =>
+				view.requests.filter((request) =>
+					request.url.endsWith("/model-selection"),
+				),
+		};
+	}
+	async function chooseModelB() {
+		const trigger = await screen.findByRole("button", {
+			name: "选择模型，当前 Model A，思考均衡，下一条消息生效",
+		});
+		expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+		trigger.focus();
+		fireEvent.click(trigger);
+		const option = await screen.findByRole("menuitemradio", {
+			name: "Model B",
+		});
+		expect(
+			screen
+				.getByRole("menuitemradio", { name: "Model A" })
+				.getAttribute("aria-checked"),
+		).toBe("true");
+		fireEvent.pointerDown(option, { pointerType: "mouse" });
+		fireEvent.click(option, { detail: 1 });
+		return trigger;
+	}
+	function sendButton() {
+		return screen.getByRole("button", { name: "发送" }) as HTMLButtonElement;
+	}
+
+	it("autosaves a chosen model from the composer toolbar without locking the draft", async () => {
+		const pending = deferred<Response>();
+		const { selections } = modelScenario(() => pending.promise);
 		const input = await composer();
 		fireEvent.change(input, { target: { value: "Use chosen model" } });
-		fireEvent.click(screen.getByRole("combobox", { name: "模型" }));
-		const modelOption = await screen.findByRole("option", { name: "Model B" });
-		fireEvent.pointerDown(modelOption, { pointerType: "mouse" });
-		fireEvent.click(modelOption, { detail: 1 });
-		expect(screen.getByRole("button", { name: "保存模型选择" })).toHaveProperty(
-			"type",
-			"button",
-		);
-		await waitFor(() =>
-			expect(
-				(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
-					.disabled,
-			).toBe(true),
-		);
-		fireEvent.click(screen.getByRole("button", { name: "保存模型选择" }));
-		await screen.findByText("模型选择已保存，从下一条消息开始生效。");
-		await waitFor(() =>
-			expect(
-				(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
-					.disabled,
-			).toBe(false),
-		);
-		const update = requests.find((request) =>
-			request.url.endsWith("/model-selection"),
-		);
-		expect(await update?.json()).toEqual({
+		// 入口在 composer 工具栏内，没有保存按钮和「请先保存」提示。
+		const form = input.closest("form");
+		if (!form) throw new Error("Expected composer form");
+		expect(
+			within(form).getByRole("button", { name: /^选择思考强度，当前均衡/ }),
+		).toBeTruthy();
+		const trigger = await chooseModelB();
+		expect(screen.queryByRole("button", { name: "保存模型选择" })).toBeNull();
+		const status = await screen.findByRole("status", {
+			name: "模型设置保存中",
+		});
+		expect(
+			status.querySelector('[data-slot="spinner"]')?.getAttribute("data-size"),
+		).toBe("sm");
+		// 保存中草稿可编辑、触发器不被禁用，只禁止发送。
+		expect(input.disabled).toBe(false);
+		expect((trigger as HTMLButtonElement).disabled).toBe(false);
+		expect(sendButton().disabled).toBe(true);
+		input.focus();
+		input.setSelectionRange(3, 3);
+		fireEvent.change(input, { target: { value: "Use chosen model!" } });
+		input.setSelectionRange(3, 3);
+		pending.resolve(new Response(null, { status: 200 }));
+		await screen.findByText("设置已保存，对下一条消息生效");
+		await waitFor(() => expect(sendButton().disabled).toBe(false));
+		expect(document.activeElement).toBe(input);
+		expect(input.selectionStart).toBe(3);
+		expect(input.value).toBe("Use chosen model!");
+		expect(
+			screen.queryByText("模型选择已保存，从下一条消息开始生效。"),
+		).toBeNull();
+		expect(screen.queryByText("请先保存模型选择，再发送消息。")).toBeNull();
+		expect(selections()).toHaveLength(1);
+		expect(await selections()[0].json()).toEqual({
 			schemaVersion: 1,
 			modelOptionId: "option-b",
 			reasoningLevel: "high",
 		});
-		expect(input.value).toBe("Use chosen model");
+		await screen.findByRole("button", {
+			name: "选择模型，当前 Model B，思考高，下一条消息生效",
+		});
+	});
+
+	it.each([
+		["a server failure", () => new Response(null, { status: 500 })],
+		[
+			"a retryable runtime refusal",
+			() =>
+				Response.json(
+					PilotProtocolErrorV1Schema.parse({
+						schemaVersion: 1,
+						code: "RUNTIME_UNAVAILABLE",
+						message: "Runtime unavailable",
+						retryable: true,
+						traceId: "trace-runtime",
+					}),
+					{ status: 503 },
+				),
+		],
+	] as const)(
+		"keeps retry usable after %s and replays the same idempotency key",
+		async (_label, failure) => {
+			const { selections } = modelScenario((attempt) =>
+				attempt === 1 ? failure() : new Response(null, { status: 200 }),
+			);
+			const input = await composer();
+			fireEvent.change(input, { target: { value: "Draft" } });
+			await chooseModelB();
+			const retry = await screen.findByRole("button", {
+				name: "设置未保存，点击重试",
+			});
+			expect((retry as HTMLButtonElement).disabled).toBe(false);
+			expect(retry.closest("fieldset")).toBeNull();
+			expect(input.disabled).toBe(false);
+			expect(sendButton().disabled).toBe(true);
+			expect(screen.queryByText(/提交结果尚未确认/)).toBeNull();
+			fireEvent.click(retry);
+			await waitFor(() => expect(sendButton().disabled).toBe(false));
+			expect(selections()).toHaveLength(2);
+			expect(selections()[1].headers.get("Idempotency-Key")).toBe(
+				selections()[0].headers.get("Idempotency-Key"),
+			);
+		},
+	);
+
+	it("rolls back to the saved model and explains a non-retryable refusal", async () => {
+		modelScenario(() =>
+			Response.json(
+				PilotProtocolErrorV1Schema.parse({
+					schemaVersion: 1,
+					code: "MODEL_SELECTION_INVALID",
+					message: "Do not render raw error",
+					retryable: false,
+					traceId: "trace-model",
+				}),
+				{ status: 409 },
+			),
+		);
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Draft" } });
+		await chooseModelB();
+		await screen.findByText("模型选项已变化，请刷新模型清单后重新选择。");
+		expect(
+			screen.getByRole("button", {
+				name: "选择模型，当前 Model A，思考均衡，下一条消息生效",
+			}),
+		).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: "设置未保存，点击重试" }),
+		).toBeNull();
+		expect(sendButton().disabled).toBe(false);
+		expect(screen.queryByText("Do not render raw error")).toBeNull();
 	});
 
 	it("submits multiline text only outside IME and treats acceptance as pending execution", async () => {
@@ -1275,16 +1686,17 @@ describe("functional conversation screen", () => {
 
 	it("keeps the draft editable but blocks sending while the conversation read is temporarily unavailable (#2151)", async () => {
 		let unavailable = false;
-		const { requests } = setup((request) =>
+		const view = setup((request) =>
 			unavailable &&
 			request.method === "GET" &&
 			new URL(request.url).pathname === "/api/v2/conversations/conversation-1"
 				? new Response("Unavailable", { status: 503 })
 				: undefined,
 		);
+		const { streams } = view;
 		const input = await composer();
 		unavailable = true;
-		fireEvent.click(screen.getByRole("button", { name: "刷新会话" }));
+		act(() => streams.at(-1)?.send(reload()));
 		await screen.findByText(/恢复后会自动继续读取/);
 		expect(input.disabled).toBe(false);
 		fireEvent.change(input, { target: { value: "断线期间的草稿" } });
@@ -1295,13 +1707,13 @@ describe("functional conversation screen", () => {
 		expect(send.disabled).toBe(true);
 		fireEvent.keyDown(input, { key: "Enter" });
 		expect(
-			requests.filter((request) => request.method === "POST"),
+			view.requests.filter((request) => request.method === "POST"),
 		).toHaveLength(0);
 	});
 
 	it("sends an edited draft after the conversation read recovers (#2151)", async () => {
 		let failRefresh = false;
-		const { requests } = setup((request) => {
+		const { requests, streams } = setup((request) => {
 			if (
 				failRefresh &&
 				request.method === "GET" &&
@@ -1314,7 +1726,7 @@ describe("functional conversation screen", () => {
 		});
 		const input = await composer();
 		failRefresh = true;
-		fireEvent.click(screen.getByRole("button", { name: "刷新会话" }));
+		act(() => streams.at(-1)?.send(reload()));
 		await screen.findByText(/恢复后会自动继续读取/);
 		fireEvent.change(input, { target: { value: "断线期间的草稿" } });
 		fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
@@ -1486,7 +1898,12 @@ describe("functional conversation screen", () => {
 				: undefined,
 		);
 		fireEvent.change(await composer(), { target: { value: "Kept draft" } });
-		await screen.findByRole("heading", { name: "最近对话" });
+		// 两个范围共用设计头部：h2「个人历史」；区域名称仍区分「最近对话」。
+		const recent = await screen.findByRole("region", { name: "最近对话" });
+		expect(
+			within(recent).getByRole("heading", { name: "个人历史", level: 2 }),
+		).toBeTruthy();
+		expect(within(recent).getByText("只显示你的会话")).toBeTruthy();
 		await waitFor(() => expect(streams).toHaveLength(1));
 		fireEvent.click(
 			screen.getByRole("button", { name: "此 Agent 的全部历史" }),
@@ -1569,29 +1986,55 @@ describe("functional conversation screen", () => {
 		},
 	);
 
-	it("shows projection-backed source and separate management/service status in the header", async () => {
+	it("keeps the page header to the Agent name and the design subtitle", async () => {
 		setup();
-		const header = (
-			await screen.findByRole("heading", { name: agent.name })
-		).closest("header");
+		const heading = await screen.findByRole("heading", {
+			name: agent.name,
+			level: 1,
+		});
+		const header = heading.closest("header");
 		if (!header) throw new Error("Expected conversation header");
-		expect(within(header).getByText("标准模板 · codex")).toBeTruthy();
-		expect(within(header).getByText("管理：可用")).toBeTruthy();
-		expect(within(header).getByText("服务：就绪")).toBeTruthy();
+		// h1 只显示 Agent 名称：不做链接、没有下拉箭头。
+		expect(heading.closest("a")).toBeNull();
+		expect(heading.querySelector("svg")).toBeNull();
+		expect(screen.queryByRole("link", { name: "切换 Agent" })).toBeNull();
+		expect(
+			within(header).getByText("Web 对话 · 已提交的任务会继续处理。"),
+		).toBeTruthy();
+		expect(within(header).queryByText(/管理：|服务：/)).toBeNull();
+		expect(within(header).queryByText("标准模板 · codex")).toBeNull();
+		expect(screen.queryByRole("button", { name: "刷新会话" })).toBeNull();
+		expect(within(header).getByRole("button", { name: "新会话" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "新建会话" })).toBeNull();
 	});
 
-	it("keeps unknown service availability out of the header status", async () => {
+	it("labels personal history items with the shared time format and current marker", async () => {
 		setup((request) =>
-			new URL(request.url).pathname === "/api/v2/agents/agent-1"
-				? Response.json({ ...agent, serviceAvailability: null })
+			new URL(request.url).pathname === "/api/v2/me/conversations/recent"
+				? Response.json({
+						items: [
+							{ ...history().conversation, title: null },
+							{
+								...history("conversation-2").conversation,
+								title: "Other",
+							},
+						],
+						nextCursor: "next",
+					})
 				: undefined,
 		);
-		const header = await screen
-			.findByRole("heading", { name: agent.name })
-			.then((heading) => heading.closest("header"));
-		if (!header) throw new Error("Expected conversation header");
-		expect(within(header).getByText("管理：可用")).toBeTruthy();
-		expect(within(header).queryByText(/服务：/)).toBeNull();
+		const current = await screen.findByRole("link", { name: /未命名对话/ });
+		expect(current.getAttribute("aria-current")).toBe("page");
+		const time = current.querySelector("time");
+		expect(time?.getAttribute("dateTime")).toBe(timestamp);
+		expect(current.querySelector("small")?.textContent).toBe(
+			`${time?.textContent} · 当前`,
+		);
+		expect(current.textContent).not.toContain("当前对话");
+		expect(current.textContent).not.toContain("未命名会话");
+		// 历史接口没有总数：已加载 2 条且还有下一页时显示「2+」。
+		const recent = screen.getByRole("region", { name: "最近对话" });
+		expect(within(recent).getByText("2+")).toBeTruthy();
 	});
 
 	it("discards a late recent response when the login identity changes", async () => {
@@ -1676,8 +2119,8 @@ describe("functional conversation screen", () => {
 	it.each([
 		["starting", "启动中"],
 		["updating", "更新中"],
-		["unavailable", "当前不可用"],
-		[null, "当前不可用"],
+		["unavailable", "暂时不可用"],
+		[null, "暂时不可用"],
 	] as const)(
 		"keeps service %s distinct from management availability",
 		async (serviceAvailability, label) => {
@@ -1691,13 +2134,13 @@ describe("functional conversation screen", () => {
 				.getByRole("heading", { name: agent.name })
 				.closest("header");
 			if (!header) throw new Error("Expected conversation header");
-			expect(screen.getByText(new RegExp(`Agent ${label}`))).toBeTruthy();
+			const banner = screen
+				.getByText(label, { selector: "strong" })
+				.closest('[data-slot="alert"]');
+			expect(banner?.getAttribute("role")).toBe("status");
+			expect(banner?.getAttribute("data-tone")).toBe("warn");
+			expect(header.contains(banner)).toBe(false);
 			expect(screen.queryByText("服务状态：就绪")).toBeNull();
-			expect(
-				within(header)
-					.getByRole("link", { name: "切换 Agent" })
-					.getAttribute("href"),
-			).toBe("/agents?mode=conversation");
 			const input = await composer();
 			if (
 				serviceAvailability === "starting" ||
@@ -1737,12 +2180,10 @@ describe("functional conversation screen", () => {
 		expect(
 			screen.queryByText("个人 Web 对话 · 离开页面不会取消已提交的任务"),
 		).toBeNull();
-		expect(
-			screen.getByRole("link", { name: "切换 Agent" }).getAttribute("href"),
-		).toBe("/agents?mode=conversation");
+		expect(screen.queryByRole("link", { name: "切换 Agent" })).toBeNull();
 		expect(screen.queryByRole("textbox", { name: "消息" })).toBeNull();
 		expect(
-			(screen.getByRole("button", { name: "新建会话" }) as HTMLButtonElement)
+			(screen.getByRole("button", { name: "新会话" }) as HTMLButtonElement)
 				.disabled,
 		).toBe(true);
 		expect(requests.every((request) => request.method === "GET")).toBe(true);
@@ -1762,9 +2203,107 @@ describe("functional conversation screen", () => {
 		expect((await composer()).disabled).toBe(true);
 		await screen.findByText("Retained question");
 		expect(
-			(screen.getByRole("button", { name: "新建会话" }) as HTMLButtonElement)
+			(screen.getByRole("button", { name: "新会话" }) as HTMLButtonElement)
 				.disabled,
 		).toBe(true);
+	});
+
+	it.each([
+		["the Owner", "user-owner-1", ["employee"], "stopped", true],
+		["a system administrator", "admin-1", ["system_admin"], "stopped", true],
+		["another member", "member-1", ["employee"], "stopped", false],
+		[
+			"the Owner of a disabled Agent",
+			"user-owner-1",
+			["employee"],
+			"disabled",
+			false,
+		],
+	] as const)(
+		"shows the stopped-Agent warning with an Owner entry only for %s",
+		async (_label, userId, roles, managementStatus, ownerEntry) => {
+			setup(
+				(request) =>
+					new URL(request.url).pathname === "/api/v2/agents/agent-1"
+						? Response.json({ ...agent, managementStatus })
+						: undefined,
+				{
+					session: {
+						schemaVersion: 1,
+						user: { userId, displayName: "受控用户", roles: [...roles] },
+					},
+				},
+			);
+			const title = await screen.findByText(
+				managementStatus === "stopped" ? "已停止" : "已停用",
+				{ selector: "strong" },
+			);
+			const banner = title.closest('[data-slot="alert"]');
+			if (!(banner instanceof HTMLElement)) throw new Error("Missing banner");
+			expect(banner.getAttribute("role")).toBe("status");
+			expect(banner.getAttribute("data-tone")).toBe("warn");
+			expect(banner.querySelector("svg")?.getAttribute("aria-hidden")).toBe(
+				"true",
+			);
+			// 横幅在页头与对话栅格之间，不在页头或对话列内。
+			expect(banner.closest("header")).toBeNull();
+			expect(banner.closest(".conversation-columns")).toBeNull();
+			const link = within(banner).queryByRole("link", {
+				name: "进入 Owner 操作",
+			});
+			if (ownerEntry) {
+				expect(
+					within(banner).getByText(
+						"历史会话仍可查看，Owner 可以重启或修改运行配置。",
+					),
+				).toBeTruthy();
+				expect(link?.getAttribute("href")).toBe(
+					"/agents/agent-1/configuration",
+				);
+			} else {
+				expect(
+					within(banner).getByText("可以查看历史，暂时不能发送消息。"),
+				).toBeTruthy();
+				expect(link).toBeNull();
+			}
+			expect(screen.queryByText(/联系 Owner/)).toBeNull();
+			expect(
+				screen.queryByRole("button", { name: "刷新 Agent 状态" }),
+			).toBeNull();
+			expect((await composer()).disabled).toBe(true);
+		},
+	);
+
+	it("creates a new conversation in one step from the header", async () => {
+		let created = false;
+		const { props, requests } = setup((request) => {
+			if (request.method === "POST") {
+				created = true;
+				return Response.json(
+					{ ...history().conversation, conversationId: "conversation-created" },
+					{ status: 201 },
+				);
+			}
+			if (new URL(request.url).pathname === "/api/v2/me/conversations/recent")
+				return Response.json({
+					items: created ? [history().conversation] : [],
+					nextCursor: null,
+				});
+		});
+		await composer();
+		fireEvent.click(screen.getByRole("button", { name: "新会话" }));
+		await waitFor(() =>
+			expect(props.onConversationChange).toHaveBeenCalledWith(
+				"conversation-created",
+			),
+		);
+		expect(
+			requests
+				.filter((request) => request.method === "POST")
+				.map((request) => new URL(request.url).pathname),
+		).toEqual(["/api/v1/agents/agent-1/conversations"]);
+		expect(screen.queryByRole("button", { name: "创建会话" })).toBeNull();
+		await screen.findByText("新会话已创建，已出现在最近对话");
 	});
 
 	it("preserves rejected busy text and reports the protocol reason", async () => {
@@ -1854,8 +2393,13 @@ describe("functional conversation screen", () => {
 		await screen.findByText("Old answer");
 		expect(screen.queryByText("Old answerOld answer")).toBeNull();
 		agentName = "更新后的正式投影助手";
-		fireEvent.click(screen.getByRole("button", { name: "刷新会话" }));
+		// Agent 名称来自 Agent 投影：回到页面时随窗口聚焦重读（不再有「刷新会话」按钮）。
+		act(() => {
+			focusManager.setFocused(false);
+			focusManager.setFocused(true);
+		});
 		await screen.findByRole("article", { name: `${agentName}的消息` });
+		focusManager.setFocused(undefined);
 		expect(
 			screen.queryByRole("article", { name: "正式投影工程助手的消息" }),
 		).toBeNull();
@@ -1954,8 +2498,13 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 		fireEvent.change(input, { target: { value: "Keep this draft" } });
 		state.agent = "stopped";
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
-		await screen.findByText(/Agent 已停止，历史保持只读/);
-		expect(screen.getByText(/请联系 Owner 重启后继续/)).toBeTruthy();
+		await screen.findByText("可以查看历史，暂时不能发送消息。");
+		expect(screen.getByText("已停止", { selector: "strong" })).toBeTruthy();
+		expect(screen.queryByText(/联系 Owner/)).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: "刷新 Agent 状态" }),
+		).toBeNull();
+		expect(screen.queryByRole("link", { name: "进入 Owner 操作" })).toBeNull();
 		expect(
 			screen.getByText(
 				"消息未送达，草稿已保留。请在 Agent 恢复可用后重新发送。",
@@ -2004,11 +2553,18 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 		fireEvent.change(input, { target: { value: "Resend me" } });
 		state.agent = "stopped";
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
-		await screen.findByText(/Agent 已停止/);
+		await screen.findByText("已停止", { selector: "strong" });
 		state.agent = "available";
 		state.post = receipt;
-		fireEvent.click(screen.getByRole("button", { name: "刷新 Agent 状态" }));
-		await waitFor(() => expect(screen.queryByText(/Agent 已停止/)).toBeNull());
+		// 已停止横幅不再提供「刷新 Agent 状态」：回到页面时 Agent 状态随窗口聚焦重读。
+		act(() => {
+			focusManager.setFocused(false);
+			focusManager.setFocused(true);
+		});
+		await waitFor(() =>
+			expect(screen.queryByText("已停止", { selector: "strong" })).toBeNull(),
+		);
+		focusManager.setFocused(undefined);
 		expect(input.value).toBe("Resend me");
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
 		await waitFor(() => expect(posts).toHaveLength(2));
@@ -2025,7 +2581,7 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 		const create = await screen.findByRole("button", { name: "创建会话" });
 		state.agent = "stopped";
 		fireEvent.click(create);
-		await screen.findByText(/Agent 已停止，历史保持只读/);
+		await screen.findByText("已停止", { selector: "strong" });
 		expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
 		expect(onAccessDenied).not.toHaveBeenCalled();
 	});

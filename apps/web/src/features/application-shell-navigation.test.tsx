@@ -91,6 +91,7 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 		"/my-settings/relay-key",
 		"/skills",
 		"/skills/manage",
+		"/skills/manage/new",
 		"/skills/$skillVersionId",
 		"/agents/$agentId",
 		"/agents/$agentId/configuration",
@@ -101,6 +102,7 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 		"/audit",
 		"/admin/approvals",
 		"/admin/agents",
+		"/admin/skill-reviews",
 		"/admin/audit",
 		"/chat/$agentId/{-$conversationId}",
 	].map((path) =>
@@ -184,7 +186,13 @@ describe("Original IA workbench navigation", () => {
 		cleanup();
 	});
 
-	it.each(["/ops/", "/admin/approvals/", "/admin/agents/", "/admin/audit/"])(
+	it.each([
+		"/ops/",
+		"/admin/approvals/",
+		"/admin/agents/",
+		"/admin/skill-reviews/",
+		"/admin/audit/",
+	])(
 		"keeps the system navigation hidden from a non-admin deep link at %s",
 		async (entry) => {
 			await showShell(false, entry);
@@ -374,7 +382,15 @@ describe("Original IA workbench navigation", () => {
 			"API 凭证",
 			"我的执行审计",
 		],
-		系统管理: ["创建审批", "Agent 管理", "评测", "平台审计", "运维观测"],
+		// 设计 renderSidebar：Skill 审核排在 Agent 管理之后。
+		系统管理: [
+			"创建审批",
+			"Agent 管理",
+			"Skill 审核",
+			"评测",
+			"平台审计",
+			"运维观测",
+		],
 	} as const;
 	it.each([false, true])(
 		"orders navigation groups and items as designed (administrator=%s)",
@@ -483,6 +499,14 @@ describe("Original IA workbench navigation", () => {
 			documentTitle: "我的 Skill · Agora Agent",
 		},
 		{
+			entry: "/skills/manage/new",
+			group: "我的管理",
+			label: "我的 Skill",
+			parent: "我的 Skill",
+			title: "创建与发布",
+			documentTitle: "创建与发布 · Agora Agent",
+		},
+		{
 			entry: "/my-agents",
 			group: "我的管理",
 			label: "我的 Agent",
@@ -555,6 +579,14 @@ describe("Original IA workbench navigation", () => {
 			documentTitle: "Agent 管理 · Agora Agent",
 		},
 		{
+			entry: "/admin/skill-reviews",
+			group: "系统管理",
+			label: "Skill 审核",
+			parent: "系统管理",
+			title: "Skill 审核",
+			documentTitle: "Skill 审核 · Agora Agent",
+		},
+		{
 			entry: "/eval",
 			group: "系统管理",
 			label: "评测",
@@ -601,6 +633,25 @@ describe("Original IA workbench navigation", () => {
 			cleanup();
 		},
 	);
+
+	it("uses the design icons for API credentials and Skill review", async () => {
+		await showShell(true, "/");
+		const management = screen.getByRole("navigation", { name: "我的管理" });
+		const system = screen.getByRole("navigation", { name: "系统管理" });
+		// 设计 renderSidebar：credentials 用 key，skill-reviews 用 shield。
+		expect(
+			within(management)
+				.getByRole("link", { name: "API 凭证" })
+				.querySelector("svg")
+				?.getAttribute("class"),
+		).toContain("lucide-key-round");
+		expect(
+			within(system)
+				.getByRole("link", { name: "Skill 审核" })
+				.querySelector("svg")
+				?.getAttribute("class"),
+		).toContain("lucide-shield");
+	});
 
 	it("updates the document title after client-side navigation", async () => {
 		await showShell(false, "/my-agents/new");

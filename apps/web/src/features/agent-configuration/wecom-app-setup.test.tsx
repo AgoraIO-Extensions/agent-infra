@@ -4,8 +4,10 @@ import {
 	render,
 	screen,
 	waitFor,
+	within,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { ToastProvider } from "@/components/ui/toast";
 import { client } from "../../pilot/generated/client.gen.js";
 import { WecomAppSetup } from "./wecom-app-setup.js";
 
@@ -41,8 +43,12 @@ it("submits the application setup contract and clears write-only fields", async 
 			return Response.json({ sessionId: "setup", status: "active" });
 		}),
 	);
-	render(<WecomAppSetup agentId="agent" onUnbind={vi.fn()} />);
+	render(<WecomAppSetup agentId="agent" />, { wrapper: ToastProvider });
 	await waitFor(() => expect(screen.getByText("未配置")).toBeTruthy());
+	// Owner 配置同页还有授权目标的「应用 ID」，这里的名称带卡片标题「企微应用」（N-12、O-07）。
+	expect(screen.getByRole("textbox", { name: "应用 ID：企微应用" }).id).toBe(
+		"wecom-app-application-id",
+	);
 	for (const [label, value] of [
 		["企业 ID", "corp"],
 		["应用 ID", "123"],
@@ -52,7 +58,7 @@ it("submits the application setup contract and clears write-only fields", async 
 	] as const)
 		fireEvent.change(screen.getByLabelText(label), { target: { value } });
 	fireEvent.click(screen.getByRole("checkbox"));
-	fireEvent.click(screen.getByRole("button", { name: "验证并绑定：自建应用" }));
+	fireEvent.click(screen.getByRole("button", { name: "验证并绑定：企微应用" }));
 	expect((screen.getByLabelText("应用 Secret") as HTMLInputElement).value).toBe(
 		"",
 	);
@@ -85,7 +91,7 @@ function fillCredentials() {
 	])
 		fireEvent.change(screen.getByLabelText(label), { target: { value } });
 	fireEvent.click(screen.getByRole("checkbox", { name: /我已知悉/ }));
-	fireEvent.click(screen.getByRole("button", { name: "验证并绑定：自建应用" }));
+	fireEvent.click(screen.getByRole("button", { name: "验证并绑定：企微应用" }));
 }
 it.each([429, 503])(
 	"retries setup status HTTP %s without resubmitting credentials",
@@ -118,7 +124,7 @@ it.each([429, 503])(
 					: Response.json({ status: "active" });
 			}),
 		);
-		render(<WecomAppSetup agentId="agent" onUnbind={vi.fn()} />);
+		render(<WecomAppSetup agentId="agent" />, { wrapper: ToastProvider });
 		await waitFor(() => expect(screen.getByText("未配置")).toBeTruthy());
 		fillCredentials();
 		await waitFor(() =>
@@ -132,7 +138,7 @@ it.each([429, 503])(
 );
 it("cancels a pending setup without unbinding the existing application", async () => {
 	client.setConfig({ baseUrl: "https://platform.test" });
-	const onUnbind = vi.fn();
+	const unbindChannel = vi.fn(async () => undefined);
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (request: Request) => {
@@ -151,20 +157,22 @@ it("cancels a pending setup without unbinding the existing application", async (
 			});
 		}),
 	);
-	render(<WecomAppSetup agentId="agent" onUnbind={onUnbind} />);
+	render(<WecomAppSetup agentId="agent" unbindChannel={unbindChannel} />, {
+		wrapper: ToastProvider,
+	});
 	await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
 	fillCredentials();
 	await waitFor(() =>
 		expect(screen.getByText(/https:\/\/callback.test/)).toBeTruthy(),
 	);
-	fireEvent.click(screen.getByRole("button", { name: "取消配置：自建应用" }));
+	fireEvent.click(screen.getByRole("button", { name: "取消配置：企微应用" }));
 	await waitFor(() =>
 		expect(
-			screen.queryByRole("button", { name: "取消配置：自建应用" }),
+			screen.queryByRole("button", { name: "取消配置：企微应用" }),
 		).toBeNull(),
 	);
 	expect(screen.getByText("已连接")).toBeTruthy();
-	expect(onUnbind).not.toHaveBeenCalled();
+	expect(unbindChannel).not.toHaveBeenCalled();
 });
 
 it("restores a pending session after reload so the Owner can cancel it", async () => {
@@ -189,41 +197,91 @@ it("restores a pending session after reload so the Owner can cancel it", async (
 			return Response.json({ status: "verifying" });
 		}),
 	);
-	render(<WecomAppSetup agentId="agent" onUnbind={vi.fn()} />);
+	render(<WecomAppSetup agentId="agent" />, { wrapper: ToastProvider });
 	await waitFor(() =>
 		expect(
-			screen.getByRole("button", { name: "取消配置：自建应用" }),
+			screen.getByRole("button", { name: "取消配置：企微应用" }),
 		).toBeTruthy(),
 	);
-	fireEvent.click(screen.getByRole("button", { name: "取消配置：自建应用" }));
+	fireEvent.click(screen.getByRole("button", { name: "取消配置：企微应用" }));
 	await waitFor(() =>
 		expect(
-			screen.queryByRole("button", { name: "取消配置：自建应用" }),
+			screen.queryByRole("button", { name: "取消配置：企微应用" }),
 		).toBeNull(),
 	);
 });
 
-it("clears the displayed application state immediately when unbinding", async () => {
+it("keeps the application binding visible until the confirmed unbind succeeds", async () => {
 	client.setConfig({ baseUrl: "https://platform.test" });
-	const onUnbind = vi.fn();
+	const state = { status: "connected" };
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async () =>
 			Response.json({
-				status: "connected",
-				callbackUrl: "https://callback.test",
+				status: state.status,
+				...(state.status === "connected"
+					? { callbackUrl: "https://callback.test" }
+					: {}),
 			}),
 		),
 	);
-	render(<WecomAppSetup agentId="agent" onUnbind={onUnbind} />);
-	await waitFor(() =>
-		expect(screen.getByRole("button", { name: "解除应用绑定" })).toBeTruthy(),
-	);
-	fireEvent.click(screen.getByRole("button", { name: "解除应用绑定" }));
-	expect(screen.getByText("未配置")).toBeTruthy();
-	expect(screen.queryByText(/callback.test/)).toBeNull();
-	expect(onUnbind).toHaveBeenCalledWith({
-		schemaVersion: 2,
-		channels: [{ kind: "wecom_app", enabled: false }],
+	const unbind = Promise.withResolvers<void>();
+	const unbindChannel = vi.fn(() => unbind.promise);
+	render(<WecomAppSetup agentId="agent" unbindChannel={unbindChannel} />, {
+		wrapper: ToastProvider,
 	});
+	const trigger = await screen.findByRole("button", {
+		name: "解除绑定：企微应用",
+	});
+	fireEvent.click(trigger);
+	// 标题与对象一致：应用卡只出现「解除企微应用绑定？」（NI-12）。
+	const dialog = await screen.findByRole("dialog", {
+		name: "解除企微应用绑定？",
+	});
+	expect(screen.queryByText("解除企微机器人绑定？")).toBeNull();
+	// 确认前不发请求，卡片状态与回调 URL 保持原样。
+	expect(unbindChannel).not.toHaveBeenCalled();
+	expect(screen.getByText("已连接")).toBeTruthy();
+	expect(screen.getByText(/callback.test/)).toBeTruthy();
+	fireEvent.click(within(dialog).getByRole("button", { name: "确认解除" }));
+	expect(unbindChannel).toHaveBeenCalledOnce();
+	expect(screen.getByText("已连接")).toBeTruthy();
+	state.status = "not_configured";
+	unbind.resolve();
+	await waitFor(() => expect(screen.getByText("未配置")).toBeTruthy());
+	expect(screen.queryByText(/callback.test/)).toBeNull();
+	expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe(
+		"企微应用已解除绑定",
+	);
+	await waitFor(() =>
+		expect(document.activeElement).toBe(
+			screen.getByRole("heading", { name: "企微应用" }),
+		),
+	);
+});
+
+it("blocks implicit submission from every application input", async () => {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => Response.json({ status: "not_configured" })),
+	);
+	render(<WecomAppSetup agentId="agent" />, { wrapper: ToastProvider });
+	await waitFor(() => expect(screen.getByText("未配置")).toBeTruthy());
+	for (const label of [
+		"企业 ID",
+		"应用 ID",
+		"应用 Secret",
+		"回调 Token",
+		"EncodingAESKey",
+	])
+		expect(
+			fireEvent.keyDown(screen.getByLabelText(label), { key: "Enter" }),
+		).toBe(false);
+	expect(
+		screen
+			.getByRole("region", { name: "企微应用" })
+			.getAttribute("data-status"),
+	).toBe("not_configured");
+	expect(screen.getByText("应用入口 · 支持回调验证")).toBeTruthy();
+	expect(screen.queryByRole("button", { name: /扫码/ })).toBeNull();
 });

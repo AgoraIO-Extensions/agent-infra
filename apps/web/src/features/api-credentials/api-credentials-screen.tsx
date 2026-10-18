@@ -3,6 +3,7 @@ import {
 	Check,
 	Copy,
 	KeyRound,
+	Plus,
 	RefreshCw,
 	Shield,
 } from "lucide-react";
@@ -19,9 +20,18 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Field, FieldLegend } from "@/components/ui/field";
+import { shortIdentifier } from "@/components/ui/identifier-text";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LoadingLine } from "@/components/ui/spinner";
+import {
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow,
+} from "@/components/ui/table";
 import { Timestamp } from "@/components/ui/timestamp";
 import { withObjectName } from "@/lib/accessible-name";
 import type {
@@ -59,6 +69,10 @@ type ApiCredentialsScreenProps = {
 	revokingCredentialId?: string;
 	issueError?: unknown;
 	revokeError?: unknown;
+	/** 主体列：个人凭证只代表当前登录用户，显示其姓名。 */
+	subjectName?: string;
+	/** 页头「创建应用凭证」：跳到应用分区，不发起写请求。 */
+	onCreateApplicationCredential?: () => void;
 };
 
 const defaultScopes: PersonalApiCredentialScope[] = ["agent:read"];
@@ -91,6 +105,8 @@ export function ApiCredentialsScreen({
 	revokingCredentialId,
 	issueError,
 	revokeError,
+	subjectName,
+	onCreateApplicationCredential,
 }: ApiCredentialsScreenProps) {
 	const headingId = useId();
 	const scopesId = `${headingId}-scopes`;
@@ -143,27 +159,41 @@ export function ApiCredentialsScreen({
 	}
 
 	return (
-		<section aria-labelledby={headingId} className="space-y-8">
+		<section aria-labelledby={headingId}>
 			<header className="page-heading">
 				<div>
-					<p className="page-eyebrow">安全设置</p>
-					<h1 id={headingId}>个人 API 凭证</h1>
-					<p>
-						凭证只代表当前登录用户。服务端会根据当前会话解析身份，不接受页面提交的
-						userId。
-					</p>
+					<p className="page-eyebrow">我的管理 / API 凭证</p>
+					<h1 id={headingId}>API 凭证</h1>
+					<p>管理个人和应用凭证的范围、有效期与撤销状态。</p>
 				</div>
-				<Shield aria-hidden="true" className="size-6 text-muted-foreground" />
+				{onCreateApplicationCredential ? (
+					<Button type="button" onClick={onCreateApplicationCredential}>
+						<Plus aria-hidden="true" />
+						创建应用凭证
+					</Button>
+				) : null}
 			</header>
+
+			{/* 静态说明，不设 role。 */}
+			<Alert tone="info" icon={<Shield aria-hidden="true" />}>
+				<AlertTitle>凭证值不会回显</AlertTitle>
+				<AlertDescription>
+					本页只展示元数据；发放、轮换和接收者授权由服务端校验。
+				</AlertDescription>
+			</Alert>
 
 			{issuedCredential ? (
 				// 只让提示段落承担 status，避免读屏整段播报凭证明文。
-				<Alert tone="info" icon={<KeyRound aria-hidden="true" />}>
+				<Alert
+					tone="info"
+					icon={<KeyRound aria-hidden="true" />}
+					className="settings-surface"
+				>
 					<AlertTitle>已签发个人 API 凭证</AlertTitle>
 					<AlertDescription className="space-y-3">
 						<p role="status">{issueNotice}</p>
 						<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-							<code className="min-w-0 flex-1 overflow-auto rounded border bg-muted px-3 py-2 text-xs [overflow-wrap:anywhere]">
+							<code className="min-w-0 flex-1 overflow-auto rounded-[10px] border bg-muted px-3 py-2 text-xs [overflow-wrap:anywhere]">
 								{issuedCredential}
 							</code>
 							<Button
@@ -193,37 +223,105 @@ export function ApiCredentialsScreen({
 					tone="info"
 					role="status"
 					icon={<AlertCircle aria-hidden="true" />}
+					className="settings-surface"
 				>
 					<AlertDescription>{issueNotice}</AlertDescription>
 				</Alert>
 			) : null}
 			{issueError ? (
-				<Alert tone="danger" role="alert">
+				<Alert tone="danger" role="alert" className="settings-surface">
 					<AlertDescription>
 						{errorMessage(issueError, "签发个人 API 凭证失败，请稍后重试。")}
 					</AlertDescription>
 				</Alert>
 			) : null}
 			{revokeError ? (
-				<Alert tone="danger" role="alert">
+				<Alert tone="danger" role="alert" className="settings-surface">
 					<AlertDescription>
 						{errorMessage(revokeError, "撤销个人 API 凭证失败，请稍后重试。")}
 					</AlertDescription>
 				</Alert>
 			) : null}
 
-			<div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
-				<form
-					className="space-y-5 rounded border bg-card p-5"
-					onSubmit={submitIssue}
-				>
+			<section className="settings-surface">
+				{state.kind === "loading" ? (
+					<LoadingLine className="py-8">正在读取个人凭证…</LoadingLine>
+				) : null}
+				{state.kind === "denied" ? (
+					<Alert tone="warn">
+						<AlertDescription>当前账号无权查看个人 API 凭证。</AlertDescription>
+					</Alert>
+				) : null}
+				{state.kind === "unavailable" ? (
+					<Alert tone="danger" role="alert">
+						<AlertDescription>{stateMessage(state)}</AlertDescription>
+						{state.retryable && onRetry ? (
+							<AlertAction>
+								<Button variant="outline" type="button" onClick={onRetry}>
+									<RefreshCw aria-hidden="true" data-icon="inline-start" />
+									重新加载
+								</Button>
+							</AlertAction>
+						) : null}
+					</Alert>
+				) : null}
+				{state.kind === "ready" && state.credentials.length === 0 ? (
+					<Empty>
+						<EmptyTitle>暂无个人 API 凭证</EmptyTitle>
+						<EmptyDescription>
+							签发后，凭证元数据会显示在这里。
+						</EmptyDescription>
+					</Empty>
+				) : null}
+				{state.kind === "ready" && state.credentials.length > 0 ? (
+					<Table className="credential-table" aria-label="个人 API 凭证">
+						<TableHeader>
+							<TableRow>
+								<TableHead>名称</TableHead>
+								<TableHead>主体</TableHead>
+								<TableHead>范围</TableHead>
+								<TableHead>状态</TableHead>
+								<TableHead>有效期</TableHead>
+								<TableHead>
+									<span className="sr-only">操作</span>
+								</TableHead>
+							</TableRow>
+						</TableHeader>
+						<TableBody>
+							{state.credentials.map((credential) => (
+								<CredentialRow
+									key={credential.credentialId}
+									credential={credential}
+									subjectName={subjectName}
+									onRevoke={onRevoke}
+									onNarrow={onNarrow}
+									onRefresh={onRetry}
+									narrowingCredentialId={narrowingCredentialId}
+									pending={credential.credentialId === revokingCredentialId}
+								/>
+							))}
+						</TableBody>
+					</Table>
+				) : null}
+			</section>
+
+			<section
+				className="settings-surface"
+				aria-labelledby={`${headingId}-issue`}
+			>
+				<div className="section-heading">
 					<div>
-						<h2 className="font-semibold text-base">签发新凭证</h2>
-						<p className="mt-1 text-muted-foreground text-sm">
-							只在需要时创建凭证，并选择最小权限范围。
-						</p>
+						<h2 id={`${headingId}-issue`}>签发个人凭证</h2>
+						<p>只在需要时创建凭证，并选择最小权限范围。</p>
 					</div>
-					<fieldset className="space-y-3" aria-describedby={`${scopesId}-hint`}>
+				</div>
+				<form className="space-y-5" onSubmit={submitIssue}>
+					{/* 页面上还有应用凭证的同名分组与字段，名称带上对象以便区分（N-12）。 */}
+					<fieldset
+						className="space-y-3"
+						aria-label={withObjectName("权限范围", "个人凭证")}
+						aria-describedby={`${scopesId}-hint`}
+					>
 						<FieldLegend>权限范围</FieldLegend>
 						<p
 							id={`${scopesId}-hint`}
@@ -235,7 +333,7 @@ export function ApiCredentialsScreen({
 							{personalApiCredentialScopes.map((scope) => (
 								<div
 									key={scope}
-									className="flex min-h-11 items-center gap-2 rounded border px-3 py-2 text-sm hover:bg-muted"
+									className="flex min-h-11 items-center gap-2 rounded-[10px] border px-3 py-2 text-sm hover:bg-muted"
 								>
 									<Checkbox
 										id={`${scopesId}-${scope.replace(":", "-")}`}
@@ -265,6 +363,7 @@ export function ApiCredentialsScreen({
 						<Input
 							id={expiryId}
 							type="datetime-local"
+							aria-label={withObjectName("过期时间（可选）", "个人凭证")}
 							value={expiresAt}
 							onChange={(event) => setExpiresAt(event.target.value)}
 						/>
@@ -279,63 +378,14 @@ export function ApiCredentialsScreen({
 						{isIssuing ? "正在签发…" : "签发个人凭证"}
 					</Button>
 				</form>
-
-				<div className="space-y-3">
-					<h2 className="font-semibold text-base">已有凭证</h2>
-					{state.kind === "loading" ? (
-						<LoadingLine className="py-8">正在读取个人凭证…</LoadingLine>
-					) : null}
-					{state.kind === "denied" ? (
-						<Alert tone="warn">
-							<AlertDescription>
-								当前账号无权查看个人 API 凭证。
-							</AlertDescription>
-						</Alert>
-					) : null}
-					{state.kind === "unavailable" ? (
-						<Alert tone="danger" role="alert">
-							<AlertDescription>{stateMessage(state)}</AlertDescription>
-							{state.retryable && onRetry ? (
-								<AlertAction>
-									<Button variant="outline" type="button" onClick={onRetry}>
-										<RefreshCw aria-hidden="true" data-icon="inline-start" />
-										重新加载
-									</Button>
-								</AlertAction>
-							) : null}
-						</Alert>
-					) : null}
-					{state.kind === "ready" && state.credentials.length === 0 ? (
-						<Empty>
-							<EmptyTitle>暂无个人 API 凭证</EmptyTitle>
-							<EmptyDescription>
-								签发后，凭证元数据会显示在这里。
-							</EmptyDescription>
-						</Empty>
-					) : null}
-					{state.kind === "ready" && state.credentials.length > 0 ? (
-						<ul className="grid gap-3" aria-label="个人 API 凭证列表">
-							{state.credentials.map((credential) => (
-								<CredentialRow
-									key={credential.credentialId}
-									credential={credential}
-									onRevoke={onRevoke}
-									onNarrow={onNarrow}
-									onRefresh={onRetry}
-									narrowingCredentialId={narrowingCredentialId}
-									pending={credential.credentialId === revokingCredentialId}
-								/>
-							))}
-						</ul>
-					) : null}
-				</div>
-			</div>
+			</section>
 		</section>
 	);
 }
 
 function CredentialRow({
 	credential,
+	subjectName,
 	onRevoke,
 	onNarrow,
 	onRefresh,
@@ -343,6 +393,7 @@ function CredentialRow({
 	pending,
 }: {
 	credential: PersonalApiCredentialMetadataV1;
+	subjectName?: string;
 	onRevoke?: (credentialId: string) => Promise<unknown>;
 	onNarrow?: NarrowCredential;
 	onRefresh?: () => void;
@@ -354,7 +405,7 @@ function CredentialRow({
 	const [editing, setEditing] = useState(false);
 	const [notice, setNotice] = useState(false);
 	const narrowButton = useRef<HTMLButtonElement>(null);
-	// 撤销确认关闭时触发器已禁用、成功后会消失，焦点落到卡片内的凭证标识上。
+	// 撤销确认关闭时触发器已禁用、成功后会消失，焦点落到该行的凭证标识上。
 	const credentialLabel = useRef<HTMLElement>(null);
 	const restoreFocus = useRef(false);
 	const expiry = credential.expiresAt
@@ -383,123 +434,125 @@ function CredentialRow({
 		setEditing(false);
 	}
 	return (
-		<li className="rounded border bg-card p-4">
-			<div className="flex flex-wrap items-start justify-between gap-3">
-				<div className="min-w-0">
-					<div className="flex flex-wrap items-center gap-2">
-						<code
-							ref={credentialLabel}
-							tabIndex={-1}
-							className="text-sm [overflow-wrap:anywhere]"
-						>
-							{credential.credentialId}
-						</code>
-						<Badge tone={revoked || expired ? "red" : "green"}>
-							{revoked ? "已撤销" : expired ? "已过期" : "有效"}
-						</Badge>
-					</div>
-					<dl className="mt-3 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
-						<div>
-							<dt className="text-muted-foreground">权限</dt>
-							<dd>{credential.scopes.join("、")}</dd>
-						</div>
-						<div>
-							<dt className="text-muted-foreground">过期时间</dt>
-							<dd>
-								{credential.expiresAt ? (
-									<Timestamp value={credential.expiresAt} style="absolute" />
-								) : (
-									"永不过期"
-								)}
-							</dd>
-						</div>
-						<div>
-							<dt className="text-muted-foreground">创建时间</dt>
-							<dd>
-								<Timestamp value={credential.createdAt} />
-							</dd>
-						</div>
-						<div>
-							<dt className="text-muted-foreground">最近使用</dt>
-							<dd>
-								{credential.lastUsedAt ? (
-									<Timestamp value={credential.lastUsedAt} />
-								) : (
-									"尚未使用"
-								)}
-							</dd>
-						</div>
-					</dl>
-				</div>
-				<div className="flex flex-wrap gap-2">
-					{active && onNarrow ? (
-						<Button
-							type="button"
-							variant="outline"
-							ref={narrowButton}
-							aria-expanded={editing}
-							aria-label={withObjectName(
-								"收窄权限与有效期",
-								credential.credentialId,
+		<>
+			<TableRow data-credential-id={credential.credentialId}>
+				<TableCell data-label="名称">
+					{/* 契约没有凭证名称字段，统一显示「个人凭证」，内部 ID 只显示缩写。
+					    包一层 div：窄屏行卡片里名称与副文同在右侧值列。 */}
+					<div className="min-w-0">
+						<strong>个人凭证</strong>
+						<small>
+							<code
+								ref={credentialLabel}
+								tabIndex={-1}
+								title={credential.credentialId}
+								className="font-mono"
+							>
+								{shortIdentifier(credential.credentialId)}
+							</code>
+							{" · 创建于 "}
+							<Timestamp value={credential.createdAt} />
+							{" · 最近使用 "}
+							{credential.lastUsedAt ? (
+								<Timestamp value={credential.lastUsedAt} />
+							) : (
+								<span>尚未使用</span>
 							)}
-							disabled={busy}
-							onClick={() => {
-								setNotice(false);
-								setEditing((current) => !current);
-							}}
-						>
-							收窄权限与有效期
-						</Button>
+						</small>
+					</div>
+				</TableCell>
+				<TableCell data-label="主体">{subjectName ?? "当前用户"}</TableCell>
+				<TableCell data-label="范围">{credential.scopes.join(" · ")}</TableCell>
+				<TableCell data-label="状态">
+					<Badge tone={revoked ? "red" : expired ? "amber" : "green"}>
+						{revoked ? "已撤销" : expired ? "已过期" : "有效"}
+					</Badge>
+				</TableCell>
+				<TableCell data-label="有效期">
+					{revoked ? (
+						"已撤销"
+					) : credential.expiresAt ? (
+						<Timestamp value={credential.expiresAt} style="absolute" />
+					) : (
+						"永不过期"
+					)}
+				</TableCell>
+				<TableCell data-label="操作">
+					<div className="flex flex-wrap gap-2">
+						{active && onNarrow ? (
+							<Button
+								type="button"
+								variant="ghost"
+								ref={narrowButton}
+								aria-expanded={editing}
+								aria-label={withObjectName(
+									"收窄权限与有效期",
+									credential.credentialId,
+								)}
+								disabled={busy}
+								onClick={() => {
+									setNotice(false);
+									setEditing((current) => !current);
+								}}
+							>
+								收窄权限与有效期
+							</Button>
+						) : null}
+						{!revoked && onRevoke ? (
+							<ConfirmDialog
+								disabled={busy}
+								trigger={
+									<Button
+										type="button"
+										variant="outline"
+										aria-label={withObjectName(
+											revokeLabel,
+											credential.credentialId,
+										)}
+									>
+										{revokeLabel}
+									</Button>
+								}
+								title="撤销这张 API 凭证？"
+								subject={{
+									name: credential.credentialId,
+									detail: `权限：${credential.scopes.join("、")}`,
+								}}
+								description="撤销后，使用这张凭证的 API 访问和结果流会立即终止，已受理的任务继续执行。撤销后不能恢复，需要时请签发新凭证。"
+								confirmLabel="撤销凭证"
+								finalFocus={credentialLabel}
+								onConfirm={() => {
+									setEditing(false);
+									void onRevoke(credential.credentialId).catch(() => undefined);
+								}}
+							/>
+						) : null}
+					</div>
+					{notice ? (
+						<p role="status" className="mt-2 text-[12px]">
+							凭证已收窄，已读取最新元数据。
+						</p>
 					) : null}
-					{!revoked && onRevoke ? (
-						<ConfirmDialog
-							disabled={busy}
-							trigger={
-								<Button
-									type="button"
-									variant="outline"
-									aria-label={withObjectName(
-										revokeLabel,
-										credential.credentialId,
-									)}
-								>
-									{revokeLabel}
-								</Button>
-							}
-							title="撤销这张 API 凭证？"
-							subject={{
-								name: credential.credentialId,
-								detail: `权限：${credential.scopes.join("、")}`,
-							}}
-							description="撤销后，使用这张凭证的 API 访问和结果流会立即终止，已受理的任务继续执行。撤销后不能恢复，需要时请签发新凭证。"
-							confirmLabel="撤销凭证"
-							finalFocus={credentialLabel}
-							onConfirm={() => {
-								setEditing(false);
-								void onRevoke(credential.credentialId).catch(() => undefined);
-							}}
-						/>
-					) : null}
-				</div>
-			</div>
-			{notice ? (
-				<p role="status" className="mt-3 text-sm">
-					凭证已收窄，已读取最新元数据。
-				</p>
-			) : null}
+				</TableCell>
+			</TableRow>
 			{active && editing && onNarrow ? (
-				<NarrowCredentialForm
-					credential={credential}
-					onNarrow={onNarrow}
-					onRefresh={onRefresh}
-					onCancel={closeForm}
-					onComplete={() => {
-						setNotice(true);
-						closeForm();
-					}}
-					disabled={busy}
-				/>
+				// 收窄表单在该行下方整行展开，宽度等于表格宽度。
+				<TableRow className="credential-edit-row">
+					<TableCell colSpan={6}>
+						<NarrowCredentialForm
+							credential={credential}
+							onNarrow={onNarrow}
+							onRefresh={onRefresh}
+							onCancel={closeForm}
+							onComplete={() => {
+								setNotice(true);
+								closeForm();
+							}}
+							disabled={busy}
+						/>
+					</TableCell>
+				</TableRow>
 			) : null}
-		</li>
+		</>
 	);
 }
