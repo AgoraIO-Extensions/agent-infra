@@ -1,12 +1,14 @@
 import { BrowserSessionProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	cleanup,
 	fireEvent,
-	render,
+	render as renderView,
 	screen,
 	waitFor,
 	within,
 } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { pendingApplication } from "../my-agents/test-fixtures.js";
@@ -29,10 +31,55 @@ const ordinaryUserSession = BrowserSessionProjectionV1Schema.parse({
 	},
 });
 
-afterEach(cleanup);
+function directoryFixture() {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: string | URL | Request) => {
+			const url = new URL(String(input), "http://localhost");
+			const ids = url.searchParams.get("ids")?.split(",") ?? [];
+			return Response.json({
+				items:
+					url.searchParams.get("kind") === "organization" &&
+					ids.includes("org-release")
+						? [
+								{
+									kind: "organization",
+									canonicalId: "org-release",
+									displayName: "Release Engineering",
+									organizationPath: "Engineering / Release",
+								},
+							]
+						: [],
+			});
+		}),
+	);
+}
+
+afterEach(() => {
+	cleanup();
+	vi.unstubAllGlobals();
+});
+
+function render(element: ReactElement) {
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false, gcTime: 0 } },
+	});
+	const result = renderView(
+		<QueryClientProvider client={client}>{element}</QueryClientProvider>,
+	);
+	return {
+		...result,
+		rerender(next: ReactElement) {
+			result.rerender(
+				<QueryClientProvider client={client}>{next}</QueryClientProvider>,
+			);
+		},
+	};
+}
 
 describe("AdminAgentApplicationsScreen", () => {
 	it("reviews real projected resource, Owner, model and scope details before approving", async () => {
+		directoryFixture();
 		const onDecision = vi.fn();
 		const application = {
 			...pendingApplication,
@@ -68,14 +115,15 @@ describe("AdminAgentApplicationsScreen", () => {
 		expect(screen.queryByRole("button", { name: "批准并创建" })).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "审阅申请" }));
 		const dialog = await screen.findByRole("dialog", { name: "审阅创建申请" });
-		expect(within(dialog).getByText("Small（只读）")).toBeTruthy();
+		expect(within(dialog).getByText("Small")).toBeTruthy();
 		expect(
 			within(dialog).getByText("250m CPU / 512 MiB 内存 / 1 GiB 存储"),
 		).toBeTruthy();
 		expect(within(dialog).getByText("Applicant")).toBeTruthy();
-		expect(within(dialog).getByText("0 名员工、1 个组织")).toBeTruthy();
-		expect(within(dialog).getAllByText("Release model")).toHaveLength(2);
-		expect(within(dialog).queryByText("model-primary")).toBeNull();
+		expect(await within(dialog).findByText("Release Engineering")).toBeTruthy();
+		expect(
+			within(dialog).getAllByText("Release model · release-model"),
+		).toHaveLength(2);
 		expect(within(dialog).queryByRole("textbox")).toBeNull();
 		expect(onDecision).not.toHaveBeenCalled();
 		fireEvent.click(within(dialog).getByRole("button", { name: "批准并创建" }));

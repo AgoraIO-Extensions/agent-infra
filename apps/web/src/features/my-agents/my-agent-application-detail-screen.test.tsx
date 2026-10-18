@@ -1,10 +1,42 @@
 import { AgentApplicationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatDateTime } from "../../lib/format-date.js";
 import { MyAgentApplicationDetailScreen } from "./my-agent-application-detail-screen.js";
 import { pendingApplication } from "./test-fixtures.js";
 import { renderWithMyAgentsRouter } from "./test-router.js";
+
+afterEach(() => vi.unstubAllGlobals());
+
+function directoryFixture() {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: string | URL | Request) => {
+			const url = new URL(String(input), "http://localhost");
+			const ids = url.searchParams.get("ids")?.split(",") ?? [];
+			const kind = url.searchParams.get("kind");
+			return Response.json({
+				items: [
+					{
+						kind: "user",
+						canonicalId: "user-release-2",
+						displayName: "Release User",
+						email: "release@example.test",
+						organizationPath: "Engineering / Release",
+					},
+					{
+						kind: "organization",
+						canonicalId: "org-platform",
+						displayName: "Platform",
+						organizationPath: "Engineering / Platform",
+					},
+				].filter(
+					(item) => item.kind === kind && ids.includes(item.canonicalId),
+				),
+			});
+		}),
+	);
+}
 
 describe("MyAgentApplicationDetailScreen", () => {
 	it.each([
@@ -252,6 +284,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 	});
 
 	it("shows the actual purpose, Owners, availability and default model without Secret fields", async () => {
+		directoryFixture();
 		const application = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			configuration: {
@@ -282,13 +315,14 @@ describe("MyAgentApplicationDetailScreen", () => {
 		);
 		expect(screen.getByText(application.description)).toBeTruthy();
 		expect(screen.getByText("Applicant")).toBeTruthy();
-		expect(screen.getByText("员工范围")).toBeTruthy();
-		expect(screen.getByText("组织范围")).toBeTruthy();
+		expect(await screen.findByText("Release User")).toBeTruthy();
+		expect(await screen.findByText("release@example.test")).toBeTruthy();
+		expect(await screen.findByText("Platform")).toBeTruthy();
 		expect(
 			screen.getByText("Release model · release-model-v1 · medium、high"),
 		).toBeTruthy();
 		expect(screen.getByText("默认模型").nextElementSibling?.textContent).toBe(
-			"Release model",
+			"Release model · release-model-v1",
 		);
 		expect(
 			screen.getByText("默认推理档位").nextElementSibling?.textContent,

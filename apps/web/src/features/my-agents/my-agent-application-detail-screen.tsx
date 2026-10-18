@@ -22,6 +22,7 @@ import {
 	agentManagementStatusLabels,
 	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
+import { DirectoryRecords } from "../directory-fields.js";
 import { PageLoadingState } from "../page-loading-state.js";
 import {
 	agentApplicationEditActionLabels,
@@ -39,6 +40,42 @@ type MyAgentApplicationDetailScreenProps = {
 	withdrawalResult?: AgentApplicationProjectionV2;
 	withdrawing: boolean;
 };
+
+function formatModelOption(
+	model: AgentApplicationProjectionV2["configuration"]["modelOptions"][number],
+) {
+	return `${model.displayName} · ${model.modelId}`;
+}
+
+function ApplicationAvailability({
+	availability,
+}: {
+	availability: AgentApplicationProjectionV2["configuration"]["availability"];
+}) {
+	const userIds = availability
+		.filter((target) => target.kind === "user")
+		.map((target) => target.userId);
+	const organizationIds = availability
+		.filter((target) => target.kind === "organization")
+		.map((target) => target.organizationId);
+	if (!availability.length) return <>未额外指定</>;
+	return (
+		<div className="space-y-3">
+			{userIds.length ? (
+				<div>
+					<strong className="font-medium">员工</strong>
+					<DirectoryRecords kind="user" ids={userIds} />
+				</div>
+			) : null}
+			{organizationIds.length ? (
+				<div>
+					<strong className="font-medium">组织</strong>
+					<DirectoryRecords kind="organization" ids={organizationIds} />
+				</div>
+			) : null}
+		</div>
+	);
+}
 
 export function MyAgentApplicationDetailScreen({
 	onRetry,
@@ -331,17 +368,9 @@ export function MyAgentApplicationDetailScreen({
 							</dd>
 							<dt>使用范围</dt>
 							<dd>
-								{configuration.availability.length ? (
-									<ul>
-										{configuration.availability.map((target) => (
-											<li key={JSON.stringify(target)}>
-												{target.kind === "user" ? "员工范围" : "组织范围"}
-											</li>
-										))}
-									</ul>
-								) : (
-									"未额外指定"
-								)}
+								<ApplicationAvailability
+									availability={configuration.availability}
+								/>
 							</dd>
 							<dt>模型范围</dt>
 							<dd>
@@ -349,7 +378,7 @@ export function MyAgentApplicationDetailScreen({
 									<ul>
 										{configuration.modelOptions.map((model) => (
 											<li key={model.optionId}>
-												{model.displayName} · {model.modelId} ·{" "}
+												{formatModelOption(model)} ·{" "}
 												{model.reasoningLevels.join("、")}
 											</li>
 										))}
@@ -360,9 +389,9 @@ export function MyAgentApplicationDetailScreen({
 							</dd>
 							<dt>默认模型</dt>
 							<dd>
-								{defaultModel?.displayName ??
-									configuration.defaultModelOptionId ??
-									"未提供"}
+								{defaultModel
+									? formatModelOption(defaultModel)
+									: (configuration.defaultModelOptionId ?? "未提供")}
 							</dd>
 							<dt>默认推理档位</dt>
 							<dd>{configuration.defaultReasoningLevel ?? "未提供"}</dd>

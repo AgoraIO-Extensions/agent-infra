@@ -35,6 +35,7 @@ import {
 	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
 import type { BrowserSessionState } from "../browser-session.js";
+import { DirectoryRecords } from "../directory-fields.js";
 import {
 	formatMultiServiceManifestSummary,
 	parseMultiServiceManifest,
@@ -81,6 +82,42 @@ function decisionFailure(error: RequestError) {
 	return error.retryable === false
 		? "权限或申请状态已变化，请刷新页面。"
 		: "审批未能提交，请稍后重试。";
+}
+
+function formatModelOption(
+	model: AgentApplicationProjectionV2["configuration"]["modelOptions"][number],
+) {
+	return `${model.displayName} · ${model.modelId}`;
+}
+
+function ApplicationAvailability({
+	availability,
+}: {
+	availability: AgentApplicationProjectionV2["configuration"]["availability"];
+}) {
+	const userIds = availability
+		.filter((target) => target.kind === "user")
+		.map((target) => target.userId);
+	const organizationIds = availability
+		.filter((target) => target.kind === "organization")
+		.map((target) => target.organizationId);
+	if (!availability.length) return <>未额外指定范围</>;
+	return (
+		<div className="space-y-3">
+			{userIds.length ? (
+				<div>
+					<strong className="font-medium">员工</strong>
+					<DirectoryRecords kind="user" ids={userIds} />
+				</div>
+			) : null}
+			{organizationIds.length ? (
+				<div>
+					<strong className="font-medium">组织</strong>
+					<DirectoryRecords kind="organization" ids={organizationIds} />
+				</div>
+			) : null}
+		</div>
+	);
 }
 function DecisionFeedback({
 	decision,
@@ -212,29 +249,33 @@ function ApplicationReview({
 							</dd>
 							<dt>使用范围</dt>
 							<dd className="break-all">
-								{configuration.availability.length
-									? `${configuration.availability.filter((target) => target.kind === "user").length} 名员工、${configuration.availability.filter((target) => target.kind === "organization").length} 个组织`
-									: "未提供额外范围"}
+								<ApplicationAvailability
+									availability={configuration.availability}
+								/>
 							</dd>
 							<dt>模型</dt>
 							<dd className="break-words">
-								{configuration.modelOptions
-									.map((model) => model.displayName)
-									.join("、") || "未提供模型选项"}
+								{configuration.modelOptions.map(formatModelOption).join("、") ||
+									"未提供模型选项"}
 							</dd>
 							<dt>默认模型</dt>
 							<dd className="break-all">
-								{configuration.modelOptions.find(
-									(model) =>
-										model.optionId === configuration.defaultModelOptionId,
-								)?.displayName ?? "未提供"}
+								{(() => {
+									const defaultModel = configuration.modelOptions.find(
+										(model) =>
+											model.optionId === configuration.defaultModelOptionId,
+									);
+									return defaultModel
+										? formatModelOption(defaultModel)
+										: "未提供";
+								})()}
 							</dd>
 							<dt>默认推理强度</dt>
 							<dd className="break-words">
 								{configuration.defaultReasoningLevel ?? "未提供"}
 							</dd>
 							<dt>预设规格</dt>
-							<dd>{resourceProfile.displayName}（只读）</dd>
+							<dd>{resourceProfile.displayName}</dd>
 							<dt>预计资源占用</dt>
 							<dd>
 								{resources.cpuMillicores}m CPU / {resources.memoryMiB} MiB 内存
@@ -425,7 +466,6 @@ export function AdminAgentApplicationsScreen({
 							}{" "}
 							项待处理
 						</Badge>
-						<Badge variant="outline">系统管理员 · 只读审计</Badge>
 					</div>
 				)}
 			</header>
@@ -531,13 +571,13 @@ export function AdminAgentApplicationsScreen({
 											</small>
 										</TableCell>
 										<TableCell data-label="可用范围">
-											{application.configuration.availability.length > 0
-												? `${application.configuration.availability.filter((target) => target.kind === "user").length} 名员工、${application.configuration.availability.filter((target) => target.kind === "organization").length} 个组织`
-												: "未额外指定"}
+											<ApplicationAvailability
+												availability={application.configuration.availability}
+											/>
 										</TableCell>
 										<TableCell data-label="模型">
 											{application.configuration.modelOptions
-												.map((model) => model.displayName)
+												.map(formatModelOption)
 												.join("、") || "未提供模型选项"}
 										</TableCell>
 										<TableCell data-label="提交时间">
