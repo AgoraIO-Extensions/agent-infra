@@ -965,6 +965,13 @@ export function assemblePlatformApi(
 			recordRefusal: (request) =>
 				managementTransaction.recordApiManagementRefusal(request),
 		},
+		agentUserManageGrants: {
+			identity: input.identity,
+			grant: (command) => managementTransaction.grantUserApiManage(command),
+			revoke: (command) => managementTransaction.revokeUserApiManage(command),
+			recordRefusal: (request) =>
+				managementTransaction.recordApiManagementRefusal(request),
+		},
 		agentApiLifecycle: {
 			lifecycle: createAgentApiLifecycleV1(managementTransaction),
 			readState: (request, material) =>

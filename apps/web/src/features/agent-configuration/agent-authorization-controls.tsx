@@ -7,14 +7,16 @@ import {
 	AgentAuthorizationRequestError,
 	grantApplicationManager,
 	grantApplicationUse,
+	grantUserApiManage,
 	grantUserApiUse,
 	revokeApplicationManager,
 	revokeApplicationUse,
+	revokeUserApiManage,
 	revokeUserApiUse,
 } from "./agent-authorization.js";
 
 type TargetKind = "application" | "user";
-type Permission = "manage" | "use" | "api-use";
+type Permission = "manage" | "use" | "api-use" | "api-manage";
 type Metadata = {
 	authorizationRevision: string | null;
 	granted: boolean;
@@ -54,16 +56,24 @@ export function AgentAuthorizationControls({
 
 	async function run(permission: Permission, revoke: boolean) {
 		if (busy || !target) return;
-		if (targetKind === "user" && (permission !== "api-use" || !validRevision))
+		if (
+			targetKind === "user" &&
+			((permission !== "api-use" && permission !== "api-manage") ||
+				!validRevision)
+		)
 			return;
 		setBusy(true);
 		setMessage("");
 		try {
 			const result =
 				targetKind === "user"
-					? revoke
-						? await revokeUserApiUse(agentId, target, revision)
-						: await grantUserApiUse(agentId, target, revision)
+					? permission === "api-manage"
+						? revoke
+							? await revokeUserApiManage(agentId, target, revision)
+							: await grantUserApiManage(agentId, target, revision)
+						: revoke
+							? await revokeUserApiUse(agentId, target, revision)
+							: await grantUserApiUse(agentId, target, revision)
 					: permission === "manage"
 						? revoke
 							? await revokeApplicationManager(agentId, target)
@@ -164,7 +174,8 @@ export function AgentAuthorizationControls({
 						onChange={(event) => setExpectedRevision(event.target.value)}
 					/>
 					<p className="text-muted-foreground text-xs">
-						当前 SDK 仅提供用户 API-use revoke；服务端会校验此授权版本。
+						用户的 API 使用权与 API
+						管理权分别授予和撤销，可以授权自己；服务端会校验此授权版本。
 					</p>
 				</div>
 			) : null}
@@ -211,6 +222,19 @@ export function AgentAuthorizationControls({
 						onClick={() => void run("api-use", true)}
 					>
 						撤销用户 API 使用
+					</Button>
+					<Button
+						disabled={busy || !target || !validRevision}
+						onClick={() => void run("api-manage", false)}
+					>
+						授权用户 API 管理
+					</Button>
+					<Button
+						variant="outline"
+						disabled={busy || !target || !validRevision}
+						onClick={() => void run("api-manage", true)}
+					>
+						撤销用户 API 管理
 					</Button>
 				</div>
 			)}
