@@ -60,12 +60,7 @@ export function MyAgentsScreen({
 				</Link>
 			</header>
 			<Tabs defaultValue="applications">
-				<TabsList
-					activateOnFocus
-					variant="line"
-					className="tabs"
-					aria-label="我的 Agent 视图"
-				>
+				<TabsList activateOnFocus aria-label="我的 Agent 视图">
 					<TabsTrigger value="applications">申请</TabsTrigger>
 					<TabsTrigger value="agents">已创建 Agent</TabsTrigger>
 				</TabsList>
@@ -127,12 +122,8 @@ export function MyAgentsScreen({
 														: agentConversationSourceLabel(application)}
 												</Badge>
 											</div>
-											<Link
-												params={{ applicationId: application.applicationId }}
-												to="/my-agents/$applicationId"
-											>
-												<h2>{application.name}</h2>
-											</Link>
+											{/* 设计稿标题不是链接，入口为同行的「查看申请」（≥44px）。 */}
+											<h2>{application.name}</h2>
 											<p>{application.description}</p>
 											<p className="text-sm">
 												提交于{" "}

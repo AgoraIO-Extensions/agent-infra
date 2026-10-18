@@ -49,6 +49,8 @@
 	--platform-topbar-height: 72px;
 	--surface-shadow: 0 16px 40px
 		color-mix(in oklch, var(--foreground) 8%, transparent);
+	/* 临时：与 tokens 流合并时以其定义为准 */
+	--accent-ink: oklch(0.46 0.15 248);
 	font-family:
 		ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
 		"PingFang SC", "Microsoft YaHei", sans-serif;
@@ -283,18 +285,6 @@
 .platform-skip-link:focus {
 	top: 10px;
 }
-[data-slot="button"],
-a[class~="group/button"] {
-	min-height: 44px;
-	min-width: 44px;
-	border-radius: 10px;
-	letter-spacing: 0.02em;
-}
-[data-slot="input"],
-[data-slot="textarea"],
-[data-slot="native-select"] {
-	border-radius: 10px;
-}
 @media (max-width: 1023px) {
 	.platform-sidebar {
 		display: none;
@@ -328,19 +318,6 @@ a[class~="group/button"] {
 }
 .audit-filters > div {
 	min-width: 0;
-}
-.audit-filters [data-slot="label"] {
-	display: block;
-	margin-bottom: 8px;
-}
-.audit-table {
-	table-layout: fixed;
-	font-size: 14px;
-}
-.audit-table [data-slot="table-cell"] {
-	white-space: normal;
-	overflow-wrap: anywhere;
-	vertical-align: top;
 }
 .audit-table [data-slot="table-head"]:last-child {
 	width: 120px;
@@ -417,37 +394,15 @@ a[class~="group/button"] {
 	color: var(--muted-foreground);
 	margin-top: 9px;
 }
-.management-content .tabs {
-	width: 100%;
-	height: auto;
-	padding: 0;
-	justify-content: start;
+/* 用链接或按钮切换范围的导航（审计范围、评测区域），外观同设计稿 .tabs 容器。 */
+.scope-tabs {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 4px;
+	width: 100%;
 	max-width: 100%;
 	border-bottom: 1px solid var(--border);
-	margin-bottom: 10px;
-}
-.management-content .tabs [role="tab"] {
-	flex: none;
-	height: auto;
-	border: 0;
-	border-bottom: 2px solid transparent;
-	box-shadow: none;
-	min-height: 44px;
-	min-width: 0;
-	padding: 9px 2px;
-	margin-right: 18px;
-	color: var(--muted-foreground);
-	font-size: 14px;
-	white-space: normal;
-	overflow-wrap: anywhere;
-}
-.management-content .tabs [aria-selected="true"] {
-	border-bottom: 2px solid var(--primary);
-	color: var(--foreground);
-	font-weight: 600;
+	margin-bottom: 20px;
 }
 .management-content .record-row {
 	display: flex;
@@ -464,22 +419,6 @@ a[class~="group/button"] {
 	font-size: 14px;
 	color: var(--muted-foreground);
 	margin-top: 7px;
-}
-.management-content .form-section,
-.management-content .detail-section {
-	padding: 22px 0;
-	border-bottom: 1px solid var(--border);
-}
-.management-content .form-section:first-child {
-	padding-top: 0;
-}
-.management-content .form-section > p {
-	color: var(--muted-foreground);
-	font-size: 14px;
-	margin-top: 6px;
-}
-.management-content .detail-section h2 {
-	margin-bottom: 14px;
 }
 .management-content .form-aside {
 	font-size: 14px;
@@ -953,6 +892,7 @@ a[class~="group/button"] {
 	width: 100%;
 	border-collapse: collapse;
 	font-size: 14px;
+	line-height: calc(1 / 0.75);
 }
 .assistant-markdown .markdown-table [data-slot="table-container"] {
 	min-width: max-content;
@@ -963,9 +903,19 @@ a[class~="group/button"] {
 	border: 1px solid var(--border);
 	text-align: left;
 	min-width: 120px;
+	/* Table 组件默认类改为管理表设计值后，对话 Markdown 表格固定为原有排版。 */
+	font-family: inherit;
+	font-size: 14px;
+	line-height: calc(1 / 0.75);
+	letter-spacing: normal;
+	white-space: nowrap;
+	vertical-align: middle;
 }
 .assistant-markdown th {
+	height: 40px;
 	background: var(--muted);
+	color: var(--foreground);
+	font-weight: 500;
 }
 /* Very short viewports use document scrolling for focus and error recovery. */
 @media (max-height: 600px) {
@@ -1401,15 +1351,6 @@ body {
 	border-radius: 14px;
 	background: var(--surface);
 }
-.management-content .form-layout .form-section:last-child {
-	border-bottom: 0;
-}
-.management-content .form-section > legend {
-	padding-right: 8px;
-}
-.management-content .form-section > p {
-	margin-bottom: 20px;
-}
 .management-content .record-row {
 	background: var(--surface);
 	padding: 20px;
@@ -1417,43 +1358,12 @@ body {
 	border-radius: 14px;
 	margin-block: 12px;
 }
-.management-content .tabs {
-	margin-bottom: 20px;
-}
-.management-content .tabs [aria-selected="true"] {
-	border-bottom-color: var(--primary);
-	color: var(--foreground);
-}
-.management-content :not(.markdown-table) > [data-slot="table-container"] {
-	border: 1px solid var(--border);
-	border-radius: 14px;
-	background: var(--surface);
-}
-.management-content [data-slot="table-head"] {
-	background: var(--surface);
-	font:
-		11px / 1.4 ui-monospace,
-		monospace;
-	letter-spacing: 0.05em;
-	color: var(--muted-foreground);
-	height: auto;
-}
 .management-content :is(.audit-filters, .admin-agent-filters) {
 	padding: 0;
 	border: 0;
 	gap: 10px;
 	margin: 0 0 20px;
 }
-[data-slot="input"],
-[data-slot="select-trigger"],
-[data-slot="native-select"] {
-	background: var(--surface);
-	min-height: 44px;
-}
-[data-slot="textarea"] {
-	background: var(--surface);
-}
-[data-slot="select-trigger"],
 [data-slot="alert"] {
 	border-radius: 10px;
 }
@@ -1462,13 +1372,8 @@ body {
 	border-radius: 14px;
 	background: var(--surface);
 }
-[data-slot="dialog-content"],
-[data-slot="select-content"] {
+[data-slot="dialog-content"] {
 	border-radius: 14px;
-}
-[data-slot="button"],
-a[class~="group/button"] {
-	font-size: 13px;
 }
 .platform-topbar [data-slot="avatar-fallback"],
 .platform-identity [data-slot="avatar-fallback"] {
@@ -1607,11 +1512,6 @@ a[class~="group/button"] {
 .admin-agent-filters > div {
 	min-width: 0;
 }
-.ia-admin-agents [data-slot="button"],
-.ia-admin-agents [data-slot="input"],
-.ia-admin-agents select {
-	min-height: 44px;
-}
 .admin-agent-summary,
 .admin-agent-pagination {
 	display: flex;
@@ -1621,16 +1521,6 @@ a[class~="group/button"] {
 	gap: 12px;
 	margin: 20px 0;
 	font-size: 14px;
-}
-.admin-agent-table {
-	table-layout: fixed;
-	font-size: 14px;
-}
-.admin-agent-table [data-slot="table-cell"] {
-	white-space: normal;
-	overflow-wrap: anywhere;
-	vertical-align: top;
-	padding-block: 16px;
 }
 .admin-agent-table [data-slot="table-head"]:first-child {
 	width: 28%;
@@ -1660,6 +1550,7 @@ a[class~="group/button"] {
 	min-width: 0;
 }
 .agent-detail .detail-section h2 {
+	margin-bottom: 14px;
 	font-family: inherit;
 	font-size: 16px;
 	letter-spacing: 0;
@@ -1716,15 +1607,6 @@ a[class~="group/button"] {
 	gap: 10px;
 	margin-bottom: 20px;
 }
-.directory-filter {
-	display: grid;
-	gap: 7px;
-	min-width: 0;
-}
-.directory-filter [data-slot="label"] {
-	color: var(--muted-foreground);
-	font-size: 12px;
-}
 @media (max-width: 767px) {
 	.directory-filters {
 		grid-template-columns: minmax(0, 1fr);
@@ -1769,15 +1651,6 @@ a[class~="group/button"] {
 	margin-top: 6px;
 }
 
-[data-slot="input"],
-[data-slot="select-trigger"],
-[data-slot="native-select"],
-[data-slot="textarea"] {
-	font-size: 15px;
-}
-[data-slot="button"]:disabled {
-	opacity: 0.48;
-}
 [data-slot="button"]:focus-visible,
 a[class~="group/button"]:focus-visible,
 [data-slot="input"]:focus-visible,
@@ -1959,32 +1832,8 @@ a[class~="group/button"]:focus-visible,
 	border-color: var(--primary);
 	color: var(--primary);
 }
-.management-content .form-section > legend,
-.management-content .full-width-form legend {
-	font-family: inherit;
-	font-weight: 650;
-	font-size: 16px;
-	line-height: 1.4;
-}
-.management-content .full-width-form .form-section {
-	border-bottom: 0;
-	border-top: 1px solid var(--border);
-}
-.management-content .full-width-form .form-section:first-child {
-	border-top: 0;
-}
 .management-content .form-grid {
 	margin-top: 16px;
-}
-.management-content .form-section > p {
-	font-size: 13px;
-	margin-top: 5px;
-	margin-bottom: 0;
-}
-.management-content .full-width-form [data-slot="label"] {
-	font-size: 12px;
-	color: var(--muted-foreground);
-	font-weight: 650;
 }
 .management-content .full-width-form .form-footer {
 	justify-content: space-between;
@@ -2031,20 +1880,8 @@ a[class~="group/button"]:focus-visible,
 .application-form-fields > .form-footer {
 	order: 5;
 }
-.application-form .form-section {
-	min-width: 0;
-	padding: 22px 0;
-	border-top: 1px solid var(--border);
-}
-.application-form .form-section:first-child {
-	padding-top: 0;
-	border-top: 0;
-}
 .application-form .form-grid {
 	margin-top: 16px;
-}
-.application-form .form-section > p {
-	margin-top: 5px;
 }
 .application-form .field-help {
 	color: var(--muted-foreground);
@@ -2059,11 +1896,11 @@ a[class~="group/button"]:focus-visible,
 	line-height: 1.45;
 }
 .application-form .application-optional-section > [data-slot="button"] {
-	min-height: 36px;
 	margin-top: 8px;
 }
 .application-form .application-advanced-section {
 	padding: 14px 0;
+	border-top: 1px solid var(--border);
 }
 .application-advanced-heading {
 	display: flex;
@@ -2081,20 +1918,6 @@ a[class~="group/button"]:focus-visible,
 	margin-top: 4px;
 	color: var(--muted-foreground);
 	font-size: 11px;
-}
-.application-advanced-toggle {
-	min-height: 36px;
-	padding: 7px 11px;
-	border: 1px solid var(--border);
-	border-radius: 10px;
-	color: var(--muted-foreground);
-	font-size: 12px;
-	font-weight: 650;
-}
-.application-advanced-toggle:hover {
-	border-color: var(--foreground);
-	color: var(--foreground);
-	background: var(--muted);
 }
 .application-advanced-content {
 	margin-top: 14px;
@@ -2191,28 +2014,11 @@ a[class~="group/button"]:focus-visible,
 	display: grid;
 	gap: 7px;
 }
-.approval-filters [data-slot="label"] {
-	font-size: 12px;
-	color: var(--muted-foreground);
-}
-.management-content :is(.audit-table, .admin-agent-table, .approval-table) {
-	min-width: 700px;
-	font-size: 13px;
-	table-layout: fixed;
-}
-.management-content :is([data-slot="table-head"], [data-slot="table-cell"]) {
-	padding: 14px 15px;
-	vertical-align: top;
-}
-.management-content [data-slot="table-cell"] {
-	white-space: normal;
-	overflow-wrap: anywhere;
-}
-.management-content [data-slot="table-cell"] small {
-	display: block;
-	margin-top: 3px;
-	color: var(--muted-foreground);
-	font-size: 11px;
+@media (min-width: 768px) {
+	.management-content :is(.audit-table, .admin-agent-table, .approval-table) {
+		min-width: 700px;
+		table-layout: fixed;
+	}
 }
 .management-content [data-slot="table-row"]:hover {
 	background: var(--muted);
@@ -2264,19 +2070,9 @@ a[class~="group/button"]:focus-visible,
 	.metadata-facts dd {
 		margin-bottom: 4px;
 	}
-	.management-content :not(.markdown-table) > [data-slot="table-container"] {
-		border-radius: 12px;
-	}
-	.management-content :is([data-slot="table-head"], [data-slot="table-cell"]) {
-		padding: 12px 11px;
-	}
 	.management-content .form-grid > .sm\:col-span-2 {
 		grid-column: auto;
 	}
-}
-
-.management-content .tabs [role="tab"]::after {
-	display: none;
 }
 
 .owned-agent-card {

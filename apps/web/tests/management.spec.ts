@@ -19,6 +19,16 @@ import type {
 	DeploymentConfigurationProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
 import { captureDesignContract, designViewports } from "./design-contract";
+import {
+	computed,
+	expectCardTable,
+	expectDesktopTable,
+	expectFieldControl,
+	expectFieldLabel,
+	expectFormSection,
+	expectNoLegendOnBorder,
+	resolved,
+} from "./primitive-styles";
 
 const deploymentConfiguration: DeploymentConfigurationProjectionV2 = {
 	modelCatalog: {
@@ -2174,4 +2184,315 @@ test("Agent detail directory failure stays readable and configuration preserves 
 		coOwnerIds: ["user-owner-1"],
 		availability: [{ kind: "organization", organizationId: "org-platform" }],
 	});
+});
+
+test("application form fields, selects, sections and small actions follow the exported design", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/my-agents/new");
+	const name = page.getByLabel("Agent 名称");
+	await expect(name).toBeVisible();
+	// B-04 字段标签、B-05 输入框与 Textarea。
+	await expectFieldLabel(
+		page,
+		page.locator("label", { hasText: "Agent 名称" }),
+	);
+	await expectFieldControl(page, name);
+	expect(
+		await computed(page.getByLabel("用途说明", { exact: true }), [
+			"minHeight",
+			"padding",
+			"borderTopLeftRadius",
+		]),
+	).toEqual({
+		minHeight: "110px",
+		padding: "10px 12px",
+		borderTopLeftRadius: "10px",
+	});
+
+	// B-06 下拉：触发器与输入框同尺寸，右侧 40px 给箭头；弹层在触发器下方、无动画。
+	const source = page.getByRole("combobox", { name: "Agent 来源" });
+	await expectFieldControl(page, source);
+	// 同一行右侧字段带说明文字更高时，标签与控件仍保持 7px 间距（Field 不拉伸行高）。
+	const [sourceLabel, sourceTrigger] = await Promise.all([
+		page.locator("label", { hasText: "来源" }).first().boundingBox(),
+		source.boundingBox(),
+	]);
+	if (!sourceLabel || !sourceTrigger) throw new Error("Missing source field");
+	expect(
+		Math.abs(sourceTrigger.y - (sourceLabel.y + sourceLabel.height) - 7),
+	).toBeLessThanOrEqual(1);
+	expect((await computed(source, ["paddingRight"])).paddingRight).toBe("40px");
+	// 触发器在视口中部时下方空间足够，弹层应从触发器下方弹出。
+	await source.evaluate((element) =>
+		element.scrollIntoView({ block: "center" }),
+	);
+	await source.click();
+	const popup = page.locator('[data-slot="select-content"]');
+	await expect(popup).toBeVisible();
+	expect(
+		await computed(popup, [
+			"borderTopLeftRadius",
+			"boxShadow",
+			"animationName",
+		]),
+	).toEqual({
+		borderTopLeftRadius: "12px",
+		boxShadow: await resolved(page, "boxShadow", "var(--surface-shadow)"),
+		animationName: "none",
+	});
+	const [trigger, menu] = await Promise.all([
+		source.boundingBox(),
+		popup.boundingBox(),
+	]);
+	expect(menu?.y ?? 0).toBeGreaterThanOrEqual(
+		(trigger?.y ?? 0) + (trigger?.height ?? 0),
+	);
+	const option = page.getByRole("option").first();
+	const optionStyle = await computed(option, [
+		"fontSize",
+		"borderTopLeftRadius",
+	]);
+	expect(optionStyle).toEqual({ fontSize: "13px", borderTopLeftRadius: "8px" });
+	const optionBox = await option.boundingBox();
+	if (!optionBox) throw new Error("Missing option geometry");
+	expect(optionBox.height).toBeGreaterThanOrEqual(44);
+	await page.keyboard.press("ArrowDown");
+	const highlighted = popup.locator(
+		'[data-slot="select-item"][data-highlighted]',
+	);
+	await expect(highlighted).toHaveCount(1);
+	expect(
+		(await computed(highlighted, ["backgroundColor"])).backgroundColor,
+	).toBe(await resolved(page, "backgroundColor", "var(--muted)"));
+	await page.keyboard.press("Escape");
+	await expect(popup).toBeHidden();
+
+	// N-10 分区：section + h2，分隔线在标题上方，没有压线的 legend。
+	await expectFormSection(page, "基本信息", { first: true });
+	await expectFormSection(page, "共同 Owner 与使用范围");
+	await expectNoLegendOnBorder(page);
+
+	// B-15 / N-14：sm 尺寸至少 44px，内边距与字号按 .btn-sm；按下下移 1px 且有 60ms 过渡。
+	const toggle = page.getByRole("button", { name: "展开高级配置" });
+	expect(
+		await computed(toggle, [
+			"minHeight",
+			"minWidth",
+			"paddingTop",
+			"paddingLeft",
+			"fontSize",
+		]),
+	).toEqual({
+		minHeight: "44px",
+		// 纯图标的 sm 按钮也保持 44px 命中宽度（原全局 min-width 规则已删除）。
+		minWidth: "44px",
+		paddingTop: "7px",
+		paddingLeft: "11px",
+		fontSize: "12px",
+	});
+	expect((await toggle.boundingBox())?.height).toBe(44);
+	expect(
+		(await computed(toggle, ["transitionDuration"])).transitionDuration,
+	).toContain("0.06s");
+	await toggle.scrollIntoViewIfNeeded();
+	const box = await toggle.boundingBox();
+	if (!box) throw new Error("Missing toggle geometry");
+	await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+	await page.mouse.down();
+	// 按下后经 60ms 过渡下移 1px。
+	await expect
+		.poll(async () => (await computed(toggle, ["transform"])).transform)
+		.toBe("matrix(1, 0, 0, 1, 0, 1)");
+	await page.mouse.up();
+	await expect(
+		page.getByRole("button", { name: "收起高级配置" }),
+	).toHaveAttribute("aria-expanded", "true");
+});
+
+test("Owner configuration sections, option checkboxes, back link and disabled save follow the exported design", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(
+		page.getByRole("region", { name: "Owner", exact: true }),
+	).toBeVisible();
+	await expectFormSection(page, "Owner", { first: true });
+	for (const name of ["使用范围", "企微渠道", "模型配置", "Secrets"])
+		await expectFormSection(page, name);
+	await expectNoLegendOnBorder(page);
+
+	// B-15：未改动时保存不可用；禁用按钮 not-allowed、半透明，且不靠 pointer-events: none。
+	const save = page.getByRole("button", { name: "校验并保存" });
+	await expect(save).toBeDisabled();
+	expect(await computed(save, ["cursor", "opacity", "pointerEvents"])).toEqual({
+		cursor: "not-allowed",
+		opacity: "0.48",
+		pointerEvents: "auto",
+	});
+
+	// B-07：复选框 18×18、圆角 4px、命中区 44×44；选项文字 13px / 400 / 前景色、行高 ≥44px。
+	const replaceModels = page.getByRole("checkbox", { name: "替换模型配置" });
+	const optionLabel = page.locator('label[data-variant="option"]', {
+		hasText: "替换模型配置",
+	});
+	expect(
+		await computed(optionLabel, ["fontSize", "fontWeight", "color"]),
+	).toEqual({
+		fontSize: "13px",
+		fontWeight: "400",
+		color: await resolved(page, "color", "var(--foreground)"),
+	});
+	expect((await optionLabel.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(
+		44,
+	);
+	const checkbox = await replaceModels.boundingBox();
+	expect([checkbox?.width, checkbox?.height]).toEqual([18, 18]);
+	expect(
+		(await computed(replaceModels, ["borderTopLeftRadius"]))
+			.borderTopLeftRadius,
+	).toBe("4px");
+	const hitArea = await computed(
+		replaceModels,
+		["top", "left", "position"],
+		"::after",
+	);
+	expect(hitArea).toEqual({
+		top: "-13px",
+		left: "-13px",
+		position: "absolute",
+	});
+	await replaceModels.click();
+	await expect(replaceModels).toBeChecked();
+	// 复选框底色带颜色过渡，等过渡结束再读取。
+	await expect
+		.poll(
+			async () =>
+				(await computed(replaceModels, ["backgroundColor"])).backgroundColor,
+		)
+		.toBe(await resolved(page, "backgroundColor", "var(--primary)"));
+
+	// B-15：返回入口是 ghost sm（与同尺寸按钮同高），不是带下划线的 link 变体。
+	const back = page.getByRole("link", { name: "返回 Agent 详情" });
+	expect(
+		await computed(back, [
+			"minHeight",
+			"paddingLeft",
+			"fontSize",
+			"textDecorationLine",
+		]),
+	).toEqual({
+		minHeight: "44px",
+		paddingLeft: "11px",
+		fontSize: "12px",
+		textDecorationLine: "none",
+	});
+});
+
+test("my Agent tabs use one underline style with pointer cursor and body-size panels", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/my-agents");
+	const applications = page.getByRole("tab", { name: "申请", exact: true });
+	const owned = page.getByRole("tab", { name: "已创建 Agent" });
+	await expect(applications).toHaveAttribute("aria-selected", "true");
+	for (const tab of [applications, owned]) {
+		expect(await computed(tab, ["fontSize", "fontWeight", "cursor"])).toEqual({
+			fontSize: "13px",
+			fontWeight: "650",
+			cursor: "pointer",
+		});
+		const tabBox = await tab.boundingBox();
+		if (!tabBox) throw new Error("Missing tab geometry");
+		expect(tabBox.height).toBeGreaterThanOrEqual(44);
+		expect((await computed(tab, ["content"], "::after")).content).toBe("none");
+	}
+	expect(
+		await computed(applications, [
+			"borderBottomWidth",
+			"borderBottomColor",
+			"color",
+		]),
+	).toEqual({
+		borderBottomWidth: "2px",
+		borderBottomColor: await resolved(page, "color", "var(--accent-ink)"),
+		color: await resolved(page, "color", "var(--foreground)"),
+	});
+	expect(await computed(owned, ["borderBottomColor", "color"])).toEqual({
+		borderBottomColor: "rgba(0, 0, 0, 0)",
+		color: await resolved(page, "color", "var(--muted-foreground)"),
+	});
+	expect(
+		(await computed(page.getByRole("tabpanel"), ["fontSize"])).fontSize,
+	).toBe("15px");
+	// N-14：申请标题不再是 23px 高的链接，详情入口「查看申请」至少 44px。
+	const detail = page.getByRole("link", { name: "查看申请" }).first();
+	const detailBox = await detail.boundingBox();
+	expect(detailBox).not.toBeNull();
+	expect(detailBox?.height).toBeGreaterThanOrEqual(44);
+});
+
+test("an unselected my Agent tab turns foreground on hover", async ({
+	page,
+}, info) => {
+	// 触屏项目没有悬停能力（Tailwind hover 只在 hover: hover 媒体下生效）。
+	test.skip(info.project.name !== "desktop", "Hover needs a pointer device");
+	await fixture(page);
+	await page.goto("/my-agents");
+	const owned = page.getByRole("tab", { name: "已创建 Agent" });
+	await owned.hover();
+	await expect
+		.poll(async () => (await computed(owned, ["color"])).color)
+		.toBe(await resolved(page, "color", "var(--foreground)"));
+});
+
+test("approval table becomes readable cards on narrow screens with the review action in view", async ({
+	page,
+}) => {
+	await fixture(page, "admin");
+	await page.goto("/admin/approvals");
+	const table = page.getByRole("table", { name: "创建审批" });
+	await expect(table).toBeVisible();
+	const badge = table.locator('[data-slot="badge"]').first();
+	for (const viewport of [
+		{ width: 1440, height: 900 },
+		{ width: 768, height: 1024 },
+	]) {
+		await page.setViewportSize(viewport);
+		await expectDesktopTable(page, table);
+	}
+	await page.setViewportSize({ width: 1440, height: 900 });
+	const desktopBadgeWidth = (await badge.boundingBox())?.width;
+	expect(desktopBadgeWidth).toBeGreaterThan(0);
+	for (const viewport of [
+		{ width: 390, height: 844 },
+		{ width: 320, height: 640 },
+	]) {
+		await page.setViewportSize(viewport);
+		const review = page.getByRole("button", { name: "审阅申请" });
+		await expectCardTable(page, table, review);
+		// NI-99：状态徽章仍是带圆点的行内块，宽度与桌面一致，右缘与值容器对齐。
+		const geometry = await badge.evaluate((element) => {
+			const value = element.closest('[data-slot="table-cell-value"]');
+			const dot = getComputedStyle(element, "::before");
+			return {
+				display: getComputedStyle(element).display,
+				dot: [dot.width, dot.height, dot.display],
+				width: element.getBoundingClientRect().width,
+				rightGap: Math.abs(
+					(value?.getBoundingClientRect().right ?? 0) -
+						element.getBoundingClientRect().right,
+				),
+			};
+		});
+		expect(geometry.display).not.toBe("block");
+		expect(
+			Math.abs(geometry.width - (desktopBadgeWidth ?? 0)),
+		).toBeLessThanOrEqual(1);
+		expect(geometry.dot).toEqual(["6px", "6px", "block"]);
+		expect(geometry.rightGap).toBeLessThanOrEqual(1);
+	}
 });

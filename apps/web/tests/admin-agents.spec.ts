@@ -2,6 +2,12 @@ import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import { captureDesignContract, designViewports } from "./design-contract";
+import {
+	expectCardTable,
+	expectDesktopTable,
+	expectFieldLabel,
+	expectSearchInput,
+} from "./primitive-styles";
 
 const baseline = AgentProjectionV2Schema.parse(
 	pilotFakeScenariosV2.starting.response.body,
@@ -276,5 +282,39 @@ test("exported design viewport matrix admin Agents", async ({ page }, info) => {
 	for (const viewport of designViewports) {
 		await page.setViewportSize(viewport);
 		await captureDesignContract(page, info, "admin-agents");
+	}
+});
+
+test("admin Agent filters and table follow the exported design, with mobile cards", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/admin/agents");
+	const table = page.getByRole("table", { name: "已创建 Agent" });
+	await expect(table).toBeVisible();
+	const search = page.getByRole("searchbox", { name: "搜索 Agent 或 Owner" });
+	for (const viewport of [
+		{ width: 1440, height: 900 },
+		{ width: 768, height: 1024 },
+	]) {
+		await page.setViewportSize(viewport);
+		await expectSearchInput(search);
+		await expectFieldLabel(
+			page,
+			page.locator("label", { hasText: "产品状态" }),
+		);
+		await expectDesktopTable(page, table);
+	}
+	for (const viewport of [
+		{ width: 390, height: 844 },
+		{ width: 320, height: 640 },
+	]) {
+		await page.setViewportSize(viewport);
+		await expectSearchInput(search);
+		await expectCardTable(
+			page,
+			table,
+			page.getByRole("link", { name: "处理 Owner 交接" }).first(),
+		);
 	}
 });

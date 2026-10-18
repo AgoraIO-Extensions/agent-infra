@@ -13,6 +13,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@/components/ui/dialog";
+import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
@@ -328,7 +329,7 @@ function PersonalRelayKeyForm({
 						)}
 					</div>
 				)}
-				<div className="space-y-2">
+				<Field>
 					<Label htmlFor="personal-relay-key">
 						{projection?.isSet ? "替换个人 Relay Key" : "设置个人 Relay Key"}
 					</Label>
@@ -363,7 +364,7 @@ function PersonalRelayKeyForm({
 							{fieldError}
 						</Alert>
 					)}
-				</div>
+				</Field>
 			</div>
 			{surface === "page" ? (
 				<div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">

@@ -1,0 +1,29 @@
+import type * as React from "react";
+import { labelVariants } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
+
+// 设计稿 .field{display:grid;gap:7px}：包住 Label 与控件。content-start 避免同一行
+// 相邻字段较高（例如带说明文字）时把标签行拉高、控件下沉。
+function Field({ className, ...props }: React.ComponentProps<"div">) {
+	return (
+		<div
+			data-slot="field"
+			className={cn("grid min-w-0 content-start gap-[7px]", className)}
+			{...props}
+		/>
+	);
+}
+
+// 设计稿 .field legend：fieldset 内的字段组标题，与字段标签同样式。
+// fieldset 由 preflight 去掉边框与内边距，分区标题请用 FormSection。
+function FieldLegend({ className, ...props }: React.ComponentProps<"legend">) {
+	return (
+		<legend
+			data-slot="field-legend"
+			className={cn(labelVariants({ variant: "field" }), className)}
+			{...props}
+		/>
+	);
+}
+
+export { Field, FieldLegend };

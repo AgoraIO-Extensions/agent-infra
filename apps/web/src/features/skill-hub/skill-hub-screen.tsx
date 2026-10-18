@@ -1,16 +1,17 @@
 import { Link } from "@tanstack/react-router";
-import { RefreshCw, Search } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
+import { Field } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { SearchInput } from "@/components/ui/search-input";
 import type { SkillHubVersionMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
 import type {
 	SkillHubDirectoryState,
@@ -142,27 +143,16 @@ export function SkillHubDirectoryScreen({
 			) : (
 				<>
 					<div className="directory-filters">
-						<div className="directory-search w-full space-y-2">
-							<Label className="sr-only" htmlFor={searchId}>
-								搜索 Skill
-							</Label>
-							<div className="search relative">
-								<Search
-									aria-hidden="true"
-									className="pointer-events-none absolute top-3 left-3 size-5 text-muted-foreground"
-								/>
-								<Input
-									id={searchId}
-									className="pl-10"
-									type="search"
-									placeholder="搜索名称、版本或来源"
-									maxLength={skillHubSearchMaxLength}
-									value={query}
-									onChange={(event) => setQuery(event.target.value)}
-								/>
-							</div>
-						</div>
-						<div className="directory-filter">
+						<SearchInput
+							wrapperClassName="directory-search w-full"
+							label="搜索 Skill"
+							id={searchId}
+							placeholder="搜索名称、版本或来源"
+							maxLength={skillHubSearchMaxLength}
+							value={query}
+							onChange={(event) => setQuery(event.target.value)}
+						/>
+						<Field>
 							<Label htmlFor={`${searchId}-provider`}>来源</Label>
 							<NativeSelect
 								id={`${searchId}-provider`}
@@ -184,8 +174,8 @@ export function SkillHubDirectoryScreen({
 									),
 								)}
 							</NativeSelect>
-						</div>
-						<div className="directory-filter">
+						</Field>
+						<Field>
 							<Label htmlFor={`${searchId}-visibility`}>可见范围</Label>
 							<NativeSelect
 								id={`${searchId}-visibility`}
@@ -207,7 +197,7 @@ export function SkillHubDirectoryScreen({
 									),
 								)}
 							</NativeSelect>
-						</div>
+						</Field>
 					</div>
 					<div className="mt-4" role="status" aria-live="polite">
 						{normalizedQuery || provider !== "all" || visibility !== "all"

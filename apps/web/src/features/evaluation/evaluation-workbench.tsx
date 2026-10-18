@@ -67,7 +67,7 @@ export function EvaluationWorkbench({
 				</Badge>
 			</header>
 
-			<nav className="tabs" aria-label="评测区域">
+			<nav className="scope-tabs" aria-label="评测区域">
 				{sections.map((item) => (
 					<Button
 						key={item.id}

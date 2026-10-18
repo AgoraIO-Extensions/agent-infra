@@ -145,7 +145,7 @@ export function AgentDetailScreen({
 					) : null}
 				</Alert>
 				<Link
-					className={buttonVariants({ variant: "link", className: "px-0" })}
+					className={buttonVariants({ variant: "ghost", size: "sm" })}
 					to="/agents"
 				>
 					<ArrowLeft aria-hidden="true" />
@@ -171,7 +171,7 @@ export function AgentDetailScreen({
 		<section aria-labelledby="agent-detail-heading" className="agent-detail">
 			<div className="agent-detail-back">
 				<Link
-					className={buttonVariants({ variant: "link", className: "px-0" })}
+					className={buttonVariants({ variant: "ghost", size: "sm" })}
 					to="/agents"
 				>
 					<ArrowLeft aria-hidden="true" />

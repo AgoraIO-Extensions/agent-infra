@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
+import { Field, FieldLegend } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { ApplicationMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
@@ -131,7 +132,7 @@ export function ApplicationManagementScreen({
 					}}
 				>
 					<h2 className="font-semibold text-base">打开既有应用</h2>
-					<div className="space-y-2">
+					<Field>
 						<Label htmlFor={`${headingId}-application`}>既有应用 ID</Label>
 						<Input
 							id={`${headingId}-application`}
@@ -146,7 +147,7 @@ export function ApplicationManagementScreen({
 						>
 							输入你负责的应用 ID，读取详情后再管理凭证。
 						</p>
-					</div>
+					</Field>
 					<Button type="submit" disabled={!applicationId.trim()}>
 						打开应用
 					</Button>
@@ -190,7 +191,7 @@ export function ApplicationManagementScreen({
 							应用负责人由当前登录会话决定，不需要填写 userId。
 						</p>
 					</div>
-					<div className="space-y-2">
+					<Field>
 						<Label htmlFor={`${headingId}-name`}>应用名称</Label>
 						<Input
 							id={`${headingId}-name`}
@@ -206,7 +207,7 @@ export function ApplicationManagementScreen({
 						>
 							使用团队成员能识别的名称。
 						</p>
-					</div>
+					</Field>
 					<Button
 						type="submit"
 						disabled={!onRegister || !name.trim() || isRegistering}
@@ -413,7 +414,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 						</p>
 					</div>
 					<fieldset className="space-y-3">
-						<legend className="font-medium text-sm">操作</legend>
+						<FieldLegend>操作</FieldLegend>
 						<div className="flex flex-wrap gap-2">
 							<Button
 								type="button"
@@ -434,7 +435,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 						</div>
 					</fieldset>
 					{operation === "rotate" ? (
-						<div className="space-y-2">
+						<Field>
 							<Label htmlFor={`${id}-credential`}>要轮换的凭证 ID</Label>
 							<Input
 								id={`${id}-credential`}
@@ -442,11 +443,11 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 								onChange={(event) => setCredentialId(event.target.value)}
 								required
 							/>
-						</div>
+						</Field>
 					) : null}
 					<div className="grid gap-4 sm:grid-cols-2">
 						<fieldset className="space-y-2">
-							<legend className="font-medium text-sm">接收主体类型</legend>
+							<FieldLegend>接收主体类型</FieldLegend>
 							<div className="flex gap-2">
 								<Button
 									type="button"
@@ -468,7 +469,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 								</Button>
 							</div>
 						</fieldset>
-						<div className="space-y-2">
+						<Field>
 							<Label htmlFor={`${id}-recipient`}>接收主体 ID</Label>
 							<Input
 								id={`${id}-recipient`}
@@ -476,10 +477,10 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 								onChange={(event) => setRecipientId(event.target.value)}
 								required
 							/>
-						</div>
+						</Field>
 					</div>
 					<fieldset className="space-y-3">
-						<legend className="font-medium text-sm">权限范围</legend>
+						<FieldLegend>权限范围</FieldLegend>
 						<div className="grid gap-2 sm:grid-cols-2">
 							{personalApiCredentialScopes.map((scope) => {
 								const checkboxId = `${id}-${scope.replace(":", "-")}`;
@@ -493,7 +494,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 											checked={scopes.includes(scope)}
 											onCheckedChange={() => toggleScope(scope)}
 										/>
-										<Label htmlFor={checkboxId} className="font-normal">
+										<Label htmlFor={checkboxId} variant="option">
 											{personalApiCredentialScopeLabels[scope]}
 										</Label>
 										<code className="ml-auto text-[11px] text-muted-foreground">
@@ -509,7 +510,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 							</Alert>
 						) : null}
 					</fieldset>
-					<div className="space-y-2">
+					<Field>
 						<Label htmlFor={`${id}-expiry`}>过期时间（可选）</Label>
 						<Input
 							id={`${id}-expiry`}
@@ -518,7 +519,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 							value={expiresAt}
 							onChange={(event) => setExpiresAt(event.target.value)}
 						/>
-					</div>
+					</Field>
 					<Button
 						type="submit"
 						disabled={

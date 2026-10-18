@@ -121,7 +121,7 @@ export function MyAgentApplicationDetailScreen({
 			<header className="page-heading">
 				<div>
 					<Link
-						className={buttonVariants({ variant: "ghost" })}
+						className={buttonVariants({ variant: "ghost", size: "sm" })}
 						to="/my-agents"
 					>
 						<ArrowLeft aria-hidden="true" />
