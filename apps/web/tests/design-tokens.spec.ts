@@ -683,7 +683,8 @@ test("reduced motion compresses every transition and animation duration", async 
 		}));
 	const normal = await durations();
 	expect(normal.nav).not.toBe("1e-06s");
-	expect(normal.buttons).toContain("0.18s");
+	// 按钮过渡：背景 / 边框 / 文字 .18s，按下位移 .06s（primitives B-15 按设计稿拆分）。
+	expect(normal.buttons).toContain("0.18s, 0.18s, 0.18s, 0.06s");
 	// 目录读取挂起时，加载指示器是页面上真实存在的动画元素。
 	api.holdDirectory();
 	await page.getByRole("combobox", { name: "共同 Owner 用户" }).click();
