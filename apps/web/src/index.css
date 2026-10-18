@@ -1998,6 +1998,15 @@ body {
 	border-top: 1px solid var(--border);
 	border-bottom: 0;
 }
+.management-content .detail-section > h2,
+.management-content .detail-section > div > h2,
+.management-content .detail-section .lifecycle-panel h2 {
+	font-family: ui-sans-serif, system-ui, sans-serif;
+	font-size: 16px;
+	font-weight: 620;
+	line-height: 1.4;
+	letter-spacing: 0;
+}
 .management-content .detail-section > legend {
 	float: none;
 	padding: 0;
