@@ -145,6 +145,8 @@ PR 的人工 UI 验收仍遵循[工作流 §7.4](../architecture/SPEC-ai-native-
 
 - `management.spec.ts`：申请/审批/配置的 pending、loading、empty、error、权限拒绝、长字段，
   移动 Sheet 的焦点、Escape、导航关闭及桌面断点关闭。
+- `my-agents-design.spec.ts`：我的 Agent `?tab=owned` 深链、刷新与返回，申请列表分批显示与带对象名的入口，
+  申请表单 Tab 顺序（高级配置收起与展开）、字段错误，以及申请详情的页头操作、三步进度和「下一步」。
 - `conversation-routing.spec.ts`：加载与 503 恢复、403 拒绝、不可用历史只读、深链/返回、
   窄屏历史切换与消息输入区。失败状态沿用对话标题层级，返回目录不产生业务写入。
 - `conversation-live.spec.ts`、`conversation-markdown.spec.ts`：消息、模型保存、执行详情、

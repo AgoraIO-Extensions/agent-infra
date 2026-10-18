@@ -61,25 +61,27 @@ export function AgentApplicationSubmissionScreen(
 		props.mode === "create"
 			? "创建一个新的 Agent。"
 			: agentApplicationEditActionLabels[props.action];
-	const cancelLabel = props.mode === "create" ? "退出创建" : "取消";
+	// 设计 .form-footer 左侧唯一的退出入口：ghost「取消」，页头不再放退出操作（N-03）。
 	const cancelAction = props.submitting ? (
-		<span
-			className={buttonVariants({ variant: "outline" })}
-			aria-disabled="true"
-		>
-			{cancelLabel}
+		<span className={buttonVariants({ variant: "ghost" })} aria-disabled="true">
+			取消
 		</span>
 	) : props.mode === "update" ? (
 		<Link
-			className={buttonVariants({ variant: "outline" })}
+			activeOptions={{ exact: true }}
+			className={buttonVariants({ variant: "ghost" })}
 			params={{ applicationId: props.application.applicationId }}
 			to="/my-agents/$applicationId"
 		>
 			取消
 		</Link>
 	) : (
-		<Link className={buttonVariants({ variant: "outline" })} to="/my-agents">
-			{cancelLabel}
+		<Link
+			activeOptions={{ exact: true }}
+			className={buttonVariants({ variant: "ghost" })}
+			to="/my-agents"
+		>
+			取消
 		</Link>
 	);
 	const validationError =
@@ -99,16 +101,19 @@ export function AgentApplicationSubmissionScreen(
 		<section aria-labelledby="agent-application-submission-heading">
 			<header className="page-heading">
 				<div>
-					<p className="page-eyebrow">我的管理 / 创建申请</p>
+					{/* eyebrow 与面包屑、页面标题使用同一页面名（page-chrome）。 */}
+					<p className="page-eyebrow">
+						{props.mode === "create"
+							? "我的管理 / 创建申请"
+							: "我的管理 / 编辑申请"}
+					</p>
 					<h1 id="agent-application-submission-heading">
 						{props.result ? "申请已提交" : heading}
 					</h1>
 					<p>
-						先说明使用场景，再配置
-						Owner、范围、模型和渠道。服务端会重新校验全部字段。
+						先说明使用场景，再配置 Owner、范围和模型。服务端会重新校验全部字段。
 					</p>
 				</div>
-				{props.mode === "create" ? cancelAction : null}
 			</header>
 			<div className="form-layout full-width-form application-form-layout">
 				<div className="application-form-card min-w-0">
@@ -187,13 +192,22 @@ export function AgentApplicationSubmissionScreen(
 						</Alert>
 					) : null}
 					{props.result ? (
-						<Link
-							className={buttonVariants()}
-							params={{ applicationId: props.result.applicationId }}
-							to="/my-agents/$applicationId"
-						>
-							查看申请详情
-						</Link>
+						<div className="card-actions application-submitted-actions">
+							<Link
+								className={buttonVariants()}
+								params={{ applicationId: props.result.applicationId }}
+								to="/my-agents/$applicationId"
+							>
+								查看申请详情
+							</Link>
+							<Link
+								activeOptions={{ exact: true }}
+								className={buttonVariants({ variant: "ghost" })}
+								to="/my-agents"
+							>
+								返回我的 Agent
+							</Link>
+						</div>
 					) : null}
 				</div>
 			</div>
