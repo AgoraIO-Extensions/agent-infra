@@ -217,6 +217,7 @@
 - 2026-10-18：补齐 L-06 登录过期提示：读取 `?reason=expired` 时在登录页以 role=status 提示任务继续处理，并为登录表单标记 aria-busy。
 - 2026-10-18：继续收敛 B-08 Tabs：管理页 Tab 统一 13px/650、0 圆角和 accent-ink 下划线。
 - 2026-10-18：补齐 N-10：Owner 配置、申请表单和 keyless model picker 的分区改为 section+h2，保留外层 fieldset 的字段禁用与内嵌字段语义；定向配置/申请测试 91/91 通过。
+- 2026-10-18：继续修复 N-14：高级配置展开与目录清空操作统一为至少 44px 触控高度。
 - 2026-10-18：补齐 W-03：工作台读取失败通知增加语义图标，401/authentication-required 提供 primary「重新登录」动作；定向 WorkBench 单测 13/13、401/403/404 E2E 3/3 通过。
 - 2026-10-18：补齐 B-05/B-06：表单 placeholder/focus token、Select 弹层下方定位与控件行高统一；Select 定向单测和 Web build 通过。
 - 2026-10-18：将 Platform API Skill importer 协议修复移出 UI 分支，避免 UI/Provider 契约混合；该后端回归应由独立 Issue/PR 承担。

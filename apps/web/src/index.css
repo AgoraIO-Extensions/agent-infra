@@ -2713,8 +2713,8 @@ a[class~="group/button"]:focus-visible {
 	font-size: 11px;
 }
 .application-advanced-toggle {
-	min-height: 36px;
-	padding: 7px 11px;
+	min-height: 44px;
+	padding: 9px 11px;
 	border: 1px solid var(--border);
 	border-radius: 10px;
 	color: var(--muted-foreground);
@@ -3216,7 +3216,7 @@ a[class~="group/button"]:focus-visible {
 .directory-clear {
 	display: inline-flex;
 	align-items: center;
-	min-height: 32px;
+	min-height: 44px;
 	margin-top: 4px;
 	padding: 5px 8px;
 	border: 0;
