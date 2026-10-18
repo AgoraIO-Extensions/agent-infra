@@ -747,7 +747,11 @@ for (const [status, message] of [
 		await expect(
 			recent.getByRole("link", { name: /继续对话|查看历史/ }),
 		).toHaveCount(0);
-		await expect(recent.getByRole("button")).toHaveCount(0);
+		if (status === 401) {
+			await expect(
+				recent.getByRole("button", { name: "重新登录", exact: true }),
+			).toHaveCount(1);
+		} else await expect(recent.getByRole("button")).toHaveCount(0);
 		await expect(
 			page.getByRole("heading", { name: "把下一步工作交给合适的 Agent。" }),
 		).toBeVisible();

@@ -372,6 +372,7 @@ describe("OpenDesign workbench presentation", () => {
 				},
 			});
 			const queryClient = new QueryClient();
+			const onRelogin = vi.fn();
 			function Consumer() {
 				const collections = useWorkbenchCollections({
 					identityKey: "controlled-login:administrator",
@@ -379,7 +380,9 @@ describe("OpenDesign workbench presentation", () => {
 					client,
 				});
 				refresh = collections.onRetry;
-				return <WorkbenchScreen {...empty} {...collections} />;
+				return (
+					<WorkbenchScreen {...empty} {...collections} onRelogin={onRelogin} />
+				);
 			}
 			const view = await showWorkbench(
 				<QueryClientProvider client={queryClient}>
@@ -404,7 +407,19 @@ describe("OpenDesign workbench presentation", () => {
 				expect(screen.queryByText("可用编程助手")).toBeNull();
 				expect(screen.queryByText("Owner 创建失败助手")).toBeNull();
 				expect(screen.queryByText("已驳回的本人申请")).toBeNull();
-				expect(screen.queryByRole("button", { name: /^重新加载/ })).toBeNull();
+				if (status === 401) {
+					expect(
+						screen.getAllByRole("button", { name: "重新登录" }),
+					).not.toHaveLength(0);
+					fireEvent.click(
+						screen.getAllByRole("button", { name: "重新登录" })[0],
+					);
+					expect(onRelogin).toHaveBeenCalledTimes(1);
+				} else {
+					expect(
+						screen.queryByRole("button", { name: /^重新加载/ }),
+					).toBeNull();
+				}
 				expect(
 					requests.every(
 						(request) => request.method === "GET" && request.body === null,
@@ -416,6 +431,29 @@ describe("OpenDesign workbench presentation", () => {
 			}
 		},
 	);
+
+	it("uses a semantic failure icon and a primary relogin action for expired sessions", async () => {
+		const onRelogin = vi.fn();
+		await showWorkbench(
+			<WorkbenchScreen
+				{...empty}
+				recent={{
+					kind: "unavailable",
+					retryable: false,
+					reason: "authentication-required",
+				}}
+				onRelogin={onRelogin}
+			/>,
+		);
+		const notice = screen.getByRole("alert");
+		expect(notice.querySelector("svg")).toBeTruthy();
+		expect(notice.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+		const relogin = screen.getByRole("button", { name: "重新登录" });
+		expect(relogin.className).toContain("bg-[var(--accent-ink)]");
+		fireEvent.click(relogin);
+		expect(onRelogin).toHaveBeenCalledOnce();
+		expect(screen.queryByRole("button", { name: /^重新加载/ })).toBeNull();
+	});
 
 	it("removes prior cards after read failures and removes the administrator region after role loss", async () => {
 		const view = await showWorkbench(

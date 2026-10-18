@@ -1,5 +1,13 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowRight, Bot, MessageSquare, Plus } from "lucide-react";
+import {
+	AlertCircle,
+	ArrowRight,
+	Bot,
+	LogIn,
+	MessageSquare,
+	Plus,
+	ShieldAlert,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -52,6 +60,7 @@ export type WorkbenchScreenProps = {
 	recent: WorkbenchRecentState;
 	administrator: boolean;
 	onRetry: () => void;
+	onRelogin?: () => void;
 	refreshing?: boolean;
 };
 
@@ -84,6 +93,7 @@ function ReadNotice({
 	state,
 	label,
 	onRetry,
+	onRelogin,
 	refreshing,
 }: {
 	state:
@@ -97,6 +107,7 @@ function ReadNotice({
 		  };
 	label: string;
 	onRetry: () => void;
+	onRelogin?: () => void;
 	refreshing?: boolean;
 }) {
 	if (state.kind === "loading")
@@ -117,15 +128,34 @@ function ReadNotice({
 					: reason === "invalid-response"
 						? `${label}返回的数据无法读取。`
 						: `${label}暂时无法读取。`;
+	const authenticationRequired = reason === "authentication-required";
+	const denied = state.kind === "denied" || reason === "denied";
+	const NoticeIcon = authenticationRequired
+		? LogIn
+		: denied
+			? ShieldAlert
+			: AlertCircle;
+	const handleRelogin = () => {
+		if (onRelogin) {
+			onRelogin();
+			return;
+		}
+		window.location.reload();
+	};
 	return (
 		<Alert>
+			<NoticeIcon aria-hidden="true" />
 			<AlertDescription className="workbench-read-notice">
 				<p>{message}</p>
-				{state.kind !== "denied" && state.retryable && (
+				{authenticationRequired ? (
+					<Button onClick={handleRelogin} disabled={refreshing}>
+						重新登录
+					</Button>
+				) : !denied && state.retryable ? (
 					<Button variant="outline" onClick={onRetry} disabled={refreshing}>
 						重新加载{label}
 					</Button>
-				)}
+				) : null}
 			</AlertDescription>
 		</Alert>
 	);
