@@ -187,7 +187,7 @@ describe("ConversationExecutionDetails", () => {
 		);
 
 		const status = screen.getAllByRole("region", { name: "模型状态" }).at(-1);
-		expect(status).toBeTruthy();
+		if (!status) throw new Error("模型状态区域未渲染");
 		expect(status.textContent).toContain("最终模型");
 		expect(status.textContent).not.toContain("旧模型");
 	});
