@@ -54,9 +54,18 @@ function EmptyMedia({
 	);
 }
 
-function EmptyTitle({ className, ...props }: React.ComponentProps<"h2">) {
+type EmptyTitleProps = React.ComponentProps<"h2"> & {
+	/** Use a heading only when the empty state introduces a real section. */
+	as?: "h2" | "h3" | "p" | "strong";
+};
+
+function EmptyTitle({
+	as: Component = "h2",
+	className,
+	...props
+}: EmptyTitleProps) {
 	return (
-		<h2
+		<Component
 			data-slot="empty-title"
 			className={cn("font-normal text-[15px] text-foreground", className)}
 			{...props}

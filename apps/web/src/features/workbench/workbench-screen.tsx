@@ -232,7 +232,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 									<MessageSquare aria-hidden="true" />
 								</EmptyMedia>
 								<EmptyHeader>
-									<EmptyTitle>暂无个人对话。</EmptyTitle>
+									<EmptyTitle as="strong">暂无个人对话。</EmptyTitle>
 									<EmptyDescription>
 										选择一个 Agent 开始新的个人对话。
 									</EmptyDescription>
