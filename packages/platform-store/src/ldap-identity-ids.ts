@@ -95,8 +95,13 @@ export class PostgresLdapIdentityIds {
 		candidateUserId: string,
 	): Promise<string> {
 		try {
+			const validatedIssuer = text(issuer);
+			const validatedUid = text(uid);
+			const validatedCandidate = id(candidateUserId);
+			const existing = await this.findByUid(validatedIssuer, validatedUid);
+			if (existing !== null) return existing;
 			const [row] = await this
-				.sql`insert into platform.ldap_identity_ids(issuer,uid,user_id) values(${text(issuer)},${text(uid)},${id(candidateUserId)}) on conflict (issuer,uid) do update set uid=excluded.uid returning user_id`;
+				.sql`insert into platform.ldap_identity_ids(issuer,uid,user_id) values(${validatedIssuer},${validatedUid},${validatedCandidate}) on conflict (issuer,uid) do update set uid=excluded.uid returning user_id`;
 			return id(row?.user_id);
 		} catch {
 			throw unavailable();
