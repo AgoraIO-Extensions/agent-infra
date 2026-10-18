@@ -731,6 +731,14 @@ export function ActiveConversation({
 					open={contextOpen}
 					onOpenChange={setContextOpen}
 				>
+					{latestExecution && (
+						<ConnectionInstallationPanel
+							key={`${conversationId}:${latestExecution}`}
+							conversationId={conversationId}
+							executionId={latestExecution}
+							client={conversationClient}
+						/>
+					)}
 					<BrowserOperationStatus
 						events={timeline.events}
 						executionId={latestExecution}
