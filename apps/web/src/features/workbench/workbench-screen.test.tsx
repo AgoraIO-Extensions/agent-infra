@@ -131,11 +131,17 @@ describe("OpenDesign workbench presentation", () => {
 			screen
 				.getAllByRole("heading", { level: 2 })
 				.map((heading) => heading.textContent),
-		).toEqual(["最近的个人对话", "待处理", "可用 Agent", "我的申请"]);
+		).toEqual([
+			"最近的个人对话",
+			"暂无个人对话。",
+			"待处理",
+			"可用 Agent",
+			"我的申请",
+		]);
 		expect(screen.getByText("暂无个人对话。")).toBeTruthy();
 		expect(screen.getByText("暂无需要修改的申请。")).toBeTruthy();
 		expect(
-			screen.getByRole("link", { name: "新对话" }).getAttribute("href"),
+			screen.getByRole("link", { name: "查看全部" }).getAttribute("href"),
 		).toBe("/agents?mode=conversation");
 		expect(
 			screen.getByRole("link", { name: "创建申请" }).getAttribute("href"),

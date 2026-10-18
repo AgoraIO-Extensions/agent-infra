@@ -1,9 +1,16 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowRight, Bot, Plus } from "lucide-react";
+import { ArrowRight, Bot, MessageSquare, Plus } from "lucide-react";
 import type { ReactNode } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import {
+	Empty,
+	EmptyDescription,
+	EmptyHeader,
+	EmptyMedia,
+	EmptyTitle,
+} from "@/components/ui/empty";
 import type {
 	AgentProjectionV2,
 	ConversationDetailProjectionV2,
@@ -180,17 +187,27 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 					title="最近的个人对话"
 					action={
 						<Link
-							className={buttonVariants({ variant: "outline" })}
+							className={buttonVariants({ variant: "ghost" })}
 							to="/agents"
 							search={{ mode: "conversation" }}
 						>
-							新对话
+							查看全部 <ArrowRight aria-hidden="true" />
 						</Link>
 					}
 				>
 					{recent.kind === "ready" ? (
 						recent.conversations.length === 0 ? (
-							<p>暂无个人对话。</p>
+							<Empty>
+								<EmptyMedia variant="icon">
+									<MessageSquare aria-hidden="true" />
+								</EmptyMedia>
+								<EmptyHeader>
+									<EmptyTitle>暂无个人对话。</EmptyTitle>
+									<EmptyDescription>
+										选择一个 Agent 开始新的个人对话。
+									</EmptyDescription>
+								</EmptyHeader>
+							</Empty>
 						) : (
 							<div className="workbench-grid">
 								{recent.conversations.map((conversation) => {
@@ -264,15 +281,6 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 						)
 					) : (
 						<ReadNotice {...props} state={recent} label="最近的个人对话" />
-					)}
-					{recent.kind === "ready" && recent.conversations.length > 0 && (
-						<Link
-							className={buttonVariants({ variant: "ghost" })}
-							to="/agents"
-							search={{ mode: "conversation" }}
-						>
-							查看全部 <ArrowRight aria-hidden="true" />
-						</Link>
 					)}
 				</WorkbenchSection>
 				<aside className="workbench-attention" aria-label="待处理">
