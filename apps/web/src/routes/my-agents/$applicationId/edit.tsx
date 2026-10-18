@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { RefreshCw } from "lucide-react";
+import { ArrowLeft, RefreshCw } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 
@@ -94,10 +94,11 @@ function EditAgentApplicationRoute() {
 						当前申请不可修改
 					</h1>
 					<Link
-						className={buttonVariants({ variant: "link", className: "px-0" })}
+						className={buttonVariants({ variant: "ghost", size: "sm" })}
 						params={{ applicationId }}
 						to="/my-agents/$applicationId"
 					>
+						<ArrowLeft aria-hidden="true" />
 						返回申请详情
 					</Link>
 				</section>

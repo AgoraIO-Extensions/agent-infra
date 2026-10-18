@@ -4,6 +4,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Field } from "@/components/ui/field";
+import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useResultFocus } from "@/hooks/use-result-focus";
@@ -111,7 +113,7 @@ function DraftRows<T extends string>({
 			{rows.map((row, index) => (
 				<div className="grid gap-3 sm:grid-cols-3" key={`${label}-${index}`}>
 					{fields.map((field) => (
-						<div className="space-y-2" key={field.key}>
+						<Field key={field.key}>
 							<Label
 								htmlFor={`configuration-${idPrefix}-${field.key}-${index}`}
 							>
@@ -129,7 +131,7 @@ function DraftRows<T extends string>({
 								type={field.type ?? "text"}
 								value={row[field.key]}
 							/>
-						</div>
+						</Field>
 					))}
 					<Button
 						variant="outline"
@@ -390,7 +392,7 @@ export function AgentConfigurationScreen({
 			<header className="page-heading">
 				<div>
 					<a
-						className={buttonVariants({ variant: "ghost" })}
+						className={buttonVariants({ variant: "ghost", size: "sm" })}
 						href={`/agents/${encodeURIComponent(agent.agentId)}`}
 					>
 						<ArrowLeft aria-hidden="true" />
@@ -459,353 +461,352 @@ export function AgentConfigurationScreen({
 						>
 							<fieldset
 								disabled={isDisabled}
-								className="min-w-0 space-y-6"
+								className="min-w-0"
 								aria-label="Agent 配置"
 							>
-								<fieldset className="min-w-0 space-y-4">
-									<legend className="font-semibold text-foreground text-sm">
-										Owner
-									</legend>
-									<DirectoryPicker
-										id="configuration-owner-ids"
-										kind="user"
-										label="共同 Owner 用户"
-										required
-										help="至少保留一名有效 Owner"
-										value={draft.coOwnerIds}
-										disabled={isDisabled}
-										error={ownerError}
-										onChange={(value) => {
-											setDraft((current) => ({
-												...current,
-												coOwnerIds: value,
-											}));
-											setOwnerError(undefined);
-										}}
-									/>
-								</fieldset>
-								<fieldset className="detail-section min-w-0 space-y-4 border-border border-t pt-5">
-									<legend className="font-semibold text-foreground text-sm">
-										使用范围
-									</legend>
-									<div className="grid min-w-0 gap-4 sm:grid-cols-2">
+								<FormSection title="Owner">
+									<div className="mt-4 space-y-4">
 										<DirectoryPicker
-											id="configuration-user-availability"
+											id="configuration-owner-ids"
 											kind="user"
-											label="可使用的用户"
-											help="可选；用于补充个人范围"
-											value={draft.userAvailabilityIds}
+											label="共同 Owner 用户"
+											required
+											help="至少保留一名有效 Owner"
+											value={draft.coOwnerIds}
 											disabled={isDisabled}
-											onChange={(value) =>
+											error={ownerError}
+											onChange={(value) => {
 												setDraft((current) => ({
 													...current,
-													userAvailabilityIds: value,
-												}))
-											}
-										/>
-										<DirectoryPicker
-											id="configuration-organization-availability"
-											kind="organization"
-											label="可使用的组织"
-											help="可选；组织范围会与用户范围合并"
-											value={draft.organizationAvailabilityIds}
-											disabled={isDisabled}
-											onChange={(value) =>
-												setDraft((current) => ({
-													...current,
-													organizationAvailabilityIds: value,
-												}))
-											}
+													coOwnerIds: value,
+												}));
+												setOwnerError(undefined);
+											}}
 										/>
 									</div>
-								</fieldset>
+								</FormSection>
+								<FormSection title="使用范围">
+									<div className="mt-4 space-y-4">
+										<div className="grid min-w-0 gap-4 sm:grid-cols-2">
+											<DirectoryPicker
+												id="configuration-user-availability"
+												kind="user"
+												label="可使用的用户"
+												help="可选；用于补充个人范围"
+												value={draft.userAvailabilityIds}
+												disabled={isDisabled}
+												onChange={(value) =>
+													setDraft((current) => ({
+														...current,
+														userAvailabilityIds: value,
+													}))
+												}
+											/>
+											<DirectoryPicker
+												id="configuration-organization-availability"
+												kind="organization"
+												label="可使用的组织"
+												help="可选；组织范围会与用户范围合并"
+												value={draft.organizationAvailabilityIds}
+												disabled={isDisabled}
+												onChange={(value) =>
+													setDraft((current) => ({
+														...current,
+														organizationAvailabilityIds: value,
+													}))
+												}
+											/>
+										</div>
+									</div>
+								</FormSection>
 								{!(
 									agent.source.kind === "custom" &&
 									agent.source.interactionMode === "self-managed"
 								) ? (
-									<fieldset
-										className="detail-section space-y-4 border-border border-t pt-5"
+									<FormSection
+										title="企微渠道"
 										aria-describedby="wecom-visibility"
 									>
-										<legend className="font-semibold text-foreground text-sm">
-											企微渠道
-										</legend>
-										<p
-											id="wecom-visibility"
-											className="text-muted-foreground text-sm"
-										>
-											群消息和 Agent 回复对群成员可见。Agent
-											可用范围只限制谁能触发
-											Agent，不能阻止群成员阅读已有内容；每位发送者的会话上下文仍独立。
-										</p>
-										<p className="text-muted-foreground text-sm">
-											自建应用和智能机器人都可在下方完成绑定，凭证通过受保护的接口提交。
-										</p>
-										<WecomBotSetup
-											key={`${agent.agentId}:wecom_bot`}
-											agentId={agent.agentId}
-											onUnbind={onSave}
-										/>
-										<WecomAppSetup
-											key={`${agent.agentId}:wecom_app`}
-											agentId={agent.agentId}
-											onUnbind={onSave}
-										/>
-									</fieldset>
+										<div className="mt-4 space-y-4">
+											<p
+												id="wecom-visibility"
+												className="text-muted-foreground text-sm"
+											>
+												群消息和 Agent 回复对群成员可见。Agent
+												可用范围只限制谁能触发
+												Agent，不能阻止群成员阅读已有内容；每位发送者的会话上下文仍独立。
+											</p>
+											<p className="text-muted-foreground text-sm">
+												自建应用和智能机器人都可在下方完成绑定，凭证通过受保护的接口提交。
+											</p>
+											<WecomBotSetup
+												key={`${agent.agentId}:wecom_bot`}
+												agentId={agent.agentId}
+												onUnbind={onSave}
+											/>
+											<WecomAppSetup
+												key={`${agent.agentId}:wecom_app`}
+												agentId={agent.agentId}
+												onUnbind={onSave}
+											/>
+										</div>
+									</FormSection>
 								) : null}
 								{agent.source.kind === "standard" ? (
-									<fieldset className="detail-section space-y-4 border-border border-t pt-5">
-										<legend className="font-semibold text-foreground text-sm">
-											模型配置
-										</legend>
-										<p className="text-muted-foreground text-sm">
-											{currentModels || "尚未配置可选模型"}
-										</p>
-										<p className="text-muted-foreground text-sm">
-											当前默认：
-											{currentDefaultModel
-												? `${currentDefaultModel.displayName}${agent.configuration.defaultReasoningLevel ? ` · ${agent.configuration.defaultReasoningLevel}` : ""}`
-												: "未提供"}
-										</p>
-										<p className="text-muted-foreground text-sm">
-											已有 Agent 默认 Relay Key 不回显；需要替换时填写新 Key。
-										</p>
-										{onReplaceDefaultRelayKey ? (
-											<div className="space-y-3">
-												<Label htmlFor="configuration-default-relay-key">
-													替换 Agent 默认 Relay Key
-												</Label>
-												<div className="flex flex-wrap gap-3">
-													<Input
-														autoComplete="new-password"
-														disabled={isDisabled || relayKeySubmitting}
-														id="configuration-default-relay-key"
-														onChange={(event) =>
-															keyCheck.setKey(event.target.value)
-														}
-														placeholder="输入新 Key"
-														type="password"
-														value={keyCheck.key}
-													/>
-													<Button
-														disabled={
-															isDisabled || keyCheck.checking || !keyCheck.typed
-														}
-														onClick={() => void keyCheck.runCheck()}
-														type="button"
-														variant="outline"
-													>
-														{keyCheck.checking ? "正在检查…" : "检查可用模型"}
-													</Button>
-													<Button
-														disabled={
-															isDisabled ||
-															relayKeySubmitting ||
-															!keyCheck.typed
-														}
-														onClick={replaceDefaultRelayKey}
-														type="button"
-													>
-														{relayKeySubmitting ? "正在替换…" : "替换默认 Key"}
-													</Button>
-												</div>
-												<p className="text-muted-foreground text-sm">
-													当前 Key
-													只显示已设置状态；输入值不会回显或写入普通业务投影。
-												</p>
-												{relayKeyResult?.isSet &&
-												!relayKeySubmitting &&
-												!relayKeyError ? (
-													<p
-														className="font-medium text-foreground text-sm"
-														role="status"
-													>
-														默认 Key 已替换，当前版本{" "}
-														{relayKeyResult.keyVersion}。
-													</p>
-												) : null}
-												{keyCheck.blocked ? (
-													<Alert variant="destructive">
-														<AlertDescription>
-															已填写新
-															Key，但还没有可保存的模型选择：请先点击「检查可用模型」，选好模型（至少一个模型，每个模型至少一个推理档位）后再保存；不想更换
-															Key 请清空输入框。
-														</AlertDescription>
-													</Alert>
-												) : null}
-												{keyCheck.error || relayKeyError ? (
-													<Alert variant="destructive">
-														<AlertDescription>
-															Key 校验或替换失败，请刷新后重试。
-														</AlertDescription>
-													</Alert>
-												) : null}
-												{keyCheck.candidates.length > 0 &&
-												!defaultRelayKeyManaged ? (
+									<FormSection title="模型配置">
+										<div className="mt-4 space-y-4">
+											<p className="text-muted-foreground text-sm">
+												{currentModels || "尚未配置可选模型"}
+											</p>
+											<p className="text-muted-foreground text-sm">
+												当前默认：
+												{currentDefaultModel
+													? `${currentDefaultModel.displayName}${agent.configuration.defaultReasoningLevel ? ` · ${agent.configuration.defaultReasoningLevel}` : ""}`
+													: "未提供"}
+											</p>
+											<p className="text-muted-foreground text-sm">
+												已有 Agent 默认 Relay Key 不回显；需要替换时填写新 Key。
+											</p>
+											{onReplaceDefaultRelayKey ? (
+												<div className="space-y-3">
+													<Label htmlFor="configuration-default-relay-key">
+														替换 Agent 默认 Relay Key
+													</Label>
+													<div className="flex flex-wrap gap-3">
+														<Input
+															autoComplete="new-password"
+															disabled={isDisabled || relayKeySubmitting}
+															id="configuration-default-relay-key"
+															onChange={(event) =>
+																keyCheck.setKey(event.target.value)
+															}
+															placeholder="输入新 Key"
+															type="password"
+															value={keyCheck.key}
+														/>
+														<Button
+															disabled={
+																isDisabled ||
+																keyCheck.checking ||
+																!keyCheck.typed
+															}
+															onClick={() => void keyCheck.runCheck()}
+															type="button"
+															variant="outline"
+														>
+															{keyCheck.checking ? "正在检查…" : "检查可用模型"}
+														</Button>
+														<Button
+															disabled={
+																isDisabled ||
+																relayKeySubmitting ||
+																!keyCheck.typed
+															}
+															onClick={replaceDefaultRelayKey}
+															type="button"
+														>
+															{relayKeySubmitting
+																? "正在替换…"
+																: "替换默认 Key"}
+														</Button>
+													</div>
 													<p className="text-muted-foreground text-sm">
-														Key 可用模型：
-														{keyCheck.candidates
-															.map(
-																(candidate) =>
-																	`${candidate.endpointId} · ${candidate.modelId}`,
-															)
-															.join("、")}
+														当前 Key
+														只显示已设置状态；输入值不会回显或写入普通业务投影。
 													</p>
-												) : null}
-												{keyCheck.candidates.length > 0 &&
-												defaultRelayKeyManaged ? (
-													<>
-														<KeylessModelPicker
-															candidates={keyCheck.candidates}
-															current={agent.configuration.modelOptions}
-															currentDefault={{
-																optionId:
-																	agent.configuration.defaultModelOptionId ??
-																	"",
-																level:
-																	agent.configuration.defaultReasoningLevel ??
-																	"",
-															}}
-															disabled={isDisabled}
-															idPrefix="configuration-keyless-model"
-															key={keyCheck.candidates
+													{relayKeyResult?.isSet &&
+													!relayKeySubmitting &&
+													!relayKeyError ? (
+														<p
+															className="font-medium text-foreground text-sm"
+															role="status"
+														>
+															默认 Key 已替换，当前版本{" "}
+															{relayKeyResult.keyVersion}。
+														</p>
+													) : null}
+													{keyCheck.blocked ? (
+														<Alert variant="destructive">
+															<AlertDescription>
+																已填写新
+																Key，但还没有可保存的模型选择：请先点击「检查可用模型」，选好模型（至少一个模型，每个模型至少一个推理档位）后再保存；不想更换
+																Key 请清空输入框。
+															</AlertDescription>
+														</Alert>
+													) : null}
+													{keyCheck.error || relayKeyError ? (
+														<Alert variant="destructive">
+															<AlertDescription>
+																Key 校验或替换失败，请刷新后重试。
+															</AlertDescription>
+														</Alert>
+													) : null}
+													{keyCheck.candidates.length > 0 &&
+													!defaultRelayKeyManaged ? (
+														<p className="text-muted-foreground text-sm">
+															Key 可用模型：
+															{keyCheck.candidates
 																.map(
 																	(candidate) =>
-																		`${candidate.endpointId}/${candidate.modelId}`,
+																		`${candidate.endpointId} · ${candidate.modelId}`,
 																)
-																.join("|")}
-															onChange={keyCheck.setSelection}
-														/>
-														<p className="text-muted-foreground text-sm">
-															选好后点击页面底部的「校验并保存」：新
-															Key、模型集合和其他修改会在同一次保存中生效。
+																.join("、")}
 														</p>
-													</>
-												) : null}
-											</div>
-										) : null}
-										{defaultRelayKeyManaged && !keyCheck.typed ? (
-											<div className="space-y-3">
-												{savedRelayKeyCandidatesLoading ? (
-													<p
-														className="text-muted-foreground text-sm"
-														role="status"
-													>
-														正在读取已保存 Key 的可用模型…
-													</p>
-												) : null}
-												{savedRelayKeyCandidatesError ? (
-													<Alert variant="destructive">
-														<AlertDescription className="flex flex-wrap items-center gap-3">
-															<span>
-																已保存的默认 Key 暂时无法读取可用模型。
-															</span>
-															{onRetrySavedRelayKeyCandidates ? (
-																<Button
-																	disabled={savedRelayKeyCandidatesLoading}
-																	onClick={onRetrySavedRelayKeyCandidates}
-																	type="button"
-																	variant="outline"
-																>
-																	{savedRelayKeyCandidatesLoading
-																		? "正在重试…"
-																		: "重新读取可用模型"}
-																</Button>
-															) : null}
-														</AlertDescription>
-													</Alert>
-												) : null}
-												{savedModelPicker}
-												{savedSelectionError ? (
-													<Alert variant="destructive">
-														<AlertDescription>
-															至少选择一个已保存 Key
-															可用的模型，并为每个模型保留一个推理档位。
-														</AlertDescription>
-													</Alert>
-												) : null}
-											</div>
-										) : null}
-										{defaultRelayKeyManaged ? null : (
-											<>
-												<Label className="min-h-11 gap-3">
-													<Checkbox
-														disabled={isDisabled}
-														checked={draft.replaceModels}
-														onCheckedChange={(checked) => {
-															setCatalogSelectionError(false);
-															setDraft((current) => ({
-																...current,
-																replaceModels: checked,
-																models: current.models,
-															}));
-														}}
-													/>
-													替换模型配置
-												</Label>
-												{draft.replaceModels
-													? (catalogModelPicker ?? (
-															<Alert variant="destructive">
-																<AlertDescription>
-																	模型目录暂时不可用，无法编辑模型配置；请刷新后重试。
-																</AlertDescription>
-															</Alert>
-														))
-													: null}
-											</>
-										)}
-									</fieldset>
+													) : null}
+													{keyCheck.candidates.length > 0 &&
+													defaultRelayKeyManaged ? (
+														<>
+															<KeylessModelPicker
+																candidates={keyCheck.candidates}
+																current={agent.configuration.modelOptions}
+																currentDefault={{
+																	optionId:
+																		agent.configuration.defaultModelOptionId ??
+																		"",
+																	level:
+																		agent.configuration.defaultReasoningLevel ??
+																		"",
+																}}
+																disabled={isDisabled}
+																idPrefix="configuration-keyless-model"
+																key={keyCheck.candidates
+																	.map(
+																		(candidate) =>
+																			`${candidate.endpointId}/${candidate.modelId}`,
+																	)
+																	.join("|")}
+																onChange={keyCheck.setSelection}
+															/>
+															<p className="text-muted-foreground text-sm">
+																选好后点击页面底部的「校验并保存」：新
+																Key、模型集合和其他修改会在同一次保存中生效。
+															</p>
+														</>
+													) : null}
+												</div>
+											) : null}
+											{defaultRelayKeyManaged && !keyCheck.typed ? (
+												<div className="space-y-3">
+													{savedRelayKeyCandidatesLoading ? (
+														<p
+															className="text-muted-foreground text-sm"
+															role="status"
+														>
+															正在读取已保存 Key 的可用模型…
+														</p>
+													) : null}
+													{savedRelayKeyCandidatesError ? (
+														<Alert variant="destructive">
+															<AlertDescription className="flex flex-wrap items-center gap-3">
+																<span>
+																	已保存的默认 Key 暂时无法读取可用模型。
+																</span>
+																{onRetrySavedRelayKeyCandidates ? (
+																	<Button
+																		disabled={savedRelayKeyCandidatesLoading}
+																		onClick={onRetrySavedRelayKeyCandidates}
+																		type="button"
+																		variant="outline"
+																	>
+																		{savedRelayKeyCandidatesLoading
+																			? "正在重试…"
+																			: "重新读取可用模型"}
+																	</Button>
+																) : null}
+															</AlertDescription>
+														</Alert>
+													) : null}
+													{savedModelPicker}
+													{savedSelectionError ? (
+														<Alert variant="destructive">
+															<AlertDescription>
+																至少选择一个已保存 Key
+																可用的模型，并为每个模型保留一个推理档位。
+															</AlertDescription>
+														</Alert>
+													) : null}
+												</div>
+											) : null}
+											{defaultRelayKeyManaged ? null : (
+												<>
+													<Label variant="option">
+														<Checkbox
+															disabled={isDisabled}
+															checked={draft.replaceModels}
+															onCheckedChange={(checked) => {
+																setCatalogSelectionError(false);
+																setDraft((current) => ({
+																	...current,
+																	replaceModels: checked,
+																	models: current.models,
+																}));
+															}}
+														/>
+														替换模型配置
+													</Label>
+													{draft.replaceModels
+														? (catalogModelPicker ?? (
+																<Alert variant="destructive">
+																	<AlertDescription>
+																		模型目录暂时不可用，无法编辑模型配置；请刷新后重试。
+																	</AlertDescription>
+																</Alert>
+															))
+														: null}
+												</>
+											)}
+										</div>
+									</FormSection>
 								) : null}
-								<fieldset className="detail-section space-y-4 border-border border-t pt-5">
-									<legend className="font-semibold text-foreground text-sm">
-										Secrets
-									</legend>
-									<p className="text-muted-foreground text-sm">
-										{currentSecrets || "尚未配置 Secret"}
-									</p>
-									<p className="text-muted-foreground text-sm">
-										Secret
-										仅显示设置状态与版本。填写同名的新值进行替换，原值不会回显。
-									</p>
-									<DraftRows
-										fields={
-											[
-												{ key: "name", label: "Secret 名称", required: true },
-												{
-													key: "value",
-													label: "新 Secret 值",
-													required: true,
-													type: "password",
-												},
-											] as const
-										}
-										idPrefix="secret"
-										label="Secret"
-										onChange={updateSecret}
-										onRemove={(index) =>
-											setDraft((current) => ({
-												...current,
-												secrets: current.secrets.filter(
-													(_, secretIndex) => secretIndex !== index,
-												),
-											}))
-										}
-										rows={draft.secrets}
-									/>
-									<Button
-										variant="outline"
-										onClick={() =>
-											setDraft((current) => ({
-												...current,
-												secrets: [...current.secrets, blankSecret()],
-											}))
-										}
-										type="button"
-									>
-										<PlusIcon aria-hidden="true" data-icon="inline-start" />
-										添加 Secret
-									</Button>
-								</fieldset>
+								<FormSection title="Secrets">
+									<div className="mt-4 space-y-4">
+										<p className="text-muted-foreground text-sm">
+											{currentSecrets || "尚未配置 Secret"}
+										</p>
+										<p className="text-muted-foreground text-sm">
+											Secret
+											仅显示设置状态与版本。填写同名的新值进行替换，原值不会回显。
+										</p>
+										<DraftRows
+											fields={
+												[
+													{ key: "name", label: "Secret 名称", required: true },
+													{
+														key: "value",
+														label: "新 Secret 值",
+														required: true,
+														type: "password",
+													},
+												] as const
+											}
+											idPrefix="secret"
+											label="Secret"
+											onChange={updateSecret}
+											onRemove={(index) =>
+												setDraft((current) => ({
+													...current,
+													secrets: current.secrets.filter(
+														(_, secretIndex) => secretIndex !== index,
+													),
+												}))
+											}
+											rows={draft.secrets}
+										/>
+										<Button
+											variant="outline"
+											onClick={() =>
+												setDraft((current) => ({
+													...current,
+													secrets: [...current.secrets, blankSecret()],
+												}))
+											}
+											type="button"
+										>
+											<PlusIcon aria-hidden="true" data-icon="inline-start" />
+											添加 Secret
+										</Button>
+									</div>
+								</FormSection>
 								<div className="form-footer border-border border-t pt-5">
 									<Button
 										aria-describedby={
@@ -829,15 +830,12 @@ export function AgentConfigurationScreen({
 						</form>
 					)}
 					{agent.source.kind === "custom" && !submittedResult ? (
-						<section className="detail-section space-y-4 border-border border-t pt-5">
-							<h2 className="font-semibold text-foreground text-lg">
-								镜像升级
-							</h2>
+						<FormSection title="镜像升级" className="space-y-4">
 							<p className="text-muted-foreground text-sm">
 								当前来源：{agentSourceReferenceLabel(agent)}
 							</p>
 							<div className="flex flex-col gap-3 sm:flex-row">
-								<div className="min-w-0 flex-1 space-y-2">
+								<Field className="flex-1">
 									<Label htmlFor="configuration-image-reference">
 										新镜像引用
 									</Label>
@@ -847,7 +845,7 @@ export function AgentConfigurationScreen({
 										onChange={(event) => setImageReference(event.target.value)}
 										value={imageReference}
 									/>
-								</div>
+								</Field>
 								<Button
 									variant="outline"
 									className="self-end"
@@ -858,7 +856,7 @@ export function AgentConfigurationScreen({
 									{submitting ? "升级中…" : "升级镜像"}
 								</Button>
 							</div>
-						</section>
+						</FormSection>
 					) : null}
 				</div>
 				{lifecycle ? (

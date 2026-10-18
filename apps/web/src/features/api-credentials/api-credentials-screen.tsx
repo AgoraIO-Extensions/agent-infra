@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
+import { Field, FieldLegend } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type {
@@ -215,7 +216,7 @@ export function ApiCredentialsScreen({
 						</p>
 					</div>
 					<fieldset className="space-y-3" aria-describedby={`${scopesId}-hint`}>
-						<legend className="font-medium text-sm">权限范围</legend>
+						<FieldLegend>权限范围</FieldLegend>
 						<p
 							id={`${scopesId}-hint`}
 							className="text-muted-foreground text-xs"
@@ -235,7 +236,7 @@ export function ApiCredentialsScreen({
 									/>
 									<Label
 										htmlFor={`${scopesId}-${scope.replace(":", "-")}`}
-										className="font-normal"
+										variant="option"
 									>
 										{personalApiCredentialScopeLabels[scope]}
 									</Label>
@@ -251,7 +252,7 @@ export function ApiCredentialsScreen({
 							</Alert>
 						) : null}
 					</fieldset>
-					<div className="space-y-2">
+					<Field>
 						<Label htmlFor={expiryId}>过期时间（可选）</Label>
 						<Input
 							id={expiryId}
@@ -262,7 +263,7 @@ export function ApiCredentialsScreen({
 						<p className="text-muted-foreground text-xs">
 							留空表示不过期；签发后只能进一步收窄权限或提前过期。
 						</p>
-					</div>
+					</Field>
 					<Button
 						type="submit"
 						disabled={!onIssue || scopes.length === 0 || isIssuing}

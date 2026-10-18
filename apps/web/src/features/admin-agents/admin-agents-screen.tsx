@@ -5,12 +5,13 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
+import { Field } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { SearchInput } from "@/components/ui/search-input";
 import {
 	Table,
 	TableBody,
@@ -125,7 +126,7 @@ export function AdminAgentsScreen({
 					<AdminUserGovernance />
 					<ApplicationMaterialGovernance />
 					<div className="admin-agent-filters">
-						<div className="space-y-2">
+						<Field>
 							<Label htmlFor={`${id}-status`}>产品状态</Label>
 							<NativeSelect
 								id={`${id}-status`}
@@ -147,24 +148,21 @@ export function AdminAgentsScreen({
 									</NativeSelectOption>
 								))}
 							</NativeSelect>
-						</div>
-						<div className="space-y-2">
-							<Label htmlFor={`${id}-search`}>搜索 Agent 或 Owner</Label>
-							<Input
-								id={`${id}-search`}
-								type="search"
-								maxLength={adminAgentQueryMaxLength}
-								value={filters.q ?? ""}
-								placeholder="输入名称、说明、来源或 Owner 标识"
-								onChange={(event) =>
-									onFiltersChange({
-										...filters,
-										q: event.target.value || undefined,
-										page: undefined,
-									})
-								}
-							/>
-						</div>
+						</Field>
+						<SearchInput
+							label="搜索 Agent 或 Owner"
+							id={`${id}-search`}
+							maxLength={adminAgentQueryMaxLength}
+							value={filters.q ?? ""}
+							placeholder="输入名称、说明、来源或 Owner 标识"
+							onChange={(event) =>
+								onFiltersChange({
+									...filters,
+									q: event.target.value || undefined,
+									page: undefined,
+								})
+							}
+						/>
 					</div>
 					<div className="admin-agent-summary">
 						<p role="status" aria-live="polite">
@@ -208,7 +206,11 @@ export function AdminAgentsScreen({
 						</Empty>
 					) : state.kind === "ready" ? (
 						<>
-							<Table className="admin-agent-table" aria-label="已创建 Agent">
+							<Table
+								className="admin-agent-table"
+								mobileLayout="cards"
+								aria-label="已创建 Agent"
+							>
 								<TableHeader>
 									<TableRow>
 										{["Agent", "来源", "Owner", "状态", "系统操作"].map(

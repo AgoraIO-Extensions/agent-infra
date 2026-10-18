@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { FormSection } from "@/components/ui/form-section";
 import {
 	getPlatformUserDisabledV2,
 	setPlatformUserDisabledV2,
@@ -89,65 +90,56 @@ export function AdminUserGovernance() {
 	}
 
 	return (
-		<section
-			aria-labelledby="admin-user-governance-heading"
-			className="detail-section space-y-4 border-border border-t pt-5"
+		<FormSection
+			title="员工访问控制"
+			description="从当前服务端目录选择员工后执行禁用或解除禁用。页面不显示或保存凭证，最终权限由服务端重新判断。"
 		>
-			<div>
-				<h2
-					id="admin-user-governance-heading"
-					className="font-semibold text-foreground text-sm"
+			<div className="mt-4 space-y-4">
+				<DirectoryPicker
+					describedBy="admin-user-governance-help"
+					help="使用当前目录记录选择员工"
+					id="admin-user-governance-user"
+					kind="user"
+					label="员工"
+					onChange={(value) => setUserId(oneUser(value))}
+					value={userId}
+				/>
+				<p
+					id="admin-user-governance-help"
+					className="text-muted-foreground text-xs"
 				>
-					员工访问控制
-				</h2>
-				<p className="mt-1 text-muted-foreground text-sm">
-					从当前服务端目录选择员工后执行禁用或解除禁用。页面不显示或保存凭证，最终权限由服务端重新判断。
+					{status === "loading"
+						? "当前状态：读取中…"
+						: status === "disabled"
+							? "当前状态：已禁用"
+							: status === "enabled"
+								? "当前状态：未禁用"
+								: status === "unavailable"
+									? "当前状态暂时无法确认，请刷新后重试。"
+									: "选择员工后读取当前服务端状态。"}
 				</p>
+				<div className="flex flex-wrap gap-3">
+					<Button
+						disabled={busy || status === "loading" || !userId}
+						onClick={() => void updateDisabled(true)}
+						variant="destructive"
+					>
+						{busy ? "提交中…" : "禁用员工"}
+					</Button>
+					<Button
+						disabled={busy || status === "loading" || !userId}
+						onClick={() => void updateDisabled(false)}
+						variant="outline"
+					>
+						解除禁用
+					</Button>
+				</div>
+				{message ? (
+					<Alert role="status">
+						<AlertDescription>{message}</AlertDescription>
+					</Alert>
+				) : null}
 			</div>
-			<DirectoryPicker
-				describedBy="admin-user-governance-help"
-				help="使用当前目录记录选择员工"
-				id="admin-user-governance-user"
-				kind="user"
-				label="员工"
-				onChange={(value) => setUserId(oneUser(value))}
-				value={userId}
-			/>
-			<p
-				id="admin-user-governance-help"
-				className="text-muted-foreground text-xs"
-			>
-				{status === "loading"
-					? "当前状态：读取中…"
-					: status === "disabled"
-						? "当前状态：已禁用"
-						: status === "enabled"
-							? "当前状态：未禁用"
-							: status === "unavailable"
-								? "当前状态暂时无法确认，请刷新后重试。"
-								: "选择员工后读取当前服务端状态。"}
-			</p>
-			<div className="flex flex-wrap gap-3">
-				<Button
-					disabled={busy || status === "loading" || !userId}
-					onClick={() => void updateDisabled(true)}
-					variant="destructive"
-				>
-					{busy ? "提交中…" : "禁用员工"}
-				</Button>
-				<Button
-					disabled={busy || status === "loading" || !userId}
-					onClick={() => void updateDisabled(false)}
-					variant="outline"
-				>
-					解除禁用
-				</Button>
-			</div>
-			{message ? (
-				<Alert role="status">
-					<AlertDescription>{message}</AlertDescription>
-				</Alert>
-			) : null}
-		</section>
+		</FormSection>
 	);
 }

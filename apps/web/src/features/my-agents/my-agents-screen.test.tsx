@@ -3,7 +3,13 @@ import {
 	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import {
+	act,
+	fireEvent,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { MyAgentsScreen } from "./my-agents-screen.js";
@@ -56,13 +62,19 @@ describe("MyAgentsScreen", () => {
 			/>,
 		);
 
-		const pendingLink = screen.getByRole("link", {
+		// 申请名称是标题而非链接（设计稿；N-14 触控目标），申请详情入口是同行的「查看申请」。
+		const pendingTitle = screen.getByRole("heading", {
 			name: /^Release assistant request/,
+		});
+		expect(pendingTitle.closest("a")).toBeNull();
+		const pendingRow = pendingTitle.closest("li");
+		expect(pendingRow?.className).toContain("application-row");
+		const pendingLink = within(pendingRow as HTMLElement).getByRole("link", {
+			name: "查看申请",
 		});
 		expect(pendingLink.getAttribute("href")).toBe(
 			"/my-agents/application%3Atenant%2F01%3Fdraft%23one%25",
 		);
-		expect(pendingLink.closest("li")?.className).toContain("application-row");
 		expect(screen.getByText("待审批")).toBeTruthy();
 		expect(screen.getByText("创建中")).toBeTruthy();
 		expect(

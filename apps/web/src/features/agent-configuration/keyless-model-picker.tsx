@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Field, FieldLegend } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
@@ -78,117 +79,120 @@ export function KeylessModelPicker({
 		}));
 
 	return (
-		<fieldset className="space-y-3 border-border border-t pt-4">
-			<legend className="font-semibold text-foreground text-sm">
-				选择允许的模型
-			</legend>
-			<p className="text-muted-foreground text-sm">
-				只列出该 Key 可见、且模板支持的模型。勾选后可调整推理档位和默认项。
-			</p>
-			{candidates.map((candidate) => {
-				const key = candidateKey(candidate);
-				const row = rows[key] ?? { checked: false, levels: [] };
-				return (
-					<div className="space-y-2" key={key}>
-						<Label className="min-h-11 gap-3">
-							<Checkbox
-								checked={row.checked}
-								disabled={disabled}
-								onCheckedChange={(checked) =>
-									setRow(key, {
-										checked,
-										// 首次勾选时默认启用全部档位，避免一个也不选。
-										levels:
-											checked && row.levels.length === 0
-												? [...candidate.reasoningLevels]
-												: row.levels,
-									})
-								}
-							/>
-							{candidate.endpointId} · {candidate.modelId}
-						</Label>
-						{row.checked ? (
-							<fieldset className="flex min-w-0 flex-wrap gap-4 pl-7">
-								<legend className="sr-only">
-									{candidate.modelId} 的推理档位
-								</legend>
-								{candidate.reasoningLevels.map((level) => (
-									<Label className="min-h-11 gap-2" key={level}>
-										<Checkbox
-											checked={row.levels.includes(level)}
-											disabled={disabled}
-											onCheckedChange={(checked) =>
-												setRow(key, {
-													levels: checked
-														? [...row.levels, level]
-														: row.levels.filter((item) => item !== level),
-												})
-											}
-										/>
-										{level}
-									</Label>
-								))}
-							</fieldset>
-						) : null}
-					</div>
-				);
-			})}
-			<div className="grid gap-3 sm:grid-cols-2">
-				<div className="space-y-2">
-					<Label htmlFor={`${idPrefix}-default-model`}>默认模型</Label>
-					<NativeSelect
-						disabled={disabled || selected.length === 0}
-						id={`${idPrefix}-default-model`}
-						onChange={(event) =>
-							setPreferred((existing) => ({
-								...existing,
-								optionId: event.target.value,
-							}))
-						}
-						value={defaults.optionId}
-					>
-						{selected.length === 0 ? (
-							<NativeSelectOption value="">请先选择模型</NativeSelectOption>
-						) : null}
-						{selected.map((candidate) => (
-							<NativeSelectOption
-								key={candidateKey(candidate)}
-								value={candidateKey(candidate)}
-							>
-								{candidate.endpointId} · {candidate.modelId}
-							</NativeSelectOption>
-						))}
-					</NativeSelect>
-				</div>
-				<div className="space-y-2">
-					<Label htmlFor={`${idPrefix}-default-reasoning`}>默认推理档位</Label>
-					<NativeSelect
-						disabled={disabled || defaultLevels.length === 0}
-						id={`${idPrefix}-default-reasoning`}
-						onChange={(event) =>
-							setPreferred((existing) => ({
-								...existing,
-								level: event.target.value,
-							}))
-						}
-						value={defaults.level}
-					>
-						{defaultLevels.length === 0 ? (
-							<NativeSelectOption value="">请先选择模型</NativeSelectOption>
-						) : null}
-						{defaultLevels.map((level) => (
-							<NativeSelectOption key={level} value={level}>
-								{level}
-							</NativeSelectOption>
-						))}
-					</NativeSelect>
-				</div>
-			</div>
-			{result.problem ? (
-				<p className="text-destructive text-sm" role="status">
-					{problemMessages[result.problem]}
+		// 分隔线放在外层，避免 legend 压在 fieldset 边框上。
+		<div className="border-border border-t pt-4">
+			<fieldset className="space-y-3">
+				<FieldLegend>选择允许的模型</FieldLegend>
+				<p className="text-muted-foreground text-sm">
+					只列出该 Key 可见、且模板支持的模型。勾选后可调整推理档位和默认项。
 				</p>
-			) : null}
-		</fieldset>
+				{candidates.map((candidate) => {
+					const key = candidateKey(candidate);
+					const row = rows[key] ?? { checked: false, levels: [] };
+					return (
+						<div className="space-y-2" key={key}>
+							<Label variant="option">
+								<Checkbox
+									checked={row.checked}
+									disabled={disabled}
+									onCheckedChange={(checked) =>
+										setRow(key, {
+											checked,
+											// 首次勾选时默认启用全部档位，避免一个也不选。
+											levels:
+												checked && row.levels.length === 0
+													? [...candidate.reasoningLevels]
+													: row.levels,
+										})
+									}
+								/>
+								{candidate.endpointId} · {candidate.modelId}
+							</Label>
+							{row.checked ? (
+								<fieldset className="flex min-w-0 flex-wrap gap-4 pl-7">
+									<legend className="sr-only">
+										{candidate.modelId} 的推理档位
+									</legend>
+									{candidate.reasoningLevels.map((level) => (
+										<Label variant="option" key={level}>
+											<Checkbox
+												checked={row.levels.includes(level)}
+												disabled={disabled}
+												onCheckedChange={(checked) =>
+													setRow(key, {
+														levels: checked
+															? [...row.levels, level]
+															: row.levels.filter((item) => item !== level),
+													})
+												}
+											/>
+											{level}
+										</Label>
+									))}
+								</fieldset>
+							) : null}
+						</div>
+					);
+				})}
+				<div className="grid gap-3 sm:grid-cols-2">
+					<Field>
+						<Label htmlFor={`${idPrefix}-default-model`}>默认模型</Label>
+						<NativeSelect
+							disabled={disabled || selected.length === 0}
+							id={`${idPrefix}-default-model`}
+							onChange={(event) =>
+								setPreferred((existing) => ({
+									...existing,
+									optionId: event.target.value,
+								}))
+							}
+							value={defaults.optionId}
+						>
+							{selected.length === 0 ? (
+								<NativeSelectOption value="">请先选择模型</NativeSelectOption>
+							) : null}
+							{selected.map((candidate) => (
+								<NativeSelectOption
+									key={candidateKey(candidate)}
+									value={candidateKey(candidate)}
+								>
+									{candidate.endpointId} · {candidate.modelId}
+								</NativeSelectOption>
+							))}
+						</NativeSelect>
+					</Field>
+					<Field>
+						<Label htmlFor={`${idPrefix}-default-reasoning`}>
+							默认推理档位
+						</Label>
+						<NativeSelect
+							disabled={disabled || defaultLevels.length === 0}
+							id={`${idPrefix}-default-reasoning`}
+							onChange={(event) =>
+								setPreferred((existing) => ({
+									...existing,
+									level: event.target.value,
+								}))
+							}
+							value={defaults.level}
+						>
+							{defaultLevels.length === 0 ? (
+								<NativeSelectOption value="">请先选择模型</NativeSelectOption>
+							) : null}
+							{defaultLevels.map((level) => (
+								<NativeSelectOption key={level} value={level}>
+									{level}
+								</NativeSelectOption>
+							))}
+						</NativeSelect>
+					</Field>
+				</div>
+				{result.problem ? (
+					<p className="text-destructive text-sm" role="status">
+						{problemMessages[result.problem]}
+					</p>
+				) : null}
+			</fieldset>
+		</div>
 	);
 }

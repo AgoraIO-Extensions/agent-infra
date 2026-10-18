@@ -1,5 +1,6 @@
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -33,7 +34,7 @@ export function ApplicationKeylessModelEditor({
 }: ApplicationKeylessModelEditorProps) {
 	return (
 		<div className="space-y-4">
-			<div className="space-y-2">
+			<Field>
 				<Label htmlFor="application-default-relay-key">
 					Agent 默认 Relay Key
 				</Label>
@@ -77,7 +78,7 @@ export function ApplicationKeylessModelEditor({
 						{error}
 					</p>
 				) : null}
-			</div>
+			</Field>
 			{keyCheck.candidates.length > 0 ? (
 				<KeylessModelPicker
 					candidates={keyCheck.candidates}

@@ -5,6 +5,12 @@ import {
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, test } from "@playwright/test";
 import { captureDesignContract, designViewports } from "./design-contract";
+import {
+	expectCardTable,
+	expectDesktopTable,
+	expectFieldControl,
+	expectFieldLabel,
+} from "./primitive-styles";
 
 const session = (role: "employee" | "admin") => ({
 	schemaVersion: 1,
@@ -541,6 +547,41 @@ for (const route of ["/audit", "/admin/audit"]) {
 		for (const viewport of designViewports) {
 			await page.setViewportSize(viewport);
 			await captureDesignContract(page, info, route.replaceAll("/", "-"));
+		}
+	});
+}
+
+for (const administrator of [false, true]) {
+	test(`${administrator ? "platform" : "personal"} audit filters and table follow the exported design, with mobile cards`, async ({
+		page,
+	}) => {
+		await fixture(page, administrator ? "admin" : "employee");
+		await page.goto(administrator ? "/admin/audit" : "/audit");
+		const table = page.locator("table.audit-table");
+		await expect(table).toBeVisible();
+		for (const viewport of [
+			{ width: 1440, height: 900 },
+			{ width: 768, height: 1024 },
+		]) {
+			await page.setViewportSize(viewport);
+			// B-04 / B-05：审计筛选的字段标签与输入框。
+			await expectFieldLabel(
+				page,
+				page.locator("label", { hasText: "起始时间" }),
+			);
+			await expectFieldControl(page, page.getByLabel("Agent ID"));
+			await expectDesktopTable(page, table);
+		}
+		for (const viewport of [
+			{ width: 390, height: 844 },
+			{ width: 320, height: 640 },
+		]) {
+			await page.setViewportSize(viewport);
+			await expectCardTable(
+				page,
+				table,
+				page.getByRole("button", { name: "查看审计详情" }).first(),
+			);
 		}
 	});
 }

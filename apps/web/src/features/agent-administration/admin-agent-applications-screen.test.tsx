@@ -32,6 +32,32 @@ const ordinaryUserSession = BrowserSessionProjectionV1Schema.parse({
 afterEach(cleanup);
 
 describe("AdminAgentApplicationsScreen", () => {
+	it("labels every non-action approval cell with its column header for mobile cards", () => {
+		render(
+			<AdminAgentApplicationsScreen
+				onDecision={vi.fn()}
+				session={{ kind: "ready", session: administratorSession }}
+				state={{ kind: "ready", applications: [pendingApplication] }}
+			/>,
+		);
+		const table = screen.getByRole("table", { name: "创建审批" });
+		const headers = within(table)
+			.getAllByRole("columnheader")
+			.map((header) => header.textContent);
+		const [row] = within(table).getAllByRole("row").slice(1);
+		const cells = within(row as HTMLElement).getAllByRole("cell");
+		expect(cells.map((cell) => cell.getAttribute("data-label"))).toEqual([
+			...headers.slice(0, 5),
+			null,
+		]);
+		expect(cells.at(-1)?.getAttribute("data-cell")).toBe("actions");
+		expect(
+			within(cells.at(-1) as HTMLElement).getByRole("button", {
+				name: "审阅申请",
+			}),
+		).toBeTruthy();
+	});
+
 	it("reviews real projected resource, Owner, model and scope details before approving", async () => {
 		const onDecision = vi.fn();
 		const application = {

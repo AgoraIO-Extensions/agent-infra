@@ -11,12 +11,13 @@ import {
 	DialogTrigger,
 } from "@/components/ui/dialog";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
+import { Field } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { SearchInput } from "@/components/ui/search-input";
 import {
 	Table,
 	TableBody,
@@ -295,7 +296,7 @@ function ApplicationReview({
 							});
 						}}
 					>
-						<div className="space-y-2">
+						<Field>
 							<Label htmlFor={reasonId}>驳回原因</Label>
 							<Textarea
 								ref={reasonInput}
@@ -315,7 +316,7 @@ function ApplicationReview({
 									<AlertDescription>请输入驳回原因。</AlertDescription>
 								</Alert>
 							)}
-						</div>
+						</Field>
 						<div className="flex flex-wrap gap-3">
 							<Button disabled={decisionSubmitting || resolved} type="submit">
 								{currentDecision?.decision === "reject"
@@ -447,17 +448,14 @@ export function AdminAgentApplicationsScreen({
 			) : (
 				<>
 					<div className="approval-filters">
-						<div>
-							<Label htmlFor={`${filterId}-search`}>搜索申请或 Owner</Label>
-							<Input
-								id={`${filterId}-search`}
-								type="search"
-								placeholder="搜索申请名称或 Owner"
-								value={search}
-								onChange={(event) => setSearch(event.target.value)}
-							/>
-						</div>
-						<div>
+						<SearchInput
+							label="搜索申请或 Owner"
+							id={`${filterId}-search`}
+							placeholder="搜索申请名称或 Owner"
+							value={search}
+							onChange={(event) => setSearch(event.target.value)}
+						/>
+						<Field>
 							<Label htmlFor={`${filterId}-source`}>来源</Label>
 							<NativeSelect
 								id={`${filterId}-source`}
@@ -471,7 +469,7 @@ export function AdminAgentApplicationsScreen({
 									</NativeSelectOption>
 								))}
 							</NativeSelect>
-						</div>
+						</Field>
 					</div>
 					{filteredApplications.length === 0 ? (
 						<Empty className="py-12">
@@ -480,7 +478,11 @@ export function AdminAgentApplicationsScreen({
 							</EmptyDescription>
 						</Empty>
 					) : (
-						<Table className="approval-table" aria-label="创建审批">
+						<Table
+							className="approval-table"
+							mobileLayout="cards"
+							aria-label="创建审批"
+						>
 							<TableHeader>
 								<TableRow>
 									<TableHead>申请</TableHead>
@@ -496,14 +498,14 @@ export function AdminAgentApplicationsScreen({
 							<TableBody>
 								{filteredApplications.map((application) => (
 									<TableRow key={application.applicationId}>
-										<TableCell>
+										<TableCell data-label="申请">
 											<strong>{application.name}</strong>
 											<small>{application.description}</small>
 											<Badge variant="outline" data-status={application.status}>
 												{agentManagementStatusLabels[application.status]}
 											</Badge>
 										</TableCell>
-										<TableCell>
+										<TableCell data-label="来源 / Owner">
 											{application.source.kind === "standard"
 												? application.source.templateId
 												: "manifest" in application.source
@@ -516,7 +518,7 @@ export function AdminAgentApplicationsScreen({
 													.join("、") || "未提供"}
 											</small>
 										</TableCell>
-										<TableCell>
+										<TableCell data-label="可用范围">
 											{application.configuration.availability
 												.map((target) =>
 													target.kind === "user"
@@ -525,17 +527,17 @@ export function AdminAgentApplicationsScreen({
 												)
 												.join("、") || "未额外指定"}
 										</TableCell>
-										<TableCell>
+										<TableCell data-label="模型">
 											{application.configuration.modelOptions
 												.map((model) => model.displayName)
 												.join("、") || "未提供模型选项"}
 										</TableCell>
-										<TableCell>
+										<TableCell data-label="提交时间">
 											<time dateTime={application.submittedAt}>
 												{new Date(application.submittedAt).toLocaleString()}
 											</time>
 										</TableCell>
-										<TableCell>
+										<TableCell data-cell="actions">
 											{application.status === "pending_approval" && (
 												<ApplicationReview
 													application={application}

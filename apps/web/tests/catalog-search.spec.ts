@@ -13,6 +13,11 @@ import {
 	type TestInfo,
 	test,
 } from "@playwright/test";
+import {
+	expectFieldControl,
+	expectFieldLabel,
+	expectSearchInput,
+} from "./primitive-styles";
 
 const baseAgent = AgentProjectionV2Schema.parse(
 	pilotFakeScenariosV2.starting.response.body,
@@ -379,4 +384,16 @@ test("template search and keyboard detail activation remain visible in short vie
 	}
 	expect(api.commands).toEqual([]);
 	expect(api.unexpected).toEqual([]);
+});
+
+test("directory search and filters use the shared search box and field styles", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/agents");
+	const search = page.getByRole("searchbox", { name: "搜索 Agent" });
+	await expect(search).toBeVisible();
+	await expectSearchInput(search);
+	await expectFieldLabel(page, page.locator("label", { hasText: "状态" }));
+	await expectFieldControl(page, page.getByLabel("状态", { exact: true }));
 });

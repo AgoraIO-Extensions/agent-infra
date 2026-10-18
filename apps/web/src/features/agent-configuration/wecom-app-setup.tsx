@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -280,7 +281,7 @@ export function WecomAppSetup({
 				</p>
 			) : null}
 			<div className="grid gap-4 sm:grid-cols-2">
-				<div className="space-y-2">
+				<Field>
 					<Label htmlFor="wecom-app-corporation-id">企业 ID</Label>
 					<Input
 						id="wecom-app-corporation-id"
@@ -303,8 +304,8 @@ export function WecomAppSetup({
 							{fieldErrors.corporationId}
 						</p>
 					) : null}
-				</div>
-				<div className="space-y-2">
+				</Field>
+				<Field>
 					<Label htmlFor="wecom-app-application-id">应用 ID</Label>
 					<Input
 						id="wecom-app-application-id"
@@ -328,8 +329,8 @@ export function WecomAppSetup({
 							{fieldErrors.applicationId}
 						</p>
 					) : null}
-				</div>
-				<div className="space-y-2">
+				</Field>
+				<Field>
 					<Label htmlFor="wecom-app-secret">应用 Secret</Label>
 					<Input
 						id="wecom-app-secret"
@@ -348,8 +349,8 @@ export function WecomAppSetup({
 							{fieldErrors.secret}
 						</p>
 					) : null}
-				</div>
-				<div className="space-y-2">
+				</Field>
+				<Field>
 					<Label htmlFor="wecom-app-token">回调 Token</Label>
 					<Input
 						id="wecom-app-token"
@@ -368,8 +369,8 @@ export function WecomAppSetup({
 							{fieldErrors.token}
 						</p>
 					) : null}
-				</div>
-				<div className="space-y-2 sm:col-span-2">
+				</Field>
+				<Field className="sm:col-span-2">
 					<Label htmlFor="wecom-app-encoding-aes-key">EncodingAESKey</Label>
 					<Input
 						id="wecom-app-encoding-aes-key"
@@ -393,12 +394,12 @@ export function WecomAppSetup({
 							{fieldErrors.encodingAesKey}
 						</p>
 					) : null}
-				</div>
+				</Field>
 			</div>
-			<Label className="min-h-11 flex-nowrap items-start gap-3 text-sm leading-6">
+			<Label variant="option" className="items-start">
 				<Checkbox
 					id="wecom-app-takeover"
-					className="mt-1"
+					className="mt-0.5"
 					checked={confirmed}
 					disabled={busy}
 					aria-invalid={!!fieldErrors.takeoverConfirmed}

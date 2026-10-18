@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -352,7 +353,7 @@ export function WecomBotSetup({
 				</p>
 			</div>
 			<div className="grid gap-4 sm:grid-cols-2">
-				<div className="space-y-2">
+				<Field>
 					<Label htmlFor="wecom-bot-id">Bot ID</Label>
 					<Input
 						id="wecom-bot-id"
@@ -361,8 +362,8 @@ export function WecomBotSetup({
 						onChange={(e) => setBotId(e.target.value)}
 						autoComplete="off"
 					/>
-				</div>
-				<div className="space-y-2">
+				</Field>
+				<Field>
 					<Label htmlFor="wecom-bot-secret">Secret</Label>
 					<Input
 						id="wecom-bot-secret"
@@ -372,11 +373,11 @@ export function WecomBotSetup({
 						onChange={(e) => setSecret(e.target.value)}
 						autoComplete="new-password"
 					/>
-				</div>
+				</Field>
 			</div>
-			<Label className="min-h-11 flex-nowrap items-start gap-3 text-sm leading-6">
+			<Label variant="option" className="items-start">
 				<Checkbox
-					className="mt-1"
+					className="mt-0.5"
 					checked={confirmed}
 					disabled={busy}
 					onCheckedChange={(value) => setConfirmed(value)}

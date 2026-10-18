@@ -18,6 +18,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
+import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -168,7 +169,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 				</Button>
 			</div>
 			{admin && (
-				<nav className="tabs" aria-label="审计范围">
+				<nav className="scope-tabs" aria-label="审计范围">
 					<Link
 						to="/audit"
 						className={buttonVariants({
@@ -200,17 +201,17 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 				className="audit-filters border-y py-5"
 				aria-label="审计查询条件"
 			>
-				<div>
+				<Field>
 					<Label htmlFor={fieldId("from")}>起始时间</Label>
 					<Input id={fieldId("from")} name="from" type="datetime-local" />
-				</div>
-				<div>
+				</Field>
+				<Field>
 					<Label htmlFor={fieldId("until")}>结束时间</Label>
 					<Input id={fieldId("until")} name="until" type="datetime-local" />
-				</div>
+				</Field>
 				{administrator && (
 					<>
-						<div>
+						<Field>
 							<Label htmlFor={fieldId("principalKind")}>主体类型</Label>
 							<NativeSelect id={fieldId("principalKind")} name="principalKind">
 								<NativeSelectOption value="">全部类型</NativeSelectOption>
@@ -219,22 +220,22 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 									应用
 								</NativeSelectOption>
 							</NativeSelect>
-						</div>
-						<div>
+						</Field>
+						<Field>
 							<Label htmlFor={fieldId("principalId")}>主体 ID</Label>
 							<Input
 								id={fieldId("principalId")}
 								name="principalId"
 								maxLength={128}
 							/>
-						</div>
+						</Field>
 					</>
 				)}
-				<div>
+				<Field>
 					<Label htmlFor={fieldId("agentId")}>Agent ID</Label>
 					<Input id={fieldId("agentId")} name="agentId" maxLength={128} />
-				</div>
-				<div>
+				</Field>
+				<Field>
 					<Label htmlFor={fieldId("action")}>动作</Label>
 					<NativeSelect id={fieldId("action")} name="action">
 						<NativeSelectOption value="">全部动作</NativeSelectOption>
@@ -244,8 +245,8 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 							</NativeSelectOption>
 						))}
 					</NativeSelect>
-				</div>
-				<div>
+				</Field>
+				<Field>
 					<Label htmlFor={fieldId("result")}>结果</Label>
 					<NativeSelect id={fieldId("result")} name="result">
 						<NativeSelectOption value="">全部结果</NativeSelectOption>
@@ -255,15 +256,15 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 							</NativeSelectOption>
 						))}
 					</NativeSelect>
-				</div>
-				<div>
+				</Field>
+				<Field>
 					<Label htmlFor={fieldId("executionId")}>Execution ID</Label>
 					<Input
 						id={fieldId("executionId")}
 						name="executionId"
 						maxLength={128}
 					/>
-				</div>
+				</Field>
 				{formFailure && (
 					<Alert className="col-span-full" variant="destructive">
 						<AlertDescription>{formFailure}</AlertDescription>
@@ -327,7 +328,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					</Empty>
 				) : (
 					!formFailure && (
-						<Table className="audit-table">
+						<Table className="audit-table" mobileLayout="cards">
 							<TableHeader>
 								<TableRow>
 									<TableHead>时间</TableHead>
