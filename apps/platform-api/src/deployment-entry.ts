@@ -40,6 +40,7 @@ const {
 	nativeMetadata,
 	nativeMetadataWorker: configuredNativeMetadataWorker,
 	nativeMetadataResolveRequest,
+	nativeMetadataRequestRegistry,
 	nativeMetadataCurrent,
 	nativeCapabilityInvocation,
 	nativeCapabilityMetadata,
@@ -175,7 +176,9 @@ if (
 	throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
 if (
 	nativeMetadataResolveRequest !== undefined &&
-	nativeMetadataWorker === undefined
+	(nativeMetadataWorker === undefined ||
+		nativeMetadataRequestRegistry === undefined ||
+		nativeMetadataCurrent === undefined)
 )
 	throw new Error("PLATFORM_NATIVE_METADATA_CONFIGURATION_INVALID");
 
@@ -196,6 +199,7 @@ export function createPlatformApiAssemblyInput() {
 		(nativeMetadataWorker && nativeMetadataResolveRequest
 			? {
 					reader: createProductionNativeMetadataReaderFromWorkerV1({
+						requestRegistry: nativeMetadataRequestRegistry,
 						resolveRequest: nativeMetadataResolveRequest,
 						worker: nativeMetadataWorker,
 					}),

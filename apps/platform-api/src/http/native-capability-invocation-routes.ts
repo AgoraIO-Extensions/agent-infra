@@ -5,6 +5,10 @@ import type {
 } from "@agent-infra/platform-core";
 import type { Hono } from "hono";
 import type { z } from "zod";
+import {
+	createRuntimeNativeMetadataRequestContextV1,
+	type RuntimeNativeMetadataRequestContextV1,
+} from "../runtime-native-metadata-request-context.js";
 import { requestMetadata } from "./common.js";
 import {
 	type IdentityAdapter,
@@ -29,6 +33,7 @@ export interface NativeCapabilityInvocationRouteDependenciesV1 {
 	readonly admitWithIdentity?: (input: {
 		readonly identity: IdentityContext;
 		readonly request: NativeCapabilityAdmissionRequestV1;
+		readonly requestContext: RuntimeNativeMetadataRequestContextV1;
 	}) => Promise<NativeCapabilityAdmissionDecisionV1>;
 }
 
@@ -71,38 +76,62 @@ export function registerNativeCapabilityInvocationRoutesV1(
 		throw new TypeError("Native capability invocation admission is invalid");
 	app.post(path, async (context) => {
 		const metadata = requestMetadata(context.req.raw);
-		let identity: IdentityContext;
+		const requestContext = createRuntimeNativeMetadataRequestContextV1({
+			signal: context.req.raw.signal,
+			authenticate: () =>
+				resolveIdentity(
+					dependencies.identity,
+					context.req.raw,
+					metadata.traceId,
+				),
+		});
 		try {
-			identity = await resolveIdentity(
-				dependencies.identity,
-				context.req.raw,
-				metadata.traceId,
+			const identity = await requestContext.authenticate();
+			let body: HttpRequest;
+			try {
+				const parsed = await requestContext.run(async () => {
+					try {
+						return { valid: true as const, value: await context.req.json() };
+					} catch {
+						return { valid: false as const };
+					}
+				});
+				if (!parsed.valid)
+					return context.json({ outcome: "invalid_parameters" }, 400);
+				body = requestSchema.parse(parsed.value);
+			} catch {
+				if (requestContext.signal.aborted)
+					return context.json({ outcome: "unavailable" }, 503);
+				return context.json({ outcome: "invalid_parameters" }, 400);
+			}
+			const request = await requestContext.run(() =>
+				dependencies.buildRequest({
+					identity,
+					conversationId: context.req.param("conversationId"),
+					body,
+				}),
 			);
-		} catch {
-			return context.json({ outcome: "unavailable" }, 503);
-		}
-		let body: HttpRequest;
-		try {
-			body = requestSchema.parse(await context.req.json());
-		} catch {
-			return context.json({ outcome: "invalid_parameters" }, 400);
-		}
-		try {
-			const request = await dependencies.buildRequest({
-				identity,
-				conversationId: context.req.param("conversationId"),
-				body,
-			});
-			const decision = dependencies.admitWithIdentity
-				? await dependencies.admitWithIdentity({ identity, request })
-				: await dependencies.admit?.(request);
+			const decision = await requestContext.run(() =>
+				dependencies.admitWithIdentity
+					? dependencies.admitWithIdentity({
+							identity,
+							request,
+							requestContext,
+						})
+					: dependencies.admit
+						? dependencies.admit(request)
+						: Promise.resolve(undefined),
+			);
 			if (!decision) throw new Error("Native capability admission unavailable");
+			await requestContext.verifyDelivery(identity);
 			return context.json(
 				sanitizedDecision(decision),
 				outcomeStatus(decision.outcome),
 			);
 		} catch {
 			return context.json({ outcome: "unavailable" }, 503);
+		} finally {
+			requestContext.close();
 		}
 	});
 }

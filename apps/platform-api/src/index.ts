@@ -348,12 +348,21 @@ export {
 	type RuntimeModelDirectoryTransportV1,
 } from "./runtime-model-selection-reader.js";
 export {
+	createRuntimeNativeMetadataCurrentCheckerV1,
+	createRuntimeNativeMetadataRequestRegistryV1,
+	type RuntimeNativeMetadataRequestRegistryV1,
+} from "./runtime-native-metadata-current.js";
+export {
 	createRuntimeNativeMetadataReaderV1,
 	createRuntimeNativeMetadataWorkerReaderV1,
 	type RuntimeNativeMetadataProofIssuerV1,
 	type RuntimeNativeMetadataTransportV1,
 	type RuntimeNativeMetadataWorkerGatewayV1,
 } from "./runtime-native-metadata-reader.js";
+export {
+	createRuntimeNativeMetadataRequestContextV1,
+	type RuntimeNativeMetadataRequestContextV1,
+} from "./runtime-native-metadata-request-context.js";
 export { createRuntimeNativeMetadataScopeResolverV1 } from "./runtime-native-metadata-scope-resolver.js";
 export { createPlatformWorkerNativeMetadataGatewayClientV1 } from "./runtime-native-metadata-worker-client.js";
 export { createWorkerSavedKeyCandidatesTransportV1 } from "./saved-key-candidates-transport.js";

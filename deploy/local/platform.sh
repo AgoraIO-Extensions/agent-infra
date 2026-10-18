@@ -50,6 +50,7 @@ database_service="$worker_release-postgres"
 database_endpoint="$database_service-docker"
 directory_service="enterprise-directory-sync"
 directory_endpoint="enterprise-directory-sync-e2e"
+native_metadata_api_service="$worker_release-native-metadata-api"
 helm_target=(helm)
 
 worker_context() {
@@ -155,6 +156,7 @@ worker_values() {
     --set enterpriseDirectorySync.enabled=false
     --set web.placement=external
     --set platformApi.placement=external
+    --set-string "platformWorker.nativeMetadataGateway.platformApiOrigin=http://$native_metadata_api_service:3000"
     --set-string "database.secretRef.name=$database_service"
     --set-string database.secretRef.key=url
     --set-string platformWorker.deploymentModule=file:///app/dist/deployment.mjs
@@ -230,6 +232,29 @@ read_native_metadata_worker_route() {
   }
 }
 
+# 终止一个后台进程并等它退出，最多约 2 秒，避免新的转发复用端口时撞上旧进程。
+# 由 start_detached 启动的进程是自己进程组的组长，按进程组终止，连同监督循环正在运行的
+# kubectl / sleep 一起回收：监督循环刚启动 kubectl、还没记下子进程 PID 时收到 TERM，会漏掉
+# 这个子进程（#2741）。旧版脚本启动的进程不是组长，照旧只终止它本身。
+stop_detached() {
+  local pid=$1 target pgid state
+  # PID 文件损坏或被篡改为 0 / 负数时，`kill -- -0` 会向调用方自己的进程组发信号。
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 0
+  pgid=$(ps -p "$pid" -o pgid= 2>/dev/null | tr -d ' ')
+  target=$pid
+  [[ "$pgid" == "$pid" ]] && target=-$pid
+  kill -TERM -- "$target" >/dev/null 2>&1 || true
+  for _ in {1..40}; do
+    if [[ "$target" == -* ]]; then
+      kill -0 -- "$target" >/dev/null 2>&1 || return 0
+    else
+      state=$(ps -p "$pid" -o stat= 2>/dev/null || true)
+      [[ -z "$state" || "$state" == Z* ]] && return 0
+    fi
+    sleep 0.05
+  done
+}
+
 stop_native_metadata_forward() {
   local pid command
   if [[ -r "$native_metadata_forward_pid_file" ]]; then
@@ -237,15 +262,7 @@ stop_native_metadata_forward() {
     if [[ "$pid" =~ ^[0-9]+$ ]]; then
       command=$(ps -p "$pid" -o command= 2>/dev/null || true)
       if [[ "$command" == *"native-metadata-port-forward-supervisor"* ]]; then
-        kill "$pid" >/dev/null 2>&1 || true
-        # The supervisor owns the kubectl child. Wait until its trap has
-        # delivered TERM to that child before a new forward reuses the port.
-        for _ in {1..40}; do
-          local state
-          state=$(ps -p "$pid" -o stat= 2>/dev/null || true)
-          [[ -z "$state" || "$state" == Z* ]] && break
-          sleep 0.05
-        done
+        stop_detached "$pid"
       fi
     fi
   fi
@@ -254,7 +271,7 @@ stop_native_metadata_forward() {
     if [[ "$pid" =~ ^[0-9]+$ ]]; then
       command=$(ps -p "$pid" -o command= 2>/dev/null || true)
       if [[ "$command" == *"native-metadata-proxy.mjs"* ]]; then
-        kill "$pid" >/dev/null 2>&1 || true
+        stop_detached "$pid"
       fi
     fi
   fi
@@ -287,6 +304,25 @@ resolve_native_metadata_forward_bind_address() {
     return 1
   }
   printf '%s' "$address"
+}
+
+# 在新会话里启动一个长驻后台进程，标准输出与错误追加到日志，打印它的 PID（#2741）。
+# 用 `&` 启动的进程和调用方同属一个会话和进程组：终端关闭（SIGHUP）或执行器在命令结束时
+# 整组终止，都会让它们跟着退出。macOS 没有 setsid 命令，这里用 node 的 detached spawn
+# （setsid）脱离调用方；stop 仍按 PID 文件校验命令行后回收。
+start_detached() {
+  local log=$1
+  shift
+  node -e '
+    const { spawn } = require("node:child_process");
+    const { openSync } = require("node:fs");
+    const [log, command, ...args] = process.argv.slice(1);
+    const output = openSync(log, "a");
+    const child = spawn(command, args, { detached: true, stdio: ["ignore", output, output] });
+    if (!child.pid) process.exit(1);
+    child.unref();
+    process.stdout.write(String(child.pid));
+  ' "$log" "$@"
 }
 
 prepare_native_metadata_forward() {
@@ -351,7 +387,8 @@ prepare_native_metadata_forward() {
   # 会退出，之后 API 一直 503（#2726）。由监督循环有界退避地重启它；PID 文件记录监督循环，
   # stop 时它连同当前的 kubectl 一起退出。
   : > "$native_metadata_forward_log"
-  bash -c '
+  local pid
+  pid=$(start_detached "$native_metadata_forward_log" bash -c '
     child=
     sleeper=
     stop() {
@@ -374,9 +411,11 @@ prepare_native_metadata_forward() {
       sleeper=
       if [ "$delay" -lt 5 ]; then delay=$((delay + 1)); fi
     done
-  ' native-metadata-port-forward-supervisor "${kube_target[@]}" port-forward --address 127.0.0.1 "service/$native_metadata_service_name" "$forward_port:80" \
-    >>"$native_metadata_forward_log" 2>&1 </dev/null &
-  local pid=$!
+  ' native-metadata-port-forward-supervisor "${kube_target[@]}" port-forward --address 127.0.0.1 "service/$native_metadata_service_name" "$forward_port:80") || {
+    echo "Local native metadata Worker port-forward could not start" >&2
+    stop_native_metadata_forward
+    return 1
+  }
   printf '%s' "$pid" > "$native_metadata_forward_pid_file"
   # 等 kubectl 报告本地监听就绪；不在这里连接转发端口：每个连接都会让 kubectl 去连 Worker
   # 网关，网关还没监听时 kubectl 会退出（#2726）。
@@ -398,8 +437,12 @@ prepare_native_metadata_forward() {
     stop_native_metadata_forward
     return 1
   fi
-  node deploy/local/native-metadata-proxy.mjs "$native_metadata_forward_bind_address" "$port" "$forward_port" "$compose_subnet" >"$native_metadata_proxy_log" 2>&1 &
-  pid=$!
+  : > "$native_metadata_proxy_log"
+  pid=$(start_detached "$native_metadata_proxy_log" node deploy/local/native-metadata-proxy.mjs "$native_metadata_forward_bind_address" "$port" "$forward_port" "$compose_subnet") || {
+    echo "Local native metadata host proxy could not start" >&2
+    stop_native_metadata_forward
+    return 1
+  }
   printf '%s' "$pid" > "$native_metadata_proxy_pid_file"
   sleep 0.1
   if ! kill -0 "$pid" >/dev/null 2>&1; then
@@ -547,6 +590,115 @@ render_proxy_config() {
     return 1
   }
   node deploy/local/render-nginx.ts "$PLATFORM_LOCAL_PROXY_TOKEN_FILE" "$PLATFORM_LOCAL_NGINX_CONFIG"
+}
+
+check_native_metadata_api_ownership() {
+  local resource
+  for resource in service endpointslice; do
+    if ! "${kube_target[@]}" get "$resource/$native_metadata_api_service" --ignore-not-found -o json |
+      node -e '
+        let input = "";
+        process.stdin.on("data", (chunk) => { input += chunk; });
+        process.stdin.on("end", () => {
+          if (!input.trim()) return;
+          try {
+            const labels = JSON.parse(input).metadata?.labels ?? {};
+            if (labels["app.kubernetes.io/managed-by"] !== "agent-infra-local" ||
+                labels["agent-infra.agora.io/local-project"] !== process.argv[1]) process.exitCode = 1;
+          } catch { process.exitCode = 1; }
+        });
+      ' "$PLATFORM_LOCAL_PROJECT"; then
+      echo "Local native metadata API $resource is not owned by this project" >&2
+      return 1
+    fi
+  done
+}
+
+check_native_metadata_api_network_ownership() {
+  local container aliases network_alias
+  container=$("${compose[@]}" ps --all -q platform-api) || return 1
+  if [[ -n "$container" ]]; then
+    network_alias="$native_metadata_api_service-${container:0:12}"
+    aliases=$("${docker_target[@]}" container inspect "$container" --format '{{with index .NetworkSettings.Networks "kind"}}{{join .Aliases " "}}{{end}}') || return 1
+    if [[ -n "$aliases" ]]; then
+      [[ "$aliases" == "$network_alias" ]] || {
+        echo "Local Platform API is connected to kind outside this project" >&2
+        return 1
+      }
+    fi
+  fi
+}
+
+disconnect_native_metadata_api() {
+  check_native_metadata_api_ownership || return 1
+  check_native_metadata_api_network_ownership || return 1
+  local container aliases
+  container=$("${compose[@]}" ps --all -q platform-api) || return 1
+  if [[ -n "$container" ]]; then
+    aliases=$("${docker_target[@]}" container inspect "$container" --format '{{with index .NetworkSettings.Networks "kind"}}{{join .Aliases " "}}{{end}}') || return 1
+    if [[ -n "$aliases" ]]; then
+      "${docker_target[@]}" network disconnect kind "$container" || return 1
+    fi
+  fi
+  "${kube_target[@]}" delete "endpointslice/$native_metadata_api_service" "service/$native_metadata_api_service" --ignore-not-found
+}
+
+connect_native_metadata_api() {
+  check_native_metadata_api_ownership || return 1
+  if [[ "$native_metadata_route_enabled" != true ]]; then
+    disconnect_native_metadata_api
+    return
+  fi
+  local container aliases network_alias api_ip
+  container=$("${compose[@]}" ps -q platform-api) || return 1
+  [[ -n "$container" ]] || { echo "Local Platform API container is missing" >&2; return 1; }
+  network_alias="$native_metadata_api_service-${container:0:12}"
+  aliases=$("${docker_target[@]}" container inspect "$container" --format '{{with index .NetworkSettings.Networks "kind"}}{{join .Aliases " "}}{{end}}') || return 1
+  if [[ -z "$aliases" ]]; then
+    "${docker_target[@]}" network connect --alias "$network_alias" kind "$container" || return 1
+  elif [[ "$aliases" != "$network_alias" ]]; then
+    echo "Local Platform API is connected to kind outside this project" >&2
+    return 1
+  fi
+  api_ip=$("${docker_target[@]}" container inspect "$container" --format '{{(index .NetworkSettings.Networks "kind").IPAddress}}') || return 1
+  [[ "$api_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "Local Platform API has no IPv4 address on the kind network" >&2
+    return 1
+  }
+  "${kube_target[@]}" apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: $native_metadata_api_service
+  labels:
+    app.kubernetes.io/managed-by: agent-infra-local
+    agent-infra.agora.io/local-project: $PLATFORM_LOCAL_PROJECT
+spec:
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: $native_metadata_api_service
+  labels:
+    app.kubernetes.io/managed-by: agent-infra-local
+    agent-infra.agora.io/local-project: $PLATFORM_LOCAL_PROJECT
+    kubernetes.io/service-name: $native_metadata_api_service
+    endpointslice.kubernetes.io/managed-by: agent-infra-local
+addressType: IPv4
+ports:
+  - name: http
+    port: 3000
+    protocol: TCP
+endpoints:
+  - addresses: ["$api_ip"]
+    conditions:
+      ready: true
+EOF
 }
 
 check_database_resource_ownership() {
@@ -935,6 +1087,8 @@ case "${1:-}" in
     check_database_resource_ownership
     check_database_network_ownership
     validate_deployment_material
+    check_native_metadata_api_ownership
+    check_native_metadata_api_network_ownership
     render_proxy_config
     "${compose[@]}" stop web platform-api
     "${compose[@]}" up --detach --wait postgres object-storage
@@ -957,6 +1111,11 @@ case "${1:-}" in
     "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
     prepare_native_metadata_forward
     if ! "${compose[@]}" up --detach --wait --force-recreate --no-deps platform-api; then
+      stop_native_metadata_forward
+      exit 1
+    fi
+    if ! connect_native_metadata_api; then
+      "${compose[@]}" stop platform-api
       stop_native_metadata_forward
       exit 1
     fi
@@ -995,6 +1154,7 @@ case "${1:-}" in
       "${compose[@]}" stop enterprise-directory-sync
       disconnect_directory_sync
       disconnect_worker_database
+      disconnect_native_metadata_api
       "${compose[@]}" stop object-storage postgres
       rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE"
       exit 0
@@ -1019,6 +1179,7 @@ case "${1:-}" in
     "${compose[@]}" stop enterprise-directory-sync
     disconnect_directory_sync
     disconnect_worker_database
+    disconnect_native_metadata_api
     "${compose[@]}" stop object-storage postgres
     rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "$PLATFORM_LOCAL_NATIVE_METADATA_WORKER_TOKEN_FILE"
     ;;

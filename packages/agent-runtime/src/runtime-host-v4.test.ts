@@ -379,6 +379,25 @@ it("executes an admitted V4 native command through the Driver seam without text"
 	const result = await f.host.nativeCapabilityV4(delivery(request));
 	expect(result.result).toEqual({ outcome: "accepted", status: "completed" });
 	expect(await f.driver.sideEffectCount()).toBe(2);
+	const bytes = await readFile(f.path, "utf8");
+	f.expire();
+	await expect(
+		f.host.resolveNativeMetadataSessionRef(
+			{
+				schemaVersion: 1,
+				principal: request.principal,
+				channelId: request.channelId,
+				agentId: request.agentId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				sessionGeneration: request.sessionGeneration,
+				authorizationRevision: "metadata-authorization",
+			},
+			result.hostSessionRef,
+		),
+	).resolves.toBe(f.store.nativeSessionRef(result.hostSessionRef));
+	expect(await readFile(f.path, "utf8")).toBe(bytes);
+	expect(await f.driver.sideEffectCount()).toBe(2);
 });
 
 it("passes the request-scoped file bridge only through the Driver execution context", async () => {

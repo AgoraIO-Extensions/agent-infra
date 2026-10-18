@@ -195,10 +195,24 @@ if (
 const validatedNativeMetadataGatewaySelectorInstance =
 	nativeMetadataGatewaySelectorInstance as string;
 const nativeMetadataGateway =
-	configuredNativeMetadataGateway ??
-	(nativeMetadataGatewayPort === undefined
+	nativeMetadataGatewayPort === undefined
 		? undefined
-		: { port: nativeMetadataGatewayPort });
+		: {
+				...configuredNativeMetadataGateway,
+				port: nativeMetadataGatewayPort,
+				...(configuredNativeMetadataGateway?.current ||
+				configuredNativeMetadataGateway?.platformApiCurrent ||
+				!process.env.PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN
+					? {}
+					: {
+							platformApiCurrent: {
+								baseUrl:
+									process.env
+										.PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN,
+								serviceToken,
+							},
+						}),
+			};
 const workloadInput =
 	nativeMetadataGatewayPort === undefined
 		? configuredWorkloadInput

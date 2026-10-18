@@ -6,6 +6,8 @@ import type {
 	PostgresConversationQueryV1,
 } from "@agent-infra/platform-store";
 import type { IdentityContext } from "./http/identity.js";
+import type { CurrentAuthorization } from "./runtime-native-metadata-current.js";
+import type { RuntimeNativeMetadataRequestContextV1 } from "./runtime-native-metadata-request-context.js";
 
 type Selector = "status" | "commands" | "skills";
 
@@ -25,8 +27,19 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 	>;
 	readonly now?: () => number;
 	readonly lifetimeMs?: number;
+	readonly authorize: (
+		identity: IdentityContext,
+		request: {
+			readonly schemaVersion: 1;
+			readonly operation: "conversation.read";
+			readonly conversationId: string;
+		},
+	) => Promise<CurrentAuthorization>;
 }) {
-	if (typeof options.query?.readNativeMetadataObjectScopeV1 !== "function")
+	if (
+		typeof options.query?.readNativeMetadataObjectScopeV1 !== "function" ||
+		typeof options.authorize !== "function"
+	)
 		throw new TypeError("Runtime native metadata scope options are invalid");
 	const lifetimeMs =
 		options.lifetimeMs ?? RuntimeNativeMetadataProofMaximumLifetimeMsV1;
@@ -42,9 +55,32 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 		readonly executionId: string;
 		readonly selector: Selector;
 		readonly signal: AbortSignal;
+		readonly requestContext?: RuntimeNativeMetadataRequestContextV1;
 	}): Promise<RuntimeNativeMetadataBindingResponseV1 | null> => {
 		try {
-			if (input.identity.accountStatus !== "active") return null;
+			const now = options.now ?? Date.now;
+			const readStartedAt = input.requestContext?.readStartedAt ?? now();
+			const expiresAt = Math.min(
+				input.requestContext?.expiresAt ?? Number.MAX_SAFE_INTEGER,
+				readStartedAt + lifetimeMs,
+			);
+			if (
+				input.identity.accountStatus !== "active" ||
+				input.signal.aborted ||
+				expiresAt <= now()
+			)
+				return null;
+			const decision = await options.authorize(input.identity, {
+				schemaVersion: 1,
+				operation: "conversation.read",
+				conversationId: input.conversationId,
+			});
+			if (
+				decision.outcome !== "allowed" ||
+				input.signal.aborted ||
+				expiresAt <= now()
+			)
+				return null;
 			const scope: NativeMetadataObjectScopeResponseV1 | undefined =
 				await options.query.readNativeMetadataObjectScopeV1({
 					scope: {
@@ -56,12 +92,26 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 					executionId: input.executionId,
 					signal: input.signal,
 				});
-			if (scope?.channelId !== "web") return null;
+			if (
+				scope?.channelId !== "web" ||
+				input.signal.aborted ||
+				expiresAt <= now()
+			)
+				return null;
+			if (
+				decision.authority.actorId !== input.identity.userId ||
+				decision.authority.agentId !== scope.agentId ||
+				decision.authority.channelId !== scope.channelId
+			)
+				return null;
+			input.requestContext?.confirmPolicy(
+				decision.authority,
+				input.conversationId,
+			);
 			const originalHostScopeRef = scope.originalHostScopeRef;
 			if (!originalHostScopeRef) return null;
 			const { originalHostScopeRef: _originalHostScopeRef, ...publicScope } =
 				scope;
-			const readStartedAt = (options.now ?? Date.now)();
 			if (!Number.isSafeInteger(readStartedAt) || readStartedAt < 1)
 				return null;
 			return {
@@ -70,7 +120,7 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 				selector: input.selector,
 				scope: publicScope,
 				readStartedAt,
-				expiresAt: readStartedAt + lifetimeMs,
+				expiresAt,
 				requestId: requestId(),
 				traceId: requestId(),
 				originalHostScopeRef,

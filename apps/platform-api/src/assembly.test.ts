@@ -24,6 +24,7 @@ import {
 	startPlatformApi,
 	startPlatformApiFromDeployment,
 } from "./index.js";
+import { createRuntimeNativeMetadataRequestRegistryV1 } from "./runtime-native-metadata-current.js";
 
 const servers: { close(callback?: (error?: Error) => void): void }[] = [];
 
@@ -122,7 +123,7 @@ describe("Platform API production assembly", () => {
 			"Platform API failed to start: codex_model_profiles_missing (template codex); see deploy/platform-api/README.md",
 		);
 	});
-	it("wires deployment-owned Runtime model and native metadata transports", () => {
+	it("wires deployment-owned Runtime model and native metadata transports", async () => {
 		const modelSelection = { read: vi.fn() };
 		const identity = {
 			schemaVersion: 1 as const,
@@ -180,7 +181,38 @@ describe("Platform API production assembly", () => {
 		});
 		expect(assembly.dependencies.nativeMetadataCurrent?.check).toBeDefined();
 		expect(assembly.dependencies.nativeCapabilityInvocation).toBeDefined();
-		return assembly.close();
+		await assembly.close();
+		let override: ReturnType<typeof assemblePlatformApi> | undefined;
+		try {
+			expect(() => {
+				override = assemblePlatformApi({
+					...baseInput,
+					nativeMetadataCurrent: {
+						serviceToken: "worker-service-token",
+						check: async () => ({ outcome: "unavailable" as const }),
+					},
+				});
+			}).toThrow("PLATFORM_NATIVE_METADATA_REQUEST_REGISTRY_REQUIRED");
+		} finally {
+			await override?.close();
+		}
+		const requestRegistry = createRuntimeNativeMetadataRequestRegistryV1();
+		const clear = vi.spyOn(requestRegistry, "clear");
+		const current = {
+			serviceToken: "worker-service-token",
+			check: async () => ({ outcome: "unavailable" as const }),
+		};
+		const shared = assemblePlatformApi({
+			...baseInput,
+			nativeMetadataWorker: {
+				...baseInput.nativeMetadataWorker,
+				requestRegistry,
+			},
+			nativeMetadataCurrent: current,
+		});
+		expect(shared.dependencies.nativeMetadataCurrent).toBe(current);
+		await shared.close();
+		expect(clear).toHaveBeenCalledOnce();
 	});
 
 	it("rejects a duplicate explicit native capability authority", () => {

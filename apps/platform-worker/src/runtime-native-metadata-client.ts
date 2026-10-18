@@ -96,7 +96,11 @@ export function createWorkerRuntimeNativeMetadataClientV1(options: {
 					JSON.parse(await responseText(response)),
 				);
 				const { projection: _projection, ...responseBinding } = result;
-				const { proof: _proof, ...requestBinding } = request;
+				const {
+					proof: _proof,
+					apiRequestSourceRef: _source,
+					...requestBinding
+				} = request;
 				if (
 					runtimeNativeMetadataRequestSigningPayloadV1(responseBinding) !==
 					runtimeNativeMetadataRequestSigningPayloadV1(requestBinding)

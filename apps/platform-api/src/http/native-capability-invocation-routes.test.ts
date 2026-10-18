@@ -109,6 +109,70 @@ it("rejects malformed input before admission", async () => {
 	expect(admit).not.toHaveBeenCalled();
 });
 
+it("keeps invalid JSON a client error without calling admission", async () => {
+	const admit = vi.fn();
+	const response = await app({ admit }).request(
+		"/api/v2/conversations/conversation/native-capability/invoke",
+		{
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: "{",
+		},
+	);
+	expect(response.status).toBe(400);
+	expect(await response.json()).toEqual({ outcome: "invalid_parameters" });
+	expect(admit).not.toHaveBeenCalled();
+});
+
+it.each(["admit", "admitWithIdentity"] as const)(
+	"bounds ignored cancellation in %s and discards a late result",
+	async (method) => {
+		let entered!: () => void;
+		const started = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		let release!: () => void;
+		const hold = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const admission = async () => {
+			entered();
+			await hold;
+			return { outcome: "unavailable" as const };
+		};
+		const controller = new AbortController();
+		const pending = app({ [method]: admission }).fetch(
+			new Request(
+				"http://native.invalid/api/v2/conversations/conversation/native-capability/invoke",
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(body),
+					signal: controller.signal,
+				},
+			),
+		);
+		await started;
+		controller.abort();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const early = await Promise.race([
+			pending,
+			new Promise<null>((resolve) => {
+				timer = setTimeout(() => resolve(null), 200);
+			}),
+		]);
+		if (timer) clearTimeout(timer);
+		release();
+		const response = early ?? (await pending);
+		expect(
+			early,
+			"cancelled admission must not retain its original HTTP request",
+		).not.toBeNull();
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ outcome: "unavailable" });
+	},
+);
+
 it.each([
 	["replayed", 202],
 	["conflict", 409],

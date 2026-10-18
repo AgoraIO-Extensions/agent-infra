@@ -41,6 +41,9 @@ metadata:
     app.kubernetes.io/component: platform-api
 spec:
   replicas: 1
+  # Request-local current confirmation must reach the only live API instance.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
