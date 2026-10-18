@@ -1,5 +1,6 @@
 import {
 	SkillHubAgentBindingStatusResponseV1Schema,
+	SkillHubInstallationResponseV1Schema,
 	SkillHubProjectPageV1Schema,
 	SkillHubPublicationResponseV1Schema,
 } from "@agent-infra/contracts/pilot";
@@ -11,6 +12,7 @@ import {
 	bindSkillHubAgentVersionV1,
 	createSkillHubProjectV1,
 	importSkillHubVersionV1,
+	installSkillHubVersionV1,
 	listSkillHubProjectsV1,
 	publishSkillHubVersionV1,
 	readSkillHubAgentBindingsV1,
@@ -25,6 +27,8 @@ import type {
 	CreateSkillHubProjectV1Responses,
 	ImportSkillHubVersionV1Errors,
 	ImportSkillHubVersionV1Responses,
+	InstallSkillHubVersionV1Errors,
+	InstallSkillHubVersionV1Responses,
 	ListSkillHubProjectsV1Errors,
 	ListSkillHubProjectsV1Responses,
 	PublishSkillHubVersionV1Data,
@@ -37,6 +41,7 @@ import type {
 	RevokeSkillHubVersionV1Errors,
 	RevokeSkillHubVersionV1Responses,
 	SkillHubAgentBindingCommandV1,
+	SkillHubInstallationCommandV1,
 	SkillHubProjectCreateV1,
 	SkillHubProjectPageV1,
 	SkillHubProviderImportRequestV1,
@@ -212,6 +217,38 @@ export async function reviewSkillHubVersion(
 	const data = requireData("审核操作失败。", result);
 	const parsed = SkillHubPublicationResponseV1Schema.safeParse(data);
 	if (!parsed.success) throw requestError("审核响应无效。", result);
+	return parsed.data;
+}
+
+/**
+ * 把固定版本加入当前用户的库。主体由调用方传入当前会话的 userId，
+ * 服务端仍会核对主体就是本人；409 表示服务端判定已安装。
+ */
+export async function installSkillHubVersion(
+	body: SkillHubInstallationCommandV1,
+	idempotencyKey: string,
+	client?: Client,
+) {
+	const result: Awaited<
+		RequestResult<
+			InstallSkillHubVersionV1Responses,
+			InstallSkillHubVersionV1Errors,
+			false
+		>
+	> = await installSkillHubVersionV1({
+		client,
+		body,
+		headers: { "Idempotency-Key": idempotencyKey },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	const data = requireData("加入我的库失败。", result);
+	const parsed = SkillHubInstallationResponseV1Schema.safeParse(data);
+	if (!parsed.success || parsed.data.installation.state !== "installed")
+		throw requestError("安装响应无效。", {
+			...result,
+			error: { retryable: false },
+		});
 	return parsed.data;
 }
 

@@ -59,13 +59,13 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `Label` | 上述表单的可访问名称 |
 | `Badge` | 状态 chip（`tone`，服务端状态经 `lib/status-tone.ts` 的 `statusTone()` 映射）与非状态标签（`variant="tag"`） |
 | `Sidebar` / `Sheet` / `Breadcrumb` / `Avatar` | 桌面与移动导航、当前位置及登录身份 |
-| `Tabs` | 我的申请与已创建 Agent 切换 |
-| `Dialog` / `ConfirmDialog` | 审批、个人 Relay Key；撤回、生命周期、撤销凭证、停用应用、禁用员工等确认 |
+| `Tabs` | 我的申请与已创建 Agent 切换，Skill 详情的用途与版本 |
+| `Dialog` / `ConfirmDialog` | 审批、Skill 审阅；撤回、生命周期、撤销凭证、撤销 Skill 版本、停用应用、禁用员工等确认 |
 | `Alert` / `Empty` | 设计 notice（`tone` 与默认图标）与空态 |
 | `Spinner` / `LoadingLine` | 读取中的加载态，`PageLoadingState` 内部使用 |
 | `Toast` | 根布局常驻的补充确认，页面通过 `useToast()` 调用 |
 | `Card` / `AgentMark` | 独立卡片的悬停，Agent 标识的字形与 tone |
-| `Table` | Agent 输出的 Markdown 表格 |
+| `Table` | Agent 输出的 Markdown 表格，API 凭证页的个人凭证表格（窄屏按页面样式转行卡片） |
 | `Timestamp` | 工作台、审批、审计、应用管理、个人 API 凭证、我的 Agent 与申请详情的时间 |
 | `IdentifierText` | Agent 管理 Owner、审批与审计中未解析人员的 ID 短形式，审计详情的可复制主体 ID |
 | `Listbox` / `ListboxOption` | 目录选择器结果层；候选不进入 Tab 序列，由输入框的 `aria-activedescendant` 导航 |
@@ -81,7 +81,7 @@ Badge、Alert 的旧变体名只作兼容层，供未迁移的对话页与浏览
 
 普通导航保留 TanStack `Link` 或语义链接；需要控件外观时使用 `buttonVariants`，不改变链接角色。
 段落、列表、定义列表、表单和 fieldset 保持语义 HTML。
-申请详情和 Agent 详情使用索引路由，确保编辑和配置子路径能渲染对应页面。
+申请详情、Agent 详情和我的 Skill 使用索引路由，确保编辑、配置和创建子路径能渲染对应页面。
 
 ## 静态规则
 
