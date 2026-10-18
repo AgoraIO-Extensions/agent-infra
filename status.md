@@ -202,6 +202,9 @@
 
 ## 变更日志
 
+- 2026-10-18：修复 NI-76：登录错误框 selector 提升为 `.login-form .login-error`，抵消全局 Alert 圆角覆盖并锁定 10px；Biome、登录单测 11/11、Web 类型检查通过；完整 auth 浏览器用例受共享端口/既有 validity 断言阻塞，未等待 CI。
+- 2026-10-18：修复 NI-82/NI-63：恢复运行实例、执行详情关闭作用域/键盘路径、Agent loading 文案、Relay Key 失败状态等被削弱的行为断言；定向 85/85、Biome、Web build 通过。
+- 2026-10-18：修复 NI-81：补个人历史分页 cursor、identity 切换和迟到响应隔离的 ConversationScreen UI 测试；定向 68/68、Biome、Web 类型检查通过。
 - 2026-10-18：修复 NI-75：工作台最近对话空态改用非 heading 的 `strong`，避免与分区 h2 争夺层级；Workbench 单测 13/13、Biome 和 Web 类型检查通过。
 - 2026-10-18：修复 NI-74：Skill 管理页 eyebrow 与导航/面包屑统一为「我的管理 / 我的 Skill」；SkillHub/shell 定向 39/39 通过。
 - 2026-10-18：修复 NI-73：补充登录空提交后的逐字段错误清除回归，输入账号或密码后对应错误与 aria-invalid/描述立即清除；登录定向 11/11 通过。
@@ -250,7 +253,7 @@
 - **R4-16**：Connection Developers 当前提供 Browser API；Consumer/declaration 管理和默认 Delegated runtime 未装配，OAuth/Delegated 机器链路无法在本仓库独立完成，按用户要求跳过。
 - **V-01**：现有 Browser Playwright 可运行项和导出矩阵已通过；报告要求的完整设计导出逐页对照仍需独立证据，不能以现有 13 个桌面导出项替代。
 - **报告终审 NI-01~NI-67**：本文件的原始整改清单记录早期实现状态；终审新增问题正在按 P1/P2 分批复核，修复后以代码、单测和浏览器证据更新对应条目。
-- 当前仍需继续复核的终审项包括登录错误框圆角、短视口细节、执行详情与页面 CSS 分层、标题/设计文档一致性、平台 Skill 导入回归测试拆分，以及剩余的审计/审批增量测试清理。
+- 当前仍需继续复核的终审项包括短视口细节、执行详情与页面 CSS 分层、标题/设计文档一致性、平台 Skill 导入回归测试拆分，以及 Connection OAuth/Delegated 与完整设计导出证据。
 
 ## 证据边界
 
