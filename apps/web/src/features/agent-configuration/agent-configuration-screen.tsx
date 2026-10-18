@@ -513,10 +513,16 @@ export function AgentConfigurationScreen({
 								className="min-w-0 space-y-6"
 								aria-label="Agent 配置"
 							>
-								<fieldset className="min-w-0 space-y-4">
-									<legend className="font-semibold text-foreground text-sm">
+								<section
+									aria-labelledby="configuration-owner-heading"
+									className="configuration-section min-w-0 space-y-4"
+								>
+									<h2
+										className="configuration-section-heading"
+										id="configuration-owner-heading"
+									>
 										Owner
-									</legend>
+									</h2>
 									<DirectoryPicker
 										id="configuration-owner-ids"
 										kind="user"
@@ -534,11 +540,17 @@ export function AgentConfigurationScreen({
 											setOwnerError(undefined);
 										}}
 									/>
-								</fieldset>
-								<fieldset className="detail-section min-w-0 space-y-4 border-border border-t pt-5">
-									<legend className="font-semibold text-foreground text-sm">
+								</section>
+								<section
+									aria-labelledby="configuration-scope-heading"
+									className="configuration-section detail-section min-w-0 space-y-4 border-border border-t pt-5"
+								>
+									<h2
+										className="configuration-section-heading"
+										id="configuration-scope-heading"
+									>
 										使用范围
-									</legend>
+									</h2>
 									<div className="grid min-w-0 gap-4 sm:grid-cols-2">
 										<DirectoryPicker
 											id="configuration-user-availability"
@@ -569,18 +581,22 @@ export function AgentConfigurationScreen({
 											}
 										/>
 									</div>
-								</fieldset>
+								</section>
 								{!(
 									agent.source.kind === "custom" &&
 									agent.source.interactionMode === "self-managed"
 								) ? (
-									<fieldset
+									<section
+										aria-labelledby="configuration-wecom-heading"
 										className="detail-section space-y-4 border-border border-t pt-5"
 										aria-describedby="wecom-visibility"
 									>
-										<legend className="font-semibold text-foreground text-sm">
+										<h2
+											className="configuration-section-heading"
+											id="configuration-wecom-heading"
+										>
 											企微渠道
-										</legend>
+										</h2>
 										<p
 											id="wecom-visibility"
 											className="text-muted-foreground text-sm"
@@ -602,13 +618,19 @@ export function AgentConfigurationScreen({
 											agentId={agent.agentId}
 											onUnbind={onSave}
 										/>
-									</fieldset>
+									</section>
 								) : null}
 								{agent.source.kind === "standard" ? (
-									<fieldset className="detail-section space-y-4 border-border border-t pt-5">
-										<legend className="font-semibold text-foreground text-sm">
+									<section
+										aria-labelledby="configuration-model-heading"
+										className="configuration-section detail-section space-y-4 border-border border-t pt-5"
+									>
+										<h2
+											className="configuration-section-heading"
+											id="configuration-model-heading"
+										>
 											模型配置
-										</legend>
+										</h2>
 										<p className="text-muted-foreground text-sm">
 											{currentModels || "尚未配置可选模型"}
 										</p>
@@ -805,12 +827,18 @@ export function AgentConfigurationScreen({
 													: null}
 											</>
 										)}
-									</fieldset>
+									</section>
 								) : null}
-								<fieldset className="detail-section space-y-4 border-border border-t pt-5">
-									<legend className="font-semibold text-foreground text-sm">
+								<section
+									aria-labelledby="configuration-secrets-heading"
+									className="configuration-section detail-section space-y-4 border-border border-t pt-5"
+								>
+									<h2
+										className="configuration-section-heading"
+										id="configuration-secrets-heading"
+									>
 										Secrets
-									</legend>
+									</h2>
 									{agent.configuration.secrets.length === 0 ? (
 										<p className="text-muted-foreground text-sm">
 											尚未配置 Secret
@@ -885,7 +913,7 @@ export function AgentConfigurationScreen({
 										<PlusIcon aria-hidden="true" data-icon="inline-start" />
 										添加 Secret
 									</Button>
-								</fieldset>
+								</section>
 								<Dialog
 									open={secretDialogName !== undefined}
 									onOpenChange={(open) => {

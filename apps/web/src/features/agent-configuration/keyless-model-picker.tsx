@@ -78,10 +78,13 @@ export function KeylessModelPicker({
 		}));
 
 	return (
-		<fieldset className="space-y-3 border-border border-t pt-4">
-			<legend className="font-semibold text-foreground text-sm">
+		<section
+			aria-labelledby={`${idPrefix}-heading`}
+			className="configuration-section detail-section space-y-3 border-border border-t pt-4"
+		>
+			<h2 className="configuration-section-heading" id={`${idPrefix}-heading`}>
 				选择允许的模型
-			</legend>
+			</h2>
 			<p className="text-muted-foreground text-sm">
 				只列出该 Key 可见、且模板支持的模型。勾选后可调整推理档位和默认项。
 			</p>
@@ -189,6 +192,6 @@ export function KeylessModelPicker({
 					{problemMessages[result.problem]}
 				</p>
 			) : null}
-		</fieldset>
+		</section>
 	);
 }

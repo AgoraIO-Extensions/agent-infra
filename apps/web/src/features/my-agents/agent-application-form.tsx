@@ -1375,8 +1375,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				className="application-form-fields min-w-0"
 				aria-label="Agent 申请"
 			>
-				<fieldset className="form-section application-basic-section">
-					<legend className="font-semibold text-lg">基本信息</legend>
+				<section
+					aria-labelledby="application-basic-heading"
+					className="form-section application-basic-section"
+				>
+					<h2 className="form-section-heading" id="application-basic-heading">
+						基本信息
+					</h2>
 					<p className="text-muted-foreground text-sm">
 						名称和描述会展示在 Agent 目录中。
 					</p>
@@ -1423,11 +1428,14 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						</div>
 						{sourceFields}
 					</div>
-				</fieldset>
-				<fieldset className="form-section application-scope-section">
-					<legend className="font-semibold text-foreground text-lg">
+				</section>
+				<section
+					aria-labelledby="application-scope-heading"
+					className="form-section application-scope-section"
+				>
+					<h2 className="form-section-heading" id="application-scope-heading">
 						共同 Owner 与使用范围
-					</legend>
+					</h2>
 					<p
 						className="text-muted-foreground text-sm"
 						id="application-access-help"
@@ -1480,7 +1488,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							errorId={errorId("organizationAvailabilityIds")}
 						/>
 					</div>
-				</fieldset>
+				</section>
 				<section
 					className="form-section application-advanced-section"
 					aria-labelledby="application-advanced-heading"
@@ -1505,10 +1513,16 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						className="application-advanced-content"
 						hidden={!advancedConfigurationOpen}
 					>
-						<fieldset className="form-section application-optional-section">
-							<legend className="font-semibold text-foreground text-lg">
+						<section
+							aria-labelledby="application-environment-heading"
+							className="form-section application-optional-section"
+						>
+							<h2
+								className="form-section-heading"
+								id="application-environment-heading"
+							>
 								环境变量
-							</legend>
+							</h2>
 							<p className="text-muted-foreground text-sm">
 								仅填写部署允许的配置项；凭证请使用 Secret 或模型凭证字段。
 							</p>
@@ -1571,11 +1585,17 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								<PlusIcon aria-hidden="true" data-icon="inline-start" />
 								添加环境变量
 							</Button>
-						</fieldset>
-						<fieldset className="form-section application-optional-section">
-							<legend className="font-semibold text-foreground text-lg">
+						</section>
+						<section
+							aria-labelledby="application-secrets-heading"
+							className="form-section application-optional-section"
+						>
+							<h2
+								className="form-section-heading"
+								id="application-secrets-heading"
+							>
 								Secret
-							</legend>
+							</h2>
 							<p className="text-muted-foreground text-sm">
 								只提交新增或替换值，已有 Secret
 								不回显。提交后会清空输入，重试时需重新填写替换值。
@@ -1641,14 +1661,17 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								<PlusIcon aria-hidden="true" data-icon="inline-start" />
 								添加 Secret
 							</Button>
-						</fieldset>
+						</section>
 					</div>
 				</section>
 				{sourceKind === "standard" ? (
-					<fieldset className="form-section application-model-section">
-						<legend className="font-semibold text-foreground text-lg">
+					<section
+						aria-labelledby="application-model-heading"
+						className="form-section application-model-section"
+					>
+						<h2 className="form-section-heading" id="application-model-heading">
 							模型与推理
-						</legend>
+						</h2>
 						<p className="text-muted-foreground text-sm">
 							只展示部署提供且通过目录校验的模型端点。
 						</p>
@@ -1927,7 +1950,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								</Button>
 							</>
 						) : null}
-					</fieldset>
+					</section>
 				) : null}
 				<div className="form-footer">
 					{props.cancelAction}

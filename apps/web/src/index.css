@@ -2580,6 +2580,14 @@ a[class~="group/button"]:focus-visible {
 	font-size: 16px;
 	line-height: 1.4;
 }
+.management-content .configuration-section-heading,
+.management-content .form-section-heading {
+	font-family: ui-sans-serif, system-ui, sans-serif;
+	font-size: 16px;
+	font-weight: 620;
+	line-height: 1.4;
+	letter-spacing: 0;
+}
 .management-content .full-width-form .form-section {
 	border-bottom: 0;
 	border-top: 1px solid var(--border);
