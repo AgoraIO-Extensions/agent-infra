@@ -202,6 +202,7 @@
 
 ## 变更日志
 
+- 2026-10-18：修复 NI-47/CH-11：短视口下工作区占满视口，composer 保持在视口内，timeline 作为唯一滚动区；Connection/文件 disclosure 在 ≤600px 并排收纳；1366×500、820×600、390×560 Browser geometry 3/3 通过。
 - 2026-10-18：修复 NI-64/NI-65：静态入口标题改为「Agora Agent」，页面标题与面包屑收敛到同一份路由映射并对齐 Owner 配置、Skill 详情、API 凭证等设计文案；补充设计快照追溯与短视口 CSS 说明，新增标题/面包屑回归矩阵。
 - 2026-10-18：修复 NI-76：登录错误框 selector 提升为 `.login-form .login-error`，抵消全局 Alert 圆角覆盖并锁定 10px；Biome、登录单测 11/11、Web 类型检查通过；完整 auth 浏览器用例受共享端口/既有 validity 断言阻塞，未等待 CI。
 - 2026-10-18：修复 NI-82/NI-63：恢复运行实例、执行详情关闭作用域/键盘路径、Agent loading 文案、Relay Key 失败状态等被削弱的行为断言；定向 85/85、Biome、Web build 通过。
@@ -248,6 +249,7 @@
 - 2026-10-18：补齐 W-03：工作台读取失败通知增加语义图标，401/authentication-required 提供 primary「重新登录」动作；定向 WorkBench 单测 13/13、401/403/404 E2E 3/3 通过。
 - 2026-10-18：补齐 B-05/B-06：表单 placeholder/focus token、Select 弹层下方定位与控件行高统一；Select 定向单测和 Web build 通过。
 - 2026-10-18：将 Platform API Skill importer 协议修复移出 UI 分支，避免 UI/Provider 契约混合；该后端回归应由独立 Issue/PR 承担。
+- 2026-10-18：复核并补回 NI-63 的两条行为断言：创建申请退出入口与提交动作的 Tab/Shift+Tab 顺序，以及个人 Key 失败恢复通知必须完整进入视口；相关 Playwright 用例已恢复强断言。NI-62 仍保持独立 Platform API Issue/PR 边界，不在本 UI 分支补后端测试。
 
 ## 当前外部/契约缺口
 

@@ -725,84 +725,88 @@ export function ActiveConversation({
 						{visibleNotice}
 					</p>
 				)}
-				<ConversationDisclosure
-					id={`${composerId}-context`}
-					label={`会话上下文 · Connection ${agent.capabilities.connection ? "已启用" : "未启用"} · 浏览器操作 ${reader.browserHandoffEvent || browserConfirmation ? "有活动" : "无"}`}
-					open={contextOpen}
-					onOpenChange={setContextOpen}
-				>
-					{latestExecution && (
-						<ConnectionInstallationPanel
-							key={`${conversationId}:${latestExecution}`}
-							conversationId={conversationId}
+				<div className="conversation-support-controls">
+					<ConversationDisclosure
+						id={`${composerId}-context`}
+						label={`会话上下文 · Connection ${agent.capabilities.connection ? "已启用" : "未启用"} · 浏览器操作 ${reader.browserHandoffEvent || browserConfirmation ? "有活动" : "无"}`}
+						open={contextOpen}
+						onOpenChange={setContextOpen}
+					>
+						{latestExecution && (
+							<ConnectionInstallationPanel
+								key={`${conversationId}:${latestExecution}`}
+								conversationId={conversationId}
+								executionId={latestExecution}
+								client={conversationClient}
+							/>
+						)}
+						<BrowserOperationStatus
+							events={timeline.events}
 							executionId={latestExecution}
-							client={conversationClient}
 						/>
-					)}
-					<BrowserOperationStatus
-						events={timeline.events}
-						executionId={latestExecution}
-					/>
-					<BrowserAuditView
-						conversationId={conversationId}
-						events={timeline.events}
-						executionId={latestExecution}
-					/>
-					{reader.browserHandoffEvent || browserConfirmation ? (
-						<BrowserHandoffPanel
-							browserAvailable={
-								agent.capabilities.browser?.status === "available"
+						<BrowserAuditView
+							conversationId={conversationId}
+							events={timeline.events}
+							executionId={latestExecution}
+						/>
+						{reader.browserHandoffEvent || browserConfirmation ? (
+							<BrowserHandoffPanel
+								browserAvailable={
+									agent.capabilities.browser?.status === "available"
+								}
+								handoffEvent={reader.browserHandoffEvent}
+								confirmation={browserConfirmation}
+								currentBinding={browserBinding}
+								{...browserHandlers}
+							/>
+						) : null}
+						<CommandNotice
+							result={
+								selectionSaveState === "idle" ? command.result : undefined
 							}
-							handoffEvent={reader.browserHandoffEvent}
-							confirmation={browserConfirmation}
-							currentBinding={browserBinding}
-							{...browserHandlers}
-						/>
-					) : null}
-					<CommandNotice
-						result={selectionSaveState === "idle" ? command.result : undefined}
-						pending={selectionSaveState === "idle" && command.isPending}
-						retry={
-							selectionSaveState === "idle" && command.canRetry && available
-								? () => command.retry()
-								: undefined
-						}
-						resend={
-							selectionSaveState === "idle" && command.canRetry && available
-								? () => {
-										if (command.submitText(draft, files.attachments)) {
-											action.current = "message";
-											setNotice("");
+							pending={selectionSaveState === "idle" && command.isPending}
+							retry={
+								selectionSaveState === "idle" && command.canRetry && available
+									? () => command.retry()
+									: undefined
+							}
+							resend={
+								selectionSaveState === "idle" && command.canRetry && available
+									? () => {
+											if (command.submitText(draft, files.attachments)) {
+												action.current = "message";
+												setNotice("");
+											}
 										}
-									}
-								: undefined
-						}
-						resendDisabled={!draft.trim()}
-					/>
-				</ConversationDisclosure>
+									: undefined
+							}
+							resendDisabled={!draft.trim()}
+						/>
+					</ConversationDisclosure>
+					{agent.capabilities.attachments && (
+						<ConversationDisclosure
+							id={`${composerId}-files`}
+							label={`会话文件 · ${files.uploads.length} 个文件 · ${files.uploads.filter((item) => item.status === "failed" || item.status === "expired").length} 个待重试`}
+							open={filesOpen}
+							onOpenChange={setFilesOpen}
+						>
+							<ConversationFilePicker
+								attachmentsEnabled={agent.capabilities.attachments}
+								limits={files.limits}
+								limitsError={files.limitsError}
+								uploads={files.uploads}
+								onSelect={(selected) => void files.addFiles(selected)}
+								onRemove={files.remove}
+								onRetry={files.retry}
+							/>
+						</ConversationDisclosure>
+					)}
+				</div>
 				{agent.capabilities.modelSelection && !option && currentModelId && (
 					<p className="text-muted-foreground text-sm">
 						原模型选项已移除；提交消息时，标准模板将使用 Owner
 						的默认选项。你也可以刷新并重新选择。
 					</p>
-				)}
-				{agent.capabilities.attachments && (
-					<ConversationDisclosure
-						id={`${composerId}-files`}
-						label={`会话文件 · ${files.uploads.length} 个文件 · ${files.uploads.filter((item) => item.status === "failed" || item.status === "expired").length} 个待重试`}
-						open={filesOpen}
-						onOpenChange={setFilesOpen}
-					>
-						<ConversationFilePicker
-							attachmentsEnabled={agent.capabilities.attachments}
-							limits={files.limits}
-							limitsError={files.limitsError}
-							uploads={files.uploads}
-							onSelect={(selected) => void files.addFiles(selected)}
-							onRemove={files.remove}
-							onRetry={files.retry}
-						/>
-					</ConversationDisclosure>
 				)}
 				<form
 					className="composer-zone composer"

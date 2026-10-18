@@ -334,6 +334,59 @@ test("keeps the composer in view while a long conversation scrolls", async ({
 	expect(fixture.unexpected).toEqual([]);
 });
 
+for (const viewport of [
+	{ width: 1366, height: 500 },
+	{ width: 820, height: 600 },
+	{ width: 390, height: 560 },
+] as const) {
+	test(`keeps the composer visible in a ${viewport.width}x${viewport.height} viewport`, async ({
+		page,
+	}) => {
+		await page.setViewportSize(viewport);
+		const fixture = await routingFixture(page, { messageRoles: true });
+		await page.goto(canonical(fixture.agentId, fixture.conversationId));
+		await assertChat(page);
+		const input = page.getByLabel("消息", { exact: true });
+		const send = page.locator('[data-c02-send-button="send"]');
+		const timeline = page.getByRole("region", { name: "会话时间线" });
+		await expect(input).toBeInViewport({ ratio: 1 });
+		const geometry = await page.evaluate(() => {
+			const timeline = document.querySelector<HTMLElement>(".timeline");
+			const composer = document.querySelector<HTMLElement>(".composer-zone");
+			if (!timeline || !composer)
+				throw new Error("Missing chat scroll regions");
+			return {
+				viewportWidth: window.innerWidth,
+				documentWidth: document.documentElement.scrollWidth,
+				documentHeight: document.documentElement.scrollHeight,
+				viewportHeight: window.innerHeight,
+				timelineHeight: timeline.getBoundingClientRect().height,
+				timelineClientHeight: timeline.clientHeight,
+				timelineScrollHeight: timeline.scrollHeight,
+				composerBottom: composer.getBoundingClientRect().bottom,
+				overflowY: getComputedStyle(timeline).overflowY,
+			};
+		});
+		expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+		expect(geometry.documentHeight).toBeLessThanOrEqual(
+			geometry.viewportHeight,
+		);
+		expect(geometry.composerBottom).toBeLessThanOrEqual(
+			geometry.viewportHeight,
+		);
+		await expect(send).toBeInViewport({ ratio: 1 });
+		expect(geometry.timelineHeight).toBeGreaterThanOrEqual(40);
+		expect(geometry.timelineScrollHeight).toBeGreaterThan(
+			geometry.timelineClientHeight,
+		);
+		expect(geometry.overflowY).toBe("auto");
+		await timeline.evaluate((element) => {
+			element.scrollTop = element.scrollHeight;
+		});
+		await expect(input).toBeInViewport({ ratio: 1 });
+	});
+}
+
 for (const compact of [false, true]) {
 	test(`keeps the Agent header inside the left conversation column${compact ? " at 320 by 370" : ""}`, async ({
 		page,

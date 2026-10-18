@@ -1204,6 +1204,9 @@ a[class~="group/button"] {
 .chat-thread:not([hidden]) {
 	gap: 10px;
 }
+.conversation-support-controls {
+	display: contents;
+}
 :where(.chat-thread) > * {
 	flex-shrink: 0;
 	margin-block: 0;
@@ -1391,6 +1394,37 @@ a[class~="group/button"] {
 }
 @media (max-width: 767px) {
 	.composer-actions [data-c02-send-button="send"] {
+		width: 44px;
+		padding-inline: 0;
+		font-size: 0;
+	}
+}
+@media (max-width: 430px) {
+	.composer-tools {
+		flex: 1 1 auto;
+		overflow: hidden;
+	}
+	.composer-tools > p {
+		display: none;
+	}
+	.chat-thread .model-controls {
+		max-width: 100%;
+		overflow: hidden;
+	}
+	.chat-thread .model-control-model {
+		width: min(140px, 36vw);
+		max-width: 140px;
+	}
+	.chat-thread .model-control-reasoning {
+		width: min(96px, 26vw);
+		max-width: 96px;
+	}
+	.chat-thread .model-control-trigger {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.composer-actions > button:not([data-c02-send-button="send"]) {
 		width: 44px;
 		padding-inline: 0;
 		font-size: 0;
@@ -1632,9 +1666,19 @@ a[class~="group/button"] {
 		margin-bottom: 4px;
 	}
 	.chat-thread .timeline {
-		min-height: 120px;
-		max-height: min(42dvh, 320px);
+		min-height: 0;
+		max-height: none;
 		padding-block: 8px;
+	}
+	.conversation-support-controls {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		min-width: 0;
+	}
+	.conversation-support-controls > section {
+		flex: 1 1 0;
+		min-width: 0;
 	}
 }
 @media (prefers-reduced-motion: reduce) {
