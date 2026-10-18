@@ -438,6 +438,63 @@ function expectBindingUnknown(read: () => string) {
 	);
 }
 
+it.each(["expired business", "terminal control"] as const)(
+	"resolves native metadata independently of %s authority without durable writes",
+	async (mode) => {
+		const f = await acceptedBindingFixture("completed");
+		if (mode === "terminal control") {
+			const {
+				authorizationRecordId: _record,
+				attachments: _attachments,
+				...claims
+			} = f.original.authorization;
+			const control = RuntimeControlGrantClaimsV2Schema.parse({
+				...claims,
+				purpose: "control",
+				controlRecordId: "metadata-terminal-control",
+				reason: "recovery",
+				hostSessionRef: f.hostSessionRef,
+				allowedCommands: ["events.persist"],
+			});
+			await f.store.authorizeRequestV3(control, "query", () => 150);
+		}
+		await f.reopen();
+		const before = await readFile(f.path, "utf8");
+		await expect(
+			f.store.resolveNativeSessionRefForOriginalExecution(
+				f.original.binding,
+				f.hostSessionRef,
+			),
+		).resolves.toBe("native-session-1");
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	},
+);
+
+it.each([
+	{ agentId: "other-agent" },
+	{ conversationId: "other-conversation" },
+	{ sessionGeneration: 2 },
+	{ executionId: "other-execution" },
+	{ principal: { kind: "user" as const, id: "bob" } },
+	{ principal: { kind: "application" as const, id: "alice" } },
+	{ channelId: "api" },
+	{ nativeSessionRef: "other-native-session" },
+])(
+	"rejects crossed native metadata original scope %j without writes",
+	async (patch) => {
+		const f = await acceptedBindingFixture("completed");
+		const before = await readFile(f.path, "utf8");
+		const ref = { ...f.original.binding, ...patch };
+		await expect(
+			f.store.resolveNativeSessionRefForOriginalExecution(
+				ref,
+				f.hostSessionRef,
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	},
+);
+
 it.each(["running", "unknown", "completed", "failed", "cancelled"] as const)(
 	"reads only the original accepted %s binding after reopen, retaining every durable byte",
 	async (status) => {
@@ -729,6 +786,32 @@ it("keeps a failed durable write retryable unknown instead of reading uncommitte
 	);
 	expect(await readFile(originalPath, "utf8")).toBe(before);
 });
+
+it.each(["prepared", "missing native", "wrong Host"] as const)(
+	"rejects unconfirmed native metadata mapping: %s",
+	async (mode) => {
+		const f = await fixture();
+		const original = input();
+		const prepared = await f.store.prepareOperation(original);
+		const ref = prepared.session.hostSessionRef;
+		if (mode !== "prepared")
+			await f.store.resolveOperation(
+				ref,
+				original.operationId,
+				{ outcome: "accepted", status: "completed" },
+				mode === "missing native" ? undefined : "native-session-1",
+			);
+		await f.reopen();
+		const before = await readFile(f.path, "utf8");
+		await expect(
+			f.store.resolveNativeSessionRefForOriginalExecution(
+				original.binding,
+				mode === "wrong Host" ? "other-host" : ref,
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	},
+);
 
 it.each(["stop", "authorization_revoked", "recovery"] as const)(
 	"reads a binding under its existing %s control authority without renewing it",

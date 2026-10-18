@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import {
+	type NativeMetadataObjectScopeV1,
 	type RuntimeDriverCommandV1,
 	RuntimeDriverCommandV1Schema,
 	type RuntimeDriverSubmitTurnCommandV2,
@@ -858,26 +859,43 @@ export class FileRuntimeStore {
 	/**
 	 * Resolve the native Session for one already accepted original Execution.
 	 *
-	 * Native metadata callers only carry the opaque Host Session reference.  Do
-	 * the complete durable authority check before returning its native mapping;
-	 * a stale execution, generation or authority therefore cannot turn a leaked
-	 * reference into a metadata read.
+	 * Match the complete persisted identity and accepted operation to the opaque
+	 * Host reference. Current read authorization belongs to the metadata context.
 	 */
 	async resolveNativeSessionRefForOriginalExecution(
-		reference: RuntimeOriginalExecutionRef,
+		reference: RuntimeOriginalExecutionRef &
+			Pick<NativeMetadataObjectScopeV1, "principal" | "channelId">,
 		hostSessionRef: string,
-		readNow: () => number,
 	) {
 		if (typeof hostSessionRef !== "string" || !hostSessionRef)
 			runtimeAuthorizationDenied();
-		const session = await this.authorizedOriginalExecution(
-			{ ...reference, runtimeOperationId: reference.executionId },
-			readNow,
-		);
+		const state = await this.file.readCommitted();
+		assertStoreState(state);
+		// Metadata uses its own proof/current policy. Original business/control
+		// leases cannot authorize or prevent this immutable binding lookup.
+		const candidates = Object.values(state.sessions).filter((session) => {
+			const operation = session.operations[reference.executionId];
+			return (
+				session.agentId === reference.agentId &&
+				session.conversationId === reference.conversationId &&
+				session.sessionGeneration === reference.sessionGeneration &&
+				isDeepStrictEqual(session.authority?.principal, reference.principal) &&
+				session.authority?.channelId === reference.channelId &&
+				(operation?.kind === "submit-turn" ||
+					operation?.kind === "native-command") &&
+				operation.executionId === reference.executionId &&
+				operation.state === "resolved" &&
+				operation.result?.outcome === "accepted"
+			);
+		});
+		if (candidates.length !== 1) runtimeAuthorizationDenied();
+		const session = candidates[0];
 		if (
-			session.hostSessionRef !== hostSessionRef ||
+			session?.hostSessionRef !== hostSessionRef ||
 			typeof session.nativeSessionRef !== "string" ||
-			!session.nativeSessionRef
+			!session.nativeSessionRef ||
+			(reference.nativeSessionRef !== undefined &&
+				reference.nativeSessionRef !== session.nativeSessionRef)
 		)
 			runtimeAuthorizationDenied();
 		return session.nativeSessionRef;
