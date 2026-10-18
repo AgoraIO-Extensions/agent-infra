@@ -71,6 +71,44 @@ describe("Platform Worker native metadata gateway client", () => {
 		);
 	});
 
+	it("allows current-confirmation round trips beyond ten seconds within the original request deadline", async () => {
+		const startedAt = Date.now();
+		const liveRequest = {
+			...request,
+			readStartedAt: startedAt,
+			expiresAt: startedAt + 30_000,
+		};
+		const liveResponse = {
+			...response,
+			readStartedAt: liveRequest.readStartedAt,
+			expiresAt: liveRequest.expiresAt,
+		};
+		const client = createPlatformWorkerNativeMetadataGatewayClientV1({
+			baseUrl: "http://worker",
+			serviceToken: "worker-token",
+			fetch: async (_input, init) =>
+				new Promise<Response>((resolve, reject) => {
+					const abort = () => {
+						clearTimeout(timer);
+						reject(new Error("aborted"));
+					};
+					const timer = setTimeout(() => {
+						init?.signal?.removeEventListener("abort", abort);
+						resolve(
+							new Response(JSON.stringify(liveResponse), {
+								headers: { "content-type": "application/json" },
+							}),
+						);
+					}, 11_000);
+					init?.signal?.addEventListener("abort", abort, { once: true });
+					if (init?.signal?.aborted) abort();
+				}),
+		});
+		await expect(
+			client.read(liveRequest, AbortSignal.timeout(30_000)),
+		).resolves.toEqual(liveResponse);
+	}, 15_000);
+
 	it("applies a transport deadline when Worker fetch stalls", async () => {
 		const client = createPlatformWorkerNativeMetadataGatewayClientV1({
 			baseUrl: "http://worker",

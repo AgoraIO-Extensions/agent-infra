@@ -3,6 +3,8 @@ import {
 	createProductionNativeMetadataReaderFromWorkerV1,
 	createProductionNativeMetadataReaderV1,
 } from "./deployment.js";
+import { createRuntimeNativeMetadataRequestRegistryV1 } from "./runtime-native-metadata-current.js";
+import { nativeMetadataTestContext } from "./runtime-native-metadata-test-context.js";
 
 const identity = {
 	schemaVersion: 1 as const,
@@ -48,6 +50,9 @@ describe("production native metadata assembly", () => {
 	it("composes the scope resolver with the Worker gateway", async () => {
 		let called = false;
 		const reader = createProductionNativeMetadataReaderV1({
+			requestRegistry: createRuntimeNativeMetadataRequestRegistryV1({
+				now: () => binding.readStartedAt,
+			}),
 			resolveRequest: async () => binding,
 			gateway: {
 				read: async (request) => {
@@ -63,6 +68,7 @@ describe("production native metadata assembly", () => {
 				binding.scope.conversationId,
 				binding.scope.executionId,
 				"commands",
+				nativeMetadataTestContext(identity, binding),
 			),
 		).resolves.toEqual(response.projection);
 		expect(called).toBe(true);
@@ -70,6 +76,9 @@ describe("production native metadata assembly", () => {
 
 	it("keeps the production projection unavailable when scope resolution fails", async () => {
 		const reader = createProductionNativeMetadataReaderV1({
+			requestRegistry: createRuntimeNativeMetadataRequestRegistryV1({
+				now: () => binding.readStartedAt,
+			}),
 			resolveRequest: async () => null,
 			gateway: { read: async () => response },
 		});
@@ -79,6 +88,7 @@ describe("production native metadata assembly", () => {
 				binding.scope.conversationId,
 				binding.scope.executionId,
 				"commands",
+				nativeMetadataTestContext(identity, binding),
 			),
 		).resolves.toBeNull();
 	});
@@ -86,6 +96,9 @@ describe("production native metadata assembly", () => {
 	it("assembles the fixed Worker ingress without exposing a Runtime target", async () => {
 		let called = false;
 		const reader = createProductionNativeMetadataReaderFromWorkerV1({
+			requestRegistry: createRuntimeNativeMetadataRequestRegistryV1({
+				now: () => binding.readStartedAt,
+			}),
 			resolveRequest: async () => binding,
 			worker: {
 				baseUrl: "http://worker.example.test",
@@ -109,6 +122,7 @@ describe("production native metadata assembly", () => {
 				binding.scope.conversationId,
 				binding.scope.executionId,
 				"commands",
+				nativeMetadataTestContext(identity, binding),
 			),
 		).resolves.toEqual(response.projection);
 		expect(called).toBe(true);

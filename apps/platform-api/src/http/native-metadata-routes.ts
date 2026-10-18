@@ -1,5 +1,9 @@
 import type { NativeMetadataProjectionV1 } from "@agent-infra/contracts/runtime";
 import type { Hono } from "hono";
+import {
+	createRuntimeNativeMetadataRequestContextV1,
+	type RuntimeNativeMetadataRequestContextV1,
+} from "../runtime-native-metadata-request-context.js";
 
 import {
 	HttpProtocolError,
@@ -18,6 +22,7 @@ export interface RuntimeNativeMetadataPublicReaderV1 {
 		conversationId: string,
 		executionId: string,
 		selector: "status" | "commands" | "skills",
+		requestContext: RuntimeNativeMetadataRequestContextV1,
 	): Promise<NativeMetadataProjectionV1 | null>;
 }
 
@@ -60,27 +65,38 @@ export function registerNativeMetadataRoutes(
 		"/api/v2/conversations/:conversationId/executions/:executionId/native-metadata",
 		async (context) => {
 			const metadata = requestMetadata(context.req.raw);
+			const requestContext = createRuntimeNativeMetadataRequestContextV1({
+				signal: context.req.raw.signal,
+				authenticate: () =>
+					resolveIdentity(
+						dependencies.identity,
+						context.req.raw,
+						metadata.traceId,
+					),
+			});
 			try {
-				const identity = await resolveIdentity(
-					dependencies.identity,
-					context.req.raw,
-					metadata.traceId,
-				);
-				const projection = await dependencies.reader.read(
-					identity,
-					context.req.param("conversationId"),
-					context.req.param("executionId"),
-					selector(context.req.raw, metadata),
+				const identity = await requestContext.authenticate();
+				const projection = await requestContext.run(() =>
+					dependencies.reader.read(
+						identity,
+						context.req.param("conversationId"),
+						context.req.param("executionId"),
+						selector(context.req.raw, metadata),
+						requestContext,
+					),
 				);
 				if (!projection)
 					throw new HttpProtocolError(
 						"DEPENDENCY_UNAVAILABLE",
 						metadata.traceId,
 					);
+				await requestContext.verifyDelivery(identity);
 				return context.json(projection);
 			} catch (error) {
 				const protocol = responseError(error, metadata);
 				return context.json(protocol.body, protocol.status);
+			} finally {
+				requestContext.close();
 			}
 		},
 	);

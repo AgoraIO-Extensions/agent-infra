@@ -51,6 +51,11 @@ describe("public native metadata routes", () => {
 			"conversation-1",
 			"execution-1",
 			"status",
+			expect.objectContaining({
+				signal: expect.any(AbortSignal),
+				readStartedAt: expect.any(Number),
+				expiresAt: expect.any(Number),
+			}),
 		);
 	});
 
