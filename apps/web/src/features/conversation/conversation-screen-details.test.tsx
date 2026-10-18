@@ -66,7 +66,10 @@ describe("ConversationExecutionDetails", () => {
 				onClose={vi.fn()}
 				requestedModelOptionId="option-requested"
 				modelOptions={[
-					{ optionId: "option-requested", displayName: "请求模型" },
+					{
+						optionId: "option-requested",
+						displayName: "Owner default · gpt-5",
+					},
 					{ optionId: "option-actual", displayName: "实际模型" },
 				]}
 			/>,
@@ -74,6 +77,7 @@ describe("ConversationExecutionDetails", () => {
 
 		const status = screen.getByRole("region", { name: "模型状态" });
 		expect(status.textContent).toContain("请求模型");
+		expect(status.textContent).toContain("Owner default · gpt-5");
 		expect(status.textContent).toContain("实际模型");
 		expect(status.textContent).toContain("请求模型选项不可用");
 		expect(status.textContent).toContain("不会静默切换到个人 Key 或未授权模型");

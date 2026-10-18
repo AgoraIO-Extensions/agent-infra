@@ -21,10 +21,10 @@ export function ConversationExecutionDetails({
 	conversationId,
 	client,
 	modelOptions = [],
+	requestedModelOptionId,
 	loading,
 	failed,
 	onRetry,
-	onClose,
 }: {
 	data?: ExecutionDetailProjectionV2;
 	conversationId: string;
@@ -52,7 +52,10 @@ export function ConversationExecutionDetails({
 		modelOptions.find((option) => option.optionId === optionId)?.displayName ??
 		fallback ??
 		"未提供";
-	const requestedModel = "未提供";
+	const requestedModel =
+		requestedModelOptionId === undefined || requestedModelOptionId === null
+			? undefined
+			: modelLabel(requestedModelOptionId);
 	const actualModel =
 		modelFact?.payload.kind === "model"
 			? modelLabel(
@@ -107,8 +110,12 @@ export function ConversationExecutionDetails({
 						>
 							<h3 className="font-semibold">模型状态</h3>
 							<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
-								<dt>请求模型</dt>
-								<dd>{requestedModel}</dd>
+								{requestedModel !== undefined ? (
+									<>
+										<dt>请求模型</dt>
+										<dd>{requestedModel}</dd>
+									</>
+								) : null}
 								<dt>实际模型</dt>
 								<dd>{actualModel}</dd>
 								{fallbackEvent ? (

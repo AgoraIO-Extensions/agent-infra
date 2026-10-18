@@ -202,6 +202,7 @@
 
 ## 变更日志
 
+- 2026-10-18：修复 NI-80 执行详情模型状态：只有存在可信请求模型 option 时才展示「请求模型」，使用真实 option displayName，不再用固定「未提供」覆盖事实；测试改用与标签不同的模型名，执行详情定向 2/2 通过。
 - 2026-10-18：修复 slash 菜单触发的 Web UI policy CI 失败：菜单容器与选项统一复用 `Listbox`/`ListboxOption` primitive；`pnpm check`、Web 类型检查、构建和会话定向 71/71 通过。
 - 2026-10-18：修复 CI 暴露的 Web 设计契约 TypeScript 类型错误；同时收敛 CH-01/02/03：模型与推理档位移入 composer 工具栏并自动保存，`/` 命令/Skill 使用可键盘操作的 combobox，会话上下文与文件改为默认折叠 disclosure；定向 capability/conversation 测试 71/71、Web 类型检查和构建通过。
 - 2026-10-18：CI 暴露的 Web 单测、浏览器回归和 Sheet 遮罩问题已修复；Web 单测 90/90 文件、1086/1086 通过，完整 Browser Playwright 248 个可运行项通过、20 个按测试配置跳过，Hosted CI 全部 required checks 通过。
