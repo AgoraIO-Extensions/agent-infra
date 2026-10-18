@@ -114,6 +114,30 @@ describe("LoginAction", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	it("clears each empty-field error as soon as that field receives input", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		render(<LoginAction endpoint="/auth/login" onLoggedIn={vi.fn()} />);
+
+		fireEvent.submit(screen.getByRole("button", { name: "登录" }));
+		await screen.findByText("请输入公司账号。");
+		expect(screen.getByText("请输入密码。")).toBeTruthy();
+
+		const loginInput = screen.getByLabelText("账号") as HTMLInputElement;
+		const passwordInput = screen.getByLabelText("密码") as HTMLInputElement;
+		fireEvent.change(loginInput, { target: { value: "alice" } });
+		expect(screen.queryByText("请输入公司账号。")).toBeNull();
+		expect(loginInput.getAttribute("aria-invalid")).toBeNull();
+		expect(loginInput.getAttribute("aria-describedby")).toBeNull();
+		expect(screen.getByText("请输入密码。")).toBeTruthy();
+
+		fireEvent.change(passwordInput, { target: { value: "secret" } });
+		expect(screen.queryByText("请输入密码。")).toBeNull();
+		expect(passwordInput.getAttribute("aria-invalid")).toBeNull();
+		expect(passwordInput.getAttribute("aria-describedby")).toBeNull();
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it("keeps the form retryable and does not report login on failure", async () => {
 		const fetchMock = vi
 			.fn()
