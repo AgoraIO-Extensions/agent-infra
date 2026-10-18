@@ -250,6 +250,8 @@ export interface ConversationDispatchStorePortV1 {
 	recordRuntimeResponse(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly hostSessionRef: string;
+		/** Canonical response/status proves this original Turn was accepted. */
+		readonly originalOperationAccepted?: true;
 		readonly transition: ConversationDispatchStateTransitionV1;
 	}): Promise<boolean>;
 	finish(input: {

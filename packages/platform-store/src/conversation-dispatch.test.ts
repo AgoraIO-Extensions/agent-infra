@@ -6541,6 +6541,218 @@ async function savedPreparationPins(executionId: string) {
 }
 
 describe("accepted Task V4 preparation pins", () => {
+	it("recovers a lost first-turn acceptance ACK using the original pins", async () => {
+		const work = await acceptedKeyWork("web");
+		const first = await claim(work.itemId);
+		try {
+			if (first.decision.outcome !== "claimed")
+				throw new Error("Expected claim");
+			expect(
+				await first.store.prepareRuntimeDispatch({
+					claim: first.decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			const original = await savedPreparationPins(work.executionId);
+			expect(
+				await first.store.retry({
+					claim: first.decision.claim,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_ACCEPTANCE_UNKNOWN",
+					transition: {
+						executionStatus: "unknown",
+						conversationStatus: "active",
+					},
+				}),
+			).toBe(true);
+			await first.store.close();
+			const recovery = await claim(work.itemId, "replacement-worker");
+			try {
+				if (recovery.decision.outcome !== "claimed")
+					throw new Error("Expected recovery claim");
+				expect(
+					await recovery.store.prepareRuntimeDispatch({
+						claim: recovery.decision.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				expect(
+					await recovery.store.recordRuntimeResponse({
+						claim: recovery.decision.claim,
+						hostSessionRef: "original-accepted-host",
+						originalOperationAccepted: true,
+						transition: {
+							executionStatus: "processing",
+							conversationStatus: "active",
+						},
+					}),
+				).toBe(true);
+				const [saved] =
+					await client`select original_operation_digest, original_submit_host_session_ref, accepted_original_host_session_ref from platform.conversation_executions where execution_id=${work.executionId}`;
+				expect(saved).toEqual({
+					original_operation_digest: original?.original_operation_digest,
+					original_submit_host_session_ref: null,
+					accepted_original_host_session_ref: "original-accepted-host",
+				});
+			} finally {
+				await recovery.store.close();
+			}
+		} finally {
+			await first.store.close();
+		}
+	});
+
+	it("does not infer acceptance from a binding-only/unknown response or current Conversation Host", async () => {
+		const work = await acceptedKeyWork("web");
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			expect(
+				await store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			expect(
+				await store.recordRuntimeResponse({
+					claim: decision.claim,
+					hostSessionRef: "known-session-only",
+					transition: {},
+				}),
+			).toBe(true);
+			const [saved] =
+				await client`select original_submit_host_session_ref, accepted_original_host_session_ref from platform.conversation_executions where execution_id=${work.executionId}`;
+			expect(saved).toEqual({
+				original_submit_host_session_ref: null,
+				accepted_original_host_session_ref: null,
+			});
+			const query = new PostgresConversationQueryV1({ databaseUrl });
+			try {
+				expect(
+					await query.readNativeMetadataObjectScopeV1({
+						scope: { actorId: "actor-dispatch", channelId: "web" },
+						conversationId: work.conversationId,
+						executionId: work.executionId,
+					}),
+				).toMatchObject({ originalHostScopeRef: null });
+			} finally {
+				await query.close();
+			}
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("rejects foreign/stale acceptance and never rebinds an accepted Host", async () => {
+		const work = await acceptedKeyWork("web");
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			expect(
+				await store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			for (const change of [
+				{ sessionGeneration: 2 },
+				{ conversationId: "foreign-conversation" },
+				{
+					actorId: "foreign-user",
+					relayKeyBinding: {
+						purpose: "personal" as const,
+						subjectId: "foreign-user",
+						keyId: "foreign-fixture-key",
+						keyVersion: 1,
+					},
+				},
+				{ authorizationRevision: "foreign-revision" },
+			]) {
+				expect(
+					await store.recordRuntimeResponse({
+						claim: { ...decision.claim, ...change },
+						hostSessionRef: "wrong-host",
+						originalOperationAccepted: true,
+						transition: {},
+					}),
+				).toBe(false);
+			}
+			expect(
+				await store.recordRuntimeResponse({
+					claim: decision.claim,
+					hostSessionRef: "accepted-host",
+					originalOperationAccepted: true,
+					transition: {},
+				}),
+			).toBe(true);
+			// Even if mutable Conversation facts drift, the accepted original cannot move.
+			await client`update platform.conversations set host_session_ref=null where id=${work.conversationId}`;
+			expect(
+				await store.recordRuntimeResponse({
+					claim: decision.claim,
+					hostSessionRef: "wrong-host",
+					originalOperationAccepted: true,
+					transition: {},
+				}),
+			).toBe(false);
+			const [saved] =
+				await client`select accepted_original_host_session_ref from platform.conversation_executions where execution_id=${work.executionId}`;
+			expect(saved?.accepted_original_host_session_ref).toBe("accepted-host");
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("resolves an accepted first-turn Host after Store restart without rewriting original pins", async () => {
+		const work = await acceptedKeyWork("web");
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			expect(
+				await store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			const original = await savedPreparationPins(work.executionId);
+			expect(original?.original_submit_host_session_ref).toBeNull();
+			const accepted = {
+				claim: decision.claim,
+				hostSessionRef: "accepted-first-host",
+				originalOperationAccepted: true as const,
+				transition: {
+					executionStatus: "processing" as const,
+					conversationStatus: "active" as const,
+				},
+			};
+			expect(await store.recordRuntimeResponse(accepted)).toBe(true);
+			expect(await store.recordRuntimeResponse(accepted)).toBe(true);
+			const saved = await savedPreparationPins(work.executionId);
+			expect(saved?.original_submit_host_session_ref).toBeNull();
+			expect(saved?.original_operation_digest).toBe(
+				original?.original_operation_digest,
+			);
+			await store.close();
+			const query = new PostgresConversationQueryV1({ databaseUrl });
+			try {
+				expect(
+					await query.readNativeMetadataObjectScopeV1({
+						scope: { actorId: "actor-dispatch", channelId: "web" },
+						conversationId: work.conversationId,
+						executionId: work.executionId,
+					}),
+				).toMatchObject({
+					originalHostScopeRef: "accepted-first-host",
+					executionId: work.executionId,
+				});
+			} finally {
+				await query.close();
+			}
+		} finally {
+			await store.close();
+		}
+	});
+
 	it.each(["web", "api:user", "api:application"] as const)(
 		"persists the accepted %s binding before dispatch and keeps it on recovery",
 		async (channel) => {

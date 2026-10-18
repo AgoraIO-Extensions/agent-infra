@@ -145,6 +145,8 @@ export const conversationExecutions = platformSchema.table(
 		runtimeSubmitProtocol: text("runtime_submit_protocol"),
 		originalOperationDigest: text("original_operation_digest"),
 		originalSubmitHostSessionRef: text("original_submit_host_session_ref"),
+		// Runtime acceptance is separate from the immutable originally submitted NULL.
+		acceptedOriginalHostSessionRef: text("accepted_original_host_session_ref"),
 		principalType: varchar("principal_type", { length: 16 })
 			.default("user")
 			.notNull(),
@@ -253,6 +255,10 @@ export const conversationExecutions = platformSchema.table(
 				AND char_length(${table.modelOptionId}) > 0
 				AND char_length(${table.reasoningLevel}) > 0
 			)`,
+		),
+		check(
+			"conversation_execution_accepted_original_host",
+			sql`${table.acceptedOriginalHostSessionRef} IS NULL OR (${table.runtimeSubmitProtocol} = 'v4' AND ${table.originalOperationDigest} IS NOT NULL AND char_length(${table.acceptedOriginalHostSessionRef}) > 0 AND (${table.originalSubmitHostSessionRef} IS NULL OR ${table.originalSubmitHostSessionRef} = ${table.acceptedOriginalHostSessionRef}))`,
 		),
 		check(
 			"conversation_execution_original_digest_binding",
