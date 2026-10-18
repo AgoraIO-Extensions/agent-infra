@@ -22,6 +22,10 @@ import {
 	registerAgentDefaultRelayKeyRoutes,
 } from "./http/agent-default-relay-key-routes.js";
 import {
+	type AgentUserManageGrantRouteDependencies,
+	registerAgentUserManageGrantRoutes,
+} from "./http/agent-user-manage-grant-routes.js";
+import {
 	type AgentUserUseGrantRouteDependencies,
 	registerAgentUserUseGrantRoutes,
 } from "./http/agent-user-use-grant-routes.js";
@@ -152,6 +156,7 @@ export interface PlatformAppDependencies {
 	readonly agentApiLifecycle?: AgentApiLifecycleRouteDependencies;
 	readonly agentApplicationGrants?: AgentApplicationGrantRouteDependencies;
 	readonly agentUserUseGrants?: AgentUserUseGrantRouteDependencies;
+	readonly agentUserManageGrants?: AgentUserManageGrantRouteDependencies;
 	readonly applicationApiCredentials?: Parameters<
 		typeof registerApplicationApiCredentialRoutes
 	>[1];
@@ -282,6 +287,8 @@ export function createPlatformApp(
 		);
 	if (dependencies.agentUserUseGrants)
 		registerAgentUserUseGrantRoutes(app, dependencies.agentUserUseGrants);
+	if (dependencies.agentUserManageGrants)
+		registerAgentUserManageGrantRoutes(app, dependencies.agentUserManageGrants);
 	if (dependencies.agentApiLifecycle)
 		registerAgentApiLifecycleRoutes(app, dependencies.agentApiLifecycle);
 	if (dependencies.applications)

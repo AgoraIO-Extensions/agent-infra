@@ -588,6 +588,35 @@ function changedFields(
 		return [];
 	}
 	if (detailKind === "api_management") {
+		// #2759：Owner 给用户授予 / 撤销 API 管理权的事件，details 只含目标用户与授权结果。
+		if (
+			action.startsWith("api.agent.manager.") &&
+			!action.endsWith(".refused") &&
+			typeof details === "object" &&
+			details !== null &&
+			Object.hasOwn(details, "userId")
+		) {
+			if (
+				!exactObject(details, [
+					"userId",
+					"grantType",
+					"granted",
+					"authorizationRevision",
+				])
+			)
+				throw new PlatformAuditQueryError("unavailable");
+			const value = details as Record<string, unknown>;
+			if (
+				!validText(value.userId) ||
+				value.grantType !== "manage" ||
+				typeof value.granted !== "boolean" ||
+				!validText(value.authorizationRevision) ||
+				(action.endsWith(".granted") && value.granted !== true) ||
+				(action.endsWith(".revoked") && value.granted !== false)
+			)
+				throw new PlatformAuditQueryError("unavailable");
+			return [];
+		}
 		if (action === "api.agent.state.read") {
 			if (details !== null) throw new PlatformAuditQueryError("unavailable");
 			return [];

@@ -362,7 +362,19 @@ export function createProductionPlatformApiAssemblyInputV1(
 		throw new Error("PLATFORM_DEPLOYMENT_CONFIGURATION_INVALID");
 	}
 	const identityScope = createDeploymentIdentityScope(input.identity);
-	const apiCandidates = input.agentApiCreation?.candidates;
+	// Web 申请与 API 创建提交的是同一种默认 Relay Key（PRD 7.4）：部署没有单独提供 API 的
+	// candidates 时，沿用 Web 申请的候选校验（同一 ModelCatalog、模板绑定与 billing 校验），
+	// 不另设一套可见模型规则（#2759）。两项策略缺任一时仍不装配，标准模板创建保持失败关闭。
+	const deploymentDefaultRelayKeyCandidates =
+		input.personalRelayKeyValidation && input.agentDefaultRelayKeyPolicy
+			? createAgentDefaultRelayKeyCandidatesV1({
+					modelCatalog: input.modelCatalog,
+					...input.agentDefaultRelayKeyPolicy,
+					validation: input.personalRelayKeyValidation,
+				})
+			: undefined;
+	const apiCandidates =
+		input.agentApiCreation?.candidates ?? deploymentDefaultRelayKeyCandidates;
 	const apiModelAdmission = input.agentApiCreation?.keylessModelAdmission;
 	const keylessModelAdmission = apiModelAdmission
 		? { admitModels: apiModelAdmission.admitModels.bind(apiModelAdmission) }
@@ -520,8 +532,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 			: {}),
 		...(personalRelayKeys &&
 		relayKeyEncryptor &&
-		input.personalRelayKeyValidation &&
-		input.agentDefaultRelayKeyPolicy
+		deploymentDefaultRelayKeyCandidates
 			? {
 					agentDefaultRelayKeys: {
 						currentIdentity: personalRelayKeys.currentIdentity,
@@ -529,11 +540,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 							binding: AgentDefaultRelayKeyBindingV1,
 							keyValue: string,
 						) => relayKeyEncryptor.encrypt({ ...binding, plaintext: keyValue }),
-						candidates: createAgentDefaultRelayKeyCandidatesV1({
-							modelCatalog: input.modelCatalog,
-							...input.agentDefaultRelayKeyPolicy,
-							validation: input.personalRelayKeyValidation,
-						}),
+						candidates: deploymentDefaultRelayKeyCandidates,
 					},
 				}
 			: {}),

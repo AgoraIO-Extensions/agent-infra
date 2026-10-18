@@ -382,6 +382,46 @@ function credentialRefusalSummary(
 	return `${row.action}: reason=${details.reason}`;
 }
 
+function agentMetadataSummary(
+	row: Row,
+	scope: PlatformAuditQueryScopeV1,
+): string {
+	if (
+		scope.kind !== "administrator" ||
+		row.source !== "platform" ||
+		row.targetType !== "api_credential" ||
+		row.requestId === null ||
+		row.agentId !== null ||
+		row.executionId !== null ||
+		row.conversationId !== null ||
+		row.result !== row.outcome ||
+		!(
+			row.actorType === "user" ||
+			(row.actorType === "unknown" && row.actorId === "unknown")
+		) ||
+		typeof row.details !== "object" ||
+		row.details === null ||
+		Array.isArray(row.details)
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	const details = row.details as Record<string, unknown>;
+	if (row.outcome !== "succeeded")
+		return credentialRefusalSummary(row, details);
+	const ids = details.returnedAgentIds;
+	if (
+		row.actorType !== "user" ||
+		row.targetId === "unknown" ||
+		Object.keys(details).length !== 2 ||
+		details.grantFilter !== "manage_or_use" ||
+		!Array.isArray(ids) ||
+		ids.length > 100 ||
+		!ids.every(boundedText) ||
+		new Set(ids).size !== ids.length
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	return row.action;
+}
+
 function credentialMutationSummary(
 	row: Row,
 	scope: PlatformAuditQueryScopeV1,
@@ -473,10 +513,15 @@ function project(
 		row.action === "api.credential.narrowed"
 			? credentialMutationSummary(row, scope)
 			: null;
+	const agentSummary =
+		row.action === "api.agent.metadata.read"
+			? agentMetadataSummary(row, scope)
+			: null;
 	const legacy =
 		executionActions.has(row.action) ||
 		metadataSummary !== null ||
-		mutationSummary !== null
+		mutationSummary !== null ||
+		agentSummary !== null
 			? null
 			: decodePlatformAuditRowV1(row);
 	// The legacy decoder has already validated exact Task API metadata and its
@@ -556,6 +601,7 @@ function project(
 		].every((value) => value === null || boundedText(value)) ||
 		(metadataSummary === null &&
 			mutationSummary === null &&
+			agentSummary === null &&
 			![
 				"agent_application",
 				"agent",
@@ -573,6 +619,7 @@ function project(
 		legacy?.summary ??
 		metadataSummary ??
 		mutationSummary ??
+		agentSummary ??
 		(row.action === "audit.query.completed" ||
 		row.action === "audit.query.failed"
 			? projectPlatformAuditQuerySummaryV1(row.action, row.details)

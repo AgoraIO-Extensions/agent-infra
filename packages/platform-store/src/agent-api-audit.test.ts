@@ -230,6 +230,37 @@ describe("Agent API facts in the existing audit decoder", () => {
 			}),
 		).toThrow();
 	});
+	it("accepts only truthful user API manage grant details (#2759)", () => {
+		const event = {
+			...row,
+			actorType: "user",
+			actorId: "owner",
+			action: "api.agent.manager.granted",
+			details: {
+				userId: "owner",
+				grantType: "manage",
+				granted: true,
+				authorizationRevision: "manage-1",
+			},
+		};
+		expect(decodePlatformAuditRowV1(event).action).toBe(
+			"api.agent.manager.granted",
+		);
+		expect(
+			decodePlatformAuditRowV1({
+				...event,
+				action: "api.agent.manager.revoked",
+				details: { ...event.details, granted: false },
+			}).action,
+		).toBe("api.agent.manager.revoked");
+		for (const details of [
+			{ ...event.details, grantType: "use" },
+			{ ...event.details, granted: false },
+			{ ...event.details, authorizationRevision: null },
+			{ ...event.details, credentialValue: "controlled-private-sentinel" },
+		])
+			expect(() => decodePlatformAuditRowV1({ ...event, details })).toThrow();
+	});
 	it("keeps application API creation and default-key actors auditable", () => {
 		const accepted = decodePlatformAuditRowV1({
 			...row,

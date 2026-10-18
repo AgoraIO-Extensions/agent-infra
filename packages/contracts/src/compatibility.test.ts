@@ -542,6 +542,56 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true });
 		}
 	});
+	it("admits only the exact user API manage grant addition (#2759)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/agents/{agentId}/api-manage-grants/{userId}";
+		const schemas = [
+			"AgentUserManageGrantRequestV1",
+			"AgentUserManageGrantResponseV1",
+			"AgentUserManageRevokeRequestV1",
+			"AgentUserManageRevokeResponseV1",
+		];
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		for (const name of schemas) delete previous.components.schemas[name];
+		const dir = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-manage-grant-compat-"),
+		);
+		const before = resolve(dir, "before.json");
+		const after = resolve(dir, "after.json");
+		try {
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				(value: typeof current) => {
+					value.paths[path].delete.operationId = "unreviewedRevoke";
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentUserManageGrantResponseV1.properties.credential =
+						{ type: "string" };
+				},
+				(value: typeof current) => {
+					value.info.title = "unreviewed";
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(dir, { recursive: true });
+		}
+	});
 	it.each([1, 2])(
 		"admits only the exact application use grant addition for browser V%s",
 		async (version) => {
@@ -2619,6 +2669,15 @@ describe("contract compatibility command", () => {
 		delete current.paths["/api/v2/agents/{agentId}/api-use-grants/{userId}"];
 		delete current.components.schemas.AgentUserUseRevokeRequestV1;
 		delete current.components.schemas.AgentUserUseRevokeResponseV1;
+		// #2759 新增的用户 API 管理授权同样属于后加内容。
+		delete current.paths["/api/v2/agents/{agentId}/api-manage-grants/{userId}"];
+		for (const name of [
+			"AgentUserManageGrantRequestV1",
+			"AgentUserManageGrantResponseV1",
+			"AgentUserManageRevokeRequestV1",
+			"AgentUserManageRevokeResponseV1",
+		])
+			delete current.components.schemas[name];
 		delete current.components.schemas.AgentApplicationCreateRequestV2.properties
 			.defaultRelayKey;
 		// #2421 之后新增的默认 Key 替换字段同样属于后加内容。

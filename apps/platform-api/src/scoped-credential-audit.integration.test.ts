@@ -14,6 +14,7 @@ import {
 import { createClient } from "../../web/src/pilot/generated-v2/client/index.ts";
 import {
 	issuePersonalApiCredentialV2,
+	listAgentsV2,
 	narrowPersonalApiCredentialV2,
 	revokePersonalApiCredentialV2,
 } from "../../web/src/pilot/generated-v2/sdk.gen.ts";
@@ -366,4 +367,73 @@ describe("credential governance audit over the original API and PostgreSQL", () 
 			}
 		},
 	);
+	it("keeps admin audit readable after actual issued Bearer Agent reads and refusals", async () => {
+		const client = createClient({ baseUrl: origin });
+		const issued = await issuePersonalApiCredentialV2({
+			client,
+			auth: "session_alice",
+			headers: { "Idempotency-Key": randomUUID() },
+			body: { scopes: ["agent:read", "agent:use"], expiresAt: null },
+		});
+		expect(issued.response?.status).toBe(201);
+		if (!issued.data?.credential) throw new Error("No produced credential");
+		const material = issued.data.credential;
+		privateValues.push(material, hash(material));
+		await read("/api/v3/admin/audit?limit=100");
+		const listed = await listAgentsV2({ client, auth: material });
+		expect(listed.response?.status).toBe(200);
+		expect(listed.data?.items).toEqual([]);
+		const rejected = await listAgentsV2({
+			client,
+			auth: `papi_${randomBytes(32).toString("base64url")}`,
+		});
+		expect(rejected.response?.status).toBe(401);
+		const rows = await sql<{ id: string; outcome: string }[]>`
+			select id,outcome from platform.audit_events where action='api.agent.metadata.read' order by occurred_at,id`;
+		expect(rows.map((row) => row.outcome)).toEqual(["succeeded", "rejected"]);
+		const page = ScopedPlatformAuditPageV1Schema.parse(
+			await read("/api/v3/admin/audit?action=api.agent.metadata.read"),
+		);
+		expect(page.items.map((item) => item.auditId).sort()).toEqual(
+			rows.map((row) => row.id).sort(),
+		);
+		for (const row of rows) {
+			const record = ScopedPlatformAuditProjectionV1Schema.parse(
+				await read(`/api/v3/admin/audit/${row.id}`),
+			);
+			expect(record).toMatchObject({
+				action: "api.agent.metadata.read",
+				result: row.outcome,
+				summary:
+					row.outcome === "succeeded"
+						? "api.agent.metadata.read"
+						: "api.agent.metadata.read: reason=authentication_required",
+				executionId: null,
+				agentId: null,
+				originalPrincipal: null,
+			});
+			for (const field of [
+				"details",
+				"returnedAgentIds",
+				"grantFilter",
+				"credentialHash",
+			])
+				expect(record).not.toHaveProperty(field);
+			for (const headers of [
+				cookie("alice"),
+				cookie("bob"),
+				{ Authorization: `Bearer ${material}` },
+			]) {
+				await read(`/api/v1/audit/${row.id}`, headers, 404);
+				await read(
+					`/api/v3/admin/audit/${row.id}`,
+					headers,
+					"Authorization" in headers ? 401 : 404,
+				);
+			}
+		}
+		await read("/api/v3/admin/audit?limit=100");
+		for (const value of privateValues)
+			expect(logs.join("\n")).not.toContain(value);
+	}, 30_000);
 });

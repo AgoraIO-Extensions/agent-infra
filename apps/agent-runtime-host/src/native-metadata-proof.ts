@@ -56,7 +56,16 @@ export function createRuntimeNativeMetadataProofVerifierV1(options: {
 				string,
 				unknown
 			>;
+			const canonicalHeader = Buffer.from(
+				JSON.stringify({
+					alg: "EdDSA",
+					kid: options.keyVersion,
+					typ: "native-metadata+jws",
+				}),
+				"utf8",
+			).toString("base64url");
 			if (
+				encodedHeader !== canonicalHeader ||
 				header.alg !== "EdDSA" ||
 				header.typ !== "native-metadata+jws" ||
 				header.kid !== options.keyVersion
@@ -77,6 +86,8 @@ export function createRuntimeNativeMetadataProofVerifierV1(options: {
 			const claims = RuntimeNativeMetadataProofClaimsV1Schema.parse(
 				JSON.parse(decodePart(encodedPayload)),
 			);
+			if (claims.keyVersion !== options.keyVersion)
+				throw new Error("Native metadata proof is invalid");
 			const {
 				proof: _proof,
 				apiRequestSourceRef: _source,
