@@ -137,6 +137,8 @@
 	flex: none;
 	font-family: ui-monospace, "SF Mono", Menlo, monospace;
 	font-size: 11px;
+	line-height: 1.4;
+	letter-spacing: 0.08em;
 	color: var(--muted-foreground);
 	padding: 0 12px;
 	margin-bottom: 8px;
@@ -962,7 +964,6 @@ a[class~="group/button"] {
 	height: auto;
 	border: 0;
 	border-bottom: 2px solid transparent;
-	box-shadow: none;
 	min-height: 44px;
 	min-width: 0;
 	padding: 9px 2px;
@@ -971,6 +972,10 @@ a[class~="group/button"] {
 	font-size: 14px;
 	white-space: normal;
 	overflow-wrap: anywhere;
+}
+.management-content .tabs [role="tab"]:focus-visible {
+	outline: 2px solid var(--primary);
+	outline-offset: 3px;
 }
 .management-content .tabs [aria-selected="true"] {
 	border-bottom: 2px solid var(--primary);

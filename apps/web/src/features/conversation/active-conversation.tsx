@@ -60,7 +60,11 @@ export function createBrowserConversationHandlers(
 ) {
 	return {
 		onPauseAgent: ({ id }: BrowserHandoffActionInputV1) => {
-			void invokeBrowser({ schemaVersion: 1, command: "pause", handoffId: id });
+			void invokeBrowser({
+				schemaVersion: 1,
+				command: "revoke",
+				handoffId: id,
+			});
 		},
 		onTakeOver: ({ id }: BrowserHandoffActionInputV1) => {
 			void invokeBrowser({

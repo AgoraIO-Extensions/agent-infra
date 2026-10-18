@@ -622,7 +622,7 @@ describe("functional conversation screen", () => {
 			} else {
 				expect(trigger.isConnected).toBe(true);
 			}
-			const back = screen.getByRole("button", { name: "返回对话" });
+			const back = screen.getByRole("button", { name: "关闭窗口" });
 			back.focus();
 			fireEvent.click(back);
 			const target =

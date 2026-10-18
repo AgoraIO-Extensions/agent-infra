@@ -1314,7 +1314,7 @@ test("owned Agent tab consumes the authorized collection and supports keyboard n
 }, info) => {
 	await fixture(page);
 	await page.goto("/my-agents");
-	const applications = page.getByRole("tab", { name: "申请", exact: true });
+	const applications = page.getByRole("tab", { name: /^申请(?:\s+\d+)?$/ });
 	await applications.focus();
 	await page.keyboard.press("ArrowRight");
 	await expect(page.getByRole("tab", { name: "已创建 Agent" })).toBeFocused();

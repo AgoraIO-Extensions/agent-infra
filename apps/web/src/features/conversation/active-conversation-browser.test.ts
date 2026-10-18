@@ -35,7 +35,7 @@ describe("ActiveConversation Browser command wiring", () => {
 		handlers.onCancelConfirmation(input);
 
 		expect(invokeBrowser.mock.calls.map(([body]) => body)).toEqual([
-			{ schemaVersion: 1, command: "pause", handoffId: input.id },
+			{ schemaVersion: 1, command: "revoke", handoffId: input.id },
 			{ schemaVersion: 1, command: "take_over", handoffId: input.id },
 			{
 				schemaVersion: 1,

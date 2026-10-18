@@ -31,8 +31,16 @@ function shortIdentifier(value: string | null | undefined) {
 	if (!value) return "未提供";
 	return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
 }
-function Identifier({ value }: { value: string | null | undefined }) {
-	return value ? <code title={value}>{shortIdentifier(value)}</code> : null;
+function Identifier({
+	value,
+	full = false,
+}: {
+	value: string | null | undefined;
+	full?: boolean;
+}) {
+	return value ? (
+		<code title={value}>{full ? value : shortIdentifier(value)}</code>
+	) : null;
 }
 
 export function AuditRecordDetail({ record }: { record: AuditRecord }) {
@@ -69,7 +77,7 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 				<Field label="实际后台组件">{record.executor}</Field>
 				<Field label="对象类型">{record.subject.kind}</Field>
 				<Field label="对象 ID">
-					<Identifier value={record.subject.subjectId} />
+					<Identifier value={record.subject.subjectId} full />
 				</Field>
 				<Field label="授权记录引用">
 					<Identifier value={record.authorizationRecordId} />
@@ -80,13 +88,13 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 					<Identifier value={record.requestId} />
 				</Field>
 				<Field label="原 Execution ID">
-					<Identifier value={record.executionId} />
+					<Identifier value={record.executionId} full />
 				</Field>
 				<Field label="Agent ID">
-					<Identifier value={record.agentId} />
+					<Identifier value={record.agentId} full />
 				</Field>
 				<Field label="Conversation ID">
-					<Identifier value={record.conversationId} />
+					<Identifier value={record.conversationId} full />
 				</Field>
 				<Field label="Trace ID">
 					<Identifier value={record.traceId} />

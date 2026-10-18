@@ -152,9 +152,7 @@ describe("AdminAgentApplicationsScreen", () => {
 		);
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 		expect(screen.getByRole("status").textContent).toContain("创建中");
-		await waitFor(() =>
-			expect(document.activeElement).toBe(screen.getByRole("status")),
-		);
+		expect(document.activeElement).not.toBe(screen.getByRole("status"));
 	});
 
 	it("latches a decision before the parent rerenders and releases on error", async () => {

@@ -203,8 +203,10 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 																	: normalizedPathname ===
 																			"/my-settings/relay-key"
 																		? "个人 Relay Key"
-																		: normalizedPathname === "/skills/manage"
-																			? "我的 Skill"
+																		: normalizedPathname.startsWith(
+																					"/skills/manage",
+																				)
+																			? "Skill Hub 管理"
 																			: normalizedPathname === "/skills" ||
 																					normalizedPathname.startsWith(
 																						"/skills/",

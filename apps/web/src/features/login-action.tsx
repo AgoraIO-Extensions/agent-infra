@@ -86,7 +86,10 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 	const passwordError = clientError === "password" ? "请输入密码。" : undefined;
 	const serverError =
 		state === "error" && errorStatus !== null
-			? errorStatus === 503 || (errorStatus !== null && errorStatus >= 500)
+			? errorStatus === 0 ||
+				errorStatus === 429 ||
+				errorStatus === 503 ||
+				(errorStatus !== null && errorStatus >= 500)
 				? "登录服务暂时不可用，请稍后重试。"
 				: errorStatus === 403
 					? "请从平台入口地址访问后重试。"

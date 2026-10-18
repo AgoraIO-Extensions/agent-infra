@@ -69,7 +69,11 @@ describe("BrowserCapabilityStatus", () => {
 		["intent", "正在受理", "操作：读取当前仓库页面"],
 		["observing", "正在观察", "Browser 工作流正在推进。"],
 		["action", "正在执行", "操作：浏览器操作"],
-		["approval_pending", "等待确认", "操作：浏览器操作 · 域名：example.test"],
+		[
+			"approval_pending",
+			"等待确认",
+			"操作：浏览器操作 · 目标 origin：https://example.test",
+		],
 		["handoff_pending", "等待接管", "需要完成 MFA"],
 		["handed_off", "用户已接管", "Agent 操作保持暂停"],
 		["unknown", "待核实", "已阻断自动重试"],

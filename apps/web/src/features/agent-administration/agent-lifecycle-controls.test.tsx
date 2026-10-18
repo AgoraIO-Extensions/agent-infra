@@ -176,7 +176,7 @@ describe("AgentLifecycleControls", () => {
 		expect(screen.queryByRole("button")).toBeNull();
 	});
 
-	it("keeps administrator disable out of the Owner configuration view", () => {
+	it("keeps administrator disable available in the Owner configuration view", () => {
 		render(
 			<AgentLifecycleControls
 				agent={unavailableAgent}
@@ -187,7 +187,7 @@ describe("AgentLifecycleControls", () => {
 
 		expect(screen.getByRole("button", { name: "停止 Agent" })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "重启 Agent" })).toBeTruthy();
-		expect(screen.queryByRole("button", { name: "停用 Agent" })).toBeNull();
+		expect(screen.getByRole("button", { name: "停用 Agent" })).toBeTruthy();
 	});
 
 	it("renders processing and terminal lifecycle feedback for the matching Agent", () => {

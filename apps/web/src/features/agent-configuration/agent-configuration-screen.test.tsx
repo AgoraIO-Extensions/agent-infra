@@ -193,7 +193,9 @@ describe("AgentConfigurationScreen", () => {
 		expect(
 			screen.getByRole("heading", { name: "管理员管理视图" }),
 		).toBeTruthy();
-		expect(screen.getByText(/当前账号不是此 Agent 的 Owner/)).toBeTruthy();
+		expect(
+			screen.getByText("此页仅提供管理员授权与生命周期操作。"),
+		).toBeTruthy();
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
 	});
 

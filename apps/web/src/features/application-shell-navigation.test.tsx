@@ -132,7 +132,7 @@ async function showShell(
 describe("Original IA workbench navigation", () => {
 	it("updates the document title from the active route", async () => {
 		await showShell(false, "/agents");
-		expect(document.title).toBe("Agent 目录 · Agent Infra");
+		expect(document.title).toBe("Agent 目录 · Agora Agent");
 	});
 
 	it("uses a standalone login screen without the application shell", async () => {
@@ -162,8 +162,8 @@ describe("Original IA workbench navigation", () => {
 		},
 	);
 	it.each([
-		["/skills/manage", "我的 Skill"],
-		["/skills/manage/", "我的 Skill"],
+		["/skills/manage", "Skill Hub 管理"],
+		["/skills/manage/", "Skill Hub 管理"],
 	])("maps Skill Hub route %s to the management IA", async (entry, label) => {
 		await showShell(false, entry);
 		const management = screen.getByRole("navigation", { name: "我的管理" });

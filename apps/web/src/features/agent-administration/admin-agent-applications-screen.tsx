@@ -418,7 +418,6 @@ export function AdminAgentApplicationsScreen({
 				</div>
 				{state.kind === "ready" && (
 					<div className="flex flex-wrap items-center gap-2">
-						<Badge variant="outline">系统管理员 · 只读审计</Badge>
 						<Badge variant="outline" data-status="pending_approval">
 							{
 								applications.filter((a) => a.status === "pending_approval")
@@ -426,6 +425,7 @@ export function AdminAgentApplicationsScreen({
 							}{" "}
 							项待处理
 						</Badge>
+						<Badge variant="outline">系统管理员 · 只读审计</Badge>
 					</div>
 				)}
 			</header>
