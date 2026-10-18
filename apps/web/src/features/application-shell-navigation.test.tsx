@@ -12,6 +12,7 @@ import {
 	fireEvent,
 	render,
 	screen,
+	waitFor,
 	within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -90,6 +91,11 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 		"/my-settings/relay-key",
 		"/skills",
 		"/skills/manage",
+		"/skills/$skillVersionId",
+		"/agents/$agentId",
+		"/agents/$agentId/configuration",
+		"/my-agents/$applicationId",
+		"/my-agents/$applicationId/edit",
 		"/eval",
 		"/ops",
 		"/audit",
@@ -138,8 +144,8 @@ describe("Original IA workbench navigation", () => {
 		},
 	);
 	it.each([
-		["/skills/manage", "Skill Hub 管理"],
-		["/skills/manage/", "Skill Hub 管理"],
+		["/skills/manage", "我的 Skill"],
+		["/skills/manage/", "我的 Skill"],
 	])("maps Skill Hub route %s to the management IA", async (entry, label) => {
 		await showShell(false, entry);
 		const management = screen.getByRole("navigation", { name: "我的管理" });
@@ -211,8 +217,8 @@ describe("Original IA workbench navigation", () => {
 		{
 			entry: "/my-settings/api-credentials/",
 			group: "我的管理",
-			label: "API 凭证与应用",
-			title: "API 凭证与应用",
+			label: "API 凭证",
+			title: "API 凭证",
 			administrator: false,
 		},
 		{
@@ -332,7 +338,7 @@ describe("Original IA workbench navigation", () => {
 	it.each([
 		{
 			entry: "/my-settings/api-credentials",
-			label: "API 凭证与应用",
+			label: "API 凭证",
 		},
 		{ entry: "/my-settings/relay-key", label: "个人 Relay Key" },
 	])(
@@ -357,4 +363,264 @@ describe("Original IA workbench navigation", () => {
 			expect(screen.queryByRole("navigation", { name: "系统管理" })).toBeNull();
 		},
 	);
+
+	const navigationOrder = {
+		工作区: ["工作台", "Agent 目录", "对话", "Skill Hub"],
+		我的管理: [
+			"我的 Agent",
+			"创建申请",
+			"我的 Skill",
+			"个人 Relay Key",
+			"API 凭证",
+			"我的执行审计",
+		],
+		系统管理: ["创建审批", "Agent 管理", "评测", "平台审计", "运维观测"],
+	} as const;
+	it.each([false, true])(
+		"orders navigation groups and items as designed (administrator=%s)",
+		async (administrator) => {
+			await showShell(administrator, "/");
+			const main = screen.getByRole("navigation", { name: "主导航" });
+			const groups = within(main)
+				.getAllByRole("navigation")
+				.map((group) => group.getAttribute("aria-label"));
+			expect(groups).toEqual(
+				administrator
+					? ["工作区", "我的管理", "系统管理"]
+					: ["工作区", "我的管理"],
+			);
+			for (const [group, labels] of Object.entries(navigationOrder)) {
+				if (group === "系统管理" && !administrator) continue;
+				const nav = screen.getByRole("navigation", { name: group });
+				expect(
+					within(nav)
+						.getAllByRole("link")
+						.map((link) => link.textContent),
+				).toEqual(labels);
+			}
+			// 不可用的 Connection 是我的管理的最后一项，排在「我的执行审计」之后。
+			const items = screen
+				.getByRole("navigation", { name: "我的管理" })
+				.querySelectorAll(".platform-nav-item");
+			expect(items[items.length - 1]?.getAttribute("aria-disabled")).toBe(
+				"true",
+			);
+			expect(items[items.length - 2]?.textContent).toBe("我的执行审计");
+		},
+	);
+
+	it.each([
+		{
+			entry: "/",
+			group: "工作区",
+			label: "工作台",
+			parent: "工作区",
+			title: "工作台",
+			documentTitle: "Agora Agent · Platform",
+		},
+		{
+			entry: "/agents",
+			group: "工作区",
+			label: "Agent 目录",
+			parent: "工作区",
+			title: "Agent 目录",
+			documentTitle: "Agent 目录 · Agora Agent",
+		},
+		{
+			entry: "/agents/agent-1",
+			group: "工作区",
+			label: "Agent 目录",
+			parent: "Agent 目录",
+			title: "Agent 详情",
+			documentTitle: "Agent 详情 · Agora Agent",
+		},
+		{
+			entry: "/agents/agent-1/configuration",
+			group: "工作区",
+			label: "Agent 目录",
+			parent: "Agent 目录",
+			title: "Owner 配置",
+			documentTitle: "Owner 配置 · Agora Agent",
+		},
+		{
+			entry: "/agents?mode=conversation",
+			group: "工作区",
+			label: "对话",
+			parent: "工作区",
+			title: "选择 Agent 开始对话",
+			documentTitle: "选择 Agent 开始对话 · Agora Agent",
+		},
+		{
+			entry: "/chat/agent-1/conversation-1",
+			group: "工作区",
+			label: "对话",
+			parent: "工作区",
+			title: "对话",
+			documentTitle: "对话 · Agora Agent",
+		},
+		{
+			entry: "/skills",
+			group: "工作区",
+			label: "Skill Hub",
+			parent: "工作区",
+			title: "Skill Hub",
+			documentTitle: "Skill Hub · Agora Agent",
+		},
+		{
+			entry: "/skills/version-1",
+			group: "工作区",
+			label: "Skill Hub",
+			parent: "Skill Hub",
+			title: "Skill 详情",
+			documentTitle: "Skill 详情 · Agora Agent",
+		},
+		{
+			entry: "/skills/manage",
+			group: "我的管理",
+			label: "我的 Skill",
+			parent: "我的管理",
+			title: "我的 Skill",
+			documentTitle: "我的 Skill · Agora Agent",
+		},
+		{
+			entry: "/my-agents",
+			group: "我的管理",
+			label: "我的 Agent",
+			parent: "我的管理",
+			title: "我的 Agent",
+			documentTitle: "我的 Agent · Agora Agent",
+		},
+		{
+			entry: "/my-agents/new",
+			group: "我的管理",
+			label: "创建申请",
+			parent: "我的管理",
+			title: "创建申请",
+			documentTitle: "创建申请 · Agora Agent",
+		},
+		{
+			entry: "/my-agents/application-1",
+			group: "我的管理",
+			label: "我的 Agent",
+			parent: "我的管理",
+			title: "申请详情",
+			documentTitle: "申请详情 · Agora Agent",
+		},
+		{
+			entry: "/my-agents/application-1/edit",
+			group: "我的管理",
+			label: "我的 Agent",
+			parent: "我的管理",
+			title: "编辑申请",
+			documentTitle: "编辑申请 · Agora Agent",
+		},
+		{
+			entry: "/my-settings/relay-key",
+			group: "我的管理",
+			label: "个人 Relay Key",
+			parent: "我的管理",
+			title: "个人 Relay Key",
+			documentTitle: "个人 Relay Key · Agora Agent",
+		},
+		{
+			entry: "/my-settings/api-credentials",
+			group: "我的管理",
+			label: "API 凭证",
+			parent: "我的管理",
+			title: "API 凭证",
+			documentTitle: "API 凭证 · Agora Agent",
+		},
+		{
+			entry: "/audit",
+			group: "我的管理",
+			label: "我的执行审计",
+			parent: "我的管理",
+			title: "我的执行审计",
+			documentTitle: "我的执行审计 · Agora Agent",
+		},
+		{
+			entry: "/admin/approvals",
+			group: "系统管理",
+			label: "创建审批",
+			parent: "系统管理",
+			title: "创建审批",
+			documentTitle: "创建审批 · Agora Agent",
+		},
+		{
+			entry: "/admin/agents",
+			group: "系统管理",
+			label: "Agent 管理",
+			parent: "系统管理",
+			title: "Agent 管理",
+			documentTitle: "Agent 管理 · Agora Agent",
+		},
+		{
+			entry: "/eval",
+			group: "系统管理",
+			label: "评测",
+			parent: "系统管理",
+			title: "评测",
+			documentTitle: "评测 · Agora Agent",
+		},
+		{
+			entry: "/admin/audit",
+			group: "系统管理",
+			label: "平台审计",
+			parent: "系统管理",
+			title: "平台审计",
+			documentTitle: "平台审计 · Agora Agent",
+		},
+		{
+			entry: "/ops",
+			group: "系统管理",
+			label: "运维观测",
+			parent: "系统管理",
+			title: "运维观测",
+			documentTitle: "运维观测 · Agora Agent",
+		},
+	])(
+		"derives one current item, breadcrumb and document title from the route table at $entry",
+		async ({ entry, group, label, parent, title, documentTitle }) => {
+			await showShell(true, entry);
+			const main = screen.getByRole("navigation", { name: "主导航" });
+			// 每条路由恰好一个当前导航项（N-16、N-21）。
+			const current = main.querySelectorAll('[aria-current="page"]');
+			expect(current).toHaveLength(1);
+			expect(current[0]?.textContent).toBe(label);
+			expect(current[0]?.closest("nav")?.getAttribute("aria-label")).toBe(
+				group,
+			);
+			expect(main.querySelectorAll(".selected")).toHaveLength(1);
+			const breadcrumb = screen.getByRole("navigation", { name: "breadcrumb" });
+			expect(
+				[...breadcrumb.querySelectorAll('[data-slot="breadcrumb-item"]')].map(
+					(item) => item.textContent,
+				),
+			).toEqual([parent, title]);
+			expect(document.title).toBe(documentTitle);
+			cleanup();
+		},
+	);
+
+	it("updates the document title after client-side navigation", async () => {
+		await showShell(false, "/my-agents/new");
+		expect(document.title).toBe("创建申请 · Agora Agent");
+		const work = screen.getByRole("navigation", { name: "工作区" });
+		fireEvent.click(within(work).getByRole("link", { name: "工作台" }));
+		await screen.findByRole("heading", { name: "受控工作台" });
+		expect(document.title).toBe("Agora Agent · Platform");
+		fireEvent.click(within(work).getByRole("link", { name: "Skill Hub" }));
+		await waitFor(() => expect(document.title).toBe("Skill Hub · Agora Agent"));
+	});
+
+	it("titles an unregistered route as not found instead of guessing a prefix", async () => {
+		await showShell(true, "/admin/no-such-page");
+		await screen.findByRole("heading", { level: 1, name: "页面不存在" });
+		expect(document.title).toBe("页面不存在 · Agora Agent");
+		expect(
+			screen
+				.getByRole("navigation", { name: "主导航" })
+				.querySelectorAll('[aria-current="page"]'),
+		).toHaveLength(0);
+	});
 });
