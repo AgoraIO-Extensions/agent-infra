@@ -540,13 +540,13 @@ for (const agentCollection of ["held", "unavailable"] as const) {
 				}),
 			).toHaveCount(0);
 			await expect(
-				recent.getByRole("link", { name: "查看历史", exact: true }),
+				recent.getByRole("link", { name: /^查看历史：/ }),
 			).toHaveCount(0);
 			await expect(
-				recent.getByRole("link", { name: "继续对话", exact: true }),
+				recent.getByRole("link", { name: /^继续对话：/ }),
 			).toHaveCount(0);
 			const original = recent
-				.getByRole("link", { name: "打开对话", exact: true })
+				.getByRole("link", { name: /^打开对话：/ })
 				.first();
 			await expect(original).toHaveAttribute(
 				"href",
@@ -799,8 +799,7 @@ for (const state of [
 		).toBeVisible();
 		const recent = recentRegion(page);
 		const original = recent.getByRole("link", {
-			name: "查看历史",
-			exact: true,
+			name: /^查看历史：/,
 		});
 		await expect(original).toHaveAttribute(
 			"href",

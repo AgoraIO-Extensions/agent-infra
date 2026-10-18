@@ -52,7 +52,7 @@ it("submits the application setup contract and clears write-only fields", async 
 	] as const)
 		fireEvent.change(screen.getByLabelText(label), { target: { value } });
 	fireEvent.click(screen.getByRole("checkbox"));
-	fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
+	fireEvent.click(screen.getByRole("button", { name: "验证并绑定：自建应用" }));
 	expect((screen.getByLabelText("应用 Secret") as HTMLInputElement).value).toBe(
 		"",
 	);
@@ -85,7 +85,7 @@ function fillCredentials() {
 	])
 		fireEvent.change(screen.getByLabelText(label), { target: { value } });
 	fireEvent.click(screen.getByRole("checkbox", { name: /我已知悉/ }));
-	fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
+	fireEvent.click(screen.getByRole("button", { name: "验证并绑定：自建应用" }));
 }
 it.each([429, 503])(
 	"retries setup status HTTP %s without resubmitting credentials",
@@ -157,9 +157,11 @@ it("cancels a pending setup without unbinding the existing application", async (
 	await waitFor(() =>
 		expect(screen.getByText(/https:\/\/callback.test/)).toBeTruthy(),
 	);
-	fireEvent.click(screen.getByRole("button", { name: "取消配置" }));
+	fireEvent.click(screen.getByRole("button", { name: "取消配置：自建应用" }));
 	await waitFor(() =>
-		expect(screen.queryByRole("button", { name: "取消配置" })).toBeNull(),
+		expect(
+			screen.queryByRole("button", { name: "取消配置：自建应用" }),
+		).toBeNull(),
 	);
 	expect(screen.getByText("已连接")).toBeTruthy();
 	expect(onUnbind).not.toHaveBeenCalled();
@@ -189,11 +191,15 @@ it("restores a pending session after reload so the Owner can cancel it", async (
 	);
 	render(<WecomAppSetup agentId="agent" onUnbind={vi.fn()} />);
 	await waitFor(() =>
-		expect(screen.getByRole("button", { name: "取消配置" })).toBeTruthy(),
+		expect(
+			screen.getByRole("button", { name: "取消配置：自建应用" }),
+		).toBeTruthy(),
 	);
-	fireEvent.click(screen.getByRole("button", { name: "取消配置" }));
+	fireEvent.click(screen.getByRole("button", { name: "取消配置：自建应用" }));
 	await waitFor(() =>
-		expect(screen.queryByRole("button", { name: "取消配置" })).toBeNull(),
+		expect(
+			screen.queryByRole("button", { name: "取消配置：自建应用" }),
+		).toBeNull(),
 	);
 });
 

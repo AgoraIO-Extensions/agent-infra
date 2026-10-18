@@ -19,6 +19,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import { withObjectName } from "@/lib/accessible-name";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	agentManagementStatusLabels,
@@ -274,6 +275,10 @@ export function AdminAgentsScreen({
 														className={buttonVariants({ variant: "outline" })}
 														params={{ agentId: agent.agentId }}
 														to="/agents/$agentId/configuration"
+														aria-label={withObjectName(
+															"处理 Owner 交接",
+															agent.name,
+														)}
 													>
 														处理 Owner 交接
 													</Link>

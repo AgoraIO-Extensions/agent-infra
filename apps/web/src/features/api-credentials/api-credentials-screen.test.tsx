@@ -94,7 +94,7 @@ describe("ApiCredentialsScreen", () => {
 		expect(within(rows[1]).getByText("已过期")).toBeTruthy();
 		expect(within(rows[2]).getByText("已撤销")).toBeTruthy();
 		expect(
-			screen.getAllByRole("button", { name: "收窄权限与有效期" }),
+			screen.getAllByRole("button", { name: /^收窄权限与有效期：/ }),
 		).toHaveLength(1);
 	});
 
@@ -115,7 +115,7 @@ describe("ApiCredentialsScreen", () => {
 			act(() => vi.advanceTimersByTime(1000));
 			expect(screen.getByText("已过期")).toBeTruthy();
 			expect(
-				screen.queryByRole("button", { name: "收窄权限与有效期" }),
+				screen.queryByRole("button", { name: /^收窄权限与有效期/ }),
 			).toBeNull();
 		} finally {
 			cleanup();
@@ -133,7 +133,9 @@ describe("ApiCredentialsScreen", () => {
 				onNarrow={vi.fn().mockResolvedValue(undefined)}
 			/>,
 		);
-		const button = screen.getByRole("button", { name: "收窄权限与有效期" });
+		const button = screen.getByRole("button", {
+			name: `收窄权限与有效期：${metadata.credentialId}`,
+		});
 		fireEvent.click(button);
 		fireEvent.click(
 			within(screen.getByRole("form", { name: /收窄凭证/ })).getByRole(
@@ -181,7 +183,11 @@ describe("ApiCredentialsScreen", () => {
 			/>,
 		);
 
-		fireEvent.click(screen.getByRole("button", { name: "收窄权限与有效期" }));
+		fireEvent.click(
+			screen.getByRole("button", {
+				name: `收窄权限与有效期：${metadata.credentialId}`,
+			}),
+		);
 		const form = screen.getByRole("form", { name: /收窄凭证/ });
 		fireEvent.click(within(form).getByRole("checkbox", { name: "读取 Agent" }));
 		fireEvent.click(within(form).getByRole("checkbox", { name: "使用 Agent" }));

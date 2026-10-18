@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { withObjectName } from "@/lib/accessible-name";
 import {
 	beginWecomSetup,
 	cancelWecomSetup,
@@ -14,6 +15,8 @@ import {
 import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
 import { openWecomQrAuthorizationV1 } from "./wecom-qr-authorization.js";
 
+// 卡片标题即页面上的对象名，用于区分两张企微卡片里的同名按钮（N-12）。
+const setupTitle = "智能机器人";
 const labels = {
 	not_configured: "未配置",
 	callback: "已配置回调模式",
@@ -328,13 +331,14 @@ export function WecomBotSetup({
 		}
 	}
 
+	const submitLabel = busy ? "验证中…" : "验证并绑定";
 	return (
 		<section
 			aria-label="智能机器人配置"
 			className="space-y-4 rounded-lg border border-slate-200 p-4"
 		>
 			<div className="flex flex-wrap items-center justify-between gap-3">
-				<h3 className="font-semibold">智能机器人</h3>
+				<h3 className="font-semibold">{setupTitle}</h3>
 				<p aria-live="polite" className="text-sm">
 					{status ? labels[status] : "连接状态暂不可用"}
 				</p>
@@ -398,16 +402,18 @@ export function WecomBotSetup({
 				<Button
 					type="button"
 					disabled={busy}
+					aria-label={withObjectName(submitLabel, setupTitle)}
 					onClick={() => {
 						void submit();
 					}}
 				>
-					{busy ? "验证中…" : "验证并绑定"}
+					{submitLabel}
 				</Button>
 				{busy ? (
 					<Button
 						type="button"
 						variant="outline"
+						aria-label={withObjectName("取消配置", setupTitle)}
 						onClick={() => {
 							void cancel();
 						}}
@@ -419,6 +425,7 @@ export function WecomBotSetup({
 					type="button"
 					variant="outline"
 					disabled={busy}
+					aria-label={withObjectName("刷新状态", setupTitle)}
 					onClick={() => {
 						void refresh();
 					}}

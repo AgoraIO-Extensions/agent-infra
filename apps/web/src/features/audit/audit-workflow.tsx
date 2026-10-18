@@ -33,6 +33,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import { withObjectName } from "@/lib/accessible-name";
 import { useApplicationSession } from "../application-shell.js";
 import {
 	auditActionLabels,
@@ -392,7 +393,10 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 										<TableCell data-label="详情">
 											<Button
 												variant="ghost"
-												aria-label="查看审计详情"
+												aria-label={withObjectName(
+													"详情",
+													`${auditActionLabels[record.action]} · ${auditTimestamp(record.occurredAt)}`,
+												)}
 												title="查看审计详情"
 												aria-expanded={auditId === record.auditId}
 												aria-controls={fieldId("detail")}

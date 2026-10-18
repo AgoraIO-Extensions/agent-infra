@@ -199,9 +199,7 @@ test("own audit page filters, paginates, opens detail, and fits mobile", async (
 	await expect(
 		page.getByRole("heading", { name: "只看自己的执行事实。", exact: true }),
 	).toBeVisible();
-	await expect(page.getByRole("button", { name: "查看审计详情" })).toHaveCount(
-		1,
-	);
+	await expect(page.getByRole("button", { name: /^详情：/ })).toHaveCount(1);
 	await page
 		.getByLabel("动作", { exact: true })
 		.selectOption("task.api.access");
@@ -212,14 +210,12 @@ test("own audit page filters, paginates, opens detail, and fits mobile", async (
 	await expect(
 		page.getByText("Execution：未提供", { exact: true }),
 	).toBeVisible();
-	await page.getByRole("button", { name: "查看审计详情" }).click();
+	await page.getByRole("button", { name: /^详情：/ }).click();
 	await expect(
 		page.getByRole("region", { name: "审计详情", exact: true }),
 	).toContainText("agent-audit-b");
 	await page.keyboard.press("Escape");
-	await expect(
-		page.getByRole("button", { name: "查看审计详情" }),
-	).toBeFocused();
+	await expect(page.getByRole("button", { name: /^详情：/ })).toBeFocused();
 	await expect(
 		page.evaluate(
 			() => document.documentElement.scrollWidth <= window.innerWidth,
@@ -284,7 +280,7 @@ for (const compact of [false, true]) {
 			"原发起主体 · 用户：audit-user-a",
 		);
 		await expect(worker.getByText("结果待核实", { exact: true })).toBeVisible();
-		await worker.getByRole("button", { name: "查看审计详情" }).click();
+		await worker.getByRole("button", { name: /^详情：/ }).click();
 		const dialog = page.getByRole("region", { name: "审计详情", exact: true });
 		await expect(dialog).toContainText(background.summary);
 		await expect(dialog).toContainText("后台组件 · platform_worker");
@@ -310,9 +306,7 @@ for (const compact of [false, true]) {
 			contentType: "image/png",
 		});
 		await page.keyboard.press("Escape");
-		await expect(
-			worker.getByRole("button", { name: "查看审计详情" }),
-		).toBeFocused();
+		await expect(worker.getByRole("button", { name: /^详情：/ })).toBeFocused();
 		await page.getByLabel("起始时间", { exact: true }).fill("2026-09-27T00:00");
 		await page.getByLabel("结束时间", { exact: true }).fill("2026-09-29T00:00");
 		await page.getByLabel("主体类型", { exact: true }).selectOption("user");
@@ -389,9 +383,7 @@ test("employee direct administrator audit route neither requests nor displays ad
 	await expect(
 		page.getByText("当前无权访问平台审计。", { exact: true }),
 	).toBeVisible();
-	await expect(page.getByRole("button", { name: "查看审计详情" })).toHaveCount(
-		0,
-	);
+	await expect(page.getByRole("button", { name: /^详情：/ })).toHaveCount(0);
 	expect(
 		api.requests.filter((request) =>
 			request.path.startsWith("/api/v3/admin/audit"),
@@ -465,7 +457,7 @@ test("same-user administrator role revocation clears list and detail despite a l
 		await expect(
 			page.getByText(governance.summary, { exact: true }),
 		).toBeVisible();
-		await page.getByRole("button", { name: "查看审计详情" }).click();
+		await page.getByRole("button", { name: /^详情：/ }).click();
 		await expect(
 			page.getByRole("region", { name: "审计详情", exact: true }),
 		).toContainText(governance.summary);
@@ -516,9 +508,7 @@ test("same-user administrator role revocation clears list and detail despite a l
 		await expect(
 			page.getByText(governance.subject.subjectId, { exact: true }),
 		).toHaveCount(0);
-		await expect(
-			page.getByRole("button", { name: "查看审计详情" }),
-		).toHaveCount(0);
+		await expect(page.getByRole("button", { name: /^详情：/ })).toHaveCount(0);
 		expect(api.requests.filter((request) => request.method !== "GET")).toEqual(
 			[],
 		);
@@ -536,7 +526,7 @@ for (const route of ["/audit", "/admin/audit"]) {
 		await fixture(page, route === "/audit" ? "employee" : "admin");
 		await page.goto(route);
 		await expect(
-			page.getByRole("button", { name: "查看审计详情" }).first(),
+			page.getByRole("button", { name: /^详情：/ }).first(),
 		).toBeVisible();
 		for (const viewport of designViewports) {
 			await page.setViewportSize(viewport);

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { withObjectName } from "@/lib/accessible-name";
 import {
 	beginWecomAppSetup,
 	cancelWecomAppSetup,
@@ -14,6 +15,8 @@ import {
 } from "../../pilot/generated/sdk.gen.js";
 import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
 
+// 卡片标题即页面上的对象名，用于区分两张企微卡片里的同名按钮（N-12）。
+const setupTitle = "自建应用";
 const labels = {
 	not_configured: "未配置",
 	callback: "已配置回调模式",
@@ -263,13 +266,14 @@ export function WecomAppSetup({
 		}
 	}
 
+	const submitLabel = busy ? "验证中…" : "验证并绑定";
 	return (
 		<section
 			aria-label="自建应用配置"
 			className="space-y-4 rounded-lg border border-border p-4"
 		>
 			<div className="flex flex-wrap items-center justify-between gap-3">
-				<h3 className="font-semibold">自建应用</h3>
+				<h3 className="font-semibold">{setupTitle}</h3>
 				<p aria-live="polite" className="text-sm">
 					{status ? labels[status] : "连接状态暂不可用"}
 				</p>
@@ -426,11 +430,21 @@ export function WecomAppSetup({
 				</Alert>
 			) : null}
 			<div className="flex flex-wrap gap-3">
-				<Button type="button" disabled={busy} onClick={() => void submit()}>
-					{busy ? "验证中…" : "验证并绑定"}
+				<Button
+					type="button"
+					disabled={busy}
+					aria-label={withObjectName(submitLabel, setupTitle)}
+					onClick={() => void submit()}
+				>
+					{submitLabel}
 				</Button>
 				{busy ? (
-					<Button type="button" variant="outline" onClick={() => void cancel()}>
+					<Button
+						type="button"
+						variant="outline"
+						aria-label={withObjectName("取消配置", setupTitle)}
+						onClick={() => void cancel()}
+					>
 						取消配置
 					</Button>
 				) : null}
@@ -438,6 +452,7 @@ export function WecomAppSetup({
 					type="button"
 					variant="outline"
 					disabled={busy}
+					aria-label={withObjectName("刷新状态", setupTitle)}
 					onClick={() => void refresh()}
 				>
 					刷新状态

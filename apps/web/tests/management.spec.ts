@@ -778,7 +778,7 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 		.getByRole("link", { name: "退出创建", exact: true })
 		.click();
 	await expect(page).toHaveURL(/\/my-agents$/);
-	await page.getByRole("link", { name: "查看申请", exact: true }).click();
+	await page.getByRole("link", { name: /^查看申请：/ }).click();
 	await page.getByRole("link", { name: "修改申请" }).click();
 	await expect(page.getByText("退出创建", { exact: true })).toHaveCount(0);
 	await expect(
@@ -2061,7 +2061,7 @@ for (const route of [
 			).toBeVisible();
 		else if (route === "/my-agents")
 			await expect(
-				page.getByRole("link", { name: "查看申请", exact: true }).first(),
+				page.getByRole("link", { name: /^查看申请：/ }).first(),
 			).toBeVisible();
 		else if (route === "/agents")
 			await expect(page.locator(".directory-card")).toHaveCount(3);

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { withObjectName } from "@/lib/accessible-name";
 import type {
 	PersonalApiCredentialMetadataV1,
 	PersonalApiCredentialNarrowRequestV1,
@@ -147,7 +148,12 @@ export function NarrowCredentialForm({
 			<p className="text-muted-foreground text-sm">
 				只可减少当前权限或提前到期。留空保留当前过期时间；服务端会校验最新权限和时间。
 			</p>
-			<fieldset disabled={busy} aria-describedby={`${id}-scope-hint`}>
+			{/* 多张凭证可同时展开收窄表单，分组名带凭证标识以便区分（N-12）。 */}
+			<fieldset
+				disabled={busy}
+				aria-label={withObjectName("保留的权限", credential.credentialId)}
+				aria-describedby={`${id}-scope-hint`}
+			>
 				<legend className="mb-2 font-medium text-sm">保留的权限</legend>
 				<p
 					id={`${id}-scope-hint`}

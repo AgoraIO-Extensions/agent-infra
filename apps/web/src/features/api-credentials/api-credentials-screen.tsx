@@ -14,6 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { withObjectName } from "@/lib/accessible-name";
 import type {
 	IssuePersonalApiCredentialV2Responses,
 	PersonalApiCredentialIssueRequestV1,
@@ -365,6 +366,7 @@ function CredentialRow({
 	}, [expiry, now, revoked]);
 	const active = !revoked && !expired;
 	const busy = pending || Boolean(narrowingCredentialId);
+	const revokeLabel = pending ? "正在撤销…" : "撤销";
 	useEffect(() => {
 		if (restoreFocus.current && !editing && !busy) {
 			narrowButton.current?.focus();
@@ -420,6 +422,10 @@ function CredentialRow({
 							variant="outline"
 							ref={narrowButton}
 							aria-expanded={editing}
+							aria-label={withObjectName(
+								"收窄权限与有效期",
+								credential.credentialId,
+							)}
 							disabled={busy}
 							onClick={() => {
 								setNotice(false);
@@ -433,13 +439,14 @@ function CredentialRow({
 						<Button
 							type="button"
 							variant="destructive"
+							aria-label={withObjectName(revokeLabel, credential.credentialId)}
 							onClick={() => {
 								setEditing(false);
 								void onRevoke(credential.credentialId).catch(() => undefined);
 							}}
 							disabled={busy}
 						>
-							{pending ? "正在撤销…" : "撤销"}
+							{revokeLabel}
 						</Button>
 					) : null}
 				</div>
