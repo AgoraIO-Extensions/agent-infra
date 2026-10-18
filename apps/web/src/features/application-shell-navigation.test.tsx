@@ -101,6 +101,7 @@ async function showShell(
 		"/my-settings/api-credentials",
 		"/my-settings/relay-key",
 		"/skills",
+		"/skills/$skillVersionId",
 		"/skills/manage",
 		"/eval",
 		"/ops",
@@ -162,8 +163,8 @@ describe("Original IA workbench navigation", () => {
 		},
 	);
 	it.each([
-		["/skills/manage", "Skill Hub 管理"],
-		["/skills/manage/", "Skill Hub 管理"],
+		["/skills/manage", "我的 Skill"],
+		["/skills/manage/", "我的 Skill"],
 	])("maps Skill Hub route %s to the management IA", async (entry, label) => {
 		await showShell(false, entry);
 		const management = screen.getByRole("navigation", { name: "我的管理" });
@@ -177,6 +178,54 @@ describe("Original IA workbench navigation", () => {
 		).toBeTruthy();
 		cleanup();
 	});
+
+	it.each([
+		{
+			entry: "/skills",
+			group: "工作区",
+			label: "Skill Hub",
+			parent: "工作区",
+			title: "Skill Hub",
+		},
+		{
+			entry: "/skills/version-1",
+			group: "工作区",
+			label: "Skill Hub",
+			parent: "Skill Hub",
+			title: "版本详情",
+		},
+		{
+			entry: "/skills/manage",
+			group: "我的管理",
+			label: "我的 Skill",
+			parent: "系统管理",
+			title: "我的 Skill",
+		},
+	])(
+		"keeps Skill Hub navigation, title and breadcrumb aligned at $entry",
+		async ({ entry, group, label, parent, title }) => {
+			await showShell(false, entry);
+			const activeGroup = screen.getByRole("navigation", { name: group });
+			const activeLink = within(activeGroup).getByRole("link", { name: label });
+			expect(activeLink.getAttribute("aria-current")).toBe("page");
+			expect(activeLink.className).toContain("selected");
+			expect(
+				document.querySelectorAll('.platform-nav-item[aria-current="page"]'),
+			).toHaveLength(1);
+			expect(
+				screen.getByText(parent, {
+					selector: '[data-slot="breadcrumb-item"]',
+				}),
+			).toBeTruthy();
+			expect(
+				screen.getByText(title, {
+					selector: '[data-slot="breadcrumb-page"]',
+				}),
+			).toBeTruthy();
+			expect(document.title).toBe(`${title} · Agora Agent`);
+			cleanup();
+		},
+	);
 
 	it.each([
 		["/eval", "评测"],

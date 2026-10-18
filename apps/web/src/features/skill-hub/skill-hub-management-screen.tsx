@@ -238,7 +238,7 @@ export function SkillHubManagementScreen({
 		<section aria-labelledby="skill-hub-management-heading">
 			<header className="page-heading">
 				<div className="min-w-0">
-					<p className="page-eyebrow">系统管理 / Skill Hub</p>
+					<p className="page-eyebrow">系统管理 / 我的 Skill</p>
 					<h1 id="skill-hub-management-heading">管理固定版本与 Agent 配置。</h1>
 					<p>
 						项目、发布、审核和 Agent
