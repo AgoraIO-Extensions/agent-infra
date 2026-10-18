@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { LoadingLine } from "@/components/ui/spinner";
+import { withObjectName } from "@/lib/accessible-name";
 import { statusTone } from "@/lib/status-tone";
 import type {
 	AgentProjectionV2,
@@ -206,6 +207,12 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 										(agent !== undefined &&
 											!canStartPlatformConversation(agent)) ||
 										conversation.status === "unavailable";
+									const title = conversation.title ?? "未命名对话";
+									const action = readOnly
+										? "查看历史"
+										: agent
+											? "继续对话"
+											: "打开对话";
 									return (
 										<article
 											className="workbench-card workbench-recent-row"
@@ -219,7 +226,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 												) : (
 													<Badge tone="gray">状态暂时无法确认</Badge>
 												)}
-												<h3>{conversation.title ?? "未命名对话"}</h3>
+												<h3>{title}</h3>
 												<p>
 													{agent?.name ?? "所属 Agent 暂时无法读取"} ·{" "}
 													<time dateTime={conversation.updatedAt}>
@@ -243,12 +250,9 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 												search={{
 													view: undefined,
 												}}
+												aria-label={withObjectName(action, title)}
 											>
-												{readOnly
-													? "查看历史"
-													: agent
-														? "继续对话"
-														: "打开对话"}
+												{action}
 											</Link>
 										</article>
 									);
@@ -326,6 +330,10 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 													className={buttonVariants({ variant: "ghost" })}
 													to="/my-agents/$applicationId/edit"
 													params={{ applicationId: application.applicationId }}
+													aria-label={withObjectName(
+														"修改并重新提交",
+														application.name,
+													)}
 												>
 													修改并重新提交
 												</Link>
@@ -362,6 +370,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 													className={buttonVariants({ variant: "ghost" })}
 													to="/agents/$agentId/configuration"
 													params={{ agentId: agent.agentId }}
+													aria-label={withObjectName("配置与管理", agent.name)}
 												>
 													配置与管理
 												</Link>
@@ -446,6 +455,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 										className={buttonVariants({ variant: "ghost" })}
 										to="/agents/$agentId"
 										params={{ agentId: agent.agentId }}
+										aria-label={withObjectName("查看详情", agent.name)}
 									>
 										查看详情
 									</Link>
@@ -489,6 +499,10 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 										className={buttonVariants({ variant: "ghost" })}
 										to="/my-agents/$applicationId"
 										params={{ applicationId: application.applicationId }}
+										aria-label={withObjectName(
+											"查看申请状态",
+											application.name,
+										)}
 									>
 										查看申请状态
 									</Link>

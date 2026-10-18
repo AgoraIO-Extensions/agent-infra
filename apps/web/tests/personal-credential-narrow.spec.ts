@@ -359,13 +359,13 @@ test("revocation is confirmed with the credential and its consequence before one
 	await page.goto("/my-settings/api-credentials");
 	const rows = page.getByRole("list", { name: "个人 API 凭证列表" });
 	const trigger = rows.getByRole("button", {
-		name: `撤销凭证 ${initial.credentialId}`,
+		name: `撤销：${initial.credentialId}`,
 		exact: true,
 	});
 	await expect(trigger).toBeVisible();
-	// 每个撤销按钮的可访问名称都带凭证标识（R3/R1b）。
+	// 每个撤销按钮的可访问名称都带凭证标识（R3/R1b、N-12「{可见文字}：{对象名}」）。
 	await expect(
-		rows.getByRole("button", { name: "撤销凭证 expired-browser", exact: true }),
+		rows.getByRole("button", { name: "撤销：expired-browser", exact: true }),
 	).toBeVisible();
 	await expect(
 		rows.getByRole("button", { name: "撤销", exact: true }),

@@ -109,6 +109,8 @@
 }
 .platform-brand {
 	display: flex;
+	/* 导航项多时侧栏滚动，品牌块不得被 flex 压扁（S-04）。 */
+	flex: none;
 	align-items: center;
 	gap: 11px;
 	min-height: 44px;
@@ -117,22 +119,26 @@
 	font-family: var(--font-display);
 	font-size: 17px;
 	font-weight: 650;
-	line-height: 1.35;
 	margin: 0 0 20px;
+}
+.platform-brand:hover,
+.platform-brand:active {
+	background: var(--surface-raised);
+	color: var(--foreground);
+	text-decoration: none;
 }
 .platform-brand:focus-visible {
 	outline: 2px solid var(--ring);
-	outline-offset: 4px;
+	outline-offset: 3px;
 	border-radius: 8px;
 }
 .platform-brand small,
 .platform-identity small {
 	display: block;
 	color: var(--muted-foreground);
-	font-size: 12px;
+	font-size: 11px;
 	font-family: ui-sans-serif, system-ui, sans-serif;
 	font-weight: 400;
-	margin-top: 5px;
 }
 .platform-brand-mark {
 	display: grid;
@@ -145,26 +151,23 @@
 	line-height: 1.5;
 	background: var(--foreground);
 	color: var(--surface);
-	border: 1px solid var(--foreground);
 	border-radius: 10px;
 }
 .platform-brand strong {
 	display: block;
 	font-size: 17px;
 	font-weight: 700;
-	line-height: 1;
+	line-height: 1.15;
 }
 .platform-brand small {
-	margin-top: 5px;
-	font-size: 11px;
-	line-height: 1.5;
+	margin-top: 3px;
 }
 .platform-nav-label {
-	font-family: var(--font-mono);
-	font-size: 11px;
+	font: 11px / 1.4 var(--font-mono);
+	letter-spacing: 0.08em;
 	color: var(--muted-foreground);
-	padding: 0 12px;
-	margin-bottom: 8px;
+	padding: 0 11px 6px;
+	margin: 0;
 }
 .platform-nav-group + .platform-nav-group {
 	margin-top: 22px;
@@ -203,16 +206,26 @@
 	color: var(--foreground);
 	text-decoration: none;
 }
+/* 选中项只改底色、边框与左侧指示，字重不变（S-07）。 */
 .platform-nav-item.selected {
 	background: var(--secondary);
 	border-color: color-mix(in oklch, var(--primary) 20%, var(--border));
 	box-shadow: inset 2px 0 var(--primary);
 	color: var(--foreground);
-	font-weight: 650;
 }
 .platform-nav-item:focus-visible {
 	outline: 2px solid var(--ring);
-	outline-offset: 2px;
+	outline-offset: 3px;
+}
+/* 不可用入口：单行名称加灰色 chip，原因只给读屏（S-08）。 */
+.platform-nav-unavailable:hover {
+	background: transparent;
+	color: var(--muted-foreground);
+}
+.platform-nav-chip {
+	flex: none;
+	margin-left: auto;
+	color: var(--muted-foreground);
 }
 .platform-nav-bottom {
 	margin-top: auto;
@@ -222,16 +235,28 @@
 	align-items: center;
 	gap: 10px;
 	border-top: 1px solid var(--border);
-	padding: 19px 9px 0;
-	font-size: 14px;
+	padding: 12px 10px;
+	font-size: 13px;
 }
 .platform-identity > div {
 	min-width: 0;
-	overflow-wrap: anywhere;
+}
+.platform-identity strong,
+.platform-identity small {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.platform-identity strong {
+	font-weight: 700;
+}
+.platform-identity small {
+	margin-top: 2px;
 }
 .platform-avatar {
-	width: 36px;
-	height: 36px;
+	width: 34px;
+	height: 34px;
 }
 .platform-workspace {
 	margin-left: 248px;
@@ -269,12 +294,14 @@
 	flex-direction: column;
 	align-items: flex-start;
 	gap: 0;
+	font-size: 11px;
 	line-height: 1.25;
 }
-.platform-breadcrumb li:last-child {
-	margin-top: 3px;
+.platform-breadcrumb li:last-child,
+.platform-breadcrumb [data-slot="breadcrumb-page"] {
 	font-size: 14px;
-	font-weight: 650;
+	font-weight: 700;
+	line-height: 1.65;
 	color: var(--foreground);
 }
 .platform-breadcrumb span {
@@ -297,7 +324,7 @@
 	width: min(290px, calc(100% - 40px));
 	height: 100dvh;
 	max-height: 100dvh;
-	padding: 50px 16px 24px;
+	padding: 22px 14px 16px;
 	background: var(--surface);
 	display: flex;
 	flex-direction: column;
@@ -549,7 +576,7 @@
 }
 .conversation-agent-switch:focus-visible {
 	outline: 2px solid var(--ring);
-	outline-offset: 4px;
+	outline-offset: 3px;
 }
 .conversation-heading-copy {
 	min-width: 0;
@@ -915,7 +942,7 @@
 }
 .assistant-markdown :is(.markdown-code, .markdown-table):focus-visible {
 	outline: 2px solid var(--ring);
-	outline-offset: 2px;
+	outline-offset: 3px;
 }
 .assistant-markdown table {
 	width: 100%;
@@ -1044,8 +1071,9 @@ body {
 	main {
 		overflow-wrap: anywhere;
 	}
-	a:focus-visible {
-		@apply outline-2 outline-ring outline-offset-2;
+	/* 全局焦点环：2px accent、offset 3px（设计稿 :focus-visible，S-11/N-18）。 */
+	:focus-visible {
+		@apply outline-2 outline-ring outline-offset-3;
 	}
 }
 
@@ -1319,8 +1347,12 @@ body {
 .platform-identity [data-slot="avatar-fallback"] {
 	background: var(--foreground);
 	color: var(--surface);
+	font-size: 12px;
+	font-weight: 700;
 }
 .platform-user {
+	width: 34px;
+	height: 34px;
 	margin-left: auto;
 	flex-shrink: 0;
 }
@@ -1576,7 +1608,9 @@ body {
 }
 
 [data-slot="button"]:focus-visible,
-a[class~="group/button"]:focus-visible,
+[class~="group/button"]:focus-visible,
+[data-slot="checkbox"]:focus-visible,
+[role="dialog"] :is([data-slot="textarea"]):focus-visible,
 [data-slot="input"]:focus-visible,
 [data-slot="select-trigger"]:focus-visible,
 [data-slot="native-select"]:focus-visible {
@@ -2129,7 +2163,7 @@ a[class~="group/button"]:focus-visible,
 }
 .directory-chip-remove:focus-visible {
 	outline: 2px solid var(--primary);
-	outline-offset: 1px;
+	outline-offset: 3px;
 }
 .directory-control .directory-input {
 	flex: 1 1 150px;
@@ -2304,5 +2338,24 @@ a[class~="group/button"]:focus-visible,
 @media (max-width: 767px) {
 	.management-content .owned-agent-card .metadata-facts {
 		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+/* 320–374px 档：放在所有 ≤767 / ≤1023 档之后，覆盖壳层边距与页头主操作（G-03）。 */
+@media (max-width: 374px) {
+	.platform-topbar {
+		padding-inline: 12px;
+	}
+	.platform-content,
+	.ia-agent-directory,
+	.ia-admin-agents,
+	.ia-workbench {
+		padding-inline: 12px;
+	}
+	/* 设计稿 .page-head .btn{width:100%}；纯图标按钮（size-11）保持 44px。 */
+	.page-heading
+	:is([data-slot="button"], [class~="group/button"]):not(.size-11) {
+		width: 100%;
+		max-width: 100%;
 	}
 }

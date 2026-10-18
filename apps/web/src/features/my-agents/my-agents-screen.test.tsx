@@ -40,7 +40,9 @@ describe("MyAgentsScreen", () => {
 				/>,
 			);
 
-			const link = screen.queryByRole("link", { name: "查看 Agent" });
+			const link = screen.queryByRole("link", {
+				name: `查看 Agent：${application.name}`,
+			});
 			if (hasAgentEntrance) {
 				expect(link?.getAttribute("href")).toBe(
 					"/agents/agent-reserved-before-approval",
@@ -48,7 +50,9 @@ describe("MyAgentsScreen", () => {
 			} else {
 				expect(link).toBeNull();
 			}
-			expect(screen.getByRole("link", { name: "查看申请" })).toBeTruthy();
+			expect(
+				screen.getByRole("link", { name: `查看申请：${application.name}` }),
+			).toBeTruthy();
 		},
 	);
 
@@ -70,7 +74,7 @@ describe("MyAgentsScreen", () => {
 		const pendingRow = pendingTitle.closest("li");
 		expect(pendingRow?.className).toContain("application-row");
 		const pendingLink = within(pendingRow as HTMLElement).getByRole("link", {
-			name: "查看申请",
+			name: `查看申请：${pendingApplication.name}`,
 		});
 		expect(pendingLink.getAttribute("href")).toBe(
 			"/my-agents/application%3Atenant%2F01%3Fdraft%23one%25",
@@ -78,9 +82,13 @@ describe("MyAgentsScreen", () => {
 		expect(screen.getByText("待审批")).toBeTruthy();
 		expect(screen.getByText("创建中")).toBeTruthy();
 		expect(
-			screen.getByRole("link", { name: "查看 Agent" }).getAttribute("href"),
+			screen
+				.getByRole("link", { name: `查看 Agent：${creatingApplication.name}` })
+				.getAttribute("href"),
 		).toBe("/agents/agent-pilot-2");
-		expect(screen.getAllByRole("link", { name: "查看 Agent" })).toHaveLength(1);
+		expect(screen.getAllByRole("link", { name: /^查看 Agent：/ })).toHaveLength(
+			1,
+		);
 	});
 
 	it("distinguishes custom application entry modes in the application list", async () => {
@@ -159,7 +167,7 @@ describe("MyAgentsScreen", () => {
 		expect(panel.getAttribute("aria-labelledby")).toBe(agents.id);
 		expect(screen.getByText("暂无你管理的 Agent")).toBeTruthy();
 		expect(screen.queryByText(creatingApplication.name)).toBeNull();
-		expect(screen.queryByRole("link", { name: "配置与管理" })).toBeNull();
+		expect(screen.queryByRole("link", { name: /^配置与管理/ })).toBeNull();
 		fireEvent.keyDown(agents, { key: "Home" });
 		await waitFor(() =>
 			expect(applications.getAttribute("aria-selected")).toBe("true"),
@@ -188,9 +196,11 @@ describe("MyAgentsScreen", () => {
 		fireEvent.click(screen.getByRole("tab", { name: "已创建 Agent" }));
 		expect(screen.getByRole("heading", { name: owned.name })).toBeTruthy();
 		expect(
-			screen.getByRole("link", { name: "配置与管理" }).getAttribute("href"),
+			screen
+				.getByRole("link", { name: `配置与管理：${owned.name}` })
+				.getAttribute("href"),
 		).toBe(`/agents/${owned.agentId}/configuration`);
-		expect(screen.queryByRole("link", { name: "查看申请" })).toBeNull();
+		expect(screen.queryByRole("link", { name: /^查看申请/ })).toBeNull();
 	});
 
 	it.each([

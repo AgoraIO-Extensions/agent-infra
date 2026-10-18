@@ -505,7 +505,7 @@ const pages = [
 		primary: "校验并保存",
 	},
 	{ route: "/admin/approvals", role: "admin", ready: ["button", "审阅申请"] },
-	{ route: "/audit", role: "owner", ready: ["button", "查看审计详情"] },
+	{ route: "/audit", role: "owner", ready: ["button", /^详情：/] },
 	{
 		route: "/my-agents/new",
 		role: "owner",

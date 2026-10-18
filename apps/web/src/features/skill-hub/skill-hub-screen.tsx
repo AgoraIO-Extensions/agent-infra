@@ -95,7 +95,7 @@ export function SkillHubDirectoryScreen({
 		<section aria-labelledby="skill-hub-heading">
 			<header className="page-heading">
 				<div>
-					<p className="page-eyebrow">我的管理 / Skill Hub</p>
+					<p className="page-eyebrow">工作区 / Skill Hub</p>
 					<h1
 						id="skill-hub-heading"
 						className="font-semibold text-[28px] tracking-normal"

@@ -540,13 +540,13 @@ for (const agentCollection of ["held", "unavailable"] as const) {
 				}),
 			).toHaveCount(0);
 			await expect(
-				recent.getByRole("link", { name: "查看历史", exact: true }),
+				recent.getByRole("link", { name: /^查看历史(：|$)/ }),
 			).toHaveCount(0);
 			await expect(
-				recent.getByRole("link", { name: "继续对话", exact: true }),
+				recent.getByRole("link", { name: /^继续对话(：|$)/ }),
 			).toHaveCount(0);
 			const original = recent
-				.getByRole("link", { name: "打开对话", exact: true })
+				.getByRole("link", { name: /^打开对话：/ })
 				.first();
 			await expect(original).toHaveAttribute(
 				"href",
@@ -799,8 +799,7 @@ for (const state of [
 		).toBeVisible();
 		const recent = recentRegion(page);
 		const original = recent.getByRole("link", {
-			name: "查看历史",
-			exact: true,
+			name: /^查看历史：/,
 		});
 		await expect(original).toHaveAttribute(
 			"href",
@@ -1305,3 +1304,46 @@ test("exported design viewport matrix workbench", async ({ page }, info) => {
 	);
 	expect(fixture.unexpected).toEqual([]);
 });
+
+for (const viewport of [
+	{ width: 320, height: 640 },
+	{ width: 360, height: 800 },
+	{ width: 375, height: 812 },
+]) {
+	test(`workbench new conversation follows the ≤374px tier at ${viewport.width}px`, async ({
+		page,
+	}, info) => {
+		test.skip(info.project.name !== "mobile", "Narrow viewport tier");
+		await page.setViewportSize(viewport);
+		const fixture = await workbenchFixture(page);
+		await page.goto("/");
+		const narrow = viewport.width <= 374;
+		const gutter = narrow ? 12 : 16;
+		// G-03：320–374px 顶栏与内容区左右 12px，页头主操作通栏。
+		await expect(page.locator(".platform-topbar")).toHaveCSS(
+			"padding-left",
+			narrow ? "12px" : "18px",
+		);
+		await expect(page.locator(".ia-workbench")).toHaveCSS(
+			"padding-left",
+			`${gutter}px`,
+		);
+		await expect(page.locator(".ia-workbench")).toHaveCSS(
+			"padding-right",
+			`${gutter}px`,
+		);
+		const action = page
+			.locator("main .page-heading")
+			.getByRole("link", { name: "新建对话" });
+		const width = (await action.boundingBox())?.width ?? 0;
+		if (narrow)
+			expect(Math.abs(width - (viewport.width - 24))).toBeLessThanOrEqual(1);
+		else expect(width).toBeLessThan(viewport.width - 33);
+		expect(
+			await page.evaluate(
+				() => document.documentElement.scrollWidth <= innerWidth,
+			),
+		).toBe(true);
+		expect(fixture.unexpected).toEqual([]);
+	});
+}

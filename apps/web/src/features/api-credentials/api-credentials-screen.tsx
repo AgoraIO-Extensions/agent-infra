@@ -22,6 +22,7 @@ import { Field, FieldLegend } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LoadingLine } from "@/components/ui/spinner";
+import { withObjectName } from "@/lib/accessible-name";
 import type {
 	IssuePersonalApiCredentialV2Responses,
 	PersonalApiCredentialIssueRequestV1,
@@ -373,6 +374,7 @@ function CredentialRow({
 	}, [expiry, now, revoked]);
 	const active = !revoked && !expired;
 	const busy = pending || Boolean(narrowingCredentialId);
+	const revokeLabel = pending ? "正在撤销…" : "撤销";
 	useEffect(() => {
 		if (restoreFocus.current && !editing && !busy) {
 			narrowButton.current?.focus();
@@ -429,6 +431,10 @@ function CredentialRow({
 							variant="outline"
 							ref={narrowButton}
 							aria-expanded={editing}
+							aria-label={withObjectName(
+								"收窄权限与有效期",
+								credential.credentialId,
+							)}
 							disabled={busy}
 							onClick={() => {
 								setNotice(false);
@@ -445,9 +451,12 @@ function CredentialRow({
 								<Button
 									type="button"
 									variant="outline"
-									aria-label={`${pending ? "正在撤销" : "撤销"}凭证 ${credential.credentialId}`}
+									aria-label={withObjectName(
+										revokeLabel,
+										credential.credentialId,
+									)}
 								>
-									{pending ? "正在撤销…" : "撤销"}
+									{revokeLabel}
 								</Button>
 							}
 							title="撤销这张 API 凭证？"

@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { LoadingLine } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { withObjectName } from "@/lib/accessible-name";
 import { statusTone } from "@/lib/status-tone";
 
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
@@ -135,6 +136,10 @@ export function MyAgentsScreen({
 												className={buttonVariants({ variant: "ghost" })}
 												params={{ applicationId: application.applicationId }}
 												to="/my-agents/$applicationId"
+												aria-label={withObjectName(
+													"查看申请",
+													application.name,
+												)}
 											>
 												查看申请
 											</Link>
@@ -143,6 +148,10 @@ export function MyAgentsScreen({
 													className={buttonVariants({ variant: "outline" })}
 													params={{ applicationId: application.applicationId }}
 													to="/my-agents/$applicationId/edit"
+													aria-label={withObjectName(
+														agentApplicationEditActionLabels[editAction],
+														application.name,
+													)}
 												>
 													{agentApplicationEditActionLabels[editAction]}
 												</Link>
@@ -152,6 +161,10 @@ export function MyAgentsScreen({
 													className={buttonVariants({ variant: "link" })}
 													params={{ agentId: application.agentId }}
 													to="/agents/$agentId"
+													aria-label={withObjectName(
+														"查看 Agent",
+														application.name,
+													)}
 												>
 													查看 Agent
 												</Link>
@@ -258,6 +271,7 @@ export function MyAgentsScreen({
 											className={buttonVariants({ variant: "outline" })}
 											params={{ agentId: agent.agentId }}
 											to="/agents/$agentId/configuration"
+											aria-label={withObjectName("配置与管理", agent.name)}
 										>
 											配置与管理
 										</Link>
@@ -265,6 +279,7 @@ export function MyAgentsScreen({
 											className={buttonVariants({ variant: "ghost" })}
 											params={{ agentId: agent.agentId }}
 											to="/agents/$agentId"
+											aria-label={withObjectName("查看详情", agent.name)}
 										>
 											查看详情
 										</Link>

@@ -9,10 +9,8 @@ export const Route = createRootRoute({
 	component: RootComponent,
 	notFoundComponent: NotFoundScreen,
 	head: () => ({
+		// 页面标题由壳层按路由外观表设置（features/page-chrome.ts）。
 		meta: [
-			{
-				title: "Agent Infra",
-			},
 			{
 				name: "description",
 				content: "企业级 Agent 平台",
