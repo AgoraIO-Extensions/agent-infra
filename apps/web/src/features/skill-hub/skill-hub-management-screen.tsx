@@ -238,7 +238,9 @@ export function SkillHubManagementScreen({
 			<header className="page-heading">
 				<div className="min-w-0">
 					<p className="page-eyebrow">我的管理 / Skill Hub</p>
-					<h1 id="skill-hub-management-heading">管理固定版本与 Agent 配置。</h1>
+					<h1 id="skill-hub-management-heading" className="tracking-normal">
+						管理固定版本与 Agent 配置。
+					</h1>
 					<p>
 						项目、发布、审核和 Agent
 						配置共用同一版本事实；每次写入都由服务端授权并带幂等键。
@@ -255,7 +257,9 @@ export function SkillHubManagementScreen({
 						disabled={retrying}
 					>
 						<RefreshCw
-							className={retrying ? "animate-spin" : ""}
+							className={
+								retrying ? "animate-spin motion-reduce:animate-none" : ""
+							}
 							aria-hidden="true"
 						/>
 						刷新

@@ -96,7 +96,10 @@ export function SkillHubDirectoryScreen({
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">我的管理 / Skill Hub</p>
-					<h1 id="skill-hub-heading" className="font-semibold text-[28px]">
+					<h1
+						id="skill-hub-heading"
+						className="font-semibold text-[28px] tracking-normal"
+					>
 						Skill 目录
 					</h1>
 					<p className="mt-2 text-muted-foreground">
@@ -133,7 +136,9 @@ export function SkillHubDirectoryScreen({
 						>
 							<RefreshCw
 								aria-hidden="true"
-								className={retrying ? "animate-spin" : ""}
+								className={
+									retrying ? "animate-spin motion-reduce:animate-none" : ""
+								}
 							/>
 							重试
 						</Button>
@@ -300,7 +305,9 @@ export function SkillHubVersionScreen({
 					>
 						<RefreshCw
 							aria-hidden="true"
-							className={retrying ? "animate-spin" : ""}
+							className={
+								retrying ? "animate-spin motion-reduce:animate-none" : ""
+							}
 						/>
 						重试
 					</Button>
@@ -317,7 +324,10 @@ export function SkillHubVersionScreen({
 			<header className="page-heading mt-6">
 				<div>
 					<p className="page-eyebrow">Skill Hub / 版本详情</p>
-					<h1 id="skill-version-heading" className="font-semibold text-[28px]">
+					<h1
+						id="skill-version-heading"
+						className="font-semibold text-[28px] tracking-normal"
+					>
 						{version.name}
 					</h1>
 					<p className="mt-2 text-muted-foreground">

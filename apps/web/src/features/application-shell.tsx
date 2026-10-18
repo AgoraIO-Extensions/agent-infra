@@ -543,7 +543,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						</AuthenticatedContent>
 					) : (
 						<main className="platform-content max-w-2xl">
-							<h1 className="font-semibold text-[28px]">登录工作空间</h1>
+							<h1 className="text-balance font-semibold text-[28px] tracking-normal">
+								登录工作空间
+							</h1>
 							<p className="mt-5 text-muted-foreground" role="status">
 								{session.isFetching
 									? "正在确认登录状态…"

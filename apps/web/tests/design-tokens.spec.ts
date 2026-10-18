@@ -485,8 +485,14 @@ async function renderedFontFamilies(page: Page, selector: string) {
 	return families;
 }
 
+// primary 为设计点名、必须落在 --accent-ink 上的主操作；skill 页按设计 .skill-page h1 例外不收紧字距。
 const pages = [
-	{ route: "/", role: "owner", ready: ["link", "新建对话"] },
+	{
+		route: "/",
+		role: "owner",
+		ready: ["link", "新建对话"],
+		primary: "新建对话",
+	},
 	{
 		route: "/agents/agent-pilot-1",
 		role: "owner",
@@ -496,14 +502,28 @@ const pages = [
 		route: "/agents/agent-pilot-1/configuration",
 		role: "owner",
 		ready: ["button", "校验并保存"],
+		primary: "校验并保存",
 	},
 	{ route: "/admin/approvals", role: "admin", ready: ["button", "审阅申请"] },
 	{ route: "/audit", role: "owner", ready: ["button", "查看审计详情"] },
-	{ route: "/my-agents/new", role: "owner", ready: ["button", "提交申请"] },
-	{ route: "/skills/release-notes-v1", role: "owner", ready: undefined },
+	{
+		route: "/my-agents/new",
+		role: "owner",
+		ready: ["button", "提交申请"],
+		primary: "提交申请",
+	},
+	{
+		route: "/skills/release-notes-v1",
+		role: "owner",
+		ready: undefined,
+		skill: true,
+	},
 ] as const;
 
-for (const { route, role, ready } of pages) {
+for (const entry of pages) {
+	const { route, role, ready } = entry;
+	const primary = "primary" in entry ? entry.primary : undefined;
+	const skill = "skill" in entry;
 	test(`design tokens, ink colors and monospace stack on ${route}`, async ({
 		page,
 	}, info) => {
@@ -530,12 +550,23 @@ for (const { route, role, ready } of pages) {
 				body: JSON.stringify(report, null, 2),
 				contentType: "application/json",
 			});
-			expect(report.h1).toEqual({
-				fontSize: `${fontSize}px`,
-				letterSpacing: `${-fontSize / 100}px`,
-				textWrapStyle: "pretty",
-			});
+			if (skill)
+				// Chromium 把 letter-spacing: 0 的计算值序列化为 normal；Skill 页字号不属于本用例。
+				expect(report.h1).toMatchObject({
+					letterSpacing: "normal",
+					textWrapStyle: "pretty",
+				});
+			else
+				expect(report.h1).toEqual({
+					fontSize: `${fontSize}px`,
+					letterSpacing: `${-fontSize / 100}px`,
+					textWrapStyle: "pretty",
+				});
 			expectInk(report);
+			if (primary)
+				expect(report.primaryButtons.map((item) => item.text)).toContain(
+					primary,
+				);
 			if (viewport.width >= 1024)
 				expect(
 					report.monospaced.some((item) =>
@@ -631,7 +662,7 @@ test("select option highlight keeps the muted background after the accent remap"
 	expect(colors.color).toBe(colors.expectedColor);
 });
 
-test("reduced motion compresses transitions and animations without removing them", async ({
+test("reduced motion compresses every transition and animation duration", async ({
 	page,
 }, info) => {
 	test.skip(info.project.name !== "desktop", "Desktop design viewport only.");
@@ -653,6 +684,20 @@ test("reduced motion compresses transitions and animations without removing them
 	const normal = await durations();
 	expect(normal.nav).not.toBe("1e-06s");
 	expect(normal.buttons).toContain("0.18s");
+	// 目录读取挂起时，加载指示器是页面上真实存在的动画元素。
+	api.holdDirectory();
+	await page.getByRole("combobox", { name: "共同 Owner 用户" }).click();
+	await expect(page.getByRole("listbox")).toBeVisible();
+	await expect
+		.poll(() =>
+			page.evaluate(
+				() =>
+					[...document.querySelectorAll("*")].filter(
+						(node) => getComputedStyle(node).animationName !== "none",
+					).length,
+			),
+		)
+		.toBeGreaterThan(0);
 
 	await page.emulateMedia({ reducedMotion: "reduce" });
 	const reduced = await durations();
@@ -666,16 +711,22 @@ test("reduced motion compresses transitions and animations without removing them
 		),
 	).toBe(true);
 	expect(reduced.scroll).toBe("auto");
-
-	api.holdDirectory();
-	await page.getByRole("combobox", { name: "共同 Owner 用户" }).click();
-	const spinner = page.locator(".directory-status-spinner").first();
-	await expect(spinner).toBeVisible();
-	expect(
-		await spinner.evaluate((node) => ({
-			name: getComputedStyle(node).animationName,
-			duration: getComputedStyle(node).animationDuration,
-		})),
-	).toEqual({ name: "directory-spin", duration: "1e-06s" });
+	// 所有元素与伪元素（含带 transition-* / animate-* 工具类的组件）的时长都被压缩；
+	// 无限加载指示器是否停转由 Spinner 组件决定，这里不断言动画名。
+	const uncompressed = await page.evaluate(() =>
+		[...document.querySelectorAll("*")].flatMap((node) =>
+			[null, "::before", "::after"].flatMap((pseudo) => {
+				const style = getComputedStyle(node, pseudo);
+				return [style.animationDuration, style.transitionDuration]
+					.flatMap((value) => value.split(", "))
+					.filter((value) => value !== "1e-06s")
+					.map(
+						(value) =>
+							`${node.tagName.toLowerCase()}.${node.getAttribute("class") ?? ""}${pseudo ?? ""}: ${value}`,
+					);
+			}),
+		),
+	);
+	expect(uncompressed).toEqual([]);
 	api.releaseDirectory();
 });
