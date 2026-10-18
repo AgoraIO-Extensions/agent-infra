@@ -3139,6 +3139,9 @@ a[class~="group/button"]:focus-visible {
 .directory-field {
 	position: relative;
 	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
 }
 .directory-field > [data-slot="label"] {
 	display: block;

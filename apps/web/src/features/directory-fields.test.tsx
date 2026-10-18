@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentConfigurationScreen } from "./agent-configuration/agent-configuration-screen.js";
 import { AgentDetailScreen } from "./agent-discovery/agent-detail-screen.js";
 import { renderWithAgentRouter } from "./agent-discovery/test-router.js";
-import { DirectoryRecords } from "./directory-fields.js";
+import { DirectoryPicker, DirectoryRecords } from "./directory-fields.js";
 
 function render(element: ReactElement) {
 	const client = new QueryClient({
@@ -223,6 +223,67 @@ describe("Agent detail and Owner configuration directory fields", () => {
 		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 		expect(onSave).not.toHaveBeenCalled();
 		expect(screen.getByText("请选择至少一名有效 Owner。")).toBeTruthy();
+	});
+});
+
+describe("DirectoryPicker interaction boundaries", () => {
+	it("closes the result layer and restores input focus after selecting an option", async () => {
+		directoryFixture();
+		const onChange = vi.fn();
+		render(
+			<DirectoryPicker
+				id="owner"
+				label="Owner"
+				help="选择目录用户"
+				kind="user"
+				onChange={onChange}
+				value=""
+			/>,
+		);
+		const input = screen.getByRole("combobox", { name: "Owner" });
+		input.focus();
+		fireEvent.change(input, { target: { value: "New" } });
+		const option = await screen.findByRole("option", { name: /New Owner/ });
+
+		fireEvent.click(option);
+
+		expect(onChange).toHaveBeenCalledWith("user-3");
+		await waitFor(() => {
+			expect(screen.queryByRole("option")).toBeNull();
+			expect(input.getAttribute("aria-expanded")).toBe("false");
+			expect(document.activeElement).toBe(input);
+		});
+	});
+
+	it("closes the result layer when focus leaves the picker and keeps options out of tab order", async () => {
+		directoryFixture();
+		render(
+			<>
+				<DirectoryPicker
+					id="owner"
+					label="Owner"
+					help="选择目录用户"
+					kind="user"
+					onChange={vi.fn()}
+					value=""
+				/>
+				<button type="button">下一个字段</button>
+			</>,
+		);
+		const input = screen.getByRole("combobox", { name: "Owner" });
+		input.focus();
+		fireEvent.change(input, { target: { value: "Directory" } });
+		const options = await screen.findAllByRole("option");
+		expect(
+			options.every((option) => option.getAttribute("tabindex") === "-1"),
+		).toBe(true);
+
+		screen.getByRole("button", { name: "下一个字段" }).focus();
+
+		await waitFor(() => {
+			expect(screen.queryByRole("option")).toBeNull();
+			expect(input.getAttribute("aria-expanded")).toBe("false");
+		});
 	});
 });
 

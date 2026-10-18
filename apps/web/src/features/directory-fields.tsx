@@ -166,8 +166,9 @@ export function DirectoryPicker({
 		Record<string, DirectoryPickerOption>
 	>({});
 	const [directoryError, setDirectoryError] = useState(false);
-	const pickerRef = useRef<HTMLDivElement>(null);
+	const pickerRef = useRef<HTMLFieldSetElement>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
+	const suppressOpenOnFocusRef = useRef(false);
 	useEffect(() => {
 		if (!open) return;
 		const closeOnOutsidePointer = (event: PointerEvent) => {
@@ -233,8 +234,15 @@ export function DirectoryPicker({
 		onChange([...selectedIds, option.id].join("\n"));
 		setQuery("");
 		setActiveIndex(0);
-		setOpen(true);
-		requestAnimationFrame(() => inputRef.current?.focus());
+		setOpen(false);
+		if (document.activeElement !== inputRef.current) {
+			suppressOpenOnFocusRef.current = true;
+			requestAnimationFrame(() => {
+				inputRef.current?.focus();
+				if (document.activeElement !== inputRef.current)
+					suppressOpenOnFocusRef.current = false;
+			});
+		}
 	};
 	const remove = (id: string) => {
 		if (!disabled)
@@ -242,8 +250,22 @@ export function DirectoryPicker({
 		requestAnimationFrame(() => inputRef.current?.focus());
 	};
 	return (
-		<div className="directory-field" ref={pickerRef}>
-			<Label htmlFor={id}>{label}</Label>
+		<fieldset
+			aria-labelledby={`${id}-label`}
+			className="directory-field"
+			onBlur={(event) => {
+				const nextTarget = event.relatedTarget;
+				if (
+					!(nextTarget instanceof Node) ||
+					!pickerRef.current?.contains(nextTarget)
+				)
+					setOpen(false);
+			}}
+			ref={pickerRef}
+		>
+			<Label id={`${id}-label`} htmlFor={id}>
+				{label}
+			</Label>
 			<div
 				className={cn("directory-control", error && "directory-control-error")}
 			>
@@ -293,7 +315,13 @@ export function DirectoryPicker({
 						setActiveIndex(0);
 						setOpen(true);
 					}}
-					onFocus={() => setOpen(true)}
+					onFocus={() => {
+						if (suppressOpenOnFocusRef.current) {
+							suppressOpenOnFocusRef.current = false;
+							return;
+						}
+						setOpen(true);
+					}}
 					onKeyDown={(event) => {
 						if (event.key === "ArrowDown") {
 							event.preventDefault();
@@ -380,6 +408,7 @@ export function DirectoryPicker({
 									key={option.id}
 									onClick={() => add(option)}
 									onMouseEnter={() => setActiveIndex(index)}
+									tabIndex={-1}
 									type="button"
 									variant="ghost"
 								>
@@ -427,6 +456,6 @@ export function DirectoryPicker({
 					{error}
 				</p>
 			) : null}
-		</div>
+		</fieldset>
 	);
 }
