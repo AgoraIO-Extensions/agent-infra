@@ -57,6 +57,7 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `NativeSelect` / `NativeSelectOption` | 申请来源、身份责任；保留原生选择和禁用语义 |
 | `Checkbox` | 申请和 Owner 的模型配置开关 |
 | `Label` | 上述表单的可访问名称 |
+| `Field` / `FieldError` | 字段标签与控件的容器；`FieldError` 为字段下方的校验错误（`role="alert"`），如审批驳回原因 |
 | `Badge` | 状态 chip（`tone`，服务端状态经 `lib/status-tone.ts` 的 `statusTone()` 映射）与非状态标签（`variant="tag"`） |
 | `Sidebar` / `Sheet` / `Breadcrumb` / `Avatar` | 桌面与移动导航、当前位置及登录身份 |
 | `Tabs` | 我的申请与已创建 Agent 切换 |
@@ -67,7 +68,7 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `Card` / `AgentMark` | 独立卡片的悬停，Agent 标识的字形与 tone |
 | `Table` | Agent 输出的 Markdown 表格 |
 | `Timestamp` | 工作台、审批、审计、应用管理、个人 API 凭证、我的 Agent 与申请详情的时间 |
-| `IdentifierText` | Agent 管理 Owner、审批与审计中未解析人员的 ID 短形式，审计详情的可复制主体 ID |
+| `IdentifierText` | 审批与审计中未解析人员的 ID 短形式；审计列表对象 ID 用 `shortIdentifier` 等宽短形式，完整值只在记录详情 |
 | `Listbox` / `ListboxOption` | 目录选择器结果层；候选不进入 Tab 序列，由输入框的 `aria-activedescendant` 导航 |
 
 时间统一由 `src/lib/format-time.ts` 按浏览器本地时区与自然日格式化，`<Timestamp>` 渲染
