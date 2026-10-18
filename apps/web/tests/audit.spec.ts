@@ -106,6 +106,24 @@ async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 				search: url.search,
 			});
 	});
+	// 审计主体按目录显示姓名；目录只返回已知用户。
+	await page.route("**/api/v2/directory/search?**", (route) => {
+		const ids =
+			new URL(route.request().url()).searchParams.get("ids")?.split(",") ?? [];
+		return route.fulfill({
+			json: {
+				schemaVersion: 1,
+				items: (["admin", "employee"] as const)
+					.map((item) => ({
+						kind: "user",
+						canonicalId: session(item).user.userId,
+						displayName: session(item).user.displayName,
+						email: `${session(item).user.userId}@example.test`,
+					}))
+					.filter((item) => ids.includes(item.canonicalId)),
+			},
+		});
+	});
 	await page.route(/\/api\/v1\/session$/, (route) =>
 		route.fulfill({
 			status: 200,
@@ -256,6 +274,13 @@ for (const compact of [false, true]) {
 		).toBeVisible();
 		const row = page.getByRole("row").filter({ hasText: governance.summary });
 		await expect(row).toContainText(governance.subject.subjectId);
+		// 时间位于 <time dateTime title> 中，按本地时区显示，不出现 ISO 原文或秒。
+		const occurred = row.locator(`time[datetime="${governance.occurredAt}"]`);
+		await expect(occurred).toHaveAttribute(
+			"title",
+			/^\d{4} 年 \d{1,2} 月 \d{1,2} 日 \d{2}:\d{2}:\d{2}$/,
+		);
+		await expect(occurred).not.toHaveText(/T\d\d:|:\d\d:\d\d/);
 		await expect(row).toContainText("创建申请");
 		await expect(row).toContainText("Execution：未提供");
 		await expect(row.getByText("已受理", { exact: true })).toBeVisible();
@@ -319,14 +344,21 @@ for (const compact of [false, true]) {
 			"platform_worker",
 		);
 		await expect(worker.locator('[data-label="操作主体"]')).toContainText(
-			"原发起主体 · 用户：audit-user-a",
+			"原发起主体 · 用户：审计用户",
+		);
+		await expect(worker.locator('[data-label="操作主体"]')).not.toContainText(
+			"audit-user-a",
 		);
 		await expect(worker.getByText("结果待核实", { exact: true })).toBeVisible();
 		await worker.getByRole("button", { name: /^详情：/ }).click();
 		const dialog = page.getByRole("region", { name: "审计详情", exact: true });
 		await expect(dialog).toContainText(background.summary);
 		await expect(dialog).toContainText("后台组件 · platform_worker");
-		await expect(dialog).toContainText("用户 · audit-user-a");
+		await expect(dialog).toContainText("用户 · 审计用户");
+		// 详情面板保留可复制的完整主体 ID 以便核对。
+		await expect(
+			dialog.getByText("audit-user-a", { exact: true }),
+		).toHaveAttribute("title", "audit-user-a");
 		await expect(dialog).toContainText("实际后台组件");
 		await info.attach("controlled-original-audit-detail-viewport", {
 			body: await page.screenshot({ animations: "disabled" }),
@@ -398,10 +430,9 @@ for (const compact of [false, true]) {
 		await expect(
 			page.getByRole("heading", { name: "只看自己的执行事实。", exact: true }),
 		).toBeVisible();
-		await expect(page.locator(".audit-table")).toContainText("audit-admin");
-		await expect(page.locator(".audit-table")).not.toContainText(
-			"audit-user-a",
-		);
+		await expect(page.locator(".audit-table")).toContainText("审计管理员");
+		await expect(page.locator(".audit-table")).not.toContainText("审计用户");
+		await expect(page.locator(".audit-table")).not.toContainText("audit-admin");
 		await expect(
 			page.getByText(governance.summary, { exact: true }),
 		).toHaveCount(0);

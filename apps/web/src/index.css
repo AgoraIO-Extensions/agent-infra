@@ -2144,16 +2144,18 @@ body {
 	font-size: 10px;
 	line-height: 1.2;
 }
+/* X-05 / G-02：命中区 44×44，负外边距保持 chip 的视觉密度。 */
 .directory-chip-remove {
 	display: grid;
 	place-items: center;
-	width: 24px;
-	height: 24px;
-	min-width: 0;
-	min-height: 24px;
+	width: 44px;
+	height: 44px;
+	min-width: 44px;
+	min-height: 44px;
+	margin: -8px -8px -8px 0;
 	flex: none;
 	border: 0;
-	border-radius: 6px;
+	border-radius: 10px;
 	background: transparent;
 	color: var(--muted-foreground);
 }
@@ -2168,8 +2170,8 @@ body {
 .directory-control .directory-input {
 	flex: 1 1 150px;
 	min-width: 120px;
-	min-height: 28px;
-	height: 28px;
+	min-height: 30px;
+	height: 30px;
 	padding: 1px 4px;
 	background: transparent;
 	color: var(--foreground);
@@ -2217,10 +2219,6 @@ body {
 .directory-result.directory-result-active {
 	border-color: color-mix(in oklch, var(--primary) 22%, var(--border));
 	background: color-mix(in oklch, var(--primary) 11%, var(--surface));
-}
-.directory-result[aria-selected="true"] {
-	opacity: 0.55;
-	cursor: default;
 }
 .directory-result-mark {
 	display: grid;
@@ -2274,10 +2272,11 @@ body {
 	color: var(--foreground);
 	font-size: 12px;
 }
+/* 「清空搜索」位于结果列表之外，命中区不小于 44px。 */
 .directory-clear {
 	display: inline-flex;
 	align-items: center;
-	min-height: 32px;
+	min-height: 44px;
 	margin-top: 4px;
 	padding: 5px 8px;
 	border: 0;

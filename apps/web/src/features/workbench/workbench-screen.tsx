@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { LoadingLine } from "@/components/ui/spinner";
+import { Timestamp } from "@/components/ui/timestamp";
 import { withObjectName } from "@/lib/accessible-name";
 import { statusTone } from "@/lib/status-tone";
 import type {
@@ -229,12 +230,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 												<h3>{title}</h3>
 												<p>
 													{agent?.name ?? "所属 Agent 暂时无法读取"} ·{" "}
-													<time dateTime={conversation.updatedAt}>
-														{new Date(conversation.updatedAt).toLocaleString(
-															"zh-CN",
-															{ dateStyle: "medium", timeStyle: "short" },
-														)}
-													</time>
+													<Timestamp value={conversation.updatedAt} />
 												</p>
 												{readOnly && (
 													<p>历史仍可查看，当前不能继续发送消息。</p>

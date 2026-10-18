@@ -151,6 +151,15 @@ async function openForm(page: Page) {
 	const rows = page.getByRole("list", { name: "个人 API 凭证列表" });
 	await expect(rows.getByText("已过期", { exact: true })).toBeVisible();
 	await expect(rows.getByText("已撤销", { exact: true })).toBeVisible();
+	// 凭证时间按本地时区显示在 <time> 中，悬停为完整时间，不出现 ISO 原文。
+	const times = rows.locator("time");
+	expect(await times.count()).toBeGreaterThan(0);
+	for (const time of await times.all())
+		await expect(time).toHaveAttribute(
+			"title",
+			/^\d{4} 年 \d{1,2} 月 \d{1,2} 日 \d{2}:\d{2}:\d{2}$/,
+		);
+	await expect(rows).not.toContainText(/\d{4}-\d{2}-\d{2}T\d{2}:/);
 	const action = rows.getByRole("button", { name: "收窄权限与有效期" });
 	await expect(action).toHaveCount(1);
 	await action.focus();

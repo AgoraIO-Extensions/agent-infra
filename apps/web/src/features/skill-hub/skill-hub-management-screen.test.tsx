@@ -188,7 +188,7 @@ describe("SkillHubManagementScreen", () => {
 		});
 		fireEvent.click(screen.getByRole("button", { name: "提交审核" }));
 		await vi.waitFor(() =>
-			expect(screen.getByText("审核成功：服务端状态 published。")).toBeTruthy(),
+			expect(screen.getByText("审核成功：服务端状态 已发布。")).toBeTruthy(),
 		);
 	});
 

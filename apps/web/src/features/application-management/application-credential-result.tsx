@@ -2,7 +2,10 @@ import { useId } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Timestamp } from "@/components/ui/timestamp";
+import type { TimestampStyle } from "@/lib/format-time";
 import { personalApiCredentialScopeLabels } from "../api-credentials/api-credentials.js";
+import { type DirectoryNames, DirectoryNameText } from "../directory-names.js";
 import type { ApplicationCredentialResponse } from "./application-management.js";
 
 const deliveryLabels: Record<
@@ -16,15 +19,22 @@ const deliveryLabels: Record<
 	unknown: "投递结果未知",
 };
 
-function dateLabel(value: string | null, empty: string) {
-	return value ? new Date(value).toLocaleString("zh-CN") : empty;
+function dateLabel(
+	value: string | null,
+	empty: string,
+	style?: TimestampStyle,
+) {
+	return value ? <Timestamp value={value} style={style} /> : empty;
 }
 
 export function ApplicationCredentialResult({
 	result,
+	names,
 	onPrepareRotation,
 }: {
 	result: ApplicationCredentialResponse;
+	/** 页面级目录读取结果，用于把接收用户显示为姓名。 */
+	names: DirectoryNames;
 	onPrepareRotation?: () => void;
 }) {
 	const headingId = useId();
@@ -93,7 +103,7 @@ export function ApplicationCredentialResult({
 				</div>
 				<div>
 					<dt>过期时间</dt>
-					<dd>{dateLabel(metadata.expiresAt, "无到期时间")}</dd>
+					<dd>{dateLabel(metadata.expiresAt, "无到期时间", "absolute")}</dd>
 				</div>
 				<div>
 					<dt>签发时间</dt>
@@ -110,8 +120,19 @@ export function ApplicationCredentialResult({
 				<div>
 					<dt>接收者</dt>
 					<dd>
-						{delivery.recipient.principalType === "user" ? "用户" : "应用"} ·{" "}
-						<code>{delivery.recipient.principalId}</code>
+						{delivery.recipient.principalType === "user" ? (
+							<>
+								用户 ·{" "}
+								<DirectoryNameText
+									name={names.resolve(delivery.recipient.principalId)}
+									status={names.status}
+								/>
+							</>
+						) : (
+							<>
+								应用 · <code>{delivery.recipient.principalId}</code>
+							</>
+						)}
 					</dd>
 				</div>
 				<div>

@@ -110,7 +110,7 @@ export function AgentAuthorizationControls({
 		// 位于配置卡片顶部、Owner 分区之前：用下边线与后面的配置表单分开。
 		<FormSection
 			title="Agent 授权控制"
-			description="填写明确的用户或应用 ID，执行由服务端最终授权的 grant/revoke。页面不推断完整授权列表，也不显示凭证。"
+			description="填写需要授权的用户或应用标识；提交时平台会重新检查当前权限。页面不显示凭证。"
 			className="border-border border-b"
 		>
 			<div className="mt-4 space-y-4">
@@ -170,8 +170,8 @@ export function AgentAuthorizationControls({
 							onChange={(event) => setExpectedRevision(event.target.value)}
 						/>
 						<p className="text-muted-foreground text-xs">
-							用户的 API 使用权与 API
-							管理权分别授予和撤销，可以授权自己；服务端会校验此授权版本。
+							API 使用权与 API
+							管理权分别授予和撤销，可以授权自己；提交时平台会核对授权版本。
 						</p>
 					</Field>
 				) : null}

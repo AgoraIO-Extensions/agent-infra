@@ -2400,6 +2400,12 @@ test("Agent detail and configuration use readable directory records with canonic
 	await expect(
 		page.getByRole("button", { name: "移除 验收用户二" }),
 	).toBeVisible();
+	// 设计 directorySelect：选中后清空查询、保持展开、焦点回到输入框，已选项不再作为候选。
+	await expect(owner).toHaveAttribute("aria-expanded", "true");
+	await expect(owner).toBeFocused();
+	await expect(owner).toHaveValue("");
+	await expect(page.getByRole("option", { name: /验收用户二/ })).toHaveCount(0);
+	await page.keyboard.press("Escape");
 	await expect(owner).toHaveAttribute("aria-expanded", "false");
 	const user = page.getByRole("combobox", { name: "可使用的用户" });
 	await user.fill("user.three");
@@ -2424,6 +2430,253 @@ test("Agent detail and configuration use readable directory records with canonic
 	});
 });
 
+test("directory pickers support consecutive picks, keyboard focus and 44px chip targets", async ({
+	page,
+}, info) => {
+	await fixture(page);
+	await page.goto("/my-agents/new");
+	const owner = page.getByRole("combobox", { name: "共同 Owner 用户" });
+	const users = page.getByRole("combobox", { name: "可使用的用户" });
+	const organizations = page.getByRole("combobox", { name: "可使用的组织" });
+	await owner.fill("验收");
+	await page.getByRole("option", { name: /验收用户二/ }).click();
+	await expect(owner).toBeFocused();
+	await expect(owner).toHaveAttribute("aria-expanded", "true");
+	await expect(owner).toHaveValue("");
+	await expect(page.getByRole("option", { name: /验收用户二/ })).toHaveCount(0);
+	// 不按其他键即可点选第二项。
+	await page.getByRole("option", { name: /验收用户三/ }).click();
+	await expect(
+		page.getByRole("button", { name: "移除 验收用户二" }),
+	).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "移除 验收用户三" }),
+	).toBeVisible();
+	await expect(owner).toBeFocused();
+	await page.keyboard.press("Escape");
+	await expect(owner).toHaveAttribute("aria-expanded", "false");
+	await expect(owner).toBeFocused();
+	await owner.click();
+	await expect(owner).toHaveAttribute("aria-expanded", "true");
+	await page.getByRole("button", { name: "移除 验收用户三" }).click();
+	await expect(
+		page.getByRole("button", { name: "移除 验收用户三" }),
+	).toHaveCount(0);
+	await expect(owner).toBeFocused();
+	await expect(owner).toHaveAttribute("aria-expanded", "true");
+
+	await owner.fill("不存在的人");
+	await expect(page.getByText("没有匹配结果")).toBeVisible();
+	await expect(page.getByRole("listbox")).toHaveCount(0);
+	const clear = page.getByRole("button", { name: "清空搜索" });
+	const clearBox = await clear.boundingBox();
+	expect(clearBox?.height).toBeGreaterThanOrEqual(44);
+	expect(clearBox?.width).toBeGreaterThanOrEqual(44);
+	await clear.click();
+	await expect(owner).toHaveValue("");
+	await expect(owner).toBeFocused();
+	await expect(owner).toHaveAttribute("aria-expanded", "true");
+	await expect(
+		page.getByRole("listbox", { name: "共同 Owner 用户搜索结果" }),
+	).toBeVisible();
+	await expect(clear).toHaveCount(0);
+	await capture(page, info, "directory-picker-open");
+
+	// Tab 依次穿过三个选择器：不经过候选或「清空搜索」，同一时刻最多一个结果层。
+	const focusState = () =>
+		page.evaluate(() => {
+			const active = document.activeElement as HTMLElement | null;
+			const box = active?.getBoundingClientRect();
+			const hit =
+				box &&
+				document.elementFromPoint(
+					box.left + box.width / 2,
+					box.top + box.height / 2,
+				);
+			const controls = active?.getAttribute("aria-controls");
+			return {
+				label: active?.getAttribute("aria-label"),
+				role: active?.getAttribute("role"),
+				hitSelf: hit === active,
+				listboxes: [...document.querySelectorAll('[role="listbox"]')].filter(
+					(node) => node.getBoundingClientRect().height > 0,
+				).length,
+				optionTabIndexes: [
+					...document.querySelectorAll<HTMLElement>('[role="option"]'),
+				].map((node) => node.tabIndex),
+				controlsExists: Boolean(controls && document.getElementById(controls)),
+			};
+		});
+	for (const [field, label] of [
+		[users, "可使用的用户"],
+		[organizations, "可使用的组织"],
+	] as const) {
+		await page.keyboard.press("Tab");
+		await expect(field).toBeFocused();
+		await expect(field).toHaveAttribute("aria-expanded", "true");
+		// 等结果层真正出现后再取状态，避免在加载中得到空集合。
+		await expect(
+			page.getByRole("listbox", { name: `${label}搜索结果` }),
+		).toBeVisible();
+		const state = await focusState();
+		expect(state.optionTabIndexes.length).toBeGreaterThan(0);
+		expect(state).toMatchObject({
+			label,
+			role: "combobox",
+			hitSelf: true,
+			controlsExists: true,
+		});
+		expect(state.listboxes).toBe(1);
+		expect(state.optionTabIndexes.every((index) => index === -1)).toBe(true);
+	}
+	await expect(owner).toHaveAttribute("aria-expanded", "false");
+
+	const geometry = await page.evaluate(() => ({
+		input: document.querySelector(".directory-input")?.getBoundingClientRect()
+			.height,
+		chip: document.querySelector(".directory-chip")?.getBoundingClientRect()
+			.height,
+		remove: [...document.querySelectorAll(".directory-chip-remove")].map(
+			(node) => {
+				const box = node.getBoundingClientRect();
+				return [box.width, box.height];
+			},
+		),
+	}));
+	expect(geometry.input).toBe(30);
+	// 设计稿 #owner-config 同视口实测 chip 高 36px（移除钮负外边距抵消 44px 命中区）。
+	expect(Math.abs((geometry.chip ?? 0) - 36)).toBeLessThanOrEqual(0.5);
+	expect(geometry.remove).toEqual([[44, 44]]);
+});
+
+async function expectLocalTimes(page: Page) {
+	const times = page.locator("main time");
+	await expect(times.first()).toBeVisible();
+	const values = await times.evaluateAll((nodes) =>
+		nodes.map((node) => ({
+			dateTime: node.getAttribute("datetime"),
+			title: node.getAttribute("title"),
+			text: node.textContent ?? "",
+		})),
+	);
+	expect(values.length).toBeGreaterThan(0);
+	for (const value of values) {
+		expect(value.dateTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+		expect(value.title).toMatch(
+			/^\d{4} 年 \d{1,2} 月 \d{1,2} 日 \d{2}:\d{2}:\d{2}$/,
+		);
+		expect(value.text).toMatch(
+			/^(刚刚|今天 \d{2}:\d{2}|昨天 \d{2}:\d{2}|\d{1,2} 月 \d{1,2} 日|\d{4} 年 \d{1,2} 月 \d{1,2} 日( \d{2}:\d{2})?)$/,
+		);
+	}
+	await expect(page.locator("main")).not.toContainText(
+		/\d{4}-\d{2}-\d{2}T\d{2}:/,
+	);
+}
+
+test("my Agents and application detail show local times with full titles", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/my-agents");
+	await expectLocalTimes(page);
+	await page.goto("/my-agents/application-browser-1");
+	await expectLocalTimes(page);
+});
+
+test("approvals show local submitted times with full titles", async ({
+	page,
+}) => {
+	await fixture(page, "admin");
+	await page.goto("/admin/approvals");
+	await expect(
+		page.getByRole("button", { name: "审阅申请", exact: true }).first(),
+	).toBeVisible();
+	await expectLocalTimes(page);
+});
+
+test("editing an application keeps 44px chip remove targets", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/my-agents/application-browser-1/edit");
+	await expect(
+		page.getByRole("button", { name: /^移除 / }).first(),
+	).toBeVisible();
+	const sizes = await page
+		.locator(".directory-chip-remove")
+		.evaluateAll((nodes) =>
+			nodes.map((node) => {
+				const box = node.getBoundingClientRect();
+				return `${box.width}x${box.height}`;
+			}),
+		);
+	expect(sizes.length).toBeGreaterThan(0);
+	expect(new Set(sizes)).toEqual(new Set(["44x44"]));
+	await expect(page.locator("main")).not.toContainText(
+		/目录记录不可用|无法读取目录详情|user-applicant-1/,
+	);
+});
+
+test("Owner configuration keeps the co-Owner picker within 720px and scopes in columns", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(
+		page.getByRole("button", { name: "移除 当前 Owner" }),
+	).toBeVisible();
+	const layout = await page.evaluate(() => {
+		const box = (id: string) =>
+			document
+				.getElementById(id)
+				?.closest(".directory-field")
+				?.getBoundingClientRect();
+		const owner = box("configuration-owner-ids");
+		const users = box("configuration-user-availability");
+		const organizations = box("configuration-organization-availability");
+		return {
+			viewport: innerWidth,
+			owner: owner?.width ?? 0,
+			sameRow:
+				Boolean(users && organizations) && users?.top === organizations?.top,
+			remove: [...document.querySelectorAll(".directory-chip-remove")].map(
+				(node) => {
+					const rect = node.getBoundingClientRect();
+					return `${rect.width}x${rect.height}`;
+				},
+			),
+		};
+	});
+	expect(layout.owner).toBeGreaterThan(0);
+	expect(layout.owner).toBeLessThanOrEqual(720);
+	// 1440 桌面「可使用的用户 / 组织」两列；390 窄屏单列。
+	expect(layout.sameRow).toBe(layout.viewport > 767);
+	expect(layout.remove.length).toBeGreaterThan(0);
+	expect(new Set(layout.remove)).toEqual(new Set(["44x44"]));
+	await expect(page.locator("main")).not.toContainText(
+		/grant\/revoke|推断完整授权列表/,
+	);
+});
+
+test("Owner configuration names records missing from the directory with the Agent projection", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.route("**/api/v2/directory/search?**", (route) =>
+		route.fulfill({ json: { schemaVersion: 1, items: [] } }),
+	);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(page.getByRole("button", { name: "移除 Owner" })).toBeVisible();
+	await expect(page.getByText("目录中暂未找到该记录")).toHaveCount(2);
+	await expect(
+		page.getByRole("button", { name: "移除 未识别的组织 1" }),
+	).toBeVisible();
+	await expect(page.locator("main")).not.toContainText(
+		/目录记录不可用|无法读取目录详情|user-owner-1|org-platform/,
+	);
+});
+
 test("Agent detail directory failure stays readable and configuration preserves existing IDs", async ({
 	page,
 }, info) => {
@@ -2433,10 +2686,22 @@ test("Agent detail directory failure stays readable and configuration preserves 
 	);
 	await page.goto("/agents/agent-pilot-1");
 	await expect(page.getByText("目录暂时无法读取")).toBeVisible();
+	await expect(page.getByRole("alert")).toHaveCount(1);
+	await expect(
+		page.getByRole("button", { name: "重新读取目录" }),
+	).toBeVisible();
 	await expect(page.locator("main")).not.toContainText("org-platform");
 	await capture(page, info, "directory-detail-error");
 	await page.getByRole("link", { name: "配置与管理" }).click();
-	await expect(page.getByText("目录记录不可用")).toHaveCount(2);
+	// 目录不可用时 Owner chip 仍显示 Agent 投影中的显示名，降级说明不进入按钮名称。
+	await expect(page.getByText("目录详情暂时无法读取")).toHaveCount(2);
+	await expect(page.getByRole("button", { name: "移除 Owner" })).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "移除 未识别的组织 1" }),
+	).toBeVisible();
+	await expect(page.locator("main")).not.toContainText(
+		/目录记录不可用|无法读取目录详情|grant\/revoke|推断完整授权列表/,
+	);
 	await page.getByRole("combobox", { name: "共同 Owner 用户" }).fill("owner");
 	await expect(page.getByText("目录暂时无法读取")).toBeVisible();
 	await page.keyboard.press("Enter");

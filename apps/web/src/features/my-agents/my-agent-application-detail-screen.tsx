@@ -10,6 +10,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Timestamp } from "@/components/ui/timestamp";
 import { useResultFocus } from "@/hooks/use-result-focus";
 import { statusTone } from "@/lib/status-tone";
 
@@ -20,6 +21,7 @@ import {
 	agentManagementStatusLabels,
 	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
+import { DirectoryRecords } from "../directory-fields.js";
 import { PageLoadingState } from "../page-loading-state.js";
 import {
 	agentApplicationEditActionLabels,
@@ -148,10 +150,7 @@ export function MyAgentApplicationDetailScreen({
 							<div>
 								<strong>申请已提交</strong>
 								<small>
-									提交于{" "}
-									<time dateTime={application.submittedAt}>
-										{application.submittedAt}
-									</time>
+									提交于 <Timestamp value={application.submittedAt} />
 								</small>
 							</div>
 							<Badge tone="green">已提交</Badge>
@@ -163,9 +162,7 @@ export function MyAgentApplicationDetailScreen({
 									{application.decision ? (
 										<span>
 											审批时间{" "}
-											<time dateTime={application.decision.decidedAt}>
-												{application.decision.decidedAt}
-											</time>
+											<Timestamp value={application.decision.decidedAt} />
 										</span>
 									) : application.status === "withdrawn" ? (
 										"申请已撤回，不再等待审批。"
@@ -288,19 +285,10 @@ export function MyAgentApplicationDetailScreen({
 							</dd>
 							<dt>使用范围</dt>
 							<dd>
-								{configuration.availability.length ? (
-									<ul>
-										{configuration.availability.map((target) => (
-											<li key={JSON.stringify(target)}>
-												{target.kind === "user"
-													? `用户 ${target.userId}`
-													: `组织 ${target.organizationId}`}
-											</li>
-										))}
-									</ul>
-								) : (
-									"未额外指定"
-								)}
+								<DirectoryRecords
+									targets={configuration.availability}
+									empty="未额外指定"
+								/>
 							</dd>
 							<dt>模型范围</dt>
 							<dd>

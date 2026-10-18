@@ -222,6 +222,13 @@ export function AgentConfigurationScreen({
 		)
 		.join("、");
 	const isDisabled = submitting || agent.managementStatus === "disabled";
+	// 目录缺少 Owner 记录或读取失败时，chip 仍显示 Agent 投影中的 Owner 显示名。
+	const ownerLabels = Object.fromEntries(
+		agent.configuration.owners.map((owner) => [
+			owner.userId,
+			owner.displayName,
+		]),
+	);
 	// 正在替换默认 Key（已输入或已检查）也算改动：保存时要引导用户先完成检查（#2560）。
 	const hasChanges =
 		agentConfigurationDraftChanged(agent, draft) ||
@@ -467,7 +474,7 @@ export function AgentConfigurationScreen({
 								aria-label="Agent 配置"
 							>
 								<FormSection title="Owner">
-									<div className="mt-4 space-y-4">
+									<div className="mt-4 max-w-[720px] space-y-4">
 										<DirectoryPicker
 											id="configuration-owner-ids"
 											kind="user"
@@ -477,6 +484,7 @@ export function AgentConfigurationScreen({
 											value={draft.coOwnerIds}
 											disabled={isDisabled}
 											error={ownerError}
+											fallbackLabels={ownerLabels}
 											onChange={(value) => {
 												setDraft((current) => ({
 													...current,

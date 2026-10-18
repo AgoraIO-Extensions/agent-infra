@@ -364,7 +364,11 @@ test("disabling an employee is confirmed with the person before one request", as
 	await picker.click();
 	await page.getByRole("option", { name: /验收员工/ }).click();
 	await expect(page.getByText("当前状态：未禁用")).toBeVisible();
-	const trigger = page.getByRole("button", { name: "禁用员工", exact: true });
+	// 触发按钮名称带员工姓名（「{可见文字}：{对象名}」），确认钮仍是「禁用员工」。
+	const trigger = page.getByRole("button", {
+		name: "禁用员工：验收员工",
+		exact: true,
+	});
 	await trigger.click();
 	const dialog = page.getByRole("dialog", { name: "禁用这名员工？" });
 	await expect(dialog).toBeVisible();

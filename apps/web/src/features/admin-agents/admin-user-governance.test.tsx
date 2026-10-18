@@ -80,9 +80,19 @@ describe("Administrator employee access control", () => {
 		fireEvent.focus(screen.getByRole("combobox", { name: "员工" }));
 		await screen.findByRole("option", { name: /Alice/ });
 		fireEvent.click(screen.getByRole("option", { name: /Alice/ }));
+		// 单选场景选中后收起结果层，避免盖住状态与操作按钮。
+		expect(
+			screen
+				.getByRole("combobox", { name: "员工" })
+				.getAttribute("aria-expanded"),
+		).toBe("false");
+		expect(screen.queryByRole("listbox")).toBeNull();
 		await screen.findByText("当前状态：未禁用");
+		// 触发按钮的可访问名称带上所选员工（F-11 / N-12：「{可见文字}：{对象名}」）。
+		const trigger = screen.getByRole("button", { name: "禁用员工：Alice" });
+		expect(trigger.textContent).toBe("禁用员工");
 		// 禁用先确认对象与后果：打开与取消都不发请求。
-		fireEvent.click(screen.getByRole("button", { name: "禁用员工" }));
+		fireEvent.click(trigger);
 		let dialog = await screen.findByRole("dialog", { name: "禁用这名员工？" });
 		expect(await within(dialog).findByText("Alice")).toBeTruthy();
 		expect(within(dialog).getByText("alice@example.test")).toBeTruthy();
@@ -91,7 +101,7 @@ describe("Administrator employee access control", () => {
 		fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 		expect(setPlatformUserDisabledV2).not.toHaveBeenCalled();
-		fireEvent.click(screen.getByRole("button", { name: "禁用员工" }));
+		fireEvent.click(screen.getByRole("button", { name: "禁用员工：Alice" }));
 		dialog = await screen.findByRole("dialog", { name: "禁用这名员工？" });
 		fireEvent.click(within(dialog).getByRole("button", { name: "禁用员工" }));
 		fireEvent.click(within(dialog).getByRole("button", { name: "禁用员工" }));
@@ -130,7 +140,9 @@ describe("Administrator employee access control", () => {
 		await screen.findByText(/操作未确认/);
 		expect(screen.queryByRole("dialog")).toBeNull();
 		expect(screen.getByRole("alert").textContent).toContain("操作未确认");
-		expect(screen.getByRole("button", { name: "禁用员工" })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "禁用员工：Alice" }),
+		).toBeTruthy();
 		expect(screen.getByRole("button", { name: "解除禁用" })).toBeTruthy();
 	});
 });

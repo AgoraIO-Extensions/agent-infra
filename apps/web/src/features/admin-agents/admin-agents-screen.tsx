@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyDescription } from "@/components/ui/empty";
 import { Field } from "@/components/ui/field";
+import { IdentifierText } from "@/components/ui/identifier-text";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
@@ -29,6 +30,7 @@ import {
 	agentServiceAvailabilityLabel,
 	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
+import { formatPerson } from "../directory-names.js";
 import type { AdminAgentsState } from "./admin-agents.js";
 import { AdminUserGovernance } from "./admin-user-governance.js";
 import { ApplicationMaterialGovernance } from "./application-material-governance.js";
@@ -244,11 +246,21 @@ export function AdminAgentsScreen({
 												{sourceLabel(agent)}
 											</TableCell>
 											<TableCell data-label="Owner">
-												{agent.configuration.owners
-													.map(
-														(owner) => `${owner.displayName} (${owner.userId})`,
-													)
-													.join("、")}
+												{agent.configuration.owners.map((owner, index) => (
+													<span key={owner.userId}>
+														{index ? "、" : null}
+														{
+															formatPerson({ displayName: owner.displayName })
+																.name
+														}{" "}
+														{/* 系统管理员需要区分同名 Owner：ID 只以等宽短形式作次要信息。 */}
+														<IdentifierText
+															className="text-muted-foreground"
+															label="Owner ID"
+															value={owner.userId}
+														/>
+													</span>
+												))}
 											</TableCell>
 											<TableCell data-label="状态">
 												<div className="space-y-2">

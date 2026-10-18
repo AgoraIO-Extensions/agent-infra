@@ -286,23 +286,9 @@ export function AgentDetailScreen({
 							<dt className="text-muted-foreground">可用范围</dt>
 							<dd className="break-words">
 								{agent.configuration.availability.length ? (
-									<div
-										key={`${agent.agentId}:${JSON.stringify(agent.configuration.availability)}`}
-										className="space-y-2"
-									>
-										{(["user", "organization"] as const).map((kind) => {
-											const ids = agent.configuration.availability
-												.filter((entry) => entry.kind === kind)
-												.map((entry) =>
-													entry.kind === "user"
-														? entry.userId
-														: entry.organizationId,
-												);
-											return ids.length ? (
-												<DirectoryRecords key={kind} kind={kind} ids={ids} />
-											) : null;
-										})}
-									</div>
+									<DirectoryRecords
+										targets={agent.configuration.availability}
+									/>
 								) : (
 									"未提供范围信息"
 								)}

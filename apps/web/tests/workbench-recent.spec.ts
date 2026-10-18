@@ -617,6 +617,17 @@ test("formal root route consumes fixture recent, opens the same Conversation and
 		"受控最近对话 conversation-z",
 		"受控最近对话 conversation-a",
 	]);
+	// 最近对话时间按本地时区显示，悬停 title 为完整时间，不出现 ISO 原文或秒。
+	const times = recent.locator("time");
+	await expect(times).toHaveCount(2);
+	for (const time of await times.all()) {
+		await expect(time).toHaveAttribute("datetime", /^\d{4}-\d{2}-\d{2}T.*Z$/);
+		await expect(time).toHaveAttribute(
+			"title",
+			/^\d{4} 年 \d{1,2} 月 \d{1,2} 日 \d{2}:\d{2}:\d{2}$/,
+		);
+		await expect(time).not.toHaveText(/T\d\d:|:\d\d:\d\d/);
+	}
 	await expect(recent.getByRole("link", { name: "查看历史" })).toHaveAttribute(
 		"href",
 		"/chat/agent-a/conversation-a",

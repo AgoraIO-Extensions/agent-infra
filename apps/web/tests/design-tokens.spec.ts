@@ -688,7 +688,13 @@ test("reduced motion compresses every transition and animation duration", async 
 	// 目录读取挂起时，加载指示器是页面上真实存在的动画元素。
 	api.holdDirectory();
 	await page.getByRole("combobox", { name: "共同 Owner 用户" }).click();
-	await expect(page.getByRole("listbox")).toBeVisible();
+	// format 流把读取中 / 无结果等状态移出 listbox（listbox 只承载结果），这里等待读取中状态出现。
+	await expect(
+		page
+			.locator("#main-content")
+			.getByRole("status")
+			.filter({ hasText: "正在读取目录" }),
+	).toBeVisible();
 	await expect
 		.poll(() =>
 			page.evaluate(

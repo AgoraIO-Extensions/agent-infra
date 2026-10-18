@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { Field } from "@/components/ui/field";
+import { IdentifierText } from "@/components/ui/identifier-text";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
@@ -31,7 +32,9 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { Timestamp } from "@/components/ui/timestamp";
 import { useResultFocus } from "@/hooks/use-result-focus";
+import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import { statusTone } from "@/lib/status-tone";
 import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
@@ -40,6 +43,13 @@ import {
 	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
 import type { BrowserSessionState } from "../browser-session.js";
+import {
+	AvailabilityNameList,
+	type AvailabilityNames,
+	DirectoryReadAlert,
+	formatPerson,
+	useAvailabilityNames,
+} from "../directory-names.js";
 import {
 	formatMultiServiceManifestSummary,
 	parseMultiServiceManifest,
@@ -71,6 +81,7 @@ type AdminAgentApplicationsScreenProps = {
 
 type ApplicationReviewProps = {
 	application: AgentApplicationProjectionV2;
+	names: AvailabilityNames;
 	onDecision: AdminAgentApplicationsScreenProps["onDecision"];
 	pendingDecision?: PendingDecision;
 	decisionError?: RequestError | null;
@@ -78,6 +89,30 @@ type ApplicationReviewProps = {
 	onOpenChange?: (open: boolean) => void;
 };
 
+/** Owner 显示投影中的姓名；姓名缺失时，系统管理员页面附 ID 短形式以便核对。 */
+function OwnerNames({
+	owners,
+}: {
+	owners: AgentApplicationProjectionV2["configuration"]["owners"];
+}) {
+	if (!owners.length) return <>未提供</>;
+	return (
+		<>
+			{owners.map((owner, index) => (
+				<span key={owner.userId}>
+					{index ? "、" : null}
+					{formatPerson({ displayName: owner.displayName }).name}
+					{owner.displayName.trim() ? null : (
+						<>
+							{" "}
+							<IdentifierText label="Owner ID" value={owner.userId} />
+						</>
+					)}
+				</span>
+			))}
+		</>
+	);
+}
 function isSystemAdministrator(session: BrowserSessionProjectionV1) {
 	// This controls visibility only. The Platform authorizes every decision command.
 	return session.user.roles.includes("system_admin");
@@ -108,6 +143,7 @@ function DecisionFeedback({
 
 function ApplicationReview({
 	application,
+	names,
 	onDecision,
 	pendingDecision,
 	decisionError,
@@ -214,19 +250,16 @@ function ApplicationReview({
 							) : null}
 							<dt>Owner</dt>
 							<dd className="break-words">
-								{configuration.owners
-									.map((owner) => owner.displayName || owner.userId)
-									.join("、") || "未提供"}
+								<OwnerNames owners={configuration.owners} />
 							</dd>
 							<dt>使用范围</dt>
-							<dd className="break-all">
-								{configuration.availability
-									.map((target) =>
-										target.kind === "user"
-											? `员工：${target.userId}`
-											: `组织：${target.organizationId}`,
-									)
-									.join("；") || "未提供额外范围"}
+							<dd className="break-words">
+								<AvailabilityNameList
+									targets={configuration.availability}
+									names={names}
+									identifier
+									empty="未提供额外范围"
+								/>
 							</dd>
 							<dt>模型</dt>
 							<dd className="break-words">
@@ -240,7 +273,9 @@ function ApplicationReview({
 							</dd>
 							<dt>默认推理强度</dt>
 							<dd className="break-words">
-								{configuration.defaultReasoningLevel ?? "未提供"}
+								{configuration.defaultReasoningLevel
+									? reasoningLevelLabel(configuration.defaultReasoningLevel)
+									: "未提供"}
 							</dd>
 							<dt>预设规格</dt>
 							<dd>{resourceProfile.displayName}（只读）</dd>
@@ -369,6 +404,12 @@ export function AdminAgentApplicationsScreen({
 	const [source, setSource] = useState("all");
 	const filterId = useId();
 	const applications = state.kind === "ready" ? state.applications : [];
+	// 表格与审阅弹窗共用同一次目录读取。
+	const names = useAvailabilityNames(
+		applications.flatMap(
+			(application) => application.configuration.availability,
+		),
+	);
 	const sources = [
 		...new Set(
 			applications.map((a) =>
@@ -432,6 +473,9 @@ export function AdminAgentApplicationsScreen({
 				)}
 			</header>
 			<DecisionFeedback decision={decisionResult} />
+			{state.kind === "ready" ? (
+				<DirectoryReadAlert names={[names]} className="mt-4" />
+			) : null}
 			{state.kind === "loading" ? (
 				<LoadingLine>正在读取审批申请…</LoadingLine>
 			) : state.kind === "unavailable" ? (
@@ -523,19 +567,16 @@ export function AdminAgentApplicationsScreen({
 													: "自定义 Agent"}
 											<small>
 												Owner ·{" "}
-												{application.configuration.owners
-													.map((o) => o.displayName || o.userId)
-													.join("、") || "未提供"}
+												<OwnerNames owners={application.configuration.owners} />
 											</small>
 										</TableCell>
 										<TableCell data-label="可用范围">
-											{application.configuration.availability
-												.map((target) =>
-													target.kind === "user"
-														? `用户 ${target.userId}`
-														: `组织 ${target.organizationId}`,
-												)
-												.join("、") || "未额外指定"}
+											<AvailabilityNameList
+												targets={application.configuration.availability}
+												names={names}
+												identifier
+												empty="未额外指定"
+											/>
 										</TableCell>
 										<TableCell data-label="模型">
 											{application.configuration.modelOptions
@@ -543,13 +584,12 @@ export function AdminAgentApplicationsScreen({
 												.join("、") || "未提供模型选项"}
 										</TableCell>
 										<TableCell data-label="提交时间">
-											<time dateTime={application.submittedAt}>
-												{new Date(application.submittedAt).toLocaleString()}
-											</time>
+											<Timestamp value={application.submittedAt} />
 										</TableCell>
 										<TableCell data-cell="actions">
 											{application.status === "pending_approval" && (
 												<ApplicationReview
+													names={names}
 													application={application}
 													onDecision={onDecision}
 													pendingDecision={pendingDecision}

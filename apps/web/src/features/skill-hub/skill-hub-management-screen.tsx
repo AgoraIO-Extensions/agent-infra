@@ -81,6 +81,17 @@ type SkillHubPublicationDraft = Omit<
 	"packageObjectVersion"
 >;
 
+// Skill 版本状态的穷举中文映射，页面不直接显示英文枚举。
+const skillVersionStateLabels: Record<
+	SkillHubPublicationResponseV1["version"]["state"],
+	string
+> = {
+	published: "已发布",
+	pending_review: "待审核",
+	rejected: "已驳回",
+	revoked: "已撤销",
+};
+
 function publicationMessage(
 	action: string,
 	result: SkillHubPublicationResponseV1,
@@ -89,7 +100,8 @@ function publicationMessage(
 	const reason = result.version.reviewReason
 		? `，原因：${result.version.reviewReason}`
 		: "";
-	return `${action}成功：服务端状态 ${result.version.state}${replay}${reason}。`;
+	const state = skillVersionStateLabels[result.version.state] ?? "其他";
+	return `${action}成功：服务端状态 ${state}${replay}${reason}。`;
 }
 
 function bindingMessage(
@@ -603,8 +615,8 @@ export function SkillHubManagementScreen({
 								/>
 								<p className="text-muted-foreground text-sm" role="status">
 									{publishedVersionIds.has(reviewForm.skillVersionId.trim())
-										? "当前授权目录确认该版本为 published，可申请撤销。"
-										: "当前授权目录未确认 published 状态，撤销按钮保持不可用。"}
+										? "当前授权目录确认该版本已发布，可申请撤销。"
+										: "当前授权目录未确认已发布状态，撤销按钮保持不可用。"}
 								</p>
 								<FieldControl label="决定">
 									{(id) => (
@@ -865,7 +877,9 @@ export function SkillHubManagementScreen({
 												<Badge variant="tag">
 													{skillHubVisibilityLabels[version.visibility]}
 												</Badge>
-												<Badge tone="gray">published</Badge>
+												<Badge tone="gray">
+													{skillVersionStateLabels.published}
+												</Badge>
 											</div>
 										</div>
 										<p className="mt-3 break-all text-muted-foreground text-xs">

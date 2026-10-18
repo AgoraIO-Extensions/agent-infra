@@ -173,7 +173,3 @@ export function auditResultTone(result: AuditRecord["result"]): ChipTone {
 	if (result === "failed") return "red";
 	return "gray";
 }
-
-export function auditTimestamp(value: string) {
-	return new Date(value).toLocaleString("zh-CN", { hour12: false });
-}

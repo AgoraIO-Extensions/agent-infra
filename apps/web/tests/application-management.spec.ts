@@ -61,6 +61,29 @@ async function fixture(page: Page) {
 			});
 		if (path === "/api/v2/me/api-credentials")
 			return route.fulfill({ json: { items: [], nextCursor: null } });
+		if (path === "/api/v2/directory/search") {
+			const ids =
+				new URL(request.url()).searchParams.get("ids")?.split(",") ?? [];
+			return route.fulfill({
+				json: {
+					schemaVersion: 1,
+					items: [
+						{
+							kind: "user",
+							canonicalId: application.responsibleUserId,
+							displayName: "应用负责人",
+							email: "app.owner@example.test",
+						},
+						{
+							kind: "user",
+							canonicalId: credential.delivery.recipient.principalId,
+							displayName: "凭证接收人",
+							email: "recipient@example.test",
+						},
+					].filter((item) => ids.includes(item.canonicalId)),
+				},
+			});
+		}
 		const match = /^\/api\/v2\/applications\/([^/]+)(\/credentials)?$/.exec(
 			path,
 		);
@@ -167,11 +190,30 @@ test("retains unknown delivery metadata, prepares rotation and wraps 390px resul
 	await page.goto(
 		`/my-settings/api-credentials?applicationId=${application.applicationId}`,
 	);
+	// 负责人与接收用户显示目录姓名，时间按本地时区显示且悬停为完整时间。
+	await expect(
+		page.locator("dt", { hasText: "负责人" }).locator("+ dd"),
+	).toHaveText("应用负责人");
+	const created = page.locator(`time[datetime="${application.createdAt}"]`);
+	await expect(created.first()).toHaveAttribute(
+		"title",
+		/^\d{4} 年 \d{1,2} 月 \d{1,2} 日 \d{2}:\d{2}:\d{2}$/,
+	);
+	await expect(page.locator("main")).not.toContainText(application.createdAt);
 	await submitCredential(page);
 	await expect(page.getByText("投递结果未知", { exact: true })).toBeVisible();
 	await expect(
 		page.getByText(credential.metadata.credentialId, { exact: true }),
 	).toBeVisible();
+	await expect(
+		page.locator("dt", { hasText: "接收者" }).locator("+ dd"),
+	).toHaveText("用户 · 凭证接收人");
+	await expect(page.locator("main")).not.toContainText(
+		application.responsibleUserId,
+	);
+	await expect(page.locator("main")).not.toContainText(
+		credential.delivery.recipient.principalId,
+	);
 	await expect(
 		page.getByText(credential.delivery.attemptId, { exact: true }),
 	).toBeVisible();

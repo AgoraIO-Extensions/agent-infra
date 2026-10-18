@@ -22,6 +22,7 @@ import { Field, FieldLegend } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LoadingLine } from "@/components/ui/spinner";
+import { Timestamp } from "@/components/ui/timestamp";
 import { withObjectName } from "@/lib/accessible-name";
 import type {
 	IssuePersonalApiCredentialV2Responses,
@@ -61,10 +62,6 @@ type ApiCredentialsScreenProps = {
 };
 
 const defaultScopes: PersonalApiCredentialScope[] = ["agent:read"];
-
-function formatDate(value: string | null) {
-	return value ? new Date(value).toLocaleString("zh-CN") : "永不过期";
-}
 
 function stateMessage(
 	state: Extract<ApiCredentialsViewState, { kind: "unavailable" }>,
@@ -408,18 +405,28 @@ function CredentialRow({
 						</div>
 						<div>
 							<dt className="text-muted-foreground">过期时间</dt>
-							<dd>{formatDate(credential.expiresAt)}</dd>
+							<dd>
+								{credential.expiresAt ? (
+									<Timestamp value={credential.expiresAt} style="absolute" />
+								) : (
+									"永不过期"
+								)}
+							</dd>
 						</div>
 						<div>
 							<dt className="text-muted-foreground">创建时间</dt>
-							<dd>{formatDate(credential.createdAt)}</dd>
+							<dd>
+								<Timestamp value={credential.createdAt} />
+							</dd>
 						</div>
 						<div>
 							<dt className="text-muted-foreground">最近使用</dt>
 							<dd>
-								{credential.lastUsedAt
-									? formatDate(credential.lastUsedAt)
-									: "尚未使用"}
+								{credential.lastUsedAt ? (
+									<Timestamp value={credential.lastUsedAt} />
+								) : (
+									"尚未使用"
+								)}
 							</dd>
 						</div>
 					</dl>

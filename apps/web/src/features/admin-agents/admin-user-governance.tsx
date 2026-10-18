@@ -3,6 +3,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FormSection } from "@/components/ui/form-section";
+import { withObjectName } from "@/lib/accessible-name";
 import {
 	getPlatformUserDisabledV2,
 	setPlatformUserDisabledV2,
@@ -23,6 +24,8 @@ function oneUser(value: string) {
 
 export function AdminUserGovernance() {
 	const [userId, setUserId] = useState("");
+	// 禁用触发按钮的可访问名称带上所选员工姓名（F-11 / N-12）；未解析的目录记录不写进名称。
+	const [userName, setUserName] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [message, setMessage] = useState("");
 	const [failed, setFailed] = useState(false);
@@ -109,7 +112,13 @@ export function AdminUserGovernance() {
 					id="admin-user-governance-user"
 					kind="user"
 					label="员工"
-					onChange={(value) => setUserId(oneUser(value))}
+					closeOnSelect
+					onChange={(value, selection) => {
+						setUserId(oneUser(value));
+						// selection 与 value 同序，最后一项即当前员工。
+						const selected = selection.at(-1);
+						setUserName(selected?.resolved ? selected.name : "");
+					}}
 					value={userId}
 				/>
 				<p
@@ -131,11 +140,24 @@ export function AdminUserGovernance() {
 					<ConfirmDialog
 						disabled={busy || status === "loading" || !userId}
 						trigger={
-							<Button variant="outline">{busy ? "提交中…" : "禁用员工"}</Button>
+							<Button
+								variant="outline"
+								aria-label={withObjectName(
+									busy ? "提交中…" : "禁用员工",
+									userName,
+								)}
+							>
+								{busy ? "提交中…" : "禁用员工"}
+							</Button>
 						}
 						title="禁用这名员工？"
 						subject={{
-							name: <DirectoryRecords kind="user" ids={[userId]} />,
+							name: (
+								<DirectoryRecords
+									targets={userId ? [{ kind: "user", userId }] : []}
+									empty="未选择员工"
+								/>
+							),
 						}}
 						description="禁用后对方立即不能登录平台，也不能通过平台入口使用或管理 Agent；进行中的任务会收到取消请求。之后可以「解除禁用」恢复资格，已取消的任务不会恢复。"
 						confirmLabel="禁用员工"

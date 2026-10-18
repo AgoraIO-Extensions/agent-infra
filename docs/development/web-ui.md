@@ -66,6 +66,14 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `Toast` | 根布局常驻的补充确认，页面通过 `useToast()` 调用 |
 | `Card` / `AgentMark` | 独立卡片的悬停，Agent 标识的字形与 tone |
 | `Table` | Agent 输出的 Markdown 表格 |
+| `Timestamp` | 工作台、审批、审计、应用管理、个人 API 凭证、我的 Agent 与申请详情的时间 |
+| `IdentifierText` | Agent 管理 Owner、审批与审计中未解析人员的 ID 短形式，审计详情的可复制主体 ID |
+| `Listbox` / `ListboxOption` | 目录选择器结果层；候选不进入 Tab 序列，由输入框的 `aria-activedescendant` 导航 |
+
+时间统一由 `src/lib/format-time.ts` 按浏览器本地时区与自然日格式化，`<Timestamp>` 渲染
+`<time dateTime title>`，`title` 为带秒的完整本地时间。人员与组织显示名由
+`src/features/directory-names.tsx` 的 `useDirectoryNames` 页面级批量读取：单元格和 chip 不放
+`role="status"`，读取失败时页面只显示一条提示与「重新读取目录」，主文字不回退到内部 ID。
 
 `Card`、`ConfirmDialog`、`Spinner`、`Toast` 与 `features/agent-mark.tsx` 为手写组件，不由 CLI 生成。
 `Alert` 不设默认 role：首屏静态说明不设 role，异步结果用 `role="status"`，失败用 `role="alert"`。
@@ -88,6 +96,10 @@ Badge、Alert 的旧变体名只作兼容层，供未迁移的对话页与浏览
 - 允许 `components/ui` 内部、普通语义内容 HTML、测试文件和三个具名现有测试 helper；生产页面不得导入测试 helper。组件选型遵守[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#21-技术栈)。
 
 规则检查直接 JSX 声明与静态可归因的 React 调用，包括一层不可变 alias；不会跟踪第二跳 alias，不是任意 JavaScript 数据流分析。不得增加业务文件级或目录通配排除。
+
+`pnpm test` 还执行 `apps/web/src/lib/time-display-policy.test.ts`：页面不得直接调用
+`toLocaleString`、`toLocaleDateString`、`toLocaleTimeString` 或 `Intl.DateTimeFormat` 显示时间。
+对话页尚待迁移的 3 个文件在该测试中具名列出，迁移后删除，不得新增条目。
 
 ## 验证
 
