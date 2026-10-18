@@ -95,6 +95,7 @@ export function AgentConfigurationWorkflow({
 				}
 				key={agent.agentId}
 				onSave={submission.saveConfiguration}
+				onSaveAndWait={submission.saveConfigurationAndWait}
 				onPreviewDefaultRelayKeyCandidates={
 					submission.previewDefaultRelayKeyCandidates
 				}

@@ -105,7 +105,16 @@ export function useAgentConfigurationSubmission(agentId: string) {
 		};
 		pendingCommands.current.set(attempt.idempotencyKey, command);
 		activeSubmission.current = attempt.idempotencyKey;
-		submission.mutate(attempt);
+		return attempt;
+	};
+	const runSubmission = (command: AgentConfigurationCommand) => {
+		const attempt = startSubmission(command);
+		if (!attempt) return Promise.resolve(undefined);
+		return submission.mutateAsync(attempt);
+	};
+	const fireSubmission = (command: AgentConfigurationCommand) => {
+		const attempt = startSubmission(command);
+		if (attempt) submission.mutate(attempt);
 	};
 
 	return {
@@ -120,9 +129,14 @@ export function useAgentConfigurationSubmission(agentId: string) {
 			body:
 				| AgentConfigurationUpdateRequestV2Writable
 				| AgentSavedModelConfigurationUpdate,
-		) => startSubmission({ kind: "configuration", body }),
+		) => fireSubmission({ kind: "configuration", body }),
+		saveConfigurationAndWait: (
+			body:
+				| AgentConfigurationUpdateRequestV2Writable
+				| AgentSavedModelConfigurationUpdate,
+		) => runSubmission({ kind: "configuration", body }),
 		upgradeImage: (imageReference: string) =>
-			startSubmission({ kind: "image", imageReference }),
+			fireSubmission({ kind: "image", imageReference }),
 		/** 仅替换 Key 成功后的状态（含新版本），供页面给出确认提示。 */
 		relayKeyResult: relayKeySubmission.isSuccess
 			? relayKeySubmission.data

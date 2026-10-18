@@ -98,6 +98,23 @@ export function buildAgentConfigurationRequest(
 	};
 }
 
+/**
+ * Build the scoped PATCH used by the write-only Secret replacement dialog.
+ *
+ * A replacement is its own configuration command.  Keeping this constructor
+ * separate from the page draft prevents unrelated, not-yet-submitted fields
+ * from being copied into a Secret request.
+ */
+export function buildAgentSecretReplacementRequest(
+	name: string,
+	value: string,
+): AgentConfigurationUpdateRequestV2Writable {
+	return {
+		schemaVersion: 2,
+		secrets: [{ name: name.trim(), value }],
+	};
+}
+
 /** 按集合比较：服务端对 Owner 与范围去重后再比较，重复的 ID 不算改动。 */
 function sortedJson(values: readonly string[]) {
 	return JSON.stringify([...new Set(values)].sort());

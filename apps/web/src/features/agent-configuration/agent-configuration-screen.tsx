@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Toast } from "@/components/ui/toast";
 import { useResultFocus } from "@/hooks/use-result-focus";
 
 import type {
@@ -37,6 +38,7 @@ import {
 	type AgentConfigurationSecretDraft,
 	agentConfigurationDraftChanged,
 	buildAgentConfigurationRequest,
+	buildAgentSecretReplacementRequest,
 	configurationDraftFromAgent,
 } from "./agent-configuration-draft.js";
 import { KeylessModelPicker } from "./keyless-model-picker.js";
@@ -61,6 +63,13 @@ type AgentConfigurationScreenProps = {
 			| AgentConfigurationUpdateRequestV2Writable
 			| AgentSavedModelConfigurationUpdate,
 	) => void;
+	onSaveAndWait?: (
+		body:
+			| AgentConfigurationUpdateRequestV2Writable
+			| AgentSavedModelConfigurationUpdate,
+	) => Promise<
+		AgentProjectionV2 | AgentApiLifecycleAcceptedResponseV1 | undefined
+	>;
 	/** Agent 由默认 Relay Key 管理模型（配置 V3）：用候选模型选择代替自由文本字段。 */
 	defaultRelayKeyManaged?: boolean;
 	/** Deployment catalog candidates for non-Key-managed Agents. */
@@ -194,6 +203,7 @@ export function AgentConfigurationScreen({
 	savedRelayKeyCandidatesLoading = false,
 	lifecycle,
 	onSave,
+	onSaveAndWait,
 	onRetrySavedRelayKeyCandidates,
 	onPreviewDefaultRelayKeyCandidates,
 	onReplaceDefaultRelayKey,
@@ -207,7 +217,9 @@ export function AgentConfigurationScreen({
 	const [draft, setDraft] = useState(() => configurationDraftFromAgent(agent));
 	const [secretDialogName, setSecretDialogName] = useState<string>();
 	const [secretDialogValue, setSecretDialogValue] = useState("");
-	const [secretDialogError, setSecretDialogError] = useState(false);
+	const [secretDialogError, setSecretDialogError] = useState<string>();
+	const [secretDialogSubmitting, setSecretDialogSubmitting] = useState(false);
+	const [secretNotice, setSecretNotice] = useState<string>();
 	const [ownerError, setOwnerError] = useState<string>();
 	const [catalogSelectionError, setCatalogSelectionError] = useState(false);
 	const [savedSelectionError, setSavedSelectionError] = useState(false);
@@ -323,37 +335,41 @@ export function AgentConfigurationScreen({
 	const closeSecretDialog = () => {
 		setSecretDialogName(undefined);
 		setSecretDialogValue("");
-		setSecretDialogError(false);
+		setSecretDialogError(undefined);
 	};
-	const replaceSecret = () => {
+	const replaceSecret = async () => {
 		if (!secretDialogName || !secretDialogValue.trim()) {
-			setSecretDialogError(true);
+			setSecretDialogError("请输入 Secret 值。");
 			return;
 		}
-		const nextSecrets = (() => {
-			const index = draft.secrets.findIndex(
-				(secret) => secret.name.trim() === secretDialogName,
+		const request = buildAgentSecretReplacementRequest(
+			secretDialogName,
+			secretDialogValue,
+		);
+		setSecretDialogSubmitting(true);
+		setSecretDialogError(undefined);
+		setSecretNotice(undefined);
+		try {
+			const result = await (onSaveAndWait
+				? onSaveAndWait(request)
+				: Promise.resolve(onSave(request)));
+			const version =
+				result && "configuration" in result
+					? result.configuration.secrets.find(
+							(secret) => secret.name === request.secrets?.[0]?.name,
+						)?.version
+					: undefined;
+			setSecretNotice(
+				version === undefined || version === null
+					? "Secret 已写入，等待 Worker 激活。"
+					: `Secret 已写入 pending version ${version}，等待 Worker 激活。`,
 			);
-			if (index === -1)
-				return [
-					...draft.secrets,
-					{ name: secretDialogName, value: secretDialogValue },
-				];
-			const secrets = [...draft.secrets];
-			secrets[index] = { name: secretDialogName, value: secretDialogValue };
-			return secrets;
-		})();
-		const request = buildAgentConfigurationRequest({
-			...draft,
-			secrets: nextSecrets,
-		});
-		if (!request.coOwnerIds?.length) {
-			setOwnerError("请选择至少一名有效 Owner。");
-			return;
+			closeSecretDialog();
+		} catch {
+			setSecretDialogError("Secret 替换未完成，请重试。");
+		} finally {
+			setSecretDialogSubmitting(false);
 		}
-		onSave(request);
-		setDraft((current) => ({ ...current, secrets: [] }));
-		closeSecretDialog();
 	};
 	const submitConfiguration = () => {
 		if (
@@ -867,7 +883,8 @@ export function AgentConfigurationScreen({
 												onClick={() => {
 													setSecretDialogName(secret.name);
 													setSecretDialogValue("");
-													setSecretDialogError(false);
+													setSecretDialogError(undefined);
+													setSecretNotice(undefined);
 												}}
 												type="button"
 											>
@@ -917,7 +934,7 @@ export function AgentConfigurationScreen({
 								<Dialog
 									open={secretDialogName !== undefined}
 									onOpenChange={(open) => {
-										if (!open) closeSecretDialog();
+										if (!open && !secretDialogSubmitting) closeSecretDialog();
 									}}
 								>
 									<DialogContent>
@@ -931,31 +948,49 @@ export function AgentConfigurationScreen({
 											</Label>
 											<Input
 												autoComplete="new-password"
+												aria-describedby={
+													secretDialogError
+														? "configuration-secret-replacement-error"
+														: undefined
+												}
+												aria-invalid={secretDialogError ? "true" : undefined}
 												id="configuration-secret-replacement"
 												onChange={(event) => {
 													setSecretDialogValue(event.target.value);
-													setSecretDialogError(false);
+													setSecretDialogError(undefined);
 												}}
 												placeholder="仅本次提交使用，不会回显"
 												type="password"
 												value={secretDialogValue}
 											/>
 											{secretDialogError && (
-												<p className="field-error">请输入 Secret 值。</p>
+												<p
+													className="field-error"
+													id="configuration-secret-replacement-error"
+													role="alert"
+												>
+													{secretDialogError}
+												</p>
 											)}
 										</div>
 										<div className="mt-5 flex flex-wrap justify-end gap-3">
 											<DialogClose
 												className={buttonVariants({ variant: "ghost" })}
+												disabled={secretDialogSubmitting}
 											>
 												取消
 											</DialogClose>
-											<Button type="button" onClick={replaceSecret}>
-												保存替换
+											<Button
+												disabled={secretDialogSubmitting}
+												type="button"
+												onClick={() => void replaceSecret()}
+											>
+												{secretDialogSubmitting ? "保存中…" : "保存替换"}
 											</Button>
 										</div>
 									</DialogContent>
 								</Dialog>
+								{secretNotice ? <Toast>{secretNotice}</Toast> : null}
 								<div className="form-footer border-border border-t pt-5">
 									<Button
 										aria-describedby={

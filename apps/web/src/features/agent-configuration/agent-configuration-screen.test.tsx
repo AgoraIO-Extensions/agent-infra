@@ -9,6 +9,7 @@ import {
 	render,
 	screen,
 	waitFor,
+	within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -136,12 +137,68 @@ describe("AgentConfigurationScreen", () => {
 		expect(screen.queryByLabelText("新 Secret 值")).toBeNull();
 	});
 
-	it("replaces a configured Secret through a write-only dialog", () => {
+	it("replaces only the selected Secret, preserving other page drafts", async () => {
 		const onSave = vi.fn();
+		const onSaveAndWait = vi.fn().mockResolvedValue({
+			...agent,
+			configuration: {
+				...agent.configuration,
+				secrets: [{ name: "MODEL_API_KEY", isSet: true, version: 2 }],
+			},
+		});
 		render(
 			<AgentConfigurationScreen
 				agent={agent}
 				onSave={onSave}
+				onSaveAndWait={onSaveAndWait}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
+		fireEvent.change(screen.getByLabelText("Secret 名称"), {
+			target: { value: "UNSAVED_SECRET" },
+		});
+		fireEvent.change(screen.getByLabelText("新 Secret 值"), {
+			target: { value: "unsaved-secret-value" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "替换 Secret" }));
+		expect(screen.getByRole("dialog", { name: "替换 Secret" })).toBeTruthy();
+		fireEvent.change(
+			within(
+				screen.getByRole("dialog", { name: "替换 Secret" }),
+			).getByLabelText("新 Secret 值"),
+			{ target: { value: "replacement-value" } },
+		);
+		fireEvent.click(screen.getByRole("button", { name: "保存替换" }));
+		await waitFor(() =>
+			expect(screen.queryByRole("dialog", { name: "替换 Secret" })).toBeNull(),
+		);
+		expect(onSave).not.toHaveBeenCalled();
+		expect(onSaveAndWait).toHaveBeenCalledWith({
+			schemaVersion: 2,
+			secrets: [{ name: "MODEL_API_KEY", value: "replacement-value" }],
+		});
+		expect(
+			(screen.getByLabelText("Secret 名称") as HTMLInputElement).value,
+		).toBe("UNSAVED_SECRET");
+		expect(
+			screen.getByText("Secret 已写入 pending version 2，等待 Worker 激活。"),
+		).toBeTruthy();
+		expect(screen.queryByText("replacement-value")).toBeNull();
+	});
+
+	it("keeps the Secret dialog and value when replacement fails", async () => {
+		const onSaveAndWait = vi
+			.fn()
+			.mockRejectedValue(new Error("controlled replacement failure"));
+		render(
+			<AgentConfigurationScreen
+				agent={agent}
+				onSave={vi.fn()}
+				onSaveAndWait={onSaveAndWait}
 				onUpgradeImage={vi.fn()}
 				session={{ kind: "ready", session: ownerSession }}
 				submitting={false}
@@ -149,18 +206,24 @@ describe("AgentConfigurationScreen", () => {
 		);
 
 		fireEvent.click(screen.getByRole("button", { name: "替换 Secret" }));
-		expect(screen.getByRole("dialog", { name: "替换 Secret" })).toBeTruthy();
 		fireEvent.change(screen.getByLabelText("新 Secret 值"), {
 			target: { value: "replacement-value" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "保存替换" }));
-		expect(screen.queryByRole("dialog", { name: "替换 Secret" })).toBeNull();
-		expect(onSave).toHaveBeenCalledWith(
-			expect.objectContaining({
-				secrets: [{ name: "MODEL_API_KEY", value: "replacement-value" }],
-			}),
+
+		await waitFor(() =>
+			expect(screen.getByRole("alert").textContent).toBe(
+				"Secret 替换未完成，请重试。",
+			),
 		);
-		expect(screen.queryByText("replacement-value")).toBeNull();
+		expect(screen.getByRole("dialog", { name: "替换 Secret" })).toBeTruthy();
+		expect(
+			(
+				within(
+					screen.getByRole("dialog", { name: "替换 Secret" }),
+				).getByLabelText("新 Secret 值") as HTMLInputElement
+			).value,
+		).toBe("replacement-value");
 	});
 
 	it("does not render configuration data or controls for an ordinary-user projection", () => {

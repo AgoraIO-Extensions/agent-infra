@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
 	agentConfigurationDraftChanged,
 	buildAgentConfigurationRequest,
+	buildAgentSecretReplacementRequest,
 	configurationDraftFromAgent,
 } from "./agent-configuration-draft.js";
 
@@ -116,6 +117,15 @@ describe("Agent configuration draft", () => {
 		});
 
 		expect(request.channels).toEqual([]);
+	});
+
+	it("serializes Secret replacement as a scoped configuration patch", () => {
+		expect(
+			buildAgentSecretReplacementRequest(" MODEL_API_KEY ", "new-secret"),
+		).toEqual({
+			schemaVersion: 2,
+			secrets: [{ name: "MODEL_API_KEY", value: "new-secret" }],
+		});
 	});
 
 	describe("change detection (#2560)", () => {
