@@ -19,6 +19,11 @@ test("consumes the Platform login contract and keeps the form retryable", async 
 	let authenticated = false;
 	const loginRequests: { method: string; body: unknown; origin?: string }[] =
 		[];
+	await page.route("**/api/v1/connection/capability", async (route) => {
+		await route.fulfill({
+			json: { schemaVersion: 1, status: "unavailable", reason: "missing" },
+		});
+	});
 	await page.route("**/api/v1/session", async (route) => {
 		if (authenticated) {
 			await route.fulfill({ status: 200, json: session });
@@ -80,6 +85,10 @@ test("consumes the Platform login contract and keeps the form retryable", async 
 	await expect(page.getByRole("status")).toHaveText(
 		"登录失败，请检查账号或稍后重试。",
 	);
+	await expect(page.locator("#platform-login-error")).toHaveCSS(
+		"border-radius",
+		"10px",
+	);
 	await expect(page.getByLabel("账号")).toHaveAttribute("aria-invalid", "true");
 	await expect(page.getByRole("button", { name: "登录" })).toBeEnabled();
 	await test.info().attach("login-retryable-error", {
@@ -114,4 +123,47 @@ test("consumes the Platform login contract and keeps the form retryable", async 
 		body: await page.screenshot({ fullPage: true }),
 		contentType: "image/png",
 	});
+});
+
+test("keeps the server login error at the design radius", async ({ page }) => {
+	test.skip(
+		!process.env.VITE_PLATFORM_LOGIN_URL,
+		"Set VITE_PLATFORM_LOGIN_URL=/auth/login when running the auth browser consumer.",
+	);
+	await page.route("**/api/v1/connection/capability", async (route) => {
+		await route.fulfill({
+			json: { schemaVersion: 1, status: "unavailable", reason: "missing" },
+		});
+	});
+	await page.route("**/api/v1/session", async (route) => {
+		await route.fulfill({
+			status: 401,
+			contentType: "application/json",
+			json: {
+				schemaVersion: 1,
+				code: "AUTHENTICATION_REQUIRED",
+				message: "Authentication required",
+				retryable: false,
+				traceId: "trace-auth-radius",
+			},
+		});
+	});
+	await page.route("**/auth/login", async (route) => {
+		await route.fulfill({ status: 401 });
+	});
+
+	await page.goto("/agents");
+	await expect(
+		page.getByRole("heading", { name: "登录工作空间" }),
+	).toBeVisible();
+	await page.getByLabel("账号").fill("alice");
+	await page.getByLabel("密码").fill("wrong");
+	await page.getByRole("button", { name: "登录" }).click();
+	await expect(page.getByRole("status")).toHaveText(
+		"登录失败，请检查账号或稍后重试。",
+	);
+	await expect(page.locator("#platform-login-error")).toHaveCSS(
+		"border-radius",
+		"10px",
+	);
 });

@@ -429,7 +429,7 @@ a[class~="group/button"] {
 	font-size: 12px;
 	line-height: 1.5;
 }
-.login-error {
+.login-form .login-error {
 	padding: 12px;
 	border: 1px solid color-mix(in oklch, var(--danger-ink) 24%, var(--border));
 	border-radius: 10px;
