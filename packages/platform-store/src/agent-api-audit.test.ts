@@ -15,6 +15,140 @@ const row = {
 };
 
 describe("Agent API facts in the existing audit decoder", () => {
+	it.each(["granted", "revoked", "replayed"] as const)(
+		"reads personal use %s in current persisted and Core audit shapes",
+		(operation) => {
+			for (const granted of operation === "replayed"
+				? [true, false]
+				: [operation === "granted"])
+				for (const details of [
+					{
+						schemaVersion: 1,
+						agentId: "agent",
+						userId: "consumer",
+						granted,
+						authorizationRevision: "use-1",
+						replayed: false,
+					},
+					{
+						userId: "consumer",
+						grantType: "use",
+						granted,
+						authorizationRevision: "use-1",
+					},
+				]) {
+					const event = decodePlatformAuditRowV1({
+						...row,
+						actorType: "user",
+						actorId: "owner",
+						action: `api.agent.use.${operation}`,
+						agentId: "agent",
+						details,
+					});
+					expect(event).toMatchObject({
+						action: `api.agent.use.${operation}`,
+						summary: `api.agent.use.${operation}`,
+						subject: { kind: "agent", subjectId: "agent" },
+						actor: { kind: "user", actorId: "owner" },
+					});
+					expect(event).not.toHaveProperty("details");
+				}
+		},
+	);
+	it("rejects malformed personal use records and contradictory Agent bindings", () => {
+		for (const operation of ["granted", "revoked", "replayed"])
+			expect(() =>
+				decodePlatformAuditRowV1({
+					...row,
+					actorType: "user",
+					action: `api.agent.use.${operation}`,
+					details: {
+						schemaVersion: 1,
+						agentId: "agent",
+						userId: "consumer",
+						granted: operation !== "revoked",
+						authorizationRevision: "use-1",
+						replayed: true,
+					},
+				}),
+			).toThrow();
+		for (const operation of ["revoked", "replayed"])
+			expect(() =>
+				decodePlatformAuditRowV1({
+					...row,
+					actorType: "user",
+					action: `api.agent.use.${operation}`,
+					details: {
+						userId: "consumer",
+						grantType: "use",
+						granted: false,
+						authorizationRevision: null,
+					},
+				}),
+			).toThrow();
+		const details = {
+			schemaVersion: 1,
+			agentId: "agent",
+			userId: "consumer",
+			granted: true,
+			authorizationRevision: "use-1",
+			replayed: false,
+		};
+		for (const change of [
+			{ schemaVersion: 2 },
+			{ userId: "" },
+			{ agentId: "other" },
+			{ granted: false },
+			{ replayed: "false" },
+			{ authorizationRevision: null },
+			{ authorizationRevision: "" },
+			{ credential: "PRIVATE_SENTINEL" },
+			{ applicationId: "robot" },
+		])
+			expect(() =>
+				decodePlatformAuditRowV1({
+					...row,
+					actorType: "user",
+					action: "api.agent.use.granted",
+					details: { ...details, ...change },
+				}),
+			).toThrow();
+		for (const change of [
+			{ actorType: "application" },
+			{ targetType: "unknown" },
+			{ agentId: "other" },
+			{ outcome: "failed" as const },
+		])
+			expect(() =>
+				decodePlatformAuditRowV1({
+					...row,
+					actorType: "user",
+					action: "api.agent.use.granted",
+					details,
+					...change,
+				}),
+			).toThrow();
+		for (const change of [
+			{ grantType: "manage" },
+			{ granted: false },
+			{ applicationId: "robot" },
+		])
+			expect(() =>
+				decodePlatformAuditRowV1({
+					...row,
+					actorType: "user",
+					action: "api.agent.use.granted",
+					details: {
+						userId: "consumer",
+						grantType: "use",
+						granted: true,
+						authorizationRevision: "use-1",
+						...change,
+					},
+				}),
+			).toThrow();
+	});
+
 	it("keeps the application lifecycle actor distinct from a user", () => {
 		expect(decodePlatformAuditRowV1(row).actor).toEqual({
 			kind: "application",
