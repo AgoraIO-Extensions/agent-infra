@@ -3,6 +3,10 @@
 {{- end -}}
 {{- $name := include "agent-infra.componentName" (dict "root" . "suffix" "platform-worker") -}}
 {{- $nativeMetadataServiceName := include "agent-infra.nativeMetadataServiceName" . -}}
+{{- $nativeMetadataApiOrigin := .Values.platformWorker.nativeMetadataGateway.platformApiOrigin | default "" -}}
+{{- if and (not $nativeMetadataApiOrigin) (eq .Values.platformApi.placement "in-cluster") -}}
+{{- $nativeMetadataApiOrigin = printf "http://%s:3000" (include "agent-infra.componentName" (dict "root" . "suffix" "platform-api")) -}}
+{{- end -}}
 {{- $bindings := include "agent-infra.componentName" (dict "root" . "suffix" "adapter-bindings") -}}
 {{- $moduleRef := .Values.platformWorker.configurationModuleSecretRef | default dict -}}
 {{- $authRef := .Values.platformWorker.runtimeAuthSecretRef | default dict -}}
@@ -126,6 +130,10 @@ spec:
               value: http://{{ $nativeMetadataServiceName }}
             - name: PLATFORM_WORKER_RELEASE_NAME
               value: {{ .Release.Name | quote }}
+            {{- if $nativeMetadataApiOrigin }}
+            - name: PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN
+              value: {{ $nativeMetadataApiOrigin | quote }}
+            {{- end }}
             {{- end }}
             {{- if .Values.platformWorker.runtimeImageRepository }}
             - name: AGENT_INFRA_RUNTIME_IMAGE_REPOSITORY

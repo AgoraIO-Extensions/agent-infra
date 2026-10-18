@@ -22,6 +22,12 @@ host alias，拒绝 Docker VM bridge-only 地址推测（不是 Kubernetes Servi
 文件，不进入环境变量、日志或请求；脚本停止时会回收转发和文件。Worker values 显式设置
 `platformWorker.nativeMetadataGateway.enabled=false` 时，不建立转发，也不向 API 提供 origin。
 
+Worker 回到 Platform API 的 current-confirmation 使用当前 project 的
+`<project>-native-metadata-api:3000` Service。入口在 API 容器健康后把它连接到选定 context 的
+kind 网络，并用实际容器 IP 更新受 ownership 校验的 EndpointSlice；不使用宿主机公网地址或
+手写 Colima IP。API 重建时重新绑定，关闭网关或停止平台时删除该路由并断开拥有的网络连接；
+遇到同名的非本 project 资源或未知网络 alias 时拒绝变更。
+
 ## 配置
 
 复制 [.env.example](.env.example) 到仓库外的本地配置文件，填写本地 Docker context、独立

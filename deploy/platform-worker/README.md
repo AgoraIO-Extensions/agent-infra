@@ -41,6 +41,12 @@ Worker 自动创建 Platform API current-confirmation client。请求本身不�
 URL、token、Host Session 或主体；任一 binding、transport、current 或 proof 依赖缺失时
 网关保持 unavailable。Worker 停止 internal listener 时会一并关闭默认 Store query client。
 
+未显式提供 `current` 或 `platformApiCurrent` 时，部署入口读取
+`PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN`，使用同一部署 service token 装配
+current-confirmation client。Helm 为 in-cluster API 推导本 release 的 API Service；external API
+由部署方提供 `platformWorker.nativeMetadataGateway.platformApiOrigin`，本地入口自动绑定到
+当前 Compose API 容器。关闭网关时不装配此默认 client；显式配置继续优先。
+
 Session Sandbox 的空闲计算回收属于同一 Worker 的会话生命周期策略。部署配置模块的
 `workloadInput.idleSandboxReclaimAfterMs` 可以配置空闲阈值，设为 `null` 可关闭，未配置时默认
 30 分钟；只有没有 `active`、`waiting` 或 `unknown` 执行的 Sandbox 才会停止计算资源，PVC 和会话映射保留，
