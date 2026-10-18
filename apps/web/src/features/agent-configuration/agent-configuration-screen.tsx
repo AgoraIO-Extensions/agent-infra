@@ -964,13 +964,11 @@ export function AgentConfigurationScreen({
 												value={secretDialogValue}
 											/>
 											{secretDialogError && (
-												<p
-													className="field-error"
-													id="configuration-secret-replacement-error"
-													role="alert"
-												>
-													{secretDialogError}
-												</p>
+												<Alert variant="destructive" className="field-error">
+													<AlertDescription id="configuration-secret-replacement-error">
+														{secretDialogError}
+													</AlertDescription>
+												</Alert>
 											)}
 										</div>
 										<div className="mt-5 flex flex-wrap justify-end gap-3">

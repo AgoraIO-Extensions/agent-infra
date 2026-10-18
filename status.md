@@ -202,6 +202,8 @@
 
 ## 变更日志
 
+- 2026-10-18：修复 NI-71：Secret 替换改为独立 scoped patch `{schemaVersion:2,secrets}`，不提交其他草稿；请求未完成时保留 Dialog/输入，成功显示 pending version，失败保留可重试状态；配置定向 43/43、Biome 和 Web 类型检查通过。
+- 2026-10-18：修复 NI-72：分离「重试原请求」与「重新发送当前草稿」，原请求重放原文和 Idempotency-Key，当前草稿走新消息请求且空草稿禁用；conversation/use-command 定向 103/103、Biome 通过。
 - 2026-10-18：修复 NI-79：审批批准/驳回结果 Toast 设为可聚焦反馈并复用结果焦点 Hook，Dialog 关闭或申请行刷新后焦点回到审批结果而不落到 body；审批屏幕定向单测 12/12、Biome 与 Web 类型检查通过。
 - 2026-10-18：修复 NI-77/NI-78：全站 Button/Input/Textarea/Select focus 统一为单一 outline，移除重复光晕；sm/lg/icon-sm/icon-lg 统一至少 44px，保留 icon-xs 紧凑例外；Button variant、design-contract、Web 类型检查通过。
 - 2026-10-18：修复 NI-70：新会话创建返回 unknown 时保留「核实原请求」出口，重试沿用原 Idempotency-Key，成功后只提交一次原草稿；conversation 定向 66/66、Biome 和 Web 类型检查通过。
@@ -245,7 +247,7 @@
 - **R4-16**：Connection Developers 当前提供 Browser API；Consumer/declaration 管理和默认 Delegated runtime 未装配，OAuth/Delegated 机器链路无法在本仓库独立完成，按用户要求跳过。
 - **V-01**：现有 Browser Playwright 可运行项和导出矩阵已通过；报告要求的完整设计导出逐页对照仍需独立证据，不能以现有 13 个桌面导出项替代。
 - **报告终审 NI-01~NI-67**：本文件的原始整改清单记录早期实现状态；终审新增问题正在按 P1/P2 分批复核，修复后以代码、单测和浏览器证据更新对应条目。
-- 当前仍需继续复核的终审项包括 Secret 替换与草稿重试边界、登录字段错误清理、Skill 管理页标题、短视口细节、审批结果焦点、执行详情与页面 CSS 分层、标题/设计文档一致性，以及平台 Skill 导入回归测试拆分。
+- 当前仍需继续复核的终审项包括登录字段错误清理、Skill 管理页标题、短视口细节、执行详情与页面 CSS 分层、标题/设计文档一致性，以及平台 Skill 导入回归测试拆分。
 
 ## 证据边界
 
