@@ -82,12 +82,19 @@ export const providerImport = undefined;
 // Robot-token Agent management API (optional):
 //
 // apiInput.agentApiCreation = {
-//   // Application principals authenticated by Platform API credentials. One
-//   // application principal may call the API for multiple Agents.
-//   allowedPrincipals: [{ kind: "application", id: "<application-id>" }],
-//   // Deployment-owned adapter that validates the requested default Relay Key
-//   // against the same endpoint/model policy used by the deployment. Platform
-//   // encrypts an accepted key with the public wrapping keys above.
+//   // Principals authenticated by Platform API credentials: applications, or
+//   // users calling with a personal API credential. Matching is exact by kind
+//   // and ID; a user and an application with the same bare ID are distinct.
+//   allowedPrincipals: [
+//     { kind: "application", id: "<application-id>" },
+//     { kind: "user", id: "<platform-user-id>" },
+//   ],
+//   // Optional. When omitted, standard-template API creation validates the
+//   // requested default Relay Key with agentDefaultRelayKeyPolicy and
+//   // personalRelayKeyValidation, the same policy as Web applications; it stays
+//   // fail-closed if either is missing. Provide a reviewed adapter only when
+//   // the deployment needs a different endpoint/model policy. Platform encrypts
+//   // an accepted key with the public wrapping keys above.
 //   candidates: async (key, configuration) => /* reviewed adapter */ [],
 //   // Optional deployment-owned model admission for keyless configuration.
 //   keylessModelAdmission: { admitModels: async (request) => /* decision */ },

@@ -1686,6 +1686,113 @@ describe("production API creation with user and application Tokens", () => {
 			]);
 		},
 	);
+	describe("without a separate API candidates adapter (#2759)", () => {
+		// 只换掉 candidates：部署提供与 Web 申请相同的默认 Relay Key 策略（受控 billing 与模型列表）。
+		async function openWithDeploymentPolicy(
+			billingStatus: number,
+			explicit?: typeof candidates,
+		) {
+			await createPlatformApiShutdown(running)();
+			const configured = fixture.input.agentApiCreation;
+			if (!configured) throw new Error("Missing controlled configuration");
+			const relayFetch = vi.fn<typeof fetch>(async (url, init) => {
+				expect(init?.redirect).toBe("error");
+				if (String(url).endsWith("/billing"))
+					return Response.json(
+						{
+							object: "sub2api.key_billing",
+							schema_version: 1,
+							billing_scope: "token",
+						},
+						{ status: billingStatus },
+					);
+				return Response.json({ data: [{ id: "model-a" }] });
+			});
+			const binding = fixture.input.templates[0]?.modelBinding;
+			if (!binding) throw new Error("Missing controlled template binding");
+			fixture.input = {
+				...fixture.input,
+				agentApiCreation: { ...configured, candidates: explicit },
+				agentDefaultRelayKeyPolicy: {
+					templateBindings: [{ ...binding, reasoningLevels: ["medium"] }],
+					relayEndpointId: "endpoint-a",
+					relayBaseUrl: "https://relay.example.test/v1",
+				},
+				personalRelayKeyValidation: {
+					profile: "sub2api-key-billing-v1",
+					billingUrl: "https://sub2api.la3.agoralab.co/v1/sub2api/billing",
+					fetch: relayFetch,
+				},
+				modelCatalog: {
+					...fixture.input.modelCatalog,
+					load: async () => ({
+						schemaVersion: 1,
+						revision: fixture.input.modelCatalog.revision,
+						validUntil: Date.now() + 60_000,
+						endpoints: [
+							{
+								endpointId: "endpoint-a",
+								baseUrl: "https://relay.example.test/v1",
+								origin: "https://relay.example.test",
+								protocol: binding.protocol,
+								authentication: "bearer",
+								security: { tls: "verify-peer", redirects: "reject" },
+								capabilities: {
+									streaming: true,
+									tools: true,
+									reasoningLevels: ["medium"],
+								},
+								allowedModels: ["model-a"],
+								available: true,
+							},
+						],
+					}),
+				},
+			};
+			await openApi();
+			return relayFetch;
+		}
+		it("uses the deployment default Relay Key policy shared with browser creation", async () => {
+			const relayFetch = await openWithDeploymentPolicy(200);
+			const response = await create();
+			expect(response.status).toBe(201);
+			expect(await effects()).toEqual([
+				{ agents: 1, grants: 2, secrets: 1, keys: 1, outbox: 1 },
+			]);
+			// 提交的 Key 只发给固定的 billing 与模型目录路由。
+			expect(
+				relayFetch.mock.calls.map(([url]) => String(url)).toSorted(),
+			).toEqual([
+				"https://relay.example.test/v1/models",
+				"https://sub2api.la3.agoralab.co/v1/sub2api/billing",
+			]);
+			expect(candidates).not.toHaveBeenCalled();
+		});
+		it("keeps an explicit API candidates adapter ahead of the shared policy", async () => {
+			candidates.mockResolvedValue([]);
+			const relayFetch = await openWithDeploymentPolicy(200, candidates);
+			expect((await create()).status).toBe(400);
+			expect(candidates).toHaveBeenCalledOnce();
+			expect(relayFetch).not.toHaveBeenCalled();
+		});
+		it.each([
+			[401, 400, "INVALID_REQUEST"],
+			[503, 503, "DEPENDENCY_UNAVAILABLE"],
+		] as const)(
+			"classifies billing status %i as HTTP %i without effects",
+			async (billingStatus, status, code) => {
+				await openWithDeploymentPolicy(billingStatus);
+				const response = await create();
+				expect(response.status).toBe(status);
+				const text = await response.text();
+				expect(JSON.parse(text)).toMatchObject({ code });
+				expect(text).not.toContain(apiBody.defaultRelayKey);
+				expect(await effects()).toEqual([
+					{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+				]);
+			},
+		);
+	});
 	it("rechecks current Owner validity after Registry admission and rolls back", async () => {
 		fixture.authorize.mockImplementationOnce(async () => {
 			currentOwnerStatus = "disabled";

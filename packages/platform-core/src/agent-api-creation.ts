@@ -5,6 +5,7 @@ import type {
 	AgentConfigurationAuthorizationAdmissionPortV1,
 	InitialAgentConfigurationAdmissionDependenciesV1,
 } from "./agent-configuration-types.js";
+import { AgentDefaultRelayKeyErrorV1 } from "./agent-default-relay-key.js";
 import type {
 	AgentManagementStateV1,
 	AgentManagementStatusV1,
@@ -317,7 +318,17 @@ export function createAgentApiCreationV1(dependencies: {
 						const ports = dependencies.defaultRelayKey;
 						if (!ports || !key || !admitted.configuration.modelConfiguration)
 							throw new PersonalApiCredentialErrorV1("unavailable");
-						const visible = await ports.candidates(key, admitted.configuration);
+						// 与 Web 申请一致：候选校验判定 Key 无效时是调用方可修正的请求错误，其余失败才是依赖不可用（#2759）。
+						const visible = await ports
+							.candidates(key, admitted.configuration)
+							.catch((error: unknown) => {
+								throw new PersonalApiCredentialErrorV1(
+									error instanceof AgentDefaultRelayKeyErrorV1 &&
+										error.code === "invalid_input"
+										? "invalid_input"
+										: "unavailable",
+								);
+							});
 						if (
 							admitted.configuration.modelConfiguration.options.some(
 								(option) =>

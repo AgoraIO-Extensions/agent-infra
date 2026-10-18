@@ -57,6 +57,12 @@ Relay Key 策略必须作为配置模块 `apiInput` 的 `agentDefaultRelayKeyPol
 warning 只列出缺失字段名，不输出 Relay Key、endpoint、billing URL 或 credential 内容；依赖缺失策略的
 标准模板申请保持失败关闭。
 
+API 直接创建 Agent 由 `apiInput.agentApiCreation` 开启。`allowedPrincipals` 列出获准的应用或用户主体，规则见[工程 Spec](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md)。
+省略 `agentApiCreation` 或列表为空时，直接创建保持失败关闭。
+标准模板创建时提交的默认 Relay Key 默认按上面两项 Relay Key 策略校验，与 Web 申请同源；任一策略缺失时，标准模板的 API 创建同样失败关闭。
+只有部署需要不同的 endpoint/模型策略时，才另外提供受审阅的 `candidates` adapter。
+Key 被 billing 拒绝时返回 `INVALID_REQUEST`；校验依赖不可用时返回 `DEPENDENCY_UNAVAILABLE`。
+
 内置模块从 `PLATFORM_DATABASE_URL` 取数据库 URL，从上述 Secret 文件读取高熵
 代理令牌，并覆盖 `apiInput` 中的
 数据库和身份字段。缺失或无效配置启动失败。API 不接收 Worker 解密私钥、
