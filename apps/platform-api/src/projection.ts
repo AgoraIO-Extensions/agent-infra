@@ -30,6 +30,8 @@ export type PresentPlatformAgent = (input: {
 	readonly agentId: string;
 	readonly configuration: AgentConfigurationProjectionV1;
 	readonly management: AgentManagementStateV1;
+	/** Server-authenticated personal API reader; never a browser identity. */
+	readonly apiUser?: CurrentTaskUserV1;
 }) => Promise<{
 	readonly source: AgentProjection["source"];
 	readonly resourceProfile: ApplicationProjection["resourceProfile"];
@@ -138,7 +140,12 @@ export function createPlatformProjectionReaders(
 				configuration.ownerIds,
 				metadata.traceId,
 			),
-			dependencies.presentAgent({ agentId, configuration, management }),
+			dependencies.presentAgent({
+				agentId,
+				configuration,
+				management,
+				...(api ? { apiUser: metadata.apiUser } : {}),
+			}),
 		]);
 		if (!sourceMatches(configuration, presentation.source)) {
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);

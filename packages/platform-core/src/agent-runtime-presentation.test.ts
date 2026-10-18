@@ -543,3 +543,48 @@ describe("Agent runtime presentation policy", () => {
 		});
 	});
 });
+
+describe("personal API runtime presentation purpose", () => {
+	it.each(["manage", "use"])(
+		"accepts an explicit %s grant for a non-Owner",
+		(grant) => {
+			const input = fixture();
+			const apiActor = { ...actor, userId: "api-reader" };
+			expect(
+				decideAgentRuntimePresentationV1({
+					...input,
+					actor: apiActor,
+					apiMetadata: {
+						agentId: input.agentId,
+						userId: apiActor.userId,
+						grantTypes: [grant],
+					},
+				}).outcome,
+			).toBe("found");
+		},
+	);
+	it.each(["no-grant", "wrong-agent", "wrong-user", "disabled"])(
+		"denies %s despite Browser Owner/admin roles",
+		(failure) => {
+			const input = fixture();
+			const apiActor = {
+				...actor,
+				isAdministrator: true,
+				...(failure === "disabled"
+					? { accountStatus: "disabled" as const }
+					: {}),
+			};
+			expect(
+				decideAgentRuntimePresentationV1({
+					...input,
+					actor: apiActor,
+					apiMetadata: {
+						agentId: failure === "wrong-agent" ? "other-agent" : input.agentId,
+						userId: failure === "wrong-user" ? "other-user" : apiActor.userId,
+						grantTypes: failure === "no-grant" ? [] : ["use"],
+					},
+				}),
+			).toEqual({ outcome: "unavailable" });
+		},
+	);
+});

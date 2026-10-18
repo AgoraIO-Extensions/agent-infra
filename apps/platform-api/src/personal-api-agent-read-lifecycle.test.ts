@@ -281,6 +281,37 @@ describe("formal deployment issued Bearer Agent reads over real PostgreSQL and g
 		},
 	);
 
+	it("presents an API-only user grant without borrowing Browser visibility, then hides a revoked grant", async () => {
+		await client`delete from platform.agent_availability where agent_id='agent_1'`;
+		await grant("agent_1", "use", "user_bob");
+		const service = await start();
+		const bob = await issue(service, "api-only.issue", "session_bob");
+		const browser = await listAgentsV2({
+			...service.options,
+			auth: () => "session_bob",
+			security: [
+				{ type: "apiKey", in: "cookie", name: "__Host-platform-session" },
+			],
+		});
+		expect(browser.response?.status).toBe(200);
+		expect(browser.data?.items).toEqual([]);
+		const allowed = await listAgentsV2({
+			...service.options,
+			auth: bob.credential,
+		});
+		expect(allowed.response?.status).toBe(200);
+		expect(allowed.data?.items.map((agent) => agent.agentId)).toEqual([
+			"agent_1",
+		]);
+		await client`update platform.agent_principal_grants set revoked_at=clock_timestamp() where agent_id='agent_1' and principal_type='user' and principal_id='user_bob'`;
+		const revoked = await listAgentsV2({
+			...service.options,
+			auth: bob.credential,
+		});
+		expect(revoked.response?.status).toBe(200);
+		expect(revoked.data?.items).toEqual([]);
+	});
+
 	it("filters before paging, isolates users, and preserves browser Owner and administrator discovery", async () => {
 		await seedAgent("agent_2");
 		await seedAgent("agent_3");
