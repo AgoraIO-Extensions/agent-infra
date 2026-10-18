@@ -624,11 +624,18 @@ async function capture(page: Page, info: TestInfo, name: string) {
 					const tableScroller = element.closest(
 						'[data-slot="table-container"]',
 					);
-					if (tableScroller) return false;
+					if (tableScroller) {
+						const scroller = tableScroller.getBoundingClientRect();
+						return (
+							scroller.left < 0 ||
+							scroller.right > innerWidth + 1 ||
+							getComputedStyle(tableScroller).overflowX !== "auto"
+						);
+					}
 					return (
 						box.width > 0 &&
 						(box.left < 0 ||
-							box.right > window.innerWidth + 4 ||
+							box.right > window.innerWidth + 1 ||
 							(element.tagName === "BUTTON" &&
 								element.scrollWidth > element.clientWidth + 1))
 					);

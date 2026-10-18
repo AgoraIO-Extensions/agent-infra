@@ -768,7 +768,8 @@ a[class~="group/button"] {
 /* OpenDesign tables become readable cards before actions leave the viewport. */
 @media (max-width: 767px) {
 	.management-content [data-slot="table-container"] {
-		overflow: visible;
+		overflow-x: auto;
+		overflow-y: visible;
 	}
 	.management-content [data-slot="table"] {
 		display: block;
@@ -819,6 +820,10 @@ a[class~="group/button"] {
 	.management-content .approval-table [data-slot="table-cell"] > * {
 		display: block;
 		max-width: 100%;
+	}
+	.management-content .approval-table [data-label="操作"] [data-slot="button"] {
+		min-width: 0;
+		padding-inline: 8px;
 	}
 }
 
