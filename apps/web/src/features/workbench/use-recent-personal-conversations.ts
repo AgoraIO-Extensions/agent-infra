@@ -28,7 +28,7 @@ export function useRecentPersonalConversations({
 			queryClient,
 			blocked: null as CollectionReadUnavailable | null,
 		}),
-		[identityKey, client, queryClient],
+		[identityKey, client, queryClient, limit],
 	);
 	const [, render] = useState(0);
 	const clear = useCallback(() => {

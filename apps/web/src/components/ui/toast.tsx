@@ -8,11 +8,12 @@ export function Toast({
 	...props
 }: React.ComponentProps<"div">) {
 	const [visible, setVisible] = useState(true);
+	const toastKey = typeof children === "string" ? children : null;
 	useEffect(() => {
 		setVisible(true);
 		const timer = window.setTimeout(() => setVisible(false), 2600);
 		return () => window.clearTimeout(timer);
-	}, [children]);
+	}, [toastKey]);
 	if (!visible) return null;
 	return (
 		<div
