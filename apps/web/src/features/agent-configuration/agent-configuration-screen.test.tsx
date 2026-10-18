@@ -6,13 +6,34 @@ import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import {
 	cleanup,
 	fireEvent,
-	render,
+	render as renderWithoutToast,
 	screen,
 	waitFor,
+	within,
 } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ToastProvider } from "@/components/ui/toast";
+import { client } from "../../pilot/generated/client.gen.js";
 
 import { AgentConfigurationScreen } from "./agent-configuration-screen.js";
+
+// 企微卡片与镜像升级会调用 Toast；页面在根布局的 ToastProvider 内渲染。
+function render(ui: ReactElement) {
+	return renderWithoutToast(ui, { wrapper: ToastProvider });
+}
+
+// Toast 宿主也是 role="status"；页面自身的状态排除它再查找。
+function pageStatuses() {
+	return screen
+		.queryAllByRole("status")
+		.filter((element) => element.getAttribute("data-slot") !== "toast");
+}
+function pageStatus() {
+	const [status, ...rest] = pageStatuses();
+	if (!status || rest.length) throw new Error("expected one page status");
+	return status;
+}
 
 const agent = AgentProjectionV2Schema.parse(
 	pilotFakeScenariosV2.starting.response.body,
@@ -185,7 +206,7 @@ describe("AgentConfigurationScreen", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("status").textContent).toBe("配置已提交：创建中。");
+		expect(pageStatus().textContent).toBe("配置已提交：创建中。");
 
 		rerender(
 			<AgentConfigurationScreen
@@ -220,7 +241,7 @@ describe("AgentConfigurationScreen", () => {
 			/>,
 		);
 
-		expect(screen.queryByRole("status")).toBeNull();
+		expect(pageStatuses()).toEqual([]);
 
 		rerender(
 			<AgentConfigurationScreen
@@ -233,7 +254,7 @@ describe("AgentConfigurationScreen", () => {
 			/>,
 		);
 
-		const status = screen.getByRole("status");
+		const status = pageStatus();
 		await waitFor(() => expect(document.activeElement).toBe(status));
 	});
 	it("allows keyless model replacement without reading back credentials", () => {
@@ -340,20 +361,219 @@ describe("AgentConfigurationScreen", () => {
 		expect(screen.queryByText("private-relay-key")).toBeNull();
 	});
 
-	it("places lifecycle controls below the configuration form", () => {
+	it("puts footer lifecycle actions after save and the danger zone after the form card", () => {
 		render(
 			<AgentConfigurationScreen
 				agent={agent}
-				lifecycle={<section aria-label="生命周期">测试生命周期操作</section>}
+				afterForm={<section aria-label="停止区">停止区内容</section>}
+				footerActions={<button type="button">重启 Agent</button>}
 				onSave={vi.fn()}
 				onUpgradeImage={vi.fn()}
 				session={{ kind: "ready", session: ownerSession }}
 				submitting={false}
 			/>,
 		);
-		const controls = screen.getByRole("region", { name: "生命周期" });
-		expect(controls.closest(".lifecycle-panel")).not.toBeNull();
-		expect(controls.closest(".form-layout")).not.toBeNull();
+		const footer = screen
+			.getByRole("button", { name: "校验并保存" })
+			.closest(".form-footer");
+		expect(footer).not.toBeNull();
+		expect(
+			within(footer as HTMLElement)
+				.getAllByRole("button")
+				.map((button) => button.textContent),
+		).toEqual(["校验并保存", "重启 Agent"]);
+		const card = footer?.closest(".configuration-form-card");
+		const zone = screen.getByRole("region", { name: "停止区" });
+		expect(card?.contains(zone)).toBe(false);
+		expect(card?.nextElementSibling).toBe(zone);
+		expect(document.querySelector(".form-aside, .lifecycle-panel")).toBeNull();
+		expect(document.body.textContent).not.toContain("生命周期");
+	});
+
+	it("keeps footer lifecycle actions reachable while the saved result replaces the form", () => {
+		render(
+			<AgentConfigurationScreen
+				agent={agent}
+				commandResult={agent}
+				footerActions={<button type="button">重启 Agent</button>}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+		expect(pageStatus().textContent).toBe("配置已提交：可用。");
+		expect(screen.queryByRole("button", { name: "校验并保存" })).toBeNull();
+		expect(
+			screen
+				.getByRole("button", { name: "重启 Agent" })
+				.closest(".form-footer"),
+		).not.toBeNull();
+	});
+
+	it("shows the design heading and the permission boundary notice", () => {
+		const { rerender } = render(
+			<AgentConfigurationScreen
+				agent={agent}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+		expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+			"配置 Agent 的 Owner、范围和运行方式。",
+		);
+		expect(
+			screen.getByText("保存后更新运行实例；Secret 只显示状态和版本。"),
+		).toBeTruthy();
+		const boundary = screen
+			.getByText("权限边界")
+			.closest('[data-slot="alert"]');
+		expect(boundary?.getAttribute("data-tone")).toBe("info");
+		expect(boundary?.getAttribute("role")).toBeNull();
+		expect(boundary?.querySelector("svg")?.getAttribute("aria-hidden")).toBe(
+			"true",
+		);
+		expect(boundary?.textContent).toContain(
+			"Connection 授权由使用者自己完成。",
+		);
+		expect(document.body.textContent).not.toContain("配置变更不需要重新审批");
+		// 页头之后紧跟说明，再是表单卡。
+		expect(
+			document.querySelector("header.page-heading")?.nextElementSibling
+				?.className,
+		).toContain("configuration-notices");
+
+		rerender(
+			<AgentConfigurationScreen
+				agent={{
+					...agent,
+					managementStatus: "disabled",
+					serviceAvailability: null,
+				}}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+		const notices = Array.from(
+			document.querySelectorAll('.configuration-notices > [data-slot="alert"]'),
+		);
+		expect(notices.map((notice) => notice.getAttribute("data-tone"))).toEqual([
+			"warn",
+			"info",
+		]);
+		expect(notices[0]?.textContent).toBe(
+			"已停用运行资格已撤销，Owner 无法恢复。",
+		);
+	});
+
+	it("names the scope sections with the design headings and descriptions", () => {
+		render(
+			<AgentConfigurationScreen
+				agent={agent}
+				authorization={<section data-slot="form-section">授权控制</section>}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+		const headings = screen
+			.getAllByRole("heading", { level: 2 })
+			.map((heading) => heading.textContent);
+		expect(headings.slice(0, 2)).toEqual(["共同 Owner", "可用范围"]);
+		expect(
+			screen.getByText(
+				"从目录选择共同 Owner；页面不显示内部 ID，提交时保存服务端 ID。",
+			),
+		).toBeTruthy();
+		expect(
+			screen.getByText(
+				"按人员和组织配置可用范围；搜不到结果时可清空关键词重试。",
+			),
+		).toBeTruthy();
+		expect(document.querySelector("legend")).toBeNull();
+	});
+
+	it("unbinds a WeCom channel through its own request without saving the page", async () => {
+		client.setConfig({ baseUrl: "https://platform.test" });
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => Response.json({ status: "connected" })),
+		);
+		const onSave = vi.fn();
+		const onUnbindChannel = vi.fn(async () => undefined);
+		render(
+			<AgentConfigurationScreen
+				agent={agent}
+				onSave={onSave}
+				onUnbindChannel={onUnbindChannel}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+		addSecretChange();
+		fireEvent.click(
+			await screen.findByRole("button", { name: "解除绑定：企微机器人" }),
+		);
+		fireEvent.click(
+			within(
+				await screen.findByRole("dialog", { name: "解除企微机器人绑定？" }),
+			).getByRole("button", { name: "确认解除" }),
+		);
+		await waitFor(() =>
+			expect(onUnbindChannel).toHaveBeenCalledExactlyOnceWith("wecom_bot"),
+		);
+		expect(onSave).not.toHaveBeenCalled();
+		// 未保存的修改仍在，保存按钮仍可用。
+		expect(screen.getByLabelText<HTMLInputElement>("新 Secret 值").value).toBe(
+			"changed-secret-value",
+		);
+		expect(
+			screen
+				.getByRole("button", { name: "校验并保存" })
+				.hasAttribute("disabled"),
+		).toBe(false);
+		vi.unstubAllGlobals();
+	});
+
+	it("reports an accepted custom image upgrade with a toast instead of a saved-result view", async () => {
+		const onUpgradeImage = vi.fn(async () => true);
+		const customAgent = AgentProjectionV2Schema.parse({
+			...agent,
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/release:1",
+				interactionMode: "platform-adapter",
+			},
+		});
+		render(
+			<AgentConfigurationScreen
+				agent={customAgent}
+				onSave={vi.fn()}
+				onUpgradeImage={onUpgradeImage}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
+		);
+		const input = screen.getByLabelText<HTMLInputElement>("新镜像引用");
+		fireEvent.change(input, {
+			target: { value: "registry.example/agents/release:2" },
+		});
+		// 分区在整页表单内：Enter 不触发保存。
+		expect(fireEvent.keyDown(input, { key: "Enter" })).toBe(false);
+		fireEvent.click(screen.getByRole("button", { name: "升级镜像" }));
+		await waitFor(() =>
+			expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe(
+				"已提交镜像升级请求",
+			),
+		);
+		expect(input.value).toBe("");
+		expect(document.body.textContent).not.toContain("配置已提交");
 	});
 
 	it.each(["pending", "disabled"] as const)(
@@ -405,7 +625,7 @@ it("shows group visibility and the self-built application setup contract", () =>
 		/>,
 	);
 	expect(screen.getByText(/群消息和 Agent 回复对群成员可见/)).toBeTruthy();
-	expect(screen.getByRole("region", { name: "自建应用配置" })).toBeTruthy();
+	expect(screen.getByRole("region", { name: "企微应用" })).toBeTruthy();
 	expect(screen.getByLabelText("企业 ID")).toBeTruthy();
 	expect(screen.queryByLabelText("自建应用配置标识")).toBeNull();
 });
@@ -683,9 +903,7 @@ describe("agents whose models are managed by the default Relay Key (#2421)", () 
 				configurationRevision: 7,
 			},
 		});
-		expect(screen.getByRole("status").textContent).toContain(
-			"默认 Key 已替换，当前版本 3。",
-		);
+		expect(pageStatus().textContent).toContain("默认 Key 已替换，当前版本 3。");
 	});
 
 	it("keeps the V2 free-text fields for agents the default Key does not manage", () => {

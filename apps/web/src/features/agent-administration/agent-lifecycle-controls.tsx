@@ -32,13 +32,13 @@ type AgentLifecycleControlsProps = {
 	session: AdministrationSessionState;
 };
 
-const commandLabels = {
+export const commandLabels = {
 	stop: "停止 Agent",
 	restart: "重启 Agent",
 	retry_creation: "重试创建",
 	disable: "停用 Agent",
 } satisfies Record<AgentLifecycleCommand, string>;
-const commandProgressLabels = {
+export const commandProgressLabels = {
 	stop: "停止中…",
 	restart: "重启中…",
 	retry_creation: "重试创建中…",
@@ -60,7 +60,7 @@ function serviceAvailabilityMessage(
 	return "服务已就绪。";
 }
 
-function visibleLifecycleCommands(
+export function visibleLifecycleCommands(
 	agent: AgentProjectionV2,
 	session: AdministrationSessionState,
 ): AgentLifecycleCommand[] {
@@ -98,7 +98,7 @@ function visibleLifecycleCommands(
 	return commands;
 }
 
-const confirmationCopy = {
+export const confirmationCopy = {
 	stop: {
 		title: () => "停止这个 Agent？",
 		description: "停止后暂不能发送消息，个人历史与配置保留。",
