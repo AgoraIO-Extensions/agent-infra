@@ -160,13 +160,19 @@ describe("OpenDesign workbench presentation", () => {
 		);
 		expect(screen.getByText("可用编程助手")).toBeTruthy();
 		expect(
-			screen.getByRole("link", { name: "查看详情" }).getAttribute("href"),
+			screen
+				.getByRole("link", { name: `查看详情：${available.name}` })
+				.getAttribute("href"),
 		).toBe("/agents/usable-agent");
 		expect(
-			screen.getByRole("link", { name: "修改并重新提交" }).getAttribute("href"),
+			screen
+				.getByRole("link", { name: `修改并重新提交：${rejected.name}` })
+				.getAttribute("href"),
 		).toBe("/my-agents/rejected-application/edit");
 		expect(
-			screen.getByRole("link", { name: "配置与管理" }).getAttribute("href"),
+			screen
+				.getByRole("link", { name: `配置与管理：${failed.name}` })
+				.getAttribute("href"),
 		).toBe("/agents/owned-failed-agent/configuration");
 		expect(screen.getByText("请缩小申请的可用范围。")).toBeTruthy();
 		expect(
@@ -247,7 +253,9 @@ describe("OpenDesign workbench presentation", () => {
 			screen.getAllByText("历史仍可查看，当前不能继续发送消息。"),
 		).toHaveLength(2);
 		expect(
-			screen.getByRole("link", { name: "打开对话" }).getAttribute("href"),
+			screen
+				.getByRole("link", { name: "打开对话：未命名对话" })
+				.getAttribute("href"),
 		).toBe("/chat/unknown-agent/conversation-unknown-agent");
 	});
 
@@ -272,10 +280,12 @@ describe("OpenDesign workbench presentation", () => {
 			expect(
 				screen.queryByText("历史仍可查看，当前不能继续发送消息。"),
 			).toBeNull();
-			expect(screen.queryByRole("link", { name: "继续对话" })).toBeNull();
-			expect(screen.queryByRole("link", { name: "查看历史" })).toBeNull();
+			expect(screen.queryByRole("link", { name: /^继续对话/ })).toBeNull();
+			expect(screen.queryByRole("link", { name: /^查看历史/ })).toBeNull();
 			expect(
-				screen.getByRole("link", { name: "打开对话" }).getAttribute("href"),
+				screen
+					.getByRole("link", { name: `打开对话：${conversation.title}` })
+					.getAttribute("href"),
 			).toBe("/chat/usable-agent/conversation-z");
 			view.rerender(
 				<WorkbenchScreen
@@ -283,7 +293,9 @@ describe("OpenDesign workbench presentation", () => {
 					agents={{ kind: "ready", agents: [available] }}
 				/>,
 			);
-			expect(screen.getByRole("link", { name: "继续对话" })).toBeTruthy();
+			expect(
+				screen.getByRole("link", { name: `继续对话：${conversation.title}` }),
+			).toBeTruthy();
 			expect(
 				screen.queryByText("历史仍可查看，当前不能继续发送消息。"),
 			).toBeNull();
@@ -306,7 +318,9 @@ describe("OpenDesign workbench presentation", () => {
 				screen.getByText("历史仍可查看，当前不能继续发送消息。"),
 			).toBeTruthy();
 			expect(
-				screen.getByRole("link", { name: "查看历史" }).getAttribute("href"),
+				screen
+					.getByRole("link", { name: `查看历史：${conversation.title}` })
+					.getAttribute("href"),
 			).toBe("/chat/usable-agent/conversation-z");
 			view.rerender(
 				<WorkbenchScreen
@@ -319,8 +333,10 @@ describe("OpenDesign workbench presentation", () => {
 				/>,
 			);
 			expect(screen.getByText("会话不可用")).toBeTruthy();
-			expect(screen.getByRole("link", { name: "查看历史" })).toBeTruthy();
-			expect(screen.queryByRole("link", { name: "打开对话" })).toBeNull();
+			expect(
+				screen.getByRole("link", { name: `查看历史：${conversation.title}` }),
+			).toBeTruthy();
+			expect(screen.queryByRole("link", { name: /^打开对话/ })).toBeNull();
 		},
 	);
 

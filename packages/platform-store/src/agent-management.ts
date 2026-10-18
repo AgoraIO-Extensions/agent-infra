@@ -1953,6 +1953,9 @@ const applicationSelection = {
 	applicationId: agentApplications.id,
 	agentId: agentApplications.agentId,
 	applicantId: agentApplications.applicantId,
+	creationChannel: sql<
+		string | null
+	>`to_jsonb(agent_applications)->>'creation_channel'`,
 	name: agentApplications.name,
 	description: agentApplications.description,
 	sourceReference: agentConfigurationRevisions.sourceReference,
@@ -1986,6 +1989,9 @@ const agentSelection = {
 	agentId: agentApplications.agentId,
 	applicationId: agentApplications.id,
 	applicantId: agentApplications.applicantId,
+	creationChannel: sql<
+		string | null
+	>`to_jsonb(agent_applications)->>'creation_channel'`,
 	name: agentApplications.name,
 	description: agentApplications.description,
 	sourceReference: agentConfigurationRevisions.sourceReference,
@@ -2005,6 +2011,7 @@ interface ManagementProjectionRow {
 	readonly applicationId: string;
 	readonly agentId: string;
 	readonly applicantId: string;
+	readonly creationChannel: string | null;
 	readonly status: AgentManagementStateV1["status"];
 	readonly revision: number;
 	readonly approvalRevision: number | null;
@@ -2032,6 +2039,9 @@ function managementState(row: ManagementProjectionRow): AgentManagementStateV1 {
 	}
 	return {
 		schemaVersion: 1,
+		...(row.creationChannel === "api"
+			? { creationChannel: "api" as const }
+			: {}),
 		applicationId: row.applicationId,
 		agentId: row.agentId,
 		applicantId: row.applicantId,

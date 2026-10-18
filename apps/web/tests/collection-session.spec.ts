@@ -173,7 +173,8 @@ test("logout and another login cancel old collection pages without restoring the
 	await expect(
 		page.getByText("Controlled b application", { exact: true }),
 	).toBeVisible();
-	await page.getByRole("tab", { name: "已创建 Agent", exact: true }).click();
+	// F-09：Tab 文案按设计改为「已创建」。
+	await page.getByRole("tab", { name: "已创建", exact: true }).click();
 	await expect(
 		page.getByText("Controlled b Agent", { exact: true }),
 	).toBeVisible();

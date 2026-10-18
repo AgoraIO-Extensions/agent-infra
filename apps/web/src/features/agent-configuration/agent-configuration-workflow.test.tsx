@@ -3,9 +3,18 @@ import {
 	BrowserSessionProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render as renderWithoutToast,
+	screen,
+	within,
+} from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToastProvider } from "@/components/ui/toast";
 
+import { useAgentLifecycleCommand } from "../agent-administration/use-agent-lifecycle-command.js";
 import { useBrowserSession } from "../use-browser-session.js";
 import { grantApplicationManager } from "./agent-authorization.js";
 import { AgentConfigurationWorkflow } from "./agent-configuration-workflow.js";
@@ -17,7 +26,7 @@ vi.mock("../use-browser-session.js", () => ({
 	useBrowserSession: vi.fn(),
 }));
 vi.mock("../agent-administration/use-agent-lifecycle-command.js", () => ({
-	useAgentLifecycleCommand: () => ({ mutate: vi.fn(), isPending: false }),
+	useAgentLifecycleCommand: vi.fn(),
 }));
 vi.mock("./use-agent-configuration-submission.js", () => ({
 	useAgentConfigurationSubmission: vi.fn(),
@@ -53,9 +62,36 @@ const administratorSession = BrowserSessionProjectionV1Schema.parse({
 		roles: ["employee", "system_admin"],
 	},
 });
+const ownerAdministratorSession = BrowserSessionProjectionV1Schema.parse({
+	schemaVersion: 1,
+	user: {
+		userId: "user-owner-1",
+		displayName: "Owner administrator",
+		roles: ["employee", "system_admin"],
+	},
+});
+const employeeSession = BrowserSessionProjectionV1Schema.parse({
+	schemaVersion: 1,
+	user: {
+		userId: "user-employee-1",
+		displayName: "Employee",
+		roles: ["employee"],
+	},
+});
 const firstAgent = AgentProjectionV2Schema.parse(
 	pilotFakeScenariosV2.starting.response.body,
 );
+
+// 页面上的生命周期反馈与企微解绑提示使用根布局的 Toast 宿主。
+function render(ui: ReactElement) {
+	return renderWithoutToast(ui, { wrapper: ToastProvider });
+}
+
+function useSession(session: typeof ownerSession) {
+	vi.mocked(useBrowserSession).mockReturnValue({
+		state: { kind: "ready", session },
+	} as never);
+}
 const secondAgent = AgentProjectionV2Schema.parse({
 	...firstAgent,
 	agentId: "agent-configuration-2",
@@ -85,6 +121,10 @@ beforeEach(() => {
 		error: null,
 		refetch: vi.fn(),
 	} as never);
+	vi.mocked(useAgentLifecycleCommand).mockReturnValue({
+		isPending: false,
+		mutateAsync: vi.fn(() => new Promise(() => undefined)),
+	} as never);
 	vi.mocked(useAgentConfigurationSubmission).mockReturnValue({
 		isError: false,
 		error: null,
@@ -96,17 +136,106 @@ beforeEach(() => {
 });
 
 describe("AgentConfigurationWorkflow", () => {
-	it("keeps administrator lifecycle controls visible outside the Owner gate", () => {
-		vi.mocked(useBrowserSession).mockReturnValue({
-			state: { kind: "ready", session: administratorSession },
-		} as never);
+	it("gives a pure administrator the same page heading with authorization and administrator actions only", () => {
+		useSession(administratorSession);
 
 		render(<AgentConfigurationWorkflow agent={firstAgent} />);
 
-		expect(screen.getByRole("button", { name: "停用 Agent" })).toBeTruthy();
+		expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+			"配置 Agent 的 Owner、范围和运行方式。",
+		);
+		expect(screen.queryByText("配置不可用")).toBeNull();
+		expect(screen.queryByText("当前无法访问此配置。")).toBeNull();
+		expect(screen.getByText("权限边界")).toBeTruthy();
+		expect(screen.getByRole("region", { name: "Agent 授权控制" })).toBeTruthy();
+		const admin = screen.getByRole("region", { name: "管理员操作" });
+		expect(
+			within(admin).getByRole("button", { name: "停用 Agent" }),
+		).toBeTruthy();
+		// 纯管理员不显示 Owner 才能编辑的配置，也没有 Owner 的停止 / 重启。
 		expect(
 			screen.queryByRole("combobox", { name: "共同 Owner 用户" }),
 		).toBeNull();
+		expect(screen.queryByRole("button", { name: "校验并保存" })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /停止 Agent|重启 Agent/ }),
+		).toBeNull();
+		expect(screen.queryByRole("region", { name: "停止 Agent" })).toBeNull();
+		// 卡片嵌套不超过两层：没有 form-aside。
+		expect(document.querySelector(".form-aside")).toBeNull();
+		expect(
+			screen
+				.getByRole("region", { name: "Agent 授权控制" })
+				.closest(".configuration-form-card")
+				?.contains(admin),
+		).toBe(false);
+	});
+
+	it("keeps the employee unavailable view without any controls", () => {
+		useSession(employeeSession);
+
+		render(<AgentConfigurationWorkflow agent={firstAgent} />);
+
+		expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+			"配置不可用",
+		);
+		expect(screen.getByText("当前无法访问此配置。")).toBeTruthy();
+		expect(screen.queryAllByRole("button")).toEqual([]);
+		expect(screen.queryAllByRole("textbox")).toEqual([]);
+		expect(screen.queryByText("权限边界")).toBeNull();
+	});
+
+	it("separates the Owner stop danger zone from the administrator disable action", () => {
+		useSession(ownerAdministratorSession);
+
+		render(
+			<AgentConfigurationWorkflow
+				agent={{ ...firstAgent, serviceAvailability: "ready" }}
+			/>,
+		);
+
+		const footer = screen
+			.getByRole("button", { name: "校验并保存" })
+			.closest(".form-footer") as HTMLElement;
+		expect(
+			within(footer)
+				.getAllByRole("button")
+				.map((button) => button.textContent),
+		).toEqual(["校验并保存", "重启 Agent"]);
+		const danger = screen.getByRole("region", { name: "停止 Agent" });
+		const admin = screen.getByRole("region", { name: "管理员操作" });
+		expect(within(danger).getByRole("button").textContent).toBe("停止 Agent");
+		expect(within(admin).getByRole("button").textContent).toBe("停用 Agent");
+		expect(danger.compareDocumentPosition(admin)).toBe(
+			Node.DOCUMENT_POSITION_FOLLOWING,
+		);
+		expect(document.body.textContent).not.toContain("生命周期");
+	});
+
+	it("drives all lifecycle areas from one shared lifecycle mutation", () => {
+		useSession(ownerAdministratorSession);
+		vi.mocked(useAgentLifecycleCommand).mockReturnValue({
+			isPending: true,
+			mutateAsync: vi.fn(),
+		} as never);
+
+		render(
+			<AgentConfigurationWorkflow
+				agent={{ ...firstAgent, serviceAvailability: "ready" }}
+			/>,
+		);
+
+		// 每次渲染只创建一个生命周期 mutation，三个区域共享它的进行中状态（NI-88）。
+		// workflow 每次渲染读取一次会话；生命周期 mutation 的创建次数与之相同，而不是每个区域各一个。
+		const calls = vi.mocked(useAgentLifecycleCommand).mock.calls;
+		expect(calls.length).toBe(vi.mocked(useBrowserSession).mock.calls.length);
+		expect(new Set(calls.map(([agentId]) => agentId))).toEqual(
+			new Set([firstAgent.agentId]),
+		);
+		for (const name of ["重启 Agent", "停止 Agent", "停用 Agent"])
+			expect(
+				screen.getByRole("button", { name }).hasAttribute("disabled"),
+			).toBe(true);
 	});
 
 	it("drops an entered Secret when navigation changes the Agent", () => {

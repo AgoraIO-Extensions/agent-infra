@@ -2,15 +2,10 @@ import { ChevronDownIcon } from "lucide-react";
 import type * as React from "react";
 import { cn } from "@/lib/utils";
 
-type NativeSelectProps = Omit<React.ComponentProps<"select">, "size"> & {
-	size?: "sm" | "default";
-};
+type NativeSelectProps = Omit<React.ComponentProps<"select">, "size">;
 
-function NativeSelect({
-	className,
-	size = "default",
-	...props
-}: NativeSelectProps) {
+// 设计稿 .select：与 Input 同高同内边距，右侧 40px 留给箭头。
+function NativeSelect({ className, ...props }: NativeSelectProps) {
 	return (
 		<div
 			className={cn(
@@ -18,16 +13,14 @@ function NativeSelect({
 				className,
 			)}
 			data-slot="native-select-wrapper"
-			data-size={size}
 		>
 			<select
 				data-slot="native-select"
-				data-size={size}
-				className="h-11 w-full min-w-0 select-none appearance-none rounded-none border border-input bg-transparent py-1 pr-8 pl-2.5 text-base outline-none transition-colors selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:cursor-not-allowed aria-invalid:border-destructive aria-invalid:ring-1 aria-invalid:ring-destructive/20 data-[size=sm]:h-7 data-[size=sm]:rounded-none data-[size=sm]:py-0.5 md:text-sm dark:bg-input/30 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 dark:hover:bg-input/50"
+				className="h-11 w-full min-w-0 select-none appearance-none rounded-[10px] border border-input bg-[var(--surface)] py-[9px] pr-10 pl-3 text-[15px] text-foreground leading-6 outline-none selection:bg-primary selection:text-primary-foreground placeholder:text-muted-ink focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed aria-invalid:border-destructive aria-invalid:ring-1 aria-invalid:ring-destructive/20 dark:bg-input/30 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 dark:hover:bg-input/50"
 				{...props}
 			/>
 			<ChevronDownIcon
-				className="pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 select-none text-muted-foreground"
+				className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 select-none text-muted-foreground"
 				aria-hidden="true"
 				data-slot="native-select-icon"
 			/>

@@ -1,16 +1,62 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	act,
 	cleanup,
 	fireEvent,
-	render,
+	render as renderView,
 	screen,
 	waitFor,
+	within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactElement, ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
 import type { ApplicationCredentialResponse } from "./application-management.js";
 import type { ApplicationManagementViewState } from "./application-management-screen.js";
 import { ApplicationManagementScreen } from "./application-management-screen.js";
+
+// 页面按需读取目录显示名：测试与生产一样提供 QueryClient，并以固定目录记录响应。
+const directoryRecords = [
+	{
+		kind: "user",
+		canonicalId: "user-1",
+		displayName: "负责人一",
+		email: "owner.one@example.test",
+	},
+	{
+		kind: "organization",
+		canonicalId: "org-release",
+		displayName: "发布工程",
+		organizationPath: "研发 / 发布工程",
+	},
+];
+beforeEach(() => {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: string | URL | Request) => {
+			const url = new URL(String(input), "http://localhost");
+			const ids = url.searchParams.get("ids")?.split(",") ?? [];
+			return Response.json({
+				items: directoryRecords.filter(
+					(item) =>
+						item.kind === url.searchParams.get("kind") &&
+						ids.includes(item.canonicalId),
+				),
+			});
+		}),
+	);
+});
+afterEach(() => vi.unstubAllGlobals());
+function render(ui: ReactElement) {
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false, gcTime: 0 } },
+	});
+	return renderView(ui, {
+		wrapper: ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={client}>{children}</QueryClientProvider>
+		),
+	});
+}
 
 const metadata: ApplicationMetadataV1 = {
 	applicationId: "application-1",
@@ -89,6 +135,32 @@ const changedScopes: {
 describe("ApplicationManagementScreen", () => {
 	afterEach(cleanup);
 
+	it("is an h2 section of the API credentials page with distinct field names (R-02, N-12)", () => {
+		const headingRef = { current: null as HTMLHeadingElement | null };
+		render(
+			<ApplicationManagementScreen
+				state={{ kind: "ready", application: metadata }}
+				onOpenApplication={vi.fn()}
+				onIssueCredential={vi.fn()}
+				headingRef={headingRef}
+			/>,
+		);
+		// API 凭证页只有一个 h1；应用管理是分区 h2，应用名是其下的 h3。
+		expect(screen.queryAllByRole("heading", { level: 1 })).toHaveLength(0);
+		const heading = screen.getByRole("heading", { level: 2, name: "应用管理" });
+		expect(headingRef.current).toBe(heading);
+		expect(heading.getAttribute("tabindex")).toBe("-1");
+		expect(
+			screen.getByRole("heading", { level: 3, name: "Build service" }),
+		).toBeTruthy();
+		expect(document.body.textContent).not.toContain("安全设置");
+		// 与个人凭证签发表单同页：同名分组和过期时间带上对象名。
+		expect(
+			screen.getByRole("group", { name: "权限范围：应用凭证" }),
+		).toBeTruthy();
+		expect(screen.getByLabelText("过期时间（可选）：应用凭证")).toBeTruthy();
+	});
+
 	it("registers an application using the current-session owner", async () => {
 		const onRegister = vi.fn().mockResolvedValue(metadata);
 		render(
@@ -104,6 +176,41 @@ describe("ApplicationManagementScreen", () => {
 		fireEvent.click(screen.getByRole("button", { name: "注册应用" }));
 		await waitFor(() =>
 			expect(onRegister).toHaveBeenCalledWith("Build service"),
+		);
+	});
+
+	it("confirms disabling the application before calling onDisable", async () => {
+		const onDisable = vi
+			.fn<(applicationId: string) => Promise<ApplicationMetadataV1>>()
+			.mockResolvedValue({ ...metadata, status: "disabled" });
+		render(
+			<ApplicationManagementScreen
+				state={{ kind: "ready", application: metadata }}
+				onDisable={onDisable}
+			/>,
+		);
+		const trigger = screen.getByRole("button", {
+			name: "停用应用：Build service",
+		});
+		expect(trigger.className).not.toContain("bg-destructive");
+		fireEvent.click(trigger);
+		let dialog = await screen.findByRole("dialog", {
+			name: "停用这个应用？",
+		});
+		expect(within(dialog).getByText("Build service")).toBeTruthy();
+		expect(within(dialog).getByText(/拒绝该应用的新任务/)).toBeTruthy();
+		expect(onDisable).not.toHaveBeenCalled();
+		fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(onDisable).not.toHaveBeenCalled();
+		fireEvent.click(trigger);
+		dialog = await screen.findByRole("dialog");
+		fireEvent.click(within(dialog).getByRole("button", { name: "停用应用" }));
+		expect(onDisable).toHaveBeenCalledExactlyOnceWith("application-1");
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole("heading", { name: "Build service" }),
+			),
 		);
 	});
 

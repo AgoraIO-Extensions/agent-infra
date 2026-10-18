@@ -67,7 +67,7 @@ const domains: Array<{
 
 function StatusBadge({ status }: { status: OperationsStatus }) {
 	return (
-		<Badge variant={status === "degraded" ? "destructive" : "outline"}>
+		<Badge tone={status === "degraded" ? "red" : "gray"}>
 			{status === "unknown"
 				? "待接入"
 				: status === "unavailable"
@@ -122,7 +122,7 @@ export function OperationsEntry({
 }) {
 	if (!isAdministrator) {
 		return (
-			<Alert>
+			<Alert tone="warn">
 				<AlertDescription>当前登录主体无权访问运维观测入口。</AlertDescription>
 			</Alert>
 		);
@@ -165,22 +165,22 @@ export function OperationsEntry({
 				))}
 			</div>
 			{state.kind === "error" ? (
-				<Alert variant="destructive" role="alert">
+				<Alert tone="danger" role="alert">
 					<AlertDescription>
 						{state.message}
 						{state.retryable ? " 请刷新后重试。" : ""}
 					</AlertDescription>
 				</Alert>
 			) : state.kind === "unavailable" ? (
-				<Alert role="status">
+				<Alert tone="warn" role="status">
 					<AlertDescription>
 						{state.message ?? "观测服务当前不可用。"}
 					</AlertDescription>
 				</Alert>
 			) : (
-				<Empty className="min-h-52 border" aria-live="polite">
+				<Empty aria-live="polite">
 					<EmptyHeader>
-						<EmptyMedia variant="icon">
+						<EmptyMedia>
 							<Activity aria-hidden="true" />
 						</EmptyMedia>
 						<EmptyTitle>{emptyTitle(state)}</EmptyTitle>

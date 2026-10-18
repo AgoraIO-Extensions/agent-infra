@@ -694,3 +694,60 @@ it("preserves an explicitly empty Skill capability list", async () => {
 	});
 	expect(result.capabilities.skills).toEqual([]);
 });
+
+it("keeps personal API presentation separate from browser identity and custom Web routing", async () => {
+	const resolve = vi.fn(async () => ({ ...identity, roles: ["system_admin"] }));
+	const identityScope = createDeploymentIdentityScope({
+		resolve,
+		hydrateUsers: async () => [],
+	});
+	const readRuntimePresentation = vi.fn(async () => ({
+		outcome: "found" as const,
+		sourceReference: "controlled-manifest",
+		capabilities: null,
+		interactionUrl: null,
+	}));
+	const resolveCustomAgentInteractionUrl = vi.fn(
+		async () => "https://browser.example.test",
+	);
+	const present = createDeploymentPresentation({
+		identityScope,
+		configurationQuery: { readRuntimePresentation },
+		resolveCustomAgentInteractionUrl,
+		resourceProfile: {
+			profileId: "controlled",
+			displayName: "Controlled",
+			estimatedResources: {
+				cpuMillicores: 1000,
+				memoryMiB: 1024,
+				storageGiB: 1,
+			},
+		},
+		imageRepository: "registry.example.test/agents",
+	});
+	const apiUser = {
+		schemaVersion: 1 as const,
+		userId: "api-reader",
+		accountStatus: "active" as const,
+		organizationIds: ["api-org"],
+		authorizationRevision: "api-revision",
+	};
+	const result = await identityScope.requestScope(
+		new Request("https://platform.test/api/v2/agents", {
+			headers: { Authorization: "Bearer controlled-api-material" },
+		}),
+		() => present({ agentId: "agent_01", configuration, management, apiUser }),
+	);
+	expect(resolve).not.toHaveBeenCalled();
+	expect(readRuntimePresentation).toHaveBeenCalledWith({
+		agentId: "agent_01",
+		actorId: apiUser.userId,
+		accountStatus: apiUser.accountStatus,
+		organizationIds: apiUser.organizationIds,
+		isAdministrator: false,
+		intent: "api_metadata",
+		expected: { configurationRevision: configuration.revision, management },
+	});
+	expect(resolveCustomAgentInteractionUrl).not.toHaveBeenCalled();
+	expect(result.interactionUrl).toBeNull();
+});

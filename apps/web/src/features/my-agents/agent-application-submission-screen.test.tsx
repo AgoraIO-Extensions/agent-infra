@@ -47,6 +47,20 @@ function creationHeader() {
 	return within(header);
 }
 
+// N-03：页头没有退出入口，唯一的「取消」在表单 footer 左侧，是 ghost 按钮。
+function expectSingleFooterCancel(href: string) {
+	expect(creationHeader().queryAllByRole("link")).toHaveLength(0);
+	expect(creationHeader().queryAllByRole("button")).toHaveLength(0);
+	const cancels = screen.getAllByRole("link", { name: "取消" });
+	expect(cancels).toHaveLength(1);
+	const cancel = cancels[0] as HTMLElement;
+	expect(cancel.getAttribute("href")).toBe(href);
+	expect(cancel.closest(".form-footer")).not.toBeNull();
+	expect(cancel.className).toContain("text-muted-foreground");
+	expect(cancel.className).not.toContain("bg-card");
+	return cancel;
+}
+
 describe("AgentApplicationSubmissionScreen", () => {
 	it("renders a server-projected create result without exposing request values", async () => {
 		await renderWithMyAgentsRouter(
@@ -65,12 +79,12 @@ describe("AgentApplicationSubmissionScreen", () => {
 		).toBe("/my-agents/application%3Atenant%2F01%3Fdraft%23one%25");
 		expect(screen.queryByRole("button", { name: "提交申请" })).toBeNull();
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
+		// 提交成功后表单（及 footer）不再渲染，结果下方给出返回入口；页头仍没有操作。
+		expect(creationHeader().queryAllByRole("link")).toHaveLength(0);
 		expect(
-			creationHeader()
-				.getByRole("link", { name: "退出创建" })
-				.getAttribute("href"),
+			screen.getByRole("link", { name: "返回我的 Agent" }).getAttribute("href"),
 		).toBe("/my-agents");
-		expect(screen.getAllByRole("link", { name: "退出创建" })).toHaveLength(1);
+		expect(screen.queryByText("退出创建")).toBeNull();
 	});
 
 	it("distinguishes retryable submission errors from changed application state", async () => {
@@ -88,11 +102,7 @@ describe("AgentApplicationSubmissionScreen", () => {
 			"申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。",
 		);
 		expect(screen.queryByText("private transport detail")).toBeNull();
-		expect(
-			creationHeader()
-				.getByRole("link", { name: "退出创建" })
-				.getAttribute("href"),
-		).toBe("/my-agents");
+		expectSingleFooterCancel("/my-agents");
 		first.unmount();
 
 		const second = await renderWithMyAgentsRouter(
@@ -108,11 +118,7 @@ describe("AgentApplicationSubmissionScreen", () => {
 		expect(screen.getByRole("alert").textContent).toBe(
 			"申请已变更或当前不可用，请刷新页面后核对。",
 		);
-		expect(
-			creationHeader()
-				.getByRole("link", { name: "退出创建" })
-				.getAttribute("href"),
-		).toBe("/my-agents");
+		expectSingleFooterCancel("/my-agents");
 		second.unmount();
 
 		await renderWithMyAgentsRouter(
@@ -129,14 +135,10 @@ describe("AgentApplicationSubmissionScreen", () => {
 		expect(screen.getByRole("alert").textContent).toBe(
 			"申请内容未通过服务端校验，请检查字段后重试。",
 		);
-		expect(
-			creationHeader()
-				.getByRole("link", { name: "退出创建" })
-				.getAttribute("href"),
-		).toBe("/my-agents");
+		expectSingleFooterCancel("/my-agents");
 	});
 
-	it("offers matching header and footer exits and leaves without submitting", async () => {
+	it("offers one ghost footer cancel and leaves without submitting", async () => {
 		const onSubmit = vi.fn();
 		await renderWithMyAgentsRouter(
 			<AgentApplicationSubmissionScreen
@@ -145,13 +147,10 @@ describe("AgentApplicationSubmissionScreen", () => {
 				submitting={false}
 			/>,
 		);
-		const exits = screen.getAllByRole("link", { name: "退出创建" });
-		expect(exits).toHaveLength(2);
-		for (const exit of exits) {
-			expect(exit.getAttribute("href")).toBe("/my-agents");
-		}
-		expect(screen.queryByRole("link", { name: "取消" })).toBeNull();
-		fireEvent.click(creationHeader().getByRole("link", { name: "退出创建" }));
+		const cancel = expectSingleFooterCancel("/my-agents");
+		expect(screen.queryByText("退出创建")).toBeNull();
+		expect(screen.getByText("我的管理 / 创建申请")).toBeTruthy();
+		fireEvent.click(cancel);
 		await waitFor(() => {
 			expect(
 				screen.queryByRole("heading", { name: "创建一个新的 Agent。" }),
@@ -174,14 +173,16 @@ describe("AgentApplicationSubmissionScreen", () => {
 					submitting={false}
 				/>,
 			);
-			expect(
-				screen.getByRole("link", { name: "取消" }).getAttribute("href"),
-			).toBe("/my-agents/application%3Atenant%2F01%3Fdraft%23one%25");
+			expectSingleFooterCancel(
+				"/my-agents/application%3Atenant%2F01%3Fdraft%23one%25",
+			);
 			expect(screen.queryByText("退出创建")).toBeNull();
+			// NI-101：编辑页 eyebrow 与面包屑「编辑申请」一致。
+			expect(screen.getByText("我的管理 / 编辑申请")).toBeTruthy();
 		},
 	);
 
-	it("disables both creation exits while submission is pending", async () => {
+	it("disables the single creation cancel while submission is pending", async () => {
 		const onSubmit = vi.fn();
 		await renderWithMyAgentsRouter(
 			<AgentApplicationSubmissionScreen
@@ -190,16 +191,17 @@ describe("AgentApplicationSubmissionScreen", () => {
 				submitting
 			/>,
 		);
-		expect(screen.queryByRole("link", { name: "退出创建" })).toBeNull();
-		const exits = screen.getAllByText("退出创建");
-		expect(exits).toHaveLength(2);
+		expect(screen.queryByRole("link", { name: "取消" })).toBeNull();
+		const exits = screen.getAllByText("取消");
+		expect(exits).toHaveLength(1);
 		for (const exit of exits) {
 			expect(exit.getAttribute("aria-disabled")).toBe("true");
 			expect(exit.getAttribute("href")).toBeNull();
 			expect(exit.tabIndex).toBe(-1);
+			expect(exit.closest(".form-footer")).not.toBeNull();
 			fireEvent.click(exit);
 		}
-		expect(creationHeader().getByText("退出创建")).toBeTruthy();
+		expect(creationHeader().queryByText("取消")).toBeNull();
 		expect(onSubmit).not.toHaveBeenCalled();
 		expect(
 			screen

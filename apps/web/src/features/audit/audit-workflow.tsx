@@ -4,8 +4,9 @@ import {
 	ArrowLeft,
 	ArrowRight,
 	ChevronRight,
-	RotateCcw,
+	RefreshCw,
 	Search,
+	X,
 } from "lucide-react";
 import {
 	type FormEvent,
@@ -14,17 +15,24 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+	Alert,
+	AlertAction,
+	AlertDescription,
+	AlertTitle,
+} from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
+import { Field } from "@/components/ui/field";
+import { shortIdentifier } from "@/components/ui/identifier-text";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
-
+import { LoadingLine } from "@/components/ui/spinner";
 import {
 	Table,
 	TableBody,
@@ -33,24 +41,36 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import { Timestamp } from "@/components/ui/timestamp";
+import { withObjectName } from "@/lib/accessible-name";
+import { formatTimestamp } from "@/lib/format-time";
 import { useApplicationSession } from "../application-shell.js";
+import {
+	DirectoryReadAlert,
+	formatPerson,
+	useDirectoryNames,
+} from "../directory-names.js";
 import {
 	auditActionLabels,
 	auditOutcomeLabel,
-	auditPrincipalLabels,
 	auditResultLabels,
+	auditResultTone,
 	auditSubjectLabels,
-	auditTimestamp,
 } from "./audit-labels.js";
 import type { AuditFilters, AuditScope } from "./audit-query.js";
-import { AuditRecordDetail } from "./audit-record-detail.js";
+import {
+	AuditPrincipalName,
+	AuditRecordDetail,
+	auditDetailHeading,
+	auditUserIds,
+} from "./audit-record-detail.js";
 import { useAuditQuery } from "./use-audit-query.js";
 
 export function AuditWorkflow({ scope }: { scope: AuditScope }) {
 	const { identityKey, session } = useApplicationSession();
 	const admin = session.user.roles.includes("system_admin");
 	return scope === "administrator" && !admin ? (
-		<Alert>
+		<Alert tone="warn">
 			<AlertDescription>当前无权访问平台审计。</AlertDescription>
 		</Alert>
 	) : (
@@ -58,17 +78,38 @@ export function AuditWorkflow({ scope }: { scope: AuditScope }) {
 	);
 }
 
+// 外置的常用筛选（设计 .filters 的 3 个字段）之外，其余字段收进「更多筛选」。
+const moreFilterNames = [
+	"until",
+	"principalKind",
+	"principalId",
+	"agentId",
+	"executionId",
+] as const;
+type FilterName = keyof AuditFilters;
+
 function AuditScreen({ scope }: { scope: AuditScope }) {
 	const { identityKey, session } = useApplicationSession();
 	const [filters, setFilters] = useState<AuditFilters>({});
 	const [auditId, setAuditId] = useState<string | null>(null);
 	const [formFailure, setFormFailure] = useState<string | null>(null);
+	const [moreOpen, setMoreOpen] = useState(false);
 	const form = useRef<HTMLFormElement>(null);
 	const detailPanel = useRef<HTMLElement>(null);
 	const detailTrigger = useRef<HTMLButtonElement>(null);
+	const invalidField = useRef<FilterName | null>(null);
+	const [failureAttempt, setFailureAttempt] = useState(0);
 	useLayoutEffect(() => {
 		if (auditId !== null) detailPanel.current?.focus();
 	}, [auditId]);
+	// 校验错误落在「更多筛选」里时，区域展开后再聚焦出错字段。
+	useLayoutEffect(() => {
+		if (!failureAttempt || !invalidField.current) return;
+		form.current
+			?.querySelector<HTMLElement>(`[name="${invalidField.current}"]`)
+			?.focus();
+		invalidField.current = null;
+	}, [failureAttempt]);
 	function closeDetail() {
 		setAuditId(null);
 		detailTrigger.current?.focus();
@@ -80,8 +121,24 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 	const denied = query.status === "denied";
 	const items = busy || formFailure ? [] : query.items;
 	const administrator = scope === "administrator";
+	// 列表与详情中的用户主体合并读取一次目录；后台组件与应用主体不是目录记录。
+	const userNames = useDirectoryNames(
+		"user",
+		auditUserIds([...items, ...(query.detail ? [query.detail] : [])]),
+	);
 	const admin = session.user.roles.includes("system_admin");
 	const fieldId = (name: string) => `${formId}-${name}`;
+	const moreFilterCount = moreFilterNames.filter(
+		(name) => filters[name],
+	).length;
+	function fail(message: string, field?: FilterName) {
+		invalidField.current = field ?? null;
+		if (field && (moreFilterNames as readonly string[]).includes(field))
+			setMoreOpen(true);
+		setFormFailure(message);
+		setAuditId(null);
+		setFailureAttempt((attempt) => attempt + 1);
+	}
 	function apply(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		const data = new FormData(event.currentTarget);
@@ -95,33 +152,32 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 			"action",
 			"result",
 			"executionId",
-		]) {
+		] as const) {
 			const value = String(data.get(name) ?? "").trim();
 			if (!value) continue;
 			if (name === "from" || name === "until") {
 				const date = new Date(value);
 				if (!Number.isFinite(date.getTime())) {
-					setFormFailure("请输入有效的时间范围。");
-					setAuditId(null);
+					fail("请输入有效的时间范围。", name);
 					return;
 				}
 				next[name] = date.toISOString();
 			} else next[name] = value;
 		}
 		if (Boolean(next.principalKind) !== Boolean(next.principalId)) {
-			setFormFailure("主体类型和主体 ID 需要同时填写。");
-			setAuditId(null);
+			fail(
+				"主体类型和主体 ID 需要同时填写。",
+				next.principalKind ? "principalId" : "principalKind",
+			);
 			return;
 		}
 		if (next.from && next.until && next.from >= next.until) {
-			setFormFailure("结束时间必须晚于起始时间。");
-			setAuditId(null);
+			fail("结束时间必须晚于起始时间。", "until");
 			return;
 		}
 		const parsed = ScopedPlatformAuditQueryV1Schema.safeParse(next);
 		if (!parsed.success) {
-			setFormFailure("查询条件无效，请检查输入。");
-			setAuditId(null);
+			fail("查询条件无效，请检查输入。");
 			return;
 		}
 		setFormFailure(null);
@@ -134,6 +190,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 		form.current?.reset();
 		setFormFailure(null);
 		setAuditId(null);
+		setMoreOpen(false);
 		if (Object.keys(filters).length === 0) void query.refresh();
 		else setFilters({});
 	}
@@ -164,11 +221,11 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 						void query.refresh();
 					}}
 				>
-					<RotateCcw aria-hidden="true" />
+					<RefreshCw aria-hidden="true" />
 				</Button>
 			</div>
 			{admin && (
-				<nav className="tabs" aria-label="审计范围">
+				<nav className="scope-tabs" aria-label="审计范围">
 					<Link
 						to="/audit"
 						className={buttonVariants({
@@ -191,97 +248,121 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 			)}
 			{!administrator && (
 				<p className="mb-5 break-words text-muted-foreground text-sm">
-					审计范围：当前用户 · {session.user.displayName || session.user.userId}
+					审计范围：当前用户 ·{" "}
+					{formatPerson({ displayName: session.user.displayName }).name}
 				</p>
 			)}
 			<form
 				ref={form}
 				onSubmit={apply}
-				className="audit-filters border-y py-5"
+				className="audit-filters"
 				aria-label="审计查询条件"
 			>
-				<div>
-					<Label htmlFor={fieldId("from")}>起始时间</Label>
-					<Input id={fieldId("from")} name="from" type="datetime-local" />
-				</div>
-				<div>
-					<Label htmlFor={fieldId("until")}>结束时间</Label>
-					<Input id={fieldId("until")} name="until" type="datetime-local" />
-				</div>
-				{administrator && (
-					<>
-						<div>
-							<Label htmlFor={fieldId("principalKind")}>主体类型</Label>
-							<NativeSelect id={fieldId("principalKind")} name="principalKind">
-								<NativeSelectOption value="">全部类型</NativeSelectOption>
-								<NativeSelectOption value="user">用户</NativeSelectOption>
-								<NativeSelectOption value="application">
-									应用
+				<div className="audit-filter-grid">
+					<Field>
+						<Label htmlFor={fieldId("from")}>起始时间</Label>
+						<Input id={fieldId("from")} name="from" type="datetime-local" />
+					</Field>
+					<Field>
+						<Label htmlFor={fieldId("action")}>动作</Label>
+						<NativeSelect id={fieldId("action")} name="action">
+							<NativeSelectOption value="">全部动作</NativeSelectOption>
+							{Object.entries(auditActionLabels).map(([value, label]) => (
+								<NativeSelectOption key={value} value={value}>
+									{label}
 								</NativeSelectOption>
-							</NativeSelect>
-						</div>
-						<div>
-							<Label htmlFor={fieldId("principalId")}>主体 ID</Label>
-							<Input
-								id={fieldId("principalId")}
-								name="principalId"
-								maxLength={128}
-							/>
-						</div>
-					</>
-				)}
-				<div>
-					<Label htmlFor={fieldId("agentId")}>Agent ID</Label>
-					<Input id={fieldId("agentId")} name="agentId" maxLength={128} />
+							))}
+						</NativeSelect>
+					</Field>
+					<Field>
+						<Label htmlFor={fieldId("result")}>结果</Label>
+						<NativeSelect id={fieldId("result")} name="result">
+							<NativeSelectOption value="">全部结果</NativeSelectOption>
+							{Object.entries(auditResultLabels).map(([value, label]) => (
+								<NativeSelectOption key={value} value={value}>
+									{label}
+								</NativeSelectOption>
+							))}
+						</NativeSelect>
+					</Field>
 				</div>
-				<div>
-					<Label htmlFor={fieldId("action")}>动作</Label>
-					<NativeSelect id={fieldId("action")} name="action">
-						<NativeSelectOption value="">全部动作</NativeSelectOption>
-						{Object.entries(auditActionLabels).map(([value, label]) => (
-							<NativeSelectOption key={value} value={value}>
-								{label}
-							</NativeSelectOption>
-						))}
-					</NativeSelect>
-				</div>
-				<div>
-					<Label htmlFor={fieldId("result")}>结果</Label>
-					<NativeSelect id={fieldId("result")} name="result">
-						<NativeSelectOption value="">全部结果</NativeSelectOption>
-						{Object.entries(auditResultLabels).map(([value, label]) => (
-							<NativeSelectOption key={value} value={value}>
-								{label}
-							</NativeSelectOption>
-						))}
-					</NativeSelect>
-				</div>
-				<div>
-					<Label htmlFor={fieldId("executionId")}>Execution ID</Label>
-					<Input
-						id={fieldId("executionId")}
-						name="executionId"
-						maxLength={128}
-					/>
+				{/* 收起时字段仍在表单内，已填写的值继续参与查询。 */}
+				<div
+					id={fieldId("more")}
+					className="audit-filter-grid"
+					hidden={!moreOpen}
+				>
+					<Field>
+						<Label htmlFor={fieldId("until")}>结束时间</Label>
+						<Input id={fieldId("until")} name="until" type="datetime-local" />
+					</Field>
+					{administrator && (
+						<>
+							<Field>
+								<Label htmlFor={fieldId("principalKind")}>主体类型</Label>
+								<NativeSelect
+									id={fieldId("principalKind")}
+									name="principalKind"
+								>
+									<NativeSelectOption value="">全部类型</NativeSelectOption>
+									<NativeSelectOption value="user">用户</NativeSelectOption>
+									<NativeSelectOption value="application">
+										应用
+									</NativeSelectOption>
+								</NativeSelect>
+							</Field>
+							<Field>
+								<Label htmlFor={fieldId("principalId")}>主体 ID</Label>
+								<Input
+									id={fieldId("principalId")}
+									name="principalId"
+									maxLength={128}
+								/>
+							</Field>
+						</>
+					)}
+					<Field>
+						<Label htmlFor={fieldId("agentId")}>Agent ID</Label>
+						<Input id={fieldId("agentId")} name="agentId" maxLength={128} />
+					</Field>
+					<Field>
+						<Label htmlFor={fieldId("executionId")}>Execution ID</Label>
+						<Input
+							id={fieldId("executionId")}
+							name="executionId"
+							maxLength={128}
+						/>
+					</Field>
 				</div>
 				{formFailure && (
-					<Alert className="col-span-full" variant="destructive">
+					<Alert tone="danger" role="alert">
 						<AlertDescription>{formFailure}</AlertDescription>
 					</Alert>
 				)}
-				<div className="col-span-full flex flex-wrap justify-end gap-2">
+				<div className="audit-filter-actions">
 					<Button
 						type="button"
 						variant="outline"
-						onClick={reset}
-						disabled={busy}
+						aria-expanded={moreOpen}
+						aria-controls={fieldId("more")}
+						onClick={() => setMoreOpen((open) => !open)}
 					>
-						重置
+						{moreFilterCount ? `更多筛选（${moreFilterCount}）` : "更多筛选"}
 					</Button>
-					<Button type="submit" disabled={busy}>
-						<Search aria-hidden="true" />
-						查询
-					</Button>
+					<div className="flex flex-wrap gap-2">
+						<Button
+							type="button"
+							variant="outline"
+							onClick={reset}
+							disabled={busy}
+						>
+							重置
+						</Button>
+						<Button type="submit" disabled={busy}>
+							<Search aria-hidden="true" />
+							查询
+						</Button>
+					</div>
 				</div>
 			</form>
 			<section className="py-5" aria-label="审计记录" aria-busy={busy}>
@@ -300,40 +381,39 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 						</p>
 					)}
 				</div>
+				<DirectoryReadAlert names={[userNames]} className="mb-4" />
 				{denied ? (
-					<Alert variant="destructive">
+					<Alert tone="danger" role="alert">
 						<AlertDescription>
 							当前无权访问审计记录，权限或会话可能已变化。
 						</AlertDescription>
 					</Alert>
 				) : query.status === "error" ? (
-					<Alert variant="destructive">
-						<AlertDescription>
-							审计查询失败，请稍后重试。
-							{query.canRetry && (
+					<Alert tone="danger" role="alert">
+						<AlertDescription>审计查询失败，请稍后重试。</AlertDescription>
+						{query.canRetry && (
+							<AlertAction>
 								<Button variant="outline" onClick={() => void query.retry()}>
 									重试
 								</Button>
-							)}
-						</AlertDescription>
+							</AlertAction>
+						)}
 					</Alert>
 				) : busy ? (
-					<p role="status" className="py-8 text-muted-foreground">
-						正在读取审计记录…
-					</p>
+					<LoadingLine className="py-8">正在读取审计记录…</LoadingLine>
 				) : !formFailure && items.length === 0 ? (
 					<Empty>
 						<EmptyDescription>暂无审计记录</EmptyDescription>
 					</Empty>
 				) : (
 					!formFailure && (
-						<Table className="audit-table">
+						<Table className="audit-table" mobileLayout="cards">
 							<TableHeader>
 								<TableRow>
 									<TableHead>时间</TableHead>
 									<TableHead>事件</TableHead>
 									<TableHead>对象</TableHead>
-									<TableHead>操作主体</TableHead>
+									<TableHead>主体</TableHead>
 									<TableHead>结果</TableHead>
 									<TableHead>
 										<span className="sr-only">详情</span>
@@ -344,55 +424,51 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 								{items.map((record) => (
 									<TableRow key={record.auditId}>
 										<TableCell data-label="时间">
-											<time dateTime={record.occurredAt}>
-												{auditTimestamp(record.occurredAt)}
-											</time>
+											<Timestamp value={record.occurredAt} />
 										</TableCell>
 										<TableCell data-label="事件">
-											<strong className="font-medium">
-												{auditActionLabels[record.action]}
-											</strong>
-											<small className="mt-1 block">{record.summary}</small>
-											<small className="mt-1 block break-all text-muted-foreground">
-												{record.action}
-											</small>
+											<strong>{auditActionLabels[record.action]}</strong>
+											<small>{record.summary}</small>
 										</TableCell>
 										<TableCell data-label="对象">
-											<span>{auditSubjectLabels[record.subject.kind]}</span>
-											<small className="mt-1 block break-all">
-												{record.subject.subjectId}
-											</small>
-											<small className="mt-1 block break-all text-muted-foreground">
-												Agent：{record.agentId ?? "未提供"}
-											</small>
-											<small className="mt-1 block break-all text-muted-foreground">
-												Execution：{record.executionId ?? "未提供"}
+											{auditSubjectLabels[record.subject.kind]}
+											{/* 对象 ID 只以等宽短形式出现，完整值在详情。 */}
+											<small
+												className="audit-identifier"
+												title={record.subject.subjectId}
+											>
+												{shortIdentifier(record.subject.subjectId)}
 											</small>
 										</TableCell>
-										<TableCell data-label="操作主体">
-											<span>
-												可信操作主体 · {auditPrincipalLabels[record.actor.kind]}
-											</span>
-											<small className="mt-1 block break-all">
-												{record.actor.actorId}
-											</small>
+										<TableCell data-label="主体">
+											<AuditPrincipalName
+												kind={record.actor.kind}
+												id={record.actor.actorId}
+												names={userNames}
+											/>
 											{record.originalPrincipal && (
-												<small className="mt-1 block break-all text-muted-foreground">
-													原发起主体 ·{" "}
-													{auditPrincipalLabels[record.originalPrincipal.kind]}
-													：{record.originalPrincipal.id}
+												<small>
+													原发起：
+													<AuditPrincipalName
+														kind={record.originalPrincipal.kind}
+														id={record.originalPrincipal.id}
+														names={userNames}
+													/>
 												</small>
 											)}
 										</TableCell>
 										<TableCell data-label="结果">
-											<Badge variant="outline" data-result={record.result}>
+											<Badge tone={auditResultTone(record.result)}>
 												{auditOutcomeLabel(record)}
 											</Badge>
 										</TableCell>
 										<TableCell data-label="详情">
 											<Button
 												variant="ghost"
-												aria-label="查看审计详情"
+												aria-label={withObjectName(
+													"详情",
+													`${auditActionLabels[record.action]} · ${formatTimestamp(record.occurredAt)?.full ?? ""}`,
+												)}
 												title="查看审计详情"
 												aria-expanded={auditId === record.auditId}
 												aria-controls={fieldId("detail")}
@@ -460,18 +536,25 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					<header className="section-heading">
 						<div>
 							<p className="page-eyebrow">记录详情</p>
-							<h2>审计详情</h2>
+							<h2>
+								{query.detail &&
+								query.detailStatus !== "loading" &&
+								!query.isDetailFetching
+									? auditDetailHeading(query.detail)
+									: "审计详情"}
+							</h2>
 						</div>
 						<Button
 							variant="ghost"
 							onClick={closeDetail}
 							aria-label="关闭审计详情"
 						>
+							<X aria-hidden="true" />
 							关闭
 						</Button>
 					</header>
 					{query.failure || query.detailStatus === "denied" ? (
-						<Alert variant="destructive">
+						<Alert tone="danger" role="alert">
 							<AlertDescription>
 								{denied || query.detailStatus === "denied"
 									? "当前无权访问审计详情，资源或权限可能已变化。"
@@ -479,21 +562,23 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 							</AlertDescription>
 						</Alert>
 					) : query.detailStatus === "error" ? (
-						<Alert variant="destructive">
+						<Alert tone="danger" role="alert">
 							<AlertDescription>
 								审计详情读取失败，请稍后重试。
+							</AlertDescription>
+							<AlertAction>
 								<Button
 									variant="outline"
 									onClick={() => void query.retryDetail()}
 								>
 									重试详情
 								</Button>
-							</AlertDescription>
+							</AlertAction>
 						</Alert>
 					) : query.detailStatus === "loading" ||
 						query.isDetailFetching ||
 						busy ? (
-						<p role="status">正在读取审计详情…</p>
+						<LoadingLine>正在读取审计详情…</LoadingLine>
 					) : query.detail ? (
 						<>
 							<div className="mb-4 flex justify-end">
@@ -504,23 +589,25 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 									title="刷新审计详情"
 									onClick={() => void query.retryDetail()}
 								>
-									<RotateCcw aria-hidden="true" />
+									<RefreshCw aria-hidden="true" />
 								</Button>
 							</div>
-							<AuditRecordDetail record={query.detail} />
+							<AuditRecordDetail record={query.detail} names={userNames} />
+							<p className="page-note">
+								只展示可审计元数据；不返回会话正文、Secret 值或模型内部思考。
+							</p>
 						</>
 					) : null}
 				</section>
 			)}
 			{administrator && (
-				<Alert className="mt-5">
-					<AlertDescription className="space-y-1">
-						<strong>最小审计数据</strong>
-						<p>
-							记录谁在何时对哪个对象做了什么及其结果，不保存对话正文、凭证值或模型内部思考。
-							Connection 授权与外部效果由独立 Connection
-							审计核实，关联引用不授予查询权限。
-						</p>
+				// 首屏即存在的审计范围说明，不设 live 角色。
+				<Alert tone="info" className="mt-5">
+					<AlertTitle>最小审计数据</AlertTitle>
+					<AlertDescription>
+						记录谁在何时对哪个对象做了什么及其结果，不保存对话正文、凭证值或模型内部思考。
+						Connection 授权与外部效果由独立 Connection
+						审计核实，关联引用不授予查询权限。
 					</AlertDescription>
 				</Alert>
 			)}

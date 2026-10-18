@@ -61,6 +61,29 @@ async function fixture(page: Page) {
 			});
 		if (path === "/api/v2/me/api-credentials")
 			return route.fulfill({ json: { items: [], nextCursor: null } });
+		if (path === "/api/v2/directory/search") {
+			const ids =
+				new URL(request.url()).searchParams.get("ids")?.split(",") ?? [];
+			return route.fulfill({
+				json: {
+					schemaVersion: 1,
+					items: [
+						{
+							kind: "user",
+							canonicalId: application.responsibleUserId,
+							displayName: "应用负责人",
+							email: "app.owner@example.test",
+						},
+						{
+							kind: "user",
+							canonicalId: credential.delivery.recipient.principalId,
+							displayName: "凭证接收人",
+							email: "recipient@example.test",
+						},
+					].filter((item) => ids.includes(item.canonicalId)),
+				},
+			});
+		}
 		const match = /^\/api\/v2\/applications\/([^/]+)(\/credentials)?$/.exec(
 			path,
 		);
@@ -167,11 +190,30 @@ test("retains unknown delivery metadata, prepares rotation and wraps 390px resul
 	await page.goto(
 		`/my-settings/api-credentials?applicationId=${application.applicationId}`,
 	);
+	// 负责人与接收用户显示目录姓名，时间按本地时区显示且悬停为完整时间。
+	await expect(
+		page.locator("dt", { hasText: "负责人" }).locator("+ dd"),
+	).toHaveText("应用负责人");
+	const created = page.locator(`time[datetime="${application.createdAt}"]`);
+	await expect(created.first()).toHaveAttribute(
+		"title",
+		/^\d{4} 年 \d{1,2} 月 \d{1,2} 日 \d{2}:\d{2}:\d{2}$/,
+	);
+	await expect(page.locator("main")).not.toContainText(application.createdAt);
 	await submitCredential(page);
 	await expect(page.getByText("投递结果未知", { exact: true })).toBeVisible();
 	await expect(
 		page.getByText(credential.metadata.credentialId, { exact: true }),
 	).toBeVisible();
+	await expect(
+		page.locator("dt", { hasText: "接收者" }).locator("+ dd"),
+	).toHaveText("用户 · 凭证接收人");
+	await expect(page.locator("main")).not.toContainText(
+		application.responsibleUserId,
+	);
+	await expect(page.locator("main")).not.toContainText(
+		credential.delivery.recipient.principalId,
+	);
 	await expect(
 		page.getByText(credential.delivery.attemptId, { exact: true }),
 	).toBeVisible();
@@ -264,4 +306,51 @@ test("missing existing applications show an opaque denial instead of registratio
 		page.getByText("找不到这个应用，或当前账号不是负责人。", { exact: true }),
 	).toBeVisible();
 	await expect(page.getByRole("button", { name: "注册应用" })).toHaveCount(0);
+});
+
+// F-11：停用应用先确认对象与后果，确认后恰好一次请求，焦点落在应用名标题。
+test("disabling an application is confirmed before one PATCH and returns focus to its title", async ({
+	page,
+}) => {
+	await fixture(page);
+	const disables: unknown[] = [];
+	let disabled = false;
+	await page.route(/\/api\/v2\/applications\/[^/]+$/, async (route) => {
+		const request = route.request();
+		if (request.method() === "PATCH") {
+			disables.push(request.postDataJSON());
+			disabled = true;
+			return route.fulfill({ json: { ...application, status: "disabled" } });
+		}
+		if (disabled)
+			return route.fulfill({ json: { ...application, status: "disabled" } });
+		return route.fallback();
+	});
+	await page.goto(
+		`/my-settings/api-credentials?applicationId=${application.applicationId}`,
+	);
+	const trigger = page.getByRole("button", {
+		name: `停用应用：${application.name}`,
+		exact: true,
+	});
+	await expect(trigger).toBeVisible();
+	await trigger.click();
+	const dialog = page.getByRole("dialog", { name: "停用这个应用？" });
+	await expect(dialog).toBeVisible();
+	await expect(dialog).toContainText(application.name);
+	await expect(dialog).toContainText("拒绝该应用的新任务");
+	expect(disables).toHaveLength(0);
+	await dialog.getByRole("button", { name: "取消" }).click();
+	await expect(dialog).not.toBeVisible();
+	await trigger.click();
+	await page.keyboard.press("Escape");
+	await expect(dialog).not.toBeVisible();
+	expect(disables).toHaveLength(0);
+	await trigger.click();
+	await dialog.getByRole("button", { name: "停用应用", exact: true }).click();
+	await expect.poll(() => disables).toEqual([{ status: "disabled" }]);
+	await expect(page.getByText("应用已停用")).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: application.name }),
+	).toBeFocused();
 });

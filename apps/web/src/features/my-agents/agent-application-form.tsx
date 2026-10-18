@@ -1,7 +1,9 @@
-import { PlusIcon, Trash2Icon } from "lucide-react";
+import { ArrowRightIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Field, FieldLegend } from "@/components/ui/field";
+import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -240,9 +242,15 @@ function recomputeDuplicateModelErrors(
 	}
 }
 
+// 设计 .field-error：12px / 1.5 / --danger-ink，与上方控件之间是字段 gap 7px + 6px 外边距；
+// 校验结果礼貌播报，不打断读屏（焦点已移到首个错误字段）。
 function FieldError({ id, message }: { id: string; message?: string }) {
 	return message ? (
-		<p aria-live="assertive" className="text-destructive text-sm" id={id}>
+		<p
+			aria-live="polite"
+			className="field-error mt-[6px] text-(--danger-ink) text-[12px] leading-[1.5]"
+			id={id}
+		>
 			{message}
 		</p>
 	) : null;
@@ -352,8 +360,8 @@ function ModelRows({
 						className="model-option-fieldset grid min-w-0 gap-3 sm:grid-cols-2"
 						key={`model-${index}`}
 					>
-						<legend className="mb-3 font-medium">模型选项 {index + 1}</legend>
-						<div className="model-option-endpoint space-y-2">
+						<FieldLegend className="mb-3">模型选项 {index + 1}</FieldLegend>
+						<Field className="model-option-endpoint">
 							<Label htmlFor={`application-model-option-endpoint-${index}`}>
 								模型端点
 							</Label>
@@ -378,7 +386,6 @@ function ModelRows({
 									aria-invalid={
 										errors[`model.${index}.endpointId`] ? true : undefined
 									}
-									className="h-11 w-full text-base md:text-sm"
 								>
 									<SelectValue placeholder="选择模型端点" />
 								</SelectTrigger>
@@ -394,8 +401,8 @@ function ModelRows({
 								id={errorId(`model.${index}.endpointId`)}
 								message={errors[`model.${index}.endpointId`]}
 							/>
-						</div>
-						<div className="model-option-model space-y-2">
+						</Field>
+						<Field className="model-option-model">
 							<Label htmlFor={`application-model-option-model-${index}`}>
 								模型
 							</Label>
@@ -420,7 +427,6 @@ function ModelRows({
 									aria-invalid={
 										errors[`model.${index}.modelId`] ? true : undefined
 									}
-									className="h-11 w-full text-base md:text-sm"
 								>
 									<SelectValue placeholder="选择模型" />
 								</SelectTrigger>
@@ -436,7 +442,7 @@ function ModelRows({
 								id={errorId(`model.${index}.modelId`)}
 								message={errors[`model.${index}.modelId`]}
 							/>
-						</div>
+						</Field>
 						<div className="model-reasoning-field space-y-2">
 							<fieldset
 								aria-describedby={
@@ -448,17 +454,17 @@ function ModelRows({
 									errors[`model.${index}.reasoningLevels`] ? true : undefined
 								}
 								aria-labelledby={`application-model-option-reasoning-label-${index}`}
-								className="model-reasoning flex min-h-11 flex-wrap items-center gap-4"
+								className="model-reasoning flex min-h-11 flex-wrap items-center gap-x-[22px] gap-y-3"
 								id={`application-model-option-reasoning-${index}`}
 								tabIndex={
 									errors[`model.${index}.reasoningLevels`] ? -1 : undefined
 								}
 							>
-								<legend
+								<FieldLegend
 									id={`application-model-option-reasoning-label-${index}`}
 								>
 									允许的推理档位
-								</legend>
+								</FieldLegend>
 								{!selectedModel && (
 									<p className="text-muted-foreground text-sm">
 										选择模型后显示可用档位。
@@ -469,7 +475,7 @@ function ModelRows({
 										.split("\n")
 										.includes(level);
 									return (
-										<Label className="min-h-8 gap-2" key={level}>
+										<Label variant="option" key={level}>
 											<Checkbox
 												checked={selected}
 												onCheckedChange={(checked) => {
@@ -530,11 +536,11 @@ function DraftRows<T extends string>({
 					className="grid min-w-0 gap-3 sm:grid-cols-2"
 					key={`${label}-${index}`}
 				>
-					<legend className="mb-3 font-medium">
+					<FieldLegend className="mb-3">
 						{label} {index + 1}
-					</legend>
+					</FieldLegend>
 					{fields.map((field) => (
-						<div className="space-y-2" key={field.key}>
+						<Field key={field.key}>
 							{(() => {
 								const key = `${idPrefix}.${index}.${field.key}`;
 								const id = fieldId(key);
@@ -559,7 +565,6 @@ function DraftRows<T extends string>({
 													id={id}
 													aria-describedby={message ? errorId(key) : undefined}
 													aria-invalid={message ? true : undefined}
-													className="h-11 w-full text-base md:text-sm"
 												>
 													<SelectValue placeholder="选择一项" />
 												</SelectTrigger>
@@ -595,7 +600,7 @@ function DraftRows<T extends string>({
 									</>
 								);
 							})()}
-						</div>
+						</Field>
 					))}
 					{rows.length > minimumRows ? (
 						<Button
@@ -686,6 +691,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	);
 	const [coOwnerIds, setCoOwnerIds] = useState(
 		configuration?.owners.map((owner) => owner.userId).join("\n") ?? "",
+	);
+	// 编辑申请时，目录缺少 Owner 记录也显示申请投影中的 Owner 显示名。
+	const ownerLabels = Object.fromEntries(
+		(configuration?.owners ?? []).map((owner) => [
+			owner.userId,
+			owner.displayName,
+		]),
 	);
 	const [userAvailabilityIds, setUserAvailabilityIds] = useState(
 		configuration?.availability
@@ -1000,7 +1012,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					{configurationMessage}
 				</p>
 			) : null}
-			<div className="space-y-2">
+			<Field>
 				<Label htmlFor="application-source-kind">来源</Label>
 				<Select
 					disabled={props.mode === "update"}
@@ -1032,7 +1044,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						aria-label="Agent 来源"
 						id="application-source-kind"
 						aria-describedby="application-source-help"
-						className="h-11 w-full text-base md:text-sm"
 					>
 						<SelectValue />
 					</SelectTrigger>
@@ -1049,9 +1060,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						</SelectItem>
 					</SelectContent>
 				</Select>
-			</div>
+			</Field>
 			{sourceKind === "standard" ? (
-				<div className="space-y-2">
+				<Field>
 					<Label htmlFor="application-template-id">标准模板</Label>
 					<Select
 						disabled={
@@ -1084,7 +1095,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								fieldErrors.templateId ? errorId("templateId") : undefined,
 							)}
 							aria-invalid={fieldErrors.templateId ? true : undefined}
-							className="h-11 w-full text-base md:text-sm"
 						>
 							<SelectValue placeholder="选择标准模板" />
 						</SelectTrigger>
@@ -1136,10 +1146,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						id={errorId("templateId")}
 						message={fieldErrors.templateId}
 					/>
-				</div>
+				</Field>
 			) : sourceKind === "custom-multi-service" ? (
 				<div className="space-y-3 sm:col-span-2">
-					<div className="space-y-2">
+					<Field>
 						<Label htmlFor="application-multi-service-file">
 							多服务资源 YAML
 						</Label>
@@ -1167,7 +1177,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							上传受限 Kubernetes 资源清单，或直接粘贴 YAML；最多 262,144
 							bytes。
 						</p>
-					</div>
+					</Field>
 					<Textarea
 						aria-describedby={
 							fieldErrors.manifest ? errorId("manifest") : undefined
@@ -1188,7 +1198,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					) : null}
 				</div>
 			) : (
-				<div className="space-y-2">
+				<Field>
 					<Label htmlFor="application-image-reference">镜像地址</Label>
 					<Input
 						disabled={props.mode === "update"}
@@ -1208,10 +1218,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						id={errorId("imageReference")}
 						message={fieldErrors.imageReference}
 					/>
-				</div>
+				</Field>
 			)}
 			{sourceKind === "custom-self-managed" ? (
-				<div className="space-y-2">
+				<Field>
 					<Label htmlFor="application-identity-responsibility">
 						入口身份校验
 					</Label>
@@ -1233,10 +1243,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							}
 						}}
 					>
-						<SelectTrigger
-							id="application-identity-responsibility"
-							className="h-11 w-full text-base md:text-sm"
-						>
+						<SelectTrigger id="application-identity-responsibility">
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
@@ -1244,7 +1251,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							<SelectItem value="self-managed">由自有入口校验</SelectItem>
 						</SelectContent>
 					</Select>
-				</div>
+				</Field>
 			) : null}
 		</>
 	);
@@ -1375,13 +1382,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				className="application-form-fields min-w-0"
 				aria-label="Agent 申请"
 			>
-				<fieldset className="form-section application-basic-section">
-					<legend className="font-semibold text-lg">基本信息</legend>
-					<p className="text-muted-foreground text-sm">
-						名称和描述会展示在 Agent 目录中。
-					</p>
+				<FormSection
+					title="基本信息"
+					className="application-basic-section"
+					description="名称和描述会展示在 Agent 目录中。"
+				>
 					<div className="form-grid">
-						<div className="space-y-2">
+						<Field>
 							<Label htmlFor="application-name">Agent 名称</Label>
 							<Input
 								aria-describedby={
@@ -1397,8 +1404,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								value={name}
 							/>
 							<FieldError id={errorId("name")} message={fieldErrors.name} />
-						</div>
-						<div className="space-y-2 sm:col-span-2">
+						</Field>
+						<Field className="sm:col-span-2">
 							<Label htmlFor="application-description">使用场景</Label>
 							<Textarea
 								aria-label="用途说明"
@@ -1406,7 +1413,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 									fieldErrors.description ? errorId("description") : undefined
 								}
 								aria-invalid={fieldErrors.description ? true : undefined}
-								className="min-h-28"
 								id="application-description"
 								onChange={(event) => {
 									setDescription(event.target.value);
@@ -1420,20 +1426,16 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								id={errorId("description")}
 								message={fieldErrors.description}
 							/>
-						</div>
+						</Field>
 						{sourceFields}
 					</div>
-				</fieldset>
-				<fieldset className="form-section application-scope-section">
-					<legend className="font-semibold text-foreground text-lg">
-						共同 Owner 与使用范围
-					</legend>
-					<p
-						className="text-muted-foreground text-sm"
-						id="application-access-help"
-					>
-						从目录选择可读的姓名和组织路径；提交时由服务端保存稳定标识。
-					</p>
+				</FormSection>
+				<FormSection
+					title="共同 Owner 与使用范围"
+					className="application-scope-section"
+					description="从目录选择可读的姓名和组织路径；提交时由服务端保存稳定标识。"
+					descriptionId="application-access-help"
+				>
 					<div className="form-grid">
 						<div className="sm:col-span-2">
 							<DirectoryPicker
@@ -1442,6 +1444,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								label="共同 Owner 用户"
 								help="至少保留一名有效 Owner"
 								value={coOwnerIds}
+								fallbackLabels={ownerLabels}
 								onChange={(value) => {
 									setCoOwnerIds(value);
 									clearFieldErrors("coOwnerIds");
@@ -1480,9 +1483,294 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							errorId={errorId("organizationAvailabilityIds")}
 						/>
 					</div>
-				</fieldset>
+				</FormSection>
+				{/* DOM 顺序即视觉顺序：模型与推理紧跟范围，高级配置在其后（WCAG 2.4.3，不用 CSS order 重排）。 */}
+				{sourceKind === "standard" ? (
+					<FormSection
+						title="模型与推理"
+						className="application-model-section"
+						description="只展示部署提供且通过目录校验的模型端点。"
+					>
+						{/* 说明文字与内容之间按设计 .form-grid 留 16px。 */}
+						<div className="mt-4">
+							{props.mode === "update" ? (
+								<Field>
+									<Label variant="option">
+										<Checkbox
+											id="application-configure-models"
+											aria-describedby={
+												fieldErrors.configureModels
+													? errorId("configureModels")
+													: undefined
+											}
+											aria-invalid={
+												fieldErrors.configureModels ? true : undefined
+											}
+											disabled={props.submitting}
+											checked={configureModels}
+											onCheckedChange={(checked) => {
+												dismissServerFormError();
+												setConfigureModels(checked);
+												if (checked && models.length === 0) {
+													setModels([blankModel()]);
+												}
+											}}
+										/>
+										修改模型配置
+									</Label>
+									<FieldError
+										id={errorId("configureModels")}
+										message={fieldErrors.configureModels}
+									/>
+								</Field>
+							) : null}
+							{managedModelEdit ? (
+								<ApplicationKeylessModelEditor
+									current={persistedModelOptions ?? []}
+									currentDefault={{
+										optionId: initialDefaultModelOptionId,
+										level: configuration?.defaultReasoningLevel ?? "",
+									}}
+									disabled={props.submitting}
+									error={fieldErrors.defaultRelayKey}
+									errorId={errorId("defaultRelayKey")}
+									keyCheck={keyCheck}
+									onChangeKey={() => clearFieldErrors("defaultRelayKey")}
+								/>
+							) : null}
+							{modelConfigurationVisible ? (
+								<>
+									{props.mode === "create" ? (
+										<Field>
+											<Label htmlFor="application-default-relay-key">
+												Agent 默认 Relay Key
+											</Label>
+											<Input
+												autoComplete="new-password"
+												aria-describedby={
+													fieldErrors.defaultRelayKey
+														? errorId("defaultRelayKey")
+														: undefined
+												}
+												aria-invalid={
+													fieldErrors.defaultRelayKey ? true : undefined
+												}
+												id="application-default-relay-key"
+												onChange={(event) => {
+													setDefaultRelayKey(event.target.value);
+													clearFieldErrors("defaultRelayKey");
+												}}
+												required
+												type="password"
+												value={defaultRelayKey}
+											/>
+											<p className="text-muted-foreground text-sm">
+												只提交一次；保存后仅显示已设置状态，Key 不会回显。
+											</p>
+											<FieldError
+												id={errorId("defaultRelayKey")}
+												message={fieldErrors.defaultRelayKey}
+											/>
+										</Field>
+									) : null}
+									<ModelRows
+										endpoints={modelEndpoints}
+										errors={fieldErrors}
+										models={models}
+										onChange={(index, key, value) => {
+											const nextModels = models.map((item, itemIndex) =>
+												itemIndex !== index
+													? item
+													: key === "endpointId" || key === "modelId"
+														? {
+																...item,
+																[key]: value,
+																...(key === "endpointId"
+																	? {
+																			modelId: "",
+																			reasoningLevels: "",
+																			optionId: "",
+																		}
+																	: {
+																			optionId:
+																				item.endpointId && value
+																					? optionIdFor(item.endpointId, value)
+																					: "",
+																			reasoningLevels: "",
+																		}),
+															}
+														: { ...item, [key]: value },
+											);
+											setModels(nextModels);
+											const rowErrorKeys = [
+												"endpointId",
+												"modelId",
+												"reasoningLevels",
+											].map((field) => `model.${index}.${field}`);
+											clearFieldErrors(
+												...(key === "endpointId" || key === "modelId"
+													? [
+															...rowErrorKeys,
+															"defaultModelOptionId",
+															"defaultReasoningLevel",
+														]
+													: [`model.${index}.${key}`]),
+											);
+											if (key === "endpointId" || key === "modelId")
+												updateModelSelectionErrors(nextModels);
+											if (key === "endpointId" || key === "modelId")
+												dismissServerValidation();
+										}}
+										onRemove={(index) => {
+											dismissServerFormError();
+											const next = models.filter(
+												(_, itemIndex) => itemIndex !== index,
+											);
+											setModels(next);
+											setFieldErrors((current) => {
+												const nextErrors = reindexRowErrors(
+													current,
+													"model",
+													index,
+												);
+												delete nextErrors.defaultModelOptionId;
+												delete nextErrors.defaultReasoningLevel;
+												recomputeDuplicateModelErrors(nextErrors, next);
+												return nextErrors;
+											});
+											dismissServerValidation();
+										}}
+									/>
+									<div className="form-grid">
+										<Field>
+											<Label htmlFor="application-default-model-option">
+												默认模型
+											</Label>
+											<Select
+												value={defaultModelOptionId}
+												disabled={
+													models.length === 0 || modelEndpoints.length === 0
+												}
+												itemToStringLabel={(value) => {
+													const model = models.find(
+														(item) => item.optionId === value,
+													);
+													const endpoint = model
+														? modelEndpoints.find(
+																(item) => item.endpointId === model.endpointId,
+															)
+														: undefined;
+													return model && endpoint
+														? modelLabel(endpoint, model.modelId)
+														: "已移除模型";
+												}}
+												onValueChange={(value) => {
+													if (!value) return;
+													setDefaultModelOptionId(value);
+													clearFieldErrors(
+														"defaultModelOptionId",
+														"defaultReasoningLevel",
+													);
+													dismissServerValidation();
+												}}
+											>
+												<SelectTrigger
+													id="application-default-model-option"
+													aria-describedby={
+														fieldErrors.defaultModelOptionId
+															? errorId("defaultModelOptionId")
+															: undefined
+													}
+													aria-invalid={
+														fieldErrors.defaultModelOptionId ? true : undefined
+													}
+												>
+													<SelectValue placeholder="选择默认模型" />
+												</SelectTrigger>
+												<SelectContent>
+													{models
+														.filter((model) => model.optionId)
+														.map((model) => {
+															const endpoint = modelEndpoints.find(
+																(item) => item.endpointId === model.endpointId,
+															);
+															return (
+																<SelectItem
+																	key={model.optionId}
+																	value={model.optionId}
+																>
+																	{endpoint
+																		? modelLabel(endpoint, model.modelId)
+																		: "已移除模型"}
+																</SelectItem>
+															);
+														})}
+												</SelectContent>
+											</Select>
+											<FieldError
+												id={errorId("defaultModelOptionId")}
+												message={fieldErrors.defaultModelOptionId}
+											/>
+										</Field>
+										<Field>
+											<Label htmlFor="application-default-reasoning-level">
+												默认推理档位
+											</Label>
+											<Select
+												value={defaultReasoningLevel}
+												disabled={!defaultModelDefinition}
+												onValueChange={(value) => {
+													if (!value) return;
+													setDefaultReasoningLevel(value);
+													clearFieldErrors("defaultReasoningLevel");
+												}}
+											>
+												<SelectTrigger
+													id="application-default-reasoning-level"
+													aria-describedby={
+														fieldErrors.defaultReasoningLevel
+															? errorId("defaultReasoningLevel")
+															: undefined
+													}
+													aria-invalid={
+														fieldErrors.defaultReasoningLevel ? true : undefined
+													}
+												>
+													<SelectValue placeholder="选择默认推理档位" />
+												</SelectTrigger>
+												<SelectContent>
+													{defaultReasoningLevels.map((value) => (
+														<SelectItem key={value} value={value}>
+															{value}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+											<FieldError
+												id={errorId("defaultReasoningLevel")}
+												message={fieldErrors.defaultReasoningLevel}
+											/>
+										</Field>
+									</div>
+									<Button
+										variant="outline"
+										id="application-add-model-option"
+										onClick={() => {
+											dismissServerFormError();
+											setModels((current) => [...current, blankModel()]);
+										}}
+										type="button"
+									>
+										<PlusIcon aria-hidden="true" data-icon="inline-start" />
+										添加模型选项
+									</Button>
+								</>
+							) : null}
+						</div>
+					</FormSection>
+				) : null}
 				<section
-					className="form-section application-advanced-section"
+					className="application-advanced-section"
 					aria-labelledby="application-advanced-heading"
 				>
 					<div className="application-advanced-heading">
@@ -1505,13 +1793,12 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						className="application-advanced-content"
 						hidden={!advancedConfigurationOpen}
 					>
-						<fieldset className="form-section application-optional-section">
-							<legend className="font-semibold text-foreground text-lg">
-								环境变量
-							</legend>
-							<p className="text-muted-foreground text-sm">
-								仅填写部署允许的配置项；凭证请使用 Secret 或模型凭证字段。
-							</p>
+						<FormSection
+							title="环境变量"
+							headingLevel={3}
+							className="application-optional-section"
+							description="仅填写部署允许的配置项；凭证请使用 Secret 或模型凭证字段。"
+						>
 							<DraftRows
 								fields={[
 									{
@@ -1571,15 +1858,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								<PlusIcon aria-hidden="true" data-icon="inline-start" />
 								添加环境变量
 							</Button>
-						</fieldset>
-						<fieldset className="form-section application-optional-section">
-							<legend className="font-semibold text-foreground text-lg">
-								Secret
-							</legend>
-							<p className="text-muted-foreground text-sm">
-								只提交新增或替换值，已有 Secret
-								不回显。提交后会清空输入，重试时需重新填写替换值。
-							</p>
+						</FormSection>
+						<FormSection
+							title="Secret"
+							headingLevel={3}
+							className="application-optional-section"
+							description="只提交新增或替换值，已有 Secret 不回显。提交后会清空输入，重试时需重新填写替换值。"
+						>
 							<DraftRows
 								fields={[
 									{
@@ -1641,294 +1926,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								<PlusIcon aria-hidden="true" data-icon="inline-start" />
 								添加 Secret
 							</Button>
-						</fieldset>
+						</FormSection>
 					</div>
 				</section>
-				{sourceKind === "standard" ? (
-					<fieldset className="form-section application-model-section">
-						<legend className="font-semibold text-foreground text-lg">
-							模型与推理
-						</legend>
-						<p className="text-muted-foreground text-sm">
-							只展示部署提供且通过目录校验的模型端点。
-						</p>
-						{props.mode === "update" ? (
-							<div className="space-y-2">
-								<Label className="min-h-11 gap-3">
-									<Checkbox
-										id="application-configure-models"
-										aria-describedby={
-											fieldErrors.configureModels
-												? errorId("configureModels")
-												: undefined
-										}
-										aria-invalid={
-											fieldErrors.configureModels ? true : undefined
-										}
-										disabled={props.submitting}
-										checked={configureModels}
-										onCheckedChange={(checked) => {
-											dismissServerFormError();
-											setConfigureModels(checked);
-											if (checked && models.length === 0) {
-												setModels([blankModel()]);
-											}
-										}}
-									/>
-									修改模型配置
-								</Label>
-								<FieldError
-									id={errorId("configureModels")}
-									message={fieldErrors.configureModels}
-								/>
-							</div>
-						) : null}
-						{managedModelEdit ? (
-							<ApplicationKeylessModelEditor
-								current={persistedModelOptions ?? []}
-								currentDefault={{
-									optionId: initialDefaultModelOptionId,
-									level: configuration?.defaultReasoningLevel ?? "",
-								}}
-								disabled={props.submitting}
-								error={fieldErrors.defaultRelayKey}
-								errorId={errorId("defaultRelayKey")}
-								keyCheck={keyCheck}
-								onChangeKey={() => clearFieldErrors("defaultRelayKey")}
-							/>
-						) : null}
-						{modelConfigurationVisible ? (
-							<>
-								{props.mode === "create" ? (
-									<div className="space-y-2">
-										<Label htmlFor="application-default-relay-key">
-											Agent 默认 Relay Key
-										</Label>
-										<Input
-											autoComplete="new-password"
-											aria-describedby={
-												fieldErrors.defaultRelayKey
-													? errorId("defaultRelayKey")
-													: undefined
-											}
-											aria-invalid={
-												fieldErrors.defaultRelayKey ? true : undefined
-											}
-											id="application-default-relay-key"
-											onChange={(event) => {
-												setDefaultRelayKey(event.target.value);
-												clearFieldErrors("defaultRelayKey");
-											}}
-											required
-											type="password"
-											value={defaultRelayKey}
-										/>
-										<p className="text-muted-foreground text-sm">
-											只提交一次；保存后仅显示已设置状态，Key 不会回显。
-										</p>
-										<FieldError
-											id={errorId("defaultRelayKey")}
-											message={fieldErrors.defaultRelayKey}
-										/>
-									</div>
-								) : null}
-								<ModelRows
-									endpoints={modelEndpoints}
-									errors={fieldErrors}
-									models={models}
-									onChange={(index, key, value) => {
-										const nextModels = models.map((item, itemIndex) =>
-											itemIndex !== index
-												? item
-												: key === "endpointId" || key === "modelId"
-													? {
-															...item,
-															[key]: value,
-															...(key === "endpointId"
-																? {
-																		modelId: "",
-																		reasoningLevels: "",
-																		optionId: "",
-																	}
-																: {
-																		optionId:
-																			item.endpointId && value
-																				? optionIdFor(item.endpointId, value)
-																				: "",
-																		reasoningLevels: "",
-																	}),
-														}
-													: { ...item, [key]: value },
-										);
-										setModels(nextModels);
-										const rowErrorKeys = [
-											"endpointId",
-											"modelId",
-											"reasoningLevels",
-										].map((field) => `model.${index}.${field}`);
-										clearFieldErrors(
-											...(key === "endpointId" || key === "modelId"
-												? [
-														...rowErrorKeys,
-														"defaultModelOptionId",
-														"defaultReasoningLevel",
-													]
-												: [`model.${index}.${key}`]),
-										);
-										if (key === "endpointId" || key === "modelId")
-											updateModelSelectionErrors(nextModels);
-										if (key === "endpointId" || key === "modelId")
-											dismissServerValidation();
-									}}
-									onRemove={(index) => {
-										dismissServerFormError();
-										const next = models.filter(
-											(_, itemIndex) => itemIndex !== index,
-										);
-										setModels(next);
-										setFieldErrors((current) => {
-											const nextErrors = reindexRowErrors(
-												current,
-												"model",
-												index,
-											);
-											delete nextErrors.defaultModelOptionId;
-											delete nextErrors.defaultReasoningLevel;
-											recomputeDuplicateModelErrors(nextErrors, next);
-											return nextErrors;
-										});
-										dismissServerValidation();
-									}}
-								/>
-								<div className="form-grid">
-									<div className="space-y-2">
-										<Label htmlFor="application-default-model-option">
-											默认模型
-										</Label>
-										<Select
-											value={defaultModelOptionId}
-											disabled={
-												models.length === 0 || modelEndpoints.length === 0
-											}
-											itemToStringLabel={(value) => {
-												const model = models.find(
-													(item) => item.optionId === value,
-												);
-												const endpoint = model
-													? modelEndpoints.find(
-															(item) => item.endpointId === model.endpointId,
-														)
-													: undefined;
-												return model && endpoint
-													? modelLabel(endpoint, model.modelId)
-													: "已移除模型";
-											}}
-											onValueChange={(value) => {
-												if (!value) return;
-												setDefaultModelOptionId(value);
-												clearFieldErrors(
-													"defaultModelOptionId",
-													"defaultReasoningLevel",
-												);
-												dismissServerValidation();
-											}}
-										>
-											<SelectTrigger
-												id="application-default-model-option"
-												aria-describedby={
-													fieldErrors.defaultModelOptionId
-														? errorId("defaultModelOptionId")
-														: undefined
-												}
-												aria-invalid={
-													fieldErrors.defaultModelOptionId ? true : undefined
-												}
-												className="h-11 w-full text-base md:text-sm"
-											>
-												<SelectValue placeholder="选择默认模型" />
-											</SelectTrigger>
-											<SelectContent>
-												{models
-													.filter((model) => model.optionId)
-													.map((model) => {
-														const endpoint = modelEndpoints.find(
-															(item) => item.endpointId === model.endpointId,
-														);
-														return (
-															<SelectItem
-																key={model.optionId}
-																value={model.optionId}
-															>
-																{endpoint
-																	? modelLabel(endpoint, model.modelId)
-																	: "已移除模型"}
-															</SelectItem>
-														);
-													})}
-											</SelectContent>
-										</Select>
-										<FieldError
-											id={errorId("defaultModelOptionId")}
-											message={fieldErrors.defaultModelOptionId}
-										/>
-									</div>
-									<div className="space-y-2">
-										<Label htmlFor="application-default-reasoning-level">
-											默认推理档位
-										</Label>
-										<Select
-											value={defaultReasoningLevel}
-											disabled={!defaultModelDefinition}
-											onValueChange={(value) => {
-												if (!value) return;
-												setDefaultReasoningLevel(value);
-												clearFieldErrors("defaultReasoningLevel");
-											}}
-										>
-											<SelectTrigger
-												id="application-default-reasoning-level"
-												aria-describedby={
-													fieldErrors.defaultReasoningLevel
-														? errorId("defaultReasoningLevel")
-														: undefined
-												}
-												aria-invalid={
-													fieldErrors.defaultReasoningLevel ? true : undefined
-												}
-												className="h-11 w-full text-base md:text-sm"
-											>
-												<SelectValue placeholder="选择默认推理档位" />
-											</SelectTrigger>
-											<SelectContent>
-												{defaultReasoningLevels.map((value) => (
-													<SelectItem key={value} value={value}>
-														{value}
-													</SelectItem>
-												))}
-											</SelectContent>
-										</Select>
-										<FieldError
-											id={errorId("defaultReasoningLevel")}
-											message={fieldErrors.defaultReasoningLevel}
-										/>
-									</div>
-								</div>
-								<Button
-									variant="outline"
-									id="application-add-model-option"
-									onClick={() => {
-										dismissServerFormError();
-										setModels((current) => [...current, blankModel()]);
-									}}
-									type="button"
-								>
-									<PlusIcon aria-hidden="true" data-icon="inline-start" />
-									添加模型选项
-								</Button>
-							</>
-						) : null}
-					</fieldset>
-				) : null}
 				<div className="form-footer">
 					{props.cancelAction}
 					<div className="form-footer-actions">
@@ -1938,6 +1938,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								: props.mode === "update"
 									? agentApplicationEditActionLabels[props.action]
 									: "提交申请"}
+							{/* 设计 .form-footer 主按钮：16px 箭头在文字后。 */}
+							{props.submitting ? null : (
+								<ArrowRightIcon aria-hidden="true" data-icon="inline-end" />
+							)}
 						</Button>
 					</div>
 				</div>

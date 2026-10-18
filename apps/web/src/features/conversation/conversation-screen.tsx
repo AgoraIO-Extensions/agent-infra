@@ -1,8 +1,10 @@
 import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, ChevronDown, History, Plus } from "lucide-react";
+import { ArrowLeft, History, Plus } from "lucide-react";
 import {
+	type ReactNode,
+	type Ref,
 	useCallback,
 	useId,
 	useLayoutEffect,
@@ -10,17 +12,24 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "../../components/ui/button.js";
-import { getAgentV2 } from "../../pilot/generated-v2/sdk.gen.js";
 import {
-	agentConversationSourceLabel,
-	agentManagementStatusLabels,
-	agentServiceAvailabilityLabel,
-} from "../agent-management-status.js";
+	Alert,
+	AlertAction,
+	AlertDescription,
+	AlertTitle,
+} from "@/components/ui/alert";
+import { Button, buttonVariants } from "../../components/ui/button.js";
+import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
+import { getAgentV2 } from "../../pilot/generated-v2/sdk.gen.js";
+import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import { isAgentConfigurationOwner } from "../agent-configuration/agent-configuration.js";
 import { ActiveConversation } from "./active-conversation.js";
-import { NewConversation, PersonalHistory } from "./conversation-navigation.js";
+import {
+	CreateConversationNotice,
+	NewConversation,
+	PersonalHistory,
+	useCreateConversation,
+} from "./conversation-navigation.js";
 import { ConversationReadError, responseFailure } from "./execution-detail.js";
 import { RecentConversationHistory } from "./recent-conversation-history.js";
 
@@ -28,6 +37,8 @@ export type ConversationScreenProps = {
 	agentId: string;
 	conversationId?: string;
 	identityKey: string;
+	/** 当前登录会话：只用于决定是否显示 Owner 入口，权限仍由 Owner 配置页和服务端校验。 */
+	session?: BrowserSessionProjectionV1;
 	view?: "history" | "conversation";
 	onViewChange?: (view: "history" | "conversation") => void;
 	onConversationChange: (conversationId: string | undefined) => void;
@@ -45,11 +56,107 @@ export function ConversationScreen(props: ConversationScreenProps) {
 	);
 }
 
+const subtitle = "Web 对话 · 已提交的任务会继续处理。";
+
+function ConversationHeader({
+	title,
+	headingRef,
+	actions,
+}: {
+	title: string;
+	headingRef?: Ref<HTMLHeadingElement>;
+	actions?: ReactNode;
+}) {
+	return (
+		<header className="conversation-header">
+			<div className="conversation-heading-copy">
+				<p className="conversation-eyebrow">工作区 / 对话</p>
+				<h1 ref={headingRef} tabIndex={-1}>
+					{title}
+				</h1>
+				<p className="conversation-subtitle">{subtitle}</p>
+			</div>
+			{actions && <div className="conversation-heading-actions">{actions}</div>}
+		</header>
+	);
+}
+
+/** 设计 notice.warn：Agent 不是「可用 + 就绪」时横跨页头下方，说明历史可读、能否继续编辑草稿。 */
+function AgentUnavailableNotice({
+	agent,
+	canManage,
+	onRefresh,
+}: {
+	agent: AgentProjectionV2;
+	canManage: boolean;
+	onRefresh: () => void;
+}) {
+	const readOnly = "可以查看历史，暂时不能发送消息。";
+	const notice: {
+		title: string;
+		description: string;
+		action?: "owner" | "refresh";
+	} =
+		agent.managementStatus === "stopped"
+			? canManage
+				? {
+						title: "已停止",
+						description: "历史会话仍可查看，Owner 可以重启或修改运行配置。",
+						action: "owner",
+					}
+				: { title: "已停止", description: readOnly }
+			: agent.managementStatus === "disabled"
+				? // 已停用的 Agent 不能由 Owner 恢复（PRD §6.3），不给 Owner 入口。
+					{ title: "已停用", description: readOnly }
+				: agent.serviceAvailability === "updating"
+					? {
+							title: "更新中",
+							description: "可以查看历史，草稿仍可编辑；更新完成后才能发送。",
+						}
+					: agent.serviceAvailability === "starting"
+						? {
+								title: "启动中",
+								description: "可以查看历史，草稿仍可编辑；启动完成后才能发送。",
+							}
+						: agent.managementStatus === "creating"
+							? { title: "创建中", description: readOnly }
+							: // 暂时不可用：保留手动重读入口（PRD §6.4 重试提示）。
+								{
+									title: "暂时不可用",
+									description: readOnly,
+									action: "refresh",
+								};
+	return (
+		<Alert role="status" tone="warn" className="conversation-unavailable">
+			<AlertTitle>{notice.title}</AlertTitle>
+			<AlertDescription>{notice.description}</AlertDescription>
+			{notice.action && (
+				<AlertAction>
+					{notice.action === "owner" ? (
+						<Link
+							to="/agents/$agentId/configuration"
+							params={{ agentId: agent.agentId }}
+							className={buttonVariants({ variant: "outline" })}
+						>
+							进入 Owner 操作
+						</Link>
+					) : (
+						<Button variant="outline" onClick={onRefresh}>
+							刷新 Agent 状态
+						</Button>
+					)}
+				</AlertAction>
+			)}
+		</Alert>
+	);
+}
+
 function ConversationWorkspace(props: ConversationScreenProps) {
 	const {
 		agentId,
 		identityKey,
 		conversationId,
+		session,
 		onConversationChange,
 		onAccessDenied,
 	} = props;
@@ -64,6 +171,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 	const [recentOpen, setRecentOpen] = useState(false);
 	const historyPanel = useRef<HTMLElement>(null);
 	const historyToggle = useRef<HTMLButtonElement>(null);
+	const heading = useRef<HTMLHeadingElement>(null);
 	const showHistory =
 		props.view === undefined ? internalHistory : props.view === "history";
 	const historyExpanded = showHistory || recentOpen;
@@ -133,6 +241,22 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 			result.data.serviceAvailability === "ready"
 		);
 	}, [refetchAgent]);
+	const onCreated = useCallback(
+		(id: string) => {
+			setRecentOpen(false);
+			setInternalHistory(false);
+			onConversationChange(id);
+		},
+		[onConversationChange],
+	);
+	// 页头「新会话」一步创建会话并进入可输入的 composer（设计 new-chat）。
+	const creation = useCreateConversation({
+		agentId,
+		identityKey,
+		onCreated,
+		onDenied: deny,
+		verifyAgent,
+	});
 	const deniedCallback = useRef(onAccessDenied);
 	deniedCallback.current = onAccessDenied;
 	useLayoutEffect(() => {
@@ -152,12 +276,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 	if (denied || !identityKey || !agent)
 		return (
 			<section className="chat-layout">
-				<header className="conversation-header">
-					<div className="conversation-heading-copy">
-						<p className="conversation-eyebrow">工作区 / 对话</p>
-						<h1>对话</h1>
-					</div>
-				</header>
+				<ConversationHeader title="对话" />
 				{denied || !identityKey ? (
 					<Alert>
 						<AlertDescription>
@@ -187,107 +306,63 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 	const selfManaged =
 		agent.source.kind === "custom" &&
 		agent.source.interactionMode === "self-managed";
+	const canManage =
+		session !== undefined &&
+		(isAgentConfigurationOwner(agent, session) ||
+			session.user.roles.includes("system_admin"));
 	return (
 		<section className="chat-layout">
+			<ConversationHeader
+				title={agent.name}
+				headingRef={heading}
+				actions={
+					<>
+						<Button
+							variant="outline"
+							ref={historyToggle}
+							className="conversation-history-toggle"
+							aria-expanded={historyExpanded}
+							aria-controls={`${instanceId}-history`}
+							onClick={() => {
+								if (historyExpanded) {
+									setRecentOpen(false);
+									setHistory(false);
+									historyToggle.current?.focus();
+								} else {
+									setRecentOpen(true);
+								}
+							}}
+						>
+							{historyExpanded ? (
+								<ArrowLeft aria-hidden="true" />
+							) : (
+								<History aria-hidden="true" />
+							)}
+							{historyExpanded ? "返回对话" : "个人历史"}
+						</Button>
+						<Button
+							variant="outline"
+							disabled={!available || selfManaged || creation.busy}
+							onClick={() => creation.create()}
+						>
+							<Plus aria-hidden="true" />
+							新会话
+						</Button>
+					</>
+				}
+			/>
+			{!available && (
+				<AgentUnavailableNotice
+					agent={agent}
+					canManage={canManage}
+					onRefresh={() => void agentQuery.refetch()}
+				/>
+			)}
+			{conversationId && !selfManaged && (
+				<CreateConversationNotice creation={creation} />
+			)}
 			<div className="conversation-columns" data-history-open={historyExpanded}>
 				<div className="chat-workspace">
-					<header className="conversation-header">
-						<div className="conversation-heading-copy">
-							<Link
-								to="/agents"
-								search={{ mode: "conversation" }}
-								aria-label="切换 Agent"
-								title="切换 Agent"
-								className="conversation-agent-switch"
-							>
-								<p className="conversation-eyebrow">工作区 / 对话</p>
-								<h1 className="font-semibold text-[26px]">
-									{agent.name}
-									<ChevronDown
-										aria-hidden="true"
-										className="ml-1 inline size-3"
-									/>
-								</h1>
-							</Link>
-							<div className="conversation-agent-status">
-								<span>{agentConversationSourceLabel(agent)}</span>
-								<Badge variant="outline" data-status={agent.managementStatus}>
-									管理：{agentManagementStatusLabels[agent.managementStatus]}
-								</Badge>
-								{agent.serviceAvailability && (
-									<Badge
-										variant="secondary"
-										data-status={agent.serviceAvailability}
-									>
-										服务：
-										{agentServiceAvailabilityLabel(agent.serviceAvailability)}
-									</Badge>
-								)}
-							</div>
-						</div>
-						<div className="conversation-heading-actions">
-							<Button
-								variant="outline"
-								ref={historyToggle}
-								className="conversation-history-toggle"
-								aria-expanded={historyExpanded}
-								aria-controls={`${instanceId}-history`}
-								onClick={() => {
-									if (historyExpanded) {
-										setRecentOpen(false);
-										setHistory(false);
-										historyToggle.current?.focus();
-									} else {
-										setRecentOpen(true);
-									}
-								}}
-							>
-								{historyExpanded ? (
-									<ArrowLeft aria-hidden="true" />
-								) : (
-									<History aria-hidden="true" />
-								)}
-								{historyExpanded ? "返回对话" : "个人历史"}
-							</Button>
-							<Button
-								variant="outline"
-								disabled={!available || selfManaged}
-								onClick={() => {
-									setRecentOpen(false);
-									setInternalHistory(false);
-									onConversationChange(undefined);
-								}}
-							>
-								<Plus aria-hidden="true" />
-								新建会话
-							</Button>
-						</div>
-					</header>
-					{!available && (
-						<Alert role="status" className="mb-5 bg-muted">
-							<AlertDescription>
-								{agent.managementStatus === "stopped"
-									? "Agent 已停止"
-									: agent.managementStatus === "disabled"
-										? "Agent 已停用"
-										: agent.serviceAvailability === "updating"
-											? "Agent 更新中"
-											: agent.serviceAvailability === "starting"
-												? "Agent 启动中"
-												: "Agent 当前不可用"}
-								，历史保持只读
-								{agent.managementStatus === "stopped"
-									? "，请联系 Owner 重启后继续。"
-									: "。"}
-								<Button
-									variant="ghost"
-									onClick={() => void agentQuery.refetch()}
-								>
-									刷新 Agent 状态
-								</Button>
-							</AlertDescription>
-						</Alert>
-					)}
 					{selfManaged ? (
 						<p>此 Agent 使用自有交互入口，请从 Agent 详情进入。</p>
 					) : conversationId ? (
@@ -299,16 +374,10 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 							onDenied={deny}
 							refreshAgent={() => void agentQuery.refetch()}
 							verifyAgent={verifyAgent}
+							focusFallback={heading}
 						/>
 					) : (
-						<NewConversation
-							agentId={agentId}
-							identityKey={identityKey}
-							available={available}
-							onCreated={onConversationChange}
-							onDenied={deny}
-							verifyAgent={verifyAgent}
-						/>
+						<NewConversation available={available} creation={creation} />
 					)}
 				</div>
 				<aside

@@ -1,5 +1,4 @@
 import { Tabs as TabsPrimitive } from "@base-ui/react/tabs";
-import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 function Tabs({
@@ -13,8 +12,8 @@ function Tabs({
 			data-orientation={orientation}
 			orientation={orientation}
 			className={cn(
-				"group/tabs flex gap-2",
-				orientation === "horizontal" && "flex-col",
+				"group/tabs flex",
+				orientation === "horizontal" ? "flex-col" : "gap-2",
 				className,
 			)}
 			{...props}
@@ -22,45 +21,28 @@ function Tabs({
 	);
 }
 
-const tabsListVariants = cva(
-	"group/tabs-list inline-flex w-fit items-center justify-center rounded-none p-[3px] text-muted-foreground data-[variant=line]:rounded-none group-data-horizontal/tabs:h-8 group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col",
-	{
-		variants: {
-			variant: {
-				default: "bg-muted",
-				line: "gap-1 bg-transparent",
-			},
-		},
-		defaultVariants: {
-			variant: "default",
-		},
-	},
-);
-
-function TabsList({
-	className,
-	variant = "default",
-	...props
-}: TabsPrimitive.List.Props & VariantProps<typeof tabsListVariants>) {
+// 设计稿只有一种 Tab 样式（.tabs / .tab）：下划线标签，底边 1px 分隔线。
+function TabsList({ className, ...props }: TabsPrimitive.List.Props) {
 	return (
 		<TabsPrimitive.List
 			data-slot="tabs-list"
-			data-variant={variant}
-			className={cn(tabsListVariants({ variant }), className)}
+			className={cn(
+				"group/tabs-list mb-5 flex w-full max-w-full flex-wrap items-center gap-1 border-border border-b group-data-[orientation=vertical]/tabs:w-fit group-data-[orientation=vertical]/tabs:flex-col group-data-[orientation=vertical]/tabs:border-b-0",
+				className,
+			)}
 			{...props}
 		/>
 	);
 }
 
+// 选中与未选中同为 13px / 650；选中下划线为 --accent-ink，悬停文字变前景色。
+// 焦点环走全局 :focus-visible（2px、offset 3px），不再叠加 1px outline 与 ring；过渡不含 outline。
 function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
 	return (
 		<TabsPrimitive.Tab
 			data-slot="tabs-trigger"
 			className={cn(
-				"relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-none border border-transparent px-1.5 py-0.5 font-medium text-foreground/60 text-xs transition-all hover:text-foreground focus-visible:border-ring focus-visible:outline-1 focus-visible:outline-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 has-data-[icon=inline-end]:pr-1 has-data-[icon=inline-start]:pl-1 aria-disabled:pointer-events-none aria-disabled:opacity-50 group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start group-data-vertical/tabs:py-[calc(--spacing(1.25))] dark:text-muted-foreground dark:hover:text-foreground [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
-				"group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent dark:group-data-[variant=line]/tabs-list:data-active:border-transparent dark:group-data-[variant=line]/tabs-list:data-active:bg-transparent",
-				"data-active:bg-background data-active:text-foreground dark:data-active:border-input dark:data-active:bg-input/30 dark:data-active:text-foreground",
-				"after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-horizontal/tabs:after:inset-x-0 group-data-vertical/tabs:after:inset-y-0 group-data-vertical/tabs:after:-right-1 group-data-horizontal/tabs:after:bottom-[-5px] group-data-horizontal/tabs:after:h-0.5 group-data-vertical/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100",
+				"relative mr-[18px] inline-flex min-h-11 min-w-0 flex-none cursor-pointer items-center justify-center gap-1.5 whitespace-normal border-0 border-transparent border-b-2 bg-transparent px-[2px] py-[9px] font-[650] text-[13px] text-muted-foreground leading-[1.65] transition-[color,background-color,border-color] [overflow-wrap:anywhere] hover:text-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-selected:border-b-[var(--accent-ink)] aria-selected:text-foreground [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
 				className,
 			)}
 			{...props}
@@ -68,14 +50,15 @@ function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
 	);
 }
 
+// 面板不设字号，继承页面正文 15px / 1.65；不加 outline-none，可聚焦面板显示全局焦点环（N-17）。
 function TabsContent({ className, ...props }: TabsPrimitive.Panel.Props) {
 	return (
 		<TabsPrimitive.Panel
 			data-slot="tabs-content"
-			className={cn("flex-1 text-xs/relaxed outline-none", className)}
+			className={cn("flex-1", className)}
 			{...props}
 		/>
 	);
 }
 
-export { Tabs, TabsContent, TabsList, TabsTrigger, tabsListVariants };
+export { Tabs, TabsContent, TabsList, TabsTrigger };

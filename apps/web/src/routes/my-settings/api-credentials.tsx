@@ -3,7 +3,7 @@ import {
 	useLocation,
 	useRouter,
 } from "@tanstack/react-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ApiCredentialsScreen } from "../../features/api-credentials/api-credentials-screen.js";
 import {
 	useApiCredentials,
@@ -25,8 +25,9 @@ export const Route = createFileRoute("/my-settings/api-credentials")({
 });
 
 function ApiCredentialsRoute() {
-	const { identityKey } = useApplicationSession();
+	const { identityKey, session } = useApplicationSession();
 	const router = useRouter();
+	const applicationHeading = useRef<HTMLHeadingElement>(null);
 	const credentials = useApiCredentials({ identityKey });
 	const issue = useIssuePersonalApiCredential();
 	const revoke = useRevokePersonalApiCredential();
@@ -49,9 +50,16 @@ function ApiCredentialsRoute() {
 	const issueApplicationCredential = useIssueOrRotateApplicationCredential();
 
 	return (
-		<main className="platform-content management-content space-y-12">
+		<main className="platform-content management-content">
 			<ApiCredentialsScreen
 				state={credentials.state}
+				subjectName={session.user.displayName}
+				onCreateApplicationCredential={() => {
+					// 应用凭证需要先注册或打开应用：页内跳到应用分区，不发起写请求。
+					const heading = applicationHeading.current;
+					heading?.scrollIntoView({ block: "start" });
+					heading?.focus({ preventScroll: true });
+				}}
 				onRetry={() => void credentials.refetch()}
 				onIssue={async (body) => {
 					const result = await issue.mutateAsync(body);
@@ -101,6 +109,7 @@ function ApiCredentialsRoute() {
 			/>
 			<ApplicationManagementScreen
 				key={identityKey}
+				headingRef={applicationHeading}
 				state={application.state}
 				onRetry={() => void application.refetch()}
 				onOpenApplication={(applicationId) =>

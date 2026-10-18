@@ -1,24 +1,16 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Square } from "lucide-react";
 import {
+	type RefObject,
+	useCallback,
 	useEffect,
 	useId,
 	useLayoutEffect,
-	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useToast } from "@/components/ui/toast";
 import { Button } from "../../components/ui/button.js";
-import { Label } from "../../components/ui/label.js";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "../../components/ui/select.js";
-import { Textarea } from "../../components/ui/textarea.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	type BrowserHandoffActionInputV1,
@@ -27,23 +19,35 @@ import {
 } from "../agent-discovery/browser-handoff-panel.js";
 import { BrowserAuditView } from "./browser-audit-view.js";
 import { BrowserOperationStatus } from "./browser-operation-status.js";
-import type { ConversationCapabilitySelectionV1 } from "./conversation-capability-picker.js";
-import { ConversationCapabilityPickerPanel } from "./conversation-capability-picker-panel.js";
+import {
+	type CapabilityInvocation,
+	capabilityReceiptBusy,
+	capabilityReceiptPhase,
+	capabilityRejectionMessage,
+} from "./conversation-capability-lifecycle.js";
+import { useCapabilityComposer } from "./conversation-capability-menu.js";
+import { CapabilityReceipt } from "./conversation-capability-receipt.js";
 import { CommandNotice } from "./conversation-command-notice.js";
 import type {
 	BrowserCommandBody,
 	ConversationCommandResult,
 } from "./conversation-commands.js";
+import { ConversationComposer } from "./conversation-composer.js";
 import {
 	ConversationFilePicker,
 	useConversationFiles,
 } from "./conversation-files.js";
 import { ConversationExecutionDetails } from "./conversation-screen-details.js";
 import { ConversationMessages } from "./conversation-screen-messages.js";
-import { currentExecution, isTerminal } from "./conversation-screen-state.js";
+import {
+	currentExecution,
+	executionStatus,
+	isTerminal,
+} from "./conversation-screen-state.js";
+import { useConversationCapabilityCatalog } from "./use-conversation-capability-catalog.js";
 import { useConversationCommands } from "./use-conversation-commands.js";
+import { useConversationModelAutosave } from "./use-conversation-model-autosave.js";
 import { useConversationModelSelection } from "./use-conversation-model-selection.js";
-import { useConversationNativeMetadata } from "./use-conversation-native-metadata.js";
 import { useConversationTimeline } from "./use-conversation-timeline.js";
 
 // Readiness is still authoritative on the server; a short bounded poll keeps
@@ -108,6 +112,7 @@ export function ActiveConversation({
 	onDenied,
 	refreshAgent,
 	verifyAgent,
+	focusFallback,
 }: {
 	agentId: string;
 	identityKey: string;
@@ -118,20 +123,22 @@ export function ActiveConversation({
 	refreshAgent: () => void;
 	/** 重新读取 Agent；返回 true 表示 Agent 仍然可用，命令被拒绝就是真的失去了访问权限。 */
 	verifyAgent: () => Promise<boolean>;
+	/** 关闭执行详情且原触发按钮已不存在时的焦点回退目标（页头 h1）。 */
+	focusFallback?: RefObject<HTMLHeadingElement | null>;
 }) {
 	const queryClient = useQueryClient();
+	const toast = useToast();
 	const [selectedExecution, setSelectedExecution] = useState<string>();
 	const executionTrigger = useRef<HTMLButtonElement>(null);
 	const returnExecutionFocus = useRef(false);
-	const conversationTitle = useRef<HTMLHeadingElement>(null);
 	useLayoutEffect(() => {
 		if (selectedExecution || !returnExecutionFocus.current) return;
 		returnExecutionFocus.current = false;
 		const trigger = executionTrigger.current;
 		executionTrigger.current = null;
 		if (trigger?.isConnected && !trigger.disabled) trigger.focus();
-		else conversationTitle.current?.focus();
-	}, [selectedExecution]);
+		else focusFallback?.current?.focus();
+	}, [selectedExecution, focusFallback]);
 	function openExecution(executionId: string) {
 		executionTrigger.current =
 			document.activeElement instanceof HTMLButtonElement
@@ -149,14 +156,16 @@ export function ActiveConversation({
 	const [notice, setNotice] = useState("");
 	const [acceptedExecution, setAcceptedExecution] = useState<string>();
 	const [stopping, setStopping] = useState<string>();
-	const [modelId, setModelId] = useState<string | undefined>();
-	const [reasoning, setReasoning] = useState<string | undefined>();
+	const [selectionDenied, setSelectionDenied] = useState(false);
+	// 本页内受理的命令 / Skill 调用；回执阶段由各自 Execution 的状态推导（CK-01）。
+	const [invocations, setInvocations] = useState<CapabilityInvocation[]>([]);
+	const pendingInvocation =
+		useRef<Omit<CapabilityInvocation, "executionId">>(undefined);
 	const composerId = useId();
 	const composer = useRef<HTMLTextAreaElement>(null);
-	const composing = useRef(false);
-	const action = useRef<
-		"message" | "stop" | "regenerate" | "selection" | "native"
-	>("message");
+	const action = useRef<"message" | "stop" | "regenerate" | "native">(
+		"message",
+	);
 	const handled = useRef<ConversationCommandResult | undefined>(undefined);
 	const conversation = timeline.history?.conversation;
 	// The Conversation stays read-only until its own Session Sandbox is ready
@@ -170,59 +179,46 @@ export function ActiveConversation({
 		timeline.events,
 		acceptedExecution,
 	);
-	const nativeMetadataEnabled = agent.capabilities.nativeMetadata === true;
-	const nativeMetadataCommands = useConversationNativeMetadata({
+	const catalog = useConversationCapabilityCatalog({
 		identityKey,
 		conversationId,
 		executionId: latestExecution,
-		selector: "commands",
-		enabled: nativeMetadataEnabled,
+		enabled: agent.capabilities.nativeMetadata === true,
 	});
-	const nativeMetadataSkills = useConversationNativeMetadata({
-		identityKey,
-		conversationId,
-		executionId: latestExecution,
-		selector: "skills",
-		enabled: nativeMetadataEnabled,
+	function invocationPhase(executionId: string) {
+		return capabilityReceiptPhase(
+			executionStatus(
+				timeline.events,
+				executionId,
+				timeline.history?.messages.findLast(
+					(message) =>
+						message.role === "assistant" && message.executionId === executionId,
+				)?.status,
+			),
+		);
+	}
+	const lastInvocation = invocations.at(-1);
+	const capabilityBusy =
+		lastInvocation !== undefined &&
+		capabilityReceiptBusy(invocationPhase(lastInvocation.executionId));
+	const capability = useCapabilityComposer({
+		catalog,
+		draft,
+		setDraft,
+		textarea: composer,
+		busy: capabilityBusy,
 	});
-	const nativeMetadataCapabilities = useMemo(
-		() => [
-			...nativeMetadataCommands.capabilities,
-			...nativeMetadataSkills.capabilities,
-		],
-		[nativeMetadataCommands.capabilities, nativeMetadataSkills.capabilities],
-	);
-	const nativeMetadataScopeKey = JSON.stringify([
-		identityKey,
-		agentId,
-		conversationId,
-		latestExecution ?? null,
-	]);
-	const nativeMetadataLoading =
-		latestExecution !== undefined &&
-		(nativeMetadataCommands.isPending || nativeMetadataSkills.isPending);
-	const nativeMetadataUnavailable =
-		latestExecution !== undefined &&
-		!nativeMetadataLoading &&
-		!nativeMetadataCommands.available &&
-		!nativeMetadataSkills.available &&
-		(nativeMetadataCommands.isError || nativeMetadataSkills.isError);
-	const nativeMetadataPartiallyUnavailable =
-		latestExecution !== undefined &&
-		!nativeMetadataLoading &&
-		nativeMetadataCommands.available !== nativeMetadataSkills.available;
-	const nativeMetadataReady =
-		latestExecution !== undefined &&
-		nativeMetadataCommands.available &&
-		nativeMetadataSkills.available;
 	const active = Boolean(latestExecution && !isTerminal(status));
+	const capabilityExecution = invocations.some(
+		(item) => item.executionId === latestExecution,
+	);
 	const visibleNotice =
 		notice ||
 		(stopping && stopping === latestExecution
 			? isTerminal(status)
 				? "原回复已结束。"
 				: "停止请求已受理，正在等待停止确认。已发生的外部操作不会自动撤回。"
-			: active && acceptedExecution === latestExecution
+			: active && acceptedExecution === latestExecution && !capabilityExecution
 				? "消息已受理，等待处理结果。"
 				: "");
 	const uncertainExecution = active && status === "unknown";
@@ -241,13 +237,33 @@ export function ActiveConversation({
 		identityKey,
 		enabled: customPlatformAdapter,
 	});
+	const modelSave = useConversationModelAutosave({
+		agentId,
+		conversationId,
+		onSaved: () => void reader.refresh(),
+		onFailed: () => toast("模型设置未保存，请重试；当前任务不受影响"),
+		onDenied: (result) => {
+			if (!result.ambiguous) {
+				setSelectionDenied(true);
+				return;
+			}
+			// 404 与 Agent 已停止同响应：先重读 Agent，确实失去访问权限才闭锁（#2570）。
+			void verifyAgent().then((denialStands) => {
+				if (denialStands) setSelectionDenied(true);
+			});
+		},
+	});
 	const files = useConversationFiles({
 		conversationId,
 		attachmentsEnabled: agent.capabilities.attachments,
 		resultFilesEnabled: agent.capabilities.resultFiles,
 	});
 	const mismatched = Boolean(conversation && conversation.agentId !== agentId);
-	const denied = timeline.status === "denied" || command.isDenied || mismatched;
+	const denied =
+		timeline.status === "denied" ||
+		command.isDenied ||
+		selectionDenied ||
+		mismatched;
 	const denialScope = `${agentId}:${identityKey}:${conversationId}`;
 	const denialScopeRef = useRef(denialScope);
 	const denialHandled = useRef(false);
@@ -332,6 +348,8 @@ export function ActiveConversation({
 		if (available && !wasAvailable.current) void reader.refresh();
 		wasAvailable.current = available;
 	}, [available, reader.refresh]);
+	const capabilityAccepted = capability.accepted;
+	const setCapabilityError = capability.setError;
 	useEffect(() => {
 		const result = command.result;
 		if (!result || result === handled.current) return;
@@ -358,19 +376,24 @@ export function ActiveConversation({
 				setAcceptedExecution(result.receipt.executionId ?? undefined);
 			}
 			void reader.refresh();
-		} else if (result.kind === "selection-updated") {
-			// Keep the confirmed values while the projection refreshes; falling back
-			// to the stale conversation would briefly show and submit the old choice.
-			setNotice("模型选择已保存，从下一条消息开始生效。");
-			void reader.refresh();
 		} else if (result.kind === "native-accepted") {
-			action.current = "native";
-			setNotice(
-				result.outcome === "replayed" ? "能力请求已恢复。" : "能力请求已受理。",
-			);
+			const selected = pendingInvocation.current;
+			pendingInvocation.current = undefined;
+			if (selected)
+				setInvocations((items) => [
+					...items.filter((item) => item.executionId !== result.executionId),
+					{ ...selected, executionId: result.executionId },
+				]);
+			setNotice("");
+			setAcceptedExecution(result.executionId);
+			capabilityAccepted();
 			void reader.refresh();
 		} else if (result.kind === "native-rejected") {
-			setNotice(`能力请求未受理：${result.outcome}`);
+			// 原因只在 composer 内显示一次，选择保留，可移除后重选（CK-02）。
+			pendingInvocation.current = undefined;
+			setCapabilityError(
+				capabilityRejectionMessage(result.outcome, result.reason),
+			);
 		} else if (result.kind === "browser-accepted") {
 			setNotice(
 				result.receipt.outcome === "replayed"
@@ -379,21 +402,27 @@ export function ActiveConversation({
 			);
 			void reader.refresh();
 		}
-	}, [command.result, reader.refresh, refreshAgent]);
+	}, [
+		command.result,
+		reader.refresh,
+		refreshAgent,
+		capabilityAccepted,
+		setCapabilityError,
+	]);
 	const options = customPlatformAdapter
 		? (runtimeSelection.data?.options ?? [])
 		: agent.configuration.modelOptions;
 	const runtimeSelectionUnavailable =
 		customPlatformAdapter && !runtimeSelection.data?.available;
 	const currentModelId =
-		modelId ??
+		modelSave.desired?.modelOptionId ??
 		conversation?.selectedModelOptionId ??
 		(customPlatformAdapter
 			? (runtimeSelection.data?.currentModelOptionId ?? "")
 			: (agent.configuration.defaultModelOptionId ?? ""));
 	const option = options.find((item) => item.optionId === currentModelId);
 	const currentReasoning =
-		reasoning ??
+		modelSave.desired?.reasoningLevel ??
 		conversation?.selectedReasoningLevel ??
 		agent.configuration.defaultReasoningLevel ??
 		"";
@@ -441,6 +470,7 @@ export function ActiveConversation({
 		timeline.status === "unavailable" &&
 		timeline.failure?.kind !== "network" &&
 		timeline.failure?.kind !== "service";
+	// 模型设置保存不进入 commandLocked：保存中草稿仍可编辑，只禁止发送（CK-06）。
 	const draftDisabled =
 		denied ||
 		commandLocked ||
@@ -448,21 +478,17 @@ export function ActiveConversation({
 		conversation?.status === "unavailable" ||
 		readLocked ||
 		(!available && !agentTransitioning);
-	const selectionDirty =
-		(modelId !== undefined &&
-			modelId !== conversation?.selectedModelOptionId) ||
-		(reasoning !== undefined &&
-			reasoning !== conversation?.selectedReasoningLevel);
-	const canSend =
+	const submitReady =
 		!blocked &&
 		!preparing &&
 		!commandLocked &&
-		!selectionDirty &&
+		modelSave.phase === "idle" &&
 		!uncertainExecution &&
 		!(active && stopping === latestExecution) &&
 		(!active || agent.capabilities.supplementaryInstruction) &&
 		!files.uploading &&
-		Boolean(draft.trim());
+		!capabilityBusy;
+	const canSend = submitReady && Boolean(draft.trim());
 	async function send() {
 		if (!canSend) return;
 		if (customPlatformAdapter) {
@@ -489,6 +515,23 @@ export function ActiveConversation({
 			setNotice("");
 		}
 	}
+	const invokeCapability = useCallback(
+		(
+			body: Parameters<typeof command.invokeCapability>[0],
+			selected: Omit<CapabilityInvocation, "executionId">,
+		) => {
+			if (!command.invokeCapability(body)) return;
+			action.current = "native";
+			pendingInvocation.current = {
+				kind: selected.kind,
+				name: selected.name,
+				source: selected.source,
+				version: selected.version,
+			};
+			setNotice("");
+		},
+		[command.invokeCapability],
+	);
 	function regenerate(messageId: string) {
 		if (blocked || preparing || commandLocked || active) return;
 		if (command.regenerate(messageId)) {
@@ -502,65 +545,15 @@ export function ActiveConversation({
 				<AlertDescription>访问权限已失效。</AlertDescription>
 			</Alert>
 		);
+	const modelSelectable =
+		agent.capabilities.modelSelection &&
+		(!customPlatformAdapter || runtimeSelection.data?.available);
 	return (
 		<>
-			{latestExecution &&
-				(nativeMetadataUnavailable ||
-					nativeMetadataPartiallyUnavailable ||
-					(nativeMetadataReady && nativeMetadataCapabilities.length > 0)) && (
-					<div aria-live="polite">
-						{nativeMetadataUnavailable && (
-							<Alert role="status">
-								<AlertDescription>
-									当前执行的命令或 Skill 暂不可用，已隐藏旧数据。
-								</AlertDescription>
-							</Alert>
-						)}
-						{nativeMetadataPartiallyUnavailable && (
-							<Alert role="status">
-								<AlertDescription>
-									部分命令或 Skill 目录暂不可用，已隐藏对应旧数据。
-								</AlertDescription>
-							</Alert>
-						)}
-						{nativeMetadataReady && nativeMetadataCapabilities.length > 0 && (
-							<ConversationCapabilityPickerPanel
-								key={nativeMetadataScopeKey}
-								capabilities={nativeMetadataCapabilities}
-								scopeKey={nativeMetadataScopeKey}
-								disabled={!available}
-								onConfirm={(selection: ConversationCapabilitySelectionV1) => {
-									if (!selection.capabilityId || !selection.directoryRevision)
-										return;
-									command.invokeCapability({
-										capabilityId: selection.capabilityId,
-										directoryRevision: selection.directoryRevision,
-										parameters: selection.parameterText,
-									});
-								}}
-							/>
-						)}
-					</div>
-				)}
 			<div
 				hidden={Boolean(selectedExecution)}
 				className="chat-thread space-y-5"
 			>
-				<div className="chat-status flex flex-wrap items-center justify-between gap-2">
-					<h2 ref={conversationTitle} tabIndex={-1} className="font-medium">
-						{conversation?.title || "新会话"}
-					</h2>
-					<Button
-						variant="ghost"
-						disabled={timeline.status === "loading"}
-						onClick={() => {
-							void reader.refresh();
-							refreshAgent();
-						}}
-					>
-						刷新会话
-					</Button>
-				</div>
 				{timeline.status === "loading" && !timeline.history && (
 					<p role="status">正在读取会话…</p>
 				)}
@@ -587,99 +580,6 @@ export function ActiveConversation({
 						</AlertDescription>
 					</Alert>
 				)}
-				{agent.capabilities.modelSelection &&
-					(!customPlatformAdapter || runtimeSelection.data?.available) && (
-						<fieldset
-							className="model-controls"
-							disabled={blocked || commandLocked}
-						>
-							<legend className="sr-only">下一条消息的模型</legend>
-							<div className="min-w-0 space-y-1">
-								<Label className="sr-only" htmlFor={`${composerId}-model`}>
-									模型
-								</Label>
-								<Select
-									disabled={blocked || commandLocked}
-									value={currentModelId || null}
-									itemToStringLabel={(value) =>
-										(!option && value === currentModelId
-											? "当前选项已移除"
-											: options.find((item) => item.optionId === value)
-													?.displayName) ?? String(value)
-									}
-									onValueChange={(value) => {
-										if (!value) return;
-										setModelId(value);
-										setReasoning(
-											options.find((item) => item.optionId === value)
-												?.reasoningLevels[0],
-										);
-									}}
-								>
-									<SelectTrigger
-										id={`${composerId}-model`}
-										className="min-h-11 w-full text-base md:text-sm"
-									>
-										<SelectValue placeholder="请选择模型" />
-									</SelectTrigger>
-									<SelectContent>
-										{!option && currentModelId && (
-											<SelectItem value={currentModelId} disabled>
-												当前选项已移除
-											</SelectItem>
-										)}
-										{options.map((item) => (
-											<SelectItem key={item.optionId} value={item.optionId}>
-												{item.displayName}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							</div>
-							<div className="min-w-0 space-y-1">
-								<Label className="sr-only" htmlFor={`${composerId}-reasoning`}>
-									推理强度
-								</Label>
-								<Select
-									disabled={blocked || commandLocked}
-									value={currentReasoning || null}
-									onValueChange={(value) => setReasoning(value ?? undefined)}
-								>
-									<SelectTrigger
-										id={`${composerId}-reasoning`}
-										className="min-h-11 w-full text-base md:text-sm"
-									>
-										<SelectValue placeholder="请选择推理强度" />
-									</SelectTrigger>
-									<SelectContent>
-										{option?.reasoningLevels.map((value) => (
-											<SelectItem key={value} value={value}>
-												{value}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							</div>
-							<Button
-								type="button"
-								variant="default"
-								className="model-save"
-								hidden={!selectionDirty}
-								disabled={!option?.reasoningLevels.includes(currentReasoning)}
-								onClick={() => {
-									if (
-										command.selectModel({
-											modelOptionId: currentModelId,
-											reasoningLevel: currentReasoning,
-										})
-									)
-										action.current = "selection";
-								}}
-							>
-								保存模型选择
-							</Button>
-						</fieldset>
-					)}
 				{timeline.history && (
 					<ConversationMessages
 						agentName={agent.name}
@@ -699,9 +599,21 @@ export function ActiveConversation({
 						earlierLoading={timeline.earlierLoading}
 						earlierFailure={timeline.earlierFailure !== null}
 						onLoadEarlier={() => void reader.loadEarlier()}
+						trailing={invocations.map((invocation) => (
+							<CapabilityReceipt
+								key={invocation.executionId}
+								invocation={invocation}
+								phase={invocationPhase(invocation.executionId)}
+								onDetails={() => openExecution(invocation.executionId)}
+								onVerify={() => {
+									void reader.refresh();
+									openExecution(invocation.executionId);
+								}}
+							/>
+						))}
 					/>
 				)}
-				{uncertainExecution && (
+				{uncertainExecution && !capabilityExecution && (
 					<p role="status">
 						原执行结果待核实，同会话暂不能发送下一条消息。
 						<Button
@@ -756,110 +668,77 @@ export function ActiveConversation({
 					pending={command.isPending}
 					retry={command.canRetry ? () => command.retry() : undefined}
 				/>
-				{selectionDirty && (
-					<p role="status" className="text-sm">
-						请先保存模型选择，再发送消息。
-					</p>
-				)}
 				{agent.capabilities.modelSelection && !option && currentModelId && (
 					<p className="text-muted-foreground text-sm">
 						原模型选项已移除；提交消息时，标准模板将使用 Owner
 						的默认选项。你也可以刷新并重新选择。
 					</p>
 				)}
-				<form
-					className="composer-zone composer"
-					data-c02-guard="pending-submit"
-					data-c02-session-id={conversation?.conversationId ?? conversationId}
-					data-c02-message-count={String(
-						timeline.history?.messages.length ?? 0,
-					)}
-					data-pending-submit={command.isPending ? "true" : "false"}
-					onSubmit={(event) => {
-						event.preventDefault();
-						send();
-					}}
-				>
-					<ConversationFilePicker
-						attachmentsEnabled={agent.capabilities.attachments}
-						limits={files.limits}
-						limitsError={files.limitsError}
-						uploads={files.uploads}
-						onSelect={(selected) => void files.addFiles(selected)}
-						onRemove={files.remove}
-						onRetry={files.retry}
-					/>
-					<Label className="sr-only" htmlFor={composerId}>
-						消息
-					</Label>
-					<Textarea
-						ref={composer}
-						id={composerId}
-						rows={3}
-						value={draft}
-						disabled={draftDisabled}
-						placeholder={`给 ${agent.name} 发一条消息…`}
-						onFocus={(event) => {
-							const input = event.currentTarget;
-							const bounds = input.getBoundingClientRect();
-							// Browsers may reveal only the caret when returning from execution details.
-							if (bounds.top < 0 || bounds.bottom > window.innerHeight)
-								input.scrollIntoView({ block: "nearest" });
-						}}
-						onChange={(event) => setDraft(event.target.value)}
-						onCompositionStart={() => {
-							composing.current = true;
-						}}
-						onCompositionEnd={() => {
-							composing.current = false;
-						}}
-						onKeyDown={(event) => {
-							if (
-								event.key === "Enter" &&
-								!event.shiftKey &&
-								!event.nativeEvent.isComposing &&
-								event.keyCode !== 229 &&
-								!composing.current
-							) {
-								event.preventDefault();
-								send();
-							}
-						}}
-					/>
-
-					<div className="composer-controls">
-						<p className="text-muted-foreground text-xs">
-							Enter 发送 · Shift + Enter 换行
-						</p>
-						<div className="composer-actions flex gap-2">
-							{active && (
-								<Button
-									type="button"
-									variant="outline"
-									disabled={
-										blocked || commandLocked || stopping === latestExecution
-									}
-									onClick={() => {
+				<ConversationComposer
+					composerId={composerId}
+					textarea={composer}
+					draft={draft}
+					draftDisabled={draftDisabled}
+					submitReady={submitReady}
+					invokeReady={!active}
+					sendLabel={
+						active &&
+						agent.capabilities.supplementaryInstruction &&
+						!capabilityExecution
+							? "发送补充指令"
+							: "发送"
+					}
+					capability={capability}
+					model={
+						modelSelectable
+							? {
+									options,
+									modelId: currentModelId,
+									reasoning: currentReasoning,
+									disabled: blocked || commandLocked,
+									phase: modelSave.phase,
+									saved: modelSave.saved,
+									onChoose: modelSave.choose,
+									onRetry: () => void modelSave.retry(),
+								}
+							: undefined
+					}
+					modelFailure={modelSave.failure}
+					stop={
+						active
+							? {
+									label: stopping === latestExecution ? "正在停止" : "停止回复",
+									disabled:
+										blocked || commandLocked || stopping === latestExecution,
+									onStop: () => {
 										if (command.stop()) action.current = "stop";
-									}}
-								>
-									<Square aria-hidden="true" />
-									{stopping === latestExecution ? "正在停止" : "停止回复"}
-								</Button>
-							)}
-							<Button
-								type="submit"
-								data-c02-send-button="send"
-								disabled={!canSend}
-							>
-								<ArrowUp aria-hidden="true" />
-								{active && agent.capabilities.supplementaryInstruction
-									? "发送补充指令"
-									: "发送"}
-							</Button>
-						</div>
-					</div>
-				</form>
+									},
+								}
+							: undefined
+					}
+					attachments={
+						<ConversationFilePicker
+							attachmentsEnabled={agent.capabilities.attachments}
+							limits={files.limits}
+							limitsError={files.limitsError}
+							uploads={files.uploads}
+							onSelect={(selected) => void files.addFiles(selected)}
+							onRemove={files.remove}
+							onRetry={files.retry}
+						/>
+					}
+					formAttributes={{
+						"data-c02-guard": "pending-submit",
+						"data-c02-session-id":
+							conversation?.conversationId ?? conversationId,
+						"data-c02-message-count": String(
+							timeline.history?.messages.length ?? 0,
+						),
+						"data-pending-submit": command.isPending ? "true" : "false",
+					}}
+					onSendMessage={() => void send()}
+					onInvokeCapability={invokeCapability}
+				/>
 			</div>
 			{selectedExecution && (
 				<ConversationExecutionDetails

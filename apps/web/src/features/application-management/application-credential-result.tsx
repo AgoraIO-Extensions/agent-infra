@@ -2,7 +2,10 @@ import { useId } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Timestamp } from "@/components/ui/timestamp";
+import type { TimestampStyle } from "@/lib/format-time";
 import { personalApiCredentialScopeLabels } from "../api-credentials/api-credentials.js";
+import { type DirectoryNames, DirectoryNameText } from "../directory-names.js";
 import type { ApplicationCredentialResponse } from "./application-management.js";
 
 const deliveryLabels: Record<
@@ -16,15 +19,22 @@ const deliveryLabels: Record<
 	unknown: "投递结果未知",
 };
 
-function dateLabel(value: string | null, empty: string) {
-	return value ? new Date(value).toLocaleString("zh-CN") : empty;
+function dateLabel(
+	value: string | null,
+	empty: string,
+	style?: TimestampStyle,
+) {
+	return value ? <Timestamp value={value} style={style} /> : empty;
 }
 
 export function ApplicationCredentialResult({
 	result,
+	names,
 	onPrepareRotation,
 }: {
 	result: ApplicationCredentialResponse;
+	/** 页面级目录读取结果，用于把接收用户显示为姓名。 */
+	names: DirectoryNames;
 	onPrepareRotation?: () => void;
 }) {
 	const headingId = useId();
@@ -32,20 +42,19 @@ export function ApplicationCredentialResult({
 	return (
 		<section
 			aria-labelledby={headingId}
-			className="space-y-4 rounded border bg-card p-5"
+			className="space-y-4 rounded-[12px] border bg-card p-5"
 		>
 			<div className="flex flex-wrap items-center justify-between gap-3">
-				<h2 id={headingId} className="font-semibold text-base">
+				<h3 id={headingId} className="font-semibold text-base">
 					应用凭证结果
-				</h2>
+				</h3>
 				<Badge
-					variant="outline"
-					data-status={
+					tone={
 						delivery.status === "accepted"
-							? "available"
+							? "green"
 							: delivery.status === "failed"
-								? "disabled"
-								: "pending"
+								? "red"
+								: "gray"
 					}
 				>
 					{deliveryLabels[delivery.status]}
@@ -58,8 +67,10 @@ export function ApplicationCredentialResult({
 				凭证材料通过受控通道投递，管理页面不会显示凭证值。
 			</p>
 			{delivery.status === "unknown" || delivery.status === "failed" ? (
+				// 失败用 role="alert"；结果未知时相邻的回执已在播报，这里不再设 live 角色。
 				<Alert
-					variant={delivery.status === "failed" ? "destructive" : "default"}
+					tone={delivery.status === "failed" ? "danger" : "warn"}
+					role={delivery.status === "failed" ? "alert" : undefined}
 				>
 					<AlertDescription>
 						{delivery.status === "unknown"
@@ -92,7 +103,7 @@ export function ApplicationCredentialResult({
 				</div>
 				<div>
 					<dt>过期时间</dt>
-					<dd>{dateLabel(metadata.expiresAt, "无到期时间")}</dd>
+					<dd>{dateLabel(metadata.expiresAt, "无到期时间", "absolute")}</dd>
 				</div>
 				<div>
 					<dt>签发时间</dt>
@@ -109,8 +120,19 @@ export function ApplicationCredentialResult({
 				<div>
 					<dt>接收者</dt>
 					<dd>
-						{delivery.recipient.principalType === "user" ? "用户" : "应用"} ·{" "}
-						<code>{delivery.recipient.principalId}</code>
+						{delivery.recipient.principalType === "user" ? (
+							<>
+								用户 ·{" "}
+								<DirectoryNameText
+									name={names.resolve(delivery.recipient.principalId)}
+									status={names.status}
+								/>
+							</>
+						) : (
+							<>
+								应用 · <code>{delivery.recipient.principalId}</code>
+							</>
+						)}
 					</dd>
 				</div>
 				<div>

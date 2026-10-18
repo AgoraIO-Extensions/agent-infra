@@ -37,6 +37,10 @@ import {
 } from "./schema.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
+type ReadTransaction = Parameters<
+	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
+>[0];
+
 export type AgentConfigurationQueryIntentV1 =
 	| "discover"
 	| "manage"
@@ -116,6 +120,8 @@ export interface AgentRuntimePresentationQueryInputV1 {
 	readonly actorId: string;
 	readonly organizationIds: readonly string[];
 	readonly isAdministrator: boolean;
+	/** Personal API metadata uses explicit grants, independently of browser discovery. */
+	readonly intent?: "discover" | "api_metadata";
 	/** Resolved by the authenticated Platform identity adapter; never inferred from ownership. */
 	readonly accountStatus: "active" | "disabled" | "revoked";
 	readonly expected: AgentRuntimePresentationExpectationV1;
@@ -131,6 +137,25 @@ export class PostgresAgentConfigurationQueryV1 {
 	constructor(options: PostgresAgentConfigurationOptionsV1) {
 		this.#client = postgres(options.databaseUrl, { max: 10 });
 		this.#database = drizzle(this.#client);
+	}
+
+	async #apiMetadataGrants(
+		transaction: ReadTransaction,
+		agentId: string,
+		actorId: string,
+	) {
+		const grants = await transaction
+			.select({ grantType: agentPrincipalGrants.grantType })
+			.from(agentPrincipalGrants)
+			.where(
+				and(
+					eq(agentPrincipalGrants.agentId, agentId),
+					eq(agentPrincipalGrants.principalType, "user"),
+					eq(agentPrincipalGrants.principalId, actorId),
+					isNull(agentPrincipalGrants.revokedAt),
+				),
+			);
+		return grants.map(({ grantType }) => grantType);
 	}
 
 	/** Bounded facts for the separate deployment release policy; grants no Owner authority. */
@@ -410,6 +435,9 @@ export class PostgresAgentConfigurationQueryV1 {
 	): Promise<AgentRuntimePresentationQueryResultV1> {
 		try {
 			if (
+				(input.intent !== undefined &&
+					input.intent !== "discover" &&
+					input.intent !== "api_metadata") ||
 				!validateText(input.agentId) ||
 				!validateText(input.actorId) ||
 				(input.accountStatus !== "active" &&
@@ -424,6 +452,7 @@ export class PostgresAgentConfigurationQueryV1 {
 			const expected = snapshotAgentRuntimePresentationExpectationV1(
 				input.expected,
 			);
+			const apiMetadataRequested = input.intent === "api_metadata";
 			const actor = {
 				schemaVersion: 1 as const,
 				userId: input.actorId,
@@ -440,9 +469,20 @@ export class PostgresAgentConfigurationQueryV1 {
 						transaction,
 						input.agentId,
 					);
+					if (!management) return { outcome: "unavailable" };
+					const apiMetadata = apiMetadataRequested
+						? {
+								agentId: input.agentId,
+								userId: actor.userId,
+								grantTypes: await this.#apiMetadataGrants(
+									transaction,
+									input.agentId,
+									actor.userId,
+								),
+							}
+						: undefined;
 					if (
-						!management ||
-						!isAgentRuntimePresentationVisibleV1(management, actor)
+						!isAgentRuntimePresentationVisibleV1(management, actor, apiMetadata)
 					)
 						return { outcome: "unavailable" };
 					const [current] = await transaction
@@ -576,6 +616,7 @@ export class PostgresAgentConfigurationQueryV1 {
 					return decideAgentRuntimePresentationV1({
 						agentId: input.agentId,
 						actor,
+						...(apiMetadata === undefined ? {} : { apiMetadata }),
 						expected,
 						facts: {
 							management,
@@ -688,22 +729,12 @@ export class PostgresAgentConfigurationQueryV1 {
 							: input.organizationIds.includes(target.organizationId),
 					);
 					if (input.intent === "api_metadata") {
-						const grants = await transaction
-							.select({ grantType: agentPrincipalGrants.grantType })
-							.from(agentPrincipalGrants)
-							.where(
-								and(
-									eq(agentPrincipalGrants.agentId, input.agentId),
-									eq(agentPrincipalGrants.principalType, "user"),
-									eq(agentPrincipalGrants.principalId, input.actorId),
-									isNull(agentPrincipalGrants.revokedAt),
-								),
-							);
-						if (
-							!isPersonalApiAgentMetadataReadAllowedV1(
-								grants.map(({ grantType }) => grantType),
-							)
-						) {
+						const grants = await this.#apiMetadataGrants(
+							transaction,
+							input.agentId,
+							input.actorId,
+						);
+						if (!isPersonalApiAgentMetadataReadAllowedV1(grants)) {
 							return { outcome: "unavailable" };
 						}
 					} else if (

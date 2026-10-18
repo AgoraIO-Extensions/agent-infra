@@ -41,6 +41,7 @@ export function ConversationMessages({
 	earlierLoading,
 	earlierFailure,
 	onLoadEarlier,
+	trailing,
 }: {
 	agentName: string;
 	history: ConversationDetailProjectionV2;
@@ -55,6 +56,8 @@ export function ConversationMessages({
 	earlierLoading: boolean;
 	earlierFailure: boolean;
 	onLoadEarlier: () => void;
+	/** 消息流末尾的附加内容（例如命令 / Skill 调用回执），随时间线一起滚动。 */
+	trailing?: ReactNode;
 }) {
 	const [versions, setVersions] = useState<Record<string, string>>({});
 	const userMessages = history.messages.filter((item) => item.role === "user");
@@ -291,6 +294,7 @@ export function ConversationMessages({
 						原模型选项已移除，此条消息已使用 Owner 的默认选项。
 					</p>
 				))}
+			{trailing}
 		</section>
 	);
 }

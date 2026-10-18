@@ -1,7 +1,12 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
 
-// OpenDesign export index.html SHA-256:
-// c278d81ade83e5e2237d852cbca1f9930759652811ddd6ef99fef099a4405940
+// OpenDesign 导出包（DESIGN-MANIFEST.json，决策 X-04，2026-10-16）SHA-256：
+// index.html（canonical）
+// f66a8694aecee90322161e9a31d682073919ae846d488312e225edf03232aaaf
+// login.html（supporting，登录页）
+// 6e04830eb0aac86e7ffea6dc6f3db0faab7942e2379c6230efe0512519d0c0a7
+// DESIGN.md
+// 162e8fb0c381cb96da71a0f838c8ce80b7076ebb6b08071cc2845961e481da18
 export const designViewports = [
 	{ width: 360, height: 800 },
 	{ width: 390, height: 844 },

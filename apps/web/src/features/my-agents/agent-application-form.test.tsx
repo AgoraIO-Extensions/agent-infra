@@ -2119,3 +2119,76 @@ describe("AgentApplicationForm editing the models of a default-Key application (
 		expect(screen.getByRole("combobox", { name: "模型端点" })).toBeTruthy();
 	});
 });
+
+describe("AgentApplicationForm design alignment", () => {
+	// M-08 / N-11 / NI-50：DOM 顺序即视觉顺序，模型与推理在高级配置之前。
+	it("orders sections as basics, scope, model, advanced and footer in the DOM", () => {
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		const fields = document.querySelector(".application-form-fields");
+		if (!fields) throw new Error("application fields missing");
+		const order = Array.from(fields.children).map((child) =>
+			child.matches(".form-footer")
+				? "footer"
+				: (child.querySelector("h2")?.textContent ?? child.tagName),
+		);
+		expect(order).toEqual([
+			"基本信息",
+			"共同 Owner 与使用范围",
+			"模型与推理",
+			"高级配置",
+			"footer",
+		]);
+		// 模型区的控件都排在「展开高级配置」之前。
+		const toggle = screen.getByRole("button", { name: "展开高级配置" });
+		const addModel = screen.getByRole("button", { name: "添加模型选项" });
+		expect(
+			addModel.compareDocumentPosition(toggle) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
+	// M-09：字段错误 12px / --danger-ink / polite，与控件关联并聚焦首个错误字段。
+	it("announces field errors politely and links them to the invalid control", () => {
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		const name = screen.getByLabelText("Agent 名称");
+		expect(name.getAttribute("aria-invalid")).toBe("true");
+		const errorId = name.getAttribute("aria-describedby");
+		const error = errorId ? document.getElementById(errorId) : null;
+		expect(error?.textContent).toBe("请输入 Agent 名称。");
+		expect(error?.getAttribute("aria-live")).toBe("polite");
+		expect(error?.className).toContain("field-error");
+		expect(error?.className).toContain("text-(--danger-ink)");
+		expect(error?.className).toContain("text-[12px]");
+		expect(document.activeElement).toBe(name);
+	});
+
+	// M-10 决策前：没有渠道分区与保存草稿；主按钮文案保持 PRD 用语并带箭头。
+	it("keeps the footer to cancel and one submit action without channels or drafts", () => {
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		expect(screen.queryByRole("heading", { name: "渠道" })).toBeNull();
+		expect(screen.queryByRole("button", { name: /保存草稿/ })).toBeNull();
+		const submit = screen.getByRole("button", { name: "提交申请" });
+		const icon = submit.querySelector("svg");
+		expect(icon?.getAttribute("aria-hidden")).toBe("true");
+		expect(submit.lastElementChild).toBe(icon);
+	});
+});

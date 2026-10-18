@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Field } from "@/components/ui/field";
+import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -130,94 +132,88 @@ export function ApplicationMaterialGovernance() {
 	}
 
 	return (
-		<section
-			aria-labelledby="application-material-governance-heading"
-			className="detail-section space-y-4 border-border border-t pt-5"
+		<FormSection
+			title="应用凭证材料授权"
+			description="系统管理员可按明确的应用与接收主体 ID 授权或撤销材料。页面只显示授权 metadata，不显示凭证材料。"
 		>
-			<div>
-				<h2
-					id="application-material-governance-heading"
-					className="font-semibold text-foreground text-sm"
-				>
-					应用凭证材料授权
-				</h2>
-				<p className="mt-1 text-muted-foreground text-sm">
-					系统管理员可按明确的应用与接收主体 ID 授权或撤销材料。页面只显示授权
-					metadata，不显示凭证材料。
+			<div className="mt-4 space-y-4">
+				<div className="grid gap-3 md:grid-cols-3">
+					<Field>
+						<Label htmlFor="material-application-id">应用 ID</Label>
+						<Input
+							id="material-application-id"
+							value={applicationId}
+							disabled={busy}
+							onChange={(event) => setApplicationId(event.target.value)}
+						/>
+					</Field>
+					<Field>
+						<Label htmlFor="material-principal-type">接收主体类型</Label>
+						<NativeSelect
+							id="material-principal-type"
+							value={principalType}
+							disabled={busy}
+							onChange={(event) =>
+								setPrincipalType(event.target.value as "user" | "application")
+							}
+						>
+							<NativeSelectOption value="user">用户</NativeSelectOption>
+							<NativeSelectOption value="application">应用</NativeSelectOption>
+						</NativeSelect>
+					</Field>
+					<Field>
+						<Label htmlFor="material-principal-id">接收主体 ID</Label>
+						<Input
+							id="material-principal-id"
+							value={principalId}
+							disabled={busy}
+							onChange={(event) => setPrincipalId(event.target.value)}
+						/>
+					</Field>
+				</div>
+				<p className="text-muted-foreground text-xs">
+					{status === "loading"
+						? "当前授权：读取中…"
+						: status === "active"
+							? "当前授权：有效"
+							: status === "revoked"
+								? "当前授权：已撤销"
+								: status === "absent"
+									? "当前授权：未找到"
+									: status === "unavailable"
+										? "当前授权：暂时无法确认"
+										: "填写应用和接收主体 ID 后读取当前授权。"}
 				</p>
-			</div>
-			<div className="grid gap-3 md:grid-cols-3">
-				<div className="space-y-2">
-					<Label htmlFor="material-application-id">应用 ID</Label>
-					<Input
-						id="material-application-id"
-						value={applicationId}
-						disabled={busy}
-						onChange={(event) => setApplicationId(event.target.value)}
-					/>
-				</div>
-				<div className="space-y-2">
-					<Label htmlFor="material-principal-type">接收主体类型</Label>
-					<NativeSelect
-						id="material-principal-type"
-						value={principalType}
-						disabled={busy}
-						onChange={(event) =>
-							setPrincipalType(event.target.value as "user" | "application")
+				<div className="flex flex-wrap gap-3">
+					<Button
+						disabled={
+							busy ||
+							status === "loading" ||
+							!applicationId.trim() ||
+							!principalId.trim()
 						}
+						onClick={() => void grant()}
 					>
-						<NativeSelectOption value="user">用户</NativeSelectOption>
-						<NativeSelectOption value="application">应用</NativeSelectOption>
-					</NativeSelect>
+						授权材料
+					</Button>
+					<Button
+						variant="outline"
+						disabled={busy || status !== "active"}
+						onClick={() => void revoke()}
+					>
+						撤销材料授权
+					</Button>
 				</div>
-				<div className="space-y-2">
-					<Label htmlFor="material-principal-id">接收主体 ID</Label>
-					<Input
-						id="material-principal-id"
-						value={principalId}
-						disabled={busy}
-						onChange={(event) => setPrincipalId(event.target.value)}
-					/>
-				</div>
+				{message ? (
+					// 失败（status 变为 unavailable）用 role="alert"，确认结果用 role="status"。
+					<Alert
+						tone={status === "unavailable" ? "danger" : "info"}
+						role={status === "unavailable" ? "alert" : "status"}
+					>
+						<AlertDescription>{message}</AlertDescription>
+					</Alert>
+				) : null}
 			</div>
-			<p className="text-muted-foreground text-xs">
-				{status === "loading"
-					? "当前授权：读取中…"
-					: status === "active"
-						? "当前授权：有效"
-						: status === "revoked"
-							? "当前授权：已撤销"
-							: status === "absent"
-								? "当前授权：未找到"
-								: status === "unavailable"
-									? "当前授权：暂时无法确认"
-									: "填写应用和接收主体 ID 后读取当前授权。"}
-			</p>
-			<div className="flex flex-wrap gap-3">
-				<Button
-					disabled={
-						busy ||
-						status === "loading" ||
-						!applicationId.trim() ||
-						!principalId.trim()
-					}
-					onClick={() => void grant()}
-				>
-					授权材料
-				</Button>
-				<Button
-					variant="outline"
-					disabled={busy || status !== "active"}
-					onClick={() => void revoke()}
-				>
-					撤销材料授权
-				</Button>
-			</div>
-			{message ? (
-				<Alert role="status">
-					<AlertDescription>{message}</AlertDescription>
-				</Alert>
-			) : null}
-		</section>
+		</FormSection>
 	);
 }

@@ -1,70 +1,189 @@
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
+import { shortIdentifier } from "@/components/ui/identifier-text";
+import { Timestamp } from "@/components/ui/timestamp";
+import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
+import { type DirectoryNames, DirectoryNameText } from "../directory-names.js";
 import {
 	auditActionLabels,
 	auditOutcomeLabel,
 	auditPrincipalLabels,
-	auditTimestamp,
+	auditResultTone,
+	auditSubjectLabels,
 	taskAuditReasonLabels,
 } from "./audit-labels.js";
 import type { AuditRecord } from "./audit-query.js";
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+/**
+ * 设计 dl.facts 的一对 dt / dd（标签列 150px、13px，dt muted）；
+ * mono 用于 ID 与引用类字段，值缺失时显示「未提供」。
+ */
+function Field({
+	label,
+	mono = false,
+	children,
+}: {
+	label: string;
+	mono?: boolean;
+	children: ReactNode;
+}) {
+	const value = children ?? "未提供";
 	return (
-		<div className="min-w-0">
-			<dt className="text-muted-foreground">{label}</dt>
-			<dd className="mt-1 break-all">{children ?? "未提供"}</dd>
-		</div>
+		<>
+			<dt>{label}</dt>
+			<dd className={mono && children != null ? "font-mono" : undefined}>
+				{value}
+			</dd>
+		</>
 	);
 }
 function Section({ title, children }: { title: string; children: ReactNode }) {
 	return (
 		<section className="border-t py-5">
 			<h3 className="mb-4 font-semibold text-base">{title}</h3>
-			<dl className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
-				{children}
-			</dl>
+			<dl className="review-facts">{children}</dl>
 		</section>
 	);
 }
 
-export function AuditRecordDetail({ record }: { record: AuditRecord }) {
+/** 列表与详情中需要按目录解析的用户主体 ID。 */
+export function auditUserIds(records: readonly AuditRecord[]) {
+	return records.flatMap((record) => [
+		...(record.actor.kind === "user" ? [record.actor.actorId] : []),
+		...(record.originalPrincipal?.kind === "user"
+			? [record.originalPrincipal.id]
+			: []),
+	]);
+}
+
+/**
+ * 审计主体名称：用户显示目录姓名（未解析时附 ID 短形式）；应用、后台组件与未确认主体
+ * 不在目录中，显示类型中文名加等宽 ID 短形式。列表行内不提供展开或复制按钮。
+ */
+export function AuditPrincipalName({
+	kind,
+	id,
+	names,
+}: {
+	kind: AuditRecord["actor"]["kind"];
+	id: string;
+	names: DirectoryNames;
+}) {
+	if (kind !== "user")
+		return (
+			<>
+				{auditPrincipalLabels[kind]}{" "}
+				<code className="font-mono" title={id}>
+					{shortIdentifier(id)}
+				</code>
+			</>
+		);
+	return (
+		<DirectoryNameText
+			name={names.resolve(id)}
+			status={names.status}
+			identifier
+		/>
+	);
+}
+
+/** 详情中的主体：先显示名称，完整 ID 作为等宽次要文字保留以便核对。 */
+function AuditPrincipalDetail({
+	kind,
+	id,
+	names,
+}: {
+	kind: AuditRecord["actor"]["kind"];
+	id: string;
+	names: DirectoryNames;
+}) {
+	return (
+		<>
+			{kind === "user" ? (
+				<DirectoryNameText name={names.resolve(id)} status={names.status} />
+			) : (
+				auditPrincipalLabels[kind]
+			)}
+			<small className="block break-all font-mono text-muted-foreground text-xs">
+				{id}
+			</small>
+		</>
+	);
+}
+
+/** 详情标题：读取成功后为「{事件} · {结果}」。 */
+export function auditDetailHeading(record: AuditRecord) {
+	return `${auditActionLabels[record.action]} · ${auditOutcomeLabel(record)}`;
+}
+
+export function AuditRecordDetail({
+	record,
+	names,
+}: {
+	record: AuditRecord;
+	names: DirectoryNames;
+}) {
 	const fact = record.operation?.fact;
 	const connection = fact?.kind === "tool" ? fact.connection : undefined;
 	return (
 		<div>
-			<div className="mb-5 flex flex-wrap items-center gap-3">
-				<h2 className="font-semibold text-base">
-					{auditActionLabels[record.action]}
-				</h2>
-				<Badge variant="outline" data-result={record.result}>
-					{auditOutcomeLabel(record)}
-				</Badge>
-			</div>
 			<Section title="操作与身份">
+				<Field label="结果">
+					<Badge tone={auditResultTone(record.result)}>
+						{auditOutcomeLabel(record)}
+					</Badge>
+				</Field>
+				<Field label="事件">{auditActionLabels[record.action]}</Field>
 				<Field label="操作摘要">{record.summary}</Field>
-				<Field label="审计 ID">{record.auditId}</Field>
-				<Field label="发生时间">{auditTimestamp(record.occurredAt)}</Field>
+				<Field label="审计 ID" mono>
+					{record.auditId}
+				</Field>
+				<Field label="发生时间">
+					<Timestamp value={record.occurredAt} style="absolute" />
+				</Field>
 				<Field label="可信操作主体">
-					{auditPrincipalLabels[record.actor.kind]} · {record.actor.actorId}
+					<AuditPrincipalDetail
+						kind={record.actor.kind}
+						id={record.actor.actorId}
+						names={names}
+					/>
 				</Field>
 				<Field label="原发起主体">
-					{record.originalPrincipal
-						? `${auditPrincipalLabels[record.originalPrincipal.kind]} · ${record.originalPrincipal.id}`
-						: null}
+					{record.originalPrincipal ? (
+						<AuditPrincipalDetail
+							kind={record.originalPrincipal.kind}
+							id={record.originalPrincipal.id}
+							names={names}
+						/>
+					) : null}
 				</Field>
 				<Field label="实际后台组件">{record.executor}</Field>
-				<Field label="对象类型">{record.subject.kind}</Field>
-				<Field label="对象 ID">{record.subject.subjectId}</Field>
-				<Field label="授权记录引用">{record.authorizationRecordId}</Field>
+				<Field label="对象类型">
+					{auditSubjectLabels[record.subject.kind]}
+				</Field>
+				<Field label="对象 ID" mono>
+					{record.subject.subjectId}
+				</Field>
+				<Field label="授权记录引用" mono>
+					{record.authorizationRecordId}
+				</Field>
 			</Section>
 			<Section title="请求与执行关联">
-				<Field label="请求尝试 ID">{record.requestId}</Field>
-				<Field label="原 Execution ID">{record.executionId}</Field>
-				<Field label="Agent ID">{record.agentId}</Field>
-				<Field label="Conversation ID">{record.conversationId}</Field>
-				<Field label="Trace ID">{record.traceId}</Field>
-				<Field label="动作代码">{record.action}</Field>
+				<Field label="请求尝试 ID" mono>
+					{record.requestId}
+				</Field>
+				<Field label="原 Execution ID" mono>
+					{record.executionId}
+				</Field>
+				<Field label="Agent ID" mono>
+					{record.agentId}
+				</Field>
+				<Field label="Conversation ID" mono>
+					{record.conversationId}
+				</Field>
+				<Field label="Trace ID" mono>
+					{record.traceId}
+				</Field>
 			</Section>
 			{record.taskApi && (
 				<Section title="请求尝试结果">
@@ -90,7 +209,9 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 					<Field label="结果原因">
 						{taskAuditReasonLabels[record.taskApi.reason]}
 					</Field>
-					<Field label="订阅 ID">{record.taskApi.subscriptionId}</Field>
+					<Field label="订阅 ID" mono>
+						{record.taskApi.subscriptionId}
+					</Field>
 				</Section>
 			)}
 			{fact && (
@@ -109,15 +230,27 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 							}[fact.phase]
 						}
 					</Field>
-					<Field label="操作引用">{fact.operationRef}</Field>
-					<Field label="尝试引用">{fact.attemptRef}</Field>
-					<Field label="父操作引用">{fact.parentOperationRef}</Field>
-					<Field label="事件 ID">{record.operation?.eventId}</Field>
+					<Field label="操作引用" mono>
+						{fact.operationRef}
+					</Field>
+					<Field label="尝试引用" mono>
+						{fact.attemptRef}
+					</Field>
+					<Field label="父操作引用" mono>
+						{fact.parentOperationRef}
+					</Field>
+					<Field label="事件 ID" mono>
+						{record.operation?.eventId}
+					</Field>
 					<Field label="开始时间">
-						{fact.startedAt ? auditTimestamp(fact.startedAt) : null}
+						{fact.startedAt ? (
+							<Timestamp value={fact.startedAt} style="absolute" />
+						) : null}
 					</Field>
 					<Field label="完成时间">
-						{fact.finishedAt ? auditTimestamp(fact.finishedAt) : null}
+						{fact.finishedAt ? (
+							<Timestamp value={fact.finishedAt} style="absolute" />
+						) : null}
 					</Field>
 					<Field label="已确认耗时">
 						{fact.durationMs === undefined ? "未采集" : `${fact.durationMs} ms`}
@@ -125,10 +258,20 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 					<Field label="失败或未知原因">{fact.failureCode}</Field>
 					{fact.kind === "model" ? (
 						<>
-							<Field label="模型 ID">{fact.model.modelId}</Field>
-							<Field label="模型选项">{fact.model.modelOptionId}</Field>
-							<Field label="配置版本">{fact.model.configVersion}</Field>
-							<Field label="推理强度">{fact.model.reasoningLevel}</Field>
+							<Field label="模型 ID" mono>
+								{fact.model.modelId}
+							</Field>
+							<Field label="模型选项" mono>
+								{fact.model.modelOptionId}
+							</Field>
+							<Field label="配置版本" mono>
+								{fact.model.configVersion}
+							</Field>
+							<Field label="推理强度">
+								{fact.model.reasoningLevel
+									? reasoningLevelLabel(fact.model.reasoningLevel)
+									: null}
+							</Field>
 							<Field label="输入 Token">
 								{fact.usage?.inputTokens ?? "未采集"}
 							</Field>
@@ -141,16 +284,24 @@ export function AuditRecordDetail({ record }: { record: AuditRecord }) {
 						</>
 					) : (
 						<>
-							<Field label="工具 ID">{fact.toolId}</Field>
-							<Field label="结果引用">{fact.resultRef}</Field>
+							<Field label="工具 ID" mono>
+								{fact.toolId}
+							</Field>
+							<Field label="结果引用" mono>
+								{fact.resultRef}
+							</Field>
 						</>
 					)}
 				</Section>
 			)}
 			{connection && (
 				<Section title="Connection 关联">
-					<Field label="服务引用">{connection.serviceRef}</Field>
-					<Field label="调用引用">{connection.callRef}</Field>
+					<Field label="服务引用" mono>
+						{connection.serviceRef}
+					</Field>
+					<Field label="调用引用" mono>
+						{connection.callRef}
+					</Field>
 					<Field label="核实状态">
 						{connection.verification === "verified"
 							? "关联已核实"

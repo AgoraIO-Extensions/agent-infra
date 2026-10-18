@@ -59,16 +59,22 @@ export function createDeploymentPresentation(input: {
 	const resourceProfile = AgentResourceProfileProjectionV1Schema.parse(
 		input.resourceProfile,
 	);
-	return async ({ agentId, configuration, management }) => {
+	return async ({ agentId, configuration, management, apiUser }) => {
 		const { traceId } = requestMetadata(input.identityScope.currentRequest());
 		// 只读展示：同一个请求里的所有 Agent 共用一次身份解析（#2632）。
-		const identity = await input.identityScope.requestIdentity(traceId);
+		const identity =
+			apiUser === undefined
+				? await input.identityScope.requestIdentity(traceId)
+				: null;
+		const actor = apiUser ?? identity;
+		if (!actor) throw new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
 		const runtime = await input.configurationQuery.readRuntimePresentation({
 			agentId,
-			actorId: identity.userId,
-			organizationIds: identity.organizationIds,
-			isAdministrator: identity.roles.includes("system_admin"),
-			accountStatus: identity.accountStatus,
+			actorId: actor.userId,
+			organizationIds: actor.organizationIds,
+			isAdministrator: identity?.roles.includes("system_admin") === true,
+			accountStatus: actor.accountStatus,
+			...(apiUser === undefined ? {} : { intent: "api_metadata" as const }),
 			expected: { configurationRevision: configuration.revision, management },
 		});
 		if (runtime.outcome === "stale") {
@@ -149,6 +155,7 @@ export function createDeploymentPresentation(input: {
 			browserSource.kind === "custom" &&
 			browserSource.interactionMode === "self-managed" &&
 			browserSource.identityResponsibility === "platform-managed" &&
+			identity !== null &&
 			input.resolveCustomAgentInteractionUrl
 		) {
 			try {

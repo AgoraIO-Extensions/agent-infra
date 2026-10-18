@@ -1,14 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button, buttonVariants } from "@/components/ui/button";
-import {
-	Dialog,
-	DialogClose,
-	DialogContent,
-	DialogDescription,
-	DialogTitle,
-	DialogTrigger,
-} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useResultFocus } from "@/hooks/use-result-focus";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -39,13 +32,13 @@ type AgentLifecycleControlsProps = {
 	session: AdministrationSessionState;
 };
 
-const commandLabels = {
+export const commandLabels = {
 	stop: "停止 Agent",
 	restart: "重启 Agent",
 	retry_creation: "重试创建",
 	disable: "停用 Agent",
 } satisfies Record<AgentLifecycleCommand, string>;
-const commandProgressLabels = {
+export const commandProgressLabels = {
 	stop: "停止中…",
 	restart: "重启中…",
 	retry_creation: "重试创建中…",
@@ -67,7 +60,7 @@ function serviceAvailabilityMessage(
 	return "服务已就绪。";
 }
 
-function visibleLifecycleCommands(
+export function visibleLifecycleCommands(
 	agent: AgentProjectionV2,
 	session: AdministrationSessionState,
 ): AgentLifecycleCommand[] {
@@ -105,30 +98,34 @@ function visibleLifecycleCommands(
 	return commands;
 }
 
-const confirmationCopy = {
+export const confirmationCopy = {
 	stop: {
-		title: "停止 Agent？",
+		title: () => "停止这个 Agent？",
 		description: "停止后暂不能发送消息，个人历史与配置保留。",
-		confirm: "确认停止",
+		confirm: "停止 Agent",
 	},
 	restart: {
-		title: "重新启动 Agent？",
+		title: (agentName: string) => `重启${agentName}？`,
 		description: "重启期间暂不能发送消息，已有历史保留。",
 		confirm: "确认重启",
 	},
 	retry_creation: {
-		title: "重试创建 Agent？",
+		title: () => "重试创建 Agent？",
 		description: "将重新尝试创建 Agent，请在创建完成后确认服务状态。",
 		confirm: "确认重试创建",
 	},
 	disable: {
-		title: "停用 Agent？",
+		title: () => "停用 Agent？",
 		description: "停用将撤销运行资格。Owner 不能恢复，个人历史仍保留。",
 		confirm: "确认停用",
 	},
 } satisfies Record<
 	AgentLifecycleCommand,
-	{ title: string; description: string; confirm: string }
+	{
+		title: (agentName: string) => string;
+		description: string;
+		confirm: string;
+	}
 >;
 
 function LifecycleConfirmation({
@@ -144,41 +141,27 @@ function LifecycleConfirmation({
 	label: string;
 	onCommand: AgentLifecycleControlsProps["onCommand"];
 }) {
-	const [open, setOpen] = useState(false);
 	const copy = confirmationCopy[command];
+	// 停止、停用为 danger；重启、重试创建为 primary。
 	const destructive = command === "stop" || command === "disable";
 	return (
-		<Dialog open={open} onOpenChange={setOpen}>
-			<DialogTrigger
-				disabled={disabled}
-				className={buttonVariants({
-					variant: destructive ? "destructive" : "outline",
-				})}
-			>
-				{label}
-			</DialogTrigger>
-			<DialogContent>
-				<DialogTitle>{copy.title}</DialogTitle>
-				<DialogDescription>{copy.description}</DialogDescription>
-				<p className="mt-5 break-words font-medium">{agentName}</p>
-				<div className="mt-5 flex flex-wrap gap-3">
-					<DialogClose className={buttonVariants({ variant: "outline" })}>
-						取消
-					</DialogClose>
-					<Button
-						variant={destructive ? "destructive" : "default"}
-						disabled={disabled}
-						onClick={() => {
-							if (disabled) return;
-							setOpen(false);
-							onCommand(command);
-						}}
-					>
-						{copy.confirm}
-					</Button>
-				</div>
-			</DialogContent>
-		</Dialog>
+		<ConfirmDialog
+			disabled={disabled}
+			trigger={
+				<Button variant={destructive ? "destructive" : "outline"}>
+					{label}
+				</Button>
+			}
+			title={copy.title(agentName)}
+			subject={{ name: agentName }}
+			description={copy.description}
+			confirmLabel={copy.confirm}
+			tone={destructive ? "danger" : "default"}
+			onConfirm={() => {
+				if (disabled) return;
+				onCommand(command);
+			}}
+		/>
 	);
 }
 
@@ -267,7 +250,7 @@ export function AgentLifecycleControls({
 					</p>
 				) : null}
 				{commandError ? (
-					<Alert>
+					<Alert tone="danger" role="alert">
 						<AlertDescription>
 							{commandError.retryable === false
 								? "权限或 Agent 状态已变化，请刷新页面。"

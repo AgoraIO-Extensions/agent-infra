@@ -1,10 +1,13 @@
 import { WecomApplicationCredentialsV1Schema } from "@agent-infra/contracts/pilot";
+import { Layers } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { withObjectName } from "@/lib/accessible-name";
 import {
 	beginWecomAppSetup,
 	cancelWecomAppSetup,
@@ -12,25 +15,26 @@ import {
 	getWecomAppSetup,
 	submitWecomAppCredentials,
 } from "../../pilot/generated/sdk.gen.js";
-import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
+import {
+	useWecomUnbind,
+	WecomChannelCard,
+	type WecomChannelStatus,
+	WecomUnbindAction,
+	WecomUnbindFailure,
+} from "./wecom-channel-card.js";
 
-const labels = {
-	not_configured: "未配置",
-	callback: "已配置回调模式",
-	verifying: "验证中",
-	connected: "已连接",
-	disconnected: "已断开",
-	auth_failed: "认证失败",
-} as const;
+// 卡片标题即页面上的对象名，用于区分两张企微卡片里的同名按钮（N-12、NI-107）。
+const setupTitle = "企微应用";
 
-type SetupStatus = keyof typeof labels;
+type SetupStatus = WecomChannelStatus;
 
 export function WecomAppSetup({
 	agentId,
-	onUnbind,
+	unbindChannel,
 }: {
 	agentId: string;
-	onUnbind: (body: AgentConfigurationUpdateRequestV2Writable) => void;
+	/** 独立的解绑请求（只含 wecom_app disabled）；未提供时不显示解绑入口。 */
+	unbindChannel?: () => Promise<void>;
 }) {
 	const [corporationId, setCorporationId] = useState("");
 	const [applicationId, setApplicationId] = useState("");
@@ -50,6 +54,7 @@ export function WecomAppSetup({
 	const connectionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
 		undefined,
 	);
+	const titleRef = useRef<HTMLHeadingElement>(null);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: poll reads refs and stable props
 	const refresh = useCallback(async () => {
@@ -87,6 +92,17 @@ export function WecomAppSetup({
 				setStatus(undefined);
 		}
 	}, [agentId]);
+	const unbind = useWecomUnbind({
+		title: setupTitle,
+		unbindChannel,
+		onUnbound: () => {
+			// 服务端已确认解除：先显示未配置，再回读连接状态（请求前不预置未配置）。
+			refreshSequence.current++;
+			setStatus("not_configured");
+			setCallbackUrl("");
+			void refresh();
+		},
+	});
 
 	useEffect(() => {
 		generation.current++;
@@ -263,24 +279,24 @@ export function WecomAppSetup({
 		}
 	}
 
+	const locked = busy || unbind.pending;
+	const submitLabel = busy ? "验证中…" : "验证并绑定";
 	return (
-		<section
-			aria-label="自建应用配置"
-			className="space-y-4 rounded-lg border border-border p-4"
+		<WecomChannelCard
+			icon={Layers}
+			status={status}
+			subtitle="应用入口 · 支持回调验证"
+			title={setupTitle}
+			titleId="wecom-app-title"
+			titleRef={titleRef}
 		>
-			<div className="flex flex-wrap items-center justify-between gap-3">
-				<h3 className="font-semibold">自建应用</h3>
-				<p aria-live="polite" className="text-sm">
-					{status ? labels[status] : "连接状态暂不可用"}
-				</p>
-			</div>
-			{callbackUrl ? (
-				<p className="break-all text-muted-foreground text-sm">
-					请在企微后台配置回调 URL：{callbackUrl}
-				</p>
-			) : null}
-			<div className="grid gap-4 sm:grid-cols-2">
-				<div className="space-y-2">
+			<p className="wecom-channel-copy">
+				{
+					"输入框中的 Secret、Token 和 EncodingAESKey 提交后清空；平台加密保存用于渠道收发。"
+				}
+			</p>
+			<div className="wecom-channel-fields">
+				<Field>
 					<Label htmlFor="wecom-app-corporation-id">企业 ID</Label>
 					<Input
 						id="wecom-app-corporation-id"
@@ -303,11 +319,13 @@ export function WecomAppSetup({
 							{fieldErrors.corporationId}
 						</p>
 					) : null}
-				</div>
-				<div className="space-y-2">
+				</Field>
+				<Field>
 					<Label htmlFor="wecom-app-application-id">应用 ID</Label>
+					{/* Owner 配置同页还有授权目标的「应用 ID」，名称带卡片标题以便区分（N-12）。 */}
 					<Input
 						id="wecom-app-application-id"
+						aria-label={withObjectName("应用 ID", setupTitle)}
 						aria-invalid={!!fieldErrors.applicationId}
 						aria-describedby={
 							fieldErrors.applicationId
@@ -328,8 +346,8 @@ export function WecomAppSetup({
 							{fieldErrors.applicationId}
 						</p>
 					) : null}
-				</div>
-				<div className="space-y-2">
+				</Field>
+				<Field>
 					<Label htmlFor="wecom-app-secret">应用 Secret</Label>
 					<Input
 						id="wecom-app-secret"
@@ -348,8 +366,8 @@ export function WecomAppSetup({
 							{fieldErrors.secret}
 						</p>
 					) : null}
-				</div>
-				<div className="space-y-2">
+				</Field>
+				<Field>
 					<Label htmlFor="wecom-app-token">回调 Token</Label>
 					<Input
 						id="wecom-app-token"
@@ -368,8 +386,8 @@ export function WecomAppSetup({
 							{fieldErrors.token}
 						</p>
 					) : null}
-				</div>
-				<div className="space-y-2 sm:col-span-2">
+				</Field>
+				<Field>
 					<Label htmlFor="wecom-app-encoding-aes-key">EncodingAESKey</Label>
 					<Input
 						id="wecom-app-encoding-aes-key"
@@ -393,12 +411,12 @@ export function WecomAppSetup({
 							{fieldErrors.encodingAesKey}
 						</p>
 					) : null}
-				</div>
+				</Field>
 			</div>
-			<Label className="min-h-11 flex-nowrap items-start gap-3 text-sm leading-6">
+			<Label variant="option" className="items-start">
 				<Checkbox
 					id="wecom-app-takeover"
-					className="mt-1"
+					className="mt-0.5"
 					checked={confirmed}
 					disabled={busy}
 					aria-invalid={!!fieldErrors.takeoverConfirmed}
@@ -416,50 +434,56 @@ export function WecomAppSetup({
 					{fieldErrors.takeoverConfirmed}
 				</p>
 			) : null}
-			<p className="text-muted-foreground text-sm">
-				输入框中的 Secret、Token 和 EncodingAESKey
-				提交后清空；平台加密保存用于渠道收发。
-			</p>
+			{callbackUrl ? (
+				<p className="wecom-channel-callback">
+					<strong>请在企微后台配置回调 URL</strong>
+					{callbackUrl}
+				</p>
+			) : null}
 			{error ? (
-				<Alert variant="destructive">
+				<Alert tone="danger" role="alert">
 					<AlertDescription>{error}</AlertDescription>
 				</Alert>
 			) : null}
-			<div className="flex flex-wrap gap-3">
-				<Button type="button" disabled={busy} onClick={() => void submit()}>
-					{busy ? "验证中…" : "验证并绑定"}
+			<WecomUnbindFailure unbind={unbind} />
+			<div className="wecom-channel-actions">
+				<Button
+					type="button"
+					disabled={locked}
+					aria-label={withObjectName(submitLabel, setupTitle)}
+					onClick={() => void submit()}
+				>
+					{submitLabel}
 				</Button>
 				{busy ? (
-					<Button type="button" variant="outline" onClick={() => void cancel()}>
+					<Button
+						type="button"
+						variant="outline"
+						aria-label={withObjectName("取消配置", setupTitle)}
+						onClick={() => void cancel()}
+					>
 						取消配置
 					</Button>
 				) : null}
 				<Button
 					type="button"
-					variant="outline"
-					disabled={busy}
+					variant="ghost"
+					disabled={locked}
+					aria-label={withObjectName("刷新状态", setupTitle)}
 					onClick={() => void refresh()}
 				>
 					刷新状态
 				</Button>
-				{status && status !== "not_configured" ? (
-					<Button
-						type="button"
-						variant="outline"
-						disabled={busy}
-						onClick={() => {
-							setStatus("not_configured");
-							setCallbackUrl("");
-							onUnbind({
-								schemaVersion: 2,
-								channels: [{ kind: "wecom_app", enabled: false }],
-							});
-						}}
-					>
-						解除应用绑定
-					</Button>
+				{unbind.available && status && status !== "not_configured" && !busy ? (
+					<WecomUnbindAction
+						disabled={locked}
+						kind="app"
+						title={setupTitle}
+						titleRef={titleRef}
+						unbind={unbind}
+					/>
 				) : null}
 			</div>
-		</section>
+		</WecomChannelCard>
 	);
 }

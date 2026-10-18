@@ -1,134 +1,112 @@
-import { FlaskConical, LockKeyhole, MessageSquareText } from "lucide-react";
-import { useState } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Link } from "@tanstack/react-router";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
 	Empty,
+	EmptyContent,
 	EmptyDescription,
 	EmptyHeader,
-	EmptyMedia,
 	EmptyTitle,
 } from "@/components/ui/empty";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-type EvaluationSection = "experiments" | "datasets" | "feedback";
+type EvaluationSection = "datasets" | "experiments" | "feedback";
 
+// 设计 #eval：分段顺序为 评测集 / 实验 / 反馈，默认评测集。评测 API 尚未接入，
+// 每段只显示各自的空态，不展示示例数据（R-03）。
 const sections: Array<{
 	id: EvaluationSection;
 	label: string;
-	title: string;
-	description: string;
+	emptyTitle: string;
+	emptyDescription: string;
 }> = [
+	{
+		id: "datasets",
+		label: "评测集",
+		emptyTitle: "还没有评测集",
+		emptyDescription:
+			"样本和判定标准按版本保存，接入后在这里显示样本数、版本与授权状态。",
+	},
 	{
 		id: "experiments",
 		label: "实验",
-		title: "比较基线与候选配置。",
-		description:
-			"实验会固定数据集、Agent 配置和评分版本，保留每次运行的可追溯结果。",
-	},
-	{
-		id: "datasets",
-		label: "数据集与标准",
-		title: "管理可复用的评测材料。",
-		description:
-			"样本和判定标准按版本保存，修改后以新版本运行，历史结论继续可读。",
+		emptyTitle: "还没有实验",
+		emptyDescription:
+			"实验固定评测集、Agent 配置和评分版本，接入后在这里显示运行进度与逐例复核。",
 	},
 	{
 		id: "feedback",
-		label: "线上反馈",
-		title: "把用户反馈与离线评分分开看。",
-		description:
-			"只统计当前用户自己的任务反馈，不把未反馈当作认可，也不混入离线通过率。",
+		label: "反馈",
+		emptyTitle: "还没有主动反馈",
+		emptyDescription: "反馈只关联当前用户自己的任务。",
 	},
 ];
 
-export function EvaluationWorkbench({
-	userDisplayName,
-	isAdministrator,
-}: {
-	userDisplayName: string;
-	isAdministrator: boolean;
-}) {
-	const [section, setSection] = useState<EvaluationSection>("experiments");
-	const current = sections.find((item) => item.id === section) ?? sections[0];
+const pendingNoteId = "evaluation-pending-note";
 
+export function EvaluationWorkbench() {
 	return (
-		<div className="space-y-8">
+		<section aria-labelledby="evaluation-heading">
 			<header className="page-heading">
 				<div className="min-w-0">
 					<p className="page-eyebrow">系统管理 / 评测</p>
-					<h1>用证据比较 Agent 效果。</h1>
-					<p>
-						{userDisplayName || "当前用户"}{" "}
-						的评测材料、实验和线上反馈将在同一处汇总；正文、凭证和思考不会进入评测摘要。
-					</p>
+					<h1 id="evaluation-heading">评测</h1>
+					<p>按固定数据集比较模型或 Agent 配置，保留逐例结果和人工复核。</p>
 				</div>
-				<Badge variant="outline">
-					{isAdministrator ? "管理员视图" : "个人视图"}
-				</Badge>
+				{/* 评测集写入接口未接入：主操作保留在设计位置，但不可用并指向说明。 */}
+				<Button disabled aria-describedby={pendingNoteId}>
+					创建评测集
+				</Button>
 			</header>
 
-			<nav className="tabs" aria-label="评测区域">
-				{sections.map((item) => (
-					<Button
-						key={item.id}
-						variant={item.id === section ? "outline" : "ghost"}
-						onClick={() => setSection(item.id)}
-						aria-current={item.id === section ? "page" : undefined}
-					>
-						{item.label}
-					</Button>
-				))}
-			</nav>
+			{/* 静态说明，不设 role。 */}
+			<Alert tone="info">
+				<AlertTitle>评测使用独立授权</AlertTitle>
+				<AlertDescription>
+					不会自动读取个人会话；评测样本、输出与评分理由按评测用途单独授权。
+				</AlertDescription>
+			</Alert>
 
-			<section
-				className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]"
-				aria-live="polite"
-			>
-				<div className="rounded-[14px] border bg-card p-6 shadow-sm">
-					<div className="mb-6 flex items-start justify-between gap-4">
-						<div>
-							<p className="page-eyebrow">{current.label}</p>
-							<h2 className="mt-2 font-semibold text-xl">{current.title}</h2>
-							<p className="mt-2 max-w-2xl text-muted-foreground text-sm">
-								{current.description}
-							</p>
-						</div>
-						<FlaskConical
-							className="size-5 text-muted-foreground"
-							aria-hidden="true"
-						/>
-					</div>
-					<Empty className="min-h-56 border">
-						<EmptyHeader>
-							<EmptyMedia variant="icon">
-								<LockKeyhole aria-hidden="true" />
-							</EmptyMedia>
-							<EmptyTitle>评测 API 尚未接入</EmptyTitle>
-							<EmptyDescription>
-								页面入口和状态边界已就绪。等正式数据集、实验和用途授权契约接入后，这里才会显示真实结果。
-							</EmptyDescription>
-						</EmptyHeader>
-					</Empty>
-				</div>
-
-				<aside
-					className="rounded-[14px] border bg-muted/30 p-5"
-					aria-label="评测边界"
-				>
-					<div className="flex items-center gap-2 font-medium">
-						<MessageSquareText className="size-4" aria-hidden="true" />
-						当前边界
-					</div>
-					<ul className="mt-4 space-y-3 text-muted-foreground text-sm">
-						<li>只读取当前主体获准的评测数据。</li>
-						<li>评分失败与业务任务失败分别显示。</li>
-						<li>重新评分不会自动重跑业务任务。</li>
-					</ul>
-					<Button className="mt-6 w-full" disabled title="等待正式评测 API">
-						创建{current.label}
-					</Button>
-				</aside>
-			</section>
-		</div>
+			<div className="evaluation-surface">
+				<Tabs defaultValue="datasets">
+					<TabsList className="evaluation-tabs" aria-label="评测区域">
+						{sections.map((item) => (
+							<TabsTrigger
+								key={item.id}
+								value={item.id}
+								className="evaluation-tab"
+							>
+								{item.label}
+							</TabsTrigger>
+						))}
+					</TabsList>
+					{sections.map((item) => (
+						<TabsContent key={item.id} value={item.id}>
+							<Empty>
+								<EmptyHeader>
+									<EmptyTitle>{item.emptyTitle}</EmptyTitle>
+									<EmptyDescription>{item.emptyDescription}</EmptyDescription>
+								</EmptyHeader>
+								{item.id === "feedback" ? (
+									<EmptyContent>
+										{/* 反馈在对话里提交：先选择 Agent 再进入对话（与导航「对话」一致）。 */}
+										<Link
+											className={buttonVariants({ variant: "outline" })}
+											to="/agents"
+											search={{ mode: "conversation" }}
+										>
+											查看对话反馈
+										</Link>
+									</EmptyContent>
+								) : null}
+							</Empty>
+						</TabsContent>
+					))}
+				</Tabs>
+				<p id={pendingNoteId} className="evaluation-note">
+					评测集读写、真实运行、评分器和逐例复核尚未接入，接入前不能创建评测集，也不会显示示例结果。
+				</p>
+			</div>
+		</section>
 	);
 }

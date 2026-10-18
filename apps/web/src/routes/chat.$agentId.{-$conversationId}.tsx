@@ -23,6 +23,9 @@ function ConversationRoute() {
 				agentId={agentId}
 				conversationId={conversationId}
 				identityKey={identityKey}
+				session={
+					session.state.kind === "ready" ? session.state.session : undefined
+				}
 				view={view ?? "conversation"}
 				onViewChange={(next) => {
 					void navigate({
