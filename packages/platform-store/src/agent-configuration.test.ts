@@ -2234,6 +2234,45 @@ describe("PostgreSQL Agent configuration query", () => {
 		).resolves.toEqual({ outcome: "unavailable" });
 	});
 
+	it("uses current user API grants for runtime presentation without Browser Owner/admin fallback", async () => {
+		const { query, input, state, persist } = await runtimePresentationFixture();
+		await persist(state);
+		const api = {
+			...input,
+			actorId: "api-reader",
+			isAdministrator: false,
+			intent: "api_metadata" as const,
+		};
+		await expect(query.readRuntimePresentation(api)).resolves.toEqual({
+			outcome: "unavailable",
+		});
+		await expect(
+			query.readRuntimePresentation({ ...input, intent: "api_metadata" }),
+		).resolves.toEqual({ outcome: "unavailable" });
+		await expect(
+			query.readRuntimePresentation({ ...api, isAdministrator: true }),
+		).resolves.toEqual({ outcome: "unavailable" });
+		await adminClient`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values('agent_01','application','api-reader','use','api-grant')`;
+		await expect(query.readRuntimePresentation(api)).resolves.toEqual({
+			outcome: "unavailable",
+		});
+		await adminClient`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values('agent_01','user','api-reader','use','api-grant')`;
+		await expect(query.readRuntimePresentation(api)).resolves.toMatchObject({
+			outcome: "found",
+			capabilities: state.capabilities,
+		});
+		await expect(
+			query.readRuntimePresentation({ ...api, actorId: "another-user" }),
+		).resolves.toEqual({ outcome: "unavailable" });
+		await expect(
+			query.readRuntimePresentation({ ...api, accountStatus: "disabled" }),
+		).resolves.toEqual({ outcome: "unavailable" });
+		await adminClient`update platform.agent_principal_grants set revoked_at=clock_timestamp() where principal_type='user' and principal_id='api-reader'`;
+		await expect(query.readRuntimePresentation(api)).resolves.toEqual({
+			outcome: "unavailable",
+		});
+	});
+
 	it("rejects a newer configuration and runtime instead of mixing them into an earlier projection", async () => {
 		const { query, input, configuration, state, persist } =
 			await runtimePresentationFixture();

@@ -12,11 +12,19 @@ import {
 	requireAgentManagementExactKeys,
 	snapshotAgentManagementDataObject,
 } from "./agent-management-input.js";
+import { isPersonalApiAgentMetadataReadAllowedV1 } from "./personal-api-agent-read.js";
 import type {
 	WorkloadBrowserCapabilityProjectionV1,
 	WorkloadReconciliationStateV1,
 	WorkloadSkillCapabilityV1,
 } from "./workload-reconciliation.js";
+
+/** Current explicit grants for the exact user/Agent, resolved by Store. */
+interface ApiMetadataAccess {
+	readonly agentId: string;
+	readonly userId: string;
+	readonly grantTypes: readonly string[];
+}
 
 export interface AgentRuntimePresentationExpectationV1 {
 	readonly configurationRevision: number;
@@ -93,12 +101,18 @@ function isCanonicalHttpsOriginV1(value: unknown): value is string {
 export function isAgentRuntimePresentationVisibleV1(
 	management: AgentManagementStateV1 | null,
 	actor: AgentManagementActorContextV1,
+	apiMetadata?: ApiMetadataAccess,
 ): boolean {
 	return (
 		management !== null &&
 		actor.accountStatus === "active" &&
-		(actor.isAdministrator ||
-			isAgentAccessAllowedV1(management, actor, "discover"))
+		(apiMetadata === undefined
+			? actor.isAdministrator ||
+				isAgentAccessAllowedV1(management, actor, "discover")
+			: apiMetadata?.agentId === management.agentId &&
+				apiMetadata.userId === actor.userId &&
+				Array.isArray(apiMetadata.grantTypes) &&
+				isPersonalApiAgentMetadataReadAllowedV1(apiMetadata.grantTypes))
 	);
 }
 
@@ -124,17 +138,22 @@ export function snapshotAgentRuntimePresentationExpectationV1(
 	};
 }
 
-/** A browser projection must describe one authorized configuration/management snapshot. */
+/** A projection must describe one authorized configuration/management snapshot. */
 export function decideAgentRuntimePresentationV1(input: {
 	readonly agentId: string;
 	readonly actor: AgentManagementActorContextV1;
+	readonly apiMetadata?: ApiMetadataAccess;
 	readonly expected: AgentRuntimePresentationExpectationV1;
 	readonly facts: AgentRuntimePresentationFactsV1 | null;
 }): AgentRuntimePresentationDecisionV1 {
 	const facts = input.facts;
 	if (
 		!facts ||
-		!isAgentRuntimePresentationVisibleV1(facts.management, input.actor)
+		!isAgentRuntimePresentationVisibleV1(
+			facts.management,
+			input.actor,
+			input.apiMetadata,
+		)
 	)
 		return { outcome: "unavailable" };
 	const management = parseAgentManagementPortState(facts.management);
