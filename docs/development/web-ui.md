@@ -9,18 +9,25 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 设计，保留工作区、我的管理、系统管理的职责分组和现有服务端契约。原 #400 原型保留。
 设计项目为 `agent-infra-web-redesign-1208`，对话为 `ab988058-7eb4-4da7-98dc-0d07bdc88c8e`。
 在 OpenDesign 中打开该项目的 `index.html` 可交互预览；`DESIGN.md` 定义视觉规则，
-`IMPLEMENTATION.md` 映射现有页面。落地版本的 SHA-256 为：
+`IMPLEMENTATION.md` 映射现有页面。`DESIGN-MANIFEST.json` 指定 `index.html` 为唯一 canonical，
+`login.html` 为登录页支持稿，`index-v2.html` 仅作历史参考、不参与验收。落地版本的 SHA-256 为：
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `c278d81ade83e5e2237d852cbca1f9930759652811ddd6ef99fef099a4405940` |
-| `DESIGN.md` | `f0d87a857af95f9be912cb832ede9764a521639313f56ef14ff9ce2495904021` |
-| `IMPLEMENTATION.md` | `364e9ffcb2f5b60a5b1974ff2359f63e69423cb5f9c59356cd4e26a2d7ea8111` |
-| `DESIGN-HANDOFF.md` | `25af7c1631e9051b93b25d34c5f4882c5f8b47e04bae9d5ea89dae9ecb7eacda` |
-| `DESIGN-MANIFEST.json` | `1a89acc1289824518ab2b40012145cade03e6c7e899c909475e0078f3f47e4e5` |
+| `index.html` | `f66a8694aecee90322161e9a31d682073919ae846d488312e225edf03232aaaf` |
+| `login.html` | `6e04830eb0aac86e7ffea6dc6f3db0faab7942e2379c6230efe0512519d0c0a7` |
+| `DESIGN.md` | `162e8fb0c381cb96da71a0f838c8ce80b7076ebb6b08071cc2845961e481da18` |
+| `IMPLEMENTATION.md` | `3ee03b85afb5567576ff2ac64c1459b811490591d52e16c048809d173bc75a3b` |
+| `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
+| `DESIGN-MANIFEST.json` | `3c78fd40eac65ac1659f0ab4934a3b9285a5cb67f85038a42dfdb17df95ffdea` |
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
-映射到现有 shadcn 变量。页面共享内容宽度、标题和表单样式；桌面侧栏为 248px，
+映射到现有 shadcn 变量，并提供设计同名别名（`--bg`、`--fg`、`--surface-raised`、`--accent`、
+`--accent-soft`、`--danger`、`--shadow`、`--font-body`、`--font-mono`）与 ink 色
+（`--accent-ink`、`--success-ink`、`--warning-ink`、`--danger-ink`、`--muted-ink`）。
+设计 `--muted` 是文字色，对应 `--muted-foreground`。主按钮、eyebrow、占位符和帮助文字使用 ink 色；
+等宽文字只引用 `var(--font-mono)` 或 Tailwind `font-mono`。
+页面共享内容宽度、标题和表单样式；桌面侧栏为 248px，
 低于 1024px 使用现有 Sheet。工作台先展示最近对话和职责事项，再展示 Agent 与申请。
 Agent 详情中的 Owner、渠道、模型和范围均取自实际投影；Owner 配置入口仍由权限结果控制。
 对话时间线独立滚动，保留消息输入区及代码、表格的局部滚动。
