@@ -176,18 +176,35 @@ describe("AgentLifecycleControls", () => {
 		expect(screen.queryByRole("button")).toBeNull();
 	});
 
-	it("keeps administrator disable available in the Owner configuration view", () => {
-		render(
+	it("separates administrator disable from the Owner lifecycle view", () => {
+		const view = render(
 			<AgentLifecycleControls
 				agent={unavailableAgent}
 				onCommand={vi.fn()}
 				session={{ kind: "ready", session: ownerAdministratorSession }}
+				scope="owner"
 			/>,
 		);
 
 		expect(screen.getByRole("button", { name: "停止 Agent" })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "重启 Agent" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "停用 Agent" })).toBeNull();
+
+		const administrator = vi.fn();
+		view.rerender(
+			<AgentLifecycleControls
+				agent={unavailableAgent}
+				onCommand={administrator}
+				session={{ kind: "ready", session: ownerAdministratorSession }}
+				scope="administrator"
+				heading="管理员操作"
+				description="停用将撤销运行资格。Owner 不能恢复，个人历史仍保留。"
+			/>,
+		);
+		expect(screen.getByRole("heading", { name: "管理员操作" })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "停用 Agent" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "停止 Agent" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "重启 Agent" })).toBeNull();
 	});
 
 	it("renders processing and terminal lifecycle feedback for the matching Agent", () => {

@@ -248,18 +248,18 @@ export function AdminAgentsScreen({
 											</TableCell>
 											<TableCell
 												data-label="系统操作"
-												aria-label={`Owner 交接入口：${agent.name}`}
+												aria-label={`Agent 管理入口：${agent.name}`}
 											>
 												{agent.managementStatus === "disabled" ? (
 													<span aria-hidden="true">—</span>
 												) : (
 													<Link
 														className={buttonVariants({ variant: "outline" })}
-														aria-label={`处理 ${agent.name} 的 Owner 交接`}
+														aria-label={`管理 ${agent.name} 的 Agent 设置与生命周期`}
 														params={{ agentId: agent.agentId }}
 														to="/agents/$agentId/configuration"
 													>
-														处理 Owner 交接
+														管理 Agent
 													</Link>
 												)}
 											</TableCell>

@@ -30,6 +30,8 @@ type PendingLifecycleCommand = {
 
 type RequestError = Error & { readonly retryable?: boolean };
 
+export type AgentLifecycleScope = "combined" | "owner" | "administrator";
+
 type AgentLifecycleControlsProps = {
 	agent: AgentProjectionV2;
 	commandError?: RequestError | null;
@@ -37,6 +39,9 @@ type AgentLifecycleControlsProps = {
 	onCommand: (command: AgentLifecycleCommand) => void;
 	pendingCommand?: PendingLifecycleCommand;
 	session: AdministrationSessionState;
+	scope?: AgentLifecycleScope;
+	heading?: string;
+	description?: string;
 };
 
 const commandLabels = {
@@ -70,6 +75,7 @@ function serviceAvailabilityMessage(
 function visibleLifecycleCommands(
 	agent: AgentProjectionV2,
 	session: AdministrationSessionState,
+	scope: AgentLifecycleScope,
 ): AgentLifecycleCommand[] {
 	if (session.kind !== "ready") return [];
 
@@ -79,6 +85,19 @@ function visibleLifecycleCommands(
 	);
 	const isAdministrator = user.roles.includes("system_admin");
 	const commands: AgentLifecycleCommand[] = [];
+	const managedStatuses: AgentProjectionV2["managementStatus"][] = [
+		"creating",
+		"available",
+		"stopped",
+		"creation_failed",
+	] as const;
+
+	if (scope === "administrator") {
+		if (isAdministrator && managedStatuses.includes(agent.managementStatus)) {
+			commands.push("disable");
+		}
+		return commands;
+	}
 
 	// These projections only select visible controls. The Platform still authorizes every command.
 	if (isOwner && agent.managementStatus === "available") {
@@ -95,9 +114,8 @@ function visibleLifecycleCommands(
 	}
 	if (
 		isAdministrator &&
-		["creating", "available", "stopped", "creation_failed"].includes(
-			agent.managementStatus,
-		)
+		managedStatuses.includes(agent.managementStatus) &&
+		(scope === "combined" || !isOwner)
 	) {
 		commands.push("disable");
 	}
@@ -131,7 +149,7 @@ const confirmationCopy = {
 	{ title: string; description: string; confirm: string }
 >;
 
-function LifecycleConfirmation({
+export function LifecycleConfirmation({
 	agentName,
 	command,
 	disabled,
@@ -186,9 +204,12 @@ export function AgentLifecycleControls({
 	agent,
 	commandError = null,
 	commandResult,
+	description = "停止或停用后仍保留个人历史。",
+	heading = "生命周期",
 	onCommand,
 	pendingCommand,
 	session,
+	scope = "combined",
 }: AgentLifecycleControlsProps) {
 	const [localPendingCommand, setLocalPendingCommand] =
 		useState<AgentLifecycleCommand | null>(null);
@@ -208,7 +229,7 @@ export function AgentLifecycleControls({
 			setLocalPendingCommand(null);
 		}
 	}, [agent.agentId, commandError, commandResult?.agentId, observedResult]);
-	const commands = visibleLifecycleCommands(agent, session);
+	const commands = visibleLifecycleCommands(agent, session, scope);
 	const serviceAvailability =
 		agent.managementStatus === "available" ? agent.serviceAvailability : null;
 	const matchingPendingCommand =
@@ -223,10 +244,8 @@ export function AgentLifecycleControls({
 	return (
 		<section className="space-y-5">
 			<div className="min-w-0 space-y-3">
-				<h2 className="font-semibold text-foreground text-lg">生命周期</h2>
-				<p className="text-muted-foreground text-sm">
-					停止或停用后仍保留个人历史。
-				</p>
+				<h2 className="font-semibold text-foreground text-lg">{heading}</h2>
+				<p className="text-muted-foreground text-sm">{description}</p>
 				<dl className="space-y-2 text-sm">
 					<div className="flex flex-col gap-1 sm:flex-row sm:gap-3">
 						<dt className="font-medium text-foreground">Agent 状态</dt>

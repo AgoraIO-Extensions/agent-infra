@@ -42,9 +42,22 @@ export function AgentConfigurationWorkflow({
 			agent.source.kind === "standard" &&
 			defaultRelayKeyManaged,
 	);
-	const lifecycle = (
-		<AgentLifecycleWorkflow key={agent.agentId} agent={agent} />
-	);
+	const ownerLifecycle = isConfigurationOwner ? (
+		<AgentLifecycleWorkflow
+			key={`${agent.agentId}:owner`}
+			agent={agent}
+			scope="owner"
+		/>
+	) : undefined;
+	const administratorLifecycle = isSystemAdministrator ? (
+		<AgentLifecycleWorkflow
+			key={`${agent.agentId}:administrator`}
+			agent={agent}
+			description="停用将撤销运行资格。Owner 不能恢复，个人历史仍保留。"
+			heading="管理员操作"
+			scope="administrator"
+		/>
+	) : undefined;
 	const authorization = (
 		<AgentAuthorizationControls
 			key={agent.agentId}
@@ -56,7 +69,7 @@ export function AgentConfigurationWorkflow({
 	return (
 		<>
 			<AgentConfigurationScreen
-				lifecycle={isConfigurationOwner ? lifecycle : undefined}
+				lifecycle={ownerLifecycle}
 				agent={agent}
 				deploymentModelCandidates={deploymentModelCandidates}
 				authorization={isConfigurationOwner ? authorization : undefined}
@@ -93,13 +106,20 @@ export function AgentConfigurationWorkflow({
 				session={session.state}
 				submitting={submission.isPending}
 			/>
-			{isSystemAdministrator && !isConfigurationOwner ? (
-				<div className="form-layout">
-					<div className="min-w-0 space-y-6">
-						{authorization}
-						<aside className="form-aside">{lifecycle}</aside>
+			{isSystemAdministrator ? (
+				isConfigurationOwner ? (
+					<section
+						aria-label="管理员操作"
+						className="detail-section administrator-lifecycle-panel"
+					>
+						{administratorLifecycle}
+					</section>
+				) : (
+					<div className="form-layout">
+						<div className="min-w-0 space-y-6">{authorization}</div>
+						<aside className="form-aside">{administratorLifecycle}</aside>
 					</div>
-				</div>
+				)
 			) : null}
 		</>
 	);

@@ -3,7 +3,13 @@ import {
 	BrowserSessionProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useBrowserSession } from "../use-browser-session.js";
@@ -50,6 +56,14 @@ const administratorSession = BrowserSessionProjectionV1Schema.parse({
 	user: {
 		userId: "user-admin-1",
 		displayName: "Administrator",
+		roles: ["employee", "system_admin"],
+	},
+});
+const ownerAdministratorSession = BrowserSessionProjectionV1Schema.parse({
+	schemaVersion: 1,
+	user: {
+		userId: "user-owner-1",
+		displayName: "Owner administrator",
 		roles: ["employee", "system_admin"],
 	},
 });
@@ -107,6 +121,33 @@ describe("AgentConfigurationWorkflow", () => {
 		expect(
 			screen.queryByRole("combobox", { name: "共同 Owner 用户" }),
 		).toBeNull();
+	});
+
+	it("moves Owner administrator disable into a separate administrator section", () => {
+		vi.mocked(useBrowserSession).mockReturnValue({
+			state: { kind: "ready", session: ownerAdministratorSession },
+		} as never);
+
+		render(<AgentConfigurationWorkflow agent={firstAgent} />);
+
+		const administratorSection = screen.getByRole("region", {
+			name: "管理员操作",
+		});
+		expect(
+			within(administratorSection).getByRole("button", {
+				name: "停用 Agent",
+			}),
+		).toBeTruthy();
+		expect(
+			within(administratorSection).queryByRole("button", {
+				name: "停止 Agent",
+			}),
+		).toBeNull();
+		expect(screen.getByRole("button", { name: "停止 Agent" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "重启 Agent" })).toBeTruthy();
+		expect(screen.getAllByRole("button", { name: "停用 Agent" })).toHaveLength(
+			1,
+		);
 	});
 
 	it("drops an entered Secret when navigation changes the Agent", () => {
