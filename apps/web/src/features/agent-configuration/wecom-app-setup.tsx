@@ -311,8 +311,10 @@ export function WecomAppSetup({
 				</Field>
 				<Field>
 					<Label htmlFor="wecom-app-application-id">应用 ID</Label>
+					{/* Owner 配置同页还有授权目标的「应用 ID」，名称带卡片标题以便区分（N-12）。 */}
 					<Input
 						id="wecom-app-application-id"
+						aria-label={withObjectName("应用 ID", setupTitle)}
 						aria-invalid={!!fieldErrors.applicationId}
 						aria-describedby={
 							fieldErrors.applicationId

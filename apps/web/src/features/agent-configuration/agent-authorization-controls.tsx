@@ -5,6 +5,7 @@ import { Field, FieldLegend } from "@/components/ui/field";
 import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { withObjectName } from "@/lib/accessible-name";
 import {
 	AgentAuthorizationRequestError,
 	grantApplicationManager,
@@ -145,8 +146,13 @@ export function AgentAuthorizationControls({
 						<Label htmlFor="agent-authorization-target-id">
 							{targetKind === "application" ? "应用 ID" : "用户 ID"}
 						</Label>
+						{/* 与企微自建应用的「应用 ID」同页，名称带分区标题以便区分（N-12）。 */}
 						<Input
 							id="agent-authorization-target-id"
+							aria-label={withObjectName(
+								targetKind === "application" ? "应用 ID" : "用户 ID",
+								"Agent 授权控制",
+							)}
 							disabled={busy}
 							value={targetId}
 							onChange={(event) => {

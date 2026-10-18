@@ -8,6 +8,7 @@ import {
 	type SkillHubDirectoryState,
 	type SkillHubVersionState,
 } from "./skill-hub.js";
+import { listSkillHubProjects } from "./skill-hub-management.js";
 
 export function useSkillHubDirectory({
 	identityKey,
@@ -142,4 +143,23 @@ export function useSkillHubVersion({
 		isFetching: allowed && query.isFetching,
 		retryable: Boolean(retryable),
 	};
+}
+
+/**
+ * 当前用户自己的 Skill 项目（服务端只返回本人项目，projectId 即 skillId）。
+ * 读取失败时调用方按「不是创建者」处理，不显示创建者操作。
+ */
+export function useSkillHubProjects({
+	identityKey,
+	client,
+}: {
+	identityKey: string;
+	client?: Client;
+}) {
+	return useQuery({
+		queryKey: ["skill-hub", "projects", identityKey],
+		queryFn: () => listSkillHubProjects(client),
+		enabled: Boolean(identityKey),
+		retry: false,
+	});
 }

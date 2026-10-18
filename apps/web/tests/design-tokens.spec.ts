@@ -512,10 +512,11 @@ const pages = [
 		ready: ["button", "提交申请"],
 		primary: "提交申请",
 	},
+	// K-02：详情不再列出摘要卡，以 Tab 出现作为就绪信号。
 	{
 		route: "/skills/release-notes-v1",
 		role: "owner",
-		ready: undefined,
+		ready: ["tab", "用途与内容"],
 		skill: true,
 	},
 ] as const;

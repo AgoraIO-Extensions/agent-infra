@@ -49,6 +49,17 @@ describe("page chrome route table", () => {
 		expect(resolvePageChrome({ pathname: "/skills/manage/" }).title).toBe(
 			"我的 Skill",
 		);
+		// 创建与发布页不被 /skills/$skillVersionId 吞掉，侧栏仍高亮我的 Skill。
+		expect(resolvePageChrome({ pathname: "/skills/manage/new" })).toMatchObject(
+			{ crumbParent: "我的 Skill", title: "创建与发布", navKey: "my-skills" },
+		);
+		expect(
+			resolvePageChrome({ pathname: "/admin/skill-reviews" }),
+		).toMatchObject({
+			crumbParent: "系统管理",
+			title: "Skill 审核",
+			navKey: "skill-reviews",
+		});
 		expect(resolvePageChrome({ pathname: "/admin/no-such-page" })).toBe(
 			notFoundChrome,
 		);

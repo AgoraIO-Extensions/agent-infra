@@ -22,6 +22,7 @@ export const navigationLabels = {
 	connection: "我的 Connection",
 	approvals: "创建审批",
 	"admin-agents": "Agent 管理",
+	"skill-reviews": "Skill 审核",
 	eval: "评测",
 	"platform-audit": "平台审计",
 	ops: "运维观测",
@@ -30,7 +31,7 @@ export const navigationLabels = {
 export type NavigationKey = keyof typeof navigationLabels;
 
 /**
- * 侧栏分组与顺序。设计稿中的 Builder、Skill 审核在 main 尚无路由，暂不列出；
+ * 侧栏分组与顺序。设计稿中的 Builder 在 main 尚无路由，暂不列出；
  * 运维观测不在设计稿中，保留在系统管理末尾，去留待产品结论。
  */
 export const navigationGroups: readonly {
@@ -59,7 +60,14 @@ export const navigationGroups: readonly {
 	{
 		label: "系统管理",
 		administratorOnly: true,
-		items: ["approvals", "admin-agents", "eval", "platform-audit", "ops"],
+		items: [
+			"approvals",
+			"admin-agents",
+			"skill-reviews",
+			"eval",
+			"platform-audit",
+			"ops",
+		],
 	},
 ];
 
@@ -135,6 +143,11 @@ const rules: readonly { pattern: RegExp; chrome: PageChrome }[] = [
 	{ pattern: /^\/chat(?:\/.*)?$/, chrome: navigationPage("chat") },
 	{ pattern: /^\/skills$/, chrome: navigationPage("skills") },
 	{ pattern: /^\/skills\/manage$/, chrome: navigationPage("my-skills") },
+	// 设计 skill-editor：['我的 Skill','创建与发布']，侧栏仍高亮我的 Skill。
+	{
+		pattern: /^\/skills\/manage\/new$/,
+		chrome: chrome("我的 Skill", "创建与发布", "my-skills"),
+	},
 	{
 		pattern: new RegExp(`^/skills/${segment}$`),
 		chrome: chrome("Skill Hub", "Skill 详情", "skills"),
@@ -160,6 +173,10 @@ const rules: readonly { pattern: RegExp; chrome: PageChrome }[] = [
 	{ pattern: /^\/audit$/, chrome: navigationPage("audit") },
 	{ pattern: /^\/admin\/approvals$/, chrome: navigationPage("approvals") },
 	{ pattern: /^\/admin\/agents$/, chrome: navigationPage("admin-agents") },
+	{
+		pattern: /^\/admin\/skill-reviews$/,
+		chrome: navigationPage("skill-reviews"),
+	},
 	{ pattern: /^\/admin\/audit$/, chrome: navigationPage("platform-audit") },
 	{ pattern: /^\/eval$/, chrome: navigationPage("eval") },
 	{ pattern: /^\/ops$/, chrome: navigationPage("ops") },
