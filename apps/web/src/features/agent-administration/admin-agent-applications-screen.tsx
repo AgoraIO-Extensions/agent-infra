@@ -463,7 +463,7 @@ export function AdminAgentApplicationsScreen({
 							<Input
 								id={`${filterId}-search`}
 								type="search"
-								placeholder="搜索申请、Owner 或风险"
+								placeholder="搜索申请、Owner 或来源"
 								value={search}
 								onChange={(event) => setSearch(event.target.value)}
 							/>
@@ -510,8 +510,7 @@ export function AdminAgentApplicationsScreen({
 										<TableCell data-label="申请">
 											<strong>{application.name}</strong>
 											<small>
-												编号 · {application.applicationId.slice(0, 12)} ·
-												申请人由当前会话确定
+												申请编号 · {application.applicationId.slice(0, 12)}
 											</small>
 											<small>{application.description}</small>
 											<Badge variant="outline" data-status={application.status}>

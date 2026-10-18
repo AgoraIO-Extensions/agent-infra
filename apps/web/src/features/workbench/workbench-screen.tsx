@@ -225,11 +225,11 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 												)}
 												<h3>{conversation.title ?? "未命名对话"}</h3>
 												<p>
-													{agent?.name ??
-														(agents.kind === "loading"
-															? "正在确认 Agent"
-															: "所属 Agent 暂时无法读取")}{" "}
-													·{" "}
+													{agent?.name
+														? `${agent.name} · `
+														: agents.kind === "loading"
+															? ""
+															: "所属 Agent 暂时无法读取 · "}
 													<time dateTime={conversation.updatedAt}>
 														{new Date(conversation.updatedAt).toLocaleString(
 															"zh-CN",

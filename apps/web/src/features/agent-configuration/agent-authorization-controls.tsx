@@ -104,7 +104,7 @@ export function AgentAuthorizationControls({
 					Agent 授权控制
 				</h2>
 				<p className="mt-1 text-muted-foreground text-sm">
-					选择明确的用户或应用；提交时平台会重新检查当前权限。页面不显示凭证。
+					填写需要授权的用户或应用标识；提交时平台会重新检查当前权限。页面不显示凭证。
 				</p>
 			</div>
 			<div className="grid gap-3 sm:grid-cols-2">
