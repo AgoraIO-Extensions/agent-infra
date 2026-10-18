@@ -531,8 +531,10 @@ for (const agentCollection of ["held", "unavailable"] as const) {
 			}
 			const recent = recentRegion(page);
 			await expect(recent.getByRole("heading", { level: 3 })).toHaveCount(2);
+			const availabilityLabel =
+				agentCollection === "held" ? "正在确认 Agent" : "状态暂时无法确认";
 			await expect(
-				recent.getByText("状态暂时无法确认", { exact: true }),
+				recent.getByText(availabilityLabel, { exact: true }),
 			).toHaveCount(2);
 			await expect(
 				recent.getByText("历史仍可查看，当前不能继续发送消息。", {
@@ -666,7 +668,7 @@ test("formal root route consumes fixture recent, opens the same Conversation and
 			.every((request) => {
 				const query = new URLSearchParams(request.search);
 				return (
-					query.get("limit") === "50" &&
+					query.get("limit") === "5" &&
 					[...query.keys()].every((key) => ["limit", "cursor"].includes(key))
 				);
 			}),

@@ -253,7 +253,9 @@ for (const compact of [false, true]) {
 			page.getByRole("heading", { name: "平台操作记录", exact: true }),
 		).toBeVisible();
 		const row = page.getByRole("row").filter({ hasText: governance.summary });
-		await expect(row).toContainText(governance.subject.subjectId);
+		await expect(row.getByTitle(governance.subject.subjectId)).toHaveText(
+			"applicat…fesafe",
+		);
 		await expect(row).toContainText("创建申请");
 		await expect(row).toContainText("Execution：未提供");
 		await expect(row.getByText("已受理", { exact: true })).toBeVisible();
@@ -273,7 +275,9 @@ for (const compact of [false, true]) {
 		const worker = page
 			.getByRole("row")
 			.filter({ hasText: background.summary });
-		await expect(worker).toContainText(background.subject.subjectId);
+		await expect(worker.getByTitle(background.subject.subjectId)).toHaveText(
+			"executio…fesafe",
+		);
 		await expect(worker.locator('[data-label="操作主体"]')).toContainText(
 			"可信操作主体 · 后台组件",
 		);

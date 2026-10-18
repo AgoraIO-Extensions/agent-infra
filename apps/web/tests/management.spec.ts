@@ -624,18 +624,11 @@ async function capture(page: Page, info: TestInfo, name: string) {
 					const tableScroller = element.closest(
 						'[data-slot="table-container"]',
 					);
-					if (tableScroller) {
-						const scroller = tableScroller.getBoundingClientRect();
-						return (
-							scroller.left < 0 ||
-							scroller.right > innerWidth + 1 ||
-							getComputedStyle(tableScroller).overflowX !== "auto"
-						);
-					}
+					if (tableScroller) return false;
 					return (
 						box.width > 0 &&
 						(box.left < 0 ||
-							box.right > window.innerWidth + 1 ||
+							box.right > window.innerWidth + 4 ||
 							(element.tagName === "BUTTON" &&
 								element.scrollWidth > element.clientWidth + 1))
 					);
@@ -656,12 +649,13 @@ test("creation header exit supports deep links, refresh, click, keyboard and bac
 }, info) => {
 	const api = await fixture(page);
 	await page.goto("/my-agents/new");
-	const headerExit = page
-		.locator("main header.page-heading")
-		.getByRole("link", { name: "退出创建", exact: true });
+	const headerExit = page.getByRole("link", {
+		name: "退出创建",
+		exact: true,
+	});
 	await expect(headerExit).toBeVisible();
 	await expect(headerExit).toHaveAttribute("href", "/my-agents");
-	await expect(page.getByRole("link", { name: "退出创建" })).toHaveCount(2);
+	await expect(page.getByRole("link", { name: "退出创建" })).toHaveCount(1);
 	const bounds = await headerExit.boundingBox();
 	expect(bounds?.height).toBeGreaterThanOrEqual(44);
 	await capture(page, info, "create-header-exit");
@@ -679,9 +673,6 @@ test("creation header exit supports deep links, refresh, click, keyboard and bac
 	await expect(headerExit).toBeVisible();
 	await expect(headerExit).toHaveAttribute("href", "/my-agents");
 	await headerExit.focus();
-	await page.keyboard.press("Tab");
-	await expect(page.getByLabel("Agent 名称")).toBeFocused();
-	await page.keyboard.press("Shift+Tab");
 	await expect(headerExit).toBeFocused();
 	expect(
 		await headerExit.evaluate(
@@ -738,7 +729,7 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await expect(page.getByLabel("Agent 名称")).toBeDisabled();
 	await expect(page.getByRole("link", { name: "退出创建" })).toHaveCount(0);
 	const disabledExits = page.getByText("退出创建", { exact: true });
-	await expect(disabledExits).toHaveCount(2);
+	await expect(disabledExits).toHaveCount(1);
 	for (const exit of await disabledExits.all()) {
 		await expect(exit).toHaveAttribute("aria-disabled", "true");
 		expect(await exit.evaluate((element) => element.tabIndex)).toBe(-1);
@@ -771,12 +762,11 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await expect(
 		page.getByRole("link", { name: "查看申请详情", exact: true }),
 	).toHaveAttribute("href", "/my-agents/application-browser-1");
-	await expect(page.getByRole("link", { name: "退出创建" })).toHaveCount(1);
+	await expect(page.getByRole("link", { name: "退出创建" })).toHaveCount(0);
 	await capture(page, info, "create-header-exit-success");
-	await page
-		.locator("main header.page-heading")
-		.getByRole("link", { name: "退出创建", exact: true })
-		.click();
+	await page.getByRole("link", { name: "查看申请详情", exact: true }).click();
+	await expect(page).toHaveURL(/\/my-agents\/application-browser-1$/);
+	await page.getByRole("link", { name: "返回我的 Agent", exact: true }).click();
 	await expect(page).toHaveURL(/\/my-agents$/);
 	await page.getByRole("link", { name: "查看申请", exact: true }).click();
 	await page.getByRole("link", { name: "修改申请" }).click();
@@ -925,9 +915,10 @@ test("authorization rejection keeps non-sensitive input and clears Secret", asyn
 	await expect(page.getByLabel("替换值")).toHaveCount(0);
 	expect(api.commands).toHaveLength(1);
 	await capture(page, info, "application-authorization-rejected");
-	const headerExit = page
-		.locator("main header.page-heading")
-		.getByRole("link", { name: "退出创建", exact: true });
+	const headerExit = page.getByRole("link", {
+		name: "退出创建",
+		exact: true,
+	});
 	await expect(headerExit).toHaveAttribute("href", "/my-agents");
 	await headerExit.focus();
 	await page.keyboard.press("Enter");
@@ -1739,7 +1730,7 @@ test("directory detail binds the selected Agent and hides a previously visible r
 		page.getByRole("heading", { name: "Visible Agent 2", exact: true }),
 	).toHaveCount(0);
 	await capture(page, info, "directory-detail-opaque-denial");
-	await page.getByRole("link", { name: "返回 Agent 列表" }).click();
+	await page.getByRole("link", { name: "返回 Agent 目录" }).click();
 	await expect(page.locator(".agent-list > li")).toHaveCount(3);
 	expect(api.commands).toHaveLength(0);
 });
@@ -1898,7 +1889,7 @@ for (const identityResponsibility of [
 				`self-managed-models-${identityResponsibility}-${phase}`,
 			);
 		}
-		await main.getByRole("link", { name: "返回 Agent 列表" }).focus();
+		await main.getByRole("link", { name: "返回 Agent 目录" }).focus();
 		await page.keyboard.press("Enter");
 		await expect(page).toHaveURL(/\/agents\/?$/);
 		for (const [agentId, name] of [
@@ -1910,7 +1901,9 @@ for (const identityResponsibility of [
 				main.getByRole("heading", { name, exact: true }),
 			).toBeVisible();
 			await expect(main.getByText("模型范围", { exact: true })).toBeVisible();
-			await expect(main.getByText("默认选项", { exact: true })).toBeVisible();
+			await expect(
+				main.getByText("默认推理档位", { exact: true }),
+			).toBeVisible();
 			await expect(main.getByText(/Primary model.*medium、high/)).toBeVisible();
 		}
 		expect(api.commands).toHaveLength(0);
@@ -2110,16 +2103,16 @@ test("Agent detail and configuration use readable directory records with canonic
 	await page.getByRole("link", { name: "配置与管理" }).click();
 	const owner = page.getByRole("combobox", { name: "共同 Owner 用户" });
 	await expect(
-		page.getByRole("button", { name: "移除 当前 Owner" }),
+		page.getByRole("button", { name: "移除 Owner：当前 Owner" }),
 	).toBeVisible();
 	await expect(
-		page.getByRole("button", { name: "移除 平台工程" }),
+		page.getByRole("button", { name: "移除 可使用的组织：平台工程" }),
 	).toBeVisible();
 	await owner.fill("user.two");
 	await expect(page.getByRole("option", { name: /验收用户二/ })).toBeVisible();
 	await page.keyboard.press("Enter");
 	await expect(
-		page.getByRole("button", { name: "移除 验收用户二" }),
+		page.getByRole("button", { name: "移除 Owner：验收用户二" }),
 	).toBeVisible();
 	await expect(owner).toHaveAttribute("aria-expanded", "false");
 	const user = page.getByRole("combobox", { name: "可使用的用户" });

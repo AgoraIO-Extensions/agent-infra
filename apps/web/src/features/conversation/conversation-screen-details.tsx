@@ -38,10 +38,10 @@ export function ConversationExecutionDetails({
 	onClose: () => void;
 }) {
 	const title = useRef<HTMLHeadingElement>(null);
-	const fallbackEvent = data?.events.find(
+	const fallbackEvent = data?.events.findLast(
 		(event) => event.type === "model.selection.fell_back",
 	);
-	const modelFact = data?.events.find(
+	const modelFact = data?.events.findLast(
 		(
 			event,
 		): event is Extract<

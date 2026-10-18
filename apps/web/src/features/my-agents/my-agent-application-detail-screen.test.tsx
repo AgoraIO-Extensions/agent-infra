@@ -1,7 +1,7 @@
 import { AgentApplicationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-
+import { formatDateTime } from "../../lib/format-date.js";
 import { MyAgentApplicationDetailScreen } from "./my-agent-application-detail-screen.js";
 import { pendingApplication } from "./test-fixtures.js";
 import { renderWithMyAgentsRouter } from "./test-router.js";
@@ -106,8 +106,12 @@ describe("MyAgentApplicationDetailScreen", () => {
 			screen.getByText("Resource capacity is currently unavailable."),
 		).toBeTruthy();
 		expect(screen.getByText(/提交于/)).toBeTruthy();
-		expect(screen.getByText("2026年9月3日 16:00").tagName).toBe("TIME");
-		expect(screen.getByText("2026年9月3日 17:00").tagName).toBe("TIME");
+		expect(
+			screen.getByText(formatDateTime(pendingApplication.submittedAt)).tagName,
+		).toBe("TIME");
+		expect(
+			screen.getByText(formatDateTime("2026-09-03T09:00:00Z")).tagName,
+		).toBe("TIME");
 		expect(screen.queryByRole("button", { name: "撤回申请" })).toBeNull();
 		expect(
 			screen.getByRole("link", { name: "修改并重新提交" }).getAttribute("href"),
@@ -136,7 +140,9 @@ describe("MyAgentApplicationDetailScreen", () => {
 
 		expect(screen.getByText("创建中")).toBeTruthy();
 		expect(screen.getByText("审批时间")).toBeTruthy();
-		expect(screen.getByText("2026年9月3日 18:00").tagName).toBe("TIME");
+		expect(
+			screen.getByText(formatDateTime("2026-09-03T10:00:00Z")).tagName,
+		).toBe("TIME");
 		expect(screen.queryByText("审批原因：")).toBeNull();
 	});
 

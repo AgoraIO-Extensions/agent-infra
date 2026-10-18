@@ -1,8 +1,8 @@
 # UI/UX 整改进度
 
-- 报告：`/private/var/folders/k1/181yvqs97nz8r3sy62r007m40000gn/T/architecture-review-20261016-110358.html`
-- 工作区：`/Users/admin/agent-infra/.worktrees/uiux-review-20261017`
-- 基线：`origin/main` @ `c7de551fb6cd2542174dc320d6d5cbd60bb88f25`；原 `/Users/admin/agent-infra` 脏工作区未改动。
+- 报告：架构评审 HTML（本地临时输入，未提交）
+- 工作区：隔离 worktree（本地路径未提交）
+- 基线：`origin/main` @ `3d208de3b40ac6b099c90f412d30600d3fd693f0`；原始工作区未改动。
 - 设计基线：index.html SHA-256 `f66a8694aecee90322161e9a31d682073919ae846d488312e225edf03232aaaf`
 - 开始时间：2026-10-16
 - 规则：每个报告编号只在此处登记一次；完成前保留证据（文件/测试/截图）。
@@ -310,3 +310,4 @@
 - 2026-10-17：origin/main 再前进到 `c7de551f`（#2725）后 rebase 无冲突；最新 Web 全量单测 90/90 文件、1085/1085 通过，desktop exported design viewport matrix 13/13 通过，mobile 项目按测试配置 13 项跳过，Web check-types 通过。
 - 2026-10-17：广义 Playwright 浏览器回归基线为 268 项：208 通过、40 失败、20 跳过；失败主要是旧测试断言与已定版 UI 不一致、无 API fixture 的超时及移动测试配置边界。针对真实 UI 问题修复目录选择结果层在选中后遮挡后续表单控件，管理目录 recovery 用例定向通过；修复移动 Sheet backdrop 抢占导航点击，移动导航 focus-trap 用例定向通过。
 - 2026-10-17：读取 `/var/folders/k1/181yvqs97nz8r3sy62r007m40000gn/T/agent-infra-connection-handoff.md` 后确认应接 Connection Agent PAT Binding；Consumer 注册、declaration 配置和服务凭据由 Connection 管理员控制，handoff 未提供现成 Consumer/credential，当前账号访问管理员页会回到「我的 Connection」。
+- 2026-10-18：修复 CI 暴露的日期断言时区不稳定、Sheet 关闭动画遗留遮罩、审计长标识断言、重复退出入口/返回文案/Owner 文案和最近对话分页断言；执行详情改为读取最后一条模型/回退事实。Web 单测 90/90 文件、1086/1086 通过，Web check-types/build/Biome 通过；完整 Browser Playwright 248/248 可运行项通过、20 项按现有配置跳过。

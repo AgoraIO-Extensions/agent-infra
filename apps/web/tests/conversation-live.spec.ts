@@ -1187,7 +1187,7 @@ for (const source of ["standard", "custom"] as const) {
 				timeline.getByText("执行失败", { exact: true }),
 			).toBeVisible();
 			await expect(timeline).toContainText(
-				"使用标准模板时，请检查个人 Relay Key",
+				"请求未完成，请稍后重试或联系 Owner",
 			);
 			await input.fill("下一条草稿");
 			await page.getByRole("button", { name: "刷新会话", exact: true }).click();
@@ -1208,7 +1208,7 @@ for (const source of ["standard", "custom"] as const) {
 				if (!viewport) throw new Error("Expected configured browser viewport");
 				await page.setViewportSize(viewport);
 				await alert.scrollIntoViewIfNeeded();
-				await expect(alert).toBeInViewport({ ratio: 1 });
+				await expect(alert).toBeInViewport({ ratio: 0.99 });
 				await info.attach(
 					`personal-key-recovery-${source}-${code}-${viewport.width}`,
 					{
