@@ -14,6 +14,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Listbox, ListboxOption } from "@/components/ui/listbox";
 import {
 	type ConversationCapabilityPickerStateV1,
 	type ConversationCapabilitySelectionV1,
@@ -264,15 +265,14 @@ export function ConversationCapabilityMenu({
 }) {
 	if (!state.open) return null;
 	return (
-		<div
+		<Listbox
 			id={state.listboxId}
-			role="listbox"
 			aria-label="命令或 Skill"
 			className="fixed z-[120] max-h-[min(248px,40dvh)] w-[min(320px,calc(100vw-32px))] overflow-y-auto rounded-[12px] border bg-popover p-1 text-popover-foreground shadow-lg"
 			style={state.position}
 		>
 			{state.filtered.map((capability, index) => (
-				<button
+				<ListboxOption
 					key={`${capability.kind}:${capability.name}:${capability.identity ?? ""}`}
 					type="button"
 					role="option"
@@ -289,9 +289,9 @@ export function ConversationCapabilityMenu({
 						</span>
 					</span>
 					<Badge variant="secondary">{capability.kind}</Badge>
-				</button>
+				</ListboxOption>
 			))}
-		</div>
+		</Listbox>
 	);
 }
 

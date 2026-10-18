@@ -2,11 +2,8 @@ import type { ComponentProps, ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-type ListboxProps = {
-	"aria-busy"?: boolean;
+type ListboxProps = Omit<ComponentProps<"div">, "role" | "children"> & {
 	children: ReactNode;
-	className?: string;
-	id?: string;
 };
 
 function Listbox({ children, className, ...props }: ListboxProps) {
