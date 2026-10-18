@@ -107,6 +107,12 @@ describe("application session boundary", () => {
 		});
 		await waitFor(() => expect(screen.queryByText("受保护内容")).toBeNull());
 	});
+	it("announces an expired login session before rendering the form", () => {
+		window.history.pushState({}, "", "/agents?reason=expired");
+		setup({ kind: "unavailable", retryable: false });
+		expect(screen.getByText(/登录已过期，请重新登录/)).toBeTruthy();
+		window.history.pushState({}, "", "/agents");
+	});
 	it("uses a fresh feature cache for another user while sharing the authoritative session", async () => {
 		const observed: { user: string; cached: unknown; client: QueryClient }[] =
 			[];

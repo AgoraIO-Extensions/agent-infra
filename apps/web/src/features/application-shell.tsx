@@ -123,6 +123,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	]);
 	const pathname = useLocation({ select: (location) => location.pathname });
 	const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
+	const loginExpired =
+		typeof window !== "undefined" &&
+		new URLSearchParams(window.location.search).get("reason") === "expired";
 	const conversationSelection = useLocation({
 		select: (location) => location.search.mode === "conversation",
 	});
@@ -480,7 +483,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					<p className="login-eyebrow">AGORA AGENT PLATFORM</p>
 					<h1 id="login-heading">登录工作空间</h1>
 					<p className="login-lead" role="status" aria-live="polite">
-						{session.isFetching
+						{loginExpired
+							? "登录已过期，请重新登录；已提交的任务会继续处理。"
+							: session.isFetching
 							? "正在确认登录状态…"
 							: session.state.kind !== "loading" &&
 								(session.state.retryable

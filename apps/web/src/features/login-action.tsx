@@ -99,7 +99,12 @@ export function LoginAction({ endpoint, onLoggedIn }: LoginActionProps) {
 			: undefined;
 
 	return (
-		<form className="login-form space-y-4" onSubmit={submit} noValidate>
+		<form
+			className="login-form space-y-4"
+			onSubmit={submit}
+			noValidate
+			aria-busy={state === "submitting" || undefined}
+		>
 			<div className="password-control space-y-2">
 				<Label htmlFor="platform-login">账号</Label>
 				<Input
