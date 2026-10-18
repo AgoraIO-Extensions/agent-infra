@@ -687,6 +687,27 @@ test("disabled native metadata has no API kind route", async () => {
 	}
 });
 
+test("local up rejects unknown API kind aliases before replacing the container", async () => {
+	const f = await fixture();
+	try {
+		const result = run("up", {
+			...f.env,
+			FAKE_API_PRECONNECTED_ALIASES: "unowned-api",
+		});
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/Platform API is connected to kind outside this project/,
+		);
+		assert.doesNotMatch(
+			await readFile(f.log, "utf8"),
+			/stop web platform-api|--force-recreate|network disconnect kind fixture-api/,
+		);
+	} finally {
+		await f.close();
+	}
+});
+
 test("local native metadata forward is restarted after kubectl exits (#2726)", async () => {
 	const f = await fixture();
 	let env = f.env;

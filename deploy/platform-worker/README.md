@@ -45,7 +45,9 @@ URL、token、Host Session 或主体；任一 binding、transport、current 或 
 `PLATFORM_WORKER_NATIVE_METADATA_PLATFORM_API_ORIGIN`，使用同一部署 service token 装配
 current-confirmation client。Helm 为 in-cluster API 推导本 release 的 API Service；external API
 由部署方提供 `platformWorker.nativeMetadataGateway.platformApiOrigin`，本地入口自动绑定到
-当前 Compose API 容器。关闭网关时不装配此默认 client；显式配置继续优先。
+当前 Compose API 容器。Chart 的 API 保持单副本并使用 `Recreate` 更新，避免滚动期间确认请求
+落到未承载原 Request 的另一实例；升级会短暂中断 API。关闭网关时不装配此默认 client；
+显式配置继续优先。
 
 Session Sandbox 的空闲计算回收属于同一 Worker 的会话生命周期策略。部署配置模块的
 `workloadInput.idleSandboxReclaimAfterMs` 可以配置空闲阈值，设为 `null` 可关闭，未配置时默认

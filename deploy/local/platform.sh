@@ -573,8 +573,7 @@ check_native_metadata_api_ownership() {
   done
 }
 
-disconnect_native_metadata_api() {
-  check_native_metadata_api_ownership || return 1
+check_native_metadata_api_network_ownership() {
   local container aliases network_alias
   container=$("${compose[@]}" ps --all -q platform-api) || return 1
   if [[ -n "$container" ]]; then
@@ -585,6 +584,18 @@ disconnect_native_metadata_api() {
         echo "Local Platform API is connected to kind outside this project" >&2
         return 1
       }
+    fi
+  fi
+}
+
+disconnect_native_metadata_api() {
+  check_native_metadata_api_ownership || return 1
+  check_native_metadata_api_network_ownership || return 1
+  local container aliases
+  container=$("${compose[@]}" ps --all -q platform-api) || return 1
+  if [[ -n "$container" ]]; then
+    aliases=$("${docker_target[@]}" container inspect "$container" --format '{{with index .NetworkSettings.Networks "kind"}}{{join .Aliases " "}}{{end}}') || return 1
+    if [[ -n "$aliases" ]]; then
       "${docker_target[@]}" network disconnect kind "$container" || return 1
     fi
   fi
@@ -1036,6 +1047,7 @@ case "${1:-}" in
     check_database_network_ownership
     validate_deployment_material
     check_native_metadata_api_ownership
+    check_native_metadata_api_network_ownership
     render_proxy_config
     "${compose[@]}" stop web platform-api
     "${compose[@]}" up --detach --wait postgres object-storage
