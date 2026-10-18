@@ -22,6 +22,7 @@ export function ConversationExecutionDetails({
 	client,
 	modelOptions = [],
 	requestedModelOptionId,
+	showHeading = true,
 	loading,
 	failed,
 	onRetry,
@@ -31,10 +32,10 @@ export function ConversationExecutionDetails({
 	client?: import("../../pilot/generated-v2/client/index.js").Client;
 	modelOptions?: readonly { optionId: string; displayName?: string }[];
 	requestedModelOptionId?: string | null;
+	showHeading?: boolean;
 	loading: boolean;
 	failed: boolean;
 	onRetry: () => void;
-	onClose: () => void;
 }) {
 	const title = useRef<HTMLHeadingElement>(null);
 	const fallbackEvent = data?.events.findLast(
@@ -70,11 +71,13 @@ export function ConversationExecutionDetails({
 	}, []);
 	return (
 		<section aria-label="执行详情" className="space-y-4">
-			<div className="flex flex-wrap items-center justify-between gap-3">
-				<h2 ref={title} tabIndex={-1} className="font-semibold text-xl">
-					执行详情
-				</h2>
-			</div>
+			{showHeading ? (
+				<div className="flex flex-wrap items-center justify-between gap-3">
+					<h2 ref={title} tabIndex={-1} className="font-semibold text-xl">
+						执行详情
+					</h2>
+				</div>
+			) : null}
 			{loading && <p role="status">正在读取执行记录…</p>}
 			{failed && (
 				<Alert className="space-y-2">

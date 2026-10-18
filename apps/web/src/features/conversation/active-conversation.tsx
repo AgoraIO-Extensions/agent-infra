@@ -12,7 +12,13 @@ import {
 } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "../../components/ui/button.js";
-import { Dialog, DialogContent } from "../../components/ui/dialog.js";
+import {
+	Dialog,
+	DialogContent,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../../components/ui/dialog.js";
 import { Label } from "../../components/ui/label.js";
 import {
 	Select,
@@ -170,6 +176,11 @@ export function ActiveConversation({
 }) {
 	const queryClient = useQueryClient();
 	const [selectedExecution, setSelectedExecution] = useState<string>();
+	const executionDialogTitle = useRef<HTMLHeadingElement>(null);
+	useEffect(() => {
+		if (!selectedExecution) return;
+		requestAnimationFrame(() => executionDialogTitle.current?.focus());
+	}, [selectedExecution]);
 	const executionTrigger = useRef<HTMLButtonElement>(null);
 	const returnExecutionFocus = useRef(false);
 	const conversationTitle = useRef<HTMLHeadingElement>(null);
@@ -1057,11 +1068,20 @@ export function ActiveConversation({
 					}
 				}}
 			>
-				<DialogContent aria-label="执行详情" className="max-w-[620px]">
+				<DialogContent
+					aria-label="执行详情"
+					className="max-h-[min(88dvh,760px)] max-w-[620px]"
+				>
+					<DialogHeader>
+						<DialogTitle ref={executionDialogTitle} tabIndex={-1}>
+							执行详情
+						</DialogTitle>
+					</DialogHeader>
 					{selectedExecution ? (
 						<ConversationExecutionDetails
 							data={reader.execution.data}
 							conversationId={conversationId}
+							showHeading={false}
 							modelOptions={options.map((item) => ({
 								optionId: item.optionId,
 								displayName: item.displayName,
@@ -1074,12 +1094,9 @@ export function ActiveConversation({
 								if (timeline.failure?.kind === "http") void reader.reconnect();
 								else void reader.execution.refetch();
 							}}
-							onClose={() => {
-								returnExecutionFocus.current = true;
-								setSelectedExecution(undefined);
-							}}
 						/>
 					) : null}
+					<DialogFooter showCloseButton />
 				</DialogContent>
 			</Dialog>
 		</>

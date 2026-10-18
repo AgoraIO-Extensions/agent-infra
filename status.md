@@ -202,6 +202,7 @@
 
 ## 变更日志
 
+- 2026-10-18：修复 NI-19/NI-58/NI-59：执行详情使用 DialogHeader/Title/Footer，主按钮「关闭」、max-height 760px、标题焦点恢复；移除执行详情组件内未使用的关闭参数，避免旧整页结构继续覆盖 Dialog 语义。Conversation detail 70/70、Biome、Web 类型检查通过。
 - 2026-10-18：修复 NI-47/CH-11：短视口下工作区占满视口，composer 保持在视口内，timeline 作为唯一滚动区；Connection/文件 disclosure 在 ≤600px 并排收纳；1366×500、820×600、390×560 Browser geometry 3/3 通过。
 - 2026-10-18：修复 NI-64/NI-65：静态入口标题改为「Agora Agent」，页面标题与面包屑收敛到同一份路由映射并对齐 Owner 配置、Skill 详情、API 凭证等设计文案；补充设计快照追溯与短视口 CSS 说明，新增标题/面包屑回归矩阵。
 - 2026-10-18：修复 NI-76：登录错误框 selector 提升为 `.login-form .login-error`，抵消全局 Alert 圆角覆盖并锁定 10px；Biome、登录单测 11/11、Web 类型检查通过；完整 auth 浏览器用例受共享端口/既有 validity 断言阻塞，未等待 CI。
@@ -256,7 +257,7 @@
 - **R4-16**：Connection Developers 当前提供 Browser API；Consumer/declaration 管理和默认 Delegated runtime 未装配，OAuth/Delegated 机器链路无法在本仓库独立完成，按用户要求跳过。
 - **V-01**：现有 Browser Playwright 可运行项和导出矩阵已通过；报告要求的完整设计导出逐页对照仍需独立证据，不能以现有 13 个桌面导出项替代。
 - **报告终审 NI-01~NI-67**：本文件的原始整改清单记录早期实现状态；终审新增问题正在按 P1/P2 分批复核，修复后以代码、单测和浏览器证据更新对应条目。
-- 当前仍需继续复核的终审项包括执行详情与页面 CSS 分层、平台 Skill 导入回归测试拆分，以及 Connection OAuth/Delegated 与完整设计导出证据。
+- 当前仍需继续复核的终审项包括平台 Skill 导入回归测试拆分，以及 Connection OAuth/Delegated 与完整设计导出证据。
 
 ## 证据边界
 

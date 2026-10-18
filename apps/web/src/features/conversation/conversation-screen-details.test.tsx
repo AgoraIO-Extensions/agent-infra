@@ -65,7 +65,6 @@ describe("ConversationExecutionDetails", () => {
 				loading={false}
 				failed={false}
 				onRetry={vi.fn()}
-				onClose={vi.fn()}
 				requestedModelOptionId="option-requested"
 				modelOptions={[
 					{
@@ -182,7 +181,6 @@ describe("ConversationExecutionDetails", () => {
 				loading={false}
 				failed={false}
 				onRetry={vi.fn()}
-				onClose={vi.fn()}
 				requestedModelOptionId="option-requested"
 				modelOptions={[
 					{ optionId: "option-requested", displayName: "请求模型" },
