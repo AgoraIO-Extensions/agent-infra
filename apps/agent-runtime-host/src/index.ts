@@ -225,12 +225,7 @@ export async function createRuntimeNativeMetadataDeploymentAssemblyV1(input: {
 			resolveNativeSessionRef: async ({ request }) => {
 				try {
 					return await input.host.resolveNativeMetadataSessionRef(
-						{
-							agentId: request.scope.agentId,
-							conversationId: request.scope.conversationId,
-							sessionGeneration: request.scope.sessionGeneration,
-							executionId: request.scope.executionId,
-						},
+						request.scope,
 						request.originalHostScopeRef,
 					);
 				} catch {

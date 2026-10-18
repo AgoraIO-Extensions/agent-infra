@@ -1300,14 +1300,13 @@ export class RuntimeHost {
 	 * native metadata; it does not create or renew a Runtime Session.
 	 */
 	async resolveNativeMetadataSessionRef(
-		reference: RuntimeOriginalExecutionRef,
+		reference: NativeMetadataObjectScopeV1,
 		hostSessionRef: string,
 	) {
 		this.trustedHost();
 		return this.options.store.resolveNativeSessionRefForOriginalExecution(
 			reference,
 			hostSessionRef,
-			this.options.grantValidationV2?.now ?? Date.now,
 		);
 	}
 
