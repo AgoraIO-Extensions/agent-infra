@@ -24,10 +24,12 @@ export const invalidRecentPage = (): RecentPersonalConversationsError =>
 /** Identity, Web channel and global ordering are resolved by the producer. */
 export async function loadRecentPersonalConversationsPage({
 	cursor = null,
+	limit = 5,
 	signal,
 	client,
 }: {
 	cursor?: string | null;
+	limit?: number;
 	signal: AbortSignal;
 	client?: Client;
 }): Promise<ListRecentPersonalConversationsV2Response> {
@@ -37,7 +39,7 @@ export async function loadRecentPersonalConversationsPage({
 	try {
 		const result = await listRecentPersonalConversationsV2({
 			client,
-			query: { limit: 5, ...(cursor === null ? {} : { cursor }) },
+			query: { limit, ...(cursor === null ? {} : { cursor }) },
 			signal,
 			responseStyle: "fields",
 			throwOnError: false,
@@ -50,7 +52,7 @@ export async function loadRecentPersonalConversationsPage({
 		const page = ConversationPageV1Schema.safeParse(result.data);
 		if (
 			!page.success ||
-			page.data.items.length > 5 ||
+			page.data.items.length > limit ||
 			(page.data.nextCursor !== null && page.data.nextCursor === cursor)
 		)
 			throw invalidRecentPage();

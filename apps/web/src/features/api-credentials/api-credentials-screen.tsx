@@ -236,7 +236,7 @@ export function ApiCredentialsScreen({
 									/>
 									<Label
 										htmlFor={`${scopesId}-${scope.replace(":", "-")}`}
-										className="font-normal"
+										className="api-scope-label font-normal"
 									>
 										{personalApiCredentialScopeLabels[scope]}
 									</Label>
@@ -434,8 +434,10 @@ function CredentialRow({
 						<ConfirmDialog
 							disabled={busy || pending}
 							label={pending ? "正在撤销…" : "撤销"}
-							title="撤销应用凭证？"
-							description="撤销后使用此凭证的调用会立即失效，且不能恢复。"
+							ariaLabel={`撤销个人 API 凭证：${credential.credentialId}`}
+							title="撤销个人 API 凭证？"
+							description={`凭证 ${credential.credentialId} 撤销后，使用它的调用会立即失效，且不能恢复。`}
+							confirmLabel="撤销凭证"
 							onConfirm={() => {
 								setEditing(false);
 								void onRevoke(credential.credentialId).catch(() => undefined);

@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { isAgentConfigurationOwner } from "../../../features/agent-configuration/agent-configuration.js";
-import { safeDeploymentUrl } from "../../../features/application-shell.js";
 import { AgentDetailScreen } from "../../../features/agent-discovery/agent-detail-screen.js";
 import { isRetryableAgentDiscoveryError } from "../../../features/agent-discovery/agent-discovery.js";
 import { useAgentDetail } from "../../../features/agent-discovery/use-agent-detail.js";
+import { safeDeploymentUrl } from "../../../features/application-shell.js";
 import { useBrowserSession } from "../../../features/use-browser-session.js";
 
 export const Route = createFileRoute("/agents/$agentId/")({
@@ -42,7 +42,9 @@ function AgentDetailRoute() {
 				})()
 			: undefined;
 	const connectionStatus =
-		session.state.kind === "ready" ? session.state.connection?.status : undefined;
+		session.state.kind === "ready"
+			? session.state.connection?.status
+			: undefined;
 
 	return (
 		<main className="platform-content management-content">

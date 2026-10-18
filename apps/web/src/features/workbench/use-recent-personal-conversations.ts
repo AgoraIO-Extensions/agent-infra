@@ -12,14 +12,16 @@ import type { WorkbenchRecentState } from "./workbench-screen.js";
 export function useRecentPersonalConversations({
 	identityKey,
 	client,
+	limit = 5,
 }: {
 	identityKey: string;
 	client?: Client;
+	limit?: number;
 }) {
 	const queryClient = useQueryClient();
 	const scope = useMemo(
 		() => ({
-			queryKey: ["personal-recent", identityKey, crypto.randomUUID()],
+			queryKey: ["personal-recent", identityKey, limit, crypto.randomUUID()],
 			active: false,
 			pending: false,
 			client,
@@ -58,6 +60,7 @@ export function useRecentPersonalConversations({
 			try {
 				return await loadRecentPersonalConversationsPage({
 					cursor: pageParam,
+					limit,
 					signal,
 					client: scope.client,
 				});

@@ -10,7 +10,6 @@ import {
 	Check,
 	ClipboardMinus,
 	ExternalLink,
-	FlaskConical,
 	House,
 	KeyRound,
 	Layers,
@@ -18,8 +17,6 @@ import {
 	Menu,
 	MessageCircle,
 	Plus,
-	Settings2,
-	Sparkles,
 	X,
 } from "lucide-react";
 import {
@@ -283,7 +280,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						activeOptions={{ exact: true }}
 						onClick={() => setSheet(false)}
 					>
-						<Sparkles size={17} strokeWidth={1.8} aria-hidden="true" />
+						<Layers size={17} strokeWidth={1.8} aria-hidden="true" />
 						Skill Hub
 					</Link>
 				</nav>
@@ -332,7 +329,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						onClick={() => setSheet(false)}
 					>
 						<Layers size={17} strokeWidth={1.8} aria-hidden="true" />
-						我的 Skill
+						Skill Hub 管理
 					</Link>
 					<Link
 						aria-current={
@@ -344,7 +341,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						to="/my-settings/api-credentials"
 						onClick={() => setSheet(false)}
 					>
-						<Settings2 size={17} strokeWidth={1.8} aria-hidden="true" />
+						<KeyRound size={17} strokeWidth={1.8} aria-hidden="true" />
 						API 凭证与应用
 					</Link>
 					<Link
@@ -433,7 +430,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							to="/eval"
 							onClick={() => setSheet(false)}
 						>
-							<FlaskConical size={17} strokeWidth={1.8} aria-hidden="true" />
+							<Activity size={17} strokeWidth={1.8} aria-hidden="true" />
 							评测
 						</Link>
 						<Link

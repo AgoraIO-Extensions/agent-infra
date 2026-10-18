@@ -205,12 +205,12 @@ export function MyAgentsScreen({
 							) : null}
 						</div>
 					)}
+					<Alert className="mt-4" role="status">
+						<AlertDescription>
+							审批记录会保留；驳回后可以修改范围、模型或渠道，再次提交申请。
+						</AlertDescription>
+					</Alert>
 				</TabsContent>
-				<Alert className="mt-4" role="status">
-					<AlertDescription>
-						审批记录会保留；驳回后可以修改并重新提交。
-					</AlertDescription>
-				</Alert>
 				<TabsContent value="agents">
 					{ownedAgentsLoading ? (
 						<p role="status" className="py-8">

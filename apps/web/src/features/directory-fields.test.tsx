@@ -217,7 +217,7 @@ describe("Agent detail and Owner configuration directory fields", () => {
 			throw new Error("Missing Owner field");
 		fireEvent.click(
 			within(ownerField).getByRole("button", {
-				name: "移除 Owner：目录记录不可用",
+				name: "移除 共同 Owner 用户：目录记录不可用",
 			}),
 		);
 		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
@@ -282,7 +282,7 @@ it.each(["pending", "disabled"])(
 		expect(
 			screen
 				.getByRole("button", {
-					name: "移除 Owner：Current Owner",
+					name: "移除 共同 Owner 用户：Current Owner",
 				})
 				.hasAttribute("disabled"),
 		).toBe(true);

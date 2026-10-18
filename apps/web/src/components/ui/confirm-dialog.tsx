@@ -13,12 +13,14 @@ export function ConfirmDialog({
 	confirmLabel = "确认",
 	description,
 	disabled,
+	ariaLabel,
 	label,
 	onConfirm,
 	title,
 	variant = "destructive",
 }: {
 	confirmLabel?: string;
+	ariaLabel?: string;
 	description: string;
 	disabled?: boolean;
 	label: string;
@@ -31,7 +33,9 @@ export function ConfirmDialog({
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogTrigger
 				disabled={disabled}
-				render={<Button type="button" variant={variant} />}
+				render={
+					<Button type="button" variant={variant} aria-label={ariaLabel} />
+				}
 			>
 				{label}
 			</DialogTrigger>

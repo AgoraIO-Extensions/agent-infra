@@ -2103,7 +2103,7 @@ test("Agent detail and configuration use readable directory records with canonic
 	await page.getByRole("link", { name: "配置与管理" }).click();
 	const owner = page.getByRole("combobox", { name: "共同 Owner 用户" });
 	await expect(
-		page.getByRole("button", { name: "移除 Owner：当前 Owner" }),
+		page.getByRole("button", { name: "移除 共同 Owner 用户：当前 Owner" }),
 	).toBeVisible();
 	await expect(
 		page.getByRole("button", { name: "移除 可使用的组织：平台工程" }),
@@ -2112,7 +2112,7 @@ test("Agent detail and configuration use readable directory records with canonic
 	await expect(page.getByRole("option", { name: /验收用户二/ })).toBeVisible();
 	await page.keyboard.press("Enter");
 	await expect(
-		page.getByRole("button", { name: "移除 Owner：验收用户二" }),
+		page.getByRole("button", { name: "移除 共同 Owner 用户：验收用户二" }),
 	).toBeVisible();
 	await expect(owner).toHaveAttribute("aria-expanded", "false");
 	const user = page.getByRole("combobox", { name: "可使用的用户" });

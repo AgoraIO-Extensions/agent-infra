@@ -172,7 +172,7 @@ function unavailableScreen({
 			<Alert>
 				<AlertDescription>
 					{administratorView
-						? "当前账号不是此 Agent 的 Owner；配置字段保持只读，请使用下方管理员操作区处理授权与生命周期。"
+						? "此页仅提供管理员授权与生命周期操作。"
 						: "当前无法访问此配置。"}
 				</AlertDescription>
 			</Alert>

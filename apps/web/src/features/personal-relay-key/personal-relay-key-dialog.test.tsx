@@ -131,7 +131,7 @@ describe("PersonalRelayKeyEntry", () => {
 		expect((input as HTMLInputElement).value).toBe("");
 
 		fireEvent.click(screen.getByRole("button", { name: "撤销 Key" }));
-		await screen.findByText("个人 Relay Key 已移除；从下一条任务生效。");
+		await screen.findByText("个人 Relay Key 已撤销；从下一条任务生效。");
 		expect(api.revoke).toHaveBeenCalledWith(
 			expect.objectContaining({
 				body: { expectedVersion: 3 },

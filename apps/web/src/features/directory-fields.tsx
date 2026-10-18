@@ -217,9 +217,6 @@ export function DirectoryPicker({
 			});
 		return () => controller.abort();
 	}, [kind, open, query, selectedKey]);
-	useEffect(() => {
-		if (open && selectedIds.length > 0 && !query) setOpen(false);
-	}, [open, query, selectedIds.length]);
 	const options = directoryOptions;
 	const selected = selectedIds.map(
 		(id) =>
@@ -232,13 +229,12 @@ export function DirectoryPicker({
 	);
 	const add = (option: DirectoryPickerOption | undefined) => {
 		if (disabled || !open || !option) return;
-		setOpen(false);
 		if (directoryError || selectedIds.includes(option.id)) return;
 		onChange([...selectedIds, option.id].join("\n"));
 		setQuery("");
 		setActiveIndex(0);
-		// Keep the next search available through the input, while closing the
-		// results layer so it cannot cover adjacent form controls.
+		setOpen(true);
+		requestAnimationFrame(() => inputRef.current?.focus());
 	};
 	const remove = (id: string) => {
 		if (!disabled)
@@ -260,11 +256,7 @@ export function DirectoryPicker({
 							</span>
 							<Button
 								disabled={disabled}
-								aria-label={
-									label.includes("Owner")
-										? `移除 Owner：${item.name}`
-										: `移除 ${label}：${item.name}`
-								}
+								aria-label={`移除 ${label}：${item.name}`}
 								className="directory-chip-remove"
 								onClick={() => remove(item.id)}
 								size="icon-xs"
@@ -301,9 +293,7 @@ export function DirectoryPicker({
 						setActiveIndex(0);
 						setOpen(true);
 					}}
-					onFocus={() => {
-						if (query.length > 0 || selectedIds.length === 0) setOpen(true);
-					}}
+					onFocus={() => setOpen(true)}
 					onKeyDown={(event) => {
 						if (event.key === "ArrowDown") {
 							event.preventDefault();

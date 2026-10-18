@@ -27,7 +27,6 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { Toast } from "@/components/ui/toast";
-import { useResultFocus } from "@/hooks/use-result-focus";
 import { formatDateTime } from "../../lib/format-date.js";
 import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
@@ -88,9 +87,8 @@ function DecisionFeedback({
 }: {
 	decision?: AgentApplicationProjectionV2;
 }) {
-	const resultRef = useResultFocus(decision);
 	return decision ? (
-		<Toast ref={resultRef} tabIndex={-1} className="mt-4 font-medium text-sm">
+		<Toast className="mt-4 font-medium text-sm">
 			{decision.status === "rejected"
 				? "已驳回，申请人会看到修改原因。"
 				: `已提交 ${decision.name} 的审批结果：${agentManagementStatusLabels[decision.status]}。`}
@@ -431,9 +429,6 @@ export function AdminAgentApplicationsScreen({
 					</div>
 				)}
 			</header>
-			<p className="page-note">
-				审批记录会保留；驳回后申请人可以修改并重新提交。
-			</p>
 			<DecisionFeedback decision={decisionResult} />
 			{state.kind === "loading" ? (
 				<p role="status">正在读取审批申请…</p>
@@ -578,6 +573,9 @@ export function AdminAgentApplicationsScreen({
 					)}
 				</>
 			)}
+			<p className="page-note">
+				审批记录会保留；驳回后申请人可以修改范围、模型或渠道，再次提交申请。
+			</p>
 			{decisionError && openApplicationId === null && (
 				<Alert variant="destructive" className="mt-4">
 					<AlertDescription>{decisionFailure(decisionError)}</AlertDescription>

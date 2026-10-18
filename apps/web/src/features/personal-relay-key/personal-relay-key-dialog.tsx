@@ -215,7 +215,7 @@ function PersonalRelayKeyForm({
 			const next = await revokePersonalRelayKey(projection.keyVersion);
 			if (request !== requestNumber.current) return;
 			setProjection(next);
-			setNotice("个人 Relay Key 已移除；从下一条任务生效。");
+			setNotice("个人 Relay Key 已撤销；从下一条任务生效。");
 			setState("ready");
 		} catch (error) {
 			if (request !== requestNumber.current) return;
@@ -233,7 +233,7 @@ function PersonalRelayKeyForm({
 			? "正在读取个人 Key 状态…"
 			: state === "saving"
 				? operation === "revoke"
-					? "正在移除个人 Key…"
+					? "正在撤销个人 Key…"
 					: "正在保存个人 Key…"
 				: hasFailure
 					? errorMessage(failure)

@@ -15,7 +15,7 @@ export function RecentConversationHistory({
 	identityKey: string;
 	onSelect: (id: string) => void;
 }) {
-	const recent = useRecentPersonalConversations({ identityKey });
+	const recent = useRecentPersonalConversations({ identityKey, limit: 50 });
 	const { state } = recent;
 	return (
 		<section aria-label="最近对话" className="space-y-3">

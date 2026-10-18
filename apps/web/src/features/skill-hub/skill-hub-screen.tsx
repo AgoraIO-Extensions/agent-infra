@@ -143,7 +143,7 @@ export function SkillHubDirectoryScreen({
 				</Alert>
 			) : (
 				<>
-					<div className="directory-filters">
+					<div className="directory-filters skill-hub-filters">
 						<div className="directory-search w-full space-y-2">
 							<Label className="sr-only" htmlFor={searchId}>
 								搜索 Skill
