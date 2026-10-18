@@ -1559,6 +1559,72 @@ describe("functional conversation screen", () => {
 		expect(requests.every((request) => request.method === "GET")).toBe(true);
 	});
 
+	it("keeps personal-history pagination inside the active identity", async () => {
+		const oldContinuation = deferred<Response>();
+		let activeIdentity = "session-a";
+		const conversation = (id: string, title: string) => ({
+			...history(id).conversation,
+			conversationId: id,
+			title,
+		});
+		const { requests, rerenderScope } = setup(
+			(request) => {
+				const url = new URL(request.url);
+				if (url.pathname !== "/api/v1/agents/agent-1/conversations")
+					return undefined;
+				const cursor = url.searchParams.get("cursor");
+				if (activeIdentity === "session-a") {
+					if (cursor === null)
+						return Response.json({
+							items: [conversation("old-first", "旧身份首屏会话")],
+							nextCursor: "old-cursor",
+						});
+					return oldContinuation.promise;
+				}
+				if (cursor === null)
+					return Response.json({
+						items: [conversation("new-first", "新身份首屏会话")],
+						nextCursor: null,
+					});
+				throw new Error(`Unexpected new identity cursor: ${cursor}`);
+			},
+			{ view: "history" },
+		);
+		await screen.findByRole("link", { name: /旧身份首屏会话/ });
+		const loadMore = screen.getByRole("button", { name: "加载更多" });
+		fireEvent.click(loadMore);
+		await waitFor(() =>
+			expect(
+				requests
+					.filter((request) =>
+						new URL(request.url).pathname.endsWith("/conversations"),
+					)
+					.map((request) => new URL(request.url).searchParams.get("cursor")),
+			).toEqual([null, "old-cursor"]),
+		);
+
+		activeIdentity = "session-b";
+		rerenderScope({ identityKey: activeIdentity, view: "history" });
+		await screen.findByRole("link", { name: /新身份首屏会话/ });
+		expect(screen.queryByRole("link", { name: /旧身份首屏会话/ })).toBeNull();
+		await act(async () => {
+			oldContinuation.resolve(
+				Response.json({
+					items: [conversation("old-late", "旧身份迟到续页")],
+					nextCursor: null,
+				}),
+			);
+		});
+		expect(screen.queryByRole("link", { name: /旧身份迟到续页/ })).toBeNull();
+		expect(
+			requests
+				.filter((request) =>
+					new URL(request.url).pathname.endsWith("/conversations"),
+				)
+				.map((request) => new URL(request.url).searchParams.get("cursor")),
+		).toEqual([null, "old-cursor", null]);
+	});
+
 	it("opens recent history without changing the route and returns from full history to recent scope", async () => {
 		const onViewChange = vi.fn();
 		const { rerenderScope, streams, requests } = setup(undefined, {
