@@ -72,6 +72,33 @@ export async function expectFieldControl(page: Page, control: Locator) {
 	});
 }
 
+// 设计稿 .input/.select/.textarea:focus（B-05）：2px accent 26% 透明描边、边框变 accent，
+// offset 沿用全局 :focus-visible 的 3px，不叠加 ring 阴影。
+export async function expectFieldFocus(page: Page, control: Locator) {
+	await control.focus();
+	expect(
+		await computed(control, [
+			"outlineStyle",
+			"outlineWidth",
+			"outlineOffset",
+			"outlineColor",
+			"borderTopColor",
+			"boxShadow",
+		]),
+	).toEqual({
+		outlineStyle: "solid",
+		outlineWidth: "2px",
+		outlineOffset: "3px",
+		outlineColor: await resolved(
+			page,
+			"color",
+			"color-mix(in oklch, var(--accent) 26%, transparent)",
+		),
+		borderTopColor: await resolved(page, "color", "var(--accent)"),
+		boxShadow: "none",
+	});
+}
+
 // 设计稿 .search-wrap：18px 图标距输入框左缘 13px、垂直居中，输入框左内边距 39px。
 export async function expectSearchInput(search: Locator) {
 	const geometry = await search.evaluate((input) => {

@@ -24,6 +24,7 @@ import {
 	expectCardTable,
 	expectDesktopTable,
 	expectFieldControl,
+	expectFieldFocus,
 	expectFieldLabel,
 	expectFormSection,
 	expectNoLegendOnBorder,
@@ -1076,6 +1077,8 @@ test("administrator rejection, approval, empty queue and pending controls", asyn
 			shadow: getComputedStyle(element).boxShadow,
 		})),
 	).toEqual({ style: "solid", width: "2px", offset: "3px", shadow: "none" });
+	// B-05：弹窗内 textarea 的焦点色与页面字段一致（26% 透明 accent 描边、accent 边框）。
+	await expectFieldFocus(page, page.getByLabel("驳回原因", { exact: true }));
 	await page
 		.getByLabel("驳回原因", { exact: true })
 		.fill("  Capacity is unavailable  ");
@@ -3036,6 +3039,9 @@ test("application form fields, selects, sections and small actions follow the ex
 		page.locator("label", { hasText: "Agent 名称" }),
 	);
 	await expectFieldControl(page, name);
+	// B-05 焦点：输入框与 Textarea 都是 26% 透明 accent 描边加 accent 边框。
+	await expectFieldFocus(page, name);
+	await expectFieldFocus(page, page.getByLabel("用途说明", { exact: true }));
 	expect(
 		await computed(page.getByLabel("用途说明", { exact: true }), [
 			"minHeight",

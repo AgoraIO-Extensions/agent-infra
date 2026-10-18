@@ -2387,12 +2387,20 @@ body {
 
 [data-slot="button"]:focus-visible,
 [class~="group/button"]:focus-visible,
-[data-slot="checkbox"]:focus-visible,
+[data-slot="checkbox"]:focus-visible {
+	outline: 2px solid var(--primary);
+	outline-offset: 3px;
+	box-shadow: none;
+}
+/* 设计 .input/.select/.textarea:focus：2px accent 26% 透明描边，边框变 accent；
+   offset 沿用全局 :focus-visible 的 3px（B-05）。控件与设计一样不带颜色过渡，
+   焦点态立即生效。按钮与复选框仍是不透明焦点环。 */
 [role="dialog"] :is([data-slot="textarea"]):focus-visible,
 [data-slot="input"]:focus-visible,
 [data-slot="select-trigger"]:focus-visible,
 [data-slot="native-select"]:focus-visible {
-	outline: 2px solid var(--primary);
+	border-color: var(--accent);
+	outline: 2px solid color-mix(in oklch, var(--accent) 26%, transparent);
 	outline-offset: 3px;
 	box-shadow: none;
 }
@@ -2403,7 +2411,8 @@ body {
 		[data-slot="select-trigger"],
 		[data-slot="native-select"]
 	):focus-visible {
-	outline: 2px solid var(--primary);
+	border-color: var(--accent);
+	outline: 2px solid color-mix(in oklch, var(--accent) 26%, transparent);
 	outline-offset: 3px;
 	box-shadow: none;
 }
