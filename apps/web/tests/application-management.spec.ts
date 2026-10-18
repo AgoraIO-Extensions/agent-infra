@@ -265,3 +265,50 @@ test("missing existing applications show an opaque denial instead of registratio
 	).toBeVisible();
 	await expect(page.getByRole("button", { name: "注册应用" })).toHaveCount(0);
 });
+
+// F-11：停用应用先确认对象与后果，确认后恰好一次请求，焦点落在应用名标题。
+test("disabling an application is confirmed before one PATCH and returns focus to its title", async ({
+	page,
+}) => {
+	await fixture(page);
+	const disables: unknown[] = [];
+	let disabled = false;
+	await page.route(/\/api\/v2\/applications\/[^/]+$/, async (route) => {
+		const request = route.request();
+		if (request.method() === "PATCH") {
+			disables.push(request.postDataJSON());
+			disabled = true;
+			return route.fulfill({ json: { ...application, status: "disabled" } });
+		}
+		if (disabled)
+			return route.fulfill({ json: { ...application, status: "disabled" } });
+		return route.fallback();
+	});
+	await page.goto(
+		`/my-settings/api-credentials?applicationId=${application.applicationId}`,
+	);
+	const trigger = page.getByRole("button", {
+		name: `停用应用 ${application.name}`,
+		exact: true,
+	});
+	await expect(trigger).toBeVisible();
+	await trigger.click();
+	const dialog = page.getByRole("dialog", { name: "停用这个应用？" });
+	await expect(dialog).toBeVisible();
+	await expect(dialog).toContainText(application.name);
+	await expect(dialog).toContainText("拒绝该应用的新任务");
+	expect(disables).toHaveLength(0);
+	await dialog.getByRole("button", { name: "取消" }).click();
+	await expect(dialog).not.toBeVisible();
+	await trigger.click();
+	await page.keyboard.press("Escape");
+	await expect(dialog).not.toBeVisible();
+	expect(disables).toHaveLength(0);
+	await trigger.click();
+	await dialog.getByRole("button", { name: "停用应用", exact: true }).click();
+	await expect.poll(() => disables).toEqual([{ status: "disabled" }]);
+	await expect(page.getByText("应用已停用")).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: application.name }),
+	).toBeFocused();
+});

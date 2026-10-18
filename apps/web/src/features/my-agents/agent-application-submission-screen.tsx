@@ -146,7 +146,11 @@ export function AgentApplicationSubmissionScreen(
 						</div>
 					) : null}
 					{props.error ? (
-						<Alert variant="destructive" className="application-form-alert">
+						<Alert
+							tone="danger"
+							role="alert"
+							className="application-form-alert"
+						>
 							<AlertDescription>
 								{validationError
 									? "申请内容未通过服务端校验，请检查字段后重试。"
@@ -171,6 +175,7 @@ export function AgentApplicationSubmissionScreen(
 					)}
 					{props.result ? (
 						<Alert
+							tone="info"
 							ref={resultRef}
 							tabIndex={-1}
 							className="my-3 font-medium"

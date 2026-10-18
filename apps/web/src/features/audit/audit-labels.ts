@@ -1,3 +1,4 @@
+import type { ChipTone } from "@/lib/status-tone";
 import type { AuditRecord } from "./audit-query.js";
 
 export const auditActionLabels: Record<AuditRecord["action"], string> = {
@@ -164,6 +165,13 @@ export function auditOutcomeLabel(record: AuditRecord) {
 	)
 		return "访问获准";
 	return auditResultLabels[record.result];
+}
+
+// 审计结果只有成功与失败带颜色，其余结果（含已拒绝）保持中性，与 statusTone 不同。
+export function auditResultTone(result: AuditRecord["result"]): ChipTone {
+	if (result === "succeeded") return "green";
+	if (result === "failed") return "red";
+	return "gray";
 }
 
 export function auditTimestamp(value: string) {

@@ -50,12 +50,19 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `NativeSelect` / `NativeSelectOption` | 申请来源、身份责任；保留原生选择和禁用语义 |
 | `Checkbox` | 申请和 Owner 的模型配置开关 |
 | `Label` | 上述表单的可访问名称 |
-| `Badge` | Agent 列表、我的 Agent、审批列表的服务或管理状态 |
+| `Badge` | 状态 chip（`tone`，服务端状态经 `lib/status-tone.ts` 的 `statusTone()` 映射）与非状态标签（`variant="tag"`） |
 | `Sidebar` / `Sheet` / `Breadcrumb` / `Avatar` | 桌面与移动导航、当前位置及登录身份 |
 | `Tabs` | 我的申请与已创建 Agent 切换 |
-| `Dialog` | 撤回、审批及生命周期确认 |
-| `Alert` / `Empty` | 管理、对话及历史的错误反馈与空态 |
+| `Dialog` / `ConfirmDialog` | 审批、个人 Relay Key；撤回、生命周期、撤销凭证、停用应用、禁用员工等确认 |
+| `Alert` / `Empty` | 设计 notice（`tone` 与默认图标）与空态 |
+| `Spinner` / `LoadingLine` | 读取中的加载态，`PageLoadingState` 内部使用 |
+| `Toast` | 根布局常驻的补充确认，页面通过 `useToast()` 调用 |
+| `Card` / `AgentMark` | 独立卡片的悬停，Agent 标识的字形与 tone |
 | `Table` | Agent 输出的 Markdown 表格 |
+
+`Card`、`ConfirmDialog`、`Spinner`、`Toast` 与 `features/agent-mark.tsx` 为手写组件，不由 CLI 生成。
+`Alert` 不设默认 role：首屏静态说明不设 role，异步结果用 `role="status"`，失败用 `role="alert"`。
+Badge、Alert 的旧变体名只作兼容层，供未迁移的对话页与浏览器面板使用，新代码使用 `tone` 或 `variant="tag"`。
 
 普通导航保留 TanStack `Link` 或语义链接；需要控件外观时使用 `buttonVariants`，不改变链接角色。
 段落、列表、定义列表、表单和 fieldset 保持语义 HTML。

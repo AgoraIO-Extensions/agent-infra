@@ -1,18 +1,21 @@
 import { AlertCircle, Building2, RefreshCw, ShieldOff } from "lucide-react";
 import {
 	type FormEvent,
+	useEffect,
 	useId,
 	useLayoutEffect,
 	useRef,
 	useState,
 } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { LoadingLine } from "@/components/ui/spinner";
 import type { ApplicationMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	type PersonalApiCredentialScope,
@@ -86,6 +89,7 @@ export function ApplicationManagementScreen({
 	const headingId = useId();
 	const [name, setName] = useState("");
 	const [applicationId, setApplicationId] = useState("");
+	const focusTitleAfterDisable = useRef(false);
 
 	async function submitRegistration(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -115,8 +119,11 @@ export function ApplicationManagementScreen({
 			</header>
 
 			{actionError ? (
-				<Alert variant="destructive">
-					<AlertCircle aria-hidden="true" />
+				<Alert
+					tone="danger"
+					role="alert"
+					icon={<AlertCircle aria-hidden="true" />}
+				>
 					<AlertDescription>
 						{errorMessage(actionError, "应用操作失败，请稍后重试。")}
 					</AlertDescription>
@@ -154,28 +161,23 @@ export function ApplicationManagementScreen({
 			) : null}
 
 			{state.kind === "loading" ? (
-				<p role="status" className="py-8 text-muted-foreground text-sm">
-					正在读取应用…
-				</p>
+				<LoadingLine className="py-8">正在读取应用…</LoadingLine>
 			) : null}
 			{state.kind === "denied" ? (
-				<Alert variant="destructive">
+				<Alert tone="warn">
 					<AlertDescription>当前账号无权管理应用。</AlertDescription>
 				</Alert>
 			) : null}
 			{state.kind === "unavailable" ? (
-				<Alert variant="destructive">
+				<Alert tone="danger" role="alert">
 					<AlertDescription>{unavailableMessage(state)}</AlertDescription>
 					{state.retryable && onRetry ? (
-						<Button
-							className="mt-3"
-							variant="outline"
-							type="button"
-							onClick={onRetry}
-						>
-							<RefreshCw aria-hidden="true" data-icon="inline-start" />
-							重新加载
-						</Button>
+						<AlertAction>
+							<Button variant="outline" type="button" onClick={onRetry}>
+								<RefreshCw aria-hidden="true" data-icon="inline-start" />
+								重新加载
+							</Button>
+						</AlertAction>
 					) : null}
 				</Alert>
 			) : null}
@@ -223,7 +225,23 @@ export function ApplicationManagementScreen({
 						state.application.status,
 					])}
 					application={state.application}
-					onDisable={onDisable}
+					onDisable={
+						onDisable
+							? (applicationId) => {
+									focusTitleAfterDisable.current = true;
+									return onDisable(applicationId).catch((error: unknown) => {
+										// 停用失败时不保留焦点标记，避免之后的状态变化抢焦点。
+										focusTitleAfterDisable.current = false;
+										throw error;
+									});
+								}
+							: undefined
+					}
+					consumeTitleFocus={() => {
+						const pendingFocus = focusTitleAfterDisable.current;
+						focusTitleAfterDisable.current = false;
+						return pendingFocus;
+					}}
 					isDisabling={isDisabling}
 					onIssueCredential={onIssueCredential}
 					isIssuingCredential={isIssuingCredential}
@@ -236,6 +254,8 @@ export function ApplicationManagementScreen({
 type ApplicationDetailsProps = {
 	application: ApplicationMetadataV1;
 	onDisable?: (applicationId: string) => Promise<ApplicationMetadataV1>;
+	// 停用成功后详情会按新状态重新挂载，由它把焦点放回应用名标题。
+	consumeTitleFocus?: () => boolean;
 	isDisabling: boolean;
 	onIssueCredential?: ApplicationManagementScreenProps["onIssueCredential"];
 	isIssuingCredential: boolean;
@@ -245,6 +265,11 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 	const { application } = props;
 	const id = useId();
 	const disabled = application.status === "disabled";
+	const title = useRef<HTMLHeadingElement>(null);
+	const { consumeTitleFocus } = props;
+	useEffect(() => {
+		if (disabled && consumeTitleFocus?.()) title.current?.focus();
+	}, [consumeTitleFocus, disabled]);
 	const active = useRef(false);
 	const pending = useRef(false);
 	const [recipientType, setRecipientType] = useState<"user" | "application">(
@@ -345,11 +370,10 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 				<div className="flex flex-wrap items-start justify-between gap-4">
 					<div>
 						<div className="flex flex-wrap items-center gap-2">
-							<h2 className="font-semibold text-lg">{application.name}</h2>
-							<Badge
-								variant="outline"
-								data-status={disabled ? "disabled" : "available"}
-							>
+							<h2 ref={title} tabIndex={-1} className="font-semibold text-lg">
+								{application.name}
+							</h2>
+							<Badge tone={disabled ? "red" : "green"}>
 								{disabled ? "已停用" : "运行中"}
 							</Badge>
 						</div>
@@ -361,15 +385,30 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 						</p>
 					</div>
 					{!disabled && props.onDisable ? (
-						<Button
-							variant="destructive"
-							type="button"
+						<ConfirmDialog
 							disabled={props.isDisabling}
-							onClick={() => void props.onDisable?.(application.applicationId)}
-						>
-							<ShieldOff aria-hidden="true" />
-							{props.isDisabling ? "正在停用…" : "停用应用"}
-						</Button>
+							trigger={
+								<Button
+									variant="outline"
+									type="button"
+									aria-label={`${props.isDisabling ? "正在停用…" : "停用应用"} ${application.name}`}
+								>
+									<ShieldOff aria-hidden="true" />
+									{props.isDisabling ? "正在停用…" : "停用应用"}
+								</Button>
+							}
+							title="停用这个应用？"
+							subject={{ name: application.name }}
+							description="停用后平台拒绝该应用的新任务，并向进行中的任务发出取消请求；已发生的外部效果不会撤回。"
+							confirmLabel="停用应用"
+							finalFocus={title}
+							onConfirm={() =>
+								// 失败由 actionError 就地呈现。
+								void props
+									.onDisable?.(application.applicationId)
+									.catch(() => undefined)
+							}
+						/>
 					) : null}
 				</div>
 				<dl className="mt-5 grid gap-3 text-sm sm:grid-cols-3">
@@ -504,8 +543,8 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 							})}
 						</div>
 						{scopes.length === 0 ? (
-							<Alert variant="destructive" className="p-2 text-sm">
-								至少选择一项权限范围。
+							<Alert tone="danger" role="alert">
+								<AlertDescription>至少选择一项权限范围。</AlertDescription>
 							</Alert>
 						) : null}
 					</fieldset>

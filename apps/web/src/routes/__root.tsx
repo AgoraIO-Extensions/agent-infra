@@ -1,6 +1,7 @@
 import { createRootRoute, HeadContent, Outlet } from "@tanstack/react-router";
 
 import "../index.css";
+import { ToastProvider } from "../components/ui/toast";
 import { ApplicationShell } from "../features/application-shell";
 import { NotFoundScreen } from "../features/not-found-screen";
 
@@ -22,11 +23,11 @@ export const Route = createRootRoute({
 
 function RootComponent() {
 	return (
-		<>
+		<ToastProvider>
 			<HeadContent />
 			<ApplicationShell>
 				<Outlet />
 			</ApplicationShell>
-		</>
+		</ToastProvider>
 	);
 }

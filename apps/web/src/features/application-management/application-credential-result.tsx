@@ -39,13 +39,12 @@ export function ApplicationCredentialResult({
 					应用凭证结果
 				</h2>
 				<Badge
-					variant="outline"
-					data-status={
+					tone={
 						delivery.status === "accepted"
-							? "available"
+							? "green"
 							: delivery.status === "failed"
-								? "disabled"
-								: "pending"
+								? "red"
+								: "gray"
 					}
 				>
 					{deliveryLabels[delivery.status]}
@@ -58,8 +57,10 @@ export function ApplicationCredentialResult({
 				凭证材料通过受控通道投递，管理页面不会显示凭证值。
 			</p>
 			{delivery.status === "unknown" || delivery.status === "failed" ? (
+				// 失败用 role="alert"；结果未知时相邻的回执已在播报，这里不再设 live 角色。
 				<Alert
-					variant={delivery.status === "failed" ? "destructive" : "default"}
+					tone={delivery.status === "failed" ? "danger" : "warn"}
+					role={delivery.status === "failed" ? "alert" : undefined}
 				>
 					<AlertDescription>
 						{delivery.status === "unknown"

@@ -2,16 +2,16 @@ import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runti
 import { Link } from "@tanstack/react-router";
 import {
 	ArrowLeft,
-	Bot,
 	ExternalLink,
 	History,
 	MessageCircle,
 	RefreshCw,
 	Settings,
 } from "lucide-react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { statusTone } from "@/lib/status-tone";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	agentConversationSourceLabel,
@@ -19,6 +19,7 @@ import {
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
+import { AgentMark } from "../agent-mark.js";
 import { DirectoryRecords } from "../directory-fields.js";
 import { PageLoadingState } from "../page-loading-state.js";
 import {
@@ -125,23 +126,24 @@ export function AgentDetailScreen({
 				<h1 id="agent-detail-heading" className="font-semibold text-[28px]">
 					暂时无法访问 Agent
 				</h1>
-				<Alert>
+				<Alert tone="danger" role="alert">
 					<AlertDescription>
 						{state.retryable
 							? "暂时无法读取 Agent 信息，请稍后重试。"
 							: "此 Agent 暂时无法访问。"}
 					</AlertDescription>
 					{state.retryable && onRetry ? (
-						<Button
-							className="mt-4"
-							variant="outline"
-							disabled={retrying}
-							onClick={onRetry}
-							type="button"
-						>
-							<RefreshCw aria-hidden="true" data-icon="inline-start" />
-							{retrying ? "正在重新加载…" : "重新加载 Agent"}
-						</Button>
+						<AlertAction>
+							<Button
+								variant="outline"
+								disabled={retrying}
+								onClick={onRetry}
+								type="button"
+							>
+								<RefreshCw aria-hidden="true" data-icon="inline-start" />
+								{retrying ? "正在重新加载…" : "重新加载 Agent"}
+							</Button>
+						</AlertAction>
 					) : null}
 				</Alert>
 				<Link
@@ -180,9 +182,7 @@ export function AgentDetailScreen({
 			</div>
 			<header className="page-heading flex flex-wrap items-start justify-between gap-6">
 				<div className="agent-detail-heading">
-					<span className="agent-detail-symbol" aria-hidden="true">
-						<Bot />
-					</span>
+					<AgentMark name={agent.name} agentId={agent.agentId} />
 					<div className="min-w-0">
 						<p className="page-eyebrow">
 							Agent 详情 ·{" "}
@@ -243,11 +243,11 @@ export function AgentDetailScreen({
 				</div>
 			</header>
 			<div className="status-line flex flex-wrap items-center gap-3">
-				<Badge variant="outline" data-status={agent.managementStatus}>
+				<Badge tone={statusTone(agent.managementStatus)}>
 					{agentManagementStatusLabels[agent.managementStatus]}
 				</Badge>
 				{agent.serviceAvailability && (
-					<Badge variant="secondary" data-status={agent.serviceAvailability}>
+					<Badge tone={statusTone(agent.serviceAvailability)}>
 						{agentServiceAvailabilityLabel(agent.serviceAvailability)}
 					</Badge>
 				)}
@@ -413,10 +413,9 @@ export function AgentDetailScreen({
 							<li>
 								<strong>服务状态</strong>
 								<Badge
-									variant="outline"
-									data-status={
-										agent.serviceAvailability ?? agent.managementStatus
-									}
+									tone={statusTone(
+										agent.serviceAvailability ?? agent.managementStatus,
+									)}
 								>
 									{agent.serviceAvailability
 										? agentServiceAvailabilityLabel(agent.serviceAvailability)
@@ -426,7 +425,7 @@ export function AgentDetailScreen({
 							{agent.configuration.channels.map((channel) => (
 								<li key={channel.kind}>
 									<strong>{agentChannelKindLabels[channel.kind]}</strong>
-									<Badge variant="outline" data-status={channel.status}>
+									<Badge tone={statusTone(channel.status)}>
 										{channelStatusLabels[channel.status]}
 									</Badge>
 								</li>

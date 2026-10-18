@@ -5,6 +5,7 @@ import {
 	render,
 	screen,
 	waitFor,
+	within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
@@ -104,6 +105,41 @@ describe("ApplicationManagementScreen", () => {
 		fireEvent.click(screen.getByRole("button", { name: "注册应用" }));
 		await waitFor(() =>
 			expect(onRegister).toHaveBeenCalledWith("Build service"),
+		);
+	});
+
+	it("confirms disabling the application before calling onDisable", async () => {
+		const onDisable = vi
+			.fn<(applicationId: string) => Promise<ApplicationMetadataV1>>()
+			.mockResolvedValue({ ...metadata, status: "disabled" });
+		render(
+			<ApplicationManagementScreen
+				state={{ kind: "ready", application: metadata }}
+				onDisable={onDisable}
+			/>,
+		);
+		const trigger = screen.getByRole("button", {
+			name: "停用应用 Build service",
+		});
+		expect(trigger.className).not.toContain("bg-destructive");
+		fireEvent.click(trigger);
+		let dialog = await screen.findByRole("dialog", {
+			name: "停用这个应用？",
+		});
+		expect(within(dialog).getByText("Build service")).toBeTruthy();
+		expect(within(dialog).getByText(/拒绝该应用的新任务/)).toBeTruthy();
+		expect(onDisable).not.toHaveBeenCalled();
+		fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(onDisable).not.toHaveBeenCalled();
+		fireEvent.click(trigger);
+		dialog = await screen.findByRole("dialog");
+		fireEvent.click(within(dialog).getByRole("button", { name: "停用应用" }));
+		expect(onDisable).toHaveBeenCalledExactlyOnceWith("application-1");
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole("heading", { name: "Build service" }),
+			),
 		);
 	});
 

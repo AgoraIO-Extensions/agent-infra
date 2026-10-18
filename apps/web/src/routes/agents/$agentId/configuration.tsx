@@ -57,7 +57,7 @@ function AgentConfigurationRoute() {
 					>
 						配置暂不可用
 					</h1>
-					<Alert>
+					<Alert tone="danger" role="alert">
 						<AlertDescription>
 							{retryable ? "请稍后重试。" : "请联系管理员。"}
 						</AlertDescription>

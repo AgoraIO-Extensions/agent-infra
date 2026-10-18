@@ -1,12 +1,14 @@
 import { ArrowLeft, PlusIcon, Trash2Icon } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { LoadingLine } from "@/components/ui/spinner";
 import { useResultFocus } from "@/hooks/use-result-focus";
+import { statusTone } from "@/lib/status-tone";
 
 import type {
 	AgentApiLifecycleAcceptedResponseV1,
@@ -158,7 +160,7 @@ function unavailableScreen() {
 			>
 				配置不可用
 			</h1>
-			<Alert>
+			<Alert tone="warn">
 				<AlertDescription>当前无法访问此配置。</AlertDescription>
 			</Alert>
 		</section>
@@ -403,11 +405,11 @@ export function AgentConfigurationScreen({
 					<p>保存后更新运行实例；Secret 只显示状态和版本，不回显值。</p>
 				</div>
 				<div className="tag-row">
-					<Badge variant="outline" data-status={agent.managementStatus}>
+					<Badge tone={statusTone(agent.managementStatus)}>
 						{agentManagementStatusLabels[agent.managementStatus]}
 					</Badge>
 					{agent.serviceAvailability && (
-						<Badge variant="outline" data-status={agent.serviceAvailability}>
+						<Badge tone={statusTone(agent.serviceAvailability)}>
 							{agentServiceAvailabilityLabel(agent.serviceAvailability)}
 						</Badge>
 					)}
@@ -440,7 +442,7 @@ export function AgentConfigurationScreen({
 						</p>
 					) : null}
 					{commandError ? (
-						<Alert>
+						<Alert tone="danger" role="alert">
 							<AlertDescription>
 								{commandError.retryable === false
 									? "权限或 Agent 状态已变化，请刷新页面。"
@@ -625,7 +627,7 @@ export function AgentConfigurationScreen({
 													</p>
 												) : null}
 												{keyCheck.blocked ? (
-													<Alert variant="destructive">
+													<Alert tone="danger" role="alert">
 														<AlertDescription>
 															已填写新
 															Key，但还没有可保存的模型选择：请先点击「检查可用模型」，选好模型（至少一个模型，每个模型至少一个推理档位）后再保存；不想更换
@@ -634,7 +636,7 @@ export function AgentConfigurationScreen({
 													</Alert>
 												) : null}
 												{keyCheck.error || relayKeyError ? (
-													<Alert variant="destructive">
+													<Alert tone="danger" role="alert">
 														<AlertDescription>
 															Key 校验或替换失败，请刷新后重试。
 														</AlertDescription>
@@ -687,20 +689,17 @@ export function AgentConfigurationScreen({
 										{defaultRelayKeyManaged && !keyCheck.typed ? (
 											<div className="space-y-3">
 												{savedRelayKeyCandidatesLoading ? (
-													<p
-														className="text-muted-foreground text-sm"
-														role="status"
-													>
+													<LoadingLine>
 														正在读取已保存 Key 的可用模型…
-													</p>
+													</LoadingLine>
 												) : null}
 												{savedRelayKeyCandidatesError ? (
-													<Alert variant="destructive">
-														<AlertDescription className="flex flex-wrap items-center gap-3">
-															<span>
-																已保存的默认 Key 暂时无法读取可用模型。
-															</span>
-															{onRetrySavedRelayKeyCandidates ? (
+													<Alert tone="danger" role="alert">
+														<AlertDescription>
+															已保存的默认 Key 暂时无法读取可用模型。
+														</AlertDescription>
+														{onRetrySavedRelayKeyCandidates ? (
+															<AlertAction>
 																<Button
 																	disabled={savedRelayKeyCandidatesLoading}
 																	onClick={onRetrySavedRelayKeyCandidates}
@@ -711,13 +710,13 @@ export function AgentConfigurationScreen({
 																		? "正在重试…"
 																		: "重新读取可用模型"}
 																</Button>
-															) : null}
-														</AlertDescription>
+															</AlertAction>
+														) : null}
 													</Alert>
 												) : null}
 												{savedModelPicker}
 												{savedSelectionError ? (
-													<Alert variant="destructive">
+													<Alert tone="danger" role="alert">
 														<AlertDescription>
 															至少选择一个已保存 Key
 															可用的模型，并为每个模型保留一个推理档位。
@@ -745,7 +744,7 @@ export function AgentConfigurationScreen({
 												</Label>
 												{draft.replaceModels
 													? (catalogModelPicker ?? (
-															<Alert variant="destructive">
+															<Alert tone="danger" role="alert">
 																<AlertDescription>
 																	模型目录暂时不可用，无法编辑模型配置；请刷新后重试。
 																</AlertDescription>

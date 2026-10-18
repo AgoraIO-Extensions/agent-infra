@@ -335,3 +335,83 @@ test("does not announce success when metadata readback still has the old scopes"
 	await expect(page.getByText("凭证已收窄，已读取最新元数据。")).toHaveCount(0);
 	await capture(page, "credential-readback-stale");
 });
+
+// F-11：撤销是不可逆操作，先确认对象与后果，确认后恰好一次请求。
+test("revocation is confirmed with the credential and its consequence before one request", async ({
+	page,
+}) => {
+	await fixture(page);
+	const revocations: string[] = [];
+	await page.route(/\/api\/v2\/me\/api-credentials\/[^/]+$/, async (route) => {
+		const request = route.request();
+		if (request.method() !== "DELETE") return route.fallback();
+		const credentialId = decodeURIComponent(
+			new URL(request.url()).pathname.split("/").at(-1) ?? "",
+		);
+		revocations.push(credentialId);
+		await route.fulfill({
+			json: {
+				metadata: { ...initial, revokedAt: "2026-10-02T00:00:00Z" },
+				replayed: false,
+			},
+		});
+	});
+	await page.goto("/my-settings/api-credentials");
+	const rows = page.getByRole("list", { name: "个人 API 凭证列表" });
+	const trigger = rows.getByRole("button", {
+		name: `撤销凭证 ${initial.credentialId}`,
+		exact: true,
+	});
+	await expect(trigger).toBeVisible();
+	// 每个撤销按钮的可访问名称都带凭证标识（R3/R1b）。
+	await expect(
+		rows.getByRole("button", { name: "撤销凭证 expired-browser", exact: true }),
+	).toBeVisible();
+	await expect(
+		rows.getByRole("button", { name: "撤销", exact: true }),
+	).toHaveCount(0);
+	// 默认状态下页面没有实心 danger 按钮。
+	const solidDanger = () =>
+		page.evaluate(() => {
+			const probe = document.createElement("span");
+			document.body.append(probe);
+			const fills = ["var(--destructive)", "var(--danger-ink)"].map((value) => {
+				probe.style.color = value;
+				return getComputedStyle(probe).color;
+			});
+			probe.remove();
+			return Array.from(
+				document.querySelectorAll('#main-content [data-slot="button"]'),
+			).filter((element) =>
+				fills.includes(getComputedStyle(element).backgroundColor),
+			).length;
+		});
+	expect(await solidDanger()).toBe(0);
+
+	await trigger.click();
+	const dialog = page.getByRole("dialog", { name: "撤销这张 API 凭证？" });
+	await expect(dialog).toBeVisible();
+	await expect(dialog).toContainText(initial.credentialId);
+	await expect(dialog).toContainText("撤销后不能恢复");
+	expect(revocations).toHaveLength(0);
+	await dialog.getByRole("button", { name: "取消" }).click();
+	await expect(dialog).not.toBeVisible();
+	await trigger.click();
+	await expect(dialog).toBeVisible();
+	await page.keyboard.press("Escape");
+	await expect(dialog).not.toBeVisible();
+	await trigger.click();
+	await expect(dialog).toBeVisible();
+	await page.mouse.click(4, 4);
+	await expect(dialog).not.toBeVisible();
+	expect(revocations).toHaveLength(0);
+
+	await trigger.click();
+	await dialog.getByRole("button", { name: "撤销凭证", exact: true }).click();
+	await expect(dialog).not.toBeVisible();
+	await expect.poll(() => revocations).toEqual([initial.credentialId]);
+	await expect
+		.poll(() => page.evaluate(() => document.activeElement === document.body))
+		.toBe(false);
+	await capture(page, "credential-revoke-confirmed");
+});

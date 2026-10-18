@@ -4,13 +4,14 @@ import { useId } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Empty, EmptyDescription } from "@/components/ui/empty";
+import { Empty, EmptyContent, EmptyDescription } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { LoadingLine } from "@/components/ui/spinner";
 import {
 	Table,
 	TableBody,
@@ -19,6 +20,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import { statusTone } from "@/lib/status-tone";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	agentManagementStatusLabels,
@@ -117,7 +119,7 @@ export function AdminAgentsScreen({
 				)}
 			</header>
 			{denied ? (
-				<Alert>
+				<Alert tone="warn">
 					<AlertDescription>当前无权访问 Agent 管理。</AlertDescription>
 				</Alert>
 			) : (
@@ -167,13 +169,15 @@ export function AdminAgentsScreen({
 						</div>
 					</div>
 					<div className="admin-agent-summary">
-						<p role="status" aria-live="polite">
-							{state.kind === "loading"
-								? "正在加载 Agent…"
-								: state.kind === "error"
-									? "Agent 列表暂时无法读取。"
-									: `${agents.length} 个已创建 Agent，匹配 ${matches.length} 个${refreshing ? "，正在刷新…" : ""}`}
-						</p>
+						<div role="status" aria-live="polite">
+							{state.kind === "loading" ? (
+								<LoadingLine announce={false}>正在加载 Agent…</LoadingLine>
+							) : state.kind === "error" ? (
+								"Agent 列表暂时无法读取。"
+							) : (
+								`${agents.length} 个已创建 Agent，匹配 ${matches.length} 个${refreshing ? "，正在刷新…" : ""}`
+							)}
+						</div>
 						<Button
 							variant="outline"
 							disabled={
@@ -188,7 +192,7 @@ export function AdminAgentsScreen({
 						</Button>
 					</div>
 					{state.kind === "error" ? (
-						<Alert>
+						<Alert tone="danger" role="alert">
 							<AlertDescription>
 								{state.retryable
 									? "请重试读取列表。"
@@ -202,9 +206,11 @@ export function AdminAgentsScreen({
 					) : state.kind === "ready" && !matches.length ? (
 						<Empty>
 							<EmptyDescription>未找到匹配的 Agent。</EmptyDescription>
-							<Button variant="outline" onClick={() => onFiltersChange({})}>
-								清除筛选
-							</Button>
+							<EmptyContent>
+								<Button variant="outline" onClick={() => onFiltersChange({})}>
+									清除筛选
+								</Button>
+							</EmptyContent>
 						</Empty>
 					) : state.kind === "ready" ? (
 						<>
@@ -243,10 +249,7 @@ export function AdminAgentsScreen({
 											</TableCell>
 											<TableCell data-label="状态">
 												<div className="space-y-2">
-													<Badge
-														variant="outline"
-														data-status={agent.managementStatus}
-													>
+													<Badge tone={statusTone(agent.managementStatus)}>
 														{
 															agentManagementStatusLabels[
 																agent.managementStatus

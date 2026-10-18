@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { RefreshCw, Search } from "lucide-react";
 import { useId, useMemo, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
@@ -11,6 +11,7 @@ import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { LoadingLine } from "@/components/ui/spinner";
 import type { SkillHubVersionMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
 import type {
 	SkillHubDirectoryState,
@@ -45,13 +46,11 @@ type SkillHubDirectoryScreenProps = {
 function VersionBadges({ version }: { version: SkillHubVersionMetadataV1 }) {
 	return (
 		<div className="flex flex-wrap gap-2">
-			<Badge variant="secondary">
-				{skillHubProviderLabels[version.provider]}
-			</Badge>
-			<Badge variant="outline">
+			<Badge variant="tag">{skillHubProviderLabels[version.provider]}</Badge>
+			<Badge variant="tag">
 				{skillHubVisibilityLabels[version.visibility]}
 			</Badge>
-			<Badge variant="outline">已发布</Badge>
+			<Badge tone="gray">已发布</Badge>
 		</div>
 	);
 }
@@ -105,7 +104,7 @@ export function SkillHubDirectoryScreen({
 				</div>
 				{state.kind === "ready" ? (
 					<Badge
-						variant="outline"
+						variant="tag"
 						aria-label={`共 ${versions.length} 个 Skill 版本`}
 					>
 						{versions.length} 个版本
@@ -116,7 +115,7 @@ export function SkillHubDirectoryScreen({
 			{state.kind === "loading" ? (
 				<p aria-live="polite">正在加载 Skill 目录…</p>
 			) : state.kind === "unavailable" ? (
-				<Alert>
+				<Alert tone="danger" role="alert">
 					<AlertDescription>
 						{state.retryable
 							? "Skill 目录暂时无法读取，请稍后重试。"
@@ -125,18 +124,15 @@ export function SkillHubDirectoryScreen({
 								: "Skill 目录暂时无法访问，请联系管理员。"}
 					</AlertDescription>
 					{state.retryable && onRetry ? (
-						<Button
-							className="mt-4"
-							variant="outline"
-							onClick={onRetry}
-							disabled={retrying}
-						>
-							<RefreshCw
-								aria-hidden="true"
-								className={retrying ? "animate-spin" : ""}
-							/>
-							重试
-						</Button>
+						<AlertAction>
+							<Button variant="outline" onClick={onRetry} disabled={retrying}>
+								<RefreshCw
+									aria-hidden="true"
+									className={retrying ? "animate-spin" : ""}
+								/>
+								重试
+							</Button>
+						</AlertAction>
 					) : null}
 				</Alert>
 			) : (
@@ -279,11 +275,11 @@ export function SkillHubVersionScreen({
 	retrying = false,
 }: SkillHubVersionScreenProps) {
 	if (state.kind === "loading") {
-		return <p aria-live="polite">正在加载 Skill 版本…</p>;
+		return <LoadingLine>正在加载 Skill 版本…</LoadingLine>;
 	}
 	if (state.kind === "unavailable") {
 		return (
-			<Alert>
+			<Alert tone="danger" role="alert">
 				<AlertDescription>
 					{state.retryable
 						? "Skill 版本暂时无法读取，请稍后重试。"
@@ -292,18 +288,15 @@ export function SkillHubVersionScreen({
 							: "Skill 版本暂时无法访问，请联系管理员。"}
 				</AlertDescription>
 				{state.retryable && onRetry ? (
-					<Button
-						className="mt-4"
-						variant="outline"
-						onClick={onRetry}
-						disabled={retrying}
-					>
-						<RefreshCw
-							aria-hidden="true"
-							className={retrying ? "animate-spin" : ""}
-						/>
-						重试
-					</Button>
+					<AlertAction>
+						<Button variant="outline" onClick={onRetry} disabled={retrying}>
+							<RefreshCw
+								aria-hidden="true"
+								className={retrying ? "animate-spin" : ""}
+							/>
+							重试
+						</Button>
+					</AlertAction>
 				) : null}
 			</Alert>
 		);

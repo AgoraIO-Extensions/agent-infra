@@ -278,3 +278,72 @@ test("exported design viewport matrix admin Agents", async ({ page }, info) => {
 		await captureDesignContract(page, info, "admin-agents");
 	}
 });
+
+// F-11：禁用员工先确认对象（姓名与邮箱）与后果；解除禁用仍直接提交。
+test("disabling an employee is confirmed with the person before one request", async ({
+	page,
+}) => {
+	await fixture(page);
+	const userId = "11111111-1111-4111-8111-111111111111";
+	const writes: unknown[] = [];
+	await page.route("**/api/v2/directory/search?**", (route) =>
+		route.fulfill({
+			json: {
+				schemaVersion: 1,
+				items: [
+					{
+						kind: "user",
+						canonicalId: userId,
+						displayName: "验收员工",
+						email: "employee@example.test",
+					},
+				],
+			},
+		}),
+	);
+	await page.route(`**/api/v2/admin/users/${userId}/disable`, (route) => {
+		const request = route.request();
+		if (request.method() === "PUT") {
+			writes.push(request.postDataJSON());
+			return route.fulfill({
+				json: {
+					schemaVersion: 1,
+					userId,
+					disabled: true,
+					changed: true,
+					auditOutcome: "recorded",
+				},
+			});
+		}
+		return route.fulfill({
+			json: { schemaVersion: 1, userId, disabled: false },
+		});
+	});
+	await page.goto("/admin/agents");
+	const picker = page.getByRole("combobox", { name: "员工" });
+	await picker.click();
+	await page.getByRole("option", { name: /验收员工/ }).click();
+	await expect(page.getByText("当前状态：未禁用")).toBeVisible();
+	const trigger = page.getByRole("button", { name: "禁用员工", exact: true });
+	await trigger.click();
+	const dialog = page.getByRole("dialog", { name: "禁用这名员工？" });
+	await expect(dialog).toBeVisible();
+	await expect(dialog).toContainText("验收员工");
+	await expect(dialog).toContainText("employee@example.test");
+	await expect(dialog).toContainText("立即不能登录平台");
+	expect(writes).toHaveLength(0);
+	await dialog.getByRole("button", { name: "取消" }).click();
+	await expect(dialog).not.toBeVisible();
+	expect(writes).toHaveLength(0);
+	await trigger.click();
+	await dialog.getByRole("button", { name: "禁用员工", exact: true }).click();
+	await expect
+		.poll(() => writes)
+		.toEqual([{ schemaVersion: 1, disabled: true }]);
+	await expect(
+		page
+			.locator("#main-content")
+			.getByRole("status")
+			.filter({ hasText: "禁用已确认" }),
+	).toBeVisible();
+});

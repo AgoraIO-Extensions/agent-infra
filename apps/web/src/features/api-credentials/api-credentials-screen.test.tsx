@@ -37,6 +37,52 @@ describe("ApiCredentialsScreen", () => {
 		expect(screen.queryByText(/papi_/)).toBeNull();
 	});
 
+	it("confirms a revocation with the credential and its consequence before requesting it", async () => {
+		const second = { ...metadata, credentialId: "credential-2" };
+		const onRevoke = vi
+			.fn<(credentialId: string) => Promise<unknown>>()
+			.mockResolvedValue(undefined);
+		render(
+			<ApiCredentialsScreen
+				state={{ kind: "ready", credentials: [metadata, second] }}
+				onRevoke={onRevoke}
+			/>,
+		);
+		// 每张卡的撤销按钮可访问名称都带凭证标识，且不是实心 danger。
+		const trigger = screen.getByRole("button", {
+			name: "撤销凭证 credential-1",
+		});
+		expect(
+			screen.getByRole("button", { name: "撤销凭证 credential-2" }),
+		).toBeTruthy();
+		expect(trigger.className).not.toContain("bg-destructive");
+		fireEvent.click(trigger);
+		let dialog = await screen.findByRole("dialog", {
+			name: "撤销这张 API 凭证？",
+		});
+		expect(within(dialog).getByText("credential-1")).toBeTruthy();
+		expect(within(dialog).getByText(/撤销后不能恢复/)).toBeTruthy();
+		expect(onRevoke).not.toHaveBeenCalled();
+		fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		fireEvent.click(trigger);
+		dialog = await screen.findByRole("dialog");
+		fireEvent.keyDown(dialog, { key: "Escape" });
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(onRevoke).not.toHaveBeenCalled();
+		fireEvent.click(trigger);
+		dialog = await screen.findByRole("dialog");
+		fireEvent.click(within(dialog).getByRole("button", { name: "撤销凭证" }));
+		expect(onRevoke).toHaveBeenCalledExactlyOnceWith("credential-1");
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		// 触发器在撤销进行中会禁用、成功后消失，焦点落在该凭证卡片内而不是 body。
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByText("credential-1", { selector: "code" }),
+			),
+		);
+	});
+
 	it("shows first-delivery material once and explains replay behavior", async () => {
 		const onIssue = vi
 			.fn<

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
 	getPlatformUserDisabledV2,
 	setPlatformUserDisabledV2,
 } from "../../pilot/generated-v2/sdk.gen.js";
-import { DirectoryPicker } from "../directory-fields.js";
+import { DirectoryPicker, DirectoryRecords } from "../directory-fields.js";
 
 type DisableStatus = "loading" | "disabled" | "enabled" | "unavailable";
 
@@ -23,8 +24,11 @@ export function AdminUserGovernance() {
 	const [userId, setUserId] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [message, setMessage] = useState("");
+	const [failed, setFailed] = useState(false);
 	const [status, setStatus] = useState<DisableStatus | undefined>();
 	const generation = useRef(0);
+	// 确认后触发器会因提交中而禁用，焦点回到本区块标题而不是 body。
+	const heading = useRef<HTMLHeadingElement>(null);
 
 	useEffect(() => {
 		const attempt = ++generation.current;
@@ -33,6 +37,7 @@ export function AdminUserGovernance() {
 			setStatus(undefined);
 			return;
 		}
+		setFailed(false);
 		setStatus("loading");
 		void getPlatformUserDisabledV2({
 			path: { userId },
@@ -58,6 +63,7 @@ export function AdminUserGovernance() {
 		const attempt = ++generation.current;
 		setBusy(true);
 		setMessage("");
+		setFailed(false);
 		try {
 			const result = await setPlatformUserDisabledV2({
 				path: { userId: targetUserId },
@@ -81,6 +87,7 @@ export function AdminUserGovernance() {
 		} catch {
 			if (attempt === generation.current) {
 				setStatus("unavailable");
+				setFailed(true);
 				setMessage("操作未确认，请刷新目录记录后重试。未显示上游错误详情。");
 			}
 		} finally {
@@ -95,6 +102,8 @@ export function AdminUserGovernance() {
 		>
 			<div>
 				<h2
+					ref={heading}
+					tabIndex={-1}
 					id="admin-user-governance-heading"
 					className="font-semibold text-foreground text-sm"
 				>
@@ -128,13 +137,21 @@ export function AdminUserGovernance() {
 								: "选择员工后读取当前服务端状态。"}
 			</p>
 			<div className="flex flex-wrap gap-3">
-				<Button
+				{/* 禁用会立即终止对方的平台访问，先确认对象与后果；解除禁用直接提交。 */}
+				<ConfirmDialog
 					disabled={busy || status === "loading" || !userId}
-					onClick={() => void updateDisabled(true)}
-					variant="destructive"
-				>
-					{busy ? "提交中…" : "禁用员工"}
-				</Button>
+					trigger={
+						<Button variant="outline">{busy ? "提交中…" : "禁用员工"}</Button>
+					}
+					title="禁用这名员工？"
+					subject={{
+						name: <DirectoryRecords kind="user" ids={[userId]} />,
+					}}
+					description="禁用后对方立即不能登录平台，也不能通过平台入口使用或管理 Agent；进行中的任务会收到取消请求。之后可以「解除禁用」恢复资格，已取消的任务不会恢复。"
+					confirmLabel="禁用员工"
+					finalFocus={heading}
+					onConfirm={() => void updateDisabled(true)}
+				/>
 				<Button
 					disabled={busy || status === "loading" || !userId}
 					onClick={() => void updateDisabled(false)}
@@ -144,7 +161,10 @@ export function AdminUserGovernance() {
 				</Button>
 			</div>
 			{message ? (
-				<Alert role="status">
+				<Alert
+					tone={failed ? "danger" : "info"}
+					role={failed ? "alert" : "status"}
+				>
 					<AlertDescription>{message}</AlertDescription>
 				</Alert>
 			) : null}

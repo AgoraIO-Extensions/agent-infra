@@ -260,6 +260,42 @@ for (const compact of [false, true]) {
 		await expect(row.getByText("成功", { exact: true })).toHaveCount(0);
 		await expect(page.getByText("最小审计数据", { exact: true })).toBeVisible();
 		await expect(page.getByText(/关联引用不授予查询权限/)).toBeVisible();
+		// 审计范围是首屏静态说明（B-10）：info notice，不设 live 角色，首屏没有 role="alert"。
+		const scopeNotice = page.locator('[data-slot="alert"]', {
+			hasText: "最小审计数据",
+		});
+		await expect(scopeNotice).not.toHaveAttribute("role");
+		await expect(scopeNotice).not.toHaveAttribute("aria-live");
+		await expect(page.getByRole("alert")).toHaveCount(0);
+		if (!compact) {
+			await expect(scopeNotice).toHaveCSS("display", "flex");
+			await expect(scopeNotice).toHaveCSS("column-gap", "10px");
+			await expect(scopeNotice).toHaveCSS("padding", "13px 14px");
+			await expect(scopeNotice).toHaveCSS("border-top-left-radius", "12px");
+			await expect(scopeNotice).toHaveCSS("font-size", "13px");
+			const accent = await page.evaluate(() => {
+				const probe = document.createElement("span");
+				probe.style.color = "var(--accent)";
+				document.body.append(probe);
+				const color = getComputedStyle(probe).color;
+				probe.remove();
+				return color;
+			});
+			const icon = scopeNotice.locator(":scope > svg");
+			await expect(icon).toHaveCSS("width", "17px");
+			await expect(icon).toHaveCSS("height", "17px");
+			await expect(icon).toHaveCSS("margin-top", "2px");
+			await expect(icon).toHaveCSS("color", accent);
+			const title = scopeNotice.getByText("最小审计数据", { exact: true });
+			expect(await title.evaluate((element) => element.tagName)).toBe("STRONG");
+			await expect(title).toHaveCSS("display", "block");
+			await expect(title).toHaveCSS("font-weight", "650");
+			const description = scopeNotice.locator(
+				'[data-slot="alert-description"]',
+			);
+			await expect(description).toHaveCSS("font-size", "13px");
+			await expect(description).toHaveCSS("line-height", "21.45px");
+		}
 		expect(
 			await page.evaluate(
 				() => document.documentElement.scrollWidth <= innerWidth,

@@ -6,7 +6,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -187,7 +187,8 @@ export function NarrowCredentialForm({
 				{scopeError ? (
 					<Alert
 						id={`${id}-scope-error`}
-						variant="destructive"
+						tone="danger"
+						role="alert"
 						className="mt-2"
 					>
 						<AlertDescription>{scopeError}</AlertDescription>
@@ -214,24 +215,25 @@ export function NarrowCredentialForm({
 					使用本地时间；留空不会取消或延长当前有效期。
 				</p>
 				{expiryError ? (
-					<Alert id={`${id}-expiry-error`} variant="destructive">
+					<Alert id={`${id}-expiry-error`} tone="danger" role="alert">
 						<AlertDescription>{expiryError}</AlertDescription>
 					</Alert>
 				) : null}
 			</div>
 			{requestError ? (
-				<Alert variant="destructive">
+				<Alert tone="danger" role="alert">
 					<AlertDescription>{requestError}</AlertDescription>
 					{onRefresh ? (
-						<Button
-							type="button"
-							variant="outline"
-							disabled={busy}
-							onClick={onRefresh}
-							className="mt-2"
-						>
-							重新加载凭证
-						</Button>
+						<AlertAction>
+							<Button
+								type="button"
+								variant="outline"
+								disabled={busy}
+								onClick={onRefresh}
+							>
+								重新加载凭证
+							</Button>
+						</AlertAction>
 					) : null}
 				</Alert>
 			) : null}

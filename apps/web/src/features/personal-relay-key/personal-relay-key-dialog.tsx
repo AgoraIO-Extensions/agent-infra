@@ -6,6 +6,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
@@ -15,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { LoadingLine } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import type { PersonalRelayKeyStateV1 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -261,6 +263,95 @@ function PersonalRelayKeyForm({
 		</>
 	);
 
+	const busy = state === "loading" || state === "saving";
+	const form = (
+		<div className="space-y-4" data-testid="personal-relay-key-form">
+			<div
+				className="border border-border bg-muted/30 px-3 py-2 text-sm"
+				data-testid="personal-key-status"
+			>
+				{projection?.isSet
+					? `已配置 · 版本 ${projection.keyVersion}`
+					: projection
+						? "未配置"
+						: "尚未读取"}
+			</div>
+			{statusText && (
+				// 同一个 live region 承载读取、保存与结果；读取或保存中显示 spinner。
+				<div
+					className={cn(
+						"text-sm",
+						hasFailure ? "text-destructive" : "text-muted-foreground",
+					)}
+					role={hasFailure ? "alert" : "status"}
+				>
+					{busy ? (
+						<LoadingLine announce={false}>{statusText}</LoadingLine>
+					) : (
+						statusText
+					)}
+				</div>
+			)}
+			{hasFailure && (
+				<div className="flex flex-wrap gap-2">
+					{kind === "authentication" && onSessionExpired ? (
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => void onSessionExpired()}
+						>
+							重新检查登录
+						</Button>
+					) : null}
+					{kind !== "authorization" && kind !== "authentication" && (
+						<Button variant="outline" size="sm" onClick={() => void refresh()}>
+							<RefreshCw aria-hidden="true" />
+							重新读取状态
+						</Button>
+					)}
+				</div>
+			)}
+			<div className="space-y-2">
+				<Label htmlFor="personal-relay-key">
+					{projection?.isSet ? "替换个人 Relay Key" : "设置个人 Relay Key"}
+				</Label>
+				<Input
+					ref={inputRef}
+					id="personal-relay-key"
+					name="personal-relay-key"
+					type="password"
+					autoComplete="new-password"
+					spellCheck={false}
+					value={value}
+					disabled={state !== "ready" || !projection}
+					aria-invalid={fieldError ? "true" : undefined}
+					aria-describedby="personal-relay-key-hint personal-relay-key-error"
+					onChange={(event) => {
+						setValue(event.target.value);
+						setFieldError("");
+					}}
+				/>
+				<p
+					id="personal-relay-key-hint"
+					className="text-muted-foreground text-xs"
+				>
+					提交或关闭后清空输入，不存入浏览器存储；不会回退到 Agent 默认 Key。
+				</p>
+				{fieldError && (
+					<Alert
+						id="personal-relay-key-error"
+						tone="danger"
+						role="alert"
+						icon={null}
+						className="border-0 bg-transparent p-0 text-sm"
+					>
+						{fieldError}
+					</Alert>
+				)}
+			</div>
+		</div>
+	);
+
 	return (
 		<>
 			{surface === "page" ? (
@@ -278,93 +369,18 @@ function PersonalRelayKeyForm({
 			) : (
 				<DialogHeader>
 					<DialogTitle>个人 Relay Key</DialogTitle>
+				</DialogHeader>
+			)}
+			{surface === "page" ? (
+				form
+			) : (
+				<DialogBody className="space-y-4">
 					<DialogDescription>
 						独立于 Agent Owner 配置。Key 只写入服务端，页面不会回显明文或摘要。
 					</DialogDescription>
-				</DialogHeader>
+					{form}
+				</DialogBody>
 			)}
-			<div className="space-y-4" data-testid="personal-relay-key-form">
-				<div
-					className="border border-border bg-muted/30 px-3 py-2 text-sm"
-					data-testid="personal-key-status"
-				>
-					{projection?.isSet
-						? `已配置 · 版本 ${projection.keyVersion}`
-						: projection
-							? "未配置"
-							: "尚未读取"}
-				</div>
-				{statusText && (
-					<p
-						className={cn(
-							"text-sm",
-							hasFailure ? "text-destructive" : "text-muted-foreground",
-						)}
-						role={hasFailure ? "alert" : "status"}
-					>
-						{statusText}
-					</p>
-				)}
-				{hasFailure && (
-					<div className="flex flex-wrap gap-2">
-						{kind === "authentication" && onSessionExpired ? (
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={() => void onSessionExpired()}
-							>
-								重新检查登录
-							</Button>
-						) : null}
-						{kind !== "authorization" && kind !== "authentication" && (
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={() => void refresh()}
-							>
-								<RefreshCw aria-hidden="true" />
-								重新读取状态
-							</Button>
-						)}
-					</div>
-				)}
-				<div className="space-y-2">
-					<Label htmlFor="personal-relay-key">
-						{projection?.isSet ? "替换个人 Relay Key" : "设置个人 Relay Key"}
-					</Label>
-					<Input
-						ref={inputRef}
-						id="personal-relay-key"
-						name="personal-relay-key"
-						type="password"
-						autoComplete="new-password"
-						spellCheck={false}
-						value={value}
-						disabled={state !== "ready" || !projection}
-						aria-invalid={fieldError ? "true" : undefined}
-						aria-describedby="personal-relay-key-hint personal-relay-key-error"
-						onChange={(event) => {
-							setValue(event.target.value);
-							setFieldError("");
-						}}
-					/>
-					<p
-						id="personal-relay-key-hint"
-						className="text-muted-foreground text-xs"
-					>
-						提交或关闭后清空输入，不存入浏览器存储；不会回退到 Agent 默认 Key。
-					</p>
-					{fieldError && (
-						<Alert
-							id="personal-relay-key-error"
-							variant="destructive"
-							className="border-0 bg-transparent p-0 text-sm"
-						>
-							{fieldError}
-						</Alert>
-					)}
-				</div>
-			</div>
 			{surface === "page" ? (
 				<div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
 					{actionButtons}
