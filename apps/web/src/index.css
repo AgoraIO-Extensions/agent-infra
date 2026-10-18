@@ -1137,11 +1137,6 @@ a[class~="group/button"] {
 	min-width: 0;
 	overflow-wrap: anywhere;
 }
-.conversation-subtitle {
-	margin-top: 4px;
-	color: var(--muted-foreground);
-	font-size: 12px;
-}
 .conversation-header h1 {
 	font-family: var(--font-display);
 	font-size: 28px;
@@ -1277,11 +1272,6 @@ a[class~="group/button"] {
 .chat-thread .model-controls .model-save {
 	grid-column: 1 / -1;
 }
-.model-selection-status {
-	grid-column: 1 / -1;
-	color: var(--muted-foreground);
-	font-size: 12px;
-}
 .chat-thread .composer-zone {
 	position: relative;
 	flex: none;
@@ -1308,88 +1298,6 @@ a[class~="group/button"] {
 .chat-thread .composer-zone [data-slot="textarea"]:focus-visible {
 	outline: 2px solid var(--primary);
 	outline-offset: -3px;
-}
-.conversation-collapsible-group {
-	display: grid;
-	gap: 4px;
-}
-.conversation-collapsible-trigger {
-	display: flex;
-	width: 100%;
-	min-height: 44px;
-	align-items: center;
-	justify-content: space-between;
-	padding: 8px 10px;
-	border: 1px solid var(--border);
-	border-radius: 10px;
-	background: var(--surface);
-	color: var(--foreground);
-	font-size: 12px;
-	text-align: left;
-}
-.conversation-collapsible-trigger:hover {
-	background: var(--muted);
-}
-.conversation-collapsible-trigger span {
-	display: inline-flex;
-	align-items: center;
-	gap: 7px;
-}
-.conversation-collapsible-trigger svg {
-	width: 15px;
-	height: 15px;
-	transition: transform 180ms ease;
-}
-.conversation-collapsible-content {
-	padding: 10px 12px;
-	border: 1px solid var(--border);
-	border-top: 0;
-	border-radius: 0 0 10px 10px;
-	color: var(--muted-foreground);
-	font-size: 12px;
-}
-.connection-notice-inline {
-	color: var(--accent-ink);
-	font-weight: 650;
-}
-.conversation-capability-menu {
-	position: absolute;
-	z-index: 60;
-	width: min(320px, calc(100vw - 32px));
-	max-height: min(248px, 40dvh);
-	overflow: auto;
-	padding: 6px;
-	border: 1px solid var(--border);
-	border-radius: 12px;
-	background: var(--surface);
-	box-shadow: var(--surface-shadow);
-}
-.conversation-capability-menu button {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto;
-	width: 100%;
-	min-height: 44px;
-	padding: 8px 10px;
-	border: 0;
-	border-radius: 8px;
-	background: transparent;
-	color: var(--foreground);
-	text-align: left;
-}
-.conversation-capability-menu button.is-active,
-.conversation-capability-menu button:hover {
-	background: var(--muted);
-}
-.conversation-capability-menu button small {
-	grid-column: 1;
-	color: var(--muted-foreground);
-	font-size: 11px;
-}
-.conversation-capability-menu button svg {
-	grid-column: 2;
-	grid-row: 1 / span 2;
-	width: 15px;
-	color: var(--accent-ink);
 }
 .composer-controls {
 	display: flex;
