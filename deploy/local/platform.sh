@@ -150,6 +150,8 @@ worker_values() {
     exit 1
   }
   worker_options=(
+    # 仓库内的本地默认值在前，私有 values 在后，私有 values 可以覆盖（#2883）。
+    --values "$repository_root/deploy/local/platform-worker.local-defaults.values.yaml"
     --values "$PLATFORM_LOCAL_WORKER_VALUES"
     --set workloadTopology.enabled=false
     --set migration.enabled=false
