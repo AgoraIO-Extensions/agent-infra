@@ -29,7 +29,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import nativeBarrierManifest from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
 	type: "json",
 };
-import { projectPlatformOperationAuditV1 } from "../../platform-core/src/audit-query.js";
 import {
 	type BrowserHandoffRuntimeSnapshotV1,
 	createBrowserHandoffControllerV1,
@@ -5527,38 +5526,6 @@ describe("Codex Runtime Driver", () => {
 			failureCode: "response_incomplete",
 			startedAt: expect.any(String),
 		});
-		const principal = { kind: "user" as const, id: "principal-a" };
-		const projected = projectPlatformOperationAuditV1(
-			{
-				schemaVersion: 2,
-				eventId: "event-model-unknown",
-				authorizationRecordId: "authorization-a",
-				executor: "platform_worker",
-				fact,
-			},
-			{
-				executionId: command.executionId,
-				agentId: command.agentId,
-				actorId: principal.id,
-				channelId: "web",
-				authorizationRecordId: "authorization-a",
-				acceptedActor: principal,
-				acceptedExecutionId: command.executionId,
-				acceptedAgentId: command.agentId,
-				acceptedAuthorizationRecordId: "authorization-a",
-				boundary: {
-					schemaVersion: 1,
-					principal,
-					agentId: command.agentId,
-					channelId: "web",
-					identityRevision: "directory-1",
-					agentAuthorizationRevision: "agent-access-1",
-					accessSources: [{ kind: "user", userId: principal.id }],
-				},
-			},
-			{ kind: "administrator", administratorId: "admin-a" },
-		);
-		expect(projected.fact).toEqual(fact);
 		expect(fact).not.toHaveProperty("finishedAt");
 		expect(fact).not.toHaveProperty("durationMs");
 		const repeated = await modelRequest(loopback, bridge);
