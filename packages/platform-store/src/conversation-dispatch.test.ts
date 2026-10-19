@@ -1,8 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+	type ConversationExecutionAuthorityV1,
 	createAgentManagementV1,
+	createNativeCapabilityAdmissionUseCaseV1,
+	createTaskRuntimeAuthorizationUseCaseV1,
 	type SessionSandboxReconciliationClaimV1,
 } from "@agent-infra/platform-core";
+import { FakeNativeCapabilityMetadataRevalidationV1 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -42,6 +46,7 @@ import {
 	requestSessionSandboxResume,
 } from "./session-sandbox.ts";
 import { persistSessionSandboxUpgradeIntents } from "./session-sandbox-upgrade.ts";
+import { PostgresTaskAuthorizationStoreV1 } from "./task-authorization.ts";
 import { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.ts";
 
 let databaseUrl = "";
@@ -437,6 +442,116 @@ function open() {
 	return new PostgresConversationDispatchStoreV1({ databaseUrl });
 }
 
+async function waitForAvailableItem(itemId: string) {
+	// The application and container DB clocks can differ; wait for the real scheduler fact.
+	await expect
+		.poll(
+			async () => {
+				const [row] = await client<
+					{ available: boolean }[]
+				>`select available_at <= clock_timestamp() as available from platform.outbox_items where id = ${itemId}`;
+				return row?.available;
+			},
+			{ timeout: 1000, interval: 10 },
+		)
+		.toBe(true);
+}
+
+async function admitNative(kind: "command" | "skill") {
+	const work = await seed("conversation.turn.submit.v1", {
+		executionStatus: "completed",
+		hostSessionRef: "native-host",
+	});
+	const state = await seedCapacityAgent();
+	await client`insert into platform.agent_configuration_revisions
+		(agent_id, revision, source_reference, configuration, created_at)
+		values ('agent-dispatch', 4, 'native-fixture', ${client.json(state.verified.configuration)}, now())`;
+	await client`insert into platform.agent_availability (agent_id, target_type, target_id)
+		values ('agent-dispatch', 'user', 'actor-dispatch')`;
+	await client`insert into platform.agent_owners (agent_id, owner_id, created_at)
+		values ('agent-dispatch', 'owner-a', now())`;
+	await client`insert into platform.relay_key_subjects (purpose, subject_id, last_version, current_version)
+		values ('personal', 'actor-dispatch', 1, 1) on conflict do nothing`;
+	await client`insert into platform.relay_key_versions (purpose, subject_id, key_version, key_id, ciphertext)
+		values ('personal', 'actor-dispatch', 1, 'native-fixture-key',
+		${client.json({ purpose: "personal", subjectId: "actor-dispatch", keyId: "native-fixture-key", keyVersion: 1 })}) on conflict do nothing`;
+	const authority: ConversationExecutionAuthorityV1 = {
+		schemaVersion: 1,
+		actorId: "actor-dispatch",
+		agentId: "agent-dispatch",
+		channelId: "web",
+		authorizationRevision: "authorization-dispatch",
+		supportsSupplementaryInstruction: false,
+		taskBoundary: {
+			schemaVersion: 1,
+			principal: { kind: "user", id: "actor-dispatch" },
+			agentId: "agent-dispatch",
+			channelId: "web",
+			identityRevision: "identity-dispatch",
+			agentAuthorizationRevision: "authorization-dispatch",
+			accessSources: [{ kind: "user", userId: "actor-dispatch" }],
+		},
+	};
+	const transaction = new PostgresConversationExecutionTransactionV1({
+		databaseUrl,
+		userDirectory: {
+			async resolveUser(userId) {
+				return {
+					schemaVersion: 1,
+					userId,
+					accountStatus: "active",
+					organizationIds: [],
+					authorizationRevision: "identity-dispatch",
+				};
+			},
+		},
+	});
+	try {
+		const admission = createNativeCapabilityAdmissionUseCaseV1({
+			authorization: {
+				async authorize() {
+					return { outcome: "allowed", authority };
+				},
+			},
+			transaction,
+			metadata: new FakeNativeCapabilityMetadataRevalidationV1({
+				hostScopeRef: "native-host",
+				projection: {
+					selector: kind === "command" ? "commands" : "skills",
+					revision: "b".repeat(64),
+					capabilities: [
+						{
+							id: "a".repeat(64),
+							kind,
+							name: "native-fixture",
+							description: "Controlled native dispatch fixture",
+							source: { name: "runtime", version: "1.0.0" },
+							availability: kind === "command" ? "available" : "discovered",
+						},
+					],
+				},
+			}),
+		});
+		const accepted = await admission.admit({
+			schemaVersion: 1,
+			conversationId: work.conversationId,
+			capabilityId: "a".repeat(64),
+			directoryRevision: "b".repeat(64),
+			parameters: kind === "command" ? "" : "summary",
+			idempotencyKey: "native-admit",
+			requestId: "native-admit",
+			traceId: "native-admit",
+		});
+		expect(accepted.outcome).toBe("accepted");
+		if (accepted.outcome !== "accepted")
+			throw new Error("Expected native admission");
+		await waitForAvailableItem(accepted.plan.outbox.id);
+		return { ...accepted.plan, authority };
+	} finally {
+		await transaction.close();
+	}
+}
+
 async function claim(
 	itemId: string,
 	workerId = "worker-1",
@@ -466,6 +581,264 @@ async function dispatchState(work: { itemId: string; executionId: string }) {
 }
 
 describe("PostgreSQL Conversation dispatch Store", () => {
+	it.each(["command", "skill"] as const)(
+		"authorizes and pins admitted native %s through real Store claims",
+		async (kind) => {
+			const plan = await admitNative(kind);
+			const { store, decision } = await claim(plan.outbox.id);
+			const authorization = new PostgresTaskAuthorizationStoreV1({
+				databaseUrl,
+			});
+			try {
+				if (decision.outcome !== "claimed")
+					throw new Error("Expected native claim");
+				const owned = decision.claim;
+				expect(owned.executionDeliveryFence).toBe(owned.deliveryFence);
+				expect(owned).toMatchObject({
+					executionSource: "web",
+					relayKeyBinding: { purpose: "personal", subjectId: "actor-dispatch" },
+					modelOptionId: null,
+					input: null,
+				});
+				const before = await store.readRuntimeState({ claim: owned });
+				expect(before).toMatchObject({
+					executionStatus: "submitted",
+					hostSessionRef: "native-host",
+					originalOperationDigest: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+				});
+				const runtimeAuthorization = createTaskRuntimeAuthorizationUseCaseV1({
+					workerId: owned.leaseOwner,
+					readRuntimeState: (claim) => store.readRuntimeState({ claim }),
+					readAuthorization: (executionId) =>
+						authorization.readExecution(executionId),
+					async resolveCurrentUser(userId) {
+						return {
+							schemaVersion: 1,
+							userId,
+							accountStatus: "active",
+							organizationIds: [],
+							authorizationRevision: "identity-dispatch",
+						};
+					},
+					async recordControl(input) {
+						if (
+							input.reason === "browser_handoff" ||
+							input.reason === "browser_side_effect"
+						)
+							throw new Error("Unexpected browser control");
+						return authorization.recordControl({
+							...input,
+							reason: input.reason,
+						});
+					},
+				});
+				await expect(
+					runtimeAuthorization.authorizeClaim(
+						owned,
+						new AbortController().signal,
+					),
+				).resolves.toMatchObject({
+					outcome: "allowed",
+					context: { kind: "business" },
+				});
+				await expect(
+					store.prepareRuntimeDispatch({
+						claim: owned,
+						leaseDurationMs: 30_000,
+					}),
+				).resolves.toBe(true);
+				const prepared = await store.readRuntimeState({ claim: owned });
+				expect(prepared).toMatchObject({
+					executionStatus: "unknown",
+					runtimeSubmitProtocol: "v4",
+					originalSubmitHostSessionRef: "native-host",
+					originalOperationDigest: before?.originalOperationDigest,
+				});
+				await expect(
+					store.recordRuntimeResponse({
+						claim: owned,
+						hostSessionRef: "native-host",
+						originalOperationAccepted: true,
+						transition: {
+							executionStatus: "processing",
+							conversationStatus: "active",
+						},
+					}),
+				).resolves.toBe(true);
+				const record = await authorization.readExecution(owned.executionId);
+				if (!record) throw new Error("Expected native task boundary");
+				const stopTransaction = new PostgresConversationExecutionTransactionV1({
+					databaseUrl,
+				});
+				try {
+					const commands = createConversationExecutionUseCaseV1({
+						transaction: stopTransaction,
+						authorization: {
+							async authorize() {
+								return { outcome: "allowed", authority: plan.authority };
+							},
+						},
+					});
+					await expect(
+						commands.stop({
+							schemaVersion: 1,
+							command: "stop",
+							conversationId: owned.conversationId,
+							targetExecutionId: owned.executionId,
+							idempotencyKey: "native-stop",
+							requestId: "native-stop",
+							traceId: "native-stop",
+						}),
+					).resolves.toMatchObject({ outcome: "accepted" });
+				} finally {
+					await stopTransaction.close();
+				}
+				await authorization.recordControl({
+					executionId: owned.executionId,
+					authorizationRecordId: record.authorizationRecordId,
+					reason: "stop",
+					workerId: owned.leaseOwner,
+					requestId: "native-stop",
+					traceId: "native-stop",
+				});
+				const [stop] = await client<
+					{ stop_request_id: string }[]
+				>`select stop_request_id from platform.conversation_stops where execution_id = ${owned.executionId}`;
+				if (!stop) throw new Error("Expected native stop");
+				await waitForAvailableItem(`conversation:stop:${stop.stop_request_id}`);
+				const stopClaim = await store.claim({
+					schemaVersion: 1,
+					itemId: `conversation:stop:${stop.stop_request_id}`,
+					workerId: "stop-worker",
+					leaseDurationMs: 30_000,
+				});
+				expect(stopClaim.outcome).toBe("claimed");
+				if (stopClaim.outcome !== "claimed")
+					throw new Error("Expected native stop claim");
+				expect(
+					await store.readRuntimeState({ claim: stopClaim.claim }),
+				).toMatchObject({
+					originalOperationDigest: before?.originalOperationDigest,
+					stopPending: true,
+					runtimeSubmitProtocol: "v4",
+				});
+				await client`update platform.outbox_items set lease_expires_at = clock_timestamp() - interval '1 second' where id = ${owned.itemId}`;
+				const recovery = await store.claim({
+					schemaVersion: 1,
+					itemId: owned.itemId,
+					workerId: "recovery-worker",
+					leaseDurationMs: 30_000,
+				});
+				if (recovery.outcome !== "claimed")
+					throw new Error("Expected native recovery claim");
+				expect(recovery.claim.executionDeliveryFence).toBeGreaterThan(
+					owned.executionDeliveryFence,
+				);
+				await expect(
+					store.prepareRuntimeDispatch({
+						claim: recovery.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).resolves.toBe(true);
+				expect(
+					await store.readRuntimeState({ claim: recovery.claim }),
+				).toMatchObject({
+					originalOperationDigest: before?.originalOperationDigest,
+				});
+				expect(await store.readRuntimeState({ claim: owned })).toBeNull();
+				await expect(
+					store.retry({
+						claim: recovery.claim,
+						retryDelayMs: 0,
+						errorCode: "NATIVE_RECOVERY_PENDING",
+						transition: {},
+					}),
+				).resolves.toBe(true);
+				await client`update platform.agent_applications set status = 'stopped', desired_state = 'stopped', service_availability = null where agent_id = ${owned.agentId}`;
+				await client`update platform.session_sandbox_allocations set status = 'unknown', desired_state = 'stopped' where conversation_id = ${owned.conversationId}`;
+				expect(await store.findDispatchable({ limit: 20 })).toContainEqual({
+					itemId: owned.itemId,
+					operation: owned.operation,
+				});
+				const stoppedRecovery = await store.claim({
+					schemaVersion: 1,
+					itemId: owned.itemId,
+					workerId: "stopped-recovery-worker",
+					leaseDurationMs: 30_000,
+				});
+				if (stoppedRecovery.outcome !== "claimed")
+					throw new Error("Expected stopped native recovery claim");
+				expect(
+					await store.readRuntimeState({ claim: stoppedRecovery.claim }),
+				).toMatchObject({
+					originalOperationDigest: before?.originalOperationDigest,
+				});
+				await expect(
+					store.prepareRuntimeDispatch({
+						claim: stoppedRecovery.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).resolves.toBe(true);
+			} finally {
+				await authorization.close();
+				await store.close();
+			}
+		},
+	);
+
+	it("rejects tampered or ambiguous native origins and foreign leases", async () => {
+		const plan = await admitNative("skill");
+		const { store, decision } = await claim(plan.outbox.id);
+		try {
+			if (decision.outcome !== "claimed")
+				throw new Error("Expected native claim");
+			const owned = decision.claim;
+			expect(
+				await store.readRuntimeState({
+					claim: { ...owned, leaseOwner: "foreign-worker" },
+				}),
+			).toBeNull();
+			for (const [field, value] of Object.entries({
+				capabilityId: "c".repeat(64),
+				directoryRevision: "c".repeat(64),
+				capabilitySourceVersion: "2.0.0",
+				parametersDigest: "c".repeat(64),
+				actorId: "foreign-user",
+				sessionGeneration: 2,
+			})) {
+				await client`update platform.outbox_items set payload = ${client.json({ ...plan.outbox.payload, [field]: value })} where id = ${owned.itemId}`;
+				expect(
+					await store.readRuntimeState({ claim: owned }),
+					field,
+				).toBeNull();
+			}
+			await client`update platform.outbox_items set payload = ${client.json(plan.outbox.payload)} where id = ${owned.itemId}`;
+			await expect(
+				store.prepareRuntimeDispatch({ claim: owned, leaseDurationMs: 30_000 }),
+			).resolves.toBe(true);
+			const changedCapabilityId = "c".repeat(64);
+			await client`update platform.outbox_items set payload = ${client.json({ ...plan.outbox.payload, capabilityId: changedCapabilityId })} where id = ${owned.itemId}`;
+			if (!owned.nativeCapability) throw new Error("Expected native binding");
+			expect(
+				await store.readRuntimeState({
+					claim: {
+						...owned,
+						nativeCapability: {
+							...owned.nativeCapability,
+							capabilityId: changedCapabilityId,
+						},
+					},
+				}),
+			).toBeNull();
+			await client`update platform.outbox_items set payload = ${client.json(plan.outbox.payload)} where id = ${owned.itemId}`;
+			await client`insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, request_id)
+				values (${`conversation:turn:${owned.executionId}`}, 'conversation', ${owned.conversationId}, 'conversation.turn.submit.v1', '{}'::jsonb, 'ambiguous', 'ambiguous')`;
+			expect(await store.readRuntimeState({ claim: owned })).toBeNull();
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("claims unknown Turn recovery after Agent stop without a ready Sandbox", async () => {
 		const work = await seed("conversation.turn.submit.v1", {
 			executionStatus: "unknown",

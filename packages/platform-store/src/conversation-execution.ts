@@ -359,6 +359,15 @@ export class PostgresConversationExecutionTransactionV1
 			if (!(await isAuthorized()))
 				return { outcome: "denied", reason: "authorization_lost" };
 			if (!isCurrent(plan, conversation)) return { outcome: "stale" };
+			const executionBinding =
+				await currentConversationExecutionRelayKeyBindingV1(transaction, {
+					authority,
+					userDirectory: this.#userDirectory,
+					personalApiAdmissionAuthority:
+						authority.personalApiAdmissionAuthority,
+				});
+			if (!executionBinding)
+				return { outcome: "denied", reason: "authorization_lost" };
 
 			const occurredAt = new Date();
 			const reservationId = await reserveIdempotency(transaction, {
@@ -382,7 +391,11 @@ export class PostgresConversationExecutionTransactionV1
 					 ${conversation.sandbox?.sandboxId ?? null}, ${plan.agentId},
 					 ${plan.actorId}, ${plan.channelId}, ${plan.turnId}, 'submitted',
 					 ${plan.sessionGeneration}, 0, ${plan.authorizationRevision},
-					 null, null, null, null, null, null, null, null, null, null, null,
+					 null, null, null, ${executionBinding.executionSource},
+					 ${executionBinding.relayKeyBinding?.purpose ?? null},
+					 ${executionBinding.relayKeyBinding?.subjectId ?? null},
+					 ${executionBinding.relayKeyBinding?.keyId ?? null},
+					 ${executionBinding.relayKeyBinding?.keyVersion ?? null}, null, null, null,
 					 ${principalType}, ${occurredAt}, ${occurredAt})
 			`;
 			if (authority.taskBoundary) {

@@ -271,7 +271,7 @@ export function createConversationDispatchUseCaseV1(
 					!(await dependencies.store.recordRuntimeResponse({
 						claim,
 						hostSessionRef,
-						...(isTurnOperation(claim.operation)
+						...(isRuntimeEventOperation(claim.operation)
 							? { originalOperationAccepted: true as const }
 							: {}),
 						transition,
@@ -1290,8 +1290,7 @@ export function createConversationDispatchUseCaseV1(
 							!claim.stopPending &&
 							!authority.controlOnly &&
 							!claim.metadataRecovery &&
-							(claim.operation === "conversation.turn.submit.v1" ||
-								claim.operation === "conversation.turn.regenerate.v1")
+							isRuntimeEventOperation(claim.operation)
 						) {
 							if (!dependencies.store.releaseUnsentDispatch)
 								return retry(
@@ -1335,7 +1334,7 @@ export function createConversationDispatchUseCaseV1(
 							: { schemaVersion: 1, outcome: "stale" };
 					}
 					if (
-						recoveringOriginalTurn &&
+						(recoveringOriginalTurn || recoveringNativeCapability) &&
 						status.outcome === "found" &&
 						status.operationOutcome === "busy"
 					) {
@@ -1447,8 +1446,7 @@ export function createConversationDispatchUseCaseV1(
 				const failure = runtimeFailure(error);
 				if (
 					failure.code === "RUNTIME_STOP_PENDING" &&
-					(claim.operation === "conversation.turn.submit.v1" ||
-						claim.operation === "conversation.turn.regenerate.v1") &&
+					isRuntimeEventOperation(claim.operation) &&
 					claim.executionDeliveryFence > 0
 				) {
 					if (!dependencies.store.cancelAccepted)
@@ -1487,8 +1485,8 @@ export function createConversationDispatchUseCaseV1(
 					failure.retryable &&
 					failure.notSent &&
 					!recoveringOriginalTurn &&
-					(claim.operation === "conversation.turn.submit.v1" ||
-						claim.operation === "conversation.turn.regenerate.v1") &&
+					!recoveringNativeCapability &&
+					isRuntimeEventOperation(claim.operation) &&
 					(claim.executionStatus === "submitted" ||
 						claim.executionStatus === "waiting") &&
 					dependencies.store.releaseUnsentDispatch
@@ -1546,7 +1544,7 @@ export function createConversationDispatchUseCaseV1(
 					claim,
 					hostSessionRef: response.hostSessionRef,
 					...(response.result.outcome === "accepted" &&
-					isTurnOperation(claim.operation)
+					isRuntimeEventOperation(claim.operation)
 						? { originalOperationAccepted: true as const }
 						: {}),
 					transition: responseTransition ?? {},

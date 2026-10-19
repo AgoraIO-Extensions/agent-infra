@@ -60,6 +60,26 @@ function snapshot(
 }
 
 describe("Core dispatch capacity decision", () => {
+	it("counts native work against capacity without ordinary model selection", () => {
+		const native = {
+			...snapshot(),
+			operation: "conversation.native-capability.invoke.v1" as const,
+			modelConfigurationRevision: null,
+		};
+		expect(decideConversationDispatchCapacityV1(native)).toBe("admit");
+		expect(
+			decideConversationDispatchCapacityV1({
+				...native,
+				occupancy: { processing: 0, unknown: 2 },
+			}),
+		).toBe("capacity_wait");
+		expect(
+			decideConversationDispatchCapacityV1({
+				...native,
+				configurationRevision: 5,
+			}),
+		).toBe("capacity_unavailable");
+	});
 	it("admits a custom Agent without a Platform model configuration", () => {
 		expect(decideConversationDispatchCapacityV1(snapshot("custom"))).toBe(
 			"admit",

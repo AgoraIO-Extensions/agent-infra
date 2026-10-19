@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
+	type RuntimeNativeCapabilityRequestV4,
 	type RuntimeSubmitTurnRequestV4,
 	runtimeOperationDigestInputV4,
 } from "@agent-infra/contracts/runtime";
@@ -62,10 +64,122 @@ export async function originalOperationBinding(
 	const origins = await transaction<OutboxRow[]>`
 	select * from platform.outbox_items where scope_type = 'conversation'
 	and scope_id = ${claim.conversationId}
-	and id in (${`conversation:turn:${claim.executionId}`}, ${`conversation:regenerate:${claim.executionId}`})
-	and operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
+	and id in (${`conversation:turn:${claim.executionId}`}, ${`conversation:regenerate:${claim.executionId}`}, ${`conversation:native-capability:${claim.executionId}`})
+	and operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1', 'conversation.native-capability.invoke.v1')
 `;
 	const [origin] = origins;
+	if (
+		origins.length === 1 &&
+		origin?.operation === "conversation.native-capability.invoke.v1"
+	) {
+		const payload = exactPayload(origin.payload, origin.operation);
+		const native = payload?.nativeCapability;
+		if (
+			origin.id !== `conversation:native-capability:${claim.executionId}` ||
+			!validText(origin.request_id) ||
+			!validText(origin.trace_id) ||
+			!payload ||
+			!native ||
+			payload.conversationId !== base.conversationId ||
+			payload.executionId !== base.executionId ||
+			payload.turnId !== base.turnId ||
+			payload.sessionGeneration !== base.sessionGeneration ||
+			native.agentId !== base.agentId ||
+			native.actorId !== state.execution.actor_id ||
+			native.channelId !== state.execution.channel_id ||
+			state.execution.model_configuration_revision !== null ||
+			state.execution.model_option_id !== null ||
+			state.execution.reasoning_level !== null ||
+			(claim.operation === origin.operation
+				? origin.id !== state.outbox.id ||
+					!isDeepStrictEqual(native, claim.nativeCapability)
+				: claim.operation !== "conversation.turn.stop.v1") ||
+			(protocol === null && (digest !== null || originalRef !== null))
+		)
+			return null;
+		const identity = {
+			...base,
+			kind: "native-capability",
+			capabilityId: native.capabilityId,
+			capabilityKind: native.capabilityKind,
+			directoryRevision: native.directoryRevision,
+			parametersDigest: native.parametersDigest,
+			capabilitySourceVersion: native.capabilitySourceVersion,
+		};
+		let expectedDigest: string;
+		let hostSessionRef: string | null = null;
+		if (key.executionSource && key.relayKeyBinding) {
+			if (protocol !== null && protocol !== "v4") return null;
+			if (protocol === null && state.execution.status !== "submitted")
+				return null;
+			hostSessionRef =
+				protocol === null ? state.conversation.host_session_ref : originalRef;
+			if (!validText(hostSessionRef)) return null;
+			const boundaries = await transaction<{ boundary: unknown }[]>`
+				select boundary from platform.task_authorization_records where execution_id = ${claim.executionId}
+			`;
+			if (boundaries.length !== 1) return null;
+			const boundary = parseTaskAuthorizationBoundaryV1(
+				boundaries[0]?.boundary,
+			);
+			const principal = executionPrincipalProjection(state.execution);
+			if (
+				!isDeepStrictEqual(boundary.principal, principal) ||
+				boundary.agentId !== base.agentId ||
+				boundary.channelId !== state.execution.channel_id ||
+				boundary.agentAuthorizationRevision !==
+					state.execution.authorization_revision
+			)
+				return null;
+			const request: RuntimeNativeCapabilityRequestV4 = {
+				schemaVersion: 4,
+				requestId: origin.request_id,
+				traceId: origin.trace_id,
+				...base,
+				principal,
+				channelId: state.execution.channel_id,
+				hostSessionRef,
+				operation: {
+					kind: "execution",
+					id: base.executionId,
+					deliveryFence: Math.max(claim.executionDeliveryFence, 1),
+					executionDeliveryFence: Math.max(claim.executionDeliveryFence, 1),
+				},
+				executionSource: key.executionSource,
+				keyBinding: {
+					purpose: key.relayKeyBinding.purpose,
+					subjectId: key.relayKeyBinding.subjectId,
+					ciphertextRef: key.relayKeyBinding.keyId,
+					version: key.relayKeyBinding.keyVersion,
+				},
+				capabilityId: native.capabilityId,
+				capabilityKind: native.capabilityKind,
+				directoryRevision: native.directoryRevision,
+				parameters: native.parameters,
+				parametersDigest: native.parametersDigest,
+				capabilitySourceVersion: native.capabilitySourceVersion,
+				// Shape-only digest projection; this marker is never signed or sent.
+				grant: {
+					schemaVersion: 4,
+					format: "runtime-execution-jws",
+					token: "unsigned.unsigned.unsigned",
+				},
+			};
+			expectedDigest = operationDigest(runtimeOperationDigestInputV4(request));
+		} else {
+			if ((protocol !== null && protocol !== "v2") || originalRef !== null)
+				return null;
+			expectedDigest = operationDigest(identity);
+		}
+		if (protocol !== null && digest !== expectedDigest) return null;
+		return {
+			runtimeSubmitProtocol: key.executionSource
+				? ("v4" as const)
+				: ("v2" as const),
+			originalOperationDigest: expectedDigest,
+			originalSubmitHostSessionRef: hostSessionRef,
+		};
+	}
 	if (
 		origins.length !== 1 ||
 		!origin ||

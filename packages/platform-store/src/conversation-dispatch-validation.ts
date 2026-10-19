@@ -166,7 +166,7 @@ export function exactPayload(
 			(capabilityKind !== "command" && capabilityKind !== "skill") ||
 			!validText(directoryRevision) ||
 			!validText(capabilitySourceVersion) ||
-			!validText(parameters) ||
+			!(parameters === "" || validText(parameters, 16 * 1024)) ||
 			!validText(parametersDigest) ||
 			!/^[a-f0-9]{64}$/.test(String(directoryRevision)) ||
 			!/^[a-f0-9]{64}$/.test(String(parametersDigest)) ||
@@ -269,6 +269,16 @@ export function isTurn(operation: ConversationDispatchOperationV1) {
 	return (
 		operation === "conversation.turn.submit.v1" ||
 		operation === "conversation.turn.regenerate.v1"
+	);
+}
+
+/** A submit or native invocation owns the Execution and its durable event stream. */
+export function isExecutionOperation(
+	operation: ConversationDispatchOperationV1,
+) {
+	return (
+		isTurn(operation) ||
+		operation === "conversation.native-capability.invoke.v1"
 	);
 }
 
