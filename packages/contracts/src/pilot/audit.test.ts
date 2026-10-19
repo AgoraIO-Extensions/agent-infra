@@ -81,13 +81,34 @@ describe("scoped public audit contract", () => {
 	it("continues to reject unregistered creation or Relay Key actions", () => {
 		for (const action of [
 			"api.agent.create.guessed",
-			"relay_key.agent_default.read",
+			"relay_key.agent_default.guessed",
 		])
 			expect(
 				ScopedPlatformAuditProjectionV1Schema.safeParse({ ...record, action })
 					.success,
 			).toBe(false);
 	});
+	it.each([
+		"skill.project.create",
+		"skill.project.update",
+		"skill.project.list",
+		"skill.project.read",
+		"relay_key.agent_default.read",
+		"relay_key.agent_default.candidates",
+	])(
+		"accepts the #2879 registered action %s in scoped audit projections",
+		(action) => {
+			expect(
+				ScopedPlatformAuditProjectionV1Schema.safeParse({
+					...record,
+					action,
+					subject: { kind: "agent", subjectId: "agent-b" },
+					result: "succeeded",
+					summary: action,
+				}).success,
+			).toBe(true);
+		},
+	);
 	it.each([
 		"api.credential.issued",
 		"api.credential.revoked",

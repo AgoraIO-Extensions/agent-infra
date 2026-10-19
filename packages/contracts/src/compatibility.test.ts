@@ -103,6 +103,29 @@ function restoreOldApiReadActions(input: unknown) {
 	for (const child of Object.values(value)) restoreOldApiReadActions(child);
 }
 
+// #2879：从产物中移除 Skill 项目操作与 Agent 默认 Key 读取/候选动作，还原到 #2879 之前的契约。
+const adminAuditActions2879 = [
+	"skill.project.create",
+	"skill.project.update",
+	"skill.project.list",
+	"skill.project.read",
+	"relay_key.agent_default.read",
+	"relay_key.agent_default.candidates",
+] as const;
+
+function restorePreAdminAuditActionsRegistration2879Contract(value: {
+	components: { schemas: Record<string, unknown> };
+}) {
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1 as
+		| { enum?: string[] }
+		| undefined;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) =>
+				!(adminAuditActions2879 as readonly string[]).includes(action),
+		);
+}
+
 function restorePreSkillHubAuditContract(value: {
 	components: { schemas: Record<string, unknown> };
 }) {
@@ -228,6 +251,7 @@ function restorePreAgentApiManagementContract(value: {
 	paths: Record<string, unknown>;
 	components: { schemas: Record<string, unknown> };
 }) {
+	restorePreAdminAuditActionsRegistration2879Contract(value);
 	restorePreSkillHubAuditContract(value);
 	restorePreApplicationUseGrantContract(value);
 	restorePreAgentCreationAuditContract(value);
@@ -360,6 +384,8 @@ describe("contract compatibility command", () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),
 		);
+		// 先还原 #2879 新增，再对比 #1574 的四个 Agent 创建动作
+		restorePreAdminAuditActionsRegistration2879Contract(current);
 		const previous = structuredClone(current);
 		restorePreAgentCreationAuditContract(previous);
 		const directory = await mkdtemp(
@@ -397,6 +423,52 @@ describe("contract compatibility command", () => {
 				(document) => {
 					document.components.schemas.ScopedPlatformAuditProjectionV1.properties.subject.additionalProperties = true;
 				},
+			];
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the six admin audit actions registered in #2879", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		// 恢复到 #2879 之前的契约（去掉这 6 个动作）
+		const previous = structuredClone(current);
+		restorePreAdminAuditActionsRegistration2879Contract(previous);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "admin-audit-2879-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			// 绿灯：精确新增应该通过
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			// 变异测试：以下任何篡改都必须导致门禁失败
+			const mutations: ((document: typeof current) => void)[] = [
+				// 添加一个未登记的额外动作
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+						"skill.project.unreviewed",
+					),
+				// 去掉最后一个已登记动作
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.pop(),
+				// 去掉第一个已登记动作（颠倒顺序验证）
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.splice(
+						document.components.schemas.ScopedPlatformAuditActionV1.enum.indexOf(
+							"skill.project.create",
+						),
+						1,
+					),
 			];
 			for (const mutate of mutations) {
 				const changed = structuredClone(current);
@@ -766,6 +838,7 @@ describe("contract compatibility command", () => {
 					delete document.paths["/api/v2/agents"].post;
 				delete document.components.schemas.AgentApiCreationRequestV1;
 				delete document.components.schemas.AgentApiCreationResponseV1;
+				restorePreAdminAuditActionsRegistration2879Contract(document);
 				restorePreSkillHubAuditContract(document);
 				restorePreAgentCreationAuditContract(document);
 				for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {
@@ -1816,175 +1889,189 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
-	it("admits only the pinned personal credential contract and rejects security/material regressions", async () => {
-		const artifact = fileURLToPath(
-			new URL(
-				"../artifacts/openapi/pilot-browser.v2.openapi.json",
-				import.meta.url,
-			),
-		);
-		const current = JSON.parse(await readFile(artifact, "utf8"));
-		// This test isolates the credential compatibility contract. Skill Hub reads
-		// have their own pinned-addition test below; keeping them out avoids paying
-		// the subprocess cost for an unrelated contract mutation matrix.
-		for (const path of [
-			"/api/v2/skills",
-			"/api/v2/skills/versions/{skillVersionId}",
-			"/api/v2/agents/{agentId}/configuration/saved-model",
-			"/api/v2/agents/{agentId}/default-relay-key/candidates",
-		])
-			delete current.paths[path];
-		for (const name of [
-			"SkillHubVersionMetadataV1",
-			"SkillHubDirectoryPageV1",
-			"AgentConfigurationUpdateRequestV4",
-			"AgentDefaultRelayKeySavedCandidatesV1",
-		])
-			delete current.components.schemas[name];
-		const latest = structuredClone(current);
-		restorePreRelayKeyContract(current);
-		const previous = structuredClone(current);
-		for (const path of [
-			"/api/v2/me/api-credentials",
-			"/api/v2/me/api-credentials/{credentialId}",
-		])
-			delete previous.paths[path];
-		for (const name of [
-			"PersonalApiCredentialIssueRequestV1",
-			"PersonalApiCredentialIssueResponseV1",
-			"PersonalApiCredentialMetadataV1",
-			"PersonalApiCredentialRevokeResponseV1",
-		])
-			delete previous.components.schemas[name];
-		delete previous.components.securitySchemes;
-		delete previous.paths["/api/v2/agents"].get.security;
-		delete previous.paths["/api/v2/agents"].get.description;
-		restoreOldApiReadActions(previous);
-		const directory = await mkdtemp(
-			resolve(tmpdir(), "agent-infra-personal-credential-compat-"),
-		);
-		const baseline = resolve(directory, "previous.json");
-		const historicalCurrent = resolve(directory, "historical-current.json");
-		const contractArtifact = resolve(directory, "skill-hub-stripped.json");
-		try {
-			await writeFile(baseline, JSON.stringify(previous));
-			await writeFile(historicalCurrent, JSON.stringify(current));
-			await writeFile(contractArtifact, JSON.stringify(current));
-			expect(comparePaths(historicalCurrent, baseline).status).toBe(0);
-			const mutations: Record<string, (value: typeof current) => void> = {
-				anonymous: (value) => {
-					value.paths["/api/v2/me/api-credentials"].post.security = [];
-				},
-				bearerGovernance: (value) => {
-					value.paths[
-						"/api/v2/me/api-credentials/{credentialId}"
-					].delete.security = [{ PersonalApiCredential: [] }];
-				},
-				hashReadback: (value) => {
-					value.components.schemas.PersonalApiCredentialMetadataV1.properties.credentialHash =
-						{ type: "string" };
-				},
-				emptyScopes: (value) => {
-					value.components.schemas.PersonalApiCredentialIssueRequestV1.properties.scopes.minItems = 0;
-				},
-				materialReplay: (value) => {
-					value.paths["/api/v2/me/api-credentials"].post.responses["200"] =
-						value.paths["/api/v2/me/api-credentials"].post.responses["201"];
-				},
-				unexpectedPatch: (value) => {
-					value.paths["/api/v2/me/api-credentials/{credentialId}"].patch =
-						value.paths["/api/v2/me/api-credentials/{credentialId}"].delete;
-				},
-				differentCookie: (value) => {
-					value.components.securitySchemes.PlatformSession.name =
-						"caller_session";
-				},
-				unrelatedOperation: (value) => {
-					value.paths["/unexpected"] =
-						value.paths["/api/v2/me/api-credentials"];
-				},
-				oldAdministratorSecurity: (value) => {
-					value.paths["/api/v2/admin/agents"].get.security = [];
-				},
-				oldMetadataResponse: (value) => {
-					value.components.schemas.AgentProjectionV2.properties.rawCredential =
-						{ type: "string" };
-				},
-				globalSecurity: (value) => {
-					value.security = [{ PlatformSession: [] }];
-				},
-				anonymousAgentRead: (value) => {
-					value.paths["/api/v2/agents"].get.security = [{}];
-				},
-				bearerOwnerOverride: (value) => {
-					value.paths["/api/v2/agents"].get.parameters.find(
-						({ name }: { name: string }) => name === "scope",
-					).schema = { type: "string" };
-				},
-				bearerSchemeChanged: (value) => {
-					value.components.securitySchemes.platformApiCredential = {
-						type: "http",
-						scheme: "basic",
-					};
-				},
-				unrelatedBearerOperation: (value) => {
-					value.paths["/api/v2/admin/agents"].get.security = [
-						{ platformApiCredential: [] },
-					];
-				},
-				andAuthentication: (value) => {
-					value.paths["/api/v2/agents"].get.security = [
-						{ PlatformSession: [], platformApiCredential: [] },
-					];
-				},
-				removedBrowserAuthentication: (value) => {
-					value.paths["/api/v2/agents"].get.security = [
-						{ platformApiCredential: [] },
-					];
-				},
-			};
-			for (const [name, mutate] of Object.entries(mutations)) {
-				const candidate = structuredClone(current);
-				mutate(candidate);
-				const path = resolve(directory, `${name}.json`);
-				await writeFile(path, JSON.stringify(candidate));
-				const result = comparePaths(path, baseline);
-				expect(result.status, name).toBe(1);
-				expect(result.stderr, name).toContain("changed OpenAPI contract");
-			}
-			for (const baselineKind of ["empty", "existingCookie", "governance"]) {
-				const existing = structuredClone(
-					baselineKind === "governance" ? current : previous,
-				);
-				if (baselineKind === "governance") {
-					delete existing.paths["/api/v2/agents"].get.security;
-					delete existing.paths["/api/v2/agents"].get.description;
-					delete existing.components.securitySchemes.platformApiCredential;
-					restoreOldApiReadActions(existing);
-				} else {
-					existing.components.securitySchemes = {};
-				}
-				if (baselineKind === "existingCookie")
-					existing.components.securitySchemes.PlatformSession = structuredClone(
-						current.components.securitySchemes.PlatformSession,
-					);
-				const path = resolve(directory, `${baselineKind}-previous.json`);
-				await writeFile(path, JSON.stringify(existing));
-				if (baselineKind === "governance")
-					expect(comparePaths(path, baseline).status).toBe(0);
-				expect(comparePaths(contractArtifact, path).status, baselineKind).toBe(
-					0,
-				);
-				expect(
-					comparePaths(historicalCurrent, path).status,
-					`${baselineKind}-historical`,
-				).toBe(0);
-				for (const [version, contract] of Object.entries({
-					historical: current,
-					latest,
-				})) {
+	// Keep every CLI comparison while bounding each baseline/version below one CI budget.
+	it.each([
+		["pinned", "historical"],
+		["empty", "historical"],
+		["empty", "latest"],
+		["existingCookie", "historical"],
+		["existingCookie", "latest"],
+		["governance", "historical"],
+		["governance", "latest"],
+	] as const)(
+		"admits only the pinned personal credential contract and rejects security/material regressions [%s/%s]",
+		async (baselineKind, version) => {
+			const artifact = fileURLToPath(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+			);
+			const current = JSON.parse(await readFile(artifact, "utf8"));
+			// This test isolates the credential compatibility contract. Skill Hub reads
+			// have their own pinned-addition test below; keeping them out avoids paying
+			// the subprocess cost for an unrelated contract mutation matrix.
+			for (const path of [
+				"/api/v2/skills",
+				"/api/v2/skills/versions/{skillVersionId}",
+				"/api/v2/agents/{agentId}/configuration/saved-model",
+				"/api/v2/agents/{agentId}/default-relay-key/candidates",
+			])
+				delete current.paths[path];
+			for (const name of [
+				"SkillHubVersionMetadataV1",
+				"SkillHubDirectoryPageV1",
+				"AgentConfigurationUpdateRequestV4",
+				"AgentDefaultRelayKeySavedCandidatesV1",
+			])
+				delete current.components.schemas[name];
+			const latest = structuredClone(current);
+			restorePreRelayKeyContract(current);
+			const previous = structuredClone(current);
+			for (const path of [
+				"/api/v2/me/api-credentials",
+				"/api/v2/me/api-credentials/{credentialId}",
+			])
+				delete previous.paths[path];
+			for (const name of [
+				"PersonalApiCredentialIssueRequestV1",
+				"PersonalApiCredentialIssueResponseV1",
+				"PersonalApiCredentialMetadataV1",
+				"PersonalApiCredentialRevokeResponseV1",
+			])
+				delete previous.components.schemas[name];
+			delete previous.components.securitySchemes;
+			delete previous.paths["/api/v2/agents"].get.security;
+			delete previous.paths["/api/v2/agents"].get.description;
+			restoreOldApiReadActions(previous);
+			const directory = await mkdtemp(
+				resolve(tmpdir(), "agent-infra-personal-credential-compat-"),
+			);
+			const baseline = resolve(directory, "previous.json");
+			const historicalCurrent = resolve(directory, "historical-current.json");
+			const contractArtifact = resolve(directory, "skill-hub-stripped.json");
+			try {
+				await writeFile(baseline, JSON.stringify(previous));
+				await writeFile(historicalCurrent, JSON.stringify(current));
+				await writeFile(contractArtifact, JSON.stringify(current));
+				const mutations: Record<string, (value: typeof current) => void> = {
+					anonymous: (value) => {
+						value.paths["/api/v2/me/api-credentials"].post.security = [];
+					},
+					bearerGovernance: (value) => {
+						value.paths[
+							"/api/v2/me/api-credentials/{credentialId}"
+						].delete.security = [{ PersonalApiCredential: [] }];
+					},
+					hashReadback: (value) => {
+						value.components.schemas.PersonalApiCredentialMetadataV1.properties.credentialHash =
+							{ type: "string" };
+					},
+					emptyScopes: (value) => {
+						value.components.schemas.PersonalApiCredentialIssueRequestV1.properties.scopes.minItems = 0;
+					},
+					materialReplay: (value) => {
+						value.paths["/api/v2/me/api-credentials"].post.responses["200"] =
+							value.paths["/api/v2/me/api-credentials"].post.responses["201"];
+					},
+					unexpectedPatch: (value) => {
+						value.paths["/api/v2/me/api-credentials/{credentialId}"].patch =
+							value.paths["/api/v2/me/api-credentials/{credentialId}"].delete;
+					},
+					differentCookie: (value) => {
+						value.components.securitySchemes.PlatformSession.name =
+							"caller_session";
+					},
+					unrelatedOperation: (value) => {
+						value.paths["/unexpected"] =
+							value.paths["/api/v2/me/api-credentials"];
+					},
+					oldAdministratorSecurity: (value) => {
+						value.paths["/api/v2/admin/agents"].get.security = [];
+					},
+					oldMetadataResponse: (value) => {
+						value.components.schemas.AgentProjectionV2.properties.rawCredential =
+							{ type: "string" };
+					},
+					globalSecurity: (value) => {
+						value.security = [{ PlatformSession: [] }];
+					},
+					anonymousAgentRead: (value) => {
+						value.paths["/api/v2/agents"].get.security = [{}];
+					},
+					bearerOwnerOverride: (value) => {
+						value.paths["/api/v2/agents"].get.parameters.find(
+							({ name }: { name: string }) => name === "scope",
+						).schema = { type: "string" };
+					},
+					bearerSchemeChanged: (value) => {
+						value.components.securitySchemes.platformApiCredential = {
+							type: "http",
+							scheme: "basic",
+						};
+					},
+					unrelatedBearerOperation: (value) => {
+						value.paths["/api/v2/admin/agents"].get.security = [
+							{ platformApiCredential: [] },
+						];
+					},
+					andAuthentication: (value) => {
+						value.paths["/api/v2/agents"].get.security = [
+							{ PlatformSession: [], platformApiCredential: [] },
+						];
+					},
+					removedBrowserAuthentication: (value) => {
+						value.paths["/api/v2/agents"].get.security = [
+							{ platformApiCredential: [] },
+						];
+					},
+				};
+				if (baselineKind === "pinned") {
+					expect(comparePaths(historicalCurrent, baseline).status).toBe(0);
 					for (const [name, mutate] of Object.entries(mutations)) {
-						const candidate = structuredClone(contract);
+						const candidate = structuredClone(current);
+						mutate(candidate);
+						const path = resolve(directory, `${name}.json`);
+						await writeFile(path, JSON.stringify(candidate));
+						const result = comparePaths(path, baseline);
+						expect(result.status, name).toBe(1);
+						expect(result.stderr, name).toContain("changed OpenAPI contract");
+					}
+				} else {
+					const existing = structuredClone(
+						baselineKind === "governance" ? current : previous,
+					);
+					if (baselineKind === "governance") {
+						delete existing.paths["/api/v2/agents"].get.security;
+						delete existing.paths["/api/v2/agents"].get.description;
+						delete existing.components.securitySchemes.platformApiCredential;
+						restoreOldApiReadActions(existing);
+					} else {
+						existing.components.securitySchemes = {};
+					}
+					if (baselineKind === "existingCookie")
+						existing.components.securitySchemes.PlatformSession =
+							structuredClone(
+								current.components.securitySchemes.PlatformSession,
+							);
+					const path = resolve(directory, `${baselineKind}-previous.json`);
+					await writeFile(path, JSON.stringify(existing));
+					if (version === "historical") {
+						if (baselineKind === "governance")
+							expect(comparePaths(path, baseline).status).toBe(0);
+						expect(
+							comparePaths(contractArtifact, path).status,
+							baselineKind,
+						).toBe(0);
+						expect(
+							comparePaths(historicalCurrent, path).status,
+							`${baselineKind}-historical`,
+						).toBe(0);
+					}
+					for (const [name, mutate] of Object.entries(mutations)) {
+						const candidate = structuredClone(
+							version === "historical" ? current : latest,
+						);
 						mutate(candidate);
 						const mutated = resolve(
 							directory,
@@ -1997,11 +2084,12 @@ describe("contract compatibility command", () => {
 						).toBe(1);
 					}
 				}
+			} finally {
+				await rm(directory, { recursive: true, force: true });
 			}
-		} finally {
-			await rm(directory, { recursive: true, force: true });
-		}
-	}, 300_000);
+		},
+		60_000,
+	);
 	it("tracks published browser, file, readiness and template-release contracts", async () => {
 		const source = await readFile(cliPath, "utf8");
 		for (const path of [

@@ -19,6 +19,7 @@ import {
 import { SearchInput } from "@/components/ui/search-input";
 import { withObjectName } from "@/lib/accessible-name";
 import type { SkillHubVersionMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
+import { RecoveryButton } from "../recovery-button.js";
 import type { SkillHubDirectoryState } from "./skill-hub.js";
 import {
 	latestVersionPerSkill,
@@ -104,14 +105,14 @@ export function SkillHubReadFailure({
 				description={retryDescription}
 				action={
 					onRetry ? (
-						<Button
+						<RecoveryButton
 							variant="outline"
-							type="button"
-							disabled={retrying}
+							recoveryKey="重新读取"
+							busy={retrying}
 							onClick={onRetry}
 						>
 							重新读取
-						</Button>
+						</RecoveryButton>
 					) : undefined
 				}
 			/>

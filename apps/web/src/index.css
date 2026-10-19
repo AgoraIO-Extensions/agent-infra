@@ -3488,12 +3488,10 @@ body {
 	font: 11px / 1.4 var(--font-mono);
 	letter-spacing: 0.08em;
 }
-/* 设计 .page-head-copy .eyebrow 上外边距为 0：页头文案块的第一个子元素是 eyebrow 时不继承
-   `.management-content .page-heading p` 的 9px；前面有返回链接的页头（Owner 配置、申请详情）不受影响。 */
-.management-content
-	.page-heading
-	> div:first-child
-	> .page-eyebrow:first-child {
+/* 设计 .page-head-copy .eyebrow 上外边距为 0：eyebrow 是所在块的第一个子元素时不继承
+   `.management-content .page-heading p` 的 9px。不限定层级，Agent 详情（标识行内层 div 里的
+   eyebrow）同样适用；前面有返回链接的页头（Owner 配置、申请详情）不是第一个子元素，不受影响。 */
+.management-content .page-heading .page-eyebrow:first-child {
 	margin-top: 0;
 }
 .management-content .form-layout.full-width-form {
@@ -3796,7 +3794,7 @@ body {
 	margin: 0;
 	overflow-wrap: anywhere;
 }
-/* 设计 .filters：搜索 1.6fr + 3 × 0.7fr；风险筛选待接口提供前不渲染，来源在第 2 轨。 */
+/* 设计 .filters：搜索 1.6fr + 3 × 0.7fr，来源在第 2 轨；审批不设「风险」筛选（#2862，PRD §6.2）。 */
 .approval-filters {
 	display: grid;
 	grid-template-columns: minmax(240px, 1.6fr) repeat(3, minmax(130px, 0.7fr));
@@ -4303,10 +4301,14 @@ body {
 	}
 }
 /* Agent 的 Skill 页（设计 #agent-skills .skill-page，O-02）。 */
-/* 设计 .skill-page .page-head{display:block}：操作在副标题下方。 */
+/* 设计与 Skill 详情同结构：页头紧接返回按钮（没有上外边距）；≥768 文案左、操作右，垂直居中
+   （.skill-page .page-head{align-items:center}）；≤767 纵向排列，操作在副标题下方 14px。 */
 .management-content .agent-skill-heading {
-	display: block;
-	margin-top: 16px;
+	align-items: center;
+	gap: 24px;
+}
+.management-content .agent-skill-heading > div:first-child p {
+	max-width: 58ch;
 }
 .management-content .agent-skill-bindings h1 {
 	font-size: clamp(27px, 3vw, 34px);
@@ -4316,7 +4318,11 @@ body {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 8px;
-	margin-top: 14px;
+}
+@media (max-width: 767px) {
+	.agent-skill-heading-actions {
+		margin-top: 14px;
+	}
 }
 .agent-skill-notice {
 	margin-top: 16px;

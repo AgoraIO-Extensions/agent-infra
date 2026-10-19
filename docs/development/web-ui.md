@@ -39,6 +39,22 @@ Agent 详情中的 Owner、渠道、模型和范围均取自实际投影；Owner
 原型中的示例人员、模型、就绪提示和演示操作不作为生产数据或新增能力。
 申请、审批、配置、生命周期及审计继续复用现有组件、请求和权限校验。
 
+### 与导出设计的已定差异
+
+以下差异已在 #2862、#2863 确认，实现与验收以这里为准，等待设计稿回写：
+
+| 位置 | 实现 | 依据 |
+| --- | --- | --- |
+| `Button` `size="sm"`（返回链接、卡片按钮） | 最小高度 44px，不采用 `.btn-sm` 的 38px | DESIGN.md 触达下限 |
+| 顶栏 | 不展示「平台就绪」 | 平台健康属于运维入口（PRD §11.1） |
+| 创建审批 | 没有「风险」筛选与列 | 审批看资源规格与准入（PRD §5.1、§6.2） |
+| 审批列表、申请详情 | 不展示 `app-024` 式申请编号 | PRD 没有申请编号 |
+| 浏览器卡终态 | 不提供「重新请求」 | PRD §11.4、§13.3 |
+| Skill 发布范围 MEMBER | 文案为「全体成员」 | PRD §11.5 |
+| 个人 API 凭证 | 不提供轮换；已撤销行只显示撤销时间 | PRD §7.3 |
+| 对话标题 | 标题展示遵循 PRD | [PRD §12.2](../prd/PRD-agent-platform-M1.md#122-会话历史) |
+| Builder、预览 | 不提供页面 | PRD §1、§5.7、§11.1 |
+
 ## 组件与调用方
 
 `apps/web/components.json` 保持 `base-lyra`、`neutral`、CSS variables、`@/` aliases 和 lucide。
@@ -90,6 +106,11 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 `Alert` 必须传 `tone`（`info`、`warn`、`danger`），没有旧变体名与缺省 tone 的兼容层。
 
 普通导航保留 TanStack `Link` 或语义链接；需要控件外观时使用 `buttonVariants`，不改变链接角色。
+站内路径一律用 `Link`（原生 `<a href="/...">` 会整页重新加载）；返回 / 取消链接的目标是当前地址的前缀时
+加 `activeOptions={{ exact: true }}`，不让前缀匹配补上 `aria-current`。
+读取失败后的「重新登录」「重新加载…」「重新读取」使用 `features/recovery-button.tsx` 的 `RecoveryButton`
+（`PageStateCard` / `ReadFailureCard` 默认操作已内置）：请求中用 `aria-disabled` 保持可聚焦，失败后焦点留在按钮上；
+恢复成功、按钮卸载后焦点移到页面 h1（需 `tabIndex={-1}`），没有可聚焦标题时落到 `#main-content`。
 段落、列表、定义列表、表单和 fieldset 保持语义 HTML。
 申请详情、Agent 详情和我的 Skill 使用索引路由，确保编辑、配置和创建子路径能渲染对应页面。
 
@@ -110,6 +131,10 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 `pnpm test` 还执行 `apps/web/src/lib/time-display-policy.test.ts`：页面不得直接调用
 `toLocaleString`、`toLocaleDateString`、`toLocaleTimeString` 或 `Intl.DateTimeFormat` 显示时间。
 该测试只允许格式化模块本身、生成代码与测试文件直接调用，不设页面白名单。
+
+`apps/web/src/lib/internal-link-policy.test.ts` 扫描生产 TSX 中的原生 `<a>`：只允许测试里逐个列出原因的
+非 SPA 目标（外链、Connection 入口、服务端登录入口、页内锚点、`useLinkProps` 生成的品牌链接），
+其余站内跳转必须用路由 `Link`。
 
 ## 验证
 

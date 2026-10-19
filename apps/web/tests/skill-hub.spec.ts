@@ -518,6 +518,15 @@ test.describe("Skill version detail", () => {
 		await expect(
 			page.getByRole("link", { name: "返回 Skill Hub" }),
 		).toHaveAttribute("href", "/skills");
+		// N-21：/skills 是当前地址的前缀，返回链接不能被前缀匹配标成当前页；全页只有主导航
+		// 「Skill Hub」一个当前页链接。
+		await expect(
+			page.getByRole("link", { name: "返回 Skill Hub" }),
+		).not.toHaveAttribute("aria-current", /.*/);
+		await expect(page.locator('a[aria-current="page"]')).toHaveCount(1);
+		await expect(
+			page.locator('nav[aria-label="主导航"] a[aria-current="page"]'),
+		).toHaveText("Skill Hub");
 		const main = page.locator("#main-content");
 		for (const hidden of ["版本 ID", "Skill ID", "Manifest 摘要", "metadata"])
 			await expect(main).not.toContainText(hidden);

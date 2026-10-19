@@ -188,6 +188,13 @@ export const platformAuditQueryActionsV1 = [
 	"wecom.cancelled",
 	"wecom.expired",
 	"wecom.abandoned",
+	// #2879：Skill 项目操作与 Agent 默认 Key 读取/候选动作
+	"skill.project.create",
+	"skill.project.update",
+	"skill.project.list",
+	"skill.project.read",
+	"relay_key.agent_default.read",
+	"relay_key.agent_default.candidates",
 ] as const;
 
 export type PlatformAuditQueryActionV1 =

@@ -1511,3 +1511,163 @@ describe("credential-backed audit query consumer", () => {
 		).rejects.toMatchObject({ code: "access_denied" });
 	});
 });
+
+// #2879：Skill 项目操作与 Agent 默认 Key 读取/候选动作的管理员审计测试
+describe("admin audit for #2879 registered actions", () => {
+	it("projects skill.project.create with replayed:false in admin audit without raw details", async () => {
+		const userId = randomUUID();
+		const projectId = randomUUID();
+		const id = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+			values (${id}, 'proj-trace', ${randomUUID()}, 'user', ${userId}, 'skill.project.create', 'unknown', ${projectId}, 'succeeded', ${sql.json({ replayed: false })})`;
+		const record = await query.getAudit(admin, id, detail, request());
+		expect(record).toMatchObject({
+			action: "skill.project.create",
+			result: "succeeded",
+			actor: { kind: "user", actorId: userId },
+			subject: { kind: "unknown", subjectId: projectId },
+			summary: "skill.project.create: replayed=false",
+		});
+		// 摘要不含 details 原始 JSON 字段名
+		expect(JSON.stringify(record)).not.toContain('""replayed""');
+	});
+
+	it("projects skill.project.list with count in admin audit", async () => {
+		const userId = randomUUID();
+		const id = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+			values (${id}, 'list-trace', ${randomUUID()}, 'user', ${userId}, 'skill.project.list', 'unknown', ${userId}, 'succeeded', ${sql.json({ count: 3 })})`;
+		const record = await query.getAudit(admin, id, detail, request());
+		expect(record.action).toBe("skill.project.list");
+		expect(record.summary).toBe("skill.project.list: count=3");
+	});
+
+	it("projects skill.project.read with status in admin audit", async () => {
+		const userId = randomUUID();
+		const projectId = randomUUID();
+		const id = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+			values (${id}, 'read-trace', ${randomUUID()}, 'user', ${userId}, 'skill.project.read', 'unknown', ${projectId}, 'succeeded', ${sql.json({ status: "active" })})`;
+		const record = await query.getAudit(admin, id, detail, request());
+		expect(record.action).toBe("skill.project.read");
+		expect(record.summary).toBe("skill.project.read: status=active");
+	});
+
+	it("projects skill.project.update with status in admin audit", async () => {
+		const userId = randomUUID();
+		const projectId = randomUUID();
+		const id = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+			values (${id}, 'update-trace', ${randomUUID()}, 'user', ${userId}, 'skill.project.update', 'unknown', ${projectId}, 'succeeded', ${sql.json({ status: "disabled" })})`;
+		const record = await query.getAudit(admin, id, detail, request());
+		expect(record.action).toBe("skill.project.update");
+		expect(record.summary).toBe("skill.project.update: status=disabled");
+	});
+
+	it("rejects skill.project.create with wrong details shape (fails closed)", async () => {
+		const id = randomUUID();
+		// details 缺少 replayed 字段 → unavailable
+		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+			values (${id}, 'bad-trace', ${randomUUID()}, 'user', 'u1', 'skill.project.create', 'unknown', 'p1', 'succeeded', ${sql.json({ unexpected: true })})`;
+		await expect(
+			query.getAudit(admin, id, detail, request()),
+		).rejects.toMatchObject({ code: "unavailable" });
+	});
+
+	it("rejects skill.project.list with negative count (fails closed)", async () => {
+		const id = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+			values (${id}, 'bad-trace2', ${randomUUID()}, 'user', 'u2', 'skill.project.list', 'unknown', 'u2', 'succeeded', ${sql.json({ count: -1 })})`;
+		await expect(
+			query.getAudit(admin, id, detail, request()),
+		).rejects.toMatchObject({ code: "unavailable" });
+	});
+
+	it("projects relay_key.agent_default.read in admin audit without key values", async () => {
+		const userId = randomUUID();
+		const agentId = randomUUID();
+		const id = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+			values (${id}, 'rk-read-trace', ${randomUUID()}, 'user', ${userId}, 'relay_key.agent_default.read', 'agent', ${agentId}, 'succeeded', ${sql.json({ schemaVersion: 1, configurationRevision: 5 })})`;
+		const record = await query.getAudit(admin, id, detail, request());
+		expect(record.action).toBe("relay_key.agent_default.read");
+		expect(record.summary).toBe("relay_key.agent_default.read");
+		// 摘要不含配置版本或 Key 值
+		expect(record.summary).not.toContain("5");
+	});
+
+	it("projects relay_key.agent_default.candidates in admin audit without key values", async () => {
+		const userId = randomUUID();
+		const agentId = randomUUID();
+		const id = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+			values (${id}, 'rk-cand-trace', ${randomUUID()}, 'user', ${userId}, 'relay_key.agent_default.candidates', 'agent', ${agentId}, 'succeeded', ${sql.json({ schemaVersion: 1, configurationRevision: 7 })})`;
+		const record = await query.getAudit(admin, id, detail, request());
+		expect(record.action).toBe("relay_key.agent_default.candidates");
+		expect(record.summary).toBe("relay_key.agent_default.candidates");
+	});
+
+	it("projects relay_key.agent_default.read rejection with reason in summary", async () => {
+		const userId = randomUUID();
+		const agentId = randomUUID();
+		const id = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+			values (${id}, 'rk-rej-trace', ${randomUUID()}, 'user', ${userId}, 'relay_key.agent_default.read', 'agent', ${agentId}, 'rejected', ${sql.json({ schemaVersion: 1, reason: "not_authorized" })})`;
+		const record = await query.getAudit(admin, id, detail, request());
+		expect(record.action).toBe("relay_key.agent_default.read");
+		expect(record.summary).toBe(
+			"relay_key.agent_default.read: reason=not_authorized",
+		);
+	});
+
+	it("rejects relay_key.agent_default.read with wrong schemaVersion (fails closed)", async () => {
+		const id = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+			values (${id}, 'rk-bad-trace', ${randomUUID()}, 'user', 'u3', 'relay_key.agent_default.read', 'agent', 'a3', 'succeeded', ${sql.json({ schemaVersion: 2, configurationRevision: 1 })})`;
+		await expect(
+			query.getAudit(admin, id, detail, request()),
+		).rejects.toMatchObject({ code: "unavailable" });
+	});
+
+	it.each([
+		[
+			"skill.project.read",
+			"unknown",
+			{ status: "<script>arbitrary text</script>" },
+		],
+		[
+			"relay_key.agent_default.read",
+			"agent",
+			{ schemaVersion: 1, reason: "free text" },
+		],
+		[
+			"relay_key.agent_default.read",
+			"agent",
+			{ schemaVersion: 1, keyVersion: "2" },
+		],
+		[
+			"relay_key.agent_default.candidates",
+			"agent",
+			{ schemaVersion: 1, configurationRevision: -1 },
+		],
+	] as const)(
+		"rejects %s with values outside the writer's domain (fails closed)",
+		async (action, targetType, details) => {
+			const id = randomUUID();
+			await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+				values (${id}, 'domain-trace', ${randomUUID()}, 'user', 'u5', ${action}, ${targetType}, 't5', 'succeeded', ${sql.json(details)})`;
+			await expect(
+				query.getAudit(admin, id, detail, request()),
+			).rejects.toMatchObject({ code: "unavailable" });
+		},
+	);
+
+	it("rejects relay_key.agent_default.candidates with unknown field (fails closed)", async () => {
+		const id = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+			values (${id}, 'rk-unk-trace', ${randomUUID()}, 'user', 'u4', 'relay_key.agent_default.candidates', 'agent', 'a4', 'succeeded', ${sql.json({ schemaVersion: 1, unknownField: "bad" })})`;
+		await expect(
+			query.getAudit(admin, id, detail, request()),
+		).rejects.toMatchObject({ code: "unavailable" });
+	});
+}, 120_000);

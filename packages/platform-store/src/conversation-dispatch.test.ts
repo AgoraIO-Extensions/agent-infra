@@ -17,6 +17,7 @@ import { workloadResourceConfigurationHashV1 } from "../../../apps/platform-work
 import {
 	type ConversationDispatchAuthorizationPortV1,
 	type ConversationDispatchClaimV1,
+	type ConversationRuntimeDispatchRequestV1,
 	type ConversationRuntimeEvent,
 	ConversationRuntimeHostError,
 	type ConversationRuntimeHostPortV1,
@@ -457,7 +458,10 @@ async function waitForAvailableItem(itemId: string) {
 		.toBe(true);
 }
 
-async function admitNative(kind: "command" | "skill") {
+async function admitNative(
+	kind: "command" | "skill",
+	parameters = kind === "command" ? "" : "summary",
+) {
 	const work = await seed("conversation.turn.submit.v1", {
 		executionStatus: "completed",
 		hostSessionRef: "native-host",
@@ -537,7 +541,7 @@ async function admitNative(kind: "command" | "skill") {
 			conversationId: work.conversationId,
 			capabilityId: "a".repeat(64),
 			directoryRevision: "b".repeat(64),
-			parameters: kind === "command" ? "" : "summary",
+			parameters,
 			idempotencyKey: "native-admit",
 			requestId: "native-admit",
 			traceId: "native-admit",
@@ -581,6 +585,91 @@ async function dispatchState(work: { itemId: string; executionId: string }) {
 }
 
 describe("PostgreSQL Conversation dispatch Store", () => {
+	it.each([
+		{ label: "empty command", kind: "command" as const, parameters: "" },
+		{
+			label: "1025 byte Skill",
+			kind: "skill" as const,
+			parameters: "a".repeat(1025),
+		},
+		{
+			label: "16384 UTF-8 byte Skill",
+			kind: "skill" as const,
+			parameters: "é".repeat(8192),
+		},
+	])(
+		"dispatches an admitted $label from PostgreSQL through Core to Runtime",
+		async ({ kind, parameters }) => {
+			const plan = await admitNative(kind, parameters);
+			const store = open();
+			const transaction = new PostgresConversationEventTransactionV1({
+				databaseUrl,
+			});
+			const events = createConversationEventUseCaseV1({ transaction });
+			const delivered: ConversationRuntimeDispatchRequestV1[] = [];
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.dispatch = async (request) => {
+				delivered.push(request);
+				return {
+					schemaVersion: 1,
+					hostSessionRef: "native-host",
+					operationId: request.executionId,
+					result: { outcome: "accepted", status: "running" },
+				};
+			};
+			runtimeHost.setEvents([
+				{
+					schemaVersion: 1,
+					type: "completed",
+					executionId: plan.executionId,
+					adapterEventKey: "native-parameters-completed",
+					cursor: "native-parameters-completed",
+					occurredAt: new Date().toISOString(),
+					payload: { status: "completed" },
+				},
+			]);
+			const useCase = createConversationDispatchUseCaseV1({
+				store,
+				events,
+				runtimeHost,
+				authorization: isolationAuthorization,
+			});
+			try {
+				expect(
+					await useCase.dispatch({
+						schemaVersion: 1,
+						itemId: plan.outbox.id,
+						workerId: "native-parameters-worker",
+					}),
+				).toMatchObject({ outcome: "accepted" });
+				expect(delivered).toHaveLength(1);
+				expect(delivered[0]).toMatchObject({
+					operation: "native-capability.invoke",
+					nativeCapability: {
+						parameters,
+						parametersDigest: plan.parametersDigest,
+					},
+					executionId: plan.executionId,
+					conversationId: plan.conversationId,
+				});
+				expect(
+					await dispatchState({
+						itemId: plan.outbox.id,
+						executionId: plan.executionId,
+					}),
+				).toMatchObject({
+					status: "succeeded",
+					execution_status: "completed",
+					outbox_fence: 1,
+					execution_fence: 1,
+				});
+			} finally {
+				await store.close();
+				await transaction.close();
+			}
+		},
+	);
+
 	it.each(["command", "skill"] as const)(
 		"authorizes and pins admitted native %s through real Store claims",
 		async (kind) => {
@@ -2487,6 +2576,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			});
 			if (created.outcome !== "accepted") throw new Error("Expected Session");
 			const itemId = `conversation:sandbox:${created.result.conversationId}:1`;
+			await waitForAvailableItem(itemId);
 			expect(await store.findDispatchable({ limit: 10 })).toEqual([
 				{ itemId, operation: "conversation.sandbox.reconcile.v1" },
 			]);
@@ -2680,6 +2770,9 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			});
 			if (message.outcome !== "accepted")
 				throw new Error("Expected ready Session admission");
+			await waitForAvailableItem(
+				`conversation:turn:${message.result.executionId}`,
+			);
 			const business = await store.claim({
 				schemaVersion: 1,
 				itemId: `conversation:turn:${message.result.executionId}`,
@@ -3345,6 +3438,9 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			});
 			if (accepted.outcome !== "accepted")
 				throw new Error("Expected custom message acceptance");
+			await waitForAvailableItem(
+				`conversation:turn:${accepted.result.executionId}`,
+			);
 			const [work] = await store.findDispatchable({ limit: 1 });
 			if (!work) throw new Error("Expected accepted message outbox");
 			const decision = await store.claim({

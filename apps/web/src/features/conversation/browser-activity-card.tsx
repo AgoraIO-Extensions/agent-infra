@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import type { PersistedConversationEventV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	BrowserOperationRecordDialog,
+	type BrowserRecordViewer,
 	browserAuditEntries,
 } from "./browser-audit-view.js";
 import {
@@ -62,6 +63,7 @@ export function BrowserActivityCard({
 	includeIdle = false,
 	now = Date.now,
 	onCommand,
+	viewer,
 }: {
 	readonly events: readonly PersistedConversationEventV2[];
 	readonly conversationId?: string;
@@ -75,6 +77,8 @@ export function BrowserActivityCard({
 	readonly includeIdle?: boolean;
 	readonly now?: () => number;
 	readonly onCommand: (command: BrowserCardCommand) => void;
+	/** 当前登录用户：操作记录里的接管人显示为姓名。 */
+	readonly viewer?: BrowserRecordViewer;
 }) {
 	const titleId = useId();
 	const card = selectBrowserCard({
@@ -163,6 +167,7 @@ export function BrowserActivityCard({
 						conversationId={conversationId}
 						events={events}
 						executionId={executionId}
+						viewer={viewer}
 					/>
 				</div>
 			)}

@@ -172,7 +172,7 @@ describe("SkillHubDirectoryScreen", () => {
 		expect([...scope.options].map((option) => option.textContent)).toEqual([
 			"全部范围",
 			"仅自己",
-			"成员",
+			"全体成员",
 			"组织共享",
 			"内部市场",
 		]);

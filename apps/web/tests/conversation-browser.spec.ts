@@ -87,6 +87,7 @@ const operation = (
 const handoff = (
 	sequence: number,
 	value: "requested" | "active" | "completed",
+	{ operatorId }: { operatorId?: string } = {},
 ) =>
 	PersistedConversationEventV2Schema.parse({
 		...envelope(sequence),
@@ -97,6 +98,7 @@ const handoff = (
 			reason: "mfa",
 			requestedAt: occurredAt,
 			expiresAt,
+			...(operatorId ? { operatorId } : {}),
 			binding: binding(),
 		},
 	});
@@ -554,6 +556,28 @@ test("keeps a taken-over browser visible in the timeline and returns control (NI
 	});
 });
 
+test("names the signed-in operator in the browser record facts (NW-01)", async ({
+	page,
+}) => {
+	const fixture = await openBrowserConversation(page, [
+		operation(1, "completed"),
+		handoff(2, "completed", { operatorId: "user-1" }),
+		status(3, "completed"),
+	]);
+	await page.getByRole("button", { name: "查看操作记录" }).first().click();
+	const dialog = page.getByRole("dialog", { name: "浏览器操作记录" });
+	await expect(dialog).toBeVisible();
+	// 设计「接管人 陈昊 · MFA」：operatorId 是会话主体本人，显示当前登录用户的姓名，不显示 ID。
+	await expect(dialog.locator('dt:text-is("接管人") + dd')).toHaveText(
+		"开发测试 · MFA 验证",
+	);
+	await expect(dialog.locator('dt:text-is("凭证") + dd')).toHaveText(
+		"不进入模型或平台记录",
+	);
+	expect(await dialog.innerText()).not.toContain("user-1");
+	expect(fixture.posts).toEqual([]);
+});
+
 test("keeps the idle browser card inside the collapsed session context (BR-01)", async ({
 	page,
 }) => {
@@ -628,7 +652,7 @@ test("keeps browser records in a read-only dialog without squeezing the thread (
 	await expect(dialog.locator("dt")).toHaveText([
 		"域名",
 		"操作范围",
-		"接管",
+		"接管人",
 		"结果",
 		"凭证",
 	]);

@@ -26,6 +26,13 @@ function AgentDetailRoute() {
 		(isAgentConfigurationOwner(agent, session.state.session) ||
 			session.state.session.user.roles.includes("system_admin"));
 	const ownerSettings = canManage ? { agentId } : undefined;
+	// 「可用 Skill」指向 Agent 的 Skill 页，该页只对当前 Owner 开放（D-03）。
+	const skillBindings =
+		agent &&
+		session.state.kind === "ready" &&
+		isAgentConfigurationOwner(agent, session.state.session)
+			? { agentId }
+			: undefined;
 	// 与壳层「我的 Connection」同一个入口函数；会话未就绪时没有入口（D-01）。
 	const connectionUrl =
 		session.state.kind === "ready"
@@ -48,6 +55,7 @@ function AgentDetailRoute() {
 					onRetry={() => void query.refetch()}
 					retrying={query.isFetching}
 					ownerSettings={ownerSettings}
+					skillBindings={skillBindings}
 					templateName={templateName}
 				/>
 			</div>

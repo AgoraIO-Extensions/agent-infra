@@ -263,16 +263,12 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 
 	it("keeps administrator audit pages readable when unregistered actions are newest (#2776)", async () => {
 		// 正常产品路径写入、但没有登记进管理员审计的动作；外加一个从未出现过的新动作。
+		// #2879 已将 skill.project.* 与 relay_key.agent_default.read/candidates 登记，不再在此测试。
 		const unregistered = [
-			"relay_key.agent_default.read",
-			"relay_key.agent_default.candidates",
 			"conversation.sandbox.idle_reclaim_requested",
 			"conversation.sandbox.upgrade_requested",
 			"conversation.sandbox.never_prepared_stopped",
 			"skill.directory.read",
-			"skill.project.list",
-			"skill.project.create",
-			"skill.project.update",
 			"future.unregistered.action",
 		];
 		// 先写两条已登记、三个版本都能表示的事件（用户主体、Agent 目标），再让未登记的事件成为最新的若干行。

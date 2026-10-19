@@ -98,6 +98,14 @@ platformWorker:
   runtimeImageDigest: ""
   replicas: 1
   wecomEnabled: false
+  # 可选的容器资源配置。不设时 Pod 为 BestEffort，内存紧张时 OOM Killer 会优先杀掉。
+  # 本地环境建议只设 requests 不设 limits，避免容器自身的 cgroup OOM；
+  # 生产环境按实际负载评估后再补充 limits。
+  # 示例：
+  #   requests:
+  #     memory: "1Gi"
+  #     cpu: "100m"
+  resources: {}
   nativeMetadataGateway:
     enabled: true
     port: 3004

@@ -659,6 +659,7 @@ export function ActiveConversation({
 		busy: blocked || commandLocked,
 		canStop: active && stopping !== latestExecution,
 		onCommand: onBrowserCommand,
+		viewer: session?.user,
 	};
 	return (
 		<>
@@ -919,6 +920,7 @@ export function ActiveConversation({
 				}}
 				onClose={() => setSelectedExecution(undefined)}
 				finalFocus={executionFinalFocus}
+				viewer={session?.user}
 			/>
 		</>
 	);

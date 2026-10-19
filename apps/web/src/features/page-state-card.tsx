@@ -1,9 +1,10 @@
 import { Link } from "@tanstack/react-router";
 import { LogIn, RefreshCw } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { StateCard } from "@/components/ui/state-card";
 import type { CollectionReadUnavailable } from "./collection-read-failure";
+import { RecoveryButton } from "./recovery-button";
 import { useBrowserSession } from "./use-browser-session";
 
 /**
@@ -59,14 +60,21 @@ const announcedKinds = new Set<PageStateKind>([
  * 重新读取服务端会话：会话已失效时由壳层切换到登录页，不整页刷新；会话仍有效时调用
  * onStillValid，由页面把失败的读取重做一次（W-03），否则页面会停在同一张卡上。
  */
-function ReauthenticateAction({ onStillValid }: { onStillValid?: () => void }) {
+function ReauthenticateAction({
+	onStillValid,
+	retrying = false,
+}: {
+	onStillValid?: () => void;
+	/** 会话确认后页面重读失败的数据期间同样忽略重复点击。 */
+	retrying?: boolean;
+}) {
 	const session = useBrowserSession();
 	// 只反映本次点击，不受挂载时的后台会话重读影响。
 	const [checking, setChecking] = useState(false);
 	return (
-		<Button
-			type="button"
-			disabled={checking}
+		<RecoveryButton
+			recoveryKey="重新登录"
+			busy={checking || retrying}
 			onClick={async () => {
 				setChecking(true);
 				try {
@@ -80,7 +88,7 @@ function ReauthenticateAction({ onStillValid }: { onStillValid?: () => void }) {
 		>
 			<LogIn aria-hidden="true" data-icon="inline-start" />
 			{checking ? "正在检查…" : "重新登录"}
-		</Button>
+		</RecoveryButton>
 	);
 }
 
@@ -106,7 +114,9 @@ function defaultAction(
 ): ReactNode {
 	switch (kind) {
 		case "login":
-			return <ReauthenticateAction onStillValid={onStillValid} />;
+			return (
+				<ReauthenticateAction onStillValid={onStillValid} retrying={retrying} />
+			);
 		case "unauthorized":
 			return (
 				<Link className={buttonVariants({ variant: "outline" })} to="/">
@@ -115,15 +125,15 @@ function defaultAction(
 			);
 		case "unavailable":
 			return onRetry ? (
-				<Button
-					type="button"
+				<RecoveryButton
 					variant="outline"
-					disabled={retrying}
+					recoveryKey={retryLabel ?? "重新加载"}
+					busy={retrying}
 					onClick={onRetry}
 				>
 					<RefreshCw aria-hidden="true" data-icon="inline-start" />
 					{retrying ? "正在重新加载…" : (retryLabel ?? "重新加载")}
-				</Button>
+				</RecoveryButton>
 			) : null;
 		case "not-found":
 		case "invalid":
@@ -131,6 +141,10 @@ function defaultAction(
 	}
 }
 
+/**
+ * 公共状态卡。默认的「重新登录」「重新加载」是 RecoveryButton：请求中保持可聚焦，恢复成功、
+ * 状态卡卸载时焦点移到页面 h1（需 tabIndex=-1），不落到 body；自定义 action 同样用它。
+ */
 export function PageStateCard(props: PageStateCardProps) {
 	const { kind, title, description, action, headingLevel, className } = props;
 	const defaults = pageStateDefaults[kind];
@@ -159,7 +173,7 @@ export function readFailureStateKind(
 	return failure.retryable ? "unavailable" : "unauthorized";
 }
 
-/** Agent 详情、申请详情与 Owner 配置共用的读取失败卡。 */
+/** Agent 详情、申请详情、Owner 配置、Agent 的 Skill 与对话页共用的读取失败卡。 */
 export function ReadFailureCard({
 	failure,
 	deniedDescription,
@@ -203,5 +217,11 @@ export function ReadFailureCard({
 				retryLabel={retryLabel}
 			/>
 		);
-	return <PageStateCard kind={kind} onStillValid={onStillValid} />;
+	return (
+		<PageStateCard
+			kind={kind}
+			onStillValid={onStillValid}
+			retrying={retrying}
+		/>
+	);
 }

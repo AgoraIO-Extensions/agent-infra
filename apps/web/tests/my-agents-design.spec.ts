@@ -715,8 +715,13 @@ test("application detail puts actions in the heading, shows three progress rows 
 	).gridTemplateColumns.split(" ");
 	if (info.project.name === "desktop") expect(columns[0]).toBe("150px");
 	else expect(columns).toHaveLength(1);
-	// F-02：来源与入口模式写模板显示名，不出现原始 templateId。
-	await expect(facts).toContainText("标准模板 · Codex");
+	// F-02 与设计 #application-detail：一行「来源 = 标准模板 · Codex」，不出现原始 templateId，
+	// 也不再另列「标准模板」「入口模式」两行重复模板名。
+	const source = facts.locator("dt", { hasText: /^来源$/ });
+	await expect(source).toHaveCount(1);
+	await expect(source.locator("+ dd")).toHaveText("标准模板 · Codex");
+	await expect(facts.locator("dt", { hasText: /^入口模式$/ })).toHaveCount(0);
+	await expect(facts.locator("dt", { hasText: /^标准模板$/ })).toHaveCount(0);
 	await expect(facts).not.toContainText("codex");
 	// M-04：使用范围按目录显示姓名、邮箱、组织名与路径，不出现内部 ID。
 	await expect(facts).toContainText("验收用户二");

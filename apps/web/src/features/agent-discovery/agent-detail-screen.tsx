@@ -9,7 +9,6 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { armBefore, useRecoveryFocus } from "@/hooks/use-recovery-focus";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import { statusTone } from "@/lib/status-tone";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
@@ -41,6 +40,11 @@ type AgentDetailScreenProps = {
 	connectionUrl?: string;
 	onRetry?: () => void;
 	ownerSettings?: { readonly agentId: string };
+	/**
+	 * 设计页头 ghost「可用 Skill」的目标是 Owner 配置下的 Agent Skill 页；该页只对当前 Owner 开放
+	 * （PRD §11.5 由 Owner 配置 Skill 版本），所以路由只为当前 Owner 提供（D-03）。
+	 */
+	skillBindings?: { readonly agentId: string };
 	retrying?: boolean;
 	state: AgentDetailState | { kind: "loading" };
 	/** 模板显示名（部署配置）；未提供或读不到时显示「标准模板」（F-02）。 */
@@ -126,9 +130,8 @@ function interactionReadiness(
 		return undefined;
 	if (agent.source.identityResponsibility === "self-managed")
 		return interactionUrl ? "自有交互入口已就绪。" : "自有交互入口尚未就绪。";
-	return interactionUrl
-		? "平台身份入口已就绪。"
-		: "平台身份入口需经过 Auth Gateway；当前未提供直接入口。";
+	// 技术组件名不进入产品界面（PRD §6.4），未就绪时与自有身份入口同一说法。
+	return interactionUrl ? "平台身份入口已就绪。" : "平台身份入口尚未就绪。";
 }
 
 /**
@@ -149,12 +152,10 @@ export function AgentDetailScreen({
 	onRetry,
 	ownerSettings,
 	retrying = false,
+	skillBindings,
 	state,
 	templateName,
 }: AgentDetailScreenProps) {
-	// 「重新登录」「重新加载 Agent」恢复成功后，焦点移到详情 h1（Agent 名），不落到 body。
-	const recovery = useRecoveryFocus(state.kind === "ready" ? 0 : 1);
-	const retry = armBefore(recovery.arm, onRetry);
 	if (state.kind === "loading")
 		return (
 			<PageLoadingState title="Agent 详情" message="正在加载 Agent 详情…" />
@@ -167,7 +168,8 @@ export function AgentDetailScreen({
 						<h1 id="agent-detail-heading">Agent 详情</h1>
 					</div>
 				</header>
-				{/* 公共状态卡按 401/403/404/503/响应无效选择（P-01）；403 与 404 文案相同。 */}
+				{/* 公共状态卡按 401/403/404/503/响应无效选择（P-01）；403 与 404 文案相同。
+				    「重新登录」「重新加载 Agent」恢复后焦点落到详情 h1（Agent 名）。 */}
 				<ReadFailureCard
 					failure={state}
 					deniedDescription="Agent 不存在，或你没有访问权限。"
@@ -181,9 +183,9 @@ export function AgentDetailScreen({
 							返回 Agent 目录
 						</Link>
 					}
-					onRetry={retry}
+					onRetry={onRetry}
 					// 401「重新登录」后会话仍有效：重读详情（W-03）。
-					onStillValid={retry}
+					onStillValid={onRetry}
 					retrying={retrying}
 					retryLabel="重新加载 Agent"
 				/>
@@ -230,7 +232,6 @@ export function AgentDetailScreen({
 							</p>
 							<h1
 								id="agent-detail-heading"
-								ref={recovery.ref}
 								tabIndex={-1}
 								className="break-words font-semibold text-[28px]"
 							>
@@ -281,6 +282,16 @@ export function AgentDetailScreen({
 							Owner 配置
 						</Link>
 					)}
+					{/* 与 Owner 配置「Skill」分区同一条件：自有交互入口不在平台会话中使用 Skill。 */}
+					{skillBindings && !selfManaged && (
+						<Link
+							className={buttonVariants({ variant: "ghost" })}
+							params={{ agentId: skillBindings.agentId }}
+							to="/agents/$agentId/skills"
+						>
+							可用 Skill
+						</Link>
+					)}
 				</div>
 			</header>
 			{/* D-03：一个派生状态 chip + 非状态 tag。 */}
@@ -313,8 +324,14 @@ export function AgentDetailScreen({
 							<dd className="break-all">
 								{templateAndEntryLabel(agent, templateName)}
 							</dd>
-							<dt className="text-muted-foreground">入口身份责任</dt>
-							<dd>{agentIdentityResponsibilityLabel(agent)}</dd>
+							{/* F-07：身份责任只是自有交互入口的选择（PRD §5.3、§7.2）；标准模板与平台交互入口
+							    始终由平台校验，设计 #agent-detail 不列这一行。 */}
+							{selfManaged && (
+								<>
+									<dt className="text-muted-foreground">入口身份责任</dt>
+									<dd>{agentIdentityResponsibilityLabel(agent)}</dd>
+								</>
+							)}
 							{entryStatus && (
 								<>
 									<dt className="text-muted-foreground">入口状态</dt>

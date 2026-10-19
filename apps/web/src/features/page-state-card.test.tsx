@@ -99,12 +99,19 @@ describe("PageStateCard", () => {
 		expect(onRetry).toHaveBeenCalledOnce();
 	});
 
-	it("disables the retry while it is running", async () => {
+	it("keeps the running retry focusable and ignores repeated clicks (aria-disabled)", async () => {
+		const onRetry = vi.fn();
 		await renderWithAgentRouter(
-			<PageStateCard kind="unavailable" onRetry={vi.fn()} retrying />,
+			<PageStateCard kind="unavailable" onRetry={onRetry} retrying />,
 		);
 		const retry = screen.getByRole("button", { name: "正在重新加载…" });
-		expect((retry as HTMLButtonElement).disabled).toBe(true);
+		// 请求中不用原生 disabled：已获得焦点的按钮被禁用时浏览器会把焦点移到 body。
+		expect(retry.getAttribute("aria-disabled")).toBe("true");
+		expect(retry.hasAttribute("disabled")).toBe(false);
+		retry.focus();
+		fireEvent.click(retry);
+		expect(onRetry).not.toHaveBeenCalled();
+		expect(document.activeElement).toBe(retry);
 	});
 
 	it("re-reads the server session for login instead of reloading the page", async () => {
@@ -163,14 +170,13 @@ describe("PageStateCard", () => {
 			await waitFor(() => expect(sessionLoader.load).toHaveBeenCalled());
 			current = kind;
 			fireEvent.click(screen.getByRole("button", { name: "重新登录" }));
+			// 检查中按钮保持可聚焦（aria-disabled，不是原生 disabled），检查结束后恢复。
 			await waitFor(() =>
 				expect(
-					(
-						screen.getByRole("button", {
-							name: "重新登录",
-						}) as HTMLButtonElement
-					).disabled,
-				).toBe(false),
+					screen
+						.getByRole("button", { name: "重新登录" })
+						.getAttribute("aria-disabled"),
+				).toBe("false"),
 			);
 			expect(onStillValid).toHaveBeenCalledTimes(calls);
 		},

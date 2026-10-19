@@ -109,6 +109,30 @@ spec:
             capabilities:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
+          {{- with .Values.platformWorker.resources }}
+          # 设置 resources 使 Pod QoS 升级为 Burstable，避免 BestEffort 下 OOM Killer 优先杀掉 Worker。
+          # 本地环境建议只设 requests 不设 limits，防止 cgroup 触发容器自身的 OOM；
+          # 生产环境按实际负载调整 requests 与 limits。
+          resources:
+            {{- if .requests }}
+            requests:
+              {{- if .requests.memory }}
+              memory: {{ .requests.memory | quote }}
+              {{- end }}
+              {{- if .requests.cpu }}
+              cpu: {{ .requests.cpu | quote }}
+              {{- end }}
+            {{- end }}
+            {{- if .limits }}
+            limits:
+              {{- if .limits.memory }}
+              memory: {{ .limits.memory | quote }}
+              {{- end }}
+              {{- if .limits.cpu }}
+              cpu: {{ .limits.cpu | quote }}
+              {{- end }}
+            {{- end }}
+          {{- end }}
           env:
             {{- if not .Values.workloadTopology.enabled }}
             - name: PLATFORM_WORKER_DEPLOYMENT_MODULE

@@ -20,10 +20,10 @@ describe("Skill Hub labels", () => {
 			"npx",
 			"GitHub",
 		]);
-		// MEMBER 在服务端对全部在职成员可见，确认前不写「指定成员」。
+		// MEMBER 对全体在职成员可见（PRD §11.5，#2862），不写设计稿的「指定成员」。
 		expect(skillHubVisibilityLabels).toEqual({
 			PRIVATE: "仅自己",
-			MEMBER: "成员",
+			MEMBER: "全体成员",
 			ORGANIZATION: "组织共享",
 			MARKET: "内部市场",
 		});

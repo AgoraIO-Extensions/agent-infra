@@ -25,6 +25,7 @@ import type {
 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	BrowserOperationRecordDialog,
+	type BrowserRecordViewer,
 	browserAuditEntries,
 } from "./browser-audit-view.js";
 import { ConnectionInstallationPanel } from "./connection-installation-panel.js";
@@ -367,6 +368,7 @@ export function ConversationExecutionDetails({
 	onRetry,
 	onClose,
 	finalFocus,
+	viewer,
 }: {
 	open: boolean;
 	data?: ExecutionDetailProjectionV2;
@@ -379,6 +381,8 @@ export function ConversationExecutionDetails({
 	onRetry: () => void;
 	onClose: () => void;
 	finalFocus?: () => HTMLElement | null;
+	/** 当前登录用户：嵌套的浏览器操作记录用它显示接管人姓名。 */
+	viewer?: BrowserRecordViewer;
 }) {
 	return (
 		<Dialog
@@ -412,6 +416,7 @@ export function ConversationExecutionDetails({
 							modelOptions={modelOptions}
 							connectionEnabled={connectionEnabled}
 							onRetry={onRetry}
+							viewer={viewer}
 						/>
 					)}
 				</DialogBody>
@@ -431,6 +436,7 @@ function ExecutionDetailBody({
 	modelOptions,
 	connectionEnabled,
 	onRetry,
+	viewer,
 }: {
 	data: ExecutionDetailProjectionV2;
 	conversationId: string;
@@ -439,6 +445,7 @@ function ExecutionDetailBody({
 	modelOptions: readonly ExecutionModelOption[];
 	connectionEnabled: boolean;
 	onRetry: () => void;
+	viewer?: BrowserRecordViewer;
 }) {
 	return (
 		<>
@@ -495,7 +502,7 @@ function ExecutionDetailBody({
 				<h3>模型与工具调用事实</h3>
 				<OperationFacts events={data.events} options={modelOptions} />
 			</section>
-			<BrowserRecordsRow data={data} />
+			<BrowserRecordsRow data={data} viewer={viewer} />
 			{connectionEnabled && (
 				<ConnectionInstallationSection
 					defaultOpen={needsConnectionAuthorization(data)}
@@ -523,7 +530,13 @@ function ExecutionDetailBody({
 }
 
 /** 该执行有浏览器记录时，在详情里提供只读记录入口（嵌套弹窗，Esc 只关闭记录）。 */
-function BrowserRecordsRow({ data }: { data: ExecutionDetailProjectionV2 }) {
+function BrowserRecordsRow({
+	data,
+	viewer,
+}: {
+	data: ExecutionDetailProjectionV2;
+	viewer?: BrowserRecordViewer;
+}) {
 	if (
 		browserAuditEntries(data.events, data.conversationId, data.executionId)
 			.length === 0
@@ -536,6 +549,7 @@ function BrowserRecordsRow({ data }: { data: ExecutionDetailProjectionV2 }) {
 				conversationId={data.conversationId}
 				events={data.events}
 				executionId={data.executionId}
+				viewer={viewer}
 			/>
 		</section>
 	);

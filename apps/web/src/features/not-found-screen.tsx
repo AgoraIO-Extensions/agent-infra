@@ -21,7 +21,9 @@ export function NotFoundScreen() {
 								<House aria-hidden="true" data-icon="inline-start" />
 								返回工作台
 							</Link>
+							{/* exact：未匹配的 /agents/... 地址以 /agents 为前缀，不让 Link 补 aria-current。 */}
 							<Link
+								activeOptions={{ exact: true }}
 								className={buttonVariants({ variant: "outline" })}
 								to="/agents"
 							>

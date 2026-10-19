@@ -189,7 +189,10 @@ export function MyAgentApplicationDetailScreen({
 					</Link>
 					{/* 设计为可读编号（#2861 跟踪）；接口就绪前只写「申请详情」，不外露内部申请 ID。 */}
 					<p className="page-eyebrow">申请详情</p>
-					<h1 id="my-agent-application-detail-heading">{application.name}</h1>
+					{/* tabIndex=-1：读取失败后「重新登录」「重新加载申请」恢复时焦点落在这里。 */}
+					<h1 id="my-agent-application-detail-heading" tabIndex={-1}>
+						{application.name}
+					</h1>
 					<p>{application.description}</p>
 				</div>
 				{hasActions ? (
@@ -308,14 +311,18 @@ export function MyAgentApplicationDetailScreen({
 					<section className="form-aside" aria-label="申请配置摘要">
 						<h2>申请配置</h2>
 						<dl className="metadata-facts">
-							<dt>
-								{application.source.kind === "standard"
-									? "标准模板"
-									: "镜像地址"}
-							</dt>
-							<dd>{agentSourceReferenceLabel(application, templateName)}</dd>
-							<dt>入口模式</dt>
+							{/* 设计 #application-detail：一行「来源 = 标准模板 · Codex」，不再分「标准模板」
+							    「入口模式」两行重复模板名。自定义 Agent 写入口方式，并保留镜像地址。 */}
+							<dt>来源</dt>
 							<dd>{agentConversationSourceLabel(application, templateName)}</dd>
+							{application.source.kind === "custom" ? (
+								<>
+									<dt>镜像地址</dt>
+									<dd>
+										{agentSourceReferenceLabel(application, templateName)}
+									</dd>
+								</>
+							) : null}
 							<dt>入口身份责任</dt>
 							<dd>{agentIdentityResponsibilityLabel(application)}</dd>
 							<dt>Owner</dt>
