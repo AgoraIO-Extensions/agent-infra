@@ -69,6 +69,11 @@ web:
   placement: external
   externalBaseUrl: https://web.example.invalid
 
+# Skill 绑定的部署级 Agent Version（工程 Spec §11.6）。非空时以同一个值注入
+# Platform API 与 Worker 的 AGENT_INFRA_AGENT_VERSION，两边配置模块都从它读取；
+# 留空时 Skill 绑定读写不可用。说明见 deploy/platform-api/README.md。
+agentVersion: ""
+
 platformApi:
   placement: external
   externalBaseUrl: https://api.example.invalid

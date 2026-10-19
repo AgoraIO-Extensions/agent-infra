@@ -117,6 +117,10 @@ spec:
               value: /var/run/agent-infra/encryption-public-key/public.pem
             - name: AGENT_INFRA_ENCRYPTION_KEY_VERSION
               value: {{ .Values.keys.encryptionPublicKey.version | quote }}
+            {{- with .Values.agentVersion }}
+            - name: AGENT_INFRA_AGENT_VERSION
+              value: {{ . | quote }}
+            {{- end }}
             {{- if $callbackAuthRef.name }}
             - name: PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE
               value: /var/run/agent-infra/connection-callback-auth/callback.auth

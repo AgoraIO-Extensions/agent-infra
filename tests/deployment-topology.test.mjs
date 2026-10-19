@@ -840,6 +840,65 @@ test("production Worker requires a private module and runtime authorization moun
 	assert.match(invalidCaRef.stderr, /trustedCaSecretRef/);
 });
 
+test("one agentVersion value reaches both the in-cluster API and the production Worker (#2903)", () => {
+	const production = [
+		"--set",
+		"workloadTopology.enabled=false",
+		"--set-string",
+		"platformWorker.deploymentModule=file:///app/dist/deployment.mjs",
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.name=worker-module",
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.key=configuration.mjs",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.name=worker-runtime-auth",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.privateKeyKey=grant.pem",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.serviceTokenKey=service-token",
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+	];
+	const deployments = [
+		"topology-agent-infra-platform-api",
+		"topology-agent-infra-platform-worker",
+	];
+	const agentVersionEnv = (output, name) =>
+		resource(
+			objects(output),
+			"Deployment",
+			name,
+		).spec.template.spec.containers[0].env.filter(
+			(entry) => entry.name === "AGENT_INFRA_AGENT_VERSION",
+		);
+	// 留空时两边都不注入：Skill 绑定读写保持不可用。
+	const unset = render(...production);
+	assert.equal(unset.status, 0, unset.stderr);
+	for (const name of deployments)
+		assert.deepEqual(agentVersionEnv(unset.stdout, name), []);
+	const configured = render(
+		...production,
+		"--set-string",
+		"agentVersion=agent-version-1",
+	);
+	assert.equal(configured.status, 0, configured.stderr);
+	for (const name of deployments)
+		assert.deepEqual(agentVersionEnv(configured.stdout, name), [
+			{ name: "AGENT_INFRA_AGENT_VERSION", value: "agent-version-1" },
+		]);
+	for (const invalid of ["agent/version", " agent-version", "x".repeat(129)]) {
+		const rejected = render(
+			...production,
+			"--set-string",
+			`agentVersion=${invalid}`,
+		);
+		assert.notEqual(rejected.status, 0);
+		assert.match(rejected.stderr, /agentVersion/);
+	}
+});
+
 test("native metadata Worker gateway is disabled for topology and restricted to Platform API", () => {
 	const disabled = objects(render().stdout);
 	assert.equal(

@@ -33,6 +33,7 @@ services:
       PLATFORM_API_NATIVE_METADATA_WORKER_ORIGIN: ${PLATFORM_LOCAL_NATIVE_METADATA_WORKER_ORIGIN:-}
       PLATFORM_API_NATIVE_METADATA_WORKER_SERVICE_TOKEN_FILE: /run/secrets/platform_native_metadata_worker_token
       PLATFORM_API_NATIVE_METADATA_WORKER_LOCAL: "true"
+      AGENT_INFRA_AGENT_VERSION: ${AGENT_INFRA_AGENT_VERSION:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "platform-worker-native-metadata:${PLATFORM_LOCAL_NATIVE_METADATA_WORKER_BIND_ADDRESS:-host-gateway}"

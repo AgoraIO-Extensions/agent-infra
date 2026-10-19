@@ -2,17 +2,26 @@ import {
 	AgentProjectionV2Schema,
 	ConnectionCapabilityProjectionV1Schema,
 	ConversationPageV1Schema,
+	SkillHubAgentBindingCommandV1Schema,
+	SkillHubAgentBindingResultV1Schema,
+	SkillHubAgentBindingStatusResponseV1Schema,
+	SkillHubAgentCurrentVersionV1Schema,
+	SkillHubDirectoryPageV1Schema,
+	SkillHubVersionMetadataV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
 	createPilotAgentMockServerV2,
 	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import type { DeploymentConfigurationProjectionV2 } from "../src/pilot/generated-v2/types.gen";
+import type {
+	DeploymentConfigurationProjectionV2,
+	SkillHubAgentBindingStatusV1,
+} from "../src/pilot/generated-v2/types.gen";
 import { computed, resolved } from "./primitive-styles";
 
 // Owner 配置的 Secret 与环境变量（O-10、N-08）、模型与默认 Relay Key（G-08、G-09、RK2-01～09）、
-// Skill 绑定入口（O-02）。契约 Fake API；页面级状态只在 #main-content 内查找（Toast 宿主是 role=status）。
+// Skill 绑定入口与绑定页（O-02、#2903）。契约 Fake API；页面级状态只在 #main-content 内查找（Toast 宿主是 role=status）。
 
 type Role = "owner" | "admin" | "employee";
 type CandidateMode = "same" | "subset" | "empty" | "error" | "forbidden";
@@ -124,6 +133,27 @@ test("renders trusted candidate names and saves only the original model identifi
 	expect(JSON.stringify(payload)).not.toMatch(/可信模型|displayName/);
 });
 
+// Skill 绑定页的目录：同一 Skill 的两个版本与另一个 Skill（#2903）。
+const skillVersion = (name: string, version: string, id: string) =>
+	SkillHubVersionMetadataV1Schema.parse({
+		schemaVersion: 1,
+		skillId: `${name}-skill`,
+		skillVersionId: id,
+		name,
+		version,
+		provider: "my_library",
+		visibility: "PRIVATE",
+		state: "published",
+		packageDigest: "a".repeat(64),
+		manifestDigest: "b".repeat(64),
+		signatureDigest: "c".repeat(64),
+	});
+const skillDirectory = [
+	skillVersion("workspace-summary", "1.0.0", "workspace-summary-v1"),
+	skillVersion("workspace-summary", "1.1.0", "workspace-summary-v2"),
+	skillVersion("code-review", "1.0.0", "code-review-v1"),
+];
+
 const unavailable = (status: number, retryable: boolean) => ({
 	status,
 	json: {
@@ -141,7 +171,14 @@ async function ownerConfigFixture(
 		role = "owner",
 		keySet = false,
 		saved = "same",
-	}: { role?: Role; keySet?: boolean; saved?: CandidateMode } = {},
+		agentVersion = null,
+	}: {
+		role?: Role;
+		keySet?: boolean;
+		saved?: CandidateMode;
+		/** 部署级 Agent Version；null 表示部署未配置（#2903）。 */
+		agentVersion?: string | null;
+	} = {},
 ) {
 	const base = AgentProjectionV2Schema.parse(
 		pilotFakeScenariosV2.starting.response.body,
@@ -168,6 +205,7 @@ async function ownerConfigFixture(
 	const releases = new Map<string, () => void>();
 	const commands: { method: string; path: string; body: unknown }[] = [];
 	const reads: string[] = [];
+	let skillBindings: SkillHubAgentBindingStatusV1[] = [];
 	const userId =
 		role === "owner"
 			? "user-owner-1"
@@ -264,6 +302,90 @@ async function ownerConfigFixture(
 		if (/\/wecom-(bot|app)$/.test(pathname))
 			return route.fulfill({ json: { status: "not_configured" } });
 		if (method !== "GET") commands.push({ method, path: pathname, body });
+		// Skill 绑定（#2903）：当前版本与绑定读写只对当前 Owner 开放，部署未配置时不可用。
+		if (method === "GET" && pathname === "/api/v2/skills")
+			return route.fulfill({
+				json: SkillHubDirectoryPageV1Schema.parse({
+					items: skillDirectory,
+					nextCursor: null,
+				}),
+			});
+		if (pathname === "/api/v2/agents/agent-pilot-1/skills/current-version") {
+			if (role !== "owner" || agentVersion === null)
+				return route.fulfill(unavailable(404, false));
+			return route.fulfill({
+				json: SkillHubAgentCurrentVersionV1Schema.parse({
+					schemaVersion: 1,
+					agentId: "agent-pilot-1",
+					agentVersion,
+					configurationRevision,
+				}),
+			});
+		}
+		const bindingPath =
+			/^\/api\/v2\/agents\/agent-pilot-1\/versions\/([^/]+)\/skills$/.exec(
+				pathname,
+			);
+		if (bindingPath) {
+			if (role !== "owner" || agentVersion === null)
+				return route.fulfill(unavailable(404, false));
+			if (decodeURIComponent(bindingPath[1] ?? "") !== agentVersion)
+				return route.fulfill(unavailable(409, false));
+			if (method === "GET")
+				return route.fulfill({
+					json: SkillHubAgentBindingStatusResponseV1Schema.parse({
+						schemaVersion: 1,
+						agentId: "agent-pilot-1",
+						agentVersion,
+						configurationRevision,
+						bindings: skillBindings,
+					}),
+				});
+			const command = SkillHubAgentBindingCommandV1Schema.parse(body);
+			if (command.expectedConfigurationRevision !== configurationRevision)
+				return route.fulfill(unavailable(409, false));
+			configurationRevision += 1;
+			// 完整集合替换：每项按目录版本进入等待同步。
+			skillBindings = command.bindings.map((binding) => {
+				const metadata = skillDirectory.find(
+					(item) => item.skillVersionId === binding.skillVersionId,
+				);
+				if (!metadata) throw new Error("Unknown Skill version in fixture");
+				return {
+					schemaVersion: 1,
+					agentId: "agent-pilot-1",
+					agentVersion,
+					skillName: metadata.name,
+					skillVersion: {
+						schemaVersion: 1,
+						skillId: metadata.skillId,
+						skillVersionId: metadata.skillVersionId,
+						provider: metadata.provider,
+						version: metadata.version,
+						packageDigest: metadata.packageDigest,
+						manifestDigest: metadata.manifestDigest,
+						signatureDigest: metadata.signatureDigest,
+					},
+					grant: binding.grant,
+					configurationRevision,
+					syncRevision: 1,
+					state: "pending_sync",
+					failureReason: null,
+					appliedReceipt: null,
+				};
+			});
+			return route.fulfill({
+				status: 201,
+				json: SkillHubAgentBindingResultV1Schema.parse({
+					schemaVersion: 1,
+					agentId: "agent-pilot-1",
+					agentVersion,
+					configurationRevision,
+					changedFields: ["skills"],
+					replayed: false,
+				}),
+			});
+		}
 		if (pathname.endsWith("/default-relay-key/display-candidates")) {
 			if (method === "GET") {
 				await gate("saved-candidates");
@@ -1060,7 +1182,125 @@ test("the Owner configuration links to the Agent's Skill page (O-02)", async ({
 	await expect(main(page)).toContainText("暂时无法读取当前 Agent 版本");
 	for (const label of ["Agent ID", "Agent 版本", "配置 revision", "Grant JSON"])
 		await expect(page.getByLabel(label)).toHaveCount(0);
+	// 部署未配置 Agent Version：读过当前版本后不发任何绑定读写（#2903）。
+	expect(api.reads).toContain(
+		"/api/v2/agents/agent-pilot-1/skills/current-version",
+	);
 	expect(api.reads.filter((path) => path.includes("/versions/"))).toEqual([]);
+	expect(api.commands).toEqual([]);
+	await noHorizontalOverflow(page);
+});
+
+test("an Owner lists, binds and unbinds Skill versions under the server's Agent Version (O-02, #2903)", async ({
+	page,
+}) => {
+	const api = await ownerConfigFixture(page, {
+		agentVersion: "agent-version-7",
+	});
+	await page.goto("/agents/agent-pilot-1/skills");
+	const region = main(page);
+	await expect(
+		region.getByText("当前 Agent 版本：agent-version-7"),
+	).toBeVisible();
+	await expect(region.getByText("还未绑定 Skill")).toBeVisible();
+	// 版本只来自服务端：页面没有可手填的版本字段。
+	await expect(page.getByLabel("Agent 版本")).toHaveCount(0);
+	const bindingPath =
+		"/api/v2/agents/agent-pilot-1/versions/agent-version-7/skills";
+	const minimalGrant = {
+		schemaVersion: 1,
+		tools: [],
+		connections: [],
+		fileRoots: [],
+		networkOrigins: [],
+		scripts: false,
+	};
+	const bind = async (versionId: string, label: string) => {
+		await region
+			.getByLabel("固定版本", { exact: true })
+			.selectOption(versionId);
+		await region.getByRole("button", { name: "绑定固定版本" }).click();
+		const dialog = page.getByRole("dialog", { name: "确认绑定固定版本" });
+		await expect(dialog).toContainText(label);
+		await dialog.getByRole("button", { name: "确认绑定" }).click();
+		await expect(dialog).toHaveCount(0);
+	};
+	await bind("code-review-v1", "code-review · v1.0.0");
+	await expect(toast(page).last()).toHaveText("已提交绑定，等待同步");
+	await expect(
+		region.getByRole("heading", { level: 2, name: "code-review v1.0.0" }),
+	).toBeVisible();
+	await bind("workspace-summary-v1", "workspace-summary · v1.0.0");
+	await expect(region.getByRole("article")).toHaveCount(2);
+	await noHorizontalOverflow(page);
+
+	await region.getByRole("button", { name: "解除绑定：code-review" }).click();
+	const unbind = page.getByRole("dialog", { name: "确认解除绑定" });
+	await expect(unbind).toContainText("code-review · v1.0.0");
+	await unbind.getByRole("button", { name: "解除绑定" }).click();
+	await expect(toast(page).last()).toHaveText("已解除绑定");
+	await expect(region.getByRole("article")).toHaveCount(1);
+	await expect(
+		region.getByRole("heading", { level: 2, name: "workspace-summary v1.0.0" }),
+	).toBeVisible();
+	await region
+		.getByRole("button", { name: "解除绑定：workspace-summary" })
+		.click();
+	await page
+		.getByRole("dialog", { name: "确认解除绑定" })
+		.getByRole("button", { name: "解除绑定" })
+		.click();
+	await expect(region.getByText("还未绑定 Skill")).toBeVisible();
+
+	// 每次写入都用服务端给出的版本、当前配置修订和完整集合。
+	expect(api.commands).toEqual([
+		{
+			method: "PUT",
+			path: bindingPath,
+			body: {
+				schemaVersion: 1,
+				expectedConfigurationRevision: 7,
+				bindings: [{ skillVersionId: "code-review-v1", grant: minimalGrant }],
+			},
+		},
+		{
+			method: "PUT",
+			path: bindingPath,
+			body: {
+				schemaVersion: 1,
+				expectedConfigurationRevision: 8,
+				bindings: [
+					{ skillVersionId: "code-review-v1", grant: minimalGrant },
+					{ skillVersionId: "workspace-summary-v1", grant: minimalGrant },
+				],
+			},
+		},
+		{
+			method: "PUT",
+			path: bindingPath,
+			body: {
+				schemaVersion: 1,
+				expectedConfigurationRevision: 9,
+				bindings: [
+					{ skillVersionId: "workspace-summary-v1", grant: minimalGrant },
+				],
+			},
+		},
+		{
+			method: "PUT",
+			path: bindingPath,
+			body: {
+				schemaVersion: 1,
+				expectedConfigurationRevision: 10,
+				bindings: [],
+			},
+		},
+	]);
+	expect(
+		api.reads.filter(
+			(path) => path.includes("/versions/") && path !== bindingPath,
+		),
+	).toEqual([]);
 	await noHorizontalOverflow(page);
 });
 
@@ -1215,6 +1455,10 @@ for (const role of ["admin", "employee"] as const) {
 			page.getByRole("button", { name: "绑定固定版本" }),
 		).toHaveCount(0);
 		expect(api.reads.filter((path) => path.includes("/versions/"))).toEqual([]);
+		// 非 Owner 不读取当前 Agent Version（#2903）。
+		expect(
+			api.reads.filter((path) => path.endsWith("/skills/current-version")),
+		).toEqual([]);
 		expect(api.commands).toEqual([]);
 		const documents = await markSinglePageNavigation(page);
 		await back.click();

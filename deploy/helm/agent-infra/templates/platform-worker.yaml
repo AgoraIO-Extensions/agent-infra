@@ -165,6 +165,10 @@ spec:
             - name: AGENT_INFRA_RUNTIME_IMAGE_DIGEST
               value: {{ required "platformWorker.runtimeImageDigest is required with runtimeImageRepository" .Values.platformWorker.runtimeImageDigest | quote }}
             {{- end }}
+            {{- with .Values.agentVersion }}
+            - name: AGENT_INFRA_AGENT_VERSION
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             - name: PLATFORM_DATABASE_URL
               valueFrom:

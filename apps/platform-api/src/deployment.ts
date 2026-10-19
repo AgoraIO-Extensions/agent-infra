@@ -6,6 +6,7 @@ import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	type AgentDefaultRelayKeyBindingV1,
 	captureAgentApiCreatePrincipalsV1,
+	isSkillHubAgentVersionV1,
 	PersonalRelayKeyErrorV1,
 } from "@agent-infra/platform-core";
 import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
@@ -110,6 +111,11 @@ export interface ProductionPlatformApiInputV1
 	readonly taskAdmissionPolicy: PlatformApiAssemblyInput["taskAdmissionPolicy"];
 	/** Same immutable image repository used by the Worker's resource policy. */
 	readonly imageRepository: string;
+	/**
+	 * 可选的部署级固定 Agent Version（工程 Spec §11.6），必须与 Worker 的
+	 * `skillMaterialization.agentVersion` 同值。缺失时 Skill 绑定读写不可用。
+	 */
+	readonly agentVersion?: string;
 	/** An actual deployment identity boundary; no browser-provided identity headers. */
 	readonly identity: IdentityAdapter;
 	readonly userGovernance?: PostgresPlatformUserDisablesV1;
@@ -330,6 +336,11 @@ export function createProductionPlatformApiAssemblyInputV1(
 		OciImageReferenceV1Schema.parse(
 			`${input.imageRepository}@sha256:${"0".repeat(64)}`,
 		);
+		if (
+			input.agentVersion !== undefined &&
+			!isSkillHubAgentVersionV1(input.agentVersion)
+		)
+			throw new Error();
 		if (
 			!["postgres:", "postgresql:"].includes(
 				new URL(input.databaseUrl).protocol,
@@ -561,6 +572,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 			? { wecomApplicationSetup: input.wecomApplicationSetup }
 			: {}),
 		...(input.files ? { files: input.files } : {}),
+		...(input.agentVersion !== undefined
+			? { agentVersion: input.agentVersion }
+			: {}),
 		databaseUrl: input.databaseUrl,
 		userGovernance,
 		taskAdmissionPolicy: input.taskAdmissionPolicy,
