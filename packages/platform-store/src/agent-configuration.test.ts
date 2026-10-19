@@ -447,6 +447,7 @@ describe("PostgreSQL Agent configuration transaction", () => {
 							({ catalogRevision: "catalog_3", ...selection }) as never,
 					},
 					defaultRelayKey: {
+						current: async () => (await keyState()).current,
 						currentIdentity: async () => ({
 							userId: "owner_01",
 							accountStatus: "active",
@@ -514,6 +515,46 @@ describe("PostgreSQL Agent configuration transaction", () => {
 						: Number(subject.current_version),
 			};
 		}
+
+		it("saves changed models with the existing Key only once (#2941)", async () => {
+			await seedKeyed();
+			const input = {
+				schemaVersion: 4 as const,
+				agentId: "agent_01",
+				idempotencyKey: "saved-model-update",
+				requestId: "request_saved_model",
+				traceId: "trace_saved_model",
+				expectedConfigurationRevision: 7,
+				expectedKeyVersion: 1,
+				changes: { modelConfiguration: requested },
+			};
+			const configuration = keyedUseCase(openTransaction());
+			const result = await configuration.update(input, actor);
+			expect(result).toEqual({
+				schemaVersion: 1,
+				agentId: "agent_01",
+				revision: 8,
+				changedFields: ["modelConfiguration"],
+			});
+			expect(await versionedSnapshot()).toMatchObject({
+				currentRevision: 8,
+				configurationCount: 2,
+				idempotencyCount: 1,
+				outboxCount: 1,
+				configuration: {
+					schemaVersion: 3,
+					modelConfiguration: { defaultOptionId: "model_second" },
+				},
+			});
+			expect(await keyState()).toEqual({ versions: [1], current: 1 });
+			expect(encrypted).toHaveLength(0);
+			await expect(configuration.update(input, actor)).resolves.toEqual(result);
+			expect(await versionedSnapshot()).toMatchObject({
+				configurationCount: 2,
+				idempotencyCount: 1,
+				outboxCount: 1,
+			});
+		});
 
 		it("advances the revision, the model set and the Key version in one transaction", async () => {
 			await seedKeyed();

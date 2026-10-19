@@ -3113,6 +3113,7 @@ describe("Agent configuration replaces the model set together with the default K
 					({ catalogRevision: "catalog_3", ...selection }) as never,
 			},
 			defaultRelayKey: {
+				current: async () => transaction.snapshot().keyVersion ?? null,
 				currentIdentity: async () => ({
 					userId: "owner_01",
 					accountStatus: "active",
@@ -3165,6 +3166,40 @@ describe("Agent configuration replaces the model set together with the default K
 		expect(encrypted).toHaveLength(1);
 		expect(JSON.stringify(stored.lastPlan)).not.toContain(plaintextKey);
 		expect(JSON.stringify(stored.configuration)).not.toContain(plaintextKey);
+	});
+
+	it("saves changed models with the existing Key only once (#2941)", async () => {
+		const { transaction, useCase, encrypted } = create();
+		const savedCommand = {
+			...command,
+			schemaVersion: 4 as const,
+			idempotencyKey: "saved-model-update",
+			expectedConfigurationRevision: 7,
+			expectedKeyVersion: 1,
+			changes: { modelConfiguration: requested },
+		};
+		const result = await useCase.update(savedCommand, actor);
+		expect(result.changedFields).toEqual(["modelConfiguration"]);
+		const stored = transaction.snapshot();
+		expect(stored).toMatchObject({
+			commitCount: 1,
+			keyVersion: 1,
+			configuration: {
+				revision: 8,
+				modelConfiguration: { defaultOptionId: "model_second" },
+			},
+		});
+		expect(encrypted).toHaveLength(0);
+		expect(snapshotAgentConfigurationWritePlanV1(stored.lastPlan)).toEqual(
+			stored.lastPlan,
+		);
+		const duplicate = structuredClone(stored.lastPlan) as {
+			result: { changedFields: string[] };
+		};
+		duplicate.result.changedFields.push("modelConfiguration");
+		expect(() => snapshotAgentConfigurationWritePlanV1(duplicate)).toThrow();
+		await expect(useCase.update(savedCommand, actor)).resolves.toEqual(result);
+		expect(transaction.snapshot().commitCount).toBe(1);
 	});
 
 	it("tells a stale Key version apart from a stale configuration revision and writes nothing", async () => {
