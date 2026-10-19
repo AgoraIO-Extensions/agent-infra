@@ -670,6 +670,24 @@ describe("Skill Hub administrator review queue", () => {
 		]);
 	});
 
+	it("skips pending rows that cannot be reviewed instead of failing the whole queue", async () => {
+		await seed();
+		// 共享范围以外的待审行（数据异常）与已失去目标组织的 ORGANIZATION 版本都不可审核。
+		await client`insert into platform.skill_hub_versions
+			(id, skill_id, owner_id, version, provider, visibility, state, package_object_version,
+			 package_digest, manifest_digest, signature_digest, created_at)
+			values ('version-c-pending', 'skill-c', 'owner-a', '2.0.0', 'my_library', 'PRIVATE',
+			 'pending_review', 'internal-object-c2', ${"a".repeat(64)}, ${"b".repeat(64)},
+			 ${"c".repeat(64)}, now())`;
+		await queued("g", "ORGANIZATION", "owner-a");
+		await client`update platform.skill_hub_skills set organization_id = null where id = 'skill-g'`;
+		expect(
+			(
+				await store().listPendingReviewVersions(request("admin"), {})
+			).versions.map((item) => item.skillVersionId),
+		).toEqual(["version-b", "version-d", "version-a"]);
+	});
+
 	it("rejects a rejection without a non-blank reason and keeps the version pending", async () => {
 		await seed();
 		const adapter = store();

@@ -42,7 +42,17 @@ import {
 	skillPackagePublicationStagesV1,
 	uninstallSkillHubInstallationV1,
 } from "@agent-infra/platform-core";
-import { and, asc, eq, type SQL, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	eq,
+	inArray,
+	isNotNull,
+	ne,
+	or,
+	type SQL,
+	sql,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
@@ -1223,7 +1233,22 @@ export class PostgresSkillHubLifecycleV1 {
 						skillHubSkills,
 						eq(skillHubSkills.id, skillHubVersions.skillId),
 					)
-					.where(and(eq(skillHubVersions.state, "pending_review"), after))
+					.where(
+						and(
+							eq(skillHubVersions.state, "pending_review"),
+							// 只列可审核的共享版本；ORGANIZATION 须仍有目标组织，否则无法审核其范围。
+							inArray(skillHubVersions.visibility, [
+								"MEMBER",
+								"ORGANIZATION",
+								"MARKET",
+							]),
+							or(
+								ne(skillHubVersions.visibility, "ORGANIZATION"),
+								isNotNull(skillHubSkills.organizationId),
+							),
+							after,
+						),
+					)
 					.orderBy(asc(skillHubVersions.createdAt), asc(skillHubVersions.id))
 					.limit(query.limit + 1);
 				const versions = rows
