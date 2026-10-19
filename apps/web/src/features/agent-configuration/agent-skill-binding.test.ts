@@ -4,6 +4,7 @@ import {
 	nextSkillBindingCollection,
 	type RuntimeSkill,
 	type SkillBindingStatus,
+	skillBindingCollectionWithout,
 	skillBindingView,
 	skillGrantSummary,
 } from "./agent-skill-binding.js";
@@ -151,6 +152,28 @@ describe("Agent Skill binding collection (O-02)", () => {
 		).toEqual([
 			{ skillVersionId: "code-review-v1", grant: minimalSkillGrant() },
 		]);
+	});
+
+	it("unbinds one version by keeping every other active binding and grant (#2903)", () => {
+		const kept = {
+			...skillBinding("pending_sync", { name: "code-review" }),
+			grant: { ...minimalSkillGrant(), tools: ["read_file"] },
+		};
+		const bindings = [
+			skillBinding("synced"),
+			kept,
+			skillBinding("revoked", { name: "old-skill" }),
+		];
+		expect(
+			skillBindingCollectionWithout(bindings, "workspace-summary-v1"),
+		).toEqual([{ skillVersionId: "code-review-v1", grant: kept.grant }]);
+		// 解除最后一项得到空集合：表示解除这个 Agent Version 的全部绑定。
+		expect(
+			skillBindingCollectionWithout(
+				[skillBinding("synced")],
+				"workspace-summary-v1",
+			),
+		).toEqual([]);
 	});
 
 	it("summarizes grants without internal identifiers", () => {

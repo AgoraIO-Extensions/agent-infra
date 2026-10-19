@@ -225,6 +225,11 @@ export interface PlatformApiAssemblyInput {
 		NonNullable<PlatformAppDependencies["customAgentGateway"]>,
 		"identity" | "authorizeAgent"
 	>;
+	/**
+	 * 部署级固定 Agent Version（工程 Spec §11.6）。必须与 Worker 的
+	 * `skillMaterialization.agentVersion` 取同一值；缺失时 Skill 绑定读写不可用。
+	 */
+	readonly agentVersion?: string;
 }
 
 export interface PlatformApiAssembly {
@@ -547,6 +552,11 @@ export function assemblePlatformApi(
 		transaction: configurationTransaction,
 		authorizationAdmission: admissions.authorizationAdmission,
 		bindingAdmission: skillHubBindingAdmission,
+		bindingStatus: skillHubBindingAdmission,
+		// 部署级固定 Agent Version，与 Worker 的 skillMaterialization.agentVersion 同值（工程 Spec §11.6）。
+		...(input.agentVersion !== undefined
+			? { agentVersion: input.agentVersion }
+			: {}),
 	});
 	const channelAdmission =
 		resolveWecomBinding || wecomSetup
@@ -1110,41 +1120,23 @@ export function assemblePlatformApi(
 						rawRequestDigest: request.rawRequestDigest,
 					},
 				),
-			read: async (request) => {
-				const authorization = await admissions.authorizationAdmission.authorize(
-					{
-						schemaVersion: 1,
-						agentId: request.agentId,
-						actorId: request.actorId,
-						requestId: request.requestId,
-						traceId: request.traceId,
-					},
-				);
-				if (
-					authorization.status !== "admitted" ||
-					!authorization.accessAuthority ||
-					authorization.accessAuthority.state.agentId !== request.agentId ||
-					!authorization.accessAuthority.state.ownerIds.includes(
-						request.actorId,
-					) ||
-					authorization.accessAuthority.actorContext.userId !== request.actorId
-				)
-					throw new Error("Skill binding is unavailable");
-				const bindings = await skillHubBindingAdmission.resolveSyncBindings({
+			read: (request) =>
+				skillHubBinding.read({
+					schemaVersion: 1,
 					agentId: request.agentId,
 					agentVersion: request.agentVersion,
-					configurationRevision: authorization.accessAuthority.state.revision,
 					actorId: request.actorId,
-					organizationIds:
-						authorization.accessAuthority.actorContext.organizationIds,
-					isAdministrator:
-						authorization.accessAuthority.actorContext.isAdministrator,
-				});
-				return {
-					configurationRevision: authorization.accessAuthority.state.revision,
-					bindings,
-				};
-			},
+					requestId: request.requestId,
+					traceId: request.traceId,
+				}),
+			currentVersion: (request) =>
+				skillHubBinding.currentVersion({
+					schemaVersion: 1,
+					agentId: request.agentId,
+					actorId: request.actorId,
+					requestId: request.requestId,
+					traceId: request.traceId,
+				}),
 		} satisfies SkillHubAgentBindingRoutesDependenciesV1,
 		skillHubProjects: skillHubRead.projectDependencies,
 		...(skillHubRead.importDependencies

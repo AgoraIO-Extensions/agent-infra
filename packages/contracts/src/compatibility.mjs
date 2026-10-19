@@ -2714,6 +2714,45 @@ function isSkillHubAgentBindingOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2903 adds the Owner-only current Agent Version read and lets the binding
+// command carry an empty full set (unbind all). Nothing else may change.
+function isSkillHubAgentCurrentVersionOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents/{agentId}/skills/current-version";
+	const schema = "SkillHubAgentCurrentVersionV1";
+	const previousBindings =
+		previous.components?.schemas?.SkillHubAgentBindingCommandV1?.properties
+			?.bindings;
+	const currentBindings =
+		current.components?.schemas?.SkillHubAgentBindingCommandV1?.properties
+			?.bindings;
+	if (
+		previous.paths?.[path] !== undefined ||
+		previous.components?.schemas?.[schema] !== undefined ||
+		current.paths?.[path] === undefined ||
+		current.components?.schemas?.[schema] === undefined ||
+		previousBindings?.minItems !== 1 ||
+		currentBindings === undefined ||
+		Object.hasOwn(currentBindings, "minItems")
+	)
+		return false;
+	const addition = {
+		path: current.paths[path],
+		schema: current.components.schemas[schema],
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"7553dcdc7cfdc3745f0f304181d95ce8614afd78a943a5a02e0cd53e7713b82e"
+	)
+		return false;
+	const baseline = structuredClone(previous);
+	delete baseline.components.schemas.SkillHubAgentBindingCommandV1.properties
+		.bindings.minItems;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	delete normalized.components.schemas[schema];
+	return sameValue(baseline, normalized);
+}
+
 // #2214 adds the controlled Provider import entry point. The request contains
 // only server-resolved candidate selectors; archive, trust and storage facts
 // remain deployment-owned.
@@ -4916,6 +4955,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isSkillHubProjectOpenApiAddition(previous, current) &&
 			!isSkillHubImportOpenApiAddition(previous, current) &&
 			!isSkillHubAgentBindingOpenApiAddition(previous, current) &&
+			!isSkillHubAgentCurrentVersionOpenApiAddition(previous, current) &&
 			!isNativeMetadataAndCapabilityOpenApiAddition(previous, current) &&
 			!isNativeMetadataOpenApiAddition(previous, current) &&
 			!isNativeCapabilityInvocationOpenApiAddition(previous, current) &&

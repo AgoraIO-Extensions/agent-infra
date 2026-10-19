@@ -30,6 +30,12 @@ export const savedKeyCandidates = undefined;
 // validator. `catalogRevision` must match the deployment model snapshot.
 export const savedKeyCandidatesPolicy = undefined;
 
+// Optional Store-backed Skill materialization. Its agentVersion must be the
+// same value as the API's apiInput.agentVersion; read the shared environment:
+//   agentVersion: process.env.AGENT_INFRA_AGENT_VERSION,
+// Leaving this undefined keeps Skill materialization unavailable.
+export const skillMaterialization = undefined;
+
 // Optional native metadata gateway. The deployment must provide only the
 // persisted Execution→Host binding resolver and a fixed Runtime target
 // resolver; proof signing defaults to the Worker `signing` key above. When

@@ -1098,6 +1098,38 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			applicationCredentialDelivery,
 		);
 	});
+	it("passes the deployment Agent Version and rejects values the binding path cannot carry (#2903)", () => {
+		expect(
+			createProductionPlatformApiAssemblyInputV1({
+				...fixture.input,
+				agentVersion: "agent-version-1",
+			}).agentVersion,
+		).toBe("agent-version-1");
+		// 未配置时不注入：Skill 绑定读写保持不可用。
+		expect(
+			createProductionPlatformApiAssemblyInputV1(fixture.input),
+		).not.toHaveProperty("agentVersion");
+		for (const agentVersion of [
+			"",
+			"agent/version",
+			"private agent version sentinel",
+		]) {
+			expect(() =>
+				createProductionPlatformApiAssemblyInputV1({
+					...fixture.input,
+					agentVersion,
+				}),
+			).toThrow("PLATFORM_DEPLOYMENT_CONFIGURATION_INVALID");
+			try {
+				createProductionPlatformApiAssemblyInputV1({
+					...fixture.input,
+					agentVersion,
+				});
+			} catch (error) {
+				expect(String(error)).not.toContain("private agent version sentinel");
+			}
+		}
+	});
 	it("merges Platform-only user disables into the authority context", async () => {
 		const userGovernance = new PostgresPlatformUserDisablesV1(
 			database.databaseUrl,

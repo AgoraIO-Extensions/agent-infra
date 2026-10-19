@@ -23,7 +23,8 @@ export const SkillHubAgentBindingCommandV1Schema = z.strictObject({
 		.int()
 		.min(1)
 		.max(Number.MAX_SAFE_INTEGER),
-	bindings: z.array(SkillHubAgentBindingRequestV1Schema).min(1).max(32),
+	// 完整集合：空数组表示解除该 Agent Version 的全部绑定（#2903）。
+	bindings: z.array(SkillHubAgentBindingRequestV1Schema).max(32),
 });
 
 export const SkillHubAgentBindingResultV1Schema = z.strictObject({
@@ -87,6 +88,17 @@ export const SkillHubAgentBindingStatusResponseV1Schema = z.strictObject({
 	agentVersion: OpaqueIdV1Schema,
 	configurationRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 	bindings: z.array(SkillHubAgentBindingStatusV1Schema).max(32),
+});
+
+/**
+ * 当前 Agent Version（#2903）：部署级固定事实，只对当前 Owner 返回；Agent、配置与状态投影
+ * 不携带该字段。configurationRevision 是读取时的当前 Agent Configuration Revision。
+ */
+export const SkillHubAgentCurrentVersionV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	agentId: OpaqueIdV1Schema,
+	agentVersion: OpaqueIdV1Schema,
+	configurationRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 });
 
 const response = (description: string, schema: z.ZodType) => ({
@@ -156,6 +168,22 @@ export const skillHubAgentBindingOpenApiPathsV1 = {
 			},
 		},
 	},
+	"/api/v2/agents/{agentId}/skills/current-version": {
+		get: {
+			operationId: "readSkillHubAgentCurrentVersionV1",
+			security: [{ PlatformSession: [] }],
+			requestParams: {
+				path: z.strictObject({ agentId: OpaqueIdV1Schema }),
+			},
+			responses: {
+				"200": response(
+					"Current Agent Version for the current Owner",
+					SkillHubAgentCurrentVersionV1Schema,
+				),
+				...errors,
+			},
+		},
+	},
 } as const;
 
 export const skillHubAgentBindingSchemasV1 = {
@@ -165,4 +193,5 @@ export const skillHubAgentBindingSchemasV1 = {
 	SkillHubAgentBindingStatusV1: SkillHubAgentBindingStatusV1Schema,
 	SkillHubAgentBindingStatusResponseV1:
 		SkillHubAgentBindingStatusResponseV1Schema,
+	SkillHubAgentCurrentVersionV1: SkillHubAgentCurrentVersionV1Schema,
 };

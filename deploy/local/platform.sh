@@ -180,6 +180,10 @@ worker_values() {
       --set-string "platformWorker.runtimeImageDigest=$AGENT_INFRA_RUNTIME_IMAGE_DIGEST"
     )
   fi
+  # Skill 绑定的 Agent Version：与 Compose API 读取同一个值（工程 Spec §11.6）。
+  if [[ -n "${AGENT_INFRA_AGENT_VERSION:-}" ]]; then
+    worker_options+=( --set-string "agentVersion=$AGENT_INFRA_AGENT_VERSION" )
+  fi
 }
 
 native_metadata_route_enabled=false

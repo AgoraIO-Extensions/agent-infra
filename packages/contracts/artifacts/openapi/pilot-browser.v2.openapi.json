@@ -6856,7 +6856,6 @@
               "$ref": "#/components/schemas/SkillHubAgentBindingRequestV1"
             },
             "maxItems": 32,
-            "minItems": 1,
             "type": "array"
           },
           "expectedConfigurationRevision": {
@@ -7750,6 +7749,35 @@
             ],
             "type": "object"
           }
+        ],
+        "type": "object"
+      },
+      "SkillHubAgentCurrentVersionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "agentVersion": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "configurationRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "agentId",
+          "agentVersion",
+          "configurationRevision"
         ],
         "type": "object"
       },
@@ -13427,6 +13455,99 @@
             "description": "Dependency is temporarily unavailable"
           }
         }
+      }
+    },
+    "/api/v2/agents/{agentId}/skills/current-version": {
+      "get": {
+        "operationId": "readSkillHubAgentCurrentVersionV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubAgentCurrentVersionV1"
+                }
+              }
+            },
+            "description": "Current Agent Version for the current Owner"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
       }
     },
     "/api/v2/agents/{agentId}/state": {
