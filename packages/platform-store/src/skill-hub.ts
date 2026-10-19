@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
 	canInstallSkillHubVersionV1,
+	canViewSkillHubVersionDetailV1,
 	canViewSkillHubVersionV1,
 	createSkillHubVersionV1,
 	PersonalApiCredentialErrorV1,
@@ -9,6 +10,7 @@ import {
 	parseSkillHubIdentitySnapshotV1,
 	parseSkillHubIdV1,
 	parseSkillHubInstallationCommandV1,
+	parseSkillHubOwnedVersionQueryV1,
 	parseSkillHubProjectCreateV1,
 	parseSkillHubProjectIdempotencyKeyV1,
 	parseSkillHubProjectIdV1,
@@ -36,6 +38,7 @@ import {
 	type SkillHubRequestV1,
 	type SkillHubVersionV1,
 	type SkillPackagePublicationContextV1,
+	type SkillPackagePublicationObjectV1,
 	type SkillPackagePublicationStateV1,
 	skillHubVersionStatesV1,
 	skillHubVisibilityV1,
@@ -46,6 +49,7 @@ import {
 	and,
 	asc,
 	eq,
+	gt,
 	inArray,
 	isNotNull,
 	ne,
@@ -1495,6 +1499,170 @@ export class PostgresSkillHubLifecycleV1 {
 				return Object.freeze(versions);
 			},
 		);
+	}
+
+	/**
+	 * 发布者本人的全部版本（含审核中、已驳回、已撤销），按版本 ID keyset 分页；
+	 * 只读取父项目仍启用的版本，与详情可见性一致。审计只记条数。
+	 */
+	async listOwnedVersions(
+		context: SkillHubRequestV1,
+		queryInput: { readonly cursor?: unknown; readonly limit?: unknown },
+	) {
+		return this.#transaction(context, async (transaction, request) => {
+			const query = parseSkillHubOwnedVersionQueryV1(queryInput);
+			const rows = await transaction
+				.select({ version: skillHubVersions, name: skillHubSkills.name })
+				.from(skillHubVersions)
+				.innerJoin(
+					skillHubSkills,
+					eq(skillHubSkills.id, skillHubVersions.skillId),
+				)
+				.where(
+					and(
+						eq(skillHubVersions.ownerId, request.userId),
+						eq(skillHubSkills.status, "active"),
+						query.cursor === undefined
+							? undefined
+							: gt(skillHubVersions.id, query.cursor),
+					),
+				)
+				.orderBy(asc(skillHubVersions.id))
+				.limit(query.limit + 1);
+			const versions = rows
+				.slice(0, query.limit)
+				.map(({ version, name }) =>
+					Object.freeze({ ...decode(version, name), name }),
+				);
+			await audit(
+				transaction,
+				request,
+				"skill.owned_versions.read",
+				"owned_versions",
+				"succeeded",
+				{ count: versions.length },
+			);
+			return Object.freeze({
+				versions: Object.freeze(versions),
+				nextCursor:
+					rows.length > query.limit
+						? (versions.at(-1)?.skillVersionId ?? null)
+						: null,
+			});
+		});
+	}
+
+	/**
+	 * 版本详情：已发布版本按发布范围可见，发布者本人还能读自己其他状态的版本；
+	 * 不可见与不存在同样返回 not_found。附当前用户本人的安装记录，以及已完成供应操作的
+	 * 固定 ZIP 描述（与版本记录逐项一致时才返回，否则为 null，由调用方标记内容不可用）。
+	 */
+	async readVersionDetail(context: SkillHubRequestV1, versionId: string) {
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				// 与 readVisibleVersion 相同的父项目 -> 版本锁顺序，避免与停用、撤销竞争。
+				const version = await this.#version(
+					transaction,
+					parseSkillHubIdV1(versionId),
+				);
+				const [parent] = await transaction
+					.select()
+					.from(skillHubSkills)
+					.where(eq(skillHubSkills.id, version.skillId));
+				if (
+					!parent ||
+					!canViewSkillHubVersionDetailV1(
+						version,
+						identity.actor,
+						parent.organizationId,
+						parent.status,
+					)
+				)
+					throw new SkillHubOperationErrorV1("not_found");
+				const [installation] = await transaction
+					.select()
+					.from(skillHubInstallations)
+					.where(
+						and(
+							eq(skillHubInstallations.principalType, "user"),
+							eq(skillHubInstallations.principalId, request.userId),
+							eq(skillHubInstallations.skillVersionId, version.skillVersionId),
+						),
+					);
+				const packageObject = await this.#admittedPackage(transaction, version);
+				await audit(
+					transaction,
+					request,
+					"skill.version.read",
+					version.skillVersionId,
+					"succeeded",
+					{ state: version.state, replayed: false },
+				);
+				return Object.freeze({
+					version: Object.freeze({ ...version, name: parent.name }),
+					installation: installation ? decodeInstallation(installation) : null,
+					packageObject,
+				});
+			},
+		);
+	}
+
+	/** 该版本唯一一次已完成供应操作保存的固定 ZIP 描述；与版本记录不一致时不返回。 */
+	async #admittedPackage(
+		transaction: Transaction,
+		version: SkillHubVersionV1,
+	): Promise<SkillPackagePublicationObjectV1 | null> {
+		const admissions = await transaction
+			.select({ id: idempotencyRecords.id, result: idempotencyRecords.result })
+			.from(idempotencyRecords)
+			.where(
+				and(
+					eq(idempotencyRecords.scopeType, "skill_package"),
+					eq(idempotencyRecords.scopeId, version.skillVersionId),
+					eq(idempotencyRecords.commandType, "skill.package.publish.v1"),
+					eq(idempotencyRecords.status, "completed"),
+				),
+			);
+		const [admission] = admissions;
+		if (
+			!admission ||
+			admissions.length !== 1 ||
+			admission.result?.operationId !== admission.id
+		)
+			return null;
+		const [item] = await transaction
+			.select({ payload: outboxItems.payload })
+			.from(outboxItems)
+			.where(
+				and(
+					eq(outboxItems.id, admission.id),
+					eq(outboxItems.scopeType, "skill_package"),
+					eq(outboxItems.scopeId, version.skillVersionId),
+					eq(outboxItems.status, "succeeded"),
+				),
+			);
+		if (!item) return null;
+		try {
+			const state = parseSkillPackagePublicationStateV1(item.payload);
+			const { zip, manifest, signature } = state.objects;
+			if (
+				!zip ||
+				!manifest ||
+				!signature ||
+				state.operationId !== admission.id ||
+				state.ownerId !== version.ownerId ||
+				state.selection.skillVersionId !== version.skillVersionId ||
+				zip.version !== version.packageObjectVersion ||
+				zip.sha256 !== version.packageDigest ||
+				manifest.sha256 !== version.manifestDigest ||
+				signature.sha256 !== version.signatureDigest
+			)
+				return null;
+			return zip;
+		} catch {
+			return null;
+		}
 	}
 
 	async installVersion(

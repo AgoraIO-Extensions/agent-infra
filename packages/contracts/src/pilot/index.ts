@@ -25,6 +25,7 @@ export * from "./skill-hub-project.ts";
 export * from "./skill-hub-publication.ts";
 export * from "./skill-hub-read.ts";
 export * from "./skill-hub-review.ts";
+export * from "./skill-hub-version-detail.ts";
 export * from "./sse.ts";
 export * from "./task.ts";
 export * from "./template-release.ts";

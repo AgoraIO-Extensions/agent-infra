@@ -690,6 +690,93 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the pinned Skill Hub version detail and owned-version reads (#2904)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const detailPath = "/api/v2/skills/versions/{skillVersionId}/detail";
+		const ownedPath = "/api/v2/skills/owned-versions";
+		const previous = structuredClone(current);
+		delete previous.paths[detailPath];
+		delete previous.paths[ownedPath];
+		delete previous.components.schemas.SkillHubOwnedVersionV1;
+		delete previous.components.schemas.SkillHubOwnedVersionPageV1;
+		delete previous.components.schemas.SkillHubVersionDetailV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "skill-hub-version-detail-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const detail = (value: typeof current) =>
+				value.components.schemas.SkillHubVersionDetailV1;
+			for (const mutate of [
+				// 两条读取都必须要求平台会话。
+				(value: typeof current) => {
+					value.paths[detailPath].get.security = [];
+				},
+				(value: typeof current) => {
+					value.paths[ownedPath].get.security = [];
+				},
+				// 投影不能放宽为任意字段，也不能带出对象位置或审核原因。
+				(value: typeof current) => {
+					detail(value).additionalProperties = true;
+				},
+				(value: typeof current) => {
+					detail(value).properties.packageObjectVersion = { type: "string" };
+				},
+				(value: typeof current) => {
+					detail(value).properties.reviewReason = { type: "string" };
+				},
+				// 正文保持有界，资源只给清单不给内容。
+				(value: typeof current) => {
+					delete detail(value).properties.content.oneOf[0].properties.body
+						.maxLength;
+				},
+				(value: typeof current) => {
+					detail(
+						value,
+					).properties.content.oneOf[0].properties.resources.items.properties.content =
+						{ type: "string" };
+				},
+				// 安装状态只描述本人，不接受其他主体字段。
+				(value: typeof current) => {
+					detail(
+						value,
+					).properties.installation.oneOf[0].properties.principalId = {
+						type: "string",
+					};
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubOwnedVersionV1.additionalProperties = true;
+				},
+				// 已发布目录与原版本读取仍只返回 published。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubVersionMetadataV1.properties.state =
+						detail(value).properties.state;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the exact direct Agent creation contract", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -3214,8 +3301,10 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/skills/projects" &&
 				path !== "/api/v2/skills/projects/{projectId}" &&
 				path !== "/api/v2/skills/reviews" &&
+				path !== "/api/v2/skills/owned-versions" &&
 				path !== "/api/v2/skills/versions" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}" &&
+				path !== "/api/v2/skills/versions/{skillVersionId}/detail" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}/review" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}/revoke" &&
 				path !== "/api/v2/applications/{applicationId}/credentials" &&

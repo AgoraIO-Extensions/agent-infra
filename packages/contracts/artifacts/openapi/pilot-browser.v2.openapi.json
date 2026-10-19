@@ -7912,6 +7912,115 @@
         ],
         "type": "object"
       },
+      "SkillHubOwnedVersionPageV1": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SkillHubOwnedVersionV1"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "SkillHubOwnedVersionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "manifestDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "name": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "type": "string"
+          },
+          "packageDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "provider": {
+            "enum": [
+              "system",
+              "my_library",
+              "market",
+              "clawhub",
+              "skillhub",
+              "npx",
+              "github"
+            ],
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "signatureDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "skillId": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "skillVersionId": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "published",
+              "pending_review",
+              "rejected",
+              "revoked"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "visibility": {
+            "enum": [
+              "PRIVATE",
+              "MEMBER",
+              "ORGANIZATION",
+              "MARKET"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "skillId",
+          "skillVersionId",
+          "provider",
+          "version",
+          "packageDigest",
+          "manifestDigest",
+          "signatureDigest",
+          "name",
+          "visibility",
+          "state"
+        ],
+        "type": "object"
+      },
       "SkillHubProjectCreateV1": {
         "additionalProperties": false,
         "properties": {
@@ -8470,6 +8579,205 @@
         },
         "required": [
           "decision"
+        ],
+        "type": "object"
+      },
+      "SkillHubVersionDetailV1": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "body": {
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  "bodyTruncated": {
+                    "type": "boolean"
+                  },
+                  "resources": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "enum": [
+                            "script",
+                            "reference",
+                            "asset",
+                            "file"
+                          ],
+                          "type": "string"
+                        },
+                        "path": {
+                          "maxLength": 512,
+                          "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                          "type": "string"
+                        },
+                        "sizeBytes": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "kind",
+                        "sizeBytes"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 1999,
+                    "type": "array"
+                  },
+                  "state": {
+                    "const": "available",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "body",
+                  "bodyTruncated",
+                  "resources"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "state": {
+                    "const": "unavailable",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              }
+            ],
+            "type": "object"
+          },
+          "installation": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "installationId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "const": "installed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "installationId"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "state": {
+                    "const": "not_installed",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              }
+            ],
+            "type": "object"
+          },
+          "manifestDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "name": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "type": "string"
+          },
+          "ownerId": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "packageDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "provider": {
+            "enum": [
+              "system",
+              "my_library",
+              "market",
+              "clawhub",
+              "skillhub",
+              "npx",
+              "github"
+            ],
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "signatureDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "skillId": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "skillVersionId": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "published",
+              "pending_review",
+              "rejected",
+              "revoked"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "visibility": {
+            "enum": [
+              "PRIVATE",
+              "MEMBER",
+              "ORGANIZATION",
+              "MARKET"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "skillId",
+          "skillVersionId",
+          "provider",
+          "version",
+          "packageDigest",
+          "manifestDigest",
+          "signatureDigest",
+          "name",
+          "visibility",
+          "state",
+          "ownerId",
+          "installation",
+          "content"
         ],
         "type": "object"
       },
@@ -17580,6 +17888,87 @@
         ]
       }
     },
+    "/api/v2/skills/owned-versions": {
+      "get": {
+        "operationId": "listOwnedSkillHubVersionsV1",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubOwnedVersionPageV1"
+                }
+              }
+            },
+            "description": "The current user's Skill versions in every state"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
     "/api/v2/skills/projects": {
       "get": {
         "operationId": "listSkillHubProjectsV1",
@@ -18200,6 +18589,89 @@
               }
             },
             "description": "Visible fixed Skill version"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
+    "/api/v2/skills/versions/{skillVersionId}/detail": {
+      "get": {
+        "operationId": "readSkillHubVersionDetailV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skillVersionId",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubVersionDetailV1"
+                }
+              }
+            },
+            "description": "Visible Skill version with bounded content and installation state"
           },
           "400": {
             "content": {

@@ -70,7 +70,7 @@ native 业务验收；外联仍由部署方配置明确的 NetworkPolicy。
 | `nativeMetadataRequestRegistry` | 显式 resolver override 的有界原请求关联；使用 `createRuntimeNativeMetadataRequestRegistryV1`，reader 与 current checker 必须共享同一实例。不能从 wire 或数据库恢复旧 context |
 | `nativeMetadataCurrent` | 可选的 current-confirmation override。与默认 reader 组合时，必须由 `nativeMetadataWorker.requestRegistry` 显式提供同一 registry；缺失即拒绝启动。未配置时，API 自动使用 request-local registry、现有 ConversationAuthorization 和同一个 Worker service token 装配 current route；过期、释放、跨 binding、撤权和 authorization revision 变化均 fail closed |
 | `nativeCapabilityMetadata` | native command/Skill admission 的可信 metadata revalidation port；必须来自已认证的当前 Runtime metadata boundary，缺失时 admission 保持 unavailable，平台不提供 fake 默认值 |
-| `providerImport` | 可选的受控 Skill Hub Provider import port：部署方提供已获准 registry、ObjectStorage、source verifier、scanner 和 admission policy；HTTP 只提交 provider/name/version 选择，不能提交 archive bytes、存储路径、trust、policy 或 approval 事实；不要同时放入 `apiInput.providerImport` |
+| `providerImport` | 可选的受控 Skill Hub Provider import port：部署方提供已获准 registry、ObjectStorage、source verifier、scanner 和 admission policy；HTTP 只提交 provider/name/version 选择，不能提交 archive bytes、存储路径、trust、policy 或 approval 事实；不要同时放入 `apiInput.providerImport`。版本详情也只从同一 ObjectStorage 按固定对象版本有界读取 `SKILL.md` 与资源清单；未提供时详情内容显示不可用 |
 | `directorySearch` | 查询当前用户和组织目录记录的函数，返回 canonical ID、可读名称及邮箱或组织路径；依赖不可用时抛错 |
 
 `apiInput.taskAdmissionPolicy` 必须由真实部署配置显式提供。`maximumWaitingTasksPerAgent`
