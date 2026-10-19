@@ -2125,6 +2125,7 @@ CI 仍验证构建出的镜像、不可变 image ID、Runtime probe、Web smoke�
 - Web 和 `platform-api` 可以由部署环境独立发布；Helm 管理 Kubernetes 中的平台部署单元，Agent Workload 只由 `platform-worker` 通过 KubernetesRuntimeAdapter 调谐。
 - 数据库迁移使用独立 Job，先执行向后兼容迁移，再发布应用。
 - 环境配置只保存非敏感值；部署向 `platform-api` 注入版本化加密公钥、向 `platform-worker` 注入 Worker-only 解密 keyring，Secret 明文和私钥不进入 values、镜像或仓库。
+- Helm 的 in-cluster API 通过 API-only Secret references 只读交付私有配置模块及同目录辅助文件、独立代理令牌和可选受信 CA；第一方入口的必要引用缺失时拒绝渲染。API 不因此获得 Kubernetes API 权限或 Worker 解密材料；外置 API 由其部署方提供同一文件契约。
 
 ### 21.3 本地开发
 

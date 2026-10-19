@@ -1,8 +1,22 @@
 {{- $callbackAuthRef := .Values.platformApi.connectionCallbackAuthSecretRef | default dict -}}
+{{- $moduleRef := .Values.platformApi.configurationModuleSecretRef | default dict -}}
+{{- $proxyTokenRef := .Values.platformApi.proxyTokenSecretRef | default dict -}}
+{{- $caRef := .Values.platformApi.trustedCaSecretRef | default dict -}}
 {{- $workerAuthRef := .Values.platformWorker.runtimeAuthSecretRef | default dict -}}
 {{- $nativeMetadataServiceName := include "agent-infra.nativeMetadataServiceName" . -}}
 {{- if and (ne .Values.platformApi.placement "in-cluster") $callbackAuthRef.name -}}
 {{- fail "platformApi.connectionCallbackAuthSecretRef requires platformApi.placement=in-cluster" -}}
+{{- end -}}
+{{- if and (ne .Values.platformApi.placement "in-cluster") (or $moduleRef.name $proxyTokenRef.name $caRef.name) -}}
+{{- fail "platformApi private configuration Secret references require platformApi.placement=in-cluster" -}}
+{{- end -}}
+{{- if and (eq .Values.platformApi.placement "in-cluster") (or (eq .Values.platformApi.deploymentModule "file:///app/dist/deployment.mjs") (eq .Values.platformApi.deploymentModule "/app/dist/deployment.mjs")) -}}
+{{- if not $moduleRef.name -}}
+{{- fail "platformApi.configurationModuleSecretRef is required for the first-party API deployment module" -}}
+{{- end -}}
+{{- if not $proxyTokenRef.name -}}
+{{- fail "platformApi.proxyTokenSecretRef is required for the first-party API deployment module" -}}
+{{- end -}}
 {{- end -}}
 {{- if and .Values.platformWorker.nativeMetadataGateway.enabled (eq .Values.platformApi.placement "in-cluster") (not .Values.workloadTopology.enabled) -}}
 {{- if not $workerAuthRef.name -}}
@@ -80,6 +94,18 @@ spec:
           env:
             - name: PLATFORM_API_DEPLOYMENT_MODULE
               value: {{ .Values.platformApi.deploymentModule | quote }}
+            {{- if $moduleRef.name }}
+            - name: PLATFORM_API_CONFIGURATION_MODULE
+              value: {{ printf "file:///app/deployment/%s" $moduleRef.key | quote }}
+            {{- end }}
+            {{- if $proxyTokenRef.name }}
+            - name: PLATFORM_API_PROXY_TOKEN_FILE
+              value: /var/run/agent-infra/proxy-token/token
+            {{- end }}
+            {{- if $caRef.name }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/agent-infra/trusted-ca/ca.crt
+            {{- end }}
             - name: PLATFORM_PUBLIC_ORIGIN
               value: {{ .Values.web.externalBaseUrl | quote }}
             - name: PLATFORM_DATABASE_URL
@@ -107,6 +133,21 @@ spec:
                 name: {{ $bindings }}
             {{- include "agent-infra.connectionEnvFrom" . | nindent 12 }}
           volumeMounts:
+            {{- if $moduleRef.name }}
+            - name: api-configuration
+              mountPath: /app/deployment
+              readOnly: true
+            {{- end }}
+            {{- if $proxyTokenRef.name }}
+            - name: api-proxy-token
+              mountPath: /var/run/agent-infra/proxy-token
+              readOnly: true
+            {{- end }}
+            {{- if $caRef.name }}
+            - name: api-trusted-ca
+              mountPath: /var/run/agent-infra/trusted-ca
+              readOnly: true
+            {{- end }}
             - name: encryption-public-key
               mountPath: /var/run/agent-infra/encryption-public-key
               readOnly: true
@@ -123,6 +164,30 @@ spec:
               readOnly: true
             {{- end }}
       volumes:
+        {{- if $moduleRef.name }}
+        - name: api-configuration
+          secret:
+            secretName: {{ $moduleRef.name }}
+            defaultMode: 288
+        {{- end }}
+        {{- if $proxyTokenRef.name }}
+        - name: api-proxy-token
+          secret:
+            secretName: {{ $proxyTokenRef.name }}
+            defaultMode: 288
+            items:
+              - key: {{ $proxyTokenRef.key }}
+                path: token
+        {{- end }}
+        {{- if $caRef.name }}
+        - name: api-trusted-ca
+          secret:
+            secretName: {{ $caRef.name }}
+            defaultMode: 288
+            items:
+              - key: {{ $caRef.key }}
+                path: ca.crt
+        {{- end }}
         - name: encryption-public-key
           secret:
             secretName: {{ .Values.keys.encryptionPublicKey.secretRef.name }}

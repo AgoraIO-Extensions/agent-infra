@@ -525,6 +525,178 @@ test("Platform API callback auth SecretRef is optional and projected as a protec
 	);
 });
 
+test("in-cluster API projects its private inputs without Worker credentials", () => {
+	const base = [
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+	];
+	const unconfigured = render(...base);
+	assert.equal(unconfigured.status, 0, unconfigured.stderr);
+	const plainApi = resource(
+		objects(unconfigured.stdout),
+		"Deployment",
+		"topology-agent-infra-platform-api",
+	).spec.template.spec;
+	for (const name of [
+		"PLATFORM_API_CONFIGURATION_MODULE",
+		"PLATFORM_API_PROXY_TOKEN_FILE",
+		"NODE_EXTRA_CA_CERTS",
+	]) {
+		assert.equal(
+			plainApi.containers[0].env.some((entry) => entry.name === name),
+			false,
+		);
+	}
+	assert.equal(
+		plainApi.volumes.some((volume) => volume.name.startsWith("api-")),
+		false,
+	);
+	const module = [
+		"--set-string",
+		"platformApi.deploymentModule=file:///app/dist/deployment.mjs",
+	];
+	const missingModule = render(...base, ...module);
+	assert.notEqual(missingModule.status, 0);
+	assert.match(
+		missingModule.stderr,
+		/platformApi.configurationModuleSecretRef/,
+	);
+	const configuration = [
+		"--set-string",
+		"platformApi.configurationModuleSecretRef.name=api-configuration",
+		"--set-string",
+		"platformApi.configurationModuleSecretRef.key=private-config.mjs",
+	];
+	const missingToken = render(...base, ...module, ...configuration);
+	assert.notEqual(missingToken.status, 0);
+	assert.match(missingToken.stderr, /platformApi.proxyTokenSecretRef/);
+	const inputs = [
+		...configuration,
+		"--set-string",
+		"platformApi.proxyTokenSecretRef.name=api-proxy-token",
+		"--set-string",
+		"platformApi.proxyTokenSecretRef.key=proxy-token",
+		"--set-string",
+		"platformApi.trustedCaSecretRef.name=api-ca",
+		"--set-string",
+		"platformApi.trustedCaSecretRef.key=directory.pem",
+	];
+	const configured = render(...base, ...module, ...inputs);
+	assert.equal(configured.status, 0, configured.stderr);
+	const api = resource(
+		objects(configured.stdout),
+		"Deployment",
+		"topology-agent-infra-platform-api",
+	).spec.template.spec;
+	const container = api.containers[0];
+	assert.equal(api.automountServiceAccountToken, false);
+	assert.equal(api.securityContext.runAsNonRoot, true);
+	assert.equal(api.securityContext.fsGroup, 1000);
+	assert.equal(container.securityContext.readOnlyRootFilesystem, true);
+	for (const [name, value] of [
+		[
+			"PLATFORM_API_CONFIGURATION_MODULE",
+			"file:///app/deployment/private-config.mjs",
+		],
+		["PLATFORM_API_PROXY_TOKEN_FILE", "/var/run/agent-infra/proxy-token/token"],
+		["NODE_EXTRA_CA_CERTS", "/var/run/agent-infra/trusted-ca/ca.crt"],
+	]) {
+		assert.equal(
+			container.env.find((entry) => entry.name === name)?.value,
+			value,
+		);
+	}
+	for (const [name, mountPath, secret] of [
+		[
+			"api-configuration",
+			"/app/deployment",
+			{ secretName: "api-configuration", defaultMode: 288 },
+		],
+		[
+			"api-proxy-token",
+			"/var/run/agent-infra/proxy-token",
+			{
+				secretName: "api-proxy-token",
+				defaultMode: 288,
+				items: [{ key: "proxy-token", path: "token" }],
+			},
+		],
+		[
+			"api-trusted-ca",
+			"/var/run/agent-infra/trusted-ca",
+			{
+				secretName: "api-ca",
+				defaultMode: 288,
+				items: [{ key: "directory.pem", path: "ca.crt" }],
+			},
+		],
+	]) {
+		assert.deepEqual(
+			container.volumeMounts.find((mount) => mount.name === name),
+			{ name, mountPath, readOnly: true },
+		);
+		assert.deepEqual(
+			api.volumes.find((volume) => volume.name === name)?.secret,
+			secret,
+		);
+	}
+	assert.equal(
+		api.volumes.some((volume) =>
+			["decryption-keyring", "runtime-auth"].includes(volume.name),
+		),
+		false,
+	);
+	assert.equal(
+		container.env.some((entry) => entry.name.startsWith("AGENT_INFRA_WORKER_")),
+		false,
+	);
+	assert.equal(
+		objects(configured.stdout).some((object) => object.kind === "Secret"),
+		false,
+	);
+});
+
+test("API private references reject malformed input and external placement", () => {
+	const base = [
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+	];
+	for (const field of [
+		"configurationModuleSecretRef",
+		"proxyTokenSecretRef",
+		"trustedCaSecretRef",
+	]) {
+		for (const invalid of [
+			["name=api-private"],
+			["key=configuration.mjs"],
+			["name=INVALID", "key=configuration.mjs"],
+			["name=api-private", "key=../private"],
+		]) {
+			const result = render(
+				...base,
+				...invalid.flatMap((value) => [
+					"--set-string",
+					`platformApi.${field}.${value}`,
+				]),
+			);
+			assert.notEqual(result.status, 0);
+			assert.match(result.stderr, new RegExp(field));
+		}
+		const external = render(
+			"--set-string",
+			`platformApi.${field}.name=api-private`,
+			"--set-string",
+			`platformApi.${field}.key=configuration.mjs`,
+		);
+		assert.notEqual(external.status, 0);
+		assert.match(external.stderr, /require platformApi.placement=in-cluster/);
+	}
+});
+
 test("production Worker requires a private module and runtime authorization mounts", () => {
 	const topologyWecom = render("--set", "platformWorker.wecomEnabled=true");
 	assert.notEqual(topologyWecom.status, 0);
