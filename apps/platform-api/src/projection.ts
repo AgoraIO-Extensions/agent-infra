@@ -153,10 +153,6 @@ export function createPlatformProjectionReaders(
 		return {
 			configuration,
 			presentation,
-			applicant:
-				hydratedOwners.find(
-					(owner) => owner.userId === management.applicantId,
-				) ?? null,
 			wire: {
 				owners: hydratedOwners,
 				availability: configuration.availability,
@@ -218,10 +214,15 @@ export function createPlatformProjectionReaders(
 			if (!input.application) {
 				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", input.traceId);
 			}
-			const { presentation, applicant, wire } = await configurationProjection(
+			const { presentation, wire } = await configurationProjection(
 				input.application.agentId,
 				input.application.management,
 				input,
+			);
+			const [applicant] = await owners(
+				input.requestScope ?? input,
+				[input.application.applicantId],
+				input.traceId,
 			);
 			return AgentApplicationProjectionV1Schema.parse({
 				schemaVersion: 1,

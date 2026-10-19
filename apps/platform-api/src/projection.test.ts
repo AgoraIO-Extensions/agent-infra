@@ -109,6 +109,72 @@ const agent = (agentId: string) => ({
 });
 
 describe("Agent projection owners (#2632)", () => {
+	it("keeps the original applicant after ownership changes", async () => {
+		const { projections, hydrateUsers } = readers();
+		const value = await projections.readApplicationProjection({
+			identity,
+			requestId: "ownership-changed-application",
+			traceId: "ownership-changed-trace",
+			requestScope: {},
+			application: {
+				schemaVersion: 1,
+				applicationId: "application_02",
+				agentId: "agent_02",
+				applicantId: "user_01",
+				name: "Application",
+				description: "Original applicant is no longer an Owner",
+				sourceReference: "sha256:custom",
+				management: {
+					...management,
+					agentId: "agent_02",
+					ownerIds: ["user_03"],
+				},
+				submittedAt: new Date("2026-09-03T08:00:00Z"),
+				updatedAt: new Date("2026-09-04T08:00:00Z"),
+				decision: null,
+			},
+		});
+		expect(value.applicant).toMatchObject({
+			userId: "user_01",
+			displayName: "Display user_01",
+		});
+		expect(value.configuration.owners.map((owner) => owner.userId)).toEqual([
+			"user_03",
+		]);
+		expect(hydrateUsers).toHaveBeenLastCalledWith(["user_01"]);
+	});
+
+	it("rejects an applicant directory response for a different subject", async () => {
+		const { projections, hydrateUsers } = readers();
+		hydrateUsers.mockImplementation(async (ids) =>
+			ids.map((userId) => ({
+				userId: ids.length === 1 ? "foreign-user" : userId,
+				displayName: "Directory fixture",
+				roles: ["employee"],
+			})),
+		);
+		await expect(
+			projections.readApplicationProjection({
+				identity,
+				requestId: "wrong-applicant",
+				traceId: "wrong-applicant-trace",
+				requestScope: {},
+				application: {
+					schemaVersion: 1,
+					applicationId: "application_01",
+					agentId: "agent_01",
+					applicantId: "user_01",
+					name: "Application",
+					description: "Projection test",
+					sourceReference: "sha256:custom",
+					management,
+					submittedAt: new Date("2026-09-03T08:00:00Z"),
+					decision: null,
+				},
+			}),
+		).rejects.toMatchObject({ body: { code: "DEPENDENCY_UNAVAILABLE" } });
+	});
+
 	it("projects application update time and applicant from the hydrated directory", async () => {
 		const { projections } = readers();
 		const value = await projections.readApplicationProjection({

@@ -286,6 +286,76 @@ function restorePreAgentApiManagementContract(value: {
 }
 
 describe("contract compatibility command", () => {
+	it("admits only the exact optional application lifecycle and applicant projection fields (#2861)", async () => {
+		for (const version of ["v1", "v2"]) {
+			const current = JSON.parse(
+				await readFile(
+					new URL(
+						`../artifacts/openapi/pilot-browser.${version}.openapi.json`,
+						import.meta.url,
+					),
+					"utf8",
+				),
+			);
+			const names = [
+				"AgentApplicationProjectionV1",
+				"AgentApplicationProjectionV2",
+			].filter((name) => current.components.schemas[name]);
+			const previous = structuredClone(current);
+			for (const name of names) {
+				delete previous.components.schemas[name].properties.updatedAt;
+				delete previous.components.schemas[name].properties.applicant;
+			}
+			const directory = await mkdtemp(
+				resolve(tmpdir(), "application-projection-compat-"),
+			);
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			try {
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				for (const name of names) {
+					for (const mutate of [
+						(schema: typeof current) => {
+							schema.properties.updatedAt.type = "integer";
+						},
+						(schema: typeof current) => {
+							delete schema.properties.updatedAt.pattern;
+						},
+						(schema: typeof current) => {
+							schema.required.push("updatedAt");
+						},
+						(schema: typeof current) => {
+							schema.required.push("applicant");
+						},
+						(schema: typeof current) => {
+							schema.properties.applicant.anyOf[0].additionalProperties = true;
+						},
+						(schema: typeof current) => {
+							schema.properties.applicant.anyOf[0].properties.token = {
+								type: "string",
+							};
+						},
+						(schema: typeof current) => {
+							schema.properties.applicant.anyOf[0].required = ["userId"];
+						},
+						(schema: typeof current) => {
+							delete schema.properties.name;
+						},
+					]) {
+						const changed = structuredClone(current);
+						mutate(changed.components.schemas[name]);
+						await writeFile(currentPath, JSON.stringify(changed));
+						expect(comparePaths(currentPath, previousPath).status).not.toBe(0);
+					}
+				}
+			} finally {
+				await rm(directory, { recursive: true, force: true });
+			}
+		}
+	});
+
 	it("admits only the four existing Agent creation audit actions", async () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),

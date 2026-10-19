@@ -338,6 +338,59 @@ afterAll(async () => {
 });
 
 describe("PostgreSQL Agent-management Adapter", () => {
+	it("projects the latest committed application lifecycle time without advancing on replay or another application", async () => {
+		const own = stateFixture({ status: "pending_approval" });
+		const other = stateFixture({
+			status: "pending_approval",
+			applicationId: "other-application",
+			agentId: "other-agent",
+			applicantId: "other-user",
+			ownerIds: ["other-user"],
+		});
+		await seedStates([own, other]);
+		const adapter = new PostgresAgentManagementTransactionV1({ databaseUrl });
+		const query = new PostgresAgentManagementQueryV1({ databaseUrl });
+		adapters.push(adapter, query);
+		const scope = { kind: "applicant" as const, applicantId: own.applicantId };
+		const submittedAt = new Date("2026-08-31T00:00:00.000Z");
+		expect(await query.getApplication(scope, own.applicationId)).toMatchObject({
+			submittedAt,
+			updatedAt: submittedAt,
+		});
+		let clock = new Date("2026-09-01T08:00:00.000Z");
+		const management = createAgentManagementV1(adapter, { now: () => clock });
+		const original = command(
+			"approve_application",
+			own,
+			"application-updated-time",
+		);
+		expect(
+			await management.executeManagementCommand(original, administrator),
+		).toMatchObject({ outcome: "accepted" });
+		const updatedAt = clock;
+		expect(await query.getApplication(scope, own.applicationId)).toMatchObject({
+			submittedAt,
+			updatedAt,
+		});
+		clock = new Date("2026-09-02T08:00:00.000Z");
+		expect(
+			await management.executeManagementCommand(original, administrator),
+		).toMatchObject({ outcome: "replayed" });
+		expect(
+			await management.executeManagementCommand(
+				command("approve_application", other, "other-application-updated-time"),
+				administrator,
+			),
+		).toMatchObject({ outcome: "accepted" });
+		expect(await query.getApplication(scope, own.applicationId)).toMatchObject({
+			submittedAt,
+			updatedAt,
+		});
+		expect(
+			await query.getApplication(scope, other.applicationId),
+		).toBeUndefined();
+	});
+
 	it("atomically fences only the managed Agent Session resources and preserves source evidence across replay", async () => {
 		const state = stateFixture();
 		const other = stateFixture({
