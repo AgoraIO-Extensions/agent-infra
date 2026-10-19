@@ -13290,7 +13290,7 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 					},
 				),
 			});
-			const deliver = (request: RuntimeBusinessRequestV4) => {
+			const deliver = <T extends RuntimeBusinessRequestV4>(request: T) => {
 				const now = Date.now();
 				const claims = RuntimeBusinessGrantClaimsV4Schema.parse({
 					schemaVersion: 4,
