@@ -4757,10 +4757,10 @@ describe("observeForDrain (#1889)", () => {
 
 	it("runs the full readiness once the record is one monitor period old", async () => {
 		const { state, monitor, drain, probeRuntime } = await ready();
-		await monitor.observe(state);
 		const now = Date.now();
-		const clock = vi.spyOn(Date, "now");
+		const clock = vi.spyOn(Date, "now").mockReturnValue(now);
 		try {
+			await monitor.observe(state);
 			clock.mockReturnValue(now + drainReadinessMaxAgeMs - 1);
 			await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
 			expect(probeRuntime).toHaveBeenCalledTimes(1);
