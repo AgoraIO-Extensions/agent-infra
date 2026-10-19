@@ -871,6 +871,25 @@ export type ModelSelectionFallbackEventV1 = {
     type: 'model.selection.fell_back';
 };
 
+export type ModelSelectionFallbackEventV2 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        modelOptionId: string;
+        reason: 'selection_unavailable';
+        reasoningLevel: string;
+        requestedModelDisplayName: string | null;
+        requestedModelOptionId: string;
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'model.selection.fell_back';
+};
+
 export type NativeCapabilityInvocationRequestV1 = {
     capabilityId: string;
     directoryRevision: string;
@@ -1006,7 +1025,7 @@ export type PersistedConversationEventV1 = {
     type: 'conversation.error';
 } | ModelSelectionFallbackEventV1;
 
-export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2 | BrowserHandoffEventV2 | BrowserSideEffectEventV2;
+export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2 | BrowserHandoffEventV2 | BrowserSideEffectEventV2 | ModelSelectionFallbackEventV2;
 
 export type PersonalApiCredentialIssueRequestV1 = {
     expiresAt: string | null;

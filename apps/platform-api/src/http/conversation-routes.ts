@@ -599,19 +599,51 @@ export function eventProjection(
 			},
 		};
 	} else if (persisted.type === "model.selection.fell_back") {
-		projected = {
-			...base,
-			type: "model.selection.fell_back",
-			payload: {
-				modelOptionId: persisted.modelOptionId,
-				reasoningLevel: persisted.reasoningLevel,
-				reason: persisted.reason,
-			},
+		const payload = {
+			modelOptionId: persisted.modelOptionId,
+			reasoningLevel: persisted.reasoningLevel,
+			reason: persisted.reason,
 		};
+		// G-07：记录了原选项的回退事件按 V2 原样进入混合版本历史；旧事件保持 V1。
+		if (persisted.requestedModelOptionId !== undefined)
+			return PersistedConversationEventV2Schema.parse({
+				...base,
+				schemaVersion: 2,
+				type: "model.selection.fell_back",
+				payload: {
+					...payload,
+					requestedModelOptionId: persisted.requestedModelOptionId,
+					requestedModelDisplayName:
+						persisted.requestedModelDisplayName ?? null,
+				},
+			});
+		projected = { ...base, type: "model.selection.fell_back", payload };
 	} else {
 		throw new Error("Unsupported persisted event type");
 	}
 	return ConversationSseMessageV1Schema.parse(projected);
+}
+
+/**
+ * V1 SSE 只能表示 V1 事件：带原选项的回退事件降为原 V1 形状，让旧读取方照旧看到回退；
+ * 其他 V2 事实返回 undefined，由调用方跳过但推进持久游标（G-07）。
+ */
+export function eventProjectionV1(
+	input: ConversationQueryEventV1,
+): SseMessage | undefined {
+	const message = eventProjection(input);
+	if (message.schemaVersion === 1) return message;
+	if (message.type !== "model.selection.fell_back") return undefined;
+	const {
+		requestedModelOptionId: _requestedModelOptionId,
+		requestedModelDisplayName: _requestedModelDisplayName,
+		...payload
+	} = message.payload;
+	return ConversationSseMessageV1Schema.parse({
+		...message,
+		schemaVersion: 1,
+		payload,
+	});
 }
 
 function failure(
@@ -1667,11 +1699,17 @@ export function registerConversationRoutes(
 												return;
 											}
 											for (const persisted of batch.events) {
-												const message = eventProjection(persisted);
-												if (v2) await writeSseMessageV2(output, message);
-												// V1 skips V2 facts but advances the durable cursor.
-												else if (message.schemaVersion === 1)
-													await writeSseMessage(output, message);
+												if (v2)
+													await writeSseMessageV2(
+														output,
+														eventProjection(persisted),
+													);
+												else {
+													// V1 skips V2 facts but advances the durable cursor;
+													// a fallback keeps its original V1 shape (G-07).
+													const message = eventProjectionV1(persisted);
+													if (message) await writeSseMessage(output, message);
+												}
 												cursor = persisted.conversationCursor;
 											}
 										}

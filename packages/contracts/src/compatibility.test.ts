@@ -2123,6 +2123,115 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toBe("");
 	});
 
+	it("admits only the pinned requested-model fallback V2 event in V2 histories (#2908)", async () => {
+		type Schema = Record<string, unknown>;
+		const isFallbackV2 = (value: unknown) => {
+			const schema = value as {
+				$ref?: string;
+				properties?: {
+					type?: { const?: string };
+					schemaVersion?: { const?: number };
+				};
+			};
+			return (
+				schema?.$ref === "#/components/schemas/ModelSelectionFallbackEventV2" ||
+				(schema?.properties?.type?.const === "model.selection.fell_back" &&
+					schema.properties.schemaVersion?.const === 2)
+			);
+		};
+		const strip = (value: unknown): unknown =>
+			Array.isArray(value)
+				? value.filter((item) => !isFallbackV2(item)).map(strip)
+				: value !== null && typeof value === "object"
+					? Object.fromEntries(
+							Object.entries(value).map(([key, item]) => [key, strip(item)]),
+						)
+					: value;
+		const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-2908-"));
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			for (const version of ["v1", "v2"] as const) {
+				const current = JSON.parse(
+					await readFile(
+						new URL(
+							`../artifacts/openapi/pilot-browser.${version}.openapi.json`,
+							import.meta.url,
+						),
+						"utf8",
+					),
+				);
+				const previous = structuredClone(current);
+				const previousSchemas = previous.components.schemas as Record<
+					string,
+					Schema
+				>;
+				delete previousSchemas.ModelSelectionFallbackEventV2;
+				for (const name of [
+					"PersistedConversationEventV2",
+					"TaskProjectionV1",
+					"TaskSseMessageV1",
+				])
+					if (previousSchemas[name])
+						previousSchemas[name] = strip(previousSchemas[name]) as Schema;
+				// 基线确实缺少该事件，当前产物只在既定宿主中新增它。
+				expect(JSON.stringify(previous)).not.toBe(JSON.stringify(current));
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				const fallback = (document: typeof current) => {
+					const component =
+						document.components.schemas.ModelSelectionFallbackEventV2;
+					if (component) return component;
+					const host = document.components.schemas.TaskProjectionV1;
+					return host.properties.events.items.anyOf[0].anyOf.find(isFallbackV2);
+				};
+				for (const mutate of [
+					(document: typeof current) => {
+						fallback(document).properties.payload.properties.requestedModelId =
+							{
+								type: "string",
+							};
+					},
+					(document: typeof current) => {
+						fallback(document).properties.payload.required = fallback(
+							document,
+						).properties.payload.required.filter(
+							(name: string) => name !== "requestedModelDisplayName",
+						);
+					},
+					(document: typeof current) => {
+						fallback(document).properties.payload.additionalProperties = true;
+					},
+					(document: typeof current) => {
+						delete fallback(document).properties.payload.properties
+							.requestedModelDisplayName.anyOf[0].maxLength;
+					},
+					(document: typeof current) => {
+						// 新增事件不能借道其他 Schema 出现。
+						document.components.schemas.SseEventIdV1 = {
+							anyOf: [
+								document.components.schemas.SseEventIdV1,
+								structuredClone(fallback(document)),
+							],
+						};
+					},
+					(document: typeof current) => {
+						document.components.schemas.ModelSelectionFallbackEventV1.properties.payload.properties.requestedModelOptionId =
+							{ type: "string" };
+					},
+				]) {
+					const changed = structuredClone(current);
+					mutate(changed);
+					await writeFile(currentPath, JSON.stringify(changed));
+					expect(comparePaths(currentPath, previousPath).status).toBe(1);
+				}
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("accepts only the reviewed custom Agent model selection additions", async () => {
 		type OpenApiDocument = {
 			components: {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	conversationCommandConformanceV1,
 	conversationConformanceAuthorityV1,
+	conversationConformanceModelIdV1,
 } from "./conversation.conformance.ts";
 import {
 	type ConversationExecutionAuthorityV1,
@@ -12,7 +13,14 @@ import {
 	type ConversationMetadataRecoveryStateV1,
 	type ConversationMetadataRecoveryWritePlanV1,
 	createConversationExecutionUseCaseV1,
+	modelOptionDisplayNameV1,
+	requestedModelDisplayNameV1,
 } from "./conversation-execution.ts";
+import {
+	effectiveModelSelection,
+	modelSelectionFallbackWrite,
+	parseState,
+} from "./conversation-execution-state.ts";
 import { FakeConversationExecutionV1 } from "./fake-conversation-execution.ts";
 
 const authority = {
@@ -48,6 +56,7 @@ conversationCommandConformanceV1("Fake", async () => {
 			},
 		},
 		modelConfiguration: conformanceModelConfiguration,
+		modelIdOf: conversationConformanceModelIdV1,
 		now: () => new Date("2026-09-04T00:00:00.000Z"),
 		newId: () => `conversation_fixture_${nextId++}`,
 	});
@@ -2045,5 +2054,118 @@ describe("Conversation metadata recovery planning", () => {
 		await expect(
 			valid.fake.requestMetadataRecovery(valid.query),
 		).resolves.toEqual({ outcome: "scheduled" });
+	});
+});
+
+describe("model-selection fallback requested model (G-07)", () => {
+	const conversation = {
+		schemaVersion: 1 as const,
+		conversationId: "conversation_01",
+		agentId: authority.agentId,
+		actorId: authority.actorId,
+		channelId: authority.channelId,
+		status: "ready" as const,
+		sessionGeneration: 1,
+		hostSessionRef: null,
+		authorizationRevision: authority.authorizationRevision,
+		lastConversationCursor: 0,
+		selectedModelOptionId: "model_alternate",
+		selectedReasoningLevel: "high",
+		createdAt: new Date(0),
+		updatedAt: new Date(0),
+	};
+	const current = {
+		configurationRevision: 2,
+		options: [{ optionId: "model_primary", reasoningLevels: ["medium"] }],
+		defaultOptionId: "model_primary",
+		defaultReasoningLevel: "medium",
+	};
+	const state = (modelConfiguration: unknown) =>
+		({
+			conversation,
+			modelConfiguration,
+			sourceMessage: undefined,
+			targetExecution: undefined,
+			existingStop: undefined,
+			activeExecution: undefined,
+		}) as ConversationExecutionStateV1;
+	const write = (configuration: Parameters<typeof parseState>[0]) => {
+		const parsed = parseState(configuration);
+		const selection = effectiveModelSelection(
+			conversation,
+			parsed.modelConfiguration,
+		);
+		return modelSelectionFallbackWrite(
+			selection.fallback,
+			parsed.modelConfiguration,
+			authority,
+			conversation.conversationId,
+			"execution_01",
+			0,
+			0,
+			"request_01",
+			"trace_01",
+			new Date(0),
+			() => "event_01",
+		)?.timelineEvent.event;
+	};
+
+	it("records the removed option and its last applied model name", () => {
+		expect(
+			write(
+				state({
+					...current,
+					selectedOption: { optionId: "model_alternate", modelId: "relay-a" },
+				}),
+			),
+		).toEqual({
+			type: "model.selection.fell_back",
+			modelOptionId: "model_primary",
+			reasoningLevel: "medium",
+			reason: "selection_unavailable",
+			requestedModelOptionId: "model_alternate",
+			requestedModelDisplayName: "relay-a",
+		});
+	});
+
+	it("records a null name instead of the option ID when no applied record is readable", () => {
+		expect(write(state(current))).toMatchObject({
+			requestedModelOptionId: "model_alternate",
+			requestedModelDisplayName: null,
+		});
+		expect(
+			requestedModelDisplayNameV1(
+				{
+					previousModelOptionId: "model_alternate",
+					previousReasoningLevel: "high",
+					modelConfigurationRevision: 2,
+					modelOptionId: "model_primary",
+					reasoningLevel: "medium",
+				},
+				{
+					...current,
+					selectedOption: {
+						optionId: "model_alternate",
+						modelId: "m".repeat(1025),
+					},
+				},
+			),
+		).toBeNull();
+	});
+
+	it("fails closed when the adapter supplies another option's record or extra fields", () => {
+		for (const selectedOption of [
+			{ optionId: "model_primary", modelId: "relay-p" },
+			{ optionId: "model_alternate", modelId: "" },
+			{ optionId: "model_alternate", modelId: "relay-a", endpointId: "e" },
+		]) {
+			expect(() => parseState(state({ ...current, selectedOption }))).toThrow(
+				ConversationExecutionError,
+			);
+		}
+	});
+
+	it("uses the standard option presentation rule for the display name", () => {
+		expect(modelOptionDisplayNameV1({ modelId: "relay-a" })).toBe("relay-a");
 	});
 });

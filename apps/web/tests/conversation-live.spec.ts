@@ -1296,3 +1296,164 @@ for (const source of ["standard", "custom"] as const) {
 		});
 	}
 }
+
+test("explains a model fallback with the requested and actual model (G-07)", async ({
+	page,
+}, info) => {
+	// Owner 已从清单删除「Removed model」，会话之后的消息回退到默认选项。
+	const agent = activeAgent();
+	const legacyExecutionId = "execution-fallback-legacy";
+	const currentExecutionId = "execution-fallback-current";
+	const fallback = (
+		sequence: number,
+		executionIdValue: string,
+		requested?: string | null,
+	) =>
+		PersistedConversationEventV2Schema.parse({
+			schemaVersion: requested === undefined ? 1 : 2,
+			kind: "event",
+			eventId: `fallback-event-${sequence}`,
+			conversationId,
+			executionId: executionIdValue,
+			sequence: 1,
+			conversationCursor: `fallback-cursor-${sequence}`,
+			occurredAt: timestamp,
+			type: "model.selection.fell_back",
+			payload: {
+				modelOptionId: "model-primary",
+				reasoningLevel: "medium",
+				reason: "selection_unavailable",
+				...(requested === undefined
+					? {}
+					: {
+							requestedModelOptionId: "model-removed",
+							requestedModelDisplayName: requested,
+						}),
+			},
+		});
+	const completedFor = (sequence: number, executionIdValue: string) =>
+		PersistedConversationEventV2Schema.parse({
+			...event("execution.status", sequence, { status: "completed" }),
+			eventId: `fallback-completed-${sequence}`,
+			executionId: executionIdValue,
+			sequence: 2,
+			conversationCursor: `fallback-cursor-${sequence}`,
+		});
+	const turn = (executionIdValue: string, question: string, reply: string) => [
+		{
+			messageId: `${executionIdValue}-question`,
+			role: "user" as const,
+			text: question,
+			status: "completed" as const,
+			executionId: executionIdValue,
+			replyToMessageId: null,
+			answerVersion: null,
+			isCurrentAnswer: null,
+			error: null,
+			createdAt: timestamp,
+		},
+		{
+			messageId: `${executionIdValue}-answer`,
+			role: "assistant" as const,
+			text: reply,
+			status: "completed" as const,
+			executionId: executionIdValue,
+			replyToMessageId: `${executionIdValue}-question`,
+			answerVersion: 1,
+			isCurrentAnswer: true,
+			error: null,
+			createdAt: timestamp,
+		},
+	];
+	const detail = ConversationDetailProjectionV2Schema.parse({
+		...history(conversationId, [
+			// 升级前写入的旧事件没有请求模型字段，仍要正常显示（AC-3）。
+			fallback(1, legacyExecutionId),
+			completedFor(2, legacyExecutionId),
+			fallback(3, currentExecutionId, "Removed model"),
+			completedFor(4, currentExecutionId),
+		]),
+		conversation: {
+			...history(conversationId, []).conversation,
+			status: "ready",
+			selectedModelOptionId: "model-primary",
+			selectedReasoningLevel: "medium",
+			lastConversationCursor: "fallback-cursor-4",
+		},
+		messages: [
+			...turn(legacyExecutionId, "升级前的问题", "旧回答。"),
+			...turn(currentExecutionId, "删除选项后的问题", "新回答。"),
+		],
+	});
+	await keepConversationStreamOpen(page);
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		const path = new URL(request.url()).pathname;
+		if (isFileLimitsRequest(request.method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
+		if (path.endsWith("/events"))
+			return route.fulfill({
+				status: 200,
+				contentType: "text/event-stream",
+				body: ": heartbeat\n\n",
+			});
+		if (path.endsWith("/session"))
+			return route.fulfill({ json: ownerSession() });
+		if (path === `/api/v2/agents/${agentId}`)
+			return route.fulfill({ json: agent });
+		if (path === `/api/v2/conversations/${conversationId}`)
+			return route.fulfill({ json: detail });
+		await route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	await expect(page.getByText("新回答。", { exact: true })).toBeVisible();
+	const facts = (dialog: ReturnType<typeof page.getByRole>) =>
+		dialog
+			.locator("dl.model-fallback-facts")
+			.evaluate((list) =>
+				Object.fromEntries(
+					[...list.querySelectorAll("dt")].map((term) => [
+						term.textContent,
+						term.nextElementSibling?.textContent,
+					]),
+				),
+			);
+
+	const current = page.getByRole("button", {
+		name: "查看模型状态：删除选项后的问题",
+	});
+	await current.click();
+	const dialog = page.getByRole("dialog", { name: "模型回退" });
+	await expect(dialog).toBeVisible();
+	expect(await facts(dialog)).toEqual({
+		请求模型: "Removed model",
+		实际模型: "Primary model",
+		原因: "会话所选的模型选项已被 Owner 移除，已在当前 Agent 允许范围内改用默认选项。",
+	});
+	await expect(dialog).not.toContainText("model-removed");
+	await expect(dialog).not.toContainText("model-primary");
+	await info.attach("model-fallback-requested", {
+		body: await page.screenshot({ animations: "disabled" }),
+		contentType: "image/png",
+	});
+	await page.keyboard.press("Escape");
+	await expect(dialog).toBeHidden();
+	await expect(current).toBeFocused();
+
+	await page
+		.getByRole("button", { name: "查看模型状态：升级前的问题" })
+		.click();
+	await expect(dialog).toBeVisible();
+	expect(await facts(dialog)).toMatchObject({
+		请求模型: "已删除的模型选项",
+		实际模型: "Primary model",
+	});
+	await expect(dialog).not.toContainText("model-removed");
+});

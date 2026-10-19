@@ -13,6 +13,7 @@ import type {
 import {
 	conversationStopConfirmationTimeoutMsV1,
 	parseSessionSandboxBindingV1,
+	requestedModelDisplayNameV1,
 } from "@agent-infra/platform-core";
 import {
 	type CreateRequest,
@@ -90,6 +91,11 @@ function validateModelSelectionFallback(
 		fallback.timelineEvent.occurredAt !== input.occurredAt.toISOString() ||
 		fallback.timelineEvent.event.modelOptionId !== fallback.modelOptionId ||
 		fallback.timelineEvent.event.reasoningLevel !== fallback.reasoningLevel ||
+		// 请求模型只能是会话原所选选项，显示名只能来自本次读取的已应用修订（G-07）。
+		fallback.timelineEvent.event.requestedModelOptionId !==
+			fallback.previousModelOptionId ||
+		fallback.timelineEvent.event.requestedModelDisplayName !==
+			requestedModelDisplayNameV1(fallback, configuration) ||
 		fallback.auditEvent.actorId !== input.authority.actorId ||
 		fallback.auditEvent.agentId !== input.authority.agentId ||
 		fallback.auditEvent.conversationId !== current.conversationId ||

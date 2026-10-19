@@ -187,6 +187,19 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 				[1, "task.status"],
 				[2, "model.selection.fell_back"],
 			]);
+			// 原选项从未出现在本 Agent 的已应用修订中：记录 ID，显示名为 null（G-07）。
+			expect(
+				before.events.find(
+					(event) => event.type === "model.selection.fell_back",
+				),
+			).toMatchObject({
+				schemaVersion: 2,
+				payload: {
+					reason: "selection_unavailable",
+					requestedModelOptionId: "removed-option",
+					requestedModelDisplayName: null,
+				},
+			});
 			expect((await cancel(task, kind, "cancel-continuation")).status).toBe(
 				202,
 			);

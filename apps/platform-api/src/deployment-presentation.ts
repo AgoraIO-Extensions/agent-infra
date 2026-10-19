@@ -5,6 +5,7 @@ import {
 	type MultiServiceServiceProjectionV1,
 	multiServiceServiceProjectionsV1,
 } from "@agent-infra/contracts/pilot";
+import { modelOptionDisplayNameV1 } from "@agent-infra/platform-core";
 import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-store";
 import { parseAllDocuments } from "yaml";
 
@@ -175,7 +176,8 @@ export function createDeploymentPresentation(input: {
 			modelOptions: configuration.modelOptions.map((option) => ({
 				...option,
 				reasoningLevels: [...option.reasoningLevels],
-				displayName: option.modelId,
+				// 与回退事件记录的请求模型显示名同一规则（G-07）。
+				displayName: modelOptionDisplayNameV1(option),
 			})),
 			channels: [
 				{ kind: "web", status: "available" },

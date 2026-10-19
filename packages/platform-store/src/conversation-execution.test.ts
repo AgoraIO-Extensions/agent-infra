@@ -15,6 +15,7 @@ import {
 	type ConversationCommandConformanceSnapshotV1,
 	conversationCommandConformanceV1,
 	conversationConformanceAuthorityV1,
+	conversationConformanceModelIdV1,
 	FakeNativeCapabilityMetadataRevalidationV1,
 } from "@agent-infra/platform-core/testing";
 import postgres from "postgres";
@@ -138,7 +139,8 @@ async function persistConformanceModelConfiguration(
 						({ optionId, reasoningLevels }, index) => ({
 							optionId,
 							endpointId: `endpoint_fixture_${index}`,
-							modelId: `model_fixture_${index}`,
+							// 与 Fake 相同的模型 ID 约定，回退事件据此记录原选项显示名（G-07）。
+							modelId: conversationConformanceModelIdV1(optionId),
 							reasoningLevels,
 							credential: {
 								secretId: `secret_fixture_${index}`,
@@ -2883,4 +2885,231 @@ it("reads legacy Session state under current authority without admitting command
 		await foreign.transaction.close();
 		await stale.transaction.close();
 	}
+});
+
+describe("PostgreSQL model fallback requested model (G-07)", () => {
+	const requestedAuthority: ConversationExecutionAuthorityV1 = {
+		...authority,
+		agentId: "agent_requested_model",
+		authorizationRevision: "authorization_requested_model",
+	};
+	const foreignAgentId = "agent_requested_model_foreign";
+
+	/** 以本 Agent 修订 1 为模板写入另一修订，只改模型选项（含其模型 ID）。 */
+	async function persistRevision(
+		agentId: string,
+		revision: number,
+		options: readonly { optionId: string; modelId: string }[],
+	) {
+		const [template] = await client<{ configuration: unknown }[]>`
+			select configuration from platform.agent_configuration_revisions
+			where agent_id = ${requestedAuthority.agentId} and revision = 1
+		`;
+		if (!template) throw new Error("Expected revision 1 fixture");
+		const configuration = structuredClone(template.configuration) as {
+			agentId: string;
+			revision: number;
+			modelConfiguration: {
+				options: { optionId: string; modelId: string }[];
+			};
+		};
+		const byId = new Map(
+			configuration.modelConfiguration.options.map((option) => [
+				option.optionId,
+				option,
+			]),
+		);
+		configuration.agentId = agentId;
+		configuration.revision = revision;
+		configuration.modelConfiguration.options = options.map(
+			({ optionId, modelId }) => {
+				const base = byId.get(optionId);
+				if (!base) throw new Error("Unknown option fixture");
+				return { ...base, modelId };
+			},
+		);
+		await client`
+			insert into platform.agents
+				(id, current_configuration_revision, authorization_revision)
+			values (${agentId}, ${revision}, ${requestedAuthority.authorizationRevision})
+			on conflict (id) do nothing
+		`;
+		await client`
+			insert into platform.agent_configuration_revisions
+				(agent_id, revision, source_reference, created_at, configuration)
+			values (${agentId}, ${revision}, ${`source_requested_${revision}`}, now(),
+				${client.json(configuration as never)})
+			on conflict (agent_id, revision) do update
+			set configuration = excluded.configuration
+		`;
+	}
+
+	async function makeCurrent(agentId: string, revision: number) {
+		await client`
+			update platform.agents set current_configuration_revision = ${revision}
+			where id = ${agentId}
+		`;
+	}
+
+	afterEach(async () => {
+		// 本组修订不能泄漏到其他用例：先恢复修订 1，再删除额外修订与外部 Agent。
+		await makeCurrent(requestedAuthority.agentId, 1);
+		await client`
+			delete from platform.agent_configuration_revisions
+			where (agent_id = ${requestedAuthority.agentId} and revision > 1)
+				or agent_id = ${foreignAgentId}
+		`;
+		await client`delete from platform.agents where id = ${foreignAgentId}`;
+	});
+
+	it("records the name from this Agent's latest applied revision, ignoring pending and foreign revisions", async () => {
+		await persistConformanceModelConfiguration(
+			conformanceModelConfiguration,
+			requestedAuthority,
+		);
+		const { transaction, useCase } = createConversation(requestedAuthority);
+		try {
+			const created = await useCase.createConversation({
+				schemaVersion: 1,
+				agentId: requestedAuthority.agentId,
+				idempotencyKey: "requested_model_create",
+				requestId: "requested_model_create",
+				traceId: "requested_model_create",
+			});
+			if (created.outcome !== "accepted")
+				throw new Error("Expected Conversation creation");
+			const conversationId = created.result.conversationId;
+			await expect(
+				useCase.selectModel({
+					schemaVersion: 1,
+					command: "model.select",
+					conversationId,
+					modelOptionId: "model_alternate",
+					reasoningLevel: "high",
+					idempotencyKey: "requested_model_select",
+					requestId: "requested_model_select",
+					traceId: "requested_model_select",
+				}),
+			).resolves.toMatchObject({ outcome: "accepted" });
+			// 修订 2 仍有原选项但改了模型名；修订 3 删除它并成为当前修订。
+			await persistRevision(requestedAuthority.agentId, 2, [
+				{ optionId: "model_primary", modelId: "relay-primary" },
+				{ optionId: "model_alternate", modelId: "relay-alternate-renamed" },
+			]);
+			await persistRevision(requestedAuthority.agentId, 3, [
+				{ optionId: "model_primary", modelId: "relay-primary" },
+			]);
+			await makeCurrent(requestedAuthority.agentId, 3);
+			// 尚未应用的修订 4 与其他 Agent 的修订都含同 ID 选项，不能被采用。
+			await persistRevision(requestedAuthority.agentId, 4, [
+				{ optionId: "model_primary", modelId: "relay-primary" },
+				{ optionId: "model_alternate", modelId: "relay-alternate-pending" },
+			]);
+			await persistRevision(foreignAgentId, 9, [
+				{ optionId: "model_primary", modelId: "foreign-primary" },
+				{ optionId: "model_alternate", modelId: "foreign-alternate" },
+			]);
+			const accepted = await useCase.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId,
+				text: "requested model fixture",
+				idempotencyKey: "requested_model_message",
+				requestId: "requested_model_message",
+				traceId: "requested_model_message",
+			});
+			if (accepted.outcome !== "accepted")
+				throw new Error("Expected fallback message acceptance");
+			const rows = await client<{ event_payload: unknown }[]>`
+				select event_payload from platform.conversation_events
+				where conversation_id = ${conversationId}
+					and event_type = 'model.selection.fell_back'
+			`;
+			expect(rows).toEqual([
+				{
+					event_payload: {
+						type: "model.selection.fell_back",
+						modelOptionId: "model_primary",
+						reasoningLevel: "low",
+						reason: "selection_unavailable",
+						requestedModelOptionId: "model_alternate",
+						requestedModelDisplayName: "relay-alternate-renamed",
+					},
+				},
+			]);
+			// 之后的配置变化不改写已写入的事件。
+			await persistRevision(requestedAuthority.agentId, 2, [
+				{ optionId: "model_primary", modelId: "relay-primary" },
+				{ optionId: "model_alternate", modelId: "relay-alternate-later" },
+			]);
+			expect(
+				await client`
+					select event_payload->>'requestedModelDisplayName' as name
+					from platform.conversation_events
+					where conversation_id = ${conversationId}
+						and event_type = 'model.selection.fell_back'
+				`,
+			).toEqual([{ name: "relay-alternate-renamed" }]);
+		} finally {
+			await transaction.close();
+		}
+	});
+
+	it("records a null name when no applied revision of this Agent has the option", async () => {
+		await persistConformanceModelConfiguration(
+			conformanceModelConfiguration,
+			requestedAuthority,
+		);
+		const { transaction, useCase } = createConversation(requestedAuthority);
+		try {
+			const created = await useCase.createConversation({
+				schemaVersion: 1,
+				agentId: requestedAuthority.agentId,
+				idempotencyKey: "requested_model_unknown_create",
+				requestId: "requested_model_unknown_create",
+				traceId: "requested_model_unknown_create",
+			});
+			if (created.outcome !== "accepted")
+				throw new Error("Expected Conversation creation");
+			const conversationId = created.result.conversationId;
+			// 模拟历史数据：会话所选选项只出现在其他 Agent 的修订中。
+			await client`
+				update platform.conversations
+				set selected_model_option_id = 'model_foreign_only',
+					selected_reasoning_level = 'high'
+				where id = ${conversationId}
+			`;
+			await persistRevision(foreignAgentId, 1, [
+				{ optionId: "model_primary", modelId: "foreign-primary" },
+			]);
+			await client`
+				update platform.agent_configuration_revisions
+				set configuration = jsonb_set(configuration,
+					'{modelConfiguration,options,0,optionId}', '"model_foreign_only"')
+				where agent_id = ${foreignAgentId} and revision = 1
+			`;
+			const accepted = await useCase.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId,
+				text: "requested model unknown fixture",
+				idempotencyKey: "requested_model_unknown_message",
+				requestId: "requested_model_unknown_message",
+				traceId: "requested_model_unknown_message",
+			});
+			if (accepted.outcome !== "accepted")
+				throw new Error("Expected fallback message acceptance");
+			expect(
+				await client`
+					select event_payload->'requestedModelOptionId' as id,
+						event_payload->'requestedModelDisplayName' as name
+					from platform.conversation_events
+					where conversation_id = ${conversationId}
+						and event_type = 'model.selection.fell_back'
+				`,
+			).toEqual([{ id: "model_foreign_only", name: null }]);
+		} finally {
+			await transaction.close();
+		}
+	});
 });
