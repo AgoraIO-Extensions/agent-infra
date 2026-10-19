@@ -120,6 +120,12 @@ import {
 	type CodexSkillLaunchProvenance,
 	codexSkillLaunch,
 } from "./codex-skill-launch.internal.js";
+import {
+	codexWorkspaceReadToolDefinition,
+	codexWorkspaceReadToolVersion,
+	isCodexWorkspaceReadPath,
+	readCodexWorkspaceTextFile,
+} from "./codex-workspace-read-tool.js";
 import type {
 	RuntimeBrowserHandoffRequestV1,
 	RuntimeBrowserSideEffectConfirmationRequestV1,
@@ -834,6 +840,7 @@ interface CodexSession {
 	requiredRuntime?: CodexRuntimeRequirements;
 	threadId?: string;
 	historyMode?: "paginated";
+	workspaceReadToolVersion?: 1;
 	standardMcp?: {
 		configFingerprint: string;
 		source: { ref: string; revision: string };
@@ -2313,6 +2320,7 @@ function isCodexSession(
 			"requiredRuntime",
 			"threadId",
 			"historyMode",
+			"workspaceReadToolVersion",
 			"standardMcp",
 			"activeExecutionId",
 			"acceptanceUncertainOperationKey",
@@ -2331,6 +2339,9 @@ function isCodexSession(
 			!isCodexRuntimeRequirements(value.requiredRuntime)) ||
 		(value.threadId !== undefined && !nonEmptyString(value.threadId)) ||
 		(value.historyMode !== undefined && value.historyMode !== "paginated") ||
+		(value.workspaceReadToolVersion !== undefined &&
+			(value.workspaceReadToolVersion !== codexWorkspaceReadToolVersion ||
+				value.threadId === undefined)) ||
 		(value.standardMcp !== undefined &&
 			(!isPlainRecord(value.standardMcp) ||
 				!hasOnlyKeys(value.standardMcp, [
@@ -4955,7 +4966,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				const cached = this.rpcsByTransport.get(bridge);
 				if (cached?.rpc === rpc) this.rpcsByTransport.delete(bridge);
 			},
-			this.standardConnectionOptions
+			this.standardConnectionOptions || this.installedSkill
 				? (params, signal) =>
 						this.handleStandardMcpTool(conversationKey, params, signal)
 				: undefined,
@@ -9989,7 +10000,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			!nonEmptyString(params.threadId) ||
 			!nonEmptyString(params.turnId) ||
 			!nonEmptyString(params.callId) ||
-			params.namespace !== "connection" ||
+			(params.namespace !== "connection" && params.namespace !== "workspace") ||
 			!nonEmptyString(params.tool) ||
 			!isPlainRecord(params.arguments)
 		)
@@ -10034,6 +10045,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async performStandardMcpTool(
 		conversationKey: string,
 		input: {
+			namespace: string;
 			threadId: string;
 			turnId: string;
 			callId: string;
@@ -10062,14 +10074,25 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return { ...resolved, execution: resolved.execution };
 		};
 		const initial = locate(this.readState());
+		const workspace = input.namespace === "workspace";
+		const root = workspace
+			? this.workspaceReadRoot(initial.nativeSessionRef)
+			: undefined;
 		const cached = this.standardMcpClients.get(initial.nativeSessionRef);
-		if (
+		if (workspace) {
+			if (
+				input.tool !== "read_text_file" ||
+				Object.keys(input.arguments).join(",") !== "path" ||
+				!isCodexWorkspaceReadPath(input.arguments.path)
+			)
+				protocolInvalid();
+		} else if (
 			!cached ||
 			cached.executionId !== initial.execution.executionId ||
 			!cached.client.validateArguments(input.tool, input.arguments)
 		)
 			unavailable();
-		const client = cached.client;
+		const client = workspace ? undefined : cached?.client;
 		const prepared = await this.update((state) => {
 			signal.throwIfAborted();
 			const resolved = locate(state);
@@ -10098,13 +10121,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				resolved.journal.externalActionsBlocked = true;
 				return { ...resolved, repeated: true as const, call: old, cursor: "" };
 			}
-			if (Object.keys(resolved.journal.standardMcpCalls ?? {}).length >= 1024)
+			const calls = Object.values(resolved.journal.standardMcpCalls ?? {});
+			if (
+				calls.length >= 1024 ||
+				(workspace &&
+					calls.filter((call) => call.toolAlias === "workspace.read_text_file")
+						.length >= 4)
+			)
 				unavailable();
 			const call: CodexStandardMcpCall = {
 				threadId: input.threadId,
 				turnId: input.turnId,
 				callId: input.callId,
-				toolAlias: input.tool,
+				toolAlias: workspace ? "workspace.read_text_file" : input.tool,
 				fingerprint,
 				operationRef: randomUUID(),
 				attemptRef: randomUUID(),
@@ -10117,15 +10146,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				operationRef: call.operationRef,
 				attemptRef: call.attemptRef,
 				phase: "intent",
-				toolId: `mcp:${standardMcpDigest(client.toolName(input.tool)).slice(0, 32)}`,
-				connection: {
-					serviceRef: client.serviceRef,
-					consumerId: client.consumerId,
-					instanceRef: client.instanceRef,
-					credentialRevision: client.credentialRevision,
-					verification: "unverified",
-					reason: "record_unavailable",
-				},
+				toolId: workspace
+					? "workspace.read_text_file"
+					: `mcp:${standardMcpDigest(client?.toolName(input.tool)).slice(0, 32)}`,
+				...(client
+					? {
+							connection: {
+								serviceRef: client.serviceRef,
+								consumerId: client.consumerId,
+								instanceRef: client.instanceRef,
+								credentialRevision: client.credentialRevision,
+								verification: "unverified" as const,
+								reason: "record_unavailable" as const,
+							},
+						}
+					: {}),
 			});
 			return {
 				...resolved,
@@ -10152,6 +10187,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			signal.throwIfAborted();
 			const state = this.readState();
 			const resolved = locate(state);
+			if (
+				workspace &&
+				this.workspaceReadRoot(prepared.nativeSessionRef) !== root
+			)
+				unavailable();
 			const operation = this.executionOperation(
 				state,
 				resolved.session,
@@ -10253,59 +10293,111 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				signal,
 			);
 			(await assertCurrent())();
-			const result = await client.call(
-				input.tool,
-				input.arguments,
-				{
-					assertCurrent,
-					block,
-					confirm: async (result) => {
-						const cursor = await save(result.phase, {
-							finishedAt: new Date().toISOString(),
-							...(result.phase === "unknown"
-								? { failureCode: "response_incomplete" as const }
-								: result.phase === "failed"
-									? { failureCode: "operation_failed" as const }
-									: {}),
-						});
-						await this.awaitStandardMcpAck(
-							prepared.nativeSessionRef,
-							prepared.execution.executionId,
-							cursor,
-							signal,
-						);
+			let result: {
+				phase: "completed" | "failed" | "unknown";
+				contentItems: { type: "inputText"; text: string }[];
+				success: boolean;
+			};
+			if (workspace) {
+				if (!root || typeof input.arguments.path !== "string") unavailable();
+				await save("started", { startedAt: new Date().toISOString() });
+				deliveryGuard?.();
+				let file:
+					| Awaited<ReturnType<typeof readCodexWorkspaceTextFile>>
+					| undefined;
+				try {
+					file = await readCodexWorkspaceTextFile(
+						root,
+						input.arguments.path,
+						signal,
+					);
+				} catch (error) {
+					if (
+						!(error instanceof Error) ||
+						error.message !== "WORKSPACE_FILE_UNAVAILABLE"
+					)
+						throw error;
+				}
+				(await assertCurrent())();
+				const phase = file ? "completed" : "failed";
+				const cursor = await save(phase, {
+					finishedAt: new Date().toISOString(),
+					...(file ? {} : { failureCode: "operation_failed" as const }),
+				});
+				await this.awaitStandardMcpAck(
+					prepared.nativeSessionRef,
+					prepared.execution.executionId,
+					cursor,
+					signal,
+				);
+				result = {
+					phase,
+					success: !!file,
+					contentItems: [
+						{
+							type: "inputText",
+							text: JSON.stringify(
+								file ?? { reason: "workspace_file_unavailable" },
+							),
+						},
+					],
+				};
+			} else {
+				if (!client) unavailable();
+				result = await client.call(
+					input.tool,
+					input.arguments,
+					{
+						assertCurrent,
+						block,
+						confirm: async (result) => {
+							const cursor = await save(result.phase, {
+								finishedAt: new Date().toISOString(),
+								...(result.phase === "unknown"
+									? { failureCode: "response_incomplete" as const }
+									: result.phase === "failed"
+										? { failureCode: "operation_failed" as const }
+										: {}),
+							});
+							await this.awaitStandardMcpAck(
+								prepared.nativeSessionRef,
+								prepared.execution.executionId,
+								cursor,
+								signal,
+							);
+						},
+						prepare: async (request) => {
+							await this.update((state) => {
+								const resolved = locate(state);
+								const call = resolved.journal.standardMcpCalls?.[callKey];
+								if (
+									!call ||
+									call.fingerprint !== fingerprint ||
+									call.phase !== "intent" ||
+									call.rpcRequestId !== undefined ||
+									call.requestDigest !== undefined
+								)
+									stateInvalid();
+								call.rpcRequestId = request.rpcRequestId;
+								call.requestDigest = request.requestDigest;
+							});
+						},
+						started: async (request) => {
+							await save(
+								"started",
+								{ startedAt: request.startedAt },
+								request.rpcRequestId,
+								request.requestDigest,
+							);
+						},
 					},
-					prepare: async (request) => {
-						await this.update((state) => {
-							const resolved = locate(state);
-							const call = resolved.journal.standardMcpCalls?.[callKey];
-							if (
-								!call ||
-								call.fingerprint !== fingerprint ||
-								call.phase !== "intent" ||
-								call.rpcRequestId !== undefined ||
-								call.requestDigest !== undefined
-							)
-								stateInvalid();
-							call.rpcRequestId = request.rpcRequestId;
-							call.requestDigest = request.requestDigest;
-						});
-					},
-					started: async (request) => {
-						await save(
-							"started",
-							{ startedAt: request.startedAt },
-							request.rpcRequestId,
-							request.requestDigest,
-						);
-					},
-				},
-				signal,
-			);
+					signal,
+				);
+			}
 			if (result.phase === "unknown") unavailable();
 			// Final authority check is not a new action permit. The completed tool
 			// fact must remain readable even if result delivery is now denied.
-			await client.assertCurrent(signal);
+			await client?.assertCurrent(signal);
 			const current = locate(this.readState());
 			if (
 				current.journal.externalActionsBlocked ||
@@ -10321,7 +10413,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				success: result.success,
 				beforeDelivery: async () => {
 					try {
-						await client.assertCurrent(signal);
+						await client?.assertCurrent(signal);
 						if (!deliveryGuard) unavailable();
 						deliveryGuard();
 						return () => {
@@ -10334,7 +10426,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						};
 					} catch {
 						block();
-						await client.close();
+						await client?.close();
 						await this.update((state) => {
 							const resolved = locate(state);
 							resolved.journal.externalActionsBlocked = true;
@@ -10362,7 +10454,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				failureCode: "recovery_unconfirmed",
 				finishedAt: new Date().toISOString(),
 			}).catch(() => {});
-			await client.close();
+			await client?.close();
 			throw unavailableError();
 		}
 	}
@@ -10611,9 +10703,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		return {
-			...(this.standardConnectionOptions
+			...(this.standardConnectionOptions || this.installedSkill
 				? {
 						allowsClientTool: (name: string, namespace: string | undefined) => {
+							if (namespace === "workspace") {
+								try {
+									this.workspaceReadRoot(prepared.nativeSessionRef);
+									const session = this.session(prepared.nativeSessionRef);
+									return (
+										name === "read_text_file" &&
+										session.activeExecutionId === prepared.executionId
+									);
+								} catch {
+									return false;
+								}
+							}
 							const client = this.standardMcpClients.get(
 								prepared.nativeSessionRef,
 							);
@@ -10693,6 +10797,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					"workspace",
 				)
 			: undefined;
+	}
+
+	private workspaceReadRoot(nativeSessionRef: string): string {
+		const session = this.session(nativeSessionRef);
+		const key = this.conversationKeyFor(nativeSessionRef);
+		const process = this.nativeSkillProcesses.get(key);
+		const owned = process && this.rpcsByTransport.get(process.bridge);
+		if (
+			session.workspaceReadToolVersion !== codexWorkspaceReadToolVersion ||
+			!this.installedSkill ||
+			!process?.active ||
+			owned?.conversationKey !== key ||
+			owned.rpc !== this.conversationRpcs.get(key)
+		)
+			unavailable();
+		return process.launch.cwd;
 	}
 
 	private async nativeResultFile(
@@ -12505,7 +12625,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			"thread/start",
 			{
 				historyMode: "paginated",
-				...(standard ? { dynamicTools: standard.toolDefinitions } : {}),
+				...(standard ||
+				(this.installedSkill &&
+					this.requiredRuntime.lane === "official-model-only")
+					? {
+							dynamicTools: [
+								...(standard?.toolDefinitions ?? []),
+								...(this.installedSkill &&
+								this.requiredRuntime.lane === "official-model-only"
+									? [structuredClone(codexWorkspaceReadToolDefinition)]
+									: []),
+							],
+						}
+					: {}),
 			},
 			(value) => {
 				const thread = isPlainRecord(value) ? value.thread : undefined;
@@ -12533,6 +12665,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			stored.threadId = threadId;
 			stored.historyMode = "paginated";
+			if (
+				this.installedSkill &&
+				this.requiredRuntime.lane === "official-model-only"
+			)
+				stored.workspaceReadToolVersion = codexWorkspaceReadToolVersion;
 			if (standard && this.standardConnectionOptions)
 				stored.standardMcp = {
 					configFingerprint:
