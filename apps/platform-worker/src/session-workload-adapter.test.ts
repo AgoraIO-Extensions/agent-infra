@@ -314,6 +314,26 @@ describe("session sandbox workload adapter", () => {
 		});
 		expect(await client.read("Pod", selected.podName)).toBeNull();
 	});
+	it("refuses to apply a running allocation without runtime before any write (#2885)", async () => {
+		// 只有排空（stopped）允许 runtime 为 null；运行中缺 runtime 会建出缺 Secret / env 的 Pod。
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await expect(
+			adapter.apply({ ...allocation, desiredState: "running", runtime: null }),
+		).rejects.toThrow();
+		expect(await client.read("Pod", allocation.podName)).toBeNull();
+		expect(await client.read("Secret", allocation.secretName)).toBeNull();
+		// 排空中的旧 payload：只用于按名称与标签删除，Secret 不带数据。
+		const secret = sessionSandboxResourcesV1({
+			...allocation,
+			desiredState: "stopped",
+			runtime: null,
+		}).find((resource) => resource.kind === "Secret") as
+			| { data?: unknown }
+			| undefined;
+		expect(secret).toBeDefined();
+		expect(secret?.data).toBeUndefined();
+	});
 	it("rejects a Session env file override before Pod creation", () => {
 		expect(() =>
 			sessionSandboxResourcesV1({

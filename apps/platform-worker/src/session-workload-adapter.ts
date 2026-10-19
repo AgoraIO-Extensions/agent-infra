@@ -364,7 +364,7 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 	workloadEgressRulesV1(value.egress);
 	// 排空（drain-only）allocation 的 runtime 允许为 null（旧 payload 形状）：
 	// cleanup 和 control-mode observe 在 stopped 状态下只需沙箱身份标签，
-	// 不依赖模型配置字段。
+	// 不依赖模型配置字段。创建资源的入口另行要求 runtime 非空。
 	if (value.runtime !== null) {
 		validateRuntimeInput(value.runtime);
 	}
@@ -1035,6 +1035,10 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			previous: readonly SessionSandboxResourceIdentityV1[] = [],
 		) {
 			if (options.client.namespace !== allocation.namespace)
+				throw new WorkloadKubernetesError("policy");
+			// 只有排空（stopped）允许 runtime 为 null；运行中的 allocation 缺 runtime 会建出
+			// 缺 Secret / env 的 Pod，必须在任何写入之前拒绝（#2885）。
+			if (allocation.desiredState === "running" && allocation.runtime === null)
 				throw new WorkloadKubernetesError("policy");
 			const resources = sessionSandboxResourcesV1(allocation);
 			// Check the complete previous set before any write. A vanished or replaced
