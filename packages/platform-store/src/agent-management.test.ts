@@ -7,6 +7,7 @@ import type {
 	SessionSandboxReconciliationClaimV1,
 } from "@agent-infra/platform-core";
 import { createAgentManagementV1 } from "@agent-infra/platform-core";
+import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
 	afterAll,
@@ -17,14 +18,15 @@ import {
 	it,
 	vi,
 } from "vitest";
-
 import {
 	type AgentManagementConformanceOptionsV1,
 	agentManagementV1Conformance,
 } from "../../platform-core/src/agent-management.conformance.ts";
+import { parseAgentManagementPortState } from "../../platform-core/src/agent-management-input.ts";
 import {
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
+	readAgentManagementState,
 } from "./agent-management.ts";
 import { PostgresConversationDispatchStoreV1 } from "./conversation-dispatch.js";
 import { migratePlatformDatabase } from "./migrate.ts";
@@ -1346,6 +1348,43 @@ describe("PostgreSQL Agent-management Adapter", () => {
 				"agent_missing",
 			),
 		).toBeUndefined();
+	});
+
+	it("projects an API-created Agent with the same management state as the transaction read (#2775)", async () => {
+		// API 创建的 Agent 没有审批修订号；只有带 creationChannel: "api" 时 Core 才接受这种状态。
+		const api = stateFixture({
+			applicationId: "application_api_created",
+			agentId: "agent_api_created",
+			ownerIds: ["user_owner"],
+		});
+		await seedStates([api]);
+		await adminClient`update platform.agent_applications
+			set creation_channel = 'api', creator_principal_type = 'user',
+				creator_principal_id = 'user_owner', approval_revision = null
+			where agent_id = ${api.agentId}`;
+		// drizzle 会改写客户端的类型解析与序列化：用独立客户端，避免影响共享的 adminClient。
+		const reader = postgres(databaseUrl, { max: 1 });
+		const expected = await readAgentManagementState(
+			drizzle(reader) as unknown as Parameters<
+				typeof readAgentManagementState
+			>[0],
+			api.agentId,
+		).finally(() => reader.end());
+		expect(expected).toMatchObject({
+			creationChannel: "api",
+			approvalRevision: null,
+		});
+		const query = new PostgresAgentManagementQueryV1({ databaseUrl });
+		adapters.push(query);
+		const scope = { kind: "owner" as const, ownerId: "user_owner" };
+		const listed = await query.listAgents(scope, { limit: 10 });
+		const found = await query.getAgent(scope, api.agentId);
+		for (const management of [listed.items[0]?.management, found?.management]) {
+			expect(management).toEqual(expected);
+			expect(() =>
+				parseAgentManagementPortState(management as AgentManagementStateV1),
+			).not.toThrow();
+		}
 	});
 
 	it("returns bounded Agent projections to an administrator with stable pagination", async () => {

@@ -998,6 +998,39 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		return { work, itemId, store };
 	}
 
+	/** 把共享夹具 Agent 改成 API 创建（无审批修订号）；返回恢复函数，供用例结束时还原。 */
+	async function useApiCreatedAgent(agentId = "agent-dispatch") {
+		await client`update platform.agent_applications
+			set creation_channel = 'api', creator_principal_type = 'user',
+				creator_principal_id = 'owner-a', approval_revision = null
+			where agent_id = ${agentId}`;
+		return async () => {
+			await client`update platform.agent_applications
+				set creation_channel = 'web', creator_principal_type = null,
+					creator_principal_id = null, approval_revision = 1
+				where agent_id = ${agentId}`;
+		};
+	}
+
+	it("claims a Session Sandbox of an API-created Agent (#2775)", async () => {
+		const { itemId, store } = await seedSandboxPrepareIntent(
+			"sandbox-api-created",
+		);
+		const restore = await useApiCreatedAgent();
+		try {
+			const claim = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "sandbox-api-created-worker",
+				leaseDurationMs: 30_000,
+			});
+			expect(claim).not.toBeNull();
+		} finally {
+			await restore();
+			await store.close();
+		}
+	});
+
 	async function sandboxRetryState(itemId: string) {
 		const [row] = await client<
 			{
