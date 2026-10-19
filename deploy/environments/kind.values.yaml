@@ -32,3 +32,11 @@ workloadTopology:
 platformWorker:
   nativeMetadataGateway:
     enabled: false
+  # 设置保守的 requests 使本地 Worker Pod 从 BestEffort 升级为 Burstable（oom_score_adj 降低），
+  # 避免 VM 内存紧张时 OOM Killer 优先杀掉 Worker。
+  # 不设 limits 是有意为之：limits 会触发容器自身的 cgroup OOM，本地环境没有严格的资源配额需求；
+  # 只要有 requests，Kubernetes 就会将 Pod QoS 从 BestEffort 变为 Burstable。
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "100m"
