@@ -125,7 +125,7 @@ function nativeCapabilityBinding(value: unknown) {
 		(input.capabilityKind !== "command" && input.capabilityKind !== "skill") ||
 		!text(input.directoryRevision) ||
 		!text(input.capabilitySourceVersion) ||
-		!text(input.parameters) ||
+		(input.parameters !== "" && !text(input.parameters, 16 * 1024)) ||
 		!text(input.parametersDigest) ||
 		!/^[a-f0-9]{64}$/.test(String(input.directoryRevision)) ||
 		!/^[a-f0-9]{64}$/.test(String(input.parametersDigest))
