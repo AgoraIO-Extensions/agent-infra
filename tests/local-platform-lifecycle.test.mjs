@@ -493,6 +493,11 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			/apply --server-side --field-manager=agent-infra-local -f -/,
 		);
 		assert.match(up[9], /^helm .* upgrade --install agent-infra-verify /);
+		// 本地默认 values（Worker requests）排在私有 values 之前，私有 values 可以覆盖（#2883）。
+		assert.match(
+			up[9],
+			/--values \S*\/deploy\/local\/platform-worker\.local-defaults\.values\.yaml --values \S+/,
+		);
 		assert.match(
 			up[10],
 			/^helm .* get values agent-infra-verify --all --output json$/,
