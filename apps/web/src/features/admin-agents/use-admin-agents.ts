@@ -55,5 +55,17 @@ export function useAdminAgents({
 			? query.refetch({ cancelRefetch: false })
 			: Promise.resolve(undefined);
 	}
-	return { state, isFetching: allowed && query.isFetching, refetch };
+	/**
+	 * 用户明确要求重读（例如「重新登录」后会话仍有效）：denied（401/403）会锁住 refetch，
+	 * 这里重置本次查询解除锁定后重读一次（W-03），无权的读取仍由服务端拒绝；未锁定时
+	 * 等同 refetch。
+	 */
+	function reload() {
+		const current = queryClient.getQueryData<AdminAgentsState>(scope.queryKey);
+		if (!scope.active || !allowed) return Promise.resolve();
+		return current?.kind === "denied"
+			? queryClient.resetQueries({ queryKey: scope.queryKey, exact: true })
+			: query.refetch({ cancelRefetch: false });
+	}
+	return { state, isFetching: allowed && query.isFetching, refetch, reload };
 }

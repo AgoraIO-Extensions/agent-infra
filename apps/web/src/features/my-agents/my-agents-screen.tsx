@@ -45,6 +45,10 @@ import {
 	useAvailabilityNames,
 } from "../directory-names.js";
 import {
+	type TemplateNameLookup,
+	templateDisplayName,
+} from "../template-display-name.js";
+import {
 	agentApplicationEditActionLabels,
 	getAgentApplicationEditAction,
 	hasCreatedAgent,
@@ -70,6 +74,8 @@ type MyAgentsScreenProps = {
 	/** 由路由的 search 参数提供；未提供时页面自己记住当前 Tab。 */
 	tab?: MyAgentsTab;
 	onTabChange?: (tab: MyAgentsTab) => void;
+	/** 模板显示名（部署配置）；未提供或读不到时显示「标准模板」（F-02）。 */
+	templateName?: TemplateNameLookup;
 };
 
 /** 已创建 Agent 卡只显示一个状态：有服务可用性时显示它，否则显示管理状态（与 Agent 详情一致）。 */
@@ -97,6 +103,7 @@ export function MyAgentsScreen({
 	retryingOwnedAgents = false,
 	tab,
 	onTabChange,
+	templateName,
 }: MyAgentsScreenProps) {
 	const id = useId();
 	const [localTab, setLocalTab] = useState<MyAgentsTab>("applications");
@@ -127,8 +134,8 @@ export function MyAgentsScreen({
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">我的管理</p>
-					<h1 id={`${id}-heading`}>跟进申请，也维护你负责的 Agent。</h1>
-					<p>申请、Owner 权限和运行配置分开管理，状态会在服务端确认后更新。</p>
+					<h1 id={`${id}-heading`}>查看申请，管理名下 Agent。</h1>
+					<p>申请、Owner 权限和运行配置分别管理，状态以服务端结果为准。</p>
 				</div>
 				<Link className={buttonVariants()} to="/my-agents/new">
 					<Plus aria-hidden="true" />
@@ -221,7 +228,10 @@ export function MyAgentsScreen({
 															</Badge>
 															<Badge variant="tag">
 																{application.source.kind === "standard"
-																	? application.source.templateId
+																	? templateDisplayName(
+																			application.source.templateId,
+																			templateName,
+																		)
 																	: agentConversationSourceLabel(application)}
 															</Badge>
 														</div>

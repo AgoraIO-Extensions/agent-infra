@@ -1,145 +1,278 @@
-import { PlusIcon, Trash2Icon } from "lucide-react";
+import { KeyRoundIcon, PlusIcon, XIcon } from "lucide-react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Field } from "@/components/ui/field";
+import { Field, FieldError } from "@/components/ui/field";
 import { FormSection } from "@/components/ui/form-section";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+	NativeSelect,
+	NativeSelectOption,
+} from "@/components/ui/native-select";
+import { useToast } from "@/components/ui/toast";
+import { withObjectName } from "@/lib/accessible-name";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
-import type { AgentConfigurationSecretDraft } from "./agent-configuration-draft.js";
+import type { AgentConfigurationEnvironmentDraft } from "./agent-configuration-draft.js";
+import {
+	type SecretDialogTarget,
+	SecretReplaceDialog,
+} from "./secret-replace-dialog.js";
 
-type DraftField<T extends string> = {
-	key: T;
-	label: string;
-	required?: boolean;
-	type?: "password" | "text";
+type ConfigurationSecretsSectionProps = {
+	agent: AgentProjectionV2;
+	/** 标准模板开放的环境变量键；undefined 表示名称自由输入（自定义 Agent 或模板未读取）。 */
+	allowedEnvironmentKeys?: readonly string[];
+	/** 标准模板开放的 Secret 键；undefined 表示名称自由输入。 */
+	allowedSecretKeys?: readonly string[];
+	disabled: boolean;
+	environment: readonly AgentConfigurationEnvironmentDraft[];
+	/** 每行环境变量的字段错误（由整页保存校验给出）。 */
+	environmentErrors: Readonly<Record<number, string>>;
+	onEnvironmentChange: (
+		update: (
+			rows: readonly AgentConfigurationEnvironmentDraft[],
+		) => readonly AgentConfigurationEnvironmentDraft[],
+	) => void;
+	/** 替换或添加单个 Secret 的独立请求；未提供时不显示替换入口。 */
+	onReplaceSecret?: (name: string, value: string) => Promise<AgentProjectionV2>;
 };
 
-type DraftRowsProps<T extends string> = {
-	fields: readonly DraftField<T>[];
-	idPrefix: string;
-	label: string;
-	onChange: (index: number, key: T, value: string) => void;
-	onRemove: (index: number) => void;
-	rows: readonly Record<T, string>[];
-};
-
-function DraftRows<T extends string>({
-	fields,
-	idPrefix,
-	label,
-	onChange,
-	onRemove,
-	rows,
-}: DraftRowsProps<T>) {
-	return (
-		<>
-			{rows.map((row, index) => (
-				<div className="grid gap-3 sm:grid-cols-3" key={`${label}-${index}`}>
-					{fields.map((field) => (
-						<Field key={field.key}>
-							<Label
-								htmlFor={`configuration-${idPrefix}-${field.key}-${index}`}
-							>
-								{field.label}
-							</Label>
-							<Input
-								autoComplete={
-									field.type === "password" ? "new-password" : undefined
-								}
-								id={`configuration-${idPrefix}-${field.key}-${index}`}
-								onChange={(event) =>
-									onChange(index, field.key, event.target.value)
-								}
-								required={field.required}
-								type={field.type ?? "text"}
-								value={row[field.key]}
-							/>
-						</Field>
-					))}
-					<Button
-						variant="outline"
-						className="self-end"
-						onClick={() => onRemove(index)}
-						type="button"
-					>
-						<Trash2Icon aria-hidden="true" data-icon="inline-start" />
-						移除{label}
-					</Button>
-				</div>
-			))}
-		</>
-	);
+export function secretStatusText(secret: {
+	readonly isSet: boolean;
+	readonly version: number | null;
+}) {
+	if (!secret.isSet) return "未设置";
+	return secret.version === null
+		? "已设置"
+		: `已设置 · version ${secret.version}`;
 }
 
-const secretFields = [
-	{ key: "name", label: "Secret 名称", required: true },
-	{
-		key: "value",
-		label: "新 Secret 值",
-		required: true,
-		type: "password",
-	},
-] as const;
-
-/** 「Secrets」分区：已有 Secret 只显示状态与版本，新值只在本次提交中使用。 */
+/**
+ * 「环境变量与 Secret」分区（O-10）：环境变量可编辑并随整页保存；Secret 只读显示名称与
+ * 状态，替换走只写弹窗的独立请求，不进入页面草稿。
+ */
 export function ConfigurationSecretsSection({
 	agent,
-	onChange,
-	secrets,
-}: {
-	agent: AgentProjectionV2;
-	/** 以函数式更新修改草稿中的 Secret 行。 */
-	onChange: (
-		update: (
-			secrets: readonly AgentConfigurationSecretDraft[],
-		) => readonly AgentConfigurationSecretDraft[],
-	) => void;
-	secrets: readonly AgentConfigurationSecretDraft[];
-}) {
-	const currentSecrets = agent.configuration.secrets
-		.map(
-			(secret) =>
-				`${secret.name}（${secret.isSet ? "已设置" : "未设置"}${secret.version === null ? "" : `，版本 ${secret.version}`}）`,
-		)
-		.join("、");
+	allowedEnvironmentKeys,
+	allowedSecretKeys,
+	disabled,
+	environment,
+	environmentErrors,
+	onEnvironmentChange,
+	onReplaceSecret,
+}: ConfigurationSecretsSectionProps) {
+	const toast = useToast();
+	const [dialogTarget, setDialogTarget] = useState<SecretDialogTarget | null>(
+		null,
+	);
+	const triggerRef = useRef<HTMLElement | null>(null);
+	const secrets = agent.configuration.secrets;
+	const existingNames = secrets.map((secret) => secret.name);
+	const addableSecretKeys = allowedSecretKeys?.filter(
+		(key) => !existingNames.includes(key),
+	);
+	const canAddSecret =
+		onReplaceSecret !== undefined &&
+		(addableSecretKeys === undefined || addableSecretKeys.length > 0);
+	const openDialog = (target: SecretDialogTarget, trigger: HTMLElement) => {
+		triggerRef.current = trigger;
+		setDialogTarget(target);
+	};
+
 	return (
-		<FormSection title="Secrets">
-			<div className="mt-4 space-y-4">
-				<p className="text-muted-foreground text-sm">
-					{currentSecrets || "尚未配置 Secret"}
-				</p>
-				<p className="text-muted-foreground text-sm">
-					Secret 仅显示设置状态与版本。填写同名的新值进行替换，原值不会回显。
-				</p>
-				<DraftRows
-					fields={secretFields}
-					idPrefix="secret"
-					label="Secret"
-					onChange={(index, key, value) =>
-						onChange((current) =>
-							current.map((secret, secretIndex) =>
-								secretIndex === index ? { ...secret, [key]: value } : secret,
-							),
-						)
-					}
-					onRemove={(index) =>
-						onChange((current) =>
-							current.filter((_, secretIndex) => secretIndex !== index),
-						)
-					}
-					rows={secrets}
-				/>
+		<FormSection
+			title="环境变量与 Secret"
+			description="Secret 只显示名称、版本和状态；替换后生成新版本。"
+		>
+			<div className="configuration-environment-rows">
+				{environment.map((entry, index) => {
+					const nameId = `configuration-environment-name-${index}`;
+					const valueId = `configuration-environment-value-${index}`;
+					const errorId = `configuration-environment-error-${index}`;
+					const error = environmentErrors[index];
+					const nameOptions = allowedEnvironmentKeys
+						? [
+								...new Set([
+									...allowedEnvironmentKeys,
+									...(entry.name ? [entry.name] : []),
+								]),
+							]
+						: undefined;
+					const rowLabel = entry.name.trim() || `第 ${index + 1} 行`;
+					return (
+						<div className="configuration-field-row" key={index}>
+							<Field>
+								<Label htmlFor={nameId}>环境变量名</Label>
+								{nameOptions ? (
+									<NativeSelect
+										id={nameId}
+										disabled={disabled}
+										value={entry.name}
+										aria-invalid={error ? "true" : undefined}
+										aria-describedby={error ? errorId : undefined}
+										onChange={(event) =>
+											onEnvironmentChange((rows) =>
+												rows.map((row, rowIndex) =>
+													rowIndex === index
+														? { ...row, name: event.target.value }
+														: row,
+												),
+											)
+										}
+									>
+										<NativeSelectOption value="">请选择</NativeSelectOption>
+										{nameOptions.map((key) => (
+											<NativeSelectOption key={key} value={key}>
+												{key}
+											</NativeSelectOption>
+										))}
+									</NativeSelect>
+								) : (
+									<Input
+										id={nameId}
+										disabled={disabled}
+										value={entry.name}
+										autoComplete="off"
+										spellCheck={false}
+										aria-invalid={error ? "true" : undefined}
+										aria-describedby={error ? errorId : undefined}
+										onChange={(event) =>
+											onEnvironmentChange((rows) =>
+												rows.map((row, rowIndex) =>
+													rowIndex === index
+														? { ...row, name: event.target.value }
+														: row,
+												),
+											)
+										}
+									/>
+								)}
+								{error ? <FieldError id={errorId}>{error}</FieldError> : null}
+							</Field>
+							<Field>
+								<Label htmlFor={valueId}>值</Label>
+								<Input
+									id={valueId}
+									disabled={disabled}
+									value={entry.value}
+									autoComplete="off"
+									spellCheck={false}
+									onChange={(event) =>
+										onEnvironmentChange((rows) =>
+											rows.map((row, rowIndex) =>
+												rowIndex === index
+													? { ...row, value: event.target.value }
+													: row,
+											),
+										)
+									}
+								/>
+							</Field>
+							<Button
+								type="button"
+								variant="ghost"
+								disabled={disabled}
+								aria-label={withObjectName("移除", rowLabel)}
+								onClick={() =>
+									onEnvironmentChange((rows) =>
+										rows.filter((_, rowIndex) => rowIndex !== index),
+									)
+								}
+							>
+								<XIcon aria-hidden="true" data-icon="inline-start" />
+								移除
+							</Button>
+						</div>
+					);
+				})}
+			</div>
+			<div className="configuration-section-actions">
 				<Button
-					variant="outline"
-					onClick={() =>
-						onChange((current) => [...current, { name: "", value: "" }])
-					}
 					type="button"
+					variant="outline"
+					disabled={disabled}
+					onClick={() =>
+						onEnvironmentChange((rows) => [...rows, { name: "", value: "" }])
+					}
 				>
 					<PlusIcon aria-hidden="true" data-icon="inline-start" />
-					添加 Secret
+					添加环境变量
 				</Button>
 			</div>
+			<div className="configuration-secret-rows">
+				{secrets.length === 0 ? (
+					<p className="text-muted-foreground text-sm">尚未配置 Secret。</p>
+				) : null}
+				{secrets.map((secret, index) => {
+					const nameId = `configuration-secret-name-${index}`;
+					const statusId = `configuration-secret-status-${index}`;
+					return (
+						<div className="configuration-field-row" key={secret.name}>
+							<Field>
+								<Label htmlFor={nameId}>Secret 名称</Label>
+								<Input id={nameId} readOnly value={secret.name} />
+							</Field>
+							<Field>
+								<Label htmlFor={statusId}>当前状态</Label>
+								<Input
+									id={statusId}
+									readOnly
+									value={secretStatusText(secret)}
+								/>
+							</Field>
+							{onReplaceSecret ? (
+								<Button
+									type="button"
+									variant="outline"
+									disabled={disabled}
+									aria-label={withObjectName("替换 Secret", secret.name)}
+									onClick={(event) =>
+										openDialog(
+											{ mode: "replace", name: secret.name },
+											event.currentTarget,
+										)
+									}
+								>
+									<KeyRoundIcon aria-hidden="true" data-icon="inline-start" />
+									替换 Secret
+								</Button>
+							) : null}
+						</div>
+					);
+				})}
+			</div>
+			{canAddSecret ? (
+				<div className="configuration-section-actions">
+					<Button
+						type="button"
+						variant="outline"
+						disabled={disabled}
+						onClick={(event) =>
+							openDialog({ mode: "add" }, event.currentTarget)
+						}
+					>
+						<PlusIcon aria-hidden="true" data-icon="inline-start" />
+						添加 Secret
+					</Button>
+				</div>
+			) : null}
+			{onReplaceSecret ? (
+				<SecretReplaceDialog
+					target={dialogTarget}
+					allowedNames={allowedSecretKeys}
+					existingNames={existingNames}
+					finalFocus={triggerRef}
+					onClose={() => setDialogTarget(null)}
+					onSubmit={onReplaceSecret}
+					onSaved={(_name, version) =>
+						toast(
+							version === null
+								? "Secret 已写入，等待 Worker 激活"
+								: `Secret 已写入 pending version ${version}，等待 Worker 激活`,
+						)
+					}
+				/>
+			) : null}
 		</FormSection>
 	);
 }

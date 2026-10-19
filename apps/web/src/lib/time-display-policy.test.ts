@@ -5,15 +5,11 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
 const sourceRoot = fileURLToPath(new URL("..", import.meta.url));
-// 对话页的时间调用点由对话页 Issue 迁移；迁移后从这里删除对应文件，不得新增条目。
-const pendingConversationMigrations = new Set([
-	"features/conversation/browser-audit-view.tsx",
-]);
+// 只有格式化模块本身、生成代码与测试可以直接调用；不设页面白名单。
 const allowed = (path: string) =>
 	path === "lib/format-time.ts" ||
 	path.startsWith("pilot/generated") ||
-	/\.(test|spec)\.[jt]sx?$/.test(path) ||
-	pendingConversationMigrations.has(path);
+	/\.(test|spec)\.[jt]sx?$/.test(path);
 
 function sourceFiles(directory: string): string[] {
 	return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {

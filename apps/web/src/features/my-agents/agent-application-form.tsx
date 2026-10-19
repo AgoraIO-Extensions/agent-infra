@@ -14,6 +14,8 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { cjkSpaced } from "@/lib/cjk-spacing";
+import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import type {
 	AgentApplicationCreateRequestV2Writable,
 	AgentApplicationProjectionV2,
@@ -491,7 +493,7 @@ function ModelRows({
 													);
 												}}
 											/>
-											{level}
+											{reasoningLevelLabel(level)}
 										</Label>
 									);
 								})}
@@ -610,7 +612,8 @@ function DraftRows<T extends string>({
 							type="button"
 						>
 							<Trash2Icon aria-hidden="true" data-icon="inline-start" />
-							移除{label}
+							{/* label 以拉丁字母开头时补空格：「移除 Secret」「移除环境变量」。 */}
+							{cjkSpaced`移除${label}`}
 						</Button>
 					) : null}
 				</fieldset>
@@ -1719,6 +1722,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 											<Select
 												value={defaultReasoningLevel}
 												disabled={!defaultModelDefinition}
+												// 推理档位只显示中文，原始枚举不进入页面。
+												itemToStringLabel={(value) =>
+													reasoningLevelLabel(String(value))
+												}
 												onValueChange={(value) => {
 													if (!value) return;
 													setDefaultReasoningLevel(value);
@@ -1741,7 +1748,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 												<SelectContent>
 													{defaultReasoningLevels.map((value) => (
 														<SelectItem key={value} value={value}>
-															{value}
+															{reasoningLevelLabel(value)}
 														</SelectItem>
 													))}
 												</SelectContent>
@@ -1937,8 +1944,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								? "正在提交…"
 								: props.mode === "update"
 									? agentApplicationEditActionLabels[props.action]
-									: "提交申请"}
-							{/* 设计 .form-footer 主按钮：16px 箭头在文字后。 */}
+									: "提交审批"}
+							{/* 设计 .form-footer 主按钮「提交审批 →」：16px 箭头在文字后（M-10）。 */}
 							{props.submitting ? null : (
 								<ArrowRightIcon aria-hidden="true" data-icon="inline-end" />
 							)}

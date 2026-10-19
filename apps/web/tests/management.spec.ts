@@ -28,6 +28,7 @@ import {
 	expectFieldLabel,
 	expectFormSection,
 	expectNoLegendOnBorder,
+	expectPageHeadTop,
 	expectSearchInput,
 	resolved,
 } from "./primitive-styles";
@@ -62,7 +63,8 @@ const deploymentConfiguration: DeploymentConfigurationProjectionV2 = {
 	status: "populated",
 	templates: [
 		{
-			allowedEnvironmentKeys: ["LOG_LEVEL"],
+			// Agent 现有环境变量 WORKSPACE_NAME 必须是模板开放的键，否则服务端不接受整表保存（O-10）。
+			allowedEnvironmentKeys: ["LOG_LEVEL", "WORKSPACE_NAME"],
 			allowedSecretKeys: ["MODEL_API_KEY"],
 			connectionEnabled: false,
 			displayName: "Codex",
@@ -547,10 +549,37 @@ async function fixture(
 				description: `无空格说明：${"longtoken".repeat(32)}`,
 			});
 		},
-		longApplicationTemplateId(templateId: string) {
+		longApplicationTemplateId(templateId: string, displayName: string) {
 			application = AgentApplicationProjectionV2Schema.parse({
 				...application,
 				source: { kind: "standard", templateId },
+			});
+			// 页面只显示部署配置登记的模板显示名（F-02），长显示名同样要在面板内换行。
+			deployment = {
+				...deployment,
+				templates: [
+					...deployment.templates,
+					{ ...deploymentConfiguration.templates[0], templateId, displayName },
+				],
+			};
+		},
+		/** 待审批申请带一个可选模型，用于核对审阅弹窗的「模型」行（F-02）。 */
+		applicationModelOptions() {
+			application = AgentApplicationProjectionV2Schema.parse({
+				...application,
+				configuration: {
+					...application.configuration,
+					modelOptions: [
+						{
+							optionId: "model-primary",
+							modelId: "gpt-5",
+							displayName: "Primary model",
+							reasoningLevels: ["medium", "high"],
+						},
+					],
+					defaultModelOptionId: "model-primary",
+					defaultReasoningLevel: "medium",
+				},
 			});
 		},
 
@@ -750,7 +779,7 @@ test("creation footer cancel supports deep links, refresh, click, keyboard and b
 	await footerCancel.click();
 	await expect(page).toHaveURL(/\/my-agents$/);
 	await expect(
-		page.getByRole("heading", { name: "跟进申请，也维护你负责的 Agent。" }),
+		page.getByRole("heading", { name: "查看申请，管理名下 Agent。" }),
 	).toBeVisible();
 	expect(api.commands).toHaveLength(0);
 
@@ -777,7 +806,7 @@ test("creation footer cancel supports deep links, refresh, click, keyboard and b
 	await page.keyboard.press("Enter");
 	await expect(page).toHaveURL(/\/my-agents$/);
 	await expect(
-		page.getByRole("heading", { name: "跟进申请，也维护你负责的 Agent。" }),
+		page.getByRole("heading", { name: "查看申请，管理名下 Agent。" }),
 	).toBeVisible();
 	expect(api.commands).toHaveLength(0);
 });
@@ -788,7 +817,7 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	const api = await fixture(page);
 	await page.goto("/my-agents/new");
 	const create = page.getByRole("button", {
-		name: "提交申请",
+		name: "提交审批",
 		exact: true,
 	});
 	await create.click();
@@ -921,7 +950,7 @@ test("directory search and transient submission recover on desktop and mobile", 
 	await page.goto("/my-agents/new");
 	const name = page.getByLabel("Agent 名称");
 	const ownerInput = page.getByRole("combobox", { name: "共同 Owner 用户" });
-	const submit = page.getByRole("button", { name: "提交申请", exact: true });
+	const submit = page.getByRole("button", { name: "提交审批", exact: true });
 	await name.fill("中文发布 Agent");
 	await page.getByLabel("用途说明", { exact: true }).fill("用于中文发布验收");
 	await page.getByRole("combobox", { name: "Agent 来源" }).click();
@@ -971,7 +1000,7 @@ test("stale deployment options block submission in the browser", async ({
 	await page.goto("/my-agents/new");
 	await page.getByLabel("Agent 名称").fill("中文模板 Agent");
 	await page.getByLabel("用途说明", { exact: true }).fill("验证过期部署选项");
-	await page.getByRole("button", { name: "提交申请", exact: true }).click();
+	await page.getByRole("button", { name: "提交审批", exact: true }).click();
 	await expect(page.locator("#application-template-id-error")).toHaveText(
 		"部署选项已过期，请重新加载后再提交。",
 	);
@@ -1004,7 +1033,7 @@ test("authorization rejection keeps non-sensitive input and clears Secret", asyn
 	await page.getByLabel("Secret 名称").fill("TEST_SECRET");
 	await page.getByLabel("替换值").fill("synthetic-rejected-value");
 	api.rejectNextApplication("AUTHORIZATION_REVOKED");
-	await page.getByRole("button", { name: "提交申请", exact: true }).click();
+	await page.getByRole("button", { name: "提交审批", exact: true }).click();
 	await expect(page.getByRole("alert")).toContainText("当前不可用");
 	await expect(page.getByLabel("Agent 名称")).toHaveValue("中文权限 Agent");
 	await expect(page.getByLabel("替换值")).toHaveCount(0);
@@ -1018,7 +1047,7 @@ test("authorization rejection keeps non-sensitive input and clears Secret", asyn
 	await page.keyboard.press("Enter");
 	await expect(page).toHaveURL(/\/my-agents$/);
 	await expect(
-		page.getByRole("heading", { name: "跟进申请，也维护你负责的 Agent。" }),
+		page.getByRole("heading", { name: "查看申请，管理名下 Agent。" }),
 	).toBeVisible();
 	expect(api.commands).toHaveLength(1);
 });
@@ -1132,10 +1161,29 @@ test("administrator rejection, approval, empty queue and pending controls", asyn
 	});
 });
 
+test("approvals page head places the h1 at the design height while Owner configuration keeps its back-link spacing", async ({
+	page,
+}, info) => {
+	await fixture(page, "admin");
+	await page.goto("/admin/approvals");
+	await expect(
+		page.getByRole("heading", { level: 1, name: "审批申请" }),
+	).toBeVisible();
+	// 设计 .page-head-copy .eyebrow 上外边距为 0，h1 与设计同高（±1px）。
+	await expectPageHeadTop(page, info.project.name === "mobile");
+	await fixture(page, "owner");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const heading = page.locator("main .page-heading").first();
+	await expect(heading.getByRole("heading", { level: 1 })).toBeVisible();
+	// Owner 配置的 eyebrow 前面有返回链接，不属于「第一个子元素」，保留原有上外边距。
+	await expect(heading.locator(".page-eyebrow")).toHaveCSS("margin-top", "9px");
+});
+
 test("approval review dialog follows the design facts, notice and footer", async ({
 	page,
 }) => {
-	await fixture(page, "admin");
+	const api = await fixture(page, "admin");
+	api.applicationModelOptions();
 	const narrow = test.info().project.name === "mobile";
 	await page.goto("/admin/approvals");
 	await page.getByRole("button", { name: /^审阅：/ }).click();
@@ -1219,9 +1267,57 @@ test("approval review dialog follows the design facts, notice and footer", async
 		await expect(dialog.getByRole("button", { name, exact: true })).toHaveCount(
 			0,
 		);
-	// F-02：模型以显示名为主，modelId 只作等宽次要文字；默认模型不出现 optionId 原值。
-	await expect(dialog).not.toContainText("（gpt-5）");
+	// F-02：模型行按设计为「显示名 · 档位」，不显示 modelId；默认模型不出现 optionId 原值。
+	await expect(dialog).not.toContainText("gpt-5");
 	await expect(dialog).not.toContainText("model-primary");
+	const modelRow = dialog.locator("dt", { hasText: /^模型$/ });
+	await expect(modelRow.locator("xpath=following-sibling::dd[1]")).toHaveText(
+		"Primary model · 均衡、高",
+	);
+	// 模板写部署配置的显示名，不显示原始 templateId。
+	await expect(
+		dialog
+			.locator("dt", { hasText: /^模板$/ })
+			.locator("xpath=following-sibling::dd[1]"),
+	).toHaveText("Codex");
+	await expect(dialog).not.toContainText("codex");
+});
+
+test("application detail model range matches the review dialog without modelId", async ({
+	page,
+}) => {
+	const api = await fixture(page, "owner");
+	api.applicationModelOptions();
+	await page.goto("/my-agents/application-browser-1");
+	const facts = page.locator(".application-detail-aside .metadata-facts");
+	await expect(facts).toBeVisible();
+	// 与审批弹窗「模型」行一致：「显示名 · 档位」，不外露 modelId。
+	await expect(
+		facts
+			.locator("dt", { hasText: /^模型范围$/ })
+			.locator("xpath=following-sibling::dd[1]"),
+	).toHaveText("Primary model · 均衡、高");
+	await expect(page.locator("main")).not.toContainText("gpt-5");
+});
+
+test("approval table source column and filter use template display names (F-02)", async ({
+	page,
+}) => {
+	const api = await fixture(page, "admin");
+	await page.goto("/admin/approvals");
+	const row = page
+		.getByRole("row")
+		.filter({ hasText: pendingApplication.name });
+	await expect(row.locator('[data-label="来源 / Owner"]')).toContainText(
+		"Codex",
+	);
+	await expect(page.locator("main table")).not.toContainText("codex");
+	const options = await page
+		.getByRole("combobox", { name: "来源", exact: true })
+		.locator("option")
+		.allTextContents();
+	expect(options).toEqual(["全部来源", "Codex"]);
+	expect(api.commands).toHaveLength(0);
 });
 
 test("administrator can recover a temporarily unavailable pending queue", async ({
@@ -1257,28 +1353,27 @@ test("administrator authorization failure does not offer a pending-queue retry",
 	);
 });
 
-test("Owner configuration, Secret clearing, lifecycle and custom image upgrade", async ({
+test("Owner configuration save, lifecycle and custom image upgrade", async ({
 	page,
 }, info) => {
 	const api = await fixture(page);
 	await page.goto("/agents/agent-pilot-1");
-	await page.getByRole("link", { name: "配置与管理" }).click();
+	await page.getByRole("link", { name: "Owner 配置" }).click();
 	const replaceModels = page.getByRole("checkbox", {
 		name: "替换模型配置",
 	});
 	await replaceModels.focus();
 	await page.keyboard.press("Space");
 	await expect(replaceModels).toBeChecked();
-	await expect(page.getByLabel("替换 Agent 默认 Relay Key")).toHaveValue("");
+	// 默认 Key 不再有页内常驻输入框，替换在弹窗中进行（G-09）。
+	await expect(
+		page.locator('[data-od-id="owner-default-relay-key"] input'),
+	).toHaveCount(0);
 	await page.keyboard.press("Space");
 	await expect(replaceModels).not.toBeChecked();
-	await page.getByRole("button", { name: "添加 Secret" }).click();
-	await page.getByLabel("Secret 名称").fill("RELEASE_KEY");
-	await page.getByLabel("新 Secret 值").fill("synthetic-browser-secret");
-	await expect(page.getByLabel("新 Secret 值")).toHaveAttribute(
-		"type",
-		"password",
-	);
+	// Secret 只读显示、经只写弹窗单独替换（O-10），整页保存只提交普通值。
+	await expect(page.getByLabel("新 Secret 值")).toHaveCount(0);
+	await page.getByLabel("值", { exact: true }).fill("synthetic-browser-value");
 	await expect(page.getByText(/群消息和 Agent 回复对群成员可见/)).toBeVisible();
 	// 企微卡片按设计标题命名区域（O-07）。
 	await expect(
@@ -1286,22 +1381,20 @@ test("Owner configuration, Secret clearing, lifecycle and custom image upgrade",
 	).toBeVisible();
 	await capture(page, info, "owner-configuration");
 	api.holdNextCommand();
-	await page.getByRole("button", { name: "校验并保存" }).click();
-	await expect(
-		page.getByRole("button", { name: "校验并保存中…" }),
-	).toBeDisabled();
+	await page.getByRole("button", { name: "保存配置" }).click();
+	await expect(page.getByRole("button", { name: "保存中…" })).toBeDisabled();
 	await expect(replaceModels).toBeDisabled();
-	await expect(page.getByLabel("新 Secret 值")).toHaveCount(0);
 	api.release();
-	await expect(pageStatus(page)).toBeFocused();
-	await expect(page.locator("body")).not.toContainText(
-		"synthetic-browser-secret",
-	);
+	// RK2-09：保存成功后页面保留并给 Toast，不再用「配置已提交」替换表单。
+	await expect(toastHost(page)).toHaveText("配置已保存，Secret 值不会回显");
+	await expect(page.locator("#main-content")).not.toContainText("配置已提交");
+	await expect(page.getByRole("button", { name: "保存配置" })).toBeVisible();
 	expect(api.commands[0]?.body).toMatchObject({
 		schemaVersion: 2,
 		coOwnerIds: ["user-owner-1"],
-		secrets: [{ name: "RELEASE_KEY", value: "synthetic-browser-secret" }],
+		environment: [{ name: "WORKSPACE_NAME", value: "synthetic-browser-value" }],
 	});
+	expect(api.commands[0]?.body).not.toHaveProperty("secrets");
 	await page.goto("/agents/agent-pilot-1/configuration");
 	await capture(page, info, "lifecycle");
 	api.holdNextCommand();
@@ -1357,7 +1450,7 @@ test("employee has no Owner or administrator controls, with loading and error st
 	await expect(
 		page.getByRole("heading", { name: "Release assistant", exact: true }),
 	).toBeVisible();
-	await expect(page.getByRole("link", { name: "配置与管理" })).toHaveCount(0);
+	await expect(page.getByRole("link", { name: "Owner 配置" })).toHaveCount(0);
 	await expect(
 		page.getByRole("button", { name: /停止 Agent|重启 Agent|停用 Agent/ }),
 	).toHaveCount(0);
@@ -1391,9 +1484,16 @@ test("employee has no Owner or administrator controls, with loading and error st
 	await expect(page.getByText("正在加载 Agent…")).toBeVisible();
 	await capture(page, info, "agents-loading");
 	release?.();
-	await expect(page.getByRole("alert")).toHaveText(
-		"Agent 列表暂时无法访问，请联系管理员。",
-	);
+	// A-03：403 是权限边界，显示「未授权」状态卡与「返回工作台」，不用 role="alert"。
+	await expect(
+		page.getByRole("heading", { level: 2, name: "未授权", exact: true }),
+	).toBeVisible();
+	await expect(
+		page.locator('#main-content [data-slot="state-card"]').getByRole("link", {
+			name: "返回工作台",
+		}),
+	).toHaveAttribute("href", "/");
+	await expect(page.getByRole("alert")).toHaveCount(0);
 	await capture(page, info, "agents-unavailable");
 });
 
@@ -1414,6 +1514,21 @@ test("mobile navigation traps focus and returns it on Escape", async ({
 	await expect(dialog).toHaveAttribute("aria-modal", "true");
 	// 打开后焦点落在品牌链接（N-09）。
 	await expect(dialog.locator(".platform-brand")).toBeFocused();
+	// 「关闭导航」与品牌链接的命中区互不重叠，点品牌任意位置都回工作台而不是关闭导航。
+	const brandBox = await dialog.locator(".platform-brand").boundingBox();
+	const closeBox = await dialog
+		.getByRole("button", { name: "关闭导航" })
+		.boundingBox();
+	expect(brandBox && closeBox).toBeTruthy();
+	if (brandBox && closeBox) {
+		const overlapX =
+			Math.min(brandBox.x + brandBox.width, closeBox.x + closeBox.width) -
+			Math.max(brandBox.x, closeBox.x);
+		const overlapY =
+			Math.min(brandBox.y + brandBox.height, closeBox.y + closeBox.height) -
+			Math.max(brandBox.y, closeBox.y);
+		expect(overlapX <= 0 || overlapY <= 0).toBe(true);
+	}
 	await expect(dialog).toHaveCSS("padding", "22px 14px 16px");
 	// Tailwind 阴影会带上透明的 ring 层；可见层必须等于设计 --shadow。
 	const shadows = (
@@ -1467,9 +1582,7 @@ test("administrator shell chrome follows the design values without squeezing the
 	await page.setViewportSize({ width: 1440, height: 900 });
 	await fixture(page, "admin");
 	await page.goto("/admin/approvals");
-	await expect(
-		page.getByRole("heading", { name: "把资源审批做得更快，也更可核对。" }),
-	).toBeVisible();
+	await expect(page.getByRole("heading", { name: "审批申请" })).toBeVisible();
 	await expect(page).toHaveTitle("创建审批 · Agora Agent");
 	const sidebar = page.locator(".platform-sidebar");
 	// S-04/S-05：管理员导航项更多时品牌块仍为设计高度，且不参与 flex 收缩。
@@ -1621,7 +1734,7 @@ for (const viewport of [
 		for (const { path, actions } of [
 			{ path: "/agents", actions: ["创建申请"] },
 			{ path: "/my-agents", actions: ["新建申请"] },
-			{ path: "/agents/agent-pilot-1", actions: ["开始对话", "配置与管理"] },
+			{ path: "/agents/agent-pilot-1", actions: ["开始对话", "Owner 配置"] },
 			{
 				path: "/agents/agent-pilot-1/configuration",
 				actions: ["返回 Agent 详情"],
@@ -1714,9 +1827,7 @@ test("management pages remain reachable at 200% zoom equivalent widths", async (
 	}
 	await fixture(page, "admin");
 	await page.goto("/admin/approvals");
-	await expect(
-		page.getByRole("heading", { name: "把资源审批做得更快，也更可核对。" }),
-	).toBeVisible();
+	await expect(page.getByRole("heading", { name: "审批申请" })).toBeVisible();
 	for (const width of [160, 200, 215, 320, 390, 430, 768, 1024, 1440]) {
 		await page.setViewportSize({ width, height: width <= 430 ? 844 : 1000 });
 		await expect
@@ -1753,9 +1864,7 @@ test.describe("short management viewport", () => {
 		}
 		await fixture(page, "admin");
 		await page.goto("/admin/approvals");
-		await expect(
-			page.getByRole("heading", { name: "把资源审批做得更快，也更可核对。" }),
-		).toBeVisible();
+		await expect(page.getByRole("heading", { name: "审批申请" })).toBeVisible();
 		await capture(page, info, "short-approvals");
 	});
 });
@@ -1813,7 +1922,7 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 			);
 	});
 	await page.goto("/agents/agent-pilot-1");
-	await page.getByRole("link", { name: "配置与管理" }).click();
+	await page.getByRole("link", { name: "Owner 配置" }).click();
 	// CK-09：扫码入口不要求先勾选「我已知悉」；O-08：不可用时显示面板，不打开窗口。
 	const qrTrigger = page.getByRole("button", { name: "扫码授权" });
 	await qrTrigger.click();
@@ -1874,6 +1983,98 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	await capture(page, info, "wecom-connected");
 });
 
+test("Owner opens the bot QR window without the manual acknowledgement and confirms the impact in the panel (CK-09)", async ({
+	page,
+}) => {
+	await fixture(page);
+	const session = {
+		sessionId: "qr-setup",
+		agentId: "agent-pilot-1",
+		configurationRevision: 1,
+		expiresAt: new Date(Date.now() + 300000).toISOString(),
+	};
+	const authOrigin = "https://wecom-auth.example.test";
+	let active = false;
+	const submitted: unknown[] = [];
+	await page.route(/\/api\/v1\/agents\/[^/]+\/wecom-/, async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (path.endsWith("/wecom-bot"))
+			return route.fulfill({
+				json: { status: active ? "connected" : "not_configured" },
+			});
+		if (path.endsWith("/wecom-app"))
+			return route.fulfill({ json: { status: "not_configured" } });
+		if (path.endsWith("/wecom-setup"))
+			return route.fulfill({
+				json: {
+					...session,
+					status: "awaiting_input",
+					state: "qr-state",
+					qrAvailable: true,
+					qr: {
+						authorizationUrl: `${authOrigin}/authorize`,
+						authOrigin,
+						source: "agent-infra",
+						state: "qr-state",
+					},
+				},
+			});
+		if (path.endsWith("/credentials")) {
+			submitted.push(route.request().postDataJSON());
+			active = true;
+			return route.fulfill({ json: { ...session, status: "verifying" } });
+		}
+		if (path.endsWith("/cancel"))
+			return route.fulfill({ json: { ...session, status: "cancelled" } });
+		return route.fulfill({ json: { ...session, status: "active" } });
+	});
+	// 受控的授权页：扫码完成后把结果发回打开它的配置页（只含合成凭证）。
+	await page.context().route(`${authOrigin}/**`, (route) =>
+		route.fulfill({
+			contentType: "text/html",
+			body: `<script>window.opener.postMessage({source:"agent-infra",state:"qr-state",botId:"qr-bot",secret:"synthetic-qr-secret"},"*");</script>`,
+		}),
+	);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const bot = page.getByRole("region", { name: "企微机器人", exact: true });
+	const acknowledgement = bot.getByRole("checkbox", {
+		name: "我已知悉：连接此机器人可能断开它在其他服务中的现有连接。",
+	});
+	await bot.getByRole("button", { name: "扫码授权" }).click();
+	// 扫码前不需要勾选上方「我已知悉」。
+	const openWindow = bot.getByRole("button", { name: "打开扫码窗口" });
+	await expect(openWindow).toBeEnabled();
+	await expect(acknowledgement).not.toBeChecked();
+	await expect(bot).not.toContainText("请先勾选");
+	const popup = page.waitForEvent("popup");
+	await openWindow.click();
+	await popup;
+	// 扫码完成后在面板内就地确认影响；确认前不提交凭证，Secret 不进入页面。
+	const confirm = bot.getByRole("button", { name: "确认并绑定" });
+	await expect(confirm).toBeFocused();
+	await expect(confirm).toHaveAccessibleDescription(
+		/^连接此机器人可能断开它在其他服务中的现有连接。/,
+	);
+	await expect(
+		bot.getByRole("button", { name: "验证并绑定：企微机器人" }),
+	).toBeDisabled();
+	await page.waitForTimeout(300);
+	expect(submitted).toEqual([]);
+	expect(await page.content()).not.toContain("synthetic-qr-secret");
+	await confirm.click();
+	await expect(bot.getByText("已连接", { exact: true })).toBeVisible();
+	expect(submitted).toEqual([
+		{
+			state: "qr-state",
+			botId: "qr-bot",
+			secret: "synthetic-qr-secret",
+			takeoverConfirmed: true,
+		},
+	]);
+	await expect(confirm).toHaveCount(0);
+	await expect(acknowledgement).not.toBeChecked();
+});
+
 test("owned Agent tab consumes the authorized collection and supports keyboard navigation", async ({
 	page,
 }, info) => {
@@ -1917,8 +2118,11 @@ test("retryable management reads recover through explicit browser actions", asyn
 	api.unavailableAgentList();
 	await page.goto("/agents");
 	await expect(page.getByRole("alert")).toContainText(
-		"Agent 列表暂时无法读取，请稍后重试。",
+		"暂时无法读取 Agent 列表，请稍后重试。",
 	);
+	await expect(
+		page.getByRole("alert").getByRole("heading", { name: "服务暂不可用" }),
+	).toBeVisible();
 	const agentRetry = page.getByRole("button", { name: "重新加载 Agent" });
 	api.recoverAgentList();
 	await agentRetry.click();
@@ -1948,8 +2152,9 @@ test("retryable management reads recover through explicit browser actions", asyn
 
 	api.unavailableAgentDetail();
 	await page.goto("/agents/agent-pilot-1");
+	// P-01：详情读取失败改为公共状态卡，可重试时仍为 role="alert"。
 	await expect(page.getByRole("alert")).toContainText(
-		"暂时无法读取 Agent 信息，请稍后重试。",
+		"暂时无法读取 Agent，请稍后重试。",
 	);
 	api.recoverAgentDetail();
 	await page.getByRole("button", { name: "重新加载 Agent" }).click();
@@ -1964,25 +2169,35 @@ test("authorization failures do not offer retry actions for Agent reads", async 
 	const api = await fixture(page);
 	api.unauthorizedAgentList();
 	await page.goto("/agents");
-	await expect(page.getByRole("alert")).toHaveText(
-		"Agent 列表暂时无法访问，请联系管理员。",
-	);
+	await expect(
+		page.getByRole("heading", { level: 2, name: "未授权", exact: true }),
+	).toBeVisible();
+	await expect(
+		page.getByText("Agent 列表暂时无法访问，请联系管理员。"),
+	).toHaveCount(0);
 	await expect(
 		page.getByRole("button", { name: "重新加载 Agent" }),
 	).toHaveCount(0);
 
 	api.unauthorizedAgentDetail();
 	await page.goto("/agents/agent-pilot-1");
-	await expect(page.getByRole("alert")).toHaveText("此 Agent 暂时无法访问。");
+	// P-01：403 与 404 为同一张「无法访问」状态卡（静态边界，不设 role），只给返回入口。
+	const detailCard = page.locator('#main-content [data-slot="state-card"]');
+	await expect(detailCard).toHaveAttribute("data-kind", "unauthorized");
+	await expect(detailCard).toHaveText(
+		"无法访问Agent 不存在，或你没有访问权限。返回 Agent 目录",
+	);
 	await expect(
 		page.getByRole("button", { name: "重新加载 Agent" }),
 	).toHaveCount(0);
 
 	await page.goto("/agents/agent-pilot-1/configuration");
 	await expect(
-		page.getByRole("heading", { name: "配置暂不可用" }),
+		page.getByRole("heading", { level: 1, name: "Owner 配置" }),
 	).toBeVisible();
-	await expect(page.getByRole("alert")).toHaveText("请联系管理员。");
+	await expect(detailCard).toHaveText(
+		"无法访问Agent 不存在，或你没有访问权限。返回 Agent 详情",
+	);
 	await expect(page.getByRole("button", { name: "重新加载配置" })).toHaveCount(
 		0,
 	);
@@ -2013,10 +2228,16 @@ test("configuration reads recover through the explicit browser action", async ({
 	const api = await fixture(page);
 	api.unavailableAgentDetail();
 	await page.goto("/agents/agent-pilot-1/configuration");
+	// P-01：页头保留页面名，失败原因由「服务暂不可用」状态卡说明。
 	await expect(
-		page.getByRole("heading", { name: "配置暂不可用" }),
+		page.getByRole("heading", { level: 1, name: "Owner 配置" }),
 	).toBeVisible();
-	await expect(page.getByRole("alert")).toHaveText("请稍后重试。");
+	await expect(
+		page.getByRole("alert").getByRole("heading", { name: "服务暂不可用" }),
+	).toBeVisible();
+	await expect(page.getByRole("alert")).toContainText(
+		"暂时无法读取 Owner 配置，请稍后重试。",
+	);
 	api.recoverAgentDetail();
 	await page.getByRole("button", { name: "重新加载配置" }).click();
 	await expect(
@@ -2032,8 +2253,12 @@ test("application detail reads recover through the explicit browser action", asy
 	const api = await fixture(page);
 	api.unavailableApplicationDetail();
 	await page.goto("/my-agents/application-browser-1");
+	// P-01：页头保留页面名，失败原因由「服务暂不可用」状态卡说明。
 	await expect(
-		page.getByRole("heading", { name: "申请详情暂不可用" }),
+		page.getByRole("heading", { level: 1, name: "申请详情" }),
+	).toBeVisible();
+	await expect(
+		page.getByRole("alert").getByRole("heading", { name: "服务暂不可用" }),
 	).toBeVisible();
 	await expect(page.getByRole("alert")).toContainText(
 		"暂时无法读取申请，请稍后重试。",
@@ -2303,9 +2528,12 @@ test("directory detail binds the selected Agent and hides a previously visible r
 	).toBeVisible();
 	api.misbindAgentDetail();
 	await page.reload();
+	// P-01：返回了另一个 Agent 视为响应无效，显示「数据无法读取」卡且没有操作。
 	await expect(
-		page.getByRole("heading", { name: "暂时无法访问 Agent" }),
+		page.getByRole("alert").getByRole("heading", { name: "数据无法读取" }),
 	).toBeVisible();
+	await expect(page.getByRole("alert").getByRole("link")).toHaveCount(0);
+	await expect(page.getByRole("alert").getByRole("button")).toHaveCount(0);
 	await expect(
 		page.getByRole("heading", { name: "Visible Agent 2", exact: true }),
 	).toHaveCount(0);
@@ -2319,14 +2547,15 @@ test("directory detail binds the selected Agent and hides a previously visible r
 		page.getByRole("heading", { name: "Visible Agent 2", exact: true }),
 	).toBeVisible();
 	await page.goto("/agents/agent-outside-authorized-collection");
+	// 不在授权集合内（404）与无权访问（403）为同一张「无法访问」卡。
 	await expect(
-		page.getByRole("heading", { name: "暂时无法访问 Agent" }),
+		page.getByRole("heading", { level: 2, name: "无法访问" }),
 	).toBeVisible();
 	await expect(
 		page.getByRole("heading", { name: "Visible Agent 2", exact: true }),
 	).toHaveCount(0);
 	await capture(page, info, "directory-detail-opaque-denial");
-	await page.getByRole("link", { name: "返回 Agent 列表" }).click();
+	await page.getByRole("link", { name: "返回 Agent 目录" }).click();
 	await expect(page.locator(".agent-list > li")).toHaveCount(3);
 	expect(api.commands).toHaveLength(0);
 });
@@ -2341,9 +2570,16 @@ test("directory rejects a malformed successful collection and reloads after reco
 	).toBeVisible();
 	api.malformAgentList();
 	await page.reload();
+	// A-03：响应无效单独成卡，不再与 401/403/404 共用一句文案。
+	await expect(
+		page.getByRole("alert").getByRole("heading", {
+			level: 2,
+			name: "目录数据无法读取",
+		}),
+	).toBeVisible();
 	await expect(
 		page.getByText("Agent 列表暂时无法访问，请联系管理员。"),
-	).toBeVisible();
+	).toHaveCount(0);
 	await expect(
 		page.getByRole("link", { name: "查看 Release assistant 详情" }),
 	).toHaveCount(0);
@@ -2459,7 +2695,9 @@ for (const identityResponsibility of [
 				main.getByRole("heading", { name: "Self managed", exact: true }),
 			).toBeVisible();
 			await expect(main.getByText("模型范围", { exact: true })).toHaveCount(0);
-			await expect(main.getByText("默认选项", { exact: true })).toHaveCount(0);
+			await expect(main.getByText("默认推理档位", { exact: true })).toHaveCount(
+				0,
+			);
 			for (const option of projected.configuration.modelOptions) {
 				await expect(
 					main.getByText(option.displayName, { exact: false }),
@@ -2475,7 +2713,9 @@ for (const identityResponsibility of [
 			await expect(main.getByRole("button", { name: "开始对话" })).toHaveCount(
 				0,
 			);
-			await expect(main.getByRole("link", { name: "个人历史" })).toHaveCount(0);
+			await expect(
+				main.getByRole("link", { name: "查看对话历史" }),
+			).toHaveCount(0);
 			await expect(
 				main.getByRole("link", { name: "打开 Agent" }),
 			).toHaveAttribute("href", "https://agent.example.test/");
@@ -2485,7 +2725,7 @@ for (const identityResponsibility of [
 				`self-managed-models-${identityResponsibility}-${phase}`,
 			);
 		}
-		await main.getByRole("link", { name: "返回 Agent 列表" }).focus();
+		await main.getByRole("link", { name: "返回 Agent 目录" }).focus();
 		await page.keyboard.press("Enter");
 		await expect(page).toHaveURL(/\/agents\/?$/);
 		for (const [agentId, name] of [
@@ -2497,8 +2737,10 @@ for (const identityResponsibility of [
 				main.getByRole("heading", { name, exact: true }),
 			).toBeVisible();
 			await expect(main.getByText("模型范围", { exact: true })).toBeVisible();
-			await expect(main.getByText("默认选项", { exact: true })).toBeVisible();
-			await expect(main.getByText(/Primary model.*medium、high/)).toBeVisible();
+			await expect(
+				main.getByText("默认推理档位", { exact: true }),
+			).toBeVisible();
+			await expect(main.getByText(/Primary model.*均衡、高/)).toBeVisible();
 		}
 		expect(api.commands).toHaveLength(0);
 	});
@@ -2563,13 +2805,15 @@ test("directory conversation mode restores URL search and chooses only existing 
 		expect(new URL(page.url()).pathname).toBe(`/agents/${id}`);
 		await expect(page.getByRole("link", { name: "开始对话" })).toHaveCount(0);
 		if (id === "agent-self-managed") {
-			await expect(page.getByRole("link", { name: "个人历史" })).toHaveCount(0);
+			await expect(
+				page.getByRole("link", { name: "查看对话历史" }),
+			).toHaveCount(0);
 		} else {
 			await expect(
 				page.getByRole("button", { name: "开始对话" }),
 			).toBeDisabled();
 			await expect(
-				page.getByRole("link", { name: "个人历史" }),
+				page.getByRole("link", { name: "查看对话历史" }),
 			).toHaveAttribute("href", "/chat/agent-starting?view=history");
 		}
 		await page.goBack();
@@ -2583,15 +2827,18 @@ test("directory conversation mode restores URL search and chooses only existing 
 	expect(api.commands).toHaveLength(0);
 });
 
-test("long application template IDs wrap inside narrow application panels", async ({
+test("long template display names wrap inside narrow application panels", async ({
 	page,
 }, info) => {
 	const api = await fixture(page);
 	const templateId = `template-${"identifier".repeat(11)}`;
-	api.longApplicationTemplateId(templateId);
+	const displayName = `Template-${"Identifier".repeat(11)}`;
+	api.longApplicationTemplateId(templateId, displayName);
 	await page.goto("/my-agents");
-	const badge = page.getByText(templateId, { exact: true });
+	const badge = page.getByText(displayName, { exact: true });
 	await expect(badge).toBeVisible();
+	// F-02：只显示模板显示名，原始 templateId 不进入页面（区分大小写）。
+	await expect(page.locator("main")).not.toContainText(templateId);
 	for (const width of [360, 390, 820]) {
 		await page.setViewportSize({ width, height: 844 });
 		expect(
@@ -2640,7 +2887,7 @@ for (const route of [
 			).toBeVisible();
 		else if (route.endsWith("/configuration"))
 			await expect(
-				page.getByRole("button", { name: "校验并保存", exact: true }),
+				page.getByRole("button", { name: "保存配置", exact: true }),
 			).toBeVisible();
 		else if (route === "/admin/approvals")
 			await expect(
@@ -2688,7 +2935,7 @@ test("Agent detail and configuration use readable directory records with canonic
 	).toBeVisible();
 	await expect(page.locator("main")).not.toContainText("org-platform");
 	await capture(page, info, "directory-detail-readable");
-	await page.getByRole("link", { name: "配置与管理" }).click();
+	await page.getByRole("link", { name: "Owner 配置" }).click();
 	const owner = page.getByRole("combobox", { name: "共同 Owner 用户" });
 	await expect(
 		page.getByRole("button", { name: "移除 当前 Owner" }),
@@ -2718,10 +2965,8 @@ test("Agent detail and configuration use readable directory records with canonic
 		content: document.documentElement.scrollWidth,
 	}));
 	expect(width.content).toBeLessThanOrEqual(width.viewport);
-	await page.getByRole("button", { name: "校验并保存" }).click();
-	await expect(
-		page.getByRole("status").filter({ hasText: "配置已提交" }),
-	).toBeVisible();
+	await page.getByRole("button", { name: "保存配置" }).click();
+	await expect(toastHost(page)).toHaveText("配置已保存，Secret 值不会回显");
 	expect(api.commands.at(-1)?.body).toMatchObject({
 		schemaVersion: 2,
 		coOwnerIds: ["user-owner-1", "user-2"],
@@ -2994,32 +3239,31 @@ test("Agent detail directory failure stays readable and configuration preserves 
 	).toBeVisible();
 	await expect(page.locator("main")).not.toContainText("org-platform");
 	await capture(page, info, "directory-detail-error");
-	await page.getByRole("link", { name: "配置与管理" }).click();
+	await page.getByRole("link", { name: "Owner 配置" }).click();
 	// 目录不可用时 Owner chip 仍显示 Agent 投影中的显示名，降级说明不进入按钮名称。
 	await expect(page.getByText("目录详情暂时无法读取")).toHaveCount(2);
 	await expect(page.getByRole("button", { name: "移除 Owner" })).toBeVisible();
+	// 读取失败不等于记录不存在：组织用中性占位，不说「未识别」（acc-3 新问题 3）。
 	await expect(
-		page.getByRole("button", { name: "移除 未识别的组织 1" }),
+		page.getByRole("button", { name: "移除 组织 1", exact: true }),
 	).toBeVisible();
+	await expect(page.locator("main")).not.toContainText("未识别");
 	await expect(page.locator("main")).not.toContainText(
 		/目录记录不可用|无法读取目录详情|grant\/revoke|推断完整授权列表/,
 	);
 	await page.getByRole("combobox", { name: "共同 Owner 用户" }).fill("owner");
 	await expect(page.getByText("目录暂时无法读取")).toBeVisible();
 	await page.keyboard.press("Enter");
-	await expect(page.getByRole("option")).toHaveCount(0);
+	// 只看目录选择器的候选；环境变量名下拉的原生 option 不属于这里（O-10）。
+	await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(0);
 	await page.keyboard.press("Escape");
 	await capture(page, info, "directory-configuration-error");
 	// 没有任何改动时保存不可用（#2560）：先做一次与 Owner、范围无关的真实改动，
 	// 再确认目录读取失败时未解析的选择仍随请求原样提交。
-	await expect(page.getByRole("button", { name: "校验并保存" })).toBeDisabled();
-	await page.getByRole("button", { name: "添加 Secret" }).click();
-	await page.getByLabel("Secret 名称").fill("CHANGED_SECRET");
-	await page.getByLabel("新 Secret 值").fill("changed-secret-value");
-	await page.getByRole("button", { name: "校验并保存" }).click();
-	await expect(
-		page.getByRole("status").filter({ hasText: "配置已提交" }),
-	).toBeVisible();
+	await expect(page.getByRole("button", { name: "保存配置" })).toBeDisabled();
+	await page.getByLabel("值", { exact: true }).fill("changed-value");
+	await page.getByRole("button", { name: "保存配置" }).click();
+	await expect(toastHost(page)).toHaveText("配置已保存，Secret 值不会回显");
 	expect(api.commands.at(-1)?.body).toMatchObject({
 		coOwnerIds: ["user-owner-1"],
 		availability: [{ kind: "organization", organizationId: "org-platform" }],
@@ -3164,18 +3408,27 @@ test("Owner configuration sections, option checkboxes, back link and disabled sa
 		page.getByRole("region", { name: "共同 Owner", exact: true }),
 	).toBeVisible();
 	await expectFormSection(page, "Agent 授权控制", { first: true });
-	for (const name of [
+	// 模型与凭证、Agent 默认 Relay Key、Skill、环境变量与 Secret 按设计命名（G-08、O-02、O-10）。
+	// 分区按设计 #owner-config 的顺序：模型与凭证、Agent 默认 Relay Key 在渠道之前（acc-5 新问题 5）。
+	const sectionOrder = [
 		"共同 Owner",
 		"可用范围",
+		"模型与凭证",
+		"Agent 默认 Relay Key",
 		"企微渠道",
-		"模型配置",
-		"Secrets",
-	])
-		await expectFormSection(page, name);
+		"Skill",
+		"环境变量与 Secret",
+	];
+	for (const name of sectionOrder) await expectFormSection(page, name);
+	await expect(
+		page.locator(
+			'.configuration-form-card form [data-slot="form-section-title"]',
+		),
+	).toHaveText(sectionOrder);
 	await expectNoLegendOnBorder(page);
 
 	// B-15：未改动时保存不可用；禁用按钮 not-allowed、半透明，且不靠 pointer-events: none。
-	const save = page.getByRole("button", { name: "校验并保存" });
+	const save = page.getByRole("button", { name: "保存配置" });
 	await expect(save).toBeDisabled();
 	expect(await computed(save, ["cursor", "opacity", "pointerEvents"])).toEqual({
 		cursor: "not-allowed",
@@ -3323,6 +3576,12 @@ test("approval table becomes readable cards on narrow screens with the review ac
 	]) {
 		await page.setViewportSize(viewport);
 		const review = page.getByRole("button", { name: /^审阅：/ });
+		// 页头改为设计稿单行标题「审批申请」后，320 宽下按钮纵向落在 .25px 的位置；
+		// scrollIntoViewIfNeeded 按整数像素贴底会裁掉 0.25px。先把按钮滚到视口中部，
+		// 下面仍断言无横向滚动且按钮完整可见。
+		await review.evaluate((element) =>
+			element.scrollIntoView({ block: "center" }),
+		);
 		await expectCardTable(page, table, review);
 	}
 });
@@ -3510,22 +3769,20 @@ test("status chips, tags, Agent marks and catalog cards follow the design primit
 		expect(style.radius).toBeGreaterThanOrEqual(999);
 		expect(style.dotColor).toBe(style.color);
 	}
-	const available = card.locator('[data-slot="badge"]', { hasText: "可用" });
-	await expect(available).toHaveCSS(
+	// A-02：目录卡只有一个派生可用性 chip（可用 + 启动中 → 「启动中」amber）；
+	// green tone 的颜色在 catalog-search.spec 的状态矩阵中验证。
+	const cardChips = card.locator('[data-slot="badge"][data-variant="chip"]');
+	await expect(cardChips).toHaveText(["启动中"]);
+	await expect(cardChips).toHaveCSS(
 		"color",
-		await resolvedColor(page, "var(--success-ink)"),
+		await resolvedColor(page, "var(--warning-ink)"),
 	);
-	await expect(available).toHaveCSS(
+	await expect(cardChips).toHaveCSS(
 		"background-color",
 		await resolvedColor(
 			page,
-			"color-mix(in oklch, var(--success) 8%, var(--surface))",
+			"color-mix(in oklch, var(--warning) 10%, var(--surface))",
 		),
-	);
-	const starting = card.locator('[data-slot="badge"]', { hasText: "启动中" });
-	await expect(starting).toHaveCSS(
-		"color",
-		await resolvedColor(page, "var(--warning-ink)"),
 	);
 	const tags = card.locator('[data-slot="badge"][data-variant="tag"]');
 	expect(await tags.count()).toBeGreaterThan(0);
@@ -3686,10 +3943,11 @@ test("read failures use a danger notice with role=alert and muted text", async (
 	page,
 }) => {
 	const api = await fixture(page, "employee");
-	api.unavailableAgentList();
-	await page.goto("/agents");
+	// Agent 目录改用设计 state-card（A-03），notice 原语在「我的 Agent」申请读取失败上验证。
+	api.unavailableApplications();
+	await page.goto("/my-agents");
 	const notice = page.getByRole("alert");
-	await expect(notice).toContainText("Agent 列表暂时无法读取");
+	await expect(notice).toContainText("暂时无法读取申请");
 	await expect(notice).toHaveCSS("display", "flex");
 	await expect(notice).toHaveCSS("column-gap", "10px");
 	await expect(notice).toHaveCSS("padding", "13px 14px");
@@ -3714,7 +3972,7 @@ test("read failures use a danger notice with role=alert and muted text", async (
 		await resolvedColor(page, "var(--muted-foreground)"),
 	);
 	await expect(
-		notice.getByRole("button", { name: "重新加载 Agent" }),
+		notice.getByRole("button", { name: "重新加载申请" }),
 	).toBeVisible();
 });
 
@@ -3832,10 +4090,13 @@ test("confirmation dialogs follow the design modal geometry and focus contract",
 			(element) => getComputedStyle(element).backgroundColor,
 		),
 	);
-	await expect(footer.getByRole("button", { name: "继续保留申请" })).toHaveCSS(
-		"background-color",
-		"rgba(0, 0, 0, 0)",
-	);
+	// 设计稿的撤回弹窗页脚只有「确认撤回」；关闭由页眉的关闭钮承担。
+	await expect(footer.getByRole("button")).toHaveCount(1);
+	await expect(
+		dialog.locator('[data-slot="dialog-header"]').getByRole("button", {
+			name: "关闭",
+		}),
+	).toBeVisible();
 	for (const key of ["Tab", "Shift+Tab"]) {
 		for (let index = 0; index < 20; index++) {
 			await page.keyboard.press(key);
@@ -3864,6 +4125,13 @@ test("lifecycle confirmations use the design titles and button variants", async 
 	let dialog = page.getByRole("dialog", { name: "停止这个 Agent？" });
 	await expect(dialog).toBeVisible();
 	await expect(dialog).toHaveAttribute("aria-modal", "true");
+	// 正文按设计原文；设计的停止 / 重启弹窗没有对象名行。
+	await expect(dialog.locator('[data-slot="dialog-description"]')).toHaveText(
+		"停止会释放运行资源，但保留配置、渠道绑定、平台会话历史与用户数据。",
+	);
+	await expect(
+		dialog.locator('[data-slot="confirm-dialog-subject"]'),
+	).toHaveCount(0);
 	expect(await dangerFills(page)).toContain(
 		await dialog
 			.getByRole("button", { name: "停止 Agent" })
@@ -3872,8 +4140,18 @@ test("lifecycle confirmations use the design titles and button variants", async 
 	await page.keyboard.press("Escape");
 	await expect(dialog).not.toBeVisible();
 	await page.getByRole("button", { name: "重启 Agent" }).click();
-	dialog = page.getByRole("dialog", { name: /^重启.+？$/ });
+	// Agent 名以拉丁字母开头时与「重启」之间有一个空格。
+	dialog = page.getByRole("dialog", {
+		name: "重启 Release assistant？",
+		exact: true,
+	});
 	await expect(dialog).toBeVisible();
+	await expect(dialog.locator('[data-slot="dialog-description"]')).toHaveText(
+		"重启会短暂释放并重新建立运行实例。历史会话保留，完成后状态会自动回到“就绪”。",
+	);
+	await expect(
+		dialog.locator('[data-slot="confirm-dialog-subject"]'),
+	).toHaveCount(0);
 	const restartFill = await dialog
 		.getByRole("button", { name: "确认重启" })
 		.evaluate((element) => getComputedStyle(element).backgroundColor);
@@ -3900,13 +4178,23 @@ test("Owner configuration follows the design heading, boundary notice and sectio
 	await page.goto("/agents/agent-pilot-1/configuration");
 	const heading = page.getByRole("heading", { level: 1 });
 	await expect(heading).toHaveText(configurationTitle);
+	// O-12：副标题按设计原文（含「由 Worker」，与 Secret 分区「等待 Worker 激活」一致）。
 	await expect(page.locator("main .page-heading")).toContainText(
-		"保存后更新运行实例；Secret 只显示状态和版本。",
+		"保存后由 Worker 更新实例；Secret 只显示状态和版本。",
 	);
+	// 设计 tag-row：一个可用性 chip（Agent 可用、服务启动中 → 启动中）加一个「Owner · 名称」tag。
+	const tagRow = page.locator("main .page-heading .tag-row");
+	await expect(
+		tagRow.locator('[data-slot="badge"][data-variant="chip"]'),
+	).toHaveText(["启动中"]);
+	await expect(
+		tagRow.locator('[data-slot="badge"][data-variant="tag"]'),
+	).toHaveText(["Owner · Owner"]);
 
-	// O-12：返回入口为 ghost sm，图标 16px，href 不变。
+	// O-12：返回入口为 ghost sm，图标 16px，href 不变；不被前缀匹配标成当前页。
 	const back = page.getByRole("link", { name: "返回 Agent 详情" });
 	await expect(back).toHaveAttribute("href", "/agents/agent-pilot-1");
+	await expect(back).not.toHaveAttribute("aria-current", /.*/);
 	expect(
 		await computed(back, [
 			"fontSize",
@@ -4074,7 +4362,7 @@ test("Owner configuration puts restart in the footer and stop in a standalone da
 	await page.goto("/agents/agent-pilot-1/configuration");
 	const card = page.locator(".configuration-form-card");
 	const footer = card.locator(".configuration-form-footer");
-	const save = footer.getByRole("button", { name: "校验并保存" });
+	const save = footer.getByRole("button", { name: "保存配置" });
 	const restart = footer.getByRole("button", { name: "重启 Agent" });
 	await expect(restart).toBeVisible();
 	await expect(restart.locator("svg")).toHaveAttribute("aria-hidden", "true");
@@ -4094,9 +4382,7 @@ test("Owner configuration puts restart in the footer and stop in a standalone da
 		).toBe(8);
 	}
 	// 保存可用时，Tab 从保存移到重启；重启只打开确认，不发配置保存请求。
-	await page.getByRole("button", { name: "添加 Secret" }).click();
-	await page.getByLabel("Secret 名称").fill("RELEASE_KEY");
-	await page.getByLabel("新 Secret 值").fill("synthetic-tab-secret");
+	await page.getByLabel("值", { exact: true }).fill("synthetic-tab-value");
 	await save.focus();
 	await page.keyboard.press("Tab");
 	await expect(restart).toBeFocused();
@@ -4154,9 +4440,9 @@ test("Owner configuration puts restart in the footer and stop in a standalone da
 	await expect(page.getByText("管理员操作")).toHaveCount(0);
 	await capture(page, info, "owner-lifecycle-layout");
 
-	// 保存结果替换表单期间，重启仍可见可用（O-11）。
+	// 保存成功后页面保留（RK2-09），重启仍可见可用（O-11）。
 	await save.click();
-	await expect(pageStatus(page)).toContainText("配置已提交");
+	await expect(toastHost(page)).toHaveText("配置已保存，Secret 值不会回显");
 	await expect(page.getByRole("button", { name: "重启 Agent" })).toBeEnabled();
 
 	// 已停止：页脚仍有重启，页面没有危险区。
@@ -4332,7 +4618,7 @@ test("a pure administrator reaches the same configuration page with authorizatio
 	await expect(
 		page.getByRole("combobox", { name: "共同 Owner 用户" }),
 	).toHaveCount(0);
-	await expect(page.getByRole("button", { name: "校验并保存" })).toHaveCount(0);
+	await expect(page.getByRole("button", { name: "保存配置" })).toHaveCount(0);
 	await expect(
 		page.getByRole("button", { name: /停止 Agent|重启 Agent/ }),
 	).toHaveCount(0);
@@ -4444,7 +4730,11 @@ async function removeOrganizationChip(page: Page) {
 	await expect(page.getByRole("button", { name: "移除 平台工程" })).toHaveCount(
 		0,
 	);
-	await expect(page.getByRole("button", { name: "校验并保存" })).toBeEnabled();
+	// 焦点在下一帧回到该选择器的输入框；等它落定，后续 fill 才不会与之竞争。
+	await expect(
+		page.getByRole("combobox", { name: "可使用的组织", exact: true }),
+	).toBeFocused();
+	await expect(page.getByRole("button", { name: "保存配置" })).toBeEnabled();
 }
 
 test("WeCom unbind asks for confirmation and sends only its own channel request", async ({
@@ -4514,7 +4804,7 @@ test("WeCom unbind asks for confirmation and sends only its own channel request"
 	await expect(bot.getByRole("heading", { name: "企微机器人" })).toBeFocused();
 	// 页面其余内容不变：表单仍在，未保存的范围修改保留，保存仍可用。
 	await expect(page.locator("#main-content")).not.toContainText("配置已提交");
-	await expect(page.getByRole("button", { name: "校验并保存" })).toBeEnabled();
+	await expect(page.getByRole("button", { name: "保存配置" })).toBeEnabled();
 	await expect(page.getByRole("button", { name: "移除 平台工程" })).toHaveCount(
 		0,
 	);
@@ -4659,7 +4949,7 @@ test("a pending stop on one Agent does not leak into another Agent's configurati
 	// 应用内导航到另一个 Agent 的配置页，A 的停止仍挂起。
 	await page.getByRole("link", { name: "Agent 目录" }).click();
 	await page.getByRole("link", { name: "查看 Visible Agent 2 详情" }).click();
-	await page.getByRole("link", { name: "配置与管理" }).click();
+	await page.getByRole("link", { name: "Owner 配置" }).click();
 	await expect(page).toHaveURL(/\/agents\/agent-visible-2\/configuration$/);
 	await expect(page.locator("main .page-eyebrow")).toContainText(
 		"Visible Agent 2",
@@ -4673,4 +4963,418 @@ test("a pending stop on one Agent does not leak into another Agent's configurati
 	await expect(toastHost(page)).toHaveText("");
 	await expect(page.locator("#main-content")).not.toContainText("操作已提交");
 	await expect(page.getByRole("button", { name: "停止 Agent" })).toBeEnabled();
+});
+
+const connectionOrigin = "https://connection.example.test";
+
+/** 直接返回原始 capability JSON（不经契约解析），用来覆盖不合规的入口值。 */
+async function stubConnectionCapability(
+	page: Page,
+	value: "fail" | "timeout" | Record<string, unknown>,
+) {
+	await page.route("**/api/v1/connection/capability", async (route) => {
+		if (value === "fail") return route.fulfill({ status: 503, json: {} });
+		if (value === "timeout") {
+			// 浏览器会话读取 capability 的上限是 3s，超过即视为没有入口。
+			await new Promise((resolve) => setTimeout(resolve, 3_500));
+			return route.fulfill({ status: 503, json: {} }).catch(() => undefined);
+		}
+		return route.fulfill({ json: value });
+	});
+}
+
+const availableCapability = (
+	publicOrigin: string = connectionOrigin,
+	mcpPath = "/mcp",
+) => ({
+	schemaVersion: 1,
+	status: "available",
+	publicOrigin,
+	mcpPath,
+	configFingerprint: "a".repeat(64),
+});
+
+function connectorSection(page: Page) {
+	return page.getByRole("region", { name: "连接器", exact: true });
+}
+
+test.describe("Agent detail design alignment", () => {
+	test("Connection notice moves from needs-auth to handoff only after opening it", async ({
+		page,
+	}, info) => {
+		await fixture(page, "employee");
+		await stubConnectionCapability(page, availableCapability());
+		const mainRequests: string[] = [];
+		page.on("request", (request) => {
+			const url = new URL(request.url());
+			if (request.method() !== "GET" || url.origin === connectionOrigin)
+				mainRequests.push(`${request.method()} ${request.url()}`);
+		});
+		await page
+			.context()
+			.route(`${connectionOrigin}/**`, (route) =>
+				route.fulfill({ contentType: "text/html", body: "<p>Connection</p>" }),
+			);
+		await page.goto("/agents/agent-pilot-1");
+		const section = connectorSection(page);
+		await expect(section.getByRole("heading", { level: 2 })).toHaveText(
+			"连接器",
+		);
+		const notice = section.locator(".connection-notice");
+		await expect(notice).toHaveAttribute("data-state", "needs-auth");
+		await expect(notice.getByText("需要 Connection 授权")).toBeVisible();
+		for (const text of [
+			"Action 范围",
+			"在 Connection 中确认",
+			"按当前主体 / Consumer / Actor 生效",
+		])
+			await expect(notice.getByText(text, { exact: true })).toBeVisible();
+		const open = notice.getByRole("link", { name: "打开 Connection" });
+		await expect(open).toHaveAttribute("href", `${connectionOrigin}/mcp`);
+		await expect(open).toHaveAttribute("target", "_blank");
+		await expect(open).toHaveAttribute("rel", /noopener/);
+		await expect(open).toHaveAttribute("rel", /noreferrer/);
+		const copy = notice.locator(".connection-notice-copy");
+		if (info.project.name === "desktop") {
+			await expect(notice).toHaveCSS("padding", "13px 14px");
+			await expect(notice).toHaveCSS("border-radius", "12px");
+			const openBox = await open.boundingBox();
+			const copyBox = await copy.boundingBox();
+			if (!openBox || !copyBox) throw new Error("Expected notice geometry");
+			// 设计 .connection-notice-action .btn{min-height:40px}，内容撑开后实测 41.4px。
+			await expect(open).toHaveCSS("min-height", "40px");
+			expect(openBox.height).toBeLessThan(44);
+			expect(openBox.x).toBeGreaterThanOrEqual(copyBox.x + copyBox.width);
+		} else {
+			// D-01：≤767px 卡片纵向，按钮整宽、上间距 10px、触控高度 ≥ 44px。
+			await expect(notice).toHaveCSS("display", "block");
+			const noticeBox = await notice.boundingBox();
+			const openBox = await open.boundingBox();
+			const copyBox = await copy.boundingBox();
+			if (!noticeBox || !openBox || !copyBox)
+				throw new Error("Expected notice geometry");
+			expect(
+				Math.abs(openBox.width - (noticeBox.width - 30)),
+			).toBeLessThanOrEqual(1);
+			await expect(notice.locator(".connection-notice-action")).toHaveCSS(
+				"margin-top",
+				"10px",
+			);
+			expect(openBox.height).toBeGreaterThanOrEqual(44);
+			expect(
+				await page.evaluate(
+					() => document.documentElement.scrollWidth <= innerWidth,
+				),
+			).toBe(true);
+		}
+		await capture(page, info, "agent-detail-connection-needs-auth");
+		const popup = page.waitForEvent("popup");
+		await open.click();
+		await (await popup).close();
+		await expect(notice).toHaveAttribute("data-state", "handoff");
+		await expect(notice.getByText("等待 Connection 授权返回")).toBeVisible();
+		await expect(
+			notice.getByRole("link", { name: "返回查看授权状态" }),
+		).toHaveAttribute("href", `${connectionOrigin}/mcp`);
+		await capture(page, info, "agent-detail-connection-handoff");
+		// Platform 不读取 Connection 的授权结果，也不发写请求。
+		expect(mainRequests).toEqual([]);
+		await page.reload();
+		await expect(notice).toHaveAttribute("data-state", "needs-auth");
+	});
+
+	test("an Agent without the Connection capability shows no notice or link", async ({
+		page,
+	}) => {
+		await fixture(page, "employee");
+		await stubConnectionCapability(page, availableCapability());
+		await page.route("**/api/v2/agents/agent-pilot-1", (route) =>
+			route.fulfill({
+				json: AgentProjectionV2Schema.parse({
+					...pilotFakeScenariosV2.starting.response.body,
+					serviceAvailability: "ready",
+					capabilities: {
+						...pilotFakeScenariosV2.starting.response.body.capabilities,
+						connection: false,
+					},
+				}),
+			}),
+		);
+		await page.goto("/agents/agent-pilot-1");
+		const section = connectorSection(page);
+		await expect(
+			section.getByText("当前 Agent 未提供 Connection 能力。"),
+		).toBeVisible();
+		await expect(section.locator(".connection-notice")).toHaveCount(0);
+		await expect(section.getByRole("link")).toHaveCount(0);
+		await expect(
+			page.getByText("支持 Connection", { exact: true }),
+		).toHaveCount(0);
+	});
+
+	for (const capability of [
+		{
+			name: "unavailable",
+			value: { schemaVersion: 1, status: "unavailable", reason: "missing" },
+		},
+		{ name: "request failure", value: "fail" as const },
+		{ name: "timeout", value: "timeout" as const },
+	]) {
+		test(`Connection ${capability.name} keeps the notice unavailable in the page and the sidebar`, async ({
+			page,
+		}, info) => {
+			await fixture(page, "employee");
+			await stubConnectionCapability(page, capability.value);
+			await page.goto("/agents/agent-pilot-1");
+			const section = connectorSection(page);
+			const notice = section.locator(".connection-notice");
+			await expect(notice).toHaveAttribute("data-state", "unavailable");
+			await expect(notice.getByText("Connection 暂不可用")).toBeVisible();
+			await expect(section.getByRole("link")).toHaveCount(0);
+			await expect(
+				page.getByText(/等待 Connection 授权返回|返回查看授权状态/),
+			).toHaveCount(0);
+			if (info.project.name === "mobile")
+				await page.getByRole("button", { name: "打开导航" }).click();
+			const nav =
+				info.project.name === "mobile"
+					? page.getByRole("dialog", { name: "主导航" })
+					: page.locator(".platform-sidebar");
+			await expect(
+				nav.locator('.platform-nav-item[aria-disabled="true"]', {
+					hasText: "我的 Connection",
+				}),
+			).toHaveCount(1);
+			await expect(
+				nav.getByRole("link", { name: "我的 Connection" }),
+			).toHaveCount(0);
+		});
+	}
+
+	test("the sidebar and the detail page link the same controlled Connection URL or neither", async ({
+		page,
+	}, info) => {
+		test.skip(
+			info.project.name !== "desktop",
+			"The sidebar is visible at 1440",
+		);
+		test.setTimeout(120_000);
+		await fixture(page, "employee");
+		const inputs: [string, string][] = [
+			[connectionOrigin, "/mcp"],
+			[connectionOrigin, "//evil.example/mcp"],
+			[connectionOrigin, "/\\evil.example/mcp"],
+			[connectionOrigin, "\\\\evil.example\\mcp"],
+			[`${connectionOrigin}\n`, "/mcp"],
+			[`${connectionOrigin}/`, "/mcp"],
+			["http://connection.example.test", "/mcp"],
+			["https://user:pass@connection.example.test", "/mcp"],
+			[connectionOrigin, "/mcp\n"],
+			[connectionOrigin, "/m\tcp"],
+			[connectionOrigin, ".evil.example/mcp"],
+			[connectionOrigin, "@evil.example/mcp"],
+			[connectionOrigin, "/mcp?next=x"],
+			[connectionOrigin, "/mcp#x"],
+			[connectionOrigin, "/%2e%2e/mcp"],
+			[connectionOrigin, "/%2Fevil.example/mcp"],
+			[connectionOrigin, "/%5cevil.example/mcp"],
+			[connectionOrigin, "/./mcp"],
+			[connectionOrigin, "/a/../mcp"],
+		];
+		let current = availableCapability();
+		await page.route("**/api/v1/connection/capability", (route) =>
+			route.fulfill({ json: current }),
+		);
+		const results: {
+			input: [string, string];
+			nav?: string;
+			detail?: string;
+		}[] = [];
+		for (const input of inputs) {
+			current = availableCapability(...input);
+			await page.goto("/agents/agent-pilot-1");
+			await expect(
+				connectorSection(page).locator(".connection-notice"),
+			).toBeVisible();
+			const nav = await page
+				.locator(".platform-sidebar a.platform-nav-external")
+				.getAttribute("href", { timeout: 200 })
+				.catch(() => undefined);
+			const detail = await connectorSection(page)
+				.getByRole("link")
+				.first()
+				.getAttribute("href", { timeout: 200 })
+				.catch(() => undefined);
+			results.push({
+				input,
+				nav: nav ?? undefined,
+				detail: detail ?? undefined,
+			});
+		}
+		await info.attach("connection-entry-matrix", {
+			body: JSON.stringify(results, null, 2),
+			contentType: "application/json",
+		});
+		// 合法输入两处都给出同一地址；其余每组两处都没有链接。
+		expect(results[0]).toMatchObject({
+			nav: `${connectionOrigin}/mcp`,
+			detail: `${connectionOrigin}/mcp`,
+		});
+		for (const result of results.slice(1))
+			expect(result, JSON.stringify(result.input)).toEqual({
+				input: result.input,
+				nav: undefined,
+				detail: undefined,
+			});
+		for (const result of results)
+			for (const href of [result.nav, result.detail])
+				if (href) expect(new URL(href).origin).toBe(connectionOrigin);
+	});
+
+	test("heading back link, actions, status tags and sidebar rows follow the design", async ({
+		page,
+	}, info) => {
+		const api = await fixture(page, "owner");
+		api.conversationChoices();
+		await page.route("**/api/v2/directory/search?**", async (route) => {
+			const url = new URL(route.request().url());
+			return route.fulfill({
+				json: {
+					schemaVersion: 1,
+					items:
+						url.searchParams.get("kind") === "user"
+							? [
+									{
+										kind: "user",
+										canonicalId: "user-owner-1",
+										displayName: "当前 Owner",
+										organizationPath: "研发 / 平台工程",
+									},
+								]
+							: [],
+				},
+			});
+		});
+		await page.goto("/agents/agent-pilot-1");
+		const heading = page.locator("main .page-heading");
+		const back = heading.getByRole("link", { name: "返回 Agent 目录" });
+		await expect(back).toHaveCSS("font-size", "12px");
+		await expect(back).toHaveCSS("padding", "7px 11px");
+		await expect(back).toHaveCSS("column-gap", "8px");
+		await expect(back).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+		await expect(back).toHaveCSS(
+			"color",
+			await resolved(page, "color", "var(--muted-foreground)"),
+		);
+		expect((await back.boundingBox())?.height).toBe(44);
+		const backBox = await back.boundingBox();
+		const identity = await heading
+			.locator(".agent-detail-heading")
+			.boundingBox();
+		if (!backBox || !identity) throw new Error("Expected heading geometry");
+		expect(
+			Math.abs(identity.y - (backBox.y + backBox.height) - 16),
+		).toBeLessThanOrEqual(1);
+		await back.hover();
+		await expect(back).toHaveCSS("text-decoration-line", "none");
+		await expect(
+			page.getByRole("link", { name: "返回 Agent 列表" }),
+		).toHaveCount(0);
+		// D-03 / F-07：primary「开始对话」、outline「Owner 配置」，没有「配置与管理」。
+		const actions = heading.locator(".agent-detail-actions > a");
+		await expect(actions).toHaveText(["开始对话", "Owner 配置"]);
+		await expect(actions.nth(1)).toHaveAttribute(
+			"href",
+			"/agents/agent-pilot-1/configuration",
+		);
+		await expect(page.getByRole("link", { name: "配置与管理" })).toHaveCount(0);
+		const status = page.locator(".agent-detail-status");
+		await expect(
+			status.locator('[data-slot="badge"][data-variant="chip"]'),
+		).toHaveText(["就绪"]);
+		const tags = status.locator('[data-slot="badge"][data-variant="tag"]');
+		await expect(tags).toHaveText(["每个用户都有独立会话", "支持 Connection"]);
+		for (const tag of await tags.all()) {
+			await expect(tag).toHaveCSS("border-top-left-radius", "7px");
+			await expect(tag).toHaveCSS("font-size", "11px");
+			await expect(tag).toHaveCSS("padding", "3px 8px");
+		}
+		// F-07：默认推理档位只有中文档位名；历史入口不与区块标题同名。
+		const level = page.getByRole("term").filter({ hasText: /^默认推理档位$/ });
+		await expect(level).toBeVisible();
+		await expect(level.locator("xpath=following-sibling::dd[1]")).toHaveText(
+			"均衡",
+		);
+		await expect(page.getByText("默认选项", { exact: true })).toHaveCount(0);
+		await expect(
+			page.getByRole("link", { name: "查看对话历史" }),
+		).toHaveAttribute("href", "/chat/agent-pilot-1?view=history");
+		await expect(
+			page.locator("main").getByRole("link", { name: "个人历史", exact: true }),
+		).toHaveCount(0);
+		// D-04：侧栏行名称 + 12px 说明，chip 在行右侧。
+		const owners = page.getByRole("region", { name: "Owner", exact: true });
+		await expect(owners.getByText("研发 / 平台工程")).toHaveCSS(
+			"font-size",
+			"12px",
+		);
+		const runtime = page.getByRole("region", { name: "运行与渠道" });
+		await expect(runtime.getByText("可以发送消息并获得回复")).toHaveCSS(
+			"font-size",
+			"12px",
+		);
+		await expect(runtime.getByText("平台对话入口")).toHaveCSS(
+			"font-size",
+			"12px",
+		);
+		for (const row of await page
+			.locator(".agent-detail-aside .detail-list li")
+			.all()) {
+			if (info.project.name === "mobile") {
+				await expect(row).toHaveCSS("display", "block");
+				continue;
+			}
+			await expect(row).toHaveCSS("align-items", "flex-start");
+			const chip = row.locator(':scope > [data-slot="badge"]');
+			if (!(await chip.count())) continue;
+			const rowBox = await row.boundingBox();
+			const chipBox = await chip.boundingBox();
+			if (!rowBox || !chipBox) throw new Error("Expected row geometry");
+			expect(
+				Math.abs(chipBox.x + chipBox.width - (rowBox.x + rowBox.width)),
+			).toBeLessThanOrEqual(1);
+		}
+		await capture(page, info, "agent-detail-design");
+		await page.goto("/agents/agent-self-managed");
+		await expect(page.getByRole("link", { name: "打开 Agent" })).toBeVisible();
+		await expect(page.getByRole("link", { name: "开始对话" })).toHaveCount(0);
+		await expect(page.getByRole("button", { name: "开始对话" })).toHaveCount(0);
+		await expect(page.getByText("每个用户都有独立会话")).toHaveCount(0);
+		await page.goto("/agents/agent-outside-authorized-collection");
+		await expect(
+			page.getByRole("link", { name: "返回 Agent 目录" }),
+		).toBeVisible();
+		await expect(
+			page.getByRole("link", { name: "返回 Agent 列表" }),
+		).toHaveCount(0);
+		expect(api.commands).toHaveLength(0);
+	});
+
+	test("employee detail has no Owner settings entry and the service row follows availability", async ({
+		page,
+	}) => {
+		await fixture(page, "employee");
+		await page.goto("/agents/agent-pilot-1");
+		await expect(page.getByRole("link", { name: "Owner 配置" })).toHaveCount(0);
+		await expect(
+			page
+				.getByRole("region", { name: "运行与渠道" })
+				.getByText("历史只读，暂时不能发送消息"),
+		).toBeVisible();
+		await expect(
+			page.locator(
+				".agent-detail-status [data-slot='badge'][data-variant='chip']",
+			),
+		).toHaveText(["启动中"]);
+	});
 });

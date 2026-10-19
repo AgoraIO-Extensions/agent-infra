@@ -53,6 +53,46 @@ describe("Personal recent generated Client read", () => {
 		});
 	});
 
+	it("lets the workbench request a smaller first page and bounds the response by that limit", async () => {
+		const requests: Request[] = [];
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async (request) => {
+				requests.push(new Request(request));
+				return Response.json(page);
+			},
+		});
+		await expect(
+			loadRecentPersonalConversationsPage({
+				client,
+				limit: 3,
+				signal: new AbortController().signal,
+			}),
+		).resolves.toEqual(page);
+		expect(
+			Object.fromEntries(new URL(requests[0]?.url ?? "").searchParams),
+		).toEqual({ limit: "3" });
+		// 响应条数超过请求的 limit 视为无效响应，不截断后展示。
+		await expect(
+			loadRecentPersonalConversationsPage({
+				client,
+				limit: 2,
+				signal: new AbortController().signal,
+			}),
+		).rejects.toMatchObject({
+			state: { kind: "unavailable", reason: "invalid-response" },
+		});
+		for (const limit of [0, 51, 2.5])
+			await expect(
+				loadRecentPersonalConversationsPage({
+					client,
+					limit,
+					signal: new AbortController().signal,
+				}),
+			).rejects.toBeInstanceOf(RangeError);
+		expect(requests).toHaveLength(2);
+	});
+
 	it.each([
 		[401, "authentication-required", false],
 		[403, "denied", false],

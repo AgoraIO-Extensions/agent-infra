@@ -3,7 +3,10 @@ import {
 	PersistedConversationEventV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
-import { currentExecution } from "./conversation-screen-state.js";
+import {
+	currentExecution,
+	emptyAnswerKind,
+} from "./conversation-screen-state.js";
 import { event, history, timestamp } from "./conversation-test-fixtures.js";
 
 describe("current conversation execution", () => {
@@ -209,5 +212,38 @@ describe("current conversation execution", () => {
 			executionId: "execution-1",
 			status: "cancelled",
 		});
+	});
+});
+
+describe("answers without body text (NW-15)", () => {
+	const projection = ConversationDetailProjectionV2Schema.parse(
+		history("conversation-1", [
+			PersistedConversationEventV1Schema.parse({
+				...event(2),
+				executionId: "execution-loaded",
+			}),
+		]),
+	);
+
+	it("only treats a completed reply outside the loaded window as not loaded", () => {
+		expect(
+			emptyAnswerKind(projection, [], "execution-old", "completed", true),
+		).toBe("not_loaded");
+		for (const status of ["failed", "cancelled", "processing"] as const)
+			expect(
+				emptyAnswerKind(projection, [], "execution-old", status, true),
+			).toBe("empty");
+	});
+
+	it("does not call a reply not loaded when its events are loaded or nothing is earlier", () => {
+		expect(
+			emptyAnswerKind(projection, [], "execution-loaded", "completed", true),
+		).toBe("empty");
+		expect(
+			emptyAnswerKind(projection, [], "execution-old", "completed", false),
+		).toBe("empty");
+		expect(emptyAnswerKind(projection, [], null, "completed", true)).toBe(
+			"empty",
+		);
 	});
 });

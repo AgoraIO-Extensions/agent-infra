@@ -1,11 +1,13 @@
 import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
+import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures";
 import { captureDesignContract, designViewports } from "./design-contract";
 import {
 	expectCardTable,
 	expectDesktopTable,
 	expectFieldLabel,
+	expectPageHeadTop,
 	expectSearchInput,
 } from "./primitive-styles";
 
@@ -85,6 +87,11 @@ async function fixture(page: Page, admin = true) {
 					},
 				},
 			});
+			return;
+		}
+		// 来源列的模板显示名来自部署配置（F-02）。
+		if (url.pathname === "/api/v2/deployment/configuration") {
+			await route.fulfill({ json: deploymentConfiguration });
 			return;
 		}
 		if (url.pathname === "/api/v2/directory/search") {
@@ -267,7 +274,7 @@ test("source filter is kept in the URL, ignores unknown values and resets the pa
 	await fixture(page);
 	await page.goto("/admin/agents?page=2");
 	await expect(page.getByText("第 2 / 2 页")).toBeVisible();
-	await page.getByLabel("来源").selectOption({ label: "自定义 Agent" });
+	await page.getByLabel("来源").selectOption({ label: "自定义镜像" });
 	await expect(page).toHaveURL(/source=custom/);
 	await expect(page).not.toHaveURL(/page=/);
 	const rows = page
@@ -276,12 +283,30 @@ test("source filter is kept in the URL, ignores unknown values and resets the pa
 		.getByRole("row");
 	await expect(rows).toHaveCount(1);
 	await expect(rows).toContainText("编程助手 4");
+	// 设计 #admin-agents：自定义来源单元格写「自定义镜像」，筛选项为「全部来源 / 标准模板 / 自定义镜像」。
+	await expect(rows.locator('[data-label="来源"]')).toHaveText("自定义镜像");
+	await expect(rows).not.toContainText("registry.example.test");
+	expect(
+		await page.getByLabel("来源").locator("option").allTextContents(),
+	).toEqual(["全部来源", "标准模板", "自定义镜像"]);
 	await page.reload();
 	await expect(page.getByLabel("来源")).toHaveValue("custom");
 	await expect(rows).toHaveCount(1);
 	await page.goto("/admin/agents?source=foo");
 	await expect(page.getByLabel("来源")).toHaveValue("all");
 	await expect(rows).toHaveCount(10);
+});
+
+test("Agent management page head places the h1 at the design height", async ({
+	page,
+}, info) => {
+	await fixture(page);
+	await page.goto("/admin/agents");
+	await expect(
+		page.getByRole("heading", { level: 1, name: "查看 Agent 状态" }),
+	).toBeVisible();
+	// 设计 .page-head-copy .eyebrow 上外边距为 0，h1 与设计同高（±1px）。
+	await expectPageHeadTop(page, info.project.name === "mobile");
 });
 
 test("refresh second-page failure collapses the page to the heading and one retry", async ({
@@ -606,6 +631,11 @@ test("admin Agent page structure, header tools and columns match the design at 1
 			cells.map((cell) => cell.getAttribute("data-label")),
 		);
 	expect(labels).toEqual([...headers.slice(0, 5), null]);
+	// F-02 与设计 #admin-agents：标准模板来源只写模板显示名，不显示原始 templateId。
+	await expect(
+		table.locator("tbody tr").first().locator('[data-label="来源"]'),
+	).toHaveText("Codex");
+	await expect(table).not.toContainText("codex");
 	for (const cell of await table.locator("tbody tr td:nth-child(4)").all())
 		await expect(cell.locator('[data-slot="badge"]')).toHaveCount(1);
 	await expect(table).not.toContainText("服务：");

@@ -10,6 +10,7 @@ import {
 	expectDesktopTable,
 	expectFieldControl,
 	expectFieldLabel,
+	expectPageHeadTop,
 } from "./primitive-styles";
 
 const session = (role: "employee" | "admin") => ({
@@ -221,7 +222,7 @@ test("own audit page filters, paginates, opens detail, and fits mobile", async (
 	const api = await fixture(page);
 	await page.goto("/audit");
 	await expect(
-		page.getByRole("heading", { name: "只看自己的执行事实。", exact: true }),
+		page.getByRole("heading", { name: "查看自己的执行记录。", exact: true }),
 	).toBeVisible();
 	await expect(page.getByRole("button", { name: /^详情：/ })).toHaveCount(1);
 	await page
@@ -269,7 +270,7 @@ for (const compact of [false, true]) {
 		await page.goto("/admin/audit");
 		await expect(
 			page.getByRole("heading", {
-				name: "复核平台关键变更。",
+				name: "查看平台变更记录。",
 				exact: true,
 			}),
 		).toBeVisible();
@@ -445,7 +446,7 @@ for (const compact of [false, true]) {
 			.click();
 		await expect(page).toHaveURL(/\/audit$/);
 		await expect(
-			page.getByRole("heading", { name: "只看自己的执行事实。", exact: true }),
+			page.getByRole("heading", { name: "查看自己的执行记录。", exact: true }),
 		).toBeVisible();
 		await expect(page.locator(".audit-table")).toContainText("审计管理员");
 		await expect(page.locator(".audit-table")).not.toContainText("审计用户");
@@ -610,6 +611,23 @@ test("same-user administrator role revocation clears list and detail despite a l
 		api.releaseDetail();
 	}
 });
+
+for (const [route, title] of [
+	["/audit", "查看自己的执行记录。"],
+	["/admin/audit", "查看平台变更记录。"],
+] as const) {
+	test(`audit page head ${route} places the h1 at the design height`, async ({
+		page,
+	}, info) => {
+		await fixture(page, route === "/audit" ? "employee" : "admin");
+		await page.goto(route);
+		await expect(
+			page.getByRole("heading", { level: 1, name: title, exact: true }),
+		).toBeVisible();
+		// 设计 .page-head-copy .eyebrow 上外边距为 0，h1 与设计同高（±1px）。
+		await expectPageHeadTop(page, info.project.name === "mobile");
+	});
+}
 
 for (const route of ["/audit", "/admin/audit"]) {
 	test(`exported design viewport matrix ${route}`, async ({ page }, info) => {

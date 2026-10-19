@@ -14,3 +14,19 @@ export function withObjectName(
 	const target = object?.trim();
 	return target ? `${label}：${target}` : label;
 }
+
+/**
+ * 同页多个对象的显示名相同（例如多次提问「继续」、多次调用同一命令）时，按出现顺序加
+ * 「（第 N 次）」，让「{可见文字}：{对象名}」仍可区分（N-12）；不重复的名称原样返回。
+ */
+export function distinctObjectNames(names: readonly string[]): string[] {
+	const totals = new Map<string, number>();
+	for (const name of names) totals.set(name, (totals.get(name) ?? 0) + 1);
+	const seen = new Map<string, number>();
+	return names.map((name) => {
+		if ((totals.get(name) ?? 0) < 2) return name;
+		const count = (seen.get(name) ?? 0) + 1;
+		seen.set(name, count);
+		return `${name}（第 ${count} 次）`;
+	});
+}

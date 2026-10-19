@@ -12,12 +12,12 @@ import {
 } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ToastProvider } from "@/components/ui/toast";
 
 import { useAgentLifecycleCommand } from "../agent-administration/use-agent-lifecycle-command.js";
 import { useBrowserSession } from "../use-browser-session.js";
 import { grantApplicationManager } from "./agent-authorization.js";
 import { AgentConfigurationWorkflow } from "./agent-configuration-workflow.js";
+import { ConfigurationTestProviders } from "./test-router-context.js";
 import { useAgentConfigurationSubmission } from "./use-agent-configuration-submission.js";
 import { useAgentDefaultRelayKeyState } from "./use-agent-default-relay-key-state.js";
 import { useAgentSavedRelayKeyCandidates } from "./use-agent-saved-relay-key-candidates.js";
@@ -82,9 +82,9 @@ const firstAgent = AgentProjectionV2Schema.parse(
 	pilotFakeScenariosV2.starting.response.body,
 );
 
-// 页面上的生命周期反馈与企微解绑提示使用根布局的 Toast 宿主。
+// 页面上的生命周期反馈与企微解绑提示使用根布局的 Toast 宿主；页头是路由 Link，同时提供路由上下文。
 function render(ui: ReactElement) {
-	return renderWithoutToast(ui, { wrapper: ToastProvider });
+	return renderWithoutToast(ui, { wrapper: ConfigurationTestProviders });
 }
 
 function useSession(session: typeof ownerSession) {
@@ -132,6 +132,10 @@ beforeEach(() => {
 		isPending: false,
 		saveConfiguration: vi.fn(),
 		upgradeImage: vi.fn(),
+		replaceSecret: vi.fn(),
+		checkDefaultRelayKey: vi.fn(),
+		replaceDefaultRelayKey: vi.fn(),
+		replaceDefaultRelayKeyWithModels: vi.fn(),
 	} as never);
 });
 
@@ -156,7 +160,7 @@ describe("AgentConfigurationWorkflow", () => {
 		expect(
 			screen.queryByRole("combobox", { name: "共同 Owner 用户" }),
 		).toBeNull();
-		expect(screen.queryByRole("button", { name: "校验并保存" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "保存配置" })).toBeNull();
 		expect(
 			screen.queryByRole("button", { name: /停止 Agent|重启 Agent/ }),
 		).toBeNull();
@@ -195,13 +199,13 @@ describe("AgentConfigurationWorkflow", () => {
 		);
 
 		const footer = screen
-			.getByRole("button", { name: "校验并保存" })
+			.getByRole("button", { name: "保存配置" })
 			.closest(".form-footer") as HTMLElement;
 		expect(
 			within(footer)
 				.getAllByRole("button")
 				.map((button) => button.textContent),
-		).toEqual(["校验并保存", "重启 Agent"]);
+		).toEqual(["保存配置", "重启 Agent"]);
 		const danger = screen.getByRole("region", { name: "停止 Agent" });
 		const admin = screen.getByRole("region", { name: "管理员操作" });
 		expect(within(danger).getByRole("button").textContent).toBe("停止 Agent");
@@ -238,36 +242,26 @@ describe("AgentConfigurationWorkflow", () => {
 			).toBe(true);
 	});
 
-	it("drops an entered Secret when navigation changes the Agent", () => {
+	it("drops an unsaved environment change when navigation changes the Agent", () => {
 		const { rerender } = render(
 			<AgentConfigurationWorkflow agent={firstAgent} />,
 		);
-		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
-		fireEvent.change(screen.getByLabelText("Secret 名称"), {
-			target: { value: "NEW_SECRET" },
-		});
-		fireEvent.change(screen.getByLabelText("新 Secret 值"), {
-			target: { value: "typed-secret" },
+		fireEvent.change(screen.getByLabelText("值"), {
+			target: { value: "typed-change" },
 		});
 
 		rerender(<AgentConfigurationWorkflow agent={secondAgent} />);
 
-		expect(screen.queryByLabelText("新 Secret 值")).toBeNull();
 		// 换成另一个 Agent 后草稿回到它自己的配置：没有改动，保存不可用（#2560）。
+		expect(screen.getByLabelText<HTMLInputElement>("值").value).toBe("release");
 		expect(
-			screen
-				.getByRole("button", { name: "校验并保存" })
-				.hasAttribute("disabled"),
+			screen.getByRole("button", { name: "保存配置" }).hasAttribute("disabled"),
 		).toBe(true);
 		// 做一次真实改动后保存，请求里的范围必须是第二个 Agent 的，而不是上一个的。
-		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
-		fireEvent.change(screen.getByLabelText("Secret 名称"), {
-			target: { value: "OTHER_SECRET" },
+		fireEvent.change(screen.getByLabelText("值"), {
+			target: { value: "other-value" },
 		});
-		fireEvent.change(screen.getByLabelText("新 Secret 值"), {
-			target: { value: "other-secret" },
-		});
-		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
+		fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
 		expect(
 			vi.mocked(useAgentConfigurationSubmission).mock.results.at(-1)?.value
 				.saveConfiguration,
@@ -276,6 +270,7 @@ describe("AgentConfigurationWorkflow", () => {
 				availability: [
 					{ kind: "organization", organizationId: "organization-2" },
 				],
+				environment: [{ name: "WORKSPACE_NAME", value: "other-value" }],
 			}),
 		);
 	});

@@ -1,4 +1,5 @@
 import { useApplicationSession } from "../application-shell.js";
+import { useTemplateNameLookup } from "../template-display-name.js";
 import { AdminAgentApplicationsScreen } from "./admin-agent-applications-screen.js";
 import { useAgentApplicationDecision } from "./use-agent-application-decision.js";
 import { usePendingAgentApplications } from "./use-pending-agent-applications.js";
@@ -10,6 +11,7 @@ export function AdminAgentApplicationsWorkflow() {
 		enabled: session.user.roles.includes("system_admin"),
 	});
 	const decision = useAgentApplicationDecision();
+	const templateName = useTemplateNameLookup();
 
 	return (
 		<AdminAgentApplicationsScreen
@@ -23,6 +25,7 @@ export function AdminAgentApplicationsWorkflow() {
 			state={applications.state}
 			onRetry={() => void applications.refetch()}
 			retrying={applications.isFetching}
+			templateName={templateName}
 		/>
 	);
 }

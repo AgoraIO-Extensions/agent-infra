@@ -5,57 +5,46 @@ import {
 	ExternalLink,
 	History,
 	MessageCircle,
-	RefreshCw,
 	Settings,
 } from "lucide-react";
-import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { armBefore, useRecoveryFocus } from "@/hooks/use-recovery-focus";
+import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import { statusTone } from "@/lib/status-tone";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
+	agentAvailabilityStatus,
 	agentConversationSourceLabel,
 	agentIdentityResponsibilityLabel,
-	agentManagementStatusLabels,
-	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
 import { AgentMark } from "../agent-mark.js";
 import { DirectoryRecords } from "../directory-fields.js";
+import { useDirectoryNames } from "../directory-names.js";
 import { PageLoadingState } from "../page-loading-state.js";
+import { ReadFailureCard } from "../page-state-card.js";
+import {
+	type TemplateNameLookup,
+	templateDisplayName,
+} from "../template-display-name.js";
 import {
 	type AgentDetailState,
 	canStartPlatformConversation,
 } from "./agent-discovery.js";
 import { agentChannelKindLabels } from "./agent-discovery-screen.js";
-import {
-	BrowserCapabilityStatus,
-	type BrowserWorkflowState,
-} from "./browser-capability-status.js";
-import type {
-	BrowserHandoffActionInputV1,
-	BrowserHandoffBindingV1,
-	BrowserHandoffPanelStateV1,
-	BrowserHandoffTimelineEventV1,
-	BrowserSideEffectConfirmationV1,
-} from "./browser-handoff-panel.js";
+import { BrowserCapabilityStatus } from "./browser-capability-status.js";
+import { ConnectionNotice } from "./connection-notice.js";
 
 type AgentDetailScreenProps = {
 	browserCapability?: BrowserCapabilityProjectionV1;
-	browserWorkflow?: BrowserWorkflowState;
-	browserHandoff?: BrowserHandoffPanelStateV1;
-	browserHandoffEvent?: BrowserHandoffTimelineEventV1;
-	browserConfirmation?: BrowserSideEffectConfirmationV1;
-	browserCurrentBinding?: BrowserHandoffBindingV1;
-	onBrowserCancelConfirmation?: (input: BrowserHandoffActionInputV1) => void;
-	onBrowserConfirmSideEffect?: (input: BrowserHandoffActionInputV1) => void;
-	onBrowserPauseAgent?: (input: BrowserHandoffActionInputV1) => void;
-	onBrowserRejectSideEffect?: (input: BrowserHandoffActionInputV1) => void;
-	onBrowserReturnToAgent?: (input: BrowserHandoffActionInputV1) => void;
-	onBrowserTakeOver?: (input: BrowserHandoffActionInputV1) => void;
+	/** 壳层与本页共用的受控 Connection 入口；undefined 表示当前没有可用入口。 */
+	connectionUrl?: string;
 	onRetry?: () => void;
 	ownerSettings?: { readonly agentId: string };
 	retrying?: boolean;
 	state: AgentDetailState | { kind: "loading" };
+	/** 模板显示名（部署配置）；未提供或读不到时显示「标准模板」（F-02）。 */
+	templateName?: TemplateNameLookup;
 };
 const channelStatusLabels = {
 	available: "可用",
@@ -84,13 +73,57 @@ function safeInteractionUrl(input: string | null) {
 	}
 }
 
+/** 服务状态行的说明：按 PRD §6.4「用户看到的行为」，不展示运行时技术状态。 */
+function serviceDescription(agent: AgentProjectionV2) {
+	if (agent.managementStatus !== "available")
+		return "历史只读，当前不能发送消息";
+	if (agent.serviceAvailability === "ready") return "可以发送消息并获得回复";
+	if (agent.serviceAvailability === "unavailable")
+		return "历史只读，可稍后重试";
+	return "历史只读，暂时不能发送消息";
+}
+
+function OwnerList({
+	owners,
+}: {
+	owners: AgentProjectionV2["configuration"]["owners"];
+}) {
+	// 第二行是目录中的组织路径；读取失败或目录没有路径时只显示名称（D-04）。
+	const names = useDirectoryNames(
+		"user",
+		owners.map((owner) => owner.userId),
+	);
+	return (
+		<ul className="detail-list">
+			{owners.map((owner) => {
+				const path = names.resolve(owner.userId).detail;
+				return (
+					<li key={owner.userId}>
+						<div className="detail-list-main">
+							<strong>{owner.displayName}</strong>
+							{path && <small>{path}</small>}
+						</div>
+					</li>
+				);
+			})}
+			{owners.length === 0 && <li>未提供 Owner</li>}
+		</ul>
+	);
+}
+
+/**
+ * 「入口状态」行：只在自有交互入口时承载入口是否就绪等状态。标准模板与平台交互入口的旧文案
+ * 只重复入口方式（已写进「模板 / 入口」），不再单独占一行，返回 undefined。
+ */
 function interactionReadiness(
 	agent: AgentProjectionV2,
 	interactionUrl: string | undefined,
 ) {
-	if (agent.source.kind === "standard") return "平台交互入口由平台提供。";
-	if (agent.source.interactionMode === "platform-adapter")
-		return "平台交互入口由平台身份校验。";
+	if (
+		agent.source.kind === "standard" ||
+		agent.source.interactionMode === "platform-adapter"
+	)
+		return undefined;
 	if (agent.source.identityResponsibility === "self-managed")
 		return interactionUrl ? "自有交互入口已就绪。" : "自有交互入口尚未就绪。";
 	return interactionUrl
@@ -98,61 +131,62 @@ function interactionReadiness(
 		: "平台身份入口需经过 Auth Gateway；当前未提供直接入口。";
 }
 
+/**
+ * 设计 #agent-detail「模板 / 入口」：标准模板写「标准模板 · {显示名} · 平台交互入口」；
+ * 自定义 Agent 的来源文案已含入口方式（「自定义 Agent · 自有交互入口」）。
+ */
+function templateAndEntryLabel(
+	agent: AgentProjectionV2,
+	templateName: TemplateNameLookup | undefined,
+) {
+	const source = agentConversationSourceLabel(agent, templateName);
+	return agent.source.kind === "standard" ? `${source} · 平台交互入口` : source;
+}
+
 export function AgentDetailScreen({
 	browserCapability,
-	browserWorkflow,
-	browserHandoff,
-	browserHandoffEvent,
-	browserConfirmation,
-	browserCurrentBinding,
-	onBrowserCancelConfirmation,
-	onBrowserConfirmSideEffect,
-	onBrowserPauseAgent,
-	onBrowserRejectSideEffect,
-	onBrowserReturnToAgent,
-	onBrowserTakeOver,
+	connectionUrl,
 	onRetry,
 	ownerSettings,
 	retrying = false,
 	state,
+	templateName,
 }: AgentDetailScreenProps) {
+	// 「重新登录」「重新加载 Agent」恢复成功后，焦点移到详情 h1（Agent 名），不落到 body。
+	const recovery = useRecoveryFocus(state.kind === "ready" ? 0 : 1);
+	const retry = armBefore(recovery.arm, onRetry);
 	if (state.kind === "loading")
 		return (
 			<PageLoadingState title="Agent 详情" message="正在加载 Agent 详情…" />
 		);
 	if (state.kind === "unavailable")
 		return (
-			<section aria-labelledby="agent-detail-heading" className="space-y-4">
-				<h1 id="agent-detail-heading" className="font-semibold text-[28px]">
-					暂时无法访问 Agent
-				</h1>
-				<Alert tone="danger" role="alert">
-					<AlertDescription>
-						{state.retryable
-							? "暂时无法读取 Agent 信息，请稍后重试。"
-							: "此 Agent 暂时无法访问。"}
-					</AlertDescription>
-					{state.retryable && onRetry ? (
-						<AlertAction>
-							<Button
-								variant="outline"
-								disabled={retrying}
-								onClick={onRetry}
-								type="button"
-							>
-								<RefreshCw aria-hidden="true" data-icon="inline-start" />
-								{retrying ? "正在重新加载…" : "重新加载 Agent"}
-							</Button>
-						</AlertAction>
-					) : null}
-				</Alert>
-				<Link
-					className={buttonVariants({ variant: "ghost", size: "sm" })}
-					to="/agents"
-				>
-					<ArrowLeft aria-hidden="true" />
-					返回 Agent 列表
-				</Link>
+			<section aria-labelledby="agent-detail-heading">
+				<header className="page-heading">
+					<div>
+						<h1 id="agent-detail-heading">Agent 详情</h1>
+					</div>
+				</header>
+				{/* 公共状态卡按 401/403/404/503/响应无效选择（P-01）；403 与 404 文案相同。 */}
+				<ReadFailureCard
+					failure={state}
+					deniedDescription="Agent 不存在，或你没有访问权限。"
+					unavailableDescription="暂时无法读取 Agent，请稍后重试。"
+					back={
+						<Link
+							activeOptions={{ exact: true }}
+							className={buttonVariants({ variant: "outline" })}
+							to="/agents"
+						>
+							返回 Agent 目录
+						</Link>
+					}
+					onRetry={retry}
+					// 401「重新登录」后会话仍有效：重读详情（W-03）。
+					onStillValid={retry}
+					retrying={retrying}
+					retryLabel="重新加载 Agent"
+				/>
 			</section>
 		);
 	const { agent } = state;
@@ -166,42 +200,49 @@ export function AgentDetailScreen({
 			? safeInteractionUrl(agent.interactionUrl)
 			: undefined;
 	const ready = canStartPlatformConversation(agent);
-	const defaultModel = agent.configuration.modelOptions.find(
-		(option) => option.optionId === agent.configuration.defaultModelOptionId,
-	);
+	const availability = agentAvailabilityStatus(agent);
+	const entryStatus = interactionReadiness(agent, interactionUrl);
 	return (
 		<section aria-labelledby="agent-detail-heading" className="agent-detail">
-			<div className="agent-detail-back">
-				<Link
-					className={buttonVariants({ variant: "ghost", size: "sm" })}
-					to="/agents"
-				>
-					<ArrowLeft aria-hidden="true" />
-					返回 Agent 列表
-				</Link>
-			</div>
-			<header className="page-heading flex flex-wrap items-start justify-between gap-6">
-				<div className="agent-detail-heading">
-					<AgentMark name={agent.name} agentId={agent.agentId} />
-					<div className="min-w-0">
-						<p className="page-eyebrow">
-							Agent 详情 ·{" "}
-							{agent.source.kind === "standard"
-								? agent.source.templateId
-								: "自定义 Agent"}
-						</p>
-						<h1
-							id="agent-detail-heading"
-							className="break-words font-semibold text-[28px]"
-						>
-							{agent.name}
-						</h1>
-						<p className="mt-2 max-w-2xl whitespace-pre-wrap break-words text-muted-foreground leading-7">
-							{agent.description}
-						</p>
+			<header className="page-heading">
+				<div className="agent-detail-copy">
+					{/* exact：返回链接不是当前页，不让 Link 按前缀补 aria-current（N-21）。 */}
+					<Link
+						activeOptions={{ exact: true }}
+						className={buttonVariants({
+							variant: "ghost",
+							size: "sm",
+							className: "agent-detail-back",
+						})}
+						to="/agents"
+					>
+						<ArrowLeft aria-hidden="true" />
+						返回 Agent 目录
+					</Link>
+					<div className="agent-detail-heading">
+						<AgentMark name={agent.name} agentId={agent.agentId} />
+						<div className="min-w-0">
+							<p className="page-eyebrow">
+								Agent 详情 ·{" "}
+								{agent.source.kind === "standard"
+									? templateDisplayName(agent.source.templateId, templateName)
+									: "自定义 Agent"}
+							</p>
+							<h1
+								id="agent-detail-heading"
+								ref={recovery.ref}
+								tabIndex={-1}
+								className="break-words font-semibold text-[28px]"
+							>
+								{agent.name}
+							</h1>
+							<p className="mt-2 max-w-2xl whitespace-pre-wrap break-words text-muted-foreground leading-7">
+								{agent.description}
+							</p>
+						</div>
 					</div>
 				</div>
-				<div className="actions flex flex-wrap gap-3">
+				<div className="actions agent-detail-actions">
 					{!selfManaged &&
 						(ready ? (
 							<Link
@@ -226,8 +267,8 @@ export function AgentDetailScreen({
 							rel="noopener noreferrer"
 							target="_blank"
 						>
-							打开 Agent
 							<ExternalLink aria-hidden="true" />
+							打开 Agent
 						</a>
 					)}
 					{ownerSettings && (
@@ -237,26 +278,19 @@ export function AgentDetailScreen({
 							to="/agents/$agentId/configuration"
 						>
 							<Settings aria-hidden="true" />
-							配置与管理
+							Owner 配置
 						</Link>
 					)}
 				</div>
 			</header>
-			<div className="status-line flex flex-wrap items-center gap-3">
-				<Badge tone={statusTone(agent.managementStatus)}>
-					{agentManagementStatusLabels[agent.managementStatus]}
+			{/* D-03：一个派生状态 chip + 非状态 tag。 */}
+			<div className="status-line agent-detail-status">
+				<Badge variant="chip" tone={availability.tone}>
+					{availability.label}
 				</Badge>
-				{agent.serviceAvailability && (
-					<Badge tone={statusTone(agent.serviceAvailability)}>
-						{agentServiceAvailabilityLabel(agent.serviceAvailability)}
-					</Badge>
-				)}
-				{!selfManaged && (
-					<span className="text-muted-foreground text-sm">
-						{ready
-							? "每位员工拥有独立的个人会话。"
-							: "历史保留，当前不可发送消息。"}
-					</span>
+				{!selfManaged && <Badge variant="tag">每个用户都有独立会话</Badge>}
+				{agent.capabilities.connection && (
+					<Badge variant="tag">支持 Connection</Badge>
 				)}
 			</div>
 			<div className="agent-detail-grid">
@@ -275,14 +309,18 @@ export function AgentDetailScreen({
 									.map((owner) => owner.displayName)
 									.join("、") || "未提供"}
 							</dd>
-							<dt className="text-muted-foreground">模板与入口</dt>
+							<dt className="text-muted-foreground">模板 / 入口</dt>
 							<dd className="break-all">
-								{agentConversationSourceLabel(agent)}
+								{templateAndEntryLabel(agent, templateName)}
 							</dd>
 							<dt className="text-muted-foreground">入口身份责任</dt>
 							<dd>{agentIdentityResponsibilityLabel(agent)}</dd>
-							<dt className="text-muted-foreground">入口状态</dt>
-							<dd>{interactionReadiness(agent, interactionUrl)}</dd>
+							{entryStatus && (
+								<>
+									<dt className="text-muted-foreground">入口状态</dt>
+									<dd>{entryStatus}</dd>
+								</>
+							)}
 							<dt className="text-muted-foreground">可用范围</dt>
 							<dd className="break-words">
 								{agent.configuration.availability.length ? (
@@ -300,14 +338,17 @@ export function AgentDetailScreen({
 										{agent.configuration.modelOptions
 											.map(
 												(option) =>
-													`${option.displayName} · ${option.reasoningLevels.join("、")}`,
+													`${option.displayName} · ${option.reasoningLevels.map(reasoningLevelLabel).join("、")}`,
 											)
 											.join("；") || "无可选择模型"}
 									</dd>
-									<dt className="text-muted-foreground">默认选项</dt>
+									{/* F-07：只显示默认推理档位的中文名，不外露模型名与原始枚举。 */}
+									<dt className="text-muted-foreground">默认推理档位</dt>
 									<dd className="break-words">
-										{defaultModel
-											? `${defaultModel.displayName}${agent.configuration.defaultReasoningLevel ? ` · ${agent.configuration.defaultReasoningLevel}` : ""}`
+										{agent.configuration.defaultReasoningLevel
+											? reasoningLevelLabel(
+													agent.configuration.defaultReasoningLevel,
+												)
 											: "未提供"}
 									</dd>
 								</>
@@ -328,7 +369,7 @@ export function AgentDetailScreen({
 								search={{ view: "history" }}
 							>
 								<History aria-hidden="true" />
-								个人历史
+								查看对话历史
 							</Link>
 						</section>
 					)}
@@ -337,7 +378,7 @@ export function AgentDetailScreen({
 						aria-labelledby="agent-capability-heading"
 					>
 						<h2 id="agent-capability-heading" className="font-semibold text-lg">
-							外部能力
+							连接器
 						</h2>
 						<p>
 							{agent.capabilities.connection
@@ -345,28 +386,11 @@ export function AgentDetailScreen({
 								: "当前 Agent 未提供 Connection 能力。"}
 						</p>
 						{agent.capabilities.connection && (
-							<p className="text-muted-foreground text-sm">
-								登录、OAuth、客户端授权和原调用查询均在独立 Connection
-								中完成。能力说明不代表当前主体已经获得授权，Owner
-								不能替其他主体授权。
-							</p>
+							<ConnectionNotice href={connectionUrl} />
 						)}
 					</section>
 					{browserCapability && (
-						<BrowserCapabilityStatus
-							capability={browserCapability}
-							workflow={browserWorkflow}
-							handoff={browserHandoff}
-							handoffEvent={browserHandoffEvent}
-							confirmation={browserConfirmation}
-							currentBinding={browserCurrentBinding}
-							onCancelConfirmation={onBrowserCancelConfirmation}
-							onConfirmSideEffect={onBrowserConfirmSideEffect}
-							onPauseAgent={onBrowserPauseAgent}
-							onRejectSideEffect={onBrowserRejectSideEffect}
-							onReturnToAgent={onBrowserReturnToAgent}
-							onTakeOver={onBrowserTakeOver}
-						/>
+						<BrowserCapabilityStatus capability={browserCapability} />
 					)}
 				</div>
 				<aside className="agent-detail-aside" aria-label="Owner 与渠道">
@@ -378,14 +402,7 @@ export function AgentDetailScreen({
 							<h2 id="agent-owner-heading">Owner</h2>
 							<p>负责范围与运行状态</p>
 						</header>
-						<ul className="detail-list">
-							{agent.configuration.owners.map((owner) => (
-								<li key={owner.userId}>
-									<strong>{owner.displayName}</strong>
-								</li>
-							))}
-							{agent.configuration.owners.length === 0 && <li>未提供 Owner</li>}
-						</ul>
+						<OwnerList owners={agent.configuration.owners} />
 					</section>
 					<section
 						className="agent-detail-panel"
@@ -397,21 +414,22 @@ export function AgentDetailScreen({
 						</header>
 						<ul className="detail-list">
 							<li>
-								<strong>服务状态</strong>
-								<Badge
-									tone={statusTone(
-										agent.serviceAvailability ?? agent.managementStatus,
-									)}
-								>
-									{agent.serviceAvailability
-										? agentServiceAvailabilityLabel(agent.serviceAvailability)
-										: agentManagementStatusLabels[agent.managementStatus]}
+								<div className="detail-list-main">
+									<strong>服务状态</strong>
+									<small>{serviceDescription(agent)}</small>
+								</div>
+								<Badge variant="chip" tone={availability.tone}>
+									{availability.label}
 								</Badge>
 							</li>
 							{agent.configuration.channels.map((channel) => (
 								<li key={channel.kind}>
-									<strong>{agentChannelKindLabels[channel.kind]}</strong>
-									<Badge tone={statusTone(channel.status)}>
+									<div className="detail-list-main">
+										<strong>{agentChannelKindLabels[channel.kind]}</strong>
+										{/* 企微渠道的范围说明需要契约字段，确认前不加（D-04）。 */}
+										{channel.kind === "web" && <small>平台对话入口</small>}
+									</div>
+									<Badge variant="chip" tone={statusTone(channel.status)}>
 										{channelStatusLabels[channel.status]}
 									</Badge>
 								</li>

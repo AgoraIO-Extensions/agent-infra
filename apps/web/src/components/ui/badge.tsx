@@ -1,7 +1,7 @@
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
 import { cva } from "class-variance-authority";
-import { type ChipTone, statusTone } from "@/lib/status-tone";
+import type { ChipTone } from "@/lib/status-tone";
 import { cn } from "@/lib/utils";
 
 // 设计 .chip（状态，全圆角带圆点）与 .tag（非状态标签，7px 圆角无圆点）。
@@ -30,26 +30,12 @@ const badgeVariants = cva(
 	},
 );
 
-// 兼容层：旧变体名只供尚未迁移的对话页与两个浏览器面板使用，
-// 对话页迁移（#2780–#2787）完成后删除。新代码只用 chip / tag 并显式传 tone。
-type LegacyBadgeVariant = "default" | "secondary" | "destructive" | "outline";
-
+// 只有 chip（状态）与 tag（非状态标签）两种变体；状态色调由调用方显式传 tone，
+// 组件不再从 data-status / data-result 推导，也不接受旧变体名。
 type BadgeProps = useRender.ComponentProps<"span"> & {
-	variant?: "chip" | "tag" | LegacyBadgeVariant;
+	variant?: "chip" | "tag";
 	tone?: ChipTone;
 };
-
-function legacyTone(
-	variant: BadgeProps["variant"],
-	status: unknown,
-): ChipTone | undefined {
-	if (variant === "destructive") return "red";
-	// 旧页面靠 data-status / data-result 属性选择器把 Badge 画成状态 chip。
-	if (typeof status === "string") return statusTone(status);
-	if (variant === "secondary") return undefined;
-	if (variant === "default") return "blue";
-	return "gray";
-}
 
 function Badge({
 	className,
@@ -58,22 +44,13 @@ function Badge({
 	render,
 	...props
 }: BadgeProps) {
-	const attributes = props as Record<string, unknown>;
-	const resolvedTone =
-		variant === "tag"
-			? undefined
-			: (tone ??
-				legacyTone(
-					variant,
-					attributes["data-status"] ?? attributes["data-result"],
-				));
-	const kind = resolvedTone === undefined ? "tag" : "chip";
+	const resolvedTone = variant === "tag" ? undefined : (tone ?? "gray");
 	return useRender({
 		defaultTagName: "span",
 		props: mergeProps<"span">(
 			{
 				className: cn(
-					badgeVariants({ variant: kind, tone: resolvedTone }),
+					badgeVariants({ variant, tone: resolvedTone }),
 					className,
 				),
 			},
@@ -82,7 +59,7 @@ function Badge({
 		render,
 		state: {
 			slot: "badge",
-			variant: kind,
+			variant,
 			tone: resolvedTone,
 		},
 	});

@@ -1,4 +1,5 @@
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { LoadingLine } from "@/components/ui/spinner";
 import { Button } from "../../components/ui/button.js";
 import { useRecentPersonalConversations } from "../workbench/use-recent-personal-conversations.js";
 import {
@@ -25,9 +26,9 @@ export function RecentConversationHistory({
 				count={state.kind === "ready" ? state.conversations.length : undefined}
 				hasMore={state.kind === "ready" && state.nextCursor !== null}
 			/>
-			{state.kind === "loading" && <p role="status">正在读取最近对话…</p>}
+			{state.kind === "loading" && <LoadingLine>正在读取最近对话…</LoadingLine>}
 			{state.kind === "unavailable" && (
-				<Alert>
+				<Alert tone="danger" role="alert">
 					<AlertDescription>
 						{state.reason === "authentication-required"
 							? "最近对话无法读取，请重新登录。"

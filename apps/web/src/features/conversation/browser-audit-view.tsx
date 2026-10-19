@@ -1,11 +1,39 @@
-import { AlertTriangle, CheckCircle2, Clock3, ShieldCheck } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogBody,
+	DialogClose,
+	DialogContent,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+	DialogTrigger,
+} from "@/components/ui/dialog";
+import { Timestamp } from "@/components/ui/timestamp";
+import type { ChipTone } from "@/lib/status-tone";
 import type { PersistedConversationEventV2 } from "../../pilot/generated-v2/types.gen.js";
+import {
+	browserEventsForExecution,
+	validBrowserHandoffEvent,
+	validBrowserSideEffectEvent,
+} from "./browser-card.js";
+import {
+	type BrowserHandoffReason,
+	boundedBrowserText,
+	browserHandoffReasonLabels,
+	browserHandoffStatusLabels,
+	browserOperationStatusLabels,
+	browserOriginHost,
+	browserSideEffectLabel,
+	browserSideEffectStatusLabels,
+	browserToolLabel,
+} from "./browser-labels.js";
 
-const MAX_BROWSER_AUDIT_ENTRIES = 50;
+export const MAX_BROWSER_AUDIT_ENTRIES = 50;
 
-type BrowserAuditKind = "operation" | "handoff" | "side_effect";
-type BrowserAuditSeverity = "normal" | "warning" | "danger";
+export type BrowserAuditKind = "operation" | "handoff" | "side_effect";
 
 export type BrowserAuditEntry = Readonly<{
 	key: string;
@@ -14,235 +42,163 @@ export type BrowserAuditEntry = Readonly<{
 	kind: BrowserAuditKind;
 	status: string;
 	statusLabel: string;
-	severity: BrowserAuditSeverity;
-	detail: string;
+	tone: ChipTone;
+	title: string;
+	detail?: string;
+	/** 「操作范围」使用的可读动作；接管没有动作。 */
+	action?: string;
+	host?: string;
+	reason?: string;
 }>;
 
-const operationLabels = {
-	intent: "正在受理",
-	started: "正在执行",
-	completed: "已完成",
-	failed: "执行失败",
-	unknown: "结果待核实",
-} as const;
-
-const handoffLabels = {
-	requested: "等待接管",
-	active: "用户已接管",
-	returning: "正在交回 Agent",
-	completed: "已交回 Agent",
-	revoked: "已撤销",
-	expired: "已过期",
-	crashed: "浏览器已崩溃",
-	unknown: "状态待核实",
-} as const;
-
-const sideEffectLabels = {
-	pending: "等待确认",
-	confirmed: "已确认",
-	rejected: "已拒绝",
-	cancelled: "已取消",
-	expired: "已过期",
-	unknown: "结果待核实",
-} as const;
-
-const reasonLabels = {
-	login: "登录",
-	mfa: "MFA 验证",
-	captcha: "CAPTCHA 验证",
-	human_judgment: "需要人工判断",
-} as const;
-
-function safeText(value: string, limit = 160): string {
-	return [...value]
-		.filter((character) => {
-			const code = character.codePointAt(0) ?? 0;
-			return code >= 0x20 && code !== 0x7f;
-		})
-		.join("")
-		.trim()
-		.slice(0, limit);
-}
-
-function safeOrigin(value: string): string | undefined {
-	try {
-		const url = new URL(value);
-		if (
-			(url.protocol !== "http:" && url.protocol !== "https:") ||
-			url.username ||
-			url.password ||
-			url.pathname !== "/" ||
-			url.search ||
-			url.hash
-		)
-			return undefined;
-		return url.origin;
-	} catch {
-		return undefined;
-	}
-}
-
-function severityFor(status: string): BrowserAuditSeverity {
-	if (["failed", "unknown", "crashed"].includes(status)) return "danger";
-	if (
-		[
-			"intent",
-			"started",
-			"requested",
-			"active",
-			"returning",
-			"pending",
-			"expired",
-		].includes(status)
-	)
-		return "warning";
-	return "normal";
-}
-
-function sameExecution(
-	event: PersistedConversationEventV2,
-	conversationId: string | undefined,
-	executionId: string | undefined,
-): boolean {
-	return (
-		event.kind === "event" &&
-		(conversationId === undefined || event.conversationId === conversationId) &&
-		(executionId === undefined || event.executionId === executionId)
-	);
-}
-
-function validBrowserSideEffectEvent(
-	event: Extract<PersistedConversationEventV2, { type: "browser.side_effect" }>,
-): boolean {
-	const { binding } = event.payload;
-	return (
-		binding.conversationId === event.conversationId &&
-		binding.executionId === event.executionId &&
-		binding.confirmationId === event.payload.confirmationId &&
-		Boolean(safeOrigin(event.payload.targetOrigin)) &&
-		Boolean(safeText(event.payload.redactedTargetSummary))
-	);
-}
-
-function operationEntry(
-	event: Extract<PersistedConversationEventV2, { type: "execution.operation" }>,
-): BrowserAuditEntry | undefined {
-	if (event.payload.kind !== "tool" || !event.payload.browser) return undefined;
-	const status = event.payload.phase;
-	return {
-		key: `operation:${event.payload.operationRef}:${event.payload.attemptRef}`,
-		sequence: event.sequence,
-		occurredAt: event.occurredAt,
-		kind: "operation",
-		status,
-		statusLabel: operationLabels[status],
-		severity: severityFor(status),
-		detail: safeText(event.payload.toolId),
-	};
-}
-
-function handoffEntry(
-	event: Extract<PersistedConversationEventV2, { type: "browser.handoff" }>,
-): BrowserAuditEntry | undefined {
-	if (
-		event.payload.binding.conversationId !== event.conversationId ||
-		event.payload.binding.executionId !== event.executionId
-	)
-		return undefined;
-	const status = event.payload.status;
-	return {
-		key: `handoff:${event.eventId}`,
-		sequence: event.sequence,
-		occurredAt: event.occurredAt,
-		kind: "handoff",
-		status,
-		statusLabel: handoffLabels[status],
-		severity: severityFor(status),
-		detail: `原因：${reasonLabels[event.payload.reason]}`,
-	};
-}
-
-function sideEffectEntry(
-	event: Extract<PersistedConversationEventV2, { type: "browser.side_effect" }>,
-): BrowserAuditEntry | undefined {
-	if (!validBrowserSideEffectEvent(event)) return undefined;
-	const status = event.payload.status;
-	const origin = safeOrigin(event.payload.targetOrigin);
-	const summary = safeText(event.payload.redactedTargetSummary);
-	if (!origin || !summary) return undefined;
-	return {
-		key: `side-effect:${event.payload.confirmationId}`,
-		sequence: event.sequence,
-		occurredAt: event.occurredAt,
-		kind: "side_effect",
-		status,
-		statusLabel: sideEffectLabels[status],
-		severity: severityFor(status),
-		detail: `${safeText(event.payload.operation)} · ${origin} · ${summary}`,
-	};
+function latest(map: Map<string, BrowserAuditEntry>, entry: BrowserAuditEntry) {
+	const previous = map.get(entry.key);
+	if (!previous || previous.sequence <= entry.sequence)
+		map.set(entry.key, entry);
 }
 
 /**
- * Build a bounded, read-only Browser history from the already authorized
- * Conversation timeline. No caller-supplied binding becomes an action input.
+ * 从已授权的会话时间线构造只读、有上限的浏览器操作记录。
+ * 操作尝试、接管、确认三类都按对象聚合到最新 sequence；
+ * 绑定与事件范围不一致、origin 带路径或凭据、摘要为空的记录直接丢弃。
  */
+export function browserAuditRecords(
+	events: readonly PersistedConversationEventV2[],
+	conversationId?: string,
+	executionId?: string,
+): { entries: readonly BrowserAuditEntry[]; truncated: boolean } {
+	const objects = new Map<string, BrowserAuditEntry>();
+	for (const event of browserEventsForExecution(
+		events,
+		conversationId,
+		executionId,
+	)) {
+		if (event.type === "execution.operation") {
+			if (event.payload.kind !== "tool") continue;
+			const status = event.payload.phase;
+			const action = browserToolLabel(event.payload.toolId);
+			latest(objects, {
+				key: `operation:${event.payload.operationRef}:${event.payload.attemptRef}`,
+				sequence: event.sequence,
+				occurredAt: event.occurredAt,
+				kind: "operation",
+				status,
+				statusLabel: browserOperationStatusLabels[status].label,
+				tone: browserOperationStatusLabels[status].tone,
+				title: action,
+				action,
+			});
+		} else if (event.type === "browser.handoff") {
+			if (!validBrowserHandoffEvent(event)) continue;
+			const { status } = event.payload;
+			const reason =
+				browserHandoffReasonLabels[
+					event.payload.reason as BrowserHandoffReason
+				];
+			latest(objects, {
+				key: `handoff:${event.payload.handoffId}`,
+				sequence: event.sequence,
+				occurredAt: event.occurredAt,
+				kind: "handoff",
+				status,
+				statusLabel: browserHandoffStatusLabels[status].label,
+				tone: browserHandoffStatusLabels[status].tone,
+				title: "人工接管",
+				detail: reason,
+				reason,
+			});
+		} else {
+			if (!validBrowserSideEffectEvent(event)) continue;
+			const { status } = event.payload;
+			const host = browserOriginHost(event.payload.targetOrigin);
+			const action = browserSideEffectLabel(event.payload.operation);
+			latest(objects, {
+				key: `side-effect:${event.payload.confirmationId}`,
+				sequence: event.sequence,
+				occurredAt: event.occurredAt,
+				kind: "side_effect",
+				status,
+				statusLabel: browserSideEffectStatusLabels[status].label,
+				tone: browserSideEffectStatusLabels[status].tone,
+				title: action,
+				detail: `${host} · ${boundedBrowserText(event.payload.redactedTargetSummary)}`,
+				action,
+				host,
+			});
+		}
+	}
+	const sorted = [...objects.values()].sort(
+		(left, right) => left.sequence - right.sequence,
+	);
+	return {
+		entries: sorted.slice(-MAX_BROWSER_AUDIT_ENTRIES),
+		truncated: sorted.length > MAX_BROWSER_AUDIT_ENTRIES,
+	};
+}
+
 export function browserAuditEntries(
 	events: readonly PersistedConversationEventV2[],
 	conversationId?: string,
 	executionId?: string,
 ): readonly BrowserAuditEntry[] {
-	if (!executionId) return [];
-	const operations = new Map<string, BrowserAuditEntry>();
-	const handoffs = new Map<string, BrowserAuditEntry>();
-	const sideEffects = new Map<string, BrowserAuditEntry>();
-	for (const event of events) {
-		if (!sameExecution(event, conversationId, executionId)) continue;
-		if (event.type === "execution.operation") {
-			const entry = operationEntry(event);
-			if (entry) {
-				const previous = operations.get(entry.key);
-				if (!previous || previous.sequence <= entry.sequence)
-					operations.set(entry.key, entry);
-			}
-		} else if (event.type === "browser.handoff") {
-			const entry = handoffEntry(event);
-			if (entry) handoffs.set(entry.key, entry);
-		} else if (event.type === "browser.side_effect") {
-			const entry = sideEffectEntry(event);
-			if (entry) {
-				const previous = sideEffects.get(entry.key);
-				if (!previous || previous.sequence <= entry.sequence)
-					sideEffects.set(entry.key, entry);
-			}
+	return browserAuditRecords(events, conversationId, executionId).entries;
+}
+
+const unique = (values: readonly (string | undefined)[]) => [
+	...new Set(values.filter((value): value is string => Boolean(value))),
+];
+
+/** 弹窗顶部的五行事实；契约没有访问域名与接管人姓名时不推测、不显示 ID。 */
+export function browserAuditFacts(entries: readonly BrowserAuditEntry[]) {
+	const hosts = unique(entries.map((entry) => entry.host));
+	const actions = unique(entries.map((entry) => entry.action));
+	const handoff = entries.findLast((entry) => entry.kind === "handoff");
+	return [
+		{ label: "域名", value: hosts.length ? hosts.join("、") : "未记录" },
+		{
+			label: "操作范围",
+			value: actions.length ? actions.join("、") : "未记录",
+		},
+		{
+			label: "接管",
+			value: handoff
+				? `${handoff.reason} · ${handoff.statusLabel}`
+				: "无需接管",
+		},
+		{ label: "结果", value: entries.at(-1)?.statusLabel ?? "未记录" },
+		// PRD §11.4 只承诺凭证不进入模型；「不保存」待产品确认后再替换。
+		{ label: "凭证", value: "不进入模型或平台记录" },
+	] as const;
+}
+
+/** 弹窗打开期间只播报最新变化的一条，首次打开不播报。 */
+function useLatestChange(entries: readonly BrowserAuditEntry[], open: boolean) {
+	const [announcement, setAnnouncement] = useState("");
+	const seen = useRef(new Map<string, string>());
+	useEffect(() => {
+		const previous = seen.current;
+		const next = new Map(entries.map((entry) => [entry.key, entry.status]));
+		seen.current = next;
+		if (!open) {
+			setAnnouncement("");
+			return;
 		}
-	}
-	return [...operations.values(), ...handoffs.values(), ...sideEffects.values()]
-		.sort((left, right) => left.sequence - right.sequence)
-		.slice(-MAX_BROWSER_AUDIT_ENTRIES);
+		const changed = entries.findLast(
+			(entry) => previous.size > 0 && previous.get(entry.key) !== entry.status,
+		);
+		if (changed) setAnnouncement(`${changed.title} · ${changed.statusLabel}`);
+	}, [entries, open]);
+	useEffect(() => {
+		if (open) setAnnouncement("");
+	}, [open]);
+	return announcement;
 }
 
-function statusIcon(entry: BrowserAuditEntry) {
-	if (entry.severity === "danger") return <AlertTriangle aria-hidden="true" />;
-	if (entry.status === "completed" || entry.status === "confirmed")
-		return <CheckCircle2 aria-hidden="true" />;
-	if (entry.status === "pending") return <ShieldCheck aria-hidden="true" />;
-	return <Clock3 aria-hidden="true" />;
-}
-
-const kindLabels: Record<BrowserAuditKind, string> = {
-	operation: "Browser 操作",
-	handoff: "浏览器接管",
-	side_effect: "外部副作用",
-};
-
-function displayTime(value: string): string {
-	const parsed = Date.parse(value);
-	return Number.isFinite(parsed)
-		? new Date(parsed).toLocaleString("zh-CN")
-		: "时间待核实";
-}
-
-export function BrowserAuditView({
+/**
+ * 只读的「浏览器操作记录」：触发按钮 + 模态弹窗。
+ * 只渲染所选 Execution 的记录；打开、关闭都不发出任何写请求。
+ */
+export function BrowserOperationRecordDialog({
 	conversationId,
 	events,
 	executionId,
@@ -251,39 +207,77 @@ export function BrowserAuditView({
 	readonly events: readonly PersistedConversationEventV2[];
 	readonly executionId?: string;
 }) {
-	const entries = browserAuditEntries(events, conversationId, executionId);
+	const [open, setOpen] = useState(false);
+	const headingId = useId();
+	const { entries, truncated } = browserAuditRecords(
+		events,
+		conversationId,
+		executionId,
+	);
+	const announcement = useLatestChange(entries, open);
 	if (entries.length === 0) return null;
+	const unknown = entries.some((entry) => entry.status === "unknown");
 	return (
-		<section aria-labelledby="browser-audit-heading" className="mt-3">
-			<div className="mb-2">
-				<h2 id="browser-audit-heading" className="font-medium">
-					Browser 审计与恢复
-				</h2>
-				<p className="text-muted-foreground text-xs">
-					只读显示当前执行的服务端 Browser 事实；结果待核实不会自动重放。
-				</p>
-			</div>
-			<ol className="space-y-2" aria-label="Browser 审计记录">
-				{entries.map((entry) => (
-					<li key={entry.key}>
-						<Alert
-							variant={entry.severity === "danger" ? "destructive" : "default"}
-							aria-label={`${kindLabels[entry.kind]}：${entry.statusLabel}`}
-						>
-							{statusIcon(entry)}
-							<AlertTitle>
-								{kindLabels[entry.kind]} · {entry.statusLabel}
-							</AlertTitle>
-							<AlertDescription>
-								<time dateTime={entry.occurredAt}>
-									{displayTime(entry.occurredAt)}
-								</time>
-								<span className="ml-2">{entry.detail}</span>
-							</AlertDescription>
-						</Alert>
-					</li>
-				))}
-			</ol>
-		</section>
+		<Dialog open={open} onOpenChange={setOpen}>
+			<DialogTrigger render={<Button type="button" variant="outline" />}>
+				查看操作记录
+			</DialogTrigger>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>浏览器操作记录</DialogTitle>
+				</DialogHeader>
+				<DialogBody>
+					<dl className="conversation-facts">
+						{browserAuditFacts(entries).map((fact) => (
+							<Fragment key={fact.label}>
+								<dt>{fact.label}</dt>
+								<dd>{fact.value}</dd>
+							</Fragment>
+						))}
+					</dl>
+					<h3 id={headingId} className="browser-record-heading">
+						操作步骤
+					</h3>
+					<ol aria-labelledby={headingId} className="browser-record-list">
+						{entries.map((entry) => (
+							<li key={entry.key}>
+								<div className="browser-record-main">
+									<strong>{entry.title}</strong>
+									{entry.detail ? <span>{entry.detail}</span> : null}
+									<RecordTime value={entry.occurredAt} />
+								</div>
+								<Badge variant="chip" tone={entry.tone}>
+									{entry.statusLabel}
+								</Badge>
+							</li>
+						))}
+					</ol>
+					{truncated ? (
+						<p className="browser-record-note">
+							仅显示最近 {MAX_BROWSER_AUDIT_ENTRIES} 条
+						</p>
+					) : null}
+					{unknown ? (
+						<p className="conversation-page-note">
+							结果待核实的操作不会自动重试。
+						</p>
+					) : null}
+					<p role="status" aria-live="polite" className="sr-only">
+						{announcement}
+					</p>
+				</DialogBody>
+				<DialogFooter>
+					<DialogClose render={<Button type="button" />}>关闭</DialogClose>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
+function RecordTime({ value }: { readonly value: string }) {
+	return Number.isFinite(Date.parse(value)) ? (
+		<Timestamp value={value} />
+	) : (
+		<span>时间待核实</span>
 	);
 }

@@ -1,11 +1,5 @@
-import { Send, Square } from "lucide-react";
-import {
-	type ReactNode,
-	type RefObject,
-	useLayoutEffect,
-	useRef,
-	useState,
-} from "react";
+import { Send } from "lucide-react";
+import { type RefObject, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Label } from "../../components/ui/label.js";
 import { Textarea } from "../../components/ui/textarea.js";
@@ -59,10 +53,10 @@ export type ConversationComposerProps = {
 	model?: ComposerModelControlsProps;
 	/** 不可重试的模型保存失败原因，显示在工具栏上方。 */
 	modelFailure?: string;
-	/** 进行中回复的停止入口。 */
-	stop?: { label: string; disabled: boolean; onStop: () => void };
-	/** composer 顶部的附件入口（会话文件迁移前仍在 composer 内）。 */
-	attachments?: ReactNode;
+	/** 输入框的补充说明（例如「提交结果尚未确认」），被禁用时读屏仍能读到原因。 */
+	draftDescribedBy?: string;
+	/** 发送按钮的补充说明（例如「不支持补充指令」），只在发送因此禁用时提供。 */
+	sendDescribedBy?: string;
 	formAttributes: Record<`data-${string}`, string>;
 	onSendMessage: () => void;
 	onInvokeCapability: (
@@ -73,7 +67,7 @@ export type ConversationComposerProps = {
 
 /**
  * 设计 .composer：唯一的输入框承载消息与 / 命令搜索；工具栏左侧是「命令 / Skill」、
- * 模型与思考入口，右侧是停止与发送。
+ * 模型与思考入口，右侧是发送。停止回复在处理中的回复卡内（R4-07），附件在「会话文件」条内（CH-03）。
  */
 export function ConversationComposer({
 	composerId,
@@ -86,8 +80,8 @@ export function ConversationComposer({
 	capability,
 	model,
 	modelFailure,
-	stop,
-	attachments,
+	draftDescribedBy,
+	sendDescribedBy,
 	formAttributes,
 	onSendMessage,
 	onInvokeCapability,
@@ -149,7 +143,6 @@ export function ConversationComposer({
 				anchor={form}
 				textarea={textarea}
 			/>
-			{attachments}
 			<CapabilitySelection capability={capability} />
 			<Label className="sr-only" htmlFor={composerId}>
 				消息
@@ -160,6 +153,7 @@ export function ConversationComposer({
 				rows={3}
 				value={draft}
 				disabled={draftDisabled}
+				aria-describedby={draftDescribedBy}
 				placeholder={placeholder}
 				{...capabilityComboboxProps(capability)}
 				onFocus={(event) => {
@@ -199,23 +193,12 @@ export function ConversationComposer({
 					{model && <ComposerModelControls {...model} compact={compact} />}
 				</div>
 				<div className="composer-actions">
-					{stop && (
-						<Button
-							type="button"
-							variant="outline"
-							className="composer-stop"
-							disabled={stop.disabled}
-							onClick={stop.onStop}
-						>
-							<Square aria-hidden="true" />
-							<span className="composer-stop-label">{stop.label}</span>
-						</Button>
-					)}
 					<Button
 						type="submit"
 						size="sm"
 						data-c02-send-button="send"
 						disabled={!canSubmit}
+						aria-describedby={sendDescribedBy}
 					>
 						<Send aria-hidden="true" />
 						<span className="composer-send-label">

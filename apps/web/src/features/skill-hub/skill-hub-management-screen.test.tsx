@@ -135,6 +135,10 @@ describe("MySkillsScreen", () => {
 		expect(
 			screen.getByRole("link", { name: "创建或导入" }).getAttribute("href"),
 		).toBe("/skills/manage/new");
+		// 绑定要先选择自己创建的 Agent：入口直达「已创建」标签页。
+		expect(
+			screen.getByRole("link", { name: "Agent 绑定" }).getAttribute("href"),
+		).toBe("/my-agents?tab=owned");
 		const rows = document.querySelectorAll("article.skill-row");
 		expect(rows).toHaveLength(2);
 		const release = rows[0] as HTMLElement;

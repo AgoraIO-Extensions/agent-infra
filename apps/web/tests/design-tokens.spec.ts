@@ -496,21 +496,22 @@ const pages = [
 	{
 		route: "/agents/agent-pilot-1",
 		role: "owner",
-		ready: ["link", "配置与管理"],
+		ready: ["link", "Owner 配置"],
 	},
 	{
 		route: "/agents/agent-pilot-1/configuration",
 		role: "owner",
-		ready: ["button", "校验并保存"],
-		primary: "校验并保存",
+		// 页脚唯一的 primary 按设计改为「保存配置」（RK2-08）。
+		ready: ["button", "保存配置"],
+		primary: "保存配置",
 	},
 	{ route: "/admin/approvals", role: "admin", ready: ["button", /^审阅：/] },
 	{ route: "/audit", role: "owner", ready: ["button", /^详情：/] },
 	{
 		route: "/my-agents/new",
 		role: "owner",
-		ready: ["button", "提交申请"],
-		primary: "提交申请",
+		ready: ["button", "提交审批"],
+		primary: "提交审批",
 	},
 	// K-02：详情不再列出摘要卡，以 Tab 出现作为就绪信号。
 	{
@@ -593,7 +594,7 @@ test("primary actions, steppers, directory help and table heads use the expected
 	await page.goto("/my-agents/new");
 	await expect(page.getByLabel("Agent 名称", { exact: true })).toBeVisible();
 	const report = await measureTokens(page);
-	expect(report.primaryButtons.map((item) => item.text)).toContain("提交申请");
+	expect(report.primaryButtons.map((item) => item.text)).toContain("提交审批");
 	expect(
 		report.monospaced.filter(
 			(item) => item.selector === "form-stepper li::before",
@@ -670,7 +671,7 @@ test("reduced motion compresses every transition and animation duration", async 
 	const api = await tokenFixture(page);
 	await page.goto("/agents/agent-pilot-1/configuration");
 	await expect(
-		page.getByRole("button", { name: "校验并保存", exact: true }),
+		page.getByRole("button", { name: "保存配置", exact: true }),
 	).toBeVisible();
 	const durations = () =>
 		page.evaluate(() => ({

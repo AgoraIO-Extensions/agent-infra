@@ -167,6 +167,7 @@ export function MySkillsScreen({
 					<Link
 						className={buttonVariants({ variant: "outline" })}
 						to="/my-agents"
+						search={{ tab: "owned" }}
 					>
 						<Settings aria-hidden="true" />
 						Agent 绑定
@@ -426,7 +427,9 @@ export function SkillEditorScreen({
 
 	return (
 		<section className="skill-page" aria-labelledby={`${id}-heading`}>
+			{/* exact：返回链接不是当前页，不让 Link 按前缀补 aria-current（N-21）。 */}
 			<Link
+				activeOptions={{ exact: true }}
 				className={buttonVariants({ variant: "ghost" })}
 				to="/skills/manage"
 			>

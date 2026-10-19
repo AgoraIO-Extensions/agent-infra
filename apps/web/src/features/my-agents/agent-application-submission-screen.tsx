@@ -53,13 +53,16 @@ type AgentApplicationSubmissionScreenProps =
 			refreshingDeploymentConfiguration?: boolean;
 	  };
 
+/** 设计 #application-form 的页面标题；路由读取中的占位标题与它一致。 */
+export const createApplicationHeading = "创建 Agent";
+
 export function AgentApplicationSubmissionScreen(
 	props: AgentApplicationSubmissionScreenProps,
 ) {
 	const resultRef = useResultFocus(props.result);
 	const heading =
 		props.mode === "create"
-			? "创建一个新的 Agent。"
+			? createApplicationHeading
 			: agentApplicationEditActionLabels[props.action];
 	// 设计 .form-footer 左侧唯一的退出入口：ghost「取消」，页头不再放退出操作（N-03）。
 	const cancelAction = props.submitting ? (
@@ -110,9 +113,8 @@ export function AgentApplicationSubmissionScreen(
 					<h1 id="agent-application-submission-heading">
 						{props.result ? "申请已提交" : heading}
 					</h1>
-					<p>
-						先说明使用场景，再配置 Owner、范围和模型。服务端会重新校验全部字段。
-					</p>
+					{/* 设计 #application-form 原文去掉「渠道」：渠道分区随 #2862 M-10 决定。 */}
+					<p>填写使用场景，再配置 Owner、范围和模型。提交时会重新校验字段。</p>
 				</div>
 			</header>
 			<div className="form-layout full-width-form application-form-layout">

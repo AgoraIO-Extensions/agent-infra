@@ -1,6 +1,6 @@
 import { ExternalLink, KeyRound, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
@@ -29,11 +29,9 @@ const statusLabels: Record<
 };
 
 export function ConnectionInstallationPanel({
-	conversationId,
 	executionId,
 	client,
 }: {
-	conversationId: string;
 	executionId: string;
 	client?: Client;
 }) {
@@ -193,7 +191,7 @@ export function ConnectionInstallationPanel({
 				state.kind !== "loading" &&
 				state.kind !== "unavailable" && (
 					<div className="flex flex-wrap items-center gap-2">
-						<Badge variant="outline">{statusLabels[state.kind]}</Badge>
+						<Badge tone="gray">{statusLabels[state.kind]}</Badge>
 						{openedUrl && state.kind === "awaiting_confirmation" && (
 							<Button
 								type="button"
@@ -212,24 +210,23 @@ export function ConnectionInstallationPanel({
 				</p>
 			)}
 			{state.kind === "unavailable" && (
-				<Alert>
+				<Alert tone="warn" role="alert">
 					<AlertDescription>Connection 安装暂不可用。</AlertDescription>
 					{state.retryable && (
-						<Button
-							type="button"
-							variant="outline"
-							onClick={() => void begin()}
-						>
-							<RefreshCw aria-hidden="true" data-icon="inline-start" />
-							重新开始
-						</Button>
+						<AlertAction>
+							<Button
+								type="button"
+								variant="outline"
+								onClick={() => void begin()}
+							>
+								<RefreshCw aria-hidden="true" data-icon="inline-start" />
+								重新开始
+							</Button>
+						</AlertAction>
 					)}
 				</Alert>
 			)}
 			{error && <p className="text-destructive text-sm">{error}</p>}
-			<p className="text-muted-foreground text-xs">
-				执行：{conversationId} / {executionId}
-			</p>
 		</section>
 	);
 }

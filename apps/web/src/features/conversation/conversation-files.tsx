@@ -392,7 +392,13 @@ export function ConversationFilePicker({
 					{item.status === "available" && <span role="status">已上传</span>}
 					{(item.status === "failed" || item.status === "expired") && (
 						<>
-							<Alert variant="destructive" className="max-w-sm py-1">
+							{/* 上传失败是操作结果：role="alert"；行内紧凑展示，不加图标（B-10）。 */}
+							<Alert
+								tone="danger"
+								role="alert"
+								icon={null}
+								className="max-w-sm py-1"
+							>
 								<AlertDescription>{item.error}</AlertDescription>
 							</Alert>
 							<Button

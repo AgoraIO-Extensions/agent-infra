@@ -80,6 +80,30 @@ describe("ConfirmDialog", () => {
 		);
 	});
 
+	it("omits the cancel button when cancelLabel is null and closes from the header", async () => {
+		const onConfirm = vi.fn();
+		render(
+			<ConfirmDialog
+				title="撤回这条申请？"
+				description="撤回后申请不会进入审批队列；你可以重新创建申请。"
+				confirmLabel="确认撤回"
+				cancelLabel={null}
+				onConfirm={onConfirm}
+				trigger={<Button variant="outline">撤回申请</Button>}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "撤回申请" }));
+		const dialog = await screen.findByRole("dialog", {
+			name: "撤回这条申请？",
+		});
+		expect(within(dialog).queryByRole("button", { name: "取消" })).toBeNull();
+		const footer = dialog.querySelector('[data-slot="dialog-footer"]');
+		expect(footer?.querySelectorAll("button")).toHaveLength(1);
+		fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(onConfirm).not.toHaveBeenCalled();
+	});
+
 	it("disables both the trigger and the confirm button", async () => {
 		const onConfirm = vi.fn();
 		const { rerender } = render(

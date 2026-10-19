@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { withObjectName } from "@/lib/accessible-name";
 import {
 	type CapabilityInvocation,
 	type CapabilityReceiptPhase,
@@ -15,11 +16,14 @@ import {
 export function CapabilityReceipt({
 	invocation,
 	phase,
+	objectName,
 	onDetails,
 	onVerify,
 }: {
 	invocation: CapabilityInvocation;
 	phase: CapabilityReceiptPhase;
+	/** 同页多张回执时区分按钮的对象名（N-12）；默认取命令 / Skill 名称。 */
+	objectName?: string;
 	onDetails: () => void;
 	/** 待核实时只回读原 Execution，不再次调用。 */
 	onVerify: () => void;
@@ -46,11 +50,24 @@ export function CapabilityReceipt({
 				</p>
 			)}
 			<div className="capability-receipt-actions">
-				<Button type="button" variant="ghost" onClick={onDetails}>
+				<Button
+					type="button"
+					variant="ghost"
+					aria-label={withObjectName("调用详情", objectName ?? invocation.name)}
+					onClick={onDetails}
+				>
 					调用详情
 				</Button>
 				{phase === "unknown" && (
-					<Button type="button" variant="outline" onClick={onVerify}>
+					<Button
+						type="button"
+						variant="outline"
+						aria-label={withObjectName(
+							"核实原操作",
+							objectName ?? invocation.name,
+						)}
+						onClick={onVerify}
+					>
 						核实原操作
 					</Button>
 				)}

@@ -5,6 +5,7 @@ import {
 } from "../../features/admin-agents/admin-agents-screen.js";
 import { useAdminAgents } from "../../features/admin-agents/use-admin-agents.js";
 import { useApplicationSession } from "../../features/application-shell.js";
+import { useTemplateNameLookup } from "../../features/template-display-name.js";
 
 export const Route = createFileRoute("/admin/agents")({
 	validateSearch: validateAdminAgentSearch,
@@ -19,6 +20,7 @@ function AdminAgentsRoute() {
 		identityKey,
 		enabled: session.user.roles.includes("system_admin"),
 	});
+	const templateName = useTemplateNameLookup();
 	return (
 		<main className="platform-content management-content ia-admin-agents">
 			<AdminAgentsScreen
@@ -31,6 +33,7 @@ function AdminAgentsRoute() {
 					void query.refetch();
 				}}
 				refreshing={query.isFetching}
+				templateName={templateName}
 			/>
 		</main>
 	);

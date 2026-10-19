@@ -231,6 +231,8 @@ describe("SkillHubVersionScreen", () => {
 		const configure = await screen.findByRole("link", {
 			name: "配置 Agent 绑定",
 		});
+		// 绑定要先选择自己创建的 Agent：入口直达「已创建」标签页。
+		expect(configure.getAttribute("href")).toBe("/my-agents?tab=owned");
 		expect(install).toHaveBeenCalledTimes(2);
 		expect(install.mock.calls[0]?.[0]).toBe("release-notes-v2");
 		expect(install.mock.calls[0]?.[1]).toBe(install.mock.calls[1]?.[1]);

@@ -55,6 +55,10 @@ import {
 	formatMultiServiceManifestSummary,
 	parseMultiServiceManifest,
 } from "../my-agents/multi-service-manifest.js";
+import {
+	type TemplateNameLookup,
+	templateDisplayName,
+} from "../template-display-name.js";
 import type {
 	AgentApplicationDecision,
 	PendingAgentApplicationsState,
@@ -78,11 +82,14 @@ type AdminAgentApplicationsScreenProps = {
 	state: PendingAgentApplicationsState | { kind: "loading" };
 	onRetry?: () => void;
 	retrying?: boolean;
+	/** 模板显示名（部署配置）；未提供或读不到时显示「标准模板」（F-02）。 */
+	templateName?: TemplateNameLookup;
 };
 
 type ApplicationReviewProps = {
 	application: AgentApplicationProjectionV2;
 	names: AvailabilityNames;
+	templateName?: TemplateNameLookup;
 	onDecision: AdminAgentApplicationsScreenProps["onDecision"];
 	pendingDecision?: PendingDecision;
 	decisionError?: RequestError | null;
@@ -127,9 +134,12 @@ function decisionFailure(error: RequestError) {
 		? "权限或申请状态已变化，请刷新页面。"
 		: "审批未能提交，请稍后重试。";
 }
-function sourceName(application: AgentApplicationProjectionV2) {
+function sourceName(
+	application: AgentApplicationProjectionV2,
+	templateName?: TemplateNameLookup,
+) {
 	return application.source.kind === "standard"
-		? application.source.templateId
+		? templateDisplayName(application.source.templateId, templateName)
 		: "manifest" in application.source
 			? "多服务 Agent"
 			: "自定义 Agent";
@@ -139,8 +149,17 @@ function sourceFilterValue(application: AgentApplicationProjectionV2) {
 		? application.source.templateId
 		: "自定义 Agent";
 }
+/** 筛选项文字：标准模板显示模板名，不显示原始 templateId（F-02）。 */
+function sourceFilterLabel(
+	application: AgentApplicationProjectionV2,
+	templateName?: TemplateNameLookup,
+) {
+	return application.source.kind === "standard"
+		? templateDisplayName(application.source.templateId, templateName)
+		: "自定义 Agent";
+}
 
-/** 模型以显示名为主文字，modelId 作为等宽次要文字保留以便核对。 */
+/** 设计审阅弹窗「模型」行：「显示名 · 档位」，不显示 modelId（F-02）。 */
 function ModelOptions({
 	options,
 }: {
@@ -151,10 +170,12 @@ function ModelOptions({
 		<ul className="space-y-1">
 			{options.map((model) => (
 				<li key={model.optionId}>
-					{model.displayName}
-					<span className="ml-2 font-mono text-[11px] text-muted-foreground">
-						{model.modelId}
-					</span>
+					{[
+						model.displayName,
+						model.reasoningLevels.map(reasoningLevelLabel).join("、"),
+					]
+						.filter(Boolean)
+						.join(" · ")}
 				</li>
 			))}
 		</ul>
@@ -164,6 +185,7 @@ function ModelOptions({
 function ApplicationReview({
 	application,
 	names,
+	templateName,
 	onDecision,
 	pendingDecision,
 	decisionError,
@@ -273,7 +295,7 @@ function ApplicationReview({
 											: "镜像"}
 								</dt>
 								<dd className="break-all">
-									{agentSourceReferenceLabel({ source })}
+									{agentSourceReferenceLabel({ source }, templateName)}
 								</dd>
 								{multiServiceSummary?.ok ? (
 									<>
@@ -436,6 +458,7 @@ export function AdminAgentApplicationsScreen({
 	state,
 	onRetry,
 	retrying = false,
+	templateName,
 }: AdminAgentApplicationsScreenProps) {
 	const [search, setSearch] = useState("");
 	const [source, setSource] = useState("all");
@@ -454,7 +477,14 @@ export function AdminAgentApplicationsScreen({
 			(application) => application.configuration.availability,
 		),
 	);
-	const sources = [...new Set(applications.map(sourceFilterValue))];
+	const sources = [
+		...new Map(
+			applications.map((application) => [
+				sourceFilterValue(application),
+				sourceFilterLabel(application, templateName),
+			]),
+		),
+	];
 	const query = search.trim().toLocaleLowerCase();
 	// placeholder 列出的字段都参与匹配：申请名称、说明与 Owner 显示名。
 	const filteredApplications = applications.filter(
@@ -542,9 +572,9 @@ export function AdminAgentApplicationsScreen({
 				<div>
 					<p className="page-eyebrow">系统管理 / 创建审批</p>
 					<h1 id="agent-approvals-heading" ref={heading} tabIndex={-1}>
-						把资源审批做得更快，也更可核对。
+						审批申请
 					</h1>
-					<p>审批信息保持紧凑：来源、Owner、范围、模型与渠道一屏完成判断。</p>
+					<p>申请里列出来源、Owner、范围、模型和渠道。</p>
 				</div>
 				{state.kind === "ready" && (
 					<div className="tag-row">
@@ -597,9 +627,9 @@ export function AdminAgentApplicationsScreen({
 								onChange={(event) => setSource(event.target.value)}
 							>
 								<NativeSelectOption value="all">全部来源</NativeSelectOption>
-								{sources.map((value) => (
+								{sources.map(([value, label]) => (
 									<NativeSelectOption key={value} value={value}>
-										{value}
+										{label}
 									</NativeSelectOption>
 								))}
 							</NativeSelect>
@@ -636,7 +666,7 @@ export function AdminAgentApplicationsScreen({
 											<strong>{application.name}</strong>
 										</TableCell>
 										<TableCell data-label="来源 / Owner">
-											{sourceName(application)}
+											{sourceName(application, templateName)}
 											<small>
 												Owner ·{" "}
 												<OwnerNames owners={application.configuration.owners} />
@@ -662,6 +692,7 @@ export function AdminAgentApplicationsScreen({
 											{application.status === "pending_approval" && (
 												<ApplicationReview
 													names={names}
+													templateName={templateName}
 													application={application}
 													onDecision={(applicationId, decision) => {
 														planFocus(applicationId);

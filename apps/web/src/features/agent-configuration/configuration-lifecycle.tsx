@@ -18,7 +18,7 @@ import {
 	commandProgressLabels,
 	confirmationCopy,
 	visibleLifecycleCommands,
-} from "../agent-administration/agent-lifecycle-controls.js";
+} from "../agent-administration/agent-lifecycle-commands.js";
 import { useAgentLifecycleCommand } from "../agent-administration/use-agent-lifecycle-command.js";
 import type { BrowserSessionState } from "../browser-session.js";
 
@@ -242,7 +242,13 @@ function LifecycleCommandButton({
 				</Button>
 			}
 			title={copy.title(lifecycle.agent.name)}
-			subject={{ name: lifecycle.agent.name }}
+			// 设计稿的停止 / 重启弹窗没有对象名行（重启标题已带 Agent 名）；
+			// 重试创建与管理员停用仍写明对象。
+			subject={
+				command === "stop" || command === "restart"
+					? undefined
+					: { name: lifecycle.agent.name }
+			}
 			description={copy.description}
 			confirmLabel={copy.confirm}
 			tone={command === "stop" || command === "disable" ? "danger" : "default"}

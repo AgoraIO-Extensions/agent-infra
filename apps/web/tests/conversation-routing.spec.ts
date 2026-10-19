@@ -6,11 +6,18 @@ import {
 	ConversationProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { expect, type Page, type TestInfo, test } from "@playwright/test";
+import {
+	expect,
+	type Locator,
+	type Page,
+	type TestInfo,
+	test,
+} from "@playwright/test";
 import {
 	event,
 	history,
 } from "../src/features/conversation/conversation-test-fixtures";
+import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
 
@@ -191,6 +198,12 @@ async function routingFixture(
 			});
 		if (isFileLimitsRequest(request.method(), url.pathname))
 			return route.fulfill({ json: controlledFileLimits() });
+		// Agent 目录与详情读取模板显示名（F-02）。
+		if (
+			request.method() === "GET" &&
+			url.pathname === "/api/v2/deployment/configuration"
+		)
+			return route.fulfill({ json: deploymentConfiguration });
 		if (url.pathname === "/api/v1/session")
 			return route.fulfill({
 				json: {
@@ -503,7 +516,11 @@ for (const compact of [false, true]) {
 		});
 		await page.goto(canonical(fixture.agentId, fixture.conversationId));
 		await assertChat(page, fixture.agentName);
-		const users = page.getByRole("article", { name: "你的消息", exact: true });
+		// CH-08：用户消息显示当前登录用户的真实姓名。
+		const users = page.getByRole("article", {
+			name: "受控员工的消息",
+			exact: true,
+		});
 		const assistants = page.getByRole("article", {
 			name: `${fixture.agentName}的消息`,
 			exact: true,
@@ -750,6 +767,54 @@ test("keeps a missing recent endpoint distinct from logout or empty history", as
 	expect(fixture.unexpected).toEqual([]);
 });
 
+test("shows an unavailable conversation as a static notice and a history read failure as an alert (B-10)", async ({
+	page,
+}) => {
+	const fixture = await routingFixture(page);
+	await page.route("**/api/v1/agents/agent-second/conversations**", (route) =>
+		route.fulfill({
+			status: 503,
+			json: { message: "Controlled history failure" },
+		}),
+	);
+	await page.goto(canonical("agent-second", "conversation-other"));
+	await assertChat(page);
+	// 设计 .notice：13px / 14px 内边距、12px 圆角、13px 正文、17px 图标。
+	async function expectNotice(notice: Locator) {
+		await expect(notice).toHaveCSS("padding", "13px 14px");
+		await expect(notice).toHaveCSS("border-radius", "12px");
+		await expect(notice).toHaveCSS("font-size", "13px");
+		const icon = notice.locator(":scope > svg");
+		await expect(icon).toHaveAttribute("aria-hidden", "true");
+		expect(await icon.boundingBox()).toMatchObject({ width: 17, height: 17 });
+	}
+	// 当前会话不可用是进入页面即可见的静态说明：warn notice，不设 live role。
+	const unavailable = page.locator('[data-slot="alert"]').filter({
+		hasText: "当前会话不可用，历史只读。请使用上方入口明确新建会话。",
+	});
+	await expect(unavailable).toBeVisible();
+	await expect(unavailable).toHaveAttribute("data-tone", "warn");
+	expect(await unavailable.getAttribute("role")).toBeNull();
+	await expectNotice(unavailable);
+	await expect(page.locator('#main-content [role="alert"]')).toHaveCount(0);
+	// 历史读取失败是异步结果：danger notice，以 role="alert" 播报。
+	if ((page.viewportSize()?.width ?? 0) < 1024)
+		await page.getByRole("button", { name: "个人历史", exact: true }).click();
+	await page.getByRole("button", { name: "此 Agent 的全部历史" }).click();
+	const failure = page
+		.locator('[data-slot="alert"]')
+		.filter({ hasText: "历史暂时无法读取。" });
+	await expect(failure).toBeVisible();
+	await expect(failure).toHaveAttribute("role", "alert");
+	await expect(failure).toHaveAttribute("data-tone", "danger");
+	await expectNotice(failure);
+	await expect(page.getByText("Controlled history failure")).toHaveCount(0);
+	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+		true,
+	);
+	expect(fixture.unexpected).toEqual([]);
+});
+
 for (const legacy of [false, true]) {
 	test(`opens ${legacy ? "legacy" : "canonical"} history with opaque IDs, refresh and browser back without a business write`, async ({
 		page,
@@ -816,16 +881,20 @@ for (const legacy of [false, true]) {
 	});
 }
 
-test("creates a conversation in one step from the header and keeps the direct entry explicit", async ({
+test("creates a conversation in one step from the header and keeps the direct entry write-free", async ({
 	page,
 }) => {
 	const fixture = await routingFixture(page);
 	await page.goto(canonical(fixture.agentId));
-	// 不带会话参数直接进入时不自动创建（导航不产生业务写入），由用户明确创建。
+	// CH-10：不带会话参数直接进入时就是可输入的 composer，没有「创建会话」；打开与刷新页面都不产生写入。
 	const create = page.getByRole("button", { name: "创建会话", exact: true });
-	await expect(create).toBeEnabled();
+	const direct = page.locator('form[data-new-conversation="true"]');
+	await expect(direct).toBeVisible();
+	await expect(page.getByLabel("消息", { exact: true })).toBeEditable();
+	await expect(create).toHaveCount(0);
 	await page.reload();
-	await expect(create).toBeEnabled();
+	await expect(direct).toBeVisible();
+	await expect(page.getByLabel("消息", { exact: true })).toBeEditable();
 	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
 		true,
 	);
@@ -854,6 +923,106 @@ test("creates a conversation in one step from the header and keeps the direct en
 			.filter((request) => request.method === "POST")
 			.map((request) => request.path),
 	).toEqual([["api", "v1", "agents", fixture.agentId, "conversations"]]);
+	expect(fixture.unexpected).toEqual([]);
+});
+
+test("creates the conversation on the first send from the direct entry and sends the original draft (CH-10)", async ({
+	page,
+}) => {
+	const fixture = await routingFixture(page);
+	const sent: unknown[] = [];
+	await page.route(
+		"**/api/v1/conversations/conversation-created/messages",
+		async (route) => {
+			sent.push(route.request().postDataJSON());
+			await route.fulfill({
+				status: 202,
+				json: {
+					schemaVersion: 1,
+					status: "submitted",
+					messageId: "message-first",
+					executionId: "execution-first",
+				},
+			});
+		},
+	);
+	await page.goto(canonical(fixture.agentId));
+	const message = page.getByLabel("消息", { exact: true });
+	await expect(message).toHaveAttribute(
+		"placeholder",
+		"输入消息，或 / 搜索命令与 Skill…",
+	);
+	await message.fill("受控首条任务");
+	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+		true,
+	);
+	await page.getByRole("button", { name: "发送", exact: true }).click();
+	await expect(page).toHaveURL(/\/chat\/agent-1\/conversation-created$/);
+	await expect(page.locator("form[data-c02-session-id]")).toHaveAttribute(
+		"data-c02-session-id",
+		"conversation-created",
+	);
+	// 先创建会话，再由新会话用原草稿发送一次；受理后草稿清空、焦点留在输入框。
+	await expect
+		.poll(() => sent)
+		.toEqual([{ schemaVersion: 1, text: "受控首条任务" }]);
+	await expect(message).toHaveValue("");
+	await expect(message).toBeFocused();
+	expect(
+		fixture.requests
+			.filter((request) => request.method === "POST")
+			.map((request) => request.path),
+	).toEqual([["api", "v1", "agents", fixture.agentId, "conversations"]]);
+	await page.reload();
+	await expect(page.locator("form[data-c02-session-id]")).toHaveAttribute(
+		"data-c02-session-id",
+		"conversation-created",
+	);
+	expect(sent).toHaveLength(1);
+	expect(fixture.unexpected).toEqual([]);
+});
+
+test("keeps the direct-entry draft and explains a refused creation above the composer (CH-10)", async ({
+	page,
+}) => {
+	const fixture = await routingFixture(page);
+	const creations: string[] = [];
+	await page.route(
+		`**/api/v1/agents/${fixture.agentId}/conversations`,
+		async (route) => {
+			if (route.request().method() !== "POST") return route.fallback();
+			creations.push(route.request().method());
+			await route.fulfill({
+				status: 503,
+				json: {
+					schemaVersion: 1,
+					code: "RUNTIME_UNAVAILABLE",
+					message: "Controlled raw failure",
+					retryable: true,
+					traceId: "controlled-create-refused",
+				},
+			});
+		},
+	);
+	await page.goto(canonical(fixture.agentId));
+	const message = page.getByLabel("消息", { exact: true });
+	await message.fill("创建失败也保留");
+	await page.getByRole("button", { name: "发送", exact: true }).click();
+	const refused = page
+		.locator('[data-slot="alert"]')
+		.filter({ hasText: "Agent 暂时不可用，请稍后重试或联系 Owner。" });
+	await expect(refused).toHaveAttribute("role", "alert");
+	await expect(page.getByText("Controlled raw failure")).toHaveCount(0);
+	const form = page.locator('form[data-new-conversation="true"]');
+	const refusedBox = await refused.boundingBox();
+	const formBox = await form.boundingBox();
+	if (!refusedBox || !formBox) throw new Error("Expected notice geometry");
+	expect(refusedBox.y + refusedBox.height).toBeLessThanOrEqual(formBox.y);
+	expect(await form.locator('[data-slot="alert"]').count()).toBe(0);
+	await expect(page).toHaveURL(/\/chat\/agent-1$/);
+	await expect(message).toHaveValue("创建失败也保留");
+	await expect(message).toBeEditable();
+	expect(creations).toHaveLength(1);
 	expect(fixture.unexpected).toEqual([]);
 });
 
@@ -948,9 +1117,11 @@ test("rejects a substituted conversation using the existing consumer authorizati
 	await page.goto(canonical(fixture.agentId, "forbidden"));
 	await expect(page.getByText(/当前登录或访问权限已失效/)).toBeVisible();
 	await expect(page.getByLabel("消息", { exact: true })).toHaveCount(0);
+	// CH-10 之后没有「创建会话」按钮；失去访问时同样不提供任何新建入口。
 	await expect(
-		page.getByRole("button", { name: "创建会话", exact: true }),
+		page.getByRole("button", { name: "新会话", exact: true }),
 	).toHaveCount(0);
+	await expect(page.locator("form[data-new-conversation]")).toHaveCount(0);
 	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
 		true,
 	);
@@ -963,9 +1134,11 @@ test("redirects the legacy no-conversation entry without creating a conversation
 	const fixture = await routingFixture(page);
 	await page.goto(`/agents/${fixture.agentId}/conversations`);
 	await expect(page).toHaveURL(/\/chat\/agent-1$/);
+	// CH-10：落到新会话页，直接显示可输入的 composer。
 	await expect(
-		page.getByRole("button", { name: "创建会话", exact: true }),
+		page.locator('form[data-new-conversation="true"]'),
 	).toBeVisible();
+	await expect(page.getByLabel("消息", { exact: true })).toBeEditable();
 	await expect(page.locator('[data-slot="breadcrumb-page"]')).toHaveText(
 		"对话",
 	);
@@ -1062,7 +1235,18 @@ for (const status of [503, 403]) {
 			});
 		});
 		await page.goto(canonical(fixture.agentId, fixture.conversationId));
-		await expect(page.getByText("正在读取 Agent…")).toBeVisible();
+		// N-19：读取中是 loading-line（15px spinner + 13px muted 文案），以 role="status" 播报。
+		const loading = page.locator('[data-slot="loading-line"]', {
+			hasText: "正在读取 Agent…",
+		});
+		await expect(loading).toBeVisible();
+		await expect(loading).toHaveAttribute("role", "status");
+		await expect(loading).toHaveCSS("column-gap", "9px");
+		await expect(loading).toHaveCSS("font-size", "13px");
+		const spinner = loading.locator('[data-slot="spinner"]');
+		await expect(spinner).toHaveAttribute("aria-hidden", "true");
+		await expect(spinner).toHaveCSS("width", "15px");
+		await expect(spinner).toHaveCSS("height", "15px");
 		const heading = page.getByRole("heading", {
 			name: "对话",
 			exact: true,
@@ -1085,12 +1269,32 @@ for (const status of [503, 403]) {
 			contentType: "image/png",
 		});
 		release();
-		await expect(page.getByRole("alert")).toBeVisible();
+		// 读取失败用公共状态卡：503 可重试并以 role="alert" 播报；403 是静态的「无法访问」边界，
+		// 不设 live role，返回链接为「返回 Agent 目录」（acc-4 新问题 5）。
+		const card = page.locator('[data-slot="state-card"]');
+		await expect(card).toBeVisible();
 		await expect(heading).toBeVisible();
 		expect(await heading.boundingBox()).toEqual(titleBox);
-		await expect(
-			page.getByRole("link", { name: "返回 Agent 列表", exact: true }),
-		).toBeVisible();
+		if (status === 503) {
+			await expect(card).toHaveAttribute("role", "alert");
+			await expect(
+				card.getByRole("heading", { name: "服务暂不可用", level: 2 }),
+			).toBeVisible();
+			await expect(
+				card.getByText("暂时无法读取 Agent，请稍后重试。"),
+			).toBeVisible();
+		} else {
+			expect(await card.getAttribute("role")).toBeNull();
+			await expect(page.getByRole("alert")).toHaveCount(0);
+			await expect(
+				card.getByRole("heading", { name: "无法访问", level: 2 }),
+			).toBeVisible();
+			await expect(
+				card.getByRole("link", { name: "返回 Agent 目录", exact: true }),
+			).toHaveAttribute("href", "/agents");
+		}
+		await expect(page.getByText(/Agent 列表/)).toHaveCount(0);
+		await expect(page.locator('[data-slot="loading-line"]')).toHaveCount(0);
 		await expect(page.getByLabel("消息", { exact: true })).toHaveCount(0);
 		await info.attach(`conversation-${status}`, {
 			body: await page.screenshot(),
@@ -1243,7 +1447,7 @@ for (const viewport of [
 		});
 		expect(await input.boundingBox()).toEqual(before);
 		// 时间线至少放得下一条完整的单行消息。
-		const last = page.getByRole("article", { name: "你的消息" }).last();
+		const last = page.getByRole("article", { name: "受控员工的消息" }).last();
 		await last.scrollIntoViewIfNeeded();
 		await expect(last.locator(".chat-message-body")).toBeInViewport({
 			ratio: 1,
@@ -1341,6 +1545,91 @@ test("matches the exported composer toolbar and history panel styles", async ({
 	).toBe(true);
 	expect(fixture.unexpected).toEqual([]);
 });
+
+for (const viewport of [
+	{ width: 1440, height: 900 },
+	{ width: 390, height: 844 },
+]) {
+	test(`keeps long history titles on one ellipsized line inside the panel at ${viewport.width} wide (CH-09)`, async ({
+		page,
+	}, info) => {
+		test.skip(info.project.name !== "desktop", "Viewport list runs once.");
+		await page.setViewportSize(viewport);
+		const fixture = await routingFixture(page, {
+			longTitles: true,
+			recentAcrossAgents: true,
+		});
+		await page.goto(canonical(fixture.agentId, fixture.conversationId));
+		await assertChat(page);
+		if (viewport.width < 1024)
+			await page.getByRole("button", { name: "个人历史", exact: true }).click();
+		const panel = page.getByRole("complementary", { name: "对话历史" });
+		for (const scope of ["recent", "full"] as const) {
+			if (scope === "full")
+				await panel
+					.getByRole("button", { name: "此 Agent 的全部历史" })
+					.click();
+			const items = panel.locator(".conversation-history-item");
+			await expect(items).toHaveCount(2);
+			const geometry = await panel.evaluate((node) => {
+				const box = node.getBoundingClientRect();
+				const style = getComputedStyle(node);
+				const list = node.querySelector(".conversation-history-list");
+				return {
+					scrollWidth: node.scrollWidth,
+					clientWidth: node.clientWidth,
+					contentRight:
+						box.right -
+						Number.parseFloat(style.borderRightWidth) -
+						Number.parseFloat(style.paddingRight),
+					listWidth: list?.getBoundingClientRect().width ?? 0,
+					items: Array.from(
+						node.querySelectorAll(".conversation-history-item"),
+						(item) => {
+							const title = item.querySelector("strong");
+							return {
+								width: item.getBoundingClientRect().width,
+								right: item.getBoundingClientRect().right,
+								titleRight: title?.getBoundingClientRect().right ?? 0,
+								long: Boolean(title?.textContent?.includes("中文长标题")),
+								ellipsized: title
+									? title.scrollWidth > title.clientWidth
+									: false,
+								titleHeight: title?.getBoundingClientRect().height ?? 0,
+								lineHeight: title
+									? Number.parseFloat(getComputedStyle(title).lineHeight)
+									: 0,
+							};
+						},
+					),
+				};
+			});
+			await info.attach(`history-long-titles-${scope}-${viewport.width}`, {
+				body: JSON.stringify(geometry),
+				contentType: "application/json",
+			});
+			// 面板不横向滚动；每个条目（含短标题）都不超出列表与面板内容区右缘。
+			expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+			expect(geometry.items.some((item) => item.long)).toBe(true);
+			for (const item of geometry.items) {
+				expect(item.width).toBeLessThanOrEqual(geometry.listWidth + 0.5);
+				expect(item.right).toBeLessThanOrEqual(geometry.contentRight + 0.5);
+				expect(item.titleRight).toBeLessThanOrEqual(item.right + 0.5);
+				// 长标题被省略而不是换行或硬裁切到面板外。
+				if (item.long) {
+					expect(item.ellipsized).toBe(true);
+					expect(item.titleHeight).toBeLessThanOrEqual(item.lineHeight + 1);
+				}
+			}
+		}
+		expect(
+			await page.evaluate(
+				() => document.documentElement.scrollWidth <= innerWidth,
+			),
+		).toBe(true);
+		expect(fixture.unexpected).toEqual([]);
+	});
+}
 
 for (const viewport of [
 	{ width: 390, height: 844, compact: true },
@@ -1496,14 +1785,32 @@ test("keeps the active command option visible while moving through a long catalo
 		"aria-activedescendant",
 		(await last.getAttribute("id")) ?? "",
 	);
-	const visible = await last.evaluate((node) => {
+	const inMenu = (node: Element) => {
 		const menu = node.closest("section");
 		if (!menu) return false;
 		const a = node.getBoundingClientRect();
 		const b = menu.getBoundingClientRect();
 		return a.top >= b.top && a.bottom <= b.bottom;
-	});
-	expect(visible).toBe(true);
+	};
+	expect(await last.evaluate(inMenu)).toBe(true);
+	// CH-02：弹层打开时 Home / End 跳到第一项 / 最后一项并滚入弹层，输入框内容不变。
+	const first = options.first();
+	await input.press("Home");
+	await expect(first).toHaveAttribute("aria-selected", "true");
+	await expect(input).toHaveAttribute(
+		"aria-activedescendant",
+		(await first.getAttribute("id")) ?? "",
+	);
+	expect(await first.evaluate(inMenu)).toBe(true);
+	await input.press("End");
+	await expect(last).toHaveAttribute("aria-selected", "true");
+	await expect(input).toHaveAttribute(
+		"aria-activedescendant",
+		(await last.getAttribute("id")) ?? "",
+	);
+	expect(await last.evaluate(inMenu)).toBe(true);
+	await expect(input).toHaveValue("/");
+	await expect(page.getByRole("listbox")).toBeVisible();
 	await input.press("Escape");
 	await expect(page.getByRole("listbox")).toHaveCount(0);
 	await expect(input).toBeFocused();
@@ -1539,4 +1846,128 @@ test("offers Owners the configuration entry from the stopped banner", async ({
 	await expect(page).toHaveURL(
 		new RegExp(`/agents/${fixture.agentId}/configuration$`),
 	);
+});
+
+test("folds session context and files around the timeline with the exported summary rows (CH-03, CH-08)", async ({
+	page,
+}, info) => {
+	const fixture = await routingFixture(page, { messageRoles: true });
+	await page.goto(canonical(fixture.agentId, fixture.conversationId));
+	await assertChat(page);
+	const context = page.getByRole("button", { name: /^会话上下文/ });
+	const files = page.getByRole("button", { name: /^会话文件/ });
+	await expect(context).toHaveAttribute("aria-expanded", "false");
+	await expect(files).toHaveAttribute("aria-expanded", "false");
+	await expect(context).toContainText("Connection");
+	await expect(context).not.toContainText("浏览器操作");
+	await expect(context).toContainText("按需查看");
+	const geometry = await page.evaluate(() => {
+		const rect = (selector: string) =>
+			document.querySelector(selector)?.getBoundingClientRect().toJSON();
+		const style = (selector: string) => {
+			const node = document.querySelector(selector);
+			return node ? getComputedStyle(node) : undefined;
+		};
+		const summary = style(".chat-context .chat-disclosure-summary");
+		const meta = document.querySelector(".chat-message .message-meta");
+		const metaBody = meta?.nextElementSibling;
+		const link = style(".message-status .inline-link");
+		return {
+			muted: (() => {
+				// 用探针元素解析 token 的计算色，与摘要的计算色同一序列化格式。
+				const probe = document.createElement("span");
+				probe.style.color = "var(--muted-foreground)";
+				document.body.append(probe);
+				const color = getComputedStyle(probe).color;
+				probe.remove();
+				return color;
+			})(),
+			context: rect(".chat-context .chat-disclosure-summary"),
+			files: rect(".chat-files .chat-disclosure-summary"),
+			timeline: rect(".timeline"),
+			composer: rect("form.composer-zone"),
+			summary: summary && {
+				fontSize: summary.fontSize,
+				color: summary.color,
+			},
+			contextRadius: style(".chat-context")?.borderTopLeftRadius,
+			filesRadius: style(".chat-files")?.borderTopLeftRadius,
+			meta: meta && {
+				display: getComputedStyle(meta).display,
+				justify: getComputedStyle(meta).justifyContent,
+				name: style(".chat-message .message-meta strong")?.fontWeight,
+				time: style(".chat-message .message-meta time")?.fontSize,
+				gap:
+					metaBody &&
+					metaBody.getBoundingClientRect().top -
+						meta.getBoundingClientRect().bottom,
+			},
+			link: link && {
+				line: link.textDecorationLine,
+				offset: link.textUnderlineOffset,
+				minHeight: link.minHeight,
+			},
+			hiddenPanels: [
+				...document.querySelectorAll('[data-slot="collapsible-panel"]'),
+			].map((node) => (node as HTMLElement).hidden),
+		};
+	});
+	await info.attach("chat-context-geometry", {
+		body: JSON.stringify(geometry),
+		contentType: "application/json",
+	});
+	if (!geometry.context || !geometry.files || !geometry.timeline)
+		throw new Error("Expected both disclosure bars and the timeline");
+	if (!geometry.composer) throw new Error("Expected the composer");
+	// 「会话上下文」在时间线之上，「会话文件」在时间线与输入框之间；默认收起，摘要 44px、12px muted。
+	expect(geometry.context.bottom).toBeLessThanOrEqual(geometry.timeline.top);
+	expect(geometry.files.top).toBeGreaterThanOrEqual(geometry.timeline.bottom);
+	expect(geometry.files.bottom).toBeLessThanOrEqual(geometry.composer.top);
+	expect(geometry.context.height).toBe(44);
+	expect(geometry.files.height).toBe(44);
+	expect(geometry.summary).toEqual({
+		fontSize: "12px",
+		color: geometry.muted,
+	});
+	expect(geometry.contextRadius).toBe("11px");
+	expect(geometry.filesRadius).toBe("10px");
+	expect(geometry.hiddenPanels).toEqual([true, true]);
+	// CH-08：meta 两端对齐，作者 650、时间 11px，meta 到正文 7px；状态行链接无 44px 外框。
+	expect(geometry.meta).toMatchObject({
+		display: "flex",
+		justify: "space-between",
+		name: "650",
+		time: "11px",
+	});
+	expect(Math.abs((geometry.meta?.gap ?? 0) - 7)).toBeLessThanOrEqual(1);
+	expect(geometry.link).toEqual({
+		line: "underline",
+		offset: "3px",
+		minHeight: "0px",
+	});
+	// 键盘：Enter 与 Space 都能切换，面板常驻 DOM。
+	await context.focus();
+	await page.keyboard.press("Enter");
+	await expect(context).toHaveAttribute("aria-expanded", "true");
+	await expect(page.getByText("需要 Connection 授权")).toBeVisible();
+	await page.keyboard.press("Space");
+	await expect(context).toHaveAttribute("aria-expanded", "false");
+	const panel = page.locator(`#${await context.getAttribute("aria-controls")}`);
+	await expect(panel).toHaveCount(1);
+	await expect(page.getByText("需要 Connection 授权")).toBeHidden();
+	// NI-92：短视口下两条折叠条上下排列，摘要不截断。
+	await page.setViewportSize({ width: 390, height: 560 });
+	for (const bar of [context, files]) {
+		expect(
+			await bar.evaluate((node) => node.scrollWidth <= node.clientWidth),
+		).toBe(true);
+	}
+	const contextBox = await context.boundingBox();
+	const filesBox = await files.boundingBox();
+	if (!contextBox || !filesBox) throw new Error("Expected disclosure bars");
+	expect(filesBox.y).toBeGreaterThan(contextBox.y + contextBox.height);
+	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+		true,
+	);
+	expect(fixture.unexpected).toEqual([]);
 });

@@ -29,14 +29,13 @@ const defaultIcons = {
 } satisfies Record<AlertTone, React.ComponentType<{ "aria-hidden"?: boolean }>>;
 
 type AlertProps = React.ComponentProps<"div"> & {
-	tone?: AlertTone;
+	// 必填：全站已迁移到 tone，不再有缺省 tone 的兼容路径。
+	tone: AlertTone;
 	// 传 null 时不显示图标；未传时使用 tone 的默认图标。
 	icon?: React.ReactNode;
-	// 兼容层：旧调用点的 variant；传了 tone 时忽略。
-	variant?: "default" | "destructive" | null;
 };
 
-// 旧调用点把图标作为首个子元素传入（lucide 组件或 svg，都带 aria-hidden），
+// 调用方把图标作为首个子元素传入（lucide 组件或 svg，都带 aria-hidden）时，
 // 这里把它们挪到图标位；其它带 aria-hidden 的原生元素（如装饰 span）保留在内容列。
 function isLeadingIcon(node: React.ReactNode) {
 	if (!React.isValidElement<{ "aria-hidden"?: unknown }>(node)) return false;
@@ -60,43 +59,30 @@ function Alert({
 	className,
 	tone,
 	icon,
-	variant,
 	role,
 	children,
 	...props
 }: AlertProps) {
-	// 兼容层：未传 tone 的旧调用点保持 role="alert"、destructive 视为 danger，
-	// 且不自动加图标。只供未迁移的对话页与两个浏览器面板使用。
-	const legacy = tone === undefined;
-	const resolvedTone: AlertTone =
-		tone ?? (variant === "destructive" ? "danger" : "info");
 	// 显式传了 icon 时不再拆分子元素，避免静默丢弃调用方的内容。
 	const { icons, content } =
 		icon === undefined
 			? splitLeadingIcons(children)
 			: { icons: [], content: React.Children.toArray(children) };
-	const DefaultIcon = defaultIcons[resolvedTone];
+	const DefaultIcon = defaultIcons[tone];
 	const resolvedIcon =
 		icon !== undefined ? (
 			icon
 		) : icons.length > 0 ? (
 			icons
-		) : legacy ? null : (
+		) : (
 			<DefaultIcon aria-hidden={true} />
 		);
 	return (
 		<div
 			data-slot="alert"
-			data-tone={resolvedTone}
-			role={role ?? (legacy ? "alert" : undefined)}
-			className={cn(
-				alertVariants({ tone: resolvedTone }),
-				// 兼容层：旧 destructive 调用点大多没有图标，保留红色说明文字作为失败提示。
-				legacy &&
-					variant === "destructive" &&
-					"[&_[data-slot=alert-description]]:text-(--danger-ink)",
-				className,
-			)}
+			data-tone={tone}
+			role={role}
+			className={cn(alertVariants({ tone }), className)}
 			{...props}
 		>
 			{resolvedIcon}

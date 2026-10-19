@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { Square } from "lucide-react";
 import {
 	type RefObject,
 	useCallback,
@@ -8,17 +9,16 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
+import { LoadingLine } from "@/components/ui/spinner";
 import { useToast } from "@/components/ui/toast";
+import { distinctObjectNames } from "@/lib/accessible-name";
 import { Button } from "../../components/ui/button.js";
+import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
-import {
-	type BrowserHandoffActionInputV1,
-	BrowserHandoffPanel,
-	type BrowserSideEffectConfirmationV1,
-} from "../agent-discovery/browser-handoff-panel.js";
-import { BrowserAuditView } from "./browser-audit-view.js";
-import { BrowserOperationStatus } from "./browser-operation-status.js";
+import { formatPerson } from "../directory-names.js";
+import { BrowserActivityCard } from "./browser-activity-card.js";
+import { type BrowserCardCommand, selectBrowserCard } from "./browser-card.js";
 import {
 	type CapabilityInvocation,
 	capabilityReceiptBusy,
@@ -34,6 +34,13 @@ import type {
 } from "./conversation-commands.js";
 import { ConversationComposer } from "./conversation-composer.js";
 import {
+	BrowserContextHint,
+	type ConnectionNoticeState,
+	ConversationConnectionNotice,
+	ConversationContextBar,
+	ConversationFilesBar,
+} from "./conversation-context-bar.js";
+import {
 	ConversationFilePicker,
 	useConversationFiles,
 } from "./conversation-files.js";
@@ -44,9 +51,13 @@ import {
 	executionStatus,
 	isTerminal,
 } from "./conversation-screen-state.js";
+import { useAmbiguousDenial } from "./use-ambiguous-denial.js";
 import { useConversationCapabilityCatalog } from "./use-conversation-capability-catalog.js";
 import { useConversationCommands } from "./use-conversation-commands.js";
-import { useConversationModelAutosave } from "./use-conversation-model-autosave.js";
+import {
+	type ModelSelectionValue,
+	useConversationModelAutosave,
+} from "./use-conversation-model-autosave.js";
 import { useConversationModelSelection } from "./use-conversation-model-selection.js";
 import { useConversationTimeline } from "./use-conversation-timeline.js";
 
@@ -54,54 +65,34 @@ import { useConversationTimeline } from "./use-conversation-timeline.js";
 // the composer responsive while the Worker finishes the Session Sandbox.
 const preparingRefreshMs = 500;
 
-type BrowserCommandInvoker = (body: BrowserCommandBody) => boolean;
-
-/** Keep the Browser panel's opaque action ids mapped to the server command
- * union in one place; the panel never constructs transport payloads itself. */
-export function createBrowserConversationHandlers(
-	invokeBrowser: BrowserCommandInvoker,
-) {
+/** 浏览器卡只给出不透明 ID；服务端命令请求体只在这里构造。停止操作走现有的停止回复命令。 */
+export function browserCommandBody(
+	command: Exclude<BrowserCardCommand, { kind: "stop_execution" }>,
+): BrowserCommandBody {
+	if ("confirmationId" in command)
+		return {
+			schemaVersion: 1,
+			command: command.kind,
+			confirmationId: command.confirmationId,
+		};
 	return {
-		onPauseAgent: ({ id }: BrowserHandoffActionInputV1) => {
-			void invokeBrowser({ schemaVersion: 1, command: "pause", handoffId: id });
-		},
-		onTakeOver: ({ id }: BrowserHandoffActionInputV1) => {
-			void invokeBrowser({
-				schemaVersion: 1,
-				command: "take_over",
-				handoffId: id,
-			});
-		},
-		onReturnToAgent: ({ id }: BrowserHandoffActionInputV1) => {
-			void invokeBrowser({
-				schemaVersion: 1,
-				command: "return_to_agent",
-				handoffId: id,
-			});
-		},
-		onConfirmSideEffect: ({ id }: BrowserHandoffActionInputV1) => {
-			void invokeBrowser({
-				schemaVersion: 1,
-				command: "confirm_side_effect",
-				confirmationId: id,
-			});
-		},
-		onRejectSideEffect: ({ id }: BrowserHandoffActionInputV1) => {
-			void invokeBrowser({
-				schemaVersion: 1,
-				command: "reject_side_effect",
-				confirmationId: id,
-			});
-		},
-		onCancelConfirmation: ({ id }: BrowserHandoffActionInputV1) => {
-			void invokeBrowser({
-				schemaVersion: 1,
-				command: "cancel_side_effect",
-				confirmationId: id,
-			});
-		},
+		schemaVersion: 1,
+		command: command.kind,
+		handoffId: command.handoffId,
 	};
 }
+
+/**
+ * 新会话页（/chat/:agentId）交给刚创建的会话的首条消息（CH-10）：
+ * - text：原草稿，作为新会话 composer 的初始草稿；
+ * - send：用户已经按下发送，会话可以发送时自动发送一次；
+ * - model：新会话页选择的模型与档位，发送前先保存到新会话。
+ */
+export type FirstMessageHandoff = Readonly<{
+	text: string;
+	send: boolean;
+	model?: ModelSelectionValue;
+}>;
 
 export function ActiveConversation({
 	agentId,
@@ -113,6 +104,10 @@ export function ActiveConversation({
 	refreshAgent,
 	verifyAgent,
 	focusFallback,
+	session,
+	connectionUrl,
+	firstMessage,
+	onFirstMessageTaken,
 }: {
 	agentId: string;
 	identityKey: string;
@@ -125,20 +120,26 @@ export function ActiveConversation({
 	verifyAgent: () => Promise<boolean>;
 	/** 关闭执行详情且原触发按钮已不存在时的焦点回退目标（页头 h1）。 */
 	focusFallback?: RefObject<HTMLHeadingElement | null>;
+	/** 当前登录会话：用户消息显示真实姓名（CH-08）。 */
+	session?: BrowserSessionProjectionV1;
+	/** 「我的 Connection」受控入口（BR-04）。 */
+	connectionUrl?: string;
+	/** 新会话页交来的首条消息，只在挂载时读取一次。 */
+	firstMessage?: FirstMessageHandoff;
+	/** 已接收 firstMessage：调用方随即清除，重新进入同一会话不会再次自动发送。 */
+	onFirstMessageTaken?: () => void;
 }) {
 	const queryClient = useQueryClient();
 	const toast = useToast();
 	const [selectedExecution, setSelectedExecution] = useState<string>();
 	const executionTrigger = useRef<HTMLButtonElement>(null);
-	const returnExecutionFocus = useRef(false);
-	useLayoutEffect(() => {
-		if (selectedExecution || !returnExecutionFocus.current) return;
-		returnExecutionFocus.current = false;
+	// 关闭执行详情：触发控件还在就回到它，否则回到页头标题（例如待核实的执行已转为终态）。
+	const executionFinalFocus = useCallback(() => {
 		const trigger = executionTrigger.current;
 		executionTrigger.current = null;
-		if (trigger?.isConnected && !trigger.disabled) trigger.focus();
-		else focusFallback?.current?.focus();
-	}, [selectedExecution, focusFallback]);
+		if (trigger?.isConnected && !trigger.disabled) return trigger;
+		return focusFallback?.current ?? null;
+	}, [focusFallback]);
 	function openExecution(executionId: string) {
 		executionTrigger.current =
 			document.activeElement instanceof HTMLButtonElement
@@ -152,8 +153,33 @@ export function ActiveConversation({
 		executionId: selectedExecution,
 	});
 	const { timeline } = reader;
-	const [draft, setDraft] = useState("");
+	const [draft, setDraft] = useState(firstMessage?.text ?? "");
+	// 首条消息只在本次挂载内自动发送一次；草稿被改写或会话进入不可发送的状态时改为手动发送。
+	const firstSend = useRef(firstMessage?.send ? firstMessage.text : undefined);
+	const [firstSendPending, setFirstSendPending] = useState(
+		firstSend.current !== undefined,
+	);
+	// 新会话页选择的模型先保存到本会话，保存完成前不自动发送。
+	const firstModel = useRef(firstMessage?.model);
+	const [firstModelPending, setFirstModelPending] = useState(
+		firstModel.current !== undefined,
+	);
+	// 从新会话页跳转过来时焦点留在 composer，直到首条消息处理完（见下方聚焦 effect）。
+	const keepComposerFocus = useRef(firstMessage !== undefined);
+	// 首条消息是否已自动发出：发出后要等提交结果回来、输入框重新可编辑时再放回焦点。
+	const firstSendSent = useRef(false);
+	const firstMessageTaken = useRef(onFirstMessageTaken);
+	useLayoutEffect(() => {
+		firstMessageTaken.current?.();
+		firstMessageTaken.current = undefined;
+	}, []);
+	// 已提交消息的正文：受理后只在草稿仍等于它时清空，重试期间改写的草稿不丢（NI-91）。
+	const sentText = useRef<string | undefined>(undefined);
+	const resending = useRef(false);
 	const [notice, setNotice] = useState("");
+	// 会话级 Connection 提示状态，不随上下文条收起丢失（BR-04、NI-87）。
+	const [connectionNotice, setConnectionNotice] =
+		useState<ConnectionNoticeState>("needs-auth");
 	const [acceptedExecution, setAcceptedExecution] = useState<string>();
 	const [stopping, setStopping] = useState<string>();
 	const [selectionDenied, setSelectionDenied] = useState(false);
@@ -162,6 +188,7 @@ export function ActiveConversation({
 	const pendingInvocation =
 		useRef<Omit<CapabilityInvocation, "executionId">>(undefined);
 	const composerId = useId();
+	const feedbackId = useId();
 	const composer = useRef<HTMLTextAreaElement>(null);
 	const action = useRef<"message" | "stop" | "regenerate" | "native">(
 		"message",
@@ -212,15 +239,20 @@ export function ActiveConversation({
 	const capabilityExecution = invocations.some(
 		(item) => item.executionId === latestExecution,
 	);
-	const visibleNotice =
-		notice ||
-		(stopping && stopping === latestExecution
-			? isTerminal(status)
-				? "原回复已结束。"
-				: "停止请求已受理，正在等待停止确认。已发生的外部操作不会自动撤回。"
-			: active && acceptedExecution === latestExecution && !capabilityExecution
-				? "消息已受理，等待处理结果。"
-				: "");
+	// 受理与停止的后续状态显示在对应回复卡内，不再在卡外重复（R4-07）。
+	const [stopNotice, setStopNotice] = useState<{
+		executionId: string;
+		text: string;
+	}>();
+	const executionNotice =
+		stopping && stopping === latestExecution
+			? {
+					executionId: stopping,
+					text: isTerminal(status)
+						? "原回复已结束。"
+						: "停止请求已受理，正在等待停止确认。已发生的外部操作不会自动撤回。",
+				}
+			: stopNotice;
 	const uncertainExecution = active && status === "unknown";
 	const command = useConversationCommands({
 		agentId,
@@ -280,21 +312,13 @@ export function ActiveConversation({
 		onDenied();
 	}, [denialScope, denied, command.revoke, reader.abort, onDenied]);
 	// 命令得到 404：没有权限与 Agent 已停止在线上是同一个响应。先重新读取 Agent，
-	// Agent 确实不可用时保留草稿并由上方横幅说明；仍然可用才按失去访问权限处理（#2570）。
-	const ambiguousDenial =
-		command.result?.kind === "denied" && command.result.ambiguous === true
-			? command.result
-			: undefined;
-	useEffect(() => {
-		if (!ambiguousDenial) return;
-		let current = true;
-		void verifyAgent().then((denialStands) => {
-			if (current && denialStands) command.confirmDenied();
-		});
-		return () => {
-			current = false;
-		};
-	}, [ambiguousDenial, verifyAgent, command.confirmDenied]);
+	// Agent 确实不可用时保留草稿并只由页顶横幅说明；仍然可用才按失去访问权限处理（#2570、NW-13）。
+	const denialPhase = useAmbiguousDenial({
+		result: command.result,
+		available,
+		verifyAgent,
+		onDenialStands: command.confirmDenied,
+	});
 	const lastRefreshEvent = useRef<string | undefined>(undefined);
 	useEffect(() => {
 		const event = timeline.events.findLast(
@@ -369,12 +393,21 @@ export function ActiveConversation({
 				// stop to wait for, only a projection to refresh (#1524).
 				if (result.receipt.status === "already_finished") {
 					setStopping(undefined);
-					setNotice("原回复已结束。");
+					const target = result.receipt.executionId ?? latestExecution;
+					if (target)
+						setStopNotice({ executionId: target, text: "原回复已结束。" });
+					else setNotice("原回复已结束。");
 				} else setStopping(result.receipt.executionId ?? undefined);
 			} else {
-				if (action.current === "message") setDraft("");
+				if (action.current === "message") {
+					const sent = sentText.current;
+					sentText.current = undefined;
+					setDraft((current) => (current === sent ? "" : current));
+					if (resending.current) toast("已重新发送，正在等待 Agent 确认");
+				}
 				setAcceptedExecution(result.receipt.executionId ?? undefined);
 			}
+			resending.current = false;
 			void reader.refresh();
 		} else if (result.kind === "native-accepted") {
 			const selected = pendingInvocation.current;
@@ -395,11 +428,8 @@ export function ActiveConversation({
 				capabilityRejectionMessage(result.outcome, result.reason),
 			);
 		} else if (result.kind === "browser-accepted") {
-			setNotice(
-				result.receipt.outcome === "replayed"
-					? "Browser 命令已恢复。"
-					: "Browser 命令已受理。",
-			);
+			// 浏览器卡自身的阶段变化就是反馈，不再额外显示受理提示（BR-02）。
+			setNotice("");
 			void reader.refresh();
 		}
 	}, [
@@ -408,6 +438,8 @@ export function ActiveConversation({
 		refreshAgent,
 		capabilityAccepted,
 		setCapabilityError,
+		latestExecution,
+		toast,
 	]);
 	const options = customPlatformAdapter
 		? (runtimeSelection.data?.options ?? [])
@@ -439,26 +471,6 @@ export function ActiveConversation({
 			timeline.status !== "reconnecting" &&
 			!refreshing);
 	const commandLocked = command.isPending || command.result?.kind === "unknown";
-	const browserEvent = reader.browserHandoffEvent;
-	const browserSideEffectEvent = reader.browserSideEffectEvent;
-	const browserBinding =
-		browserSideEffectEvent?.payload.binding ?? browserEvent?.payload.binding;
-	const browserConfirmation: BrowserSideEffectConfirmationV1 | undefined =
-		browserSideEffectEvent
-			? {
-					confirmationId: browserSideEffectEvent.payload.confirmationId,
-					status: browserSideEffectEvent.payload.status,
-					expiresAt: browserSideEffectEvent.payload.expiresAt,
-					operation: browserSideEffectEvent.payload.operation,
-					targetOrigin: browserSideEffectEvent.payload.targetOrigin,
-					redactedTargetSummary:
-						browserSideEffectEvent.payload.redactedTargetSummary,
-					binding: browserSideEffectEvent.payload.binding,
-				}
-			: undefined;
-	const browserHandlers = createBrowserConversationHandlers(
-		command.invokeBrowser,
-	);
 	// Keep the local draft editable while an Agent or its Session is becoming
 	// ready. Sending stays blocked by `blocked`/`preparing`; only an authorization
 	// or read failure should lock the text area itself (#1607).
@@ -489,7 +501,7 @@ export function ActiveConversation({
 		!files.uploading &&
 		!capabilityBusy;
 	const canSend = submitReady && Boolean(draft.trim());
-	async function send() {
+	async function send(options: { resend?: boolean } = {}) {
 		if (!canSend) return;
 		if (customPlatformAdapter) {
 			let latest: Awaited<ReturnType<typeof runtimeSelection.refresh>>;
@@ -512,9 +524,58 @@ export function ActiveConversation({
 		}
 		if (command.submitText(draft, files.attachments)) {
 			action.current = "message";
+			sentText.current = draft;
+			// 「重新发送」受理后用 Toast 补充确认（G-04）。
+			resending.current = options.resend === true;
 			setNotice("");
+			setStopNotice(undefined);
 		}
 	}
+	// 新会话页选择的模型：投影读到后保存到本会话；与当前选择相同时不发请求（CH-10）。
+	const chooseModel = modelSave.choose;
+	useEffect(() => {
+		const value = firstModel.current;
+		if (!value || !timeline.history) return;
+		firstModel.current = undefined;
+		setFirstModelPending(false);
+		if (
+			value.modelOptionId !== currentModelId ||
+			value.reasoningLevel !== currentReasoning
+		)
+			chooseModel(value);
+	}, [timeline.history, currentModelId, currentReasoning, chooseModel]);
+	// 新会话页按下发送的首条消息：模型保存完成、会话可以发送时自动发送一次。草稿被改写、
+	// 失去访问、会话或 Agent 不可用、模型保存失败时不再自动发送，草稿保留给用户手动处理。
+	useEffect(() => {
+		const text = firstSend.current;
+		if (text === undefined) return;
+		const abandoned =
+			draft !== text ||
+			denied ||
+			conversation?.status === "unavailable" ||
+			readLocked ||
+			(!available && !agentTransitioning) ||
+			modelSave.phase === "error" ||
+			modelSave.failure !== undefined;
+		if (!abandoned && (firstModelPending || !canSend)) return;
+		firstSend.current = undefined;
+		setFirstSendPending(false);
+		if (abandoned) return;
+		firstSendSent.current = true;
+		void send();
+	});
+	// 从新会话页跳转过来时焦点留在 composer：输入框可编辑而焦点已丢失（落在 body）时聚焦。
+	// 自动发送期间输入框暂时禁用会失去焦点，提交有了结果后再放回；用户主动移走焦点时不抢回。
+	useEffect(() => {
+		if (!keepComposerFocus.current || draftDisabled) return;
+		const focused = document.activeElement;
+		if (!focused || focused === document.body) composer.current?.focus();
+		if (
+			firstSend.current === undefined &&
+			(!firstSendSent.current || command.result !== undefined)
+		)
+			keepComposerFocus.current = false;
+	});
 	const invokeCapability = useCallback(
 		(
 			body: Parameters<typeof command.invokeCapability>[0],
@@ -541,40 +602,113 @@ export function ActiveConversation({
 	}
 	if (denied)
 		return (
-			<Alert>
+			<Alert tone="danger" role="alert">
 				<AlertDescription>访问权限已失效。</AlertDescription>
 			</Alert>
 		);
 	const modelSelectable =
 		agent.capabilities.modelSelection &&
 		(!customPlatformAdapter || runtimeSelection.data?.available);
+	// 补充指令提示只在草稿非空、发送因此禁用时作为发送按钮的说明出现（R4-07、AC-7）。
+	const supplementBlocked =
+		active &&
+		!agent.capabilities.supplementaryInstruction &&
+		Boolean(draft.trim());
+	const stopControl =
+		active && latestExecution
+			? {
+					executionId: latestExecution,
+					label: stopping === latestExecution ? "正在停止" : "停止回复",
+					disabled: blocked || commandLocked || stopping === latestExecution,
+					onStop: () => {
+						if (command.stop()) {
+							action.current = "stop";
+							setStopNotice(undefined);
+						}
+					},
+				}
+			: undefined;
+	// 同一命令 / Skill 调用多次时回执按钮仍可区分（N-12）。
+	const receiptNames = distinctObjectNames(
+		invocations.map((invocation) => invocation.name),
+	);
+	// 对话页只有一张浏览器卡（BR-01）。空闲卡放在默认收起的会话上下文里；一旦当前 Execution
+	// 有浏览器活动（请求、接管、执行中与终态），卡片移到会话时间线末尾，不会被折叠隐藏（NI-83）。
+	// 空闲只取决于当前 Execution 有没有浏览器事件，与时间无关，两处判断不会错开。
+	const browserCapability = agent.capabilities.browser;
+	const browserAvailable = browserCapability?.status === "available";
+	const browserIdle =
+		browserCapability !== undefined &&
+		selectBrowserCard({
+			events: timeline.events,
+			conversationId,
+			executionId: latestExecution,
+			browserAvailable,
+			now: Date.now(),
+		})?.phase === "idle";
+	const onBrowserCommand = (browserCommand: BrowserCardCommand) => {
+		// 「停止操作」走与「停止回复」相同的停止命令。
+		if (browserCommand.kind === "stop_execution") stopControl?.onStop();
+		else command.invokeBrowser(browserCommandBody(browserCommand));
+	};
+	const browserCardProps = {
+		events: timeline.events,
+		conversationId,
+		executionId: latestExecution,
+		browserAvailable,
+		busy: blocked || commandLocked,
+		canStop: active && stopping !== latestExecution,
+		onCommand: onBrowserCommand,
+	};
 	return (
 		<>
-			<div
-				hidden={Boolean(selectedExecution)}
-				className="chat-thread space-y-5"
-			>
+			<div className="chat-thread space-y-5">
+				{/* 设计 renderChatContext：只在有 Connection 或浏览器能力时出现，位于时间线之上（CH-03）。 */}
+				<ConversationContextBar
+					connection={agent.capabilities.connection}
+					browser={browserCapability !== undefined}
+				>
+					{agent.capabilities.connection && (
+						<ConversationConnectionNotice
+							url={connectionUrl}
+							state={connectionNotice}
+							onOpen={() => {
+								setConnectionNotice("handoff");
+								toast("已转到独立 Connection 入口；完成授权后返回此会话");
+							}}
+						/>
+					)}
+					{browserCapability &&
+						(browserIdle ? (
+							<BrowserActivityCard includeIdle {...browserCardProps} />
+						) : (
+							<BrowserContextHint />
+						))}
+				</ConversationContextBar>
 				{timeline.status === "loading" && !timeline.history && (
-					<p role="status">正在读取会话…</p>
+					<LoadingLine>正在读取会话…</LoadingLine>
 				)}
 				{timeline.status === "reconnecting" && (
 					<p role="status">会话连接中断，正在自动重新连接，草稿会保留。</p>
 				)}
 				{(timeline.status === "disconnected" ||
 					timeline.status === "unavailable") && (
-					<Alert className="space-y-2 bg-muted">
+					<Alert tone="warn" role="alert">
 						<AlertDescription>
 							{readLocked
 								? "会话连接暂时中断，草稿已保留。重新连接只恢复读取，不重新发送任务。"
 								: "会话连接暂时中断，草稿已保留，恢复后会自动继续读取；也可手动重新连接。重新连接只恢复读取，不重新发送任务。"}
 						</AlertDescription>
-						<Button variant="outline" onClick={() => void reader.reconnect()}>
-							重新连接
-						</Button>
+						<AlertAction>
+							<Button variant="outline" onClick={() => void reader.reconnect()}>
+								重新连接
+							</Button>
+						</AlertAction>
 					</Alert>
 				)}
+				{/* 静态说明：进入页面即可见，不打断读屏（B-10）。 */}
 				{conversation?.status === "unavailable" && (
-					<Alert>
+					<Alert tone="warn">
 						<AlertDescription>
 							当前会话不可用，历史只读。请使用上方入口明确新建会话。
 						</AlertDescription>
@@ -583,8 +717,17 @@ export function ActiveConversation({
 				{timeline.history && (
 					<ConversationMessages
 						agentName={agent.name}
+						userName={
+							formatPerson({ displayName: session?.user.displayName }).name
+						}
 						history={timeline.history}
 						events={timeline.events}
+						// 命令 / Skill 调用由调用回执说明状态，不再另画一张处理中的回复卡。
+						current={
+							capabilityExecution
+								? undefined
+								: { executionId: latestExecution, status }
+						}
 						onExecution={openExecution}
 						onRegenerate={regenerate}
 						canRegenerate={!blocked && !preparing && !commandLocked && !active}
@@ -599,20 +742,64 @@ export function ActiveConversation({
 						earlierLoading={timeline.earlierLoading}
 						earlierFailure={timeline.earlierFailure !== null}
 						onLoadEarlier={() => void reader.loadEarlier()}
-						trailing={invocations.map((invocation) => (
-							<CapabilityReceipt
-								key={invocation.executionId}
-								invocation={invocation}
-								phase={invocationPhase(invocation.executionId)}
-								onDetails={() => openExecution(invocation.executionId)}
-								onVerify={() => {
-									void reader.refresh();
-									openExecution(invocation.executionId);
-								}}
-							/>
-						))}
+						stop={capabilityExecution ? undefined : stopControl}
+						executionNotice={executionNotice}
+						modelOptions={options}
+						trailing={
+							<>
+								{invocations.map((invocation, index) => (
+									<CapabilityReceipt
+										key={invocation.executionId}
+										invocation={invocation}
+										objectName={receiptNames[index]}
+										phase={invocationPhase(invocation.executionId)}
+										onDetails={() => openExecution(invocation.executionId)}
+										onVerify={() => {
+											void reader.refresh();
+											openExecution(invocation.executionId);
+										}}
+									/>
+								))}
+								{/* 设计 .skill-actions：调用进行中时回执之后的「停止回复」（R4-07）。 */}
+								{capabilityExecution && stopControl && (
+									<div className="skill-actions">
+										<Button
+											type="button"
+											variant="outline"
+											disabled={stopControl.disabled}
+											onClick={stopControl.onStop}
+										>
+											<Square aria-hidden="true" />
+											{stopControl.label}
+										</Button>
+									</div>
+								)}
+								{/* 有活动的浏览器卡在时间线末尾，不放进可收起的上下文条（NI-83）；空闲时不渲染。 */}
+								{browserCapability && (
+									<BrowserActivityCard {...browserCardProps} />
+								)}
+							</>
+						}
 					/>
 				)}
+				{/* 设计 renderChatFiles：消息列表之后、输入框之前；只汇总本页上传的输入附件（CH-03）。 */}
+				{agent.capabilities.attachments && (
+					<ConversationFilesBar
+						uploads={files.uploads}
+						limitsError={files.limitsError}
+					>
+						<ConversationFilePicker
+							attachmentsEnabled={agent.capabilities.attachments}
+							limits={files.limits}
+							limitsError={files.limitsError}
+							uploads={files.uploads}
+							onSelect={(selected) => void files.addFiles(selected)}
+							onRemove={files.remove}
+							onRetry={files.retry}
+						/>
+					</ConversationFilesBar>
+				)}
+				{/* 命令反馈区：composer 上方、任何折叠条之外，默认可见（NI-83）。 */}
 				{uncertainExecution && !capabilityExecution && (
 					<p role="status">
 						原执行结果待核实，同会话暂不能发送下一条消息。
@@ -630,43 +817,33 @@ export function ActiveConversation({
 				)}
 				{preparing && (
 					<p role="status">
-						{updating
-							? "会话更新中，完成后即可发送。草稿会保留。"
-							: "会话准备中，完成后即可发送。草稿会保留。"}
+						{firstSendPending
+							? updating
+								? "会话更新中，完成后自动发送这条消息。"
+								: "会话准备中，完成后自动发送这条消息。"
+							: updating
+								? "会话更新中，完成后即可发送。草稿会保留。"
+								: "会话准备中，完成后即可发送。草稿会保留。"}
 					</p>
 				)}
-				{active && !agent.capabilities.supplementaryInstruction && (
-					<p role="status">当前回复仍在处理，不支持补充指令。草稿会保留。</p>
+				{supplementBlocked && (
+					<p id={`${feedbackId}-supplement`} className="text-sm">
+						当前回复仍在处理，不支持补充指令。草稿会保留。
+					</p>
 				)}
-				{visibleNotice && (
+				{notice && (
 					<p role="status" className="text-sm">
-						{visibleNotice}
+						{notice}
 					</p>
 				)}
-				<BrowserOperationStatus
-					events={timeline.events}
-					executionId={latestExecution}
-				/>
-				<BrowserAuditView
-					conversationId={conversationId}
-					events={timeline.events}
-					executionId={latestExecution}
-				/>
-				{reader.browserHandoffEvent || browserConfirmation ? (
-					<BrowserHandoffPanel
-						browserAvailable={
-							agent.capabilities.browser?.status === "available"
-						}
-						handoffEvent={reader.browserHandoffEvent}
-						confirmation={browserConfirmation}
-						currentBinding={browserBinding}
-						{...browserHandlers}
-					/>
-				) : null}
 				<CommandNotice
 					result={command.result}
 					pending={command.isPending}
 					retry={command.canRetry ? () => command.retry() : undefined}
+					denial={denialPhase}
+					unknownId={`${feedbackId}-unknown`}
+					onResend={() => void send({ resend: true })}
+					resendDisabled={!canSend}
 				/>
 				{agent.capabilities.modelSelection && !option && currentModelId && (
 					<p className="text-muted-foreground text-sm">
@@ -704,28 +881,13 @@ export function ActiveConversation({
 							: undefined
 					}
 					modelFailure={modelSave.failure}
-					stop={
-						active
-							? {
-									label: stopping === latestExecution ? "正在停止" : "停止回复",
-									disabled:
-										blocked || commandLocked || stopping === latestExecution,
-									onStop: () => {
-										if (command.stop()) action.current = "stop";
-									},
-								}
+					draftDescribedBy={
+						command.result?.kind === "unknown"
+							? `${feedbackId}-unknown`
 							: undefined
 					}
-					attachments={
-						<ConversationFilePicker
-							attachmentsEnabled={agent.capabilities.attachments}
-							limits={files.limits}
-							limitsError={files.limitsError}
-							uploads={files.uploads}
-							onSelect={(selected) => void files.addFiles(selected)}
-							onRemove={files.remove}
-							onRetry={files.retry}
-						/>
+					sendDescribedBy={
+						supplementBlocked ? `${feedbackId}-supplement` : undefined
 					}
 					formAttributes={{
 						"data-c02-guard": "pending-submit",
@@ -740,22 +902,24 @@ export function ActiveConversation({
 					onInvokeCapability={invokeCapability}
 				/>
 			</div>
-			{selectedExecution && (
-				<ConversationExecutionDetails
-					data={reader.execution.data}
-					conversationId={conversationId}
-					loading={reader.execution.isFetching}
-					failed={reader.execution.isError || timeline.failure?.kind === "http"}
-					onRetry={() => {
-						if (timeline.failure?.kind === "http") void reader.reconnect();
-						else void reader.execution.refetch();
-					}}
-					onClose={() => {
-						returnExecutionFocus.current = true;
-						setSelectedExecution(undefined);
-					}}
-				/>
-			)}
+			<ConversationExecutionDetails
+				open={selectedExecution !== undefined}
+				data={selectedExecution ? reader.execution.data : undefined}
+				conversationId={conversationId}
+				loading={Boolean(selectedExecution) && reader.execution.isFetching}
+				failed={
+					Boolean(selectedExecution) &&
+					(reader.execution.isError || timeline.failure?.kind === "http")
+				}
+				modelOptions={options}
+				connectionEnabled={agent.capabilities.connection === true}
+				onRetry={() => {
+					if (timeline.failure?.kind === "http") void reader.reconnect();
+					else void reader.execution.refetch();
+				}}
+				onClose={() => setSelectedExecution(undefined)}
+				finalFocus={executionFinalFocus}
+			/>
 		</>
 	);
 }

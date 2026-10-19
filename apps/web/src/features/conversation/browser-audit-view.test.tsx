@@ -1,203 +1,281 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+	act,
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PersistedConversationEventV2 } from "../../pilot/generated-v2/types.gen.js";
-import { BrowserAuditView, browserAuditEntries } from "./browser-audit-view.js";
-import { timestamp } from "./conversation-test-fixtures.js";
-
-const binding = {
-	subjectId: "subject-1",
-	agentId: "agent-1",
-	conversationId: "conversation-1",
-	executionId: "execution-1",
-	sessionGeneration: 1,
-	resourceFence: 2,
-	workloadRevision: 3,
-	imageDigest: `sha256:${"a".repeat(64)}`,
-	capabilityVersion: 1,
-	capabilityRevision: 1,
-	pageRevision: 4,
-};
-
-function operation(
-	sequence: number,
-	phase: "intent" | "started" | "completed" | "failed" | "unknown",
-	executionId = "execution-1",
-): Extract<PersistedConversationEventV2, { type: "execution.operation" }> {
-	return {
-		schemaVersion: 2,
-		kind: "event",
-		eventId: `operation-${sequence}`,
-		conversationId: "conversation-1",
-		executionId,
-		sequence,
-		conversationCursor: `cursor-${sequence}`,
-		occurredAt: timestamp,
-		type: "execution.operation",
-		payload: {
-			operationRef: "operation-1",
-			attemptRef: "attempt-1",
-			kind: "tool",
-			toolId: "browser_click",
-			phase,
-			browser: {
-				actionId: "action-1",
-				capabilityVersion: 1,
-				pageRevision: 4,
-				sessionGeneration: 1,
-				resourceFence: 2,
-				workloadRevision: 3,
-				imageDigest: binding.imageDigest,
-				sideEffect: false,
-			},
-		},
-	};
-}
-
-function handoff(
-	sequence: number,
-	status: "requested" | "active" | "completed" | "unknown",
-): Extract<PersistedConversationEventV2, { type: "browser.handoff" }> {
-	return {
-		schemaVersion: 2,
-		kind: "event",
-		eventId: `handoff-${sequence}`,
-		conversationId: "conversation-1",
-		executionId: "execution-1",
-		sequence,
-		conversationCursor: `cursor-${sequence}`,
-		occurredAt: timestamp,
-		type: "browser.handoff",
-		payload: {
-			handoffId: "handoff-1",
-			status,
-			reason: "mfa",
-			requestedAt: timestamp,
-			expiresAt: "2027-01-01T00:00:00.000Z",
-			binding,
-		},
-	};
-}
-
-function sideEffect(
-	sequence: number,
-	status: "pending" | "confirmed" | "unknown",
-	patch: Partial<
-		Extract<
-			PersistedConversationEventV2,
-			{ type: "browser.side_effect" }
-		>["payload"]
-	> = {},
-): Extract<PersistedConversationEventV2, { type: "browser.side_effect" }> {
-	return {
-		schemaVersion: 2,
-		kind: "event",
-		eventId: `side-effect-${sequence}`,
-		conversationId: "conversation-1",
-		executionId: "execution-1",
-		sequence,
-		conversationCursor: `cursor-${sequence}`,
-		occurredAt: timestamp,
-		type: "browser.side_effect",
-		payload: {
-			confirmationId: "confirmation-1",
-			status,
-			requestedAt: timestamp,
-			expiresAt: "2027-01-01T00:00:00.000Z",
-			operation: "submit",
-			targetOrigin: "https://example.test/",
-			redactedTargetSummary: "提交公开表单（已脱敏）",
-			binding: {
-				...binding,
-				actionId: "action-1",
-				confirmationId: "confirmation-1",
-				operationRef: "operation-1",
-				attemptRef: "attempt-1",
-			},
-			...patch,
-		},
-	};
-}
+import {
+	BrowserOperationRecordDialog,
+	browserAuditEntries,
+	browserAuditFacts,
+	browserAuditRecords,
+} from "./browser-audit-view.js";
+import {
+	handoffEvent,
+	operationEvent,
+	sideEffectEvent,
+} from "./browser-test-fixtures.js";
 
 afterEach(() => cleanup());
 
-describe("Browser audit and recovery projection", () => {
-	it("deduplicates terminal facts, keeps recovery states and isolates executions", () => {
-		const entries = browserAuditEntries(
-			[
-				operation(1, "intent"),
-				operation(2, "completed"),
-				handoff(3, "active"),
-				sideEffect(4, "pending"),
-				sideEffect(5, "unknown"),
-				operation(6, "completed", "foreign-execution"),
-			],
-			"conversation-1",
-			"execution-1",
-		);
+const entries = (
+	events: PersistedConversationEventV2[],
+	executionId = "execution-1",
+) => browserAuditEntries(events, "conversation-1", executionId);
 
-		expect(entries).toHaveLength(3);
-		expect(entries.map((entry) => [entry.kind, entry.status])).toEqual([
+describe("browser operation records", () => {
+	it("aggregates each object to its latest state and isolates executions", () => {
+		const result = entries([
+			operationEvent(1, "intent"),
+			operationEvent(2, "completed"),
+			handoffEvent(3, "requested"),
+			handoffEvent(4, "active"),
+			handoffEvent(5, "completed"),
+			sideEffectEvent(6, "pending"),
+			sideEffectEvent(7, "unknown"),
+			operationEvent(8, "completed", { executionId: "execution-foreign" }),
+		]);
+		expect(result.map((entry) => [entry.kind, entry.status])).toEqual([
 			["operation", "completed"],
-			["handoff", "active"],
+			["handoff", "completed"],
 			["side_effect", "unknown"],
 		]);
-		expect(entries.at(-1)?.detail).toContain("example.test");
+		expect(result[1]?.statusLabel).toBe("已交回 Agent");
+		expect(result.at(-1)?.detail).toBe("example.test · 提交公开表单（已脱敏）");
 	});
 
-	it("rejects foreign side-effect bindings and non-origin URLs", () => {
-		const entries = browserAuditEntries(
-			[
-				sideEffect(1, "pending", {
+	it("keeps a newer handoff state when an older event arrives later", () => {
+		const result = entries([
+			handoffEvent(5, "completed"),
+			handoffEvent(3, "active"),
+		]);
+		expect(result.map((entry) => entry.status)).toEqual(["completed"]);
+		expect(
+			entries([
+				handoffEvent(1, "requested", { handoffId: "handoff-1" }),
+				handoffEvent(2, "requested", { handoffId: "handoff-2" }),
+			]),
+		).toHaveLength(2);
+	});
+
+	it("drops records whose binding, origin or summary cannot be verified", () => {
+		expect(
+			entries([
+				sideEffectEvent(1, "pending", {
 					targetOrigin: "https://example.test/private?token=secret",
+					unchecked: true,
 				}),
-				sideEffect(2, "pending", {
-					binding: {
-						...binding,
-						conversationId: "foreign-conversation",
-						actionId: "action-1",
-						confirmationId: "confirmation-1",
-						operationRef: "operation-1",
-						attemptRef: "attempt-1",
-					},
+				sideEffectEvent(2, "pending", {
+					binding: { conversationId: "conversation-foreign" },
+					unchecked: true,
 				}),
-			],
+				sideEffectEvent(3, "pending", {
+					confirmationId: "confirmation-3",
+					summary: "\u0007",
+					unchecked: true,
+				}),
+				handoffEvent(4, "requested", {
+					binding: { executionId: "execution-foreign" },
+					unchecked: true,
+				}),
+			]),
+		).toEqual([]);
+		const [record] = entries([
+			sideEffectEvent(1, "pending", {
+				summary: `第一行\u0000${"长".repeat(400)}`,
+			}),
+		]);
+		expect(record?.detail).not.toContain("\u0000");
+		expect(record?.detail?.length).toBe("example.test · ".length + 160);
+	});
+
+	it("bounds the list to the latest fifty objects", () => {
+		const many = Array.from({ length: 55 }, (_, index) =>
+			handoffEvent(index + 1, "active", { handoffId: `handoff-${index + 1}` }),
+		);
+		const { entries: bounded, truncated } = browserAuditRecords(
+			many,
 			"conversation-1",
 			"execution-1",
 		);
-		expect(entries).toEqual([]);
+		expect(bounded).toHaveLength(50);
+		expect(bounded[0]?.sequence).toBe(6);
+		expect(truncated).toBe(true);
+		expect(
+			browserAuditRecords(many.slice(0, 50), "conversation-1", "execution-1")
+				.truncated,
+		).toBe(false);
 	});
 
-	it("bounds the history to the latest fifty entries", () => {
-		const entries = browserAuditEntries(
-			Array.from({ length: 55 }, (_, index) =>
-				handoff(index + 1, index === 54 ? "unknown" : "active"),
-			),
-			"conversation-1",
-			"execution-1",
+	it.each([
+		["operation", "intent", "正在受理", "blue"],
+		["operation", "started", "执行中", "blue"],
+		["operation", "completed", "已完成", "green"],
+		["operation", "failed", "执行失败", "red"],
+		["operation", "unknown", "待核实", "red"],
+		["handoff", "requested", "等待接管", "amber"],
+		["handoff", "active", "接管中", "amber"],
+		["handoff", "returning", "正在交回", "blue"],
+		["handoff", "completed", "已交回 Agent", "green"],
+		["handoff", "revoked", "已停止", "red"],
+		["handoff", "crashed", "浏览器已崩溃", "red"],
+		["handoff", "unknown", "待核实", "red"],
+		["handoff", "expired", "已过期", "gray"],
+		["side_effect", "pending", "等待确认", "amber"],
+		["side_effect", "confirmed", "已确认", "green"],
+		["side_effect", "rejected", "已拒绝", "red"],
+		["side_effect", "cancelled", "已取消", "red"],
+		["side_effect", "unknown", "待核实", "red"],
+		["side_effect", "expired", "已过期", "gray"],
+	] as const)("labels %s %s as %s (%s)", (kind, status, label, tone) => {
+		const event =
+			kind === "operation"
+				? operationEvent(1, status as "intent")
+				: kind === "handoff"
+					? handoffEvent(1, status as "requested")
+					: sideEffectEvent(1, status as "pending");
+		expect(entries([event])[0]).toMatchObject({
+			status,
+			statusLabel: label,
+			tone,
+		});
+	});
+
+	it("summarises the facts without IDs or guessed people", () => {
+		expect(
+			browserAuditFacts(entries([operationEvent(1, "completed")])),
+		).toEqual([
+			{ label: "域名", value: "未记录" },
+			{ label: "操作范围", value: "打开页面" },
+			{ label: "接管", value: "无需接管" },
+			{ label: "结果", value: "已完成" },
+			{ label: "凭证", value: "不进入模型或平台记录" },
+		]);
+		expect(
+			browserAuditFacts(
+				entries([
+					operationEvent(1, "completed", { toolId: "browser_observe" }),
+					handoffEvent(2, "completed"),
+					sideEffectEvent(3, "confirmed", { operation: "unregistered" }),
+				]),
+			).map((fact) => fact.value),
+		).toEqual([
+			"example.test",
+			"读取页面、外部操作",
+			"MFA 验证 · 已交回 Agent",
+			"已确认",
+			"不进入模型或平台记录",
+		]);
+	});
+});
+
+describe("BrowserOperationRecordDialog", () => {
+	function open(events: PersistedConversationEventV2[]) {
+		const view = render(
+			<BrowserOperationRecordDialog
+				conversationId="conversation-1"
+				executionId="execution-1"
+				events={events}
+			/>,
 		);
-		expect(entries).toHaveLength(50);
-		expect(entries[0]?.sequence).toBe(6);
-		expect(entries.at(-1)?.status).toBe("unknown");
-	});
+		fireEvent.click(screen.getByRole("button", { name: "查看操作记录" }));
+		return view;
+	}
 
-	it("renders unknown recovery as read-only and never exposes URL paths", () => {
+	it("renders nothing when the execution has no browser records", () => {
 		render(
-			<BrowserAuditView
+			<BrowserOperationRecordDialog
 				conversationId="conversation-1"
 				executionId="execution-1"
 				events={[
-					sideEffect(1, "unknown", {
-						targetOrigin: "https://example.test/",
-					}),
+					operationEvent(1, "completed", { executionId: "execution-2" }),
 				]}
 			/>,
 		);
+		expect(screen.queryByRole("button", { name: "查看操作记录" })).toBeNull();
+	});
+
+	it("opens a read-only modal with facts, a step list and one primary close", async () => {
+		open([
+			operationEvent(1, "completed"),
+			handoffEvent(2, "completed"),
+			sideEffectEvent(3, "unknown", { operation: "unregistered.op" }),
+		]);
+		const dialog = await screen.findByRole("dialog", {
+			name: "浏览器操作记录",
+		});
+		expect(dialog.getAttribute("aria-modal")).toBe("true");
 		expect(
-			screen.getByRole("heading", { name: "Browser 审计与恢复" }),
-		).toBeTruthy();
-		expect(screen.getByRole("alert", { name: /结果待核实/ })).toBeTruthy();
-		expect(screen.getByText(/https:\/\/example\.test/)).toBeTruthy();
-		expect(screen.queryByText(/secret\/path|token=hidden/)).toBeNull();
-		expect(screen.queryByRole("button")).toBeNull();
+			[...dialog.querySelectorAll("dt")].map((item) => item.textContent),
+		).toEqual(["域名", "操作范围", "接管", "结果", "凭证"]);
+		expect(
+			within(dialog)
+				.getAllByRole("button")
+				.map(
+					(button) => button.textContent || button.getAttribute("aria-label"),
+				),
+		).toEqual(["关闭", "关闭"]);
+		const list = within(dialog).getByRole("list", { name: "操作步骤" });
+		const items = within(list).getAllByRole("listitem");
+		expect(items).toHaveLength(3);
+		for (const item of items) {
+			expect(item.getAttribute("role")).toBeNull();
+			expect(item.getAttribute("aria-label")).toBeNull();
+			expect(item.querySelector("time")?.getAttribute("dateTime")).toBe(
+				"2026-10-11T09:59:00.000Z",
+			);
+			expect(item.textContent).not.toMatch(/\d{1,2}:\d{2}:\d{2}/);
+		}
+		expect(within(dialog).queryByRole("alert")).toBeNull();
+		const live = within(dialog).getByRole("status");
+		expect(live.textContent).toBe("");
+		expect(dialog.textContent).toContain("结果待核实的操作不会自动重试。");
+		expect(dialog.textContent).not.toMatch(
+			/Browser|恢复|服务端|browser_\w+|https?:\/\/|unregistered|operator-secret-1|handoff-1|confirmation-1|action-|execution-1/,
+		);
+	});
+
+	it("announces only the latest change while open", async () => {
+		const events = [operationEvent(1, "started")];
+		const { rerender } = open(events);
+		const dialog = await screen.findByRole("dialog", {
+			name: "浏览器操作记录",
+		});
+		const live = within(dialog).getByRole("status");
+		expect(live.textContent).toBe("");
+		act(() =>
+			rerender(
+				<BrowserOperationRecordDialog
+					conversationId="conversation-1"
+					executionId="execution-1"
+					events={[
+						...events,
+						operationEvent(2, "completed"),
+						handoffEvent(3, "requested"),
+					]}
+				/>,
+			),
+		);
+		await waitFor(() => expect(live.textContent).toBe("人工接管 · 等待接管"));
+	});
+
+	it("shows the fifty-item limit note only when objects were dropped", async () => {
+		open(
+			Array.from({ length: 55 }, (_, index) =>
+				handoffEvent(index + 1, "active", {
+					handoffId: `handoff-${index + 1}`,
+				}),
+			),
+		);
+		const dialog = await screen.findByRole("dialog", {
+			name: "浏览器操作记录",
+		});
+		expect(within(dialog).getAllByRole("listitem")).toHaveLength(50);
+		expect(dialog.textContent).toContain("仅显示最近 50 条");
 	});
 });

@@ -6,6 +6,8 @@ import {
 } from "../../features/agent-discovery/agent-discovery-screen.js";
 import { useAgentDiscovery } from "../../features/agent-discovery/use-agent-discovery.js";
 import { useApplicationSession } from "../../features/application-shell.js";
+import { useSessionRecheck } from "../../features/session-recheck.js";
+import { useTemplateNameLookup } from "../../features/template-display-name.js";
 
 export const Route = createFileRoute("/agents/")({
 	validateSearch: (
@@ -26,6 +28,9 @@ function AgentsRoute() {
 	const navigate = Route.useNavigate();
 	const { identityKey } = useApplicationSession();
 	const query = useAgentDiscovery({ identityKey });
+	const templateName = useTemplateNameLookup();
+	// 401 时经壳层重新确认会话；会话仍有效则解除不可重试锁定、重读一次目录（A-03、W-03）。
+	const relogin = useSessionRecheck(() => void query.reload());
 	const retryable = query.isError
 		? isRetryableAgentDiscoveryError(query.error)
 		: query.data?.kind === "unavailable" && query.data.retryable;
@@ -50,7 +55,9 @@ function AgentsRoute() {
 								: query.data
 					}
 					onRetry={() => void query.refetch()}
-					retrying={query.isFetching}
+					onRelogin={() => void relogin.recheck()}
+					retrying={query.isFetching || relogin.checking}
+					templateName={templateName}
 				/>
 			</div>
 		</main>

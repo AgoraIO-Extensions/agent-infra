@@ -15,8 +15,8 @@ import {
 } from "@testing-library/react";
 import { type ReactElement, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ToastProvider } from "@/components/ui/toast";
 import { AgentConfigurationScreen } from "./agent-configuration/agent-configuration-screen.js";
+import { ConfigurationTestProviders } from "./agent-configuration/test-router-context.js";
 import { AgentDetailScreen } from "./agent-discovery/agent-detail-screen.js";
 import { renderWithAgentRouter } from "./agent-discovery/test-router.js";
 import {
@@ -29,10 +29,11 @@ function render(element: ReactElement) {
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false, gcTime: 0 } },
 	});
-	// 配置页的企微卡片与镜像升级会调用 Toast，页面在根布局的 ToastProvider 内渲染。
+	// 配置页的企微卡片与镜像升级会调用 Toast，页面在根布局的 ToastProvider 内渲染；
+	// 配置页页头是路由 Link，同时提供路由上下文。
 	const result = renderView(
 		<QueryClientProvider client={client}>
-			<ToastProvider>{element}</ToastProvider>
+			<ConfigurationTestProviders>{element}</ConfigurationTestProviders>
 		</QueryClientProvider>,
 	);
 	return {
@@ -40,7 +41,7 @@ function render(element: ReactElement) {
 		rerender(element: ReactElement) {
 			result.rerender(
 				<QueryClientProvider client={client}>
-					<ToastProvider>{element}</ToastProvider>
+					<ConfigurationTestProviders>{element}</ConfigurationTestProviders>
 				</QueryClientProvider>,
 			);
 		},
@@ -205,7 +206,7 @@ describe("Agent detail and Owner configuration directory fields", () => {
 		fireEvent.click(
 			screen.getByRole("button", { name: "移除 Directory User" }),
 		);
-		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
+		fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
 		expect(onSave).toHaveBeenCalledWith(
 			expect.objectContaining({
 				coOwnerIds: ["user-owner-1", "user-3"],
@@ -233,20 +234,19 @@ describe("Agent detail and Owner configuration directory fields", () => {
 		await waitFor(() =>
 			expect(screen.getAllByText("目录详情暂时无法读取")).toHaveLength(3),
 		);
-		expect(screen.getByText(/^未识别的用户 \d+$/)).toBeTruthy();
-		expect(screen.getByText(/^未识别的组织 \d+$/)).toBeTruthy();
+		// 读取失败不等于记录不存在：用中性占位，不说「未识别」（acc-3 新问题 3）。
+		expect(screen.getByText(/^用户 \d+$/)).toBeTruthy();
+		expect(screen.getByText(/^组织 \d+$/)).toBeTruthy();
+		expect(document.body.textContent).not.toContain("未识别");
 		expect(document.body.textContent).not.toContain("目录记录不可用");
 		expect(document.body.textContent).not.toContain("user-2");
 		// 没有任何改动时保存不可用（#2560）；先做一次与 Owner、范围无关的真实改动，
 		// 再确认目录读取失败时未解析的选择仍随请求原样提交。
-		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
-		fireEvent.change(screen.getByLabelText("Secret 名称"), {
-			target: { value: "CHANGED_SECRET" },
+		// Secret 改为只写弹窗单独替换（O-10），这里用环境变量制造改动。
+		fireEvent.change(screen.getByLabelText("值"), {
+			target: { value: "changed-value" },
 		});
-		fireEvent.change(screen.getByLabelText("新 Secret 值"), {
-			target: { value: "changed-secret-value" },
-		});
-		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
+		fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
 		expect(onSave).toHaveBeenCalledWith(
 			expect.objectContaining({
 				coOwnerIds: ["user-owner-1"],
@@ -262,7 +262,7 @@ describe("Agent detail and Owner configuration directory fields", () => {
 		fireEvent.click(
 			within(ownerField).getByRole("button", { name: "移除 Owner" }),
 		);
-		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
+		fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
 		expect(onSave).not.toHaveBeenCalled();
 		expect(screen.getByText("请选择至少一名有效 Owner。")).toBeTruthy();
 	});

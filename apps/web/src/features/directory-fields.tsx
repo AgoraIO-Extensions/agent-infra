@@ -75,7 +75,8 @@ function placeholderNumber(kind: DirectoryKind, item: string) {
 	numbers.set(item, next);
 	return next;
 }
-const pendingDirectoryLabels: Record<DirectoryKind, string> = {
+// 读取中与读取失败的中性占位：都还不能断定记录不存在，「未识别的…」只用于目录确认缺失。
+const neutralDirectoryLabels: Record<DirectoryKind, string> = {
 	user: "用户",
 	organization: "组织",
 };
@@ -264,15 +265,15 @@ export function DirectoryPicker({
 			const fallback = fallbackLabels?.[item]?.trim();
 			const reason = unresolvedReasons[item];
 			// 没有已知显示名时用可区分的序号占位，不显示内部 ID，也不让多个移除钮同名；
-			// 读取完成前不下「未识别」的结论。
+			// 只有目录确认缺失才下「未识别」的结论，读取中与读取失败都用中性占位。
 			return {
 				id: item,
 				name:
 					fallback ||
 					`${
-						reason
+						reason === "missing"
 							? unresolvedDirectoryLabels[kind]
-							: pendingDirectoryLabels[kind]
+							: neutralDirectoryLabels[kind]
 					} ${placeholderNumber(kind, item)}`,
 				secondary:
 					reason === "failed"

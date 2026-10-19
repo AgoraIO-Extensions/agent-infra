@@ -1,7 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeft, RefreshCw } from "lucide-react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 
 import { AgentConfigurationWorkflow } from "../../../features/agent-configuration/agent-configuration-workflow.js";
 import { isRetryableAgentDiscoveryError } from "../../../features/agent-discovery/agent-discovery.js";
@@ -9,6 +7,7 @@ import { useAgentDetail } from "../../../features/agent-discovery/use-agent-deta
 import { projectDeploymentConfiguration } from "../../../features/my-agents/deployment-configuration.js";
 import { useDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
 import { PageLoadingState } from "../../../features/page-loading-state.js";
+import { ReadFailureCard } from "../../../features/page-state-card.js";
 
 export const Route = createFileRoute("/agents/$agentId/configuration")({
 	component: AgentConfigurationRoute,
@@ -44,53 +43,73 @@ function AgentConfigurationRoute() {
 					})),
 				)
 			: undefined;
+	// 端点显示名用于模型选择与摘要，页面不显示原始端点 ID（RK2-01）。
+	const endpointNames = Object.fromEntries(
+		deploymentConfiguration.modelCatalog.status === "populated"
+			? deploymentConfiguration.modelCatalog.endpoints.map((endpoint) => [
+					endpoint.endpointId,
+					endpoint.displayName,
+				])
+			: [],
+	);
 	if (query.isError || !query.data || query.data.kind !== "ready") {
+		const failure =
+			!query.isError && query.data?.kind === "unavailable"
+				? query.data
+				: { retryable };
 		return (
 			<main className="platform-content management-content">
-				<section
-					aria-labelledby="agent-configuration-heading"
-					className="space-y-4"
-				>
-					<h1
-						id="agent-configuration-heading"
-						className="font-semibold text-2xl text-foreground"
-					>
-						配置暂不可用
-					</h1>
-					<Alert tone="danger" role="alert">
-						<AlertDescription>
-							{retryable ? "请稍后重试。" : "请联系管理员。"}
-						</AlertDescription>
-					</Alert>
-					{retryable ? (
-						<Button
-							variant="outline"
-							disabled={query.isFetching}
-							onClick={() => void query.refetch()}
-							type="button"
-						>
-							<RefreshCw aria-hidden="true" data-icon="inline-start" />
-							{query.isFetching ? "正在重新加载…" : "重新加载配置"}
-						</Button>
-					) : null}
-					<Link
-						className={buttonVariants({ variant: "ghost", size: "sm" })}
-						params={{ agentId }}
-						to="/agents/$agentId"
-					>
-						<ArrowLeft aria-hidden="true" />
-						返回 Agent 详情
-					</Link>
+				<section aria-labelledby="agent-configuration-heading">
+					<header className="page-heading">
+						<div>
+							<h1 id="agent-configuration-heading">Owner 配置</h1>
+						</div>
+					</header>
+					{/* 与 Agent 详情共用读取结果与状态卡映射（P-01）。 */}
+					<ReadFailureCard
+						failure={failure}
+						deniedDescription="Agent 不存在，或你没有访问权限。"
+						unavailableDescription="暂时无法读取 Owner 配置，请稍后重试。"
+						back={
+							<Link
+								activeOptions={{ exact: true }}
+								className={buttonVariants({ variant: "outline" })}
+								params={{ agentId }}
+								to="/agents/$agentId"
+							>
+								返回 Agent 详情
+							</Link>
+						}
+						onRetry={() => void query.refetch()}
+						onStillValid={() => void query.refetch()}
+						retrying={query.isFetching}
+						retryLabel="重新加载配置"
+					/>
 				</section>
 			</main>
 		);
 	}
 
+	const agent = query.data.agent;
+	// 标准模板只开放模板登记的环境变量与 Secret 键（PRD §5.5）；模板未读取到时名称自由输入，
+	// 由服务端校验。
+	const template =
+		agent.source.kind === "standard"
+			? deploymentConfiguration.templates.find(
+					(item) =>
+						agent.source.kind === "standard" &&
+						item.templateId === agent.source.templateId,
+				)
+			: undefined;
+
 	return (
 		<main className="platform-content management-content">
 			<AgentConfigurationWorkflow
-				agent={query.data.agent}
+				agent={agent}
+				allowedEnvironmentKeys={template?.allowedEnvironmentKeys}
+				allowedSecretKeys={template?.allowedSecretKeys}
 				deploymentModelCandidates={deploymentModelCandidates}
+				endpointNames={endpointNames}
 			/>
 		</main>
 	);

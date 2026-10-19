@@ -26,7 +26,8 @@ type ConfirmDialogProps = {
 	// 在说明上方显示操作对象。
 	subject?: { name: React.ReactNode; detail?: React.ReactNode };
 	tone?: "danger" | "default";
-	cancelLabel?: string;
+	// 传 null 时不渲染「取消」次按钮，只保留页眉的关闭钮（例如设计稿的撤回申请弹窗）。
+	cancelLabel?: string | null;
 	// 同时禁用触发器与确认钮。
 	disabled?: boolean;
 	open?: boolean;
@@ -84,9 +85,11 @@ function ConfirmDialog({
 					<DialogDescription>{description}</DialogDescription>
 				</DialogBody>
 				<DialogFooter>
-					<DialogClose render={<Button variant="ghost" />}>
-						{cancelLabel}
-					</DialogClose>
+					{cancelLabel === null ? null : (
+						<DialogClose render={<Button variant="ghost" />}>
+							{cancelLabel}
+						</DialogClose>
+					)}
 					<Button
 						type="button"
 						variant={tone === "danger" ? "destructive" : "default"}

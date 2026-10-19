@@ -475,6 +475,60 @@ describe("My Agents generated-client consumer", () => {
 		}
 	});
 
+	it.each([
+		[401, { retryable: false, reason: "authentication-required" }],
+		[400, { retryable: false }],
+		[405, { retryable: false }],
+	] as const)(
+		"keeps the HTTP %i application detail failure reason for the state card",
+		async (status, expected) => {
+			const client = createClient({
+				baseUrl: "https://platform.example.test",
+				fetch: async () =>
+					Response.json(
+						{
+							...pilotFakeScenariosV2.unauthorized.response.body,
+							message: "private application detail",
+						},
+						{ status },
+					),
+			});
+			await expect(
+				loadMyAgentApplication("application-pilot-1", client),
+			).resolves.toEqual({ kind: "unavailable", ...expected });
+		},
+	);
+
+	it.each([429, 500, 503])(
+		"rejects a retryable HTTP %i application detail failure by status",
+		async (status) => {
+			const client = createClient({
+				baseUrl: "https://platform.example.test",
+				fetch: async () => Response.json({}, { status }),
+			});
+			await expect(
+				loadMyAgentApplication("application-pilot-1", client),
+			).rejects.toMatchObject({ retryable: true });
+		},
+	);
+
+	it.each([null, { ...pendingApplication, status: "private-invalid-state" }])(
+		"rejects a successful application detail that fails the schema %#",
+		async (body) => {
+			const client = createClient({
+				baseUrl: "https://platform.example.test",
+				fetch: async () => Response.json(body),
+			});
+			await expect(
+				loadMyAgentApplication("application-pilot-1", client),
+			).resolves.toEqual({
+				kind: "unavailable",
+				retryable: false,
+				reason: "invalid-response",
+			});
+		},
+	);
+
 	it("withdraws a pending current applicant application through the generated client", async () => {
 		const server = createApplicationServer({
 			withdrawAgentApplication: { status: 200, body: withdrawnApplication },

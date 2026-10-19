@@ -97,7 +97,46 @@ describe("Agent discovery generated-client consumer", () => {
 			).resolves.toEqual({
 				kind: "unavailable",
 				retryable: false,
+				// P-01：schema 不符或 agentId 不一致单独标为响应无效，页面给「数据无法读取」卡。
+				reason: "invalid-response",
 			});
+		},
+	);
+
+	it.each([
+		[401, { retryable: false, reason: "authentication-required" }],
+		[400, { retryable: false }],
+		[405, { retryable: false }],
+	] as const)(
+		"keeps the HTTP %i detail failure reason for the state card",
+		async (status, expected) => {
+			const client = createClient({
+				baseUrl: "https://platform.example.test",
+				fetch: async () =>
+					Response.json(
+						{
+							...pilotFakeScenariosV2.unauthorized.response.body,
+							message: "private detail failure",
+						},
+						{ status },
+					),
+			});
+			await expect(
+				loadAgentDetail(startingAgent.agentId, client),
+			).resolves.toEqual({ kind: "unavailable", ...expected });
+		},
+	);
+
+	it.each([429, 500, 503])(
+		"rejects a retryable HTTP %i detail failure by status",
+		async (status) => {
+			const client = createClient({
+				baseUrl: "https://platform.example.test",
+				fetch: async () => Response.json({}, { status }),
+			});
+			await expect(
+				loadAgentDetail(startingAgent.agentId, client),
+			).rejects.toMatchObject({ retryable: true });
 		},
 	);
 

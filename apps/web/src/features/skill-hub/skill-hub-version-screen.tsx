@@ -243,6 +243,7 @@ function ReadyVersion({
 								ref={configureLink}
 								className={buttonVariants()}
 								to="/my-agents"
+								search={{ tab: "owned" }}
 							>
 								<Settings aria-hidden="true" />
 								配置 Agent 绑定

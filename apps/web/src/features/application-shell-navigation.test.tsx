@@ -138,6 +138,22 @@ describe("Original IA workbench navigation", () => {
 			expect(within(breadcrumb).getByText("页面不存在")).toBeTruthy();
 			expect(within(breadcrumb).queryByText("Agent 详情")).toBeNull();
 			expect(within(breadcrumb).queryByText("创建审批")).toBeNull();
+			// P-01：404 内容为状态卡，保留返回工作台与前往 Agent 目录两个入口。
+			const card = document.querySelector(
+				'#main-content [data-slot="state-card"]',
+			);
+			expect(card?.getAttribute("data-kind")).toBe("not-found");
+			expect(card?.textContent).toContain(
+				"链接可能已失效或地址有误。可以回到工作台，或从 Agent 目录重新进入。",
+			);
+			expect(
+				screen
+					.getByRole("link", { name: "前往 Agent 目录" })
+					.getAttribute("href"),
+			).toBe("/agents");
+			expect(
+				screen.getByRole("link", { name: "返回工作台" }).getAttribute("href"),
+			).toBe("/");
 			fireEvent.click(screen.getByRole("link", { name: "返回工作台" }));
 			expect(
 				await screen.findByRole("heading", { name: "受控工作台" }),
@@ -145,6 +161,17 @@ describe("Original IA workbench navigation", () => {
 			expect(history.location.pathname).toBe("/");
 		},
 	);
+	it("keeps the brand link out of the current-page state on the workbench (N-21)", async () => {
+		await showShell(false, "/");
+		const current = document.querySelectorAll('a[aria-current="page"]');
+		expect([...current].map((link) => link.textContent)).toEqual(["工作台"]);
+		const brand = document.querySelector("a.platform-brand");
+		expect(brand?.getAttribute("href")).toBe("/");
+		expect(brand?.hasAttribute("aria-current")).toBe(false);
+		expect(brand?.hasAttribute("data-status")).toBe(false);
+		cleanup();
+	});
+
 	it.each([
 		["/skills/manage", "我的 Skill"],
 		["/skills/manage/", "我的 Skill"],

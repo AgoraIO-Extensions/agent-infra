@@ -283,9 +283,7 @@ describe("AdminAgentApplicationsScreen", () => {
 				state={{ kind: "ready", applications: [application] }}
 			/>,
 		);
-		expect(
-			screen.getByRole("heading", { name: "把资源审批做得更快，也更可核对。" }),
-		).toBeTruthy();
+		expect(screen.getByRole("heading", { name: "审批申请" })).toBeTruthy();
 		// AP-04：先 amber 计数 chip，再 tag「系统管理员 · 只读审计」。
 		const heading = screen
 			.getByRole("heading", { level: 1 })
@@ -325,11 +323,9 @@ describe("AdminAgentApplicationsScreen", () => {
 		// 使用范围显示目录名称，不再显示组织 ID。
 		expect(await within(dialog).findByText("发布工程")).toBeTruthy();
 		expect(dialog.textContent).not.toContain("org-release");
-		// F-02：模型为显示名 + 等宽次要 modelId；默认模型显示选项名；推理强度为中文档位。
-		expect(dialog.textContent).not.toContain("Release model（release-model）");
-		const model = within(dialog).getByText("release-model");
-		expect(model.className).toContain("font-mono");
-		expect(model.closest("li")?.textContent).toBe("Release modelrelease-model");
+		// F-02：模型行按设计为「显示名 · 档位」，不显示 modelId；默认模型显示选项名；推理强度为中文档位。
+		expect(within(dialog).getByText("Release model · 高").tagName).toBe("LI");
+		expect(dialog.textContent).not.toContain("release-model");
 		expect(within(dialog).queryByText("model-primary")).toBeNull();
 		expect(dialog.textContent).not.toContain("model-primary");
 		expect(within(dialog).getByText("高")).toBeTruthy();

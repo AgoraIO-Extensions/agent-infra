@@ -115,6 +115,42 @@ describe("useDirectoryNames", () => {
 		expect(document.body.textContent).not.toContain("user-b-missing");
 	});
 
+	it("exposes a user's organization path as detail only when the directory returns one", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({
+					items: [
+						{
+							kind: "user",
+							canonicalId: "user-with-path",
+							displayName: "带组织的用户",
+							organizationPath: "研发 / 平台工程",
+						},
+						{
+							kind: "user",
+							canonicalId: "user-without-path",
+							displayName: "无组织的用户",
+						},
+					],
+				}),
+			),
+		);
+		let latest: DirectoryNames | undefined;
+		render(
+			<Names
+				ids={["user-with-path", "user-without-path"]}
+				onNames={(names) => {
+					latest = names;
+				}}
+			/>,
+			{ wrapper: wrapper(new QueryClient()) },
+		);
+		await waitFor(() => expect(latest?.status).toBe("ready"));
+		expect(latest?.resolve("user-with-path").detail).toBe("研发 / 平台工程");
+		expect(latest?.resolve("user-without-path")).not.toHaveProperty("detail");
+	});
+
 	it("keeps displayed names while refetching in the background", async () => {
 		namedDirectory();
 		const client = new QueryClient({

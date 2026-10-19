@@ -1,13 +1,11 @@
+import { Link } from "@tanstack/react-router";
 import { ArrowLeft, ShieldCheck } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
-import { statusTone } from "@/lib/status-tone";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
-import {
-	agentManagementStatusLabels,
-	agentServiceAvailabilityLabel,
-} from "../agent-management-status.js";
+import { agentAvailabilityStatus } from "../agent-management-status.js";
+import { formatPerson } from "../directory-names.js";
 import { configurationHeadingId } from "./configuration-lifecycle.js";
 
 /**
@@ -19,33 +17,37 @@ export function ConfigurationPageHeading({
 }: {
 	agent: AgentProjectionV2;
 }) {
+	// 设计 tag-row：一个可用性 chip（与 Agent 目录、详情同一派生规则）加一个「Owner · 名称」tag。
+	const availability = agentAvailabilityStatus(agent);
+	const owners = agent.configuration.owners
+		.map((owner) => formatPerson({ displayName: owner.displayName }).name)
+		.join("、");
 	return (
 		<>
 			<header className="page-heading">
 				<div>
-					<a
+					{/* 站内导航用路由 Link，不整页刷新；exact 避免前缀匹配把返回链接标成当前页。 */}
+					<Link
 						className={buttonVariants({ variant: "ghost", size: "sm" })}
-						href={`/agents/${encodeURIComponent(agent.agentId)}`}
+						to="/agents/$agentId"
+						params={{ agentId: agent.agentId }}
+						activeOptions={{ exact: true }}
 					>
 						<ArrowLeft aria-hidden="true" />
 						返回 Agent 详情
-					</a>
+					</Link>
 					<p className="page-eyebrow">Owner 配置 · {agent.name}</p>
 					<h1 id={configurationHeadingId} tabIndex={-1}>
 						配置 Agent 的 Owner、范围和运行方式。
 					</h1>
-					{/* 设计稿写「由 Worker 更新实例」；产品界面不展示运行时组件名，按 PRD 去掉 Worker。 */}
-					<p>保存后更新运行实例；Secret 只显示状态和版本。</p>
+					{/* 设计原文；与 Secret 分区「等待 Worker 激活」的用语一致（O-12）。 */}
+					<p>保存后由 Worker 更新实例；Secret 只显示状态和版本。</p>
 				</div>
 				<div className="tag-row">
-					<Badge tone={statusTone(agent.managementStatus)}>
-						{agentManagementStatusLabels[agent.managementStatus]}
+					<Badge variant="chip" tone={availability.tone}>
+						{availability.label}
 					</Badge>
-					{agent.serviceAvailability && (
-						<Badge tone={statusTone(agent.serviceAvailability)}>
-							{agentServiceAvailabilityLabel(agent.serviceAvailability)}
-						</Badge>
-					)}
+					{owners ? <Badge variant="tag">Owner · {owners}</Badge> : null}
 				</div>
 			</header>
 			<div className="configuration-notices">

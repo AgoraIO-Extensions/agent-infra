@@ -70,7 +70,11 @@ export async function loadAgentDefaultRelayKey(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error?.retryable !== false);
+	if (!result.data)
+		throw requestError(
+			result.error?.retryable !== false,
+			result.response?.status,
+		);
 	return result.data;
 }
 
@@ -92,7 +96,11 @@ export async function previewAgentDefaultRelayKeyCandidates(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error?.retryable !== false);
+	if (!result.data)
+		throw requestError(
+			result.error?.retryable !== false,
+			result.response?.status,
+		);
 	return result.data;
 }
 
@@ -117,7 +125,11 @@ export async function loadAgentDefaultRelayKeySavedCandidates(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error?.retryable !== false);
+	if (!result.data)
+		throw requestError(
+			result.error?.retryable !== false,
+			result.response?.status,
+		);
 	return result.data;
 }
 
@@ -161,15 +173,40 @@ export async function replaceAgentDefaultRelayKey(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error?.retryable !== false);
+	if (!result.data)
+		throw requestError(
+			result.error?.retryable !== false,
+			result.response?.status,
+		);
 	return result.data;
 }
 
-function requestError(retryable: boolean) {
+/** 配置相关请求失败：页面按 `retryable` 与 HTTP 状态码区分可重试与冲突（RK2-06、RK2-09）。 */
+export type AgentConfigurationRequestError = Error & {
+	readonly retryable: boolean;
+	readonly status?: number;
+};
+
+/** 权限、找不到与冲突都不可重试：页面不给「重新读取」，改为提示刷新（RK2-06、RK2-09）。 */
+export function isRetryableConfigurationError(
+	error: AgentConfigurationRequestError | null,
+) {
+	return (
+		error !== null &&
+		error.retryable !== false &&
+		![401, 403, 404, 409].includes(error.status ?? 0)
+	);
+}
+
+function requestError(
+	retryable: boolean,
+	status?: number,
+): AgentConfigurationRequestError {
 	return Object.assign(
 		new Error("Agent configuration is temporarily unavailable"),
 		{
 			retryable,
+			...(status === undefined ? {} : { status }),
 		},
 	);
 }
@@ -194,7 +231,11 @@ export async function updateAgentConfiguration(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error?.retryable !== false);
+	if (!result.data)
+		throw requestError(
+			result.error?.retryable !== false,
+			result.response?.status,
+		);
 	if (result.data.agentId !== agentId) throw requestError(false);
 
 	return result.data;
@@ -220,7 +261,11 @@ export async function updateAgentSavedModelConfiguration(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error?.retryable !== false);
+	if (!result.data)
+		throw requestError(
+			result.error?.retryable !== false,
+			result.response?.status,
+		);
 	if (result.data.agentId !== agentId) throw requestError(false);
 	return result.data;
 }
@@ -249,7 +294,11 @@ export async function upgradeAgentCustomImage(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (!result.data) throw requestError(result.error?.retryable !== false);
+	if (!result.data)
+		throw requestError(
+			result.error?.retryable !== false,
+			result.response?.status,
+		);
 	if (result.data.agentId !== agentId) throw requestError(false);
 
 	return result.data;

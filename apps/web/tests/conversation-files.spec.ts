@@ -132,6 +132,12 @@ test("reads the read-only limits, uploads one attachment and keeps narrow layout
 	page,
 }) => {
 	const fixture = await conversationFixture(page, 200);
+	// CH-03：附件入口在默认收起的「会话文件」折叠条内，需要用户先展开。
+	const files = page.getByRole("button", { name: /^会话文件/ });
+	await expect(files).toHaveAttribute("aria-expanded", "false");
+	await expect(files).toContainText("0 个文件 · 0 个待重试");
+	await files.click();
+	await expect(files).toHaveAttribute("aria-expanded", "true");
 	// The visually hidden file input is also exposed as a button, so scope the
 	// trigger to the rendered control.
 	const picker = page.locator('button[data-slot="button"]', {
@@ -167,6 +173,7 @@ test("reads the read-only limits, uploads one attachment and keeps narrow layout
 		buffer: Buffer.from("hello"),
 	});
 	await expect(page.getByText("已上传")).toBeVisible();
+	await expect(files).toContainText("1 个文件 · 0 个待重试");
 	await page.getByRole("textbox", { name: "消息" }).fill("请查看附件");
 	await page.getByRole("button", { name: "发送", exact: true }).click();
 	await expect
@@ -181,6 +188,11 @@ test("closes the attachment entry when the read-only limits request fails", asyn
 	page,
 }) => {
 	const fixture = await conversationFixture(page, 500);
+	// 收起状态的摘要直接反映失败（CH-03 AC-2）；展开后看到原因与禁用的入口。
+	const files = page.getByRole("button", { name: /^会话文件/ });
+	await expect(files).toContainText("上传暂不可用");
+	await expect(files).not.toContainText("0 个待重试");
+	await files.click();
 	await expect(
 		page.getByText("文件限制暂不可用，上传入口已关闭。"),
 	).toBeVisible();

@@ -153,9 +153,10 @@ it("explains unavailable QR in a fallback panel without opening a window or requ
 	expect(open).not.toHaveBeenCalled();
 });
 
-it("opens the QR window only from the panel and only after takeover confirmation", async () => {
+function qrAvailableFixture() {
 	client.setConfig({ baseUrl: "https://platform.test" });
 	const bodies: unknown[] = [];
+	const requests: string[] = [];
 	const popup = { close: vi.fn(), closed: false };
 	const openPopup = vi.fn(() => popup);
 	const expiresAt = new Date(Date.now() + 60_000).toISOString();
@@ -167,6 +168,7 @@ it("opens the QR window only from the panel and only after takeover confirmation
 		"fetch",
 		vi.fn(async (input: Request) => {
 			const url = new URL(input.url);
+			requests.push(`${input.method} ${url.pathname}`);
 			if (url.pathname.endsWith("/wecom-bot"))
 				return Response.json({ status: "not_configured" });
 			if (url.pathname.endsWith("/wecom-setup") && input.method === "POST")
@@ -189,37 +191,69 @@ it("opens the QR window only from the panel and only after takeover confirmation
 				bodies.push(await input.json());
 				return Response.json({ status: "verifying" });
 			}
+			if (url.pathname.endsWith("/cancel"))
+				return Response.json({ status: "cancelled" });
 			return Response.json({ status: "active" });
 		}),
 	);
+	const scan = () =>
+		window.dispatchEvent(
+			new MessageEvent("message", {
+				origin: "https://auth.example.test",
+				source: popup as unknown as MessageEventSource,
+				data: {
+					source: "agent-infra",
+					state: "qr-state",
+					botId: "qr-bot",
+					secret: "qr-secret",
+				},
+			}),
+		);
+	return { bodies, requests, openPopup, scan };
+}
+
+it("opens the QR window without the manual acknowledgement and submits once only after confirming in the panel (CK-09)", async () => {
+	const { bodies, openPopup, scan } = qrAvailableFixture();
 	render(<WecomBotSetup agentId="agent" />, { wrapper: ToastProvider });
 	fireEvent.click(screen.getByRole("button", { name: "扫码授权" }));
 	const openWindow = await screen.findByRole("button", {
 		name: "打开扫码窗口",
 	});
 	expect(openPopup).not.toHaveBeenCalled();
-	// 提交扫码结果前仍须确认连接影响：在面板内就地提示，不在入口拦截。
-	expect(openWindow.hasAttribute("disabled")).toBe(true);
-	expect(screen.getByText(/请先勾选上方「我已知悉」/)).toBeTruthy();
-	fireEvent.click(screen.getByRole("checkbox"));
+	// 扫码前不需要勾选上方「我已知悉」：按钮可用，也没有要求先勾选的提示。
+	expect(
+		(screen.getByRole("checkbox") as HTMLButtonElement).getAttribute(
+			"aria-checked",
+		),
+	).toBe("false");
 	expect(openWindow.hasAttribute("disabled")).toBe(false);
+	expect(document.body.textContent).not.toContain("请先勾选");
 	fireEvent.click(openWindow);
 	expect(openPopup).toHaveBeenCalledExactlyOnceWith(
 		"https://auth.example.test/authorize",
 		"wecom-qr",
 	);
-	window.dispatchEvent(
-		new MessageEvent("message", {
-			origin: "https://auth.example.test",
-			source: popup as unknown as MessageEventSource,
-			data: {
-				source: "agent-infra",
-				state: "qr-state",
-				botId: "qr-bot",
-				secret: "qr-secret",
-			},
-		}),
-	);
+	scan();
+	// 扫码完成后在面板内就地确认影响；确认前不提交凭证，Secret 不进入页面。
+	const confirm = await screen.findByRole("button", { name: "确认并绑定" });
+	await waitFor(() => expect(document.activeElement).toBe(confirm));
+	expect(
+		document
+			.getElementById(confirm.getAttribute("aria-describedby") ?? "")
+			?.textContent?.startsWith(
+				"连接此机器人可能断开它在其他服务中的现有连接。",
+			),
+	).toBe(true);
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(bodies).toEqual([]);
+	expect(document.body.innerHTML).not.toContain("qr-secret");
+	expect(
+		screen
+			.getByRole("button", { name: "验证并绑定：企微机器人" })
+			.hasAttribute("disabled"),
+	).toBe(true);
+	fireEvent.click(confirm);
+	fireEvent.click(confirm);
 	await waitFor(() =>
 		expect(bodies).toEqual([
 			{
@@ -230,6 +264,40 @@ it("opens the QR window only from the panel and only after takeover confirmation
 			},
 		]),
 	);
+	expect(screen.queryByRole("button", { name: "确认并绑定" })).toBeNull();
+	await waitFor(() =>
+		expect(document.activeElement).toBe(
+			screen.getByRole("heading", { name: "企微机器人" }),
+		),
+	);
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(bodies).toHaveLength(1);
+});
+
+it("discards a scanned QR result without submitting when the Owner cancels the confirmation (CK-09)", async () => {
+	const { bodies, requests, scan } = qrAvailableFixture();
+	render(<WecomBotSetup agentId="agent" />, { wrapper: ToastProvider });
+	const trigger = screen.getByRole("button", { name: "扫码授权" });
+	fireEvent.click(trigger);
+	fireEvent.click(await screen.findByRole("button", { name: "打开扫码窗口" }));
+	scan();
+	await screen.findByRole("button", { name: "确认并绑定" });
+	expect((screen.getByLabelText("Bot ID") as HTMLInputElement).value).toBe(
+		"qr-bot",
+	);
+	fireEvent.click(screen.getByRole("button", { name: "取消" }));
+	await waitFor(() => expect(document.activeElement).toBe(trigger));
+	expect(screen.queryByRole("button", { name: "确认并绑定" })).toBeNull();
+	expect((screen.getByLabelText("Bot ID") as HTMLInputElement).value).toBe("");
+	await waitFor(() =>
+		expect(requests).toContain(
+			"POST /api/v1/agents/agent/wecom-setup/setup-qr/cancel",
+		),
+	);
+	expect(bodies).toEqual([]);
+	expect(
+		requests.filter((request) => request.endsWith("/credentials")),
+	).toEqual([]);
 });
 
 it.each([0, 408, 429, 500, 503])(
