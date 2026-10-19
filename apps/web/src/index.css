@@ -317,6 +317,10 @@
 .platform-topbar .mobile-menu {
 	display: none;
 }
+/* 窄屏导航右上角的「关闭导航」（44×44）不得与品牌链接的命中区重叠：品牌块在 Sheet 内让出关闭钮所在列。 */
+.platform-nav-sheet .platform-brand {
+	margin-inline-end: 48px;
+}
 .platform-nav-sheet {
 	position: fixed;
 	inset: 0 auto 0 0;

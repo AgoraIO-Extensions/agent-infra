@@ -62,12 +62,14 @@ export function visibleLifecycleCommands(
 export const confirmationCopy = {
 	stop: {
 		title: () => "停止这个 Agent？",
-		description: "停止后暂不能发送消息，个人历史与配置保留。",
+		description:
+			"停止会释放运行资源，但保留配置、渠道绑定、平台会话历史与用户数据。",
 		confirm: "停止 Agent",
 	},
 	restart: {
 		title: (agentName: string) => `重启${agentName}？`,
-		description: "重启期间暂不能发送消息，已有历史保留。",
+		description:
+			"重启会短暂释放并重新建立运行实例。历史会话保留，完成后状态会自动回到“就绪”。",
 		confirm: "确认重启",
 	},
 	retry_creation: {

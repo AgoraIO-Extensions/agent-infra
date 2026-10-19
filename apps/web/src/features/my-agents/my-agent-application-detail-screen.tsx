@@ -220,10 +220,11 @@ export function MyAgentApplicationDetailScreen({
 								description={
 									<>
 										“{application.name}
-										”撤回后保留为只读历史，不再等待审批。再次申请需要新建申请。
+										”撤回后申请不会进入审批队列；你可以重新创建申请。
 									</>
 								}
-								cancelLabel="继续保留申请"
+								// 设计稿只有「确认撤回」与页眉关闭钮，不再另给次按钮。
+								cancelLabel={null}
 								confirmLabel="确认撤回"
 								onConfirm={() => {
 									if (withdrawalPending) return;

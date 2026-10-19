@@ -1478,6 +1478,21 @@ test("mobile navigation traps focus and returns it on Escape", async ({
 	await expect(dialog).toHaveAttribute("aria-modal", "true");
 	// 打开后焦点落在品牌链接（N-09）。
 	await expect(dialog.locator(".platform-brand")).toBeFocused();
+	// 「关闭导航」与品牌链接的命中区互不重叠，点品牌任意位置都回工作台而不是关闭导航。
+	const brandBox = await dialog.locator(".platform-brand").boundingBox();
+	const closeBox = await dialog
+		.getByRole("button", { name: "关闭导航" })
+		.boundingBox();
+	expect(brandBox && closeBox).toBeTruthy();
+	if (brandBox && closeBox) {
+		const overlapX =
+			Math.min(brandBox.x + brandBox.width, closeBox.x + closeBox.width) -
+			Math.max(brandBox.x, closeBox.x);
+		const overlapY =
+			Math.min(brandBox.y + brandBox.height, closeBox.y + closeBox.height) -
+			Math.max(brandBox.y, closeBox.y);
+		expect(overlapX <= 0 || overlapY <= 0).toBe(true);
+	}
 	await expect(dialog).toHaveCSS("padding", "22px 14px 16px");
 	// Tailwind 阴影会带上透明的 ring 层；可见层必须等于设计 --shadow。
 	const shadows = (
@@ -4039,10 +4054,13 @@ test("confirmation dialogs follow the design modal geometry and focus contract",
 			(element) => getComputedStyle(element).backgroundColor,
 		),
 	);
-	await expect(footer.getByRole("button", { name: "继续保留申请" })).toHaveCSS(
-		"background-color",
-		"rgba(0, 0, 0, 0)",
-	);
+	// 设计稿的撤回弹窗页脚只有「确认撤回」；关闭由页眉的关闭钮承担。
+	await expect(footer.getByRole("button")).toHaveCount(1);
+	await expect(
+		dialog.locator('[data-slot="dialog-header"]').getByRole("button", {
+			name: "关闭",
+		}),
+	).toBeVisible();
 	for (const key of ["Tab", "Shift+Tab"]) {
 		for (let index = 0; index < 20; index++) {
 			await page.keyboard.press(key);
@@ -4071,6 +4089,13 @@ test("lifecycle confirmations use the design titles and button variants", async 
 	let dialog = page.getByRole("dialog", { name: "停止这个 Agent？" });
 	await expect(dialog).toBeVisible();
 	await expect(dialog).toHaveAttribute("aria-modal", "true");
+	// 正文按设计原文；设计的停止 / 重启弹窗没有对象名行。
+	await expect(dialog.locator('[data-slot="dialog-description"]')).toHaveText(
+		"停止会释放运行资源，但保留配置、渠道绑定、平台会话历史与用户数据。",
+	);
+	await expect(
+		dialog.locator('[data-slot="confirm-dialog-subject"]'),
+	).toHaveCount(0);
 	expect(await dangerFills(page)).toContain(
 		await dialog
 			.getByRole("button", { name: "停止 Agent" })
@@ -4081,6 +4106,12 @@ test("lifecycle confirmations use the design titles and button variants", async 
 	await page.getByRole("button", { name: "重启 Agent" }).click();
 	dialog = page.getByRole("dialog", { name: /^重启.+？$/ });
 	await expect(dialog).toBeVisible();
+	await expect(dialog.locator('[data-slot="dialog-description"]')).toHaveText(
+		"重启会短暂释放并重新建立运行实例。历史会话保留，完成后状态会自动回到“就绪”。",
+	);
+	await expect(
+		dialog.locator('[data-slot="confirm-dialog-subject"]'),
+	).toHaveCount(0);
 	const restartFill = await dialog
 		.getByRole("button", { name: "确认重启" })
 		.evaluate((element) => getComputedStyle(element).backgroundColor);
