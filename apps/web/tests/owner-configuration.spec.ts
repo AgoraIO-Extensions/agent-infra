@@ -70,6 +70,14 @@ test("renders trusted candidate names and saves only the original model identifi
 			exact: true,
 		}),
 	).toBeVisible();
+	const keySection = page.getByRole("region", {
+		name: "Agent 默认 Relay Key",
+		exact: true,
+	});
+	await expect(
+		keySection.getByText("可信模型甲 · 均衡/高", { exact: true }),
+	).toBeVisible();
+	await expect(keySection).not.toContainText("gpt-5");
 	await page
 		.getByRole("checkbox", {
 			name: "Relay · Internal · 可信模型乙",

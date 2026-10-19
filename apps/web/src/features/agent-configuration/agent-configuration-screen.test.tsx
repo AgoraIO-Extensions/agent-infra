@@ -1230,6 +1230,26 @@ describe("Agent default Relay Key (G-08, G-09)", () => {
 		return screen.findByRole("dialog", { name: "替换 Agent 默认 Relay Key" });
 	}
 
+	it.each([
+		{ displayName: "可信模型甲", expected: "可信模型甲 · 均衡/高" },
+		{ displayName: undefined, expected: "model-a · 均衡/高" },
+	])("uses trusted names in available-model tags: $expected", (model) => {
+		renderKey(
+			{},
+			{
+				savedRelayKeyCandidates: [
+					{
+						endpointId: "relay",
+						modelId: "model-a",
+						displayName: model.displayName,
+						reasoningLevels: ["medium", "high"],
+					},
+				],
+			},
+		);
+		expect(within(section()).getByText(model.expected)).toBeTruthy();
+	});
+
 	it("has its own section with usage boundary, status, version and available models", () => {
 		renderKey();
 		const region = section();

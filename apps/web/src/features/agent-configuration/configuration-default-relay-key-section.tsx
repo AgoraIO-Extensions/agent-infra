@@ -65,7 +65,7 @@ function availableModelTags(
 			candidates.filter((item) => item.modelId === candidate.modelId).length ===
 			1;
 		const name = unique
-			? candidate.modelId
+			? (candidate.displayName ?? candidate.modelId)
 			: (labels.get(candidateKey(candidate)) ?? candidate.modelId);
 		return {
 			key: candidateKey(candidate),
