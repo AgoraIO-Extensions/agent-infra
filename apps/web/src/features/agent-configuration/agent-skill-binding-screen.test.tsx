@@ -14,11 +14,11 @@ import {
 } from "@testing-library/react";
 import type { ComponentProps, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ToastProvider } from "@/components/ui/toast";
 import type { SkillHubVersionMetadataV1 } from "../../pilot/generated-v2/types.gen.js";
 import { minimalSkillGrant } from "./agent-skill-binding.js";
 import { AgentSkillBindingScreen } from "./agent-skill-binding-screen.js";
 import { digest, skillBinding } from "./agent-skill-binding-test-fixtures.js";
+import { ConfigurationTestProviders } from "./test-router-context.js";
 
 const agent = AgentProjectionV2Schema.parse(
 	pilotFakeScenariosV2.starting.response.body,
@@ -93,9 +93,10 @@ function renderScreen(overrides: Partial<Props> = {}) {
 		...overrides,
 	};
 	const queryClient = new QueryClient();
+	// 页面里的站内链接是路由 Link：提供路由上下文（含 ToastProvider）生成 href。
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<QueryClientProvider client={queryClient}>
-			<ToastProvider>{children}</ToastProvider>
+			<ConfigurationTestProviders>{children}</ConfigurationTestProviders>
 		</QueryClientProvider>
 	);
 	const view = render(<AgentSkillBindingScreen {...props} />, { wrapper });

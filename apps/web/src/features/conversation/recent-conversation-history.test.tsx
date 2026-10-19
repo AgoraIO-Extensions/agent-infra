@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { client as v2 } from "../../pilot/generated-v2/client.gen.js";
+import { ConfigurationTestProviders } from "../agent-configuration/test-router-context.js";
 import { deferred, history } from "./conversation-test-fixtures.js";
 import { RecentConversationHistory } from "./recent-conversation-history.js";
 
@@ -44,14 +45,17 @@ function setup(
 	const queryClient = new QueryClient();
 	queries.push(queryClient);
 	const onSelect = vi.fn();
+	// 历史条目是路由 Link：提供路由上下文生成 href。
 	const view = (key: string) => (
 		<QueryClientProvider client={queryClient}>
-			<RecentConversationHistory
-				agentId="agent-1"
-				conversationId="first-1"
-				identityKey={key}
-				onSelect={onSelect}
-			/>
+			<ConfigurationTestProviders>
+				<RecentConversationHistory
+					agentId="agent-1"
+					conversationId="first-1"
+					identityKey={key}
+					onSelect={onSelect}
+				/>
+			</ConfigurationTestProviders>
 		</QueryClientProvider>
 	);
 	const result = render(view(identityKey));

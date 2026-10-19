@@ -71,6 +71,7 @@ import {
 	signInDocumentTitle,
 } from "./page-chrome";
 import { PageStateCard } from "./page-state-card";
+import { RecoveryButton } from "./recovery-button";
 import {
 	BrowserSessionQueryContext,
 	useBrowserSession,
@@ -661,13 +662,14 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 								headingLevel={1}
 								description="暂时无法确认登录状态，请稍后重试。"
 								action={
-									<Button
+									<RecoveryButton
 										variant="outline"
+										recoveryKey="重新检查"
+										busy={session.isFetching}
 										onClick={() => void session.refetch()}
-										disabled={session.isFetching}
 									>
 										{session.isFetching ? "正在检查…" : "重新检查"}
-									</Button>
+									</RecoveryButton>
 								}
 							/>
 						</main>

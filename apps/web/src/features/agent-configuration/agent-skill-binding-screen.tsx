@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Plus, RefreshCw, ShieldAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import {
@@ -42,6 +43,7 @@ import type {
 	SkillHubVersionMetadataV1,
 } from "../../pilot/generated-v2/types.gen.js";
 import type { BrowserSessionState } from "../browser-session.js";
+import { RecoveryButton } from "../recovery-button.js";
 import { loadSkillHubDirectory } from "../skill-hub/skill-hub.js";
 import {
 	bindSkillHubAgentVersion,
@@ -111,12 +113,15 @@ function NoPermission({ agentId }: { agentId: string }) {
 				只有当前 Owner 可以管理这个 Agent 的 Skill 绑定。
 			</AlertDescription>
 			<AlertAction>
-				<a
+				{/* exact：/agents/$agentId 是当前地址的前缀，不让 Link 补 aria-current（N-21）。 */}
+				<Link
+					activeOptions={{ exact: true }}
 					className={buttonVariants({ variant: "outline" })}
-					href={`/agents/${encodeURIComponent(agentId)}`}
+					params={{ agentId }}
+					to="/agents/$agentId"
 				>
 					返回 Agent 详情
-				</a>
+				</Link>
 			</AlertAction>
 		</Alert>
 	);
@@ -138,20 +143,22 @@ export function AgentSkillBindingScreen({
 	const isOwner =
 		session.kind === "ready" &&
 		isAgentConfigurationOwner(agent, session.session);
-	const configurationHref = `/agents/${encodeURIComponent(agent.agentId)}/configuration`;
 	return (
 		<section
 			aria-labelledby={agentSkillHeadingId}
 			className="agent-skill-bindings"
 			data-od-id="agent-skill-bindings-page"
 		>
-			<a
+			{/* 站内跳转用路由 Link，不整页重新加载（查询缓存与会话状态保留）。 */}
+			<Link
+				activeOptions={{ exact: true }}
 				className={buttonVariants({ variant: "ghost" })}
-				href={configurationHref}
+				params={{ agentId: agent.agentId }}
+				to="/agents/$agentId/configuration"
 			>
 				<ArrowLeft aria-hidden="true" data-icon="inline-start" />
 				返回 Owner 配置
-			</a>
+			</Link>
 			<header className="page-heading agent-skill-heading">
 				<div>
 					<p className="page-eyebrow">Owner 配置 / Skill</p>
@@ -161,10 +168,10 @@ export function AgentSkillBindingScreen({
 					<p>{agent.name} · 固定 Skill 版本，完成同步后才能在对话中使用。</p>
 				</div>
 				<div className="agent-skill-heading-actions">
-					<a className={buttonVariants({ variant: "outline" })} href="/skills">
+					<Link className={buttonVariants({ variant: "outline" })} to="/skills">
 						<Plus aria-hidden="true" data-icon="inline-start" />
 						浏览 Skill Hub
-					</a>
+					</Link>
 				</div>
 			</header>
 			{session.kind === "loading" ? (
@@ -325,15 +332,15 @@ function AgentSkillBindings({
 				</AlertDescription>
 				{retryable ? (
 					<AlertAction>
-						<Button
-							type="button"
+						<RecoveryButton
 							variant="outline"
-							disabled={bindings.isFetching}
+							recoveryKey="重新读取"
+							busy={bindings.isFetching}
 							onClick={() => void bindings.refetch()}
 						>
 							<RefreshCw aria-hidden="true" data-icon="inline-start" />
 							{bindings.isFetching ? "正在重新读取…" : "重新读取"}
-						</Button>
+						</RecoveryButton>
 					</AlertAction>
 				) : null}
 			</Alert>
@@ -473,13 +480,15 @@ function SkillBindingCard({
 			{view.error ? <p className="skill-binding-error">{view.error}</p> : null}
 			<div className="skill-actions">
 				{view.usable ? (
-					<a
+					<Link
 						className={buttonVariants({ variant: "outline" })}
-						href={`/chat/${encodeURIComponent(agentId)}`}
+						params={{ agentId, conversationId: undefined }}
+						search={{ view: undefined }}
+						to="/chat/$agentId/{-$conversationId}"
 						aria-label={withObjectName("在对话中选择", name)}
 					>
 						在对话中选择
-					</a>
+					</Link>
 				) : null}
 				{!revoked && !readOnly && otherVersions.length > 0 ? (
 					<ChangeVersionDialog
@@ -489,13 +498,14 @@ function SkillBindingCard({
 						onConfirm={onChangeVersion}
 					/>
 				) : null}
-				<a
+				<Link
 					className={buttonVariants({ variant: "ghost" })}
-					href={`/skills/${encodeURIComponent(binding.skillVersion.skillVersionId)}`}
+					params={{ skillVersionId: binding.skillVersion.skillVersionId }}
+					to="/skills/$skillVersionId"
 					aria-label={withObjectName("版本详情", name)}
 				>
 					版本详情
-				</a>
+				</Link>
 			</div>
 		</article>
 	);

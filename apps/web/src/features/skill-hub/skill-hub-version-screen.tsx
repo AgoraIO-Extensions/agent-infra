@@ -120,8 +120,13 @@ export function SkillHubVersionScreen(props: SkillHubVersionScreenProps) {
 }
 
 function BackToHub() {
+	// exact：/skills 是 /skills/$skillVersionId 的前缀，不让 Link 补 aria-current（N-21）。
 	return (
-		<Link className={buttonVariants({ variant: "ghost" })} to="/skills">
+		<Link
+			activeOptions={{ exact: true }}
+			className={buttonVariants({ variant: "ghost" })}
+			to="/skills"
+		>
 			<ArrowLeft aria-hidden="true" />
 			返回 Skill Hub
 		</Link>
