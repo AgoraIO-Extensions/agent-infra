@@ -420,7 +420,7 @@ test("application rows show a text title, one detail entrance and unique link na
 		await expect(row.locator(`a[href="${href}"]`)).toHaveCount(1);
 		const time = row.locator("time");
 		await expect(time).toHaveAttribute("datetime", /^\d{4}-\d{2}-\d{2}T/);
-		await expect(time.locator("xpath=..")).toContainText(" · 提交于 ");
+		await expect(time.locator("xpath=..")).toContainText(" · 更新于 ");
 	}
 	await expect(page.locator("main")).not.toContainText(
 		/\d{4}-\d{2}-\d{2}T\d{2}:/,
