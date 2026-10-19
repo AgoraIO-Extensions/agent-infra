@@ -61,11 +61,13 @@ function availableModelTags(
 ) {
 	const labels = keylessCandidateLabels(candidates, endpointNames);
 	return candidates.map((candidate) => {
+		const displayName = candidate.displayName ?? candidate.modelId;
 		const unique =
-			candidates.filter((item) => item.modelId === candidate.modelId).length ===
-			1;
+			candidates.filter(
+				(item) => (item.displayName ?? item.modelId) === displayName,
+			).length === 1;
 		const name = unique
-			? candidate.modelId
+			? displayName
 			: (labels.get(candidateKey(candidate)) ?? candidate.modelId);
 		return {
 			key: candidateKey(candidate),

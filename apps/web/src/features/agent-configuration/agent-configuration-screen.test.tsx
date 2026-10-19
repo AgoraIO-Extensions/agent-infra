@@ -1230,6 +1230,55 @@ describe("Agent default Relay Key (G-08, G-09)", () => {
 		return screen.findByRole("dialog", { name: "替换 Agent 默认 Relay Key" });
 	}
 
+	it.each([
+		{ displayName: "可信模型甲", expected: "可信模型甲 · 均衡/高" },
+		{ displayName: undefined, expected: "model-a · 均衡/高" },
+	])("uses trusted names in available-model tags: $expected", (model) => {
+		renderKey(
+			{},
+			{
+				savedRelayKeyCandidates: [
+					{
+						endpointId: "relay",
+						modelId: "model-a",
+						displayName: model.displayName,
+						reasoningLevels: ["medium", "high"],
+					},
+				],
+			},
+		);
+		expect(within(section()).getByText(model.expected)).toBeTruthy();
+	});
+
+	it("distinguishes equal display names with different endpoint/model pairs", () => {
+		renderKey(
+			{},
+			{
+				endpointNames: { relay: "服务甲", other: "服务乙" },
+				savedRelayKeyCandidates: [
+					{
+						endpointId: "relay",
+						modelId: "model-a",
+						displayName: "共享名称",
+						reasoningLevels: ["medium"],
+					},
+					{
+						endpointId: "other",
+						modelId: "model-b",
+						displayName: "共享名称",
+						reasoningLevels: ["medium"],
+					},
+				],
+			},
+		);
+		expect(
+			within(section()).getByText("服务甲 · 共享名称 · 均衡"),
+		).toBeTruthy();
+		expect(
+			within(section()).getByText("服务乙 · 共享名称 · 均衡"),
+		).toBeTruthy();
+	});
+
 	it("has its own section with usage boundary, status, version and available models", () => {
 		renderKey();
 		const region = section();
