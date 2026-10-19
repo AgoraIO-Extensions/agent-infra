@@ -1047,7 +1047,8 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					channelId: "web",
 					identityRevision: "identity-dispatch",
 					agentAuthorizationRevision: "authorization-dispatch",
-					accessSources: [{ kind: "user", userId: "actor-dispatch" }],
+					// actor-dispatch 是 Owner：当前访问来源是 owner。
+					accessSources: [{ kind: "owner", userId: "actor-dispatch" }],
 				},
 			)}) on conflict (execution_id) do nothing`;
 		const restore = await useApiCreatedAgent();
@@ -1072,17 +1073,18 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				workerId: "waiting-api-created-worker",
 				leaseDurationMs: 30_000,
 			});
-			if (decision.outcome !== "claimed")
-				throw new Error(`Expected a claim, got ${decision.outcome}`);
-			// 修复前，复核读到的管理状态缺 creationChannel，这里抛 ConversationDispatchStoreError。
-			await store.prepareRuntimeDispatch({
-				claim: decision.claim,
-				leaseDurationMs: 30_000,
-			});
+			// 修复前，认领时的复核读到缺 creationChannel 的管理状态，claim 抛 ConversationDispatchStoreError；
+			// 复核若判定撤权则返回 failed 并取消任务。两者都不应发生：要么认领，要么继续等待。
+			expect(["claimed", "busy"]).toContain(decision.outcome);
+			if (decision.outcome === "claimed")
+				await store.prepareRuntimeDispatch({
+					claim: decision.claim,
+					leaseDurationMs: 30_000,
+				});
 			const [execution] = await client<{ status: string }[]>`
 				select status from platform.conversation_executions
 				where execution_id = ${waiting.executionId}`;
-			expect(execution?.status).not.toBe("cancelled");
+			expect(["cancelled", "failed"]).not.toContain(execution?.status);
 			expect(
 				await client`select 1 from platform.task_control_records
 					where execution_id = ${waiting.executionId}`,
