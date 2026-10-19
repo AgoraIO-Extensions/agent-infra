@@ -134,12 +134,16 @@ export function parseState(
 		if (updatedAt.getTime() < createdAt.getTime()) unavailable();
 		const modelConfiguration = (() => {
 			if (values.modelConfiguration === undefined) return undefined;
-			const configuration = snapshotObject(values.modelConfiguration, [
-				"configurationRevision",
-				"options",
-				"defaultOptionId",
-				"defaultReasoningLevel",
-			]);
+			const configuration = snapshotObject(
+				values.modelConfiguration,
+				[
+					"configurationRevision",
+					"options",
+					"defaultOptionId",
+					"defaultReasoningLevel",
+				],
+				["selectedOption"],
+			);
 			if (
 				!isPositiveSafeInteger(configuration.configurationRevision) ||
 				!Array.isArray(configuration.options) ||
@@ -175,11 +179,38 @@ export function parseState(
 			) {
 				unavailable();
 			}
+			const selectedOption = (() => {
+				if (configuration.selectedOption === undefined) return undefined;
+				const option = snapshotObject(
+					configuration.selectedOption,
+					["optionId", "modelId"],
+					["displayName"],
+				);
+				// 只描述会话当前所选选项；与会话不符的历史记录不能混入回退事件。
+				if (
+					!isText(option.optionId) ||
+					!isText(option.modelId, modelDisplayNameMaxBytesV1) ||
+					(option.displayName !== undefined &&
+						option.displayName !== null &&
+						!isText(option.displayName, modelDisplayNameMaxBytesV1)) ||
+					option.optionId !== conversation.selectedModelOptionId
+				) {
+					unavailable();
+				}
+				return {
+					optionId: option.optionId,
+					modelId: option.modelId,
+					...(option.displayName === undefined
+						? {}
+						: { displayName: option.displayName }),
+				};
+			})();
 			return {
 				configurationRevision: configuration.configurationRevision,
 				options,
 				defaultOptionId: configuration.defaultOptionId,
 				defaultReasoningLevel: configuration.defaultReasoningLevel,
+				...(selectedOption ? { selectedOption } : {}),
 			};
 		})();
 		const sourceMessage = (() => {
@@ -498,8 +529,37 @@ export function effectiveModelSelection(
 	};
 }
 
+/** 回退事件显示名的上限（UTF-8 字节），与公共契约 ModelSelectionFallbackEventV2 一致。 */
+const modelDisplayNameMaxBytesV1 = 1024;
+
+/** 未配置名称 metadata 时使用原模型 ID 作为显示名（G-07）。 */
+export function modelOptionDisplayNameV1(option: {
+	readonly modelId: string;
+}): string {
+	return option.modelId;
+}
+
+/**
+ * 回退时原选项的显示名：只取与原选项 ID 相同的已应用修订记录。
+ * 读不到或超出公共契约上限时为 null，由界面显示中性文案，不回退为内部 ID（G-07）。
+ */
+export function requestedModelDisplayNameV1(
+	fallback: ConversationModelSelectionFallbackV1,
+	configuration: ConversationModelConfigurationV1 | null | undefined,
+): string | null {
+	const option = configuration?.selectedOption;
+	if (!option || option.optionId !== fallback.previousModelOptionId)
+		return null;
+	const displayName =
+		option.displayName === undefined
+			? modelOptionDisplayNameV1(option)
+			: option.displayName;
+	return isText(displayName, modelDisplayNameMaxBytesV1) ? displayName : null;
+}
+
 export function modelSelectionFallbackWrite(
 	fallback: ConversationModelSelectionFallbackV1 | null,
+	configuration: ConversationModelConfigurationV1 | null | undefined,
 	authority: ConversationExecutionAuthorityV1,
 	conversationId: string,
 	executionId: string,
@@ -527,6 +587,11 @@ export function modelSelectionFallbackWrite(
 				modelOptionId: fallback.modelOptionId,
 				reasoningLevel: fallback.reasoningLevel,
 				reason: "selection_unavailable",
+				requestedModelOptionId: fallback.previousModelOptionId,
+				requestedModelDisplayName: requestedModelDisplayNameV1(
+					fallback,
+					configuration,
+				),
 			},
 		},
 		auditEvent: {

@@ -39,6 +39,11 @@ export interface FakeConversationExecutionOptionsV1
 	readonly authority?: ConversationExecutionAuthorityV1;
 	readonly authorization?: ConversationExecutionAuthorizationPortV1;
 	readonly modelConfiguration?: ConversationModelConfigurationV1;
+	/**
+	 * 模拟已应用配置修订里各选项的模型 ID。提供后，Fake 像持久适配器一样为会话所选、
+	 * 且曾出现在已应用配置中的选项给出 selectedOption（含已删除选项，G-07）。
+	 */
+	readonly modelIdOf?: (optionId: string) => string;
 }
 
 interface StoredIdempotency<T> {
@@ -221,6 +226,9 @@ export class FakeConversationExecutionV1
 	readonly #events: StoredTimelineEvent[] = [];
 	readonly #currentAuthorizationRevision: string | undefined;
 	#modelConfiguration: ConversationModelConfigurationV1 | undefined;
+	readonly #modelIdOf: ((optionId: string) => string) | undefined;
+	/** 曾出现在已应用配置中的选项；配置删除选项后仍保留，用于回退记录原选项。 */
+	readonly #appliedOptionIds = new Set<string>();
 	readonly #createIdempotency = new Map<
 		string,
 		StoredIdempotency<CreateConversationDecisionV1>
@@ -247,6 +255,8 @@ export class FakeConversationExecutionV1
 		this.#currentAuthorizationRevision =
 			options.authority?.authorizationRevision;
 		this.#modelConfiguration = structuredClone(options.modelConfiguration);
+		this.#modelIdOf = options.modelIdOf;
+		this.#recordAppliedOptions(options.modelConfiguration);
 		const transaction: ConversationExecutionTransactionPortV1 = {
 			requestMetadataRecovery: async (request, decide) => {
 				const candidates: ConversationMetadataRecoveryStateV1["candidates"][number][] =
@@ -883,6 +893,33 @@ export class FakeConversationExecutionV1
 		configuration: ConversationModelConfigurationV1 | undefined,
 	) {
 		this.#modelConfiguration = structuredClone(configuration);
+		this.#recordAppliedOptions(configuration);
+	}
+
+	#recordAppliedOptions(
+		configuration: ConversationModelConfigurationV1 | undefined,
+	) {
+		for (const option of configuration?.options ?? [])
+			this.#appliedOptionIds.add(option.optionId);
+	}
+
+	/** 与持久适配器相同：只为会话所选、且曾被应用过的选项附上最近一次的模型。 */
+	#modelConfigurationFor(
+		conversation: ConversationExecutionStateV1["conversation"],
+	): ConversationModelConfigurationV1 | undefined {
+		const configuration = structuredClone(this.#modelConfiguration);
+		const optionId = conversation?.selectedModelOptionId;
+		if (
+			!configuration ||
+			!optionId ||
+			!this.#modelIdOf ||
+			!this.#appliedOptionIds.has(optionId)
+		)
+			return configuration;
+		return {
+			...configuration,
+			selectedOption: { optionId, modelId: this.#modelIdOf(optionId) },
+		};
 	}
 
 	completeExecution(
@@ -1022,7 +1059,9 @@ export class FakeConversationExecutionV1
 			: false;
 		return {
 			conversation: structuredClone(this.#conversations.get(conversationId)),
-			modelConfiguration: structuredClone(this.#modelConfiguration),
+			modelConfiguration: this.#modelConfigurationFor(
+				this.#conversations.get(conversationId),
+			),
 			sourceMessage: source
 				? {
 						messageId: source.messageId,

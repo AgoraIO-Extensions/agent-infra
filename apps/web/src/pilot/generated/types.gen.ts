@@ -1202,6 +1202,23 @@ export type TaskProjectionV1 = {
         schemaVersion: 2;
         sequence: number;
         type: 'browser.side_effect';
+    } | {
+        conversationCursor: string;
+        conversationId: string;
+        eventId: SseEventIdV1;
+        executionId: string;
+        kind: 'event';
+        occurredAt: string;
+        payload: {
+            modelOptionId: string;
+            reason: 'selection_unavailable';
+            reasoningLevel: string;
+            requestedModelDisplayName: string | null;
+            requestedModelOptionId: string;
+        };
+        schemaVersion: 2;
+        sequence: number;
+        type: 'model.selection.fell_back';
     } | TaskStatusEventV1>;
     executionId: string;
     output: string;
@@ -1349,6 +1366,23 @@ export type TaskSseMessageV1 = PersistedConversationEventV1 | {
     schemaVersion: 2;
     sequence: number;
     type: 'browser.side_effect';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        modelOptionId: string;
+        reason: 'selection_unavailable';
+        reasoningLevel: string;
+        requestedModelDisplayName: string | null;
+        requestedModelOptionId: string;
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'model.selection.fell_back';
 } | TaskStatusEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
 
 export type TaskStatusEventV1 = {

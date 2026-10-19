@@ -39,6 +39,7 @@ import {
 	PostgresApplicationRegistrationStoreV1,
 	PostgresApplicationRevisionTransactionV1,
 	PostgresCommitWakeupListenerV1,
+	type PostgresConversationExecutionOptionsV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
 	PostgresPersonalApiCredentialStoreV1,
@@ -165,6 +166,7 @@ export interface PlatformApiAssemblyInput {
 	) => Promise<"valid" | "invalid" | "unavailable">;
 	readonly enforceDefaultRelayKey?: boolean;
 	readonly readModelDisplayNames?: AgentDefaultRelayKeyRoutesDependencies["readModelDisplayNames"];
+	readonly readRequestedModelDisplayName?: PostgresConversationExecutionOptionsV1["readRequestedModelDisplayName"];
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly connectionCapability?: ConnectionCapabilityV1;
@@ -462,6 +464,9 @@ export function assemblePlatformApi(
 		new PostgresConversationExecutionTransactionV1({
 			databaseUrl: input.databaseUrl,
 			userDirectory,
+			...(input.readRequestedModelDisplayName
+				? { readRequestedModelDisplayName: input.readRequestedModelDisplayName }
+				: {}),
 		});
 	const conversationQuery = new PostgresConversationQueryV1({
 		databaseUrl: input.databaseUrl,

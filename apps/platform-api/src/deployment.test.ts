@@ -986,6 +986,56 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			reason: "unapproved",
 		});
 	});
+	it("resolves historical model names within the original production request scope", async () => {
+		expect(
+			createProductionPlatformApiAssemblyInputV1(fixture.input)
+				.readRequestedModelDisplayName,
+		).toBeUndefined();
+		const load = vi.fn(async (_signal: AbortSignal) =>
+			fixture.input.modelCatalog.load(_signal),
+		);
+		const input = createProductionPlatformApiAssemblyInputV1({
+			...fixture.input,
+			modelCatalog: { ...fixture.input.modelCatalog, load },
+			modelDisplayMetadata: {
+				schemaVersion: 1,
+				models: [
+					{
+						endpointId: "endpoint-a",
+						modelId: "model-a",
+						displayName: "Workspace model",
+					},
+				],
+			},
+		});
+		const resolveName = input.readRequestedModelDisplayName;
+		const scope = input.requestScope;
+		if (!resolveName || !scope)
+			throw new Error("Expected scoped name resolver");
+		const model = { endpointId: "endpoint-a", modelId: "model-a" };
+		await expect(resolveName(model)).rejects.toThrow("scope");
+		expect(load).not.toHaveBeenCalled();
+		const controller = new AbortController();
+		const request = new Request("https://platform.example.test/commands", {
+			signal: controller.signal,
+		});
+		let name: string | null = null;
+		await scope(request, async () => {
+			name = await resolveName(model);
+			return new Response(null);
+		});
+		expect(name).toBe("Workspace model");
+		expect(load).toHaveBeenCalledExactlyOnceWith(request.signal);
+		controller.abort();
+		await expect(
+			scope(request, async () => {
+				await resolveName(model);
+				return new Response(null);
+			}),
+		).rejects.toThrow();
+		expect(load).toHaveBeenCalledTimes(1);
+	});
+
 	it("passes the deployment-owned file adapter into the API assembly", () => {
 		const files = {
 			storage: new FakeObjectStorageV1(),

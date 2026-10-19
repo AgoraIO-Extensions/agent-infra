@@ -321,7 +321,8 @@ API 契约覆盖 Agent 创建/启动/停止/重启、任务提交/查询/取消�
 对话回复和状态流使用 `text/event-stream`：
 
 - 每个事件包含稳定 `eventId`、`executionId`、Execution 内递增 `sequence`、Conversation 内严格递增 `conversationCursor`、`type`、`occurredAt` 和类型化 payload。
-- Runtime 来源事件与 Platform 来源事件写入同一持久化时间线并共享上述排序空间。Runtime 来源必须携带非空 Runtime cursor，且不能写入 Platform 保留事件类型；Platform 来源按 Schema 显式区分任务受理/等待/取消/失败/待核实等状态事件和 `model.selection.fell_back`，其中 Worker 失败与待核实收敛事件在同一 Dispatch 事务内写入并保持空 Runtime cursor，Runtime 终态事件已持久化时不追加（见 [Agent Runtime M1 HLD §8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等)）；模型回退事件绑定接收消息的 Execution、Runtime cursor 为空，payload 只包含实际采用的模型选项、推理强度和固定的受限原因。
+- Runtime 来源事件与 Platform 来源事件写入同一持久化时间线并共享上述排序空间。Runtime 来源必须携带非空 Runtime cursor，且不能写入 Platform 保留事件类型；Platform 来源按 Schema 显式区分任务受理/等待/取消/失败/待核实等状态事件和 `model.selection.fell_back`，其中 Worker 失败与待核实收敛事件在同一 Dispatch 事务内写入并保持空 Runtime cursor，Runtime 终态事件已持久化时不追加（见 [Agent Runtime M1 HLD §8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等)）；模型回退事件绑定接收消息的 Execution、Runtime cursor 为空，payload 只包含实际采用的模型选项、推理强度、固定的受限原因，以及会话原所选选项的 ID 与受理时的显示名。
+- 原选项显示名在写入回退事件的同一事务中确定：从不晚于当前已应用配置修订、且包含该选项的最新修订读取原 endpoint/model 关联；部署配置了可信名称时，按该关联解析受理时的显示名，未配置时沿用模型 ID。历史关联或名称无法确认时记为空，之后的配置或部署名称变化不改写已写入的事件。endpoint 标识只在服务端解析名称，不进入公开事件；名称解析不改变原授权与回退选择，也不增加 stop/native metadata 路径的外部依赖。带原选项的回退事件以 `schemaVersion: 2` 进入 V2 混合版本事件历史（V2 Conversation 读取、V2 SSE 与 Task 投影）；只接受 V1 事件的 V1 SSE 仍收到不含原选项的 V1 形状，未记录原选项的旧事件在各读取方保持 V1 原样。
 - 标准模板当前选择失效时，`platform-api` 在接受消息的同一 Conversation 事务中写入一条 `model.selection.fell_back`：初始消息和重新生成绑定新建 Execution，补充指令绑定当前活跃 Execution。该事务同时分配下一 Execution `sequence` 和 Conversation `conversationCursor`、推进两个平台计数器并保存对应审计；幂等重放复用原分配，任何一步失败均整体回滚，且不推进 Execution 的 Runtime cursor。
 - Web/API 调用方通过 `Last-Event-ID` 或显式游标重连；服务端验证游标属于当前主体有权访问的 Conversation/Execution，任务流不能带出同会话其他任务的数据。
 - 服务端先保存事件，再向在线连接推送；断线后按持久化序列补发。事件事务提交后，数据库发出只含 Conversation 标识的唤醒提示，在线连接据此立即从持久化游标读取；提示只用于缩短等待，丢失时按固定轮询送达，不改变持久化、排序和授权规则。

@@ -205,6 +205,67 @@ describe("Pilot mixed-version operation contracts", () => {
 			).toBe(false);
 	});
 
+	it("adds the requested-model fallback only to V2 histories and keeps V1 strict (G-07)", () => {
+		const legacyFallback = {
+			...original,
+			eventId: "fallback-event",
+			type: "model.selection.fell_back",
+			payload: {
+				modelOptionId: "option-default",
+				reasoningLevel: "medium",
+				reason: "selection_unavailable",
+			},
+		} as const;
+		const fallback = {
+			...legacyFallback,
+			schemaVersion: 2,
+			payload: {
+				...legacyFallback.payload,
+				requestedModelOptionId: "option-removed",
+				requestedModelDisplayName: "gpt-removed",
+			},
+		} as const;
+		const unnamed = {
+			...fallback,
+			payload: { ...fallback.payload, requestedModelDisplayName: null },
+		} as const;
+		for (const event of [legacyFallback, fallback, unnamed]) {
+			expect(PersistedConversationEventV2Schema.parse(event)).toEqual(event);
+			expect(ConversationSseMessageV2Schema.parse(event)).toEqual(event);
+			expect(framePilotSseMessageV2(event)).toEqual({
+				id: event.eventId,
+				data: event,
+			});
+		}
+		// 旧的 V1 读取方仍只接受原 V1 回退事件，不接受带请求模型的事件。
+		expect(ConversationSseMessageV1Schema.parse(legacyFallback)).toEqual(
+			legacyFallback,
+		);
+		for (const event of [
+			fallback,
+			{ ...fallback, schemaVersion: 1 },
+			{ ...legacyFallback, schemaVersion: 2 },
+		])
+			expect(ConversationSseMessageV1Schema.safeParse(event).success).toBe(
+				false,
+			);
+		for (const payload of [
+			{ ...fallback.payload, requestedModelDisplayName: "" },
+			{ ...fallback.payload, requestedModelDisplayName: "m".repeat(1025) },
+			{ ...fallback.payload, requestedModelOptionId: "" },
+			{ ...fallback.payload, requestedReasoningLevel: "high" },
+			{ ...fallback.payload, credential: "credential-ref" },
+			{ ...legacyFallback.payload, requestedModelOptionId: "option-removed" },
+		])
+			expect(
+				PersistedConversationEventV2Schema.safeParse({ ...fallback, payload })
+					.success,
+			).toBe(false);
+		expect(pilotOperationSchemasV2).toHaveProperty(
+			"ModelSelectionFallbackEventV2",
+		);
+	});
+
 	it("adds complete events to V2 execution detail without changing V1 detail", () => {
 		const legacy = {
 			schemaVersion: 1,

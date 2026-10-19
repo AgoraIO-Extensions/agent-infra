@@ -546,6 +546,19 @@ export function createProductionPlatformApiAssemblyInputV1(
 		},
 		...(personalRelayKeys ? { personalRelayKeys } : {}),
 		readModelDisplayNames,
+		...(input.modelDisplayMetadata === undefined
+			? {}
+			: {
+					readRequestedModelDisplayName: async (model: {
+						readonly endpointId: string;
+						readonly modelId: string;
+					}) => {
+						const names = await readModelDisplayNames(
+							identityScope.currentRequest().signal,
+						);
+						return names(model);
+					},
+				}),
 		...(validatePersonalRelayKey
 			? { validateDefaultRelayKey: validatePersonalRelayKey }
 			: {}),

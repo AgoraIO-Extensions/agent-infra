@@ -601,6 +601,69 @@ describe("Browser side-effect event parsing", () => {
 	});
 });
 
+describe("model-selection fallback payload parsing (G-07)", () => {
+	const legacy = {
+		type: "model.selection.fell_back" as const,
+		modelOptionId: "model_primary",
+		reasoningLevel: "medium",
+		reason: "selection_unavailable" as const,
+	};
+
+	it("keeps legacy payloads without the requested model readable", () => {
+		expect(parseConversationPersistedEventPayloadV1(legacy)).toEqual(legacy);
+	});
+
+	it("reads the requested option with its accepted display name or a null name", () => {
+		for (const requestedModelDisplayName of ["relay-model-alternate", null]) {
+			const payload = {
+				...legacy,
+				requestedModelOptionId: "model_alternate",
+				requestedModelDisplayName,
+			};
+			expect(parseConversationPersistedEventPayloadV1(payload)).toEqual(
+				payload,
+			);
+		}
+	});
+
+	it("rejects unpaired, empty, overlong or extra requested-model fields", () => {
+		for (const payload of [
+			{ ...legacy, requestedModelOptionId: "model_alternate" },
+			{ ...legacy, requestedModelDisplayName: "relay-model-alternate" },
+			{
+				...legacy,
+				requestedModelOptionId: "",
+				requestedModelDisplayName: "relay-model-alternate",
+			},
+			{
+				...legacy,
+				requestedModelOptionId: "model_alternate",
+				requestedModelDisplayName: "",
+			},
+			{
+				...legacy,
+				requestedModelOptionId: "model_alternate",
+				requestedModelDisplayName: "m".repeat(1025),
+			},
+			{
+				...legacy,
+				requestedModelOptionId: "model_alternate",
+				requestedModelDisplayName: 7,
+			},
+			{
+				...legacy,
+				requestedModelOptionId: "model_alternate",
+				requestedModelDisplayName: "relay-model-alternate",
+				requestedReasoningLevel: "high",
+			},
+		]) {
+			expect(() => parseConversationPersistedEventPayloadV1(payload)).toThrow(
+				ConversationEventError,
+			);
+		}
+	});
+});
+
 describe("waiting control event ownership", () => {
 	it("reads the platform cancellation event without exposing its internal reason", () => {
 		const payload = publicTaskStatusEventV1({

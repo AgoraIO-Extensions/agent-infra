@@ -1957,7 +1957,9 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		persistedEvents.anyOf = persistedEvents.anyOf.filter(
 			(option) =>
 				option?.$ref !== "#/components/schemas/BrowserHandoffEventV2" &&
-				option?.$ref !== "#/components/schemas/BrowserSideEffectEventV2",
+				option?.$ref !== "#/components/schemas/BrowserSideEffectEventV2" &&
+				// #2908 后加的回退事件 V2 由其自身的摘要例外固定，不属于 #508 原发布。
+				option?.$ref !== modelSelectionFallbackV2Ref,
 		);
 	// The bounded event window is a later additive field on this V2 detail;
 	// keep the original #508 publication digest stable when checking the
@@ -2309,6 +2311,114 @@ function hasSelectedBrowserSideEffectEventJsonSchemaAddition(value) {
 		return false;
 	};
 	return Object.values(schemas).some(hasInline);
+}
+
+// #2908 为模型回退新增 schemaVersion 2 事件，额外记录会话原所选选项与受理时的显示名。
+// 旧 V1 回退事件与 V1 读取方保持不变，只有 V2 混合版本事件历史（含 Task 投影）新增这一选项。
+// 新增的 Schema 内容按摘要固定：基线尚无该事件时，只去掉与摘要一致的新增，其余差异仍须由
+// 其他例外逐项放行；字段、约束或宿主的任何漂移都会留在差异里并失败。
+const modelSelectionFallbackV2Name = "ModelSelectionFallbackEventV2";
+const modelSelectionFallbackV2Ref = `#/components/schemas/${modelSelectionFallbackV2Name}`;
+const modelSelectionFallbackV2Digest =
+	"5f5177398821443a45362894767344a108d3f1a41df265c329b37d89c3886720";
+const modelSelectionFallbackV2Hosts = [
+	"PersistedConversationEventV2",
+	"TaskProjectionV1",
+	"TaskSseMessageV1",
+];
+
+function isModelSelectionFallbackV2OpenApiOption(value) {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		!Array.isArray(value) &&
+		((value.properties?.type?.const === "model.selection.fell_back" &&
+			value.properties?.schemaVersion?.const === 2) ||
+			value.$ref === modelSelectionFallbackV2Ref)
+	);
+}
+
+function modelSelectionFallbackV2Options(value, found = []) {
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			if (isModelSelectionFallbackV2OpenApiOption(item)) found.push(item);
+			else modelSelectionFallbackV2Options(item, found);
+		}
+	} else if (value !== null && typeof value === "object") {
+		for (const item of Object.values(value))
+			modelSelectionFallbackV2Options(item, found);
+	}
+	return found;
+}
+
+function hasModelSelectionFallbackV2OpenApiAddition(value) {
+	const schemas = value.components?.schemas ?? {};
+	return (
+		schemas[modelSelectionFallbackV2Name] !== undefined ||
+		modelSelectionFallbackV2Options(schemas).length > 0
+	);
+}
+
+function stripModelSelectionFallbackV2Options(value) {
+	if (Array.isArray(value))
+		return value
+			.filter((item) => !isModelSelectionFallbackV2OpenApiOption(item))
+			.map(stripModelSelectionFallbackV2Options);
+	if (value !== null && typeof value === "object") {
+		const result = {};
+		for (const [key, item] of Object.entries(value))
+			result[key] = stripModelSelectionFallbackV2Options(item);
+		return result;
+	}
+	return value;
+}
+
+function isPinnedModelSelectionFallbackV2Schema(value) {
+	return (
+		createHash("sha256").update(JSON.stringify(value)).digest("hex") ===
+		modelSelectionFallbackV2Digest
+	);
+}
+
+/**
+ * 基线没有 #2908 回退事件 V2 时，去掉当前文档中与摘要一致、且只出现在三个宿主里的新增。
+ * 新增与摘要不符或出现在其他 Schema 时原样返回，让差异继续按破坏性变更判定。
+ */
+function normalizeModelSelectionFallbackV2OpenApiAddition(previous, current) {
+	if (
+		hasModelSelectionFallbackV2OpenApiAddition(previous) ||
+		!hasModelSelectionFallbackV2OpenApiAddition(current)
+	)
+		return current;
+	const schemas = current.components.schemas;
+	const component = schemas[modelSelectionFallbackV2Name];
+	if (
+		component !== undefined &&
+		!isPinnedModelSelectionFallbackV2Schema(component)
+	)
+		return current;
+	const options = modelSelectionFallbackV2Hosts.flatMap((name) =>
+		modelSelectionFallbackV2Options(schemas[name]),
+	);
+	if (
+		!options.every((option) =>
+			option.$ref === modelSelectionFallbackV2Ref
+				? component !== undefined
+				: isPinnedModelSelectionFallbackV2Schema(option),
+		) ||
+		modelSelectionFallbackV2Options(schemas).length !== options.length
+	)
+		return current;
+	const normalized = structuredClone(current);
+	for (const name of modelSelectionFallbackV2Hosts) {
+		if (normalized.components.schemas[name] !== undefined)
+			normalized.components.schemas[name] =
+				stripModelSelectionFallbackV2Options(
+					normalized.components.schemas[name],
+				);
+	}
+	delete normalized.components.schemas[modelSelectionFallbackV2Name];
+	return normalized;
 }
 
 const preparingSessionAvailability = {
@@ -4780,6 +4890,10 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 		previous = stripMultiServiceSourceOpenApiBranches(previous);
 		current = stripMultiServiceSourceOpenApiBranches(current);
 		current = normalizeMultiServiceResourceCapErrorCodeAddition(
+			previous,
+			current,
+		);
+		current = normalizeModelSelectionFallbackV2OpenApiAddition(
 			previous,
 			current,
 		);

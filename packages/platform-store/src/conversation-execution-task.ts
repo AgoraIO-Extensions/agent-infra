@@ -28,8 +28,10 @@ import {
 	insertModelSelectionFallback,
 	lockAgentConfiguration,
 	lockConversation,
+	type RequestedModelDisplayNameResolverV1,
 	readIdempotency,
 	reserveIdempotency,
+	withSelectedModelOption,
 } from "./conversation-execution-sql.js";
 import { requireCurrentPersonalApiTaskAdmissionV1 } from "./personal-api-task-authorization.js";
 import {
@@ -231,6 +233,7 @@ export async function submitConversationTask(
 	request: SubmitRequest,
 	decide: SubmitDecide,
 	userDirectory: TaskUserDirectoryV1 | undefined,
+	readDisplayName?: RequestedModelDisplayNameResolverV1,
 ): ReturnType<ConversationTaskAdmissionTransactionPortV1["submitTask"]> {
 	const authority = parseAuthority(request.authority);
 	const principal = authority.taskBoundary?.principal;
@@ -287,6 +290,16 @@ export async function submitConversationTask(
 	if (!queue) unavailable();
 	const state: ConversationTaskAdmissionStateV1 = {
 		...agent,
+		// 任务续用已有会话时同样记录回退前的原选项显示名（G-07）。
+		modelConfiguration: conversation
+			? ((await withSelectedModelOption(
+					transaction,
+					authority.agentId,
+					agent.modelConfiguration ?? undefined,
+					conversation.selectedModelOptionId,
+					readDisplayName,
+				)) ?? null)
+			: agent.modelConfiguration,
 		conversation: conversation ?? null,
 		waitingCount: safeInteger(queue.waiting_count, 0),
 		lastWaitOrder: safeInteger(queue.last_order ?? "0", 0),

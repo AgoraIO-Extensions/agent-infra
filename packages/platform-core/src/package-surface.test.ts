@@ -159,6 +159,7 @@ describe("platform-core package surface", () => {
 			"isTraceParentV1",
 			"markSkillHubInstallationUpgradeV1",
 			"markSkillHubUpgradeV1",
+			"modelOptionDisplayNameV1",
 			"nativeCapabilityAdmissionRequestDigestV1",
 			"nativeCapabilityParametersDigestV1",
 			"pageSkillHubReviewQueueV1",
@@ -254,6 +255,7 @@ describe("platform-core package surface", () => {
 			"projectVisibilityOrganizationV1",
 			"publicTaskStatusEventV1",
 			"readAgentApiAuditContextV1",
+			"requestedModelDisplayNameV1",
 			"requireAgentApiCreatePermissionV1",
 			"requireAgentApplicationGrantAuthorityV1",
 			"requireAgentUserUseRevokeAuthorityV1",
@@ -320,6 +322,7 @@ describe("platform-core package surface", () => {
 			"applicationRevisionFailurePoints",
 			"conversationCommandConformanceV1",
 			"conversationConformanceAuthorityV1",
+			"conversationConformanceModelIdV1",
 			"conversationEventConformanceV1",
 		]);
 		expect(

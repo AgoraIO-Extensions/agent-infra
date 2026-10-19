@@ -441,6 +441,7 @@ export function createConversationTaskAdmissionUseCaseV1(
 						const modelSelectionFallback = conversation
 							? modelSelectionFallbackWrite(
 									selection.fallback,
+									model,
 									authority,
 									conversationId,
 									executionId,

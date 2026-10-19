@@ -1153,6 +1153,164 @@ describe("Conversation persisted SSE", () => {
 		expect(body).not.toContain("credential");
 	});
 
+	it("keeps a requested-model fallback in its original V1 shape on V1 streams (G-07)", async () => {
+		const fallback = {
+			...persistedEvent,
+			eventType: "model.selection.fell_back",
+			eventPayload: {
+				type: "model.selection.fell_back",
+				modelOptionId: "model-primary",
+				reasoningLevel: "medium",
+				reason: "selection_unavailable",
+				requestedModelOptionId: "model-removed",
+				requestedModelDisplayName: "gpt-removed",
+			},
+		};
+		const input = dependencies();
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [fallback],
+				resumeCursor: "cursor-1",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-1",
+			});
+		const v1 = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/events",
+		);
+		const body = await v1.text();
+		expect(v1.status).toBe(200);
+		const events = body
+			.split("\n")
+			.filter((line) => line.startsWith("data: "))
+			.map((line) =>
+				ConversationSseMessageV1Schema.parse(JSON.parse(line.slice(6))),
+			)
+			.filter((message) => message.kind === "event");
+		expect(events).toEqual([
+			{
+				schemaVersion: 1,
+				kind: "event",
+				eventId: "event-1",
+				conversationId: conversation.conversationId,
+				executionId: "execution-1",
+				sequence: 1,
+				conversationCursor: "cursor-1",
+				occurredAt: "2026-09-06T00:00:02.000Z",
+				type: "model.selection.fell_back",
+				payload: {
+					modelOptionId: "model-primary",
+					reasoningLevel: "medium",
+					reason: "selection_unavailable",
+				},
+			},
+		]);
+		expect(body).not.toContain("requestedModel");
+		expect(body).not.toContain("gpt-removed");
+	});
+
+	it("publishes the requested model only through V2 mixed-version reads (G-07)", async () => {
+		const requested = {
+			...persistedEvent,
+			eventType: "model.selection.fell_back",
+			eventPayload: {
+				type: "model.selection.fell_back",
+				modelOptionId: "model-primary",
+				reasoningLevel: "medium",
+				reason: "selection_unavailable",
+				requestedModelOptionId: "model-removed",
+				requestedModelDisplayName: null,
+			},
+		};
+		const legacy = {
+			...persistedEvent,
+			eventId: "event-2",
+			sequence: 2,
+			conversationCursor: "cursor-2",
+			eventType: "model.selection.fell_back",
+			eventPayload: {
+				type: "model.selection.fell_back",
+				modelOptionId: "model-primary",
+				reasoningLevel: "medium",
+				reason: "selection_unavailable",
+			},
+		};
+		expect(eventProjection(requested)).toEqual(
+			ConversationSseMessageV2Schema.parse({
+				schemaVersion: 2,
+				kind: "event",
+				eventId: "event-1",
+				conversationId: conversation.conversationId,
+				executionId: "execution-1",
+				sequence: 1,
+				conversationCursor: "cursor-1",
+				occurredAt: "2026-09-06T00:00:02.000Z",
+				type: "model.selection.fell_back",
+				payload: {
+					modelOptionId: "model-primary",
+					reasoningLevel: "medium",
+					reason: "selection_unavailable",
+					requestedModelOptionId: "model-removed",
+					requestedModelDisplayName: null,
+				},
+			}),
+		);
+		// 未记录原选项的旧事件在 V2 读取中保持原 V1 形状（AC-3）。
+		expect(eventProjection(legacy)).toMatchObject({
+			schemaVersion: 1,
+			payload: {
+				modelOptionId: "model-primary",
+				reasoningLevel: "medium",
+				reason: "selection_unavailable",
+			},
+		});
+		expect(eventProjection(legacy)).not.toHaveProperty(
+			"payload.requestedModelOptionId",
+		);
+		const input = dependencies();
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [requested, legacy],
+				resumeCursor: "cursor-2",
+			})
+			.mockResolvedValue({
+				outcome: "reload",
+				reason: "cursor_expired",
+				resumeCursor: "cursor-2",
+			});
+		const v2 = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1/events",
+		);
+		expect(v2.status).toBe(200);
+		const events = (await v2.text())
+			.split("\n")
+			.filter((line) => line.startsWith("data: "))
+			.map((line) =>
+				ConversationSseMessageV2Schema.parse(JSON.parse(line.slice(6))),
+			)
+			.filter((message) => message.kind === "event");
+		expect(events).toEqual([
+			eventProjection(requested),
+			eventProjection(legacy),
+		]);
+		for (const payload of [
+			{ ...requested.eventPayload, requestedModelDisplayName: "" },
+			(({ requestedModelOptionId: _removed, ...payload }) => payload)(
+				requested.eventPayload,
+			),
+			{ ...requested.eventPayload, requestedReasoningLevel: "high" },
+		])
+			expect(() =>
+				eventProjection({ ...requested, eventPayload: payload }),
+			).toThrow();
+	});
+
 	it("redacts Runtime error codes into the browser protocol", async () => {
 		const input = dependencies();
 		input.query.replay = vi

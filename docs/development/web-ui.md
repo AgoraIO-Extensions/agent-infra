@@ -266,6 +266,7 @@ PR 的人工 UI 验收仍遵循[工作流 §7.4](../architecture/SPEC-ai-native-
 - `conversation-routing.spec.ts`：加载与 503 恢复、403 拒绝、不可用历史只读、深链/返回、
   窄屏历史切换与消息输入区。失败状态沿用对话标题层级，返回目录不产生业务写入。
 - `conversation-live.spec.ts`、`conversation-markdown.spec.ts`：消息、模型保存、执行详情、
+  模型回退弹窗（请求模型与实际模型、旧事件的中性文案）、
   长正文和代码/表格局部滚动。
 - `conversation-screen.test.tsx`：终态经事件或历史回读后清除等待提示并刷新最近会话，
   新建会话成功后刷新最近会话。
