@@ -658,6 +658,68 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("revalidates a waiting Task of an API-created Agent without failing the dispatch (#2775)", async () => {
+		const waiting = await seed("conversation.turn.submit.v1", {
+			executionStatus: "waiting",
+		});
+		await client`insert into platform.agent_owners (agent_id, owner_id, created_at)
+			values ('agent-dispatch', 'actor-dispatch', now()) on conflict do nothing`;
+		// 等待中的任务夹具不带授权记录；按 Web 受理时的形状补一条，让复核走到管理状态读取。
+		await client`insert into platform.task_authorization_records(id, execution_id, boundary)
+			values (${`authorization-${waiting.executionId}`}, ${waiting.executionId}, ${client.json(
+				{
+					schemaVersion: 1,
+					principal: { kind: "user", id: "actor-dispatch" },
+					agentId: "agent-dispatch",
+					channelId: "web",
+					identityRevision: "identity-dispatch",
+					agentAuthorizationRevision: "authorization-dispatch",
+					accessSources: [{ kind: "user", userId: "actor-dispatch" }],
+				},
+			)}) on conflict (execution_id) do nothing`;
+		const restore = await useApiCreatedAgent();
+		const store = new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			userDirectory: {
+				async resolveUser(userId) {
+					return {
+						schemaVersion: 1,
+						userId,
+						accountStatus: "active",
+						organizationIds: [],
+						authorizationRevision: "identity-dispatch",
+					};
+				},
+			},
+		});
+		try {
+			const decision = await store.claim({
+				schemaVersion: 1,
+				itemId: waiting.itemId,
+				workerId: "waiting-api-created-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (decision.outcome !== "claimed")
+				throw new Error(`Expected a claim, got ${decision.outcome}`);
+			// 修复前，复核读到的管理状态缺 creationChannel，这里抛 ConversationDispatchStoreError。
+			await store.prepareRuntimeDispatch({
+				claim: decision.claim,
+				leaseDurationMs: 30_000,
+			});
+			const [execution] = await client<{ status: string }[]>`
+				select status from platform.conversation_executions
+				where execution_id = ${waiting.executionId}`;
+			expect(execution?.status).not.toBe("cancelled");
+			expect(
+				await client`select 1 from platform.task_control_records
+					where execution_id = ${waiting.executionId}`,
+			).toHaveLength(0);
+		} finally {
+			await restore();
+			await store.close();
+		}
+	});
+
 	async function sandboxRetryState(itemId: string) {
 		const [row] = await client<
 			{
