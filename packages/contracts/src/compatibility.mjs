@@ -2644,6 +2644,38 @@ function isSkillHubVersionDetailOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2953 在已有的 /api/v2/skills/installations 上新增本人安装列表 GET 与两个只读投影；
+// 原 POST、DELETE 与全部既有 schema 保持不变。
+function isSkillHubInstallationListOpenApiAddition(previous, current) {
+	const path = "/api/v2/skills/installations";
+	const schemas = [
+		"SkillHubInstallationListItemV1",
+		"SkillHubInstallationPageV1",
+	];
+	if (
+		previous.paths?.[path]?.post === undefined ||
+		previous.paths[path].get !== undefined ||
+		current.paths?.[path]?.get === undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		get: current.paths[path].get,
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"c14d3f59dd8245a806bab06c827e53b335fa63393bf091f1917bfed90edd14df"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].get;
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #2270 publishes the existing authenticated native metadata read route and
 // projection as an additive Browser v2 consumer contract.
 function isNativeMetadataOpenApiAddition(previous, current) {
@@ -5024,6 +5056,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isSkillHubPublicationOpenApiAddition(previous, current) &&
 			!isSkillHubReviewQueueOpenApiAddition(previous, current) &&
 			!isSkillHubVersionDetailOpenApiAddition(previous, current) &&
+			!isSkillHubInstallationListOpenApiAddition(previous, current) &&
 			!isSkillHubProjectAndImportOpenApiAddition(previous, current) &&
 			!isSkillHubProjectOpenApiAddition(previous, current) &&
 			!isSkillHubImportOpenApiAddition(previous, current) &&

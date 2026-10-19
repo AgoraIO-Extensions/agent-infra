@@ -777,6 +777,88 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the pinned Skill Hub installation list read (#2953)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const listPath = "/api/v2/skills/installations";
+		const previous = structuredClone(current);
+		delete previous.paths[listPath].get;
+		delete previous.components.schemas.SkillHubInstallationListItemV1;
+		delete previous.components.schemas.SkillHubInstallationPageV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "skill-hub-installation-list-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const item = (value: typeof current) =>
+				value.components.schemas.SkillHubInstallationListItemV1;
+			for (const mutate of [
+				// 列表必须要求平台会话，不能改成按查询参数指定主体。
+				(value: typeof current) => {
+					value.paths[listPath].get.security = [];
+				},
+				(value: typeof current) => {
+					value.paths[listPath].get.parameters.push({
+						in: "query",
+						name: "principalId",
+						schema: { type: "string" },
+					});
+				},
+				// 投影不能放宽为任意字段，也不能带出主体或对象位置。
+				(value: typeof current) => {
+					item(value).additionalProperties = true;
+				},
+				(value: typeof current) => {
+					item(value).properties.principalId = { type: "string" };
+				},
+				(value: typeof current) => {
+					item(
+						value,
+					).properties.version.oneOf[0].properties.packageObjectVersion = {
+						type: "string",
+					};
+				},
+				// 不可见版本不带名称。
+				(value: typeof current) => {
+					item(value).properties.version.oneOf[1].properties.name = {
+						type: "string",
+					};
+				},
+				(value: typeof current) => {
+					delete value.components.schemas.SkillHubInstallationPageV1.properties
+						.items.maxItems;
+				},
+				// 已发布的安装命令与响应保持不变。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubInstallationV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.paths[listPath].post.security = [];
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the exact direct Agent creation contract", async () => {
 		const current = JSON.parse(
 			await readFile(

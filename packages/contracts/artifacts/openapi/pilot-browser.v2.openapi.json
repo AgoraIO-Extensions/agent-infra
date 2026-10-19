@@ -7835,6 +7835,146 @@
         ],
         "type": "object"
       },
+      "SkillHubInstallationListItemV1": {
+        "additionalProperties": false,
+        "properties": {
+          "installationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "installedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          },
+          "needUpgrade": {
+            "type": "boolean"
+          },
+          "skillVersionId": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          },
+          "version": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "access": {
+                    "const": "visible",
+                    "type": "string"
+                  },
+                  "name": {
+                    "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                    "type": "string"
+                  },
+                  "provider": {
+                    "enum": [
+                      "system",
+                      "my_library",
+                      "market",
+                      "clawhub",
+                      "skillhub",
+                      "npx",
+                      "github"
+                    ],
+                    "type": "string"
+                  },
+                  "skillId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "published",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "version": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "visibility": {
+                    "enum": [
+                      "PRIVATE",
+                      "MEMBER",
+                      "ORGANIZATION",
+                      "MARKET"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "access",
+                  "skillId",
+                  "name",
+                  "version",
+                  "provider",
+                  "visibility",
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "access": {
+                    "const": "unavailable",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "access"
+                ],
+                "type": "object"
+              }
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "installationId",
+          "skillVersionId",
+          "needUpgrade",
+          "installedAt",
+          "updatedAt",
+          "version"
+        ],
+        "type": "object"
+      },
+      "SkillHubInstallationPageV1": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SkillHubInstallationListItemV1"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
       "SkillHubInstallationResponseV1": {
         "additionalProperties": false,
         "properties": {
@@ -17670,6 +17810,85 @@
       }
     },
     "/api/v2/skills/installations": {
+      "get": {
+        "operationId": "listSkillHubInstallationsV1",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubInstallationPageV1"
+                }
+              }
+            },
+            "description": "The current user's installed Skill versions"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      },
       "post": {
         "operationId": "installSkillHubVersionV1",
         "parameters": [
