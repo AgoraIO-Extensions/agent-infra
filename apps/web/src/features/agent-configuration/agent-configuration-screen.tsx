@@ -108,7 +108,12 @@ type AgentConfigurationScreenProps = {
 function unavailableScreen() {
 	return (
 		<section aria-labelledby={configurationHeadingId} className="space-y-4">
-			<h1 id={configurationHeadingId} className="font-semibold text-[28px]">
+			{/* tabIndex=-1：读取失败后「重新登录」「重新加载配置」恢复到此状态时焦点落在标题上。 */}
+			<h1
+				id={configurationHeadingId}
+				tabIndex={-1}
+				className="font-semibold text-[28px]"
+			>
 				配置不可用
 			</h1>
 			<Alert tone="warn">

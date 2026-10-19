@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 
 import { checkAgentDefaultRelayKey } from "../../../features/agent-configuration/agent-configuration.js";
 import { useAgentDefaultRelayKeyState } from "../../../features/agent-configuration/use-agent-default-relay-key-state.js";
@@ -16,6 +16,7 @@ import { useAgentApplicationSubmission } from "../../../features/my-agents/use-a
 import { useDeploymentConfiguration } from "../../../features/my-agents/use-deployment-configuration.js";
 import { useMyAgentApplication } from "../../../features/my-agents/use-my-agent-application.js";
 import { PageLoadingState } from "../../../features/page-loading-state.js";
+import { RecoveryButton } from "../../../features/recovery-button.js";
 
 export const Route = createFileRoute("/my-agents/$applicationId/edit")({
 	component: EditAgentApplicationRoute,
@@ -63,15 +64,15 @@ function EditAgentApplicationRoute() {
 						</AlertDescription>
 						{retryable ? (
 							<AlertAction>
-								<Button
+								<RecoveryButton
 									variant="outline"
-									disabled={query.isFetching}
+									recoveryKey="重新加载申请"
+									busy={query.isFetching}
 									onClick={() => void query.refetch()}
-									type="button"
 								>
 									<RefreshCw aria-hidden="true" data-icon="inline-start" />
 									{query.isFetching ? "正在重新加载…" : "重新加载申请"}
-								</Button>
+								</RecoveryButton>
 							</AlertAction>
 						) : null}
 					</Alert>
@@ -94,7 +95,9 @@ function EditAgentApplicationRoute() {
 					>
 						当前申请不可修改
 					</h1>
+					{/* exact：申请详情是当前地址的前缀，不让 Link 补 aria-current（N-21）。 */}
 					<Link
+						activeOptions={{ exact: true }}
 						className={buttonVariants({ variant: "ghost", size: "sm" })}
 						params={{ applicationId }}
 						to="/my-agents/$applicationId"

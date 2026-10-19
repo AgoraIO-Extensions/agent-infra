@@ -1834,3 +1834,88 @@ test("production Worker requires an explicit packaged deployment module path", (
 		"file:///app/deployment/platform-worker.mjs",
 	);
 });
+
+test("Worker 容器默认不含 resources 块（BestEffort 兼容，默认值为空对象）", () => {
+	// kind values 中已设置 resources.requests，此处用最小 values 验证默认不渲染
+	const result = spawnSync(
+		"helm",
+		[
+			"template",
+			"topology",
+			chart,
+			"--namespace",
+			"agent-infra",
+			"--values",
+			kindValues,
+			"--set",
+			"platformWorker.resources=null",
+		],
+		{ encoding: "utf8" },
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const worker = resource(
+		objects(result.stdout),
+		"Deployment",
+		"topology-agent-infra-platform-worker",
+	);
+	// resources 字段不应出现
+	assert.equal(
+		worker.spec.template.spec.containers[0].resources,
+		undefined,
+		"默认不设 resources 时，容器中不应有 resources 块",
+	);
+});
+
+test("设置 platformWorker.resources.requests 后 Worker 容器渲染正确的 resources 块", () => {
+	const result = render(
+		"--set",
+		"platformWorker.resources.requests.memory=1Gi",
+		"--set",
+		"platformWorker.resources.requests.cpu=100m",
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const worker = resource(
+		objects(result.stdout),
+		"Deployment",
+		"topology-agent-infra-platform-worker",
+	);
+	const resources = worker.spec.template.spec.containers[0].resources;
+	assert.ok(resources, "设置 resources 后容器应含 resources 块");
+	assert.equal(resources.requests?.memory, "1Gi", "requests.memory 应为 1Gi");
+	assert.equal(resources.requests?.cpu, "100m", "requests.cpu 应为 100m");
+	// 未设置 limits 时不应出现 limits 键
+	assert.equal(resources.limits, undefined, "未设置 limits 时不应出现");
+});
+
+test("kind values 中设置的 resources 被正确渲染到 Worker 容器", () => {
+	// kind.values.yaml 已设置 requests.memory=1Gi 与 requests.cpu=100m
+	const result = render();
+	assert.equal(result.status, 0, result.stderr);
+	const worker = resource(
+		objects(result.stdout),
+		"Deployment",
+		"topology-agent-infra-platform-worker",
+	);
+	const resources = worker.spec.template.spec.containers[0].resources;
+	assert.ok(resources, "kind values 设置 resources 后容器应含 resources 块");
+	assert.equal(
+		resources.requests?.memory,
+		"1Gi",
+		"kind.values.yaml 中的 requests.memory 应渲染",
+	);
+	assert.equal(
+		resources.requests?.cpu,
+		"100m",
+		"kind.values.yaml 中的 requests.cpu 应渲染",
+	);
+});
+
+test("schema 拒绝 platformWorker.resources 中的未知键", () => {
+	const result = render("--set", "platformWorker.resources.unknownKey=bad");
+	// helm 使用 --values 校验时对 additionalProperties: false 应报错
+	assert.notEqual(
+		result.status,
+		0,
+		"schema 的 additionalProperties: false 应拒绝未知键",
+	);
+});

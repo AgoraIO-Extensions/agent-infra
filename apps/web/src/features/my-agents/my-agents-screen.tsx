@@ -44,6 +44,7 @@ import {
 	formatPerson,
 	useAvailabilityNames,
 } from "../directory-names.js";
+import { RecoveryButton } from "../recovery-button.js";
 import {
 	type TemplateNameLookup,
 	templateDisplayName,
@@ -176,15 +177,15 @@ export function MyAgentsScreen({
 							</AlertDescription>
 							{state.retryable && onRetryApplications ? (
 								<AlertAction>
-									<Button
+									<RecoveryButton
 										variant="outline"
-										disabled={retryingApplications}
+										recoveryKey="重新加载申请"
+										busy={retryingApplications}
 										onClick={onRetryApplications}
-										type="button"
 									>
 										<RefreshCw aria-hidden="true" data-icon="inline-start" />
 										{retryingApplications ? "正在重新加载…" : "重新加载申请"}
-									</Button>
+									</RecoveryButton>
 								</AlertAction>
 							) : null}
 						</Alert>
@@ -342,17 +343,17 @@ export function MyAgentsScreen({
 							</AlertDescription>
 							{ownedAgentsRetryable && onRetryOwnedAgents ? (
 								<AlertAction>
-									<Button
+									<RecoveryButton
 										variant="outline"
-										disabled={retryingOwnedAgents}
+										recoveryKey="重新加载已创建 Agent"
+										busy={retryingOwnedAgents}
 										onClick={onRetryOwnedAgents}
-										type="button"
 									>
 										<RefreshCw aria-hidden="true" data-icon="inline-start" />
 										{retryingOwnedAgents
 											? "正在重新加载…"
 											: "重新加载已创建 Agent"}
-									</Button>
+									</RecoveryButton>
 								</AlertAction>
 							) : null}
 						</Alert>

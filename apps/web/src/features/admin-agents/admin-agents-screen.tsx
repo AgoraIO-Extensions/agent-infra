@@ -33,6 +33,7 @@ import {
 	formatPerson,
 	useAvailabilityNames,
 } from "../directory-names.js";
+import { RecoveryButton } from "../recovery-button.js";
 import {
 	type TemplateNameLookup,
 	templateDisplayName,
@@ -196,13 +197,14 @@ export function AdminAgentsScreen({
 					</AlertDescription>
 					{state.retryable ? (
 						<AlertAction>
-							<Button
+							<RecoveryButton
 								variant="outline"
-								disabled={refreshing}
+								recoveryKey="重新加载"
+								busy={refreshing}
 								onClick={onRefresh}
 							>
 								重新加载
-							</Button>
+							</RecoveryButton>
 						</AlertAction>
 					) : null}
 				</Alert>

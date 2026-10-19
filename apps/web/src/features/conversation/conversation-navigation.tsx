@@ -6,6 +6,7 @@ import { LoadingLine } from "@/components/ui/spinner";
 import { useToast } from "@/components/ui/toast";
 import { Button } from "../../components/ui/button.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import { RecoveryButton } from "../recovery-button.js";
 import {
 	type CapabilityCatalog,
 	useCapabilityComposer,
@@ -61,7 +62,8 @@ export function PersonalHistory({
 				{history.items.map((item) => (
 					<li key={item.conversationId}>
 						<ConversationHistoryLink
-							href={`/chat/${encodeURIComponent(agentId)}/${encodeURIComponent(item.conversationId)}`}
+							agentId={agentId}
+							conversationId={item.conversationId}
 							title={item.title}
 							updatedAt={item.updatedAt}
 							current={current === item.conversationId}
@@ -74,9 +76,14 @@ export function PersonalHistory({
 				))}
 			</ul>
 			{history.canRetry && (
-				<Button variant="outline" onClick={() => void history.retry()}>
+				<RecoveryButton
+					variant="outline"
+					recoveryKey="重试读取历史"
+					busy={history.isFetching}
+					onClick={() => void history.retry()}
+				>
 					重试读取历史
-				</Button>
+				</RecoveryButton>
 			)}
 			{history.hasNextPage && (
 				<Button

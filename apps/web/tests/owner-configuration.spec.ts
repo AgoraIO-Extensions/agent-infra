@@ -496,7 +496,7 @@ test("Secrets are read-only rows replaced through a write-only modal (O-10, N-08
 		},
 	]);
 	await expect(toast(page)).toHaveText(
-		"Secret 已写入 pending version 4，等待 Worker 激活",
+		"Secret 已写入 pending version 4，等待平台激活",
 	);
 	await expect(status).toHaveValue("已设置 · version 4");
 	await expect(trigger).toBeFocused();
@@ -989,6 +989,119 @@ test("the Owner configuration links to the Agent's Skill page (O-02)", async ({
 	await noHorizontalOverflow(page);
 });
 
+test("the Agent's Skill heading follows the Skill detail layout (#agent-skills)", async ({
+	page,
+}, info) => {
+	await ownerConfigFixture(page);
+	await page.goto("/agents/agent-pilot-1/skills");
+	const mobile = info.project.name === "mobile";
+	const back = main(page).getByRole("link", { name: "返回 Owner 配置" });
+	await expect(back).toBeVisible();
+	const geometry = await page
+		.locator("header.agent-skill-heading")
+		.evaluate((element) => {
+			const box = (node: Element | null) => {
+				if (!node) throw new Error("Expected heading geometry");
+				const rect = node.getBoundingClientRect();
+				return {
+					top: rect.top + scrollY,
+					bottom: rect.bottom + scrollY,
+					left: rect.left,
+					right: rect.right,
+				};
+			};
+			const back = element.previousElementSibling;
+			return {
+				marginTop: getComputedStyle(element).marginTop,
+				head: box(element),
+				back: box(back),
+				eyebrow: box(element.querySelector(".page-eyebrow")),
+				h1: box(element.querySelector("h1")),
+				subtitle: box(element.querySelector("h1 + p")),
+				actions: box(element.querySelector(".agent-skill-heading-actions")),
+				action: box(element.querySelector(".agent-skill-heading-actions > a")),
+			};
+		});
+	// 设计 #agent-skills（与 #skill-detail 同结构）：页头紧接返回按钮，没有上外边距；
+	// 1440 下 eyebrow 150、h1 174.39，390 下 141、165.39。
+	expect(geometry.marginTop).toBe("0px");
+	expect(
+		Math.abs(geometry.head.top - geometry.back.bottom),
+	).toBeLessThanOrEqual(0.5);
+	expect(
+		Math.abs(geometry.eyebrow.top - (mobile ? 141 : 150)),
+	).toBeLessThanOrEqual(1);
+	expect(
+		Math.abs(geometry.h1.top - (mobile ? 165.39 : 174.39)),
+	).toBeLessThanOrEqual(1);
+	if (mobile) {
+		// ≤767：操作在副标题下方 14px，左对齐。
+		expect(
+			Math.abs(geometry.actions.top - (geometry.subtitle.bottom + 14)),
+		).toBeLessThanOrEqual(1);
+		expect(
+			Math.abs(geometry.action.left - geometry.head.left),
+		).toBeLessThanOrEqual(0.5);
+	} else {
+		// ≥768：文案左、「浏览 Skill Hub」右，与文案块垂直居中（设计 top 179.69）。
+		expect(
+			Math.abs(geometry.action.right - geometry.head.right),
+		).toBeLessThanOrEqual(0.5);
+		expect(geometry.action.top).toBeGreaterThan(geometry.head.top);
+		expect(geometry.action.bottom).toBeLessThan(geometry.head.bottom);
+		expect(
+			Math.abs(
+				(geometry.action.top + geometry.action.bottom) / 2 -
+					(geometry.head.top + geometry.head.bottom) / 2,
+			),
+		).toBeLessThanOrEqual(1);
+	}
+	await noHorizontalOverflow(page);
+});
+
+test("the Agent's Skill links navigate in the app without a document reload or aria-current (FIX3-3)", async ({
+	page,
+}) => {
+	await ownerConfigFixture(page);
+	await page.goto("/agents/agent-pilot-1/skills");
+	const back = main(page).getByRole("link", { name: "返回 Owner 配置" });
+	await expect(back).toHaveAttribute(
+		"href",
+		"/agents/agent-pilot-1/configuration",
+	);
+	await expect(back).not.toHaveAttribute("aria-current", /.*/);
+	let documents = await markSinglePageNavigation(page);
+	await back.click();
+	await expect(page).toHaveURL(/\/agents\/agent-pilot-1\/configuration$/);
+	await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+	await expectNoDocumentNavigation(page, documents);
+
+	// Skill Hub 目录读取不在本夹具内：返回 503，只验证跳转本身。
+	await page.route(/\/api\/v[12]\/skills(?:[/?]|$)/, (route) =>
+		route.fulfill({
+			status: 503,
+			json: {
+				schemaVersion: 1,
+				code: "DEPENDENCY_UNAVAILABLE",
+				message: "Controlled Skill Hub failure",
+				retryable: true,
+				traceId: "trace-agent-skill-hub-link",
+			},
+		}),
+	);
+	await page.goto("/agents/agent-pilot-1/skills");
+	const hub = main(page).getByRole("link", { name: "浏览 Skill Hub" });
+	await expect(hub).toHaveAttribute("href", "/skills");
+	documents = await markSinglePageNavigation(page);
+	await hub.focus();
+	await page.keyboard.press("Enter");
+	await expect(page).toHaveURL(/\/skills$/);
+	await expect(
+		page.getByRole("heading", { level: 1, name: "Skill Hub" }),
+	).toBeVisible();
+	await expectNoDocumentNavigation(page, documents);
+});
+
 test("the Owner configuration back link navigates without a document reload or aria-current (acc-5)", async ({
 	page,
 }) => {
@@ -1019,13 +1132,21 @@ for (const role of ["admin", "employee"] as const) {
 		).toHaveCount(0);
 		await page.goto("/agents/agent-pilot-1/skills");
 		await expect(main(page)).toContainText("没有权限");
-		await expect(
-			main(page).getByRole("link", { name: "返回 Agent 详情" }),
-		).toHaveAttribute("href", "/agents/agent-pilot-1");
+		const back = main(page).getByRole("link", { name: "返回 Agent 详情" });
+		await expect(back).toHaveAttribute("href", "/agents/agent-pilot-1");
+		// /agents/agent-pilot-1 是当前地址的前缀：返回链接不是当前页，且走路由跳转。
+		await expect(back).not.toHaveAttribute("aria-current", /.*/);
 		await expect(
 			page.getByRole("button", { name: "绑定固定版本" }),
 		).toHaveCount(0);
 		expect(api.reads.filter((path) => path.includes("/versions/"))).toEqual([]);
 		expect(api.commands).toEqual([]);
+		const documents = await markSinglePageNavigation(page);
+		await back.click();
+		await expect(page).toHaveURL(/\/agents\/agent-pilot-1$/);
+		await expect(
+			page.getByRole("heading", { level: 1, name: "Release assistant" }),
+		).toBeVisible();
+		await expectNoDocumentNavigation(page, documents);
 	});
 }

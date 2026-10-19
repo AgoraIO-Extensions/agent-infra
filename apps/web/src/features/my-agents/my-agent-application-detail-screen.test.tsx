@@ -416,6 +416,14 @@ describe("MyAgentApplicationDetailScreen", () => {
 
 			expect(screen.getByText(entryLabel)).toBeTruthy();
 			expect(screen.getByText(identityLabel)).toBeTruthy();
+			// 自定义 Agent：「来源」写入口方式，另起一行保留镜像地址。
+			expect(screen.getByText("来源").nextElementSibling?.textContent).toBe(
+				entryLabel,
+			);
+			expect(screen.getByText("镜像地址").nextElementSibling?.textContent).toBe(
+				"registry.example/agents/release:v1",
+			);
+			expect(screen.queryByText("入口模式")).toBeNull();
 		},
 	);
 });
@@ -554,13 +562,14 @@ describe("MyAgentApplicationDetailScreen design alignment (M-11)", () => {
 		expect(document.body.textContent).not.toContain(
 			pendingApplication.applicationId,
 		);
-		// F-02：来源与入口模式写模板显示名，不显示原始 templateId。
-		expect(screen.getByText("标准模板").nextElementSibling?.textContent).toBe(
-			"Codex",
-		);
-		expect(screen.getByText("入口模式").nextElementSibling?.textContent).toBe(
+		// F-02 与设计 #application-detail：一行「来源 = 标准模板 · Codex」，写模板显示名，
+		// 不显示原始 templateId，也不再另列「标准模板」「入口模式」两行重复模板名。
+		expect(screen.getByText("来源").nextElementSibling?.textContent).toBe(
 			"标准模板 · Codex",
 		);
+		expect(screen.queryByText("入口模式")).toBeNull();
+		expect(screen.queryByText("标准模板", { selector: "dt" })).toBeNull();
+		expect(screen.queryByText("镜像地址")).toBeNull();
 		expect(document.body.textContent).not.toContain("codex");
 	});
 

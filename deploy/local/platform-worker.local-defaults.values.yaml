@@ -1,0 +1,8 @@
+# 固定本地 E2E 的 Worker 默认值，排在私有 values 之前，私有 values 可以覆盖（#2883）。
+# 给 Worker 设 requests、不设 limits：Pod 成为 Burstable，VM 内存紧张时不再被内核 OOM 优先杀掉，
+# 也不会因为容器自身的内存上限被杀。
+platformWorker:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 1Gi

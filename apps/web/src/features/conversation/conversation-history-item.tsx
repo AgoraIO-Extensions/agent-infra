@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import type { MouseEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Timestamp } from "@/components/ui/timestamp";
@@ -28,26 +29,34 @@ export function ConversationHistoryHeading({
 	);
 }
 
-/** 设计 .history-item：标题单行省略，副文「{时间} · 当前」。可访问名称保留完整标题。 */
+/**
+ * 设计 .history-item：标题单行省略，副文「{时间} · 当前」。可访问名称保留完整标题。
+ * 站内会话页用路由 Link（跨 Agent 也不整页重新加载；会话页按 Agent 重新挂载）。
+ */
 export function ConversationHistoryLink({
-	href,
+	agentId,
+	conversationId,
 	title,
 	updatedAt,
 	current,
 	unavailable,
 	onNavigate,
 }: {
-	href: string;
+	agentId: string;
+	conversationId: string;
 	title: string | null | undefined;
 	updatedAt: string;
 	current: boolean;
 	unavailable?: boolean;
-	/** 普通左键点击时在页内切换；返回 false 时保留浏览器默认跳转。 */
+	/** 普通左键点击时在页内切换；返回 false 时交给路由跳转。 */
 	onNavigate: () => boolean;
 }) {
 	return (
-		<a
-			href={href}
+		<Link
+			to="/chat/$agentId/{-$conversationId}"
+			params={{ agentId, conversationId }}
+			search={{ view: undefined }}
+			activeOptions={{ exact: true, includeSearch: false }}
 			aria-current={current ? "page" : undefined}
 			className="conversation-history-item"
 			onClick={(event: MouseEvent<HTMLAnchorElement>) => {
@@ -68,6 +77,6 @@ export function ConversationHistoryLink({
 				{current && " · 当前"}
 				{unavailable && " · 会话不可用"}
 			</small>
-		</a>
+		</Link>
 	);
 }

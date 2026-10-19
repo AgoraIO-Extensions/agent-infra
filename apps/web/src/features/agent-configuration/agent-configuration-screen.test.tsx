@@ -344,10 +344,11 @@ describe("AgentConfigurationScreen", () => {
 			"配置 Agent 的 Owner、范围和运行方式。",
 		);
 		const header = document.querySelector("header.page-heading");
-		// O-12：副标题按设计原文，与 Secret 分区「等待 Worker 激活」一致。
+		// O-12：副标题按 PRD §6.4 / §8.2 不出现进程名「Worker」，与 Secret 分区「等待平台激活」一致。
 		expect(header?.textContent).toContain(
-			"保存后由 Worker 更新实例；Secret 只显示状态和版本。",
+			"保存后由平台更新实例；Secret 只显示状态和版本。",
 		);
+		expect(header?.textContent).not.toContain("Worker");
 		// 设计 tag-row：只有一个可用性 chip（服务启动中），加一个「Owner · 名称」tag。
 		const tagRow = header?.querySelector(".tag-row");
 		const chips = [
@@ -641,9 +642,7 @@ describe("Secrets (O-10, N-08)", () => {
 			"replacement-value",
 		);
 		expect(onSave).not.toHaveBeenCalled();
-		expect(toastText()).toBe(
-			"Secret 已写入 pending version 2，等待 Worker 激活",
-		);
+		expect(toastText()).toBe("Secret 已写入 pending version 2，等待平台激活");
 		await waitFor(() => expect(document.activeElement).toBe(trigger()));
 		// 未保存的修改仍在页面上，页脚保存仍可用；没有「配置已提交」和可编辑的 Secret 行。
 		expect(screen.getAllByLabelText<HTMLInputElement>("值")[0]?.value).toBe(

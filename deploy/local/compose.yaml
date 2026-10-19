@@ -1,9 +1,12 @@
 services:
   postgres:
+    # docker 守护进程重启后自动恢复长期服务，unless-stopped 在显式 stop/down 后不会重启。
+    restart: unless-stopped
     ports: !override
       - "127.0.0.1:${PLATFORM_LOCAL_POSTGRES_PORT:-54329}:5432"
 
   web:
+    restart: unless-stopped
     ports: !override
       - "127.0.0.1:${PLATFORM_LOCAL_WEB_PORT:-3001}:8443"
     volumes:
@@ -17,6 +20,7 @@ services:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
 
   platform-api:
+    restart: unless-stopped
     ports: !override
       - "127.0.0.1:${PLATFORM_LOCAL_API_PORT:-3000}:3000"
     environment:
@@ -57,6 +61,7 @@ services:
         condition: service_healthy
 
   enterprise-directory-sync:
+    restart: unless-stopped
     image: ${PLATFORM_LOCAL_DIRECTORY_IMAGE:?Set the local directory sync image}
     build: !reset null
     environment:
@@ -89,6 +94,7 @@ services:
         condition: service_completed_successfully
 
   object-storage:
+    restart: unless-stopped
     image: cgr.dev/chainguard/minio@sha256:4d397a26fe49d7f9ed39b8b566534848936f7efa50ab6328ac97b2a44eeabf4c
     ports: !override
       - "127.0.0.1:${PLATFORM_LOCAL_OBJECT_STORAGE_PORT:-9000}:9000"
