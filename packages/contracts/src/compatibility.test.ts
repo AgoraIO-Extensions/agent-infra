@@ -1816,10 +1816,18 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
-	// Keep every CLI comparison while bounding each historical baseline below one CI budget.
-	it.each(["pinned", "empty", "existingCookie", "governance"] as const)(
-		"admits only the pinned personal credential contract and rejects security/material regressions [%s]",
-		async (baselineKind) => {
+	// Keep every CLI comparison while bounding each baseline/version below one CI budget.
+	it.each([
+		["pinned", "historical"],
+		["empty", "historical"],
+		["empty", "latest"],
+		["existingCookie", "historical"],
+		["existingCookie", "latest"],
+		["governance", "historical"],
+		["governance", "latest"],
+	] as const)(
+		"admits only the pinned personal credential contract and rejects security/material regressions [%s/%s]",
+		async (baselineKind, version) => {
 			const artifact = fileURLToPath(
 				new URL(
 					"../artifacts/openapi/pilot-browser.v2.openapi.json",
@@ -1975,33 +1983,32 @@ describe("contract compatibility command", () => {
 							);
 					const path = resolve(directory, `${baselineKind}-previous.json`);
 					await writeFile(path, JSON.stringify(existing));
-					if (baselineKind === "governance")
-						expect(comparePaths(path, baseline).status).toBe(0);
-					expect(
-						comparePaths(contractArtifact, path).status,
-						baselineKind,
-					).toBe(0);
-					expect(
-						comparePaths(historicalCurrent, path).status,
-						`${baselineKind}-historical`,
-					).toBe(0);
-					for (const [version, contract] of Object.entries({
-						historical: current,
-						latest,
-					})) {
-						for (const [name, mutate] of Object.entries(mutations)) {
-							const candidate = structuredClone(contract);
-							mutate(candidate);
-							const mutated = resolve(
-								directory,
-								`${baselineKind}-${version}-${name}.json`,
-							);
-							await writeFile(mutated, JSON.stringify(candidate));
-							expect(
-								comparePaths(mutated, path).status,
-								`${baselineKind}-${version}-${name}`,
-							).toBe(1);
-						}
+					if (version === "historical") {
+						if (baselineKind === "governance")
+							expect(comparePaths(path, baseline).status).toBe(0);
+						expect(
+							comparePaths(contractArtifact, path).status,
+							baselineKind,
+						).toBe(0);
+						expect(
+							comparePaths(historicalCurrent, path).status,
+							`${baselineKind}-historical`,
+						).toBe(0);
+					}
+					for (const [name, mutate] of Object.entries(mutations)) {
+						const candidate = structuredClone(
+							version === "historical" ? current : latest,
+						);
+						mutate(candidate);
+						const mutated = resolve(
+							directory,
+							`${baselineKind}-${version}-${name}.json`,
+						);
+						await writeFile(mutated, JSON.stringify(candidate));
+						expect(
+							comparePaths(mutated, path).status,
+							`${baselineKind}-${version}-${name}`,
+						).toBe(1);
 					}
 				}
 			} finally {
