@@ -359,6 +359,11 @@ describe("PostgreSQL Platform audit query", () => {
 				},
 			},
 		];
+		// 未登记的动作在查询里就被跳过（#2776），不再让整页失败；已登记动作的畸形详情仍失败关闭。
+		const unregistered = new Set([
+			"connection.authorization.updated",
+			"wecom.not_registered",
+		]);
 		for (const [index, fixture] of malformed.entries()) {
 			await clearDatabase();
 			await seedAudit({
@@ -366,15 +371,18 @@ describe("PostgreSQL Platform audit query", () => {
 				occurredAt: new Date("2026-09-02T04:00:00.000Z"),
 				...fixture,
 			});
-			const failure = await adapter
+			const outcome = await adapter
 				.listAudit(administrator, { schemaVersion: 1, limit: 10 })
 				.catch((error: unknown) => error);
-			expect(failure).toMatchObject({
-				name: "PlatformAuditQueryError",
-				code: "unavailable",
-				message: "Platform audit persistence is unavailable",
-			});
-			expect(JSON.stringify(failure)).not.toMatch(
+			if (fixture.action && unregistered.has(fixture.action))
+				expect(outcome).toEqual({ items: [], nextCursor: null });
+			else
+				expect(outcome).toMatchObject({
+					name: "PlatformAuditQueryError",
+					code: "unavailable",
+					message: "Platform audit persistence is unavailable",
+				});
+			expect(JSON.stringify(outcome)).not.toMatch(
 				/credential-plaintext|secret-plaintext|conversationBody/,
 			);
 		}

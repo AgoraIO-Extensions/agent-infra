@@ -261,6 +261,64 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 		}
 	});
 
+	it("keeps administrator audit pages readable when unregistered actions are newest (#2776)", async () => {
+		// 正常产品路径写入、但没有登记进管理员审计的动作；外加一个从未出现过的新动作。
+		const unregistered = [
+			"relay_key.agent_default.read",
+			"relay_key.agent_default.candidates",
+			"conversation.sandbox.idle_reclaim_requested",
+			"conversation.sandbox.upgrade_requested",
+			"conversation.sandbox.never_prepared_stopped",
+			"skill.directory.read",
+			"skill.project.list",
+			"skill.project.create",
+			"skill.project.update",
+			"future.unregistered.action",
+		];
+		// 先写两条已登记、三个版本都能表示的事件（用户主体、Agent 目标），再让未登记的事件成为最新的若干行。
+		// 旧版 v1 只能表示用户主体，v2 不能表示 execution 目标，所以这里不用应用 Token 的生命周期事件。
+		expect((await govern("agent-a", true, "audit-unregistered")).status).toBe(
+			200,
+		);
+		expect(
+			(await govern("agent-a", false, "audit-unregistered-revoke")).status,
+		).toBe(200);
+		for (const [index, action] of unregistered.entries())
+			await sql`insert into platform.audit_events
+				(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, occurred_at, details)
+				values (${`unregistered-${index}`}, 'trace-unregistered', 'user', 'same-id', ${action}, 'agent', 'agent-a',
+					'succeeded', 'request-unregistered', 'agent-a', clock_timestamp() + interval '1 minute', ${sql.json({ schemaVersion: 1 })})`;
+		const pages: Record<string, { status: number; actions: string[] }> = {};
+		for (const path of [
+			"/api/v1/admin/audit",
+			"/api/v2/admin/audit",
+			"/api/v3/admin/audit",
+		]) {
+			const response = await fetch(`${origin}${path}?limit=2`, {
+				headers: { Cookie: "session=administrator" },
+			});
+			const page =
+				response.status === 200
+					? ((await response.json()) as { items: Array<{ action: string }> })
+					: { items: [] };
+			pages[path] = {
+				status: response.status,
+				actions: page.items.map((item) => item.action),
+			};
+		}
+		// 三个版本一起断言，失败时能同时看到每个版本的状态。
+		for (const [path, page] of Object.entries(pages)) {
+			expect(page.status, path).toBe(200);
+			// 未登记的行在 SQL 里就被排除，所以这一页仍然是 2 条已登记的事件。
+			expect(page.actions, path).toHaveLength(2);
+			for (const action of page.actions)
+				expect(unregistered, path).not.toContain(action);
+		}
+		expect(Object.values(pages).map((page) => page.status)).toEqual([
+			200, 200, 200,
+		]);
+	});
+
 	it("an application Token reads only its explicitly authorized Agent lifecycle state", async () => {
 		const headers = { Authorization: `Bearer ${material.application}` };
 		const response = await fetch(`${origin}/api/v2/agents/agent-a/state`, {
