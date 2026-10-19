@@ -1362,12 +1362,14 @@ describe("PostgreSQL Agent-management Adapter", () => {
 			set creation_channel = 'api', creator_principal_type = 'user',
 				creator_principal_id = 'user_owner', approval_revision = null
 			where agent_id = ${api.agentId}`;
+		// drizzle 会改写客户端的类型解析与序列化：用独立客户端，避免影响共享的 adminClient。
+		const reader = postgres(databaseUrl, { max: 1 });
 		const expected = await readAgentManagementState(
-			drizzle(adminClient) as unknown as Parameters<
+			drizzle(reader) as unknown as Parameters<
 				typeof readAgentManagementState
 			>[0],
 			api.agentId,
-		);
+		).finally(() => reader.end());
 		expect(expected).toMatchObject({
 			creationChannel: "api",
 			approvalRevision: null,

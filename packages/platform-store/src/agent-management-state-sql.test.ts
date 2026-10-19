@@ -47,12 +47,14 @@ describe("shared Agent management state SQL (#2775)", () => {
 	it.each(["agent-web", "agent-api"])(
 		"builds exactly the state that readAgentManagementState reads for %s",
 		async (agentId) => {
+			// drizzle 会改写客户端的类型解析与序列化：用独立客户端读取对照值。
+			const reader = postgres(database.databaseUrl, { max: 1 });
 			const expected = await readAgentManagementState(
-				drizzle(sql) as unknown as Parameters<
+				drizzle(reader) as unknown as Parameters<
 					typeof readAgentManagementState
 				>[0],
 				agentId,
-			);
+			).finally(() => reader.end());
 			const [row] = await sql<{ management: unknown }[]>`
 				select ${sql.unsafe(agentManagementStateJsonSql("a"))} as management
 				from platform.agent_applications a where a.agent_id = ${agentId}`;
