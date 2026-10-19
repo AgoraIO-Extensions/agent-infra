@@ -3820,6 +3820,29 @@ body {
 	min-width: 0;
 	overflow-wrap: anywhere;
 }
+/* 运维观测（F-12，web-ui.md「运维观测页」）：沿用设计 #my-agents 已创建卡的 .grid-2 > .card，
+   卡头为 .card-head（标题与状态 chip 两端对齐，gap 14px），事实列表为 dl.facts（上距 15px）。 */
+.operations-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 16px;
+}
+.operations-domain-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 14px;
+}
+/* 设计 .card-title h3：17px / 650 / 1.4 正文字体，压过未分层的 `.management-content h2`。 */
+.management-content .operations-domain-head h2 {
+	min-width: 0;
+	font: 650 17px / 1.4 var(--font-body);
+	letter-spacing: 0;
+	overflow-wrap: anywhere;
+}
+.operations-domain .review-facts {
+	margin-top: 15px;
+}
 /* 设计 .page-note：列表或详情之后的补充说明。 */
 .page-note {
 	margin-top: 16px;
@@ -3856,6 +3879,7 @@ body {
 		margin-top: 16px;
 	}
 	.owned-agent-grid,
+	.operations-grid,
 	.approval-filters,
 	.audit-filters,
 	.audit-filter-grid,

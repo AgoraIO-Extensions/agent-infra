@@ -1,14 +1,12 @@
-import { Activity, BellRing, Database, RefreshCcw, Server } from "lucide-react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { RefreshCw } from "lucide-react";
+import { type ReactNode, useId } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-	Empty,
-	EmptyDescription,
-	EmptyHeader,
-	EmptyMedia,
-	EmptyTitle,
-} from "@/components/ui/empty";
+import { Card } from "@/components/ui/card";
+import { LoadingLine } from "@/components/ui/spinner";
+import { Timestamp } from "@/components/ui/timestamp";
+import type { ChipTone } from "@/lib/status-tone";
+import { PageStateCard } from "../page-state-card.js";
 
 export type OperationsStatus =
 	| "unknown"
@@ -16,178 +14,246 @@ export type OperationsStatus =
 	| "healthy"
 	| "degraded";
 
-export type OperationsDomain = "health" | "agents" | "delivery" | "alerts";
+export type OperationsDomain = "health" | "agents" | "dependencies" | "alerts";
+
+/** Platform API 观测采集与导出的计数，来自正式观测查询，不做推算。 */
+export type OperationsCollection = {
+	readonly captureFailures: number;
+	readonly exportFailures: number;
+	readonly droppedLogs: number;
+	readonly invalidRecords: number;
+	readonly lastExportFailureAt?: string;
+};
 
 export type OperationsEntryState =
-	| { readonly kind: "unknown" }
 	| { readonly kind: "loading" }
-	| { readonly kind: "empty" }
-	| {
-			readonly kind: "error";
-			readonly message: string;
-			readonly retryable?: boolean;
-	  }
-	| { readonly kind: "unavailable"; readonly message?: string }
+	/** 服务端拒绝（403）；会话没有 system_admin 时页面不发出查询，同样显示无权限卡。 */
+	| { readonly kind: "denied" }
+	/** 部署没有提供观测查询入口（404）。 */
+	| { readonly kind: "not-connected" }
+	| { readonly kind: "unavailable"; readonly message: string }
 	| {
 			readonly kind: "ready";
 			readonly statuses: Readonly<Record<OperationsDomain, OperationsStatus>>;
+			readonly collection: OperationsCollection;
 	  };
 
-const domains: Array<{
+// 页面结构与状态见 docs/development/web-ui.md「运维观测页」（F-12）。
+const domains: ReadonlyArray<{
 	key: OperationsDomain;
-	icon: typeof Activity;
-	label: string;
-	description: string;
+	title: string;
+	coverage: string;
 }> = [
 	{
 		key: "health",
-		icon: Activity,
-		label: "服务健康与延迟",
-		description: "API、SSE 和后台依赖的可用性与延迟。",
+		title: "平台健康",
+		coverage: "服务健康、错误与延迟、流式连接",
 	},
 	{
 		key: "agents",
-		icon: Server,
-		label: "Agent 与任务",
-		description: "Agent 启动、更新、不可用和任务积压。",
+		title: "Agent 与任务",
+		coverage: "Agent 可用性与启动、任务积压",
 	},
 	{
-		key: "delivery",
-		icon: Database,
-		label: "数据与投递",
-		description: "PostgreSQL、outbox 和投递重试状态。",
+		key: "dependencies",
+		title: "依赖",
+		coverage: "PostgreSQL、outbox 投递、对象存储与 Runtime 依赖",
 	},
 	{
 		key: "alerts",
-		icon: BellRing,
-		label: "告警与故障",
-		description: "持续积压、服务不可用和异常错误。",
+		title: "告警",
+		coverage: "服务不可用、持续积压与异常错误",
 	},
 ];
 
-function StatusBadge({ status }: { status: OperationsStatus }) {
+const statusChips: Record<OperationsStatus, { label: string; tone: ChipTone }> =
+	{
+		unknown: { label: "未接入", tone: "gray" },
+		healthy: { label: "正常", tone: "green" },
+		degraded: { label: "降级", tone: "amber" },
+		unavailable: { label: "不可用", tone: "red" },
+	};
+
+function Fact({ term, children }: { term: string; children: ReactNode }) {
 	return (
-		<Badge tone={status === "degraded" ? "red" : "gray"}>
-			{status === "unknown"
-				? "待接入"
-				: status === "unavailable"
-					? "不可用"
-					: status === "healthy"
-						? "正常"
-						: "降级"}
-		</Badge>
+		<>
+			<dt>{term}</dt>
+			<dd>{children}</dd>
+		</>
 	);
 }
 
-function statusFor(state: OperationsEntryState, key: OperationsDomain) {
-	return state.kind === "ready" ? state.statuses[key] : "unknown";
+/** 告警区块：告警出口尚未接入；观测采集计数是正式查询返回的独立健康信号。 */
+function CollectionFacts({
+	collection,
+	degraded,
+}: {
+	collection: OperationsCollection;
+	degraded: boolean;
+}) {
+	return (
+		<>
+			<Fact term="告警出口">未接入</Fact>
+			<Fact term="观测采集">
+				{degraded ? "Platform API · 有失败" : "Platform API · 正常"}
+			</Fact>
+			<Fact term="采集失败">{collection.captureFailures} 次</Fact>
+			<Fact term="导出失败">{collection.exportFailures} 次</Fact>
+			<Fact term="丢弃日志">{collection.droppedLogs} 条</Fact>
+			<Fact term="无效记录">{collection.invalidRecords} 条</Fact>
+			<Fact term="最近导出失败">
+				{collection.lastExportFailureAt ? (
+					<Timestamp value={collection.lastExportFailureAt} />
+				) : (
+					"无"
+				)}
+			</Fact>
+		</>
+	);
 }
 
-function emptyTitle(state: OperationsEntryState) {
-	switch (state.kind) {
-		case "loading":
-			return "正在读取观测状态";
-		case "empty":
-			return "暂无观测数据";
-		case "ready":
-			return "观测状态已更新";
-		default:
-			return "观测查询尚未接入";
-	}
+function DomainCard({
+	domain,
+	status,
+	collection,
+}: {
+	domain: (typeof domains)[number];
+	status: OperationsStatus;
+	collection: OperationsCollection;
+}) {
+	const id = useId();
+	const chip = statusChips[status];
+	return (
+		<Card
+			render={<section aria-labelledby={`${id}-title`} />}
+			className="operations-domain"
+			data-domain={domain.key}
+		>
+			<div className="operations-domain-head">
+				<h2 id={`${id}-title`}>{domain.title}</h2>
+				<Badge tone={chip.tone}>{chip.label}</Badge>
+			</div>
+			<dl className="review-facts">
+				<Fact term="覆盖">{domain.coverage}</Fact>
+				{domain.key === "alerts" ? (
+					<CollectionFacts
+						collection={collection}
+						degraded={status === "degraded"}
+					/>
+				) : (
+					<Fact term="数据来源">
+						{status === "unknown" ? "未接入" : "正式观测查询"}
+					</Fact>
+				)}
+			</dl>
+		</Card>
+	);
 }
 
-function emptyDescription(state: OperationsEntryState) {
+function OperationsBody({
+	state,
+	onRefresh,
+	isRefreshing,
+}: {
+	state: OperationsEntryState;
+	onRefresh: () => void;
+	isRefreshing: boolean;
+}) {
 	switch (state.kind) {
 		case "loading":
-			return "正在等待正式观测查询返回。";
-		case "empty":
-			return "正式观测查询已接入，但当前没有可显示的状态。";
+			return <LoadingLine>正在读取观测状态…</LoadingLine>;
+		case "denied":
+			return (
+				<PageStateCard
+					kind="unauthorized"
+					description="你没有访问运维观测的权限。"
+				/>
+			);
+		case "not-connected":
+			return (
+				<PageStateCard
+					kind="unavailable"
+					title="观测查询未接入"
+					description="当前部署没有提供运维观测查询，页面不显示指标或告警。"
+					action={null}
+				/>
+			);
+		case "unavailable":
+			return (
+				<PageStateCard
+					kind="unavailable"
+					description={state.message}
+					onRetry={onRefresh}
+					retrying={isRefreshing}
+					retryLabel="重新读取观测状态"
+				/>
+			);
 		case "ready":
-			return "状态来自正式观测查询；页面不生成指标或告警事实。";
-		default:
-			return "当前页面不生成指标或告警事实；待 #441 的正式遥测查询和告警出口接入后，这里才会显示真实状态。";
+			return (
+				<div className="operations-grid">
+					{domains.map((domain) => (
+						<DomainCard
+							key={domain.key}
+							domain={domain}
+							status={state.statuses[domain.key]}
+							collection={state.collection}
+						/>
+					))}
+				</div>
+			);
 	}
 }
 
 export function OperationsEntry({
 	isAdministrator,
 	onRefresh,
-	state = { kind: "unknown" },
+	state,
 	isRefreshing = false,
 }: {
+	/** 会话角色由服务端解析；非系统管理员直接显示无权限卡，调用方不发出查询。 */
 	isAdministrator: boolean;
-	onRefresh?: () => void;
-	state?: OperationsEntryState;
+	onRefresh: () => void;
+	state: OperationsEntryState;
 	isRefreshing?: boolean;
 }) {
-	if (!isAdministrator) {
-		return (
-			<Alert tone="warn">
-				<AlertDescription>当前登录主体无权访问运维观测入口。</AlertDescription>
-			</Alert>
-		);
-	}
+	const id = useId();
+	const shown: OperationsEntryState = isAdministrator
+		? state
+		: { kind: "denied" };
+	// 刷新只在读取中与已读取时出现；失败卡自带重试，无权限与未接入没有可刷新的内容。
+	const refreshable = shown.kind === "loading" || shown.kind === "ready";
 	return (
-		<div className="space-y-8">
+		<section aria-labelledby={`${id}-heading`}>
 			<header className="page-heading">
 				<div className="min-w-0">
 					<p className="page-eyebrow">系统管理 / 运维观测</p>
-					<h1>先确认平台状态，再定位故障。</h1>
-					<p>健康、积压、依赖和告警将在正式观测查询接入后显示真实结果。</p>
+					{/* tabIndex=-1：失败卡「重新读取」恢复后焦点移到这里。 */}
+					<h1 id={`${id}-heading`} tabIndex={-1}>
+						先确认平台状态，再定位故障。
+					</h1>
+					<p>
+						只显示正式观测查询返回的状态；没有数据源的区块标为「未接入」，页面不生成指标或告警。
+					</p>
 				</div>
-				<Button
-					type="button"
-					variant="ghost"
-					onClick={() => onRefresh?.()}
-					disabled={onRefresh === undefined || isRefreshing}
-					aria-label="刷新运维状态"
-					title={onRefresh === undefined ? "正式观测查询尚未接入" : undefined}
-				>
-					<RefreshCcw aria-hidden="true" />
-					{isRefreshing ? "刷新中" : "刷新"}
-				</Button>
+				{refreshable ? (
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon"
+						aria-label="刷新运维状态"
+						title="刷新运维状态"
+						disabled={isRefreshing || shown.kind === "loading"}
+						onClick={onRefresh}
+					>
+						<RefreshCw aria-hidden="true" />
+					</Button>
+				) : null}
 			</header>
-			<div className="grid gap-4 md:grid-cols-2">
-				{domains.map(({ key, icon: Icon, label, description }) => (
-					<section key={key} className="rounded-[14px] border bg-card p-5">
-						<div className="flex items-start justify-between gap-3">
-							<div className="flex items-center gap-3">
-								<Icon
-									className="size-5 text-muted-foreground"
-									aria-hidden="true"
-								/>
-								<h2 className="font-medium">{label}</h2>
-							</div>
-							<StatusBadge status={statusFor(state, key)} />
-						</div>
-						<p className="mt-3 text-muted-foreground text-sm">{description}</p>
-					</section>
-				))}
-			</div>
-			{state.kind === "error" ? (
-				<Alert tone="danger" role="alert">
-					<AlertDescription>
-						{state.message}
-						{state.retryable ? " 请刷新后重试。" : ""}
-					</AlertDescription>
-				</Alert>
-			) : state.kind === "unavailable" ? (
-				<Alert tone="warn" role="status">
-					<AlertDescription>
-						{state.message ?? "观测服务当前不可用。"}
-					</AlertDescription>
-				</Alert>
-			) : (
-				<Empty aria-live="polite">
-					<EmptyHeader>
-						<EmptyMedia>
-							<Activity aria-hidden="true" />
-						</EmptyMedia>
-						<EmptyTitle>{emptyTitle(state)}</EmptyTitle>
-						<EmptyDescription>{emptyDescription(state)}</EmptyDescription>
-					</EmptyHeader>
-				</Empty>
-			)}
-		</div>
+			<OperationsBody
+				state={shown}
+				onRefresh={onRefresh}
+				isRefreshing={isRefreshing}
+			/>
+		</section>
 	);
 }
