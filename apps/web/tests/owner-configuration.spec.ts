@@ -58,6 +58,64 @@ const candidates = {
 	},
 };
 
+test("renders trusted candidate names and saves only the original model identifiers", async ({
+	page,
+}) => {
+	const api = await ownerConfigFixture(page, { keySet: true });
+	api.modelNames({ "gpt-5": "可信模型甲", "gpt-5-mini": "可信模型乙" });
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(
+		page.getByRole("checkbox", {
+			name: "Relay · Internal · 可信模型甲",
+			exact: true,
+		}),
+	).toBeVisible();
+	await page
+		.getByRole("checkbox", {
+			name: "Relay · Internal · 可信模型乙",
+			exact: true,
+		})
+		.click();
+	await page.getByRole("button", { name: "保存配置", exact: true }).click();
+	await expect
+		.poll(
+			() =>
+				api.commands.filter(({ path }) =>
+					path.endsWith("/configuration/saved-model"),
+				).length,
+		)
+		.toBe(1);
+	const saved = api.commands.find(({ path }) =>
+		path.endsWith("/configuration/saved-model"),
+	);
+	const payload = saved?.body as {
+		modelConfiguration: {
+			options: { optionId: string; endpointId: string; modelId: string }[];
+		};
+	};
+	expect(
+		payload.modelConfiguration.options.map(
+			({ endpointId, modelId, optionId }) => ({
+				endpointId,
+				modelId,
+				optionId,
+			}),
+		),
+	).toEqual([
+		{
+			endpointId: "endpoint-primary",
+			modelId: "gpt-5",
+			optionId: "endpoint-primary:gpt-5",
+		},
+		{
+			endpointId: "endpoint-primary",
+			modelId: "gpt-5-mini",
+			optionId: "endpoint-primary:gpt-5-mini",
+		},
+	]);
+	expect(JSON.stringify(payload)).not.toMatch(/可信模型|displayName/);
+});
+
 const unavailable = (status: number, retryable: boolean) => ({
 	status,
 	json: {
@@ -92,6 +150,11 @@ async function ownerConfigFixture(
 	let configurationRevision = 7;
 	let savedMode = saved;
 	let checkCandidates = [candidates.gpt5, candidates.mini];
+	let modelNames: Readonly<Record<string, string>> = {};
+	const withName = (candidate: typeof candidates.gpt5) => ({
+		...candidate,
+		displayName: modelNames[candidate.modelId] ?? candidate.modelId,
+	});
 	const failures = new Set<string>();
 	const gates = new Map<string, Promise<void>>();
 	const releases = new Map<string, () => void>();
@@ -193,7 +256,7 @@ async function ownerConfigFixture(
 		if (/\/wecom-(bot|app)$/.test(pathname))
 			return route.fulfill({ json: { status: "not_configured" } });
 		if (method !== "GET") commands.push({ method, path: pathname, body });
-		if (pathname.endsWith("/default-relay-key/candidates")) {
+		if (pathname.endsWith("/default-relay-key/display-candidates")) {
 			if (method === "GET") {
 				await gate("saved-candidates");
 				if (savedMode === "error") return route.fulfill(unavailable(503, true));
@@ -201,24 +264,24 @@ async function ownerConfigFixture(
 					return route.fulfill(unavailable(403, false));
 				return route.fulfill({
 					json: {
-						schemaVersion: 1,
+						schemaVersion: 2,
 						configurationRevision,
 						keyVersion,
-						candidates:
-							savedMode === "empty"
-								? []
-								: savedMode === "subset"
-									? [candidates.mini]
-									: [candidates.gpt5, candidates.mini],
+						candidates: (savedMode === "empty"
+							? []
+							: savedMode === "subset"
+								? [candidates.mini]
+								: [candidates.gpt5, candidates.mini]
+						).map(withName),
 					},
 				});
 			}
 			await gate("check");
 			return route.fulfill({
 				json: {
-					schemaVersion: 1,
+					schemaVersion: 2,
 					configurationRevision,
-					candidates: checkCandidates,
+					candidates: checkCandidates.map(withName),
 				},
 			});
 		}
@@ -282,6 +345,9 @@ async function ownerConfigFixture(
 	return {
 		commands,
 		reads,
+		modelNames(names: Readonly<Record<string, string>>) {
+			modelNames = names;
+		},
 		hold(name: "saved-candidates" | "check" | "replace-key" | "configuration") {
 			gates.set(
 				name,
@@ -667,8 +733,9 @@ test("the default Relay Key has its own section and a verified replacement (G-08
 	await expect(mini).toBeChecked();
 	expect((await page.content()).includes(probe)).toBe(false);
 	const candidateReads = () =>
-		api.reads.filter((path) => path.endsWith("/default-relay-key/candidates"))
-			.length;
+		api.reads.filter((path) =>
+			path.endsWith("/default-relay-key/display-candidates"),
+		).length;
 	const readsBefore = candidateReads();
 	api.release("replace-key");
 	await expect(chip).toHaveText("已设置");
@@ -677,7 +744,7 @@ test("the default Relay Key has its own section and a verified replacement (G-08
 	await expect(trigger).toBeFocused();
 	await expect.poll(candidateReads).toBe(readsBefore + 1);
 	expect(api.commands.map(({ method, path }) => `${method} ${path}`)).toEqual([
-		"POST /api/v2/agents/agent-pilot-1/default-relay-key/candidates",
+		"POST /api/v2/agents/agent-pilot-1/default-relay-key/display-candidates",
 		"PUT /api/v2/agents/agent-pilot-1/default-relay-key",
 	]);
 	expect(JSON.stringify(api.commands)).toContain(probe);
@@ -706,7 +773,7 @@ test("a new Key that cannot call current models is committed with a new selectio
 	await expect(dialog.getByText("新的 Key 不能调用部分当前模型")).toBeVisible();
 	await expect(dialog).toContainText("Primary model");
 	expect(api.commands.map(({ path }) => path)).toEqual([
-		"/api/v2/agents/agent-pilot-1/default-relay-key/candidates",
+		"/api/v2/agents/agent-pilot-1/default-relay-key/display-candidates",
 	]);
 	await dialog
 		.getByRole("checkbox", { name: "Relay · Internal · gpt-5-mini" })
@@ -896,7 +963,7 @@ test("subset, empty and failed candidate reads never block other fields (RK2-03,
 	expect(
 		api.reads
 			.slice(before)
-			.filter((path) => path.endsWith("/default-relay-key/candidates")),
+			.filter((path) => path.endsWith("/default-relay-key/display-candidates")),
 	).toHaveLength(1);
 
 	api.savedMode("forbidden");

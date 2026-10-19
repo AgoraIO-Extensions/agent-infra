@@ -1,3 +1,7 @@
+import {
+	AgentDefaultRelayKeyCandidatesV1Schema,
+	AgentDefaultRelayKeySavedCandidatesV1Schema,
+} from "@agent-infra/contracts/pilot";
 import { AgentDefaultRelayKeyErrorV1 } from "@agent-infra/platform-core";
 import { Hono } from "hono";
 import { expect, it, vi } from "vitest";
@@ -12,7 +16,9 @@ const state = {
 	keyVersion: 2,
 	configurationRevision: 7,
 };
-function fixture() {
+function fixture(
+	overrides: Partial<AgentDefaultRelayKeyRoutesDependencies> = {},
+) {
 	const replace = vi.fn<
 		AgentDefaultRelayKeyRoutesDependencies["keys"]["replace"]
 	>(async () => state);
@@ -53,6 +59,7 @@ function fixture() {
 				],
 			})),
 		},
+		...overrides,
 	};
 	const app = new Hono();
 	registerAgentDefaultRelayKeyRoutes(app, deps);
@@ -138,4 +145,113 @@ it("conceals absent/foreign Agent and dependency detail", async () => {
 		);
 		expect(await response.text()).not.toContain(key);
 	}
+});
+
+it.each(["GET", "POST"])(
+	"adds only trusted names on the new %s path and retains the exact old response",
+	async (method) => {
+		const candidate = {
+			endpointId: "endpoint_01",
+			modelId: "model_01",
+			reasoningLevels: ["medium"],
+		};
+		const lookup = vi.fn(() => "部署模型甲");
+		const names = vi.fn(async () => lookup);
+		const f = fixture({
+			readModelDisplayNames: names,
+			keys: {
+				current: async () => state,
+				replace: async () => state,
+				candidates: async () => ({
+					schemaVersion: 1,
+					configurationRevision: 7,
+					candidates: [candidate],
+				}),
+			},
+		});
+		const init = {
+			method,
+			...(method === "POST"
+				? {
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ keyValue: key, configurationRevision: 7 }),
+					}
+				: {}),
+		};
+		const legacy = await f.app.request(`${url}/candidates`, init);
+		expect(legacy.status).toBe(200);
+		const oldProjection = (
+			method === "GET"
+				? AgentDefaultRelayKeySavedCandidatesV1Schema
+				: AgentDefaultRelayKeyCandidatesV1Schema
+		).parse(await legacy.json());
+		expect(oldProjection).toEqual({
+			schemaVersion: 1,
+			configurationRevision: 7,
+			...(method === "GET" ? { keyVersion: 2 } : {}),
+			candidates: [candidate],
+		});
+		expect(names).not.toHaveBeenCalled();
+		const display = await f.app.request(`${url}/display-candidates`, init);
+		expect(display.status).toBe(200);
+		expect(display.headers.get("Cache-Control")).toBe("no-store");
+		expect(await display.json()).toEqual({
+			...oldProjection,
+			schemaVersion: 2,
+			candidates: [{ ...candidate, displayName: "部署模型甲" }],
+		});
+		expect(lookup).toHaveBeenCalledWith(candidate);
+	},
+);
+
+it.each(["GET", "POST"])(
+	"rejects foreign-subject %s before reading names",
+	async (method) => {
+		const refused = async () => {
+			throw new AgentDefaultRelayKeyErrorV1("not_authorized");
+		};
+		const names = vi.fn();
+		const f = fixture({
+			readModelDisplayNames: names,
+			keys: { current: refused, candidates: refused, replace: refused },
+		});
+		const response = await f.app.request(`${url}/display-candidates`, {
+			method,
+			...(method === "POST"
+				? {
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ keyValue: key, configurationRevision: 7 }),
+					}
+				: {}),
+		});
+		expect(response.status).toBe(404);
+		expect(names).not.toHaveBeenCalled();
+		expect(await response.text()).not.toContain(key);
+	},
+);
+
+it("does not enrich stale saved-Key evidence or expose display dependency failures", async () => {
+	const names = vi.fn(async () => {
+		throw new Error(key);
+	});
+	const stale = fixture({
+		readModelDisplayNames: names,
+		savedCandidates: {
+			read: async () => ({
+				schemaVersion: 1,
+				agentId: "agent_01",
+				configurationRevision: 8,
+				keyVersion: 2,
+				candidates: [],
+			}),
+		},
+	});
+	expect((await stale.app.request(`${url}/display-candidates`)).status).toBe(
+		503,
+	);
+	expect(names).not.toHaveBeenCalled();
+	const current = fixture({ readModelDisplayNames: names });
+	const response = await current.app.request(`${url}/display-candidates`);
+	expect(response.status).toBe(503);
+	expect(await response.text()).not.toContain(key);
 });

@@ -1,5 +1,6 @@
 import { AgentResourceProfileProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
+import { createDeploymentModelDisplayNamesV1 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationAuthorityContextV1,
 	type AgentConfigurationUseCaseDependenciesV1,
@@ -127,6 +128,8 @@ export interface ProductionPlatformApiInputV1
 	readonly resourceProfile: Parameters<
 		typeof createDeploymentPresentation
 	>[0]["resourceProfile"];
+	/** Nonsecret presentation metadata, separate from the strict policy catalog. */
+	readonly modelDisplayMetadata?: unknown;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly conversationEventWindow?: number;
@@ -362,6 +365,10 @@ export function createProductionPlatformApiAssemblyInputV1(
 		throw new Error("PLATFORM_DEPLOYMENT_CONFIGURATION_INVALID");
 	}
 	const identityScope = createDeploymentIdentityScope(input.identity);
+	const readModelDisplayNames = createDeploymentModelDisplayNamesV1({
+		metadata: input.modelDisplayMetadata,
+		modelCatalog: { ...input.modelCatalog },
+	});
 	// Web 申请与 API 创建提交的是同一种默认 Relay Key（PRD 7.4）：部署没有单独提供 API 的
 	// candidates 时，沿用 Web 申请的候选校验（同一 ModelCatalog、模板绑定与 billing 校验），
 	// 不另设一套可见模型规则（#2759）。两项策略缺任一时仍不装配，标准模板创建保持失败关闭。
@@ -527,6 +534,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 				: {}),
 		},
 		...(personalRelayKeys ? { personalRelayKeys } : {}),
+		readModelDisplayNames,
 		...(validatePersonalRelayKey
 			? { validateDefaultRelayKey: validatePersonalRelayKey }
 			: {}),
@@ -613,6 +621,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 					resourceProfile,
 					imageRepository: input.imageRepository,
 					modelSelectionAvailable: input.modelSelection !== undefined,
+					readModelDisplayNames,
 					...(input.resolveCustomAgentInteractionUrl
 						? {
 								resolveCustomAgentInteractionUrl:

@@ -5,6 +5,7 @@ import {
 	type MultiServiceServiceProjectionV1,
 	multiServiceServiceProjectionsV1,
 } from "@agent-infra/contracts/pilot";
+import type { ModelDisplayNameLookupV1 } from "@agent-infra/model-catalog";
 import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-store";
 import { parseAllDocuments } from "yaml";
 
@@ -49,6 +50,9 @@ export function createDeploymentPresentation(input: {
 	readonly imageRepository: string;
 	/** Runtime model capability is public only when the API reader is wired. */
 	readonly modelSelectionAvailable?: boolean;
+	readonly readModelDisplayNames?: (
+		signal: AbortSignal,
+	) => Promise<ModelDisplayNameLookupV1>;
 	/** Deployment-owned, readiness-aware resolver for platform-identity Web routes. */
 	readonly resolveCustomAgentInteractionUrl?: (input: {
 		readonly agentId: string;
@@ -169,13 +173,20 @@ export function createDeploymentPresentation(input: {
 				// A route dependency that cannot prove readiness stays unavailable.
 			}
 		}
+		const modelDisplayName =
+			configuration.modelOptions.length > 0 && input.readModelDisplayNames
+				? await input.readModelDisplayNames(
+						input.identityScope.currentRequest().signal,
+					)
+				: ({ modelId }: { modelId: string }) => modelId;
 		return {
 			source: browserSource,
 			resourceProfile,
 			modelOptions: configuration.modelOptions.map((option) => ({
-				...option,
+				optionId: option.optionId,
+				modelId: option.modelId,
 				reasoningLevels: [...option.reasoningLevels],
-				displayName: option.modelId,
+				displayName: modelDisplayName(option),
 			})),
 			channels: [
 				{ kind: "web", status: "available" },
