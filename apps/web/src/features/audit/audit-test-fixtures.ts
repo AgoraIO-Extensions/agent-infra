@@ -2,11 +2,11 @@ import type { AuditRecord } from "./audit-query.js";
 
 export function auditRecord(auditId = "audit-a"): AuditRecord {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		auditId,
 		action: "task.api.access",
-		actor: { kind: "user", actorId: "user-a" },
-		subject: { kind: "agent", subjectId: "agent-a" },
+		actor: { kind: "user", actorId: "user-a", displayName: null },
+		subject: { kind: "agent", subjectId: "agent-a", displayName: null },
 		result: "accepted",
 		summary: "任务 API 访问获准",
 		taskApi: {
@@ -21,9 +21,10 @@ export function auditRecord(auditId = "audit-a"): AuditRecord {
 		conversationId: "conversation-a",
 		executionId: "execution-a",
 		authorizationRecordId: "authorization-a",
-		originalPrincipal: { kind: "user", id: "user-a" },
+		originalPrincipal: { kind: "user", id: "user-a", displayName: null },
 		executor: null,
 		operation: null,
+		agentDisplayName: null,
 	};
 }
 

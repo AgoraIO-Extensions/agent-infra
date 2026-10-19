@@ -164,6 +164,18 @@ export const auditSubjectLabels: Record<
 	api_credential: "API 凭证",
 };
 
+/**
+ * 对象列的主文字（F-03）：服务端按当前权限返回的 Agent / 创建申请名称；其他对象显示类型，
+ * 有可见的所属 Agent 时附上 Agent 名称。没有名称时只给类型，ID 始终以短形式另行显示。
+ */
+export function auditObjectName(record: AuditRecord) {
+	const type = auditSubjectLabels[record.subject.kind];
+	if (record.subject.displayName) return record.subject.displayName;
+	if (record.agentDisplayName && record.subject.kind !== "agent")
+		return `${record.agentDisplayName} · ${type}`;
+	return type;
+}
+
 export function auditOutcomeLabel(record: AuditRecord) {
 	if (
 		record.taskApi?.phase === "access" &&

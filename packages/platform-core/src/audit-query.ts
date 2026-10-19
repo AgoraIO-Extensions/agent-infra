@@ -233,6 +233,41 @@ export interface PlatformAuditQueryFiltersV1 {
 	readonly executionId?: string;
 }
 
+/**
+ * #2909：审计投影可附带显示名的范围，名称一律由服务端按查询方的当前权限解析，
+ * 不能让审计成为探测不可见 Agent 或应用是否存在的旁路。
+ * - 系统管理员按职责查看平台元数据（PRD §13.2），可见 Agent、创建申请与应用的名称；
+ * - 用户或应用只解析本次查询已按当前访问权核验过的 Agent 名称；创建申请与应用的名称
+ *   没有对应的当前读取权限，不返回。
+ */
+export interface PlatformAuditDisplayNamePolicyV1 {
+	readonly agents: "all" | "verified_current_access";
+	readonly agentApplications: boolean;
+	readonly applications: boolean;
+}
+
+export function platformAuditDisplayNamePolicyV1(
+	scope: PlatformAuditQueryScopeV1,
+): PlatformAuditDisplayNamePolicyV1 {
+	return scope.kind === "administrator"
+		? { agents: "all", agentApplications: true, applications: true }
+		: {
+				agents: "verified_current_access",
+				agentApplications: false,
+				applications: false,
+			};
+}
+
+/** 显示名与公开契约同界（1–200 个 UTF-16 单元）；无法确认的值视为没有名称。 */
+export function parsePlatformAuditDisplayNameV1(input: unknown): string | null {
+	return isAgentManagementText(input) &&
+		input.length <= 200 &&
+		input.trim() !== "" &&
+		!/\p{Cc}/u.test(input)
+		? input
+		: null;
+}
+
 export interface PlatformAuditQueryInputV1 {
 	readonly limit: number;
 	readonly cursor?: string;

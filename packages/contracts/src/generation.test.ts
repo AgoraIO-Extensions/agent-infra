@@ -198,7 +198,12 @@ describe("standard contract artifacts", () => {
 		expect(artifacts.pilotBrowserOpenapi.components.securitySchemes).toEqual(
 			artifacts.pilotBrowserOpenapiV2.components.securitySchemes,
 		);
-		for (const path of ["/api/v1/audit", "/api/v1/audit/{auditId}"]) {
+		for (const path of [
+			"/api/v1/audit",
+			"/api/v1/audit/{auditId}",
+			"/api/v2/audit",
+			"/api/v2/audit/{auditId}",
+		]) {
 			expect(artifacts.pilotBrowserOpenapi.paths[path].get.security).toEqual([
 				{ PlatformSession: [] },
 				{ platformApiCredential: [] },
@@ -207,11 +212,26 @@ describe("standard contract artifacts", () => {
 		for (const path of [
 			"/api/v3/admin/audit",
 			"/api/v3/admin/audit/{auditId}",
+			"/api/v4/admin/audit",
+			"/api/v4/admin/audit/{auditId}",
 		]) {
 			expect(artifacts.pilotBrowserOpenapi.paths[path].get.security).toEqual([
 				{ PlatformSession: [] },
 			]);
 		}
+		// #2909：V1 响应不变，V2 入口才返回带显示名的投影。
+		expect(
+			artifacts.pilotBrowserOpenapi.paths["/api/v1/audit"].get.responses[200]
+				.content["application/json"].schema,
+		).toEqual({ $ref: "#/components/schemas/ScopedPlatformAuditPageV1" });
+		expect(
+			artifacts.pilotBrowserOpenapi.paths["/api/v4/admin/audit/{auditId}"].get
+				.responses[200].content["application/json"].schema,
+		).toEqual({ $ref: "#/components/schemas/ScopedPlatformAuditProjectionV2" });
+		expect(
+			artifacts.pilotBrowserOpenapi.components.schemas
+				.ScopedPlatformAuditProjectionV1.properties,
+		).not.toHaveProperty("agentDisplayName");
 		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
 			"/api/v1/conversations/{conversationId}/messages",
 		);
