@@ -3190,13 +3190,15 @@ describe("Agent configuration replaces the model set together with the default K
 			},
 		});
 		expect(encrypted).toHaveLength(0);
-		expect(snapshotAgentConfigurationWritePlanV1(stored.lastPlan)).toEqual(
-			stored.lastPlan,
-		);
-		const duplicate = structuredClone(stored.lastPlan) as {
-			result: { changedFields: string[] };
+		const plan = snapshotAgentConfigurationWritePlanV1(stored.lastPlan);
+		expect(plan).toEqual(stored.lastPlan);
+		const duplicate = {
+			...plan,
+			result: {
+				...plan.result,
+				changedFields: [...plan.result.changedFields, "modelConfiguration"],
+			},
 		};
-		duplicate.result.changedFields.push("modelConfiguration");
 		expect(() => snapshotAgentConfigurationWritePlanV1(duplicate)).toThrow();
 		await expect(useCase.update(savedCommand, actor)).resolves.toEqual(result);
 		expect(transaction.snapshot().commitCount).toBe(1);
