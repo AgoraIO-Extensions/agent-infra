@@ -1250,6 +1250,35 @@ describe("Agent default Relay Key (G-08, G-09)", () => {
 		expect(within(section()).getByText(model.expected)).toBeTruthy();
 	});
 
+	it("distinguishes equal display names with different endpoint/model pairs", () => {
+		renderKey(
+			{},
+			{
+				endpointNames: { relay: "服务甲", other: "服务乙" },
+				savedRelayKeyCandidates: [
+					{
+						endpointId: "relay",
+						modelId: "model-a",
+						displayName: "共享名称",
+						reasoningLevels: ["medium"],
+					},
+					{
+						endpointId: "other",
+						modelId: "model-b",
+						displayName: "共享名称",
+						reasoningLevels: ["medium"],
+					},
+				],
+			},
+		);
+		expect(
+			within(section()).getByText("服务甲 · 共享名称 · 均衡"),
+		).toBeTruthy();
+		expect(
+			within(section()).getByText("服务乙 · 共享名称 · 均衡"),
+		).toBeTruthy();
+	});
+
 	it("has its own section with usage boundary, status, version and available models", () => {
 		renderKey();
 		const region = section();
