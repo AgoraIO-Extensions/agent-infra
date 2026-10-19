@@ -1,8 +1,8 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
 
-// OpenDesign 导出包（DESIGN-MANIFEST.json，决策 X-04，2026-10-16）SHA-256：
+// OpenDesign 导出包（DESIGN-MANIFEST.json，决策 X-04，2026-10-20）SHA-256：
 // index.html（canonical）
-// f66a8694aecee90322161e9a31d682073919ae846d488312e225edf03232aaaf
+// b540e4c948bd506fc33623f506a1d2b472c26a1fe8bf362b83b0165cbe1ecd26
 // login.html（supporting，登录页）
 // 6e04830eb0aac86e7ffea6dc6f3db0faab7942e2379c6230efe0512519d0c0a7
 // DESIGN.md
