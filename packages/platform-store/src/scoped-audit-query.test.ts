@@ -1512,7 +1512,6 @@ describe("credential-backed audit query consumer", () => {
 	});
 });
 
-
 // #2879：Skill 项目操作与 Agent 默认 Key 读取/候选动作的管理员审计测试
 describe("admin audit for #2879 registered actions", () => {
 	it("projects skill.project.create with replayed:false in admin audit without raw details", async () => {
@@ -1530,7 +1529,7 @@ describe("admin audit for #2879 registered actions", () => {
 			summary: "skill.project.create: replayed=false",
 		});
 		// 摘要不含 details 原始 JSON 字段名
-		expect(JSON.stringify(record)).not.toContain('"\"replayed\""');
+		expect(JSON.stringify(record)).not.toContain('""replayed""');
 	});
 
 	it("projects skill.project.list with count in admin audit", async () => {
@@ -1616,7 +1615,9 @@ describe("admin audit for #2879 registered actions", () => {
 			values (${id}, 'rk-rej-trace', ${randomUUID()}, 'user', ${userId}, 'relay_key.agent_default.read', 'agent', ${agentId}, 'rejected', ${sql.json({ schemaVersion: 1, reason: "not_authorized" })})`;
 		const record = await query.getAudit(admin, id, detail, request());
 		expect(record.action).toBe("relay_key.agent_default.read");
-		expect(record.summary).toBe("relay_key.agent_default.read: reason=not_authorized");
+		expect(record.summary).toBe(
+			"relay_key.agent_default.read: reason=not_authorized",
+		);
 	});
 
 	it("rejects relay_key.agent_default.read with wrong schemaVersion (fails closed)", async () => {
