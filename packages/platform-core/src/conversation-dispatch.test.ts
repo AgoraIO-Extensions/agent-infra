@@ -22,6 +22,7 @@ import {
 	decideConversationDispatchRetryTransitionV1,
 	decideConversationStopConfirmationStatusV1,
 	decideConversationStopConfirmationTimeoutV1,
+	nativeCapabilityParametersDigestV1,
 } from "./index.js";
 
 describe("stop confirmation timeout", () => {
@@ -540,6 +541,101 @@ function dispatch(
 ) {
 	return useCase.dispatch({ schemaVersion: 1, itemId, workerId: "worker-1" });
 }
+
+function nativeParametersClaim(parameters: string, kind: "command" | "skill") {
+	return claim({
+		operation: "conversation.native-capability.invoke.v1",
+		itemId: "conversation:native-capability:execution-1",
+		input: null,
+		messageId: null,
+		modelConfigurationRevision: null,
+		modelOptionId: null,
+		reasoningLevel: null,
+		hostSessionRef: "host-session-conversation-1",
+		nativeCapability: {
+			agentId: "agent-1",
+			actorId: "actor-1",
+			channelId: "web",
+			turnId: "turn-1",
+			capabilityId: "a".repeat(64),
+			capabilityKind: kind,
+			directoryRevision: "b".repeat(64),
+			parameters,
+			parametersDigest: nativeCapabilityParametersDigestV1(parameters),
+			capabilitySourceVersion: "1.0.0",
+		},
+	});
+}
+
+describe("native dispatch parameter bounds", () => {
+	it.each([
+		{ label: "empty command", kind: "command" as const, parameters: "" },
+		{
+			label: "1025 byte Skill",
+			kind: "skill" as const,
+			parameters: "a".repeat(1025),
+		},
+		{
+			label: "16384 byte Skill",
+			kind: "skill" as const,
+			parameters: "a".repeat(16384),
+		},
+		{
+			label: "16384 UTF-8 byte Skill",
+			kind: "skill" as const,
+			parameters: "é".repeat(8192),
+		},
+	])(
+		"delivers the unchanged $label to Runtime and persists its terminal event",
+		async ({ kind, parameters }) => {
+			const native = nativeParametersClaim(parameters, kind);
+			const store = new MemoryDispatchStore(native);
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.setEvents([runtimeEvent(1)]);
+			const delivered = vi.spyOn(runtimeHost, "dispatch");
+			const f = setup({ store, runtimeHost });
+			expect(await dispatch(f.useCase, native.itemId)).toMatchObject({
+				outcome: "accepted",
+			});
+			expect(delivered).toHaveBeenCalledTimes(1);
+			expect(delivered.mock.calls[0]?.[0]).toMatchObject({
+				operation: "native-capability.invoke",
+				nativeCapability: {
+					parameters,
+					parametersDigest: nativeCapabilityParametersDigestV1(parameters),
+				},
+			});
+			expect(store.current.executionStatus).toBe("completed");
+			expect(store.outboxStatus).toBe("succeeded");
+		},
+	);
+
+	it.each([
+		{ label: "non-string", value: null },
+		{ label: "NUL", value: "\0" },
+		{ label: "ill-formed Unicode", value: "\ud800" },
+		{ label: "over byte limit", value: "a".repeat(16385) },
+		{ label: "over UTF-8 byte limit", value: "é".repeat(8193) },
+	])("rejects $label native parameters", ({ value }) => {
+		const native = nativeParametersClaim("summary", "skill");
+		expect(() =>
+			parseClaim({
+				...native,
+				nativeCapability: { ...native.nativeCapability, parameters: value },
+			}),
+		).toThrow();
+	});
+
+	it("keeps ordinary identity fields nonempty", () => {
+		const native = nativeParametersClaim("", "command");
+		expect(() =>
+			parseClaim({
+				...native,
+				nativeCapability: { ...native.nativeCapability, actorId: "" },
+			}),
+		).toThrow();
+	});
+});
 
 describe("bounded unknown recovery", () => {
 	it("closes a denied unknown stop after the durable attempt limit", async () => {
