@@ -138,6 +138,7 @@ export * from "./session-sandbox-reconciliation.js";
 export * from "./skill-hub.js";
 export * from "./skill-hub-agent-binding.js";
 export * from "./skill-hub-installation.js";
+export * from "./skill-hub-installation-list.js";
 export * from "./skill-hub-management.js";
 export * from "./skill-hub-project.js";
 export * from "./skill-hub-project.js";

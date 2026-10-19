@@ -1097,6 +1097,7 @@ export function assemblePlatformApi(
 		scopedAudit: { identity: input.identity, audit: scopedAuditQuery },
 		skillHubRead: skillHubRead.dependencies,
 		skillHubInstallations: skillHubRead.installationDependencies,
+		skillHubInstallationList: skillHubRead.installationListDependencies,
 		skillHubPublication: skillHubRead.publicationDependencies,
 		skillHubReview: skillHubRead.reviewDependencies,
 		skillHubVersionDetail: skillHubRead.versionDetailDependencies,
