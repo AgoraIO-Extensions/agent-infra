@@ -94,17 +94,20 @@ it("executes an admitted V3 native command through the Driver seam", async () =>
 		const accepted = await submit(env.host);
 		await env.driver.setOperationStatus("execution-fixture", "completed");
 		const create = vi.spyOn(env.driver, "createNativeCommandCommand");
+		const context = {
+			...base(accepted.hostSessionRef),
+			executionId: "execution-command",
+			turnId: "turn-command",
+			operation: {
+				kind: "execution" as const,
+				id: "execution-command",
+				deliveryFence: 2,
+				executionDeliveryFence: 2,
+			},
+		};
 		const request = signV3Fixture(
 			{
-				...base(accepted.hostSessionRef),
-				executionId: "execution-command",
-				turnId: "turn-command",
-				operation: {
-					kind: "execution" as const,
-					id: "execution-command",
-					deliveryFence: 2,
-					executionDeliveryFence: 2,
-				},
+				...context,
 				capabilityId: fakeNativeCommandCapabilityId,
 				capabilityKind: "command" as const,
 				directoryRevision: fakeNativeCommandDirectoryRevision,
@@ -127,6 +130,108 @@ it("executes an admitted V3 native command through the Driver seam", async () =>
 				capabilitySourceVersion: "1",
 			}),
 		);
+		const query = signV3Fixture(
+			{
+				...context,
+				consumer: "platform_worker_persistence" as const,
+				afterCursor: null,
+			},
+			"events.persist",
+		);
+		const stream = await env.host.streamEventsV3(
+			query,
+			verifyRuntimeV2Fixture(query.grant),
+		);
+		const iterator = stream[Symbol.asyncIterator]();
+		const first = await iterator.next();
+		await iterator.return?.(undefined);
+		if (first.done) throw new Error("Expected native command event");
+		const ack = signV3Fixture(
+			{
+				...context,
+				consumer: "platform_worker_persistence" as const,
+				confirmedCursor: first.value.cursor,
+			},
+			"events.ack",
+		);
+		await expect(
+			env.host.acknowledgeEventsV3(ack, verifyRuntimeV2Fixture(ack.grant)),
+		).resolves.toMatchObject({ confirmedCursor: first.value.cursor });
+		const recovery = signV3Fixture(
+			{
+				...context,
+				originalOperationDigest: requestDigest({
+					kind: "native-capability",
+					agentId: request.agentId,
+					conversationId: request.conversationId,
+					executionId: request.executionId,
+					turnId: request.turnId,
+					sessionGeneration: request.sessionGeneration,
+					capabilityId: request.capabilityId,
+					capabilityKind: request.capabilityKind,
+					directoryRevision: request.directoryRevision,
+					parametersDigest: request.parametersDigest,
+					capabilitySourceVersion: request.capabilitySourceVersion,
+				}),
+			},
+			"session.status",
+			{ purpose: "control", reason: "recovery" },
+		);
+		const beforeWrongDigest = await readFile(env.storePath, "utf8");
+		const wrongDigest = signV3Fixture(
+			{ ...recovery, originalOperationDigest: "a".repeat(43) },
+			"session.status",
+			{ purpose: "control", reason: "recovery" },
+		);
+		await expect(
+			env.host.recoverStatusV3(
+				wrongDigest,
+				verifyRuntimeV2Fixture(wrongDigest.grant),
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		expect(await readFile(env.storePath, "utf8")).toBe(beforeWrongDigest);
+		await expect(
+			env.host.recoverStatusV3(
+				recovery,
+				verifyRuntimeV2Fixture(recovery.grant),
+			),
+		).resolves.toMatchObject({ outcome: "found", status: "completed" });
+		expect(await env.driver.sideEffectCount()).toBe(2);
+		const stop = signV3Fixture(
+			{
+				...context,
+				operation: {
+					...context.operation,
+					kind: "stop" as const,
+					id: "stop-command",
+					deliveryFence: 3,
+				},
+			},
+			"turn.stop",
+			{
+				purpose: "control",
+				reason: "stop",
+				claims: { controlRecordId: "control-native-stop" },
+			},
+		);
+		const foreignStop = signV3Fixture(
+			{ ...stop, turnId: "foreign-turn" },
+			"turn.stop",
+			{
+				purpose: "control",
+				reason: "stop",
+				claims: { controlRecordId: "control-native-stop" },
+			},
+		);
+		const beforeForeignStop = await readFile(env.storePath, "utf8");
+		await expect(
+			env.host.stopV3(foreignStop, verifyRuntimeV2Fixture(foreignStop.grant)),
+		).rejects.toMatchObject({ code: "RUNTIME_EXECUTION_BINDING_MISMATCH" });
+		expect(await readFile(env.storePath, "utf8")).toBe(beforeForeignStop);
+		await expect(
+			env.host.stopV3(stop, verifyRuntimeV2Fixture(stop.grant)),
+		).resolves.toMatchObject({ result: { outcome: "accepted" } });
+		expect(create).toHaveBeenCalledTimes(1);
 	} finally {
 		await env.host.close();
 	}

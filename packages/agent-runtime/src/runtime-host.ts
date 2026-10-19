@@ -941,7 +941,10 @@ export class RuntimeHost {
 			runtimeAuthorizationDenied("v4-original-scope-missing");
 		if (original.hostSessionRef !== request.hostSessionRef)
 			runtimeAuthorizationDenied("v4-original-session-mismatch");
-		if (original.operation.kind !== "submit-turn")
+		if (
+			original.operation.kind !== "submit-turn" &&
+			original.operation.kind !== "native-command"
+		)
 			runtimeAuthorizationDenied("v4-original-operation-kind");
 		if (!verified.success)
 			runtimeAuthorizationDenied("v4-verification-invalid");

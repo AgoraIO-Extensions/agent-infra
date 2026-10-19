@@ -4,6 +4,7 @@ import { OpaqueIdV1Schema } from "../index.ts";
 import {
 	RuntimeBusinessGrantClaimsV4Schema,
 	RuntimeExecutionGrantV4Schema,
+	RuntimeNativeCapabilityRequestV4Schema,
 	RuntimePrivateRelayKeyFieldV1Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	runtimeRequestDigestV4,
@@ -15,7 +16,7 @@ import {
 
 /**
  * A recovery request names an already accepted operation.  The target session
- * and operation digest are separate from the original submit envelope because
+ * and operation digest are separate from the original envelope because
  * the first submit may have been sent with a null Host session reference.
  */
 const recoveryBinding = {
@@ -28,7 +29,12 @@ export const RuntimeRestoreExecutionKeyRequestV4Schema = z.strictObject({
 	schemaVersion: z.literal(4),
 	...recoveryBinding,
 	grant: RuntimeExecutionGrantV4Schema,
-	originalRequest: RuntimeSubmitTurnRequestV4Schema,
+	originalRequest: z.union([
+		RuntimeSubmitTurnRequestV4Schema,
+		RuntimeNativeCapabilityRequestV4Schema.extend({
+			capabilityKind: z.literal("skill"),
+		}),
+	]),
 });
 export type RuntimeRestoreExecutionKeyRequestV4 = z.infer<
 	typeof RuntimeRestoreExecutionKeyRequestV4Schema
@@ -62,14 +68,17 @@ export type RuntimeRestoreExecutionKeyResponseV4 = z.infer<
 	typeof RuntimeRestoreExecutionKeyResponseV4Schema
 >;
 
-function bindingClaims(claims: RuntimeRestoreExecutionKeyGrantClaimsV4) {
+function bindingClaims(
+	claims: RuntimeRestoreExecutionKeyGrantClaimsV4,
+	command: "turn.submit" | "native-capability.invoke" = "turn.submit",
+) {
 	const {
 		mode: _mode,
 		acceptedHostSessionRef: _ref,
 		acceptedOperationDigest: _digest,
 		...common
 	} = claims;
-	return { ...common, allowedCommands: ["turn.submit"] as const };
+	return { ...common, allowedCommands: [command] };
 }
 
 export function validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV4(
@@ -114,7 +123,7 @@ export async function runtimeRestoreExecutionKeyRequestDigestV4(
 	).join("");
 }
 
-/** Validate the signed recovery intent and the original submit binding. */
+/** Validate the signed recovery intent and the original operation binding. */
 export async function validateRuntimeRestoreExecutionKeyBindingV4(
 	input: unknown,
 	verifiedClaims: unknown,
@@ -132,17 +141,23 @@ export async function validateRuntimeRestoreExecutionKeyBindingV4(
 	)
 		throw new TypeError("RuntimeHostV4 Key recovery binding is invalid");
 	await validateRuntimeBusinessBindingV4(request.originalRequest, {
-		...bindingClaims(claims),
-		requestDigest: await runtimeRequestDigestV4(request.originalRequest),
-		attachments: request.originalRequest.input.attachments.map(
-			(attachmentId) => ({ attachmentId, operations: ["read"] as const }),
+		...bindingClaims(
+			claims,
+			"capabilityId" in request.originalRequest
+				? "native-capability.invoke"
+				: "turn.submit",
 		),
+		requestDigest: await runtimeRequestDigestV4(request.originalRequest),
+		attachments: ("input" in request.originalRequest
+			? request.originalRequest.input.attachments
+			: []
+		).map((attachmentId) => ({ attachmentId, operations: ["read"] as const })),
 	});
 }
 
 /**
  * The private Key uses the recovery Grant digest, while the rest of its
- * context remains bound to the original accepted submit request.
+ * context remains bound to the original accepted request.
  */
 export function validateRuntimeRestoreExecutionKeyPrivateFieldV4(
 	field: unknown,

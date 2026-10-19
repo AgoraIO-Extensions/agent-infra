@@ -13,6 +13,7 @@ import type {
 	RuntimeControlReasonV2,
 	RuntimeEventAckRequestV4,
 	RuntimeEventReadRequestV4,
+	RuntimeRestoreExecutionKeyRequestV4,
 } from "@agent-infra/contracts/runtime";
 import {
 	RuntimeEventAckRequestV4Schema,
@@ -1143,44 +1144,80 @@ export function createConversationRuntimeV2(
 			state.executionStatus === "processing" &&
 			authority.purpose === "business" &&
 			!context.claim.metadataRecovery &&
+			context.claim.executionSource &&
+			context.claim.relayKeyBinding &&
 			state.hostSessionRef !== null &&
 			state.originalSubmitHostSessionRef !== undefined &&
-			state.originalOperationDigest &&
-			context.claim.input &&
-			context.claim.modelOptionId &&
-			context.claim.reasoningLevel
+			state.originalOperationDigest
 		) {
-			const originalRequest = {
+			const claim = context.claim;
+			const originalHostSessionRef = state.originalSubmitHostSessionRef;
+			const common = () => ({
 				...base,
 				schemaVersion: 4 as const,
 				...keyedIdentity(prepared),
-				hostSessionRef: state.originalSubmitHostSessionRef,
-				input: {
-					...context.claim.input,
-					attachments: [...context.claim.input.attachments],
-				},
-				selection: {
-					schemaVersion: 1 as const,
-					modelOptionId: context.claim.modelOptionId,
-					reasoningLevel: context.claim.reasoningLevel,
-				},
+				hostSessionRef: originalHostSessionRef,
 				grant: {
 					schemaVersion: 4 as const,
 					format: "runtime-execution-jws" as const,
 					token: "unsigned.unsigned.unsigned",
 				},
-			};
-			try {
-				await v4Client(prepared, "turn.submit", active).restoreExecutionKey(
-					originalRequest,
-					state.hostSessionRef,
-					state.originalOperationDigest,
-					active,
-				);
-			} catch (error) {
-				// A terminal transition can race this read-only Key restore. The
-				// following status query is authoritative and must still reconcile it.
-				if (!(error instanceof ConversationRuntimeHostError)) throw error;
+			});
+			let originalRequest:
+				| RuntimeRestoreExecutionKeyRequestV4["originalRequest"]
+				| undefined;
+			if (
+				claim.operation === "conversation.native-capability.invoke.v1" &&
+				claim.nativeCapability?.capabilityKind === "skill" &&
+				state.originalSubmitHostSessionRef !== null
+			) {
+				originalRequest = {
+					...common(),
+					hostSessionRef: state.originalSubmitHostSessionRef,
+					capabilityId: claim.nativeCapability.capabilityId,
+					capabilityKind: "skill",
+					directoryRevision: claim.nativeCapability.directoryRevision,
+					parameters: claim.nativeCapability.parameters,
+					parametersDigest: claim.nativeCapability.parametersDigest,
+					capabilitySourceVersion:
+						claim.nativeCapability.capabilitySourceVersion,
+				};
+			} else if (
+				(claim.operation === "conversation.turn.submit.v1" ||
+					claim.operation === "conversation.turn.regenerate.v1") &&
+				claim.input &&
+				claim.modelOptionId &&
+				claim.reasoningLevel
+			) {
+				originalRequest = {
+					...common(),
+					input: { ...claim.input, attachments: [...claim.input.attachments] },
+					selection: {
+						schemaVersion: 1,
+						modelOptionId: claim.modelOptionId,
+						reasoningLevel: claim.reasoningLevel,
+					},
+				};
+			}
+			if (originalRequest) {
+				try {
+					await v4Client(
+						prepared,
+						"capabilityId" in originalRequest
+							? "native-capability.invoke"
+							: "turn.submit",
+						active,
+					).restoreExecutionKey(
+						originalRequest,
+						state.hostSessionRef,
+						state.originalOperationDigest,
+						active,
+					);
+				} catch (error) {
+					// A terminal transition can race this read-only Key restore. The
+					// following status query is authoritative and must still reconcile it.
+					if (!(error instanceof ConversationRuntimeHostError)) throw error;
+				}
 			}
 		}
 		const body = {

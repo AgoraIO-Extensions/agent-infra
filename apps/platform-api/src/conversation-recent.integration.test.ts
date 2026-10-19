@@ -312,6 +312,21 @@ describe("recent generated client → production assembly/HTTP/Core → PostgreS
 		expect(new Set(seen).size).toBe(132);
 	});
 
+	it("lists a conversation of an API-created Agent without failing the page (#2775)", async () => {
+		// API 创建的 Agent 没有审批修订号，管理状态须带 creationChannel 才能被 Core 接受。
+		await sql`update platform.agent_applications
+			set creation_channel = 'api', creator_principal_type = 'user',
+				creator_principal_id = 'owner', approval_revision = null
+			where agent_id = 'a'`;
+		await seedConversation("api-created", "a", "2026-10-02T00:00:00Z");
+		await seedConversation("web-created", "b", "2026-10-01T00:00:00Z");
+		const result = await page(10);
+		expect(result.items.map((item) => item.conversationId)).toEqual([
+			"api-created",
+			"web-created",
+		]);
+	});
+
 	it("uses PostgreSQL microseconds across a millisecond boundary instead of the public Date projection", async () => {
 		await seedConversation("a-new", "a", "2026-09-06T00:00:00.000900Z");
 		await seedConversation("z-old", "b", "2026-09-06T00:00:00.000100Z");

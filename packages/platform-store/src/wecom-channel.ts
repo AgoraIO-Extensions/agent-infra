@@ -22,6 +22,7 @@ import {
 } from "@agent-infra/platform-core";
 import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { PostgresAgentManagementTransactionV1 } from "./agent-management.js";
+import { agentManagementStateJsonSql } from "./agent-management-state-sql.js";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.js";
 import postgres from "./observed-postgres.js";
 import {
@@ -227,22 +228,7 @@ export class PostgresWecomChannelV1
 				}[]
 			>`
 				select c.configuration, a.authorization_revision,
-					jsonb_build_object(
-						'schemaVersion', 1, 'agentId', a.id, 'applicationId', app.id,
-						'applicantId', app.applicant_id, 'status', app.status,
-						'revision', app.management_revision::double precision,
-						'approvalRevision', app.approval_revision::double precision,
-						'decisionReason', app.decision_reason, 'serviceAvailability', app.service_availability,
-						'desiredState', app.desired_state, 'workloadRevision', app.workload_revision::double precision,
-						'fence', app.fence::double precision, 'failureCode', app.failure_code,
-						'ownerIds', (select coalesce(jsonb_agg(owner_id order by owner_id), '[]'::jsonb)
-							from platform.agent_owners where agent_id = a.id),
-						'availability', (select coalesce(jsonb_agg(jsonb_build_object(
-							'kind', case when target_type = 'user' then 'user' else 'organization' end,
-							case when target_type = 'user' then 'userId' else 'organizationId' end, target_id
-						) order by target_type, target_id), '[]'::jsonb)
-							from platform.agent_availability where agent_id = a.id)
-					) as management
+					${transaction.unsafe(agentManagementStateJsonSql("app"))} as management
 				from platform.agents a
 				join platform.agent_applications app on app.agent_id = a.id
 				join platform.agent_configuration_revisions c on c.agent_id = a.id and c.revision = a.current_configuration_revision

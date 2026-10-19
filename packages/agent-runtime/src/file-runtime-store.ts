@@ -472,7 +472,8 @@ function assertExecutionBinding(
 ) {
 	const execution = session.operations[binding.executionId];
 	if (
-		execution?.kind !== "submit-turn" ||
+		(execution?.kind !== "submit-turn" &&
+			execution?.kind !== "native-command") ||
 		execution.executionId !== binding.executionId ||
 		execution.turnId !== binding.turnId
 	) {
@@ -596,7 +597,8 @@ export class FileRuntimeStore {
 		if (!hostSessionRef) return null;
 		const session = sessionFor(state, hostSessionRef, binding);
 		const original = session.operations[binding.executionId];
-		if (original?.kind !== "submit-turn") return null;
+		if (original?.kind !== "submit-turn" && original?.kind !== "native-command")
+			return null;
 		return {
 			hostSessionRef,
 			scope: original.keyScopeV4 ? structuredClone(original.keyScopeV4) : null,
@@ -628,7 +630,11 @@ export class FileRuntimeStore {
 					{
 						...claims,
 						schemaVersion: 2,
-						allowedCommands: ["turn.submit"],
+						allowedCommands: [
+							"capabilityId" in input.request.originalRequest
+								? "native-capability.invoke"
+								: "turn.submit",
+						],
 					},
 					"prepare",
 					typeof input.now === "function"
@@ -819,7 +825,8 @@ export class FileRuntimeStore {
 			!authority ||
 			authority.workerId !== claims.workerId ||
 			!operation ||
-			operation.kind !== "submit-turn" ||
+			(operation.kind !== "submit-turn" &&
+				operation.kind !== "native-command") ||
 			operation.turnId !== request.turnId ||
 			operation.requestDigest !== request.originalOperationDigest ||
 			operation.state !== "resolved" ||
@@ -1382,7 +1389,8 @@ export class FileRuntimeStore {
 			const operation = session.operations[claims.executionId];
 			if (
 				operation &&
-				(operation.kind !== "submit-turn" ||
+				((operation.kind !== "submit-turn" &&
+					operation.kind !== "native-command") ||
 					operation.turnId !== claims.turnId ||
 					operation.requestDigest !== originalOperationDigest)
 			)
@@ -1611,7 +1619,8 @@ export class FileRuntimeStore {
 			session.nativeSessionRef !== nativeSessionRef ||
 			session.executionAuthorities?.[claims.executionId]?.evidenceQuery
 				?.requestId !== requestId ||
-			original?.kind !== "submit-turn" ||
+			(original?.kind !== "submit-turn" &&
+				original?.kind !== "native-command") ||
 			original.turnId !== claims.turnId ||
 			original.requestDigest !== originalOperationDigest ||
 			original.command.executionId !== claims.executionId ||
@@ -1893,7 +1902,9 @@ export class FileRuntimeStore {
 		const now = readNow();
 		const candidates = Object.values(state.sessions).filter(
 			(entry) =>
-				entry.operations[action.runtimeOperationId]?.kind === "submit-turn" &&
+				(entry.operations[action.runtimeOperationId]?.kind === "submit-turn" ||
+					entry.operations[action.runtimeOperationId]?.kind ===
+						"native-command") &&
 				entry.operations[action.runtimeOperationId]?.executionId ===
 					action.executionId &&
 				(action.nativeSessionRef === undefined ||

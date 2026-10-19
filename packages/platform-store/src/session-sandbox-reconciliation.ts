@@ -31,6 +31,7 @@ import {
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import type postgres from "postgres";
+import { agentManagementStateJsonSql } from "./agent-management-state-sql.js";
 import {
 	readCurrentTaskApiUseGrantV1,
 	readCurrentTaskApplicationV1,
@@ -81,18 +82,8 @@ async function lockedContext(
 	const [managementRow] = await transaction<
 		{ management: AgentManagementStateV1 }[]
 	>`
-		select jsonb_build_object(
-			'schemaVersion', 1, 'applicationId', a.id, 'agentId', a.agent_id,
-			'applicantId', a.applicant_id, 'status', a.status, 'revision', a.management_revision,
-			'approvalRevision', a.approval_revision, 'decisionReason', a.decision_reason,
-			'serviceAvailability', a.service_availability, 'desiredState', a.desired_state,
-			'workloadRevision', a.workload_revision, 'fence', a.fence, 'failureCode', a.failure_code,
-			'ownerIds', (select coalesce(jsonb_agg(owner_id order by owner_id), '[]'::jsonb) from platform.agent_owners where agent_id = a.agent_id),
-			'availability', (select coalesce(jsonb_agg(case when target_type = 'user'
-				then jsonb_build_object('kind', 'user', 'userId', target_id)
-				else jsonb_build_object('kind', 'organization', 'organizationId', target_id) end order by target_type, target_id), '[]'::jsonb)
-				from platform.agent_availability where agent_id = a.agent_id)
-		) as management from platform.agent_applications a where a.agent_id = ${hint.agent_id}`;
+		select ${transaction.unsafe(agentManagementStateJsonSql("a"))} as management
+		from platform.agent_applications a where a.agent_id = ${hint.agent_id}`;
 	const management = managementRow?.management;
 	const outbox = await lockOutbox(transaction, itemId);
 	if (
