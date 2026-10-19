@@ -2988,6 +2988,43 @@ function isScopedAuditOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #2909 发布带显示名的审计 V2 入口与投影；V1 路径、V1 schema 与其余契约逐字节不变。
+// 新增内容（经比较前的统一归一化后）用写死的 SHA-256 固定，任何改动都会使门禁失败。
+function isScopedAuditDisplayNameV2OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/audit",
+		"/api/v2/audit/{auditId}",
+		"/api/v4/admin/audit",
+		"/api/v4/admin/audit/{auditId}",
+	];
+	const schemas = [
+		"ScopedPlatformAuditProjectionV2",
+		"ScopedPlatformAuditPageV2",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"80d060a8084126b72578212f6045af70ac0990d56c85b853ede4545d7cf291e2"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 // #481 documents the actual scoped audit cookie/Bearer entry points only.
 function isScopedAuditCredentialSecurityAddition(previous, current) {
 	const paths = [
@@ -4849,6 +4886,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isWecomQrAuthorizationOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
+			!isScopedAuditDisplayNameV2OpenApiAddition(previous, current) &&
 			!isSkillHubAuditActionOpenApiAddition(previous, current) &&
 			!isConnectionInstallationOpenApiAddition(previous, current) &&
 			!isPlatformUserDisableOpenApiAddition(previous, current) &&

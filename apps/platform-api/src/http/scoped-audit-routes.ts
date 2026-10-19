@@ -1,6 +1,8 @@
 import {
 	ScopedPlatformAuditPageV1Schema,
+	ScopedPlatformAuditPageV2Schema,
 	ScopedPlatformAuditProjectionV1Schema,
+	ScopedPlatformAuditProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import {
 	type ApiPrincipalV1,
@@ -34,7 +36,11 @@ export interface ScopedAuditRoutesDependencies {
 	readonly observability?: AuditTelemetry;
 	readonly audit: Pick<
 		PostgresScopedPlatformAuditQueryV1,
-		"listAudit" | "getAudit" | "recordDeniedQuery"
+		| "listAudit"
+		| "getAudit"
+		| "listAuditWithDisplayNames"
+		| "getAuditWithDisplayNames"
+		| "recordDeniedQuery"
 	>;
 }
 
@@ -204,6 +210,9 @@ function protocolError(error: unknown, traceId: string): never {
 type StoredAudit = Awaited<
 	ReturnType<PostgresScopedPlatformAuditQueryV1["getAudit"]>
 >;
+type StoredNamedAudit = Awaited<
+	ReturnType<PostgresScopedPlatformAuditQueryV1["getAuditWithDisplayNames"]>
+>;
 
 function publicRecord(record: StoredAudit) {
 	return ScopedPlatformAuditProjectionV1Schema.parse({
@@ -212,13 +221,33 @@ function publicRecord(record: StoredAudit) {
 	});
 }
 
+/** #2909：显示名挂在对应引用上；V2 parse 拒绝放错位置的名称，失败按 503 处理。 */
+function publicNamedRecord({ displayNames, ...record }: StoredNamedAudit) {
+	return ScopedPlatformAuditProjectionV2Schema.parse({
+		...record,
+		schemaVersion: 2,
+		occurredAt: record.occurredAt.toISOString(),
+		actor: { ...record.actor, displayName: displayNames.actor },
+		subject: { ...record.subject, displayName: displayNames.subject },
+		originalPrincipal: record.originalPrincipal
+			? {
+					...record.originalPrincipal,
+					displayName: displayNames.originalPrincipal,
+				}
+			: null,
+		agentDisplayName: displayNames.agent,
+	});
+}
+
 export function registerScopedAuditRoutes(
 	app: Hono,
 	dependencies: ScopedAuditRoutesDependencies,
 ) {
-	for (const [path, administrator] of [
-		["/api/v1/audit", false],
-		["/api/v3/admin/audit", true],
+	for (const [path, administrator, version] of [
+		["/api/v1/audit", false, 1],
+		["/api/v3/admin/audit", true, 1],
+		["/api/v2/audit", false, 2],
+		["/api/v4/admin/audit", true, 2],
 	] as const) {
 		app.get(path, async (context) => {
 			const request = context.req.raw;
@@ -231,6 +260,25 @@ export function registerScopedAuditRoutes(
 					"list",
 					metadata,
 				);
+				if (version === 2) {
+					const page = await observeAuditQuery({
+						telemetry: dependencies.observability,
+						operation: "list",
+						metadata,
+						work: () =>
+							dependencies.audit.listAuditWithDisplayNames(
+								scope,
+								queryInput(request),
+								metadata,
+							),
+					});
+					return context.json(
+						ScopedPlatformAuditPageV2Schema.parse({
+							items: page.items.map(publicNamedRecord),
+							nextCursor: page.nextCursor,
+						}),
+					);
+				}
 				const page = await observeAuditQuery({
 					telemetry: dependencies.observability,
 					operation: "list",
@@ -259,6 +307,21 @@ export function registerScopedAuditRoutes(
 					"detail",
 					metadata,
 				);
+				if (version === 2) {
+					const item = await observeAuditQuery({
+						telemetry: dependencies.observability,
+						operation: "detail",
+						metadata,
+						work: () =>
+							dependencies.audit.getAuditWithDisplayNames(
+								scope,
+								context.req.param("auditId"),
+								queryInput(request, 1),
+								metadata,
+							),
+					});
+					return context.json(publicNamedRecord(item));
+				}
 				const item = await observeAuditQuery({
 					telemetry: dependencies.observability,
 					operation: "detail",

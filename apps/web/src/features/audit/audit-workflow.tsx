@@ -25,7 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { Field } from "@/components/ui/field";
-import { shortIdentifier } from "@/components/ui/identifier-text";
+import { IdentifierText } from "@/components/ui/identifier-text";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -51,11 +51,15 @@ import {
 	useDirectoryNames,
 } from "../directory-names.js";
 import {
+	type AuditAgentOption,
+	AuditAgentPicker,
+} from "./audit-agent-picker.js";
+import {
 	auditActionLabels,
+	auditObjectName,
 	auditOutcomeLabel,
 	auditResultLabels,
 	auditResultTone,
-	auditSubjectLabels,
 } from "./audit-labels.js";
 import type { AuditFilters, AuditScope } from "./audit-query.js";
 import {
@@ -94,6 +98,8 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 	const [auditId, setAuditId] = useState<string | null>(null);
 	const [formFailure, setFormFailure] = useState<string | null>(null);
 	const [moreOpen, setMoreOpen] = useState(false);
+	// Agent 按名称选择；提交的仍是所选 Agent 的 ID（AC-2）。
+	const [agentFilter, setAgentFilter] = useState<AuditAgentOption | null>(null);
 	const form = useRef<HTMLFormElement>(null);
 	const detailPanel = useRef<HTMLElement>(null);
 	const detailTrigger = useRef<HTMLButtonElement>(null);
@@ -153,7 +159,10 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 			"result",
 			"executionId",
 		] as const) {
-			const value = String(data.get(name) ?? "").trim();
+			const value =
+				name === "agentId"
+					? (agentFilter?.agentId ?? "")
+					: String(data.get(name) ?? "").trim();
 			if (!value) continue;
 			if (name === "from" || name === "until") {
 				const date = new Date(value);
@@ -188,6 +197,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 	}
 	function reset() {
 		form.current?.reset();
+		setAgentFilter(null);
 		setFormFailure(null);
 		setAuditId(null);
 		setMoreOpen(false);
@@ -321,10 +331,13 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 							</Field>
 						</>
 					)}
-					<Field>
-						<Label htmlFor={fieldId("agentId")}>Agent ID</Label>
-						<Input id={fieldId("agentId")} name="agentId" maxLength={128} />
-					</Field>
+					<AuditAgentPicker
+						id={fieldId("agentId")}
+						label="Agent"
+						scope={scope}
+						value={agentFilter}
+						onChange={setAgentFilter}
+					/>
 					<Field>
 						<Label htmlFor={fieldId("executionId")}>Execution ID</Label>
 						<Input
@@ -431,19 +444,20 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 											<small>{record.summary}</small>
 										</TableCell>
 										<TableCell data-label="对象">
-											{auditSubjectLabels[record.subject.kind]}
-											{/* 对象 ID 只以等宽短形式出现，完整值在详情。 */}
-											<small
-												className="audit-identifier"
-												title={record.subject.subjectId}
-											>
-												{shortIdentifier(record.subject.subjectId)}
+											{auditObjectName(record)}
+											{/* 对象 ID 以 IdentifierText 等宽短形式出现，完整值在 title 与详情中。 */}
+											<small className="audit-identifier">
+												<IdentifierText
+													value={record.subject.subjectId}
+													label="对象 ID"
+												/>
 											</small>
 										</TableCell>
 										<TableCell data-label="主体">
 											<AuditPrincipalName
 												kind={record.actor.kind}
 												id={record.actor.actorId}
+												displayName={record.actor.displayName}
 												names={userNames}
 											/>
 											{record.originalPrincipal && (
@@ -452,6 +466,7 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 													<AuditPrincipalName
 														kind={record.originalPrincipal.kind}
 														id={record.originalPrincipal.id}
+														displayName={record.originalPrincipal.displayName}
 														names={userNames}
 													/>
 												</small>

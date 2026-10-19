@@ -688,9 +688,12 @@
 	justify-content: space-between;
 	gap: 8px;
 }
-/* 对象 ID 短形式：设计 small.mono（11px 等宽）。 */
+/* 对象 ID 短形式：设计 small.mono（11px 等宽），IdentifierText 不再缩小字号。 */
 .audit-table small.audit-identifier {
 	font-family: var(--font-mono);
+}
+.audit-table small.audit-identifier [data-slot="identifier-text"] code {
+	font-size: inherit;
 }
 .audit-table [data-slot="table-head"]:last-child {
 	width: 120px;

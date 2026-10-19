@@ -164,6 +164,9 @@ export {
 export { PostgresRelayKeyVersionStoreV1 } from "./relay-key-versions.ts";
 export {
 	PostgresScopedPlatformAuditQueryV1,
+	type ScopedPlatformAuditDisplayNamesV1,
+	type ScopedPlatformAuditNamedPageV1,
+	type ScopedPlatformAuditNamedProjectionV1,
 	type ScopedPlatformAuditPageV1,
 	type ScopedPlatformAuditProjectionV1,
 	type ScopedPlatformAuditRequestMetadataV1,

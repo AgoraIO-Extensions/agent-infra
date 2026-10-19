@@ -1,8 +1,10 @@
 import {
+	AgentProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
-	ScopedPlatformAuditPageV1Schema,
-	ScopedPlatformAuditProjectionV1Schema,
+	ScopedPlatformAuditPageV2Schema,
+	ScopedPlatformAuditProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
+import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, test } from "@playwright/test";
 import { captureDesignContract, designViewports } from "./design-contract";
 import {
@@ -22,13 +24,22 @@ const session = (role: "employee" | "admin") => ({
 	},
 });
 
-function record(auditId: string, userId = "audit-user-a") {
-	return ScopedPlatformAuditProjectionV1Schema.parse({
-		schemaVersion: 1,
+// #2909：页面读取 V2 投影；名称由服务端按查询方当前权限返回，null 表示只给类型与 ID。
+function record(
+	auditId: string,
+	userId = "audit-user-a",
+	agentName: string | null = null,
+) {
+	return ScopedPlatformAuditProjectionV2Schema.parse({
+		schemaVersion: 2,
 		auditId,
 		action: "task.api.access",
-		actor: { kind: "user", actorId: userId },
-		subject: { kind: "agent", subjectId: `agent-${auditId}` },
+		actor: { kind: "user", actorId: userId, displayName: null },
+		subject: {
+			kind: "agent",
+			subjectId: `agent-${auditId}`,
+			displayName: agentName,
+		},
 		result: "accepted",
 		summary: `任务 API 访问获准 ${auditId}`,
 		taskApi: {
@@ -46,15 +57,17 @@ function record(auditId: string, userId = "audit-user-a") {
 		originalPrincipal: null,
 		executor: null,
 		operation: null,
+		agentDisplayName: agentName,
 	});
 }
 
-const governance = ScopedPlatformAuditProjectionV1Schema.parse({
+const governance = ScopedPlatformAuditProjectionV2Schema.parse({
 	...record("audit-a"),
 	action: "agent.application.submitted",
 	subject: {
 		kind: "agent_application",
 		subjectId: `application-${"safe".repeat(18)}`,
+		displayName: "数据助手",
 	},
 	result: "accepted",
 	summary: "申请已受理；治理元数据只含受控对象与结果，不包含对话正文。".repeat(
@@ -66,32 +79,82 @@ const governance = ScopedPlatformAuditProjectionV1Schema.parse({
 	originalPrincipal: null,
 });
 const backgroundExecutionId = `execution-backend-${"safe".repeat(18)}`;
-const background = ScopedPlatformAuditProjectionV1Schema.parse({
+const background = ScopedPlatformAuditProjectionV2Schema.parse({
 	...record("audit-b"),
 	action: "task.status.changed",
-	actor: { kind: "system", actorId: "platform_worker" },
+	actor: { kind: "system", actorId: "platform_worker", displayName: null },
 	subject: {
 		kind: "execution",
 		subjectId: backgroundExecutionId,
+		displayName: null,
 	},
 	result: "unknown",
 	summary: "后台执行结果待核实；不能把请求受理或启动当作执行成功。".repeat(3),
 	taskApi: null,
 	agentId: "agent-a",
+	agentDisplayName: "编程助手",
 	executionId: backgroundExecutionId,
 	authorizationRecordId: "authorization-background-a",
-	originalPrincipal: { kind: "user", id: "audit-user-a" },
+	originalPrincipal: { kind: "user", id: "audit-user-a", displayName: null },
 	executor: "platform_worker",
 });
+const applicationActorId = `application-ops-${"safe".repeat(6)}`;
+const applicationStop = ScopedPlatformAuditProjectionV2Schema.parse({
+	...record("audit-c"),
+	action: "agent.lifecycle.stopped",
+	actor: {
+		kind: "application",
+		actorId: applicationActorId,
+		displayName: "运维机器人",
+	},
+	subject: { kind: "agent", subjectId: "agent-a", displayName: "编程助手" },
+	result: "succeeded",
+	summary: "应用停止 Agent，名称按管理员当前权限返回。",
+	taskApi: null,
+	agentId: "agent-a",
+	agentDisplayName: "编程助手",
+});
+// 名称不可确认（无权、不存在或无法确认）时，投影只给类型与 ID。
+const unnamedAgentId = `agent-unnamed-${"safe".repeat(6)}`;
+const unnamedApplication = ScopedPlatformAuditProjectionV2Schema.parse({
+	...record("audit-d"),
+	action: "agent.lifecycle.stopped",
+	actor: {
+		kind: "application",
+		actorId: `application-unnamed-${"safe".repeat(6)}`,
+		displayName: null,
+	},
+	subject: { kind: "agent", subjectId: unnamedAgentId, displayName: null },
+	result: "succeeded",
+	summary: "名称不可确认时只显示类型与 ID 短形式。",
+	taskApi: null,
+	agentId: unnamedAgentId,
+	agentDisplayName: null,
+});
+const agentBaseline = AgentProjectionV2Schema.parse(
+	pilotFakeScenariosV2.starting.response.body,
+);
+// Agent 筛选的候选只来自服务端已授权的 Agent 列表。
+const agentCandidates = {
+	employee: [
+		["agent-audit-a", "编程助手"],
+		["agent-audit-b", "写作助手"],
+	],
+	admin: [
+		["agent-a", "编程助手"],
+		["agent-b", "数据助手"],
+	],
+} as const;
 
 async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 	let failNext = false;
 	let emptyNext = false;
 	let holdDetail = false;
 	let roles = session(role).user.roles;
-	const ownRecords = ["audit-a", "audit-b"].map((id) =>
-		record(id, session(role).user.userId),
-	);
+	const ownRecords = [
+		record("audit-a", session(role).user.userId, "编程助手"),
+		record("audit-b", session(role).user.userId),
+	];
 	const requests: { method: string; path: string; search: string }[] = [];
 	const held: string[] = [];
 	let releaseDetail = () => {};
@@ -125,6 +188,20 @@ async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 			},
 		});
 	});
+	await page.route(/\/api\/v2\/(admin\/)?agents(?:\?.*)?$/, (route) => {
+		const admin = new URL(route.request().url()).pathname.startsWith(
+			"/api/v2/admin/",
+		);
+		return route.fulfill({
+			json: {
+				items: agentCandidates[admin ? "admin" : "employee"].map(
+					([agentId, name]) =>
+						AgentProjectionV2Schema.parse({ ...agentBaseline, agentId, name }),
+				),
+				nextCursor: null,
+			},
+		});
+	});
 	await page.route(/\/api\/v1\/session$/, (route) =>
 		route.fulfill({
 			status: 200,
@@ -132,12 +209,12 @@ async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 		}),
 	);
 	await page.route(
-		/\/api\/(v1\/audit|v3\/admin\/audit)(\/.*)?(?:\?.*)?$/,
+		/\/api\/(v2\/audit|v4\/admin\/audit)(\/.*)?(?:\?.*)?$/,
 		async (route) => {
 			const request = route.request();
 			const url = new URL(request.url());
-			const records = url.pathname.startsWith("/api/v3/admin/audit")
-				? [governance, background]
+			const records = url.pathname.startsWith("/api/v4/admin/audit")
+				? [governance, background, applicationStop, unnamedApplication]
 				: ownRecords;
 			if (failNext) {
 				failNext = false;
@@ -188,14 +265,17 @@ async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 						item.occurredAt < (url.searchParams.get("until") ?? ""))
 				);
 			});
-			const index = url.searchParams.has("cursor") ? 1 : 0;
+			// 每页 1 条，cursor 记下一页的序号。
+			const index = Number(
+				url.searchParams.get("cursor")?.replace("cursor-", "") ?? 0,
+			);
 			await route.fulfill({
 				status: 200,
-				json: ScopedPlatformAuditPageV1Schema.parse({
+				json: ScopedPlatformAuditPageV2Schema.parse({
 					items: emptyNext ? [] : filtered.slice(index, index + 1),
 					nextCursor:
-						!emptyNext && index === 0 && filtered.length > 1
-							? "cursor-next"
+						!emptyNext && index + 1 < filtered.length
+							? `cursor-${index + 1}`
 							: null,
 				}),
 			});
@@ -230,8 +310,13 @@ test("own audit page filters, paginates, opens detail, and fits mobile", async (
 		.selectOption("task.api.access");
 	await page.getByRole("button", { name: "查询", exact: true }).click();
 	await expect(page.getByText("访问获准", { exact: true })).toBeVisible();
+	// #2909：有权查看的 Agent 显示名称，ID 以 IdentifierText 短形式附在下方。
+	await expect(
+		page.locator('.audit-table [data-label="对象"]').first(),
+	).toHaveText("编程助手agent-au…");
 	await page.getByRole("button", { name: "下一页", exact: true }).click();
-	// F-03：列表只给对象 ID 的等宽短形式（完整值在 title 与详情中），不再列出 Agent / Execution 原值。
+	// F-03：列表只给对象 ID 的等宽短形式（完整值在 title 与详情中），不再列出 Agent / Execution 原值；
+	// 没有名称的对象只显示类型。
 	const objectId = page
 		.locator(".audit-table")
 		.getByText("agent-au…", { exact: true });
@@ -283,6 +368,10 @@ for (const compact of [false, true]) {
 		const row = page.getByRole("row").filter({ hasText: governance.summary });
 		await expect(row).toContainText("applicat…");
 		await expect(row).not.toContainText(governance.subject.subjectId);
+		// #2909：创建申请对象显示服务端返回的申请名称。
+		await expect(row.locator('[data-label="对象"]')).toHaveText(
+			"数据助手applicat…",
+		);
 		// 时间位于 <time dateTime title> 中，按本地时区显示，不出现 ISO 原文或秒。
 		const occurred = row.locator(`time[datetime="${governance.occurredAt}"]`);
 		await expect(occurred).toHaveAttribute(
@@ -347,6 +436,10 @@ for (const compact of [false, true]) {
 			.filter({ hasText: background.summary });
 		await expect(worker).toContainText("executio…");
 		await expect(worker).not.toContainText(background.subject.subjectId);
+		// #2909：Execution 对象附上可见的所属 Agent 名称。
+		await expect(worker.locator('[data-label="对象"]')).toHaveText(
+			"编程助手 · Executionexecutio…",
+		);
 		// 主体格：后台组件为类型中文名 + ID 短形式；原发起主体显示目录姓名（PRD §13.1）。
 		const principal = worker.locator('[data-label="主体"]');
 		await expect(principal).toContainText("后台组件 platform…");
@@ -363,6 +456,9 @@ for (const compact of [false, true]) {
 			"font-family",
 			/^ui-monospace/,
 		);
+		await expect(
+			dialog.locator("dt", { hasText: "Agent 名称" }).locator("+ dd"),
+		).toHaveText("编程助手");
 		await expect(dialog).not.toContainText("动作代码");
 		await expect(dialog).not.toContainText("task.status.changed");
 		await expect(dialog).toContainText("实际后台组件");
@@ -400,7 +496,15 @@ for (const compact of [false, true]) {
 		await page.getByLabel("结束时间", { exact: true }).fill("2026-09-29T00:00");
 		await page.getByLabel("主体类型", { exact: true }).selectOption("user");
 		await page.getByLabel("主体 ID", { exact: true }).fill("audit-user-a");
-		await page.getByLabel("Agent ID", { exact: true }).fill("agent-a");
+		// AC-2：Agent 按名称选择，请求里仍是 Agent ID。
+		await page.getByRole("combobox", { name: "Agent", exact: true }).click();
+		await page
+			.getByRole("listbox", { name: "Agent搜索结果" })
+			.getByRole("option", { name: /编程助手/ })
+			.click();
+		await expect(
+			page.getByRole("button", { name: "移除 编程助手", exact: true }),
+		).toBeVisible();
 		await page
 			.getByLabel("动作", { exact: true })
 			.selectOption("task.status.changed");
@@ -411,7 +515,7 @@ for (const compact of [false, true]) {
 		const filteredRequest = page.waitForRequest((request) => {
 			const url = new URL(request.url());
 			return (
-				url.pathname === "/api/v3/admin/audit" &&
+				url.pathname === "/api/v4/admin/audit" &&
 				url.searchParams.get("executionId") === backgroundExecutionId
 			);
 		});
@@ -479,7 +583,7 @@ test("employee direct administrator audit route neither requests nor displays ad
 	);
 	expect(
 		api.requests.filter((request) =>
-			request.path.startsWith("/api/v3/admin/audit"),
+			/^\/api\/(v3|v4)\/admin\/(audit|agents)/.test(request.path),
 		),
 	).toEqual([]);
 });
@@ -527,7 +631,7 @@ test("same-user administrator role revocation clears list and detail despite a l
 		window.controlledAuditTransport = { aborted: 0, completed: 0 };
 		window.fetch = (input, init) => {
 			const request = new Request(input, init);
-			if (!new URL(request.url).pathname.startsWith("/api/v3/admin/audit/"))
+			if (!new URL(request.url).pathname.startsWith("/api/v4/admin/audit/"))
 				return originalFetch(input, init);
 			request.signal.addEventListener(
 				"abort",
@@ -665,11 +769,27 @@ for (const administrator of [false, true]) {
 				page,
 				page.locator("label", { hasText: "起始时间" }),
 			);
-			// Agent ID 按 F-03 收进「更多筛选」：由用户展开后再核对输入框样式。
+			// 「更多筛选」中的字段由用户展开后再核对输入框样式；Agent 筛选是名称选择器（#2909），
+			// 控件外框与其他字段同高同圆角。
 			const more = page.getByRole("button", { name: /^更多筛选/ });
 			if ((await more.getAttribute("aria-expanded")) === "false")
 				await more.click();
-			await expectFieldControl(page, page.getByLabel("Agent ID"));
+			await expectFieldControl(
+				page,
+				page.getByLabel("Execution ID", { exact: true }),
+			);
+			const agentControl = page
+				.locator(".directory-field")
+				.filter({
+					has: page.getByRole("combobox", { name: "Agent", exact: true }),
+				})
+				.locator(".directory-control");
+			expect(
+				await agentControl.evaluate((element) => [
+					element.getBoundingClientRect().height,
+					getComputedStyle(element).borderTopLeftRadius,
+				]),
+			).toEqual([44, "10px"]);
 			await expectDesktopTable(page, table);
 		}
 		for (const viewport of [
@@ -724,10 +844,16 @@ for (const administrator of [false, true]) {
 			"结果",
 			"结束时间",
 			...(administrator ? ["主体类型", "主体 ID"] : []),
-			"Agent ID",
+			"Agent",
 			"Execution ID",
 		]);
-		await form.getByLabel("Agent ID", { exact: true }).fill("agent-a");
+		const agentName = administrator ? "数据助手" : "写作助手";
+		const agentId = administrator ? "agent-b" : "agent-audit-b";
+		await form.getByRole("combobox", { name: "Agent", exact: true }).click();
+		await page
+			.getByRole("listbox", { name: "Agent搜索结果" })
+			.getByRole("option", { name: new RegExp(agentName) })
+			.click();
 		await form.getByLabel("Execution ID", { exact: true }).fill("execution-a");
 		const filtered = page.waitForRequest((request) => {
 			const url = new URL(request.url());
@@ -735,7 +861,7 @@ for (const administrator of [false, true]) {
 		});
 		await form.getByRole("button", { name: "查询", exact: true }).click();
 		const url = new URL((await filtered).url());
-		expect(url.searchParams.get("agentId")).toBe("agent-a");
+		expect(url.searchParams.get("agentId")).toBe(agentId);
 		await expect(more).toHaveText("更多筛选（2）");
 		await expect(more).toHaveAttribute("aria-expanded", "true");
 		if (administrator) {
@@ -757,8 +883,14 @@ for (const administrator of [false, true]) {
 		await expect(more).toHaveText("更多筛选");
 		await expect(more).toHaveAttribute("aria-expanded", "false");
 		await more.click();
-		for (const label of ["Agent ID", "Execution ID", "结束时间"])
+		for (const label of ["Execution ID", "结束时间"])
 			await expect(form.getByLabel(label, { exact: true })).toHaveValue("");
+		await expect(
+			form.getByRole("button", { name: `移除 ${agentName}`, exact: true }),
+		).toHaveCount(0);
+		await expect(
+			form.getByRole("combobox", { name: "Agent", exact: true }),
+		).toHaveValue("");
 	});
 }
 
@@ -888,3 +1020,116 @@ test("audit list cells, detail facts and refresh icons follow the exported desig
 		role: null,
 	});
 });
+
+test("platform audit shows only server-permitted names and keeps IDs as IdentifierText (#2909)", async ({
+	page,
+}) => {
+	const api = await fixture(page, "admin");
+	await page.goto("/admin/audit");
+	const objectCell = page.locator('.audit-table [data-label="对象"]');
+	const principalCell = page.locator('.audit-table [data-label="主体"]');
+	const detail = page.getByRole("region", { name: "审计详情", exact: true });
+	const fact = (label: string) =>
+		detail.locator("dt", { hasText: label }).locator("+ dd");
+	await expect(objectCell).toHaveText("数据助手applicat…");
+	// AC-1：ID 用 IdentifierText 截断，完整值在 title 与记录详情中展开。
+	const identifier = objectCell.locator('[data-slot="identifier-text"] code');
+	await expect(identifier).toHaveText("applicat…");
+	await expect(identifier).toHaveAttribute(
+		"title",
+		governance.subject.subjectId,
+	);
+	const next = page.getByRole("button", { name: "下一页", exact: true });
+	await next.click();
+	await expect(objectCell).toHaveText("编程助手 · Executionexecutio…");
+	await next.click();
+	await expect(objectCell).toHaveText("编程助手agent-a");
+	await expect(principalCell).toHaveText("应用 · 运维机器人");
+	await expect(principalCell.locator("[title]")).toHaveAttribute(
+		"title",
+		applicationActorId,
+	);
+	await page.getByRole("button", { name: /^详情：/ }).click();
+	await expect(fact("对象名称")).toHaveText("编程助手");
+	await expect(fact("对象 ID")).toHaveText("agent-a");
+	await expect(fact("可信操作主体")).toHaveText(
+		`应用 · 运维机器人${applicationActorId}`,
+	);
+	await page.keyboard.press("Escape");
+	// AC-3：名称不可确认时只显示类型与 ID 短形式，也不说明原因。
+	await next.click();
+	await expect(objectCell).toHaveText("Agentagent-un…");
+	await expect(principalCell).toHaveText("应用 applicat…");
+	await page.getByRole("button", { name: /^详情：/ }).click();
+	await expect(fact("对象名称")).toHaveText("未提供");
+	await expect(fact("Agent 名称")).toHaveText("未提供");
+	await expect(fact("对象 ID")).toHaveText(unnamedAgentId);
+	// 页面只读 V2 入口，不回退到 V1 / V3。
+	expect(
+		api.requests.filter((request) =>
+			/^\/api\/(v1\/audit|v3\/admin\/audit)/.test(request.path),
+		),
+	).toEqual([]);
+	expect(api.requests.filter((request) => request.method !== "GET")).toEqual(
+		[],
+	);
+});
+
+for (const administrator of [false, true]) {
+	test(`${administrator ? "platform" : "personal"} audit Agent filter selects by name and still submits the Agent ID (#2909)`, async ({
+		page,
+	}) => {
+		const api = await fixture(page, administrator ? "admin" : "employee");
+		await page.goto(administrator ? "/admin/audit" : "/audit");
+		await expect(page.locator("table.audit-table")).toBeVisible();
+		const listPath = administrator ? "/api/v2/admin/agents" : "/api/v2/agents";
+		// 候选在展开选择器时才读取。
+		expect(api.requests.filter((request) => request.path === listPath)).toEqual(
+			[],
+		);
+		await page.getByRole("button", { name: /^更多筛选/ }).click();
+		const picker = page.getByRole("combobox", { name: "Agent", exact: true });
+		const results = page.getByRole("listbox", { name: "Agent搜索结果" });
+		await picker.click();
+		await expect(results).toBeVisible();
+		expect(
+			api.requests.filter((request) => request.path === listPath).length,
+		).toBeGreaterThan(0);
+		await expect(results.getByRole("option")).toHaveCount(2);
+		await picker.fill("编程");
+		await expect(results.getByRole("option")).toHaveCount(1);
+		await expect(picker).toHaveAttribute(
+			"aria-activedescendant",
+			/agent-(audit-)?a$/,
+		);
+		await picker.press("Enter");
+		await expect(results).toBeHidden();
+		const chip = page.getByRole("button", {
+			name: "移除 编程助手",
+			exact: true,
+		});
+		await expect(chip).toBeVisible();
+		const auditPath = administrator ? "/api/v4/admin/audit" : "/api/v2/audit";
+		const filtered = page.waitForRequest((request) => {
+			const url = new URL(request.url());
+			return url.pathname === auditPath && url.searchParams.has("agentId");
+		});
+		await page.getByRole("button", { name: "查询", exact: true }).click();
+		const url = new URL((await filtered).url());
+		expect(url.searchParams.get("agentId")).toBe(
+			administrator ? "agent-a" : "agent-audit-a",
+		);
+		expect([...url.searchParams.values()]).not.toContain("编程助手");
+		await expect(
+			page.getByRole("button", { name: "更多筛选（1）", exact: true }),
+		).toBeVisible();
+		// Esc 只收起结果层，不清除已选 Agent。
+		await picker.click();
+		await expect(results).toBeVisible();
+		await picker.press("Escape");
+		await expect(results).toBeHidden();
+		await expect(chip).toBeVisible();
+		await chip.click();
+		await expect(chip).toHaveCount(0);
+	});
+}

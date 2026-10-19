@@ -480,6 +480,83 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the pinned audit display-name V2 entries (#2909)", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const paths = [
+			"/api/v2/audit",
+			"/api/v2/audit/{auditId}",
+			"/api/v4/admin/audit",
+			"/api/v4/admin/audit/{auditId}",
+		];
+		const previous = structuredClone(current);
+		for (const path of paths) delete previous.paths[path];
+		delete previous.components.schemas.ScopedPlatformAuditProjectionV2;
+		delete previous.components.schemas.ScopedPlatformAuditPageV2;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "audit-display-name-v2-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				// 管理员入口只接受平台会话，不能改成 Bearer 或匿名。
+				(value: typeof current) => {
+					value.paths["/api/v4/admin/audit"].get.security = [
+						{ PlatformSession: [] },
+						{ platformApiCredential: [] },
+					];
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/audit/{auditId}"].get.security = [];
+				},
+				// V2 投影保持 strict，不能带出凭证、正文或任意字段。
+				(value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV2.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV2.properties.credential =
+						{ type: "string" };
+				},
+				(value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV2.properties.actor.additionalProperties = true;
+				},
+				// 名称有上限。
+				(value: typeof current) => {
+					delete value.components.schemas.ScopedPlatformAuditProjectionV2
+						.properties.agentDisplayName.anyOf[0].maxLength;
+				},
+				// 已发布的 V1 投影与入口保持不变。
+				(value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV1.properties.agentDisplayName =
+						{ type: "string" };
+				},
+				(value: typeof current) => {
+					value.paths["/api/v1/audit"].get.responses["200"].content[
+						"application/json"
+					].schema = {
+						$ref: "#/components/schemas/ScopedPlatformAuditPageV2",
+					};
+				},
+				(value: typeof current) => {
+					value.paths["/api/v5/admin/audit"] = structuredClone(
+						value.paths["/api/v4/admin/audit"],
+					);
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the pinned Skill Hub review queue read (#2905)", async () => {
 		const current = JSON.parse(
 			await readFile(

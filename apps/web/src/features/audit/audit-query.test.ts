@@ -50,7 +50,8 @@ describe("Scoped audit browser transport", () => {
 			expect(
 				(await loadAuditDetail({ ...input, auditId: "audit-a" })).auditId,
 			).toBe("audit-a");
-			const base = scope === "own" ? "/api/v1/audit" : "/api/v3/admin/audit";
+			// #2909：页面读取带显示名的 V2 入口；V1 入口仍为既有 strict reader 保留。
+			const base = scope === "own" ? "/api/v2/audit" : "/api/v4/admin/audit";
 			expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
 				base,
 				`${base}/audit-a`,
@@ -130,6 +131,38 @@ describe("Scoped audit browser transport", () => {
 			});
 		},
 	);
+
+	it("rejects a V1 record or a misplaced display name from the V2 entry (#2909)", async () => {
+		const {
+			schemaVersion: _version,
+			agentDisplayName: _name,
+			...rest
+		} = auditRecord();
+		for (const record of [
+			{
+				...rest,
+				schemaVersion: 1,
+				actor: { kind: "user", actorId: "user-a" },
+				subject: { kind: "agent", subjectId: "agent-a" },
+				originalPrincipal: { kind: "user", id: "user-a" },
+			},
+			{
+				...auditRecord(),
+				actor: { kind: "user", actorId: "user-a", displayName: "张三" },
+			},
+		]) {
+			const { transport } = transportFor(() =>
+				Response.json({ items: [record], nextCursor: null }),
+			);
+			await expect(
+				loadAuditPage({
+					scope: "own",
+					transport,
+					signal: new AbortController().signal,
+				}),
+			).rejects.toMatchObject({ failure: { kind: "invalid" } });
+		}
+	});
 
 	it("rejects a late response after cancellation", async () => {
 		const controller = new AbortController();
