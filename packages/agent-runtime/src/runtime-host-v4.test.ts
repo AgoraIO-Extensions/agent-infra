@@ -333,6 +333,30 @@ async function event(
 	};
 }
 
+it.each(["current", "expiry", "close"] as const)(
+	"returns a keyless tool guard without a Connection consumer: %s",
+	async (change) => {
+		const f = await setup();
+		const accepted = await f.host.submitTurnV4(f.transport);
+		const native = f.store.nativeSessionRef(accepted.hostSessionRef);
+		if (!native) throw new Error("Missing original native Session");
+		const authorized = await f.host.authorizeExternalAction({
+			...action(native),
+			kind: "tool",
+		});
+		expect(authorized).toEqual({ revalidate: expect.any(Function) });
+		if (!authorized?.revalidate) throw new Error("Missing Host tool guard");
+		expect(authorized.relayKey).toBeUndefined();
+		expect(authorized.revalidate()).toBeUndefined();
+		if (change === "expiry") f.expire();
+		else if (change === "close") await f.host.close();
+		if (change !== "current")
+			expect(authorized.revalidate).toThrowError(
+				expect.objectContaining({ code: "RUNTIME_GRANT_INVALID" }),
+			);
+	},
+);
+
 it("binds the first durable native receipt and returns the original Key before submit resolves", async () => {
 	const f = await setup();
 	const execute = f.driver.execute.bind(f.driver);
