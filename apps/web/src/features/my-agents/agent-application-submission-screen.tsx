@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { useResultFocus } from "@/hooks/use-result-focus";
 
 import type {
@@ -11,6 +11,7 @@ import type {
 } from "../../pilot/generated-v2/types.gen.js";
 import type { AgentDefaultRelayKeyCheck } from "../agent-configuration/agent-configuration.js";
 import { agentManagementStatusLabels } from "../agent-management-status.js";
+import { RecoveryButton } from "../recovery-button.js";
 import { AgentApplicationForm } from "./agent-application-form.js";
 import {
 	type AgentApplicationEditAction,
@@ -139,16 +140,16 @@ export function AgentApplicationSubmissionScreen(
 									: "部署选项暂不可用，请联系管理员。"}
 							</p>
 							{deploymentRetryable && props.onRefreshDeploymentConfiguration ? (
-								<Button
+								<RecoveryButton
 									variant="outline"
-									disabled={props.refreshingDeploymentConfiguration}
+									recoveryKey="重新加载部署选项"
+									busy={props.refreshingDeploymentConfiguration}
 									onClick={props.onRefreshDeploymentConfiguration}
-									type="button"
 								>
 									{props.refreshingDeploymentConfiguration
 										? "正在刷新…"
 										: "重新加载部署选项"}
-								</Button>
+								</RecoveryButton>
 							) : null}
 						</div>
 					) : null}
@@ -195,7 +196,10 @@ export function AgentApplicationSubmissionScreen(
 					) : null}
 					{props.result ? (
 						<div className="card-actions application-submitted-actions">
+							{/* exact：修改申请（/my-agents/$applicationId/edit）提交后，申请详情是当前地址的
+							    前缀，不让 Link 补 aria-current（N-21）。 */}
 							<Link
+								activeOptions={{ exact: true }}
 								className={buttonVariants()}
 								params={{ applicationId: props.result.applicationId }}
 								to="/my-agents/$applicationId"

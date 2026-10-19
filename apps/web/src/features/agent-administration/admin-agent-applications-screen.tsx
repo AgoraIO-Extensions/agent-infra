@@ -55,6 +55,7 @@ import {
 	formatMultiServiceManifestSummary,
 	parseMultiServiceManifest,
 } from "../my-agents/multi-service-manifest.js";
+import { RecoveryButton } from "../recovery-button.js";
 import {
 	type TemplateNameLookup,
 	templateDisplayName,
@@ -597,15 +598,15 @@ export function AdminAgentApplicationsScreen({
 					</AlertDescription>
 					{state.retryable && onRetry ? (
 						<AlertAction>
-							<Button
+							<RecoveryButton
 								variant="outline"
-								disabled={retrying}
+								recoveryKey="重新加载审批"
+								busy={retrying}
 								onClick={onRetry}
-								type="button"
 							>
 								<RefreshCwIcon aria-hidden="true" data-icon="inline-start" />
 								{retrying ? "正在重试…" : "重新加载审批"}
-							</Button>
+							</RecoveryButton>
 						</AlertAction>
 					) : null}
 				</Alert>

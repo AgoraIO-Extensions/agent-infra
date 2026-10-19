@@ -9,7 +9,6 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { armBefore, useRecoveryFocus } from "@/hooks/use-recovery-focus";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import { statusTone } from "@/lib/status-tone";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
@@ -152,9 +151,6 @@ export function AgentDetailScreen({
 	state,
 	templateName,
 }: AgentDetailScreenProps) {
-	// 「重新登录」「重新加载 Agent」恢复成功后，焦点移到详情 h1（Agent 名），不落到 body。
-	const recovery = useRecoveryFocus(state.kind === "ready" ? 0 : 1);
-	const retry = armBefore(recovery.arm, onRetry);
 	if (state.kind === "loading")
 		return (
 			<PageLoadingState title="Agent 详情" message="正在加载 Agent 详情…" />
@@ -167,7 +163,8 @@ export function AgentDetailScreen({
 						<h1 id="agent-detail-heading">Agent 详情</h1>
 					</div>
 				</header>
-				{/* 公共状态卡按 401/403/404/503/响应无效选择（P-01）；403 与 404 文案相同。 */}
+				{/* 公共状态卡按 401/403/404/503/响应无效选择（P-01）；403 与 404 文案相同。
+				    「重新登录」「重新加载 Agent」恢复后焦点落到详情 h1（Agent 名）。 */}
 				<ReadFailureCard
 					failure={state}
 					deniedDescription="Agent 不存在，或你没有访问权限。"
@@ -181,9 +178,9 @@ export function AgentDetailScreen({
 							返回 Agent 目录
 						</Link>
 					}
-					onRetry={retry}
+					onRetry={onRetry}
 					// 401「重新登录」后会话仍有效：重读详情（W-03）。
-					onStillValid={retry}
+					onStillValid={onRetry}
 					retrying={retrying}
 					retryLabel="重新加载 Agent"
 				/>
@@ -230,7 +227,6 @@ export function AgentDetailScreen({
 							</p>
 							<h1
 								id="agent-detail-heading"
-								ref={recovery.ref}
 								tabIndex={-1}
 								className="break-words font-semibold text-[28px]"
 							>

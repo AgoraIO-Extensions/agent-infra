@@ -755,7 +755,11 @@ describe("AdminAgentApplicationsScreen", () => {
 			/>,
 		);
 		const pendingRetry = screen.getByRole("button", { name: "正在重试…" });
-		expect(pendingRetry.getAttribute("disabled")).not.toBeNull();
+		// 重试中保持可聚焦（aria-disabled），不用原生 disabled 把焦点丢到 body。
+		expect(pendingRetry.getAttribute("aria-disabled")).toBe("true");
+		expect(pendingRetry.hasAttribute("disabled")).toBe(false);
+		fireEvent.click(pendingRetry);
+		expect(onRetry).toHaveBeenCalledTimes(1);
 	});
 
 	it("renders a decision error only once while a review dialog is open", async () => {

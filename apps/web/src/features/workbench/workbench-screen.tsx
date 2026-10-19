@@ -8,7 +8,7 @@ import {
 	AlertTitle,
 } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
 	Empty,
@@ -19,7 +19,6 @@ import {
 } from "@/components/ui/empty";
 import { LoadingLine } from "@/components/ui/spinner";
 import { Timestamp } from "@/components/ui/timestamp";
-import { armBefore, useRecoveryFocus } from "@/hooks/use-recovery-focus";
 import { distinctObjectNames, withObjectName } from "@/lib/accessible-name";
 import { cjkSpaced } from "@/lib/cjk-spacing";
 import { statusTone } from "@/lib/status-tone";
@@ -45,6 +44,7 @@ import type {
 } from "../collection-read-failure.js";
 import { conversationDisplayTitle } from "../conversation/conversation-display-title.js";
 import type { MyAgentApplicationsState } from "../my-agents/my-agent-applications.js";
+import { RecoveryButton } from "../recovery-button.js";
 import {
 	type TemplateNameLookup,
 	templateDisplayName,
@@ -154,6 +154,7 @@ function ReadNotice({
 	const denied = state.kind === "denied";
 	const retryable =
 		!denied && state.retryable && state.reason !== "authentication-required";
+	const retryLabel = cjkSpaced`重新加载${label}`;
 	return (
 		// 无权读取是权限边界，不打断读屏；其余读取失败用 role="alert"。
 		<Alert
@@ -163,9 +164,15 @@ function ReadNotice({
 			<AlertTitle>{readFailureMessage(state, label)}</AlertTitle>
 			{retryable && (
 				<AlertAction>
-					<Button variant="outline" onClick={onRetry} disabled={refreshing}>
-						{cjkSpaced`重新加载${label}`}
-					</Button>
+					{/* 恢复成功后焦点落到工作台 h1；重新加载仍失败时焦点留在按钮上。 */}
+					<RecoveryButton
+						variant="outline"
+						recoveryKey={retryLabel}
+						busy={refreshing}
+						onClick={onRetry}
+					>
+						{retryLabel}
+					</RecoveryButton>
 				</AlertAction>
 			)}
 		</Alert>
@@ -339,19 +346,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 		applications,
 		...(administrator ? [pending, adminAgents] : []),
 	];
-	// 页面级「重新登录」或分区「重新加载…」恢复成功后，焦点移到页面 h1，不落到 body。
-	// 401 的「重新登录」一次恢复多个分区，没有唯一的「恢复分区」，因此统一落到页面 h1。
-	const recovery = useRecoveryFocus(
-		sections.filter((section) => section.kind !== "ready").length,
-	);
-	const notice = {
-		onRetry: () => {
-			recovery.arm();
-			onRetry();
-		},
-		refreshing,
-	};
-	const relogin = armBefore(recovery.arm, onRelogin);
+	const notice = { onRetry, refreshing };
 	const loginRequired = sections.some(requiresLogin);
 	const latest =
 		recent.kind === "ready" ? recent.conversations.at(0) : undefined;
@@ -378,9 +373,9 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 			<header className="page-heading">
 				<div>
 					<p className="workbench-eyebrow">公司内部工作区 · M1</p>
-					<h1 ref={recovery.ref} tabIndex={-1}>
-						选择一个 Agent 开始工作。
-					</h1>
+					{/* tabIndex=-1：页面级「重新登录」或分区「重新加载…」恢复后焦点落在这里。401 的
+					    「重新登录」一次恢复多个分区，没有唯一的「恢复分区」，因此统一落到页面 h1。 */}
+					<h1 tabIndex={-1}>选择一个 Agent 开始工作。</h1>
 					<p>最近对话、可用 Agent 和待处理事项都在这里。</p>
 				</div>
 				<Link
@@ -398,11 +393,15 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 					<AlertDescription>
 						当前会话已过期，需要重新登录后再进入工作区。
 					</AlertDescription>
-					{relogin && (
+					{onRelogin && (
 						<AlertAction>
-							<Button onClick={relogin} disabled={refreshing}>
+							<RecoveryButton
+								recoveryKey="重新登录"
+								busy={refreshing}
+								onClick={onRelogin}
+							>
 								重新登录
-							</Button>
+							</RecoveryButton>
 						</AlertAction>
 					)}
 				</Alert>

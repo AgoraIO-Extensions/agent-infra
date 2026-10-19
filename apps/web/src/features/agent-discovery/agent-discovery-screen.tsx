@@ -20,7 +20,6 @@ import {
 } from "@/components/ui/native-select";
 import { SearchInput } from "@/components/ui/search-input";
 import { LoadingLine } from "@/components/ui/spinner";
-import { armBefore, useRecoveryFocus } from "@/hooks/use-recovery-focus";
 import { distinctObjectNames } from "@/lib/accessible-name";
 import { cn } from "@/lib/utils";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
@@ -32,6 +31,7 @@ import {
 } from "../agent-management-status.js";
 import { AgentMark } from "../agent-mark.js";
 import { PageStateCard } from "../page-state-card.js";
+import { RecoveryButton } from "../recovery-button.js";
 import {
 	type TemplateNameLookup,
 	templateDisplayName,
@@ -122,9 +122,13 @@ function DirectoryUnavailable({
 				// 经壳层重读会话；会话仍有效时由目录页重新读取列表（useSessionRecheck）。
 				action={
 					onRelogin ? (
-						<Button type="button" onClick={onRelogin} disabled={retrying}>
+						<RecoveryButton
+							recoveryKey="重新登录"
+							busy={retrying}
+							onClick={onRelogin}
+						>
 							重新登录
-						</Button>
+						</RecoveryButton>
 					) : null
 				}
 			/>
@@ -197,8 +201,6 @@ export function AgentDiscoveryScreen({
 		controlledQuery !== undefined && onQueryChange !== undefined;
 	const query = isControlled ? controlledQuery : localQuery;
 	const searchId = useId();
-	// 「重新登录」「重新加载 Agent」恢复成功后，焦点从卸载的按钮移到页面 h1，不落到 body。
-	const recovery = useRecoveryFocus(state.kind === "ready" ? 0 : 1);
 	const [statusFilter, setStatusFilter] = useState("all");
 	const [templateFilter, setTemplateFilter] = useState("all");
 	const [modelFilter, setModelFilter] = useState("all");
@@ -242,9 +244,9 @@ export function AgentDiscoveryScreen({
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">工作区 / Agent 目录</p>
+					{/* tabIndex=-1：「重新登录」「重新加载 Agent」恢复后焦点落在这里（RecoveryButton）。 */}
 					<h1
 						id="agents-heading"
-						ref={recovery.ref}
 						tabIndex={-1}
 						className="font-semibold text-[28px]"
 					>
@@ -349,8 +351,8 @@ export function AgentDiscoveryScreen({
 			) : state.kind === "unavailable" ? (
 				<DirectoryUnavailable
 					state={state}
-					onRetry={armBefore(recovery.arm, onRetry)}
-					onRelogin={armBefore(recovery.arm, onRelogin)}
+					onRetry={onRetry}
+					onRelogin={onRelogin}
 					retrying={retrying}
 				/>
 			) : (

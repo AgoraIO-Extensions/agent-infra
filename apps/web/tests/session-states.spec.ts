@@ -416,6 +416,88 @@ test("keyboard recovery on the Agent detail moves focus to the Agent h1, not bod
 	}
 });
 
+// FIX3-7：恢复焦点在公共状态卡层统一处理，所有使用 ReadFailureCard 的页面都落到页面 h1。
+const recoveryPages = [
+	...detailPages.map((detail) => ({
+		name: detail.name,
+		path: detail.path,
+		key: detail.key,
+		retry: detail.retry,
+	})),
+	{
+		name: "conversation",
+		path: `/chat/${agent.agentId}`,
+		key: "agent" as const,
+		retry: "重新读取",
+	},
+];
+
+for (const target of recoveryPages) {
+	test(`keyboard recovery on the ${target.name} moves focus to the page h1, not body (FIX3-7)`, async ({
+		page,
+	}) => {
+		let reply: Reply = { status: 401 };
+		await platform(page, { [target.key]: () => reply });
+		const card = page.locator('#main-content [data-slot="state-card"]');
+		const heading = page.locator("#main-content h1");
+		for (const [status, name] of [
+			[401, "重新登录"],
+			[503, target.retry],
+		] as const) {
+			reply = { status };
+			await page.goto(target.path);
+			const action = card.getByRole("button", { name, exact: true });
+			await action.focus();
+			await expect(action).toBeFocused();
+			reply = { status: 200 };
+			await page.keyboard.press("Enter");
+			await expect(card).toHaveCount(0);
+			await expect(heading).toHaveCount(1);
+			await expect(heading).toBeFocused();
+			await expect(heading).toHaveAttribute("tabindex", "-1");
+			expect(
+				await page.evaluate(() => document.activeElement === document.body),
+			).toBe(false);
+		}
+	});
+
+	test(`a failed keyboard retry on the ${target.name} keeps focus on the retry button (FIX3-6)`, async ({
+		page,
+	}) => {
+		let reply: Reply = { status: 401 };
+		await platform(page, { [target.key]: () => reply });
+		const card = page.locator('#main-content [data-slot="state-card"]');
+		const readPath =
+			target.key === "application"
+				? `/api/v2/agent-applications/${application.applicationId}`
+				: `/api/v2/agents/${agent.agentId}`;
+		for (const [status, name] of [
+			// 401：会话仍有效，但数据仍返回 401。
+			[401, "重新登录"],
+			[503, target.retry],
+		] as const) {
+			reply = { status };
+			await page.goto(target.path);
+			const action = card.getByRole("button", { name, exact: true });
+			await action.focus();
+			await expect(action).toBeFocused();
+			const reread = page.waitForResponse(
+				(response) =>
+					new URL(response.url()).pathname === readPath &&
+					response.status() === status,
+			);
+			await page.keyboard.press("Enter");
+			await reread;
+			// 请求结束、仍然失败：按钮回到可用状态，焦点仍在按钮上，不落到 body。
+			await expect(action).toHaveAttribute("aria-disabled", "false");
+			await expect(action).toBeFocused();
+			expect(
+				await page.evaluate(() => document.activeElement === document.body),
+			).toBe(false);
+		}
+	});
+}
+
 test("re-reads the Agent on the conversation page when re-login finds the session still valid (W-03)", async ({
 	page,
 }) => {
@@ -469,7 +551,10 @@ test("every main route marks exactly one link as the current page (N-21)", async
 		"/my-agents",
 		"/my-agents/new",
 		`/my-agents/${application.applicationId}`,
+		// 带返回 / 取消链接的子路由：返回目标是当前地址的前缀（FIX3-4）。
+		`/my-agents/${application.applicationId}/edit`,
 		"/skills",
+		"/skills/skill-states-v1",
 		"/skills/manage",
 		"/skills/manage/new",
 		"/audit",
@@ -638,4 +723,13 @@ test("shows the not-found state card inside the usable shell (P-01, #2297)", asy
 	await expect(
 		page.getByRole("heading", { level: 1, name: "选择要使用的 Agent。" }),
 	).toBeVisible();
+
+	// 未匹配的 /agents/... 子地址以 /agents 为前缀：404 卡片的「前往 Agent 目录」不能被
+	// 前缀匹配标成当前页（N-21）。
+	await page.goto(`/agents/${agent.agentId}/no-such-page`);
+	await expect(card).toHaveAttribute("data-kind", "not-found");
+	await expect(
+		card.getByRole("link", { name: "前往 Agent 目录" }),
+	).not.toHaveAttribute("aria-current", /.*/);
+	await expect(page.locator('main a[aria-current="page"]')).toHaveCount(0);
 });

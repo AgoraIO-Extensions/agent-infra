@@ -51,6 +51,25 @@ describe("Button", () => {
 		expect(button.className).toContain("disabled:cursor-not-allowed");
 	});
 
+	it("keeps a busy focusableWhenDisabled button focused and dimmed like disabled", () => {
+		const onClick = vi.fn();
+		render(
+			<Button disabled focusableWhenDisabled onClick={onClick}>
+				正在重新加载…
+			</Button>,
+		);
+		const button = screen.getByRole("button", { name: "正在重新加载…" });
+		button.focus();
+		fireEvent.click(button);
+		expect(onClick).not.toHaveBeenCalled();
+		// 不设原生 disabled：已获得焦点的按钮不会把焦点丢到 body。
+		expect(button.hasAttribute("disabled")).toBe(false);
+		expect(button.getAttribute("aria-disabled")).toBe("true");
+		expect(document.activeElement).toBe(button);
+		expect(button.className).toContain("aria-disabled:opacity-[.48]");
+		expect(button.className).toContain("aria-disabled:cursor-not-allowed");
+	});
+
 	it("gives links and buttons of the same size the same size classes", () => {
 		render(
 			<>

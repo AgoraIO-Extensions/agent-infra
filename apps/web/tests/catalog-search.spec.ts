@@ -856,6 +856,38 @@ test.describe("Agent directory design alignment", () => {
 		expect(api.unexpected).toEqual([]);
 	});
 
+	test("a failed keyboard 401 re-login or 503 reload keeps focus on the button, not body (FIX3-6)", async ({
+		page,
+	}) => {
+		const api = await fixture(page);
+		for (const [failure, name] of [
+			// 401：会话仍有效，重置查询重读目录仍返回 401（期间先显示读取中）。
+			[401, "重新登录"],
+			[503, "重新加载 Agent"],
+		] as const) {
+			api.current.failure = failure;
+			await page.goto("/agents");
+			const action = page.getByRole("button", { name, exact: true });
+			await action.focus();
+			await expect(action).toBeFocused();
+			const reread = page.waitForResponse(
+				(response) =>
+					new URL(response.url()).pathname === "/api/v2/agents" &&
+					response.status() === failure,
+			);
+			await page.keyboard.press("Enter");
+			await reread;
+			// 仍然失败：按钮回到可用状态，焦点仍在（或回到）这个按钮上。
+			await expect(action).toHaveAttribute("aria-disabled", "false");
+			await expect(action).toBeFocused();
+			expect(
+				await page.evaluate(() => document.activeElement === document.body),
+			).toBe(false);
+		}
+		expect(api.commands).toEqual([]);
+		expect(api.unexpected).toEqual([]);
+	});
+
 	test("401 re-login rechecks the session through the shell without reloading", async ({
 		page,
 	}) => {

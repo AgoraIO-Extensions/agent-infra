@@ -1,6 +1,7 @@
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { LoadingLine } from "@/components/ui/spinner";
 import { Button } from "../../components/ui/button.js";
+import { RecoveryButton } from "../recovery-button.js";
 import { useRecentPersonalConversations } from "../workbench/use-recent-personal-conversations.js";
 import {
 	ConversationHistoryHeading,
@@ -53,13 +54,15 @@ export function RecentConversationHistory({
 							return (
 								<li key={JSON.stringify([item.agentId, item.conversationId])}>
 									<ConversationHistoryLink
-										href={`/chat/${encodeURIComponent(item.agentId)}/${encodeURIComponent(item.conversationId)}`}
+										agentId={item.agentId}
+										conversationId={item.conversationId}
 										title={item.title}
 										updatedAt={item.updatedAt}
 										current={current}
 										unavailable={item.status === "unavailable"}
 										onNavigate={() => {
-											// 跨 Agent 的记录走浏览器默认跳转，进入原 Agent 的会话页。
+											// 跨 Agent 的记录交给路由 Link 跳转，进入原 Agent 的会话页（会话页按
+											// Agent 重新挂载，不整页重新加载）。
 											if (item.agentId !== agentId) return false;
 											onSelect(item.conversationId);
 											return true;
@@ -81,13 +84,14 @@ export function RecentConversationHistory({
 				</>
 			)}
 			{state.kind === "unavailable" && state.retryable && (
-				<Button
+				<RecoveryButton
 					variant="outline"
-					disabled={recent.isFetching}
+					recoveryKey="重试读取最近对话"
+					busy={recent.isFetching}
 					onClick={() => void recent.refresh()}
 				>
 					重试读取最近对话
-				</Button>
+				</RecoveryButton>
 			)}
 		</section>
 	);

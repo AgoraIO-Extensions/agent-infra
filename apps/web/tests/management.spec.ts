@@ -5275,6 +5275,35 @@ test.describe("Agent detail design alignment", () => {
 		expect(
 			Math.abs(identity.y - (backBox.y + backBox.height) - 16),
 		).toBeLessThanOrEqual(1);
+		// 设计 #agent-detail .eyebrow margin 0 0 9px：eyebrow 顶部与标识行顶部对齐（不继承
+		// .page-heading p 的 9px 上外边距），h1 在 eyebrow 下 9px。设计 1440 下 h1 y=184.39、
+		// 390 下 191.39，基于 38px 的 sm 返回按钮；应用的 sm 按钮暂保持 44px（#2863 B-15），
+		// 差值只来自按钮高度。
+		const eyebrowGeometry = await heading
+			.locator(".agent-detail-heading")
+			.evaluate((element) => {
+				const eyebrow = element.querySelector(".page-eyebrow");
+				const h1 = element.querySelector("h1");
+				if (!eyebrow || !h1) throw new Error("Expected eyebrow and h1");
+				return {
+					marginTop: getComputedStyle(eyebrow).marginTop,
+					identityTop: element.getBoundingClientRect().top,
+					eyebrowTop: eyebrow.getBoundingClientRect().top,
+					eyebrowBottom: eyebrow.getBoundingClientRect().bottom,
+					h1Top: h1.getBoundingClientRect().top,
+				};
+			});
+		expect(eyebrowGeometry.marginTop).toBe("0px");
+		expect(
+			Math.abs(eyebrowGeometry.eyebrowTop - eyebrowGeometry.identityTop),
+		).toBeLessThanOrEqual(0.5);
+		expect(
+			Math.abs(eyebrowGeometry.h1Top - (eyebrowGeometry.eyebrowBottom + 9)),
+		).toBeLessThanOrEqual(0.5);
+		const designH1 = info.project.name === "mobile" ? 191.39 : 184.39;
+		expect(
+			Math.abs(eyebrowGeometry.h1Top - (designH1 + backBox.height - 38)),
+		).toBeLessThanOrEqual(1);
 		await back.hover();
 		await expect(back).toHaveCSS("text-decoration-line", "none");
 		await expect(

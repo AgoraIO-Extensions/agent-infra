@@ -90,6 +90,11 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 `Alert` 必须传 `tone`（`info`、`warn`、`danger`），没有旧变体名与缺省 tone 的兼容层。
 
 普通导航保留 TanStack `Link` 或语义链接；需要控件外观时使用 `buttonVariants`，不改变链接角色。
+站内路径一律用 `Link`（原生 `<a href="/...">` 会整页重新加载）；返回 / 取消链接的目标是当前地址的前缀时
+加 `activeOptions={{ exact: true }}`，不让前缀匹配补上 `aria-current`。
+读取失败后的「重新登录」「重新加载…」「重新读取」使用 `features/recovery-button.tsx` 的 `RecoveryButton`
+（`PageStateCard` / `ReadFailureCard` 默认操作已内置）：请求中用 `aria-disabled` 保持可聚焦，失败后焦点留在按钮上；
+恢复成功、按钮卸载后焦点移到页面 h1（需 `tabIndex={-1}`），没有可聚焦标题时落到 `#main-content`。
 段落、列表、定义列表、表单和 fieldset 保持语义 HTML。
 申请详情、Agent 详情和我的 Skill 使用索引路由，确保编辑、配置和创建子路径能渲染对应页面。
 
@@ -110,6 +115,10 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 `pnpm test` 还执行 `apps/web/src/lib/time-display-policy.test.ts`：页面不得直接调用
 `toLocaleString`、`toLocaleDateString`、`toLocaleTimeString` 或 `Intl.DateTimeFormat` 显示时间。
 该测试只允许格式化模块本身、生成代码与测试文件直接调用，不设页面白名单。
+
+`apps/web/src/lib/internal-link-policy.test.ts` 扫描生产 TSX 中的原生 `<a>`：只允许测试里逐个列出原因的
+非 SPA 目标（外链、Connection 入口、服务端登录入口、页内锚点、`useLinkProps` 生成的品牌链接），
+其余站内跳转必须用路由 `Link`。
 
 ## 验证
 

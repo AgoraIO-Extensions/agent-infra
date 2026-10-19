@@ -1099,6 +1099,60 @@ test("keyboard reload of a failed recent section moves focus to the workbench h1
 	expect(fixture.unexpected).toEqual([]);
 });
 
+test("a failed keyboard 401 re-login keeps focus on 重新登录, not body (FIX3-6)", async ({
+	page,
+}) => {
+	const fixture = await workbenchFixture(page, {
+		administrator: true,
+		attention: true,
+		collectionStatus: 401,
+	});
+	await page.goto("/");
+	const main = page.locator("main");
+	const relogin = main.getByRole("button", { name: "重新登录", exact: true });
+	await relogin.focus();
+	await expect(relogin).toBeFocused();
+	// 会话仍有效，重置后的分区读取仍返回 401（期间分区先显示读取中、提示卸载）。
+	const reread = page.waitForResponse(
+		(response) =>
+			new URL(response.url()).pathname === "/api/v2/agents" &&
+			response.status() === 401,
+	);
+	await page.keyboard.press("Enter");
+	await reread;
+	await expect(main.getByText(/无法读取，请重新登录。$/).first()).toBeVisible();
+	await expect(relogin).toHaveAttribute("aria-disabled", "false");
+	await expect(relogin).toBeFocused();
+	expect(
+		await page.evaluate(() => document.activeElement === document.body),
+	).toBe(false);
+	expect(fixture.unexpected).toEqual([]);
+});
+
+test("a failed keyboard reload of the recent section keeps focus on the button, not body (FIX3-6)", async ({
+	page,
+}) => {
+	const fixture = await workbenchFixture(page, { recentStatus: 503 });
+	await page.goto("/");
+	const recent = recentRegion(page);
+	const reload = recent.getByRole("button", { name: "重新加载最近对话" });
+	await reload.focus();
+	await expect(reload).toBeFocused();
+	const reread = page.waitForResponse(
+		(response) =>
+			new URL(response.url()).pathname === "/api/v2/me/conversations/recent" &&
+			response.status() === 503,
+	);
+	await page.keyboard.press("Enter");
+	await reread;
+	await expect(reload).toHaveAttribute("aria-disabled", "false");
+	await expect(reload).toBeFocused();
+	expect(
+		await page.evaluate(() => document.activeElement === document.body),
+	).toBe(false);
+	expect(fixture.unexpected).toEqual([]);
+});
+
 test("untitled recent conversations keep distinct continue link names (N-12)", async ({
 	page,
 }) => {
