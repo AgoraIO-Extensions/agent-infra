@@ -316,6 +316,8 @@ export const AgentApplicationProjectionV1Schema = z.strictObject({
 	resourceProfile: AgentResourceProfileProjectionV1Schema,
 	configuration: AgentConfigurationProjectionV1Schema,
 	submittedAt: Rfc3339TimestampV1Schema,
+	updatedAt: Rfc3339TimestampV1Schema.optional(),
+	applicant: BrowserUserProjectionV1Schema.nullable().optional(),
 	decision: z
 		.strictObject({
 			decidedAt: Rfc3339TimestampV1Schema,

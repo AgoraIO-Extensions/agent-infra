@@ -336,7 +336,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 			/>,
 		);
 		expect(screen.getByText(application.description)).toBeTruthy();
-		expect(screen.getByText("Applicant")).toBeTruthy();
+		expect(screen.getAllByText("Applicant").length).toBeGreaterThanOrEqual(1);
 		// 使用范围按目录显示姓名与组织名，不显示内部 ID。
 		expect(await screen.findByText("发布用户二")).toBeTruthy();
 		expect(screen.getByText("平台工程")).toBeTruthy();

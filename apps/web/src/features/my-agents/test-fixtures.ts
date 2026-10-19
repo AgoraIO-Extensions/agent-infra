@@ -64,6 +64,12 @@ export const pendingApplication = AgentApplicationProjectionV2Schema.parse({
 		secrets: [],
 	},
 	submittedAt: "2026-09-03T08:00:00Z",
+	updatedAt: "2026-09-03T08:00:00Z",
+	applicant: {
+		userId: "user-applicant-1",
+		displayName: "Applicant",
+		roles: ["employee"],
+	},
 	decision: null,
 });
 

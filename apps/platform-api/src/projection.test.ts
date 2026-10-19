@@ -109,6 +109,34 @@ const agent = (agentId: string) => ({
 });
 
 describe("Agent projection owners (#2632)", () => {
+	it("projects application update time and applicant from the hydrated directory", async () => {
+		const { projections } = readers();
+		const value = await projections.readApplicationProjection({
+			identity,
+			requestId: "application-request",
+			traceId: "application-trace",
+			requestScope: {},
+			application: {
+				schemaVersion: 1,
+				applicationId: "application_01",
+				agentId: "agent_01",
+				applicantId: "user_01",
+				name: "Application",
+				description: "Projection test",
+				sourceReference: "sha256:custom",
+				management,
+				submittedAt: new Date("2026-09-03T08:00:00Z"),
+				updatedAt: new Date("2026-09-04T08:00:00Z"),
+				decision: null,
+			},
+		});
+		expect(value.updatedAt).toBe("2026-09-04T08:00:00.000Z");
+		expect(value.applicant).toMatchObject({
+			userId: "user_01",
+			displayName: "Display user_01",
+		});
+	});
+
 	it("hydrates the same owners once per request and again for the next request", async () => {
 		const { projections, hydrateUsers } = readers();
 		// 同一个请求：路由为这个请求解析一次身份，列表里的每一项都带着这个身份对象。

@@ -329,6 +329,14 @@ export function MyAgentApplicationDetailScreen({
 									)
 									.join("、") || "未提供"}
 							</dd>
+							<dt>申请人</dt>
+							<dd>{application.applicant?.displayName ?? "未知"}</dd>
+							<dt>更新于</dt>
+							<dd>
+								<Timestamp
+									value={application.updatedAt ?? application.submittedAt}
+								/>
+							</dd>
 							<dt>使用范围</dt>
 							<dd>
 								<DirectoryRecords
