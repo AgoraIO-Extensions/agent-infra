@@ -628,7 +628,11 @@ export class FileRuntimeStore {
 					{
 						...claims,
 						schemaVersion: 2,
-						allowedCommands: ["turn.submit"],
+						allowedCommands: [
+							"capabilityId" in input.request.originalRequest
+								? "native-capability.invoke"
+								: "turn.submit",
+						],
 					},
 					"prepare",
 					typeof input.now === "function"

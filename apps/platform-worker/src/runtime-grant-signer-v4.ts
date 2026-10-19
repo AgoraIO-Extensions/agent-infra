@@ -17,7 +17,6 @@ import {
 	RuntimeExecutionGrantV4Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
 	type RuntimeRestoreExecutionKeyRequestV4,
-	type RuntimeSubmitTurnRequestV4,
 	runtimeEventRequestDigestV4,
 	runtimeRequestSigningPayloadV4,
 	runtimeRestoreExecutionKeyRequestDigestV4,
@@ -71,7 +70,7 @@ export function createWorkerRuntimeGrantSignerV4(options: SignerOptionsV4) {
 	}
 	return {
 		async signRecovery(
-			originalRequest: RuntimeSubmitTurnRequestV4,
+			originalRequest: RuntimeRestoreExecutionKeyRequestV4["originalRequest"],
 			acceptedHostSessionRef: string,
 			acceptedOperationDigest: string,
 			authorizationRecordId: string,
