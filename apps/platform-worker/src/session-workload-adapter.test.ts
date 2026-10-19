@@ -1546,7 +1546,7 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 		const podJson = JSON.stringify(pod);
 		expect(podJson).not.toContain("MODEL_CREDENTIAL");
 		expect(podJson).not.toContain(sessionSandboxDeploymentTokenFixture);
-		expect(podJson).not.toContain(allocation.runtime.serviceToken);
+		expect(podJson).not.toContain(allocation.runtime!.serviceToken);
 		expect(container?.envFrom).toBeUndefined();
 		expect(secret).toMatchObject({
 			kind: "Secret",
@@ -1609,7 +1609,7 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			"a static-key model configuration",
 			{
 				modelConfiguration: JSON.stringify({
-					...JSON.parse(allocation.runtime.modelConfiguration),
+					...JSON.parse(allocation.runtime!.modelConfiguration),
 					schemaVersion: 3,
 				}),
 			},

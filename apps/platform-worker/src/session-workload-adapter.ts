@@ -136,8 +136,12 @@ export interface SessionSandboxAllocationV1 {
 	readonly containerPort: number;
 	readonly workspaceMountPath: string;
 	readonly env?: Readonly<Record<string, string>>;
-	/** Verified V4 projection and Worker runtime auth, assembled by the Worker. */
-	readonly runtime: SessionSandboxRuntimeInputV1;
+	/**
+	 * Verified V4 projection and Worker runtime auth, assembled by the Worker.
+	 * 排空（drain）路径若原 payload 未保存 modelProjection（旧 payload 形状），
+	 * 此字段为 null；只有 desiredState === "running" 的准备操作才强制要求非 null。
+	 */
+	readonly runtime: SessionSandboxRuntimeInputV1 | null;
 	readonly connectionConsumerSnapshot?: string | null;
 	readonly connectionInstallationRevision?: string | null;
 	readonly resources: {
@@ -351,12 +355,19 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 	);
 	if (
 		value.egress.nativeMetadataWorkerEgress !== undefined &&
+		// 排空（drain-only）allocation 的 runtime 为 null，无需检查 nativeMetadata 原点。
+		value.runtime !== null &&
 		!isNativeMetadataWorkerOriginV1(value.runtime.nativeMetadataWorkerOrigin)
 	)
 		throw new WorkloadKubernetesError("policy");
 	// Rejects any destination the shared Agent-level compiler would reject.
 	workloadEgressRulesV1(value.egress);
-	validateRuntimeInput(value.runtime);
+	// 排空（drain-only）allocation 的 runtime 允许为 null（旧 payload 形状）：
+	// cleanup 和 control-mode observe 在 stopped 状态下只需沙箱身份标签，
+	// 不依赖模型配置字段。
+	if (value.runtime !== null) {
+		validateRuntimeInput(value.runtime);
+	}
 }
 
 function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
@@ -450,6 +461,8 @@ function validateNativeMetadataWorkerEgressV1(
 function runtimeEnvironment(
 	allocation: SessionSandboxAllocationV1,
 ): V1EnvVar[] {
+	// 排空（drain-only）allocation 的 runtime 为 null：stopped 状态不创建资源，无需环境变量。
+	if (!allocation.runtime) return [];
 	const { runtime } = allocation;
 	const secretRef = (key: "model-config" | "token") => ({
 		secretKeyRef: { name: allocation.secretName, key, optional: false },
@@ -630,12 +643,20 @@ export function sessionSandboxResourcesV1(
 		metadata: metadata(allocation, allocation.secretName),
 		type: "Opaque",
 		immutable: true,
-		data: {
-			token: Buffer.from(allocation.runtime.serviceToken).toString("base64"),
-			"model-config": Buffer.from(
-				allocation.runtime.modelConfiguration,
-			).toString("base64"),
-		},
+		// 排空（drain-only）allocation 的 runtime 为 null：不创建 Secret，
+		// cleanup 只按名称+标签删除，不比对 Secret 内容。
+		...(allocation.runtime
+			? {
+					data: {
+						token: Buffer.from(allocation.runtime.serviceToken).toString(
+							"base64",
+						),
+						"model-config": Buffer.from(
+							allocation.runtime.modelConfiguration,
+						).toString("base64"),
+					},
+				}
+			: {}),
 	};
 	const service: V1Service = {
 		apiVersion: "v1",
