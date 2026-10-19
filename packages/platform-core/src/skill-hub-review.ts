@@ -39,7 +39,7 @@ export function parseSkillHubReviewQueueQueryV1(query: {
 }
 
 /** 只投影仍待审的共享版本；不符合不变量的行按依赖不可用处理，不降级显示。 */
-export function projectSkillHubReviewQueueItemV1(
+function projectSkillHubReviewQueueItemV1(
 	version: SkillHubPendingReviewVersionV1,
 ) {
 	if (
