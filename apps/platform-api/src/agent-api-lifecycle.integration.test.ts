@@ -275,11 +275,14 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 			"skill.project.update",
 			"future.unregistered.action",
 		];
-		// 先写两条已登记的事件，再让未登记的事件成为最新的若干行。
-		expect((await request()).status).toBe(202);
+		// 先写两条已登记、三个版本都能表示的事件（用户主体、Agent 目标），再让未登记的事件成为最新的若干行。
+		// 旧版 v1 只能表示用户主体，v2 不能表示 execution 目标，所以这里不用应用 Token 的生命周期事件。
 		expect((await govern("agent-a", true, "audit-unregistered")).status).toBe(
 			200,
 		);
+		expect(
+			(await govern("agent-a", false, "audit-unregistered-revoke")).status,
+		).toBe(200);
 		for (const [index, action] of unregistered.entries())
 			await sql`insert into platform.audit_events
 				(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, occurred_at, details)
