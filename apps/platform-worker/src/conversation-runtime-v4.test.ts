@@ -146,6 +146,87 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 					kind: "execution",
 					id: "execution",
 				});
+				Object.assign(h.state, { originalSubmitHostSessionRef: "host" });
+				const fetcher = h.fetcher.getMockImplementation();
+				h.fetcher.mockImplementation(async (url, init) => {
+					if (String(url).endsWith("/execution-key/restore"))
+						return Response.json({
+							schemaVersion: 4,
+							hostSessionRef: "host",
+							operationId: "execution",
+							result: "restored",
+						});
+					if (!fetcher) throw new Error("missing fixture transport");
+					return fetcher(url, init);
+				});
+				const beforeReads =
+					h.executionKeys.readAcceptedExecution.mock.calls.length;
+				await expect(
+					h.runtime.runtimeHost.recoverOriginalStatus?.({
+						...h.events(reference),
+						schemaVersion: 2,
+					}),
+				).resolves.toMatchObject({ outcome: "found", status: "running" });
+				const restores = h.fetcher.mock.calls.filter(([url]) =>
+					String(url).endsWith("/execution-key/restore"),
+				);
+				expect(restores).toHaveLength(capabilityKind === "skill" ? 1 : 0);
+				expect(h.executionKeys.readAcceptedExecution).toHaveBeenCalledTimes(
+					beforeReads + (capabilityKind === "skill" ? 1 : 0),
+				);
+				if (capabilityKind === "skill") {
+					const restored = JSON.parse(restores[0]?.[1]?.body as string);
+					expect(restored.recoveryRequest.originalRequest).toMatchObject({
+						capabilityId: nativeCapability.capabilityId,
+						capabilityKind,
+						directoryRevision: nativeCapability.directoryRevision,
+						parameters,
+						parametersDigest: nativeCapability.parametersDigest,
+						capabilitySourceVersion: nativeCapability.capabilitySourceVersion,
+						hostSessionRef: "host",
+						keyBinding: { ciphertextRef: "key-original", version: 1 },
+					});
+					expect(restored.recoveryRequest.originalRequest).not.toHaveProperty(
+						"input",
+					);
+					expect(restored.recoveryRequest.originalRequest).not.toHaveProperty(
+						"selection",
+					);
+					expect(restored.recoveryRequest.acceptedOperationDigest).toBe(
+						h.state.originalOperationDigest,
+					);
+					expect(restored.privateKeyField.keyDelivery.relayKey).toBe(
+						keySentinel,
+					);
+					expect(h.executionKeys.readCiphertext).toHaveBeenLastCalledWith({
+						purpose: "personal",
+						subjectId: "user",
+						keyId: "key-original",
+						keyVersion: 1,
+					});
+				}
+				// Historical missing pins permit status reads, never Key replacement.
+				const readsBeforeMissingPin =
+					h.executionKeys.readAcceptedExecution.mock.calls.length;
+				Object.assign(h.claim, {
+					relayKeyBinding: null,
+					executionSource: null,
+				});
+				const keyfreeReference = await h.authorize();
+				await expect(
+					h.runtime.runtimeHost.recoverOriginalStatus?.({
+						...h.events(keyfreeReference),
+						schemaVersion: 2,
+					}),
+				).resolves.toMatchObject({ outcome: "found", status: "running" });
+				expect(h.executionKeys.readAcceptedExecution).toHaveBeenCalledTimes(
+					readsBeforeMissingPin,
+				);
+				expect(
+					h.fetcher.mock.calls.filter(([url]) =>
+						String(url).endsWith("/native-capability"),
+					),
+				).toHaveLength(1);
 			} finally {
 				h.runtime.close();
 			}

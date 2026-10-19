@@ -38,7 +38,10 @@ import {
 	signV3Fixture,
 	verifyRuntimeV2Fixture,
 } from "./grant-v2-fixture.test-support.js";
-import { createRuntimeExecutionGrantValidatorV4 } from "./grant-v4.js";
+import {
+	createRuntimeExecutionGrantValidatorV4,
+	createRuntimeExecutionKeyRecoveryValidatorV4,
+} from "./grant-v4.js";
 import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
 import {
 	type RuntimeBrowserExecutionContextFactoryInputV1,
@@ -1526,6 +1529,174 @@ it("restores a Key only for the durable accepted/running journal entry", async (
 	expect(retainedKeys(f.host).get("execution-1")).toMatchObject({
 		relayKey: "synthetic-pinned-key-k1",
 	});
+});
+
+it("restores a restarted native Skill from its signed original envelope without reinvoking or rediscovering it", async () => {
+	const validateRecovery = createRuntimeExecutionKeyRecoveryValidatorV4(
+		publicKeys,
+		{
+			expectedIssuer: "platform-fixture",
+			expectedWorkerId: "worker-fixture",
+			now: () => now,
+		},
+	);
+	const f = await setup(undefined, undefined, validateRecovery);
+	const submitted = await f.host.submitTurnV4(f.transport);
+	await f.driver.setOperationStatus("execution-1", "completed");
+	const metadata = vi.fn(async () => ({
+		selector: "skills" as const,
+		revision: "b".repeat(64),
+		capabilities: [
+			{
+				id: "a".repeat(64),
+				kind: "skill" as const,
+				name: "test-skill",
+				description: "Controlled Skill",
+				source: { name: "controlled", version: "1" },
+				parameters: [],
+				effect: "model_turn" as const,
+				availability: "discovered" as const,
+			},
+		],
+	}));
+	const createSkill = vi.fn(
+		(command: import("./driver.js").RuntimeNativeSkillCommandV1) => ({
+			schemaVersion: 1 as const,
+			kind: "submit-turn" as const,
+			operationId: command.operationId,
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			executionId: command.executionId,
+			turnId: command.turnId,
+			sessionGeneration: command.sessionGeneration,
+			nativeSessionRef: command.nativeSessionRef,
+			input: { text: command.parameters, attachments: [] },
+			nativeSkill: {
+				capabilityId: command.capabilityId,
+				directoryRevision: command.directoryRevision,
+				name: command.capabilityName,
+				version: command.capabilitySourceVersion,
+				packageDigest: command.packageDigest,
+				manifestDigest: command.manifestDigest,
+			},
+		}),
+	);
+	Object.assign(f.driver, {
+		readNativeMetadataV1: metadata,
+		resolveNativeSkillBinding: () => ({
+			packageDigest: "c".repeat(64),
+			manifestDigest: "d".repeat(64),
+		}),
+		createNativeSkillCommand: createSkill,
+	});
+	const { input: _input, selection: _selection, ...context } = submission();
+	const request = RuntimeNativeCapabilityRequestV4Schema.parse({
+		...context,
+		requestId: "native-skill-request",
+		hostSessionRef: submitted.hostSessionRef,
+		executionId: "execution-skill",
+		turnId: "turn-skill",
+		operation: {
+			kind: "execution",
+			id: "execution-skill",
+			deliveryFence: 2,
+			executionDeliveryFence: 2,
+		},
+		capabilityId: "a".repeat(64),
+		capabilityKind: "skill",
+		directoryRevision: "b".repeat(64),
+		parameters: "skill parameters",
+		parametersDigest: createHash("sha256")
+			.update("skill parameters")
+			.digest("hex"),
+		capabilitySourceVersion: "1",
+	});
+	const accepted = await f.host.nativeCapabilityV4(delivery(request));
+	expect(accepted.result).toEqual({ outcome: "accepted", status: "running" });
+	const original = f.store.readOriginalExecutionKeyScopeV4(request);
+	if (!original?.scope) throw new Error("missing original Skill binding");
+	const reopened = await f.reopen();
+	expect(retainedKeys(reopened).size).toBe(0);
+	const metadataReads = metadata.mock.calls.length;
+	const makeRecovery = async (originalRequest = request) => {
+		const unsigned = RuntimeRestoreExecutionKeyRequestV4Schema.parse({
+			schemaVersion: 4,
+			mode: "existing-accepted-only",
+			acceptedHostSessionRef: accepted.hostSessionRef,
+			acceptedOperationDigest: original.operation.requestDigest,
+			grant: request.grant,
+			originalRequest,
+		});
+		const claims = RuntimeRestoreExecutionKeyGrantClaimsV4Schema.parse({
+			...businessClaims(originalRequest),
+			grantId: "native-skill-key-recovery",
+			allowedCommands: ["execution.key.restore"],
+			mode: unsigned.mode,
+			acceptedHostSessionRef: unsigned.acceptedHostSessionRef,
+			acceptedOperationDigest: unsigned.acceptedOperationDigest,
+			requestDigest: await runtimeRestoreExecutionKeyRequestDigestV4(unsigned),
+		});
+		const field = delivery(originalRequest).privateKeyField;
+		return {
+			recoveryRequest: {
+				...unsigned,
+				grant: { ...unsigned.grant, token: token(claims) },
+			},
+			privateKeyField: {
+				...field,
+				context: {
+					...field.context,
+					grantId: claims.grantId,
+					requestDigest: claims.requestDigest,
+				},
+			},
+		};
+	};
+	const before = await readFile(f.path, "utf8");
+	for (const changes of [
+		{ capabilityId: "e".repeat(64) },
+		{ directoryRevision: "f".repeat(64) },
+		{ capabilitySourceVersion: "other-version" },
+		{
+			parameters: "changed",
+			parametersDigest: createHash("sha256").update("changed").digest("hex"),
+		},
+		{ keyBinding: { ...request.keyBinding, version: 2 } },
+		{ agentId: "other-agent" },
+		{
+			principal: { kind: "user" as const, id: "bob" },
+			keyBinding: { ...request.keyBinding, subjectId: "bob" },
+		},
+	]) {
+		await expect(
+			reopened.restoreExecutionKeyV4(
+				await makeRecovery({ ...request, ...changes }),
+			),
+		).rejects.toThrow();
+		expect(retainedKeys(reopened).size).toBe(0);
+		expect(await readFile(f.path, "utf8")).toBe(before);
+	}
+	await expect(
+		reopened.restoreExecutionKeyV4(await makeRecovery()),
+	).resolves.toMatchObject({
+		result: "restored",
+		operationId: "execution-skill",
+	});
+	expect(retainedKeys(reopened).get("execution-skill")).toMatchObject({
+		relayKey: "synthetic-pinned-key-k1",
+	});
+	expect(await readFile(f.path, "utf8")).toBe(before);
+	expect(await f.driver.sideEffectCount()).toBe(2);
+	expect(createSkill).toHaveBeenCalledTimes(1);
+	expect(metadata).toHaveBeenCalledTimes(metadataReads);
+	// A real terminal Driver observation prevents reinstalling the accepted Key.
+	await f.driver.setOperationStatus("execution-skill", "completed");
+	const terminalHost = await f.reopen();
+	await expect(
+		terminalHost.restoreExecutionKeyV4(await makeRecovery()),
+	).rejects.toThrow();
+	expect(retainedKeys(terminalHost).size).toBe(0);
+	expect(await f.driver.sideEffectCount()).toBe(2);
 });
 
 it("rejects missing or terminal recovery without creating durable state", async () => {

@@ -1,5 +1,9 @@
+import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
-import { RuntimeSubmitTurnRequestV4Schema } from "./host-v4.ts";
+import {
+	RuntimeNativeCapabilityRequestV4Schema,
+	RuntimeSubmitTurnRequestV4Schema,
+} from "./host-v4.ts";
 import {
 	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
 	RuntimeRestoreExecutionKeyRequestV4Schema,
@@ -53,6 +57,7 @@ const request = RuntimeRestoreExecutionKeyRequestV4Schema.parse({
 });
 
 function claims(requestValue = request) {
+	const originalRequest = requestValue.originalRequest;
 	return RuntimeRestoreExecutionKeyGrantClaimsV4Schema.parse({
 		schemaVersion: 4,
 		issuer: "platform-worker",
@@ -83,6 +88,81 @@ function claims(requestValue = request) {
 		acceptedOperationDigest: requestValue.acceptedOperationDigest,
 	});
 }
+
+it("restores the original native Skill without a synthetic Turn input or selection", async () => {
+	const { input: _input, selection: _selection, ...context } = originalRequest;
+	const skill = RuntimeNativeCapabilityRequestV4Schema.parse({
+		...context,
+		hostSessionRef: "host-session-1",
+		capabilityId: "a".repeat(64),
+		capabilityKind: "skill",
+		directoryRevision: "b".repeat(64),
+		parameters: "original parameters",
+		parametersDigest: createHash("sha256")
+			.update("original parameters")
+			.digest("hex"),
+		capabilitySourceVersion: "source-version-1",
+	});
+	const value = RuntimeRestoreExecutionKeyRequestV4Schema.parse({
+		...request,
+		originalRequest: skill,
+	});
+	const signed = {
+		...claims(value),
+		requestDigest: await runtimeRestoreExecutionKeyRequestDigestV4(value),
+	};
+	await expect(
+		validateRuntimeRestoreExecutionKeyBindingV4(value, signed),
+	).resolves.toBeUndefined();
+	for (const change of [
+		{ capabilityId: "c".repeat(64) },
+		{ directoryRevision: "d".repeat(64) },
+		{ parameters: "changed parameters" },
+		{ capabilitySourceVersion: "different-source" },
+		{ principal: { kind: "user", id: "bob" } },
+		{ agentId: "other-agent" },
+		{ keyBinding: { ...skill.keyBinding, version: 2 } },
+	]) {
+		await expect(
+			validateRuntimeRestoreExecutionKeyBindingV4(
+				{
+					...value,
+					originalRequest: { ...skill, ...change },
+				},
+				signed,
+			),
+		).rejects.toThrow();
+	}
+	// A newly signed envelope still cannot substitute raw parameters for their digest.
+	const mismatched = {
+		...value,
+		originalRequest: { ...skill, parameters: "changed" },
+	};
+	await expect(
+		validateRuntimeRestoreExecutionKeyBindingV4(mismatched, {
+			...signed,
+			requestDigest:
+				await runtimeRestoreExecutionKeyRequestDigestV4(mismatched),
+		}),
+	).rejects.toThrow();
+	for (const original of [
+		{ ...skill, capabilityKind: "command" },
+		{ ...skill, input: originalRequest.input },
+		{ ...skill, selection: originalRequest.selection },
+		{
+			...context,
+			hostSessionRef: "host-session-1",
+			input: originalRequest.input,
+		},
+	]) {
+		expect(
+			RuntimeRestoreExecutionKeyRequestV4Schema.safeParse({
+				...request,
+				originalRequest: original,
+			}).success,
+		).toBe(false);
+	}
+});
 
 it("binds recovery intent separately from the original submit digest", async () => {
 	const value = claims();

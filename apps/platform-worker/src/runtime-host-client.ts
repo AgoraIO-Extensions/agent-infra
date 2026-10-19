@@ -52,6 +52,7 @@ import {
 	RuntimeRelayKeyDeliveryV1Schema,
 	RuntimeReplayRequestV1Schema,
 	type RuntimeRestoreExecutionKeyRequestV4,
+	RuntimeRestoreExecutionKeyRequestV4Schema,
 	RuntimeRestoreExecutionKeyResponseV4Schema,
 	RuntimeRestoreExecutionKeyTransportV4Schema,
 	type RuntimeSelectionV1,
@@ -77,7 +78,6 @@ import {
 	RuntimeSubmitTurnRequestV2Schema,
 	type RuntimeSubmitTurnRequestV3,
 	RuntimeSubmitTurnRequestV3Schema,
-	type RuntimeSubmitTurnRequestV4,
 	RuntimeSubmitTurnRequestV4Schema,
 	RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV1Schema,
@@ -141,7 +141,7 @@ export interface WorkerRuntimeHostClientOptionsV4
 	readonly selection?: RuntimeSelectionV1;
 	readonly assertCurrentAuthorization: () => Promise<void>;
 	readonly signRecovery?: (
-		originalRequest: RuntimeSubmitTurnRequestV4,
+		originalRequest: RuntimeRestoreExecutionKeyRequestV4["originalRequest"],
 		acceptedHostSessionRef: string,
 		acceptedOperationDigest: string,
 		authorizationRecordId: string,
@@ -1355,7 +1355,7 @@ export function createWorkerRuntimeHostClientV4(
 			signal?: AbortSignal,
 		) => send(value, signal),
 		async restoreExecutionKey(
-			originalRequest: RuntimeSubmitTurnRequestV4,
+			originalRequest: RuntimeRestoreExecutionKeyRequestV4["originalRequest"],
 			acceptedHostSessionRef: string,
 			acceptedOperationDigest: string,
 			signal?: AbortSignal,
@@ -1367,7 +1367,10 @@ export function createWorkerRuntimeHostClientV4(
 					!options.decryptor
 				)
 					throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
-				const request = RuntimeSubmitTurnRequestV4Schema.parse(originalRequest);
+				const request =
+					RuntimeRestoreExecutionKeyRequestV4Schema.shape.originalRequest.parse(
+						originalRequest,
+					);
 				const accepted = await interruptedDependency(
 					options.executionKeys.readAcceptedExecution(request),
 					signal,
@@ -1382,10 +1385,17 @@ export function createWorkerRuntimeHostClientV4(
 					accepted.scope.agentId !== request.agentId ||
 					accepted.scope.conversationId !== request.conversationId ||
 					!isDeepStrictEqual(accepted.scope.keyBinding, request.keyBinding) ||
-					!isDeepStrictEqual(accepted.selection, request.selection)
+					("selection" in request
+						? !isDeepStrictEqual(accepted.selection, request.selection)
+						: accepted.selection !== undefined)
 				)
 					return failure("RUNTIME_GRANT_INVALID", false);
 				if (accepted.stopPending) return failure("RUNTIME_STOP_PENDING", false);
+				validateRuntimePinnedExecutionKeyScopeV4(
+					accepted.scope,
+					request,
+					request.hostSessionRef,
+				);
 				const binding: RuntimeRelayKeyBindingV1 = {
 					purpose: accepted.scope.keyBinding.purpose,
 					subjectId: accepted.scope.keyBinding.subjectId,

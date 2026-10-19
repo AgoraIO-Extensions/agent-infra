@@ -2,6 +2,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import {
 	RuntimeEventAckRequestV4Schema,
 	RuntimeEventReadRequestV4Schema,
+	RuntimeNativeCapabilityRequestV4Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	validateRuntimePrivateRelayKeyFieldV1,
 } from "@agent-infra/contracts/runtime";
@@ -61,6 +62,74 @@ function clientHarness() {
 }
 
 describe("V4 authenticated confidential private Key client", () => {
+	it.each([
+		"missing",
+		"principal",
+		"agent",
+		"generation",
+		"channel",
+		"key-version",
+		"host",
+		"selection",
+		"stop",
+	] as const)(
+		"rejects native Skill recovery with %s acceptance before decrypting or sending a Key",
+		async (changed) => {
+			const { h, client, request } = clientHarness();
+			try {
+				const { input: _input, selection: _selection, ...context } = request;
+				const skill = RuntimeNativeCapabilityRequestV4Schema.parse({
+					...context,
+					hostSessionRef: "host",
+					capabilityId: "a".repeat(64),
+					capabilityKind: "skill",
+					directoryRevision: "b".repeat(64),
+					capabilitySourceVersion: "original-version",
+					parameters: "",
+					parametersDigest: createHash("sha256").update("").digest("hex"),
+				});
+				const original = h.accepted();
+				if (!original) throw new Error("missing acceptance fixture");
+				const accepted = {
+					...original,
+					trustedHostSessionRef: "host",
+					scope: { ...original.scope, hostSessionRef: "host" },
+					selection: undefined,
+				};
+				if (changed === "principal")
+					accepted.scope.principal = { kind: "user", id: "other-user" };
+				if (changed === "agent") accepted.scope.agentId = "other-agent";
+				if (changed === "generation") accepted.scope.sessionGeneration += 1;
+				if (changed === "channel") accepted.scope.channelId = "other-channel";
+				if (changed === "key-version") accepted.scope.keyBinding.version += 1;
+				if (changed === "host") accepted.trustedHostSessionRef = "other-host";
+				h.setAccepted(
+					changed === "missing"
+						? null
+						: {
+								...accepted,
+								...(changed === "stop" ? { stopPending: true } : {}),
+								...(changed === "selection"
+									? { selection: original.selection }
+									: {}),
+							},
+				);
+				await expect(
+					client.restoreExecutionKey(
+						{ ...skill, capabilityKind: "skill" },
+						"host",
+						"A".repeat(43),
+					),
+				).rejects.toThrow();
+				expect(h.relayKeyDecryptor.decrypt).not.toHaveBeenCalled();
+				expect(h.executionKeys.readCiphertext).not.toHaveBeenCalled();
+				expect(h.fetcher).not.toHaveBeenCalled();
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
+
 	it("delivers the original Key through the independent recovery route", async () => {
 		const { h, client, request } = clientHarness();
 		try {
