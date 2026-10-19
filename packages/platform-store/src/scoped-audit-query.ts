@@ -257,6 +257,8 @@ function candidates(
 				limit 1
 			) accepted on true
 			where ${ownership}
+				-- 只返回已登记的动作（#2776）：未登记的动作没有投影规则，会让整页失败。
+				and a.action = any(${[...platformAuditQueryActionsV1]}::text[])
 				and (${filters.from ?? null}::timestamptz is null or a."occurredAt" >= ${filters.from ?? null}::timestamptz)
 				and (${filters.until ?? null}::timestamptz is null or a."occurredAt" < ${filters.until ?? null}::timestamptz)
 				and (${filters.agentId ?? null}::text is null or a."agentId" = ${filters.agentId ?? null})

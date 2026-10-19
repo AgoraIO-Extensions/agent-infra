@@ -5,7 +5,7 @@ import {
 	skillHubVersionStatesV1,
 } from "@agent-infra/platform-core";
 
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
 
@@ -355,6 +355,10 @@ const configurationChangedFields = [
 ] as const;
 
 export type PlatformAuditActionV1 = keyof typeof platformAuditActionMetadata;
+/** 旧版管理员审计列表只返回解码器认识的动作（#2776）：未登记的动作会让整页 503。 */
+const legacyAdministratorAuditActions = Object.keys(
+	platformAuditActionMetadata,
+);
 export type PlatformAuditChangedFieldV1 =
 	(typeof configurationChangedFields)[number];
 
@@ -1044,7 +1048,10 @@ export class PostgresPlatformAuditQueryV1 {
 						.from(auditEvents)
 						.innerJoin(cursor, sql`true`)
 						.where(
-							sql<boolean>`(${auditEvents.occurredAt}, ${auditEvents.id}) < (${cursor.occurredAt}, ${cursor.auditId}) AND ${auditEvents.action} NOT LIKE 'audit.query.%'`,
+							and(
+								sql<boolean>`(${auditEvents.occurredAt}, ${auditEvents.id}) < (${cursor.occurredAt}, ${cursor.auditId}) AND ${auditEvents.action} NOT LIKE 'audit.query.%'`,
+								inArray(auditEvents.action, legacyAdministratorAuditActions),
+							),
 						)
 						.orderBy(desc(auditEvents.occurredAt), desc(auditEvents.id))
 						.limit(page.limit + 1),
@@ -1077,7 +1084,12 @@ export class PostgresPlatformAuditQueryV1 {
 				rows = await this.#database
 					.select(auditSelection)
 					.from(auditEvents)
-					.where(sql<boolean>`${auditEvents.action} NOT LIKE 'audit.query.%'`)
+					.where(
+						and(
+							sql<boolean>`${auditEvents.action} NOT LIKE 'audit.query.%'`,
+							inArray(auditEvents.action, legacyAdministratorAuditActions),
+						),
+					)
 					.orderBy(desc(auditEvents.occurredAt), desc(auditEvents.id))
 					.limit(page.limit + 1);
 			}
