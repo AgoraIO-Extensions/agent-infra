@@ -10,6 +10,7 @@ import {
 	expectDesktopTable,
 	expectFieldControl,
 	expectFieldLabel,
+	expectPageHeadTop,
 } from "./primitive-styles";
 
 const session = (role: "employee" | "admin") => ({
@@ -610,6 +611,23 @@ test("same-user administrator role revocation clears list and detail despite a l
 		api.releaseDetail();
 	}
 });
+
+for (const [route, title] of [
+	["/audit", "查看自己的执行记录。"],
+	["/admin/audit", "查看平台变更记录。"],
+] as const) {
+	test(`audit page head ${route} places the h1 at the design height`, async ({
+		page,
+	}, info) => {
+		await fixture(page, route === "/audit" ? "employee" : "admin");
+		await page.goto(route);
+		await expect(
+			page.getByRole("heading", { level: 1, name: title, exact: true }),
+		).toBeVisible();
+		// 设计 .page-head-copy .eyebrow 上外边距为 0，h1 与设计同高（±1px）。
+		await expectPageHeadTop(page, info.project.name === "mobile");
+	});
+}
 
 for (const route of ["/audit", "/admin/audit"]) {
 	test(`exported design viewport matrix ${route}`, async ({ page }, info) => {

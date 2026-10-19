@@ -14,6 +14,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { cjkSpaced } from "@/lib/cjk-spacing";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import type {
 	AgentApplicationCreateRequestV2Writable,
@@ -611,7 +612,8 @@ function DraftRows<T extends string>({
 							type="button"
 						>
 							<Trash2Icon aria-hidden="true" data-icon="inline-start" />
-							移除{label}
+							{/* label 以拉丁字母开头时补空格：「移除 Secret」「移除环境变量」。 */}
+							{cjkSpaced`移除${label}`}
 						</Button>
 					) : null}
 				</fieldset>

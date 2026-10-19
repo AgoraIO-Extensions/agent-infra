@@ -26,7 +26,6 @@ import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
-	agentSourceReferenceLabel,
 } from "../agent-management-status.js";
 import {
 	AvailabilityNameList,
@@ -35,8 +34,8 @@ import {
 	useAvailabilityNames,
 } from "../directory-names.js";
 import {
-	standardTemplateLabel,
 	type TemplateNameLookup,
+	templateDisplayName,
 } from "../template-display-name.js";
 import { AdminAgentRowActions } from "./admin-agent-row-actions.js";
 import type { AdminAgentsState } from "./admin-agents.js";
@@ -59,9 +58,10 @@ export type AdminAgentFilters = {
 };
 export const adminAgentQueryMaxLength = 256;
 const pageSize = 10;
+// 设计 #admin-agents：来源筛选为「全部来源 / 标准模板 / 自定义镜像」。
 const sourceFilterLabels = {
 	standard: "标准模板",
-	custom: "自定义 Agent",
+	custom: "自定义镜像",
 } as const satisfies Record<(typeof adminAgentSources)[number], string>;
 
 export function validateAdminAgentSearch(
@@ -88,10 +88,11 @@ function sourceLabel(
 	agent: AgentProjectionV2,
 	templateName?: TemplateNameLookup,
 ) {
-	// 标准模板只显示模板显示名，读不到时为「标准模板」（F-02）。
+	// 设计 #admin-agents 的来源单元格：标准模板只写模板显示名（「Codex」），读不到时为
+	// 「标准模板」（F-02）；自定义来源写「自定义镜像」。
 	return agent.source.kind === "standard"
-		? standardTemplateLabel(agent.source.templateId, templateName)
-		: `自定义 Agent · ${agentSourceReferenceLabel(agent)}`;
+		? templateDisplayName(agent.source.templateId, templateName)
+		: sourceFilterLabels.custom;
 }
 
 // 与 Agent 详情一致：有服务可用性时显示服务可用性，否则显示管理状态，只出一个 chip。

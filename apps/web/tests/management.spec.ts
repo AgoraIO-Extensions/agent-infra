@@ -28,6 +28,7 @@ import {
 	expectFieldLabel,
 	expectFormSection,
 	expectNoLegendOnBorder,
+	expectPageHeadTop,
 	expectSearchInput,
 	resolved,
 } from "./primitive-styles";
@@ -1160,6 +1161,24 @@ test("administrator rejection, approval, empty queue and pending controls", asyn
 	});
 });
 
+test("approvals page head places the h1 at the design height while Owner configuration keeps its back-link spacing", async ({
+	page,
+}, info) => {
+	await fixture(page, "admin");
+	await page.goto("/admin/approvals");
+	await expect(
+		page.getByRole("heading", { level: 1, name: "审批申请" }),
+	).toBeVisible();
+	// 设计 .page-head-copy .eyebrow 上外边距为 0，h1 与设计同高（±1px）。
+	await expectPageHeadTop(page, info.project.name === "mobile");
+	await fixture(page, "owner");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const heading = page.locator("main .page-heading").first();
+	await expect(heading.getByRole("heading", { level: 1 })).toBeVisible();
+	// Owner 配置的 eyebrow 前面有返回链接，不属于「第一个子元素」，保留原有上外边距。
+	await expect(heading.locator(".page-eyebrow")).toHaveCSS("margin-top", "9px");
+});
+
 test("approval review dialog follows the design facts, notice and footer", async ({
 	page,
 }) => {
@@ -1262,6 +1281,23 @@ test("approval review dialog follows the design facts, notice and footer", async
 			.locator("xpath=following-sibling::dd[1]"),
 	).toHaveText("Codex");
 	await expect(dialog).not.toContainText("codex");
+});
+
+test("application detail model range matches the review dialog without modelId", async ({
+	page,
+}) => {
+	const api = await fixture(page, "owner");
+	api.applicationModelOptions();
+	await page.goto("/my-agents/application-browser-1");
+	const facts = page.locator(".application-detail-aside .metadata-facts");
+	await expect(facts).toBeVisible();
+	// 与审批弹窗「模型」行一致：「显示名 · 档位」，不外露 modelId。
+	await expect(
+		facts
+			.locator("dt", { hasText: /^模型范围$/ })
+			.locator("xpath=following-sibling::dd[1]"),
+	).toHaveText("Primary model · 均衡、高");
+	await expect(page.locator("main")).not.toContainText("gpt-5");
 });
 
 test("approval table source column and filter use template display names (F-02)", async ({
@@ -4104,7 +4140,11 @@ test("lifecycle confirmations use the design titles and button variants", async 
 	await page.keyboard.press("Escape");
 	await expect(dialog).not.toBeVisible();
 	await page.getByRole("button", { name: "重启 Agent" }).click();
-	dialog = page.getByRole("dialog", { name: /^重启.+？$/ });
+	// Agent 名以拉丁字母开头时与「重启」之间有一个空格。
+	dialog = page.getByRole("dialog", {
+		name: "重启 Release assistant？",
+		exact: true,
+	});
 	await expect(dialog).toBeVisible();
 	await expect(dialog.locator('[data-slot="dialog-description"]')).toHaveText(
 		"重启会短暂释放并重新建立运行实例。历史会话保留，完成后状态会自动回到“就绪”。",

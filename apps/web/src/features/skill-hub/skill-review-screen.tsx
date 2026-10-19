@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { withObjectName } from "@/lib/accessible-name";
+import { cjkSpaced } from "@/lib/cjk-spacing";
 import type {
 	SkillHubPublicationVersionV1,
 	SkillHubReviewRequestV1,
@@ -148,8 +149,9 @@ function SkillReviewRow({
 			<div className="skill-row-copy">
 				<h2>{item.name}</h2>
 				<p>
-					{item.submitterName}申请 · {skillHubVisibilityLabels[item.visibility]}{" "}
-					· {skillHubProviderLabels[item.provider]}
+					{cjkSpaced`${item.submitterName}申请`} ·{" "}
+					{skillHubVisibilityLabels[item.visibility]} ·{" "}
+					{skillHubProviderLabels[item.provider]}
 				</p>
 				{self ? (
 					<p id={hintId} className="skill-form-hint">

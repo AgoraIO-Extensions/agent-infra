@@ -1,3 +1,4 @@
+import { cjkSpaced } from "@/lib/cjk-spacing";
 import type {
 	AgentConfigurationUpdateRequestV2Writable,
 	AgentProjectionV2,
@@ -206,12 +207,13 @@ export function configurationKeyError(
 ): string | undefined {
 	const trimmed = name.trim();
 	const label = kind === "environment" ? "环境变量名" : "Secret 名称";
-	if (!trimmed) return `请输入${label}。`;
+	// 「Secret 名称」以拉丁字母开头：与前面的中文之间补空格（「请输入 Secret 名称。」）。
+	if (!trimmed) return cjkSpaced`请输入${label}。`;
 	if (trimmed.startsWith("AGENT_INFRA_"))
-		return `${label}不能以 AGENT_INFRA_ 开头。`;
+		return cjkSpaced`${label}不能以 AGENT_INFRA_ 开头。`;
 	if (!environmentNamePattern.test(trimmed))
-		return `${label}只能包含字母、数字和下划线，且不能以数字开头。`;
+		return cjkSpaced`${label}只能包含字母、数字和下划线，且不能以数字开头。`;
 	if (allowedNames && !allowedNames.includes(trimmed))
-		return `当前模板不允许这个${label}。`;
+		return cjkSpaced`当前模板不允许这个${label}。`;
 	return undefined;
 }

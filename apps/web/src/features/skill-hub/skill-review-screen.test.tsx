@@ -112,6 +112,23 @@ describe("SkillReviewsScreen", () => {
 		expect(review).not.toHaveBeenCalled();
 	});
 
+	it("spaces a Latin submitter name before 申请 and keeps Han names joined", () => {
+		renderReviews({
+			queue: {
+				kind: "ready",
+				items: [{ ...others, submitterName: "Alex Chen" }, own],
+			},
+		});
+		const lines = [...document.querySelectorAll(".skill-row-copy > p")].map(
+			(line) => line.textContent,
+		);
+		expect(lines.some((line) => line?.startsWith("Alex Chen 申请 · "))).toBe(
+			true,
+		);
+		expect(lines.some((line) => line?.startsWith("陈昊申请 · "))).toBe(true);
+		expect(lines.some((line) => line?.includes("Chen申请"))).toBe(false);
+	});
+
 	it("requires a rejection reason and does not send an empty or whitespace review", async () => {
 		const review = renderReviews();
 		const dialog = await openReview();

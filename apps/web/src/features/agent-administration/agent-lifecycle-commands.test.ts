@@ -5,7 +5,10 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { pendingApplication } from "../my-agents/test-fixtures.js";
-import { visibleLifecycleCommands } from "./agent-lifecycle-commands.js";
+import {
+	confirmationCopy,
+	visibleLifecycleCommands,
+} from "./agent-lifecycle-commands.js";
 
 const ownerSession = BrowserSessionProjectionV1Schema.parse({
 	schemaVersion: 1,
@@ -108,5 +111,15 @@ describe("visibleLifecycleCommands", () => {
 			[],
 		);
 		expect(visibleLifecycleCommands(agent, { kind: "loading" })).toEqual([]);
+	});
+});
+
+describe("confirmationCopy", () => {
+	it("spaces a Latin Agent name in the restart title and keeps Han names joined", () => {
+		expect(confirmationCopy.restart.title("Release assistant")).toBe(
+			"重启 Release assistant？",
+		);
+		expect(confirmationCopy.restart.title("3 号助手")).toBe("重启 3 号助手？");
+		expect(confirmationCopy.restart.title("发布助理")).toBe("重启发布助理？");
 	});
 });

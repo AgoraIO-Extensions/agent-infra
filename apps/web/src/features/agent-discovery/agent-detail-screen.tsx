@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { armBefore, useRecoveryFocus } from "@/hooks/use-recovery-focus";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import { statusTone } from "@/lib/status-tone";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
@@ -110,18 +111,36 @@ function OwnerList({
 	);
 }
 
+/**
+ * 「入口状态」行：只在自有交互入口时承载入口是否就绪等状态。标准模板与平台交互入口的旧文案
+ * 只重复入口方式（已写进「模板 / 入口」），不再单独占一行，返回 undefined。
+ */
 function interactionReadiness(
 	agent: AgentProjectionV2,
 	interactionUrl: string | undefined,
 ) {
-	if (agent.source.kind === "standard") return "平台交互入口由平台提供。";
-	if (agent.source.interactionMode === "platform-adapter")
-		return "平台交互入口由平台身份校验。";
+	if (
+		agent.source.kind === "standard" ||
+		agent.source.interactionMode === "platform-adapter"
+	)
+		return undefined;
 	if (agent.source.identityResponsibility === "self-managed")
 		return interactionUrl ? "自有交互入口已就绪。" : "自有交互入口尚未就绪。";
 	return interactionUrl
 		? "平台身份入口已就绪。"
 		: "平台身份入口需经过 Auth Gateway；当前未提供直接入口。";
+}
+
+/**
+ * 设计 #agent-detail「模板 / 入口」：标准模板写「标准模板 · {显示名} · 平台交互入口」；
+ * 自定义 Agent 的来源文案已含入口方式（「自定义 Agent · 自有交互入口」）。
+ */
+function templateAndEntryLabel(
+	agent: AgentProjectionV2,
+	templateName: TemplateNameLookup | undefined,
+) {
+	const source = agentConversationSourceLabel(agent, templateName);
+	return agent.source.kind === "standard" ? `${source} · 平台交互入口` : source;
 }
 
 export function AgentDetailScreen({
@@ -133,6 +152,9 @@ export function AgentDetailScreen({
 	state,
 	templateName,
 }: AgentDetailScreenProps) {
+	// 「重新登录」「重新加载 Agent」恢复成功后，焦点移到详情 h1（Agent 名），不落到 body。
+	const recovery = useRecoveryFocus(state.kind === "ready" ? 0 : 1);
+	const retry = armBefore(recovery.arm, onRetry);
 	if (state.kind === "loading")
 		return (
 			<PageLoadingState title="Agent 详情" message="正在加载 Agent 详情…" />
@@ -159,9 +181,9 @@ export function AgentDetailScreen({
 							返回 Agent 目录
 						</Link>
 					}
-					onRetry={onRetry}
+					onRetry={retry}
 					// 401「重新登录」后会话仍有效：重读详情（W-03）。
-					onStillValid={onRetry}
+					onStillValid={retry}
 					retrying={retrying}
 					retryLabel="重新加载 Agent"
 				/>
@@ -179,6 +201,7 @@ export function AgentDetailScreen({
 			: undefined;
 	const ready = canStartPlatformConversation(agent);
 	const availability = agentAvailabilityStatus(agent);
+	const entryStatus = interactionReadiness(agent, interactionUrl);
 	return (
 		<section aria-labelledby="agent-detail-heading" className="agent-detail">
 			<header className="page-heading">
@@ -207,6 +230,8 @@ export function AgentDetailScreen({
 							</p>
 							<h1
 								id="agent-detail-heading"
+								ref={recovery.ref}
+								tabIndex={-1}
 								className="break-words font-semibold text-[28px]"
 							>
 								{agent.name}
@@ -284,14 +309,18 @@ export function AgentDetailScreen({
 									.map((owner) => owner.displayName)
 									.join("、") || "未提供"}
 							</dd>
-							<dt className="text-muted-foreground">模板与入口</dt>
+							<dt className="text-muted-foreground">模板 / 入口</dt>
 							<dd className="break-all">
-								{agentConversationSourceLabel(agent, templateName)}
+								{templateAndEntryLabel(agent, templateName)}
 							</dd>
 							<dt className="text-muted-foreground">入口身份责任</dt>
 							<dd>{agentIdentityResponsibilityLabel(agent)}</dd>
-							<dt className="text-muted-foreground">入口状态</dt>
-							<dd>{interactionReadiness(agent, interactionUrl)}</dd>
+							{entryStatus && (
+								<>
+									<dt className="text-muted-foreground">入口状态</dt>
+									<dd>{entryStatus}</dd>
+								</>
+							)}
 							<dt className="text-muted-foreground">可用范围</dt>
 							<dd className="break-words">
 								{agent.configuration.availability.length ? (

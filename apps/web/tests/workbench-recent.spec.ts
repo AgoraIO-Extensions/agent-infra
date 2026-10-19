@@ -621,7 +621,7 @@ for (const agentCollection of ["held", "unavailable"] as const) {
 					exact: true,
 				});
 				await expect(
-					agents.getByText("可用 Agent暂时无法读取。", { exact: true }),
+					agents.getByText("可用 Agent 暂时无法读取。", { exact: true }),
 				).toBeVisible();
 				await expect(
 					agents.getByRole("button", {
@@ -834,7 +834,7 @@ test("a failed workbench first page shows a notice and retry reads a new first p
 	const fixture = await workbenchFixture(page, { recentStatus: 503 });
 	await page.goto("/");
 	const recent = recentRegion(page);
-	const title = recent.getByText("最近的个人对话暂时无法读取。", {
+	const title = recent.getByText("最近对话暂时无法读取。", {
 		exact: true,
 	});
 	await expect(title).toBeVisible();
@@ -856,7 +856,7 @@ test("a failed workbench first page shows a notice and retry reads a new first p
 			.length;
 	const before = reads();
 	fixture.failFirst(200);
-	await recent.getByRole("button", { name: "重新加载最近的个人对话" }).click();
+	await recent.getByRole("button", { name: "重新加载最近对话" }).click();
 	await expect(recent.getByRole("heading", { level: 3 })).toHaveText([
 		"受控最近对话 conversation-z",
 		"受控最近对话 conversation-a",
@@ -878,9 +878,9 @@ test("a failed workbench first page shows a notice and retry reads a new first p
 });
 
 for (const [status, message] of [
-	[404, "最近的个人对话读取入口不可用。"],
-	[401, "最近的个人对话无法读取，请重新登录。"],
-	[403, "当前无权读取最近的个人对话。"],
+	[404, "最近对话读取入口不可用。"],
+	[401, "最近对话无法读取，请重新登录。"],
+	[403, "当前无权读取最近对话。"],
 ] as const) {
 	test(`recent ${status} keeps the failure in the region without replacing the authenticated root`, async ({
 		page,
@@ -937,7 +937,7 @@ test("401 across the workbench offers one re-login that rechecks the session wit
 	});
 	const main = page.locator("main");
 	await expect(
-		main.getByText("最近的个人对话无法读取，请重新登录。", { exact: true }),
+		main.getByText("最近对话无法读取，请重新登录。", { exact: true }),
 	).toBeVisible();
 	const relogin = main.getByRole("button", { name: "重新登录", exact: true });
 	// W-03：全页只有一个主操作，各分区 notice 内没有按钮。
@@ -1044,6 +1044,58 @@ test("401 re-login with a still-valid session re-reads every failed section and 
 	expect(fixture.requests.every((request) => request.method === "GET")).toBe(
 		true,
 	);
+	expect(fixture.unexpected).toEqual([]);
+});
+
+test("keyboard recovery from the 401 re-login moves focus to the workbench h1, not body", async ({
+	page,
+}) => {
+	const fixture = await workbenchFixture(page, {
+		administrator: true,
+		attention: true,
+		collectionStatus: 401,
+	});
+	await page.goto("/");
+	const main = page.locator("main");
+	// 工作台统一落到页面 h1：401「重新登录」一次恢复多个分区，没有唯一的恢复分区。
+	const heading = main.getByRole("heading", {
+		level: 1,
+		name: "选择一个 Agent 开始工作。",
+	});
+	const relogin = main.getByRole("button", { name: "重新登录", exact: true });
+	await relogin.focus();
+	await expect(relogin).toBeFocused();
+	fixture.restoreCollections();
+	await page.keyboard.press("Enter");
+	await expect(relogin).toHaveCount(0);
+	await expect(main.getByText(/无法读取，请重新登录。$/)).toHaveCount(0);
+	await expect(heading).toBeFocused();
+	await expect(heading).toHaveAttribute("tabindex", "-1");
+	expect(
+		await page.evaluate(() => document.activeElement === document.body),
+	).toBe(false);
+	expect(fixture.unexpected).toEqual([]);
+});
+
+test("keyboard reload of a failed recent section moves focus to the workbench h1, not body", async ({
+	page,
+}) => {
+	const fixture = await workbenchFixture(page, { recentStatus: 503 });
+	await page.goto("/");
+	const recent = recentRegion(page);
+	const reload = recent.getByRole("button", { name: "重新加载最近对话" });
+	await reload.focus();
+	await expect(reload).toBeFocused();
+	fixture.failFirst(200);
+	await page.keyboard.press("Enter");
+	await expect(recent.getByRole("heading", { level: 3 })).toHaveCount(2);
+	await expect(reload).toHaveCount(0);
+	await expect(
+		page.getByRole("heading", { level: 1, name: "选择一个 Agent 开始工作。" }),
+	).toBeFocused();
+	expect(
+		await page.evaluate(() => document.activeElement === document.body),
+	).toBe(false);
 	expect(fixture.unexpected).toEqual([]);
 });
 

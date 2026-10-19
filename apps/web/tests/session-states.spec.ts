@@ -388,6 +388,34 @@ for (const detail of detailPages) {
 	});
 }
 
+test("keyboard recovery on the Agent detail moves focus to the Agent h1, not body", async ({
+	page,
+}) => {
+	let reply: Reply = { status: 401 };
+	await platform(page, { agent: () => reply });
+	const card = page.locator('#main-content [data-slot="state-card"]');
+	const heading = page.getByRole("heading", { level: 1, name: agent.name });
+	for (const [status, name] of [
+		[401, "重新登录"],
+		[503, "重新加载 Agent"],
+	] as const) {
+		reply = { status };
+		await page.goto(`/agents/${agent.agentId}`);
+		const action = card.getByRole("button", { name, exact: true });
+		await action.focus();
+		await expect(action).toBeFocused();
+		reply = { status: 200 };
+		await page.keyboard.press("Enter");
+		await expect(card).toHaveCount(0);
+		// 恢复后状态卡卸载：焦点移到详情 h1（tabIndex=-1），不落到 body。
+		await expect(heading).toBeFocused();
+		await expect(heading).toHaveAttribute("tabindex", "-1");
+		expect(
+			await page.evaluate(() => document.activeElement === document.body),
+		).toBe(false);
+	}
+});
+
 test("re-reads the Agent on the conversation page when re-login finds the session still valid (W-03)", async ({
 	page,
 }) => {

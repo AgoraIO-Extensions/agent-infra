@@ -3488,6 +3488,14 @@ body {
 	font: 11px / 1.4 var(--font-mono);
 	letter-spacing: 0.08em;
 }
+/* 设计 .page-head-copy .eyebrow 上外边距为 0：页头文案块的第一个子元素是 eyebrow 时不继承
+   `.management-content .page-heading p` 的 9px；前面有返回链接的页头（Owner 配置、申请详情）不受影响。 */
+.management-content
+	.page-heading
+	> div:first-child
+	> .page-eyebrow:first-child {
+	margin-top: 0;
+}
 .management-content .form-layout.full-width-form {
 	grid-template-columns: minmax(0, 1fr);
 }

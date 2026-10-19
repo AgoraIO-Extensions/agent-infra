@@ -551,7 +551,7 @@ resources:
 		expect(screen.getAllByText("名称不能重复。")).toHaveLength(2);
 
 		fireEvent.click(
-			at(screen.getAllByRole("button", { name: "移除Secret" }), 1),
+			at(screen.getAllByRole("button", { name: "移除 Secret" }), 1),
 		);
 		expect(screen.queryByText("名称不能重复。")).toBeNull();
 	});

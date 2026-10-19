@@ -80,6 +80,14 @@ describe("AgentDetailScreen", () => {
 		).toEqual(["每个用户都有独立会话", "支持 Connection"]);
 		expect(statusLine.querySelector('[class*="bg-secondary"]')).toBeNull();
 		expect(screen.getByText("Owner", { selector: "dt" })).toBeTruthy();
+		// 设计 #agent-detail：「模板 / 入口」一行写来源、模板显示名与入口方式；入口方式不再单独占行。
+		const source = screen.getByText("模板 / 入口", { selector: "dt" });
+		expect(source.nextElementSibling?.textContent).toBe(
+			"标准模板 · 平台交互入口",
+		);
+		expect(screen.queryByText("模板与入口", { selector: "dt" })).toBeNull();
+		expect(screen.queryByText("入口状态", { selector: "dt" })).toBeNull();
+		expect(screen.queryByText(/平台交互入口由平台/)).toBeNull();
 		expect(
 			screen.getByRole("region", { name: "运行与渠道" }).textContent,
 		).toContain("Web平台对话入口可用企微机器人未配置");
@@ -147,7 +155,15 @@ describe("AgentDetailScreen", () => {
 		).toBe("https://agent.example.test/");
 		expect(screen.getByText("入口身份责任", { selector: "dt" })).toBeTruthy();
 		expect(screen.getByText("由自有入口校验")).toBeTruthy();
-		expect(screen.getByText("自有交互入口已就绪。")).toBeTruthy();
+		// 自有交互入口：「模板 / 入口」写现有入口文案，「入口状态」承载就绪状态，保留。
+		expect(
+			screen.getByText("模板 / 入口", { selector: "dt" }).nextElementSibling
+				?.textContent,
+		).toBe("自定义 Agent · 自有交互入口");
+		expect(
+			screen.getByText("入口状态", { selector: "dt" }).nextElementSibling
+				?.textContent,
+		).toBe("自有交互入口已就绪。");
 		expect(screen.queryByRole("link", { name: "查看对话历史" })).toBeNull();
 		expect(screen.queryByRole("link", { name: "开始对话" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "开始对话" })).toBeNull();
@@ -234,6 +250,8 @@ describe("AgentDetailScreen", () => {
 
 		expect(screen.queryByRole("link", { name: "打开 Agent" })).toBeNull();
 		expect(screen.getByText("自定义 Agent · 平台交互入口")).toBeTruthy();
+		// 平台交互入口的旧「入口状态」只重复入口方式，不再单独占行。
+		expect(screen.queryByText("入口状态", { selector: "dt" })).toBeNull();
 		expect(screen.getByText("由平台校验")).toBeTruthy();
 		expect(screen.getByText("模型范围", { selector: "dt" })).toBeTruthy();
 		expect(screen.getByText("默认推理档位", { selector: "dt" })).toBeTruthy();

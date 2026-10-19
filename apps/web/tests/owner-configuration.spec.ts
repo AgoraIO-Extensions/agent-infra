@@ -383,7 +383,8 @@ test("Secrets are read-only rows replaced through a write-only modal (O-10, N-08
 	});
 	await expect(trigger.locator("svg")).toHaveCount(1);
 	await expect(section.locator('input[type="password"]')).toHaveCount(0);
-	await expect(main(page)).not.toContainText("移除Secret");
+	// 申请表单的「移除 Secret」已补中英文空格；两种写法都不得出现。
+	await expect(main(page)).not.toContainText(/移除\s?Secret/);
 	// NI-78：三个入口都是默认尺寸 44px。
 	for (const button of [
 		trigger,

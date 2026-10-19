@@ -162,6 +162,16 @@ describe("Agent configuration draft", () => {
 				allowedNames: ["LOG_LEVEL"],
 			}),
 		).toBe("当前模板不允许这个环境变量名。");
+		// Secret 名称以拉丁字母开头：与前面的中文之间有一个空格。
+		expect(configurationKeyError(" ", { kind: "secret" })).toBe(
+			"请输入 Secret 名称。",
+		);
+		expect(
+			configurationKeyError("OTHER", {
+				kind: "secret",
+				allowedNames: ["MODEL_API_KEY"],
+			}),
+		).toBe("当前模板不允许这个 Secret 名称。");
 		expect(
 			configurationKeyError("LOG_LEVEL", {
 				kind: "environment",

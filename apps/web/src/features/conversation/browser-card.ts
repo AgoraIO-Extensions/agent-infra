@@ -1,4 +1,5 @@
 import { withObjectName } from "@/lib/accessible-name";
+import { cjkSpaced } from "@/lib/cjk-spacing";
 import type { ChipTone } from "@/lib/status-tone";
 import type { PersistedConversationEventV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -357,16 +358,15 @@ export function selectBrowserCard({
 			browserHandoffReasonLabels[
 				openHandoff.payload.reason as BrowserHandoffReason
 			];
-		// 中西文之间留空格：「完成 MFA 验证」「完成 CAPTCHA 验证」，中文开头的「完成登录」不加。
-		const reason = /^[A-Za-z0-9]/.test(label) ? ` ${label}` : label;
 		const handoffId = openHandoff.payload.handoffId;
 		return {
 			phase: "handoff",
 			title: "需要你接管浏览器",
+			// 中西文之间留空格：「完成 MFA 验证」「完成 CAPTCHA 验证」，中文开头的「完成登录」不加。
 			body:
 				status === "requested"
-					? `请接管浏览器完成${reason}，然后把控制权交还给 Agent。接管期间 Agent 不会操作页面。`
-					: `请在浏览器中完成${reason}，然后把控制权交还给 Agent。`,
+					? cjkSpaced`请接管浏览器完成${label}，然后把控制权交还给 Agent。接管期间 Agent 不会操作页面。`
+					: cjkSpaced`请在浏览器中完成${label}，然后把控制权交还给 Agent。`,
 			status: status === "requested" ? "等待接管" : "已接管",
 			tone: "amber",
 			meta: [],

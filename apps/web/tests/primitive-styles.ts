@@ -327,3 +327,38 @@ export async function expectDesktopTable(page: Page, table: Locator) {
 		(await computed(table.locator("tbody tr").first(), ["display"])).display,
 	).toBe("table-row");
 }
+
+/**
+ * 设计 .page-head-copy：eyebrow 上外边距为 0、贴页头文案块顶部，h1 在 eyebrow 下 9px；
+ * 1440 下 h1 y=130.4，390 下 y=121.4（±1px）。坐标按文档计算，不受滚动位置影响。
+ */
+export async function expectPageHeadTop(page: Page, mobile: boolean) {
+	const heading = page.locator("main .page-heading").first();
+	await expect(heading.locator("h1")).toBeVisible();
+	const geometry = await heading.evaluate((element) => {
+		const eyebrow = element.querySelector(".page-eyebrow");
+		const h1 = element.querySelector("h1");
+		if (!eyebrow?.parentElement || !h1)
+			throw new Error("Expected a page head eyebrow and h1");
+		const box = (node: Element) => {
+			const rect = node.getBoundingClientRect();
+			return { top: rect.top + scrollY, bottom: rect.bottom + scrollY };
+		};
+		return {
+			marginTop: getComputedStyle(eyebrow).marginTop,
+			eyebrow: box(eyebrow),
+			copy: box(eyebrow.parentElement),
+			h1: box(h1),
+		};
+	});
+	expect(geometry.marginTop).toBe("0px");
+	expect(
+		Math.abs(geometry.eyebrow.top - geometry.copy.top),
+	).toBeLessThanOrEqual(0.5);
+	expect(
+		Math.abs(geometry.h1.top - (geometry.eyebrow.bottom + 9)),
+	).toBeLessThanOrEqual(0.5);
+	expect(
+		Math.abs(geometry.h1.top - (mobile ? 121.4 : 130.4)),
+	).toBeLessThanOrEqual(1);
+}

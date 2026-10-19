@@ -354,9 +354,9 @@ describe("MyAgentApplicationDetailScreen", () => {
 		expect(document.body.textContent).not.toMatch(
 			/user-release-2|org-platform/,
 		);
-		expect(
-			screen.getByText("Release model · release-model-v1 · 均衡、高"),
-		).toBeTruthy();
+		// 与审批弹窗一致：模型范围写「显示名 · 档位」，不外露 modelId。
+		expect(screen.getByText("Release model · 均衡、高")).toBeTruthy();
+		expect(document.body.textContent).not.toContain("release-model-v1");
 		expect(screen.getByText("默认模型").nextElementSibling?.textContent).toBe(
 			"Release model",
 		);
@@ -680,9 +680,9 @@ describe("MyAgentApplicationDetailScreen design alignment (M-11)", () => {
 		expect(within(scope).getAllByRole("listitem")).toHaveLength(2);
 		expect(within(scope).getByText("未识别的用户")).toBeTruthy();
 		expect(within(scope).getByText("未识别的组织")).toBeTruthy();
-		expect(
-			screen.getByText("Release model · release-model-v1 · 均衡"),
-		).toBeTruthy();
+		// 模型范围写「显示名 · 档位」，不外露 modelId。
+		expect(screen.getByText("Release model · 均衡")).toBeTruthy();
+		expect(document.body.textContent).not.toContain("release-model-v1");
 		expect(screen.getByText("默认模型").nextElementSibling?.textContent).toBe(
 			"未识别的模型选项",
 		);

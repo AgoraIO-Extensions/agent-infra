@@ -19,7 +19,9 @@ import {
 } from "@/components/ui/empty";
 import { LoadingLine } from "@/components/ui/spinner";
 import { Timestamp } from "@/components/ui/timestamp";
+import { armBefore, useRecoveryFocus } from "@/hooks/use-recovery-focus";
 import { distinctObjectNames, withObjectName } from "@/lib/accessible-name";
+import { cjkSpaced } from "@/lib/cjk-spacing";
 import { statusTone } from "@/lib/status-tone";
 import type {
 	AgentProjectionV2,
@@ -113,17 +115,18 @@ function WorkbenchSection({
 	);
 }
 
+/** 分区读取失败的标题；label 以拉丁字母或数字结尾时与中文之间补空格（「可用 Agent 无法读取」）。 */
 function readFailureMessage(state: Exclude<ReadState, Loading>, label: string) {
 	const reason = state.reason;
 	return reason === "authentication-required"
-		? `${label}无法读取，请重新登录。`
+		? cjkSpaced`${label}无法读取，请重新登录。`
 		: state.kind === "denied" || reason === "denied"
-			? `当前无权读取${label}。`
+			? cjkSpaced`当前无权读取${label}。`
 			: reason === "not-found"
-				? `${label}读取入口不可用。`
+				? cjkSpaced`${label}读取入口不可用。`
 				: reason === "invalid-response"
-					? `${label}返回的数据无法读取。`
-					: `${label}暂时无法读取。`;
+					? cjkSpaced`${label}返回的数据无法读取。`
+					: cjkSpaced`${label}暂时无法读取。`;
 }
 
 const requiresLogin = (state: { kind: string; reason?: unknown }) =>
@@ -147,7 +150,7 @@ function ReadNotice({
 	refreshing?: boolean;
 }) {
 	if (state.kind === "loading")
-		return <LoadingLine>正在加载{label}…</LoadingLine>;
+		return <LoadingLine>{cjkSpaced`正在加载${label}…`}</LoadingLine>;
 	const denied = state.kind === "denied";
 	const retryable =
 		!denied && state.retryable && state.reason !== "authentication-required";
@@ -161,7 +164,7 @@ function ReadNotice({
 			{retryable && (
 				<AlertAction>
 					<Button variant="outline" onClick={onRetry} disabled={refreshing}>
-						重新加载{label}
+						{cjkSpaced`重新加载${label}`}
 					</Button>
 				</AlertAction>
 			)}
@@ -329,14 +332,27 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 		refreshing,
 		templateName,
 	} = props;
-	const notice = { onRetry, refreshing };
-	const loginRequired = [
+	const sections = [
 		recent,
 		agents,
 		ownerAgents,
 		applications,
 		...(administrator ? [pending, adminAgents] : []),
-	].some(requiresLogin);
+	];
+	// 页面级「重新登录」或分区「重新加载…」恢复成功后，焦点移到页面 h1，不落到 body。
+	// 401 的「重新登录」一次恢复多个分区，没有唯一的「恢复分区」，因此统一落到页面 h1。
+	const recovery = useRecoveryFocus(
+		sections.filter((section) => section.kind !== "ready").length,
+	);
+	const notice = {
+		onRetry: () => {
+			recovery.arm();
+			onRetry();
+		},
+		refreshing,
+	};
+	const relogin = armBefore(recovery.arm, onRelogin);
+	const loginRequired = sections.some(requiresLogin);
 	const latest =
 		recent.kind === "ready" ? recent.conversations.at(0) : undefined;
 	const rejected =
@@ -362,7 +378,9 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 			<header className="page-heading">
 				<div>
 					<p className="workbench-eyebrow">公司内部工作区 · M1</p>
-					<h1>选择一个 Agent 开始工作。</h1>
+					<h1 ref={recovery.ref} tabIndex={-1}>
+						选择一个 Agent 开始工作。
+					</h1>
 					<p>最近对话、可用 Agent 和待处理事项都在这里。</p>
 				</div>
 				<Link
@@ -380,9 +398,9 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 					<AlertDescription>
 						当前会话已过期，需要重新登录后再进入工作区。
 					</AlertDescription>
-					{onRelogin && (
+					{relogin && (
 						<AlertAction>
-							<Button onClick={onRelogin} disabled={refreshing}>
+							<Button onClick={relogin} disabled={refreshing}>
 								重新登录
 							</Button>
 						</AlertAction>
@@ -413,7 +431,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 					{recent.kind === "ready" ? (
 						<RecentConversations agents={agents} recent={recent} />
 					) : (
-						<ReadNotice {...notice} state={recent} label="最近的个人对话" />
+						<ReadNotice {...notice} state={recent} label="最近对话" />
 					)}
 				</WorkbenchSection>
 				<aside className="workbench-attention" aria-label="待处理">

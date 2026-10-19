@@ -188,8 +188,12 @@ describe("Administrator inventory presentation", () => {
 		const table = screen.getByRole("table", { name: "已创建 Agent" });
 		const rows = within(table).getAllByRole("row").slice(1);
 		expect(rows).toHaveLength(6);
-		for (const row of rows)
-			expect(row.textContent).toContain("自定义 Agent · registry.example.test");
+		// 设计 #admin-agents：自定义来源单元格写「自定义镜像」，不写镜像地址。
+		for (const row of rows) {
+			const cell = row.querySelector('[data-label="来源"]');
+			expect(cell?.textContent).toBe("自定义镜像");
+			expect(row.textContent).not.toContain("registry.example.test");
+		}
 		const filters = document.querySelector(".admin-agent-filters");
 		expect(
 			[...(filters?.children ?? [])].map(
@@ -202,7 +206,7 @@ describe("Administrator inventory presentation", () => {
 		expect([...source.options].map((option) => option.text)).toEqual([
 			"全部来源",
 			"标准模板",
-			"自定义 Agent",
+			"自定义镜像",
 		]);
 		fireEvent.change(source, { target: { value: "standard" } });
 		expect(change).toHaveBeenLastCalledWith({
@@ -214,6 +218,32 @@ describe("Administrator inventory presentation", () => {
 			source: undefined,
 			page: undefined,
 		});
+	});
+
+	it("writes the template display name in the source cell and falls back to 标准模板", () => {
+		const standard = agents.slice(0, 1);
+		const view = render(
+			<AdminAgentsScreen
+				state={{ kind: "ready", agents: standard }}
+				filters={{}}
+				templateName={() => "Codex"}
+				{...noop}
+			/>,
+		);
+		const cell = () =>
+			screen
+				.getByRole("table", { name: "已创建 Agent" })
+				.querySelector('tbody [data-label="来源"]');
+		// 设计 #admin-agents：标准模板单元格只写模板显示名，不加「标准模板 · 」前缀。
+		expect(cell()?.textContent).toBe("Codex");
+		view.rerender(
+			<AdminAgentsScreen
+				state={{ kind: "ready", agents: standard }}
+				filters={{}}
+				{...noop}
+			/>,
+		);
+		expect(cell()?.textContent).toBe("标准模板");
 	});
 
 	it("renders design columns, one status chip, Owner names and configure/retry row actions", async () => {

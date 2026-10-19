@@ -1,6 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { AgentApplicationSubmissionScreen } from "../../features/my-agents/agent-application-submission-screen.js";
+import {
+	AgentApplicationSubmissionScreen,
+	createApplicationHeading,
+} from "../../features/my-agents/agent-application-submission-screen.js";
 import { projectDeploymentConfiguration } from "../../features/my-agents/deployment-configuration.js";
 import { useAgentApplicationSubmission } from "../../features/my-agents/use-agent-application-submission.js";
 import { useDeploymentConfiguration } from "../../features/my-agents/use-deployment-configuration.js";
@@ -17,7 +20,7 @@ function NewAgentApplicationRoute() {
 		return (
 			<main className="platform-content management-content">
 				<PageLoadingState
-					title="创建一个新的 Agent。"
+					title={createApplicationHeading}
 					message="正在读取部署选项…"
 				/>
 			</main>

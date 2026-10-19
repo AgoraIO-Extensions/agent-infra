@@ -589,9 +589,9 @@ describe("Secrets (O-10, N-08)", () => {
 			true,
 		]);
 		expect(trigger().querySelectorAll("svg")).toHaveLength(1);
-		// 页面上没有可编辑的 Secret 输入框，也没有「移除Secret」。
+		// 页面上没有可编辑的 Secret 输入框，也没有「移除 Secret」（申请表单的按钮已补中英文空格）。
 		expect(screen.queryByLabelText("新 Secret 值")).toBeNull();
-		expect(document.body.textContent).not.toContain("移除Secret");
+		expect(document.body.textContent).not.toMatch(/移除\s?Secret/);
 		expect(secretSectionPasswordInputs()).toHaveLength(0);
 	});
 
@@ -782,7 +782,8 @@ describe("Secrets (O-10, N-08)", () => {
 		fireEvent.click(
 			within(dialog).getByRole("button", { name: "保存 Secret" }),
 		);
-		expect(within(dialog).getByText("请输入Secret 名称。")).toBeTruthy();
+		// 中文与「Secret」之间有一个空格。
+		expect(within(dialog).getByText("请输入 Secret 名称。")).toBeTruthy();
 		fireEvent.change(name, { target: { value: "RELEASE_KEY" } });
 		typeWriteOnly(within(dialog).getByLabelText("新 Secret 值"), "new-value");
 		fireEvent.click(

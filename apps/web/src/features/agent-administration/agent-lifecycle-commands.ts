@@ -1,3 +1,4 @@
+import { cjkSpaced } from "@/lib/cjk-spacing";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import type { AgentLifecycleCommand } from "./agent-administration.js";
@@ -67,7 +68,8 @@ export const confirmationCopy = {
 		confirm: "停止 Agent",
 	},
 	restart: {
-		title: (agentName: string) => `重启${agentName}？`,
+		// Agent 名以拉丁字母或数字开头时中间补空格（「重启 Release assistant？」）。
+		title: (agentName: string) => cjkSpaced`重启${agentName}？`,
 		description:
 			"重启会短暂释放并重新建立运行实例。历史会话保留，完成后状态会自动回到“就绪”。",
 		confirm: "确认重启",

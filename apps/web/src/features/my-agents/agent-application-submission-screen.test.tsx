@@ -150,11 +150,15 @@ describe("AgentApplicationSubmissionScreen", () => {
 		const cancel = expectSingleFooterCancel("/my-agents");
 		expect(screen.queryByText("退出创建")).toBeNull();
 		expect(screen.getByText("我的管理 / 创建申请")).toBeTruthy();
+		// 设计 #application-form：h1「创建 Agent」，副标题为设计原文去掉「渠道」（随 #2862 M-10 决定）。
+		const heading = screen.getByRole("heading", { level: 1 });
+		expect(heading.textContent).toBe("创建 Agent");
+		expect(heading.nextElementSibling?.textContent).toBe(
+			"填写使用场景，再配置 Owner、范围和模型。提交时会重新校验字段。",
+		);
 		fireEvent.click(cancel);
 		await waitFor(() => {
-			expect(
-				screen.queryByRole("heading", { name: "创建一个新的 Agent。" }),
-			).toBeNull();
+			expect(screen.queryByRole("heading", { name: "创建 Agent" })).toBeNull();
 		});
 		expect(onSubmit).not.toHaveBeenCalled();
 	});

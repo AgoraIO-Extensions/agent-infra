@@ -288,6 +288,61 @@ describe("AgentDiscoveryScreen", () => {
 		).toBe("/my-agents/new");
 	});
 
+	it("labels model filter options with display names, keeps modelId as the value and numbers duplicate names", async () => {
+		const withModels = (
+			agentId: string,
+			name: string,
+			modelOptions: {
+				optionId: string;
+				displayName: string;
+				modelId: string;
+			}[],
+		) =>
+			AgentProjectionV2Schema.parse({
+				...startingAgent,
+				agentId,
+				name,
+				configuration: {
+					...startingAgent.configuration,
+					modelOptions: modelOptions.map((option) => ({
+						...option,
+						reasoningLevels: ["medium"],
+					})),
+					defaultModelOptionId: modelOptions[0]?.optionId ?? null,
+				},
+			});
+		const agents = [
+			withModels("agent-a", "甲助手", [
+				{ optionId: "a-1", displayName: "GPT 旗舰", modelId: "gpt-5" },
+				{ optionId: "a-2", displayName: "Sonnet", modelId: "claude-sonnet-4" },
+			]),
+			withModels("agent-b", "乙助手", [
+				// 同一 modelId 再次出现时不重复成选项；另一个模型与它同名，按出现顺序编号。
+				{ optionId: "b-1", displayName: "GPT 旗舰（别名）", modelId: "gpt-5" },
+				{ optionId: "b-2", displayName: "Sonnet", modelId: "claude-sonnet-3" },
+			]),
+		];
+		await renderWithAgentRouter(
+			<AgentDiscoveryScreen state={{ kind: "ready", agents }} />,
+		);
+		const model = screen.getByRole("combobox", {
+			name: "模型",
+		}) as HTMLSelectElement;
+		expect(
+			[...model.options].map((option) => [option.value, option.text]),
+		).toEqual([
+			["all", "全部模型"],
+			["gpt-5", "GPT 旗舰"],
+			["claude-sonnet-4", "Sonnet（第 1 次）"],
+			["claude-sonnet-3", "Sonnet（第 2 次）"],
+		]);
+		for (const option of model.options)
+			expect(option.text).not.toMatch(/gpt-5|claude-sonnet/);
+		fireEvent.change(model, { target: { value: "claude-sonnet-3" } });
+		expect(screen.getByRole("link", { name: "查看 乙助手 详情" })).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "查看 甲助手 详情" })).toBeNull();
+	});
+
 	it("drops previously visible Agents when the authorized collection changes", async () => {
 		function Collection() {
 			const [agents, setAgents] = useState([startingAgent]);

@@ -533,6 +533,16 @@ test.describe("Agent directory design alignment", () => {
 		expect(templates).toEqual(expect.arrayContaining(["Codex", "OpenCode"]));
 		for (const raw of ["codex", "opencode", "pi"])
 			expect(templates).not.toContain(raw);
+		// 「模型」筛选项写模型显示名，不外露 modelId（value 仍为 modelId）。
+		const model = page.getByRole("combobox", { name: "模型", exact: true });
+		expect(await model.locator("option").allTextContents()).toEqual([
+			"全部模型",
+			"Primary model",
+		]);
+		await expect(model.locator("option").nth(1)).toHaveAttribute(
+			"value",
+			"gpt-5",
+		);
 		await card.getByRole("link", { name: "查看 发布助理 详情" }).click();
 		await expect(
 			page.getByRole("heading", { level: 1, name: "发布助理" }),
@@ -541,6 +551,13 @@ test.describe("Agent directory design alignment", () => {
 			"Agent 详情 · Codex",
 		);
 		await expect(page.locator("main")).toContainText("标准模板 · Codex");
+		// 设计 #agent-detail：「模板 / 入口 = 标准模板 · Codex · 平台交互入口」，入口方式不单独占行。
+		await expect(
+			page.locator("main dt", { hasText: "模板 / 入口" }).locator("+ dd"),
+		).toHaveText("标准模板 · Codex · 平台交互入口");
+		await expect(page.locator("main dt", { hasText: "入口状态" })).toHaveCount(
+			0,
+		);
 		await expect(page.locator("main")).not.toContainText("codex");
 		// 页内「返回 Agent 目录」不是当前页；全页只有导航「Agent 目录」带 aria-current。
 		const back = page.getByRole("link", { name: "返回 Agent 目录" });
@@ -803,6 +820,38 @@ test.describe("Agent directory design alignment", () => {
 				() => performance.getEntriesByType("navigation").length,
 			),
 		).toBe(1);
+		expect(api.commands).toEqual([]);
+		expect(api.unexpected).toEqual([]);
+	});
+
+	test("keyboard recovery from 401 re-login and 503 reload moves focus to the page h1, not body", async ({
+		page,
+	}) => {
+		const api = await fixture(page);
+		const heading = page.getByRole("heading", {
+			level: 1,
+			name: "选择要使用的 Agent。",
+		});
+		for (const [failure, name] of [
+			[401, "重新登录"],
+			[503, "重新加载 Agent"],
+		] as const) {
+			api.current.failure = failure;
+			await page.goto("/agents");
+			const action = page.getByRole("button", { name, exact: true });
+			await action.focus();
+			await expect(action).toBeFocused();
+			api.current.failure = undefined;
+			await page.keyboard.press("Enter");
+			await expect(page.locator(".agent-list > li")).toHaveCount(5);
+			await expect(action).toHaveCount(0);
+			// 恢复后按钮卸载：焦点移到页面 h1（tabIndex=-1），读屏与 Tab 从标题继续。
+			await expect(heading).toBeFocused();
+			await expect(heading).toHaveAttribute("tabindex", "-1");
+			expect(
+				await page.evaluate(() => document.activeElement === document.body),
+			).toBe(false);
+		}
 		expect(api.commands).toEqual([]);
 		expect(api.unexpected).toEqual([]);
 	});

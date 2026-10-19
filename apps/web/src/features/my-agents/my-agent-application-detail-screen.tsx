@@ -338,12 +338,17 @@ export function MyAgentApplicationDetailScreen({
 							<dd>
 								{configuration.modelOptions.length ? (
 									<ul>
+										{/* 与审批弹窗一致：「显示名 · 档位」，不外露 modelId。 */}
 										{configuration.modelOptions.map((model) => (
 											<li key={model.optionId}>
-												{model.displayName} · {model.modelId} ·{" "}
-												{model.reasoningLevels
-													.map(reasoningLevelLabel)
-													.join("、")}
+												{[
+													model.displayName,
+													model.reasoningLevels
+														.map(reasoningLevelLabel)
+														.join("、"),
+												]
+													.filter(Boolean)
+													.join(" · ")}
 											</li>
 										))}
 									</ul>

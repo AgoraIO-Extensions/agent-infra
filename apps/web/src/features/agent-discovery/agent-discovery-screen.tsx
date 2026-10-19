@@ -20,6 +20,8 @@ import {
 } from "@/components/ui/native-select";
 import { SearchInput } from "@/components/ui/search-input";
 import { LoadingLine } from "@/components/ui/spinner";
+import { armBefore, useRecoveryFocus } from "@/hooks/use-recovery-focus";
+import { distinctObjectNames } from "@/lib/accessible-name";
 import { cn } from "@/lib/utils";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -78,6 +80,23 @@ function agentModelSummary(agent: AgentProjectionV2) {
 			.map((option) => option.displayName)
 			.join(" · ") || "无可选择模型"
 	);
+}
+
+/**
+ * 「模型」筛选项：value 是 modelId（按它去重与筛选），文字是模型显示名，不外露 modelId。
+ * 同一 modelId 取第一次出现的显示名；不同模型显示名相同时按出现顺序加「（第 N 次）」区分。
+ */
+function modelFilterOptions(agents: readonly AgentProjectionV2[]) {
+	const names = new Map<string, string>();
+	for (const agent of agents)
+		for (const option of agent.configuration.modelOptions)
+			if (!names.has(option.modelId))
+				names.set(option.modelId, option.displayName);
+	const labels = distinctObjectNames([...names.values()]);
+	return [...names.keys()].map((modelId, index) => ({
+		modelId,
+		label: labels[index] ?? "",
+	}));
 }
 
 /**
@@ -178,6 +197,8 @@ export function AgentDiscoveryScreen({
 		controlledQuery !== undefined && onQueryChange !== undefined;
 	const query = isControlled ? controlledQuery : localQuery;
 	const searchId = useId();
+	// 「重新登录」「重新加载 Agent」恢复成功后，焦点从卸载的按钮移到页面 h1，不落到 body。
+	const recovery = useRecoveryFocus(state.kind === "ready" ? 0 : 1);
 	const [statusFilter, setStatusFilter] = useState("all");
 	const [templateFilter, setTemplateFilter] = useState("all");
 	const [modelFilter, setModelFilter] = useState("all");
@@ -192,13 +213,7 @@ export function AgentDiscoveryScreen({
 			),
 		),
 	];
-	const models = [
-		...new Set(
-			agents.flatMap((agent) =>
-				agent.configuration.modelOptions.map((option) => option.modelId),
-			),
-		),
-	];
+	const models = modelFilterOptions(agents);
 	const visible = agents.filter(
 		(agent) =>
 			(statusFilter === "all" ||
@@ -227,7 +242,12 @@ export function AgentDiscoveryScreen({
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">工作区 / Agent 目录</p>
-					<h1 id="agents-heading" className="font-semibold text-[28px]">
+					<h1
+						id="agents-heading"
+						ref={recovery.ref}
+						tabIndex={-1}
+						className="font-semibold text-[28px]"
+					>
 						{conversationSelection
 							? "选择 Agent 开始对话"
 							: "选择要使用的 Agent。"}
@@ -316,8 +336,8 @@ export function AgentDiscoveryScreen({
 						>
 							<NativeSelectOption value="all">全部模型</NativeSelectOption>
 							{models.map((model) => (
-								<NativeSelectOption key={model} value={model}>
-									{model}
+								<NativeSelectOption key={model.modelId} value={model.modelId}>
+									{model.label}
 								</NativeSelectOption>
 							))}
 						</NativeSelect>
@@ -329,8 +349,8 @@ export function AgentDiscoveryScreen({
 			) : state.kind === "unavailable" ? (
 				<DirectoryUnavailable
 					state={state}
-					onRetry={onRetry}
-					onRelogin={onRelogin}
+					onRetry={armBefore(recovery.arm, onRetry)}
+					onRelogin={armBefore(recovery.arm, onRelogin)}
 					retrying={retrying}
 				/>
 			) : (

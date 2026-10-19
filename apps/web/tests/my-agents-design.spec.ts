@@ -17,7 +17,7 @@ import type {
 	AgentApplicationProjectionV2,
 	AgentProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
-import { computed, resolved } from "./primitive-styles";
+import { computed, expectPageHeadTop, resolved } from "./primitive-styles";
 
 // 我的 Agent、申请表单与申请详情按 OpenDesign #my-agents / #application-form /
 // #application-detail 对齐后的浏览器回归（M-01~M-12、R4-11、F-09、N-03、N-11）。
@@ -781,4 +781,36 @@ test("my Agent routes mark only one navigation link as the current page (N-21)",
 		await expect(links).toHaveCount(1);
 		await expect(links).toHaveText(current);
 	}
+});
+
+// 设计 .page-head-copy .eyebrow 上外边距为 0：我的 Agent 与创建申请页头的 h1 与设计同高（±1px）；
+// 申请详情的 eyebrow 前面有返回链接，保留原有间距。
+test("my Agent and application form page heads place the h1 at the design height", async ({
+	page,
+}, info) => {
+	await fixture(page);
+	const mobile = info.project.name === "mobile";
+	await page.goto("/my-agents");
+	await expect(
+		page.getByRole("heading", { level: 1, name: "查看申请，管理名下 Agent。" }),
+	).toBeVisible();
+	await expectPageHeadTop(page, mobile);
+	await page.goto("/my-agents/new");
+	await expect(page.getByLabel("Agent 名称")).toBeVisible();
+	// 设计 #application-form：h1「创建 Agent」；副标题为设计原文去掉「渠道」（随 #2862 M-10 决定）。
+	const heading = page.locator("main .page-heading").first();
+	await expect(heading.getByRole("heading", { level: 1 })).toHaveText(
+		"创建 Agent",
+	);
+	await expect(heading.locator("h1 + p")).toHaveText(
+		"填写使用场景，再配置 Owner、范围和模型。提交时会重新校验字段。",
+	);
+	await expectPageHeadTop(page, mobile);
+	await page.goto("/my-agents/application-browser-1");
+	const detail = page.locator("main header.application-detail-heading");
+	await expect(detail.locator(".page-eyebrow")).toHaveText("申请详情");
+	await expect(detail.locator(".page-eyebrow")).not.toHaveCSS(
+		"margin-top",
+		"0px",
+	);
 });

@@ -427,17 +427,51 @@ describe("OpenDesign workbench presentation", () => {
 		},
 	);
 
+	// 五个分区的失败标题；中文与拉丁字母或数字相邻处有一个空格（「可用 Agent 无法读取」「当前无权读取 Owner 创建状态」）。
 	it.each([
 		{
 			status: 401,
-			notice: (label: string) => `${label}无法读取，请重新登录。`,
+			notices: [
+				"可用 Agent 无法读取，请重新登录。",
+				"Owner 创建状态无法读取，请重新登录。",
+				"我的申请无法读取，请重新登录。",
+				"待审批申请无法读取，请重新登录。",
+				"管理员 Agent 状态无法读取，请重新登录。",
+			],
 		},
-		{ status: 403, notice: (label: string) => `当前无权读取${label}。` },
-		{ status: 404, notice: (label: string) => `${label}读取入口不可用。` },
-		{ status: 200, notice: (label: string) => `${label}返回的数据无法读取。` },
+		{
+			status: 403,
+			notices: [
+				"当前无权读取可用 Agent。",
+				"当前无权读取 Owner 创建状态。",
+				"当前无权读取我的申请。",
+				"当前无权读取待审批申请。",
+				"当前无权读取管理员 Agent 状态。",
+			],
+		},
+		{
+			status: 404,
+			notices: [
+				"可用 Agent 读取入口不可用。",
+				"Owner 创建状态读取入口不可用。",
+				"我的申请读取入口不可用。",
+				"待审批申请读取入口不可用。",
+				"管理员 Agent 状态读取入口不可用。",
+			],
+		},
+		{
+			status: 200,
+			notices: [
+				"可用 Agent 返回的数据无法读取。",
+				"Owner 创建状态返回的数据无法读取。",
+				"我的申请返回的数据无法读取。",
+				"待审批申请返回的数据无法读取。",
+				"管理员 Agent 状态返回的数据无法读取。",
+			],
+		},
 	])(
 		"removes prior rows and preserves the received HTTP $status failure in the actual collection presentation",
-		async ({ status, notice }) => {
+		async ({ status, notices }) => {
 			let failedRead = false;
 			let refresh = () => {};
 			const requests: Request[] = [];
@@ -485,14 +519,8 @@ describe("OpenDesign workbench presentation", () => {
 				failedRead = true;
 				await act(async () => refresh());
 				await waitFor(() => {
-					for (const label of [
-						"可用 Agent",
-						"Owner 创建状态",
-						"我的申请",
-						"待审批申请",
-						"管理员 Agent 状态",
-					])
-						expect(screen.getByText(notice(label))).toBeTruthy();
+					for (const notice of notices)
+						expect(screen.getByText(notice)).toBeTruthy();
 				});
 				expect(screen.queryByText("可用编程助手")).toBeNull();
 				expect(screen.queryByText("Owner 创建失败助手")).toBeNull();
@@ -548,7 +576,7 @@ describe("OpenDesign workbench presentation", () => {
 		expect(screen.queryByRole("link", { name: "处理创建审批" })).toBeNull();
 		expect(screen.getByText("我的申请暂时无法读取。")).toBeTruthy();
 		expect(
-			screen.getByRole("button", { name: "重新加载最近的个人对话" }),
+			screen.getByRole("button", { name: "重新加载最近对话" }),
 		).toBeTruthy();
 	});
 
@@ -613,19 +641,19 @@ describe("OpenDesign workbench presentation", () => {
 	it.each([
 		{
 			state: { kind: "unavailable", retryable: true },
-			title: "最近的个人对话暂时无法读取。",
+			title: "最近对话暂时无法读取。",
 			tone: "info",
 			retry: true,
 		},
 		{
 			state: { kind: "unavailable", retryable: false, reason: "denied" },
-			title: "当前无权读取最近的个人对话。",
+			title: "当前无权读取最近对话。",
 			tone: "danger",
 			retry: false,
 		},
 		{
 			state: { kind: "unavailable", retryable: false, reason: "not-found" },
-			title: "最近的个人对话读取入口不可用。",
+			title: "最近对话读取入口不可用。",
 			tone: "danger",
 			retry: false,
 		},
@@ -635,7 +663,7 @@ describe("OpenDesign workbench presentation", () => {
 				retryable: false,
 				reason: "invalid-response",
 			},
-			title: "最近的个人对话返回的数据无法读取。",
+			title: "最近对话返回的数据无法读取。",
 			tone: "danger",
 			retry: false,
 		},
@@ -661,13 +689,49 @@ describe("OpenDesign workbench presentation", () => {
 			if (retry) {
 				fireEvent.click(
 					within(region).getByRole("button", {
-						name: "重新加载最近的个人对话",
+						name: "重新加载最近对话",
 					}),
 				);
 				expect(onRetry).toHaveBeenCalledOnce();
 			} else expect(within(region).queryByRole("button")).toBeNull();
 		},
 	);
+
+	it("names the recent section 最近对话 in loading, failure and retry copy and spaces Latin labels", async () => {
+		const onRetry = vi.fn();
+		const view = await showWorkbench(
+			<WorkbenchScreen
+				{...empty}
+				recent={{ kind: "loading" }}
+				agents={{ kind: "loading" }}
+			/>,
+		);
+		const recent = () => screen.getByRole("region", { name: "最近对话" });
+		const agents = () => screen.getByRole("region", { name: "可用 Agent" });
+		expect(within(recent()).getByText("正在加载最近对话…")).toBeTruthy();
+		expect(within(agents()).getByText("正在加载可用 Agent…")).toBeTruthy();
+		view.rerender(
+			<WorkbenchScreen
+				{...empty}
+				recent={{ kind: "unavailable", retryable: true }}
+				agents={{ kind: "unavailable", retryable: true }}
+				onRetry={onRetry}
+			/>,
+		);
+		expect(within(recent()).getByText("最近对话暂时无法读取。")).toBeTruthy();
+		expect(
+			within(recent()).getByRole("button", { name: "重新加载最近对话" }),
+		).toBeTruthy();
+		// label 以拉丁字母结尾时与中文之间有一个空格。
+		expect(
+			within(agents()).getByText("可用 Agent 暂时无法读取。"),
+		).toBeTruthy();
+		expect(
+			within(agents()).getByRole("button", { name: "重新加载可用 Agent" }),
+		).toBeTruthy();
+		expect(screen.queryByText(/最近的个人对话/)).toBeNull();
+		expect(screen.queryByText(/Agent(无法|暂时|读取|返回)/)).toBeNull();
+	});
 
 	it("colors each application status chip inside its own row", async () => {
 		const failedApplication = {
