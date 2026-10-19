@@ -93,7 +93,8 @@ beforeEach(async () => {
 	await client`truncate platform.skill_hub_agent_bindings, platform.agent_owners,
 		platform.agent_configuration_revisions, platform.agent_applications,
 		platform.agents, platform.idempotency_records, platform.outbox_items,
-		platform.audit_events cascade`;
+		platform.audit_events, platform.skill_hub_installations,
+		platform.skill_hub_versions, platform.skill_hub_skills cascade`;
 	const configuration = {
 		...structuredClone(agentConfigurationConformanceRecordV1),
 		agentId: "agent-1",
@@ -155,6 +156,8 @@ describe("Skill Hub Agent binding persistence", () => {
 		const useCase = createSkillHubAgentBindingUseCaseV1({
 			transaction,
 			bindingAdmission,
+			// #2903：写入要求路径版本等于部署当前 Agent Version。
+			agentVersion: "agent-version-1",
 			authorizationAdmission: {
 				async authorize() {
 					return {
@@ -432,6 +435,155 @@ describe("Skill Hub Agent binding persistence", () => {
 			).toEqual([{ state: "revoked", applied_receipt: null }]);
 		} finally {
 			await receiptStore.close();
+		}
+	});
+});
+
+// #2903：Owner 读取使用 agents.current_configuration_revision，而不是管理修订。
+describe("Skill Hub Agent current binding read", () => {
+	const emptyGrant = {
+		schemaVersion: 1,
+		tools: [],
+		connections: [],
+		fileRoots: [],
+		networkOrigins: [],
+		scripts: false,
+	};
+	const owner = {
+		agentId: "agent-1",
+		agentVersion: "agent-version-1",
+		actorId: "owner-1",
+		organizationIds: ["org-1"],
+		isAdministrator: false,
+	};
+
+	it("lists, binds and unbinds through the current configuration revision", async () => {
+		// 生产装配不注入 grant 边界：边界视为空 grant，与 admit 一致。
+		const store = new PostgresSkillHubAgentBindingAdmissionV1({
+			databaseUrl: database?.databaseUrl ?? "",
+		});
+		const useCase = createSkillHubAgentBindingUseCaseV1({
+			transaction,
+			bindingAdmission: store,
+			bindingStatus: store,
+			agentVersion: "agent-version-1",
+			authorizationAdmission: {
+				async authorize() {
+					return {
+						schemaVersion: 1,
+						status: "admitted",
+						agentId: "agent-1",
+						actorId: "owner-1",
+						authorizationRevision: "authorization-1",
+						accessAuthority,
+					};
+				},
+			},
+			now: () => occurredAt,
+		});
+		const read = {
+			schemaVersion: 1,
+			agentId: "agent-1",
+			agentVersion: "agent-version-1",
+			actorId: "owner-1",
+			requestId: "request-read",
+			traceId: "trace-read",
+		};
+		try {
+			// 种子数据：管理修订 1，配置修订 7。
+			expect(
+				await client`
+					select management_revision from platform.agent_applications
+					where agent_id = 'agent-1'`,
+			).toEqual([{ management_revision: "1" }]);
+			expect(await store.readCurrentConfigurationRevision(owner)).toBe(7);
+			expect(await useCase.read(read)).toMatchObject({
+				configurationRevision: 7,
+				bindings: [],
+			});
+			const bound = await useCase.bind(
+				{
+					schemaVersion: 1,
+					agentId: "agent-1",
+					agentVersion: "agent-version-1",
+					expectedConfigurationRevision: 7,
+					idempotencyKey: "bind-current",
+					requestId: "request-bind",
+					traceId: "trace-bind",
+					bindings: [{ skillVersionId: "skill-version-1", grant: emptyGrant }],
+				},
+				actor,
+			);
+			expect(bound).toMatchObject({ revision: 8, replayed: false });
+			const listed = await useCase.read(read);
+			expect(listed.configurationRevision).toBe(8);
+			expect(listed.bindings).toEqual([
+				expect.objectContaining({
+					agentId: "agent-1",
+					agentVersion: "agent-version-1",
+					skillName: "workspace-summary",
+					configurationRevision: 8,
+					state: "pending_sync",
+					grant: emptyGrant,
+				}),
+			]);
+			// 其他 Agent Version 的读取看不到这条绑定。
+			expect(
+				await store.readCurrentBindings({
+					...owner,
+					agentVersion: "agent-version-2",
+				}),
+			).toEqual({ configurationRevision: 8, bindings: [] });
+			const unbound = await useCase.bind(
+				{
+					schemaVersion: 1,
+					agentId: "agent-1",
+					agentVersion: "agent-version-1",
+					expectedConfigurationRevision: 8,
+					idempotencyKey: "unbind-current",
+					requestId: "request-unbind",
+					traceId: "trace-unbind",
+					bindings: [],
+				},
+				actor,
+			);
+			expect(unbound).toMatchObject({ revision: 9, replayed: false });
+			expect(await useCase.read(read)).toMatchObject({
+				configurationRevision: 9,
+				bindings: [],
+			});
+			// 历史修订的绑定记录保留，不被解绑删除。
+			expect(
+				await client`
+					select configuration_revision from platform.skill_hub_agent_bindings
+					order by configuration_revision`,
+			).toEqual([{ configuration_revision: "8" }]);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("fails closed for a persisted grant beyond the empty deployment boundary", async () => {
+		await client`
+			insert into platform.skill_hub_agent_bindings
+			(agent_id, agent_version, skill_version_id, "grant", sync_revision, state,
+			 failure_reason, created_at, updated_at, configuration_revision)
+			values ('agent-1', 'agent-version-1', 'skill-version-1',
+			 ${client.json({ ...emptyGrant, tools: ["filesystem.read"] } as never)},
+			 1, 'pending_sync', null, ${occurredAt}, ${occurredAt}, 7)
+		`;
+		const store = new PostgresSkillHubAgentBindingAdmissionV1({
+			databaseUrl: database?.databaseUrl ?? "",
+		});
+		try {
+			await expect(store.readCurrentBindings(owner)).rejects.toMatchObject({
+				code: "unavailable",
+			});
+			await expect(
+				store.readCurrentConfigurationRevision({ agentId: "agent-missing" }),
+			).rejects.toMatchObject({ code: "unavailable" });
+		} finally {
+			await store.close();
 		}
 	});
 });

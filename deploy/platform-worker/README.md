@@ -82,6 +82,13 @@ service token 永不写入 Sandbox。Session 的 `nativeMetadataWorkerEgress` �
 namespace/pod-label selector 与单一 TCP port，缺失策略保持 NetworkPolicy deny-all，IP/CIDR
 目标会在资源写入前拒绝。
 
+## Skill 物化的 Agent Version
+
+配置模块可选导出 `skillMaterialization`，装配 Store 与对象存储支撑的 Skill 物化。其中
+`agentVersion` 必须与 Platform API 的 `apiInput.agentVersion` 取同一个值，取值规则与 Helm、
+本地注入方式见 [API 部署说明](../platform-api/README.md#skill-绑定的-agent-version)。未导出或配置
+不完整时 Skill 物化不可用，普通 Workload 照常启动。
+
 ## 多服务资源档位
 
 `workloadInput.policy.multiServiceResourceProfiles` 与 `workloadInput.policy.multiServiceResourceCap`

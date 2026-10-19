@@ -1,5 +1,6 @@
 import {
 	SkillHubAgentBindingStatusResponseV1Schema,
+	SkillHubAgentCurrentVersionV1Schema,
 	SkillHubInstallationResponseV1Schema,
 	SkillHubProjectPageV1Schema,
 	SkillHubPublicationResponseV1Schema,
@@ -16,6 +17,7 @@ import {
 	listSkillHubProjectsV1,
 	publishSkillHubVersionV1,
 	readSkillHubAgentBindingsV1,
+	readSkillHubAgentCurrentVersionV1,
 	reviewSkillHubVersionV1,
 	revokeSkillHubVersionV1,
 	updateSkillHubProjectV1,
@@ -36,6 +38,8 @@ import type {
 	PublishSkillHubVersionV1Responses,
 	ReadSkillHubAgentBindingsV1Errors,
 	ReadSkillHubAgentBindingsV1Responses,
+	ReadSkillHubAgentCurrentVersionV1Errors,
+	ReadSkillHubAgentCurrentVersionV1Responses,
 	ReviewSkillHubVersionV1Errors,
 	ReviewSkillHubVersionV1Responses,
 	RevokeSkillHubVersionV1Errors,
@@ -273,6 +277,32 @@ export async function revokeSkillHubVersion(
 	const data = requireData("撤销版本失败。", result);
 	const parsed = SkillHubPublicationResponseV1Schema.safeParse(data);
 	if (!parsed.success) throw requestError("撤销响应无效。", result);
+	return parsed.data;
+}
+
+/**
+ * 当前 Agent Version（#2903）：只对当前 Owner 返回；绑定读写路径使用这里的值，不让用户手填。
+ */
+export async function readSkillHubAgentCurrentVersion(
+	agentId: string,
+	client?: Client,
+) {
+	const result: Awaited<
+		RequestResult<
+			ReadSkillHubAgentCurrentVersionV1Responses,
+			ReadSkillHubAgentCurrentVersionV1Errors,
+			false
+		>
+	> = await readSkillHubAgentCurrentVersionV1({
+		client,
+		path: { agentId },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	const data = requireData("当前 Agent 版本暂时无法读取。", result);
+	const parsed = SkillHubAgentCurrentVersionV1Schema.safeParse(data);
+	if (!parsed.success || parsed.data.agentId !== agentId)
+		throw requestError("当前 Agent 版本响应无效。", result);
 	return parsed.data;
 }
 

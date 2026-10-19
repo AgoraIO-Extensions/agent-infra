@@ -544,6 +544,75 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the Owner current Agent Version read and the empty binding set (#2903)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const versionPath = "/api/v2/agents/{agentId}/skills/current-version";
+		const bindingPath =
+			"/api/v2/agents/{agentId}/versions/{agentVersion}/skills";
+		const previous = structuredClone(current);
+		delete previous.paths[versionPath];
+		delete previous.components.schemas.SkillHubAgentCurrentVersionV1;
+		previous.components.schemas.SkillHubAgentBindingCommandV1.properties.bindings.minItems = 1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "skill-hub-agent-current-version-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				// 版本读取必须要求平台会话。
+				(value: typeof current) => {
+					value.paths[versionPath].get.security = [];
+				},
+				// 投影保持严格，不能带出 Owner 或其他字段。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubAgentCurrentVersionV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubAgentCurrentVersionV1.properties.ownerIds =
+						{ type: "array", items: { type: "string" } };
+				},
+				// 只放开空集合，其余绑定命令约束不变。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubAgentBindingCommandV1.properties.bindings.maxItems = 64;
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubAgentBindingCommandV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.paths[bindingPath].get.operationId = "unreviewed";
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+			// 旧契约若没有 minItems 约束，不能借这条规则引入新入口。
+			const withoutMinimum = structuredClone(previous);
+			delete withoutMinimum.components.schemas.SkillHubAgentBindingCommandV1
+				.properties.bindings.minItems;
+			await writeFile(before, JSON.stringify(withoutMinimum));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the exact direct Agent creation contract", async () => {
 		const current = JSON.parse(
 			await readFile(

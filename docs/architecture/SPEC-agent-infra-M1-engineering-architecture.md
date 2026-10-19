@@ -1211,6 +1211,8 @@ Skill Hub 是 Platform DB、版本化 S3 兼容对象存储、Platform API/Web�
 
 - Skill project 的规范目录为 `.agents/skills/<name>/SKILL.md`，可选 scripts/、references/ 和 assets/；`.magic/skills` 不属于本平台兼容路径。发布从项目快照生成不可变 ZIP、manifest、内容 digest/signature 和版本记录，对象存储保存字节，Platform DB 保存关系与状态。
 - Platform DB 保存 Skill 主记录、Skill Version、发布范围（PRIVATE、MEMBER、ORGANIZATION、MARKET）、审核、市场目录、用户/组织安装、Agent Version 绑定、权限 grant、同步修订、need_upgrade、撤销和审计。Skill Version 一经发布不可变；Agent Version 保存具体 skillVersionId，市场更新不得静默替换已绑定版本。
+- Agent Version 是部署级固定事实，整个部署共用一个值：Platform API 与 Platform Worker 读取同一部署输入，取值满足绑定接口的 Agent Version 标识规则。Platform DB 不保存版本表或 Agent 版本列，平台也不从 Workload、浏览器、Agent 投影或模板派生它。标准模板升级与平台回滚不改变 Agent Version，已有绑定沿用。部署未配置时，绑定读取不可用，写入一律拒绝。注入方式见 [Platform API 部署说明](../../deploy/platform-api/README.md#skill-绑定的-agent-version)。
+- 当前 Agent Version 只通过当前 Owner 可读的独立入口返回，Agent、配置和状态投影不增加该字段。绑定读写先完成 Owner 授权，再要求路径中的 Agent Version 等于当前值，非 Owner 不能借此探测版本。绑定写入提交该 Agent Version 的完整集合，以当前 Agent Configuration Revision 做 CAS；空集合表示解除全部绑定。
 - Provider Registry 按 system → my_library → market → clawhub → skillhub → npx → github 的固定顺序聚合来源。Provider 适配器由平台部署维护，不能由 Skill、Owner、浏览器或 Runtime 动态注册；外部来源必须固定可验证版本，验证发布者/签名和内容 digest，强制扫描/审核，并拒绝归档路径逃逸、符号链接逃逸、超限包和未授权依赖。
 - 上传/导入、Provider 安装和批量安装统一经过临时目录、大小/文件数/SKILL.md/路径验证、staging、manifest 写入、目标目录原子替换和失败恢复；批量安装最多 10 个、并发最多 3 个。安装状态与绑定状态分离，安装成功不代表 Runtime 已挂载。
 - Agent Version 绑定后由受控异步同步将固定包 materialize 到 Agent project 的 `.agents/skills/<name>`，并维护 `.agents/SKILLS.md`；只有同步成功、Worker Applied 与 Runtime 装配摘要一致后，Skill 才进入可发现目录。同步失败、撤权、版本撤销、digest/signature 不一致和 Applied 未确认均 fail closed。

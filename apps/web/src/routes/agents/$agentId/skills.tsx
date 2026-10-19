@@ -1,11 +1,14 @@
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { buttonVariants } from "@/components/ui/button";
 
+import { isAgentConfigurationOwner } from "../../../features/agent-configuration/agent-configuration.js";
 import { AgentSkillBindingScreen } from "../../../features/agent-configuration/agent-skill-binding-screen.js";
 import { isRetryableAgentDiscoveryError } from "../../../features/agent-discovery/agent-discovery.js";
 import { useAgentDetail } from "../../../features/agent-discovery/use-agent-detail.js";
 import { PageLoadingState } from "../../../features/page-loading-state.js";
 import { ReadFailureCard } from "../../../features/page-state-card.js";
+import { readSkillHubAgentCurrentVersion } from "../../../features/skill-hub/skill-hub-management.js";
 import { useBrowserSession } from "../../../features/use-browser-session.js";
 
 export const Route = createFileRoute("/agents/$agentId/skills")({
@@ -17,6 +20,19 @@ function AgentSkillsRoute() {
 	const { agentId } = Route.useParams();
 	const query = useAgentDetail(agentId);
 	const session = useBrowserSession();
+	const agent = query.data?.kind === "ready" ? query.data.agent : undefined;
+	// 当前 Agent Version 只对当前 Owner 返回（#2903）：确认是 Owner 后才读取，
+	// 纯管理员与员工不发请求。读取失败时 agentVersion 为 null，页面沿用原状态卡。
+	const isOwner =
+		agent !== undefined &&
+		session.state.kind === "ready" &&
+		isAgentConfigurationOwner(agent, session.state.session);
+	const currentVersion = useQuery({
+		queryKey: ["agents", agentId, "skills", "current-version"],
+		queryFn: () => readSkillHubAgentCurrentVersion(agentId),
+		enabled: isOwner,
+		retry: false,
+	});
 	if (query.isPending) {
 		return (
 			<main className="platform-content management-content">
@@ -68,9 +84,9 @@ function AgentSkillsRoute() {
 		<main className="platform-content management-content">
 			<AgentSkillBindingScreen
 				agent={query.data.agent}
-				// Agent 与配置投影尚未返回当前 Agent Version（O-02 待确认 1）：不发绑定请求，
-				// 也不让用户手填；契约补齐后从投影传入。
-				agentVersion={null}
+				// 绑定读写路径只使用服务端给出的当前版本，不让用户手填。
+				agentVersion={currentVersion.data?.agentVersion ?? null}
+				agentVersionPending={isOwner && currentVersion.isPending}
 				session={session.state}
 				onRefreshAgent={() => void query.refetch()}
 			/>

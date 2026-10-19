@@ -1380,6 +1380,13 @@ export type SkillHubAgentBindingStatusV1 = {
     syncRevision: number;
 };
 
+export type SkillHubAgentCurrentVersionV1 = {
+    agentId: string;
+    agentVersion: string;
+    configurationRevision: number;
+    schemaVersion: 1;
+};
+
 export type SkillHubDirectoryPageV1 = {
     items: Array<SkillHubVersionMetadataV1>;
     nextCursor: string | null;
@@ -3683,6 +3690,53 @@ export type CommandAgentLifecycleV2Responses = {
 };
 
 export type CommandAgentLifecycleV2Response = CommandAgentLifecycleV2Responses[keyof CommandAgentLifecycleV2Responses];
+
+export type ReadSkillHubAgentCurrentVersionV1Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/skills/current-version';
+};
+
+export type ReadSkillHubAgentCurrentVersionV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadSkillHubAgentCurrentVersionV1Error = ReadSkillHubAgentCurrentVersionV1Errors[keyof ReadSkillHubAgentCurrentVersionV1Errors];
+
+export type ReadSkillHubAgentCurrentVersionV1Responses = {
+    /**
+     * Current Agent Version for the current Owner
+     */
+    200: SkillHubAgentCurrentVersionV1;
+};
+
+export type ReadSkillHubAgentCurrentVersionV1Response = ReadSkillHubAgentCurrentVersionV1Responses[keyof ReadSkillHubAgentCurrentVersionV1Responses];
 
 export type GetAgentApiStateV1Data = {
     body?: never;

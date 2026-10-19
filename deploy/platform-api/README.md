@@ -59,7 +59,7 @@ native 业务验收；外联仍由部署方配置明确的 NetworkPolicy。
 | `organizationIds` | 从 #889 当前目录快照解析完整组织映射的函数；不可用时抛错 |
 | `directorySnapshot` | 可选的通用快照 consumer：`{ endpoint, token, organizationIdForDepartment }`。配置后每次敏感身份解析从 HTTPS 当前快照按 LDAP email 唯一匹配 active 成员，并映射组织 ID；失败不得回退到旧 `organizationIds`。快照 revision/fetchedAt/validUntil 已由 consumer 校验，但现有 LDAP identity wire 尚未携带 sidecar，跨 #481/#508/#440 的不可变版本绑定仍需后续契约接收。 |
 | `publicOrigin` | 与本地 HTTPS Web 相同的精确 Origin |
-| `apiInput` | [`ProductionPlatformApiInputV1`](../../apps/platform-api/src/deployment.ts) 中除 `databaseUrl`、`identity` 外的真实 Registry、模板、ModelCatalog、密钥公钥、准入和展示依赖；其中必须包含与模板 `modelBinding`/Model Catalog 端点一致的 `agentDefaultRelayKeyPolicy` 和 `personalRelayKeyValidation`；可选 `modelDisplayMetadata` 为非秘密 `{ schemaVersion: 1, models: [{ endpointId, modelId, displayName }] }`，按精确模型关联提供展示名，缺名保留真实 ID，不改变模型授权；边界见[工程 Spec §10.7](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#107-标准模板模型配置) |
+| `apiInput` | [`ProductionPlatformApiInputV1`](../../apps/platform-api/src/deployment.ts) 中除 `databaseUrl`、`identity` 外的真实 Registry、模板、ModelCatalog、密钥公钥、准入和展示依赖；其中必须包含与模板 `modelBinding`/Model Catalog 端点一致的 `agentDefaultRelayKeyPolicy` 和 `personalRelayKeyValidation`；可选 `modelDisplayMetadata` 为非秘密 `{ schemaVersion: 1, models: [{ endpointId, modelId, displayName }] }`，按精确模型关联提供展示名，缺名保留真实 ID，不改变模型授权；边界见[工程 Spec §10.7](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#107-标准模板模型配置)；可选的 `agentVersion` 见[Skill 绑定的 Agent Version](#skill-绑定的-agent-version) |
 | `customAgentGateway` | 可选的部署端 Gateway port：提供 `resolveDeployment`、`authorizeAgent`、签名 issuer/key version/private key；不要同时放入 `apiInput.customAgentGateway` |
 | `modelSelection` | 可选的 Runtime ACP model-directory reader；应由部署方用 `createRuntimeModelSelectionReaderV1` 和受认证 transport 组装；不要同时放入 `apiInput.modelSelection` |
 | `modelDirectory` | 可选的 `{ baseUrl, serviceToken }` Worker 内部模型目录服务输入；配置后 API 自动从 Platform Store 绑定当前 Web Conversation/Execution/Session/fence，并创建默认 `modelSelection` reader；不要同时提供 `modelSelection` |
@@ -102,6 +102,24 @@ Kubernetes 凭证或模型原始凭据。issuer/UID 映射由 `@agent-infra/plat
 启动和验收入口见[本地生命周期](../local/README.md)。镜像内模块可加载、
 代理令牌正确与否及 PostgreSQL 会话装配属于部署证据；实际 LDAP 登录、
 停用传播、申请审批、Worker Pod/PVC、模型访问和重启持久化须单独实测。
+
+## Skill 绑定的 Agent Version
+
+Skill 绑定挂在 Agent Version 下。它是整个部署共用的固定值，来源与升级语义见
+[工程 Spec §11.6](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配)。
+Platform API 从 `apiInput.agentVersion` 读取，Worker 从 `skillMaterialization.agentVersion`
+读取，两边必须取同一个值。取值为 1–128 个字符，以字母或数字开头，只含字母、数字、`.`、`_`、`:`
+和 `-`。
+
+- Helm：设置顶层 `agentVersion`。非空时 Chart 以 `AGENT_INFRA_AGENT_VERSION` 把同一个值注入
+  in-cluster API 与正式 Worker，两边的配置模块都从这个变量读取。external API 由其部署方注入同一个值。
+- 本地：在 `.env` 设置 `AGENT_INFRA_AGENT_VERSION`。Compose 把它交给 API 容器，`platform.sh`
+  用它设置 Worker 的 Helm 值；示例配置模块演示了两边的读取写法。
+
+未配置时 API 照常启动，但 Skill 绑定读取不可用、写入一律拒绝，绑定页显示“暂时无法读取当前
+Agent 版本”。取值不符合规则时 API 以 `PLATFORM_DEPLOYMENT_CONFIGURATION_INVALID` 启动失败。
+标准模板升级不改变这个值，已有绑定沿用。修改这个值等于换用新的 Agent Version，原值下的绑定不会
+出现在新值下，因此只在确实要切换版本时修改。
 
 ## 标准 Codex 模板的模型画像
 

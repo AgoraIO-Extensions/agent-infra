@@ -55,6 +55,7 @@ import {
 	nextSkillBindingCollection,
 	type SkillBindingCandidate,
 	type SkillBindingStatus,
+	skillBindingCollectionWithout,
 	skillBindingView,
 	skillGrantSummary,
 } from "./agent-skill-binding.js";
@@ -66,10 +67,12 @@ type SessionState = BrowserSessionState | { kind: "loading" };
 type AgentSkillBindingScreenProps = {
 	agent: AgentProjectionV2;
 	/**
-	 * 当前 Agent Version。Agent 与配置投影都还不返回它（O-02 待确认 1），为 null 时
-	 * 不发出绑定读写请求，也不让用户手填。
+	 * 服务端给出的当前 Agent Version（#2903，只对当前 Owner 返回）。为 null 时（读取失败或
+	 * 部署未配置）不发出绑定读写请求，也不让用户手填。
 	 */
 	agentVersion: string | null;
+	/** 当前 Agent Version 仍在读取。 */
+	agentVersionPending?: boolean;
 	session: SessionState;
 	/** 轮询同步进度时一并重读 Agent 详情（Runtime 装配摘要在 Agent 投影里）。 */
 	onRefreshAgent?: () => void;
@@ -134,6 +137,7 @@ function NoPermission({ agentId }: { agentId: string }) {
 export function AgentSkillBindingScreen({
 	agent,
 	agentVersion,
+	agentVersionPending = false,
 	session,
 	onRefreshAgent,
 	readBindings = readSkillHubAgentBindings,
@@ -178,6 +182,8 @@ export function AgentSkillBindingScreen({
 				<LoadingLine>正在确认权限…</LoadingLine>
 			) : !isOwner ? (
 				<NoPermission agentId={agent.agentId} />
+			) : agentVersionPending ? (
+				<LoadingLine>正在读取当前 Agent 版本…</LoadingLine>
 			) : agentVersion === null ? (
 				<Alert tone="info">
 					<AlertTitle>暂时无法读取当前 Agent 版本</AlertTitle>
@@ -281,6 +287,7 @@ function AgentSkillBindings({
 
 	const write = async (
 		next: SkillHubAgentBindingCommandV1["bindings"],
+		successMessage = "已提交绑定，等待同步",
 	): Promise<boolean> => {
 		if (!bindings.data || writing) return false;
 		const body: SkillHubAgentBindingCommandV1 = {
@@ -298,7 +305,7 @@ function AgentSkillBindings({
 				body,
 				idempotencyKey({ agentVersion, body }),
 			);
-			toast("已提交绑定，等待同步");
+			toast(successMessage);
 			await queryClient.invalidateQueries({ queryKey });
 			return true;
 		} catch (error) {
@@ -350,7 +357,7 @@ function AgentSkillBindings({
 	return (
 		<>
 			<Alert tone="info" icon={null} className="agent-skill-version-notice">
-				<AlertTitle>当前配置版本</AlertTitle>
+				<AlertTitle>当前 Agent 版本：{agentVersion}</AlertTitle>
 				<AlertDescription>
 					升级前需要确认；已受理的任务继续使用原版本。
 				</AlertDescription>
@@ -393,12 +400,21 @@ function AgentSkillBindings({
 						readOnly={readOnly}
 						view={view}
 						writing={writing}
-						onChangeVersion={(target) =>
+						onChangeVersion={(target) => {
+							const next = nextSkillBindingCollection(items, {
+								skillVersionId: target.skillVersionId,
+								skillName: binding.skillName,
+							});
+							// 空集合表示解除全部绑定：组装不出新集合时不提交。
+							return next ? write(next) : Promise.resolve(false);
+						}}
+						onUnbind={() =>
 							write(
-								nextSkillBindingCollection(items, {
-									skillVersionId: target.skillVersionId,
-									skillName: binding.skillName,
-								}) ?? [],
+								skillBindingCollectionWithout(
+									items,
+									binding.skillVersion.skillVersionId,
+								),
+								"已解除绑定",
 							)
 						}
 					/>
@@ -429,6 +445,7 @@ function SkillBindingCard({
 	view,
 	writing,
 	onChangeVersion,
+	onUnbind,
 }: {
 	agentId: string;
 	binding: SkillBindingStatus;
@@ -437,6 +454,7 @@ function SkillBindingCard({
 	view: ReturnType<typeof skillBindingView>;
 	writing: boolean;
 	onChangeVersion: (target: SkillHubVersionMetadataV1) => Promise<boolean>;
+	onUnbind: () => Promise<boolean>;
 }) {
 	const titleId = useId();
 	const name = binding.skillName;
@@ -506,6 +524,25 @@ function SkillBindingCard({
 				>
 					版本详情
 				</Link>
+				{readOnly ? null : (
+					<ConfirmDialog
+						title="确认解除绑定"
+						subject={{ name: `${name} · v${binding.skillVersion.version}` }}
+						description="解除后，新的调用不再提供这个 Skill；现有执行保留原版本。"
+						confirmLabel="解除绑定"
+						disabled={writing}
+						onConfirm={() => void onUnbind()}
+						trigger={
+							<Button
+								type="button"
+								variant="ghost"
+								aria-label={withObjectName("解除绑定", name)}
+							>
+								解除绑定
+							</Button>
+						}
+					/>
+				)}
 			</div>
 		</article>
 	);
