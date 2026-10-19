@@ -615,16 +615,19 @@ export function createProductionSessionSandboxReceiverV1(
 					sourceStop: lifecycle.stopReceipt,
 					resources: [lifecycle.stopReceipt.retainedPVC],
 				};
+			// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影（runtime 为 null），
+			// 当时也不创建 Runtime Secret：其余 5 种资源就是完整来源（#2885）。
+			const sourceKinds = [
+				"Pod",
+				"Service",
+				"ServiceAccount",
+				"PersistentVolumeClaim",
+				"NetworkPolicy",
+				...(sourceAllocation.runtime === null ? [] : ["Secret"]),
+			];
 			const completeSource =
-				sourceResources.length >= 6 &&
-				[
-					"Pod",
-					"Service",
-					"ServiceAccount",
-					"PersistentVolumeClaim",
-					"NetworkPolicy",
-					"Secret",
-				].every((kind) =>
+				sourceResources.length >= sourceKinds.length &&
+				sourceKinds.every((kind) =>
 					sourceResources.some((resource) => resource.kind === kind),
 				);
 			if (!completeSource) {

@@ -30,12 +30,15 @@ import {
 	validateRuntimeModelProjectionV1,
 } from "@agent-infra/model-catalog";
 import type {
+	SessionSandboxDeletionProgressV1,
 	SessionSandboxReconciliationClaimV1,
+	SessionSandboxResourceIdentityV1,
 	SessionSandboxRuntimeStateV1,
 } from "@agent-infra/platform-core";
 import {
 	type AgentConfigurationRecordV2,
 	createWorkloadReconciliationV1,
+	decideSessionSandboxDrainObservationV1,
 	type SecretActivationCandidateV1,
 	type SecretActivationStorePortV1,
 	type WorkloadReconciliationInputV1,
@@ -43,6 +46,7 @@ import {
 } from "@agent-infra/platform-core";
 import { FakeAgentManagementV1 } from "@agent-infra/platform-core/testing";
 import type {
+	KubernetesObject,
 	V1Deployment,
 	V1Ingress,
 	V1Pod,
@@ -5030,5 +5034,237 @@ describe("sandbox drain with legacy null modelProjection (#2885)", () => {
 		// 有效 projection 的排空也应正常工作
 		const observation = await receive(drainClaim, new AbortController().signal);
 		expect(["unknown", "observed", "stopped"]).toContain(observation.status);
+	});
+
+	it("把 #1481 之前准备的来源排空到 stopped：没有 Secret、规格是旧模板，按归属与 UID 删除并保留 PVC", async () => {
+		const keys = generateKeyPairSync("ed25519");
+		const workerId = "worker-drain-legacy-source";
+		const runtimeAuth = {
+			workerId,
+			grantIssuer: "platform",
+			grantKeyId: "key-drain-legacy-source",
+			grantPublicKey: keys.publicKey
+				.export({ type: "spki", format: "pem" })
+				.toString(),
+			serviceTokenSecret: { name: "transport", key: "token" },
+		};
+		const f = fixture({ policy: { ...workloadTestPolicy, runtimeAuth } });
+		await f.tick(8);
+		const ready = f.state;
+		if (!ready?.verified?.deployment) throw new Error("期望就绪 fixture");
+		const deployment = validateAgentWorkloadDesiredV1(
+			ready.verified.deployment,
+		);
+		Object.assign(f.client, {
+			async deleteResult(object: KubernetesObject) {
+				await f.client.delete(object);
+				return "acknowledged" as const;
+			},
+		});
+		const sandboxId = "00000000-0000-4000-8000-0000000legacy";
+		const sandbox = {
+			schemaVersion: 1 as const,
+			sandboxId,
+			sessionId: "conversation-drain-legacy-source",
+			agentId: ready.agentId,
+			principal: { kind: "user" as const, id: "actor-drain-legacy" },
+			channelId: "web",
+			generation: 1,
+			resourceName: `sandbox-${sandboxId}`,
+			workspaceScope: sandboxId,
+		};
+		const policy = {
+			namespace: f.options.policy.namespace,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(
+				f.options.policy,
+			),
+			configurationRevision: ready.sourceConfigurationRevision,
+			workloadRevision: ready.sourceLifecycleRevision,
+			managementFence: 1,
+			imageDigest: deployment.imageDigest,
+		};
+		const name = sandbox.resourceName;
+		const labels = { ...sessionSandboxLabelsV1(sandbox) };
+		const metadata = () => ({
+			namespace: policy.namespace,
+			name,
+			labels: { ...labels },
+			annotations: {
+				...sessionSandboxIdentityAnnotationsV1(sandbox),
+				"agent-infra.agora.io/fence": "2",
+				"agent-infra.agora.io/managed": "session-sandbox-v1",
+			},
+		});
+		// 当时的模板：5 种资源，没有 Runtime Secret，Pod 与 NetworkPolicy 的规格与今天不同。
+		const legacy: KubernetesObject[] = [
+			{
+				apiVersion: "v1",
+				kind: "ServiceAccount",
+				metadata: metadata(),
+				automountServiceAccountToken: false,
+			} as KubernetesObject,
+			{
+				apiVersion: "v1",
+				kind: "PersistentVolumeClaim",
+				metadata: metadata(),
+				spec: {
+					accessModes: ["ReadWriteOnce"],
+					resources: { requests: { storage: "1Gi" } },
+				},
+			} as KubernetesObject,
+			{
+				apiVersion: "networking.k8s.io/v1",
+				kind: "NetworkPolicy",
+				metadata: metadata(),
+				spec: {
+					podSelector: { matchLabels: labels },
+					policyTypes: ["Ingress"],
+				},
+			} as KubernetesObject,
+			{
+				apiVersion: "v1",
+				kind: "Service",
+				metadata: metadata(),
+				spec: {
+					type: "ClusterIP",
+					selector: labels,
+					ports: [{ name: "runtime", port: 8080, targetPort: 8080 }],
+				},
+			} as KubernetesObject,
+			{
+				apiVersion: "v1",
+				kind: "Pod",
+				metadata: metadata(),
+				spec: {
+					serviceAccountName: name,
+					containers: [{ name: "runtime", image: "runtime@sha256:old" }],
+				},
+			} as KubernetesObject,
+		];
+		const identities: SessionSandboxResourceIdentityV1[] = [];
+		for (const object of legacy) {
+			const created = await f.client.create(object);
+			identities.push({
+				kind: created.kind as SessionSandboxResourceIdentityV1["kind"],
+				namespace: policy.namespace,
+				name,
+				uid: created.metadata?.uid ?? "",
+				resourceVersion: created.metadata?.resourceVersion ?? "",
+			});
+		}
+		// Pod 状态更新让 resourceVersion 前进，UID 不变。
+		const pod = await f.client.read<V1Pod>("Pod", name);
+		if (!pod) throw new Error("Missing legacy Pod");
+		await f.client.replace({ ...pod, status: { phase: "Pending" } });
+
+		const lifecycle = {
+			schemaVersion: 1 as const,
+			authority: {
+				kind: "management" as const,
+				applicationId: "application-a",
+				managementRevision: 1,
+				managementFence: 1,
+				workloadRevision: 1,
+				targetDesiredState: "stopped" as const,
+			},
+			source: {
+				sandbox,
+				resourceFence: 2,
+				policy,
+				observation: { status: "observed" as const, resources: identities },
+				deployment,
+				modelProjection: null,
+			},
+			stopReceipt: null,
+			deletionProgress: [],
+		};
+		const claim: SessionSandboxReconciliationClaimV1 = {
+			schemaVersion: 1,
+			operation: "conversation.sandbox.reconcile.v1",
+			execution: null,
+			itemId: `conversation:sandbox:${sandbox.sessionId}:1`,
+			leaseOwner: workerId,
+			deliveryFence: 2,
+			resourceFence: 3,
+			resourceStatus: "unknown",
+			desiredState: "stopped",
+			authorization: null,
+			purpose: "drain",
+			drainComputeAllowed: true,
+			lifecycle,
+			sandbox,
+			policy,
+			deployment: null,
+			modelProjection: null,
+			previousObservation: lifecycle.source.observation,
+		};
+		const receive = createProductionSessionSandboxReceiverV1(f.options, {
+			serviceToken: "synthetic-transport",
+		});
+		const progress: SessionSandboxDeletionProgressV1[] = [];
+		const record = async (entry: SessionSandboxDeletionProgressV1) => {
+			progress.push(entry);
+			return "committed" as const;
+		};
+
+		// 第一次：Pod 的 resourceVersion 已前进，先刷新来源（#1523），不删除任何资源。
+		const refreshed = await receive(
+			claim,
+			new AbortController().signal,
+			record,
+		);
+		expect(refreshed.status).toBe("observed");
+		expect(progress).toEqual([]);
+		expect(
+			refreshed.resources.find((resource) => resource.kind === "Pod"),
+		).toMatchObject({ uid: identities.find((r) => r.kind === "Pod")?.uid });
+
+		// Store 接受刷新后：按归属与 UID 删除 Pod、Service、NetworkPolicy、ServiceAccount，保留 PVC。
+		const next = {
+			...lifecycle,
+			source: {
+				...lifecycle.source,
+				observation: {
+					status: "observed" as const,
+					resources: refreshed.resources,
+				},
+			},
+		};
+		const stopped = await receive(
+			{
+				...claim,
+				lifecycle: next,
+				previousObservation: next.source.observation,
+			},
+			new AbortController().signal,
+			record,
+		);
+		expect(stopped.status).toBe("stopped");
+		for (const kind of [
+			"Pod",
+			"Service",
+			"NetworkPolicy",
+			"ServiceAccount",
+			"Secret",
+		] as const)
+			expect(await f.client.read(kind, name)).toBeNull();
+		expect(
+			(await f.client.read("PersistentVolumeClaim", name))?.metadata?.uid,
+		).toBe(identities.find((r) => r.kind === "PersistentVolumeClaim")?.uid);
+
+		// Core 接受这份逐资源停止证明（Store 据此写入 stopReceipt）。
+		const latest = [
+			...new Map(
+				progress.map((entry) => [entry.resource.kind, entry]),
+			).values(),
+		];
+		expect(
+			decideSessionSandboxDrainObservationV1({
+				sandbox,
+				resourceFence: claim.resourceFence,
+				lifecycle: { ...next, deletionProgress: latest },
+				observation: stopped,
+			}),
+		).toMatchObject({ status: "stopped", finished: true });
 	});
 });

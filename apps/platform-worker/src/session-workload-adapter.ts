@@ -643,8 +643,9 @@ export function sessionSandboxResourcesV1(
 		metadata: metadata(allocation, allocation.secretName),
 		type: "Opaque",
 		immutable: true,
-		// 排空（drain-only）allocation 的 runtime 为 null：不创建 Secret，
-		// cleanup 只按名称+标签删除，不比对 Secret 内容。
+		// runtime 为 null 只出现在排空 #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源：
+		// 当时不创建 Runtime Secret。这里的无数据 Secret 只保持资源集合的形状，不会被创建；
+		// observe（control）与 cleanup 对这类来源允许 Secret 不存在（#2885）。
 		...(allocation.runtime
 			? {
 					data: {
@@ -1148,6 +1149,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					? { ...allocation, desiredState: "stopped" }
 					: allocation,
 			);
+			// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影，排空 allocation 的
+			// runtime 为 null：当时不创建 Runtime Secret，资源规格也由当时的模板渲染，今天的模板
+			// 复现不了。这类来源的 control 观测只按归属标记与 UID 识别（#2885）。
+			const preparedBeforeRuntimeInputs =
+				purpose === "control" && allocation.runtime === null;
 			for (const expected of expectedResources) {
 				const kind = expected.kind as SessionSandboxResourceIdentityV1["kind"];
 				const name = expected.metadata?.name ?? "";
@@ -1159,6 +1165,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					if (current) status = "unknown";
 					continue;
 				}
+				if (!current && kind === "Secret" && preparedBeforeRuntimeInputs)
+					continue;
 				if (
 					!current ||
 					!owned(current, expected, allocation) ||
@@ -1189,12 +1197,13 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				)
 					status = "unknown";
 				const matches =
-					purpose === "control" && kind === "Pod"
+					preparedBeforeRuntimeInputs ||
+					(purpose === "control" && kind === "Pod"
 						? podSpecMatches(
 								runtimeConnectionConsumerControlPodV1(current as V1Pod),
 								runtimeConnectionConsumerControlPodV1(expected as V1Pod),
 							)
-						: resourceSpecMatches(current, expected);
+						: resourceSpecMatches(current, expected));
 				if (!matches) status = "unknown";
 				if (kind === "Pod") {
 					const pod = current as V1Pod;
@@ -1320,6 +1329,10 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				}
 				if (!current) {
 					const prior = previousByKind.get(kind);
+					// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源（runtime 为 null）从未创建
+					// Runtime Secret：既不在集群里、也没被记录时没有可删除的对象（#2885）。
+					if (!prior && kind === "Secret" && allocation.runtime === null)
+						continue;
 					if (!prior) throw new WorkloadKubernetesError("unavailable");
 					const identity = existing?.resource ?? prior;
 					const absence = {
