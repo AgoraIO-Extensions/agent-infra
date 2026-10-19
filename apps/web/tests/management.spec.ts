@@ -3619,7 +3619,8 @@ test("approval filters, columns and page chrome follow the exported design", asy
 	expect(grid.marginBottom).toBe("20px");
 	const search = page.getByRole("searchbox", { name: "搜索申请" });
 	await expectSearchInput(search);
-	await expect(search).toHaveAttribute("placeholder", "搜索申请名称或 Owner");
+	// F-05：设计 placeholder「搜索申请名称或申请人」，申请人来自申请投影 applicant。
+	await expect(search).toHaveAttribute("placeholder", "搜索申请名称或申请人");
 	if (!narrow) {
 		const searchBox = await search.boundingBox();
 		const sourceBox = await page.getByLabel("来源").boundingBox();
@@ -3662,7 +3663,23 @@ test("approval filters, columns and page chrome follow the exported design", asy
 			getComputedStyle(element).fontWeight,
 		]),
 	).toEqual(["13px", "700"]);
-	expect(await table.locator("tbody td:first-child small").count()).toBe(0);
+	// F-05：名称下 small 只有「申请人 · 姓名」（设计「编号 · 申请人」，可读编号尚无契约字段），没有说明文字；
+	// 样式取设计 td small：块级 11px、muted、上外边距 3px。
+	const applicant = table.locator("tbody td:first-child small");
+	await expect(applicant).toHaveText(["申请人 · Applicant"]);
+	expect(
+		await applicant.first().evaluate((element) => {
+			const css = getComputedStyle(element);
+			return [css.display, css.fontSize, css.marginTop];
+		}),
+	).toEqual(["block", "11px", "3px"]);
+	await expect(applicant.first()).toHaveCSS(
+		"color",
+		await resolved(page, "color", "var(--muted-foreground)"),
+	);
+	await expect(table.locator("tbody td:first-child")).not.toContainText(
+		"Helps the release team",
+	);
 	await expect(main.getByText("申请人由当前会话确定")).toHaveCount(0);
 	await expect(main.getByText(/application-/)).toHaveCount(0);
 	// AP-04 / NI-42：先 amber chip，再 tag（radius 7、透明底、11px、无圆点）。
@@ -4178,9 +4195,9 @@ test("Owner configuration follows the design heading, boundary notice and sectio
 	await page.goto("/agents/agent-pilot-1/configuration");
 	const heading = page.getByRole("heading", { level: 1 });
 	await expect(heading).toHaveText(configurationTitle);
-	// O-12：副标题按设计原文（含「由 Worker」，与 Secret 分区「等待 Worker 激活」一致）。
+	// O-12：设计原文「由 Worker」按 PRD §6.4 / §8.2 写作「由平台」，与 Secret 分区「等待平台激活」一致。
 	await expect(page.locator("main .page-heading")).toContainText(
-		"保存后由 Worker 更新实例；Secret 只显示状态和版本。",
+		"保存后由平台更新实例；Secret 只显示状态和版本。",
 	);
 	// 设计 tag-row：一个可用性 chip（Agent 可用、服务启动中 → 启动中）加一个「Owner · 名称」tag。
 	const tagRow = page.locator("main .page-heading .tag-row");
@@ -5309,13 +5326,27 @@ test.describe("Agent detail design alignment", () => {
 		await expect(
 			page.getByRole("link", { name: "返回 Agent 列表" }),
 		).toHaveCount(0);
-		// D-03 / F-07：primary「开始对话」、outline「Owner 配置」，没有「配置与管理」。
+		// D-03 / F-07：primary「开始对话」、outline「Owner 配置」、ghost「可用 Skill」（Owner 可见），没有「配置与管理」。
 		const actions = heading.locator(".agent-detail-actions > a");
-		await expect(actions).toHaveText(["开始对话", "Owner 配置"]);
+		await expect(actions).toHaveText(["开始对话", "Owner 配置", "可用 Skill"]);
 		await expect(actions.nth(1)).toHaveAttribute(
 			"href",
 			"/agents/agent-pilot-1/configuration",
 		);
+		await expect(actions.nth(2)).toHaveAttribute(
+			"href",
+			"/agents/agent-pilot-1/skills",
+		);
+		// 设计 .btn-ghost：透明底与边框、muted 文字、无图标。
+		await expect(actions.nth(2)).toHaveCSS(
+			"background-color",
+			"rgba(0, 0, 0, 0)",
+		);
+		await expect(actions.nth(2)).toHaveCSS(
+			"color",
+			await resolved(page, "color", "var(--muted-foreground)"),
+		);
+		await expect(actions.nth(2).locator("svg")).toHaveCount(0);
 		await expect(page.getByRole("link", { name: "配置与管理" })).toHaveCount(0);
 		const status = page.locator(".agent-detail-status");
 		await expect(
@@ -5395,6 +5426,8 @@ test.describe("Agent detail design alignment", () => {
 		await fixture(page, "employee");
 		await page.goto("/agents/agent-pilot-1");
 		await expect(page.getByRole("link", { name: "Owner 配置" })).toHaveCount(0);
+		// D-03：「可用 Skill」指向只对 Owner 开放的 Agent Skill 页，员工看不到入口。
+		await expect(page.getByRole("link", { name: "可用 Skill" })).toHaveCount(0);
 		await expect(
 			page
 				.getByRole("region", { name: "运行与渠道" })
@@ -5405,5 +5438,14 @@ test.describe("Agent detail design alignment", () => {
 				".agent-detail-status [data-slot='badge'][data-variant='chip']",
 			),
 		).toHaveText(["启动中"]);
+	});
+
+	test("a system administrator who is not an Owner gets Owner 配置 but no「可用 Skill」(D-03)", async ({
+		page,
+	}) => {
+		await fixture(page, "admin");
+		await page.goto("/agents/agent-pilot-1");
+		await expect(page.getByRole("link", { name: "Owner 配置" })).toBeVisible();
+		await expect(page.getByRole("link", { name: "可用 Skill" })).toHaveCount(0);
 	});
 });

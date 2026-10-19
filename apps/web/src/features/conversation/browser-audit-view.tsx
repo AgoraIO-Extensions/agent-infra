@@ -14,6 +14,7 @@ import {
 import { Timestamp } from "@/components/ui/timestamp";
 import type { ChipTone } from "@/lib/status-tone";
 import type { PersistedConversationEventV2 } from "../../pilot/generated-v2/types.gen.js";
+import { formatPerson, unresolvedDirectoryLabels } from "../directory-names.js";
 import {
 	browserEventsForExecution,
 	validBrowserHandoffEvent,
@@ -49,6 +50,14 @@ export type BrowserAuditEntry = Readonly<{
 	action?: string;
 	host?: string;
 	reason?: string;
+	/** 接管人：服务端只给 operatorId（等于会话主体本人），名称由当前登录身份解析。 */
+	operatorId?: string;
+}>;
+
+/** 当前登录用户；用于把接管记录里的 operatorId 显示为姓名。 */
+export type BrowserRecordViewer = Readonly<{
+	userId: string;
+	displayName: string;
 }>;
 
 function latest(map: Map<string, BrowserAuditEntry>, entry: BrowserAuditEntry) {
@@ -106,6 +115,9 @@ export function browserAuditRecords(
 				title: "人工接管",
 				detail: reason,
 				reason,
+				...(event.payload.operatorId
+					? { operatorId: event.payload.operatorId }
+					: {}),
 			});
 		} else {
 			if (!validBrowserSideEffectEvent(event)) continue;
@@ -148,8 +160,24 @@ const unique = (values: readonly (string | undefined)[]) => [
 	...new Set(values.filter((value): value is string => Boolean(value))),
 ];
 
-/** 弹窗顶部的五行事实；契约没有访问域名与接管人姓名时不推测、不显示 ID。 */
-export function browserAuditFacts(entries: readonly BrowserAuditEntry[]) {
+/** 接管人：operatorId 即会话主体本人；与当前登录用户一致时显示姓名，否则不推测、不显示 ID。 */
+function handoffOperatorName(
+	operatorId: string,
+	viewer: BrowserRecordViewer | undefined,
+) {
+	return viewer?.userId === operatorId
+		? formatPerson({ displayName: viewer.displayName }).name
+		: unresolvedDirectoryLabels.user;
+}
+
+/**
+ * 弹窗顶部的五行事实（设计「域名 / 操作范围 / 接管人 / 结果 / 凭证」）；契约没有访问域名时不推测。
+ * 接管人为「姓名 · 原因」；尚无接管人时为「接管状态 · 原因」。
+ */
+export function browserAuditFacts(
+	entries: readonly BrowserAuditEntry[],
+	viewer?: BrowserRecordViewer,
+) {
 	const hosts = unique(entries.map((entry) => entry.host));
 	const actions = unique(entries.map((entry) => entry.action));
 	const handoff = entries.findLast((entry) => entry.kind === "handoff");
@@ -160,13 +188,16 @@ export function browserAuditFacts(entries: readonly BrowserAuditEntry[]) {
 			value: actions.length ? actions.join("、") : "未记录",
 		},
 		{
-			label: "接管",
-			value: handoff
-				? `${handoff.reason} · ${handoff.statusLabel}`
-				: "无需接管",
+			label: "接管人",
+			value: !handoff
+				? "无需接管"
+				: handoff.operatorId
+					? `${handoffOperatorName(handoff.operatorId, viewer)} · ${handoff.reason}`
+					: `${handoff.statusLabel} · ${handoff.reason}`,
 		},
 		{ label: "结果", value: entries.at(-1)?.statusLabel ?? "未记录" },
-		// PRD §11.4 只承诺凭证不进入模型；「不保存」待产品确认后再替换。
+		// 设计「不保存」超出 PRD §11.4（凭证不进入模型）、§13.1（审计不保存凭证值）与
+		// 工程 Spec §11.5（Cookie、Storage 留在 RuntimeHost 内）的承诺，按 PRD 表述。
 		{ label: "凭证", value: "不进入模型或平台记录" },
 	] as const;
 }
@@ -202,10 +233,13 @@ export function BrowserOperationRecordDialog({
 	conversationId,
 	events,
 	executionId,
+	viewer,
 }: {
 	readonly conversationId?: string;
 	readonly events: readonly PersistedConversationEventV2[];
 	readonly executionId?: string;
+	/** 当前登录用户，用于显示接管人姓名。 */
+	readonly viewer?: BrowserRecordViewer;
 }) {
 	const [open, setOpen] = useState(false);
 	const headingId = useId();
@@ -228,7 +262,7 @@ export function BrowserOperationRecordDialog({
 				</DialogHeader>
 				<DialogBody>
 					<dl className="conversation-facts">
-						{browserAuditFacts(entries).map((fact) => (
+						{browserAuditFacts(entries, viewer).map((fact) => (
 							<Fragment key={fact.label}>
 								<dt>{fact.label}</dt>
 								<dd>{fact.value}</dd>

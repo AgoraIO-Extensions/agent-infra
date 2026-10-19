@@ -40,8 +40,9 @@ export function ConfigurationPageHeading({
 					<h1 id={configurationHeadingId} tabIndex={-1}>
 						配置 Agent 的 Owner、范围和运行方式。
 					</h1>
-					{/* 设计原文；与 Secret 分区「等待 Worker 激活」的用语一致（O-12）。 */}
-					<p>保存后由 Worker 更新实例；Secret 只显示状态和版本。</p>
+					{/* 设计原文写「由 Worker」；PRD §6.4 不在产品界面展示进程与运行时名称、§8.2 不向用户展示
+					    底层更新过程，改写为「由平台」，与 Secret 分区「等待平台激活」一致（O-12）。 */}
+					<p>保存后由平台更新实例；Secret 只显示状态和版本。</p>
 				</div>
 				<div className="tag-row">
 					<Badge variant="chip" tone={availability.tone}>

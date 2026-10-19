@@ -107,6 +107,11 @@ const queue = [
 		...pendingApplication,
 		applicationId: "application-a",
 		name: "申请甲",
+		applicant: {
+			userId: "user-applicant-a",
+			displayName: "甲申请人",
+			roles: ["employee" as const],
+		},
 		configuration: {
 			...pendingApplication.configuration,
 			availability: [{ kind: "user" as const, userId: "user-two" }],
@@ -186,8 +191,17 @@ describe("AdminAgentApplicationsScreen", () => {
 		expect(review.querySelector("svg")?.getAttribute("aria-hidden")).toBe(
 			"true",
 		);
-		// F-05：首列只有名称，没有说明与状态 Badge。
-		expect(cells[0]?.textContent).toBe(pendingApplication.name);
+		// F-05：首列为名称 + small「申请人 · 姓名」，没有说明与状态 Badge；可读编号尚无契约字段，不显示。
+		expect(cells[0]?.querySelector("strong")?.textContent).toBe(
+			pendingApplication.name,
+		);
+		expect(cells[0]?.querySelector("small")?.textContent).toBe(
+			"申请人 · Applicant",
+		);
+		expect(cells[0]?.textContent).not.toContain(pendingApplication.description);
+		expect(cells[0]?.textContent).not.toContain(
+			pendingApplication.applicationId,
+		);
 		expect(cells[0]?.querySelector('[data-slot="badge"]')).toBeNull();
 		// AP-02：提交时间为 time 元素，dateTime 等于 submittedAt。
 		expect(cells[4]?.querySelector("time")?.getAttribute("dateTime")).toBe(
@@ -197,7 +211,7 @@ describe("AdminAgentApplicationsScreen", () => {
 		expect(screen.queryByText(/风险/)).toBeNull();
 	});
 
-	it("searches visible name, description and Owner display names, filters by source and names every review", async () => {
+	it("searches visible name, applicant, description and Owner display names, filters by source and names every review", async () => {
 		render(
 			<AdminAgentApplicationsScreen
 				onDecision={vi.fn()}
@@ -206,7 +220,8 @@ describe("AdminAgentApplicationsScreen", () => {
 			/>,
 		);
 		const search = screen.getByRole("searchbox", { name: "搜索申请" });
-		expect(search.getAttribute("placeholder")).toBe("搜索申请名称或 Owner");
+		// F-05：设计 placeholder「搜索申请名称或申请人」，申请人来自申请投影 applicant。
+		expect(search.getAttribute("placeholder")).toBe("搜索申请名称或申请人");
 		const reviews = screen.getAllByRole("button", { name: /^审阅：/ });
 		expect(
 			new Set(reviews.map((button) => button.getAttribute("aria-label"))).size,
@@ -215,7 +230,16 @@ describe("AdminAgentApplicationsScreen", () => {
 			within(screen.getByRole("table", { name: "创建审批" }))
 				.getAllByRole("row")
 				.slice(1)
-				.map((row) => within(row).getAllByRole("cell")[0]?.textContent);
+				.map(
+					(row) =>
+						within(row).getAllByRole("cell")[0]?.querySelector("strong")
+							?.textContent,
+				);
+		fireEvent.change(search, { target: { value: "甲申请人" } });
+		expect(visibleRows()).toEqual(["申请甲"]);
+		// 申请人内部 ID 不参与匹配。
+		fireEvent.change(search, { target: { value: "user-applicant-a" } });
+		expect(screen.getByText("没有匹配的申请。")).toBeTruthy();
 		fireEvent.change(search, { target: { value: "乙 Owner" } });
 		expect(visibleRows()).toEqual(["申请乙"]);
 		fireEvent.change(search, { target: { value: "发布工程协作" } });
@@ -228,6 +252,45 @@ describe("AdminAgentApplicationsScreen", () => {
 			target: { value: "自定义 Agent" },
 		});
 		expect(visibleRows()).toEqual(["申请丙"]);
+	});
+
+	it("shows an unresolved applicant with an ID short form and omits a missing applicant (F-05)", () => {
+		render(
+			<AdminAgentApplicationsScreen
+				onDecision={vi.fn()}
+				session={{ kind: "ready", session: administratorSession }}
+				state={{
+					kind: "ready",
+					applications: [
+						{
+							...pendingApplication,
+							applicationId: "application-unnamed",
+							name: "无姓名申请",
+							applicant: {
+								userId: "user-applicant-unnamed",
+								displayName: " ",
+								roles: ["employee"],
+							},
+						},
+						{
+							...pendingApplication,
+							applicationId: "application-legacy",
+							name: "旧申请",
+							applicant: null,
+						},
+					],
+				}}
+			/>,
+		);
+		const rows = within(screen.getByRole("table", { name: "创建审批" }))
+			.getAllByRole("row")
+			.slice(1)
+			.map((row) => within(row).getAllByRole("cell")[0] as HTMLElement);
+		const unnamed = rows[0]?.querySelector("small");
+		expect(unnamed?.textContent).toContain("申请人 · 未识别的用户");
+		expect(unnamed?.querySelector("code")?.textContent).toBe("user-app…");
+		expect(rows[1]?.querySelector("small")).toBeNull();
+		expect(rows[1]?.textContent).toBe("旧申请");
 	});
 
 	it("reads directory names once per kind for the whole queue and reuses them in the review", async () => {
