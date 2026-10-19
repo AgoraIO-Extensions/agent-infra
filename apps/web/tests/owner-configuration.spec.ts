@@ -496,7 +496,7 @@ test("Secrets are read-only rows replaced through a write-only modal (O-10, N-08
 		},
 	]);
 	await expect(toast(page)).toHaveText(
-		"Secret 已写入 pending version 4，等待 Worker 激活",
+		"Secret 已写入 pending version 4，等待平台激活",
 	);
 	await expect(status).toHaveValue("已设置 · version 4");
 	await expect(trigger).toBeFocused();

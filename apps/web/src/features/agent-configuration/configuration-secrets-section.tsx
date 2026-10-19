@@ -264,11 +264,12 @@ export function ConfigurationSecretsSection({
 					finalFocus={triggerRef}
 					onClose={() => setDialogTarget(null)}
 					onSubmit={onReplaceSecret}
+					// 不展示进程名（PRD §6.4）：设计「等待 Worker 激活」写作「等待平台激活」。
 					onSaved={(_name, version) =>
 						toast(
 							version === null
-								? "Secret 已写入，等待 Worker 激活"
-								: `Secret 已写入 pending version ${version}，等待 Worker 激活`,
+								? "Secret 已写入，等待平台激活"
+								: `Secret 已写入 pending version ${version}，等待平台激活`,
 						)
 					}
 				/>

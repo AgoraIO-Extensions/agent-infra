@@ -34,6 +34,11 @@ export async function renderWithAgentRouter(content: ReactNode) {
 		path: "/agents/$agentId/configuration",
 		component: () => null,
 	});
+	const agentSkillsRoute = createRoute({
+		getParentRoute: () => rootRoute,
+		path: "/agents/$agentId/skills",
+		component: () => null,
+	});
 	const chatRoute = createRoute({
 		getParentRoute: () => rootRoute,
 		path: "/chat/$agentId/{-$conversationId}",
@@ -46,6 +51,7 @@ export async function renderWithAgentRouter(content: ReactNode) {
 			agentsRoute,
 			agentDetailRoute,
 			agentConfigurationRoute,
+			agentSkillsRoute,
 			chatRoute,
 		]),
 	});

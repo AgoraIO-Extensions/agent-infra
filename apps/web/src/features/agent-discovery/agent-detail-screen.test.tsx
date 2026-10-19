@@ -87,6 +87,9 @@ describe("AgentDetailScreen", () => {
 		);
 		expect(screen.queryByText("模板与入口", { selector: "dt" })).toBeNull();
 		expect(screen.queryByText("入口状态", { selector: "dt" })).toBeNull();
+		// F-07：标准模板始终由平台校验身份，设计 dl 不列「入口身份责任」。
+		expect(screen.queryByText("入口身份责任", { selector: "dt" })).toBeNull();
+		expect(screen.queryByText("由平台校验")).toBeNull();
 		expect(screen.queryByText(/平台交互入口由平台/)).toBeNull();
 		expect(
 			screen.getByRole("region", { name: "运行与渠道" }).textContent,
@@ -116,6 +119,53 @@ describe("AgentDetailScreen", () => {
 		expect(screen.queryByText("批准申请")).toBeNull();
 		expect(screen.queryByText("配置与管理")).toBeNull();
 		expect(screen.queryByText("Owner 配置")).toBeNull();
+		expect(screen.queryByRole("link", { name: "可用 Skill" })).toBeNull();
+	});
+
+	it("links the Owner to the Agent Skill page with a ghost「可用 Skill」(D-03)", async () => {
+		await renderWithAgentRouter(
+			<AgentDetailScreen
+				ownerSettings={{ agentId: startingAgent.agentId }}
+				skillBindings={{ agentId: startingAgent.agentId }}
+				state={{ kind: "ready", agent: startingAgent }}
+			/>,
+		);
+		const actions = document.querySelector(
+			".agent-detail-actions",
+		) as HTMLElement;
+		// 设计页头顺序：primary 开始对话 / outline Owner 配置 / ghost 可用 Skill。
+		expect(
+			within(actions)
+				.getAllByRole("link")
+				.map((link) => link.textContent),
+		).toEqual(["Owner 配置", "可用 Skill"]);
+		const skills = within(actions).getByRole("link", { name: "可用 Skill" });
+		expect(skills.getAttribute("href")).toBe(
+			`/agents/${startingAgent.agentId}/skills`,
+		);
+		expect(skills.className).toContain("text-muted-foreground");
+		expect(skills.querySelector("svg")).toBeNull();
+	});
+
+	it("omits「可用 Skill」for a self-managed Agent even for its Owner", async () => {
+		const agent = AgentProjectionV2Schema.parse({
+			...startingAgent,
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/pilot@sha256:abc",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+			},
+		});
+		await renderWithAgentRouter(
+			<AgentDetailScreen
+				ownerSettings={{ agentId: agent.agentId }}
+				skillBindings={{ agentId: agent.agentId }}
+				state={{ kind: "ready", agent }}
+			/>,
+		);
+		expect(screen.getByRole("link", { name: "Owner 配置" })).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "可用 Skill" })).toBeNull();
 	});
 
 	it("renders an Owner settings entry only when the route supplies one", async () => {
@@ -252,7 +302,9 @@ describe("AgentDetailScreen", () => {
 		expect(screen.getByText("自定义 Agent · 平台交互入口")).toBeTruthy();
 		// 平台交互入口的旧「入口状态」只重复入口方式，不再单独占行。
 		expect(screen.queryByText("入口状态", { selector: "dt" })).toBeNull();
-		expect(screen.getByText("由平台校验")).toBeTruthy();
+		// F-07：平台交互入口与标准模板一样由平台校验身份，不列「入口身份责任」（身份责任只是自有交互入口的选择）。
+		expect(screen.queryByText("入口身份责任", { selector: "dt" })).toBeNull();
+		expect(screen.queryByText("由平台校验")).toBeNull();
 		expect(screen.getByText("模型范围", { selector: "dt" })).toBeTruthy();
 		expect(screen.getByText("默认推理档位", { selector: "dt" })).toBeTruthy();
 		expect(screen.getByText(/Primary model.*均衡、高/)).toBeTruthy();
@@ -279,6 +331,35 @@ describe("AgentDetailScreen", () => {
 		).toBe("https://agent.example.test/");
 		expect(screen.getByText("由平台校验")).toBeTruthy();
 		expect(screen.getByText("平台身份入口已就绪。")).toBeTruthy();
+	});
+
+	it("keeps the identity rows for a platform-auth entry that is not ready without naming components", async () => {
+		const agent = AgentProjectionV2Schema.parse({
+			...startingAgent,
+			interactionUrl: null,
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/pilot@sha256:abc",
+				interactionMode: "self-managed",
+				identityResponsibility: "platform-managed",
+			},
+		});
+
+		await renderWithAgentRouter(
+			<AgentDetailScreen state={{ kind: "ready", agent }} />,
+		);
+
+		expect(screen.queryByRole("link", { name: "打开 Agent" })).toBeNull();
+		expect(
+			screen.getByText("入口身份责任", { selector: "dt" }).nextElementSibling
+				?.textContent,
+		).toBe("由平台校验");
+		// PRD §6.4：技术组件名不进入产品界面。
+		expect(
+			screen.getByText("入口状态", { selector: "dt" }).nextElementSibling
+				?.textContent,
+		).toBe("平台身份入口尚未就绪。");
+		expect(document.body.textContent).not.toContain("Auth Gateway");
 	});
 
 	it("renders one opaque unavailable state for a missing or forbidden Agent", async () => {

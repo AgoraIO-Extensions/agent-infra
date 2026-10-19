@@ -558,6 +558,10 @@ test.describe("Agent directory design alignment", () => {
 		await expect(page.locator("main dt", { hasText: "入口状态" })).toHaveCount(
 			0,
 		);
+		// F-07：标准模板由平台校验身份，设计 dl 不列「入口身份责任」。
+		await expect(
+			page.locator("main dt", { hasText: "入口身份责任" }),
+		).toHaveCount(0);
 		await expect(page.locator("main")).not.toContainText("codex");
 		// 页内「返回 Agent 目录」不是当前页；全页只有导航「Agent 目录」带 aria-current。
 		const back = page.getByRole("link", { name: "返回 Agent 目录" });

@@ -152,10 +152,11 @@ describe("browser operation records", () => {
 		).toEqual([
 			{ label: "域名", value: "未记录" },
 			{ label: "操作范围", value: "打开页面" },
-			{ label: "接管", value: "无需接管" },
+			{ label: "接管人", value: "无需接管" },
 			{ label: "结果", value: "已完成" },
 			{ label: "凭证", value: "不进入模型或平台记录" },
 		]);
+		// 设计「接管人 陈昊 · MFA」：operatorId 是会话主体本人，与当前登录用户一致时显示姓名（NW-01）。
 		expect(
 			browserAuditFacts(
 				entries([
@@ -163,14 +164,49 @@ describe("browser operation records", () => {
 					handoffEvent(2, "completed"),
 					sideEffectEvent(3, "confirmed", { operation: "unregistered" }),
 				]),
+				{ userId: "operator-secret-1", displayName: "陈昊" },
 			).map((fact) => fact.value),
 		).toEqual([
 			"example.test",
 			"读取页面、外部操作",
-			"MFA 验证 · 已交回 Agent",
+			"陈昊 · MFA 验证",
 			"已确认",
 			"不进入模型或平台记录",
 		]);
+	});
+
+	it("never shows the operator ID when the operator is not the signed-in user", () => {
+		const handoff = entries([handoffEvent(1, "completed")]);
+		for (const viewer of [
+			undefined,
+			{ userId: "someone-else", displayName: "林默" },
+		]) {
+			const value = browserAuditFacts(handoff, viewer).find(
+				(fact) => fact.label === "接管人",
+			)?.value;
+			expect(value).toBe("未识别的用户 · MFA 验证");
+			expect(value).not.toContain("operator-secret-1");
+			expect(value).not.toContain("林默");
+		}
+		// 显示名为空时同样不回退到 ID。
+		expect(
+			browserAuditFacts(handoff, {
+				userId: "operator-secret-1",
+				displayName: "  ",
+			})[2],
+		).toEqual({ label: "接管人", value: "未识别的用户 · MFA 验证" });
+	});
+
+	it("shows the handoff state and reason before anyone has taken over", () => {
+		const requested = handoffEvent(1, "requested");
+		if (requested.type !== "browser.handoff") throw new Error("fixture");
+		const { operatorId: _operator, ...payload } = requested.payload;
+		expect(
+			browserAuditFacts(entries([{ ...requested, payload }]), {
+				userId: "operator-secret-1",
+				displayName: "陈昊",
+			})[2],
+		).toEqual({ label: "接管人", value: "等待接管 · MFA 验证" });
 	});
 });
 
@@ -212,7 +248,7 @@ describe("BrowserOperationRecordDialog", () => {
 		expect(dialog.getAttribute("aria-modal")).toBe("true");
 		expect(
 			[...dialog.querySelectorAll("dt")].map((item) => item.textContent),
-		).toEqual(["域名", "操作范围", "接管", "结果", "凭证"]);
+		).toEqual(["域名", "操作范围", "接管人", "结果", "凭证"]);
 		expect(
 			within(dialog)
 				.getAllByRole("button")
@@ -238,6 +274,25 @@ describe("BrowserOperationRecordDialog", () => {
 		expect(dialog.textContent).not.toMatch(
 			/Browser|恢复|服务端|browser_\w+|https?:\/\/|unregistered|operator-secret-1|handoff-1|confirmation-1|action-|execution-1/,
 		);
+	});
+
+	it("names the signed-in operator in the facts without exposing the ID", async () => {
+		render(
+			<BrowserOperationRecordDialog
+				conversationId="conversation-1"
+				executionId="execution-1"
+				events={[handoffEvent(1, "completed")]}
+				viewer={{ userId: "operator-secret-1", displayName: "陈昊" }}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "查看操作记录" }));
+		const dialog = await screen.findByRole("dialog", {
+			name: "浏览器操作记录",
+		});
+		const terms = [...dialog.querySelectorAll("dt")];
+		const operator = terms.find((term) => term.textContent === "接管人");
+		expect(operator?.nextElementSibling?.textContent).toBe("陈昊 · MFA 验证");
+		expect(dialog.textContent).not.toContain("operator-secret-1");
 	});
 
 	it("announces only the latest change while open", async () => {

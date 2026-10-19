@@ -126,6 +126,28 @@ function OwnerNames({
 		</>
 	);
 }
+/**
+ * 设计「编号 · 申请人」中的申请人（F-05）：取申请投影的 applicant；姓名缺失时附 ID 短形式。
+ * 申请 ID 是 UUID，没有可读编号字段，编号部分暂不显示。
+ */
+function ApplicantLine({
+	applicant,
+}: {
+	applicant: AgentApplicationProjectionV2["applicant"];
+}) {
+	if (!applicant) return null;
+	return (
+		<small>
+			申请人 · {formatPerson({ displayName: applicant.displayName }).name}
+			{applicant.displayName.trim() ? null : (
+				<>
+					{" "}
+					<IdentifierText label="申请人 ID" value={applicant.userId} />
+				</>
+			)}
+		</small>
+	);
+}
 function isSystemAdministrator(session: BrowserSessionProjectionV1) {
 	// This controls visibility only. The Platform authorizes every decision command.
 	return session.user.roles.includes("system_admin");
@@ -487,13 +509,16 @@ export function AdminAgentApplicationsScreen({
 		),
 	];
 	const query = search.trim().toLocaleLowerCase();
-	// placeholder 列出的字段都参与匹配：申请名称、说明与 Owner 显示名。
+	// placeholder 列出的申请名称与申请人都参与匹配；说明与 Owner 显示名也继续匹配。
 	const filteredApplications = applications.filter(
 		(a) =>
 			(source === "all" || source === sourceFilterValue(a)) &&
 			[
 				a.name,
 				a.description,
+				...(a.applicant
+					? [formatPerson({ displayName: a.applicant.displayName }).name]
+					: []),
 				...a.configuration.owners.map(
 					(o) => formatPerson({ displayName: o.displayName }).name,
 				),
@@ -616,7 +641,7 @@ export function AdminAgentApplicationsScreen({
 						<SearchInput
 							label="搜索申请"
 							id={`${filterId}-search`}
-							placeholder="搜索申请名称或 Owner"
+							placeholder="搜索申请名称或申请人"
 							value={search}
 							onChange={(event) => setSearch(event.target.value)}
 						/>
@@ -665,6 +690,7 @@ export function AdminAgentApplicationsScreen({
 									<TableRow key={application.applicationId}>
 										<TableCell data-label="申请">
 											<strong>{application.name}</strong>
+											<ApplicantLine applicant={application.applicant} />
 										</TableCell>
 										<TableCell data-label="来源 / Owner">
 											{sourceName(application, templateName)}
