@@ -20,6 +20,7 @@ import {
 	readSkillHubAgentCurrentVersionV1,
 	reviewSkillHubVersionV1,
 	revokeSkillHubVersionV1,
+	uninstallSkillHubInstallationV1,
 	updateSkillHubProjectV1,
 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
@@ -50,6 +51,8 @@ import type {
 	SkillHubProjectPageV1,
 	SkillHubProviderImportRequestV1,
 	SkillHubReviewRequestV1,
+	UninstallSkillHubInstallationV1Errors,
+	UninstallSkillHubInstallationV1Responses,
 	UpdateSkillHubProjectV1Errors,
 	UpdateSkillHubProjectV1Responses,
 } from "../../pilot/generated-v2/types.gen.js";
@@ -250,6 +253,35 @@ export async function installSkillHubVersion(
 	const parsed = SkillHubInstallationResponseV1Schema.safeParse(data);
 	if (!parsed.success || parsed.data.installation.state !== "installed")
 		throw requestError("安装响应无效。", {
+			...result,
+			error: { retryable: false },
+		});
+	return parsed.data;
+}
+
+/** 把本人安装从我的库移出；安装记录 ID 只来自服务端详情投影。 */
+export async function uninstallSkillHubInstallation(
+	installationId: string,
+	idempotencyKey: string,
+	client?: Client,
+) {
+	const result: Awaited<
+		RequestResult<
+			UninstallSkillHubInstallationV1Responses,
+			UninstallSkillHubInstallationV1Errors,
+			false
+		>
+	> = await uninstallSkillHubInstallationV1({
+		client,
+		path: { installationId },
+		headers: { "Idempotency-Key": idempotencyKey },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	const data = requireData("移出我的库失败。", result);
+	const parsed = SkillHubInstallationResponseV1Schema.safeParse(data);
+	if (!parsed.success || parsed.data.installation.state !== "uninstalled")
+		throw requestError("移出响应无效。", {
 			...result,
 			error: { retryable: false },
 		});

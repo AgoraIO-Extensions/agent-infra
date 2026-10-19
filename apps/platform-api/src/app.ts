@@ -121,6 +121,10 @@ import {
 	type SkillHubReviewRoutesDependenciesV1,
 } from "./http/skill-hub-review-routes.js";
 import {
+	registerSkillHubVersionDetailRoutesV1,
+	type SkillHubVersionDetailRoutesDependenciesV1,
+} from "./http/skill-hub-version-detail-routes.js";
+import {
 	registerTaskRoutes,
 	type TaskRoutesDependencies,
 } from "./http/task-routes.js";
@@ -201,6 +205,7 @@ export interface PlatformAppDependencies {
 	readonly skillHubInstallations?: SkillHubInstallationRoutesDependenciesV1;
 	readonly skillHubPublication?: SkillHubPublicationRoutesDependenciesV1;
 	readonly skillHubReview?: SkillHubReviewRoutesDependenciesV1;
+	readonly skillHubVersionDetail?: SkillHubVersionDetailRoutesDependenciesV1;
 	readonly skillHubAgentBindings?: SkillHubAgentBindingRoutesDependenciesV1;
 	readonly skillHubImport?: SkillHubImportRoutesDependenciesV1;
 	readonly userGovernance?: UserGovernanceRoutesDependencies;
@@ -372,6 +377,11 @@ export function createPlatformApp(
 		registerSkillHubPublicationRoutesV1(app, dependencies.skillHubPublication);
 	if (dependencies.skillHubReview)
 		registerSkillHubReviewRoutesV1(app, dependencies.skillHubReview);
+	if (dependencies.skillHubVersionDetail)
+		registerSkillHubVersionDetailRoutesV1(
+			app,
+			dependencies.skillHubVersionDetail,
+		);
 	if (dependencies.skillHubAgentBindings)
 		registerSkillHubAgentBindingRoutesV1(
 			app,

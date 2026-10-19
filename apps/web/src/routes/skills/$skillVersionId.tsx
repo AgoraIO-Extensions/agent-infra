@@ -4,12 +4,14 @@ import { isRetryableSkillHubError } from "../../features/skill-hub/skill-hub.js"
 import {
 	installSkillHubVersion,
 	revokeSkillHubVersion,
+	uninstallSkillHubInstallation,
 } from "../../features/skill-hub/skill-hub-management.js";
 import {
 	type SkillDetailTab,
 	SkillHubVersionScreen,
 } from "../../features/skill-hub/skill-hub-version-screen.js";
 import {
+	useOwnedSkillHubVersions,
 	useSkillHubDirectory,
 	useSkillHubProjects,
 	useSkillHubVersion,
@@ -29,6 +31,7 @@ function SkillHubVersionRoute() {
 	const { identityKey, session } = useApplicationSession();
 	const query = useSkillHubVersion({ identityKey, skillVersionId });
 	const catalog = useSkillHubDirectory({ identityKey });
+	const ownedVersions = useOwnedSkillHubVersions({ identityKey });
 	const projects = useSkillHubProjects({ identityKey });
 	const retryable = query.isError
 		? isRetryableSkillHubError(query.error)
@@ -59,7 +62,18 @@ function SkillHubVersionRoute() {
 							? { kind: "unavailable", retryable: catalog.retryable }
 							: catalog.data
 				}
-				onCatalogChanged={() => void catalog.refetch()}
+				ownedVersions={
+					ownedVersions.isPending
+						? { kind: "loading" }
+						: ownedVersions.isError || !ownedVersions.data
+							? { kind: "unavailable", retryable: ownedVersions.retryable }
+							: ownedVersions.data
+				}
+				onCatalogChanged={() => {
+					void catalog.refetch();
+					void ownedVersions.refetch();
+				}}
+				onVersionChanged={() => void query.refetch()}
 				tab={tab ?? "overview"}
 				onTabChange={(next: SkillDetailTab) =>
 					void navigate({
@@ -79,6 +93,8 @@ function SkillHubVersionRoute() {
 							},
 							idempotencyKey,
 						),
+					uninstall: (installationId, idempotencyKey) =>
+						uninstallSkillHubInstallation(installationId, idempotencyKey),
 					revoke: (id, idempotencyKey) =>
 						revokeSkillHubVersion(id, idempotencyKey),
 				}}

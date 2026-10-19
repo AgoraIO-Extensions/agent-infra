@@ -1434,6 +1434,25 @@ export type SkillHubInstallationV1 = {
     updatedAt: string;
 };
 
+export type SkillHubOwnedVersionPageV1 = {
+    items: Array<SkillHubOwnedVersionV1>;
+    nextCursor: string | null;
+};
+
+export type SkillHubOwnedVersionV1 = {
+    manifestDigest: string;
+    name: string;
+    packageDigest: string;
+    provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+    schemaVersion: 1;
+    signatureDigest: string;
+    skillId: string;
+    skillVersionId: string;
+    state: 'published' | 'pending_review' | 'rejected' | 'revoked';
+    version: string;
+    visibility: 'PRIVATE' | 'MEMBER' | 'ORGANIZATION' | 'MARKET';
+};
+
 export type SkillHubProjectCreateV1 = {
     name: string;
     organizationId?: string | null;
@@ -1537,6 +1556,39 @@ export type SkillHubReviewQueuePageV1 = {
 export type SkillHubReviewRequestV1 = {
     decision: 'approve' | 'reject';
     reason?: string;
+};
+
+export type SkillHubVersionDetailV1 = {
+    content: {
+        body: string;
+        bodyTruncated: boolean;
+        resources: Array<{
+            kind: 'script' | 'reference' | 'asset' | 'file';
+            path: string;
+            sizeBytes: number;
+        }>;
+        state: 'available';
+    } | {
+        state: 'unavailable';
+    };
+    installation: {
+        installationId: string;
+        state: 'installed';
+    } | {
+        state: 'not_installed';
+    };
+    manifestDigest: string;
+    name: string;
+    ownerId: string;
+    packageDigest: string;
+    provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+    schemaVersion: 1;
+    signatureDigest: string;
+    skillId: string;
+    skillVersionId: string;
+    state: 'published' | 'pending_review' | 'rejected' | 'revoked';
+    version: string;
+    visibility: 'PRIVATE' | 'MEMBER' | 'ORGANIZATION' | 'MARKET';
 };
 
 export type SkillHubVersionMetadataV1 = {
@@ -5321,6 +5373,46 @@ export type UninstallSkillHubInstallationV1Responses = {
 
 export type UninstallSkillHubInstallationV1Response = UninstallSkillHubInstallationV1Responses[keyof UninstallSkillHubInstallationV1Responses];
 
+export type ListOwnedSkillHubVersionsV1Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/skills/owned-versions';
+};
+
+export type ListOwnedSkillHubVersionsV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListOwnedSkillHubVersionsV1Error = ListOwnedSkillHubVersionsV1Errors[keyof ListOwnedSkillHubVersionsV1Errors];
+
+export type ListOwnedSkillHubVersionsV1Responses = {
+    /**
+     * The current user's Skill versions in every state
+     */
+    200: SkillHubOwnedVersionPageV1;
+};
+
+export type ListOwnedSkillHubVersionsV1Response = ListOwnedSkillHubVersionsV1Responses[keyof ListOwnedSkillHubVersionsV1Responses];
+
 export type ListSkillHubProjectsV1Data = {
     body?: never;
     path?: never;
@@ -5649,6 +5741,49 @@ export type ReadSkillHubVersionV1Responses = {
 };
 
 export type ReadSkillHubVersionV1Response = ReadSkillHubVersionV1Responses[keyof ReadSkillHubVersionV1Responses];
+
+export type ReadSkillHubVersionDetailV1Data = {
+    body?: never;
+    path: {
+        skillVersionId: string;
+    };
+    query?: never;
+    url: '/api/v2/skills/versions/{skillVersionId}/detail';
+};
+
+export type ReadSkillHubVersionDetailV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadSkillHubVersionDetailV1Error = ReadSkillHubVersionDetailV1Errors[keyof ReadSkillHubVersionDetailV1Errors];
+
+export type ReadSkillHubVersionDetailV1Responses = {
+    /**
+     * Visible Skill version with bounded content and installation state
+     */
+    200: SkillHubVersionDetailV1;
+};
+
+export type ReadSkillHubVersionDetailV1Response = ReadSkillHubVersionDetailV1Responses[keyof ReadSkillHubVersionDetailV1Responses];
 
 export type ReviewSkillHubVersionV1Data = {
     body: SkillHubReviewRequestV1;

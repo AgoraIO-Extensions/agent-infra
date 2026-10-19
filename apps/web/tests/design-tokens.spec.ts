@@ -1,6 +1,7 @@
 import {
 	ScopedPlatformAuditPageV2Schema,
 	ScopedPlatformAuditProjectionV2Schema,
+	SkillHubVersionDetailV1Schema,
 	SkillHubVersionMetadataV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
@@ -197,8 +198,25 @@ async function tokenFixture(page: Page, role: "owner" | "admin" = "owner") {
 					nextCursor: null,
 				}),
 			});
-		if (path === `/api/v2/skills/versions/${skillVersion.skillVersionId}`)
-			return route.fulfill({ json: skillVersion });
+		if (
+			path === `/api/v2/skills/versions/${skillVersion.skillVersionId}/detail`
+		)
+			// K-02：详情页读取版本详情投影（发布者、本人安装状态与有界正文）。
+			return route.fulfill({
+				json: SkillHubVersionDetailV1Schema.parse({
+					...skillVersion,
+					ownerId: "user-owner-1",
+					installation: { state: "not_installed" },
+					content: {
+						state: "available",
+						body: "# release-notes\n",
+						bodyTruncated: false,
+						resources: [
+							{ path: "references/guide.md", kind: "reference", sizeBytes: 5 },
+						],
+					},
+				}),
+			});
 		try {
 			const response = await server.fetch(
 				new Request(request.url(), {

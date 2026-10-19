@@ -1,5 +1,6 @@
 import {
 	type ObjectStorageDataV1,
+	readAdmittedSkillPackageEntryV1,
 	type SkillPackageAdmissionPolicyV1,
 	type SkillPackageScannerV1,
 	type SkillPackageSourceVerifierV1,
@@ -8,10 +9,14 @@ import {
 import type { SkillProviderRegistryV1 } from "@agent-infra/platform-core";
 import {
 	createSkillProviderImportV1,
+	pageSkillHubOwnedVersionsV1,
 	pageSkillHubReviewQueueV1,
 	pageSkillHubVersionsV1,
+	projectSkillHubVersionContentV1,
+	projectSkillHubVersionDetailV1,
 	projectSkillHubVersionMetadataV1,
 	SkillHubOperationErrorV1,
+	type SkillHubVersionContentV1,
 } from "@agent-infra/platform-core";
 import { PostgresSkillHubLifecycleV1 } from "@agent-infra/platform-store";
 import { createDeploymentIdentityScope } from "./deployment-identity.js";
@@ -22,6 +27,7 @@ import type { SkillHubProjectRoutesDependenciesV1 } from "./http/skill-hub-proje
 import type { SkillHubPublicationRoutesDependenciesV1 } from "./http/skill-hub-publication-routes.js";
 import type { SkillHubReadRoutesDependenciesV1 } from "./http/skill-hub-read-routes.js";
 import type { SkillHubReviewRoutesDependenciesV1 } from "./http/skill-hub-review-routes.js";
+import type { SkillHubVersionDetailRoutesDependenciesV1 } from "./http/skill-hub-version-detail-routes.js";
 
 export type SkillHubProviderImportDeploymentV1 = Readonly<{
 	readonly registry: SkillProviderRegistryV1;
@@ -134,6 +140,43 @@ export function assembleSkillHubReadApiV1(input: {
 		recordRefusal: (metadata, userId, reason) =>
 			store.recordReadRefusal(metadata, userId, reason),
 	};
+	// 详情正文只从部署维护的 Skill 包存储按固定对象版本读取；未装配、无包描述或核对失败时
+	// 内容标记不可用，版本、发布者与安装状态照常返回。
+	const packageStorage = input.providerImport?.storage;
+	const versionDetailDependencies: SkillHubVersionDetailRoutesDependenciesV1 = {
+		identity: input.identity,
+		listOwned: (request, trusted, query) =>
+			scope.requestScope(request, async () =>
+				pageSkillHubOwnedVersionsV1(
+					await store.listOwnedVersions(trusted, query),
+					trusted.userId,
+				),
+			),
+		readDetail: (request, trusted, versionId) =>
+			scope.requestScope(request, async () => {
+				const detail = await store.readVersionDetail(trusted, versionId);
+				let content: SkillHubVersionContentV1 = { state: "unavailable" };
+				if (packageStorage && detail.packageObject)
+					try {
+						content = projectSkillHubVersionContentV1(
+							await readAdmittedSkillPackageEntryV1({
+								storage: packageStorage,
+								zip: detail.packageObject,
+								name: detail.version.name,
+								version: detail.version.version,
+								packageDigest: detail.version.packageDigest,
+								manifestDigest: detail.version.manifestDigest,
+								signal: request.signal,
+							}),
+						);
+					} catch {
+						/* 内容读取或核对失败不暴露原因，只标记不可用。 */
+					}
+				return projectSkillHubVersionDetailV1({ ...detail, content });
+			}),
+		recordRefusal: (metadata, userId, reason) =>
+			store.recordReadRefusal(metadata, userId, reason),
+	};
 	const importDependencies: SkillHubImportRoutesDependenciesV1 | undefined =
 		providerImport && input.providerImport
 			? {
@@ -167,6 +210,7 @@ export function assembleSkillHubReadApiV1(input: {
 		installationDependencies,
 		publicationDependencies,
 		reviewDependencies,
+		versionDetailDependencies,
 		importDependencies,
 		projectDependencies,
 		close: () => store.close(),
