@@ -4339,10 +4339,16 @@ function isPilotBrowserProjectionOpenApiAddition(previous, current) {
 
 // #2861 adds optional lifecycle and directory identity fields to application
 // projections. Existing readers may continue using the historical fields.
-function isApplicationProjectionLifecycleFieldsOpenApiAddition(previous, current) {
+function isApplicationProjectionLifecycleFieldsOpenApiAddition(
+	previous,
+	current,
+) {
 	const normalized = structuredClone(current);
 	let changed = false;
-	for (const name of ["AgentApplicationProjectionV1", "AgentApplicationProjectionV2"]) {
+	for (const name of [
+		"AgentApplicationProjectionV1",
+		"AgentApplicationProjectionV2",
+	]) {
 		const before = previous.components?.schemas?.[name]?.properties ?? {};
 		const after = normalized.components?.schemas?.[name]?.properties;
 		if (!after) continue;
@@ -4449,7 +4455,10 @@ function normalizeApplicationProjectionLifecycleFieldsJsonSchemaAddition(
 	const normalized = structuredClone(current);
 	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
 	const schemas = normalized.$defs ?? normalized.components?.schemas ?? {};
-	for (const name of ["AgentApplicationProjectionV1", "AgentApplicationProjectionV2"]) {
+	for (const name of [
+		"AgentApplicationProjectionV1",
+		"AgentApplicationProjectionV2",
+	]) {
 		const before = previousSchemas[name]?.properties ?? {};
 		const after = schemas[name]?.properties;
 		if (!after) continue;
@@ -4628,7 +4637,10 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isRuntimeBrowserOperationFactOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserWorkloadIdentityOpenApiAddition(previous, current) &&
 			!isPilotBrowserProjectionOpenApiAddition(previous, current) &&
-			!isApplicationProjectionLifecycleFieldsOpenApiAddition(previous, current) &&
+			!isApplicationProjectionLifecycleFieldsOpenApiAddition(
+				previous,
+				current,
+			) &&
 			!isBrowserCommandOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isRuntimeNativeCapabilityV3OpenApiAddition(previous, current) &&
@@ -4701,8 +4713,8 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 		normalizeApplicationProjectionLifecycleFieldsJsonSchemaAddition(
 			previous,
 			normalizeRuntimeSkillHostReadJsonSchemaAddition(
-			previous,
-			normalizeSkillPackageObjectVersions(previous, current, changes),
+				previous,
+				normalizeSkillPackageObjectVersions(previous, current, changes),
 			),
 		),
 	);
