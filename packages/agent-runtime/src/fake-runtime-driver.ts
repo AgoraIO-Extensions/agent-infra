@@ -230,6 +230,13 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 			let result: RuntimeDriverOperationRecord["result"];
 			if (command.kind === "native-command") {
 				result = { outcome: "accepted", status: "completed" };
+				this.appendEvent(session, command.executionId, "completed", {
+					status: "completed",
+				});
+				eventStreamKey = this.eventStreamKey(
+					nativeSessionRef,
+					command.executionId,
+				);
 				state.sideEffects += 1;
 			} else if (command.kind === "submit-turn") {
 				if (
@@ -566,7 +573,9 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 		session: FakeSession,
 		executionId: string,
 		type: "status" | "text" | "completed",
-		payload: { status: "running" | "cancelled" } | { delta: string },
+		payload:
+			| { status: "running" | "cancelled" | "completed" }
+			| { delta: string },
 	) {
 		const sequence = session.events.length + 1;
 		const base = {
@@ -581,9 +590,13 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 		} else if (
 			type === "completed" &&
 			"status" in payload &&
-			payload.status === "cancelled"
+			(payload.status === "cancelled" || payload.status === "completed")
 		) {
-			session.events.push({ ...base, type, payload: { status: "cancelled" } });
+			session.events.push({
+				...base,
+				type,
+				payload: { status: payload.status },
+			});
 		} else if (
 			type === "status" &&
 			"status" in payload &&
