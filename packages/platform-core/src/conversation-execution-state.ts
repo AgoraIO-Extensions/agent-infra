@@ -181,19 +181,29 @@ export function parseState(
 			}
 			const selectedOption = (() => {
 				if (configuration.selectedOption === undefined) return undefined;
-				const option = snapshotObject(configuration.selectedOption, [
-					"optionId",
-					"modelId",
-				]);
+				const option = snapshotObject(
+					configuration.selectedOption,
+					["optionId", "modelId"],
+					["displayName"],
+				);
 				// 只描述会话当前所选选项；与会话不符的历史记录不能混入回退事件。
 				if (
 					!isText(option.optionId) ||
 					!isText(option.modelId, modelDisplayNameMaxBytesV1) ||
+					(option.displayName !== undefined &&
+						option.displayName !== null &&
+						!isText(option.displayName, modelDisplayNameMaxBytesV1)) ||
 					option.optionId !== conversation.selectedModelOptionId
 				) {
 					unavailable();
 				}
-				return { optionId: option.optionId, modelId: option.modelId };
+				return {
+					optionId: option.optionId,
+					modelId: option.modelId,
+					...(option.displayName === undefined
+						? {}
+						: { displayName: option.displayName }),
+				};
 			})();
 			return {
 				configurationRevision: configuration.configurationRevision,
@@ -519,10 +529,10 @@ export function effectiveModelSelection(
 	};
 }
 
-/** 标准模板模型选项的显示名就是其模型 ID；Web 选择器与回退事件共用这一规则（G-07）。 */
 /** 回退事件显示名的上限（UTF-8 字节），与公共契约 ModelSelectionFallbackEventV2 一致。 */
 const modelDisplayNameMaxBytesV1 = 1024;
 
+/** 未配置名称 metadata 时使用原模型 ID 作为显示名（G-07）。 */
 export function modelOptionDisplayNameV1(option: {
 	readonly modelId: string;
 }): string {
@@ -540,7 +550,10 @@ export function requestedModelDisplayNameV1(
 	const option = configuration?.selectedOption;
 	if (!option || option.optionId !== fallback.previousModelOptionId)
 		return null;
-	const displayName = modelOptionDisplayNameV1(option);
+	const displayName =
+		option.displayName === undefined
+			? modelOptionDisplayNameV1(option)
+			: option.displayName;
 	return isText(displayName, modelDisplayNameMaxBytesV1) ? displayName : null;
 }
 

@@ -8,6 +8,7 @@ import {
 import type { SkillProviderRegistryV1 } from "@agent-infra/platform-core";
 import {
 	createSkillProviderImportV1,
+	pageSkillHubReviewQueueV1,
 	pageSkillHubVersionsV1,
 	projectSkillHubVersionMetadataV1,
 	SkillHubOperationErrorV1,
@@ -20,6 +21,7 @@ import type { SkillHubInstallationRoutesDependenciesV1 } from "./http/skill-hub-
 import type { SkillHubProjectRoutesDependenciesV1 } from "./http/skill-hub-project-routes.js";
 import type { SkillHubPublicationRoutesDependenciesV1 } from "./http/skill-hub-publication-routes.js";
 import type { SkillHubReadRoutesDependenciesV1 } from "./http/skill-hub-read-routes.js";
+import type { SkillHubReviewRoutesDependenciesV1 } from "./http/skill-hub-review-routes.js";
 
 export type SkillHubProviderImportDeploymentV1 = Readonly<{
 	readonly registry: SkillProviderRegistryV1;
@@ -121,6 +123,17 @@ export function assembleSkillHubReadApiV1(input: {
 				store.revokeVersion(trusted, versionId, key),
 			),
 	};
+	const reviewDependencies: SkillHubReviewRoutesDependenciesV1 = {
+		identity: input.identity,
+		list: (request, trusted, query) =>
+			scope.requestScope(request, async () =>
+				pageSkillHubReviewQueueV1(
+					await store.listPendingReviewVersions(trusted, query),
+				),
+			),
+		recordRefusal: (metadata, userId, reason) =>
+			store.recordReadRefusal(metadata, userId, reason),
+	};
 	const importDependencies: SkillHubImportRoutesDependenciesV1 | undefined =
 		providerImport && input.providerImport
 			? {
@@ -153,6 +166,7 @@ export function assembleSkillHubReadApiV1(input: {
 		dependencies,
 		installationDependencies,
 		publicationDependencies,
+		reviewDependencies,
 		importDependencies,
 		projectDependencies,
 		close: () => store.close(),

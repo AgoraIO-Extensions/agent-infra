@@ -3,6 +3,9 @@ import {
 	SkillHubProjectPageV1Schema,
 	SkillHubProviderImportRequestV1Schema,
 	SkillHubPublicationResponseV1Schema,
+	SkillHubReviewQueueItemV1Schema,
+	SkillHubReviewQueuePageV1Schema,
+	SkillHubReviewRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, test } from "@playwright/test";
 
@@ -21,10 +24,18 @@ const project = {
 
 async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 	const writes: { method: string; path: string; body: unknown }[] = [];
+	const reads: string[] = [];
+	// 待审队列按服务端规则回读：审核成功后该版本离开队列。
+	const pending = [
+		reviewItem("incident-summary", "user-other", "ORGANIZATION", "org-release"),
+		reviewItem("release-notes", userId, "MARKET", null),
+		reviewItem("weekly-digest", "user-latin", "MEMBER", null),
+	];
 	await page.route("**/api/**", async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
-		if (request.method() !== "GET")
+		if (request.method() === "GET") reads.push(path);
+		else
 			writes.push({
 				method: request.method(),
 				path,
@@ -97,6 +108,71 @@ async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 				}),
 			});
 		}
+		if (path === "/api/v2/skills/reviews" && role === "admin")
+			return route.fulfill({
+				json: SkillHubReviewQueuePageV1Schema.parse({
+					items: pending,
+					nextCursor: null,
+				}),
+			});
+		const reviewPath = path.match(
+			/^\/api\/v2\/skills\/versions\/([^/]+)\/review$/,
+		);
+		if (reviewPath && request.method() === "POST" && role === "admin") {
+			const body = SkillHubReviewRequestV1Schema.parse(request.postDataJSON());
+			const index = pending.findIndex(
+				(item) => item.skillVersionId === reviewPath[1],
+			);
+			const [item] = pending.splice(index, 1);
+			if (!item) throw new Error("review fixture missing");
+			return route.fulfill({
+				json: SkillHubPublicationResponseV1Schema.parse({
+					replayed: false,
+					version: {
+						schemaVersion: 1,
+						skillId: item.skillId,
+						skillVersionId: item.skillVersionId,
+						provider: item.provider,
+						version: item.version,
+						packageDigest: item.packageDigest,
+						manifestDigest: item.manifestDigest,
+						signatureDigest: item.signatureDigest,
+						visibility: item.visibility,
+						state: body.decision === "approve" ? "published" : "rejected",
+						needUpgrade: false,
+						reviewedBy: userId,
+						reviewReason: body.reason ?? null,
+						revokedAt: null,
+					},
+				}),
+			});
+		}
+		if (path === "/api/v2/directory/search") {
+			const url = new URL(request.url());
+			const ids = url.searchParams.get("ids")?.split(",") ?? [];
+			return route.fulfill({
+				json: {
+					items: [
+						{ kind: "user", canonicalId: "user-other", displayName: "周可" },
+						{
+							kind: "user",
+							canonicalId: "user-latin",
+							displayName: "Alex Chen",
+						},
+						{ kind: "user", canonicalId: userId, displayName: "Skill 管理员" },
+						{
+							kind: "organization",
+							canonicalId: "org-release",
+							displayName: "发布工程",
+						},
+					].filter(
+						(item) =>
+							item.kind === url.searchParams.get("kind") &&
+							ids.includes(item.canonicalId),
+					),
+				},
+			});
+		}
 		return route.fulfill({
 			status: 404,
 			json: {
@@ -108,7 +184,31 @@ async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 			},
 		});
 	});
-	return { writes };
+	return { writes, reads };
+}
+
+function reviewItem(
+	name: string,
+	ownerId: string,
+	visibility: "MEMBER" | "ORGANIZATION" | "MARKET",
+	organizationId: string | null,
+) {
+	return SkillHubReviewQueueItemV1Schema.parse({
+		schemaVersion: 1,
+		skillId: name,
+		skillVersionId: `${name}-v1`,
+		name,
+		provider: "github",
+		version: "1.0.0",
+		packageDigest: "a".repeat(64),
+		manifestDigest: "b".repeat(64),
+		signatureDigest: "c".repeat(64),
+		visibility,
+		organizationId,
+		state: "pending_review",
+		ownerId,
+		submittedAt: "2026-10-01T08:00:00Z",
+	});
 }
 
 async function fitsViewport(page: Page) {
@@ -212,7 +312,7 @@ test("creating and publishing never asks for internal IDs and reports state in C
 	await fitsViewport(page);
 });
 
-test("Skill review is a system administration page with an honest unavailable queue", async ({
+test("Skill review lists pending versions, reviews them and re-reads the queue (K-04)", async ({
 	page,
 }) => {
 	const control = await fixture(page, "admin");
@@ -235,10 +335,73 @@ test("Skill review is a system administration page with an honest unavailable qu
 	await expect(
 		system.getByRole("link", { name: "Skill 审核", includeHidden: true }),
 	).toHaveAttribute("aria-current", "page");
-	await expect(main.getByText("审核队列暂不可用")).toBeVisible();
+	const rows = main.locator("article.skill-row");
+	await expect(rows).toHaveCount(3);
+	const incident = rows.filter({ hasText: "incident-summary" });
+	await expect(incident).toContainText(
+		"周可申请 · 组织共享：发布工程 · GitHub · ",
+	);
+	await expect(incident.locator("time")).toHaveAttribute(
+		"datetime",
+		"2026-10-01T08:00:00Z",
+	);
+	await expect(rows.filter({ hasText: "weekly-digest" })).toContainText(
+		"Alex Chen 申请 · 全体成员 · GitHub",
+	);
+	// 创建者看不到自己发布版本的审核入口。
+	const own = rows.filter({ hasText: "release-notes" });
+	await expect(own).toContainText("不能审核自己发布的版本");
+	await expect(own.getByRole("button")).toHaveCount(0);
+	await expect(main).not.toContainText(
+		/pending_review|ORGANIZATION|org-release|user-other|aaaaaaaa/,
+	);
 	await expect(main.locator("input, textarea")).toHaveCount(0);
-	await expect(main.getByRole("button")).toHaveCount(0);
+
+	// 驳回理由必填：空理由不发出请求。
+	await main
+		.getByRole("button", { name: "审阅：incident-summary · v1.0.0" })
+		.click();
+	const dialog = page.getByRole("dialog", { name: "审阅发布申请" });
+	await expect(dialog).toContainText("组织共享：发布工程");
+	await dialog.getByRole("button", { name: "驳回" }).click();
+	await expect(dialog.getByRole("alert")).toHaveText("请填写驳回原因。");
+	await expect(dialog.getByLabel("审核说明 · 驳回时必填")).toBeFocused();
 	expect(control.writes).toHaveLength(0);
+	await dialog.getByLabel("审核说明 · 驳回时必填").fill("  缺少使用说明  ");
+	const queueReads = control.reads.filter(
+		(path) => path === "/api/v2/skills/reviews",
+	).length;
+	await dialog.getByRole("button", { name: "驳回" }).click();
+	await expect(dialog).toBeHidden();
+	await expect(page.getByText("已驳回，发布者可修改后重提")).toBeVisible();
+	// 处理后队列立即回读，已驳回的版本离开队列。
+	await expect(rows).toHaveCount(2);
+	await expect(rows.filter({ hasText: "incident-summary" })).toHaveCount(0);
+	expect(
+		control.reads.filter((path) => path === "/api/v2/skills/reviews").length,
+	).toBeGreaterThan(queueReads);
+
+	await main
+		.getByRole("button", { name: "审阅：weekly-digest · v1.0.0" })
+		.click();
+	await dialog.getByRole("button", { name: "批准发布" }).click();
+	await expect(
+		page.getByText("版本已批准发布，现有绑定继续使用原版本"),
+	).toBeVisible();
+	await expect(rows).toHaveCount(1);
+	await expect(rows).toContainText("release-notes");
+	expect(control.writes).toEqual([
+		{
+			method: "POST",
+			path: "/api/v2/skills/versions/incident-summary-v1/review",
+			body: { decision: "reject", reason: "缺少使用说明" },
+		},
+		{
+			method: "POST",
+			path: "/api/v2/skills/versions/weekly-digest-v1/review",
+			body: { decision: "approve" },
+		},
+	]);
 	await fitsViewport(page);
 });
 
@@ -260,4 +423,6 @@ test("employees see no Skill review entry and a no-permission page on deep links
 		0,
 	);
 	expect(control.writes).toHaveLength(0);
+	// 普通员工不发出待审队列读取。
+	expect(control.reads).not.toContain("/api/v2/skills/reviews");
 });

@@ -1505,6 +1505,28 @@ export type SkillHubPublicationVersionV1 = {
     visibility: 'PRIVATE' | 'MEMBER' | 'ORGANIZATION' | 'MARKET';
 };
 
+export type SkillHubReviewQueueItemV1 = {
+    manifestDigest: string;
+    name: string;
+    organizationId: string | null;
+    ownerId: string;
+    packageDigest: string;
+    provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+    schemaVersion: 1;
+    signatureDigest: string;
+    skillId: string;
+    skillVersionId: string;
+    state: 'pending_review';
+    submittedAt: string;
+    version: string;
+    visibility: 'MEMBER' | 'ORGANIZATION' | 'MARKET';
+};
+
+export type SkillHubReviewQueuePageV1 = {
+    items: Array<SkillHubReviewQueueItemV1>;
+    nextCursor: string | null;
+};
+
 export type SkillHubReviewRequestV1 = {
     decision: 'approve' | 'reject';
     reason?: string;
@@ -3503,6 +3525,130 @@ export type GetAgentDefaultRelayKeyCandidatesV2Responses = {
 
 export type GetAgentDefaultRelayKeyCandidatesV2Response = GetAgentDefaultRelayKeyCandidatesV2Responses[keyof GetAgentDefaultRelayKeyCandidatesV2Responses];
 
+export type GetAgentDefaultRelayKeySavedDisplayCandidatesV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/default-relay-key/display-candidates';
+};
+
+export type GetAgentDefaultRelayKeySavedDisplayCandidatesV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentDefaultRelayKeySavedDisplayCandidatesV2Error = GetAgentDefaultRelayKeySavedDisplayCandidatesV2Errors[keyof GetAgentDefaultRelayKeySavedDisplayCandidatesV2Errors];
+
+export type GetAgentDefaultRelayKeySavedDisplayCandidatesV2Responses = {
+    /**
+     * Saved-Key candidates with display names
+     */
+    200: {
+        candidates: Array<{
+            displayName: string;
+            endpointId: string;
+            modelId: string;
+            reasoningLevels: Array<string>;
+        }>;
+        configurationRevision: number;
+        keyVersion: number;
+        schemaVersion: 2;
+    };
+};
+
+export type GetAgentDefaultRelayKeySavedDisplayCandidatesV2Response = GetAgentDefaultRelayKeySavedDisplayCandidatesV2Responses[keyof GetAgentDefaultRelayKeySavedDisplayCandidatesV2Responses];
+
+export type GetAgentDefaultRelayKeyDisplayCandidatesV2Data = {
+    body: {
+        configurationRevision: number;
+        keyValue: string;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/default-relay-key/display-candidates';
+};
+
+export type GetAgentDefaultRelayKeyDisplayCandidatesV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentDefaultRelayKeyDisplayCandidatesV2Error = GetAgentDefaultRelayKeyDisplayCandidatesV2Errors[keyof GetAgentDefaultRelayKeyDisplayCandidatesV2Errors];
+
+export type GetAgentDefaultRelayKeyDisplayCandidatesV2Responses = {
+    /**
+     * Compatible candidates with display names
+     */
+    200: {
+        candidates: Array<{
+            displayName: string;
+            endpointId: string;
+            modelId: string;
+            reasoningLevels: Array<string>;
+        }>;
+        configurationRevision: number;
+        schemaVersion: 2;
+    };
+};
+
+export type GetAgentDefaultRelayKeyDisplayCandidatesV2Response = GetAgentDefaultRelayKeyDisplayCandidatesV2Responses[keyof GetAgentDefaultRelayKeyDisplayCandidatesV2Responses];
+
 export type CommandAgentLifecycleV2Data = {
     body: AgentLifecycleCommandRequestV1;
     headers: {
@@ -5314,6 +5460,46 @@ export type UpdateSkillHubProjectV1Responses = {
 };
 
 export type UpdateSkillHubProjectV1Response = UpdateSkillHubProjectV1Responses[keyof UpdateSkillHubProjectV1Responses];
+
+export type ListSkillHubReviewQueueV1Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/skills/reviews';
+};
+
+export type ListSkillHubReviewQueueV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListSkillHubReviewQueueV1Error = ListSkillHubReviewQueueV1Errors[keyof ListSkillHubReviewQueueV1Errors];
+
+export type ListSkillHubReviewQueueV1Responses = {
+    /**
+     * Skill versions waiting for administrator review
+     */
+    200: SkillHubReviewQueuePageV1;
+};
+
+export type ListSkillHubReviewQueueV1Response = ListSkillHubReviewQueueV1Responses[keyof ListSkillHubReviewQueueV1Responses];
 
 export type PublishSkillHubVersionV1Data = {
     body: SkillHubPublicationRequestV1;

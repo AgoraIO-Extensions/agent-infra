@@ -42,6 +42,10 @@ export {
 } from "./codex-model-profile.js";
 export { createMessagesModelAccessValidatorV1 } from "./messages-access.js";
 export {
+	createDeploymentModelDisplayNamesV1,
+	type ModelDisplayNameLookupV1,
+} from "./model-display-names.js";
+export {
 	projectRuntimeModelConfigurationV1,
 	projectRuntimeModelConfigurationV4,
 	type RuntimeModelProjectionV1,

@@ -2128,6 +2128,26 @@ describe("model-selection fallback requested model (G-07)", () => {
 		});
 	});
 
+	it("records the resolved deployment name and preserves an explicitly unavailable name", () => {
+		for (const displayName of ["Trusted model name", null]) {
+			expect(
+				write(
+					state({
+						...current,
+						selectedOption: {
+							optionId: "model_alternate",
+							modelId: "relay-a",
+							displayName,
+						},
+					}),
+				),
+			).toMatchObject({
+				requestedModelOptionId: "model_alternate",
+				requestedModelDisplayName: displayName,
+			});
+		}
+	});
+
 	it("records a null name instead of the option ID when no applied record is readable", () => {
 		expect(write(state(current))).toMatchObject({
 			requestedModelOptionId: "model_alternate",
@@ -2158,6 +2178,13 @@ describe("model-selection fallback requested model (G-07)", () => {
 			{ optionId: "model_primary", modelId: "relay-p" },
 			{ optionId: "model_alternate", modelId: "" },
 			{ optionId: "model_alternate", modelId: "relay-a", endpointId: "e" },
+			{ optionId: "model_alternate", modelId: "relay-a", displayName: 42 },
+			{ optionId: "model_alternate", modelId: "relay-a", displayName: "" },
+			{
+				optionId: "model_alternate",
+				modelId: "relay-a",
+				displayName: "m".repeat(1025),
+			},
 		]) {
 			expect(() => parseState(state({ ...current, selectedOption }))).toThrow(
 				ConversationExecutionError,

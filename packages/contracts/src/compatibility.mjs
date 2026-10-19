@@ -2580,6 +2580,35 @@ function isSkillHubPublicationOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2905 publishes the system administrator pending-review queue read additively;
+// the existing review command and every published schema stay unchanged.
+function isSkillHubReviewQueueOpenApiAddition(previous, current) {
+	const paths = ["/api/v2/skills/reviews"];
+	const schemas = ["SkillHubReviewQueueItemV1", "SkillHubReviewQueuePageV1"];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"08f359f7a20b96cba61175dccfcfd073adb6a604c7b23698196f3abf4b573d50"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #2270 publishes the existing authenticated native metadata read route and
 // projection as an additive Browser v2 consumer contract.
 function isNativeMetadataOpenApiAddition(previous, current) {
@@ -3226,6 +3255,36 @@ function isKeylessModelReplacementOpenApiAddition(previous, current) {
 // #2612 adds the saved-Key read projection and a credential-free, version-bound
 // configuration update branch. Strip those additive branches before comparing
 // the historical V2 contract.
+function isModelDisplayCandidatesOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents/{agentId}/default-relay-key/display-candidates";
+	if (
+		previous.paths?.[path] !== undefined ||
+		current.paths?.[path] === undefined
+	)
+		return false;
+	if (
+		createHash("sha256")
+			.update(JSON.stringify(current.paths?.[path]))
+			.digest("hex") !==
+		"652cd90088a9852a524d4b0ca0fc711a3b1288b6d92111acd43f7243c3519e20"
+	)
+		return false;
+	const oldPath = "/api/v2/agents/{agentId}/default-relay-key/candidates";
+	for (const method of ["get", "post"]) {
+		if (
+			previous.paths?.[oldPath]?.[method] !== undefined &&
+			!sameValue(
+				previous.paths[oldPath][method],
+				current.paths?.[oldPath]?.[method],
+			)
+		)
+			return false;
+	}
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function isSavedKeyCandidateOpenApiAddition(previous, current) {
 	const normalized = structuredClone(current);
 	const savedPath =
@@ -4839,6 +4898,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isApplicationDefaultRelayKeyV2OpenApiAddition(previous, current) &&
 			!isKeylessModelReplacementOpenApiAddition(previous, current) &&
 			!isSavedKeyCandidateOpenApiAddition(previous, current) &&
+			!isModelDisplayCandidatesOpenApiAddition(previous, current) &&
 			!isAgentDefaultRelayKeyInputOpenApiAddition(previous, current) &&
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isTaskHttpV1SseOpenApiAddition(previous, current) &&
@@ -4851,6 +4911,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isSkillHubReadOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationOpenApiAddition(previous, current) &&
 			!isSkillHubPublicationOpenApiAddition(previous, current) &&
+			!isSkillHubReviewQueueOpenApiAddition(previous, current) &&
 			!isSkillHubProjectAndImportOpenApiAddition(previous, current) &&
 			!isSkillHubProjectOpenApiAddition(previous, current) &&
 			!isSkillHubImportOpenApiAddition(previous, current) &&

@@ -22,8 +22,10 @@ import {
 import {
 	AgentDefaultRelayKeyCandidatesRequestV1Schema,
 	AgentDefaultRelayKeyCandidatesV1Schema,
+	AgentDefaultRelayKeyDisplayCandidatesV2Schema,
 	AgentDefaultRelayKeyReplaceRequestV1Schema,
 	AgentDefaultRelayKeySavedCandidatesV1Schema,
+	AgentDefaultRelayKeySavedDisplayCandidatesV2Schema,
 	AgentDefaultRelayKeyStateV1Schema,
 } from "./agent-default-relay-key.ts";
 import {
@@ -1868,6 +1870,42 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 				"200": jsonResponse(
 					"Compatible candidates",
 					AgentDefaultRelayKeyCandidatesV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/default-relay-key/display-candidates": {
+		get: {
+			operationId: "getAgentDefaultRelayKeySavedDisplayCandidatesV2",
+			summary: "Read saved-Key candidates with deployment-owned model names",
+			description:
+				"Current Owner browser session only. Retains current configuration and saved Key version checks; names are presentation metadata only. No Key material is returned. No-store; no Authorization header, query or request body.",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"200": jsonResponse(
+					"Saved-Key candidates with display names",
+					AgentDefaultRelayKeySavedDisplayCandidatesV2Schema,
+				),
+				...errorResponses,
+			},
+		},
+		post: {
+			operationId: "getAgentDefaultRelayKeyDisplayCandidatesV2",
+			summary:
+				"Preview Key-visible candidates with deployment-owned model names",
+			description:
+				"Current Owner browser session only. Retains the original candidate intersection and independent save revalidation. Names never authorize a model or prove execution. No-store; no Authorization header or query.",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			requestBody: requiredJsonRequestBody(
+				AgentDefaultRelayKeyCandidatesRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Compatible candidates with display names",
+					AgentDefaultRelayKeyDisplayCandidatesV2Schema,
 				),
 				...errorResponses,
 			},

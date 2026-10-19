@@ -28,6 +28,7 @@ import {
 	insertModelSelectionFallback,
 	lockAgentConfiguration,
 	lockConversation,
+	type RequestedModelDisplayNameResolverV1,
 	readIdempotency,
 	reserveIdempotency,
 	withSelectedModelOption,
@@ -232,6 +233,7 @@ export async function submitConversationTask(
 	request: SubmitRequest,
 	decide: SubmitDecide,
 	userDirectory: TaskUserDirectoryV1 | undefined,
+	readDisplayName?: RequestedModelDisplayNameResolverV1,
 ): ReturnType<ConversationTaskAdmissionTransactionPortV1["submitTask"]> {
 	const authority = parseAuthority(request.authority);
 	const principal = authority.taskBoundary?.principal;
@@ -295,6 +297,7 @@ export async function submitConversationTask(
 					authority.agentId,
 					agent.modelConfiguration ?? undefined,
 					conversation.selectedModelOptionId,
+					readDisplayName,
 				)) ?? null)
 			: agent.modelConfiguration,
 		conversation: conversation ?? null,

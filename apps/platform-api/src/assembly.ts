@@ -39,6 +39,7 @@ import {
 	PostgresApplicationRegistrationStoreV1,
 	PostgresApplicationRevisionTransactionV1,
 	PostgresCommitWakeupListenerV1,
+	type PostgresConversationExecutionOptionsV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
 	PostgresPersonalApiCredentialStoreV1,
@@ -60,6 +61,7 @@ import {
 	assemblePlatformFilesV1,
 	type PlatformFileDeploymentV1,
 } from "./file-assembly.js";
+import type { AgentDefaultRelayKeyRoutesDependencies } from "./http/agent-default-relay-key-routes.js";
 import { createApplicationCredentialProcessDeliveryV1 } from "./http/application-api-credential-routes.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import type {
@@ -163,6 +165,8 @@ export interface PlatformApiAssemblyInput {
 		keyValue: string,
 	) => Promise<"valid" | "invalid" | "unavailable">;
 	readonly enforceDefaultRelayKey?: boolean;
+	readonly readModelDisplayNames?: AgentDefaultRelayKeyRoutesDependencies["readModelDisplayNames"];
+	readonly readRequestedModelDisplayName?: PostgresConversationExecutionOptionsV1["readRequestedModelDisplayName"];
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly connectionCapability?: ConnectionCapabilityV1;
@@ -455,6 +459,9 @@ export function assemblePlatformApi(
 		new PostgresConversationExecutionTransactionV1({
 			databaseUrl: input.databaseUrl,
 			userDirectory,
+			...(input.readRequestedModelDisplayName
+				? { readRequestedModelDisplayName: input.readRequestedModelDisplayName }
+				: {}),
 		});
 	const conversationQuery = new PostgresConversationQueryV1({
 		databaseUrl: input.databaseUrl,
@@ -914,6 +921,9 @@ export function assemblePlatformApi(
 					agentDefaultRelayKeys: {
 						identity: input.identity,
 						keys: agentDefaultRelayKeys,
+						...(input.readModelDisplayNames
+							? { readModelDisplayNames: input.readModelDisplayNames }
+							: {}),
 						...(savedKeyCandidatesTransport
 							? { savedCandidates: savedKeyCandidatesTransport }
 							: {}),
@@ -1078,6 +1088,7 @@ export function assemblePlatformApi(
 		skillHubRead: skillHubRead.dependencies,
 		skillHubInstallations: skillHubRead.installationDependencies,
 		skillHubPublication: skillHubRead.publicationDependencies,
+		skillHubReview: skillHubRead.reviewDependencies,
 		skillHubAgentBindings: {
 			identity: input.identity,
 			bind: async (request) =>

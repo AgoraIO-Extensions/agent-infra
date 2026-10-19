@@ -75,6 +75,7 @@ export interface AgentConfigurationProjectionV1 {
 	readonly availability: readonly AgentConfigurationAccessTargetV1[];
 	readonly modelOptions: readonly {
 		readonly optionId: string;
+		readonly endpointId: string;
 		readonly modelId: string;
 		readonly reasoningLevels: readonly string[];
 	}[];
@@ -787,6 +788,7 @@ export class PostgresAgentConfigurationQueryV1 {
 							modelOptions:
 								configuration.modelConfiguration?.options.map((option) => ({
 									optionId: option.optionId,
+									endpointId: option.endpointId,
 									modelId: option.modelId,
 									reasoningLevels: option.reasoningLevels,
 								})) ?? [],

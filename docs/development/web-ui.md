@@ -14,12 +14,12 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `f66a8694aecee90322161e9a31d682073919ae846d488312e225edf03232aaaf` |
+| `index.html` | `b540e4c948bd506fc33623f506a1d2b472c26a1fe8bf362b83b0165cbe1ecd26` |
 | `login.html` | `6e04830eb0aac86e7ffea6dc6f3db0faab7942e2379c6230efe0512519d0c0a7` |
 | `DESIGN.md` | `162e8fb0c381cb96da71a0f838c8ce80b7076ebb6b08071cc2845961e481da18` |
 | `IMPLEMENTATION.md` | `3ee03b85afb5567576ff2ac64c1459b811490591d52e16c048809d173bc75a3b` |
 | `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
-| `DESIGN-MANIFEST.json` | `3c78fd40eac65ac1659f0ab4934a3b9285a5cb67f85038a42dfdb17df95ffdea` |
+| `DESIGN-MANIFEST.json` | `2846fe1e5da4c43a0b8407b635b6591b9fd1ac750b4427e862b7bfd68787ea97` |
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量，并提供设计同名别名（`--bg`、`--fg`、`--surface-raised`、`--accent`、
@@ -54,6 +54,23 @@ Agent 详情中的 Owner、渠道、模型和范围均取自实际投影；Owner
 | 个人 API 凭证 | 不提供轮换；已撤销行只显示撤销时间 | PRD §7.3 |
 | 对话标题 | 标题展示遵循 PRD | [PRD §12.2](../prd/PRD-agent-platform-M1.md#122-会话历史) |
 | Builder、预览 | 不提供页面 | PRD §1、§5.7、§11.1 |
+
+### 申请详情进度
+
+[#2920](https://github.com/AgoraIO-Extensions/agent-infra/issues/2920) 已将 M-11 回写本版导出稿。
+按 [PRD §6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)，三步为「申请已提交 → 系统管理员审批 → 创建 Agent」；
+资源与范围校验继续属于准入，不增加独立用户阶段。提交步骤始终显示「完成」（green），
+审批与创建步骤按现有申请状态展示；两个视口均保持状态 chip 在步骤右侧。
+
+| 申请状态 | 管理员审批 | 创建 Agent |
+| --- | --- | --- |
+| 待审批 | 等待（gray） | 等待（gray） |
+| 已撤回 | 不再审批（gray） | 不再创建（gray） |
+| 已驳回 | 已驳回（red） | 不再创建（gray） |
+| 创建中 | 已通过（green） | 处理中（amber） |
+| 可用、已停止 | 已通过（green） | 完成（green） |
+| 创建失败 | 已通过（green） | 失败（red） |
+| 已停用 | 已通过（green） | 已停用（gray） |
 
 ### 运维观测页
 
@@ -113,8 +130,8 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `Toast` | 根布局常驻的补充确认，页面通过 `useToast()` 调用 |
 | `Card` / `AgentMark` | 独立卡片的悬停，Agent 标识的字形与 tone |
 | `Table` | Agent 输出的 Markdown 表格，API 凭证页的个人凭证表格（窄屏按页面样式转行卡片） |
-| `Timestamp` | 工作台、审批、审计、应用管理、个人 API 凭证、我的 Agent、申请详情与对话历史的时间 |
-| `IdentifierText` | 审批与审计中未解析人员的 ID 短形式；审计列表对象 ID 用 `shortIdentifier` 等宽短形式，完整值只在记录详情 |
+| `Timestamp` | 工作台、审批、审计、应用管理、个人 API 凭证、我的 Agent、申请详情、Skill 审核与对话历史的时间 |
+| `IdentifierText` | 审批、Skill 审核与审计中未解析人员的 ID 短形式；审计列表对象 ID 用 `shortIdentifier` 等宽短形式，完整值只在记录详情 |
 | `Listbox` / `ListboxOption` | 目录选择器结果层与对话 `/` 命令弹层；候选不进入 Tab 序列，由输入框的 `aria-activedescendant` 导航 |
 | `DropdownMenu` | 对话输入框工具栏的模型与思考菜单（`menuitemradio`，向上展开，无入场动画） |
 | `Collapsible` / `CollapsibleTrigger` / `CollapsiblePanel` | 对话页「会话上下文」「会话文件」折叠条（替代原生 `details/summary`）；面板默认 `keepMounted`，收起只隐藏不卸载 |

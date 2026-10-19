@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
 	candidateKey,
+	currentOptionLabel,
 	initialKeylessModelRows,
+	keylessCandidateLabels,
 	keylessModelSelection,
 	normalizedKeylessDefaults,
 	optionIdFor,
@@ -23,6 +25,66 @@ const c = {
 	modelId: "model:c",
 	reasoningLevels: ["low"],
 };
+
+it("uses trusted names without changing selection IDs and disambiguates repeated names", () => {
+	const candidates = [
+		{ ...a, displayName: "可信模型" },
+		{ ...b, displayName: "可信模型" },
+	];
+	expect([...keylessCandidateLabels(candidates).entries()]).toEqual([
+		[candidateKey(a), "可信模型（1）"],
+		[candidateKey(b), "可信模型（2）"],
+	]);
+	const rows = initialKeylessModelRows(candidates, [
+		{
+			optionId: candidateKey(a),
+			modelId: a.modelId,
+			reasoningLevels: a.reasoningLevels,
+		},
+	]);
+	expect(
+		keylessModelSelection(candidates, rows, {
+			optionId: candidateKey(a),
+			level: "high",
+		}).selection?.options[0],
+	).toEqual({
+		optionId: candidateKey(a),
+		endpointId: a.endpointId,
+		modelId: a.modelId,
+		reasoningLevels: ["high", "medium"],
+	});
+	expect(
+		currentOptionLabel(
+			{
+				optionId: candidateKey(a),
+				modelId: a.modelId,
+				displayName: "当前可信模型",
+				reasoningLevels: a.reasoningLevels,
+			},
+			{ relay: "受信端点" },
+		),
+	).toBe("受信端点 · 当前可信模型");
+});
+
+it("omits a raw endpoint ID when deployment has no separate endpoint label", () => {
+	const candidate = { ...a, displayName: "可信模型" };
+	expect(
+		keylessCandidateLabels([candidate], { relay: "relay" }).get(
+			candidateKey(a),
+		),
+	).toBe("可信模型");
+	expect(
+		currentOptionLabel(
+			{
+				optionId: candidateKey(a),
+				modelId: a.modelId,
+				displayName: "可信模型",
+				reasoningLevels: a.reasoningLevels,
+			},
+			{ relay: "relay" },
+		),
+	).toBe("可信模型");
+});
 
 describe("keyless model selection (#2421)", () => {
 	it("encodes endpoint and model separately, like the application form and the server", () => {

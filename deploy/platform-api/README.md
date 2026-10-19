@@ -59,7 +59,7 @@ native 业务验收；外联仍由部署方配置明确的 NetworkPolicy。
 | `organizationIds` | 从 #889 当前目录快照解析完整组织映射的函数；不可用时抛错 |
 | `directorySnapshot` | 可选的通用快照 consumer：`{ endpoint, token, organizationIdForDepartment }`。配置后每次敏感身份解析从 HTTPS 当前快照按 LDAP email 唯一匹配 active 成员，并映射组织 ID；失败不得回退到旧 `organizationIds`。快照 revision/fetchedAt/validUntil 已由 consumer 校验，但现有 LDAP identity wire 尚未携带 sidecar，跨 #481/#508/#440 的不可变版本绑定仍需后续契约接收。 |
 | `publicOrigin` | 与本地 HTTPS Web 相同的精确 Origin |
-| `apiInput` | [`ProductionPlatformApiInputV1`](../../apps/platform-api/src/deployment.ts) 中除 `databaseUrl`、`identity` 外的真实 Registry、模板、ModelCatalog、密钥公钥、准入和展示依赖；其中必须包含与模板 `modelBinding`/Model Catalog 端点一致的 `agentDefaultRelayKeyPolicy` 和 `personalRelayKeyValidation` |
+| `apiInput` | [`ProductionPlatformApiInputV1`](../../apps/platform-api/src/deployment.ts) 中除 `databaseUrl`、`identity` 外的真实 Registry、模板、ModelCatalog、密钥公钥、准入和展示依赖；其中必须包含与模板 `modelBinding`/Model Catalog 端点一致的 `agentDefaultRelayKeyPolicy` 和 `personalRelayKeyValidation`；可选 `modelDisplayMetadata` 为非秘密 `{ schemaVersion: 1, models: [{ endpointId, modelId, displayName }] }`，按精确模型关联提供展示名，缺名保留真实 ID，不改变模型授权；边界见[工程 Spec §10.7](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#107-标准模板模型配置) |
 | `customAgentGateway` | 可选的部署端 Gateway port：提供 `resolveDeployment`、`authorizeAgent`、签名 issuer/key version/private key；不要同时放入 `apiInput.customAgentGateway` |
 | `modelSelection` | 可选的 Runtime ACP model-directory reader；应由部署方用 `createRuntimeModelSelectionReaderV1` 和受认证 transport 组装；不要同时放入 `apiInput.modelSelection` |
 | `modelDirectory` | 可选的 `{ baseUrl, serviceToken }` Worker 内部模型目录服务输入；配置后 API 自动从 Platform Store 绑定当前 Web Conversation/Execution/Session/fence，并创建默认 `modelSelection` reader；不要同时提供 `modelSelection` |

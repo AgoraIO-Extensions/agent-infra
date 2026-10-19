@@ -358,7 +358,8 @@ beforeAll(async () => {
 					},
 				},
 				modelOptions: configuration.modelOptions.map((option) => ({
-					...option,
+					optionId: option.optionId,
+					modelId: option.modelId,
 					reasoningLevels: [...option.reasoningLevels],
 					displayName: option.modelId,
 				})),

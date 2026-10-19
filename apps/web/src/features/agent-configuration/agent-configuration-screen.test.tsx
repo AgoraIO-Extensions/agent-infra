@@ -927,11 +927,13 @@ const savedCandidates = [
 	{
 		endpointId: "relay",
 		modelId: "model-a",
+		displayName: "model-a",
 		reasoningLevels: ["medium", "high"],
 	},
 	{
 		endpointId: "relay",
 		modelId: "model-b",
+		displayName: "model-b",
 		reasoningLevels: ["low", "medium"],
 	},
 ];
@@ -1202,7 +1204,7 @@ describe("Agent default Relay Key (G-08, G-09)", () => {
 	) {
 		const defaultRelayKeyActions = {
 			check: vi.fn(async () => ({
-				schemaVersion: 1 as const,
+				schemaVersion: 2 as const,
 				configurationRevision: 7,
 				keyVersion: 3,
 				candidates: savedCandidates,
@@ -1334,7 +1336,7 @@ describe("Agent default Relay Key (G-08, G-09)", () => {
 	it("asks for a new model selection when the new Key cannot call current models", async () => {
 		const { actions, onSave } = renderKey({
 			check: vi.fn(async () => ({
-				schemaVersion: 1 as const,
+				schemaVersion: 2 as const,
 				configurationRevision: 7,
 				keyVersion: 3,
 				candidates: [savedCandidates[1] as (typeof savedCandidates)[number]],

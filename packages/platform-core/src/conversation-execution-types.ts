@@ -273,6 +273,7 @@ export interface ConversationModelConfigurationV1 {
 	readonly selectedOption?: {
 		readonly optionId: string;
 		readonly modelId: string;
+		readonly displayName?: string | null;
 	};
 }
 

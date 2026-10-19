@@ -22,7 +22,10 @@ import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { PostgresConversationDispatchStoreV1 } from "./conversation-dispatch.ts";
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
-import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.ts";
+import {
+	type PostgresConversationExecutionOptionsV1,
+	PostgresConversationExecutionTransactionV1,
+} from "./conversation-execution.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
 	type PostgresTestDatabase,
@@ -606,6 +609,7 @@ function createConversation(
 	resolvedAuthority: ConversationExecutionAuthorityV1 = authority,
 	options: {
 		readonly sandbox?: "preparing" | "ready";
+		readonly readRequestedModelDisplayName?: PostgresConversationExecutionOptionsV1["readRequestedModelDisplayName"];
 		/** 让某类命令的计划带上与命令不一致的 outbox traceparent（#2473）。 */
 		readonly tamperTraceParent?: {
 			readonly method: "executeMessage" | "executeRegeneration" | "executeStop";
@@ -616,6 +620,9 @@ function createConversation(
 	let nextId = 1;
 	const transaction = new PostgresConversationExecutionTransactionV1({
 		databaseUrl,
+		...(options.readRequestedModelDisplayName
+			? { readRequestedModelDisplayName: options.readRequestedModelDisplayName }
+			: {}),
 		userDirectory: {
 			async resolveUser(userId) {
 				return {
@@ -2899,7 +2906,11 @@ describe("PostgreSQL model fallback requested model (G-07)", () => {
 	async function persistRevision(
 		agentId: string,
 		revision: number,
-		options: readonly { optionId: string; modelId: string }[],
+		options: readonly {
+			optionId: string;
+			modelId: string;
+			endpointId?: string;
+		}[],
 	) {
 		const [template] = await client<{ configuration: unknown }[]>`
 			select configuration from platform.agent_configuration_revisions
@@ -2922,10 +2933,14 @@ describe("PostgreSQL model fallback requested model (G-07)", () => {
 		configuration.agentId = agentId;
 		configuration.revision = revision;
 		configuration.modelConfiguration.options = options.map(
-			({ optionId, modelId }) => {
+			({ optionId, modelId, endpointId }) => {
 				const base = byId.get(optionId);
 				if (!base) throw new Error("Unknown option fixture");
-				return { ...base, modelId };
+				return {
+					...base,
+					modelId,
+					...(endpointId === undefined ? {} : { endpointId }),
+				};
 			},
 		);
 		await client`
@@ -2962,98 +2977,258 @@ describe("PostgreSQL model fallback requested model (G-07)", () => {
 		await client`delete from platform.agents where id = ${foreignAgentId}`;
 	});
 
-	it("records the name from this Agent's latest applied revision, ignoring pending and foreign revisions", async () => {
-		await persistConformanceModelConfiguration(
-			conformanceModelConfiguration,
-			requestedAuthority,
-		);
-		const { transaction, useCase } = createConversation(requestedAuthority);
-		try {
-			const created = await useCase.createConversation({
-				schemaVersion: 1,
-				agentId: requestedAuthority.agentId,
-				idempotencyKey: "requested_model_create",
-				requestId: "requested_model_create",
-				traceId: "requested_model_create",
+	it.each(["default", "trusted", "unavailable", "null", "invalid"] as const)(
+		"records the name from this Agent's latest applied revision, ignoring pending and foreign revisions (%s)",
+		async (nameSource) => {
+			await persistConformanceModelConfiguration(
+				conformanceModelConfiguration,
+				requestedAuthority,
+			);
+			let alias = "Trusted historical model";
+			const calls: { endpointId: string; modelId: string }[] = [];
+			const resolver =
+				nameSource === "default"
+					? undefined
+					: async (model: { endpointId: string; modelId: string }) => {
+							calls.push(model);
+							if (nameSource === "unavailable")
+								throw new Error("Controlled name provider failure");
+							if (nameSource === "null") return null;
+							if (nameSource === "invalid") return "";
+							return model.endpointId === "endpoint_historical"
+								? alias
+								: "Wrong endpoint";
+						};
+			const expectedName =
+				nameSource === "default"
+					? "relay-alternate-renamed"
+					: nameSource === "trusted"
+						? alias
+						: null;
+			const { transaction, useCase } = createConversation(requestedAuthority, {
+				...(resolver ? { readRequestedModelDisplayName: resolver } : {}),
 			});
-			if (created.outcome !== "accepted")
-				throw new Error("Expected Conversation creation");
-			const conversationId = created.result.conversationId;
-			await expect(
-				useCase.selectModel({
+			try {
+				const created = await useCase.createConversation({
 					schemaVersion: 1,
-					command: "model.select",
+					agentId: requestedAuthority.agentId,
+					idempotencyKey: "requested_model_create",
+					requestId: "requested_model_create",
+					traceId: "requested_model_create",
+				});
+				if (created.outcome !== "accepted")
+					throw new Error("Expected Conversation creation");
+				const conversationId = created.result.conversationId;
+				await expect(
+					useCase.selectModel({
+						schemaVersion: 1,
+						command: "model.select",
+						conversationId,
+						modelOptionId: "model_alternate",
+						reasoningLevel: "high",
+						idempotencyKey: "requested_model_select",
+						requestId: "requested_model_select",
+						traceId: "requested_model_select",
+					}),
+				).resolves.toMatchObject({ outcome: "accepted" });
+				// 修订 2 仍有原选项但改了模型名；修订 3 删除它并成为当前修订。
+				await persistRevision(requestedAuthority.agentId, 2, [
+					{ optionId: "model_primary", modelId: "relay-primary" },
+					{
+						optionId: "model_alternate",
+						modelId:
+							nameSource === "default"
+								? "relay-alternate-renamed"
+								: "shared-model",
+						endpointId: "endpoint_historical",
+					},
+				]);
+				await persistRevision(requestedAuthority.agentId, 3, [
+					{ optionId: "model_primary", modelId: "relay-primary" },
+				]);
+				await makeCurrent(requestedAuthority.agentId, 3);
+				// 修订 4 尚未应用；其他 Agent 的修订 3 在上界内，也不能被采用。
+				await persistRevision(requestedAuthority.agentId, 4, [
+					{ optionId: "model_primary", modelId: "relay-primary" },
+					{
+						optionId: "model_alternate",
+						modelId:
+							nameSource === "default"
+								? "relay-alternate-pending"
+								: "shared-model",
+						endpointId: "endpoint_future",
+					},
+				]);
+				await persistRevision(foreignAgentId, 3, [
+					{ optionId: "model_primary", modelId: "foreign-primary" },
+					{
+						optionId: "model_alternate",
+						modelId:
+							nameSource === "default" ? "foreign-alternate" : "shared-model",
+						endpointId: "endpoint_foreign",
+					},
+				]);
+				const accepted = await useCase.accept({
+					schemaVersion: 1,
+					command: "message",
 					conversationId,
-					modelOptionId: "model_alternate",
-					reasoningLevel: "high",
-					idempotencyKey: "requested_model_select",
-					requestId: "requested_model_select",
-					traceId: "requested_model_select",
-				}),
-			).resolves.toMatchObject({ outcome: "accepted" });
-			// 修订 2 仍有原选项但改了模型名；修订 3 删除它并成为当前修订。
-			await persistRevision(requestedAuthority.agentId, 2, [
-				{ optionId: "model_primary", modelId: "relay-primary" },
-				{ optionId: "model_alternate", modelId: "relay-alternate-renamed" },
-			]);
-			await persistRevision(requestedAuthority.agentId, 3, [
-				{ optionId: "model_primary", modelId: "relay-primary" },
-			]);
-			await makeCurrent(requestedAuthority.agentId, 3);
-			// 尚未应用的修订 4 与其他 Agent 的修订都含同 ID 选项，不能被采用。
-			await persistRevision(requestedAuthority.agentId, 4, [
-				{ optionId: "model_primary", modelId: "relay-primary" },
-				{ optionId: "model_alternate", modelId: "relay-alternate-pending" },
-			]);
-			await persistRevision(foreignAgentId, 9, [
-				{ optionId: "model_primary", modelId: "foreign-primary" },
-				{ optionId: "model_alternate", modelId: "foreign-alternate" },
-			]);
-			const accepted = await useCase.accept({
-				schemaVersion: 1,
-				command: "message",
-				conversationId,
-				text: "requested model fixture",
-				idempotencyKey: "requested_model_message",
-				requestId: "requested_model_message",
-				traceId: "requested_model_message",
-			});
-			if (accepted.outcome !== "accepted")
-				throw new Error("Expected fallback message acceptance");
-			const rows = await client<{ event_payload: unknown }[]>`
+					text: "requested model fixture",
+					idempotencyKey: "requested_model_message",
+					requestId: "requested_model_message",
+					traceId: "requested_model_message",
+				});
+				if (accepted.outcome !== "accepted")
+					throw new Error("Expected fallback message acceptance");
+				const rows = await client<{ event_payload: unknown }[]>`
 				select event_payload from platform.conversation_events
 				where conversation_id = ${conversationId}
 					and event_type = 'model.selection.fell_back'
 			`;
-			expect(rows).toEqual([
-				{
-					event_payload: {
-						type: "model.selection.fell_back",
-						modelOptionId: "model_primary",
-						reasoningLevel: "low",
-						reason: "selection_unavailable",
-						requestedModelOptionId: "model_alternate",
-						requestedModelDisplayName: "relay-alternate-renamed",
+				expect(rows).toEqual([
+					{
+						event_payload: {
+							type: "model.selection.fell_back",
+							modelOptionId: "model_primary",
+							reasoningLevel: "low",
+							reason: "selection_unavailable",
+							requestedModelOptionId: "model_alternate",
+							requestedModelDisplayName: expectedName,
+						},
 					},
-				},
-			]);
-			// 之后的配置变化不改写已写入的事件。
-			await persistRevision(requestedAuthority.agentId, 2, [
-				{ optionId: "model_primary", modelId: "relay-primary" },
-				{ optionId: "model_alternate", modelId: "relay-alternate-later" },
-			]);
-			expect(
-				await client`
+				]);
+				expect(JSON.stringify(rows)).not.toContain("endpoint_historical");
+				expect(calls).toEqual(
+					resolver
+						? [{ endpointId: "endpoint_historical", modelId: "shared-model" }]
+						: [],
+				);
+				alias = "Later deployment name";
+				// 之后的配置变化不改写已写入的事件。
+				await persistRevision(requestedAuthority.agentId, 2, [
+					{ optionId: "model_primary", modelId: "relay-primary" },
+					{ optionId: "model_alternate", modelId: "relay-alternate-later" },
+				]);
+				await expect(
+					useCase.accept({
+						schemaVersion: 1,
+						command: "message",
+						conversationId,
+						text: "requested model fixture",
+						idempotencyKey: "requested_model_message",
+						requestId: "requested_model_message",
+						traceId: "requested_model_message",
+					}),
+				).resolves.toMatchObject({ outcome: "replayed" });
+				expect(calls).toHaveLength(resolver ? 1 : 0);
+				expect(
+					await client`
 					select event_payload->>'requestedModelDisplayName' as name
 					from platform.conversation_events
 					where conversation_id = ${conversationId}
 						and event_type = 'model.selection.fell_back'
 				`,
-			).toEqual([{ name: "relay-alternate-renamed" }]);
-		} finally {
-			await transaction.close();
-		}
-	});
+				).toEqual([{ name: expectedName }]);
+			} finally {
+				await transaction.close();
+			}
+		},
+	);
+
+	it.each(["supplement", "regenerate"] as const)(
+		"keeps the trusted historical name on %s and does not resolve it for stop",
+		async (command) => {
+			await persistConformanceModelConfiguration(
+				conformanceModelConfiguration,
+				requestedAuthority,
+			);
+			let reads = 0;
+			const { transaction, useCase } = createConversation(requestedAuthority, {
+				readRequestedModelDisplayName: async () => {
+					reads += 1;
+					return "Trusted removed model";
+				},
+			});
+			try {
+				const created = await useCase.createConversation({
+					schemaVersion: 1,
+					agentId: requestedAuthority.agentId,
+					idempotencyKey: "named-create",
+					requestId: "named-create",
+					traceId: "named-create",
+				});
+				if (created.outcome !== "accepted")
+					throw new Error("Expected creation");
+				const conversationId = created.result.conversationId;
+				await expect(
+					useCase.selectModel({
+						schemaVersion: 1,
+						command: "model.select",
+						conversationId,
+						modelOptionId: "model_alternate",
+						reasoningLevel: "high",
+						idempotencyKey: "named-select",
+						requestId: "named-select",
+						traceId: "named-select",
+					}),
+				).resolves.toMatchObject({ outcome: "accepted" });
+				const initial = await useCase.accept({
+					schemaVersion: 1,
+					command: "message",
+					conversationId,
+					text: "controlled initial message",
+					idempotencyKey: "named-initial",
+					requestId: "named-initial",
+					traceId: "named-initial",
+				});
+				if (initial.outcome !== "accepted" || !initial.result.messageId)
+					throw new Error("Expected initial message");
+				if (command === "regenerate") {
+					await client`update platform.conversation_executions set status = 'completed' where execution_id = ${initial.result.executionId}`;
+				}
+				await persistRevision(requestedAuthority.agentId, 2, [
+					{ optionId: "model_primary", modelId: "relay-primary" },
+				]);
+				await makeCurrent(requestedAuthority.agentId, 2);
+				reads = 0;
+				const metadata = {
+					schemaVersion: 1 as const,
+					conversationId,
+					idempotencyKey: "named-next",
+					requestId: "named-next",
+					traceId: "named-next",
+				};
+				const result =
+					command === "supplement"
+						? await useCase.accept({
+								...metadata,
+								command: "message",
+								text: "controlled supplementary message",
+							})
+						: await useCase.regenerate({
+								...metadata,
+								command: "regenerate",
+								sourceMessageId: initial.result.messageId,
+							});
+				if (result.outcome !== "accepted")
+					throw new Error("Expected fallback command");
+				expect(
+					await client`select event_payload->>'requestedModelDisplayName' as name from platform.conversation_events where conversation_id = ${conversationId} and event_type = 'model.selection.fell_back'`,
+				).toEqual([{ name: "Trusted removed model" }]);
+				expect(reads).toBe(1);
+				await expect(
+					useCase.stop({
+						...metadata,
+						command: "stop",
+						targetExecutionId: result.result.executionId,
+						idempotencyKey: "named-stop",
+					}),
+				).resolves.toMatchObject({ outcome: "accepted" });
+				expect(reads).toBe(1);
+			} finally {
+				await transaction.close();
+			}
+		},
+	);
 
 	it("records a null name when no applied revision of this Agent has the option", async () => {
 		await persistConformanceModelConfiguration(
