@@ -638,10 +638,12 @@ describe("native dispatch parameter bounds", () => {
 });
 
 describe("native capability with terminal execution (#2919)", () => {
-	function nativeCancelledClaim(
+	// 固定环境的条目：执行已 cancelled，从未被 Runtime 受理（没有 hostSessionRef），
+	// 授权每次都是 unavailable，条目以 AUTHORIZATION_UNAVAILABLE 每秒重试。
+	function nativeTerminalClaim(
 		overrides: Partial<{
 			hostSessionRef: string | null;
-			executionStatus: "cancelled" | "completed" | "failed";
+			executionStatus: "cancelled" | "completed" | "failed" | "submitted";
 		}> = {},
 	) {
 		return claim({
@@ -652,7 +654,10 @@ describe("native capability with terminal execution (#2919)", () => {
 			modelConfigurationRevision: null,
 			modelOptionId: null,
 			reasoningLevel: null,
-			hostSessionRef: overrides.hostSessionRef ?? "host-session-previous-turn",
+			hostSessionRef:
+				overrides.hostSessionRef === undefined
+					? null
+					: overrides.hostSessionRef,
 			executionStatus: overrides.executionStatus ?? "cancelled",
 			nativeCapability: {
 				agentId: "agent-1",
@@ -668,125 +673,84 @@ describe("native capability with terminal execution (#2919)", () => {
 			},
 		});
 	}
+	const unavailableAuthorization = () => ({
+		async authorize() {
+			return { outcome: "unavailable" as const };
+		},
+	});
+	const runtime = () => ({
+		dispatch: vi.fn(),
+		recoverStatus: vi.fn(),
+		events: vi.fn(async function* () {}),
+	});
 
-	it.each(["cancelled", "completed", "failed"] as const)(
-		"关闭授权被拒的 %s native capability 条目而不重试也不调用 Runtime",
-		async (executionStatus) => {
-			const native = nativeCancelledClaim({ executionStatus });
+	it.each([
+		["cancelled", "unavailable"],
+		["completed", "unavailable"],
+		["failed", "unavailable"],
+		["cancelled", "denied"],
+		["completed", "denied"],
+		["failed", "denied"],
+	] as const)(
+		"关闭从未被 Runtime 受理的 %s 条目（授权 %s），不重试也不调用 Runtime",
+		async (executionStatus, decision) => {
+			const native = nativeTerminalClaim({ executionStatus });
 			const store = new MemoryDispatchStore(native);
-			const runtimeDispatch = vi.fn();
+			const runtimeHost = runtime();
 			const h = setup({
 				store,
-				authorization: deniedAuthorization(),
-				runtimeHost: {
-					dispatch: runtimeDispatch,
-					recoverStatus: vi.fn(),
-					async *events() {},
-				},
+				authorization:
+					decision === "denied"
+						? deniedAuthorization()
+						: unavailableAuthorization(),
+				runtimeHost,
 			});
-
 			await expect(dispatch(h.useCase, native.itemId)).resolves.toMatchObject({
 				outcome: "already_completed",
 			});
-			expect(runtimeDispatch).not.toHaveBeenCalled();
+			expect(runtimeHost.dispatch).not.toHaveBeenCalled();
+			expect(runtimeHost.events).not.toHaveBeenCalled();
 			expect(store.outboxStatus).toBe("succeeded");
 			expect(store.errorCode).toBeUndefined();
 		},
 	);
 
-	it("关闭授权临时失败（unavailable）的 cancelled native capability 条目而不重试", async () => {
-		const native = nativeCancelledClaim();
-		const store = new MemoryDispatchStore(native);
-		const runtimeDispatch = vi.fn();
-		const h = setup({
-			store,
-			authorization: {
-				async authorize() {
-					return { outcome: "unavailable" };
-				},
-			},
-			runtimeHost: {
-				dispatch: runtimeDispatch,
-				recoverStatus: vi.fn(),
-				async *events() {},
-			},
-		});
+	it.each(["unavailable", "denied"] as const)(
+		"已被 Runtime 受理（有 hostSessionRef）的已终态条目在授权 %s 时仍重试，保留事件续读",
+		async (decision) => {
+			const native = nativeTerminalClaim({ hostSessionRef: "host-session-1" });
+			const store = new MemoryDispatchStore(native);
+			const h = setup({
+				store,
+				authorization:
+					decision === "denied"
+						? deniedAuthorization()
+						: unavailableAuthorization(),
+				runtimeHost: runtime(),
+			});
+			await expect(dispatch(h.useCase, native.itemId)).resolves.toMatchObject({
+				outcome: "retry",
+			});
+			expect(store.outboxStatus).not.toBe("succeeded");
+		},
+	);
 
-		await expect(dispatch(h.useCase, native.itemId)).resolves.toMatchObject({
-			outcome: "already_completed",
-		});
-		expect(runtimeDispatch).not.toHaveBeenCalled();
-		expect(store.outboxStatus).toBe("succeeded");
-	});
-
-	it("关闭授权允许的 cancelled native capability 条目（hostSessionRef 非空）而不调用 Runtime", async () => {
-		const native = nativeCancelledClaim();
-		const store = new MemoryDispatchStore(native);
-		const runtimeDispatch = vi.fn();
-		const runtimeEvents = vi.fn(async function* () {});
-		const h = setup({
-			store,
-			runtimeHost: {
-				dispatch: runtimeDispatch,
-				recoverStatus: vi.fn(),
-				events: runtimeEvents,
-			},
-		});
-
-		await expect(dispatch(h.useCase, native.itemId)).resolves.toMatchObject({
-			outcome: "already_completed",
-		});
-		// 执行已终态时不应调用 Runtime
-		expect(runtimeDispatch).not.toHaveBeenCalled();
-		expect(runtimeEvents).not.toHaveBeenCalled();
-		expect(store.outboxStatus).toBe("succeeded");
-	});
-
-	it("关闭 hostSessionRef 为空的 cancelled native capability 条目（现有路径未变）", async () => {
-		const native = nativeCancelledClaim({ hostSessionRef: null });
-		const store = new MemoryDispatchStore(native);
-		const runtimeDispatch = vi.fn();
-		const h = setup({
-			store,
-			runtimeHost: {
-				dispatch: runtimeDispatch,
-				recoverStatus: vi.fn(),
-				async *events() {},
-			},
-		});
-
-		await expect(dispatch(h.useCase, native.itemId)).resolves.toMatchObject({
-			outcome: "already_completed",
-		});
-		expect(runtimeDispatch).not.toHaveBeenCalled();
-		expect(store.outboxStatus).toBe("succeeded");
-	});
-
-	it("执行仍为 submitted 时行为不变（授权拒绝走 reject 而非 already_completed）", async () => {
-		// 验证修复只对终态执行生效：submitted 仍走正常拒绝路径，不会被提前关闭
+	it("执行仍为 submitted 时行为不变（授权拒绝走 reject）", async () => {
 		const submitted = {
-			...nativeCancelledClaim(),
-			executionStatus: "submitted" as const,
+			...nativeTerminalClaim({ executionStatus: "submitted" }),
 			itemId: "conversation:native-capability:execution-submitted-1",
 		};
 		const store = new MemoryDispatchStore(submitted);
-		const runtimeDispatch = vi.fn();
+		const runtimeHost = runtime();
 		const h = setup({
 			store,
 			authorization: deniedAuthorization(),
-			runtimeHost: {
-				dispatch: runtimeDispatch,
-				recoverStatus: vi.fn(),
-				async *events() {},
-			},
+			runtimeHost,
 		});
-
-		// submitted + denied → 走 reject（因为 executionTerminal("submitted") = false）
-		const result = await dispatch(h.useCase, submitted.itemId);
-		// 结果是 rejected（而非 already_completed），说明修复没有影响 submitted 路径
-		expect(result).toMatchObject({ outcome: "rejected" });
-		expect(runtimeDispatch).not.toHaveBeenCalled();
-		// outboxStatus 是 "failed"（rejected 路径）
+		await expect(dispatch(h.useCase, submitted.itemId)).resolves.toMatchObject({
+			outcome: "rejected",
+		});
+		expect(runtimeHost.dispatch).not.toHaveBeenCalled();
 		expect(store.outboxStatus).toBe("failed");
 	});
 });

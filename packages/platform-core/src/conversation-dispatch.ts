@@ -575,8 +575,11 @@ export function createConversationDispatchUseCaseV1(
 			);
 			if (authorization.outcome === "unavailable") {
 				if (authorization.authority !== undefined) return unavailable();
-				// 执行已终态的 native capability 临时授权失败时，同样直接结束条目（#2919）。
+				// 执行已终态、且从未被 Runtime 受理（没有 hostSessionRef）的 native capability
+				// 没有可续读的事件，也不再需要授权：直接按已完成关闭，不再无限重试（#2919）。
 				if (
+					!claim.metadataRecovery &&
+					claim.hostSessionRef === null &&
 					executionTerminal(claim.executionStatus) &&
 					isNativeCapabilityOperation(claim.operation)
 				) {
@@ -658,10 +661,10 @@ export function createConversationDispatchUseCaseV1(
 						? { schemaVersion: 1, outcome: "rejected" }
 						: { schemaVersion: 1, outcome: "stale" };
 				}
-				// 执行已终态的 native capability 授权拒绝时直接按关闭规则结束条目，
-				// 避免因 recoveryExhausted 只检查 "unknown" 状态而无限重试（#2919）。
+				// 同上：已终态且从未被 Runtime 受理的 native capability 授权被拒时直接关闭（#2919）。
 				if (
 					!claim.metadataRecovery &&
+					claim.hostSessionRef === null &&
 					executionTerminal(claim.executionStatus) &&
 					isNativeCapabilityOperation(claim.operation)
 				) {
@@ -1091,9 +1094,7 @@ export function createConversationDispatchUseCaseV1(
 						"ORIGINAL_RESPONSE_ALREADY_FINISHED",
 					);
 				}
-				// 执行已终态的 turn 需要续读 Runtime 事件流；native capability
-				// 已终态时直接关闭条目，不再调用 Runtime（#2919）。
-				if (isTurnOperation(claim.operation) && claim.hostSessionRef) {
+				if (isRuntimeEventOperation(claim.operation) && claim.hostSessionRef) {
 					return persistRuntimeEvents(
 						claim,
 						authority,
