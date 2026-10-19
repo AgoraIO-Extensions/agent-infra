@@ -13510,6 +13510,197 @@ describe("Codex model started Driver state guard", () => {
 });
 
 describe("Codex structured Skill input", () => {
+	it.each([
+		"allowed",
+		"revoked before read",
+		"revoked after read",
+		"other Conversation",
+	] as const)(
+		"keeps the workspace tool under protected current/ACK boundaries: %s",
+		async (mode) => {
+			const { realpath } = await import("node:fs/promises");
+			const workspaceReader = await import("./codex-workspace-read-tool.js");
+			const directory = await realpath(await runtimeDirectory());
+			const root = join(directory, "workspace");
+			await mkdir(root, { mode: 0o700 });
+			const text = "controlled-reader-payload-2887";
+			await writeFile(join(root, "proof.txt"), text);
+			const path = join(directory, "driver.json");
+			let authorizations = 0;
+			const fixture = await skillDiscoveryFixture(
+				(bridge) => {
+					if (!bridge.launch) throw new Error("missing controlled launch");
+					bridge.launch = Object.freeze({ ...bridge.launch, cwd: root });
+				},
+				{
+					path,
+					authorizeExternalAction: async () => {
+						authorizations++;
+						if (
+							mode === "revoked before read" ||
+							(mode === "revoked after read" && authorizations >= 3)
+						)
+							throw new Error("controlled authorization revoked");
+						return { revalidate: () => undefined };
+					},
+				},
+			);
+			const command = submitCommand();
+			const accepted = await fixture.driver.execute(command);
+			const state = JSON.parse(await readFile(path, "utf8"));
+			const execution =
+				state.sessions[accepted.nativeSessionRef].executions[
+					command.executionId
+				];
+			const launch = fixture.bridge.launch;
+			if (!launch) throw new Error("missing verified controlled launch");
+			const read = vi.spyOn(workspaceReader, "readCodexWorkspaceTextFile");
+			const invoke = Reflect.get(fixture.driver, "handleStandardMcpTool") as (
+				key: string,
+				body: unknown,
+				signal: AbortSignal,
+			) => Promise<{
+				success: boolean;
+				contentItems: { text: string }[];
+				beforeDelivery: () => Promise<() => void>;
+			}>;
+			const body = {
+				threadId: fixture.bridge.nativeThreadId,
+				turnId: execution.nativeTurnId,
+				callId: "workspace-call-1",
+				namespace: "workspace",
+				tool: "read_text_file",
+				arguments: { path: "proof.txt" },
+			};
+			let finished = false;
+			const ack = (async () => {
+				while (!finished) {
+					const events = await fixture.driver.replayEvents(
+						accepted.nativeSessionRef,
+						command.executionId,
+					);
+					const cursor = events.at(-1)?.cursor;
+					if (cursor)
+						await fixture.driver.acknowledgeEvents(
+							accepted.nativeSessionRef,
+							command.executionId,
+							cursor,
+						);
+					await new Promise((resolve) => setTimeout(resolve, 5));
+				}
+			})();
+			try {
+				const pending = invoke.call(
+					fixture.driver,
+					mode === "other Conversation"
+						? "other-conversation"
+						: launch.conversationKey,
+					body,
+					new AbortController().signal,
+				);
+				if (mode !== "allowed") {
+					await expect(pending).rejects.toMatchObject({
+						code: "RUNTIME_CODEX_UNAVAILABLE",
+					});
+					expect(read).toHaveBeenCalledTimes(
+						mode === "revoked after read" ? 1 : 0,
+					);
+				} else {
+					const result = await pending;
+					expect(result.success).toBe(true);
+					expect(
+						JSON.parse(result.contentItems[0]?.text ?? "null"),
+					).toMatchObject({ path: "proof.txt", text, truncated: false });
+					(await result.beforeDelivery())();
+					const replay = await invoke.call(
+						fixture.driver,
+						launch.conversationKey,
+						body,
+						new AbortController().signal,
+					);
+					expect(replay).toBe(result);
+					expect(read).toHaveBeenCalledTimes(1);
+					for (let index = 2; index <= 4; index++) {
+						const next = await invoke.call(
+							fixture.driver,
+							launch.conversationKey,
+							{ ...body, callId: `workspace-call-${index}` },
+							new AbortController().signal,
+						);
+						expect(next.success).toBe(true);
+						(await next.beforeDelivery())();
+					}
+					await expect(
+						invoke.call(
+							fixture.driver,
+							launch.conversationKey,
+							{ ...body, callId: "workspace-call-5" },
+							new AbortController().signal,
+						),
+					).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+					expect(read).toHaveBeenCalledTimes(4);
+					await expect(
+						invoke.call(
+							fixture.driver,
+							launch.conversationKey,
+							{ ...body, arguments: { path: "different.txt" } },
+							new AbortController().signal,
+						),
+					).rejects.toMatchObject({ code: "RUNTIME_CODEX_PROTOCOL_INVALID" });
+				}
+			} finally {
+				finished = true;
+				await ack;
+			}
+			const durable = await readFile(path, "utf8");
+			expect(durable).not.toContain(text);
+			expect(durable).not.toContain("proof.txt");
+		},
+	);
+
+	it("registers the bounded workspace reader on a new verified official Thread", async () => {
+		const path = join(await runtimeDirectory(), "fresh-driver.json");
+		const fixture = await skillDiscoveryFixture(undefined, { path });
+		const accepted = await fixture.driver.execute(submitCommand());
+		expect(accepted.result).toMatchObject({ outcome: "accepted" });
+		const request = fixture.bridge.requests.find(
+			(frame) => frame.method === "thread/start",
+		);
+		expect(request?.params).toMatchObject({
+			dynamicTools: [
+				expect.objectContaining({
+					name: "workspace",
+					tools: [expect.objectContaining({ name: "read_text_file" })],
+				}),
+			],
+		});
+		const state = JSON.parse(await readFile(path, "utf8"));
+		expect(
+			state.sessions[accepted.nativeSessionRef].workspaceReadToolVersion,
+		).toBe(1);
+	});
+
+	it("preserves a historical Thread without adding a workspace tool snapshot", async () => {
+		const fixture = await skillDiscoveryFixture();
+		const accepted = await fixture.driver.execute(
+			submitCommand({ agentId: "agent-1", conversationId: "conversation-1" }),
+		);
+		expect(accepted.nativeSessionRef).toBe(fixture.nativeSessionRef);
+		expect(
+			fixture.bridge.requests.some((frame) => frame.method === "thread/start"),
+		).toBe(false);
+		const state = JSON.parse(await readFile(fixture.path, "utf8"));
+		expect(
+			state.sessions[accepted.nativeSessionRef].workspaceReadToolVersion,
+		).toBeUndefined();
+		const root = Reflect.get(fixture.driver, "workspaceReadRoot") as (
+			nativeSessionRef: string,
+		) => string;
+		expect(() =>
+			root.call(fixture.driver, accepted.nativeSessionRef),
+		).toThrow();
+	});
+
 	function nativeSkillCommand(
 		fixture: Awaited<ReturnType<typeof skillDiscoveryFixture>>,
 		projection: {

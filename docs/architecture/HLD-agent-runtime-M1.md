@@ -472,6 +472,23 @@ Driver 直接执行的标准 MCP 使用工程 Spec
 的官方工具请求/结果接缝，在原持久意图、当前授权与结果确认后交付原生响应。
 它只覆盖受保护 Driver 内的实际 MCP 操作，不替代其他原生工具或私有 lane 的屏障。
 
+首方工作区文本读取同样使用官方 client-tool 请求/结果接缝，由受保护 Driver 执行
+`workspace.read_text_file`，与 Connection 工具分别处理。根目录取自已验证、仍存活的当前
+Conversation 原生进程的 cwd，不接收模型提供的根目录或身份；新 Thread 保存工具版本，
+恢复时保留原快照，没有该快照的历史 Thread 不自动获得读取能力。
+
+- 参数只接受有界相对路径；逐级拒绝符号链接、父目录跳转与非普通文件，校验打开文件和
+  路径的归属与身份。每次最多返回 4096 字节的 UTF-8 文本，明确截断范围；每个 Execution
+  最多四次新读取。已确认的同一请求不能再次触发 I/O，参数变化或崩溃后的不确定请求保持
+  unknown，不自动重读。
+- intent 绑定原 thread/Turn/callId、Execution、操作和尝试并可靠保存、确认后，才重验当前
+  Host 授权并读取；实际开始、完成或失败沿既有操作事实记录，文件正文与路径不进入事实。
+  结果交付前再次核对当前权限、停止状态、进程与原操作绑定。授权变化或结果保存失败时
+  封闭交付，不以普通错误继续推理。
+- 这不是原生 shell/file 工具许可，也不新增 Connection 或外部网络权利。测试可以在本机
+  自有 Conversation 工作区准备明确的控制文本作为输入，但实际 Skill 加载、工具调用、
+  当前授权、模型结果和终态必须来自真实链路；控制文件本身不证明业务授权或调用成功。
+
 以下屏障契约只适用于明确启用私有 FD callback、Connection bootstrap/recovery 或等价 native
 lane 的发布 target。部署 provenance 必须声明 lane、协议/schema 与工具覆盖，且在任何业务
 副作用前验证不可由模型/Owner 关闭的 native barrier；缺失、错配、断连、过期或配置被关闭
