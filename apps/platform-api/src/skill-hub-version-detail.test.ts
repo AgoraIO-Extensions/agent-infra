@@ -493,6 +493,19 @@ describe("Skill Hub version detail over HTTP with PostgreSQL", () => {
 				SkillHubOwnedVersionPageV1Schema.parse(await response.json()).items,
 			).toEqual([]);
 		}
+		// 读不到的详情（含未知版本）由 Store 事务写拒绝审计，只记原因码。
+		const refusals =
+			await sql`select target_id, outcome, details from platform.audit_events where action = 'skill.version.refused'`;
+		expect(refusals).toHaveLength(8);
+		for (const refusal of refusals)
+			expect(refusal).toMatchObject({
+				target_id: "unknown",
+				outcome: "rejected",
+				details: { reason: "not_found" },
+			});
+		expect(
+			await sql`select 1 from platform.audit_events where action = 'skill.version.read'`,
+		).toHaveLength(0);
 	});
 
 	it("refuses unauthenticated, Bearer and malformed requests", async () => {

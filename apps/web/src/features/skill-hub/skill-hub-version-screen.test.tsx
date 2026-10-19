@@ -447,6 +447,50 @@ describe("SkillHubVersionScreen", () => {
 		expect(onVersionChanged).toHaveBeenCalledOnce();
 	});
 
+	it("drops the optimistic library state once the server reads back a different installation", async () => {
+		let readBack: (version: SkillHubVersionDetailV1) => void = () => undefined;
+		const install = vi
+			.fn<SkillHubVersionActions["install"]>()
+			.mockResolvedValue(installed("installation-1"));
+		function Detail() {
+			const [current, setCurrent] = useState(detail);
+			readBack = setCurrent;
+			return (
+				<SkillHubVersionScreen
+					state={{ kind: "ready", version: current }}
+					catalog={{ kind: "ready", versions: [v1, v2] }}
+					tab="overview"
+					onTabChange={() => undefined}
+					owned={false}
+					actions={actions({ install })}
+				/>
+			);
+		}
+		await renderWithRouter(<Detail />);
+		const summary = screen.getByRole("complementary", { name: "版本与权限" });
+		fireEvent.click(screen.getByRole("button", { name: "加入我的库" }));
+		await screen.findByRole("link", { name: "配置 Agent 绑定" });
+		// 回读确认安装后，另一个页面又把它移出；再次回读必须显示服务端的「尚未安装」。
+		act(() =>
+			readBack(
+				detailOf(v2, {
+					installation: {
+						state: "installed",
+						installationId: "installation-1",
+					},
+				}),
+			),
+		);
+		expect(within(summary).getByText("已在我的库")).toBeTruthy();
+		act(() =>
+			readBack(detailOf(v2, { installation: { state: "not_installed" } })),
+		);
+		expect(within(summary).getByText("尚未安装")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "加入我的库" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "移出我的库" })).toBeNull();
+		expect(screen.queryByRole("link", { name: "配置 Agent 绑定" })).toBeNull();
+	});
+
 	it("treats a 409 install as already in the library and keeps 403 inline without error codes", async () => {
 		const install = vi
 			.fn<SkillHubVersionActions["install"]>()

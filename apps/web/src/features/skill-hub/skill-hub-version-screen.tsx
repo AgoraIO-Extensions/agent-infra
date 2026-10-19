@@ -209,6 +209,13 @@ function ReadyVersion({
 	}>();
 	const library: LibraryState =
 		local && local.basedOn === serverKey ? local.value : serverLibrary;
+	// 回读结果与乐观状态的依据不同，说明服务端已给出新事实：丢弃乐观状态，
+	// 以后即使回读又回到原值（如在其他页面移出），也只以服务端为准。
+	useEffect(() => {
+		setLocal((current) =>
+			current && current.basedOn !== serverKey ? undefined : current,
+		);
+	}, [serverKey]);
 	const [installing, setInstalling] = useState(false);
 	const [removing, setRemoving] = useState(false);
 	const [libraryError, setLibraryError] = useState<string>();
