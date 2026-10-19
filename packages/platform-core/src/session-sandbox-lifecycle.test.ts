@@ -517,6 +517,85 @@ describe("original source stop proof", () => {
 	});
 });
 
+// #2885：#1481（按 Sandbox 投影 Runtime 输入）之前准备的来源有 deployment、没有模型投影，
+// 当时也不创建 Runtime Secret；它记录的 5 种资源就是完整来源。
+describe("stop proof of a source prepared before per-Sandbox Runtime inputs (#2885)", () => {
+	function withoutSecret(
+		source: Partial<SessionSandboxLifecycleV1["source"]> = {},
+	) {
+		const input = fixture();
+		const receipt = input.observation.sourceStop;
+		const observation = input.lifecycle.source.observation;
+		if (!receipt || !observation) throw new Error("Missing stop proof fixture");
+		return {
+			...input,
+			lifecycle: {
+				...input.lifecycle,
+				source: {
+					...input.lifecycle.source,
+					observation: {
+						status: "observed" as const,
+						resources: observation.resources.filter(
+							(resource) => resource.kind !== "Secret",
+						),
+					},
+					deployment: { schemaVersion: 1 },
+					modelProjection: null,
+					...source,
+				},
+				deletionProgress: (input.lifecycle.deletionProgress ?? []).filter(
+					(entry) => entry.resource.kind !== "Secret",
+				),
+			},
+			observation: {
+				...input.observation,
+				sourceStop: {
+					...receipt,
+					removed: receipt.removed.filter(
+						(proof) => proof.resource.kind !== "Secret",
+					),
+				},
+			},
+		};
+	}
+
+	it("accepts the per-object stop proof of the five resources it created", () => {
+		expect(
+			decideSessionSandboxDrainObservationV1(withoutSecret()),
+		).toMatchObject({ status: "stopped", finished: true });
+	});
+
+	it("still requires the Secret when the source was prepared with a model projection or never recorded a preparation", () => {
+		for (const source of [
+			{ modelProjection: { schemaVersion: 4 } },
+			{ deployment: null },
+			{ deployment: undefined },
+		])
+			expect(
+				decideSessionSandboxDrainObservationV1(withoutSecret(source)),
+			).toMatchObject({ status: "unknown", finished: false });
+	});
+
+	it("still requires a proof for every resource the source recorded", () => {
+		const input = withoutSecret();
+		const receipt = input.observation.sourceStop;
+		expect(
+			decideSessionSandboxDrainObservationV1({
+				...input,
+				observation: {
+					...input.observation,
+					sourceStop: {
+						...receipt,
+						removed: receipt.removed.filter(
+							(proof) => proof.resource.kind !== "Service",
+						),
+					},
+				},
+			}),
+		).toMatchObject({ status: "unknown", finished: false });
+	});
+});
+
 describe("original Execution drain eligibility", () => {
 	it.each(["processing", "unknown", "invalid"])(
 		"does not release %s occupancy",

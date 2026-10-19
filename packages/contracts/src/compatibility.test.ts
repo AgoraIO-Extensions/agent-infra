@@ -480,6 +480,70 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the pinned Skill Hub review queue read (#2905)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const queuePath = "/api/v2/skills/reviews";
+		const previous = structuredClone(current);
+		delete previous.paths[queuePath];
+		delete previous.components.schemas.SkillHubReviewQueueItemV1;
+		delete previous.components.schemas.SkillHubReviewQueuePageV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "skill-hub-review-queue-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				// 队列必须要求平台会话。
+				(value: typeof current) => {
+					value.paths[queuePath].get.security = [];
+				},
+				// 投影不能放宽为任意字段或带出审核原因。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubReviewQueueItemV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubReviewQueueItemV1.properties.reviewReason =
+						{ type: "string" };
+				},
+				// 只列待审的共享版本。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubReviewQueueItemV1.properties.state =
+						{ type: "string" };
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubReviewQueueItemV1.properties.visibility.enum.push(
+						"PRIVATE",
+					);
+				},
+				// 已发布的审核命令保持不变。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubReviewRequestV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the exact direct Agent creation contract", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -2893,6 +2957,7 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/agents/{agentId}/versions/{agentVersion}/skills" &&
 				path !== "/api/v2/skills/projects" &&
 				path !== "/api/v2/skills/projects/{projectId}" &&
+				path !== "/api/v2/skills/reviews" &&
 				path !== "/api/v2/skills/versions" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}/review" &&

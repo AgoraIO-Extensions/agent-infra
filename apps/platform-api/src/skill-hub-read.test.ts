@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import {
 	SkillHubDirectoryPageV1Schema,
+	SkillHubReviewQueuePageV1Schema,
 	SkillHubVersionMetadataV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
@@ -24,6 +25,7 @@ import {
 } from "../../../packages/platform-store/src/postgres-test.js";
 import { createClient } from "../../web/src/pilot/generated-v2/client/index.js";
 import {
+	listSkillHubReviewQueueV1,
 	listSkillHubVersionsV1,
 	readSkillHubVersionV1,
 } from "../../web/src/pilot/generated-v2/sdk.gen.js";
@@ -793,5 +795,222 @@ describe("Skill Hub authenticated HTTP reads with PostgreSQL", () => {
 				})
 			).status,
 		).toBe(401);
+	});
+
+	it("lists the administrator review queue, applies reviews and re-reads the queue (#2905)", async () => {
+		const publish = async (userId: string, key: string, visibility: string) => {
+			const response = await fetchInstallation(
+				"/api/v2/skills/versions",
+				userId,
+				{
+					method: "POST",
+					headers: { "Idempotency-Key": `queue-register-${key}` },
+					body: JSON.stringify({
+						schemaVersion: 1,
+						name: `queue-${key}`,
+						skillId: `queue-${key}`,
+						skillVersionId: `queue-${key}-version`,
+						visibility,
+						provider: "github",
+						version: "1.0.0",
+						packageObjectVersion: `internal-queue-object-${key}`,
+						packageDigest: "a".repeat(64),
+						manifestDigest: "b".repeat(64),
+						signatureDigest: "c".repeat(64),
+						...(visibility === "ORGANIZATION"
+							? {
+									organizationId:
+										users[userId as keyof typeof users].organizationIds[0],
+								}
+							: {}),
+					}),
+				},
+			);
+			expect(response.status).toBe(201);
+		};
+		let attempt = 0;
+		const review = (userId: string, key: string, body: unknown) => {
+			attempt += 1;
+			return fetchInstallation(
+				`/api/v2/skills/versions/queue-${key}-version/review`,
+				userId,
+				{
+					method: "POST",
+					headers: { "Idempotency-Key": `queue-review-${attempt}` },
+					body: JSON.stringify(body),
+				},
+			);
+		};
+		const queue = async (query = "") => {
+			const response = await fetchRead(
+				`/api/v2/skills/reviews${query}`,
+				"admin",
+			);
+			expect(response.status).toBe(200);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+			const text = await response.text();
+			expect(text).not.toContain("internal-");
+			expect(text).not.toContain("reviewReason");
+			return SkillHubReviewQueuePageV1Schema.parse(JSON.parse(text));
+		};
+		await publish("owner-b", "member", "MEMBER");
+		await publish("owner-a", "organization", "ORGANIZATION");
+		await publish("admin", "own", "MARKET");
+		await publish("owner-a", "private", "PRIVATE");
+
+		const listed = (await queue()).items;
+		const queued = listed.map((item) => item.skillVersionId);
+		// 只含待审版本：种子里未审的 version-g 与本测试新增的三个共享版本。
+		expect(queued).toEqual(
+			expect.arrayContaining([
+				"version-g",
+				"queue-member-version",
+				"queue-organization-version",
+				"queue-own-version",
+			]),
+		);
+		for (const excluded of [
+			"queue-private-version",
+			"version-a",
+			"version-c",
+			"version-i",
+			"publication-organization-version",
+		])
+			expect(queued).not.toContain(excluded);
+		expect(
+			listed.find(
+				(item) => item.skillVersionId === "queue-organization-version",
+			),
+		).toMatchObject({
+			name: "queue-organization",
+			ownerId: "owner-a",
+			visibility: "ORGANIZATION",
+			organizationId: "org-a",
+			provider: "github",
+			state: "pending_review",
+		});
+		expect(
+			listed.find((item) => item.skillVersionId === "queue-own-version"),
+		).toMatchObject({ ownerId: "admin", organizationId: null });
+
+		// 分页通过生成的 Browser v2 client 回读完整队列，与单页结果一致。
+		const client = createClient({
+			baseUrl,
+			headers: { cookie: "fixture-user=admin" },
+		});
+		const paged: string[] = [];
+		let cursor: string | undefined;
+		do {
+			const page = await listSkillHubReviewQueueV1({
+				client,
+				query: { limit: 1, ...(cursor ? { cursor } : {}) },
+				throwOnError: true,
+			});
+			paged.push(
+				...(page.data?.items.map((item) => item.skillVersionId) ?? []),
+			);
+			cursor = page.data?.nextCursor ?? undefined;
+		} while (cursor);
+		expect(paged).toEqual(queued);
+
+		// 自审、空理由驳回均被拒绝，版本仍留在队列。
+		expect((await review("admin", "own", { decision: "approve" })).status).toBe(
+			403,
+		);
+		expect(
+			(await review("admin", "member", { decision: "reject" })).status,
+		).toBe(400);
+		expect(
+			(
+				await review("admin", "organization", {
+					decision: "reject",
+					reason: "   ",
+				})
+			).status,
+		).toBe(400);
+		// 非管理员不能审核别人的版本。
+		expect(
+			(await review("owner-a", "member", { decision: "approve" })).status,
+		).toBe(403);
+		expect((await queue()).items.map((item) => item.skillVersionId)).toEqual(
+			queued,
+		);
+
+		const approved = await review("admin", "member", { decision: "approve" });
+		expect(approved.status).toBe(200);
+		expect(
+			((await approved.json()) as { version: { state: string } }).version.state,
+		).toBe("published");
+		const rejected = await review("admin", "organization", {
+			decision: "reject",
+			reason: "缺少使用说明",
+		});
+		expect(rejected.status).toBe(200);
+		expect(
+			((await rejected.json()) as { version: { state: string } }).version.state,
+		).toBe("rejected");
+		expect((await queue()).items.map((item) => item.skillVersionId)).toEqual(
+			queued.filter(
+				(id) =>
+					id !== "queue-member-version" && id !== "queue-organization-version",
+			),
+		);
+		expect(
+			(
+				await fetchRead(
+					"/api/v2/skills/versions/queue-member-version",
+					"owner-a",
+				)
+			).status,
+		).toBe(200);
+	});
+
+	it("refuses review queue reads by non-administrators and malformed requests", async () => {
+		expect((await fetchRead("/api/v2/skills/reviews", null)).status).toBe(401);
+		expect(
+			(
+				await fetchRead("/api/v2/skills/reviews", "admin", {
+					Authorization: "Bearer private-test-sentinel",
+				})
+			).status,
+		).toBe(401);
+		for (const userId of ["owner-a", "owner-b"])
+			expect(
+				(
+					await fetchRead("/api/v2/skills/reviews", userId, {
+						"x-user-id": "admin",
+						"x-role": "system_admin",
+					})
+				).status,
+			).toBe(403);
+		for (const query of [
+			"?ownerId=owner-a",
+			"?limit=0",
+			"?limit=101",
+			"?limit=1&limit=2",
+			"?cursor=bad%20id",
+			"?cursor=unknown-version",
+		])
+			expect(
+				(await fetchRead(`/api/v2/skills/reviews${query}`, "admin")).status,
+			).toBe(400);
+		const rows =
+			await sql`select action, actor_id, outcome, details from platform.audit_events order by occurred_at`;
+		expect(rows.some((row) => row.action === "skill.review_queue.read")).toBe(
+			false,
+		);
+		expect(
+			rows.filter(
+				(row) => row.actor_id === "owner-a" || row.actor_id === "owner-b",
+			),
+		).toEqual([
+			expect.objectContaining({
+				action: "skill.version.refused",
+				outcome: "rejected",
+				details: { reason: "forbidden" },
+			}),
+			expect.objectContaining({ details: { reason: "forbidden" } }),
+		]);
+		expect(JSON.stringify(rows)).not.toContain("private-test-sentinel");
 	});
 });

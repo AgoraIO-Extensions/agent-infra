@@ -136,8 +136,12 @@ export interface SessionSandboxAllocationV1 {
 	readonly containerPort: number;
 	readonly workspaceMountPath: string;
 	readonly env?: Readonly<Record<string, string>>;
-	/** Verified V4 projection and Worker runtime auth, assembled by the Worker. */
-	readonly runtime: SessionSandboxRuntimeInputV1;
+	/**
+	 * Verified V4 projection and Worker runtime auth, assembled by the Worker.
+	 * 排空（drain）路径若原 payload 未保存 modelProjection（旧 payload 形状），
+	 * 此字段为 null；只有 desiredState === "running" 的准备操作才强制要求非 null。
+	 */
+	readonly runtime: SessionSandboxRuntimeInputV1 | null;
 	readonly connectionConsumerSnapshot?: string | null;
 	readonly connectionInstallationRevision?: string | null;
 	readonly resources: {
@@ -351,12 +355,19 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 	);
 	if (
 		value.egress.nativeMetadataWorkerEgress !== undefined &&
+		// 排空（drain-only）allocation 的 runtime 为 null，无需检查 nativeMetadata 原点。
+		value.runtime !== null &&
 		!isNativeMetadataWorkerOriginV1(value.runtime.nativeMetadataWorkerOrigin)
 	)
 		throw new WorkloadKubernetesError("policy");
 	// Rejects any destination the shared Agent-level compiler would reject.
 	workloadEgressRulesV1(value.egress);
-	validateRuntimeInput(value.runtime);
+	// 排空（drain-only）allocation 的 runtime 允许为 null（旧 payload 形状）：
+	// cleanup 和 control-mode observe 在 stopped 状态下只需沙箱身份标签，
+	// 不依赖模型配置字段。创建资源的入口另行要求 runtime 非空。
+	if (value.runtime !== null) {
+		validateRuntimeInput(value.runtime);
+	}
 }
 
 function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
@@ -450,6 +461,8 @@ function validateNativeMetadataWorkerEgressV1(
 function runtimeEnvironment(
 	allocation: SessionSandboxAllocationV1,
 ): V1EnvVar[] {
+	// 排空（drain-only）allocation 的 runtime 为 null：stopped 状态不创建资源，无需环境变量。
+	if (!allocation.runtime) return [];
 	const { runtime } = allocation;
 	const secretRef = (key: "model-config" | "token") => ({
 		secretKeyRef: { name: allocation.secretName, key, optional: false },
@@ -630,12 +643,21 @@ export function sessionSandboxResourcesV1(
 		metadata: metadata(allocation, allocation.secretName),
 		type: "Opaque",
 		immutable: true,
-		data: {
-			token: Buffer.from(allocation.runtime.serviceToken).toString("base64"),
-			"model-config": Buffer.from(
-				allocation.runtime.modelConfiguration,
-			).toString("base64"),
-		},
+		// runtime 为 null 只出现在排空 #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源：
+		// 当时不创建 Runtime Secret。这里的无数据 Secret 只保持资源集合的形状，不会被创建；
+		// observe（control）与 cleanup 对这类来源允许 Secret 不存在（#2885）。
+		...(allocation.runtime
+			? {
+					data: {
+						token: Buffer.from(allocation.runtime.serviceToken).toString(
+							"base64",
+						),
+						"model-config": Buffer.from(
+							allocation.runtime.modelConfiguration,
+						).toString("base64"),
+					},
+				}
+			: {}),
 	};
 	const service: V1Service = {
 		apiVersion: "v1",
@@ -1015,6 +1037,10 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 		) {
 			if (options.client.namespace !== allocation.namespace)
 				throw new WorkloadKubernetesError("policy");
+			// 只有排空（stopped）允许 runtime 为 null；运行中的 allocation 缺 runtime 会建出
+			// 缺 Secret / env 的 Pod，必须在任何写入之前拒绝（#2885）。
+			if (allocation.desiredState === "running" && allocation.runtime === null)
+				throw new WorkloadKubernetesError("policy");
 			const resources = sessionSandboxResourcesV1(allocation);
 			// Check the complete previous set before any write. A vanished or replaced
 			// instance needs Store-authorized recovery, not implicit allocation here.
@@ -1123,6 +1149,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					? { ...allocation, desiredState: "stopped" }
 					: allocation,
 			);
+			// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影，排空 allocation 的
+			// runtime 为 null：当时不创建 Runtime Secret，资源规格也由当时的模板渲染，今天的模板
+			// 复现不了。这类来源的 control 观测只按归属标记与 UID 识别（#2885）。
+			const preparedBeforeRuntimeInputs =
+				purpose === "control" && allocation.runtime === null;
 			for (const expected of expectedResources) {
 				const kind = expected.kind as SessionSandboxResourceIdentityV1["kind"];
 				const name = expected.metadata?.name ?? "";
@@ -1134,6 +1165,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					if (current) status = "unknown";
 					continue;
 				}
+				if (!current && kind === "Secret" && preparedBeforeRuntimeInputs)
+					continue;
 				if (
 					!current ||
 					!owned(current, expected, allocation) ||
@@ -1164,12 +1197,13 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				)
 					status = "unknown";
 				const matches =
-					purpose === "control" && kind === "Pod"
+					preparedBeforeRuntimeInputs ||
+					(purpose === "control" && kind === "Pod"
 						? podSpecMatches(
 								runtimeConnectionConsumerControlPodV1(current as V1Pod),
 								runtimeConnectionConsumerControlPodV1(expected as V1Pod),
 							)
-						: resourceSpecMatches(current, expected);
+						: resourceSpecMatches(current, expected));
 				if (!matches) status = "unknown";
 				if (kind === "Pod") {
 					const pod = current as V1Pod;
@@ -1295,6 +1329,10 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				}
 				if (!current) {
 					const prior = previousByKind.get(kind);
+					// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源（runtime 为 null）从未创建
+					// Runtime Secret：既不在集群里、也没被记录时没有可删除的对象（#2885）。
+					if (!prior && kind === "Secret" && allocation.runtime === null)
+						continue;
 					if (!prior) throw new WorkloadKubernetesError("unavailable");
 					const identity = existing?.resource ?? prior;
 					const absence = {

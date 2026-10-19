@@ -467,7 +467,7 @@ function createSessionSandboxAllocationResolverV1(
 		deployment: AgentWorkloadDesiredV1,
 		modelProjection: unknown,
 		requireCurrentTemplateTrust: boolean,
-	): SessionSandboxRuntimeInputV1 => {
+	): SessionSandboxRuntimeInputV1 | null => {
 		const auth = workload.policy.runtimeAuth;
 		let projection: RuntimeModelProjectionV4;
 		try {
@@ -481,6 +481,11 @@ function createSessionSandboxAllocationResolverV1(
 			validateWorkloadRuntimeAuthV1(auth);
 			projection = validateRuntimeModelProjectionV4(modelProjection);
 		} catch {
+			// 排空（drain）路径不要求当前模板信任，且原 payload 未保存 modelProjection
+			// （旧 payload 形状）时，返回 null runtime；adapter 的 cleanup/observe
+			// 在 stopped 状态下不依赖 runtime 字段，可按标签与 UID 完成资源删除。
+			// 工程 Spec §10.1.1：模板撤销不得阻断已获管理授权的原资源回收。
+			if (!requireCurrentTemplateTrust && !modelProjection) return null;
 			throw new WorkloadKubernetesError("policy");
 		}
 		const templateBinding = projection.standardTemplateBinding;
@@ -610,16 +615,19 @@ export function createProductionSessionSandboxReceiverV1(
 					sourceStop: lifecycle.stopReceipt,
 					resources: [lifecycle.stopReceipt.retainedPVC],
 				};
+			// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影（runtime 为 null），
+			// 当时也不创建 Runtime Secret：其余 5 种资源就是完整来源（#2885）。
+			const sourceKinds = [
+				"Pod",
+				"Service",
+				"ServiceAccount",
+				"PersistentVolumeClaim",
+				"NetworkPolicy",
+				...(sourceAllocation.runtime === null ? [] : ["Secret"]),
+			];
 			const completeSource =
-				sourceResources.length >= 6 &&
-				[
-					"Pod",
-					"Service",
-					"ServiceAccount",
-					"PersistentVolumeClaim",
-					"NetworkPolicy",
-					"Secret",
-				].every((kind) =>
+				sourceResources.length >= sourceKinds.length &&
+				sourceKinds.every((kind) =>
 					sourceResources.some((resource) => resource.kind === kind),
 				);
 			if (!completeSource) {

@@ -266,6 +266,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/skills/installations/{installationId}",
 			"/api/v2/skills/projects",
 			"/api/v2/skills/projects/{projectId}",
+			"/api/v2/skills/reviews",
 			"/api/v2/skills/versions",
 			"/api/v2/skills/versions/{skillVersionId}",
 			"/api/v2/skills/versions/{skillVersionId}/review",
@@ -282,6 +283,7 @@ describe("standard contract artifacts", () => {
 		).toEqual(["accepted", "replayed"]);
 		for (const path of [
 			"/api/v2/skills",
+			"/api/v2/skills/reviews",
 			"/api/v2/skills/versions/{skillVersionId}",
 		]) {
 			expect(artifacts.pilotBrowserOpenapiV2.paths[path].get.security).toEqual([
