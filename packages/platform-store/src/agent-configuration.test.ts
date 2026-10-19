@@ -2475,11 +2475,17 @@ describe("PostgreSQL Agent configuration query", () => {
 				source: { kind: "standard", templateId: "template_01" },
 				ownerIds: ["owner_01"],
 				defaultModelOptionId: "model_primary",
+				modelOptions: [
+					{
+						optionId: "model_primary",
+						endpointId: "endpoint_01",
+					},
+				],
 				secrets: [],
 			},
 		});
 		expect(JSON.stringify(found)).not.toMatch(
-			/secret_model_primary|sha256:|image_policy_7|endpoint_01|binding_01/,
+			/secret_model_primary|sha256:|image_policy_7|binding_01/,
 		);
 		const forbidden = await query.read({
 			agentId: "agent_01",

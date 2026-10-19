@@ -3082,6 +3082,36 @@ function isKeylessModelReplacementOpenApiAddition(previous, current) {
 // #2612 adds the saved-Key read projection and a credential-free, version-bound
 // configuration update branch. Strip those additive branches before comparing
 // the historical V2 contract.
+function isModelDisplayCandidatesOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents/{agentId}/default-relay-key/display-candidates";
+	if (
+		previous.paths?.[path] !== undefined ||
+		current.paths?.[path] === undefined
+	)
+		return false;
+	if (
+		createHash("sha256")
+			.update(JSON.stringify(current.paths?.[path]))
+			.digest("hex") !==
+		"652cd90088a9852a524d4b0ca0fc711a3b1288b6d92111acd43f7243c3519e20"
+	)
+		return false;
+	const oldPath = "/api/v2/agents/{agentId}/default-relay-key/candidates";
+	for (const method of ["get", "post"]) {
+		if (
+			previous.paths?.[oldPath]?.[method] !== undefined &&
+			!sameValue(
+				previous.paths[oldPath][method],
+				current.paths?.[oldPath]?.[method],
+			)
+		)
+			return false;
+	}
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function isSavedKeyCandidateOpenApiAddition(previous, current) {
 	const normalized = structuredClone(current);
 	const savedPath =
@@ -4691,6 +4721,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isApplicationDefaultRelayKeyV2OpenApiAddition(previous, current) &&
 			!isKeylessModelReplacementOpenApiAddition(previous, current) &&
 			!isSavedKeyCandidateOpenApiAddition(previous, current) &&
+			!isModelDisplayCandidatesOpenApiAddition(previous, current) &&
 			!isAgentDefaultRelayKeyInputOpenApiAddition(previous, current) &&
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isTaskHttpV1SseOpenApiAddition(previous, current) &&

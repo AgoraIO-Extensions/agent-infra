@@ -124,13 +124,14 @@ describe("Agent configuration generated-client consumer", () => {
 
 	it("reads saved default-Key candidates through the generated GET client", async () => {
 		const candidates = {
-			schemaVersion: 1 as const,
+			schemaVersion: 2 as const,
 			configurationRevision: 8,
 			keyVersion: 4,
 			candidates: [
 				{
 					endpointId: "endpoint-primary",
 					modelId: "model-a",
+					displayName: "受信模型甲",
 					reasoningLevels: ["medium", "high"],
 				},
 			],
@@ -150,7 +151,39 @@ describe("Agent configuration generated-client consumer", () => {
 		expect(requests).toHaveLength(1);
 		expect(requests[0]?.method).toBe("GET");
 		expect(requests[0]?.url).toBe(
-			"https://platform.example.test/api/v2/agents/agent-pilot-1/default-relay-key/candidates",
+			"https://platform.example.test/api/v2/agents/agent-pilot-1/default-relay-key/display-candidates",
 		);
 	});
+
+	it.each(["old version", "missing name", "extra field"])(
+		"rejects %s on the explicit display endpoint",
+		async (mode) => {
+			const candidate = {
+				endpointId: "endpoint-primary",
+				modelId: "model-a",
+				displayName: "受信模型甲",
+				reasoningLevels: ["medium"],
+			};
+			const { displayName: _displayName, ...withoutName } = candidate;
+			const projection = {
+				schemaVersion: mode === "old version" ? 1 : 2,
+				configurationRevision: 8,
+				keyVersion: 4,
+				candidates: [
+					mode === "missing name"
+						? withoutName
+						: mode === "extra field"
+							? { ...candidate, credential: "synthetic-sensitive-value" }
+							: candidate,
+				],
+			};
+			const client = createClient({
+				baseUrl: "https://platform.example.test",
+				fetch: async () => Response.json(projection),
+			});
+			await expect(
+				loadAgentDefaultRelayKeySavedCandidates(agent.agentId, client),
+			).rejects.toMatchObject({ retryable: false });
+		},
+	);
 });

@@ -12716,6 +12716,368 @@
         "summary": "Preview Key-visible models compatible with the current Agent template"
       }
     },
+    "/api/v2/agents/{agentId}/default-relay-key/display-candidates": {
+      "get": {
+        "description": "Current Owner browser session only. Retains current configuration and saved Key version checks; names are presentation metadata only. No Key material is returned. No-store; no Authorization header, query or request body.",
+        "operationId": "getAgentDefaultRelayKeySavedDisplayCandidatesV2",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidates": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "displayName": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                            "type": "string"
+                          },
+                          "endpointId": {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "modelId": {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "reasoningLevels": {
+                            "items": {
+                              "maxLength": 1024,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxItems": 32,
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "endpointId",
+                          "modelId",
+                          "reasoningLevels",
+                          "displayName"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32768,
+                      "type": "array"
+                    },
+                    "configurationRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "keyVersion": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 2,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "configurationRevision",
+                    "keyVersion",
+                    "candidates"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Saved-Key candidates with display names"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ],
+        "summary": "Read saved-Key candidates with deployment-owned model names"
+      },
+      "post": {
+        "description": "Current Owner browser session only. Retains the original candidate intersection and independent save revalidation. Names never authorize a model or prove execution. No-store; no Authorization header or query.",
+        "operationId": "getAgentDefaultRelayKeyDisplayCandidatesV2",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "configurationRevision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "keyValue": {
+                    "format": "password",
+                    "maxLength": 8192,
+                    "minLength": 16,
+                    "pattern": "^[\\x21-\\x7e]+$",
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "configurationRevision",
+                  "keyValue"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidates": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "displayName": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                            "type": "string"
+                          },
+                          "endpointId": {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "modelId": {
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "reasoningLevels": {
+                            "items": {
+                              "maxLength": 1024,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxItems": 32,
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "endpointId",
+                          "modelId",
+                          "reasoningLevels",
+                          "displayName"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32768,
+                      "type": "array"
+                    },
+                    "configurationRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 2,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "configurationRevision",
+                    "candidates"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Compatible candidates with display names"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ],
+        "summary": "Preview Key-visible candidates with deployment-owned model names"
+      }
+    },
     "/api/v2/agents/{agentId}/lifecycle": {
       "post": {
         "operationId": "commandAgentLifecycleV2",

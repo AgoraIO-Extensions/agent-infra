@@ -14,7 +14,12 @@ export function useAgentSavedRelayKeyCandidates(
 	return useQuery({
 		enabled,
 		queryFn: () => loadAgentDefaultRelayKeySavedCandidates(agentId),
-		queryKey: ["agents", agentId, "default-relay-key", "saved-candidates"],
+		queryKey: [
+			"agents",
+			agentId,
+			"default-relay-key",
+			"saved-display-candidates",
+		],
 		retry: false,
 	});
 }
