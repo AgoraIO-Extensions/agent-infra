@@ -129,6 +129,12 @@ export const ScopedPlatformAuditActionV1Schema = z.enum([
 	"api.agent.create.replayed",
 	"api.agent.create.refused",
 	"relay_key.agent_default.replace",
+	"skill.project.create",
+	"skill.project.update",
+	"skill.project.list",
+	"skill.project.read",
+	"relay_key.agent_default.read",
+	"relay_key.agent_default.candidates",
 ]);
 
 export const ScopedPlatformAuditProjectionV1Schema = z.strictObject({
