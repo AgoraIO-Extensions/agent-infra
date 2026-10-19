@@ -96,6 +96,7 @@ import type {
 	RuntimeDriverCommand,
 	RuntimeDriverExecutionContextV1,
 	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
 	RuntimeNativeMetadataReadContextV1,
 	RuntimeNativeSkillReadContextV1,
 	RuntimeNativeSkillReaderV1,
@@ -1119,7 +1120,14 @@ export class RuntimeHost {
 	acknowledgeEventsV3(value: RuntimeEventAckRequestV3, verification: unknown) {
 		return this.trustedHost().acknowledgeEvents(value, verification);
 	}
-	async authorizeExternalAction(action: RuntimeExternalActionAuthorization) {
+	async authorizeExternalAction(
+		action: RuntimeExternalActionAuthorization,
+	): Promise<
+		| (RuntimeExternalActionAuthorizationResult & {
+				readonly revalidate: () => void;
+		  })
+		| undefined
+	> {
 		this.trustedHost();
 		if (!this.options.driver.validateExternalAction)
 			runtimeAuthorizationDenied();
@@ -1127,7 +1135,18 @@ export class RuntimeHost {
 		await this.bindOriginalNativeSession(originalAction);
 		const delivery =
 			await this.currentExternalActionAuthorization(originalAction);
-		if (!delivery) return;
+		if (!delivery) {
+			if (originalAction.kind !== "tool") return;
+			return {
+				revalidate: () => {
+					this.trustedHost();
+					this.options.store.assertExternalActionCurrent(
+						originalAction,
+						this.options.grantValidationV2?.now ?? Date.now,
+					);
+				},
+			};
+		}
 		return {
 			...delivery,
 			revalidate: () =>

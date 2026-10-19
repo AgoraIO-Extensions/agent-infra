@@ -714,6 +714,32 @@ describe("Runtime V3 durable authorization", () => {
 		},
 	);
 
+	it.each(["current", "expiry", "close"] as const)(
+		"returns a keyless tool guard without a Connection consumer: %s",
+		async (change) => {
+			const env = await setup();
+			try {
+				const accepted = await submit(env.host);
+				const authorized = await env.host.authorizeExternalAction({
+					...guard(accepted.hostSessionRef, env.store),
+					kind: "tool",
+				});
+				expect(authorized).toEqual({ revalidate: expect.any(Function) });
+				if (!authorized?.revalidate) throw new Error("Missing Host tool guard");
+				expect(authorized.relayKey).toBeUndefined();
+				expect(authorized.revalidate()).toBeUndefined();
+				if (change === "expiry") env.clock.now += 30_000;
+				else if (change === "close") await env.host.close();
+				if (change !== "current")
+					expect(authorized.revalidate).toThrowError(
+						expect.objectContaining({ code: "RUNTIME_GRANT_INVALID" }),
+					);
+			} finally {
+				await env.host.close();
+			}
+		},
+	);
+
 	it("expires external-action authority and renews only the existing accepted execution", async () => {
 		const env = await setup();
 		const accepted = await submit(env.host);
