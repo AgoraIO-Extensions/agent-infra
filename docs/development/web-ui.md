@@ -55,6 +55,32 @@ Agent 详情中的 Owner、渠道、模型和范围均取自实际投影；Owner
 | 对话标题 | 标题展示遵循 PRD | [PRD §12.2](../prd/PRD-agent-platform-M1.md#122-会话历史) |
 | Builder、预览 | 不提供页面 | PRD §1、§5.7、§11.1 |
 
+### 运维观测页
+
+导出设计没有 `#ops`（F-12，设计回补见 #2863）。按 #2862 定论，`/ops` 保留在「系统管理」末尾
+（[PRD §11.1](../prd/PRD-agent-platform-M1.md#111-页面)、[§14.2](../prd/PRD-agent-platform-M1.md#142-运维观测)）。
+设计稿回写前以本节为这一页的设计依据，样式沿用同类管理页页头与设计 `#my-agents` 已创建卡，不另做原型。
+
+- 页头：`.page-heading`，eyebrow「系统管理 / 运维观测」、h1「先确认平台状态，再定位故障。」
+  （`tabIndex={-1}`，作为恢复焦点目标）与副标题。读取中和已读取时右侧有 44px ghost 图标按钮「刷新运维状态」，
+  读取中禁用；其余状态不显示。
+- 区块：已读取时依次为平台健康、Agent 与任务、依赖、告警四张 `Card`（`section`，以标题命名）。
+  卡头对应设计 `.card-head`：h2 为 17px / 650 正文字体，状态 chip 在右，gap 14px；
+  下方为 `dl.review-facts`，上距 15px。桌面两列、gap 16px；不超过 767px 时单列，事实列表上下排列。
+- 状态 chip：`Badge` 显式传 `tone`，未接入为 gray、正常为 green、降级为 amber、不可用为 red。
+- 事实：每块先列「覆盖」。数据只来自 `GET /api/v1/ops/observability`（`ObservabilityStatusProjectionV1`），
+  该查询只报告 Platform API 观测采集与导出的独立健康信号（[工程 Spec §18.2](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#182-运行指标与故障)），
+  显示在告警块：「告警出口」写「未接入」，并列出观测采集、采集失败、导出失败、丢弃日志、无效记录和最近导出失败时间（`Timestamp`）。
+  任一计数大于 0 时告警 chip 为「降级」，否则为「未接入」。另外三块没有数据源，chip 和「数据来源」都写「未接入」。
+  页面不生成指标、阈值或告警事实，也不为未接入的区块补零。
+
+| 状态 | 条件 | 呈现 |
+| --- | --- | --- |
+| 未接入 | 查询成功，但区块没有数据源；或查询入口返回 404 | 区块按上文显示「未接入」；入口 404 时页头下为 `PageStateCard`（`unavailable`）「观测查询未接入」，没有操作 |
+| 读取中 | 首次进入或刷新 | 页头下为 `LoadingLine`「正在读取观测状态…」，不显示区块 |
+| 不可用 | 网络失败、503、其他失败状态、采集未启用或已关闭、响应不符合 strict 契约 | `PageStateCard`（`unavailable`）与「重新读取观测状态」；恢复后焦点移到 h1，仍失败时留在按钮上 |
+| 无权限 | 会话没有 `system_admin`（不发出查询），或查询返回 403 | `PageStateCard`（`unauthorized`）「你没有访问运维观测的权限。」与「返回工作台」，不显示区块和观测事实 |
+
 ## 组件与调用方
 
 `apps/web/components.json` 保持 `base-lyra`、`neutral`、CSS variables、`@/` aliases 和 lucide。
@@ -178,6 +204,7 @@ PR 的人工 UI 验收仍遵循[工作流 §7.4](../architecture/SPEC-ai-native-
 | 创建审批 | `management.spec.ts` | `-admin-approvals` |
 | 管理员 Agent 列表 | `admin-agents.spec.ts` | `admin-agents` |
 | 个人、平台审计 | `audit.spec.ts` | `-audit`、`-admin-audit` |
+| 运维观测（导出设计未覆盖，按[运维观测页](#运维观测页)） | `ops.spec.ts` | `ops` |
 
 关键状态与行为另由以下测试覆盖，不增加原型状态产品路由：
 
@@ -192,6 +219,8 @@ PR 的人工 UI 验收仍遵循[工作流 §7.4](../architecture/SPEC-ai-native-
 - `conversation-screen.test.tsx`：终态经事件或历史回读后清除等待提示并刷新最近会话，
   新建会话成功后刷新最近会话。
 - `use-agent-detail.test.tsx`：生命周期过渡到 ready 后更新展示数据并停止轮询；403/503 不继续轮询。
+- `ops.spec.ts`：运维观测在 1440×900 与 390×844 下的页头、卡片、chip、事实列表和横向溢出，
+  以及未接入、读取中、不可用（含重试焦点）、无权限（不发出观测查询）四种状态。
 
 截图反映受控 API fixture，不证明 LDAP、真实模型、Kubernetes 或独立 Connection 验收。
 数据条数、身份、模型选项、权限相关操作与导出样例的差异须以实际契约为准；

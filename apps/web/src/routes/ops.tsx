@@ -1,7 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import { useApplicationSession } from "../features/application-shell.js";
-import { OperationsEntry } from "../features/operations/operations-entry.js";
+import {
+	OperationsEntry,
+	type OperationsEntryState,
+} from "../features/operations/operations-entry.js";
 import { fetchOperationsStatus } from "../features/operations/operations-query.js";
 
 export const Route = createFileRoute("/ops")({
@@ -11,9 +14,10 @@ export const Route = createFileRoute("/ops")({
 function OperationsRoute() {
 	const { session } = useApplicationSession();
 	const isAdministrator = session.user.roles.includes("system_admin");
-	const [state, setState] = useState<
-		import("../features/operations/operations-entry.js").OperationsEntryState
-	>(() => (isAdministrator ? { kind: "loading" } : { kind: "unknown" }));
+	// 非系统管理员不发出观测查询，直接显示无权限卡（F-12 AC-3）。
+	const [state, setState] = useState<OperationsEntryState>(() =>
+		isAdministrator ? { kind: "loading" } : { kind: "denied" },
+	);
 	const [isRefreshing, setIsRefreshing] = useState(false);
 	const refresh = useCallback(async () => {
 		if (!isAdministrator) return;
