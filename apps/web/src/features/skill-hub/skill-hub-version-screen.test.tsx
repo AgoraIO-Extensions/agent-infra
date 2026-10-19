@@ -1,4 +1,9 @@
-import { SkillHubVersionMetadataV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	SkillHubOwnedVersionV1Schema,
+	SkillHubVersionDetailV1Schema,
+	SkillHubVersionMetadataV1Schema,
+} from "@agent-infra/contracts/pilot";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -16,9 +21,14 @@ import {
 	within,
 } from "@testing-library/react";
 import { type ReactNode, useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/components/ui/toast";
-import type { SkillHubPublicationResponseV1 } from "../../pilot/generated-v2/types.gen.js";
+import type {
+	SkillHubInstallationResponseV1,
+	SkillHubPublicationResponseV1,
+	SkillHubVersionDetailV1,
+} from "../../pilot/generated-v2/types.gen.js";
+import type { SkillHubOwnedVersionsState } from "./skill-hub.js";
 import {
 	type SkillDetailTab,
 	type SkillHubVersionActions,
@@ -48,6 +58,78 @@ const other = SkillHubVersionMetadataV1Schema.parse({
 	skillId: "incident-summary",
 	skillVersionId: "incident-summary-v1",
 	name: "incident-summary",
+});
+// 版本详情投影：发布者、本人安装状态与有界正文（#2904）。
+const skillBody =
+	"# release-notes\n汇总本周变更。\n<script>alert(1)</script>\n";
+function detailOf(
+	version: typeof v1,
+	overrides: Partial<SkillHubVersionDetailV1> = {},
+): SkillHubVersionDetailV1 {
+	return SkillHubVersionDetailV1Schema.parse({
+		...version,
+		ownerId: "user-owner",
+		installation: { state: "not_installed" },
+		content: {
+			state: "available",
+			body: skillBody,
+			bodyTruncated: false,
+			resources: [
+				{ path: "references/style.md", kind: "reference", sizeBytes: 2048 },
+				{ path: "scripts/collect.sh", kind: "script", sizeBytes: 120 },
+			],
+		},
+		...overrides,
+	});
+}
+const detail = detailOf(v2);
+
+function installed(installationId = "installation-1") {
+	return {
+		replayed: false,
+		installation: {
+			schemaVersion: 1,
+			installationId,
+			principalType: "user",
+			principalId: "user-viewer",
+			skillVersionId: "release-notes-v2",
+			state: "installed",
+			needUpgrade: false,
+			installedAt: "2026-10-18T00:00:00Z",
+			updatedAt: "2026-10-18T00:00:00Z",
+		},
+	} satisfies SkillHubInstallationResponseV1;
+}
+function removed(installationId = "installation-1") {
+	const value = installed(installationId);
+	return {
+		...value,
+		installation: { ...value.installation, state: "uninstalled" },
+	} satisfies SkillHubInstallationResponseV1;
+}
+
+// 发布者显示名由页面级目录读取解析：测试与生产一样经 QueryClient 读取固定目录记录。
+beforeEach(() => {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: string | URL | Request) => {
+			const url = new URL(String(input), "http://localhost");
+			const ids = url.searchParams.get("ids")?.split(",") ?? [];
+			return Response.json({
+				items: [
+					{ kind: "user", canonicalId: "user-owner", displayName: "周可" },
+				].filter(
+					(item) =>
+						item.kind === url.searchParams.get("kind") &&
+						ids.includes(item.canonicalId),
+				),
+			});
+		}),
+	);
+});
+afterEach(() => {
+	cleanup();
+	vi.unstubAllGlobals();
 });
 
 function revoked(version: typeof v1 = v2): SkillHubPublicationResponseV1 {
@@ -80,11 +162,10 @@ function requestError(status: number) {
 	});
 }
 
-afterEach(cleanup);
-
 function actions(overrides: Partial<SkillHubVersionActions> = {}) {
 	return {
 		install: vi.fn<SkillHubVersionActions["install"]>(),
+		uninstall: vi.fn<SkillHubVersionActions["uninstall"]>(),
 		revoke: vi.fn<SkillHubVersionActions["revoke"]>(),
 		...overrides,
 	};
@@ -94,17 +175,25 @@ async function renderDetail({
 	owned = false,
 	initialTab = "overview",
 	act: detailActions = actions(),
+	version = detail,
+	ownedVersions,
+	onVersionChanged,
 }: {
 	owned?: boolean;
 	initialTab?: SkillDetailTab;
 	act?: ReturnType<typeof actions>;
+	version?: SkillHubVersionDetailV1;
+	ownedVersions?: SkillHubOwnedVersionsState;
+	onVersionChanged?: () => void;
 } = {}) {
 	function Detail() {
 		const [tab, setTab] = useState<SkillDetailTab>(initialTab);
 		return (
 			<SkillHubVersionScreen
-				state={{ kind: "ready", version: v2 }}
+				state={{ kind: "ready", version }}
 				catalog={{ kind: "ready", versions: [v1, other, v2] }}
+				ownedVersions={ownedVersions}
+				onVersionChanged={onVersionChanged}
 				tab={tab}
 				onTabChange={setTab}
 				owned={owned}
@@ -124,7 +213,12 @@ async function renderWithRouter(content: ReactNode) {
 			path: "/",
 			component: () => content,
 		}),
-		...["/skills", "/skills/$skillVersionId", "/my-agents"].map((path) =>
+		...[
+			"/skills",
+			"/skills/$skillVersionId",
+			"/skills/manage/new",
+			"/my-agents",
+		].map((path) =>
 			createRoute({ getParentRoute: () => root, path, component: () => null }),
 		),
 	];
@@ -133,10 +227,15 @@ async function renderWithRouter(content: ReactNode) {
 		routeTree: root.addChildren(routes),
 	});
 	await router.load();
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false, gcTime: 0 } },
+	});
 	render(
-		<ToastProvider>
-			<RouterProvider router={router} />
-		</ToastProvider>,
+		<QueryClientProvider client={client}>
+			<ToastProvider>
+				<RouterProvider router={router} />
+			</ToastProvider>
+		</QueryClientProvider>,
 	);
 	return router;
 }
@@ -150,6 +249,9 @@ describe("SkillHubVersionScreen", () => {
 		expect(
 			screen.getByRole("link", { name: "返回 Skill Hub" }).getAttribute("href"),
 		).toBe("/skills");
+		const summary = screen.getByRole("complementary", { name: "版本与权限" });
+		// 发布者显示名来自目录读取，不显示内部用户 ID。
+		await within(summary).findByText("周可");
 		const text = document.body.textContent ?? "";
 		for (const hidden of [
 			"版本 ID",
@@ -160,21 +262,85 @@ describe("SkillHubVersionScreen", () => {
 			"release-notes-v",
 			"a".repeat(64),
 			"文件权限",
-			"发布者",
+			"user-owner",
 		])
 			expect(text).not.toContain(hidden);
-		const summary = screen.getByRole("complementary", { name: "版本与权限" });
 		expect(
 			[...summary.querySelectorAll("dt")].map((item) => item.textContent),
-		).toEqual(["版本", "发布状态", "来源", "可见范围", "脚本", "网络权限"]);
+		).toEqual([
+			"版本",
+			"发布状态",
+			"发布者",
+			"来源",
+			"可见范围",
+			"我的库",
+			"脚本",
+			"网络权限",
+		]);
 		expect(
 			[...summary.querySelectorAll("dd")].map((item) => item.textContent),
-		).toEqual(["v1.2.0", "已发布", "我的库", "仅自己", "禁用", "不会新增"]);
+		).toEqual([
+			"v1.2.0",
+			"已发布",
+			"周可",
+			"我的库",
+			"仅自己",
+			"尚未安装",
+			"禁用",
+			"不会新增",
+		]);
 		expect(
 			within(summary).getByText(
 				"安装后还不能直接使用。先绑定到 Agent 版本并完成同步。",
 			),
 		).toBeTruthy();
+	});
+
+	it("renders SKILL.md as plain text and lists resources without their content", async () => {
+		await renderDetail();
+		const body = screen.getByRole("region", { name: "SKILL.md 正文" });
+		// 正文按纯文本显示：<script> 只作为文字出现，不生成任何元素。
+		expect(body.querySelector("pre")?.textContent).toBe(skillBody);
+		expect(document.querySelector("script")).toBeNull();
+		expect(body.querySelectorAll("*")).toHaveLength(1);
+		const resources = screen
+			.getByRole("heading", { level: 2, name: "配套资源" })
+			.closest("section") as HTMLElement;
+		expect(
+			[...resources.querySelectorAll("li")].map((item) => item.textContent),
+		).toEqual([
+			"references/style.md参考资料 · 2 KB",
+			"scripts/collect.sh脚本 · 120 B",
+		]);
+		expect(screen.queryByText(/正文较长/)).toBeNull();
+		cleanup();
+
+		await renderDetail({
+			version: detailOf(v2, {
+				content: {
+					state: "available",
+					body: "x".repeat(10),
+					bodyTruncated: true,
+					resources: [],
+				},
+			}),
+		});
+		expect(
+			screen.getByText(
+				"正文较长，这里只显示开头部分；调用时会按需加载完整内容。",
+			),
+		).toBeTruthy();
+		expect(screen.getByText("这个版本没有配套资源。")).toBeTruthy();
+		cleanup();
+
+		await renderDetail({
+			version: detailOf(v2, { content: { state: "unavailable" } }),
+		});
+		expect(
+			screen.getByText("正文与配套资源暂时无法读取，版本信息不受影响。"),
+		).toBeTruthy();
+		expect(screen.queryByRole("region", { name: "SKILL.md 正文" })).toBeNull();
+		expect(screen.getByRole("button", { name: "加入我的库" })).toBeTruthy();
 	});
 
 	it("lists only this Skill's versions newest first and keeps the current one disabled", async () => {
@@ -214,10 +380,9 @@ describe("SkillHubVersionScreen", () => {
 		const install = vi
 			.fn<SkillHubVersionActions["install"]>()
 			.mockRejectedValueOnce(requestError(503))
-			.mockResolvedValueOnce(
-				{} as Awaited<ReturnType<SkillHubVersionActions["install"]>>,
-			);
-		await renderDetail({ act: actions({ install }) });
+			.mockResolvedValueOnce(installed());
+		const onVersionChanged = vi.fn();
+		await renderDetail({ act: actions({ install }), onVersionChanged });
 		expect(screen.queryByRole("textbox")).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "加入我的库" }));
 		expect(
@@ -240,6 +405,46 @@ describe("SkillHubVersionScreen", () => {
 		expect(
 			screen.getByText("固定版本已加入我的库，尚未绑定到 Agent"),
 		).toBeTruthy();
+		// 成功后立即显示「已在我的库」并请求回读详情。
+		const summary = screen.getByRole("complementary", { name: "版本与权限" });
+		expect(within(summary).getByText("已在我的库")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "移出我的库" })).toBeTruthy();
+		expect(onVersionChanged).toHaveBeenCalledOnce();
+	});
+
+	it("shows a server-read installation and removes it with one reused key, then re-reads", async () => {
+		const uninstall = vi
+			.fn<SkillHubVersionActions["uninstall"]>()
+			.mockRejectedValueOnce(requestError(503))
+			.mockResolvedValueOnce(removed());
+		const onVersionChanged = vi.fn();
+		await renderDetail({
+			act: actions({ uninstall }),
+			onVersionChanged,
+			version: detailOf(v2, {
+				installation: {
+					state: "installed",
+					installationId: "installation-1",
+				},
+			}),
+		});
+		const summary = screen.getByRole("complementary", { name: "版本与权限" });
+		expect(within(summary).getByText("已在我的库")).toBeTruthy();
+		expect(screen.getByRole("link", { name: "配置 Agent 绑定" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "加入我的库" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "移出我的库" }));
+		expect((await screen.findByRole("alert")).textContent).toBe(
+			"暂时无法移出我的库，请稍后重试。",
+		);
+		fireEvent.click(screen.getByRole("button", { name: "移出我的库" }));
+		const add = await screen.findByRole("button", { name: "加入我的库" });
+		await waitFor(() => expect(document.activeElement).toBe(add));
+		expect(uninstall).toHaveBeenCalledTimes(2);
+		expect(uninstall.mock.calls[0]?.[0]).toBe("installation-1");
+		expect(uninstall.mock.calls[0]?.[1]).toBe(uninstall.mock.calls[1]?.[1]);
+		expect(within(summary).getByText("尚未安装")).toBeTruthy();
+		expect(screen.getByText("已移出我的库")).toBeTruthy();
+		expect(onVersionChanged).toHaveBeenCalledOnce();
 	});
 
 	it("treats a 409 install as already in the library and keeps 403 inline without error codes", async () => {
@@ -327,6 +532,59 @@ describe("SkillHubVersionScreen", () => {
 		expect(alert.textContent).toBe("版本状态已变化，请刷新后再操作。");
 		const summary = screen.getByRole("complementary", { name: "版本与权限" });
 		expect(within(summary).getByText("已发布")).toBeTruthy();
+	});
+
+	it("shows the publisher's own unpublished versions without install or revoke", async () => {
+		const pending = SkillHubOwnedVersionV1Schema.parse({
+			...v2,
+			skillVersionId: "release-notes-v3",
+			version: "1.3.0",
+			visibility: "MARKET",
+			state: "pending_review",
+		});
+		const rejected = SkillHubOwnedVersionV1Schema.parse({
+			...pending,
+			skillVersionId: "release-notes-v4",
+			version: "1.4.0",
+			state: "rejected",
+		});
+		await renderDetail({
+			owned: true,
+			initialTab: "versions",
+			version: detailOf(v2, pending),
+			ownedVersions: { kind: "ready", versions: [v1, v2, pending, rejected] },
+		});
+		const summary = screen.getByRole("complementary", { name: "版本与权限" });
+		expect(within(summary).getByText("待审核")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "加入我的库" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "撤销此版本" })).toBeNull();
+		expect(
+			screen.getByRole("link", { name: "编辑新版本" }).getAttribute("href"),
+		).toBe("/skills/manage/new?project=release-notes");
+		// 版本列表合并本人目录：本人的待审核、已驳回版本与已发布版本按版本号排列。
+		const lines = [...document.querySelectorAll(".version-line")];
+		expect(
+			lines.map((line) => [
+				line.querySelector("strong")?.textContent,
+				line.querySelector('[data-slot="badge"]')?.textContent,
+			]),
+		).toEqual([
+			["v1.4.0", "已驳回"],
+			["v1.3.0", "待审核"],
+			["v1.2.0", "已发布"],
+			["v1.0.0", "已发布"],
+		]);
+		expect(
+			within(lines[1] as HTMLElement)
+				.getByRole("button", { name: "正在查看" })
+				.hasAttribute("disabled"),
+		).toBe(true);
+		cleanup();
+
+		// 非创建者（理论上读不到）也不显示编辑入口。
+		await renderDetail({ version: detailOf(v2, pending) });
+		expect(screen.queryByRole("link", { name: "编辑新版本" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "加入我的库" })).toBeNull();
 	});
 
 	it("uses the page loading state and only retries retryable read failures", async () => {

@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Plus, Settings } from "lucide-react";
+import { ArrowLeft, PenLine, Plus, Settings } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -8,9 +8,17 @@ import { LoadingLine, Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/toast";
 import { withObjectName } from "@/lib/accessible-name";
+import type { SkillHubVersionDetailV1 } from "../../pilot/generated-v2/types.gen.js";
+import { formatBytes } from "../conversation/conversation-files.js";
+import {
+	DirectoryNameText,
+	DirectoryReadAlert,
+	useDirectoryNames,
+} from "../directory-names.js";
 import { PageLoadingState } from "../page-loading-state.js";
 import type {
 	SkillHubDirectoryState,
+	SkillHubOwnedVersionsState,
 	SkillHubVersionState as SkillHubVersionReadState,
 } from "./skill-hub.js";
 import {
@@ -22,6 +30,7 @@ import {
 import type {
 	installSkillHubVersion,
 	revokeSkillHubVersion,
+	uninstallSkillHubInstallation,
 } from "./skill-hub-management.js";
 import { SkillHubStateChip } from "./skill-hub-scope-pill.js";
 import { SkillHubReadFailure } from "./skill-hub-screen.js";
@@ -33,6 +42,10 @@ export type SkillHubVersionActions = {
 		skillVersionId: string,
 		idempotencyKey: string,
 	) => ReturnType<typeof installSkillHubVersion>;
+	uninstall: (
+		installationId: string,
+		idempotencyKey: string,
+	) => ReturnType<typeof uninstallSkillHubInstallation>;
 	revoke: (
 		skillVersionId: string,
 		idempotencyKey: string,
@@ -40,6 +53,10 @@ export type SkillHubVersionActions = {
 };
 
 type RequestFailure = { status?: number; retryable?: boolean };
+/** 页面上的「我的库」状态；409 后尚未回读到安装记录 ID 时 installationId 为空。 */
+type LibraryState =
+	| { state: "installed"; installationId?: string }
+	| { state: "not_installed" };
 
 function requestFailure(error: unknown): RequestFailure {
 	return error && typeof error === "object" ? (error as RequestFailure) : {};
@@ -55,6 +72,16 @@ function installFailureMessage(error: unknown) {
 	return "加入我的库失败，请稍后重试。";
 }
 
+function uninstallFailureMessage(error: unknown) {
+	const { status, retryable } = requestFailure(error);
+	if (status === 401) return "登录状态已失效，请重新登录后再试。";
+	if (status === 403) return "当前账号不能把这个版本移出我的库。";
+	if (status === 404 || status === 409)
+		return "我的库状态已变化，请刷新后再操作。";
+	if (status === 503 || retryable) return "暂时无法移出我的库，请稍后重试。";
+	return "移出我的库失败，请稍后重试。";
+}
+
 function revokeFailureMessage(error: unknown) {
 	const { status, retryable } = requestFailure(error);
 	if (status === 401) return "登录状态已失效，请重新登录后再试。";
@@ -64,13 +91,30 @@ function revokeFailureMessage(error: unknown) {
 	return "撤销版本失败，请稍后重试。";
 }
 
+const resourceKindLabels = {
+	script: "脚本",
+	reference: "参考资料",
+	asset: "资源文件",
+	file: "其他文件",
+} satisfies Record<
+	Extract<
+		SkillHubVersionDetailV1["content"],
+		{ state: "available" }
+	>["resources"][number]["kind"],
+	string
+>;
+
 type SkillHubVersionScreenProps = {
 	state: SkillHubVersionReadState | { kind: "loading" };
 	onRetry?: () => void;
 	retrying?: boolean;
 	/** 同一目录查询：版本列表取同一 skillId 的已发布版本。 */
 	catalog: SkillHubDirectoryState | { kind: "loading" };
+	/** 本人的全部版本：版本列表据此补上本人审核中、已驳回、已撤销的版本。 */
+	ownedVersions?: SkillHubOwnedVersionsState | { kind: "loading" };
 	onCatalogChanged?: () => void;
+	/** 安装或移出后回读版本详情，「我的库」以服务端结果为准。 */
+	onVersionChanged?: () => void;
 	tab: SkillDetailTab;
 	onTabChange: (tab: SkillDetailTab) => void;
 	/** 当前用户的 Skill 项目包含该 skillId 时才是创建者，可以撤销。 */
@@ -136,31 +180,49 @@ function BackToHub() {
 function ReadyVersion({
 	version,
 	catalog,
+	ownedVersions,
 	onCatalogChanged,
+	onVersionChanged,
 	tab,
 	onTabChange,
 	owned,
 	actions,
 }: SkillHubVersionScreenProps & {
-	version: Extract<SkillHubVersionReadState, { kind: "ready" }>["version"];
+	version: SkillHubVersionDetailV1;
 }) {
 	const id = useId();
 	const toast = useToast();
 	const heading = useRef<HTMLHeadingElement>(null);
 	const configureLink = useRef<HTMLAnchorElement>(null);
+	const addButton = useRef<HTMLButtonElement>(null);
 	const keys = useRef(new Map<string, string>());
-	const [state, setState] = useState<SkillHubVersionState>(version.state);
-	const [install, setInstall] = useState<"idle" | "pending" | "installed">(
-		"idle",
-	);
-	const [installError, setInstallError] = useState<string>();
+	const publisher = useDirectoryNames("user", [version.ownerId]);
+	const [revoked, setRevoked] = useState(false);
+	const state: SkillHubVersionState = revoked ? "revoked" : version.state;
+	// 写操作成功后先显示新状态；服务端回读到不同的安装记录时以回读为准。
+	const serverLibrary = version.installation;
+	const serverKey =
+		serverLibrary.state === "installed" ? serverLibrary.installationId : "";
+	const [local, setLocal] = useState<{
+		basedOn: string;
+		value: LibraryState;
+	}>();
+	const library: LibraryState =
+		local && local.basedOn === serverKey ? local.value : serverLibrary;
+	const [installing, setInstalling] = useState(false);
+	const [removing, setRemoving] = useState(false);
+	const [libraryError, setLibraryError] = useState<string>();
 	const [revoking, setRevoking] = useState(false);
 	const [revokeError, setRevokeError] = useState<string>();
-	const [focusTarget, setFocusTarget] = useState<"configure" | "heading">();
+	const [focusTarget, setFocusTarget] = useState<
+		"add" | "configure" | "heading"
+	>();
 	const published = state === "published";
+	const installed = library.state === "installed";
 
 	useEffect(() => {
 		if (focusTarget === "configure") configureLink.current?.focus();
+		if (focusTarget === "add") addButton.current?.focus();
 		if (focusTarget === "heading") heading.current?.focus();
 		if (focusTarget) setFocusTarget(undefined);
 	}, [focusTarget]);
@@ -175,25 +237,61 @@ function ReadyVersion({
 	}
 
 	async function addToLibrary() {
-		if (install !== "idle" || !published) return;
-		setInstall("pending");
-		setInstallError(undefined);
+		if (installing || installed || !published) return;
+		setInstalling(true);
+		setLibraryError(undefined);
 		try {
-			await actions.install(version.skillVersionId, keyFor("install"));
+			const result = await actions.install(
+				version.skillVersionId,
+				keyFor("install"),
+			);
 			keys.current.delete("install");
-			setInstall("installed");
+			setLocal({
+				basedOn: serverKey,
+				value: {
+					state: "installed",
+					installationId: result.installation.installationId,
+				},
+			});
 			toast("固定版本已加入我的库，尚未绑定到 Agent");
 			setFocusTarget("configure");
+			onVersionChanged?.();
 		} catch (error) {
 			if (requestFailure(error).status === 409) {
 				keys.current.delete("install");
-				setInstall("installed");
+				setLocal({ basedOn: serverKey, value: { state: "installed" } });
 				toast("这个版本已在我的库中");
 				setFocusTarget("configure");
+				onVersionChanged?.();
 				return;
 			}
-			setInstall("idle");
-			setInstallError(installFailureMessage(error));
+			setLibraryError(installFailureMessage(error));
+		} finally {
+			setInstalling(false);
+		}
+	}
+
+	async function removeFromLibrary() {
+		if (
+			removing ||
+			library.state !== "installed" ||
+			library.installationId === undefined
+		)
+			return;
+		const operation = `uninstall:${library.installationId}`;
+		setRemoving(true);
+		setLibraryError(undefined);
+		try {
+			await actions.uninstall(library.installationId, keyFor(operation));
+			keys.current.delete(operation);
+			setLocal({ basedOn: serverKey, value: { state: "not_installed" } });
+			toast("已移出我的库");
+			setFocusTarget(published ? "add" : "heading");
+			onVersionChanged?.();
+		} catch (error) {
+			setLibraryError(uninstallFailureMessage(error));
+		} finally {
+			setRemoving(false);
 		}
 	}
 
@@ -207,7 +305,7 @@ function ReadyVersion({
 				keyFor("revoke"),
 			);
 			keys.current.delete("revoke");
-			setState(result.version.state);
+			setRevoked(result.version.state === "revoked");
 			toast("版本已撤销，新的调用已被阻止");
 			setFocusTarget("heading");
 			onCatalogChanged?.();
@@ -218,14 +316,20 @@ function ReadyVersion({
 		}
 	}
 
+	// 已发布目录只含已发布版本；本人还能看到自己其他状态的版本。同一版本以本人目录为准。
 	const siblings =
 		catalog.kind === "ready"
 			? versionsOfSkill(
 					[
-						...catalog.versions.filter(
-							(item) => item.skillVersionId !== version.skillVersionId,
-						),
-						{ ...version, state },
+						...new Map(
+							[
+								...catalog.versions,
+								...(ownedVersions?.kind === "ready"
+									? ownedVersions.versions
+									: []),
+								{ ...version, state },
+							].map((item) => [item.skillVersionId, item]),
+						).values(),
 					],
 					version.skillId,
 				)
@@ -241,9 +345,9 @@ function ReadyVersion({
 						{version.name}
 					</h1>
 				</div>
-				{published ? (
+				{published || owned || installed ? (
 					<div className="skill-actions skill-primary-action">
-						{install === "installed" ? (
+						{published && installed ? (
 							<Link
 								ref={configureLink}
 								className={buttonVariants()}
@@ -253,28 +357,49 @@ function ReadyVersion({
 								<Settings aria-hidden="true" />
 								配置 Agent 绑定
 							</Link>
-						) : (
+						) : published ? (
 							<Button
+								ref={addButton}
 								type="button"
-								disabled={install === "pending"}
+								disabled={installing}
 								onClick={() => void addToLibrary()}
 							>
-								{install === "pending" ? (
+								{installing ? (
 									<Spinner size="sm" />
 								) : (
 									<Plus aria-hidden="true" />
 								)}
-								{install === "pending" ? "正在校验包…" : "加入我的库"}
+								{installing ? "正在校验包…" : "加入我的库"}
 							</Button>
-						)}
-						{installError ? (
+						) : owned ? (
+							<Link
+								className={buttonVariants({ variant: "outline" })}
+								to="/skills/manage/new"
+								search={{ project: version.skillId }}
+							>
+								<PenLine aria-hidden="true" />
+								编辑新版本
+							</Link>
+						) : null}
+						{installed && library.installationId !== undefined ? (
+							<Button
+								type="button"
+								variant="ghost"
+								disabled={removing}
+								onClick={() => void removeFromLibrary()}
+							>
+								{removing ? "正在移出…" : "移出我的库"}
+							</Button>
+						) : null}
+						{libraryError ? (
 							<Alert tone="danger" role="alert" className="skill-action-error">
-								<AlertDescription>{installError}</AlertDescription>
+								<AlertDescription>{libraryError}</AlertDescription>
 							</Alert>
 						) : null}
 					</div>
 				) : null}
 			</header>
+			<DirectoryReadAlert names={[publisher]} className="mb-4" />
 
 			<Tabs
 				value={tab}
@@ -298,6 +423,7 @@ function ReadyVersion({
 									<li>正文和配套资源在发起调用后按需加载。</li>
 								</ul>
 							</section>
+							<SkillContent id={id} content={version.content} />
 						</TabsContent>
 						<TabsContent value="versions">
 							<section
@@ -359,10 +485,25 @@ function ReadyVersion({
 							<dd>
 								<SkillHubStateChip state={state} />
 							</dd>
+							<dt>发布者</dt>
+							<dd>
+								<DirectoryNameText
+									name={publisher.resolve(version.ownerId)}
+									status={publisher.status}
+								/>
+							</dd>
 							<dt>来源</dt>
 							<dd>{skillHubProviderLabels[version.provider]}</dd>
 							<dt>可见范围</dt>
 							<dd>{skillHubVisibilityLabels[version.visibility]}</dd>
+							<dt>我的库</dt>
+							<dd>
+								{installing
+									? "正在校验包…"
+									: installed
+										? "已在我的库"
+										: "尚未安装"}
+							</dd>
 							<dt>脚本</dt>
 							<dd>禁用</dd>
 							<dt>网络权限</dt>
@@ -397,5 +538,66 @@ function ReadyVersion({
 				</div>
 			</Tabs>
 		</section>
+	);
+}
+
+/** SKILL.md 只作为纯文本显示，不解析 Markdown 或 HTML；资源只列清单。 */
+function SkillBody({ body }: { body: string }) {
+	return (
+		// biome-ignore lint/a11y/noNoninteractiveTabindex: 可滚动的正文需要键盘可达。
+		<section className="skill-code" tabIndex={0} aria-label="SKILL.md 正文">
+			<pre>{body}</pre>
+		</section>
+	);
+}
+
+function SkillContent({
+	id,
+	content,
+}: {
+	id: string;
+	content: SkillHubVersionDetailV1["content"];
+}) {
+	if (content.state === "unavailable")
+		return (
+			<section className="skill-section" aria-labelledby={`${id}-body`}>
+				<h2 id={`${id}-body`}>Skill 正文</h2>
+				<p>正文与配套资源暂时无法读取，版本信息不受影响。</p>
+			</section>
+		);
+	return (
+		<>
+			<section className="skill-section" aria-labelledby={`${id}-body`}>
+				<h2 id={`${id}-body`}>Skill 正文</h2>
+				{content.body ? (
+					<SkillBody body={content.body} />
+				) : (
+					<p>SKILL.md 没有正文。</p>
+				)}
+				{content.bodyTruncated ? (
+					<p>正文较长，这里只显示开头部分；调用时会按需加载完整内容。</p>
+				) : null}
+			</section>
+			<section className="skill-section" aria-labelledby={`${id}-resources`}>
+				<h2 id={`${id}-resources`}>配套资源</h2>
+				{content.resources.length ? (
+					<ul className="skill-resources">
+						{content.resources.map((resource) => (
+							<li key={resource.path}>
+								<span className="quiet-pill skill-resource-path">
+									{resource.path}
+								</span>
+								<span className="skill-resource-meta">
+									{resourceKindLabels[resource.kind]} ·{" "}
+									{formatBytes(resource.sizeBytes)}
+								</span>
+							</li>
+						))}
+					</ul>
+				) : (
+					<p>这个版本没有配套资源。</p>
+				)}
+			</section>
+		</>
 	);
 }

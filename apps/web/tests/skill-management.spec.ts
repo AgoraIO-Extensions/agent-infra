@@ -53,7 +53,8 @@ async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 					},
 				},
 			});
-		if (path === "/api/v2/skills")
+		if (path === "/api/v2/skills" || path === "/api/v2/skills/owned-versions")
+			// 我的 Skill 改读本人版本目录（K-02）；fixture 中两者都只有这个本人已发布版本。
 			return route.fulfill({
 				json: SkillHubDirectoryPageV1Schema.parse({
 					items: [
