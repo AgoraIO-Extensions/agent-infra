@@ -60,6 +60,7 @@ import {
 	assemblePlatformFilesV1,
 	type PlatformFileDeploymentV1,
 } from "./file-assembly.js";
+import type { AgentDefaultRelayKeyRoutesDependencies } from "./http/agent-default-relay-key-routes.js";
 import { createApplicationCredentialProcessDeliveryV1 } from "./http/application-api-credential-routes.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import type {
@@ -163,6 +164,7 @@ export interface PlatformApiAssemblyInput {
 		keyValue: string,
 	) => Promise<"valid" | "invalid" | "unavailable">;
 	readonly enforceDefaultRelayKey?: boolean;
+	readonly readModelDisplayNames?: AgentDefaultRelayKeyRoutesDependencies["readModelDisplayNames"];
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly connectionCapability?: ConnectionCapabilityV1;
@@ -914,6 +916,9 @@ export function assemblePlatformApi(
 					agentDefaultRelayKeys: {
 						identity: input.identity,
 						keys: agentDefaultRelayKeys,
+						...(input.readModelDisplayNames
+							? { readModelDisplayNames: input.readModelDisplayNames }
+							: {}),
 						...(savedKeyCandidatesTransport
 							? { savedCandidates: savedKeyCandidatesTransport }
 							: {}),

@@ -1,3 +1,4 @@
+import { ModelOptionProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
 
@@ -51,6 +52,64 @@ const management = {
 	availability: [],
 	failureCode: null,
 };
+
+it("resolves names from the authorized endpoint association and keeps the old public fields exact", async () => {
+	const request = new Request("https://platform.test/agents/agent_01");
+	const model = {
+		optionId: "opaque-choice",
+		endpointId: "endpoint-a",
+		modelId: "model-a",
+		reasoningLevels: ["medium"],
+	};
+	const lookup = vi.fn(() => "部署模型甲");
+	const present = createDeploymentPresentation({
+		identityScope: {
+			currentRequest: () => request,
+			currentIdentity: async () => identity,
+			requestIdentity: async () => identity,
+		} as never,
+		configurationQuery: {
+			readRuntimePresentation: async () => ({
+				outcome: "found",
+				sourceReference: "controlled-source",
+				capabilities: null,
+				interactionUrl: null,
+			}),
+		},
+		readModelDisplayNames: async () => lookup,
+		resourceProfile: {
+			profileId: "small",
+			displayName: "Small",
+			estimatedResources: { cpuMillicores: 100, memoryMiB: 128, storageGiB: 1 },
+		},
+		imageRepository: "registry.example.test/agents",
+	});
+	const result = await present({
+		agentId: "agent_01",
+		configuration: {
+			...configuration,
+			source: {
+				kind: "standard",
+				templateId: "codex",
+				connectionEnabled: false,
+			},
+			modelOptions: [model],
+		},
+		management,
+	});
+	expect(lookup).toHaveBeenCalledWith(model);
+	expect(result.modelOptions).toEqual([
+		{
+			optionId: "opaque-choice",
+			modelId: "model-a",
+			displayName: "部署模型甲",
+			reasoningLevels: ["medium"],
+		},
+	]);
+	expect(ModelOptionProjectionV1Schema.parse(result.modelOptions[0])).toEqual(
+		result.modelOptions[0],
+	);
+});
 
 /** 以持久化的多服务清单调用展示函数；单 Agent 档位刻意设为 profile_01 以区分多服务默认档位。 */
 function presentMultiServiceManifest(manifest: string) {

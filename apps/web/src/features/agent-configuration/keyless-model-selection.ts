@@ -6,6 +6,7 @@
 export type KeylessModelCandidate = {
 	readonly endpointId: string;
 	readonly modelId: string;
+	readonly displayName?: string;
 	readonly reasoningLevels: readonly string[];
 };
 
@@ -53,7 +54,7 @@ export function candidateKey(candidate: KeylessModelCandidate) {
 export type KeylessEndpointNames = Readonly<Record<string, string>>;
 
 /**
- * 候选模型的可读名称（RK2-01）：端点用部署目录显示名，模型在契约补显示名前沿用模型名；
+ * 候选模型的可读名称（RK2-01）：使用服务端部署显示名，旧数据缺名时沿用真实模型 ID；
  * 原始端点 ID 不进入页面。目录里找不到端点时只显示模型名，同名时加序号区分。
  */
 export function keylessCandidateLabels(
@@ -62,7 +63,10 @@ export function keylessCandidateLabels(
 ): ReadonlyMap<string, string> {
 	const base = candidates.map((candidate) => {
 		const endpoint = endpointNames[candidate.endpointId];
-		return endpoint ? `${endpoint} · ${candidate.modelId}` : candidate.modelId;
+		const label = candidate.displayName ?? candidate.modelId;
+		return endpoint && endpoint !== candidate.endpointId
+			? `${endpoint} · ${label}`
+			: label;
 	});
 	const seen = new Map<string, number>();
 	return new Map(
@@ -87,17 +91,20 @@ export function currentOptionLabel(
 	option: KeylessCurrentModelOption,
 	endpointNames: KeylessEndpointNames = {},
 ) {
+	const label = option.displayName ?? option.modelId;
 	const separator = option.optionId.indexOf(":");
 	if (separator > 0) {
 		try {
-			const endpoint =
-				endpointNames[decodeURIComponent(option.optionId.slice(0, separator))];
-			if (endpoint) return `${endpoint} · ${option.modelId}`;
+			const endpointId = decodeURIComponent(
+				option.optionId.slice(0, separator),
+			);
+			const endpoint = endpointNames[endpointId];
+			if (endpoint && endpoint !== endpointId) return `${endpoint} · ${label}`;
 		} catch {
 			// 编码不合法时按显示名展示。
 		}
 	}
-	return option.displayName ?? option.modelId;
+	return label;
 }
 
 /** 当前配置中的某个模型是否对应这个候选（与预先勾选使用同一规则）。 */

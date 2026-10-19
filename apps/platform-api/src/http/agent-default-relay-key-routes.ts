@@ -1,6 +1,8 @@
 import {
 	AgentDefaultRelayKeyCandidatesV1Schema,
+	AgentDefaultRelayKeyDisplayCandidatesV2Schema,
 	AgentDefaultRelayKeySavedCandidatesV1Schema,
+	AgentDefaultRelayKeySavedDisplayCandidatesV2Schema,
 	AgentDefaultRelayKeyStateV1Schema,
 	AgentDefaultRelayKeyCandidatesRequestV1Schema as candidates,
 	AgentDefaultRelayKeyReplaceRequestV1Schema as replace,
@@ -10,6 +12,7 @@ import {
 	RuntimeSavedKeyCandidatesRequestV1Schema,
 	RuntimeSavedKeyCandidatesResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
+import type { ModelDisplayNameLookupV1 } from "@agent-infra/model-catalog";
 import type { createAgentDefaultRelayKeyUseCaseV1 } from "@agent-infra/platform-core";
 import { AgentDefaultRelayKeyErrorV1 } from "@agent-infra/platform-core";
 import type { Context, Hono } from "hono";
@@ -19,6 +22,9 @@ import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 export interface AgentDefaultRelayKeyRoutesDependencies {
 	readonly identity: IdentityAdapter;
 	readonly keys: ReturnType<typeof createAgentDefaultRelayKeyUseCaseV1>;
+	readonly readModelDisplayNames?: (
+		signal: AbortSignal,
+	) => Promise<ModelDisplayNameLookupV1>;
 	readonly savedCandidates?: {
 		read(
 			request: RuntimeSavedKeyCandidatesRequestV1,
@@ -30,9 +36,31 @@ export function registerAgentDefaultRelayKeyRoutes(
 	app: Hono,
 	dependencies: AgentDefaultRelayKeyRoutesDependencies,
 ) {
+	async function displayProjection(
+		projection:
+			| ReturnType<typeof AgentDefaultRelayKeyCandidatesV1Schema.parse>
+			| ReturnType<typeof AgentDefaultRelayKeySavedCandidatesV1Schema.parse>,
+		signal: AbortSignal,
+	) {
+		const name = dependencies.readModelDisplayNames
+			? await dependencies.readModelDisplayNames(signal)
+			: ({ modelId }: { modelId: string }) => modelId;
+		return {
+			schemaVersion: 2,
+			configurationRevision: projection.configurationRevision,
+			...("keyVersion" in projection
+				? { keyVersion: projection.keyVersion }
+				: {}),
+			candidates: projection.candidates.map((candidate) => ({
+				...candidate,
+				displayName: name(candidate),
+			})),
+		};
+	}
 	async function handle(
 		context: Context,
 		operation: "read" | "replace" | "candidates" | "read-saved-candidates",
+		display = false,
 	) {
 		const request = context.req.raw;
 		const metadata = requestMetadata(request);
@@ -97,13 +125,18 @@ export function registerAgentDefaultRelayKeyRoutes(
 						response.keyVersion !== state.keyVersion
 					)
 						throw new Error("SAVED_RELAY_KEY_BINDING_INVALID");
+					const projection = AgentDefaultRelayKeySavedCandidatesV1Schema.parse({
+						schemaVersion: response.schemaVersion,
+						configurationRevision: response.configurationRevision,
+						keyVersion: response.keyVersion,
+						candidates: response.candidates,
+					});
 					return context.json(
-						AgentDefaultRelayKeySavedCandidatesV1Schema.parse({
-							schemaVersion: response.schemaVersion,
-							configurationRevision: response.configurationRevision,
-							keyVersion: response.keyVersion,
-							candidates: response.candidates,
-						}),
+						display
+							? AgentDefaultRelayKeySavedDisplayCandidatesV2Schema.parse(
+									await displayProjection(projection, request.signal),
+								)
+							: projection,
 					);
 				} finally {
 					controller.abort();
@@ -115,6 +148,15 @@ export function registerAgentDefaultRelayKeyRoutes(
 				metadata.traceId,
 			);
 			const result = await dependencies.keys[operation](trusted, value);
+			if (display && operation === "candidates")
+				return context.json(
+					AgentDefaultRelayKeyDisplayCandidatesV2Schema.parse(
+						await displayProjection(
+							AgentDefaultRelayKeyCandidatesV1Schema.parse(result),
+							request.signal,
+						),
+					),
+				);
 			return context.json(
 				(operation === "replace"
 					? AgentDefaultRelayKeyStateV1Schema
@@ -151,5 +193,12 @@ export function registerAgentDefaultRelayKeyRoutes(
 	);
 	app.post("/api/v2/agents/:agentId/default-relay-key/candidates", (c) =>
 		handle(c, "candidates"),
+	);
+	app.get("/api/v2/agents/:agentId/default-relay-key/display-candidates", (c) =>
+		handle(c, "read-saved-candidates", true),
+	);
+	app.post(
+		"/api/v2/agents/:agentId/default-relay-key/display-candidates",
+		(c) => handle(c, "candidates", true),
 	);
 }
