@@ -285,6 +285,7 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 				(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, occurred_at, details)
 				values (${`unregistered-${index}`}, 'trace-unregistered', 'user', 'same-id', ${action}, 'agent', 'agent-a',
 					'succeeded', 'request-unregistered', 'agent-a', clock_timestamp() + interval '1 minute', ${sql.json({ schemaVersion: 1 })})`;
+		const pages: Record<string, { status: number; actions: string[] }> = {};
 		for (const path of [
 			"/api/v1/admin/audit",
 			"/api/v2/admin/audit",
@@ -293,15 +294,26 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 			const response = await fetch(`${origin}${path}?limit=2`, {
 				headers: { Cookie: "session=administrator" },
 			});
-			expect(response.status, path).toBe(200);
-			const page = (await response.json()) as {
-				items: Array<{ action: string }>;
+			const page =
+				response.status === 200
+					? ((await response.json()) as { items: Array<{ action: string }> })
+					: { items: [] };
+			pages[path] = {
+				status: response.status,
+				actions: page.items.map((item) => item.action),
 			};
-			// 未登记的行在 SQL 里就被排除，所以这一页仍然是 2 条已登记的事件。
-			expect(page.items, path).toHaveLength(2);
-			for (const item of page.items)
-				expect(unregistered, path).not.toContain(item.action);
 		}
+		// 三个版本一起断言，失败时能同时看到每个版本的状态。
+		for (const [path, page] of Object.entries(pages)) {
+			expect(page.status, path).toBe(200);
+			// 未登记的行在 SQL 里就被排除，所以这一页仍然是 2 条已登记的事件。
+			expect(page.actions, path).toHaveLength(2);
+			for (const action of page.actions)
+				expect(unregistered, path).not.toContain(action);
+		}
+		expect(Object.values(pages).map((page) => page.status)).toEqual([
+			200, 200, 200,
+		]);
 	});
 
 	it("an application Token reads only its explicitly authorized Agent lifecycle state", async () => {
