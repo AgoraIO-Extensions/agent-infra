@@ -17,7 +17,6 @@ import {
 	type RuntimeRestoreExecutionKeyRequestV4,
 	RuntimeRestoreExecutionKeyRequestV4Schema,
 	RuntimeSubmitTurnRequestV4Schema,
-	type RuntimeSubmitTurnTransportV4,
 	runtimeEventRequestDigestV4,
 	runtimeRequestSigningPayloadV4,
 	runtimeRestoreExecutionKeyRequestDigestV4,
@@ -253,17 +252,25 @@ function retainedKeys(host: RuntimeHost) {
 }
 
 async function event(
-	request: RuntimeSubmitTurnTransportV4["businessRequest"],
+	request: RuntimeBusinessRequestV4,
 	hostSessionRef: string,
 	cursor?: string,
 	afterCursor: string | null = null,
 ) {
-	const {
-		input: _input,
-		selection: _selection,
-		grant: _grant,
-		...base
-	} = request;
+	const base = {
+		schemaVersion: request.schemaVersion,
+		traceId: request.traceId,
+		principal: request.principal,
+		channelId: request.channelId,
+		agentId: request.agentId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		operation: request.operation,
+		executionSource: request.executionSource,
+		keyBinding: request.keyBinding,
+	};
 	const value = {
 		...base,
 		requestId: cursor ? "ack-1" : "read-1",
@@ -379,10 +386,58 @@ it("executes an admitted V4 native command through the Driver seam without text"
 	const result = await f.host.nativeCapabilityV4(delivery(request));
 	expect(result.result).toEqual({ outcome: "accepted", status: "completed" });
 	expect(await f.driver.sideEffectCount()).toBe(2);
+	const read = await event(request, result.hostSessionRef);
+	const replay = await f.host.readEventsV4(
+		RuntimeEventReadRequestV4Schema.parse(read.request),
+		read.verification,
+	);
+	expect(replay.events.length).toBeGreaterThan(0);
+	const cursor = replay.events.at(-1)?.cursor;
+	if (!cursor) throw new Error("Expected native command terminal event");
+	const ack = await event(request, result.hostSessionRef, cursor);
+	const active = await f.reopen();
+	await expect(
+		active.acknowledgeEventsV4(
+			RuntimeEventAckRequestV4Schema.parse(ack.request),
+			ack.verification,
+		),
+	).resolves.toMatchObject({ confirmedCursor: cursor });
+	expect(await f.driver.sideEffectCount()).toBe(2);
+	const beforeDeniedAck = await readFile(f.path, "utf8");
+	const foreign = await event(request, result.hostSessionRef, "fake-cursor-1");
+	await expect(
+		active.acknowledgeEventsV4(
+			RuntimeEventAckRequestV4Schema.parse(foreign.request),
+			foreign.verification,
+		),
+	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+	expect(await readFile(f.path, "utf8")).toBe(beforeDeniedAck);
+	const foreignRequests: RuntimeBusinessRequestV4[] = [
+		{ ...request, agentId: "foreign-agent" },
+		{
+			...request,
+			principal: { kind: "user", id: "foreign-user" },
+			keyBinding: {
+				...request.keyBinding,
+				subjectId: "foreign-user",
+				ciphertextRef: "foreign-key",
+			},
+		},
+	];
+	for (const foreignRequest of foreignRequests) {
+		const read = await event(foreignRequest, result.hostSessionRef);
+		await expect(
+			active.readEventsV4(
+				RuntimeEventReadRequestV4Schema.parse(read.request),
+				read.verification,
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		expect(await readFile(f.path, "utf8")).toBe(beforeDeniedAck);
+	}
 	const bytes = await readFile(f.path, "utf8");
 	f.expire();
 	await expect(
-		f.host.resolveNativeMetadataSessionRef(
+		active.resolveNativeMetadataSessionRef(
 			{
 				schemaVersion: 1,
 				principal: request.principal,
