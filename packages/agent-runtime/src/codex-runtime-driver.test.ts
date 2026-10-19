@@ -29,6 +29,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import nativeBarrierManifest from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
 	type: "json",
 };
+import { projectPlatformOperationAuditV1 } from "../../platform-core/src/audit-query.js";
 import {
 	type BrowserHandoffRuntimeSnapshotV1,
 	createBrowserHandoffControllerV1,
@@ -5481,6 +5482,89 @@ describe("Codex Runtime Driver", () => {
 		expect(
 			await driver.getStatus(submitted.nativeSessionRef, "execution-codex"),
 		).toBe("failed");
+	});
+
+	it("keeps unconfirmed model results readable without claiming terminal timing", async () => {
+		const directory = await runtimeDirectory();
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end("data: malformed\n\n");
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const command = submitCommandV2();
+		const accepted = await driver.execute(command);
+		if (!loopback) throw new Error("missing loopback access");
+		const response = await modelRequest(loopback, bridge);
+		await response.text();
+		const facts = (
+			await driver.replayEvents(accepted.nativeSessionRef, command.executionId)
+		).flatMap((event) => (event.type === "operation" ? [event.payload] : []));
+		expect(facts.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"unknown",
+		]);
+		expect(new Set(facts.map((fact) => fact.operationRef)).size).toBe(1);
+		expect(new Set(facts.map((fact) => fact.attemptRef)).size).toBe(1);
+		const fact = facts.at(-1);
+		expect(fact).toMatchObject({
+			kind: "model",
+			phase: "unknown",
+			failureCode: "response_incomplete",
+			startedAt: expect.any(String),
+		});
+		const principal = { kind: "user" as const, id: "principal-a" };
+		const projected = projectPlatformOperationAuditV1(
+			{
+				schemaVersion: 2,
+				eventId: "event-model-unknown",
+				authorizationRecordId: "authorization-a",
+				executor: "platform_worker",
+				fact,
+			},
+			{
+				executionId: command.executionId,
+				agentId: command.agentId,
+				actorId: principal.id,
+				channelId: "web",
+				authorizationRecordId: "authorization-a",
+				acceptedActor: principal,
+				acceptedExecutionId: command.executionId,
+				acceptedAgentId: command.agentId,
+				acceptedAuthorizationRecordId: "authorization-a",
+				boundary: {
+					schemaVersion: 1,
+					principal,
+					agentId: command.agentId,
+					channelId: "web",
+					identityRevision: "directory-1",
+					agentAuthorizationRevision: "agent-access-1",
+					accessSources: [{ kind: "user", userId: principal.id }],
+				},
+			},
+			{ kind: "administrator", administratorId: "admin-a" },
+		);
+		expect(projected.fact).toEqual(fact);
+		expect(fact).not.toHaveProperty("finishedAt");
+		expect(fact).not.toHaveProperty("durationMs");
+		const repeated = await modelRequest(loopback, bridge);
+		expect(repeated.status).toBe(409);
+		await repeated.text();
+		expect(upstreamCalls).toBe(1);
 	});
 
 	it("keeps a start response without a recognized notification unavailable", async () => {
