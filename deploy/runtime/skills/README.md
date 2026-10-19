@@ -24,3 +24,21 @@ node tests/runtime-installed-skill-image.ts "$image_id" "$test_image_id" "$(git 
 检查读取真实镜像内容、来源标签、官方 provenance 和模式，并以镜像默认 `node` 用户在一次性可写 overlay 中尝试写入、删除、替换和换包，证明 UNIX owner/mode 拒绝操作。容器无网络和业务挂载，退出即清理。报告区分 image ID 与可用的 OCI/Registry digest，不把准备值当成实际 digest。
 
 该检查只证明安装。原生 config/set/list、完整来源准入、Skill 加载、工具效果、授权、API/Web 与四 Runtime 验收仍归后续消费者；不得用安装或目录 metadata 代签。
+
+## 固定 Codex 的只读工具往返
+
+在已经声明的 Docker context，以包含本次 Runtime 修复的不可变镜像执行：
+
+```sh
+docker --context "$docker_context" run --rm -i --network none --read-only \
+  --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 \
+  --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+  --tmpfs /var/lib/agent-runtime:rw,nosuid,nodev,uid=1000,gid=1000,mode=0700 \
+  --entrypoint node "$image_id" --input-type=module \
+  < tests/codex-workspace-read.native.mjs
+```
+
+探针使用实际安装与 Driver、新建的原生 Thread、真实文件 I/O 和 client-tool 回执。随机内容只写入
+该 Conversation 的控制文件，第一轮模型输入不含它；第二轮必须取得相同的工具结果并完成，
+Driver journal 不得保存正文或路径。模型端点和 Host 当前授权回调是受控 fixture，不读取业务
+凭据；结果不能替代真实 LDAP、Platform 权限或浏览器 Skill 验收。
