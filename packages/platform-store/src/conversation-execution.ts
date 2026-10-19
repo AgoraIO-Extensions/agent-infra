@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { RuntimeBusinessRequestV4 } from "@agent-infra/contracts/runtime";
 import {
 	bindInputFileV1,
@@ -142,6 +142,7 @@ type NativeAdmissionAuthorized = Parameters<
 function nativeAdmissionPlan(
 	value: unknown,
 	request: NativeAdmissionRequest,
+	purpose: "admission" | "replay" = "admission",
 ): NativeCapabilityInvocationPlanV1 {
 	if (typeof value !== "object" || value === null || Array.isArray(value))
 		unavailable();
@@ -196,8 +197,13 @@ function nativeAdmissionPlan(
 		candidate.executionStatus !== "submitted" ||
 		typeof candidate.executionId !== "string" ||
 		candidate.parameters !== command.parameters ||
-		candidate.parametersDigest !==
-			nativeCapabilityParametersDigestV1(command.parameters) ||
+		(candidate.parametersDigest !==
+			nativeCapabilityParametersDigestV1(command.parameters) &&
+			(purpose !== "replay" ||
+				candidate.parametersDigest !==
+					createHash("sha256")
+						.update(JSON.stringify(command.parameters))
+						.digest("hex"))) ||
 		capability?.id !== command.capabilityId ||
 		(capability?.kind !== "command" && capability?.kind !== "skill") ||
 		capability?.directoryRevision !== command.directoryRevision ||
@@ -338,7 +344,12 @@ export class PostgresConversationExecutionTransactionV1
 					};
 				if (!(await isAuthorized()))
 					return { outcome: "denied", reason: "authorization_lost" };
-				const replayed = nativeAdmissionPlan(existing.result, request);
+				// Historical results are read verbatim; old digests never enter new admission.
+				const replayed = nativeAdmissionPlan(
+					existing.result,
+					request,
+					"replay",
+				);
 				if (!nativeAdmissionAuthorityMatches(replayed, authority))
 					return { outcome: "unavailable", reason: "metadata_unavailable" };
 				return {
