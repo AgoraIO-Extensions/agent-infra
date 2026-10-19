@@ -363,7 +363,6 @@ describe("PostgreSQL Platform audit query", () => {
 		const unregistered = new Set([
 			"connection.authorization.updated",
 			"wecom.not_registered",
-			"wecom.accepted",
 		]);
 		for (const [index, fixture] of malformed.entries()) {
 			await clearDatabase();
