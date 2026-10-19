@@ -1004,6 +1004,22 @@ test("native metadata Worker gateway is disabled for topology and restricted to 
 		"app.kubernetes.io/instance": "topology",
 		"app.kubernetes.io/component": "platform-worker",
 	});
+	assert.deepEqual(apiEgress.spec.egress.slice(1), [
+		{
+			to: [
+				{
+					namespaceSelector: {
+						matchLabels: { "kubernetes.io/metadata.name": "kube-system" },
+					},
+					podSelector: { matchLabels: { "k8s-app": "kube-dns" } },
+				},
+			],
+			ports: [
+				{ protocol: "UDP", port: 53 },
+				{ protocol: "TCP", port: 53 },
+			],
+		},
+	]);
 	const external = render(
 		"--set",
 		"platformWorker.nativeMetadataGateway.enabled=true",
