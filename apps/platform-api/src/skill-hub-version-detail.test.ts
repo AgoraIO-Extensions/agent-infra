@@ -334,7 +334,7 @@ describe("Skill Hub version detail over HTTP with PostgreSQL", () => {
 			client,
 			path: { skillVersionId: "notes-v1" },
 		});
-		expect(read.response.status).toBe(200);
+		expect(read.response?.status).toBe(200);
 		const detail = SkillHubVersionDetailV1Schema.parse(read.data);
 		expect(detail).toMatchObject({
 			skillVersionId: "notes-v1",
@@ -429,7 +429,7 @@ describe("Skill Hub version detail over HTTP with PostgreSQL", () => {
 			client,
 			query: { limit: 3 },
 		});
-		expect(first.response.status).toBe(200);
+		expect(first.response?.status).toBe(200);
 		const page = SkillHubOwnedVersionPageV1Schema.parse(first.data);
 		const next = SkillHubOwnedVersionPageV1Schema.parse(
 			(
