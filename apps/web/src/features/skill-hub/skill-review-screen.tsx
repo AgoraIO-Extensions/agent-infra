@@ -12,47 +12,60 @@ import {
 	DialogTrigger,
 } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
+import { IdentifierText } from "@/components/ui/identifier-text";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Timestamp } from "@/components/ui/timestamp";
 import { useToast } from "@/components/ui/toast";
 import { withObjectName } from "@/lib/accessible-name";
 import { cjkSpaced } from "@/lib/cjk-spacing";
 import type {
-	SkillHubPublicationVersionV1,
+	SkillHubReviewQueueItemV1,
 	SkillHubReviewRequestV1,
 } from "../../pilot/generated-v2/types.gen.js";
 import {
+	type DirectoryNames,
+	DirectoryReadAlert,
+	useDirectoryNames,
+} from "../directory-names.js";
+import {
+	type SkillHubVersionState,
 	skillHubProviderLabels,
 	skillHubVisibilityLabels,
 } from "./skill-hub-labels.js";
 import type { reviewSkillHubVersion } from "./skill-hub-management.js";
 import { FieldErrorText } from "./skill-hub-management-screen.js";
 import { SkillHubStateChip } from "./skill-hub-scope-pill.js";
-import { SkillHubEmpty } from "./skill-hub-screen.js";
+import {
+	SkillHubEmpty,
+	SkillHubLoading,
+	SkillHubReadFailure,
+} from "./skill-hub-screen.js";
+import type { SkillReviewQueueReadState } from "./skill-review-queue.js";
 
 /** 与契约 SkillHubReviewRequestV1.reason 上限一致。 */
 export const skillReviewReasonMaxLength = 1024;
 const selfReviewText = "不能审核自己发布的版本";
 
-/** 待审核版本；ownerId 用于在界面上先拦住自审，服务端仍会拒绝。 */
-export type SkillReviewItem = Pick<
-	SkillHubPublicationVersionV1,
-	"skillVersionId" | "version" | "provider" | "visibility" | "state"
-> & {
-	name: string;
-	ownerId: string;
-	submitterName: string;
-};
+/** 服务端待审队列的一项；ownerId 用于隐藏自审入口，服务端仍会拒绝自审。 */
+export type SkillReviewItem = SkillHubReviewQueueItemV1;
 
 export type SkillReviewQueueState =
-	| { kind: "unavailable" }
-	| { kind: "ready"; items: SkillReviewItem[] };
+	| { kind: "loading" }
+	| SkillReviewQueueReadState;
 
 type ReviewAction = (
 	skillVersionId: string,
 	body: SkillHubReviewRequestV1,
 	idempotencyKey: string,
 ) => ReturnType<typeof reviewSkillHubVersion>;
+
+/** 行与弹窗共用的显示文字：发布者与组织名称由页面级目录读取解析。 */
+type ReviewNames = {
+	submitter: string;
+	submitterUnresolved: boolean;
+	scope: string;
+};
 
 type RequestFailure = { status?: number; code?: string; retryable?: boolean };
 
@@ -61,9 +74,35 @@ function reviewFailureMessage(error: unknown) {
 		error && typeof error === "object" ? (error as RequestFailure) : {};
 	if (code === "owner_cannot_review") return selfReviewText;
 	if (status === 403) return "当前账号不能审核这个版本。";
-	if (status === 409) return "版本状态已变化，请刷新队列后再审核。";
+	if (status === 404 || status === 409)
+		return "版本状态已变化，队列已重新读取。";
 	if (status === 503 || retryable) return "审核暂时无法提交，请稍后重试。";
 	return "审核未完成，请稍后重试。";
+}
+
+function reviewNames(
+	item: SkillReviewItem,
+	users: DirectoryNames,
+	organizations: DirectoryNames,
+): ReviewNames {
+	const submitter = users.resolve(item.ownerId);
+	const pending = !submitter.resolved && users.status === "loading";
+	const organization =
+		item.organizationId === null
+			? null
+			: organizations.resolve(item.organizationId);
+	return {
+		submitter: pending ? "读取中…" : submitter.name,
+		submitterUnresolved: !pending && !submitter.resolved,
+		scope:
+			organization === null
+				? skillHubVisibilityLabels[item.visibility]
+				: `${skillHubVisibilityLabels[item.visibility]}：${
+						!organization.resolved && organizations.status === "loading"
+							? "读取中…"
+							: organization.name
+					}`,
+	};
 }
 
 export function SkillReviewsScreen({
@@ -71,19 +110,39 @@ export function SkillReviewsScreen({
 	currentUserId,
 	queue,
 	review,
+	onRetry,
+	retrying = false,
+	onReviewed,
 }: {
 	isAdministrator: boolean;
 	currentUserId: string;
 	queue: SkillReviewQueueState;
 	review: ReviewAction;
+	onRetry?: () => void;
+	retrying?: boolean;
+	/** 审核成功或版本状态已变化后回读队列。 */
+	onReviewed?: () => void;
 }) {
 	const id = useId();
+	const items = queue.kind === "ready" ? queue.items : [];
+	const users = useDirectoryNames(
+		"user",
+		items.map((item) => item.ownerId),
+	);
+	const organizations = useDirectoryNames(
+		"organization",
+		items.flatMap((item) =>
+			item.organizationId === null ? [] : [item.organizationId],
+		),
+	);
 	return (
 		<section className="skill-page" aria-labelledby={`${id}-heading`}>
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">系统管理 / Skill 审核</p>
-					<h1 id={`${id}-heading`}>Skill 发布审核</h1>
+					<h1 id={`${id}-heading`} tabIndex={-1}>
+						Skill 发布审核
+					</h1>
 					<p>核对来源、固定版本、共享范围和权限声明。</p>
 				</div>
 			</header>
@@ -94,31 +153,41 @@ export function SkillReviewsScreen({
 					title="没有访问权限"
 					description="Skill 审核只对系统管理员开放。"
 				/>
+			) : queue.kind === "loading" ? (
+				<SkillHubLoading>正在读取待审核版本…</SkillHubLoading>
 			) : queue.kind === "unavailable" ? (
-				// 服务端还没有可读的待审队列；不提供手填版本 ID 的替代入口。
-				<SkillHubEmpty
-					role="status"
-					icon={<Shield aria-hidden="true" />}
-					title="审核队列暂不可用"
-					description="待审核版本列表尚未接入，暂时不能在这里审阅。已提交的版本保持待审核。"
+				<SkillHubReadFailure
+					retryable={queue.retryable}
+					reason={queue.reason}
+					retryTitle="暂时无法读取审核队列"
+					retryDescription="已提交的版本保持待审核，可以稍后重新读取。"
+					deniedText="当前账号没有读取审核队列的权限。"
+					unavailableText="审核队列暂时无法访问，请联系管理员。"
+					onRetry={onRetry}
+					retrying={retrying}
 				/>
-			) : queue.items.length === 0 ? (
+			) : items.length === 0 ? (
 				<SkillHubEmpty
 					icon={<Shield aria-hidden="true" />}
 					title="当前没有待审核版本"
 					description="审核结果会显示在版本详情里。"
 				/>
 			) : (
-				<div className="skill-surface">
-					{queue.items.map((item) => (
-						<SkillReviewRow
-							key={item.skillVersionId}
-							item={item}
-							self={item.ownerId === currentUserId}
-							review={review}
-						/>
-					))}
-				</div>
+				<>
+					<DirectoryReadAlert names={[users, organizations]} />
+					<div className="skill-surface">
+						{items.map((item) => (
+							<SkillReviewRow
+								key={item.skillVersionId}
+								item={item}
+								names={reviewNames(item, users, organizations)}
+								self={item.ownerId === currentUserId}
+								review={review}
+								onReviewed={onReviewed}
+							/>
+						))}
+					</div>
+				</>
 			)}
 			{isAdministrator ? (
 				<p className="skill-form-hint">
@@ -131,16 +200,19 @@ export function SkillReviewsScreen({
 
 function SkillReviewRow({
 	item,
+	names,
 	self,
 	review,
+	onReviewed,
 }: {
 	item: SkillReviewItem;
+	names: ReviewNames;
 	self: boolean;
 	review: ReviewAction;
+	onReviewed?: () => void;
 }) {
-	const hintId = useId();
-	const [state, setState] = useState(item.state);
-	const pending = state === "pending_review";
+	// 审核结果先在本行显示，队列回读后该行离开队列。
+	const [state, setState] = useState<SkillHubVersionState>(item.state);
 	return (
 		<article className="skill-row">
 			<span className="skill-mark" aria-hidden="true">
@@ -149,48 +221,55 @@ function SkillReviewRow({
 			<div className="skill-row-copy">
 				<h2>{item.name}</h2>
 				<p>
-					{cjkSpaced`${item.submitterName}申请`} ·{" "}
-					{skillHubVisibilityLabels[item.visibility]} ·{" "}
-					{skillHubProviderLabels[item.provider]}
+					{cjkSpaced`${names.submitter}申请`}
+					{names.submitterUnresolved ? (
+						<>
+							{" "}
+							<IdentifierText value={item.ownerId} label="发布者 ID" />
+						</>
+					) : null}
+					{" · "}
+					{names.scope} · {skillHubProviderLabels[item.provider]} ·{" "}
+					<Timestamp value={item.submittedAt} />
 				</p>
-				{self ? (
-					<p id={hintId} className="skill-form-hint">
-						{selfReviewText}
-					</p>
-				) : null}
+				{self ? <p className="skill-form-hint">{selfReviewText}</p> : null}
 			</div>
 			<div className="skill-row-meta">
 				<strong>v{item.version}</strong>
 				<SkillHubStateChip state={state} />
 			</div>
-			<div className="skill-actions">
-				<SkillReviewDialog
-					item={item}
-					self={self}
-					disabled={!pending}
-					describedBy={self ? hintId : undefined}
-					review={review}
-					onReviewed={setState}
-				/>
-			</div>
+			{/* 创建者看不到自己版本的审核入口（PRD §11.5）。 */}
+			{self ? null : (
+				<div className="skill-actions">
+					<SkillReviewDialog
+						item={item}
+						names={names}
+						disabled={state !== "pending_review"}
+						review={review}
+						onReviewed={(next) => {
+							if (next) setState(next);
+							onReviewed?.();
+						}}
+					/>
+				</div>
+			)}
 		</article>
 	);
 }
 
 export function SkillReviewDialog({
 	item,
-	self,
+	names,
 	disabled = false,
-	describedBy,
 	review,
 	onReviewed,
 }: {
 	item: SkillReviewItem;
-	self: boolean;
+	names: ReviewNames;
 	disabled?: boolean;
-	describedBy?: string;
 	review: ReviewAction;
-	onReviewed?: (state: SkillReviewItem["state"]) => void;
+	/** 成功时带回新状态；版本已不在待审状态时不带状态，只回读队列。 */
+	onReviewed?: (state?: SkillHubVersionState) => void;
 }) {
 	const id = useId();
 	const toast = useToast();
@@ -201,7 +280,6 @@ export function SkillReviewDialog({
 	const [busy, setBusy] = useState(false);
 	const reasonInput = useRef<HTMLTextAreaElement>(null);
 	const keys = useRef(new Map<string, { fingerprint: string; key: string }>());
-	const blocked = self || busy;
 
 	function keyFor(body: SkillHubReviewRequestV1) {
 		const fingerprint = JSON.stringify(body);
@@ -213,7 +291,7 @@ export function SkillReviewDialog({
 	}
 
 	async function submit(decision: SkillHubReviewRequestV1["decision"]) {
-		if (blocked) return;
+		if (busy) return;
 		const trimmed = reason.trim();
 		if (decision === "reject" && !trimmed) {
 			setReasonError("请填写驳回原因。");
@@ -243,6 +321,10 @@ export function SkillReviewDialog({
 			);
 		} catch (error) {
 			setFailure(reviewFailureMessage(error));
+			const { status } =
+				error && typeof error === "object" ? (error as RequestFailure) : {};
+			// 版本已被他人处理或不存在：回读队列，不在本行假定新状态。
+			if (status === 404 || status === 409) onReviewed?.();
 		} finally {
 			setBusy(false);
 		}
@@ -260,7 +342,7 @@ export function SkillReviewDialog({
 			}}
 		>
 			<DialogTrigger
-				disabled={disabled || self}
+				disabled={disabled}
 				render={
 					<Button
 						variant="outline"
@@ -269,7 +351,6 @@ export function SkillReviewDialog({
 							"审阅",
 							`${item.name} · v${item.version}`,
 						)}
-						aria-describedby={describedBy}
 					/>
 				}
 			>
@@ -286,9 +367,21 @@ export function SkillReviewDialog({
 							{item.name} · v{item.version}
 						</dd>
 						<dt>申请人</dt>
-						<dd>{item.submitterName}</dd>
+						<dd>
+							{names.submitter}
+							{names.submitterUnresolved ? (
+								<>
+									{" "}
+									<IdentifierText value={item.ownerId} label="发布者 ID" />
+								</>
+							) : null}
+						</dd>
+						<dt>提交时间</dt>
+						<dd>
+							<Timestamp value={item.submittedAt} />
+						</dd>
 						<dt>共享范围</dt>
-						<dd>{skillHubVisibilityLabels[item.visibility]}</dd>
+						<dd>{names.scope}</dd>
 						<dt>来源</dt>
 						<dd>{skillHubProviderLabels[item.provider]}</dd>
 						<dt>权限声明</dt>
@@ -302,7 +395,7 @@ export function SkillReviewDialog({
 							value={reason}
 							maxLength={skillReviewReasonMaxLength}
 							placeholder="说明未通过的原因或需要修改的内容"
-							disabled={blocked}
+							disabled={busy}
 							aria-invalid={reasonError ? "true" : undefined}
 							aria-describedby={reasonError ? `${id}-reason-error` : undefined}
 							onChange={(event) => {
@@ -316,7 +409,6 @@ export function SkillReviewDialog({
 							</FieldErrorText>
 						) : null}
 					</Field>
-					{self ? <p className="skill-form-hint">{selfReviewText}</p> : null}
 					{failure ? (
 						<Alert tone="danger" role="alert">
 							<AlertDescription>{failure}</AlertDescription>
@@ -327,14 +419,14 @@ export function SkillReviewDialog({
 					<Button
 						variant="outline"
 						type="button"
-						disabled={blocked}
+						disabled={busy}
 						onClick={() => void submit("reject")}
 					>
 						驳回
 					</Button>
 					<Button
 						type="button"
-						disabled={blocked}
+						disabled={busy}
 						onClick={() => void submit("approve")}
 					>
 						批准发布
