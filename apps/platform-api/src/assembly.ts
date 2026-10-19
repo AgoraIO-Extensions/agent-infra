@@ -1078,6 +1078,7 @@ export function assemblePlatformApi(
 		skillHubRead: skillHubRead.dependencies,
 		skillHubInstallations: skillHubRead.installationDependencies,
 		skillHubPublication: skillHubRead.publicationDependencies,
+		skillHubReview: skillHubRead.reviewDependencies,
 		skillHubAgentBindings: {
 			identity: input.identity,
 			bind: async (request) =>

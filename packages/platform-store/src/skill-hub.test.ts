@@ -537,6 +537,165 @@ describe("Skill Hub PostgreSQL lifecycle", () => {
 	);
 });
 
+describe("Skill Hub administrator review queue", () => {
+	const queued = (
+		key: string,
+		visibility: "PRIVATE" | "MEMBER" | "ORGANIZATION" | "MARKET",
+		ownerId: string,
+	) =>
+		store().registerVersion(request(ownerId), `register-${key}`, {
+			...registration(visibility),
+			name: `skill-${key}`,
+			skillId: `skill-${key}`,
+			skillVersionId: `version-${key}`,
+			packageObjectVersion: `internal-object-${key}`,
+		});
+	async function seed() {
+		// 提交顺序与版本 ID 顺序不同，用来确认队列按提交时间排列；间隔保证时间不同。
+		for (const [key, visibility, ownerId] of [
+			["b", "ORGANIZATION", "owner-b"],
+			["d", "MARKET", "admin"],
+			["a", "MEMBER", "owner-a"],
+			["c", "PRIVATE", "owner-a"],
+			["e", "MARKET", "owner-b"],
+			["f", "MARKET", "owner-a"],
+		] as const) {
+			await queued(key, visibility, ownerId);
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		}
+		await store().reviewVersion(request("admin"), "version-e", "approve-e", {
+			decision: "approve",
+		});
+		await store().reviewVersion(request("admin"), "version-f", "reject-f", {
+			decision: "reject",
+			reason: "private-review-text",
+		});
+	}
+
+	it("pages pending shared versions by submission time and drops reviewed ones", async () => {
+		await seed();
+		const adapter = store();
+		const first = await adapter.listPendingReviewVersions(request("admin"), {
+			limit: 2,
+		});
+		expect(first.versions.map((item) => item.skillVersionId)).toEqual([
+			"version-b",
+			"version-d",
+		]);
+		expect(first.nextCursor).toBe("version-d");
+		const [stored] =
+			await client`select created_at as "createdAt" from platform.skill_hub_versions where id = 'version-b'`;
+		if (!stored) throw new Error("seeded version missing");
+		expect(first.versions[0]).toMatchObject({
+			name: "skill-b",
+			ownerId: "owner-b",
+			visibility: "ORGANIZATION",
+			organizationId: "org-a",
+			state: "pending_review",
+			submittedAt: (stored.createdAt as Date).toISOString(),
+		});
+		// 管理员自己发布的版本也如实列出，审核命令仍独立拒绝自审。
+		expect(first.versions[1]).toMatchObject({
+			ownerId: "admin",
+			organizationId: null,
+		});
+		const second = await adapter.listPendingReviewVersions(request("admin"), {
+			cursor: "version-d",
+			limit: 2,
+		});
+		expect(second.versions.map((item) => item.skillVersionId)).toEqual([
+			"version-a",
+		]);
+		expect(second.nextCursor).toBeNull();
+		await adapter.reviewVersion(request("admin"), "version-b", "approve-b", {
+			decision: "approve",
+		});
+		// 游标所在版本离开队列后，后续页仍从原位置继续。
+		expect(
+			(
+				await adapter.listPendingReviewVersions(request("admin"), {
+					cursor: "version-b",
+				})
+			).versions.map((item) => item.skillVersionId),
+		).toEqual(["version-d", "version-a"]);
+		const audits =
+			await client`select action, target_id as "targetId", outcome, details from platform.audit_events where action = 'skill.review_queue.read' order by occurred_at`;
+		expect(audits).toEqual([
+			expect.objectContaining({
+				targetId: "review_queue",
+				outcome: "succeeded",
+				details: { count: 2 },
+			}),
+			expect.objectContaining({ details: { count: 1 } }),
+			expect.objectContaining({ details: { count: 2 } }),
+		]);
+		expect(JSON.stringify(audits)).not.toContain("internal-object");
+	});
+
+	it("refuses non-administrators and invalid cursors without returning queue data", async () => {
+		await seed();
+		const adapter = store();
+		for (const userId of ["owner-a", "owner-b"])
+			await expect(
+				adapter.listPendingReviewVersions(request(userId), {}),
+			).rejects.toMatchObject({ code: "forbidden" });
+		for (const query of [
+			{ cursor: "missing" },
+			{ cursor: "../version-a" },
+			{ limit: 0 },
+			{ limit: 101 },
+		])
+			await expect(
+				adapter.listPendingReviewVersions(request("admin"), query),
+			).rejects.toMatchObject({ code: "invalid_input" });
+		await client`insert into platform.platform_user_disables (user_id) values ('admin')`;
+		await expect(
+			adapter.listPendingReviewVersions(request("admin"), {}),
+		).rejects.toMatchObject({ code: "forbidden" });
+		const audits =
+			await client`select action, outcome, details from platform.audit_events where action in ('skill.review_queue.read', 'skill.version.refused') and actor_id in ('owner-a', 'owner-b', 'admin') order by occurred_at`;
+		expect(
+			audits.filter((audit) => audit.action === "skill.review_queue.read"),
+		).toEqual([]);
+		expect(
+			audits.map((audit) => (audit.details as { reason: string }).reason),
+		).toEqual([
+			"forbidden",
+			"forbidden",
+			"invalid_input",
+			"invalid_input",
+			"invalid_input",
+			"invalid_input",
+			"forbidden",
+		]);
+	});
+
+	it("rejects a rejection without a non-blank reason and keeps the version pending", async () => {
+		await seed();
+		const adapter = store();
+		const before = await counts();
+		for (const [key, input] of [
+			["reject-empty", { decision: "reject" }],
+			["reject-blank", { decision: "reject", reason: "   " }],
+			["reject-zero", { decision: "reject", reason: "" }],
+		] as const)
+			await expect(
+				adapter.reviewVersion(request("admin"), "version-a", key, input),
+			).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			adapter.reviewVersion(request("admin"), "version-d", "self-approve", {
+				decision: "approve",
+			}),
+		).rejects.toMatchObject({ code: "owner_cannot_review" });
+		expect(await counts()).toEqual(before);
+		expect(
+			(
+				await adapter.listPendingReviewVersions(request("admin"), {})
+			).versions.map((item) => item.skillVersionId),
+		).toEqual(["version-b", "version-d", "version-a"]);
+	});
+});
+
 describe("Skill Hub project management", () => {
 	it("creates, lists, reads, updates and replays owner projects", async () => {
 		const adapter = store();

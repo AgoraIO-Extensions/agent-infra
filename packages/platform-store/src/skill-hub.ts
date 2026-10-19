@@ -15,6 +15,7 @@ import {
 	parseSkillHubProjectUpdateV1,
 	parseSkillHubRegistrationV1,
 	parseSkillHubRequestV1,
+	parseSkillHubReviewQueueQueryV1,
 	parseSkillHubReviewV1,
 	parseSkillPackagePublicationSelectionV1,
 	parseSkillPackagePublicationStateV1,
@@ -41,7 +42,7 @@ import {
 	skillPackagePublicationStagesV1,
 	uninstallSkillHubInstallationV1,
 } from "@agent-infra/platform-core";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, type SQL, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
@@ -1184,6 +1185,73 @@ export class PostgresSkillHubLifecycleV1 {
 						return this.#version(transaction, id);
 					},
 				);
+			},
+		);
+	}
+
+	/**
+	 * 系统管理员读取全部待审版本（含管理员本人发布的，以便如实显示；自审仍由 reviewVersion 拒绝）。
+	 * 按提交时间与版本 ID keyset 分页，审核让条目离开队列也不会跳过后续页。
+	 */
+	async listPendingReviewVersions(
+		context: SkillHubRequestV1,
+		queryInput: { readonly cursor?: unknown; readonly limit?: unknown },
+	) {
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				requireSkillHubReviewerV1(identity.actor);
+				const query = parseSkillHubReviewQueueQueryV1(queryInput);
+				let after: SQL | undefined;
+				if (query.cursor !== undefined) {
+					const [cursor] = await transaction
+						.select({ id: skillHubVersions.id })
+						.from(skillHubVersions)
+						.where(eq(skillHubVersions.id, query.cursor));
+					if (!cursor) throw new SkillHubOperationErrorV1("invalid_input");
+					// 子查询取游标行的原始时间，避免经 JS Date 截断精度。
+					after = sql`(${skillHubVersions.createdAt}, ${skillHubVersions.id}) > (select review_cursor.created_at, review_cursor.id from ${skillHubVersions} review_cursor where review_cursor.id = ${cursor.id})`;
+				}
+				const rows = await transaction
+					.select({
+						version: skillHubVersions,
+						name: skillHubSkills.name,
+						organizationId: skillHubSkills.organizationId,
+					})
+					.from(skillHubVersions)
+					.innerJoin(
+						skillHubSkills,
+						eq(skillHubSkills.id, skillHubVersions.skillId),
+					)
+					.where(and(eq(skillHubVersions.state, "pending_review"), after))
+					.orderBy(asc(skillHubVersions.createdAt), asc(skillHubVersions.id))
+					.limit(query.limit + 1);
+				const versions = rows
+					.slice(0, query.limit)
+					.map(({ version, name, organizationId }) =>
+						Object.freeze({
+							...decode(version, name),
+							name,
+							organizationId:
+								version.visibility === "ORGANIZATION" ? organizationId : null,
+							submittedAt: version.createdAt.toISOString(),
+						}),
+					);
+				await audit(
+					transaction,
+					request,
+					"skill.review_queue.read",
+					"review_queue",
+					"succeeded",
+					{ count: versions.length },
+				);
+				return Object.freeze({
+					versions: Object.freeze(versions),
+					nextCursor:
+						rows.length > query.limit
+							? (versions.at(-1)?.skillVersionId ?? null)
+							: null,
+				});
 			},
 		);
 	}
