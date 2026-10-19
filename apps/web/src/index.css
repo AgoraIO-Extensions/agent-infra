@@ -3794,7 +3794,7 @@ body {
 	margin: 0;
 	overflow-wrap: anywhere;
 }
-/* 设计 .filters：搜索 1.6fr + 3 × 0.7fr；风险筛选待接口提供前不渲染，来源在第 2 轨。 */
+/* 设计 .filters：搜索 1.6fr + 3 × 0.7fr，来源在第 2 轨；审批不设「风险」筛选（#2862，PRD §6.2）。 */
 .approval-filters {
 	display: grid;
 	grid-template-columns: minmax(240px, 1.6fr) repeat(3, minmax(130px, 0.7fr));

@@ -145,13 +145,21 @@ describe("ApiCredentialsScreen", () => {
 		expect(within(rows[0]).getByText("永不过期")).toBeTruthy();
 		expect(within(rows[0]).getByText("尚未使用")).toBeTruthy();
 		expect(within(rows[1]).getByText("已过期")).toBeTruthy();
-		// 设计中已撤销行的状态 chip 与有效期列都显示「已撤销」。
+		// 已撤销行：状态 chip 为「已撤销」，有效期列只显示撤销时间，
+		// 不提供详情、轮换或收窄（#2862 R-02，PRD §7.3）。
 		expect(
 			within(rows[2]).getByText("已撤销", { selector: '[data-slot="badge"]' }),
 		).toBeTruthy();
+		const revokedCell = within(rows[2])
+			.getAllByRole("cell")
+			.find((cell) => cell.dataset.label === "有效期");
+		expect(revokedCell?.textContent).toMatch(/^已撤销于 /);
+		expect(revokedCell?.querySelector("time")?.getAttribute("datetime")).toBe(
+			"2026-10-01T00:00:00Z",
+		);
 		expect(
-			within(rows[2]).getByText("已撤销", { selector: "td" }).dataset.label,
-		).toBe("有效期");
+			within(rows[2]).queryByRole("button", { name: /详情|轮换|收窄/ }),
+		).toBeNull();
 		expect(
 			screen.getAllByRole("button", { name: /^收窄权限与有效期：/ }),
 		).toHaveLength(1);
