@@ -6051,12 +6051,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const revision = createHash("sha256")
 			.update(
 				JSON.stringify([
-					"codex-thread-read-v1",
+					"codex-thread-read-v2",
 					binding.authority.principal.kind,
 					binding.authority.principal.id,
 					binding.authority.scope.agentId,
 					binding.authority.scope.conversationId,
-					binding.authority.scope.executionId,
 					binding.authority.scope.sessionGeneration,
 					binding.nativeSessionRef,
 					binding.threadId,
@@ -6345,11 +6344,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			mountedEntries,
 		);
 		assertMountedCurrent();
+		// Selection survives admission of a new Execution; read guards keep its full scope.
+		const { executionId: _executionId, ...directoryScope } =
+			binding.authority.scope;
 		const revision = createHash("sha256")
 			.update(
 				JSON.stringify([
-					"codex-installed-skill-directory-v1",
-					binding,
+					"codex-installed-skill-directory-v2",
+					{
+						...binding,
+						authority: { ...binding.authority, scope: directoryScope },
+					},
 					binding.requiredRuntime,
 					{ fixed: descriptor ?? null, hub: mountedEntries ?? null },
 					mountedGenerationId,
