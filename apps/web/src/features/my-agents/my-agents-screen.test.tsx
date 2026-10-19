@@ -354,7 +354,7 @@ describe("MyAgentsScreen design alignment", () => {
 		expect(screen.queryByText("审批记录会保留")).toBeNull();
 	});
 
-	it("shows rows with a non-link title, one detail link and a merged submitted time (R4-11 / M-03)", async () => {
+	it("shows rows with a non-link title, one detail link and a merged updated time (R4-11 / M-03)", async () => {
 		await renderWithMyAgentsRouter(
 			<MyAgentsScreen
 				state={{ kind: "ready", applications: [pendingApplication] }}
@@ -373,7 +373,7 @@ describe("MyAgentsScreen design alignment", () => {
 		const time = row.querySelector("time") as HTMLElement;
 		expect(time.getAttribute("datetime")).toBe(pendingApplication.submittedAt);
 		expect(time.closest("p")?.textContent).toBe(
-			`${pendingApplication.description} · 提交于 ${time.textContent}`,
+			`${pendingApplication.description} · 更新于 ${time.textContent}`,
 		);
 		expect(document.body.textContent).not.toContain(
 			pendingApplication.submittedAt,

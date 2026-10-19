@@ -188,6 +188,11 @@ export type AgentApplicationManagerResponseV1 = {
 
 export type AgentApplicationProjectionV2 = {
     agentId: string | null;
+    applicant?: {
+        displayName: string;
+        roles: Array<'employee' | 'system_admin'>;
+        userId: string;
+    } | null;
     applicationId: string;
     configuration: AgentConfigurationProjectionV2;
     decision: {
@@ -231,6 +236,7 @@ export type AgentApplicationProjectionV2 = {
     };
     status: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
     submittedAt: string;
+    updatedAt?: string;
 };
 
 export type AgentApplicationUpdateRequestV2 = {

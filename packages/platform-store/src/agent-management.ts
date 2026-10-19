@@ -1737,6 +1737,7 @@ export interface AgentManagementApplicationProjectionV1 {
 	readonly sourceReference: string;
 	readonly management: AgentManagementStateV1;
 	readonly submittedAt: Date;
+	readonly updatedAt?: Date;
 	readonly decision: null | {
 		readonly decidedAt: Date;
 		readonly reason: string | null;
@@ -1969,6 +1970,12 @@ const applicationSelection = {
 	failureCode: agentApplications.failureCode,
 	...projectionAccessSelection,
 	submittedAt: agentApplications.submittedAt,
+	updatedAt: sql<Date>`coalesce(
+		(select max(${agentManagementHistory.occurredAt})
+		 from ${agentManagementHistory}
+		 where ${agentManagementHistory.applicationId} = ${agentApplications.id}),
+		${agentApplications.submittedAt}
+	)`.mapWith(agentManagementHistory.occurredAt),
 	decisionReason: agentApplications.decisionReason,
 	decisionOccurredAt: sql<Date | null>`(
 		select ${agentManagementHistory.occurredAt}
@@ -2030,6 +2037,7 @@ interface ApplicationProjectionRow extends ManagementProjectionRow {
 	readonly description: string;
 	readonly sourceReference: string;
 	readonly submittedAt: Date;
+	readonly updatedAt: Date;
 	readonly decisionOccurredAt: Date | null;
 }
 
@@ -2072,6 +2080,7 @@ function applicationProjection(
 		sourceReference: row.sourceReference,
 		management: managementState(row),
 		submittedAt: row.submittedAt,
+		updatedAt: row.updatedAt,
 		decision: row.decisionOccurredAt
 			? { decidedAt: row.decisionOccurredAt, reason: row.decisionReason }
 			: null,

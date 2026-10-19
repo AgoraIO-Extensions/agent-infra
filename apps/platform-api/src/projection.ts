@@ -219,6 +219,11 @@ export function createPlatformProjectionReaders(
 				input.application.management,
 				input,
 			);
+			const [applicant] = await owners(
+				input.requestScope ?? input,
+				[input.application.applicantId],
+				input.traceId,
+			);
 			return AgentApplicationProjectionV1Schema.parse({
 				schemaVersion: 1,
 				applicationId: input.application.applicationId,
@@ -230,6 +235,10 @@ export function createPlatformProjectionReaders(
 				resourceProfile: presentation.resourceProfile,
 				configuration: wire,
 				submittedAt: input.application.submittedAt.toISOString(),
+				updatedAt: (
+					input.application.updatedAt ?? input.application.submittedAt
+				).toISOString(),
+				applicant,
 				decision: input.application.decision
 					? {
 							decidedAt: input.application.decision.decidedAt.toISOString(),

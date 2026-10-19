@@ -4337,6 +4337,69 @@ function isPilotBrowserProjectionOpenApiAddition(previous, current) {
 	return changed && findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #2861 adds only the reviewed optional timestamp and directory user projection.
+// Preserve every pre-existing field and reject broader identity or required fields.
+const applicationApplicantProjection = {
+	anyOf: [
+		{
+			additionalProperties: false,
+			properties: {
+				displayName: { minLength: 1, type: "string" },
+				roles: {
+					items: { enum: ["employee", "system_admin"], type: "string" },
+					minItems: 1,
+					type: "array",
+				},
+				userId: { minLength: 1, type: "string" },
+			},
+			required: ["userId", "displayName", "roles"],
+			type: "object",
+		},
+		{ type: "null" },
+	],
+};
+
+function stripApplicationProjectionLifecycleFields(previousSchemas, schemas) {
+	let changed = false;
+	for (const name of [
+		"AgentApplicationProjectionV1",
+		"AgentApplicationProjectionV2",
+	]) {
+		const before = previousSchemas[name]?.properties ?? {};
+		const schema = schemas[name];
+		const after = schema?.properties;
+		if (!after) continue;
+		const expected = {
+			updatedAt: before.submittedAt ?? after.submittedAt,
+			applicant: applicationApplicantProjection,
+		};
+		for (const [field, expectedSchema] of Object.entries(expected)) {
+			if (
+				before[field] === undefined &&
+				after[field] !== undefined &&
+				!schema.required?.includes(field) &&
+				sameValue(after[field], expectedSchema)
+			) {
+				delete after[field];
+				changed = true;
+			}
+		}
+	}
+	return changed;
+}
+
+function isApplicationProjectionLifecycleFieldsOpenApiAddition(
+	previous,
+	current,
+) {
+	const normalized = structuredClone(current);
+	const changed = stripApplicationProjectionLifecycleFields(
+		previous.components?.schemas ?? {},
+		normalized.components?.schemas ?? {},
+	);
+	return changed && findBreakingChanges(previous, normalized).length === 0;
+}
+
 // Runtime operation facts may add optional, non-secret Connection consumer
 // references without invalidating existing event readers.
 function normalizeRuntimeConnectionAssociationOpenApiAddition(current) {
@@ -4418,6 +4481,18 @@ function normalizeRuntimeSkillHostReadJsonSchemaAddition(previous, current) {
 		if (Array.isArray(schema.required))
 			schema.required = schema.required.filter((key) => key !== "generationId");
 	}
+	return normalized;
+}
+
+function normalizeApplicationProjectionLifecycleFieldsJsonSchemaAddition(
+	previous,
+	current,
+) {
+	const normalized = structuredClone(current);
+	stripApplicationProjectionLifecycleFields(
+		previous.$defs ?? previous.components?.schemas ?? {},
+		normalized.$defs ?? normalized.components?.schemas ?? {},
+	);
 	return normalized;
 }
 
@@ -4588,6 +4663,10 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isRuntimeBrowserOperationFactOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserWorkloadIdentityOpenApiAddition(previous, current) &&
 			!isPilotBrowserProjectionOpenApiAddition(previous, current) &&
+			!isApplicationProjectionLifecycleFieldsOpenApiAddition(
+				previous,
+				current,
+			) &&
 			!isBrowserCommandOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isRuntimeNativeCapabilityV3OpenApiAddition(previous, current) &&
@@ -4657,9 +4736,12 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
 	let normalized = normalizeRuntimeNativeCapabilityV3CommandJsonSchemaAddition(
 		previous,
-		normalizeRuntimeSkillHostReadJsonSchemaAddition(
+		normalizeApplicationProjectionLifecycleFieldsJsonSchemaAddition(
 			previous,
-			normalizeSkillPackageObjectVersions(previous, current, changes),
+			normalizeRuntimeSkillHostReadJsonSchemaAddition(
+				previous,
+				normalizeSkillPackageObjectVersions(previous, current, changes),
+			),
 		),
 	);
 	const currentSchemas =

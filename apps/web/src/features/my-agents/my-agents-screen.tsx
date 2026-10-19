@@ -227,10 +227,19 @@ export function MyAgentsScreen({
 														</div>
 														{/* 设计稿标题不是链接，详情入口只有同行的「查看申请」。 */}
 														<h2>{application.name}</h2>
-														{/* 契约只有提交时间，没有更新时间，因此写「提交于」。 */}
+														{/* 更新时间来自申请生命周期投影；提交时间仍保留在详情进度。 */}
 														<p>
-															{application.description} · 提交于{" "}
-															<Timestamp value={application.submittedAt} />
+															{application.description} · 更新于{" "}
+															<Timestamp
+																value={
+																	application.updatedAt ??
+																	application.submittedAt
+																}
+															/>
+														</p>
+														<p>
+															申请人：
+															{application.applicant?.displayName ?? "未知"}
 														</p>
 													</div>
 
