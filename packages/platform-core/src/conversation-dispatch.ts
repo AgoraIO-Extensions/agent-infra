@@ -575,6 +575,20 @@ export function createConversationDispatchUseCaseV1(
 			);
 			if (authorization.outcome === "unavailable") {
 				if (authorization.authority !== undefined) return unavailable();
+				// 执行已终态的 native capability 临时授权失败时，同样直接结束条目（#2919）。
+				if (
+					executionTerminal(claim.executionStatus) &&
+					isNativeCapabilityOperation(claim.operation)
+				) {
+					const finished = await dependencies.store.finish({
+						claim,
+						status: "succeeded",
+						transition: {},
+					});
+					return finished
+						? { schemaVersion: 1, outcome: "already_completed" }
+						: { schemaVersion: 1, outcome: "stale" };
+				}
 				return retry(
 					dependencies.store,
 					claim,
@@ -642,6 +656,22 @@ export function createConversationDispatchUseCaseV1(
 					});
 					return finished
 						? { schemaVersion: 1, outcome: "rejected" }
+						: { schemaVersion: 1, outcome: "stale" };
+				}
+				// 执行已终态的 native capability 授权拒绝时直接按关闭规则结束条目，
+				// 避免因 recoveryExhausted 只检查 "unknown" 状态而无限重试（#2919）。
+				if (
+					!claim.metadataRecovery &&
+					executionTerminal(claim.executionStatus) &&
+					isNativeCapabilityOperation(claim.operation)
+				) {
+					const finished = await dependencies.store.finish({
+						claim,
+						status: "succeeded",
+						transition: {},
+					});
+					return finished
+						? { schemaVersion: 1, outcome: "already_completed" }
 						: { schemaVersion: 1, outcome: "stale" };
 				}
 				if (
@@ -1061,7 +1091,9 @@ export function createConversationDispatchUseCaseV1(
 						"ORIGINAL_RESPONSE_ALREADY_FINISHED",
 					);
 				}
-				if (isRuntimeEventOperation(claim.operation) && claim.hostSessionRef) {
+				// 执行已终态的 turn 需要续读 Runtime 事件流；native capability
+				// 已终态时直接关闭条目，不再调用 Runtime（#2919）。
+				if (isTurnOperation(claim.operation) && claim.hostSessionRef) {
 					return persistRuntimeEvents(
 						claim,
 						authority,
