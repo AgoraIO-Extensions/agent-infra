@@ -1629,6 +1629,39 @@ describe("admin audit for #2879 registered actions", () => {
 		).rejects.toMatchObject({ code: "unavailable" });
 	});
 
+	it.each([
+		[
+			"skill.project.read",
+			"unknown",
+			{ status: "<script>arbitrary text</script>" },
+		],
+		[
+			"relay_key.agent_default.read",
+			"agent",
+			{ schemaVersion: 1, reason: "free text" },
+		],
+		[
+			"relay_key.agent_default.read",
+			"agent",
+			{ schemaVersion: 1, keyVersion: "2" },
+		],
+		[
+			"relay_key.agent_default.candidates",
+			"agent",
+			{ schemaVersion: 1, configurationRevision: -1 },
+		],
+	] as const)(
+		"rejects %s with values outside the writer's domain (fails closed)",
+		async (action, targetType, details) => {
+			const id = randomUUID();
+			await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+				values (${id}, 'domain-trace', ${randomUUID()}, 'user', 'u5', ${action}, ${targetType}, 't5', 'succeeded', ${sql.json(details)})`;
+			await expect(
+				query.getAudit(admin, id, detail, request()),
+			).rejects.toMatchObject({ code: "unavailable" });
+		},
+	);
+
 	it("rejects relay_key.agent_default.candidates with unknown field (fails closed)", async () => {
 		const id = randomUUID();
 		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)

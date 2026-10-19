@@ -509,8 +509,8 @@ function skillProjectSummary(
 		case "skill.project.update": {
 			if (
 				Object.keys(details).length !== 1 ||
-				typeof details.status !== "string" ||
-				!(details.status as string).length
+				// 只接受 Skill 项目的已知状态（skillHubProjectStatusesV1）。
+				(details.status !== "active" && details.status !== "disabled")
 			)
 				throw new PlatformAuditScopeErrorV1("unavailable");
 			return `${row.action}: status=${details.status as string}`;
@@ -551,16 +551,26 @@ function agentDefaultRelayKeyReadSummary(
 		"previousVersion",
 		"keyVersion",
 	]);
+	const counter = (value: unknown) =>
+		value === undefined ||
+		value === null ||
+		(Number.isSafeInteger(value) && (value as number) >= 0);
 	if (
 		details.schemaVersion !== 1 ||
-		Object.keys(details).some((k) => !allowedKeys.has(k))
+		Object.keys(details).some((k) => !allowedKeys.has(k)) ||
+		// reason 只能是 AgentDefaultRelayKeyErrorV1 的错误码；数值字段只能是非负整数。
+		(details.reason !== undefined &&
+			!["invalid_input", "not_authorized", "conflict", "unavailable"].includes(
+				details.reason as string,
+			)) ||
+		!counter(details.configurationRevision) ||
+		!counter(details.previousVersion) ||
+		!counter(details.keyVersion)
 	)
 		throw new PlatformAuditScopeErrorV1("unavailable");
 	// 摘要只暴露动作名和可选 reason，不含任何 Key 值
 	const reason =
-		typeof details.reason === "string" && details.reason.length > 0
-			? `: reason=${details.reason}`
-			: "";
+		details.reason === undefined ? "" : `: reason=${details.reason}`;
 	return `${row.action}${reason}`;
 }
 
