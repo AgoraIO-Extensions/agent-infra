@@ -4820,3 +4820,215 @@ describe("observeForDrain (#1889)", () => {
 		]);
 	});
 });
+
+// #2885：旧 payload（source.modelProjection 为 null）的排空请求不得永远重试
+describe("sandbox drain with legacy null modelProjection (#2885)", () => {
+	it("排空接收器在 source.modelProjection 为 null 时不抛出 policy 错误", async () => {
+		// 构造最小受信 runtimeAuth
+		const keys = generateKeyPairSync("ed25519");
+		const workerId = "worker-drain-test";
+		const runtimeAuth = {
+			workerId,
+			grantIssuer: "platform",
+			grantKeyId: "key-drain",
+			grantPublicKey: keys.publicKey
+				.export({ type: "spki", format: "pem" })
+				.toString(),
+			serviceTokenSecret: { name: "transport", key: "token" },
+		};
+		const f = fixture({ policy: { ...workloadTestPolicy, runtimeAuth } });
+		await f.tick(8);
+		const ready = f.state;
+		if (!ready?.verified?.deployment) throw new Error("期望就绪 fixture");
+		const deployment = validateAgentWorkloadDesiredV1(
+			ready.verified.deployment,
+		);
+
+		// 模拟旧 payload：source.modelProjection 为 null
+		const sandboxId = "00000000-0000-4000-8000-00000000dead";
+		const sandbox = {
+			schemaVersion: 1 as const,
+			sandboxId,
+			sessionId: "conversation-drain-legacy",
+			agentId: ready.agentId,
+			principal: { kind: "user" as const, id: "actor-drain" },
+			channelId: "web",
+			generation: 1,
+			resourceName: `sandbox-${sandboxId}`,
+			workspaceScope: sandboxId,
+		};
+		const policy = {
+			namespace: f.options.policy.namespace,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(
+				f.options.policy,
+			),
+			configurationRevision: ready.sourceConfigurationRevision,
+			workloadRevision: ready.sourceLifecycleRevision,
+			managementFence: 1,
+			imageDigest: deployment.imageDigest,
+		};
+
+		// 构造排空 lifecycle，source.modelProjection 故意为 null（旧 payload 形状）
+		const lifecycle = {
+			schemaVersion: 1 as const,
+			authority: {
+				kind: "management" as const,
+				applicationId: "application-a",
+				managementRevision: 1,
+				managementFence: 1,
+				workloadRevision: 1,
+				targetDesiredState: "stopped" as const,
+			},
+			source: {
+				sandbox,
+				resourceFence: 2,
+				policy,
+				observation: null, // 源观测缺失，触发 observe 分支
+				deployment, // 合法 deployment
+				modelProjection: null, // 旧 payload 形状：projection 未保存
+			},
+			stopReceipt: null,
+			deletionProgress: [],
+		};
+
+		const receive = createProductionSessionSandboxReceiverV1(f.options, {
+			serviceToken: "synthetic-transport",
+		});
+
+		// 构造排空 claim
+		const drainClaim: SessionSandboxReconciliationClaimV1 = {
+			schemaVersion: 1,
+			operation: "conversation.sandbox.reconcile.v1",
+			execution: null,
+			itemId: `conversation:sandbox:${sandbox.sessionId}:1`,
+			leaseOwner: workerId,
+			deliveryFence: 2,
+			resourceFence: 3,
+			resourceStatus: "applying",
+			desiredState: "stopped",
+			authorization: null,
+			purpose: "drain",
+			drainComputeAllowed: true,
+			lifecycle,
+			sandbox,
+			policy, // drain 使用 source.policy
+			deployment: null,
+			modelProjection: null,
+			previousObservation: null,
+		};
+
+		// 修复前：抛出 WorkloadKubernetesError("policy")
+		// 修复后：正常返回 unknown 观测（k8s 中无资源可观测），不再无限重试
+		const observation = await receive(drainClaim, new AbortController().signal);
+		// 只要不再抛出 policy 错误即为修复成功
+		expect(["unknown", "observed", "stopped"]).toContain(observation.status);
+	});
+
+	it("排空接收器在 source.modelProjection 非 null 时仍正常工作", async () => {
+		// 确保修复不破坏有效 modelProjection 的排空路径
+		const keys = generateKeyPairSync("ed25519");
+		const workerId = "worker-drain-valid";
+		const runtimeAuth = {
+			workerId,
+			grantIssuer: "platform",
+			grantKeyId: "key-drain-valid",
+			grantPublicKey: keys.publicKey
+				.export({ type: "spki", format: "pem" })
+				.toString(),
+			serviceTokenSecret: { name: "transport", key: "token" },
+		};
+		const f = fixture({ policy: { ...workloadTestPolicy, runtimeAuth } });
+		await f.tick(8);
+		const ready = f.state;
+		if (!ready?.verified?.deployment) throw new Error("期望就绪 fixture");
+		const deployment = validateAgentWorkloadDesiredV1(
+			ready.verified.deployment,
+		);
+
+		const modelProjection = sessionSandboxModelProjectionFixture({
+			agentId: ready.agentId,
+			configurationRevision: deployment.configRevision,
+			imageDigest: deployment.imageDigest,
+		});
+		Object.assign(f.options, {
+			templateModelBindings: [
+				sessionSandboxTemplateBindingFixture(deployment.imageDigest),
+			],
+		});
+
+		const sandboxId = "00000000-0000-4000-8000-0000000valid";
+		const sandbox = {
+			schemaVersion: 1 as const,
+			sandboxId,
+			sessionId: "conversation-drain-valid",
+			agentId: ready.agentId,
+			principal: { kind: "user" as const, id: "actor-drain-valid" },
+			channelId: "web",
+			generation: 1,
+			resourceName: `sandbox-${sandboxId}`,
+			workspaceScope: sandboxId,
+		};
+		const policy = {
+			namespace: f.options.policy.namespace,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(
+				f.options.policy,
+			),
+			configurationRevision: ready.sourceConfigurationRevision,
+			workloadRevision: ready.sourceLifecycleRevision,
+			managementFence: 1,
+			imageDigest: deployment.imageDigest,
+		};
+
+		// 有效 modelProjection 的排空 lifecycle
+		const lifecycle = {
+			schemaVersion: 1 as const,
+			authority: {
+				kind: "management" as const,
+				applicationId: "application-a",
+				managementRevision: 1,
+				managementFence: 1,
+				workloadRevision: 1,
+				targetDesiredState: "stopped" as const,
+			},
+			source: {
+				sandbox,
+				resourceFence: 2,
+				policy,
+				observation: null,
+				deployment,
+				modelProjection, // 有效的 V4 projection
+			},
+			stopReceipt: null,
+			deletionProgress: [],
+		};
+
+		const receive = createProductionSessionSandboxReceiverV1(f.options, {
+			serviceToken: "synthetic-transport",
+		});
+
+		const drainClaim: SessionSandboxReconciliationClaimV1 = {
+			schemaVersion: 1,
+			operation: "conversation.sandbox.reconcile.v1",
+			execution: null,
+			itemId: `conversation:sandbox:${sandbox.sessionId}:1`,
+			leaseOwner: workerId,
+			deliveryFence: 2,
+			resourceFence: 3,
+			resourceStatus: "applying",
+			desiredState: "stopped",
+			authorization: null,
+			purpose: "drain",
+			drainComputeAllowed: true,
+			lifecycle,
+			sandbox,
+			policy,
+			deployment: null,
+			modelProjection: null,
+			previousObservation: null,
+		};
+
+		// 有效 projection 的排空也应正常工作
+		const observation = await receive(drainClaim, new AbortController().signal);
+		expect(["unknown", "observed", "stopped"]).toContain(observation.status);
+	});
+});
