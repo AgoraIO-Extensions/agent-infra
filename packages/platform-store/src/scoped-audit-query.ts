@@ -461,6 +461,121 @@ function credentialMutationSummary(
 	return row.action;
 }
 
+/** #2879：Skill 项目动作（create/update/list/read）的 details 校验与摘要。
+ * 写入方是 PostgresSkillHubLifecycleV1.audit()，actor_type='user'，target_type='unknown'。
+ * - create: details = { replayed: boolean }
+ * - list:   details = { count: number }
+ * - read:   details = { status: string }
+ * - update: details = { status: string }
+ */
+function skillProjectSummary(
+	row: Row,
+	scope: PlatformAuditQueryScopeV1,
+): string {
+	if (
+		scope.kind !== "administrator" ||
+		row.source !== "platform" ||
+		row.targetType !== "unknown" ||
+		row.agentId !== null ||
+		row.executionId !== null ||
+		row.conversationId !== null ||
+		row.result !== row.outcome ||
+		row.actorType !== "user" ||
+		typeof row.details !== "object" ||
+		row.details === null ||
+		Array.isArray(row.details)
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	const details = row.details as Record<string, unknown>;
+	switch (row.action) {
+		case "skill.project.create": {
+			if (
+				Object.keys(details).length !== 1 ||
+				typeof details.replayed !== "boolean"
+			)
+				throw new PlatformAuditScopeErrorV1("unavailable");
+			return `${row.action}: replayed=${String(details.replayed)}`;
+		}
+		case "skill.project.list": {
+			if (
+				Object.keys(details).length !== 1 ||
+				!Number.isSafeInteger(details.count) ||
+				(details.count as number) < 0
+			)
+				throw new PlatformAuditScopeErrorV1("unavailable");
+			return `${row.action}: count=${String(details.count)}`;
+		}
+		case "skill.project.read":
+		case "skill.project.update": {
+			if (
+				Object.keys(details).length !== 1 ||
+				typeof details.status !== "string" ||
+				!(details.status as string).length
+			)
+				throw new PlatformAuditScopeErrorV1("unavailable");
+			return `${row.action}: status=${details.status as string}`;
+		}
+		default:
+			throw new PlatformAuditScopeErrorV1("unavailable");
+	}
+}
+
+/** #2879：relay_key.agent_default.read / relay_key.agent_default.candidates 的 details 校验与摘要。
+ * 写入方 PostgresAgentDefaultRelayKeyStoreV1.audit()，actor_type='user'，target_type='agent'。
+ * details = { schemaVersion: 1, reason?, configurationRevision?, previousVersion?, keyVersion? }
+ * 摘要不含 keyVersion 等敏感值，仅输出动作名称与可选 reason。
+ */
+function agentDefaultRelayKeyReadSummary(
+	row: Row,
+	scope: PlatformAuditQueryScopeV1,
+): string {
+	if (
+		scope.kind !== "administrator" ||
+		row.source !== "platform" ||
+		row.targetType !== "agent" ||
+		row.agentId !== null ||
+		row.executionId !== null ||
+		row.conversationId !== null ||
+		row.actorType !== "user" ||
+		typeof row.details !== "object" ||
+		row.details === null ||
+		Array.isArray(row.details)
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	const details = row.details as Record<string, unknown>;
+	// schemaVersion 必须为 1，其余字段为可选
+	const allowedKeys = new Set([
+		"schemaVersion",
+		"reason",
+		"configurationRevision",
+		"previousVersion",
+		"keyVersion",
+	]);
+	if (
+		details.schemaVersion !== 1 ||
+		Object.keys(details).some((k) => !allowedKeys.has(k))
+	)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	// 摘要只暴露动作名和可选 reason，不含任何 Key 值
+	const reason =
+		typeof details.reason === "string" && details.reason.length > 0
+			? `: reason=${details.reason}`
+			: "";
+	return `${row.action}${reason}`;
+}
+
+const skillProjectActions = new Set([
+	"skill.project.create",
+	"skill.project.update",
+	"skill.project.list",
+	"skill.project.read",
+] as const);
+
+const agentDefaultRelayKeyReadActions = new Set([
+	"relay_key.agent_default.read",
+	"relay_key.agent_default.candidates",
+] as const);
+
 function project(
 	row: Row,
 	scope: PlatformAuditQueryScopeV1,
@@ -519,11 +634,22 @@ function project(
 		row.action === "api.agent.metadata.read"
 			? agentMetadataSummary(row, scope)
 			: null;
+	// #2879：Skill 项目动作的 details 校验与摘要
+	const skillProjectSummaryValue = skillProjectActions.has(row.action as never)
+		? skillProjectSummary(row, scope)
+		: null;
+	// #2879：relay_key.agent_default.read / candidates 的 details 校验与摘要
+	const agentDefaultRelayKeyReadSummaryValue =
+		agentDefaultRelayKeyReadActions.has(row.action as never)
+			? agentDefaultRelayKeyReadSummary(row, scope)
+			: null;
 	const legacy =
 		executionActions.has(row.action) ||
 		metadataSummary !== null ||
 		mutationSummary !== null ||
-		agentSummary !== null
+		agentSummary !== null ||
+		skillProjectSummaryValue !== null ||
+		agentDefaultRelayKeyReadSummaryValue !== null
 			? null
 			: decodePlatformAuditRowV1(row);
 	// The legacy decoder has already validated exact Task API metadata and its
@@ -622,6 +748,8 @@ function project(
 		metadataSummary ??
 		mutationSummary ??
 		agentSummary ??
+		skillProjectSummaryValue ??
+		agentDefaultRelayKeyReadSummaryValue ??
 		(row.action === "audit.query.completed" ||
 		row.action === "audit.query.failed"
 			? projectPlatformAuditQuerySummaryV1(row.action, row.details)

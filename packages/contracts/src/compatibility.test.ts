@@ -103,6 +103,29 @@ function restoreOldApiReadActions(input: unknown) {
 	for (const child of Object.values(value)) restoreOldApiReadActions(child);
 }
 
+// #2879：从产物中移除 Skill 项目操作与 Agent 默认 Key 读取/候选动作，还原到 #2879 之前的契约。
+const adminAuditActions2879 = [
+	"skill.project.create",
+	"skill.project.update",
+	"skill.project.list",
+	"skill.project.read",
+	"relay_key.agent_default.read",
+	"relay_key.agent_default.candidates",
+] as const;
+
+function restorePreAdminAuditActionsRegistration2879Contract(value: {
+	components: { schemas: Record<string, unknown> };
+}) {
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1 as
+		| { enum?: string[] }
+		| undefined;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) =>
+				!(adminAuditActions2879 as readonly string[]).includes(action),
+		);
+}
+
 function restorePreSkillHubAuditContract(value: {
 	components: { schemas: Record<string, unknown> };
 }) {
@@ -228,6 +251,7 @@ function restorePreAgentApiManagementContract(value: {
 	paths: Record<string, unknown>;
 	components: { schemas: Record<string, unknown> };
 }) {
+	restorePreAdminAuditActionsRegistration2879Contract(value);
 	restorePreSkillHubAuditContract(value);
 	restorePreApplicationUseGrantContract(value);
 	restorePreAgentCreationAuditContract(value);
@@ -360,6 +384,8 @@ describe("contract compatibility command", () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),
 		);
+		// 先还原 #2879 新增，再对比 #1574 的四个 Agent 创建动作
+		restorePreAdminAuditActionsRegistration2879Contract(current);
 		const previous = structuredClone(current);
 		restorePreAgentCreationAuditContract(previous);
 		const directory = await mkdtemp(
@@ -397,6 +423,52 @@ describe("contract compatibility command", () => {
 				(document) => {
 					document.components.schemas.ScopedPlatformAuditProjectionV1.properties.subject.additionalProperties = true;
 				},
+			];
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the six admin audit actions registered in #2879", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		// 恢复到 #2879 之前的契约（去掉这 6 个动作）
+		const previous = structuredClone(current);
+		restorePreAdminAuditActionsRegistration2879Contract(previous);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "admin-audit-2879-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			// 绿灯：精确新增应该通过
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			// 变异测试：以下任何篡改都必须导致门禁失败
+			const mutations: ((document: typeof current) => void)[] = [
+				// 添加一个未登记的额外动作
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+						"skill.project.unreviewed",
+					),
+				// 去掉最后一个已登记动作
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.pop(),
+				// 去掉第一个已登记动作（颠倒顺序验证）
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.splice(
+						document.components.schemas.ScopedPlatformAuditActionV1.enum.indexOf(
+							"skill.project.create",
+						),
+						1,
+					),
 			];
 			for (const mutate of mutations) {
 				const changed = structuredClone(current);
@@ -766,6 +838,7 @@ describe("contract compatibility command", () => {
 					delete document.paths["/api/v2/agents"].post;
 				delete document.components.schemas.AgentApiCreationRequestV1;
 				delete document.components.schemas.AgentApiCreationResponseV1;
+				restorePreAdminAuditActionsRegistration2879Contract(document);
 				restorePreSkillHubAuditContract(document);
 				restorePreAgentCreationAuditContract(document);
 				for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {

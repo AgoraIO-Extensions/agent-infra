@@ -2827,6 +2827,40 @@ function isAgentCreationAuditActionOpenApiAddition(previous, current) {
 	return isDeepStrictEqual(previous, normalized);
 }
 
+// #2879 登记 Skill 项目操作与 Agent 默认 Key 读取/候选动作。新增枚举值追加在 replace 之后；
+// 用写死 SHA-256 确保任意篡改都会使此门禁失败。
+function isAdminAuditActionsRegistration2879OpenApiAddition(previous, current) {
+	const additions = [
+		"skill.project.create",
+		"skill.project.update",
+		"skill.project.list",
+		"skill.project.read",
+		"relay_key.agent_default.read",
+		"relay_key.agent_default.candidates",
+	];
+	const additionsDigest = createHash("sha256")
+		.update(JSON.stringify(additions))
+		.digest("hex");
+	if (
+		additionsDigest !==
+		"7b1060cf4859fef5c3e99bbf26479ddd487fe52d806269faf569773fe607ffc7"
+	)
+		return false;
+	const before = previous.components?.schemas?.ScopedPlatformAuditActionV1;
+	const after = current.components?.schemas?.ScopedPlatformAuditActionV1;
+	if (
+		!Array.isArray(before?.enum) ||
+		!Array.isArray(after?.enum) ||
+		additions.some((action) => before.enum.includes(action)) ||
+		!sameValue(after.enum, [...before.enum, ...additions])
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+		structuredClone(before.enum);
+	return isDeepStrictEqual(previous, normalized);
+}
+
 function isSkillHubAuditActionOpenApiAddition(previous, current) {
 	const additions = [
 		"skill.version.register",
@@ -4719,6 +4753,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isPlatformUserDisableOpenApiAddition(previous, current) &&
 			!isConnectionInstallationAuthorizationUrlAddition(previous, current) &&
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&
+			!isAdminAuditActionsRegistration2879OpenApiAddition(previous, current) &&
 			!isScopedAuditCredentialSecurityAddition(previous, current) &&
 			!isRuntimeFileExchangeOpenApiAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current) &&

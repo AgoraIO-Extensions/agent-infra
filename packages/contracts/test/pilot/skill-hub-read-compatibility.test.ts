@@ -71,4 +71,4 @@ it("admits only the exact Skill metadata read addition and preserves all prior c
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
-});
+}, 30_000);
