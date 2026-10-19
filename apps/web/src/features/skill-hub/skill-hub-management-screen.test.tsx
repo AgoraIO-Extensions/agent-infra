@@ -126,6 +126,7 @@ describe("MySkillsScreen", () => {
 					items: [project, { ...project, projectId: "draft", name: "draft" }],
 				}}
 				versions={{ kind: "ready", versions: [published] }}
+				installations={{ kind: "ready", installations: [] }}
 			/>,
 		);
 		expect(
@@ -214,6 +215,7 @@ describe("MySkillsScreen", () => {
 					kind: "ready",
 					versions: [published, pending, rejected, revoked],
 				}}
+				installations={{ kind: "ready", installations: [] }}
 			/>,
 		);
 		const rows = [
@@ -238,6 +240,7 @@ describe("MySkillsScreen", () => {
 			<MySkillsScreen
 				projects={{ kind: "ready", items: [project] }}
 				versions={{ kind: "unavailable", retryable: true }}
+				installations={{ kind: "ready", installations: [] }}
 			/>,
 		);
 		expect(
@@ -255,6 +258,7 @@ describe("MySkillsScreen", () => {
 			<MySkillsScreen
 				projects={{ kind: "unavailable", retryable: true }}
 				versions={{ kind: "loading" }}
+				installations={{ kind: "loading" }}
 				onRetry={retry}
 			/>,
 		);
@@ -265,6 +269,7 @@ describe("MySkillsScreen", () => {
 			<MySkillsScreen
 				projects={{ kind: "unavailable", retryable: false, reason: "denied" }}
 				versions={{ kind: "loading" }}
+				installations={{ kind: "loading" }}
 			/>,
 		);
 		expect(

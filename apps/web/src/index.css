@@ -3076,7 +3076,8 @@ body {
 .skill-row-copy {
 	min-width: 0;
 }
-.skill-page .skill-row-copy h2 {
+.skill-page .skill-row-copy h2,
+.skill-page .skill-row-copy h3 {
 	overflow-wrap: anywhere;
 	font-family: var(--font-body);
 	font-size: 16px;
@@ -3091,8 +3092,14 @@ body {
 }
 /* 契约还没有用途说明时，标签直接跟在名称下方，间距取说明段的上下外边距之和。 */
 .skill-row-copy > h2 + [data-slot="badge"],
-.skill-row-copy > h2 + .skill-row-badges {
+.skill-row-copy > h2 + .skill-row-badges,
+.skill-row-copy > h3 + .skill-row-badges {
 	margin-top: 8px;
+}
+.skill-row-badges {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
 }
 .skill-row-meta {
 	min-width: 0;

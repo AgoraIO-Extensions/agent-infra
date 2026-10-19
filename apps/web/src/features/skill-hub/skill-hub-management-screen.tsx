@@ -21,7 +21,11 @@ import type {
 	SkillHubPublicationResponseV1,
 } from "../../pilot/generated-v2/types.gen.js";
 import type { CollectionReadUnavailable } from "../collection-read-failure.js";
-import type { SkillHubOwnedVersionsState } from "./skill-hub.js";
+import type {
+	SkillHubInstallationsState,
+	SkillHubOwnedVersionsState,
+} from "./skill-hub.js";
+import { MyInstallationsSection } from "./skill-hub-installations-section.js";
 import {
 	latestVersionPerSkill,
 	skillHubProviderLabels,
@@ -80,14 +84,28 @@ function importResultText(result: SkillHubPublicationResponseV1) {
 export function MySkillsScreen({
 	projects,
 	versions,
+	installations,
 	onRetry,
 	retrying = false,
+	onInstallationsRetry,
+	installationsRetrying = false,
+	onInstallationsChanged,
+	uninstall,
 }: {
 	projects: SkillHubProjectsState;
 	/** 本人的全部版本（含审核中、已驳回、已撤销）。 */
 	versions: SkillHubOwnedVersionsState | { kind: "loading" };
+	/** 本人在我的库中的安装（#2953）。 */
+	installations: SkillHubInstallationsState | { kind: "loading" };
 	onRetry?: () => void;
 	retrying?: boolean;
+	onInstallationsRetry?: () => void;
+	installationsRetrying?: boolean;
+	onInstallationsChanged?: () => void;
+	uninstall?: (
+		installationId: string,
+		idempotencyKey: string,
+	) => Promise<unknown>;
 }) {
 	const id = useId();
 	// 每个项目取本人版本号最高的版本，状态按服务端回读显示。
@@ -99,7 +117,9 @@ export function MySkillsScreen({
 				<div>
 					<p className="page-eyebrow">我的管理 / 我的 Skill</p>
 					<h1 id={`${id}-heading`}>我的 Skill</h1>
-					<p>管理自己创建的 Skill 项目，以及审核中、已驳回和已撤销的版本。</p>
+					<p>
+						管理自己创建的 Skill 项目和各状态的版本，以及加入我的库的固定版本。
+					</p>
 				</div>
 				<div className="skill-actions">
 					<Link className={buttonVariants()} to="/skills/manage/new">
@@ -165,6 +185,14 @@ export function MySkillsScreen({
 					</div>
 				</>
 			)}
+
+			<MyInstallationsSection
+				installations={installations}
+				onRetry={onInstallationsRetry}
+				retrying={installationsRetrying}
+				onChanged={onInstallationsChanged}
+				{...(uninstall ? { uninstall } : {})}
+			/>
 
 			<section
 				className="skill-section-block"

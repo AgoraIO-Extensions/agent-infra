@@ -1,5 +1,8 @@
 import {
 	SkillHubDirectoryPageV1Schema,
+	SkillHubInstallationListItemV1Schema,
+	SkillHubInstallationPageV1Schema,
+	SkillHubInstallationResponseV1Schema,
 	SkillHubProjectPageV1Schema,
 	SkillHubProviderImportRequestV1Schema,
 	SkillHubPublicationResponseV1Schema,
@@ -22,9 +25,25 @@ const project = {
 	updatedAt: "2026-10-01T00:00:00Z",
 } as const;
 
-async function fixture(page: Page, role: "employee" | "admin" = "employee") {
+type InstallationItem = ReturnType<
+	typeof SkillHubInstallationListItemV1Schema.parse
+>;
+
+async function fixture(
+	page: Page,
+	role: "employee" | "admin" = "employee",
+	options: {
+		installations?: InstallationItem[];
+		/** 依次返回的移出状态码；成功后服务端列表不再包含该安装。 */
+		uninstall?: number[];
+	} = {},
+) {
 	const writes: { method: string; path: string; body: unknown }[] = [];
 	const reads: string[] = [];
+	const removals: { path: string; key: string | undefined }[] = [];
+	// 「我的安装」按服务端规则回读：移出成功后该安装离开列表。
+	const library = [...(options.installations ?? [])];
+	const uninstallStatuses = [...(options.uninstall ?? [])];
 	// 待审队列按服务端规则回读：审核成功后该版本离开队列。
 	const pending = [
 		reviewItem("incident-summary", "user-other", "ORGANIZATION", "org-release"),
@@ -75,6 +94,52 @@ async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 					nextCursor: null,
 				}),
 			});
+		if (path === "/api/v2/skills/installations" && request.method() === "GET")
+			return route.fulfill({
+				json: SkillHubInstallationPageV1Schema.parse({
+					items: library,
+					nextCursor: null,
+				}),
+			});
+		const removal = path.match(/^\/api\/v2\/skills\/installations\/([^/]+)$/);
+		if (removal && request.method() === "DELETE") {
+			removals.push({ path, key: request.headers()["idempotency-key"] });
+			const index = library.findIndex(
+				(item) => item.installationId === removal[1],
+			);
+			const status = index === -1 ? 404 : (uninstallStatuses.shift() ?? 200);
+			const [item] = status === 200 ? library.splice(index, 1) : [];
+			if (!item)
+				return route.fulfill({
+					status,
+					json: {
+						schemaVersion: 1,
+						code:
+							status === 503
+								? "DEPENDENCY_UNAVAILABLE"
+								: "RESOURCE_UNAVAILABLE",
+						message: "Skill installation fixture unavailable",
+						retryable: status === 503,
+						traceId: "trace-skill-management",
+					},
+				});
+			return route.fulfill({
+				json: SkillHubInstallationResponseV1Schema.parse({
+					replayed: false,
+					installation: {
+						schemaVersion: 1,
+						installationId: item.installationId,
+						principalType: "user",
+						principalId: userId,
+						skillVersionId: item.skillVersionId,
+						state: "uninstalled",
+						needUpgrade: item.needUpgrade,
+						installedAt: item.installedAt,
+						updatedAt: "2026-10-02T08:00:00Z",
+					},
+				}),
+			});
+		}
 		if (path === "/api/v2/skills/projects" && request.method() === "GET")
 			return route.fulfill({
 				json: SkillHubProjectPageV1Schema.parse({
@@ -185,7 +250,7 @@ async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 			},
 		});
 	});
-	return { writes, reads };
+	return { writes, reads, removals, library };
 }
 
 function reviewItem(
@@ -266,6 +331,90 @@ test("My Skill lists the user's projects with the same group in eyebrow, breadcr
 	await expect(main).not.toContainText(
 		/项目 ID|版本 ID|digest|Agent ID|配置 revision|Grant JSON|共享审核|pending_sync/,
 	);
+	await fitsViewport(page);
+});
+
+test("My Skill lists my installations, removes one and re-reads the list (K-03)", async ({
+	page,
+}) => {
+	const installed = SkillHubInstallationListItemV1Schema.parse({
+		installationId: "installation-notes",
+		skillVersionId: "weekly-digest-v3",
+		needUpgrade: true,
+		installedAt: "2026-10-01T08:00:00Z",
+		updatedAt: "2026-10-01T08:00:00Z",
+		version: {
+			access: "visible",
+			skillId: "weekly-digest",
+			name: "weekly-digest",
+			version: "3.1.0",
+			provider: "market",
+			visibility: "MARKET",
+			state: "published",
+		},
+	});
+	const unavailable = SkillHubInstallationListItemV1Schema.parse({
+		...installed,
+		installationId: "installation-hidden",
+		skillVersionId: "hidden-v1",
+		needUpgrade: false,
+		version: { access: "unavailable" },
+	});
+	const control = await fixture(page, "employee", {
+		installations: [installed, unavailable],
+		uninstall: [503],
+	});
+	await page.goto("/skills/manage");
+	const main = page.locator("#main-content");
+	const section = main.getByRole("region", { name: "我的安装" });
+	const rows = section.locator("article.skill-row");
+	await expect(rows).toHaveCount(2);
+	const digest = rows.filter({ hasText: "weekly-digest" });
+	await expect(digest).toContainText("v3.1.0");
+	await expect(digest).toContainText("内部市场");
+	await expect(digest).toContainText("有新版本");
+	await expect(
+		digest.getByRole("link", { name: "详情：weekly-digest" }),
+	).toHaveAttribute("href", "/skills/weekly-digest-v3");
+	// 当前不可见的版本不显示名称和详情入口，仍可移出。
+	const hidden = rows.filter({ hasText: "版本不可用" });
+	await expect(hidden).toContainText("当前无权查看");
+	await expect(hidden.getByRole("link")).toHaveCount(0);
+	await expect(section).not.toContainText(
+		/installation-|hidden-v1|MARKET|published|principal/,
+	);
+
+	// 第一次移出遇到 503：显示可重试的中文提示，行保留；重试复用同一幂等键。
+	const remove = digest.getByRole("button", {
+		name: "移出我的库：weekly-digest",
+	});
+	await remove.click();
+	await expect(digest.getByRole("alert")).toHaveText(
+		"暂时无法移出我的库，请稍后重试。",
+	);
+	await expect(rows).toHaveCount(2);
+	const listReads = () =>
+		control.reads.filter((path) => path === "/api/v2/skills/installations")
+			.length;
+	const readsBeforeRemoval = listReads();
+	await remove.click();
+	await expect(page.locator('[data-slot="toast"]')).toHaveText("已移出我的库");
+	await expect(
+		section.getByRole("heading", { level: 2, name: "我的安装" }),
+	).toBeFocused();
+	await expect(rows).toHaveCount(1);
+	await expect(rows.filter({ hasText: "weekly-digest" })).toHaveCount(0);
+	await expect.poll(listReads).toBeGreaterThan(readsBeforeRemoval);
+	expect(control.removals).toHaveLength(2);
+	expect(control.removals[0]?.path).toBe(
+		"/api/v2/skills/installations/installation-notes",
+	);
+	expect(control.removals[0]?.key).toBeTruthy();
+	expect(control.removals[1]?.key).toBe(control.removals[0]?.key);
+	// 刷新后仍以服务端列表为准。
+	await page.reload();
+	await expect(rows).toHaveCount(1);
+	await expect(rows).toContainText("版本不可用");
 	await fitsViewport(page);
 });
 

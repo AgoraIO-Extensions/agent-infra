@@ -1,4 +1,5 @@
 import {
+	SkillHubInstallationListItemV1Schema,
 	SkillHubOwnedVersionV1Schema,
 	SkillHubVersionDetailV1Schema,
 	SkillHubVersionMetadataV1Schema,
@@ -8,6 +9,7 @@ import { createClient } from "../../pilot/generated-v2/client/index.js";
 import {
 	loadOwnedSkillHubVersions,
 	loadSkillHubDirectory,
+	loadSkillHubInstallations,
 	loadSkillHubVersion,
 } from "./skill-hub.js";
 
@@ -166,6 +168,53 @@ describe("Skill Hub read boundary", () => {
 			Response.json({}, { status: 403 }),
 		);
 		await expect(loadOwnedSkillHubVersions(denied)).resolves.toEqual({
+			kind: "unavailable",
+			retryable: false,
+			reason: "denied",
+		});
+	});
+
+	it("collects every page of the user's installations and rejects other shapes (#2953)", async () => {
+		const installation = SkillHubInstallationListItemV1Schema.parse({
+			installationId: "installation-1",
+			skillVersionId: "release-notes-v1",
+			needUpgrade: false,
+			installedAt: "2026-10-01T08:00:00Z",
+			updatedAt: "2026-10-01T08:00:00Z",
+			version: { access: "unavailable" },
+		});
+		const second = { ...installation, installationId: "installation-2" };
+		const { client, requests } = fakeClient((request) =>
+			Response.json(
+				new URL(request.url).searchParams.get("cursor")
+					? { items: [second], nextCursor: null }
+					: { items: [installation], nextCursor: "installation-1" },
+			),
+		);
+		await expect(loadSkillHubInstallations(client)).resolves.toEqual({
+			kind: "ready",
+			installations: [installation, second],
+		});
+		expect(requests.map((request) => request.url)).toEqual([
+			"https://platform.example.test/api/v2/skills/installations",
+			"https://platform.example.test/api/v2/skills/installations?cursor=installation-1",
+		]);
+		// 带主体字段的响应不属于这个投影，按无效响应处理，不暴露部分结果。
+		const { client: invalid } = fakeClient(() =>
+			Response.json({
+				items: [{ ...installation, principalId: "other-user" }],
+				nextCursor: null,
+			}),
+		);
+		await expect(loadSkillHubInstallations(invalid)).resolves.toEqual({
+			kind: "unavailable",
+			retryable: false,
+			reason: "invalid-response",
+		});
+		const { client: denied } = fakeClient(() =>
+			Response.json({}, { status: 403 }),
+		);
+		await expect(loadSkillHubInstallations(denied)).resolves.toEqual({
 			kind: "unavailable",
 			retryable: false,
 			reason: "denied",
