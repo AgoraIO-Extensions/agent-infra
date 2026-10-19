@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	type ConversationExecutionAuthorityV1,
 	type ConversationExecutionTransactionPortV1,
@@ -716,7 +717,7 @@ async function commandEffectCounts() {
 }
 
 describe("PostgreSQL Conversation command transaction", () => {
-	it("persists and replays one native capability admission atomically", async () => {
+	it("persists and replays one native capability admission atomically, including historical digests (#2950)", async () => {
 		await persistConformanceModelConfiguration(undefined, authority);
 		const { transaction, useCase } = createConversation();
 		try {
@@ -921,6 +922,55 @@ describe("PostgreSQL Conversation command transaction", () => {
 			} finally {
 				await dispatch.close();
 			}
+
+			// Emulate a record committed by the previous binary in this isolated test DB.
+			const legacyDigest = createHash("sha256")
+				.update(JSON.stringify(request.parameters))
+				.digest("hex");
+			await client`update platform.idempotency_records
+				set result = jsonb_set(jsonb_set(result, '{plan,parametersDigest}',
+					to_jsonb(${legacyDigest}::text)), '{plan,outbox,payload,parametersDigest}',
+					to_jsonb(${legacyDigest}::text))
+				where scope_id = ${request.conversationId}
+					and command_type = 'native-capability.invoke'
+					and idempotency_key = ${request.idempotencyKey}`;
+			await client`update platform.outbox_items
+				set payload = jsonb_set(payload, '{parametersDigest}', to_jsonb(${legacyDigest}::text))
+				where id = ${accepted.plan.outbox.id}`;
+			const snapshot = () => client`select
+				(select jsonb_agg(to_jsonb(i) order by id) from platform.idempotency_records i
+					where scope_id = ${request.conversationId}) as idempotency,
+				(select jsonb_agg(to_jsonb(e) order by execution_id) from platform.conversation_executions e
+					where conversation_id = ${request.conversationId}) as executions,
+				(select jsonb_agg(to_jsonb(o) order by id) from platform.outbox_items o
+					where scope_type = 'conversation' and scope_id = ${request.conversationId}) as outbox,
+				(select jsonb_agg(to_jsonb(a) order by id) from platform.conversation_audit_events a
+					where execution_id = ${accepted.result.executionId}) as audit`;
+			const beforeReplay = await snapshot();
+			await expect(admission.admit(request)).resolves.toMatchObject({
+				outcome: "replayed",
+				result: accepted.result,
+				plan: { parametersDigest: legacyDigest },
+			});
+			await expect(
+				admission.admit({ ...request, parameters: "different" }),
+			).resolves.toEqual({
+				outcome: "conflict",
+				reason: "idempotency_conflict",
+			});
+			expect(await snapshot()).toEqual(beforeReplay);
+			await client`update platform.idempotency_records
+				set result = jsonb_set(jsonb_set(result, '{plan,parametersDigest}',
+					to_jsonb(${"0".repeat(64)}::text)), '{plan,outbox,payload,parametersDigest}',
+					to_jsonb(${"0".repeat(64)}::text))
+				where scope_id = ${request.conversationId}
+					and command_type = 'native-capability.invoke'
+					and idempotency_key = ${request.idempotencyKey}`;
+			const beforeInvalidReplay = await snapshot();
+			await expect(admission.admit(request)).resolves.toMatchObject({
+				outcome: "unavailable",
+			});
+			expect(await snapshot()).toEqual(beforeInvalidReplay);
 		} finally {
 			await transaction.close();
 		}

@@ -435,7 +435,7 @@ function digest(value: unknown): string {
 }
 
 export function nativeCapabilityParametersDigestV1(parameters: string): string {
-	return digest(parameters);
+	return createHash("sha256").update(parameters, "utf8").digest("hex");
 }
 
 export function nativeCapabilityAdmissionRequestDigestV1(
