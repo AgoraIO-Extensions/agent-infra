@@ -496,10 +496,19 @@ Worker→Host Native V5 只为所选 Skill 携带附件 ID，command 不接受�
 服务端在受理事务中复用文件 Core 的归属、available 状态与单次关联检查。
 
 Native V5 沿用 V4 business Grant 的身份、Key 版本和只读附件语义，Grant 必须列出与请求
-完全一致的附件集合；签名摘要覆盖完整 V5 请求。Host 在创建 FileBridge 前验证版本、
+完全一致的附件集合；签名摘要覆盖 V5 业务请求的规范化字段及完整附件序列，排除 Grant
+token 和独立私有 Key 原值及其摘要，仍精确绑定 Key 的用途、引用与版本。Host 在创建
+FileBridge 前验证版本、
 主体、Conversation、Execution、generation/fence、当前权限与摘要。恢复必须沿原持久输入
 与冻结 Key 版本，旧请求不能通过默认空集合或重新解释参数取得文件；旧 V4 的独立私有 Key
 交付含义保持不变。
+
+Native V5 的 Key 恢复使用独立 RestoreExecutionKey V5 契约，旧恢复 V4 继续严格接收原
+Submit/Native V4。V5 仅接受已持久受理的原 Native V5 请求：原业务摘要、附件序列、
+accepted Host/operation 引用、代次/fence 和冻结 Key 引用/版本必须一致；不能将它降为
+空附件 V4，也不能由恢复请求创建新的执行或 native intent。恢复 Grant 只恢复原执行的私有
+Key 上下文，不授予附件访问，不恢复 File Grant、旧临时路径或重新物化文件；后续动作仍须
+通过当前授权与原 journal/ACK 屏障。
 
 Codex 仅接受 FileLimits 当前交集允许的 `text/plain`，最多四个文件，每个最多 4096 字节。
 FileAuthority 的固定对象版本、descriptor、实际字节数及 SHA-256 必须一致；验证 UTF-8，
