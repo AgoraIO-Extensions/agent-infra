@@ -4337,6 +4337,25 @@ function isPilotBrowserProjectionOpenApiAddition(previous, current) {
 	return changed && findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #2861 adds optional lifecycle and directory identity fields to application
+// projections. Existing readers may continue using the historical fields.
+function isApplicationProjectionLifecycleFieldsOpenApiAddition(previous, current) {
+	const normalized = structuredClone(current);
+	let changed = false;
+	for (const name of ["AgentApplicationProjectionV1", "AgentApplicationProjectionV2"]) {
+		const before = previous.components?.schemas?.[name]?.properties ?? {};
+		const after = normalized.components?.schemas?.[name]?.properties;
+		if (!after) continue;
+		for (const field of ["updatedAt", "applicant"]) {
+			if (before[field] === undefined && after[field] !== undefined) {
+				delete after[field];
+				changed = true;
+			}
+		}
+	}
+	return changed && findBreakingChanges(previous, normalized).length === 0;
+}
+
 // Runtime operation facts may add optional, non-secret Connection consumer
 // references without invalidating existing event readers.
 function normalizeRuntimeConnectionAssociationOpenApiAddition(current) {
@@ -4417,6 +4436,27 @@ function normalizeRuntimeSkillHostReadJsonSchemaAddition(previous, current) {
 		delete schema.properties?.generationId;
 		if (Array.isArray(schema.required))
 			schema.required = schema.required.filter((key) => key !== "generationId");
+	}
+	return normalized;
+}
+
+// #2861 adds optional lifecycle and directory identity fields to application
+// projections without removing any historical fields.
+function normalizeApplicationProjectionLifecycleFieldsJsonSchemaAddition(
+	previous,
+	current,
+) {
+	const normalized = structuredClone(current);
+	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
+	const schemas = normalized.$defs ?? normalized.components?.schemas ?? {};
+	for (const name of ["AgentApplicationProjectionV1", "AgentApplicationProjectionV2"]) {
+		const before = previousSchemas[name]?.properties ?? {};
+		const after = schemas[name]?.properties;
+		if (!after) continue;
+		for (const field of ["updatedAt", "applicant"]) {
+			if (before[field] === undefined && after[field] !== undefined)
+				delete after[field];
+		}
 	}
 	return normalized;
 }
@@ -4588,6 +4628,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isRuntimeBrowserOperationFactOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserWorkloadIdentityOpenApiAddition(previous, current) &&
 			!isPilotBrowserProjectionOpenApiAddition(previous, current) &&
+			!isApplicationProjectionLifecycleFieldsOpenApiAddition(previous, current) &&
 			!isBrowserCommandOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isRuntimeNativeCapabilityV3OpenApiAddition(previous, current) &&
@@ -4657,9 +4698,12 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
 	let normalized = normalizeRuntimeNativeCapabilityV3CommandJsonSchemaAddition(
 		previous,
-		normalizeRuntimeSkillHostReadJsonSchemaAddition(
+		normalizeApplicationProjectionLifecycleFieldsJsonSchemaAddition(
+			previous,
+			normalizeRuntimeSkillHostReadJsonSchemaAddition(
 			previous,
 			normalizeSkillPackageObjectVersions(previous, current, changes),
+			),
 		),
 	);
 	const currentSchemas =
