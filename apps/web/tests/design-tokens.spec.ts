@@ -1,6 +1,6 @@
 import {
-	ScopedPlatformAuditPageV1Schema,
-	ScopedPlatformAuditProjectionV1Schema,
+	ScopedPlatformAuditPageV2Schema,
+	ScopedPlatformAuditProjectionV2Schema,
 	SkillHubVersionMetadataV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
@@ -159,16 +159,21 @@ async function tokenFixture(page: Page, role: "owner" | "admin" = "owner") {
 		}
 		if (path.endsWith("/wecom-bot") || path.endsWith("/wecom-app"))
 			return route.fulfill({ json: { status: "not_configured" } });
-		if (path === "/api/v1/audit")
+		// #2909：审计页读取带显示名的 V2 入口。
+		if (path === "/api/v2/audit")
 			return route.fulfill({
-				json: ScopedPlatformAuditPageV1Schema.parse({
+				json: ScopedPlatformAuditPageV2Schema.parse({
 					items: [
-						ScopedPlatformAuditProjectionV1Schema.parse({
-							schemaVersion: 1,
+						ScopedPlatformAuditProjectionV2Schema.parse({
+							schemaVersion: 2,
 							auditId: "audit-tokens",
 							action: "task.api.access",
-							actor: { kind: "user", actorId: userId },
-							subject: { kind: "agent", subjectId: "agent-tokens" },
+							actor: { kind: "user", actorId: userId, displayName: null },
+							subject: {
+								kind: "agent",
+								subjectId: "agent-tokens",
+								displayName: "编程助手",
+							},
 							result: "accepted",
 							summary: "任务 API 访问获准",
 							taskApi: {
@@ -186,6 +191,7 @@ async function tokenFixture(page: Page, role: "owner" | "admin" = "owner") {
 							originalPrincipal: null,
 							executor: null,
 							operation: null,
+							agentDisplayName: "编程助手",
 						}),
 					],
 					nextCursor: null,
