@@ -73,6 +73,18 @@ platformApi:
   placement: external
   externalBaseUrl: https://api.example.invalid
   deploymentModule: deployment-platform-api
+  # First-party in-cluster API: use file:///app/dist/deployment.mjs and supply
+  # API-only Secret references. The configuration Secret's other files are
+  # available beside the module under /app/deployment; bytes stay outside values.
+  # configurationModuleSecretRef:
+  #   name: agent-infra-api-configuration
+  #   key: configuration.mjs
+  # proxyTokenSecretRef:
+  #   name: agent-infra-api-proxy-token
+  #   key: token
+  # trustedCaSecretRef:
+  #   name: agent-infra-api-trusted-ca
+  #   key: ca.crt
   # Optional callback-only credential for the in-cluster Platform API. The
   # referenced Secret is supplied by the deployment owner; its bytes are
   # projected read-only and never stored in Helm values.

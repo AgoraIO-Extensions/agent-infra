@@ -25,6 +25,33 @@ Secret 内容不进入 values、模板渲染日志或 API 配置；省略该 Sec
 该凭据只允许固定的 `/internal/runtime/oauth/v1/callback` 路由，不能复用 Worker business/
 installation credential。外置 `platform-api` 的文件装配仍由其部署方负责。
 
+Helm 的第一方 in-cluster API 使用以下仅含引用的 values。部署 owner 预先创建 API 专属
+Secret；配置 Secret 的全部文件只读挂到 `/app/deployment`，入口加载所选 key，辅助模块可用
+相对 import，私有 adapter 的依赖包仍由部署镜像提供。不要把 Worker keyring 放入该 Secret。
+
+```yaml
+platformApi:
+  placement: in-cluster
+  deploymentModule: file:///app/dist/deployment.mjs
+  configurationModuleSecretRef:
+    name: agent-infra-api-configuration
+    key: configuration.mjs
+  proxyTokenSecretRef:
+    name: agent-infra-api-proxy-token
+    key: token
+  trustedCaSecretRef:
+    name: agent-infra-api-trusted-ca
+    key: ca.crt
+```
+
+Chart 设置 `PLATFORM_API_CONFIGURATION_MODULE=file:///app/deployment/configuration.mjs`、
+`PLATFORM_API_PROXY_TOKEN_FILE=/var/run/agent-infra/proxy-token/token`；可选 CA 设置
+`NODE_EXTRA_CA_CERTS=/var/run/agent-infra/trusted-ca/ca.crt`。文件权限为 `0440`，API 的
+`fsGroup=1000` 可读，root filesystem 和各挂载均只读，ServiceAccount token 不挂载。
+内置入口缺少配置或代理令牌引用时拒绝渲染；自带可信部署模块可以省略未使用的引用，
+external API 不接受这些 in-cluster 引用。模板验证不代替实际 LDAP 登录、目录、授权与
+native 业务验收；外联仍由部署方配置明确的 NetworkPolicy。
+
 | 导出 | 契约 |
 | --- | --- |
 | `ldap` | [`LdapIdentityConfiguration`](../../packages/identity/src/ldap.ts)，含实际 LDAP（`tls: true` 默认使用 LDAPS，`tls: false` 使用 LDAP，见工程 Spec §9.1）、受控 `verifyCurrentStatus` 和持久 issuer/UID 映射；无需专用 active 属性 |
