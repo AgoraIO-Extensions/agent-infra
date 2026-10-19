@@ -16,12 +16,12 @@ export const skillHubProviderLabels = {
 } satisfies Record<SkillHubVersionMetadataV1["provider"], string>;
 
 /**
- * 发布范围。MEMBER 在服务端对全部在职成员可见，契约也没有成员名单；
- * 设计稿的「指定成员」会误导发布者，产品确认前保持「成员」。
+ * 发布范围。MEMBER 对全体在职成员可见（PRD §11.5，#2862 已确认），
+ * 不采用设计稿的「指定成员」。
  */
 export const skillHubVisibilityLabels = {
 	PRIVATE: "仅自己",
-	MEMBER: "成员",
+	MEMBER: "全体成员",
 	ORGANIZATION: "组织共享",
 	MARKET: "内部市场",
 } satisfies Record<SkillHubVersionMetadataV1["visibility"], string>;
