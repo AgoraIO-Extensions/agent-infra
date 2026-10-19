@@ -3,7 +3,13 @@ import {
 	QueryClientProvider,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { Link, useLocation, useRouterState } from "@tanstack/react-router";
+import {
+	Link,
+	useLinkProps,
+	useLocation,
+	useRouter,
+	useRouterState,
+} from "@tanstack/react-router";
 import {
 	Activity,
 	Bot,
@@ -52,8 +58,10 @@ import {
 	SheetTrigger,
 } from "@/components/ui/sheet";
 import { Sidebar } from "@/components/ui/sidebar";
+import { LoadingLine } from "@/components/ui/spinner";
 import type { BrowserSessionProjectionV1 } from "../pilot/generated/types.gen";
-import { LoginAction } from "./login-action";
+import { connectionEntryUrl } from "./connection-entry";
+import { LoginPage } from "./login-page";
 import { LogoutAction } from "./logout-action";
 import {
 	type NavigationKey,
@@ -62,6 +70,7 @@ import {
 	resolvePageChrome,
 	signInDocumentTitle,
 } from "./page-chrome";
+import { PageStateCard } from "./page-state-card";
 import {
 	BrowserSessionQueryContext,
 	useBrowserSession,
@@ -99,6 +108,33 @@ export function safeDeploymentUrl(value: unknown): string | undefined {
 	}
 }
 
+/**
+ * 品牌链接回到工作台，但它不是导航项：去掉 Link 在「/」上自动补的 aria-current 与
+ * data-status，当前页只由「工作台」导航项标出（N-21）。
+ */
+function BrandLink({
+	ref,
+	onClick,
+	children,
+}: {
+	ref?: RefObject<HTMLAnchorElement | null>;
+	onClick: () => void;
+	children: ReactNode;
+}) {
+	const {
+		"aria-current": _current,
+		"data-status": _status,
+		...props
+	} = useLinkProps({ to: "/", onClick }, ref) as ReturnType<
+		typeof useLinkProps
+	> & { "data-status"?: string };
+	return (
+		<a {...props} className="platform-brand">
+			{children}
+		</a>
+	);
+}
+
 function AuthenticatedContent({
 	session,
 	children,
@@ -129,6 +165,46 @@ function AuthenticatedContent({
 
 export function ApplicationShell({ children }: { children: ReactNode }) {
 	const session = useBrowserSession();
+	const [sheet, setSheet] = useState(false);
+	const sessionKind = session.state.kind;
+	// 只有服务端确认未登录（401、retryable: false）才整页渲染登录页；
+	// 确认中与可重试失败都留在壳层骨架内，不出现登录标题与「尚未登录」（R4-02）。
+	const confirmedAnonymous =
+		session.state.kind === "unavailable" && !session.state.retryable;
+	const sessionUnavailable =
+		session.state.kind === "unavailable" && session.state.retryable;
+	const router = useRouter();
+	const expiredReason = useLocation({
+		select: (location) =>
+			(location.search as Record<string, unknown>).reason === "expired",
+	});
+	// 过期只保存在内存：已就绪的会话变为确认未登录，且不是用户主动退出。
+	const [sessionExpired, setSessionExpired] = useState(false);
+	const authenticatedBefore = useRef(false);
+	const loggedOut = useRef(false);
+	useEffect(() => {
+		if (sessionKind === "ready") {
+			authenticatedBefore.current = true;
+			loggedOut.current = false;
+			setSessionExpired(false);
+		} else if (confirmedAnonymous) {
+			if (authenticatedBefore.current && !loggedOut.current)
+				setSessionExpired(true);
+			authenticatedBefore.current = false;
+			loggedOut.current = false;
+		}
+		// 离开就绪态时窄屏导航随应用壳卸载；重新登录后不应自动再次展开。
+		if (sessionKind !== "ready") setSheet(false);
+	}, [sessionKind, confirmedAnonymous]);
+	// 会话就绪后去掉 reason 参数，保留其他查询参数，避免之后退出时误报过期。
+	useEffect(() => {
+		if (sessionKind !== "ready" || !expiredReason) return;
+		const { pathname, search, hash } = router.history.location;
+		const params = new URLSearchParams(search);
+		params.delete("reason");
+		const query = params.toString();
+		router.history.replace(`${pathname}${query ? `?${query}` : ""}${hash}`);
+	}, [sessionKind, expiredReason, router]);
 	const sessionProjection =
 		session.state.kind === "ready"
 			? JSON.stringify(session.state.session)
@@ -144,7 +220,6 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const conversationSelection = useLocation({
 		select: (location) => location.search.mode === "conversation",
 	});
-	const [sheet, setSheet] = useState(false);
 	const sheetBrand = useRef<HTMLAnchorElement>(null);
 	const navigationId = useId();
 	const routeHref = useLocation({ select: (location) => location.href });
@@ -168,13 +243,10 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const admin = user?.roles.includes("system_admin") ?? false;
 	const loginUrl = safeDeploymentUrl(import.meta.env.VITE_PLATFORM_LOGIN_URL);
 	const logoutUrl = safeDeploymentUrl(import.meta.env.VITE_PLATFORM_LOGOUT_URL);
+	// 与 Agent 详情「打开 Connection」、对话上下文条共用同一个入口函数（NI-01 / NI-68、BR-04）。
 	const connectionUrl =
-		session.state.kind === "ready" &&
-		session.state.connection?.status === "available"
-			? safeDeploymentUrl(
-					session.state.connection.publicOrigin +
-						session.state.connection.mcpPath,
-				)
+		session.state.kind === "ready"
+			? connectionEntryUrl(session.state.connection)
 			: undefined;
 	const development =
 		import.meta.env.DEV &&
@@ -188,11 +260,10 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		conversationSelection,
 		notFound,
 	});
-	// 未登录时整页是登录入口，标签页标题与登录页一致。
-	const documentTitle =
-		session.state.kind === "unavailable"
-			? signInDocumentTitle
-			: chrome.documentTitle;
+	// 确认未登录时整页是登录入口，标签页标题与登录页一致；确认中沿用目标页标题。
+	const documentTitle = confirmedAnonymous
+		? signInDocumentTitle
+		: chrome.documentTitle;
 	useEffect(() => {
 		document.title = documentTitle;
 	}, [documentTitle]);
@@ -395,12 +466,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		brandRef?: RefObject<HTMLAnchorElement | null>,
 	) => (
 		<>
-			<Link
-				ref={brandRef}
-				className="platform-brand"
-				to="/"
-				onClick={closeSheet}
-			>
+			<BrandLink ref={brandRef} onClick={closeSheet}>
 				<span className="platform-brand-mark" aria-hidden="true">
 					A
 				</span>
@@ -408,7 +474,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					<strong>Agora Agent</strong>
 					<small>Platform workspace</small>
 				</div>
-			</Link>
+			</BrandLink>
 			<nav aria-label="主导航">
 				{navigationGroups
 					.filter((group) => admin || !group.administratorOnly)
@@ -440,12 +506,57 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				{user && logoutUrl && (
 					<LogoutAction
 						endpoint={logoutUrl}
-						onLoggedOut={() => session.refetch()}
+						onLoggedOut={() => {
+							// 主动退出后的未登录不是「登录已过期」。
+							loggedOut.current = true;
+							return session.refetch();
+						}}
 					/>
 				)}
 			</div>
 		</>
 	);
+	// 会话确认期与可重试失败的侧栏骨架：品牌块与导航占位行同宽、同位置，
+	// 不渲染可点击的导航项、身份卡与「尚未登录」；就绪后只在末尾追加系统管理分组。
+	const renderNavigationSkeleton = () => (
+		<>
+			<div className="platform-brand" aria-hidden="true">
+				<span className="platform-brand-mark">A</span>
+				<div>
+					<strong>Agora Agent</strong>
+					<small>Platform workspace</small>
+				</div>
+			</div>
+			<div className="platform-nav-skeleton" aria-hidden="true">
+				{navigationGroups
+					.filter((group) => !group.administratorOnly)
+					.map((group) => (
+						<div key={group.label} className="platform-nav-group">
+							<p className="platform-nav-label">{group.label}</p>
+							{group.items.map((key) => (
+								<span key={key} className="platform-nav-item">
+									<span className="platform-skeleton-line" />
+								</span>
+							))}
+						</div>
+					))}
+			</div>
+		</>
+	);
+	if (confirmedAnonymous)
+		return (
+			<LoginPage
+				loginUrl={loginUrl}
+				development={development}
+				expired={sessionExpired || expiredReason}
+				onLoggedIn={async () => {
+					const result = await session.refetch();
+					if (result.data?.kind !== "ready")
+						throw new Error("Login session was not established");
+				}}
+			/>
+		);
+	const ready = session.state.kind === "ready";
 	return (
 		<div
 			className={
@@ -458,50 +569,58 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				跳至主要内容
 			</a>
 			<Sidebar className="platform-sidebar">
-				{renderNavigation("sidebar")}
+				{ready ? renderNavigation("sidebar") : renderNavigationSkeleton()}
 			</Sidebar>
 			<div className="platform-workspace">
 				<header className="platform-topbar">
-					<Sheet open={sheet} onOpenChange={setSheet}>
-						<SheetTrigger
-							render={
-								<Button
-									variant="outline"
-									size="icon"
-									className="mobile-menu"
-									aria-label="打开导航"
-								/>
-							}
-						>
-							<Menu aria-hidden="true" />
-						</SheetTrigger>
-						<SheetContent
-							side="left"
-							showCloseButton={false}
-							className="platform-nav-sheet"
-							aria-modal="true"
-							// 设计稿：打开后焦点落在品牌链接，Esc 关闭后回到「打开导航」。
-							initialFocus={sheetBrand}
-						>
-							<SheetHeader className="sr-only">
-								<SheetTitle>主导航</SheetTitle>
-								<SheetDescription>
-									选择页面，或关闭导航返回当前页面。
-								</SheetDescription>
-							</SheetHeader>
-							<SheetClose
-								className={buttonVariants({
-									variant: "ghost",
-									size: "icon",
-									className: "absolute top-3 right-3",
-								})}
-								aria-label="关闭导航"
+					{ready ? (
+						<Sheet open={sheet} onOpenChange={setSheet}>
+							<SheetTrigger
+								render={
+									<Button
+										variant="outline"
+										size="icon"
+										className="mobile-menu"
+										aria-label="打开导航"
+									/>
+								}
 							>
-								<X aria-hidden="true" />
-							</SheetClose>
-							{renderNavigation("sheet", sheetBrand)}
-						</SheetContent>
-					</Sheet>
+								<Menu aria-hidden="true" />
+							</SheetTrigger>
+							<SheetContent
+								side="left"
+								showCloseButton={false}
+								className="platform-nav-sheet"
+								aria-modal="true"
+								// 设计稿：打开后焦点落在品牌链接，Esc 关闭后回到「打开导航」。
+								initialFocus={sheetBrand}
+							>
+								<SheetHeader className="sr-only">
+									<SheetTitle>主导航</SheetTitle>
+									<SheetDescription>
+										选择页面，或关闭导航返回当前页面。
+									</SheetDescription>
+								</SheetHeader>
+								<SheetClose
+									className={buttonVariants({
+										variant: "ghost",
+										size: "icon",
+										className: "absolute top-3 right-3",
+									})}
+									aria-label="关闭导航"
+								>
+									<X aria-hidden="true" />
+								</SheetClose>
+								{renderNavigation("sheet", sheetBrand)}
+							</SheetContent>
+						</Sheet>
+					) : (
+						// 确认期保留菜单按钮的位置与尺寸，但不提供导航入口。
+						<span
+							className="mobile-menu platform-menu-placeholder"
+							aria-hidden="true"
+						/>
+					)}
 					<Breadcrumb className="platform-breadcrumb">
 						<BreadcrumbList>
 							<BreadcrumbItem>{chrome.crumbParent}</BreadcrumbItem>
@@ -534,41 +653,14 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						>
 							{children}
 						</AuthenticatedContent>
-					) : (
-						<main className="platform-content max-w-2xl">
-							<h1 className="text-balance font-semibold text-[28px] tracking-normal">
-								登录工作空间
-							</h1>
-							<p className="mt-5 text-muted-foreground" role="status">
-								{session.isFetching
-									? "正在确认登录状态…"
-									: session.state.kind !== "loading" &&
-										(session.state.retryable
-											? "暂时无法确认登录状态，请重试。"
-											: "请先登录，再查看 Agent、提交申请或继续对话。")}
-							</p>
-							{session.state.kind !== "loading" && (
-								<div className="mt-5 space-y-4">
-									{loginUrl ? (
-										development ? (
-											<a className={buttonVariants()} href={loginUrl}>
-												选择开发测试身份
-											</a>
-										) : (
-											<LoginAction
-												endpoint={loginUrl}
-												onLoggedIn={async () => {
-													const result = await session.refetch();
-													if (result.data?.kind !== "ready")
-														throw new Error(
-															"Login session was not established",
-														);
-												}}
-											/>
-										)
-									) : (
-										<p role="status">登录入口尚未配置。</p>
-									)}
+					) : sessionUnavailable ? (
+						// 重试用尽仍无法确认：登录状态未知，不给登录表单，只提供重新检查。
+						<main className="platform-content">
+							<PageStateCard
+								kind="unavailable"
+								headingLevel={1}
+								description="暂时无法确认登录状态，请稍后重试。"
+								action={
 									<Button
 										variant="outline"
 										onClick={() => void session.refetch()}
@@ -576,8 +668,12 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 									>
 										{session.isFetching ? "正在检查…" : "重新检查"}
 									</Button>
-								</div>
-							)}
+								}
+							/>
+						</main>
+					) : (
+						<main className="platform-content">
+							<LoadingLine>正在确认登录状态…</LoadingLine>
 						</main>
 					)}
 				</div>

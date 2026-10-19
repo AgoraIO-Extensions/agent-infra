@@ -4,6 +4,7 @@ import { MyAgentApplicationDetailScreen } from "../../../features/my-agents/my-a
 import { isRetryableMyAgentApplicationError } from "../../../features/my-agents/my-agent-applications.js";
 import { useMyAgentApplication } from "../../../features/my-agents/use-my-agent-application.js";
 import { useWithdrawMyAgentApplication } from "../../../features/my-agents/use-withdraw-my-agent-application.js";
+import { useTemplateNameLookup } from "../../../features/template-display-name.js";
 
 export const Route = createFileRoute("/my-agents/$applicationId/")({
 	component: MyAgentApplicationRoute,
@@ -13,6 +14,7 @@ function MyAgentApplicationRoute() {
 	const { applicationId } = Route.useParams();
 	const query = useMyAgentApplication(applicationId);
 	const withdrawal = useWithdrawMyAgentApplication(applicationId);
+	const templateName = useTemplateNameLookup();
 	const retryable = query.isError
 		? isRetryableMyAgentApplicationError(query.error)
 		: query.data?.kind === "unavailable" && query.data.retryable;
@@ -33,6 +35,7 @@ function MyAgentApplicationRoute() {
 				withdrawalError={withdrawal.isError}
 				withdrawalResult={withdrawal.data}
 				withdrawing={withdrawal.isPending}
+				templateName={templateName}
 			/>
 		</main>
 	);

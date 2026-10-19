@@ -2,10 +2,7 @@ import { BrowserCapabilityProjectionV1Schema } from "@agent-infra/contracts/runt
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-	BrowserCapabilityStatus,
-	BrowserWorkflowStatus,
-} from "./browser-capability-status.js";
+import { BrowserCapabilityStatus } from "./browser-capability-status.js";
 
 const available = BrowserCapabilityProjectionV1Schema.parse({
 	schemaVersion: 1,
@@ -54,43 +51,23 @@ describe("BrowserCapabilityStatus", () => {
 	it("renders bounded available provenance and policy summary", () => {
 		render(<BrowserCapabilityStatus capability={available} />);
 
+		expect(screen.getByRole("heading", { name: "浏览器能力" })).toBeTruthy();
+		const status = screen.getByRole("status");
+		expect(status.textContent).toContain("可用");
 		expect(
-			screen.getByRole("heading", { name: "Browser Capability" }),
-		).toBeTruthy();
-		expect(screen.getByRole("status").textContent).toContain("可用");
+			status.querySelector('[data-slot="badge"]')?.getAttribute("data-tone"),
+		).toBe("green");
 		expect(screen.getByText(/Chromium 153\.0\.8010\.12/)).toBeTruthy();
-		expect(screen.getByText("2 个受控 origin")).toBeTruthy();
-		expect(screen.getByText("1 个 Context、2 个 Tab、4 个 Page")).toBeTruthy();
+		expect(screen.getByText("导航、页面观察、页面交互")).toBeTruthy();
+		expect(screen.getByText("2 个受控域名")).toBeTruthy();
+		expect(
+			screen.getByText("1 个浏览器上下文、2 个标签页、4 个页面"),
+		).toBeTruthy();
 		expect(screen.getByText("支持受控接管")).toBeTruthy();
 		expect(screen.queryByText(/sha256/)).toBeNull();
-	});
-
-	it.each([
-		["intent", "正在受理", "操作：navigate"],
-		["observing", "正在观察", "Browser 工作流正在推进。"],
-		["action", "正在执行", "操作：click"],
-		["approval_pending", "等待确认", "目标 origin：https://example.test"],
-		["handoff_pending", "等待接管", "需要完成 MFA"],
-		["handed_off", "用户已接管", "Agent 操作保持暂停"],
-		["unknown", "待核实", "已阻断自动重试"],
-	] as const)("renders the %s workflow state", (kind, label, detail) => {
-		const workflow =
-			kind === "intent"
-				? { kind, operation: "navigate" }
-				: kind === "action"
-					? { kind, operation: "click" }
-					: kind === "approval_pending"
-						? { kind, operation: "submit", origin: "https://example.test" }
-						: kind === "handoff_pending"
-							? { kind, reason: "需要完成 MFA" }
-							: kind === "unknown"
-								? { kind, operation: "purchase" }
-								: { kind };
-
-		render(<BrowserWorkflowStatus workflow={workflow} />);
-
-		expect(screen.getByRole("alert").textContent).toContain(label);
-		expect(screen.getByRole("alert").textContent).toContain(detail);
+		expect(document.body.textContent).not.toMatch(
+			/Browser|origin|Context|navigate|chromium \//,
+		);
 	});
 
 	it.each([
@@ -119,7 +96,12 @@ describe("BrowserCapabilityStatus", () => {
 
 			render(<BrowserCapabilityStatus capability={capability} />);
 
-			expect(screen.getByRole("alert").textContent).toContain(label);
+			expect(screen.getByRole("alert").textContent).toContain(
+				`浏览器能力 · ${label}`,
+			);
+			expect(screen.getByRole("alert").textContent).not.toMatch(
+				/Browser|receipt|Capability/,
+			);
 			expect(screen.getByRole("alert").textContent).toContain(
 				"controlled test reason",
 			);

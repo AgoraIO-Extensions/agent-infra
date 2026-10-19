@@ -1,13 +1,25 @@
 import { Link } from "@tanstack/react-router";
-import { Plus } from "lucide-react";
+import { ArrowRight, MessageSquare, Plus } from "lucide-react";
 import type { ReactNode } from "react";
-import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
+import {
+	Alert,
+	AlertAction,
+	AlertDescription,
+	AlertTitle,
+} from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+	Empty,
+	EmptyDescription,
+	EmptyHeader,
+	EmptyMedia,
+	EmptyTitle,
+} from "@/components/ui/empty";
 import { LoadingLine } from "@/components/ui/spinner";
 import { Timestamp } from "@/components/ui/timestamp";
-import { withObjectName } from "@/lib/accessible-name";
+import { distinctObjectNames, withObjectName } from "@/lib/accessible-name";
 import { statusTone } from "@/lib/status-tone";
 import type {
 	AgentProjectionV2,
@@ -31,6 +43,13 @@ import type {
 } from "../collection-read-failure.js";
 import { conversationDisplayTitle } from "../conversation/conversation-display-title.js";
 import type { MyAgentApplicationsState } from "../my-agents/my-agent-applications.js";
+import {
+	type TemplateNameLookup,
+	templateDisplayName,
+} from "../template-display-name.js";
+
+/** 工作台只列最近几条个人对话（设计稿原型 3 条）；全部历史在对话页「最近对话」面板。 */
+export const workbenchRecentLimit = 3;
 
 type Loading = { kind: "loading" };
 type Unavailable = CollectionReadUnavailable;
@@ -52,9 +71,22 @@ export type WorkbenchScreenProps = {
 	recent: WorkbenchRecentState;
 	administrator: boolean;
 	onRetry: () => void;
+	/** 任一分区返回 401 时页面唯一的「重新登录」：由壳层重新确认浏览器会话。 */
+	onRelogin?: () => void;
 	refreshing?: boolean;
-	onLoadMoreRecent?: () => void;
+	/** 模板显示名（部署配置）；未提供或读不到时显示「标准模板」（F-02）。 */
+	templateName?: TemplateNameLookup;
 };
+
+type ReadState =
+	| Loading
+	| Unavailable
+	| { kind: "denied"; reason?: CollectionReadFailureReason }
+	| {
+			kind: "error";
+			retryable: boolean;
+			reason?: CollectionReadFailureReason;
+	  };
 
 function WorkbenchSection({
 	eyebrow,
@@ -81,47 +113,52 @@ function WorkbenchSection({
 	);
 }
 
+function readFailureMessage(state: Exclude<ReadState, Loading>, label: string) {
+	const reason = state.reason;
+	return reason === "authentication-required"
+		? `${label}无法读取，请重新登录。`
+		: state.kind === "denied" || reason === "denied"
+			? `当前无权读取${label}。`
+			: reason === "not-found"
+				? `${label}读取入口不可用。`
+				: reason === "invalid-response"
+					? `${label}返回的数据无法读取。`
+					: `${label}暂时无法读取。`;
+}
+
+const requiresLogin = (state: { kind: string; reason?: unknown }) =>
+	state.kind !== "ready" &&
+	state.kind !== "loading" &&
+	state.reason === "authentication-required";
+
+/**
+ * 分区读取反馈（设计 .notice）：原因写在 strong 标题里。可重试失败用信息变体并给
+ * outline「重新加载」；401、403、404 与响应无效不给按钮，401 的主操作只在页面级提示里出现一次。
+ */
 function ReadNotice({
 	state,
 	label,
 	onRetry,
 	refreshing,
 }: {
-	state:
-		| Loading
-		| Unavailable
-		| { kind: "denied"; reason?: CollectionReadFailureReason }
-		| {
-				kind: "error";
-				retryable: boolean;
-				reason?: CollectionReadFailureReason;
-		  };
+	state: ReadState;
 	label: string;
 	onRetry: () => void;
 	refreshing?: boolean;
 }) {
 	if (state.kind === "loading")
 		return <LoadingLine>正在加载{label}…</LoadingLine>;
-	const reason = state.reason;
-	const message =
-		reason === "authentication-required"
-			? `${label}无法读取，请重新登录。`
-			: state.kind === "denied" || reason === "denied"
-				? `当前无权读取${label}。`
-				: reason === "not-found"
-					? `${label}读取入口不可用。`
-					: reason === "invalid-response"
-						? `${label}返回的数据无法读取。`
-						: `${label}暂时无法读取。`;
 	const denied = state.kind === "denied";
+	const retryable =
+		!denied && state.retryable && state.reason !== "authentication-required";
 	return (
 		// 无权读取是权限边界，不打断读屏；其余读取失败用 role="alert"。
 		<Alert
-			tone={denied ? "warn" : "danger"}
+			tone={denied ? "warn" : retryable ? "info" : "danger"}
 			role={denied ? undefined : "alert"}
 		>
-			<AlertDescription>{message}</AlertDescription>
-			{!denied && state.retryable && (
+			<AlertTitle>{readFailureMessage(state, label)}</AlertTitle>
+			{retryable && (
 				<AlertAction>
 					<Button variant="outline" onClick={onRetry} disabled={refreshing}>
 						重新加载{label}
@@ -151,6 +188,133 @@ function AgentStatus({ agent }: { agent: AgentProjectionV2 }) {
 	);
 }
 
+function RecentConversations({
+	agents,
+	recent,
+}: Pick<WorkbenchScreenProps, "agents" | "recent"> & {
+	recent: Extract<WorkbenchRecentState, { kind: "ready" }>;
+}) {
+	if (recent.conversations.length === 0)
+		return (
+			<Empty className="workbench-empty">
+				<EmptyHeader>
+					<EmptyMedia>
+						<MessageSquare aria-hidden="true" />
+					</EmptyMedia>
+					<EmptyTitle>暂无个人对话</EmptyTitle>
+					<EmptyDescription>选择一个 Agent 开始新的个人对话。</EmptyDescription>
+				</EmptyHeader>
+			</Empty>
+		);
+	// 标题重复（含多条「未命名对话」）时按出现顺序编号，链接名称仍可区分（N-12）。
+	const objectNames = distinctObjectNames(
+		recent.conversations
+			.slice(0, workbenchRecentLimit)
+			.map((conversation) => conversationDisplayTitle(conversation.title)),
+	);
+	return (
+		<div className="workbench-list">
+			{recent.conversations
+				.slice(0, workbenchRecentLimit)
+				.map((conversation, index) => {
+					// Agent 列表仍在读取时不下结论：不显示状态文字、元信息只放时间，
+					// 只有列表确认失败（或列表里没有该 Agent）才显示「暂时无法确认」。
+					const agentsLoading = agents.kind === "loading";
+					const agent =
+						agents.kind === "ready"
+							? agents.agents.find(
+									(candidate) => candidate.agentId === conversation.agentId,
+								)
+							: undefined;
+					const conversationUnavailable = conversation.status === "unavailable";
+					const readOnly =
+						(agent !== undefined && !canStartPlatformConversation(agent)) ||
+						conversationUnavailable;
+					const title = conversationDisplayTitle(conversation.title);
+					// 三种文案都是四个字：加载期到就绪后按钮宽度不变（NI-28）。
+					const action = readOnly
+						? "查看历史"
+						: agent
+							? "继续对话"
+							: "打开对话";
+					return (
+						<article
+							className="workbench-list-row workbench-recent-row"
+							key={`${conversation.agentId}\u0000${conversation.conversationId}`}
+						>
+							<div className="workbench-list-main">
+								<div className="workbench-tag-row">
+									{conversationUnavailable ? (
+										<Badge tone="red">会话不可用</Badge>
+									) : agent ? (
+										<AgentStatus agent={agent} />
+									) : agentsLoading ? (
+										<span
+											className="workbench-chip-placeholder"
+											data-slot="chip-placeholder"
+											aria-hidden="true"
+										/>
+									) : (
+										<Badge tone="gray">状态暂时无法确认</Badge>
+									)}
+								</div>
+								<h3>{title}</h3>
+								<small>
+									{agent
+										? `${agent.name} · `
+										: agentsLoading
+											? null
+											: "所属 Agent 暂时无法读取 · "}
+									<Timestamp value={conversation.updatedAt} />
+									{readOnly && " · 历史只读"}
+								</small>
+							</div>
+							<div className="workbench-list-side">
+								<Link
+									className={buttonVariants({
+										variant: readOnly ? "ghost" : "outline",
+									})}
+									to="/chat/$agentId/{-$conversationId}"
+									params={{
+										agentId: conversation.agentId,
+										conversationId: conversation.conversationId,
+									}}
+									search={{
+										view: undefined,
+									}}
+									aria-label={withObjectName(action, objectNames[index])}
+								>
+									{action}
+								</Link>
+							</div>
+						</article>
+					);
+				})}
+		</div>
+	);
+}
+
+/** 待处理的一行：strong 标题 + 说明（或读取反馈），操作放在右侧。 */
+function TaskRow({
+	title,
+	children,
+	action,
+}: {
+	title: string;
+	children: ReactNode;
+	action?: ReactNode;
+}) {
+	return (
+		<div className="workbench-list-row workbench-task-row">
+			<div className="workbench-list-main">
+				<h3>{title}</h3>
+				{children}
+			</div>
+			{action && <div className="workbench-list-side">{action}</div>}
+		</div>
+	);
+}
+
 export function WorkbenchScreen(props: WorkbenchScreenProps) {
 	const {
 		agents,
@@ -160,15 +324,46 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 		adminAgents,
 		recent,
 		administrator,
+		onRetry,
+		onRelogin,
+		refreshing,
+		templateName,
 	} = props;
-	const linkClass = buttonVariants({ variant: "outline" });
+	const notice = { onRetry, refreshing };
+	const loginRequired = [
+		recent,
+		agents,
+		ownerAgents,
+		applications,
+		...(administrator ? [pending, adminAgents] : []),
+	].some(requiresLogin);
+	const latest =
+		recent.kind === "ready" ? recent.conversations.at(0) : undefined;
+	const rejected =
+		applications.kind === "ready"
+			? applications.applications
+					.filter((application) => application.status === "rejected")
+					.slice(0, 3)
+			: [];
+	const creationFailed =
+		ownerAgents.kind === "ready"
+			? ownerAgents.agents
+					.filter((agent) => agent.managementStatus === "creation_failed")
+					.slice(0, 3)
+			: [];
+	const administratorFailures =
+		adminAgents.kind === "ready"
+			? adminAgents.agents.filter(
+					(agent) => agent.managementStatus === "creation_failed",
+				).length
+			: 0;
 	return (
 		<div className="ia-workbench">
 			<header className="page-heading">
 				<div>
 					<p className="workbench-eyebrow">公司内部工作区 · M1</p>
-					<h1>把下一步工作交给合适的 Agent。</h1>
-					<p>最近对话、可用入口和需要你处理的事项都集中在这里。</p>
+					<h1>选择一个 Agent 开始工作。</h1>
+					<p>最近对话、可用 Agent 和待处理事项都在这里。</p>
 				</div>
 				<Link
 					className={buttonVariants()}
@@ -178,225 +373,174 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 					<Plus aria-hidden="true" /> 新建对话
 				</Link>
 			</header>
+			{loginRequired && (
+				// 会话过期时全页只有这一个主操作；各分区只说明原因，不再各放按钮。
+				<Alert tone="danger" role="alert" className="workbench-login-notice">
+					<AlertTitle>登录已过期</AlertTitle>
+					<AlertDescription>
+						当前会话已过期，需要重新登录后再进入工作区。
+					</AlertDescription>
+					{onRelogin && (
+						<AlertAction>
+							<Button onClick={onRelogin} disabled={refreshing}>
+								重新登录
+							</Button>
+						</AlertAction>
+					)}
+				</Alert>
+			)}
 			<div className="workbench-overview">
 				<WorkbenchSection
-					eyebrow="只显示当前账号自己的历史"
-					title="最近的个人对话"
+					eyebrow="只显示你的历史记录"
+					title="最近对话"
 					action={
-						<Link
-							className={buttonVariants({ variant: "outline" })}
-							to="/agents"
-							search={{ mode: "conversation" }}
-						>
-							新对话
-						</Link>
+						latest && (
+							<Link
+								className={buttonVariants({ variant: "ghost" })}
+								to="/chat/$agentId/{-$conversationId}"
+								params={{
+									agentId: latest.agentId,
+									conversationId: latest.conversationId,
+								}}
+								search={{ view: undefined }}
+							>
+								查看全部
+								<ArrowRight aria-hidden="true" />
+							</Link>
+						)
 					}
 				>
 					{recent.kind === "ready" ? (
-						recent.conversations.length === 0 ? (
-							<p>暂无个人对话。</p>
-						) : (
-							<div className="workbench-grid">
-								{recent.conversations.map((conversation) => {
-									const agent =
-										agents.kind === "ready"
-											? agents.agents.find(
-													(candidate) =>
-														candidate.agentId === conversation.agentId,
-												)
-											: undefined;
-									const readOnly =
-										(agent !== undefined &&
-											!canStartPlatformConversation(agent)) ||
-										conversation.status === "unavailable";
-									const title = conversationDisplayTitle(conversation.title);
-									const action = readOnly
-										? "查看历史"
-										: agent
-											? "继续对话"
-											: "打开对话";
-									return (
-										<article
-											className="workbench-card workbench-recent-row"
-											key={`${conversation.agentId}\u0000${conversation.conversationId}`}
-										>
-											<div className="workbench-recent-copy">
-												{conversation.status === "unavailable" ? (
-													<Badge tone="red">会话不可用</Badge>
-												) : agent ? (
-													<AgentStatus agent={agent} />
-												) : (
-													<Badge tone="gray">状态暂时无法确认</Badge>
-												)}
-												<h3>{title}</h3>
-												<p>
-													{agent?.name ?? "所属 Agent 暂时无法读取"} ·{" "}
-													<Timestamp value={conversation.updatedAt} />
-												</p>
-												{readOnly && (
-													<p>历史仍可查看，当前不能继续发送消息。</p>
-												)}
-											</div>
-											<Link
-												className={linkClass}
-												to="/chat/$agentId/{-$conversationId}"
-												params={{
-													agentId: conversation.agentId,
-													conversationId: conversation.conversationId,
-												}}
-												search={{
-													view: undefined,
-												}}
-												aria-label={withObjectName(action, title)}
-											>
-												{action}
-											</Link>
-										</article>
-									);
-								})}
-							</div>
-						)
+						<RecentConversations agents={agents} recent={recent} />
 					) : (
-						<ReadNotice {...props} state={recent} label="最近的个人对话" />
-					)}
-					{recent.kind === "ready" && recent.nextCursor !== null && (
-						<Button
-							className="mt-4"
-							variant="outline"
-							onClick={props.onLoadMoreRecent}
-							disabled={props.refreshing || !props.onLoadMoreRecent}
-						>
-							加载更多对话
-						</Button>
+						<ReadNotice {...notice} state={recent} label="最近的个人对话" />
 					)}
 				</WorkbenchSection>
 				<aside className="workbench-attention" aria-label="待处理">
 					<header className="workbench-section-head">
 						<div>
 							<h2>待处理</h2>
-							<p className="workbench-section-description">按你的职责聚合</p>
+							<p className="workbench-section-description">按你的权限显示</p>
 						</div>
 					</header>
-					{administrator && (
-						<section aria-label="需要管理员处理" className="workbench-task-row">
-							<div>
-								<h3>创建审批</h3>
-								{pending.kind === "ready" ? (
-									<p>{pending.applications.length} 项申请等待系统管理员审阅</p>
-								) : (
-									<ReadNotice {...props} state={pending} label="待审批申请" />
-								)}
-							</div>
-							<Link
-								className={buttonVariants({ variant: "ghost" })}
-								to="/admin/approvals"
-							>
-								进入审批
-							</Link>
-						</section>
-					)}
-					<section aria-label="需要你处理" className="workbench-task-group">
-						<div className="workbench-task-row">
-							<div>
-								<h3>Owner 事项</h3>
-								{applications.kind !== "ready" ? (
+					<div className="workbench-task-lists">
+						{administrator && (
+							<section aria-label="需要管理员处理" className="workbench-list">
+								<TaskRow
+									title="创建审批"
+									action={
+										<Link
+											className={buttonVariants({ variant: "ghost" })}
+											to="/admin/approvals"
+											aria-label={withObjectName("进入", "创建审批")}
+										>
+											进入
+										</Link>
+									}
+								>
+									{pending.kind === "ready" ? (
+										<small>
+											{pending.applications.length} 项申请等待系统管理员审阅
+										</small>
+									) : (
+										<ReadNotice
+											{...notice}
+											state={pending}
+											label="待审批申请"
+										/>
+									)}
+								</TaskRow>
+							</section>
+						)}
+						<section aria-label="需要你处理" className="workbench-list">
+							{applications.kind !== "ready" ? (
+								<TaskRow title="Owner 事项">
 									<ReadNotice
-										{...props}
+										{...notice}
 										state={applications}
 										label="待处理申请"
 									/>
-								) : applications.applications.some(
-										(application) => application.status === "rejected",
-									) ? (
-									applications.applications
-										.filter((application) => application.status === "rejected")
-										.slice(0, 3)
-										.map((application) => (
-											<div
-												key={application.applicationId}
-												className="workbench-task-item"
+								</TaskRow>
+							) : rejected.length ? (
+								rejected.map((application) => (
+									<TaskRow
+										key={application.applicationId}
+										title="Owner 事项"
+										action={
+											<Link
+												className={buttonVariants({ variant: "ghost" })}
+												to="/my-agents/$applicationId/edit"
+												params={{ applicationId: application.applicationId }}
+												aria-label={withObjectName(
+													"修改并重新提交",
+													application.name,
+												)}
 											>
-												<p>
-													<strong>{application.name}</strong> ·{" "}
-													<span>
-														{application.decision?.reason ??
-															"暂未提供驳回原因。"}
-													</span>
-												</p>
-												<Link
-													className={buttonVariants({ variant: "ghost" })}
-													to="/my-agents/$applicationId/edit"
-													params={{ applicationId: application.applicationId }}
-													aria-label={withObjectName(
-														"修改并重新提交",
-														application.name,
-													)}
-												>
-													修改并重新提交
-												</Link>
-											</div>
-										))
-								) : (
-									<p>暂无需要修改的申请。</p>
-								)}
-							</div>
-						</div>
-						<div className="workbench-task-row">
-							<div>
-								<h3>运行状态</h3>
-								{ownerAgents.kind !== "ready" ? (
+												修改并重新提交
+											</Link>
+										}
+									>
+										<small>
+											<span>{application.name}</span> ·{" "}
+											<span>
+												{application.decision?.reason ?? "暂未提供驳回原因。"}
+											</span>
+										</small>
+									</TaskRow>
+								))
+							) : (
+								<TaskRow title="Owner 事项">
+									<small>暂无需要修改的申请。</small>
+								</TaskRow>
+							)}
+							{ownerAgents.kind !== "ready" ? (
+								<TaskRow title="运行状态">
 									<ReadNotice
-										{...props}
+										{...notice}
 										state={ownerAgents}
 										label="Owner 创建状态"
 									/>
-								) : ownerAgents.agents.some(
-										(agent) => agent.managementStatus === "creation_failed",
-									) ? (
-									ownerAgents.agents
-										.filter(
-											(agent) => agent.managementStatus === "creation_failed",
-										)
-										.slice(0, 3)
-										.map((agent) => (
-											<div key={agent.agentId} className="workbench-task-item">
-												<p>
-													<strong>{agent.name}</strong> · 创建失败
-												</p>
-												<Link
-													className={buttonVariants({ variant: "ghost" })}
-													to="/agents/$agentId/configuration"
-													params={{ agentId: agent.agentId }}
-													aria-label={withObjectName("配置与管理", agent.name)}
-												>
-													配置与管理
-												</Link>
-											</div>
-										))
-								) : (
-									<p>暂无创建失败的 Agent。</p>
-								)}
-								{administrator &&
-									(adminAgents.kind !== "ready" ? (
+								</TaskRow>
+							) : creationFailed.length ? (
+								creationFailed.map((agent) => (
+									<TaskRow
+										key={agent.agentId}
+										title="运行状态"
+										action={
+											<Link
+												className={buttonVariants({ variant: "ghost" })}
+												to="/agents/$agentId/configuration"
+												params={{ agentId: agent.agentId }}
+												aria-label={withObjectName("配置与管理", agent.name)}
+											>
+												配置与管理
+											</Link>
+										}
+									>
+										<small>
+											<span>{agent.name}</span> · 创建失败
+										</small>
+									</TaskRow>
+								))
+							) : (
+								<TaskRow title="运行状态">
+									<small>暂无创建失败的 Agent。</small>
+								</TaskRow>
+							)}
+							{administrator &&
+								(adminAgents.kind !== "ready" ? (
+									<TaskRow title="运行状态">
 										<ReadNotice
-											{...props}
+											{...notice}
 											state={adminAgents}
 											label="管理员 Agent 状态"
 										/>
-									) : (
-										adminAgents.agents.some(
-											(agent) => agent.managementStatus === "creation_failed",
-										) && (
-											<div className="workbench-task-item">
-												<p>
-													{
-														adminAgents.agents.filter(
-															(agent) =>
-																agent.managementStatus === "creation_failed",
-														).length
-													}{" "}
-													个 Agent 创建失败
-												</p>
+									</TaskRow>
+								) : (
+									administratorFailures > 0 && (
+										<TaskRow
+											title="运行状态"
+											action={
 												<Link
 													className={buttonVariants({ variant: "ghost" })}
 													to="/admin/agents"
@@ -404,20 +548,23 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 												>
 													查看失败清单
 												</Link>
-											</div>
-										)
-									))}
-							</div>
-						</div>
-					</section>
+											}
+										>
+											<small>{administratorFailures} 个 Agent 创建失败</small>
+										</TaskRow>
+									)
+								))}
+						</section>
+					</div>
 				</aside>
 			</div>
 			<WorkbenchSection
-				eyebrow="根据当前账号与组织范围过滤"
+				eyebrow="按账号和组织权限过滤"
 				title="可用 Agent"
 				action={
 					<Link className={buttonVariants({ variant: "ghost" })} to="/agents">
-						查看全部 Agent
+						查看目录
+						<ArrowRight aria-hidden="true" />
 					</Link>
 				}
 			>
@@ -439,7 +586,10 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 									<div className="workbench-agent-tags">
 										<Badge variant="tag">
 											{agent.source.kind === "standard"
-												? agent.source.templateId
+												? templateDisplayName(
+														agent.source.templateId,
+														templateName,
+													)
 												: "自定义 Agent"}
 										</Badge>
 										{agent.configuration.channels.map((channel) => (
@@ -461,14 +611,18 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 						</div>
 					)
 				) : (
-					<ReadNotice {...props} state={agents} label="可用 Agent" />
+					<ReadNotice {...notice} state={agents} label="可用 Agent" />
 				)}
 			</WorkbenchSection>
 			<WorkbenchSection
-				eyebrow="跟进状态与下一步"
+				eyebrow="查看状态和下一步"
 				title="我的申请"
 				action={
-					<Link className={linkClass} to="/my-agents/new">
+					<Link
+						className={buttonVariants({ variant: "outline" })}
+						to="/my-agents/new"
+					>
+						<Plus aria-hidden="true" />
 						创建申请
 					</Link>
 				}
@@ -477,38 +631,40 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 					applications.applications.length === 0 ? (
 						<p>暂无创建申请。</p>
 					) : (
-						<div className="workbench-applications">
+						<div className="workbench-applications workbench-list">
 							{applications.applications.slice(0, 3).map((application) => (
 								<article
-									className="workbench-card workbench-application-row"
+									className="workbench-list-row workbench-application-row"
 									key={application.applicationId}
 								>
-									<div className="workbench-application-copy">
-										<div className="workbench-application-title">
+									<div className="workbench-list-main">
+										<div className="workbench-tag-row">
 											<Badge tone={statusTone(application.status)}>
 												{agentManagementStatusLabels[application.status]}
 											</Badge>
-											<h3>{application.name}</h3>
 										</div>
-										<p>{application.description}</p>
+										<h3>{application.name}</h3>
+										<small>{application.description}</small>
 									</div>
-									<Link
-										className={buttonVariants({ variant: "ghost" })}
-										to="/my-agents/$applicationId"
-										params={{ applicationId: application.applicationId }}
-										aria-label={withObjectName(
-											"查看申请状态",
-											application.name,
-										)}
-									>
-										查看申请状态
-									</Link>
+									<div className="workbench-list-side">
+										<Link
+											className={buttonVariants({ variant: "ghost" })}
+											to="/my-agents/$applicationId"
+											params={{ applicationId: application.applicationId }}
+											aria-label={withObjectName(
+												"查看申请状态",
+												application.name,
+											)}
+										>
+											查看申请状态
+										</Link>
+									</div>
 								</article>
 							))}
 						</div>
 					)
 				) : (
-					<ReadNotice {...props} state={applications} label="我的申请" />
+					<ReadNotice {...notice} state={applications} label="我的申请" />
 				)}
 			</WorkbenchSection>
 		</div>

@@ -44,54 +44,24 @@ describe("Badge", () => {
 		expect(element.className).not.toContain("before:size-[6px]");
 	});
 
-	it("prefers an explicit tone over a derived status", () => {
+	it("never derives a tone from data-status or data-result", () => {
 		render(
-			<Badge tone="gray" data-status="ready">
-				显式
-			</Badge>,
+			<>
+				<Badge data-status="ready">未传色调</Badge>
+				<Badge tone="green" data-result="failed">
+					显式色调
+				</Badge>
+			</>,
 		);
-		expect(badge("显式").dataset.tone).toBe("gray");
+		expect(badge("未传色调").dataset.tone).toBe("gray");
+		expect(badge("显式色调").dataset.tone).toBe("green");
 	});
 
-	describe("compatibility layer for unmigrated callers", () => {
-		it("derives a chip tone from data-status and data-result", () => {
-			render(
-				<>
-					<Badge variant="outline" data-status="ready">
-						就绪
-					</Badge>
-					<Badge variant="secondary" data-status="starting">
-						启动中
-					</Badge>
-					<Badge variant="outline" data-result="failed">
-						失败
-					</Badge>
-				</>,
-			);
-			expect(badge("就绪").dataset.tone).toBe("green");
-			expect(badge("启动中").dataset.variant).toBe("chip");
-			expect(badge("启动中").dataset.tone).toBe("amber");
-			expect(badge("失败").dataset.tone).toBe("red");
-		});
-
-		it("maps legacy variants without solid primary or secondary-foreground fills", () => {
-			render(
-				<>
-					<Badge variant="default">处理中</Badge>
-					<Badge variant="secondary">命令</Badge>
-					<Badge variant="destructive">失败</Badge>
-					<Badge variant="outline">3 项</Badge>
-				</>,
-			);
-			expect(badge("处理中").dataset.tone).toBe("blue");
-			expect(badge("命令").dataset.variant).toBe("tag");
-			expect(badge("失败").dataset.tone).toBe("red");
-			expect(badge("3 项").dataset.tone).toBe("gray");
-			for (const text of ["处理中", "命令", "失败", "3 项"]) {
-				expect(badge(text).className).not.toMatch(
-					/\bbg-primary\b|text-secondary-foreground|text-primary-foreground/,
-				);
-			}
-		});
+	it("only accepts the chip and tag variants", () => {
+		// @ts-expect-error 兼容层已删除：旧变体名（default / secondary / destructive / outline）不再合法。
+		render(<Badge variant="outline">旧变体</Badge>);
+		expect(badge("旧变体").className).not.toMatch(
+			/\bbg-primary\b|text-secondary-foreground|text-primary-foreground/,
+		);
 	});
 });

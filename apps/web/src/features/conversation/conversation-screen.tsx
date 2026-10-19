@@ -18,20 +18,40 @@ import {
 	AlertDescription,
 	AlertTitle,
 } from "@/components/ui/alert";
+import { LoadingLine } from "@/components/ui/spinner";
 import { Button, buttonVariants } from "../../components/ui/button.js";
 import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
 import { getAgentV2 } from "../../pilot/generated-v2/sdk.gen.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { isAgentConfigurationOwner } from "../agent-configuration/agent-configuration.js";
-import { ActiveConversation } from "./active-conversation.js";
+import {
+	type CollectionReadUnavailable,
+	collectionReadFailure,
+} from "../collection-read-failure.js";
+import { ReadFailureCard } from "../page-state-card.js";
+import {
+	ActiveConversation,
+	type FirstMessageHandoff,
+} from "./active-conversation.js";
+import {
+	BrowserContextHint,
+	type ConnectionNoticeState,
+	ConversationConnectionNotice,
+	ConversationContextBar,
+} from "./conversation-context-bar.js";
 import {
 	CreateConversationNotice,
-	NewConversation,
+	NewConversationComposer,
 	PersonalHistory,
 	useCreateConversation,
 } from "./conversation-navigation.js";
-import { ConversationReadError, responseFailure } from "./execution-detail.js";
+import {
+	ConversationReadError,
+	type ConversationReadFailure,
+	responseFailure,
+} from "./execution-detail.js";
 import { RecentConversationHistory } from "./recent-conversation-history.js";
+import type { ModelSelectionValue } from "./use-conversation-model-autosave.js";
 
 export type ConversationScreenProps = {
 	agentId: string;
@@ -39,6 +59,8 @@ export type ConversationScreenProps = {
 	identityKey: string;
 	/** 当前登录会话：只用于决定是否显示 Owner 入口，权限仍由 Owner 配置页和服务端校验。 */
 	session?: BrowserSessionProjectionV1;
+	/** 「我的 Connection」受控入口，与壳层侧栏同一地址；不可用时为空（BR-04）。 */
+	connectionUrl?: string;
 	view?: "history" | "conversation";
 	onViewChange?: (view: "history" | "conversation") => void;
 	onConversationChange: (conversationId: string | undefined) => void;
@@ -78,6 +100,34 @@ function ConversationHeader({
 			</div>
 			{actions && <div className="conversation-heading-actions">{actions}</div>}
 		</header>
+	);
+}
+
+/** Agent 读取失败到公共状态卡的映射：401 → 登录；403、404 等 → 无法访问；网络与 5xx → 可重试（P-01）。 */
+function agentReadFailure(
+	failure: ConversationReadFailure,
+): Pick<CollectionReadUnavailable, "retryable" | "reason"> {
+	switch (failure.kind) {
+		case "authorization":
+			return {
+				retryable: false,
+				reason: failure.status === 401 ? "authentication-required" : "denied",
+			};
+		case "invalid":
+			return { retryable: false, reason: "invalid-response" };
+		case "network":
+		case "service":
+			return { retryable: true };
+		case "http":
+			return collectionReadFailure(failure.status);
+	}
+}
+
+function BackToAgentDirectory() {
+	return (
+		<Link to="/agents" className={buttonVariants({ variant: "outline" })}>
+			返回 Agent 目录
+		</Link>
 	);
 }
 
@@ -166,9 +216,24 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		() => ["conversation-screen-agent", instanceId, identityKey, agentId],
 		[instanceId, identityKey, agentId],
 	);
-	const [denied, setDenied] = useState(false);
+	// 失去访问后闭锁页面。Agent 读取被拒时记下失败以选择状态卡；会话、命令等其他来源记为 "access"。
+	const [denial, setDenial] = useState<ConversationReadFailure | "access">();
+	const denied = denial !== undefined;
 	const [internalHistory, setInternalHistory] = useState(false);
 	const [recentOpen, setRecentOpen] = useState(false);
+	// 新会话页的 Connection 提示状态；已有会话由 ActiveConversation 按会话保存。
+	const [connectionNotice, setConnectionNotice] =
+		useState<ConnectionNoticeState>("needs-auth");
+	// 新会话页（无会话参数）的草稿与模型选择：保存在工作区，切换历史视图不丢失（CH-10）。
+	const [newDraft, setNewDraft] = useState("");
+	const [newModel, setNewModel] = useState<ModelSelectionValue>();
+	const newPage = useRef({ draft: newDraft, model: newModel });
+	newPage.current = { draft: newDraft, model: newModel };
+	// 本次创建由新会话页发起时记录是否要发送首条消息；创建成功后连同草稿交给新会话。
+	const createIntent = useRef<{ send: boolean } | undefined>(undefined);
+	const [handoff, setHandoff] = useState<
+		FirstMessageHandoff & { conversationId: string }
+	>();
 	const historyPanel = useRef<HTMLElement>(null);
 	const historyToggle = useRef<HTMLButtonElement>(null);
 	const heading = useRef<HTMLHeadingElement>(null);
@@ -229,7 +294,10 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		},
 		[queryClient, queryKey],
 	);
-	const deny = useCallback(() => setDenied(true), []);
+	const deny = useCallback(
+		() => setDenial((current) => current ?? "access"),
+		[],
+	);
 	// 命令得到 404 时用它确认：Agent 已停止/停用/更新中时 404 只是「不可用」，不是失去访问权限。
 	// 读取失败或结果仍然可用时按原来的方式处理（#2570）。
 	const refetchAgent = agentQuery.refetch;
@@ -243,6 +311,19 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 	}, [refetchAgent]);
 	const onCreated = useCallback(
 		(id: string) => {
+			const intent = createIntent.current;
+			createIntent.current = undefined;
+			if (intent) {
+				const { draft, model } = newPage.current;
+				setHandoff({
+					conversationId: id,
+					text: draft,
+					send: intent.send && draft.trim() !== "",
+					...(model ? { model } : {}),
+				});
+				setNewDraft("");
+				setNewModel(undefined);
+			}
 			setRecentOpen(false);
 			setInternalHistory(false);
 			onConversationChange(id);
@@ -253,18 +334,28 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 	const creation = useCreateConversation({
 		agentId,
 		identityKey,
+		available:
+			agentQuery.data?.managementStatus === "available" &&
+			agentQuery.data.serviceAvailability === "ready",
 		onCreated,
 		onDenied: deny,
 		verifyAgent,
 	});
+	/** send=true 表示由新会话页的 composer 提交：创建成功后用原草稿发送首条消息。 */
+	function startCreate(send: boolean) {
+		if (creation.create())
+			createIntent.current =
+				conversationId === undefined ? { send } : undefined;
+	}
 	const deniedCallback = useRef(onAccessDenied);
 	deniedCallback.current = onAccessDenied;
 	useLayoutEffect(() => {
+		const error = agentQuery.error;
 		if (
-			agentQuery.error instanceof ConversationReadError &&
-			agentQuery.error.failure.kind === "authorization"
+			error instanceof ConversationReadError &&
+			error.failure.kind === "authorization"
 		)
-			setDenied(true);
+			setDenial((current) => current ?? error.failure);
 	}, [agentQuery.error]);
 	useLayoutEffect(() => {
 		if (!denied) return;
@@ -277,27 +368,45 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		return (
 			<section className="chat-layout">
 				<ConversationHeader title="对话" />
-				{denied || !identityKey ? (
-					<Alert>
+				{typeof denial === "object" ? (
+					// Agent 读取被拒（401/403）：与 Agent 详情同一套状态卡（P-01）。
+					<ReadFailureCard
+						failure={agentReadFailure(denial)}
+						deniedDescription="Agent 不存在，或你没有访问权限。"
+						unavailableDescription="暂时无法读取 Agent，请稍后重试。"
+						back={<BackToAgentDirectory />}
+						// 401「重新登录」确认会话仍有效：只解除这一次 Agent 读取失败的闭锁，Agent 随即
+						// 由服务端重新读取与鉴权；再次失败会重新闭锁（W-03）。
+						onStillValid={() =>
+							setDenial((current) => (current === denial ? undefined : current))
+						}
+					/>
+				) : denied || !identityKey ? (
+					<Alert tone="danger" role="alert">
 						<AlertDescription>
-							当前登录或访问权限已失效，请重新登录或返回 Agent 列表。
+							当前登录或访问权限已失效，请重新登录或返回 Agent 目录。
 						</AlertDescription>
+						<AlertAction>
+							<BackToAgentDirectory />
+						</AlertAction>
 					</Alert>
 				) : agentQuery.isPending ? (
-					<p role="status">正在读取 Agent…</p>
+					<LoadingLine>正在读取 Agent…</LoadingLine>
 				) : (
-					<Alert>
-						<AlertDescription>Agent 信息暂时无法读取。</AlertDescription>
-					</Alert>
+					<ReadFailureCard
+						failure={agentReadFailure(
+							agentQuery.error instanceof ConversationReadError
+								? agentQuery.error.failure
+								: { kind: "network" },
+						)}
+						deniedDescription="Agent 不存在，或你没有访问权限。"
+						unavailableDescription="暂时无法读取 Agent，请稍后重试。"
+						back={<BackToAgentDirectory />}
+						onRetry={() => void agentQuery.refetch()}
+						retrying={agentQuery.isFetching}
+						retryLabel="重新读取"
+					/>
 				)}
-				<div className="mt-4 flex flex-wrap gap-2">
-					{!denied && identityKey && !agentQuery.isPending && (
-						<Button onClick={() => void agentQuery.refetch()}>重新读取</Button>
-					)}
-					<Link to="/agents" className={buttonVariants({ variant: "outline" })}>
-						返回 Agent 列表
-					</Link>
-				</div>
 			</section>
 		);
 	const available =
@@ -343,7 +452,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 						<Button
 							variant="outline"
 							disabled={!available || selfManaged || creation.busy}
-							onClick={() => creation.create()}
+							onClick={() => startCreate(false)}
 						>
 							<Plus aria-hidden="true" />
 							新会话
@@ -375,9 +484,37 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 							refreshAgent={() => void agentQuery.refetch()}
 							verifyAgent={verifyAgent}
 							focusFallback={heading}
+							firstMessage={
+								handoff?.conversationId === conversationId ? handoff : undefined
+							}
+							onFirstMessageTaken={() => setHandoff(undefined)}
 						/>
 					) : (
-						<NewConversation available={available} creation={creation} />
+						<div className="chat-thread space-y-5">
+							<ConversationContextBar
+								connection={agent.capabilities.connection}
+								browser={Boolean(agent.capabilities.browser)}
+							>
+								{agent.capabilities.connection && (
+									<ConversationConnectionNotice
+										url={props.connectionUrl}
+										state={connectionNotice}
+										onOpen={() => setConnectionNotice("handoff")}
+									/>
+								)}
+								{agent.capabilities.browser && <BrowserContextHint />}
+							</ConversationContextBar>
+							<NewConversationComposer
+								agent={agent}
+								available={available}
+								creation={creation}
+								draft={newDraft}
+								onDraftChange={setNewDraft}
+								model={newModel}
+								onModelChange={setNewModel}
+								onSubmit={() => startCreate(true)}
+							/>
+						</div>
 					)}
 				</div>
 				<aside

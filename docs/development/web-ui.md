@@ -30,8 +30,11 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 页面共享内容宽度、标题和表单样式；桌面侧栏为 248px，
 低于 1024px 使用现有 Sheet。工作台先展示最近对话和职责事项，再展示 Agent 与申请。
 Agent 详情中的 Owner、渠道、模型和范围均取自实际投影；Owner 配置入口仍由权限结果控制。
+侧栏「我的 Connection」、对话「会话上下文」中的 Connection 提示与 Agent 详情「打开 Connection」
+只由 `src/features/connection-entry.ts` 生成：先按服务端规则分别校验原始 `publicOrigin` 与
+`mcpPath`，再拼接并确认 origin 不变。
 对话时间线独立滚动，保留消息输入区及代码、表格的局部滚动。
-视口高度不超过 600px 时改用页面滚动，避免从执行详情返回后的键盘焦点被聊天容器裁切。
+短视口（高度不超过 600px）只压缩页头与间距，仍只有时间线一处滚动；执行详情是模态弹窗，关闭后焦点回到触发按钮。
 
 原型中的示例人员、模型、就绪提示和演示操作不作为生产数据或新增能力。
 申请、审批、配置、生命周期及审计继续复用现有组件、请求和权限校验。
@@ -64,6 +67,7 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `Dialog` / `ConfirmDialog` | 审批、Skill 审阅；撤回、生命周期、撤销凭证、撤销 Skill 版本、停用应用、禁用员工等确认 |
 | `Alert` / `Empty` | 设计 notice（`tone` 与默认图标）与空态 |
 | `Spinner` / `LoadingLine` | 读取中的加载态，`PageLoadingState` 内部使用 |
+| `StateCard` / `PageStateCard` | 会话不可用、详情读取失败（401 / 403·404 / 503 / 响应无效）与 404 页的公共状态卡；401 的「重新登录」确认会话仍有效后调用 `onStillValid` 重读数据 |
 | `Toast` | 根布局常驻的补充确认，页面通过 `useToast()` 调用 |
 | `Card` / `AgentMark` | 独立卡片的悬停，Agent 标识的字形与 tone |
 | `Table` | Agent 输出的 Markdown 表格，API 凭证页的个人凭证表格（窄屏按页面样式转行卡片） |
@@ -71,15 +75,19 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `IdentifierText` | 审批与审计中未解析人员的 ID 短形式；审计列表对象 ID 用 `shortIdentifier` 等宽短形式，完整值只在记录详情 |
 | `Listbox` / `ListboxOption` | 目录选择器结果层与对话 `/` 命令弹层；候选不进入 Tab 序列，由输入框的 `aria-activedescendant` 导航 |
 | `DropdownMenu` | 对话输入框工具栏的模型与思考菜单（`menuitemradio`，向上展开，无入场动画） |
+| `Collapsible` / `CollapsibleTrigger` / `CollapsiblePanel` | 对话页「会话上下文」「会话文件」折叠条（替代原生 `details/summary`）；面板默认 `keepMounted`，收起只隐藏不卸载 |
 
 时间统一由 `src/lib/format-time.ts` 按浏览器本地时区与自然日格式化，`<Timestamp>` 渲染
 `<time dateTime title>`，`title` 为带秒的完整本地时间。人员与组织显示名由
 `src/features/directory-names.tsx` 的 `useDirectoryNames` 页面级批量读取：单元格和 chip 不放
 `role="status"`，读取失败时页面只显示一条提示与「重新读取目录」，主文字不回退到内部 ID。
+标准模板只显示部署配置登记的显示名：路由（或页面 workflow）用 `src/features/template-display-name.ts` 的
+`useTemplateNameLookup()` 读取并传给页面，读不到时显示「标准模板」，不显示原始 `templateId`。
 
-`Card`、`ConfirmDialog`、`DropdownMenu`、`Spinner`、`Toast` 与 `features/agent-mark.tsx` 为手写组件，不由 CLI 生成。
+`Card`、`Collapsible`、`ConfirmDialog`、`DropdownMenu`、`Spinner`、`StateCard`、`Toast` 与 `features/agent-mark.tsx` 为手写组件，不由 CLI 生成。
 `Alert` 不设默认 role：首屏静态说明不设 role，异步结果用 `role="status"`，失败用 `role="alert"`。
-Badge、Alert 的旧变体名只作兼容层，供未迁移的对话页与浏览器面板使用，新代码使用 `tone` 或 `variant="tag"`。
+`Badge` 只有 `variant="chip"`（状态，显式传 `tone`）与 `variant="tag"` 两种，不从 `data-status` 推导色调。
+`Alert` 必须传 `tone`（`info`、`warn`、`danger`），没有旧变体名与缺省 tone 的兼容层。
 
 普通导航保留 TanStack `Link` 或语义链接；需要控件外观时使用 `buttonVariants`，不改变链接角色。
 段落、列表、定义列表、表单和 fieldset 保持语义 HTML。
@@ -101,7 +109,7 @@ Badge、Alert 的旧变体名只作兼容层，供未迁移的对话页与浏览
 
 `pnpm test` 还执行 `apps/web/src/lib/time-display-policy.test.ts`：页面不得直接调用
 `toLocaleString`、`toLocaleDateString`、`toLocaleTimeString` 或 `Intl.DateTimeFormat` 显示时间。
-对话页尚待迁移的 3 个文件在该测试中具名列出，迁移后删除，不得新增条目。
+该测试只允许格式化模块本身、生成代码与测试文件直接调用，不设页面白名单。
 
 ## 验证
 
@@ -112,6 +120,9 @@ pnpm --filter @agent-infra/web test:browser
 ```
 
 浏览器测试运行实际生产构建，通过已有契约校验 Fake 拦截 API；不依赖真实凭证，不代表真实后端验收。
+`auth.spec.ts` 与 `collection-session.spec.ts` 在 `auth-desktop` / `auth-mobile` project 中运行：
+Playwright 另起一个配置了同源 `/auth/login`、`/auth/logout` 入口的构建（`dist/auth-browser`，
+端口为 `WEB_TEST_PORT + 1000`，可用 `WEB_AUTH_TEST_PORT` 覆盖），其余用例使用未配置入口的默认构建。
 桌面 1440×1000、移动 390×844 覆盖申请创建、编辑、重新提交、撤回，审批批准与驳回，
 Owner 配置、Secret 清空、模型复选框、停止、重启、镜像升级，以及普通员工的权限负向场景。
 同时检查 Tab/Enter/Space、必填校验、可访问名称、焦点环、结果焦点、pending 禁用、loading、

@@ -10,20 +10,25 @@ export type AgentConfigurationModelDraft = {
 	reasoningLevels: string;
 };
 
-export type AgentConfigurationSecretDraft = {
+/** 环境变量是普通值：可回显、可修改，整页保存时按整表提交（PRD §5.5）。 */
+export type AgentConfigurationEnvironmentDraft = {
 	name: string;
 	value: string;
 };
 
+/**
+ * 整页草稿。Secret 不在草稿里：替换 Secret 走只写弹窗的独立请求，明文不进入页面状态
+ * （O-10、NI-02、NI-71）。
+ */
 export type AgentConfigurationDraft = {
 	channels?: AgentConfigurationUpdateRequestV2Writable["channels"];
 	coOwnerIds: string;
 	defaultModelOptionId: string;
 	defaultReasoningLevel: string;
+	environment: readonly AgentConfigurationEnvironmentDraft[];
 	models: readonly AgentConfigurationModelDraft[];
 	organizationAvailabilityIds: string;
 	replaceModels: boolean;
-	secrets: readonly AgentConfigurationSecretDraft[];
 	userAvailabilityIds: string;
 };
 
@@ -53,12 +58,40 @@ export function configurationDraftFromAgent(
 		models: [],
 		defaultModelOptionId: "",
 		defaultReasoningLevel: "",
-		secrets: [],
+		environment: agent.configuration.environment.map((entry) => ({
+			name: entry.name,
+			value: entry.value,
+		})),
 	};
+}
+
+/** 与服务端一致：环境变量按名称排序后整表比较。 */
+function environmentKey(
+	entries: readonly AgentConfigurationEnvironmentDraft[],
+) {
+	return JSON.stringify(
+		entries
+			.map((entry) => [entry.name.trim(), entry.value] as const)
+			.toSorted(([left], [right]) =>
+				left < right ? -1 : left > right ? 1 : 0,
+			),
+	);
+}
+
+/** 草稿中的环境变量是否与当前配置不同；未改动时请求不带 `environment`。 */
+export function agentConfigurationEnvironmentChanged(
+	agent: AgentProjectionV2,
+	draft: Pick<AgentConfigurationDraft, "environment">,
+) {
+	return (
+		environmentKey(draft.environment) !==
+		environmentKey(agent.configuration.environment)
+	);
 }
 
 export function buildAgentConfigurationRequest(
 	draft: AgentConfigurationDraft,
+	agent: AgentProjectionV2,
 ): AgentConfigurationUpdateRequestV2Writable {
 	const modelConfiguration = draft.replaceModels
 		? {
@@ -72,10 +105,12 @@ export function buildAgentConfigurationRequest(
 				defaultReasoningLevel: draft.defaultReasoningLevel.trim(),
 			}
 		: undefined;
-	const secrets = draft.secrets.map((secret) => ({
-		name: secret.name.trim(),
-		value: secret.value,
-	}));
+	const environment = agentConfigurationEnvironmentChanged(agent, draft)
+		? draft.environment.map((entry) => ({
+				name: entry.name.trim(),
+				value: entry.value,
+			}))
+		: undefined;
 
 	return {
 		schemaVersion: 2,
@@ -93,7 +128,7 @@ export function buildAgentConfigurationRequest(
 			),
 		],
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
-		...(secrets.length === 0 ? {} : { secrets }),
+		...(environment === undefined ? {} : { environment }),
 		...(draft.channels === undefined ? {} : { channels: draft.channels }),
 	};
 }
@@ -106,8 +141,8 @@ function sortedJson(values: readonly string[]) {
 /**
  * 草稿相对已加载的配置是否真有改动（#2560）。服务端把「没有任何变更」的保存拒绝成 409，
  * 页面再提示「权限或 Agent 状态已变化，请刷新页面」是误导，所以没有改动时不应发出保存请求。
- * 比较方式与服务端一致：Owner、可使用范围、模型选项都按集合比较，与顺序无关；填写了
- * Secret 或渠道变更一律算改动。
+ * 比较方式与服务端一致：Owner、可使用范围、模型选项都按集合比较，与顺序无关；环境变量按
+ * 名称排序后整表比较；渠道变更一律算改动。
  */
 export function agentConfigurationDraftChanged(
 	agent: AgentProjectionV2,
@@ -115,9 +150,11 @@ export function agentConfigurationDraftChanged(
 ): boolean {
 	const baseline = buildAgentConfigurationRequest(
 		configurationDraftFromAgent(agent),
+		agent,
 	);
-	const request = buildAgentConfigurationRequest(draft);
-	if (request.secrets?.length || request.channels !== undefined) return true;
+	const request = buildAgentConfigurationRequest(draft, agent);
+	if (request.channels !== undefined || request.environment !== undefined)
+		return true;
 	if (
 		sortedJson(request.coOwnerIds ?? []) !==
 		sortedJson(baseline.coOwnerIds ?? [])
@@ -151,4 +188,30 @@ export function agentConfigurationDraftChanged(
 		sortedJson(next.options.map(option)) !==
 		sortedJson(current.modelOptions.map(option))
 	);
+}
+
+/** 与服务端 `environmentNamePattern` 一致。 */
+export const environmentNamePattern = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+
+/**
+ * 环境变量名与 Secret 名的前端校验，返回字段错误文案；合法时返回 undefined。
+ * `allowedNames` 存在时（标准模板）只允许模板开放的键。
+ */
+export function configurationKeyError(
+	name: string,
+	{
+		allowedNames,
+		kind,
+	}: { allowedNames?: readonly string[]; kind: "environment" | "secret" },
+): string | undefined {
+	const trimmed = name.trim();
+	const label = kind === "environment" ? "环境变量名" : "Secret 名称";
+	if (!trimmed) return `请输入${label}。`;
+	if (trimmed.startsWith("AGENT_INFRA_"))
+		return `${label}不能以 AGENT_INFRA_ 开头。`;
+	if (!environmentNamePattern.test(trimmed))
+		return `${label}只能包含字母、数字和下划线，且不能以数字开头。`;
+	if (allowedNames && !allowedNames.includes(trimmed))
+		return `当前模板不允许这个${label}。`;
+	return undefined;
 }

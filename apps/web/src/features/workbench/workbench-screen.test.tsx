@@ -18,9 +18,11 @@ import {
 	render,
 	screen,
 	waitFor,
+	within,
 } from "@testing-library/react";
 import { createContext, type ReactNode, useContext } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ClockProvider } from "@/lib/clock";
 import { createClient } from "../../pilot/generated-v2/client/index.js";
 import { pendingApplication } from "../my-agents/test-fixtures.js";
 import { useWorkbenchCollections } from "./use-workbench-collections.js";
@@ -76,6 +78,7 @@ const empty: WorkbenchScreenProps = {
 	recent: { kind: "ready", conversations: [], nextCursor: null },
 	administrator: true,
 	onRetry: vi.fn(),
+	onRelogin: vi.fn(),
 };
 const available = AgentProjectionV2Schema.parse({
 	...pilotFakeScenariosV2.starting.response.body,
@@ -124,22 +127,45 @@ const conversation = ConversationProjectionV1Schema.parse({
 describe("OpenDesign workbench presentation", () => {
 	it("keeps all responsibility regions and safe empty-state navigation", async () => {
 		await showWorkbench(<WorkbenchScreen {...empty} />);
+		// W-06：页头文案按设计稿 #workbench。
 		expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
-			"把下一步工作交给合适的 Agent。",
+			"选择一个 Agent 开始工作。",
 		);
+		expect(
+			screen.getByText("最近对话、可用 Agent 和待处理事项都在这里。"),
+		).toBeTruthy();
+		// 空态标题是 strong 而不是 heading，分区标题层级不变（NI-82、NI-75）。
 		expect(
 			screen
 				.getAllByRole("heading", { level: 2 })
 				.map((heading) => heading.textContent),
-		).toEqual(["最近的个人对话", "待处理", "可用 Agent", "我的申请"]);
-		expect(screen.getByText("暂无个人对话。")).toBeTruthy();
+		).toEqual(["最近对话", "待处理", "可用 Agent", "我的申请"]);
+		// 分区副标题按设计稿 canonical #workbench。
+		for (const description of [
+			"只显示你的历史记录",
+			"按你的权限显示",
+			"按账号和组织权限过滤",
+			"查看状态和下一步",
+		])
+			expect(screen.getByText(description, { exact: true })).toBeTruthy();
+		const recent = screen.getByRole("region", { name: "最近对话" });
+		const emptyState = recent.querySelector('[data-slot="empty"]');
+		expect(emptyState).toBeTruthy();
+		const emptyTitle = within(recent).getByText("暂无个人对话");
+		expect(emptyTitle.tagName).toBe("STRONG");
+		expect(
+			within(recent).getByText("选择一个 Agent 开始新的个人对话。"),
+		).toBeTruthy();
+		expect(emptyState?.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
 		expect(screen.getByText("暂无需要修改的申请。")).toBeTruthy();
-		expect(
-			screen.getByRole("link", { name: "新对话" }).getAttribute("href"),
-		).toBe("/agents?mode=conversation");
-		expect(
-			screen.getByRole("link", { name: "创建申请" }).getAttribute("href"),
-		).toBe("/my-agents/new");
+		// W-02：区块头部没有「新对话」；无历史时也不提供「查看全部」。
+		expect(screen.queryByRole("link", { name: "新对话" })).toBeNull();
+		expect(screen.queryByRole("link", { name: "查看全部" })).toBeNull();
+		const create = screen.getByRole("link", { name: "创建申请" });
+		expect(create.getAttribute("href")).toBe("/my-agents/new");
+		// F-06：outline「创建申请」带 plus 图标。
+		expect(create.className).toContain("border-border");
+		expect(create.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
 	});
 
 	it("routes projected collections to permitted targets without turning admin inventory into Agent actions", async () => {
@@ -179,6 +205,28 @@ describe("OpenDesign workbench presentation", () => {
 			screen.getByRole("link", { name: "查看失败清单" }).getAttribute("href"),
 		).toBe("/admin/agents?status=creation_failed");
 		expect(screen.getByText("1 项申请等待系统管理员审阅")).toBeTruthy();
+		// F-06：待处理「进入」的可访问名称带对象名；可用 Agent 头部为「查看目录」+ 箭头。
+		const approvals = screen.getByRole("link", { name: "进入：创建审批" });
+		expect(approvals.textContent).toBe("进入");
+		expect(approvals.getAttribute("href")).toBe("/admin/approvals");
+		expect(screen.queryByRole("link", { name: /进入审批/ })).toBeNull();
+		const directory = screen.getByRole("link", { name: "查看目录" });
+		expect(directory.getAttribute("href")).toBe("/agents");
+		expect(directory.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "查看全部 Agent" })).toBeNull();
+		// W-04：待处理的操作放在行右侧，不夹在说明文字里。
+		for (const name of [
+			"进入：创建审批",
+			`修改并重新提交：${rejected.name}`,
+			`配置与管理：${failed.name}`,
+			"查看失败清单",
+		]) {
+			const link = screen.getByRole("link", { name });
+			expect(link.parentElement?.className).toBe("workbench-list-side");
+			expect(
+				link.closest(".workbench-list-row")?.querySelector("h3"),
+			).toBeTruthy();
+		}
 		expect(
 			document.querySelector('a[href*="/agents/another-owner-agent"]'),
 		).toBeNull();
@@ -205,32 +253,30 @@ describe("OpenDesign workbench presentation", () => {
 						},
 						{
 							...conversation,
-							conversationId: "conversation-unavailable",
-							status: "unavailable",
-							title: "恢复失败的会话",
-						},
-						{
-							...conversation,
 							conversationId: "conversation-unknown-agent",
 							agentId: "unknown-agent",
 							title: null,
 						},
+						{
+							...conversation,
+							conversationId: "conversation-unavailable",
+							status: "unavailable",
+							title: "超出工作台条数的会话",
+						},
 					],
-					nextCursor: null,
+					nextCursor: "opaque-recent/+?=",
 				}}
 			/>,
 		);
-		const region = screen.getByRole("region", { name: "最近的个人对话" });
+		const region = screen.getByRole("region", { name: "最近对话" });
+		// R4-04：工作台最多 3 行，且不提供续页。
 		expect(
 			Array.from(region.querySelectorAll("h3")).map(
 				(heading) => heading.textContent,
 			),
-		).toEqual([
-			"较后 ID 的最近对话",
-			"停止后的个人历史",
-			"恢复失败的会话",
-			"未命名对话",
-		]);
+		).toEqual(["较后 ID 的最近对话", "停止后的个人历史", "未命名对话"]);
+		expect(screen.queryByText("超出工作台条数的会话")).toBeNull();
+		expect(screen.queryByRole("button", { name: "加载更多对话" })).toBeNull();
 		const links = Array.from(region.querySelectorAll('a[href^="/chat/"]')).map(
 			(link) => {
 				const url = new URL(
@@ -240,18 +286,40 @@ describe("OpenDesign workbench presentation", () => {
 				return [url.pathname, url.searchParams.get("view")];
 			},
 		);
+		// 「查看全部」进入最近一条会话的对话页，由其「最近对话」面板承载全部个人对话。
 		expect(links).toEqual([
 			["/chat/usable-agent/conversation-z", null],
+			["/chat/usable-agent/conversation-z", null],
 			["/chat/stopped-agent/conversation-a", null],
-			["/chat/usable-agent/conversation-unavailable", null],
 			["/chat/unknown-agent/conversation-unknown-agent", null],
 		]);
+		const all = within(region).getByRole("link", { name: "查看全部" });
+		expect(all.className).toContain("text-muted-foreground");
+		expect(all.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+		expect(all.getAttribute("href")).not.toBe("/agents?mode=conversation");
 		expect(
 			region.querySelector('time[datetime="2026-09-30T21:00:00Z"]'),
 		).toBeTruthy();
+		// W-04：只读说明并入元信息「· 历史只读」，不再单独成段。
 		expect(
-			screen.getAllByText("历史仍可查看，当前不能继续发送消息。"),
-		).toHaveLength(2);
+			screen.queryByText("历史仍可查看，当前不能继续发送消息。"),
+		).toBeNull();
+		const rows = Array.from(region.querySelectorAll(".workbench-list-row"));
+		expect(
+			rows.map((row) =>
+				row.querySelector("small")?.textContent?.endsWith(" · 历史只读"),
+			),
+		).toEqual([false, true, false]);
+		// F-06：只读行「查看历史」为 ghost，其余为 outline。
+		const history = screen.getByRole("link", {
+			name: "查看历史：停止后的个人历史",
+		});
+		expect(history.className).toContain("text-muted-foreground");
+		expect(history.className).not.toContain("border-border");
+		expect(
+			screen.getByRole("link", { name: "继续对话：较后 ID 的最近对话" })
+				.className,
+		).toContain("border-border");
 		expect(
 			screen
 				.getByRole("link", { name: "打开对话：未命名对话" })
@@ -276,10 +344,28 @@ describe("OpenDesign workbench presentation", () => {
 				},
 			};
 			const view = await showWorkbench(<WorkbenchScreen {...props} />);
-			expect(screen.getByText("状态暂时无法确认")).toBeTruthy();
-			expect(
-				screen.queryByText("历史仍可查看，当前不能继续发送消息。"),
-			).toBeNull();
+			const region = screen.getByRole("region", { name: "最近对话" });
+			const meta = region.querySelector(".workbench-list-row small");
+			if (agents.kind === "loading") {
+				// R4-03 / NI-28：Agent 列表还在读取时不显示失败或「待确认」文字，元信息只有时间。
+				expect(screen.queryByText("状态暂时无法确认")).toBeNull();
+				expect(screen.queryByText(/所属 Agent 暂时无法读取/)).toBeNull();
+				expect(screen.queryByText(/正在确认/)).toBeNull();
+				expect(
+					region
+						.querySelector('[data-slot="chip-placeholder"]')
+						?.getAttribute("aria-hidden"),
+				).toBe("true");
+				expect(meta?.textContent).toBe(
+					meta?.querySelector("time")?.textContent,
+				);
+			} else {
+				expect(within(region).getAllByText("状态暂时无法确认")).toHaveLength(1);
+				expect(
+					meta?.textContent?.startsWith("所属 Agent 暂时无法读取 · "),
+				).toBe(true);
+			}
+			expect(meta?.textContent?.includes("历史只读")).toBe(false);
 			expect(screen.queryByRole("link", { name: /^继续对话/ })).toBeNull();
 			expect(screen.queryByRole("link", { name: /^查看历史/ })).toBeNull();
 			expect(
@@ -297,8 +383,9 @@ describe("OpenDesign workbench presentation", () => {
 				screen.getByRole("link", { name: `继续对话：${conversation.title}` }),
 			).toBeTruthy();
 			expect(
-				screen.queryByText("历史仍可查看，当前不能继续发送消息。"),
-			).toBeNull();
+				region.querySelector(".workbench-list-row small")?.textContent,
+			).toMatch(/^可用编程助手 · .+$/);
+			expect(screen.queryByText(/历史只读/)).toBeNull();
 			view.rerender(
 				<WorkbenchScreen
 					{...props}
@@ -315,8 +402,8 @@ describe("OpenDesign workbench presentation", () => {
 				/>,
 			);
 			expect(
-				screen.getByText("历史仍可查看，当前不能继续发送消息。"),
-			).toBeTruthy();
+				region.querySelector(".workbench-list-row small")?.textContent,
+			).toMatch(/ · 历史只读$/);
 			expect(
 				screen
 					.getByRole("link", { name: `查看历史：${conversation.title}` })
@@ -411,6 +498,13 @@ describe("OpenDesign workbench presentation", () => {
 				expect(screen.queryByText("Owner 创建失败助手")).toBeNull();
 				expect(screen.queryByText("已驳回的本人申请")).toBeNull();
 				expect(screen.queryByRole("button", { name: /^重新加载/ })).toBeNull();
+				// W-03：只有 401 在页面级给出唯一的「重新登录」，其余失败没有按钮。
+				expect(
+					screen.queryAllByRole("button", { name: "重新登录" }),
+				).toHaveLength(status === 401 ? 1 : 0);
+				expect(screen.queryAllByRole("button")).toHaveLength(
+					status === 401 ? 1 : 0,
+				);
 				expect(
 					requests.every(
 						(request) => request.method === "GET" && request.body === null,
@@ -458,9 +552,8 @@ describe("OpenDesign workbench presentation", () => {
 		).toBeTruthy();
 	});
 
-	it("offers continuation only for a supplied cursor and disables it during refresh", async () => {
-		const more = vi.fn();
-		const view = await showWorkbench(
+	it("never pages recent conversations or shows a loaded-count badge even when a cursor is supplied", async () => {
+		await showWorkbench(
 			<WorkbenchScreen
 				{...empty}
 				recent={{
@@ -468,31 +561,220 @@ describe("OpenDesign workbench presentation", () => {
 					conversations: [conversation],
 					nextCursor: "opaque-recent/+?=",
 				}}
-				onLoadMoreRecent={more}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: "加载更多对话" }));
-		expect(more).toHaveBeenCalledOnce();
-		view.rerender(
+		const region = screen.getByRole("region", { name: "最近对话" });
+		// R4-04 / NI-32：续页只在对话页「最近对话」面板；工作台不显示已加载条数徽章。
+		expect(within(region).queryByRole("button")).toBeNull();
+		expect(region.querySelector("header [data-slot='badge']")).toBeNull();
+		expect(within(region).getByRole("link", { name: "查看全部" })).toBeTruthy();
+	});
+
+	it("shows one primary re-login for 401 and keeps partition notices without buttons", async () => {
+		const relogin = vi.fn();
+		const authentication = {
+			kind: "unavailable",
+			retryable: false,
+			reason: "authentication-required",
+		} as const;
+		await showWorkbench(
 			<WorkbenchScreen
 				{...empty}
-				recent={{
-					kind: "ready",
-					conversations: [conversation],
-					nextCursor: "opaque-recent/+?=",
+				agents={authentication}
+				ownerAgents={authentication}
+				applications={authentication}
+				pending={authentication}
+				adminAgents={{
+					kind: "error",
+					retryable: false,
+					reason: "authentication-required",
 				}}
-				onLoadMoreRecent={more}
-				refreshing
+				recent={authentication}
+				onRelogin={relogin}
 			/>,
 		);
+		const relogins = screen.getAllByRole("button", { name: "重新登录" });
+		expect(relogins).toHaveLength(1);
+		expect(screen.getAllByRole("button")).toHaveLength(1);
+		expect(relogins[0]?.className).toContain("bg-accent-ink");
+		expect(screen.getByText("登录已过期")).toBeTruthy();
 		expect(
-			(
-				screen.getByRole("button", {
-					name: "加载更多对话",
-				}) as HTMLButtonElement
-			).disabled,
-		).toBe(true);
-		view.rerender(<WorkbenchScreen {...empty} onLoadMoreRecent={more} />);
-		expect(screen.queryByRole("button", { name: "加载更多对话" })).toBeNull();
+			screen.getByText("当前会话已过期，需要重新登录后再进入工作区。"),
+		).toBeTruthy();
+		for (const name of ["最近对话", "可用 Agent", "我的申请"]) {
+			const region = screen.getByRole("region", { name });
+			expect(within(region).queryByRole("button")).toBeNull();
+			expect(within(region).getByText(/无法读取，请重新登录。$/)).toBeTruthy();
+		}
+		fireEvent.click(relogins[0] as HTMLElement);
+		expect(relogin).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		{
+			state: { kind: "unavailable", retryable: true },
+			title: "最近的个人对话暂时无法读取。",
+			tone: "info",
+			retry: true,
+		},
+		{
+			state: { kind: "unavailable", retryable: false, reason: "denied" },
+			title: "当前无权读取最近的个人对话。",
+			tone: "danger",
+			retry: false,
+		},
+		{
+			state: { kind: "unavailable", retryable: false, reason: "not-found" },
+			title: "最近的个人对话读取入口不可用。",
+			tone: "danger",
+			retry: false,
+		},
+		{
+			state: {
+				kind: "unavailable",
+				retryable: false,
+				reason: "invalid-response",
+			},
+			title: "最近的个人对话返回的数据无法读取。",
+			tone: "danger",
+			retry: false,
+		},
+	] satisfies {
+		state: WorkbenchScreenProps["recent"];
+		title: string;
+		tone: string;
+		retry: boolean;
+	}[])(
+		"renders the recent read failure as a notice with its own title ($title)",
+		async ({ state, title, tone, retry }) => {
+			const onRetry = vi.fn();
+			await showWorkbench(
+				<WorkbenchScreen {...empty} recent={state} onRetry={onRetry} />,
+			);
+			const region = screen.getByRole("region", { name: "最近对话" });
+			const notice = region.querySelector('[data-slot="alert"]');
+			expect(notice?.getAttribute("data-tone")).toBe(tone);
+			expect(notice?.getAttribute("role")).toBe("alert");
+			expect(notice?.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+			expect(within(region).getByText(title).tagName).toBe("STRONG");
+			expect(screen.queryByRole("button", { name: "重新登录" })).toBeNull();
+			if (retry) {
+				fireEvent.click(
+					within(region).getByRole("button", {
+						name: "重新加载最近的个人对话",
+					}),
+				);
+				expect(onRetry).toHaveBeenCalledOnce();
+			} else expect(within(region).queryByRole("button")).toBeNull();
+		},
+	);
+
+	it("colors each application status chip inside its own row", async () => {
+		const failedApplication = {
+			...pendingApplication,
+			applicationId: "failed-application",
+			name: "创建失败的本人申请",
+			status: "creation_failed" as const,
+		};
+		await showWorkbench(
+			<WorkbenchScreen
+				{...empty}
+				applications={{
+					kind: "ready",
+					applications: [failedApplication, rejected, pendingApplication],
+				}}
+			/>,
+		);
+		const region = screen.getByRole("region", { name: "我的申请" });
+		for (const [name, label, tone] of [
+			[failedApplication.name, "创建失败", "red"],
+			[rejected.name, "已驳回", "red"],
+			[pendingApplication.name, "待审批", "amber"],
+		] as const) {
+			const row = within(region)
+				.getByRole("heading", { level: 3, name })
+				.closest(".workbench-list-row") as HTMLElement;
+			const chip = within(row).getByText(label, {
+				selector: '[data-slot="badge"]',
+			});
+			expect(chip.dataset.variant).toBe("chip");
+			expect(chip.dataset.tone).toBe(tone);
+		}
+	});
+
+	it("numbers duplicate and untitled recent titles so continue links stay distinct (N-12)", async () => {
+		await showWorkbench(
+			<WorkbenchScreen
+				{...empty}
+				agents={{ kind: "ready", agents: [available] }}
+				recent={{
+					kind: "ready",
+					conversations: [
+						{ ...conversation, conversationId: "untitled-1", title: null },
+						{ ...conversation, conversationId: "untitled-2", title: "  " },
+						{ ...conversation, conversationId: "titled" },
+					],
+					nextCursor: null,
+				}}
+			/>,
+		);
+		const region = screen.getByRole("region", { name: "最近对话" });
+		// 可见标题仍是「未命名对话」；只有链接的对象名按出现顺序编号。
+		expect(
+			within(region)
+				.getAllByRole("heading", { level: 3 })
+				.map((heading) => heading.textContent),
+		).toEqual(["未命名对话", "未命名对话", "较后 ID 的最近对话"]);
+		const names = within(region)
+			.getAllByRole("link", { name: /^继续对话：/ })
+			.map((link) => link.getAttribute("aria-label"));
+		expect(names).toEqual([
+			"继续对话：未命名对话（第 1 次）",
+			"继续对话：未命名对话（第 2 次）",
+			"继续对话：较后 ID 的最近对话",
+		]);
+		expect(new Set(names).size).toBe(names.length);
+	});
+
+	it("shows today and earlier recent times with the shared formatter", async () => {
+		const originalTimeZone = process.env.TZ;
+		process.env.TZ = "Asia/Shanghai";
+		try {
+			await showWorkbench(
+				<ClockProvider now={() => new Date("2026-10-18T02:40:00Z")}>
+					<WorkbenchScreen
+						{...empty}
+						agents={{ kind: "ready", agents: [available] }}
+						recent={{
+							kind: "ready",
+							conversations: [
+								{ ...conversation, updatedAt: "2026-10-18T02:33:00Z" },
+								{
+									...conversation,
+									conversationId: "conversation-july",
+									updatedAt: "2026-07-27T02:00:00Z",
+								},
+							],
+							nextCursor: null,
+						}}
+					/>
+				</ClockProvider>,
+			);
+			const region = await screen.findByRole("region", {
+				name: "最近对话",
+			});
+			const times = Array.from(region.querySelectorAll("time"));
+			expect(times.map((time) => time.textContent)).toEqual([
+				"今天 10:33",
+				"7 月 27 日",
+			]);
+			expect(times.map((time) => time.getAttribute("datetime"))).toEqual([
+				"2026-10-18T02:33:00Z",
+				"2026-07-27T02:00:00Z",
+			]);
+		} finally {
+			if (originalTimeZone === undefined) delete process.env.TZ;
+			else process.env.TZ = originalTimeZone;
+		}
 	});
 });

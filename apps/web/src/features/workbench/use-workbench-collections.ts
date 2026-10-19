@@ -25,7 +25,10 @@ export function useWorkbenchCollections({
 	| "adminAgents"
 	| "onRetry"
 	| "refreshing"
-> {
+> & {
+	/** 「重新登录」后会话仍有效：解除各分区不可重试的失败并重读（W-03）。 */
+	reload: () => void;
+} {
 	const agents = useAgentDiscovery({ identityKey, client });
 	const ownerAgents = useAgentDiscovery({
 		identityKey,
@@ -82,6 +85,13 @@ export function useWorkbenchCollections({
 			void applications.refetch();
 			void pending.refetch();
 			void adminAgents.refetch();
+		},
+		reload: () => {
+			void agents.reload();
+			void ownerAgents.reload();
+			void applications.reload();
+			void pending.reload();
+			void adminAgents.reload();
 		},
 	};
 }

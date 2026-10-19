@@ -34,6 +34,10 @@ import {
 	formatPerson,
 	useAvailabilityNames,
 } from "../directory-names.js";
+import {
+	standardTemplateLabel,
+	type TemplateNameLookup,
+} from "../template-display-name.js";
 import { AdminAgentRowActions } from "./admin-agent-row-actions.js";
 import type { AdminAgentsState } from "./admin-agents.js";
 import { AdminUserGovernance } from "./admin-user-governance.js";
@@ -80,9 +84,13 @@ export function validateAdminAgentSearch(
 	};
 }
 
-function sourceLabel(agent: AgentProjectionV2) {
+function sourceLabel(
+	agent: AgentProjectionV2,
+	templateName?: TemplateNameLookup,
+) {
+	// 标准模板只显示模板显示名，读不到时为「标准模板」（F-02）。
 	return agent.source.kind === "standard"
-		? `标准模板 · ${agent.source.templateId}`
+		? standardTemplateLabel(agent.source.templateId, templateName)
 		: `自定义 Agent · ${agentSourceReferenceLabel(agent)}`;
 }
 
@@ -113,12 +121,15 @@ export function AdminAgentsScreen({
 	onFiltersChange,
 	onRefresh,
 	refreshing = false,
+	templateName,
 }: {
 	state: AdminAgentsState;
 	filters: AdminAgentFilters;
 	onFiltersChange: (filters: AdminAgentFilters) => void;
 	onRefresh: () => void;
 	refreshing?: boolean;
+	/** 模板显示名（部署配置）；未提供或读不到时显示「标准模板」（F-02）。 */
+	templateName?: TemplateNameLookup;
 }) {
 	const id = useId();
 	const toast = useToast();
@@ -130,7 +141,7 @@ export function AdminAgentsScreen({
 		(agent) =>
 			(!filters.status || filters.status === agent.managementStatus) &&
 			(!filters.source || filters.source === agent.source.kind) &&
-			`${agent.name}\n${agent.description}\n${sourceLabel(agent)}\n${ownerNames(agent)}`
+			`${agent.name}\n${agent.description}\n${sourceLabel(agent, templateName)}\n${ownerNames(agent)}`
 				.toLocaleLowerCase()
 				.includes(search),
 	);
@@ -149,11 +160,8 @@ export function AdminAgentsScreen({
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">系统管理 / Agent 管理</p>
-					<h1 id={`${id}-heading`}>看清所有 Agent 的运行资格。</h1>
-					<p>
-						查看已创建 Agent 的来源、Owner
-						和管理状态。创建申请请在“创建审批”中处理。
-					</p>
+					<h1 id={`${id}-heading`}>查看 Agent 状态</h1>
+					<p>系统管理员可以停用 Agent、替换 Owner 或重试创建；不支持删除。</p>
 				</div>
 				{denied || failed ? null : (
 					<div className="tag-row admin-agent-heading-tools">
@@ -320,7 +328,7 @@ export function AdminAgentsScreen({
 												{ownerNames(agent) || "未提供"}
 											</TableCell>
 											<TableCell data-label="来源">
-												{sourceLabel(agent)}
+												{sourceLabel(agent, templateName)}
 											</TableCell>
 											<TableCell data-label="状态">
 												<AgentStatusChip agent={agent} />

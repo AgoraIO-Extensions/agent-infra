@@ -158,8 +158,8 @@ export function useCapabilityComposer({
 			setDraft("");
 		},
 		/**
-		 * 输入框键盘：弹层打开时 ↑↓ 移动活动项（首尾停住），Enter / Tab 只选择不发送，
-		 * Esc 收起且焦点留在输入框。返回 true 表示事件已被弹层处理。
+		 * 输入框键盘：弹层打开时 ↑↓ 移动活动项（首尾停住），Home / End 跳到第一项 / 最后一项，
+		 * Enter / Tab 只选择不发送，Esc 收起且焦点留在输入框。返回 true 表示事件已被弹层处理。
 		 */
 		onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>, composing: boolean) {
 			if (!open || busy || composing) return false;
@@ -177,6 +177,20 @@ export function useCapabilityComposer({
 						options.length,
 					),
 				);
+				return true;
+			}
+			// 弹层打开时 Home / End 移动活动项，不移动输入框光标（CH-02）；带修饰键（如 Shift 选择）
+			// 或没有选项时交还输入框。
+			if (
+				(event.key === "Home" || event.key === "End") &&
+				!event.shiftKey &&
+				!event.ctrlKey &&
+				!event.metaKey &&
+				!event.altKey &&
+				options.length
+			) {
+				event.preventDefault();
+				setActiveIndex(event.key === "Home" ? 0 : options.length - 1);
 				return true;
 			}
 			if (

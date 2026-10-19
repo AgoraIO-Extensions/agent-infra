@@ -112,6 +112,8 @@ export type DirectoryName = {
 	name: string;
 	secondary: string;
 	resolved: boolean;
+	/** 用户的组织路径（目录返回时才有）；组织本身的路径已在 secondary 中。 */
+	detail?: string;
 };
 export type DirectoryNames = {
 	status: "loading" | "ready" | "error";
@@ -155,7 +157,12 @@ export function useDirectoryNames(
 							email: record?.secondary,
 						})
 					: formatOrganization({ name: record?.name, path: record?.secondary });
-			return { id, ...formatted, resolved: Boolean(record) };
+			return {
+				id,
+				...formatted,
+				resolved: Boolean(record),
+				...(record?.detail?.trim() ? { detail: record.detail.trim() } : {}),
+			};
 		},
 		retry() {
 			void query.refetch();

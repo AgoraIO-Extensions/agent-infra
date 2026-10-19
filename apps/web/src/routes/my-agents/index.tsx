@@ -5,6 +5,7 @@ import { useApplicationSession } from "../../features/application-shell.js";
 import { isRetryableMyAgentApplicationError } from "../../features/my-agents/my-agent-applications.js";
 import { MyAgentsScreen } from "../../features/my-agents/my-agents-screen.js";
 import { useMyAgentApplications } from "../../features/my-agents/use-my-agent-applications.js";
+import { useTemplateNameLookup } from "../../features/template-display-name.js";
 
 export const Route = createFileRoute("/my-agents/")({
 	// 只认「已创建」一个值；默认的「申请」不写参数，其他值一律忽略。
@@ -20,6 +21,7 @@ function MyAgentsRoute() {
 	const { identityKey } = useApplicationSession();
 	const query = useMyAgentApplications({ identityKey });
 	const owned = useAgentDiscovery({ identityKey, scope: "owner" });
+	const templateName = useTemplateNameLookup();
 	const applicationsRetryable = query.isError
 		? isRetryableMyAgentApplicationError(query.error)
 		: query.data?.kind === "unavailable" && query.data.retryable;
@@ -57,6 +59,7 @@ function MyAgentsRoute() {
 							? { kind: "unavailable", retryable: applicationsRetryable }
 							: query.data
 				}
+				templateName={templateName}
 			/>
 		</main>
 	);

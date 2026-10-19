@@ -221,7 +221,7 @@ test("own audit page filters, paginates, opens detail, and fits mobile", async (
 	const api = await fixture(page);
 	await page.goto("/audit");
 	await expect(
-		page.getByRole("heading", { name: "只看自己的执行事实。", exact: true }),
+		page.getByRole("heading", { name: "查看自己的执行记录。", exact: true }),
 	).toBeVisible();
 	await expect(page.getByRole("button", { name: /^详情：/ })).toHaveCount(1);
 	await page
@@ -269,7 +269,7 @@ for (const compact of [false, true]) {
 		await page.goto("/admin/audit");
 		await expect(
 			page.getByRole("heading", {
-				name: "复核平台关键变更。",
+				name: "查看平台变更记录。",
 				exact: true,
 			}),
 		).toBeVisible();
@@ -445,7 +445,7 @@ for (const compact of [false, true]) {
 			.click();
 		await expect(page).toHaveURL(/\/audit$/);
 		await expect(
-			page.getByRole("heading", { name: "只看自己的执行事实。", exact: true }),
+			page.getByRole("heading", { name: "查看自己的执行记录。", exact: true }),
 		).toBeVisible();
 		await expect(page.locator(".audit-table")).toContainText("审计管理员");
 		await expect(page.locator(".audit-table")).not.toContainText("审计用户");

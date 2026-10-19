@@ -1,9 +1,10 @@
 import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import { templateNameLookup } from "../template-display-name.js";
 import { AgentDiscoveryScreen } from "./agent-discovery-screen.js";
 import { renderWithAgentRouter } from "./test-router.js";
 
@@ -75,7 +76,7 @@ describe("AgentDiscoveryScreen", () => {
 		expect(input.value).toBe("Release");
 		fireEvent.change(input, { target: { value: "other" } });
 		expect(input.value).toBe("other");
-		expect(screen.getByText("未找到匹配的 Agent。")).toBeTruthy();
+		expect(screen.getByText("没有匹配的 Agent")).toBeTruthy();
 	});
 
 	it("searches only authorized names and purposes while reporting the actual collection size", async () => {
@@ -90,7 +91,11 @@ describe("AgentDiscoveryScreen", () => {
 				state={{ kind: "ready", agents: [startingAgent, documentAgent] }}
 			/>,
 		);
-		expect(screen.getByRole("status").textContent).toBe("2 个获授权 Agent");
+		// A-01：计数是筛选后的结果数，写在 role=status 里的 gray chip 中。
+		expect(screen.getByRole("status").textContent).toBe("2 个结果");
+		expect(
+			within(screen.getByRole("status")).getByText("2 个结果").dataset.tone,
+		).toBe("gray");
 		fireEvent.change(screen.getByRole("searchbox", { name: "搜索 Agent" }), {
 			target: { value: "  RELEASE  " },
 		});
@@ -100,9 +105,7 @@ describe("AgentDiscoveryScreen", () => {
 		expect(
 			screen.queryByRole("link", { name: "查看 文档检查 详情" }),
 		).toBeNull();
-		expect(screen.getByRole("status").textContent).toBe(
-			"2 个获授权 Agent，匹配 1 个",
-		);
+		expect(screen.getByRole("status").textContent).toBe("1 个结果");
 		fireEvent.change(screen.getByRole("searchbox", { name: "搜索 Agent" }), {
 			target: { value: "发布说明" },
 		});
@@ -115,7 +118,7 @@ describe("AgentDiscoveryScreen", () => {
 		fireEvent.change(screen.getByRole("searchbox", { name: "搜索 Agent" }), {
 			target: { value: "not-in-authorized-response" },
 		});
-		expect(screen.getByText("未找到匹配的 Agent。")).toBeTruthy();
+		expect(screen.getByText("没有匹配的 Agent")).toBeTruthy();
 		expect(
 			screen.queryAllByRole("link", { name: /^查看 .+ 详情$/ }),
 		).toHaveLength(0);
@@ -136,12 +139,25 @@ describe("AgentDiscoveryScreen", () => {
 		await renderWithAgentRouter(
 			<AgentDiscoveryScreen
 				state={{ kind: "ready", agents: [startingAgent, channelAgent] }}
+				templateName={templateNameLookup([
+					{ templateId: "codex", displayName: "Codex" },
+					{ templateId: "opencode", displayName: "OpenCode" },
+				])}
 			/>,
 		);
 		const search = screen.getByRole("searchbox", { name: "搜索 Agent" });
 		expect(search.getAttribute("placeholder")).toBe("搜索名称、模板或渠道");
+		// F-02：卡片 tag 与模板筛选显示部署配置的模板显示名，不显示原始 templateId。
+		expect(
+			screen
+				.getAllByRole("option")
+				.map((option) => option.textContent)
+				.filter((text) =>
+					["Codex", "OpenCode", "codex", "opencode"].includes(text ?? ""),
+				),
+		).toEqual(["Codex", "OpenCode"]);
 		for (const [query, name, label] of [
-			["  CODEX  ", "Release assistant", "标准模板 · codex"],
+			["  CODEX  ", "Release assistant", "标准模板 · Codex"],
 			["  wEB  ", "Release assistant", "Web"],
 			["企微机器人", "团队助理", "企微机器人"],
 		]) {
@@ -152,14 +168,26 @@ describe("AgentDiscoveryScreen", () => {
 			expect(
 				screen.getByText(label, { selector: '[data-slot="badge"]' }),
 			).toBeTruthy();
-			expect(screen.getByRole("status").textContent).toBe(
-				"2 个获授权 Agent，匹配 1 个",
-			);
+			expect(screen.getByRole("status").textContent).toBe("1 个结果");
 		}
 		fireEvent.change(search, { target: { value: "" } });
 		expect(
 			screen.queryAllByRole("link", { name: /^查看 .+ 详情$/ }),
 		).toHaveLength(2);
+	});
+
+	it("falls back to 标准模板 without exposing the templateId when names are unavailable (F-02)", async () => {
+		await renderWithAgentRouter(
+			<AgentDiscoveryScreen
+				state={{ kind: "ready", agents: [startingAgent] }}
+			/>,
+		);
+		expect(
+			screen.getByText("标准模板", { selector: '[data-slot="badge"]' }),
+		).toBeTruthy();
+		const list = screen.getByRole("list", { name: "可用范围" });
+		expect(list.textContent?.toLocaleLowerCase()).not.toContain("codex");
+		expect(screen.queryByRole("option", { name: "codex" })).toBeNull();
 	});
 
 	it.each(["not_configured", "binding", "failed"] as const)(
@@ -189,7 +217,7 @@ describe("AgentDiscoveryScreen", () => {
 				"gpt-5",
 			]) {
 				fireEvent.change(search, { target: { value: query } });
-				expect(screen.getByText("未找到匹配的 Agent。")).toBeTruthy();
+				expect(screen.getByText("没有匹配的 Agent")).toBeTruthy();
 				expect(
 					screen.queryAllByRole("link", { name: /^查看 .+ 详情$/ }),
 				).toHaveLength(0);
@@ -280,9 +308,7 @@ describe("AgentDiscoveryScreen", () => {
 		expect(
 			screen.queryByRole("link", { name: /Release assistant/ }),
 		).toBeNull();
-		expect(screen.getByRole("status").textContent).toBe(
-			"0 个获授权 Agent，匹配 0 个",
-		);
+		expect(screen.getByRole("status").textContent).toBe("0 个结果");
 	});
 
 	it("renders a visible Agent as a responsive detail link", async () => {
@@ -361,26 +387,87 @@ describe("AgentDiscoveryScreen", () => {
 	);
 
 	it.each([
-		["starting", "启动中"],
-		["updating", "更新中"],
-		["unavailable", "暂时不可用"],
-		["ready", "就绪"],
-	])(
-		"shows management status alongside %s service availability",
-		async (serviceAvailability, label) => {
+		["available", "ready", "就绪", "green"],
+		["available", "starting", "启动中", "amber"],
+		["available", "updating", "更新中", "amber"],
+		["available", "unavailable", "暂时不可用", "gray"],
+		["stopped", null, "已停止", "gray"],
+	] as const)(
+		"shows one derived availability chip for %s/%s",
+		async (managementStatus, serviceAvailability, label, tone) => {
 			const agent = AgentProjectionV2Schema.parse({
 				...startingAgent,
+				managementStatus,
 				serviceAvailability,
 			});
 			await renderWithAgentRouter(
 				<AgentDiscoveryScreen state={{ kind: "ready", agents: [agent] }} />,
 			);
-			expect(screen.getByText("可用")).toBeTruthy();
-			expect(
-				screen.getByText(label, { selector: '[data-slot="badge"]' }),
-			).toBeTruthy();
+			// A-02：卡片只有一个状态 chip，没有 secondary 徽章。
+			const card = screen.getByRole("listitem");
+			const chips = card.querySelectorAll(
+				'[data-slot="badge"][data-variant="chip"]',
+			);
+			expect(Array.from(chips).map((chip) => chip.textContent)).toEqual([
+				label,
+			]);
+			expect((chips[0] as HTMLElement).dataset.tone).toBe(tone);
+			expect(card.querySelector('[class*="bg-secondary"]')).toBeNull();
 		},
 	);
+
+	it("shows Owner and model range in the card foot", async () => {
+		const selfManaged = AgentProjectionV2Schema.parse({
+			...startingAgent,
+			agentId: "self-managed",
+			name: "自有入口助手",
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/pilot@sha256:abc",
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+			},
+		});
+		const noModels = AgentProjectionV2Schema.parse({
+			...startingAgent,
+			agentId: "no-models",
+			name: "无模型助手",
+			configuration: {
+				...startingAgent.configuration,
+				modelOptions: [],
+				defaultModelOptionId: null,
+				defaultReasoningLevel: null,
+			},
+		});
+		await renderWithAgentRouter(
+			<AgentDiscoveryScreen
+				state={{
+					kind: "ready",
+					agents: [startingAgent, selfManaged, noModels],
+				}}
+			/>,
+		);
+		const foot = (name: string) =>
+			Array.from(
+				screen
+					.getByRole("heading", { level: 3, name })
+					.closest("li")
+					?.querySelectorAll(".directory-card-foot-main small") ?? [],
+			).map((line) => line.textContent);
+		expect(foot("Release assistant")).toEqual([
+			`Owner · ${startingAgent.configuration.owners.map((owner) => owner.displayName).join("、")}`,
+			startingAgent.configuration.modelOptions
+				.map((option) => option.displayName)
+				.join(" · "),
+		]);
+		expect(foot("自有入口助手")[1]).toBe("由 Agent 自行管理");
+		expect(foot("无模型助手")[1]).toBe("无可选择模型");
+		expect(
+			screen
+				.getByRole("link", { name: "查看 Release assistant 详情" })
+				.closest(".directory-card-foot-side"),
+		).toBeTruthy();
+	});
 
 	it("uses Router navigation for an opaque Agent identifier", async () => {
 		const agent = AgentProjectionV2Schema.parse({
@@ -404,25 +491,117 @@ describe("AgentDiscoveryScreen", () => {
 			<AgentDiscoveryScreen state={{ kind: "ready", agents: [] }} />,
 		);
 
-		expect(screen.getByText("暂无你有权访问的 Agent。")).toBeTruthy();
+		const empty = document.querySelector('[data-slot="empty"]');
+		const title = screen.getByText("暂无你有权访问的 Agent");
+		expect(title.tagName).toBe("STRONG");
+		expect(
+			screen.getByText("目录只展示当前账号有权访问的 Agent。"),
+		).toBeTruthy();
+		expect(empty?.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "清除筛选" })).toBeNull();
 	});
 
-	it("renders an unavailable list without stale Agent data", async () => {
+	it("shows a search empty state with an icon, a non-heading title and clear filters", async () => {
 		await renderWithAgentRouter(
 			<AgentDiscoveryScreen
-				state={{
-					kind: "unavailable",
-					retryable: false,
-				}}
+				query="不存在"
+				state={{ kind: "ready", agents: [startingAgent] }}
 			/>,
 		);
-
-		expect(screen.getByRole("alert").textContent).toContain(
-			"Agent 列表暂时无法访问，请联系管理员。",
-		);
-		expect(screen.queryByText("Release assistant")).toBeNull();
-		expect(screen.queryByText(/forbidden|missing/i)).toBeNull();
+		const empty = document.querySelector('[data-slot="empty"]') as HTMLElement;
+		expect(within(empty).getByText("没有匹配的 Agent").tagName).toBe("STRONG");
+		expect(
+			within(empty).getByText("换一个名称、模板或渠道关键词再试。"),
+		).toBeTruthy();
+		expect(empty.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+		expect(
+			screen
+				.getAllByRole("heading", { level: 2 })
+				.map((node) => node.textContent),
+		).toEqual(["可用范围"]);
+		fireEvent.click(within(empty).getByRole("button", { name: "清除筛选" }));
+		expect(
+			screen.getByRole("link", { name: "查看 Release assistant 详情" }),
+		).toBeTruthy();
 	});
+
+	it.each([
+		{
+			state: {
+				kind: "unavailable",
+				retryable: false,
+				reason: "authentication-required",
+			},
+			title: "登录已过期",
+			button: "重新登录",
+			alert: true,
+		},
+		{
+			state: { kind: "unavailable", retryable: false, reason: "denied" },
+			title: "未授权",
+			link: ["返回工作台", "/"],
+			alert: false,
+		},
+		{
+			state: { kind: "unavailable", retryable: false, reason: "not-found" },
+			title: "目录入口不可用",
+			alert: true,
+		},
+		{
+			state: {
+				kind: "unavailable",
+				retryable: false,
+				reason: "invalid-response",
+			},
+			title: "目录数据无法读取",
+			alert: true,
+		},
+		{
+			state: { kind: "unavailable", retryable: true },
+			title: "服务暂不可用",
+			button: "重新加载 Agent",
+			alert: true,
+		},
+	] as const)(
+		"renders the $title state card without stale Agent data",
+		async (expected) => {
+			const onRetry = vi.fn();
+			const onRelogin = vi.fn();
+			await renderWithAgentRouter(
+				<AgentDiscoveryScreen
+					state={expected.state}
+					onRetry={onRetry}
+					onRelogin={onRelogin}
+				/>,
+			);
+			const card = screen
+				.getByRole("heading", { level: 2, name: expected.title })
+				.closest('[data-slot="state-card"]') as HTMLElement;
+			expect(card).toBeTruthy();
+			expect(card.getAttribute("role")).toBe(expected.alert ? "alert" : null);
+			expect(
+				screen.queryByText("Agent 列表暂时无法访问，请联系管理员。"),
+			).toBeNull();
+			expect(screen.queryByText("Release assistant")).toBeNull();
+			expect(screen.queryByText(/forbidden|missing/i)).toBeNull();
+			const buttons = within(card).queryAllByRole("button");
+			expect(buttons.map((button) => button.textContent)).toEqual(
+				"button" in expected ? [expected.button] : [],
+			);
+			if ("link" in expected && expected.link)
+				expect(
+					within(card)
+						.getByRole("link", { name: expected.link[0] })
+						.getAttribute("href"),
+				).toBe(expected.link[1]);
+			if ("button" in expected) {
+				fireEvent.click(buttons[0] as HTMLElement);
+				expect(
+					expected.button === "重新登录" ? onRelogin : onRetry,
+				).toHaveBeenCalledOnce();
+			}
+		},
+	);
 
 	it("renders an explicit loading state", async () => {
 		await renderWithAgentRouter(
@@ -432,5 +611,11 @@ describe("AgentDiscoveryScreen", () => {
 		expect(screen.getByText("正在加载 Agent…").getAttribute("aria-live")).toBe(
 			"polite",
 		);
+		// A-03：加载用 15px spinner + 文案，放在 role=status 内。
+		expect(
+			screen
+				.getByRole("status")
+				.querySelector('[data-slot="spinner"][aria-hidden="true"]'),
+		).toBeTruthy();
 	});
 });

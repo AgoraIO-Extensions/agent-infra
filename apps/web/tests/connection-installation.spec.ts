@@ -4,6 +4,7 @@ import {
 	AgentProjectionV2Schema,
 	ConnectionCapabilityProjectionV1Schema,
 	ConversationPageV1Schema,
+	ExecutionDetailProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { ConnectionInstallationProjectionV1Schema } from "@agent-infra/contracts/runtime";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
@@ -75,6 +76,43 @@ function installationProjection(status: "awaiting_confirmation" | "confirmed") {
 }
 
 /** Boots the real execution-details surface and enforces the Platform gate. */
+/**
+ * 执行详情只在本次执行确实需要 Connection 授权时默认展开安装区（R4-09）；
+ * fixture 带一条授权暂不可用的调用事实，用户不需要先展开折叠区。
+ */
+function authorizationNeededExecution() {
+	const base = execution(conversationId, executionId);
+	return ExecutionDetailProjectionV2Schema.parse({
+		...base,
+		events: [
+			...base.events,
+			{
+				schemaVersion: 2,
+				kind: "event",
+				eventId: "connection-installation-event-2",
+				conversationId,
+				executionId,
+				sequence: 2,
+				conversationCursor: "connection-installation-cursor-2",
+				occurredAt: base.startedAt,
+				type: "execution.operation",
+				payload: {
+					kind: "tool",
+					operationRef: "operation-connection",
+					attemptRef: "attempt-connection",
+					phase: "failed",
+					toolId: "github.issues_read",
+					connection: {
+						verification: "unverified",
+						serviceRef: "service-github",
+						reason: "authorization_unavailable",
+					},
+				},
+			},
+		],
+	});
+}
+
 async function openExecutionDetails(page: Page) {
 	const observed: ObservedInstallationRequest[] = [];
 	await keepConversationStreamOpen(page);
@@ -146,7 +184,7 @@ async function openExecutionDetails(page: Page) {
 		if (path === `/api/v2/conversations/${conversationId}`)
 			return route.fulfill({ json: history(conversationId) });
 		if (path.endsWith(`/executions/${executionId}`))
-			return route.fulfill({ json: execution(conversationId, executionId) });
+			return route.fulfill({ json: authorizationNeededExecution() });
 		if (path.endsWith("/events"))
 			return route.fulfill({
 				contentType: "text/event-stream",
@@ -157,7 +195,8 @@ async function openExecutionDetails(page: Page) {
 	await page.goto(
 		`/agents/${agentId}/conversations?conversation=${conversationId}`,
 	);
-	await page.getByRole("button", { name: "执行详情", exact: true }).click();
+	// CH-08：执行详情入口是回复卡状态行里的「查看执行详情」文字链接。
+	await page.getByRole("button", { name: /^查看执行详情/ }).click();
 	return observed;
 }
 
@@ -165,7 +204,7 @@ test("begins and polls a Connection installation through the browser Origin gate
 	page,
 }) => {
 	const observed = await openExecutionDetails(page);
-	const details = page.getByRole("region", { name: "执行详情" });
+	const details = page.getByRole("dialog", { name: "执行详情" });
 	await details.getByRole("button", { name: "开始安装", exact: true }).click();
 	await expect(
 		details.getByText("等待 Connection 确认", { exact: true }),

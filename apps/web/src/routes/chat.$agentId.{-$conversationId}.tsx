@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useApplicationSession } from "../features/application-shell.js";
+import { connectionEntryUrl } from "../features/connection-entry.js";
 import { ConversationScreen } from "../features/conversation/conversation-screen.js";
 import { useBrowserSession } from "../features/use-browser-session.js";
 
@@ -25,6 +26,11 @@ function ConversationRoute() {
 				identityKey={identityKey}
 				session={
 					session.state.kind === "ready" ? session.state.session : undefined
+				}
+				connectionUrl={
+					session.state.kind === "ready"
+						? connectionEntryUrl(session.state.connection)
+						: undefined
 				}
 				view={view ?? "conversation"}
 				onViewChange={(next) => {

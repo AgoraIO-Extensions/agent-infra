@@ -36,12 +36,7 @@ it("opens a validated authorization URL and shows awaiting status", async () => 
 			authorizationUrl: "https://connector.test/authorize?state=x",
 		},
 	});
-	render(
-		<ConnectionInstallationPanel
-			conversationId="conversation-1"
-			executionId="execution-1"
-		/>,
-	);
+	render(<ConnectionInstallationPanel executionId="execution-1" />);
 	fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
 	await screen.findByText("等待 Connection 确认");
 	expect(screen.queryByRole("button", { name: "开始安装" })).toBeNull();
@@ -66,12 +61,7 @@ it("does not open an invalid authorization URL", async () => {
 			authorizationUrl: "http://connector.test/authorize",
 		},
 	});
-	render(
-		<ConnectionInstallationPanel
-			conversationId="conversation-1"
-			executionId="execution-1"
-		/>,
-	);
+	render(<ConnectionInstallationPanel executionId="execution-1" />);
 	fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
 	await waitFor(() =>
 		expect(
@@ -91,12 +81,7 @@ it("fails closed when the authorization URL is absent", async () => {
 			expiresAt: Date.now() + 60_000,
 		},
 	});
-	render(
-		<ConnectionInstallationPanel
-			conversationId="conversation-1"
-			executionId="execution-1"
-		/>,
-	);
+	render(<ConnectionInstallationPanel executionId="execution-1" />);
 	fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
 	await waitFor(() =>
 		expect(
@@ -129,12 +114,7 @@ it("polls awaiting confirmation into a terminal confirmed state", async () => {
 		},
 	});
 	try {
-		render(
-			<ConnectionInstallationPanel
-				conversationId="conversation-1"
-				executionId="execution-1"
-			/>,
-		);
+		render(<ConnectionInstallationPanel executionId="execution-1" />);
 		fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
 		await act(async () => {
 			await Promise.resolve();
@@ -166,12 +146,7 @@ it("bounds polling attempts after status failures", async () => {
 		new Error("offline"),
 	);
 	try {
-		render(
-			<ConnectionInstallationPanel
-				conversationId="conversation-1"
-				executionId="execution-1"
-			/>,
-		);
+		render(<ConnectionInstallationPanel executionId="execution-1" />);
 		fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
 		await act(async () => {
 			await Promise.resolve();
@@ -201,12 +176,7 @@ it.each(["confirmed", "revoked", "expired", "unknown"] as const)(
 				expiresAt: Date.now() + 60_000,
 			},
 		});
-		render(
-			<ConnectionInstallationPanel
-				conversationId="conversation-1"
-				executionId="execution-1"
-			/>,
-		);
+		render(<ConnectionInstallationPanel executionId="execution-1" />);
 		fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
 		await waitFor(() =>
 			expect(
@@ -235,12 +205,7 @@ it("does not render credential-shaped response fields", async () => {
 			token: "secret-material",
 		},
 	});
-	render(
-		<ConnectionInstallationPanel
-			conversationId="conversation-1"
-			executionId="execution-1"
-		/>,
-	);
+	render(<ConnectionInstallationPanel executionId="execution-1" />);
 	fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
 	await waitFor(() =>
 		expect(

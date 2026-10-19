@@ -40,16 +40,24 @@ describe("Alert", () => {
 		expect(screen.getByRole("alert").textContent).toBe("保存失败");
 	});
 
-	it("keeps role=alert and no automatic icon on the legacy path", () => {
+	it("requires a tone and has no implicit role or icon-less fallback (B-10)", () => {
+		// @ts-expect-error tone 必填：不再有缺省 tone 时默认 role=alert、无图标的兼容路径。
+		const legacy = <Alert>旧调用点</Alert>;
+		expect(legacy.props.tone).toBeUndefined();
 		const { container } = render(
-			<Alert variant="destructive">
-				<AlertDescription>旧调用点</AlertDescription>
+			<Alert tone="danger">
+				<AlertDescription>失败说明</AlertDescription>
 			</Alert>,
 		);
-		expect(screen.getByRole("alert").textContent).toBe("旧调用点");
 		const element = alertElement(container);
+		expect(element.getAttribute("role")).toBeNull();
+		expect(screen.queryByRole("alert")).toBeNull();
 		expect(element.dataset.tone).toBe("danger");
-		expect(element.querySelector("svg")).toBeNull();
+		expect(
+			element
+				.querySelector(":scope > svg")
+				?.classList.contains("lucide-circle-alert"),
+		).toBe(true);
 	});
 
 	it.each([
@@ -117,29 +125,18 @@ describe("Alert", () => {
 		).not.toBeNull();
 	});
 
-	it("keeps red description text for legacy destructive callers only", () => {
+	it("never turns the danger description text red", () => {
 		const { container } = render(
-			<>
-				<Alert variant="destructive">
-					<AlertDescription>旧失败</AlertDescription>
-				</Alert>
-				<Alert tone="danger" role="alert">
-					<AlertDescription>新失败</AlertDescription>
-				</Alert>
-			</>,
+			<Alert tone="danger" role="alert">
+				<AlertDescription>失败</AlertDescription>
+			</Alert>,
 		);
-		const [legacy, migrated] = Array.from(
-			container.querySelectorAll('[data-slot="alert"]'),
-		);
-		expect(legacy?.className).toContain(
-			"[&_[data-slot=alert-description]]:text-(--danger-ink)",
-		);
-		expect(migrated?.className).not.toContain("--danger-ink");
+		expect(alertElement(container).className).not.toContain("--danger-ink");
 	});
 
-	it("moves a legacy leading icon into the icon slot", () => {
+	it("moves a leading icon child into the icon slot", () => {
 		const { container } = render(
-			<Alert>
+			<Alert tone="info">
 				<svg aria-hidden="true" data-testid="legacy-icon" />
 				<AlertTitle>Browser 工作流</AlertTitle>
 			</Alert>,

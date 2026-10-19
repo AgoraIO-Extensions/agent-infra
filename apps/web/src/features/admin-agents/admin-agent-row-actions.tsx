@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { RefreshCw, Settings } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { withObjectName } from "@/lib/accessible-name";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
@@ -84,6 +84,14 @@ function RetryCreationButton({
 	const button = useRef<HTMLButtonElement>(null);
 	const [submitting, setSubmitting] = useState(false);
 	const [accepted, setAccepted] = useState(false);
+	const [refocus, setRefocus] = useState(false);
+	// 提交中按钮被禁用会失去焦点：失败后等按钮重新可用的那次提交再交还焦点，
+	// 不依赖 requestAnimationFrame 与 React 提交的先后（高负载下 rAF 可能先于提交执行）。
+	useEffect(() => {
+		if (!refocus || submitting) return;
+		setRefocus(false);
+		button.current?.focus();
+	}, [refocus, submitting]);
 	if (accepted) return null;
 	const label = submitting ? "重试中…" : "重试";
 	return (
@@ -104,9 +112,9 @@ function RetryCreationButton({
 					},
 					(error: RequestError) => {
 						setSubmitting(false);
+						// 失败后把焦点交还给「重试」以便再次提交（见上方 effect）。
+						setRefocus(true);
 						onFailed(error);
-						// 提交中按钮被禁用会失去焦点，失败后交还给「重试」以便再次提交。
-						requestAnimationFrame(() => button.current?.focus());
 					},
 				);
 			}}

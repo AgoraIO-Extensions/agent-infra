@@ -13,6 +13,8 @@ export type KeylessCurrentModelOption = {
 	readonly optionId: string;
 	readonly modelId: string;
 	readonly reasoningLevels: readonly string[];
+	/** 投影中的显示名；只用于提示文字。 */
+	readonly displayName?: string;
 };
 
 export type KeylessModelRow = {
@@ -45,6 +47,147 @@ function legacyOptionIdFor(endpointId: string, modelId: string) {
 
 export function candidateKey(candidate: KeylessModelCandidate) {
 	return optionIdFor(candidate.endpointId, candidate.modelId);
+}
+
+/** 端点 ID → 部署目录中的端点显示名。 */
+export type KeylessEndpointNames = Readonly<Record<string, string>>;
+
+/**
+ * 候选模型的可读名称（RK2-01）：端点用部署目录显示名，模型在契约补显示名前沿用模型名；
+ * 原始端点 ID 不进入页面。目录里找不到端点时只显示模型名，同名时加序号区分。
+ */
+export function keylessCandidateLabels(
+	candidates: readonly KeylessModelCandidate[],
+	endpointNames: KeylessEndpointNames = {},
+): ReadonlyMap<string, string> {
+	const base = candidates.map((candidate) => {
+		const endpoint = endpointNames[candidate.endpointId];
+		return endpoint ? `${endpoint} · ${candidate.modelId}` : candidate.modelId;
+	});
+	const seen = new Map<string, number>();
+	return new Map(
+		candidates.map((candidate, index) => {
+			const label = base[index] ?? candidate.modelId;
+			const total = base.filter((item) => item === label).length;
+			const count = (seen.get(label) ?? 0) + 1;
+			seen.set(label, count);
+			return [
+				candidateKey(candidate),
+				total > 1 ? `${label}（${count}）` : label,
+			] as const;
+		}),
+	);
+}
+
+/**
+ * 已配置模型的可读名称：选项 ID 中的端点换成部署目录显示名，原始端点 ID 不显示（RK2-01）；
+ * 选项 ID 不是约定格式或目录里没有该端点时，用投影的显示名。
+ */
+export function currentOptionLabel(
+	option: KeylessCurrentModelOption,
+	endpointNames: KeylessEndpointNames = {},
+) {
+	const separator = option.optionId.indexOf(":");
+	if (separator > 0) {
+		try {
+			const endpoint =
+				endpointNames[decodeURIComponent(option.optionId.slice(0, separator))];
+			if (endpoint) return `${endpoint} · ${option.modelId}`;
+		} catch {
+			// 编码不合法时按显示名展示。
+		}
+	}
+	return option.displayName ?? option.modelId;
+}
+
+/** 当前配置中的某个模型是否对应这个候选（与预先勾选使用同一规则）。 */
+export function currentOptionMatchesCandidate(
+	option: KeylessCurrentModelOption,
+	candidate: KeylessModelCandidate,
+	candidates: readonly KeylessModelCandidate[],
+) {
+	return matchingCurrentOption(candidate, candidates, [option]) !== undefined;
+}
+
+/**
+ * 当前已配置、但在这次选择中会被移除的模型（RK2-02）：候选里没有它，或对应候选没被勾选。
+ */
+export function removedCurrentOptions(
+	candidates: readonly KeylessModelCandidate[],
+	rows: KeylessModelRows,
+	current: readonly KeylessCurrentModelOption[],
+) {
+	return current.filter(
+		(option) =>
+			!candidates.some(
+				(candidate) =>
+					rows[candidateKey(candidate)]?.checked &&
+					currentOptionMatchesCandidate(option, candidate, candidates),
+			),
+	);
+}
+
+/** 两组勾选状态是否等价（未勾选行的档位不计）。 */
+export function sameKeylessRows(
+	candidates: readonly KeylessModelCandidate[],
+	left: KeylessModelRows,
+	right: KeylessModelRows,
+) {
+	return candidates.every((candidate) => {
+		const key = candidateKey(candidate);
+		const a = left[key];
+		const b = right[key];
+		const checked = Boolean(a?.checked);
+		if (checked !== Boolean(b?.checked)) return false;
+		if (!checked) return true;
+		const levels = (row: KeylessModelRow | undefined) =>
+			JSON.stringify([...(row?.levels ?? [])].toSorted());
+		return levels(a) === levels(b);
+	});
+}
+
+/** 以一次未保存的选择为起点（例如替换默认 Key 后按新候选重建，RK2-08），只保留新候选内的部分。 */
+export function keylessRowsFromSelection(
+	candidates: readonly KeylessModelCandidate[],
+	selection: Pick<KeylessModelSelection, "options">,
+): KeylessModelRows {
+	return Object.fromEntries(
+		candidates.map((candidate) => {
+			const picked = selection.options.find(
+				(option) => option.optionId === candidateKey(candidate),
+			);
+			const levels = picked
+				? candidate.reasoningLevels.filter((level) =>
+						picked.reasoningLevels.includes(level),
+					)
+				: [];
+			return [
+				candidateKey(candidate),
+				{ checked: picked !== undefined && levels.length > 0, levels },
+			];
+		}),
+	);
+}
+
+/**
+ * 新候选是否覆盖当前全部模型及其推理档位（G-09）：覆盖时只替换 Key，不改模型集合；
+ * 否则返回新 Key 不能调用的当前模型。
+ */
+export function uncoveredCurrentOptions(
+	candidates: readonly KeylessModelCandidate[],
+	current: readonly KeylessCurrentModelOption[],
+) {
+	return current.filter((option) => {
+		const candidate = candidates.find((item) =>
+			currentOptionMatchesCandidate(option, item, candidates),
+		);
+		return (
+			candidate === undefined ||
+			option.reasoningLevels.some(
+				(level) => !candidate.reasoningLevels.includes(level),
+			)
+		);
+	});
 }
 
 function matchingCurrentOption(

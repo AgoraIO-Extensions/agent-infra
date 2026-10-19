@@ -1,6 +1,7 @@
 import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
+import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures";
 import { captureDesignContract, designViewports } from "./design-contract";
 import {
 	expectCardTable,
@@ -85,6 +86,11 @@ async function fixture(page: Page, admin = true) {
 					},
 				},
 			});
+			return;
+		}
+		// 来源列的模板显示名来自部署配置（F-02）。
+		if (url.pathname === "/api/v2/deployment/configuration") {
+			await route.fulfill({ json: deploymentConfiguration });
 			return;
 		}
 		if (url.pathname === "/api/v2/directory/search") {
@@ -606,6 +612,11 @@ test("admin Agent page structure, header tools and columns match the design at 1
 			cells.map((cell) => cell.getAttribute("data-label")),
 		);
 	expect(labels).toEqual([...headers.slice(0, 5), null]);
+	// F-02：标准模板来源写「标准模板 · 显示名」，不显示原始 templateId。
+	await expect(
+		table.locator("tbody tr").first().locator('[data-label="来源"]'),
+	).toHaveText("标准模板 · Codex");
+	await expect(table).not.toContainText("codex");
 	for (const cell of await table.locator("tbody tr td:nth-child(4)").all())
 		await expect(cell.locator('[data-slot="badge"]')).toHaveCount(1);
 	await expect(table).not.toContainText("服务：");

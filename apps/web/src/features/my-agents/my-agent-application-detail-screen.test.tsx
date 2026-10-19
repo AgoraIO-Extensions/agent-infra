@@ -2,6 +2,7 @@ import { AgentApplicationProjectionV2Schema } from "@agent-infra/contracts/pilot
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { templateNameLookup } from "../template-display-name.js";
 import { MyAgentApplicationDetailScreen } from "./my-agent-application-detail-screen.js";
 import { pendingApplication } from "./test-fixtures.js";
 import { renderWithMyAgentsRouter } from "./test-router.js";
@@ -181,7 +182,13 @@ describe("MyAgentApplicationDetailScreen", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("alert").textContent).toBe("当前无法查看此申请。");
+		// P-01：403 与 404 合并为同一张「无法访问」状态卡（不再是 Alert），返回我的 Agent。
+		const card = screen.getByRole("article", { name: "无法访问" });
+		expect(card.textContent).toContain("申请不存在，或你没有访问权限。");
+		expect(
+			screen.getByRole("link", { name: "返回我的 Agent" }).getAttribute("href"),
+		).toBe("/my-agents");
+		expect(screen.queryByText("当前无法查看此申请。")).toBeNull();
 		expect(screen.queryByText("Release assistant request")).toBeNull();
 		expect(screen.queryByRole("button", { name: "撤回申请" })).toBeNull();
 		unavailable.unmount();
@@ -212,9 +219,11 @@ describe("MyAgentApplicationDetailScreen", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("alert").textContent).toBe(
-			"暂时无法读取申请，请稍后重试。",
-		);
+		// P-01：可重试失败为「服务暂不可用」状态卡，说明文案不变。
+		const card = screen.getByRole("alert");
+		expect(card.getAttribute("data-slot")).toBe("state-card");
+		expect(card.textContent).toContain("服务暂不可用");
+		expect(card.textContent).toContain("暂时无法读取申请，请稍后重试。");
 		expect(screen.queryByText("Release assistant request")).toBeNull();
 	});
 
@@ -344,14 +353,16 @@ describe("MyAgentApplicationDetailScreen", () => {
 			/user-release-2|org-platform/,
 		);
 		expect(
-			screen.getByText("Release model · release-model-v1 · medium、high"),
+			screen.getByText("Release model · release-model-v1 · 均衡、高"),
 		).toBeTruthy();
 		expect(screen.getByText("默认模型").nextElementSibling?.textContent).toBe(
 			"Release model",
 		);
 		expect(
 			screen.getByText("默认推理档位").nextElementSibling?.textContent,
-		).toBe("high");
+		).toBe("高");
+		// 推理档位只显示中文，原始枚举不进入页面。
+		expect(document.body.textContent).not.toMatch(/medium|high/);
 		expect(screen.getByText("Small")).toBeTruthy();
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
 		expect(screen.queryByRole("textbox")).toBeNull();
@@ -520,6 +531,37 @@ describe("MyAgentApplicationDetailScreen design alignment (M-11)", () => {
 		},
 	);
 
+	it("does not expose the internal application ID and names the template by its display name", async () => {
+		await renderWithMyAgentsRouter(
+			<MyAgentApplicationDetailScreen
+				onWithdraw={vi.fn()}
+				state={{ kind: "ready", application: pendingApplication }}
+				templateName={templateNameLookup([
+					{ templateId: "codex", displayName: "Codex" },
+				])}
+				withdrawing={false}
+			/>,
+		);
+		const heading = document.querySelector(
+			"header.application-detail-heading",
+		) as HTMLElement;
+		// 可读编号待 #2861；在此之前 eyebrow 只写「申请详情」。
+		expect(heading.querySelector(".page-eyebrow")?.textContent).toBe(
+			"申请详情",
+		);
+		expect(document.body.textContent).not.toContain(
+			pendingApplication.applicationId,
+		);
+		// F-02：来源与入口模式写模板显示名，不显示原始 templateId。
+		expect(screen.getByText("标准模板").nextElementSibling?.textContent).toBe(
+			"Codex",
+		);
+		expect(screen.getByText("入口模式").nextElementSibling?.textContent).toBe(
+			"标准模板 · Codex",
+		);
+		expect(document.body.textContent).not.toContain("codex");
+	});
+
 	it("puts the pending actions in the page heading and keeps the progress panel action-free", async () => {
 		await renderWithMyAgentsRouter(
 			<MyAgentApplicationDetailScreen
@@ -637,7 +679,7 @@ describe("MyAgentApplicationDetailScreen design alignment (M-11)", () => {
 		expect(within(scope).getByText("未识别的用户")).toBeTruthy();
 		expect(within(scope).getByText("未识别的组织")).toBeTruthy();
 		expect(
-			screen.getByText("Release model · release-model-v1 · medium"),
+			screen.getByText("Release model · release-model-v1 · 均衡"),
 		).toBeTruthy();
 		expect(screen.getByText("默认模型").nextElementSibling?.textContent).toBe(
 			"未识别的模型选项",

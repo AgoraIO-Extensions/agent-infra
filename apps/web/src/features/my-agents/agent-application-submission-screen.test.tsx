@@ -77,7 +77,7 @@ describe("AgentApplicationSubmissionScreen", () => {
 		expect(
 			screen.getByRole("link", { name: "查看申请详情" }).getAttribute("href"),
 		).toBe("/my-agents/application%3Atenant%2F01%3Fdraft%23one%25");
-		expect(screen.queryByRole("button", { name: "提交申请" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "提交审批" })).toBeNull();
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
 		// 提交成功后表单（及 footer）不再渲染，结果下方给出返回入口；页头仍没有操作。
 		expect(creationHeader().queryAllByRole("link")).toHaveLength(0);

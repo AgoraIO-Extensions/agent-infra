@@ -59,5 +59,22 @@ export function useMyAgentApplications({
 			? query.refetch({ cancelRefetch: false })
 			: Promise.resolve(undefined);
 	}
-	return { ...query, refetch, isFetching: allowed && query.isFetching };
+	/**
+	 * 用户明确要求重读（例如「重新登录」后会话仍有效）：不可重试的结果会锁住 refetch，
+	 * 这里重置本次查询解除锁定后重读一次（W-03）；未锁定时等同 refetch。
+	 */
+	function reload() {
+		const current =
+			selection.queryClient.getQueryData<MyAgentApplicationsState>(
+				selection.queryKey,
+			);
+		if (!selection.active || !allowed) return Promise.resolve();
+		return current?.kind === "unavailable" && !current.retryable
+			? selection.queryClient.resetQueries({
+					queryKey: selection.queryKey,
+					exact: true,
+				})
+			: query.refetch({ cancelRefetch: false });
+	}
+	return { ...query, refetch, reload, isFetching: allowed && query.isFetching };
 }

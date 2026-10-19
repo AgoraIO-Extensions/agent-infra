@@ -12,9 +12,12 @@ import type { WorkbenchRecentState } from "./workbench-screen.js";
 export function useRecentPersonalConversations({
 	identityKey,
 	client,
+	limit,
 }: {
 	identityKey: string;
 	client?: Client;
+	/** 每页条数，默认沿用共享读取的 50 条；工作台只读取首页的前几条。 */
+	limit?: number;
 }) {
 	const queryClient = useQueryClient();
 	const scope = useMemo(
@@ -23,10 +26,11 @@ export function useRecentPersonalConversations({
 			active: false,
 			pending: false,
 			client,
+			limit,
 			queryClient,
 			blocked: null as CollectionReadUnavailable | null,
 		}),
-		[identityKey, client, queryClient],
+		[identityKey, client, limit, queryClient],
 	);
 	const [, render] = useState(0);
 	const clear = useCallback(() => {
@@ -60,6 +64,7 @@ export function useRecentPersonalConversations({
 					cursor: pageParam,
 					signal,
 					client: scope.client,
+					limit: scope.limit,
 				});
 			} catch (error) {
 				if (
@@ -147,5 +152,15 @@ export function useRecentPersonalConversations({
 		isFetching: Boolean(identityKey) && !scope.blocked && query.isFetching,
 		refresh: () => read(false),
 		loadMore: () => read(true),
+		/**
+		 * 用户明确要求重读（例如「重新登录」后会话仍有效）：解除不可重试失败的锁定，
+		 * 用新的首页重读一次；未锁定时等同 refresh。
+		 */
+		reload: async () => {
+			if (!scope.active || !identityKey) return;
+			if (!scope.blocked) return read(false);
+			scope.blocked = null;
+			render((revision) => revision + 1);
+		},
 	};
 }

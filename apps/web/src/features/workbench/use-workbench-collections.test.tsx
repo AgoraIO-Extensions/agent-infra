@@ -206,6 +206,57 @@ describe("Workbench existing collections", () => {
 		},
 	);
 
+	it("keeps 401 sections locked on retry but reload re-reads every section (W-03)", async () => {
+		let status = 401;
+		const { result, requests } = setup(
+			(request) =>
+				status === 200
+					? collectionResponse(request)
+					: Response.json(
+							{
+								schemaVersion: 1,
+								code: "AUTHENTICATION_REQUIRED",
+								message: "Controlled authentication failure",
+								retryable: false,
+								traceId: "trace-workbench-reload",
+							},
+							{ status },
+						),
+			{ identityKey: "login-a:administrator", administrator: true },
+		);
+		await waitFor(() => expect(result.current.refreshing).toBe(false));
+		expect(result.current.agents).toMatchObject({
+			kind: "unavailable",
+			retryable: false,
+			reason: "authentication-required",
+		});
+		expect(result.current.adminAgents).toMatchObject({ kind: "denied" });
+		const failedReads = requests.length;
+		expect(failedReads).toBe(5);
+		status = 200;
+		// 普通重试不越过不可重试结果。
+		await act(async () => result.current.onRetry());
+		expect(requests).toHaveLength(failedReads);
+		// 会话仍有效后的 reload 解除锁定，五个分区各重读一次并恢复。
+		await act(async () => result.current.reload());
+		await waitFor(() => expect(result.current.refreshing).toBe(false));
+		expect(requests).toHaveLength(failedReads + 5);
+		for (const field of [
+			"agents",
+			"ownerAgents",
+			"applications",
+			"pending",
+			"adminAgents",
+		] as const)
+			expect(result.current[field].kind).toBe("ready");
+		expect(
+			requests.every(
+				(request) => request.method === "GET" && request.body === null,
+			),
+		).toBe(true);
+		expect(globalThis.fetch).not.toHaveBeenCalled();
+	});
+
 	it("cancels both administrator continuations on role loss and rejects late results and retained refresh", async () => {
 		let finish!: (response: Response) => void;
 		const late = new Promise<Response>((resolve) => {

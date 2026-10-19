@@ -329,9 +329,14 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 	await expect(
 		page.getByText("第一段实时输出。第二段完成输出。", { exact: true }),
 	).toHaveCount(0);
+	// R4-07：受理与处理状态只在助手回复卡内（spinner + 状态文案），卡外不再有受理行。
 	await expect(
-		page.getByRole("status").filter({ hasText: "消息已受理" }),
+		page
+			.getByRole("article")
+			.getByRole("status")
+			.filter({ hasText: /已受理，等待处理|处理中/ }),
 	).toBeVisible();
+	await expect(page.getByText(/消息已受理，等待处理/)).toHaveCount(0);
 	await test.info().attach("conversation-incremental-sse", {
 		body: await page.screenshot({ fullPage: true }),
 		contentType: "image/png",
@@ -412,7 +417,7 @@ test("renders an authorization failure without retaining another subject's conve
 		`/agents/${agentId}/conversations?conversation=${conversationId}`,
 	);
 	await expect(
-		page.getByText("当前登录或访问权限已失效，请重新登录或返回 Agent 列表。"),
+		page.getByText("当前登录或访问权限已失效，请重新登录或返回 Agent 目录。"),
 	).toBeVisible();
 	await expect(
 		page.getByText("请输出一段实时结果", { exact: true }),
@@ -481,7 +486,7 @@ test("recovers an ordinary conversation 404 through read-only reconnect", async 
 		),
 	).toBeVisible();
 	await expect(
-		page.getByText("当前登录或访问权限已失效，请重新登录或返回 Agent 列表。"),
+		page.getByText("当前登录或访问权限已失效，请重新登录或返回 Agent 目录。"),
 	).toHaveCount(0);
 	await expect(page.getByRole("button", { name: "重新连接" })).toBeVisible();
 	await test.info().attach("fake-404-unavailable", {
@@ -566,13 +571,13 @@ test("clears a loaded execution after 404 and recovers without resending", async
 	await page.goto(
 		`/agents/${agentId}/conversations?conversation=${conversationId}`,
 	);
-	await page.getByRole("button", { name: "执行详情", exact: true }).click();
+	await page.getByRole("button", { name: /^查看执行详情/ }).click();
 	await expect(page.getByText(oldSummary, { exact: true })).toBeVisible();
 	missing = true;
 	await page
 		.getByRole("button", { name: "核实原执行状态", exact: true })
 		.click();
-	const details = page.getByRole("region", { name: "执行详情" });
+	const details = page.getByRole("dialog", { name: "执行详情" });
 	await expect(
 		details.getByText("执行记录暂时无法读取。", { exact: true }),
 	).toBeVisible();
@@ -581,7 +586,7 @@ test("clears a loaded execution after 404 and recovers without resending", async
 	).toBeVisible();
 	await expect(page.getByText(oldSummary, { exact: true })).toHaveCount(0);
 	await expect(
-		page.getByText("当前登录或访问权限已失效，请重新登录或返回 Agent 列表。"),
+		page.getByText("当前登录或访问权限已失效，请重新登录或返回 Agent 目录。"),
 	).toHaveCount(0);
 	await test.info().attach("fake-execution-404-cleared", {
 		body: await page.screenshot({ fullPage: true }),
@@ -940,16 +945,27 @@ test("regenerates a terminal answer and opens its execution details", async ({
 		`/agents/${agentId}/conversations?conversation=${conversationId}`,
 	);
 	await expect(page.getByText("已完成检查。", { exact: true })).toBeVisible();
-	await page.getByRole("button", { name: "重新生成" }).click();
+	await page.getByRole("button", { name: /^重新生成/ }).click();
+	// R4-07：重新生成受理后，新回复卡内显示受理状态，卡外没有受理行。
 	await expect(
-		page.getByRole("status").filter({ hasText: "消息已受理" }),
+		page
+			.getByRole("article")
+			.getByRole("status")
+			.filter({ hasText: "已受理，等待处理" }),
 	).toBeVisible();
+	await expect(page.getByText(/消息已受理，等待处理/)).toHaveCount(0);
 	expect(regenerateBody).toEqual({
 		schemaVersion: 1,
 		messageId,
 	});
-	await page.getByRole("button", { name: "执行详情" }).click();
-	const details = page.getByRole("region", { name: "执行详情" });
+	// 原回答与重新生成的新回复各有一个入口，可访问名称可以区分（N-12）。
+	await expect(
+		page.getByRole("button", { name: "查看执行详情：回复" }),
+	).toBeVisible();
+	await page
+		.getByRole("button", { name: "查看执行详情：请检查当前任务" })
+		.click();
+	const details = page.getByRole("dialog", { name: "执行详情" });
 	await expect(details).toBeVisible();
 	await expect(details.getByText("模型与工具调用事实")).toBeVisible();
 	await expect(
@@ -1160,8 +1176,8 @@ for (const source of ["standard", "custom"] as const) {
 			await input.fill("下一条草稿");
 			// 「刷新会话」按钮已按设计删除（CH-05），这里只确认草稿保留。
 			await expect(input).toHaveValue("下一条草稿");
-			await page.getByRole("button", { name: "执行详情", exact: true }).click();
-			const details = page.getByRole("region", { name: "执行详情" });
+			await page.getByRole("button", { name: /^查看执行详情/ }).click();
+			const details = page.getByRole("dialog", { name: "执行详情" });
 			const alert = details.getByRole("alert");
 			await expect(alert).toContainText("使用标准模板时，请检查个人 Relay Key");
 			await expect(alert).toContainText("仍失败请联系 Owner 检查模型配置");
@@ -1185,10 +1201,16 @@ for (const source of ["standard", "custom"] as const) {
 					},
 				);
 			}
+			// 执行详情是模态弹窗：底部唯一主按钮「关闭」，关闭后焦点回到触发按钮（R4-09）。
 			await details
-				.getByRole("button", { name: "返回对话", exact: true })
+				.locator('[data-slot="dialog-footer"]')
+				.getByRole("button", { name: "关闭", exact: true })
 				.focus();
 			await page.keyboard.press("Enter");
+			await expect(details).toHaveCount(0);
+			await expect(
+				page.getByRole("button", { name: /^查看执行详情/ }),
+			).toBeFocused();
 			for (
 				let index = 0;
 				index < 12 &&

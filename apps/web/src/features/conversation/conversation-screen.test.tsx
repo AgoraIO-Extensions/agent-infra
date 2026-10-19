@@ -5,6 +5,7 @@ import {
 	PersistedConversationEventV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
+import { BrowserCapabilityProjectionV1Schema } from "@agent-infra/contracts/runtime";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import {
 	focusManager,
@@ -54,6 +55,15 @@ const agent = AgentProjectionV2Schema.parse({
 		nativeMetadata: true,
 	},
 });
+/** 当前登录用户：用户消息卡显示真实姓名（CH-08）。不是 Agent Owner。 */
+const currentUser = {
+	schemaVersion: 1 as const,
+	user: {
+		displayName: "陈昊",
+		roles: ["employee" as const],
+		userId: "user-chat",
+	},
+};
 const originalV1 = v1.getConfig();
 const originalV2 = v2.getConfig();
 const queries: QueryClient[] = [];
@@ -114,6 +124,7 @@ function setup(
 		agentId: "agent-1",
 		conversationId: "conversation-1",
 		identityKey: "session-a",
+		session: currentUser,
 		onConversationChange: vi.fn(),
 		...changes,
 	};
@@ -151,6 +162,28 @@ async function composer() {
 	return (await screen.findByRole("textbox", {
 		name: "消息",
 	})) as HTMLTextAreaElement;
+}
+/** 处理中的回复卡：meta 右侧 spinner + 状态文案（role=status），属于 Agent 的消息卡（R4-07）。 */
+async function pendingReply(label = "已受理，等待处理") {
+	const status = await screen.findByText(label, {
+		selector: '[data-slot="loading-line"]',
+	});
+	expect(status.getAttribute("role")).toBe("status");
+	expect(status.closest("article")?.getAttribute("aria-label")).toBe(
+		`${agent.name}的消息`,
+	);
+	return status;
+}
+function noPendingReply() {
+	expect(document.querySelector('[data-slot="loading-line"]')).toBeNull();
+	// 受理提示只在回复卡内出现一次，卡外不再有单独的受理行（R4-07、AC-6）。
+	expect(screen.queryByText(/消息已受理，等待处理/)).toBeNull();
+}
+/** 打开「会话文件」折叠条：添加附件入口按设计在条内（CH-03）。 */
+function openFiles() {
+	const trigger = screen.getByRole("button", { name: /^会话文件/ });
+	if (trigger.getAttribute("aria-expanded") !== "true")
+		fireEvent.click(trigger);
 }
 function receipt() {
 	return Response.json(
@@ -338,6 +371,18 @@ describe("functional conversation screen", () => {
 		expect(
 			within(listbox).getAllByRole("option")[1].getAttribute("aria-selected"),
 		).toBe("true");
+		// CH-02：Home / End 跳到第一项 / 最后一项，并阻止输入框移动光标；带 Shift 时交还输入框。
+		expect(fireEvent.keyDown(input, { key: "Home" })).toBe(false);
+		expect(options[0].getAttribute("aria-selected")).toBe("true");
+		expect(input.getAttribute("aria-activedescendant")).toBe(options[0].id);
+		expect(fireEvent.keyDown(input, { key: "End" })).toBe(false);
+		expect(options[1].getAttribute("aria-selected")).toBe("true");
+		expect(input.getAttribute("aria-activedescendant")).toBe(options[1].id);
+		expect(fireEvent.keyDown(input, { key: "Home", shiftKey: true })).toBe(
+			true,
+		);
+		expect(options[1].getAttribute("aria-selected")).toBe("true");
+		expect(input.value).toBe("/");
 		// 输入法组合中的 Enter 不选择、不发送。
 		fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
 		expect(screen.getByRole("listbox")).toBeTruthy();
@@ -389,6 +434,11 @@ describe("functional conversation screen", () => {
 			).disabled,
 		).toBe(true);
 		expect(receiptStatus()).toBe("已受理，尚未开始");
+		// 调用进行中：回执之后有「停止回复」（设计 .skill-actions），不另画处理中的回复卡（R4-07）。
+		const capabilityStop = screen.getByRole("button", { name: "停止回复" });
+		expect(capabilityStop.closest(".skill-actions")).toBeTruthy();
+		expect(capabilityStop.closest("form")).toBeNull();
+		expect(document.querySelector('[data-slot="loading-line"]')).toBeNull();
 		await waitFor(() => expect(streams.length).toBeGreaterThan(1));
 		nativeStatus(5, "processing");
 		await waitFor(() => expect(receiptStatus()).toBe("正在执行"));
@@ -611,6 +661,12 @@ describe("functional conversation screen", () => {
 				: undefined,
 		);
 		await screen.findByText("文件限制暂不可用，上传入口已关闭。");
+		// 收起状态的「会话文件」摘要直接反映失败，不显示「0 个待重试」（CH-03、AC-2）。
+		const summary = screen.getByRole("button", { name: /^会话文件/ });
+		expect(summary.getAttribute("aria-expanded")).toBe("false");
+		expect(summary.textContent).toContain("上传暂不可用");
+		expect(summary.textContent).not.toContain("0 个待重试");
+		openFiles();
 		expect(
 			(screen.getByRole("button", { name: "添加附件" }) as HTMLButtonElement)
 				.disabled,
@@ -620,6 +676,7 @@ describe("functional conversation screen", () => {
 	it("reads the read-only file limits before the attachment entry opens", async () => {
 		const { requests } = setup();
 		await screen.findByText(/支持 text\/plain/);
+		openFiles();
 		expect(
 			(screen.getByRole("button", { name: "添加附件" }) as HTMLButtonElement)
 				.disabled,
@@ -662,17 +719,22 @@ describe("functional conversation screen", () => {
 					return receipt();
 				return undefined;
 			});
+			await composer();
+			openFiles();
 			fireEvent.change(await screen.findByLabelText("添加附件"), {
 				target: {
 					files: [new File(["hello"], "notes.txt", { type: "text/plain" })],
 				},
 			});
 			await screen.findByText("已上传");
+			expect(
+				screen.getByRole("button", { name: /^会话文件/ }).textContent,
+			).toContain("1 个文件 · 0 个待重试");
 			fireEvent.change(await composer(), {
 				target: { value: "Summarize this" },
 			});
 			fireEvent.click(screen.getByRole("button", { name: "发送" }));
-			await screen.findByText("消息已受理，等待处理结果。");
+			await pendingReply();
 			const messageRequest = requests.find(
 				(request) =>
 					request.method === "POST" &&
@@ -791,14 +853,14 @@ describe("functional conversation screen", () => {
 				target: { value: "Complete this task" },
 			});
 			fireEvent.click(screen.getByRole("button", { name: "发送" }));
-			await screen.findByText("消息已受理，等待处理结果。");
+			await pendingReply();
 			await screen.findByRole("link", { name: /Pending task/ });
 			completed = true;
 			if (source === "stream") act(() => streams.at(-1)?.send(completedEvent));
 			// 页面不再提供「刷新会话」：快照由服务端要求的重读（timeline.reload）带回。
 			else act(() => streams.at(-1)?.send(reload()));
 			await screen.findByText("已完成");
-			expect(screen.queryByText("消息已受理，等待处理结果。")).toBeNull();
+			noPendingReply();
 			expect(
 				await screen.findByRole("link", { name: /Completed task/ }),
 			).toBeTruthy();
@@ -835,7 +897,7 @@ describe("functional conversation screen", () => {
 		const input = await composer();
 		fireEvent.change(input, { target: { value: "Fail this task" } });
 		fireEvent.click(screen.getByRole("button", { name: "发送" }));
-		await screen.findByText("消息已受理，等待处理结果。");
+		await pendingReply();
 		// The receipt re-read opens the stream that carries the persisted failure.
 		await waitFor(() => expect(streams.length).toBe(2));
 		expect(
@@ -848,7 +910,7 @@ describe("functional conversation screen", () => {
 		failureDelivered = true;
 		act(() => streams.at(-1)?.send(failedEvent));
 		await screen.findByText("执行失败");
-		expect(screen.queryByText("消息已受理，等待处理结果。")).toBeNull();
+		noPendingReply();
 		expect(input.disabled).toBe(false);
 		fireEvent.change(input, { target: { value: "Try once more" } });
 		const send = screen.getByRole("button", {
@@ -897,13 +959,18 @@ describe("functional conversation screen", () => {
 			);
 			const trigger =
 				entry === "timeline"
-					? (await screen.findAllByRole("button", { name: "执行详情" }))[0]
+					? (await screen.findAllByRole("button", { name: /^查看执行详情/ }))[0]
 					: await screen.findByRole("button", { name: "核实原执行状态" });
 			if (!trigger) throw new Error("Missing execution detail trigger");
 			trigger.focus();
 			fireEvent.click(trigger);
-			const heading = await screen.findByRole("heading", { name: "执行详情" });
-			await waitFor(() => expect(document.activeElement).toBe(heading));
+			// 执行详情是模态弹窗（R4-09 / N-08）：打开时聚焦弹窗本身，背后的对话不再被隐藏。
+			const dialog = await screen.findByRole("dialog", { name: "执行详情" });
+			expect(dialog.getAttribute("aria-modal")).toBe("true");
+			await waitFor(() => expect(document.activeElement).toBe(dialog));
+			expect(
+				document.querySelector(".chat-thread")?.hasAttribute("hidden"),
+			).toBe(false);
 			if (entry === "removed-unknown") {
 				completed = true;
 				act(() => streams.at(-1)?.send(statusEvent()));
@@ -911,9 +978,13 @@ describe("functional conversation screen", () => {
 			} else {
 				expect(trigger.isConnected).toBe(true);
 			}
-			const back = screen.getByRole("button", { name: "返回对话" });
-			back.focus();
-			fireEvent.click(back);
+			expect(
+				within(dialog).queryByRole("button", { name: "返回对话" }),
+			).toBeNull();
+			const close = within(dialog).getByText("关闭", { selector: "button" });
+			close.focus();
+			fireEvent.click(close);
+			await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 			const target =
 				entry === "removed-unknown"
 					? screen.getByRole("heading", { name: agent.name, level: 1 })
@@ -979,15 +1050,19 @@ describe("functional conversation screen", () => {
 		fireEvent.change(input, {
 			target: { value: "Cannot start a parallel reply" },
 		});
-		expect(
-			(screen.getByRole("button", { name: "重新生成" }) as HTMLButtonElement)
-				.disabled,
-		).toBe(true);
+		// 有进行中的回复时不提供「重新生成」（CH-08 过渡，AC-5）。
+		expect(screen.queryByRole("button", { name: /^重新生成/ })).toBeNull();
 		expect(
 			(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
 				.disabled,
 		).toBe(true);
-		fireEvent.click(screen.getByRole("button", { name: "停止回复" }));
+		const stop = screen.getByRole("button", { name: "停止回复" });
+		// 「停止回复」在处理中的回复卡内，composer 工具栏里没有（R4-07）。
+		expect(stop.closest("article")?.getAttribute("aria-label")).toBe(
+			`${agent.name}的消息`,
+		);
+		expect(stop.closest("form")).toBeNull();
+		fireEvent.click(stop);
 		await screen.findByRole("button", { name: "正在停止" });
 		const post = requests.find((request) => request.method === "POST");
 		expect(await post?.json()).toEqual({
@@ -1023,11 +1098,15 @@ describe("functional conversation screen", () => {
 					events: completed ? [terminal] : [],
 				});
 		});
-		fireEvent.click(await screen.findByRole("button", { name: "执行详情" }));
-		await screen.findByText("处理中");
+		fireEvent.click(
+			await screen.findByRole("button", { name: /^查看执行详情/ }),
+		);
+		const details = await screen.findByRole("dialog", { name: "执行详情" });
+		await within(details).findByText("处理中");
 		completed = true;
 		act(() => streams.at(-1)?.send(terminal));
-		await screen.findByText("已完成");
+		// 回复卡状态行也有「已完成」，这里只看执行详情。
+		await within(details).findByText("已完成");
 		expect(screen.queryByText("处理中")).toBeNull();
 		expect(
 			requests.filter((request) =>
@@ -1316,7 +1395,7 @@ describe("functional conversation screen", () => {
 		expect(screen.queryByText("访问权限已失效。")).toBeNull();
 		expect(
 			screen.queryByText(
-				"当前登录或访问权限已失效，请重新登录或返回 Agent 列表。",
+				"当前登录或访问权限已失效，请重新登录或返回 Agent 目录。",
 			),
 		).toBeNull();
 	});
@@ -1657,7 +1736,7 @@ describe("functional conversation screen", () => {
 			requests.filter((request) => request.method === "POST"),
 		).toHaveLength(0);
 		fireEvent.keyDown(input, { key: "Enter" });
-		await screen.findByText("消息已受理，等待处理结果。");
+		await pendingReply();
 		const posts = requests.filter((request) => request.method === "POST");
 		expect(posts).toHaveLength(1);
 		expect(await posts[0].json()).toEqual({
@@ -1666,7 +1745,12 @@ describe("functional conversation screen", () => {
 		});
 		expect(input.value).toBe("");
 		expect(screen.queryByText("已完成")).toBeNull();
-		expect(screen.getByRole("button", { name: "停止回复" })).toBeTruthy();
+		expect(
+			screen
+				.getByRole("button", { name: "停止回复" })
+				.closest("article")
+				?.getAttribute("aria-label"),
+		).toBe(`${agent.name}的消息`);
 	});
 
 	it("guards synchronous send repeats within one session", async () => {
@@ -1678,7 +1762,7 @@ describe("functional conversation screen", () => {
 		const send = screen.getByRole("button", { name: "发送" });
 		fireEvent.click(send);
 		fireEvent.click(send);
-		await screen.findByText("消息已受理，等待处理结果。");
+		await pendingReply();
 		expect(
 			requests.filter((request) => request.method === "POST"),
 		).toHaveLength(1);
@@ -1728,6 +1812,12 @@ describe("functional conversation screen", () => {
 		failRefresh = true;
 		act(() => streams.at(-1)?.send(reload()));
 		await screen.findByText(/恢复后会自动继续读取/);
+		// B-10：连接中断是读取失败，用 warn notice 并以 role="alert" 播报。
+		const interrupted = screen
+			.getByText(/恢复后会自动继续读取/)
+			.closest('[data-slot="alert"]');
+		expect(interrupted?.getAttribute("role")).toBe("alert");
+		expect(interrupted?.getAttribute("data-tone")).toBe("warn");
 		fireEvent.change(input, { target: { value: "断线期间的草稿" } });
 		fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
 		await waitFor(() =>
@@ -1977,7 +2067,11 @@ describe("functional conversation screen", () => {
 						: undefined,
 				{ onAccessDenied },
 			);
-			await screen.findByText(String(message));
+			const failure = await screen.findByText(String(message));
+			// B-10：读取失败是 danger notice，以 role="alert" 播报。
+			const notice = failure.closest('[data-slot="alert"]');
+			expect(notice?.getAttribute("role")).toBe("alert");
+			expect(notice?.getAttribute("data-tone")).toBe("danger");
 			await composer();
 			expect(screen.queryByText("暂无个人对话。")).toBeNull();
 			expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
@@ -2087,7 +2181,7 @@ describe("functional conversation screen", () => {
 		expect(onViewChange).toHaveBeenLastCalledWith("history");
 	});
 
-	it("creates a durable conversation and refreshes recent history before navigating", async () => {
+	it("creates a durable conversation on the first send and refreshes recent history before navigating", async () => {
 		let created = false;
 		const { props, requests } = setup(
 			(request) => {
@@ -2104,16 +2198,179 @@ describe("functional conversation screen", () => {
 			{ conversationId: undefined },
 		);
 		await screen.findByText("暂无个人对话。");
-		fireEvent.click(await screen.findByRole("button", { name: "创建会话" }));
+		// CH-10：直接进入就是可输入的 composer，没有「创建会话」；打开页面不产生写入。
+		const input = await composer();
+		expect(input.disabled).toBe(false);
+		expect(input.placeholder).toBe("输入消息，或 / 搜索命令与 Skill…");
+		expect(screen.queryByRole("button", { name: "创建会话" })).toBeNull();
+		expect(requests.every((request) => request.method === "GET")).toBe(true);
+		fireEvent.change(input, { target: { value: "第一条任务" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
 		await waitFor(() =>
 			expect(props.onConversationChange).toHaveBeenCalledWith("conversation-1"),
 		);
 		expect(
-			requests.filter((request) => request.method === "POST"),
-		).toHaveLength(1);
+			requests
+				.filter((request) => request.method === "POST")
+				.map((request) => new URL(request.url).pathname),
+		).toEqual(["/api/v1/agents/agent-1/conversations"]);
 		expect(
 			await screen.findByRole("link", { name: /Test conversation/ }),
 		).toBeTruthy();
+	});
+
+	describe("first message from the new-conversation page (CH-10)", () => {
+		function firstMessageScenario({
+			preparing = false,
+			create = () => Response.json(history().conversation, { status: 201 }),
+		}: {
+			preparing?: boolean;
+			create?: () => Response;
+		} = {}) {
+			const state = { ready: !preparing };
+			const view = setup(
+				(request) => {
+					const path = new URL(request.url).pathname;
+					if (request.method === "POST")
+						return path === "/api/v1/agents/agent-1/conversations"
+							? create()
+							: receipt();
+					if (path === "/api/v2/conversations/conversation-1")
+						return Response.json({
+							...history("conversation-1", []),
+							conversation: { ...history().conversation, status: "ready" },
+							sessionAvailability: state.ready ? "ready" : "preparing",
+						});
+				},
+				{ conversationId: undefined },
+			);
+			const posts = () =>
+				view.requests
+					.filter((request) => request.method === "POST")
+					.map((request) => new URL(request.url).pathname);
+			return { ...view, state, posts };
+		}
+		async function submitFirst(text: string) {
+			const input = await composer();
+			fireEvent.change(input, { target: { value: text } });
+			fireEvent.keyDown(input, { key: "Enter" });
+		}
+
+		it("creates the conversation, then sends the original draft once after navigating", async () => {
+			const { props, posts, requests, rerenderScope } = firstMessageScenario();
+			await submitFirst("第一条任务");
+			await waitFor(() =>
+				expect(props.onConversationChange).toHaveBeenCalledWith(
+					"conversation-1",
+				),
+			);
+			// 跳转前只有创建请求：消息由新会话页发送。
+			expect(posts()).toEqual(["/api/v1/agents/agent-1/conversations"]);
+			rerenderScope({ conversationId: "conversation-1" });
+			await waitFor(() =>
+				expect(posts()).toEqual([
+					"/api/v1/agents/agent-1/conversations",
+					"/api/v1/conversations/conversation-1/messages",
+				]),
+			);
+			const message = requests.find((request) =>
+				request.url.endsWith("/messages"),
+			);
+			expect(await message?.json()).toEqual({
+				schemaVersion: 1,
+				text: "第一条任务",
+			});
+			const input = await composer();
+			await waitFor(() => expect(input.value).toBe(""));
+			expect(document.activeElement).toBe(input);
+			// 再次进入同一会话不会重复发送。
+			rerenderScope({ conversationId: undefined });
+			await composer();
+			rerenderScope({ conversationId: "conversation-1" });
+			await composer();
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(posts()).toHaveLength(2);
+		});
+
+		it("waits for a preparing Session and then sends the first message", async () => {
+			const { props, posts, state, rerenderScope } = firstMessageScenario({
+				preparing: true,
+			});
+			await submitFirst("准备完成后发送");
+			await waitFor(() =>
+				expect(props.onConversationChange).toHaveBeenCalledWith(
+					"conversation-1",
+				),
+			);
+			rerenderScope({ conversationId: "conversation-1" });
+			const status = await screen.findByText(
+				"会话准备中，完成后自动发送这条消息。",
+			);
+			expect(status.getAttribute("role")).toBe("status");
+			const input = await composer();
+			expect(input.value).toBe("准备完成后发送");
+			expect(posts()).toHaveLength(1);
+			state.ready = true;
+			await waitFor(() => expect(posts()).toHaveLength(2), { timeout: 4_000 });
+			await waitFor(() => expect(input.value).toBe(""));
+		});
+
+		it("leaves a rewritten draft for a manual send", async () => {
+			const { props, posts, state, rerenderScope } = firstMessageScenario({
+				preparing: true,
+			});
+			await submitFirst("原草稿");
+			await waitFor(() =>
+				expect(props.onConversationChange).toHaveBeenCalledWith(
+					"conversation-1",
+				),
+			);
+			rerenderScope({ conversationId: "conversation-1" });
+			await screen.findByText("会话准备中，完成后自动发送这条消息。");
+			const input = await composer();
+			fireEvent.change(input, { target: { value: "改写后的草稿" } });
+			await screen.findByText("会话准备中，完成后即可发送。草稿会保留。");
+			state.ready = true;
+			const send = screen.getByRole("button", {
+				name: "发送",
+			}) as HTMLButtonElement;
+			await waitFor(() => expect(send.disabled).toBe(false), {
+				timeout: 4_000,
+			});
+			expect(posts()).toHaveLength(1);
+			expect(input.value).toBe("改写后的草稿");
+		});
+
+		it("keeps the draft and explains a refused creation above the composer", async () => {
+			const { props, posts } = firstMessageScenario({
+				create: () =>
+					Response.json(
+						PilotProtocolErrorV1Schema.parse({
+							schemaVersion: 1,
+							code: "AGENT_BUSY",
+							message: "Do not render raw error",
+							retryable: true,
+							traceId: "trace-busy",
+						}),
+						{ status: 409 },
+					),
+			});
+			await submitFirst("创建失败也保留");
+			const refused = await screen.findByRole("alert");
+			const input = await composer();
+			const form = input.closest("form");
+			if (!form) throw new Error("Expected composer form");
+			// 提示在 composer 上方，不在表单内，也没有原始错误文本。
+			expect(form.contains(refused)).toBe(false);
+			expect(
+				refused.compareDocumentPosition(form) &
+					Node.DOCUMENT_POSITION_FOLLOWING,
+			).toBeTruthy();
+			expect(refused.textContent).not.toContain("Do not render raw error");
+			expect(input.value).toBe("创建失败也保留");
+			expect(props.onConversationChange).not.toHaveBeenCalled();
+			expect(posts()).toEqual(["/api/v1/agents/agent-1/conversations"]);
+		});
 	});
 
 	it.each([
@@ -2377,7 +2634,7 @@ describe("functional conversation screen", () => {
 		});
 		expect(within(answer).getByText(agentName)).toBeTruthy();
 		expect(
-			within(screen.getByRole("article", { name: "你的消息" })).getByText(
+			within(screen.getByRole("article", { name: "陈昊的消息" })).getByText(
 				"Private question",
 			),
 		).toBeTruthy();
@@ -2407,7 +2664,9 @@ describe("functional conversation screen", () => {
 		expect(
 			requests.filter((request) => request.method === "POST"),
 		).toHaveLength(0);
-		fireEvent.click(screen.getByRole("button", { name: "执行详情" }));
+		fireEvent.click(
+			screen.getByRole("button", { name: "查看执行详情：Private question" }),
+		);
 		await waitFor(() =>
 			expect(
 				requests.some((request) =>
@@ -2440,8 +2699,14 @@ describe("functional conversation screen", () => {
 		const live = screen.getByRole("article", { name: `${agent.name}的消息` });
 		expect(within(live).getByText(agent.name)).toBeTruthy();
 		expect(within(live).getByText("执行失败")).toBeTruthy();
-		expect(screen.getByRole("article", { name: "你的消息" })).toBeTruthy();
-		expect(screen.getAllByRole("button", { name: "执行详情" })).toHaveLength(2);
+		expect(screen.getByRole("article", { name: "陈昊的消息" })).toBeTruthy();
+		// 每个执行最多一个执行详情入口：卡外的受理行与第二个「执行详情」已删除（R4-07、AC-6）。
+		expect(
+			screen.getAllByRole("button", { name: /^查看执行详情/ }),
+		).toHaveLength(1);
+		expect(
+			within(live).getByRole("button", { name: /^查看执行详情/ }),
+		).toBeTruthy();
 	});
 });
 
@@ -2468,15 +2733,18 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 		const state = {
 			agent: "available" as "available" | "stopped" | "failing",
 			post: resourceUnavailable as () => Response,
+			/** 设置后 Agent 重读要等它完成，用来观察复核进行中的状态。 */
+			hold: undefined as Promise<void> | undefined,
 		};
 		const posts: Request[] = [];
-		const view = setup((request) => {
+		const view = setup(async (request) => {
 			const path = new URL(request.url).pathname;
 			if (request.method === "POST") {
 				posts.push(request);
 				return state.post();
 			}
 			if (path === "/api/v2/agents/agent-1") {
+				if (state.hold) await state.hold;
 				if (state.agent === "stopped") return Response.json(stoppedAgent);
 				if (state.agent === "failing")
 					return new Response("down", { status: 500 });
@@ -2505,11 +2773,10 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 			screen.queryByRole("button", { name: "刷新 Agent 状态" }),
 		).toBeNull();
 		expect(screen.queryByRole("link", { name: "进入 Owner 操作" })).toBeNull();
-		expect(
-			screen.getByText(
-				"消息未送达，草稿已保留。请在 Agent 恢复可用后重新发送。",
-			),
-		).toBeTruthy();
+		// 确认 Agent 不可用后只保留页顶一处提示；命令区不重复（NW-13），也没有被折叠条藏起来的提示。
+		expect(screen.queryByText(/消息未送达/)).toBeNull();
+		expect(screen.queryByText("正在确认 Agent 状态…")).toBeNull();
+		expect(document.querySelectorAll('[data-slot="alert"]')).toHaveLength(1);
 		expect(input.value).toBe("Keep this draft");
 		expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
 		expect(onAccessDenied).not.toHaveBeenCalled();
@@ -2572,26 +2839,126 @@ describe("a 404 that may only mean the Agent is stopped (#2570)", () => {
 		expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
 	});
 
+	// CH-10：新会话页在首次发送时创建会话，创建遇 404 的处理与原「创建会话」入口相同。
+	async function sendFirstMessage(text: string) {
+		const input = await composer();
+		fireEvent.change(input, { target: { value: text } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		return input;
+	}
+
 	it("explains a stopped Agent when a new Session is refused with 404", async () => {
 		const onAccessDenied = vi.fn();
 		const { state } = scenario({
 			conversationId: undefined,
 			onAccessDenied,
 		});
-		const create = await screen.findByRole("button", { name: "创建会话" });
+		await composer();
 		state.agent = "stopped";
-		fireEvent.click(create);
+		const input = await sendFirstMessage("Stopped first draft");
 		await screen.findByText("已停止", { selector: "strong" });
 		expect(screen.queryByText(/当前登录或访问权限已失效/)).toBeNull();
 		expect(onAccessDenied).not.toHaveBeenCalled();
+		expect(input.value).toBe("Stopped first draft");
 	});
 
 	it("still treats a refused new Session as lost access while the Agent is available", async () => {
 		const onAccessDenied = vi.fn();
 		scenario({ conversationId: undefined, onAccessDenied });
-		fireEvent.click(await screen.findByRole("button", { name: "创建会话" }));
+		await sendFirstMessage("Lost access draft");
 		await screen.findByText(/当前登录或访问权限已失效/);
 		expect(onAccessDenied).toHaveBeenCalledOnce();
+		// 失去访问后草稿随页面一起清除。
+		expect(screen.queryByDisplayValue("Lost access draft")).toBeNull();
+	});
+
+	it("only says it is checking the Agent while the 404 is being verified (NW-13)", async () => {
+		const { state } = scenario();
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Keep this draft" } });
+		const gate = deferred<void>();
+		state.hold = gate.promise;
+		state.agent = "stopped";
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		const checking = await screen.findByText("正在确认 Agent 状态…");
+		expect(checking.getAttribute("role")).toBe("status");
+		// 复核返回前不出现「恢复后重新发送」类文案，也没有页顶不可用横幅。
+		expect(screen.queryByText(/消息未送达|重新发送|草稿已保留/)).toBeNull();
+		expect(document.querySelectorAll('[data-slot="alert"]')).toHaveLength(0);
+		await act(async () => gate.resolve());
+		await screen.findByText("已停止", { selector: "strong" });
+		expect(screen.queryByText("正在确认 Agent 状态…")).toBeNull();
+		expect(document.querySelectorAll('[data-slot="alert"]')).toHaveLength(1);
+		expect(input.value).toBe("Keep this draft");
+	});
+
+	it("offers 重新发送 with the current draft once the stopped Agent recovers (G-04)", async () => {
+		const { state, posts } = scenario();
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "原文A" } });
+		state.agent = "stopped";
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await screen.findByText("已停止", { selector: "strong" });
+		expect(screen.queryByText("消息未送达")).toBeNull();
+		state.agent = "available";
+		state.post = receipt;
+		act(() => {
+			focusManager.setFocused(false);
+			focusManager.setFocused(true);
+		});
+		// Agent 恢复后无需任何操作即可看到状态卡：标题、说明与 outline「重新发送」。
+		const title = await screen.findByText("消息未送达");
+		focusManager.setFocused(undefined);
+		const card = title.closest('[data-slot="alert"]') as HTMLElement;
+		expect(card.textContent).toContain("原文仍保留在输入框");
+		expect(card.closest('[data-slot="collapsible-panel"]')).toBeNull();
+		const resend = within(card).getByRole("button", { name: "重新发送" });
+		fireEvent.change(input, { target: { value: "  " } });
+		expect((resend as HTMLButtonElement).disabled).toBe(true);
+		fireEvent.change(input, { target: { value: "改写B" } });
+		expect((resend as HTMLButtonElement).disabled).toBe(false);
+		fireEvent.click(resend);
+		await waitFor(() => expect(posts).toHaveLength(2));
+		// 原尝试已结束：重新发送是一次新的消息命令（新的幂等键），正文是当前草稿。
+		expect(await posts[1].clone().json()).toEqual({
+			schemaVersion: 1,
+			text: "改写B",
+		});
+		expect(posts[1].headers.get("Idempotency-Key")).not.toBe(
+			posts[0].headers.get("Idempotency-Key"),
+		);
+		await waitFor(() =>
+			expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe(
+				"已重新发送，正在等待 Agent 确认",
+			),
+		);
+		await waitFor(() => expect(input.value).toBe(""));
+		expect(screen.queryByText("消息未送达")).toBeNull();
+	});
+
+	it("never says a refused new Session lost a message or a draft (NW-12)", async () => {
+		const { state, posts } = scenario({ conversationId: undefined });
+		await composer();
+		const gate = deferred<void>();
+		state.hold = gate.promise;
+		state.agent = "stopped";
+		const input = await sendFirstMessage("NW-12 draft");
+		await screen.findByText("正在确认 Agent 状态…");
+		expect(screen.queryByText(/消息未送达|草稿已保留/)).toBeNull();
+		await act(async () => gate.resolve());
+		await screen.findByText("已停止", { selector: "strong" });
+		expect(
+			screen.queryByText(/消息未送达|草稿已保留|正在确认 Agent 状态/),
+		).toBeNull();
+		expect(document.querySelectorAll('[data-slot="alert"]')).toHaveLength(1);
+		// Agent 已停止：草稿保留但不可编辑，发送不可用，不会再次创建。
+		expect(input.value).toBe("NW-12 draft");
+		expect(input.disabled).toBe(true);
+		expect(
+			(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(true);
+		expect(posts).toHaveLength(1);
 	});
 });
 
@@ -2671,22 +3038,45 @@ describe("answers outside the loaded event window (#2635)", () => {
 	}
 
 	it("says the content is not loaded instead of 'not output yet', then shows it after loading earlier content", async () => {
-		setup(windowed({ hasEarlier: true }));
+		const { requests } = setup(windowed({ hasEarlier: true }));
 
 		expect(await screen.findByText("Newest answer")).toBeTruthy();
-		expect(screen.getByText(/较早的内容还没有加载/)).toBeTruthy();
+		// 窗口外的已完成回复：不把提示当正文，改为状态行 + 就地「加载更早内容」（NW-15）。
+		const inline = screen.getByRole("button", {
+			name: "加载更早内容：old question",
+		});
+		const reply = inline.closest("article") as HTMLElement;
+		expect(reply.querySelector(".assistant-markdown")).toBeNull();
+		expect(inline.closest("p")?.textContent).toContain(
+			"已完成 · 正文在更早的记录中",
+		);
+		expect(screen.queryByText(/点上方的/)).toBeNull();
 		expect(screen.queryByText("尚未输出正文。")).toBeNull();
 
-		fireEvent.click(screen.getByRole("button", { name: "加载更早内容" }));
+		const earlierReads = () =>
+			requests.filter((request) =>
+				new URL(request.url).searchParams.has("beforeCursor"),
+			).length;
+		fireEvent.click(inline);
+		fireEvent.click(inline);
 		expect(await screen.findByText("Old answer")).toBeTruthy();
-		expect(screen.queryByText(/较早的内容还没有加载/)).toBeNull();
+		// 与顶部按钮同一请求，只发一次；成功后焦点落到该回复，而不是 body。
+		expect(earlierReads()).toBe(1);
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByText("Old answer").closest("article"),
+			),
+		);
+		expect(
+			screen.queryByRole("button", { name: /^加载更早内容：/ }),
+		).toBeNull();
 	});
 
 	it("keeps 'not output yet' when the earlier content is already loaded or there is none", async () => {
 		const { unmount } = setup(windowed({ hasEarlier: false }));
 		expect(await screen.findByText("Newest answer")).toBeTruthy();
 		expect(screen.getAllByText("尚未输出正文。")).toHaveLength(1);
-		expect(screen.queryByText(/较早的内容还没有加载/)).toBeNull();
+		expect(screen.queryByRole("button", { name: /^加载更早内容/ })).toBeNull();
 		unmount();
 		cleanup();
 
@@ -2707,15 +3097,895 @@ describe("answers outside the loaded event window (#2635)", () => {
 			}),
 		);
 		expect(await screen.findByText("Newest answer")).toBeTruthy();
-		expect(screen.getAllByText("尚未输出正文。")).toHaveLength(1);
-		expect(screen.queryByText(/较早的内容还没有加载/)).toBeNull();
+		// 已停止且无正文：不显示「尚未输出正文。」，只用一行状态说明（R4-08）。
+		expect(screen.queryByText("尚未输出正文。")).toBeNull();
+		expect(screen.getByText("已停止")).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: /^加载更早内容：/ }),
+		).toBeNull();
 	});
 
 	it("does not call a running reply that has no events yet 'not loaded'", async () => {
 		setup(windowed({ hasEarlier: true, oldStatus: "processing" }));
 
 		expect(await screen.findByText("Newest answer")).toBeTruthy();
-		expect(screen.getAllByText("尚未输出正文。")).toHaveLength(1);
-		expect(screen.queryByText(/较早的内容还没有加载/)).toBeNull();
+		// 进行中的回复在卡内显示 spinner 与「正在整理结果…」（R4-07），不提示可加载。
+		await pendingReply("处理中");
+		expect(screen.getByText("正在整理结果…")).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: /^加载更早内容：/ }),
+		).toBeNull();
+	});
+});
+
+describe("session context, command feedback and reply cards (design alignment)", () => {
+	const browserCapability = BrowserCapabilityProjectionV1Schema.parse({
+		schemaVersion: 1,
+		capabilityVersion: 1,
+		status: "available",
+		operations: ["navigate", "observe", "interact", "handoff"],
+		policy: {
+			allowedOrigins: ["https://example.test/"],
+			maxContexts: 1,
+			maxTabs: 2,
+			maxPages: 4,
+			maxViewportWidth: 1280,
+			maxViewportHeight: 720,
+			maxConcurrentActions: 1,
+			maxDownloads: 2,
+			maxDownloadBytes: 1_000_000,
+			maxUploadBytes: 1_000_000,
+			maxScreenshotBytes: 1_000_000,
+			maxBrowserDurationMs: 60_000,
+			maxRetainedProfileBytes: 10_000_000,
+			navigationTimeoutMs: 15_000,
+			actionTimeoutMs: 5_000,
+			requireSideEffectConfirmation: true,
+			allowUserHandoff: true,
+		},
+		provenance: {
+			browser: "chromium",
+			chromiumVersion: "153.0.8010.12",
+			playwrightVersion: "1.63.0",
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		},
+		conformance: {
+			schemaVersion: 1,
+			receiptId: "browser-receipt-1",
+			probeVersion: "browser-probe-1",
+			verifiedAt: "2026-10-10T00:00:00Z",
+			manifestDigest: `sha256:${"b".repeat(64)}`,
+			evidenceHash: "c".repeat(64),
+			operations: ["navigate", "observe", "interact", "handoff"],
+		},
+	});
+	const binding = {
+		subjectId: "subject-1",
+		agentId: "agent-1",
+		conversationId: "conversation-1",
+		executionId: "execution-1",
+		sessionGeneration: 1,
+		resourceFence: 2,
+		workloadRevision: 3,
+		imageDigest: `sha256:${"a".repeat(64)}`,
+		capabilityVersion: 1,
+		capabilityRevision: 1,
+		pageRevision: 4,
+	};
+	function handoff(sequence: number, status: "requested" | "active") {
+		return PersistedConversationEventV2Schema.parse({
+			schemaVersion: 2,
+			kind: "event",
+			eventId: `handoff-${sequence}`,
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			sequence,
+			conversationCursor: `cursor-${sequence}`,
+			occurredAt: timestamp,
+			type: "browser.handoff",
+			payload: {
+				handoffId: "handoff-1",
+				status,
+				reason: "mfa",
+				requestedAt: timestamp,
+				expiresAt: "2099-01-01T00:00:00.000Z",
+				binding,
+			},
+		});
+	}
+	function withAgent(
+		patch: Partial<typeof agent.capabilities>,
+		handler?: (request: Request) => Response | undefined,
+	) {
+		return (request: Request) => {
+			if (new URL(request.url).pathname === "/api/v2/agents/agent-1")
+				return Response.json({
+					...agent,
+					capabilities: { ...agent.capabilities, ...patch },
+				});
+			return handler?.(request);
+		};
+	}
+	function conversationWith(
+		events: ReturnType<typeof event>[],
+		messages: unknown[] = [],
+		status: "ready" | "active" = "ready",
+	) {
+		return (request: Request) =>
+			new URL(request.url).pathname === "/api/v2/conversations/conversation-1"
+				? Response.json({
+						...history("conversation-1", events),
+						conversation: { ...history().conversation, status },
+						messages,
+					})
+				: undefined;
+	}
+	function answer(
+		patch: Record<string, unknown> = {},
+	): Record<string, unknown> {
+		return {
+			...userMessage(),
+			role: "assistant",
+			messageId: "answer-1",
+			replyToMessageId: "message-1",
+			text: "",
+			answerVersion: 1,
+			isCurrentAnswer: true,
+			...patch,
+		};
+	}
+
+	it("puts a collapsed 会话上下文 bar above the timeline with a session-level Connection notice (CH-03, BR-04)", async () => {
+		setup(undefined, { connectionUrl: "https://connection.example.test/mcp" });
+		const trigger = await screen.findByRole("button", { name: /^会话上下文/ });
+		const timeline = await screen.findByRole("region", { name: "会话时间线" });
+		expect(
+			trigger.compareDocumentPosition(timeline) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(trigger.getAttribute("aria-expanded")).toBe("false");
+		expect(trigger.textContent).toContain("Connection");
+		expect(trigger.textContent).toContain("按需查看");
+		// 只列 Agent 实际具备的能力；「展开 / 收起」不进入可访问名称。
+		expect(trigger.textContent).not.toContain("浏览器操作");
+		expect(screen.queryByRole("button", { name: /展开|收起/ })).toBeNull();
+		const panel = document.getElementById(
+			trigger.getAttribute("aria-controls") ?? "",
+		);
+		expect(panel?.hidden).toBe(true);
+		// 对话主视图不挂执行级安装面板，也不外露会话 / 执行 ID（NI-92、NI-93）。
+		expect(screen.queryByText(/开始安装|Connection 安装/)).toBeNull();
+		expect(screen.queryByText(/执行：|conversation-1 \//)).toBeNull();
+
+		fireEvent.click(trigger);
+		expect(trigger.getAttribute("aria-expanded")).toBe("true");
+		expect(panel?.hidden).toBe(false);
+		expect(screen.getByText("需要 Connection 授权")).toBeTruthy();
+		// 与 Agent 详情「连接器」同一句 needs-auth 正文，不断言当前主体的授权状态。
+		expect(
+			screen.getByText(
+				"使用前需在独立 Connection 完成当前账号的授权；具体 Action allowlist 由 Connection Grant 决定，Platform 不保存或编辑这份授权。",
+			),
+		).toBeTruthy();
+		expect(screen.getByText("Action 范围")).toBeTruthy();
+		expect(screen.getByText("在 Connection 中确认")).toBeTruthy();
+		expect(screen.getByText("按当前主体 / Consumer / Actor 生效")).toBeTruthy();
+		const open = screen.getByRole("link", { name: "打开 Connection" });
+		expect(open.getAttribute("href")).toBe(
+			"https://connection.example.test/mcp",
+		);
+		expect(open.getAttribute("target")).toBe("_blank");
+		expect(open.getAttribute("rel")).toContain("noopener");
+		expect(open.getAttribute("rel")).toContain("noreferrer");
+		open.addEventListener("click", (clicked) => clicked.preventDefault());
+		fireEvent.click(open);
+		expect(await screen.findByText("等待 Connection 授权返回")).toBeTruthy();
+
+		// 收起再展开：handoff 状态不丢（NI-87）。
+		fireEvent.click(trigger);
+		expect(panel?.hidden).toBe(true);
+		fireEvent.click(trigger);
+		expect(
+			screen
+				.getByRole("link", { name: "返回查看授权状态" })
+				.getAttribute("href"),
+		).toBe("https://connection.example.test/mcp");
+	});
+
+	it("explains an unavailable Connection entry without rendering a link", async () => {
+		setup();
+		fireEvent.click(await screen.findByRole("button", { name: /^会话上下文/ }));
+		expect(screen.getByText("Connection 入口暂不可用。")).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "打开 Connection" })).toBeNull();
+	});
+
+	it("does not render the session context without Connection or Browser capabilities (NI-92, NI-93)", async () => {
+		setup(withAgent({ connection: false }));
+		await composer();
+		expect(screen.queryByRole("button", { name: /^会话上下文/ })).toBeNull();
+		expect(screen.queryByText(/Connection/)).toBeNull();
+	});
+
+	it("shows the 会话文件 bar between the timeline and the composer only with attachments (CH-03)", async () => {
+		const { unmount } = setup();
+		const files = await screen.findByRole("button", { name: /^会话文件/ });
+		const timeline = screen.getByRole("region", { name: "会话时间线" });
+		const input = await composer();
+		expect(
+			timeline.compareDocumentPosition(files) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			files.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(files.getAttribute("aria-expanded")).toBe("false");
+		expect(files.textContent).toContain("0 个文件 · 0 个待重试");
+		// 附件入口不再放在 composer 表单内。
+		expect(
+			input.closest("form")?.querySelector('input[type="file"]'),
+		).toBeNull();
+		unmount();
+		cleanup();
+		setup(withAgent({ attachments: false }));
+		await composer();
+		expect(screen.queryByRole("button", { name: /^会话文件/ })).toBeNull();
+	});
+
+	it("shows an active Browser card in the timeline, outside the collapsed context (NI-83, BR-01)", async () => {
+		const { streams } = setup(
+			withAgent(
+				{ browser: browserCapability },
+				conversationWith([handoff(1, "requested")]),
+			),
+		);
+		const input = await composer();
+		act(() => input.focus());
+		const trigger = await screen.findByRole("button", { name: /^会话上下文/ });
+		const timeline = screen.getByRole("region", { name: "会话时间线" });
+		// 接管请求卡在时间线里：不用展开折叠条即可见、可操作；上下文条保持收起，焦点不动。
+		const card = await within(timeline).findByRole("region", {
+			name: "需要你接管浏览器",
+		});
+		expect(
+			within(card).getByRole("button", { name: "接管浏览器" }),
+		).toBeTruthy();
+		expect(card.closest('[data-slot="collapsible-panel"]')).toBeNull();
+		expect(trigger.getAttribute("aria-expanded")).toBe("false");
+		expect(document.activeElement).toBe(input);
+		expect(
+			document.querySelectorAll("section.browser-capability"),
+		).toHaveLength(1);
+		// 展开上下文条：条内只有指向时间线的说明，不重复渲染浏览器卡。
+		fireEvent.click(trigger);
+		expect(
+			screen.getByText(
+				"浏览器操作：有请求、接管或进行中的操作时，浏览器卡显示在会话时间线里。",
+			),
+		).toBeTruthy();
+		expect(
+			document.querySelectorAll("section.browser-capability"),
+		).toHaveLength(1);
+		fireEvent.click(trigger);
+
+		// 已接管：同一张卡更新为「交还给 Agent」，仍在时间线里，上下文条不自动展开。
+		act(() => streams.at(-1)?.send(handoff(2, "active")));
+		expect(
+			await within(timeline).findByRole("button", { name: "交还给 Agent" }),
+		).toBeTruthy();
+		expect(trigger.getAttribute("aria-expanded")).toBe("false");
+		expect(
+			document.querySelectorAll("section.browser-capability"),
+		).toHaveLength(1);
+	});
+
+	it("keeps the idle Browser card inside the collapsed context only (BR-01)", async () => {
+		setup(withAgent({ browser: browserCapability }));
+		await composer();
+		const trigger = await screen.findByRole("button", { name: /^会话上下文/ });
+		expect(trigger.getAttribute("aria-expanded")).toBe("false");
+		const cards = document.querySelectorAll("section.browser-capability");
+		expect(cards).toHaveLength(1);
+		expect(cards[0]?.closest('[data-slot="collapsible-panel"]')).toBeTruthy();
+		expect(
+			screen
+				.queryByRole("region", { name: "会话时间线" })
+				?.querySelector("section.browser-capability") ?? null,
+		).toBeNull();
+		fireEvent.click(trigger);
+		const region = screen.getByRole("region", { name: "浏览器操作" });
+		expect(region.textContent).toContain("可请求");
+		expect(within(region).queryByRole("button")).toBeNull();
+	});
+
+	it("keeps command feedback outside every collapsed panel (NI-83)", async () => {
+		const pending = deferred<Response>();
+		let attempt = 0;
+		setup((request) => {
+			if (request.method !== "POST") return undefined;
+			attempt += 1;
+			if (attempt === 1) return pending.promise;
+			return new Response("down", { status: 500 });
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Keep this draft" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		const submitting = await screen.findByText("正在提交，请勿重复操作…");
+		expect(submitting.getAttribute("role")).toBe("status");
+		expect(submitting.closest('[data-slot="collapsible-panel"]')).toBeNull();
+		await act(async () =>
+			pending.resolve(
+				Response.json(
+					PilotProtocolErrorV1Schema.parse({
+						schemaVersion: 1,
+						code: "RUNTIME_UNAVAILABLE",
+						message: "Runtime unavailable",
+						retryable: true,
+						traceId: "trace-503",
+					}),
+					{ status: 503 },
+				),
+			),
+		);
+		const refused = await screen.findByRole("alert");
+		expect(refused.textContent).toContain(
+			"Agent 暂时不可用，请稍后重试或联系 Owner。",
+		);
+		expect(
+			within(refused).getByRole("button", { name: "重试原请求" }),
+		).toBeTruthy();
+		fireEvent.click(
+			within(refused).getByRole("button", { name: "重试原请求" }),
+		);
+		const unknown = await screen.findByText(/提交结果尚未确认/);
+		expect(unknown.closest('[data-slot="alert"]')?.getAttribute("role")).toBe(
+			"alert",
+		);
+		expect(screen.getByRole("button", { name: "核实原请求" })).toBeTruthy();
+		// 输入框被锁时读屏仍能读到原因。
+		expect(input.disabled).toBe(true);
+		expect(input.getAttribute("aria-describedby")).toBe(unknown.id);
+	});
+
+	it("keeps a draft rewritten while the original request is retried (NI-91)", async () => {
+		let attempt = 0;
+		const { requests } = setup((request) => {
+			if (request.method !== "POST") return undefined;
+			attempt += 1;
+			if (attempt > 1) return receipt();
+			return Response.json(
+				PilotProtocolErrorV1Schema.parse({
+					schemaVersion: 1,
+					code: "RUNTIME_UNAVAILABLE",
+					message: "Runtime unavailable",
+					retryable: true,
+					traceId: "trace-503",
+				}),
+				{ status: 503 },
+			);
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "原文A" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		const retry = await screen.findByRole("button", { name: "重试原请求" });
+		fireEvent.change(input, { target: { value: "改写B" } });
+		fireEvent.click(retry);
+		await pendingReply();
+		const posts = requests.filter((request) => request.method === "POST");
+		expect(posts).toHaveLength(2);
+		expect(await posts[1].json()).toEqual({ schemaVersion: 1, text: "原文A" });
+		expect(posts[1].headers.get("Idempotency-Key")).toBe(
+			posts[0].headers.get("Idempotency-Key"),
+		);
+		expect(input.value).toBe("改写B");
+	});
+
+	it("explains unsupported supplementary instructions only when the draft is blocked by them (R4-07)", async () => {
+		const processing = PersistedConversationEventV2Schema.parse({
+			...event(1),
+			type: "execution.status",
+			payload: { status: "processing" },
+		});
+		setup(
+			withAgent(
+				{ supplementaryInstruction: false },
+				conversationWith([processing], [userMessage()], "active"),
+			),
+		);
+		const input = await composer();
+		await pendingReply("处理中");
+		expect(screen.getByText("正在整理结果…")).toBeTruthy();
+		const hint = "当前回复仍在处理，不支持补充指令。草稿会保留。";
+		expect(screen.queryByText(hint)).toBeNull();
+		const send = screen.getByRole("button", { name: "发送" });
+		expect(send.getAttribute("aria-describedby")).toBeNull();
+		fireEvent.change(input, { target: { value: "补充一句" } });
+		const note = screen.getByText(hint);
+		expect((send as HTMLButtonElement).disabled).toBe(true);
+		expect(send.getAttribute("aria-describedby")).toBe(note.id);
+		// 停止入口只在处理中的回复卡内；composer 内没有。
+		expect(input.closest("form")?.textContent).not.toContain("停止回复");
+	});
+
+	it("collapses a failed reply into one status line with inline actions (R4-08, NI-07)", async () => {
+		const failed = PersistedConversationEventV2Schema.parse({
+			...event(1),
+			type: "execution.status",
+			payload: { status: "failed" },
+		});
+		const { requests } = setup((request) => {
+			if (request.method === "POST")
+				return Response.json(
+					CommandAcceptedProjectionV1Schema.parse({
+						schemaVersion: 1,
+						executionId: "execution-2",
+						messageId: null,
+						status: "submitted",
+					}),
+					{ status: 202 },
+				);
+			return conversationWith(
+				[failed],
+				[
+					userMessage(),
+					answer({
+						status: "failed",
+						error: PilotProtocolErrorV1Schema.parse({
+							schemaVersion: 1,
+							code: "PROVIDER_RATE_LIMITED",
+							message: "Synthetic provider detail",
+							retryable: true,
+							traceId: "trace-rate",
+						}),
+					}),
+				],
+			)(request);
+		});
+		const reply = await screen.findByRole("article", {
+			name: `${agent.name}的消息`,
+		});
+		await within(reply).findByText("执行失败");
+		expect(within(reply).queryByText("尚未输出正文。")).toBeNull();
+		expect(reply.querySelector('[data-slot="badge"]')).toBeNull();
+		const line = within(reply)
+			.getByText("执行失败")
+			.closest("p") as HTMLElement;
+		expect(line.classList.contains("message-status")).toBe(true);
+		expect(line.textContent).toContain("使用标准模板时，请检查个人 Relay Key");
+		expect(line.textContent).toContain("可重新生成");
+		expect(screen.queryByText("Synthetic provider detail")).toBeNull();
+		// 同卡只有一个「重新生成」和一个「查看执行详情」，都在状态行内。
+		const regenerate = within(line).getByRole("button", {
+			name: "重新生成：Private question",
+		});
+		expect(
+			within(reply).getAllByRole("button", { name: /^重新生成/ }),
+		).toHaveLength(1);
+		expect(
+			within(reply).getAllByRole("button", { name: /^查看执行详情/ }),
+		).toHaveLength(1);
+		expect(
+			within(reply).queryByRole("button", { name: "上一个回答版本" }),
+		).toBeNull();
+		expect(within(reply).queryByText(/版本 1\/1/)).toBeNull();
+		fireEvent.click(regenerate);
+		await waitFor(() =>
+			expect(
+				requests.some(
+					(request) =>
+						request.method === "POST" &&
+						new URL(request.url).pathname.endsWith("/regenerations"),
+				),
+			).toBe(true),
+		);
+	});
+
+	it("says 已停止 · 可重新生成 for a stopped reply without body text", async () => {
+		const cancelled = PersistedConversationEventV2Schema.parse({
+			...event(1),
+			type: "execution.status",
+			payload: { status: "cancelled" },
+		});
+		setup(
+			conversationWith(
+				[cancelled],
+				[userMessage(), answer({ status: "cancelled" })],
+			),
+		);
+		const reply = await screen.findByRole("article", {
+			name: `${agent.name}的消息`,
+		});
+		const line = (await within(reply).findByText("已停止")).closest("p");
+		expect(line?.textContent).toContain("已停止 · 可重新生成");
+		expect(within(reply).queryByText("尚未输出正文。")).toBeNull();
+	});
+
+	it("labels messages with the signed-in user and their times (CH-08)", async () => {
+		const completed = PersistedConversationEventV2Schema.parse({
+			...event(2),
+			type: "execution.status",
+			payload: { status: "completed" },
+		});
+		setup(
+			conversationWith(
+				[event(1), completed],
+				[userMessage(), answer({ text: "output 1" })],
+			),
+		);
+		const mine = await screen.findByRole("article", { name: "陈昊的消息" });
+		expect(screen.queryByRole("article", { name: "你的消息" })).toBeNull();
+		expect(within(mine).getByText("陈昊").tagName).toBe("STRONG");
+		expect(
+			mine.querySelector(".message-meta time")?.getAttribute("dateTime"),
+		).toBe(timestamp);
+		const reply = screen.getByRole("article", { name: `${agent.name}的消息` });
+		expect(
+			reply.querySelector(".message-meta time")?.getAttribute("dateTime"),
+		).toBe(timestamp);
+		expect(reply.querySelector('[data-slot="spinner"]')).toBeNull();
+		const details = within(reply).getByRole("button", {
+			name: "查看执行详情：Private question",
+		});
+		expect(details.closest("p")?.textContent).toContain("已完成");
+		fireEvent.click(details);
+		expect(
+			await screen.findByRole("heading", { name: "执行详情" }),
+		).toBeTruthy();
+	});
+
+	it("attaches model fallback to its reply and explains it in a dialog (G-07)", async () => {
+		const completed = PersistedConversationEventV2Schema.parse({
+			...event(3),
+			type: "execution.status",
+			payload: { status: "completed" },
+		});
+		const fallback = PersistedConversationEventV2Schema.parse({
+			...event(1),
+			type: "model.selection.fell_back",
+			payload: {
+				modelOptionId: "model-primary",
+				reasoningLevel: "medium",
+				reason: "selection_unavailable",
+			},
+		});
+		setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (path !== "/api/v2/conversations/conversation-1") return undefined;
+			return Response.json({
+				...history("conversation-1", [fallback, event(2), completed]),
+				conversation: {
+					...history().conversation,
+					status: "ready",
+					// 回退后会话所选已是默认项：不能据此推断「请求模型」。
+					selectedModelOptionId: "model-primary",
+					selectedReasoningLevel: "medium",
+				},
+				messages: [userMessage(), answer({ text: "output 2" })],
+			});
+		});
+		const reply = await screen.findByRole("article", {
+			name: `${agent.name}的消息`,
+		});
+		const line = (
+			await within(reply).findByText(/模型回退 · 实际模型/)
+		).closest("p") as HTMLElement;
+		expect(line.textContent).toContain("实际模型 Primary model");
+		const trigger = within(line).getByRole("button", {
+			name: "查看模型状态：Private question",
+		});
+		act(() => trigger.focus());
+		fireEvent.click(trigger);
+		const dialog = await screen.findByRole("dialog", { name: "模型回退" });
+		expect(within(dialog).getByText("实际模型")).toBeTruthy();
+		expect(within(dialog).getByText("Primary model")).toBeTruthy();
+		expect(within(dialog).getByText("原因")).toBeTruthy();
+		expect(dialog.textContent).not.toContain("请求模型");
+		expect(dialog.textContent).not.toContain("暂时不可用");
+		expect(dialog.textContent).not.toContain("model-primary");
+		expect(
+			within(dialog).getByText(
+				"执行记录会保留实际模型；不会静默切换到个人 Key 或未授权模型。",
+			),
+		).toBeTruthy();
+		fireEvent.click(
+			within(dialog)
+				.getAllByRole("button", { name: "关闭" })
+				.at(-1) as HTMLElement,
+		);
+		await waitFor(() =>
+			expect(screen.queryByRole("dialog", { name: "模型回退" })).toBeNull(),
+		);
+		await waitFor(() => expect(document.activeElement).toBe(trigger));
+		// 时间线末尾不再有独立的回退提示框。
+		expect(screen.queryByText(/原模型选项已移除，此条消息/)).toBeNull();
+	});
+
+	it("never mentions model fallback when no fallback event exists (AC-13)", async () => {
+		setup(
+			conversationWith(
+				[event(1)],
+				[userMessage(), answer({ text: "output 1" })],
+			),
+		);
+		await screen.findByText("output 1");
+		expect(document.body.textContent).not.toContain("回退");
+		expect(document.body.textContent).not.toContain("不会静默切换");
+		expect(screen.queryByRole("button", { name: /^查看模型状态/ })).toBeNull();
+	});
+});
+
+describe("loading lines, read failures and notices on the conversation page (N-19, B-10)", () => {
+	function loadingLine(text: string) {
+		const line = screen.getByText(text);
+		expect(line.getAttribute("data-slot")).toBe("loading-line");
+		expect(line.getAttribute("role")).toBe("status");
+		expect(line.querySelector('[data-slot="spinner"]')).not.toBeNull();
+	}
+
+	it("uses loading lines while the Agent, Conversation and history are read", async () => {
+		const agentRead = deferred<Response>();
+		const conversationRead = deferred<Response>();
+		const recentRead = deferred<Response>();
+		const historyRead = deferred<Response>();
+		setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (path === "/api/v2/agents/agent-1") return agentRead.promise;
+			if (path === "/api/v2/conversations/conversation-1")
+				return conversationRead.promise;
+			if (path === "/api/v2/me/conversations/recent") return recentRead.promise;
+			if (path === "/api/v1/agents/agent-1/conversations")
+				return historyRead.promise;
+		});
+		await screen.findByText("正在读取 Agent…");
+		loadingLine("正在读取 Agent…");
+		await act(async () => agentRead.resolve(Response.json(agent)));
+		await screen.findByText("正在读取会话…");
+		loadingLine("正在读取会话…");
+		loadingLine("正在读取最近对话…");
+		fireEvent.click(
+			screen.getByRole("button", { name: "此 Agent 的全部历史" }),
+		);
+		await screen.findByText("正在读取历史…");
+		loadingLine("正在读取历史…");
+		await act(async () => {
+			conversationRead.resolve(
+				Response.json({
+					...history("conversation-1", []),
+					conversation: { ...history().conversation, status: "ready" },
+				}),
+			);
+			recentRead.resolve(Response.json({ items: [], nextCursor: null }));
+			historyRead.resolve(Response.json({ items: [], nextCursor: null }));
+		});
+		await waitFor(() =>
+			expect(document.querySelector('[data-slot="loading-line"]')).toBeNull(),
+		);
+	});
+
+	it.each([
+		[
+			401,
+			"登录",
+			"当前会话已过期，需要重新登录后再进入工作区。",
+			"button",
+			"重新登录",
+			"alert",
+		],
+		[
+			403,
+			"无法访问",
+			"Agent 不存在，或你没有访问权限。",
+			"link",
+			"返回 Agent 目录",
+			null,
+		],
+		[
+			404,
+			"无法访问",
+			"Agent 不存在，或你没有访问权限。",
+			"link",
+			"返回 Agent 目录",
+			null,
+		],
+		[
+			503,
+			"服务暂不可用",
+			"暂时无法读取 Agent，请稍后重试。",
+			"button",
+			"重新读取",
+			"alert",
+		],
+	] as const)(
+		"shows the shared state card when the Agent read fails with %s",
+		async (status, title, description, actionRole, action, role) => {
+			setup((request) => {
+				const path = new URL(request.url).pathname;
+				if (path === "/api/v2/agents/agent-1")
+					return Response.json({ message: "Controlled failure" }, { status });
+				if (path.startsWith("/api/v1/session") || path.includes("/connection"))
+					return new Response(null, { status: 503 });
+			});
+			const heading = await screen.findByRole("heading", {
+				name: title,
+				level: 2,
+			});
+			const card = heading.closest('[data-slot="state-card"]');
+			if (!(card instanceof HTMLElement))
+				throw new Error("Expected state card");
+			expect(card.getAttribute("role")).toBe(role);
+			expect(within(card).getByText(description)).toBeTruthy();
+			expect(within(card).getByRole(actionRole, { name: action })).toBeTruthy();
+			expect(
+				screen.getByRole("heading", { name: "对话", level: 1 }),
+			).toBeTruthy();
+			expect(screen.queryByText(/Agent 列表/)).toBeNull();
+			expect(screen.queryByRole("textbox", { name: "消息" })).toBeNull();
+		},
+	);
+
+	it.each([
+		["ready", 2],
+		["expired", 1],
+	] as const)(
+		"re-reads the Agent after 重新登录 only when the session is %s (W-03)",
+		async (kind, agentReads) => {
+			let agentStatus = 401;
+			let sessionStatus = 200;
+			const { requests } = setup(
+				(request) => {
+					const path = new URL(request.url).pathname;
+					if (path === "/api/v2/agents/agent-1")
+						return agentStatus === 200
+							? Response.json(agent)
+							: Response.json(
+									{
+										schemaVersion: 1,
+										code: "AUTHENTICATION_REQUIRED",
+										message: "Controlled failure",
+										retryable: false,
+										traceId: "trace-w03",
+									},
+									{ status: agentStatus },
+								);
+					if (path === "/api/v1/session")
+						return sessionStatus === 200
+							? Response.json(currentUser)
+							: Response.json(
+									{
+										schemaVersion: 1,
+										code: "AUTHENTICATION_REQUIRED",
+										message: "Controlled failure",
+										retryable: false,
+										traceId: "trace-w03",
+									},
+									{ status: sessionStatus },
+								);
+					if (path.includes("/connection"))
+						return new Response(null, { status: 503 });
+				},
+				{ conversationId: undefined },
+			);
+			const agentRequests = () =>
+				requests.filter(
+					(request) =>
+						new URL(request.url).pathname === "/api/v2/agents/agent-1",
+				).length;
+			const sessionRequests = () =>
+				requests.filter(
+					(request) => new URL(request.url).pathname === "/api/v1/session",
+				).length;
+			const relogin = await screen.findByRole("button", { name: "重新登录" });
+			await waitFor(() => expect(sessionRequests()).toBeGreaterThan(0));
+			const sessionReads = sessionRequests();
+			expect(agentRequests()).toBe(1);
+			agentStatus = 200;
+			if (kind === "expired") sessionStatus = 401;
+			fireEvent.click(relogin);
+			await waitFor(() =>
+				expect(sessionRequests()).toBeGreaterThan(sessionReads),
+			);
+			if (kind === "ready") {
+				// 会话仍有效：解除闭锁后重读 Agent，进入可输入的新会话页，不再停在登录卡。
+				expect(await composer()).toBeTruthy();
+				expect(
+					screen.getByRole("heading", { name: agent.name, level: 1 }),
+				).toBeTruthy();
+				expect(screen.queryByRole("button", { name: "重新登录" })).toBeNull();
+			} else {
+				// 会话已失效：不重读 Agent，仍停在登录卡，交给壳层切换到登录页。
+				await waitFor(() =>
+					expect(
+						(
+							screen.getByRole("button", {
+								name: "重新登录",
+							}) as HTMLButtonElement
+						).disabled,
+					).toBe(false),
+				);
+				expect(screen.queryByRole("textbox", { name: "消息" })).toBeNull();
+			}
+			expect(agentRequests()).toBe(agentReads);
+			// 打开页面与恢复读取都不发写请求。
+			expect(
+				requests.filter((request) => request.method !== "GET"),
+			).toHaveLength(0);
+		},
+	);
+
+	it("shows the invalid-data card when the Agent response does not match", async () => {
+		setup((request) =>
+			new URL(request.url).pathname === "/api/v2/agents/agent-1"
+				? Response.json({ ...agent, agentId: "agent-other" })
+				: undefined,
+		);
+		const heading = await screen.findByRole("heading", {
+			name: "数据无法读取",
+			level: 2,
+		});
+		expect(
+			heading.closest('[data-slot="state-card"]')?.getAttribute("role"),
+		).toBe("alert");
+		expect(screen.queryByRole("button", { name: "重新读取" })).toBeNull();
+	});
+
+	it("retries an unavailable Agent read from the state card", async () => {
+		let failing = true;
+		setup((request) =>
+			failing && new URL(request.url).pathname === "/api/v2/agents/agent-1"
+				? new Response("down", { status: 503 })
+				: undefined,
+		);
+		const retry = await screen.findByRole("button", { name: "重新读取" });
+		failing = false;
+		fireEvent.click(retry);
+		await composer();
+		expect(screen.queryByRole("heading", { name: "服务暂不可用" })).toBeNull();
+	});
+
+	it("says lost access with a danger alert and a link back to the Agent directory", async () => {
+		setup((request) =>
+			new URL(request.url).pathname === "/api/v2/conversations/conversation-1"
+				? Response.json(
+						PilotProtocolErrorV1Schema.parse({
+							schemaVersion: 1,
+							code: "AUTHORIZATION_REVOKED",
+							message: "Denied",
+							retryable: false,
+							traceId: "trace-denied",
+						}),
+						{ status: 403 },
+					)
+				: undefined,
+		);
+		const text = await screen.findByText(
+			"当前登录或访问权限已失效，请重新登录或返回 Agent 目录。",
+		);
+		const notice = text.closest('[data-slot="alert"]');
+		if (!(notice instanceof HTMLElement)) throw new Error("Expected notice");
+		expect(notice.getAttribute("role")).toBe("alert");
+		expect(notice.getAttribute("data-tone")).toBe("danger");
+		expect(
+			within(notice)
+				.getByRole("link", { name: "返回 Agent 目录" })
+				.getAttribute("href"),
+		).toBe("/agents");
+	});
+
+	it("explains an unavailable conversation as a static warn notice", async () => {
+		setup((request) =>
+			new URL(request.url).pathname === "/api/v2/conversations/conversation-1"
+				? Response.json({
+						...history("conversation-1", []),
+						conversation: { ...history().conversation, status: "unavailable" },
+					})
+				: undefined,
+		);
+		const text = await screen.findByText(
+			"当前会话不可用，历史只读。请使用上方入口明确新建会话。",
+		);
+		const notice = text.closest('[data-slot="alert"]');
+		if (!(notice instanceof HTMLElement)) throw new Error("Expected notice");
+		expect(notice.getAttribute("role")).toBeNull();
+		expect(notice.getAttribute("data-tone")).toBe("warn");
+		expect(notice.querySelector(":scope > svg")).not.toBeNull();
 	});
 });

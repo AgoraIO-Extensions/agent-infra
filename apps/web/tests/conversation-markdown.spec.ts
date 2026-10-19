@@ -215,13 +215,19 @@ test("assistant Markdown stays readable through history reload and version switc
 		).toBeVisible();
 		await checkSurface("history");
 		await page.getByRole("button", { name: "返回对话" }).click();
-		await page.getByRole("button", { name: "执行详情" }).first().click();
-		const details = page.getByRole("region", { name: "执行详情" });
+		await page
+			.getByRole("button", { name: /^查看执行详情/ })
+			.first()
+			.click();
+		const details = page.getByRole("dialog", { name: "执行详情" });
 		await expect(
 			details.getByRole("button", { name: "核实原执行状态" }),
 		).toBeVisible();
 		await checkSurface("execution");
-		await details.getByRole("button", { name: "返回对话" }).click();
+		await details
+			.locator('[data-slot="dialog-footer"]')
+			.getByRole("button", { name: "关闭" })
+			.click();
 	}
 	expect(
 		await page.evaluate(

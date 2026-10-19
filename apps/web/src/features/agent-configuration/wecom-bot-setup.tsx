@@ -22,7 +22,10 @@ import {
 	WecomUnbindAction,
 	WecomUnbindFailure,
 } from "./wecom-channel-card.js";
-import { openWecomQrAuthorizationV1 } from "./wecom-qr-authorization.js";
+import {
+	openWecomQrAuthorizationV1,
+	type WecomQrAuthorizationResultV1,
+} from "./wecom-qr-authorization.js";
 
 // 卡片标题即页面上的对象名，用于区分两张企微卡片里的同名按钮（N-12、NI-107）。
 const setupTitle = "企微机器人";
@@ -37,6 +40,7 @@ type QrAvailableSession = Extract<
 >;
 
 // 扫码面板：能力由服务端 setup session 决定，不可用时不打开窗口、不伪造绑定成功（O-08）。
+// 扫码完成后先在面板内确认连接影响（confirming），确认前不提交凭证（CK-09、PRD §10.2）。
 type QrPanel =
 	| { readonly phase: "closed" }
 	| { readonly phase: "checking" }
@@ -45,7 +49,8 @@ type QrPanel =
 			readonly reason: QrUnavailableSession["qrUnavailableReason"] | null;
 	  }
 	| { readonly phase: "available"; readonly started: QrAvailableSession }
-	| { readonly phase: "authorizing" };
+	| { readonly phase: "authorizing" }
+	| { readonly phase: "confirming"; readonly started: QrAvailableSession };
 
 // 原因只显示中文说明，不外露服务端枚举值。
 function qrUnavailableCopy(
@@ -85,6 +90,13 @@ export function WecomBotSetup({
 	);
 	const titleRef = useRef<HTMLHeadingElement>(null);
 	const qrTriggerRef = useRef<HTMLButtonElement>(null);
+	const qrConfirmRef = useRef<HTMLButtonElement>(null);
+	// 扫码结果只放在内存里等待 Owner 确认，不进入 React 状态；提交、取消或卸载时清空 Secret。
+	const qrResult = useRef<WecomQrAuthorizationResultV1 | undefined>(undefined);
+	const discardQrResult = useCallback(() => {
+		if (qrResult.current) qrResult.current.secret = "";
+		qrResult.current = undefined;
+	}, []);
 	const refresh = useCallback(
 		async function refreshConnection() {
 			clearTimeout(connectionTimer.current);
@@ -130,6 +142,7 @@ export function WecomBotSetup({
 	useEffect(() => {
 		generation.current++;
 		session.current = undefined;
+		discardQrResult();
 		setBotId("");
 		setSecret("");
 		setConfirmed(false);
@@ -141,11 +154,16 @@ export function WecomBotSetup({
 		void refresh();
 		return () => {
 			generation.current++;
+			discardQrResult();
 			qrAbort.current?.abort();
 			clearTimeout(timer.current);
 			clearTimeout(connectionTimer.current);
 		};
-	}, [refresh]);
+	}, [refresh, discardQrResult]);
+	// 扫码完成进入确认步骤时，焦点落在面板内的确认按钮上（按钮通过 aria-describedby 读出影响说明）。
+	useEffect(() => {
+		if (qr.phase === "confirming") qrConfirmRef.current?.focus();
+	}, [qr.phase]);
 	async function poll(attempt: number) {
 		if (attempt !== generation.current || !session.current) return;
 		try {
@@ -259,7 +277,13 @@ export function WecomBotSetup({
 	}
 	// 第一步：读取扫码能力。不打开窗口，也不要求先勾选（CK-09）。
 	async function openQrPanel() {
-		if (busy || qr.phase === "checking" || qr.phase === "authorizing") return;
+		if (
+			busy ||
+			qr.phase === "checking" ||
+			qr.phase === "authorizing" ||
+			qr.phase === "confirming"
+		)
+			return;
 		setError("");
 		if (qrUnavailable) {
 			setQr({ phase: "unavailable", reason: qrUnavailable.reason });
@@ -299,7 +323,14 @@ export function WecomBotSetup({
 		}
 	}
 	function closeQrPanel(focus: "trigger" | "manual") {
-		if (qr.phase === "available") void releaseQrSession(qr.started.sessionId);
+		if (qr.phase === "available" || qr.phase === "confirming")
+			void releaseQrSession(qr.started.sessionId);
+		if (qr.phase === "confirming") {
+			// 放弃本次扫码结果：不提交凭证，清空回填的 Bot ID，恢复连接状态轮询。
+			discardQrResult();
+			setBotId("");
+			void refresh();
+		}
 		setQr({ phase: "closed" });
 		// 面板关闭后焦点去处：改用手动配置 → Bot ID；关闭 → 扫码授权按钮。
 		window.setTimeout(() => {
@@ -307,9 +338,10 @@ export function WecomBotSetup({
 			else qrTriggerRef.current?.focus();
 		});
 	}
-	// 第二步：扫码可用时由这次点击打开扫码窗口，提交前仍需确认连接影响（PRD §10.2）。
+	// 第二步：扫码可用时由这次点击打开扫码窗口，不要求先勾选上方「我已知悉」（CK-09）。
+	// 扫码结果先留在内存里，进入面板内的确认步骤；这里不提交凭证。
 	async function authorizeQr(started: QrAvailableSession) {
-		if (busy || qrAbort.current || !confirmed) return;
+		if (busy || qrAbort.current) return;
 		const controller = new AbortController();
 		qrAbort.current = controller;
 		setQr({ phase: "authorizing" });
@@ -318,73 +350,84 @@ export function WecomBotSetup({
 		refreshSequence.current++;
 		clearTimeout(connectionTimer.current);
 		const attempt = generation.current;
-		let submittedCredentials = false;
 		try {
 			const result = await openWecomQrAuthorizationV1({
 				...started.qr,
 				expiresAt: started.expiresAt,
 				signal: controller.signal,
 			});
-			try {
-				if (attempt !== generation.current || controller.signal.aborted) return;
-				setBotId(result.botId);
-				setStatus("verifying");
-				const body = {
-					state: started.state,
-					botId: result.botId,
-					secret: result.secret,
-					takeoverConfirmed: confirmed,
-				};
+			if (attempt !== generation.current || controller.signal.aborted) {
 				result.secret = "";
-				submittedCredentials = true;
-				try {
-					const submitted = await submitWecomCredentials({
-						path: { agentId, sessionId: started.sessionId },
-						body,
-						responseStyle: "fields",
-						throwOnError: false,
-					});
-					if (attempt !== generation.current) return;
-					const statusCode = submitted.response?.status;
-					if (
-						!submitted.data &&
-						statusCode !== undefined &&
-						statusCode >= 400 &&
-						statusCode < 500 &&
-						statusCode !== 408 &&
-						statusCode !== 429
-					) {
-						session.current = undefined;
-						setBusy(false);
-						setQr({ phase: "closed" });
-						setStatus(undefined);
-						setError("凭证提交被拒绝，请检查输入并重试。");
-						return;
-					}
-				} finally {
-					body.secret = "";
-				}
-			} finally {
-				result.secret = "";
-			}
-		} catch {
-			if (attempt !== generation.current || controller.signal.aborted) return;
-			if (submittedCredentials && session.current) {
-				// A lost response may follow a committed submission. Read the original session.
-				setQr({ phase: "closed" });
-				await poll(attempt);
 				return;
 			}
+			discardQrResult();
+			qrResult.current = result;
+			setBotId(result.botId);
+			setBusy(false);
+			setQr({ phase: "confirming", started });
+		} catch {
+			if (attempt !== generation.current || controller.signal.aborted) return;
 			if (session.current) await releaseQrSession(session.current);
 			if (attempt !== generation.current) return;
 			setBusy(false);
 			setQr({ phase: "closed" });
 			setError("扫码授权未完成，请重试或使用下方手动配置。");
-			return;
 		} finally {
 			if (qrAbort.current === controller) qrAbort.current = undefined;
 		}
+	}
+	// 第三步：Owner 在面板内确认连接影响后才提交扫码凭证，且只提交一次（CK-09、PRD §10.2）。
+	async function confirmQr(started: QrAvailableSession) {
+		const scanned = qrResult.current;
+		if (busy || !scanned) return;
+		qrResult.current = undefined;
+		const body = {
+			state: started.state,
+			botId: scanned.botId,
+			secret: scanned.secret,
+			takeoverConfirmed: true as const,
+		};
+		scanned.secret = "";
+		setBusy(true);
+		setError("");
+		refreshSequence.current++;
+		clearTimeout(connectionTimer.current);
+		setStatus("verifying");
 		setQr({ phase: "closed" });
+		// 确认按钮随面板卸载：焦点交给卡片标题，状态 chip 的变化由其 live 区域播报。
+		window.setTimeout(() => titleRef.current?.focus());
+		const attempt = generation.current;
+		// 轮询与取消都跟随这次扫码的 setup session。
+		session.current = started.sessionId;
+		try {
+			const submitted = await submitWecomCredentials({
+				path: { agentId, sessionId: started.sessionId },
+				body,
+				responseStyle: "fields",
+				throwOnError: false,
+			});
+			if (attempt !== generation.current) return;
+			const statusCode = submitted.response?.status;
+			if (
+				!submitted.data &&
+				statusCode !== undefined &&
+				statusCode >= 400 &&
+				statusCode < 500 &&
+				statusCode !== 408 &&
+				statusCode !== 429
+			) {
+				session.current = undefined;
+				setBusy(false);
+				setStatus(undefined);
+				setError("凭证提交被拒绝，请检查输入并重试。");
+				return;
+			}
+		} catch {
+			// 响应丢失时提交可能已生效：继续回读原会话，不当作失败。
+			if (attempt !== generation.current) return;
+		} finally {
+			body.secret = "";
+		}
 		if (session.current) await poll(attempt);
 	}
 	async function cancel(invalidate = true) {
@@ -422,7 +465,9 @@ export function WecomBotSetup({
 		}
 	}
 
-	const locked = busy || unbind.pending;
+	// 扫码结果等待确认期间锁住手动表单与其他操作，只能在面板内确认或取消。
+	const qrConfirming = qr.phase === "confirming";
+	const locked = busy || unbind.pending || qrConfirming;
 	const qrOpen = qr.phase !== "closed" && qr.phase !== "checking";
 	const submitLabel = busy ? "验证中…" : "验证并绑定";
 	return (
@@ -445,7 +490,7 @@ export function WecomBotSetup({
 					<Input
 						id="wecom-bot-id"
 						value={botId}
-						disabled={busy}
+						disabled={busy || qrConfirming}
 						onChange={(e) => setBotId(e.target.value)}
 						autoComplete="off"
 					/>
@@ -456,7 +501,7 @@ export function WecomBotSetup({
 						id="wecom-bot-secret"
 						type="password"
 						value={secret}
-						disabled={busy}
+						disabled={busy || qrConfirming}
 						onChange={(e) => setSecret(e.target.value)}
 						autoComplete="new-password"
 					/>
@@ -466,7 +511,7 @@ export function WecomBotSetup({
 				<Checkbox
 					className="mt-0.5"
 					checked={confirmed}
-					disabled={busy}
+					disabled={busy || qrConfirming}
 					onCheckedChange={(value) => setConfirmed(value)}
 				/>
 				<span className="min-w-0">
@@ -585,47 +630,76 @@ export function WecomBotSetup({
 					</div>
 				</div>
 			) : null}
-			{qr.phase === "available" || qr.phase === "authorizing" ? (
+			{qr.phase === "available" ||
+			qr.phase === "authorizing" ||
+			qr.phase === "confirming" ? (
 				<div
 					className="wecom-qr-panel"
-					data-phase="available"
+					data-phase={qr.phase === "confirming" ? "confirming" : "available"}
 					id="wecom-bot-qr-panel"
 				>
-					<div className="wecom-qr-head">
-						<div>
-							<strong>扫码授权</strong>
-							<p>
-								在新窗口中用企业微信扫码；完成后平台会提交凭证并轮询验证结果。
-							</p>
-						</div>
-					</div>
-					{confirmed ? null : (
-						<p className="wecom-qr-hint" role="status">
-							提交扫码结果前，请先勾选上方「我已知悉」确认连接影响。
-						</p>
+					{qr.phase === "confirming" ? (
+						<>
+							<div className="wecom-qr-head">
+								<div>
+									<strong>扫码已完成，确认后绑定</strong>
+									<p id="wecom-bot-qr-impact">
+										连接此机器人可能断开它在其他服务中的现有连接。确认后平台提交凭证并轮询验证结果。
+									</p>
+								</div>
+							</div>
+							<div className="wecom-qr-actions">
+								<Button
+									ref={qrConfirmRef}
+									type="button"
+									aria-describedby="wecom-bot-qr-impact"
+									onClick={() => void confirmQr(qr.started)}
+								>
+									确认并绑定
+								</Button>
+								<Button
+									type="button"
+									variant="ghost"
+									onClick={() => closeQrPanel("trigger")}
+								>
+									取消
+								</Button>
+							</div>
+						</>
+					) : (
+						<>
+							<div className="wecom-qr-head">
+								<div>
+									<strong>扫码授权</strong>
+									<p>
+										在新窗口中用企业微信扫码；扫码完成后在这里确认连接影响，平台再提交凭证并轮询验证结果。
+									</p>
+								</div>
+							</div>
+							<div className="wecom-qr-actions">
+								<Button
+									type="button"
+									variant="outline"
+									disabled={qr.phase === "authorizing"}
+									onClick={() => {
+										if (qr.phase === "available") void authorizeQr(qr.started);
+									}}
+								>
+									<Scan aria-hidden="true" data-icon="inline-start" />
+									{qr.phase === "authorizing" ? "等待扫码…" : "打开扫码窗口"}
+								</Button>
+								{qr.phase === "available" ? (
+									<Button
+										type="button"
+										variant="ghost"
+										onClick={() => closeQrPanel("trigger")}
+									>
+										关闭
+									</Button>
+								) : null}
+							</div>
+						</>
 					)}
-					<div className="wecom-qr-actions">
-						<Button
-							type="button"
-							variant="outline"
-							disabled={!confirmed || qr.phase === "authorizing"}
-							onClick={() => {
-								if (qr.phase === "available") void authorizeQr(qr.started);
-							}}
-						>
-							<Scan aria-hidden="true" data-icon="inline-start" />
-							{qr.phase === "authorizing" ? "等待扫码…" : "打开扫码窗口"}
-						</Button>
-						{qr.phase === "available" ? (
-							<Button
-								type="button"
-								variant="ghost"
-								onClick={() => closeQrPanel("trigger")}
-							>
-								关闭
-							</Button>
-						) : null}
-					</div>
 				</div>
 			) : null}
 		</WecomChannelCard>

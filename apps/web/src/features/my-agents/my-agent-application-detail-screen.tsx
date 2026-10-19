@@ -1,17 +1,13 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, RefreshCw, Settings2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Settings2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import {
-	Alert,
-	AlertAction,
-	AlertDescription,
-	AlertTitle,
-} from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Timestamp } from "@/components/ui/timestamp";
 import { useResultFocus } from "@/hooks/use-result-focus";
+import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import { statusTone } from "@/lib/status-tone";
 
 import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
@@ -24,6 +20,8 @@ import {
 import { DirectoryRecords } from "../directory-fields.js";
 import { formatPerson } from "../directory-names.js";
 import { PageLoadingState } from "../page-loading-state.js";
+import { ReadFailureCard } from "../page-state-card.js";
+import type { TemplateNameLookup } from "../template-display-name.js";
 import {
 	type ApplicationProgressStepKey,
 	agentApplicationEditActionLabels,
@@ -41,6 +39,8 @@ type MyAgentApplicationDetailScreenProps = {
 	withdrawalError?: boolean;
 	withdrawalResult?: AgentApplicationProjectionV2;
 	withdrawing: boolean;
+	/** 模板显示名（部署配置）；未提供或读不到时显示「标准模板」（F-02）。 */
+	templateName?: TemplateNameLookup;
 };
 
 type ApplicationStatus = AgentApplicationProjectionV2["status"];
@@ -104,6 +104,7 @@ export function MyAgentApplicationDetailScreen({
 	withdrawalError = false,
 	withdrawalResult,
 	withdrawing,
+	templateName,
 }: MyAgentApplicationDetailScreenProps) {
 	const [confirmationFor, setConfirmationFor] = useState<string | null>(null);
 	const [withdrawalLatched, setWithdrawalLatched] = useState(false);
@@ -138,35 +139,30 @@ export function MyAgentApplicationDetailScreen({
 		return (
 			<section aria-labelledby="my-agent-application-detail-heading">
 				<header className="page-heading">
-					<h1 id="my-agent-application-detail-heading">申请详情暂不可用</h1>
+					<div>
+						<h1 id="my-agent-application-detail-heading">申请详情</h1>
+					</div>
 				</header>
-				<Alert tone="danger" role="alert" className="my-3">
-					<AlertDescription>
-						{state.retryable
-							? "暂时无法读取申请，请稍后重试。"
-							: "当前无法查看此申请。"}
-					</AlertDescription>
-					{state.retryable && onRetry ? (
-						<AlertAction>
-							<Button
-								variant="outline"
-								disabled={retrying}
-								onClick={onRetry}
-								type="button"
-							>
-								<RefreshCw aria-hidden="true" data-icon="inline-start" />
-								{retrying ? "正在重新加载…" : "重新加载申请"}
-							</Button>
-						</AlertAction>
-					) : null}
-				</Alert>
-				<Link
-					activeOptions={{ exact: true }}
-					className={buttonVariants({ variant: "outline" })}
-					to="/my-agents"
-				>
-					返回我的 Agent
-				</Link>
+				{/* 公共状态卡按 401/403/404/503/响应无效选择（P-01）；403 与 404 文案相同。 */}
+				<ReadFailureCard
+					failure={state}
+					deniedDescription="申请不存在，或你没有访问权限。"
+					unavailableDescription="暂时无法读取申请，请稍后重试。"
+					back={
+						<Link
+							activeOptions={{ exact: true }}
+							className={buttonVariants({ variant: "outline" })}
+							to="/my-agents"
+						>
+							返回我的 Agent
+						</Link>
+					}
+					onRetry={onRetry}
+					// 401「重新登录」后会话仍有效：重读详情（W-03）。
+					onStillValid={onRetry}
+					retrying={retrying}
+					retryLabel="重新加载申请"
+				/>
 			</section>
 		);
 	const { application } = state;
@@ -191,7 +187,8 @@ export function MyAgentApplicationDetailScreen({
 						<ArrowLeft aria-hidden="true" />
 						返回我的 Agent
 					</Link>
-					<p className="page-eyebrow">申请详情 · {application.applicationId}</p>
+					{/* 设计为可读编号（#2861 跟踪）；接口就绪前只写「申请详情」，不外露内部申请 ID。 */}
+					<p className="page-eyebrow">申请详情</p>
 					<h1 id="my-agent-application-detail-heading">{application.name}</h1>
 					<p>{application.description}</p>
 				</div>
@@ -315,9 +312,9 @@ export function MyAgentApplicationDetailScreen({
 									? "标准模板"
 									: "镜像地址"}
 							</dt>
-							<dd>{agentSourceReferenceLabel(application)}</dd>
+							<dd>{agentSourceReferenceLabel(application, templateName)}</dd>
 							<dt>入口模式</dt>
-							<dd>{agentConversationSourceLabel(application)}</dd>
+							<dd>{agentConversationSourceLabel(application, templateName)}</dd>
 							<dt>入口身份责任</dt>
 							<dd>{agentIdentityResponsibilityLabel(application)}</dd>
 							<dt>Owner</dt>
@@ -343,7 +340,9 @@ export function MyAgentApplicationDetailScreen({
 										{configuration.modelOptions.map((model) => (
 											<li key={model.optionId}>
 												{model.displayName} · {model.modelId} ·{" "}
-												{model.reasoningLevels.join("、")}
+												{model.reasoningLevels
+													.map(reasoningLevelLabel)
+													.join("、")}
 											</li>
 										))}
 									</ul>
@@ -360,7 +359,11 @@ export function MyAgentApplicationDetailScreen({
 										: "未提供")}
 							</dd>
 							<dt>默认推理档位</dt>
-							<dd>{configuration.defaultReasoningLevel ?? "未提供"}</dd>
+							<dd>
+								{configuration.defaultReasoningLevel
+									? reasoningLevelLabel(configuration.defaultReasoningLevel)
+									: "未提供"}
+							</dd>
 						</dl>
 					</section>
 					<section

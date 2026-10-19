@@ -21,23 +21,35 @@ export const invalidRecentPage = (): RecentPersonalConversationsError =>
 		reason: "invalid-response",
 	});
 
+/** 共享读取的默认页大小：对话页「最近对话」面板每页 50 条；工作台按需传更小的值。 */
+export const recentPersonalConversationsPageLimit = 50;
+
 /** Identity, Web channel and global ordering are resolved by the producer. */
 export async function loadRecentPersonalConversationsPage({
 	cursor = null,
 	signal,
 	client,
+	limit = recentPersonalConversationsPageLimit,
 }: {
 	cursor?: string | null;
 	signal: AbortSignal;
 	client?: Client;
+	/** 1–50 的整数；响应条数超过它视为无效响应。 */
+	limit?: number;
 }): Promise<ListRecentPersonalConversationsV2Response> {
 	signal.throwIfAborted();
+	if (
+		!Number.isInteger(limit) ||
+		limit < 1 ||
+		limit > recentPersonalConversationsPageLimit
+	)
+		throw new RangeError("Recent conversation page limit must be 1–50");
 	if (cursor !== null && !OpaqueCursorV1Schema.safeParse(cursor).success)
 		throw invalidRecentPage();
 	try {
 		const result = await listRecentPersonalConversationsV2({
 			client,
-			query: { limit: 50, ...(cursor === null ? {} : { cursor }) },
+			query: { limit, ...(cursor === null ? {} : { cursor }) },
 			signal,
 			responseStyle: "fields",
 			throwOnError: false,
@@ -50,7 +62,7 @@ export async function loadRecentPersonalConversationsPage({
 		const page = ConversationPageV1Schema.safeParse(result.data);
 		if (
 			!page.success ||
-			page.data.items.length > 50 ||
+			page.data.items.length > limit ||
 			(page.data.nextCursor !== null && page.data.nextCursor === cursor)
 		)
 			throw invalidRecentPage();

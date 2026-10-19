@@ -213,7 +213,7 @@ resources:
 			},
 		});
 		expect(screen.getByRole("status").textContent).toContain("入口服务：api");
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		expect(onSubmit).toHaveBeenCalledWith(
 			expect.objectContaining({
 				source: expect.objectContaining({
@@ -248,7 +248,7 @@ resources:
 		fireEvent.change(manifestField, {
 			target: { value: "schemaVersion: 1\nresources: []" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		expect(onSubmit).not.toHaveBeenCalled();
 		expect(screen.getByText(/多服务 YAML 不符合/)).toBeTruthy();
 	});
@@ -274,7 +274,7 @@ resources:
 			(screen.getByLabelText("Agent 默认 Relay Key") as HTMLInputElement)
 				.required,
 		).toBe(true);
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
@@ -323,11 +323,11 @@ resources:
 		choose("标准模板", "Codex");
 		choose("模型端点", "Primary endpoint");
 		choose("模型", "gpt-5");
-		check("medium");
-		check("high");
+		check("均衡");
+		check("高");
 		choose("默认模型", "Primary endpoint · gpt-5");
-		choose("默认推理档位", "medium");
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		choose("默认推理档位", "均衡");
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
@@ -448,7 +448,7 @@ resources:
 		});
 		fireEvent.pointerDown(identityOption, { pointerType: "mouse" });
 		fireEvent.click(identityOption, { detail: 1 });
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 
 		expect(onSubmit).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -504,7 +504,7 @@ resources:
 		const thirdName = names[2];
 		if (!thirdName) throw new Error("third environment name input missing");
 		fireEvent.change(thirdName, { target: { value: "B" } });
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		expect(screen.getAllByText("名称不能重复。")).toHaveLength(2);
 
 		fireEvent.click(
@@ -547,7 +547,7 @@ resources:
 		fireEvent.change(at(screen.getAllByLabelText("替换值"), 1), {
 			target: { value: "secret-two" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		expect(screen.getAllByText("名称不能重复。")).toHaveLength(2);
 
 		fireEvent.click(
@@ -634,15 +634,15 @@ resources:
 		choose("标准模板", "Codex");
 		chooseAt("模型端点", "Primary endpoint", 0);
 		chooseAt("模型", "gpt-5", 0);
-		checkAt("medium", 0);
+		checkAt("均衡", 0);
 		fireEvent.click(screen.getByRole("button", { name: "添加模型选项" }));
 		chooseAt("模型端点", "Primary endpoint", 1);
 		chooseAt("模型", "gpt-5", 1);
-		checkAt("medium", 1);
+		checkAt("均衡", 1);
 		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
 			target: { value: "agent-relay-key-value" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		expect(screen.getAllByText("模型选项不能重复。")).toHaveLength(2);
 
 		chooseAt("模型端点", "Secondary endpoint", 0);
@@ -670,12 +670,12 @@ resources:
 		choose("标准模板", "Codex");
 		chooseAt("模型端点", "Primary endpoint", 0);
 		chooseAt("模型", "gpt-5", 0);
-		checkAt("medium", 0);
+		checkAt("均衡", 0);
 		fireEvent.click(screen.getByRole("button", { name: "添加模型选项" }));
 		chooseAt("模型端点", "Primary endpoint", 1);
 		chooseAt("模型", "gpt-5", 1);
-		checkAt("medium", 1);
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		checkAt("均衡", 1);
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		expect(screen.getAllByText("模型选项不能重复。")).toHaveLength(2);
 
 		fireEvent.click(
@@ -727,14 +727,14 @@ resources:
 		});
 		choose("模型端点", "Primary endpoint");
 		choose("模型", "gpt-5");
-		check("medium");
-		check("high");
+		check("均衡");
+		check("高");
 		choose("默认模型", "Primary endpoint · gpt-5");
-		choose("默认推理档位", "medium");
+		choose("默认推理档位", "均衡");
 		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
 			target: { value: "agent-relay-key-value" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 
 		expect(onSubmit).toHaveBeenCalledWith({
 			schemaVersion: 2,
@@ -798,13 +798,13 @@ resources:
 		choose("标准模板", "Codex");
 		choose("模型端点", "Colon endpoint");
 		choose("模型", "model:primary");
-		check("medium");
+		check("均衡");
 		choose("默认模型", "Colon endpoint · model:primary");
-		choose("默认推理档位", "medium");
+		choose("默认推理档位", "均衡");
 		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
 			target: { value: "agent-relay-key-value" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 
 		expect(onSubmit).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -845,7 +845,7 @@ resources:
 		expect((screen.getByLabelText("变量值") as HTMLInputElement).required).toBe(
 			true,
 		);
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
@@ -877,7 +877,7 @@ resources:
 			"disabled",
 			true,
 		);
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
@@ -959,7 +959,7 @@ resources:
 		expect(
 			screen.getByLabelText("变量名称").closest("[hidden]"),
 		).not.toBeNull();
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 
 		expect(screen.getByRole("button", { name: "收起高级配置" })).toBeTruthy();
 		expect(screen.getByLabelText("变量名称")).toBeTruthy();
@@ -977,7 +977,7 @@ resources:
 		);
 
 		const form = screen
-			.getByRole("button", { name: "提交申请" })
+			.getByRole("button", { name: "提交审批" })
 			.closest("form");
 		if (!form) throw new Error("application form missing");
 		expect(form).toHaveProperty("noValidate", true);
@@ -1009,7 +1009,7 @@ resources:
 		);
 
 		const form = screen
-			.getByRole("button", { name: "提交申请" })
+			.getByRole("button", { name: "提交审批" })
 			.closest("form");
 		if (!form) throw new Error("application form missing");
 		fireEvent.submit(form);
@@ -1397,9 +1397,9 @@ resources:
 		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
 		expect(onSubmit).not.toHaveBeenCalled();
 		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
-		choose("默认推理档位", "high");
+		choose("默认推理档位", "高");
 		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
-		check("high");
+		check("高");
 		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
 	});
 
@@ -1432,8 +1432,11 @@ resources:
 
 		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
 		fireEvent.click(screen.getByRole("combobox", { name: "默认推理档位" }));
-		expect(screen.getByRole("option", { name: "medium" })).toBeTruthy();
-		expect(screen.queryByRole("option", { name: "high" })).toBeNull();
+		expect(screen.getByRole("option", { name: "均衡" })).toBeTruthy();
+		expect(screen.queryByRole("option", { name: "高" })).toBeNull();
+		// 推理档位只显示中文：复选框与默认档位都不出现原始枚举。
+		expect(screen.getByRole("checkbox", { name: "均衡" })).toBeTruthy();
+		expect(screen.queryByText("medium")).toBeNull();
 	});
 
 	it("associates missing reasoning levels with the checkbox group", () => {
@@ -1457,7 +1460,7 @@ resources:
 		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
 			target: { value: "agent-relay-key-value" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 
 		const group = screen.getByRole("group", { name: "允许的推理档位" });
 		expect(group.getAttribute("aria-invalid")).toBe("true");
@@ -1491,7 +1494,7 @@ resources:
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 
 		const status = screen.getByRole("status");
 		expect(document.activeElement).toBe(status);
@@ -1714,7 +1717,7 @@ resources:
 		fireEvent.change(await screen.findByLabelText("镜像地址"), {
 			target: { value: "registry.example/agents/release:v1" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		expect(onSubmit).toHaveBeenCalledWith(
 			expect.objectContaining({
 				source: {
@@ -1812,8 +1815,8 @@ resources:
 		);
 
 		expect(screen.getByRole("status").textContent).toContain("暂不可用");
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
@@ -1840,13 +1843,13 @@ resources:
 		choose("标准模板", "Codex");
 		choose("模型端点", "Primary endpoint");
 		choose("模型", "gpt-5");
-		check("medium");
+		check("均衡");
 		choose("默认模型", "Primary endpoint · gpt-5");
-		choose("默认推理档位", "medium");
+		choose("默认推理档位", "均衡");
 		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
 			target: { value: "agent-relay-key-value" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 
 		expect(screen.getByRole("status").textContent).toBe(
 			"部署选项已过期，请重新加载后再提交。",
@@ -1890,7 +1893,7 @@ resources:
 		fireEvent.change(screen.getByLabelText("镜像地址"), {
 			target: { value: "registry.example/agents/custom:v1" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 
 		expect(onSubmit).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -1922,7 +1925,7 @@ resources:
 		);
 
 		expect(screen.getByRole("status").textContent).toContain("过期");
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
@@ -2162,7 +2165,7 @@ describe("AgentApplicationForm design alignment", () => {
 				submitting={false}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交审批" }));
 		const name = screen.getByLabelText("Agent 名称");
 		expect(name.getAttribute("aria-invalid")).toBe("true");
 		const errorId = name.getAttribute("aria-describedby");
@@ -2186,7 +2189,7 @@ describe("AgentApplicationForm design alignment", () => {
 		);
 		expect(screen.queryByRole("heading", { name: "渠道" })).toBeNull();
 		expect(screen.queryByRole("button", { name: /保存草稿/ })).toBeNull();
-		const submit = screen.getByRole("button", { name: "提交申请" });
+		const submit = screen.getByRole("button", { name: "提交审批" });
 		const icon = submit.querySelector("svg");
 		expect(icon?.getAttribute("aria-hidden")).toBe("true");
 		expect(submit.lastElementChild).toBe(icon);

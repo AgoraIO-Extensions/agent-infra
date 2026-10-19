@@ -1,0 +1,1030 @@
+import {
+	AgentProjectionV2Schema,
+	ConnectionCapabilityProjectionV1Schema,
+	ConversationPageV1Schema,
+} from "@agent-infra/contracts/pilot";
+import {
+	createPilotAgentMockServerV2,
+	pilotFakeScenariosV2,
+} from "@agent-infra/test-support/pilot";
+import { expect, type Locator, type Page, test } from "@playwright/test";
+import type { DeploymentConfigurationProjectionV2 } from "../src/pilot/generated-v2/types.gen";
+import { computed, resolved } from "./primitive-styles";
+
+// Owner 配置的 Secret 与环境变量（O-10、N-08）、模型与默认 Relay Key（G-08、G-09、RK2-01～09）、
+// Skill 绑定入口（O-02）。契约 Fake API；页面级状态只在 #main-content 内查找（Toast 宿主是 role=status）。
+
+type Role = "owner" | "admin" | "employee";
+type CandidateMode = "same" | "subset" | "empty" | "error" | "forbidden";
+
+const deploymentConfiguration: DeploymentConfigurationProjectionV2 = {
+	modelCatalog: {
+		endpoints: [
+			{
+				displayName: "Relay · Internal",
+				endpointId: "endpoint-primary",
+				models: [
+					{ modelId: "gpt-5", reasoningLevels: ["medium", "high"] },
+					{ modelId: "gpt-5-mini", reasoningLevels: ["medium"] },
+				],
+			},
+		],
+		revision: "catalog-owner-config",
+		status: "populated",
+	},
+	schemaVersion: 2,
+	status: "populated",
+	templates: [
+		{
+			allowedEnvironmentKeys: ["AGENT_WORKSPACE", "LOG_LEVEL"],
+			allowedSecretKeys: ["RELEASE_KEY", "MODEL_API_KEY"],
+			connectionEnabled: false,
+			displayName: "Codex",
+			templateId: "codex",
+		},
+	],
+};
+
+const candidates = {
+	gpt5: {
+		endpointId: "endpoint-primary",
+		modelId: "gpt-5",
+		reasoningLevels: ["medium", "high"],
+	},
+	mini: {
+		endpointId: "endpoint-primary",
+		modelId: "gpt-5-mini",
+		reasoningLevels: ["medium"],
+	},
+};
+
+const unavailable = (status: number, retryable: boolean) => ({
+	status,
+	json: {
+		schemaVersion: 1,
+		code: retryable ? "DEPENDENCY_UNAVAILABLE" : "RESOURCE_UNAVAILABLE",
+		message: "Controlled failure",
+		retryable,
+		traceId: "trace-owner-config",
+	},
+});
+
+async function ownerConfigFixture(
+	page: Page,
+	{
+		role = "owner",
+		keySet = false,
+		saved = "same",
+	}: { role?: Role; keySet?: boolean; saved?: CandidateMode } = {},
+) {
+	const base = AgentProjectionV2Schema.parse(
+		pilotFakeScenariosV2.starting.response.body,
+	);
+	let agent = AgentProjectionV2Schema.parse({
+		...base,
+		configuration: {
+			...base.configuration,
+			environment: [{ name: "AGENT_WORKSPACE", value: "platform" }],
+			secrets: [{ name: "RELEASE_KEY", isSet: true, version: 3 }],
+		},
+	});
+	let keyVersion = 3;
+	let configurationRevision = 7;
+	let savedMode = saved;
+	let checkCandidates = [candidates.gpt5, candidates.mini];
+	const failures = new Set<string>();
+	const gates = new Map<string, Promise<void>>();
+	const releases = new Map<string, () => void>();
+	const commands: { method: string; path: string; body: unknown }[] = [];
+	const reads: string[] = [];
+	const userId =
+		role === "owner"
+			? "user-owner-1"
+			: role === "admin"
+				? "user-admin-1"
+				: "user-employee-1";
+	const server = createPilotAgentMockServerV2({
+		getCurrentSession: {
+			status: 200,
+			body: {
+				schemaVersion: 1,
+				user: {
+					userId,
+					displayName: role,
+					roles: role === "admin" ? ["employee", "system_admin"] : ["employee"],
+				},
+			},
+		},
+		getDeploymentConfiguration: () => ({
+			status: 200,
+			body: deploymentConfiguration,
+		}),
+		listAgents: () => ({
+			status: 200,
+			body: { items: [agent], nextCursor: null },
+		}),
+		getAgent: () => ({ status: 200, body: agent }),
+		getAgentDefaultRelayKey: () => ({
+			status: 200,
+			body: keySet
+				? { schemaVersion: 1, isSet: true, keyVersion, configurationRevision }
+				: {
+						schemaVersion: 1,
+						isSet: false,
+						keyVersion: null,
+						configurationRevision,
+					},
+		}),
+		updateAgentConfiguration: () => ({ status: 200, body: agent }),
+	});
+	const gate = async (name: string) => {
+		await gates.get(name);
+		gates.delete(name);
+	};
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		const method = request.method();
+		const pathname = new URL(request.url()).pathname;
+		const body = request.postData() ? request.postDataJSON() : undefined;
+		if (method === "GET") reads.push(pathname);
+		if (method === "GET" && pathname === "/api/v1/connection/capability")
+			return route.fulfill({
+				json: ConnectionCapabilityProjectionV1Schema.parse({
+					schemaVersion: 1,
+					status: "unavailable",
+					reason: "missing",
+				}),
+			});
+		if (method === "GET" && pathname === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
+		if (method === "GET" && pathname === "/api/v2/directory/search") {
+			const url = new URL(request.url());
+			const items = [
+				{
+					kind: "user",
+					canonicalId: "user-owner-1",
+					displayName: "当前 Owner",
+					email: "owner@example.test",
+				},
+				{
+					kind: "organization",
+					canonicalId: "org-platform",
+					displayName: "平台工程",
+					organizationPath: "研发 / 平台工程",
+				},
+			];
+			return route.fulfill({
+				json: {
+					schemaVersion: 1,
+					items: items.filter(
+						(item) =>
+							item.kind === url.searchParams.get("kind") &&
+							(!url.searchParams.has("ids") ||
+								url.searchParams
+									.get("ids")
+									?.split(",")
+									.includes(item.canonicalId)),
+					),
+				},
+			});
+		}
+		if (/\/wecom-(bot|app)$/.test(pathname))
+			return route.fulfill({ json: { status: "not_configured" } });
+		if (method !== "GET") commands.push({ method, path: pathname, body });
+		if (pathname.endsWith("/default-relay-key/candidates")) {
+			if (method === "GET") {
+				await gate("saved-candidates");
+				if (savedMode === "error") return route.fulfill(unavailable(503, true));
+				if (savedMode === "forbidden")
+					return route.fulfill(unavailable(403, false));
+				return route.fulfill({
+					json: {
+						schemaVersion: 1,
+						configurationRevision,
+						keyVersion,
+						candidates:
+							savedMode === "empty"
+								? []
+								: savedMode === "subset"
+									? [candidates.mini]
+									: [candidates.gpt5, candidates.mini],
+					},
+				});
+			}
+			await gate("check");
+			return route.fulfill({
+				json: {
+					schemaVersion: 1,
+					configurationRevision,
+					candidates: checkCandidates,
+				},
+			});
+		}
+		if (method === "PUT" && pathname.endsWith("/default-relay-key")) {
+			await gate("replace-key");
+			if (failures.delete("replace-key"))
+				return route.fulfill(unavailable(503, true));
+			keyVersion += 1;
+			configurationRevision += 1;
+			return route.fulfill({
+				json: {
+					schemaVersion: 1,
+					isSet: true,
+					keyVersion,
+					configurationRevision,
+				},
+			});
+		}
+		if (method === "PUT" && pathname.endsWith("/configuration")) {
+			await gate("configuration");
+			if (failures.delete("configuration"))
+				return route.fulfill(unavailable(503, true));
+			// Fake 按请求更新投影：Secret 版本递增，环境变量整表替换。
+			const update = body as {
+				secrets?: { name: string }[];
+				environment?: { name: string; value: string }[];
+			};
+			const secrets = [...agent.configuration.secrets];
+			for (const { name } of update.secrets ?? []) {
+				const index = secrets.findIndex((secret) => secret.name === name);
+				const previous = index >= 0 ? (secrets[index]?.version ?? 0) : 0;
+				const next = { name, isSet: true, version: previous + 1 };
+				if (index >= 0) secrets[index] = next;
+				else secrets.push(next);
+			}
+			agent = AgentProjectionV2Schema.parse({
+				...agent,
+				configuration: {
+					...agent.configuration,
+					secrets,
+					...(update.environment ? { environment: update.environment } : {}),
+				},
+			});
+			configurationRevision += 1;
+		}
+		if (method === "PUT" && pathname.endsWith("/configuration/saved-model"))
+			return route.fulfill({ json: agent });
+		const response = await server.fetch(
+			new Request(request.url(), {
+				method,
+				headers: request.headers(),
+				body: request.postData(),
+			}),
+		);
+		await route.fulfill({
+			status: response.status,
+			contentType: "application/json",
+			body: await response.text(),
+		});
+	});
+	return {
+		commands,
+		reads,
+		hold(name: "saved-candidates" | "check" | "replace-key" | "configuration") {
+			gates.set(
+				name,
+				new Promise<void>((resolve) => {
+					releases.set(name, resolve);
+				}),
+			);
+		},
+		release(name: string) {
+			releases.get(name)?.();
+			releases.delete(name);
+		},
+		fail(name: "replace-key" | "configuration") {
+			failures.add(name);
+		},
+		checkReturns(next: typeof checkCandidates) {
+			checkCandidates = next;
+		},
+		savedMode(next: CandidateMode) {
+			savedMode = next;
+		},
+	};
+}
+
+const toast = (page: Page) => page.locator('[data-slot="toast"]');
+const main = (page: Page) => page.locator("#main-content");
+
+async function noHorizontalOverflow(page: Page) {
+	const width = await page.evaluate(() => ({
+		viewport: innerWidth,
+		content: document.documentElement.scrollWidth,
+	}));
+	expect(width.content).toBeLessThanOrEqual(width.viewport);
+}
+
+async function height(locator: Locator) {
+	return (await locator.boundingBox())?.height ?? 0;
+}
+
+/** 在窗口上放一个探针并记录之后的文档请求：整页刷新会丢掉探针并发出文档请求。 */
+async function markSinglePageNavigation(page: Page) {
+	await page.evaluate(() => {
+		Object.assign(window, { __ownerConfigProbe: "kept" });
+	});
+	const documents: string[] = [];
+	page.on("request", (request) => {
+		if (request.resourceType() === "document") documents.push(request.url());
+	});
+	return documents;
+}
+
+async function expectNoDocumentNavigation(page: Page, documents: string[]) {
+	expect(
+		await page.evaluate(
+			() =>
+				(window as unknown as { __ownerConfigProbe?: string })
+					.__ownerConfigProbe,
+		),
+	).toBe("kept");
+	expect(documents).toEqual([]);
+}
+
+async function expectDangerInkFieldError(page: Page, error: Locator) {
+	expect(
+		await computed(error, ["fontSize", "color", "borderTopWidth"]),
+	).toEqual({
+		fontSize: "12px",
+		color: await resolved(page, "color", "var(--danger-ink)"),
+		borderTopWidth: "0px",
+	});
+	expect(
+		await error.evaluate((element) =>
+			Boolean(element.closest('[data-slot="alert"]')),
+		),
+	).toBe(false);
+}
+
+test("Secrets are read-only rows replaced through a write-only modal (O-10, N-08)", async ({
+	page,
+}, info) => {
+	const api = await ownerConfigFixture(page);
+	const probe = "probe-secret-value";
+	const pageHasProbe = async () => (await page.content()).includes(probe);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const section = page.getByRole("region", {
+		name: "环境变量与 Secret",
+		exact: true,
+	});
+	await expect(
+		section.getByText("Secret 只显示名称、版本和状态；替换后生成新版本。"),
+	).toBeVisible();
+	const name = section.getByLabel("Secret 名称", { exact: true });
+	const status = section.getByLabel("当前状态", { exact: true });
+	await expect(name).toHaveValue("RELEASE_KEY");
+	await expect(name).toHaveAttribute("readonly", "");
+	await expect(status).toHaveValue("已设置 · version 3");
+	const trigger = section.getByRole("button", {
+		name: "替换 Secret：RELEASE_KEY",
+	});
+	await expect(trigger.locator("svg")).toHaveCount(1);
+	await expect(section.locator('input[type="password"]')).toHaveCount(0);
+	await expect(main(page)).not.toContainText("移除Secret");
+	// NI-78：三个入口都是默认尺寸 44px。
+	for (const button of [
+		trigger,
+		section.getByRole("button", { name: "添加 Secret" }),
+		section.getByRole("button", { name: "添加环境变量" }),
+	])
+		expect(Math.abs((await height(button)) - 44)).toBeLessThanOrEqual(0.5);
+	// 1440 三列同行，390 单列。
+	const [nameBox, statusBox, triggerBox] = await Promise.all([
+		name.boundingBox(),
+		status.boundingBox(),
+		trigger.boundingBox(),
+	]);
+	if (info.project.name === "desktop") {
+		expect(statusBox?.y).toBe(nameBox?.y);
+		expect((triggerBox?.x ?? 0) > (statusBox?.x ?? 0)).toBe(true);
+	} else {
+		expect((statusBox?.y ?? 0) > (nameBox?.y ?? 0)).toBe(true);
+		expect((triggerBox?.y ?? 0) > (statusBox?.y ?? 0)).toBe(true);
+	}
+	await noHorizontalOverflow(page);
+
+	// 先做未保存的修改：移除组织范围、改环境变量、加一行空白环境变量（NI-71）。
+	await page.getByRole("button", { name: "移除 平台工程" }).click();
+	// 移除 chip 后焦点在下一帧回到该选择器的输入框；先等焦点落定，再填写其他字段，
+	// 否则高负载下 fill 的输入会落进目录选择器。
+	await expect(
+		page.getByRole("combobox", { name: "可使用的组织", exact: true }),
+	).toBeFocused();
+	await section.getByLabel("值", { exact: true }).fill("unsaved-workspace");
+	await expect(section.getByLabel("值", { exact: true })).toHaveValue(
+		"unsaved-workspace",
+	);
+	await section.getByRole("button", { name: "添加环境变量" }).click();
+
+	// 取消、Esc、点遮罩都不发请求，焦点回到触发按钮。
+	for (const dismiss of ["cancel", "escape", "backdrop"] as const) {
+		await trigger.click();
+		const dialog = page.getByRole("dialog", { name: "替换 Secret" });
+		await expect(dialog).toHaveAttribute("aria-modal", "true");
+		await expect(dialog).toContainText(
+			"输入新值后只会保存密文版本。页面不会显示当前 Secret 值。",
+		);
+		await expect(dialog).toContainText("RELEASE_KEY");
+		const input = dialog.getByLabel("新 Secret 值");
+		await expect(input).toBeFocused();
+		await expect(input).toHaveAttribute("placeholder", "仅本次提交使用");
+		await expect(input).toHaveValue("");
+		await expect(
+			dialog.locator('[data-slot="dialog-footer"]').getByRole("button"),
+		).toHaveText(["取消", "保存替换"]);
+		await input.fill("discarded-value");
+		if (dismiss === "cancel")
+			await dialog.getByRole("button", { name: "取消" }).click();
+		else if (dismiss === "escape") await page.keyboard.press("Escape");
+		else await page.mouse.click(5, 5);
+		await expect(dialog).toBeHidden();
+		await expect(trigger).toBeFocused();
+	}
+	expect(api.commands).toEqual([]);
+
+	await trigger.click();
+	const dialog = page.getByRole("dialog", { name: "替换 Secret" });
+	const input = dialog.getByLabel("新 Secret 值");
+	// 空值：零请求，字段下方 12px --danger-ink 的纯文字错误（NI-95）。
+	await dialog.getByRole("button", { name: "保存替换" }).click();
+	const empty = dialog.getByText("请输入新的 Secret 值。");
+	await expectDangerInkFieldError(page, empty);
+	await expect(input).toHaveAttribute("aria-invalid", "true");
+	expect(api.commands).toEqual([]);
+
+	// 失败：弹窗保留，弹窗内提示，焦点回到密码框，不写页面级错误。
+	await input.fill(probe);
+	expect(await pageHasProbe()).toBe(false);
+	api.hold("configuration");
+	api.fail("configuration");
+	await dialog.getByRole("button", { name: "保存替换" }).press("Enter");
+	const pending = dialog.getByRole("button", { name: "正在保存…" });
+	await expect(pending).toHaveAttribute("aria-disabled", "true");
+	await expect(pending).toBeFocused();
+	expect(await pageHasProbe()).toBe(false);
+	await page.keyboard.press("Escape");
+	await expect(dialog).toBeVisible();
+	await expect(dialog.getByRole("button", { name: "关闭" })).toBeDisabled();
+	api.release("configuration");
+	await expect(dialog.getByRole("alert")).toHaveText(
+		"Secret 替换未完成，请重试。",
+	);
+	await expect(input).toBeFocused();
+	await expect(main(page)).not.toContainText("配置未能保存");
+
+	// 成功：只提交这一个 Secret，关闭弹窗，Toast 带新版本，行状态回读更新。
+	await dialog.getByRole("button", { name: "保存替换" }).click();
+	await expect(dialog).toBeHidden();
+	expect(api.commands.map(({ path, body }) => ({ path, body }))).toEqual([
+		{
+			path: "/api/v2/agents/agent-pilot-1/configuration",
+			body: {
+				schemaVersion: 2,
+				secrets: [{ name: "RELEASE_KEY", value: probe }],
+			},
+		},
+		{
+			path: "/api/v2/agents/agent-pilot-1/configuration",
+			body: {
+				schemaVersion: 2,
+				secrets: [{ name: "RELEASE_KEY", value: probe }],
+			},
+		},
+	]);
+	await expect(toast(page)).toHaveText(
+		"Secret 已写入 pending version 4，等待 Worker 激活",
+	);
+	await expect(status).toHaveValue("已设置 · version 4");
+	await expect(trigger).toBeFocused();
+	expect(await pageHasProbe()).toBe(false);
+	// 未保存的修改仍在页面上，页脚保存仍可用。
+	await expect(page.getByRole("button", { name: "移除 平台工程" })).toHaveCount(
+		0,
+	);
+	await expect(section.getByLabel("值", { exact: true }).first()).toHaveValue(
+		"unsaved-workspace",
+	);
+	await expect(page.getByRole("button", { name: "保存配置" })).toBeEnabled();
+	await expect(main(page)).not.toContainText("配置已提交");
+});
+
+test("environment variables save as a full table and the page stays after saving (O-10, RK2-09)", async ({
+	page,
+}) => {
+	const api = await ownerConfigFixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const section = page.getByRole("region", {
+		name: "环境变量与 Secret",
+		exact: true,
+	});
+	const name = section.getByLabel("环境变量名", { exact: true });
+	await expect(name).toHaveValue("AGENT_WORKSPACE");
+	// 标准模板只能选模板开放的键。
+	expect(
+		await name.evaluate((select) =>
+			[...(select as HTMLSelectElement).options].map((option) => option.value),
+		),
+	).toEqual(["", "AGENT_WORKSPACE", "LOG_LEVEL"]);
+	await expect(
+		section.getByRole("button", { name: "移除：AGENT_WORKSPACE" }),
+	).toHaveText("移除");
+	const save = page.getByRole("button", { name: "保存配置" });
+	await expect(save).toBeDisabled();
+	await section.getByLabel("值", { exact: true }).fill("workspace");
+	await expect(main(page).getByText("没有需要保存的变更。")).toHaveCount(0);
+	await save.click();
+	await expect(toast(page)).toHaveText("配置已保存，Secret 值不会回显");
+	expect(api.commands.at(-1)?.body).toEqual({
+		schemaVersion: 2,
+		coOwnerIds: ["user-owner-1"],
+		availability: [{ kind: "organization", organizationId: "org-platform" }],
+		environment: [{ name: "AGENT_WORKSPACE", value: "workspace" }],
+	});
+	// 页面保留，以新投影重置；焦点不落在 body。
+	await expect(main(page)).not.toContainText("配置已提交");
+	const hint = main(page).getByText("没有需要保存的变更。");
+	await expect(hint).toBeFocused();
+	await section.getByRole("button", { name: "移除：AGENT_WORKSPACE" }).click();
+	await save.click();
+	await expect.poll(() => api.commands.length).toBe(2);
+	expect(api.commands.at(-1)?.body).toMatchObject({ environment: [] });
+});
+
+test("the default Relay Key has its own section and a verified replacement (G-08, G-09, RK2-08)", async ({
+	page,
+}, info) => {
+	const api = await ownerConfigFixture(page, { keySet: true });
+	const probe = "probe-relay-key";
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const models = page.getByRole("region", { name: "模型与凭证", exact: true });
+	const section = page.getByRole("region", {
+		name: "Agent 默认 Relay Key",
+		exact: true,
+	});
+	await expect(
+		section.getByText(
+			"供 API、评测和后台任务使用；Web 对话和企微继续使用个人 Key。",
+		),
+	).toBeVisible();
+	const chip = section.locator('[data-slot="badge"][data-variant="chip"]');
+	await expect(chip).toHaveText("已设置");
+	await expect(chip).toHaveAttribute("data-tone", "green");
+	const facts = section.locator("dl");
+	await expect(facts.locator("dt")).toHaveText([
+		"当前版本",
+		"可用模型",
+		"密钥值",
+	]);
+	await expect(facts.locator("dd").first()).toHaveText("version 3");
+	await expect(facts.locator('[data-slot="badge"]')).toHaveText([
+		"gpt-5 · 均衡/高",
+		"gpt-5-mini · 均衡",
+	]);
+	await expect(facts.locator("dd").last()).toHaveText("只显示状态，不回显");
+	const columns = await computed(facts, ["gridTemplateColumns"]);
+	if (info.project.name === "desktop")
+		expect(columns.gridTemplateColumns.startsWith("150px ")).toBe(true);
+	else expect(columns.gridTemplateColumns.split(" ")).toHaveLength(1);
+	// 模型分区在前；两个分区内没有 primary，也没有常驻 Key 输入框与「检查可用模型」。
+	expect(
+		await models.evaluate(
+			(element, other) =>
+				Boolean(
+					other &&
+						element.compareDocumentPosition(other) &
+							Node.DOCUMENT_POSITION_FOLLOWING,
+				),
+			await section.elementHandle(),
+		),
+	).toBe(true);
+	await expect(page.getByRole("button", { name: "检查可用模型" })).toHaveCount(
+		0,
+	);
+	await expect(section.locator("input")).toHaveCount(0);
+	const primary = await resolved(page, "backgroundColor", "var(--accent-ink)");
+	for (const area of [models, section])
+		for (const button of await area.getByRole("button").all())
+			expect(
+				(await computed(button, ["backgroundColor"])).backgroundColor,
+			).not.toBe(primary);
+	await expect(page.locator(".configuration-form-footer")).toContainText(
+		"保存配置",
+	);
+	for (const text of ["普通业务投影", "已有 Agent 默认 Relay Key 不回显"])
+		await expect(main(page)).not.toContainText(text);
+	// X-09：默认 Key 没有「撤销」与「未设置」态（授权控制里的「撤销使用」不属于这里）。
+	for (const text of ["撤销", "未设置"])
+		await expect(section).not.toContainText(text);
+
+	// RK2-08：先勾选一个模型（不保存），替换流程中保留并禁用。
+	const mini = models.getByRole("checkbox", {
+		name: "Relay · Internal · gpt-5-mini",
+	});
+	await mini.click();
+	await expect(mini).toBeChecked();
+
+	const trigger = section.getByRole("button", { name: "替换默认 Key" });
+	expect(Math.abs((await height(trigger)) - 44)).toBeLessThanOrEqual(0.5);
+	await expect(trigger.locator("svg")).toHaveCount(1);
+	await trigger.click();
+	const dialog = page.getByRole("dialog", {
+		name: "替换 Agent 默认 Relay Key",
+	});
+	await expect(dialog).toHaveAttribute("aria-modal", "true");
+	const input = dialog.getByLabel("新的 Relay Key");
+	await expect(input).toBeFocused();
+	await expect(input).toHaveAttribute(
+		"placeholder",
+		"仅本次提交使用，不会回显",
+	);
+	await expect(input).toHaveAttribute("autocomplete", "new-password");
+	await expect(
+		dialog.locator('[data-slot="dialog-footer"]').getByRole("button"),
+	).toHaveText(["取消", "校验并替换"]);
+	await dialog.getByRole("button", { name: "校验并替换" }).click();
+	const empty = dialog.getByRole("alert");
+	await expect(empty).toHaveText("请输入默认 Relay Key。");
+	await expectDangerInkFieldError(page, empty);
+	expect(api.commands).toEqual([]);
+
+	await input.fill(probe);
+	api.hold("check");
+	await dialog.getByRole("button", { name: "校验并替换" }).click();
+	await expect(dialog.getByRole("button", { name: "正在校验…" })).toBeFocused();
+	expect((await page.content()).includes(probe)).toBe(false);
+	api.hold("replace-key");
+	api.release("check");
+	await expect(dialog).toBeHidden();
+	// 写入中：chip「校验中」，notice 代替 dl，选择器保留并禁用。
+	await expect(chip).toHaveText("校验中");
+	await expect(chip).toHaveAttribute("data-tone", "amber");
+	await expect(section.getByRole("status")).toContainText("正在校验默认 Key");
+	await expect(mini).toBeDisabled();
+	await expect(mini).toBeChecked();
+	expect((await page.content()).includes(probe)).toBe(false);
+	const candidateReads = () =>
+		api.reads.filter((path) => path.endsWith("/default-relay-key/candidates"))
+			.length;
+	const readsBefore = candidateReads();
+	api.release("replace-key");
+	await expect(chip).toHaveText("已设置");
+	await expect(facts.locator("dd").first()).toHaveText("version 4");
+	await expect(toast(page)).toHaveText("Agent 默认 Relay Key 已替换");
+	await expect(trigger).toBeFocused();
+	await expect.poll(candidateReads).toBe(readsBefore + 1);
+	expect(api.commands.map(({ method, path }) => `${method} ${path}`)).toEqual([
+		"POST /api/v2/agents/agent-pilot-1/default-relay-key/candidates",
+		"PUT /api/v2/agents/agent-pilot-1/default-relay-key",
+	]);
+	expect(JSON.stringify(api.commands)).toContain(probe);
+	expect((await page.content()).includes(probe)).toBe(false);
+	// 用户未保存的勾选仍在新候选内，保留。
+	await expect(mini).toBeChecked();
+});
+
+test("a new Key that cannot call current models is committed with a new selection only", async ({
+	page,
+}) => {
+	const api = await ownerConfigFixture(page, { keySet: true });
+	api.checkReturns([candidates.mini]);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await page.getByRole("button", { name: "移除 平台工程" }).click();
+	// 焦点在下一帧回到该选择器的输入框；等它落定再打开弹窗填写，避免输入落进选择器。
+	await expect(
+		page.getByRole("combobox", { name: "可使用的组织", exact: true }),
+	).toBeFocused();
+	await page.getByRole("button", { name: "替换默认 Key" }).click();
+	const dialog = page.getByRole("dialog", {
+		name: "替换 Agent 默认 Relay Key",
+	});
+	await dialog.getByLabel("新的 Relay Key").fill("synthetic-new-key");
+	await dialog.getByRole("button", { name: "校验并替换" }).click();
+	await expect(dialog.getByText("新的 Key 不能调用部分当前模型")).toBeVisible();
+	await expect(dialog).toContainText("Primary model");
+	expect(api.commands.map(({ path }) => path)).toEqual([
+		"/api/v2/agents/agent-pilot-1/default-relay-key/candidates",
+	]);
+	await dialog
+		.getByRole("checkbox", { name: "Relay · Internal · gpt-5-mini" })
+		.click();
+	await dialog.getByRole("button", { name: "校验并替换" }).click();
+	await expect(dialog).toBeHidden();
+	const write = api.commands.at(-1);
+	expect(write?.path).toBe("/api/v2/agents/agent-pilot-1/configuration");
+	expect(Object.keys(write?.body as object).sort()).toEqual([
+		"defaultRelayKey",
+		"expectedConfigurationRevision",
+		"expectedKeyVersion",
+		"modelConfiguration",
+		"schemaVersion",
+	]);
+	expect(
+		api.commands.some(
+			({ method, path }) =>
+				method === "PUT" && path.endsWith("/default-relay-key"),
+		),
+	).toBe(false);
+	await expect(toast(page)).toHaveText("Agent 默认 Relay Key 已替换");
+	// 页面上的范围修改仍未保存。
+	await expect(page.getByRole("button", { name: "移除 平台工程" })).toHaveCount(
+		0,
+	);
+	await expect(page.getByRole("button", { name: "保存配置" })).toBeEnabled();
+});
+
+test("a failed default Key write keeps the version and shows no page-level error", async ({
+	page,
+}) => {
+	const api = await ownerConfigFixture(page, { keySet: true });
+	api.fail("replace-key");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const section = page.getByRole("region", {
+		name: "Agent 默认 Relay Key",
+		exact: true,
+	});
+	await section.getByRole("button", { name: "替换默认 Key" }).click();
+	const dialog = page.getByRole("dialog", {
+		name: "替换 Agent 默认 Relay Key",
+	});
+	await dialog.getByLabel("新的 Relay Key").fill("synthetic-new-key");
+	await dialog.getByRole("button", { name: "校验并替换" }).click();
+	await expect(section.getByRole("alert")).toContainText("默认 Key 未替换");
+	await expect(
+		section.locator('[data-slot="badge"][data-variant="chip"]'),
+	).toHaveText("已设置");
+	await expect(section.locator("dd").first()).toHaveText("version 3");
+	await expect(main(page)).not.toContainText("配置未能保存");
+});
+
+test("saved-Key candidates start unchanged and use readable names (RK2-01, RK2-02, RK2-07)", async ({
+	page,
+}) => {
+	const api = await ownerConfigFixture(page, { keySet: true, saved: "same" });
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const models = page.getByRole("region", { name: "模型与凭证", exact: true });
+	const picker = models.locator('[data-slot="keyless-model-picker"]');
+	await expect(picker).toBeVisible();
+	// 加载完成后没有改动：当前选项是旧格式（无 endpointId）也不算改动。
+	await expect(main(page).getByText("没有需要保存的变更。")).toBeVisible();
+	await expect(page.getByRole("button", { name: "保存配置" })).toBeDisabled();
+	await expect(
+		models.getByRole("checkbox", {
+			name: "Relay · Internal · gpt-5",
+			exact: true,
+		}),
+	).toBeChecked();
+	const levels = models.getByRole("group", {
+		name: "Relay · Internal · gpt-5 的推理档位",
+	});
+	await expect(levels.getByRole("checkbox")).toHaveCount(2);
+	await expect(levels).toContainText("均衡");
+	await expect(levels).toContainText("高");
+	const text = (await picker.innerText()).toLowerCase();
+	for (const raw of ["endpoint-primary", "medium", "high"])
+		expect(text).not.toContain(raw);
+	// 只有一个「默认模型选项」下拉；选择器根节点没有边线，也没有可见 legend。
+	await expect(models.getByLabel("默认模型选项")).toHaveCount(1);
+	await expect(models.getByLabel("默认模型", { exact: true })).toHaveCount(0);
+	await expect(models.getByLabel("默认推理档位")).toHaveCount(0);
+	expect((await computed(picker, ["borderTopWidth"])).borderTopWidth).toBe(
+		"0px",
+	);
+	expect(
+		await picker
+			.locator("legend")
+			.evaluateAll(
+				(legends) =>
+					legends.filter((legend) => legend.getBoundingClientRect().height > 0)
+						.length,
+			),
+	).toBe(0);
+	const label = models.locator('label[data-variant="option"]').first();
+	expect(await computed(label, ["fontSize", "fontWeight"])).toEqual({
+		fontSize: "13px",
+		fontWeight: "400",
+	});
+	await expect(models).not.toContainText("当前默认：");
+	// 勾选再取消同一档位后仍为未改动。
+	const high = levels.getByRole("checkbox", { name: "高" });
+	await high.click();
+	await expect(page.getByRole("button", { name: "保存配置" })).toBeEnabled();
+	await high.click();
+	await expect(page.getByRole("button", { name: "保存配置" })).toBeDisabled();
+	// 只改环境变量并保存：schemaVersion 2，不带模型。
+	await page
+		.getByRole("region", { name: "环境变量与 Secret", exact: true })
+		.getByLabel("值", { exact: true })
+		.fill("owner-only-change");
+	await page.getByRole("button", { name: "保存配置" }).click();
+	await expect(toast(page)).toHaveText("配置已保存，Secret 值不会回显");
+	expect(api.commands.at(-1)?.body).toMatchObject({ schemaVersion: 2 });
+	expect(api.commands.at(-1)?.body).not.toHaveProperty("modelConfiguration");
+});
+
+test("subset, empty and failed candidate reads never block other fields (RK2-03, RK2-04, RK2-06)", async ({
+	page,
+}) => {
+	const api = await ownerConfigFixture(page, { keySet: true, saved: "subset" });
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const models = page.getByRole("region", { name: "模型与凭证", exact: true });
+	await expect(
+		models.locator('[data-slot="keyless-model-picker"]'),
+	).toBeVisible();
+	// 候选不含当前模型：加载后没有错误，也不判定为改动。
+	await expect(main(page).getByRole("alert")).toHaveCount(0);
+	await expect(page.getByRole("button", { name: "保存配置" })).toBeDisabled();
+	const mini = models.getByRole("checkbox", {
+		name: "Relay · Internal · gpt-5-mini",
+	});
+	// 改动选择会移除当前模型：保存前先列出来。
+	await mini.click();
+	await expect(models.getByText("保存后会移除这些模型")).toBeVisible();
+	await expect(models.getByRole("status")).toContainText("Primary model");
+	await mini.click();
+	await expect(models.getByText("保存后会移除这些模型")).toHaveCount(0);
+	// 勾选再取消回到初始状态：不显示「至少选择一个模型。」，页面也判定为未改动。
+	await expect(main(page).getByRole("alert")).toHaveCount(0);
+	await expect(main(page).getByText("没有需要保存的变更。")).toBeVisible();
+	await expect(page.getByRole("button", { name: "保存配置" })).toBeDisabled();
+
+	// 取消全部勾选后只出现一条字段错误；保存不发请求，焦点回到选择器第一个控件。
+	api.savedMode("same");
+	await page.reload();
+	const gpt5 = models.getByRole("checkbox", {
+		name: "Relay · Internal · gpt-5",
+		exact: true,
+	});
+	await gpt5.click();
+	const error = main(page).getByRole("alert");
+	await expect(error).toHaveText("至少选择一个模型。");
+	await expectDangerInkFieldError(page, error);
+	await page.getByRole("button", { name: "保存配置" }).click();
+	await expect(gpt5).toBeFocused();
+	expect(api.commands).toEqual([]);
+	await gpt5.click();
+	await expect(main(page).getByRole("alert")).toHaveCount(0);
+
+	api.savedMode("empty");
+	await page.reload();
+	await expect(
+		models.getByText("当前默认 Key 没有此模板可用的模型"),
+	).toBeVisible();
+	await expect(models.getByRole("checkbox")).toHaveCount(0);
+	await expect(main(page).getByRole("alert")).toHaveCount(0);
+	const facts = page
+		.getByRole("region", { name: "Agent 默认 Relay Key", exact: true })
+		.locator("dl");
+	await expect(facts.locator("dd").nth(1)).toHaveText("无");
+	await expect(page.getByRole("button", { name: "替换默认 Key" })).toHaveCount(
+		1,
+	);
+
+	api.savedMode("error");
+	await page.reload();
+	const alert = models.getByRole("alert");
+	await expect(alert).toContainText("暂时无法读取可用模型");
+	api.savedMode("same");
+	const before = api.reads.length;
+	await alert.getByRole("button", { name: "重新读取可用模型" }).click();
+	await expect(
+		models.locator('[data-slot="keyless-model-picker"]'),
+	).toBeVisible();
+	expect(
+		api.reads
+			.slice(before)
+			.filter((path) => path.endsWith("/default-relay-key/candidates")),
+	).toHaveLength(1);
+
+	api.savedMode("forbidden");
+	await page.reload();
+	await expect(models.getByRole("alert")).toContainText("无法读取可用模型");
+	await expect(models.getByRole("alert")).not.toContainText("暂时");
+	await expect(
+		models.getByRole("button", { name: "重新读取可用模型" }),
+	).toHaveCount(0);
+	await page
+		.getByRole("region", { name: "环境变量与 Secret", exact: true })
+		.getByLabel("值", { exact: true })
+		.fill("still-saves");
+	await page.getByRole("button", { name: "保存配置" }).click();
+	await expect.poll(() => api.commands.length).toBe(1);
+	expect(api.commands[0]?.body).not.toHaveProperty("modelConfiguration");
+});
+
+test("saved-Key candidates show a loading line only on the first read (RK2-05)", async ({
+	page,
+}) => {
+	const api = await ownerConfigFixture(page, { keySet: true });
+	api.hold("saved-candidates");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const models = page.getByRole("region", { name: "模型与凭证", exact: true });
+	const loading = models.locator('[data-slot="loading-line"]');
+	await expect(loading).toHaveAttribute("role", "status");
+	const spinner = loading.locator('[data-slot="spinner"]');
+	// 旋转中的包围盒会变大，读取计算尺寸。
+	expect(await computed(spinner, ["width", "height"])).toEqual({
+		width: "15px",
+		height: "15px",
+	});
+	api.release("saved-candidates");
+	await expect(
+		models.locator('[data-slot="keyless-model-picker"]'),
+	).toBeVisible();
+	await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+	await page.waitForTimeout(300);
+	await expect(loading).toHaveCount(0);
+	await expect(models).not.toContainText("正在读取");
+});
+
+test("the Owner configuration links to the Agent's Skill page (O-02)", async ({
+	page,
+}, info) => {
+	const api = await ownerConfigFixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const section = page.getByRole("region", { name: "Skill", exact: true });
+	await expect(
+		section.getByText("Skill 版本、同步和对话可用性分开管理。"),
+	).toBeVisible();
+	const link = section.getByRole("link", { name: "管理 Skill 绑定" });
+	await expect(link).toHaveAttribute("href", "/agents/agent-pilot-1/skills");
+	await expect(link.locator("svg")).toHaveAttribute("aria-hidden", "true");
+	expect(await height(link)).toBeGreaterThanOrEqual(44);
+	if (info.project.name === "desktop") {
+		const [headingBox, linkBox] = await Promise.all([
+			section.getByRole("heading", { level: 2 }).boundingBox(),
+			link.boundingBox(),
+		]);
+		// 链接与 h2 同行：两者在纵向上重叠，链接在右侧。
+		const linkTop = linkBox?.y ?? 0;
+		const headingTop = headingBox?.y ?? 0;
+		expect(linkTop < headingTop + (headingBox?.height ?? 0)).toBe(true);
+		expect(linkTop + (linkBox?.height ?? 0) > headingTop).toBe(true);
+		expect((linkBox?.x ?? 0) > (headingBox?.x ?? 0) + 300).toBe(true);
+	}
+	await noHorizontalOverflow(page);
+	// 路由 Link：不发生文档级导航，页面状态（含窗口上的探针）保留（acc-5 新问题 2）。
+	const documents = await markSinglePageNavigation(page);
+	await link.focus();
+	await page.keyboard.press("Enter");
+	await expect(page).toHaveURL(/\/agents\/agent-pilot-1\/skills$/);
+	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+		"Agent 的 Skill",
+	);
+	await expectNoDocumentNavigation(page, documents);
+	await expect(page.locator('[data-slot="breadcrumb-page"]')).toHaveText(
+		"Agent 的 Skill",
+	);
+	await expect(main(page)).toContainText("Owner 配置 / Skill");
+	await expect(main(page)).toContainText(
+		"Release assistant · 固定 Skill 版本，完成同步后才能在对话中使用。",
+	);
+	await expect(main(page)).toContainText("暂时无法读取当前 Agent 版本");
+	for (const label of ["Agent ID", "Agent 版本", "配置 revision", "Grant JSON"])
+		await expect(page.getByLabel(label)).toHaveCount(0);
+	expect(api.reads.filter((path) => path.includes("/versions/"))).toEqual([]);
+	await noHorizontalOverflow(page);
+});
+
+test("the Owner configuration back link navigates without a document reload or aria-current (acc-5)", async ({
+	page,
+}) => {
+	await ownerConfigFixture(page);
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const back = main(page).getByRole("link", { name: "返回 Agent 详情" });
+	await expect(back).toHaveAttribute("href", "/agents/agent-pilot-1");
+	// 返回链接是当前路径的前缀，不能被前缀匹配标成当前页。
+	await expect(back).not.toHaveAttribute("aria-current", /.*/);
+	const documents = await markSinglePageNavigation(page);
+	await back.click();
+	await expect(page).toHaveURL(/\/agents\/agent-pilot-1$/);
+	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+		"Release assistant",
+	);
+	await expectNoDocumentNavigation(page, documents);
+});
+
+for (const role of ["admin", "employee"] as const) {
+	test(`a ${role} sees no Skill entry and no bindings (O-02)`, async ({
+		page,
+	}) => {
+		const api = await ownerConfigFixture(page, { role });
+		await page.goto("/agents/agent-pilot-1/configuration");
+		await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+		await expect(
+			page.getByRole("region", { name: "Skill", exact: true }),
+		).toHaveCount(0);
+		await page.goto("/agents/agent-pilot-1/skills");
+		await expect(main(page)).toContainText("没有权限");
+		await expect(
+			main(page).getByRole("link", { name: "返回 Agent 详情" }),
+		).toHaveAttribute("href", "/agents/agent-pilot-1");
+		await expect(
+			page.getByRole("button", { name: "绑定固定版本" }),
+		).toHaveCount(0);
+		expect(api.reads.filter((path) => path.includes("/versions/"))).toEqual([]);
+		expect(api.commands).toEqual([]);
+	});
+}

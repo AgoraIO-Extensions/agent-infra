@@ -417,7 +417,7 @@ describe("Administrator inventory presentation", () => {
 			/>,
 		);
 		const section = screen.getByRole("region", {
-			name: "看清所有 Agent 的运行资格。",
+			name: "查看 Agent 状态",
 		});
 		expect(within(section).getByRole("alert").textContent).toBe(
 			"暂时无法读取 Agent 列表，请稍后重试。重新加载",
@@ -476,7 +476,7 @@ describe("Administrator inventory presentation", () => {
 			/>,
 		);
 		const section = screen.getByRole("region", {
-			name: "看清所有 Agent 的运行资格。",
+			name: "查看 Agent 状态",
 		});
 		const order = [
 			section.querySelector("header.page-heading"),

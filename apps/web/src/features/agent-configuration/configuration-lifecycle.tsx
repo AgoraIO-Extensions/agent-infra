@@ -18,7 +18,7 @@ import {
 	commandProgressLabels,
 	confirmationCopy,
 	visibleLifecycleCommands,
-} from "../agent-administration/agent-lifecycle-controls.js";
+} from "../agent-administration/agent-lifecycle-commands.js";
 import { useAgentLifecycleCommand } from "../agent-administration/use-agent-lifecycle-command.js";
 import type { BrowserSessionState } from "../browser-session.js";
 

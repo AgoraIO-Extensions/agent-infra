@@ -414,6 +414,14 @@ test("application rows show a text title, one detail entrance and unique link na
 	await expect(rows).toHaveCount(3);
 	for (const row of await rows.all()) {
 		await expect(row.locator("a h2")).toHaveCount(0);
+		// 设计 .list-row strong：申请行标题 14px / 700。
+		expect(
+			await computed(row.locator("h2"), ["fontSize", "fontWeight"]),
+		).toEqual({ fontSize: "14px", fontWeight: "700" });
+		// F-02：模板 tag 为部署配置的显示名「Codex」，不显示原始 templateId。
+		await expect(
+			row.locator('[data-slot="badge"][data-variant="tag"]'),
+		).toHaveText("Codex");
 		const href = await row
 			.getByRole("link", { name: /^查看申请：/ })
 			.getAttribute("href");
@@ -511,10 +519,10 @@ for (const expanded of [false, true]) {
 			});
 			if (!step) break;
 			steps.push(step);
-			if (step.label === "提交申请") break;
+			if (step.label === "提交审批") break;
 			await page.keyboard.press("Tab");
 		}
-		expect(steps.at(-1)?.label).toBe("提交申请");
+		expect(steps.at(-1)?.label).toBe("提交审批");
 		for (let index = 1; index < steps.length; index++) {
 			const previous = steps[index - 1];
 			const current = steps[index];
@@ -551,11 +559,18 @@ test("application form footer, field errors, legends and option labels follow th
 				"columnGap",
 			]),
 		).toEqual({ rowGap: "14px", columnGap: "14px" });
-	// M-10 决策前：没有渠道分区与保存草稿，主按钮保持「提交申请」并带 16px 箭头。
+	// M-10：渠道分区与保存草稿待 PRD 决策（#2862）；主按钮按设计为「提交审批」，文字后带 16px 箭头。
 	await expect(page.getByRole("heading", { name: "渠道" })).toHaveCount(0);
 	await expect(page.getByRole("button", { name: /保存草稿/ })).toHaveCount(0);
-	const submit = footer.getByRole("button", { name: "提交申请", exact: true });
+	const submit = footer.getByRole("button", { name: "提交审批", exact: true });
+	await expect(submit).toHaveText("提交审批");
 	await expect(submit.locator("svg")).toHaveCSS("width", "16px");
+	expect(
+		await submit.evaluate(
+			(button) => button.lastElementChild?.tagName.toLowerCase() ?? "",
+		),
+	).toBe("svg");
+	await expect(footer.getByRole("button", { name: "提交申请" })).toHaveCount(0);
 
 	await submit.click();
 	const name = page.getByLabel("Agent 名称");
@@ -598,9 +613,13 @@ test("application form footer, field errors, legends and option labels follow th
 				"color",
 			]),
 		).toEqual({ fontSize: "12px", fontWeight: "650", color: muted });
+	// 推理档位只显示中文（reasoningLevelLabel），原始枚举 medium / high 不进入页面。
+	await expect(
+		page.locator('.model-reasoning label[data-variant="option"]'),
+	).toHaveText(["均衡", "高"]);
 	// M-06：推理档位选项 13px / 400 / 前景色，至少 44px 高，复选框 18×18。
 	const option = page.locator('label[data-variant="option"]', {
-		hasText: "medium",
+		hasText: "均衡",
 	});
 	expect(await computed(option, ["fontSize", "fontWeight", "color"])).toEqual({
 		fontSize: "13px",
@@ -648,6 +667,9 @@ test("application detail puts actions in the heading, shows three progress rows 
 	const heading = page.locator("main header.application-detail-heading");
 	const h1 = heading.getByRole("heading", { level: 1 });
 	await expect(h1).toHaveText(pendingApplication.name);
+	// 可读编号待 #2861；在此之前 eyebrow 只写「申请详情」，不外露内部申请 ID。
+	await expect(heading.locator(".page-eyebrow")).toHaveText("申请详情");
+	await expect(page.locator("main")).not.toContainText("application-browser-1");
 	const actions = heading.locator(":scope > .card-actions");
 	const edit = actions.getByRole("link", { name: "修改申请" });
 	const withdraw = actions.getByRole("button", { name: "撤回申请" });
@@ -693,6 +715,9 @@ test("application detail puts actions in the heading, shows three progress rows 
 	).gridTemplateColumns.split(" ");
 	if (info.project.name === "desktop") expect(columns[0]).toBe("150px");
 	else expect(columns).toHaveLength(1);
+	// F-02：来源与入口模式写模板显示名，不出现原始 templateId。
+	await expect(facts).toContainText("标准模板 · Codex");
+	await expect(facts).not.toContainText("codex");
 	// M-04：使用范围按目录显示姓名、邮箱、组织名与路径，不出现内部 ID。
 	await expect(facts).toContainText("验收用户二");
 	await expect(facts).toContainText("user.two@example.test");

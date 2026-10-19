@@ -231,32 +231,34 @@ async function run(input, evidence) {
 		await page.goto(
 			`${input.origin}/agents/${encodeURIComponent(input.agentId)}/conversations`,
 		);
-		await expect(page.getByRole("button", { name: "创建会话" })).toBeEnabled();
-		const [created] = await Promise.all([
+		// 新会话页直接显示 composer：首次发送时先创建会话，再由新会话用原草稿发送（CH-10）。
+		await expect(page.getByRole("textbox", { name: "消息" })).toBeEnabled();
+		await page.getByRole("textbox", { name: "消息" }).fill(input.prompt);
+		const [created, submitted] = await Promise.all([
 			page.waitForResponse(
 				(response) =>
 					response.request().method() === "POST" &&
 					new URL(response.url()).pathname ===
 						`/api/v1/agents/${encodeURIComponent(input.agentId)}/conversations`,
 			),
-			page.getByRole("button", { name: "创建会话" }).click(),
+			page.waitForResponse(
+				(response) =>
+					response.request().method() === "POST" &&
+					/^\/api\/v1\/conversations\/[^/]+\/messages$/.test(
+						new URL(response.url()).pathname,
+					),
+			),
+			page.getByRole("button", { name: "发送", exact: true }).click(),
 		]);
 		assert.equal(created.status(), 201);
 		const { conversationId } = await created.json();
 		assert(typeof conversationId === "string" && conversationId.length > 0);
 		evidence.createStatus = created.status();
 		evidence.conversationHash = digest(conversationId);
-		await expect(page.getByRole("textbox", { name: "消息" })).toBeEnabled();
-		await page.getByRole("textbox", { name: "消息" }).fill(input.prompt);
-		const [submitted] = await Promise.all([
-			page.waitForResponse(
-				(response) =>
-					response.request().method() === "POST" &&
-					new URL(response.url()).pathname ===
-						`/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
-			),
-			page.getByRole("button", { name: "发送", exact: true }).click(),
-		]);
+		assert.equal(
+			new URL(submitted.url()).pathname,
+			`/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
+		);
 		assert.equal(submitted.status(), 202);
 		const receipt = await submitted.json();
 		assert(
@@ -449,7 +451,7 @@ async function run(input, evidence) {
 		);
 		await expect(
 			otherPage.getByText(
-				"当前登录或访问权限已失效，请重新登录或返回 Agent 列表。",
+				"当前登录或访问权限已失效，请重新登录或返回 Agent 目录。",
 			),
 		).toBeVisible();
 		await expect(

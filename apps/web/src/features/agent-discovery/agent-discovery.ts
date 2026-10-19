@@ -127,10 +127,18 @@ export async function loadAgentDetail(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (result.response?.status !== 200) return unavailable(result.error);
+	if (result.response?.status !== 200) {
+		const failure = collectionReadFailure(result.response?.status);
+		// 403 与 404 对页面是同一结果，不暴露不可见 Agent 是否存在（PRD §7.3）。
+		return unavailable(
+			failure.reason === "denied" || failure.reason === "not-found"
+				? { retryable: false }
+				: failure,
+		);
+	}
 	const parsed = AgentProjectionV2Schema.safeParse(result.data);
 	if (!parsed.success || parsed.data.agentId !== agentId)
-		return unavailable({ retryable: false });
+		return unavailable({ retryable: false, reason: "invalid-response" });
 	return { kind: "ready", agent: parsed.data };
 }
 

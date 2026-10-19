@@ -20,6 +20,7 @@ const clients: QueryClient[] = [];
 function setup(
 	handler: (request: Request) => Response | Promise<Response>,
 	identityKey = "login-a",
+	limit?: number,
 ) {
 	const queryClient = new QueryClient();
 	clients.push(queryClient);
@@ -40,7 +41,7 @@ function setup(
 	return {
 		...renderHook(
 			(props: { identityKey: string }) =>
-				useRecentPersonalConversations({ ...props, client }),
+				useRecentPersonalConversations({ ...props, client, limit }),
 			{ initialProps: { identityKey }, wrapper },
 		),
 		requests,
@@ -53,6 +54,32 @@ afterEach(() => {
 });
 
 describe("Personal recent login and continuation lifetime", () => {
+	it("keeps 50 as the shared page size and lets a caller request fewer rows", async () => {
+		// 对话页「最近对话」面板沿用 50 条一页；工作台只取首页 3 条（NI-32）。
+		const shared = setup(() => Response.json(page(["shared"])));
+		await waitFor(() => expect(shared.result.current.state.kind).toBe("ready"));
+		const workbench = setup(
+			() => Response.json(page(["a", "b", "c"], "opaque-next/+?=")),
+			"login-a",
+			3,
+		);
+		await waitFor(() =>
+			expect(workbench.result.current.state).toMatchObject({
+				kind: "ready",
+				conversations: [
+					{ conversationId: "a" },
+					{ conversationId: "b" },
+					{ conversationId: "c" },
+				],
+			}),
+		);
+		expect(
+			[...shared.requests, ...workbench.requests].map((request) =>
+				new URL(request.url).searchParams.get("limit"),
+			),
+		).toEqual(["50", "3"]);
+	});
+
 	it("waits for a confirmed empty response and does not read without a login", async () => {
 		const pending = deferred<Response>();
 		const hook = setup(() => pending.promise);
@@ -304,6 +331,40 @@ describe("Personal recent login and continuation lifetime", () => {
 			).not.toContain("old-personal-row");
 		},
 	);
+
+	it("reloads a blocked first page only when the user explicitly asks again", async () => {
+		let denied = true;
+		const hook = setup(() =>
+			denied
+				? new Response("Controlled authentication", { status: 401 })
+				: Response.json(page(["after-relogin"])),
+		);
+		await waitFor(() =>
+			expect(hook.result.current.state).toEqual({
+				kind: "unavailable",
+				retryable: false,
+				reason: "authentication-required",
+			}),
+		);
+		const count = hook.requests.length;
+		await act(async () => hook.result.current.refresh());
+		expect(hook.requests).toHaveLength(count);
+		denied = false;
+		// 「重新登录」后会话仍有效：解除锁定，用新的首页重读一次。
+		await act(async () => hook.result.current.reload());
+		await waitFor(() =>
+			expect(hook.result.current.state).toMatchObject({
+				kind: "ready",
+				conversations: [{ conversationId: "after-relogin" }],
+			}),
+		);
+		expect(hook.requests.length).toBeGreaterThan(count);
+		expect(
+			hook.requests
+				.slice(count)
+				.every((request) => !new URL(request.url).searchParams.has("cursor")),
+		).toBe(true);
+	});
 
 	it("rejects a cursor cycle spanning several pages without reporting partial success", async () => {
 		const hook = setup((request) => {

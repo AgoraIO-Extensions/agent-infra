@@ -5,12 +5,12 @@ import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/gene
 import type { AgentSavedModelConfigurationUpdate } from "./agent-configuration.js";
 import {
 	checkAgentDefaultRelayKey,
-	loadAgentDefaultRelayKey,
 	replaceAgentDefaultRelayKey,
 	updateAgentConfiguration,
 	updateAgentSavedModelConfiguration,
 	upgradeAgentCustomImage,
 } from "./agent-configuration.js";
+import type { DefaultRelayKeyReplacement } from "./default-relay-key-dialog.js";
 
 type AgentConfigurationCommand =
 	| {
@@ -37,6 +37,14 @@ export function useAgentConfigurationSubmission(agentId: string) {
 	const currentAgentId = useRef(agentId);
 	const activeSubmission = useRef<string | undefined>(undefined);
 	const pendingCommands = useRef(new Map<string, AgentConfigurationCommand>());
+	const refreshAgent = () =>
+		Promise.all([
+			queryClient.invalidateQueries({ queryKey: ["agents"] }),
+			queryClient.invalidateQueries({ queryKey: ["my-agents"] }),
+			queryClient.invalidateQueries({
+				queryKey: ["admin", "agent-applications"],
+			}),
+		]);
 	const submission = useMutation({
 		mutationKey: ["agents", agentId, "configuration"],
 		mutationFn: async (attempt: AgentConfigurationAttempt) => {
@@ -66,35 +74,12 @@ export function useAgentConfigurationSubmission(agentId: string) {
 				pendingCommands.current.delete(attempt.idempotencyKey);
 			}
 		},
-		onSuccess: () =>
-			Promise.all([
-				queryClient.invalidateQueries({ queryKey: ["agents"] }),
-				queryClient.invalidateQueries({ queryKey: ["my-agents"] }),
-				queryClient.invalidateQueries({
-					queryKey: ["admin", "agent-applications"],
-				}),
-			]),
+		onSuccess: refreshAgent,
 		onSettled: (_data, _error, attempt) => {
 			if (activeSubmission.current === attempt.idempotencyKey) {
 				activeSubmission.current = undefined;
 			}
 		},
-	});
-	const relayKeySubmission = useMutation({
-		mutationKey: ["agents", agentId, "default-relay-key"],
-		mutationFn: async (keyValue: string) => {
-			const state = await loadAgentDefaultRelayKey(agentId);
-			return replaceAgentDefaultRelayKey(agentId, {
-				configurationRevision: state.configurationRevision,
-				expectedVersion: state.isSet ? state.keyVersion : null,
-				keyValue,
-			});
-		},
-		onSuccess: () =>
-			Promise.all([
-				queryClient.invalidateQueries({ queryKey: ["agents", agentId] }),
-				queryClient.invalidateQueries({ queryKey: ["agents"] }),
-			]),
 	});
 
 	// 企微解绑是独立请求：只提交该渠道 disabled，不经过整页保存，也不替换表单（O-01）。
@@ -139,12 +124,6 @@ export function useAgentConfigurationSubmission(agentId: string) {
 
 	return {
 		...submission,
-		relayKeySubmission,
-		relayKeyError:
-			relayKeySubmission.isError && relayKeySubmission.error instanceof Error
-				? relayKeySubmission.error
-				: null,
-		relayKeySubmitting: relayKeySubmission.isPending,
 		saveConfiguration: (
 			body:
 				| AgentConfigurationUpdateRequestV2Writable
@@ -157,13 +136,43 @@ export function useAgentConfigurationSubmission(agentId: string) {
 		unbindWecomChannel: async (kind: WecomChannelKind) => {
 			await channelUnbind.mutateAsync(kind);
 		},
-		/** 仅替换 Key 成功后的状态（含新版本），供页面给出确认提示。 */
-		relayKeyResult: relayKeySubmission.isSuccess
-			? relayKeySubmission.data
-			: undefined,
-		replaceDefaultRelayKey: relayKeySubmission.mutate,
-		/** 返回候选模型，以及检查时看到的配置修订和 Key 版本（保存时作为 expected 值）。 */
-		previewDefaultRelayKeyCandidates: (keyValue: string) =>
+		/**
+		 * 替换或添加单个 Secret（O-10、NI-71）：独立请求，只带这一个 Secret，不读取页面草稿，
+		 * 也不经过整页 mutation——明文不进入 mutation 变量或页面级错误。
+		 */
+		replaceSecret: async (name: string, value: string) => {
+			const projection = await updateAgentConfiguration(
+				agentId,
+				{ schemaVersion: 2, secrets: [{ name, value }] },
+				crypto.randomUUID(),
+			);
+			await refreshAgent();
+			return projection;
+		},
+		/** 检查新 Key 可见的模型，并带回检查时的配置修订与 Key 版本（写入时作为 expected 值）。 */
+		checkDefaultRelayKey: (keyValue: string) =>
 			checkAgentDefaultRelayKey(agentId, keyValue),
+		/** 只替换默认 Key（新候选覆盖当前模型，G-09）；成功后回读 Key 状态与候选。 */
+		replaceDefaultRelayKey: async (replacement: DefaultRelayKeyReplacement) => {
+			const state = await replaceAgentDefaultRelayKey(agentId, {
+				configurationRevision: replacement.configurationRevision,
+				expectedVersion: replacement.expectedVersion,
+				keyValue: replacement.keyValue,
+			});
+			await refreshAgent();
+			return state;
+		},
+		/** 新 Key 不覆盖当前模型时，Key 与模型集合一次提交；请求体由弹窗只用这几项组装。 */
+		replaceDefaultRelayKeyWithModels: async (
+			body: AgentConfigurationUpdateRequestV2Writable,
+		) => {
+			const projection = await updateAgentConfiguration(
+				agentId,
+				body,
+				crypto.randomUUID(),
+			);
+			await refreshAgent();
+			return projection;
+		},
 	};
 }

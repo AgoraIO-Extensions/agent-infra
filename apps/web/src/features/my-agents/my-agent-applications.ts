@@ -159,6 +159,9 @@ const applicationPageSchema =
 	pilotBrowserHttpOpenApiPathsV2["/api/v2/agent-applications"].get.responses[
 		"200"
 	].content["application/json"].schema;
+const applicationSchema =
+	pilotBrowserHttpOpenApiPathsV2["/api/v2/agent-applications/{applicationId}"]
+		.get.responses["200"].content["application/json"].schema;
 
 function unavailable(
 	error:
@@ -227,9 +230,19 @@ export async function loadMyAgentApplication(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	return result.data
-		? { kind: "ready", application: result.data }
-		: unavailable(result.error);
+	const status = result.response?.status;
+	if (status !== 200) {
+		const failure = collectionReadFailure(status);
+		// 403 与 404 对页面是同一结果，不暴露不可见申请是否存在（PRD §7.3）。
+		return unavailable(
+			failure.reason === "denied" || failure.reason === "not-found"
+				? { retryable: false }
+				: failure,
+		);
+	}
+	if (!result.data || !applicationSchema.safeParse(result.data).success)
+		return unavailable({ retryable: false, reason: "invalid-response" });
+	return { kind: "ready", application: result.data };
 }
 
 export async function createMyAgentApplication(

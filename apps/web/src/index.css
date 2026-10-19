@@ -342,6 +342,25 @@
 .platform-skip-link:focus {
 	top: 10px;
 }
+/* 会话确认期的壳层骨架（R4-02）：占位行沿用导航项尺寸，就绪后导航与内容区不跳动。 */
+.platform-skeleton-line {
+	display: block;
+	width: 62%;
+	height: 10px;
+	border-radius: 5px;
+	background: color-mix(in oklch, var(--foreground) 7%, transparent);
+}
+.platform-nav-skeleton .platform-nav-item:hover {
+	background: transparent;
+}
+.platform-menu-placeholder {
+	flex: none;
+	width: 44px;
+	height: 44px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface);
+}
 @media (max-width: 1023px) {
 	.platform-sidebar {
 		display: none;
@@ -361,6 +380,283 @@
 	}
 	.platform-content {
 		padding-top: 28px;
+	}
+}
+
+/* 公共状态卡（设计 #states .state-card）：页面级 h1/h2 规则不得改变卡内标题。 */
+[data-slot="state-card"] {
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
+	gap: 16px;
+	width: 100%;
+	max-width: 560px;
+	min-width: 0;
+	min-height: 190px;
+	padding: 18px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--surface);
+}
+[data-slot="state-card"] [data-slot="state-card-title"] {
+	font-family: var(--font-body);
+	font-size: 16px;
+	font-weight: 650;
+	line-height: 1.4;
+	letter-spacing: 0;
+	color: var(--foreground);
+	overflow-wrap: anywhere;
+}
+[data-slot="state-card"] [data-slot="state-card-description"] {
+	margin-top: 6px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	line-height: 1.65;
+}
+[data-slot="state-card-actions"] {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+	gap: 8px;
+}
+
+/* 独立登录页（设计 login.html）：确认未登录时整页渲染，不含应用侧栏、顶栏与身份卡。 */
+.login-page {
+	display: flex;
+	flex-direction: column;
+	min-height: 100dvh;
+	font-size: 15px;
+	line-height: 1.75;
+}
+.login-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 20px;
+	padding: 28px clamp(20px, 4vw, 56px);
+}
+.login-brand {
+	display: flex;
+	align-items: center;
+	gap: 11px;
+}
+.login-brand-mark {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 34px;
+	height: 34px;
+	border-radius: 10px;
+	background: var(--foreground);
+	color: var(--surface);
+	font: 600 21px / 1 var(--font-display);
+}
+.login-brand-name {
+	font: 600 20px / 1.3 var(--font-display);
+	letter-spacing: -0.01em;
+}
+.login-context {
+	font-size: 12px;
+	color: var(--muted-foreground);
+}
+.login-main {
+	display: grid;
+	place-items: center;
+	flex: 1;
+	padding: 28px 20px 36px;
+}
+.login-panel {
+	width: min(100%, 440px);
+	padding: 32px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--surface);
+	box-shadow: 0 12px 35px color-mix(in oklch, var(--foreground) 4%, transparent);
+}
+.login-intro {
+	margin-bottom: 28px;
+}
+.login-kicker {
+	margin-bottom: 8px;
+	font-size: 12px;
+	letter-spacing: 0.02em;
+	color: var(--muted-foreground);
+}
+.login-intro h1 {
+	font: 600 clamp(26px, 4vw, 30px) / 1.35 var(--font-display);
+	letter-spacing: 0;
+	text-wrap: balance;
+}
+.login-lead {
+	margin-top: 8px;
+	font-size: 14px;
+	color: var(--muted-foreground);
+}
+.login-expired {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	margin: 0 0 24px;
+	padding: 12px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface-raised);
+	font-size: 13px;
+	line-height: 1.7;
+}
+.login-expired svg {
+	flex: none;
+	width: 17px;
+	height: 17px;
+	margin-top: 3px;
+	color: var(--muted-foreground);
+}
+.login-expired strong {
+	display: block;
+	font-weight: 550;
+}
+.login-expired p {
+	font-size: 12px;
+	color: var(--muted-foreground);
+}
+.login-field {
+	display: grid;
+	gap: 7px;
+	min-width: 0;
+	margin-bottom: 18px;
+}
+.login-field [data-slot="label"] {
+	color: var(--foreground);
+	font-size: 13px;
+	font-weight: 550;
+	letter-spacing: 0.02em;
+	line-height: 1.75;
+}
+.login-input[data-slot="input"] {
+	height: 48px;
+	padding: 10px 12px;
+	border-radius: 10px;
+	font-size: 15px;
+	line-height: 1.75;
+}
+.login-input[data-slot="input"]:disabled {
+	background: var(--surface-raised);
+	color: var(--muted-foreground);
+	opacity: 1;
+	cursor: wait;
+}
+.login-password-control {
+	position: relative;
+}
+.login-password-control .login-input[data-slot="input"] {
+	padding-right: 54px;
+}
+.login-password-toggle[data-slot="button"] {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	width: 44px;
+	min-width: 44px;
+	height: 44px;
+	border-radius: 8px;
+	color: var(--muted-foreground);
+}
+.login-password-toggle[data-slot="button"]:hover {
+	background: var(--surface-raised);
+	color: var(--foreground);
+}
+.login-password-toggle svg {
+	width: 19px;
+	height: 19px;
+}
+.login-field-error {
+	color: var(--danger-ink);
+	font-size: 12px;
+	line-height: 1.6;
+}
+.login-form [data-slot="alert"].login-form-error {
+	margin: 0 0 18px;
+	padding: 12px;
+	border: 1px solid color-mix(in oklch, var(--danger) 35%, var(--border));
+	border-radius: 10px;
+	background: color-mix(in oklch, var(--danger) 5%, var(--surface));
+	color: var(--danger-ink);
+	font-size: 13px;
+	line-height: 1.7;
+}
+.login-submit {
+	width: 100%;
+	min-height: 44px;
+	gap: 9px;
+	padding: 10px 16px;
+	border-color: transparent;
+	border-radius: 10px;
+	background: color-mix(in oklch, var(--accent) 88%, var(--foreground));
+	color: var(--surface);
+	font-size: 14px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	line-height: 1.75;
+}
+.login-submit:hover {
+	border-color: transparent;
+	background: color-mix(in oklch, var(--accent) 76%, var(--foreground));
+	color: var(--surface);
+	text-decoration: none;
+}
+.login-submit:disabled {
+	opacity: 0.65;
+	cursor: wait;
+}
+/* 提交按钮内的反色 spinner：16px，2px 圈为 surface 35%，顶边 surface。 */
+.login-submit-spinner[data-slot="spinner"] {
+	width: 16px;
+	height: 16px;
+	border-color: color-mix(in oklch, var(--surface) 35%, transparent);
+	border-top-color: var(--surface);
+}
+.login-unconfigured {
+	font-size: 14px;
+	color: var(--muted-foreground);
+}
+.login-help {
+	max-width: 65ch;
+	margin-top: 24px;
+	padding-top: 20px;
+	border-top: 1px solid var(--border);
+	font-size: 12px;
+	line-height: 1.8;
+	color: var(--muted-foreground);
+}
+.login-footer {
+	width: min(100%, 680px);
+	margin: 0 auto;
+	padding: 0 20px 24px;
+	text-align: center;
+	font-size: 12px;
+	color: var(--muted-foreground);
+}
+@media (max-width: 600px) {
+	.login-header {
+		padding: 22px 20px;
+	}
+	.login-context {
+		font-size: 11px;
+	}
+	.login-brand-name {
+		font-size: 18px;
+	}
+	.login-main {
+		align-items: start;
+		padding: 12px 16px 28px;
+	}
+	.login-panel {
+		padding: 26px 22px;
+	}
+	.login-intro {
+		margin-bottom: 24px;
+	}
+	.login-footer {
+		padding: 0 20px 20px;
 	}
 }
 
@@ -658,6 +954,163 @@
 .chat-layout .exchange {
 	margin: 0 0 22px;
 }
+/* 设计 .chat-history-actions：时间线顶部的 ghost「加载更早内容」（G-04）。 */
+.chat-history-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+}
+/* 设计 .chat-context / .chat-files：默认收起的折叠条，摘要行 44px、12px muted（CH-03）。 */
+.chat-context {
+	border: 1px solid var(--border);
+	border-radius: 11px;
+	background: var(--surface);
+}
+.chat-files {
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface);
+}
+.chat-disclosure-summary {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	width: 100%;
+	min-height: 44px;
+	padding: 9px 12px;
+	border: 0;
+	border-radius: inherit;
+	background: transparent;
+	color: var(--muted-foreground);
+	font: inherit;
+	font-size: 12px;
+	line-height: 1.65;
+	text-align: left;
+}
+.chat-disclosure-summary strong {
+	flex: none;
+	color: var(--foreground);
+	font-weight: 650;
+}
+.chat-disclosure-detail {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.chat-disclosure-hint {
+	flex: none;
+	margin-left: auto;
+}
+.chat-disclosure-toggle {
+	flex: none;
+	color: var(--accent-ink);
+	font-size: 11px;
+}
+.chat-disclosure-compact {
+	display: none;
+}
+/* 展开内容有高度上限并独立滚动，消息区与输入区不被挤出视口（NW-02）。 */
+.chat-context-body {
+	max-height: min(45dvh, 420px);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: 0 12px 12px;
+	border-top: 1px solid var(--border);
+}
+.chat-context-body > * {
+	margin-top: 12px;
+}
+.chat-context-hint {
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+.chat-files-body {
+	max-height: min(40dvh, 360px);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: 0 12px 10px;
+}
+/* 设计 .connection-notice：needs-auth 为信号蓝浅底，handoff 为警示色浅底（BR-04）。 */
+.connection-notice {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 14px;
+	padding: 13px 14px;
+	border: 1px solid color-mix(in oklch, var(--accent) 24%, var(--border));
+	border-radius: 12px;
+	background: color-mix(in oklch, var(--accent) 4%, var(--surface));
+}
+.connection-notice[data-state="handoff"] {
+	border-color: color-mix(in oklch, var(--warning) 26%, var(--border));
+	background: color-mix(in oklch, var(--warning) 4%, var(--surface));
+}
+.chat-context-body .connection-notice {
+	padding: 10px 0;
+	border: 0;
+	background: transparent;
+}
+.connection-notice-main {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	min-width: 0;
+}
+.connection-notice-icon {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 30px;
+	height: 30px;
+	border-radius: 8px;
+	background: var(--surface);
+	color: var(--accent);
+}
+.connection-notice[data-state="handoff"] .connection-notice-icon {
+	color: var(--warning);
+}
+.connection-notice-copy {
+	min-width: 0;
+}
+.connection-notice-copy .connection-notice-title {
+	display: block;
+	font-size: 13px;
+	font-weight: 650;
+}
+.connection-notice-text {
+	margin-top: 3px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.6;
+	overflow-wrap: anywhere;
+}
+.connection-notice-scope {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	margin-top: 8px;
+	padding-top: 8px;
+	border-top: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+	font-size: 11px;
+}
+.connection-notice-scope span {
+	flex: none;
+	color: var(--muted-foreground);
+}
+.connection-notice-scope strong {
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.connection-notice-scope small {
+	color: var(--muted-foreground);
+	font-size: inherit;
+	overflow-wrap: anywhere;
+}
+.connection-notice-action {
+	flex: none;
+}
 .chat-message {
 	display: grid;
 	grid-template-columns: 34px minmax(0, 1fr);
@@ -703,6 +1156,109 @@
 	grid-row: 1;
 	background: var(--primary);
 	color: var(--surface);
+}
+/* 设计 .message-meta：作者 12px/650 在左，时间 11px muted 或进行中状态在右，可换行（CH-08）。 */
+.chat-message .message-meta {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin-bottom: 7px;
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+.chat-message .message-meta time {
+	flex: none;
+	color: var(--muted-foreground);
+	font-size: 11px;
+}
+.chat-message .message-meta-state {
+	flex: none;
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+/* 设计 .message-body .subtle：回答状态行 12px muted，正文之后 9px（CH-08、R4-08）。 */
+.chat-message .message-status {
+	margin-top: 9px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+.chat-message .message-status + .message-status {
+	margin-top: 4px;
+}
+.chat-message .message-pending {
+	color: var(--muted-foreground);
+}
+.chat-message-body > :is(.supplement, .message-files, .answer-versions) {
+	margin-top: 9px;
+}
+/* 设计 .card-actions：处理中卡内的「停止回复」（R4-07）。 */
+.chat-message-body > .card-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-top: 12px;
+}
+.answer-versions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+/* 设计 .skill-actions（命令 / Skill 调用进行中时回执之后的「停止回复」）与 Skill 页共用一条全局规则，
+   见下方 Skill Hub 块的 .skill-actions。 */
+/* 设计 .inline-link：状态行里的文字链接，无按钮外框，不受按钮 44px 最小高度影响。 */
+.inline-link {
+	display: inline;
+	min-width: 0;
+	min-height: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 3px;
+	background: transparent;
+	color: var(--accent-ink);
+	font: inherit;
+	letter-spacing: normal;
+	text-align: inherit;
+	white-space: normal;
+	vertical-align: baseline;
+	text-decoration-line: underline;
+	text-decoration-color: color-mix(
+		in oklch,
+		var(--accent-ink) 50%,
+		transparent
+	);
+	text-underline-offset: 3px;
+}
+.inline-link:hover {
+	text-decoration-color: var(--accent-ink);
+}
+.inline-link[aria-disabled="true"] {
+	cursor: progress;
+	color: var(--muted-foreground);
+}
+/* 设计 #states「模型回退」弹窗的 dl.facts 与 page-note（G-07）。 */
+.model-fallback-facts {
+	display: grid;
+	grid-template-columns: 150px minmax(0, 1fr);
+	gap: 10px 18px;
+	font-size: 13px;
+}
+.model-fallback-facts dt {
+	color: var(--muted-foreground);
+}
+.model-fallback-facts dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+.model-fallback-note {
+	margin-top: 16px;
+	color: var(--muted-ink);
+	font-size: 12px;
 }
 .chat-thread .composer-zone {
 	flex: none;
@@ -1063,13 +1619,19 @@
 	color: var(--muted-foreground);
 	font-size: 13px;
 }
+/* 列宽固定为面板内容宽：长标题不能把条目撑出面板，省略号才会生效（CH-09）。 */
 .conversation-history-list {
 	display: grid;
+	grid-template-columns: minmax(0, 1fr);
 	gap: 4px;
+}
+.conversation-history-list > li {
+	min-width: 0;
 }
 /* 设计 .history-item：标题单行省略，时间在前、「当前」在后。 */
 .conversation-history-item {
 	display: block;
+	min-width: 0;
 	min-height: 44px;
 	padding: 10px;
 	border-radius: 10px;
@@ -1093,6 +1655,246 @@
 .conversation-history-item[aria-current="page"] {
 	background: var(--surface-raised);
 	color: var(--fg);
+}
+/* 设计 .browser-capability：对话页唯一的浏览器卡（BR-01），阶段由 data-phase 表达。 */
+.browser-capability {
+	padding: 14px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface);
+}
+.browser-capability[data-phase="request"] {
+	border-color: color-mix(in oklch, var(--accent) 25%, var(--border));
+}
+.browser-capability[data-phase="handoff"] {
+	border-color: color-mix(in oklch, var(--warning) 28%, var(--border));
+	background: color-mix(in oklch, var(--warning) 3%, var(--surface));
+}
+.browser-capability:is(
+	[data-phase="denied"],
+	[data-phase="stopped"],
+	[data-phase="unknown"]
+) {
+	border-color: color-mix(in oklch, var(--danger) 24%, var(--border));
+}
+.browser-capability-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+.browser-capability-title {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	min-width: 0;
+}
+.browser-capability-icon {
+	display: grid;
+	place-items: center;
+	width: 30px;
+	height: 30px;
+	flex: none;
+	border-radius: 8px;
+	background: var(--surface-raised);
+	color: var(--accent);
+}
+.browser-capability-icon svg {
+	width: 16px;
+	height: 16px;
+}
+.browser-capability[data-phase="handoff"] .browser-capability-icon {
+	color: var(--warning);
+}
+.browser-capability:is(
+		[data-phase="denied"],
+		[data-phase="stopped"],
+		[data-phase="unknown"]
+	)
+	.browser-capability-icon {
+	color: var(--danger);
+}
+.browser-capability-title strong {
+	display: block;
+	font-size: 13px;
+	font-weight: 650;
+}
+.browser-capability-body {
+	margin-top: 3px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.55;
+	overflow-wrap: anywhere;
+}
+.browser-capability-status {
+	flex: none;
+}
+.browser-capability-meta {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 8px;
+	margin-top: 12px;
+}
+.browser-capability-meta > div {
+	min-width: 0;
+	padding: 9px;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	background: var(--surface-raised);
+}
+.browser-capability-meta dt {
+	color: var(--muted-foreground);
+	font-size: 10px;
+}
+.browser-capability-meta dd {
+	margin: 3px 0 0;
+	font-size: 12px;
+	font-weight: 700;
+	overflow-wrap: anywhere;
+}
+.browser-capability-timeline {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 12px;
+}
+.browser-capability-timeline li {
+	padding: 5px 8px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	color: var(--muted-foreground);
+	font-size: 11px;
+}
+.browser-capability-timeline li[data-active="true"] {
+	border-color: color-mix(in oklch, var(--accent) 32%, var(--border));
+	background: var(--accent-soft);
+	color: var(--fg);
+}
+.browser-capability-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 12px;
+}
+/* 设计 .chat-context-body .browser-capability：放进会话上下文条时去掉卡片外框。 */
+.chat-context-body .browser-capability {
+	margin: 12px 0 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+}
+/* 设计 .facts / .page-note：执行详情与浏览器操作记录弹窗的事实列表。 */
+.conversation-facts {
+	display: grid;
+	grid-template-columns: 150px minmax(0, 1fr);
+	/* 带 44px 复制按钮的 ID 行与标签按文字基线对齐。 */
+	align-items: baseline;
+	gap: 10px 18px;
+	margin-top: 15px;
+	font-size: 13px;
+}
+.conversation-facts dt {
+	color: var(--muted-foreground);
+}
+.conversation-facts dd {
+	min-width: 0;
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+.conversation-page-note {
+	margin-top: 16px;
+	color: var(--muted-ink);
+	font-size: 12px;
+}
+.execution-detail-section {
+	margin-top: 20px;
+}
+.execution-detail-section > h3,
+.browser-record-heading {
+	font-size: 13px;
+	font-weight: 650;
+}
+.execution-detail-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 12px;
+}
+.execution-detail-list {
+	display: grid;
+	gap: 10px;
+	margin-top: 8px;
+}
+.execution-detail-list > li {
+	min-width: 0;
+	padding-left: 12px;
+	border-left: 2px solid var(--border);
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+.execution-detail-meta {
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+.execution-detail-disclosure {
+	padding-inline: 8px;
+}
+.execution-detail-disclosure svg[data-open="true"] {
+	transform: rotate(180deg);
+}
+.browser-record-heading {
+	margin-top: 20px;
+}
+.browser-record-list {
+	margin-top: 8px;
+}
+.browser-record-list > li {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 10px 0;
+	border-top: 1px solid var(--border);
+}
+.browser-record-main {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+.browser-record-main strong {
+	color: var(--fg);
+	font-size: 13px;
+	font-weight: 650;
+}
+.browser-record-note {
+	margin-top: 8px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+@media (max-width: 767px) {
+	.browser-capability-meta {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.browser-capability-head {
+		display: block;
+	}
+	.browser-capability-status {
+		margin-top: 8px;
+	}
+	.conversation-facts {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 3px;
+	}
+	.conversation-facts dt {
+		margin-top: 8px;
+	}
+	.conversation-facts dd {
+		margin-bottom: 4px;
+	}
 }
 @media (max-width: 1023px) {
 	.conversation-history-toggle {
@@ -1150,14 +1952,12 @@
 		display: none;
 	}
 	/* 设计紧凑态：视口 ≤767 且 composer 宽 ≤440 时发送为 44×44 纯图标，可访问名称不变。 */
-	.composer-zone[data-compact="true"] [data-c02-send-button],
-	.composer-zone[data-compact="true"] .composer-stop {
+	.composer-zone[data-compact="true"] [data-c02-send-button] {
 		width: 44px;
 		height: 44px;
 		padding: 0;
 	}
-	.composer-zone[data-compact="true"] .composer-send-label,
-	.composer-zone[data-compact="true"] .composer-stop-label {
+	.composer-zone[data-compact="true"] .composer-send-label {
 		position: absolute;
 		width: 1px;
 		height: 1px;
@@ -1183,6 +1983,42 @@
 	}
 	.chat-message-body {
 		padding: 10px 12px;
+	}
+	/* 设计 ≤767：折叠条摘要 8px 10px；Connection 提示纵向排列、按钮整宽、范围行逐行显示。 */
+	.chat-disclosure-summary {
+		padding: 8px 10px;
+	}
+	.chat-context-body {
+		padding: 0 10px 10px;
+	}
+	.connection-notice {
+		display: block;
+	}
+	.connection-notice-action {
+		margin-top: 10px;
+	}
+	.connection-notice-action > a {
+		width: 100%;
+	}
+	.chat-context-body .connection-notice-scope {
+		display: block;
+	}
+	.chat-context-body .connection-notice-scope > * {
+		display: block;
+		margin-top: 2px;
+	}
+	.chat-context-body .connection-notice-scope > span {
+		margin-top: 0;
+	}
+	.model-fallback-facts {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 3px;
+	}
+	.model-fallback-facts dt {
+		margin-top: 8px;
+	}
+	.model-fallback-facts dd {
+		margin-bottom: 4px;
 	}
 }
 
@@ -1313,7 +2149,7 @@
 	.chat-thread:not([hidden]) {
 		gap: 6px;
 	}
-	/* 执行详情等替换对话列的内容在列内滚动，不撑出整页；对话视图本身恰好放下，不产生第二处滚动。 */
+	/* 浏览器卡、提示等额外内容在对话列内滚动，不撑出整页；对话视图本身恰好放下，不产生第二处滚动。 */
 	.conversation-columns > .chat-workspace {
 		overflow-y: auto;
 		overscroll-behavior: contain;
@@ -1323,17 +2159,12 @@
 		min-height: 80px;
 		padding-block: 8px;
 	}
-	/* 附件说明排在「添加附件」右侧，不单独占一行。 */
-	.composer-zone [data-testid="conversation-file-picker"] > div:first-child {
-		flex-wrap: nowrap;
+	/* 折叠条摘要保持一行：短视口省略「按需查看」提示，摘要内容与展开状态不变。 */
+	.chat-disclosure-hint {
+		display: none;
 	}
-	.composer-zone
-		[data-testid="conversation-file-picker"]
-		> div:first-child
-		> p {
-		flex: 1 1 0;
-		min-width: 0;
-		line-height: 1.4;
+	.chat-disclosure-toggle {
+		margin-left: auto;
 	}
 }
 /* 极短视口（如 320×370）：再压缩边距、输入框与工具栏，给时间线留出一条完整消息。 */
@@ -1361,15 +2192,50 @@
 	.composer-controls {
 		padding-block: 0;
 	}
-	.composer-zone
-		[data-testid="conversation-file-picker"]
-		> div:first-child
-		> p {
-		display: -webkit-box;
-		overflow: hidden;
-		font-size: 11px;
-		-webkit-box-orient: vertical;
-		-webkit-line-clamp: 2;
+	/* 两条折叠条并排成一行、摘要只留标题（失败时留简短提示），时间线仍放得下一条完整消息；
+	 * 展开任一条时恢复上下排列，由对话列滚动（CH-03、CH-11）。 */
+	.chat-thread:not([hidden]):has(> .chat-context):has(> .chat-files):not(
+		:has(> :is(.chat-context, .chat-files) > [aria-expanded="true"])
+	) {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		grid-template-rows: auto minmax(0, 1fr);
+		column-gap: 6px;
+	}
+	.chat-thread:not([hidden]):has(> .chat-context):has(> .chat-files):not(
+			:has(> :is(.chat-context, .chat-files) > [aria-expanded="true"])
+		)
+		> * {
+		grid-column: 1 / -1;
+		margin-top: 0;
+	}
+	.chat-thread:not([hidden]):has(> .chat-context):has(> .chat-files):not(
+			:has(> :is(.chat-context, .chat-files) > [aria-expanded="true"])
+		)
+		> .chat-context {
+		grid-column: 1;
+		grid-row: 1;
+	}
+	.chat-thread:not([hidden]):has(> .chat-context):has(> .chat-files):not(
+			:has(> :is(.chat-context, .chat-files) > [aria-expanded="true"])
+		)
+		> .chat-files {
+		grid-column: 2;
+		grid-row: 1;
+	}
+	.chat-thread:not([hidden]):has(> .chat-context):has(> .chat-files):not(
+			:has(> :is(.chat-context, .chat-files) > [aria-expanded="true"])
+		)
+		> .timeline {
+		grid-row: 2;
+	}
+	.chat-thread:not([hidden]):has(> .chat-context):has(> .chat-files)
+		.chat-disclosure-detail {
+		display: none;
+	}
+	.chat-thread:not([hidden]):has(> .chat-context):has(> .chat-files)
+		.chat-disclosure-compact {
+		display: inline;
 	}
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1462,7 +2328,8 @@ body {
 	display: flex;
 	align-items: end;
 	justify-content: space-between;
-	flex-wrap: wrap;
+	/* 设计 .page-head 不换行，只在 ≤767px 变为纵向（W-05）。 */
+	flex-wrap: nowrap;
 	gap: 24px;
 	margin-bottom: 28px;
 }
@@ -1487,6 +2354,11 @@ body {
 	letter-spacing: 0.08em;
 	color: var(--muted-foreground);
 	margin-bottom: 8px;
+}
+/* 设计 .page-head-copy .eyebrow：margin 0 0 9px，不继承 .page-heading p 的上外边距。 */
+.ia-workbench .page-heading .workbench-eyebrow,
+.ia-agent-directory .page-heading .page-eyebrow {
+	margin: 0 0 9px;
 }
 .workbench-overview {
 	display: grid;
@@ -1543,10 +2415,6 @@ body {
 .workbench-agent-grid {
 	grid-template-columns: repeat(3, minmax(0, 1fr));
 }
-.workbench-overview .workbench-grid {
-	grid-template-columns: minmax(0, 1fr);
-	gap: 0;
-}
 .workbench-card {
 	display: flex;
 	flex-direction: column;
@@ -1568,35 +2436,6 @@ body {
 .workbench-card a {
 	margin-top: auto;
 }
-.workbench-overview .workbench-card {
-	border: 0;
-	border-radius: 0;
-	padding: 15px 0;
-}
-.workbench-overview .workbench-card + .workbench-card {
-	border-top: 1px solid var(--border);
-}
-.workbench-overview .workbench-card:first-child {
-	padding-top: 0;
-}
-.workbench-overview .workbench-card:last-child {
-	padding-bottom: 0;
-}
-.workbench-overview .workbench-recent-row {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto;
-	align-items: center;
-	gap: 6px 16px;
-}
-.workbench-recent-copy {
-	min-width: 0;
-	display: grid;
-	justify-items: start;
-	gap: 6px;
-}
-.workbench-recent-row > a {
-	margin: 0;
-}
 .workbench-applications {
 	display: grid;
 	gap: 0;
@@ -1605,48 +2444,83 @@ body {
 	border-radius: 14px;
 	background: var(--surface);
 }
-.workbench-applications .workbench-card {
-	border: 0;
-	border-radius: 0;
+/* 设计 .list / .list-row：最近对话、待处理与我的申请共用的行布局（W-04）。 */
+.workbench-list {
+	display: grid;
+	gap: 0;
+	min-width: 0;
+}
+.workbench-list-row {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	min-width: 0;
 	padding: 15px 0;
+	border-bottom: 1px solid var(--border);
 }
-.workbench-applications .workbench-card + .workbench-card {
-	border-top: 1px solid var(--border);
-}
-.workbench-applications .workbench-card:first-child {
+.workbench-list-row:first-child {
 	padding-top: 0;
 }
-.workbench-applications .workbench-card:last-child {
+.workbench-list-row:last-child {
 	padding-bottom: 0;
+	border-bottom: 0;
+}
+.workbench-list-main {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+.workbench-list-main h3 {
+	font-size: 14px;
+	font-weight: 700;
+	line-height: 1.65;
+	overflow-wrap: anywhere;
+}
+.workbench-list-main small {
+	display: block;
+	margin-top: 3px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.65;
+	overflow-wrap: anywhere;
+}
+.workbench-list-main [data-slot="alert"] {
+	margin-top: 8px;
+}
+.workbench-list-side {
+	display: flex;
+	flex: none;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+}
+.workbench-tag-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+/* Agent 列表读取中的状态占位：与 chip 同高，不含文字，读屏忽略（R4-03）。 */
+.workbench-chip-placeholder {
+	display: block;
+	width: 56px;
+	height: 26px;
+	border-radius: 999px;
+	background: color-mix(in oklch, var(--foreground) 6%, transparent);
+}
+/* 待处理的管理员与本人两个分组之间延续同一条行分隔线。 */
+.workbench-task-lists > .workbench-list + .workbench-list {
+	margin-top: 15px;
+	padding-top: 15px;
+	border-top: 1px solid var(--border);
+}
+.workbench-login-notice {
+	margin-bottom: 20px;
 }
 .workbench-agent-tags {
 	display: flex;
 	gap: 6px;
 	flex-wrap: wrap;
-}
-.workbench-recent-row h3,
-.workbench-application-row h3 {
-	font-size: 14px;
-}
-
-.workbench-application-row {
-	flex-direction: row;
-	align-items: center;
-	justify-content: space-between;
-	gap: 16px;
-}
-.workbench-application-copy {
-	min-width: 0;
-}
-.workbench-application-title {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 10px;
-	margin-bottom: 6px;
-}
-.workbench-application-row a {
-	margin: 0;
 }
 .workbench-agent-top {
 	display: flex;
@@ -1677,21 +2551,56 @@ body {
 }
 .ia-agent-directory .directory-section-head {
 	display: flex;
-	align-items: center;
+	align-items: end;
 	justify-content: space-between;
 	gap: 18px;
 	margin-bottom: 14px;
 }
+.ia-agent-directory .directory-section-head > div {
+	min-width: 0;
+}
+.ia-agent-directory .directory-section-description {
+	margin-top: 4px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
 .ia-agent-directory .directory-card h3 {
 	font-size: 17px;
+	font-weight: 650;
 	line-height: 1.4;
 }
 .ia-agent-directory .directory-card p {
 	font-size: 13px;
 	line-height: 1.65;
 }
+/* 设计卡片底部 .list-row：无上边线，左侧 Owner 与模型两行，右侧操作（A-04）。 */
 .ia-agent-directory .directory-card-foot {
+	display: flex;
+	align-items: flex-start;
 	justify-content: space-between;
+	gap: 16px;
+	min-width: 0;
+	padding-top: 14px;
+}
+.directory-card-foot-main {
+	min-width: 0;
+}
+.directory-card-foot-main small {
+	display: block;
+	margin-top: 3px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.65;
+	overflow-wrap: anywhere;
+}
+.directory-card-foot-side {
+	display: flex;
+	flex: none;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	max-width: 100%;
 }
 /* Forms retain their fieldsets, labels, feedback and real server operations. */
 .management-content .form-layout > div:first-child {
@@ -1728,15 +2637,24 @@ body {
 }
 
 /* Agent detail keeps projected metadata and owner-only navigation separate. */
-.agent-detail-back {
-	margin-bottom: 16px;
+/* 设计 .page-head-copy：返回按钮在文案块内第一项，Agent 标识行在其下 16px（D-02）。 */
+.agent-detail-copy {
+	display: grid;
+	justify-items: start;
+	flex: 1 1 auto;
+	min-width: 0;
+	max-width: 720px;
 }
 .agent-detail-heading {
 	display: flex;
 	align-items: start;
 	gap: 16px;
 	min-width: 0;
-	flex: 1;
+	margin-top: 16px;
+}
+.agent-detail .agent-detail-actions {
+	gap: 8px;
+	margin-top: 16px;
 }
 .agent-detail-grid {
 	display: grid;
@@ -1775,7 +2693,113 @@ body {
 	align-items: end;
 }
 .agent-detail .status-line {
+	gap: 6px;
 	padding: 0 0 32px;
+}
+/* 设计 .connection-notice：needs-auth / handoff 两态，另有无入口的 unavailable（D-01）。 */
+.connection-notice {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 14px;
+	padding: 13px 14px;
+	border: 1px solid color-mix(in oklch, var(--accent) 24%, var(--border));
+	border-radius: 12px;
+	background: color-mix(in oklch, var(--accent) 4%, var(--surface));
+}
+.connection-notice[data-state="handoff"] {
+	border-color: color-mix(in oklch, var(--warning) 26%, var(--border));
+	background: color-mix(in oklch, var(--warning) 4%, var(--surface));
+}
+.connection-notice[data-state="unavailable"] {
+	border-color: var(--border);
+	background: var(--surface);
+}
+.connection-notice-main {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	min-width: 0;
+}
+.connection-notice-icon {
+	display: grid;
+	place-items: center;
+	width: 30px;
+	height: 30px;
+	flex: none;
+	border-radius: 8px;
+	background: var(--surface);
+	color: var(--accent);
+}
+.connection-notice-icon svg {
+	width: 16px;
+	height: 16px;
+}
+.connection-notice[data-state="handoff"] .connection-notice-icon {
+	color: var(--warning);
+}
+.connection-notice[data-state="unavailable"] .connection-notice-icon {
+	color: var(--muted-foreground);
+}
+.connection-notice-copy {
+	min-width: 0;
+}
+.connection-notice-copy strong {
+	display: block;
+	font-size: 13px;
+	font-weight: 650;
+}
+.agent-detail .connection-notice-copy p {
+	margin-top: 3px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.6;
+	overflow-wrap: anywhere;
+}
+.connection-notice-scope {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	margin-top: 8px;
+	padding-top: 8px;
+	border-top: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+	font-size: 11px;
+}
+.connection-notice-scope span {
+	flex: none;
+	color: var(--muted-foreground);
+}
+.connection-notice-copy .connection-notice-scope strong {
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.connection-notice-scope small {
+	color: var(--muted-foreground);
+	font-size: smaller;
+	overflow-wrap: anywhere;
+}
+.connection-notice-action {
+	flex: none;
+}
+.connection-notice-action > a {
+	min-height: 40px;
+}
+@media (max-width: 767px) {
+	.connection-notice {
+		display: block;
+	}
+	.connection-notice-action {
+		margin-top: 10px;
+	}
+	/* DESIGN.md：390px 下跳转按钮整宽并保持 44px 触控高度。 */
+	.connection-notice-action > a {
+		width: 100%;
+		min-height: 44px;
+	}
+	.agent-detail .agent-detail-back {
+		margin-top: 16px;
+	}
 }
 
 @media (max-width: 1023px) {
@@ -1790,16 +2814,12 @@ body {
 	.agent-detail-grid {
 		grid-template-columns: minmax(0, 1fr);
 	}
-	.ia-workbench .page-heading,
 	.ia-agent-directory .page-heading {
 		flex-direction: column;
 		align-items: start;
 	}
 	.ia-agent-directory .directory-search {
 		width: 100%;
-	}
-	.workbench-application-row {
-		flex-wrap: wrap;
 	}
 }
 @media (max-width: 767px) {
@@ -1811,7 +2831,14 @@ body {
 	}
 	.ia-workbench .workbench-section-head,
 	.ia-agent-directory .directory-section-head {
-		align-items: start;
+		align-items: flex-start;
+	}
+	.ia-agent-directory .directory-card-foot {
+		display: block;
+	}
+	.directory-card-foot-side {
+		justify-content: flex-start;
+		margin-top: 10px;
 	}
 	.workbench-section-head h2,
 	.ia-agent-directory .directory-section-head h2 {
@@ -1921,15 +2948,46 @@ body {
 	padding-bottom: 0;
 	border-bottom: 0;
 }
+/* 设计侧栏 .list-row：名称 + 12px 说明，状态 chip 在右侧（D-04）。 */
+.agent-detail-aside .detail-list li {
+	flex-wrap: nowrap;
+	align-items: flex-start;
+	gap: 16px;
+}
+.detail-list-main {
+	min-width: 0;
+}
+.detail-list-main strong {
+	display: block;
+	overflow-wrap: anywhere;
+}
+.detail-list-main small {
+	display: block;
+	margin-top: 3px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.65;
+	overflow-wrap: anywhere;
+}
+@media (max-width: 767px) {
+	.agent-detail-aside .detail-list li {
+		display: block;
+	}
+	/* 侧栏里的 li 只有 .detail-list 行；不叠加 .detail-list，免得特异性高于后面 Skill 行的徽章规则。 */
+	.agent-detail-aside li > [data-slot="badge"] {
+		margin-top: 10px;
+	}
+}
 @media (max-width: 767px) {
 	.workbench-grid {
 		grid-template-columns: minmax(0, 1fr);
 	}
-	.workbench-overview .workbench-recent-row {
-		grid-template-columns: minmax(0, 1fr);
+	.workbench-list-row {
+		display: block;
 	}
-	.workbench-recent-row > a {
-		justify-self: start;
+	.workbench-list-side {
+		justify-content: flex-start;
+		margin-top: 10px;
 	}
 	.agent-detail dl {
 		grid-template-columns: minmax(0, 1fr);
@@ -1962,6 +3020,7 @@ body {
 .skill-page .page-heading > div:first-child p {
 	max-width: 58ch;
 }
+/* 设计 .skill-actions 是全局类：Skill 页操作区与对话时间线里调用回执后的「停止回复」共用。 */
 .skill-actions {
 	display: flex;
 	flex-wrap: wrap;
@@ -2381,40 +3440,6 @@ body {
 .workbench-attention .workbench-section-head {
 	margin-bottom: 2px;
 }
-.workbench-task-group {
-	min-width: 0;
-}
-.workbench-task-row {
-	display: flex;
-	align-items: start;
-	justify-content: space-between;
-	gap: 16px;
-	padding: 15px 0;
-	border-bottom: 1px solid var(--border);
-}
-.workbench-task-row > div {
-	min-width: 0;
-	flex: 1;
-}
-.workbench-task-row:last-child {
-	padding-bottom: 0;
-	border-bottom: 0;
-}
-.workbench-task-row h3 {
-	font-size: 14px;
-	font-weight: 650;
-}
-.ia-workbench .workbench-task-row p {
-	margin-top: 3px;
-	font-size: 12px;
-	color: var(--muted-foreground);
-}
-.workbench-task-item + .workbench-task-item {
-	margin-top: 10px;
-}
-.workbench-task-item a {
-	margin-top: 6px;
-}
 
 [data-slot="button"]:focus-visible,
 [class~="group/button"]:focus-visible,
@@ -2517,6 +3542,10 @@ body {
 	font-size: 14px;
 	font-weight: 650;
 	line-height: 1.65;
+}
+/* 设计 .list-row strong：我的 Agent 申请行标题 14px / 700。 */
+.management-content .application-row h2 {
+	font-weight: 700;
 }
 .management-content .application-row p,
 .application-progress small {
@@ -3108,8 +4137,7 @@ body {
 	font-size: 13px;
 	font-weight: 650;
 }
-.management-content .wecom-qr-head p,
-.management-content .wecom-qr-hint {
+.management-content .wecom-qr-head p {
 	margin-top: 3px;
 	color: var(--muted-foreground);
 	font-size: 11px;
@@ -3147,6 +4175,260 @@ body {
 	flex-wrap: wrap;
 	gap: 7px;
 	margin-top: 12px;
+}
+/* Owner 配置：带右侧 chip / 入口的分区标题（设计 .section-head，G-08、O-02）。 */
+.configuration-section-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: end;
+	justify-content: space-between;
+	gap: 18px;
+}
+/* 设计 .section-head 下方 14px；分区只有标题行（Skill）时用内边距，保持分区之间只有一条线的节奏。 */
+.configuration-section-head:last-child {
+	padding-bottom: 14px;
+}
+/* 设计 .field-row：环境变量行与 Secret 只读行（O-10）。 */
+.configuration-field-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+	gap: 10px;
+	align-items: end;
+}
+/* 设计 .field-row 紧跟分区说明，没有上外边距；Secret 行上距 12px。 */
+.configuration-environment-rows,
+.configuration-secret-rows {
+	display: grid;
+	gap: 12px;
+}
+.configuration-secret-rows {
+	margin-top: 12px;
+}
+.configuration-section-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 12px;
+}
+/* 模型与凭证（RK2-07）：选择器是分区内容，没有自己的边线与 legend。 */
+.configuration-model-content {
+	display: grid;
+	gap: 15px;
+	margin-top: 16px;
+}
+.configuration-model-summary {
+	display: grid;
+	gap: 4px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+.keyless-model-picker {
+	display: grid;
+	gap: 12px;
+	min-width: 0;
+}
+.keyless-model-description {
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+.keyless-model-list {
+	display: grid;
+	gap: 4px;
+}
+.keyless-level-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 22px;
+	padding-left: 26px;
+}
+.keyless-model-default {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+}
+/* Agent 默认 Relay Key（设计 .relay-key-summary .facts，G-08）。 */
+.configuration-facts {
+	display: grid;
+	grid-template-columns: 150px minmax(0, 1fr);
+	gap: 10px 18px;
+	margin-top: 15px;
+	font-size: 13px;
+}
+.configuration-facts dt {
+	color: var(--muted-foreground);
+}
+.configuration-facts dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+.configuration-relay-key-notice {
+	margin-top: 15px;
+}
+.agent-configuration [data-od-id="owner-default-relay-key"] .card-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-top: 16px;
+}
+@media (max-width: 767px) {
+	.configuration-section-head {
+		align-items: flex-start;
+	}
+	.configuration-field-row,
+	.keyless-model-default {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.configuration-facts {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 3px;
+	}
+	.configuration-facts dt {
+		margin-top: 8px;
+	}
+	.configuration-facts dd {
+		margin-bottom: 4px;
+	}
+}
+/* Agent 的 Skill 页（设计 #agent-skills .skill-page，O-02）。 */
+/* 设计 .skill-page .page-head{display:block}：操作在副标题下方。 */
+.management-content .agent-skill-heading {
+	display: block;
+	margin-top: 16px;
+}
+.management-content .agent-skill-bindings h1 {
+	font-size: clamp(27px, 3vw, 34px);
+	letter-spacing: 0;
+}
+.agent-skill-heading-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 14px;
+}
+.agent-skill-notice {
+	margin-top: 16px;
+}
+.agent-skill-empty,
+.skill-binding-card {
+	margin-top: 32px;
+}
+.skill-binding-card {
+	min-width: 0;
+	padding: 20px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--surface);
+}
+.skill-binding-head {
+	display: flex;
+	align-items: end;
+	justify-content: space-between;
+	gap: 18px;
+}
+.management-content .skill-binding-head p {
+	margin-top: 4px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+.quiet-pill {
+	display: inline-flex;
+	max-width: 100%;
+	padding: 3px 8px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	color: var(--muted-foreground);
+	font-size: 11px;
+	vertical-align: middle;
+	overflow-wrap: anywhere;
+}
+.sync-stages {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 7px;
+	margin: 18px 0 0;
+	padding: 0;
+	list-style: none;
+}
+.sync-stage {
+	min-width: 0;
+	padding: 10px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface-raised);
+	color: var(--muted-foreground);
+	font-size: 11px;
+}
+.sync-stage[data-current] {
+	border-color: var(--muted-foreground);
+}
+.sync-stage[data-failed] {
+	border-color: var(--danger);
+	color: var(--danger-ink);
+}
+.sync-stage strong {
+	display: block;
+	margin-top: 3px;
+	color: var(--foreground);
+	font-size: 12px;
+	font-weight: 550;
+}
+.skill-binding-error {
+	margin-top: 6px;
+	color: var(--danger-ink);
+	font-size: 12px;
+	line-height: 1.5;
+}
+.skill-binding-card .skill-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-top: 12px;
+}
+.skill-bind-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	align-items: end;
+	gap: 14px;
+	margin-top: 16px;
+}
+.skill-bind-submit {
+	display: grid;
+	justify-items: start;
+	gap: 7px;
+}
+.skill-bind-help {
+	color: var(--muted-ink);
+	font-size: 11px;
+}
+.skill-binding-facts {
+	display: grid;
+	grid-template-columns: 100px minmax(0, 1fr);
+	gap: 10px 18px;
+	font-size: 13px;
+}
+.skill-binding-facts dt {
+	color: var(--muted-foreground);
+}
+.skill-binding-facts dd {
+	margin: 0;
+}
+@media (max-width: 767px) {
+	.agent-skill-empty,
+	.skill-binding-card {
+		margin-top: 26px;
+	}
+	.skill-binding-head {
+		align-items: flex-start;
+	}
+	.sync-stages {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+	.skill-bind-grid,
+	.skill-binding-facts {
+		grid-template-columns: minmax(0, 1fr);
+	}
 }
 @media (max-width: 767px) {
 	.configuration-form-card {
