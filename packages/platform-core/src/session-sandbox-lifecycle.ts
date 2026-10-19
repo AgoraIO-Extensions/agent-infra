@@ -157,6 +157,15 @@ export function planSessionSandboxManagementTransitionV1(input: {
 	};
 }
 
+/**
+ * #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源：记录了 deployment，却没有模型投影。
+ * 当时不创建 Runtime Secret，所以不要求来源记录过 Secret（#2885）。之后缺模型投影的 prepare
+ * 在任何写入之前失败；来源记录过的每个资源（包括 Secret）仍要逐个证明已删除。
+ */
+function isPreparedWithoutModelProjectionV1(source: SessionSandboxSourceV1) {
+	return source.deployment != null && source.modelProjection == null;
+}
+
 /** Only a complete per-object stop proof may replace the saved source identities. */
 export function decideSessionSandboxDrainObservationV1(input: {
 	readonly sandbox: SessionSandboxBindingV1;
@@ -241,6 +250,7 @@ export function decideSessionSandboxDrainObservationV1(input: {
 				desiredState: "running",
 			},
 			{ ...source.observation, status: "ready" },
+			{ runtimeSecret: !isPreparedWithoutModelProjectionV1(source) },
 		)
 	)
 		return unknown();

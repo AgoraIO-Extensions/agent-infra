@@ -226,6 +226,9 @@ export function isSessionSandboxObservationValidV1(
 		"sandbox" | "policy" | "desiredState"
 	>,
 	observation: SessionSandboxObservationV1,
+	// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源从未创建 Runtime Secret；
+	// 只有排空判定这类来源是否完整时才传 false，其余就绪判定始终要求 Secret（#2885）。
+	options: { readonly runtimeSecret?: boolean } = {},
 ): boolean {
 	if (
 		!observation ||
@@ -276,7 +279,11 @@ export function isSessionSandboxObservationValidV1(
 		);
 		return (
 			claim.desiredState === "running" &&
-			[...required].every((kind) => seen.has(kind)) &&
+			[...required].every(
+				(kind) =>
+					seen.has(kind) ||
+					(kind === "Secret" && options.runtimeSecret === false),
+			) &&
 			pod?.controllerUid === controller?.uid
 		);
 	}
