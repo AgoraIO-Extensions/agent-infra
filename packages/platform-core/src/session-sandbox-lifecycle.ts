@@ -242,18 +242,6 @@ export function decideSessionSandboxDrainObservationV1(input: {
 		!Array.isArray(observation.resources)
 	)
 		return unknown();
-	if (
-		!isSessionSandboxObservationValidV1(
-			{
-				sandbox: source.sandbox,
-				policy: source.policy,
-				desiredState: "running",
-			},
-			{ ...source.observation, status: "ready" },
-			{ runtimeSecret: !isPreparedWithoutModelProjectionV1(source) },
-		)
-	)
-		return unknown();
 	const prior = source.observation.resources;
 	const sameIdentity = (
 		old: SessionSandboxResourceIdentityV1,
@@ -266,6 +254,46 @@ export function decideSessionSandboxDrainObservationV1(input: {
 		old.uid === current.uid &&
 		typeof current.resourceVersion === "string" &&
 		!!current.resourceVersion.trim();
+	// #2917：上一轮排空已完成、只剩 PVC 的沙箱被管理转换重新当作来源时，没有需要删除的
+	// 资源；停止证明只需证明保留的仍是来源记录的同一 PVC。
+	if (source.observation.status === "stopped") {
+		const [stoppedPVC] = prior;
+		if (
+			prior.length !== 1 ||
+			stoppedPVC?.kind !== "PersistentVolumeClaim" ||
+			!isSessionSandboxObservationValidV1(
+				{
+					sandbox: source.sandbox,
+					policy: source.policy,
+					desiredState: "stopped",
+				},
+				source.observation,
+			) ||
+			receipt.removed.length !== 0 ||
+			!sameIdentity(stoppedPVC, receipt.retainedPVC) ||
+			observation.resources.length !== 1 ||
+			!sameIdentity(receipt.retainedPVC, observation.resources[0])
+		)
+			return unknown();
+		return {
+			status: "stopped" as const,
+			observation,
+			finished: true,
+			stopReceipt: receipt,
+		};
+	}
+	if (
+		!isSessionSandboxObservationValidV1(
+			{
+				sandbox: source.sandbox,
+				policy: source.policy,
+				desiredState: "running",
+			},
+			{ ...source.observation, status: "ready" },
+			{ runtimeSecret: !isPreparedWithoutModelProjectionV1(source) },
+		)
+	)
+		return unknown();
 	const pvc = prior.find(
 		(resource) => resource.kind === "PersistentVolumeClaim",
 	);
