@@ -18,6 +18,7 @@ import {
 	type ConversationRuntimeEventV1,
 	type ConversationRuntimeHostPortV1,
 	type ConversationRuntimeOperationEventV2,
+	type ConversationRuntimeReasoningEventV2,
 	createConversationDispatchUseCaseV1,
 	decideConversationDispatchRetryTransitionV1,
 	decideConversationStopConfirmationStatusV1,
@@ -1890,6 +1891,76 @@ describe("Conversation Worker dispatch", () => {
 			);
 			expect(acknowledged).toEqual(["cursor-10"]);
 		});
+
+		const reasoning = (
+			sequence: number,
+			kind: "raw" | "summary",
+		): ConversationRuntimeReasoningEventV2 => ({
+			...text(sequence),
+			schemaVersion: 2,
+			type: "reasoning",
+			payload: { kind, delta: `thought ${sequence}` },
+		});
+
+		it("persists plain reasoning deltas in Runtime order with the reply's single ACK (#2979)", async () => {
+			const { runtimeHost, acknowledged } = host(async function* () {
+				yield runtimeEvent(1, "running");
+				yield reasoning(2, "raw");
+				yield text(3);
+				yield reasoning(4, "summary");
+				yield runtimeEvent(5);
+			});
+			const h = setup({ runtimeHost });
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+			expect(
+				h.events.persisted.slice(1, 4).map((command) => command.event),
+			).toEqual([
+				{ type: "reasoning.delta", kind: "raw", text: "thought 2" },
+				{ type: "text.delta", text: "part 3" },
+				{ type: "reasoning.delta", kind: "summary", text: "thought 4" },
+			]);
+			expect(
+				h.events.persisted
+					.filter((command) => command.event.type === "reasoning.delta")
+					.map((command) => [command.adapterEventKey, command.transition]),
+			).toEqual([
+				["event-2", undefined],
+				["event-4", undefined],
+			]);
+			expect(acknowledged).toEqual(["cursor-5"]);
+		});
+
+		it.each([
+			["an unknown kind", { kind: "encrypted", delta: "opaque" }],
+			["an empty delta", { kind: "raw", delta: "" }],
+			["an oversized delta", { kind: "raw", delta: "x".repeat(65_537) }],
+			[
+				"an extra field",
+				{ kind: "raw", delta: "thought", encrypted_content: "opaque" },
+			],
+			["a missing kind", { delta: "thought" }],
+		])(
+			"fails closed for a reasoning delta with %s without persisting or acknowledging it (#2979)",
+			async (_name, payload) => {
+				const { runtimeHost, acknowledged } = host(async function* () {
+					yield runtimeEvent(1, "running");
+					yield text(2);
+					yield { ...reasoning(3, "raw"), payload };
+					yield runtimeEvent(4);
+				});
+				const h = setup({ runtimeHost });
+				const result = await dispatch(h.useCase);
+				expect(result.outcome).not.toBe("accepted");
+				expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual([
+					"cursor-1",
+					"cursor-2",
+				]);
+				expect(acknowledged).not.toContain("cursor-3");
+				expect(acknowledged).not.toContain("cursor-4");
+			},
+		);
 
 		it("acknowledges a tool fact before the Runtime is asked for more events", async () => {
 			const seen: number[] = [];

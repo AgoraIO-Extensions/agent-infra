@@ -2869,6 +2869,138 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the pinned reasoning events in their reviewed hosts (#2979)", async () => {
+		type Schema = Record<string, unknown>;
+		type Document = { components: { schemas: Record<string, Schema> } };
+		const persisted = {
+			$ref: "#/components/schemas/PersistedConversationEventV2",
+		};
+		const cases = [
+			{
+				artifact: "runtime-host.v3",
+				name: "RuntimeReasoningEventV2",
+				unionHosts: ["RuntimeEvent"],
+				itemHosts: [] as string[],
+			},
+			{
+				artifact: "pilot-browser.v2",
+				name: "ReasoningDeltaEventV2",
+				unionHosts: ["ConversationSseMessageV2"],
+				itemHosts: [
+					"ConversationDetailProjectionV2",
+					"ExecutionDetailProjectionV2",
+				],
+			},
+		];
+		// 独立实现的反向变换：去掉新增 Schema，把宿主还原为基线形状。
+		const collapse = (value: unknown, ref: string): unknown => {
+			if (
+				JSON.stringify(value) ===
+				JSON.stringify({ anyOf: [persisted, { $ref: ref }] })
+			)
+				return structuredClone(persisted);
+			if (Array.isArray(value)) return value.map((item) => collapse(item, ref));
+			if (value !== null && typeof value === "object")
+				return Object.fromEntries(
+					Object.entries(value).map(([key, item]) => [
+						key,
+						collapse(item, ref),
+					]),
+				);
+			return value;
+		};
+		const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-2979-"));
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			for (const item of cases) {
+				const ref = `#/components/schemas/${item.name}`;
+				const current = JSON.parse(
+					await readFile(
+						new URL(
+							`../artifacts/openapi/${item.artifact}.openapi.json`,
+							import.meta.url,
+						),
+						"utf8",
+					),
+				) as Document;
+				const previous = structuredClone(current);
+				const schemas = previous.components.schemas;
+				delete schemas[item.name];
+				for (const host of item.unionHosts) {
+					const options = schemas[host]?.anyOf as Schema[];
+					schemas[host] = {
+						...schemas[host],
+						anyOf: options.filter((option) => option.$ref !== ref),
+					};
+				}
+				for (const host of item.itemHosts)
+					schemas[host] = collapse(schemas[host], ref) as Schema;
+				// 基线确实缺少该事件，且反向变换后不再引用它。
+				expect(JSON.stringify(previous)).not.toContain(JSON.stringify(ref));
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				const component = (document: Document) =>
+					document.components.schemas[item.name] as {
+						properties: {
+							payload: {
+								properties: Record<string, Schema>;
+								additionalProperties?: boolean;
+							};
+						};
+					};
+				const textField =
+					item.name === "RuntimeReasoningEventV2" ? "delta" : "text";
+				for (const mutate of [
+					(document: Document) => {
+						component(document).properties.payload.properties.encrypted = {
+							type: "string",
+						};
+					},
+					(document: Document) => {
+						component(document).properties.payload.properties.kind = {
+							enum: ["raw", "summary", "encrypted"],
+							type: "string",
+						};
+					},
+					(document: Document) => {
+						component(document).properties.payload.additionalProperties = true;
+					},
+					(document: Document) => {
+						const field =
+							component(document).properties.payload.properties[textField];
+						if (field) delete field.minLength;
+					},
+					(document: Document) => {
+						// 宿主缺少新增选项时不放行未被引用的新 Schema。
+						const host = document.components.schemas[
+							item.unionHosts[0] as string
+						] as { anyOf: Schema[] };
+						host.anyOf = host.anyOf.filter((option) => option.$ref !== ref);
+					},
+					(document: Document) => {
+						// 新增事件不能借道其他 Schema 出现。
+						const other =
+							item.name === "RuntimeReasoningEventV2"
+								? "RuntimeEventV2"
+								: "SseEventIdV1";
+						document.components.schemas[other] = {
+							anyOf: [document.components.schemas[other], { $ref: ref }],
+						};
+					},
+				]) {
+					const changed = structuredClone(current);
+					mutate(changed);
+					await writeFile(currentPath, JSON.stringify(changed));
+					expect(comparePaths(currentPath, previousPath).status).toBe(1);
+				}
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("accepts only the reviewed custom Agent model selection additions", async () => {
 		type OpenApiDocument = {
 			components: {
@@ -3805,6 +3937,8 @@ describe("contract compatibility command", () => {
 			"NativeCapabilityInvocationRequestV1",
 			"NativeCapabilityInvocationResponseV1",
 			"NativeCapabilityInvocationResultV1",
+			// 该基线早于 #2979 的思考过程事件。
+			"ReasoningDeltaEventV2",
 		])
 			delete previous.components.schemas[name];
 		const directory = await mkdtemp(

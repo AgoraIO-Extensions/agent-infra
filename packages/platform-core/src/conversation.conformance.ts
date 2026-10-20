@@ -1200,6 +1200,9 @@ const eventFixture = {
 
 const normalizedEventFixtures = [
 	{ type: "text.delta", text: "bounded text fixture" },
+	// #2979：思考过程与正文同为 Runtime 来源的会话内容，各自占用游标。
+	{ type: "reasoning.delta", kind: "raw", text: "bounded reasoning fixture" },
+	{ type: "reasoning.delta", kind: "summary", text: "bounded summary fixture" },
 	{ type: "execution.status", status: "processing" },
 	{
 		type: "execution.detail",
@@ -1279,17 +1282,17 @@ export function conversationEventConformanceV1(
 				expect(persisted.map(({ event }) => event)).toEqual(
 					normalizedEventFixtures,
 				);
-				expect(persisted.map(({ sequence }) => sequence)).toEqual([
-					1, 2, 3, 4, 5,
-				]);
+				const count = normalizedEventFixtures.length;
+				const positions = normalizedEventFixtures.map((_, index) => index + 1);
+				expect(persisted.map(({ sequence }) => sequence)).toEqual(positions);
 				expect(
 					persisted.map(({ conversationCursor }) => conversationCursor),
-				).toEqual([1, 2, 3, 4, 5]);
+				).toEqual(positions);
 				expect(await harness.snapshot()).toEqual({
-					events: 5,
-					conversationCursor: 5,
-					executionSequence: 5,
-					runtimeCursor: "runtime_normalized_fixture_5",
+					events: count,
+					conversationCursor: count,
+					executionSequence: count,
+					runtimeCursor: `runtime_normalized_fixture_${count}`,
 				});
 			} finally {
 				await harness.close();

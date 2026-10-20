@@ -9,7 +9,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "../../components/ui/dialog.js";
-import type { PersistedConversationEventV2 } from "../../pilot/generated-v2/types.gen.js";
+import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
 
 export type ModelOptionName = Readonly<{
 	optionId: string;
@@ -33,7 +33,7 @@ export const removedModelOptionLabel = "已删除的模型选项";
  * 都没有时为「未提供」；任何情况下都不显示不透明的 modelOptionId。
  */
 export function modelFallbacks(
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	options: readonly ModelOptionName[],
 ): ReadonlyMap<string, ModelFallback> {
 	const result = new Map<string, ModelFallback>();

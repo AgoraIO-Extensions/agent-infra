@@ -81,6 +81,7 @@ export {
 	type ConversationRuntimeOperationEventV2,
 	type ConversationRuntimeOperationResponseV1,
 	type ConversationRuntimeOperationResultV1,
+	type ConversationRuntimeReasoningEventV2,
 	type ConversationRuntimeStatusRequestV2,
 	type ConversationRuntimeStatusResponseV2,
 	type ConversationRuntimeStatusV1,

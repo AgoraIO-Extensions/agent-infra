@@ -3,6 +3,7 @@ import { createDocument } from "zod-openapi";
 
 import { ExecutionDetailProjectionV1Schema } from "../../src/pilot/browser.js";
 import {
+	ConversationDetailProjectionV2Schema,
 	ConversationSseMessageV2Schema,
 	ExecutionDetailProjectionV2Schema,
 	ExecutionOperationEventV2Schema,
@@ -15,6 +16,10 @@ import {
 	ConversationSseMessageV1Schema,
 	framePilotSseMessageV1,
 } from "../../src/pilot/sse.js";
+import {
+	TaskProjectionV1Schema,
+	TaskSseMessageV1Schema,
+} from "../../src/pilot/task.js";
 import { RuntimeOperationFactV2Schema } from "../../src/runtime/events-v2.js";
 
 const original = {
@@ -203,6 +208,82 @@ describe("Pilot mixed-version operation contracts", () => {
 					payload,
 				}).success,
 			).toBe(false);
+	});
+
+	it("adds reasoning deltas only to V2 conversation reads and keeps V1 and tasks strict (#2979)", () => {
+		const reasoning = {
+			...original,
+			schemaVersion: 2,
+			eventId: "reasoning-event",
+			sequence: 3,
+			conversationCursor: "cursor-3",
+			type: "reasoning.delta",
+			payload: { kind: "raw", text: "Synthetic thought" },
+		} as const;
+		expect(ConversationSseMessageV2Schema.parse(reasoning)).toEqual(reasoning);
+		expect(framePilotSseMessageV2(reasoning)).toEqual({
+			id: "reasoning-event",
+			data: reasoning,
+		});
+		expect(
+			ConversationSseMessageV2Schema.parse({
+				...reasoning,
+				payload: { kind: "summary", text: "Synthetic summary" },
+			}).type,
+		).toBe("reasoning.delta");
+		// 混合版本历史本身与任务投影都不接受思考过程，V1 读取方也不接受。
+		expect(
+			PersistedConversationEventV2Schema.safeParse(reasoning).success,
+		).toBe(false);
+		expect(TaskSseMessageV1Schema.safeParse(reasoning).success).toBe(false);
+		expect(
+			TaskProjectionV1Schema.safeParse({
+				schemaVersion: 1,
+				conversationId: "conversation-1",
+				executionId: "execution-1",
+				status: "completed",
+				output: "",
+				events: [reasoning],
+			}).success,
+		).toBe(false);
+		expect(ConversationSseMessageV1Schema.safeParse(reasoning).success).toBe(
+			false,
+		);
+		expect(
+			ConversationSseMessageV1Schema.safeParse({
+				...reasoning,
+				schemaVersion: 1,
+			}).success,
+		).toBe(false);
+		for (const payload of [
+			{ kind: "encrypted", text: "Synthetic thought" },
+			{ kind: "raw", text: "" },
+			{ kind: "raw" },
+			{ kind: "raw", text: "Synthetic thought", signature: "opaque" },
+		])
+			expect(
+				ConversationSseMessageV2Schema.safeParse({ ...reasoning, payload })
+					.success,
+			).toBe(false);
+		const detail = {
+			schemaVersion: 2,
+			conversation: {
+				schemaVersion: 1,
+				conversationId: "conversation-1",
+				agentId: "agent-1",
+				title: null,
+				status: "ready",
+				selectedModelOptionId: null,
+				selectedReasoningLevel: null,
+				lastConversationCursor: "cursor-3",
+				createdAt: "2026-09-14T12:00:00Z",
+				updatedAt: "2026-09-14T12:00:00Z",
+			},
+			messages: [],
+			events: [original, reasoning],
+		};
+		const parsed = ConversationDetailProjectionV2Schema.safeParse(detail);
+		expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
 	});
 
 	it("adds the requested-model fallback only to V2 histories and keeps V1 strict (G-07)", () => {

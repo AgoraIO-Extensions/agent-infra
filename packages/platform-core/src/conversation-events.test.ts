@@ -521,6 +521,77 @@ describe("platform-owned task status reasons", () => {
 	});
 });
 
+describe("reasoning delta events (#2979)", () => {
+	const reasoning = {
+		type: "reasoning.delta" as const,
+		kind: "raw" as const,
+		text: "Synthetic thought",
+	};
+
+	it("reads bounded raw and summary reasoning as persisted conversation content", () => {
+		expect(parseConversationPersistedEventPayloadV1(reasoning)).toEqual(
+			reasoning,
+		);
+		const summary = { ...reasoning, kind: "summary" as const };
+		expect(parseConversationPersistedEventPayloadV1(summary)).toEqual(summary);
+		const limit = { ...reasoning, text: "思".repeat(21_845) };
+		expect(parseConversationPersistedEventPayloadV1(limit)).toEqual(limit);
+		for (const payload of [
+			{ ...reasoning, kind: "encrypted" },
+			{ ...reasoning, kind: undefined },
+			{ type: "reasoning.delta", text: "missing kind" },
+			{ ...reasoning, text: "" },
+			{ ...reasoning, text: "x".repeat(65_537) },
+			{ ...reasoning, text: "\u0000" },
+			{ ...reasoning, signature: "opaque" },
+			{ ...reasoning, encrypted_content: "opaque" },
+		])
+			expect(() => parseConversationPersistedEventPayloadV1(payload)).toThrow(
+				ConversationEventError,
+			);
+	});
+
+	it("persists reasoning as a Runtime event with its own cursor and no transition", async () => {
+		const events = new FakeConversationEventsV1({
+			conversationId: event.conversationId,
+			executionId: event.executionId,
+			sessionGeneration: event.sessionGeneration,
+			deliveryFence: event.deliveryFence,
+			newId: () => "event_reasoning",
+		});
+		const accepted = await events.persist({ ...event, event: reasoning });
+		expect(accepted).toMatchObject({
+			outcome: "accepted",
+			event: {
+				eventId: "event_reasoning",
+				sequence: 1,
+				conversationCursor: 1,
+				event: reasoning,
+			},
+		});
+		// 思考过程不能带状态迁移，也不能用同一个 adapter key 改写内容。
+		await expect(
+			events.persist({
+				...event,
+				adapterEventKey: "adapter-event-transition",
+				runtimeCursor: "runtime-cursor-transition",
+				event: reasoning,
+				transition: {
+					executionStatus: "completed",
+					conversationStatus: "ready",
+				},
+			}),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persist({
+				...event,
+				event: { ...reasoning, text: "changed thought" },
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		expect(events.snapshot().lastConversationCursor).toBe(1);
+	});
+});
+
 describe("Browser handoff event parsing", () => {
 	it("accepts a bounded authenticated transition and rejects a mismatched binding", () => {
 		const payload = {

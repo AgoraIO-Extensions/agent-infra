@@ -1,8 +1,6 @@
 import type { PilotProtocolErrorV1 } from "../../pilot/generated/types.gen.js";
-import type {
-	ConversationDetailProjectionV2,
-	PersistedConversationEventV2,
-} from "../../pilot/generated-v2/types.gen.js";
+import type { ConversationDetailProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
 
 export const executionStatusLabels = {
 	submitted: "已受理，等待处理",
@@ -19,7 +17,7 @@ export function isTerminal(status: ExecutionStatus | undefined) {
 	);
 }
 export function executionStatus(
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	executionId: string | null,
 	fallback?: ExecutionStatus,
 ): ExecutionStatus | undefined {
@@ -33,7 +31,7 @@ export function executionStatus(
 /** A stored terminal answer result is final even when the timeline lacks its
  * terminal event; a later terminal event still wins (#1524). */
 export function answerStatus(
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	executionId: string | null,
 	stored: ExecutionStatus,
 ): ExecutionStatus | undefined {
@@ -45,7 +43,7 @@ export function answerStatus(
  * persisted status stream is authoritative even when an older answer is last. */
 export function currentExecution(
 	history: ConversationDetailProjectionV2 | null,
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	acceptedExecution?: string,
 ): { executionId: string | undefined; status: ExecutionStatus | undefined } {
 	const messages = history?.messages ?? [];
@@ -122,7 +120,7 @@ export function currentExecution(
  * arriving after that projection, never render both the snapshot and its replay. */
 export function answerText(
 	history: ConversationDetailProjectionV2,
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	executionId: string,
 	text: string,
 ) {
@@ -151,14 +149,14 @@ export const answerNotWrittenYet = "尚未输出正文。";
  */
 export function emptyAnswerKind(
 	history: ConversationDetailProjectionV2,
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	executionId: string | null,
 	status: ExecutionStatus | undefined,
 	hasEarlier: boolean,
 ): "not_loaded" | "empty" {
 	if (!hasEarlier || executionId === null || status !== "completed")
 		return "empty";
-	const loaded = (list: readonly PersistedConversationEventV2[]) =>
+	const loaded = (list: readonly ConversationTimelineEventV2[]) =>
 		list.some((event) => event.executionId === executionId);
 	return loaded(history.events) || loaded(events) ? "empty" : "not_loaded";
 }

@@ -20,6 +20,7 @@ import {
 	ModelOptionProjectionV1Schema,
 	ModelSelectionUpdateRequestV1Schema,
 	PersistedConversationEventV2Schema,
+	ReasoningDeltaEventV2Schema,
 	RegenerateCommandRequestV1Schema,
 	resolvePilotReplaySelectorV1,
 	StopCommandRequestV1Schema,
@@ -535,6 +536,14 @@ export function eventProjection(
 			type: "text.delta",
 			payload: { text: persisted.text },
 		};
+	} else if (persisted.type === "reasoning.delta") {
+		// #2979：思考过程只以 V2 事件进入会话读取与 V2 SSE；V1 读取方跳过它但推进游标。
+		return ReasoningDeltaEventV2Schema.parse({
+			...base,
+			schemaVersion: 2,
+			type: "reasoning.delta",
+			payload: { kind: persisted.kind, text: persisted.text },
+		});
 	} else if (persisted.type === "execution.status") {
 		projected = {
 			...base,

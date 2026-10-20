@@ -512,7 +512,8 @@ export function registerTaskRoutes(
 								endReason = "dependency_unavailable";
 								return;
 							}
-							await write(taskEventProjection(event));
+							const message = taskEventProjection(event);
+							if (message) await write(message);
 							cursor = event.conversationCursor;
 						}
 						if (lifetime.signal.aborted) break;

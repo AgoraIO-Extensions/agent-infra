@@ -13,6 +13,7 @@ import {
 	browserToolLabel,
 	browserToolProgress,
 } from "./browser-labels.js";
+import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
 
 export type BrowserOperationEvent = Extract<
 	PersistedConversationEventV2,
@@ -134,7 +135,7 @@ export function validBrowserSideEffectEvent(
 }
 
 export function isBrowserOperationEvent(
-	event: PersistedConversationEventV2,
+	event: ConversationTimelineEventV2,
 ): event is BrowserOperationEvent {
 	return (
 		event.type === "execution.operation" &&
@@ -144,7 +145,7 @@ export function isBrowserOperationEvent(
 }
 
 export function browserEventsForExecution(
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	conversationId: string | undefined,
 	executionId: string | undefined,
 ) {
@@ -269,7 +270,7 @@ export function selectBrowserCard({
 	browserAvailable,
 	now,
 }: {
-	readonly events: readonly PersistedConversationEventV2[];
+	readonly events: readonly ConversationTimelineEventV2[];
 	readonly conversationId?: string;
 	readonly executionId?: string;
 	readonly browserAvailable: boolean;

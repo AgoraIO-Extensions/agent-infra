@@ -2421,6 +2421,97 @@ function normalizeModelSelectionFallbackV2OpenApiAddition(previous, current) {
 	return normalized;
 }
 
+// #2979 新增思考过程事件：Runtime V2 `reasoning` 与浏览器 V2 `reasoning.delta`，两者只做加法。
+// Runtime 事件联合多一个选项；浏览器事件只进入 V2 会话 SSE、会话详情与执行详情，任务投影和
+// V1 读取方不变。新增 Schema 的内容按摘要固定，宿主与出现位置也逐一固定：基线已有该 Schema、
+// 内容与摘要不符、缺少任一宿主，或新增出现在其他位置时原样返回，让差异按破坏性变更判定。
+const persistedConversationEventV2Ref =
+	"#/components/schemas/PersistedConversationEventV2";
+const reasoningEventAdditions = [
+	{
+		name: "RuntimeReasoningEventV2",
+		digest: "06b22aa7e929072dc276753280769c9f2956783d1c428c629b165b276d24f142",
+		// 宿主联合直接多一个引用选项。
+		unionHosts: ["RuntimeEvent"],
+		itemHosts: [],
+	},
+	{
+		name: "ReasoningDeltaEventV2",
+		digest: "d86593d02128f2c808ec65a88de522c234b8e8855084c82ddd48a723d8464ce0",
+		unionHosts: ["ConversationSseMessageV2"],
+		// 详情的 events.items 由原引用变为「原引用 + 思考过程」两项 anyOf。
+		itemHosts: [
+			"ConversationDetailProjectionV2",
+			"ExecutionDetailProjectionV2",
+		],
+	},
+];
+
+function replaceReasoningEventItems(value, pair, replacement, found) {
+	if (sameValue(value, pair)) {
+		found.count += 1;
+		return structuredClone(replacement);
+	}
+	if (Array.isArray(value))
+		return value.map((item) =>
+			replaceReasoningEventItems(item, pair, replacement, found),
+		);
+	if (value !== null && typeof value === "object")
+		return Object.fromEntries(
+			Object.entries(value).map(([key, item]) => [
+				key,
+				replaceReasoningEventItems(item, pair, replacement, found),
+			]),
+		);
+	return value;
+}
+
+function normalizeReasoningEventOpenApiAddition(previous, current) {
+	let normalized = current;
+	for (const addition of reasoningEventAdditions) {
+		const ref = `#/components/schemas/${addition.name}`;
+		const component = normalized.components?.schemas?.[addition.name];
+		if (
+			previous.components?.schemas?.[addition.name] !== undefined ||
+			component === undefined
+		)
+			continue;
+		if (
+			createHash("sha256").update(JSON.stringify(component)).digest("hex") !==
+			addition.digest
+		)
+			return current;
+		const candidate = structuredClone(normalized);
+		const schemas = candidate.components.schemas;
+		delete schemas[addition.name];
+		for (const host of addition.unionHosts) {
+			const options = schemas[host]?.anyOf;
+			const index = Array.isArray(options)
+				? options.findIndex((option) => sameValue(option, { $ref: ref }))
+				: -1;
+			if (index === -1) return current;
+			options.splice(index, 1);
+		}
+		const pair = {
+			anyOf: [{ $ref: persistedConversationEventV2Ref }, { $ref: ref }],
+		};
+		for (const host of addition.itemHosts) {
+			const found = { count: 0 };
+			if (schemas[host] === undefined) return current;
+			schemas[host] = replaceReasoningEventItems(
+				schemas[host],
+				pair,
+				{ $ref: persistedConversationEventV2Ref },
+				found,
+			);
+			if (found.count === 0) return current;
+		}
+		// 新增出现在其他位置时，残留的引用本身就是与基线的差异，最终比较照常失败。
+		normalized = candidate;
+	}
+	return normalized;
+}
+
 const preparingSessionAvailability = {
 	enum: ["preparing", "ready", "unavailable"],
 	type: "string",
@@ -5057,6 +5148,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			previous,
 			current,
 		);
+		current = normalizeReasoningEventOpenApiAddition(previous, current);
 		if (!hasSelectedBrowserSideEffectEventOpenApiOption(previous)) {
 			const sideEffectNormalized =
 				stripBrowserSideEffectOpenApiAdditions(current);
