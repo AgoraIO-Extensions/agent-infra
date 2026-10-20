@@ -8176,6 +8176,68 @@
           "resumeCursor"
         ],
         "type": "object"
+      },
+      "WecomBotConnectionProjectionV2": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "qrAvailable": {
+                "const": false,
+                "type": "boolean"
+              },
+              "qrUnavailableReason": {
+                "enum": [
+                  "authorization_correlation_unverified"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "not_configured",
+                  "callback",
+                  "verifying",
+                  "connected",
+                  "disconnected",
+                  "auth_failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "qrAvailable",
+              "qrUnavailableReason"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "qrAvailable": {
+                "const": true,
+                "type": "boolean"
+              },
+              "status": {
+                "enum": [
+                  "not_configured",
+                  "callback",
+                  "verifying",
+                  "connected",
+                  "disconnected",
+                  "auth_failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "qrAvailable"
+            ],
+            "type": "object"
+          }
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -14389,6 +14451,86 @@
             "description": "Dependency is temporarily unavailable"
           }
         }
+      }
+    },
+    "/api/v2/agents/{agentId}/wecom-bot": {
+      "get": {
+        "description": "Owner only, resolved by the server for the current account; a non-Owner, another Agent and a missing Agent are indistinguishable. QR availability uses the same deployment decision as beginWecomSetup and carries no authorization URL or state. The V1 status response is unchanged.",
+        "operationId": "getWecomBotConnectionV2",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WecomBotConnectionProjectionV2"
+                }
+              }
+            },
+            "description": "Owner bot connection status with QR availability"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "summary": "Read the Owner's bot connection status with QR availability"
       }
     },
     "/api/v2/audit": {

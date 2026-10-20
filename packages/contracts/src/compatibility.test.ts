@@ -557,6 +557,87 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the pinned WeCom bot status V2 with QR availability (#2911)", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const statusPath = "/api/v2/agents/{agentId}/wecom-bot";
+		const previous = structuredClone(current);
+		delete previous.paths[statusPath];
+		delete previous.components.schemas.WecomBotConnectionProjectionV2;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "wecom-bot-qr-availability-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const branches = (value: typeof current) =>
+				value.components.schemas.WecomBotConnectionProjectionV2.oneOf;
+			for (const mutate of [
+				// 投影保持 strict，不能放宽或带出授权地址、state 与凭证。
+				(value: typeof current) => {
+					branches(value)[1].additionalProperties = true;
+				},
+				(value: typeof current) => {
+					branches(value)[1].properties.authorizationUrl = {
+						type: "string",
+					};
+				},
+				(value: typeof current) => {
+					branches(value)[0].properties.secret = { type: "string" };
+				},
+				// 不可用原因只取与配置会话响应相同的枚举。
+				(value: typeof current) => {
+					branches(value)[0].properties.qrUnavailableReason.enum.push(
+						"unknown",
+					);
+				},
+				(value: typeof current) => {
+					branches(value)[0].required = ["status", "qrAvailable"];
+				},
+				// 不能新增未评审的分支或状态。
+				(value: typeof current) => {
+					branches(value).push({ type: "object" });
+				},
+				(value: typeof current) => {
+					branches(value)[1].properties.status.enum.push("unknown");
+				},
+				(value: typeof current) => {
+					value.paths[statusPath].get.operationId = "unreviewed";
+				},
+				// 已发布的 V1 状态响应保持只含 status。
+				(value: typeof current) => {
+					value.paths["/api/v1/agents/{agentId}/wecom-bot"].get.responses[
+						"200"
+					].content["application/json"].schema = {
+						$ref: "#/components/schemas/WecomBotConnectionProjectionV2",
+					};
+				},
+				(value: typeof current) => {
+					value.paths["/api/v1/agents/{agentId}/wecom-bot"].get.responses[
+						"200"
+					].content["application/json"].schema.properties.qrAvailable = {
+						type: "boolean",
+					};
+				},
+				(value: typeof current) => {
+					value.paths["/api/v3/agents/{agentId}/wecom-bot"] = structuredClone(
+						value.paths[statusPath],
+					);
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the pinned Skill Hub review queue read (#2905)", async () => {
 		const current = JSON.parse(
 			await readFile(

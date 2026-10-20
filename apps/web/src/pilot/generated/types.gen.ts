@@ -1414,6 +1414,15 @@ export type TimelineReloadSignalV1 = {
     type: 'timeline.reload';
 };
 
+export type WecomBotConnectionProjectionV2 = {
+    qrAvailable: false;
+    qrUnavailableReason: 'authorization_correlation_unverified';
+    status: 'not_configured' | 'callback' | 'verifying' | 'connected' | 'disconnected' | 'auth_failed';
+} | {
+    qrAvailable: true;
+    status: 'not_configured' | 'callback' | 'verifying' | 'connected' | 'disconnected' | 'auth_failed';
+};
+
 export type AgentApplicationCreateRequestV1Writable = {
     actions: Array<ActionSelectionV1>;
     availability: Array<{
@@ -4116,6 +4125,49 @@ export type AbandonUnknownWecomDeliveryResponses = {
 };
 
 export type AbandonUnknownWecomDeliveryResponse = AbandonUnknownWecomDeliveryResponses[keyof AbandonUnknownWecomDeliveryResponses];
+
+export type GetWecomBotConnectionV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/wecom-bot';
+};
+
+export type GetWecomBotConnectionV2Errors = {
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetWecomBotConnectionV2Error = GetWecomBotConnectionV2Errors[keyof GetWecomBotConnectionV2Errors];
+
+export type GetWecomBotConnectionV2Responses = {
+    /**
+     * Owner bot connection status with QR availability
+     */
+    200: WecomBotConnectionProjectionV2;
+};
+
+export type GetWecomBotConnectionV2Response = GetWecomBotConnectionV2Responses[keyof GetWecomBotConnectionV2Responses];
 
 export type ListOwnExecutionAuditV2Data = {
     body?: never;

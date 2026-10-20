@@ -72,6 +72,8 @@ import {
 	skillHubVersionDetailSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
 	standardTemplateReleaseOpenApiPathsV2,
+	wecomBotConnectionOpenApiPathsV2,
+	wecomBotConnectionSchemasV2,
 } from "./pilot/index.ts";
 import { platformAuthOpenApiPathsV1 } from "./platform-auth.ts";
 import {
@@ -770,6 +772,7 @@ function buildArtifacts() {
 			...pilotScopedAuditOpenApiPathsV1,
 			...pilotScopedAuditOpenApiPathsV2,
 			...pilotTaskOpenApiPathsV1,
+			...wecomBotConnectionOpenApiPathsV2,
 		},
 		components: {
 			securitySchemes: {
@@ -787,6 +790,7 @@ function buildArtifacts() {
 				...pilotScopedAuditSchemasV1,
 				...pilotScopedAuditSchemasV2,
 				...pilotTaskSchemasV1,
+				...wecomBotConnectionSchemasV2,
 			},
 		},
 	});
