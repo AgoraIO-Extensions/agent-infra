@@ -4,6 +4,7 @@ import type {
 	RuntimeFileBridgeBindingV1,
 	RuntimeFileBridgeFactoryV1,
 	RuntimeFileBridgePortV1,
+	RuntimeFileExchangeEvidenceV1,
 	RuntimeFileInputV1,
 	RuntimeFileResultReceiptV1,
 } from "@agent-infra/agent-runtime";
@@ -13,7 +14,7 @@ import {
 	FileAccessResponseV1Schema,
 	type FileDescriptorV1,
 	FileProjectionV1Schema,
-	RuntimeFileExchangeRequestV1Schema,
+	RuntimeFileExchangeRequestV2Schema,
 } from "@agent-infra/contracts/files";
 
 const runtimeFileResponseLimit = 65_536;
@@ -179,7 +180,7 @@ export function createWorkerRuntimeFileBridgeFactoryV1(
 		return url;
 	}
 	async function exchange(value: unknown, key: string) {
-		const request = RuntimeFileExchangeRequestV1Schema.parse(value);
+		const request = RuntimeFileExchangeRequestV2Schema.parse(value);
 		const response = await send(exchangeUrl, {
 			method: "POST",
 			redirect: "error",
@@ -205,7 +206,9 @@ export function createWorkerRuntimeFileBridgeFactoryV1(
 			throw new Error("WORKER_RUNTIME_FILE_ACCESS_EXPIRED");
 		return access;
 	}
-	return (binding) => {
+	return (binding, evidence: RuntimeFileExchangeEvidenceV1) => {
+		if (!evidence?.executionGrant?.token)
+			throw new Error("WORKER_RUNTIME_FILE_EVIDENCE_INVALID");
 		const port: RuntimeFileBridgePortV1 = {
 			revalidate: () => revalidate(binding),
 			async readInput(fileId: string): Promise<RuntimeFileInputV1> {
@@ -215,15 +218,8 @@ export function createWorkerRuntimeFileBridgeFactoryV1(
 				const key = runtimeFileKey(binding, "read", fileId);
 				const access = await exchange(
 					{
-						schemaVersion: 1,
-						actorId: binding.actorId,
-						agentId: binding.agentId,
-						channelId: binding.channelId,
-						conversationId: binding.conversationId,
-						executionId: binding.executionId,
-						sessionGeneration: binding.sessionGeneration,
-						grantId: binding.grantId,
-						expiresAt: new Date(binding.expiresAt).toISOString(),
+						schemaVersion: 2,
+						executionGrant: evidence.executionGrant,
 						operation: "read",
 						fileId,
 						idempotencyKey: key,
@@ -284,15 +280,8 @@ export function createWorkerRuntimeFileBridgeFactoryV1(
 				try {
 					const access = await exchange(
 						{
-							schemaVersion: 1,
-							actorId: binding.actorId,
-							agentId: binding.agentId,
-							channelId: binding.channelId,
-							conversationId: binding.conversationId,
-							executionId: binding.executionId,
-							sessionGeneration: binding.sessionGeneration,
-							grantId: binding.grantId,
-							expiresAt: new Date(binding.expiresAt).toISOString(),
+							schemaVersion: 2,
+							executionGrant: evidence.executionGrant,
 							operation: "result",
 							descriptor,
 							idempotencyKey: key,

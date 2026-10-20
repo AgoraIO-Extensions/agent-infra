@@ -2,7 +2,7 @@ import { createHash, type KeyObject, timingSafeEqual } from "node:crypto";
 import type {
 	FileAccessClaimsV1,
 	FileAccessGrantV1,
-	RuntimeFileExchangeRequestV1,
+	RuntimeFileExchangeRequestV2,
 } from "@agent-infra/contracts/files";
 import type { ObjectStorageDataV1 } from "@agent-infra/object-storage";
 import {
@@ -11,12 +11,14 @@ import {
 	type FileExecutionV1,
 	type FileLimitDeclarationsV1,
 	type FileScopeV1,
+	parseTaskAuthorizationBoundaryV1,
 	resolveFileLimitsV1,
 } from "@agent-infra/platform-core";
 import { PostgresFileStoreV1 } from "@agent-infra/platform-store";
 import {
 	createFileGrantCodecV1,
 	verifyExecutionGrantForFilesV1,
+	verifyRuntimeExecutionGrantForFilesV4,
 } from "./file-grants.js";
 import { requestMetadata } from "./http/common.js";
 import type { ConversationAuthorization } from "./http/conversation-routes.js";
@@ -34,6 +36,9 @@ export interface PlatformFileDeploymentV1 {
 	readonly privateKey: KeyObject;
 	readonly publicKeys: ReadonlyMap<string, KeyObject>;
 	readonly runtimeIssuer: string;
+	// The Worker identity that signs business V4 Grants. File exchange fails
+	// closed when files are configured without it.
+	readonly runtimeWorkerId: string;
 	readonly runtimePublicKeys: ReadonlyMap<string, KeyObject>;
 	readonly intentTtlMs: number;
 	readonly accessTtlMs: number;
@@ -65,6 +70,8 @@ export function assemblePlatformFilesV1(input: {
 	): Promise<FileLimitDeclarationsV1 | null>;
 }) {
 	const deployment = input.deployment;
+	if (!deployment.runtimeWorkerId?.trim())
+		throw new Error("File runtime worker identity configuration is invalid");
 	const store = new PostgresFileStoreV1(input.databaseUrl);
 	const service = createFileAuthorityV1({
 		store,
@@ -207,18 +214,114 @@ export function assemblePlatformFilesV1(input: {
 			},
 		},
 		runtimeExchange: {
-			// The V4 wire carries no signed grant, so nothing submitted in the request may
-			// become the authorized attachment allowlist or the authoritative grant expiry.
-			// Stay fail-closed until the current Runtime grant is resolved server-side
-			// (ADR-0014 §41 与 §45)。
+			// The positive V4 exchange is proven by the original signed Execution
+			// Grant. Everything the old V1 wire self-reported (identity, generator,
+			// expiry, allowlist) is derived from verified claims and persisted facts.
 			async authenticate(
-				_request: Request,
-				_value: RuntimeFileExchangeRequestV1,
+				request: Request,
+				value: RuntimeFileExchangeRequestV2,
 			): Promise<{
 				conversationId: string;
 				authorization: FileAuthorizationPortV1;
 			}> {
-				throw new Error("Runtime file exchange denied");
+				const claims = verifyRuntimeExecutionGrantForFilesV4(
+					value.executionGrant,
+					{
+						issuer: deployment.runtimeIssuer,
+						workerId: deployment.runtimeWorkerId,
+						publicKeys: deployment.runtimePublicKeys,
+					},
+				);
+				if (!serviceAllowed(request, claims.agentId))
+					throw new Error("Runtime file exchange denied");
+				// Read the current persisted authority inside one transaction before
+				// any object I/O. A missing, foreign, terminal, stopped, stale-fenced
+				// or revoked Execution is indistinguishable to the caller.
+				const current = await store.transaction(
+					claims.conversationId,
+					async (transaction) => {
+						const conversation = transaction.conversation;
+						if (
+							!conversation ||
+							conversation.actorId !== claims.principal.id ||
+							conversation.agentId !== claims.agentId ||
+							conversation.channelId !== claims.channelId ||
+							conversation.sessionGeneration !== claims.sessionGeneration
+						)
+							return null;
+						const execution = await transaction.getExecution(
+							claims.executionId,
+						);
+						if (
+							!execution ||
+							execution.actorId !== claims.principal.id ||
+							execution.agentId !== claims.agentId ||
+							execution.channelId !== claims.channelId ||
+							execution.conversationId !== claims.conversationId ||
+							execution.sessionGeneration !== claims.sessionGeneration ||
+							!["submitted", "processing"].includes(execution.status) ||
+							execution.stopPending
+						)
+							return null;
+						// The execution-bound submit Grant names the persisted delivery
+						// fence. A supplement proof names its Message and has no comparable
+						// persisted Message fence in this milestone (OQ-3 in #2968).
+						if (
+							claims.operation.kind === "execution" &&
+							execution.deliveryFence !==
+								claims.operation.executionDeliveryFence
+						)
+							return null;
+						const record = await transaction.getTaskAuthorization(
+							claims.authorizationRecordId,
+							claims.executionId,
+						);
+						if (
+							!record ||
+							record.revoked ||
+							record.executionId !== claims.executionId
+						)
+							return null;
+						let boundary: ReturnType<typeof parseTaskAuthorizationBoundaryV1>;
+						try {
+							boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+						} catch {
+							return null;
+						}
+						if (
+							boundary.principal.kind !== claims.principal.kind ||
+							boundary.principal.id !== claims.principal.id ||
+							boundary.agentId !== claims.agentId ||
+							boundary.channelId !== claims.channelId ||
+							boundary.agentAuthorizationRevision !==
+								execution.authorizationRevision
+						)
+							return null;
+						return execution;
+					},
+				);
+				if (!current) throw new Error("Runtime file exchange denied");
+				return {
+					conversationId: claims.conversationId,
+					authorization: authorization(request, {
+						actorId: claims.principal.id,
+						agentId: claims.agentId,
+						channelId: claims.channelId,
+						conversationId: claims.conversationId,
+						executionId: claims.executionId,
+						sessionGeneration: claims.sessionGeneration,
+						grantId: claims.grantId,
+						// Only the signed attachment allowlist may be read.
+						attachments: claims.attachments
+							.filter((attachment) => attachment.operations.includes("read"))
+							.map((attachment) => attachment.attachmentId),
+						// The File Grant horizon is a deployment decision, never a
+						// request- or Grant-claimed value.
+						expiresAt: new Date(
+							Date.now() + deployment.accessTtlMs,
+						).toISOString(),
+					}),
+				};
 			},
 		},
 	};

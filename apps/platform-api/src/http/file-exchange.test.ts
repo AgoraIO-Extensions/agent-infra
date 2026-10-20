@@ -22,6 +22,8 @@ it("allocates a result only through the trusted execution exchange and rejects a
 		...scope,
 		executionId: "execution",
 		sessionGeneration: 1,
+		deliveryFence: 1,
+		authorizationRevision: "auth-1",
 		status: "processing" as const,
 		stopPending: false,
 	};
@@ -74,16 +76,10 @@ it("allocates a result only through the trusted execution exchange and rejects a
 			authenticate: async (request, value) => {
 				if (request.headers.get("test-service") !== "worker")
 					throw new Error("Denied");
-				if (
-					value.actorId !== scope.actorId ||
-					value.agentId !== scope.agentId ||
-					value.channelId !== scope.channelId ||
-					value.conversationId !== scope.conversationId ||
-					value.executionId !== execution.executionId ||
-					value.sessionGeneration !== execution.sessionGeneration
-				)
-					throw new Error("Binding denied");
-				return { conversationId: value.conversationId, authorization };
+				// The route only reaches the positive path with a V2 proof.
+				if (value.schemaVersion !== 2 || value.executionGrant.token !== "a.b.c")
+					throw new Error("Evidence denied");
+				return { conversationId: scope.conversationId, authorization };
 			},
 		},
 	});
@@ -133,16 +129,13 @@ it("allocates a result only through the trusted execution exchange and rejects a
 	).toBe(404);
 	store.seedExecution(execution);
 	const runtimeRequest = {
-		schemaVersion: 1,
+		schemaVersion: 2,
+		executionGrant: {
+			schemaVersion: 4,
+			format: "runtime-execution-jws",
+			token: "a.b.c",
+		},
 		operation: "result",
-		actorId: scope.actorId,
-		agentId: scope.agentId,
-		channelId: scope.channelId,
-		conversationId: scope.conversationId,
-		executionId: execution.executionId,
-		sessionGeneration: execution.sessionGeneration,
-		grantId: "grant-v4",
-		expiresAt: "2099-01-01T00:00:00Z",
 		idempotencyKey: "runtime-result-1",
 		descriptor: {
 			name: "runtime.txt",
@@ -181,19 +174,56 @@ it("allocates a result only through the trusted execution exchange and rejects a
 		},
 	);
 	expect(runtimeReplay.status).toBe(200);
-	const crossSubject = await app.request(
-		"/internal/v1/files/runtime-exchange",
-		{
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"Idempotency-Key": runtimeRequest.idempotencyKey,
-				"test-service": "worker",
-			},
-			body: JSON.stringify({ ...runtimeRequest, actorId: "other-actor" }),
+	// A body-only Idempotency-Key mismatch never reaches the exchange.
+	const mismatched = await app.request("/internal/v1/files/runtime-exchange", {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			"Idempotency-Key": "other-key",
+			"test-service": "worker",
 		},
-	);
-	expect(crossSubject.status).toBe(404);
+		body: JSON.stringify(runtimeRequest),
+	});
+	expect(mismatched.status).toBe(404);
+	// The self-reported V1 wire stays rejected on the same route.
+	const v1 = await app.request("/internal/v1/files/runtime-exchange", {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			"Idempotency-Key": "runtime-v1",
+			"test-service": "worker",
+		},
+		body: JSON.stringify({
+			schemaVersion: 1,
+			operation: "read",
+			actorId: scope.actorId,
+			agentId: "agent",
+			channelId: "web",
+			conversationId: scope.conversationId,
+			executionId: execution.executionId,
+			sessionGeneration: 1,
+			grantId: "grant-v4",
+			expiresAt: "2099-01-01T00:00:00Z",
+			fileId: "file-1",
+			idempotencyKey: "runtime-v1",
+		}),
+	});
+	expect(v1.status).toBe(404);
+	// A tampered grant never becomes authority.
+	const tampered = await app.request("/internal/v1/files/runtime-exchange", {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			"Idempotency-Key": "runtime-tampered",
+			"test-service": "worker",
+		},
+		body: JSON.stringify({
+			...runtimeRequest,
+			executionGrant: { ...runtimeRequest.executionGrant, token: "x.y.z" },
+			idempotencyKey: "runtime-tampered",
+		}),
+	});
+	expect(tampered.status).toBe(404);
 	store.seedExecution({ ...execution, sessionGeneration: 2 });
 	const retired = await app.request("/internal/v1/files/runtime-exchange", {
 		method: "POST",

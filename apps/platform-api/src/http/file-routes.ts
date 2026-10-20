@@ -8,8 +8,8 @@ import {
 	FileIntentRequestV1Schema,
 	FileLimitsV1Schema,
 	FileProjectionV1Schema,
-	type RuntimeFileExchangeRequestV1,
-	RuntimeFileExchangeRequestV1Schema,
+	RuntimeFileExchangeRequestSchema,
+	type RuntimeFileExchangeRequestV2,
 } from "@agent-infra/contracts/files";
 import {
 	type ObjectStorageDataV1,
@@ -51,7 +51,7 @@ export interface FileRoutesDependenciesV1 {
 	readonly runtimeExchange?: {
 		authenticate(
 			request: Request,
-			value: RuntimeFileExchangeRequestV1,
+			value: RuntimeFileExchangeRequestV2,
 		): Promise<{
 			conversationId: string;
 			authorization: FileAuthorizationPortV1;
@@ -165,11 +165,14 @@ export function registerFileRoutesV1(
 			const traceId = requestMetadata(request).traceId;
 			const { value } = await parseJson(
 				request,
-				RuntimeFileExchangeRequestV1Schema,
+				RuntimeFileExchangeRequestSchema,
 				traceId,
 			);
 			const idempotencyKey = parseIdempotencyKey(request, traceId);
 			if (idempotencyKey !== value.idempotencyKey) return denied(context);
+			// The self-reported V1 wire stays rejected; only the V2 proof may
+			// enter the positive exchange.
+			if (value.schemaVersion === 1) return denied(context);
 			let trusted: Awaited<
 				ReturnType<
 					NonNullable<

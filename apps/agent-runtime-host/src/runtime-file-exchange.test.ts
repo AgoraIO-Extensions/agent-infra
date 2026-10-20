@@ -1,3 +1,4 @@
+import type { RuntimeFileExchangeEvidenceV1 } from "@agent-infra/agent-runtime";
 import { expect, it, vi } from "vitest";
 import { createRuntimeFileBridgeFactoryV1 } from "./runtime-file-exchange.js";
 
@@ -17,6 +18,14 @@ const grant = {
 	schemaVersion: 1 as const,
 	format: "compact-jws" as const,
 	token: "a.b.c",
+};
+
+const evidence: RuntimeFileExchangeEvidenceV1 = {
+	executionGrant: {
+		schemaVersion: 4,
+		format: "runtime-execution-jws",
+		token: "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJhY3Rvci0xIn0.c2lnbmF0dXJl",
+	},
 };
 
 function response(
@@ -71,12 +80,32 @@ it("exchanges V4 binding for a bounded input stream without exposing the grant",
 		serviceToken: "s".repeat(32),
 		fetch: fetcher,
 	});
-	const input = await factory(binding).readInput("input-1");
+	const input = await factory(binding, evidence).readInput("input-1");
 	expect(new Uint8Array(await new Response(input.body).arrayBuffer())).toEqual(
 		new Uint8Array([1, 2, 3]),
 	);
 	const exchange = fetcher.mock.calls[0]?.[1];
 	expect(JSON.stringify(exchange)).not.toContain("a.b.c");
+	const body = JSON.parse(String(exchange?.body));
+	expect(body).toEqual({
+		schemaVersion: 2,
+		executionGrant: evidence.executionGrant,
+		operation: "read",
+		fileId: "input-1",
+		idempotencyKey: expect.any(String),
+	});
+	// No V1 self-reported authority travels on the wire.
+	for (const field of [
+		"actorId",
+		"agentId",
+		"channelId",
+		"conversationId",
+		"executionId",
+		"sessionGeneration",
+		"grantId",
+		"expiresAt",
+	])
+		expect(body).not.toHaveProperty(field);
 	expect(fetcher).toHaveBeenCalledTimes(2);
 });
 
@@ -87,9 +116,9 @@ it("rejects a file outside the execution binding before network access", async (
 		serviceToken: "s".repeat(32),
 		fetch: fetcher,
 	});
-	await expect(factory(binding).readInput("other-file")).rejects.toThrow(
-		"RUNTIME_FILE_INPUT_NOT_AUTHORIZED",
-	);
+	await expect(
+		factory(binding, evidence).readInput("other-file"),
+	).rejects.toThrow("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
 	expect(fetcher).not.toHaveBeenCalled();
 });
 
@@ -132,7 +161,7 @@ it("keeps result idempotency stable when descriptor property order changes", asy
 		origin: "https://files.example.test",
 		serviceToken: "s".repeat(32),
 		fetch: fetcher,
-	})(binding);
+	})(binding, evidence);
 	await bridge.writeResult(descriptor, new ReadableStream<Uint8Array>());
 	await bridge.writeResult(reordered, new ReadableStream<Uint8Array>());
 	const keys = fetcher.mock.calls
@@ -172,7 +201,7 @@ it("rejects an expired access response before content transfer", async () => {
 		origin: "https://files.example.test",
 		serviceToken: "s".repeat(32),
 		fetch: fetcher,
-	})(binding);
+	})(binding, evidence);
 	await expect(bridge.readInput("input-1")).rejects.toThrow(
 		"RUNTIME_FILE_EXCHANGE_EXPIRED",
 	);
@@ -214,7 +243,7 @@ it("bounds result upload streams before completing the file", async () => {
 		origin: "https://files.example.test",
 		serviceToken: "s".repeat(32),
 		fetch: fetcher,
-	})(binding);
+	})(binding, evidence);
 	await expect(
 		bridge.writeResult(
 			descriptor,

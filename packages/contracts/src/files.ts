@@ -5,6 +5,7 @@ import {
 	Rfc3339TimestampV1Schema,
 } from "./index.ts";
 import { ExecutionGrantV1Schema } from "./pilot/delegated.ts";
+import { RuntimeExecutionGrantV4Schema } from "./runtime/host-v4.ts";
 
 export const FileDescriptorV1Schema = z.strictObject({
 	name: z
@@ -143,6 +144,43 @@ export const RuntimeFileExchangeRequestV1Schema = z.discriminatedUnion(
 export type RuntimeFileExchangeRequestV1 = z.infer<
 	typeof RuntimeFileExchangeRequestV1Schema
 >;
+
+// #2968: the positive exchange carries the original signed V4 Execution Grant
+// and nothing the caller could self-report. Identity, conversation, execution,
+// allowlist and expiry are derived from the verified claims and the persisted
+// Execution, never from this request.
+const runtimeFileExchangeGrantV2 = {
+	schemaVersion: z.literal(2),
+	executionGrant: RuntimeExecutionGrantV4Schema,
+	idempotencyKey: IdempotencyKeyV1Schema,
+};
+export const RuntimeFileExchangeRequestV2Schema = z.discriminatedUnion(
+	"operation",
+	[
+		z.strictObject({
+			...runtimeFileExchangeGrantV2,
+			operation: z.literal("read"),
+			fileId: OpaqueIdV1Schema,
+		}),
+		z.strictObject({
+			...runtimeFileExchangeGrantV2,
+			operation: z.literal("result"),
+			descriptor: FileDescriptorV1Schema,
+		}),
+	],
+);
+export type RuntimeFileExchangeRequestV2 = z.infer<
+	typeof RuntimeFileExchangeRequestV2Schema
+>;
+// The same internal route accepts both wire versions; it dispatches on
+// `schemaVersion` and keeps the self-reported V1 request rejected.
+export const RuntimeFileExchangeRequestSchema = z.union([
+	RuntimeFileExchangeRequestV1Schema,
+	RuntimeFileExchangeRequestV2Schema,
+]);
+export type RuntimeFileExchangeRequest = z.infer<
+	typeof RuntimeFileExchangeRequestSchema
+>;
 export const fileSchemasV1 = {
 	FileDescriptorV1: FileDescriptorV1Schema,
 	FileLimitsV1: FileLimitsV1Schema,
@@ -155,6 +193,8 @@ export const fileSchemasV1 = {
 	FileCompleteRequestV1: FileCompleteRequestV1Schema,
 	FileExchangeRequestV1: FileExchangeRequestV1Schema,
 	RuntimeFileExchangeRequestV1: RuntimeFileExchangeRequestV1Schema,
+	RuntimeFileExchangeRequestV2: RuntimeFileExchangeRequestV2Schema,
+	RuntimeFileExchangeRequest: RuntimeFileExchangeRequestSchema,
 };
 export type FileAccessGrantV1 = z.infer<typeof FileAccessGrantV1Schema>;
 
@@ -288,7 +328,7 @@ export const runtimeFileExchangeOpenApiPathsV1 = {
 					schema: z.string(),
 				},
 			],
-			requestBody: jsonBody(RuntimeFileExchangeRequestV1Schema),
+			requestBody: jsonBody(RuntimeFileExchangeRequestSchema),
 			responses: { "200": jsonResponse(FileAccessResponseV1Schema) },
 		},
 	},

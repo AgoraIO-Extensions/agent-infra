@@ -4,6 +4,7 @@ import type {
 	FileRecordV1,
 	FileScopeV1,
 	FileStoreV1,
+	FileTaskAuthorizationRecordV1,
 	FileTransactionV1,
 } from "./file-authority.js";
 
@@ -50,6 +51,10 @@ export class FakeFileStoreV1 implements FileStoreV1 {
 	seedExecution(value: FileExecutionStateV1) {
 		this.executions.set(value.executionId, structuredClone(value));
 	}
+	private taskAuthorizations = new Map<string, FileTaskAuthorizationRecordV1>();
+	seedTaskAuthorization(value: FileTaskAuthorizationRecordV1) {
+		this.taskAuthorizations.set(value.id, structuredClone(value));
+	}
 	private files = new Map<string, FileRecordV1>();
 	private accesses = new Map<string, FileAccessRecordV1>();
 	private tail: Promise<unknown> = Promise.resolve();
@@ -72,6 +77,12 @@ export class FakeFileStoreV1 implements FileStoreV1 {
 				),
 				getExecution: async (id) =>
 					structuredClone(this.executions.get(id) ?? null),
+				getTaskAuthorization: async (id, executionId) => {
+					const record = this.taskAuthorizations.get(id);
+					return record && record.executionId === executionId
+						? structuredClone(record)
+						: null;
+				},
 				getIntent: async (actorId, key) =>
 					structuredClone(
 						[...files.values()].find(

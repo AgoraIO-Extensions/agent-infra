@@ -4,6 +4,14 @@ import type { FileDescriptorV1 } from "@agent-infra/contracts/files";
 import { describe, expect, it } from "vitest";
 import { createWorkerRuntimeFileBridgeFactoryV1 } from "./file-client.js";
 
+const evidence = {
+	executionGrant: {
+		schemaVersion: 4 as const,
+		format: "runtime-execution-jws" as const,
+		token: "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJhY3Rvci0xIn0.c2lnbmF0dXJl",
+	},
+};
+
 const binding: RuntimeFileBridgeBindingV1 = {
 	actorId: "actor-1",
 	channelId: "web",
@@ -66,18 +74,27 @@ describe("Worker V4 runtime file client", () => {
 				return new Response("abc");
 			},
 		});
-		const input = await factory(binding).readInput("input-1");
+		const input = await factory(binding, evidence).readInput("input-1");
 		await expect(new Response(input.body).text()).resolves.toBe("abc");
-		const request = JSON.parse(String(calls[0]?.init?.body)) as Record<
-			string,
-			unknown
-		>;
-		expect(request).toMatchObject({
+		const body = JSON.parse(String(calls[0]?.init?.body));
+		expect(body).toEqual({
+			schemaVersion: 2,
+			executionGrant: evidence.executionGrant,
 			operation: "read",
-			actorId: binding.actorId,
-			executionId: binding.executionId,
 			fileId: "input-1",
+			idempotencyKey: expect.any(String),
 		});
+		for (const field of [
+			"actorId",
+			"agentId",
+			"channelId",
+			"conversationId",
+			"executionId",
+			"sessionGeneration",
+			"grantId",
+			"expiresAt",
+		])
+			expect(body).not.toHaveProperty(field);
 	});
 
 	it("bounds and confirms an execution-bound result write", async () => {
@@ -106,7 +123,7 @@ describe("Worker V4 runtime file client", () => {
 			},
 		});
 		await expect(
-			factory(binding).writeResult(
+			factory(binding, evidence).writeResult(
 				resultDescriptor,
 				new ReadableStream<Uint8Array>({
 					start(controller) {
@@ -132,9 +149,9 @@ describe("Worker V4 runtime file client", () => {
 				return Response.error();
 			},
 		});
-		await expect(factory(binding).readInput("input-1")).rejects.toThrow(
-			"WORKER_RUNTIME_FILE_BINDING_STALE",
-		);
+		await expect(
+			factory(binding, evidence).readInput("input-1"),
+		).rejects.toThrow("WORKER_RUNTIME_FILE_BINDING_STALE");
 		expect(calls).toBe(0);
 	});
 
@@ -165,7 +182,7 @@ describe("Worker V4 runtime file client", () => {
 			},
 		});
 		await expect(
-			factory(localBinding).writeResult(
+			factory(localBinding, evidence).writeResult(
 				resultDescriptor,
 				new ReadableStream({
 					start(controller) {
@@ -198,7 +215,7 @@ describe("Worker V4 runtime file client", () => {
 						)
 					: new Response("abc"),
 		});
-		const input = await factory(binding).readInput("input-1");
+		const input = await factory(binding, evidence).readInput("input-1");
 		await expect(new Response(input.body).text()).rejects.toThrow(
 			"WORKER_RUNTIME_FILE_BINDING_STALE",
 		);

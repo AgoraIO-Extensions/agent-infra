@@ -6,6 +6,7 @@ import {
 	type RuntimeBusinessGrantClaimsV4,
 	RuntimeBusinessGrantClaimsV4Schema,
 	type RuntimeBusinessRequestV4,
+	type RuntimeExecutionGrantV4,
 	RuntimeSubmitTurnRequestV4Schema,
 	RuntimeSupplementRequestV4Schema,
 	validateRuntimeBusinessBindingV4,
@@ -133,9 +134,20 @@ export function readRuntimeFileResultReceiptV1(
 	return metadata;
 }
 
+/**
+ * The original signed V4 Execution Grant that admitted the operation. It is the
+ * only positive exchange evidence the Platform receives; identity, conversation,
+ * execution, fence and allowlist are derived from its verified claims there.
+ * The token never enters the binding, a Driver context or a stored record.
+ */
+export interface RuntimeFileExchangeEvidenceV1 {
+	readonly executionGrant: RuntimeExecutionGrantV4;
+}
+
 /** Creates a port bound to exactly one validated Runtime business request. */
 export type RuntimeFileBridgeFactoryV1 = (
 	binding: RuntimeFileBridgeBindingV1,
+	evidence: RuntimeFileExchangeEvidenceV1,
 ) => RuntimeFileBridgePortV1;
 
 type RuntimeFileBridgeBindingKey = keyof RuntimeFileBridgeBindingV1;

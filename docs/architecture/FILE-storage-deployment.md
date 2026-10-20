@@ -4,7 +4,7 @@
 
 ## 装配
 
-Platform API 的 `PlatformApiAssemblyInput.files` 接收部署创建的 ObjectStorage Adapter、文件签名密钥、原 Execution Grant 验签公钥、服务身份到允许 Agent 的映射，以及当前用户与文件限制查询。缺失此配置时不注册文件入口，带附件的 Message 被拒绝。
+Platform API 的 `PlatformApiAssemblyInput.files` 接收部署创建的 ObjectStorage Adapter、文件签名密钥、原 Execution Grant V4 验签公钥与其签名 Worker identity（`runtimeWorkerId`）、服务身份到允许 Agent 的映射，以及当前用户与文件限制查询。配置了文件能力但缺少 `runtimeWorkerId` 时装配必须 fail-closed；缺失整体配置时不注册文件入口，带附件的 Message 被拒绝。生产 deployment builder 与四模板文件 E2E 由 #3060 负责，本页不据此声明已全面交付。
 
 使用 `createS3ObjectStorageV1` 创建 S3 Adapter。bucket 必须启用 versioning，并支持条件创建、按版本读取、版本列举及删除。部署独占一个前缀；所有对象引用均由平台生成。endpoint、region、bucket、prefix、凭证和 SDK 只在 Adapter／部署模块内配置。生产凭证通过部署凭证供应链提供，不写入仓库。
 
@@ -14,7 +14,7 @@ Platform API 的 `PlatformApiAssemblyInput.files` 接收部署创建的 ObjectSt
 
 ## Worker 与恢复
 
-`createWorkerFileClientV1` 提供输入读取与结果写入。它使用原始 Execution Grant 调用交换入口，随后携带文件 Grant 与服务身份传输字节；不接受调用者指定的对象键或存储地址。实际 Driver 文件桥接不属于本模块。
+`createWorkerFileClientV1` 提供输入读取与结果写入。它使用 RuntimeHost 已验证的原始 V4 Execution Grant 调用 `RuntimeFileExchangeRequestV2` 交换入口（`schemaVersion=2`、`executionGrant`、操作、单一文件引用或结果描述、幂等键），随后携带文件 Grant 与服务身份传输字节；不接受调用者指定的对象键或存储地址。旧 V1 自报身份 wire 继续被拒绝。原 Grant 仅证明执行委托范围，交换后的当前授权由持久 Conversation、Execution、generation、delivery fence、停止/终态和 `task_authorization_records` 决定，File Grant 有效期取部署 `accessTtlMs`。实际 Driver 文件桥接不属于本模块。
 
 结果写入的 `idempotencyKey` 标识永久不变的写入意图。访问到期后，调用者可传入新的 `accessIdempotencyKey` 换取该意图的新临时权限；不要换一个意图键重试同一结果。已确认对象只允许重放完成确认，不能重新上传或覆盖字节。执行终态、撤权或代次变化仍拒绝执行授权。
 
@@ -26,6 +26,6 @@ Platform API 的 `PlatformApiAssemblyInput.files` 接收部署创建的 ObjectSt
 
 使用仓库固定的 Node／pnpm 工具链。完整 `pnpm test` 包含文件的真实 HTTP／PostgreSQL／MinIO 验收；单独执行 `pnpm test:file-authority` 前需构建 workspace 依赖。
 
-测试创建随机命名、仅绑定 loopback 的独立容器，并仅回收这些容器。Fake 与 S3 使用同一对象契约，测试覆盖版本固定、重放、并发、过期、对象缺失、冲突及重复清理。平台联测覆盖上传、下载、结果写入、同入口跨用户拒绝、撤权与旧代次拒绝。
+测试创建随机命名、仅绑定 loopback 的独立容器，并仅回收这些容器。Fake 与 S3 使用同一对象契约，测试覆盖版本固定、重放、并发、过期、对象缺失、冲突及重复清理。平台联测覆盖上传、下载、结果写入、同入口跨用户拒绝、撤权与旧代次拒绝。V4 文件交换另覆盖签名伪造、错误 issuer/Worker/audience、控制用途、非 allowlist 文件、终态、停止、撤销的 `task_authorization_records`、fence/generation 变化，以及可读与不可读文件一致的 404。
 
 发布验收记录只保留 source commit、配置版本、对象存储实现／镜像 digest、测试命令和结果。禁止记录文件正文、服务凭证、JWS 或内部签名 URL。测试通过不替代后续文件消费者整装与人工验收。

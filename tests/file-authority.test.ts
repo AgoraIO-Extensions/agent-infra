@@ -16,8 +16,10 @@ import {
 	FileAccessResponseV1Schema,
 	FileProjectionV1Schema,
 } from "../packages/contracts/src/files.ts";
+import { RuntimeBusinessGrantClaimsV4Schema } from "../packages/contracts/src/runtime/index.ts";
 import { startMinioFileFixtureV1 } from "../packages/object-storage/src/minio.test-support.ts";
 import { createConversationExecutionUseCaseV1 } from "../packages/platform-core/src/conversation-execution.ts";
+import { parseTaskAuthorizationBoundaryV1 } from "../packages/platform-core/src/task-authorization.ts";
 import { PostgresConversationExecutionTransactionV1 } from "../packages/platform-store/src/conversation-execution.ts";
 import { migratePlatformDatabase } from "../packages/platform-store/src/migrate.ts";
 import { startPostgresTestDatabase } from "../packages/platform-store/src/postgres-test.ts";
@@ -87,6 +89,7 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 				privateKey: keys.privateKey,
 				publicKeys: new Map([["file-key", keys.publicKey]]),
 				runtimeIssuer: "runtime",
+				runtimeWorkerId: "runtime-worker",
 				runtimePublicKeys: new Map([["runtime-key", keys.publicKey]]),
 				intentTtlMs: 60000,
 				accessTtlMs: 2000,
@@ -418,6 +421,23 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 	});
 	const serviceToken = "synthetic-file-service-2054-123456789";
 	const keys = generateKeyPairSync("ed25519");
+	const runtimeWorkerId = "runtime-worker";
+	const signRuntimeGrant = (claims: unknown) => {
+		const header = Buffer.from(
+			JSON.stringify({
+				alg: "EdDSA",
+				kid: "runtime-key",
+				typ: "runtime-execution+jws",
+			}),
+		).toString("base64url");
+		const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
+		const content = `${header}.${payload}`;
+		return {
+			schemaVersion: 4 as const,
+			format: "runtime-execution-jws" as const,
+			token: `${content}.${sign(null, Buffer.from(content), keys.privateKey).toString("base64url")}`,
+		};
+	};
 	const limits = {
 		revision: "test-limits-v1",
 		expiresAt: "2099-01-01T00:00:00Z",
@@ -439,9 +459,14 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 		},
 	} as const;
 	const revoked = new Set<string>();
-	const executionBindings = new Map<
+	const grants = new Map<
 		string,
-		RuntimeFileBridgeBindingV1 & { readonly turnId: string }
+		{
+			readonly claims: ReturnType<
+				typeof RuntimeBusinessGrantClaimsV4Schema.parse
+			>;
+			readonly grant: ReturnType<typeof signRuntimeGrant>;
+		}
 	>();
 	const actor = (userId: string) => ({
 		schemaVersion: 1 as const,
@@ -487,6 +512,7 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 				privateKey: keys.privateKey,
 				publicKeys: new Map([["file-key", keys.publicKey]]),
 				runtimeIssuer: "runtime",
+				runtimeWorkerId,
 				runtimePublicKeys: new Map([["runtime-key", keys.publicKey]]),
 				intentTtlMs: 60000,
 				accessTtlMs: 2000,
@@ -527,79 +553,7 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 		};
 		assembled = assemblePlatformFilesV1(assemblyInput);
 		let app = createPlatformHealthApp();
-		const runtimeExchange = {
-			async authenticate(
-				request: Request,
-				value: import("../packages/contracts/src/files.ts").RuntimeFileExchangeRequestV1,
-			) {
-				if (request.headers.get("Authorization") !== `Bearer ${serviceToken}`) {
-					throw new Error("service identity denied");
-				}
-				const expected = executionBindings.get(value.executionId);
-				if (!expected) {
-					throw new Error("execution binding denied");
-				}
-				const same =
-					value.actorId === expected.actorId &&
-					value.agentId === expected.agentId &&
-					value.channelId === expected.channelId &&
-					value.conversationId === expected.conversationId &&
-					value.executionId === expected.executionId &&
-					value.sessionGeneration === expected.sessionGeneration &&
-					value.grantId === expected.grantId &&
-					value.expiresAt === new Date(expected.expiresAt).toISOString();
-				if (!same || revoked.has(expected.actorId)) {
-					throw new Error("execution binding denied");
-				}
-				const [conversation] = await sql`
-					select actor_id, agent_id, channel_id, session_generation
-					from platform.conversations where id = ${expected.conversationId}
-				`;
-				if (
-					!conversation ||
-					conversation.actor_id !== expected.actorId ||
-					conversation.agent_id !== expected.agentId ||
-					conversation.channel_id !== expected.channelId ||
-					Number(conversation.session_generation) !== expected.sessionGeneration
-				) {
-					throw new Error("stale execution binding");
-				}
-				const expectedSession = sessionForConversation(expected.conversationId);
-				if (!expectedSession) {
-					throw new Error("execution session denied");
-				}
-				const authority = {
-					async authorize(conversationId: string, operation: "read" | "write") {
-						if (conversationId !== expected.conversationId) return null;
-						return {
-							...authorityFor(expectedSession),
-							conversationId: expected.conversationId,
-							limits,
-							execution: {
-								executionId: expected.executionId,
-								sessionGeneration: expected.sessionGeneration,
-								grantId: expected.grantId,
-								attachments:
-									operation === "read" &&
-									value.operation === "read" &&
-									value.fileId
-										? [value.fileId]
-										: [],
-								expiresAt: new Date(expected.expiresAt).toISOString(),
-							},
-						};
-					},
-				};
-				return {
-					conversationId: expected.conversationId,
-					authorization: authority,
-				};
-			},
-		};
-		registerFileRoutesV1(app, {
-			...assembled.dependencies,
-			runtimeExchange,
-		});
+		registerFileRoutesV1(app, assembled.dependencies);
 		const authorization = {
 			authorize: async (input: { conversationId?: string }) => {
 				const session = input.conversationId
@@ -739,21 +693,58 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 			const [execution] =
 				await sql`select turn_id, session_generation from platform.conversation_executions where execution_id = ${accepted.executionId}`;
 			if (!execution) throw new Error(`Missing ${name} execution`);
-			const binding = {
-				actorId: session.actorId,
+			// Simulate the dispatch claim that increments the Execution fence before
+			// the Worker signs the V4 Grant for this delivery.
+			await sql`update platform.conversation_executions set delivery_fence = 1 where execution_id = ${accepted.executionId}`;
+			const authorizationRecordId = `authorization-${accepted.executionId}`;
+			const boundary = parseTaskAuthorizationBoundaryV1({
+				schemaVersion: 1,
+				principal: { kind: "user", id: session.actorId },
+				agentId: "agent",
+				channelId: "web",
+				identityRevision: "auth",
+				agentAuthorizationRevision: "auth",
+				accessSources: [{ kind: "user", userId: session.actorId }],
+			});
+			await sql`insert into platform.task_authorization_records (id, execution_id, boundary) values (${authorizationRecordId}, ${accepted.executionId}, ${sql.json(boundary)})`;
+			const issuedAt = Date.now() - 1000;
+			const claims = RuntimeBusinessGrantClaimsV4Schema.parse({
+				schemaVersion: 4,
+				issuer: "runtime",
+				audience: "runtime_host",
+				issuedAt,
+				expiresAt: issuedAt + 30_000,
+				grantId: session.grantId,
+				workerId: runtimeWorkerId,
+				principal: { kind: "user", id: session.actorId },
+				executionSource: "web",
+				relayKeyBinding: {
+					purpose: "personal",
+					subjectId: session.actorId,
+					ciphertextRef: `${name}-key`,
+					version: 1,
+				},
 				agentId: "agent",
 				channelId: "web",
 				conversationId: session.conversationId,
 				executionId: accepted.executionId,
-				sessionGeneration: Number(execution.session_generation),
-				grantId: session.grantId,
-				expiresAt: Date.now() + 60000,
-				inputFileIds: [file.fileId],
-			} satisfies RuntimeFileBridgeBindingV1;
-			executionBindings.set(accepted.executionId, {
-				...binding,
 				turnId: execution.turn_id,
+				sessionGeneration: Number(execution.session_generation),
+				traceId: `${name}-trace`,
+				hostSessionRef: null,
+				operation: {
+					kind: "execution",
+					id: accepted.executionId,
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+				},
+				allowedCommands: ["turn.submit"],
+				purpose: "business",
+				authorizationRecordId,
+				attachments: [{ attachmentId: file.fileId, operations: ["read"] }],
+				requestDigest: "a".repeat(64),
 			});
+			grants.set(name, { claims, grant: signRuntimeGrant(claims) });
 			const read = FileAccessResponseV1Schema.parse(
 				await (
 					await post(
@@ -821,18 +812,32 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 				fetch: transfer as typeof fetch,
 			});
 		let bridgeFactory = createBridgeFactory();
+		const evidenceFor = (name: keyof typeof sessions) => {
+			const evidence = grants.get(name);
+			if (!evidence) throw new Error(`Missing ${name} grant`);
+			return { executionGrant: evidence.grant };
+		};
 		const bindingFor = (name: keyof typeof sessions) => {
-			const binding = [...executionBindings.values()].find(
-				(value) => value.actorId === sessions[name].actorId,
-			);
-			if (!binding) throw new Error(`Missing ${name} binding`);
-			const { turnId: _turnId, ...runtimeBinding } = binding;
-			return runtimeBinding;
+			const claims = grants.get(name)?.claims;
+			if (!claims) throw new Error(`Missing ${name} binding`);
+			return {
+				actorId: claims.principal.id,
+				agentId: claims.agentId,
+				channelId: claims.channelId,
+				conversationId: claims.conversationId,
+				executionId: claims.executionId,
+				sessionGeneration: claims.sessionGeneration,
+				grantId: claims.grantId,
+				expiresAt: Date.now() + 60000,
+				inputFileIds: claims.attachments.map(
+					(attachment) => attachment.attachmentId,
+				),
+			} satisfies RuntimeFileBridgeBindingV1;
 		};
 		const consume = async (body: ReadableStream<Uint8Array>) =>
 			Buffer.from(await new Response(body).arrayBuffer());
 		for (const name of Object.keys(sessions) as (keyof typeof sessions)[]) {
-			const bridge = bridgeFactory(bindingFor(name));
+			const bridge = bridgeFactory(bindingFor(name), evidenceFor(name));
 			const inputFile = requireFixtureValue(
 				uploaded.get(name),
 				`${name} input`,
@@ -841,7 +846,7 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 			expect(await consume(input.body)).toEqual(bytes[name]);
 			const resultBytes = Buffer.from(`${name} result`);
 			const writeResult = () =>
-				bridgeFactory(bindingFor(name)).writeResult(
+				bridgeFactory(bindingFor(name), evidenceFor(name)).writeResult(
 					descriptor(`${name}-result.txt`, resultBytes),
 					new ReadableStream({
 						start(controller) {
@@ -863,10 +868,7 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 				await assembled.close();
 				assembled = assemblePlatformFilesV1(assemblyInput);
 				app = createPlatformHealthApp();
-				registerFileRoutesV1(app, {
-					...assembled.dependencies,
-					runtimeExchange,
-				});
+				registerFileRoutesV1(app, assembled.dependencies);
 				bridgeFactory = createBridgeFactory();
 				expect(
 					await sql`select * from platform.file_accesses where file_id = ${lostFile.fileId}`,
@@ -988,42 +990,131 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 			bytes.first,
 		);
 		const firstBinding = bindingFor("first");
-		const deniedMutations: Array<
-			[string, Partial<RuntimeFileBridgeBindingV1>]
-		> = [
-			["actor", { actorId: "bob" }],
-			["agent", { agentId: "other-agent" }],
-			["channel", { channelId: "other-channel" }],
-			["conversation", { conversationId: sessions.second.conversationId }],
-			["execution", { executionId: bindingFor("second").executionId }],
-			["generation", { sessionGeneration: 2 }],
-			["grant", { grantId: "grant-second" }],
-		];
-		for (const [label, change] of deniedMutations) {
-			const mutated = { ...firstBinding, ...change };
-			const bridge = bridgeFactory(mutated);
-			await expect(bridge.readInput(firstFile.fileId)).rejects.toThrow();
-			void label;
-		}
+		const firstGrant = grants.get("first");
+		if (!firstGrant) throw new Error("Missing first grant");
+		const firstExecution = firstGrant.claims.executionId;
+		const denyRead = async (
+			binding: RuntimeFileBridgeBindingV1,
+			executionGrant: ReturnType<typeof signRuntimeGrant>,
+			fileId: string,
+		) => {
+			await expect(
+				bridgeFactory(binding, { executionGrant }).readInput(fileId),
+			).rejects.toThrow();
+		};
+		// The signed evidence alone rejects a tampered token, a foreign Worker,
+		// a control-purpose Grant, an unroutable command and a stale fence.
+		await denyRead(
+			firstBinding,
+			{
+				...firstGrant.grant,
+				token: `${firstGrant.grant.token.slice(0, -4)}AAAA`,
+			},
+			firstFile.fileId,
+		);
+		await denyRead(
+			firstBinding,
+			signRuntimeGrant({ ...firstGrant.claims, workerId: "other-worker" }),
+			firstFile.fileId,
+		);
+		await denyRead(
+			firstBinding,
+			signRuntimeGrant({
+				...firstGrant.claims,
+				purpose: "control",
+				controlRecordId: "control-1",
+				reason: "stop",
+				allowedCommands: ["turn.stop"],
+			}),
+			firstFile.fileId,
+		);
+		await denyRead(
+			firstBinding,
+			signRuntimeGrant({
+				...firstGrant.claims,
+				allowedCommands: ["native-capability.invoke"],
+			}),
+			firstFile.fileId,
+		);
+		await denyRead(
+			firstBinding,
+			signRuntimeGrant({
+				...firstGrant.claims,
+				operation: { ...firstGrant.claims.operation, deliveryFence: 2 },
+			}),
+			firstFile.fileId,
+		);
+		// A Grant for another Execution cannot read this session's attachment.
+		await denyRead(
+			firstBinding,
+			grants.get("second")?.grant ?? firstGrant.grant,
+			firstFile.fileId,
+		);
 		const crossFileBinding = {
 			...firstBinding,
 			inputFileIds: [secondFile.fileId],
 		};
 		await expect(
-			bridgeFactory(crossFileBinding).readInput(secondFile.fileId),
+			bridgeFactory(crossFileBinding, evidenceFor("first")).readInput(
+				secondFile.fileId,
+			),
 		).rejects.toThrow();
+		// Readable and non-allowlisted files are indistinguishable through the
+		// exchange when the signed allowlist does not name them.
+		const probe = async (fileId: string) => {
+			const key = `probe-${fileId}`;
+			const response = await fetch(
+				`${origin}/internal/v1/files/runtime-exchange`,
+				{
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${serviceToken}`,
+						"Content-Type": "application/json",
+						"Idempotency-Key": key,
+					},
+					body: JSON.stringify({
+						schemaVersion: 2,
+						executionGrant: firstGrant.grant,
+						operation: "read",
+						fileId,
+						idempotencyKey: key,
+					}),
+				},
+			);
+			await response.body?.cancel();
+			return response.status;
+		};
+		expect(await probe(firstFile.fileId)).toBe(200);
+		expect(await probe(secondFile.fileId)).toBe(404);
+		expect(await probe("file_missing_2968")).toBe(404);
+		const denyCurrent = async () =>
+			denyRead(firstBinding, firstGrant.grant, firstFile.fileId);
+		// Persisted authority, not the signed proof, decides the exchange.
+		await sql`update platform.conversation_executions set delivery_fence = 2 where execution_id = ${firstExecution}`;
+		await denyCurrent();
+		await sql`update platform.conversation_executions set delivery_fence = 1 where execution_id = ${firstExecution}`;
+		await sql`update platform.conversation_executions set status = 'completed' where execution_id = ${firstExecution}`;
+		await denyCurrent();
+		await sql`update platform.conversation_executions set status = 'processing' where execution_id = ${firstExecution}`;
+		await sql`insert into platform.conversation_stops (execution_id, stop_request_id, status, created_at, updated_at) values (${firstExecution}, 'stop-2968', 'submitted', now(), now())`;
+		await denyCurrent();
+		await sql`delete from platform.conversation_stops where execution_id = ${firstExecution}`;
+		await sql`update platform.task_authorization_records set revoked_at = now() where id = ${firstGrant.claims.authorizationRecordId}`;
+		await denyCurrent();
+		await sql`update platform.task_authorization_records set revoked_at = null where id = ${firstGrant.claims.authorizationRecordId}`;
+		await sql`update platform.conversation_executions set authorization_revision = 'other' where execution_id = ${firstExecution}`;
+		await denyCurrent();
+		await sql`update platform.conversation_executions set authorization_revision = 'auth' where execution_id = ${firstExecution}`;
 		revoked.add(sessions.first.actorId);
-		await expect(
-			bridgeFactory(firstBinding).readInput(firstFile.fileId),
-		).rejects.toThrow();
+		await denyCurrent();
 		revoked.delete(sessions.first.actorId);
 		await sql`update platform.conversations set session_generation = 2 where id = ${sessions.first.conversationId}`;
-		await expect(
-			bridgeFactory(firstBinding).readInput(firstFile.fileId),
-		).rejects.toThrow();
+		await denyCurrent();
 		const expired = { ...bindingFor("second"), expiresAt: Date.now() - 1 };
 		await expect(
-			bridgeFactory(expired).readInput(secondFile.fileId),
+			bridgeFactory(expired, evidenceFor("second")).readInput(
+				secondFile.fileId,
+			),
 		).rejects.toThrow("WORKER_RUNTIME_FILE_BINDING_STALE");
 	} finally {
 		if (server) {
