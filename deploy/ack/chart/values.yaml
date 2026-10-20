@@ -53,6 +53,9 @@ scheduling:
         operator: Equal
         value: alibabacloud
         effect: NoSchedule
+sessionRuntimeScheduling:
+  enabled: false
+  architecture: amd64
 resources:
   api:
     requests: {cpu: 100m, memory: 128Mi}
