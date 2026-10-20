@@ -21,7 +21,7 @@ function createAssemblyFixture() {
 		maxBytes: 100,
 		mediaTypes: ["text/plain"],
 	};
-	const state = { revoked: false, channelId: "web" };
+	const state = { revoked: false, channelId: "web", limitsUnavailable: false };
 	const mapping = {
 		token: "synthetic-service-token-442-123456789",
 		agentIds: ["agent"],
@@ -48,11 +48,10 @@ function createAssemblyFixture() {
 				declarations: { agent: limits, channel: limits, deployment: limits },
 			}),
 		},
-		readCurrentLimits: async () => ({
-			agent: limits,
-			channel: limits,
-			deployment: limits,
-		}),
+		readCurrentLimits: async () => {
+			if (state.limitsUnavailable) throw new Error("unavailable");
+			return { agent: limits, channel: limits, deployment: limits };
+		},
 		conversationAuthorization: {
 			authorize: async (identity) => ({
 				outcome: "allowed",
@@ -133,6 +132,11 @@ it("requires both a signed execution delegation and a mapped service, then reche
 		await expect(
 			accepted.authorization.authorize("conversation", "read"),
 		).rejects.toThrow();
+		state.revoked = false;
+		state.limitsUnavailable = true;
+		expect(
+			await accepted.authorization.authorize("conversation", "read"),
+		).toBeNull();
 	} finally {
 		await assembled.close();
 	}

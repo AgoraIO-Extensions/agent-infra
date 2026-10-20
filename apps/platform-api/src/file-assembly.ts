@@ -171,11 +171,18 @@ export function assemblePlatformFilesV1(input: {
 					return null;
 				let limits = null;
 				if (operation === "write" || execution) {
-					const declarations = await input.readCurrentLimits(
-						identity,
-						scope,
-						execution && operation === "write" ? "result" : "attachment",
-					);
+					let declarations: FileLimitDeclarationsV1 | null = null;
+					try {
+						declarations = await input.readCurrentLimits(
+							identity,
+							scope,
+							execution && operation === "write" ? "result" : "attachment",
+						);
+					} catch {
+						// A declaration read failure denies the operation instead of
+						// falling back to a wider or synthetic limit.
+						declarations = null;
+					}
 					limits = declarations
 						? resolveFileLimitsV1(declarations, new Date())
 						: null;
