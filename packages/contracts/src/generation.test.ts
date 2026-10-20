@@ -198,7 +198,12 @@ describe("standard contract artifacts", () => {
 		expect(artifacts.pilotBrowserOpenapi.components.securitySchemes).toEqual(
 			artifacts.pilotBrowserOpenapiV2.components.securitySchemes,
 		);
-		for (const path of ["/api/v1/audit", "/api/v1/audit/{auditId}"]) {
+		for (const path of [
+			"/api/v1/audit",
+			"/api/v1/audit/{auditId}",
+			"/api/v2/audit",
+			"/api/v2/audit/{auditId}",
+		]) {
 			expect(artifacts.pilotBrowserOpenapi.paths[path].get.security).toEqual([
 				{ PlatformSession: [] },
 				{ platformApiCredential: [] },
@@ -207,11 +212,55 @@ describe("standard contract artifacts", () => {
 		for (const path of [
 			"/api/v3/admin/audit",
 			"/api/v3/admin/audit/{auditId}",
+			"/api/v4/admin/audit",
+			"/api/v4/admin/audit/{auditId}",
 		]) {
 			expect(artifacts.pilotBrowserOpenapi.paths[path].get.security).toEqual([
 				{ PlatformSession: [] },
 			]);
 		}
+		// #2909：V1 响应不变，V2 入口才返回带显示名的投影。
+		expect(
+			artifacts.pilotBrowserOpenapi.paths["/api/v1/audit"].get.responses[200]
+				.content["application/json"].schema,
+		).toEqual({ $ref: "#/components/schemas/ScopedPlatformAuditPageV1" });
+		expect(
+			artifacts.pilotBrowserOpenapi.paths["/api/v4/admin/audit/{auditId}"].get
+				.responses[200].content["application/json"].schema,
+		).toEqual({ $ref: "#/components/schemas/ScopedPlatformAuditProjectionV2" });
+		expect(
+			artifacts.pilotBrowserOpenapi.components.schemas
+				.ScopedPlatformAuditProjectionV1.properties,
+		).not.toHaveProperty("agentDisplayName");
+		// #2911：V1 状态响应只含 status，扫码可用性只在 V2 入口返回。
+		expect(
+			artifacts.pilotBrowserOpenapi.paths["/api/v1/agents/{agentId}/wecom-bot"]
+				.get.responses[200].content["application/json"].schema,
+		).toEqual({
+			additionalProperties: false,
+			properties: {
+				status: {
+					enum: [
+						"not_configured",
+						"callback",
+						"verifying",
+						"connected",
+						"disconnected",
+						"auth_failed",
+					],
+					type: "string",
+				},
+			},
+			required: ["status"],
+			type: "object",
+		});
+		expect(
+			artifacts.pilotBrowserOpenapi.paths["/api/v2/agents/{agentId}/wecom-bot"]
+				.get.responses[200].content["application/json"].schema,
+		).toEqual({ $ref: "#/components/schemas/WecomBotConnectionProjectionV2" });
+		expect(artifacts.pilotBrowserOpenapiV2.paths).not.toHaveProperty(
+			"/api/v2/agents/{agentId}/wecom-bot",
+		);
 		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
 			"/api/v1/conversations/{conversationId}/messages",
 		);
@@ -241,7 +290,10 @@ describe("standard contract artifacts", () => {
 			"/api/v2/agents/{agentId}/configuration/saved-model",
 			"/api/v2/agents/{agentId}/default-relay-key",
 			"/api/v2/agents/{agentId}/default-relay-key/candidates",
+			"/api/v2/agents/{agentId}/default-relay-key/display-candidates",
+			"/api/v2/agents/{agentId}/detail",
 			"/api/v2/agents/{agentId}/lifecycle",
+			"/api/v2/agents/{agentId}/skills/current-version",
 			"/api/v2/agents/{agentId}/state",
 			"/api/v2/agents/{agentId}/versions/{agentVersion}/skills",
 			"/api/v2/applications",
@@ -263,10 +315,15 @@ describe("standard contract artifacts", () => {
 			"/api/v2/skills/imports",
 			"/api/v2/skills/installations",
 			"/api/v2/skills/installations/{installationId}",
+			"/api/v2/skills/owned-versions",
 			"/api/v2/skills/projects",
 			"/api/v2/skills/projects/{projectId}",
+			"/api/v2/skills/projects/{projectId}/content",
+			"/api/v2/skills/projects/{projectId}/versions",
+			"/api/v2/skills/reviews",
 			"/api/v2/skills/versions",
 			"/api/v2/skills/versions/{skillVersionId}",
+			"/api/v2/skills/versions/{skillVersionId}/detail",
 			"/api/v2/skills/versions/{skillVersionId}/review",
 			"/api/v2/skills/versions/{skillVersionId}/revoke",
 		]);
@@ -280,11 +337,32 @@ describe("standard contract artifacts", () => {
 				.properties.outcome.enum,
 		).toEqual(["accepted", "replayed"]);
 		for (const path of [
+			"/api/v2/agents/{agentId}/detail",
 			"/api/v2/skills",
+			"/api/v2/skills/installations",
+			"/api/v2/skills/owned-versions",
+			"/api/v2/skills/projects/{projectId}/content",
+			"/api/v2/skills/reviews",
 			"/api/v2/skills/versions/{skillVersionId}",
+			"/api/v2/skills/versions/{skillVersionId}/detail",
 		]) {
 			expect(artifacts.pilotBrowserOpenapiV2.paths[path].get.security).toEqual([
 				{ PlatformSession: [] },
+			]);
+		}
+		// #2906 内容保存与网页发布只接受平台会话并要求幂等键。
+		for (const [path, method] of [
+			["/api/v2/skills/projects/{projectId}/content", "put"],
+			["/api/v2/skills/projects/{projectId}/versions", "post"],
+		] as const) {
+			const operation = artifacts.pilotBrowserOpenapiV2.paths[path][method];
+			expect(operation.security).toEqual([{ PlatformSession: [] }]);
+			expect(
+				operation.parameters.filter(
+					(parameter: { in: string }) => parameter.in === "header",
+				),
+			).toEqual([
+				expect.objectContaining({ name: "Idempotency-Key", required: true }),
 			]);
 		}
 		const recent =

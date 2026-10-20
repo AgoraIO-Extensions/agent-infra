@@ -1,5 +1,8 @@
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
-import type { SessionSandboxDeletionProgressV1 } from "@agent-infra/platform-core";
+import type {
+	SessionSandboxDeletionProgressV1,
+	SessionSandboxResourceIdentityV1,
+} from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
 	V1NetworkPolicy,
@@ -313,6 +316,26 @@ describe("session sandbox workload adapter", () => {
 			recordDeletionProgress: async () => "committed",
 		});
 		expect(await client.read("Pod", selected.podName)).toBeNull();
+	});
+	it("refuses to apply a running allocation without runtime before any write (#2885)", async () => {
+		// 只有排空（stopped）允许 runtime 为 null；运行中缺 runtime 会建出缺 Secret / env 的 Pod。
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await expect(
+			adapter.apply({ ...allocation, desiredState: "running", runtime: null }),
+		).rejects.toThrow();
+		expect(await client.read("Pod", allocation.podName)).toBeNull();
+		expect(await client.read("Secret", allocation.secretName)).toBeNull();
+		// 排空中的旧 payload：只用于按名称与标签删除，Secret 不带数据。
+		const secret = sessionSandboxResourcesV1({
+			...allocation,
+			desiredState: "stopped",
+			runtime: null,
+		}).find((resource) => resource.kind === "Secret") as
+			| { data?: unknown }
+			| undefined;
+		expect(secret).toBeDefined();
+		expect(secret?.data).toBeUndefined();
 	});
 	it("rejects a Session env file override before Pod creation", () => {
 		expect(() =>
@@ -1310,7 +1333,7 @@ describe("session sandbox workload adapter", () => {
 				return "committed";
 			},
 		});
-		expect(receipt.retainedPVC.kind).toBe("PersistentVolumeClaim");
+		expect(receipt.retainedPVC?.kind).toBe("PersistentVolumeClaim");
 		expect(progress).toHaveLength(15);
 		expect(
 			progress.filter((entry) => entry.state === "delete-requested"),
@@ -1546,7 +1569,7 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 		const podJson = JSON.stringify(pod);
 		expect(podJson).not.toContain("MODEL_CREDENTIAL");
 		expect(podJson).not.toContain(sessionSandboxDeploymentTokenFixture);
-		expect(podJson).not.toContain(allocation.runtime.serviceToken);
+		expect(podJson).not.toContain(allocation.runtime!.serviceToken);
 		expect(container?.envFrom).toBeUndefined();
 		expect(secret).toMatchObject({
 			kind: "Secret",
@@ -1609,12 +1632,28 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 			"a static-key model configuration",
 			{
 				modelConfiguration: JSON.stringify({
-					...JSON.parse(allocation.runtime.modelConfiguration),
+					...JSON.parse(allocation.runtime!.modelConfiguration),
 					schemaVersion: 3,
 				}),
 			},
 		],
-		["another driver", { driver: "claude" }],
+		["a Driver/protocol mismatch", { driver: "claude" }],
+		["an unknown Driver", { driver: "unknown" }],
+		[
+			"Messages configuration with the Codex Driver",
+			{
+				modelConfiguration: JSON.stringify({
+					...JSON.parse(allocation.runtime!.modelConfiguration),
+					modelOptions: JSON.parse(
+						allocation.runtime!.modelConfiguration,
+					).modelOptions.map((option: object) => ({
+						...option,
+						protocol: "anthropic-messages-v1",
+						authentication: "api-key",
+					})),
+				}),
+			},
+		],
 		["an extra input", { credential: "synthetic" }],
 	])("rejects %s before any resource write", async (_name, override) => {
 		const client = api();
@@ -1958,5 +1997,171 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 		await expect(adapter.observe(allocation)).resolves.toMatchObject({
 			status: "unknown",
 		});
+	});
+});
+
+// #2885：#1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影，排空 allocation 的
+// runtime 为 null。那时不创建 Runtime Secret，资源规格也由当时的模板渲染。
+describe("drain of a source prepared before per-Sandbox Runtime inputs (#2885)", () => {
+	const legacy: SessionSandboxAllocationV1 = { ...allocation, runtime: null };
+	const name = allocation.resourceName;
+	const kinds = [
+		"NetworkPolicy",
+		"PersistentVolumeClaim",
+		"Pod",
+		"Service",
+		"ServiceAccount",
+	];
+
+	/** 带今天的归属标记，但没有 Secret，Pod 与 NetworkPolicy 的规格是旧模板的。 */
+	async function seedLegacySource(
+		client: ReturnType<typeof api>,
+	): Promise<SessionSandboxResourceIdentityV1[]> {
+		for (const resource of sessionSandboxResourcesV1(allocation)) {
+			if (resource.kind === "Secret") continue;
+			const old = structuredClone(resource);
+			if (old.kind === "Pod") {
+				const spec = (old as V1Pod).spec;
+				const container = spec?.containers[0];
+				if (!spec || !container) throw new Error("Missing Pod spec");
+				spec.volumes = spec.volumes?.filter(
+					(volume) => volume.name === "workspace",
+				);
+				container.volumeMounts = [
+					{ name: "workspace", mountPath: "/workspace" },
+				];
+				delete container.readinessProbe;
+				delete spec.enableServiceLinks;
+			}
+			if (old.kind === "NetworkPolicy") {
+				const spec = (old as V1NetworkPolicy).spec;
+				if (!spec) throw new Error("Missing NetworkPolicy spec");
+				spec.ingress = [];
+			}
+			await client.create(old);
+		}
+		return [...client.resources.values()].map((object) => ({
+			kind: object.kind as SessionSandboxResourceIdentityV1["kind"],
+			namespace: allocation.namespace,
+			name,
+			uid: object.metadata?.uid ?? "",
+			resourceVersion: object.metadata?.resourceVersion ?? "",
+		}));
+	}
+
+	it("observes the source by ownership and UID for drain control, not by today's template", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		const previous = await seedLegacySource(client);
+		// Pod 状态更新让 resourceVersion 前进，UID 不变。
+		const pod = client.resources.get(`Pod/${name}`);
+		if (!pod?.metadata) throw new Error("Missing Pod");
+		pod.metadata.resourceVersion = "99";
+
+		const observed = await adapter.observe(legacy, previous, "control");
+		expect(observed.status).toBe("observed");
+		expect(observed.resources.map((resource) => resource.kind).sort()).toEqual(
+			kinds,
+		);
+		expect(
+			observed.resources.find((resource) => resource.kind === "Pod"),
+		).toMatchObject({ uid: pod.metadata.uid, resourceVersion: "99" });
+
+		// 当前来源（有 runtime）不放宽：缺 Secret、规格漂移仍是 unknown。
+		await expect(
+			adapter.observe(allocation, previous, "control"),
+		).resolves.toMatchObject({ status: "unknown" });
+		// 业务观测也不放宽。
+		await expect(adapter.observe(legacy, previous)).resolves.toMatchObject({
+			status: "unknown",
+		});
+	});
+
+	it("does not identify a replaced or foreign resource by name", async () => {
+		for (const change of ["uid", "fence", "session"] as const) {
+			const client = api();
+			const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+			const previous = await seedLegacySource(client);
+			const service = client.resources.get(`Service/${name}`);
+			if (!service?.metadata?.annotations) throw new Error("Missing Service");
+			if (change === "uid") service.metadata.uid = "replaced-service";
+			if (change === "fence")
+				service.metadata.annotations["agent-infra.agora.io/fence"] = "1";
+			if (change === "session")
+				service.metadata.annotations["agent-infra.agora.io/session-id"] =
+					"session-other";
+			await expect(
+				adapter.observe(legacy, previous, "control"),
+			).resolves.toMatchObject({ status: "unknown" });
+		}
+	});
+
+	it("removes the four compute and route resources by UID and keeps the PVC", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		const previous = await seedLegacySource(client);
+		const progress: SessionSandboxDeletionProgressV1[] = [];
+		const receipt = await adapter.cleanup(
+			{ ...legacy, desiredState: "stopped" },
+			previous,
+			{
+				managementFence: 4,
+				recordDeletionProgress: async (entry) => {
+					progress.push(entry);
+					return "committed";
+				},
+			},
+		);
+		expect(receipt.removed.map((proof) => proof.resource.kind).sort()).toEqual([
+			"NetworkPolicy",
+			"Pod",
+			"Service",
+			"ServiceAccount",
+		]);
+		expect(receipt.retainedPVC?.uid).toBe(
+			previous.find((resource) => resource.kind === "PersistentVolumeClaim")
+				?.uid,
+		);
+		expect([...client.resources.keys()]).toEqual([
+			`PersistentVolumeClaim/${name}`,
+		]);
+		expect(progress.some((entry) => entry.resource.kind === "Secret")).toBe(
+			false,
+		);
+	});
+
+	it("does not ignore an owned Secret left by an interrupted preparation", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		const previous = await seedLegacySource(client);
+		const secret = sessionSandboxResourcesV1(allocation).find(
+			(resource) => resource.kind === "Secret",
+		);
+		if (!secret) throw new Error("Missing Secret");
+		await client.create(structuredClone(secret));
+		const observed = await adapter.observe(legacy, previous, "control");
+		expect(observed.resources.map((resource) => resource.kind)).toContain(
+			"Secret",
+		);
+		// 来源没有记录它：不随排空忽略或删除，证据不足时失败关闭。
+		await expect(
+			adapter.cleanup({ ...legacy, desiredState: "stopped" }, previous, {
+				managementFence: 4,
+				recordDeletionProgress: async () => "committed",
+			}),
+		).rejects.toMatchObject({ code: "conflict" });
+		expect(await client.read("Secret", name)).not.toBeNull();
+	});
+
+	it("still requires the Secret of a source prepared with Runtime inputs", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		const previous = await seedLegacySource(client);
+		await expect(
+			adapter.cleanup({ ...allocation, desiredState: "stopped" }, previous, {
+				managementFence: 4,
+				recordDeletionProgress: async () => "committed",
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
 	});
 });

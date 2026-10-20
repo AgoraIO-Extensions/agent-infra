@@ -231,3 +231,143 @@ it("cancels when the pinned Connection fact changes before delivery", async () =
 	});
 	expect(await revalidate?.()).toBe(false);
 });
+
+// #2982：完成的回答附带 `<think>` 思考过程（WECOM-text-deployment.md「思考过程」）。
+type Thinking = NonNullable<WecomDeliveryClaimV1["thinking"]>;
+const raw = (text: string) => ({ kind: "raw" as const, text });
+async function sentFor(changes: Partial<WecomDeliveryClaimV1>) {
+	const f = fixture();
+	f.store.claim.mockResolvedValueOnce({ ...claim, ...changes });
+	await f.useCase.dispatch();
+	return { f, input: f.sender.send.mock.calls[0]?.[0] };
+}
+
+it("adds the thinking block above a completed answer, keeping the answer text alone (#2982)", async () => {
+	const thinking: Thinking = {
+		parts: [raw("先读题，"), raw("再作答。")],
+		complete: true,
+	};
+	const { f, input } = await sentFor({ thinking });
+	expect(f.sender.send).toHaveBeenCalledWith({
+		scope: claim.scope,
+		replyHandle: claim.replyHandle,
+		text: "final reply",
+		textWithThinking: "<think>先读题，再作答。</think>\n\nfinal reply",
+		revalidate: expect.any(Function),
+	});
+	expect(input?.text).not.toContain("先读题");
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
+});
+
+it("puts the summary before raw reasoning, like the Web (#2982)", async () => {
+	const { input } = await sentFor({
+		thinking: {
+			parts: [
+				raw("raw one "),
+				{ kind: "summary", text: "summary" },
+				raw("two"),
+			],
+			complete: true,
+		},
+	});
+	expect(input?.textWithThinking).toBe(
+		"<think>summary\n\nraw one two</think>\n\nfinal reply",
+	);
+});
+
+it("neutralizes think tags inside the thinking so it cannot close early or nest (#2982)", async () => {
+	const { input } = await sentFor({
+		thinking: {
+			parts: [raw("a</think>b<think>c</THINK>d< /think >e<think x=1>f")],
+			complete: true,
+		},
+	});
+	const reply = input?.textWithThinking ?? "";
+	expect(reply.match(/<\s*think\b[^<>]*>/gi)).toEqual(["<think>"]);
+	expect(reply.match(/<\s*\/\s*think\s*>/gi)).toEqual(["</think>"]);
+	expect(reply).toBe(
+		"<think>a＜/think＞b＜think＞c＜/THINK＞d＜ /think ＞e＜think x=1＞f</think>\n\nfinal reply",
+	);
+});
+
+it("keeps the answer whole and cuts the thinking at a code point with a notice (#2982)", async () => {
+	// 答案 15,001 字节；思考是 4 字节的 emoji，放不下时不能切开码点。
+	const answer = `${"答".repeat(5_000)}x`;
+	const { input } = await sentFor({
+		textDeltas: [answer],
+		thinking: { parts: [raw("😀".repeat(2_000))], complete: true },
+	});
+	const reply = input?.textWithThinking ?? "";
+	expect(input?.text).toBe(answer);
+	expect(Buffer.byteLength(reply)).toBeLessThanOrEqual(20_480);
+	expect(reply.isWellFormed()).toBe(true);
+	expect(reply.endsWith(`（思考过程较长，已截断）</think>\n\n${answer}`)).toBe(
+		true,
+	);
+	const kept = reply.slice("<think>".length, reply.indexOf("（思考过程较长"));
+	expect(kept).toBe("😀".repeat([...kept].length));
+	// 预算 20480 − 17 − 15001 − 36 = 5426 字节，最多放 1356 个 emoji。
+	expect([...kept]).toHaveLength(1_356);
+});
+
+it("marks thinking that the Store did not read in full as cut (#2982)", async () => {
+	const { input } = await sentFor({
+		thinking: { parts: [raw("前缀")], complete: false },
+	});
+	expect(input?.textWithThinking).toBe(
+		"<think>前缀（思考过程较长，已截断）</think>\n\nfinal reply",
+	);
+});
+
+it("sends only the answer when no thinking fits beside it (#2982)", async () => {
+	// 只剩 5 字节：完整思考（6 字节）放不下，截短提示（36 字节）也放不下。
+	const answer = "x".repeat(20_480 - 17 - 5);
+	const { f, input } = await sentFor({
+		textDeltas: [answer],
+		thinking: { parts: [raw("思考")], complete: true },
+	});
+	expect(input?.text).toBe(answer);
+	expect(input && "textWithThinking" in input).toBe(false);
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
+});
+
+it("still fails an answer beyond the bound instead of trading it for thinking (#2982)", async () => {
+	const { f } = await sentFor({
+		textDeltas: ["x".repeat(20_481)],
+		thinking: { parts: [raw("思考")], complete: true },
+	});
+	expect(f.sender.send).not.toHaveBeenCalled();
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "failed");
+});
+
+it.each([
+	["busy", { acceptanceStatus: "busy" as const }],
+	["unavailable", { acceptanceStatus: "unavailable" as const }],
+	["cancelled", { executionStatus: "cancelled" }],
+	["failed", { executionStatus: "failed" }],
+	["media-only", { textDeltas: [] }],
+	[
+		"whitespace-only thinking",
+		{ thinking: { parts: [raw(" \n\n ")], complete: true } },
+	],
+])(
+	"never attaches thinking to a %s reply (#2982)",
+	async (_name, changes: Partial<WecomDeliveryClaimV1>) => {
+		const media = [
+			{
+				fileId: "result-file-1",
+				name: "report.pdf",
+				mediaType: "application/pdf",
+				sizeBytes: 42,
+			},
+		] as const;
+		const { f, input } = await sentFor({
+			thinking: { parts: [raw("私密思考")], complete: true },
+			media,
+			...changes,
+		});
+		expect(f.sender.send).toHaveBeenCalledTimes(1);
+		expect(input && "textWithThinking" in input).toBe(false);
+		expect(JSON.stringify(input)).not.toContain("私密思考");
+	},
+);

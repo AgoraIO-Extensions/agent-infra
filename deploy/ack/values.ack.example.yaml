@@ -1,0 +1,36 @@
+# Start from chart/values.yaml and keep this file outside Git: it contains the
+# environment-specific image digests, LB origin, WeCom Corp ID and Secret names.
+#
+# Required overrides (chart defaults are placeholders and deploy.sh rejects a
+# rendered manifest that still contains them):
+# - images.{web,api,worker,directory,postgres}      immutable repo@sha256 digests
+# - images.runtimeHost.{repository,digest}          Worker-created Runtime images
+# - publicOrigin                                    actual ACK LB origin
+# - directory.corpId                                real WeCom Corp ID
+# - ingress.tlsSecret / ingress.className           cluster TLS Secret / class
+# - images.pullSecrets                              GHCR pull Secret name(s)
+# - secrets.*                                       Secret names in this namespace
+#
+# The chart expects these existing Secret/ConfigMap objects in the namespace:
+# - ack-ghcr-pull
+# - agent-infra-platform-database
+# - agent-infra-api-configuration
+# - agent-infra-api-proxy-token
+# - agent-infra-encryption-public-key
+# - agent-infra-directory-db
+# - agent-infra-directory-migration-db
+# - agent-infra-directory-runtime
+# - agent-infra-directory-ca
+# - agent-infra-worker-configuration
+# - agent-infra-worker-runtime-auth
+# - agent-infra-worker-keyring
+# - agent-infra-worker-directory-read
+# - agent-infra-worker-ca
+# - agent-infra-directory-source (ConfigMap)
+#
+# Keep migrations and Postgres disabled when taking over an initialized ACK
+# namespace; enable them for a new environment after reviewing storage and DB.
+postgres:
+  enabled: false
+migrations:
+  enabled: false

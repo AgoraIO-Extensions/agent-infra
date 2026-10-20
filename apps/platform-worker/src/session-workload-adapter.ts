@@ -44,7 +44,7 @@ import {
  * to them by key and never receives a deployment-level credential.
  */
 export interface SessionSandboxRuntimeInputV1 {
-	readonly driver: "codex";
+	readonly driver: "codex" | "claude" | "acp" | "pi";
 	/** Non-sensitive keyless V4 configuration from the verified projection. */
 	readonly modelConfiguration: string;
 	readonly workerId: string;
@@ -136,8 +136,12 @@ export interface SessionSandboxAllocationV1 {
 	readonly containerPort: number;
 	readonly workspaceMountPath: string;
 	readonly env?: Readonly<Record<string, string>>;
-	/** Verified V4 projection and Worker runtime auth, assembled by the Worker. */
-	readonly runtime: SessionSandboxRuntimeInputV1;
+	/**
+	 * Verified V4 projection and Worker runtime auth, assembled by the Worker.
+	 * 排空（drain）路径若原 payload 未保存 modelProjection（旧 payload 形状），
+	 * 此字段为 null；只有 desiredState === "running" 的准备操作才强制要求非 null。
+	 */
+	readonly runtime: SessionSandboxRuntimeInputV1 | null;
 	readonly connectionConsumerSnapshot?: string | null;
 	readonly connectionInstallationRevision?: string | null;
 	readonly resources: {
@@ -351,12 +355,19 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 	);
 	if (
 		value.egress.nativeMetadataWorkerEgress !== undefined &&
+		// 排空（drain-only）allocation 的 runtime 为 null，无需检查 nativeMetadata 原点。
+		value.runtime !== null &&
 		!isNativeMetadataWorkerOriginV1(value.runtime.nativeMetadataWorkerOrigin)
 	)
 		throw new WorkloadKubernetesError("policy");
 	// Rejects any destination the shared Agent-level compiler would reject.
 	workloadEgressRulesV1(value.egress);
-	validateRuntimeInput(value.runtime);
+	// 排空（drain-only）allocation 的 runtime 允许为 null（旧 payload 形状）：
+	// cleanup 和 control-mode observe 在 stopped 状态下只需沙箱身份标签，
+	// 不依赖模型配置字段。创建资源的入口另行要求 runtime 非空。
+	if (value.runtime !== null) {
+		validateRuntimeInput(value.runtime);
+	}
 }
 
 function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
@@ -368,7 +379,7 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,serviceToken,workerId",
 				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,nativeMetadataWorkerOrigin,serviceToken,workerId",
 			].includes(Object.keys(runtime).sort().join(",")) ||
-			runtime.driver !== "codex" ||
+			!["codex", "claude", "acp", "pi"].includes(runtime.driver) ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
 				(item) => typeof item === "string" && runtimeTextPattern.test(item),
 			) ||
@@ -383,9 +394,17 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 		)
 			throw new Error();
 		// Keyless V4 only: static model credentials are never projected here.
-		RuntimeModelConfigurationV4Schema.parse(
+		const configuration = RuntimeModelConfigurationV4Schema.parse(
 			JSON.parse(runtime.modelConfiguration),
 		);
+		const protocol =
+			runtime.driver === "codex"
+				? "openai-responses-v1"
+				: "anthropic-messages-v1";
+		if (
+			configuration.modelOptions.some((option) => option.protocol !== protocol)
+		)
+			throw new Error();
 	} catch {
 		throw new WorkloadKubernetesError("policy");
 	}
@@ -450,6 +469,8 @@ function validateNativeMetadataWorkerEgressV1(
 function runtimeEnvironment(
 	allocation: SessionSandboxAllocationV1,
 ): V1EnvVar[] {
+	// 排空（drain-only）allocation 的 runtime 为 null：stopped 状态不创建资源，无需环境变量。
+	if (!allocation.runtime) return [];
 	const { runtime } = allocation;
 	const secretRef = (key: "model-config" | "token") => ({
 		secretKeyRef: { name: allocation.secretName, key, optional: false },
@@ -630,12 +651,21 @@ export function sessionSandboxResourcesV1(
 		metadata: metadata(allocation, allocation.secretName),
 		type: "Opaque",
 		immutable: true,
-		data: {
-			token: Buffer.from(allocation.runtime.serviceToken).toString("base64"),
-			"model-config": Buffer.from(
-				allocation.runtime.modelConfiguration,
-			).toString("base64"),
-		},
+		// runtime 为 null 只出现在排空 #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源：
+		// 当时不创建 Runtime Secret。这里的无数据 Secret 只保持资源集合的形状，不会被创建；
+		// observe（control）与 cleanup 对这类来源允许 Secret 不存在（#2885）。
+		...(allocation.runtime
+			? {
+					data: {
+						token: Buffer.from(allocation.runtime.serviceToken).toString(
+							"base64",
+						),
+						"model-config": Buffer.from(
+							allocation.runtime.modelConfiguration,
+						).toString("base64"),
+					},
+				}
+			: {}),
 	};
 	const service: V1Service = {
 		apiVersion: "v1",
@@ -899,10 +929,107 @@ function owned(
 	);
 }
 
+/**
+ * 与 owned() 相同，但 fence 注解与 generation 标签只要求不高于 allocation 的值。只用于已被
+ * 来源记录钉住 UID 的保留 PVC：沙箱停止后 PVC 不会被改写，它的 fence 与 generation 停在
+ * 最初准备时的值；更高的值说明有更新的写入方，仍失败关闭（#2917）。
+ */
+function ownedAtOrBefore(
+	current: KubernetesObject,
+	allocation: SessionSandboxAllocationV1,
+) {
+	const counter = (value: string | undefined) => {
+		const parsed = Number(value);
+		return value !== undefined &&
+			String(parsed) === value &&
+			Number.isSafeInteger(parsed) &&
+			parsed >= 1
+			? parsed
+			: undefined;
+	};
+	const resourceFence = counter(
+		current.metadata?.annotations?.["agent-infra.agora.io/fence"],
+	);
+	const generation = counter(
+		current.metadata?.labels?.["agent-infra.agora.io/generation"],
+	);
+	if (
+		resourceFence === undefined ||
+		generation === undefined ||
+		resourceFence > allocation.resourceFence ||
+		generation > allocation.generation
+	)
+		return false;
+	const earlier = { ...allocation, generation, resourceFence };
+	const expected = sessionSandboxResourcesV1(earlier).find(
+		(resource) => resource.kind === current.kind,
+	);
+	return !!expected && owned(current, expected, earlier);
+}
+
 export function createSessionSandboxWorkloadAdapterV1(options: {
 	readonly client: WorkerKubernetesClientV1;
 }) {
 	return {
+		/**
+		 * #2917：来源本身已停止（只记录了保留的 PVC）时，不删除任何资源，只读证明停止：
+		 * 其余资源按名称都不存在（任何同名对象都失败关闭，不删除也不接管），PVC 是来源
+		 * 记录的同一个（UID、身份一致，fence 不高于来源 fence）。
+		 */
+		async confirmStoppedSource(
+			allocation: SessionSandboxAllocationV1,
+			previous: readonly SessionSandboxResourceIdentityV1[],
+			context: {
+				readonly sourceGeneration: number;
+				readonly sourceResourceFence: number;
+				readonly targetGeneration: number;
+				readonly targetResourceFence: number;
+			},
+		): Promise<SessionSandboxStopReceiptV1> {
+			if (options.client.namespace !== allocation.namespace)
+				throw new WorkloadKubernetesError("policy");
+			validateAllocation(allocation);
+			const [prior] = previous;
+			if (
+				previous.length !== 1 ||
+				prior?.kind !== "PersistentVolumeClaim" ||
+				prior.namespace !== allocation.namespace ||
+				prior.name !== allocation.pvcName
+			)
+				throw new WorkloadKubernetesError("conflict");
+			const expectedResources = sessionSandboxResourcesV1({
+				...allocation,
+				desiredState: "stopped",
+			});
+			for (const expected of expectedResources) {
+				if (expected.kind === "PersistentVolumeClaim") continue;
+				const kind = expected.kind as SessionSandboxResourceIdentityV1["kind"];
+				if (await options.client.read(kind, expected.metadata?.name ?? ""))
+					throw new WorkloadKubernetesError("conflict");
+			}
+			const pvc = await options.client.read(
+				"PersistentVolumeClaim",
+				allocation.pvcName,
+			);
+			if (
+				!pvc?.metadata?.resourceVersion ||
+				pvc.metadata.uid !== prior.uid ||
+				pvc.metadata.deletionTimestamp ||
+				!ownedAtOrBefore(pvc, allocation)
+			)
+				throw new WorkloadKubernetesError("conflict");
+			return {
+				schemaVersion: 1,
+				sandboxId: allocation.sandboxId,
+				sessionId: allocation.sessionId,
+				...context,
+				removed: [],
+				retainedPVC: {
+					...prior,
+					resourceVersion: pvc.metadata.resourceVersion,
+				},
+			};
+		},
 		async prepareRetainedPVC(
 			allocation: SessionSandboxAllocationV1,
 			lifecycle: SessionSandboxLifecycleV1,
@@ -918,6 +1045,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				allocation.desiredState !== "running" ||
 				lifecycle.authority.targetDesiredState !== "running" ||
 				!receipt ||
+				!receipt.retainedPVC ||
 				!preparation ||
 				preparation.generation !== allocation.generation ||
 				preparation.resourceFence !== allocation.resourceFence ||
@@ -981,7 +1109,12 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					resource.kind === "PersistentVolumeClaim",
 			);
 			if (!sourceExpected) throw new WorkloadKubernetesError("policy");
-			if (!owned(current, sourceExpected, sourceAllocation))
+			// 来源已停止（#2917）时 PVC 的 fence 与 generation 停在最初准备时的值，UID 已被回执钉住。
+			if (
+				!(source.observation?.status === "stopped"
+					? ownedAtOrBefore(current, sourceAllocation)
+					: owned(current, sourceExpected, sourceAllocation))
+			)
 				throw new WorkloadKubernetesError("conflict");
 			// Preserve the volume and use the observed UID/resourceVersion for this
 			// single Store-authorized ownership transition, never an unfenced adoption.
@@ -1014,6 +1147,10 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			previous: readonly SessionSandboxResourceIdentityV1[] = [],
 		) {
 			if (options.client.namespace !== allocation.namespace)
+				throw new WorkloadKubernetesError("policy");
+			// 只有排空（stopped）允许 runtime 为 null；运行中的 allocation 缺 runtime 会建出
+			// 缺 Secret / env 的 Pod，必须在任何写入之前拒绝（#2885）。
+			if (allocation.desiredState === "running" && allocation.runtime === null)
 				throw new WorkloadKubernetesError("policy");
 			const resources = sessionSandboxResourcesV1(allocation);
 			// Check the complete previous set before any write. A vanished or replaced
@@ -1123,6 +1260,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					? { ...allocation, desiredState: "stopped" }
 					: allocation,
 			);
+			// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影，排空 allocation 的
+			// runtime 为 null：当时不创建 Runtime Secret，资源规格也由当时的模板渲染，今天的模板
+			// 复现不了。这类来源的 control 观测只按归属标记与 UID 识别（#2885）。
+			const preparedBeforeRuntimeInputs =
+				purpose === "control" && allocation.runtime === null;
 			for (const expected of expectedResources) {
 				const kind = expected.kind as SessionSandboxResourceIdentityV1["kind"];
 				const name = expected.metadata?.name ?? "";
@@ -1134,6 +1276,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					if (current) status = "unknown";
 					continue;
 				}
+				if (!current && kind === "Secret" && preparedBeforeRuntimeInputs)
+					continue;
 				if (
 					!current ||
 					!owned(current, expected, allocation) ||
@@ -1164,12 +1308,13 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				)
 					status = "unknown";
 				const matches =
-					purpose === "control" && kind === "Pod"
+					preparedBeforeRuntimeInputs ||
+					(purpose === "control" && kind === "Pod"
 						? podSpecMatches(
 								runtimeConnectionConsumerControlPodV1(current as V1Pod),
 								runtimeConnectionConsumerControlPodV1(expected as V1Pod),
 							)
-						: resourceSpecMatches(current, expected);
+						: resourceSpecMatches(current, expected));
 				if (!matches) status = "unknown";
 				if (kind === "Pod") {
 					const pod = current as V1Pod;
@@ -1203,6 +1348,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				readonly recordDeletionProgress?: (
 					progress: SessionSandboxDeletionProgressV1,
 				) => Promise<"committed" | "stale" | "unknown">;
+				/** 来源只记录了部分资源（准备中断，#2918）：未记录且不存在的种类视为从未创建。 */
+				readonly partialSource?: boolean;
 			} = {},
 		): Promise<SessionSandboxStopReceiptV1> {
 			if (options.client.namespace !== allocation.namespace)
@@ -1217,6 +1364,16 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			const previousByKind = new Map(
 				previous.map((resource) => [resource.kind, resource]),
 			);
+			// #2918：部分来源先确认所有未记录的种类都不存在，再删除任何资源；任一同名对象存在
+			// 都失败关闭，不接管也不留下删了一半的状态。
+			if (context.partialSource)
+				for (const expected of expectedResources) {
+					const kind =
+						expected.kind as SessionSandboxResourceIdentityV1["kind"];
+					if (previousByKind.has(kind)) continue;
+					if (await options.client.read(kind, expected.metadata?.name ?? ""))
+						throw new WorkloadKubernetesError("conflict");
+				}
 			const deletedResources: Array<
 				SessionSandboxStopReceiptV1["removed"][number]
 			> = [];
@@ -1295,6 +1452,12 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				}
 				if (!current) {
 					const prior = previousByKind.get(kind);
+					// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源（runtime 为 null）从未创建
+					// Runtime Secret：既不在集群里、也没被记录时没有可删除的对象（#2885）。
+					if (!prior && kind === "Secret" && allocation.runtime === null)
+						continue;
+					// #2918：部分准备的来源没有记录、集群里也不存在的种类从未被创建。
+					if (!prior && context.partialSource) continue;
 					if (!prior) throw new WorkloadKubernetesError("unavailable");
 					const identity = existing?.resource ?? prior;
 					const absence = {
@@ -1529,16 +1692,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				pvcExpected.metadata?.name ?? "",
 			);
 			const pvcPrior = previousByKind.get("PersistentVolumeClaim");
-			if (
-				!pvc ||
-				!pvcPrior ||
-				!owned(pvc, pvcExpected, allocation) ||
-				pvc.metadata?.uid !== pvcPrior.uid ||
-				!pvc.metadata.resourceVersion
-			)
-				throw new WorkloadKubernetesError("conflict");
-			return {
-				schemaVersion: 1,
+			const receipt = {
+				schemaVersion: 1 as const,
 				sandboxId: allocation.sandboxId,
 				sessionId: allocation.sessionId,
 				sourceGeneration: context.sourceGeneration ?? allocation.generation,
@@ -1548,6 +1703,23 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				targetResourceFence:
 					context.targetResourceFence ?? allocation.resourceFence,
 				removed: deletedResources,
+			};
+			// #2918：部分准备的来源从未记录 PVC 时，集群里也不能有同名 PVC（未记录的对象一律
+			// 失败关闭，不接管）；回执不保留 PVC。
+			if (context.partialSource && !pvcPrior) {
+				if (pvc) throw new WorkloadKubernetesError("conflict");
+				return { ...receipt, retainedPVC: null };
+			}
+			if (
+				!pvc ||
+				!pvcPrior ||
+				!owned(pvc, pvcExpected, allocation) ||
+				pvc.metadata?.uid !== pvcPrior.uid ||
+				!pvc.metadata.resourceVersion
+			)
+				throw new WorkloadKubernetesError("conflict");
+			return {
+				...receipt,
 				retainedPVC: {
 					...pvcPrior,
 					resourceVersion: pvc.metadata.resourceVersion,

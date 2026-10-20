@@ -35,6 +35,7 @@ import {
 	executionStatusLabels,
 	isTerminal,
 } from "./conversation-screen-state.js";
+import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
 
 type OperationEvent = Extract<
 	PersistedConversationEventV2,
@@ -78,7 +79,7 @@ const phaseLabels = {
 } as const;
 
 /** 同一操作尝试只保留最后一条事实（快照与 SSE 重放可能重复）。 */
-function operationFacts(events: readonly PersistedConversationEventV2[]) {
+function operationFacts(events: readonly ConversationTimelineEventV2[]) {
 	const operations = new Map<string, OperationEvent>();
 	for (const event of events)
 		if (event.type === "execution.operation")
@@ -234,7 +235,7 @@ function OperationFacts({
 	events,
 	options,
 }: {
-	events: readonly PersistedConversationEventV2[];
+	events: readonly ConversationTimelineEventV2[];
 	options: readonly ExecutionModelOption[];
 }) {
 	const facts = operationFacts(events);
@@ -523,7 +524,7 @@ function ExecutionDetailBody({
 				</Button>
 			)}
 			<p className="conversation-page-note">
-				这里展示可审计的执行事实，不包含模型内部思考。
+				这里展示可审计的执行事实，不包含思考过程；模型提供的思考过程显示在回答上方。
 			</p>
 		</>
 	);

@@ -151,16 +151,67 @@ export const ExecutionOperationEventV2Schema = z.strictObject({
 	payload: RuntimeOperationFactV2Schema,
 });
 
+/**
+ * G-07：回退事件 V2 在 V1 payload 之外记录会话原所选选项及受理时的显示名。
+ * 显示名读不到时为 null；V1 读取方仍收到不含原选项的 V1 事件，旧事件保持 V1。
+ */
+export const ModelSelectionFallbackEventV2Schema = z.strictObject({
+	schemaVersion: z.literal(2),
+	kind: z.literal("event"),
+	eventId: SseEventIdV1Schema,
+	conversationId: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+	sequence: z.number().int().positive().safe(),
+	conversationCursor: OpaqueCursorV1Schema,
+	occurredAt: Rfc3339TimestampV1Schema,
+	type: z.literal("model.selection.fell_back"),
+	payload: z.strictObject({
+		modelOptionId: OpaqueIdV1Schema,
+		reasoningLevel: z.string().min(1),
+		reason: z.literal("selection_unavailable"),
+		requestedModelOptionId: OpaqueIdV1Schema,
+		requestedModelDisplayName: z.string().min(1).max(1024).nullable(),
+	}),
+});
+
 /** Mixed history preserves each original event version and stable reference. */
 export const PersistedConversationEventV2Schema = z.union([
 	PersistedConversationEventV1Schema,
 	ExecutionOperationEventV2Schema,
 	BrowserHandoffEventV2Schema,
 	BrowserSideEffectEventV2Schema,
+	ModelSelectionFallbackEventV2Schema,
 ]);
+
+/**
+ * #2979：模型提供的思考过程增量（原始推理或推理摘要），属于会话正文。只出现在 V2 会话
+ * 读取、执行详情与 V2 SSE；V1 SSE 跳过它但推进持久游标。任务投影沿用
+ * PersistedConversationEventV2，不包含思考过程。
+ */
+export const ReasoningDeltaEventV2Schema = z.strictObject({
+	schemaVersion: z.literal(2),
+	kind: z.literal("event"),
+	eventId: SseEventIdV1Schema,
+	conversationId: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+	sequence: z.number().int().positive().safe(),
+	conversationCursor: OpaqueCursorV1Schema,
+	occurredAt: Rfc3339TimestampV1Schema,
+	type: z.literal("reasoning.delta"),
+	payload: z.strictObject({
+		kind: z.enum(["raw", "summary"]),
+		text: z.string().min(1),
+	}),
+});
+
+/** 会话读取方看到的事件：混合版本历史加上思考过程。 */
+const conversationEvents = z.array(
+	z.union([PersistedConversationEventV2Schema, ReasoningDeltaEventV2Schema]),
+);
 
 export const ConversationSseMessageV2Schema = z.union([
 	PersistedConversationEventV2Schema,
+	ReasoningDeltaEventV2Schema,
 	HeartbeatSignalV1Schema,
 	TimelineReloadSignalV1Schema,
 	AuthorizationRevokedSignalV1Schema,
@@ -179,7 +230,7 @@ export function framePilotSseMessageV2(input: unknown) {
 export const ConversationDetailProjectionV2Schema =
 	ConversationDetailProjectionV1Schema.extend({
 		schemaVersion: z.literal(2),
-		events: z.array(PersistedConversationEventV2Schema),
+		events: conversationEvents,
 		/** Present on current servers; omitted by older detail responses. */
 		eventWindow: ConversationEventWindowV1Schema.optional(),
 		/** Whether the Conversation's own Session Sandbox can take messages yet.
@@ -192,7 +243,7 @@ export const ConversationDetailProjectionV2Schema =
 
 const executionAdditions = {
 	schemaVersion: z.literal(2),
-	events: z.array(PersistedConversationEventV2Schema),
+	events: conversationEvents,
 };
 export const ExecutionDetailProjectionV2Schema = z.discriminatedUnion(
 	"status",
@@ -300,7 +351,9 @@ export const pilotOperationSseSchemasV2 = {
 	ExecutionOperationEventV2: ExecutionOperationEventV2Schema,
 	BrowserHandoffEventV2: BrowserHandoffEventV2Schema,
 	BrowserSideEffectEventV2: BrowserSideEffectEventV2Schema,
+	ModelSelectionFallbackEventV2: ModelSelectionFallbackEventV2Schema,
 	PersistedConversationEventV2: PersistedConversationEventV2Schema,
+	ReasoningDeltaEventV2: ReasoningDeltaEventV2Schema,
 	ConversationSseMessageV2: ConversationSseMessageV2Schema,
 };
 
@@ -318,9 +371,13 @@ export type BrowserHandoffEventV2 = z.infer<typeof BrowserHandoffEventV2Schema>;
 export type BrowserSideEffectEventV2 = z.infer<
 	typeof BrowserSideEffectEventV2Schema
 >;
+export type ModelSelectionFallbackEventV2 = z.infer<
+	typeof ModelSelectionFallbackEventV2Schema
+>;
 export type PersistedConversationEventV2 = z.infer<
 	typeof PersistedConversationEventV2Schema
 >;
+export type ReasoningDeltaEventV2 = z.infer<typeof ReasoningDeltaEventV2Schema>;
 export type ConversationSseMessageV2 = z.infer<
 	typeof ConversationSseMessageV2Schema
 >;

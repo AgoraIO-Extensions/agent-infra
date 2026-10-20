@@ -1,4 +1,5 @@
 import type { BrowserHandoffCommandV1 } from "./browser-handoff-admission.js";
+import type { ConversationReasoningKindV1 } from "./conversation-events.js";
 import type { ConversationExecutionSourceV1 } from "./conversation-execution-types.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
@@ -110,9 +111,23 @@ export type ConversationRuntimeOperationEventV2 = Omit<
 	readonly payload: ConversationOperationFactV2;
 };
 
+/** #2979：模型以明文提供的思考过程增量，持久化为会话正文 reasoning.delta。 */
+export type ConversationRuntimeReasoningEventV2 = Omit<
+	ConversationRuntimeEventBaseV1,
+	"schemaVersion"
+> & {
+	readonly schemaVersion: 2;
+	readonly type: "reasoning";
+	readonly payload: {
+		readonly kind: ConversationReasoningKindV1;
+		readonly delta: string;
+	};
+};
+
 export type ConversationRuntimeEvent =
 	| ConversationRuntimeEventV1
-	| ConversationRuntimeOperationEventV2;
+	| ConversationRuntimeOperationEventV2
+	| ConversationRuntimeReasoningEventV2;
 
 export interface ConversationMetadataRecoveryV1 {
 	readonly id: string;

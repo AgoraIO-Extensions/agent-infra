@@ -10,6 +10,8 @@ import {
 } from "vitest";
 
 import {
+	type AuditRow,
+	decodePlatformAuditRowV1,
 	type PlatformAuditAdministratorScopeV1,
 	PlatformAuditQueryError,
 	PostgresPlatformAuditQueryV1,
@@ -29,6 +31,136 @@ const administrator: PlatformAuditAdministratorScopeV1 = {
 };
 
 describe("Platform audit query errors", () => {
+	const anonymousSkillRefusal = {
+		auditId: "anonymous-skill-refusal",
+		traceId: "anonymous-skill-trace",
+		actorType: "unknown",
+		actorId: "anonymous",
+		action: "skill.version.refused",
+		targetType: "unknown",
+		targetId: "unknown",
+		outcome: "rejected",
+		occurredAt: new Date("2026-10-20T00:00:00.000Z"),
+		details: { reason: "authentication_required" },
+	} satisfies AuditRow;
+	it.each([
+		["authentication_required", "rejected"],
+		["forbidden", "rejected"],
+		["invalid_input", "rejected"],
+		["unavailable", "failed"],
+	] as const)(
+		"decodes canonical anonymous Skill refusal %s without inventing a user",
+		(reason, outcome) => {
+			expect(
+				decodePlatformAuditRowV1({
+					...anonymousSkillRefusal,
+					outcome,
+					details: { reason },
+				}),
+			).toMatchObject({
+				actor: { kind: "unknown", actorId: "unknown" },
+				action: "skill.version.refused",
+				subject: { kind: "unknown", subjectId: "unknown" },
+			});
+		},
+	);
+	it("keeps malformed anonymous Skill refusals and other anonymous Skill actions closed", () => {
+		const invalid: Partial<AuditRow>[] = [
+			{ actorId: "unknown" },
+			{ actorId: "another-user" },
+			{ actorType: "system" },
+			{ actorType: "application" },
+			{ targetType: "agent" },
+			{ targetId: "skill-version" },
+			{ outcome: "succeeded" },
+			{ outcome: "failed" },
+			{ details: { reason: "unavailable" } },
+			{ details: { reason: "version_unavailable" } },
+			{ details: { reason: "UNKNOWN_REASON" } },
+			{
+				details: {
+					reason: "authentication_required",
+					secret: "SECRET_SENTINEL",
+				},
+			},
+			{ details: null },
+		];
+		for (const change of invalid)
+			expect(() =>
+				decodePlatformAuditRowV1({ ...anonymousSkillRefusal, ...change }),
+			).toThrow(PlatformAuditQueryError);
+		for (const action of [
+			"skill.version.register",
+			"skill.version.review",
+			"skill.version.revoke",
+			"skill.version.read",
+		])
+			expect(() =>
+				decodePlatformAuditRowV1({
+					...anonymousSkillRefusal,
+					action,
+					outcome: "succeeded",
+					details: { state: "published", replayed: false },
+				}),
+			).toThrow(PlatformAuditQueryError);
+		for (const actorId of ["skill-owner", "anonymous", "unknown"])
+			expect(
+				decodePlatformAuditRowV1({
+					...anonymousSkillRefusal,
+					actorType: "user",
+					actorId,
+				}),
+			).toMatchObject({ actor: { kind: "user", actorId } });
+	});
+	it.each(["succeeded", "failed"] as const)(
+		"requires rejected outcome for authenticated authentication_required refusals: %s",
+		(outcome) => {
+			expect(() =>
+				decodePlatformAuditRowV1({
+					...anonymousSkillRefusal,
+					actorType: "user",
+					actorId: "skill-owner",
+					outcome,
+				}),
+			).toThrow(PlatformAuditQueryError);
+		},
+	);
+
+	it.each(["skills", "defaultRelayKey"] as const)(
+		"decodes the current %s configuration writer field without accepting invalid metadata",
+		(field) => {
+			const row = {
+				auditId: "configuration-audit",
+				traceId: "configuration-trace",
+				actorType: "user",
+				actorId: "configuration-owner",
+				action: "agent.configuration.revised",
+				targetType: "agent",
+				targetId: "configuration-agent",
+				outcome: "succeeded",
+				occurredAt: new Date("2026-10-20T00:00:00.000Z"),
+				details: { changedFields: [field] },
+			} satisfies AuditRow;
+			expect(decodePlatformAuditRowV1(row)).toMatchObject({
+				auditId: row.auditId,
+				summary: `agent.configuration.revised: ${field}`,
+			});
+			for (const details of [
+				{ changedFields: [field, field] },
+				{ changedFields: ["source", field] },
+				{ changedFields: [field, "unknown-field"] },
+				{ changedFields: [field], secretValue: "SECRET_SENTINEL" },
+			]) {
+				expect(() => decodePlatformAuditRowV1({ ...row, details })).toThrow(
+					PlatformAuditQueryError,
+				);
+			}
+			expect(() =>
+				decodePlatformAuditRowV1({ ...row, action: "agent.access.updated" }),
+			).toThrow(PlatformAuditQueryError);
+		},
+	);
+
 	it("uses fixed messages without persistence details", async () => {
 		const adapter = new PostgresPlatformAuditQueryV1({
 			databaseUrl:

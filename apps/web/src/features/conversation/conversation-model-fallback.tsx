@@ -9,7 +9,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "../../components/ui/dialog.js";
-import type { PersistedConversationEventV2 } from "../../pilot/generated-v2/types.gen.js";
+import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
 
 export type ModelOptionName = Readonly<{
 	optionId: string;
@@ -17,16 +17,23 @@ export type ModelOptionName = Readonly<{
 }>;
 
 /** 某个 Execution 的模型回退事实：只有 model.selection.fell_back 事件才产生（G-07）。 */
-export type ModelFallback = Readonly<{ actualModel: string }>;
+export type ModelFallback = Readonly<{
+	requestedModel: string;
+	actualModel: string;
+}>;
+
+/** 请求模型读不到时的中性文案：原选项是被 Owner 移除后才回退的，不显示内部 ID（G-07）。 */
+export const removedModelOptionLabel = "已删除的模型选项";
 
 /**
- * 回退事件只带实际采用的 Owner 默认选项（modelOptionId）、推理档位和固定原因；
- * 契约没有请求模型，所以这里不推断、不显示请求模型（G-07、AC-12）。
+ * 回退事件带实际采用的 Owner 默认选项（modelOptionId）、推理档位和固定原因。
+ * V2 事件另带服务端在回退时记录的原选项显示名，请求模型只取这一记录，不按当前清单推断；
+ * 旧 V1 事件和读不到显示名的 V2 事件写「已删除的模型选项」。
  * 实际模型优先取当前模型清单的显示名，其次取同一 Execution 已采集的模型调用事实，
  * 都没有时为「未提供」；任何情况下都不显示不透明的 modelOptionId。
  */
 export function modelFallbacks(
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	options: readonly ModelOptionName[],
 ): ReadonlyMap<string, ModelFallback> {
 	const result = new Map<string, ModelFallback>();
@@ -46,7 +53,12 @@ export function modelFallbacks(
 			observed.payload.kind === "model"
 				? observed.payload.model.modelId
 				: undefined;
+		const requested =
+			event.schemaVersion === 2
+				? event.payload.requestedModelDisplayName?.trim()
+				: undefined;
 		result.set(event.executionId, {
+			requestedModel: requested || removedModelOptionLabel,
 			actualModel: listed?.trim() || fact?.trim() || "未提供",
 		});
 	}
@@ -57,7 +69,7 @@ export function modelFallbacks(
 export const modelFallbackReason =
 	"会话所选的模型选项已被 Owner 移除，已在当前 Agent 允许范围内改用默认选项。";
 
-/** 设计 #states「模型回退」弹窗：实际模型、原因与说明；契约提供请求模型前不显示该行。
+/** 设计 #states「模型回退」弹窗：请求模型、实际模型、原因与说明（G-07）。
  * 触发器是消息卡状态行里的文字链接，关闭后焦点回到触发器。 */
 export function ModelFallbackDialog({
 	fallback,
@@ -81,6 +93,8 @@ export function ModelFallbackDialog({
 				</DialogHeader>
 				<DialogBody>
 					<dl className="model-fallback-facts">
+						<dt>请求模型</dt>
+						<dd>{fallback.requestedModel}</dd>
 						<dt>实际模型</dt>
 						<dd>{fallback.actualModel}</dd>
 						<dt>原因</dt>

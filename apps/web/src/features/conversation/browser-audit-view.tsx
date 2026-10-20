@@ -13,7 +13,6 @@ import {
 } from "@/components/ui/dialog";
 import { Timestamp } from "@/components/ui/timestamp";
 import type { ChipTone } from "@/lib/status-tone";
-import type { PersistedConversationEventV2 } from "../../pilot/generated-v2/types.gen.js";
 import { formatPerson, unresolvedDirectoryLabels } from "../directory-names.js";
 import {
 	browserEventsForExecution,
@@ -31,6 +30,7 @@ import {
 	browserSideEffectStatusLabels,
 	browserToolLabel,
 } from "./browser-labels.js";
+import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
 
 export const MAX_BROWSER_AUDIT_ENTRIES = 50;
 
@@ -72,7 +72,7 @@ function latest(map: Map<string, BrowserAuditEntry>, entry: BrowserAuditEntry) {
  * 绑定与事件范围不一致、origin 带路径或凭据、摘要为空的记录直接丢弃。
  */
 export function browserAuditRecords(
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	conversationId?: string,
 	executionId?: string,
 ): { entries: readonly BrowserAuditEntry[]; truncated: boolean } {
@@ -149,7 +149,7 @@ export function browserAuditRecords(
 }
 
 export function browserAuditEntries(
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	conversationId?: string,
 	executionId?: string,
 ): readonly BrowserAuditEntry[] {
@@ -236,7 +236,7 @@ export function BrowserOperationRecordDialog({
 	viewer,
 }: {
 	readonly conversationId?: string;
-	readonly events: readonly PersistedConversationEventV2[];
+	readonly events: readonly ConversationTimelineEventV2[];
 	readonly executionId?: string;
 	/** 当前登录用户，用于显示接管人姓名。 */
 	readonly viewer?: BrowserRecordViewer;

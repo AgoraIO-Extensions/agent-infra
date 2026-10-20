@@ -201,33 +201,44 @@ export function createLdapIdentityDirectory(
 	};
 	const createClient =
 		config.createClient ?? ((options: ClientOptions) => new Client(options));
-	async function find(
-		attributeNameToSearch: string,
-		value: string,
-	): Promise<LdapEntry | null> {
+	async function withServiceClient<T>(
+		lookup: (client: LdapClient) => Promise<T>,
+	): Promise<T> {
 		const client = createClient(clientOptions);
 		try {
 			await client.bind(config.serviceBindDn, config.serviceBindPassword);
-			const result = await client.search(config.baseDn, {
-				filter: new EqualityFilter({ attribute: attributeNameToSearch, value }),
-				scope: "sub",
-				derefAliases: "never",
-				sizeLimit: 2,
-				timeLimit: Math.ceil(timeoutMs / 1000),
-				attributes: [
-					config.uidAttribute,
-					config.emailAttribute,
-					config.displayNameAttribute,
-				],
-			});
-			if (result.searchReferences.length || result.searchEntries.length > 1)
-				throw new LdapIdentityUnavailableError();
-			return result.searchEntries[0] ?? null;
+			return await lookup(client);
 		} catch {
 			throw new LdapIdentityUnavailableError();
 		} finally {
 			await client.unbind().catch(() => undefined);
 		}
+	}
+	async function search(
+		client: LdapClient,
+		attributeNameToSearch: string,
+		value: string,
+	): Promise<LdapEntry | null> {
+		const result = await client.search(config.baseDn, {
+			filter: new EqualityFilter({ attribute: attributeNameToSearch, value }),
+			scope: "sub",
+			derefAliases: "never",
+			sizeLimit: 2,
+			timeLimit: Math.ceil(timeoutMs / 1000),
+			attributes: [
+				config.uidAttribute,
+				config.emailAttribute,
+				config.displayNameAttribute,
+			],
+		});
+		if (result.searchReferences.length || result.searchEntries.length > 1)
+			throw new LdapIdentityUnavailableError();
+		return result.searchEntries[0] ?? null;
+	}
+	function find(attributeNameToSearch: string, value: string) {
+		return withServiceClient((client) =>
+			search(client, attributeNameToSearch, value),
+		);
 	}
 
 	type Identity = Pick<LdapAccount, "uid" | "email" | "displayName" | "roles">;
@@ -260,8 +271,11 @@ export function createLdapIdentityDirectory(
 		};
 	}
 
-	async function verifyUniqueEmail(value: Identity): Promise<void> {
-		const entry = await find(config.emailAttribute, value.email);
+	async function verifyUniqueEmail(
+		client: LdapClient,
+		value: Identity,
+	): Promise<void> {
+		const entry = await search(client, config.emailAttribute, value.email);
 		if (
 			!entry ||
 			attribute(entry, config.uidAttribute) !== value.uid ||
@@ -280,11 +294,15 @@ export function createLdapIdentityDirectory(
 	): Promise<LdapAccount | null> {
 		try {
 			requiredText(uid, 256);
-			const entry = await find(config.uidAttribute, uid);
-			if (!entry) return null;
-			const parsed = identity(entry);
-			if (parsed.uid !== uid) throw new LdapIdentityUnavailableError();
-			await verifyUniqueEmail(parsed);
+			const parsed = await withServiceClient(async (client) => {
+				const entry = await search(client, config.uidAttribute, uid);
+				if (!entry) return null;
+				const value = identity(entry);
+				if (value.uid !== uid) throw new LdapIdentityUnavailableError();
+				await verifyUniqueEmail(client, value);
+				return value;
+			});
+			if (!parsed) return null;
 			if (createIdentity && parsed.email !== expectedEmail) return null;
 			const storedId = createIdentity
 				? await config.identityIds.getOrCreate(config.issuer, uid, randomUUID())

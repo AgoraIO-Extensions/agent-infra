@@ -144,6 +144,8 @@ export interface SessionRuntimeDriverOptions {
 export interface NativeSessionOptions {
 	directory: string;
 	cwd: string;
+	/** Driver-owned reference used by Host authorization; never the vendor nativeId. */
+	readonly runtimeSessionRef: string;
 	nativeId?: string;
 	history?: { checkpoint: string; complete: boolean };
 	selection: RuntimeSelectionV1;
@@ -376,26 +378,21 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	async validateExternalAction(
 		action: import("./driver.js").RuntimeExternalActionAuthorization,
 	) {
-		if (action.runtimeOperationId !== action.executionId)
+		if (this.closed || action.runtimeOperationId !== action.executionId)
 			runtimeAuthorizationDenied();
-		let binding: Binding | undefined;
-		let file: DurableJsonFile<Session> | undefined;
-		for (const entry of this.index.read().sessions) {
-			const candidate = await this.file(entry);
-			if (candidate.read().nativeId === action.nativeSessionRef) {
-				binding = entry;
-				file = candidate;
-				break;
-			}
-		}
-		if (!binding || !file) runtimeAuthorizationDenied();
+		const binding = this.index
+			.read()
+			.sessions.find((entry) => entry.ref === action.nativeSessionRef);
+		if (!binding) runtimeAuthorizationDenied();
+		const file = await this.file(binding);
 		const turn = file
 			.read()
 			.turns.find((item) => item.executionId === action.executionId);
-		if (!turn) runtimeAuthorizationDenied();
+		if (!turn || terminal(turn.status)) runtimeAuthorizationDenied();
 		if (turn.unknownHold) runtimeAuthorizationDenied();
 		if (
 			action.kind === "model" &&
+			turn.operationFacts === undefined &&
 			(turn.operationRef !== action.operationRef ||
 				turn.attemptRef !== action.attemptRef)
 		)
@@ -986,6 +983,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							};
 					const restored = await this.options.openSession({
 						directory,
+						runtimeSessionRef: binding.ref,
 						cwd: workspace,
 						nativeId: state.nativeId,
 						history: latest.nativeCheckpoint
@@ -1505,16 +1503,35 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		let admitted: () => void = () => {};
 		const operationRef = randomUUID();
 		const attemptRef = randomUUID();
-		let activeNativeSessionRef = before.nativeId ?? "";
 		const resolveModelCredential = this.options.authorizeModelAction
 			? async () => {
+					const turn = file
+						.read()
+						.turns.find((turn) => turn.executionId === command.executionId);
+					if (
+						this.closed ||
+						!turn ||
+						turn.status !== "running" ||
+						turn.unknownHold
+					)
+						runtimeAuthorizationDenied();
+					const latest = new Map<string, RuntimeOperationFactV2>();
+					for (const fact of turn.operationFacts ?? []) {
+						if (fact.kind === "model")
+							latest.set(`${fact.operationRef}:${fact.attemptRef}`, fact);
+					}
+					const active = [...latest.values()].filter(
+						(fact) => fact.phase === "intent" || fact.phase === "started",
+					);
+					const fact = active[0];
+					if (active.length !== 1 || !fact) runtimeAuthorizationDenied();
 					const authorized = await this.options.authorizeModelAction?.({
 						kind: "model",
-						nativeSessionRef: activeNativeSessionRef,
+						nativeSessionRef: ref,
 						executionId: command.executionId,
 						runtimeOperationId: command.executionId,
-						operationRef,
-						attemptRef,
+						operationRef: fact.operationRef,
+						attemptRef: fact.attemptRef,
 					});
 					if (!authorized?.relayKey)
 						throw new Error("RUNTIME_AUTHORIZATION_DENIED");
@@ -1582,6 +1599,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		try {
 			const sessionOptions: NativeSessionOptions = {
 				directory,
+				runtimeSessionRef: ref,
 				executionId: command.executionId,
 				connectionReference: {
 					agentId: command.agentId,
@@ -1668,7 +1686,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				native = reuse.native;
 				native.startTurn?.(sessionOptions);
 			} else native = await this.options.openSession(sessionOptions);
-			activeNativeSessionRef = native.nativeId;
 		} catch {
 			unavailable();
 		}

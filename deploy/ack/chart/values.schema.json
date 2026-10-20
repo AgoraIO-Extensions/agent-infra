@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["images", "secrets", "publicOrigin", "directory", "scheduling", "resources", "postgres", "ingress", "migrations"],
+  "properties": {
+    "images": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["web", "api", "worker", "directory", "postgres", "runtimeHost", "pullSecrets"],
+      "properties": {
+        "runtimeHost": {
+          "type": "object",
+          "required": ["repository", "digest"],
+          "properties": {
+            "repository": {"type": "string", "minLength": 1},
+            "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+          }
+        }
+      }
+    },
+    "secrets": {"type": "object", "additionalProperties": {"type": "string"}},
+    "publicOrigin": {"type": "string", "pattern": "^https://"},
+    "directory": {"type": "object", "required": ["corpId", "sourceConfigMap", "sourceModule", "runtimeDatabaseRole"]},
+    "scheduling": {"type": "object"},
+    "sessionRuntimeScheduling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "architecture"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "architecture": {"type": "string", "enum": ["amd64", "arm64"]}
+      }
+    },
+    "resources": {"type": "object"},
+    "postgres": {"type": "object"},
+    "ingress": {"type": "object"},
+    "migrations": {"type": "object"}
+  }
+}

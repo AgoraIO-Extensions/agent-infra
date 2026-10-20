@@ -817,10 +817,15 @@ export type RuntimeFileExchangeRequestV1 = {
     sessionGeneration: number;
 };
 
-export type ScopedPlatformAuditActionV1 = 'skill.version.register' | 'skill.version.review' | 'skill.version.revoke' | 'skill.version.read' | 'skill.version.refused' | 'connection.installation.begin' | 'connection.installation.confirm' | 'agent.application.submitted' | 'agent.application.updated' | 'agent.application.resubmitted' | 'agent.application.withdrawn' | 'agent.application.approved' | 'agent.application.rejected' | 'agent.lifecycle.stopped' | 'agent.lifecycle.restarted' | 'agent.lifecycle.creation_retried' | 'agent.lifecycle.disabled' | 'agent.workload.creation_succeeded' | 'agent.workload.creation_failed' | 'agent.workload.service_starting' | 'agent.workload.service_ready' | 'agent.workload.service_updating' | 'agent.workload.service_unavailable' | 'agent.configuration.revised' | 'agent.access.updated' | 'api.access.rejected' | 'api.application.created' | 'api.credential.issued' | 'api.credential.revoked' | 'api.credential.narrowed' | 'api.credential.metadata.read' | 'api.credential.delivery.granted' | 'api.credential.delivery.revoked' | 'api.agent.grant.granted' | 'api.agent.grant.revoked' | 'api.agent.metadata.read' | 'api.agent.state.read' | 'api.agent.manager.granted' | 'api.agent.manager.revoked' | 'api.agent.manager.replayed' | 'api.agent.lifecycle.refused' | 'api.agent.manager.refused' | 'api.agent.use.granted' | 'api.agent.use.revoked' | 'api.agent.use.replayed' | 'api.agent.use.refused' | 'api.agent.state.refused' | 'platform.user.disabled' | 'platform.user.reenabled' | 'relay_key.personal.read' | 'relay_key.personal.replace' | 'relay_key.personal.revoke' | 'task.api.access' | 'task.api.subscription.started' | 'task.api.subscription.ended' | 'task.authorization.accepted' | 'task.status.changed' | 'task.control.created' | 'execution.operation.observed' | 'conversation.task.accepted' | 'conversation.message.accepted' | 'conversation.regeneration.accepted' | 'conversation.stop.accepted' | 'conversation.model_selection.updated' | 'conversation.model_selection.fell_back' | 'conversation.task.status' | 'secret.decrypt' | 'secret.activate' | 'secret.rewrap' | 'secret.retire-key' | 'audit.query.completed' | 'audit.query.failed' | 'wecom.setup_started' | 'wecom.credentials_submitted' | 'wecom.setup_cancelled' | 'wecom.setup_expired' | 'wecom.setup_failed' | 'wecom.callback_verified' | 'wecom.setup_activated' | 'wecom.connection_verifying' | 'wecom.connection_connected' | 'wecom.connection_disconnected' | 'wecom.connection_auth_failed' | 'wecom.denied' | 'wecom.unavailable' | 'wecom.conflict' | 'wecom.accepted' | 'wecom.unknown' | 'wecom.sending' | 'wecom.sent' | 'wecom.failed' | 'wecom.cancelled' | 'wecom.expired' | 'wecom.abandoned' | 'api.agent.create.accepted' | 'api.agent.create.replayed' | 'api.agent.create.refused' | 'relay_key.agent_default.replace';
+export type ScopedPlatformAuditActionV1 = 'skill.version.register' | 'skill.version.review' | 'skill.version.revoke' | 'skill.version.read' | 'skill.version.refused' | 'connection.installation.begin' | 'connection.installation.confirm' | 'agent.application.submitted' | 'agent.application.updated' | 'agent.application.resubmitted' | 'agent.application.withdrawn' | 'agent.application.approved' | 'agent.application.rejected' | 'agent.lifecycle.stopped' | 'agent.lifecycle.restarted' | 'agent.lifecycle.creation_retried' | 'agent.lifecycle.disabled' | 'agent.workload.creation_succeeded' | 'agent.workload.creation_failed' | 'agent.workload.service_starting' | 'agent.workload.service_ready' | 'agent.workload.service_updating' | 'agent.workload.service_unavailable' | 'agent.configuration.revised' | 'agent.access.updated' | 'api.access.rejected' | 'api.application.created' | 'api.credential.issued' | 'api.credential.revoked' | 'api.credential.narrowed' | 'api.credential.metadata.read' | 'api.credential.delivery.granted' | 'api.credential.delivery.revoked' | 'api.agent.grant.granted' | 'api.agent.grant.revoked' | 'api.agent.metadata.read' | 'api.agent.state.read' | 'api.agent.manager.granted' | 'api.agent.manager.revoked' | 'api.agent.manager.replayed' | 'api.agent.lifecycle.refused' | 'api.agent.manager.refused' | 'api.agent.use.granted' | 'api.agent.use.revoked' | 'api.agent.use.replayed' | 'api.agent.use.refused' | 'api.agent.state.refused' | 'platform.user.disabled' | 'platform.user.reenabled' | 'relay_key.personal.read' | 'relay_key.personal.replace' | 'relay_key.personal.revoke' | 'task.api.access' | 'task.api.subscription.started' | 'task.api.subscription.ended' | 'task.authorization.accepted' | 'task.status.changed' | 'task.control.created' | 'execution.operation.observed' | 'conversation.task.accepted' | 'conversation.message.accepted' | 'conversation.regeneration.accepted' | 'conversation.stop.accepted' | 'conversation.model_selection.updated' | 'conversation.model_selection.fell_back' | 'conversation.task.status' | 'secret.decrypt' | 'secret.activate' | 'secret.rewrap' | 'secret.retire-key' | 'audit.query.completed' | 'audit.query.failed' | 'wecom.setup_started' | 'wecom.credentials_submitted' | 'wecom.setup_cancelled' | 'wecom.setup_expired' | 'wecom.setup_failed' | 'wecom.callback_verified' | 'wecom.setup_activated' | 'wecom.connection_verifying' | 'wecom.connection_connected' | 'wecom.connection_disconnected' | 'wecom.connection_auth_failed' | 'wecom.denied' | 'wecom.unavailable' | 'wecom.conflict' | 'wecom.accepted' | 'wecom.unknown' | 'wecom.sending' | 'wecom.sent' | 'wecom.failed' | 'wecom.cancelled' | 'wecom.expired' | 'wecom.abandoned' | 'api.agent.create.accepted' | 'api.agent.create.replayed' | 'api.agent.create.refused' | 'relay_key.agent_default.replace' | 'skill.project.create' | 'skill.project.update' | 'skill.project.list' | 'skill.project.read' | 'relay_key.agent_default.read' | 'relay_key.agent_default.candidates';
 
 export type ScopedPlatformAuditPageV1 = {
     items: Array<ScopedPlatformAuditProjectionV1>;
+    nextCursor: string | null;
+};
+
+export type ScopedPlatformAuditPageV2 = {
+    items: Array<ScopedPlatformAuditProjectionV2>;
     nextCursor: string | null;
 };
 
@@ -910,6 +915,109 @@ export type ScopedPlatformAuditProjectionV1 = {
     result: ScopedPlatformAuditResultV1;
     schemaVersion: 1;
     subject: {
+        kind: 'agent_application' | 'agent' | 'secret' | 'secret_key' | 'grant' | 'unknown' | 'conversation' | 'execution' | 'configuration' | 'api_credential';
+        subjectId: string;
+    };
+    summary: string;
+    taskApi: {
+        operation: 'submit' | 'read' | 'cancel' | 'subscribe';
+        phase: 'access' | 'subscription.started' | 'subscription.ended';
+        reason: 'request_accepted' | 'invalid_request' | 'authentication_required' | 'authorization_revoked' | 'missing_scope' | 'resource_unavailable' | 'capacity_full' | 'conflict' | 'dependency_unavailable' | 'client_disconnected' | 'stream_ended' | 'subscription_unconfirmed';
+        subscriptionId?: string;
+    } | null;
+    traceId: string;
+};
+
+export type ScopedPlatformAuditProjectionV2 = {
+    action: ScopedPlatformAuditActionV1;
+    actor: {
+        actorId: string;
+        displayName: string | null;
+        kind: 'user' | 'application' | 'system' | 'unknown';
+    };
+    agentDisplayName: string | null;
+    agentId: string | null;
+    auditId: string;
+    authorizationRecordId: string | null;
+    conversationId: string | null;
+    executionId: string | null;
+    executor: 'platform_worker' | null;
+    occurredAt: string;
+    operation: {
+        eventId: string;
+        fact: {
+            attemptRef: string;
+            durationMs?: number;
+            failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
+            finishedAt?: string;
+            kind: 'model';
+            model: {
+                configVersion: string;
+                modelId: string;
+                modelOptionId: string;
+                reasoningLevel?: string;
+            };
+            operationRef: string;
+            parentOperationRef?: string;
+            phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+            startedAt?: string;
+            usage?: {
+                cachedInputTokens?: number;
+                inputTokens?: number;
+                outputTokens?: number;
+            };
+        } | {
+            attemptRef: string;
+            browser?: {
+                actionId: string;
+                capabilityVersion: number;
+                imageDigest?: string;
+                pageRevision: number;
+                resourceFence: number;
+                sessionGeneration: number;
+                sideEffect: boolean;
+                workloadRevision?: number;
+            };
+            connection?: {
+                callRef: string;
+                consumerId?: string;
+                credentialRevision?: string;
+                instanceRef?: string;
+                serviceRef: string;
+                verification: 'verified';
+            } | {
+                callRef?: string;
+                consumerId?: string;
+                credentialRevision?: string;
+                instanceRef?: string;
+                reason: 'receipt_missing' | 'record_unavailable' | 'authorization_unavailable' | 'binding_mismatch' | 'response_unconfirmed';
+                serviceRef: string;
+                verification: 'unverified';
+            };
+            durationMs?: number;
+            failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
+            finishedAt?: string;
+            kind: 'tool';
+            operationRef: string;
+            parentOperationRef?: string;
+            phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+            requestDigest?: string;
+            resultRef?: string;
+            rpcRequestId?: string | number;
+            startedAt?: string;
+            toolId: string;
+        };
+    } | null;
+    originalPrincipal: {
+        displayName: string | null;
+        id: string;
+        kind: 'user' | 'application';
+    } | null;
+    requestId: string | null;
+    result: ScopedPlatformAuditResultV1;
+    schemaVersion: 2;
+    subject: {
+        displayName: string | null;
         kind: 'agent_application' | 'agent' | 'secret' | 'secret_key' | 'grant' | 'unknown' | 'conversation' | 'execution' | 'configuration' | 'api_credential';
         subjectId: string;
     };
@@ -1094,6 +1202,23 @@ export type TaskProjectionV1 = {
         schemaVersion: 2;
         sequence: number;
         type: 'browser.side_effect';
+    } | {
+        conversationCursor: string;
+        conversationId: string;
+        eventId: SseEventIdV1;
+        executionId: string;
+        kind: 'event';
+        occurredAt: string;
+        payload: {
+            modelOptionId: string;
+            reason: 'selection_unavailable';
+            reasoningLevel: string;
+            requestedModelDisplayName: string | null;
+            requestedModelOptionId: string;
+        };
+        schemaVersion: 2;
+        sequence: number;
+        type: 'model.selection.fell_back';
     } | TaskStatusEventV1>;
     executionId: string;
     output: string;
@@ -1241,6 +1366,23 @@ export type TaskSseMessageV1 = PersistedConversationEventV1 | {
     schemaVersion: 2;
     sequence: number;
     type: 'browser.side_effect';
+} | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        modelOptionId: string;
+        reason: 'selection_unavailable';
+        reasoningLevel: string;
+        requestedModelDisplayName: string | null;
+        requestedModelOptionId: string;
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'model.selection.fell_back';
 } | TaskStatusEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
 
 export type TaskStatusEventV1 = {
@@ -1270,6 +1412,15 @@ export type TimelineReloadSignalV1 = {
     resumeCursor: string;
     schemaVersion: 1;
     type: 'timeline.reload';
+};
+
+export type WecomBotConnectionProjectionV2 = {
+    qrAvailable: false;
+    qrUnavailableReason: 'authorization_correlation_unverified';
+    status: 'not_configured' | 'callback' | 'verifying' | 'connected' | 'disconnected' | 'auth_failed';
+} | {
+    qrAvailable: true;
+    status: 'not_configured' | 'callback' | 'verifying' | 'connected' | 'disconnected' | 'auth_failed';
 };
 
 export type AgentApplicationCreateRequestV1Writable = {
@@ -3975,6 +4126,155 @@ export type AbandonUnknownWecomDeliveryResponses = {
 
 export type AbandonUnknownWecomDeliveryResponse = AbandonUnknownWecomDeliveryResponses[keyof AbandonUnknownWecomDeliveryResponses];
 
+export type GetWecomBotConnectionV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/wecom-bot';
+};
+
+export type GetWecomBotConnectionV2Errors = {
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetWecomBotConnectionV2Error = GetWecomBotConnectionV2Errors[keyof GetWecomBotConnectionV2Errors];
+
+export type GetWecomBotConnectionV2Responses = {
+    /**
+     * Owner bot connection status with QR availability
+     */
+    200: WecomBotConnectionProjectionV2;
+};
+
+export type GetWecomBotConnectionV2Response = GetWecomBotConnectionV2Responses[keyof GetWecomBotConnectionV2Responses];
+
+export type ListOwnExecutionAuditV2Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        limit?: number;
+        cursor?: string;
+        from?: string;
+        until?: string;
+        principalKind?: 'user' | 'application';
+        principalId?: string;
+        agentId?: string;
+        action?: ScopedPlatformAuditActionV1;
+        result?: ScopedPlatformAuditResultV1;
+        executionId?: string;
+    };
+    url: '/api/v2/audit';
+};
+
+export type ListOwnExecutionAuditV2Errors = {
+    /**
+     * Audit query failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListOwnExecutionAuditV2Error = ListOwnExecutionAuditV2Errors[keyof ListOwnExecutionAuditV2Errors];
+
+export type ListOwnExecutionAuditV2Responses = {
+    /**
+     * Authorized audit metadata with permitted display names
+     */
+    200: ScopedPlatformAuditPageV2;
+};
+
+export type ListOwnExecutionAuditV2Response = ListOwnExecutionAuditV2Responses[keyof ListOwnExecutionAuditV2Responses];
+
+export type GetOwnExecutionAuditV2Data = {
+    body?: never;
+    path: {
+        auditId: string;
+    };
+    query?: {
+        limit?: number;
+        cursor?: string;
+        from?: string;
+        until?: string;
+        principalKind?: 'user' | 'application';
+        principalId?: string;
+        agentId?: string;
+        action?: ScopedPlatformAuditActionV1;
+        result?: ScopedPlatformAuditResultV1;
+        executionId?: string;
+    };
+    url: '/api/v2/audit/{auditId}';
+};
+
+export type GetOwnExecutionAuditV2Errors = {
+    /**
+     * Audit query failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetOwnExecutionAuditV2Error = GetOwnExecutionAuditV2Errors[keyof GetOwnExecutionAuditV2Errors];
+
+export type GetOwnExecutionAuditV2Responses = {
+    /**
+     * Authorized audit detail with permitted display names
+     */
+    200: ScopedPlatformAuditProjectionV2;
+};
+
+export type GetOwnExecutionAuditV2Response = GetOwnExecutionAuditV2Responses[keyof GetOwnExecutionAuditV2Responses];
+
 export type ListScopedAdministratorAuditData = {
     body?: never;
     path?: never;
@@ -4080,3 +4380,109 @@ export type GetScopedAdministratorAuditResponses = {
 };
 
 export type GetScopedAdministratorAuditResponse = GetScopedAdministratorAuditResponses[keyof GetScopedAdministratorAuditResponses];
+
+export type ListScopedAdministratorAuditV2Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        limit?: number;
+        cursor?: string;
+        from?: string;
+        until?: string;
+        principalKind?: 'user' | 'application';
+        principalId?: string;
+        agentId?: string;
+        action?: ScopedPlatformAuditActionV1;
+        result?: ScopedPlatformAuditResultV1;
+        executionId?: string;
+    };
+    url: '/api/v4/admin/audit';
+};
+
+export type ListScopedAdministratorAuditV2Errors = {
+    /**
+     * Audit query failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListScopedAdministratorAuditV2Error = ListScopedAdministratorAuditV2Errors[keyof ListScopedAdministratorAuditV2Errors];
+
+export type ListScopedAdministratorAuditV2Responses = {
+    /**
+     * Authorized audit metadata with permitted display names
+     */
+    200: ScopedPlatformAuditPageV2;
+};
+
+export type ListScopedAdministratorAuditV2Response = ListScopedAdministratorAuditV2Responses[keyof ListScopedAdministratorAuditV2Responses];
+
+export type GetScopedAdministratorAuditV2Data = {
+    body?: never;
+    path: {
+        auditId: string;
+    };
+    query?: {
+        limit?: number;
+        cursor?: string;
+        from?: string;
+        until?: string;
+        principalKind?: 'user' | 'application';
+        principalId?: string;
+        agentId?: string;
+        action?: ScopedPlatformAuditActionV1;
+        result?: ScopedPlatformAuditResultV1;
+        executionId?: string;
+    };
+    url: '/api/v4/admin/audit/{auditId}';
+};
+
+export type GetScopedAdministratorAuditV2Errors = {
+    /**
+     * Audit query failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Audit query failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetScopedAdministratorAuditV2Error = GetScopedAdministratorAuditV2Errors[keyof GetScopedAdministratorAuditV2Errors];
+
+export type GetScopedAdministratorAuditV2Responses = {
+    /**
+     * Authorized audit detail with permitted display names
+     */
+    200: ScopedPlatformAuditProjectionV2;
+};
+
+export type GetScopedAdministratorAuditV2Response = GetScopedAdministratorAuditV2Responses[keyof GetScopedAdministratorAuditV2Responses];

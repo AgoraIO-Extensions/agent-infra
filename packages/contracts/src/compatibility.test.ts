@@ -103,6 +103,29 @@ function restoreOldApiReadActions(input: unknown) {
 	for (const child of Object.values(value)) restoreOldApiReadActions(child);
 }
 
+// #2879：从产物中移除 Skill 项目操作与 Agent 默认 Key 读取/候选动作，还原到 #2879 之前的契约。
+const adminAuditActions2879 = [
+	"skill.project.create",
+	"skill.project.update",
+	"skill.project.list",
+	"skill.project.read",
+	"relay_key.agent_default.read",
+	"relay_key.agent_default.candidates",
+] as const;
+
+function restorePreAdminAuditActionsRegistration2879Contract(value: {
+	components: { schemas: Record<string, unknown> };
+}) {
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1 as
+		| { enum?: string[] }
+		| undefined;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) =>
+				!(adminAuditActions2879 as readonly string[]).includes(action),
+		);
+}
+
 function restorePreSkillHubAuditContract(value: {
 	components: { schemas: Record<string, unknown> };
 }) {
@@ -228,6 +251,7 @@ function restorePreAgentApiManagementContract(value: {
 	paths: Record<string, unknown>;
 	components: { schemas: Record<string, unknown> };
 }) {
+	restorePreAdminAuditActionsRegistration2879Contract(value);
 	restorePreSkillHubAuditContract(value);
 	restorePreApplicationUseGrantContract(value);
 	restorePreAgentCreationAuditContract(value);
@@ -360,6 +384,8 @@ describe("contract compatibility command", () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),
 		);
+		// 先还原 #2879 新增，再对比 #1574 的四个 Agent 创建动作
+		restorePreAdminAuditActionsRegistration2879Contract(current);
 		const previous = structuredClone(current);
 		restorePreAgentCreationAuditContract(previous);
 		const directory = await mkdtemp(
@@ -403,6 +429,689 @@ describe("contract compatibility command", () => {
 				mutate(changed);
 				await writeFile(currentPath, JSON.stringify(changed));
 				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the six admin audit actions registered in #2879", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		// 恢复到 #2879 之前的契约（去掉这 6 个动作）
+		const previous = structuredClone(current);
+		restorePreAdminAuditActionsRegistration2879Contract(previous);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "admin-audit-2879-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			// 绿灯：精确新增应该通过
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			// 变异测试：以下任何篡改都必须导致门禁失败
+			const mutations: ((document: typeof current) => void)[] = [
+				// 添加一个未登记的额外动作
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+						"skill.project.unreviewed",
+					),
+				// 去掉最后一个已登记动作
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.pop(),
+				// 去掉第一个已登记动作（颠倒顺序验证）
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.splice(
+						document.components.schemas.ScopedPlatformAuditActionV1.enum.indexOf(
+							"skill.project.create",
+						),
+						1,
+					),
+			];
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the pinned audit display-name V2 entries (#2909)", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const paths = [
+			"/api/v2/audit",
+			"/api/v2/audit/{auditId}",
+			"/api/v4/admin/audit",
+			"/api/v4/admin/audit/{auditId}",
+		];
+		const previous = structuredClone(current);
+		for (const path of paths) delete previous.paths[path];
+		delete previous.components.schemas.ScopedPlatformAuditProjectionV2;
+		delete previous.components.schemas.ScopedPlatformAuditPageV2;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "audit-display-name-v2-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				// 管理员入口只接受平台会话，不能改成 Bearer 或匿名。
+				(value: typeof current) => {
+					value.paths["/api/v4/admin/audit"].get.security = [
+						{ PlatformSession: [] },
+						{ platformApiCredential: [] },
+					];
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/audit/{auditId}"].get.security = [];
+				},
+				// V2 投影保持 strict，不能带出凭证、正文或任意字段。
+				(value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV2.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV2.properties.credential =
+						{ type: "string" };
+				},
+				(value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV2.properties.actor.additionalProperties = true;
+				},
+				// 名称有上限。
+				(value: typeof current) => {
+					delete value.components.schemas.ScopedPlatformAuditProjectionV2
+						.properties.agentDisplayName.anyOf[0].maxLength;
+				},
+				// 已发布的 V1 投影与入口保持不变。
+				(value: typeof current) => {
+					value.components.schemas.ScopedPlatformAuditProjectionV1.properties.agentDisplayName =
+						{ type: "string" };
+				},
+				(value: typeof current) => {
+					value.paths["/api/v1/audit"].get.responses["200"].content[
+						"application/json"
+					].schema = {
+						$ref: "#/components/schemas/ScopedPlatformAuditPageV2",
+					};
+				},
+				(value: typeof current) => {
+					value.paths["/api/v5/admin/audit"] = structuredClone(
+						value.paths["/api/v4/admin/audit"],
+					);
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the pinned WeCom bot status V2 with QR availability (#2911)", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const statusPath = "/api/v2/agents/{agentId}/wecom-bot";
+		const previous = structuredClone(current);
+		delete previous.paths[statusPath];
+		delete previous.components.schemas.WecomBotConnectionProjectionV2;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "wecom-bot-qr-availability-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const branches = (value: typeof current) =>
+				value.components.schemas.WecomBotConnectionProjectionV2.oneOf;
+			for (const mutate of [
+				// 投影保持 strict，不能放宽或带出授权地址、state 与凭证。
+				(value: typeof current) => {
+					branches(value)[1].additionalProperties = true;
+				},
+				(value: typeof current) => {
+					branches(value)[1].properties.authorizationUrl = {
+						type: "string",
+					};
+				},
+				(value: typeof current) => {
+					branches(value)[0].properties.secret = { type: "string" };
+				},
+				// 不可用原因只取与配置会话响应相同的枚举。
+				(value: typeof current) => {
+					branches(value)[0].properties.qrUnavailableReason.enum.push(
+						"unknown",
+					);
+				},
+				(value: typeof current) => {
+					branches(value)[0].required = ["status", "qrAvailable"];
+				},
+				// 不能新增未评审的分支或状态。
+				(value: typeof current) => {
+					branches(value).push({ type: "object" });
+				},
+				(value: typeof current) => {
+					branches(value)[1].properties.status.enum.push("unknown");
+				},
+				(value: typeof current) => {
+					value.paths[statusPath].get.operationId = "unreviewed";
+				},
+				// 已发布的 V1 状态响应保持只含 status。
+				(value: typeof current) => {
+					value.paths["/api/v1/agents/{agentId}/wecom-bot"].get.responses[
+						"200"
+					].content["application/json"].schema = {
+						$ref: "#/components/schemas/WecomBotConnectionProjectionV2",
+					};
+				},
+				(value: typeof current) => {
+					value.paths["/api/v1/agents/{agentId}/wecom-bot"].get.responses[
+						"200"
+					].content["application/json"].schema.properties.qrAvailable = {
+						type: "boolean",
+					};
+				},
+				(value: typeof current) => {
+					value.paths["/api/v3/agents/{agentId}/wecom-bot"] = structuredClone(
+						value.paths[statusPath],
+					);
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the pinned Skill Hub review queue read (#2905)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const queuePath = "/api/v2/skills/reviews";
+		const previous = structuredClone(current);
+		delete previous.paths[queuePath];
+		delete previous.components.schemas.SkillHubReviewQueueItemV1;
+		delete previous.components.schemas.SkillHubReviewQueuePageV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "skill-hub-review-queue-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				// 队列必须要求平台会话。
+				(value: typeof current) => {
+					value.paths[queuePath].get.security = [];
+				},
+				// 投影不能放宽为任意字段或带出审核原因。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubReviewQueueItemV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubReviewQueueItemV1.properties.reviewReason =
+						{ type: "string" };
+				},
+				// 只列待审的共享版本。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubReviewQueueItemV1.properties.state =
+						{ type: "string" };
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubReviewQueueItemV1.properties.visibility.enum.push(
+						"PRIVATE",
+					);
+				},
+				// 已发布的审核命令保持不变。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubReviewRequestV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the Owner current Agent Version read and the empty binding set (#2903)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const versionPath = "/api/v2/agents/{agentId}/skills/current-version";
+		const bindingPath =
+			"/api/v2/agents/{agentId}/versions/{agentVersion}/skills";
+		const previous = structuredClone(current);
+		delete previous.paths[versionPath];
+		delete previous.components.schemas.SkillHubAgentCurrentVersionV1;
+		previous.components.schemas.SkillHubAgentBindingCommandV1.properties.bindings.minItems = 1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "skill-hub-agent-current-version-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				// 版本读取必须要求平台会话。
+				(value: typeof current) => {
+					value.paths[versionPath].get.security = [];
+				},
+				// 投影保持严格，不能带出 Owner 或其他字段。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubAgentCurrentVersionV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubAgentCurrentVersionV1.properties.ownerIds =
+						{ type: "array", items: { type: "string" } };
+				},
+				// 只放开空集合，其余绑定命令约束不变。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubAgentBindingCommandV1.properties.bindings.maxItems = 64;
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubAgentBindingCommandV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.paths[bindingPath].get.operationId = "unreviewed";
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+			// 旧契约若没有 minItems 约束，不能借这条规则引入新入口。
+			const withoutMinimum = structuredClone(previous);
+			delete withoutMinimum.components.schemas.SkillHubAgentBindingCommandV1
+				.properties.bindings.minItems;
+			await writeFile(before, JSON.stringify(withoutMinimum));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the pinned Agent detail with Owner status (#2910)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const detailPath = "/api/v2/agents/{agentId}/detail";
+		const previous = structuredClone(current);
+		delete previous.paths[detailPath];
+		delete previous.components.schemas.AgentOwnerProjectionV1;
+		delete previous.components.schemas.AgentDetailConfigurationProjectionV1;
+		delete previous.components.schemas.AgentDetailProjectionV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-detail-owner-status-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const owner = (value: typeof current) =>
+				value.components.schemas.AgentOwnerProjectionV1;
+			for (const mutate of [
+				// 详情只接受平台会话，不接受 Bearer 凭证。
+				(value: typeof current) => {
+					value.paths[detailPath].get.security = [
+						{ PlatformSession: [] },
+						{ platformApiCredential: [] },
+					];
+				},
+				// Owner 投影保持 strict，不能带出邮箱、角色或禁用原因。
+				(value: typeof current) => {
+					owner(value).additionalProperties = true;
+				},
+				(value: typeof current) => {
+					owner(value).properties.email = { type: "string" };
+				},
+				(value: typeof current) => {
+					owner(value).properties.disabledReason = { type: "string" };
+				},
+				// 状态集合固定，未知状态不能被接受为有效。
+				(value: typeof current) => {
+					owner(value).properties.status.enum.push("unknown");
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentDetailProjectionV1.additionalProperties = true;
+				},
+				// 既有 V2 投影的 Owner 形状不变。
+				(value: typeof current) => {
+					value.components.schemas.AgentProjectionV2.properties.configuration =
+						value.components.schemas.AgentDetailProjectionV1.properties.configuration;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the pinned Skill Hub version detail and owned-version reads (#2904)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const detailPath = "/api/v2/skills/versions/{skillVersionId}/detail";
+		const ownedPath = "/api/v2/skills/owned-versions";
+		const previous = structuredClone(current);
+		delete previous.paths[detailPath];
+		delete previous.paths[ownedPath];
+		delete previous.components.schemas.SkillHubOwnedVersionV1;
+		delete previous.components.schemas.SkillHubOwnedVersionPageV1;
+		delete previous.components.schemas.SkillHubVersionDetailV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "skill-hub-version-detail-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const detail = (value: typeof current) =>
+				value.components.schemas.SkillHubVersionDetailV1;
+			for (const mutate of [
+				// 两条读取都必须要求平台会话。
+				(value: typeof current) => {
+					value.paths[detailPath].get.security = [];
+				},
+				(value: typeof current) => {
+					value.paths[ownedPath].get.security = [];
+				},
+				// 投影不能放宽为任意字段，也不能带出对象位置或审核原因。
+				(value: typeof current) => {
+					detail(value).additionalProperties = true;
+				},
+				(value: typeof current) => {
+					detail(value).properties.packageObjectVersion = { type: "string" };
+				},
+				(value: typeof current) => {
+					detail(value).properties.reviewReason = { type: "string" };
+				},
+				// 正文保持有界，资源只给清单不给内容。
+				(value: typeof current) => {
+					delete detail(value).properties.content.oneOf[0].properties.body
+						.maxLength;
+				},
+				(value: typeof current) => {
+					detail(
+						value,
+					).properties.content.oneOf[0].properties.resources.items.properties.content =
+						{ type: "string" };
+				},
+				// 安装状态只描述本人，不接受其他主体字段。
+				(value: typeof current) => {
+					detail(
+						value,
+					).properties.installation.oneOf[0].properties.principalId = {
+						type: "string",
+					};
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubOwnedVersionV1.additionalProperties = true;
+				},
+				// 已发布目录与原版本读取仍只返回 published。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubVersionMetadataV1.properties.state =
+						detail(value).properties.state;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the pinned Skill Hub installation list read (#2953)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const listPath = "/api/v2/skills/installations";
+		const previous = structuredClone(current);
+		delete previous.paths[listPath].get;
+		delete previous.components.schemas.SkillHubInstallationListItemV1;
+		delete previous.components.schemas.SkillHubInstallationPageV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "skill-hub-installation-list-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const item = (value: typeof current) =>
+				value.components.schemas.SkillHubInstallationListItemV1;
+			for (const mutate of [
+				// 列表必须要求平台会话，不能改成按查询参数指定主体。
+				(value: typeof current) => {
+					value.paths[listPath].get.security = [];
+				},
+				(value: typeof current) => {
+					value.paths[listPath].get.parameters.push({
+						in: "query",
+						name: "principalId",
+						schema: { type: "string" },
+					});
+				},
+				// 投影不能放宽为任意字段，也不能带出主体或对象位置。
+				(value: typeof current) => {
+					item(value).additionalProperties = true;
+				},
+				(value: typeof current) => {
+					item(value).properties.principalId = { type: "string" };
+				},
+				(value: typeof current) => {
+					item(
+						value,
+					).properties.version.oneOf[0].properties.packageObjectVersion = {
+						type: "string",
+					};
+				},
+				// 不可见版本不带名称。
+				(value: typeof current) => {
+					item(value).properties.version.oneOf[1].properties.name = {
+						type: "string",
+					};
+				},
+				(value: typeof current) => {
+					delete value.components.schemas.SkillHubInstallationPageV1.properties
+						.items.maxItems;
+				},
+				// 已发布的安装命令与响应保持不变。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubInstallationV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.paths[listPath].post.security = [];
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("admits only the pinned Skill Hub project content and web publication (#2906)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const contentPath = "/api/v2/skills/projects/{projectId}/content";
+		const publishPath = "/api/v2/skills/projects/{projectId}/versions";
+		const schemas = [
+			"SkillHubProjectContentV1",
+			"SkillHubProjectContentUpdateV1",
+			"SkillHubProjectContentSaveResponseV1",
+			"SkillHubProjectPublicationRequestV1",
+		];
+		const previous = structuredClone(current);
+		delete previous.paths[contentPath];
+		delete previous.paths[publishPath];
+		for (const name of schemas) delete previous.components.schemas[name];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "skill-hub-project-content-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const publication = (value: typeof current) =>
+				value.components.schemas.SkillHubProjectPublicationRequestV1;
+			const update = (value: typeof current) =>
+				value.components.schemas.SkillHubProjectContentUpdateV1;
+			for (const mutate of [
+				// 三个入口都必须要求平台会话，写入必须带幂等键。
+				(value: typeof current) => {
+					value.paths[contentPath].get.security = [];
+				},
+				(value: typeof current) => {
+					value.paths[contentPath].put.security = [];
+				},
+				(value: typeof current) => {
+					value.paths[publishPath].post.security = [];
+				},
+				(value: typeof current) => {
+					value.paths[publishPath].post.parameters = value.paths[
+						publishPath
+					].post.parameters.filter(
+						(parameter: { in: string }) => parameter.in !== "header",
+					);
+				},
+				// 浏览器不能提交对象版本、摘要、签名、来源或组织。
+				(value: typeof current) => {
+					publication(value).additionalProperties = true;
+				},
+				(value: typeof current) => {
+					publication(value).properties.packageObjectVersion = {
+						type: "string",
+					};
+				},
+				(value: typeof current) => {
+					publication(value).properties.signatureDigest = { type: "string" };
+				},
+				(value: typeof current) => {
+					publication(value).properties.organizationId = { type: "string" };
+				},
+				// 内容保持有界，路径只能在规范布局内。
+				(value: typeof current) => {
+					delete update(value).properties.files.maxItems;
+				},
+				(value: typeof current) => {
+					delete update(value).properties.files.items.oneOf[0].properties
+						.content.maxLength;
+				},
+				(value: typeof current) => {
+					update(
+						value,
+					).properties.files.items.oneOf[0].properties.path.pattern = "^.+$";
+				},
+				// 已发布的版本登记、发布响应与项目投影保持不变。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubPublicationRequestV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubPublicationResponseV1.properties.content =
+						{ type: "string" };
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubProjectV1.properties.files = {
+						type: "array",
+					};
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
 			}
 		} finally {
 			await rm(directory, { recursive: true, force: true });
@@ -766,6 +1475,7 @@ describe("contract compatibility command", () => {
 					delete document.paths["/api/v2/agents"].post;
 				delete document.components.schemas.AgentApiCreationRequestV1;
 				delete document.components.schemas.AgentApiCreationResponseV1;
+				restorePreAdminAuditActionsRegistration2879Contract(document);
 				restorePreSkillHubAuditContract(document);
 				restorePreAgentCreationAuditContract(document);
 				for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {
@@ -1816,175 +2526,189 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
-	it("admits only the pinned personal credential contract and rejects security/material regressions", async () => {
-		const artifact = fileURLToPath(
-			new URL(
-				"../artifacts/openapi/pilot-browser.v2.openapi.json",
-				import.meta.url,
-			),
-		);
-		const current = JSON.parse(await readFile(artifact, "utf8"));
-		// This test isolates the credential compatibility contract. Skill Hub reads
-		// have their own pinned-addition test below; keeping them out avoids paying
-		// the subprocess cost for an unrelated contract mutation matrix.
-		for (const path of [
-			"/api/v2/skills",
-			"/api/v2/skills/versions/{skillVersionId}",
-			"/api/v2/agents/{agentId}/configuration/saved-model",
-			"/api/v2/agents/{agentId}/default-relay-key/candidates",
-		])
-			delete current.paths[path];
-		for (const name of [
-			"SkillHubVersionMetadataV1",
-			"SkillHubDirectoryPageV1",
-			"AgentConfigurationUpdateRequestV4",
-			"AgentDefaultRelayKeySavedCandidatesV1",
-		])
-			delete current.components.schemas[name];
-		const latest = structuredClone(current);
-		restorePreRelayKeyContract(current);
-		const previous = structuredClone(current);
-		for (const path of [
-			"/api/v2/me/api-credentials",
-			"/api/v2/me/api-credentials/{credentialId}",
-		])
-			delete previous.paths[path];
-		for (const name of [
-			"PersonalApiCredentialIssueRequestV1",
-			"PersonalApiCredentialIssueResponseV1",
-			"PersonalApiCredentialMetadataV1",
-			"PersonalApiCredentialRevokeResponseV1",
-		])
-			delete previous.components.schemas[name];
-		delete previous.components.securitySchemes;
-		delete previous.paths["/api/v2/agents"].get.security;
-		delete previous.paths["/api/v2/agents"].get.description;
-		restoreOldApiReadActions(previous);
-		const directory = await mkdtemp(
-			resolve(tmpdir(), "agent-infra-personal-credential-compat-"),
-		);
-		const baseline = resolve(directory, "previous.json");
-		const historicalCurrent = resolve(directory, "historical-current.json");
-		const contractArtifact = resolve(directory, "skill-hub-stripped.json");
-		try {
-			await writeFile(baseline, JSON.stringify(previous));
-			await writeFile(historicalCurrent, JSON.stringify(current));
-			await writeFile(contractArtifact, JSON.stringify(current));
-			expect(comparePaths(historicalCurrent, baseline).status).toBe(0);
-			const mutations: Record<string, (value: typeof current) => void> = {
-				anonymous: (value) => {
-					value.paths["/api/v2/me/api-credentials"].post.security = [];
-				},
-				bearerGovernance: (value) => {
-					value.paths[
-						"/api/v2/me/api-credentials/{credentialId}"
-					].delete.security = [{ PersonalApiCredential: [] }];
-				},
-				hashReadback: (value) => {
-					value.components.schemas.PersonalApiCredentialMetadataV1.properties.credentialHash =
-						{ type: "string" };
-				},
-				emptyScopes: (value) => {
-					value.components.schemas.PersonalApiCredentialIssueRequestV1.properties.scopes.minItems = 0;
-				},
-				materialReplay: (value) => {
-					value.paths["/api/v2/me/api-credentials"].post.responses["200"] =
-						value.paths["/api/v2/me/api-credentials"].post.responses["201"];
-				},
-				unexpectedPatch: (value) => {
-					value.paths["/api/v2/me/api-credentials/{credentialId}"].patch =
-						value.paths["/api/v2/me/api-credentials/{credentialId}"].delete;
-				},
-				differentCookie: (value) => {
-					value.components.securitySchemes.PlatformSession.name =
-						"caller_session";
-				},
-				unrelatedOperation: (value) => {
-					value.paths["/unexpected"] =
-						value.paths["/api/v2/me/api-credentials"];
-				},
-				oldAdministratorSecurity: (value) => {
-					value.paths["/api/v2/admin/agents"].get.security = [];
-				},
-				oldMetadataResponse: (value) => {
-					value.components.schemas.AgentProjectionV2.properties.rawCredential =
-						{ type: "string" };
-				},
-				globalSecurity: (value) => {
-					value.security = [{ PlatformSession: [] }];
-				},
-				anonymousAgentRead: (value) => {
-					value.paths["/api/v2/agents"].get.security = [{}];
-				},
-				bearerOwnerOverride: (value) => {
-					value.paths["/api/v2/agents"].get.parameters.find(
-						({ name }: { name: string }) => name === "scope",
-					).schema = { type: "string" };
-				},
-				bearerSchemeChanged: (value) => {
-					value.components.securitySchemes.platformApiCredential = {
-						type: "http",
-						scheme: "basic",
-					};
-				},
-				unrelatedBearerOperation: (value) => {
-					value.paths["/api/v2/admin/agents"].get.security = [
-						{ platformApiCredential: [] },
-					];
-				},
-				andAuthentication: (value) => {
-					value.paths["/api/v2/agents"].get.security = [
-						{ PlatformSession: [], platformApiCredential: [] },
-					];
-				},
-				removedBrowserAuthentication: (value) => {
-					value.paths["/api/v2/agents"].get.security = [
-						{ platformApiCredential: [] },
-					];
-				},
-			};
-			for (const [name, mutate] of Object.entries(mutations)) {
-				const candidate = structuredClone(current);
-				mutate(candidate);
-				const path = resolve(directory, `${name}.json`);
-				await writeFile(path, JSON.stringify(candidate));
-				const result = comparePaths(path, baseline);
-				expect(result.status, name).toBe(1);
-				expect(result.stderr, name).toContain("changed OpenAPI contract");
-			}
-			for (const baselineKind of ["empty", "existingCookie", "governance"]) {
-				const existing = structuredClone(
-					baselineKind === "governance" ? current : previous,
-				);
-				if (baselineKind === "governance") {
-					delete existing.paths["/api/v2/agents"].get.security;
-					delete existing.paths["/api/v2/agents"].get.description;
-					delete existing.components.securitySchemes.platformApiCredential;
-					restoreOldApiReadActions(existing);
-				} else {
-					existing.components.securitySchemes = {};
-				}
-				if (baselineKind === "existingCookie")
-					existing.components.securitySchemes.PlatformSession = structuredClone(
-						current.components.securitySchemes.PlatformSession,
-					);
-				const path = resolve(directory, `${baselineKind}-previous.json`);
-				await writeFile(path, JSON.stringify(existing));
-				if (baselineKind === "governance")
-					expect(comparePaths(path, baseline).status).toBe(0);
-				expect(comparePaths(contractArtifact, path).status, baselineKind).toBe(
-					0,
-				);
-				expect(
-					comparePaths(historicalCurrent, path).status,
-					`${baselineKind}-historical`,
-				).toBe(0);
-				for (const [version, contract] of Object.entries({
-					historical: current,
-					latest,
-				})) {
+	// Keep every CLI comparison while bounding each baseline/version below one CI budget.
+	it.each([
+		["pinned", "historical"],
+		["empty", "historical"],
+		["empty", "latest"],
+		["existingCookie", "historical"],
+		["existingCookie", "latest"],
+		["governance", "historical"],
+		["governance", "latest"],
+	] as const)(
+		"admits only the pinned personal credential contract and rejects security/material regressions [%s/%s]",
+		async (baselineKind, version) => {
+			const artifact = fileURLToPath(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+			);
+			const current = JSON.parse(await readFile(artifact, "utf8"));
+			// This test isolates the credential compatibility contract. Skill Hub reads
+			// have their own pinned-addition test below; keeping them out avoids paying
+			// the subprocess cost for an unrelated contract mutation matrix.
+			for (const path of [
+				"/api/v2/skills",
+				"/api/v2/skills/versions/{skillVersionId}",
+				"/api/v2/agents/{agentId}/configuration/saved-model",
+				"/api/v2/agents/{agentId}/default-relay-key/candidates",
+			])
+				delete current.paths[path];
+			for (const name of [
+				"SkillHubVersionMetadataV1",
+				"SkillHubDirectoryPageV1",
+				"AgentConfigurationUpdateRequestV4",
+				"AgentDefaultRelayKeySavedCandidatesV1",
+			])
+				delete current.components.schemas[name];
+			const latest = structuredClone(current);
+			restorePreRelayKeyContract(current);
+			const previous = structuredClone(current);
+			for (const path of [
+				"/api/v2/me/api-credentials",
+				"/api/v2/me/api-credentials/{credentialId}",
+			])
+				delete previous.paths[path];
+			for (const name of [
+				"PersonalApiCredentialIssueRequestV1",
+				"PersonalApiCredentialIssueResponseV1",
+				"PersonalApiCredentialMetadataV1",
+				"PersonalApiCredentialRevokeResponseV1",
+			])
+				delete previous.components.schemas[name];
+			delete previous.components.securitySchemes;
+			delete previous.paths["/api/v2/agents"].get.security;
+			delete previous.paths["/api/v2/agents"].get.description;
+			restoreOldApiReadActions(previous);
+			const directory = await mkdtemp(
+				resolve(tmpdir(), "agent-infra-personal-credential-compat-"),
+			);
+			const baseline = resolve(directory, "previous.json");
+			const historicalCurrent = resolve(directory, "historical-current.json");
+			const contractArtifact = resolve(directory, "skill-hub-stripped.json");
+			try {
+				await writeFile(baseline, JSON.stringify(previous));
+				await writeFile(historicalCurrent, JSON.stringify(current));
+				await writeFile(contractArtifact, JSON.stringify(current));
+				const mutations: Record<string, (value: typeof current) => void> = {
+					anonymous: (value) => {
+						value.paths["/api/v2/me/api-credentials"].post.security = [];
+					},
+					bearerGovernance: (value) => {
+						value.paths[
+							"/api/v2/me/api-credentials/{credentialId}"
+						].delete.security = [{ PersonalApiCredential: [] }];
+					},
+					hashReadback: (value) => {
+						value.components.schemas.PersonalApiCredentialMetadataV1.properties.credentialHash =
+							{ type: "string" };
+					},
+					emptyScopes: (value) => {
+						value.components.schemas.PersonalApiCredentialIssueRequestV1.properties.scopes.minItems = 0;
+					},
+					materialReplay: (value) => {
+						value.paths["/api/v2/me/api-credentials"].post.responses["200"] =
+							value.paths["/api/v2/me/api-credentials"].post.responses["201"];
+					},
+					unexpectedPatch: (value) => {
+						value.paths["/api/v2/me/api-credentials/{credentialId}"].patch =
+							value.paths["/api/v2/me/api-credentials/{credentialId}"].delete;
+					},
+					differentCookie: (value) => {
+						value.components.securitySchemes.PlatformSession.name =
+							"caller_session";
+					},
+					unrelatedOperation: (value) => {
+						value.paths["/unexpected"] =
+							value.paths["/api/v2/me/api-credentials"];
+					},
+					oldAdministratorSecurity: (value) => {
+						value.paths["/api/v2/admin/agents"].get.security = [];
+					},
+					oldMetadataResponse: (value) => {
+						value.components.schemas.AgentProjectionV2.properties.rawCredential =
+							{ type: "string" };
+					},
+					globalSecurity: (value) => {
+						value.security = [{ PlatformSession: [] }];
+					},
+					anonymousAgentRead: (value) => {
+						value.paths["/api/v2/agents"].get.security = [{}];
+					},
+					bearerOwnerOverride: (value) => {
+						value.paths["/api/v2/agents"].get.parameters.find(
+							({ name }: { name: string }) => name === "scope",
+						).schema = { type: "string" };
+					},
+					bearerSchemeChanged: (value) => {
+						value.components.securitySchemes.platformApiCredential = {
+							type: "http",
+							scheme: "basic",
+						};
+					},
+					unrelatedBearerOperation: (value) => {
+						value.paths["/api/v2/admin/agents"].get.security = [
+							{ platformApiCredential: [] },
+						];
+					},
+					andAuthentication: (value) => {
+						value.paths["/api/v2/agents"].get.security = [
+							{ PlatformSession: [], platformApiCredential: [] },
+						];
+					},
+					removedBrowserAuthentication: (value) => {
+						value.paths["/api/v2/agents"].get.security = [
+							{ platformApiCredential: [] },
+						];
+					},
+				};
+				if (baselineKind === "pinned") {
+					expect(comparePaths(historicalCurrent, baseline).status).toBe(0);
 					for (const [name, mutate] of Object.entries(mutations)) {
-						const candidate = structuredClone(contract);
+						const candidate = structuredClone(current);
+						mutate(candidate);
+						const path = resolve(directory, `${name}.json`);
+						await writeFile(path, JSON.stringify(candidate));
+						const result = comparePaths(path, baseline);
+						expect(result.status, name).toBe(1);
+						expect(result.stderr, name).toContain("changed OpenAPI contract");
+					}
+				} else {
+					const existing = structuredClone(
+						baselineKind === "governance" ? current : previous,
+					);
+					if (baselineKind === "governance") {
+						delete existing.paths["/api/v2/agents"].get.security;
+						delete existing.paths["/api/v2/agents"].get.description;
+						delete existing.components.securitySchemes.platformApiCredential;
+						restoreOldApiReadActions(existing);
+					} else {
+						existing.components.securitySchemes = {};
+					}
+					if (baselineKind === "existingCookie")
+						existing.components.securitySchemes.PlatformSession =
+							structuredClone(
+								current.components.securitySchemes.PlatformSession,
+							);
+					const path = resolve(directory, `${baselineKind}-previous.json`);
+					await writeFile(path, JSON.stringify(existing));
+					if (version === "historical") {
+						if (baselineKind === "governance")
+							expect(comparePaths(path, baseline).status).toBe(0);
+						expect(
+							comparePaths(contractArtifact, path).status,
+							baselineKind,
+						).toBe(0);
+						expect(
+							comparePaths(historicalCurrent, path).status,
+							`${baselineKind}-historical`,
+						).toBe(0);
+					}
+					for (const [name, mutate] of Object.entries(mutations)) {
+						const candidate = structuredClone(
+							version === "historical" ? current : latest,
+						);
 						mutate(candidate);
 						const mutated = resolve(
 							directory,
@@ -1997,11 +2721,12 @@ describe("contract compatibility command", () => {
 						).toBe(1);
 					}
 				}
+			} finally {
+				await rm(directory, { recursive: true, force: true });
 			}
-		} finally {
-			await rm(directory, { recursive: true, force: true });
-		}
-	}, 300_000);
+		},
+		60_000,
+	);
 	it("tracks published browser, file, readiness and template-release contracts", async () => {
 		const source = await readFile(cliPath, "utf8");
 		for (const path of [
@@ -2033,6 +2758,247 @@ describe("contract compatibility command", () => {
 		);
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");
+	});
+
+	it("admits only the pinned requested-model fallback V2 event in V2 histories (#2908)", async () => {
+		type Schema = Record<string, unknown>;
+		const isFallbackV2 = (value: unknown) => {
+			const schema = value as {
+				$ref?: string;
+				properties?: {
+					type?: { const?: string };
+					schemaVersion?: { const?: number };
+				};
+			};
+			return (
+				schema?.$ref === "#/components/schemas/ModelSelectionFallbackEventV2" ||
+				(schema?.properties?.type?.const === "model.selection.fell_back" &&
+					schema.properties.schemaVersion?.const === 2)
+			);
+		};
+		const strip = (value: unknown): unknown =>
+			Array.isArray(value)
+				? value.filter((item) => !isFallbackV2(item)).map(strip)
+				: value !== null && typeof value === "object"
+					? Object.fromEntries(
+							Object.entries(value).map(([key, item]) => [key, strip(item)]),
+						)
+					: value;
+		const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-2908-"));
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			for (const version of ["v1", "v2"] as const) {
+				const current = JSON.parse(
+					await readFile(
+						new URL(
+							`../artifacts/openapi/pilot-browser.${version}.openapi.json`,
+							import.meta.url,
+						),
+						"utf8",
+					),
+				);
+				const previous = structuredClone(current);
+				const previousSchemas = previous.components.schemas as Record<
+					string,
+					Schema
+				>;
+				delete previousSchemas.ModelSelectionFallbackEventV2;
+				for (const name of [
+					"PersistedConversationEventV2",
+					"TaskProjectionV1",
+					"TaskSseMessageV1",
+				])
+					if (previousSchemas[name])
+						previousSchemas[name] = strip(previousSchemas[name]) as Schema;
+				// 基线确实缺少该事件，当前产物只在既定宿主中新增它。
+				expect(JSON.stringify(previous)).not.toBe(JSON.stringify(current));
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				const fallback = (document: typeof current) => {
+					const component =
+						document.components.schemas.ModelSelectionFallbackEventV2;
+					if (component) return component;
+					const host = document.components.schemas.TaskProjectionV1;
+					return host.properties.events.items.anyOf[0].anyOf.find(isFallbackV2);
+				};
+				for (const mutate of [
+					(document: typeof current) => {
+						fallback(document).properties.payload.properties.requestedModelId =
+							{
+								type: "string",
+							};
+					},
+					(document: typeof current) => {
+						fallback(document).properties.payload.required = fallback(
+							document,
+						).properties.payload.required.filter(
+							(name: string) => name !== "requestedModelDisplayName",
+						);
+					},
+					(document: typeof current) => {
+						fallback(document).properties.payload.additionalProperties = true;
+					},
+					(document: typeof current) => {
+						delete fallback(document).properties.payload.properties
+							.requestedModelDisplayName.anyOf[0].maxLength;
+					},
+					(document: typeof current) => {
+						// 新增事件不能借道其他 Schema 出现。
+						document.components.schemas.SseEventIdV1 = {
+							anyOf: [
+								document.components.schemas.SseEventIdV1,
+								structuredClone(fallback(document)),
+							],
+						};
+					},
+					(document: typeof current) => {
+						document.components.schemas.ModelSelectionFallbackEventV1.properties.payload.properties.requestedModelOptionId =
+							{ type: "string" };
+					},
+				]) {
+					const changed = structuredClone(current);
+					mutate(changed);
+					await writeFile(currentPath, JSON.stringify(changed));
+					expect(comparePaths(currentPath, previousPath).status).toBe(1);
+				}
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only the pinned reasoning events in their reviewed hosts (#2979)", async () => {
+		type Schema = Record<string, unknown>;
+		type Document = { components: { schemas: Record<string, Schema> } };
+		const persisted = {
+			$ref: "#/components/schemas/PersistedConversationEventV2",
+		};
+		const cases = [
+			{
+				artifact: "runtime-host.v3",
+				name: "RuntimeReasoningEventV2",
+				unionHosts: ["RuntimeEvent"],
+				itemHosts: [] as string[],
+			},
+			{
+				artifact: "pilot-browser.v2",
+				name: "ReasoningDeltaEventV2",
+				unionHosts: ["ConversationSseMessageV2"],
+				itemHosts: [
+					"ConversationDetailProjectionV2",
+					"ExecutionDetailProjectionV2",
+				],
+			},
+		];
+		// 独立实现的反向变换：去掉新增 Schema，把宿主还原为基线形状。
+		const collapse = (value: unknown, ref: string): unknown => {
+			if (
+				JSON.stringify(value) ===
+				JSON.stringify({ anyOf: [persisted, { $ref: ref }] })
+			)
+				return structuredClone(persisted);
+			if (Array.isArray(value)) return value.map((item) => collapse(item, ref));
+			if (value !== null && typeof value === "object")
+				return Object.fromEntries(
+					Object.entries(value).map(([key, item]) => [
+						key,
+						collapse(item, ref),
+					]),
+				);
+			return value;
+		};
+		const directory = await mkdtemp(resolve(tmpdir(), "agent-infra-2979-"));
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			for (const item of cases) {
+				const ref = `#/components/schemas/${item.name}`;
+				const current = JSON.parse(
+					await readFile(
+						new URL(
+							`../artifacts/openapi/${item.artifact}.openapi.json`,
+							import.meta.url,
+						),
+						"utf8",
+					),
+				) as Document;
+				const previous = structuredClone(current);
+				const schemas = previous.components.schemas;
+				delete schemas[item.name];
+				for (const host of item.unionHosts) {
+					const options = schemas[host]?.anyOf as Schema[];
+					schemas[host] = {
+						...schemas[host],
+						anyOf: options.filter((option) => option.$ref !== ref),
+					};
+				}
+				for (const host of item.itemHosts)
+					schemas[host] = collapse(schemas[host], ref) as Schema;
+				// 基线确实缺少该事件，且反向变换后不再引用它。
+				expect(JSON.stringify(previous)).not.toContain(JSON.stringify(ref));
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				const component = (document: Document) =>
+					document.components.schemas[item.name] as {
+						properties: {
+							payload: {
+								properties: Record<string, Schema>;
+								additionalProperties?: boolean;
+							};
+						};
+					};
+				const textField =
+					item.name === "RuntimeReasoningEventV2" ? "delta" : "text";
+				for (const mutate of [
+					(document: Document) => {
+						component(document).properties.payload.properties.encrypted = {
+							type: "string",
+						};
+					},
+					(document: Document) => {
+						component(document).properties.payload.properties.kind = {
+							enum: ["raw", "summary", "encrypted"],
+							type: "string",
+						};
+					},
+					(document: Document) => {
+						component(document).properties.payload.additionalProperties = true;
+					},
+					(document: Document) => {
+						const field =
+							component(document).properties.payload.properties[textField];
+						if (field) delete field.minLength;
+					},
+					(document: Document) => {
+						// 宿主缺少新增选项时不放行未被引用的新 Schema。
+						const host = document.components.schemas[
+							item.unionHosts[0] as string
+						] as { anyOf: Schema[] };
+						host.anyOf = host.anyOf.filter((option) => option.$ref !== ref);
+					},
+					(document: Document) => {
+						// 新增事件不能借道其他 Schema 出现。
+						const other =
+							item.name === "RuntimeReasoningEventV2"
+								? "RuntimeEventV2"
+								: "SseEventIdV1";
+						document.components.schemas[other] = {
+							anyOf: [document.components.schemas[other], { $ref: ref }],
+						};
+					},
+				]) {
+					const changed = structuredClone(current);
+					mutate(changed);
+					await writeFile(currentPath, JSON.stringify(changed));
+					expect(comparePaths(currentPath, previousPath).status).toBe(1);
+				}
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	it("accepts only the reviewed custom Agent model selection additions", async () => {
@@ -2803,10 +3769,17 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/skills/installations" &&
 				path !== "/api/v2/skills/installations/{installationId}" &&
 				path !== "/api/v2/agents/{agentId}/versions/{agentVersion}/skills" &&
+				path !== "/api/v2/agents/{agentId}/skills/current-version" &&
+				path !== "/api/v2/agents/{agentId}/detail" &&
 				path !== "/api/v2/skills/projects" &&
 				path !== "/api/v2/skills/projects/{projectId}" &&
+				path !== "/api/v2/skills/projects/{projectId}/content" &&
+				path !== "/api/v2/skills/projects/{projectId}/versions" &&
+				path !== "/api/v2/skills/reviews" &&
+				path !== "/api/v2/skills/owned-versions" &&
 				path !== "/api/v2/skills/versions" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}" &&
+				path !== "/api/v2/skills/versions/{skillVersionId}/detail" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}/review" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}/revoke" &&
 				path !== "/api/v2/applications/{applicationId}/credentials" &&
@@ -2964,6 +3937,8 @@ describe("contract compatibility command", () => {
 			"NativeCapabilityInvocationRequestV1",
 			"NativeCapabilityInvocationResponseV1",
 			"NativeCapabilityInvocationResultV1",
+			// 该基线早于 #2979 的思考过程事件。
+			"ReasoningDeltaEventV2",
 		])
 			delete previous.components.schemas[name];
 		const directory = await mkdtemp(

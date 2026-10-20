@@ -266,6 +266,15 @@ export interface ConversationModelConfigurationV1 {
 	}[];
 	readonly defaultOptionId: string;
 	readonly defaultReasoningLevel: string;
+	/**
+	 * 会话当前所选选项在不晚于本修订、且包含它的最新已应用修订中的模型（G-07）。
+	 * 该选项已被删除时仍可读，只用于回退事件记录请求模型的显示名；读不到时缺省。
+	 */
+	readonly selectedOption?: {
+		readonly optionId: string;
+		readonly modelId: string;
+		readonly displayName?: string | null;
+	};
 }
 
 export interface ConversationExecutionConversationStateV1 {
@@ -644,6 +653,10 @@ export interface ConversationModelSelectionFallbackWriteV1
 			readonly modelOptionId: string;
 			readonly reasoningLevel: string;
 			readonly reason: "selection_unavailable";
+			/** 会话原所选选项；与 previousModelOptionId 相同（G-07）。 */
+			readonly requestedModelOptionId: string;
+			/** 受理时原选项的显示名；读不到时为 null，界面改用中性文案（G-07）。 */
+			readonly requestedModelDisplayName: string | null;
 		};
 	};
 	readonly auditEvent: {

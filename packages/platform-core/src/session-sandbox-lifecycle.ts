@@ -44,7 +44,8 @@ export interface SessionSandboxStopReceiptV1 {
 			readonly name: string;
 		};
 	}[];
-	readonly retainedPVC: SessionSandboxResourceIdentityV1;
+	/** 来源从未记录 PVC（准备中断、只建出了部分资源）时为 null（#2918）。 */
+	readonly retainedPVC: SessionSandboxResourceIdentityV1 | null;
 }
 
 /** Carried by the original durable resource outbox, never a business grant. */
@@ -157,6 +158,15 @@ export function planSessionSandboxManagementTransitionV1(input: {
 	};
 }
 
+/**
+ * #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源：记录了 deployment，却没有模型投影。
+ * 当时不创建 Runtime Secret，所以不要求来源记录过 Secret（#2885）。之后缺模型投影的 prepare
+ * 在任何写入之前失败；来源记录过的每个资源（包括 Secret）仍要逐个证明已删除。
+ */
+function isPreparedWithoutModelProjectionV1(source: SessionSandboxSourceV1) {
+	return source.deployment != null && source.modelProjection == null;
+}
+
 /** Only a complete per-object stop proof may replace the saved source identities. */
 export function decideSessionSandboxDrainObservationV1(input: {
 	readonly sandbox: SessionSandboxBindingV1;
@@ -233,17 +243,6 @@ export function decideSessionSandboxDrainObservationV1(input: {
 		!Array.isArray(observation.resources)
 	)
 		return unknown();
-	if (
-		!isSessionSandboxObservationValidV1(
-			{
-				sandbox: source.sandbox,
-				policy: source.policy,
-				desiredState: "running",
-			},
-			{ ...source.observation, status: "ready" },
-		)
-	)
-		return unknown();
 	const prior = source.observation.resources;
 	const sameIdentity = (
 		old: SessionSandboxResourceIdentityV1,
@@ -256,14 +255,73 @@ export function decideSessionSandboxDrainObservationV1(input: {
 		old.uid === current.uid &&
 		typeof current.resourceVersion === "string" &&
 		!!current.resourceVersion.trim();
+	// #2917：上一轮排空已完成、只剩 PVC 的沙箱被管理转换重新当作来源时，没有需要删除的
+	// 资源；停止证明只需证明保留的仍是来源记录的同一 PVC。
+	if (source.observation.status === "stopped") {
+		const [stoppedPVC] = prior;
+		if (
+			prior.length !== 1 ||
+			stoppedPVC?.kind !== "PersistentVolumeClaim" ||
+			!isSessionSandboxObservationValidV1(
+				{
+					sandbox: source.sandbox,
+					policy: source.policy,
+					desiredState: "stopped",
+				},
+				source.observation,
+			) ||
+			receipt.removed.length !== 0 ||
+			!receipt.retainedPVC ||
+			!sameIdentity(stoppedPVC, receipt.retainedPVC) ||
+			observation.resources.length !== 1 ||
+			!sameIdentity(receipt.retainedPVC, observation.resources[0])
+		)
+			return unknown();
+		return {
+			status: "stopped" as const,
+			observation,
+			finished: true,
+			stopReceipt: receipt,
+		};
+	}
+	const complete = isSessionSandboxObservationValidV1(
+		{
+			sandbox: source.sandbox,
+			policy: source.policy,
+			desiredState: "running",
+		},
+		{ ...source.observation, status: "ready" },
+		{ runtimeSecret: !isPreparedWithoutModelProjectionV1(source) },
+	);
+	// #2918：准备中断时来源只记录了部分资源（observation 为 observed / unknown）。这类来源
+	// 只需逐个证明删除了它记录过的资源；就绪的来源必须完整。
+	const partial =
+		!complete &&
+		source.observation.status !== "ready" &&
+		isSessionSandboxObservationValidV1(
+			{
+				sandbox: source.sandbox,
+				policy: source.policy,
+				desiredState: "running",
+			},
+			source.observation,
+		);
+	if (!complete && !partial) return unknown();
 	const pvc = prior.find(
 		(resource) => resource.kind === "PersistentVolumeClaim",
 	);
-	if (
-		!pvc ||
-		!sameIdentity(pvc, receipt.retainedPVC) ||
-		observation.resources.length !== 1 ||
-		!sameIdentity(receipt.retainedPVC, observation.resources[0])
+	if (pvc) {
+		if (
+			!receipt.retainedPVC ||
+			!sameIdentity(pvc, receipt.retainedPVC) ||
+			observation.resources.length !== 1 ||
+			!sameIdentity(receipt.retainedPVC, observation.resources[0])
+		)
+			return unknown();
+	} else if (
+		!partial ||
+		receipt.retainedPVC !== null ||
+		observation.resources.length !== 0
 	)
 		return unknown();
 	const removed = prior.filter(
@@ -540,6 +598,7 @@ export function canPrepareSessionSandboxReplacementV1(input: {
 	)
 		return false;
 
+	const retained = receipt.retainedPVC;
 	if (
 		!decideSessionSandboxDrainObservationV1({
 			sandbox: { ...sandbox, generation: receipt.targetGeneration },
@@ -547,7 +606,7 @@ export function canPrepareSessionSandboxReplacementV1(input: {
 			lifecycle,
 			observation: {
 				status: "stopped",
-				resources: [receipt.retainedPVC],
+				resources: retained ? [retained] : [],
 				sourceStop: receipt,
 			},
 		}).finished
@@ -556,10 +615,12 @@ export function canPrepareSessionSandboxReplacementV1(input: {
 	const pvc = observation?.resources.find(
 		(resource) => resource.kind === "PersistentVolumeClaim",
 	);
+	// 没有保留 PVC（#2918）：准备按新建处理，当前观测里也不能出现 PVC。
+	if (!retained) return !pvc;
 	return (
 		!!pvc &&
-		pvc.namespace === receipt.retainedPVC.namespace &&
-		pvc.name === receipt.retainedPVC.name &&
-		pvc.uid === receipt.retainedPVC.uid
+		pvc.namespace === retained.namespace &&
+		pvc.name === retained.name &&
+		pvc.uid === retained.uid
 	);
 }

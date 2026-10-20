@@ -125,7 +125,8 @@ describe("MySkillsScreen", () => {
 					kind: "ready",
 					items: [project, { ...project, projectId: "draft", name: "draft" }],
 				}}
-				catalog={{ kind: "ready", versions: [published] }}
+				versions={{ kind: "ready", versions: [published] }}
+				installations={{ kind: "ready", installations: [] }}
 			/>,
 		);
 		expect(
@@ -155,9 +156,8 @@ describe("MySkillsScreen", () => {
 				.getByRole("link", { name: "详情：release-notes" })
 				.getAttribute("href"),
 		).toBe("/skills/release-notes-v1");
-		expect(
-			within(rows[1] as HTMLElement).getByText("暂无已发布版本"),
-		).toBeTruthy();
+		// 本人目录含全部状态：没有任何版本的项目显示「暂无版本」。
+		expect(within(rows[1] as HTMLElement).getByText("暂无版本")).toBeTruthy();
 		expect(
 			within(rows[1] as HTMLElement).queryByRole("link", { name: /^详情/ }),
 		).toBeNull();
@@ -178,12 +178,87 @@ describe("MySkillsScreen", () => {
 			expect(text).not.toContain(removed);
 	});
 
+	it("shows each project's newest own version in its real state (K-02)", async () => {
+		const pending = {
+			...published,
+			skillVersionId: "release-notes-v2",
+			version: "2.0.0",
+			state: "pending_review" as const,
+		};
+		const rejected = {
+			...published,
+			skillId: "draft",
+			skillVersionId: "draft-v1",
+			name: "draft",
+			version: "0.1.0",
+			visibility: "PRIVATE" as const,
+			state: "rejected" as const,
+		};
+		const revoked = {
+			...published,
+			skillId: "old",
+			skillVersionId: "old-v1",
+			name: "old",
+			state: "revoked" as const,
+		};
+		await renderWithRouter(
+			<MySkillsScreen
+				projects={{
+					kind: "ready",
+					items: [
+						project,
+						{ ...project, projectId: "draft", name: "draft" },
+						{ ...project, projectId: "old", name: "old" },
+					],
+				}}
+				versions={{
+					kind: "ready",
+					versions: [published, pending, rejected, revoked],
+				}}
+				installations={{ kind: "ready", installations: [] }}
+			/>,
+		);
+		const rows = [
+			...document.querySelectorAll("article.skill-row"),
+		] as HTMLElement[];
+		expect(
+			rows.map((row) => [
+				row.querySelector("h2")?.textContent,
+				row.querySelector('[data-slot="badge"]')?.textContent,
+				row.querySelector(".skill-row-meta strong")?.textContent,
+				within(row).getByRole("link", { name: /^详情/ }).getAttribute("href"),
+			]),
+		).toEqual([
+			["release-notes", "待审核", "v2.0.0", "/skills/release-notes-v2"],
+			["draft", "已驳回", "v0.1.0", "/skills/draft-v1"],
+			["old", "已撤销", "v1.2.0", "/skills/old-v1"],
+		]);
+	});
+
+	it("keeps the project list when version states cannot be read", async () => {
+		await renderWithRouter(
+			<MySkillsScreen
+				projects={{ kind: "ready", items: [project] }}
+				versions={{ kind: "unavailable", retryable: true }}
+				installations={{ kind: "ready", installations: [] }}
+			/>,
+		);
+		expect(
+			screen.getByText("版本状态暂时无法读取，项目列表不受影响。"),
+		).toBeTruthy();
+		const row = document.querySelector("article.skill-row") as HTMLElement;
+		expect(within(row).getByText("版本暂时无法读取")).toBeTruthy();
+		expect(within(row).queryByText("暂无版本")).toBeNull();
+		expect(within(row).queryByRole("link", { name: /^详情/ })).toBeNull();
+	});
+
 	it("keeps retryable and denied project reads separate", async () => {
 		const retry = vi.fn();
 		await renderWithRouter(
 			<MySkillsScreen
 				projects={{ kind: "unavailable", retryable: true }}
-				catalog={{ kind: "loading" }}
+				versions={{ kind: "loading" }}
+				installations={{ kind: "loading" }}
 				onRetry={retry}
 			/>,
 		);
@@ -193,7 +268,8 @@ describe("MySkillsScreen", () => {
 		await renderWithRouter(
 			<MySkillsScreen
 				projects={{ kind: "unavailable", retryable: false, reason: "denied" }}
-				catalog={{ kind: "loading" }}
+				versions={{ kind: "loading" }}
+				installations={{ kind: "loading" }}
 			/>,
 		);
 		expect(
@@ -207,10 +283,12 @@ describe("SkillEditorScreen", () => {
 	it("creates a project through the server action boundary without internal IDs", async () => {
 		const createProject = vi.fn().mockResolvedValue(project);
 		const onProjectsChanged = vi.fn();
+		const onProjectCreated = vi.fn();
 		await renderWithRouter(
 			<SkillEditorScreen
 				actions={editorActions({ createProject })}
 				onProjectsChanged={onProjectsChanged}
+				onProjectCreated={onProjectCreated}
 			/>,
 		);
 		expect(
@@ -236,10 +314,11 @@ describe("SkillEditorScreen", () => {
 		);
 		expect(
 			await screen.findByText(
-				"Skill 项目已创建：release-notes。可以继续导入第一个版本。",
+				"Skill 项目已创建：release-notes。可以继续编辑内容并发布，或导入第一个版本。",
 			),
 		).toBeTruthy();
 		expect(onProjectsChanged).toHaveBeenCalledOnce();
+		expect(onProjectCreated).toHaveBeenCalledWith("release-notes");
 	});
 
 	it("reuses the idempotency key when a write is retried", async () => {
@@ -336,5 +415,39 @@ describe("SkillEditorScreen", () => {
 		expect(
 			await screen.findByText("Skill 项目已停用：release-notes。"),
 		).toBeTruthy();
+	});
+
+	it("offers content editing and web publication only for an existing project (#2906)", async () => {
+		await renderWithRouter(<SkillEditorScreen actions={editorActions()} />);
+		expect(screen.queryByRole("heading", { name: "Skill 内容" })).toBeNull();
+		expect(screen.queryByRole("heading", { name: "发布版本" })).toBeNull();
+		cleanup();
+		await renderWithRouter(
+			<SkillEditorScreen
+				project={project}
+				actions={editorActions()}
+				content={{
+					kind: "ready",
+					content: {
+						schemaVersion: 1,
+						projectId: "release-notes",
+						revision: 0,
+						contentDigest: null,
+						fileCount: 0,
+						totalBytes: 0,
+						updatedAt: null,
+						files: [],
+					},
+				}}
+			/>,
+		);
+		expect(screen.getByRole("heading", { name: "Skill 内容" })).toBeTruthy();
+		expect(screen.getByRole("heading", { name: "发布版本" })).toBeTruthy();
+		expect(
+			(screen.getByLabelText("SKILL.md（任务说明）") as HTMLTextAreaElement)
+				.value,
+		).toBe("");
+		// 浏览器不提交、也不显示包事实。
+		expect(document.body.textContent).not.toMatch(/项目 ID|版本 ID|digest/i);
 	});
 });

@@ -1,6 +1,7 @@
 import {
-	ScopedPlatformAuditPageV1Schema,
-	ScopedPlatformAuditProjectionV1Schema,
+	ScopedPlatformAuditPageV2Schema,
+	ScopedPlatformAuditProjectionV2Schema,
+	SkillHubVersionDetailV1Schema,
 	SkillHubVersionMetadataV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
@@ -11,7 +12,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { pendingApplication } from "../src/features/my-agents/test-fixtures";
 import type { DeploymentConfigurationProjectionV2 } from "../src/pilot/generated-v2/types.gen";
 
-// 设计 index.html（SHA-256 f66a8694…aaaf）:root 的原始写法；颜色由浏览器解析后与实现比较。
+// 设计 index.html（SHA-256 6dd1cb8e…3c13）:root 的原始写法；颜色由浏览器解析后与实现比较。
 const designColors = {
 	"--bg": "oklch(0.975 0.008 95)",
 	"--surface": "oklch(0.995 0.005 90)",
@@ -159,16 +160,21 @@ async function tokenFixture(page: Page, role: "owner" | "admin" = "owner") {
 		}
 		if (path.endsWith("/wecom-bot") || path.endsWith("/wecom-app"))
 			return route.fulfill({ json: { status: "not_configured" } });
-		if (path === "/api/v1/audit")
+		// #2909：审计页读取带显示名的 V2 入口。
+		if (path === "/api/v2/audit")
 			return route.fulfill({
-				json: ScopedPlatformAuditPageV1Schema.parse({
+				json: ScopedPlatformAuditPageV2Schema.parse({
 					items: [
-						ScopedPlatformAuditProjectionV1Schema.parse({
-							schemaVersion: 1,
+						ScopedPlatformAuditProjectionV2Schema.parse({
+							schemaVersion: 2,
 							auditId: "audit-tokens",
 							action: "task.api.access",
-							actor: { kind: "user", actorId: userId },
-							subject: { kind: "agent", subjectId: "agent-tokens" },
+							actor: { kind: "user", actorId: userId, displayName: null },
+							subject: {
+								kind: "agent",
+								subjectId: "agent-tokens",
+								displayName: "编程助手",
+							},
 							result: "accepted",
 							summary: "任务 API 访问获准",
 							taskApi: {
@@ -186,13 +192,31 @@ async function tokenFixture(page: Page, role: "owner" | "admin" = "owner") {
 							originalPrincipal: null,
 							executor: null,
 							operation: null,
+							agentDisplayName: "编程助手",
 						}),
 					],
 					nextCursor: null,
 				}),
 			});
-		if (path === `/api/v2/skills/versions/${skillVersion.skillVersionId}`)
-			return route.fulfill({ json: skillVersion });
+		if (
+			path === `/api/v2/skills/versions/${skillVersion.skillVersionId}/detail`
+		)
+			// K-02：详情页读取版本详情投影（发布者、本人安装状态与有界正文）。
+			return route.fulfill({
+				json: SkillHubVersionDetailV1Schema.parse({
+					...skillVersion,
+					ownerId: "user-owner-1",
+					installation: { state: "not_installed" },
+					content: {
+						state: "available",
+						body: "# release-notes\n",
+						bodyTruncated: false,
+						resources: [
+							{ path: "references/guide.md", kind: "reference", sizeBytes: 5 },
+						],
+					},
+				}),
+			});
 		try {
 			const response = await server.fetch(
 				new Request(request.url(), {

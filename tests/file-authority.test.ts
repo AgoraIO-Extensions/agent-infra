@@ -473,7 +473,7 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 			await sql`insert into platform.conversation_executions (execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,created_at,updated_at) values (${session.executionId},${session.conversationId},'agent',${session.actorId},'web',${`${session.executionId}-turn`},'processing',1,1,'auth',now(),now())`;
 			await seedSessionSandboxFixture(sql, session.conversationId);
 		}
-		assembled = assemblePlatformFilesV1({
+		const assemblyInput: Parameters<typeof assemblePlatformFilesV1>[0] = {
 			databaseUrl: db.databaseUrl,
 			identity: {
 				resolve: async (request) =>
@@ -495,7 +495,11 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 				resolveActor: async (id) => actor(id),
 				readLimits: async () => ({
 					configurationRevision: 1,
-					declarations: { agent: limits, channel: limits, deployment: limits },
+					declarations: {
+						agent: limits,
+						channel: limits,
+						deployment: limits,
+					},
 				}),
 			},
 			readCurrentLimits: async () => ({
@@ -520,8 +524,9 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 					};
 				},
 			},
-		});
-		const app = createPlatformHealthApp();
+		};
+		assembled = assemblePlatformFilesV1(assemblyInput);
+		let app = createPlatformHealthApp();
 		const runtimeExchange = {
 			async authenticate(
 				request: Request,
@@ -628,7 +633,11 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 				replay: async () => undefined,
 			},
 		});
-		server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 });
+		server = serve({
+			fetch: (request) => app.fetch(request),
+			hostname: "127.0.0.1",
+			port: 0,
+		});
 		if (!server.listening) await once(server, "listening");
 		const address = server.address();
 		if (!address || typeof address === "string")
@@ -757,6 +766,12 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 			);
 			readAccess.set(name, read);
 		}
+		let loseCompleteReceipt = false;
+		let lostResult: ReturnType<typeof FileProjectionV1Schema.parse> | undefined;
+		let lostObject:
+			| Awaited<ReturnType<typeof fixture.storage.inspect>>
+			| undefined;
+		let resultUploads = 0;
 		const transfer = async (
 			value: string | URL | Request,
 			init?: RequestInit,
@@ -776,15 +791,36 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 			const headers = new Headers(init?.headers);
 			if (url.pathname.startsWith("/api/v1/conversations/"))
 				headers.set("Authorization", `Bearer ${serviceToken}`);
+			if (init?.method === "PUT") resultUploads += 1;
 			const response = await fetch(url, { ...init, headers });
+			if (
+				loseCompleteReceipt &&
+				url.pathname.endsWith("/complete") &&
+				response.ok
+			) {
+				loseCompleteReceipt = false;
+				lostResult = FileProjectionV1Schema.parse(
+					await response.clone().json(),
+				);
+				const [persisted] =
+					await sql`select record from platform.files where file_id = ${lostResult.fileId}`;
+				expect(persisted?.record.status).toBe("available");
+				lostObject = await fixture.storage.inspect(persisted.record.objectRef);
+				expect(lostObject).not.toBeNull();
+				// The real HTTP handler has committed. Drop its receipt at the client boundary.
+				await response.body?.cancel();
+				throw new Error("CONTROLLED_RESULT_RECEIPT_LOST");
+			}
 			return response;
 		};
-		const bridgeFactory = createWorkerRuntimeFileBridgeFactoryV1({
-			origin: httpsOrigin,
-			serviceToken,
-			timeoutMs: 10000,
-			fetch: transfer as typeof fetch,
-		});
+		const createBridgeFactory = () =>
+			createWorkerRuntimeFileBridgeFactoryV1({
+				origin: httpsOrigin,
+				serviceToken,
+				timeoutMs: 10000,
+				fetch: transfer as typeof fetch,
+			});
+		let bridgeFactory = createBridgeFactory();
 		const bindingFor = (name: keyof typeof sessions) => {
 			const binding = [...executionBindings.values()].find(
 				(value) => value.actorId === sessions[name].actorId,
@@ -804,16 +840,67 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 			const input = await bridge.readInput(inputFile.fileId);
 			expect(await consume(input.body)).toEqual(bytes[name]);
 			const resultBytes = Buffer.from(`${name} result`);
-			const receipt = await bridge.writeResult(
-				descriptor(`${name}-result.txt`, resultBytes),
-				new ReadableStream({
-					start(controller) {
-						controller.enqueue(resultBytes);
-						controller.close();
-					},
-				}),
-			);
+			const writeResult = () =>
+				bridgeFactory(bindingFor(name)).writeResult(
+					descriptor(`${name}-result.txt`, resultBytes),
+					new ReadableStream({
+						start(controller) {
+							controller.enqueue(resultBytes);
+							controller.close();
+						},
+					}),
+				);
+			if (name === "first") {
+				loseCompleteReceipt = true;
+				await expect(writeResult()).rejects.toThrow(
+					"CONTROLLED_RESULT_RECEIPT_LOST",
+				);
+				expect(loseCompleteReceipt).toBe(false);
+				const lostFile = requireFixtureValue(lostResult, "lost result receipt");
+				expect(lostFile.status).toBe("available");
+				const accesses =
+					await sql`select * from platform.file_accesses where file_id = ${lostFile.fileId}`;
+				await assembled.close();
+				assembled = assemblePlatformFilesV1(assemblyInput);
+				app = createPlatformHealthApp();
+				registerFileRoutesV1(app, {
+					...assembled.dependencies,
+					runtimeExchange,
+				});
+				bridgeFactory = createBridgeFactory();
+				expect(
+					await sql`select * from platform.file_accesses where file_id = ${lostFile.fileId}`,
+				).toEqual(accesses);
+			}
+			const uploadsBeforeReplay = resultUploads;
+			const receipt = await writeResult();
 			expect(receipt.projection.status).toBe("available");
+			if (name === "first") {
+				expect(receipt.projection.fileId).toBe(lostResult?.fileId);
+				expect(resultUploads).toBe(uploadsBeforeReplay);
+			}
+			const [beforeReplay] =
+				await sql`select record from platform.files where file_id = ${receipt.projection.fileId}`;
+			const stored = await fixture.storage.inspect(
+				beforeReplay.record.objectRef,
+			);
+			expect(stored).toMatchObject({
+				version: beforeReplay.record.objectVersion,
+				etag: beforeReplay.record.etag,
+			});
+			if (name === "first") expect(stored).toEqual(lostObject);
+			const uploadsBeforeSecondReplay = resultUploads;
+			expect((await writeResult()).projection.fileId).toBe(
+				receipt.projection.fileId,
+			);
+			expect(resultUploads).toBe(uploadsBeforeSecondReplay);
+			expect(
+				await fixture.storage.inspect(beforeReplay.record.objectRef),
+			).toEqual(stored);
+			const resultRows =
+				await sql`select record from platform.files where conversation_id = ${sessions[name].conversationId} and record->>'kind' = 'result'`;
+			expect(resultRows).toHaveLength(1);
+			expect(resultRows[0]?.record).toEqual(beforeReplay.record);
 			const resultRead = FileAccessResponseV1Schema.parse(
 				await (
 					await post(

@@ -10,30 +10,78 @@ interface PopupWindowV1 {
 	readonly location?: { href: string };
 }
 
-function parseResult(
+function credential(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0 && value.length <= 1024;
+}
+
+type ParsedMessageV1 =
+	| { readonly kind: "result"; readonly result: WecomQrAuthorizationResultV1 }
+	| { readonly kind: "cancelled" }
+	| { readonly kind: "failed" }
+	| { readonly kind: "ignored" }
+	| { readonly kind: "invalid" };
+
+/**
+ * 解析扫码弹窗发来的消息（调用方已核对 origin 与弹窗本身）：
+ * - 企微官方扫码页（@wecom/wecom-aibot-sdk 协议）：{type:"AUTH_SUCCESS", payload:{botid, secret}}，
+ *   不回传 state；官方定义的其他类型按取消 / 失败处理，未知类型忽略（#2894）。
+ * - 部署自有的中转页：{botId, secret, source, state}，source 与一次性 state 必须一致。
+ * 官方结果的关联凭据是「本页为这次配置会话打开的那个弹窗」；一次性 state 仍由本页提交给服务端校验。
+ */
+function parseMessage(
 	value: unknown,
 	expectedSource: string,
 	expectedState: string,
-): WecomQrAuthorizationResultV1 | undefined {
+): ParsedMessageV1 {
 	if (typeof value !== "object" || value === null || Array.isArray(value))
-		return undefined;
+		return { kind: "invalid" };
 	const candidate = value as Record<string, unknown>;
+	if (typeof candidate.type === "string") {
+		switch (candidate.type) {
+			case "AUTH_SUCCESS": {
+				const payload = candidate.payload as Record<string, unknown> | null;
+				if (
+					typeof payload !== "object" ||
+					payload === null ||
+					Array.isArray(payload) ||
+					!credential(payload.botid) ||
+					!credential(payload.secret)
+				)
+					return { kind: "invalid" };
+				return {
+					kind: "result",
+					result: {
+						botId: payload.botid,
+						secret: payload.secret,
+						state: expectedState,
+					},
+				};
+			}
+			case "AUTH_CANCEL":
+			case "WINDOW_CLOSE":
+				return { kind: "cancelled" };
+			case "AUTH_ERROR":
+				return { kind: "failed" };
+			default:
+				// 例如 QR_CODE_READY：继续等待扫码结果。
+				return { kind: "ignored" };
+		}
+	}
 	if (
 		Object.keys(candidate).sort().join(",") !== "botId,secret,source,state" ||
 		candidate.source !== expectedSource ||
 		candidate.state !== expectedState ||
-		typeof candidate.botId !== "string" ||
-		typeof candidate.secret !== "string" ||
-		candidate.botId.length === 0 ||
-		candidate.botId.length > 1024 ||
-		candidate.secret.length === 0 ||
-		candidate.secret.length > 1024
+		!credential(candidate.botId) ||
+		!credential(candidate.secret)
 	)
-		return undefined;
+		return { kind: "invalid" };
 	return {
-		botId: candidate.botId,
-		secret: candidate.secret,
-		state: expectedState,
+		kind: "result",
+		result: {
+			botId: candidate.botId,
+			secret: candidate.secret,
+			state: expectedState,
+		},
 	};
 }
 
@@ -65,7 +113,12 @@ export function openWecomQrAuthorizationV1(input: {
 	const remainingMs = expiresAt - startedAt;
 	if (!Number.isFinite(expiresAt) || remainingMs <= 0)
 		return Promise.reject(new Error("WECom_QR_EXPIRED"));
-	const timeoutMs = Math.min(input.timeoutMs ?? 120_000, remainingMs);
+	// 默认等到配置会话到期前 30 秒：官方二维码本身有效 300 秒，Owner 还要在手机上创建机器人；
+	// 留出的 30 秒用于面板确认、提交与 Worker 验证（#2894）。原先固定 120 秒，常常来不及扫完。
+	const timeoutMs = Math.min(
+		input.timeoutMs ?? Math.max(remainingMs - 30_000, 1_000),
+		remainingMs,
+	);
 	if (
 		!Number.isSafeInteger(timeoutMs) ||
 		timeoutMs < 1_000 ||
@@ -120,9 +173,15 @@ export function openWecomQrAuthorizationV1(input: {
 			if (now >= waitDeadline) return finish(new Error("WECom_QR_TIMEOUT"));
 			if (popup.closed) return finish(new Error("WECom_QR_CANCELLED"));
 			if (event.source !== popup || event.origin !== input.authOrigin) return;
-			const result = parseResult(event.data, input.source, input.state);
-			if (!result) return finish(new Error("WECom_QR_RESULT_INVALID"));
-			finish(undefined, result);
+			const parsed = parseMessage(event.data, input.source, input.state);
+			if (parsed.kind === "ignored") return;
+			if (parsed.kind === "cancelled")
+				return finish(new Error("WECom_QR_CANCELLED"));
+			if (parsed.kind === "failed")
+				return finish(new Error("WECom_QR_AUTH_FAILED"));
+			if (parsed.kind === "invalid")
+				return finish(new Error("WECom_QR_RESULT_INVALID"));
+			finish(undefined, parsed.result);
 		};
 		add("message", onMessage);
 		if (input.signal?.aborted) onAbort();

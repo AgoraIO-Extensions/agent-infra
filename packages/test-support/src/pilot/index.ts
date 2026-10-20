@@ -1,3 +1,4 @@
+export * from "./agent-detail.ts";
 export * from "./delegated.ts";
 export * from "./mock-server.ts";
 

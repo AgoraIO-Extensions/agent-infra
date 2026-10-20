@@ -190,6 +190,46 @@ it("only reports sent after provider ACK and rejects a swapped sender", async ()
 	);
 	expect(await result).toBe("sent");
 });
+// #2982：长连接 stream 回复带 `<think>` 思考过程；带思考的文本不合规时退回只发答案。
+it.each([
+	[
+		"the thinking block above the answer",
+		"<think>先读题</think>\n\nfixture answer",
+		"<think>先读题</think>\n\nfixture answer",
+	],
+	[
+		"only the answer when the thinking text exceeds the bound",
+		"x".repeat(20_481),
+		"fixture answer",
+	],
+	[
+		"only the answer when the thinking text is not well-formed",
+		"<think>\ud800</think>\n\nfixture answer",
+		"fixture answer",
+	],
+])("streams %s", async (_name, textWithThinking, content) => {
+	const s = await setup();
+	await s.authenticate();
+	s.push();
+	await expect.poll(() => s.messages.length).toBe(1);
+	const message = s.messages[0];
+	if (!message) throw new Error("Missing admitted message");
+	const reply = once(s.socket, "message");
+	const result = s.adapter.sender.send({
+		scope: message,
+		replyHandle: message.replyHandle,
+		text: "fixture answer",
+		textWithThinking,
+	});
+	const [raw] = await reply;
+	const frame = JSON.parse(raw.toString());
+	expect(frame).toMatchObject({
+		cmd: "aibot_respond_msg",
+		body: { msgtype: "stream", stream: { finish: true, content } },
+	});
+	s.socket.send(JSON.stringify({ headers: frame.headers, errcode: 0 }));
+	expect(await result).toBe("sent");
+});
 it("does not send a bot reply after the final actor authorization is revoked", async () => {
 	const s = await setup();
 	await s.authenticate();

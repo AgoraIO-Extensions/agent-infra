@@ -1,11 +1,14 @@
 import {
 	ConversationDetailProjectionV2Schema,
 	PersistedConversationEventV1Schema,
+	ReasoningDeltaEventV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 import {
+	answerText,
 	currentExecution,
 	emptyAnswerKind,
+	reasoningTexts,
 } from "./conversation-screen-state.js";
 import { event, history, timestamp } from "./conversation-test-fixtures.js";
 
@@ -245,5 +248,71 @@ describe("answers without body text (NW-15)", () => {
 		expect(emptyAnswerKind(projection, [], null, "completed", true)).toBe(
 			"empty",
 		);
+	});
+});
+
+describe("reasoning deltas in the timeline (#2979)", () => {
+	const reasoning = (sequence: number, kind: "raw" | "summary") =>
+		ReasoningDeltaEventV2Schema.parse({
+			...event(sequence),
+			schemaVersion: 2,
+			type: "reasoning.delta",
+			payload: { kind, text: `thought ${sequence}` },
+		});
+
+	it("keeps the answer text to text deltas while the history accepts reasoning", () => {
+		const projection = ConversationDetailProjectionV2Schema.parse(
+			history("conversation-1", [event(1)]),
+		);
+		const live = [
+			...projection.events,
+			reasoning(2, "raw"),
+			event(3),
+			reasoning(4, "summary"),
+		];
+		expect(answerText(projection, live, "execution-1", "output 1")).toBe(
+			"output 1output 3",
+		);
+		// 思考过程同样属于该 Execution 的已加载事件，不会把回复误判为「未加载」。
+		expect(
+			emptyAnswerKind(
+				projection,
+				[reasoning(5, "raw")],
+				"execution-1",
+				"completed",
+				true,
+			),
+		).toBe("empty");
+	});
+});
+
+describe("thinking text per execution (#2981)", () => {
+	const reasoning = (
+		sequence: number,
+		kind: "raw" | "summary",
+		text: string,
+		executionId = "execution-1",
+	) =>
+		ReasoningDeltaEventV2Schema.parse({
+			...event(sequence),
+			executionId,
+			schemaVersion: 2,
+			type: "reasoning.delta",
+			payload: { kind, text },
+		});
+
+	it("joins each execution's reasoning in arrival order, summary before raw", () => {
+		const texts = reasoningTexts([
+			reasoning(1, "raw", "think "),
+			event(2),
+			reasoning(3, "summary", "Plan"),
+			reasoning(4, "raw", "more"),
+			reasoning(5, "raw", "other", "execution-2"),
+			reasoning(6, "summary", "\n\nNext"),
+		]);
+		expect(texts.get("execution-1")).toBe("Plan\n\nNext\n\nthink more");
+		expect(texts.get("execution-2")).toBe("other");
+		// 正文增量不进入思考过程；没有思考的 Execution 没有条目。
+		expect([...texts.keys()]).toEqual(["execution-1", "execution-2"]);
 	});
 });

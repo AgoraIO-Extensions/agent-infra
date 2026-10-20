@@ -148,7 +148,7 @@ async function openForm(page: Page) {
 	await expect(
 		page.getByRole("heading", { level: 1, name: "API 凭证" }),
 	).toBeVisible();
-	// R-02：个人凭证是表格；已撤销行的状态 chip 与有效期列都写「已撤销」，按 chip 定位。
+	// R-02：个人凭证是表格；已撤销行的状态 chip 为「已撤销」，有效期列只写撤销时间（#2862）。
 	const rows = page.getByRole("table", { name: "个人 API 凭证" });
 	await expect(
 		rows.locator('[data-slot="badge"]', { hasText: /^已过期$/ }),
@@ -156,6 +156,14 @@ async function openForm(page: Page) {
 	await expect(
 		rows.locator('[data-slot="badge"]', { hasText: /^已撤销$/ }),
 	).toBeVisible();
+	// 已撤销行的有效期列只显示撤销时间（<time>），不提供详情或轮换（#2862）。
+	const revokedExpiry = rows
+		.locator("tr", {
+			has: page.locator('[data-slot="badge"]', { hasText: /^已撤销$/ }),
+		})
+		.locator('td[data-label="有效期"]');
+	await expect(revokedExpiry).toContainText(/^已撤销于 /);
+	await expect(revokedExpiry.locator("time")).toHaveCount(1);
 	// 收窄前的范围先可见，之后「不再出现」的断言才有意义。
 	await expect(
 		rows

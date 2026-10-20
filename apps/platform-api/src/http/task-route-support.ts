@@ -293,13 +293,14 @@ export function scope(
 	};
 }
 export function taskProjection(detail: ConversationExecutionDetailV1) {
-	const events = detail.events.map((event) => {
+	const events = detail.events.flatMap((event) => {
 		if (
 			event.executionId !== detail.execution.executionId ||
 			event.conversationId !== detail.execution.conversationId
 		)
 			throw new Error("Task events are inconsistent");
-		return taskEventProjection(event);
+		const projected = taskEventProjection(event);
+		return projected ? [projected] : [];
 	});
 	return TaskProjectionV1Schema.parse({
 		schemaVersion: 1,
@@ -313,8 +314,22 @@ export function taskProjection(detail: ConversationExecutionDetailV1) {
 	});
 }
 
+/**
+ * 任务投影不包含思考过程（#2979）：返回 undefined 的事件由调用方跳过，任务订阅仍推进
+ * 持久游标；其他事件按会话投影原样输出。
+ */
 export function taskEventProjection(event: ConversationQueryEventV1) {
-	if (event.eventType !== "task.status") return eventProjection(event);
+	if (event.eventType === "reasoning.delta") {
+		// 仍完整校验持久事件，损坏的记录照常失败而不是被静默跳过。
+		eventProjection(event);
+		return undefined;
+	}
+	if (event.eventType !== "task.status") {
+		const projected = eventProjection(event);
+		if (projected.kind !== "event" || projected.type === "reasoning.delta")
+			throw new Error("Task event projection is invalid");
+		return projected;
+	}
 	if (event.eventSchemaVersion !== undefined)
 		throw new Error("Task status schema is invalid");
 	const persisted = parseConversationPersistedEventPayloadV1(

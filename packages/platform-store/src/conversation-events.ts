@@ -203,6 +203,15 @@ function normalizedEvent(value: unknown): ConversationNormalizedEventV1 {
 		const input = exactRecord(value, ["type", "text"]);
 		return { type: "text.delta", text: text(input.text, 65_536) };
 	}
+	if (type === "reasoning.delta") {
+		const input = exactRecord(value, ["type", "kind", "text"]);
+		if (input.kind !== "raw" && input.kind !== "summary") return unavailable();
+		return {
+			type: "reasoning.delta",
+			kind: input.kind,
+			text: text(input.text, 65_536),
+		};
+	}
 	if (type === "execution.status") {
 		const input = exactRecord(value, ["type", "status"]);
 		if (

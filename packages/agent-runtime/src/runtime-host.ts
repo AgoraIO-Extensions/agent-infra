@@ -17,6 +17,7 @@ import type {
 	RuntimeEventAckRequestV4,
 	RuntimeEventPersistRequestV3,
 	RuntimeEventReadRequestV4,
+	RuntimeEventV1,
 	RuntimeGenerationCancelRequestV1,
 	RuntimeGenerationCancelRequestV3,
 	RuntimeModelDirectoryRequestV1,
@@ -2173,7 +2174,10 @@ export class RuntimeHost {
 			// The legacy replay response is still V1-only. Operation facts cross the
 			// process boundary through the streaming endpoint below, whose event
 			// contract preserves the versioned RuntimeEvent union.
-			events: events.data.filter((event) => event.type !== "operation"),
+			// #2979：思考过程同为 V2 事件，按版本过滤，不会进入 V1 replay。
+			events: events.data.filter(
+				(event): event is RuntimeEventV1 => event.schemaVersion === 1,
+			),
 		};
 	}
 

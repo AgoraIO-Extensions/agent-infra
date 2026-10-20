@@ -9,6 +9,7 @@ import {
 	ExecutionDetailProjectionV2Schema,
 	PersistedConversationEventV2Schema,
 	PilotProtocolErrorV1Schema,
+	ReasoningDeltaEventV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, test } from "@playwright/test";
@@ -362,6 +363,203 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 	).toBeVisible();
 	await expect.poll(() => submitRequests).toBe(1);
 	await test.info().attach("conversation-completed-after-reload", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+});
+
+// #2981：思考过程随推理增量实时展开；答案开始后收起，刷新后仍完整且不重复。
+test("streams the thinking process above the reply and restores it folded after reload", async ({
+	page,
+}) => {
+	const question = "请分析这道题";
+	const thought = (sequence: number, text: string) =>
+		ReasoningDeltaEventV2Schema.parse({
+			schemaVersion: 2,
+			kind: "event",
+			eventId: `live-event-${sequence}`,
+			conversationId,
+			executionId,
+			sequence,
+			conversationCursor: `live-cursor-${sequence}`,
+			occurredAt: timestamp,
+			type: "reasoning.delta",
+			payload: { kind: "raw", text },
+		});
+	const thoughts = [thought(1, "先列出已知条件，"), thought(2, "再逐步推导。")];
+	const answerDelta = event("text.delta", 3, { text: "答案是 42。" });
+	const completed = event("execution.status", 4, { status: "completed" });
+	const userQuestion = {
+		messageId,
+		role: "user",
+		text: question,
+		status: "processing",
+		executionId,
+		replyToMessageId: null,
+		answerVersion: null,
+		isCurrentAnswer: null,
+		error: null,
+		createdAt: timestamp,
+	};
+	let phase: "running" | "completed" = "running";
+	await page.addInitScript(() => {
+		type FixtureWindow = Window & {
+			hasConversationStream: () => boolean;
+			emitConversationFrame: (value: unknown, id: string) => void;
+		};
+		const fixture = window as unknown as FixtureWindow;
+		const realFetch = window.fetch.bind(window);
+		const encoder = new TextEncoder();
+		let activeController:
+			| ReadableStreamDefaultController<Uint8Array>
+			| undefined;
+		fixture.hasConversationStream = () => Boolean(activeController);
+		fixture.emitConversationFrame = (value, id) => {
+			if (!activeController)
+				throw new Error("The conversation stream is not open");
+			activeController.enqueue(
+				encoder.encode(`id: ${id}\n` + `data: ${JSON.stringify(value)}\n\n`),
+			);
+		};
+		window.fetch = async (input, init) => {
+			const url = new URL(
+				typeof input === "string"
+					? input
+					: input instanceof Request
+						? input.url
+						: String(input),
+				window.location.href,
+			);
+			if (!url.pathname.endsWith("/events")) return realFetch(input, init);
+			let controllerForStream:
+				| ReadableStreamDefaultController<Uint8Array>
+				| undefined;
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controllerForStream = controller;
+					activeController = controller;
+				},
+				cancel() {
+					if (activeController === controllerForStream)
+						activeController = undefined;
+				},
+			});
+			return new Response(body, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+	});
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		const path = new URL(request.url()).pathname;
+		if (isFileLimitsRequest(request.method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
+		if (path.endsWith("/session"))
+			return route.fulfill({ json: ownerSession() });
+		if (path === `/api/v2/agents/${agentId}`)
+			return route.fulfill({ json: activeAgent() });
+		if (path === `/api/v2/conversations/${conversationId}`) {
+			const events =
+				phase === "completed" ? [...thoughts, answerDelta, completed] : [];
+			return route.fulfill({
+				json: ConversationDetailProjectionV2Schema.parse({
+					schemaVersion: 2,
+					conversation: {
+						schemaVersion: 1,
+						conversationId,
+						agentId,
+						title: "思考过程验收会话",
+						status: phase === "completed" ? "ready" : "active",
+						selectedModelOptionId: null,
+						selectedReasoningLevel: null,
+						lastConversationCursor: events.at(-1)?.conversationCursor ?? null,
+						createdAt: timestamp,
+						updatedAt: timestamp,
+					},
+					messages:
+						phase === "completed"
+							? [
+									{ ...userQuestion, status: "completed" },
+									{
+										...userQuestion,
+										messageId: "answer-live-1",
+										role: "assistant",
+										text: "答案是 42。",
+										status: "completed",
+										replyToMessageId: messageId,
+										answerVersion: 1,
+										isCurrentAnswer: true,
+									},
+								]
+							: [userQuestion],
+					events,
+				}),
+			});
+		}
+		await route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	await expect(page.getByText(question, { exact: true })).toBeVisible();
+	await page.waitForFunction(() =>
+		(
+			window as unknown as { hasConversationStream: () => boolean }
+		).hasConversationStream(),
+	);
+	const emit = (frame: unknown, id: string) =>
+		page.evaluate(
+			([value, frameId]) =>
+				(
+					window as unknown as {
+						emitConversationFrame: (value: unknown, id: string) => void;
+					}
+				).emitConversationFrame(value, frameId as string),
+			[frame, id] as const,
+		);
+	const toggle = page.getByRole("button", { name: `思考过程：${question}` });
+	await expect(toggle).toHaveCount(0);
+	await emit(thoughts[0], "live-event-1");
+	await emit(thoughts[1], "live-event-2");
+	await expect(toggle).toHaveAttribute("aria-expanded", "true");
+	await expect(
+		page.getByText("先列出已知条件，再逐步推导。", { exact: true }),
+	).toBeVisible();
+	await test.info().attach("conversation-thinking-live", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+
+	await emit(answerDelta, "live-event-3");
+	await expect(page.getByText("答案是 42。", { exact: true })).toBeVisible();
+	await expect(toggle).toHaveAttribute("aria-expanded", "false");
+	await expect(
+		page.getByText("先列出已知条件，再逐步推导。", { exact: true }),
+	).toBeHidden();
+
+	phase = "completed";
+	await emit(completed, "live-event-4");
+	await expect(
+		page.getByRole("button", { name: `重新生成：${question}` }),
+	).toBeVisible();
+	await page.reload();
+	await expect(page.getByText("答案是 42。", { exact: true })).toBeVisible();
+	await expect(toggle).toHaveAttribute("aria-expanded", "false");
+	await toggle.click();
+	await expect(toggle).toHaveAttribute("aria-expanded", "true");
+	await expect(
+		page.getByText("先列出已知条件，再逐步推导。", { exact: true }),
+	).toHaveCount(1);
+	await expect(
+		page.getByText("先列出已知条件，再逐步推导。", { exact: true }),
+	).toBeVisible();
+	await test.info().attach("conversation-thinking-after-reload", {
 		body: await page.screenshot({ fullPage: true }),
 		contentType: "image/png",
 	});
@@ -1296,3 +1494,164 @@ for (const source of ["standard", "custom"] as const) {
 		});
 	}
 }
+
+test("explains a model fallback with the requested and actual model (G-07)", async ({
+	page,
+}, info) => {
+	// Owner 已从清单删除「Removed model」，会话之后的消息回退到默认选项。
+	const agent = activeAgent();
+	const legacyExecutionId = "execution-fallback-legacy";
+	const currentExecutionId = "execution-fallback-current";
+	const fallback = (
+		sequence: number,
+		executionIdValue: string,
+		requested?: string | null,
+	) =>
+		PersistedConversationEventV2Schema.parse({
+			schemaVersion: requested === undefined ? 1 : 2,
+			kind: "event",
+			eventId: `fallback-event-${sequence}`,
+			conversationId,
+			executionId: executionIdValue,
+			sequence: 1,
+			conversationCursor: `fallback-cursor-${sequence}`,
+			occurredAt: timestamp,
+			type: "model.selection.fell_back",
+			payload: {
+				modelOptionId: "model-primary",
+				reasoningLevel: "medium",
+				reason: "selection_unavailable",
+				...(requested === undefined
+					? {}
+					: {
+							requestedModelOptionId: "model-removed",
+							requestedModelDisplayName: requested,
+						}),
+			},
+		});
+	const completedFor = (sequence: number, executionIdValue: string) =>
+		PersistedConversationEventV2Schema.parse({
+			...event("execution.status", sequence, { status: "completed" }),
+			eventId: `fallback-completed-${sequence}`,
+			executionId: executionIdValue,
+			sequence: 2,
+			conversationCursor: `fallback-cursor-${sequence}`,
+		});
+	const turn = (executionIdValue: string, question: string, reply: string) => [
+		{
+			messageId: `${executionIdValue}-question`,
+			role: "user" as const,
+			text: question,
+			status: "completed" as const,
+			executionId: executionIdValue,
+			replyToMessageId: null,
+			answerVersion: null,
+			isCurrentAnswer: null,
+			error: null,
+			createdAt: timestamp,
+		},
+		{
+			messageId: `${executionIdValue}-answer`,
+			role: "assistant" as const,
+			text: reply,
+			status: "completed" as const,
+			executionId: executionIdValue,
+			replyToMessageId: `${executionIdValue}-question`,
+			answerVersion: 1,
+			isCurrentAnswer: true,
+			error: null,
+			createdAt: timestamp,
+		},
+	];
+	const detail = ConversationDetailProjectionV2Schema.parse({
+		...history(conversationId, [
+			// 升级前写入的旧事件没有请求模型字段，仍要正常显示（AC-3）。
+			fallback(1, legacyExecutionId),
+			completedFor(2, legacyExecutionId),
+			fallback(3, currentExecutionId, "Removed model"),
+			completedFor(4, currentExecutionId),
+		]),
+		conversation: {
+			...history(conversationId, []).conversation,
+			status: "ready",
+			selectedModelOptionId: "model-primary",
+			selectedReasoningLevel: "medium",
+			lastConversationCursor: "fallback-cursor-4",
+		},
+		messages: [
+			...turn(legacyExecutionId, "升级前的问题", "旧回答。"),
+			...turn(currentExecutionId, "删除选项后的问题", "新回答。"),
+		],
+	});
+	await keepConversationStreamOpen(page);
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		const path = new URL(request.url()).pathname;
+		if (isFileLimitsRequest(request.method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
+		if (path.endsWith("/events"))
+			return route.fulfill({
+				status: 200,
+				contentType: "text/event-stream",
+				body: ": heartbeat\n\n",
+			});
+		if (path.endsWith("/session"))
+			return route.fulfill({ json: ownerSession() });
+		if (path === `/api/v2/agents/${agentId}`)
+			return route.fulfill({ json: agent });
+		if (path === `/api/v2/conversations/${conversationId}`)
+			return route.fulfill({ json: detail });
+		await route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	await expect(page.getByText("新回答。", { exact: true })).toBeVisible();
+	const facts = (dialog: ReturnType<typeof page.getByRole>) =>
+		dialog
+			.locator("dl.model-fallback-facts")
+			.evaluate((list) =>
+				Object.fromEntries(
+					[...list.querySelectorAll("dt")].map((term) => [
+						term.textContent,
+						term.nextElementSibling?.textContent,
+					]),
+				),
+			);
+
+	const current = page.getByRole("button", {
+		name: "查看模型状态：删除选项后的问题",
+	});
+	await current.click();
+	const dialog = page.getByRole("dialog", { name: "模型回退" });
+	await expect(dialog).toBeVisible();
+	expect(await facts(dialog)).toEqual({
+		请求模型: "Removed model",
+		实际模型: "Primary model",
+		原因: "会话所选的模型选项已被 Owner 移除，已在当前 Agent 允许范围内改用默认选项。",
+	});
+	await expect(dialog).not.toContainText("model-removed");
+	await expect(dialog).not.toContainText("model-primary");
+	await info.attach("model-fallback-requested", {
+		body: await page.screenshot({ animations: "disabled" }),
+		contentType: "image/png",
+	});
+	await page.keyboard.press("Escape");
+	await expect(dialog).toBeHidden();
+	await expect(current).toBeFocused();
+
+	await page
+		.getByRole("button", { name: "查看模型状态：升级前的问题" })
+		.click();
+	await expect(dialog).toBeVisible();
+	expect(await facts(dialog)).toMatchObject({
+		请求模型: "已删除的模型选项",
+		实际模型: "Primary model",
+	});
+	await expect(dialog).not.toContainText("model-removed");
+});

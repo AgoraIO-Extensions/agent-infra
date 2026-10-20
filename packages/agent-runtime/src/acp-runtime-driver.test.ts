@@ -489,7 +489,7 @@ it("refreshes the V4 authorization resolver on a reused ACP session", async () =
 						new URL("./acp-peer.test-support.mjs", import.meta.url),
 					),
 				],
-				env: {},
+				env: { ACP_TEST_MODE: "hold" },
 				beginTurn: () => {
 					begins++;
 				},
@@ -518,8 +518,34 @@ it("refreshes the V4 authorization resolver on a reused ACP session", async () =
 		await vi.waitFor(async () =>
 			expect(
 				await driver.getStatus(first.nativeSessionRef, "execution-a"),
-			).toBe("completed"),
+			).toBe("running"),
 		);
+		expect(await resolveCredential?.()).toBe("synthetic-key-execution-a");
+		const stop = (
+			nativeSessionRef: string,
+			executionId: string,
+			turnId: string,
+		) =>
+			driver.execute({
+				schemaVersion: 1,
+				kind: "stop",
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: 1,
+				nativeSessionRef,
+				executionId,
+				turnId,
+				operationId: `stop-${executionId}`,
+			});
+		await stop(first.nativeSessionRef, "execution-a", "turn-a");
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(first.nativeSessionRef, "execution-a"),
+			).toBe("cancelled"),
+		);
+		await expect(resolveCredential?.()).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
 		const next = await driver.execute({
 			...command,
 			nativeSessionRef: first.nativeSessionRef,
@@ -529,14 +555,23 @@ it("refreshes the V4 authorization resolver on a reused ACP session", async () =
 		});
 		await vi.waitFor(async () =>
 			expect(await driver.getStatus(next.nativeSessionRef, "execution-b")).toBe(
-				"completed",
+				"running",
 			),
 		);
 		expect(launches).toBe(1);
 		expect(begins).toBe(1);
 		expect(resolveCredential).toBeDefined();
 		expect(await resolveCredential?.()).toBe("synthetic-key-execution-b");
-		expect(actions).toEqual(["execution-b"]);
+		expect(actions).toEqual(["execution-a", "execution-b"]);
+		await stop(next.nativeSessionRef, "execution-b", "turn-b");
+		await vi.waitFor(async () =>
+			expect(await driver.getStatus(next.nativeSessionRef, "execution-b")).toBe(
+				"cancelled",
+			),
+		);
+		await expect(resolveCredential?.()).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });

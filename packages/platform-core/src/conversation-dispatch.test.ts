@@ -18,10 +18,12 @@ import {
 	type ConversationRuntimeEventV1,
 	type ConversationRuntimeHostPortV1,
 	type ConversationRuntimeOperationEventV2,
+	type ConversationRuntimeReasoningEventV2,
 	createConversationDispatchUseCaseV1,
 	decideConversationDispatchRetryTransitionV1,
 	decideConversationStopConfirmationStatusV1,
 	decideConversationStopConfirmationTimeoutV1,
+	nativeCapabilityParametersDigestV1,
 } from "./index.js";
 
 describe("stop confirmation timeout", () => {
@@ -540,6 +542,219 @@ function dispatch(
 ) {
 	return useCase.dispatch({ schemaVersion: 1, itemId, workerId: "worker-1" });
 }
+
+function nativeParametersClaim(parameters: string, kind: "command" | "skill") {
+	return claim({
+		operation: "conversation.native-capability.invoke.v1",
+		itemId: "conversation:native-capability:execution-1",
+		input: null,
+		messageId: null,
+		modelConfigurationRevision: null,
+		modelOptionId: null,
+		reasoningLevel: null,
+		hostSessionRef: "host-session-conversation-1",
+		nativeCapability: {
+			agentId: "agent-1",
+			actorId: "actor-1",
+			channelId: "web",
+			turnId: "turn-1",
+			capabilityId: "a".repeat(64),
+			capabilityKind: kind,
+			directoryRevision: "b".repeat(64),
+			parameters,
+			parametersDigest: nativeCapabilityParametersDigestV1(parameters),
+			capabilitySourceVersion: "1.0.0",
+		},
+	});
+}
+
+describe("native dispatch parameter bounds", () => {
+	it.each([
+		{ label: "empty command", kind: "command" as const, parameters: "" },
+		{
+			label: "1025 byte Skill",
+			kind: "skill" as const,
+			parameters: "a".repeat(1025),
+		},
+		{
+			label: "16384 byte Skill",
+			kind: "skill" as const,
+			parameters: "a".repeat(16384),
+		},
+		{
+			label: "16384 UTF-8 byte Skill",
+			kind: "skill" as const,
+			parameters: "é".repeat(8192),
+		},
+	])(
+		"delivers the unchanged $label to Runtime and persists its terminal event",
+		async ({ kind, parameters }) => {
+			const native = nativeParametersClaim(parameters, kind);
+			const store = new MemoryDispatchStore(native);
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.setEvents([runtimeEvent(1)]);
+			const delivered = vi.spyOn(runtimeHost, "dispatch");
+			const f = setup({ store, runtimeHost });
+			expect(await dispatch(f.useCase, native.itemId)).toMatchObject({
+				outcome: "accepted",
+			});
+			expect(delivered).toHaveBeenCalledTimes(1);
+			expect(delivered.mock.calls[0]?.[0]).toMatchObject({
+				operation: "native-capability.invoke",
+				nativeCapability: {
+					parameters,
+					parametersDigest: nativeCapabilityParametersDigestV1(parameters),
+				},
+			});
+			expect(store.current.executionStatus).toBe("completed");
+			expect(store.outboxStatus).toBe("succeeded");
+		},
+	);
+
+	it.each([
+		{ label: "non-string", value: null },
+		{ label: "NUL", value: "\0" },
+		{ label: "ill-formed Unicode", value: "\ud800" },
+		{ label: "over byte limit", value: "a".repeat(16385) },
+		{ label: "over UTF-8 byte limit", value: "é".repeat(8193) },
+	])("rejects $label native parameters", ({ value }) => {
+		const native = nativeParametersClaim("summary", "skill");
+		expect(() =>
+			parseClaim({
+				...native,
+				nativeCapability: { ...native.nativeCapability, parameters: value },
+			}),
+		).toThrow();
+	});
+
+	it("keeps ordinary identity fields nonempty", () => {
+		const native = nativeParametersClaim("", "command");
+		expect(() =>
+			parseClaim({
+				...native,
+				nativeCapability: { ...native.nativeCapability, actorId: "" },
+			}),
+		).toThrow();
+	});
+});
+
+describe("native capability with terminal execution (#2919)", () => {
+	// 固定环境的条目：执行已 cancelled，从未被 Runtime 受理（没有 hostSessionRef），
+	// 授权每次都是 unavailable，条目以 AUTHORIZATION_UNAVAILABLE 每秒重试。
+	function nativeTerminalClaim(
+		overrides: Partial<{
+			hostSessionRef: string | null;
+			executionStatus: "cancelled" | "completed" | "failed" | "submitted";
+		}> = {},
+	) {
+		return claim({
+			operation: "conversation.native-capability.invoke.v1",
+			itemId: "conversation:native-capability:execution-cancel-1",
+			input: null,
+			messageId: null,
+			modelConfigurationRevision: null,
+			modelOptionId: null,
+			reasoningLevel: null,
+			hostSessionRef:
+				overrides.hostSessionRef === undefined
+					? null
+					: overrides.hostSessionRef,
+			executionStatus: overrides.executionStatus ?? "cancelled",
+			nativeCapability: {
+				agentId: "agent-1",
+				actorId: "actor-1",
+				channelId: "web",
+				turnId: "turn-1",
+				capabilityId: "a".repeat(64),
+				capabilityKind: "skill",
+				directoryRevision: "b".repeat(64),
+				parameters: "summarize files",
+				parametersDigest: "c".repeat(64),
+				capabilitySourceVersion: "1.0.0",
+			},
+		});
+	}
+	const unavailableAuthorization = () => ({
+		async authorize() {
+			return { outcome: "unavailable" as const };
+		},
+	});
+	const runtime = () => ({
+		dispatch: vi.fn(),
+		recoverStatus: vi.fn(),
+		events: vi.fn(async function* () {}),
+	});
+
+	it.each([
+		["cancelled", "unavailable"],
+		["completed", "unavailable"],
+		["failed", "unavailable"],
+		["cancelled", "denied"],
+		["completed", "denied"],
+		["failed", "denied"],
+	] as const)(
+		"关闭从未被 Runtime 受理的 %s 条目（授权 %s），不重试也不调用 Runtime",
+		async (executionStatus, decision) => {
+			const native = nativeTerminalClaim({ executionStatus });
+			const store = new MemoryDispatchStore(native);
+			const runtimeHost = runtime();
+			const h = setup({
+				store,
+				authorization:
+					decision === "denied"
+						? deniedAuthorization()
+						: unavailableAuthorization(),
+				runtimeHost,
+			});
+			await expect(dispatch(h.useCase, native.itemId)).resolves.toMatchObject({
+				outcome: "already_completed",
+			});
+			expect(runtimeHost.dispatch).not.toHaveBeenCalled();
+			expect(runtimeHost.events).not.toHaveBeenCalled();
+			expect(store.outboxStatus).toBe("succeeded");
+			expect(store.errorCode).toBeUndefined();
+		},
+	);
+
+	it.each(["unavailable", "denied"] as const)(
+		"已被 Runtime 受理（有 hostSessionRef）的已终态条目在授权 %s 时仍重试，保留事件续读",
+		async (decision) => {
+			const native = nativeTerminalClaim({ hostSessionRef: "host-session-1" });
+			const store = new MemoryDispatchStore(native);
+			const h = setup({
+				store,
+				authorization:
+					decision === "denied"
+						? deniedAuthorization()
+						: unavailableAuthorization(),
+				runtimeHost: runtime(),
+			});
+			await expect(dispatch(h.useCase, native.itemId)).resolves.toMatchObject({
+				outcome: "retry",
+			});
+			expect(store.outboxStatus).not.toBe("succeeded");
+		},
+	);
+
+	it("执行仍为 submitted 时行为不变（授权拒绝走 reject）", async () => {
+		const submitted = {
+			...nativeTerminalClaim({ executionStatus: "submitted" }),
+			itemId: "conversation:native-capability:execution-submitted-1",
+		};
+		const store = new MemoryDispatchStore(submitted);
+		const runtimeHost = runtime();
+		const h = setup({
+			store,
+			authorization: deniedAuthorization(),
+			runtimeHost,
+		});
+		await expect(dispatch(h.useCase, submitted.itemId)).resolves.toMatchObject({
+			outcome: "rejected",
+		});
+		expect(runtimeHost.dispatch).not.toHaveBeenCalled();
+		expect(store.outboxStatus).toBe("failed");
+	});
+});
 
 describe("bounded unknown recovery", () => {
 	it("closes a denied unknown stop after the durable attempt limit", async () => {
@@ -1676,6 +1891,76 @@ describe("Conversation Worker dispatch", () => {
 			);
 			expect(acknowledged).toEqual(["cursor-10"]);
 		});
+
+		const reasoning = (
+			sequence: number,
+			kind: "raw" | "summary",
+		): ConversationRuntimeReasoningEventV2 => ({
+			...text(sequence),
+			schemaVersion: 2,
+			type: "reasoning",
+			payload: { kind, delta: `thought ${sequence}` },
+		});
+
+		it("persists plain reasoning deltas in Runtime order with the reply's single ACK (#2979)", async () => {
+			const { runtimeHost, acknowledged } = host(async function* () {
+				yield runtimeEvent(1, "running");
+				yield reasoning(2, "raw");
+				yield text(3);
+				yield reasoning(4, "summary");
+				yield runtimeEvent(5);
+			});
+			const h = setup({ runtimeHost });
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+			expect(
+				h.events.persisted.slice(1, 4).map((command) => command.event),
+			).toEqual([
+				{ type: "reasoning.delta", kind: "raw", text: "thought 2" },
+				{ type: "text.delta", text: "part 3" },
+				{ type: "reasoning.delta", kind: "summary", text: "thought 4" },
+			]);
+			expect(
+				h.events.persisted
+					.filter((command) => command.event.type === "reasoning.delta")
+					.map((command) => [command.adapterEventKey, command.transition]),
+			).toEqual([
+				["event-2", undefined],
+				["event-4", undefined],
+			]);
+			expect(acknowledged).toEqual(["cursor-5"]);
+		});
+
+		it.each([
+			["an unknown kind", { kind: "encrypted", delta: "opaque" }],
+			["an empty delta", { kind: "raw", delta: "" }],
+			["an oversized delta", { kind: "raw", delta: "x".repeat(65_537) }],
+			[
+				"an extra field",
+				{ kind: "raw", delta: "thought", encrypted_content: "opaque" },
+			],
+			["a missing kind", { delta: "thought" }],
+		])(
+			"fails closed for a reasoning delta with %s without persisting or acknowledging it (#2979)",
+			async (_name, payload) => {
+				const { runtimeHost, acknowledged } = host(async function* () {
+					yield runtimeEvent(1, "running");
+					yield text(2);
+					yield { ...reasoning(3, "raw"), payload };
+					yield runtimeEvent(4);
+				});
+				const h = setup({ runtimeHost });
+				const result = await dispatch(h.useCase);
+				expect(result.outcome).not.toBe("accepted");
+				expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual([
+					"cursor-1",
+					"cursor-2",
+				]);
+				expect(acknowledged).not.toContain("cursor-3");
+				expect(acknowledged).not.toContain("cursor-4");
+			},
+		);
 
 		it("acknowledges a tool fact before the Runtime is asked for more events", async () => {
 			const seen: number[] = [];

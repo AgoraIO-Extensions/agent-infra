@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	getOwnExecutionAudit,
+	getOwnExecutionAuditV2,
 	listOwnExecutionAudit,
+	listOwnExecutionAuditV2,
 } from "./generated/sdk.gen.js";
 import { listAgentsV2 } from "./generated-v2/sdk.gen.js";
 
@@ -187,6 +189,42 @@ describe("generated own-audit authentication selection", () => {
 				}),
 			).rejects.toThrow("Select one read authentication scheme");
 			expect(http.fetch).not.toHaveBeenCalled();
+		},
+	);
+});
+
+describe("generated own-audit V2 authentication selection (#2909)", () => {
+	it.each(["list", "detail"] as const)(
+		"keeps the same Bearer or Cookie choice on the named V2 entry (%s)",
+		async (mode) => {
+			const bearer = transport();
+			const options = {
+				baseUrl: "https://platform.example.test",
+				auth: credential,
+				credentials: "include" as const,
+				fetch: bearer.fetch,
+			};
+			await (mode === "list"
+				? listOwnExecutionAuditV2(options)
+				: getOwnExecutionAuditV2({
+						...options,
+						path: { auditId: "audit_1" },
+					}));
+			expect(bearer.request()?.headers.get("Authorization")).toBe(
+				`Bearer ${credential}`,
+			);
+			expect(bearer.request()?.credentials).toBe("omit");
+			expect(new URL(bearer.request()?.url ?? "").pathname).toBe(
+				mode === "list" ? "/api/v2/audit" : "/api/v2/audit/audit_1",
+			);
+			const cookie = transport();
+			await listOwnExecutionAuditV2({
+				baseUrl: "https://platform.example.test",
+				credentials: "include",
+				fetch: cookie.fetch,
+			});
+			expect(cookie.request()?.credentials).toBe("include");
+			expect(cookie.request()?.headers.has("Authorization")).toBe(false);
 		},
 	);
 });

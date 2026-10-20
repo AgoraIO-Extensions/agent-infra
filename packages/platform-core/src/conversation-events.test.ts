@@ -521,6 +521,77 @@ describe("platform-owned task status reasons", () => {
 	});
 });
 
+describe("reasoning delta events (#2979)", () => {
+	const reasoning = {
+		type: "reasoning.delta" as const,
+		kind: "raw" as const,
+		text: "Synthetic thought",
+	};
+
+	it("reads bounded raw and summary reasoning as persisted conversation content", () => {
+		expect(parseConversationPersistedEventPayloadV1(reasoning)).toEqual(
+			reasoning,
+		);
+		const summary = { ...reasoning, kind: "summary" as const };
+		expect(parseConversationPersistedEventPayloadV1(summary)).toEqual(summary);
+		const limit = { ...reasoning, text: "思".repeat(21_845) };
+		expect(parseConversationPersistedEventPayloadV1(limit)).toEqual(limit);
+		for (const payload of [
+			{ ...reasoning, kind: "encrypted" },
+			{ ...reasoning, kind: undefined },
+			{ type: "reasoning.delta", text: "missing kind" },
+			{ ...reasoning, text: "" },
+			{ ...reasoning, text: "x".repeat(65_537) },
+			{ ...reasoning, text: "\u0000" },
+			{ ...reasoning, signature: "opaque" },
+			{ ...reasoning, encrypted_content: "opaque" },
+		])
+			expect(() => parseConversationPersistedEventPayloadV1(payload)).toThrow(
+				ConversationEventError,
+			);
+	});
+
+	it("persists reasoning as a Runtime event with its own cursor and no transition", async () => {
+		const events = new FakeConversationEventsV1({
+			conversationId: event.conversationId,
+			executionId: event.executionId,
+			sessionGeneration: event.sessionGeneration,
+			deliveryFence: event.deliveryFence,
+			newId: () => "event_reasoning",
+		});
+		const accepted = await events.persist({ ...event, event: reasoning });
+		expect(accepted).toMatchObject({
+			outcome: "accepted",
+			event: {
+				eventId: "event_reasoning",
+				sequence: 1,
+				conversationCursor: 1,
+				event: reasoning,
+			},
+		});
+		// 思考过程不能带状态迁移，也不能用同一个 adapter key 改写内容。
+		await expect(
+			events.persist({
+				...event,
+				adapterEventKey: "adapter-event-transition",
+				runtimeCursor: "runtime-cursor-transition",
+				event: reasoning,
+				transition: {
+					executionStatus: "completed",
+					conversationStatus: "ready",
+				},
+			}),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
+			events.persist({
+				...event,
+				event: { ...reasoning, text: "changed thought" },
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		expect(events.snapshot().lastConversationCursor).toBe(1);
+	});
+});
+
 describe("Browser handoff event parsing", () => {
 	it("accepts a bounded authenticated transition and rejects a mismatched binding", () => {
 		const payload = {
@@ -598,6 +669,69 @@ describe("Browser side-effect event parsing", () => {
 				targetOrigin: "https://example.test/path",
 			}),
 		).toThrow(ConversationEventError);
+	});
+});
+
+describe("model-selection fallback payload parsing (G-07)", () => {
+	const legacy = {
+		type: "model.selection.fell_back" as const,
+		modelOptionId: "model_primary",
+		reasoningLevel: "medium",
+		reason: "selection_unavailable" as const,
+	};
+
+	it("keeps legacy payloads without the requested model readable", () => {
+		expect(parseConversationPersistedEventPayloadV1(legacy)).toEqual(legacy);
+	});
+
+	it("reads the requested option with its accepted display name or a null name", () => {
+		for (const requestedModelDisplayName of ["relay-model-alternate", null]) {
+			const payload = {
+				...legacy,
+				requestedModelOptionId: "model_alternate",
+				requestedModelDisplayName,
+			};
+			expect(parseConversationPersistedEventPayloadV1(payload)).toEqual(
+				payload,
+			);
+		}
+	});
+
+	it("rejects unpaired, empty, overlong or extra requested-model fields", () => {
+		for (const payload of [
+			{ ...legacy, requestedModelOptionId: "model_alternate" },
+			{ ...legacy, requestedModelDisplayName: "relay-model-alternate" },
+			{
+				...legacy,
+				requestedModelOptionId: "",
+				requestedModelDisplayName: "relay-model-alternate",
+			},
+			{
+				...legacy,
+				requestedModelOptionId: "model_alternate",
+				requestedModelDisplayName: "",
+			},
+			{
+				...legacy,
+				requestedModelOptionId: "model_alternate",
+				requestedModelDisplayName: "m".repeat(1025),
+			},
+			{
+				...legacy,
+				requestedModelOptionId: "model_alternate",
+				requestedModelDisplayName: 7,
+			},
+			{
+				...legacy,
+				requestedModelOptionId: "model_alternate",
+				requestedModelDisplayName: "relay-model-alternate",
+				requestedReasoningLevel: "high",
+			},
+		]) {
+			expect(() => parseConversationPersistedEventPayloadV1(payload)).toThrow(
+				ConversationEventError,
+			);
+		}
 	});
 });
 

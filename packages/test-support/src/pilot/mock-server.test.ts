@@ -1,5 +1,6 @@
 import {
 	AgentApplicationProjectionV1Schema,
+	AgentDetailProjectionV1Schema,
 	AgentProjectionV1Schema,
 	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
@@ -7,7 +8,11 @@ import {
 } from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 
-import { pilotFakeScenariosV1, pilotFakeScenariosV2 } from "./index.js";
+import {
+	pilotAgentDetailFromV2,
+	pilotFakeScenariosV1,
+	pilotFakeScenariosV2,
+} from "./index.js";
 import {
 	createPilotAgentMockServerV1,
 	createPilotAgentMockServerV2,
@@ -126,6 +131,54 @@ describe("Pilot Agent Mock Server", () => {
 		);
 
 		expect(await response.json()).toEqual(deploymentConfiguration);
+	});
+
+	it("derives the Agent detail with active Owners from getAgent and validates overrides (#2910)", async () => {
+		const derived = createPilotAgentMockServerV2({
+			listAgents: { status: 200, body: { items: [], nextCursor: null } },
+			getAgent: { status: 200, body: startingAgentV2 },
+		});
+		const response = await derived.fetch(
+			new Request(
+				"https://platform.example.test/api/v2/agents/agent-pilot-1/detail",
+			),
+		);
+		expect(response.status).toBe(200);
+		const detail = AgentDetailProjectionV1Schema.parse(await response.json());
+		expect(detail.configuration.owners).toEqual([
+			{ userId: "user-owner-1", displayName: "Owner", status: "active" },
+		]);
+		const overridden = createPilotAgentMockServerV2({
+			listAgents: { status: 200, body: { items: [], nextCursor: null } },
+			getAgent: { status: 200, body: startingAgentV2 },
+			getAgentDetail: {
+				status: 200,
+				body: pilotAgentDetailFromV2(startingAgentV2, {
+					"user-owner-1": "departed",
+				}),
+			},
+		});
+		expect(
+			AgentDetailProjectionV1Schema.parse(
+				await (
+					await overridden.fetch(
+						new Request(
+							"https://platform.example.test/api/v2/agents/agent-pilot-1/detail",
+						),
+					)
+				).json(),
+			).configuration.owners,
+		).toEqual([
+			{ userId: "user-owner-1", displayName: null, status: "departed" },
+		]);
+		// V2 Owner 形状不能冒充详情投影。
+		expect(() =>
+			createPilotAgentMockServerV2({
+				listAgents: { status: 200, body: { items: [], nextCursor: null } },
+				getAgent: { status: 200, body: startingAgentV2 },
+				getAgentDetail: { status: 200, body: startingAgentV2 },
+			}),
+		).toThrow();
 	});
 
 	it("answers the default Relay Key state as not set so Owner pages keep the per-model credential UI (#2421)", async () => {

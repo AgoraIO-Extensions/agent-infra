@@ -328,6 +328,94 @@ async function lockedContext(
 	};
 }
 
+/**
+ * #2985：排空完成后 Agent 重启（替换准备未被认领）又再次停止，生命周期保留着原停止回执、
+ * 目标又是 stopped。lockedContext 只为替换准备放行带回执的生命周期，这类条目会永远停在
+ * pending。回执仍证明停止时（Core 判定通过、分配观测仍是回执保留的同一 PVC、没有进入准备）
+ * 直接结束：条目 succeeded，分配 stopped。不触碰任何 Kubernetes 资源。
+ */
+async function settleRetainedStopReceipt(
+	transaction: Transaction,
+	itemId: string,
+): Promise<boolean> {
+	const [outbox] = await transaction<
+		{ scope_id: string; payload: { lifecycle?: SessionSandboxLifecycleV1 } }[]
+	>`
+		select scope_id, payload from platform.outbox_items
+		where id = ${itemId} and scope_type = 'conversation'
+			and operation = 'conversation.sandbox.reconcile.v1'
+			and status in ('pending', 'retry_scheduled')
+		for update`;
+	const lifecycle = outbox?.payload?.lifecycle;
+	const receipt = lifecycle?.stopReceipt;
+	if (
+		!outbox ||
+		!lifecycle ||
+		!receipt ||
+		lifecycle.schemaVersion !== 1 ||
+		lifecycle.authority?.targetDesiredState !== "stopped" ||
+		lifecycle.preparation
+	)
+		return false;
+	const [allocation] = await transaction<
+		{
+			sandbox_id: string;
+			agent_id: string;
+			desired_state: string;
+			resource_observation: SessionSandboxObservationV1 | null;
+		}[]
+	>`
+		select sandbox_id, agent_id, desired_state, resource_observation
+		from platform.session_sandbox_allocations where conversation_id = ${outbox.scope_id}
+		for update`;
+	if (
+		!allocation ||
+		allocation.desired_state !== "stopped" ||
+		allocation.sandbox_id !== receipt.sandboxId
+	)
+		return false;
+	const [management] = await transaction<{ desired_state: string }[]>`
+		select desired_state from platform.agent_applications where agent_id = ${allocation.agent_id}`;
+	if (management?.desired_state !== "stopped") return false;
+	const retained = receipt.retainedPVC ? [receipt.retainedPVC] : [];
+	const observed = allocation.resource_observation;
+	if (
+		observed?.status !== "stopped" ||
+		observed.resources.length !== retained.length ||
+		!retained.every((pvc) =>
+			observed.resources.some(
+				(resource) =>
+					resource.kind === pvc.kind &&
+					resource.namespace === pvc.namespace &&
+					resource.name === pvc.name &&
+					resource.uid === pvc.uid,
+			),
+		) ||
+		!decideSessionSandboxDrainObservationV1({
+			sandbox: {
+				...lifecycle.source.sandbox,
+				generation: receipt.targetGeneration,
+			},
+			resourceFence: receipt.targetResourceFence,
+			lifecycle,
+			observation: {
+				status: "stopped",
+				resources: retained,
+				sourceStop: receipt,
+			},
+		}).finished
+	)
+		return false;
+	await transaction`update platform.outbox_items
+		set status = 'succeeded', lease_owner = null, lease_expires_at = null,
+			updated_at = clock_timestamp()
+		where id = ${itemId}`;
+	await transaction`update platform.session_sandbox_allocations
+		set status = 'stopped', updated_at = clock_timestamp()
+		where sandbox_id = ${allocation.sandbox_id}`;
+	return true;
+}
+
 export async function claimSandboxReconciliation(
 	transaction: Transaction,
 	input: SandboxClaimRequest,
@@ -345,7 +433,10 @@ export async function claimSandboxReconciliation(
 		policy,
 		directory,
 	);
-	if (!context) return null;
+	if (!context) {
+		await settleRetainedStopReceipt(transaction, input.itemId);
+		return null;
+	}
 	const { outbox, sandbox, allocation, authorization } = context;
 	const [lease] = await transaction<{ eligible: boolean }[]>`select
 		(status in ('pending','retry_scheduled') and available_at <= clock_timestamp()) or

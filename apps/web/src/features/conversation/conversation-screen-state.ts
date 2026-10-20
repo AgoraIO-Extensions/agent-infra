@@ -1,8 +1,6 @@
 import type { PilotProtocolErrorV1 } from "../../pilot/generated/types.gen.js";
-import type {
-	ConversationDetailProjectionV2,
-	PersistedConversationEventV2,
-} from "../../pilot/generated-v2/types.gen.js";
+import type { ConversationDetailProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
 
 export const executionStatusLabels = {
 	submitted: "已受理，等待处理",
@@ -19,7 +17,7 @@ export function isTerminal(status: ExecutionStatus | undefined) {
 	);
 }
 export function executionStatus(
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	executionId: string | null,
 	fallback?: ExecutionStatus,
 ): ExecutionStatus | undefined {
@@ -33,7 +31,7 @@ export function executionStatus(
 /** A stored terminal answer result is final even when the timeline lacks its
  * terminal event; a later terminal event still wins (#1524). */
 export function answerStatus(
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	executionId: string | null,
 	stored: ExecutionStatus,
 ): ExecutionStatus | undefined {
@@ -45,7 +43,7 @@ export function answerStatus(
  * persisted status stream is authoritative even when an older answer is last. */
 export function currentExecution(
 	history: ConversationDetailProjectionV2 | null,
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	acceptedExecution?: string,
 ): { executionId: string | undefined; status: ExecutionStatus | undefined } {
 	const messages = history?.messages ?? [];
@@ -122,7 +120,7 @@ export function currentExecution(
  * arriving after that projection, never render both the snapshot and its replay. */
 export function answerText(
 	history: ConversationDetailProjectionV2,
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	executionId: string,
 	text: string,
 ) {
@@ -141,6 +139,33 @@ export function answerText(
 	);
 }
 
+/**
+ * #2981：每个 Execution 的思考过程（PRD §11.2）。思考没有投影文本，只来自时间线事件；
+ * 时间线已按 eventId 去重，所以首屏、实时与更早页合在一起也不会重复。摘要与原始推理
+ * 各自按到达顺序拼接（Runtime 只在同一 kind 的分段之间加空行），两者都有时先摘要、后原始推理。
+ */
+export function reasoningTexts(
+	events: readonly ConversationTimelineEventV2[],
+): ReadonlyMap<string, string> {
+	const parts = new Map<string, { summary: string[]; raw: string[] }>();
+	for (const event of events) {
+		if (event.type !== "reasoning.delta") continue;
+		let entry = parts.get(event.executionId);
+		if (!entry) {
+			entry = { summary: [], raw: [] };
+			parts.set(event.executionId, entry);
+		}
+		entry[event.payload.kind].push(event.payload.text);
+	}
+	const texts = new Map<string, string>();
+	for (const [executionId, { summary, raw }] of parts)
+		texts.set(
+			executionId,
+			[summary.join(""), raw.join("")].filter(Boolean).join("\n\n"),
+		);
+	return texts;
+}
+
 export const answerNotWrittenYet = "尚未输出正文。";
 
 /**
@@ -151,14 +176,14 @@ export const answerNotWrittenYet = "尚未输出正文。";
  */
 export function emptyAnswerKind(
 	history: ConversationDetailProjectionV2,
-	events: readonly PersistedConversationEventV2[],
+	events: readonly ConversationTimelineEventV2[],
 	executionId: string | null,
 	status: ExecutionStatus | undefined,
 	hasEarlier: boolean,
 ): "not_loaded" | "empty" {
 	if (!hasEarlier || executionId === null || status !== "completed")
 		return "empty";
-	const loaded = (list: readonly PersistedConversationEventV2[]) =>
+	const loaded = (list: readonly ConversationTimelineEventV2[]) =>
 		list.some((event) => event.executionId === executionId);
 	return loaded(history.events) || loaded(events) ? "empty" : "not_loaded";
 }

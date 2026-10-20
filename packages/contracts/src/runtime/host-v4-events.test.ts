@@ -373,6 +373,53 @@ it("preserves V1 and V2 operation facts in live and replay without widening V1",
 	}
 });
 
+it("carries plain reasoning deltas as V2 events without widening V1 (#2979)", () => {
+	const reasoningEvent = {
+		schemaVersion: 2,
+		adapterEventKey: "event-reasoning-1",
+		executionId: "execution-1",
+		cursor: "cursor-3",
+		occurredAt: "2026-09-28T00:00:02.000Z",
+		type: "reasoning",
+		payload: { kind: "raw", delta: "synthetic thought" },
+	};
+	const summaryEvent = {
+		...reasoningEvent,
+		adapterEventKey: "event-reasoning-2",
+		cursor: "cursor-4",
+		payload: { kind: "summary", delta: "synthetic summary" },
+	};
+	for (const event of [reasoningEvent, summaryEvent])
+		expect(validateRuntimeLiveEventV4(event, "execution-1")).toEqual(event);
+	const replay = {
+		schemaVersion: 4,
+		hostSessionRef: "session-1",
+		executionId: "execution-1",
+		events: [textEvent, reasoningEvent, operationEvent, summaryEvent],
+	};
+	expect(validateRuntimeReplayResponseV4(replay, readRequest)).toEqual(replay);
+	expect(
+		RuntimeReplayResponseV1Schema.safeParse({
+			schemaVersion: 1,
+			events: [textEvent, reasoningEvent],
+		}).success,
+	).toBe(false);
+	for (const changed of [
+		{ ...reasoningEvent, schemaVersion: 1 },
+		{ ...reasoningEvent, payload: { kind: "encrypted", delta: "opaque" } },
+		{ ...reasoningEvent, payload: { kind: "raw", delta: "" } },
+		{ ...reasoningEvent, payload: { kind: "raw" } },
+		{
+			...reasoningEvent,
+			payload: { ...reasoningEvent.payload, encrypted_content: "opaque" },
+		},
+		{ ...reasoningEvent, signature: "opaque" },
+	])
+		expect(() => validateRuntimeLiveEventV4(changed, "execution-1")).toThrow(
+			"RuntimeHostV4 event is invalid",
+		);
+});
+
 it("names the failed event access check in a fixed cause (#1888)", async () => {
 	const readVerification = await verified(readRequest);
 	const cause = (

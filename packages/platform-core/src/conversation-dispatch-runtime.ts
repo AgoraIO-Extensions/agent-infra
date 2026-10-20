@@ -330,6 +330,17 @@ export function parseRuntimeEvent(
 		occurredAt: text(input.occurredAt, 128),
 	};
 	if (input.schemaVersion === 2) {
+		if (input.type === "reasoning") {
+			const payload = exactObject(input.payload, ["kind", "delta"]);
+			if (payload.kind !== "raw" && payload.kind !== "summary")
+				return unavailable();
+			return {
+				...base,
+				schemaVersion: 2,
+				type: "reasoning",
+				payload: { kind: payload.kind, delta: text(payload.delta, 65_536) },
+			};
+		}
 		if (input.type !== "operation") return unavailable();
 		return {
 			...base,

@@ -129,6 +129,12 @@ export const ScopedPlatformAuditActionV1Schema = z.enum([
 	"api.agent.create.replayed",
 	"api.agent.create.refused",
 	"relay_key.agent_default.replace",
+	"skill.project.create",
+	"skill.project.update",
+	"skill.project.list",
+	"skill.project.read",
+	"relay_key.agent_default.read",
+	"relay_key.agent_default.candidates",
 ]);
 
 export const ScopedPlatformAuditProjectionV1Schema = z.strictObject({
@@ -199,6 +205,68 @@ export const ScopedPlatformAuditPageV1Schema = z.strictObject({
 	nextCursor: OpaqueCursorV1Schema.nullable(),
 });
 
+// #2909：显示名由服务端按查询方当前权限解析；无权查看、对象不存在或无法确认时为 null，
+// 调用方只能看到类型与 ID。名称是普通元数据，不来自请求，也不进入审计记录本身。
+const ScopedPlatformAuditDisplayNameV2Schema = z
+	.string()
+	.min(1)
+	.max(200)
+	.nullable();
+const v1Shape = ScopedPlatformAuditProjectionV1Schema.shape;
+
+/** V1 不可加字段（strict reader），V2 在新入口提供 Agent、创建申请与应用的显示名。 */
+export const ScopedPlatformAuditProjectionV2Schema = z
+	.strictObject({
+		...v1Shape,
+		schemaVersion: z.literal(2),
+		actor: z.strictObject({
+			...v1Shape.actor.shape,
+			displayName: ScopedPlatformAuditDisplayNameV2Schema,
+		}),
+		subject: z.strictObject({
+			...v1Shape.subject.shape,
+			displayName: ScopedPlatformAuditDisplayNameV2Schema,
+		}),
+		originalPrincipal: z
+			.strictObject({
+				...ApiPrincipalV1Schema.shape,
+				displayName: ScopedPlatformAuditDisplayNameV2Schema,
+			})
+			.nullable(),
+		agentDisplayName: ScopedPlatformAuditDisplayNameV2Schema,
+	})
+	.superRefine((record, context) => {
+		// 只有应用主体、Agent 与创建申请对象可以带名称；用户名称仍由目录按权限解析。
+		const misplaced = [
+			record.actor.displayName !== null && record.actor.kind !== "application"
+				? "actor"
+				: null,
+			record.originalPrincipal?.displayName != null &&
+			record.originalPrincipal.kind !== "application"
+				? "originalPrincipal"
+				: null,
+			record.subject.displayName !== null &&
+			record.subject.kind !== "agent" &&
+			record.subject.kind !== "agent_application"
+				? "subject"
+				: null,
+			record.agentDisplayName !== null && record.agentId === null
+				? "agentDisplayName"
+				: null,
+		].filter((path) => path !== null);
+		for (const path of misplaced)
+			context.addIssue({
+				code: "custom",
+				path: [path],
+				message: "Display name is not allowed for this reference",
+			});
+	});
+
+export const ScopedPlatformAuditPageV2Schema = z.strictObject({
+	items: z.array(ScopedPlatformAuditProjectionV2Schema),
+	nextCursor: OpaqueCursorV1Schema.nullable(),
+});
+
 export const ScopedPlatformAuditQueryV1Schema = z.strictObject({
 	limit: z.coerce.number().int().min(1).max(100).optional(),
 	cursor: OpaqueCursorV1Schema.optional(),
@@ -222,18 +290,28 @@ const errors = Object.fromEntries(
 		json("Audit query failed", PilotProtocolErrorV1Schema),
 	]),
 );
-const list = (operationId: string, security: Record<string, never[]>[]) => ({
+const list = (
+	operationId: string,
+	security: Record<string, never[]>[],
+	page: z.ZodType = ScopedPlatformAuditPageV1Schema,
+	description = "Authorized audit metadata",
+) => ({
 	get: {
 		operationId,
 		security,
 		requestParams: { query: ScopedPlatformAuditQueryV1Schema },
 		responses: {
-			"200": json("Authorized audit metadata", ScopedPlatformAuditPageV1Schema),
+			"200": json(description, page),
 			...errors,
 		},
 	},
 });
-const detail = (operationId: string, security: Record<string, never[]>[]) => ({
+const detail = (
+	operationId: string,
+	security: Record<string, never[]>[],
+	projection: z.ZodType = ScopedPlatformAuditProjectionV1Schema,
+	description = "Authorized audit detail",
+) => ({
 	get: {
 		operationId,
 		security,
@@ -242,10 +320,7 @@ const detail = (operationId: string, security: Record<string, never[]>[]) => ({
 			query: ScopedPlatformAuditQueryV1Schema,
 		},
 		responses: {
-			"200": json(
-				"Authorized audit detail",
-				ScopedPlatformAuditProjectionV1Schema,
-			),
+			"200": json(description, projection),
 			...errors,
 		},
 	},
@@ -268,6 +343,34 @@ export const pilotScopedAuditOpenApiPathsV1 = {
 	]),
 } as const;
 
+/** #2909：带显示名的 V2 入口；V1 路径与响应保持不变。 */
+export const pilotScopedAuditOpenApiPathsV2 = {
+	"/api/v2/audit": list(
+		"listOwnExecutionAuditV2",
+		[{ PlatformSession: [] }, { platformApiCredential: [] }],
+		ScopedPlatformAuditPageV2Schema,
+		"Authorized audit metadata with permitted display names",
+	),
+	"/api/v2/audit/{auditId}": detail(
+		"getOwnExecutionAuditV2",
+		[{ PlatformSession: [] }, { platformApiCredential: [] }],
+		ScopedPlatformAuditProjectionV2Schema,
+		"Authorized audit detail with permitted display names",
+	),
+	"/api/v4/admin/audit": list(
+		"listScopedAdministratorAuditV2",
+		[{ PlatformSession: [] }],
+		ScopedPlatformAuditPageV2Schema,
+		"Authorized audit metadata with permitted display names",
+	),
+	"/api/v4/admin/audit/{auditId}": detail(
+		"getScopedAdministratorAuditV2",
+		[{ PlatformSession: [] }],
+		ScopedPlatformAuditProjectionV2Schema,
+		"Authorized audit detail with permitted display names",
+	),
+} as const;
+
 export const pilotScopedAuditSchemasV1 = {
 	ScopedPlatformAuditResultV1: ScopedPlatformAuditResultV1Schema,
 	ScopedPlatformAuditActionV1: ScopedPlatformAuditActionV1Schema,
@@ -275,6 +378,14 @@ export const pilotScopedAuditSchemasV1 = {
 	ScopedPlatformAuditPageV1: ScopedPlatformAuditPageV1Schema,
 };
 
+export const pilotScopedAuditSchemasV2 = {
+	ScopedPlatformAuditProjectionV2: ScopedPlatformAuditProjectionV2Schema,
+	ScopedPlatformAuditPageV2: ScopedPlatformAuditPageV2Schema,
+};
+
 export type ScopedPlatformAuditProjectionV1 = z.infer<
 	typeof ScopedPlatformAuditProjectionV1Schema
+>;
+export type ScopedPlatformAuditProjectionV2 = z.infer<
+	typeof ScopedPlatformAuditProjectionV2Schema
 >;

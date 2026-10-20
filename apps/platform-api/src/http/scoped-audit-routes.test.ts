@@ -63,6 +63,15 @@ const item = {
 	executor: "platform_worker" as const,
 	operation: null,
 };
+const namedItem = {
+	...item,
+	displayNames: {
+		actor: null,
+		subject: null,
+		originalPrincipal: null,
+		agent: "编程助手",
+	},
+};
 
 function fixture(telemetry?: AuditTelemetry) {
 	const identity = {
@@ -97,6 +106,38 @@ function fixture(telemetry?: AuditTelemetry) {
 				Awaited<ReturnType<PostgresScopedPlatformAuditQueryV1["getAudit"]>>
 			> => item,
 		),
+		listAuditWithDisplayNames: vi.fn(
+			async (
+				scope: QueryIdentity,
+				input: unknown,
+				_metadata: unknown,
+			): Promise<
+				Awaited<
+					ReturnType<
+						PostgresScopedPlatformAuditQueryV1["listAuditWithDisplayNames"]
+					>
+				>
+			> => {
+				if (scope.kind === "api-credential")
+					throw new PersonalApiCredentialErrorV1("authentication_required");
+				parsePlatformAuditQueryInputV1(input, scope);
+				return { items: [namedItem], nextCursor: "next-cursor" };
+			},
+		),
+		getAuditWithDisplayNames: vi.fn(
+			async (
+				_scope: QueryIdentity,
+				_id: string,
+				_input: unknown,
+				_metadata: unknown,
+			): Promise<
+				Awaited<
+					ReturnType<
+						PostgresScopedPlatformAuditQueryV1["getAuditWithDisplayNames"]
+					>
+				>
+			> => namedItem,
+		),
 	};
 	const app = new Hono();
 	app.onError((error, context) =>
@@ -109,6 +150,112 @@ function fixture(telemetry?: AuditTelemetry) {
 }
 
 describe("scoped audit HTTP adapter", () => {
+	it("serves display names only on the V2 entries and keeps V1 bytes unchanged (#2909)", async () => {
+		const { app, audit } = fixture();
+		const v1 = await app.request("/api/v1/audit");
+		expect(v1.status).toBe(200);
+		const v1Body = (await v1.json()) as {
+			items: Record<string, unknown>[];
+		};
+		expect(v1Body.items).toHaveLength(1);
+		expect(v1Body.items[0]).not.toHaveProperty("agentDisplayName");
+		expect(v1Body.items[0]?.schemaVersion).toBe(1);
+		expect(audit.listAuditWithDisplayNames).not.toHaveBeenCalled();
+		const v2 = await app.request("/api/v2/audit");
+		expect(v2.status).toBe(200);
+		expect(await v2.json()).toEqual({
+			items: [
+				{
+					...item,
+					schemaVersion: 2,
+					occurredAt: item.occurredAt.toISOString(),
+					actor: { ...item.actor, displayName: null },
+					subject: { ...item.subject, displayName: null },
+					originalPrincipal: { ...item.originalPrincipal, displayName: null },
+					agentDisplayName: "编程助手",
+				},
+			],
+			nextCursor: "next-cursor",
+		});
+		const detail = await app.request("/api/v2/audit/audit-a");
+		expect(detail.status).toBe(200);
+		expect(await detail.json()).toMatchObject({
+			schemaVersion: 2,
+			agentDisplayName: "编程助手",
+		});
+		expect(audit.listAudit).toHaveBeenCalledOnce();
+	});
+
+	it("never lets a misplaced Store name reach the V2 response (#2909)", async () => {
+		const { app, audit } = fixture();
+		audit.listAuditWithDisplayNames.mockResolvedValueOnce({
+			items: [
+				{
+					...namedItem,
+					// 用户主体的名称只能由目录按权限解析，投影不得携带。
+					displayNames: {
+						...namedItem.displayNames,
+						originalPrincipal: "张三",
+					},
+				},
+			],
+			nextCursor: null,
+		});
+		const response = await app.request("/api/v2/audit");
+		expect(response.status).toBe(503);
+		expect(JSON.stringify(await response.json())).not.toContain("张三");
+	});
+
+	it("keeps the V4 administrator entry session-only and audits non-administrator rejection (#2909)", async () => {
+		const { app, identity, audit } = fixture();
+		const bearer = await app.request("/api/v4/admin/audit", {
+			headers: { authorization: `Bearer papi_${"a".repeat(43)}` },
+		});
+		expect(bearer.status).toBe(401);
+		expect(identity.resolve).not.toHaveBeenCalled();
+		const employee = await app.request("/api/v4/admin/audit/audit-a");
+		expect(employee.status).toBe(404);
+		expect(audit.recordDeniedQuery).toHaveBeenLastCalledWith(
+			{
+				principal: { kind: "user", id: currentUser.userId },
+				requestedScope: "administrator",
+				operation: "detail",
+				result: "rejected",
+				reason: "RESOURCE_UNAVAILABLE",
+			},
+			expect.anything(),
+		);
+		expect(audit.listAuditWithDisplayNames).not.toHaveBeenCalled();
+		expect(audit.getAuditWithDisplayNames).not.toHaveBeenCalled();
+		identity.resolve.mockResolvedValue({ ...browser, roles: ["system_admin"] });
+		const admin = await app.request("/api/v4/admin/audit");
+		expect(admin.status).toBe(200);
+		expect(audit.listAuditWithDisplayNames.mock.calls[0]?.[0]).toEqual({
+			kind: "administrator",
+			administratorId: currentUser.userId,
+		});
+	});
+
+	it("passes the own-audit V2 Bearer to the Store without trusting filters (#2909)", async () => {
+		const { app, identity, audit } = fixture();
+		const material = `papi_${"b".repeat(43)}`;
+		audit.listAuditWithDisplayNames.mockResolvedValueOnce({
+			items: [],
+			nextCursor: null,
+		});
+		const response = await app.request(
+			"/api/v2/audit?principalKind=user&principalId=forged",
+			{ headers: { authorization: `Bearer ${material}` } },
+		);
+		expect(response.status).toBe(200);
+		expect(audit.listAuditWithDisplayNames.mock.calls[0]?.[0]).toMatchObject({
+			kind: "api-credential",
+			material,
+		});
+		expect(identity.resolve).not.toHaveBeenCalled();
+		expect(JSON.stringify(await response.json())).not.toContain(material);
+	});
+
 	it.each([
 		"skill.version.register",
 		"skill.version.review",

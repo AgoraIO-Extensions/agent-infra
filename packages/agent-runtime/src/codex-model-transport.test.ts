@@ -1051,6 +1051,82 @@ describe("Codex model transport", () => {
 		expect(await response.text()).toBe(stream);
 	}, 30_000);
 
+	// #3000：DeepSeek 的原始推理按 token 流式返回，一次响应可超过 8,192 个事件。
+	it("forwards a long reasoning stream past 8,192 events within the byte bound", async () => {
+		const stream =
+			event({
+				type: "response.reasoning_text.delta",
+				delta: "想",
+				content_index: 0,
+			}).repeat(6_000) +
+			event({ type: "response.output_text.delta", delta: "答" }).repeat(2_500) +
+			completedEvent();
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(stream);
+			}),
+		);
+		const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
+		const value = await transport(target, true, {
+			modelOnly: true,
+			beforeRequest: async () => ({ started: async () => {}, finish }),
+		});
+		const response = await request(value.modelAccess);
+
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe(stream);
+		expect(finish).toHaveBeenCalledWith(
+			expect.objectContaining({ phase: "succeeded" }),
+		);
+	}, 120_000);
+
+	it.each([
+		[
+			"more events than one stream allows",
+			() =>
+				event({ type: "response.output_text.delta", delta: "x" }).repeat(
+					131_073,
+				) + completedEvent(),
+		],
+		[
+			"more bytes than one stream allows",
+			() =>
+				event({
+					type: "response.output_text.delta",
+					delta: "x".repeat(1024 * 1024 - 256),
+				}).repeat(17) + completedEvent(),
+		],
+	])(
+		"fails a stream with %s",
+		async (_name, build) => {
+			const stream = build();
+			const target = await listen(
+				createServer((_incoming, response) => {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(stream);
+				}),
+			);
+			const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
+			const value = await transport(target, true, {
+				modelOnly: true,
+				beforeRequest: async () => ({ started: async () => {}, finish }),
+			});
+			const response = await request(value.modelAccess);
+
+			expect(await response.text()).not.toContain(
+				'"type":"response.completed"',
+			);
+			expect(finish).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "unknown",
+					failureCode: "invalid_response",
+				}),
+			);
+		},
+		60_000,
+	);
+
 	it.each([
 		["gzip", gzipSync, gunzipSync],
 		["zstd", zstdCompressSync, zstdDecompressSync],
@@ -1244,6 +1320,98 @@ describe("Codex model transport", () => {
 		);
 	});
 
+	it.each([false, true])(
+		"accepts a raw reasoning text completion without forwarding it (model-only: %s)",
+		async (modelOnly) => {
+			// #2969：流式输出原始推理的 Responses provider（例如 DeepSeek）在每段
+			// 推理结束时发送 response.reasoning_text.done。
+			const reasoningItem = {
+				type: "reasoning",
+				id: "reasoning-item",
+				summary: [],
+			};
+			const reasoningDone = {
+				...reasoningItem,
+				content: [{ type: "reasoning_text", text: "synthetic thought" }],
+			};
+			const message = {
+				type: "message",
+				id: "message-item",
+				role: "assistant",
+				content: [{ type: "output_text", text: "synthetic answer" }],
+			};
+			const upstream = [
+				{ type: "response.output_item.added", item: reasoningItem },
+				{
+					type: "response.reasoning_text.delta",
+					item_id: "reasoning-item",
+					content_index: 0,
+					delta: "synthetic ",
+				},
+				{
+					type: "response.reasoning_text.delta",
+					item_id: "reasoning-item",
+					content_index: 0,
+					delta: "thought",
+				},
+				{
+					type: "response.reasoning_text.done",
+					item_id: "reasoning-item",
+					content_index: 0,
+					text: "synthetic thought",
+				},
+				{ type: "response.output_item.done", item: reasoningDone },
+				{ type: "response.output_text.delta", delta: "synthetic answer" },
+				{
+					type: "response.completed",
+					response: {
+						id: "response-synthetic",
+						status: "completed",
+						output: [reasoningDone, message],
+					},
+				},
+			];
+			const outcomes: CodexModelRequestOutcome[] = [];
+			const target = await listen(
+				createServer((_incoming, response) => {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(upstream.map(event).join(""));
+				}),
+			);
+			const value = await transport(target, true, {
+				...(modelOnly ? { modelOnly: true } : {}),
+				beforeRequest: async () => ({
+					started: async () => {},
+					finish: async (outcome) => {
+						outcomes.push(outcome);
+					},
+				}),
+			});
+			const response = await request(value.modelAccess);
+			const body = await response.text();
+
+			expect(response.status).toBe(200);
+			expect(body).not.toContain("response.reasoning_text.done");
+			expect(body).toContain(
+				event({
+					type: "response.reasoning_text.delta",
+					delta: "thought",
+					content_index: 0,
+				}),
+			);
+			expect(body).toContain(
+				event({
+					type: "response.output_text.delta",
+					delta: "synthetic answer",
+				}),
+			);
+			expect(body).toContain('"type":"response.completed"');
+			expect(outcomes).toEqual([
+				expect.objectContaining({ phase: "succeeded" }),
+			]);
+		},
+	);
+
 	it("accepts nullable optional fields on a pinned function call item", async () => {
 		const item = {
 			type: "function_call",
@@ -1383,6 +1551,52 @@ describe("Codex model transport", () => {
 					execution: "synthetic",
 					arguments: { [credential]: "synthetic" },
 				},
+			},
+		],
+		[
+			"raw reasoning completion that echoes a credential",
+			{
+				type: "response.reasoning_text.done",
+				item_id: "reasoning-item",
+				content_index: 0,
+				text: `prefix:${credential}:suffix`,
+			},
+		],
+		[
+			"raw reasoning completion with non-text content",
+			{
+				type: "response.reasoning_text.done",
+				item_id: "reasoning-item",
+				content_index: 0,
+				text: { message: sensitiveMarker },
+			},
+		],
+		[
+			"raw reasoning completion with an extra error field",
+			{
+				type: "response.reasoning_text.done",
+				item_id: "reasoning-item",
+				content_index: 0,
+				text: "safe",
+				error: { message: sensitiveMarker },
+			},
+		],
+		[
+			"raw reasoning completion with an invalid content index",
+			{
+				type: "response.reasoning_text.done",
+				item_id: "reasoning-item",
+				content_index: -1,
+				text: sensitiveMarker,
+			},
+		],
+		[
+			"raw reasoning completion with a non-text item reference",
+			{
+				type: "response.reasoning_text.done",
+				item_id: { id: sensitiveMarker },
+				content_index: 0,
+				text: "safe",
 			},
 		],
 	] as const)("rejects a %s before it reaches Codex", async (_name, unsafe) => {
@@ -2501,6 +2715,15 @@ describe("Codex model transport", () => {
 				type: "response.output_text.delta",
 				delta: "x".repeat(1024 * 1024),
 			})}\n\n`,
+		],
+		[
+			"oversized raw reasoning completion",
+			`data: ${JSON.stringify({
+				type: "response.reasoning_text.done",
+				item_id: "reasoning-item",
+				content_index: 0,
+				text: "x".repeat(1024 * 1024),
+			})}\n\n${completedEvent()}`,
 		],
 		["unterminated", completedEvent().trimEnd()],
 		[

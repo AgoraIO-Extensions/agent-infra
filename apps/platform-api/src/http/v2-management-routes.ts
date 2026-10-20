@@ -5,6 +5,7 @@ import {
 	AgentApplicationProjectionV1Schema,
 	AgentApplicationProjectionV2Schema,
 	AgentApplicationUpdateRequestV2Schema,
+	AgentDetailProjectionV1Schema,
 	AgentLifecycleCommandRequestV1Schema,
 	AgentProjectionV1Schema,
 	AgentProjectionV2Schema,
@@ -55,6 +56,9 @@ type ApplicationProjection = ReturnType<
 	typeof AgentApplicationProjectionV2Schema.parse
 >;
 type AgentProjection = ReturnType<typeof AgentProjectionV2Schema.parse>;
+type AgentDetailProjection = ReturnType<
+	typeof AgentDetailProjectionV1Schema.parse
+>;
 type ApplicationCreateInput = ReturnType<
 	typeof AgentApplicationCreateRequestV2Schema.parse
 >;
@@ -144,6 +148,10 @@ export interface ManagementRouteDependencies {
 		input: ProjectionInput<AgentManagementApplicationProjectionV1>,
 	) => Promise<unknown>;
 	readonly readAgentProjection: (
+		input: ProjectionInput<AgentManagementAgentProjectionV1>,
+	) => Promise<unknown>;
+	/** Agent 详情（#2910）：Owner 附带当前有效状态；未装配时详情入口返回依赖不可用。 */
+	readonly readAgentDetailProjection?: (
 		input: ProjectionInput<AgentManagementAgentProjectionV1>,
 	) => Promise<unknown>;
 }
@@ -306,6 +314,34 @@ async function projectAgent(
 		schemaVersion: 2,
 		configuration,
 	});
+}
+
+async function projectAgentDetail(
+	dependencies: ManagementRouteDependencies,
+	agent: AgentManagementAgentProjectionV1,
+	identity: IdentityContext,
+	metadata: RequestMetadata,
+): Promise<AgentDetailProjection> {
+	const read = dependencies.readAgentDetailProjection;
+	if (!read) fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+	let value: unknown;
+	try {
+		value = await read({
+			agent,
+			identity,
+			requestScope: metadata,
+			...metadata,
+		});
+	} catch (error) {
+		recordHttpFailureContext({ failureStep: "projection.read", error });
+		// 快照过期原样抛出，由读取路由决定是否重读（#2661）。
+		if (error instanceof StaleProjectionError) throw error;
+		fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+	}
+	const parsed = AgentDetailProjectionV1Schema.safeParse(value);
+	if (!parsed.success || parsed.data.agentId !== agent.agentId)
+		fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+	return parsed.data;
 }
 
 /**
@@ -1138,6 +1174,34 @@ export function registerV2ManagementRoutes(
 					() =>
 						agentOrUnavailable(dependencies, scope, agentId, metadata.traceId),
 					(agent) => projectAgent(dependencies, agent, identity, metadata),
+				),
+			);
+		}),
+	);
+
+	// Agent 详情（#2910）：可见性与 GET /api/v2/agents/:agentId 相同，Owner 附带当前有效状态。
+	// 只接受浏览器会话；不可见与不存在同为 RESOURCE_UNAVAILABLE，不探知其他 Agent 的 Owner。
+	app.get("/api/v2/agents/:agentId/detail", (context) =>
+		boundary(context, async (metadata) => {
+			context.header("Cache-Control", "no-store");
+			const request = context.req.raw;
+			if (request.headers.has("authorization"))
+				fail("AUTHENTICATION_REQUIRED", metadata.traceId);
+			if (new URL(request.url).search)
+				fail("INVALID_REQUEST", metadata.traceId);
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				request,
+				metadata.traceId,
+			);
+			const scope = userScope(identity);
+			const agentId = context.req.param("agentId");
+			return context.json(
+				await projectCurrent(
+					() =>
+						agentOrUnavailable(dependencies, scope, agentId, metadata.traceId),
+					(agent) =>
+						projectAgentDetail(dependencies, agent, identity, metadata),
 				),
 			);
 		}),

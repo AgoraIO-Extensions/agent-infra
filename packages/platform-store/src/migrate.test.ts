@@ -1990,6 +1990,7 @@ describe("published Relay authority migration", () => {
 			56,
 			57,
 			58,
+			59,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2043,9 +2044,13 @@ describe("published Relay authority migration", () => {
 			idx: 57,
 			tag: "0057_trace_context",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 58)).toMatchObject({
 			idx: 58,
 			tag: "0058_accepted_original_host",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 59,
+			tag: "0059_skill_project_content",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2163,6 +2168,15 @@ describe("published Relay authority migration", () => {
 				"skill_hub_installations:skill_version_id",
 				"skill_hub_installations:state",
 				"skill_hub_installations:updated_at",
+				// 0059：网页编辑的 Skill 项目内容（#2906）。
+				"skill_hub_project_contents:content_digest",
+				"skill_hub_project_contents:file_count",
+				"skill_hub_project_contents:files",
+				"skill_hub_project_contents:owner_id",
+				"skill_hub_project_contents:project_id",
+				"skill_hub_project_contents:revision",
+				"skill_hub_project_contents:total_bytes",
+				"skill_hub_project_contents:updated_at",
 				"skill_hub_skills:created_at",
 				"skill_hub_skills:id",
 				"skill_hub_skills:name",
@@ -2198,6 +2212,11 @@ describe("published Relay authority migration", () => {
 				"skill_hub_installations:skill_hub_installation_principal_non_empty",
 				"skill_hub_installations:skill_hub_installation_principal_type_valid",
 				"skill_hub_installations:skill_hub_installation_state_valid",
+				"skill_hub_project_contents:skill_hub_project_content_digest_hex",
+				"skill_hub_project_contents:skill_hub_project_content_file_count_bounded",
+				"skill_hub_project_contents:skill_hub_project_content_files_array",
+				"skill_hub_project_contents:skill_hub_project_content_revision_positive",
+				"skill_hub_project_contents:skill_hub_project_content_total_bytes_bounded",
 				"skill_hub_skills:skill_hub_skill_id_non_empty",
 				"skill_hub_skills:skill_hub_skill_name_non_empty",
 				"skill_hub_skills:skill_hub_skill_organization_non_empty",
@@ -2220,6 +2239,7 @@ describe("published Relay authority migration", () => {
 				"skill_hub_installations:skill_hub_installation_principal_idx",
 				"skill_hub_installations:skill_hub_installation_principal_version_unique",
 				"skill_hub_installations:skill_hub_installations_pkey",
+				"skill_hub_project_contents:skill_hub_project_contents_pkey",
 				"skill_hub_skills:skill_hub_skill_id_owner_unique",
 				"skill_hub_skills:skill_hub_skill_owner_idx",
 				"skill_hub_skills:skill_hub_skill_owner_name_unique",

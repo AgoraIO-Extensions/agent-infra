@@ -57,18 +57,27 @@ export function auditUserIds(records: readonly AuditRecord[]) {
 }
 
 /**
- * 审计主体名称：用户显示目录姓名（未解析时附 ID 短形式）；应用、后台组件与未确认主体
- * 不在目录中，显示类型中文名加等宽 ID 短形式。列表行内不提供展开或复制按钮。
+ * 审计主体名称：用户显示目录姓名（未解析时附 ID 短形式）；应用有服务端按权限返回的名称时
+ * 显示「应用 · 名称」；其余（含无权查看名称的应用）显示类型中文名加等宽 ID 短形式。
+ * 列表行内不提供展开或复制按钮。
  */
 export function AuditPrincipalName({
 	kind,
 	id,
+	displayName = null,
 	names,
 }: {
 	kind: AuditRecord["actor"]["kind"];
 	id: string;
+	displayName?: string | null;
 	names: DirectoryNames;
 }) {
+	if (kind === "application" && displayName)
+		return (
+			<span title={id}>
+				{auditPrincipalLabels.application} · {displayName}
+			</span>
+		);
 	if (kind !== "user")
 		return (
 			<>
@@ -91,16 +100,20 @@ export function AuditPrincipalName({
 function AuditPrincipalDetail({
 	kind,
 	id,
+	displayName,
 	names,
 }: {
 	kind: AuditRecord["actor"]["kind"];
 	id: string;
+	displayName: string | null;
 	names: DirectoryNames;
 }) {
 	return (
 		<>
 			{kind === "user" ? (
 				<DirectoryNameText name={names.resolve(id)} status={names.status} />
+			) : kind === "application" && displayName ? (
+				`${auditPrincipalLabels.application} · ${displayName}`
 			) : (
 				auditPrincipalLabels[kind]
 			)}
@@ -110,6 +123,12 @@ function AuditPrincipalDetail({
 		</>
 	);
 }
+
+/** 服务端可能为其返回名称的对象类型（Agent 与创建申请）。 */
+const nameableSubjects = new Set<AuditRecord["subject"]["kind"]>([
+	"agent",
+	"agent_application",
+]);
 
 /** 详情标题：读取成功后为「{事件} · {结果}」。 */
 export function auditDetailHeading(record: AuditRecord) {
@@ -145,6 +164,7 @@ export function AuditRecordDetail({
 					<AuditPrincipalDetail
 						kind={record.actor.kind}
 						id={record.actor.actorId}
+						displayName={record.actor.displayName}
 						names={names}
 					/>
 				</Field>
@@ -153,6 +173,7 @@ export function AuditRecordDetail({
 						<AuditPrincipalDetail
 							kind={record.originalPrincipal.kind}
 							id={record.originalPrincipal.id}
+							displayName={record.originalPrincipal.displayName}
 							names={names}
 						/>
 					) : null}
@@ -161,6 +182,10 @@ export function AuditRecordDetail({
 				<Field label="对象类型">
 					{auditSubjectLabels[record.subject.kind]}
 				</Field>
+				{/* 名称由服务端按当前权限返回；无权或无法确认时显示「未提供」，不区分原因。 */}
+				{nameableSubjects.has(record.subject.kind) && (
+					<Field label="对象名称">{record.subject.displayName}</Field>
+				)}
 				<Field label="对象 ID" mono>
 					{record.subject.subjectId}
 				</Field>
@@ -175,6 +200,9 @@ export function AuditRecordDetail({
 				<Field label="原 Execution ID" mono>
 					{record.executionId}
 				</Field>
+				{record.agentId !== null && (
+					<Field label="Agent 名称">{record.agentDisplayName}</Field>
+				)}
 				<Field label="Agent ID" mono>
 					{record.agentId}
 				</Field>

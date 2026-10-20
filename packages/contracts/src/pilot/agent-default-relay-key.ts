@@ -49,3 +49,27 @@ export const AgentDefaultRelayKeySavedCandidatesV1Schema = z.strictObject({
 	keyVersion: version,
 	candidates: z.array(candidateSchema).max(32768),
 });
+
+const displayCandidateSchema = candidateSchema.extend({
+	displayName: z
+		.string()
+		.min(1)
+		.max(128)
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: 负字符类明确拒绝 C0/C1 控制字符。
+		.regex(/^[^\u0000-\u001f\u007f-\u009f]+$/)
+		.refine((value) => value.trim() === value),
+});
+
+export const AgentDefaultRelayKeyDisplayCandidatesV2Schema = z.strictObject({
+	schemaVersion: z.literal(2),
+	configurationRevision: version,
+	candidates: z.array(displayCandidateSchema).max(32768),
+});
+
+export const AgentDefaultRelayKeySavedDisplayCandidatesV2Schema =
+	z.strictObject({
+		schemaVersion: z.literal(2),
+		configurationRevision: version,
+		keyVersion: version,
+		candidates: z.array(displayCandidateSchema).max(32768),
+	});

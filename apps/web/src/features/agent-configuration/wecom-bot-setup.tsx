@@ -10,11 +10,14 @@ import { withObjectName } from "@/lib/accessible-name";
 import {
 	beginWecomSetup,
 	cancelWecomSetup,
-	getWecomBotConnection,
+	getWecomBotConnectionV2,
 	getWecomSetup,
 	submitWecomCredentials,
 } from "../../pilot/generated/sdk.gen.js";
-import type { BeginWecomSetupResponse } from "../../pilot/generated/types.gen.js";
+import type {
+	BeginWecomSetupResponse,
+	GetWecomBotConnectionV2Response,
+} from "../../pilot/generated/types.gen.js";
 import {
 	useWecomUnbind,
 	WecomChannelCard,
@@ -39,7 +42,8 @@ type QrAvailableSession = Extract<
 	{ qrAvailable: true }
 >;
 
-// 扫码面板：能力由服务端 setup session 决定，不可用时不打开窗口、不伪造绑定成功（O-08）。
+// 扫码面板：能力由服务端状态 V2 判定（O-08、#2911），不可用时不建立 setup session、
+// 不打开窗口、不伪造绑定成功。
 // 扫码完成后先在面板内确认连接影响（confirming），确认前不提交凭证（CK-09、PRD §10.2）。
 type QrPanel =
 	| { readonly phase: "closed" }
@@ -51,6 +55,29 @@ type QrPanel =
 	| { readonly phase: "available"; readonly started: QrAvailableSession }
 	| { readonly phase: "authorizing" }
 	| { readonly phase: "confirming"; readonly started: QrAvailableSession };
+
+// 扫码能力只取服务端的明确结论；读不到或形状不符时视为未知，不据此建立 setup session。
+type QrCapability =
+	| { readonly available: true }
+	| {
+			readonly available: false;
+			readonly reason: QrUnavailableSession["qrUnavailableReason"] | null;
+	  };
+
+function qrCapabilityOf(
+	data: GetWecomBotConnectionV2Response | undefined,
+): QrCapability | undefined {
+	if (data?.qrAvailable === true) return { available: true };
+	if (data?.qrAvailable === false)
+		return {
+			available: false,
+			reason:
+				data.qrUnavailableReason === "authorization_correlation_unverified"
+					? data.qrUnavailableReason
+					: null,
+		};
+	return undefined;
+}
 
 // 原因只显示中文说明，不外露服务端枚举值。
 function qrUnavailableCopy(
@@ -76,10 +103,8 @@ export function WecomBotSetup({
 	const [status, setStatus] = useState<WecomChannelStatus>();
 	const [error, setError] = useState("");
 	const [qr, setQr] = useState<QrPanel>({ phase: "closed" });
-	// 本页已确认扫码不可用后，再次打开面板不再创建 setup session。
-	const [qrUnavailable, setQrUnavailable] = useState<{
-		readonly reason: QrUnavailableSession["qrUnavailableReason"] | null;
-	}>();
+	// 首次点击前由连接状态 V2 给出扫码能力；已知不可用时打开面板不创建 setup session。
+	const [qrCapability, setQrCapability] = useState<QrCapability>();
 	const session = useRef<string | undefined>(undefined);
 	const generation = useRef(0);
 	const refreshSequence = useRef(0);
@@ -103,7 +128,7 @@ export function WecomBotSetup({
 			const attempt = generation.current;
 			const sequence = ++refreshSequence.current;
 			try {
-				const result = await getWecomBotConnection({
+				const result = await getWecomBotConnectionV2({
 					path: { agentId },
 					responseStyle: "fields",
 					throwOnError: false,
@@ -114,6 +139,9 @@ export function WecomBotSetup({
 				) {
 					const next = result.data?.status;
 					setStatus(next);
+					// 读取失败时保留已知的扫码能力；建立 setup session 的响应仍会再判定一次。
+					const capability = qrCapabilityOf(result.data);
+					if (capability) setQrCapability(capability);
 					if (next === "verifying" || next === "disconnected")
 						connectionTimer.current = setTimeout(() => {
 							void refreshConnection();
@@ -150,7 +178,7 @@ export function WecomBotSetup({
 		setStatus(undefined);
 		setError("");
 		setQr({ phase: "closed" });
-		setQrUnavailable(undefined);
+		setQrCapability(undefined);
 		void refresh();
 		return () => {
 			generation.current++;
@@ -275,7 +303,7 @@ export function WecomBotSetup({
 			// 会话会在到期后失效。
 		}
 	}
-	// 第一步：读取扫码能力。不打开窗口，也不要求先勾选（CK-09）。
+	// 第一步：按扫码能力打开面板。不打开窗口，也不要求先勾选（CK-09）。
 	async function openQrPanel() {
 		if (
 			busy ||
@@ -285,8 +313,9 @@ export function WecomBotSetup({
 		)
 			return;
 		setError("");
-		if (qrUnavailable) {
-			setQr({ phase: "unavailable", reason: qrUnavailable.reason });
+		// 服务端已判定不可用：直接显示手动配置入口，不发出 POST …/wecom-setup（O-08）。
+		if (qrCapability && !qrCapability.available) {
+			setQr({ phase: "unavailable", reason: qrCapability.reason });
 			return;
 		}
 		if (qr.phase === "available" || qr.phase === "unavailable") return;
@@ -295,6 +324,24 @@ export function WecomBotSetup({
 		setQr({ phase: "checking" });
 		const attempt = generation.current;
 		try {
+			// 首屏还没有读到扫码能力时先重读状态 V2；只有服务端确认可用才建立 setup session。
+			let capability: QrCapability | undefined = qrCapability;
+			if (!capability) {
+				const current = await getWecomBotConnectionV2({
+					path: { agentId },
+					signal: controller.signal,
+					responseStyle: "fields",
+					throwOnError: false,
+				});
+				if (attempt !== generation.current || controller.signal.aborted) return;
+				capability = qrCapabilityOf(current.data);
+				if (!capability) throw new Error("WECOM_QR_CAPABILITY_UNKNOWN");
+				setQrCapability(capability);
+				if (!capability.available) {
+					setQr({ phase: "unavailable", reason: capability.reason });
+					return;
+				}
+			}
 			const started = await beginWecomSetup({
 				path: { agentId },
 				signal: controller.signal,
@@ -303,12 +350,13 @@ export function WecomBotSetup({
 			});
 			if (attempt !== generation.current || controller.signal.aborted) return;
 			if (!started.data) throw new Error("WECom_QR_START_FAILED");
+			// 状态读取之后部署判定有变时，以本次会话响应为准并释放会话。
 			if (!started.data.qrAvailable) {
 				const reason = started.data.qrUnavailableReason ?? null;
 				session.current = started.data.sessionId;
 				await releaseQrSession(started.data.sessionId);
 				if (attempt !== generation.current) return;
-				setQrUnavailable({ reason });
+				setQrCapability({ available: false, reason });
 				setQr({ phase: "unavailable", reason });
 				return;
 			}
@@ -590,9 +638,7 @@ export function WecomBotSetup({
 					<div className="wecom-qr-head">
 						<div>
 							<strong>扫码授权暂不可用</strong>
-							<p>
-								二维码能力由服务端 setup session 决定，当前不会伪造绑定成功。
-							</p>
+							<p>扫码能力由服务端按当前部署判定，当前不会伪造绑定成功。</p>
 						</div>
 					</div>
 					<div

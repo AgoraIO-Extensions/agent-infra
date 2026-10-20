@@ -58,6 +58,7 @@ export {
 import {
 	skillHubAgentBindings,
 	skillHubInstallations,
+	skillHubProjectContents,
 	skillHubSkills,
 	skillHubVersions,
 } from "./schema-skill-hub";
@@ -131,6 +132,7 @@ export { browserSessions } from "./schema-sessions";
 export {
 	skillHubAgentBindings,
 	skillHubInstallations,
+	skillHubProjectContents,
 	skillHubSkills,
 	skillHubVersions,
 } from "./schema-skill-hub";
@@ -181,6 +183,7 @@ export const platformInfrastructureTables = [
 	skillHubVersions,
 	skillHubInstallations,
 	skillHubAgentBindings,
+	skillHubProjectContents,
 ] as const;
 
 import { sessionSandboxAllocations } from "./schema-session-sandboxes";

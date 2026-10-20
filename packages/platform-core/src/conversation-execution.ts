@@ -44,6 +44,10 @@ import {
 import { createSessionSandboxBindingV1 } from "./session-sandbox.js";
 
 export {
+	modelOptionDisplayNameV1,
+	requestedModelDisplayNameV1,
+} from "./conversation-execution-state.js";
+export {
 	type ConversationCommandDecisionV1,
 	type ConversationCommandResultV1,
 	type ConversationCreatedResultV1,
@@ -318,6 +322,7 @@ export function createConversationExecutionUseCaseV1(
 								const messageId = nextOpaqueId(newId);
 								const modelSelectionFallback = modelSelectionFallbackWrite(
 									modelSelection.fallback,
+									state.modelConfiguration,
 									authority,
 									conversation.conversationId,
 									state.activeExecution.executionId,
@@ -401,6 +406,7 @@ export function createConversationExecutionUseCaseV1(
 							const turnId = nextOpaqueId(newId);
 							const modelSelectionFallback = modelSelectionFallbackWrite(
 								modelSelection.fallback,
+								state.modelConfiguration,
 								authority,
 								conversation.conversationId,
 								executionId,
@@ -649,6 +655,7 @@ export function createConversationExecutionUseCaseV1(
 							const turnId = nextOpaqueId(newId);
 							const modelSelectionFallback = modelSelectionFallbackWrite(
 								modelSelection.fallback,
+								state.modelConfiguration,
 								authority,
 								conversation.conversationId,
 								executionId,

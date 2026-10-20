@@ -114,6 +114,76 @@ export async function lockAgentConfiguration(
 	}
 }
 
+export type RequestedModelDisplayNameResolverV1 = (model: {
+	readonly endpointId: string;
+	readonly modelId: string;
+}) => Promise<string | null>;
+
+/**
+ * 为会话所选选项附上它在不晚于当前修订、且包含它的最新已应用配置修订中的模型（G-07）。
+ * 只查本 Agent 的修订；选项已被删除时仍可读。记录缺失或不是有界文本时视为读不到，
+ * 回退事件此时记录 null 显示名，不阻断消息受理。
+ */
+export async function withSelectedModelOption(
+	transaction: Transaction,
+	agentId: string,
+	modelConfiguration: ConversationModelConfigurationV1 | undefined,
+	selectedModelOptionId: string | null,
+	readDisplayName?: RequestedModelDisplayNameResolverV1,
+): Promise<ConversationModelConfigurationV1 | undefined> {
+	if (!modelConfiguration || selectedModelOptionId === null)
+		return modelConfiguration;
+	const rows = await awaitConversationExecutionQueryV1(
+		transaction,
+		transaction<{ model_id: unknown; endpoint_id: unknown }[]>`
+		select applied.option->'modelId' as model_id,
+			applied.option->'endpointId' as endpoint_id
+		from platform.agent_configuration_revisions as configuration
+		cross join lateral jsonb_array_elements(
+			case
+				when jsonb_typeof(configuration.configuration->'modelConfiguration'->'options') = 'array'
+					then configuration.configuration->'modelConfiguration'->'options'
+				else '[]'::jsonb
+			end
+		) as applied(option)
+		where configuration.agent_id = ${agentId}
+			and configuration.revision <= ${modelConfiguration.configurationRevision}
+			and applied.option->>'optionId' = ${selectedModelOptionId}
+		order by configuration.revision desc
+		limit 1
+	`,
+	);
+	const modelId = rows[0]?.model_id;
+	if (
+		typeof modelId !== "string" ||
+		modelId.length === 0 ||
+		modelId.includes("\0") ||
+		!String.prototype.isWellFormed.call(modelId) ||
+		Buffer.byteLength(modelId, "utf8") > 1024
+	)
+		return modelConfiguration;
+	let displayName: string | null | undefined;
+	if (readDisplayName) {
+		try {
+			const value = await readDisplayName({
+				endpointId: text(rows[0]?.endpoint_id),
+				modelId,
+			});
+			displayName = value === null ? null : text(value);
+		} catch {
+			displayName = null;
+		}
+	}
+	return {
+		...modelConfiguration,
+		selectedOption: {
+			optionId: selectedModelOptionId,
+			modelId,
+			...(displayName === undefined ? {} : { displayName }),
+		},
+	};
+}
+
 export function createIdempotencyScopeId(
 	agentId: string,
 	channelId: string,
@@ -302,8 +372,17 @@ export async function lockConversationForRead(
 export async function readMessageState(
 	transaction: Transaction,
 	conversation: ConversationExecutionConversationStateV1,
+	readDisplayName?: RequestedModelDisplayNameResolverV1,
 ): Promise<ConversationExecutionStateV1> {
 	const agent = await lockAgentConfiguration(transaction, conversation.agentId);
+	// 回退时要记录原选项显示名，即使该选项已从当前配置删除（G-07）。
+	const modelConfiguration = await withSelectedModelOption(
+		transaction,
+		conversation.agentId,
+		agent?.modelConfiguration,
+		conversation.selectedModelOptionId,
+		readDisplayName,
+	);
 	const activeRows = await awaitConversationExecutionQueryV1(
 		transaction,
 		transaction<ExecutionRow[]>`
@@ -322,7 +401,7 @@ export async function readMessageState(
 	if (!active) {
 		return {
 			conversation,
-			modelConfiguration: agent?.modelConfiguration,
+			modelConfiguration,
 			sourceMessage: undefined,
 			targetExecution: undefined,
 			existingStop: undefined,
@@ -355,7 +434,7 @@ export async function readMessageState(
 		unavailable();
 	return {
 		conversation,
-		modelConfiguration: agent?.modelConfiguration,
+		modelConfiguration,
 		sourceMessage: undefined,
 		targetExecution: undefined,
 		existingStop: undefined,
@@ -408,8 +487,13 @@ export async function readRegenerationState(
 	transaction: Transaction,
 	conversation: ConversationExecutionConversationStateV1,
 	sourceMessageId: string,
+	readDisplayName?: RequestedModelDisplayNameResolverV1,
 ): Promise<ConversationExecutionStateV1> {
-	const state = await readMessageState(transaction, conversation);
+	const state = await readMessageState(
+		transaction,
+		conversation,
+		readDisplayName,
+	);
 	const rows = await transaction<
 		{
 			readonly message_id: string;

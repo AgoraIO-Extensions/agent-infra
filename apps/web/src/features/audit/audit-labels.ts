@@ -58,6 +58,12 @@ export const auditActionLabels: Record<AuditRecord["action"], string> = {
 	"relay_key.personal.replace": "替换个人 Relay Key",
 	"relay_key.personal.revoke": "撤销个人 Relay Key",
 	"relay_key.agent_default.replace": "替换 Agent 默认 Relay Key",
+	"skill.project.create": "创建 Skill 项目",
+	"skill.project.update": "更新 Skill 项目",
+	"skill.project.list": "列出 Skill 项目",
+	"skill.project.read": "查看 Skill 项目",
+	"relay_key.agent_default.read": "查看 Agent 默认 Relay Key 状态",
+	"relay_key.agent_default.candidates": "查询 Agent 默认 Relay Key 候选",
 	"task.api.access": "任务 API 访问",
 	"task.api.subscription.started": "建立结果订阅",
 	"task.api.subscription.ended": "结束结果订阅",
@@ -157,6 +163,18 @@ export const auditSubjectLabels: Record<
 	configuration: "配置",
 	api_credential: "API 凭证",
 };
+
+/**
+ * 对象列的主文字（F-03）：服务端按当前权限返回的 Agent / 创建申请名称；其他对象显示类型，
+ * 有可见的所属 Agent 时附上 Agent 名称。没有名称时只给类型，ID 始终以短形式另行显示。
+ */
+export function auditObjectName(record: AuditRecord) {
+	const type = auditSubjectLabels[record.subject.kind];
+	if (record.subject.displayName) return record.subject.displayName;
+	if (record.agentDisplayName && record.subject.kind !== "agent")
+		return `${record.agentDisplayName} · ${type}`;
+	return type;
+}
 
 export function auditOutcomeLabel(record: AuditRecord) {
 	if (

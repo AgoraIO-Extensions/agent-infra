@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { FakeNativeCapabilityMetadataRevalidationV1 } from "./fake-native-capability-admission.ts";
 import {
@@ -126,6 +127,33 @@ function useCase(
 }
 
 describe("native capability admission contract", () => {
+	it.each([
+		{ command: commandRequest, metadata: commandProjection },
+		{ command: request, metadata: projection },
+		{
+			command: { ...request, parameters: '请汇总工作区\n"文件"\\路径 🧪' },
+			metadata: projection,
+		},
+	])(
+		"hashes the admitted raw UTF-8 parameters for Runtime V4 (#2950)",
+		async ({ command, metadata }) => {
+			const decision = await useCase(
+				new FakeNativeCapabilityMetadataRevalidationV1({
+					projection: metadata,
+				}),
+			).admit(command);
+			if (decision.outcome !== "accepted")
+				throw new Error("Expected acceptance");
+			const expected = createHash("sha256")
+				.update(command.parameters, "utf8")
+				.digest("hex");
+			expect(decision.plan.parameters).toBe(command.parameters);
+			expect(decision.plan.parametersDigest).toBe(expected);
+			expect(decision.plan.outbox.payload.parameters).toBe(command.parameters);
+			expect(decision.plan.outbox.payload.parametersDigest).toBe(expected);
+		},
+	);
+
 	it("keeps the fake metadata scope bound for synchronous current checks", async () => {
 		const fake = new FakeNativeCapabilityMetadataRevalidationV1({ projection });
 		const allowed = await fake.revalidate({

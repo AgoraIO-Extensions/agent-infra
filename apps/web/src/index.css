@@ -688,9 +688,12 @@
 	justify-content: space-between;
 	gap: 8px;
 }
-/* 对象 ID 短形式：设计 small.mono（11px 等宽）。 */
+/* 对象 ID 短形式：设计 small.mono（11px 等宽），IdentifierText 不再缩小字号。 */
 .audit-table small.audit-identifier {
 	font-family: var(--font-mono);
+}
+.audit-table small.audit-identifier [data-slot="identifier-text"] code {
+	font-size: inherit;
 }
 .audit-table [data-slot="table-head"]:last-child {
 	width: 120px;
@@ -1205,6 +1208,47 @@
 	align-items: center;
 	gap: 8px;
 	margin-top: 12px;
+}
+/* #2981：回答上方可折叠的「思考过程」。摘要行沿用会话折叠条的 44px 触达高度与配色；
+   展开后随时间线一起滚动，不另设滚动区域。 */
+.chat-message-body > .message-thinking {
+	margin-bottom: 9px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+}
+.message-thinking-summary {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	min-height: 44px;
+	padding: 9px 12px;
+	border: 0;
+	border-radius: inherit;
+	background: transparent;
+	color: var(--muted-foreground);
+	font: inherit;
+	font-size: 12px;
+	line-height: 1.65;
+	text-align: left;
+}
+.message-thinking-summary strong {
+	color: var(--foreground);
+	font-weight: 650;
+}
+.message-thinking-toggle {
+	flex: none;
+	margin-left: auto;
+	color: var(--accent-ink);
+	font-size: 11px;
+}
+.message-thinking-body {
+	padding: 0 12px 12px;
+}
+.message-thinking-text {
+	color: var(--muted-foreground);
+	font-size: 13px;
+	line-height: 1.7;
 }
 .answer-versions {
 	display: flex;
@@ -1989,10 +2033,14 @@
 		padding: 10px 12px;
 	}
 	/* 设计 ≤767：折叠条摘要 8px 10px；Connection 提示纵向排列、按钮整宽、范围行逐行显示。 */
-	.chat-disclosure-summary {
+	.chat-disclosure-summary,
+	.message-thinking-summary {
 		padding: 8px 10px;
 	}
 	.chat-context-body {
+		padding: 0 10px 10px;
+	}
+	.message-thinking-body {
 		padding: 0 10px 10px;
 	}
 	.connection-notice {
@@ -3073,7 +3121,8 @@ body {
 .skill-row-copy {
 	min-width: 0;
 }
-.skill-page .skill-row-copy h2 {
+.skill-page .skill-row-copy h2,
+.skill-page .skill-row-copy h3 {
 	overflow-wrap: anywhere;
 	font-family: var(--font-body);
 	font-size: 16px;
@@ -3088,8 +3137,14 @@ body {
 }
 /* 契约还没有用途说明时，标签直接跟在名称下方，间距取说明段的上下外边距之和。 */
 .skill-row-copy > h2 + [data-slot="badge"],
-.skill-row-copy > h2 + .skill-row-badges {
+.skill-row-copy > h2 + .skill-row-badges,
+.skill-row-copy > h3 + .skill-row-badges {
 	margin-top: 8px;
+}
+.skill-row-badges {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
 }
 .skill-row-meta {
 	min-width: 0;
@@ -3210,6 +3265,54 @@ body {
 .version-line strong {
 	font-size: 14px;
 }
+/* 设计 pre.skill-code：SKILL.md 只按纯文本显示，长行换行，过长时在块内滚动。 */
+.skill-page .skill-code {
+	max-height: 420px;
+	margin: 12px 0 0;
+	padding: 14px 16px;
+	overflow: auto;
+	overscroll-behavior: contain;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface-raised);
+	color: var(--foreground);
+	font: 12px / 1.7 var(--font-mono);
+}
+.skill-page .skill-code pre {
+	margin: 0;
+	font: inherit;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.skill-page .skill-code:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: 3px;
+}
+/* 设计配套资源：等宽 quiet-pill 列表，类别与大小跟在路径后。 */
+.skill-page .skill-section .skill-resources {
+	display: grid;
+	gap: 8px;
+	margin: 12px 0 0;
+	padding: 0;
+	list-style: none;
+}
+.skill-page .skill-section .skill-resources li + li {
+	margin-top: 0;
+}
+.skill-resources li {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+.skill-resource-path {
+	font-family: var(--font-mono);
+}
+.skill-resource-meta {
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
 .skill-editor-surface {
 	display: grid;
 	gap: 0;
@@ -3226,6 +3329,34 @@ body {
 }
 .skill-form-actions {
 	margin-top: 16px;
+}
+/* 网页编辑的项目内容（#2906）：正文与文件内容等宽显示，配套文件逐个分组。 */
+.skill-editor-form > .skill-editor-full {
+	margin-top: 16px;
+}
+.skill-content-text {
+	min-height: 180px;
+	font-family: var(--font-mono);
+	font-size: 13px;
+	line-height: 1.6;
+}
+.skill-content-files {
+	display: grid;
+	gap: 12px;
+	margin-top: 20px;
+}
+.skill-page h3.skill-content-heading {
+	font-family: var(--font-body);
+	font-size: 14px;
+	font-weight: 600;
+	letter-spacing: 0;
+}
+.skill-content-file {
+	min-width: 0;
+	margin: 0;
+	padding: 0 16px 16px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
 }
 .skill-field-help {
 	color: var(--muted-ink);
@@ -3794,7 +3925,7 @@ body {
 	margin: 0;
 	overflow-wrap: anywhere;
 }
-/* 设计 .filters：搜索 1.6fr + 3 × 0.7fr；风险筛选待接口提供前不渲染，来源在第 2 轨。 */
+/* 设计 .filters：搜索 1.6fr + 3 × 0.7fr，来源在第 2 轨；审批不设「风险」筛选（#2862，PRD §6.2）。 */
 .approval-filters {
 	display: grid;
 	grid-template-columns: minmax(240px, 1.6fr) repeat(3, minmax(130px, 0.7fr));
@@ -3819,6 +3950,29 @@ body {
 	margin: 0;
 	min-width: 0;
 	overflow-wrap: anywhere;
+}
+/* 运维观测（F-12，web-ui.md「运维观测页」）：沿用设计 #my-agents 已创建卡的 .grid-2 > .card，
+   卡头为 .card-head（标题与状态 chip 两端对齐，gap 14px），事实列表为 dl.facts（上距 15px）。 */
+.operations-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 16px;
+}
+.operations-domain-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 14px;
+}
+/* 设计 .card-title h3：17px / 650 / 1.4 正文字体，压过未分层的 `.management-content h2`。 */
+.management-content .operations-domain-head h2 {
+	min-width: 0;
+	font: 650 17px / 1.4 var(--font-body);
+	letter-spacing: 0;
+	overflow-wrap: anywhere;
+}
+.operations-domain .review-facts {
+	margin-top: 15px;
 }
 /* 设计 .page-note：列表或详情之后的补充说明。 */
 .page-note {
@@ -3856,6 +4010,7 @@ body {
 		margin-top: 16px;
 	}
 	.owned-agent-grid,
+	.operations-grid,
 	.approval-filters,
 	.audit-filters,
 	.audit-filter-grid,

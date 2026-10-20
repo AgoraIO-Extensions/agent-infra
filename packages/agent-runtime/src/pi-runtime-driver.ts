@@ -110,7 +110,6 @@ export const PiRuntimeDriver = {
 							return resolver();
 						}
 					: undefined;
-				let nativeSessionRef = "";
 				let connectionClient: StandardMcpClient | undefined;
 				let connectionGateway: StandardMcpAcpBridge | undefined;
 				let browserGateway: BrowserMcpGatewayV1 | undefined;
@@ -164,7 +163,7 @@ export const PiRuntimeDriver = {
 						connectionGateway = await createStandardMcpAcpBridge({
 							client: connectionClient,
 							execution: session.connectionReference,
-							nativeSessionRef: () => nativeSessionRef,
+							nativeSessionRef: () => session.runtimeSessionRef,
 							recordOperationFact: callbacks.recordOperationFact,
 							authorizeToolAction: options.authorizeToolAction,
 							onBlocked: async () => {
@@ -207,7 +206,6 @@ export const PiRuntimeDriver = {
 						update: (event) => callbacks.update(event),
 						launch,
 					});
-					nativeSessionRef = native.nativeId;
 					nativeCancel = native.cancel;
 					nativeClose = native.close;
 					return {

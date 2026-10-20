@@ -1,21 +1,20 @@
 import {
 	SkillHubDirectoryPageV1Schema,
-	SkillHubVersionMetadataV1Schema,
+	SkillHubInstallationPageV1Schema,
+	SkillHubOwnedVersionPageV1Schema,
+	SkillHubVersionDetailV1Schema,
 } from "@agent-infra/contracts/pilot";
-import type {
-	Client,
-	RequestResult,
-} from "../../pilot/generated-v2/client/index.js";
+import type { Client } from "../../pilot/generated-v2/client/index.js";
 import {
+	listOwnedSkillHubVersionsV1,
+	listSkillHubInstallationsV1,
 	listSkillHubVersionsV1,
-	readSkillHubVersionV1,
+	readSkillHubVersionDetailV1,
 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
-	ListSkillHubVersionsV1Data,
-	ListSkillHubVersionsV1Errors,
-	ListSkillHubVersionsV1Responses,
-	ReadSkillHubVersionV1Errors,
-	ReadSkillHubVersionV1Responses,
+	SkillHubInstallationListItemV1,
+	SkillHubOwnedVersionV1,
+	SkillHubVersionDetailV1,
 	SkillHubVersionMetadataV1,
 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -27,8 +26,18 @@ export type SkillHubDirectoryState =
 	| { kind: "ready"; versions: SkillHubVersionMetadataV1[] }
 	| CollectionReadUnavailable;
 
+/** 当前用户自己的版本（含审核中、已驳回、已撤销）。 */
+export type SkillHubOwnedVersionsState =
+	| { kind: "ready"; versions: SkillHubOwnedVersionV1[] }
+	| CollectionReadUnavailable;
+
+/** 当前用户（user 主体）仍在我的库中的安装。 */
+export type SkillHubInstallationsState =
+	| { kind: "ready"; installations: SkillHubInstallationListItemV1[] }
+	| CollectionReadUnavailable;
+
 export type SkillHubVersionState =
-	| { kind: "ready"; version: SkillHubVersionMetadataV1 }
+	| { kind: "ready"; version: SkillHubVersionDetailV1 }
 	| CollectionReadUnavailable;
 
 const maximumSkillHubPages = 100;
@@ -60,43 +69,38 @@ export function isRetryableSkillHubError(error: unknown): boolean {
 	);
 }
 
-/** Read the complete server-authorized catalog before exposing any rows. */
-export async function loadSkillHubDirectory(
-	client?: Client,
+type PageResult = {
+	data?: unknown;
+	response?: Response;
+};
+
+/** 读完服务端授权的全部分页后才暴露结果；游标重复或页数超限时不静默截断。 */
+async function collectPages<T>(
+	readPage: (
+		query: { cursor?: string },
+		signal?: AbortSignal,
+	) => Promise<PageResult>,
+	parse: (
+		data: unknown,
+	) => { items: T[]; nextCursor: string | null } | undefined,
 	signal?: AbortSignal,
-): Promise<SkillHubDirectoryState> {
-	const versions: SkillHubVersionMetadataV1[] = [];
+): Promise<{ kind: "ready"; versions: T[] } | CollectionReadUnavailable> {
+	const versions: T[] = [];
 	const cursors = new Set<string>();
 	let cursor: string | null = null;
 
 	for (let page = 0; page < maximumSkillHubPages; page += 1) {
 		signal?.throwIfAborted();
-		const query: ListSkillHubVersionsV1Data["query"] =
-			cursor === null ? {} : { cursor };
-		const result: Awaited<
-			RequestResult<
-				ListSkillHubVersionsV1Responses,
-				ListSkillHubVersionsV1Errors,
-				false
-			>
-		> = await listSkillHubVersionsV1<false>({
-			client,
-			query,
-			signal,
-			responseStyle: "fields",
-			throwOnError: false,
-		});
+		const result = await readPage(cursor === null ? {} : { cursor }, signal);
 		signal?.throwIfAborted();
 		const status = result.response?.status;
 		if (status !== 200) return unavailable(collectionReadFailure(status));
-		if (
-			!result.data ||
-			!SkillHubDirectoryPageV1Schema.safeParse(result.data).success
-		)
+		const parsed = result.data ? parse(result.data) : undefined;
+		if (!parsed)
 			return unavailable({ retryable: false, reason: "invalid-response" });
 
-		versions.push(...result.data.items);
-		cursor = result.data.nextCursor;
+		versions.push(...parsed.items);
+		cursor = parsed.nextCursor;
 		if (cursor === null) return { kind: "ready", versions };
 		if (cursors.has(cursor)) return unavailable({ retryable: false });
 		cursors.add(cursor);
@@ -105,19 +109,83 @@ export async function loadSkillHubDirectory(
 	return unavailable({ retryable: false });
 }
 
+/** Read the complete server-authorized catalog before exposing any rows. */
+export function loadSkillHubDirectory(
+	client?: Client,
+	signal?: AbortSignal,
+): Promise<SkillHubDirectoryState> {
+	return collectPages(
+		(query, pageSignal) =>
+			listSkillHubVersionsV1<false>({
+				client,
+				query,
+				signal: pageSignal,
+				responseStyle: "fields",
+				throwOnError: false,
+			}),
+		(data) => {
+			const parsed = SkillHubDirectoryPageV1Schema.safeParse(data);
+			return parsed.success ? parsed.data : undefined;
+		},
+		signal,
+	);
+}
+
+/** 读完当前用户自己的全部版本；服务端按会话主体过滤，页面不提交主体。 */
+export function loadOwnedSkillHubVersions(
+	client?: Client,
+	signal?: AbortSignal,
+): Promise<SkillHubOwnedVersionsState> {
+	return collectPages(
+		(query, pageSignal) =>
+			listOwnedSkillHubVersionsV1<false>({
+				client,
+				query,
+				signal: pageSignal,
+				responseStyle: "fields",
+				throwOnError: false,
+			}),
+		(data) => {
+			const parsed = SkillHubOwnedVersionPageV1Schema.safeParse(data);
+			return parsed.success ? parsed.data : undefined;
+		},
+		signal,
+	);
+}
+
+/** 读完当前用户在我的库中的全部安装；服务端按会话主体过滤，页面不提交主体。 */
+export async function loadSkillHubInstallations(
+	client?: Client,
+	signal?: AbortSignal,
+): Promise<SkillHubInstallationsState> {
+	const result = await collectPages(
+		(query, pageSignal) =>
+			listSkillHubInstallationsV1<false>({
+				client,
+				query,
+				signal: pageSignal,
+				responseStyle: "fields",
+				throwOnError: false,
+			}),
+		(data) => {
+			const parsed = SkillHubInstallationPageV1Schema.safeParse(data);
+			return parsed.success ? parsed.data : undefined;
+		},
+		signal,
+	);
+	return result.kind === "ready"
+		? { kind: "ready", installations: result.versions }
+		: result;
+}
+
+/** 版本详情：含有界正文、资源清单、发布者与本人安装状态。 */
 export async function loadSkillHubVersion(
 	skillVersionId: string,
 	client?: Client,
 	signal?: AbortSignal,
 ): Promise<SkillHubVersionState> {
 	signal?.throwIfAborted();
-	const result: Awaited<
-		RequestResult<
-			ReadSkillHubVersionV1Responses,
-			ReadSkillHubVersionV1Errors,
-			false
-		>
-	> = await readSkillHubVersionV1<false>({
+	const result = await readSkillHubVersionDetailV1<false>({
 		client,
 		path: { skillVersionId },
 		signal,
@@ -127,7 +195,7 @@ export async function loadSkillHubVersion(
 	signal?.throwIfAborted();
 	const status = result.response?.status;
 	if (status !== 200) return unavailable(collectionReadFailure(status));
-	const parsed = SkillHubVersionMetadataV1Schema.safeParse(result.data);
+	const parsed = SkillHubVersionDetailV1Schema.safeParse(result.data);
 	if (!parsed.success || parsed.data.skillVersionId !== skillVersionId)
 		return unavailable({ retryable: false, reason: "invalid-response" });
 	return { kind: "ready", version: parsed.data };

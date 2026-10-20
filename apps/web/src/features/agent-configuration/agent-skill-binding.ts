@@ -186,3 +186,23 @@ export function nextSkillBindingCollection(
 				},
 			];
 }
+
+/**
+ * 解除一项绑定（#2903）：提交不含该项的完整集合，其余项的版本与授权不变；撤销的版本同样
+ * 不带回。结果可以是空数组，表示解除这个 Agent Version 的全部绑定。
+ */
+export function skillBindingCollectionWithout(
+	bindings: readonly SkillBindingStatus[],
+	skillVersionId: string,
+): SkillHubAgentBindingCommandV1["bindings"] {
+	return bindings
+		.filter(
+			(binding) =>
+				binding.state !== "revoked" &&
+				binding.skillVersion.skillVersionId !== skillVersionId,
+		)
+		.map((binding) => ({
+			skillVersionId: binding.skillVersion.skillVersionId,
+			grant: binding.grant,
+		}));
+}

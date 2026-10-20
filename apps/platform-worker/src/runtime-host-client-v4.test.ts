@@ -6,6 +6,7 @@ import {
 	RuntimeSubmitTurnRequestV4Schema,
 	validateRuntimePrivateRelayKeyFieldV1,
 } from "@agent-infra/contracts/runtime";
+import { nativeCapabilityParametersDigestV1 } from "@agent-infra/platform-core";
 import { createRelayKeyEncryptorV1 } from "@agent-infra/secret-store";
 import { createRelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { describe, expect, it, vi } from "vitest";
@@ -62,6 +63,67 @@ function clientHarness() {
 }
 
 describe("V4 authenticated confidential private Key client", () => {
+	it.each([
+		{ kind: "command" as const, parameters: "" },
+		{ kind: "skill" as const, parameters: '请汇总工作区\n"文件"\\路径 🧪' },
+	])(
+		"accepts the Core parameter digest for $kind through V4 validation (#2950)",
+		async ({ kind, parameters }) => {
+			const { h, client, signer, request } = clientHarness();
+			try {
+				const { input: _input, selection: _selection, ...context } = request;
+				const original = h.accepted();
+				if (!original) throw new Error("Missing fixture acceptance");
+				h.setAccepted({
+					...original,
+					trustedHostSessionRef: "host",
+					scope: { ...original.scope, hostSessionRef: "host" },
+					selection: undefined,
+				});
+				const unsigned = RuntimeNativeCapabilityRequestV4Schema.parse({
+					...context,
+					hostSessionRef: "host",
+					capabilityId: "a".repeat(64),
+					capabilityKind: kind,
+					directoryRevision: "b".repeat(64),
+					capabilitySourceVersion: "original-version",
+					parameters,
+					parametersDigest: nativeCapabilityParametersDigestV1(parameters),
+				});
+				const signed = {
+					...unsigned,
+					grant: signer.sign(unsigned, "authorization"),
+				};
+				await expect(client.nativeCapability(signed)).resolves.toMatchObject({
+					result: { outcome: "accepted", status: "running" },
+				});
+				expect(h.fetcher).toHaveBeenCalledTimes(1);
+				expect(h.sent().url).toBe(
+					"http://runtime.test/internal/runtime/v4/native-capability",
+				);
+				expect(h.sent().body.businessRequest.parametersDigest).toBe(
+					createHash("sha256").update(parameters, "utf8").digest("hex"),
+				);
+
+				const encoded = {
+					...unsigned,
+					parametersDigest: createHash("sha256")
+						.update(JSON.stringify(parameters))
+						.digest("hex"),
+				};
+				await expect(
+					client.nativeCapability({
+						...encoded,
+						grant: signer.sign(encoded, "authorization"),
+					}),
+				).rejects.toMatchObject({ code: "RUNTIME_REQUEST_INVALID" });
+				expect(h.fetcher).toHaveBeenCalledTimes(1);
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
+
 	it.each([
 		"missing",
 		"principal",

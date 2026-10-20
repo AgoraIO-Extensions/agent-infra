@@ -4,6 +4,7 @@ import {
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration-plan.js";
 import type {
+	AgentConfigurationAccessAuthorityV1,
 	AgentConfigurationActorContextV1,
 	AgentConfigurationAuthorizationAdmissionPortV1,
 	AgentConfigurationResultV1,
@@ -98,6 +99,8 @@ export class SkillHubAgentBindingErrorV1 extends Error {
 		| "not_admitted"
 		| "stale_revision"
 		| "idempotency_conflict"
+		| "agent_version_unavailable"
+		| "agent_version_mismatch"
 		| "dependency_unavailable"
 		| "persistence_failed";
 
@@ -106,6 +109,71 @@ export class SkillHubAgentBindingErrorV1 extends Error {
 		this.name = "SkillHubAgentBindingErrorV1";
 		this.code = code;
 	}
+}
+
+/**
+ * 读取一个 Agent Version 当前绑定状态的端口（#2903）。实现方在同一快照里读取
+ * `agents.current_configuration_revision` 与该修订下的绑定，调用方不提交修订号。
+ */
+export interface SkillHubAgentBindingStatusPortV1<Binding> {
+	readCurrentConfigurationRevision(input: {
+		readonly agentId: string;
+	}): Promise<number>;
+	readCurrentBindings(input: {
+		readonly agentId: string;
+		readonly agentVersion: string;
+		readonly actorId: string;
+		readonly organizationIds: readonly string[];
+		readonly isAdministrator: boolean;
+	}): Promise<{
+		readonly configurationRevision: number;
+		readonly bindings: readonly Binding[];
+	}>;
+}
+
+export type SkillHubAgentBindingReadV1<Binding> = Readonly<{
+	schemaVersion: 1;
+	agentId: string;
+	agentVersion: string;
+	configurationRevision: number;
+	bindings: readonly Binding[];
+}>;
+
+export type SkillHubAgentCurrentVersionV1 = Readonly<{
+	schemaVersion: 1;
+	agentId: string;
+	agentVersion: string;
+	configurationRevision: number;
+}>;
+
+/** Agent Version 与绑定接口路径使用同一标识规则；部署值不满足时视为未配置。 */
+export function isSkillHubAgentVersionV1(value: unknown): value is string {
+	return typeof value === "string" && idPattern.test(value);
+}
+
+type AgentConfigurationAuthorizationV1 = Awaited<
+	ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
+>;
+
+/**
+ * Skill 绑定的读、写与当前版本读取共用的 Owner 判定：授权已受理、事实属于同一 Agent 与
+ * 同一当前用户、账号有效，并且当前用户在 Owner 列表中。系统管理员角色不构成 Owner 授权。
+ */
+function currentOwnerAuthority(
+	authorization: AgentConfigurationAuthorizationV1,
+	agentId: string,
+	actorId: string,
+): AgentConfigurationAccessAuthorityV1 | undefined {
+	if (
+		authorization.status !== "admitted" ||
+		!authorization.accessAuthority ||
+		authorization.accessAuthority.state.agentId !== agentId ||
+		authorization.accessAuthority.actorContext.userId !== actorId ||
+		authorization.accessAuthority.actorContext.accountStatus !== "active" ||
+		!authorization.accessAuthority.state.ownerIds.includes(actorId)
+	)
+		return undefined;
+	return authorization.accessAuthority;
 }
 
 function object(
@@ -242,11 +310,8 @@ export function parseSkillHubAgentBindingCommandV1(
 	const traceId = boundedText(value.traceId);
 	if (!keyPattern.test(idempotencyKey))
 		throw new SkillHubAgentBindingErrorV1("invalid_input");
-	if (
-		!Array.isArray(value.bindings) ||
-		value.bindings.length === 0 ||
-		value.bindings.length > maxBindings
-	)
+	// 完整集合：空数组表示解除该 Agent Version 的全部绑定（#2903）。
+	if (!Array.isArray(value.bindings) || value.bindings.length > maxBindings)
 		throw new SkillHubAgentBindingErrorV1("invalid_input");
 	const bindings = value.bindings.map((entry) => {
 		const binding = object(entry, ["skillVersionId", "grant"]);
@@ -343,14 +408,147 @@ function sameValue(left: unknown, right: unknown): boolean {
 	return JSON.stringify(left) === JSON.stringify(right);
 }
 
-export function createSkillHubAgentBindingUseCaseV1(dependencies: {
+function parseReadInput(input: unknown, withAgentVersion: boolean) {
+	const value = object(input, [
+		"schemaVersion",
+		"agentId",
+		...(withAgentVersion ? ["agentVersion"] : []),
+		"actorId",
+		"requestId",
+		"traceId",
+	]);
+	if (value.schemaVersion !== 1)
+		throw new SkillHubAgentBindingErrorV1("invalid_input");
+	return {
+		agentId: id(value.agentId),
+		agentVersion: withAgentVersion ? id(value.agentVersion) : undefined,
+		actorId: boundedText(value.actorId),
+		requestId: boundedText(value.requestId),
+		traceId: boundedText(value.traceId),
+	};
+}
+
+export function createSkillHubAgentBindingUseCaseV1<
+	Binding = never,
+>(dependencies: {
 	readonly transaction: AgentConfigurationTransactionPortV1;
 	readonly authorizationAdmission: AgentConfigurationAuthorizationAdmissionPortV1;
 	readonly bindingAdmission: SkillHubAgentBindingAdmissionPortV1;
+	/**
+	 * 部署级固定 Agent Version（工程 Spec §11.6）。未配置或不满足标识规则时，绑定读取与
+	 * 写入一律拒绝。
+	 */
+	readonly agentVersion?: string;
+	/** 当前绑定状态读取；缺失时读取不可用。 */
+	readonly bindingStatus?: SkillHubAgentBindingStatusPortV1<Binding>;
 	readonly now?: () => Date;
 }) {
 	const now = dependencies.now ?? (() => new Date());
+	const configuredAgentVersion = isSkillHubAgentVersionV1(
+		dependencies.agentVersion,
+	)
+		? dependencies.agentVersion
+		: undefined;
+	/** 先完成 Owner 授权再比较版本，非 Owner 不能用路径探测当前版本。 */
+	function currentAgentVersion(requested: string | undefined): string {
+		if (configuredAgentVersion === undefined)
+			throw new SkillHubAgentBindingErrorV1("agent_version_unavailable");
+		if (requested !== undefined && requested !== configuredAgentVersion)
+			throw new SkillHubAgentBindingErrorV1("agent_version_mismatch");
+		return configuredAgentVersion;
+	}
+	async function authorizeOwner(input: {
+		readonly agentId: string;
+		readonly actorId: string;
+		readonly requestId: string;
+		readonly traceId: string;
+	}): Promise<AgentConfigurationAccessAuthorityV1> {
+		let authorization: AgentConfigurationAuthorizationV1;
+		try {
+			authorization = await dependencies.authorizationAdmission.authorize({
+				schemaVersion: 1,
+				...input,
+			});
+		} catch {
+			throw new SkillHubAgentBindingErrorV1("dependency_unavailable");
+		}
+		const authority = currentOwnerAuthority(
+			authorization,
+			input.agentId,
+			input.actorId,
+		);
+		if (!authority) throw new SkillHubAgentBindingErrorV1("not_authorized");
+		return authority;
+	}
 	return {
+		/** 当前 Owner 读取部署级 Agent Version 与当前配置修订。 */
+		async currentVersion(
+			input: unknown,
+		): Promise<SkillHubAgentCurrentVersionV1> {
+			const query = parseReadInput(input, false);
+			await authorizeOwner(query);
+			const agentVersion = currentAgentVersion(undefined);
+			if (!dependencies.bindingStatus)
+				throw new SkillHubAgentBindingErrorV1("dependency_unavailable");
+			let configurationRevision: number;
+			try {
+				configurationRevision =
+					await dependencies.bindingStatus.readCurrentConfigurationRevision({
+						agentId: query.agentId,
+					});
+			} catch {
+				throw new SkillHubAgentBindingErrorV1("dependency_unavailable");
+			}
+			if (
+				!Number.isSafeInteger(configurationRevision) ||
+				configurationRevision < 1
+			)
+				throw new SkillHubAgentBindingErrorV1("dependency_unavailable");
+			return {
+				schemaVersion: 1,
+				agentId: query.agentId,
+				agentVersion,
+				configurationRevision,
+			};
+		},
+		/** 当前 Owner 读取当前 Agent Version 在当前配置修订下的绑定。 */
+		async read(input: unknown): Promise<SkillHubAgentBindingReadV1<Binding>> {
+			const query = parseReadInput(input, true);
+			const authority = await authorizeOwner(query);
+			const agentVersion = currentAgentVersion(query.agentVersion);
+			if (!dependencies.bindingStatus)
+				throw new SkillHubAgentBindingErrorV1("dependency_unavailable");
+			let current: Awaited<
+				ReturnType<
+					SkillHubAgentBindingStatusPortV1<Binding>["readCurrentBindings"]
+				>
+			>;
+			try {
+				current = await dependencies.bindingStatus.readCurrentBindings({
+					agentId: query.agentId,
+					agentVersion,
+					actorId: query.actorId,
+					organizationIds: authority.actorContext.organizationIds,
+					isAdministrator: authority.actorContext.isAdministrator,
+				});
+			} catch {
+				throw new SkillHubAgentBindingErrorV1("dependency_unavailable");
+			}
+			if (
+				!Number.isSafeInteger(current?.configurationRevision) ||
+				current.configurationRevision < 1 ||
+				!Array.isArray(current.bindings) ||
+				current.bindings.length > maxBindings
+			)
+				throw new SkillHubAgentBindingErrorV1("dependency_unavailable");
+			return {
+				schemaVersion: 1,
+				agentId: query.agentId,
+				agentVersion,
+				configurationRevision: current.configurationRevision,
+				bindings: current.bindings,
+			};
+		},
 		async bind(
 			commandInput: unknown,
 			actorContextInput: unknown,
@@ -374,9 +572,7 @@ export function createSkillHubAgentBindingUseCaseV1(dependencies: {
 				actorId: actor.actorId,
 				rawRequestDigest: actor.rawRequestDigest,
 			});
-			let authorization: Awaited<
-				ReturnType<AgentConfigurationAuthorizationAdmissionPortV1["authorize"]>
-			>;
+			let authorization: AgentConfigurationAuthorizationV1;
 			try {
 				authorization = await dependencies.authorizationAdmission.authorize({
 					schemaVersion: 1,
@@ -388,15 +584,15 @@ export function createSkillHubAgentBindingUseCaseV1(dependencies: {
 			} catch {
 				throw new SkillHubAgentBindingErrorV1("dependency_unavailable");
 			}
-			if (
-				authorization.status !== "admitted" ||
-				!authorization.accessAuthority ||
-				authorization.accessAuthority.state.agentId !== command.agentId ||
-				authorization.accessAuthority.actorContext.userId !== actor.actorId ||
-				authorization.accessAuthority.actorContext.accountStatus !== "active" ||
-				!authorization.accessAuthority.state.ownerIds.includes(actor.actorId)
-			)
+			const accessAuthority = currentOwnerAuthority(
+				authorization,
+				command.agentId,
+				actor.actorId,
+			);
+			if (authorization.status !== "admitted" || !accessAuthority)
 				throw new SkillHubAgentBindingErrorV1("not_authorized");
+			// 路径中的 Agent Version 必须等于部署当前值；未配置时一律拒绝（#2903）。
+			currentAgentVersion(command.agentVersion);
 			let readDecision: Awaited<
 				ReturnType<AgentConfigurationTransactionPortV1["read"]>
 			>;
@@ -428,22 +624,25 @@ export function createSkillHubAgentBindingUseCaseV1(dependencies: {
 			let admitted: Awaited<
 				ReturnType<SkillHubAgentBindingAdmissionPortV1["admit"]>
 			>;
-			try {
-				admitted = await dependencies.bindingAdmission.admit({
-					schemaVersion: 1,
-					agentId: command.agentId,
-					agentVersion: command.agentVersion,
-					actorId: actor.actorId,
-					organizationIds:
-						authorization.accessAuthority.actorContext.organizationIds,
-					isAdministrator:
-						authorization.accessAuthority.actorContext.isAdministrator,
-					requestId: command.requestId,
-					traceId: command.traceId,
-					requested: command.bindings,
-				});
-			} catch {
-				throw new SkillHubAgentBindingErrorV1("dependency_unavailable");
+			if (command.bindings.length === 0) {
+				// 解除全部绑定：没有待准入的版本，直接提交空集合。
+				admitted = { schemaVersion: 1, status: "admitted", bindings: [] };
+			} else {
+				try {
+					admitted = await dependencies.bindingAdmission.admit({
+						schemaVersion: 1,
+						agentId: command.agentId,
+						agentVersion: command.agentVersion,
+						actorId: actor.actorId,
+						organizationIds: accessAuthority.actorContext.organizationIds,
+						isAdministrator: accessAuthority.actorContext.isAdministrator,
+						requestId: command.requestId,
+						traceId: command.traceId,
+						requested: command.bindings,
+					});
+				} catch {
+					throw new SkillHubAgentBindingErrorV1("dependency_unavailable");
+				}
 			}
 			if (admitted.status !== "admitted") {
 				throw new SkillHubAgentBindingErrorV1(
@@ -481,8 +680,7 @@ export function createSkillHubAgentBindingUseCaseV1(dependencies: {
 				agentId: command.agentId,
 				baseRevision: current.revision,
 				nextRevision,
-				expectedManagementRevision:
-					authorization.accessAuthority.state.revision,
+				expectedManagementRevision: accessAuthority.state.revision,
 				expectedAuthorizationRevision:
 					readDecision.record.authorizationRevision,
 				nextAuthorizationRevision: authorization.authorizationRevision,

@@ -1,8 +1,8 @@
 import { OpaqueIdV1Schema } from "@agent-infra/contracts";
 import {
-	ScopedPlatformAuditPageV1Schema,
-	type ScopedPlatformAuditProjectionV1,
-	ScopedPlatformAuditProjectionV1Schema,
+	ScopedPlatformAuditPageV2Schema,
+	type ScopedPlatformAuditProjectionV2,
+	ScopedPlatformAuditProjectionV2Schema,
 	ScopedPlatformAuditQueryV1Schema,
 } from "@agent-infra/contracts/pilot";
 
@@ -17,7 +17,8 @@ export type AuditFilters = {
 	result?: AuditRecord["result"];
 	executionId?: string;
 };
-export type AuditRecord = ScopedPlatformAuditProjectionV1;
+/** #2909：V2 投影带服务端按当前权限解析的 Agent、创建申请与应用名称。 */
+export type AuditRecord = ScopedPlatformAuditProjectionV2;
 export type AuditReadFailure = {
 	kind: "authorization" | "network" | "service" | "http" | "invalid";
 };
@@ -70,7 +71,7 @@ function requestUrl(
 			? globalThis.location.origin
 			: "http://localhost");
 	const path =
-		scope === "administrator" ? "/api/v3/admin/audit" : "/api/v1/audit";
+		scope === "administrator" ? "/api/v4/admin/audit" : "/api/v2/audit";
 	const url = new URL(
 		`${path}${auditId ? `/${encodeURIComponent(auditId)}` : ""}`,
 		origin,
@@ -148,7 +149,7 @@ export async function loadAuditPage({
 		limit: 25,
 		...(cursor == null ? {} : { cursor }),
 	});
-	const parsed = ScopedPlatformAuditPageV1Schema.safeParse(
+	const parsed = ScopedPlatformAuditPageV2Schema.safeParse(
 		await request({ scope, filters, signal, transport, baseUrl }, query),
 	);
 	if (
@@ -172,7 +173,7 @@ export async function loadAuditDetail({
 	if (!OpaqueIdV1Schema.safeParse(auditId).success)
 		throw new AuditReadError({ kind: "invalid" });
 	const query = queryInput(filters);
-	const parsed = ScopedPlatformAuditProjectionV1Schema.safeParse(
+	const parsed = ScopedPlatformAuditProjectionV2Schema.safeParse(
 		await request(
 			{ scope, filters, signal, transport, baseUrl },
 			query,

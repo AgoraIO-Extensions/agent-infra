@@ -119,6 +119,10 @@ export class SkillPackageSupplierV1 {
 			"trustRevision",
 			"policyRevision",
 			"archiveBytes",
+			// ORGANIZATION 发布显式携带服务端解析的目标组织，由 Store 登记时复核。
+			...(Object.hasOwn(descriptors, "organizationId")
+				? ["organizationId"]
+				: []),
 		];
 		if (
 			Reflect.ownKeys(descriptors).length !== fields.length ||

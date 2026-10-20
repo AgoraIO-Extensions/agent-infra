@@ -32,7 +32,8 @@ export type NavigationKey = keyof typeof navigationLabels;
 
 /**
  * 侧栏分组与顺序。设计稿中的 Builder 在 main 尚无路由，暂不列出；
- * 运维观测不在设计稿中，保留在系统管理末尾，去留待产品结论。
+ * 运维观测不在设计稿中，按 #2862 定论保留在系统管理末尾（PRD §11.1、§14.2），
+ * 页面结构以 docs/development/web-ui.md「运维观测页」为准。
  */
 export const navigationGroups: readonly {
 	label: NavigationGroup;

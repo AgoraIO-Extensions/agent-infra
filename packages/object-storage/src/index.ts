@@ -170,6 +170,7 @@ export {
 } from "./s3.js";
 export * from "./skill-package-admission.js";
 export { createClamAvSkillPackageScannerV1 } from "./skill-package-clamav.js";
+export { readAdmittedSkillPackageEntryV1 } from "./skill-package-content.js";
 export {
 	type SkillPackageMaterializationDetailsV1,
 	type SkillPackageMaterializationInputV1,
@@ -183,3 +184,4 @@ export {
 	SkillPackageSupplierV1,
 	type SkillPackageSupplyInputV1,
 } from "./skill-package-supplier.js";
+export { createSkillProjectSourceVerifierV1 } from "./skill-project-source.js";

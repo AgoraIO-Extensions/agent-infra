@@ -1,8 +1,22 @@
 import { Bot, ChevronLeft, ChevronRight, Square, User } from "lucide-react";
-import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+	Fragment,
+	memo,
+	type ReactNode,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Button } from "../../components/ui/button.js";
+import {
+	Collapsible,
+	CollapsiblePanel,
+	CollapsibleTrigger,
+} from "../../components/ui/collapsible.js";
 import { LoadingLine } from "../../components/ui/spinner.js";
 import { Timestamp } from "../../components/ui/timestamp.js";
 import {
@@ -32,7 +46,9 @@ import {
 	executionStatus,
 	executionStatusLabels,
 	isTerminal,
+	reasoningTexts,
 } from "./conversation-screen-state.js";
+import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
 
 /** 进行中回复的停止入口：只渲染在该 Execution 的回复卡内（R4-07）。 */
 export type ConversationStopControl = Readonly<{
@@ -79,7 +95,7 @@ export function ConversationMessages({
 	/** 当前会话用户的显示名：个人对话只对本人可见，用户消息的发送者就是当前用户（CH-08）。 */
 	userName: string;
 	history: ConversationDetailProjectionV2;
-	events: readonly PersistedConversationEventV2[];
+	events: readonly ConversationTimelineEventV2[];
 	/** 页面认定的当前 Execution 与状态（含刚受理、尚无状态事件的回复）。 */
 	current?: Readonly<{
 		executionId: string | undefined;
@@ -103,6 +119,11 @@ export function ConversationMessages({
 	trailing?: ReactNode;
 }) {
 	const [versions, setVersions] = useState<Record<string, string>>({});
+	// #2981：用户对各 Execution 思考过程的展开选择。按 Execution 保存，回复卡从实时卡换成
+	// 历史回答、或切换回答版本后仍沿用；没有选择时按默认规则展开或收起。
+	const [thinkingOpen, setThinkingOpen] = useState<Record<string, boolean>>({});
+	// 推理流可能有上万条增量：每次事件变化只遍历一次，各回复卡直接按 Execution 取用。
+	const thinking = useMemo(() => reasoningTexts(events), [events]);
 	// 从回复卡就地加载更早内容后，正文出现时把焦点移到该回复（NW-15）。
 	const [focusAfterLoad, setFocusAfterLoad] = useState<string>();
 	const articles = useRef(new Map<string, HTMLElement>());
@@ -196,6 +217,19 @@ export function ConversationMessages({
 					: undefined
 			}
 			versions={versionControl}
+			thinking={
+				executionId
+					? {
+							text: thinking.get(executionId),
+							open: thinkingOpen[executionId],
+							onOpenChange: (open) =>
+								setThinkingOpen((previous) => ({
+									...previous,
+									[executionId]: open,
+								})),
+						}
+					: undefined
+			}
 			files={
 				onDownloadFile && executionId ? (
 					<ResultFiles
@@ -445,6 +479,7 @@ function AssistantReply({
 	fallback,
 	earlier,
 	versions,
+	thinking,
 	files,
 }: {
 	articleRef: (node: HTMLElement | null) => void;
@@ -463,9 +498,16 @@ function AssistantReply({
 	fallback?: ModelFallback;
 	earlier?: { loading: boolean; failed: boolean; onLoad: () => void };
 	versions?: ReactNode;
+	/** #2981：该 Execution 的思考过程与用户的展开选择（未选择时为 undefined）。 */
+	thinking?: {
+		text: string | undefined;
+		open: boolean | undefined;
+		onOpenChange: (open: boolean) => void;
+	};
 	files?: ReactNode;
 }) {
 	const pending = status === "submitted" || status === "processing";
+	const answered = bodyKind === "text" && Boolean(text);
 	const meta = pending ? (
 		<LoadingLine className="message-loading">
 			{executionStatusLabels[status]}
@@ -551,8 +593,17 @@ function AssistantReply({
 			articleRef={articleRef}
 			focusable
 		>
+			{/* #2981：思考过程在回答正文之上；模型没有提供思考内容时不渲染。 */}
+			{thinking?.text && (
+				<ThinkingProcess
+					text={thinking.text}
+					open={thinking.open ?? (pending && !answered)}
+					onOpenChange={thinking.onOpenChange}
+					objectName={objectName}
+				/>
+			)}
 			{/* 失败与已停止且无正文时只用状态行说明，不再写「尚未输出正文。」（R4-08）。 */}
-			{bodyKind === "text" && text ? (
+			{answered ? (
 				<AssistantMarkdown>{text}</AssistantMarkdown>
 			) : pending ? (
 				<p className="message-pending">正在整理结果…</p>
@@ -604,13 +655,63 @@ function keyOf(part: ReactNode, index: number) {
 		: `segment-${index}`;
 }
 
+/**
+ * #2981：回答上方可折叠的「思考过程」（PRD §11.2）。摘要行与会话折叠条一样高 44px，
+ * 「展开 / 收起」只是视觉提示，不进入可访问名称；同页多张回复卡用提问摘要区分（N-12）。
+ * 正文按纯文本显示，不设 live region：状态已由 meta 行播报，推理流的每条增量也不必
+ * 重新解析 Markdown。面板常驻 DOM（keepMounted），收起只隐藏。
+ */
+function ThinkingProcess({
+	text,
+	open,
+	onOpenChange,
+	objectName,
+}: {
+	text: string;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	objectName?: string;
+}) {
+	const panelId = useId();
+	return (
+		<Collapsible
+			className="message-thinking"
+			open={open}
+			onOpenChange={onOpenChange}
+		>
+			<CollapsibleTrigger
+				className="message-thinking-summary"
+				aria-controls={panelId}
+				aria-label={withObjectName("思考过程", objectName)}
+			>
+				<strong>思考过程</strong>
+				<span className="message-thinking-toggle" aria-hidden="true">
+					{open ? "收起" : "展开"}
+				</span>
+			</CollapsibleTrigger>
+			<CollapsiblePanel id={panelId} className="message-thinking-body">
+				<ThinkingText text={text} />
+			</CollapsiblePanel>
+		</Collapsible>
+	);
+}
+
+/** 只在思考文本变化时重新渲染，回复卡的其他更新不会重排长文本。 */
+const ThinkingText = memo(function ThinkingText({ text }: { text: string }) {
+	return (
+		<p className="message-thinking-text whitespace-pre-wrap break-words">
+			{text}
+		</p>
+	);
+});
+
 function ResultFiles({
 	events,
 	executionId,
 	onDownloadFile,
 	downloadingFileId,
 }: {
-	events: readonly PersistedConversationEventV2[];
+	events: readonly ConversationTimelineEventV2[];
 	executionId: string;
 	onDownloadFile: (file: ResultFile) => Promise<boolean>;
 	downloadingFileId?: string;

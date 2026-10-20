@@ -469,8 +469,12 @@ function CredentialRow({
 					</Badge>
 				</TableCell>
 				<TableCell data-label="有效期">
-					{revoked ? (
-						"已撤销"
+					{revoked && credential.revokedAt ? (
+						// 已撤销的个人凭证只显示撤销时间，不提供详情或轮换（#2862，PRD §7.3）。
+						<span>
+							已撤销于{" "}
+							<Timestamp value={credential.revokedAt} style="absolute" />
+						</span>
 					) : credential.expiresAt ? (
 						<Timestamp value={credential.expiresAt} style="absolute" />
 					) : (

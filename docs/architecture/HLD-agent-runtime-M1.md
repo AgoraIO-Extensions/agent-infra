@@ -162,7 +162,7 @@ Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation
 - 将 Platform 已持久化的消息/任务 Execution 提交为一个带已固化有效模型选择的 Turn，并接收 accepted/busy/rejected/unknown；平台受理和 Runtime 接受是不同阶段，Host 不创建平台 Execution。
 - 停止当前 Turn，以及在 capability 支持时提交补充指令。
 - 查询 Session 和 Turn 状态。
-- 订阅并归一化文本、状态、文件、完成和错误事件；实际模型/工具事实按 8.5 生产，不把自由文本摘要当作可信操作结果。
+- 订阅并归一化文本、思考过程、状态、文件、完成和错误事件；实际模型/工具事实按 8.5 生产，不把自由文本摘要当作可信操作结果。思考过程的事件版本与读取边界见[工程 Spec §8.2](SPEC-agent-infra-M1-engineering-architecture.md#82-sse)。
 - 探测模型、附件、结果文件、Connection 和补充指令 capability；Browser Capability 的内部 probe 另由 §4.2 的版本化契约定义，尚不等同于 Platform/API Agent projection。
 
 `packages/agent-runtime` 实现 RuntimeHost 深 Module 和四个固定 Runtime Driver；`apps/agent-runtime-host` 只负责 Agent Pod 内的进程入口、依赖装配和 HTTP/SSE 接入。worker 侧 RuntimeHost Client Adapter 只依赖版本化 Host Contract，不依赖该 package 或任何 Native/ACP library。Agent Service 对 `platform-worker` 始终提供同一内部 HTTP/SSE Interface。
@@ -404,14 +404,15 @@ execution/turn/digest 不匹配时整次拒绝。映射由部署提供受保护�
 
 - 每个 Adapter 必须为原生事件提供跨重连稳定的 `adapterEventKey` 和可持久化的 Runtime 事件恢复游标。优先使用 Runtime 提供的持久事件 ID；若 Runtime 不提供稳定 ID 和重放，则 Pod 内的 Runtime Host 或 Bridge 必须在首次转发前持久化事件日志并分配单调事件 ID，保留未确认事件并支持按该 ID 重放。禁止使用重连后可能重置或重新分块的流内序号派生。
 - Platform DB 对 Runtime 来源事件的 `(executionId, adapterEventKey)` 建立唯一约束，并在处理事件时先查找该键。已保存的重复事件直接返回原 `eventId`、`sequence` 和 `conversationCursor`，不再次写入或推进游标；只有新事件才校验当前 `sessionGeneration` 和 `deliveryFence`，旧 token 产生的新事件或状态写必须拒绝。新事件首次插入成功时，平台通过 Conversation 锁或等价的数据库原子序列机制，在同一事务中保存事件、推进该 Execution 的已确认 Runtime 事件游标，并分配稳定 `eventId`、Execution 内递增 `sequence` 和 Conversation 内严格递增 `conversationCursor`；事务失败或 token 过期不产生可见事件、游标推进或平台确认。
-- Runtime 来源与 Platform 来源事件共享 Execution `sequence` 和 Conversation `conversationCursor`，数据库保存不可由 Runtime 命令选择的来源判别。Runtime 来源必须保存非空 Runtime cursor，且 Runtime 事件 Interface 不接受 Platform 来源类型。平台任务的受理、等待、取消请求/确认、失败和待核实等状态事件，以及 `model.selection.fell_back`，只由 Core 的对应事务写入并保存空 Runtime cursor（Worker 失败/待核实收敛见 [8.1](#81-消息与命令幂等)）；Platform 操作的每次持久状态转换生成稳定事件引用，重试复用原引用，不同事件类型或不同状态转换不能共用去重键，也不能伪造 Runtime cursor。标准模板所选模型或推理强度失效时，消息准入事务将 notice 和对应审计绑定到本次消息的 Execution：初始消息与重新生成绑定事务内新建 Execution，补充指令绑定已锁定的活跃 Execution；payload 只保存实际采用的 `modelOptionId`、`reasoningLevel` 和固定 `selection_unavailable` 原因。该事务同时分配并推进下一 Execution `sequence` 和 Conversation `conversationCursor`，但不改变最后确认的 Runtime cursor；幂等重放返回原消息结果且不重复事件，后续或并发 Runtime 事件从已推进的平台计数器继续分配。事件、审计、消息、Execution、outbox、幂等记录或任一计数器写入失败时全部回滚。
+- Runtime 来源与 Platform 来源事件共享 Execution `sequence` 和 Conversation `conversationCursor`，数据库保存不可由 Runtime 命令选择的来源判别。Runtime 来源必须保存非空 Runtime cursor，且 Runtime 事件 Interface 不接受 Platform 来源类型。平台任务的受理、等待、取消请求/确认、失败和待核实等状态事件，以及 `model.selection.fell_back`，只由 Core 的对应事务写入并保存空 Runtime cursor（Worker 失败/待核实收敛见 [8.1](#81-消息与命令幂等)）；Platform 操作的每次持久状态转换生成稳定事件引用，重试复用原引用，不同事件类型或不同状态转换不能共用去重键，也不能伪造 Runtime cursor。标准模板所选模型或推理强度失效时，消息准入事务将 notice 和对应审计绑定到本次消息的 Execution：初始消息与重新生成绑定事务内新建 Execution，补充指令绑定已锁定的活跃 Execution；payload 只保存实际采用的 `modelOptionId`、`reasoningLevel`、固定 `selection_unavailable` 原因，以及会话原所选选项的 ID 与受理时的显示名（取值与事件版本见[工程 Spec §8.2](SPEC-agent-infra-M1-engineering-architecture.md#82-sse)）。该事务同时分配并推进下一 Execution `sequence` 和 Conversation `conversationCursor`，但不改变最后确认的 Runtime cursor；幂等重放返回原消息结果且不重复事件，后续或并发 Runtime 事件从已推进的平台计数器继续分配。事件、审计、消息、Execution、outbox、幂等记录或任一计数器写入失败时全部回滚。
 - Turn 的事件 outbox 只有在 Runtime 终态事件已持久化后才能完成。状态查询返回的终态只证明 Runtime 已结束，不代替事件流排空；Host 按页回放事件时，Worker 在读到终态事件前持续续读，不能因 Platform DB 已记录终态而提前结束。
 - 同一次认领的续读与 ACK 沿用排空已完成的准备：每次请求离开 Worker 前，仍从 Platform DB 重读租约、fence、Session 状态与授权记录并重新评估当前授权，除已确认游标外任一状态变化都重新完整准备，授权或路由记录变化即拒绝或改签控制用途 Grant。只有对 Workload 与 Session Service 的 Kubernetes 实际路由观测可以复用：授权评估后距上次观测开始不足 2 秒即沿用，否则重新观测，观测结果变化或不可用时不发送；Turn 提交、补充指令和 Connection 安装请求不复用该观测。业务用途的事件续读、ACK 与执行续期重新观测时，签名 readiness 可沿用同一 Worker 进程内 Workload 监测或完整观测最近一次通过的结果：该结果绑定同一 Workload UID/generation、Workload revision 和 fence，距通过不超过一个监测周期（30 秒），且 Workload 当前为 ready、无未消化的探测失败；此时仍核对 Kubernetes 实际路由、漂移、Pod 就绪与 `/healthz`。任一条件不满足、或任何一次完整观测未通过时，回到完整签名 readiness。Turn 提交、补充指令、状态核实和 Connection 安装的每次准备在最后一次路由解析执行完整签名 readiness；同一次准备中此前用于核对路由记录的解析，以及发送前的复核，可沿用同一 Pod 的该次结果；控制用途始终执行完整签名 readiness。
 - Runtime 在事件读完前结束时，Host 不再续期原业务授权。Worker 以状态核实取得终态证明并在同一租约内持久化后，于同一次认领中改用控制用途 Grant 续读至终态事件，outbox 不重新排队（工程 Spec 9.3）；续期被拒但无法证明终态时，沿原恢复路径重新认领。每次认领在首个事件读取或确认前先续期一次业务授权：中断后重新认领时，原授权可能已过期，此时只续期仍在运行的原执行，并按上述规则处理续期被拒；业务授权已因停止或撤权失效时不续期，只经控制用途的状态核实闩住 Host，并用控制用途 Grant 续读；续期请求本身失败时重新认领，不把该 Turn 判为失败。
 - Worker 只能在上述事务提交后向 Runtime Host、Bridge 或原生 Runtime 确认已处理游标。Runtime 事件连接中断、Worker/Pod 重启或事件事务失败时，Adapter 从 Platform DB 最后已确认游标重放；事务已提交但 Runtime 确认前崩溃会产生可去重的重放，不能丢失事件。浏览器 SSE 连接状态不得推进该 Runtime 游标。确认是累计的：确认某个已提交游标即确认其前的全部事件，Worker 可以按批只确认最后已提交游标；Runtime 等待确认才继续的事实（如标准工具调用事实）和终态事件提交后立即确认，未确认事件数保持在 Host 上限以内。
 - 跨 Execution 或迟到的首次事件按实际持久化顺序追加。重复事件返回已有平台事件及原 `sequence` 和 `conversationCursor`，不能重新分配游标。
-- 高频文本可以在同一事务中批量持久化，但不能合并原生事件边界。批次内每个原生事件保留稳定 `adapterEventKey`，按原始顺序独立生成平台事件及游标；事务提交前不能推送内容，重试同一批次必须返回已保存事件及原游标，不能重复追加文本或改变最终文本顺序。
-- Runtime Driver 同样可以把原生文本增量合并为一次 `durable commit`：读取原生事件不等待逐条落盘，相邻两次提交至少间隔 100 ms，持久写进行期间与间隔内收到的增量并入下一次提交；每个增量仍是独立 journal 事件并保留到达顺序与到达时间，提交前不可回放；其他原生通知先等待此前收到的增量提交。持久写失败时该批全部不可见，并按原生通知失败处理。Host 一页事件读取最多一次持久写，状态未变化的复核不重写；一页总是包含可读的前 8 个事件，并在总数不超过 64、序列化事件字节不超过 Worker 接受的 1 MiB 时带出更多积压事件。
+- 高频文本与思考增量可以在同一事务中批量持久化，但不能合并原生事件边界。批次内每个原生事件保留稳定 `adapterEventKey`，按原始顺序独立生成平台事件及游标；事务提交前不能推送内容，重试同一批次必须返回已保存事件及原游标，不能重复追加文本或改变最终文本顺序。
+- Runtime Driver 同样可以把原生文本与思考增量合并为一次 `durable commit`：读取原生事件不等待逐条落盘，相邻两次提交至少间隔 100 ms，持久写进行期间与间隔内收到的增量并入下一次提交；每个增量仍是独立 journal 事件并保留到达顺序与到达时间，提交前不可回放；其他原生通知先等待此前收到的增量提交。持久写失败时该批全部不可见，并按原生通知失败处理。Host 一页事件读取最多一次持久写，状态未变化的复核不重写；一页总是包含可读的前 8 个事件，并在总数不超过 64、序列化事件字节不超过 Worker 接受的 1 MiB 时带出更多积压事件。
+- Codex Driver 把官方原始推理与推理摘要的增量通知分别归一化为 `kind: raw` 与 `kind: summary` 的 `reasoning` 事件，与正文增量共用上述批次与到达顺序，不拼入回答正文。只输出模型以明文提供的增量，不输出 `encrypted_content`、签名或被隐藏的思考；模型未提供时不产生该事件，也不补造内容。
 - Codex Runtime Driver 把已结束 Turn 的 journal 移出主状态文件：Worker 确认到该 Turn 的终态事件时，或 Driver 启动时，先把 journal 原样写入独立文件并同步落盘，再以一次持久提交删除主状态中的 journal 并记录固定大小的索引项（字节数、SHA-256、事件数、游标序列范围与终态）。只归档终态唯一、不可能再追加的 journal：没有待定操作、原生工具 attempt、子执行源、Connection 恢复、未结束的标准 MCP 调用或中断。两步之间失败或崩溃只保留原 journal，之后重复归档。启动时按索引读取并校验全部归档文件，缺失或不一致按 §7.3 拒绝恢复。回放、游标、事件字节与 ACK 语义不变，归档后的 ACK 只校验游标、不再写入；主状态只随未结束 Turn 的事件与每个 Turn 的固定索引项增长。
 - Runtime 的 `execution.detail` 只作为 Agent 提供的过程摘要，浏览器标明其来源。自由文本或摘要中自报的 `callId` 不能建立可信外部调用绑定，也不能据此补齐模型、Provider、账号或结果。实际模型/工具事实走 8.5 的结构化事件；平台对 Connection 只保存按第 9 节核实的关联引用，不建立 Connection 状态或审计投影。
 
@@ -761,10 +762,11 @@ Agent Pod 的 ServiceAccount、网络隔离、出站范围、Secret 注入和运
 
 Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineering-architecture.md#123-事件保存)与脱敏边界。
 
-历史迁移的部署入口使用独立的[一次性迁移 Job](../../deploy/helm/runtime-legacy-migration/README.md)，
-由既有 CLI 消费原 PVC 及独立只读信任文件。部署方先完成正常停机和 PVC 清退；提交模式还须
-维持全部 Platform API/Worker 入口的隔离维护窗口。该 Job 不属于主应用升级 hook，不改变
-第 8.1 节的历史证明与授权约束，也不向长期 Workload 增加未消费的信任配置。
+历史迁移由部署方在构建后的 Host 目录手工运行既有 `legacy-migration-cli.mjs` 完成，输入与
+提交语义见 [Runtime 部署说明](../../deploy/runtime/README.md#就绪证明与历史-session-迁移)。
+迁移只消费原 PVC 及独立只读信任文件；部署方先完成正常停机和 PVC 清退，提交模式还须维持
+全部 Platform API/Worker 入口的隔离维护窗口。该迁移不属于主应用升级 hook，不改变第 8.1 节
+的历史证明与授权约束，也不向长期 Workload 增加未消费的信任配置。
 
 ### 10.1 Codex Linux sandbox 启动准入
 
@@ -793,6 +795,7 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
 [Sandbox ADR](../adr/0017-session-owned-sandbox-isolation.md)。
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、带 Execution 级有效模型选择的 Turn、流式事件与按已确认游标重放、停止、状态和 capability。
+- Codex 思考过程验证覆盖：原始推理与推理摘要通知映射为 `reasoning` 事件，并与正文增量保持同批与到达顺序；`encrypted_content` 和签名不输出；回答正文、任务输出与企微答案不含思考内容；V1 SSE 与 Task 投影跳过该事件但推进游标；跨用户、跨 Agent 读不到思考过程；推理中出现的凭证片段被模型传输拦截。真实验收在固定环境用提供原始推理的模型完成 Web 与企微链路。
 - 四模板分别以真实镜像、Driver 与 Relay 模型链路验证可申请状态；未就绪项显示受限原因并拒绝申请。合成目录、`/v1/models` 可见、Fake Driver 或单个模板通过不证明其他模板就绪。
 - 标准模板 Key 契约覆盖同 Agent 的 Alice/Bob 使用不同个人 Key、Web/企微与全部 API/Eval 费用归属、缺失/失效/额度不足不回退、Owner 清单与个人 Key 实际权限不一致的调用失败、Key K1→K2 替换后的新旧执行分离、Relay 撤销 K1、Worker/Pod 重启后同版本恢复，以及跨主体、Agent、Execution、渠道/用途和 Grant/fence 的负向替换。OpenCode/Pi 还须以同一模型的相邻执行验证旧 native handle 退役、新 Key 实际生效和原 Session 连续；旧 handle 排空失败必须拒绝。证实 Key 原值不进入 Pod env/Kubernetes Secret、持久状态、日志、事件、错误或普通查询。
 - API 与 Store/Worker 组合验证用户/应用任务的受理、默认新会话幂等、显式续接、同会话排队、不同会话容量、启动/更新等待、满容量受理前拒绝、等待到期及重启后原顺序/期限恢复；Web 仍可合法补充指令且新 Turn 不插队，停止/停用/故障不能由提交任务绕过。

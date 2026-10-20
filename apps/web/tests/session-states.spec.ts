@@ -1,5 +1,11 @@
-import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
-import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
+import {
+	AgentDetailProjectionV1Schema,
+	AgentProjectionV2Schema,
+} from "@agent-infra/contracts/pilot";
+import {
+	pilotAgentDetailFromV2,
+	pilotFakeScenariosV2,
+} from "@agent-infra/test-support/pilot";
 import { expect, type Page, test } from "@playwright/test";
 import { pendingApplication } from "../src/features/my-agents/test-fixtures";
 
@@ -8,6 +14,9 @@ const agent = AgentProjectionV2Schema.parse({
 	...pilotFakeScenariosV2.starting.response.body,
 	agentId: "agent-states-1",
 });
+const agentDetail = AgentDetailProjectionV1Schema.parse(
+	pilotAgentDetailFromV2(agent),
+);
 const application = {
 	...pendingApplication,
 	applicationId: "application-states-1",
@@ -76,6 +85,11 @@ async function platform(
 		if (url.pathname === `/api/v2/agents/${agent.agentId}`) {
 			counts.agent += 1;
 			return fulfill(route, replies.agent?.() ?? { status: 200 }, agent);
+		}
+		// Agent 详情页读取带 Owner 状态的详情投影（#2910）；配置与 Skill 页仍读 V2。
+		if (url.pathname === `/api/v2/agents/${agent.agentId}/detail`) {
+			counts.agent += 1;
+			return fulfill(route, replies.agent?.() ?? { status: 200 }, agentDetail);
 		}
 		if (
 			url.pathname === `/api/v2/agent-applications/${application.applicationId}`
@@ -470,7 +484,9 @@ for (const target of recoveryPages) {
 		const readPath =
 			target.key === "application"
 				? `/api/v2/agent-applications/${application.applicationId}`
-				: `/api/v2/agents/${agent.agentId}`;
+				: target.path === `/agents/${agent.agentId}`
+					? `/api/v2/agents/${agent.agentId}/detail`
+					: `/api/v2/agents/${agent.agentId}`;
 		for (const [status, name] of [
 			// 401：会话仍有效，但数据仍返回 401。
 			[401, "重新登录"],

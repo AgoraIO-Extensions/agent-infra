@@ -173,7 +173,7 @@ describe("Worker V3 Runtime Client", () => {
 		expect(received).toEqual(wireEvents);
 		const before = received[0];
 		const after = received[1];
-		if (before?.schemaVersion !== 2 || after?.schemaVersion !== 2)
+		if (before?.type !== "operation" || after?.type !== "operation")
 			throw new Error("Expected domain operation facts");
 		expect(() =>
 			requireConversationOperationSuccessorV2([before.payload], after.payload),
@@ -253,6 +253,76 @@ describe("Worker V3 Runtime Client", () => {
 					received.push(entry);
 			}).rejects.toMatchObject({ code: "RUNTIME_EVENT_INVALID" });
 			expect(received).toEqual([]);
+		}
+	});
+	it("passes plain reasoning deltas through unchanged and rejects malformed ones (#2979)", async () => {
+		const reasoning = (cursor: string, payload: Record<string, unknown>) => ({
+			schemaVersion: 2,
+			adapterEventKey: `reasoning-${cursor}`,
+			executionId: "execution",
+			cursor,
+			occurredAt: "2026-09-14T12:00:00Z",
+			type: "reasoning",
+			payload,
+		});
+		const stream = (events: readonly { cursor: string; type: string }[]) =>
+			vi
+				.fn<typeof fetch>()
+				.mockResolvedValue(
+					new Response(
+						events
+							.map(
+								(event) =>
+									`id: ${event.cursor}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+							)
+							.join(""),
+						{ headers: { "content-type": "text/event-stream" } },
+					),
+				);
+		const wireEvents = [
+			reasoning("cursor-1", { kind: "raw", delta: "synthetic thought" }),
+			{
+				schemaVersion: 1,
+				adapterEventKey: "text-2",
+				executionId: "execution",
+				cursor: "cursor-2",
+				occurredAt: "2026-09-14T12:00:01Z",
+				type: "text",
+				payload: { delta: "answer" },
+			},
+			reasoning("cursor-3", { kind: "summary", delta: "synthetic summary" }),
+		];
+		const received = [];
+		for await (const entry of client(stream(wireEvents)).events({
+			...base,
+			consumer: "platform_worker_persistence",
+			afterCursor: null,
+		}))
+			received.push(entry);
+		expect(received).toEqual(wireEvents);
+		for (const invalid of [
+			reasoning("cursor-1", { kind: "encrypted", delta: "opaque" }),
+			reasoning("cursor-1", { kind: "raw", delta: "" }),
+			reasoning("cursor-1", {
+				kind: "raw",
+				delta: "synthetic thought",
+				encrypted_content: "opaque",
+			}),
+			{
+				...reasoning("cursor-1", { kind: "raw", delta: "synthetic thought" }),
+				executionId: "other-execution",
+			},
+		]) {
+			const rejected: unknown[] = [];
+			await expect(async () => {
+				for await (const entry of client(stream([invalid])).events({
+					...base,
+					consumer: "platform_worker_persistence",
+					afterCursor: null,
+				}))
+					rejected.push(entry);
+			}).rejects.toMatchObject({ code: "RUNTIME_EVENT_INVALID" });
+			expect(rejected).toEqual([]);
 		}
 	});
 	it("sends only the original digest for control recovery, including when Host ref is unknown", async () => {

@@ -145,6 +145,8 @@ describe("RuntimeHost durable Session", () => {
 		"invalid V1",
 		"foreign operation",
 		"foreign V1",
+		"invalid reasoning",
+		"foreign reasoning",
 	])(
 		"validates %s events before replay and stream delivery",
 		async (scenario) => {
@@ -202,6 +204,15 @@ describe("RuntimeHost durable Session", () => {
 					type: "text",
 					payload: { delta: "synthetic-event-after-operation" },
 				},
+				// #2979：思考过程是 V2 事件，只走流式读取，不进入 V1 replay。
+				{
+					...base,
+					schemaVersion: 2,
+					adapterEventKey: "event-reasoning",
+					cursor: "cursor-reasoning",
+					type: "reasoning",
+					payload: { kind: "raw", delta: "synthetic-thought" },
+				},
 			];
 			const operation = events[1];
 			if (operation?.type !== "operation")
@@ -213,6 +224,13 @@ describe("RuntimeHost durable Session", () => {
 			if (text?.type !== "text") throw new Error("Missing fixture text");
 			if (scenario === "invalid V1") text.payload.delta = "";
 			if (scenario === "foreign V1") text.executionId = "other-execution";
+			const reasoning = events[3];
+			if (reasoning?.type !== "reasoning")
+				throw new Error("Missing fixture reasoning");
+			if (scenario === "invalid reasoning")
+				(reasoning.payload as { kind: string }).kind = "encrypted";
+			if (scenario === "foreign reasoning")
+				reasoning.executionId = "other-execution";
 			const replay = vi
 				.spyOn(eventDriver, "replayEvents")
 				.mockResolvedValue(events);
@@ -255,8 +273,24 @@ describe("RuntimeHost durable Session", () => {
 					value: events[2],
 				});
 				await expect(iterator.next()).resolves.toEqual({
+					done: false,
+					value: events[3],
+				});
+				await expect(iterator.next()).resolves.toEqual({
 					done: true,
 					value: undefined,
+				});
+			} else if (
+				scenario === "invalid reasoning" ||
+				scenario === "foreign reasoning"
+			) {
+				for (const value of events.slice(1, 3))
+					await expect(iterator.next()).resolves.toEqual({
+						done: false,
+						value,
+					});
+				await expect(iterator.next()).rejects.toMatchObject({
+					code: "RUNTIME_DRIVER_INVALID",
 				});
 			} else if (scenario === "invalid V1" || scenario === "foreign V1") {
 				await expect(iterator.next()).resolves.toEqual({

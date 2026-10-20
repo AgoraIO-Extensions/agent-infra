@@ -221,7 +221,7 @@ agent-infra/
 | Agent Access | Owner、员工/组织范围、管理员手动禁用、应用与责任人、API 凭证范围/失效、显式授权及当前权限交集 | LDAP 员工身份、企微目录快照、Connection 授权 |
 | Agent Configuration | 模板、自定义镜像、交互模式、自有交互入口身份责任、env/Secret、个人与 Agent 默认 Relay Key、模型、渠道和已验证的集成能力 | Relay 路由和 Connection Provider 凭证 |
 | Builder / 多服务 Agent | 普通 Agent 通过现有 Connection 读写 Repo；平台准入受限的多服务资源描述、Digest 版本和最终部署资源 | 用户业务授权、Connection 凭证、生产合并与发布决定 |
-| Conversation | 会话、消息、回答版本、附件引用、执行事件和历史查询 | Agent 内部思考原文 |
+| Conversation | 会话、消息、回答版本、思考过程、附件引用、执行事件和历史查询 | 模型未公开的推理（加密内容、签名或被隐藏的思考） |
 | Agent Dispatch | API 有界受理/等待与投递、幂等、取消/恢复、Web 繁忙与补充指令 | Runtime 内部执行算法、通用调度服务 |
 | Channel | Web、API、企微的主体、会话与附件映射 | Runtime 原生 Session 和协议语义 |
 | Platform Audit | 治理、API/执行/Eval 元数据、持久审计与受控查询 | 会话正文、Connection 状态或审计副本 |
@@ -321,8 +321,10 @@ API 契约覆盖 Agent 创建/启动/停止/重启、任务提交/查询/取消�
 对话回复和状态流使用 `text/event-stream`：
 
 - 每个事件包含稳定 `eventId`、`executionId`、Execution 内递增 `sequence`、Conversation 内严格递增 `conversationCursor`、`type`、`occurredAt` 和类型化 payload。
-- Runtime 来源事件与 Platform 来源事件写入同一持久化时间线并共享上述排序空间。Runtime 来源必须携带非空 Runtime cursor，且不能写入 Platform 保留事件类型；Platform 来源按 Schema 显式区分任务受理/等待/取消/失败/待核实等状态事件和 `model.selection.fell_back`，其中 Worker 失败与待核实收敛事件在同一 Dispatch 事务内写入并保持空 Runtime cursor，Runtime 终态事件已持久化时不追加（见 [Agent Runtime M1 HLD §8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等)）；模型回退事件绑定接收消息的 Execution、Runtime cursor 为空，payload 只包含实际采用的模型选项、推理强度和固定的受限原因。
+- Runtime 来源事件与 Platform 来源事件写入同一持久化时间线并共享上述排序空间。Runtime 来源必须携带非空 Runtime cursor，且不能写入 Platform 保留事件类型；Platform 来源按 Schema 显式区分任务受理/等待/取消/失败/待核实等状态事件和 `model.selection.fell_back`，其中 Worker 失败与待核实收敛事件在同一 Dispatch 事务内写入并保持空 Runtime cursor，Runtime 终态事件已持久化时不追加（见 [Agent Runtime M1 HLD §8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等)）；模型回退事件绑定接收消息的 Execution、Runtime cursor 为空，payload 只包含实际采用的模型选项、推理强度、固定的受限原因，以及会话原所选选项的 ID 与受理时的显示名。
+- 原选项显示名在写入回退事件的同一事务中确定：从不晚于当前已应用配置修订、且包含该选项的最新修订读取原 endpoint/model 关联；部署配置了可信名称时，按该关联解析受理时的显示名，未配置时沿用模型 ID。历史关联或名称无法确认时记为空，之后的配置或部署名称变化不改写已写入的事件。endpoint 标识只在服务端解析名称，不进入公开事件；名称解析不改变原授权与回退选择，也不增加 stop/native metadata 路径的外部依赖。带原选项的回退事件以 `schemaVersion: 2` 进入 V2 混合版本事件历史（V2 Conversation 读取、V2 SSE 与 Task 投影）；只接受 V1 事件的 V1 SSE 仍收到不含原选项的 V1 形状，未记录原选项的旧事件在各读取方保持 V1 原样。
 - 标准模板当前选择失效时，`platform-api` 在接受消息的同一 Conversation 事务中写入一条 `model.selection.fell_back`：初始消息和重新生成绑定新建 Execution，补充指令绑定当前活跃 Execution。该事务同时分配下一 Execution `sequence` 和 Conversation `conversationCursor`、推进两个平台计数器并保存对应审计；幂等重放复用原分配，任何一步失败均整体回滚，且不推进 Execution 的 Runtime cursor。
+- 思考过程：Runtime 以 `schemaVersion: 2` 的 `reasoning` 事件输出模型提供的原始推理或推理摘要增量（`kind` 为 `raw` 或 `summary`，单条上限与正文增量相同），Worker 保存为 Runtime 来源的 `reasoning.delta`，属于会话正文，只在 Conversation 读取权限内返回。该事件只进入 V2 Conversation 读取与 V2 SSE；V1 SSE 和 Task 投影（任务查询、输出与事件订阅）跳过它但推进持久游标。回答正文、任务输出和企微答案只拼接 `text.delta`。发布时先让 Platform 各读取方接受该事件，再更新 Runtime。决策与边界见 [ADR-0026](../adr/0026-show-model-reasoning-as-conversation-content.md)。
 - Web/API 调用方通过 `Last-Event-ID` 或显式游标重连；服务端验证游标属于当前主体有权访问的 Conversation/Execution，任务流不能带出同会话其他任务的数据。
 - 服务端先保存事件，再向在线连接推送；断线后按持久化序列补发。事件事务提交后，数据库发出只含 Conversation 标识的唤醒提示，在线连接据此立即从持久化游标读取；提示只用于缩短等待，丢失时按固定轮询送达，不改变持久化、排序和授权规则。
 - 心跳只用于保持连接，不进入业务时间线。
@@ -378,6 +380,7 @@ M1 不引入 tRPC/oRPC/ConnectRPC。
 - Platform 通过受认证的版本化接口消费通用组织目录，不直接调用企业上游协议。独立配套同步服务的 Adapter 每天从企微或企业内部接口拉取员工与部门，上游 Adapter 负责核实成员有效性与部门归属语义，不能把未知状态默认为有效或把查询范围当成直接归属。只有全量校验成功才原子发布带来源、版本、完整性标记和最长一天有效期的快照；失败保留上一版用于诊断，但过期或不完整快照不能继续授权。Platform 以 LDAP 与快照中唯一、有效的邮箱一对一关联，缺失、重复、停用或无法核实均拒绝依赖该映射的 Owner/可用范围新增与敏感操作；不按名字或请求提交的邮箱猜测。组织成员变化以新完整快照生效，允许最长一天延迟。
 - 平台不维护独立员工目录，只保存业务所需的稳定 LDAP 用户引用、管理员手动禁用状态和授权记录。管理员禁用在 Platform DB 中持久化并审计，优先于 LDAP active 结果；解除禁用也须当前 LDAP 账号有效，不修改 LDAP 或企微源数据。
 - LDAP 当前账号状态、Platform 手动禁用及适用的组织快照在每次敏感操作前重新解析；LDAP 停用和手动禁用立即拒绝，短期缓存不能成为独立权限来源。IdentityAdapter 或目录依赖缺失、非法、过期或不可用时，依赖其结果的敏感操作 fail closed，不能使用调用方字段或不受控旧缓存继续授权。
+- Agent 详情投影 `GET /api/v2/agents/{agentId}/detail` 为每个 Owner 返回服务端当次解析的有效状态，可见性与 `GET /api/v2/agents/{agentId}` 相同，不可见与不存在不可区分；`AgentProjectionV2`、列表和命令响应保持不变。第一方 LDAP IdentityAdapter 逐个 Owner 按上述当前事实判定：LDAP 中已查不到该账号为 `departed`；LDAP 停用或 Platform 管理员禁用为 `disabled`；LDAP、禁用记录与适用的目录快照均确认有效才为 `active`；任一依赖失败、快照缺失或过期、邮箱关联无法核实时为 `unavailable`。单个 Owner 的状态不使整个投影失败，也不以默认值、旧缓存或调用方字段补齐；未提供该能力的 IdentityAdapter 只返回 `unavailable`。状态只用于展示，不替代 9.2 的授权检查。
 - IdentityAdapter 确认账号禁用时，平台为该用户全部仍活跃的 Execution 幂等创建平台来源的停止工作项；若平台确认用户失去某个 Agent 的可用范围或某个渠道的权限，则只处理服务端保存的 Agent 或渠道授权上下文受该撤权事实影响的活跃 Execution。该控制操作不借用已撤权用户的调用权限。具体投递和竞态规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md#81-消息与命令幂等)。
 
 Connection 不消费 Platform 浏览器会话或 Platform API 凭证；其 LDAP 登录、OAuth 客户端身份、授权及复核机制由 [Connection M1 HLD](HLD-connection-M1.md) 定义。
@@ -823,6 +826,8 @@ UID 或不匹配的 fence 不能授权删除。停止、停用或更高管理 fe
 - 部署通过既有 ModelCatalogAdapter 提供固定、获准的 Relay endpoint、protocol profile 和流式/tool/reasoning 能力政策；Owner 不能输入 Base URL、认证 header 或目录外 endpoint。目录快照继续使用 `schemaVersion: 1`、精确 `revision`、`validUntil`、TLS/禁止重定向和可用状态，过期、移除或不兼容时拒绝新配置。Responses 与 Messages 仍分别按目录 profile 和标准模板 Driver 绑定，不能按 URL 或模型名猜协议。
 - 标准模板申请或 API 创建提交一把 Agent 默认 Relay Key；任一当前 Owner 可替换。使用者在个人设置提交本人用于 Web/企微的 Relay Key。两类 Key 分别以 Agent 或用户为用途和 AAD 加密、版本化、不可回显；API 只写密文，Worker-only keyring 按授权用途解密。平台审计提交者，不使用 Relay Admin API 枚举 Key，也不声称已核实个人 Key 的 Relay 账号归属。Relay 实际按 Key 归属计费和授权；Platform 不建 Agent Group 权威。
 - Owner 允许模型与默认模型从 Agent 默认 Key 的 Relay `/v1/models` 可见结果和所选 Driver 的能力交集选取，reasoning 档位也须被模板支持；目录仍可进一步限制。`/v1/models` 仅用于候选展示，不证明真实模型请求必然成功。Web/企微只展示 Owner 允许清单，不按个人 Key 预过滤；API 使用同一 Owner 清单。候选、默认值或 capability 无效时拒绝保存或提交，不静默切换模型。实际认证、模型和额度错误由 Relay 返回后映射为稳定、脱敏、可操作的错误。
+- 模型显示名由 API 的受信部署输入提供，按精确的 `endpointId`、`modelId` 关联，并由 ModelCatalog 模块校验名称表及其当前目录关联。名称只用于展示，不参与允许集合、协议、Key、版本或执行绑定；不能从浏览器输入、模型自报名称或解析 `optionId` 推导。名称非空、有界且不含控制字符，重复关联、未知端点或目录政策不允许的模型拒绝；缺少名称时保留真实 `modelId`，不杜撰名称或缩小候选集合。已授权配置查询为内部展示保留端点关联，对外明确选取既有 `ModelOptionProjectionV1` 字段，不透传端点或部署输入。
+- 带显示名的默认 Key 候选使用独立的 `GET` / `POST /api/v2/agents/{agentId}/default-relay-key/display-candidates`，响应 envelope 与候选项组成独立的 strict `schemaVersion: 2` 投影；新 Key 和已存 Key 两条路径沿用原授权、候选交集、配置修订及 Key 版本检查后，由 API 装配名称。旧 `/candidates` 路径精确保留原 V1 响应，政策 Catalog V1、部署目录 V2 与 Worker 私有 saved-Key V1 不增加字段。Web 显式消费新入口，选择、比较和保存仍使用原稳定 ID；同名不合并，不把旧响应推断为已支持显示名。契约继续按 §6.4 从 Zod 生成并验证精确兼容边界。
 - 每次受理标准模板 Execution 时，在同一持久事务内冻结 `modelOptionId`、`reasoningLevel`、Key 用途、密文引用和版本：Web/企微绑定实际发送者的个人 Key，全部 Platform API 调用及 Eval 样本运行绑定 Agent 默认 Key；Eval 模型评分也绑定其工作项开始时的 Agent 默认 Key。界面明确费用归属。缺 Key、失效或额度不足不自动回退到其他主体的 Key；Relay 拒绝调用时如实失败。个人或 Agent Key 替换后，新执行选新版本，已受理执行继续用旧版本至终态；仅 Relay 撤销或实际调用失败才使其失败。旧密文在所有引用它的执行终态前不能回收，停止和恢复也不得改绑版本。
 - Workload 候选仅预检目录/Driver/profile/模型选项结构及固定 Relay 路由；四个模板的真实镜像与模型链路须逐项独立验证。模型选项集合以 `RuntimeModelConfigurationV4` 保存并校验；该配置仅包含 endpoint、protocol、authentication、模型、reasoning 和能力绑定，**不包含 Key 原值或引用**。它可以沿用现有 immutable 配置 Secret、candidate/verified 投影、指纹、fence 和回滚机制，但不再生成 `AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_*`。调谐、回滚和 Pod 重启不能从 Kubernetes Secret、env 或旧 active 配置取得任何用户或 Agent 默认 Relay Key。
 - Worker 在当前业务 Grant、Execution、选择与 Key 引用/版本一致后，才通过既有受认证且具传输保密的 Worker–Host 私有接口交付本次 Key；原值只在 Worker 解密缓冲区和 Host/Driver 的本次执行内存存在，不进入 Grant、公共 RuntimeSelection、配置、Pod env、PVC、journal、日志、事件或普通错误。Host 在模型请求前核对 Agent、Conversation、Execution、渠道/用途、版本及 operation/fence；同 Agent 的不同用户和相邻 Execution 不能复用传输能力。补充指令继续绑定原 Execution。Worker/Host 重启时只为仍获准的原执行重交同一版本；无法确认旧版本或授权时拒绝恢复，不用当前 Key 替代。执行结束排空在途请求后清除内存中的 Key。
@@ -884,6 +889,9 @@ profile 校验 reasoning；此匹配不代表供应商支持该后缀。多斜�
 已验证 profile 的配置拒绝。父进程仅按完整
 内部模型名查询当前批准集合，将请求的 model 改回真实 model，并使用该项固定 Relay endpoint 与原 Execution 的 Key；不根据模型正文、调用方 URL 或同名 model 猜测路由。该方式必须保留原模型在 pinned
 Codex 中的能力元数据，不自行生成或放宽 capability profile；无已验证 profile 的选项不准入。
+标准 Codex 模板的 pinned 能力元数据以 Codex 加载的、随 Runtime 镜像固定的模型目录为准：固定
+release 的内置条目原样保留，另含经评审的追加条目，决策见
+[ADR-0026](../adr/0026-show-model-reasoning-as-conversation-content.md)。
 同一会话连续切换两个真实 model 同名的选项，以及相邻 Execution 使用不同 Key 版本，必须有原生测试；
 任何上游失败都不得改用其他选项。
 
@@ -1206,6 +1214,7 @@ Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的�
 - 能力目录不是授权凭据。新业务调用取当前权限与原受理范围的交集，并保持原模型选择、Key 版本、文件授权和 Connection 独立身份边界；目录读取不获得执行权限。只读命令不创建业务 Turn；产生 Turn 或改变原生状态的操作必须先持久受理，复用原 outbox、串行占用、操作事实和恢复路径。
 - 原生 CLI 支持不等于 SDK/API 支持。公开接口缺少所需绑定、事实或恢复接缝时，按具体能力拒绝并记录差额；不能用普通提示、模型自报、私有协议或修改上游产物补齐。尤其不能以 Skill 作为绕过 §10.8–10.13 或文件、隔离、授权门禁的入口。
 - 新契约采用显式版本协商；旧 Driver/Host 缺少命令或 Skill 语义时返回不支持，不把新输入降级为旧文本 submit。旧消息、控制、任务与恢复语义保持；新增能力不能迫使旧任务重建或重放。
+- 目录只在已有原 Execution 时读取（[§9.3.1](#931-原生元数据读取授权)、[Runtime HLD §5.1](HLD-agent-runtime-M1.md#51-命令与-skill-目录及调用)）。尚无原 Execution 的会话，包括首条消息前的新会话，不读取原生目录，也不为读取目录创建 Runtime Session 或 Execution（[Runtime HLD §7.1](HLD-agent-runtime-M1.md#71-session-生命周期)）；Web 在输入框说明发送首条消息后才能使用命令与 Skill。这是 M1 的确定行为，不属于能力缺口。
 
 ### 11.5 Browser Capability 边界
 
@@ -1228,8 +1237,13 @@ Skill Hub 是 Platform DB、版本化 S3 兼容对象存储、Platform API/Web�
 
 - Skill project 的规范目录为 `.agents/skills/<name>/SKILL.md`，可选 scripts/、references/ 和 assets/；`.magic/skills` 不属于本平台兼容路径。发布从项目快照生成不可变 ZIP、manifest、内容 digest/signature 和版本记录，对象存储保存字节，Platform DB 保存关系与状态。
 - Platform DB 保存 Skill 主记录、Skill Version、发布范围（PRIVATE、MEMBER、ORGANIZATION、MARKET）、审核、市场目录、用户/组织安装、Agent Version 绑定、权限 grant、同步修订、need_upgrade、撤销和审计。Skill Version 一经发布不可变；Agent Version 保存具体 skillVersionId，市场更新不得静默替换已绑定版本。
+- Agent Version 是部署级固定事实，整个部署共用一个值：Platform API 与 Platform Worker 读取同一部署输入，取值满足绑定接口的 Agent Version 标识规则。Platform DB 不保存版本表或 Agent 版本列，平台也不从 Workload、浏览器、Agent 投影或模板派生它。标准模板升级与平台回滚不改变 Agent Version，已有绑定沿用。部署未配置时，绑定读取不可用，写入一律拒绝。注入方式见 [Platform API 部署说明](../../deploy/platform-api/README.md#skill-绑定的-agent-version)。
+- 当前 Agent Version 只通过当前 Owner 可读的独立入口返回，Agent、配置和状态投影不增加该字段。绑定读写先完成 Owner 授权，再要求路径中的 Agent Version 等于当前值，非 Owner 不能借此探测版本。绑定写入提交该 Agent Version 的完整集合，以当前 Agent Configuration Revision 做 CAS；空集合表示解除全部绑定。
 - Provider Registry 按 system → my_library → market → clawhub → skillhub → npx → github 的固定顺序聚合来源。Provider 适配器由平台部署维护，不能由 Skill、Owner、浏览器或 Runtime 动态注册；外部来源必须固定可验证版本，验证发布者/签名和内容 digest，强制扫描/审核，并拒绝归档路径逃逸、符号链接逃逸、超限包和未授权依赖。
 - 上传/导入、Provider 安装和批量安装统一经过临时目录、大小/文件数/SKILL.md/路径验证、staging、manifest 写入、目标目录原子替换和失败恢复；批量安装最多 10 个、并发最多 3 个。安装状态与绑定状态分离，安装成功不代表 Runtime 已挂载。
+- Web 的版本详情与本人版本目录是独立的版本化只读投影，已发布目录与原版本读取保持不变。发布者本人可回读自己审核中、已驳回和已撤销的版本；其他主体仍只按发布范围读取已发布版本，不可见与不存在不可区分。详情只返回当前用户本人的安装状态，并从该版本已完成供应操作的包描述按固定对象版本、ETag 与长度读取 ZIP，核对 `packageDigest` 及重建 manifest 的 `manifestDigest` 后，返回不超过 64 KiB UTF-8 的 `SKILL.md` 文本（超出时标记截断）和资源清单（路径、类别、大小）。资源内容、对象地址与审核原因不进入该投影；包描述缺失、存储未装配或核对失败时内容标记为不可用。正文不进入目录、审计或日志。
+- 网页编辑的 Skill 项目内容是该项目的可变草稿，只属于项目 Owner，由 Platform DB 以有界字节保存，不进入目录、审计、日志、Worker 或 Runtime。内容按整体替换保存，以项目内容修订号做 CAS；根目录必须有非空 UTF-8 `SKILL.md`，其余文件只能位于 `scripts/`、`references/` 或 `assets/` 下，路径沿用 §11.6.1 的规则。普通文件最多 100 个、单个最多 256 KiB、解码后合计最多 512 KiB；该上限低于 §11.6.1 的包上限，并受 1 MiB JSON 请求上限约束，调用方不能提高。
+- 网页发布只提交内容修订、版本号与发布范围，不接收对象版本、摘要、签名、来源或准入字段。服务端在当前授权下读取本人启用项目该修订的内容，由平台项目打包器生成 ZIP，`provider` 固定为 `my_library`；来源证明由平台项目供应生成：`publisherId` 为项目 Owner，`sourceVersion` 为项目与内容修订引用，`sourceDigest` 等于实际 ZIP 的 `packageDigest`，`approvalRef` 为 null。扫描、Ed25519 admission 签名（部署维护的同一 signer 及 trust/policy 修订）、固定对象版本和原操作提交沿 §11.6.1–11.6.4 的同一包供应，不另设签名密钥、发布路径或部署来源校验器。ORGANIZATION 范围的组织取项目所属组织，且须仍属于当前主体。同一项目已登记的版本号直接冲突，不进入供应；同一幂等键的重试按原修订重新打包并核对原输入摘要，修订已变化时拒绝，不用新内容续接原操作。草稿之后的修改不影响已提交版本，修改内容须以新版本号重新发布。部署未装配 Skill 包供应时网页发布返回不可用，内容编辑不受影响。
 - Agent Version 绑定后由受控异步同步将固定包 materialize 到 Agent project 的 `.agents/skills/<name>`，并维护 `.agents/SKILLS.md`；只有同步成功、Worker Applied 与 Runtime 装配摘要一致后，Skill 才进入可发现目录。同步失败、撤权、版本撤销、digest/signature 不一致和 Applied 未确认均 fail closed。
 - Platform Worker 消费带有 Skill Version、对象版本、manifest、digest/signature、目标相对路径和只读策略的不可变投影，写入并回读版本化 Workload Desired/Applied/恢复事实。调用方不能提交路径、URL、身份、Agent、Connection 或权限字段；Worker 不直接解析 Provider，也不执行未经 grant 的脚本。
 - Runtime 的 find_skills、install_skills 和 read_skills 仅作用于当前主体、Agent Version、Sandbox 和已批准 grant 的交集。初始 Prompt 只放有界 metadata（最多 150 项、约 30000 字符），正文和关联资源按需读取；读取结果必须包含实际包版本和加载证据。Runtime 不能自行改变 Hub 权威状态，不能静默跟随同名新版本。
@@ -1332,7 +1346,7 @@ sequenceDiagram
 
 ### 12.3 事件保存
 
-平台保存用户可见消息、最终回答、状态变化、模型/工具调用事实和已验证的 Connection 关联引用。Runtime 原生事件由 RuntimeHost/Driver 归一化，再由 `platform-worker` 按 fence 去重并保存；保存成功后才由 `platform-api` 推送给浏览器。有限补发规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)。模型内部思考原文、Provider 原始凭证和未脱敏请求不能进入事件表。
+平台保存用户可见消息、最终回答、思考过程、状态变化、模型/工具调用事实和已验证的 Connection 关联引用。Runtime 原生事件由 RuntimeHost/Driver 归一化，再由 `platform-worker` 按 fence 去重并保存；保存成功后才由 `platform-api` 推送给浏览器。有限补发规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)。思考过程按 [§8.2](#82-sse) 保存为会话正文；模型未公开的推理（加密内容、签名或被隐藏的思考）、Provider 原始凭证和未脱敏请求不能进入事件表。
 
 ### 12.4 API 受理、调度与恢复
 
@@ -1838,6 +1852,10 @@ revoke 超时都不宣称已远端撤销，不替代 Connection 的逐次授权�
 两者调用相同的 Core 配置用例；服务端生成渠道引用并复用 Agent 配置的版本、绑定和审计权威。
 浏览器表单不要求用户填写内部 `bindingReference`。扫码优先复用企微授权 SDK，手动配置作为独立入口；
 部署提供获准的 `source` 与固定官方授权 origin，不能由普通请求指定授权端点。
+扫码是否可用只由部署是否提供上述获准配置决定：机器人连接状态的 V2 入口（`GET /api/v2/agents/{agentId}/wecom-bot`）
+与建立配置会话的响应使用同一份判定，不可用时附原因枚举，不含授权地址或 state。该字段只在服务端按当前账号确认
+Owner 权限后返回，非 Owner、其他 Agent 与不存在的 Agent 不可区分；V1 状态入口及其 strict 投影保持不变。
+浏览器据此在首次点击前门控扫码入口，不可用时直接给出手动配置，不建立配置会话。
 
 配置会话绑定当前 Owner、Agent、配置版本及一次性短时随机 state；验证弹窗 origin、source、state、
 过期和一次消费，防止跨用户、跨 Agent、重放及旧配置覆盖。SDK 的成功回调不是平台授权或凭证有效证明，
@@ -1883,6 +1901,13 @@ API 不因此获得 Bot Secret、应用发送 Secret 或历史回复路由的解
 
 SDK 默认日志、debug 和重试行为必须验证，不照抄输出凭证或正文的示例。审计与指标覆盖绑定、凭证替换、
 配置会话、连接状态、受理及回复，保持固定标签和脱敏投影。
+Agent 投影的 `channels[].status` 只列出当前配置修订已配置的企微渠道，在可见性判定的同一只读快照内
+按该修订的绑定引用读取连接事实，取值限于已发布枚举，不展示可见范围：
+智能机器人以 `wecom_connections` 中同一 Agent、同一绑定引用的连接行为准，平台托管绑定还须是其配置会话记录的机器人，
+租约已失效按断开处理；已认证为 `bound`，认证中或尚无连接行为 `binding`，断开或认证失败为 `failed`。
+自建应用没有长连接，以配置会话为准：已激活且回调已验证为 `bound`，部署静态绑定没有平台验证事实时为 `binding`。
+托管配置会话不再有效、不属于该 Agent 或渠道类型、连接事实不唯一或认证失败时一律 `failed`。
+其他 Agent 或旧绑定引用的连接不参与；状态只用于展示，不替代绑定与授权检查，也不返回机器人 ID、会话、持有者或租约。
 群聊、线程和附件映射由 Channel 层负责，RuntimeHost/Driver 不感知企微身份或自行改变映射。
 四个标准模板和通过 ACP 验证的自定义 Agent 使用同一执行链路；Web 与企微会话不合并。
 
@@ -1998,7 +2023,7 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 - 自定义镜像必须通过 ImageRegistryAdapter 准入，并使用不可变 Digest。
 - 容器以非 root 用户运行，根文件系统默认只读；需要写入的数据挂载到明确卷。
 - 个人与 Agent 默认 Relay Key、Owner Secret 和企微凭证按各自用途加密保存、不回显，只能替换。旧 Key 密文只在仍有已受理 Execution 引用时保留。
-- 审计和日志不记录聊天正文、模型思考原文和原始凭证。
+- 审计和日志不记录聊天正文（含思考过程）和原始凭证。M1 不从会话正文派生标题，标题投影保持空值，由 Web 按 [PRD §12.2](../prd/PRD-agent-platform-M1.md#122-会话历史) 统一展示“未命名对话”。
 - 所有跨主体（用户或应用）资源访问测试按“资源不存在”返回，避免枚举。
 - 任务、会话、附件、执行详情和自身审计查询始终匹配提交主体；Owner/应用责任人不因此获得他人内容或使用记录。Eval 按独立用途和对象授权，不能成为会话访问旁路。
 
@@ -2039,6 +2064,8 @@ API/Worker 的外部操作在调用前保存意图；RuntimeHost/Driver 的实�
 请求尝试与业务幂等操作、受理与完成、取消请求与停止确认、工具结果与外部效果分别表达。必要审计无法可靠保存时不返回虚假成功；已经发生的效果不能抹去，授权拒绝不能变成放行。审计 API/页面按时间、主体、Agent、动作、结果和执行引用筛选、分页并查看详情；查询故障明确报错，不返回伪空列表。
 
 系统管理员仅按职责读取平台元数据，用户/应用只能查询自己的执行审计；Owner/责任人没有他人使用记录权限，Connection 管理权限不互相继承。审计不存正文、附件、思考、证明或凭证值；保留与受控清理服从部署数据政策，清理不伪造历史业务结果，访问和清理均受权限控制。
+
+审计查询的 V2 入口（`/api/v2/audit`、`/api/v4/admin/audit`）为记录附带 Agent、创建申请和应用的显示名，V1 入口与其 strict 投影保持不变。名称只为本页已授权记录中的引用解析，在同一查询事务中按查询方的当前权限确定：系统管理员按职责可见上述平台元数据；用户/应用只解析本次已按当前访问权核验的 Agent 名称，不返回创建申请和应用名称。无权、不存在或无法确认时只返回类型与 ID。名称不按调用方提交的 ID 解析，Agent 筛选对不可见与不存在的 Agent 同样拒绝，审计不能成为探测对象是否存在的旁路；用户名称仍由目录按权限解析，名称不写入审计记录本身。
 
 ### 18.4 Eval 数据与执行
 

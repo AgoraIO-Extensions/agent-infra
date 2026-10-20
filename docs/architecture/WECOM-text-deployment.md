@@ -35,9 +35,10 @@ Owner 无需提供公网回调 URL、Token、EncodingAESKey 或内部配置标�
 
 当前长连接 Adapter 固定使用 `@wecom/aibot-node-sdk@1.0.7`；禁用 SDK 原始 payload 日志。
 生产 API 的 `createProductionPlatformApiAssemblyInputV1` 默认不开放机器人配置 API。
-部署同时配置下述 Worker `wecom.setup` 和 `connections` 后，显式设置 `wecomSetupEnabled: true`，
-并提供 API 侧 `wecomIdentity` 当前企微身份映射，才把已有 `encryptionKeys` 公钥输入传给机器人配置模块；
-直接调用 `assemblePlatformApi` 时显式提供 `wecomCredentialEncryptionKeys` 和 `wecomIdentity`。
+部署同时配置下述 Worker `wecom.setup` 和 `connections` 后，在 API 部署输入里同时提供
+`wecomCredentialEncryptionKeys`（与 Runtime Secret 相同格式的 `encryptionKeys` 公钥输入）和
+`wecomIdentity`（API 侧当前企微身份映射），机器人配置模块才会装配；只提供密钥时启动失败。
+直接调用 `assemblePlatformApi` 时提供同样两项。
 回执查询/放弃接口使用当前企微身份映射独立装配，不依赖 HTTP 回调 Token 或回调路由。
 身份 Adapter 必须提供 `resolveUser`，每次配置操作重新校验当前账号和 Owner 权限。
 
@@ -57,8 +58,24 @@ Worker 实际认证通过、Owner/配置版本/连接租约仍有效后，通过
 当前渠道密文尚不参与 Runtime Secret 的自动重新封装任务：更换加密公钥后，逐个重新验证并绑定机器人，
 确认旧渠道引用清除后再退役旧 key；在此之前保留旧 Worker 私钥。不能用 Runtime Secret 轮换完成状态代替该检查。
 
-扫码入口当前返回 `authorization_correlation_unverified` 并展示手动替代入口；
-没有通过官方授权来源与一次性配置会话关联验证前，不启用扫码提交，不将本实现计为扫码验收通过。
+扫码入口由 API 部署输入 `wecomBotQr` 开启，不提供时返回 `authorization_correlation_unverified` 并展示手动替代入口：
+
+```js
+wecomBotQr: {
+  source: "<部署自定的来源标识>",
+  authOrigin: "https://work.weixin.qq.com",
+  authorizationEndpoint: "https://work.weixin.qq.com/ai/qc/gen",
+}
+```
+
+- 授权地址由平台拼上 `source` 和本次配置会话的一次性 `state`。官方扫码页的二维码 300 秒后过期，
+  页面在 Owner 用企业微信确认后只向 opener 发送 `{type:"AUTH_SUCCESS", payload:{botid, secret}}`，不回传 `state`。
+- 浏览器只接受来自 `authOrigin`、且正是本页为这次配置会话打开的那个弹窗的结果；
+  `AUTH_CANCEL`、`WINDOW_CLOSE` 按取消处理，`AUTH_ERROR` 按失败处理，其他类型忽略。
+- 一次性 `state` 仍由本页随凭证提交，服务端照旧校验摘要、有效期和配置版本；之后与手动配置一样，
+  由 Worker 用真实长连接认证、Core 激活绑定。
+- 等待扫码默认到配置会话到期前 30 秒，留给面板确认与 Worker 验证。
+- 部署自有的中转页也可以发送 `{botId, secret, source, state}`，`source` 与 `state` 必须一致。
 
 ## 自建应用与显式回调模式
 
@@ -99,7 +116,32 @@ SDK 自动重连、重试或队列不能突破已持久化的发送状态：
 原发送者通过已认证的 `/api/v1/wecom/receipts`、`/api/v1/wecom/receipts/{receiptId}` 查询状态，
 通过 `POST /api/v1/wecom/receipts/{receiptId}/abandon` 处置 `unknown`。
 查询不返回正文、回复路由或凭证；其他用户和没有当前访问权的主体得到资源不存在。
-具体长度、时效和可恢复能力按固定 SDK/协议版本验证，超过限制明确失败，不静默截断或盲目重发。
+具体长度、时效和可恢复能力按固定 SDK/协议版本验证，超过限制明确失败，不静默截断或盲目重发；
+思考过程的截短规则见下节。
+
+## 思考过程
+
+回答带有思考过程（[平台 PRD §10.3](../prd/PRD-agent-platform-M1.md#103-企微会话)）时，回复按以下规则组合；
+事件保存、发送状态机、fence 与一次性发送语义不变，决策见
+[ADR-0026](../adr/0026-show-model-reasoning-as-conversation-content.md)。
+
+- 只有执行完成（completed）的回复组合思考过程。繁忙、不可用、无权限、取消和失败等固定文案不附带；
+  答案为空时不发送只有思考过程的回复。
+- 格式为 `<think>{思考过程}</think>`、一个空行、答案。企微按
+  [被动回复消息](https://developer.work.weixin.qq.com/document/path/101031)把 `<think></think>` 中的内容
+  展示为思考过程。组合前先中和思考内容里的 `<think>`、`</think>` 字面量，不能提前闭合或另起思考块。
+- 整条回复不超过 20480 字节，答案优先：答案本身超过上限时仍按原规则明确失败；否则思考过程在 UTF-8
+  码点边界截短，并在末尾附“（思考过程较长，已截断）”；连提示都放不下时只发答案。
+- Store 只在 completed 时按顺序读取 `reasoning.delta` 的有界前缀（累计约 20480 字节、最多 10000 条）；
+  没有读完时同样按截短处理并附提示，答案照常发送。摘要与原始推理各自按顺序拼接，先摘要、后原始推理，与 Web 一致。
+- 发送端口同时拿到只含答案的文本和带思考过程的完整回复，只有长连接 stream 回复使用后者；后者不合规时退回只发答案。
+- 单聊和群聊规则相同；群聊中的思考过程与答案一样对群成员可见。
+
+| 回复方式 | 思考过程 |
+| --- | --- |
+| 智能机器人长连接（stream 回复） | 附带 |
+| 智能机器人 HTTP 回调（`response_url` markdown） | 真实验证渲染后再启用，之前不附带 |
+| 自建应用文本消息 | 不附带，不出现原样的 `<think>` 标签 |
 
 ## 验收资源与证据
 
@@ -112,6 +154,7 @@ SDK 自动重连、重试或队列不能突破已持久化的发送状态：
 
 验证扫码取消/超时/重放和错误弹窗来源、跨 Owner/Agent、配置冲突、认证失败、轮换/解绑；
 再验证机器人单聊/群聊、双发送者隔离、撤权、繁忙、重连/重投、多副本与重启、发送未知及应用文本回调。
+思考过程另验长连接单聊与群聊的展示、答案完整、过长截短提示，以及固定文案和自建应用文本不附带。
 协议不提供独立线程时明确记录，不伪造线程支持。
 证据绑定 source SHA、SDK 版本、镜像、配置版本、传输模式与实际 Runtime。
 Fake、协议 fixture、仅获取 Token 或受控 Runtime transport 不能替代真实收发；文件/媒体与 Connection 未在本票验收。

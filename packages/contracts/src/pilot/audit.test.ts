@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	ScopedPlatformAuditProjectionV1Schema,
+	ScopedPlatformAuditProjectionV2Schema,
 	ScopedPlatformAuditQueryV1Schema,
 } from "./audit.ts";
 
@@ -81,13 +82,34 @@ describe("scoped public audit contract", () => {
 	it("continues to reject unregistered creation or Relay Key actions", () => {
 		for (const action of [
 			"api.agent.create.guessed",
-			"relay_key.agent_default.read",
+			"relay_key.agent_default.guessed",
 		])
 			expect(
 				ScopedPlatformAuditProjectionV1Schema.safeParse({ ...record, action })
 					.success,
 			).toBe(false);
 	});
+	it.each([
+		"skill.project.create",
+		"skill.project.update",
+		"skill.project.list",
+		"skill.project.read",
+		"relay_key.agent_default.read",
+		"relay_key.agent_default.candidates",
+	])(
+		"accepts the #2879 registered action %s in scoped audit projections",
+		(action) => {
+			expect(
+				ScopedPlatformAuditProjectionV1Schema.safeParse({
+					...record,
+					action,
+					subject: { kind: "agent", subjectId: "agent-b" },
+					result: "succeeded",
+					summary: action,
+				}).success,
+			).toBe(true);
+		},
+	);
 	it.each([
 		"api.credential.issued",
 		"api.credential.revoked",
@@ -263,5 +285,102 @@ describe("scoped public audit contract", () => {
 		expect(ScopedPlatformAuditQueryV1Schema.safeParse(input).success).toBe(
 			false,
 		);
+	});
+});
+
+describe("scoped public audit display-name V2 contract (#2909)", () => {
+	const named = {
+		...record,
+		schemaVersion: 2,
+		actor: { ...record.actor, displayName: null },
+		subject: { ...record.subject, displayName: null },
+		originalPrincipal: {
+			...record.originalPrincipal,
+			displayName: "运维机器人",
+		},
+		agentDisplayName: "编程助手",
+	};
+
+	it("carries names only for applications, Agents and creation applications", () => {
+		expect(ScopedPlatformAuditProjectionV2Schema.parse(named)).toEqual(named);
+		const agentSubject = {
+			...named,
+			subject: { kind: "agent", subjectId: "agent-a", displayName: "编程助手" },
+		};
+		expect(ScopedPlatformAuditProjectionV2Schema.parse(agentSubject)).toEqual(
+			agentSubject,
+		);
+		const application = {
+			...named,
+			actor: {
+				kind: "application",
+				actorId: "application-a",
+				displayName: "运维机器人",
+			},
+			subject: {
+				kind: "agent_application",
+				subjectId: "agent-application-a",
+				displayName: "编程助手",
+			},
+		};
+		expect(ScopedPlatformAuditProjectionV2Schema.parse(application)).toEqual(
+			application,
+		);
+	});
+
+	it.each([
+		{ actor: { kind: "user", actorId: "user-a", displayName: "张三" } },
+		{
+			actor: {
+				kind: "system",
+				actorId: "platform_worker",
+				displayName: "后台",
+			},
+		},
+		{
+			originalPrincipal: {
+				kind: "user",
+				id: "user-a",
+				displayName: "张三",
+			},
+		},
+		{
+			subject: {
+				kind: "execution",
+				subjectId: "execution-a",
+				displayName: "执行",
+			},
+		},
+		{ agentId: null, agentDisplayName: "编程助手" },
+	])("rejects a display name on a reference that cannot carry one", (input) => {
+		expect(
+			ScopedPlatformAuditProjectionV2Schema.safeParse({ ...named, ...input })
+				.success,
+		).toBe(false);
+	});
+
+	it("keeps V2 strict and bounded, and V1 readers reject V2 fields", () => {
+		for (const input of [
+			{ credential: "private-sentinel" },
+			{ schemaVersion: 1 },
+			{ agentDisplayName: "" },
+			{ agentDisplayName: "名".repeat(201) },
+			{ actor: { ...named.actor, email: "user@example.invalid" } },
+		])
+			expect(
+				ScopedPlatformAuditProjectionV2Schema.safeParse({ ...named, ...input })
+					.success,
+			).toBe(false);
+		const { agentDisplayName: _name, ...withoutName } = named;
+		expect(
+			ScopedPlatformAuditProjectionV2Schema.safeParse(withoutName).success,
+		).toBe(false);
+		expect(
+			ScopedPlatformAuditProjectionV1Schema.safeParse({
+				...record,
+				agentDisplayName: "编程助手",
+			}).success,
+		).toBe(false);
+		expect(ScopedPlatformAuditProjectionV1Schema.parse(record)).toEqual(record);
 	});
 });

@@ -95,9 +95,17 @@ export interface ConversationBrowserSideEffectEventV1 {
 	readonly binding: ConversationBrowserSideEffectBindingV1;
 }
 
+/** #2979：思考过程的来源，`raw` 为原始推理，`summary` 为推理摘要。 */
+export type ConversationReasoningKindV1 = "raw" | "summary";
+
 export type ConversationNormalizedEventV1 =
 	| ConversationOperationEventV2
 	| { readonly type: "text.delta"; readonly text: string }
+	| {
+			readonly type: "reasoning.delta";
+			readonly kind: ConversationReasoningKindV1;
+			readonly text: string;
+	  }
 	| {
 			readonly type: "execution.status";
 			readonly status: ConversationEventStatusV1;
@@ -129,6 +137,12 @@ export interface ConversationModelSelectionFallbackEventV1 {
 	readonly modelOptionId: string;
 	readonly reasoningLevel: string;
 	readonly reason: "selection_unavailable";
+	/**
+	 * G-07 起成对写入：会话原所选选项与受理时的显示名（读不到时为 null）。
+	 * 此前写入的旧事件没有这两项，读取方继续按 V1 事件投影。
+	 */
+	readonly requestedModelOptionId?: string;
+	readonly requestedModelDisplayName?: string | null;
 }
 
 export interface ConversationTaskStatusEventV1 {
@@ -445,6 +459,15 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 		const values = snapshotObject(input, ["type", "text"]);
 		if (!isText(values.text, 65_536)) invalidInput();
 		return { type: "text.delta", text: values.text };
+	}
+	if (type === "reasoning.delta") {
+		const values = snapshotObject(input, ["type", "kind", "text"]);
+		if (
+			(values.kind !== "raw" && values.kind !== "summary") ||
+			!isText(values.text, 65_536)
+		)
+			invalidInput();
+		return { type: "reasoning.delta", kind: values.kind, text: values.text };
 	}
 	if (type === "execution.status") {
 		const values = snapshotObject(input, ["type", "status"]);
@@ -765,16 +788,23 @@ export function parseConversationPersistedEventPayloadV1(
 	}
 	if (eventType(input) !== "model.selection.fell_back")
 		return parseEvent(input);
-	const values = snapshotObject(input, [
-		"type",
-		"modelOptionId",
-		"reasoningLevel",
-		"reason",
-	]);
+	const values = snapshotObject(
+		input,
+		["type", "modelOptionId", "reasoningLevel", "reason"],
+		["requestedModelOptionId", "requestedModelDisplayName"],
+	);
+	const hasRequested = values.requestedModelOptionId !== undefined;
 	if (
 		!isText(values.modelOptionId) ||
 		!isText(values.reasoningLevel) ||
-		values.reason !== "selection_unavailable"
+		values.reason !== "selection_unavailable" ||
+		// 原选项与显示名必须成对出现；显示名可为 null，否则是不超过 1024 字节的文本，
+		// 与公共契约 ModelSelectionFallbackEventV2 的上限一致。
+		hasRequested !== (values.requestedModelDisplayName !== undefined) ||
+		(hasRequested &&
+			(!isText(values.requestedModelOptionId) ||
+				(values.requestedModelDisplayName !== null &&
+					!isText(values.requestedModelDisplayName))))
 	) {
 		invalidInput();
 	}
@@ -783,6 +813,14 @@ export function parseConversationPersistedEventPayloadV1(
 		modelOptionId: values.modelOptionId,
 		reasoningLevel: values.reasoningLevel,
 		reason: "selection_unavailable",
+		...(hasRequested
+			? {
+					requestedModelOptionId: values.requestedModelOptionId as string,
+					requestedModelDisplayName: values.requestedModelDisplayName as
+						| string
+						| null,
+				}
+			: {}),
 	};
 }
 

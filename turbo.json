@@ -13,6 +13,9 @@
 		"@agent-infra/platform-store#check-types": {
 			"dependsOn": ["build", "^build", "^check-types"]
 		},
+		"@agent-infra/test-support#check-types": {
+			"dependsOn": ["build", "^build", "^check-types"]
+		},
 		"test": {
 			"dependsOn": ["^test"]
 		},

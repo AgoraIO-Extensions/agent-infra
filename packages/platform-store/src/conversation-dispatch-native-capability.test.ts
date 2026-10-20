@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { nativeCapabilityParametersDigestV1 } from "@agent-infra/platform-core";
 import { describe, expect, it } from "vitest";
 import { exactPayload } from "./conversation-dispatch-validation.ts";
@@ -20,6 +21,20 @@ const payload = {
 };
 
 describe("Conversation Dispatch native capability payload", () => {
+	it("rejects the historical JSON-encoded parameter digest without rewriting it (#2950)", () => {
+		expect(
+			exactPayload(
+				{
+					...payload,
+					parametersDigest: createHash("sha256")
+						.update(JSON.stringify(payload.parameters))
+						.digest("hex"),
+				},
+				"conversation.native-capability.invoke.v1",
+			),
+		).toBeUndefined();
+	});
+
 	it("accepts an admitted command with no parameters", () => {
 		expect(
 			exactPayload(

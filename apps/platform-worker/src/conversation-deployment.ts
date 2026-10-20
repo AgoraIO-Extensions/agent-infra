@@ -14,7 +14,11 @@ import {
 	runtimeModelInjectionV4,
 	validateRuntimeModelProjectionV4,
 } from "@agent-infra/model-catalog";
-import type { SessionSandboxDeletionProgressV1 } from "@agent-infra/platform-core";
+import type {
+	SessionSandboxDeletionProgressV1,
+	SessionSandboxResourceIdentityV1,
+	SessionSandboxStopReceiptV1,
+} from "@agent-infra/platform-core";
 import {
 	ConversationRuntimeHostError,
 	type SessionSandboxReconciliationClaimV1,
@@ -467,7 +471,7 @@ function createSessionSandboxAllocationResolverV1(
 		deployment: AgentWorkloadDesiredV1,
 		modelProjection: unknown,
 		requireCurrentTemplateTrust: boolean,
-	): SessionSandboxRuntimeInputV1 => {
+	): SessionSandboxRuntimeInputV1 | null => {
 		const auth = workload.policy.runtimeAuth;
 		let projection: RuntimeModelProjectionV4;
 		try {
@@ -481,6 +485,11 @@ function createSessionSandboxAllocationResolverV1(
 			validateWorkloadRuntimeAuthV1(auth);
 			projection = validateRuntimeModelProjectionV4(modelProjection);
 		} catch {
+			// 排空（drain）路径不要求当前模板信任，且原 payload 未保存 modelProjection
+			// （旧 payload 形状）时，返回 null runtime；adapter 的 cleanup/observe
+			// 在 stopped 状态下不依赖 runtime 字段，可按标签与 UID 完成资源删除。
+			// 工程 Spec §10.1.1：模板撤销不得阻断已获管理授权的原资源回收。
+			if (!requireCurrentTemplateTrust && !modelProjection) return null;
 			throw new WorkloadKubernetesError("policy");
 		}
 		const templateBinding = projection.standardTemplateBinding;
@@ -490,7 +499,6 @@ function createSessionSandboxAllocationResolverV1(
 			projection.agentId !== binding.agentId ||
 			projection.configurationRevision !== deployment.configRevision ||
 			templateBinding.imageDigest !== deployment.imageDigest ||
-			templateBinding.driver !== "codex" ||
 			deployment.runtimeManifest.interactionMode !== "platform-adapter" ||
 			(workload.policy.nativeMetadataWorkerEgress !== undefined &&
 				!isNativeMetadataWorkerOriginV1(auth.nativeMetadataWorkerOrigin)) ||
@@ -503,7 +511,7 @@ function createSessionSandboxAllocationResolverV1(
 		)
 			throw new WorkloadKubernetesError("policy");
 		return {
-			driver: "codex",
+			driver: templateBinding.driver,
 			modelConfiguration: runtimeModelInjectionV4(projection).configuration,
 			workerId: auth.workerId,
 			grantKeyId: auth.grantKeyId,
@@ -561,6 +569,11 @@ function createSessionSandboxAllocationResolverV1(
 	});
 }
 
+/** 停止回执保留的资源：从未记录 PVC 的部分准备来源没有（#2918）。 */
+function retainedResources(receipt: SessionSandboxStopReceiptV1) {
+	return receipt.retainedPVC ? [receipt.retainedPVC] : [];
+}
+
 /** Production resource receiver; invoked only under the original Store lease. */
 export function createProductionSessionSandboxReceiverV1(
 	workload: WorkloadRuntimeOptionsV1,
@@ -608,18 +621,77 @@ export function createProductionSessionSandboxReceiverV1(
 				return {
 					status: "stopped" as const,
 					sourceStop: lifecycle.stopReceipt,
-					resources: [lifecycle.stopReceipt.retainedPVC],
+					resources: retainedResources(lifecycle.stopReceipt),
 				};
+			// #2917：上一轮排空已完成、只剩 PVC 的沙箱被管理转换重新当作来源。没有可删除的资源，
+			// 只读证明停止；与正常排空一样，执行未终态或已进入准备时不下结论。
+			if (source.observation?.status === "stopped") {
+				if (!claim.drainComputeAllowed || lifecycle.preparation)
+					return { status: "unknown" as const, resources: sourceResources };
+				// #2995：停止发生在替换准备期间时，准备可能已在来源 fence 下建出资源（PVC 也被改写到
+				// 该 fence），但观测没来得及提交，来源仍是上一轮的停止观测。读到这些归属资源、且仍包含
+				// 记录的同一 PVC 时，交给 Core 补全来源证据（只是证据，不是停止证明），下一次按完整或
+				// 部分来源逐个删除。fence 不符、不归属本沙箱的同名资源不算，仍由下面失败关闭。
+				const owned = await adapter.observe(
+					sourceAllocation,
+					sourceResources,
+					"control",
+				);
+				signal.throwIfAborted();
+				if (
+					owned.resources.some(
+						(resource) => resource.kind !== "PersistentVolumeClaim",
+					) &&
+					sourceResources.every((recorded) =>
+						owned.resources.some(
+							(resource) =>
+								resource.kind === recorded.kind &&
+								resource.namespace === recorded.namespace &&
+								resource.name === recorded.name &&
+								resource.uid === recorded.uid,
+						),
+					)
+				)
+					return { status: "observed" as const, resources: owned.resources };
+				const stopReceipt = await adapter.confirmStoppedSource(
+					allocationFor(
+						claim.sandbox,
+						source.policy,
+						sourceDeployment,
+						source.modelProjection,
+						"stopped",
+						source.sandbox.generation,
+						source.resourceFence,
+						false,
+					),
+					sourceResources,
+					{
+						sourceGeneration: source.sandbox.generation,
+						sourceResourceFence: source.resourceFence,
+						targetGeneration: claim.sandbox.generation,
+						targetResourceFence: claim.resourceFence,
+					},
+				);
+				signal.throwIfAborted();
+				return {
+					status: "stopped" as const,
+					sourceStop: stopReceipt,
+					resources: retainedResources(stopReceipt),
+				};
+			}
+			// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影（runtime 为 null），
+			// 当时也不创建 Runtime Secret：其余 5 种资源就是完整来源（#2885）。
+			const sourceKinds = [
+				"Pod",
+				"Service",
+				"ServiceAccount",
+				"PersistentVolumeClaim",
+				"NetworkPolicy",
+				...(sourceAllocation.runtime === null ? [] : ["Secret"]),
+			];
 			const completeSource =
-				sourceResources.length >= 6 &&
-				[
-					"Pod",
-					"Service",
-					"ServiceAccount",
-					"PersistentVolumeClaim",
-					"NetworkPolicy",
-					"Secret",
-				].every((kind) =>
+				sourceResources.length >= sourceKinds.length &&
+				sourceKinds.every((kind) =>
 					sourceResources.some((resource) => resource.kind === kind),
 				);
 			if (!completeSource) {
@@ -629,6 +701,76 @@ export function createProductionSessionSandboxReceiverV1(
 					"control",
 				);
 				signal.throwIfAborted();
+				// #2918：准备中断留下的部分来源（未就绪、只记录了部分资源）。
+				if (
+					source.observation &&
+					source.observation.status !== "ready" &&
+					observed.status === "unknown"
+				) {
+					const same = (
+						left: readonly SessionSandboxResourceIdentityV1[],
+						right: SessionSandboxResourceIdentityV1,
+						version: boolean,
+					) =>
+						left.some(
+							(item) =>
+								item.kind === right.kind &&
+								item.uid === right.uid &&
+								(!version || item.resourceVersion === right.resourceVersion),
+						);
+					const keepsRecorded = sourceResources.every((resource) =>
+						same(observed.resources, resource, false),
+					);
+					const unchanged =
+						keepsRecorded &&
+						observed.resources.length === sourceResources.length &&
+						observed.resources.every((resource) =>
+							same(sourceResources, resource, true),
+						);
+					// 读到了新的归属资源，或记录的资源版本已前进：交给 Core 补全来源证据
+					// （只是证据，不是就绪或停止证明）。
+					if (keepsRecorded && !unchanged)
+						return {
+							status: "observed" as const,
+							resources: observed.resources,
+						};
+					// 证据稳定：按记录的 UID 删除，未记录且不存在的种类视为从未创建。
+					if (unchanged) {
+						if (!claim.drainComputeAllowed || lifecycle.preparation)
+							return { status: "unknown" as const, resources: sourceResources };
+						if (!recordDeletionProgress)
+							throw new Error("Session Sandbox deletion CAS is unavailable");
+						const stopReceipt = await adapter.cleanup(
+							allocationFor(
+								claim.sandbox,
+								source.policy,
+								sourceDeployment,
+								source.modelProjection,
+								"stopped",
+								source.sandbox.generation,
+								source.resourceFence,
+								false,
+							),
+							sourceResources,
+							{
+								sourceGeneration: source.sandbox.generation,
+								sourceResourceFence: source.resourceFence,
+								targetGeneration: claim.sandbox.generation,
+								targetResourceFence: claim.resourceFence,
+								managementFence: lifecycle.authority.managementFence,
+								deletionProgress: lifecycle.deletionProgress,
+								recordDeletionProgress,
+								partialSource: true,
+							},
+						);
+						signal.throwIfAborted();
+						return {
+							status: "stopped" as const,
+							sourceStop: stopReceipt,
+							resources: retainedResources(stopReceipt),
+						};
+					}
+				}
 				return {
 					status:
 						observed.status === "unknown"
@@ -701,7 +843,7 @@ export function createProductionSessionSandboxReceiverV1(
 			return {
 				status: "stopped" as const,
 				sourceStop: stopReceipt,
-				resources: [stopReceipt.retainedPVC],
+				resources: retainedResources(stopReceipt),
 			};
 		}
 		const deployment = validateAgentWorkloadDesiredV1(claim.deployment);
@@ -743,11 +885,12 @@ export function createProductionSessionSandboxReceiverV1(
 			return {
 				status: "stopped" as const,
 				sourceStop: stopReceipt,
-				resources: [stopReceipt.retainedPVC],
+				resources: retainedResources(stopReceipt),
 			};
 		}
 		let previousForApply = previous;
-		if (claim.lifecycle?.stopReceipt) {
+		// 没有保留 PVC 的回执（#2918）按新建准备：apply 会创建 PVC，同名的未归属对象仍判冲突。
+		if (claim.lifecycle?.stopReceipt?.retainedPVC) {
 			await adapter.prepareRetainedPVC(allocation, claim.lifecycle, previous);
 			signal.throwIfAborted();
 			// The retained PVC was just rebound by the authorized CAS above; its

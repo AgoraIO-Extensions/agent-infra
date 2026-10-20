@@ -1,0 +1,84 @@
+# ACK E2E deployment values. All referenced Secrets and the directory source
+# ConfigMap are created from the E2E private inputs outside this chart.
+#
+# The image digests, runtime host digest, public origin, WeCom Corp ID and TLS
+# Secret below are placeholders. Replace them in a private values file kept
+# outside Git; deploy.sh rejects a rendered manifest that still contains the
+# placeholders. Never commit real LB addresses, Corp IDs, Secret values or
+# environment-specific digests to this repository.
+images:
+  web: ghcr.io/agoraio-extensions/agent-infra/web@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  api: ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  worker: ghcr.io/agoraio-extensions/agent-infra/platform-worker@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  directory: ghcr.io/agoraio-extensions/agent-infra/enterprise-directory-sync@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  postgres: ghcr.io/agoraio-extensions/agent-infra/postgres@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  runtimeHost:
+    repository: ghcr.io/agoraio-extensions/agent-infra/agent-runtime-host
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  pullSecrets:
+    - ack-ghcr-pull
+secrets:
+  database: agent-infra-platform-database
+  apiConfiguration: agent-infra-api-configuration
+  apiProxyToken: agent-infra-api-proxy-token
+  encryptionPublicKey: agent-infra-encryption-public-key
+  directoryDatabase: agent-infra-directory-db
+  directoryMigrationDatabase: agent-infra-directory-migration-db
+  directoryRuntime: agent-infra-directory-runtime
+  directoryCa: agent-infra-directory-ca
+  workerConfiguration: agent-infra-worker-configuration
+  workerRuntimeAuth: agent-infra-worker-runtime-auth
+  workerKeyring: agent-infra-worker-keyring
+  workerDirectoryRead: agent-infra-worker-directory-read
+  workerCa: agent-infra-worker-ca
+  webTls: agent-infra-web-tls
+publicOrigin: https://ack.example.invalid
+directory:
+  corpId: ww0000000000000000
+  sourceConfigMap: agent-infra-directory-source
+  sourceModule: file:///app/directory-source/source.ts
+  runtimeDatabaseRole: agent_infra_directory
+scheduling:
+  api: {}
+  web: {}
+  directory: {}
+  postgres: {}
+  worker:
+    nodeSelector:
+      kubernetes.io/arch: amd64
+      kubernetes.io/os: linux
+      type: virtual-kubelet
+    tolerations:
+      - key: virtual-kubelet.io/provider
+        operator: Equal
+        value: alibabacloud
+        effect: NoSchedule
+sessionRuntimeScheduling:
+  enabled: false
+  architecture: amd64
+resources:
+  api:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  web:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  directory:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  worker:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  postgres:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+postgres:
+  enabled: false
+  storageClass: alicloud-disk-essd
+  storageSize: 20Gi
+ingress:
+  enabled: true
+  className: new-magic-nginx
+  tlsSecret: agent-infra-web-tls
+migrations:
+  enabled: false
