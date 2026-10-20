@@ -31,6 +31,36 @@ Namespace 示例为 `agent-infra`。首次试部署使用受控 raw manifests，
 
 目录同步 `/readyz` 返回 `200`，快照有效（成员与部门数量属于环境数据，不写入仓库）。Worker 通过 ACK Service 名称访问目录；保留了 E2E 证书的 `enterprise-directory-sync` SAN，并创建了同名 Service alias。
 
+## Session Runtime 的 ECI 调度
+
+`scheduling.worker` 只决定 `platform-worker` 调度服务本身的位置，不决定它创建的 Session
+Runtime Pod。常驻平台服务可以使用同一集群的普通节点，按会话创建的执行 Pod 使用 ECI。
+
+Kubernetes 1.36 及以上可在仓库外 private values 显式开启：
+
+```yaml
+scheduling:
+  worker:
+    nodeSelector: null
+    tolerations: []
+sessionRuntimeScheduling:
+  enabled: true
+  architecture: amd64
+```
+
+`nodeSelector: null` 用于清除 chart 默认的 Worker selector；空对象会与默认值合并。
+
+该选项默认关闭，使用 GA `MutatingAdmissionPolicy`，不依赖外部调度 Webhook。策略和绑定
+同时限定 Helm release namespace、`agent-infra.agora.io/managed=session-sandbox-v1`
+标签与 Pod `CREATE` 操作；只补 ECI nodeSelector 和 provider toleration，保留其他非冲突调度
+字段，不修改容器、安全上下文、资源、身份或凭证。重复求值不追加相同 toleration。
+开启该选项的部署账号需要创建集群级准入策略的权限，低于 1.36 的版本在渲染阶段拒绝。
+关闭选项只影响后续 Pod 创建，已有 Pod 仍沿原有生命周期运行。
+
+ECI 调度成功不代表网络策略生效。还须单独验证目标 Driver 的内核能力、实际模型调用、
+持久卷、出站和入口隔离；不能用 Pod Ready 或已创建 NetworkPolicy 对象代替真实负向验证。
+Runtime image 必须是 `architecture` 对应的不可变 manifest Digest。
+
 ## E2E 配置迁移
 
 迁移来源为当前 E2E harness 生成的仓库外 private 配置快照；该目录只作为部署输入，不进入 Git。

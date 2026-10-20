@@ -22,6 +22,15 @@
     "publicOrigin": {"type": "string", "pattern": "^https://"},
     "directory": {"type": "object", "required": ["corpId", "sourceConfigMap", "sourceModule", "runtimeDatabaseRole"]},
     "scheduling": {"type": "object"},
+    "sessionRuntimeScheduling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "architecture"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "architecture": {"type": "string", "enum": ["amd64", "arm64"]}
+      }
+    },
     "resources": {"type": "object"},
     "postgres": {"type": "object"},
     "ingress": {"type": "object"},

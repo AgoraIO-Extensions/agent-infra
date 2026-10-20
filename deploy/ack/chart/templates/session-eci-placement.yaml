@@ -1,0 +1,58 @@
+{{- if .Values.sessionRuntimeScheduling.enabled }}
+{{- if not (semverCompare ">=1.36.0-0" .Capabilities.KubeVersion.Version) }}
+{{- fail "sessionRuntimeScheduling requires Kubernetes 1.36 or later (GA MutatingAdmissionPolicy)" }}
+{{- end }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: {{ printf "%s-session-eci" .Release.Namespace }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+    objectSelector:
+      matchLabels:
+        agent-infra.agora.io/managed: session-sandbox-v1
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [pods]
+  mutations:
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [
+            JSONPatch{op:"add",path:"/spec/nodeSelector",value:has(object.spec.nodeSelector)?object.spec.nodeSelector:{}},
+            JSONPatch{op:"add",path:"/spec/nodeSelector/type",value:"virtual-kubelet"},
+            JSONPatch{op:"add",path:"/spec/nodeSelector/kubernetes.io~1arch",value:"{{ .Values.sessionRuntimeScheduling.architecture }}"}
+          ] + (
+            !has(object.spec.tolerations) ?
+            [JSONPatch{op:"add",path:"/spec/tolerations",value:[{"key":"virtual-kubelet.io/provider","operator":"Equal","value":"alibabacloud","effect":"NoSchedule"}]}] :
+            object.spec.tolerations.exists(t,
+              has(t.key) && t.key=="virtual-kubelet.io/provider" &&
+              (!has(t.operator) || t.operator=="Equal") &&
+              has(t.value) && t.value=="alibabacloud" &&
+              has(t.effect) && t.effect=="NoSchedule") ? [] :
+            [JSONPatch{op:"add",path:"/spec/tolerations/-",value:{"key":"virtual-kubelet.io/provider","operator":"Equal","value":"alibabacloud","effect":"NoSchedule"}}]
+          )
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: {{ printf "%s-session-eci" .Release.Namespace }}
+  labels: {{- include "ack.labels" . | nindent 4 }}
+spec:
+  policyName: {{ printf "%s-session-eci" .Release.Namespace }}
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+    objectSelector:
+      matchLabels:
+        agent-infra.agora.io/managed: session-sandbox-v1
+{{- end }}
