@@ -338,8 +338,23 @@ describe("Administrator inventory presentation", () => {
 		expect(
 			screen.getByRole("button", { name: "重试：Agent creation_failed" }),
 		).toBeTruthy();
+		// 管理员停用（#3033）：服务端允许停用的四种状态各一个「停用」，排在行操作最后。
+		const disable = screen.getAllByRole("button", { name: /^停用：/ });
+		expect(disable.map((button) => button.getAttribute("aria-label"))).toEqual([
+			"停用：Agent creating",
+			"停用：Agent available",
+			"停用：Agent stopped",
+			"停用：Agent creation_failed",
+		]);
+		for (const button of disable) {
+			expect(button.closest(".admin-agent-row-actions")?.lastElementChild).toBe(
+				button,
+			);
+			expect(button.querySelector("svg")).toBeTruthy();
+		}
 		const disabledRow = screen.getByRole("row", { name: /Agent disabled/ });
 		expect(within(disabledRow).queryByRole("link")).toBeNull();
+		expect(within(disabledRow).queryByRole("button")).toBeNull();
 		expect(within(disabledRow).getAllByRole("cell").at(-1)?.textContent).toBe(
 			"—",
 		);
@@ -433,6 +448,151 @@ describe("Administrator inventory presentation", () => {
 		fireEvent.click(retry);
 		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
 		expect(commandAgentLifecycle).toHaveBeenCalledTimes(2);
+	});
+
+	it("disables an Agent only after confirmation, then refreshes and moves focus to the heading (#3033)", async () => {
+		const available = AgentProjectionV2Schema.parse({
+			...baseline,
+			agentId: "agent-out-of-scope",
+			name: "范围外的 Agent",
+			managementStatus: "available",
+			serviceAvailability: "ready",
+		});
+		type Result = Awaited<ReturnType<typeof commandAgentLifecycle>>;
+		let settle: (value: Result) => void = () => undefined;
+		vi.mocked(commandAgentLifecycle).mockImplementationOnce(
+			() =>
+				new Promise<Result>((resolve) => {
+					settle = resolve;
+				}),
+		);
+		const onRefresh = vi.fn();
+		render(
+			<AdminAgentsScreen
+				state={{ kind: "ready", agents: [available] }}
+				filters={{}}
+				onFiltersChange={vi.fn()}
+				onRefresh={onRefresh}
+			/>,
+		);
+		const trigger = screen.getByRole("button", {
+			name: "停用：范围外的 Agent",
+		});
+		fireEvent.click(trigger);
+		let dialog = await screen.findByRole("dialog", { name: "停用 Agent？" });
+		expect(dialog.textContent).toContain("范围外的 Agent");
+		expect(dialog.textContent).toContain("Owner 不能恢复");
+		// 取消不发请求。
+		fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(commandAgentLifecycle).not.toHaveBeenCalled();
+
+		fireEvent.click(trigger);
+		dialog = await screen.findByRole("dialog", { name: "停用 Agent？" });
+		fireEvent.click(within(dialog).getByRole("button", { name: "确认停用" }));
+		await waitFor(() =>
+			expect(commandAgentLifecycle).toHaveBeenCalledExactlyOnceWith(
+				"agent-out-of-scope",
+				"disable",
+				expect.any(String),
+			),
+		);
+		const pending = await screen.findByRole("button", {
+			name: "停用中…：范围外的 Agent",
+		});
+		expect(pending.hasAttribute("disabled")).toBe(true);
+		expect(onRefresh).not.toHaveBeenCalled();
+		await act(async () => {
+			settle({
+				...available,
+				managementStatus: "disabled",
+				serviceAvailability: null,
+			});
+		});
+		// 该行重新读取后不再有操作：焦点交给页面标题，不落到 body。
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole("heading", { level: 1 }),
+			),
+		);
+		expect(screen.queryByRole("button", { name: /^停用/ })).toBeNull();
+		expect(onRefresh).toHaveBeenCalledOnce();
+		expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe(
+			"已提交停用请求",
+		);
+	});
+
+	it("keeps focus on disable and shows one alert when the disable cannot be submitted", async () => {
+		const stopped = AgentProjectionV2Schema.parse({
+			...baseline,
+			agentId: "agent-stopped",
+			name: "已停止的 Agent",
+			managementStatus: "stopped",
+			serviceAvailability: null,
+		});
+		vi.mocked(commandAgentLifecycle).mockRejectedValueOnce(
+			Object.assign(new Error(), { retryable: false }),
+		);
+		const onRefresh = vi.fn();
+		render(
+			<AdminAgentsScreen
+				state={{ kind: "ready", agents: [stopped] }}
+				filters={{}}
+				onFiltersChange={vi.fn()}
+				onRefresh={onRefresh}
+			/>,
+		);
+		fireEvent.click(
+			screen.getByRole("button", { name: "停用：已停止的 Agent" }),
+		);
+		const dialog = await screen.findByRole("dialog", { name: "停用 Agent？" });
+		fireEvent.click(within(dialog).getByRole("button", { name: "确认停用" }));
+		const alert = await screen.findByRole("alert");
+		expect(alert.textContent).toBe("权限或 Agent 状态已变化，请刷新页面。");
+		const trigger = screen.getByRole("button", {
+			name: "停用：已停止的 Agent",
+		});
+		await waitFor(() => expect(document.activeElement).toBe(trigger));
+		expect(trigger.hasAttribute("disabled")).toBe(false);
+		expect(onRefresh).not.toHaveBeenCalled();
+		expect(
+			document.querySelector('[data-slot="toast"]')?.textContent ?? "",
+		).toBe("");
+	});
+
+	it("shares one lifecycle command per row: a pending retry blocks disable", async () => {
+		const failed = AgentProjectionV2Schema.parse({
+			...baseline,
+			agentId: "agent-failed",
+			name: "失败的 Agent",
+			managementStatus: "creation_failed",
+			serviceAvailability: null,
+		});
+		vi.mocked(commandAgentLifecycle).mockImplementationOnce(
+			() => new Promise(() => undefined),
+		);
+		render(
+			<AdminAgentsScreen
+				state={{ kind: "ready", agents: [failed] }}
+				filters={{}}
+				{...noop}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "重试：失败的 Agent" }));
+		await waitFor(() =>
+			expect(
+				screen
+					.getByRole("button", { name: "停用：失败的 Agent" })
+					.hasAttribute("disabled"),
+			).toBe(true),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "停用：失败的 Agent" }));
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(commandAgentLifecycle).toHaveBeenCalledExactlyOnceWith(
+			"agent-failed",
+			"retry_creation",
+			expect.any(String),
+		);
 	});
 
 	it("collapses every section except the heading and one alert when the list fails", () => {

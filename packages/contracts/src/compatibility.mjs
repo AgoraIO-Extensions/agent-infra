@@ -2730,6 +2730,23 @@ function isAgentDetailOwnerStatusOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #3033 新增系统管理员读取单个 Agent 的只读入口，响应复用既有 AgentProjectionV2；
+// 全部既有路径与 schema 保持不变，新增路径用写死的 SHA-256 固定。
+function isAdministratorAgentDetailOpenApiAddition(previous, current) {
+	const path = "/api/v2/admin/agents/{agentId}";
+	if (
+		previous.paths?.[path] !== undefined ||
+		createHash("sha256")
+			.update(JSON.stringify(current.paths?.[path] ?? null))
+			.digest("hex") !==
+			"8e8de1748080a0247e4829badd679e5fe631eadb57d0b2251d9ef68dad535e90"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	return sameValue(previous, normalized);
+}
+
 // #2911 新增带扫码可用性的企微机器人状态 V2 入口；V1 状态响应、配置会话响应和全部既有 schema 保持不变。
 // 新增路径与投影用写死的 SHA-256 固定，任何改动都会使门禁失败。
 function isWecomBotQrAvailabilityOpenApiAddition(previous, current) {
@@ -5243,6 +5260,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isSkillHubVersionDetailOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationListOpenApiAddition(previous, current) &&
 			!isAgentDetailOwnerStatusOpenApiAddition(previous, current) &&
+			!isAdministratorAgentDetailOpenApiAddition(previous, current) &&
 			!isSkillHubProjectContentOpenApiAddition(previous, current) &&
 			!isSkillHubProjectAndImportOpenApiAddition(previous, current) &&
 			!isSkillHubProjectOpenApiAddition(previous, current) &&

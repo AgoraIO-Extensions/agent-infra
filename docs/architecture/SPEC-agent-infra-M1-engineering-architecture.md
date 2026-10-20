@@ -419,6 +419,8 @@ Agent 元数据的 API 列表读取要求凭证包含 `agent:read`，并仅返�
 
 撤权控制以服务端持久授权关系定位 Execution，由系统身份执行，不能借用已失效调用方凭证。取消请求与实际停止分开保存，不回滚已发生的外部效果；Connection 在自己的入口执行当前授权。
 
+系统管理员按[平台 PRD 2.3](../prd/PRD-agent-platform-M1.md#23-系统管理员)的职责读取 Agent 管理投影：列表 `GET /api/v2/admin/agents` 与单项 `GET /api/v2/admin/agents/{agentId}` 只接受浏览器会话，每次按 9.1 重新确认当前账号有效且为 `system_admin`，返回与普通读取相同的 `AgentProjectionV2`，Owner 等字段均由服务端投影，单项不存在时返回不可用。管理员读取不授予配置写入、授权变更或使用权，管理员命令仍在各自入口按当前身份独立授权；它也不扩大 `GET /api/v2/agents`、`GET /api/v2/agents/{agentId}` 及详情投影的可见范围，管理员不在可用范围内时普通读取仍按不可见处理。
+
 ### 9.3 服务端授权上下文
 
 Web 和企微仍按可信用户、当前 Agent 可用范围及渠道权限校验；API 按 9.2 校验。每次 Turn 或补充指令实际投递前，平台重验当前主体和 Agent 使用权，再生成短期、不可篡改且版本化的 Runtime Execution Grant。Grant 绑定签发方、RuntimeHost audience、签发/过期时间、唯一 `grantId`、Execution、Agent、提交主体及类型、渠道、Conversation/Turn、允许命令和附件操作；标准模板业务 Grant 还绑定该 Execution 已固化的 Relay Key 用途、引用与版本，但不含原值。执行范围受原受理授权边界约束，不能因后台 Worker 的服务权限而扩张；Platform API 凭证的后续失效按 9.2 处理，Relay Key 的执行期规则按 10.7 处理。

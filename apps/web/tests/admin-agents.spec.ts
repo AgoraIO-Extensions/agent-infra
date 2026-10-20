@@ -119,7 +119,8 @@ async function fixture(page: Page, admin = true) {
 		);
 		if (lifecycle && request.method() === "POST") {
 			const agentId = decodeURIComponent(lifecycle[1] ?? "");
-			commands.push({ agentId, body: request.postDataJSON() });
+			const body = request.postDataJSON() as { command?: string };
+			commands.push({ agentId, body });
 			if (holdCommand) await holdCommand;
 			const agent = items.find((item) => item.agentId === agentId);
 			if (commandStatus !== 200 || !agent) {
@@ -132,8 +133,30 @@ async function fixture(page: Page, admin = true) {
 				});
 				return;
 			}
-			agent.managementStatus = "creating";
+			// 停用（#3033）立即撤销运行资格；重试创建回到「创建中」。
+			if (body.command === "disable") {
+				agent.managementStatus = "disabled";
+				agent.serviceAvailability = null;
+			} else agent.managementStatus = "creating";
 			await route.fulfill({ json: agent });
+			return;
+		}
+		// 管理员读取单个 Agent（#3033）：只有管理员会话可读；普通读取 /api/v2/agents/{id}
+		// 落到下方兜底 404，模拟管理员不在使用范围内。
+		const adminAgent = url.pathname.match(
+			/^\/api\/v2\/admin\/agents\/([^/]+)$/,
+		);
+		if (adminAgent && request.method() === "GET") {
+			const agentId = decodeURIComponent(adminAgent[1] ?? "");
+			const agent = items.find((item) => item.agentId === agentId);
+			await route.fulfill(
+				admin && agent
+					? { json: agent }
+					: {
+							status: admin ? 404 : 403,
+							json: pilotFakeScenariosV2.unauthorized.response.body,
+						},
+			);
 			return;
 		}
 		if (url.pathname === "/api/v2/admin/agents") {
@@ -255,9 +278,13 @@ test("complete admin collection supports later-page search and URL refresh", asy
 	await page.reload();
 	await expect(page.getByText("第 2 / 2 页")).toBeVisible();
 	await expect(page.getByText("较后页文档助手", { exact: true })).toBeVisible();
+	// #3033：可用的一行有管理员「停用 Agent」，已停用的一行没有任何操作；行内没有重试或开始对话。
 	expect(
-		await page.getByRole("button", { name: /停用|重试|开始对话/ }).count(),
+		await page.getByRole("button", { name: /重试|开始对话/ }).count(),
 	).toBe(0);
+	const disable = page.getByRole("button", { name: /停用/ });
+	await expect(disable).toHaveCount(1);
+	await expect(disable).toHaveAttribute("aria-label", "停用：编程助手 10");
 	expect(await page.locator('main a[href*="/agents/"]').count()).toBe(1);
 	expect(
 		await page.locator('main a[href*="/agents/"]').getAttribute("href"),
@@ -788,4 +815,173 @@ test("disabling an employee is confirmed with the person before one request", as
 			.getByRole("status")
 			.filter({ hasText: "禁用已确认" }),
 	).toBeVisible();
+});
+
+// #3033 AC-1：不依赖管理员个人使用范围，从 Agent 管理行内确认后停用。
+test("an administrator disables an Agent from its row only after confirmation", async ({
+	page,
+}, info) => {
+	const data = await fixture(page);
+	await page.goto("/admin/agents");
+	const row = page.getByRole("row", { name: /编程助手 2/ });
+	const disable = row.getByRole("button", {
+		name: "停用：编程助手 2",
+		exact: true,
+	});
+	await expect(row.locator('[data-slot="badge"]')).toHaveText("就绪");
+	// 行操作顺序：配置 → 停用；与 Owner 的「停止」区分，不另起一列，桌面同一行放下不换行。
+	await expect(row.locator(".admin-agent-row-actions > *")).toHaveText([
+		"配置",
+		"停用",
+	]);
+	if (info.project.name === "desktop") {
+		const tops = await row
+			.locator(".admin-agent-row-actions > *")
+			.evaluateAll((nodes) =>
+				nodes.map((node) => Math.round(node.getBoundingClientRect().top)),
+			);
+		expect(new Set(tops).size).toBe(1);
+	}
+	await disable.click();
+	const dialog = page.getByRole("dialog", { name: "停用 Agent？" });
+	await expect(dialog).toContainText("编程助手 2");
+	await expect(dialog).toContainText("Owner 不能恢复");
+	await capture(page, info, "admin-agent-row-disable-confirm");
+	await dialog.getByRole("button", { name: "取消" }).click();
+	await expect(dialog).toBeHidden();
+	await expect(disable).toBeFocused();
+	expect(data.commands).toHaveLength(0);
+
+	data.holdCommands();
+	await disable.click();
+	await dialog.getByRole("button", { name: "确认停用" }).click();
+	await expect(
+		row.getByRole("button", { name: "停用中…：编程助手 2" }),
+	).toBeDisabled();
+	data.releaseCommands();
+	await expect(page.locator('[data-slot="toast"]')).toHaveText(
+		"已提交停用请求",
+	);
+	// 列表回读后该行只剩「—」：焦点在页面标题，不落到 body。
+	await expect(row.locator('[data-slot="badge"]')).toHaveText("已停用");
+	await expect(row.getByRole("button")).toHaveCount(0);
+	await expect(row.getByRole("link")).toHaveCount(0);
+	await expect(page.getByRole("heading", { level: 1 })).toBeFocused();
+	expect(data.commands).toEqual([
+		{ agentId: "inventory-2", body: { schemaVersion: 1, command: "disable" } },
+	]);
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= innerWidth,
+		),
+	).toBe(true);
+	await capture(page, info, "admin-agent-row-disabled");
+});
+
+// #3033 AC-2：管理员不在使用范围内时，配置页改读服务端管理员投影，只显示管理员操作。
+test("an administrator outside the use scope opens configuration through the administrator projection", async ({
+	page,
+}, info) => {
+	const data = await fixture(page);
+	await page.goto("/admin/agents");
+	await page
+		.getByRole("row", { name: /编程助手 0/ })
+		.getByRole("link", { name: "配置：编程助手 0" })
+		.click();
+	await expect(page).toHaveURL(/\/agents\/inventory-0\/configuration$/);
+	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+		"配置 Agent 的 Owner、范围和运行方式。",
+	);
+	const main = page.locator("main");
+	await expect(main).not.toContainText("Agent 不存在");
+	await expect(main).not.toContainText("无法访问");
+	// Owner 来自服务端管理员投影，不由页面合成。
+	await expect(main).toContainText("Owner · 其他 Owner");
+	await expect(main).toContainText("权限边界");
+	await expect(
+		page.getByRole("region", { name: "Agent 授权控制", exact: true }),
+	).toHaveCount(0);
+	await expect(
+		page.getByRole("button", { name: /停止 Agent|重启 Agent|保存配置/ }),
+	).toHaveCount(0);
+	const admin = page.getByRole("region", { name: "管理员操作", exact: true });
+	await expect(admin.getByRole("button")).toHaveText(["停用 Agent"]);
+	// 先按使用范围读取（不可见），再读管理员投影；不改读其他管理员入口。
+	const reads = data.requests
+		.filter(
+			(request) =>
+				request.method === "GET" && request.path.endsWith("/inventory-0"),
+		)
+		.map((request) => request.path);
+	expect(reads).toEqual([
+		"/api/v2/agents/inventory-0",
+		"/api/v2/admin/agents/inventory-0",
+	]);
+	await capture(page, info, "admin-configuration-out-of-scope");
+
+	await admin.getByRole("button", { name: "停用 Agent" }).click();
+	const dialog = page.getByRole("dialog", { name: "停用 Agent？" });
+	await expect(dialog).toContainText("编程助手 0");
+	await dialog.getByRole("button", { name: "确认停用" }).click();
+	await expect(page.locator('[data-slot="toast"]')).toHaveText("Agent 已停用");
+	await expect(page.locator(".configuration-notices")).toContainText(
+		"运行资格已撤销，Owner 无法恢复。",
+	);
+	await expect(page.getByText("管理员操作")).toHaveCount(0);
+	expect(data.commands).toEqual([
+		{ agentId: "inventory-0", body: { schemaVersion: 1, command: "disable" } },
+	]);
+	await capture(page, info, "admin-configuration-out-of-scope-disabled");
+
+	// Agent 详情对其不可见：返回 Agent 管理，该行已停用且没有操作。
+	await page.getByRole("link", { name: "返回 Agent 管理" }).click();
+	await expect(page).toHaveURL(/\/admin\/agents$/);
+	const row = page.getByRole("row", { name: /编程助手 0/ });
+	await expect(row.locator('[data-slot="badge"]')).toHaveText("已停用");
+	await expect(row.getByRole("button")).toHaveCount(0);
+	await expect(row.getByRole("link")).toHaveCount(0);
+});
+
+test("an administrator deep link to a missing Agent stays inaccessible and returns to Agent management", async ({
+	page,
+}) => {
+	const data = await fixture(page);
+	await page.goto("/agents/agent-missing/configuration");
+	await expect(
+		page.getByText("Agent 不存在，或你没有访问权限。"),
+	).toBeVisible();
+	await expect(
+		page.getByRole("link", { name: "返回 Agent 管理" }),
+	).toHaveAttribute("href", "/admin/agents");
+	await expect(page.getByText("管理员操作")).toHaveCount(0);
+	expect(
+		data.requests
+			.filter((request) => request.path.endsWith("/agent-missing"))
+			.map((request) => request.path),
+	).toEqual([
+		"/api/v2/agents/agent-missing",
+		"/api/v2/admin/agents/agent-missing",
+	]);
+});
+
+// #3033 AC-3：非管理员看不到、也不会调用管理员读取与停用入口。
+test("an employee never reads the administrator projection or sees disable for a hidden Agent", async ({
+	page,
+}) => {
+	const data = await fixture(page, false);
+	await page.goto("/agents/inventory-0/configuration");
+	await expect(
+		page.getByText("Agent 不存在，或你没有访问权限。"),
+	).toBeVisible();
+	await expect(
+		page.getByRole("link", { name: "返回 Agent 详情" }),
+	).toBeVisible();
+	await expect(page.getByRole("button", { name: /停用/ })).toHaveCount(0);
+	await expect(page.getByText("管理员操作")).toHaveCount(0);
+	expect(
+		data.requests.some((request) =>
+			request.path.startsWith("/api/v2/admin/agents"),
+		),
+	).toBe(false);
+	expect(data.commands).toHaveLength(0);
 });

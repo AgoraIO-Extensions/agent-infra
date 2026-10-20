@@ -1,5 +1,5 @@
 import { RefreshCw } from "lucide-react";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -136,6 +136,7 @@ export function AdminAgentsScreen({
 	const id = useId();
 	const toast = useToast();
 	const [actionFailure, setActionFailure] = useState<string | null>(null);
+	const heading = useRef<HTMLHeadingElement>(null);
 	const agents = state.kind === "ready" ? state.agents : [];
 	const search = (filters.q ?? "").trim().toLocaleLowerCase();
 	// 只匹配页面上可见的文字：名称、说明、来源文案与 Owner 显示名。
@@ -162,7 +163,9 @@ export function AdminAgentsScreen({
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">系统管理 / Agent 管理</p>
-					<h1 id={`${id}-heading`}>查看 Agent 状态</h1>
+					<h1 id={`${id}-heading`} ref={heading} tabIndex={-1}>
+						查看 Agent 状态
+					</h1>
 					<p>系统管理员可以停用 Agent、替换 Owner 或重试创建；不支持删除。</p>
 				</div>
 				{denied || failed ? null : (
@@ -352,7 +355,13 @@ export function AdminAgentsScreen({
 														toast("已提交重试，创建状态会在后台更新");
 														onRefresh();
 													}}
-													onRetryFailed={(_agent, error) =>
+													onDisableAccepted={() => {
+														// 该行重新读取后只剩「—」，焦点交给页面标题，不落到 body。
+														heading.current?.focus();
+														toast("已提交停用请求");
+														onRefresh();
+													}}
+													onActionFailed={(_agent, error) =>
 														setActionFailure(
 															error.retryable === false
 																? "权限或 Agent 状态已变化，请刷新页面。"

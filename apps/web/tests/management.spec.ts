@@ -4802,7 +4802,7 @@ test("an Owner administrator can disable in every eligible state and a pending s
 	await expect(page.locator("#main-content")).not.toContainText("操作已提交");
 });
 
-test("a pure administrator reaches the same configuration page with authorization and administrator actions only", async ({
+test("a pure administrator reaches the same configuration page with administrator actions only", async ({
 	page,
 }, info) => {
 	const api = await fixture(page, "admin");
@@ -4816,9 +4816,10 @@ test("a pure administrator reaches the same configuration page with authorizatio
 	await expect(
 		page.locator('.configuration-notices > [data-slot="alert"]'),
 	).toContainText("权限边界");
+	// API 与应用授权只由当前 Owner 治理，服务端拒绝纯管理员：页面不显示授权控制（#3033 AC-2）。
 	await expect(
 		page.getByRole("region", { name: "Agent 授权控制", exact: true }),
-	).toBeVisible();
+	).toHaveCount(0);
 	const admin = page.getByRole("region", { name: "管理员操作", exact: true });
 	await expect(admin.getByRole("button")).toHaveText([
 		"重试创建",
@@ -4832,7 +4833,7 @@ test("a pure administrator reaches the same configuration page with authorizatio
 	await expect(
 		page.getByRole("button", { name: /停止 Agent|重启 Agent/ }),
 	).toHaveCount(0);
-	// 卡片嵌套不超过两层：授权控制所在的卡片不包含管理员区。
+	// 卡片嵌套不超过两层：管理员区不在表单卡内。
 	expect(
 		await admin.evaluate(
 			(element) => element.closest(".configuration-form-card") === null,

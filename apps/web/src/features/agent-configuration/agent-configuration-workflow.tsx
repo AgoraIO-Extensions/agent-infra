@@ -26,6 +26,11 @@ import { useAgentSavedRelayKeyCandidates } from "./use-agent-saved-relay-key-can
 
 type AgentConfigurationWorkflowProps = {
 	agent: AgentProjectionV2;
+	/**
+	 * Agent 读自服务端管理员投影（系统管理员不在使用范围内，#3033）：Agent 详情对其不可见，
+	 * 返回链接改为 Agent 管理。
+	 */
+	administratorProjection?: boolean;
 	allowedEnvironmentKeys?: readonly string[];
 	allowedSecretKeys?: readonly string[];
 	deploymentModelCandidates?: readonly KeylessModelCandidate[];
@@ -49,6 +54,7 @@ export function AgentConfigurationWorkflow(
 
 function AgentConfigurationWorkflowContent({
 	agent,
+	administratorProjection = false,
 	allowedEnvironmentKeys,
 	allowedSecretKeys,
 	deploymentModelCandidates,
@@ -79,10 +85,12 @@ function AgentConfigurationWorkflowContent({
 			agent.source.kind === "standard" &&
 			defaultRelayKeyManaged,
 	);
+	// API 与应用授权只由当前 Owner 治理（PRD §7.3、工程 Spec §9.2），服务端拒绝非 Owner 的管理员；
+	// 纯管理员视图因此不显示授权控制，只显示服务端允许的管理员操作（#3033 AC-2）。
 	const authorization = (
 		<AgentAuthorizationControls
 			agentId={agent.agentId}
-			enabled={isConfigurationOwner || isSystemAdministrator}
+			enabled={isConfigurationOwner}
 		/>
 	);
 	const afterForm = (
@@ -96,8 +104,8 @@ function AgentConfigurationWorkflowContent({
 		return (
 			<AgentAdministratorConfigurationScreen
 				agent={agent}
-				authorization={authorization}
 				afterForm={afterForm}
+				back={administratorProjection ? "admin" : "detail"}
 			/>
 		);
 	}

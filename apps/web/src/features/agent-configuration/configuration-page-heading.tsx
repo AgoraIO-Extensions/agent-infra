@@ -9,13 +9,21 @@ import { formatPerson } from "../directory-names.js";
 import { configurationHeadingId } from "./configuration-lifecycle.js";
 
 /**
+ * 页头返回链接的去处：默认回 Agent 详情；读自管理员投影的纯管理员（不在使用范围内，
+ * Agent 详情对其不可见）回 Agent 管理（#3033）。
+ */
+export type ConfigurationPageBack = "detail" | "admin";
+
+/**
  * Owner 配置页头与权限边界说明；Owner 与纯管理员视图共用（O-05、O-12、N-02）。
  * h1 可被程序聚焦，作为操作区卸载后的焦点落点。
  */
 export function ConfigurationPageHeading({
 	agent,
+	back = "detail",
 }: {
 	agent: AgentProjectionV2;
+	back?: ConfigurationPageBack;
 }) {
 	// 设计 tag-row：一个可用性 chip（与 Agent 目录、详情同一派生规则）加一个「Owner · 名称」tag。
 	const availability = agentAvailabilityStatus(agent);
@@ -27,15 +35,26 @@ export function ConfigurationPageHeading({
 			<header className="page-heading">
 				<div>
 					{/* 站内导航用路由 Link，不整页刷新；exact 避免前缀匹配把返回链接标成当前页。 */}
-					<Link
-						className={buttonVariants({ variant: "ghost", size: "sm" })}
-						to="/agents/$agentId"
-						params={{ agentId: agent.agentId }}
-						activeOptions={{ exact: true }}
-					>
-						<ArrowLeft aria-hidden="true" />
-						返回 Agent 详情
-					</Link>
+					{back === "admin" ? (
+						<Link
+							className={buttonVariants({ variant: "ghost", size: "sm" })}
+							to="/admin/agents"
+							activeOptions={{ exact: true }}
+						>
+							<ArrowLeft aria-hidden="true" />
+							返回 Agent 管理
+						</Link>
+					) : (
+						<Link
+							className={buttonVariants({ variant: "ghost", size: "sm" })}
+							to="/agents/$agentId"
+							params={{ agentId: agent.agentId }}
+							activeOptions={{ exact: true }}
+						>
+							<ArrowLeft aria-hidden="true" />
+							返回 Agent 详情
+						</Link>
+					)}
 					<p className="page-eyebrow">Owner 配置 · {agent.name}</p>
 					<h1 id={configurationHeadingId} tabIndex={-1}>
 						配置 Agent 的 Owner、范围和运行方式。

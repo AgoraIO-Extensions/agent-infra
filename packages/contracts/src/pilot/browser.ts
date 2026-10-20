@@ -2151,6 +2151,21 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+	// #3033：系统管理员按职责读取单个 Agent，形状与管理员列表项相同；不扩大 getAgentV2 的可见范围。
+	"/api/v2/admin/agents/{agentId}": {
+		get: {
+			operationId: "getAdminAgentV2",
+			summary: "Read one Agent through the administrator projection",
+			description:
+				"Browser session only; no Authorization header or query. The current identity must be an active system_admin. Returns the same AgentProjectionV2 as listAdminAgentsV2, does not widen getAgentV2 visibility and grants no configuration, authorization or use rights. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"200": jsonResponse("Administrator Agent", AgentProjectionV2Schema),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agents": {
 		get: {
 			operationId: "listAgentsV2",

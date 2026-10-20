@@ -600,6 +600,157 @@ describe("V2 management routes", () => {
 		}
 	});
 
+	// #3033：管理员读取单个 Agent，供不在使用范围内的管理员进入配置页与停用。
+	it("reads one Agent in administrator scope with the list projection and leaves the ordinary read in user scope", async () => {
+		const { app, getAgent, readAgentProjection, executeManagementCommand } =
+			createApp({ administrator: true });
+		const response = await app.request("/api/v2/admin/agents/agent-1");
+		expect(response.status).toBe(200);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		expect(getAgent).toHaveBeenCalledExactlyOnceWith(
+			{ kind: "administrator" },
+			"agent-1",
+		);
+		const body = await response.json();
+		const projected = AgentProjectionV2Schema.parse(body);
+		// Owner 来自服务端投影，与管理员列表项相同；不带旧 Action 或申请人字段。
+		expect(projected).toMatchObject({
+			agentId: "agent-1",
+			configuration: { owners: configuration.owners },
+		});
+		expect(projected.configuration).not.toHaveProperty("actions");
+		expect(body).not.toHaveProperty("applicant");
+		expect(readAgentProjection).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({
+				agent: agentRecord,
+				identity: expect.objectContaining({
+					userId: identity.userId,
+					roles: ["employee", "system_admin"],
+				}),
+			}),
+		);
+		expect(executeManagementCommand).not.toHaveBeenCalled();
+
+		// 普通读取的范围不随管理员入口扩大。
+		expect((await app.request("/api/v2/agents/agent-1")).status).toBe(200);
+		expect(getAgent).toHaveBeenLastCalledWith(
+			{ kind: "user", userId: identity.userId, organizationIds: ["org-1"] },
+			"agent-1",
+		);
+	});
+
+	it("returns the ordinary unavailable result when the administrator scope has no such Agent", async () => {
+		const { app, getAgent, readAgentProjection } = createApp({
+			administrator: true,
+		});
+		getAgent.mockResolvedValueOnce(undefined);
+		const response = await app.request("/api/v2/admin/agents/agent-missing");
+		expect(response.status).toBe(404);
+		expect(PilotProtocolErrorV1Schema.parse(await response.json()).code).toBe(
+			"RESOURCE_UNAVAILABLE",
+		);
+		expect(getAgent).toHaveBeenCalledExactlyOnceWith(
+			{ kind: "administrator" },
+			"agent-missing",
+		);
+		expect(readAgentProjection).not.toHaveBeenCalled();
+	});
+
+	it("rejects employees, forged identity headers and disabled or absent identities before querying one Agent", async () => {
+		for (const [identityValue, status, code] of [
+			[identity, 403, "RESOURCE_UNAVAILABLE"],
+			[
+				{ ...identity, organizationIds: ["org-other"] },
+				403,
+				"RESOURCE_UNAVAILABLE",
+			],
+			[
+				{ ...identity, roles: ["system_admin"], accountStatus: "disabled" },
+				403,
+				"AUTHORIZATION_REVOKED",
+			],
+			[null, 401, "AUTHENTICATION_REQUIRED"],
+		] as const) {
+			const { app, getAgent, readAgentProjection } = createApp({
+				identityValue,
+			});
+			const response = await app.request("/api/v2/admin/agents/agent-1", {
+				headers: {
+					"x-user-id": "admin",
+					"x-role": "system_admin",
+					"x-roles": "system_admin",
+					"x-identity-context": "administrator",
+				},
+			});
+			expect(response.status).toBe(status);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+			const error = PilotProtocolErrorV1Schema.parse(await response.json());
+			expect(error.code).toBe(code);
+			expect(JSON.stringify(error)).not.toContain("Release assistant");
+			expect(getAgent).not.toHaveBeenCalled();
+			expect(readAgentProjection).not.toHaveBeenCalled();
+		}
+	});
+
+	it("accepts only the browser session and rejects caller-selected scopes or identities on one Agent", async () => {
+		const { app, getAgent, resolve } = createApp({ administrator: true });
+		const bearer = await app.request("/api/v2/admin/agents/agent-1", {
+			headers: {
+				Authorization: "Bearer fixture-api-credential",
+				Cookie: "fixture-browser-session=admin",
+			},
+		});
+		expect(bearer.status).toBe(401);
+		expect(PilotProtocolErrorV1Schema.parse(await bearer.json()).code).toBe(
+			"AUTHENTICATION_REQUIRED",
+		);
+		expect(resolve).not.toHaveBeenCalled();
+		for (const query of [
+			"scope=administrator",
+			"userId=admin",
+			"role=system_admin",
+		]) {
+			const response = await app.request(
+				`/api/v2/admin/agents/agent-1?${query}`,
+			);
+			expect(response.status).toBe(400);
+			expect(PilotProtocolErrorV1Schema.parse(await response.json()).code).toBe(
+				"INVALID_REQUEST",
+			);
+		}
+		expect(getAgent).not.toHaveBeenCalled();
+		// 每次请求都重新确认当前角色：角色被撤销后同一会话立即被拒绝。
+		expect((await app.request("/api/v2/admin/agents/agent-1")).status).toBe(
+			200,
+		);
+		resolve.mockResolvedValueOnce(identity);
+		expect((await app.request("/api/v2/admin/agents/agent-1")).status).toBe(
+			403,
+		);
+		expect(getAgent).toHaveBeenCalledTimes(1);
+	});
+
+	it("fails closed for single administrator read dependencies without exposing private details", async () => {
+		for (const failure of [
+			{ identityFailure: true },
+			{ projectionFailure: true },
+		]) {
+			const { app } = createApp({ administrator: true, ...failure });
+			const response = await app.request("/api/v2/admin/agents/agent-1");
+			expect(response.status).toBe(503);
+			const error = PilotProtocolErrorV1Schema.parse(await response.json());
+			expect(error.code).toBe("DEPENDENCY_UNAVAILABLE");
+			expect(JSON.stringify(error)).not.toContain("private");
+		}
+		const { app, getAgent } = createApp({ administrator: true });
+		getAgent.mockRejectedValueOnce(new Error("private query detail"));
+		const response = await app.request("/api/v2/admin/agents/agent-1");
+		expect(response.status).toBe(503);
+		const error = PilotProtocolErrorV1Schema.parse(await response.json());
+		expect(error.code).toBe("DEPENDENCY_UNAVAILABLE");
+		expect(JSON.stringify(error)).not.toContain("private");
+	});
+
 	it("uses owner scope and returns an action-free V2 agent projection", async () => {
 		const { app, listAgents } = createApp();
 		const response = await app.request("/api/v2/agents?scope=owner&limit=10");
