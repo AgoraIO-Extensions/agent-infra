@@ -49,7 +49,7 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 
 ### 与导出设计的已定差异
 
-以下差异已在 #2862、#2863、#2903 确认，实现与验收以这里为准，等待设计稿回写：
+以下差异已在 #2862、#2863、#2903、#2996 确认，实现与验收以这里为准，等待设计稿回写：
 
 | 位置 | 实现 | 依据 |
 | --- | --- | --- |
@@ -61,6 +61,7 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | Skill 发布范围 MEMBER | 文案为「全体成员」 | PRD §11.5 |
 | 个人 API 凭证 | 不提供轮换；已撤销行只显示撤销时间 | PRD §7.3 |
 | 对话标题 | 标题展示遵循 PRD | [PRD §12.2](../prd/PRD-agent-platform-M1.md#122-会话历史) |
+| 新会话首条消息前的「/」 | 不提供命令与 Skill 目录，说明「发送第一条消息后可使用命令与 Skill。」 | [工程 Spec §11.4](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界) |
 | Builder、预览 | 不提供页面 | PRD §1、§5.7、§11.1 |
 | Agent 的 Skill 绑定卡 | 增加「解除绑定」，确认后提交不含该项的完整集合 | #2903 AC-1、[工程 Spec §11.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配) |
 
