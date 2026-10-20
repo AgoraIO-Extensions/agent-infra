@@ -3,7 +3,21 @@
   "type": "object",
   "required": ["images", "secrets", "publicOrigin", "directory", "scheduling", "resources", "postgres", "ingress", "migrations"],
   "properties": {
-    "images": {"type": "object", "additionalProperties": true, "required": ["web", "api", "worker", "directory", "postgres", "pullSecrets"]},
+    "images": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["web", "api", "worker", "directory", "postgres", "runtimeHost", "pullSecrets"],
+      "properties": {
+        "runtimeHost": {
+          "type": "object",
+          "required": ["repository", "digest"],
+          "properties": {
+            "repository": {"type": "string", "minLength": 1},
+            "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+          }
+        }
+      }
+    },
     "secrets": {"type": "object", "additionalProperties": {"type": "string"}},
     "publicOrigin": {"type": "string", "pattern": "^https://"},
     "directory": {"type": "object", "required": ["corpId", "sourceConfigMap", "sourceModule", "runtimeDatabaseRole"]},

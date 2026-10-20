@@ -97,7 +97,7 @@ Key 被 billing 拒绝时返回 `INVALID_REQUEST`；校验依赖不可用时返�
 内置模块从 `PLATFORM_DATABASE_URL` 取数据库 URL，从上述 Secret 文件读取高熵
 代理令牌，并覆盖 `apiInput` 中的
 数据库和身份字段。缺失或无效配置启动失败。API 不接收 Worker 解密私钥、
-Kubernetes 凭证或模型原始凭据。issuer/UID 映射由 `@agent-infra/platform-store` 的 `PostgresLdapIdentityIds` 提供，使用同一 Platform 数据库 URL；正式迁移自动创建映射表，首次成功 LDAP 认证时原子分配随机平台 ID，部署方无需手工录入 UID 对应表。`isPlatformDisabled` 查询现有 `platform_user_disables` 表。示例固定值、内存映射和历史 Authentik proof 不能作为真实身份验收。
+Kubernetes 凭证或模型原始凭据。issuer/UID 映射由 `@agent-infra/platform-store` 的 `PostgresLdapIdentityIds` 提供，使用同一 Platform 数据库 URL；正式迁移自动创建映射表，首次成功 LDAP 认证时原子分配随机平台 ID，部署方无需手工录入 UID 对应表。`isPlatformDisabled` 查询现有 `platform_user_disables` 表。示例固定值、内存映射和历史身份 proof 不能作为真实身份验收。
 
 启动和验收入口见[本地生命周期](../local/README.md)。镜像内模块可加载、
 代理令牌正确与否及 PostgreSQL 会话装配属于部署证据；实际 LDAP 登录、

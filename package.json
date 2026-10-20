@@ -13,7 +13,7 @@
 		"dev": "turbo run dev",
 		"build": "turbo run build",
 		"check": "biome check . && node tests/support/web-ui-policy.mjs",
-		"check-types": "turbo run check-types && tsc --project deploy/local/authentik/tsconfig.json --noEmit",
+		"check-types": "turbo run check-types",
 		"test:meta": "node --test .github/scripts/*.test.mjs tests/*.test.mjs",
 		"test:packages:parallel": "pnpm --workspace-concurrency=2 --filter @agent-infra/enterprise-directory --filter @agent-infra/identity --filter @agent-infra/image-registry --filter @agent-infra/model-catalog --filter @agent-infra/object-storage --filter @agent-infra/observability --filter @agent-infra/secret-store --filter @agent-infra/wecom test",
 		"test:packages:serial": "pnpm --workspace-concurrency=1 --filter @agent-infra/agent-runtime --filter @agent-infra/contracts --filter @agent-infra/enterprise-directory-store --filter @agent-infra/platform-core --filter @agent-infra/platform-store --filter @agent-infra/test-support test",
