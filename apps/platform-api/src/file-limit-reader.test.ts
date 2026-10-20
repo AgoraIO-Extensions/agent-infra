@@ -69,6 +69,7 @@ function assembly(
 			...keys,
 			publicKeys: new Map([["file-key", keys.publicKey]]),
 			runtimeIssuer: "platform-runtime",
+			runtimeWorkerId: "runtime-worker",
 			runtimePublicKeys: new Map([["runtime-key", keys.publicKey]]),
 			intentTtlMs: 60000,
 			accessTtlMs: 10000,
