@@ -499,7 +499,6 @@ function createSessionSandboxAllocationResolverV1(
 			projection.agentId !== binding.agentId ||
 			projection.configurationRevision !== deployment.configRevision ||
 			templateBinding.imageDigest !== deployment.imageDigest ||
-			templateBinding.driver !== "codex" ||
 			deployment.runtimeManifest.interactionMode !== "platform-adapter" ||
 			(workload.policy.nativeMetadataWorkerEgress !== undefined &&
 				!isNativeMetadataWorkerOriginV1(auth.nativeMetadataWorkerOrigin)) ||
@@ -512,7 +511,7 @@ function createSessionSandboxAllocationResolverV1(
 		)
 			throw new WorkloadKubernetesError("policy");
 		return {
-			driver: "codex",
+			driver: templateBinding.driver,
 			modelConfiguration: runtimeModelInjectionV4(projection).configuration,
 			workerId: auth.workerId,
 			grantKeyId: auth.grantKeyId,

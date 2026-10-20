@@ -82,6 +82,16 @@ service token 永不写入 Sandbox。Session 的 `nativeMetadataWorkerEgress` �
 namespace/pod-label selector 与单一 TCP port，缺失策略保持 NetworkPolicy deny-all，IP/CIDR
 目标会在资源写入前拒绝。
 
+## Session Runtime Driver
+
+Session Sandbox 的 Driver 来自部署已信任的标准模板绑定，不能由用户请求选择。
+Codex 使用 `openai-responses-v1`；Claude、OpenCode（`acp`）与 Pi 使用
+`anthropic-messages-v1`。Worker 核对 Driver 与无凭证 V4 模型配置的协议，再将配置和派生的
+传输 Token 写入该 Session 自己的 Secret；未知 Driver、协议错配或模板信任撤销时拒绝创建。
+
+每个模板仍须通过自身的真实模型验证及目标节点上的隔离检查。Messages 模板可被装配，
+不代表它已通过真实用户对话验收，也不代替 Codex 的 Landlock 要求。
+
 ## Skill 物化的 Agent Version
 
 配置模块可选导出 `skillMaterialization`，装配 Store 与对象存储支撑的 Skill 物化。其中
