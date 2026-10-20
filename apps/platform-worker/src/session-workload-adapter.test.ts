@@ -1637,7 +1637,23 @@ describe("Session Sandbox Runtime projection (#1466)", () => {
 				}),
 			},
 		],
-		["another driver", { driver: "claude" }],
+		["a Driver/protocol mismatch", { driver: "claude" }],
+		["an unknown Driver", { driver: "unknown" }],
+		[
+			"Messages configuration with the Codex Driver",
+			{
+				modelConfiguration: JSON.stringify({
+					...JSON.parse(allocation.runtime!.modelConfiguration),
+					modelOptions: JSON.parse(
+						allocation.runtime!.modelConfiguration,
+					).modelOptions.map((option: object) => ({
+						...option,
+						protocol: "anthropic-messages-v1",
+						authentication: "api-key",
+					})),
+				}),
+			},
+		],
 		["an extra input", { credential: "synthetic" }],
 	])("rejects %s before any resource write", async (_name, override) => {
 		const client = api();

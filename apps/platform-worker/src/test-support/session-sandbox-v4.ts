@@ -29,12 +29,14 @@ export const sessionSandboxRuntimeAuthFixture: WorkloadRuntimeAuthV1 = {
 
 export function sessionSandboxTemplateBindingFixture(
 	imageDigest: string,
+	driver: StandardTemplateModelBindingV1["driver"] = "codex",
 ): StandardTemplateModelBindingV1 {
 	return {
-		templateId: "codex-standard",
+		templateId: `${driver}-standard`,
 		imageDigest,
-		driver: "codex",
-		protocol: "openai-responses-v1",
+		driver,
+		protocol:
+			driver === "codex" ? "openai-responses-v1" : "anthropic-messages-v1",
 	};
 }
 
@@ -43,7 +45,12 @@ export function sessionSandboxModelProjectionFixture(input: {
 	readonly agentId: string;
 	readonly configurationRevision: number;
 	readonly imageDigest: string;
+	readonly driver?: StandardTemplateModelBindingV1["driver"];
 }): RuntimeModelProjectionV4 {
+	const binding = sessionSandboxTemplateBindingFixture(
+		input.imageDigest,
+		input.driver,
+	);
 	const content = {
 		schemaVersion: 4 as const,
 		agentId: input.agentId,
@@ -51,9 +58,7 @@ export function sessionSandboxModelProjectionFixture(input: {
 		catalogRevision: "catalog-1",
 		defaultOptionId: "default",
 		defaultReasoningLevel: "medium",
-		standardTemplateBinding: sessionSandboxTemplateBindingFixture(
-			input.imageDigest,
-		),
+		standardTemplateBinding: binding,
 		options: [
 			{
 				optionId: "default",
@@ -61,7 +66,10 @@ export function sessionSandboxModelProjectionFixture(input: {
 					endpointId: "relay",
 					baseUrl: "https://relay.example.test/v1",
 					origin: "https://relay.example.test",
-					protocol: "openai-responses-v1" as const,
+					protocol: binding.protocol,
+					...(binding.driver === "codex"
+						? {}
+						: { authentication: "api-key" as const }),
 					security: {
 						tls: "verify-peer" as const,
 						redirects: "reject" as const,

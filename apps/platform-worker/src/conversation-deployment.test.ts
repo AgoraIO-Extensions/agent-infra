@@ -411,6 +411,41 @@ describe("production SessionSandbox resource receiver", () => {
 		expect(podReads).toBeGreaterThanOrEqual(2);
 	});
 
+	it.each(["claude", "acp", "pi"] as const)(
+		"projects the deployment-trusted %s Driver into its own Session Pod",
+		async (driver) => {
+			const f = fixture();
+			const modelProjection = sessionSandboxModelProjectionFixture({
+				agentId: f.claim.sandbox.agentId,
+				configurationRevision: 1,
+				imageDigest: f.claim.policy.imageDigest,
+				driver,
+			});
+			const receive = createProductionSessionSandboxReceiverV1(
+				{
+					...f.options,
+					templateModelBindings: [modelProjection.standardTemplateBinding],
+				},
+				{ serviceToken: sessionSandboxDeploymentTokenFixture },
+			);
+			await receive(
+				{ ...f.claim, modelProjection },
+				new AbortController().signal,
+			);
+			const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+			expect(pod.spec?.containers[0]?.env).toContainEqual({
+				name: "AGENT_INFRA_RUNTIME_DRIVER",
+				value: driver,
+			});
+			const secret = [...f.resources.values()].find(
+				(resource) => resource.kind === "Secret",
+			) as V1Secret;
+			expect(
+				Buffer.from(secret.data?.["model-config"] ?? "", "base64").toString(),
+			).toBe(runtimeModelInjectionV4(modelProjection).configuration);
+		},
+	);
+
 	it("rejects a mismatched persisted policy before any resource write", async () => {
 		const f = fixture();
 		await expect(

@@ -44,7 +44,7 @@ import {
  * to them by key and never receives a deployment-level credential.
  */
 export interface SessionSandboxRuntimeInputV1 {
-	readonly driver: "codex";
+	readonly driver: "codex" | "claude" | "acp" | "pi";
 	/** Non-sensitive keyless V4 configuration from the verified projection. */
 	readonly modelConfiguration: string;
 	readonly workerId: string;
@@ -379,7 +379,7 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,serviceToken,workerId",
 				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,nativeMetadataWorkerOrigin,serviceToken,workerId",
 			].includes(Object.keys(runtime).sort().join(",")) ||
-			runtime.driver !== "codex" ||
+			!["codex", "claude", "acp", "pi"].includes(runtime.driver) ||
 			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
 				(item) => typeof item === "string" && runtimeTextPattern.test(item),
 			) ||
@@ -394,9 +394,17 @@ function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
 		)
 			throw new Error();
 		// Keyless V4 only: static model credentials are never projected here.
-		RuntimeModelConfigurationV4Schema.parse(
+		const configuration = RuntimeModelConfigurationV4Schema.parse(
 			JSON.parse(runtime.modelConfiguration),
 		);
+		const protocol =
+			runtime.driver === "codex"
+				? "openai-responses-v1"
+				: "anthropic-messages-v1";
+		if (
+			configuration.modelOptions.some((option) => option.protocol !== protocol)
+		)
+			throw new Error();
 	} catch {
 		throw new WorkloadKubernetesError("policy");
 	}
