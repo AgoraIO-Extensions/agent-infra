@@ -639,6 +639,7 @@ jobs:
             --name "$tls_container" --network=none --read-only \
             --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,size=16m,mode=1777 \
             --add-host platform-api:127.0.0.1 \
+            --add-host agent-infra-api:127.0.0.1 \
             --env PLATFORM_PROXY_TOKEN=synthetic-ci-proxy-token \
             --env PLATFORM_PROXY_TOKEN_REQUIRED=true \
             --env PLATFORM_PROXY_SCHEME=https \
