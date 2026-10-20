@@ -30,6 +30,49 @@ async function cleanFixture(path) {
 	await rm(path, { recursive: true, force: true });
 }
 
+// #2978：安装脚本连同模型目录模块、追加条目与摘要清单一起放进临时仓库根目录。
+const upstreamCommit = "a".repeat(40);
+const upstreamCatalogUrl = `https://raw.githubusercontent.com/openai/codex/${upstreamCommit}/codex-rs/models-manager/models.json`;
+const upstreamCatalog = JSON.stringify({
+	models: [{ slug: "upstream-model", priority: 1 }],
+});
+const catalogAdditions = JSON.stringify({ models: [{ slug: "added-model" }] });
+// 独立写出期望字节，不复用被测模块：内置条目在前，追加条目在后。
+const expectedCatalog = `${JSON.stringify({
+	models: [{ slug: "upstream-model", priority: 1 }, { slug: "added-model" }],
+})}\n`;
+const digest = (bytes) =>
+	`sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+
+async function stageInstaller(
+	root,
+	{
+		additions = catalogAdditions,
+		upstreamPin = digest(upstreamCatalog),
+		catalogPin = digest(expectedCatalog),
+	} = {},
+) {
+	await mkdir(join(root, "deploy/runtime"), { recursive: true });
+	await mkdir(join(root, "packages/agent-runtime/src"), { recursive: true });
+	for (const name of ["install-codex.mjs", "codex-models.mjs"])
+		await copyFile(
+			new URL(`../deploy/runtime/${name}`, import.meta.url),
+			join(root, "deploy/runtime", name),
+		);
+	await writeFile(
+		join(root, "deploy/runtime/codex-models-additions.json"),
+		additions,
+	);
+	await writeFile(
+		join(root, "packages/agent-runtime/src/codex-models.json"),
+		JSON.stringify({ upstreamSha256: upstreamPin, sha256: catalogPin }),
+	);
+	return join(root, "deploy/runtime/install-codex.mjs");
+}
+
+// 只对固定提交的目录 URL 返回内置目录，其他 URL 视为不存在。
+const catalogFetch = `url === ${JSON.stringify(upstreamCatalogUrl)} ? new Response(${JSON.stringify(upstreamCatalog)}) : url.endsWith("/models.json") ? new Response("", { status: 404 }) :`;
+
 for (const scenario of ["new", "replace", "rollback", "cleanup-failure"])
 	test(
 		scenario === "rollback"
@@ -45,15 +88,7 @@ for (const scenario of ["new", "replace", "rollback", "cleanup-failure"])
 			const root = await mkdtemp(join(tmpdir(), "codex-installer-test-"));
 			const destination = join(root, "installed");
 			try {
-				await mkdir(join(root, "deploy/runtime"), { recursive: true });
-				await mkdir(join(root, "packages/agent-runtime/src"), {
-					recursive: true,
-				});
-				const installer = join(root, "deploy/runtime/install-codex.mjs");
-				await copyFile(
-					new URL("../deploy/runtime/install-codex.mjs", import.meta.url),
-					installer,
-				);
+				const installer = await stageInstaller(root);
 				const binary = Buffer.from("synthetic upstream bytes");
 				const name = "codex-test";
 				await writeFile(join(root, name), binary);
@@ -66,7 +101,7 @@ for (const scenario of ["new", "replace", "rollback", "cleanup-failure"])
 				const hash = (bytes) =>
 					`sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 				const manifest = {
-					provenance: { upstreamTag: "test", upstreamCommit: "test" },
+					provenance: { upstreamTag: "test", upstreamCommit },
 					artifacts: {
 						amd64: {
 							name,
@@ -108,7 +143,7 @@ fs.rename = async (source, target) => {
   return originalRename(source, target);
 };
 syncBuiltinESMExports();
-globalThis.fetch = async (url) => new Response(url.endsWith(".tar.gz") ? await readFile(new URL("./archive.tar.gz", import.meta.url)) : "synthetic license");`,
+globalThis.fetch = async (url) => ${catalogFetch} new Response(url.endsWith(".tar.gz") ? await readFile(new URL("./archive.tar.gz", import.meta.url)) : "synthetic license");`,
 				);
 				const install = () =>
 					execFileSync(
@@ -174,6 +209,7 @@ globalThis.fetch = async (url) => new Response(url.endsWith(".tar.gz") ? await r
 					["bin/codex", 0o555],
 					["share/release.json", 0o444],
 					["share/LICENSE", 0o444],
+					["share/models.json", 0o444],
 				]) {
 					const info = await stat(join(destination, path));
 					assert.equal(info.mode & 0o7777, mode, path);
@@ -183,6 +219,10 @@ globalThis.fetch = async (url) => new Response(url.endsWith(".tar.gz") ? await r
 				assert.deepEqual(
 					await readFile(join(destination, "bin/codex")),
 					binary,
+				);
+				assert.equal(
+					await readFile(join(destination, "share/models.json"), "utf8"),
+					expectedCatalog,
 				);
 			} finally {
 				await cleanFixture(root);
@@ -194,13 +234,7 @@ test("upstream installer validates the archive member before replacing an existi
 	const root = await mkdtemp(join(tmpdir(), "codex-installer-invalid-member-"));
 	const destination = join(root, "installed");
 	try {
-		await mkdir(join(root, "deploy/runtime"), { recursive: true });
-		await mkdir(join(root, "packages/agent-runtime/src"), { recursive: true });
-		const installer = join(root, "deploy/runtime/install-codex.mjs");
-		await copyFile(
-			new URL("../deploy/runtime/install-codex.mjs", import.meta.url),
-			installer,
-		);
+		const installer = await stageInstaller(root);
 		await mkdir(destination, { recursive: true });
 		const sentinel = join(destination, "sentinel");
 		await writeFile(sentinel, "keep-existing-install");
@@ -237,13 +271,7 @@ test("upstream installer keeps the previous install when staging validation fail
 	);
 	const destination = join(root, "installed");
 	try {
-		await mkdir(join(root, "deploy/runtime"), { recursive: true });
-		await mkdir(join(root, "packages/agent-runtime/src"), { recursive: true });
-		const installer = join(root, "deploy/runtime/install-codex.mjs");
-		await copyFile(
-			new URL("../deploy/runtime/install-codex.mjs", import.meta.url),
-			installer,
-		);
+		const installer = await stageInstaller(root);
 		await mkdir(destination, { recursive: true });
 		const sentinel = join(destination, "sentinel");
 		await writeFile(sentinel, "keep-existing-install");
@@ -280,3 +308,79 @@ test("upstream installer keeps the previous install when staging validation fail
 		await rm(root, { recursive: true, force: true });
 	}
 });
+
+// #2978：目录摘要、追加条目或内置目录任一不符时，安装失败且保留原安装。
+for (const [scenario, options, expected] of [
+	[
+		"catalog pin mismatch",
+		{ catalogPin: digest("another catalog") },
+		/Codex model catalog checksum mismatch/,
+	],
+	[
+		"upstream catalog pin mismatch",
+		{ upstreamPin: digest("another upstream catalog") },
+		/Codex release asset checksum mismatch/,
+	],
+	[
+		"addition overriding a built-in model",
+		{ additions: JSON.stringify({ models: [{ slug: "upstream-model" }] }) },
+		/Codex model catalog is invalid/,
+	],
+	[
+		"addition with an extra top-level field",
+		{ additions: JSON.stringify({ models: [{ slug: "x" }], extra: true }) },
+		/Codex model catalog is invalid/,
+	],
+])
+	test(`upstream installer keeps the previous install on ${scenario}`, async () => {
+		const root = await mkdtemp(join(tmpdir(), "codex-installer-catalog-"));
+		const destination = join(root, "installed");
+		try {
+			const installer = await stageInstaller(root, options);
+			const binary = Buffer.from("synthetic upstream bytes");
+			await writeFile(join(root, "codex-test"), binary);
+			const archive = join(root, "archive.tar.gz");
+			execFileSync("tar", ["-czf", archive, "-C", root, "codex-test"]);
+			await writeFile(
+				join(root, "packages/agent-runtime/src/codex-release.json"),
+				JSON.stringify({
+					provenance: { upstreamTag: "test", upstreamCommit },
+					artifacts: {
+						amd64: {
+							name: "codex-test",
+							archiveSha256: digest(await readFile(archive)),
+							executableSha256: digest(binary),
+						},
+					},
+					legal: { LICENSE: digest("synthetic license") },
+				}),
+			);
+			await mkdir(destination, { recursive: true });
+			const sentinel = join(destination, "sentinel");
+			await writeFile(sentinel, "keep-existing-install");
+			const preload = join(root, "download-fixture.mjs");
+			await writeFile(
+				preload,
+				`import { readFile } from "node:fs/promises";
+globalThis.fetch = async (url) => ${catalogFetch} new Response(url.endsWith(".tar.gz") ? await readFile(new URL("./archive.tar.gz", import.meta.url)) : "synthetic license");`,
+			);
+			assert.throws(
+				() =>
+					execFileSync(
+						process.execPath,
+						["--import", preload, installer, "amd64", destination],
+						{ stdio: "pipe" },
+					),
+				expected,
+			);
+			assert.equal(await readFile(sentinel, "utf8"), "keep-existing-install");
+			assert.deepEqual(
+				(await readdir(root)).filter((name) =>
+					name.startsWith(".codex-install-"),
+				),
+				[],
+			);
+		} finally {
+			await cleanFixture(root);
+		}
+	});

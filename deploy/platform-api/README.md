@@ -141,8 +141,14 @@ docker run --rm -i --network none --entrypoint node \
 
 [`codex-model-profiles.mjs`](../runtime/codex-model-profiles.mjs) 在容器内以临时空 HOME 启动
 `codex app-server`，按 Runtime 相同的分页读取含隐藏项的 `model/list`；不联网、不读取凭证，
-失败时只输出固定错误码。把生成的数组原样写入私有配置的 `codexModelProfiles`。Model Catalog
-的 `allowedModels` 仍只应列出该数组中存在、且模型端点实际可用的模型。
+失败时只输出固定错误码。它与 Runtime 官方 lane 一样以 `--strict-config` 加载镜像内的模型目录
+`/opt/codex/share/models.json`（见 [Codex 运行装配](../runtime/README.md#固定镜像)），所以
+结果包含固定 Codex 的内置模型以及经评审追加的 DeepSeek 模型（`deepseek-flash`、`deepseek-v4-pro`，
+推理档位 `low`、`high`、`max`）。不含该目录的旧镜像上脚本以 `CODEX_MODEL_PROFILES_UNAVAILABLE`
+失败，这类镜像使用其源码提交中的同名脚本生成。把生成的数组原样写入私有配置的 `codexModelProfiles`。Model Catalog
+的 `allowedModels` 仍只应列出该数组中存在、且模型端点实际可用的模型；要让 Owner 选用 DeepSeek，
+该端点的 `capabilities.reasoningLevels` 还要包含所需档位（DeepSeek 为 `low`、`high`、`max`）。
+每个模型实际可选的档位仍以 `codexModelProfiles` 为准。
 
 ## 多服务 Agent 资源档位
 

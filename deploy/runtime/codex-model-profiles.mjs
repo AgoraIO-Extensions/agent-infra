@@ -6,13 +6,16 @@
 //     <registry>/agent-runtime-host@sha256:<digest> --input-type=module - \
 //     < deploy/runtime/codex-model-profiles.mjs
 //
-// 结果与 Runtime readiness 使用同一份 `model/list`（含隐藏模型、分页）。
+// 结果与 Runtime readiness 使用同一份 `model/list`（含隐藏模型、分页），也加载 Runtime 官方
+// lane 使用的同一个镜像内模型目录（#2978）。
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const codex = process.env.CODEX_BIN || "/opt/codex/bin/codex";
+// 与 packages/agent-runtime 的 CODEX_MODEL_CATALOG_PATH 相同，测试会核对两者一致。
+const modelCatalog = "/opt/codex/share/models.json";
 const pageSize = 100;
 const maximumPages = 8;
 const timeoutMs = 30_000;
@@ -25,11 +28,20 @@ function fail(code) {
 }
 
 const home = mkdtempSync(join(tmpdir(), "codex-model-profiles-"));
-const child = spawn(codex, ["app-server"], {
-	// 只传 PATH：不继承部署环境中的任何凭证或代理配置。
-	env: { HOME: home, CODEX_HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
-	stdio: ["pipe", "pipe", "ignore"],
-});
+const child = spawn(
+	codex,
+	[
+		"app-server",
+		"--strict-config",
+		"--config",
+		`model_catalog_json=${JSON.stringify(modelCatalog)}`,
+	],
+	{
+		// 只传 PATH：不继承部署环境中的任何凭证或代理配置。
+		env: { HOME: home, CODEX_HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+		stdio: ["pipe", "pipe", "ignore"],
+	},
+);
 const cleanup = () => {
 	child.kill();
 	rmSync(home, { recursive: true, force: true });

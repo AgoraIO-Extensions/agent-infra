@@ -3274,6 +3274,14 @@ function assertContainedConfiguration(
 			if (origin === undefined) configurationInvalid();
 			assertSessionFlagOrigin(origin);
 		}
+	} else if (
+		// #2978：只有官方 lane 加载随镜像固定的模型目录，其他 lane 沿用内置列表。
+		// 固定 Codex 把未设置的目录序列化为 null，且不记录 origin。
+		(value.config.model_catalog_json !== undefined &&
+			value.config.model_catalog_json !== null) ||
+		ownRecordValue(value.origins, "model_catalog_json") !== undefined
+	) {
+		configurationInvalid();
 	}
 	for (const key of isolatedConfigurationKeys) {
 		if (key === "mcp_servers" && expected.connectionProfile) {

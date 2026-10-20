@@ -200,6 +200,9 @@ const landlockDeviceRights = "read-file,read-dir,write-file";
 // access, so granting that would make every sibling Conversation listable again.
 const linuxNativeSandboxMode = "danger-full-access";
 
+/** 随 Runtime 镜像固定的模型目录（#2978），由 install-codex.mjs 生成并按摘要校验。 */
+export const CODEX_MODEL_CATALOG_PATH = "/opt/codex/share/models.json";
+
 /** Fixed deployment policy for the official lane, never native/user overrides. */
 export const CODEX_MODEL_ONLY_CONFIG = Object.freeze({
 	web_search: "disabled",
@@ -216,6 +219,8 @@ export const CODEX_MODEL_ONLY_CONFIG = Object.freeze({
 	"features.hooks": false,
 	"features.memories": false,
 	"features.shell_snapshot": false,
+	// 目录替换固定 Codex 的内置模型列表：内置条目原样保留，另含经评审的追加模型。
+	model_catalog_json: CODEX_MODEL_CATALOG_PATH,
 });
 
 /**

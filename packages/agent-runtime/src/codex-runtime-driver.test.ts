@@ -6901,6 +6901,52 @@ describe("Codex Runtime Driver", () => {
 	);
 
 	it.each([
+		[
+			"a catalog path",
+			{ model_catalog_json: "/opt/codex/share/models.json" },
+			{ model_catalog_json: sessionFlagOrigin() },
+		],
+		[
+			"only a catalog origin",
+			{ model_catalog_json: null },
+			{ model_catalog_json: sessionFlagOrigin() },
+		],
+		[
+			"a catalog path without origin",
+			{ model_catalog_json: "/tmp/models.json" },
+			{},
+		],
+	] as const)(
+		"fails closed when the private lane loads a model catalog with %s (#2978)",
+		async (_name, config, origins) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			bridge.setConfigReadResult(configReadResult({ config, origins }));
+
+			await expect(
+				openDriver(join(directory, "driver.json"), bridge),
+			).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
+			});
+			expect(bridge.isClosed()).toBe(true);
+		},
+	);
+
+	it("accepts the pinned null model catalog on the private lane (#2978)", async () => {
+		// 固定 Codex 0.153.0 对未设置的目录返回 null 且不记录 origin。
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		bridge.setConfigReadResult(
+			configReadResult({ config: { model_catalog_json: null } }),
+		);
+
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+
+		expect(bridge.isClosed()).toBe(false);
+	});
+
+	it.each([
 		["missing config", { origins: {} }, "RUNTIME_CODEX_PROTOCOL_INVALID"],
 		[
 			"unexpected layers",
@@ -14766,6 +14812,57 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 				else config.config.model_reasoning_summary = value;
 				if (!sessionFlag) delete config.origins.model_reasoning_summary;
 			});
+			await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject(
+				{ code: "RUNTIME_CODEX_CONFIGURATION_INVALID" },
+			);
+			expect(
+				f.bridge.requests.some((r) => r.method.startsWith("skills/")),
+			).toBe(false);
+		},
+	);
+
+	const catalogTampering: [
+		string,
+		(config: {
+			config: Record<string, unknown>;
+			origins: Record<string, unknown>;
+		}) => void,
+	][] = [
+		[
+			"another path",
+			(config) => {
+				config.config.model_catalog_json = "/opt/codex/share/other.json";
+			},
+		],
+		[
+			"no catalog",
+			(config) => {
+				config.config.model_catalog_json = null;
+				delete config.origins.model_catalog_json;
+			},
+		],
+		[
+			"a missing origin",
+			(config) => {
+				delete config.origins.model_catalog_json;
+			},
+		],
+		[
+			"a non-session origin",
+			(config) => {
+				config.origins.model_catalog_json = {
+					name: { type: "system" },
+					version: "1",
+				};
+			},
+		],
+	];
+	it.each(catalogTampering)(
+		"rejects the official lane with %s for the pinned model catalog (#2978)",
+		async (_name, tamper) => {
+			const f = await skillDiscoveryFixture((_bridge, config) =>
+				tamper(config),
+			);
 			await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject(
 				{ code: "RUNTIME_CODEX_CONFIGURATION_INVALID" },
 			);

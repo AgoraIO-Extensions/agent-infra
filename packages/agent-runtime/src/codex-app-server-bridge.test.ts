@@ -484,6 +484,10 @@ describe.sequential("Codex app-server v2 bridge", () => {
 				// #2980：会总结推理的模型被要求返回明文摘要，作为思考过程展示；
 				// 原始推理不需要额外配置。
 				expect(server?.args).toContain('model_reasoning_summary="auto"');
+				// #2978：官方 lane 固定加载镜像内的模型目录，路径不随调用方变化。
+				expect(server?.args).toContain(
+					'model_catalog_json="/opt/codex/share/models.json"',
+				);
 			} finally {
 				await bridge.close();
 			}
@@ -1161,6 +1165,12 @@ describe.sequential("Codex app-server v2 bridge", () => {
 				) ?? -1,
 			);
 			expect(native?.environment.hasConnectionCredential).toBe(false);
+			// #2978：私有 lane 沿用固定 Codex 的内置模型列表，不加载模型目录。
+			expect(
+				native?.args.some((argument) =>
+					argument.startsWith("model_catalog_json="),
+				),
+			).toBe(false);
 			expect(bootstrap).not.toHaveBeenCalled();
 		} finally {
 			await bridge.close();

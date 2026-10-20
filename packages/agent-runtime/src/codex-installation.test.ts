@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const fixture = vi.hoisted(() => ({
 	sandbox: "",
 	release: {} as Record<string, unknown>,
+	modelCatalog: {} as Record<string, unknown>,
 	arch: "arm64",
 	platform: "linux",
 	ownerUid: 0,
@@ -31,6 +32,11 @@ const fixture = vi.hoisted(() => ({
 vi.mock("./codex-release.json", () => ({
 	get default() {
 		return fixture.release;
+	},
+}));
+vi.mock("./codex-models.json", () => ({
+	get default() {
+		return fixture.modelCatalog;
 	},
 }));
 vi.mock("node:process", async (importOriginal) => ({
@@ -112,6 +118,7 @@ const provenance = {
 const hash = (data: string | Buffer) =>
 	`sha256:${createHash("sha256").update(data).digest("hex")}`;
 const installed = (name: string) => join(fixture.sandbox, "opt/codex", name);
+const modelCatalogBytes = `${JSON.stringify({ models: [{ slug: "pinned" }] })}\n`;
 let directory: string;
 let executable: Buffer;
 async function directoryModes(path: string, mode: number) {
@@ -166,6 +173,12 @@ beforeEach(async () => {
 	await repin();
 	await put("share/LICENSE", "upstream license");
 	await put("share/NOTICE", "upstream notice");
+	// #2978：目录内容不在此校验，只核对它与固定摘要一致。
+	fixture.modelCatalog = {
+		upstreamSha256: hash("upstream catalog"),
+		sha256: hash(modelCatalogBytes),
+	};
+	await put("share/models.json", modelCatalogBytes);
 });
 
 const skillPayloads = [
@@ -237,7 +250,13 @@ describe("fixed Skill layout preserves official provenance", () => {
 		if (fault === "root process") fixture.runtimeUid = 0;
 		await expect(verify("workspace-summary-v1")).rejects.toThrow(mismatch);
 	});
-	it.each(["bin/codex", "share/LICENSE", "share/NOTICE", "share/release.json"])(
+	it.each([
+		"bin/codex",
+		"share/LICENSE",
+		"share/NOTICE",
+		"share/release.json",
+		"share/models.json",
+	])(
 		"retains official payload rejection with the new group: %s",
 		async (name) => {
 			await installSkillLayout();
@@ -260,13 +279,30 @@ describe("fixed official Codex installation", () => {
 			await expect(verify()).resolves.toEqual(provenance);
 		},
 	);
-	it.each(["bin/codex", "share/LICENSE", "share/NOTICE", "share/release.json"])(
-		"rejects modified %s",
+	it.each([
+		"bin/codex",
+		"share/LICENSE",
+		"share/NOTICE",
+		"share/release.json",
+		"share/models.json",
+	])("rejects modified %s", async (name) => {
+		await put(name, "tampered", name === "bin/codex" ? 0o555 : 0o444);
+		await expect(verify()).rejects.toThrow(mismatch);
+	});
+	it.each(["share/models.json", "share/release.json"])(
+		"rejects missing %s",
 		async (name) => {
-			await put(name, "tampered", name === "bin/codex" ? 0o555 : 0o444);
+			await rm(installed(name));
 			await expect(verify()).rejects.toThrow(mismatch);
 		},
 	);
+	it("rejects a model catalog that no longer matches its pinned digest", async () => {
+		fixture.modelCatalog = {
+			...fixture.modelCatalog,
+			sha256: hash("another catalog"),
+		};
+		await expect(verify()).rejects.toThrow(mismatch);
+	});
 	it.each(["riscv64", "x64"])(
 		"rejects undeclared or mismatched %s",
 		async (arch) => {
