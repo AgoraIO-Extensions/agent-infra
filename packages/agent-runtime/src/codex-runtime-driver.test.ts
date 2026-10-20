@@ -13329,9 +13329,504 @@ describe("Codex structured Skill input", () => {
 			).toBe(false);
 		},
 	);
-});
 
-// Complete-entry scripted tests. These mappings/configs are not native acceptance.
+	describe("V5 native Skill text inputs (#2887)", () => {
+		const encoded = (value: string) => new TextEncoder().encode(value);
+		const fact = (
+			bytes: Uint8Array,
+			overrides: {
+				readonly sha256?: string;
+				readonly byteLength?: number;
+				readonly mediaType?: string;
+			} = {},
+		) => ({
+			bytes,
+			sha256: createHash("sha256").update(bytes).digest("hex"),
+			byteLength: bytes.byteLength,
+			mediaType: "text/plain",
+			...overrides,
+		});
+		const textFileBridge = (inputs: Readonly<Record<string, unknown>>) => {
+			const readNativeTextInput = vi.fn(async (attachmentId: string) => {
+				const input = inputs[attachmentId];
+				if (input === undefined) throw new Error("missing controlled input");
+				return input;
+			});
+			return {
+				readNativeTextInput,
+				readInput: async () => {
+					throw new Error("unexpected image read");
+				},
+				revalidate: vi.fn(),
+				writeResult: async () => {
+					throw new Error("unused");
+				},
+			};
+		};
+		const nativeTextFixture = async (
+			options: {
+				readonly workspaceReadToolVersion?: boolean;
+				readonly executionId?: string;
+				readonly attachments?: readonly string[];
+			} = {},
+		) => {
+			const directory = await runtimeDirectory();
+			const workspace = join(directory, "workspace");
+			await mkdir(workspace, { mode: 0o700 });
+			const fixture = await skillDiscoveryFixture(undefined, {}, false, {
+				directory,
+				workspaceReadRoot: workspace,
+				...(options.workspaceReadToolVersion === false
+					? {}
+					: {
+							session: (session: Record<string, unknown>) => {
+								session.workspaceReadToolVersion = 1;
+							},
+						}),
+			});
+			const projection = await fixture.driver.discoverNativeSkills(
+				fixture.read,
+			);
+			const executionId = options.executionId ?? "skill-execution";
+			const base = fixture.driver.createNativeSkillCommand(
+				nativeSkillCommand(
+					fixture,
+					projection,
+					executionId === "skill-execution"
+						? {}
+						: {
+								operationId: executionId,
+								executionId,
+								turnId: "skill-turn",
+							},
+				),
+			);
+			const command = {
+				...base,
+				input: {
+					text: (base.input as { readonly text: string }).text,
+					attachments: [...(options.attachments ?? [])],
+				},
+			};
+			return { fixture, workspace, directory, command, projection };
+		};
+
+		it("materializes ordered V5 text inputs under the native cwd and exposes only relative paths", async () => {
+			const { fixture, workspace, command, projection } =
+				await nativeTextFixture({ attachments: ["file-a", "file-b"] });
+			const alpha = "controlled-text-alpha-2887";
+			const beta = "controlled-text-beta-2887";
+			const bridge = textFileBridge({
+				"file-a": fact(encoded(alpha)),
+				"file-b": fact(encoded(beta)),
+			});
+
+			const accepted = await fixture.driver.execute(command, {
+				fileBridge: bridge,
+			});
+			expect(accepted).toMatchObject({
+				result: { outcome: "accepted", status: "running" },
+			});
+			const start = fixture.bridge.requests.find(
+				({ method }) => method === "turn/start",
+			);
+			const input = (
+				start?.params as { input?: readonly unknown[] } | undefined
+			)?.input;
+			expect(input).toHaveLength(3);
+			expect(input?.[0]).toEqual({
+				type: "text",
+				text: "$workspace-summary summarize files",
+			});
+			expect(input?.[1]).toMatchObject({
+				type: "skill",
+				name: "workspace-summary",
+			});
+			const mapping = input?.[2] as { type?: unknown; text?: unknown };
+			expect(mapping.type).toBe("text");
+			const mappingText = String(mapping.text);
+			expect(mappingText).toContain(
+				`.agent-infra-inputs/${command.executionId}/00.txt`,
+			);
+			expect(mappingText).toContain(
+				`.agent-infra-inputs/${command.executionId}/01.txt`,
+			);
+			expect(mappingText).not.toContain(workspace);
+			expect(mappingText).not.toContain("file-a");
+			expect(mappingText).not.toContain(alpha);
+			expect(bridge.readNativeTextInput.mock.calls.map(([id]) => id)).toEqual([
+				"file-a",
+				"file-b",
+			]);
+			expect(bridge.revalidate).toHaveBeenCalled();
+
+			const executionDirectory = join(
+				workspace,
+				".agent-infra-inputs",
+				command.executionId,
+			);
+			const first = join(executionDirectory, "00.txt");
+			const second = join(executionDirectory, "01.txt");
+			await expect(readFile(first, "utf8")).resolves.toBe(alpha);
+			await expect(readFile(second, "utf8")).resolves.toBe(beta);
+			expect((await stat(first)).mode & 0o777).toBe(0o600);
+			expect((await stat(second)).mode & 0o777).toBe(0o600);
+			expect((await stat(executionDirectory)).mode & 0o777).toBe(0o700);
+			expect(
+				(await stat(join(workspace, ".agent-infra-inputs"))).mode & 0o777,
+			).toBe(0o700);
+			const durable = await readFile(fixture.path, "utf8");
+			expect(durable).not.toContain(alpha);
+			expect(durable).not.toContain(".agent-infra-inputs");
+			let journaled = "";
+			try {
+				for (const entry of await readdir(`${fixture.path}.journals`, {
+					recursive: true,
+					withFileTypes: true,
+				})) {
+					if (entry.isFile())
+						journaled += await readFile(
+							join(entry.parentPath, entry.name),
+							"utf8",
+						);
+				}
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+			expect(journaled).not.toContain(alpha);
+			expect(journaled).not.toContain(".agent-infra-inputs");
+			expect(journaled).not.toContain("file-a");
+
+			// The original task text and its parameter digest stay untouched.
+			expect(input?.[0]).toEqual({
+				type: "text",
+				text: "$workspace-summary summarize files",
+			});
+			expect(createHash("sha256").update("summarize files").digest("hex")).toBe(
+				nativeSkillCommand(fixture, projection).parametersDigest,
+			);
+
+			await fixture.bridge.emitTurnCompleted("completed");
+			await vi.waitFor(async () => {
+				await expect(readFile(first)).rejects.toThrow();
+				await expect(readFile(second)).rejects.toThrow();
+				await expect(stat(executionDirectory)).rejects.toThrow();
+				await expect(
+					stat(join(workspace, ".agent-infra-inputs")),
+				).rejects.toThrow();
+			});
+		});
+
+		it("removes the materialization when current authorization lapses", async () => {
+			const { fixture, workspace, command } = await nativeTextFixture({
+				attachments: ["file-a"],
+			});
+			const bridge = textFileBridge({
+				"file-a": fact(encoded("revoked")),
+			});
+			let revalidations = 0;
+			bridge.revalidate.mockImplementation(() => {
+				revalidations += 1;
+				if (revalidations >= 2)
+					throw new RuntimeHostError(
+						"RUNTIME_GRANT_INVALID",
+						"synthetic revoked lease",
+						403,
+					);
+			});
+			await expect(
+				fixture.driver.execute(command, { fileBridge: bridge }),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			await expect(
+				stat(join(workspace, ".agent-infra-inputs", command.executionId)),
+			).rejects.toThrow();
+			expect(
+				fixture.bridge.requests.some(({ method }) => method === "turn/start"),
+			).toBe(false);
+		});
+
+		it.each([
+			["sha256", { sha256: "a".repeat(64) }],
+			["byteLength", { byteLength: 4 }],
+			["mediaType", { mediaType: "text/markdown" }],
+		] as const)(
+			"rejects a %s fact mismatch before native submission",
+			async (_name, overrides) => {
+				const { fixture, workspace, command } = await nativeTextFixture({
+					attachments: ["file-a"],
+				});
+				const bridge = textFileBridge({
+					"file-a": fact(encoded("abc"), overrides),
+				});
+				await expect(
+					fixture.driver.execute(command, { fileBridge: bridge }),
+				).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+				expect(
+					fixture.bridge.requests.some(({ method }) => method === "turn/start"),
+				).toBe(false);
+				await expect(
+					stat(join(workspace, ".agent-infra-inputs", command.executionId)),
+				).rejects.toThrow();
+			},
+		);
+
+		it.each([
+			["NUL", new Uint8Array([0x61, 0x00, 0x62])],
+			["invalid UTF-8", new Uint8Array([0x61, 0xff])],
+		])("rejects %s control bytes", async (_name, bytes) => {
+			const { fixture, command } = await nativeTextFixture({
+				attachments: ["file-a"],
+			});
+			const bridge = textFileBridge({ "file-a": fact(bytes) });
+			await expect(
+				fixture.driver.execute(command, { fileBridge: bridge }),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(
+				fixture.bridge.requests.some(({ method }) => method === "turn/start"),
+			).toBe(false);
+		});
+
+		it("rejects more than four text inputs before reading any of them", async () => {
+			const { fixture, command } = await nativeTextFixture({
+				attachments: ["file-a", "file-b", "file-c", "file-d", "file-e"],
+			});
+			const bridge = textFileBridge({});
+			await expect(
+				fixture.driver.execute(command, { fileBridge: bridge }),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(bridge.readNativeTextInput).not.toHaveBeenCalled();
+			expect(
+				fixture.bridge.requests.some(({ method }) => method === "turn/start"),
+			).toBe(false);
+		});
+
+		it("fails closed when the V5 text input port is absent", async () => {
+			const { fixture, command } = await nativeTextFixture({
+				attachments: ["file-a"],
+			});
+			const fileBridge = {
+				readInput: async () => {
+					throw new Error("unexpected image read");
+				},
+				revalidate: () => {},
+				writeResult: async () => {
+					throw new Error("unused");
+				},
+			};
+			await expect(
+				fixture.driver.execute(command, { fileBridge }),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(
+				fixture.bridge.requests.some(({ method }) => method === "turn/start"),
+			).toBe(false);
+		});
+
+		it("fails closed for V5 text inputs on a Thread without the reader snapshot", async () => {
+			const { fixture, command } = await nativeTextFixture({
+				workspaceReadToolVersion: false,
+				attachments: ["file-a"],
+			});
+			const bridge = textFileBridge({ "file-a": fact(encoded("bounded")) });
+			await expect(
+				fixture.driver.execute(command, { fileBridge: bridge }),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(bridge.readNativeTextInput).not.toHaveBeenCalled();
+		});
+
+		it("never uses an attachment identifier as a path and rejects an unsafe Execution id", async () => {
+			const { fixture, workspace, directory, command } =
+				await nativeTextFixture({ attachments: ["../../escape"] });
+			const bridge = textFileBridge({
+				"../../escape": fact(encoded("bounded-path")),
+			});
+			await expect(
+				fixture.driver.execute(command, { fileBridge: bridge }),
+			).resolves.toMatchObject({ result: { outcome: "accepted" } });
+			await expect(
+				readFile(
+					join(workspace, ".agent-infra-inputs", command.executionId, "00.txt"),
+					"utf8",
+				),
+			).resolves.toBe("bounded-path");
+			await expect(stat(join(directory, "escape"))).rejects.toThrow();
+			expect(bridge.readNativeTextInput).toHaveBeenCalledWith(
+				"../../escape",
+				expect.any(AbortSignal),
+			);
+
+			const unsafe = await nativeTextFixture({
+				executionId: "../../escape",
+				attachments: ["file-a"],
+			});
+			const unsafeBridge = textFileBridge({
+				"file-a": fact(encoded("unbounded")),
+			});
+			await expect(
+				unsafe.fixture.driver.execute(unsafe.command, {
+					fileBridge: unsafeBridge,
+				}),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(unsafeBridge.readNativeTextInput).not.toHaveBeenCalled();
+			await expect(
+				stat(join(unsafe.workspace, ".agent-infra-inputs")),
+			).rejects.toThrow();
+		});
+
+		it("removes the materialization after a confirmed cancel", async () => {
+			const { fixture, workspace, command } = await nativeTextFixture({
+				attachments: ["file-a"],
+			});
+			const bridge = textFileBridge({
+				"file-a": fact(encoded("cancel-me")),
+			});
+			const accepted = await fixture.driver.execute(command, {
+				fileBridge: bridge,
+			});
+			const executionDirectory = join(
+				workspace,
+				".agent-infra-inputs",
+				command.executionId,
+			);
+			await expect(
+				readFile(join(executionDirectory, "00.txt"), "utf8"),
+			).resolves.toBe("cancel-me");
+			fixture.bridge.completeOnInterrupt("interrupted");
+			await fixture.driver.execute({
+				schemaVersion: 1,
+				kind: "stop",
+				operationId: "stop-skill-execution",
+				agentId: "agent-1",
+				conversationId: "conversation-1",
+				executionId: command.executionId,
+				turnId: "skill-turn",
+				sessionGeneration: 1,
+				nativeSessionRef: accepted.nativeSessionRef,
+			});
+			await vi.waitFor(async () => {
+				await expect(stat(executionDirectory)).rejects.toThrow();
+			});
+		});
+
+		it("does not rematerialize a replayed or unknown Execution after restart", async () => {
+			const { fixture, workspace, command } = await nativeTextFixture({
+				attachments: ["file-a"],
+			});
+			const firstBridge = textFileBridge({
+				"file-a": fact(encoded("restart-me")),
+			});
+			await expect(
+				fixture.driver.execute(command, { fileBridge: firstBridge }),
+			).resolves.toMatchObject({ result: { outcome: "accepted" } });
+			const executionDirectory = join(
+				workspace,
+				".agent-infra-inputs",
+				command.executionId,
+			);
+			await expect(
+				readFile(join(executionDirectory, "00.txt"), "utf8"),
+			).resolves.toBe("restart-me");
+			await fixture.driver.close();
+			await expect(stat(executionDirectory)).rejects.toThrow();
+
+			const replayed = await fixture.reopen();
+			const replayBridge = textFileBridge({
+				"file-a": fact(encoded("restart-me")),
+			});
+			await expect(
+				replayed.driver.execute(command, { fileBridge: replayBridge }),
+			).resolves.toMatchObject({ result: { outcome: "accepted" } });
+			expect(replayBridge.readNativeTextInput).not.toHaveBeenCalled();
+			await expect(stat(executionDirectory)).rejects.toThrow();
+			await replayed.driver.close();
+
+			// Simulate a crash after the operation was prepared but before submission.
+			const state = JSON.parse(await readFile(fixture.path, "utf8")) as {
+				sessions: Record<
+					string,
+					{
+						executions: Record<string, unknown>;
+						journals?: Record<string, unknown>;
+						archivedJournals?: Record<string, unknown>;
+						activeExecutionId?: string;
+						eventSequence?: number;
+					}
+				>;
+				operations: Record<string, Record<string, unknown>>;
+			};
+			const session = state.sessions[fixture.nativeSessionRef];
+			if (!session) throw new Error("missing Skill session");
+			delete session.executions[command.executionId];
+			delete session.journals;
+			delete session.archivedJournals;
+			delete session.activeExecutionId;
+			delete session.eventSequence;
+			const operation = Object.values(state.operations).find(
+				(entry) =>
+					(entry.record as { readonly operationId?: unknown } | undefined)
+						?.operationId === command.executionId,
+			);
+			if (!operation) throw new Error("missing accepted operation");
+			operation.state = "prepared";
+			delete operation.record;
+			delete operation.admissionPending;
+			delete operation.admissionRecoveryPending;
+			await writeFile(fixture.path, JSON.stringify(state));
+			const unknown = await fixture.reopen();
+			const unknownBridge = textFileBridge({
+				"file-a": fact(encoded("restart-me")),
+			});
+			await expect(
+				unknown.driver.execute(command, { fileBridge: unknownBridge }),
+			).resolves.toMatchObject({ result: { outcome: "unknown" } });
+			expect(unknownBridge.readNativeTextInput).not.toHaveBeenCalled();
+			await expect(stat(executionDirectory)).rejects.toThrow();
+			await unknown.driver.close();
+		});
+
+		it("keeps rejecting text attachments on the non-Skill image path", async () => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(join(directory, "driver.json"), bridge);
+			drivers.push(driver);
+			const bytes = encoded("plain");
+			const readNativeTextInput = vi.fn();
+			const fileBridge = {
+				readNativeTextInput,
+				readInput: async (fileId: string) => ({
+					fileId,
+					descriptor: {
+						name: "note.txt",
+						mediaType: "text/plain",
+						sizeBytes: bytes.byteLength,
+						sha256: createHash("sha256").update(bytes).digest("hex"),
+					},
+					body: new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(bytes);
+							controller.close();
+						},
+					}),
+				}),
+				revalidate: () => {},
+				writeResult: async () => {
+					throw new Error("unused");
+				},
+			};
+			await expect(
+				driver.execute(
+					submitCommand({
+						input: { text: "describe this file", attachments: ["file-a"] },
+					}),
+					{ fileBridge },
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			expect(readNativeTextInput).not.toHaveBeenCalled();
+			expect(
+				bridge.requests.some(({ method }) => method === "turn/start"),
+			).toBe(false);
+		});
+	});
+});
 class SkillDiscoveryBridge extends TestCodexBridge {
 	launch?: CodexSkillLaunchProvenance;
 	metadata: Record<string, unknown> = {
@@ -13443,14 +13938,27 @@ async function skillDiscoveryFixture(
 	) => void,
 	optionsOverride: Partial<CodexRuntimeDriverOptions> = {},
 	fresh = false,
+	seed?: {
+		readonly directory?: string;
+		readonly workspaceReadRoot?: string;
+		readonly session?: (session: Record<string, unknown>) => void;
+	},
 ) {
-	const directory = await runtimeDirectory();
+	const directory = seed?.directory ?? (await runtimeDirectory());
 	const seeded = await seedNativeCommandState(
 		directory,
 		"codex-native-thread-private",
 	);
 	if (fresh) await rm(seeded.path);
-	const bridge = new SkillDiscoveryBridge();
+	else if (seed?.session) {
+		const state = JSON.parse(await readFile(seeded.path, "utf8")) as {
+			sessions: Record<string, Record<string, unknown>>;
+		};
+		const session = state.sessions[seeded.nativeSessionRef];
+		if (!session) throw new Error("missing seeded Skill session");
+		seed.session(session);
+		await writeFile(seeded.path, JSON.stringify(state));
+	}
 	const options: CodexRuntimeDriverOptions = {
 		...driverOptions(seeded.path),
 		nativeLane: "official-model-only",
@@ -13465,42 +13973,49 @@ async function skillDiscoveryFixture(
 		},
 		...optionsOverride,
 	};
-	const driver = await RuntimeBindingDriver.openBound(
-		options,
-		async (launch) => {
-			if (!launch.modelAccess) throw new Error("Missing model access");
-			bridge.launch = Object.freeze({
-				transport: bridge,
-				processId: "controlled-process-1",
-				conversationKey: launch.conversationKey,
-				cwd: join(directory, "actual-spawn-workspace"),
-				bundledSkillsDisabled: launch.disableBundledSkills === true,
-			});
-			const result = modelAccessConfigReadResult(launch.modelAccess) as {
-				config: Record<string, unknown>;
-				origins: Record<string, unknown>;
-			};
-			const config = result.config as Record<string, unknown>;
-			for (const [key, value] of Object.entries(CODEX_MODEL_ONLY_CONFIG)) {
-				const parts = key.split(".");
-				let target = config;
-				for (const part of parts.slice(0, -1)) {
-					target[part] ??= {};
-					target = target[part] as Record<string, unknown>;
+	const openWith = async (bridge: SkillDiscoveryBridge) => {
+		const driver = await RuntimeBindingDriver.openBound(
+			options,
+			async (launch) => {
+				if (!launch.modelAccess) throw new Error("Missing model access");
+				bridge.launch = Object.freeze({
+					transport: bridge,
+					processId: "controlled-process-1",
+					conversationKey: launch.conversationKey,
+					cwd:
+						seed?.workspaceReadRoot ??
+						join(directory, "actual-spawn-workspace"),
+					bundledSkillsDisabled: launch.disableBundledSkills === true,
+				});
+				const result = modelAccessConfigReadResult(launch.modelAccess) as {
+					config: Record<string, unknown>;
+					origins: Record<string, unknown>;
+				};
+				const config = result.config as Record<string, unknown>;
+				for (const [key, value] of Object.entries(CODEX_MODEL_ONLY_CONFIG)) {
+					const parts = key.split(".");
+					let target = config;
+					for (const part of parts.slice(0, -1)) {
+						target[part] ??= {};
+						target = target[part] as Record<string, unknown>;
+					}
+					target[parts.at(-1) as string] = value;
+					result.origins[key] = sessionFlagOrigin();
 				}
-				target[parts.at(-1) as string] = value;
-				result.origins[key] = sessionFlagOrigin();
-			}
-			if (launch.disableBundledSkills) {
-				config.skills = { bundled: { enabled: false } };
-				result.origins["skills.bundled.enabled"] = sessionFlagOrigin();
-			}
-			configure?.(bridge, result);
-			bridge.setConfigReadResult(result);
-			return bridge;
-		},
-	);
-	drivers.push(driver);
+				if (launch.disableBundledSkills) {
+					config.skills = { bundled: { enabled: false } };
+					result.origins["skills.bundled.enabled"] = sessionFlagOrigin();
+				}
+				configure?.(bridge, result);
+				bridge.setConfigReadResult(result);
+				return bridge;
+			},
+		);
+		drivers.push(driver);
+		return driver;
+	};
+	const bridge = new SkillDiscoveryBridge();
+	const driver = await openWith(bridge);
 	const abort = new AbortController();
 	const read = {
 		nativeSessionRef: seeded.nativeSessionRef,
@@ -13509,7 +14024,12 @@ async function skillDiscoveryFixture(
 		assertCurrent: () => seeded.binding,
 		revalidate: async () => seeded.binding,
 	} satisfies CodexNativeCommandReadContext;
-	return { ...seeded, driver, bridge, read, abort, directory };
+	const reopen = async () => {
+		const reopenedBridge = new SkillDiscoveryBridge();
+		const reopenedDriver = await openWith(reopenedBridge);
+		return { driver: reopenedDriver, bridge: reopenedBridge };
+	};
+	return { ...seeded, driver, bridge, read, abort, directory, reopen };
 }
 
 describe("installed Codex Skill complete discovery (controlled behavior only)", () => {
