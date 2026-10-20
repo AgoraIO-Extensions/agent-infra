@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
 	canInstallSkillHubVersionV1,
+	canViewSkillHubVersionDetailV1,
 	canViewSkillHubVersionV1,
 	createSkillHubVersionV1,
 	PersonalApiCredentialErrorV1,
@@ -9,12 +10,15 @@ import {
 	parseSkillHubIdentitySnapshotV1,
 	parseSkillHubIdV1,
 	parseSkillHubInstallationCommandV1,
+	parseSkillHubInstallationQueryV1,
+	parseSkillHubOwnedVersionQueryV1,
 	parseSkillHubProjectCreateV1,
 	parseSkillHubProjectIdempotencyKeyV1,
 	parseSkillHubProjectIdV1,
 	parseSkillHubProjectUpdateV1,
 	parseSkillHubRegistrationV1,
 	parseSkillHubRequestV1,
+	parseSkillHubReviewQueueQueryV1,
 	parseSkillHubReviewV1,
 	parseSkillPackagePublicationSelectionV1,
 	parseSkillPackagePublicationStateV1,
@@ -27,6 +31,7 @@ import {
 	reviewSkillHubVersionV1,
 	revokeSkillHubVersionV1,
 	type SkillHubInstallationCommandV1,
+	type SkillHubInstallationListEntryV1,
 	type SkillHubInstallationV1,
 	SkillHubLifecycleErrorV1,
 	SkillHubOperationErrorV1,
@@ -35,13 +40,25 @@ import {
 	type SkillHubRequestV1,
 	type SkillHubVersionV1,
 	type SkillPackagePublicationContextV1,
+	type SkillPackagePublicationObjectV1,
 	type SkillPackagePublicationStateV1,
 	skillHubVersionStatesV1,
 	skillHubVisibilityV1,
 	skillPackagePublicationStagesV1,
 	uninstallSkillHubInstallationV1,
 } from "@agent-infra/platform-core";
-import { and, eq, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	eq,
+	gt,
+	inArray,
+	isNotNull,
+	ne,
+	or,
+	type SQL,
+	sql,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "./observed-postgres.js";
@@ -1188,6 +1205,88 @@ export class PostgresSkillHubLifecycleV1 {
 		);
 	}
 
+	/**
+	 * 系统管理员读取全部待审版本（含管理员本人发布的，以便如实显示；自审仍由 reviewVersion 拒绝）。
+	 * 按提交时间与版本 ID keyset 分页，审核让条目离开队列也不会跳过后续页。
+	 */
+	async listPendingReviewVersions(
+		context: SkillHubRequestV1,
+		queryInput: { readonly cursor?: unknown; readonly limit?: unknown },
+	) {
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				requireSkillHubReviewerV1(identity.actor);
+				const query = parseSkillHubReviewQueueQueryV1(queryInput);
+				let after: SQL | undefined;
+				if (query.cursor !== undefined) {
+					const [cursor] = await transaction
+						.select({ id: skillHubVersions.id })
+						.from(skillHubVersions)
+						.where(eq(skillHubVersions.id, query.cursor));
+					if (!cursor) throw new SkillHubOperationErrorV1("invalid_input");
+					// 子查询取游标行的原始时间，避免经 JS Date 截断精度。
+					after = sql`(${skillHubVersions.createdAt}, ${skillHubVersions.id}) > (select review_cursor.created_at, review_cursor.id from ${skillHubVersions} review_cursor where review_cursor.id = ${cursor.id})`;
+				}
+				const rows = await transaction
+					.select({
+						version: skillHubVersions,
+						name: skillHubSkills.name,
+						organizationId: skillHubSkills.organizationId,
+					})
+					.from(skillHubVersions)
+					.innerJoin(
+						skillHubSkills,
+						eq(skillHubSkills.id, skillHubVersions.skillId),
+					)
+					.where(
+						and(
+							eq(skillHubVersions.state, "pending_review"),
+							// 只列可审核的共享版本；ORGANIZATION 须仍有目标组织，否则无法审核其范围。
+							inArray(skillHubVersions.visibility, [
+								"MEMBER",
+								"ORGANIZATION",
+								"MARKET",
+							]),
+							or(
+								ne(skillHubVersions.visibility, "ORGANIZATION"),
+								isNotNull(skillHubSkills.organizationId),
+							),
+							after,
+						),
+					)
+					.orderBy(asc(skillHubVersions.createdAt), asc(skillHubVersions.id))
+					.limit(query.limit + 1);
+				const versions = rows
+					.slice(0, query.limit)
+					.map(({ version, name, organizationId }) =>
+						Object.freeze({
+							...decode(version, name),
+							name,
+							organizationId:
+								version.visibility === "ORGANIZATION" ? organizationId : null,
+							submittedAt: version.createdAt.toISOString(),
+						}),
+					);
+				await audit(
+					transaction,
+					request,
+					"skill.review_queue.read",
+					"review_queue",
+					"succeeded",
+					{ count: versions.length },
+				);
+				return Object.freeze({
+					versions: Object.freeze(versions),
+					nextCursor:
+						rows.length > query.limit
+							? (versions.at(-1)?.skillVersionId ?? null)
+							: null,
+				});
+			},
+		);
+	}
+
 	async revokeVersion(
 		context: SkillHubRequestV1,
 		versionId: string,
@@ -1400,6 +1499,247 @@ export class PostgresSkillHubLifecycleV1 {
 					{ count: versions.length },
 				);
 				return Object.freeze(versions);
+			},
+		);
+	}
+
+	/**
+	 * 发布者本人的全部版本（含审核中、已驳回、已撤销），按版本 ID keyset 分页；
+	 * 只读取父项目仍启用的版本，与详情可见性一致。审计只记条数。
+	 */
+	async listOwnedVersions(
+		context: SkillHubRequestV1,
+		queryInput: { readonly cursor?: unknown; readonly limit?: unknown },
+	) {
+		return this.#transaction(context, async (transaction, request) => {
+			const query = parseSkillHubOwnedVersionQueryV1(queryInput);
+			const rows = await transaction
+				.select({ version: skillHubVersions, name: skillHubSkills.name })
+				.from(skillHubVersions)
+				.innerJoin(
+					skillHubSkills,
+					eq(skillHubSkills.id, skillHubVersions.skillId),
+				)
+				.where(
+					and(
+						eq(skillHubVersions.ownerId, request.userId),
+						eq(skillHubSkills.status, "active"),
+						query.cursor === undefined
+							? undefined
+							: gt(skillHubVersions.id, query.cursor),
+					),
+				)
+				.orderBy(asc(skillHubVersions.id))
+				.limit(query.limit + 1);
+			const versions = rows
+				.slice(0, query.limit)
+				.map(({ version, name }) =>
+					Object.freeze({ ...decode(version, name), name }),
+				);
+			await audit(
+				transaction,
+				request,
+				"skill.owned_versions.read",
+				"owned_versions",
+				"succeeded",
+				{ count: versions.length },
+			);
+			return Object.freeze({
+				versions: Object.freeze(versions),
+				nextCursor:
+					rows.length > query.limit
+						? (versions.at(-1)?.skillVersionId ?? null)
+						: null,
+			});
+		});
+	}
+
+	/**
+	 * 版本详情：已发布版本按发布范围可见，发布者本人还能读自己其他状态的版本；
+	 * 不可见与不存在同样返回 not_found。附当前用户本人的安装记录，以及已完成供应操作的
+	 * 固定 ZIP 描述（与版本记录逐项一致时才返回，否则为 null，由调用方标记内容不可用）。
+	 */
+	async readVersionDetail(context: SkillHubRequestV1, versionId: string) {
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				// 与 readVisibleVersion 相同的父项目 -> 版本锁顺序，避免与停用、撤销竞争。
+				const version = await this.#version(
+					transaction,
+					parseSkillHubIdV1(versionId),
+				);
+				const [parent] = await transaction
+					.select()
+					.from(skillHubSkills)
+					.where(eq(skillHubSkills.id, version.skillId));
+				if (
+					!parent ||
+					!canViewSkillHubVersionDetailV1(
+						version,
+						identity.actor,
+						parent.organizationId,
+						parent.status,
+					)
+				)
+					throw new SkillHubOperationErrorV1("not_found");
+				const [installation] = await transaction
+					.select()
+					.from(skillHubInstallations)
+					.where(
+						and(
+							eq(skillHubInstallations.principalType, "user"),
+							eq(skillHubInstallations.principalId, request.userId),
+							eq(skillHubInstallations.skillVersionId, version.skillVersionId),
+						),
+					);
+				const packageObject = await this.#admittedPackage(transaction, version);
+				await audit(
+					transaction,
+					request,
+					"skill.version.read",
+					version.skillVersionId,
+					"succeeded",
+					{ state: version.state, replayed: false },
+				);
+				return Object.freeze({
+					version: Object.freeze({ ...version, name: parent.name }),
+					installation: installation ? decodeInstallation(installation) : null,
+					packageObject,
+				});
+			},
+		);
+	}
+
+	/** 该版本唯一一次已完成供应操作保存的固定 ZIP 描述；与版本记录不一致时不返回。 */
+	async #admittedPackage(
+		transaction: Transaction,
+		version: SkillHubVersionV1,
+	): Promise<SkillPackagePublicationObjectV1 | null> {
+		const admissions = await transaction
+			.select({ id: idempotencyRecords.id, result: idempotencyRecords.result })
+			.from(idempotencyRecords)
+			.where(
+				and(
+					eq(idempotencyRecords.scopeType, "skill_package"),
+					eq(idempotencyRecords.scopeId, version.skillVersionId),
+					eq(idempotencyRecords.commandType, "skill.package.publish.v1"),
+					eq(idempotencyRecords.status, "completed"),
+				),
+			);
+		const [admission] = admissions;
+		if (
+			!admission ||
+			admissions.length !== 1 ||
+			admission.result?.operationId !== admission.id
+		)
+			return null;
+		const [item] = await transaction
+			.select({ payload: outboxItems.payload })
+			.from(outboxItems)
+			.where(
+				and(
+					eq(outboxItems.id, admission.id),
+					eq(outboxItems.scopeType, "skill_package"),
+					eq(outboxItems.scopeId, version.skillVersionId),
+					eq(outboxItems.status, "succeeded"),
+				),
+			);
+		if (!item) return null;
+		try {
+			const state = parseSkillPackagePublicationStateV1(item.payload);
+			const { zip, manifest, signature } = state.objects;
+			if (
+				!zip ||
+				!manifest ||
+				!signature ||
+				state.operationId !== admission.id ||
+				state.ownerId !== version.ownerId ||
+				state.selection.skillVersionId !== version.skillVersionId ||
+				zip.version !== version.packageObjectVersion ||
+				zip.sha256 !== version.packageDigest ||
+				manifest.sha256 !== version.manifestDigest ||
+				signature.sha256 !== version.signatureDigest
+			)
+				return null;
+			return zip;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * 「我的安装」：只读当前会话用户 user 主体、仍处于 installed 的安装，按安装 ID keyset 分页。
+	 * 版本按详情可见性规则（canViewSkillHubVersionDetailV1）判断，当前不可见时只返回安装事实，
+	 * 不带版本名称。审计只记条数。
+	 */
+	async listInstallations(
+		context: SkillHubRequestV1,
+		queryInput: { readonly cursor?: unknown; readonly limit?: unknown },
+	) {
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				const query = parseSkillHubInstallationQueryV1(queryInput);
+				const rows = await transaction
+					.select({
+						installation: skillHubInstallations,
+						version: skillHubVersions,
+						name: skillHubSkills.name,
+						organizationId: skillHubSkills.organizationId,
+						status: skillHubSkills.status,
+					})
+					.from(skillHubInstallations)
+					.innerJoin(
+						skillHubVersions,
+						eq(skillHubVersions.id, skillHubInstallations.skillVersionId),
+					)
+					.innerJoin(
+						skillHubSkills,
+						eq(skillHubSkills.id, skillHubVersions.skillId),
+					)
+					.where(
+						and(
+							eq(skillHubInstallations.principalType, "user"),
+							eq(skillHubInstallations.principalId, request.userId),
+							eq(skillHubInstallations.state, "installed"),
+							query.cursor === undefined
+								? undefined
+								: gt(skillHubInstallations.id, query.cursor),
+						),
+					)
+					.orderBy(asc(skillHubInstallations.id))
+					.limit(query.limit + 1);
+				const entries: SkillHubInstallationListEntryV1[] = rows
+					.slice(0, query.limit)
+					.map((row) => {
+						const version = decode(row.version, row.name);
+						return Object.freeze({
+							installation: decodeInstallation(row.installation),
+							version: canViewSkillHubVersionDetailV1(
+								version,
+								identity.actor,
+								row.organizationId,
+								row.status,
+							)
+								? Object.freeze({ ...version, name: row.name })
+								: null,
+						});
+					});
+				await audit(
+					transaction,
+					request,
+					"skill.installations.read",
+					"installations",
+					"succeeded",
+					{ count: entries.length },
+				);
+				return Object.freeze({
+					entries: Object.freeze(entries),
+					nextCursor:
+						rows.length > query.limit
+							? (entries.at(-1)?.installation.installationId ?? null)
+							: null,
+				});
 			},
 		);
 	}

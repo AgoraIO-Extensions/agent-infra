@@ -1,5 +1,8 @@
 import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
-import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
+import {
+	pilotAgentDetailFromV2,
+	pilotFakeScenariosV2,
+} from "@agent-infra/test-support/pilot";
 import { expect, type Page, type Route, test } from "@playwright/test";
 
 // 本文件在 auth-desktop / auth-mobile project 中运行：构建配置了同源登录入口（NI-113）。
@@ -55,6 +58,13 @@ async function platform(
 			const status = agentDetailStatus?.() ?? 200;
 			return status === 200
 				? route.fulfill({ json: agent })
+				: route.fulfill({ status, json: anonymousBody });
+		}
+		// Agent 详情页读取带 Owner 状态的详情投影（#2910）。
+		if (url.pathname === `/api/v2/agents/${agent.agentId}/detail`) {
+			const status = agentDetailStatus?.() ?? 200;
+			return status === 200
+				? route.fulfill({ json: pilotAgentDetailFromV2(agent) })
 				: route.fulfill({ status, json: anonymousBody });
 		}
 		return route.abort();

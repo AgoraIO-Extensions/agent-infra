@@ -1,9 +1,10 @@
 import { generateKeyPairSync } from "node:crypto";
 import { runtimeModelInjectionV4 } from "@agent-infra/model-catalog";
-import type {
-	SessionSandboxDeletionProgressV1,
-	SessionSandboxObservationV1,
-	SessionSandboxReconciliationClaimV1,
+import {
+	decideSessionSandboxDrainObservationV1,
+	type SessionSandboxDeletionProgressV1,
+	type SessionSandboxObservationV1,
+	type SessionSandboxReconciliationClaimV1,
 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
@@ -825,6 +826,183 @@ describe("production SessionSandbox resource receiver", () => {
 				).toBeNull();
 			},
 		);
+	});
+
+	// #2917：上一轮排空完成、只剩 PVC 的沙箱被管理转换重新当作来源（resourceFence 已前进，
+	// PVC 的 fence 注解仍是最初准备时的值），之前永远停在 unknown。
+	describe("drain of a source that was already stopped (#2917)", () => {
+		const fence = "agent-infra.agora.io/fence";
+		/** 准备 → 就绪 → 完整排空，得到只剩 PVC 的沙箱；再构造把它当作来源的新排空认领。 */
+		const stoppedSourceClaim = async (f: ReturnType<typeof fixture>) => {
+			const signal = new AbortController().signal;
+			await f.receive(f.claim, signal);
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				f.claim.sandbox.resourceName,
+			);
+			if (!pod) throw new Error("Expected prepared Pod");
+			pod.status = {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+			};
+			await f.client.replace(pod);
+			const ready = await f.receive(f.claim, signal);
+			const first = drainClaim(f, ready);
+			const stopped = await f.receive(first, signal, async () => "committed");
+			if (stopped.status !== "stopped" || !first.lifecycle)
+				throw new Error(`Expected a complete stop, got ${stopped.status}`);
+			// 管理转换：来源取当时已停止的分配，resourceFence 前进，回执丢失。
+			const sourceFence = first.resourceFence + 1;
+			const claim: SessionSandboxReconciliationClaimV1 = {
+				...first,
+				resourceFence: sourceFence + 1,
+				resourceStatus: "unknown",
+				previousObservation: {
+					status: "stopped",
+					resources: stopped.resources,
+				},
+				lifecycle: {
+					...first.lifecycle,
+					authority: {
+						...first.lifecycle.authority,
+						targetDesiredState: "stopped",
+					},
+					source: {
+						...first.lifecycle.source,
+						sandbox: first.sandbox,
+						resourceFence: sourceFence,
+						observation: { status: "stopped", resources: stopped.resources },
+					},
+					stopReceipt: null,
+					deletionProgress: [],
+				},
+			};
+			return { claim, signal, pvc: stopped.resources[0] };
+		};
+
+		it("stops with an empty removal set, the same PVC and a proof Core accepts", async () => {
+			const f = fixture();
+			const { claim, signal, pvc } = await stoppedSourceClaim(f);
+			const writes = f.writes.length;
+			const observation = await f.receive(
+				claim,
+				signal,
+				async () => "committed",
+			);
+			expect(observation.status).toBe("stopped");
+			expect(observation.sourceStop?.removed).toEqual([]);
+			expect(observation.sourceStop?.retainedPVC.uid).toBe(pvc?.uid);
+			expect(f.writes).toHaveLength(writes);
+			if (!claim.lifecycle) throw new Error("Expected lifecycle");
+			expect(
+				decideSessionSandboxDrainObservationV1({
+					sandbox: claim.sandbox,
+					resourceFence: claim.resourceFence,
+					lifecycle: claim.lifecycle,
+					observation,
+				}),
+			).toMatchObject({ status: "stopped", finished: true });
+		});
+
+		it("prepares the same Sandbox again from that proof and moves the PVC to the new fence", async () => {
+			const f = fixture();
+			const { claim, signal, pvc } = await stoppedSourceClaim(f);
+			const stopped = await f.receive(claim, signal, async () => "committed");
+			if (!claim.lifecycle || !stopped.sourceStop)
+				throw new Error("Expected stop");
+			const replacement: SessionSandboxReconciliationClaimV1 = {
+				...claim,
+				purpose: "prepare",
+				desiredState: "running",
+				drainComputeAllowed: false,
+				resourceStatus: "applying",
+				policy: { ...f.claim.policy, workloadRevision: 2, managementFence: 2 },
+				deployment: {
+					...(f.claim.deployment as ReturnType<typeof workloadDesiredFixture>),
+					workloadRevision: 2,
+				},
+				previousObservation: stopped,
+				lifecycle: {
+					...claim.lifecycle,
+					authority: {
+						...claim.lifecycle.authority,
+						targetDesiredState: "running",
+					},
+					stopReceipt: stopped.sourceStop,
+					preparation: {
+						generation: claim.sandbox.generation,
+						resourceFence: claim.resourceFence,
+					},
+				},
+			};
+			await f.receive(replacement, signal);
+			const retained = await f.client.read<KubernetesObject>(
+				"PersistentVolumeClaim",
+				claim.sandbox.resourceName,
+			);
+			expect(retained?.metadata?.uid).toBe(pvc?.uid);
+			expect(retained?.metadata?.annotations?.[fence]).toBe(
+				String(replacement.resourceFence),
+			);
+			expect(
+				await f.client.read("Pod", claim.sandbox.resourceName),
+			).not.toBeNull();
+		});
+
+		it("does not conclude while executions still hold the Sandbox or a preparation started", async () => {
+			const f = fixture();
+			const { claim, signal } = await stoppedSourceClaim(f);
+			if (!claim.lifecycle) throw new Error("Expected lifecycle");
+			for (const held of [
+				{ ...claim, drainComputeAllowed: false },
+				{
+					...claim,
+					lifecycle: {
+						...claim.lifecycle,
+						preparation: {
+							generation: claim.sandbox.generation,
+							resourceFence: claim.resourceFence,
+						},
+					},
+				},
+			])
+				await expect(
+					f.receive(held, signal, async () => "committed"),
+				).resolves.toMatchObject({ status: "unknown" });
+		});
+
+		it("fails closed without deleting when another same-name resource exists or the PVC is not the recorded one", async () => {
+			for (const drift of ["pod", "pvc-fence", "pvc-uid"] as const) {
+				const f = fixture();
+				const { claim, signal } = await stoppedSourceClaim(f);
+				const name = claim.sandbox.resourceName;
+				if (drift === "pod")
+					f.seed({
+						apiVersion: "v1",
+						kind: "Pod",
+						metadata: {
+							name,
+							namespace: claim.policy.namespace,
+							uid: "late-pod",
+							resourceVersion: "1",
+						},
+					});
+				const pvc = f.resources.get(`PersistentVolumeClaim/${name}`);
+				if (!pvc?.metadata?.annotations) throw new Error("Expected PVC");
+				if (drift === "pvc-fence")
+					pvc.metadata.annotations[fence] = String(
+						(claim.lifecycle?.source.resourceFence ?? 0) + 1,
+					);
+				if (drift === "pvc-uid") pvc.metadata.uid = "replaced-pvc";
+				const writes = f.writes.length;
+				await expect(
+					f.receive(claim, signal, async () => "committed"),
+				).rejects.toMatchObject({ code: "conflict" });
+				expect(f.writes).toHaveLength(writes);
+				if (drift === "pod")
+					expect(await f.client.read("Pod", name)).not.toBeNull();
+			}
+		});
 	});
 
 	it("replays a persisted stop receipt as stopped", async () => {

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { RuntimeBusinessRequestV4 } from "@agent-infra/contracts/runtime";
 import {
 	bindInputFileV1,
@@ -87,6 +87,7 @@ import {
 	lockConversation,
 	lockConversationForRead,
 	outboxId,
+	type RequestedModelDisplayNameResolverV1,
 	readIdempotency,
 	readMessageState,
 	readModelSelectionState,
@@ -141,6 +142,7 @@ type NativeAdmissionAuthorized = Parameters<
 function nativeAdmissionPlan(
 	value: unknown,
 	request: NativeAdmissionRequest,
+	purpose: "admission" | "replay" = "admission",
 ): NativeCapabilityInvocationPlanV1 {
 	if (typeof value !== "object" || value === null || Array.isArray(value))
 		unavailable();
@@ -195,8 +197,13 @@ function nativeAdmissionPlan(
 		candidate.executionStatus !== "submitted" ||
 		typeof candidate.executionId !== "string" ||
 		candidate.parameters !== command.parameters ||
-		candidate.parametersDigest !==
-			nativeCapabilityParametersDigestV1(command.parameters) ||
+		(candidate.parametersDigest !==
+			nativeCapabilityParametersDigestV1(command.parameters) &&
+			(purpose !== "replay" ||
+				candidate.parametersDigest !==
+					createHash("sha256")
+						.update(JSON.stringify(command.parameters))
+						.digest("hex"))) ||
 		capability?.id !== command.capabilityId ||
 		(capability?.kind !== "command" && capability?.kind !== "skill") ||
 		capability?.directoryRevision !== command.directoryRevision ||
@@ -249,6 +256,7 @@ function validateNativeAdmissionPlan(
 export interface PostgresConversationExecutionOptionsV1 {
 	readonly databaseUrl: string;
 	readonly userDirectory?: TaskUserDirectoryV1;
+	readonly readRequestedModelDisplayName?: RequestedModelDisplayNameResolverV1;
 }
 
 export class PostgresConversationExecutionTransactionV1
@@ -257,6 +265,9 @@ export class PostgresConversationExecutionTransactionV1
 	readonly #client: ReturnType<typeof postgres> | undefined;
 	readonly #existingTransaction: Transaction | undefined;
 	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
+	readonly #readRequestedModelDisplayName:
+		| RequestedModelDisplayNameResolverV1
+		| undefined;
 	readonly #acceptedKeyReads = new Set<Promise<unknown>>();
 	#acceptedKeyClosing = false;
 
@@ -266,10 +277,12 @@ export class PostgresConversationExecutionTransactionV1
 			| {
 					readonly transaction: Transaction;
 					readonly userDirectory?: TaskUserDirectoryV1;
+					readonly readRequestedModelDisplayName?: RequestedModelDisplayNameResolverV1;
 					readonly signal?: AbortSignal;
 			  },
 	) {
 		this.#userDirectory = options.userDirectory;
+		this.#readRequestedModelDisplayName = options.readRequestedModelDisplayName;
 		if ("transaction" in options) {
 			bindConversationExecutionSignalV1(options.transaction, options.signal);
 			this.#existingTransaction = options.transaction;
@@ -331,7 +344,12 @@ export class PostgresConversationExecutionTransactionV1
 					};
 				if (!(await isAuthorized()))
 					return { outcome: "denied", reason: "authorization_lost" };
-				const replayed = nativeAdmissionPlan(existing.result, request);
+				// Historical results are read verbatim; old digests never enter new admission.
+				const replayed = nativeAdmissionPlan(
+					existing.result,
+					request,
+					"replay",
+				);
 				if (!nativeAdmissionAuthorityMatches(replayed, authority))
 					return { outcome: "unavailable", reason: "metadata_unavailable" };
 				return {
@@ -756,7 +774,11 @@ export class PostgresConversationExecutionTransactionV1
 				await this.#requireCurrentPersonalApiAdmission(transaction, authority);
 				return { outcome: "replayed", result };
 			}
-			const state = await readMessageState(transaction, conversation);
+			const state = await readMessageState(
+				transaction,
+				conversation,
+				this.#readRequestedModelDisplayName,
+			);
 			const decision = decide(state);
 			if (!isMessagePlan(decision)) {
 				return decision;
@@ -1060,6 +1082,7 @@ export class PostgresConversationExecutionTransactionV1
 				transaction,
 				conversation,
 				text(request.command.sourceMessageId),
+				this.#readRequestedModelDisplayName,
 			);
 			const decision = decide(state);
 			if (!isRegenerationPlan(decision)) return decision;
@@ -1508,7 +1531,13 @@ export class PostgresConversationExecutionTransactionV1
 		>[1],
 	) {
 		return this.#transaction((transaction) =>
-			submitConversationTask(transaction, request, decide, this.#userDirectory),
+			submitConversationTask(
+				transaction,
+				request,
+				decide,
+				this.#userDirectory,
+				this.#readRequestedModelDisplayName,
+			),
 		);
 	}
 

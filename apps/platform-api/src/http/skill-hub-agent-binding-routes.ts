@@ -2,6 +2,7 @@ import type { SkillHubSyncBindingV1 } from "@agent-infra/contracts";
 import {
 	SkillHubAgentBindingCommandV1Schema,
 	SkillHubAgentBindingStatusResponseV1Schema,
+	SkillHubAgentCurrentVersionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import type { SkillHubAgentBindingResultV1 } from "@agent-infra/platform-core";
 import type { Hono } from "hono";
@@ -27,19 +28,27 @@ export interface SkillHubAgentBindingRoutesDependenciesV1 {
 		readonly actorId: string;
 		readonly rawRequestDigest: string;
 	}) => Promise<SkillHubAgentBindingResultV1>;
+	/** Owner 判定、当前版本比较与当前配置修订都由 Core 在服务端完成。 */
 	readonly read: (input: {
 		readonly agentId: string;
 		readonly agentVersion: string;
 		readonly actorId: string;
-		readonly organizationIds: readonly string[];
-		readonly isAdministrator: boolean;
 		readonly requestId: string;
 		readonly traceId: string;
 	}) => Promise<{
+		readonly agentVersion: string;
 		readonly configurationRevision: number;
-		readonly agentId?: string;
-		readonly agentVersion?: string;
 		readonly bindings: readonly SkillHubSyncBindingV1[];
+	}>;
+	/** 只对当前 Owner 返回部署级 Agent Version（#2903）。 */
+	readonly currentVersion: (input: {
+		readonly agentId: string;
+		readonly actorId: string;
+		readonly requestId: string;
+		readonly traceId: string;
+	}) => Promise<{
+		readonly agentVersion: string;
+		readonly configurationRevision: number;
 	}>;
 }
 
@@ -169,16 +178,15 @@ export function registerSkillHubAgentBindingRoutesV1(
 					agentId: context.req.param("agentId"),
 					agentVersion: context.req.param("agentVersion"),
 					actorId: identity.userId,
-					organizationIds: identity.organizationIds,
-					isAdministrator: identity.roles.includes("system_admin"),
 					requestId: metadata.requestId,
 					traceId: metadata.traceId,
 				});
 				return context.json(
 					publicBindingStatus({
-						...result,
 						agentId: context.req.param("agentId"),
-						agentVersion: context.req.param("agentVersion"),
+						agentVersion: result.agentVersion,
+						configurationRevision: result.configurationRevision,
+						bindings: result.bindings,
 					}),
 				);
 			} catch (error) {
@@ -187,4 +195,42 @@ export function registerSkillHubAgentBindingRoutesV1(
 			}
 		},
 	);
+
+	app.get("/api/v2/agents/:agentId/skills/current-version", async (context) => {
+		const request = context.req.raw;
+		const metadata = requestMetadata(request);
+		context.header("Cache-Control", "no-store");
+		context.header("Referrer-Policy", "no-referrer");
+		try {
+			if (request.headers.has("Authorization"))
+				throw new HttpProtocolError(
+					"AUTHENTICATION_REQUIRED",
+					metadata.traceId,
+				);
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				request,
+				metadata.traceId,
+			);
+			noBodyOrQuery(request, metadata.traceId);
+			const agentId = context.req.param("agentId");
+			const result = await dependencies.currentVersion({
+				agentId,
+				actorId: identity.userId,
+				requestId: metadata.requestId,
+				traceId: metadata.traceId,
+			});
+			return context.json(
+				SkillHubAgentCurrentVersionV1Schema.parse({
+					schemaVersion: 1,
+					agentId,
+					agentVersion: result.agentVersion,
+					configurationRevision: result.configurationRevision,
+				}),
+			);
+		} catch (error) {
+			const protocol = mapCoreError(error, metadata.traceId);
+			return context.json(protocol.body, protocol.status);
+		}
+	});
 }

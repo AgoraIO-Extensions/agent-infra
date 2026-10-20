@@ -133,7 +133,7 @@ describe("AgentSkillBindingScreen (O-02)", () => {
 		expect(
 			screen.getByRole("link", { name: "浏览 Skill Hub" }).getAttribute("href"),
 		).toBe("/skills");
-		// 契约还没有当前 Agent Version：只说明，不发绑定请求，也没有手填字段。
+		// 读不到当前 Agent Version：只说明，不发绑定请求，也没有手填字段。
 		expect(screen.getByText("暂时无法读取当前 Agent 版本")).toBeTruthy();
 		expect(readBindings).not.toHaveBeenCalled();
 		for (const label of [
@@ -446,6 +446,83 @@ describe("AgentSkillBindingScreen (O-02)", () => {
 		await screen.findByRole("article");
 		expect(screen.queryByRole("button", { name: "绑定固定版本" })).toBeNull();
 		expect(screen.queryByRole("button", { name: /^更换固定版本/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^解除绑定/ })).toBeNull();
+	});
+
+	it("reads bindings under the server-provided version and shows it (#2903)", async () => {
+		const { readBindings } = renderScreen({ agentVersion: "2026.10:r1" });
+		expect(await screen.findByText("当前 Agent 版本：2026.10:r1")).toBeTruthy();
+		expect(readBindings).toHaveBeenCalledWith("agent-pilot-1", "2026.10:r1");
+		expect(screen.queryAllByRole("textbox")).toEqual([]);
+	});
+
+	it("waits for the current version before reading bindings (#2903)", () => {
+		const { readBindings } = renderScreen({
+			agentVersion: null,
+			agentVersionPending: true,
+		});
+		expect(screen.getByText("正在读取当前 Agent 版本…")).toBeTruthy();
+		expect(screen.queryByText("暂时无法读取当前 Agent 版本")).toBeNull();
+		expect(readBindings).not.toHaveBeenCalled();
+	});
+
+	it("unbinds after confirmation by submitting the remaining set (#2903)", async () => {
+		const { bindVersion } = renderScreen({
+			readBindings: vi.fn(async () => ({
+				schemaVersion: 1 as const,
+				agentId: agent.agentId,
+				agentVersion: "agent-version-1",
+				configurationRevision: 3,
+				bindings: [
+					skillBinding("synced"),
+					skillBinding("pending_sync", { name: "code-review" }),
+				],
+			})),
+		});
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: "解除绑定：workspace-summary",
+			}),
+		);
+		const dialog = await screen.findByRole("dialog", { name: "确认解除绑定" });
+		expect(dialog.textContent).toContain("workspace-summary · v1.0.0");
+		expect(dialog.textContent).toContain("现有执行保留原版本");
+		expect(bindVersion).not.toHaveBeenCalled();
+		fireEvent.click(within(dialog).getByRole("button", { name: "解除绑定" }));
+		await waitFor(() => expect(bindVersion).toHaveBeenCalledOnce());
+		expect(bindVersion).toHaveBeenCalledWith(
+			"agent-pilot-1",
+			"agent-version-1",
+			{
+				schemaVersion: 1,
+				expectedConfigurationRevision: 3,
+				bindings: [
+					{ skillVersionId: "code-review-v1", grant: minimalSkillGrant() },
+				],
+			},
+			expect.any(String),
+		);
+		await waitFor(() => expect(toastText()).toBe("已解除绑定"));
+	});
+
+	it("unbinds the last Skill with an empty set (#2903)", async () => {
+		const { bindVersion } = renderScreen();
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: "解除绑定：workspace-summary",
+			}),
+		);
+		fireEvent.click(
+			within(
+				await screen.findByRole("dialog", { name: "确认解除绑定" }),
+			).getByRole("button", { name: "解除绑定" }),
+		);
+		await waitFor(() => expect(bindVersion).toHaveBeenCalledOnce());
+		expect((bindVersion.mock.calls as unknown as unknown[][])[0]?.[2]).toEqual({
+			schemaVersion: 1,
+			expectedConfigurationRevision: 3,
+			bindings: [],
+		});
 	});
 
 	it("polls while syncing and toasts once when the Skill becomes usable", async () => {

@@ -1,5 +1,5 @@
 import { SearchIcon, XIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -52,6 +52,54 @@ function remember(
 	const merged = { ...current };
 	for (const option of nextOptions) merged[option.id] = option;
 	return merged;
+}
+
+/**
+ * 选择器结果层的收起时机：Esc 由调用方处理；点击选择器之外；键盘把焦点移出选择器
+ * （例如 Tab 到下一个字段）。指针操作在 click 之后才收起：窄屏结果层在文档流中，
+ * 按下时收起会让下方控件位移、点击落空。目录选择器与审计 Agent 选择器共用。
+ */
+export function usePickerDismiss(
+	pickerRef: RefObject<HTMLElement | null>,
+	expanded: boolean,
+	close: () => void,
+) {
+	const closeRef = useRef(close);
+	closeRef.current = close;
+	useEffect(() => {
+		const picker = pickerRef.current;
+		if (!expanded || !picker) return;
+		let pointerOutside = false;
+		const inside = (target: EventTarget | null) =>
+			target instanceof Node && picker.contains(target);
+		const markPointer = (event: PointerEvent) => {
+			pointerOutside = !inside(event.target);
+		};
+		const closeOnOutsideClick = (event: MouseEvent) => {
+			pointerOutside = false;
+			// 选中或移除会在冒泡途中卸载被点击的节点，按派发时的事件路径判断是否在选择器内。
+			if (!event.composedPath().includes(picker)) closeRef.current();
+		};
+		const resetPointer = () => {
+			pointerOutside = false;
+		};
+		const closeOnFocusLeave = (event: FocusEvent) => {
+			const next = event.relatedTarget;
+			if (inside(next) || pointerOutside) return;
+			if (next) closeRef.current();
+		};
+		document.addEventListener("pointerdown", markPointer, true);
+		// 捕获阶段监听：外部元素阻止冒泡时也能收起。
+		document.addEventListener("click", closeOnOutsideClick, true);
+		document.addEventListener("keydown", resetPointer, true);
+		picker.addEventListener("focusout", closeOnFocusLeave);
+		return () => {
+			document.removeEventListener("pointerdown", markPointer, true);
+			document.removeEventListener("click", closeOnOutsideClick, true);
+			document.removeEventListener("keydown", resetPointer, true);
+			picker.removeEventListener("focusout", closeOnFocusLeave);
+		};
+	}, [pickerRef, expanded]);
 }
 
 export type DirectorySelection = {
@@ -135,42 +183,7 @@ export function DirectoryPicker({
 	const pickerRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const expanded = open && !disabled;
-	// 收起时机：Esc；点击选择器之外；键盘把焦点移出选择器（例如 Tab 到下一个字段）。
-	// 指针操作在 click 之后才收起：窄屏结果层在文档流中，按下时收起会让下方控件位移、点击落空。
-	useEffect(() => {
-		const picker = pickerRef.current;
-		if (!expanded || !picker) return;
-		let pointerOutside = false;
-		const inside = (target: EventTarget | null) =>
-			target instanceof Node && picker.contains(target);
-		const markPointer = (event: PointerEvent) => {
-			pointerOutside = !inside(event.target);
-		};
-		const closeOnOutsideClick = (event: MouseEvent) => {
-			pointerOutside = false;
-			// 选中或移除会在冒泡途中卸载被点击的节点，按派发时的事件路径判断是否在选择器内。
-			if (!event.composedPath().includes(picker)) setOpen(false);
-		};
-		const resetPointer = () => {
-			pointerOutside = false;
-		};
-		const closeOnFocusLeave = (event: FocusEvent) => {
-			const next = event.relatedTarget;
-			if (inside(next) || pointerOutside) return;
-			if (next) setOpen(false);
-		};
-		document.addEventListener("pointerdown", markPointer, true);
-		// 捕获阶段监听：外部元素阻止冒泡时也能收起。
-		document.addEventListener("click", closeOnOutsideClick, true);
-		document.addEventListener("keydown", resetPointer, true);
-		picker.addEventListener("focusout", closeOnFocusLeave);
-		return () => {
-			document.removeEventListener("pointerdown", markPointer, true);
-			document.removeEventListener("click", closeOnOutsideClick, true);
-			document.removeEventListener("keydown", resetPointer, true);
-			picker.removeEventListener("focusout", closeOnFocusLeave);
-		};
-	}, [expanded]);
+	usePickerDismiss(pickerRef, expanded, () => setOpen(false));
 	// 搜索结果：只在展开时读取。
 	useEffect(() => {
 		if (!expanded) return;

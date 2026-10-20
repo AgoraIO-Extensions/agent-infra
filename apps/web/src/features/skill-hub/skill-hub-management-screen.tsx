@@ -15,13 +15,17 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { withObjectName } from "@/lib/accessible-name";
 import type {
+	SkillHubOwnedVersionV1,
 	SkillHubProjectV1,
 	SkillHubProviderImportRequestV1,
 	SkillHubPublicationResponseV1,
-	SkillHubVersionMetadataV1,
 } from "../../pilot/generated-v2/types.gen.js";
 import type { CollectionReadUnavailable } from "../collection-read-failure.js";
-import type { SkillHubDirectoryState } from "./skill-hub.js";
+import type {
+	SkillHubInstallationsState,
+	SkillHubOwnedVersionsState,
+} from "./skill-hub.js";
+import { MyInstallationsSection } from "./skill-hub-installations-section.js";
 import {
 	latestVersionPerSkill,
 	skillHubProviderLabels,
@@ -79,26 +83,43 @@ function importResultText(result: SkillHubPublicationResponseV1) {
 
 export function MySkillsScreen({
 	projects,
-	catalog,
+	versions,
+	installations,
 	onRetry,
 	retrying = false,
+	onInstallationsRetry,
+	installationsRetrying = false,
+	onInstallationsChanged,
+	uninstall,
 }: {
 	projects: SkillHubProjectsState;
-	catalog: SkillHubDirectoryState | { kind: "loading" };
+	/** 本人的全部版本（含审核中、已驳回、已撤销）。 */
+	versions: SkillHubOwnedVersionsState | { kind: "loading" };
+	/** 本人在我的库中的安装（#2953）。 */
+	installations: SkillHubInstallationsState | { kind: "loading" };
 	onRetry?: () => void;
 	retrying?: boolean;
+	onInstallationsRetry?: () => void;
+	installationsRetrying?: boolean;
+	onInstallationsChanged?: () => void;
+	uninstall?: (
+		installationId: string,
+		idempotencyKey: string,
+	) => Promise<unknown>;
 }) {
 	const id = useId();
-	// 目录只含已发布版本；用它补全每个项目的最新已发布版本。
-	const published =
-		catalog.kind === "ready" ? latestVersionPerSkill(catalog.versions) : [];
+	// 每个项目取本人版本号最高的版本，状态按服务端回读显示。
+	const latest =
+		versions.kind === "ready" ? latestVersionPerSkill(versions.versions) : [];
 	return (
 		<section className="skill-page" aria-labelledby={`${id}-heading`}>
 			<header className="page-heading">
 				<div>
 					<p className="page-eyebrow">我的管理 / 我的 Skill</p>
 					<h1 id={`${id}-heading`}>我的 Skill</h1>
-					<p>管理自己创建的 Skill 项目和已发布版本。</p>
+					<p>
+						管理自己创建的 Skill 项目和各状态的版本，以及加入我的库的固定版本。
+					</p>
 				</div>
 				<div className="skill-actions">
 					<Link className={buttonVariants()} to="/skills/manage/new">
@@ -142,18 +163,36 @@ export function MySkillsScreen({
 					}
 				/>
 			) : (
-				<div className="skill-surface">
-					{projects.items.map((project) => (
-						<OwnedSkillRow
-							key={project.projectId}
-							project={project}
-							latest={published.find(
-								(version) => version.skillId === project.projectId,
-							)}
-						/>
-					))}
-				</div>
+				<>
+					{versions.kind === "unavailable" ? (
+						<Alert tone="warn" role="status" className="mb-4">
+							<AlertDescription>
+								版本状态暂时无法读取，项目列表不受影响。
+							</AlertDescription>
+						</Alert>
+					) : null}
+					<div className="skill-surface">
+						{projects.items.map((project) => (
+							<OwnedSkillRow
+								key={project.projectId}
+								project={project}
+								versions={versions.kind}
+								latest={latest.find(
+									(version) => version.skillId === project.projectId,
+								)}
+							/>
+						))}
+					</div>
+				</>
 			)}
+
+			<MyInstallationsSection
+				installations={installations}
+				onRetry={onInstallationsRetry}
+				retrying={installationsRetrying}
+				onChanged={onInstallationsChanged}
+				{...(uninstall ? { uninstall } : {})}
+			/>
 
 			<section
 				className="skill-section-block"
@@ -188,10 +227,13 @@ export function MySkillsScreen({
 
 function OwnedSkillRow({
 	project,
+	versions,
 	latest,
 }: {
 	project: SkillHubProjectV1;
-	latest?: SkillHubVersionMetadataV1;
+	versions: "loading" | "ready" | "unavailable";
+	/** 本人版本号最高的版本，可能处于任一状态。 */
+	latest?: SkillHubOwnedVersionV1;
 }) {
 	const disabled = project.status === "disabled";
 	return (
@@ -205,10 +247,10 @@ function OwnedSkillRow({
 					{disabled ? (
 						<Badge tone="red">已停用</Badge>
 					) : latest ? (
-						<SkillHubStateChip state="published" />
-					) : (
-						<Badge tone="gray">暂无已发布版本</Badge>
-					)}
+						<SkillHubStateChip state={latest.state} />
+					) : versions === "ready" ? (
+						<Badge tone="gray">暂无版本</Badge>
+					) : null}
 				</div>
 			</div>
 			<div className="skill-row-meta">
@@ -217,8 +259,12 @@ function OwnedSkillRow({
 						<strong>v{latest.version}</strong>
 						{skillHubVisibilityLabels[latest.visibility]}
 					</>
+				) : versions === "loading" ? (
+					"正在读取版本…"
+				) : versions === "unavailable" ? (
+					"版本暂时无法读取"
 				) : (
-					"尚无可安装的版本"
+					"尚未提交版本"
 				)}
 			</div>
 			<div className="skill-actions">

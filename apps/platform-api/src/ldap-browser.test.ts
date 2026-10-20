@@ -176,6 +176,83 @@ describe("LDAP browser adapter", () => {
 		).rejects.toThrow("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
 	});
 
+	it("describes each Owner from current LDAP, Platform disable and directory facts (#2910)", async () => {
+		const state = fixture();
+		const owner = (suffix: string, extra: Partial<LdapAccount> = {}) => ({
+			...account,
+			uid: `stable-${suffix}`,
+			userId: `user-${suffix}`,
+			displayName: `Person ${suffix}`,
+			...extra,
+		});
+		const accounts = new Map<string, LdapAccount | Error | null>([
+			["user-active", owner("active")],
+			[
+				"user-ldap-disabled",
+				owner("ldap-disabled", { accountStatus: "disabled" }),
+			],
+			["user-platform-disabled", owner("platform-disabled")],
+			["user-departed", null],
+			["user-ldap-down", new Error("private-ldap-detail")],
+			["user-mismatch", owner("other")],
+			["user-directory-down", owner("directory-down")],
+			["user-disable-store-down", owner("disable-store-down")],
+		]);
+		vi.mocked(state.directory.currentByUserId).mockImplementation(
+			async (id: string) => {
+				const value = accounts.get(id);
+				if (value instanceof Error) throw value;
+				return value ?? null;
+			},
+		);
+		const isPlatformDisabled = vi.fn(async (id: string) => {
+			if (id === "user-disable-store-down") throw new Error("store down");
+			return id === "user-platform-disabled";
+		});
+		const adapter = createLdapBrowserAdapter({
+			publicOrigin: origin,
+			directory: state.directory,
+			sessions: memorySessions(),
+			isPlatformDisabled,
+			organizationIds: async (current) => {
+				if (current.userId === "user-directory-down")
+					throw new Error("snapshot expired");
+				return ["org-a"];
+			},
+		});
+		const ids = [...accounts.keys()];
+		await expect(adapter.identityAdapter.describeOwners(ids)).resolves.toEqual([
+			{ userId: "user-active", displayName: "Person active", status: "active" },
+			{
+				userId: "user-ldap-disabled",
+				displayName: "Person ldap-disabled",
+				status: "disabled",
+			},
+			{
+				userId: "user-platform-disabled",
+				displayName: "Person platform-disabled",
+				status: "disabled",
+			},
+			{ userId: "user-departed", displayName: null, status: "departed" },
+			{ userId: "user-ldap-down", displayName: null, status: "unavailable" },
+			{ userId: "user-mismatch", displayName: null, status: "unavailable" },
+			{
+				userId: "user-directory-down",
+				displayName: "Person directory-down",
+				status: "unavailable",
+			},
+			{
+				userId: "user-disable-store-down",
+				displayName: "Person disable-store-down",
+				status: "unavailable",
+			},
+		]);
+		// 原有 Owner 名称读取仍对非有效 Owner fail closed（旧投影行为不变）。
+		await expect(
+			adapter.identityAdapter.hydrateUsers(["user-platform-disabled"]),
+		).rejects.toThrow("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+	});
+
 	it("issues a secure hash-only session and resolves its stored principal", async () => {
 		const state = fixture();
 		const result = await state.login();

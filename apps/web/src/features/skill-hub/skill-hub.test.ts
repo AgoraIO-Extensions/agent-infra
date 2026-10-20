@@ -1,7 +1,17 @@
-import { SkillHubVersionMetadataV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	SkillHubInstallationListItemV1Schema,
+	SkillHubOwnedVersionV1Schema,
+	SkillHubVersionDetailV1Schema,
+	SkillHubVersionMetadataV1Schema,
+} from "@agent-infra/contracts/pilot";
 import { describe, expect, it } from "vitest";
 import { createClient } from "../../pilot/generated-v2/client/index.js";
-import { loadSkillHubDirectory, loadSkillHubVersion } from "./skill-hub.js";
+import {
+	loadOwnedSkillHubVersions,
+	loadSkillHubDirectory,
+	loadSkillHubInstallations,
+	loadSkillHubVersion,
+} from "./skill-hub.js";
 
 const version = SkillHubVersionMetadataV1Schema.parse({
 	schemaVersion: 1,
@@ -97,14 +107,24 @@ describe("Skill Hub read boundary", () => {
 		expect(requests).toHaveLength(0);
 	});
 
-	it("reads one version and rejects a response for another version id", async () => {
-		const { client } = fakeClient(() => Response.json(version));
+	it("reads one version detail and rejects a response for another version id", async () => {
+		// 详情页改读版本详情投影（#2904），同一套 ID 核对与失败映射。
+		const detail = SkillHubVersionDetailV1Schema.parse({
+			...version,
+			ownerId: "user-owner",
+			installation: { state: "not_installed" },
+			content: { state: "unavailable" },
+		});
+		const { client, requests } = fakeClient(() => Response.json(detail));
 		await expect(
 			loadSkillHubVersion(version.skillVersionId, client),
 		).resolves.toEqual({
 			kind: "ready",
-			version,
+			version: detail,
 		});
+		expect(requests[0]?.url).toBe(
+			"https://platform.example.test/api/v2/skills/versions/release-notes-v1/detail",
+		);
 		await expect(loadSkillHubVersion("other-version", client)).resolves.toEqual(
 			{
 				kind: "unavailable",
@@ -112,6 +132,93 @@ describe("Skill Hub read boundary", () => {
 				reason: "invalid-response",
 			},
 		);
+		// 旧的 metadata 形状缺少发布者、安装与内容，不能当作详情接受。
+		const { client: legacy } = fakeClient(() => Response.json(version));
+		await expect(
+			loadSkillHubVersion(version.skillVersionId, legacy),
+		).resolves.toEqual({
+			kind: "unavailable",
+			retryable: false,
+			reason: "invalid-response",
+		});
+	});
+
+	it("collects every page of the user's own versions in any state", async () => {
+		const pending = SkillHubOwnedVersionV1Schema.parse({
+			...version,
+			skillVersionId: "release-notes-v2",
+			state: "pending_review",
+		});
+		const { client, requests } = fakeClient((request) =>
+			Response.json(
+				new URL(request.url).searchParams.get("cursor")
+					? { items: [pending], nextCursor: null }
+					: { items: [version], nextCursor: "release-notes-v1" },
+			),
+		);
+		await expect(loadOwnedSkillHubVersions(client)).resolves.toEqual({
+			kind: "ready",
+			versions: [version, pending],
+		});
+		expect(requests.map((request) => request.url)).toEqual([
+			"https://platform.example.test/api/v2/skills/owned-versions",
+			"https://platform.example.test/api/v2/skills/owned-versions?cursor=release-notes-v1",
+		]);
+		const { client: denied } = fakeClient(() =>
+			Response.json({}, { status: 403 }),
+		);
+		await expect(loadOwnedSkillHubVersions(denied)).resolves.toEqual({
+			kind: "unavailable",
+			retryable: false,
+			reason: "denied",
+		});
+	});
+
+	it("collects every page of the user's installations and rejects other shapes (#2953)", async () => {
+		const installation = SkillHubInstallationListItemV1Schema.parse({
+			installationId: "installation-1",
+			skillVersionId: "release-notes-v1",
+			needUpgrade: false,
+			installedAt: "2026-10-01T08:00:00Z",
+			updatedAt: "2026-10-01T08:00:00Z",
+			version: { access: "unavailable" },
+		});
+		const second = { ...installation, installationId: "installation-2" };
+		const { client, requests } = fakeClient((request) =>
+			Response.json(
+				new URL(request.url).searchParams.get("cursor")
+					? { items: [second], nextCursor: null }
+					: { items: [installation], nextCursor: "installation-1" },
+			),
+		);
+		await expect(loadSkillHubInstallations(client)).resolves.toEqual({
+			kind: "ready",
+			installations: [installation, second],
+		});
+		expect(requests.map((request) => request.url)).toEqual([
+			"https://platform.example.test/api/v2/skills/installations",
+			"https://platform.example.test/api/v2/skills/installations?cursor=installation-1",
+		]);
+		// 带主体字段的响应不属于这个投影，按无效响应处理，不暴露部分结果。
+		const { client: invalid } = fakeClient(() =>
+			Response.json({
+				items: [{ ...installation, principalId: "other-user" }],
+				nextCursor: null,
+			}),
+		);
+		await expect(loadSkillHubInstallations(invalid)).resolves.toEqual({
+			kind: "unavailable",
+			retryable: false,
+			reason: "invalid-response",
+		});
+		const { client: denied } = fakeClient(() =>
+			Response.json({}, { status: 403 }),
+		);
+		await expect(loadSkillHubInstallations(denied)).resolves.toEqual({
+			kind: "unavailable",
+			retryable: false,
+			reason: "denied",
+		});
 	});
 
 	it("does not silently retry a repeated cursor", async () => {

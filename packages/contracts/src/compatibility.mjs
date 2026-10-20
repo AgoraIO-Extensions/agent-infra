@@ -1957,7 +1957,9 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		persistedEvents.anyOf = persistedEvents.anyOf.filter(
 			(option) =>
 				option?.$ref !== "#/components/schemas/BrowserHandoffEventV2" &&
-				option?.$ref !== "#/components/schemas/BrowserSideEffectEventV2",
+				option?.$ref !== "#/components/schemas/BrowserSideEffectEventV2" &&
+				// #2908 后加的回退事件 V2 由其自身的摘要例外固定，不属于 #508 原发布。
+				option?.$ref !== modelSelectionFallbackV2Ref,
 		);
 	// The bounded event window is a later additive field on this V2 detail;
 	// keep the original #508 publication digest stable when checking the
@@ -2311,6 +2313,114 @@ function hasSelectedBrowserSideEffectEventJsonSchemaAddition(value) {
 	return Object.values(schemas).some(hasInline);
 }
 
+// #2908 为模型回退新增 schemaVersion 2 事件，额外记录会话原所选选项与受理时的显示名。
+// 旧 V1 回退事件与 V1 读取方保持不变，只有 V2 混合版本事件历史（含 Task 投影）新增这一选项。
+// 新增的 Schema 内容按摘要固定：基线尚无该事件时，只去掉与摘要一致的新增，其余差异仍须由
+// 其他例外逐项放行；字段、约束或宿主的任何漂移都会留在差异里并失败。
+const modelSelectionFallbackV2Name = "ModelSelectionFallbackEventV2";
+const modelSelectionFallbackV2Ref = `#/components/schemas/${modelSelectionFallbackV2Name}`;
+const modelSelectionFallbackV2Digest =
+	"5f5177398821443a45362894767344a108d3f1a41df265c329b37d89c3886720";
+const modelSelectionFallbackV2Hosts = [
+	"PersistedConversationEventV2",
+	"TaskProjectionV1",
+	"TaskSseMessageV1",
+];
+
+function isModelSelectionFallbackV2OpenApiOption(value) {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		!Array.isArray(value) &&
+		((value.properties?.type?.const === "model.selection.fell_back" &&
+			value.properties?.schemaVersion?.const === 2) ||
+			value.$ref === modelSelectionFallbackV2Ref)
+	);
+}
+
+function modelSelectionFallbackV2Options(value, found = []) {
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			if (isModelSelectionFallbackV2OpenApiOption(item)) found.push(item);
+			else modelSelectionFallbackV2Options(item, found);
+		}
+	} else if (value !== null && typeof value === "object") {
+		for (const item of Object.values(value))
+			modelSelectionFallbackV2Options(item, found);
+	}
+	return found;
+}
+
+function hasModelSelectionFallbackV2OpenApiAddition(value) {
+	const schemas = value.components?.schemas ?? {};
+	return (
+		schemas[modelSelectionFallbackV2Name] !== undefined ||
+		modelSelectionFallbackV2Options(schemas).length > 0
+	);
+}
+
+function stripModelSelectionFallbackV2Options(value) {
+	if (Array.isArray(value))
+		return value
+			.filter((item) => !isModelSelectionFallbackV2OpenApiOption(item))
+			.map(stripModelSelectionFallbackV2Options);
+	if (value !== null && typeof value === "object") {
+		const result = {};
+		for (const [key, item] of Object.entries(value))
+			result[key] = stripModelSelectionFallbackV2Options(item);
+		return result;
+	}
+	return value;
+}
+
+function isPinnedModelSelectionFallbackV2Schema(value) {
+	return (
+		createHash("sha256").update(JSON.stringify(value)).digest("hex") ===
+		modelSelectionFallbackV2Digest
+	);
+}
+
+/**
+ * 基线没有 #2908 回退事件 V2 时，去掉当前文档中与摘要一致、且只出现在三个宿主里的新增。
+ * 新增与摘要不符或出现在其他 Schema 时原样返回，让差异继续按破坏性变更判定。
+ */
+function normalizeModelSelectionFallbackV2OpenApiAddition(previous, current) {
+	if (
+		hasModelSelectionFallbackV2OpenApiAddition(previous) ||
+		!hasModelSelectionFallbackV2OpenApiAddition(current)
+	)
+		return current;
+	const schemas = current.components.schemas;
+	const component = schemas[modelSelectionFallbackV2Name];
+	if (
+		component !== undefined &&
+		!isPinnedModelSelectionFallbackV2Schema(component)
+	)
+		return current;
+	const options = modelSelectionFallbackV2Hosts.flatMap((name) =>
+		modelSelectionFallbackV2Options(schemas[name]),
+	);
+	if (
+		!options.every((option) =>
+			option.$ref === modelSelectionFallbackV2Ref
+				? component !== undefined
+				: isPinnedModelSelectionFallbackV2Schema(option),
+		) ||
+		modelSelectionFallbackV2Options(schemas).length !== options.length
+	)
+		return current;
+	const normalized = structuredClone(current);
+	for (const name of modelSelectionFallbackV2Hosts) {
+		if (normalized.components.schemas[name] !== undefined)
+			normalized.components.schemas[name] =
+				stripModelSelectionFallbackV2Options(
+					normalized.components.schemas[name],
+				);
+	}
+	delete normalized.components.schemas[modelSelectionFallbackV2Name];
+	return normalized;
+}
+
 const preparingSessionAvailability = {
 	enum: ["preparing", "ready", "unavailable"],
 	type: "string",
@@ -2470,6 +2580,132 @@ function isSkillHubPublicationOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2905 publishes the system administrator pending-review queue read additively;
+// the existing review command and every published schema stay unchanged.
+function isSkillHubReviewQueueOpenApiAddition(previous, current) {
+	const paths = ["/api/v2/skills/reviews"];
+	const schemas = ["SkillHubReviewQueueItemV1", "SkillHubReviewQueuePageV1"];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"08f359f7a20b96cba61175dccfcfd073adb6a604c7b23698196f3abf4b573d50"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
+// #2910 新增带 Owner 有效状态的 Agent 详情只读入口；AgentProjectionV2、列表、命令响应和全部既有 schema 保持不变。
+function isAgentDetailOwnerStatusOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents/{agentId}/detail";
+	const schemas = [
+		"AgentOwnerProjectionV1",
+		"AgentDetailConfigurationProjectionV1",
+		"AgentDetailProjectionV1",
+	];
+	if (
+		previous.paths?.[path] !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: { [path]: current.paths?.[path] },
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"f7ded998e7ae0effe4ac2a123310ecdc2e703171962836b9e4bcfd2202fb7a4a"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
+// #2904 新增版本详情与本人版本目录两条只读入口；已发布目录、原版本读取和全部既有 schema 保持不变。
+function isSkillHubVersionDetailOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/skills/owned-versions",
+		"/api/v2/skills/versions/{skillVersionId}/detail",
+	];
+	const schemas = [
+		"SkillHubOwnedVersionV1",
+		"SkillHubOwnedVersionPageV1",
+		"SkillHubVersionDetailV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"fb9cca77c144f04f33f98772d48777c6a58de3f69923279d63ed2d2e1ac5d9dd"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
+// #2953 在已有的 /api/v2/skills/installations 上新增本人安装列表 GET 与两个只读投影；
+// 原 POST、DELETE 与全部既有 schema 保持不变。
+function isSkillHubInstallationListOpenApiAddition(previous, current) {
+	const path = "/api/v2/skills/installations";
+	const schemas = [
+		"SkillHubInstallationListItemV1",
+		"SkillHubInstallationPageV1",
+	];
+	if (
+		previous.paths?.[path]?.post === undefined ||
+		previous.paths[path].get !== undefined ||
+		current.paths?.[path]?.get === undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		get: current.paths[path].get,
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"c14d3f59dd8245a806bab06c827e53b335fa63393bf091f1917bfed90edd14df"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].get;
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #2270 publishes the existing authenticated native metadata read route and
 // projection as an additive Browser v2 consumer contract.
 function isNativeMetadataOpenApiAddition(previous, current) {
@@ -2573,6 +2809,45 @@ function isSkillHubAgentBindingOpenApiAddition(previous, current) {
 	for (const path of paths) delete normalized.paths[path];
 	for (const name of schemas) delete normalized.components.schemas[name];
 	return sameValue(previous, normalized);
+}
+
+// #2903 adds the Owner-only current Agent Version read and lets the binding
+// command carry an empty full set (unbind all). Nothing else may change.
+function isSkillHubAgentCurrentVersionOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents/{agentId}/skills/current-version";
+	const schema = "SkillHubAgentCurrentVersionV1";
+	const previousBindings =
+		previous.components?.schemas?.SkillHubAgentBindingCommandV1?.properties
+			?.bindings;
+	const currentBindings =
+		current.components?.schemas?.SkillHubAgentBindingCommandV1?.properties
+			?.bindings;
+	if (
+		previous.paths?.[path] !== undefined ||
+		previous.components?.schemas?.[schema] !== undefined ||
+		current.paths?.[path] === undefined ||
+		current.components?.schemas?.[schema] === undefined ||
+		previousBindings?.minItems !== 1 ||
+		currentBindings === undefined ||
+		Object.hasOwn(currentBindings, "minItems")
+	)
+		return false;
+	const addition = {
+		path: current.paths[path],
+		schema: current.components.schemas[schema],
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"7553dcdc7cfdc3745f0f304181d95ce8614afd78a943a5a02e0cd53e7713b82e"
+	)
+		return false;
+	const baseline = structuredClone(previous);
+	delete baseline.components.schemas.SkillHubAgentBindingCommandV1.properties
+		.bindings.minItems;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	delete normalized.components.schemas[schema];
+	return sameValue(baseline, normalized);
 }
 
 // #2214 adds the controlled Provider import entry point. The request contains
@@ -2920,6 +3195,43 @@ function isScopedAuditOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #2909 发布带显示名的审计 V2 入口与投影；V1 路径、V1 schema 与其余契约逐字节不变。
+// 新增内容（经比较前的统一归一化后）用写死的 SHA-256 固定，任何改动都会使门禁失败。
+function isScopedAuditDisplayNameV2OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/audit",
+		"/api/v2/audit/{auditId}",
+		"/api/v4/admin/audit",
+		"/api/v4/admin/audit/{auditId}",
+	];
+	const schemas = [
+		"ScopedPlatformAuditProjectionV2",
+		"ScopedPlatformAuditPageV2",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"80d060a8084126b72578212f6045af70ac0990d56c85b853ede4545d7cf291e2"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 // #481 documents the actual scoped audit cookie/Bearer entry points only.
 function isScopedAuditCredentialSecurityAddition(previous, current) {
 	const paths = [
@@ -3116,6 +3428,36 @@ function isKeylessModelReplacementOpenApiAddition(previous, current) {
 // #2612 adds the saved-Key read projection and a credential-free, version-bound
 // configuration update branch. Strip those additive branches before comparing
 // the historical V2 contract.
+function isModelDisplayCandidatesOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents/{agentId}/default-relay-key/display-candidates";
+	if (
+		previous.paths?.[path] !== undefined ||
+		current.paths?.[path] === undefined
+	)
+		return false;
+	if (
+		createHash("sha256")
+			.update(JSON.stringify(current.paths?.[path]))
+			.digest("hex") !==
+		"652cd90088a9852a524d4b0ca0fc711a3b1288b6d92111acd43f7243c3519e20"
+	)
+		return false;
+	const oldPath = "/api/v2/agents/{agentId}/default-relay-key/candidates";
+	for (const method of ["get", "post"]) {
+		if (
+			previous.paths?.[oldPath]?.[method] !== undefined &&
+			!sameValue(
+				previous.paths[oldPath][method],
+				current.paths?.[oldPath]?.[method],
+			)
+		)
+			return false;
+	}
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function isSavedKeyCandidateOpenApiAddition(previous, current) {
 	const normalized = structuredClone(current);
 	const savedPath =
@@ -4648,6 +4990,10 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			previous,
 			current,
 		);
+		current = normalizeModelSelectionFallbackV2OpenApiAddition(
+			previous,
+			current,
+		);
 		if (!hasSelectedBrowserSideEffectEventOpenApiOption(previous)) {
 			const sideEffectNormalized =
 				stripBrowserSideEffectOpenApiAdditions(current);
@@ -4725,6 +5071,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isApplicationDefaultRelayKeyV2OpenApiAddition(previous, current) &&
 			!isKeylessModelReplacementOpenApiAddition(previous, current) &&
 			!isSavedKeyCandidateOpenApiAddition(previous, current) &&
+			!isModelDisplayCandidatesOpenApiAddition(previous, current) &&
 			!isAgentDefaultRelayKeyInputOpenApiAddition(previous, current) &&
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isTaskHttpV1SseOpenApiAddition(previous, current) &&
@@ -4737,10 +5084,15 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isSkillHubReadOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationOpenApiAddition(previous, current) &&
 			!isSkillHubPublicationOpenApiAddition(previous, current) &&
+			!isSkillHubReviewQueueOpenApiAddition(previous, current) &&
+			!isSkillHubVersionDetailOpenApiAddition(previous, current) &&
+			!isSkillHubInstallationListOpenApiAddition(previous, current) &&
+			!isAgentDetailOwnerStatusOpenApiAddition(previous, current) &&
 			!isSkillHubProjectAndImportOpenApiAddition(previous, current) &&
 			!isSkillHubProjectOpenApiAddition(previous, current) &&
 			!isSkillHubImportOpenApiAddition(previous, current) &&
 			!isSkillHubAgentBindingOpenApiAddition(previous, current) &&
+			!isSkillHubAgentCurrentVersionOpenApiAddition(previous, current) &&
 			!isNativeMetadataAndCapabilityOpenApiAddition(previous, current) &&
 			!isNativeMetadataOpenApiAddition(previous, current) &&
 			!isNativeCapabilityInvocationOpenApiAddition(previous, current) &&
@@ -4748,6 +5100,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isWecomQrAuthorizationOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
+			!isScopedAuditDisplayNameV2OpenApiAddition(previous, current) &&
 			!isSkillHubAuditActionOpenApiAddition(previous, current) &&
 			!isConnectionInstallationOpenApiAddition(previous, current) &&
 			!isPlatformUserDisableOpenApiAddition(previous, current) &&

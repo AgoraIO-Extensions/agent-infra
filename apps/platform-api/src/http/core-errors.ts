@@ -39,6 +39,9 @@ export function mapCoreError(
 			not_admitted: "RESOURCE_UNAVAILABLE",
 			stale_revision: "CONFLICT",
 			idempotency_conflict: "CONFLICT",
+			// 部署未配置 Agent Version 与非 Owner 同样不可用；版本不符只在 Owner 授权后出现。
+			agent_version_unavailable: "RESOURCE_UNAVAILABLE",
+			agent_version_mismatch: "CONFLICT",
 			dependency_unavailable: "DEPENDENCY_UNAVAILABLE",
 			persistence_failed: "DEPENDENCY_UNAVAILABLE",
 		} as const;

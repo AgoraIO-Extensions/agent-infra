@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
 	type PlatformAuditQueryScopeV1,
 	type PlatformExecutionAuditBindingV1,
+	parsePlatformAuditDisplayNameV1,
 	parsePlatformAuditQueryInputV1,
 	parsePlatformAuditQueryScopeV1,
+	platformAuditDisplayNamePolicyV1,
 	projectPlatformAuditQueryDenialV1,
 	projectPlatformAuditQueryRecordV1,
 	projectPlatformAuditQuerySummaryV1,
@@ -664,5 +666,45 @@ describe("scoped audit domain", () => {
 			result: "unknown",
 		});
 		expect(JSON.stringify(projection)).not.toContain("SENSITIVE_SENTINEL");
+	});
+});
+
+describe("audit display-name policy (#2909)", () => {
+	it("lets only administrators resolve application and creation application names", () => {
+		expect(platformAuditDisplayNamePolicyV1(admin)).toEqual({
+			agents: "all",
+			agentApplications: true,
+			applications: true,
+		});
+		const application: PlatformAuditQueryScopeV1 = {
+			kind: "execution",
+			principal: { kind: "application", id: "application-a" },
+		};
+		for (const executionScope of [scope, application])
+			expect(platformAuditDisplayNamePolicyV1(executionScope)).toEqual({
+				agents: "verified_current_access",
+				agentApplications: false,
+				applications: false,
+			});
+	});
+
+	it("keeps only bounded display names", () => {
+		expect(parsePlatformAuditDisplayNameV1("编程助手")).toBe("编程助手");
+		expect(parsePlatformAuditDisplayNameV1("名".repeat(200))).toBe(
+			"名".repeat(200),
+		);
+		for (const input of [
+			null,
+			undefined,
+			42,
+			"",
+			"   ",
+			"名".repeat(201),
+			"😀".repeat(101),
+			"bad\u0000name",
+			"line\nbreak",
+			"\ud800",
+		])
+			expect(parsePlatformAuditDisplayNameV1(input)).toBeNull();
 	});
 });

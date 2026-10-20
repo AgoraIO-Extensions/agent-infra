@@ -344,6 +344,7 @@ const platformAuditActionMetadata = {
 } as const;
 
 const configurationChangedFields = [
+	"defaultRelayKey",
 	"source",
 	"environment",
 	"modelConfiguration",
@@ -352,6 +353,7 @@ const configurationChangedFields = [
 	"channels",
 	"owners",
 	"availability",
+	"skills",
 ] as const;
 
 export type PlatformAuditActionV1 = keyof typeof platformAuditActionMetadata;
@@ -526,9 +528,11 @@ function changedFields(
 		if (action === "skill.version.refused") {
 			if (
 				!exactObject(details, ["reason"]) ||
-				!skillHubOperationCodesV1.some(
-					(code) => code === (details as { reason?: unknown }).reason,
-				)
+				((details as { reason?: unknown }).reason !==
+					"authentication_required" &&
+					!skillHubOperationCodesV1.some(
+						(code) => code === (details as { reason?: unknown }).reason,
+					))
 			)
 				throw new PlatformAuditQueryError("unavailable");
 		} else {
@@ -933,11 +937,33 @@ export function decodePlatformAuditRowV1(
 		row.actorType === "application" &&
 		(action === "agent.lifecycle.stopped" ||
 			action === "agent.lifecycle.restarted");
+	const anonymousSkillRefusal =
+		action === "skill.version.refused" && row.actorType === "unknown";
+	if (anonymousSkillRefusal) {
+		const reason =
+			typeof row.details === "object" && row.details !== null
+				? (row.details as { reason?: unknown }).reason
+				: undefined;
+		if (
+			row.actorId !== "anonymous" ||
+			row.targetType !== "unknown" ||
+			row.targetId !== "unknown" ||
+			(reason === "unavailable"
+				? row.outcome !== "failed"
+				: row.outcome !== "rejected" ||
+					!["authentication_required", "forbidden", "invalid_input"].some(
+						(value) => value === reason,
+					))
+		)
+			throw new PlatformAuditQueryError("unavailable");
+	}
 	const expectedActorType: PlatformAuditProjectionV1["actor"]["kind"] = api
 		? (row.actorType as PlatformAuditProjectionV1["actor"]["kind"])
 		: applicationLifecycle
 			? "application"
-			: metadata.actorKind;
+			: anonymousSkillRefusal
+				? "unknown"
+				: metadata.actorKind;
 	const expectedTargetType: PlatformAuditProjectionV1["subject"]["kind"] =
 		refusal ? (row.targetType as "agent" | "unknown") : metadata.subjectKind;
 	if (
@@ -981,10 +1007,19 @@ export function decodePlatformAuditRowV1(
 	)
 		throw new PlatformAuditQueryError("unavailable");
 	const fields = changedFields(action, row.details, row.targetId);
+	if (
+		action === "skill.version.refused" &&
+		(row.details as { reason: unknown }).reason === "authentication_required" &&
+		row.outcome !== "rejected"
+	)
+		throw new PlatformAuditQueryError("unavailable");
 	return {
 		schemaVersion: 1,
 		auditId: row.auditId,
-		actor: { kind: expectedActorType, actorId: row.actorId },
+		actor: {
+			kind: expectedActorType,
+			actorId: anonymousSkillRefusal ? "unknown" : row.actorId,
+		},
 		action,
 		subject: {
 			kind: subjectKind,

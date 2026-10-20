@@ -688,9 +688,12 @@
 	justify-content: space-between;
 	gap: 8px;
 }
-/* 对象 ID 短形式：设计 small.mono（11px 等宽）。 */
+/* 对象 ID 短形式：设计 small.mono（11px 等宽），IdentifierText 不再缩小字号。 */
 .audit-table small.audit-identifier {
 	font-family: var(--font-mono);
+}
+.audit-table small.audit-identifier [data-slot="identifier-text"] code {
+	font-size: inherit;
 }
 .audit-table [data-slot="table-head"]:last-child {
 	width: 120px;
@@ -3073,7 +3076,8 @@ body {
 .skill-row-copy {
 	min-width: 0;
 }
-.skill-page .skill-row-copy h2 {
+.skill-page .skill-row-copy h2,
+.skill-page .skill-row-copy h3 {
 	overflow-wrap: anywhere;
 	font-family: var(--font-body);
 	font-size: 16px;
@@ -3088,8 +3092,14 @@ body {
 }
 /* 契约还没有用途说明时，标签直接跟在名称下方，间距取说明段的上下外边距之和。 */
 .skill-row-copy > h2 + [data-slot="badge"],
-.skill-row-copy > h2 + .skill-row-badges {
+.skill-row-copy > h2 + .skill-row-badges,
+.skill-row-copy > h3 + .skill-row-badges {
 	margin-top: 8px;
+}
+.skill-row-badges {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
 }
 .skill-row-meta {
 	min-width: 0;
@@ -3209,6 +3219,54 @@ body {
 }
 .version-line strong {
 	font-size: 14px;
+}
+/* 设计 pre.skill-code：SKILL.md 只按纯文本显示，长行换行，过长时在块内滚动。 */
+.skill-page .skill-code {
+	max-height: 420px;
+	margin: 12px 0 0;
+	padding: 14px 16px;
+	overflow: auto;
+	overscroll-behavior: contain;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface-raised);
+	color: var(--foreground);
+	font: 12px / 1.7 var(--font-mono);
+}
+.skill-page .skill-code pre {
+	margin: 0;
+	font: inherit;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.skill-page .skill-code:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: 3px;
+}
+/* 设计配套资源：等宽 quiet-pill 列表，类别与大小跟在路径后。 */
+.skill-page .skill-section .skill-resources {
+	display: grid;
+	gap: 8px;
+	margin: 12px 0 0;
+	padding: 0;
+	list-style: none;
+}
+.skill-page .skill-section .skill-resources li + li {
+	margin-top: 0;
+}
+.skill-resources li {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+.skill-resource-path {
+	font-family: var(--font-mono);
+}
+.skill-resource-meta {
+	color: var(--muted-foreground);
+	font-size: 12px;
 }
 .skill-editor-surface {
 	display: grid;

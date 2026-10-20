@@ -234,7 +234,7 @@ async function fixture(page: Page) {
 			url.pathname !== "/api/v1/session" &&
 			url.pathname !== "/api/v2/deployment/configuration" &&
 			url.pathname !== "/api/v2/agents" &&
-			!/^\/api\/v2\/agents\/[^/]+$/.test(url.pathname)
+			!/^\/api\/v2\/agents\/[^/]+(?:\/detail)?$/.test(url.pathname)
 		) {
 			unexpected.push(url.pathname);
 			return route.abort();

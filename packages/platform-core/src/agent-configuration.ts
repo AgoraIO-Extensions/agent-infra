@@ -681,10 +681,11 @@ function createAgentConfigurationUseCaseV1Internal(
 			channels,
 		});
 
-		if (keyless)
-			changedFields.push(
-				"defaultRelayKey" in keyless ? "defaultRelayKey" : "modelConfiguration",
-			);
+		if (keyless) {
+			const field =
+				"defaultRelayKey" in keyless ? "defaultRelayKey" : "modelConfiguration";
+			if (!changedFields.includes(field)) changedFields.push(field);
+		}
 		changedFields.sort();
 		if (changedFields.length === 0) {
 			throw new AgentConfigurationError("no_change");

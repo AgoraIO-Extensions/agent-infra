@@ -2612,7 +2612,7 @@ function isCodexOperation(
 	const isInterruption = kind === "stop" || kind === "generation-cancel";
 	const isNativeCommand = kind === "native-command";
 	if (
-		(kind === "submit-turn" &&
+		((kind === "submit-turn" || isNativeCommand) &&
 			value.configVersion !== undefined &&
 			(typeof value.configVersion !== "string" ||
 				!codexModelPattern.test(value.configVersion))) ||
@@ -5879,13 +5879,31 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		const session = ownRecordValue(state.sessions, read.nativeSessionRef);
 		const allowUnboundExecution = read.allowUnboundExecution === true;
+		const nativeCommand = ownRecordValue(
+			state.operations,
+			operationKey({
+				agentId: scope.agentId,
+				conversationId: scope.conversationId,
+				sessionGeneration: scope.sessionGeneration,
+				kind: "native-command",
+				operationId: scope.executionId,
+			}),
+		);
+		const hasBoundNativeCommand =
+			nativeCommand !== undefined &&
+			nativeCommand.nativeSessionRef === read.nativeSessionRef &&
+			nativeCommand.executionId === scope.executionId &&
+			nativeCommand.state === "resolved" &&
+			nativeCommand.record?.kind === "native-command" &&
+			nativeCommand.record.result.outcome === "accepted";
 		if (
 			!session ||
 			session.agentId !== scope.agentId ||
 			session.conversationId !== scope.conversationId ||
 			session.sessionGeneration !== scope.sessionGeneration ||
 			(!allowUnboundExecution &&
-				!ownRecordValue(session.executions, scope.executionId)) ||
+				!ownRecordValue(session.executions, scope.executionId) &&
+				!hasBoundNativeCommand) ||
 			(session.activeExecutionId !== undefined &&
 				session.activeExecutionId !== scope.executionId)
 		)
@@ -5908,7 +5926,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							candidate.nativeSessionRef === read.nativeSessionRef &&
 							nonEmptyString(candidate.configVersion),
 					)
-				: undefined);
+				: hasBoundNativeCommand
+					? nativeCommand
+					: undefined);
 		if (
 			!operation ||
 			operation.nativeSessionRef !== read.nativeSessionRef ||
@@ -6051,12 +6071,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const revision = createHash("sha256")
 			.update(
 				JSON.stringify([
-					"codex-thread-read-v1",
+					"codex-thread-read-v2",
 					binding.authority.principal.kind,
 					binding.authority.principal.id,
 					binding.authority.scope.agentId,
 					binding.authority.scope.conversationId,
-					binding.authority.scope.executionId,
 					binding.authority.scope.sessionGeneration,
 					binding.nativeSessionRef,
 					binding.threadId,
@@ -6345,11 +6364,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			mountedEntries,
 		);
 		assertMountedCurrent();
+		// Selection survives admission of a new Execution; read guards keep its full scope.
+		const { executionId: _executionId, ...directoryScope } =
+			binding.authority.scope;
 		const revision = createHash("sha256")
 			.update(
 				JSON.stringify([
-					"codex-installed-skill-directory-v1",
-					binding,
+					"codex-installed-skill-directory-v2",
+					{
+						...binding,
+						authority: { ...binding.authority, scope: directoryScope },
+					},
 					binding.requiredRuntime,
 					{ fixed: descriptor ?? null, hub: mountedEntries ?? null },
 					mountedGenerationId,
@@ -6670,6 +6695,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				schemaVersion: 1,
 				state: "prepared",
 				nativeSessionRef: command.nativeSessionRef,
+				configVersion: this.configVersion,
 				executionId: command.executionId,
 				turnId: command.turnId,
 			};
@@ -10472,9 +10498,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			} = {},
 		) => {
 			const finishedAt =
-				phase === "started"
-					? undefined
-					: (details.finishedAt ?? new Date().toISOString());
+				phase === "completed" || phase === "failed"
+					? (details.finishedAt ?? new Date().toISOString())
+					: undefined;
 			await this.update((state) => {
 				const session = ownRecordValue(
 					state.sessions,
@@ -10494,12 +10520,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					(previous.phase !== "intent" && previous.phase !== "started")
 				)
 					stateInvalid();
-				this.appendOperationFact(session, journal, {
+				const next = {
 					...previous,
 					...details,
 					phase,
 					...(finishedAt ? { finishedAt } : {}),
-				});
+				};
+				// Transport closure does not confirm the external operation ended.
+				if (phase === "unknown") {
+					delete next.finishedAt;
+					delete next.durationMs;
+				}
+				this.appendOperationFact(session, journal, next);
 				if (phase === "unknown" || phase === "failed")
 					journal.externalActionsBlocked = true;
 			});

@@ -1,10 +1,12 @@
 import { AgentResourceProfileProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
+import { createDeploymentModelDisplayNamesV1 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationAuthorityContextV1,
 	type AgentConfigurationUseCaseDependenciesV1,
 	type AgentDefaultRelayKeyBindingV1,
 	captureAgentApiCreatePrincipalsV1,
+	isSkillHubAgentVersionV1,
 	PersonalRelayKeyErrorV1,
 } from "@agent-infra/platform-core";
 import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
@@ -103,12 +105,19 @@ export interface ProductionPlatformApiInputV1
 	readonly wecomIdentity?: PlatformApiAssemblyInput["wecomIdentity"];
 	readonly wecomCredentialEncryptionKeys?: PlatformApiAssemblyInput["wecomCredentialEncryptionKeys"];
 	readonly wecomApplicationSetup?: PlatformApiAssemblyInput["wecomApplicationSetup"];
+	/** 部署获准的扫码授权来源（企微官方页 origin、授权地址与来源标识）；不提供时扫码入口保持不可用（#2894）。 */
+	readonly wecomBotQr?: PlatformApiAssemblyInput["wecomBotQr"];
 	/** Deployment-owned ObjectStorage/file authority adapter for Web and Runtime exchange. */
 	readonly files?: PlatformApiAssemblyInput["files"];
 	readonly databaseUrl: string;
 	readonly taskAdmissionPolicy: PlatformApiAssemblyInput["taskAdmissionPolicy"];
 	/** Same immutable image repository used by the Worker's resource policy. */
 	readonly imageRepository: string;
+	/**
+	 * 可选的部署级固定 Agent Version（工程 Spec §11.6），必须与 Worker 的
+	 * `skillMaterialization.agentVersion` 同值。缺失时 Skill 绑定读写不可用。
+	 */
+	readonly agentVersion?: string;
 	/** An actual deployment identity boundary; no browser-provided identity headers. */
 	readonly identity: IdentityAdapter;
 	readonly userGovernance?: PostgresPlatformUserDisablesV1;
@@ -127,6 +136,8 @@ export interface ProductionPlatformApiInputV1
 	readonly resourceProfile: Parameters<
 		typeof createDeploymentPresentation
 	>[0]["resourceProfile"];
+	/** Nonsecret presentation metadata, separate from the strict policy catalog. */
+	readonly modelDisplayMetadata?: unknown;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly conversationEventWindow?: number;
@@ -328,6 +339,11 @@ export function createProductionPlatformApiAssemblyInputV1(
 			`${input.imageRepository}@sha256:${"0".repeat(64)}`,
 		);
 		if (
+			input.agentVersion !== undefined &&
+			!isSkillHubAgentVersionV1(input.agentVersion)
+		)
+			throw new Error();
+		if (
 			!["postgres:", "postgresql:"].includes(
 				new URL(input.databaseUrl).protocol,
 			) ||
@@ -362,6 +378,10 @@ export function createProductionPlatformApiAssemblyInputV1(
 		throw new Error("PLATFORM_DEPLOYMENT_CONFIGURATION_INVALID");
 	}
 	const identityScope = createDeploymentIdentityScope(input.identity);
+	const readModelDisplayNames = createDeploymentModelDisplayNamesV1({
+		metadata: input.modelDisplayMetadata,
+		modelCatalog: { ...input.modelCatalog },
+	});
 	// Web 申请与 API 创建提交的是同一种默认 Relay Key（PRD 7.4）：部署没有单独提供 API 的
 	// candidates 时，沿用 Web 申请的候选校验（同一 ModelCatalog、模板绑定与 billing 校验），
 	// 不另设一套可见模型规则（#2759）。两项策略缺任一时仍不装配，标准模板创建保持失败关闭。
@@ -527,6 +547,20 @@ export function createProductionPlatformApiAssemblyInputV1(
 				: {}),
 		},
 		...(personalRelayKeys ? { personalRelayKeys } : {}),
+		readModelDisplayNames,
+		...(input.modelDisplayMetadata === undefined
+			? {}
+			: {
+					readRequestedModelDisplayName: async (model: {
+						readonly endpointId: string;
+						readonly modelId: string;
+					}) => {
+						const names = await readModelDisplayNames(
+							identityScope.currentRequest().signal,
+						);
+						return names(model);
+					},
+				}),
 		...(validatePersonalRelayKey
 			? { validateDefaultRelayKey: validatePersonalRelayKey }
 			: {}),
@@ -552,7 +586,11 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.wecomApplicationSetup
 			? { wecomApplicationSetup: input.wecomApplicationSetup }
 			: {}),
+		...(input.wecomBotQr ? { wecomBotQr: input.wecomBotQr } : {}),
 		...(input.files ? { files: input.files } : {}),
+		...(input.agentVersion !== undefined
+			? { agentVersion: input.agentVersion }
+			: {}),
 		databaseUrl: input.databaseUrl,
 		userGovernance,
 		taskAdmissionPolicy: input.taskAdmissionPolicy,
@@ -613,6 +651,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 					resourceProfile,
 					imageRepository: input.imageRepository,
 					modelSelectionAvailable: input.modelSelection !== undefined,
+					readModelDisplayNames,
 					...(input.resolveCustomAgentInteractionUrl
 						? {
 								resolveCustomAgentInteractionUrl:

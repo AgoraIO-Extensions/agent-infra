@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
 	type ApiPrincipalV1,
+	type ConversationOperationFactV2,
 	createConversationEventUseCaseV1,
 	createPersonalApiCredentialUseCaseV1,
 	type PersonalApiAgentReadAuditV1,
@@ -106,6 +107,169 @@ async function fixture(
 }
 
 describe("controlled PostgreSQL audit query", () => {
+	it.each([false, true])(
+		"reads formally ingested unknown model facts without rewriting history, legacy timing=%s",
+		async (legacy) => {
+			const f = await fixture();
+			const adapter = new PostgresConversationEventTransactionV1({
+				databaseUrl: database.databaseUrl,
+			});
+			const events = createConversationEventUseCaseV1(
+				{ transaction: adapter },
+				{ newId: randomUUID },
+			);
+			const startedAt = "2026-10-01T00:00:00.000Z";
+			const command = (phase: "intent" | "started" | "unknown") => ({
+				schemaVersion: 1 as const,
+				conversationId: f.conversationId,
+				executionId: f.executionId,
+				sessionGeneration: 1,
+				deliveryFence: 1,
+				adapterEventKey: `model-${phase}`,
+				runtimeCursor: `model-${phase}`,
+				occurredAt: "2026-10-01T00:00:00.125Z",
+				event: {
+					schemaVersion: 2 as const,
+					type: "execution.operation" as const,
+					fact: {
+						kind: "model" as const,
+						operationRef: "model-operation",
+						attemptRef: "model-attempt",
+						phase,
+						model: {
+							modelOptionId: "test-model-option",
+							modelId: "controlled-model",
+							configVersion: "configuration-1",
+							reasoningLevel: "medium",
+						},
+						...(phase === "intent" ? {} : { startedAt }),
+						...(phase === "unknown"
+							? {
+									failureCode: "response_incomplete",
+									...(legacy
+										? {
+												finishedAt: "2026-10-01T00:00:00.125Z",
+												durationMs: 125,
+											}
+										: {}),
+								}
+							: {}),
+					} satisfies ConversationOperationFactV2,
+				},
+			});
+			const snapshot = async () => ({
+				events:
+					await sql`select * from platform.conversation_events where execution_id = ${f.executionId} order by sequence`,
+				audits:
+					await sql`select * from platform.audit_events where target_id = ${f.executionId} and action = 'execution.operation.observed' order by id`,
+			});
+			try {
+				for (const phase of ["intent", "started", "unknown"] as const)
+					await events.persist(command(phase));
+				const before = await snapshot();
+				expect(before.events).toHaveLength(3);
+				expect(before.audits).toHaveLength(3);
+				const unknown = before.audits.find(
+					(row) => row.details.fact.phase === "unknown",
+				);
+				if (!unknown) throw new Error("missing ingested unknown audit");
+				for (const scope of [f.scope, admin]) {
+					const record = await query.getAuditWithDisplayNames(
+						scope,
+						unknown.id,
+						detail,
+						request(),
+					);
+					expect(record).toMatchObject({
+						result: "unknown",
+						originalPrincipal: f.principal,
+						operation: {
+							fact: {
+								phase: "unknown",
+								startedAt,
+								failureCode: "response_incomplete",
+							},
+						},
+						displayNames: { agent: "Audit fixture" },
+					});
+					expect(record.operation?.fact).not.toHaveProperty("finishedAt");
+					expect(record.operation?.fact).not.toHaveProperty("durationMs");
+					const ids: string[] = [];
+					let cursor: string | undefined;
+					do {
+						const result = await query.listAuditWithDisplayNames(
+							scope,
+							{
+								limit: 1,
+								filters: {
+									executionId: f.executionId,
+									action: "execution.operation.observed",
+								},
+								...(cursor ? { cursor } : {}),
+							},
+							request(),
+						);
+						ids.push(...result.items.map((item) => item.auditId));
+						cursor = result.nextCursor ?? undefined;
+					} while (cursor);
+					expect(ids.sort()).toEqual(before.audits.map((row) => row.id).sort());
+				}
+				await events.persist(command("unknown"));
+				expect(await snapshot()).toEqual(before);
+				const other = await fixture(undefined, f.agentId);
+				await expect(
+					query.getAudit(other.scope, unknown.id, detail, request()),
+				).rejects.toMatchObject({ code: "access_denied" });
+				if (legacy) {
+					const original = unknown.details;
+					for (const change of [
+						{ ...original, authorizationRecordId: "wrong-authorization" },
+						{ ...original, secret: "PRIVATE_SENTINEL" },
+						{
+							...original,
+							fact: { ...original.fact, secret: "PRIVATE_SENTINEL" },
+						},
+						{ ...original, fact: { ...original.fact, finishedAt: "invalid" } },
+					]) {
+						await sql`update platform.audit_events set details = ${sql.json(change)} where id = ${unknown.id}`;
+						await expect(
+							query.getAudit(admin, unknown.id, detail, request()),
+						).rejects.toMatchObject({ code: "unavailable" });
+					}
+					await sql`update platform.audit_events set details = ${sql.json(original)} where id = ${unknown.id}`;
+					const event = before.events.at(-1);
+					if (!event) throw new Error("missing original event");
+					for (const payload of [
+						{ ...event.event_payload, schemaVersion: 3 },
+						{ ...event.event_payload, secret: "PRIVATE_SENTINEL" },
+						{
+							...event.event_payload,
+							fact: { ...original.fact, attemptRef: "different-attempt" },
+						},
+					]) {
+						await sql`update platform.conversation_events set event_payload = ${sql.json(payload)} where event_id = ${event.event_id}`;
+						await expect(
+							query.getAudit(admin, unknown.id, detail, request()),
+						).rejects.toMatchObject({ code: "unavailable" });
+					}
+					await sql`update platform.conversation_events set event_payload = ${sql.json(event.event_payload)}, execution_id = ${other.executionId}, conversation_id = ${other.conversationId} where event_id = ${event.event_id}`;
+					await expect(
+						query.getAudit(admin, unknown.id, detail, request()),
+					).rejects.toMatchObject({ code: "unavailable" });
+					const unpairedId = randomUUID();
+					await sql`update platform.conversation_events set event_id = ${unpairedId}, execution_id = ${event.execution_id}, conversation_id = ${event.conversation_id} where event_id = ${event.event_id}`;
+					await expect(
+						query.getAudit(admin, unknown.id, detail, request()),
+					).rejects.toMatchObject({ code: "unavailable" });
+					await sql`update platform.conversation_events set event_id = ${event.event_id} where event_id = ${unpairedId}`;
+					expect(await snapshot()).toEqual(before);
+				}
+			} finally {
+				await adapter.close();
+			}
+		},
+	);
+
 	it("retains the actual durable control reference and truthful status timeout reason in detail", async () => {
 		const f = await fixture();
 		const authority = new PostgresTaskAuthorizationStoreV1({
@@ -1671,3 +1835,225 @@ describe("admin audit for #2879 registered actions", () => {
 		).rejects.toMatchObject({ code: "unavailable" });
 	});
 }, 120_000);
+
+// #2909：显示名按查询方当前权限解析，不可见对象不返回名称，也不能借筛选探测存在性。
+describe("audit display names follow the querying principal's current access", () => {
+	async function nameAgent(agentId: string, prefix: string) {
+		const name = `${prefix}-${randomUUID().slice(0, 8)}`;
+		await sql`update platform.agent_applications set name = ${name} where agent_id = ${agentId}`;
+		return name;
+	}
+	const failureText = (error: unknown) =>
+		`${String((error as Error)?.message)} ${JSON.stringify(error)}`;
+
+	it("returns Agent names only on the named entry and only for currently accessible own records", async () => {
+		const f = await fixture();
+		const other = await fixture(undefined, f.agentId);
+		const name = await nameAgent(f.agentId, "编程助手");
+		const input = { limit: 100, filters: { agentId: f.agentId } };
+		const plain = await query.listAudit(f.scope, input, request());
+		expect(plain.items.length).toBeGreaterThan(0);
+		for (const item of plain.items)
+			expect(item).not.toHaveProperty("displayNames");
+		const named = await query.listAuditWithDisplayNames(
+			f.scope,
+			input,
+			request(),
+		);
+		expect(named.items.map((item) => item.auditId)).toEqual(
+			plain.items.map((item) => item.auditId),
+		);
+		expect(named.items.some((item) => item.auditId === other.auditId)).toBe(
+			false,
+		);
+		for (const item of named.items)
+			expect(item.displayNames).toEqual({
+				actor: null,
+				subject: null,
+				originalPrincipal: null,
+				agent: name,
+			});
+		// Owner 角色不带来他人的记录，也就不带来名称。
+		const ownerScope: PlatformAuditQueryScopeV1 = {
+			kind: "execution",
+			principal: { kind: "user", id: "different-owner" },
+			user: {
+				schemaVersion: 1,
+				userId: "different-owner",
+				accountStatus: "active",
+				organizationIds: [],
+				authorizationRevision: "owner-directory",
+			},
+		};
+		expect(
+			(await query.listAuditWithDisplayNames(ownerScope, input, request()))
+				.items,
+		).toHaveLength(0);
+		await expect(
+			query.getAuditWithDisplayNames(ownerScope, f.auditId, detail, request()),
+		).rejects.toMatchObject({ code: "access_denied" });
+		// 失去当前访问权后整页拒绝，错误里没有名称。
+		await sql`delete from platform.agent_availability where agent_id = ${f.agentId} and target_id = ${f.principal.id}`;
+		for (const attempt of [
+			query.listAuditWithDisplayNames(f.scope, input, request()),
+			query.getAuditWithDisplayNames(f.scope, f.auditId, detail, request()),
+		]) {
+			const failure = await attempt.then(
+				() => null,
+				(error: unknown) => error,
+			);
+			expect(failure).toMatchObject({ code: "access_denied" });
+			expect(failureText(failure)).not.toContain(name);
+		}
+	});
+
+	it("rejects an inaccessible Agent filter exactly like a missing Agent, without its name", async () => {
+		const f = await fixture();
+		const hidden = await fixture();
+		const hiddenName = await nameAgent(hidden.agentId, "隐藏助手");
+		const failures = await Promise.all(
+			[hidden.agentId, randomUUID()].map((agentId) =>
+				query
+					.listAuditWithDisplayNames(
+						f.scope,
+						{ limit: 10, filters: { agentId } },
+						request(),
+					)
+					.then(
+						() => null,
+						(error: unknown) => error,
+					),
+			),
+		);
+		for (const failure of failures) {
+			expect(failure).toMatchObject({ code: "access_denied" });
+			expect(failureText(failure)).not.toContain(hiddenName);
+		}
+		expect(failureText(failures[0])).toBe(failureText(failures[1]));
+		await expect(
+			query.getAuditWithDisplayNames(
+				f.scope,
+				hidden.auditId,
+				detail,
+				request(),
+			),
+		).rejects.toMatchObject({ code: "access_denied" });
+	});
+
+	it("resolves application and creation application names only for administrators", async () => {
+		const f = await fixture();
+		const agentName = await nameAgent(f.agentId, "审计助手");
+		const [creation] =
+			await sql`select id from platform.agent_applications where agent_id = ${f.agentId}`;
+		if (!creation) throw new Error("Fixture creation application is missing");
+		const applicationId = randomUUID();
+		const applicationName = `运维机器人-${randomUUID().slice(0, 8)}`;
+		await sql`insert into platform.platform_applications (id,name,responsible_user_id,status,authorization_revision)
+			values (${applicationId},${applicationName},'responsible-user','active','app-revision')`;
+		const stopped = randomUUID();
+		const unknownApplication = randomUUID();
+		const submitted = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, agent_id, details)
+			values (${stopped}, 'name-trace', ${randomUUID()}, 'application', ${applicationId}, 'agent.lifecycle.stopped', 'agent', ${f.agentId}, 'succeeded', ${f.agentId}, null),
+				(${unknownApplication}, 'name-trace', ${randomUUID()}, 'application', ${randomUUID()}, 'agent.lifecycle.stopped', 'agent', ${randomUUID()}, 'succeeded', null, null),
+				(${submitted}, 'name-trace', ${randomUUID()}, 'user', ${f.principal.id}, 'agent.application.submitted', 'agent_application', ${creation.id}, 'succeeded', null, null)`;
+		expect(
+			(await query.getAuditWithDisplayNames(admin, stopped, detail, request()))
+				.displayNames,
+		).toEqual({
+			actor: applicationName,
+			subject: agentName,
+			originalPrincipal: null,
+			agent: agentName,
+		});
+		// 不存在的应用与 Agent 不编造名称。
+		expect(
+			(
+				await query.getAuditWithDisplayNames(
+					admin,
+					unknownApplication,
+					detail,
+					request(),
+				)
+			).displayNames,
+		).toEqual({
+			actor: null,
+			subject: null,
+			originalPrincipal: null,
+			agent: null,
+		});
+		expect(
+			(
+				await query.getAuditWithDisplayNames(
+					admin,
+					submitted,
+					detail,
+					request(),
+				)
+			).displayNames,
+		).toEqual({
+			actor: null,
+			subject: agentName,
+			originalPrincipal: null,
+			agent: null,
+		});
+		expect(
+			await query.getAudit(admin, stopped, detail, request()),
+		).not.toHaveProperty("displayNames");
+	});
+
+	it("gives an application credential its current-use Agent names but never application names", async () => {
+		const f = await fixture();
+		const agentName = await nameAgent(f.agentId, "接口助手");
+		const applicationId = randomUUID();
+		const applicationName = `接口应用-${randomUUID().slice(0, 8)}`;
+		const material = `papi_${randomBytes(32).toString("base64url")}`;
+		await sql`insert into platform.platform_applications (id,name,responsible_user_id,status,authorization_revision)
+			values (${applicationId},${applicationName},'responsible-user','active','app-revision')`;
+		await sql`insert into platform.platform_api_credentials (id,principal_type,principal_id,credential_hash,scopes)
+			values (${randomUUID()},'application',${applicationId},${createHash("sha256").update(material).digest("hex")},'["agent:use"]'::jsonb)`;
+		await sql`insert into platform.agent_principal_grants (agent_id,principal_type,principal_id,grant_type,authorization_revision)
+			values (${f.agentId},'application',${applicationId},'use','current-agent-revision')`;
+		const accessId = randomUUID();
+		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, agent_id, details)
+			values (${accessId}, 'access-trace', ${randomUUID()}, 'application', ${applicationId}, 'task.api.access', 'agent', ${f.agentId}, 'succeeded', ${f.agentId},
+				${sql.json({ schemaVersion: 1, operation: "submit", phase: "access", reason: "request_accepted", target: { kind: "agent", agentId: f.agentId } })})`;
+		const source = {
+			kind: "api-credential" as const,
+			material,
+			userDirectory: {
+				resolveUser: async () => {
+					throw new Error("Application must not resolve a responsible user");
+				},
+			},
+		};
+		const named = await query.getAuditWithDisplayNames(
+			source,
+			accessId,
+			detail,
+			request(),
+		);
+		expect(named.actor).toEqual({
+			kind: "application",
+			actorId: applicationId,
+		});
+		expect(named.displayNames).toEqual({
+			actor: null,
+			subject: agentName,
+			originalPrincipal: null,
+			agent: agentName,
+		});
+		expect(JSON.stringify(named)).not.toContain(applicationName);
+		expect(JSON.stringify(named)).not.toContain(material);
+		await sql`update platform.agent_principal_grants set revoked_at = now()
+			where agent_id = ${f.agentId} and principal_type = 'application' and principal_id = ${applicationId}`;
+		const failure = await query
+			.getAuditWithDisplayNames(source, accessId, detail, request())
+			.then(
+				() => null,
+				(error: unknown) => error,
+			);
+		expect(failure).toMatchObject({ code: "access_denied" });
+		expect(failureText(failure)).not.toContain(agentName);
+	});
+});

@@ -29,6 +29,10 @@ function fixture() {
 	const binds: string[] = [];
 	const options: ClientOptions[] = [];
 	const searches: string[] = [];
+	const clients: { binds: string[]; searches: string[]; unbinds: number }[] =
+		[];
+	let beforeSearch: ((filter: string) => void | Promise<void>) | undefined;
+	let searchReferences: string[] = [];
 	const verifications: { issuer: string; uid: string }[] = [];
 	const config: LdapIdentityConfiguration = {
 		url: "ldaps://ldap.example.test:636",
@@ -68,9 +72,16 @@ function fixture() {
 		administratorUids: ["stable-a"],
 		createClient(clientOptions) {
 			options.push(clientOptions);
+			const client = {
+				binds: [] as string[],
+				searches: [] as string[],
+				unbinds: 0,
+			};
+			clients.push(client);
 			return {
 				async bind(dn: string, candidate?: string) {
 					binds.push(dn);
+					client.binds.push(dn);
 					if (!serviceAvailable) throw new Error("secret-provider-detail");
 					if (dn === employee.dn && (!bindAllowed || candidate !== password))
 						throw new InvalidCredentialsError("secret-provider-detail");
@@ -78,6 +89,8 @@ function fixture() {
 				async search(_base: string, searchOptions) {
 					const filter = searchOptions?.filter?.toString() ?? "";
 					searches.push(filter);
+					client.searches.push(filter);
+					await beforeSearch?.(filter);
 					const match = /^\((uid|entryUUID|mail)=(.*)\)$/u.exec(filter);
 					return {
 						searchEntries: match
@@ -87,10 +100,12 @@ function fixture() {
 										: entry[match[1] as "uid" | "entryUUID"] === match[2],
 								)
 							: [],
-						searchReferences: [],
+						searchReferences,
 					};
 				},
-				async unbind() {},
+				async unbind() {
+					client.unbinds++;
+				},
 			} as Pick<Client, "bind" | "search" | "unbind">;
 		},
 	};
@@ -100,7 +115,14 @@ function fixture() {
 		binds,
 		options,
 		searches,
+		clients,
 		verifications,
+		setBeforeSearch(value: typeof beforeSearch) {
+			beforeSearch = value;
+		},
+		setSearchReferences(value: string[]) {
+			searchReferences = value;
+		},
 		setEntries(value: typeof entries) {
 			entries = value;
 		},
@@ -123,6 +145,151 @@ function fixture() {
 }
 
 describe("first-party LDAP identity directory", () => {
+	it("uses one fresh service client for both current-account searches (#2940)", async () => {
+		const state = fixture();
+		const directory = createLdapIdentityDirectory(state.config);
+		const account = await directory.authenticate("login-a", "correct-password");
+		state.clients.length = 0;
+		for (let call = 0; call < 2; call++) {
+			await expect(directory.current("stable-a")).resolves.toEqual(account);
+			expect(state.clients).toHaveLength(call + 1);
+			expect(state.clients[call]).toEqual({
+				binds: [state.config.serviceBindDn],
+				searches: ["(entryUUID=stable-a)", "(mail=person.a@example.test)"],
+				unbinds: 1,
+			});
+		}
+		expect(state.verifications).toHaveLength(2);
+	});
+
+	it("keeps the fresh client bound until the second search finishes (#2940)", async () => {
+		const state = fixture();
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		state.setBeforeSearch(async (filter) => {
+			if (!filter.startsWith("(mail=")) return;
+			entered.resolve();
+			await release.promise;
+		});
+		const result = createLdapIdentityDirectory(state.config).current(
+			"stable-a",
+		);
+		await entered.promise;
+		try {
+			expect(state.clients).toHaveLength(1);
+			expect(state.clients[0]?.unbinds).toBe(0);
+		} finally {
+			release.resolve();
+			await result;
+		}
+		expect(state.clients[0]?.unbinds).toBe(1);
+	});
+
+	it.each(["deleted", "duplicate", "reassigned", "reference", "failed"])(
+		"rejects an email search that is %s and cleans the client (#2940)",
+		async (change) => {
+			const state = fixture();
+			state.setBeforeSearch((filter) => {
+				if (!filter.startsWith("(mail=")) return;
+				if (change === "failed") throw new Error("controlled search failure");
+				if (change === "reference")
+					state.setSearchReferences(["ldap://elsewhere.test"]);
+				if (change === "deleted") state.setEntries([]);
+				if (change === "duplicate")
+					state.setEntries([employee, { ...employee, entryUUID: "stable-b" }]);
+				if (change === "reassigned")
+					state.setEntries([{ ...employee, entryUUID: "stable-b" }]);
+			});
+			await expect(
+				createLdapIdentityDirectory(state.config).current("stable-a"),
+			).rejects.toThrow(LdapIdentityUnavailableError);
+			expect(state.ids.size).toBe(0);
+			expect(state.clients).toHaveLength(1);
+			expect(state.clients[0]?.unbinds).toBe(1);
+		},
+	);
+
+	it("isolates concurrent subjects on separate fresh clients (#2940)", async () => {
+		const state = fixture();
+		state.setEntries([
+			employee,
+			{
+				...employee,
+				uid: "login-b",
+				entryUUID: "stable-b",
+				mail: "person.b@example.test",
+			},
+		]);
+		const identities = [
+			["stable-a", "00000000-0000-4000-8000-000000000001"],
+			["stable-b", "00000000-0000-4000-8000-000000000002"],
+		] as const;
+		for (const [uid, id] of identities)
+			state.ids.set(JSON.stringify([state.config.issuer, uid]), id);
+		const directory = createLdapIdentityDirectory(state.config);
+		const values = await Promise.all([
+			directory.current("stable-a"),
+			directory.current("stable-b"),
+		]);
+		expect(values.map((value) => value?.userId)).toEqual(
+			identities.map(([, id]) => id),
+		);
+		expect(values.map((value) => value?.roles)).toEqual([
+			["employee", "system_admin"],
+			["employee"],
+		]);
+		expect(state.clients).toHaveLength(2);
+		for (const [index, suffix] of ["a", "b"].entries())
+			expect(state.clients[index]).toEqual({
+				binds: [state.config.serviceBindDn],
+				searches: [
+					`(entryUUID=stable-${suffix})`,
+					`(mail=person.${suffix}@example.test)`,
+				],
+				unbinds: 1,
+			});
+	});
+
+	it("cleans a failed service bind without reaching identity storage (#2940)", async () => {
+		const state = fixture();
+		state.setServiceAvailable(false);
+		await expect(
+			createLdapIdentityDirectory(state.config).current("stable-a"),
+		).rejects.toThrow(LdapIdentityUnavailableError);
+		expect(state.clients).toEqual([
+			{ binds: [state.config.serviceBindDn], searches: [], unbinds: 1 },
+		]);
+		expect(state.ids.size).toBe(0);
+	});
+
+	it("finishes cleanup before identity storage even when unbind rejects (#2940)", async () => {
+		const state = fixture();
+		const createClient = state.config.createClient;
+		if (!createClient) throw new Error("fixture client missing");
+		const directory = createLdapIdentityDirectory({
+			...state.config,
+			createClient(options) {
+				const client = createClient(options);
+				return {
+					...client,
+					async unbind() {
+						await client.unbind();
+						throw new Error("controlled cleanup failure");
+					},
+				};
+			},
+			identityIds: {
+				...state.config.identityIds,
+				async findByUid() {
+					expect(state.clients[0]?.unbinds).toBe(1);
+					return null;
+				},
+			},
+		});
+		await expect(directory.current("stable-a")).resolves.toBeNull();
+		expect(state.clients).toHaveLength(1);
+	});
+
 	it("rejects malformed LDAP URLs and current-status verifiers", () => {
 		const { config } = fixture();
 		for (const url of [
@@ -216,7 +383,6 @@ describe("first-party LDAP identity directory", () => {
 		expect(state.binds).toEqual([
 			state.config.serviceBindDn,
 			employee.dn,
-			state.config.serviceBindDn,
 			state.config.serviceBindDn,
 			state.config.serviceBindDn,
 		]);

@@ -1,5 +1,6 @@
 import {
 	SkillHubAgentBindingStatusResponseV1Schema,
+	SkillHubAgentCurrentVersionV1Schema,
 	SkillHubInstallationResponseV1Schema,
 	SkillHubProjectPageV1Schema,
 	SkillHubPublicationResponseV1Schema,
@@ -16,8 +17,10 @@ import {
 	listSkillHubProjectsV1,
 	publishSkillHubVersionV1,
 	readSkillHubAgentBindingsV1,
+	readSkillHubAgentCurrentVersionV1,
 	reviewSkillHubVersionV1,
 	revokeSkillHubVersionV1,
+	uninstallSkillHubInstallationV1,
 	updateSkillHubProjectV1,
 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
@@ -36,6 +39,8 @@ import type {
 	PublishSkillHubVersionV1Responses,
 	ReadSkillHubAgentBindingsV1Errors,
 	ReadSkillHubAgentBindingsV1Responses,
+	ReadSkillHubAgentCurrentVersionV1Errors,
+	ReadSkillHubAgentCurrentVersionV1Responses,
 	ReviewSkillHubVersionV1Errors,
 	ReviewSkillHubVersionV1Responses,
 	RevokeSkillHubVersionV1Errors,
@@ -46,6 +51,8 @@ import type {
 	SkillHubProjectPageV1,
 	SkillHubProviderImportRequestV1,
 	SkillHubReviewRequestV1,
+	UninstallSkillHubInstallationV1Errors,
+	UninstallSkillHubInstallationV1Responses,
 	UpdateSkillHubProjectV1Errors,
 	UpdateSkillHubProjectV1Responses,
 } from "../../pilot/generated-v2/types.gen.js";
@@ -252,6 +259,35 @@ export async function installSkillHubVersion(
 	return parsed.data;
 }
 
+/** 把本人安装从我的库移出；安装记录 ID 只来自服务端详情投影。 */
+export async function uninstallSkillHubInstallation(
+	installationId: string,
+	idempotencyKey: string,
+	client?: Client,
+) {
+	const result: Awaited<
+		RequestResult<
+			UninstallSkillHubInstallationV1Responses,
+			UninstallSkillHubInstallationV1Errors,
+			false
+		>
+	> = await uninstallSkillHubInstallationV1({
+		client,
+		path: { installationId },
+		headers: { "Idempotency-Key": idempotencyKey },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	const data = requireData("移出我的库失败。", result);
+	const parsed = SkillHubInstallationResponseV1Schema.safeParse(data);
+	if (!parsed.success || parsed.data.installation.state !== "uninstalled")
+		throw requestError("移出响应无效。", {
+			...result,
+			error: { retryable: false },
+		});
+	return parsed.data;
+}
+
 export async function revokeSkillHubVersion(
 	skillVersionId: string,
 	idempotencyKey: string,
@@ -273,6 +309,32 @@ export async function revokeSkillHubVersion(
 	const data = requireData("撤销版本失败。", result);
 	const parsed = SkillHubPublicationResponseV1Schema.safeParse(data);
 	if (!parsed.success) throw requestError("撤销响应无效。", result);
+	return parsed.data;
+}
+
+/**
+ * 当前 Agent Version（#2903）：只对当前 Owner 返回；绑定读写路径使用这里的值，不让用户手填。
+ */
+export async function readSkillHubAgentCurrentVersion(
+	agentId: string,
+	client?: Client,
+) {
+	const result: Awaited<
+		RequestResult<
+			ReadSkillHubAgentCurrentVersionV1Responses,
+			ReadSkillHubAgentCurrentVersionV1Errors,
+			false
+		>
+	> = await readSkillHubAgentCurrentVersionV1({
+		client,
+		path: { agentId },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	const data = requireData("当前 Agent 版本暂时无法读取。", result);
+	const parsed = SkillHubAgentCurrentVersionV1Schema.safeParse(data);
+	if (!parsed.success || parsed.data.agentId !== agentId)
+		throw requestError("当前 Agent 版本响应无效。", result);
 	return parsed.data;
 }
 

@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { isAgentConfigurationOwner } from "../../../features/agent-configuration/agent-configuration.js";
 import { AgentDetailScreen } from "../../../features/agent-discovery/agent-detail-screen.js";
 import { isRetryableAgentDiscoveryError } from "../../../features/agent-discovery/agent-discovery.js";
-import { useAgentDetail } from "../../../features/agent-discovery/use-agent-detail.js";
+import { useAgentDetailView } from "../../../features/agent-discovery/use-agent-detail.js";
 import { connectionEntryUrl } from "../../../features/connection-entry.js";
 import { useTemplateNameLookup } from "../../../features/template-display-name.js";
 import { useBrowserSession } from "../../../features/use-browser-session.js";
@@ -13,7 +13,7 @@ export const Route = createFileRoute("/agents/$agentId/")({
 
 function AgentDetailRoute() {
 	const { agentId } = Route.useParams();
-	const query = useAgentDetail(agentId);
+	const query = useAgentDetailView(agentId);
 	const session = useBrowserSession();
 	const templateName = useTemplateNameLookup();
 	const retryable = query.isError

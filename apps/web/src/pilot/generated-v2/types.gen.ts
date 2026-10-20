@@ -371,6 +371,135 @@ export type AgentConfigurationUpdateRequestV2 = {
     }>;
 };
 
+export type AgentDetailConfigurationProjectionV1 = {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    channels: Array<{
+        kind: 'web' | 'wecom_bot' | 'wecom_app';
+        status: 'available' | 'not_configured' | 'binding' | 'bound' | 'failed';
+    }>;
+    defaultModelOptionId: string | null;
+    defaultReasoningLevel: string | null;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelOptions: Array<{
+        displayName: string;
+        modelId: string;
+        optionId: string;
+        reasoningLevels: Array<string>;
+    }>;
+    owners: Array<AgentOwnerProjectionV1>;
+    secrets: Array<{
+        isSet: boolean;
+        name: string;
+        version: number | null;
+    }>;
+};
+
+export type AgentDetailProjectionV1 = {
+    agentId: string;
+    capabilities: {
+        attachments: boolean;
+        browser?: {
+            capabilityVersion: number;
+            conformance: {
+                evidenceHash: string;
+                manifestDigest: string;
+                operations: Array<'navigate' | 'observe' | 'interact' | 'files' | 'handoff' | 'side_effects'>;
+                probeVersion: string;
+                receiptId: string;
+                schemaVersion: 1;
+                verifiedAt: string;
+            };
+            operations: Array<'navigate' | 'observe' | 'interact' | 'files' | 'handoff' | 'side_effects'>;
+            policy: {
+                actionTimeoutMs: number;
+                allowUserHandoff: boolean;
+                allowedOrigins: Array<string>;
+                maxBrowserDurationMs: number;
+                maxConcurrentActions: number;
+                maxContexts: number;
+                maxDownloadBytes: number;
+                maxDownloads: number;
+                maxPages: number;
+                maxRetainedProfileBytes: number;
+                maxScreenshotBytes: number;
+                maxTabs: number;
+                maxUploadBytes: number;
+                maxViewportHeight: number;
+                maxViewportWidth: number;
+                navigationTimeoutMs: number;
+                requireSideEffectConfirmation: boolean;
+            };
+            provenance: {
+                browser: 'chromium';
+                chromiumVersion: string;
+                imageDigest: string;
+                playwrightVersion: string;
+            };
+            schemaVersion: 1;
+            status: 'available';
+        } | {
+            capabilityVersion: number;
+            errorCode: 'BROWSER_CAPABILITY_NOT_CONFIGURED' | 'BROWSER_CAPABILITY_PROBE_FAILED' | 'BROWSER_CAPABILITY_UNAVAILABLE' | 'BROWSER_CAPABILITY_STALE' | 'BROWSER_CAPABILITY_VERSION_UNSUPPORTED' | 'BROWSER_CAPABILITY_POLICY_DENIED';
+            reason: string;
+            retryable: boolean;
+            schemaVersion: 1;
+            status: 'not_configured' | 'probe_failed' | 'unavailable' | 'stale';
+        };
+        connection: boolean;
+        modelSelection: boolean;
+        nativeMetadata?: boolean;
+        resultFiles: boolean;
+        skills?: Array<{
+            manifestSha256: string;
+            name: string;
+            packageDigest: string;
+            readOnly: true;
+            schemaVersion: 1;
+            version: string;
+        }>;
+        supplementaryInstruction: boolean;
+    };
+    configuration: AgentDetailConfigurationProjectionV1;
+    description: string;
+    interactionUrl: string | null;
+    managementStatus: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
+    name: string;
+    schemaVersion: 1;
+    serviceAvailability: 'ready' | 'starting' | 'updating' | 'unavailable' | null;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
+    };
+};
+
 export type AgentLifecycleCommandRequestV1 = {
     command: 'stop' | 'restart' | 'retry_creation' | 'disable';
     schemaVersion: 1;
@@ -378,6 +507,12 @@ export type AgentLifecycleCommandRequestV1 = {
     command: 'upgrade_custom_image';
     imageReference: string;
     schemaVersion: 1;
+};
+
+export type AgentOwnerProjectionV1 = {
+    displayName: string | null;
+    status: 'active' | 'disabled' | 'departed' | 'unavailable';
+    userId: string;
 };
 
 export type AgentProjectionV2 = {
@@ -871,6 +1006,25 @@ export type ModelSelectionFallbackEventV1 = {
     type: 'model.selection.fell_back';
 };
 
+export type ModelSelectionFallbackEventV2 = {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        modelOptionId: string;
+        reason: 'selection_unavailable';
+        reasoningLevel: string;
+        requestedModelDisplayName: string | null;
+        requestedModelOptionId: string;
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'model.selection.fell_back';
+};
+
 export type NativeCapabilityInvocationRequestV1 = {
     capabilityId: string;
     directoryRevision: string;
@@ -1006,7 +1160,7 @@ export type PersistedConversationEventV1 = {
     type: 'conversation.error';
 } | ModelSelectionFallbackEventV1;
 
-export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2 | BrowserHandoffEventV2 | BrowserSideEffectEventV2;
+export type PersistedConversationEventV2 = PersistedConversationEventV1 | ExecutionOperationEventV2 | BrowserHandoffEventV2 | BrowserSideEffectEventV2 | ModelSelectionFallbackEventV2;
 
 export type PersonalApiCredentialIssueRequestV1 = {
     expiresAt: string | null;
@@ -1380,6 +1534,13 @@ export type SkillHubAgentBindingStatusV1 = {
     syncRevision: number;
 };
 
+export type SkillHubAgentCurrentVersionV1 = {
+    agentId: string;
+    agentVersion: string;
+    configurationRevision: number;
+    schemaVersion: 1;
+};
+
 export type SkillHubDirectoryPageV1 = {
     items: Array<SkillHubVersionMetadataV1>;
     nextCursor: string | null;
@@ -1389,6 +1550,30 @@ export type SkillHubInstallationCommandV1 = {
     principalId: string;
     principalType: 'user' | 'organization';
     skillVersionId: string;
+};
+
+export type SkillHubInstallationListItemV1 = {
+    installationId: string;
+    installedAt: string;
+    needUpgrade: boolean;
+    skillVersionId: string;
+    updatedAt: string;
+    version: {
+        access: 'visible';
+        name: string;
+        provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+        skillId: string;
+        state: 'published' | 'revoked';
+        version: string;
+        visibility: 'PRIVATE' | 'MEMBER' | 'ORGANIZATION' | 'MARKET';
+    } | {
+        access: 'unavailable';
+    };
+};
+
+export type SkillHubInstallationPageV1 = {
+    items: Array<SkillHubInstallationListItemV1>;
+    nextCursor: string | null;
 };
 
 export type SkillHubInstallationResponseV1 = {
@@ -1406,6 +1591,25 @@ export type SkillHubInstallationV1 = {
     skillVersionId: string;
     state: 'installed' | 'uninstalled' | 'failed';
     updatedAt: string;
+};
+
+export type SkillHubOwnedVersionPageV1 = {
+    items: Array<SkillHubOwnedVersionV1>;
+    nextCursor: string | null;
+};
+
+export type SkillHubOwnedVersionV1 = {
+    manifestDigest: string;
+    name: string;
+    packageDigest: string;
+    provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+    schemaVersion: 1;
+    signatureDigest: string;
+    skillId: string;
+    skillVersionId: string;
+    state: 'published' | 'pending_review' | 'rejected' | 'revoked';
+    version: string;
+    visibility: 'PRIVATE' | 'MEMBER' | 'ORGANIZATION' | 'MARKET';
 };
 
 export type SkillHubProjectCreateV1 = {
@@ -1486,9 +1690,64 @@ export type SkillHubPublicationVersionV1 = {
     visibility: 'PRIVATE' | 'MEMBER' | 'ORGANIZATION' | 'MARKET';
 };
 
+export type SkillHubReviewQueueItemV1 = {
+    manifestDigest: string;
+    name: string;
+    organizationId: string | null;
+    ownerId: string;
+    packageDigest: string;
+    provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+    schemaVersion: 1;
+    signatureDigest: string;
+    skillId: string;
+    skillVersionId: string;
+    state: 'pending_review';
+    submittedAt: string;
+    version: string;
+    visibility: 'MEMBER' | 'ORGANIZATION' | 'MARKET';
+};
+
+export type SkillHubReviewQueuePageV1 = {
+    items: Array<SkillHubReviewQueueItemV1>;
+    nextCursor: string | null;
+};
+
 export type SkillHubReviewRequestV1 = {
     decision: 'approve' | 'reject';
     reason?: string;
+};
+
+export type SkillHubVersionDetailV1 = {
+    content: {
+        body: string;
+        bodyTruncated: boolean;
+        resources: Array<{
+            kind: 'script' | 'reference' | 'asset' | 'file';
+            path: string;
+            sizeBytes: number;
+        }>;
+        state: 'available';
+    } | {
+        state: 'unavailable';
+    };
+    installation: {
+        installationId: string;
+        state: 'installed';
+    } | {
+        state: 'not_installed';
+    };
+    manifestDigest: string;
+    name: string;
+    ownerId: string;
+    packageDigest: string;
+    provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+    schemaVersion: 1;
+    signatureDigest: string;
+    skillId: string;
+    skillVersionId: string;
+    state: 'published' | 'pending_review' | 'rejected' | 'revoked';
+    version: string;
+    visibility: 'PRIVATE' | 'MEMBER' | 'ORGANIZATION' | 'MARKET';
 };
 
 export type SkillHubVersionMetadataV1 = {
@@ -3484,6 +3743,177 @@ export type GetAgentDefaultRelayKeyCandidatesV2Responses = {
 
 export type GetAgentDefaultRelayKeyCandidatesV2Response = GetAgentDefaultRelayKeyCandidatesV2Responses[keyof GetAgentDefaultRelayKeyCandidatesV2Responses];
 
+export type GetAgentDefaultRelayKeySavedDisplayCandidatesV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/default-relay-key/display-candidates';
+};
+
+export type GetAgentDefaultRelayKeySavedDisplayCandidatesV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentDefaultRelayKeySavedDisplayCandidatesV2Error = GetAgentDefaultRelayKeySavedDisplayCandidatesV2Errors[keyof GetAgentDefaultRelayKeySavedDisplayCandidatesV2Errors];
+
+export type GetAgentDefaultRelayKeySavedDisplayCandidatesV2Responses = {
+    /**
+     * Saved-Key candidates with display names
+     */
+    200: {
+        candidates: Array<{
+            displayName: string;
+            endpointId: string;
+            modelId: string;
+            reasoningLevels: Array<string>;
+        }>;
+        configurationRevision: number;
+        keyVersion: number;
+        schemaVersion: 2;
+    };
+};
+
+export type GetAgentDefaultRelayKeySavedDisplayCandidatesV2Response = GetAgentDefaultRelayKeySavedDisplayCandidatesV2Responses[keyof GetAgentDefaultRelayKeySavedDisplayCandidatesV2Responses];
+
+export type GetAgentDefaultRelayKeyDisplayCandidatesV2Data = {
+    body: {
+        configurationRevision: number;
+        keyValue: string;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/default-relay-key/display-candidates';
+};
+
+export type GetAgentDefaultRelayKeyDisplayCandidatesV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentDefaultRelayKeyDisplayCandidatesV2Error = GetAgentDefaultRelayKeyDisplayCandidatesV2Errors[keyof GetAgentDefaultRelayKeyDisplayCandidatesV2Errors];
+
+export type GetAgentDefaultRelayKeyDisplayCandidatesV2Responses = {
+    /**
+     * Compatible candidates with display names
+     */
+    200: {
+        candidates: Array<{
+            displayName: string;
+            endpointId: string;
+            modelId: string;
+            reasoningLevels: Array<string>;
+        }>;
+        configurationRevision: number;
+        schemaVersion: 2;
+    };
+};
+
+export type GetAgentDefaultRelayKeyDisplayCandidatesV2Response = GetAgentDefaultRelayKeyDisplayCandidatesV2Responses[keyof GetAgentDefaultRelayKeyDisplayCandidatesV2Responses];
+
+export type GetAgentDetailV1Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/detail';
+};
+
+export type GetAgentDetailV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentDetailV1Error = GetAgentDetailV1Errors[keyof GetAgentDetailV1Errors];
+
+export type GetAgentDetailV1Responses = {
+    /**
+     * Agent detail with Owner status
+     */
+    200: AgentDetailProjectionV1;
+};
+
+export type GetAgentDetailV1Response = GetAgentDetailV1Responses[keyof GetAgentDetailV1Responses];
+
 export type CommandAgentLifecycleV2Data = {
     body: AgentLifecycleCommandRequestV1;
     headers: {
@@ -3537,6 +3967,53 @@ export type CommandAgentLifecycleV2Responses = {
 };
 
 export type CommandAgentLifecycleV2Response = CommandAgentLifecycleV2Responses[keyof CommandAgentLifecycleV2Responses];
+
+export type ReadSkillHubAgentCurrentVersionV1Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/skills/current-version';
+};
+
+export type ReadSkillHubAgentCurrentVersionV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadSkillHubAgentCurrentVersionV1Error = ReadSkillHubAgentCurrentVersionV1Errors[keyof ReadSkillHubAgentCurrentVersionV1Errors];
+
+export type ReadSkillHubAgentCurrentVersionV1Responses = {
+    /**
+     * Current Agent Version for the current Owner
+     */
+    200: SkillHubAgentCurrentVersionV1;
+};
+
+export type ReadSkillHubAgentCurrentVersionV1Response = ReadSkillHubAgentCurrentVersionV1Responses[keyof ReadSkillHubAgentCurrentVersionV1Responses];
 
 export type GetAgentApiStateV1Data = {
     body?: never;
@@ -5000,6 +5477,46 @@ export type ImportSkillHubVersionV1Responses = {
 
 export type ImportSkillHubVersionV1Response = ImportSkillHubVersionV1Responses[keyof ImportSkillHubVersionV1Responses];
 
+export type ListSkillHubInstallationsV1Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/skills/installations';
+};
+
+export type ListSkillHubInstallationsV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListSkillHubInstallationsV1Error = ListSkillHubInstallationsV1Errors[keyof ListSkillHubInstallationsV1Errors];
+
+export type ListSkillHubInstallationsV1Responses = {
+    /**
+     * The current user's installed Skill versions
+     */
+    200: SkillHubInstallationPageV1;
+};
+
+export type ListSkillHubInstallationsV1Response = ListSkillHubInstallationsV1Responses[keyof ListSkillHubInstallationsV1Responses];
+
 export type InstallSkillHubVersionV1Data = {
     body: SkillHubInstallationCommandV1;
     headers: {
@@ -5101,6 +5618,46 @@ export type UninstallSkillHubInstallationV1Responses = {
 };
 
 export type UninstallSkillHubInstallationV1Response = UninstallSkillHubInstallationV1Responses[keyof UninstallSkillHubInstallationV1Responses];
+
+export type ListOwnedSkillHubVersionsV1Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/skills/owned-versions';
+};
+
+export type ListOwnedSkillHubVersionsV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListOwnedSkillHubVersionsV1Error = ListOwnedSkillHubVersionsV1Errors[keyof ListOwnedSkillHubVersionsV1Errors];
+
+export type ListOwnedSkillHubVersionsV1Responses = {
+    /**
+     * The current user's Skill versions in every state
+     */
+    200: SkillHubOwnedVersionPageV1;
+};
+
+export type ListOwnedSkillHubVersionsV1Response = ListOwnedSkillHubVersionsV1Responses[keyof ListOwnedSkillHubVersionsV1Responses];
 
 export type ListSkillHubProjectsV1Data = {
     body?: never;
@@ -5296,6 +5853,46 @@ export type UpdateSkillHubProjectV1Responses = {
 
 export type UpdateSkillHubProjectV1Response = UpdateSkillHubProjectV1Responses[keyof UpdateSkillHubProjectV1Responses];
 
+export type ListSkillHubReviewQueueV1Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/skills/reviews';
+};
+
+export type ListSkillHubReviewQueueV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListSkillHubReviewQueueV1Error = ListSkillHubReviewQueueV1Errors[keyof ListSkillHubReviewQueueV1Errors];
+
+export type ListSkillHubReviewQueueV1Responses = {
+    /**
+     * Skill versions waiting for administrator review
+     */
+    200: SkillHubReviewQueuePageV1;
+};
+
+export type ListSkillHubReviewQueueV1Response = ListSkillHubReviewQueueV1Responses[keyof ListSkillHubReviewQueueV1Responses];
+
 export type PublishSkillHubVersionV1Data = {
     body: SkillHubPublicationRequestV1;
     headers: {
@@ -5390,6 +5987,49 @@ export type ReadSkillHubVersionV1Responses = {
 };
 
 export type ReadSkillHubVersionV1Response = ReadSkillHubVersionV1Responses[keyof ReadSkillHubVersionV1Responses];
+
+export type ReadSkillHubVersionDetailV1Data = {
+    body?: never;
+    path: {
+        skillVersionId: string;
+    };
+    query?: never;
+    url: '/api/v2/skills/versions/{skillVersionId}/detail';
+};
+
+export type ReadSkillHubVersionDetailV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadSkillHubVersionDetailV1Error = ReadSkillHubVersionDetailV1Errors[keyof ReadSkillHubVersionDetailV1Errors];
+
+export type ReadSkillHubVersionDetailV1Responses = {
+    /**
+     * Visible Skill version with bounded content and installation state
+     */
+    200: SkillHubVersionDetailV1;
+};
+
+export type ReadSkillHubVersionDetailV1Response = ReadSkillHubVersionDetailV1Responses[keyof ReadSkillHubVersionDetailV1Responses];
 
 export type ReviewSkillHubVersionV1Data = {
     body: SkillHubReviewRequestV1;

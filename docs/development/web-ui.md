@@ -14,12 +14,12 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `f66a8694aecee90322161e9a31d682073919ae846d488312e225edf03232aaaf` |
+| `index.html` | `b540e4c948bd506fc33623f506a1d2b472c26a1fe8bf362b83b0165cbe1ecd26` |
 | `login.html` | `6e04830eb0aac86e7ffea6dc6f3db0faab7942e2379c6230efe0512519d0c0a7` |
 | `DESIGN.md` | `162e8fb0c381cb96da71a0f838c8ce80b7076ebb6b08071cc2845961e481da18` |
 | `IMPLEMENTATION.md` | `3ee03b85afb5567576ff2ac64c1459b811490591d52e16c048809d173bc75a3b` |
 | `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
-| `DESIGN-MANIFEST.json` | `3c78fd40eac65ac1659f0ab4934a3b9285a5cb67f85038a42dfdb17df95ffdea` |
+| `DESIGN-MANIFEST.json` | `2846fe1e5da4c43a0b8407b635b6591b9fd1ac750b4427e862b7bfd68787ea97` |
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量，并提供设计同名别名（`--bg`、`--fg`、`--surface-raised`、`--accent`、
@@ -30,6 +30,11 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 页面共享内容宽度、标题和表单样式；桌面侧栏为 248px，
 低于 1024px 使用现有 Sheet。工作台先展示最近对话和职责事项，再展示 Agent 与申请。
 Agent 详情中的 Owner、渠道、模型和范围均取自实际投影；Owner 配置入口仍由权限结果控制。
+详情页读取带 Owner 有效状态的详情投影（[工程 Spec §9.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#91-identityadapter)），
+侧栏 Owner 行的 chip 只映射服务端状态：有效（green）、已禁用（amber）、已离职（gray）、状态未知（gray），
+不区分主要与共同 Owner；服务端没有返回名称时先取目录名称，再只显示「用户」与 ID 短形式。
+「运行与渠道」的企微行只显示服务端投影的真实绑定状态（[工程 Spec §14.2.2](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1422-传输与执行)），
+不显示可见范围：已绑定（green）、绑定中（amber）、连接异常（red），不显示原始枚举。
 侧栏「我的 Connection」、对话「会话上下文」中的 Connection 提示与 Agent 详情「打开 Connection」
 只由 `src/features/connection-entry.ts` 生成：先按服务端规则分别校验原始 `publicOrigin` 与
 `mcpPath`，再拼接并确认 origin 不变。
@@ -41,7 +46,7 @@ Agent 详情中的 Owner、渠道、模型和范围均取自实际投影；Owner
 
 ### 与导出设计的已定差异
 
-以下差异已在 #2862、#2863 确认，实现与验收以这里为准，等待设计稿回写：
+以下差异已在 #2862、#2863、#2903 确认，实现与验收以这里为准，等待设计稿回写：
 
 | 位置 | 实现 | 依据 |
 | --- | --- | --- |
@@ -54,6 +59,24 @@ Agent 详情中的 Owner、渠道、模型和范围均取自实际投影；Owner
 | 个人 API 凭证 | 不提供轮换；已撤销行只显示撤销时间 | PRD §7.3 |
 | 对话标题 | 标题展示遵循 PRD | [PRD §12.2](../prd/PRD-agent-platform-M1.md#122-会话历史) |
 | Builder、预览 | 不提供页面 | PRD §1、§5.7、§11.1 |
+| Agent 的 Skill 绑定卡 | 增加「解除绑定」，确认后提交不含该项的完整集合 | #2903 AC-1、[工程 Spec §11.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配) |
+
+### 申请详情进度
+
+[#2920](https://github.com/AgoraIO-Extensions/agent-infra/issues/2920) 已将 M-11 回写本版导出稿。
+按 [PRD §6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)，三步为「申请已提交 → 系统管理员审批 → 创建 Agent」；
+资源与范围校验继续属于准入，不增加独立用户阶段。提交步骤始终显示「完成」（green），
+审批与创建步骤按现有申请状态展示；两个视口均保持状态 chip 在步骤右侧。
+
+| 申请状态 | 管理员审批 | 创建 Agent |
+| --- | --- | --- |
+| 待审批 | 等待（gray） | 等待（gray） |
+| 已撤回 | 不再审批（gray） | 不再创建（gray） |
+| 已驳回 | 已驳回（red） | 不再创建（gray） |
+| 创建中 | 已通过（green） | 处理中（amber） |
+| 可用、已停止 | 已通过（green） | 完成（green） |
+| 创建失败 | 已通过（green） | 失败（red） |
+| 已停用 | 已通过（green） | 已停用（gray） |
 
 ### 运维观测页
 
@@ -113,9 +136,9 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `Toast` | 根布局常驻的补充确认，页面通过 `useToast()` 调用 |
 | `Card` / `AgentMark` | 独立卡片的悬停，Agent 标识的字形与 tone |
 | `Table` | Agent 输出的 Markdown 表格，API 凭证页的个人凭证表格（窄屏按页面样式转行卡片） |
-| `Timestamp` | 工作台、审批、审计、应用管理、个人 API 凭证、我的 Agent、申请详情与对话历史的时间 |
-| `IdentifierText` | 审批与审计中未解析人员的 ID 短形式；审计列表对象 ID 用 `shortIdentifier` 等宽短形式，完整值只在记录详情 |
-| `Listbox` / `ListboxOption` | 目录选择器结果层与对话 `/` 命令弹层；候选不进入 Tab 序列，由输入框的 `aria-activedescendant` 导航 |
+| `Timestamp` | 工作台、审批、审计、应用管理、个人 API 凭证、我的 Agent、申请详情、Skill 审核与对话历史的时间 |
+| `IdentifierText` | 审批、Skill 审核与审计中未解析人员的 ID 短形式；审计列表对象 ID 同样用它的等宽短形式（`title` 为完整值），完整值在记录详情 |
+| `Listbox` / `ListboxOption` | 目录选择器与审计 Agent 筛选的结果层、对话 `/` 命令弹层；候选不进入 Tab 序列，由输入框的 `aria-activedescendant` 导航 |
 | `DropdownMenu` | 对话输入框工具栏的模型与思考菜单（`menuitemradio`，向上展开，无入场动画） |
 | `Collapsible` / `CollapsibleTrigger` / `CollapsiblePanel` | 对话页「会话上下文」「会话文件」折叠条（替代原生 `details/summary`）；面板默认 `keepMounted`，收起只隐藏不卸载 |
 
@@ -125,6 +148,10 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 `role="status"`，读取失败时页面只显示一条提示与「重新读取目录」，主文字不回退到内部 ID。
 标准模板只显示部署配置登记的显示名：路由（或页面 workflow）用 `src/features/template-display-name.ts` 的
 `useTemplateNameLookup()` 读取并传给页面，读不到时显示「标准模板」，不显示原始 `templateId`。
+审计页读取带显示名的审计 V2 投影（[工程 Spec §18.3](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#183-持久审计)）：
+对象列显示 Agent 或创建申请名称，Execution 等对象附所属 Agent 名称，应用主体显示「应用 · 名称」；
+服务端没有返回名称时只显示类型与 ID 短形式，详情写「未提供」，不说明原因。
+Agent 筛选沿用目录选择器的交互按名称单选，候选在展开时从个人可见或管理员 Agent 列表读取，提交的仍是 Agent ID。
 
 `Card`、`Collapsible`、`ConfirmDialog`、`DropdownMenu`、`Spinner`、`StateCard`、`Toast` 与 `features/agent-mark.tsx` 为手写组件，不由 CLI 生成。
 `Alert` 不设默认 role：首屏静态说明不设 role，异步结果用 `role="status"`，失败用 `role="alert"`。
@@ -139,6 +166,35 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 恢复成功、按钮卸载后焦点移到页面 h1（需 `tabIndex={-1}`），没有可聚焦标题时落到 `#main-content`。
 段落、列表、定义列表、表单和 fieldset 保持语义 HTML。
 申请详情、Agent 详情和我的 Skill 使用索引路由，确保编辑、配置和创建子路径能渲染对应页面。
+
+## 历史、身份与缺省状态
+
+[#2925](https://github.com/AgoraIO-Extensions/agent-infra/issues/2925) 补充以下局部设计；原稿回写前以本节为依据。
+行为范围沿用 [PRD 对话与历史](../prd/PRD-agent-platform-M1.md#112-对话能力)及
+[Runtime HLD](../architecture/HLD-agent-runtime-M1.md#8-消息事件与-sse-可靠性)的现有契约，不增加领域状态。
+下表未表示 canonical 已补画；外部原稿与最终摘要继续由 #2863 跟踪。
+
+| 场景 | 呈现与交互 |
+| --- | --- |
+| 已完成回答的正文在更早记录（NW-15） | 仅在已完成、当前快照与增量均未加载该执行的任何事件且仍有更早记录时，显示 12px muted 状态行「已完成 · 正文在更早的记录中」和就地「加载更早内容」。加载中禁用重复操作，失败就地重试，成功后显示实际正文；失败、取消、处理中及没有更早页时不显示该提示。 |
+| 同一消息的多个回答版本（CH-08） | 两版及以上时，在回答下方另起 12px muted 版本行，gap 4px、距正文 9px，排列上一版、版本 x/y、下一版；边界按钮禁用，沿公共 ghost 图标命中区。切换只改变所选回答及对应执行详情，不发送消息或生成新执行；窄屏保留全部操作。 |
+| 详情读取 403/404（P-01） | 共用「无法访问」卡，说明资源不存在或无权访问，只提供返回上级，不重试、不区分对象是否存在。只有未知页面路由显示「无法打开此地址」。401、503、响应无效及恢复焦点沿公共状态卡规则。 |
+| 首次确认会话（R4-02） | 保留侧栏、顶栏与内容起点的壳层骨架，导航占位不可交互、不显示访客或真实用户身份，正文用 LoadingLine 显示「正在确认登录状态…」。确认匿名后才切登录；暂时不可确认时保持骨架，显示不可用提示与「重新检查」，就绪后替换为真实身份及导航。 |
+| 消息提交结果（G-04） | 结果未知时显示「提交结果尚未确认」与「核实原请求」，不自动重发，也不把网络错误当作未送达。仅确认未受理且 Agent 恢复可用后显示「消息未送达」，说明原文仍在输入框、可以重新发送；outline「重新发送」只在显式点击后用当前草稿提交。创建会话失败不使用消息丢失文案。 |
+| Connection 引导（BR-04） | 有批准入口时显示「需要 Connection 授权」，引导到独立系统确认当前账号及具体 Action/版本授权，不断言当前用户尚未授权。本页点击后切换「等待 Connection 授权返回」，这是刷新会重置的本地引导态，不代表授权成功/失败。入口不可用时显示「Connection 暂不可用」且不给链接；Agent 无此能力时不显示提示。 |
+
+### 返回链接与管理区布局
+
+Owner 配置与申请详情沿公共管理页页头：页头文字区内的返回链接不额外追加窄屏 16px 上外边距，
+其后 eyebrow 保持 9px 间距；16px 只用于换行后的页头操作。触达尺寸仍采用已定的 44px。
+原稿回写时缩小宽泛 `.page-head .btn` 媒体规则的范围，不改变现有 Web 布局。
+
+管理员 Agent 页（AA-01）依次排列页头、筛选、列表、分页、员工访问控制、应用凭证材料授权。
+两个治理区在列表之后，以独立 FormSection 呈现，默认展开；标题采用 16px 正文字体，
+说明、分隔线与控件沿公共分区规则。列表读取失败时只保留页头与失败提示，不展示治理区；
+权限、pending、确认及结果反馈沿既有入口，不显示凭证材料值。
+治理权限以 [PRD §2.3](../prd/PRD-agent-platform-M1.md#23-系统管理员)与
+[PRD §7.3](../prd/PRD-agent-platform-M1.md#73-api-身份凭证与授权)为准。
 
 ## 静态规则
 
@@ -215,6 +271,7 @@ PR 的人工 UI 验收仍遵循[工作流 §7.4](../architecture/SPEC-ai-native-
 - `conversation-routing.spec.ts`：加载与 503 恢复、403 拒绝、不可用历史只读、深链/返回、
   窄屏历史切换与消息输入区。失败状态沿用对话标题层级，返回目录不产生业务写入。
 - `conversation-live.spec.ts`、`conversation-markdown.spec.ts`：消息、模型保存、执行详情、
+  模型回退弹窗（请求模型与实际模型、旧事件的中性文案）、
   长正文和代码/表格局部滚动。
 - `conversation-screen.test.tsx`：终态经事件或历史回读后清除等待提示并刷新最近会话，
   新建会话成功后刷新最近会话。

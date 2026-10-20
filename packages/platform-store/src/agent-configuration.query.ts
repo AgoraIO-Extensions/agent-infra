@@ -1,5 +1,6 @@
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
+	type AgentChannelConnectionFactV1,
 	type AgentConfigurationAccessTargetV1,
 	type AgentConfigurationRecord,
 	type AgentConfigurationRecordV2,
@@ -15,7 +16,7 @@ import {
 	type StandardTemplateUpgradeRuntimeFactsV1,
 	snapshotAgentRuntimePresentationExpectationV1,
 } from "@agent-infra/platform-core";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { default as postgres } from "postgres";
 import {
@@ -33,6 +34,8 @@ import {
 	agentOwners,
 	agentPrincipalGrants,
 	agents,
+	wecomConnections,
+	wecomSetupSessions,
 	workloadReconciliations,
 } from "./schema.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
@@ -75,6 +78,7 @@ export interface AgentConfigurationProjectionV1 {
 	readonly availability: readonly AgentConfigurationAccessTargetV1[];
 	readonly modelOptions: readonly {
 		readonly optionId: string;
+		readonly endpointId: string;
 		readonly modelId: string;
 		readonly reasoningLevels: readonly string[];
 	}[];
@@ -156,6 +160,79 @@ export class PostgresAgentConfigurationQueryV1 {
 				),
 			);
 		return grants.map(({ grantType }) => grantType);
+	}
+
+	/**
+	 * 当前修订企微渠道的连接事实（#2910）：只按该 Agent 与当前绑定引用读取，
+	 * 其他 Agent、旧绑定引用和托管会话之外机器人的行都不参与；租约失效的行按断开处理。
+	 */
+	async #channelFacts(
+		transaction: ReadTransaction,
+		agentId: string,
+		channels: AgentConfigurationRecord["channels"],
+	): Promise<AgentChannelConnectionFactV1[]> {
+		if (channels.length === 0) return [];
+		const references = channels.map(({ bindingReference }) => bindingReference);
+		const sessions = await transaction
+			.select({
+				sessionId: wecomSetupSessions.sessionId,
+				agentId: wecomSetupSessions.agentId,
+				kind: wecomSetupSessions.kind,
+				status: wecomSetupSessions.status,
+				botId: wecomSetupSessions.botId,
+				callbackVerified: sql<boolean>`${wecomSetupSessions.callbackVerifiedAt} is not null`,
+			})
+			.from(wecomSetupSessions)
+			.where(
+				and(
+					eq(wecomSetupSessions.agentId, agentId),
+					inArray(wecomSetupSessions.sessionId, references),
+				),
+			);
+		const connections = await transaction
+			.select({
+				botId: wecomConnections.botId,
+				bindingReference: wecomConnections.bindingReference,
+				status: sql<string>`case when ${wecomConnections.status} = 'auth_failed' then 'auth_failed' when ${wecomConnections.leaseUntil} > clock_timestamp() then ${wecomConnections.status} else 'disconnected' end`,
+			})
+			.from(wecomConnections)
+			.where(
+				and(
+					eq(wecomConnections.agentId, agentId),
+					inArray(wecomConnections.bindingReference, references),
+				),
+			);
+		return channels.map((channel) => {
+			const session = sessions.find(
+				(row) => row.sessionId === channel.bindingReference,
+			);
+			return {
+				kind: channel.kind,
+				bindingReference: channel.bindingReference,
+				session: session
+					? {
+							agentId: session.agentId,
+							kind: session.kind,
+							status: session.status,
+							callbackVerified: session.callbackVerified === true,
+						}
+					: null,
+				connections: connections
+					.filter(
+						(row) =>
+							row.bindingReference === channel.bindingReference &&
+							(!session || row.botId === session.botId),
+					)
+					.map(({ status }) =>
+						// 约束之外的取值不能证明连接，按断开处理。
+						status === "verifying" ||
+						status === "connected" ||
+						status === "auth_failed"
+							? status
+							: "disconnected",
+					),
+			};
+		});
 	}
 
 	/** Bounded facts for the separate deployment release policy; grants no Owner authority. */
@@ -622,6 +699,11 @@ export class PostgresAgentConfigurationQueryV1 {
 							management,
 							configuration,
 							sourceReference: current.sourceReference,
+							channels: await this.#channelFacts(
+								transaction,
+								input.agentId,
+								configuration.channels,
+							),
 							runtime,
 						},
 					});
@@ -787,6 +869,7 @@ export class PostgresAgentConfigurationQueryV1 {
 							modelOptions:
 								configuration.modelConfiguration?.options.map((option) => ({
 									optionId: option.optionId,
+									endpointId: option.endpointId,
 									modelId: option.modelId,
 									reasoningLevels: option.reasoningLevels,
 								})) ?? [],

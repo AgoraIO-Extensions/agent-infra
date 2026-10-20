@@ -12,6 +12,7 @@ import {
 	parseSkillHubRegistrationV1,
 	type SkillHubAgentBindingAdmissionPortV1,
 	type SkillHubAgentBindingRequestV1,
+	type SkillHubAgentBindingStatusPortV1,
 	type SkillHubGrantV1,
 } from "@agent-infra/platform-core";
 import { and, eq, inArray, or } from "drizzle-orm";
@@ -59,9 +60,22 @@ const emptyGrant: SkillHubGrantV1 = {
 	scripts: false,
 };
 
+type BindingReader = Pick<ReturnType<typeof drizzle>, "select">;
+
+type SyncBindingQueryV1 = {
+	readonly agentId: string;
+	readonly agentVersion: string;
+	readonly configurationRevision: number;
+	readonly actorId: string;
+	readonly organizationIds: readonly string[];
+	readonly isAdministrator: boolean;
+};
+
 /** Reads current installation, publication and package-admission facts only. */
 export class PostgresSkillHubAgentBindingAdmissionV1
-	implements SkillHubAgentBindingAdmissionPortV1
+	implements
+		SkillHubAgentBindingAdmissionPortV1,
+		SkillHubAgentBindingStatusPortV1<SkillHubSyncBindingV1>
 {
 	readonly #client;
 	readonly #database;
@@ -192,15 +206,10 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 		}
 	}
 
-	/** Resolve the current binding facts for Worker materialization. */
-	async resolveSyncBindings(input: {
+	/** 当前 Agent 配置修订（`agents.current_configuration_revision`）。 */
+	async readCurrentConfigurationRevision(input: {
 		readonly agentId: string;
-		readonly agentVersion: string;
-		readonly configurationRevision: number;
-		readonly actorId: string;
-		readonly organizationIds: readonly string[];
-		readonly isAdministrator: boolean;
-	}): Promise<readonly SkillHubSyncBindingV1[]> {
+	}): Promise<number> {
 		try {
 			const [agent] = await this.#database
 				.select({
@@ -209,170 +218,244 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 				.from(agents)
 				.where(eq(agents.id, input.agentId))
 				.limit(1);
-			if (
-				!agent ||
-				Number(agent.currentConfigurationRevision) !==
-					input.configurationRevision
-			)
-				return [];
-			const rows = await this.#database
-				.select({
-					binding: skillHubAgentBindings,
-					version: skillHubVersions,
-					name: skillHubSkills.name,
-					parentStatus: skillHubSkills.status,
-					organizationId: skillHubSkills.organizationId,
-				})
-				.from(skillHubAgentBindings)
-				.innerJoin(
-					skillHubVersions,
-					eq(skillHubVersions.id, skillHubAgentBindings.skillVersionId),
-				)
-				.innerJoin(
-					skillHubSkills,
-					eq(skillHubSkills.id, skillHubVersions.skillId),
-				)
-				.where(
-					and(
-						eq(skillHubAgentBindings.agentId, input.agentId),
-						eq(skillHubAgentBindings.agentVersion, input.agentVersion),
-						eq(
-							skillHubAgentBindings.configurationRevision,
-							input.configurationRevision,
-						),
-					),
-				);
-			if (rows.length === 0) return [];
-			const skillVersionIds = rows.map((row) => row.binding.skillVersionId);
-			const admissions = await this.#database
-				.select({ scopeId: idempotencyRecords.scopeId })
-				.from(idempotencyRecords)
-				.where(
-					and(
-						eq(idempotencyRecords.scopeType, "skill_package"),
-						inArray(idempotencyRecords.scopeId, skillVersionIds),
-						eq(idempotencyRecords.status, "completed"),
-					),
-				);
-			const admitted = new Set(admissions.map((row) => row.scopeId));
-			const principalScope = input.organizationIds.length
-				? or(
-						and(
-							eq(skillHubInstallations.principalType, "user"),
-							eq(skillHubInstallations.principalId, input.actorId),
-						),
-						and(
-							eq(skillHubInstallations.principalType, "organization"),
-							inArray(skillHubInstallations.principalId, input.organizationIds),
-						),
-					)
-				: and(
-						eq(skillHubInstallations.principalType, "user"),
-						eq(skillHubInstallations.principalId, input.actorId),
-					);
-			const installations = await this.#database
-				.select({ skillVersionId: skillHubInstallations.skillVersionId })
-				.from(skillHubInstallations)
-				.where(
-					and(
-						inArray(skillHubInstallations.skillVersionId, skillVersionIds),
-						eq(skillHubInstallations.state, "installed"),
-						principalScope,
-					),
-				);
-			const installed = new Set(installations.map((row) => row.skillVersionId));
-			const requested = rows.map((row) => ({
-				skillVersionId: row.binding.skillVersionId,
-				grant: parseSkillHubGrantV1(row.binding.grant),
-			}));
-			const boundaryRows = this.#resolveGrantBoundary
-				? await this.#resolveGrantBoundary({
-						agentId: input.agentId,
-						actorId: input.actorId,
-						requested,
-					})
-				: [];
-			const grants = new Map(
-				boundaryRows.map((row) => [row.skillVersionId, row.grant]),
-			);
-			return rows.map((row) => {
-				const persistedGrant = parseSkillHubGrantV1(row.binding.grant);
-				const boundaryGrant = grants.get(row.binding.skillVersionId);
-				const registration = parseSkillHubRegistrationV1({
-					schemaVersion: 1,
-					name: row.name,
-					skillId: row.version.skillId,
-					skillVersionId: row.version.id,
-					visibility: row.version.visibility,
-					provider: row.version.provider,
-					version: row.version.version,
-					packageObjectVersion: row.version.packageObjectVersion,
-					packageDigest: row.version.packageDigest,
-					manifestDigest: row.version.manifestDigest,
-					signatureDigest: row.version.signatureDigest,
-				});
-				const visible = canViewSkillHubVersionV1(
-					{
-						...registration,
-						ownerId: row.version.ownerId,
-						state: row.version.state as never,
-						needUpgrade: row.version.needUpgrade,
-						reviewedBy: row.version.reviewedBy,
-						reviewReason: row.version.reviewReason,
-						revokedAt: row.version.revokedAt?.toISOString() ?? null,
-					},
-					{
-						schemaVersion: 1,
-						userId: input.actorId,
-						accountStatus: "active",
-						organizationIds: input.organizationIds,
-						isAdministrator: input.isAdministrator,
-					},
-					row.organizationId,
-					row.parentStatus,
-				);
-				if (
-					!visible ||
-					row.version.state !== "published" ||
-					row.parentStatus !== "active" ||
-					!admitted.has(row.binding.skillVersionId) ||
-					!installed.has(row.binding.skillVersionId) ||
-					boundaryGrant === undefined ||
-					!isSkillHubGrantWithinBoundaryV1(persistedGrant, boundaryGrant)
-				)
-					throw new SkillHubAgentBindingAdmissionErrorV1();
-				const appliedReceipt =
-					row.binding.state === "synced"
-						? SkillHubAppliedReceiptV1Schema.parse(row.binding.appliedReceipt)
-						: null;
-				return SkillHubSyncBindingV1Schema.parse({
-					schemaVersion: 1,
-					agentId: row.binding.agentId,
-					agentVersion: row.binding.agentVersion,
-					skillName: row.name,
-					skillVersion: SkillVersionRefV1Schema.parse({
-						schemaVersion: 1,
-						skillId: registration.skillId,
-						skillVersionId: registration.skillVersionId,
-						provider: registration.provider,
-						version: registration.version,
-						packageObjectVersion: registration.packageObjectVersion,
-						packageDigest: registration.packageDigest,
-						manifestDigest: registration.manifestDigest,
-						signatureDigest: registration.signatureDigest,
-					}),
-					grant: persistedGrant,
-					configurationRevision: row.binding.configurationRevision,
-					syncRevision: row.binding.syncRevision,
-					state: row.binding.state,
-					failureReason: row.binding.failureReason,
-					appliedReceipt,
-				});
-			});
+			const revision = Number(agent?.currentConfigurationRevision);
+			if (!Number.isSafeInteger(revision) || revision < 1)
+				throw new SkillHubAgentBindingAdmissionErrorV1();
+			return revision;
 		} catch (error) {
 			if (error instanceof SkillHubAgentBindingAdmissionErrorV1) throw error;
 			throw new SkillHubAgentBindingAdmissionErrorV1();
 		}
+	}
+
+	/**
+	 * Owner 读取：在同一只读快照里取当前配置修订，再按该修订解析绑定（#2903）。
+	 * 调用方不提交修订号，避免把管理修订当作配置修订使用。
+	 */
+	async readCurrentBindings(
+		input: Omit<SyncBindingQueryV1, "configurationRevision">,
+	): Promise<{
+		readonly configurationRevision: number;
+		readonly bindings: readonly SkillHubSyncBindingV1[];
+	}> {
+		try {
+			return await this.#database.transaction(
+				async (transaction) => {
+					const [agent] = await transaction
+						.select({
+							currentConfigurationRevision: agents.currentConfigurationRevision,
+						})
+						.from(agents)
+						.where(eq(agents.id, input.agentId))
+						.limit(1);
+					const configurationRevision = Number(
+						agent?.currentConfigurationRevision,
+					);
+					if (
+						!Number.isSafeInteger(configurationRevision) ||
+						configurationRevision < 1
+					)
+						throw new SkillHubAgentBindingAdmissionErrorV1();
+					const bindings = await this.#resolveSyncBindings(transaction, {
+						...input,
+						configurationRevision,
+					});
+					return { configurationRevision, bindings };
+				},
+				{ isolationLevel: "repeatable read", accessMode: "read only" },
+			);
+		} catch (error) {
+			if (error instanceof SkillHubAgentBindingAdmissionErrorV1) throw error;
+			throw new SkillHubAgentBindingAdmissionErrorV1();
+		}
+	}
+
+	/** Resolve the current binding facts for Worker materialization. */
+	async resolveSyncBindings(
+		input: SyncBindingQueryV1,
+	): Promise<readonly SkillHubSyncBindingV1[]> {
+		try {
+			return await this.#resolveSyncBindings(this.#database, input);
+		} catch (error) {
+			if (error instanceof SkillHubAgentBindingAdmissionErrorV1) throw error;
+			throw new SkillHubAgentBindingAdmissionErrorV1();
+		}
+	}
+
+	async #resolveSyncBindings(
+		database: BindingReader,
+		input: SyncBindingQueryV1,
+	): Promise<readonly SkillHubSyncBindingV1[]> {
+		const [agent] = await database
+			.select({
+				currentConfigurationRevision: agents.currentConfigurationRevision,
+			})
+			.from(agents)
+			.where(eq(agents.id, input.agentId))
+			.limit(1);
+		if (
+			!agent ||
+			Number(agent.currentConfigurationRevision) !== input.configurationRevision
+		)
+			return [];
+		const rows = await database
+			.select({
+				binding: skillHubAgentBindings,
+				version: skillHubVersions,
+				name: skillHubSkills.name,
+				parentStatus: skillHubSkills.status,
+				organizationId: skillHubSkills.organizationId,
+			})
+			.from(skillHubAgentBindings)
+			.innerJoin(
+				skillHubVersions,
+				eq(skillHubVersions.id, skillHubAgentBindings.skillVersionId),
+			)
+			.innerJoin(
+				skillHubSkills,
+				eq(skillHubSkills.id, skillHubVersions.skillId),
+			)
+			.where(
+				and(
+					eq(skillHubAgentBindings.agentId, input.agentId),
+					eq(skillHubAgentBindings.agentVersion, input.agentVersion),
+					eq(
+						skillHubAgentBindings.configurationRevision,
+						input.configurationRevision,
+					),
+				),
+			);
+		if (rows.length === 0) return [];
+		const skillVersionIds = rows.map((row) => row.binding.skillVersionId);
+		const admissions = await database
+			.select({ scopeId: idempotencyRecords.scopeId })
+			.from(idempotencyRecords)
+			.where(
+				and(
+					eq(idempotencyRecords.scopeType, "skill_package"),
+					inArray(idempotencyRecords.scopeId, skillVersionIds),
+					eq(idempotencyRecords.status, "completed"),
+				),
+			);
+		const admitted = new Set(admissions.map((row) => row.scopeId));
+		const principalScope = input.organizationIds.length
+			? or(
+					and(
+						eq(skillHubInstallations.principalType, "user"),
+						eq(skillHubInstallations.principalId, input.actorId),
+					),
+					and(
+						eq(skillHubInstallations.principalType, "organization"),
+						inArray(skillHubInstallations.principalId, input.organizationIds),
+					),
+				)
+			: and(
+					eq(skillHubInstallations.principalType, "user"),
+					eq(skillHubInstallations.principalId, input.actorId),
+				);
+		const installations = await database
+			.select({ skillVersionId: skillHubInstallations.skillVersionId })
+			.from(skillHubInstallations)
+			.where(
+				and(
+					inArray(skillHubInstallations.skillVersionId, skillVersionIds),
+					eq(skillHubInstallations.state, "installed"),
+					principalScope,
+				),
+			);
+		const installed = new Set(installations.map((row) => row.skillVersionId));
+		const requested = rows.map((row) => ({
+			skillVersionId: row.binding.skillVersionId,
+			grant: parseSkillHubGrantV1(row.binding.grant),
+		}));
+		// 与 admit 一致：没有部署端能力事实时，边界是空 grant（拒绝一切额外能力）。
+		const boundaryRows = this.#resolveGrantBoundary
+			? await this.#resolveGrantBoundary({
+					agentId: input.agentId,
+					actorId: input.actorId,
+					requested,
+				})
+			: requested.map((row) => ({
+					skillVersionId: row.skillVersionId,
+					grant: emptyGrant,
+				}));
+		const grants = new Map(
+			boundaryRows.map((row) => [row.skillVersionId, row.grant]),
+		);
+		return rows.map((row) => {
+			const persistedGrant = parseSkillHubGrantV1(row.binding.grant);
+			const boundaryGrant = grants.get(row.binding.skillVersionId);
+			const registration = parseSkillHubRegistrationV1({
+				schemaVersion: 1,
+				name: row.name,
+				skillId: row.version.skillId,
+				skillVersionId: row.version.id,
+				visibility: row.version.visibility,
+				provider: row.version.provider,
+				version: row.version.version,
+				packageObjectVersion: row.version.packageObjectVersion,
+				packageDigest: row.version.packageDigest,
+				manifestDigest: row.version.manifestDigest,
+				signatureDigest: row.version.signatureDigest,
+			});
+			const visible = canViewSkillHubVersionV1(
+				{
+					...registration,
+					ownerId: row.version.ownerId,
+					state: row.version.state as never,
+					needUpgrade: row.version.needUpgrade,
+					reviewedBy: row.version.reviewedBy,
+					reviewReason: row.version.reviewReason,
+					revokedAt: row.version.revokedAt?.toISOString() ?? null,
+				},
+				{
+					schemaVersion: 1,
+					userId: input.actorId,
+					accountStatus: "active",
+					organizationIds: input.organizationIds,
+					isAdministrator: input.isAdministrator,
+				},
+				row.organizationId,
+				row.parentStatus,
+			);
+			if (
+				!visible ||
+				row.version.state !== "published" ||
+				row.parentStatus !== "active" ||
+				!admitted.has(row.binding.skillVersionId) ||
+				!installed.has(row.binding.skillVersionId) ||
+				boundaryGrant === undefined ||
+				!isSkillHubGrantWithinBoundaryV1(persistedGrant, boundaryGrant)
+			)
+				throw new SkillHubAgentBindingAdmissionErrorV1();
+			const appliedReceipt =
+				row.binding.state === "synced"
+					? SkillHubAppliedReceiptV1Schema.parse(row.binding.appliedReceipt)
+					: null;
+			return SkillHubSyncBindingV1Schema.parse({
+				schemaVersion: 1,
+				agentId: row.binding.agentId,
+				agentVersion: row.binding.agentVersion,
+				skillName: row.name,
+				skillVersion: SkillVersionRefV1Schema.parse({
+					schemaVersion: 1,
+					skillId: registration.skillId,
+					skillVersionId: registration.skillVersionId,
+					provider: registration.provider,
+					version: registration.version,
+					packageObjectVersion: registration.packageObjectVersion,
+					packageDigest: registration.packageDigest,
+					manifestDigest: registration.manifestDigest,
+					signatureDigest: registration.signatureDigest,
+				}),
+				grant: persistedGrant,
+				configurationRevision: row.binding.configurationRevision,
+				syncRevision: row.binding.syncRevision,
+				state: row.binding.state,
+				failureReason: row.binding.failureReason,
+				appliedReceipt,
+			});
+		});
 	}
 
 	async admit(

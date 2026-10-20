@@ -13,9 +13,13 @@ import {
 	type PlatformAuditQueryScopeV1,
 	PlatformAuditScopeErrorV1,
 	type PlatformExecutionAuditBindingV1,
+	parseConversationOperationEventV2,
+	parseConversationOperationFactV2,
 	parsePersonalApiCredentialIssuanceV1,
+	parsePlatformAuditDisplayNameV1,
 	parsePlatformAuditQueryInputV1,
 	parsePlatformAuditQueryScopeV1,
+	platformAuditDisplayNamePolicyV1,
 	platformAuditQueryActionsV1,
 	platformAuditQueryResultsV1,
 	projectPlatformAuditQueryDenialV1,
@@ -72,6 +76,28 @@ export interface ScopedPlatformAuditProjectionV1 {
 
 export interface ScopedPlatformAuditPageV1 {
 	readonly items: readonly ScopedPlatformAuditProjectionV1[];
+	readonly nextCursor: string | null;
+}
+
+/** #2909：按查询方当前权限解析的显示名；无权、不存在或无法确认时为 null。 */
+export interface ScopedPlatformAuditDisplayNamesV1 {
+	/** 应用主体的名称；用户名称仍由目录按权限解析。 */
+	readonly actor: string | null;
+	/** Agent 或创建申请对象的名称。 */
+	readonly subject: string | null;
+	/** 应用原发起主体的名称。 */
+	readonly originalPrincipal: string | null;
+	/** 记录关联 Agent（agentId）的名称。 */
+	readonly agent: string | null;
+}
+
+export type ScopedPlatformAuditNamedProjectionV1 =
+	ScopedPlatformAuditProjectionV1 & {
+		readonly displayNames: ScopedPlatformAuditDisplayNamesV1;
+	};
+
+export interface ScopedPlatformAuditNamedPageV1 {
+	readonly items: readonly ScopedPlatformAuditNamedProjectionV1[];
 	readonly nextCursor: string | null;
 }
 
@@ -157,6 +183,27 @@ function decodeCursor(
 	}
 }
 
+/**
+ * 当前审计读取权（引用别名 `agent`）：管理员不限；凭证或应用主体需要当前 use grant；
+ * 浏览器用户需要是 Owner 或在可用范围内。记录过滤与显示名解析共用同一条件。
+ */
+function currentAgentAccess(
+	transaction: Transaction,
+	scope: PlatformAuditQueryScopeV1,
+) {
+	return scope.kind === "administrator"
+		? transaction`true`
+		: scope.credential || scope.principal.kind === "application"
+			? transaction`exists (select 1 from platform.agent_principal_grants g
+				where g.agent_id = agent.id and g.principal_type = ${scope.principal.kind}
+					and g.principal_id = ${scope.principal.id} and g.grant_type = 'use'
+					and g.revoked_at is null)`
+			: transaction`(exists (select 1 from platform.agent_owners o where o.agent_id = agent.id and o.owner_id = ${scope.principal.id})
+				or exists (select 1 from platform.agent_availability av where av.agent_id = agent.id
+					and ((av.target_type = 'user' and av.target_id = ${scope.principal.id})
+						or (av.target_type = 'organization' and av.target_id = any(${[...(scope.user?.organizationIds ?? [])]}::text[])))))`;
+}
+
 /** Filtering happens before pagination. The same CTE is used for pages, details and anchors. */
 function candidates(
 	transaction: Transaction,
@@ -170,18 +217,7 @@ function candidates(
 		and accepted.actor_type = r.boundary -> 'principal' ->> 'kind'
 		and accepted.actor_id = r.boundary -> 'principal' ->> 'id'
 		and r.boundary ->> 'agentId' = e.agent_id and r.boundary ->> 'channelId' = e.channel_id`;
-	const currentAccess =
-		scope.kind === "administrator"
-			? transaction`true`
-			: scope.credential || scope.principal.kind === "application"
-				? transaction`exists (select 1 from platform.agent_principal_grants g
-				where g.agent_id = agent.id and g.principal_type = ${scope.principal.kind}
-					and g.principal_id = ${scope.principal.id} and g.grant_type = 'use'
-					and g.revoked_at is null)`
-				: transaction`(exists (select 1 from platform.agent_owners o where o.agent_id = agent.id and o.owner_id = ${scope.principal.id})
-				or exists (select 1 from platform.agent_availability av where av.agent_id = agent.id
-					and ((av.target_type = 'user' and av.target_id = ${scope.principal.id})
-						or (av.target_type = 'organization' and av.target_id = any(${[...(scope.user?.organizationIds ?? [])]}::text[])))))`;
+	const currentAccess = currentAgentAccess(transaction, scope);
 	const executionOwnership =
 		scope.kind === "administrator"
 			? transaction`true`
@@ -589,6 +625,7 @@ const agentDefaultRelayKeyReadActions = new Set([
 function project(
 	row: Row,
 	scope: PlatformAuditQueryScopeV1,
+	operationDetails: unknown = row.details,
 ): ScopedPlatformAuditProjectionV1 {
 	if (
 		!platformAuditQueryActionsV1.some((action) => action === row.action) ||
@@ -705,7 +742,7 @@ function project(
 	if (row.action === "execution.operation.observed") {
 		if (!binding) throw new PlatformAuditScopeErrorV1("unavailable");
 		const projected = projectPlatformOperationAuditV1(
-			row.details,
+			operationDetails,
 			binding,
 			scope,
 		);
@@ -805,6 +842,93 @@ function project(
 	};
 }
 
+/** Read-only compatibility for protected legacy model facts, bounded to this page. */
+async function legacyOperationDetails(
+	transaction: Transaction,
+	rows: readonly Row[],
+): Promise<Map<string, unknown>> {
+	const legacy = rows.flatMap((row) => {
+		if (
+			row.source !== "platform" ||
+			row.action !== "execution.operation.observed"
+		)
+			return [];
+		const details = row.details as Record<string, unknown> | null;
+		const raw = details?.fact as Record<string, unknown> | undefined;
+		if (
+			raw?.kind !== "model" ||
+			raw.phase !== "unknown" ||
+			(raw.finishedAt === undefined && raw.durationMs === undefined)
+		)
+			return [];
+		try {
+			const fact = parseConversationOperationFactV2(raw);
+			if (
+				!details ||
+				!boundedText(details.eventId) ||
+				row.auditId !== `operation-observed:${details.eventId}` ||
+				row.targetType !== "execution" ||
+				row.targetId !== row.executionId ||
+				row.outcome !== "succeeded"
+			)
+				throw new PlatformAuditScopeErrorV1("unavailable");
+			return [{ row, details, fact, eventId: details.eventId }];
+		} catch {
+			throw new PlatformAuditScopeErrorV1("unavailable");
+		}
+	});
+	const normalized = new Map<string, unknown>();
+	if (!legacy.length) return normalized;
+	const events = await transaction<
+		{
+			event_id: string;
+			execution_id: string;
+			conversation_id: string;
+			event_payload: unknown;
+			event_digest: string;
+		}[]
+	>`select event_id, execution_id, conversation_id, event_payload, event_digest
+		from platform.conversation_events
+		where event_id = any(${legacy.map((item) => item.eventId)}::text[])
+			and source = 'runtime' and event_type = 'execution.operation'`;
+	for (const { row, details, fact, eventId } of legacy) {
+		try {
+			const matches = events.filter((event) => event.event_id === eventId);
+			const event = matches[0];
+			if (
+				matches.length !== 1 ||
+				!event ||
+				event.execution_id !== row.executionId ||
+				event.conversation_id !== row.boundConversationId ||
+				!/^[a-f0-9]{64}$/.test(event.event_digest) ||
+				JSON.stringify(
+					parseConversationOperationEventV2(event.event_payload).fact,
+				) !== JSON.stringify(fact)
+			)
+				throw new PlatformAuditScopeErrorV1("unavailable");
+			const presentation = { ...fact };
+			delete presentation.finishedAt;
+			delete presentation.durationMs;
+			normalized.set(row.auditId, { ...details, fact: presentation });
+		} catch {
+			throw new PlatformAuditScopeErrorV1("unavailable");
+		}
+	}
+	return normalized;
+}
+
+function named(
+	items: readonly ScopedPlatformAuditProjectionV1[],
+	displayNames: readonly ScopedPlatformAuditDisplayNamesV1[],
+): ScopedPlatformAuditNamedProjectionV1[] {
+	if (displayNames.length !== items.length)
+		throw new PlatformAuditScopeErrorV1("unavailable");
+	return items.map((item, index) => ({
+		...item,
+		displayNames: displayNames[index] as ScopedPlatformAuditDisplayNamesV1,
+	}));
+}
+
 /** API material is transient and never enters Core scope, cursor or audit data. */
 type ScopedAuditQueryIdentityV1 =
 	| PlatformAuditQueryScopeV1
@@ -822,6 +946,8 @@ export class PostgresScopedPlatformAuditQueryV1 {
 		this.#client = postgres(options.databaseUrl, {
 			max: 5,
 			connect_timeout: 2,
+			// Selective and unfiltered pages need plans for their actual parameters.
+			prepare: false,
 		});
 		// The Agent lock in the query transaction guards the current management
 		// read. Keep Drizzle's timestamp/JSON codecs off the raw query pool.
@@ -908,7 +1034,11 @@ export class PostgresScopedPlatformAuditQueryV1 {
 		input: unknown,
 		request: ScopedPlatformAuditRequestMetadataV1,
 		auditId?: string,
-	): Promise<ScopedPlatformAuditPageV1> {
+		withDisplayNames = false,
+	): Promise<{
+		readonly page: ScopedPlatformAuditPageV1;
+		readonly displayNames: readonly ScopedPlatformAuditDisplayNamesV1[];
+	}> {
 		let resolvedScope: PlatformAuditQueryScopeV1 | undefined;
 		const credentialQuery = scopeInput.kind === "api-credential";
 		if (!boundedText(request.requestId) || !boundedText(request.traceId))
@@ -987,14 +1117,32 @@ export class PostgresScopedPlatformAuditQueryV1 {
 					rows = await transaction<
 						Row[]
 					>`${cte} select * from controlled order by "occurredAt" desc, source desc, "auditId" desc limit ${query.limit + 1}`;
-				for (const agentId of new Set(
+				const verifiedAgentIds = new Set(
 					rows.flatMap((row) => (row.agentId ? [row.agentId] : [])),
-				))
+				);
+				for (const agentId of verifiedAgentIds)
 					await this.#requireAgent(transaction, scope, agentId);
 				const visible = rows.slice(0, query.limit);
-				const items = visible.map((row) =>
-					project({ ...row, conversationId: row.boundConversationId }, scope),
+				const legacyDetails = await legacyOperationDetails(
+					transaction,
+					visible,
 				);
+				const items = visible.map((row) =>
+					project(
+						{ ...row, conversationId: row.boundConversationId },
+						scope,
+						legacyDetails.get(row.auditId) ?? row.details,
+					),
+				);
+				// 名称在同一事务内、按刚核验过的当前权限解析，与记录可见性一致。
+				const displayNames = withDisplayNames
+					? await this.#displayNames(
+							transaction,
+							scope,
+							items,
+							verifiedAgentIds,
+						)
+					: [];
 				await this.#audit(
 					transaction,
 					scope,
@@ -1007,9 +1155,14 @@ export class PostgresScopedPlatformAuditQueryV1 {
 				await resolution?.revalidate();
 				const last = visible.at(-1);
 				return {
-					items,
-					nextCursor:
-						rows.length > query.limit && last ? encodeCursor(key, last) : null,
+					page: {
+						items,
+						nextCursor:
+							rows.length > query.limit && last
+								? encodeCursor(key, last)
+								: null,
+					},
+					displayNames,
 				};
 			});
 		} catch (error) {
@@ -1066,7 +1219,26 @@ export class PostgresScopedPlatformAuditQueryV1 {
 		input: unknown,
 		request: ScopedPlatformAuditRequestMetadataV1,
 	): Promise<ScopedPlatformAuditPageV1> {
-		return this.#run(scope, input, request);
+		return this.#run(scope, input, request).then(({ page }) => page);
+	}
+
+	/** #2909：V2 入口的列表，附带按当前权限解析的显示名。 */
+	async listAuditWithDisplayNames(
+		scope: ScopedAuditQueryIdentityV1,
+		input: unknown,
+		request: ScopedPlatformAuditRequestMetadataV1,
+	): Promise<ScopedPlatformAuditNamedPageV1> {
+		const { page, displayNames } = await this.#run(
+			scope,
+			input,
+			request,
+			undefined,
+			true,
+		);
+		return {
+			items: named(page.items, displayNames),
+			nextCursor: page.nextCursor,
+		};
 	}
 
 	async recordDeniedQuery(
@@ -1093,10 +1265,108 @@ export class PostgresScopedPlatformAuditQueryV1 {
 		input: unknown,
 		request: ScopedPlatformAuditRequestMetadataV1,
 	): Promise<ScopedPlatformAuditProjectionV1> {
-		const page = await this.#run(scope, input, request, auditId);
+		const { page } = await this.#run(scope, input, request, auditId);
 		const item = page.items[0];
 		if (!item) deny();
 		return item;
+	}
+
+	/** #2909：V2 入口的详情，附带按当前权限解析的显示名。 */
+	async getAuditWithDisplayNames(
+		scope: ScopedAuditQueryIdentityV1,
+		auditId: string,
+		input: unknown,
+		request: ScopedPlatformAuditRequestMetadataV1,
+	): Promise<ScopedPlatformAuditNamedProjectionV1> {
+		const { page, displayNames } = await this.#run(
+			scope,
+			input,
+			request,
+			auditId,
+			true,
+		);
+		const [item] = named(page.items, displayNames);
+		if (!item) deny();
+		return item;
+	}
+
+	/**
+	 * 只为本页已投影的引用解析名称，不接受调用方提交的 ID。非管理员只解析本次查询已按
+	 * 当前访问权核验过的 Agent，并在 SQL 中再次套用同一访问条件；创建申请与应用名称仅管理员可见。
+	 */
+	async #displayNames(
+		transaction: Transaction,
+		scope: PlatformAuditQueryScopeV1,
+		items: readonly ScopedPlatformAuditProjectionV1[],
+		verifiedAgentIds: ReadonlySet<string>,
+	): Promise<ScopedPlatformAuditDisplayNamesV1[]> {
+		const policy = platformAuditDisplayNamePolicyV1(scope);
+		const agentIds = new Set<string>();
+		const agentApplicationIds = new Set<string>();
+		const applicationIds = new Set<string>();
+		for (const item of items) {
+			if (item.agentId) agentIds.add(item.agentId);
+			if (item.subject.kind === "agent") agentIds.add(item.subject.subjectId);
+			if (item.subject.kind === "agent_application")
+				agentApplicationIds.add(item.subject.subjectId);
+			if (item.actor.kind === "application")
+				applicationIds.add(item.actor.actorId);
+			if (item.originalPrincipal?.kind === "application")
+				applicationIds.add(item.originalPrincipal.id);
+		}
+		const permittedAgentIds = [...agentIds].filter(
+			(agentId) => policy.agents === "all" || verifiedAgentIds.has(agentId),
+		);
+		const names = async (
+			ids: readonly string[],
+			read: (ids: string[]) => Promise<{ id: string; name: unknown }[]>,
+		) => {
+			const found = new Map<string, string>();
+			if (ids.length === 0) return found;
+			for (const row of await read([...ids])) {
+				const name = parsePlatformAuditDisplayNameV1(row.name);
+				if (name !== null) found.set(row.id, name);
+			}
+			return found;
+		};
+		const agentAccess =
+			policy.agents === "all"
+				? transaction`true`
+				: transaction`agent.authorization_revision is not null and ${currentAgentAccess(transaction, scope)}`;
+		const agentNames = await names(
+			permittedAgentIds,
+			(ids) => transaction<{ id: string; name: unknown }[]>`
+				select agent.id, application.name from platform.agents agent
+				join platform.agent_applications application on application.agent_id = agent.id
+				where agent.id = any(${ids}::text[]) and ${agentAccess}`,
+		);
+		const agentApplicationNames = await names(
+			policy.agentApplications ? [...agentApplicationIds] : [],
+			(ids) => transaction<{ id: string; name: unknown }[]>`
+				select id, name from platform.agent_applications where id = any(${ids}::text[])`,
+		);
+		const applicationNames = await names(
+			policy.applications ? [...applicationIds] : [],
+			(ids) => transaction<{ id: string; name: unknown }[]>`
+				select id, name from platform.platform_applications where id = any(${ids}::text[])`,
+		);
+		return items.map((item) => ({
+			actor:
+				item.actor.kind === "application"
+					? (applicationNames.get(item.actor.actorId) ?? null)
+					: null,
+			subject:
+				item.subject.kind === "agent"
+					? (agentNames.get(item.subject.subjectId) ?? null)
+					: item.subject.kind === "agent_application"
+						? (agentApplicationNames.get(item.subject.subjectId) ?? null)
+						: null,
+			originalPrincipal:
+				item.originalPrincipal?.kind === "application"
+					? (applicationNames.get(item.originalPrincipal.id) ?? null)
+					: null,
+			agent: item.agentId ? (agentNames.get(item.agentId) ?? null) : null,
+		}));
 	}
 
 	async close(): Promise<void> {

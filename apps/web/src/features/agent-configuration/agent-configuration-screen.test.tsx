@@ -927,11 +927,13 @@ const savedCandidates = [
 	{
 		endpointId: "relay",
 		modelId: "model-a",
+		displayName: "model-a",
 		reasoningLevels: ["medium", "high"],
 	},
 	{
 		endpointId: "relay",
 		modelId: "model-b",
+		displayName: "model-b",
 		reasoningLevels: ["low", "medium"],
 	},
 ];
@@ -1202,7 +1204,7 @@ describe("Agent default Relay Key (G-08, G-09)", () => {
 	) {
 		const defaultRelayKeyActions = {
 			check: vi.fn(async () => ({
-				schemaVersion: 1 as const,
+				schemaVersion: 2 as const,
 				configurationRevision: 7,
 				keyVersion: 3,
 				candidates: savedCandidates,
@@ -1227,6 +1229,55 @@ describe("Agent default Relay Key (G-08, G-09)", () => {
 		fireEvent.click(replaceButton());
 		return screen.findByRole("dialog", { name: "替换 Agent 默认 Relay Key" });
 	}
+
+	it.each([
+		{ displayName: "可信模型甲", expected: "可信模型甲 · 均衡/高" },
+		{ displayName: undefined, expected: "model-a · 均衡/高" },
+	])("uses trusted names in available-model tags: $expected", (model) => {
+		renderKey(
+			{},
+			{
+				savedRelayKeyCandidates: [
+					{
+						endpointId: "relay",
+						modelId: "model-a",
+						displayName: model.displayName,
+						reasoningLevels: ["medium", "high"],
+					},
+				],
+			},
+		);
+		expect(within(section()).getByText(model.expected)).toBeTruthy();
+	});
+
+	it("distinguishes equal display names with different endpoint/model pairs", () => {
+		renderKey(
+			{},
+			{
+				endpointNames: { relay: "服务甲", other: "服务乙" },
+				savedRelayKeyCandidates: [
+					{
+						endpointId: "relay",
+						modelId: "model-a",
+						displayName: "共享名称",
+						reasoningLevels: ["medium"],
+					},
+					{
+						endpointId: "other",
+						modelId: "model-b",
+						displayName: "共享名称",
+						reasoningLevels: ["medium"],
+					},
+				],
+			},
+		);
+		expect(
+			within(section()).getByText("服务甲 · 共享名称 · 均衡"),
+		).toBeTruthy();
+		expect(
+			within(section()).getByText("服务乙 · 共享名称 · 均衡"),
+		).toBeTruthy();
+	});
 
 	it("has its own section with usage boundary, status, version and available models", () => {
 		renderKey();
@@ -1334,7 +1385,7 @@ describe("Agent default Relay Key (G-08, G-09)", () => {
 	it("asks for a new model selection when the new Key cannot call current models", async () => {
 		const { actions, onSave } = renderKey({
 			check: vi.fn(async () => ({
-				schemaVersion: 1 as const,
+				schemaVersion: 2 as const,
 				configurationRevision: 7,
 				keyVersion: 3,
 				candidates: [savedCandidates[1] as (typeof savedCandidates)[number]],

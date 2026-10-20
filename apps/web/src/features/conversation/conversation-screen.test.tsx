@@ -179,6 +179,13 @@ function noPendingReply() {
 	// 受理提示只在回复卡内出现一次，卡外不再有单独的受理行（R4-07、AC-6）。
 	expect(screen.queryByText(/消息已受理，等待处理/)).toBeNull();
 }
+/** 读取「模型回退」弹窗里某一项事实（dt 后紧跟的 dd）的文字（G-07）。 */
+function fact(dialog: HTMLElement, label: string) {
+	const term = within(dialog).getByText(label, { selector: "dt" });
+	const value = term.nextElementSibling;
+	expect(value?.tagName).toBe("DD");
+	return value?.textContent;
+}
 /** 打开「会话文件」折叠条：添加附件入口按设计在条内（CH-03）。 */
 function openFiles() {
 	const trigger = screen.getByRole("button", { name: /^会话文件/ });
@@ -3675,10 +3682,10 @@ describe("session context, command feedback and reply cards (design alignment)",
 		act(() => trigger.focus());
 		fireEvent.click(trigger);
 		const dialog = await screen.findByRole("dialog", { name: "模型回退" });
-		expect(within(dialog).getByText("实际模型")).toBeTruthy();
-		expect(within(dialog).getByText("Primary model")).toBeTruthy();
+		// 旧事件没有记录原选项：请求模型写中性文案，不按当前所选推断（AC-2、AC-3）。
+		expect(fact(dialog, "请求模型")).toBe("已删除的模型选项");
+		expect(fact(dialog, "实际模型")).toBe("Primary model");
 		expect(within(dialog).getByText("原因")).toBeTruthy();
-		expect(dialog.textContent).not.toContain("请求模型");
 		expect(dialog.textContent).not.toContain("暂时不可用");
 		expect(dialog.textContent).not.toContain("model-primary");
 		expect(
@@ -3697,6 +3704,106 @@ describe("session context, command feedback and reply cards (design alignment)",
 		await waitFor(() => expect(document.activeElement).toBe(trigger));
 		// 时间线末尾不再有独立的回退提示框。
 		expect(screen.queryByText(/原模型选项已移除，此条消息/)).toBeNull();
+	});
+
+	it("shows the requested model recorded at fallback beside the actual model (G-07)", async () => {
+		const completed = PersistedConversationEventV2Schema.parse({
+			...event(3),
+			type: "execution.status",
+			payload: { status: "completed" },
+		});
+		const fallback = PersistedConversationEventV2Schema.parse({
+			...event(1),
+			schemaVersion: 2,
+			type: "model.selection.fell_back",
+			payload: {
+				modelOptionId: "model-primary",
+				reasoningLevel: "medium",
+				reason: "selection_unavailable",
+				requestedModelOptionId: "model-removed",
+				requestedModelDisplayName: "gpt-removed-by-owner",
+			},
+		});
+		setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (path !== "/api/v2/conversations/conversation-1") return undefined;
+			return Response.json({
+				...history("conversation-1", [fallback, event(2), completed]),
+				conversation: {
+					...history().conversation,
+					status: "ready",
+					selectedModelOptionId: "model-primary",
+					selectedReasoningLevel: "medium",
+				},
+				messages: [userMessage(), answer({ text: "output 2" })],
+			});
+		});
+		const reply = await screen.findByRole("article", {
+			name: `${agent.name}的消息`,
+		});
+		const line = (
+			await within(reply).findByText(/模型回退 · 实际模型/)
+		).closest("p") as HTMLElement;
+		fireEvent.click(
+			within(line).getByRole("button", {
+				name: "查看模型状态：Private question",
+			}),
+		);
+		const dialog = await screen.findByRole("dialog", { name: "模型回退" });
+		expect(fact(dialog, "请求模型")).toBe("gpt-removed-by-owner");
+		expect(fact(dialog, "实际模型")).toBe("Primary model");
+		expect(dialog.textContent).not.toContain("model-removed");
+		expect(dialog.textContent).not.toContain("model-primary");
+	});
+
+	it("shows the requested model from a fallback delivered live after sending (G-07, AC-1)", async () => {
+		let accepted = false;
+		const { streams } = setup((request) => {
+			if (request.method === "POST") {
+				accepted = true;
+				return receipt();
+			}
+			if (
+				new URL(request.url).pathname !== "/api/v2/conversations/conversation-1"
+			)
+				return undefined;
+			return Response.json({
+				...history("conversation-1", []),
+				messages: accepted ? [userMessage("After removal")] : [],
+			});
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "After removal" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await pendingReply();
+		await waitFor(() => expect(streams.length).toBe(2));
+		// 服务端在受理这条消息的同一事务里写入的 V2 回退事件，经 SSE 实时到达。
+		act(() =>
+			streams.at(-1)?.send({
+				...event(1),
+				schemaVersion: 2,
+				type: "model.selection.fell_back",
+				payload: {
+					modelOptionId: "model-primary",
+					reasoningLevel: "medium",
+					reason: "selection_unavailable",
+					requestedModelOptionId: "model-removed",
+					requestedModelDisplayName: "gpt-removed-by-owner",
+				},
+			}),
+		);
+		const line = (await screen.findByText(/模型回退 · 实际模型/)).closest(
+			"p",
+		) as HTMLElement;
+		fireEvent.click(
+			within(line).getByRole("button", {
+				name: "查看模型状态：After removal",
+			}),
+		);
+		const dialog = await screen.findByRole("dialog", { name: "模型回退" });
+		expect(fact(dialog, "请求模型")).toBe("gpt-removed-by-owner");
+		expect(fact(dialog, "实际模型")).toBe("Primary model");
+		expect(dialog.textContent).not.toContain("model-removed");
 	});
 
 	it("never mentions model fallback when no fallback event exists (AC-13)", async () => {

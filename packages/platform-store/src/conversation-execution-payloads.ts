@@ -335,6 +335,8 @@ export function parseModelSelectionFallback(
 		"modelOptionId",
 		"reasoningLevel",
 		"reason",
+		"requestedModelOptionId",
+		"requestedModelDisplayName",
 	]);
 	const audit = exactRecord(input.auditEvent, [
 		"action",
@@ -376,6 +378,12 @@ export function parseModelSelectionFallback(
 				modelOptionId: text(payload.modelOptionId),
 				reasoningLevel: text(payload.reasoningLevel),
 				reason: "selection_unavailable",
+				requestedModelOptionId: text(payload.requestedModelOptionId),
+				// 读不到原选项显示名时为 null；非 null 时必须是有界文本（G-07）。
+				requestedModelDisplayName:
+					payload.requestedModelDisplayName === null
+						? null
+						: text(payload.requestedModelDisplayName),
 			},
 		},
 		auditEvent: {

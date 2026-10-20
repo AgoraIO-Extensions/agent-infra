@@ -18,7 +18,12 @@ const clients = [
 			repositoryRoot,
 			"apps/web/src/pilot/generated-client-config",
 		),
-		dualAuthenticationPaths: ["/api/v1/audit", "/api/v1/audit/{auditId}"],
+		dualAuthenticationPaths: [
+			"/api/v1/audit",
+			"/api/v1/audit/{auditId}",
+			"/api/v2/audit",
+			"/api/v2/audit/{auditId}",
+		],
 	},
 	{
 		input: resolve(

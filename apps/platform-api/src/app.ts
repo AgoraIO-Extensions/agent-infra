@@ -101,6 +101,10 @@ import {
 	type SkillHubImportRoutesDependenciesV1,
 } from "./http/skill-hub-import-routes.js";
 import {
+	registerSkillHubInstallationListRoutesV1,
+	type SkillHubInstallationListRoutesDependenciesV1,
+} from "./http/skill-hub-installation-list-routes.js";
+import {
 	registerSkillHubInstallationRoutesV1,
 	type SkillHubInstallationRoutesDependenciesV1,
 } from "./http/skill-hub-installation-routes.js";
@@ -116,6 +120,14 @@ import {
 	registerSkillHubReadRoutesV1,
 	type SkillHubReadRoutesDependenciesV1,
 } from "./http/skill-hub-read-routes.js";
+import {
+	registerSkillHubReviewRoutesV1,
+	type SkillHubReviewRoutesDependenciesV1,
+} from "./http/skill-hub-review-routes.js";
+import {
+	registerSkillHubVersionDetailRoutesV1,
+	type SkillHubVersionDetailRoutesDependenciesV1,
+} from "./http/skill-hub-version-detail-routes.js";
 import {
 	registerTaskRoutes,
 	type TaskRoutesDependencies,
@@ -195,7 +207,10 @@ export interface PlatformAppDependencies {
 	readonly skillHubRead?: SkillHubReadRoutesDependenciesV1;
 	readonly skillHubProjects?: SkillHubProjectRoutesDependenciesV1;
 	readonly skillHubInstallations?: SkillHubInstallationRoutesDependenciesV1;
+	readonly skillHubInstallationList?: SkillHubInstallationListRoutesDependenciesV1;
 	readonly skillHubPublication?: SkillHubPublicationRoutesDependenciesV1;
+	readonly skillHubReview?: SkillHubReviewRoutesDependenciesV1;
+	readonly skillHubVersionDetail?: SkillHubVersionDetailRoutesDependenciesV1;
 	readonly skillHubAgentBindings?: SkillHubAgentBindingRoutesDependenciesV1;
 	readonly skillHubImport?: SkillHubImportRoutesDependenciesV1;
 	readonly userGovernance?: UserGovernanceRoutesDependencies;
@@ -363,8 +378,20 @@ export function createPlatformApp(
 			app,
 			dependencies.skillHubInstallations,
 		);
+	if (dependencies.skillHubInstallationList)
+		registerSkillHubInstallationListRoutesV1(
+			app,
+			dependencies.skillHubInstallationList,
+		);
 	if (dependencies.skillHubPublication)
 		registerSkillHubPublicationRoutesV1(app, dependencies.skillHubPublication);
+	if (dependencies.skillHubReview)
+		registerSkillHubReviewRoutesV1(app, dependencies.skillHubReview);
+	if (dependencies.skillHubVersionDetail)
+		registerSkillHubVersionDetailRoutesV1(
+			app,
+			dependencies.skillHubVersionDetail,
+		);
 	if (dependencies.skillHubAgentBindings)
 		registerSkillHubAgentBindingRoutesV1(
 			app,

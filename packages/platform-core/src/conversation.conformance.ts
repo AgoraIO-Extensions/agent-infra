@@ -23,6 +23,14 @@ export const conversationConformanceAuthorityV1: ConversationExecutionAuthorityV
 		supportsSupplementaryInstruction: true,
 	};
 
+/**
+ * Harness 为每个模型选项在已应用配置修订中保存的模型 ID，也就是标准模板的显示名（G-07）。
+ * 它与选项 ID 不同，测试据此确认回退事件记录的是显示名而不是内部选项 ID。
+ */
+export function conversationConformanceModelIdV1(optionId: string): string {
+	return `relay-${optionId.replaceAll("_", "-")}`;
+}
+
 const conversationConformanceModelConfigurationV1 = {
 	configurationRevision: 1,
 	options: [
@@ -716,6 +724,10 @@ export function conversationCommandConformanceV1(
 									modelOptionId: "model_primary",
 									reasoningLevel: "medium",
 									reason: "selection_unavailable",
+									// 原选项已从当前配置删除，显示名来自它最后出现的已应用修订（G-07）。
+									requestedModelOptionId: "model_alternate",
+									requestedModelDisplayName:
+										conversationConformanceModelIdV1("model_alternate"),
 								},
 							},
 						},
@@ -788,6 +800,12 @@ export function conversationCommandConformanceV1(
 						executionId: regenerated.result.executionId,
 						sequence: 1,
 						conversationCursor: 1,
+						event: {
+							type: "model.selection.fell_back",
+							requestedModelOptionId: "model_alternate",
+							requestedModelDisplayName:
+								conversationConformanceModelIdV1("model_alternate"),
+						},
 					},
 				});
 				expect(snapshot.fallbackAuditExecutionIds).toEqual([
@@ -853,6 +871,18 @@ export function conversationCommandConformanceV1(
 					"platform",
 					"runtime",
 				]);
+				expect(
+					snapshot.events.find(({ source }) => source === "platform")?.event
+						.event,
+				).toEqual({
+					type: "model.selection.fell_back",
+					modelOptionId: "model_primary",
+					reasoningLevel: "medium",
+					reason: "selection_unavailable",
+					requestedModelOptionId: "model_alternate",
+					requestedModelDisplayName:
+						conversationConformanceModelIdV1("model_alternate"),
+				});
 				expect(snapshot.executions).toEqual([
 					{
 						executionId: initial.executionId,
@@ -860,6 +890,59 @@ export function conversationCommandConformanceV1(
 						lastRuntimeCursor:
 							"runtime_cursor_runtime_concurrent_fallback_fixture",
 					},
+				]);
+			} finally {
+				await harness.close();
+			}
+		});
+
+		it("records the retained option name when only its reasoning level was removed", async () => {
+			const harness = await open();
+			try {
+				const conversationId = await createConversationFixture(
+					harness,
+					"reasoning_fallback_event_fixture",
+				);
+				await harness.useCase.selectModel(
+					modelSelectionFixture(
+						conversationId,
+						"reasoning_fallback_event_fixture",
+					),
+				);
+				// 原选项仍在当前配置中，只是不再允许所选推理强度。
+				await harness.setModelConfiguration({
+					configurationRevision: 2,
+					options: [
+						{ optionId: "model_primary", reasoningLevels: ["medium"] },
+						{ optionId: "model_alternate", reasoningLevels: ["low"] },
+					],
+					defaultOptionId: "model_primary",
+					defaultReasoningLevel: "medium",
+				});
+				const accepted = await harness.useCase.accept(
+					messageFixture(
+						conversationId,
+						"reasoning_fallback_event_fixture",
+						"bounded reasoning fallback fixture",
+					),
+				);
+				if (accepted.outcome !== "accepted") {
+					throw new Error("Expected reasoning fallback acceptance");
+				}
+				const snapshot = await harness.eventSnapshot(conversationId);
+				expect(snapshot.events.map(({ event }) => event.event)).toEqual([
+					{
+						type: "model.selection.fell_back",
+						modelOptionId: "model_primary",
+						reasoningLevel: "medium",
+						reason: "selection_unavailable",
+						requestedModelOptionId: "model_alternate",
+						requestedModelDisplayName:
+							conversationConformanceModelIdV1("model_alternate"),
+					},
+				]);
+				expect(snapshot.fallbackAuditExecutionIds).toEqual([
+					accepted.result.executionId,
 				]);
 			} finally {
 				await harness.close();

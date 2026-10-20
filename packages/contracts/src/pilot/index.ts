@@ -1,6 +1,7 @@
 export * from "./agent-api-lifecycle.ts";
 export * from "./agent-application-manager.ts";
 export * from "./agent-default-relay-key.ts";
+export * from "./agent-detail.ts";
 export * from "./agent-user-manage-grants.ts";
 export * from "./agent-user-use-grants.ts";
 export * from "./application-api-credentials.ts";
@@ -24,6 +25,8 @@ export * from "./skill-hub-installation.ts";
 export * from "./skill-hub-project.ts";
 export * from "./skill-hub-publication.ts";
 export * from "./skill-hub-read.ts";
+export * from "./skill-hub-review.ts";
+export * from "./skill-hub-version-detail.ts";
 export * from "./sse.ts";
 export * from "./task.ts";
 export * from "./template-release.ts";

@@ -222,6 +222,54 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				}),
 			);
 		},
+		/**
+		 * Agent 详情的 Owner 当前状态（#2910，工程 Spec §9.1）。与会话校验使用同一组当前事实：
+		 * LDAP 中查不到为 departed；LDAP 停用或 Platform 禁用为 disabled；LDAP、禁用记录与
+		 * 目录快照都确认有效才是 active；其余（依赖失败、快照不可用、映射不一致）为 unavailable。
+		 * 每个 Owner 单独判定，一个 Owner 读不到不影响其他 Owner，也不让整个详情失败。
+		 */
+		async describeOwners(ids: readonly string[]) {
+			return Promise.all(
+				ids.map(async (id) => {
+					const unavailable = {
+						userId: id,
+						displayName: null,
+						status: "unavailable" as const,
+					};
+					let account: LdapAccount | null;
+					try {
+						account = await input.directory.currentByUserId(id);
+					} catch {
+						return unavailable;
+					}
+					if (!account)
+						return {
+							userId: id,
+							displayName: null,
+							status: "departed" as const,
+						};
+					if (account.userId !== id) return unavailable;
+					const displayName = account.displayName.trim() || null;
+					// LDAP 已确认停用时不再依赖其他来源。
+					if (account.accountStatus === "disabled")
+						return { userId: id, displayName, status: "disabled" as const };
+					try {
+						const identity = await current(account);
+						if (identity.userId !== id) return unavailable;
+						return {
+							userId: id,
+							displayName,
+							status:
+								identity.accountStatus === "active"
+									? ("active" as const)
+									: ("disabled" as const),
+						};
+					} catch {
+						return { ...unavailable, displayName };
+					}
+				}),
+			);
+		},
 		async resolveMaterialGrantActor(id: string) {
 			const account = await input.directory.currentByUserId(id);
 			if (!account) return null;

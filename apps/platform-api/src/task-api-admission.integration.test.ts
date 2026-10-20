@@ -187,6 +187,19 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 				[1, "task.status"],
 				[2, "model.selection.fell_back"],
 			]);
+			// 原选项从未出现在本 Agent 的已应用修订中：记录 ID，显示名为 null（G-07）。
+			expect(
+				before.events.find(
+					(event) => event.type === "model.selection.fell_back",
+				),
+			).toMatchObject({
+				schemaVersion: 2,
+				payload: {
+					reason: "selection_unavailable",
+					requestedModelOptionId: "removed-option",
+					requestedModelDisplayName: null,
+				},
+			});
 			expect((await cancel(task, kind, "cancel-continuation")).status).toBe(
 				202,
 			);
@@ -205,6 +218,96 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 			).toEqual(after);
 		},
 	);
+	it("freezes the trusted historical name on Task continuation without exposing the endpoint", async () => {
+		const initial = await submit("user");
+		expect((await cancel(initial, "user", "named-initial-cancel")).status).toBe(
+			202,
+		);
+		const historical = {
+			...configuration,
+			revision: configuration.revision - 1,
+			modelConfiguration: {
+				...configuration.modelConfiguration,
+				options: [
+					{
+						...configuration.modelConfiguration?.options[0],
+						optionId: "removed-option",
+						endpointId: "historical-endpoint",
+						modelId: "shared-model",
+					},
+				],
+			},
+		};
+		await sql`insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,created_at,configuration) values(${configuration.agentId},${historical.revision},'historical-model-fixture',now(),${sql.json(historical as unknown as postgres.JSONValue)})`;
+		await sql`update platform.conversations set selected_model_option_id = 'removed-option' where id = ${initial.conversationId}`;
+		let reads = 0;
+		let alias = "Trusted Task model";
+		const named = new PostgresConversationExecutionTransactionV1({
+			databaseUrl: database.databaseUrl,
+			userDirectory: directory,
+			readRequestedModelDisplayName: async (model) => {
+				reads += 1;
+				expect(model).toEqual({
+					endpointId: "historical-endpoint",
+					modelId: "shared-model",
+				});
+				return alias;
+			},
+		});
+		try {
+			const app = new Hono();
+			registerTaskRoutes(
+				app,
+				createTaskRoutesDependenciesV1({
+					transaction: named,
+					query,
+					policy: { maximumWaitingTasksPerAgent: 8, waitingTimeoutMs: 30_000 },
+				}),
+			);
+			const submitNamed = () =>
+				app.request(`/api/v1/agents/${configuration.agentId}/tasks`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${material.user}`,
+						"Content-Type": "application/json",
+						"Idempotency-Key": "named-continuation",
+					},
+					body: JSON.stringify({
+						schemaVersion: 1,
+						conversationId: initial.conversationId,
+						text: "controlled named continuation",
+					}),
+				});
+			const response = await submitNamed();
+			expect(response.status).toBe(202);
+			const task = (await response.json()) as Accepted;
+			const before = TaskProjectionV1Schema.parse(
+				await (await request(path(task), "user")).json(),
+			);
+			expect(
+				before.events.find(
+					(event) => event.type === "model.selection.fell_back",
+				),
+			).toMatchObject({
+				payload: {
+					requestedModelOptionId: "removed-option",
+					requestedModelDisplayName: alias,
+				},
+			});
+			expect(JSON.stringify(before)).not.toContain("historical-endpoint");
+			alias = "Later deployment name";
+			expect((await submitNamed()).status).toBe(202);
+			expect(
+				TaskProjectionV1Schema.parse(
+					await (await request(path(task), "user")).json(),
+				),
+			).toEqual(before);
+			expect(reads).toBe(1);
+		} finally {
+			await named.close();
+		}
+	});
+
 	it.each(["user", "application"] as const)(
 		"uses identical hidden HTTP results for %s missing/revoked Bearer and foreign legacy channel probes",
 		async (kind) => {

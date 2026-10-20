@@ -76,6 +76,7 @@ Compose 环境变量。选定 Docker context 必须能读取 API 配置、TLS �
 | `channelPolicy` | 明确绑定到 Agent 和主体的部署登记；未配置渠道时 `bindings: []` |
 | `resourceProfile` | 与 Worker 实际资源 Profile 一致的展示值 |
 | `multiServiceResourceProfiles`、`multiServiceResourceCap` | 可选的多服务档位与单 Agent 总量上限；与 Worker `workloadInput.policy` 同名字段取相同值，见[多服务 Agent 资源档位](../platform-api/README.md#多服务-agent-资源档位) |
+| `agentVersion` | 可选的 Skill 绑定 Agent Version；在 `.env` 设置 `AGENT_INFRA_AGENT_VERSION` 后，Compose 交给 API，`platform.sh` 交给 Worker，见[Skill 绑定的 Agent Version](../platform-api/README.md#skill-绑定的-agent-version) |
 
 身份部署负责 HttpOnly、Secure、SameSite 会话及其真实登录过程，符合
 [身份边界](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#91-identityadapter)。

@@ -37,6 +37,9 @@ export const publicOrigin = requiredEnv("PLATFORM_PUBLIC_ORIGIN");
 //   codexModelProfiles: [{ model: "<model>", reasoningLevels: ["medium", "high"] }]
 // Generate it offline with deploy/runtime/codex-model-profiles.mjs; see
 // deploy/platform-api/README.md. Missing profiles stop the API at startup.
+// Optional apiInput.agentVersion enables Skill binding. Read the same value the
+// Worker uses for skillMaterialization.agentVersion:
+//   agentVersion: process.env.AGENT_INFRA_AGENT_VERSION || undefined,
 export const apiInput = missing("apiInput");
 
 // Optional API → Worker model-directory transport. When provided, Platform
