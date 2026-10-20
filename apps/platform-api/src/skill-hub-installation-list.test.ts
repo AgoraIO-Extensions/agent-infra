@@ -1,6 +1,13 @@
 import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
-import { SkillHubInstallationPageV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	PlatformAuditProjectionV2Schema,
+	ScopedPlatformAuditPageV1Schema,
+	ScopedPlatformAuditPageV2Schema,
+	ScopedPlatformAuditProjectionV1Schema,
+	ScopedPlatformAuditProjectionV2Schema,
+	SkillHubInstallationPageV1Schema,
+} from "@agent-infra/contracts/pilot";
 import {
 	FakeObjectStorageV1,
 	packSkillProjectSnapshotV1,
@@ -70,6 +77,18 @@ const identity = {
 		async (request: Request): Promise<unknown | null> => currentUser(request),
 	),
 	hydrateUsers: async () => [],
+	resolveUser: async (userId: string) => {
+		const current = users[userId];
+		return current
+			? {
+					schemaVersion: 1 as const,
+					userId,
+					accountStatus: current.accountStatus,
+					organizationIds: current.organizationIds,
+					authorizationRevision: current.authorizationRevision,
+				}
+			: null;
+	},
 } satisfies IdentityAdapter;
 const snapshot = (userId: string) => {
 	const current = users[userId];
@@ -400,6 +419,99 @@ describe("Skill Hub installation list over HTTP with PostgreSQL (#2953)", () => 
 			name: "draft",
 			state: "revoked",
 		});
+	});
+
+	it("reads original anonymous Skill refusals in legacy V2 and scoped administrator audit", async () => {
+		const path = "/api/v2/skills/installations";
+		expect((await fetchAs(path, null)).status).toBe(401);
+		expect(
+			(
+				await fetchAs(path, "member-a", {
+					headers: { authorization: "Bearer platform-token" },
+				})
+			).status,
+		).toBe(401);
+		const originals =
+			await sql`select * from platform.audit_events where action = 'skill.version.refused' order by id`;
+		expect(originals).toHaveLength(2);
+		expect(
+			originals.every(
+				(row) => row.actor_type === "unknown" && row.actor_id === "anonymous",
+			),
+		).toBe(true);
+		for (const base of [
+			"/api/v2/admin/audit",
+			"/api/v3/admin/audit",
+			"/api/v4/admin/audit",
+		]) {
+			const pageSchema =
+				base === "/api/v2/admin/audit"
+					? ScopedPlatformAuditPageV1Schema.extend({
+							items: PlatformAuditProjectionV2Schema.array(),
+						})
+					: base === "/api/v3/admin/audit"
+						? ScopedPlatformAuditPageV1Schema
+						: ScopedPlatformAuditPageV2Schema;
+			const unfiltered = await fetchAs(`${base}?limit=100`, "admin");
+			expect(unfiltered.status, `${base} default`).toBe(200);
+			const unfilteredPage = pageSchema.parse(await unfiltered.json());
+			expect(
+				unfilteredPage.items
+					.filter((item: { auditId: string }) =>
+						originals.some((row) => row.id === item.auditId),
+					)
+					.map((item: { auditId: string }) => item.auditId)
+					.toSorted(),
+			).toEqual(originals.map((row) => row.id));
+			let cursor: string | null = null;
+			const ids: string[] = [];
+			do {
+				const response = await fetchAs(
+					`${base}?${new URLSearchParams({ limit: "1", ...(base === "/api/v2/admin/audit" ? {} : { action: "skill.version.refused" }), ...(cursor ? { cursor } : {}) })}`,
+					"admin",
+				);
+				expect(response.status, base).toBe(200);
+				const page = pageSchema.parse(await response.json());
+				expect(page.items).toHaveLength(1);
+				for (const item of page.items) {
+					expect(item.actor).toMatchObject({
+						kind: "unknown",
+						actorId: "unknown",
+					});
+					ids.push(item.auditId);
+				}
+				cursor = page.nextCursor;
+				expect(ids.length).toBeLessThanOrEqual(2);
+			} while (cursor);
+			expect(ids.toSorted()).toEqual(originals.map((row) => row.id));
+			if (base !== "/api/v2/admin/audit") {
+				const detailSchema =
+					base === "/api/v3/admin/audit"
+						? ScopedPlatformAuditProjectionV1Schema
+						: ScopedPlatformAuditProjectionV2Schema;
+				for (const row of originals) {
+					const response = await fetchAs(`${base}/${row.id}`, "admin");
+					expect(response.status, `${base} detail`).toBe(200);
+					expect(detailSchema.parse(await response.json()).actor).toMatchObject(
+						{
+							kind: "unknown",
+							actorId: "unknown",
+						},
+					);
+				}
+			}
+		}
+		for (const row of originals) {
+			expect(
+				(await fetchAs(`/api/v3/admin/audit/${row.id}`, "member-a")).status,
+			).toBe(404);
+			expect(
+				(await fetchAs(`/api/v2/audit/${row.id}`, "member-a")).status,
+			).toBe(404);
+		}
+		expect(
+			await sql`select * from platform.audit_events where id = any(${originals.map((row) => row.id)}::text[]) order by id`,
+		).toEqual(originals);
 	});
 
 	it("refuses unauthenticated, Bearer and malformed requests", async () => {
