@@ -9,6 +9,7 @@ function record(value: unknown): value is Record<string, unknown> {
 function invalid(): never {
 	throw new Error("RUNTIME_MODEL_STREAM_INVALID");
 }
+class CompleteStream extends Error {}
 async function write(
 	response: ServerResponse,
 	value: string,
@@ -238,7 +239,7 @@ export async function forwardClaudeMessages(
 					case "message_stop":
 						if (!delta || blocks.size) invalid();
 						terminal = 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
-						return;
+						throw new CompleteStream();
 					default:
 						invalid();
 				}
@@ -255,21 +256,37 @@ export async function forwardClaudeMessages(
 		},
 	});
 	const decoder = new TextDecoder("utf-8", { fatal: true });
+	let completed = false;
 	for await (const chunk of body) {
 		signal.throwIfAborted();
 		bytes += chunk.byteLength;
 		if (bytes > 67_108_864) invalid();
 		const decoded = decoder.decode(chunk, { stream: true });
 		ending = `${ending}${decoded}`.slice(-4);
-		parser.feed(decoded);
+		try {
+			parser.feed(decoded);
+		} catch (error) {
+			if (error instanceof CompleteStream) {
+				completed = true;
+				break;
+			}
+			throw error;
+		}
 		for (const encoded of queued) await write(response, encoded, signal);
 		queued = [];
 	}
-	parser.feed(decoder.decode());
-	if (ending.endsWith("\r")) parser.feed("\n");
-	if (!terminal || !ending.replace(/\r\n?/g, "\n").endsWith("\n\n")) invalid();
+	if (!completed) {
+		parser.feed(decoder.decode());
+		if (ending.endsWith("\r")) parser.feed("\n");
+	}
+	if (
+		!terminal ||
+		(!completed && !ending.replace(/\r\n?/g, "\n").endsWith("\n\n"))
+	)
+		invalid();
 	await verified(stopReason);
 	for (const encoded of [...queued, ...pending, terminal])
 		await write(response, encoded, signal);
 	response.end();
+	if (completed) await body.cancel().catch(() => {});
 }

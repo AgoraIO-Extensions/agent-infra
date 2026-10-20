@@ -56,7 +56,11 @@ it.each(["valid", "credential", "late-error", "incomplete"])(
 			fetch: async () =>
 				new Response(
 					scenario === "late-error"
-						? `${stream}event: error\ndata: {"type":"error","error":{"message":"synthetic-provider-error"}}\n\n`
+						? stream.replace(
+								'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+								'event: error\ndata: {"type":"error","error":{"message":"synthetic-provider-error"}}\n\n' +
+									'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+							)
 						: scenario === "incomplete"
 							? stream.slice(0, -1)
 							: stream,
@@ -95,6 +99,49 @@ it.each(["valid", "credential", "late-error", "incomplete"])(
 		}
 	},
 );
+
+it("completes when the provider keeps the HTTP stream open after message_stop", async () => {
+	const stream = messages(["O", "K"]);
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test",
+		credential: "synthetic-provider-credential",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {},
+		fetch: async () =>
+			new Response(
+				new ReadableStream({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode(stream));
+					},
+				}),
+				{ headers: { "content-type": "text/event-stream" } },
+			),
+	});
+	try {
+		const response = await fetch(
+			`${transport.modelAccess.endpoint}/v1/messages`,
+			{
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${transport.modelAccess.credential}`,
+				},
+				body: JSON.stringify({
+					model: "claude-opus-5",
+					output_config: { effort: "high" },
+					thinking: { type: "adaptive" },
+					stream: true,
+					messages: [],
+				}),
+			},
+		);
+		expect(await response.text()).toContain('"type":"message_stop"');
+		expect(transport.failure()).toBeUndefined();
+	} finally {
+		await transport.close();
+	}
+});
 
 it.each(["valid", "credential"])(
 	"checks the initial thinking signature together with its deltas: %s",
