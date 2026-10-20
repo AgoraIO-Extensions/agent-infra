@@ -27,6 +27,7 @@ import type {
 import {
 	RuntimeBusinessGrantClaimsV4Schema,
 	type RuntimeBusinessRequestV4,
+	RuntimeEventSchema,
 	RuntimeNativeCapabilityRequestV4Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	runtimeRequestSigningPayloadV4,
@@ -1189,6 +1190,57 @@ class TestCodexBridge {
 					item: { type: "agentMessage", id: itemId, text },
 				},
 			});
+		});
+	}
+
+	/** #2980：固定 0.153.0 schema 的思考过程增量帧。 */
+	emitReasoningDelta(
+		kind: "raw" | "summary",
+		delta: string,
+		{ itemId = "codex-native-reasoning-private", index = 0 } = {},
+	) {
+		return this.emitFrame({
+			method:
+				kind === "raw"
+					? "item/reasoning/textDelta"
+					: "item/reasoning/summaryTextDelta",
+			params: {
+				threadId: this.nativeThreadId,
+				turnId: this.nativeTurnId,
+				itemId,
+				delta,
+				[kind === "raw" ? "contentIndex" : "summaryIndex"]: index,
+			},
+		});
+	}
+
+	emitReasoningSummaryPartAdded(
+		summaryIndex: number,
+		itemId = "codex-native-reasoning-private",
+	) {
+		return this.emitFrame({
+			method: "item/reasoning/summaryPartAdded",
+			params: {
+				threadId: this.nativeThreadId,
+				turnId: this.nativeTurnId,
+				itemId,
+				summaryIndex,
+			},
+		});
+	}
+
+	emitReasoningCompleted(
+		parts: { summary?: unknown; content?: unknown },
+		itemId = "codex-native-reasoning-private",
+	) {
+		return this.emitFrame({
+			method: "item/completed",
+			params: {
+				threadId: this.nativeThreadId,
+				turnId: this.nativeTurnId,
+				completedAtMs: 1,
+				item: { type: "reasoning", id: itemId, ...parts },
+			},
 		});
 	}
 
@@ -8232,6 +8284,508 @@ describe("Codex Runtime Driver", () => {
 		});
 	});
 
+	describe("reasoning events (#2980)", () => {
+		async function reasoningTurn() {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(path, bridge);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+			const replay = () =>
+				driver.replayEvents(accepted.nativeSessionRef, command.executionId);
+			const reasoning = async () =>
+				(await replay()).flatMap((event) =>
+					event.type === "reasoning" ? [event.payload] : [],
+				);
+			const answer = async () =>
+				(await replay())
+					.flatMap((event) =>
+						event.type === "text" ? [event.payload.delta] : [],
+					)
+					.join("");
+			/** 占住持久写队列，让之后的提交排在它后面。 */
+			const holdWrites = () => {
+				const file = (driver as unknown as { file: DurableJsonFile<unknown> })
+					.file;
+				const release = Promise.withResolvers<void>();
+				const holding = file.update(() => release.promise);
+				return async () => {
+					release.resolve();
+					await holding;
+				};
+			};
+			return {
+				path,
+				bridge,
+				driver,
+				command,
+				accepted,
+				replay,
+				reasoning,
+				answer,
+				holdWrites,
+			};
+		}
+
+		it("emits raw and summary deltas as ordered reasoning events beside the answer", async () => {
+			const f = await reasoningTurn();
+			await f.bridge.emitReasoningSummaryPartAdded(0);
+			await f.bridge.emitReasoningDelta("summary", "Plan ");
+			await f.bridge.emitReasoningDelta("summary", "steps");
+			await f.bridge.emitReasoningDelta("raw", "think ");
+			// 与正文相同，空的原生增量不产生事件。
+			await f.bridge.emitReasoningDelta("raw", "");
+			await f.bridge.emitReasoningDelta("raw", "hard");
+			await f.bridge.emitAgentMessageDelta("answer");
+			await f.bridge.emitTurnCompleted("completed");
+			const events = await vi.waitFor(async () => {
+				const replayed = await f.replay();
+				expect(replayed.at(-1)?.type).toBe("completed");
+				return replayed;
+			});
+			expect(events.map((event) => [event.schemaVersion, event.type])).toEqual([
+				[1, "status"],
+				[2, "reasoning"],
+				[2, "reasoning"],
+				[2, "reasoning"],
+				[2, "reasoning"],
+				[1, "text"],
+				[1, "completed"],
+			]);
+			expect(await f.reasoning()).toEqual([
+				{ kind: "summary", delta: "Plan " },
+				{ kind: "summary", delta: "steps" },
+				{ kind: "raw", delta: "think " },
+				{ kind: "raw", delta: "hard" },
+			]);
+			expect(await f.answer()).toBe("answer");
+			for (const event of events)
+				expect(RuntimeEventSchema.safeParse(event).success).toBe(true);
+			expect(new Set(events.map((event) => event.cursor)).size).toBe(
+				events.length,
+			);
+			expect(JSON.stringify(events)).not.toContain(
+				"codex-native-reasoning-private",
+			);
+		});
+
+		it("starts each later part of the same kind as a new paragraph", async () => {
+			const f = await reasoningTurn();
+			await f.bridge.emitReasoningDelta("raw", "first ", { itemId: "rs-a" });
+			await f.bridge.emitReasoningDelta("raw", "item", { itemId: "rs-a" });
+			await f.bridge.emitReasoningDelta("summary", "Title", { itemId: "rs-b" });
+			await f.bridge.emitReasoningDelta("raw", "second item", {
+				itemId: "rs-b",
+			});
+			await f.bridge.emitReasoningSummaryPartAdded(1, "rs-b");
+			await f.bridge.emitReasoningDelta("summary", "Next", {
+				itemId: "rs-b",
+				index: 1,
+			});
+			await f.bridge.emitReasoningDelta("raw", " continues", {
+				itemId: "rs-b",
+			});
+			await f.bridge.emitReasoningDelta("raw", "next part", {
+				itemId: "rs-b",
+				index: 1,
+			});
+			const reasoning = await vi.waitFor(async () => {
+				const events = await f.reasoning();
+				expect(events).toHaveLength(7);
+				return events;
+			});
+			expect(reasoning).toEqual([
+				{ kind: "raw", delta: "first " },
+				{ kind: "raw", delta: "item" },
+				{ kind: "summary", delta: "Title" },
+				{ kind: "raw", delta: "\n\nsecond item" },
+				{ kind: "summary", delta: "\n\nNext" },
+				{ kind: "raw", delta: " continues" },
+				{ kind: "raw", delta: "\n\nnext part" },
+			]);
+		});
+
+		it("adds only the reasoning a completed item holds beyond its streamed deltas", async () => {
+			const f = await reasoningTurn();
+			await f.bridge.emitReasoningDelta("raw", "stre");
+			await f.bridge.emitReasoningCompleted({
+				summary: ["Short summary"],
+				content: ["streamed"],
+			});
+			// 重复的完成通知没有剩余内容可补。
+			await f.bridge.emitReasoningCompleted({
+				summary: ["Short summary"],
+				content: ["streamed"],
+			});
+			// 从未流式返回的后续 item 作为新段落；空分段不产生事件。
+			await f.bridge.emitReasoningCompleted(
+				{ content: ["", "unstreamed"] },
+				"rs-later",
+			);
+			await f.bridge.emitReasoningCompleted({}, "rs-empty");
+			await f.bridge.emitAgentMessageCompleted("answer");
+			await f.bridge.emitTurnCompleted("completed");
+			// Turn 结束后的完成通知不会重新打开 journal。
+			await f.bridge.emitReasoningCompleted({ content: ["late"] }, "rs-late");
+			await f.bridge.emitAgentMessageDelta("");
+			await vi.waitFor(async () =>
+				expect((await f.replay()).at(-1)?.type).toBe("completed"),
+			);
+			expect(await f.reasoning()).toEqual([
+				{ kind: "raw", delta: "stre" },
+				{ kind: "summary", delta: "Short summary" },
+				{ kind: "raw", delta: "amed" },
+				{ kind: "raw", delta: "\n\nunstreamed" },
+			]);
+			expect(await f.answer()).toBe("answer");
+			expect(f.bridge.isClosed()).toBe(false);
+		});
+
+		it("fails closed when a completed item contradicts its streamed reasoning", async () => {
+			const f = await reasoningTurn();
+			await f.bridge.emitAgentMessageDelta("kept ");
+			await f.bridge.emitReasoningDelta("raw", "streamed");
+			await f.bridge.emitReasoningCompleted({ content: ["different"] });
+			await vi.waitFor(() => expect(f.bridge.isClosed()).toBe(true));
+			expect(await f.reasoning()).toEqual([{ kind: "raw", delta: "streamed" }]);
+			expect(await f.answer()).toBe("kept ");
+		});
+
+		it("splits a delta beyond the platform bound at code points", async () => {
+			const f = await reasoningTurn();
+			// 65,537 个 UTF-8 字节，不能放进一条平台事件。
+			const delta = `${"😀".repeat(16_384)}x`;
+			await f.bridge.emitReasoningDelta("raw", delta);
+			// 后续分段的段落分隔也计入上限。
+			const later = "😀".repeat(16_384);
+			await f.bridge.emitReasoningDelta("raw", later, { itemId: "rs-later" });
+			const events = await vi.waitFor(async () => {
+				const reasoning = await f.reasoning();
+				expect(reasoning).toHaveLength(4);
+				return reasoning;
+			});
+			expect(events.map((event) => Buffer.byteLength(event.delta))).toEqual([
+				65_536, 1, 65_534, 4,
+			]);
+			expect(events.every((event) => event.delta.isWellFormed())).toBe(true);
+			expect(events.map((event) => event.delta).join("")).toBe(
+				`${delta}\n\n${later}`,
+			);
+			// 完成通知把拆分后的增量当作完整的原生分段核对，结果一致。
+			await f.bridge.emitReasoningCompleted({ content: [delta] });
+			await f.bridge.emitReasoningCompleted({ content: [later] }, "rs-later");
+			await f.bridge.emitTurnCompleted("completed");
+			await vi.waitFor(async () =>
+				expect((await f.replay()).at(-1)?.type).toBe("completed"),
+			);
+			expect(await f.reasoning()).toHaveLength(4);
+			expect(f.bridge.isClosed()).toBe(false);
+		});
+
+		const ids = { threadId: "codex-native-thread-private" };
+		const turn = { ...ids, turnId: "codex-native-turn-private" };
+		const item = { ...turn, itemId: "codex-native-reasoning-private" };
+		it.each<[string, CodexAppServerFrame]>([
+			[
+				"an encrypted field",
+				{
+					method: "item/reasoning/textDelta",
+					params: {
+						...item,
+						delta: "x",
+						contentIndex: 0,
+						encrypted_content: "opaque",
+					},
+				},
+			],
+			[
+				"no part index",
+				{ method: "item/reasoning/textDelta", params: { ...item, delta: "x" } },
+			],
+			[
+				"a negative part index",
+				{
+					method: "item/reasoning/textDelta",
+					params: { ...item, delta: "x", contentIndex: -1 },
+				},
+			],
+			[
+				// schema 校验不依赖该 Turn 是否属于本会话。
+				"a negative part index on another thread",
+				{
+					method: "item/reasoning/textDelta",
+					params: {
+						...item,
+						threadId: "codex-native-thread-other",
+						delta: "x",
+						contentIndex: -1,
+					},
+				},
+			],
+			[
+				"a fractional part index",
+				{
+					method: "item/reasoning/summaryTextDelta",
+					params: { ...item, delta: "x", summaryIndex: 0.5 },
+				},
+			],
+			[
+				"the other kind's part index",
+				{
+					method: "item/reasoning/summaryTextDelta",
+					params: { ...item, delta: "x", contentIndex: 0 },
+				},
+			],
+			[
+				"a structured delta",
+				{
+					method: "item/reasoning/textDelta",
+					params: { ...item, delta: { text: "x" }, contentIndex: 0 },
+				},
+			],
+			[
+				"ill-formed text",
+				{
+					method: "item/reasoning/textDelta",
+					params: { ...item, delta: "\ud800", contentIndex: 0 },
+				},
+			],
+			[
+				"no item",
+				{
+					method: "item/reasoning/textDelta",
+					params: { ...turn, delta: "x", contentIndex: 0 },
+				},
+			],
+			[
+				"an extra summary part field",
+				{
+					method: "item/reasoning/summaryPartAdded",
+					params: { ...item, summaryIndex: 0, delta: "x" },
+				},
+			],
+			[
+				"an encrypted completed item",
+				{
+					method: "item/completed",
+					params: {
+						...turn,
+						completedAtMs: 1,
+						item: {
+							type: "reasoning",
+							id: "rs-encrypted",
+							summary: [],
+							content: ["x"],
+							encrypted_content: "opaque",
+						},
+					},
+				},
+			],
+			[
+				"a structured completed part",
+				{
+					method: "item/completed",
+					params: {
+						...turn,
+						completedAtMs: 1,
+						item: {
+							type: "reasoning",
+							id: "rs-structured",
+							content: [{ type: "reasoning_text", text: "x" }],
+						},
+					},
+				},
+			],
+		])(
+			"fails closed for reasoning with %s and keeps the answer",
+			async (_name, frame) => {
+				const f = await reasoningTurn();
+				await f.bridge.emitAgentMessageDelta("kept");
+				await vi.waitFor(async () => expect(await f.answer()).toBe("kept"));
+				await f.bridge.emitFrame(frame);
+				await vi.waitFor(() => expect(f.bridge.isClosed()).toBe(true));
+				expect(await f.reasoning()).toEqual([]);
+				expect(await f.answer()).toBe("kept");
+			},
+		);
+
+		it("commits reasoning and text received during a write together, in order (#1637)", async () => {
+			const f = await reasoningTurn();
+			const release = f.holdWrites();
+			const updates = vi.spyOn(DurableJsonFile.prototype, "update");
+			await f.bridge.emitReasoningDelta("raw", "r1 ");
+			await f.bridge.emitAgentMessageDelta("t1 ");
+			await f.bridge.emitReasoningDelta("summary", "s1");
+			await f.bridge.emitReasoningDelta("raw", "r2");
+			await f.bridge.emitAgentMessageDelta("t2");
+			// 提交之前不可回放。
+			expect(await f.reasoning()).toEqual([]);
+			await release();
+			const events = await vi.waitFor(async () => {
+				const replayed = (await f.replay()).filter(
+					(event) => event.type === "reasoning" || event.type === "text",
+				);
+				expect(replayed).toHaveLength(5);
+				return replayed;
+			});
+			expect(events.map((event) => event.payload)).toEqual([
+				{ kind: "raw", delta: "r1 " },
+				{ delta: "t1 " },
+				{ kind: "summary", delta: "s1" },
+				{ kind: "raw", delta: "r2" },
+				{ delta: "t2" },
+			]);
+			// 五个原生事件由同一次持久写提交。
+			expect(updates).toHaveBeenCalledTimes(1);
+		});
+
+		it("holds at most 512 uncommitted deltas, reasoning included (#1637)", async () => {
+			const f = await reasoningTurn();
+			const release = f.holdWrites();
+			for (let index = 0; index < 512; index++) {
+				if (index % 2 === 0)
+					await f.bridge.emitReasoningDelta("raw", `r${index} `);
+				else await f.bridge.emitAgentMessageDelta(`t${index} `);
+			}
+			// 第 512 条增量让读取循环等待批次提交，写队列被占住时不会读取下一帧。
+			let read = false;
+			const next = f.bridge
+				.emitReasoningDelta("raw", "after")
+				.then(() => (read = true));
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(read).toBe(false);
+			await release();
+			await next;
+			const deltas = await vi.waitFor(async () => {
+				const replayed = (await f.replay()).flatMap((event) =>
+					event.type === "reasoning" || event.type === "text"
+						? [event.payload.delta]
+						: [],
+				);
+				expect(replayed).toHaveLength(513);
+				return replayed;
+			});
+			expect(deltas.slice(0, 3)).toEqual(["r0 ", "t1 ", "r2 "]);
+			expect(deltas.at(-1)).toBe("after");
+		});
+
+		it("fails the native process and exposes no reasoning when its batch cannot be persisted", async () => {
+			const f = await reasoningTurn();
+			// 两条增量都进入批次之后，批次写入才失败。
+			const fail = Promise.withResolvers<void>();
+			vi.spyOn(DurableJsonFile.prototype, "update").mockImplementationOnce(() =>
+				fail.promise.then(() => {
+					throw new Error("synthetic persistence failure");
+				}),
+			);
+			await f.bridge.emitReasoningDelta("raw", "lost ");
+			await f.bridge.emitAgentMessageDelta("batch");
+			fail.resolve();
+			await vi.waitFor(() => expect(f.bridge.isClosed()).toBe(true));
+			expect(await f.reasoning()).toEqual([]);
+			expect(await f.answer()).toBe("");
+		});
+
+		it("restarts from the committed journal with the same reasoning events", async () => {
+			const f = await reasoningTurn();
+			await f.bridge.emitReasoningDelta("raw", "first", { itemId: "rs-a" });
+			await f.bridge.emitReasoningDelta("raw", "second", { itemId: "rs-b" });
+			await f.bridge.emitAgentMessageDelta("answer");
+			const committed = await vi.waitFor(async () => {
+				const events = (await f.replay()).filter(
+					(event) => event.type !== "status",
+				);
+				expect(events).toHaveLength(3);
+				return events;
+			});
+			const restartedPath = join(dirname(f.path), "restarted.json");
+			await copyFile(f.path, restartedPath);
+			const restarted = await openDriver(restartedPath, new TestCodexBridge());
+			drivers.push(restarted);
+			const replayed = (
+				await restarted.replayEvents(
+					f.accepted.nativeSessionRef,
+					f.command.executionId,
+				)
+			).filter((event) => event.type !== "status");
+			expect(replayed).toEqual(committed);
+			expect(replayed.map((event) => event.payload)).toEqual([
+				{ kind: "raw", delta: "first" },
+				{ kind: "raw", delta: "\n\nsecond" },
+				{ delta: "answer" },
+			]);
+		});
+
+		it.each<[string, (events: Record<string, unknown>[]) => void]>([
+			[
+				"a paragraph mark without its break",
+				(events) => {
+					if (events[0]) events[0].separated = true;
+				},
+			],
+			[
+				"a paragraph mark without native text",
+				(events) => {
+					if (events[1]) events[1].payload = { kind: "raw", delta: "\n\n" };
+				},
+			],
+			[
+				"an unknown kind",
+				(events) => {
+					if (events[0]) events[0].payload = { kind: "encrypted", delta: "x" };
+				},
+			],
+			[
+				"an encrypted field",
+				(events) => {
+					if (events[0]) events[0].encrypted_content = "opaque";
+				},
+			],
+			[
+				"a negative part index",
+				(events) => {
+					if (events[0]) events[0].nativePartIndex = -1;
+				},
+			],
+			[
+				"no native item",
+				(events) => {
+					delete events[0]?.nativeItemId;
+				},
+			],
+		])("refuses a durable reasoning event with %s", async (_name, tamper) => {
+			const f = await reasoningTurn();
+			await f.bridge.emitReasoningDelta("raw", "first", { itemId: "rs-a" });
+			await f.bridge.emitReasoningDelta("raw", "second", { itemId: "rs-b" });
+			await vi.waitFor(async () => expect(await f.reasoning()).toHaveLength(2));
+			await f.driver.close();
+			const state = JSON.parse(await readFile(f.path, "utf8")) as {
+				sessions: Record<
+					string,
+					{
+						journals?: Record<string, { events: Record<string, unknown>[] }>;
+					}
+				>;
+			};
+			const journal = Object.values(state.sessions)[0]?.journals?.[
+				f.bridge.nativeTurnId
+			];
+			const events = (journal?.events ?? []).filter(
+				(event) => event.type === "reasoning",
+			);
+			expect(events).toHaveLength(2);
+			tamper(events);
+			await writeFile(f.path, JSON.stringify(state));
+			const resumedBridge = new TestCodexBridge();
+			await expect(openDriver(f.path, resumedBridge)).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_STATE_INVALID",
+			});
+			expect(resumedBridge.requests).toEqual([]);
+		});
+	});
+
 	describe("finished Turn journal archive (#1705)", () => {
 		type Driver = Awaited<ReturnType<typeof openDriver>>;
 		interface FinishedTurn {
@@ -14196,6 +14750,30 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 			f.bridge.requests.some((r) => r.method === "skills/extraRoots/set"),
 		).toBe(false);
 	});
+
+	// #2980：官方 lane 始终请求明文推理摘要。
+	it.each([
+		["a missing", undefined, true],
+		["a null", null, true],
+		["a disabled", "none", true],
+		["a different", "detailed", true],
+		["an origin-less", "auto", false],
+	])(
+		"rejects %s reasoning summary setting before any Skill call",
+		async (_name, value, sessionFlag) => {
+			const f = await skillDiscoveryFixture((_bridge, config) => {
+				if (value === undefined) delete config.config.model_reasoning_summary;
+				else config.config.model_reasoning_summary = value;
+				if (!sessionFlag) delete config.origins.model_reasoning_summary;
+			});
+			await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject(
+				{ code: "RUNTIME_CODEX_CONFIGURATION_INVALID" },
+			);
+			expect(
+				f.bridge.requests.some((r) => r.method.startsWith("skills/")),
+			).toBe(false);
+		},
+	);
 
 	it.each([
 		"missing",

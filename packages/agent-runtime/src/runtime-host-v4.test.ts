@@ -24,6 +24,7 @@ import {
 import { afterEach, expect, it, vi } from "vitest";
 import type {
 	RuntimeBrowserExecutionContextV1,
+	RuntimeDriver,
 	RuntimeExternalActionAuthorization,
 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
@@ -1298,6 +1299,42 @@ it("grows a replay page past eight events only within the Worker's byte bound (#
 	expect(grown.body).toBeLessThanOrEqual(maximumRuntimeEventReplayPageBytesV4);
 	// Eight events larger than the bound still form a page, as before #1637.
 	expect((await pageLength(160 * 1024)).length).toBe(8);
+});
+
+it("pages reasoning events within the same event and byte bounds (#2980)", async () => {
+	const f = await setup();
+	const accepted = await f.host.submitTurnV4(f.transport);
+	const reasoning = (count: number, bytes: number) =>
+		pageEvents(1, count).map((item) => ({
+			...item,
+			schemaVersion: 2 as const,
+			type: "reasoning" as const,
+			payload: { kind: "raw" as const, delta: "x".repeat(bytes) },
+		}));
+	// #2980：Host 通过接口读取 Driver，接口的事件类型包含 V2。
+	const replayed = vi.spyOn(f.driver as RuntimeDriver, "replayEvents");
+	Object.assign(f.driver, { acknowledgeEvents: vi.fn(async () => undefined) });
+	const page = async (events: ReturnType<typeof reasoning>) => {
+		replayed.mockResolvedValueOnce(events);
+		const read = await event(
+			f.transport.businessRequest,
+			accepted.hostSessionRef,
+		);
+		const replay = await f.host.readEventsV4(
+			RuntimeEventReadRequestV4Schema.parse(read.request),
+			read.verification,
+		);
+		return replay.events;
+	};
+	// 17 条 60 KiB 的思考增量在 1 MiB 上限内，第 18 条会超出。
+	const large = await page(reasoning(20, 60 * 1024));
+	expect(large).toHaveLength(17);
+	expect(large.every((item) => item.type === "reasoning")).toBe(true);
+	expect(
+		Buffer.byteLength(large.map((item) => JSON.stringify(item)).join(",")),
+	).toBeLessThanOrEqual(maximumRuntimeEventReplayPageBytesV4);
+	// 小的思考增量仍然每页最多 64 条。
+	expect(await page(reasoning(100, 8))).toHaveLength(64);
 });
 
 it("drains a long reply in full pages with the Worker's batched ACKs (#1637)", async () => {

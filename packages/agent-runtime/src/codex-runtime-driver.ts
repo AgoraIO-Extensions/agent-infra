@@ -646,6 +646,25 @@ interface CodexJournalTextEvent {
 	payload: { delta: string };
 }
 
+/** #2980：模型以明文流式返回的思考过程，原始推理或推理摘要。 */
+type CodexReasoningKind = "raw" | "summary";
+
+/**
+ * #2980：一条思考过程增量。`payload` 与 Runtime 事件的 payload 完全一致；
+ * 原生 item 与分段序号用于按 `item/completed` 补齐尾部。同一 kind 的后续分段
+ * 以段落分隔开头，并用 `separated` 标明，平台据此按段落展示。
+ */
+interface CodexJournalReasoningEvent {
+	cursor: string;
+	adapterEventKey: string;
+	occurredAt: string;
+	nativeItemId: string;
+	nativePartIndex: number;
+	separated?: true;
+	type: "reasoning";
+	payload: { kind: CodexReasoningKind; delta: string };
+}
+
 interface CodexJournalFileEvent {
 	cursor: string;
 	adapterEventKey: string;
@@ -678,6 +697,7 @@ interface CodexJournalOperationEvent {
 type CodexJournalEvent =
 	| CodexJournalStatusEvent
 	| CodexJournalTextEvent
+	| CodexJournalReasoningEvent
 	| CodexJournalFileEvent
 	| CodexJournalOperationEvent
 	| CodexJournalCompletedEvent;
@@ -883,17 +903,21 @@ interface PendingRequest {
 
 type CodexNotificationHandler = (frame: CodexAppServerFrame) => Promise<void>;
 
+/** 等待随批次写入 journal 的原生流式增量。 */
+type CodexStreamedDelta =
+	| NonNullable<ReturnType<typeof agentMessageDeltaNotification>>
+	| NonNullable<ReturnType<typeof reasoningDeltaNotification>>;
+
 /**
  * Agent message deltas a native RPC delivered while an earlier batch was being
  * persisted (#1637). They are committed together, in arrival order and each as
  * its own journal event, so the read loop never waits for one fsync per delta.
+ * #2980：思考过程增量与正文增量共用同一批次与到达顺序。
  */
 interface CodexTextDeltaBatch {
 	readonly pending: {
 		readonly conversationKey: string | undefined;
-		readonly delta: NonNullable<
-			ReturnType<typeof agentMessageDeltaNotification>
-		>;
+		readonly delta: CodexStreamedDelta;
 		/** When the delta arrived; its event keeps this time, not the commit's. */
 		readonly receivedAt: string;
 	}[];
@@ -912,6 +936,11 @@ const maximumPendingTextDeltas = 512;
  * and leaves room for Host event reads; the first delta still commits at once.
  */
 const textDeltaFlushIntervalMs = 100;
+
+/** #2980：同一 kind 的后续分段之前插入的段落分隔。 */
+const reasoningPartSeparator = "\n\n";
+/** #2980：一条思考过程事件的 UTF-8 字节上限，与平台对单条增量的上限一致。 */
+const maximumReasoningEventBytes = 65_536;
 
 /** The first delta of a batch that could not be appended, and why. */
 class TextDeltaFailure extends Error {
@@ -1322,6 +1351,45 @@ function nonEmptyString(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0;
 }
 
+/** #2980：原生 content 或 summary 分段序号（固定 schema 中为 int64）。 */
+function isNativePartIndex(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** #2980：思考过程事件记录的原生文本，不含 Driver 插入的段落分隔。 */
+function nativeReasoningText(event: CodexJournalReasoningEvent) {
+	return event.separated
+		? event.payload.delta.slice(reasoningPartSeparator.length)
+		: event.payload.delta;
+}
+
+/**
+ * #2980：把 well-formed 文本按码点边界切成不超过平台单条字节上限的片段。
+ * 流式增量通常只有几个字节，几乎都保持为一段。
+ */
+function reasoningEventChunks(text: string) {
+	// 每个 UTF-16 码元最多编码为 3 个 UTF-8 字节。
+	if (text.length * 3 <= maximumReasoningEventBytes) return [text];
+	const chunks: string[] = [];
+	let start = 0;
+	let bytes = 0;
+	for (let index = 0; index < text.length; ) {
+		const codePoint = text.codePointAt(index) ?? 0;
+		const units = codePoint > 0xffff ? 2 : 1;
+		const size =
+			codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint > 0xffff ? 4 : 3;
+		if (bytes + size > maximumReasoningEventBytes) {
+			chunks.push(text.slice(start, index));
+			start = index;
+			bytes = 0;
+		}
+		bytes += size;
+		index += units;
+	}
+	chunks.push(text.slice(start));
+	return chunks;
+}
+
 function ownRecordValue<T>(record: Record<string, T>, key: string) {
 	return Object.hasOwn(record, key) ? record[key] : undefined;
 }
@@ -1480,6 +1548,35 @@ function isCodexJournalEvent(value: unknown): value is CodexJournalEvent {
 		isPlainRecord(value.payload) &&
 		hasOnlyKeys(value.payload, ["delta"]) &&
 		nonEmptyString(value.payload.delta)
+	) {
+		return true;
+	}
+	if (
+		isPlainRecord(value) &&
+		hasOnlyKeys(value, [
+			"cursor",
+			"adapterEventKey",
+			"occurredAt",
+			"nativeItemId",
+			"nativePartIndex",
+			"separated",
+			"type",
+			"payload",
+		]) &&
+		nonEmptyString(value.cursor) &&
+		nonEmptyString(value.adapterEventKey) &&
+		nonEmptyString(value.occurredAt) &&
+		nonEmptyString(value.nativeItemId) &&
+		isNativePartIndex(value.nativePartIndex) &&
+		value.type === "reasoning" &&
+		isPlainRecord(value.payload) &&
+		hasOnlyKeys(value.payload, ["kind", "delta"]) &&
+		(value.payload.kind === "raw" || value.payload.kind === "summary") &&
+		nonEmptyString(value.payload.delta) &&
+		(value.separated === undefined ||
+			(value.separated === true &&
+				value.payload.delta.startsWith(reasoningPartSeparator) &&
+				value.payload.delta.length > reasoningPartSeparator.length))
 	) {
 		return true;
 	}
@@ -3488,11 +3585,72 @@ function agentMessageDeltaNotification(frame: CodexAppServerFrame) {
 		protocolInvalid();
 	}
 	return {
+		type: "text" as const,
 		threadId: params.threadId,
 		nativeTurnId: params.turnId,
 		nativeItemId: params.itemId,
 		delta: params.delta,
 	};
+}
+
+/**
+ * #2980：原始推理（`item/reasoning/textDelta`）与推理摘要
+ * （`item/reasoning/summaryTextDelta`）增量，字段与固定 app-server schema 完全一致。
+ * 它们只携带模型流式返回的明文；加密推理不会出现在这些通知里。
+ */
+function reasoningDeltaNotification(frame: CodexAppServerFrame) {
+	const kind: CodexReasoningKind | undefined =
+		frame.method === "item/reasoning/textDelta"
+			? "raw"
+			: frame.method === "item/reasoning/summaryTextDelta"
+				? "summary"
+				: undefined;
+	if (!kind) return undefined;
+	const partKey = kind === "raw" ? "contentIndex" : "summaryIndex";
+	const params = frame.params;
+	if (!isPlainRecord(params)) protocolInvalid();
+	const nativePartIndex = params[partKey];
+	if (
+		!hasOnlyKeys(params, ["threadId", "turnId", "itemId", "delta", partKey]) ||
+		!nonEmptyString(params.threadId) ||
+		!nonEmptyString(params.turnId) ||
+		!nonEmptyString(params.itemId) ||
+		typeof params.delta !== "string" ||
+		// 按码点拆分需要 well-formed 文本；原生进程只会发出这种文本。
+		!params.delta.isWellFormed() ||
+		!isNativePartIndex(nativePartIndex)
+	) {
+		protocolInvalid();
+	}
+	return {
+		type: "reasoning" as const,
+		kind,
+		nativePartIndex,
+		threadId: params.threadId,
+		nativeTurnId: params.turnId,
+		nativeItemId: params.itemId,
+		delta: params.delta,
+	};
+}
+
+/**
+ * #2980：新的摘要分段不携带文本，由下一条增量的序号开始该分段；
+ * 通知本身仍按固定 schema 校验。
+ */
+function isReasoningSummaryPartAddedNotification(frame: CodexAppServerFrame) {
+	if (frame.method !== "item/reasoning/summaryPartAdded") return false;
+	const params = frame.params;
+	if (
+		!isPlainRecord(params) ||
+		!hasOnlyKeys(params, ["threadId", "turnId", "itemId", "summaryIndex"]) ||
+		!nonEmptyString(params.threadId) ||
+		!nonEmptyString(params.turnId) ||
+		!nonEmptyString(params.itemId) ||
+		!isNativePartIndex(params.summaryIndex)
+	) {
+		protocolInvalid();
+	}
+	return true;
 }
 
 function agentMessageCompletedNotification(frame: CodexAppServerFrame) {
@@ -3508,6 +3666,7 @@ function agentMessageCompletedNotification(frame: CodexAppServerFrame) {
 	}
 	// Only the agent message carries replayable text; other item types stay
 	// opaque to the platform.
+	// #2980：reasoning item 由 reasoningCompletedNotification 单独解析。
 	if (params.item.type !== "agentMessage") return undefined;
 	if (!nonEmptyString(params.item.id) || typeof params.item.text !== "string") {
 		protocolInvalid();
@@ -3517,6 +3676,53 @@ function agentMessageCompletedNotification(frame: CodexAppServerFrame) {
 		nativeTurnId: params.turnId,
 		nativeItemId: params.item.id,
 		text: params.item.text,
+	};
+}
+
+/**
+ * #2980：已完成 reasoning item 中的明文摘要分段与原始推理分段（固定 schema 中均为字符串）。
+ * 该 item 不含加密推理；出现 schema 之外的字段时 fail closed。
+ */
+function reasoningCompletedNotification(frame: CodexAppServerFrame) {
+	if (frame.method !== "item/completed") return undefined;
+	const params = frame.params;
+	if (
+		!isPlainRecord(params) ||
+		!nonEmptyString(params.threadId) ||
+		!nonEmptyString(params.turnId) ||
+		!isPlainRecord(params.item)
+	) {
+		protocolInvalid();
+	}
+	const item = params.item;
+	if (item.type !== "reasoning") return undefined;
+	if (
+		!hasOnlyKeys(item, ["type", "id", "summary", "content"]) ||
+		!nonEmptyString(item.id)
+	) {
+		protocolInvalid();
+	}
+	const parts = (kind: CodexReasoningKind, value: unknown) => {
+		if (value === undefined) return [];
+		if (
+			!Array.isArray(value) ||
+			!value.every(
+				(part): part is string =>
+					typeof part === "string" && part.isWellFormed(),
+			)
+		)
+			protocolInvalid();
+		return value.map((text: string, nativePartIndex) => ({
+			kind,
+			nativePartIndex,
+			text,
+		}));
+	};
+	return {
+		threadId: params.threadId,
+		nativeTurnId: params.turnId,
+		nativeItemId: item.id,
+		parts: [...parts("summary", item.summary), ...parts("raw", item.content)],
 	};
 }
 
@@ -10878,12 +11084,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		conversationKey: string | undefined,
 		textDeltas: CodexTextDeltaBatch,
 	) {
-		const delta = agentMessageDeltaNotification(frame);
+		const delta =
+			agentMessageDeltaNotification(frame) ?? reasoningDeltaNotification(frame);
 		if (delta) {
 			if (delta.delta.length > 0)
 				await this.bufferTextDelta(textDeltas, conversationKey, delta);
 			return;
 		}
+		// #2980：摘要分段边界不产生事件，因此不必等待此前的增量提交。
+		if (isReasoningSummaryPartAddedNotification(frame)) return;
 		// Every other notification orders after the deltas received before it.
 		await this.drainTextDeltas(textDeltas);
 		if (frame.method === "skills/changed") {
@@ -11086,6 +11295,54 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (messageStreamKey) this.notifyEventStream(messageStreamKey);
 			return;
 		}
+
+		const reasoning = reasoningCompletedNotification(frame);
+		if (reasoning) {
+			// #2980：与 agent message 相同，已完成的 item 补上传输没有流式返回的
+			// 明文思考过程；已流式的分段只追加增量之后的剩余部分。
+			const reasoningStreamKey = await this.update((state) => {
+				const resolved = this.resolveNotificationJournal(
+					state,
+					conversationKey,
+					reasoning.threadId,
+					reasoning.nativeTurnId,
+				);
+				if (!resolved) return;
+				if (resolved.journal.events.some((event) => event.type === "completed"))
+					return;
+				let appended = false;
+				for (const part of reasoning.parts) {
+					const emitted = resolved.journal.events
+						.filter(
+							(event): event is CodexJournalReasoningEvent =>
+								event.type === "reasoning" &&
+								event.nativeItemId === reasoning.nativeItemId &&
+								event.nativePartIndex === part.nativePartIndex &&
+								event.payload.kind === part.kind,
+						)
+						.map(nativeReasoningText)
+						.join("");
+					if (!part.text.startsWith(emitted)) protocolInvalid();
+					const delta = part.text.slice(emitted.length);
+					if (delta.length === 0) continue;
+					this.appendReasoningEvents(resolved.session, resolved.journal, {
+						kind: part.kind,
+						nativeItemId: reasoning.nativeItemId,
+						nativePartIndex: part.nativePartIndex,
+						delta,
+					});
+					appended = true;
+				}
+				return appended && resolved.execution
+					? this.eventStreamKey(
+							resolved.nativeSessionRef,
+							resolved.execution.executionId,
+						)
+					: undefined;
+			});
+			if (reasoningStreamKey) this.notifyEventStream(reasoningStreamKey);
+			return;
+		}
 	}
 
 	/**
@@ -11096,7 +11353,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async bufferTextDelta(
 		batch: CodexTextDeltaBatch,
 		conversationKey: string | undefined,
-		delta: NonNullable<ReturnType<typeof agentMessageDeltaNotification>>,
+		delta: CodexStreamedDelta,
 	) {
 		if (batch.failure !== undefined) throw batch.failure;
 		batch.pending.push({
@@ -11180,13 +11437,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				);
 				if (!resolved) continue;
 				this.assertJournalOpen(resolved.journal);
-				this.appendTextEvent(
-					resolved.session,
-					resolved.journal,
-					delta.nativeItemId,
-					delta.delta,
-					receivedAt,
-				);
+				if (delta.type === "reasoning")
+					this.appendReasoningEvents(
+						resolved.session,
+						resolved.journal,
+						delta,
+						receivedAt,
+					);
+				else
+					this.appendTextEvent(
+						resolved.session,
+						resolved.journal,
+						delta.nativeItemId,
+						delta.delta,
+						receivedAt,
+					);
 				if (resolved.execution)
 					streamKeys.add(
 						this.eventStreamKey(
@@ -11408,6 +11673,54 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		journal.events.push(event);
 	}
 
+	/**
+	 * #2980：记录一条原生思考过程增量。开始同一 kind 后续分段的增量以段落分隔开头；
+	 * 超过平台单条字节上限的增量按码点拆成多个事件。
+	 */
+	private appendReasoningEvents(
+		session: CodexSession,
+		journal: CodexEventJournal,
+		delta: {
+			readonly kind: CodexReasoningKind;
+			readonly nativeItemId: string;
+			readonly nativePartIndex: number;
+			readonly delta: string;
+		},
+		occurredAt = new Date().toISOString(),
+	) {
+		this.assertJournalOpen(journal);
+		// 同一分段的增量连续到达，同 kind 的最新思考事件就在末尾附近，回扫很短。
+		let previous: CodexJournalReasoningEvent | undefined;
+		for (let index = journal.events.length - 1; index >= 0; index--) {
+			const event = journal.events[index];
+			if (event?.type === "reasoning" && event.payload.kind === delta.kind) {
+				previous = event;
+				break;
+			}
+		}
+		const separated =
+			previous !== undefined &&
+			(previous.nativeItemId !== delta.nativeItemId ||
+				previous.nativePartIndex !== delta.nativePartIndex);
+		const chunks = reasoningEventChunks(
+			separated ? `${reasoningPartSeparator}${delta.delta}` : delta.delta,
+		);
+		for (const [index, chunk] of chunks.entries()) {
+			const { cursor, adapterEventKey } = this.nextEventIdentity(session);
+			const event: CodexJournalReasoningEvent = {
+				cursor,
+				adapterEventKey,
+				occurredAt,
+				nativeItemId: delta.nativeItemId,
+				nativePartIndex: delta.nativePartIndex,
+				...(separated && index === 0 ? { separated: true as const } : {}),
+				type: "reasoning",
+				payload: { kind: delta.kind, delta: chunk },
+			};
+			journal.events.push(event);
+		}
+	}
+
 	private appendFileEvent(
 		session: CodexSession,
 		journal: CodexEventJournal,
@@ -11513,6 +11826,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		if (event.type === "text") {
 			return { ...base, type: "text" as const, payload: event.payload };
+		}
+		if (event.type === "reasoning") {
+			return {
+				...base,
+				schemaVersion: 2 as const,
+				type: "reasoning" as const,
+				payload: event.payload,
+			};
 		}
 		if (event.type === "file") {
 			return { ...base, type: "file" as const, payload: event.payload };
