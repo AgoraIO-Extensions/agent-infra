@@ -589,6 +589,7 @@ jobs:
           timeout --signal=TERM --kill-after=5s 60s docker run --rm --pull=never --interactive \
             --name "$static_container" --network=none --read-only \
             --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,size=16m,mode=1777 \
+            --add-host agent-infra-api:127.0.0.1 \
             --env PLATFORM_PROXY_TOKEN=synthetic-ci-proxy-token \
             --entrypoint /bin/sh "$web_image" -se <<'WEB_SMOKE' 2>&1 | tee "$evidence/static.log"
               test "$(id -u)" -ne 0
