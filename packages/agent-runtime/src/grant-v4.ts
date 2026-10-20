@@ -3,20 +3,27 @@ import { TextDecoder } from "node:util";
 
 import {
 	RuntimeExecutionGrantV4Schema,
+	RuntimeExecutionGrantV5Schema,
 	RuntimeNativeCapabilityRequestV4Schema,
+	RuntimeNativeCapabilityRequestV5Schema,
 	RuntimeNativeCapabilityTransportV4Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
+	RuntimeRestoreExecutionKeyGrantClaimsV5Schema,
 	RuntimeRestoreExecutionKeyRequestV4Schema,
+	RuntimeRestoreExecutionKeyRequestV5Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV4Schema,
 	RuntimeSupplementTransportV4Schema,
 	VerifiedRuntimeExecutionGrantV4Schema,
 	validateRuntimeBusinessBindingV4,
+	validateRuntimeBusinessBindingV5,
 	validateRuntimePrivateRelayKeyFieldV1,
 	validateRuntimeRestoreExecutionKeyBindingV4,
+	validateRuntimeRestoreExecutionKeyBindingV5,
 	validateVerifiedRuntimeExecutionGrantClaimsV4,
 	validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV4,
+	validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV5,
 } from "@agent-infra/contracts/runtime";
 
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
@@ -39,6 +46,43 @@ export function createRuntimeExecutionGrantVerifierV4(
 	};
 }
 
+/** Verifies one `runtime-execution+jws` token and returns its decoded claims. */
+function verifySignedRuntimeToken(
+	publicKeys: ReadonlyMap<string, KeyObject>,
+	token: string,
+): unknown {
+	const parts = token.split(".");
+	if (parts.length !== 3) runtimeAuthorizationDenied();
+	const [headerPart, claimsPart, signaturePart] = parts;
+	if (!headerPart || !claimsPart || !signaturePart)
+		runtimeAuthorizationDenied();
+	const header = JSON.parse(utf8.decode(decode(headerPart))) as {
+		alg?: unknown;
+		kid?: unknown;
+		typ?: unknown;
+	};
+	if (
+		!header ||
+		Object.keys(header).sort().join(",") !== "alg,kid,typ" ||
+		header.alg !== "EdDSA" ||
+		header.typ !== "runtime-execution+jws" ||
+		typeof header.kid !== "string"
+	)
+		runtimeAuthorizationDenied();
+	const key = publicKeys.get(header.kid);
+	if (
+		key?.asymmetricKeyType !== "ed25519" ||
+		!verify(
+			null,
+			Buffer.from(`${headerPart}.${claimsPart}`, "ascii"),
+			key,
+			decode(signaturePart),
+		)
+	)
+		runtimeAuthorizationDenied();
+	return JSON.parse(utf8.decode(decode(claimsPart))) as unknown;
+}
+
 /** Signature-only verifier used by the independent recovery Grant schema. */
 function verifySignedRuntimeGrantV4(
 	publicKeys: ReadonlyMap<string, KeyObject>,
@@ -46,38 +90,9 @@ function verifySignedRuntimeGrantV4(
 ) {
 	try {
 		const grant = RuntimeExecutionGrantV4Schema.parse(value);
-		const parts = grant.token.split(".");
-		if (parts.length !== 3) runtimeAuthorizationDenied();
-		const [headerPart, claimsPart, signaturePart] = parts;
-		if (!headerPart || !claimsPart || !signaturePart)
-			runtimeAuthorizationDenied();
-		const header = JSON.parse(utf8.decode(decode(headerPart))) as {
-			alg?: unknown;
-			kid?: unknown;
-			typ?: unknown;
-		};
-		if (
-			!header ||
-			Object.keys(header).sort().join(",") !== "alg,kid,typ" ||
-			header.alg !== "EdDSA" ||
-			header.typ !== "runtime-execution+jws" ||
-			typeof header.kid !== "string"
-		)
-			runtimeAuthorizationDenied();
-		const key = publicKeys.get(header.kid);
-		if (
-			key?.asymmetricKeyType !== "ed25519" ||
-			!verify(
-				null,
-				Buffer.from(`${headerPart}.${claimsPart}`, "ascii"),
-				key,
-				decode(signaturePart),
-			)
-		)
-			runtimeAuthorizationDenied();
 		return {
 			token: grant.token,
-			claims: JSON.parse(utf8.decode(decode(claimsPart))) as unknown,
+			claims: verifySignedRuntimeToken(publicKeys, grant.token),
 		};
 	} catch {
 		runtimeAuthorizationDenied();
@@ -233,6 +248,79 @@ export function createRuntimeExecutionKeyRecoveryValidatorV4(
 				},
 			);
 			await validateRuntimeRestoreExecutionKeyBindingV4(request, claims);
+			return { request, claims };
+		} catch {
+			runtimeAuthorizationDenied();
+		}
+	};
+}
+
+/**
+ * Verifies the reused V4 business Grant carried by a Native V5 Skill request
+ * and revalidates the exact ordered attachment binding against its claims.
+ */
+export function createRuntimeExecutionGrantValidatorV5(
+	publicKeys: ReadonlyMap<string, KeyObject>,
+	options: {
+		readonly expectedIssuer: string;
+		readonly expectedWorkerId: string;
+		readonly now?: () => number;
+	},
+) {
+	const verifyGrant = createRuntimeExecutionGrantVerifierV4(publicKeys);
+	return async (request: unknown) => {
+		try {
+			const parsedRequest =
+				RuntimeNativeCapabilityRequestV5Schema.parse(request);
+			const verification = verifyGrant(parsedRequest.grant);
+			if (verification.token !== parsedRequest.grant.token)
+				runtimeAuthorizationDenied();
+			const claims = validateVerifiedRuntimeExecutionGrantClaimsV4(
+				verification.claims,
+				{
+					expectedIssuer: options.expectedIssuer,
+					expectedWorkerId: options.expectedWorkerId,
+					now: (options.now ?? Date.now)(),
+				},
+			);
+			await validateRuntimeBusinessBindingV5(parsedRequest, claims);
+			return { request: parsedRequest, claims };
+		} catch {
+			runtimeAuthorizationDenied();
+		}
+	};
+}
+
+/**
+ * Verifies the independent existing-accepted-only recovery Grant for a Native
+ * V5 Skill. The ordered `acceptedAttachmentIds` must match the original V5
+ * request; the Host never rematerializes inputs during recovery.
+ */
+export function createRuntimeExecutionKeyRecoveryValidatorV5(
+	publicKeys: ReadonlyMap<string, KeyObject>,
+	options: {
+		readonly expectedIssuer: string;
+		readonly expectedWorkerId: string;
+		readonly now?: () => number;
+	},
+) {
+	return async (transport: unknown) => {
+		try {
+			const request =
+				RuntimeRestoreExecutionKeyRequestV5Schema.parse(transport);
+			const grant = RuntimeExecutionGrantV5Schema.parse(request.grant);
+			const verifiedClaims = verifySignedRuntimeToken(publicKeys, grant.token);
+			const recoveryClaims =
+				RuntimeRestoreExecutionKeyGrantClaimsV5Schema.parse(verifiedClaims);
+			const claims = validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV5(
+				recoveryClaims,
+				{
+					expectedIssuer: options.expectedIssuer,
+					expectedWorkerId: options.expectedWorkerId,
+					now: (options.now ?? Date.now)(),
+				},
+			);
+			await validateRuntimeRestoreExecutionKeyBindingV5(request, claims);
 			return { request, claims };
 		} catch {
 			runtimeAuthorizationDenied();

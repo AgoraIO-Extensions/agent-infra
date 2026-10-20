@@ -2072,3 +2072,154 @@ it("keeps V5 restore fail-closed without a recovery validator", async () => {
 		}),
 	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
 });
+
+it("dispatches a V5 Skill with the ordered ids on the same FileBridge port the Driver reads", async () => {
+	let accepted: Awaited<ReturnType<typeof v5Accepted>> | undefined;
+	const deploymentBridge: RuntimeFileBridgePortV1 = {
+		async readInput(fileId) {
+			return {
+				fileId,
+				descriptor: {
+					name: "input.txt",
+					mediaType: "text/plain",
+					sizeBytes: 5,
+					sha256: createHash("sha256").update("hello").digest("hex"),
+				},
+				body: new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode("hello"));
+						controller.close();
+					},
+				}),
+			};
+		},
+		async writeResult() {
+			throw new Error("unused V5 result write");
+		},
+		revalidate() {},
+	};
+	const f = await setup(deploymentBridge, undefined, undefined, async () => {
+		if (!accepted) throw new Error("V5 fixture is not ready");
+		return accepted;
+	});
+	const submitted = await f.host.submitTurnV4(f.transport);
+	await f.driver.setOperationStatus("execution-1", "completed");
+	const request = {
+		...v5Request(submitted.hostSessionRef),
+		conversationId: "conversation-1",
+	};
+	accepted = await v5Accepted(request);
+	const metadata = vi.fn(async () => ({
+		selector: "skills" as const,
+		revision: request.directoryRevision,
+		capabilities: [
+			{
+				id: request.capabilityId,
+				kind: "skill" as const,
+				name: "v5-skill",
+				description: "Controlled V5 Skill",
+				source: {
+					name: "controlled",
+					version: request.capabilitySourceVersion,
+				},
+				parameters: [],
+				effect: "model_turn" as const,
+				availability: "discovered" as const,
+			},
+		],
+	}));
+	const originalExecute = f.driver.execute.bind(f.driver);
+	let observedCommand: unknown;
+	let observedInput: unknown;
+	Object.assign(f.driver, {
+		readNativeMetadataV1: metadata,
+		resolveNativeSkillBinding: () => ({
+			packageDigest: "c".repeat(64),
+			manifestDigest: "d".repeat(64),
+		}),
+		createNativeSkillCommand: (
+			command: import("./driver.js").RuntimeNativeSkillCommandV1,
+		) => ({
+			schemaVersion: 1 as const,
+			kind: "submit-turn" as const,
+			operationId: command.operationId,
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			executionId: command.executionId,
+			turnId: command.turnId,
+			sessionGeneration: command.sessionGeneration,
+			nativeSessionRef: command.nativeSessionRef,
+			input: { text: command.parameters, attachments: [] },
+			nativeSkill: {
+				capabilityId: command.capabilityId,
+				directoryRevision: command.directoryRevision,
+				name: command.capabilityName,
+				version: command.capabilitySourceVersion,
+				packageDigest: command.packageDigest,
+				manifestDigest: command.manifestDigest,
+			},
+		}),
+		execute: async (
+			command: import("./driver.js").RuntimeDriverCommand,
+			context?: import("./driver.js").RuntimeDriverExecutionContextV1,
+		) => {
+			if (command.kind === "submit-turn" && "nativeSkill" in command) {
+				observedCommand = command;
+				const bridge = context?.fileBridge as
+					| (RuntimeFileBridgePortV1 & {
+							readNativeTextInput?: (
+								attachmentId: string,
+								signal?: AbortSignal,
+							) => Promise<unknown>;
+					  })
+					| undefined;
+				if (typeof bridge?.readNativeTextInput === "function")
+					observedInput = await bridge.readNativeTextInput("file-v5");
+			}
+			return originalExecute(command, context);
+		},
+	});
+	const transport = RuntimeNativeCapabilityTransportV5Schema.parse({
+		businessRequest: request,
+		privateKeyField: {
+			schemaVersion: 1,
+			context: {
+				requestId: request.requestId,
+				grantId: accepted.claims.grantId,
+				requestDigest: accepted.claims.requestDigest,
+				traceId: request.traceId,
+				principal: request.principal,
+				executionSource: request.executionSource,
+				channelId: request.channelId,
+				agentId: request.agentId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				turnId: request.turnId,
+				sessionGeneration: request.sessionGeneration,
+				hostSessionRef: request.hostSessionRef,
+				operation: request.operation,
+				keyBinding: request.keyBinding,
+			},
+			keyDelivery: { relayKey: "synthetic-v5-key" },
+		},
+	});
+	await expect(f.host.nativeCapabilityV5(transport)).resolves.toMatchObject({
+		schemaVersion: 5,
+		operationId: "execution-v5",
+		result: { outcome: "accepted", status: "running" },
+	});
+	expect(observedCommand).toMatchObject({
+		kind: "submit-turn",
+		nativeSkill: { name: "v5-skill" },
+		input: { attachments: ["file-v5"] },
+	});
+	expect(observedInput).toEqual({
+		bytes: new TextEncoder().encode("hello"),
+		sha256: createHash("sha256").update("hello").digest("hex"),
+		byteLength: 5,
+		mediaType: "text/plain",
+	});
+	expect(retainedKeys(f.host).get("execution-v5")).toMatchObject({
+		relayKey: "synthetic-v5-key",
+	});
+});
