@@ -596,6 +596,122 @@ describe("stop proof of a source prepared before per-Sandbox Runtime inputs (#28
 	});
 });
 
+// #2917：上一轮排空已完成、只剩 PVC 的沙箱被管理转换重新当作来源时，没有需要删除的资源；
+// 停止证明只需证明保留的仍是同一 PVC。
+describe("stop proof of a source that was already stopped (#2917)", () => {
+	function stoppedSource() {
+		const input = fixture();
+		const receipt = input.observation.sourceStop;
+		const source = input.lifecycle.source.observation;
+		const pvc = source?.resources.find(
+			(resource) => resource.kind === "PersistentVolumeClaim",
+		);
+		if (!receipt || !pvc) throw new Error("Missing stop proof fixture");
+		const retainedPVC = { ...pvc, resourceVersion: "7" };
+		return {
+			...input,
+			full: source?.resources ?? [],
+			proofs: receipt.removed,
+			lifecycle: {
+				...input.lifecycle,
+				source: {
+					...input.lifecycle.source,
+					observation: { status: "stopped" as const, resources: [pvc] },
+				},
+				deletionProgress: [],
+			},
+			observation: {
+				status: "stopped" as const,
+				resources: [retainedPVC],
+				sourceStop: { ...receipt, removed: [], retainedPVC },
+			},
+		};
+	}
+
+	it("accepts an empty removal set with the same retained PVC", () => {
+		const { full: _full, proofs: _proofs, ...input } = stoppedSource();
+		expect(decideSessionSandboxDrainObservationV1(input)).toMatchObject({
+			status: "stopped",
+			finished: true,
+		});
+	});
+
+	it("rejects removals, another PVC, a source with other resources or a different readback", () => {
+		const { full, proofs, ...input } = stoppedSource();
+		const receipt = input.observation.sourceStop;
+		const pvc = receipt.retainedPVC;
+		const proof = proofs[0];
+		const pod = full.find((resource) => resource.kind === "Pod");
+		if (!proof || !pod) throw new Error("Missing removal proof");
+		const variants = [
+			{
+				...input,
+				observation: {
+					...input.observation,
+					sourceStop: { ...receipt, removed: [proof] },
+				},
+			},
+			{
+				...input,
+				observation: {
+					...input.observation,
+					resources: [{ ...pvc, uid: "other-pvc" }],
+					sourceStop: { ...receipt, retainedPVC: { ...pvc, uid: "other-pvc" } },
+				},
+			},
+			{
+				...input,
+				lifecycle: {
+					...input.lifecycle,
+					source: {
+						...input.lifecycle.source,
+						observation: {
+							status: "stopped" as const,
+							resources: [pvc, pod],
+						},
+					},
+				},
+			},
+			{ ...input, observation: { ...input.observation, resources: [] } },
+			{
+				...input,
+				observation: {
+					...input.observation,
+					sourceStop: { ...receipt, sourceResourceFence: 99 },
+				},
+			},
+		];
+		for (const variant of variants)
+			expect(decideSessionSandboxDrainObservationV1(variant)).toMatchObject({
+				status: "unknown",
+				finished: false,
+			});
+	});
+
+	it("lets the same Sandbox be prepared again from that proof", () => {
+		const { full: _full, proofs: _proofs, ...input } = stoppedSource();
+		const receipt = input.observation.sourceStop;
+		const lifecycle: SessionSandboxLifecycleV1 = {
+			...input.lifecycle,
+			authority: {
+				...input.lifecycle.authority,
+				targetDesiredState: "running",
+			},
+			stopReceipt: receipt,
+		};
+		expect(
+			canPrepareSessionSandboxReplacementV1({
+				sandbox: input.sandbox,
+				resourceFence: receipt.targetResourceFence,
+				lifecycle,
+				observation: input.observation,
+				executions: [],
+				generationBarrierPending: false,
+			}),
+		).toBe(true);
+	});
+});
+
 describe("original Execution drain eligibility", () => {
 	it.each(["processing", "unknown", "invalid"])(
 		"does not release %s occupancy",

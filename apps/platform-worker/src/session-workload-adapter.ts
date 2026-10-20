@@ -921,10 +921,107 @@ function owned(
 	);
 }
 
+/**
+ * 与 owned() 相同，但 fence 注解与 generation 标签只要求不高于 allocation 的值。只用于已被
+ * 来源记录钉住 UID 的保留 PVC：沙箱停止后 PVC 不会被改写，它的 fence 与 generation 停在
+ * 最初准备时的值；更高的值说明有更新的写入方，仍失败关闭（#2917）。
+ */
+function ownedAtOrBefore(
+	current: KubernetesObject,
+	allocation: SessionSandboxAllocationV1,
+) {
+	const counter = (value: string | undefined) => {
+		const parsed = Number(value);
+		return value !== undefined &&
+			String(parsed) === value &&
+			Number.isSafeInteger(parsed) &&
+			parsed >= 1
+			? parsed
+			: undefined;
+	};
+	const resourceFence = counter(
+		current.metadata?.annotations?.["agent-infra.agora.io/fence"],
+	);
+	const generation = counter(
+		current.metadata?.labels?.["agent-infra.agora.io/generation"],
+	);
+	if (
+		resourceFence === undefined ||
+		generation === undefined ||
+		resourceFence > allocation.resourceFence ||
+		generation > allocation.generation
+	)
+		return false;
+	const earlier = { ...allocation, generation, resourceFence };
+	const expected = sessionSandboxResourcesV1(earlier).find(
+		(resource) => resource.kind === current.kind,
+	);
+	return !!expected && owned(current, expected, earlier);
+}
+
 export function createSessionSandboxWorkloadAdapterV1(options: {
 	readonly client: WorkerKubernetesClientV1;
 }) {
 	return {
+		/**
+		 * #2917：来源本身已停止（只记录了保留的 PVC）时，不删除任何资源，只读证明停止：
+		 * 其余资源按名称都不存在（任何同名对象都失败关闭，不删除也不接管），PVC 是来源
+		 * 记录的同一个（UID、身份一致，fence 不高于来源 fence）。
+		 */
+		async confirmStoppedSource(
+			allocation: SessionSandboxAllocationV1,
+			previous: readonly SessionSandboxResourceIdentityV1[],
+			context: {
+				readonly sourceGeneration: number;
+				readonly sourceResourceFence: number;
+				readonly targetGeneration: number;
+				readonly targetResourceFence: number;
+			},
+		): Promise<SessionSandboxStopReceiptV1> {
+			if (options.client.namespace !== allocation.namespace)
+				throw new WorkloadKubernetesError("policy");
+			validateAllocation(allocation);
+			const [prior] = previous;
+			if (
+				previous.length !== 1 ||
+				prior?.kind !== "PersistentVolumeClaim" ||
+				prior.namespace !== allocation.namespace ||
+				prior.name !== allocation.pvcName
+			)
+				throw new WorkloadKubernetesError("conflict");
+			const expectedResources = sessionSandboxResourcesV1({
+				...allocation,
+				desiredState: "stopped",
+			});
+			for (const expected of expectedResources) {
+				if (expected.kind === "PersistentVolumeClaim") continue;
+				const kind = expected.kind as SessionSandboxResourceIdentityV1["kind"];
+				if (await options.client.read(kind, expected.metadata?.name ?? ""))
+					throw new WorkloadKubernetesError("conflict");
+			}
+			const pvc = await options.client.read(
+				"PersistentVolumeClaim",
+				allocation.pvcName,
+			);
+			if (
+				!pvc?.metadata?.resourceVersion ||
+				pvc.metadata.uid !== prior.uid ||
+				pvc.metadata.deletionTimestamp ||
+				!ownedAtOrBefore(pvc, allocation)
+			)
+				throw new WorkloadKubernetesError("conflict");
+			return {
+				schemaVersion: 1,
+				sandboxId: allocation.sandboxId,
+				sessionId: allocation.sessionId,
+				...context,
+				removed: [],
+				retainedPVC: {
+					...prior,
+					resourceVersion: pvc.metadata.resourceVersion,
+				},
+			};
+		},
 		async prepareRetainedPVC(
 			allocation: SessionSandboxAllocationV1,
 			lifecycle: SessionSandboxLifecycleV1,
@@ -1003,7 +1100,12 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					resource.kind === "PersistentVolumeClaim",
 			);
 			if (!sourceExpected) throw new WorkloadKubernetesError("policy");
-			if (!owned(current, sourceExpected, sourceAllocation))
+			// 来源已停止（#2917）时 PVC 的 fence 与 generation 停在最初准备时的值，UID 已被回执钉住。
+			if (
+				!(source.observation?.status === "stopped"
+					? ownedAtOrBefore(current, sourceAllocation)
+					: owned(current, sourceExpected, sourceAllocation))
+			)
 				throw new WorkloadKubernetesError("conflict");
 			// Preserve the volume and use the observed UID/resourceVersion for this
 			// single Store-authorized ownership transition, never an unfenced adoption.

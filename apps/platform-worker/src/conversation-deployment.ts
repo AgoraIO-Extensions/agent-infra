@@ -615,6 +615,37 @@ export function createProductionSessionSandboxReceiverV1(
 					sourceStop: lifecycle.stopReceipt,
 					resources: [lifecycle.stopReceipt.retainedPVC],
 				};
+			// #2917：上一轮排空已完成、只剩 PVC 的沙箱被管理转换重新当作来源。没有可删除的资源，
+			// 只读证明停止；与正常排空一样，执行未终态或已进入准备时不下结论。
+			if (source.observation?.status === "stopped") {
+				if (!claim.drainComputeAllowed || lifecycle.preparation)
+					return { status: "unknown" as const, resources: sourceResources };
+				const stopReceipt = await adapter.confirmStoppedSource(
+					allocationFor(
+						claim.sandbox,
+						source.policy,
+						sourceDeployment,
+						source.modelProjection,
+						"stopped",
+						source.sandbox.generation,
+						source.resourceFence,
+						false,
+					),
+					sourceResources,
+					{
+						sourceGeneration: source.sandbox.generation,
+						sourceResourceFence: source.resourceFence,
+						targetGeneration: claim.sandbox.generation,
+						targetResourceFence: claim.resourceFence,
+					},
+				);
+				signal.throwIfAborted();
+				return {
+					status: "stopped" as const,
+					sourceStop: stopReceipt,
+					resources: [stopReceipt.retainedPVC],
+				};
+			}
 			// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影（runtime 为 null），
 			// 当时也不创建 Runtime Secret：其余 5 种资源就是完整来源（#2885）。
 			const sourceKinds = [
