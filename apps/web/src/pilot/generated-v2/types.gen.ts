@@ -371,6 +371,135 @@ export type AgentConfigurationUpdateRequestV2 = {
     }>;
 };
 
+export type AgentDetailConfigurationProjectionV1 = {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    channels: Array<{
+        kind: 'web' | 'wecom_bot' | 'wecom_app';
+        status: 'available' | 'not_configured' | 'binding' | 'bound' | 'failed';
+    }>;
+    defaultModelOptionId: string | null;
+    defaultReasoningLevel: string | null;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelOptions: Array<{
+        displayName: string;
+        modelId: string;
+        optionId: string;
+        reasoningLevels: Array<string>;
+    }>;
+    owners: Array<AgentOwnerProjectionV1>;
+    secrets: Array<{
+        isSet: boolean;
+        name: string;
+        version: number | null;
+    }>;
+};
+
+export type AgentDetailProjectionV1 = {
+    agentId: string;
+    capabilities: {
+        attachments: boolean;
+        browser?: {
+            capabilityVersion: number;
+            conformance: {
+                evidenceHash: string;
+                manifestDigest: string;
+                operations: Array<'navigate' | 'observe' | 'interact' | 'files' | 'handoff' | 'side_effects'>;
+                probeVersion: string;
+                receiptId: string;
+                schemaVersion: 1;
+                verifiedAt: string;
+            };
+            operations: Array<'navigate' | 'observe' | 'interact' | 'files' | 'handoff' | 'side_effects'>;
+            policy: {
+                actionTimeoutMs: number;
+                allowUserHandoff: boolean;
+                allowedOrigins: Array<string>;
+                maxBrowserDurationMs: number;
+                maxConcurrentActions: number;
+                maxContexts: number;
+                maxDownloadBytes: number;
+                maxDownloads: number;
+                maxPages: number;
+                maxRetainedProfileBytes: number;
+                maxScreenshotBytes: number;
+                maxTabs: number;
+                maxUploadBytes: number;
+                maxViewportHeight: number;
+                maxViewportWidth: number;
+                navigationTimeoutMs: number;
+                requireSideEffectConfirmation: boolean;
+            };
+            provenance: {
+                browser: 'chromium';
+                chromiumVersion: string;
+                imageDigest: string;
+                playwrightVersion: string;
+            };
+            schemaVersion: 1;
+            status: 'available';
+        } | {
+            capabilityVersion: number;
+            errorCode: 'BROWSER_CAPABILITY_NOT_CONFIGURED' | 'BROWSER_CAPABILITY_PROBE_FAILED' | 'BROWSER_CAPABILITY_UNAVAILABLE' | 'BROWSER_CAPABILITY_STALE' | 'BROWSER_CAPABILITY_VERSION_UNSUPPORTED' | 'BROWSER_CAPABILITY_POLICY_DENIED';
+            reason: string;
+            retryable: boolean;
+            schemaVersion: 1;
+            status: 'not_configured' | 'probe_failed' | 'unavailable' | 'stale';
+        };
+        connection: boolean;
+        modelSelection: boolean;
+        nativeMetadata?: boolean;
+        resultFiles: boolean;
+        skills?: Array<{
+            manifestSha256: string;
+            name: string;
+            packageDigest: string;
+            readOnly: true;
+            schemaVersion: 1;
+            version: string;
+        }>;
+        supplementaryInstruction: boolean;
+    };
+    configuration: AgentDetailConfigurationProjectionV1;
+    description: string;
+    interactionUrl: string | null;
+    managementStatus: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
+    name: string;
+    schemaVersion: 1;
+    serviceAvailability: 'ready' | 'starting' | 'updating' | 'unavailable' | null;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    } | {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    } | {
+        identityResponsibility: 'self-managed';
+        interactionMode: 'self-managed';
+        kind: 'custom';
+        manifest: string;
+        services?: Array<{
+            entry: boolean;
+            name: string;
+            resourceProfileRef: string;
+        }>;
+    };
+};
+
 export type AgentLifecycleCommandRequestV1 = {
     command: 'stop' | 'restart' | 'retry_creation' | 'disable';
     schemaVersion: 1;
@@ -378,6 +507,12 @@ export type AgentLifecycleCommandRequestV1 = {
     command: 'upgrade_custom_image';
     imageReference: string;
     schemaVersion: 1;
+};
+
+export type AgentOwnerProjectionV1 = {
+    displayName: string | null;
+    status: 'active' | 'disabled' | 'departed' | 'unavailable';
+    userId: string;
 };
 
 export type AgentProjectionV2 = {
@@ -3731,6 +3866,53 @@ export type GetAgentDefaultRelayKeyDisplayCandidatesV2Responses = {
 };
 
 export type GetAgentDefaultRelayKeyDisplayCandidatesV2Response = GetAgentDefaultRelayKeyDisplayCandidatesV2Responses[keyof GetAgentDefaultRelayKeyDisplayCandidatesV2Responses];
+
+export type GetAgentDetailV1Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/detail';
+};
+
+export type GetAgentDetailV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentDetailV1Error = GetAgentDetailV1Errors[keyof GetAgentDetailV1Errors];
+
+export type GetAgentDetailV1Responses = {
+    /**
+     * Agent detail with Owner status
+     */
+    200: AgentDetailProjectionV1;
+};
+
+export type GetAgentDetailV1Response = GetAgentDetailV1Responses[keyof GetAgentDetailV1Responses];
 
 export type CommandAgentLifecycleV2Data = {
     body: AgentLifecycleCommandRequestV1;

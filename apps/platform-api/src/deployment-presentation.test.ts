@@ -71,6 +71,7 @@ it("resolves names from the authorized endpoint association and keeps the old pu
 		configurationQuery: {
 			readRuntimePresentation: async () => ({
 				outcome: "found",
+				channels: [],
 				sourceReference: "controlled-source",
 				capabilities: null,
 				interactionUrl: null,
@@ -111,6 +112,54 @@ it("resolves names from the authorized endpoint association and keeps the old pu
 	);
 });
 
+// #2910：企微渠道状态取自同一快照的连接事实，已配置不再等同于「绑定中」或「已绑定」。
+it("presents WeCom channel status from the runtime snapshot instead of the configured kinds", async () => {
+	const request = new Request("https://platform.test/agents/agent_01");
+	const present = createDeploymentPresentation({
+		identityScope: {
+			currentRequest: () => request,
+			currentIdentity: async () => identity,
+			requestIdentity: async () => identity,
+		} as never,
+		configurationQuery: {
+			readRuntimePresentation: async () => ({
+				outcome: "found",
+				sourceReference: "controlled-source",
+				channels: [
+					{ kind: "wecom_app", status: "failed" },
+					{ kind: "wecom_bot", status: "bound" },
+				],
+				capabilities: null,
+				interactionUrl: null,
+			}),
+		},
+		resourceProfile: {
+			profileId: "small",
+			displayName: "Small",
+			estimatedResources: { cpuMillicores: 100, memoryMiB: 128, storageGiB: 1 },
+		},
+		imageRepository: "registry.example.test/agents",
+	});
+	const result = await present({
+		agentId: "agent_01",
+		configuration: {
+			...configuration,
+			source: {
+				kind: "standard",
+				templateId: "codex",
+				connectionEnabled: false,
+			},
+			channelKinds: ["wecom_app", "wecom_bot"],
+		},
+		management,
+	});
+	expect(result.channels).toEqual([
+		{ kind: "web", status: "available" },
+		{ kind: "wecom_app", status: "failed" },
+		{ kind: "wecom_bot", status: "bound" },
+	]);
+});
+
 /** 以持久化的多服务清单调用展示函数；单 Agent 档位刻意设为 profile_01 以区分多服务默认档位。 */
 function presentMultiServiceManifest(manifest: string) {
 	const request = new Request("https://platform.test/agents/agent_01");
@@ -123,6 +172,7 @@ function presentMultiServiceManifest(manifest: string) {
 		configurationQuery: {
 			readRuntimePresentation: vi.fn().mockResolvedValue({
 				outcome: "found",
+				channels: [],
 				sourceReference: "sha256:multi-service",
 				capabilities: {},
 				interactionUrl: null,
@@ -219,6 +269,7 @@ describe("deployment presentation platform identity route", () => {
 		});
 		const readRuntimePresentation = vi.fn().mockResolvedValue({
 			outcome: "found",
+			channels: [],
 			sourceReference: "sha256:custom",
 			capabilities: {},
 			interactionUrl: null,
@@ -324,6 +375,7 @@ describe("deployment presentation platform identity route", () => {
 			configurationQuery: {
 				readRuntimePresentation: vi.fn().mockResolvedValue({
 					outcome: "found",
+					channels: [],
 					sourceReference: "sha256:custom",
 					capabilities: { modelSelection: true },
 					interactionUrl: null,
@@ -395,6 +447,7 @@ describe("deployment presentation platform identity route", () => {
 			configurationQuery: {
 				readRuntimePresentation: vi.fn().mockResolvedValue({
 					outcome: "found",
+					channels: [],
 					sourceReference: "sha256:multi-service",
 					capabilities: {},
 					interactionUrl: null,
@@ -504,6 +557,7 @@ resources:
 			configurationQuery: {
 				readRuntimePresentation: vi.fn().mockResolvedValue({
 					outcome: "found",
+					channels: [],
 					sourceReference: "sha256:custom",
 					capabilities: {},
 					interactionUrl: null,
@@ -538,6 +592,7 @@ resources:
 			configurationQuery: {
 				readRuntimePresentation: vi.fn().mockResolvedValue({
 					outcome: "found",
+					channels: [],
 					sourceReference: "sha256:custom",
 					capabilities: {},
 					interactionUrl: null,
@@ -627,6 +682,7 @@ it("passes the verified Browser projection through the API presentation", async 
 		configurationQuery: {
 			readRuntimePresentation: async () => ({
 				outcome: "found" as const,
+				channels: [],
 				sourceReference: `sha256:${"a".repeat(64)}`,
 				capabilities: {
 					modelSelection: true,
@@ -715,6 +771,7 @@ it("preserves an explicitly empty Skill capability list", async () => {
 		configurationQuery: {
 			readRuntimePresentation: async () => ({
 				outcome: "found" as const,
+				channels: [],
 				sourceReference: `sha256:${"a".repeat(64)}`,
 				capabilities: {
 					modelSelection: true,
@@ -762,6 +819,7 @@ it("keeps personal API presentation separate from browser identity and custom We
 	});
 	const readRuntimePresentation = vi.fn(async () => ({
 		outcome: "found" as const,
+		channels: [],
 		sourceReference: "controlled-manifest",
 		capabilities: null,
 		interactionUrl: null,

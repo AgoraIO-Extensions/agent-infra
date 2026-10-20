@@ -1,11 +1,13 @@
 import {
 	AgentApplicationProjectionV2Schema,
+	AgentDetailProjectionV1Schema,
 	AgentProjectionV2Schema,
 	ConnectionCapabilityProjectionV1Schema,
 	ConversationPageV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
 	createPilotAgentMockServerV2,
+	pilotAgentDetailFromV2,
 	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
@@ -360,11 +362,19 @@ async function fixture(
 		}
 		if (
 			request.method() === "GET" &&
-			/^\/api\/v2\/agents\/[^/]+$/.test(pathname) &&
+			/^\/api\/v2\/agents\/[^/]+(?:\/detail)?$/.test(pathname) &&
 			agentDetailMismatched
 		) {
+			const unrelated = {
+				...agent,
+				agentId: "agent-unrelated",
+				name: "Unrelated Agent",
+			};
+			// 详情页读取带 Owner 状态的详情投影（#2910）；不一致的主体仍按响应无效处理。
 			await route.fulfill({
-				json: { ...agent, agentId: "agent-unrelated", name: "Unrelated Agent" },
+				json: pathname.endsWith("/detail")
+					? pilotAgentDetailFromV2(unrelated)
+					: unrelated,
 			});
 			return;
 		}
@@ -2675,14 +2685,15 @@ for (const identityResponsibility of [
 	}, info) => {
 		const api = await fixture(page, "employee");
 		api.conversationChoices(identityResponsibility);
+		// 详情页读取带 Owner 状态的详情投影（#2910）；模型字段与 V2 相同。
 		const detailResponse = page.waitForResponse(
 			(response) =>
 				new URL(response.url()).pathname ===
-					"/api/v2/agents/agent-self-managed" &&
+					"/api/v2/agents/agent-self-managed/detail" &&
 				response.request().method() === "GET",
 		);
 		await page.goto("/agents/agent-self-managed");
-		const projected = AgentProjectionV2Schema.parse(
+		const projected = AgentDetailProjectionV1Schema.parse(
 			await (await detailResponse).json(),
 		);
 		expect(projected.configuration.modelOptions.length).toBeGreaterThan(0);
@@ -2975,6 +2986,133 @@ test("Agent detail and configuration use readable directory records with canonic
 			{ kind: "organization", organizationId: "org-platform" },
 		],
 	});
+});
+
+test("Agent detail shows each Owner's server-projected status chip (D-04, #2910)", async ({
+	page,
+}, info) => {
+	await fixture(page);
+	const base = pilotAgentDetailFromV2(
+		pilotFakeScenariosV2.starting.response.body,
+	);
+	// 服务端投影四种 Owner 状态；页面不得自行推断「有效」。
+	const detail = AgentDetailProjectionV1Schema.parse({
+		...base,
+		serviceAvailability: "ready",
+		configuration: {
+			...base.configuration,
+			owners: [
+				{ userId: "user-owner-1", displayName: "当前 Owner", status: "active" },
+				{ userId: "user-2", displayName: "验收用户二", status: "disabled" },
+				{ userId: "user-3", displayName: null, status: "departed" },
+				{
+					userId: "user-departed-0123456789",
+					displayName: null,
+					status: "unavailable",
+				},
+			],
+		},
+	});
+	const detailReads: string[] = [];
+	await page.route("**/api/v2/agents/agent-pilot-1/detail", async (route) => {
+		detailReads.push(route.request().method());
+		await route.fulfill({
+			json: detail,
+			headers: { "cache-control": "no-store" },
+		});
+	});
+	await page.goto("/agents/agent-pilot-1");
+	const owners = page.getByRole("region", { name: "Owner" });
+	await expect(owners.getByRole("listitem")).toHaveCount(4);
+	// 没有服务端显示名时取目录名称；目录也没有时只显示「用户」与 ID 短形式。
+	await expect(owners.getByText("验收用户三", { exact: true })).toBeVisible();
+	const rows = await owners.getByRole("listitem").evaluateAll((items) =>
+		items.map((item) => {
+			const chip = item.querySelector(
+				'[data-slot="badge"][data-variant="chip"]',
+			);
+			return [
+				item.querySelector("strong")?.textContent,
+				chip?.textContent,
+				chip?.getAttribute("data-tone"),
+				chip?.getAttribute("role"),
+			];
+		}),
+	);
+	expect(rows).toEqual([
+		["当前 Owner", "有效", "green", null],
+		["验收用户二", "已禁用", "amber", null],
+		["验收用户三", "已离职", "gray", null],
+		["用户 user-dep…", "状态未知", "gray", null],
+	]);
+	await expect(owners.getByText("有效", { exact: true })).toHaveCount(1);
+	await expect(owners).not.toContainText(
+		/active|disabled|departed|unavailable|主要 Owner|共同 Owner/,
+	);
+	await expect(
+		owners.locator('code[title="user-departed-0123456789"]'),
+	).toBeVisible();
+	// 不同状态的 chip 色调可区分（有效 green，其余 amber / gray）。
+	const colors = await owners
+		.locator('[data-slot="badge"][data-variant="chip"]')
+		.evaluateAll((chips) => chips.map((chip) => getComputedStyle(chip).color));
+	expect(new Set(colors).size).toBe(3);
+	expect(colors[2]).toBe(colors[3]);
+	expect(detailReads).toEqual(["GET"]);
+	const width = await page.evaluate(() => ({
+		viewport: innerWidth,
+		content: document.documentElement.scrollWidth,
+	}));
+	expect(width.content).toBeLessThanOrEqual(width.viewport);
+	await capture(page, info, "agent-detail-owner-status");
+});
+
+test("Agent detail shows the real WeCom binding status without a visibility scope (D-04, #2910)", async ({
+	page,
+}, info) => {
+	await fixture(page);
+	const base = pilotAgentDetailFromV2(
+		pilotFakeScenariosV2.starting.response.body,
+	);
+	let status: "bound" | "binding" | "failed" = "bound";
+	await page.route("**/api/v2/agents/agent-pilot-1/detail", async (route) => {
+		await route.fulfill({
+			json: AgentDetailProjectionV1Schema.parse({
+				...base,
+				serviceAvailability: "ready",
+				configuration: {
+					...base.configuration,
+					channels: [
+						{ kind: "web", status: "available" },
+						{ kind: "wecom_bot", status },
+					],
+				},
+			}),
+			headers: { "cache-control": "no-store" },
+		});
+	});
+	const runtime = page.getByRole("region", { name: "运行与渠道" });
+	const wecom = runtime
+		.getByRole("listitem")
+		.filter({ has: page.getByText("企微机器人", { exact: true }) });
+	const chip = wecom.locator('[data-slot="badge"][data-variant="chip"]');
+	// 服务端投影的真实状态逐一映射为中文文案与色调；渠道行不显示可见范围。
+	for (const [projected, label, tone] of [
+		["bound", "已绑定", "green"],
+		["binding", "绑定中", "amber"],
+		["failed", "连接异常", "red"],
+	] as const) {
+		status = projected;
+		await page.goto("/agents/agent-pilot-1");
+		await expect(chip).toHaveText(label);
+		await expect(chip).toHaveAttribute("data-tone", tone);
+		await expect(wecom).toHaveText(`企微机器人${label}`);
+		await expect(runtime).not.toContainText(
+			/组织内|可见范围|not_configured|binding|bound|failed/,
+		);
+		if (projected === "bound")
+			await capture(page, info, "agent-detail-wecom-bound");
+	}
 });
 
 test("directory pickers support consecutive picks, keyboard focus and 44px chip targets", async ({
@@ -5105,16 +5243,19 @@ test.describe("Agent detail design alignment", () => {
 	}) => {
 		await fixture(page, "employee");
 		await stubConnectionCapability(page, availableCapability());
-		await page.route("**/api/v2/agents/agent-pilot-1", (route) =>
+		// 详情页读取带 Owner 状态的详情投影（#2910），能力字段与 V2 相同。
+		await page.route("**/api/v2/agents/agent-pilot-1/detail", (route) =>
 			route.fulfill({
-				json: AgentProjectionV2Schema.parse({
-					...pilotFakeScenariosV2.starting.response.body,
-					serviceAvailability: "ready",
-					capabilities: {
-						...pilotFakeScenariosV2.starting.response.body.capabilities,
-						connection: false,
-					},
-				}),
+				json: AgentDetailProjectionV1Schema.parse(
+					pilotAgentDetailFromV2({
+						...pilotFakeScenariosV2.starting.response.body,
+						serviceAvailability: "ready",
+						capabilities: {
+							...pilotFakeScenariosV2.starting.response.body.capabilities,
+							connection: false,
+						},
+					}),
+				),
 			}),
 		);
 		await page.goto("/agents/agent-pilot-1");

@@ -1,15 +1,24 @@
-import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
-import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { AgentDetailProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	pilotAgentDetailFromV2,
+	pilotFakeScenariosV2,
+} from "@agent-infra/test-support/pilot";
+import {
+	cleanup,
+	fireEvent,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentDetailScreen } from "./agent-detail-screen.js";
 import { renderWithAgentRouter } from "./test-router.js";
 
-const startingAgent = AgentProjectionV2Schema.parse(
-	pilotFakeScenariosV2.starting.response.body,
+const startingAgent = AgentDetailProjectionV1Schema.parse(
+	pilotAgentDetailFromV2(pilotFakeScenariosV2.starting.response.body),
 );
-const readyAgent = AgentProjectionV2Schema.parse({
+const readyAgent = AgentDetailProjectionV1Schema.parse({
 	...startingAgent,
 	serviceAvailability: "ready",
 });
@@ -21,7 +30,7 @@ afterEach(() => {
 
 describe("AgentDetailScreen", () => {
 	it("links to a new conversation and directly to history for a ready platform Agent", async () => {
-		const agent = AgentProjectionV2Schema.parse({
+		const agent = AgentDetailProjectionV1Schema.parse({
 			...startingAgent,
 			serviceAvailability: "ready",
 			agentId: "agent:tenant/01?draft#one%",
@@ -122,6 +131,41 @@ describe("AgentDetailScreen", () => {
 		expect(screen.queryByRole("link", { name: "可用 Skill" })).toBeNull();
 	});
 
+	it("maps each projected WeCom binding status to Chinese copy without a scope (D-04, #2910)", async () => {
+		for (const [status, label, tone] of [
+			["bound", "已绑定", "green"],
+			["binding", "绑定中", "amber"],
+			["failed", "连接异常", "red"],
+		] as const) {
+			const agent = AgentDetailProjectionV1Schema.parse({
+				...readyAgent,
+				configuration: {
+					...readyAgent.configuration,
+					channels: [
+						{ kind: "web", status: "available" },
+						{ kind: "wecom_bot", status },
+					],
+				},
+			});
+			await renderWithAgentRouter(
+				<AgentDetailScreen state={{ kind: "ready", agent }} />,
+			);
+			const runtime = screen.getByRole("region", { name: "运行与渠道" });
+			const row = within(runtime)
+				.getByText("企微机器人", { selector: "strong" })
+				.closest("li") as HTMLElement;
+			expect(row.textContent).toBe(`企微机器人${label}`);
+			const chip = row.querySelector(
+				'[data-slot="badge"][data-variant="chip"]',
+			);
+			expect(chip?.getAttribute("data-tone")).toBe(tone);
+			expect(runtime.textContent).not.toMatch(
+				/组织内|可见范围|not_configured|binding|bound|failed/,
+			);
+			cleanup();
+		}
+	});
+
 	it("links the Owner to the Agent Skill page with a ghost「可用 Skill」(D-03)", async () => {
 		await renderWithAgentRouter(
 			<AgentDetailScreen
@@ -148,7 +192,7 @@ describe("AgentDetailScreen", () => {
 	});
 
 	it("omits「可用 Skill」for a self-managed Agent even for its Owner", async () => {
-		const agent = AgentProjectionV2Schema.parse({
+		const agent = AgentDetailProjectionV1Schema.parse({
 			...startingAgent,
 			source: {
 				kind: "custom",
@@ -185,7 +229,7 @@ describe("AgentDetailScreen", () => {
 	});
 
 	it("renders a server-projected self-managed access entry", async () => {
-		const agent = AgentProjectionV2Schema.parse({
+		const agent = AgentDetailProjectionV1Schema.parse({
 			...startingAgent,
 			interactionUrl: "https://agent.example.test",
 			source: {
@@ -227,7 +271,7 @@ describe("AgentDetailScreen", () => {
 		"https://agent.example.test?access_token=secret",
 		"https://agent.example.test/#token=secret",
 	])("omits unsafe self-managed access entry %s", async (interactionUrl) => {
-		const selfManagedAgent = AgentProjectionV2Schema.parse({
+		const selfManagedAgent = AgentDetailProjectionV1Schema.parse({
 			...startingAgent,
 			interactionUrl: "https://agent.example.test",
 			source: {
@@ -250,7 +294,7 @@ describe("AgentDetailScreen", () => {
 	it.each(["self-managed", "platform-managed"] as const)(
 		"omits nonempty model information for a self-managed Agent with %s identity",
 		async (identityResponsibility) => {
-			const agent = AgentProjectionV2Schema.parse({
+			const agent = AgentDetailProjectionV1Schema.parse({
 				...startingAgent,
 				source: {
 					kind: "custom",
@@ -284,7 +328,7 @@ describe("AgentDetailScreen", () => {
 	);
 
 	it("keeps model information for a platform-adapter projection without a self-managed access entry", async () => {
-		const agent = AgentProjectionV2Schema.parse({
+		const agent = AgentDetailProjectionV1Schema.parse({
 			...startingAgent,
 			interactionUrl: "https://agent.example.test",
 			source: {
@@ -311,7 +355,7 @@ describe("AgentDetailScreen", () => {
 	});
 
 	it("renders a verified platform-auth access entry when Platform owns self-managed identity", async () => {
-		const agent = AgentProjectionV2Schema.parse({
+		const agent = AgentDetailProjectionV1Schema.parse({
 			...startingAgent,
 			interactionUrl: "https://agent.example.test",
 			source: {
@@ -334,7 +378,7 @@ describe("AgentDetailScreen", () => {
 	});
 
 	it("keeps the identity rows for a platform-auth entry that is not ready without naming components", async () => {
-		const agent = AgentProjectionV2Schema.parse({
+		const agent = AgentDetailProjectionV1Schema.parse({
 			...startingAgent,
 			interactionUrl: null,
 			source: {
@@ -443,7 +487,7 @@ describe("AgentDetailScreen", () => {
 	});
 
 	it("omits the Connection notice and tag for an Agent without the capability", async () => {
-		const agent = AgentProjectionV2Schema.parse({
+		const agent = AgentDetailProjectionV1Schema.parse({
 			...readyAgent,
 			capabilities: { ...readyAgent.capabilities, connection: false },
 		});
@@ -512,8 +556,9 @@ describe("AgentDetailScreen", () => {
 		await waitFor(() =>
 			expect(within(owners).getByText("研发 / 平台工程").tagName).toBe("SMALL"),
 		);
-		// NI-10：不硬编码「主要 Owner」与「有效」。
-		expect(within(owners).queryByText(/主要 Owner|共同 Owner|有效/)).toBeNull();
+		// NI-10：不硬编码「主要 Owner」「共同 Owner」（PRD §2.2）。「有效」只由服务端投影的
+		// Owner 状态决定（#2910），状态与 chip 的对应见下一个用例。
+		expect(within(owners).queryByText(/主要 Owner|共同 Owner/)).toBeNull();
 		view.unmount();
 		vi.stubGlobal(
 			"fetch",
@@ -530,6 +575,96 @@ describe("AgentDetailScreen", () => {
 		);
 		expect(failed.querySelector("small")).toBeNull();
 		expect(failed.textContent).not.toMatch(/无法|失败|读取/);
+	});
+
+	it("shows each Owner's server-projected status chip and never infers「有效」(#2910)", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => Response.json({ schemaVersion: 1, items: [] })),
+		);
+		const owners = [
+			{ userId: "user-active", displayName: "在职 Owner", status: "active" },
+			{
+				userId: "user-disabled",
+				displayName: "停用 Owner",
+				status: "disabled",
+			},
+			{
+				userId: "user-departed-0123456789",
+				displayName: null,
+				status: "departed",
+			},
+			{
+				userId: "user-unknown",
+				displayName: "未知 Owner",
+				status: "unavailable",
+			},
+		] as const;
+		const agent = AgentDetailProjectionV1Schema.parse({
+			...readyAgent,
+			configuration: { ...readyAgent.configuration, owners },
+		});
+		await renderWithAgentRouter(
+			<AgentDetailScreen state={{ kind: "ready", agent }} />,
+		);
+		const region = screen.getByRole("region", { name: "Owner" });
+		const rows = within(region).getAllByRole("listitem");
+		expect(
+			rows.map((row) => {
+				const chip = row.querySelector(
+					'[data-slot="badge"][data-variant="chip"]',
+				);
+				return [
+					row.querySelector("strong")?.textContent,
+					chip?.textContent,
+					chip?.getAttribute("data-tone"),
+				];
+			}),
+		).toEqual([
+			["在职 Owner", "有效", "green"],
+			["停用 Owner", "已禁用", "amber"],
+			// 没有显示名时只显示类型与 ID 短形式，不说明原因。
+			["用户 user-dep…", "已离职", "gray"],
+			["未知 Owner", "状态未知", "gray"],
+		]);
+		expect(within(region).getAllByText("有效")).toHaveLength(1);
+		expect(
+			within(region).queryByText(/active|disabled|departed|unavailable/),
+		).toBeNull();
+		expect(within(region).getByTitle("user-departed-0123456789").tagName).toBe(
+			"CODE",
+		);
+		// 「关于此 Agent」的 Owner 行同样只用服务端名称，缺失时显示 ID 短形式。
+		expect(
+			screen.getByText("Owner", { selector: "dt" }).nextElementSibling
+				?.textContent,
+		).toBe("在职 Owner、停用 Owner、用户 user-dep…、未知 Owner");
+
+		// 状态读不到时只有「状态未知」，不伪造「有效」。
+		cleanup();
+		await renderWithAgentRouter(
+			<AgentDetailScreen
+				state={{
+					kind: "ready",
+					agent: AgentDetailProjectionV1Schema.parse({
+						...readyAgent,
+						configuration: {
+							...readyAgent.configuration,
+							owners: [
+								{
+									userId: "user-owner-1",
+									displayName: "Owner",
+									status: "unavailable",
+								},
+							],
+						},
+					}),
+				}}
+			/>,
+		);
+		const unknown = screen.getByRole("region", { name: "Owner" });
+		expect(within(unknown).queryByText("有效")).toBeNull();
+		expect(within(unknown).getByText("状态未知")).toBeTruthy();
 	});
 
 	it.each([

@@ -190,11 +190,8 @@ export function createDeploymentPresentation(input: {
 			})),
 			channels: [
 				{ kind: "web", status: "available" },
-				...configuration.channelKinds.map((kind) => ({
-					kind,
-					// Admission records a requested binding; it does not prove a live channel.
-					status: "binding" as const,
-				})),
+				// 企微渠道按当前绑定引用的连接事实输出（#2910），不再把已配置等同于已绑定。
+				...runtime.channels.map(({ kind, status }) => ({ kind, status })),
 			],
 			capabilities,
 			interactionUrl,

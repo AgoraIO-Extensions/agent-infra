@@ -2173,6 +2173,793 @@
         ],
         "type": "object"
       },
+      "AgentDetailConfigurationProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "availability": {
+            "items": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "user",
+                      "type": "string"
+                    },
+                    "userId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "userId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "organization",
+                      "type": "string"
+                    },
+                    "organizationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "organizationId"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "channels": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "web",
+                    "wecom_bot",
+                    "wecom_app"
+                  ],
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "available",
+                    "not_configured",
+                    "binding",
+                    "bound",
+                    "failed"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "status"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "defaultModelOptionId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "defaultReasoningLevel": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "environment": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "modelOptions": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "displayName": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "modelId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "optionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "reasoningLevels": {
+                  "items": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "optionId",
+                "displayName",
+                "modelId",
+                "reasoningLevels"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "owners": {
+            "items": {
+              "$ref": "#/components/schemas/AgentOwnerProjectionV1"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "secrets": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "isSet": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version": {
+                  "anyOf": [
+                    {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "isSet",
+                "version"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "owners",
+          "availability",
+          "modelOptions",
+          "defaultModelOptionId",
+          "defaultReasoningLevel",
+          "environment",
+          "channels",
+          "secrets"
+        ],
+        "type": "object"
+      },
+      "AgentDetailProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "capabilities": {
+            "additionalProperties": false,
+            "properties": {
+              "attachments": {
+                "type": "boolean"
+              },
+              "browser": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "capabilityVersion": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 100,
+                        "type": "integer"
+                      },
+                      "conformance": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "evidenceHash": {
+                            "pattern": "^[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          "manifestDigest": {
+                            "pattern": "^sha256:[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          "operations": {
+                            "items": {
+                              "enum": [
+                                "navigate",
+                                "observe",
+                                "interact",
+                                "files",
+                                "handoff",
+                                "side_effects"
+                              ],
+                              "type": "string"
+                            },
+                            "maxItems": 16,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "probeVersion": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "receiptId": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "verifiedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "receiptId",
+                          "probeVersion",
+                          "verifiedAt",
+                          "manifestDigest",
+                          "evidenceHash",
+                          "operations"
+                        ],
+                        "type": "object"
+                      },
+                      "operations": {
+                        "items": {
+                          "enum": [
+                            "navigate",
+                            "observe",
+                            "interact",
+                            "files",
+                            "handoff",
+                            "side_effects"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 16,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "policy": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actionTimeoutMs": {
+                            "maximum": 120000,
+                            "minimum": 100,
+                            "type": "integer"
+                          },
+                          "allowUserHandoff": {
+                            "type": "boolean"
+                          },
+                          "allowedOrigins": {
+                            "items": {
+                              "pattern": "^https?:\\/\\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\\/$",
+                              "type": "string"
+                            },
+                            "maxItems": 128,
+                            "type": "array"
+                          },
+                          "maxBrowserDurationMs": {
+                            "maximum": 86400000,
+                            "minimum": 1000,
+                            "type": "integer"
+                          },
+                          "maxConcurrentActions": {
+                            "maximum": 16,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxContexts": {
+                            "maximum": 4,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxDownloadBytes": {
+                            "maximum": 10000000000,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "maxDownloads": {
+                            "maximum": 256,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "maxPages": {
+                            "maximum": 64,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxRetainedProfileBytes": {
+                            "maximum": 10000000000,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "maxScreenshotBytes": {
+                            "maximum": 100000000,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "maxTabs": {
+                            "maximum": 32,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxUploadBytes": {
+                            "maximum": 10000000000,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "maxViewportHeight": {
+                            "maximum": 4320,
+                            "minimum": 240,
+                            "type": "integer"
+                          },
+                          "maxViewportWidth": {
+                            "maximum": 7680,
+                            "minimum": 320,
+                            "type": "integer"
+                          },
+                          "navigationTimeoutMs": {
+                            "maximum": 300000,
+                            "minimum": 100,
+                            "type": "integer"
+                          },
+                          "requireSideEffectConfirmation": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "allowedOrigins",
+                          "maxContexts",
+                          "maxTabs",
+                          "maxPages",
+                          "maxViewportWidth",
+                          "maxViewportHeight",
+                          "maxConcurrentActions",
+                          "maxDownloads",
+                          "maxDownloadBytes",
+                          "maxUploadBytes",
+                          "maxScreenshotBytes",
+                          "maxBrowserDurationMs",
+                          "maxRetainedProfileBytes",
+                          "navigationTimeoutMs",
+                          "actionTimeoutMs",
+                          "requireSideEffectConfirmation",
+                          "allowUserHandoff"
+                        ],
+                        "type": "object"
+                      },
+                      "provenance": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "browser": {
+                            "const": "chromium",
+                            "type": "string"
+                          },
+                          "chromiumVersion": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "imageDigest": {
+                            "pattern": "^sha256:[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          "playwrightVersion": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "browser",
+                          "chromiumVersion",
+                          "playwrightVersion",
+                          "imageDigest"
+                        ],
+                        "type": "object"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "status": {
+                        "const": "available",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "capabilityVersion",
+                      "status",
+                      "operations",
+                      "policy",
+                      "provenance",
+                      "conformance"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "capabilityVersion": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 100,
+                        "type": "integer"
+                      },
+                      "errorCode": {
+                        "enum": [
+                          "BROWSER_CAPABILITY_NOT_CONFIGURED",
+                          "BROWSER_CAPABILITY_PROBE_FAILED",
+                          "BROWSER_CAPABILITY_UNAVAILABLE",
+                          "BROWSER_CAPABILITY_STALE",
+                          "BROWSER_CAPABILITY_VERSION_UNSUPPORTED",
+                          "BROWSER_CAPABILITY_POLICY_DENIED"
+                        ],
+                        "type": "string"
+                      },
+                      "reason": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "retryable": {
+                        "type": "boolean"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "status": {
+                        "enum": [
+                          "not_configured",
+                          "probe_failed",
+                          "unavailable",
+                          "stale"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "capabilityVersion",
+                      "status",
+                      "errorCode",
+                      "reason",
+                      "retryable"
+                    ],
+                    "type": "object"
+                  }
+                ],
+                "type": "object"
+              },
+              "connection": {
+                "type": "boolean"
+              },
+              "modelSelection": {
+                "type": "boolean"
+              },
+              "nativeMetadata": {
+                "type": "boolean"
+              },
+              "resultFiles": {
+                "type": "boolean"
+              },
+              "skills": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "manifestSha256": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "packageDigest": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "readOnly": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "version": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "name",
+                    "version",
+                    "manifestSha256",
+                    "packageDigest",
+                    "readOnly"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 150,
+                "type": "array"
+              },
+              "supplementaryInstruction": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "modelSelection",
+              "attachments",
+              "resultFiles",
+              "connection",
+              "supplementaryInstruction"
+            ],
+            "type": "object"
+          },
+          "configuration": {
+            "$ref": "#/components/schemas/AgentDetailConfigurationProjectionV1"
+          },
+          "description": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "interactionUrl": {
+            "anyOf": [
+              {
+                "pattern": "^https:\\/\\/(?![^/?#]*@)[^?#]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "managementStatus": {
+            "enum": [
+              "pending_approval",
+              "withdrawn",
+              "rejected",
+              "creating",
+              "available",
+              "stopped",
+              "creation_failed",
+              "disabled"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "serviceAvailability": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ready",
+                  "starting",
+                  "updating",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "standard",
+                    "type": "string"
+                  },
+                  "templateId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "templateId"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "identityResponsibility": {
+                    "enum": [
+                      "self-managed",
+                      "platform-managed"
+                    ],
+                    "type": "string"
+                  },
+                  "imageReference": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "imageReference",
+                  "interactionMode",
+                  "identityResponsibility"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "imageReference": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "platform-adapter",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "imageReference",
+                  "interactionMode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "identityResponsibility": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "interactionMode": {
+                    "const": "self-managed",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "custom",
+                    "type": "string"
+                  },
+                  "manifest": {
+                    "maxLength": 262144,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "entry": {
+                          "type": "boolean"
+                        },
+                        "name": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "resourceProfileRef": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "resourceProfileRef",
+                        "entry"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "interactionMode",
+                  "identityResponsibility",
+                  "manifest"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "agentId",
+          "name",
+          "description",
+          "source",
+          "managementStatus",
+          "serviceAvailability",
+          "configuration",
+          "capabilities",
+          "interactionUrl"
+        ],
+        "type": "object"
+      },
       "AgentLifecycleCommandRequestV1": {
         "oneOf": [
           {
@@ -2221,6 +3008,41 @@
             ],
             "type": "object"
           }
+        ],
+        "type": "object"
+      },
+      "AgentOwnerProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "active",
+              "disabled",
+              "departed",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "userId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "displayName",
+          "status"
         ],
         "type": "object"
       },
@@ -13777,6 +14599,101 @@
           }
         ],
         "summary": "Preview Key-visible candidates with deployment-owned model names"
+      }
+    },
+    "/api/v2/agents/{agentId}/detail": {
+      "get": {
+        "description": "Browser session only; no Authorization header or query. Visibility matches getAgentV2 and an invisible Agent is indistinguishable from a missing one. Owner status is resolved from the current LDAP account, Platform disable record and directory snapshot. Responses are no-store.",
+        "operationId": "getAgentDetailV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDetailProjectionV1"
+                }
+              }
+            },
+            "description": "Agent detail with Owner status"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ],
+        "summary": "Read one visible Agent with each Owner's current status"
       }
     },
     "/api/v2/agents/{agentId}/lifecycle": {

@@ -1,6 +1,10 @@
-import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
+import {
+	AgentDetailProjectionV1Schema,
+	AgentProjectionV2Schema,
+} from "@agent-infra/contracts/pilot";
 import {
 	createPilotAgentMockServerV2,
+	pilotAgentDetailFromV2,
 	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
 import { describe, expect, it } from "vitest";
@@ -9,6 +13,7 @@ import { createClient } from "../../pilot/generated-v2/client/index.js";
 import {
 	isRetryableAgentDiscoveryError,
 	loadAgentDetail,
+	loadAgentDetailView,
 	loadAgentDiscovery,
 } from "./agent-discovery.js";
 
@@ -137,6 +142,66 @@ describe("Agent discovery generated-client consumer", () => {
 			await expect(
 				loadAgentDetail(startingAgent.agentId, client),
 			).rejects.toMatchObject({ retryable: true });
+		},
+	);
+
+	it("reads the Owner-status detail projection from the detail entry (#2910)", async () => {
+		const detail = AgentDetailProjectionV1Schema.parse(
+			pilotAgentDetailFromV2(startingAgent, { "user-owner-1": "disabled" }),
+		);
+		const server = createPilotAgentMockServerV2({
+			listAgents: emptyAgentPage,
+			getAgent: { status: 200, body: startingAgent },
+			getAgentDetail: { status: 200, body: detail },
+		});
+		await expect(
+			loadAgentDetailView(startingAgent.agentId, createAgentClient(server)),
+		).resolves.toEqual({ kind: "ready", agent: detail });
+		expect(
+			server.requests.map((request) => new URL(request.url).pathname),
+		).toEqual(["/api/v2/agents/agent-pilot-1/detail"]);
+	});
+
+	it.each([
+		// 旧 V2 Owner 形状、伪造的未知状态与他人 Agent 都不能当作详情显示。
+		startingAgent,
+		{
+			...pilotAgentDetailFromV2(startingAgent),
+			configuration: {
+				...pilotAgentDetailFromV2(startingAgent).configuration,
+				owners: [
+					{ userId: "user-owner-1", displayName: "Owner", status: "valid" },
+				],
+			},
+		},
+		pilotAgentDetailFromV2(secondAgent),
+	])("rejects an invalid or mismatched Owner-status detail", async (body) => {
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async () => Response.json(body),
+		});
+		await expect(
+			loadAgentDetailView(startingAgent.agentId, client),
+		).resolves.toEqual({
+			kind: "unavailable",
+			retryable: false,
+			reason: "invalid-response",
+		});
+	});
+
+	it.each([403, 404])(
+		"keeps an HTTP %i Owner-status detail indistinguishable from a missing Agent",
+		async (status) => {
+			const client = createClient({
+				baseUrl: "https://platform.example.test",
+				fetch: async () =>
+					Response.json(pilotFakeScenariosV2.unauthorized.response.body, {
+						status,
+					}),
+			});
+			await expect(
+				loadAgentDetailView(startingAgent.agentId, client),
+			).resolves.toEqual({ kind: "unavailable", retryable: false });
 		},
 	);
 

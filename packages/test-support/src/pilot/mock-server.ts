@@ -1,7 +1,9 @@
 import {
+	agentDetailOpenApiPathsV1,
 	pilotBrowserHttpOpenApiPathsV1,
 	pilotBrowserHttpOpenApiPathsV2,
 } from "@agent-infra/contracts/pilot";
+import { pilotAgentDetailFromV2 } from "./agent-detail.ts";
 
 export type PilotAgentMockResponseV1 = {
 	readonly status: number;
@@ -17,6 +19,11 @@ export type PilotAgentMockServerScenarioV1 = {
 	readonly getDeploymentConfiguration?: PilotAgentMockResponderV1<[Request]>;
 	readonly listAgents: PilotAgentMockResponderV1<[Request]>;
 	readonly getAgent: PilotAgentMockResponderV1<[Request, string]>;
+	/**
+	 * GET /api/v2/agents/{agentId}/detail（#2910）。未提供时由 getAgent 的 V2 响应派生，
+	 * Owner 均为 active；错误响应原样返回。
+	 */
+	readonly getAgentDetail?: PilotAgentMockResponderV1<[Request, string]>;
 	readonly getAgentDefaultRelayKey?: PilotAgentMockResponderV1<
 		[Request, string]
 	>;
@@ -153,6 +160,11 @@ function createPilotAgentMockServer(
 			? operation("/api/v2/deployment/configuration", "get")
 			: undefined;
 	const getAgentOperation = operation("/api/v1/agents/{agentId}", "get");
+	const getAgentDetailOperation =
+		version === 2
+			? (agentDetailOpenApiPathsV1["/api/v2/agents/{agentId}/detail"]
+					.get as unknown as Operation)
+			: undefined;
 	const getAgentDefaultRelayKeyOperation =
 		version === 2
 			? operation("/api/v2/agents/{agentId}/default-relay-key", "get")
@@ -206,6 +218,9 @@ function createPilotAgentMockServer(
 	}
 	validateStaticResponse(scenario.listAgents, listAgentsOperation);
 	validateStaticResponse(scenario.getAgent, getAgentOperation);
+	if (getAgentDetailOperation) {
+		validateStaticResponse(scenario.getAgentDetail, getAgentDetailOperation);
+	}
 	if (getAgentDefaultRelayKeyOperation) {
 		validateStaticResponse(
 			scenario.getAgentDefaultRelayKey,
@@ -484,6 +499,42 @@ function createPilotAgentMockServer(
 		}
 
 		const agentIdPath = /^\/api\/v1\/agents\/([^/]+)$/.exec(routingPath)?.[1];
+		const detailAgentIdPath = /^\/api\/v1\/agents\/([^/]+)\/detail$/.exec(
+			routingPath,
+		)?.[1];
+		if (
+			request.method === "GET" &&
+			detailAgentIdPath !== undefined &&
+			getAgentDetailOperation !== undefined
+		) {
+			const agentId = decodeURIComponent(detailAgentIdPath);
+			getAgentDetailOperation.requestParams.path?.parse({ agentId });
+			let response: PilotAgentMockResponseV1;
+			if (scenario.getAgentDetail) {
+				response = resolveResponse(scenario.getAgentDetail, request, agentId);
+			} else {
+				// 由 V2 详情派生：responder 看到的是对应的 V2 详情请求。
+				const agentUrl = new URL(request.url);
+				agentUrl.pathname = agentUrl.pathname.replace(/\/detail$/, "");
+				const agent = resolveResponse(
+					scenario.getAgent,
+					new Request(agentUrl, request),
+					agentId,
+				);
+				validateResponse(getAgentOperation, agent);
+				response =
+					agent.status === 200
+						? {
+								status: 200,
+								body: pilotAgentDetailFromV2(
+									agent.body as Parameters<typeof pilotAgentDetailFromV2>[0],
+								),
+							}
+						: agent;
+			}
+			validateResponse(getAgentDetailOperation, response);
+			return jsonResponse(response);
+		}
 		const defaultRelayKeyAgentIdPath =
 			/^\/api\/v1\/agents\/([^/]+)\/default-relay-key$/.exec(routingPath)?.[1];
 		if (

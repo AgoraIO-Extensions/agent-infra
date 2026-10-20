@@ -690,6 +690,76 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the pinned Agent detail with Owner status (#2910)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const detailPath = "/api/v2/agents/{agentId}/detail";
+		const previous = structuredClone(current);
+		delete previous.paths[detailPath];
+		delete previous.components.schemas.AgentOwnerProjectionV1;
+		delete previous.components.schemas.AgentDetailConfigurationProjectionV1;
+		delete previous.components.schemas.AgentDetailProjectionV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-detail-owner-status-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const owner = (value: typeof current) =>
+				value.components.schemas.AgentOwnerProjectionV1;
+			for (const mutate of [
+				// 详情只接受平台会话，不接受 Bearer 凭证。
+				(value: typeof current) => {
+					value.paths[detailPath].get.security = [
+						{ PlatformSession: [] },
+						{ platformApiCredential: [] },
+					];
+				},
+				// Owner 投影保持 strict，不能带出邮箱、角色或禁用原因。
+				(value: typeof current) => {
+					owner(value).additionalProperties = true;
+				},
+				(value: typeof current) => {
+					owner(value).properties.email = { type: "string" };
+				},
+				(value: typeof current) => {
+					owner(value).properties.disabledReason = { type: "string" };
+				},
+				// 状态集合固定，未知状态不能被接受为有效。
+				(value: typeof current) => {
+					owner(value).properties.status.enum.push("unknown");
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentDetailProjectionV1.additionalProperties = true;
+				},
+				// 既有 V2 投影的 Owner 形状不变。
+				(value: typeof current) => {
+					value.components.schemas.AgentProjectionV2.properties.configuration =
+						value.components.schemas.AgentDetailProjectionV1.properties.configuration;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the pinned Skill Hub version detail and owned-version reads (#2904)", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -3380,6 +3450,7 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/skills/installations/{installationId}" &&
 				path !== "/api/v2/agents/{agentId}/versions/{agentVersion}/skills" &&
 				path !== "/api/v2/agents/{agentId}/skills/current-version" &&
+				path !== "/api/v2/agents/{agentId}/detail" &&
 				path !== "/api/v2/skills/projects" &&
 				path !== "/api/v2/skills/projects/{projectId}" &&
 				path !== "/api/v2/skills/reviews" &&

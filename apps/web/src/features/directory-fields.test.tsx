@@ -1,8 +1,12 @@
 import {
+	AgentDetailProjectionV1Schema,
 	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
-import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
+import {
+	pilotAgentDetailFromV2,
+	pilotFakeScenariosV2,
+} from "@agent-infra/test-support/pilot";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	act,
@@ -58,6 +62,10 @@ const agent = AgentProjectionV2Schema.parse({
 		],
 	},
 });
+// Agent 详情页读取带 Owner 状态的详情投影（#2910），其余字段与 V2 相同。
+const detailAgent = AgentDetailProjectionV1Schema.parse(
+	pilotAgentDetailFromV2(agent),
+);
 const session = BrowserSessionProjectionV1Schema.parse({
 	schemaVersion: 1,
 	user: { userId: "user-owner-1", displayName: "Owner", roles: ["employee"] },
@@ -116,7 +124,7 @@ describe("Agent detail and Owner configuration directory fields", () => {
 	it("resolves detail availability by canonical IDs without displaying them", async () => {
 		const fetch = directoryFixture();
 		await renderWithAgentRouter(
-			<AgentDetailScreen state={{ kind: "ready", agent }} />,
+			<AgentDetailScreen state={{ kind: "ready", agent: detailAgent }} />,
 		);
 		expect(await screen.findByText("Directory User")).toBeTruthy();
 		expect(await screen.findByText("Engineering / Platform")).toBeTruthy();
@@ -136,7 +144,7 @@ describe("Agent detail and Owner configuration directory fields", () => {
 			vi.fn(() => new Promise<Response>(() => undefined)),
 		);
 		await renderWithAgentRouter(
-			<AgentDetailScreen state={{ kind: "ready", agent }} />,
+			<AgentDetailScreen state={{ kind: "ready", agent: detailAgent }} />,
 		);
 		expect(await screen.findAllByText("读取中…")).toHaveLength(2);
 		expect(
@@ -151,7 +159,7 @@ describe("Agent detail and Owner configuration directory fields", () => {
 		const failing = vi.fn(async () => new Response(null, { status: 503 }));
 		vi.stubGlobal("fetch", failing);
 		await renderWithAgentRouter(
-			<AgentDetailScreen state={{ kind: "ready", agent }} />,
+			<AgentDetailScreen state={{ kind: "ready", agent: detailAgent }} />,
 		);
 		const alert = await screen.findByRole("alert");
 		expect(alert.textContent).toContain("目录暂时无法读取");
@@ -177,7 +185,7 @@ describe("Agent detail and Owner configuration directory fields", () => {
 			vi.fn(async () => Response.json({ items: [] })),
 		);
 		await renderWithAgentRouter(
-			<AgentDetailScreen state={{ kind: "ready", agent }} />,
+			<AgentDetailScreen state={{ kind: "ready", agent: detailAgent }} />,
 		);
 		expect(await screen.findByText("未识别的用户")).toBeTruthy();
 		expect(screen.getByText("未识别的组织")).toBeTruthy();
