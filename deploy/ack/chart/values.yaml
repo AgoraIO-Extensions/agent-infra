@@ -1,0 +1,72 @@
+# Non-secret ACK deployment values. All referenced Secrets and the directory
+# source ConfigMap are created from the E2E private inputs outside this chart.
+images:
+  web: ghcr.io/agoraio-extensions/agent-infra/web@sha256:df1ee9b1d284b6dc4fc92a5033477fe4e82de7e53e78aabacdb21f9af78c1162
+  api: ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:1ff771514f0fa426fc719f700f16d7f7428d3ccdb33e5c4380ffe8e19625ecea
+  worker: ghcr.io/agoraio-extensions/agent-infra/platform-worker@sha256:f99076114c2690c0a9716b504bb0a12132703a645dc13138110136ae033c4efa
+  directory: ghcr.io/agoraio-extensions/agent-infra/enterprise-directory-sync@sha256:cb8a377ab39877149fd8d852731fc74023b95b7f1e9396d47c7cc79e9501fa37
+  postgres: ghcr.io/agoraio-extensions/agent-infra/postgres@sha256:3a1c948f0c6c857ce1db23caa700794725f0f1a7b3dc395925aa363d3284af49
+  pullSecrets:
+    - ack-ghcr-pull
+secrets:
+  database: agent-infra-platform-database
+  apiConfiguration: agent-infra-api-configuration
+  apiProxyToken: agent-infra-api-proxy-token
+  encryptionPublicKey: agent-infra-encryption-public-key
+  directoryDatabase: agent-infra-directory-db
+  directoryMigrationDatabase: agent-infra-directory-migration-db
+  directoryRuntime: agent-infra-directory-runtime
+  directoryCa: agent-infra-directory-ca
+  workerConfiguration: agent-infra-worker-configuration
+  workerRuntimeAuth: agent-infra-worker-runtime-auth
+  workerKeyring: agent-infra-worker-keyring
+  workerDirectoryRead: agent-infra-worker-directory-read
+  workerCa: agent-infra-worker-ca
+  webTls: agent-infra-web-tls
+publicOrigin: https://118.178.91.138
+directory:
+  corpId: ww1792ac25c99153bd
+  sourceConfigMap: agent-infra-directory-source
+  sourceModule: file:///app/directory-source/source.ts
+  runtimeDatabaseRole: agent_infra_directory
+scheduling:
+  api: {}
+  web: {}
+  directory: {}
+  postgres: {}
+  worker:
+    nodeSelector:
+      kubernetes.io/arch: amd64
+      kubernetes.io/os: linux
+      type: virtual-kubelet
+    tolerations:
+      - key: virtual-kubelet.io/provider
+        operator: Equal
+        value: alibabacloud
+        effect: NoSchedule
+resources:
+  api:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  web:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  directory:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  worker:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  postgres:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+postgres:
+  enabled: false
+  storageClass: alicloud-disk-essd
+  storageSize: 20Gi
+ingress:
+  enabled: true
+  className: new-magic-nginx
+  tlsSecret: agent-infra-web-tls
+migrations:
+  enabled: false

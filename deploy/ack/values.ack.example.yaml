@@ -1,0 +1,25 @@
+# Start from chart/values.yaml and keep this file outside Git if it contains
+# environment-specific Secret names or image overrides.
+# The chart expects these existing Secret/ConfigMap objects in the namespace:
+# - ack-ghcr-pull
+# - agent-infra-platform-database
+# - agent-infra-api-configuration
+# - agent-infra-api-proxy-token
+# - agent-infra-encryption-public-key
+# - agent-infra-directory-db
+# - agent-infra-directory-migration-db
+# - agent-infra-directory-runtime
+# - agent-infra-directory-ca
+# - agent-infra-worker-configuration
+# - agent-infra-worker-runtime-auth
+# - agent-infra-worker-keyring
+# - agent-infra-worker-directory-read
+# - agent-infra-worker-ca
+# - agent-infra-directory-source (ConfigMap)
+#
+# Keep migrations and Postgres disabled when taking over an initialized ACK
+# namespace; enable them for a new environment after reviewing storage and DB.
+postgres:
+  enabled: false
+migrations:
+  enabled: false

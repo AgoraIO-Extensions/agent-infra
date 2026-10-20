@@ -18,7 +18,9 @@ RUN apk add --no-cache libexpat=2.8.4-r0 libuuid=2.42.3-r1 pcre2=10.49-r0 \
     && rm -f /var/log/apk.log
 COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
 COPY apps/web/nginx-main.conf /etc/nginx/nginx.conf
-COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
+COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf.template
+COPY apps/web/ack-web-entrypoint.sh /usr/local/bin/ack-web-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/ack-web-entrypoint.sh
 USER nginx
-ENTRYPOINT ["nginx"]
-CMD ["-g", "daemon off;"]
+ENTRYPOINT ["/usr/local/bin/ack-web-entrypoint.sh"]
+CMD ["nginx", "-g", "daemon off;"]

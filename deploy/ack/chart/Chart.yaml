@@ -1,0 +1,7 @@
+apiVersion: v2
+name: agent-infra-ack
+description: ACK deployment wrapper for the E2E-compatible Agent Infra stack
+version: 0.1.0
+appVersion: e2e
+kubeVersion: ">=1.28.0-0"
+type: application
