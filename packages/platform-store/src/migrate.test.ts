@@ -1991,6 +1991,7 @@ describe("published Relay authority migration", () => {
 			57,
 			58,
 			59,
+			60,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2048,9 +2049,13 @@ describe("published Relay authority migration", () => {
 			idx: 58,
 			tag: "0058_accepted_original_host",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 59)).toMatchObject({
 			idx: 59,
 			tag: "0059_skill_project_content",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 60,
+			tag: "0060_file_limit_declarations",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2382,6 +2387,19 @@ describe("published Relay authority migration", () => {
 						"updated_at",
 						"workspace_scope",
 					].map((name) => `session_sandbox_allocations:${name}`),
+					...[
+						"scope",
+						"agent_id",
+						"channel_id",
+						"revision",
+						"expires_at",
+						"max_bytes",
+						"media_types",
+						"idempotency_key",
+						"request_digest",
+						"updated_at",
+						"updated_by",
+					].map((name) => `file_limit_declarations:${name}`),
 				].sort(),
 				checks: [
 					...expectedDelta.checks,
@@ -2413,6 +2431,16 @@ describe("published Relay authority migration", () => {
 					].map(
 						(name) => `session_sandbox_allocations:session_sandbox_${name}`,
 					),
+					...[
+						"scope_valid",
+						"binding",
+						"revision_safe",
+						"max_bytes_safe",
+						"media_types_array",
+						"idempotency_key_non_empty",
+						"request_digest_hex",
+						"updated_by_non_empty",
+					].map((name) => `file_limit_declarations:file_limit_declaration_${name}`),
 				].sort(),
 				indexes: [
 					...expectedDelta.indexes,
@@ -2429,6 +2457,7 @@ describe("published Relay authority migration", () => {
 					].map(
 						(name) => `session_sandbox_allocations:session_sandbox_${name}`,
 					),
+					"file_limit_declarations:file_limit_declarations_scope_agent_id_channel_id_pk",
 				].sort(),
 			});
 			expect(
