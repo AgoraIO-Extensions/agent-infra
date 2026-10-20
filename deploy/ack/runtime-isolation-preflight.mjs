@@ -25,7 +25,6 @@ const ownershipLabel = "agent-infra.agora.io/runtime-preflight";
 const kubectl = (args, input) => execFileSync(process.env.KUBECTL_BIN ?? "kubectl", [
 	"--kubeconfig", kubeconfig, "--namespace", namespace, ...args,
 ], { encoding: "utf8", input, timeout: 190_000, stdio: ["pipe", "pipe", "pipe"] });
-let created = false;
 let stage = "create";
 console.log(JSON.stringify({ scope: "codex-landlock-installation", probePod: name }));
 try {
@@ -43,7 +42,6 @@ try {
 			}],
 		},
 	}));
-	created = true;
 	stage = "scheduling-and-pull";
 	kubectl(["wait", "--for=condition=Ready", `pod/${name}`, "--timeout=120s"]);
 	const pod = JSON.parse(kubectl(["get", "pod", name, "-o", "json"]));
@@ -57,14 +55,17 @@ try {
 	console.error(JSON.stringify({ status: "failed", stage, probePod: name, hint: "Check scheduling/image pull, setpriv and enforceable Landlock ABI 5; Pod health alone is insufficient" }));
 	process.exitCode = 1;
 } finally {
-	if (created) {
-		try {
-			const pod = JSON.parse(kubectl(["get", "pod", name, "-o", "json"]));
+	// A create request that timed out or lost its response may still have persisted the
+	// Pod, so cleanup always probes for it instead of trusting a success flag.
+	try {
+		const raw = kubectl(["get", "pod", name, "--ignore-not-found", "-o", "json"]);
+		if (raw.trim()) {
+			const pod = JSON.parse(raw);
 			if (pod.metadata.labels[ownershipLabel] !== owner) throw new Error("Probe ownership changed");
 			kubectl(["delete", "pod", name, "--wait=false"]);
-		} catch {
-			console.error(JSON.stringify({ status: "cleanup-failed", probePod: name, hint: "Inspect ownership before deleting" }));
-			process.exitCode = 1;
 		}
+	} catch {
+		console.error(JSON.stringify({ status: "cleanup-failed", probePod: name, hint: "Inspect ownership before deleting" }));
+		process.exitCode = 1;
 	}
 }
