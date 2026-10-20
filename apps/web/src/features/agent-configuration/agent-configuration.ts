@@ -38,7 +38,11 @@ import type {
 } from "../../pilot/generated-v2/types.gen.js";
 
 export function isAgentConfigurationOwner(
-	agent: AgentProjectionV2,
+	agent: {
+		readonly configuration: {
+			readonly owners: readonly { readonly userId: string }[];
+		};
+	},
 	session: BrowserSessionProjectionV1,
 ) {
 	return agent.configuration.owners.some(

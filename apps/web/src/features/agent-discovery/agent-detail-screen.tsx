@@ -7,11 +7,16 @@ import {
 	MessageCircle,
 	Settings,
 } from "lucide-react";
+import { Fragment } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { IdentifierText } from "@/components/ui/identifier-text";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
-import { statusTone } from "@/lib/status-tone";
-import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import { type ChipTone, statusTone } from "@/lib/status-tone";
+import type {
+	AgentDetailProjectionV1,
+	AgentProjectionV2,
+} from "../../pilot/generated-v2/types.gen.js";
 import {
 	agentAvailabilityStatus,
 	agentConversationSourceLabel,
@@ -27,7 +32,7 @@ import {
 	templateDisplayName,
 } from "../template-display-name.js";
 import {
-	type AgentDetailState,
+	type AgentDetailViewState,
 	canStartPlatformConversation,
 } from "./agent-discovery.js";
 import { agentChannelKindLabels } from "./agent-discovery-screen.js";
@@ -46,10 +51,12 @@ type AgentDetailScreenProps = {
 	 */
 	skillBindings?: { readonly agentId: string };
 	retrying?: boolean;
-	state: AgentDetailState | { kind: "loading" };
+	state: AgentDetailViewState | { kind: "loading" };
 	/** 模板显示名（部署配置）；未提供或读不到时显示「标准模板」（F-02）。 */
 	templateName?: TemplateNameLookup;
 };
+type AgentDetail = AgentDetailProjectionV1;
+type AgentOwner = AgentDetail["configuration"]["owners"][number];
 const channelStatusLabels = {
 	available: "可用",
 	not_configured: "未配置",
@@ -78,7 +85,7 @@ function safeInteractionUrl(input: string | null) {
 }
 
 /** 服务状态行的说明：按 PRD §6.4「用户看到的行为」，不展示运行时技术状态。 */
-function serviceDescription(agent: AgentProjectionV2) {
+function serviceDescription(agent: AgentDetail) {
 	if (agent.managementStatus !== "available")
 		return "历史只读，当前不能发送消息";
 	if (agent.serviceAvailability === "ready") return "可以发送消息并获得回复";
@@ -87,11 +94,60 @@ function serviceDescription(agent: AgentProjectionV2) {
 	return "历史只读，暂时不能发送消息";
 }
 
-function OwnerList({
-	owners,
+/**
+ * Owner 状态 chip（#2910）：只显示服务端投影的状态，读不到时为「状态未知」，不推断为有效。
+ * 所有 Owner 权限相同，不区分主要 / 共同 Owner（PRD §2.2）。
+ */
+const ownerStatusChips = {
+	active: { label: "有效", tone: "green" },
+	disabled: { label: "已禁用", tone: "amber" },
+	departed: { label: "已离职", tone: "gray" },
+	unavailable: { label: "状态未知", tone: "gray" },
+} satisfies Record<AgentOwner["status"], { label: string; tone: ChipTone }>;
+
+/** Owner 名称：服务端显示名，其次目录名称；都没有时只显示类型与 ID 短形式。 */
+function OwnerName({
+	owner,
+	directoryName,
 }: {
-	owners: AgentProjectionV2["configuration"]["owners"];
+	owner: AgentOwner;
+	directoryName?: string;
 }) {
+	const name = owner.displayName ?? directoryName;
+	return name ? (
+		<>{name}</>
+	) : (
+		<>
+			用户 <IdentifierText value={owner.userId} label="用户 ID" />
+		</>
+	);
+}
+
+function OwnerNames({ owners }: { owners: readonly AgentOwner[] }) {
+	const names = useDirectoryNames(
+		"user",
+		owners.map((owner) => owner.userId),
+	);
+	if (owners.length === 0) return <>未提供</>;
+	return (
+		<>
+			{owners.map((owner, index) => {
+				const directory = names.resolve(owner.userId);
+				return (
+					<Fragment key={owner.userId}>
+						{index > 0 && "、"}
+						<OwnerName
+							owner={owner}
+							directoryName={directory.resolved ? directory.name : undefined}
+						/>
+					</Fragment>
+				);
+			})}
+		</>
+	);
+}
+
+function OwnerList({ owners }: { owners: readonly AgentOwner[] }) {
 	// 第二行是目录中的组织路径；读取失败或目录没有路径时只显示名称（D-04）。
 	const names = useDirectoryNames(
 		"user",
@@ -100,13 +156,24 @@ function OwnerList({
 	return (
 		<ul className="detail-list">
 			{owners.map((owner) => {
-				const path = names.resolve(owner.userId).detail;
+				const directory = names.resolve(owner.userId);
+				const chip = ownerStatusChips[owner.status];
 				return (
 					<li key={owner.userId}>
 						<div className="detail-list-main">
-							<strong>{owner.displayName}</strong>
-							{path && <small>{path}</small>}
+							<strong>
+								<OwnerName
+									owner={owner}
+									directoryName={
+										directory.resolved ? directory.name : undefined
+									}
+								/>
+							</strong>
+							{directory.detail && <small>{directory.detail}</small>}
 						</div>
+						<Badge variant="chip" tone={chip.tone}>
+							{chip.label}
+						</Badge>
 					</li>
 				);
 			})}
@@ -120,7 +187,7 @@ function OwnerList({
  * 只重复入口方式（已写进「模板 / 入口」），不再单独占一行，返回 undefined。
  */
 function interactionReadiness(
-	agent: AgentProjectionV2,
+	agent: AgentDetail,
 	interactionUrl: string | undefined,
 ) {
 	if (
@@ -139,7 +206,7 @@ function interactionReadiness(
  * 自定义 Agent 的来源文案已含入口方式（「自定义 Agent · 自有交互入口」）。
  */
 function templateAndEntryLabel(
-	agent: AgentProjectionV2,
+	agent: AgentDetail,
 	templateName: TemplateNameLookup | undefined,
 ) {
 	const source = agentConversationSourceLabel(agent, templateName);
@@ -316,9 +383,7 @@ export function AgentDetailScreen({
 						<dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-[auto_minmax(0,1fr)]">
 							<dt className="text-muted-foreground">Owner</dt>
 							<dd>
-								{agent.configuration.owners
-									.map((owner) => owner.displayName)
-									.join("、") || "未提供"}
+								<OwnerNames owners={agent.configuration.owners} />
 							</dd>
 							<dt className="text-muted-foreground">模板 / 入口</dt>
 							<dd className="break-all">

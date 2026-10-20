@@ -2,8 +2,13 @@ import type {
 	Client,
 	RequestResult,
 } from "../../pilot/generated-v2/client/index.js";
-import { getAgentV2, listAgentsV2 } from "../../pilot/generated-v2/sdk.gen.js";
+import {
+	getAgentDetailV1,
+	getAgentV2,
+	listAgentsV2,
+} from "../../pilot/generated-v2/sdk.gen.js";
 import type {
+	AgentDetailProjectionV1,
 	AgentProjectionV2,
 	ListAgentsV2Data,
 	ListAgentsV2Errors,
@@ -27,8 +32,16 @@ export type AgentDetailState =
 	| { kind: "ready"; agent: AgentProjectionV2 }
 	| UnavailableState;
 
+/** Agent 详情页的读取结果：Owner 带服务端解析的当前有效状态（#2910）。 */
+export type AgentDetailViewState =
+	| { kind: "ready"; agent: AgentDetailProjectionV1 }
+	| UnavailableState;
+
 export function canStartPlatformConversation(
-	agent: AgentProjectionV2,
+	agent: Pick<
+		AgentProjectionV2,
+		"managementStatus" | "serviceAvailability" | "source"
+	>,
 ): boolean {
 	return (
 		agent.managementStatus === "available" &&
@@ -142,7 +155,36 @@ export async function loadAgentDetail(
 	return { kind: "ready", agent: parsed.data };
 }
 
+/**
+ * 详情页读取带 Owner 状态的详情投影（#2910）。失败映射与 loadAgentDetail 相同：
+ * 403 与 404 合并，不暴露不可见 Agent 是否存在。
+ */
+export async function loadAgentDetailView(
+	agentId: string,
+	client?: Client,
+): Promise<AgentDetailViewState> {
+	const result = await getAgentDetailV1({
+		client,
+		path: { agentId },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	if (result.response?.status !== 200) {
+		const failure = collectionReadFailure(result.response?.status);
+		return unavailable(
+			failure.reason === "denied" || failure.reason === "not-found"
+				? { retryable: false }
+				: failure,
+		);
+	}
+	const parsed = AgentDetailProjectionV1Schema.safeParse(result.data);
+	if (!parsed.success || parsed.data.agentId !== agentId)
+		return unavailable({ retryable: false, reason: "invalid-response" });
+	return { kind: "ready", agent: parsed.data };
+}
+
 import {
+	AgentDetailProjectionV1Schema,
 	AgentProjectionV2Schema,
 	pilotBrowserHttpOpenApiPathsV2,
 } from "@agent-infra/contracts/pilot";
