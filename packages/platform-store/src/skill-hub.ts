@@ -1715,14 +1715,13 @@ export class PostgresSkillHubLifecycleV1 {
 						const version = decode(row.version, row.name);
 						return Object.freeze({
 							installation: decodeInstallation(row.installation),
-							version: canViewSkillHubVersionDetailV1(
+							version: Object.freeze({ ...version, name: row.name }),
+							visible: canViewSkillHubVersionDetailV1(
 								version,
 								identity.actor,
 								row.organizationId,
 								row.status,
-							)
-								? Object.freeze({ ...version, name: row.name })
-								: null,
+							),
 						});
 					});
 				await audit(
