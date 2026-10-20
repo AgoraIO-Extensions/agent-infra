@@ -233,6 +233,35 @@ describe("reply protection and external send", () => {
 			).send({ scope, replyHandle: handle, text: "reply" }),
 		).toBe("unknown");
 	});
+	// #2982：HTTP 回调 markdown 在真实验证渲染前、自建应用文本始终只发答案，不出现 `<think>`。
+	it.each([
+		["the bot HTTP callback markdown", route, scope],
+		["the application text", applicationRoute, applicationScope],
+	] as const)(
+		"sends only the answer through %s",
+		async (_name, replyRoute, replyScope) => {
+			const bodies: unknown[] = [];
+			const adapter = sender(async (_url, init) => {
+				bodies.push(JSON.parse(String(init?.body)));
+				return Response.json({ errcode: 0 });
+			});
+			expect(
+				await adapter.send({
+					scope: replyScope,
+					replyHandle: await protect(replyRoute),
+					text: "最终答案",
+					textWithThinking: "<think>私密思考</think>\n\n最终答案",
+				}),
+			).toBe("sent");
+			expect(bodies).toHaveLength(1);
+			const body = bodies[0] as {
+				markdown?: { content: string };
+				text?: { content: string };
+			};
+			expect(body.markdown?.content ?? body.text?.content).toBe("最终答案");
+			expect(JSON.stringify(bodies)).not.toContain("think");
+		},
+	);
 	it("sends a long application reply in ordered UTF-8-bounded parts", async () => {
 		const content: string[] = [];
 		const adapter = sender(async (_url, init) => {

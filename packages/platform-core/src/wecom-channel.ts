@@ -444,6 +444,17 @@ export interface WecomDeliveryClaimV1 {
 	readonly textDeltas: readonly string[];
 	/** Result files already confirmed by File Authority for this execution. */
 	readonly media?: readonly WecomResultFileReferenceV1[];
+	/**
+	 * #2982：执行完成时按顺序读取的思考过程有界前缀；`complete` 为 false 表示还有没读到的思考内容。
+	 * 只有完成的回答会带上它，回答正文仍只来自 `textDeltas`。
+	 */
+	readonly thinking?: {
+		readonly parts: readonly {
+			readonly kind: "raw" | "summary";
+			readonly text: string;
+		}[];
+		readonly complete: boolean;
+	};
 }
 export interface WecomDeliveryStorePortV1 {
 	claim(): Promise<WecomDeliveryClaimV1 | null>;
@@ -461,12 +472,59 @@ export interface WecomSendPortV1 {
 		readonly scope: WecomScopeV1;
 		readonly replyHandle: string;
 		readonly text: string;
+		/**
+		 * #2982：`<think>思考过程</think>`、空行加答案的完整回复，不超过 20480 字节。只有能按企微
+		 * 思考过程样式渲染的回复方式（智能机器人长连接 stream）使用它；其他方式只发送 `text`。
+		 */
+		readonly textWithThinking?: string;
 		/** Result files already confirmed by File Authority for this execution. */
 		readonly media?: readonly WecomResultFileReferenceV1[];
 		/** Rechecks the original actor, channel revision and task boundary before an external effect. */
 		readonly revalidate?: () => Promise<boolean>;
 	}): Promise<"sent" | "failed" | "unknown">;
 }
+/** #2982：企微单条回复的字节上限，答案与思考过程共用。 */
+const wecomReplyMaximumBytes = 20_480;
+const wecomThinkingTruncatedNotice = "（思考过程较长，已截断）";
+
+/**
+ * #2982：按企微被动回复的思考过程样式组合 `<think>思考过程</think>`、空行与答案
+ * （WECOM-text-deployment.md「思考过程」）。摘要与原始推理各自按顺序拼接，先摘要后原始推理，
+ * 与 Web 一致。思考内容里的 `<think>`、`</think>` 字面量先换成全角尖括号，不能提前闭合或另起
+ * 思考块。答案优先：思考过程只用答案之外的预算，放不下或没有读完时在码点边界截短并附提示；
+ * 连提示都放不下时只发答案。
+ */
+function composeWecomThinkingReplyV1(
+	answer: string,
+	thinking: NonNullable<WecomDeliveryClaimV1["thinking"]>,
+) {
+	const joined = (kind: "raw" | "summary") =>
+		thinking.parts
+			.filter((part) => part.kind === kind)
+			.map((part) => part.text)
+			.join("");
+	const content = [joined("summary"), joined("raw")]
+		.filter(Boolean)
+		.join("\n\n")
+		.replace(/<(\s*\/?\s*think\b[^<>]*)>/gi, "＜$1＞");
+	if (!content.trim()) return undefined;
+	const budget =
+		wecomReplyMaximumBytes - Buffer.byteLength(`<think></think>\n\n${answer}`);
+	if (thinking.complete && Buffer.byteLength(content) <= budget)
+		return `<think>${content}</think>\n\n${answer}`;
+	const room = budget - Buffer.byteLength(wecomThinkingTruncatedNotice);
+	let bytes = 0;
+	let end = 0;
+	for (const point of content) {
+		const size = Buffer.byteLength(point);
+		if (bytes + size > room) break;
+		bytes += size;
+		end += point.length;
+	}
+	if (!content.slice(0, end).trim()) return undefined;
+	return `<think>${content.slice(0, end)}${wecomThinkingTruncatedNotice}</think>\n\n${answer}`;
+}
+
 export function createWecomDeliveryV1(dependencies: {
 	readonly store: WecomDeliveryStorePortV1;
 	readonly authorization: WecomAuthorizationPortV1;
@@ -520,10 +578,21 @@ export function createWecomDeliveryV1(dependencies: {
 								? "本次任务已停止"
 								: "本次任务执行失败，请稍后重试";
 			const media = claim.media ?? [];
-			if ((!text && media.length === 0) || Buffer.byteLength(text) > 20_480) {
+			if (
+				(!text && media.length === 0) ||
+				Buffer.byteLength(text) > wecomReplyMaximumBytes
+			) {
 				await dependencies.store.finish(claim, "failed");
 				return true;
 			}
+			// #2982：只有完成且有答案的回复组合思考过程；固定文案与只有文件的回复不附带。
+			const textWithThinking =
+				claim.acceptanceStatus === "accepted" &&
+				claim.executionStatus === "completed" &&
+				text &&
+				claim.thinking
+					? composeWecomThinkingReplyV1(text, claim.thinking)
+					: undefined;
 			if (!(await dependencies.store.prepare(claim, current.authority)))
 				return true;
 			let status: "sent" | "failed" | "unknown";
@@ -532,6 +601,7 @@ export function createWecomDeliveryV1(dependencies: {
 					scope: claim.scope,
 					replyHandle: claim.replyHandle,
 					text,
+					...(textWithThinking ? { textWithThinking } : {}),
 					...(media.length ? { media } : {}),
 					revalidate: async () => {
 						const latest = claim.connectionAuthorizationFact
