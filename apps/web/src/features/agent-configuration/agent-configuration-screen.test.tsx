@@ -417,7 +417,8 @@ describe("AgentConfigurationScreen", () => {
 			"可用范围",
 			"模型与凭证",
 			"Agent 默认 Relay Key",
-			"企微渠道",
+			// W-17：设计 #owner-config 分区标题为「渠道」。
+			"渠道",
 			"Skill",
 			"环境变量与 Secret",
 		]);

@@ -378,6 +378,12 @@ describe("MyAgentsScreen design alignment", () => {
 		expect(document.body.textContent).not.toContain(
 			pendingApplication.submittedAt,
 		);
+		// W-02：设计 .list-row 只有标题与「说明 · 更新于」两行；列表只含本人申请，不再另起申请人行。
+		const copy = row.querySelector(".tag-row")?.parentElement as HTMLElement;
+		expect(
+			[...copy.children].map((child) => child.tagName.toLowerCase()),
+		).toEqual(["div", "h2", "p"]);
+		expect(row.textContent).not.toContain("申请人");
 	});
 
 	it("names every repeated link after its application or Agent (R4-11 / AC-11)", async () => {
@@ -483,6 +489,48 @@ describe("MyAgentsScreen design alignment", () => {
 			expect(link.firstElementChild?.tagName.toLowerCase()).toBe("svg");
 		}
 		expect(screen.queryByText("配置与管理")).toBeNull();
+	});
+
+	it("separates owned card channels and models with the design dot (W-04)", async () => {
+		const parsed = AgentProjectionV2Schema.parse(
+			pilotFakeScenariosV2.starting.response.body,
+		);
+		const agent = AgentProjectionV2Schema.parse({
+			...parsed,
+			configuration: {
+				...parsed.configuration,
+				channels: [
+					{ kind: "web", status: "available" },
+					{ kind: "wecom_bot", status: "bound" },
+				],
+				modelOptions: [
+					...parsed.configuration.modelOptions,
+					{
+						...parsed.configuration.modelOptions[0],
+						optionId: "second-option",
+						displayName: "Second model",
+					},
+				],
+			},
+		});
+		await renderWithMyAgentsRouter(
+			<MyAgentsScreen
+				state={{ kind: "ready", applications: [] }}
+				ownedAgents={[agent]}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("tab", { name: "已创建" }));
+		const facts = screen
+			.getByRole("heading", { name: agent.name })
+			.closest("li")
+			?.querySelector(".metadata-facts") as HTMLElement;
+		const value = (term: string) =>
+			[...facts.querySelectorAll("dt")].find((dt) => dt.textContent === term)
+				?.nextElementSibling?.textContent;
+		expect(value("渠道")).toBe("Web · 企微机器人");
+		expect(value("模型")).toBe(
+			`${parsed.configuration.modelOptions[0]?.displayName} · Second model`,
+		);
 	});
 
 	it("never falls back to an Owner user ID when the display name is empty (M-05)", async () => {

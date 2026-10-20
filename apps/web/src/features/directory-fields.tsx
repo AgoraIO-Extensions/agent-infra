@@ -143,6 +143,7 @@ export function DirectoryPicker({
 	required = false,
 	fallbackLabels,
 	closeOnSelect = false,
+	placeholder,
 }: {
 	id: string;
 	label: string;
@@ -159,6 +160,8 @@ export function DirectoryPicker({
 	fallbackLabels?: Readonly<Record<string, string>>;
 	/** 只取一项的调用方（例如员工访问控制）选中后收起，避免结果层盖住后续操作。 */
 	closeOnSelect?: boolean;
+	/** 未选择任何项时的占位符；不提供时按目录类型显示默认文案。 */
+	placeholder?: string;
 }) {
 	const selectedIds = splitDirectoryValue(value);
 	const selectedKey = selectedIds.join(",");
@@ -425,9 +428,8 @@ export function DirectoryPicker({
 					placeholder={
 						selected.length > 0
 							? "继续搜索姓名、邮箱或组织"
-							: kind === "user"
-								? "搜索姓名或邮箱"
-								: "搜索组织名称或路径"
+							: (placeholder ??
+								(kind === "user" ? "搜索姓名或邮箱" : "搜索组织名称或路径"))
 					}
 					value={query}
 				/>

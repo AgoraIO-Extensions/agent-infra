@@ -355,6 +355,141 @@ describe("AgentSkillBindingScreen (O-02)", () => {
 		await waitFor(() => expect(toastText()).toBe("已提交绑定，等待同步"));
 	});
 
+	// W-30：写入并回读后，焦点交给结果卡片标题或页面 h1，不落到 body。
+	function statefulBindings(
+		initial: ReturnType<typeof skillBinding>[],
+		afterWrite: ReturnType<typeof skillBinding>[],
+	) {
+		let current = { revision: 3, bindings: initial };
+		const readBindings = vi.fn(async () => ({
+			schemaVersion: 1 as const,
+			agentId: agent.agentId,
+			agentVersion: "agent-version-1",
+			configurationRevision: current.revision,
+			bindings: current.bindings,
+		}));
+		const bindVersion = vi.fn(async () => {
+			current = { revision: 4, bindings: afterWrite };
+			return {
+				schemaVersion: 1 as const,
+				agentId: agent.agentId,
+				agentVersion: "agent-version-1",
+				configurationRevision: 4,
+				changedFields: ["skills"] as ["skills"],
+				replayed: false,
+			};
+		});
+		return { readBindings, bindVersion };
+	}
+
+	it("moves focus to the new binding title after confirming a binding (W-30)", async () => {
+		renderScreen(
+			statefulBindings(
+				[skillBinding("synced")],
+				[
+					skillBinding("synced"),
+					skillBinding("pending_sync", { name: "code-review" }),
+				],
+			),
+		);
+		await screen.findByRole("article");
+		fireEvent.change(screen.getByLabelText("固定版本"), {
+			target: { value: "code-review-v1" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "绑定固定版本" }));
+		const dialog = await screen.findByRole("dialog", {
+			name: "确认绑定固定版本",
+		});
+		fireEvent.click(within(dialog).getByRole("button", { name: "确认绑定" }));
+		const title = await screen.findByRole("heading", {
+			level: 2,
+			name: "code-review v1.0.0",
+		});
+		await waitFor(() => expect(document.activeElement).toBe(title));
+		expect(title.getAttribute("tabindex")).toBe("-1");
+	});
+
+	it("moves focus to the next binding after unbinding one (W-30)", async () => {
+		renderScreen(
+			statefulBindings(
+				[
+					skillBinding("synced"),
+					skillBinding("pending_sync", { name: "code-review" }),
+				],
+				[skillBinding("pending_sync", { name: "code-review" })],
+			),
+		);
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: "解除绑定：workspace-summary",
+			}),
+		);
+		fireEvent.click(
+			within(
+				await screen.findByRole("dialog", { name: "确认解除绑定" }),
+			).getByRole("button", { name: "解除绑定" }),
+		);
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole("heading", { level: 2, name: "code-review v1.0.0" }),
+			),
+		);
+		expect(
+			screen.queryByRole("heading", { name: "workspace-summary v1.0.0" }),
+		).toBeNull();
+	});
+
+	it("moves focus to the page heading after unbinding the last binding (W-30)", async () => {
+		renderScreen(statefulBindings([skillBinding("synced")], []));
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: "解除绑定：workspace-summary",
+			}),
+		);
+		fireEvent.click(
+			within(
+				await screen.findByRole("dialog", { name: "确认解除绑定" }),
+			).getByRole("button", { name: "解除绑定" }),
+		);
+		await screen.findByText("还未绑定 Skill");
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole("heading", { level: 1, name: "Agent 的 Skill" }),
+			),
+		);
+	});
+
+	it("moves focus to the replacement binding after changing its version (W-30)", async () => {
+		renderScreen(
+			statefulBindings(
+				[skillBinding("synced")],
+				[
+					skillBinding("pending_sync", {
+						versionId: "workspace-summary-v2",
+						version: "1.1.0",
+					}),
+				],
+			),
+		);
+		fireEvent.click(
+			await screen.findByRole("button", {
+				name: "更换固定版本：workspace-summary",
+			}),
+		);
+		const dialog = await screen.findByRole("dialog", { name: "更换固定版本" });
+		fireEvent.click(
+			within(dialog).getByRole("button", { name: "确认版本变更" }),
+		);
+		await waitFor(() =>
+			expect(document.activeElement).toBe(
+				screen.getByRole("heading", {
+					level: 2,
+					name: "workspace-summary v1.1.0",
+				}),
+			),
+		);
+	});
+
 	it("does not resubmit an already bound version", async () => {
 		const { bindVersion } = renderScreen();
 		await screen.findByRole("article");
@@ -451,7 +586,14 @@ describe("AgentSkillBindingScreen (O-02)", () => {
 
 	it("reads bindings under the server-provided version and shows it (#2903)", async () => {
 		const { readBindings } = renderScreen({ agentVersion: "2026.10:r1" });
-		expect(await screen.findByText("当前 Agent 版本：2026.10:r1")).toBeTruthy();
+		// W-37：版本值由 IdentifierText 显示（不超过 12 个字符时为全文），标题文字不变。
+		const title = await screen.findByText("当前 Agent 版本：", {
+			exact: false,
+		});
+		expect(title.textContent).toBe("当前 Agent 版本：2026.10:r1");
+		expect(title.querySelector("code")?.getAttribute("title")).toBe(
+			"2026.10:r1",
+		);
 		expect(readBindings).toHaveBeenCalledWith("agent-pilot-1", "2026.10:r1");
 		expect(screen.queryAllByRole("textbox")).toEqual([]);
 	});

@@ -1,11 +1,17 @@
 import { AgentApplicationProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
+import { ToastProvider } from "@/components/ui/toast";
 import { templateNameLookup } from "../template-display-name.js";
 import { MyAgentApplicationDetailScreen } from "./my-agent-application-detail-screen.js";
 import { pendingApplication } from "./test-fixtures.js";
-import { renderWithMyAgentsRouter } from "./test-router.js";
+import { renderWithMyAgentsRouter as renderInRouter } from "./test-router.js";
+
+// 详情页用 Toast 确认撤回结果（W-15）：与根布局一样包一层 Toast 宿主。
+function renderWithMyAgentsRouter(content: ReactNode) {
+	return renderInRouter(<ToastProvider>{content}</ToastProvider>);
+}
 
 const originalTimeZone = process.env.TZ;
 afterEach(() => {
@@ -135,11 +141,16 @@ describe("MyAgentApplicationDetailScreen", () => {
 		expect(
 			within(progressRow("approval")).getByText("已驳回").dataset.tone,
 		).toBe("red");
-		expect(screen.getByText("审批原因：")).toBeTruthy();
+		// W-13：驳回提示标题按设计为「需要修改后重提」；首步为「提交时间 · 申请人」。
+		expect(screen.getByText("需要修改后重提")).toBeTruthy();
+		expect(screen.queryByText("审批原因：")).toBeNull();
 		expect(
 			screen.getByText("Resource capacity is currently unavailable."),
 		).toBeTruthy();
-		expect(screen.getByText(/提交于/)).toBeTruthy();
+		const submitted = progressRow("submitted").querySelector("small");
+		expect(submitted?.textContent).toBe(
+			`${submitted?.querySelector("time")?.textContent} · ${pendingApplication.applicant?.displayName}`,
+		);
 		expectLocalTimestamp("2026-09-03T08:00:00Z", "2026 年 9 月 3 日 16:00:00");
 		expectLocalTimestamp("2026-09-03T09:00:00Z", "2026 年 9 月 3 日 17:00:00");
 		expect(screen.queryByRole("button", { name: "撤回申请" })).toBeNull();
@@ -173,6 +184,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 		expect(screen.getByText("审批时间")).toBeTruthy();
 		expectLocalTimestamp("2026-09-03T10:00:00Z", "2026 年 9 月 3 日 18:00:00");
 		expect(screen.queryByText("审批原因：")).toBeNull();
+		expect(screen.queryByText("需要修改后重提")).toBeNull();
 	});
 
 	it("keeps unavailable details opaque and does not direct a withdrawal error to retry", async () => {
@@ -265,7 +277,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 		expect(onWithdraw).toHaveBeenCalledOnce();
 	});
 
-	it("shows a withdrawn application as read-only history and focuses the projected result", async () => {
+	it("shows a withdrawn application as read-only history, confirms with a Toast and focuses the heading (W-15)", async () => {
 		const withdrawn = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			status: "withdrawn",
@@ -283,9 +295,31 @@ describe("MyAgentApplicationDetailScreen", () => {
 		).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "撤回申请" })).toBeNull();
 		expect(screen.queryByRole("link", { name: "修改申请" })).toBeNull();
-		const result = screen.getByRole("status");
-		expect(result.textContent).toBe("撤回请求已提交：已撤回。");
-		expect(document.activeElement).toBe(result);
+		// W-15：设计只用 Toast「申请已撤回」确认；「撤回申请」随状态消失，焦点落在页面 h1。
+		const toast = document.querySelector('[data-slot="toast"]');
+		await waitFor(() => expect(toast?.textContent).toBe("申请已撤回"));
+		expect(screen.queryByText(/撤回请求已提交/)).toBeNull();
+		expect(document.activeElement).toBe(
+			screen.getByRole("heading", { level: 1, name: withdrawn.name }),
+		);
+	});
+
+	it("asks to withdraw with the design copy without repeating the application name (W-16)", async () => {
+		await renderWithMyAgentsRouter(
+			<MyAgentApplicationDetailScreen
+				onWithdraw={vi.fn()}
+				state={{ kind: "ready", application: pendingApplication }}
+				withdrawing={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "撤回申请" }));
+		const dialog = await screen.findByRole("dialog", {
+			name: "撤回这条申请？",
+		});
+		expect(
+			dialog.querySelector('[data-slot="dialog-description"]')?.textContent,
+		).toBe("撤回后申请不会进入审批队列；你可以重新创建申请。");
+		expect(dialog.textContent).not.toContain(pendingApplication.name);
 	});
 
 	it("shows the actual purpose, Owners, availability and default model without Secret fields", async () => {

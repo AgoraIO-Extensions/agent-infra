@@ -495,8 +495,9 @@ export function AgentConfigurationScreen({
 								</Alert>
 							) : null}
 							{hasChanges || isDisabled ? null : (
+								// 设计 .form-footer 左侧状态为 .field-help：11px、--muted-ink（W-23）。
 								<p
-									className="text-muted-foreground text-sm outline-none"
+									className="text-(--muted-ink) text-[11px] outline-none"
 									id="agent-configuration-unchanged"
 									tabIndex={-1}
 								>

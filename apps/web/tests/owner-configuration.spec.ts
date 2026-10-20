@@ -18,6 +18,7 @@ import type {
 	DeploymentConfigurationProjectionV2,
 	SkillHubAgentBindingStatusV1,
 } from "../src/pilot/generated-v2/types.gen";
+import { expectNoDuplicateControls } from "./page-health";
 import {
 	computed,
 	expectCleanPage,
@@ -1206,9 +1207,15 @@ test("an Owner lists, binds and unbinds Skill versions under the server's Agent 
 	});
 	await page.goto("/agents/agent-pilot-1/skills");
 	const region = main(page);
-	await expect(
-		region.getByText("当前 Agent 版本：agent-version-7"),
-	).toBeVisible();
+	// W-37：部署配置的 Agent Version 没有显示名，按 IdentifierText 的等宽短形式显示，title 为完整值。
+	const versionTitle = region.locator(
+		'.agent-skill-version-notice [data-slot="alert-title"]',
+	);
+	await expect(versionTitle).toHaveText("当前 Agent 版本：agent-ve…");
+	await expect(versionTitle.locator("code")).toHaveAttribute(
+		"title",
+		"agent-version-7",
+	);
 	await expect(region.getByText("还未绑定 Skill")).toBeVisible();
 	// 版本只来自服务端：页面没有可手填的版本字段。
 	await expect(page.getByLabel("Agent 版本")).toHaveCount(0);
@@ -1222,6 +1229,24 @@ test("an Owner lists, binds and unbinds Skill versions under the server's Agent 
 		networkOrigins: [],
 		scripts: false,
 	};
+	// W-32：绑定按钮撑满右栏，高度沿公共 44px。
+	const bindTrigger = region.getByRole("button", { name: "绑定固定版本" });
+	const [submitColumn, bindBox] = await Promise.all([
+		region.locator(".skill-bind-submit").boundingBox(),
+		bindTrigger.boundingBox(),
+	]);
+	expect(
+		Math.abs((bindBox?.width ?? 0) - (submitColumn?.width ?? 0)),
+	).toBeLessThanOrEqual(0.5);
+	expect(bindBox?.height).toBe(44);
+	// W-30 / W-36：确认后焦点交给结果卡片标题或页面 h1，任何时候都不落到 body。
+	const activeElement = () =>
+		page.evaluate(() => {
+			const element = document.activeElement;
+			return element === document.body || !element
+				? "body"
+				: `${element.tagName.toLowerCase()}:${element.textContent?.trim()}`;
+		});
 	const bind = async (versionId: string, label: string) => {
 		await region
 			.getByLabel("固定版本", { exact: true })
@@ -1237,24 +1262,42 @@ test("an Owner lists, binds and unbinds Skill versions under the server's Agent 
 		);
 		await dialog.getByRole("button", { name: "确认绑定" }).click();
 		await expect(dialog).toHaveCount(0);
+		expect(await activeElement()).not.toBe("body");
 		await expect
 			.poll(() => page.evaluate(() => document.activeElement === document.body))
 			.toBe(false);
 	};
 	await bind("code-review-v1", "code-review · v1.0.0");
 	await expect(toast(page).last()).toHaveText("已提交绑定，等待同步");
-	await expect(
-		region.getByRole("heading", { level: 2, name: "code-review v1.0.0" }),
-	).toBeVisible();
+	const codeReview = region.getByRole("heading", {
+		level: 2,
+		name: "code-review v1.0.0",
+	});
+	await expect(codeReview).toBeVisible();
+	await expect(codeReview).toBeFocused();
+	expect(await activeElement()).toBe("h2:code-review v1.0.0");
 	await bind("workspace-summary-v1", "workspace-summary · v1.0.0");
 	await expect(region.getByRole("article")).toHaveCount(2);
+	await expect(
+		region.getByRole("heading", { level: 2, name: "workspace-summary v1.0.0" }),
+	).toBeFocused();
 	await noHorizontalOverflow(page);
 
-	await region.getByRole("button", { name: "解除绑定：code-review" }).click();
+	// 取消与 Esc 仍回到触发按钮。
+	const unbindCodeReview = region.getByRole("button", {
+		name: "解除绑定：code-review",
+	});
+	await unbindCodeReview.click();
+	await page.keyboard.press("Escape");
+	await expect(page.getByRole("dialog")).toHaveCount(0);
+	await expect(unbindCodeReview).toBeFocused();
+
+	await unbindCodeReview.click();
 	const unbind = page.getByRole("dialog", { name: "确认解除绑定" });
 	await expect(unbind).toContainText("code-review · v1.0.0");
 	await expectSkillDialog(page, unbind, test.info().project.name === "mobile");
 	await unbind.getByRole("button", { name: "解除绑定" }).click();
+	expect(await activeElement()).not.toBe("body");
 	await expect(toast(page).last()).toHaveText("已解除绑定");
 	await expect(region.getByRole("article")).toHaveCount(1);
 	// 解除绑定后触发按钮随卡片卸载，焦点不落到 body（#3037 AC-2）。
@@ -1262,9 +1305,10 @@ test("an Owner lists, binds and unbinds Skill versions under the server's Agent 
 		.poll(() => page.evaluate(() => document.activeElement === document.body))
 		.toBe(false);
 	await expectCleanPage(page, pageErrors);
+	// 解除后焦点交给下一张卡片的标题。
 	await expect(
 		region.getByRole("heading", { level: 2, name: "workspace-summary v1.0.0" }),
-	).toBeVisible();
+	).toBeFocused();
 	await region
 		.getByRole("button", { name: "解除绑定：workspace-summary" })
 		.click();
@@ -1273,6 +1317,11 @@ test("an Owner lists, binds and unbinds Skill versions under the server's Agent 
 		.getByRole("button", { name: "解除绑定" })
 		.click();
 	await expect(region.getByText("还未绑定 Skill")).toBeVisible();
+	// 没有下一张卡片：焦点交给页面 h1。
+	await expect(
+		page.getByRole("heading", { level: 1, name: "Agent 的 Skill" }),
+	).toBeFocused();
+	expect(await activeElement()).toBe("h1:Agent 的 Skill");
 
 	// 每次写入都用服务端给出的版本、当前配置修订和完整集合。
 	expect(api.commands).toEqual([
@@ -1491,3 +1540,44 @@ for (const role of ["admin", "employee"] as const) {
 		await expectNoDocumentNavigation(page, documents);
 	});
 }
+
+// #3040 AC-2：Owner 配置与 Agent 的 Skill 页在 1440×900 与 390×844 下没有横向溢出、
+// 控制台错误与同页同名控件（含一张绑定卡与绑定表单同屏时）。
+test("Owner configuration and the Agent's Skill page have no overflow, console errors or duplicate controls (#3040 AC-2)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const pageErrors = trackPageErrors(page);
+	await ownerConfigFixture(page, { agentVersion: "agent-version-7" });
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(
+		page.getByRole("region", { name: "渠道", exact: true }),
+	).toBeVisible();
+	await expect(
+		page.getByRole("region", { name: "企微机器人", exact: true }),
+	).toBeVisible();
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(page, "Owner 配置");
+
+	await page.goto("/agents/agent-pilot-1/skills");
+	const region = main(page);
+	await expect(region.getByText("还未绑定 Skill")).toBeVisible();
+	await expectNoDuplicateControls(page, "Agent 的 Skill（空）");
+	await region
+		.getByLabel("固定版本", { exact: true })
+		.selectOption("code-review-v1");
+	await region.getByRole("button", { name: "绑定固定版本" }).click();
+	await page
+		.getByRole("dialog", { name: "确认绑定固定版本" })
+		.getByRole("button", { name: "确认绑定" })
+		.click();
+	await expect(
+		region.getByRole("heading", { level: 2, name: "code-review v1.0.0" }),
+	).toBeFocused();
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(page, "Agent 的 Skill（已绑定）");
+});

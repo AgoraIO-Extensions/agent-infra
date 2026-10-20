@@ -79,6 +79,37 @@ it("submits the application setup contract and clears write-only fields", async 
 	});
 	await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
 	expect(reads).toBe(1);
+	// W-26：设计绑定成功后给 Toast「企微应用已连接」。
+	await waitFor(() =>
+		expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe(
+			"企微应用已连接",
+		),
+	);
+});
+it("uses the design copy, placeholders and a short acknowledgement (W-19 / W-21)", async () => {
+	client.setConfig({ baseUrl: "https://platform.test" });
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => Response.json({ status: "not_configured" })),
+	);
+	render(<WecomAppSetup agentId="agent" />, { wrapper: ToastProvider });
+	await waitFor(() => expect(screen.getByText("未配置")).toBeTruthy());
+	expect(document.querySelector(".wecom-channel-copy")?.textContent).toBe(
+		"配置企业 ID、应用 ID 和回调材料。验证期间保留原绑定，Secret 类字段只保存密文状态。",
+	);
+	for (const [label, placeholder] of [
+		["企业 ID", "输入企业 ID"],
+		["应用 ID", "输入应用 ID"],
+		["应用 Secret", "仅本次提交使用"],
+		["回调 Token", "输入回调 Token"],
+		["EncodingAESKey", "输入 43 位密钥"],
+	] as const)
+		expect((screen.getByLabelText(label) as HTMLInputElement).placeholder).toBe(
+			placeholder,
+		);
+	expect(
+		screen.getByRole("checkbox", { name: "我已知悉可能影响现有回调" }),
+	).toBeTruthy();
 });
 
 function fillCredentials() {

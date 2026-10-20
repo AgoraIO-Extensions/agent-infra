@@ -58,7 +58,8 @@ export function ConfigurationAvailabilitySection({
 			title="可用范围"
 			description="按人员和组织配置可用范围；搜不到结果时可清空关键词重试。"
 		>
-			<div className="mt-4 grid min-w-0 gap-4 sm:grid-cols-2">
+			{/* 设计 .form-grid：两列间距 14px（W-22）。 */}
+			<div className="mt-4 grid min-w-0 gap-[14px] sm:grid-cols-2">
 				<DirectoryPicker
 					id="configuration-user-availability"
 					kind="user"

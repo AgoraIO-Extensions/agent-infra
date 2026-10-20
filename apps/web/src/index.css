@@ -3677,8 +3677,9 @@ body {
 	padding: 15px 0;
 	border-bottom: 1px solid var(--border);
 }
-.application-row:first-child,
-.application-progress li:first-child {
+/* 设计 .list-row:first-child 只命中申请列表首行；审批进度的步骤前还有 .section-head，
+   首步保留 15px 上内边距（W-11）。 */
+.application-row:first-child {
 	padding-top: 0;
 }
 .application-row:last-child,
@@ -3698,8 +3699,9 @@ body {
 	font-weight: 650;
 	line-height: 1.65;
 }
-/* 设计 .list-row strong：我的 Agent 申请行标题 14px / 700。 */
-.management-content .application-row h2 {
+/* 设计 .list-row strong：申请行标题与审批进度步骤标题都是 14px / 700（W-12）。 */
+.management-content .application-row h2,
+.application-progress strong {
 	font-weight: 700;
 }
 .management-content .application-row p,
@@ -3727,6 +3729,10 @@ body {
 }
 .application-detail-feedback {
 	margin-bottom: 20px;
+}
+/* 设计 .tab 内的计数 .chip 没有自己的字重，继承 Tab 的 650（W-01）。 */
+.my-agents-tab-count {
+	font-weight: inherit;
 }
 /* 设计 #my-agents：说明 notice 与「显示更多」都在申请列表之后 16px。 */
 .my-agents-note,
@@ -3784,12 +3790,13 @@ body {
 	background: var(--foreground);
 	color: var(--surface);
 }
+/* 设计 .step.active：当前步为 --accent-ink，不是主操作的 --primary（W-05）。 */
 .form-stepper li.active {
-	color: var(--primary);
+	color: var(--accent-ink);
 }
 .form-stepper li.active::before {
-	border-color: var(--primary);
-	color: var(--primary);
+	border-color: var(--accent-ink);
+	color: var(--accent-ink);
 }
 .management-content .form-grid {
 	margin-top: 16px;
@@ -4077,6 +4084,10 @@ body {
 	min-width: 0;
 	flex: 1;
 }
+/* 设计 .card-head 内标识与标题组同处 align-items:center 的行；状态 chip 仍顶对齐（W-03）。 */
+.owned-card-heading > [data-slot="agent-mark"] {
+	align-self: center;
+}
 .management-content .owned-card-heading h2 {
 	font:
 		650 17px / 1.4 ui-sans-serif,
@@ -4275,8 +4286,26 @@ body {
 	gap: 10px;
 	margin-top: 14px;
 }
+/* 设计 .wecom-channel-fields：字段间 5px，标签 11px，输入 13px（W-18）。 */
+.wecom-channel-fields > [data-slot="field"] {
+	gap: 5px;
+}
+.wecom-channel-fields [data-slot="label"] {
+	font-size: 11px;
+}
+.wecom-channel-fields [data-slot="input"] {
+	font-size: 13px;
+}
+/* 设计 .check 紧接字段、没有上外边距（W-20）。 */
 .wecom-channel-card > [data-slot="label"] {
-	margin-top: 10px;
+	margin-top: 0;
+}
+/* PRD §10.3 的群聊可见性提示，沿分区说明之后的小字（W-17 待回写）。 */
+.management-content .wecom-visibility-note {
+	margin-top: 15px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.65;
 }
 .wecom-channel-card > [data-slot="alert"],
 .wecom-channel-card > .text-destructive {
@@ -4580,10 +4609,14 @@ body {
 	gap: 14px;
 	margin-top: 16px;
 }
+/* 设计 #agent-skills 的绑定按钮在 .field 里撑满右栏（W-32）；高度沿公共 44px 控件高度。 */
 .skill-bind-submit {
 	display: grid;
-	justify-items: start;
+	justify-items: stretch;
 	gap: 7px;
+}
+.skill-bind-submit > [data-slot="button"] {
+	width: 100%;
 }
 .skill-bind-help {
 	color: var(--muted-ink);

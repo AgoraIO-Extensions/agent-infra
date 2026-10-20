@@ -895,6 +895,8 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await capture(page, info, "application-pending");
 	api.release();
 	await expect(pageStatus(page)).toBeFocused();
+	// W-08：设计 .notice p 为常规字重，提交结果不再加粗。
+	await expect(pageStatus(page)).toHaveCSS("font-weight", "400");
 	await expect(
 		page.getByRole("link", { name: "查看申请详情", exact: true }),
 	).toHaveAttribute("href", "/my-agents/application-browser-1");
@@ -951,8 +953,10 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await expect(page.getByRole("button", { name: "正在撤回…" })).toBeDisabled();
 	api.release();
 	await expect(page.getByText("已撤回", { exact: true })).toBeVisible();
-	await expect(pageStatus(page)).toBeFocused();
-	await expect(pageStatus(page)).toHaveText("撤回请求已提交：已撤回。");
+	// W-15：设计只用 Toast「申请已撤回」确认，不再内联结果；「撤回申请」消失后焦点落在页面 h1。
+	await expect(toastHost(page)).toHaveText("申请已撤回");
+	await expect(pageStatus(page)).toHaveCount(0);
+	await expect(page.getByRole("heading", { level: 1 })).toBeFocused();
 	await expect(page.getByRole("button", { name: "撤回申请" })).toHaveCount(0);
 });
 
@@ -1961,6 +1965,15 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	);
 	await expect(page.locator("main")).not.toContainText("请先确认连接影响");
 	await expect(bot.getByRole("alert")).toHaveCount(0);
+	// W-24 / W-25（待回写）：面板只有底部一个「关闭」；说明不外露 setup session 术语。
+	const qrPanel = bot.locator("#wecom-bot-qr-panel");
+	await expect(
+		qrPanel.getByRole("button", { name: "关闭", exact: true }),
+	).toHaveCount(1);
+	await expect(qrPanel.locator(".wecom-qr-head p")).toHaveText(
+		"扫码能力由服务端按当前部署判定，当前不会伪造绑定成功。",
+	);
+	await expect(page.locator("main")).not.toContainText("setup session");
 	expect(
 		await page.evaluate(
 			() =>
@@ -1980,7 +1993,7 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	expect(setupRequests).toEqual([]);
 	await page
 		.getByRole("checkbox", {
-			name: "我已知悉：连接此机器人可能断开它在其他服务中的现有连接。",
+			name: "我已知悉可能断开其他连接",
 		})
 		.check();
 	await page.getByLabel("Bot ID", { exact: true }).fill("fixture-bot");
@@ -2075,7 +2088,7 @@ test("Owner opens the bot QR window without the manual acknowledgement and confi
 	await page.goto("/agents/agent-pilot-1/configuration");
 	const bot = page.getByRole("region", { name: "企微机器人", exact: true });
 	const acknowledgement = bot.getByRole("checkbox", {
-		name: "我已知悉：连接此机器人可能断开它在其他服务中的现有连接。",
+		name: "我已知悉可能断开其他连接",
 	});
 	await expect(bot.getByText("未配置", { exact: true })).toBeVisible();
 	// AC-2（#2911）：扫码可用时，打开页面不建立 setup session，点击后才建立一次。
@@ -2116,6 +2129,9 @@ test("Owner opens the bot QR window without the manual acknowledgement and confi
 	]);
 	await expect(confirm).toHaveCount(0);
 	await expect(acknowledgement).not.toBeChecked();
+	// W-26：扫码确认后的绑定成功给 Toast「企微机器人已连接」，焦点留在卡片标题，不落到 body。
+	await expect(toastHost(page)).toHaveText("企微机器人已连接");
+	await expect(bot.getByRole("heading", { name: "企微机器人" })).toBeFocused();
 });
 
 test("owned Agent tab consumes the authorized collection and supports keyboard navigation", async ({
@@ -3586,7 +3602,8 @@ test("Owner configuration sections, option checkboxes, back link and disabled sa
 		"可用范围",
 		"模型与凭证",
 		"Agent 默认 Relay Key",
-		"企微渠道",
+		// W-17：设计 #owner-config 分区标题为「渠道」。
+		"渠道",
 		"Skill",
 		"环境变量与 Secret",
 	];
@@ -4935,6 +4952,125 @@ async function removeOrganizationChip(page: Page) {
 	).toBeFocused();
 	await expect(page.getByRole("button", { name: "保存配置" })).toBeEnabled();
 }
+
+// W-17～W-23、W-28：渠道分区、企微卡片字段、可用范围栅格与页脚状态按设计 #owner-config。
+test("Owner configuration channels, WeCom fields, scope grid and footer status follow the design (W-17 / W-23)", async ({
+	page,
+}) => {
+	await fixture(page);
+	await wecomStatuses(page, {
+		bot: "not_configured",
+		app: "connected",
+		callbackUrl: "https://callback.example.test/wecom",
+	});
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const channels = page.getByRole("region", { name: "渠道", exact: true });
+	await expect(channels).toBeVisible();
+	// W-17：标题与说明按导出稿，说明走分区说明样式；PRD §10.3 的群聊可见性提示保留。
+	const description = channels.locator(
+		':scope > [data-slot="form-section-description"]',
+	);
+	await expect(description).toHaveText(
+		"Web 对话默认可用；企微入口需要分别绑定，状态会在这里更新。",
+	);
+	expect(
+		await computed(description, ["fontSize", "marginTop", "lineHeight"]),
+	).toEqual({ fontSize: "13px", marginTop: "5px", lineHeight: "21.45px" });
+	await expect(channels).toHaveAccessibleDescription(
+		/Agent 可用范围只限制谁能触发/,
+	);
+	await expect(channels).not.toContainText("自建应用和智能机器人");
+	await expect(page.getByRole("heading", { name: "企微渠道" })).toHaveCount(0);
+
+	const bot = page.getByRole("region", { name: "企微机器人", exact: true });
+	const app = page.getByRole("region", { name: "企微应用", exact: true });
+	// W-21：卡片说明与确认勾选按导出稿。
+	await expect(bot.locator(".wecom-channel-copy")).toHaveText(
+		"支持单聊与群聊，群消息和回复对群成员可见；不同发送者的会话上下文独立。Secret 只提交一次，页面不回显。",
+	);
+	await expect(app.locator(".wecom-channel-copy")).toHaveText(
+		"配置企业 ID、应用 ID 和回调材料。验证期间保留原绑定，Secret 类字段只保存密文状态。",
+	);
+	// W-19：输入框占位符。
+	for (const [card, field, placeholder] of [
+		[bot, "#wecom-bot-id", "输入 Bot ID"],
+		[bot, "#wecom-bot-secret", "仅本次提交使用"],
+		[app, "#wecom-app-corporation-id", "输入企业 ID"],
+		[app, "#wecom-app-application-id", "输入应用 ID"],
+		[app, "#wecom-app-secret", "仅本次提交使用"],
+		[app, "#wecom-app-token", "输入回调 Token"],
+		[app, "#wecom-app-encoding-aes-key", "输入 43 位密钥"],
+	] as const)
+		await expect(card.locator(field)).toHaveAttribute(
+			"placeholder",
+			placeholder,
+		);
+	for (const [card, acknowledgement] of [
+		[bot, "我已知悉可能断开其他连接"],
+		[app, "我已知悉可能影响现有回调"],
+	] as const) {
+		// W-18：字段标签 11px（行高 18.15px），输入 13px。
+		for (const label of await card
+			.locator('.wecom-channel-fields [data-slot="label"]')
+			.all())
+			expect(await computed(label, ["fontSize", "lineHeight"])).toEqual({
+				fontSize: "11px",
+				lineHeight: "18.15px",
+			});
+		for (const input of await card
+			.locator('.wecom-channel-fields [data-slot="input"]')
+			.all())
+			await expect(input).toHaveCSS("font-size", "13px");
+		// W-20：确认勾选行紧接字段，44px 行内垂直居中。
+		const checkbox = card.getByRole("checkbox", {
+			name: acknowledgement,
+			exact: true,
+		});
+		const row = card.locator(':scope > [data-slot="label"]');
+		expect(
+			await computed(row, ["marginTop", "alignItems", "minHeight"]),
+		).toEqual({ marginTop: "0px", alignItems: "center", minHeight: "44px" });
+		const [fields, rowBox, box] = await Promise.all([
+			card.locator(".wecom-channel-fields").boundingBox(),
+			row.boundingBox(),
+			checkbox.boundingBox(),
+		]);
+		expect(
+			Math.abs((rowBox?.y ?? 0) - ((fields?.y ?? 0) + (fields?.height ?? 0))),
+		).toBeLessThanOrEqual(0.5);
+		expect(
+			Math.abs(
+				(box?.y ?? 0) +
+					(box?.height ?? 0) / 2 -
+					((rowBox?.y ?? 0) + (rowBox?.height ?? 0) / 2),
+			),
+		).toBeLessThanOrEqual(1);
+	}
+	// W-27：回调 URL 块保留操作提示（待回写）。
+	await expect(app.locator(".wecom-channel-callback strong")).toHaveText(
+		"请在企微后台配置回调 URL",
+	);
+	// W-22：可用范围两列间距 14px（与 .form-grid 一致）。
+	const scope = page
+		.getByRole("region", { name: "可用范围", exact: true })
+		.locator(":scope > div.grid");
+	expect(await computed(scope, ["rowGap", "columnGap"])).toEqual({
+		rowGap: "14px",
+		columnGap: "14px",
+	});
+	// W-23：页脚状态文字走 .field-help：11px、--muted-ink。
+	const status = page.locator("#agent-configuration-unchanged");
+	await expect(status).toHaveText("没有需要保存的变更。");
+	expect(await computed(status, ["fontSize", "color"])).toEqual({
+		fontSize: "11px",
+		color: await resolved(page, "color", "var(--muted-ink)"),
+	});
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= innerWidth,
+		),
+	).toBe(true);
+});
 
 test("WeCom unbind asks for confirmation and sends only its own channel request", async ({
 	page,

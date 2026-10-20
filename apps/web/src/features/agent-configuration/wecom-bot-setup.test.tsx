@@ -81,6 +81,33 @@ it("requires takeover acknowledgement and clears the Secret before submitting th
 	);
 	await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
 	expect(screen.queryByLabelText(/配置标识/)).toBeNull();
+	// W-26：设计手动绑定成功后给 Toast「企微机器人已连接」。
+	await waitFor(() =>
+		expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe(
+			"企微机器人已连接",
+		),
+	);
+});
+it("uses the design copy, placeholders and a short acknowledgement (W-19 / W-21)", async () => {
+	client.setConfig({ baseUrl: "https://platform.test" });
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => Response.json({ status: "not_configured" })),
+	);
+	render(<WecomBotSetup agentId="agent" />, { wrapper: ToastProvider });
+	await waitFor(() => expect(screen.getByText("未配置")).toBeTruthy());
+	expect(document.querySelector(".wecom-channel-copy")?.textContent).toBe(
+		"支持单聊与群聊，群消息和回复对群成员可见；不同发送者的会话上下文独立。Secret 只提交一次，页面不回显。",
+	);
+	expect(
+		(screen.getByLabelText("Bot ID") as HTMLInputElement).placeholder,
+	).toBe("输入 Bot ID");
+	expect(
+		(screen.getByLabelText("Secret") as HTMLInputElement).placeholder,
+	).toBe("仅本次提交使用");
+	expect(
+		screen.getByRole("checkbox", { name: "我已知悉可能断开其他连接" }),
+	).toBeTruthy();
 });
 it("gates unavailable QR on the status V2 and shows the manual fallback without creating a setup session (#2911)", async () => {
 	client.setConfig({ baseUrl: "https://platform.test" });
@@ -361,6 +388,15 @@ it("opens the QR window without the manual acknowledgement and submits once only
 	);
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	expect(bodies).toHaveLength(1);
+	// W-26：扫码确认后的绑定成功同样给 Toast，焦点仍留在卡片标题。
+	await waitFor(() =>
+		expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe(
+			"企微机器人已连接",
+		),
+	);
+	expect(document.activeElement).toBe(
+		screen.getByRole("heading", { name: "企微机器人" }),
+	);
 });
 
 it("discards a scanned QR result without submitting when the Owner cancels the confirmation (CK-09)", async () => {

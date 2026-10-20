@@ -17,6 +17,7 @@ import type {
 	AgentApplicationProjectionV2,
 	AgentProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
+import { expectNoDuplicateControls } from "./page-health";
 import {
 	computed,
 	expectCleanPage,
@@ -241,6 +242,8 @@ test("my Agent tabs keep the selected view in ?tab=owned across refresh, deep li
 		"color",
 		await resolved(page, "color", "var(--muted-foreground)"),
 	);
+	// W-01：设计 .tab 内的 .chip 没有自己的字重，继承 Tab 的 650。
+	await expect(count).toHaveCSS("font-weight", "650");
 
 	await owned.click();
 	await expect(page).toHaveURL(/\/my-agents\?tab=owned$/);
@@ -328,6 +331,25 @@ test("owned Agent cards use one status chip, 150px facts, 40px icon actions and 
 		await resolved(page, "color", "var(--warning-ink)"),
 	);
 	await expect(page.locator("main")).not.toContainText("服务：");
+	// W-03：设计 .card-head 里标识与标题组 align-items:center；状态 chip 仍在卡头顶部。
+	const heading = card.locator(".owned-card-heading");
+	const [mark, titleGroup, headingBox] = await Promise.all([
+		rect(heading.locator('[data-slot="agent-mark"]')),
+		rect(heading.locator(":scope > div").first()),
+		rect(heading),
+	]);
+	expect(
+		Math.abs(
+			(mark.top + mark.bottom) / 2 - (titleGroup.top + titleGroup.bottom) / 2,
+		),
+	).toBeLessThanOrEqual(0.5);
+	expect(
+		Math.abs((await rect(chips)).top - headingBox.top),
+	).toBeLessThanOrEqual(0.5);
+	// W-04：设计 renderOwnedAgents 的渠道用「 · 」分隔。
+	await expect(
+		card.locator(".metadata-facts dt", { hasText: /^渠道$/ }).locator("+ dd"),
+	).toHaveText("Web · 企微机器人");
 	// M-04：可用范围按目录显示组织名，不出现内部 ID。
 	await expect(card.locator(".metadata-facts")).toContainText("平台工程");
 	await expect(page.locator("main")).not.toContainText("org-platform");
@@ -436,6 +458,10 @@ test("application rows show a text title, one detail entrance and unique link na
 		const time = row.locator("time");
 		await expect(time).toHaveAttribute("datetime", /^\d{4}-\d{2}-\d{2}T/);
 		await expect(time.locator("xpath=..")).toContainText(" · 更新于 ");
+		// W-02：设计 .list-row 只有标题与「说明 · 更新于」两行，不再另起「申请人」行。
+		const copy = row.locator(":scope > div").first();
+		await expect(copy.locator(":scope > p")).toHaveCount(1);
+		await expect(row).not.toContainText("申请人");
 	}
 	await expect(page.locator("main")).not.toContainText(
 		/\d{4}-\d{2}-\d{2}T\d{2}:/,
@@ -654,6 +680,52 @@ test("application form footer, field errors, legends and option labels follow th
 	await noHorizontalOverflow(page);
 });
 
+// W-05 / W-07 / W-10：创建与修改申请共用的步骤条、分区说明与目录占位符按设计 #application-form。
+for (const path of [
+	"/my-agents/new",
+	"/my-agents/application-browser-1/edit",
+] as const) {
+	test(`application form stepper, section copy and directory placeholders follow the design on ${path} (W-05 / W-07 / W-10)`, async ({
+		page,
+	}) => {
+		await fixture(page);
+		await page.goto(path);
+		await expect(page.getByLabel("Agent 名称")).toBeVisible();
+		const accentInk = await resolved(page, "color", "var(--accent-ink)");
+		const active = page.locator(".form-stepper li.active");
+		await expect(active).toHaveText("配置");
+		await expect(active).toHaveCSS("color", accentInk);
+		expect(
+			await active.evaluate((element) => {
+				const before = getComputedStyle(element, "::before");
+				return [before.borderTopColor, before.color];
+			}),
+		).toEqual([accentInk, accentInk]);
+		const description = (title: string) =>
+			page
+				.locator('section[data-slot="form-section"]', {
+					has: page.getByRole("heading", { level: 2, name: title }),
+				})
+				.locator(':scope > [data-slot="form-section-description"]');
+		await expect(description("基本信息")).toHaveText(
+			"名称和描述会显示在 Agent 目录。",
+		);
+		await expect(description("共同 Owner 与使用范围")).toHaveText(
+			"从目录选择人员和组织；提交时保存服务端 ID。",
+		);
+		await expect(description("模型与推理")).toHaveText(
+			"这里只显示已部署且通过校验的模型。",
+		);
+		await expect(
+			page.getByRole("combobox", { name: "可使用的用户" }),
+		).toHaveAttribute("placeholder", "搜索姓名、邮箱或组织路径");
+		await expect(
+			page.getByRole("combobox", { name: "可使用的组织" }),
+		).toHaveAttribute("placeholder", "搜索组织名称或路径");
+		await noHorizontalOverflow(page);
+	});
+}
+
 test("application detail puts actions in the heading, shows three progress rows and a next step (M-11 / M-12 / M-04)", async ({
 	page,
 }, info) => {
@@ -714,6 +786,19 @@ test("application detail puts actions in the heading, shows three progress rows 
 		"color",
 		await resolved(page, "color", "var(--success-ink)"),
 	);
+	// W-11：设计 .list-row:first-child 不命中进度首步（前面还有 .section-head），首步保留 15px 上内边距。
+	await expect(rows.first()).toHaveCSS("padding-top", "15px");
+	// W-12：设计 .list-row-main strong 为默认粗体 700。
+	for (const title of await rows.locator("strong").all())
+		await expect(title).toHaveCSS("font-weight", "700");
+	// W-13：副标题与首步「提交时间 · 申请人」按设计 applicationProgress。
+	await expect(progress.locator(".section-heading p")).toHaveText(
+		"状态来自服务端事件",
+	);
+	await expect(rows.first().locator("small")).toHaveText(
+		new RegExp(` · ${pendingApplication.applicant?.displayName}$`),
+	);
+	await expect(rows.first().locator("small time")).toHaveCount(1);
 
 	const next = page.getByRole("region", { name: "下一步" });
 	await expect(next).toContainText(
@@ -780,6 +865,30 @@ test("rejected application detail offers the resubmit action with an icon in the
 	await expect(page.getByRole("region", { name: "下一步" })).toContainText(
 		"查看审批原因，修改后重新提交。",
 	);
+	// W-13：驳回提示标题按设计为「需要修改后重提」，原因仍取服务端投影。
+	const reason = page.locator(".application-decision-reason");
+	await expect(reason.locator('[data-slot="alert-title"]')).toHaveText(
+		"需要修改后重提",
+	);
+	await expect(reason).toContainText("范围过大");
+});
+
+test("withdraw confirmation uses the design copy and keeps focus inside the dialog until it closes (W-16)", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/my-agents/application-browser-1");
+	const withdraw = page.getByRole("button", { name: "撤回申请" });
+	await withdraw.click();
+	const dialog = page.getByRole("dialog", { name: "撤回这条申请？" });
+	await expect(dialog.locator('[data-slot="dialog-description"]')).toHaveText(
+		"撤回后申请不会进入审批队列；你可以重新创建申请。",
+	);
+	await expect(dialog).not.toContainText(pendingApplication.name);
+	await page.keyboard.press("Escape");
+	await expect(dialog).toHaveCount(0);
+	await expect(withdraw).toBeFocused();
+	await noHorizontalOverflow(page);
 });
 
 // N-21：每个页面只有一个导航链接是当前页；页内返回 / 取消链接不因前缀匹配被读成「当前页」。
@@ -833,4 +942,46 @@ test("my Agent and application form page heads place the h1 at the design height
 		"margin-top",
 		"0px",
 	);
+});
+
+// #3040 AC-2：受影响页面在 1440×900 与 390×844 下没有横向溢出、控制台错误与同页同名控件。
+test("my Agent pages have no overflow, console errors or duplicate controls at the acceptance viewports (#3040 AC-2)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const pageErrors = trackPageErrors(page);
+	await fixture(page, {
+		applications: [
+			application(),
+			application({
+				applicationId: "application-browser-2",
+				name: "Rejected request",
+				status: "rejected",
+				decision: { decidedAt: "2026-09-03T10:00:00Z", reason: "范围过大" },
+			}),
+		],
+	});
+	for (const [path, ready] of [
+		["/my-agents", page.getByRole("list", { name: "我的申请" })],
+		["/my-agents?tab=owned", page.locator(".owned-agent-card").first()],
+		["/my-agents/new", page.getByLabel("Agent 名称")],
+		["/my-agents/application-browser-1/edit", page.getByLabel("Agent 名称")],
+		[
+			"/my-agents/application-browser-1",
+			page.getByRole("region", { name: "审批进度" }),
+		],
+		[
+			"/my-agents/application-browser-2",
+			page.locator(".application-decision-reason"),
+		],
+	] as const) {
+		await page.goto(path);
+		await expect(ready).toBeVisible();
+		await expectCleanPage(page, pageErrors);
+		await expectNoDuplicateControls(page, path);
+	}
 });
