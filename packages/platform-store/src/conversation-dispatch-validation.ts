@@ -5,8 +5,10 @@ import {
 	type ConversationDispatchOperationV1,
 	type ConversationDispatchStateTransitionV1,
 	type ConversationMetadataRecoveryV1,
+	type NativeTextInputV1,
 	nativeCapabilityParametersDigestV1,
 	parseConversationMetadataRecoveryV1,
+	parseNativeCapabilityAttachmentsV1,
 } from "@agent-infra/platform-core";
 import {
 	type ConversationPayload,
@@ -153,8 +155,20 @@ export function exactPayload(
 		const capabilitySourceVersion = input.capabilitySourceVersion;
 		const parameters = input.parameters;
 		const parametersDigest = input.parametersDigest;
+		const hasAttachments = Object.hasOwn(input, "attachments");
+		let attachments: readonly NativeTextInputV1[] | undefined;
+		if (hasAttachments) {
+			// Attachments are Invocation V2-only and Skill-only. The accepted facts
+			// are replayed from the persisted payload, never re-read from files.
+			if (capabilityKind !== "skill") return undefined;
+			try {
+				attachments = parseNativeCapabilityAttachmentsV1(input.attachments);
+			} catch {
+				return undefined;
+			}
+		}
 		if (
-			Object.keys(input).length !== 14 ||
+			Object.keys(input).length !== (hasAttachments ? 15 : 14) ||
 			input.schemaVersion !== 1 ||
 			!validText(input.conversationId) ||
 			!validText(input.executionId) ||
@@ -198,6 +212,7 @@ export function exactPayload(
 				capabilitySourceVersion: capabilitySourceVersion as string,
 				parameters: parameters as string,
 				parametersDigest: parametersDigest as string,
+				...(attachments ? { attachments } : {}),
 			},
 		};
 	}

@@ -93,12 +93,14 @@ export * from "./conversation-read-projection.js";
 export * from "./conversation-recent.js";
 export {
 	bindInputFileV1,
+	bindNativeTextInputFileV1,
 	createFileAuthorityV1,
 	type FileAccessRecordV1,
 	FileAuthorityError,
 	type FileAuthorityV1,
 	type FileAuthorizationPortV1,
 	type FileDescriptorV1,
+	type FileExecutionInputBindingV1,
 	type FileExecutionStateV1,
 	type FileExecutionV1,
 	type FileLimitsV1,
@@ -107,6 +109,8 @@ export {
 	type FileStoreV1,
 	type FileTransactionV1,
 	isConfirmedResultFileV1,
+	type NativeTextInputV1,
+	nativeTextInputLimitV1,
 	type ObjectStoragePortV1,
 	type StoredFileObjectV1,
 } from "./file-authority.js";

@@ -7,6 +7,15 @@ import type {
 	ConversationExecutionConversationStateV1,
 } from "./conversation-execution-types.js";
 import { nextOpaqueId } from "./conversation-execution-values.js";
+import {
+	FileAuthorityError,
+	type FileLimitsV1,
+	type FileRecordV1,
+	type FileScopeV1,
+	type NativeTextInputV1,
+	nativeTextInputLimitV1,
+	resolveNativeTextInputsV1,
+} from "./file-authority.js";
 
 const digestPattern = /^[a-f0-9]{64}$/u;
 const idempotencyKeyPattern = /^[A-Za-z0-9._~-]{1,128}$/u;
@@ -41,9 +50,35 @@ export type NativeCapabilityAdmissionRequestV1 = Readonly<{
 	traceId: string;
 }>;
 
+/**
+ * Invocation V2 adds the ordered, caller-selected file ids of an already
+ * uploaded read-only text input set (issue #2887). The caller never supplies
+ * digests, byte lengths, media types or grants; Core resolves each id through
+ * FileAuthority in the admission transaction.
+ */
+export type NativeCapabilityAdmissionRequestV2 = Readonly<{
+	schemaVersion: 2;
+	conversationId: string;
+	capabilityId: string;
+	directoryRevision: string;
+	parameters: string;
+	attachments: readonly string[];
+	idempotencyKey: string;
+	requestId: string;
+	traceId: string;
+}>;
+
+export type NativeCapabilityAdmissionRequest =
+	| NativeCapabilityAdmissionRequestV1
+	| NativeCapabilityAdmissionRequestV2;
+
 export interface NativeCapabilityAdmissionCapabilityV1
 	extends NativeCapabilityMetadataV1 {
 	readonly directoryRevision: string;
+}
+
+export interface NativeCapabilityAdmissionInputFilesV1 {
+	getFile(fileId: string): Promise<FileRecordV1 | null>;
 }
 
 export interface NativeCapabilityAdmissionStateV1 {
@@ -53,6 +88,12 @@ export interface NativeCapabilityAdmissionStateV1 {
 		readonly status: "waiting" | "submitted" | "processing" | "unknown";
 	} | null;
 	readonly authorizationRevision: string | null;
+	/**
+	 * Transaction-scoped file reader. Required for Invocation V2 so the ordered
+	 * ids are resolved under the same locks as the persisted Plan; null for
+	 * transactions that cannot read FileAuthority records.
+	 */
+	readonly inputFiles: NativeCapabilityAdmissionInputFilesV1 | null;
 }
 
 export interface NativeCapabilityInvocationPlanV1 {
@@ -69,6 +110,8 @@ export interface NativeCapabilityInvocationPlanV1 {
 	readonly capability: NativeCapabilityAdmissionCapabilityV1;
 	readonly parameters: string;
 	readonly parametersDigest: string;
+	/** Ordered Execution-only text inputs; omitted for Invocation V1. */
+	readonly attachments?: readonly NativeTextInputV1[];
 	readonly executionStatus: "submitted";
 	readonly outbox: {
 		readonly id: string;
@@ -88,6 +131,8 @@ export interface NativeCapabilityInvocationPlanV1 {
 			readonly capabilitySourceVersion: string;
 			readonly parameters: string;
 			readonly parametersDigest: string;
+			/** Present exactly when the accepted Invocation V2 sequence is present. */
+			readonly attachments?: readonly NativeTextInputV1[];
 		};
 		readonly requestId: string;
 		readonly traceId: string;
@@ -191,10 +236,25 @@ export interface NativeCapabilityMetadataRevalidationPortV1 {
 	}): boolean;
 }
 
+export interface NativeCapabilityInputLimitsPortV1 {
+	/**
+	 * Reads the current attachment FileLimits intersection for the admission
+	 * scope. It is called inside the admission transaction so a configuration or
+	 * capability change between selection and commit fails closed.
+	 */
+	read(input: {
+		readonly actorId: string;
+		readonly agentId: string;
+		readonly channelId: string;
+		readonly conversationId: string;
+		readonly sessionGeneration: number;
+	}): Promise<FileLimitsV1 | null>;
+}
+
 export interface NativeCapabilityAdmissionTransactionPortV1 {
 	admitNativeCapability(
 		request: {
-			readonly command: NativeCapabilityAdmissionRequestV1;
+			readonly command: NativeCapabilityAdmissionRequest;
 			readonly authority: ConversationExecutionAuthorityV1;
 			readonly requestDigest: string;
 		},
@@ -220,7 +280,7 @@ export interface NativeCapabilityAdmissionTransactionPortV1 {
 
 export interface NativeCapabilityAdmissionUseCaseV1 {
 	admit(
-		request: NativeCapabilityAdmissionRequestV1,
+		request: NativeCapabilityAdmissionRequest,
 	): Promise<NativeCapabilityAdmissionDecisionV1>;
 }
 
@@ -332,6 +392,128 @@ export function parseNativeCapabilityAdmissionRequestV1(
 		requestId: text(value.requestId),
 		traceId: text(value.traceId),
 	});
+}
+
+export function parseNativeCapabilityAdmissionRequestV2(
+	input: unknown,
+): NativeCapabilityAdmissionRequestV2 {
+	const value = exactObject(input, [
+		"schemaVersion",
+		"conversationId",
+		"capabilityId",
+		"directoryRevision",
+		"parameters",
+		"attachments",
+		"idempotencyKey",
+		"requestId",
+		"traceId",
+	]);
+	if (value.schemaVersion !== 2) invalidInput();
+	const conversationId = text(value.conversationId);
+	const capabilityId = text(value.capabilityId);
+	const directoryRevision = text(value.directoryRevision);
+	if (
+		!digestPattern.test(capabilityId) ||
+		!digestPattern.test(directoryRevision)
+	)
+		invalidInput();
+	const parameters = boundedText(value.parameters, maxParameterBytes, true);
+	if (
+		typeof value.idempotencyKey !== "string" ||
+		!idempotencyKeyPattern.test(value.idempotencyKey) ||
+		!Array.isArray(value.attachments) ||
+		value.attachments.length < 1 ||
+		value.attachments.length > nativeTextInputLimitV1.maxFiles
+	)
+		invalidInput();
+	const attachments = (value.attachments as unknown[]).map((fileId) =>
+		text(fileId),
+	);
+	if (new Set(attachments).size !== attachments.length) invalidInput();
+	return Object.freeze({
+		schemaVersion: 2,
+		conversationId,
+		capabilityId,
+		directoryRevision,
+		parameters,
+		attachments: Object.freeze(attachments),
+		idempotencyKey: value.idempotencyKey,
+		requestId: text(value.requestId),
+		traceId: text(value.traceId),
+	});
+}
+
+export function parseNativeCapabilityAdmissionRequest(
+	input: unknown,
+): NativeCapabilityAdmissionRequest {
+	if (
+		typeof input === "object" &&
+		input !== null &&
+		!Array.isArray(input) &&
+		!types.isProxy(input) &&
+		(input as Record<string, unknown>).schemaVersion === 2
+	)
+		return parseNativeCapabilityAdmissionRequestV2(input);
+	return parseNativeCapabilityAdmissionRequestV1(input);
+}
+
+/**
+ * Validates the server-resolved ordered attachment facts carried by the Plan and
+ * the native outbox payload. Both the admission transaction and a later dispatch
+ * must reconstruct exactly the accepted sequence.
+ */
+export function parseNativeCapabilityAttachmentsV1(
+	value: unknown,
+): readonly NativeTextInputV1[] {
+	if (
+		!Array.isArray(value) ||
+		value.length < 1 ||
+		value.length > nativeTextInputLimitV1.maxFiles
+	)
+		throw new TypeError("Native capability attachments are invalid");
+	const keys = ["byteLength", "fileId", "mediaType", "sha256"];
+	const seen = new Set<string>();
+	return Object.freeze(
+		value.map((entry) => {
+			if (
+				typeof entry !== "object" ||
+				entry === null ||
+				Array.isArray(entry) ||
+				types.isProxy(entry)
+			)
+				throw new TypeError("Native capability attachments are invalid");
+			const record = entry as Record<string, unknown>;
+			if (
+				Reflect.ownKeys(record).length !== keys.length ||
+				Object.keys(record).sort().join(",") !== keys.join(",")
+			)
+				throw new TypeError("Native capability attachments are invalid");
+			const fileId = record.fileId;
+			const sha256 = record.sha256;
+			const byteLength = record.byteLength;
+			if (
+				typeof fileId !== "string" ||
+				fileId.length === 0 ||
+				fileId.length > 1024 ||
+				seen.has(fileId) ||
+				typeof sha256 !== "string" ||
+				!digestPattern.test(sha256) ||
+				typeof byteLength !== "number" ||
+				!Number.isSafeInteger(byteLength) ||
+				byteLength < 0 ||
+				byteLength > nativeTextInputLimitV1.maxBytes ||
+				record.mediaType !== nativeTextInputLimitV1.mediaType
+			)
+				throw new TypeError("Native capability attachments are invalid");
+			seen.add(fileId);
+			return Object.freeze({
+				fileId,
+				sha256,
+				byteLength,
+				mediaType: nativeTextInputLimitV1.mediaType,
+			});
+		}),
+	);
 }
 
 function capability(value: unknown): NativeCapabilityMetadataV1 {
@@ -451,16 +633,68 @@ export function nativeCapabilityAdmissionRequestDigestV1(
 	});
 }
 
+/**
+ * Invocation V2 binds the exact ordered attachment ids into idempotency. A
+ * changed, reordered or missing sequence is a different request and therefore a
+ * key conflict, never a replay.
+ */
+export function nativeCapabilityAdmissionRequestDigestV2(
+	request: NativeCapabilityAdmissionRequestV2,
+): string {
+	return digest({
+		schemaVersion: 2,
+		command: "native-capability.invoke",
+		conversationId: request.conversationId,
+		capabilityId: request.capabilityId,
+		directoryRevision: request.directoryRevision,
+		parameters: request.parameters,
+		attachments: [...request.attachments],
+	});
+}
+
+export function nativeCapabilityAdmissionRequestDigest(
+	request: NativeCapabilityAdmissionRequest,
+): string {
+	return request.schemaVersion === 2
+		? nativeCapabilityAdmissionRequestDigestV2(request)
+		: nativeCapabilityAdmissionRequestDigestV1(request);
+}
+
+/**
+ * The metadata seam only selects a capability/directory revision; attachments do
+ * not affect its answer. V2 therefore revalidates through the frozen V1 view so
+ * the existing metadata port and its cache keep their exact input shape.
+ */
+function nativeCapabilityMetadataRequestViewV1(
+	request: NativeCapabilityAdmissionRequest,
+): NativeCapabilityAdmissionRequestV1 {
+	if (request.schemaVersion === 1) return request;
+	return Object.freeze({
+		schemaVersion: 1,
+		conversationId: request.conversationId,
+		capabilityId: request.capabilityId,
+		directoryRevision: request.directoryRevision,
+		parameters: request.parameters,
+		idempotencyKey: request.idempotencyKey,
+		requestId: request.requestId,
+		traceId: request.traceId,
+	});
+}
+
 export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 	readonly authorization: NativeCapabilityAdmissionAuthorizationPortV1;
 	readonly metadata: NativeCapabilityMetadataRevalidationPortV1;
 	readonly transaction: NativeCapabilityAdmissionTransactionPortV1;
+	readonly inputLimits?: NativeCapabilityInputLimitsPortV1;
+	readonly now?: () => Date;
 	readonly newId?: () => string;
 }): NativeCapabilityAdmissionUseCaseV1 {
 	const newId = dependencies.newId ?? randomUUID;
+	const now = dependencies.now ?? (() => new Date());
 	return {
 		async admit(input) {
-			const request = parseNativeCapabilityAdmissionRequestV1(input);
+			const request = parseNativeCapabilityAdmissionRequest(input);
+			const metadataRequest = nativeCapabilityMetadataRequestViewV1(request);
 			let authority: ConversationExecutionAuthorityV1;
 			try {
 				const decision = await dependencies.authorization.authorize({
@@ -480,7 +714,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 				authority.actorId.length === 0
 			)
 				return { outcome: "denied", reason: "authorization_lost" };
-			const requestDigest = nativeCapabilityAdmissionRequestDigestV1(request);
+			const requestDigest = nativeCapabilityAdmissionRequestDigest(request);
 			try {
 				let latestScopeForCommit: NativeCapabilityAdmissionScopeV1 | undefined;
 				return await dependencies.transaction.admitNativeCapability(
@@ -509,7 +743,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							return { outcome: "denied", reason: "authorization_lost" };
 						if (state.activeExecution) return { outcome: "busy" };
 						const metadata = await dependencies.metadata.revalidate({
-							request,
+							request: metadataRequest,
 							authority,
 							sessionGeneration: conversation.sessionGeneration,
 						});
@@ -559,7 +793,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 						)
 							return { outcome: "denied", reason: "authorization_lost" };
 						const latestMetadata = await dependencies.metadata.revalidate({
-							request,
+							request: metadataRequest,
 							authority,
 							sessionGeneration: conversation.sessionGeneration,
 						});
@@ -609,12 +843,64 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							return { outcome: "denied", reason: "authorization_lost" };
 						if (
 							!dependencies.metadata.isCurrent({
-								request,
+								request: metadataRequest,
 								capability: latestSelected,
 								scope: currentScope,
 							})
 						)
 							return { outcome: "stale" };
+						let attachments: readonly NativeTextInputV1[] | undefined;
+						if (request.schemaVersion === 2) {
+							// Invocation V2 is Skill-only and resolves its ordered file ids
+							// through FileAuthority inside this same transaction.
+							if (latestSelected.kind !== "skill")
+								return { outcome: "unsupported" };
+							const inputFiles = state.inputFiles;
+							if (!dependencies.inputLimits || !inputFiles)
+								return {
+									outcome: "unavailable",
+									reason: "metadata_unavailable",
+								};
+							const fileScope: FileScopeV1 = {
+								actorId: authority.actorId,
+								agentId: authority.agentId,
+								channelId: authority.channelId,
+								conversationId: request.conversationId,
+							};
+							let limits: FileLimitsV1 | null;
+							try {
+								limits = await dependencies.inputLimits.read({
+									actorId: fileScope.actorId,
+									agentId: fileScope.agentId,
+									channelId: fileScope.channelId,
+									conversationId: fileScope.conversationId,
+									sessionGeneration: conversation.sessionGeneration,
+								});
+							} catch {
+								return {
+									outcome: "unavailable",
+									reason: "metadata_unavailable",
+								};
+							}
+							if (!limits) return { outcome: "denied" };
+							try {
+								const files = await Promise.all(
+									request.attachments.map((fileId) =>
+										inputFiles.getFile(fileId),
+									),
+								);
+								attachments = resolveNativeTextInputsV1(
+									files,
+									fileScope,
+									limits,
+									now(),
+								);
+							} catch (error) {
+								if (error instanceof FileAuthorityError)
+									return { outcome: "denied" };
+								throw error;
+							}
+						}
 						const executionId = nextOpaqueId(newId);
 						const turnId = nextOpaqueId(newId);
 						const result: NativeCapabilityAdmissionResultV1 = Object.freeze({
@@ -642,6 +928,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							parametersDigest: nativeCapabilityParametersDigestV1(
 								request.parameters,
 							),
+							...(attachments ? { attachments } : {}),
 							executionStatus: "submitted",
 							outbox: {
 								id: `conversation:native-capability:${executionId}`,
@@ -663,6 +950,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 									parametersDigest: nativeCapabilityParametersDigestV1(
 										request.parameters,
 									),
+									...(attachments ? { attachments } : {}),
 								},
 								requestId: request.requestId,
 								traceId: request.traceId,
@@ -695,7 +983,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 						currentConversation.hostSessionRef ===
 							latestScopeForCommit.hostScopeRef &&
 						dependencies.metadata.isCurrent({
-							request,
+							request: metadataRequest,
 							capability: plan.capability,
 							scope: latestScopeForCommit,
 						}),

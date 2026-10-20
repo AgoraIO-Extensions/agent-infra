@@ -1,13 +1,20 @@
+import { isDeepStrictEqual } from "node:util";
 import type {
 	ConversationExecutionAuthorityV1,
 	ConversationExecutionConversationStateV1,
+	FileRecordV1,
 	NativeCapabilityAdmissionDecisionV1,
-	NativeCapabilityAdmissionRequestV1,
+	NativeCapabilityAdmissionRequest,
 	NativeCapabilityAdmissionStateV1,
 	NativeCapabilityAdmissionTransactionPortV1,
 	NativeCapabilityInvocationPlanV1,
+	NativeTextInputV1,
 } from "@agent-infra/platform-core";
-import { nativeCapabilityParametersDigestV1 } from "@agent-infra/platform-core";
+import {
+	bindNativeTextInputFileV1,
+	nativeCapabilityParametersDigestV1,
+	parseNativeCapabilityAttachmentsV1,
+} from "@agent-infra/platform-core";
 
 interface IdempotencyRecord {
 	readonly requestDigest: string;
@@ -26,6 +33,8 @@ export interface FakeNativeCapabilityAdmissionStoreOptionsV1 {
 	readonly conversation: ConversationExecutionConversationStateV1;
 	readonly authorizationRevision?: string;
 	readonly activeExecution?: NativeCapabilityAdmissionStateV1["activeExecution"];
+	/** Available, currently unbound input files for Invocation V2 tests. */
+	readonly files?: readonly FileRecordV1[];
 }
 
 /**
@@ -43,6 +52,7 @@ export class FakeNativeCapabilityAdmissionStoreV1
 	#activeExecution: NativeCapabilityAdmissionStateV1["activeExecution"];
 	readonly #idempotency = new Map<string, IdempotencyRecord>();
 	readonly #plans = new Map<string, NativeCapabilityInvocationPlanV1>();
+	readonly #files = new Map<string, FileRecordV1>();
 	#tail: Promise<void> = Promise.resolve();
 
 	constructor(options: FakeNativeCapabilityAdmissionStoreOptionsV1) {
@@ -51,6 +61,8 @@ export class FakeNativeCapabilityAdmissionStoreV1
 			options.authorizationRevision ??
 			options.conversation.authorizationRevision;
 		this.#activeExecution = options.activeExecution ?? null;
+		for (const file of options.files ?? [])
+			this.#files.set(file.fileId, structuredClone(file));
 	}
 
 	setAuthorizationRevision(revision: string): void {
@@ -69,9 +81,13 @@ export class FakeNativeCapabilityAdmissionStoreV1
 		);
 	}
 
+	get files(): readonly FileRecordV1[] {
+		return [...this.#files.values()].map((file) => structuredClone(file));
+	}
+
 	async admitNativeCapability(
 		request: {
-			readonly command: NativeCapabilityAdmissionRequestV1;
+			readonly command: NativeCapabilityAdmissionRequest;
 			readonly authority: ConversationExecutionAuthorityV1;
 			readonly requestDigest: string;
 		},
@@ -109,7 +125,7 @@ export class FakeNativeCapabilityAdmissionStoreV1
 
 	async #admitNativeCapability(
 		request: {
-			readonly command: NativeCapabilityAdmissionRequestV1;
+			readonly command: NativeCapabilityAdmissionRequest;
 			readonly authority: ConversationExecutionAuthorityV1;
 			readonly requestDigest: string;
 		},
@@ -169,6 +185,10 @@ export class FakeNativeCapabilityAdmissionStoreV1
 				? { ...this.#activeExecution }
 				: null,
 			authorizationRevision: this.#authorizationRevision,
+			inputFiles: {
+				getFile: async (fileId) =>
+					structuredClone(this.#files.get(fileId) ?? null),
+			},
 		});
 		if ("outcome" in decision) return decision;
 		if (this.#authorizationRevision !== authority.authorizationRevision)
@@ -176,6 +196,7 @@ export class FakeNativeCapabilityAdmissionStoreV1
 		if (this.#activeExecution) return { outcome: "busy" };
 		if (!isCurrent(decision, this.#conversation)) return { outcome: "stale" };
 		this.#validatePlan(decision, request);
+		this.#bindInputs(decision, command);
 		const plan = freeze(structuredClone(decision));
 		this.#idempotency.set(idempotencyKey, {
 			requestDigest: request.requestDigest,
@@ -196,12 +217,26 @@ export class FakeNativeCapabilityAdmissionStoreV1
 	#validatePlan(
 		plan: NativeCapabilityInvocationPlanV1,
 		request: {
-			readonly command: NativeCapabilityAdmissionRequestV1;
+			readonly command: NativeCapabilityAdmissionRequest;
 			readonly authority: ConversationExecutionAuthorityV1;
 			readonly requestDigest: string;
 		},
 	): void {
 		const command = request.command;
+		let attachments: readonly NativeTextInputV1[] | undefined;
+		let outboxAttachments: readonly NativeTextInputV1[] | undefined;
+		try {
+			attachments =
+				plan.attachments === undefined
+					? undefined
+					: parseNativeCapabilityAttachmentsV1(plan.attachments);
+			outboxAttachments =
+				plan.outbox.payload.attachments === undefined
+					? undefined
+					: parseNativeCapabilityAttachmentsV1(plan.outbox.payload.attachments);
+		} catch {
+			throw new Error("Native capability admission plan is invalid");
+		}
 		if (
 			plan.schemaVersion !== 1 ||
 			plan.kind !== "native-capability" ||
@@ -231,11 +266,61 @@ export class FakeNativeCapabilityAdmissionStoreV1
 				plan.capability.source.version ||
 			plan.outbox.payload.parameters !== plan.parameters ||
 			plan.outbox.payload.parametersDigest !== plan.parametersDigest ||
+			(command.schemaVersion === 2
+				? !attachments ||
+					attachments.length !== command.attachments.length ||
+					attachments.some(
+						(entry, index) => entry.fileId !== command.attachments[index],
+					) ||
+					!isDeepStrictEqual(outboxAttachments, attachments) ||
+					plan.capability.kind !== "skill"
+				: attachments !== undefined || outboxAttachments !== undefined) ||
 			plan.result.executionId !== plan.executionId ||
 			plan.result.conversationId !== plan.conversationId ||
 			plan.idempotency.key !== command.idempotencyKey ||
 			plan.idempotency.requestDigest !== request.requestDigest
 		)
 			throw new Error("Native capability admission plan is invalid");
+	}
+
+	#bindInputs(
+		plan: NativeCapabilityInvocationPlanV1,
+		command: NativeCapabilityAdmissionRequest,
+	): void {
+		if (plan.attachments === undefined) {
+			if (command.schemaVersion !== 1)
+				throw new Error("Native capability admission plan is invalid");
+			return;
+		}
+		if (command.schemaVersion !== 2)
+			throw new Error("Native capability admission plan is invalid");
+		const scope = {
+			actorId: this.#conversation.actorId,
+			agentId: this.#conversation.agentId,
+			channelId: this.#conversation.channelId,
+			conversationId: this.#conversation.conversationId,
+		};
+		const now = new Date();
+		for (let index = 0; index < plan.attachments.length; index += 1) {
+			const attachment = plan.attachments[index];
+			if (!attachment || attachment.fileId !== command.attachments[index])
+				throw new Error("Native capability admission plan is invalid");
+			const file = bindNativeTextInputFileV1(
+				this.#files.get(attachment.fileId) ?? null,
+				scope,
+				{
+					executionId: plan.executionId,
+					sessionGeneration: plan.sessionGeneration,
+				},
+				now,
+			);
+			if (
+				file.descriptor.sha256 !== attachment.sha256 ||
+				file.descriptor.sizeBytes !== attachment.byteLength ||
+				file.descriptor.mediaType !== attachment.mediaType
+			)
+				throw new Error("Native capability admission plan is invalid");
+			this.#files.set(file.fileId, structuredClone(file));
+		}
 	}
 }

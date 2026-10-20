@@ -29,6 +29,26 @@ export interface FileAuthorityV1 extends FileScopeV1 {
 	readonly limits: FileLimitsV1 | null;
 	readonly execution: FileExecutionV1 | null;
 }
+/**
+ * Native Skill text inputs (issue #2887) are bounded, read-only `text/plain`
+ * attachments. The limits live here because FileAuthority owns the input
+ * facts; admission still intersects them with the current FileLimits.
+ */
+export const nativeTextInputLimitV1 = Object.freeze({
+	maxFiles: 4,
+	maxBytes: 4096,
+	mediaType: "text/plain",
+} as const);
+export type NativeTextInputV1 = Readonly<{
+	readonly fileId: string;
+	readonly sha256: string;
+	readonly byteLength: number;
+	readonly mediaType: "text/plain";
+}>;
+export type FileExecutionInputBindingV1 = Readonly<{
+	readonly executionId: string;
+	readonly sessionGeneration: number;
+}>;
 export interface FileAuthorizationPortV1 {
 	authorize(
 		conversationId: string,
@@ -244,14 +264,21 @@ export function createFileAuthorityV1(options: {
 		if (!file || !sameScope(file, authority)) denied();
 		if (authority.execution) {
 			await requireExecution(tx, authority);
+			// SPEC §15.4.1: an input attachment may bind once to a Message or to an
+			// Execution, never both. Message-bound reads stay exact; an
+			// Execution-only binding is accepted only for this Execution and this
+			// Session generation, and only while the Grant lists the file (#2887).
+			const executionOnlyBinding =
+				file.executionId === authority.execution.executionId &&
+				file.sessionGeneration === authority.execution.sessionGeneration;
 			if (
 				request.operation === "write"
 					? file.kind !== "result" ||
 						file.executionId !== authority.execution.executionId ||
 						file.sessionGeneration !== authority.execution.sessionGeneration
 					: file.kind !== "attachment" ||
-						file.messageId === null ||
-						!authority.execution.attachments.includes(file.fileId)
+						!authority.execution.attachments.includes(file.fileId) ||
+						(file.messageId === null && !executionOnlyBinding)
 			)
 				denied();
 		} else if (request.operation === "write" && file.kind !== "attachment")
@@ -679,6 +706,89 @@ export function bindInputFileV1(
 	return {
 		...file,
 		...binding,
+		revision: file.revision + 1,
+		updatedAt: now.toISOString(),
+	};
+}
+
+function nativeTextInputFile(
+	input: FileRecordV1 | null,
+	scope: FileScopeV1,
+): { readonly file: FileRecordV1; readonly facts: NativeTextInputV1 } {
+	const file = requireUnboundInput(input, scope);
+	if (
+		file.descriptor.mediaType !== nativeTextInputLimitV1.mediaType ||
+		file.descriptor.sizeBytes > nativeTextInputLimitV1.maxBytes
+	)
+		invalid();
+	return {
+		file,
+		facts: Object.freeze({
+			fileId: file.fileId,
+			sha256: file.descriptor.sha256,
+			byteLength: file.descriptor.sizeBytes,
+			mediaType: nativeTextInputLimitV1.mediaType,
+		}),
+	};
+}
+
+/**
+ * Resolves the ordered Invocation V2 attachment ids inside the admission
+ * transaction. Every file must be an available, currently unbound attachment in
+ * the same owner/Agent/Channel/Conversation scope, and the current FileLimits
+ * intersection must allow `text/plain` and the byte length.
+ */
+export function resolveNativeTextInputsV1(
+	inputs: readonly (FileRecordV1 | null)[],
+	scope: FileScopeV1,
+	limits: FileLimitsV1 | null,
+	now: Date,
+): readonly NativeTextInputV1[] {
+	if (
+		!Array.isArray(inputs) ||
+		inputs.length < 1 ||
+		inputs.length > nativeTextInputLimitV1.maxFiles
+	)
+		invalid();
+	if (!limits) denied();
+	const seen = new Set<string>();
+	const resolved: NativeTextInputV1[] = [];
+	for (const input of inputs) {
+		const { file, facts } = nativeTextInputFile(input, scope);
+		if (seen.has(file.fileId)) invalid();
+		seen.add(file.fileId);
+		checkLimits(file.descriptor, limits, now);
+		resolved.push(facts);
+	}
+	return Object.freeze(resolved);
+}
+
+/**
+ * Creates the Execution-only input binding required by SPEC §15.4.1.
+ *
+ * The file keeps `messageId = null`; the Execution id plus Session generation is
+ * the single association. A later attempt to bind the same attachment to another
+ * Execution (or to a Message) is denied by `requireUnboundInput`.
+ */
+export function bindNativeTextInputFileV1(
+	input: FileRecordV1 | null,
+	scope: FileScopeV1,
+	binding: FileExecutionInputBindingV1,
+	now: Date,
+): FileRecordV1 {
+	if (
+		typeof binding.executionId !== "string" ||
+		binding.executionId.length === 0 ||
+		!Number.isSafeInteger(binding.sessionGeneration) ||
+		binding.sessionGeneration < 1
+	)
+		invalid();
+	const { file } = nativeTextInputFile(input, scope);
+	return {
+		...file,
+		messageId: null,
+		executionId: binding.executionId,
+		sessionGeneration: binding.sessionGeneration,
 		revision: file.revision + 1,
 		updatedAt: now.toISOString(),
 	};

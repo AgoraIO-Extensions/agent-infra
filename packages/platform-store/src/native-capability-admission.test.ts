@@ -1,7 +1,11 @@
 import {
 	createNativeCapabilityAdmissionUseCaseV1,
+	type FileLimitsV1,
+	type FileRecordV1,
+	type NativeCapabilityAdmissionRequestV2,
 	type NativeCapabilityMetadataRevalidationPortV1,
 	nativeCapabilityAdmissionRequestDigestV1,
+	nativeCapabilityAdmissionRequestDigestV2,
 } from "@agent-infra/platform-core";
 import { FakeNativeCapabilityMetadataRevalidationV1 } from "@agent-infra/platform-core/testing";
 import { describe, expect, it } from "vitest";
@@ -64,11 +68,52 @@ const projection = {
 	],
 };
 
+const textLimits: FileLimitsV1 = {
+	revision: "limits-1",
+	expiresAt: "2099-01-01T00:00:00Z",
+	mediaTypes: ["text/plain"],
+	maxBytes: 4096,
+};
+
+function textFile(
+	fileId: string,
+	overrides: Partial<FileRecordV1> = {},
+): FileRecordV1 {
+	return {
+		actorId: authority.actorId,
+		agentId: authority.agentId,
+		channelId: authority.channelId,
+		conversationId: conversation.conversationId,
+		fileId,
+		objectRef: `object-${fileId}`,
+		kind: "attachment",
+		idempotencyKey: `intent-${fileId}`,
+		descriptor: {
+			name: `${fileId}.txt`,
+			mediaType: "text/plain",
+			sizeBytes: 5,
+			sha256: "e".repeat(64),
+		},
+		status: "available",
+		executionId: null,
+		messageId: null,
+		sessionGeneration: null,
+		objectVersion: "version-1",
+		etag: "etag-1",
+		createdAt: "2026-10-13T00:00:00.000Z",
+		expiresAt: "2099-01-01T00:00:00Z",
+		updatedAt: "2026-10-13T00:00:00.000Z",
+		revision: 1,
+		...overrides,
+	};
+}
+
 function createHarness(
 	options: Partial<FakeNativeCapabilityAdmissionStoreOptionsV1> = {},
 	metadata: NativeCapabilityMetadataRevalidationPortV1 = new FakeNativeCapabilityMetadataRevalidationV1(
 		{ projection, hostScopeRef: conversation.hostSessionRef },
 	),
+	limits: FileLimitsV1 | null = textLimits,
 ) {
 	const store = new FakeNativeCapabilityAdmissionStoreV1({
 		conversation,
@@ -82,6 +127,12 @@ function createHarness(
 		},
 		metadata,
 		transaction: store,
+		inputLimits: {
+			async read() {
+				return limits;
+			},
+		},
+		now: () => new Date("2026-10-13T00:00:00.000Z"),
 		newId: (() => {
 			let next = 0;
 			return () => `generated-${++next}`;
@@ -389,5 +440,133 @@ describe("native capability admission Store seam", () => {
 		expect(
 			(await command.useCase.admit({ ...request, parameters: "" })).outcome,
 		).toBe("accepted");
+	});
+});
+
+describe("native capability Invocation V2 Store seam", () => {
+	const v2Request: NativeCapabilityAdmissionRequestV2 = {
+		...request,
+		schemaVersion: 2,
+		attachments: ["file-a", "file-b"],
+	};
+
+	it("binds the accepted ordered inputs once and replays them without rebinding", async () => {
+		const harness = createHarness({
+			files: [textFile("file-a"), textFile("file-b")],
+		});
+		const accepted = await harness.useCase.admit(v2Request);
+		if (accepted.outcome !== "accepted")
+			throw new Error("Expected Invocation V2 acceptance");
+		expect(
+			accepted.plan.attachments?.map((attachment) => attachment.fileId),
+		).toEqual(["file-a", "file-b"]);
+		expect(accepted.plan.idempotency.requestDigest).toBe(
+			nativeCapabilityAdmissionRequestDigestV2(v2Request),
+		);
+		const firstBinding = harness.store.files.map((file) => ({
+			fileId: file.fileId,
+			executionId: file.executionId,
+			sessionGeneration: file.sessionGeneration,
+			messageId: file.messageId,
+			revision: file.revision,
+		}));
+		expect(firstBinding).toEqual([
+			{
+				fileId: "file-a",
+				executionId: accepted.plan.executionId,
+				sessionGeneration: conversation.sessionGeneration,
+				messageId: null,
+				revision: 2,
+			},
+			{
+				fileId: "file-b",
+				executionId: accepted.plan.executionId,
+				sessionGeneration: conversation.sessionGeneration,
+				messageId: null,
+				revision: 2,
+			},
+		]);
+		const replay = await harness.useCase.admit({
+			...v2Request,
+			requestId: "request-2",
+		});
+		expect(replay.outcome).toBe("replayed");
+		if (replay.outcome !== "replayed")
+			throw new Error("Expected Invocation V2 replay");
+		expect(replay.plan.attachments).toEqual(accepted.plan.attachments);
+		expect(harness.store.files).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ fileId: "file-a", revision: 2 }),
+				expect.objectContaining({ fileId: "file-b", revision: 2 }),
+			]),
+		);
+	});
+
+	it("never rebinds an input that another Execution already owns", async () => {
+		const harness = createHarness({
+			files: [textFile("file-a"), textFile("file-b")],
+		});
+		expect((await harness.useCase.admit(v2Request)).outcome).toBe("accepted");
+		harness.store.setActiveExecution(null);
+		expect(
+			await harness.useCase.admit({
+				...v2Request,
+				idempotencyKey: "invoke-2",
+				requestId: "request-2",
+			}),
+		).toEqual({ outcome: "denied" });
+		expect(harness.store.plans).toHaveLength(1);
+	});
+
+	it("fails closed when the persisted plan drops the accepted inputs", async () => {
+		const store = new FakeNativeCapabilityAdmissionStoreV1({
+			conversation,
+			files: [textFile("file-a"), textFile("file-b")],
+		});
+		const source = createHarness({
+			files: [textFile("file-a"), textFile("file-b")],
+		});
+		const accepted = await source.useCase.admit(v2Request);
+		if (accepted.outcome !== "accepted")
+			throw new Error("Expected Invocation V2 acceptance");
+		const malformed = structuredClone(accepted.plan) as unknown as {
+			attachments?: unknown;
+			outbox: { payload: Record<string, unknown> };
+		};
+		delete malformed.attachments;
+		delete malformed.outbox.payload.attachments;
+		await expect(
+			store.admitNativeCapability(
+				{
+					command: v2Request,
+					authority,
+					requestDigest: nativeCapabilityAdmissionRequestDigestV2(v2Request),
+				},
+				async () => malformed as never,
+				() => true,
+				async () => true,
+			),
+		).rejects.toThrow("Native capability admission plan is invalid");
+	});
+
+	it.each([
+		{ label: "no FileLimits", limits: null },
+		{
+			label: "media type not allowed",
+			limits: { ...textLimits, mediaTypes: ["image/png"] },
+		},
+	])("denies $label before binding", async ({ limits }) => {
+		const harness = createHarness(
+			{ files: [textFile("file-a"), textFile("file-b")] },
+			new FakeNativeCapabilityMetadataRevalidationV1({ projection }),
+			limits,
+		);
+		expect(await harness.useCase.admit(v2Request)).toEqual({
+			outcome: "denied",
+		});
+		expect(harness.store.plans).toHaveLength(0);
+		expect(harness.store.files.every((file) => file.executionId === null)).toBe(
+			true,
+		);
 	});
 });
