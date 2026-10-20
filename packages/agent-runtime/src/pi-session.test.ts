@@ -11,6 +11,23 @@ vi.mock("./pi-rpc.js", async (importOriginal) => ({
 	openPiRpc: openRpc,
 }));
 
+it("does not load the Pi SDK when only importing the session adapter", async () => {
+	vi.resetModules();
+	const loadPiSdk = vi.fn(() => {
+		throw new Error("PI_SDK_EAGER_LOAD");
+	});
+	vi.doMock("@earendil-works/pi-coding-agent", loadPiSdk);
+	try {
+		await expect(import("./pi-session.js")).resolves.toHaveProperty(
+			"openPiSession",
+		);
+		expect(loadPiSdk).not.toHaveBeenCalled();
+	} finally {
+		vi.doUnmock("@earendil-works/pi-coding-agent");
+		vi.resetModules();
+	}
+});
+
 async function fixture() {
 	const directory = await realpath(
 		await mkdtemp(join(tmpdir(), "pi-session-")),
