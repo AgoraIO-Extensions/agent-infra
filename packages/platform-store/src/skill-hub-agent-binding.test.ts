@@ -15,11 +15,13 @@ import {
 } from "vitest";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
 import { PostgresAgentConfigurationTransactionV1 } from "./agent-configuration.transaction.ts";
+import { PostgresPlatformAuditQueryV1 } from "./audit.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { PostgresScopedPlatformAuditQueryV1 } from "./scoped-audit-query.ts";
 import { PostgresSkillHubAgentBindingAdmissionV1 } from "./skill-hub-agent-binding.ts";
 
 const occurredAt = new Date("2026-10-09T00:00:00.000Z");
@@ -214,6 +216,70 @@ describe("Skill Hub Agent binding persistence", () => {
 		]);
 		const replay = await useCase.bind(command, actor);
 		expect(replay).toEqual({ ...result, replayed: true });
+		const originalAudit = await client`
+			select * from platform.audit_events
+			where action = 'agent.configuration.revised' and target_id = 'agent-1'
+			order by id`;
+		expect(originalAudit).toHaveLength(1);
+		expect(originalAudit[0]?.details).toEqual({ changedFields: ["skills"] });
+		const auditId = originalAudit[0]?.id as string;
+		const legacy = new PostgresPlatformAuditQueryV1({
+			databaseUrl: database?.databaseUrl ?? "",
+		});
+		const scoped = new PostgresScopedPlatformAuditQueryV1({
+			databaseUrl: database?.databaseUrl ?? "",
+		});
+		const admin = {
+			kind: "administrator" as const,
+			administratorId: "admin-1",
+		};
+		try {
+			const expected = {
+				auditId,
+				action: "agent.configuration.revised",
+				summary: "agent.configuration.revised: skills",
+			};
+			expect(
+				(
+					await legacy.listAudit(
+						{ schemaVersion: 1, ...admin },
+						{ schemaVersion: 1, limit: 100 },
+					)
+				).items,
+			).toEqual(expect.arrayContaining([expect.objectContaining(expected)]));
+			const request = { requestId: "audit-request", traceId: "audit-trace" };
+			expect(
+				(
+					await scoped.listAuditWithDisplayNames(
+						admin,
+						{
+							limit: 100,
+							filters: {
+								action: "agent.configuration.revised",
+								agentId: "agent-1",
+							},
+						},
+						request,
+					)
+				).items,
+			).toEqual(expect.arrayContaining([expect.objectContaining(expected)]));
+			expect(
+				await scoped.getAuditWithDisplayNames(
+					admin,
+					auditId,
+					{ limit: 1, filters: {} },
+					request,
+				),
+			).toMatchObject(expected);
+			expect(
+				await client`select * from platform.audit_events
+				where action = 'agent.configuration.revised' and target_id = 'agent-1'
+				order by id`,
+			).toEqual(originalAudit);
+		} finally {
+			await legacy.close();
+			await scoped.close();
+		}
 		expect(
 			await client`select count(*)::int as count from platform.skill_hub_agent_bindings`,
 		).toEqual([{ count: 1 }]);
