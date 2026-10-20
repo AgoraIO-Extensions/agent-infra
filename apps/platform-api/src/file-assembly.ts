@@ -225,11 +225,10 @@ export function assemblePlatformFilesV1(input: {
 					throw new Error("Runtime file exchange denied");
 				const now = Date.now();
 				const submittedExpiry = Date.parse(value.expiresAt);
-				if (
-					!Number.isFinite(submittedExpiry) ||
-					submittedExpiry <= now ||
-					submittedExpiry > now + deployment.accessTtlMs
-				)
+				// The submitted expiry is the Runtime execution authority's
+				// horizon, which may legitimately exceed the short file-access
+				// token lifetime. Only the minted token is capped below.
+				if (!Number.isFinite(submittedExpiry) || submittedExpiry <= now)
 					throw new Error("Runtime file exchange denied");
 				const trusted = await store.transaction(
 					value.conversationId,
@@ -276,7 +275,7 @@ export function assemblePlatformFilesV1(input: {
 								? [value.fileId]
 								: [],
 						expiresAt: new Date(
-							Math.min(submittedExpiry, now + 60_000),
+							Math.min(submittedExpiry, now + deployment.accessTtlMs),
 						).toISOString(),
 					}),
 				};

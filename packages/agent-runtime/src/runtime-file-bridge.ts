@@ -73,35 +73,39 @@ export interface RuntimeNativeTextInputV1 {
 	readonly mediaType: "text/plain";
 }
 
+/** Admitted facts plus the exact bytes returned for one V5 text input. */
+export interface RuntimeNativeTextInputBytesV1 {
+	readonly bytes: Uint8Array;
+	readonly sha256: string;
+	readonly byteLength: number;
+	readonly mediaType: "text/plain";
+}
+
 /**
  * Narrow Host -> Driver port for the exact ordered Native V5 text input set.
  *
- * The Driver may read only the admitted attachment ids, in any order it
- * needs, but each read is bounded by the admitted byte length and verified
- * against the admitted SHA-256 before any bytes are returned. Implementations
- * land with the Driver (P4); a Driver that does not declare
- * {@link RuntimeNativeTextInputDriverV1} must never receive this port.
+ * The Driver calls `readNativeTextInput` on the same request-scoped object it
+ * receives as `RuntimeFileBridgePortV1` (P4). Only the admitted attachment ids
+ * are readable, in any order it needs, but each read is bounded by the admitted
+ * byte length and verified against the admitted SHA-256 before any bytes are
+ * returned. Unknown ids, reordered/forged facts, a size or digest mismatch and
+ * a lapsed authority all fail before a byte reaches the Driver.
  */
 export interface RuntimeNativeTextInputPortV1 {
 	readonly schemaVersion: 1;
 	readonly inputs: readonly RuntimeNativeTextInputV1[];
-	read(
-		input: RuntimeNativeTextInputV1,
+	readNativeTextInput(
+		attachmentId: string,
 		signal?: AbortSignal,
-	): Promise<Uint8Array>;
+	): Promise<RuntimeNativeTextInputBytesV1>;
 	revalidate(): void;
 }
 
-/**
- * Driver declaration required before the Host exposes
- * {@link RuntimeNativeTextInputPortV1}. The field is additive and fails closed:
- * a Driver without it cannot execute a Native V5 Skill with attachments.
- */
-export interface RuntimeNativeTextInputDriverV1 {
-	readonly nativeTextInputs?: { readonly schemaVersion: 1 };
-}
+/** Request-scoped Driver port that also carries the V5 text-input method. */
+export type RuntimeFileBridgeWithNativeTextInputV1 = RuntimeFileBridgePortV1 &
+	RuntimeNativeTextInputPortV1;
 
-/** Execution context extension consumed by a text-input-aware Driver. */
+/** Optional execution-context extension for Drivers that inspect the port directly. */
 export interface RuntimeNativeTextInputExecutionContextV1 {
 	readonly nativeTextInput?: RuntimeNativeTextInputPortV1;
 }
@@ -465,18 +469,14 @@ export function createRuntimeNativeTextInputPortV1(input: {
 	return {
 		schemaVersion: 1,
 		inputs,
-		async read(entry, signal) {
+		async readNativeTextInput(attachmentId, signal) {
 			if (signal?.aborted) throw new Error("RUNTIME_FILE_INPUT_ABORTED");
 			const admitted = inputs.find(
-				(candidate) => candidate.attachmentId === entry.attachmentId,
+				(candidate) => candidate.attachmentId === attachmentId,
 			);
-			if (!admitted || admitted.sha256 !== entry.sha256)
-				throw new Error("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+			if (!admitted) throw new Error("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
 			assertLive();
-			const result = await input.bridge.readInput(
-				admitted.attachmentId,
-				signal,
-			);
+			const result = await input.bridge.readInput(attachmentId, signal);
 			const bytes = await readBoundedInput(result.body, admitted.byteLength);
 			assertLive();
 			const digest = createHash("sha256").update(bytes).digest("hex");
@@ -485,7 +485,12 @@ export function createRuntimeNativeTextInputPortV1(input: {
 				bytes.byteLength !== admitted.byteLength
 			)
 				throw new Error("RUNTIME_FILE_INPUT_INVALID");
-			return bytes;
+			return {
+				bytes,
+				sha256: admitted.sha256,
+				byteLength: admitted.byteLength,
+				mediaType: admitted.mediaType,
+			};
 		},
 		revalidate() {
 			assertLive();

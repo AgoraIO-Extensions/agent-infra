@@ -655,13 +655,15 @@ describe("Native V5 ordered text input bridge", () => {
 			bridge: inputBridge(admitted),
 			now: () => 10_000,
 		});
-		await expect(port.read(inputs[0]!)).resolves.toEqual(text);
-		await expect(
-			port.read({ ...inputs[0]!, attachmentId: "file-2" }),
-		).rejects.toThrow("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
-		await expect(
-			port.read({ ...inputs[0]!, sha256: "c".repeat(64) }),
-		).rejects.toThrow("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+		await expect(port.readNativeTextInput("file-1")).resolves.toEqual({
+			bytes: text,
+			sha256: sha256Hex(text),
+			byteLength: text.byteLength,
+			mediaType: "text/plain",
+		});
+		await expect(port.readNativeTextInput("file-2")).rejects.toThrow(
+			"RUNTIME_FILE_INPUT_NOT_AUTHORIZED",
+		);
 	});
 	it("rejects reordered, extra or missing attachments in the reused V4 Grant", async () => {
 		const { request, claims } = await fixture();
@@ -719,7 +721,7 @@ describe("Native V5 ordered text input bridge", () => {
 				inputs,
 				bridge: inputBridge(admitted, oversized),
 				now: () => 10_000,
-			}).read(inputs[0]!),
+			}).readNativeTextInput("file-1"),
 		).rejects.toThrow("RUNTIME_FILE_INPUT_INVALID");
 		const mismatched = new ReadableStream<Uint8Array>({
 			start(controller) {
@@ -733,7 +735,7 @@ describe("Native V5 ordered text input bridge", () => {
 				inputs,
 				bridge: inputBridge(admitted, mismatched),
 				now: () => 10_000,
-			}).read(inputs[0]!),
+			}).readNativeTextInput("file-1"),
 		).rejects.toThrow("RUNTIME_FILE_INPUT_INVALID");
 		const expired = createRuntimeNativeTextInputPortV1({
 			binding: admitted,
@@ -741,7 +743,7 @@ describe("Native V5 ordered text input bridge", () => {
 			bridge: inputBridge(admitted),
 			now: () => 20_000,
 		});
-		await expect(expired.read(inputs[0]!)).rejects.toThrow(
+		await expect(expired.readNativeTextInput("file-1")).rejects.toThrow(
 			"RUNTIME_FILE_BRIDGE_BINDING_INVALID",
 		);
 	});

@@ -144,7 +144,7 @@ import {
 	createRuntimeNativeTextInputPortV1,
 	type RuntimeFileBridgeFactoryV1,
 	type RuntimeFileBridgePortV1,
-	type RuntimeNativeTextInputDriverV1,
+	type RuntimeFileBridgeWithNativeTextInputV1,
 	type RuntimeNativeTextInputExecutionContextV1,
 	type RuntimeNativeTextInputPortV1,
 } from "./runtime-file-bridge.js";
@@ -1014,10 +1014,8 @@ export class RuntimeHost {
 				requestDigest: claims.requestDigest,
 			},
 		);
-		const driver = this.options.driver as RuntimeDriver &
-			RuntimeNativeTextInputDriverV1;
+		const driver = this.options.driver;
 		if (
-			driver.nativeTextInputs?.schemaVersion !== 1 ||
 			!driver.createNativeSkillCommand ||
 			!driver.resolveNativeSkillBinding ||
 			!this.options.fileBridge
@@ -1173,7 +1171,7 @@ export class RuntimeHost {
 								capabilitySourceVersion: request.capabilitySourceVersion,
 								directoryRevision: request.directoryRevision,
 							});
-							return skillCreate.call(driver, {
+							const command = skillCreate.call(driver, {
 								schemaVersion: 1,
 								kind: "native-capability",
 								operationId: request.executionId,
@@ -1192,6 +1190,18 @@ export class RuntimeHost {
 								packageDigest: skillBinding.packageDigest,
 								manifestDigest: skillBinding.manifestDigest,
 							});
+							// The Driver builds its ordinary Skill command without
+							// attachments; V5 adds exactly the admitted ordered ids. The
+							// Driver resolves their bytes through the request-scoped bridge.
+							return {
+								...command,
+								input: {
+									...command.input,
+									attachments: request.attachments.map(
+										(attachment) => attachment.attachmentId,
+									),
+								},
+							};
 						},
 					});
 					this.requireLegacyHost();
@@ -1391,7 +1401,7 @@ export class RuntimeHost {
 		});
 		this.requireLegacyHost();
 		const port = fileBridge(binding);
-		const bridge: RuntimeFileBridgePortV1 = {
+		const authorityBridge: RuntimeFileBridgePortV1 = {
 			readInput: (fileId, signal) => port.readInput(fileId, signal),
 			writeResult: (descriptor, body) => port.writeResult(descriptor, body),
 			revalidate: () => {
@@ -1408,9 +1418,19 @@ export class RuntimeHost {
 			createRuntimeNativeTextInputPortV1({
 				binding,
 				inputs,
-				bridge,
+				bridge: authorityBridge,
 				now: input.now,
 			});
+		// P4 reads this method from the same object it receives as
+		// RuntimeFileBridgePortV1, so the ordered text input seam must travel on
+		// the bridge rather than in a side channel.
+		const bridge: RuntimeFileBridgeWithNativeTextInputV1 = {
+			...authorityBridge,
+			schemaVersion: 1,
+			inputs: nativeTextInput.inputs,
+			readNativeTextInput: (attachmentId, signal) =>
+				nativeTextInput.readNativeTextInput(attachmentId, signal),
+		};
 		this.requireLegacyHost();
 		return input.dispatch({ fileBridge: bridge, nativeTextInput });
 	}
@@ -3007,13 +3027,26 @@ export class RuntimeHost {
 				this.options.driver,
 			);
 			const originalFileBridge = context?.fileBridge;
+			const readNativeTextInput = (
+				originalFileBridge as
+					| (RuntimeFileBridgePortV1 & Partial<RuntimeNativeTextInputPortV1>)
+					| undefined
+			)?.readNativeTextInput;
 			const driverContext =
 				originalFileBridge && recordResultFile
 					? {
 							...context,
 							fileBridge: {
-								readInput(fileId: string) {
-									return originalFileBridge.readInput(fileId);
+								// The result-recording wrapper must keep the V5 text-input
+								// method on the same object the Driver receives.
+								...(readNativeTextInput
+									? {
+											readNativeTextInput:
+												readNativeTextInput.bind(originalFileBridge),
+										}
+									: {}),
+								readInput(fileId: string, signal?: AbortSignal) {
+									return originalFileBridge.readInput(fileId, signal);
 								},
 								revalidate() {
 									originalFileBridge.revalidate();
