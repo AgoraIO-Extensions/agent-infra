@@ -166,6 +166,62 @@ describe("Dialog", () => {
 		expect(document.activeElement).toBe(other);
 	});
 
+	it("stops guarding focus once the address changes, including the query", async () => {
+		function Removable() {
+			const [present, setPresent] = React.useState(true);
+			return (
+				<main id="main-content" tabIndex={-1}>
+					<h1 tabIndex={-1}>审阅队列</h1>
+					{present ? (
+						<Dialog>
+							<DialogTrigger render={<Button variant="outline" />}>
+								审阅
+							</DialogTrigger>
+							<DialogContent>
+								<DialogHeader>
+									<DialogTitle>审阅发布申请</DialogTitle>
+								</DialogHeader>
+								<DialogFooter>
+									<DialogClose
+										render={<Button />}
+										onClick={() =>
+											setTimeout(() => {
+												// 同一路径换了查询参数：新视图由页面自己的焦点管理接手。
+												history.pushState(null, "", "?scope=done");
+												setPresent(false);
+											}, 30)
+										}
+									>
+										批准发布
+									</DialogClose>
+								</DialogFooter>
+							</DialogContent>
+						</Dialog>
+					) : null}
+				</main>
+			);
+		}
+		const before = `${location.pathname}${location.search}`;
+		try {
+			render(<Removable />);
+			const trigger = screen.getByRole("button", { name: "审阅" });
+			trigger.focus();
+			fireEvent.click(trigger);
+			const dialog = await screen.findByRole("dialog");
+			fireEvent.click(within(dialog).getByRole("button", { name: "批准发布" }));
+			await waitFor(() => expect(document.activeElement).toBe(trigger));
+			await waitFor(() =>
+				expect(screen.queryByRole("button", { name: "审阅" })).toBeNull(),
+			);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(document.activeElement).not.toBe(
+				screen.getByRole("heading", { name: "审阅队列" }),
+			);
+		} finally {
+			history.replaceState(null, "", before);
+		}
+	});
+
 	it("uses the design surface without blur or animation on the backdrop", async () => {
 		render(<Example />);
 		fireEvent.click(screen.getByRole("button", { name: "打开" }));

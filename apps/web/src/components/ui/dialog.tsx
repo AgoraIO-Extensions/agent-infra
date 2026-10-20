@@ -10,11 +10,12 @@ import { cn } from "@/lib/utils";
  * 关闭后的焦点看护（#3037 AC-2）：Base UI 关闭弹窗时把焦点还给触发按钮。触发按钮当时被禁用
  * 或已卸载，或之后随列表回读卸载（例如审阅、解除绑定后该行离开列表）时，焦点会落到 body，
  * 读屏与 Tab 都从页首重来。看护期间焦点一旦落到 body，就移到页面标题（pageRecoveryTarget：
- * 主内容区 h1[tabindex]，否则 #main-content）。焦点被移到别处、用户按下指针、地址变化、
- * 再次打开弹窗或 10 秒后停止看护；调用方传了 finalFocus 时不看护。
+ * 主内容区 h1[tabindex]，否则 #main-content）。焦点被移到别处、用户按下指针、地址（含查询与
+ * hash）变化、再次打开弹窗或 10 秒后停止看护；调用方传了 finalFocus 时不看护。
  */
 let closeFocusGuard: {
-	path: string;
+	/** 开始看护时的完整地址：路由或查询参数变化后由页面自己的焦点管理接手。 */
+	address: string;
 	observer: MutationObserver | null;
 	timer: ReturnType<typeof setTimeout>;
 	/** 关闭后第一次获得焦点的元素，通常是触发按钮。 */
@@ -45,7 +46,7 @@ function onCloseFocusIn(event: FocusEvent) {
 function settleCloseFocus() {
 	const current = closeFocusGuard;
 	if (!current) return;
-	if (current.path !== location.pathname) {
+	if (current.address !== currentAddress()) {
 		stopCloseFocusGuard();
 		return;
 	}
@@ -58,6 +59,10 @@ function settleCloseFocus() {
 	target.focus({ preventScroll: target.id === "main-content" });
 }
 
+function currentAddress() {
+	return `${location.pathname}${location.search}${location.hash}`;
+}
+
 function startCloseFocusGuard() {
 	stopCloseFocusGuard();
 	const observer =
@@ -65,7 +70,7 @@ function startCloseFocusGuard() {
 			? null
 			: new MutationObserver(settleCloseFocus);
 	closeFocusGuard = {
-		path: location.pathname,
+		address: currentAddress(),
 		observer,
 		timer: setTimeout(stopCloseFocusGuard, 10_000),
 		restored: null,
