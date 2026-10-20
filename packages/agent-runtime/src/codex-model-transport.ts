@@ -782,6 +782,19 @@ function encodeValidatedEvent(
 	if (ignoredPinnedCodexEvents.has(value.type)) {
 		return { state: "ignored" as const };
 	}
+	if (value.type === "response.reasoning_text.done") {
+		// #2969：流式输出原始推理的模型在每段推理结束时发送该事件。text 与已转发的
+		// delta 及 output_item.done 中的 reasoning item 重复；上方已对整个事件做过
+		// 大小、凭证与 error 字段校验，因此按 response.output_text.done 的方式丢弃，
+		// 不再让整轮回复失败。
+		if (
+			typeof value.text !== "string" ||
+			!nonNegativeInteger(value.content_index) ||
+			(value.item_id !== undefined && typeof value.item_id !== "string")
+		)
+			return { state: "invalid" as const };
+		return { state: "ignored" as const };
+	}
 	const projected = projectHandledEvent(value);
 	if (!projected) return { state: "invalid" as const };
 	const payload = semanticPayload(projected, credentialMatcher);
