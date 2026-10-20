@@ -12,6 +12,7 @@ import {
 	RuntimeAuthorizationRenewRequestV3Schema,
 	RuntimeBrowserHandoffRequestV3Schema,
 	RuntimeBrowserSideEffectConfirmationRequestV3Schema,
+	type RuntimeBusinessGrantClaimsV4,
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeEventAckRequestV3Schema,
 	RuntimeEventAckRequestV4Schema,
@@ -22,11 +23,16 @@ import {
 	RuntimeGenerationCancelRequestV3Schema,
 	RuntimeModelDirectoryRequestV1Schema,
 	RuntimeNativeCapabilityRequestV3Schema,
+	type RuntimeNativeCapabilityRequestV5,
 	RuntimeNativeCapabilityTransportV4Schema,
+	RuntimeNativeCapabilityTransportV5Schema,
 	RuntimeNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataReadResponseV1Schema,
 	RuntimeReplayRequestV1Schema,
+	type RuntimeRestoreExecutionKeyGrantClaimsV5,
+	type RuntimeRestoreExecutionKeyRequestV5,
 	RuntimeRestoreExecutionKeyTransportV4Schema,
+	RuntimeRestoreExecutionKeyTransportV5Schema,
 	RuntimeSkillDirectoryRequestV1Schema,
 	RuntimeSkillResourceReadRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
@@ -77,6 +83,14 @@ interface RuntimeHostAppOptions {
 	verifyRecoveryGrantV4?: (request: unknown) => Promise<{
 		request: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyRequestV4;
 		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
+	}>;
+	verifyGrantV5?: (request: unknown) => Promise<{
+		request: RuntimeNativeCapabilityRequestV5;
+		claims: RuntimeBusinessGrantClaimsV4;
+	}>;
+	verifyRecoveryGrantV5?: (request: unknown) => Promise<{
+		request: RuntimeRestoreExecutionKeyRequestV5;
+		claims: RuntimeRestoreExecutionKeyGrantClaimsV5;
 	}>;
 	/** The transport token authenticates this deployment-provisioned Worker identity. */
 	readinessWorkerId?: string;
@@ -169,7 +183,7 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		// must remain usable when a deployment profile changes or disappears.
 		if (
 			context.req.method === "POST" &&
-			/^\/internal\/runtime\/v(?:[1-4]\/turns|[134]\/instructions|3\/native-capability|4\/native-capability)$/.test(
+			/^\/internal\/runtime\/v(?:[1-4]\/turns|[134]\/instructions|3\/native-capability|4\/native-capability|5\/native-capability)$/.test(
 				context.req.path,
 			)
 		) {
@@ -509,6 +523,38 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			);
 		return verified;
 	}
+	async function verifyV5(request: unknown) {
+		if (!options.verifyGrantV5 || !options.runtimeWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization is not configured",
+				403,
+			);
+		const verified = await options.verifyGrantV5(request);
+		if (verified.claims.workerId !== options.runtimeWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization does not match this deployment",
+				403,
+			);
+		return verified;
+	}
+	async function verifyRecoveryV5(request: unknown) {
+		if (!options.verifyRecoveryGrantV5 || !options.runtimeWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization is not configured",
+				403,
+			);
+		const verified = await options.verifyRecoveryGrantV5(request);
+		if (verified.claims.workerId !== options.runtimeWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization does not match this deployment",
+				403,
+			);
+		return verified;
+	}
 	app.post("/internal/runtime/v4/turns", async (context) => {
 		const request = await parseBody(
 			context.req.raw,
@@ -540,6 +586,24 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		);
 		await verifyRecoveryV4(request.recoveryRequest);
 		return context.json(await options.host.restoreExecutionKeyV4(request));
+	});
+	app.post("/internal/runtime/v5/native-capability", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeNativeCapabilityTransportV5Schema,
+		);
+		// The deployment verifier repeats the V5 business/Digest binding; the Host
+		// repeats it again before it exposes the private Key and attachment set.
+		await verifyV5(request.businessRequest);
+		return context.json(await options.host.nativeCapabilityV5(request));
+	});
+	app.post("/internal/runtime/v5/execution-key/restore", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeRestoreExecutionKeyTransportV5Schema,
+		);
+		await verifyRecoveryV5(request.recoveryRequest);
+		return context.json(await options.host.restoreExecutionKeyV5(request));
 	});
 	app.post("/internal/runtime/v4/events/read", async (context) => {
 		const request = await parseBody(
@@ -644,22 +708,34 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 	app.onError((error, context) => {
 		const readinessRequest =
 			context.req.path === "/internal/runtime/v1/readiness";
+		const v5Request = context.req.path.startsWith("/internal/runtime/v5/");
 		const runtimeError =
 			error instanceof RuntimeHostError
 				? error
-				: readinessRequest && context.req.raw.signal.aborted
-					? new RuntimeHostError(
-							"RUNTIME_READINESS_UNAVAILABLE",
-							"Runtime request was interrupted",
-							503,
-							true,
+				: v5Request && error instanceof TypeError
+					? // V5 contract validators signal a binding/Digest mismatch with a
+						// TypeError; it is an authorization denial, never a 500.
+						new RuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							"Runtime authorization is unavailable or does not authorize this operation",
+							403,
+							false,
+							undefined,
+							"v5-binding-invalid",
 						)
-					: new RuntimeHostError(
-							"RUNTIME_INTERNAL_ERROR",
-							"Runtime request failed",
-							500,
-							true,
-						);
+					: readinessRequest && context.req.raw.signal.aborted
+						? new RuntimeHostError(
+								"RUNTIME_READINESS_UNAVAILABLE",
+								"Runtime request was interrupted",
+								503,
+								true,
+							)
+						: new RuntimeHostError(
+								"RUNTIME_INTERNAL_ERROR",
+								"Runtime request failed",
+								500,
+								true,
+							);
 		const traceId = context.req.header("x-trace-id") ?? crypto.randomUUID();
 		if (runtimeError.code === "RUNTIME_GRANT_INVALID")
 			(

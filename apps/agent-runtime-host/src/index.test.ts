@@ -988,6 +988,8 @@ describe("RuntimeHost environment assembly", () => {
 			try {
 				expect(runtime.configVersion).toBe("claude-active-17");
 				expect(runtime.verifyGrantV4).toBeUndefined();
+				expect(runtime.verifyGrantV5).toBeUndefined();
+				expect(runtime.verifyRecoveryGrantV5).toBeUndefined();
 				expect(
 					(await createRuntimeHostApp(runtime).request("/healthz")).status,
 				).toBe(200);
@@ -1468,6 +1470,8 @@ describe("RuntimeHost environment assembly", () => {
 			});
 			try {
 				expect(runtime.verifyGrantV4).toBeTypeOf("function");
+				expect(runtime.verifyGrantV5).toBeTypeOf("function");
+				expect(runtime.verifyRecoveryGrantV5).toBeTypeOf("function");
 				expect(runtime.connectionConsumer).toMatchObject({
 					status: "available",
 					configFingerprint: approval.configFingerprint,
@@ -1738,6 +1742,8 @@ describe("RuntimeHost environment assembly", () => {
 		});
 		try {
 			expect(runtime.verifyGrantV4).toBeUndefined();
+			expect(runtime.verifyGrantV5).toBeUndefined();
+			expect(runtime.verifyRecoveryGrantV5).toBeUndefined();
 			expect(openedWith?.connectionClient).toMatchObject({
 				profile,
 				authorizedService: {

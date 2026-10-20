@@ -29,9 +29,13 @@ import {
 } from "@agent-infra/agent-runtime";
 import type {
 	ExecutionGrantV1,
+	RuntimeBusinessGrantClaimsV4,
 	RuntimeBusinessRequestV4,
 	RuntimeExecutionGrantV2,
+	RuntimeNativeCapabilityRequestV5,
+	RuntimeRestoreExecutionKeyGrantClaimsV5,
 	RuntimeRestoreExecutionKeyRequestV4,
+	RuntimeRestoreExecutionKeyRequestV5,
 	VerifiedExecutionGrantV1,
 	VerifiedRuntimeExecutionGrantV2,
 } from "@agent-infra/contracts/runtime";
@@ -78,6 +82,7 @@ import {
 	prepareRuntimeOAuth,
 	type RuntimeOAuthAssembly,
 } from "./runtime-oauth.js";
+import { createRuntimeV5GrantValidators } from "./runtime-v5-grant.js";
 import {
 	readRuntimeSkillHubBindingV1,
 	runtimeSkillHubMountRootV1,
@@ -115,6 +120,14 @@ interface StartOptions {
 	verifyRecoveryGrantV4?: (request: unknown) => Promise<{
 		request: RuntimeRestoreExecutionKeyRequestV4;
 		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
+	}>;
+	verifyGrantV5?: (request: unknown) => Promise<{
+		request: RuntimeNativeCapabilityRequestV5;
+		claims: RuntimeBusinessGrantClaimsV4;
+	}>;
+	verifyRecoveryGrantV5?: (request: unknown) => Promise<{
+		request: RuntimeRestoreExecutionKeyRequestV5;
+		claims: RuntimeRestoreExecutionKeyGrantClaimsV5;
 	}>;
 	nativeMetadataRead?: (
 		request: import("@agent-infra/contracts/runtime").RuntimeNativeMetadataReadRequestV1,
@@ -753,6 +766,41 @@ export async function assembleRuntimeHost(
 					return verified;
 				}
 			: undefined;
+		// V5 reuses the V4 business Grant and is enabled by the same Codex V4
+		// deployment configuration. The validators re-verify the V4 JWS and
+		// repeat the V5 request/Digest binding before the Host revalidates it.
+		const rawValidateV5 =
+			runtimeWorkerId && activeConfiguration?.schemaVersion === 4
+				? createRuntimeV5GrantValidators(new Map([[keyId, publicKey]]), {
+						expectedIssuer,
+						expectedWorkerId: runtimeWorkerId,
+					})
+				: undefined;
+		const validateV5 = rawValidateV5
+			? {
+					grant: async (request: unknown) => {
+						const verified = await rawValidateV5.validateGrantV5(request);
+						if (agentId && verified.claims.agentId !== agentId)
+							throw new RuntimeHostError(
+								"RUNTIME_GRANT_INVALID",
+								"Runtime authorization does not match this deployment",
+								403,
+							);
+						return verified;
+					},
+					recovery: async (request: unknown) => {
+						const verified =
+							await rawValidateV5.validateRecoveryGrantV5(request);
+						if (agentId && verified.claims.agentId !== agentId)
+							throw new RuntimeHostError(
+								"RUNTIME_GRANT_INVALID",
+								"Runtime authorization does not match this deployment",
+								403,
+							);
+						return verified;
+					},
+				}
+			: undefined;
 		const host = await RuntimeHost.open({
 			createBrowserExecutionContext,
 			probeBrowserCapability: async ({ declaration, binding, signal }) =>
@@ -793,6 +841,12 @@ export async function assembleRuntimeHost(
 			...(validateV4 ? { validateGrantV4: validateV4 } : {}),
 			...(validateRecoveryV4
 				? { validateRecoveryGrantV4: validateRecoveryV4 }
+				: {}),
+			...(validateV5
+				? {
+						validateGrantV5: validateV5.grant,
+						validateRecoveryGrantV5: validateV5.recovery,
+					}
 				: {}),
 		});
 		assembledHost = host;
@@ -841,6 +895,13 @@ export async function assembleRuntimeHost(
 				? {
 						verifyRecoveryGrantV4: (request: unknown) =>
 							validateRecoveryV4(request),
+					}
+				: {}),
+			...(validateV5
+				? {
+						verifyGrantV5: (request: unknown) => validateV5.grant(request),
+						verifyRecoveryGrantV5: (request: unknown) =>
+							validateV5.recovery(request),
 					}
 				: {}),
 			...(activeConfiguration
