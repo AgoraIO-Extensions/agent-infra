@@ -946,6 +946,8 @@ export class PostgresScopedPlatformAuditQueryV1 {
 		this.#client = postgres(options.databaseUrl, {
 			max: 5,
 			connect_timeout: 2,
+			// Selective and unfiltered pages need plans for their actual parameters.
+			prepare: false,
 		});
 		// The Agent lock in the query transaction guards the current management
 		// read. Keep Drizzle's timestamp/JSON codecs off the raw query pool.
