@@ -635,7 +635,7 @@ describe("production SessionSandbox resource receiver", () => {
 			const sourcePVC = observation.resources.find(
 				(resource) => resource.kind === "PersistentVolumeClaim",
 			);
-			expect(stopped.sourceStop.retainedPVC.uid).toBe(sourcePVC?.uid);
+			expect(stopped.sourceStop.retainedPVC?.uid).toBe(sourcePVC?.uid);
 			if (change !== "token-rotated") return;
 			const replacement: SessionSandboxReconciliationClaimV1 = {
 				...claim,
@@ -891,7 +891,7 @@ describe("production SessionSandbox resource receiver", () => {
 			);
 			expect(observation.status).toBe("stopped");
 			expect(observation.sourceStop?.removed).toEqual([]);
-			expect(observation.sourceStop?.retainedPVC.uid).toBe(pvc?.uid);
+			expect(observation.sourceStop?.retainedPVC?.uid).toBe(pvc?.uid);
 			expect(f.writes).toHaveLength(writes);
 			if (!claim.lifecycle) throw new Error("Expected lifecycle");
 			expect(
@@ -1002,6 +1002,194 @@ describe("production SessionSandbox resource receiver", () => {
 				if (drift === "pod")
 					expect(await f.client.read("Pod", name)).not.toBeNull();
 			}
+		});
+	});
+
+	// #2918：准备中断，只建出了 ServiceAccount、观测从未提交。来源 observation 为 unknown 且没有资源，
+	// 之前永远停在 unknown，ServiceAccount 一直留在集群里。
+	describe("drain of a partially prepared source (#2918)", () => {
+		const partialClaim = async (f: ReturnType<typeof fixture>) => {
+			const signal = new AbortController().signal;
+			await f.receive(f.claim, signal);
+			for (const key of [...f.resources.keys()])
+				if (key !== `ServiceAccount/${f.claim.sandbox.resourceName}`)
+					f.resources.delete(key);
+			const claim = drainClaim(f, { status: "unknown", resources: [] });
+			if (!claim.lifecycle) throw new Error("Expected lifecycle");
+			return {
+				signal,
+				claim: {
+					...claim,
+					resourceStatus: "unknown" as const,
+					previousObservation: { status: "unknown" as const, resources: [] },
+					lifecycle: {
+						...claim.lifecycle,
+						authority: {
+							...claim.lifecycle.authority,
+							targetDesiredState: "stopped" as const,
+						},
+						deletionProgress: [],
+					},
+				},
+			};
+		};
+		/** 模拟 Store 按 Core 的补全规则写回来源证据。 */
+		const refined = (
+			claim: SessionSandboxReconciliationClaimV1,
+			observation: SessionSandboxObservationV1,
+		): SessionSandboxReconciliationClaimV1 => {
+			if (!claim.lifecycle) throw new Error("Expected lifecycle");
+			const decision = decideSessionSandboxDrainObservationV1({
+				sandbox: claim.sandbox,
+				resourceFence: claim.resourceFence,
+				lifecycle: claim.lifecycle,
+				observation,
+			});
+			return {
+				...claim,
+				previousObservation: decision.observation,
+				lifecycle: {
+					...claim.lifecycle,
+					source: {
+						...claim.lifecycle.source,
+						observation: decision.observation,
+					},
+				},
+			};
+		};
+
+		it("records the owned leftover as evidence, then removes it by UID without a retained PVC", async () => {
+			const f = fixture();
+			const { claim, signal } = await partialClaim(f);
+			const name = claim.sandbox.resourceName;
+			const progress = new Map<string, SessionSandboxDeletionProgressV1>();
+			const record = async (entry: SessionSandboxDeletionProgressV1) => {
+				progress.set(entry.resource.kind, entry);
+				return "committed" as const;
+			};
+			const first = await f.receive(claim, signal, record);
+			expect(first).toMatchObject({ status: "observed" });
+			expect(first.resources.map((resource) => resource.kind)).toEqual([
+				"ServiceAccount",
+			]);
+			expect(await f.client.read("ServiceAccount", name)).not.toBeNull();
+			const next = refined(claim, first);
+			expect(next.lifecycle?.source.observation?.resources).toHaveLength(1);
+			const stopped = await f.receive(next, signal, record);
+			expect(stopped.status).toBe("stopped");
+			expect(
+				stopped.sourceStop?.removed.map((proof) => proof.resource.kind),
+			).toEqual(["ServiceAccount"]);
+			expect(stopped.sourceStop?.retainedPVC).toBeNull();
+			expect(stopped.resources).toEqual([]);
+			expect(await f.client.read("ServiceAccount", name)).toBeNull();
+			if (!next.lifecycle) throw new Error("Expected lifecycle");
+			expect(
+				decideSessionSandboxDrainObservationV1({
+					sandbox: next.sandbox,
+					resourceFence: next.resourceFence,
+					lifecycle: {
+						...next.lifecycle,
+						deletionProgress: [...progress.values()],
+					},
+					observation: stopped,
+				}),
+			).toMatchObject({ status: "stopped", finished: true });
+		});
+
+		it("does not remove anything while executions still hold the Sandbox or a preparation started", async () => {
+			const f = fixture();
+			const { claim, signal } = await partialClaim(f);
+			const first = await f.receive(claim, signal, async () => "committed");
+			const next = refined(claim, first);
+			if (!next.lifecycle) throw new Error("Expected lifecycle");
+			for (const held of [
+				{ ...next, drainComputeAllowed: false },
+				{
+					...next,
+					lifecycle: {
+						...next.lifecycle,
+						preparation: {
+							generation: next.sandbox.generation,
+							resourceFence: next.resourceFence,
+						},
+					},
+				},
+			])
+				await expect(
+					f.receive(held, signal, async () => "committed"),
+				).resolves.toMatchObject({ status: "unknown" });
+			expect(
+				await f.client.read("ServiceAccount", next.sandbox.resourceName),
+			).not.toBeNull();
+		});
+
+		it("fails closed without deleting when a same-name object is not the recorded one", async () => {
+			for (const leftover of ["Pod", "PersistentVolumeClaim"] as const) {
+				const f = fixture();
+				const { claim, signal } = await partialClaim(f);
+				const name = claim.sandbox.resourceName;
+				const first = await f.receive(claim, signal, async () => "committed");
+				const next = refined(claim, first);
+				f.seed({
+					apiVersion: "v1",
+					kind: leftover,
+					metadata: {
+						name,
+						namespace: claim.policy.namespace,
+						uid: `foreign-${leftover}`,
+						resourceVersion: "1",
+					},
+				});
+				const writes = f.writes.length;
+				await expect(
+					f.receive(next, signal, async () => "committed"),
+				).rejects.toMatchObject({
+					code: "conflict",
+				});
+				expect(f.writes).toHaveLength(writes);
+				expect(await f.client.read("ServiceAccount", name)).not.toBeNull();
+				expect(await f.client.read(leftover, name)).not.toBeNull();
+			}
+		});
+
+		it("prepares the same Sandbox from scratch after a stop without a retained PVC", async () => {
+			const f = fixture();
+			const { claim, signal } = await partialClaim(f);
+			const first = await f.receive(claim, signal, async () => "committed");
+			const next = refined(claim, first);
+			const stopped = await f.receive(next, signal, async () => "committed");
+			if (!next.lifecycle || !stopped.sourceStop)
+				throw new Error("Expected stop");
+			const replacement: SessionSandboxReconciliationClaimV1 = {
+				...next,
+				purpose: "prepare",
+				desiredState: "running",
+				drainComputeAllowed: false,
+				resourceStatus: "applying",
+				policy: { ...f.claim.policy, workloadRevision: 2, managementFence: 2 },
+				deployment: {
+					...(f.claim.deployment as ReturnType<typeof workloadDesiredFixture>),
+					workloadRevision: 2,
+				},
+				previousObservation: stopped,
+				lifecycle: {
+					...next.lifecycle,
+					authority: {
+						...next.lifecycle.authority,
+						targetDesiredState: "running",
+					},
+					stopReceipt: stopped.sourceStop,
+					preparation: {
+						generation: next.sandbox.generation,
+						resourceFence: next.resourceFence,
+					},
+				},
+			};
+			await f.receive(replacement, signal);
+			const name = next.sandbox.resourceName;
+			expect(await f.client.read("PersistentVolumeClaim", name)).not.toBeNull();
+			expect(await f.client.read("Pod", name)).not.toBeNull();
 		});
 	});
 
