@@ -61,6 +61,10 @@ import {
 	registerDirectoryRoutes,
 } from "./http/directory-routes.js";
 import {
+	type FileLimitRoutesDependenciesV1,
+	registerFileLimitRoutesV2,
+} from "./http/file-limit-routes.js";
+import {
 	type FileRoutesDependenciesV1,
 	registerFileRoutesV1,
 } from "./http/file-routes.js";
@@ -185,6 +189,7 @@ export interface PlatformAppDependencies {
 		readonly path: string;
 	};
 	readonly files?: FileRoutesDependenciesV1;
+	readonly fileLimits?: FileLimitRoutesDependenciesV1;
 	readonly applications?: ApplicationRegistrationRouteDependencies;
 	readonly applicationMaterialGrants?: ApplicationMaterialGrantRouteDependencies;
 	readonly configuration: ConfigurationRoutesDependencies;
@@ -334,6 +339,8 @@ export function createPlatformApp(
 			app,
 			dependencies.deploymentConfiguration,
 		);
+	if (dependencies.fileLimits)
+		registerFileLimitRoutesV2(app, dependencies.fileLimits);
 	registerConversationRoutes(app, {
 		...dependencies.conversation,
 		files: dependencies.files,

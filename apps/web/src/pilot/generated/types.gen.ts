@@ -595,6 +595,36 @@ export type FileIntentRequestV1 = {
     schemaVersion: 1;
 };
 
+export type FileLimitDeclarationInputV1 = {
+    expiresAt: string;
+    maxBytes: number;
+    mediaTypes: Array<string>;
+};
+
+export type FileLimitDeclarationProjectionV1 = {
+    expiresAt: string;
+    maxBytes: number;
+    mediaTypes: Array<string>;
+    revision: number;
+    schemaVersion: 1;
+    scope: FileLimitDeclarationScopeV1;
+    updatedAt: string;
+    updatedBy: string;
+};
+
+export type FileLimitDeclarationResponseV1 = {
+    declaration: FileLimitDeclarationProjectionV1;
+    schemaVersion: 1;
+};
+
+export type FileLimitDeclarationScopeV1 = 'deployment' | 'agent' | 'channel';
+
+export type FileLimitDeclarationWriteRequestV1 = {
+    declaration: FileLimitDeclarationInputV1;
+    expectedRevision: number | null;
+    schemaVersion: 1;
+};
+
 export type FileLimitsV1 = {
     expiresAt: string;
     maxBytes: number;

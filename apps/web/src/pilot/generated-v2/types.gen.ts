@@ -982,6 +982,32 @@ export type ExecutionOperationEventV2 = {
     type: 'execution.operation';
 };
 
+export type FileLimitDeclarationProjectionV1 = {
+    expiresAt: string;
+    maxBytes: number;
+    mediaTypes: Array<string>;
+    revision: number;
+    schemaVersion: 1;
+    scope: 'deployment' | 'agent' | 'channel';
+    updatedAt: string;
+    updatedBy: string;
+};
+
+export type FileLimitDeclarationResponseV1 = {
+    declaration: FileLimitDeclarationProjectionV1;
+    schemaVersion: 1;
+};
+
+export type FileLimitDeclarationWriteRequestV1 = {
+    declaration: {
+        expiresAt: string;
+        maxBytes: number;
+        mediaTypes: Array<string>;
+    };
+    expectedRevision: number | null;
+    schemaVersion: 1;
+};
+
 export type HeartbeatSignalV1 = {
     kind: 'control';
     occurredAt: string;
@@ -2442,6 +2468,107 @@ export type ListPlatformAuditV2Responses = {
 
 export type ListPlatformAuditV2Response = ListPlatformAuditV2Responses[keyof ListPlatformAuditV2Responses];
 
+export type ReadDeploymentFileLimitsV2Data = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v2/admin/deployment/file-limits';
+};
+
+export type ReadDeploymentFileLimitsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadDeploymentFileLimitsV2Error = ReadDeploymentFileLimitsV2Errors[keyof ReadDeploymentFileLimitsV2Errors];
+
+export type ReadDeploymentFileLimitsV2Responses = {
+    /**
+     * Deployment file limit declaration
+     */
+    200: FileLimitDeclarationResponseV1;
+};
+
+export type ReadDeploymentFileLimitsV2Response = ReadDeploymentFileLimitsV2Responses[keyof ReadDeploymentFileLimitsV2Responses];
+
+export type UpdateDeploymentFileLimitsV2Data = {
+    body: FileLimitDeclarationWriteRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/admin/deployment/file-limits';
+};
+
+export type UpdateDeploymentFileLimitsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type UpdateDeploymentFileLimitsV2Error = UpdateDeploymentFileLimitsV2Errors[keyof UpdateDeploymentFileLimitsV2Errors];
+
+export type UpdateDeploymentFileLimitsV2Responses = {
+    /**
+     * Deployment file limit declaration
+     */
+    200: FileLimitDeclarationResponseV1;
+};
+
+export type UpdateDeploymentFileLimitsV2Response = UpdateDeploymentFileLimitsV2Responses[keyof UpdateDeploymentFileLimitsV2Responses];
+
 export type GetPlatformUserDisabledV2Data = {
     body?: never;
     path: {
@@ -3413,6 +3540,113 @@ export type GrantAgentApplicationUseV1Responses = {
 
 export type GrantAgentApplicationUseV1Response = GrantAgentApplicationUseV1Responses[keyof GrantAgentApplicationUseV1Responses];
 
+export type ReadChannelFileLimitsV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+        channelId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/channels/{channelId}/file-limits';
+};
+
+export type ReadChannelFileLimitsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadChannelFileLimitsV2Error = ReadChannelFileLimitsV2Errors[keyof ReadChannelFileLimitsV2Errors];
+
+export type ReadChannelFileLimitsV2Responses = {
+    /**
+     * Channel file limit declaration
+     */
+    200: FileLimitDeclarationResponseV1;
+};
+
+export type ReadChannelFileLimitsV2Response = ReadChannelFileLimitsV2Responses[keyof ReadChannelFileLimitsV2Responses];
+
+export type UpdateChannelFileLimitsV2Data = {
+    body: FileLimitDeclarationWriteRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+        channelId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/channels/{channelId}/file-limits';
+};
+
+export type UpdateChannelFileLimitsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type UpdateChannelFileLimitsV2Error = UpdateChannelFileLimitsV2Errors[keyof UpdateChannelFileLimitsV2Errors];
+
+export type UpdateChannelFileLimitsV2Responses = {
+    /**
+     * Channel file limit declaration
+     */
+    200: FileLimitDeclarationResponseV1;
+};
+
+export type UpdateChannelFileLimitsV2Response = UpdateChannelFileLimitsV2Responses[keyof UpdateChannelFileLimitsV2Responses];
+
 export type CommandAgentApiLifecycleV1Data = {
     body: AgentApiLifecycleRequestV1;
     headers: {
@@ -4032,6 +4266,111 @@ export type GetAgentDetailV1Responses = {
 };
 
 export type GetAgentDetailV1Response = GetAgentDetailV1Responses[keyof GetAgentDetailV1Responses];
+
+export type ReadAgentFileLimitsV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/file-limits';
+};
+
+export type ReadAgentFileLimitsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadAgentFileLimitsV2Error = ReadAgentFileLimitsV2Errors[keyof ReadAgentFileLimitsV2Errors];
+
+export type ReadAgentFileLimitsV2Responses = {
+    /**
+     * Agent file limit declaration
+     */
+    200: FileLimitDeclarationResponseV1;
+};
+
+export type ReadAgentFileLimitsV2Response = ReadAgentFileLimitsV2Responses[keyof ReadAgentFileLimitsV2Responses];
+
+export type UpdateAgentFileLimitsV2Data = {
+    body: FileLimitDeclarationWriteRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/file-limits';
+};
+
+export type UpdateAgentFileLimitsV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type UpdateAgentFileLimitsV2Error = UpdateAgentFileLimitsV2Errors[keyof UpdateAgentFileLimitsV2Errors];
+
+export type UpdateAgentFileLimitsV2Responses = {
+    /**
+     * Agent file limit declaration
+     */
+    200: FileLimitDeclarationResponseV1;
+};
+
+export type UpdateAgentFileLimitsV2Response = UpdateAgentFileLimitsV2Responses[keyof UpdateAgentFileLimitsV2Responses];
 
 export type CommandAgentLifecycleV2Data = {
     body: AgentLifecycleCommandRequestV1;

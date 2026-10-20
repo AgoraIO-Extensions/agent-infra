@@ -1,5 +1,10 @@
 import { z } from "zod";
 import {
+	FileLimitDeclarationProjectionV1Schema,
+	FileLimitDeclarationResponseV1Schema,
+	FileLimitDeclarationWriteRequestV1Schema,
+} from "../files.ts";
+import {
 	IdempotencyKeyV1Schema,
 	OpaqueCursorV1Schema,
 	OpaqueIdV1Schema,
@@ -864,6 +869,10 @@ const auditPageV2 = z.strictObject({
 const applicationPath = z.strictObject({ applicationId: pathId() });
 const platformUserPath = z.strictObject({ userId: z.uuidv4() });
 const agentPath = z.strictObject({ agentId: pathId() });
+const channelFileLimitPath = z.strictObject({
+	agentId: pathId(),
+	channelId: pathId(),
+});
 const conversationPath = z.strictObject({ conversationId: pathId() });
 const executionPath = z.strictObject({
 	conversationId: pathId(),
@@ -2255,6 +2264,104 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 		},
 	},
 
+	"/api/v2/agents/{agentId}/file-limits": {
+		get: {
+			operationId: "readAgentFileLimitsV2",
+			summary: "Read the Agent file limit declaration",
+			description:
+				"Browser session only. The current identity must be an active Owner, Co-owner or system_admin for the Agent. The declaration is independent from the Agent configuration revision but carries its own revision and expiry.",
+			requestParams: { path: agentPath },
+			responses: {
+				"200": jsonResponse(
+					"Agent file limit declaration",
+					FileLimitDeclarationResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		put: {
+			operationId: "updateAgentFileLimitsV2",
+			summary: "Create or replace the Agent file limit declaration",
+			description:
+				"Browser session only. `expectedRevision` is the persisted declaration revision; `null` creates it. A mismatch returns 409 and mutates nothing. A declaration that is already expired is rejected.",
+			requestParams: { path: agentPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				FileLimitDeclarationWriteRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Agent file limit declaration",
+					FileLimitDeclarationResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/channels/{channelId}/file-limits": {
+		get: {
+			operationId: "readChannelFileLimitsV2",
+			summary: "Read the Channel file limit declaration",
+			description:
+				"Browser session only. Channel declarations are scoped to one Agent and channel binding; the current identity must be an active Owner, Co-owner or system_admin for the Agent.",
+			requestParams: { path: channelFileLimitPath },
+			responses: {
+				"200": jsonResponse(
+					"Channel file limit declaration",
+					FileLimitDeclarationResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		put: {
+			operationId: "updateChannelFileLimitsV2",
+			summary: "Create or replace the Channel file limit declaration",
+			description:
+				"Browser session only. `expectedRevision` is the persisted declaration revision; `null` creates it. A mismatch returns 409 and mutates nothing. A declaration that is already expired is rejected.",
+			requestParams: { path: channelFileLimitPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				FileLimitDeclarationWriteRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Channel file limit declaration",
+					FileLimitDeclarationResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/admin/deployment/file-limits": {
+		get: {
+			operationId: "readDeploymentFileLimitsV2",
+			summary: "Read the deployment file limit declaration",
+			description:
+				"Browser session only. The current identity must be an active system_admin. The deployment declaration caps every Agent and Channel intersection.",
+			responses: {
+				"200": jsonResponse(
+					"Deployment file limit declaration",
+					FileLimitDeclarationResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		put: {
+			operationId: "updateDeploymentFileLimitsV2",
+			summary: "Create or replace the deployment file limit declaration",
+			description:
+				"Browser session only; system_admin only. `expectedRevision` is the persisted declaration revision; `null` creates it. A mismatch returns 409 and mutates nothing. A declaration that is already expired is rejected.",
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(
+				FileLimitDeclarationWriteRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Deployment file limit declaration",
+					FileLimitDeclarationResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/admin/audit": {
 		get: {
 			operationId: "listPlatformAuditV2",
@@ -2304,6 +2411,9 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	FileLimitDeclarationProjectionV1: FileLimitDeclarationProjectionV1Schema,
+	FileLimitDeclarationResponseV1: FileLimitDeclarationResponseV1Schema,
+	FileLimitDeclarationWriteRequestV1: FileLimitDeclarationWriteRequestV1Schema,
 	PlatformUserDisableCommandV1: PlatformUserDisableCommandV1Schema,
 	PlatformUserDisableStatusV1: PlatformUserDisableStatusV1Schema,
 	PlatformUserDisableResultV1: PlatformUserDisableResultV1Schema,

@@ -22,8 +22,11 @@ import {
 	createPersonalRelayKeyUseCaseV1,
 	createRecentPersonalConversationsUseCaseV1,
 	createSkillHubAgentBindingUseCaseV1,
+	type FileLimitDeclarationSubjectV1,
 	type NativeCapabilityMetadataRevalidationPortV1,
+	readFileLimitDeclarationV1,
 	type WecomIdentityPortV1,
+	writeFileLimitDeclarationV1,
 } from "@agent-infra/platform-core";
 import {
 	ConversationEventWakeHubV1,
@@ -42,6 +45,7 @@ import {
 	type PostgresConversationExecutionOptionsV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
+	PostgresFileLimitDeclarationStoreV1,
 	PostgresPersonalApiCredentialStoreV1,
 	PostgresPersonalRelayKeyStoreV1,
 	PostgresPlatformAuditQueryV1,
@@ -73,6 +77,7 @@ import type { DeploymentConfigurationRoutesDependencies } from "./http/deploymen
 import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import {
 	type IdentityAdapter,
+	type IdentityContext,
 	resolveCurrentMaterialGrantActor,
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
@@ -825,12 +830,67 @@ export function assemblePlatformApi(
 					>
 				).store
 			: undefined;
+	const fileLimitStore = input.files
+		? new PostgresFileLimitDeclarationStoreV1(input.databaseUrl)
+		: undefined;
+	let readFileLimits:
+		| ReturnType<typeof assemblePlatformFilesV1>["readLimits"]
+		| undefined;
+	async function authorizeFileLimitDeclaration(
+		identity: IdentityContext,
+		subject: FileLimitDeclarationSubjectV1,
+	): Promise<boolean> {
+		if (subject.scope === "deployment")
+			return identity.roles.includes("system_admin");
+		const configuration = await configurationQuery.read({
+			agentId: subject.agentId,
+			actorId: identity.userId,
+			organizationIds: identity.organizationIds,
+			isAdministrator: identity.roles.includes("system_admin"),
+			intent: "manage",
+		});
+		return configuration.outcome === "found";
+	}
+	const fileLimits = fileLimitStore
+		? {
+				identity: input.identity,
+				read: (
+					identity: IdentityContext,
+					subject: FileLimitDeclarationSubjectV1,
+				) =>
+					readFileLimitDeclarationV1({
+						store: fileLimitStore,
+						subject,
+						authorize: () => authorizeFileLimitDeclaration(identity, subject),
+					}),
+				write: (
+					identity: IdentityContext,
+					subject: FileLimitDeclarationSubjectV1,
+					request: {
+						readonly declaration: unknown;
+						readonly expectedRevision: number | null;
+						readonly idempotencyKey: string;
+					},
+				) =>
+					writeFileLimitDeclarationV1({
+						store: fileLimitStore,
+						subject,
+						declaration: request.declaration,
+						expectedRevision: request.expectedRevision,
+						idempotencyKey: request.idempotencyKey,
+						actorId: identity.userId,
+						now: new Date(),
+						authorize: () => authorizeFileLimitDeclaration(identity, subject),
+					}),
+			}
+		: undefined;
 	const files = input.files
 		? assemblePlatformFilesV1({
 				databaseUrl: input.databaseUrl,
 				deployment: input.files,
 				identity: input.identity,
 				conversationAuthorization,
+				limitDeclarations: fileLimitStore,
 				async readCurrentLimits(identity, scope, kind) {
 					const configuration = await configurationQuery.read({
 						agentId: scope.agentId,
@@ -860,8 +920,9 @@ export function assemblePlatformApi(
 							: projection.capabilities.resultFiles)
 					)
 						return null;
+					if (!readFileLimits) return null;
 					const revision = configuration.configuration.revision;
-					const declared = await input.files?.readLimits({
+					const declared = await readFileLimits({
 						agentId: scope.agentId,
 						channelId: scope.channelId,
 						configurationRevision: revision,
@@ -873,6 +934,7 @@ export function assemblePlatformApi(
 				},
 			})
 		: undefined;
+	readFileLimits = files?.readLimits;
 	const dependencies: PlatformAppDependencies = {
 		...(installationStore && input.connectionInstallation
 			? {
@@ -971,6 +1033,7 @@ export function assemblePlatformApi(
 			: {}),
 		requestScope: input.requestScope,
 		...(files ? { files: files.dependencies } : {}),
+		...(fileLimits ? { fileLimits } : {}),
 		agentApplicationGrants: {
 			identity: input.identity,
 			change: (command, grantType) =>
@@ -1161,6 +1224,7 @@ export function assemblePlatformApi(
 		...(wecomSetup ? [wecomSetup] : []),
 		...(wecom ? [wecom] : []),
 		...(files ? [files] : []),
+		...(fileLimitStore ? [fileLimitStore] : []),
 		foundationTransaction,
 		revisionTransaction,
 		managementTransaction,

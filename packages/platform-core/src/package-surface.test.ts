@@ -49,6 +49,7 @@ describe("platform-core package surface", () => {
 			"ConversationExecutionError",
 			"ConversationRuntimeHostError",
 			"FileAuthorityError",
+			"FileLimitDeclarationErrorV1",
 			"MagicSkillProviderOrderV1",
 			"NativeCapabilityAdmissionError",
 			"PersonalApiCredentialErrorV1",
@@ -105,6 +106,7 @@ describe("platform-core package surface", () => {
 			"createConversationExecutionUseCaseV1",
 			"createConversationTaskAdmissionUseCaseV1",
 			"createFileAuthorityV1",
+			"createFileLimitDeclarationReaderV1",
 			"createFileReconciliationV1",
 			"createNativeCapabilityAdmissionUseCaseV1",
 			"createPersonalApiAgentReadUseCaseV1",
@@ -140,6 +142,7 @@ describe("platform-core package surface", () => {
 			"decodeAgentConfigurationRecordV3",
 			"executeConversationBrowserActionV1",
 			"fanOutStandardTemplateUpgradeV2",
+			"fileLimitDeclarationToLimitsV1",
 			"immutableSecretNameV1",
 			"installSkillHubVersionV1",
 			"isAdministratorAgentReadAllowedV1",
@@ -164,6 +167,7 @@ describe("platform-core package surface", () => {
 			"modelOptionDisplayNameV1",
 			"nativeCapabilityAdmissionRequestDigestV1",
 			"nativeCapabilityParametersDigestV1",
+			"normalizeFileLimitDeclarationV1",
 			"normalizeSkillHubProjectFilesV1",
 			"pageSkillHubInstallationsV1",
 			"pageSkillHubOwnedVersionsV1",
@@ -267,6 +271,7 @@ describe("platform-core package surface", () => {
 			"projectVisibilityOrganizationV1",
 			"publicTaskStatusEventV1",
 			"readAgentApiAuditContextV1",
+			"readFileLimitDeclarationV1",
 			"requestedModelDisplayNameV1",
 			"requireAgentApiCreatePermissionV1",
 			"requireAgentApplicationGrantAuthorityV1",
@@ -315,6 +320,7 @@ describe("platform-core package surface", () => {
 			"wecomChannelIdV1",
 			"withAgentApiAuditContextV1",
 			"workloadManagementObservationV1",
+			"writeFileLimitDeclarationV1",
 		]);
 		const testingSurface = await import(
 			new URL("../dist/testing.mjs", import.meta.url).href

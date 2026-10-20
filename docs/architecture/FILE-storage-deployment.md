@@ -12,6 +12,14 @@ Platform API 的 `PlatformApiAssemblyInput.files` 接收部署创建的 ObjectSt
 
 `readLimits` 按当前 Agent configuration revision 和 Channel 返回 Agent、Channel、deployment 三方声明；平台再次检查已验证 capability，取支持类型与大小的交集。声明需要版本和有效期，缺失或过期拒绝。S3 Adapter 对实际内容探测类型、计数并计算 SHA-256；支持的声明必须与部署选择的可验证格式一致。普通历史读取不以 Agent 运行状态或新的执行输入限制为前提。
 
+### FileLimits 声明存储
+
+三方声明保存在 Platform DB 的 `platform.file_limit_declarations`（迁移 `0060_file_limit_declarations.sql`），以 `scope` 区分 `deployment`、`agent`、`channel`；Channel 声明同时绑定所属 Agent。每条记录包含单调递增 `revision`、`expiresAt`、`maxBytes`、`mediaTypes`，以及最后写入者与时间。写入使用 `Idempotency-Key` 与 `expectedRevision` 比较并交换：`null` 创建，revision 不一致返回 409 且不修改任何事实；相同键与请求摘要的重放返回原记录。
+
+Agent 与 Channel 声明通过 `/api/v2/agents/{agentId}/file-limits`、`/api/v2/agents/{agentId}/channels/{channelId}/file-limits` 写入，只有当前 Owner/Co-owner 或 system_admin 可以读写；Deployment 声明通过 `/api/v2/admin/deployment/file-limits` 写入，只有 system_admin 可以读写。部署声明选择 Platform DB 行而非部署常量：它同样需要 revision、有效期和审计，固定环境可以在不新增部署环境变量的情况下通过正式 API 配置，是否装配文件面仍由部署决定。所有路由拒绝 `Authorization` Header、查询串和调用方提交的主体字段；Actor 由服务端会话解析，已撤销的管理员在下一次请求即被拒绝。
+
+`PlatformFileDeploymentV1.readLimits` 保留为部署覆盖点；缺省时 Platform API 装配用 Platform DB 读取器读取三方声明，并以 `agents.current_configuration_revision` 作为配置修订事实。读取器返回的修订与调用方已验证的配置修订不一致时装配层拒绝；`resolveFileLimitsV1` 继续执行三方交集，缺失、过期或空交集返回 `null`；声明读取不可用会拒绝请求而不是放行。
+
 ## Worker 与恢复
 
 `createWorkerFileClientV1` 提供输入读取与结果写入。它使用 RuntimeHost 已验证的原始 V4 Execution Grant 调用 `RuntimeFileExchangeRequestV2` 交换入口（`schemaVersion=2`、`executionGrant`、操作、单一文件引用或结果描述、幂等键），随后携带文件 Grant 与服务身份传输字节；不接受调用者指定的对象键或存储地址。旧 V1 自报身份 wire 继续被拒绝。原 Grant 仅证明执行委托范围，交换后的当前授权由持久 Conversation、Execution、generation、delivery fence、停止/终态和 `task_authorization_records` 决定，File Grant 有效期取部署 `accessTtlMs`。实际 Driver 文件桥接不属于本模块。
@@ -26,6 +34,6 @@ Platform API 的 `PlatformApiAssemblyInput.files` 接收部署创建的 ObjectSt
 
 使用仓库固定的 Node／pnpm 工具链。完整 `pnpm test` 包含文件的真实 HTTP／PostgreSQL／MinIO 验收；单独执行 `pnpm test:file-authority` 前需构建 workspace 依赖。
 
-测试创建随机命名、仅绑定 loopback 的独立容器，并仅回收这些容器。Fake 与 S3 使用同一对象契约，测试覆盖版本固定、重放、并发、过期、对象缺失、冲突及重复清理。平台联测覆盖上传、下载、结果写入、同入口跨用户拒绝、撤权与旧代次拒绝。V4 文件交换另覆盖签名伪造、错误 issuer/Worker/audience、控制用途、非 allowlist 文件、终态、停止、撤销的 `task_authorization_records`、fence/generation 变化，以及可读与不可读文件一致的 404。
+测试创建随机命名、仅绑定 loopback 的独立容器，并仅回收这些容器。Fake 与 S3 使用同一对象契约，测试覆盖版本固定、重放、并发、过期、对象缺失、冲突及重复清理。平台联测覆盖上传、下载、结果写入、同入口跨用户拒绝、撤权与旧代次拒绝。V4 文件交换另覆盖签名伪造、错误 issuer/Worker/audience、控制用途、非 allowlist 文件、终态、停止、撤销的 `task_authorization_records`、fence/generation 变化，以及可读与不可读文件一致的 404。FileLimits 声明另有 PostgreSQL 集成测试覆盖持久化、revision 比较并交换、幂等重放、过期与配置修订失配；HTTP 路由测试覆盖 Owner、非 Owner、已撤销管理员、过期声明与 revision 冲突。
 
 发布验收记录只保留 source commit、配置版本、对象存储实现／镜像 digest、测试命令和结果。禁止记录文件正文、服务凭证、JWS 或内部签名 URL。测试通过不替代后续文件消费者整装与人工验收。

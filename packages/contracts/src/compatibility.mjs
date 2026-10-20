@@ -1958,6 +1958,58 @@ function isFileAuthorityOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #3061 adds the authoritative FileLimits declaration management surface and
+// its schemas; the pinned digests admit only that reviewed shape.
+function isFileLimitDeclarationOpenApiAddition(previous, current) {
+	const names = [
+		"FileLimitDeclarationInputV1",
+		"FileLimitDeclarationProjectionV1",
+		"FileLimitDeclarationResponseV1",
+		"FileLimitDeclarationScopeV1",
+		"FileLimitDeclarationWriteRequestV1",
+	];
+	const paths = [
+		"/api/v2/agents/{agentId}/file-limits",
+		"/api/v2/agents/{agentId}/channels/{channelId}/file-limits",
+		"/api/v2/admin/deployment/file-limits",
+	];
+	const schemas = current.components?.schemas;
+	const addedNames = names.filter((name) => schemas?.[name] !== undefined);
+	const addedPaths = paths.filter(
+		(path) => current.paths?.[path] !== undefined,
+	);
+	if (addedNames.length === 0 && addedPaths.length === 0) return false;
+	if (
+		addedNames.some(
+			(name) => previous.components?.schemas?.[name] !== undefined,
+		) ||
+		addedPaths.some((path) => previous.paths?.[path] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			addedPaths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			addedNames.map((name) => [name, schemas[name]]),
+		),
+	};
+	const digest = createHash("sha256")
+		.update(JSON.stringify(addition))
+		.digest("hex");
+	if (
+		digest !==
+			"32afdea45b7954ab460242c1bd99f01b3083be44e7f2dfb32b01ae4609d63cb9" &&
+		digest !==
+			"18346900c3b4bbe8d10b512d8bf28d7428bebfbed8185d15deb68e1a81b67696"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const name of addedNames) delete normalized.components.schemas[name];
+	for (const path of addedPaths) delete normalized.paths[path];
+	return sameValue(previous, normalized);
+}
+
 // #508 adds V2 operation history/SSE without altering published management/audit.
 function isConversationFactsV2OpenApiAddition(previous, current) {
 	const paths = [
@@ -5337,7 +5389,11 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isRuntimeBrowserHandoffOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserSideEffectOpenApiAddition(previous, current) &&
 			!isCustomAgentModelProjectionOpenApiAddition(previous, current) &&
-			!isStandardTemplateReleaseCompatibilityOpenApiAddition(previous, current)
+			!isStandardTemplateReleaseCompatibilityOpenApiAddition(
+				previous,
+				current,
+			) &&
+			!isFileLimitDeclarationOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}

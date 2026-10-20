@@ -52,6 +52,41 @@ export const FileLimitsV1Schema = z.strictObject({
 	mediaTypes: z.array(FileDescriptorV1Schema.shape.mediaType).min(1).max(128),
 	maxBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 });
+export const FileLimitDeclarationScopeV1Schema = z.enum([
+	"deployment",
+	"agent",
+	"channel",
+]);
+export const FileLimitDeclarationInputV1Schema = z.strictObject({
+	expiresAt: Rfc3339TimestampV1Schema,
+	mediaTypes: z.array(FileDescriptorV1Schema.shape.mediaType).min(1).max(128),
+	maxBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+});
+export const FileLimitDeclarationWriteRequestV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	declaration: FileLimitDeclarationInputV1Schema,
+	/** `null` creates the declaration; a number compares and swaps the stored revision. */
+	expectedRevision: z
+		.number()
+		.int()
+		.positive()
+		.max(Number.MAX_SAFE_INTEGER)
+		.nullable(),
+});
+export const FileLimitDeclarationProjectionV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	scope: FileLimitDeclarationScopeV1Schema,
+	revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+	expiresAt: Rfc3339TimestampV1Schema,
+	mediaTypes: z.array(FileDescriptorV1Schema.shape.mediaType).min(1).max(128),
+	maxBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+	updatedAt: Rfc3339TimestampV1Schema,
+	updatedBy: OpaqueIdV1Schema,
+});
+export const FileLimitDeclarationResponseV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	declaration: FileLimitDeclarationProjectionV1Schema,
+});
 export const FileIntentRequestV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
 	descriptor: FileDescriptorV1Schema,
@@ -184,6 +219,11 @@ export type RuntimeFileExchangeRequest = z.infer<
 export const fileSchemasV1 = {
 	FileDescriptorV1: FileDescriptorV1Schema,
 	FileLimitsV1: FileLimitsV1Schema,
+	FileLimitDeclarationInputV1: FileLimitDeclarationInputV1Schema,
+	FileLimitDeclarationScopeV1: FileLimitDeclarationScopeV1Schema,
+	FileLimitDeclarationWriteRequestV1: FileLimitDeclarationWriteRequestV1Schema,
+	FileLimitDeclarationProjectionV1: FileLimitDeclarationProjectionV1Schema,
+	FileLimitDeclarationResponseV1: FileLimitDeclarationResponseV1Schema,
 	FileProjectionV1: FileProjectionV1Schema,
 	FileIntentRequestV1: FileIntentRequestV1Schema,
 	FileAccessRequestV1: FileAccessRequestV1Schema,
