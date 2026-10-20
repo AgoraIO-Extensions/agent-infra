@@ -21,11 +21,7 @@ import type {
 	DeploymentConfigurationProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
 import { captureDesignContract, designViewports } from "./design-contract";
-import {
-	collectPageErrors,
-	duplicateControlNames,
-	expectNoHorizontalOverflow,
-} from "./page-hygiene";
+import { duplicateControlNames } from "./page-hygiene";
 import {
 	computed,
 	expectCardTable,
@@ -5776,7 +5772,7 @@ test.describe("Agent detail design alignment", () => {
 	test("final acceptance Y detail facts, section notes and panel heads follow the design", async ({
 		page,
 	}, info) => {
-		const errors = collectPageErrors(page);
+		const errors = trackPageErrors(page);
 		const mobile = info.project.name === "mobile";
 		await page.setViewportSize(
 			mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
@@ -5895,9 +5891,8 @@ test.describe("Agent detail design alignment", () => {
 			0,
 		);
 		// AC-2：无横向溢出、无控制台错误、同页没有同名控件。
-		await expectNoHorizontalOverflow(page);
+		await expectCleanPage(page, errors);
 		expect(await duplicateControlNames(page)).toEqual([]);
-		expect(errors).toEqual([]);
 		await capture(page, info, "final-acceptance-y-agent-detail");
 		expect(api.commands).toHaveLength(0);
 	});
@@ -5944,7 +5939,7 @@ test.describe("final acceptance Y shell and directory", () => {
 		page,
 	}, info) => {
 		test.skip(info.project.name !== "mobile", "Mobile Sheet behavior");
-		const errors = collectPageErrors(page);
+		const errors = trackPageErrors(page);
 		await fixture(page, "employee");
 		await page.goto("/");
 		const trigger = page.getByRole("button", { name: "打开导航" });
@@ -5975,7 +5970,7 @@ test.describe("final acceptance Y shell and directory", () => {
 		test(`Agent ${mode} cards put the arrow first and the page has no overflow or duplicate controls`, async ({
 			page,
 		}, info) => {
-			const errors = collectPageErrors(page);
+			const errors = trackPageErrors(page);
 			await page.setViewportSize(
 				info.project.name === "mobile"
 					? { width: 390, height: 844 }
@@ -6000,9 +5995,8 @@ test.describe("final acceptance Y shell and directory", () => {
 					),
 				).toBe("svg");
 			// AC-2：无横向溢出、无控制台错误、同页没有同名控件。
-			await expectNoHorizontalOverflow(page);
+			await expectCleanPage(page, errors);
 			expect(await duplicateControlNames(page)).toEqual([]);
-			expect(errors).toEqual([]);
 			await capture(page, info, `final-acceptance-y-agents-${mode}`);
 		});
 	}

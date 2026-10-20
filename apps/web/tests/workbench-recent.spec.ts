@@ -24,11 +24,8 @@ import type {
 } from "../src/pilot/generated-v2/types.gen";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
-import {
-	collectPageErrors,
-	duplicateControlNames,
-	expectNoHorizontalOverflow,
-} from "./page-hygiene";
+import { duplicateControlNames } from "./page-hygiene";
+import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
 type ControlledSession = {
 	tag: "old" | "new";
@@ -2283,7 +2280,7 @@ test.describe("workbench design alignment", () => {
 				(viewport.width === 1440) !== (info.project.name === "desktop"),
 				"Each viewport runs in its own project",
 			);
-			const errors = collectPageErrors(page);
+			const errors = trackPageErrors(page);
 			await page.setViewportSize(viewport);
 			const fixture = await workbenchFixture(page, {
 				administrator: true,
@@ -2387,9 +2384,8 @@ test.describe("workbench design alignment", () => {
 				recentRegion(page).locator(".workbench-list-side a"),
 			).toHaveText(["继续对话", "查看历史"]);
 			// AC-2：无横向溢出、无控制台错误、同页没有同名控件。
-			await expectNoHorizontalOverflow(page);
+			await expectCleanPage(page, errors);
 			expect(await duplicateControlNames(page)).toEqual([]);
-			expect(errors).toEqual([]);
 			await info.attach(`final-acceptance-y-workbench-${viewport.width}`, {
 				body: await page.screenshot({ fullPage: true, animations: "disabled" }),
 				contentType: "image/png",
