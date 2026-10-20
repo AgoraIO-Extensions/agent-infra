@@ -184,3 +184,4 @@ export {
 	SkillPackageSupplierV1,
 	type SkillPackageSupplyInputV1,
 } from "./skill-package-supplier.js";
+export { createSkillProjectSourceVerifierV1 } from "./skill-project-source.js";

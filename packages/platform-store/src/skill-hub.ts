@@ -5,6 +5,7 @@ import {
 	canViewSkillHubVersionDetailV1,
 	canViewSkillHubVersionV1,
 	createSkillHubVersionV1,
+	normalizeSkillHubProjectFilesV1,
 	PersonalApiCredentialErrorV1,
 	parseSkillHubIdempotencyKeyV1,
 	parseSkillHubIdentitySnapshotV1,
@@ -12,6 +13,7 @@ import {
 	parseSkillHubInstallationCommandV1,
 	parseSkillHubInstallationQueryV1,
 	parseSkillHubOwnedVersionQueryV1,
+	parseSkillHubProjectContentUpdateV1,
 	parseSkillHubProjectCreateV1,
 	parseSkillHubProjectIdempotencyKeyV1,
 	parseSkillHubProjectIdV1,
@@ -72,6 +74,7 @@ import {
 } from "./schema.js";
 import {
 	skillHubInstallations,
+	skillHubProjectContents,
 	skillHubSkills,
 	skillHubVersions,
 } from "./schema-skill-hub.js";
@@ -776,6 +779,242 @@ export class PostgresSkillHubLifecycleV1 {
 		);
 	}
 
+	/** 项目内容行：解码存储的文件并按同一规则复核；不一致时按依赖不可用失败关闭。 */
+	#projectContent(row: typeof skillHubProjectContents.$inferSelect) {
+		try {
+			const files = (row.files as unknown[]).map((entry) => {
+				const value = entry as Record<string, unknown>;
+				if (
+					typeof value.path !== "string" ||
+					typeof value.contentBase64 !== "string"
+				)
+					throw new Error();
+				return {
+					path: value.path,
+					bytes: new Uint8Array(Buffer.from(value.contentBase64, "base64")),
+				};
+			});
+			const content = normalizeSkillHubProjectFilesV1(files);
+			if (
+				content.contentDigest !== row.contentDigest ||
+				content.fileCount !== row.fileCount ||
+				content.totalBytes !== row.totalBytes
+			)
+				throw new Error();
+			return content;
+		} catch {
+			throw new SkillHubOperationErrorV1("unavailable");
+		}
+	}
+
+	async #ownProject(
+		transaction: Transaction,
+		request: SkillHubRequestV1,
+		projectId: string,
+		lock = false,
+	) {
+		const query = transaction
+			.select()
+			.from(skillHubSkills)
+			.where(
+				and(
+					eq(skillHubSkills.id, projectId),
+					eq(skillHubSkills.ownerId, request.userId),
+				),
+			);
+		const [project] = lock ? await query.for("update") : await query;
+		// 他人的项目与不存在的项目同样不可见。
+		if (!project) throw new SkillHubOperationErrorV1("not_found");
+		return project;
+	}
+
+	/** 本人项目的当前内容（网页编辑草稿）；只有 Owner 能读，审计只记修订与数量。 */
+	async readProjectContent(context: SkillHubRequestV1, projectIdInput: string) {
+		return this.#transaction(context, async (transaction, request) => {
+			const projectId = parseSkillHubProjectIdV1(projectIdInput);
+			const source = await this.#projectSource(transaction, request, projectId);
+			await audit(
+				transaction,
+				request,
+				"skill.project.content.read",
+				projectId,
+				"succeeded",
+				{
+					revision: source.revision,
+					fileCount: source.content?.fileCount ?? 0,
+				},
+			);
+			return source;
+		});
+	}
+
+	/**
+	 * 网页发布读取来源：与内容读取相同的授权，并在同一事务内执行发布用例的检查，
+	 * 拒绝随事务写入拒绝审计；成功的发布由供应操作审计。
+	 */
+	async readProjectPublicationSource(
+		context: SkillHubRequestV1,
+		projectIdInput: string,
+		check: (
+			source: Awaited<
+				ReturnType<PostgresSkillHubLifecycleV1["readProjectContent"]>
+			>,
+		) => unknown = () => undefined,
+	) {
+		return this.#transaction(context, async (transaction, request) => {
+			const source = await this.#projectSource(
+				transaction,
+				request,
+				parseSkillHubProjectIdV1(projectIdInput),
+			);
+			check(source);
+			return source;
+		});
+	}
+
+	async #projectSource(
+		transaction: Transaction,
+		request: SkillHubRequestV1,
+		projectId: string,
+	) {
+		const project = await this.#ownProject(transaction, request, projectId);
+		const [row] = await transaction
+			.select()
+			.from(skillHubProjectContents)
+			.where(eq(skillHubProjectContents.projectId, projectId));
+		return Object.freeze({
+			project: decodeProject(project),
+			revision: row?.revision ?? 0,
+			updatedAt: row?.updatedAt.toISOString() ?? null,
+			content: row ? this.#projectContent(row) : null,
+		});
+	}
+
+	/**
+	 * 整体替换本人启用项目的内容，以修订号做 CAS；同一幂等键重放返回原结果。
+	 * 内容只进入项目内容表，审计与幂等结果只记修订、数量与摘要。
+	 */
+	async saveProjectContent(
+		context: SkillHubRequestV1,
+		projectIdInput: string,
+		keyInput: string,
+		input: unknown,
+	) {
+		return this.#transaction(context, async (transaction, request) => {
+			const projectId = parseSkillHubProjectIdV1(projectIdInput);
+			const key = parseSkillHubProjectIdempotencyKeyV1(keyInput);
+			const update = parseSkillHubProjectContentUpdateV1(input);
+			const digest = platformIdempotencyV1.canonicalRequestDigest({
+				projectId,
+				baseRevision: update.baseRevision,
+				contentDigest: update.content.contentDigest,
+			});
+			await transaction.execute(
+				sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["skill_project_content", projectId])}, 0))`,
+			);
+			const project = await this.#ownProject(
+				transaction,
+				request,
+				projectId,
+				true,
+			);
+			const [prior] = await transaction
+				.select()
+				.from(idempotencyRecords)
+				.where(
+					and(
+						eq(idempotencyRecords.scopeType, "skill_project_content"),
+						eq(idempotencyRecords.scopeId, projectId),
+						eq(idempotencyRecords.actorId, request.userId),
+						eq(idempotencyRecords.commandType, "skill.project.content.save.v1"),
+						eq(idempotencyRecords.idempotencyKey, key),
+					),
+				);
+			if (prior && prior.requestDigest !== digest)
+				throw new SkillHubOperationErrorV1("idempotency_conflict");
+			if (prior) {
+				const result = prior.result as Record<string, unknown> | null;
+				if (
+					prior.status !== "completed" ||
+					typeof result?.revision !== "number" ||
+					typeof result.updatedAt !== "string"
+				)
+					throw new SkillHubOperationErrorV1("unavailable");
+				return Object.freeze({
+					replayed: true,
+					projectId,
+					revision: result.revision,
+					contentDigest: update.content.contentDigest,
+					fileCount: update.content.fileCount,
+					totalBytes: update.content.totalBytes,
+					updatedAt: result.updatedAt,
+				});
+			}
+			if (project.status !== "active")
+				throw new SkillHubOperationErrorV1("forbidden");
+			const [current] = await transaction
+				.select({ revision: skillHubProjectContents.revision })
+				.from(skillHubProjectContents)
+				.where(eq(skillHubProjectContents.projectId, projectId))
+				.for("update");
+			if ((current?.revision ?? 0) !== update.baseRevision)
+				throw new SkillHubOperationErrorV1("version_conflict");
+			const revision = update.baseRevision + 1;
+			const now = new Date();
+			const values = {
+				projectId,
+				ownerId: request.userId,
+				revision,
+				files: update.content.files.map((file) => ({
+					path: file.path,
+					contentBase64: Buffer.from(file.bytes).toString("base64"),
+				})),
+				fileCount: update.content.fileCount,
+				totalBytes: update.content.totalBytes,
+				contentDigest: update.content.contentDigest,
+				updatedAt: now,
+			};
+			if (current)
+				await transaction
+					.update(skillHubProjectContents)
+					.set(values)
+					.where(eq(skillHubProjectContents.projectId, projectId));
+			else await transaction.insert(skillHubProjectContents).values(values);
+			await transaction.insert(idempotencyRecords).values({
+				id: randomUUID(),
+				scopeType: "skill_project_content",
+				scopeId: projectId,
+				actorId: request.userId,
+				commandType: "skill.project.content.save.v1",
+				idempotencyKey: key,
+				requestDigest: digest,
+				status: "completed",
+				result: { revision, updatedAt: now.toISOString() },
+			});
+			await audit(
+				transaction,
+				request,
+				"skill.project.content.save",
+				projectId,
+				"succeeded",
+				{
+					revision,
+					fileCount: update.content.fileCount,
+					totalBytes: update.content.totalBytes,
+				},
+			);
+			return Object.freeze({
+				replayed: false,
+				projectId,
+				revision,
+				contentDigest: update.content.contentDigest,
+				fileCount: update.content.fileCount,
+				totalBytes: update.content.totalBytes,
+				updatedAt: now.toISOString(),
+			});
+		});
+	}
+
 	/** Internal supplier boundary: durable intent and checkpoints in the original outbox. */
 	async publishPackage(
 		context: SkillHubRequestV1,
@@ -847,6 +1086,18 @@ export class PostgresSkillHubLifecycleV1 {
 						.from(skillHubVersions)
 						.where(eq(skillHubVersions.id, selection.skillVersionId));
 					if (existing) throw new SkillHubOperationErrorV1("version_conflict");
+					// 已登记的版本号不能换包：同一 Skill 的同一版本号在进入供应前直接冲突。
+					const [sameVersion] = await tx
+						.select({ id: skillHubVersions.id })
+						.from(skillHubVersions)
+						.where(
+							and(
+								eq(skillHubVersions.skillId, selection.skillId),
+								eq(skillHubVersions.version, selection.version),
+							),
+						);
+					if (sameVersion)
+						throw new SkillHubOperationErrorV1("version_conflict");
 					const operationId = randomUUID();
 					const state = parseSkillPackagePublicationStateV1({
 						schemaVersion: 1,

@@ -142,6 +142,7 @@ export * from "./skill-hub-installation-list.js";
 export * from "./skill-hub-management.js";
 export * from "./skill-hub-project.js";
 export * from "./skill-hub-project.js";
+export * from "./skill-hub-project-content.js";
 export * from "./skill-hub-read.js";
 export * from "./skill-hub-review.js";
 export * from "./skill-hub-version-detail.js";

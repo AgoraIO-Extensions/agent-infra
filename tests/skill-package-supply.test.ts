@@ -23,7 +23,9 @@ import {
 	SkillPackageSupplierV1,
 	type SkillPackageSupplyInputV1,
 } from "../packages/object-storage/src/skill-package-supplier.ts";
+import { createSkillProjectSourceVerifierV1 } from "../packages/object-storage/src/skill-project-source.ts";
 import type { ObjectStorageDataV1 } from "../packages/object-storage/src/types.ts";
+import { createSkillHubProjectPublicationV1 } from "../packages/platform-core/src/skill-hub-project-content.ts";
 import { migratePlatformDatabase } from "../packages/platform-store/src/migrate.ts";
 import { startPostgresTestDatabase } from "../packages/platform-store/src/postgres-test.ts";
 import { PostgresSkillHubLifecycleV1 } from "../packages/platform-store/src/skill-hub.ts";
@@ -214,7 +216,7 @@ beforeAll(async () => {
 	fixture = await startMinioFileFixtureV1("skill-package");
 });
 beforeEach(async () => {
-	await sql`truncate platform.skill_hub_skills, platform.skill_hub_versions, platform.idempotency_records, platform.audit_events, platform.outbox_items, platform.platform_user_disables, platform.persisted_events cascade`;
+	await sql`truncate platform.skill_hub_project_contents, platform.skill_hub_skills, platform.skill_hub_versions, platform.idempotency_records, platform.audit_events, platform.outbox_items, platform.platform_user_disables, platform.persisted_events cascade`;
 	identities = new Map([
 		["owner-a", identity("owner-a")],
 		["owner-b", identity("owner-b")],
@@ -482,5 +484,161 @@ describe("Skill supplier with real PG, versioned S3 and native ClamAV", () => {
 			supplier().value.admitVersion(request(), input()),
 		).rejects.toThrow(/rejected/);
 		expect(scanCount).toBe(1);
+	});
+});
+
+// 网页编辑项目的发布（#2906）沿同一 Supplier：真实 PG、版本化 MinIO、原生 ClamAV 与 Ed25519。
+describe("web-edited Skill project publication with real PG, versioned S3 and native ClamAV", () => {
+	function projectPublication(lifecycle: PostgresSkillHubLifecycleV1) {
+		const projectSupplier = new SkillPackageSupplierV1({
+			storage: fixture.storage,
+			lifecycle,
+			resolveAdmissionPolicy: async () => ({
+				...(await scanner.describe()),
+				policyRevision,
+				signer: { ...keys, keyId: "key-1", trustRevision: "trust-1" },
+			}),
+			sourceVerifier: createSkillProjectSourceVerifierV1(),
+			scanner: {
+				scan: async (selected) => {
+					scanCount++;
+					return scanner.scan(selected);
+				},
+			},
+		});
+		return createSkillHubProjectPublicationV1({
+			readSource: (context, projectId, check) =>
+				lifecycle.readProjectPublicationSource(context, projectId, check),
+			pack: packSkillProjectSnapshotV1,
+			admit: ({ context, key, selection, source, archiveBytes }) =>
+				projectSupplier.admitVersion(
+					context,
+					{
+						...selection,
+						...source,
+						trustRevision: "trust-1",
+						policyRevision,
+						archiveBytes,
+					},
+					key,
+				),
+		});
+	}
+	async function project(
+		lifecycle: PostgresSkillHubLifecycleV1,
+		body: string,
+		organizationId?: string,
+	) {
+		const { project: created } = await lifecycle.createProject(
+			request(),
+			`create-${randomUUID()}`,
+			{
+				schemaVersion: 1,
+				name: `notes-${randomUUID().slice(0, 8)}`,
+				...(organizationId ? { organizationId } : {}),
+			},
+		);
+		await lifecycle.saveProjectContent(request(), created.projectId, "save-1", {
+			schemaVersion: 1,
+			baseRevision: 0,
+			files: [
+				{ path: "SKILL.md", encoding: "utf8", content: body },
+				{ path: "scripts/run.sh", encoding: "utf8", content: "echo run\n" },
+				{ path: "references/info.txt", encoding: "utf8", content: "resource" },
+			],
+		});
+		return created.projectId;
+	}
+
+	it("publishes the stored snapshot as a my_library version whose fixed objects verify", async () => {
+		const lifecycle = supplier().lifecycle;
+		const projectId = await project(lifecycle, "# notes\n", "org");
+		const result = await projectPublication(lifecycle).publish(
+			request(),
+			projectId,
+			"publish-1",
+			{
+				schemaVersion: 1,
+				contentRevision: 1,
+				version: "1.0.0",
+				visibility: "ORGANIZATION",
+			},
+		);
+		expect(result.version).toMatchObject({
+			skillId: projectId,
+			provider: "my_library",
+			visibility: "ORGANIZATION",
+			state: "pending_review",
+		});
+		expect(Object.keys(result.artifacts).toSorted()).toEqual(
+			[
+				"bundle",
+				"manifest",
+				"scan",
+				"signature",
+				"signature-record",
+				"source-proof",
+				"zip",
+			].toSorted(),
+		);
+		// 固定 ZIP 字节即服务端从已保存内容打出的包；来源证明固定项目修订且没有审批引用。
+		const source = await lifecycle.readProjectPublicationSource(
+			request(),
+			projectId,
+		);
+		const zip = result.artifacts.zip;
+		if (!zip || !source.content) throw new Error("zip missing");
+		expect(zip.sha256).toBe(
+			sha(packSkillProjectSnapshotV1(source.content.files)),
+		);
+		const [operation] =
+			await sql`select payload from platform.outbox_items where scope_type = 'skill_package' and scope_id = ${result.version.skillVersionId}`;
+		expect(operation?.payload.intents["source-proof"].evidence).toEqual({
+			schemaVersion: 1,
+			provider: "my_library",
+			publisherId: "owner-a",
+			sourceVersion: `project:${projectId}:r1`,
+			sourceDigest: zip.sha256,
+			approvalRef: null,
+			trustRevision: "trust-1",
+		});
+		expect(operation?.payload.selection.organizationId).toBe("org");
+		expect(scanCount).toBe(1);
+		// 同一版本号的新内容不能再进入供应。
+		await lifecycle.saveProjectContent(request(), projectId, "save-2", {
+			schemaVersion: 1,
+			baseRevision: 1,
+			files: [{ path: "SKILL.md", encoding: "utf8", content: "# changed\n" }],
+		});
+		await expect(
+			projectPublication(lifecycle).publish(request(), projectId, "publish-2", {
+				schemaVersion: 1,
+				contentRevision: 2,
+				version: "1.0.0",
+				visibility: "PRIVATE",
+			}),
+		).rejects.toMatchObject({ code: "version_conflict" });
+		expect(scanCount).toBe(1);
+	});
+
+	it("rejects an infected project snapshot without registering a version", async () => {
+		const lifecycle = supplier().lifecycle;
+		const projectId = await project(
+			lifecycle,
+			"EICAR-STANDARD-ANTIVIRUS-TEST-FILE",
+		);
+		await expect(
+			projectPublication(lifecycle).publish(request(), projectId, "publish-1", {
+				schemaVersion: 1,
+				contentRevision: 1,
+				version: "1.0.0",
+				visibility: "PRIVATE",
+			}),
+		).rejects.toThrow(/rejected/);
+		expect(await counts()).toEqual({
+			versions: 0,
+			completed: 0,
+			idempotency: 0,
+		});
 	});
 });

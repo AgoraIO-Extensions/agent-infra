@@ -7,6 +7,7 @@ import {
 	check,
 	foreignKey,
 	index,
+	integer,
 	jsonb,
 	primaryKey,
 	text,
@@ -231,6 +232,54 @@ export const skillHubAgentBindings = platformSchema.table(
 				agentConfigurationRevisions.revision,
 			],
 			name: "skill_hub_agent_binding_configuration_revision_fk",
+		}),
+	],
+);
+
+/**
+ * 网页编辑的 Skill 项目内容（工程 Spec §11.6）：每个项目一份可变草稿，只属于项目 Owner；
+ * 文件按路径排序保存为 {path, contentBase64}，数量与大小受网页内容上限约束。
+ * 内容不进入目录、审计或日志；发布时由服务端打包并经包供应生成新的固定版本。
+ */
+export const skillHubProjectContents = platformSchema.table(
+	"skill_hub_project_contents",
+	{
+		projectId: text("project_id").primaryKey(),
+		ownerId: text("owner_id").notNull(),
+		revision: integer("revision").notNull(),
+		files: jsonb("files")
+			.$type<readonly { path: string; contentBase64: string }[]>()
+			.notNull(),
+		fileCount: integer("file_count").notNull(),
+		totalBytes: integer("total_bytes").notNull(),
+		contentDigest: char("content_digest", { length: 64 }).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		check(
+			"skill_hub_project_content_revision_positive",
+			sql`${table.revision} > 0`,
+		),
+		check(
+			"skill_hub_project_content_file_count_bounded",
+			sql`${table.fileCount} between 1 and 100`,
+		),
+		check(
+			"skill_hub_project_content_total_bytes_bounded",
+			sql`${table.totalBytes} between 1 and 524288`,
+		),
+		check(
+			"skill_hub_project_content_digest_hex",
+			sql`${table.contentDigest} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"skill_hub_project_content_files_array",
+			sql`jsonb_typeof(${table.files}) = 'array' and jsonb_array_length(${table.files}) = ${table.fileCount}`,
+		),
+		foreignKey({
+			columns: [table.projectId, table.ownerId],
+			foreignColumns: [skillHubSkills.id, skillHubSkills.ownerId],
+			name: "skill_hub_project_content_project_owner_fk",
 		}),
 	],
 );

@@ -1,6 +1,9 @@
 import {
+	createSkillProjectSourceVerifierV1,
 	type ObjectStorageDataV1,
+	packSkillProjectSnapshotV1,
 	readAdmittedSkillPackageEntryV1,
+	SkillPackageAdmissionErrorV1,
 	type SkillPackageAdmissionPolicyV1,
 	type SkillPackageScannerV1,
 	type SkillPackageSourceVerifierV1,
@@ -8,15 +11,18 @@ import {
 } from "@agent-infra/object-storage";
 import type { SkillProviderRegistryV1 } from "@agent-infra/platform-core";
 import {
+	createSkillHubProjectPublicationV1,
 	createSkillProviderImportV1,
 	pageSkillHubInstallationsV1,
 	pageSkillHubOwnedVersionsV1,
 	pageSkillHubReviewQueueV1,
 	pageSkillHubVersionsV1,
+	projectSkillHubProjectContentV1,
 	projectSkillHubVersionContentV1,
 	projectSkillHubVersionDetailV1,
 	projectSkillHubVersionMetadataV1,
 	SkillHubOperationErrorV1,
+	type SkillHubRequestV1,
 	type SkillHubVersionContentV1,
 } from "@agent-infra/platform-core";
 import { PostgresSkillHubLifecycleV1 } from "@agent-infra/platform-store";
@@ -25,6 +31,7 @@ import type { IdentityAdapter } from "./http/identity.js";
 import type { SkillHubImportRoutesDependenciesV1 } from "./http/skill-hub-import-routes.js";
 import type { SkillHubInstallationListRoutesDependenciesV1 } from "./http/skill-hub-installation-list-routes.js";
 import type { SkillHubInstallationRoutesDependenciesV1 } from "./http/skill-hub-installation-routes.js";
+import type { SkillHubProjectContentRoutesDependenciesV1 } from "./http/skill-hub-project-content-routes.js";
 import type { SkillHubProjectRoutesDependenciesV1 } from "./http/skill-hub-project-routes.js";
 import type { SkillHubPublicationRoutesDependenciesV1 } from "./http/skill-hub-publication-routes.js";
 import type { SkillHubReadRoutesDependenciesV1 } from "./http/skill-hub-read-routes.js";
@@ -220,6 +227,81 @@ export function assembleSkillHubReadApiV1(input: {
 					}),
 				}
 			: undefined;
+	// 网页项目发布（#2906）：复用部署的 Skill 包存储、扫描器与 admission policy（同一 signer），
+	// 来源证明由平台项目供应生成，不调用部署的外部来源校验器。
+	const projectSupplier = input.providerImport
+		? new SkillPackageSupplierV1({
+				storage: input.providerImport.storage,
+				lifecycle: store,
+				resolveAdmissionPolicy: input.providerImport.resolveAdmissionPolicy,
+				sourceVerifier: createSkillProjectSourceVerifierV1(),
+				scanner: input.providerImport.scanner,
+			})
+		: undefined;
+	const projectPublication =
+		projectSupplier && input.providerImport
+			? createSkillHubProjectPublicationV1({
+					readSource: (context, projectId, check) =>
+						store.readProjectPublicationSource(context, projectId, check),
+					pack: (files) =>
+						packSkillProjectSnapshotV1(
+							files.map((file) => ({ path: file.path, bytes: file.bytes })),
+						),
+					admit: async ({ context, key, selection, source, archiveBytes }) => {
+						const policy = await input.providerImport?.resolveAdmissionPolicy();
+						if (!policy) throw new SkillHubOperationErrorV1("unavailable");
+						try {
+							return await projectSupplier.admitVersion(
+								context,
+								{
+									...selection,
+									...source,
+									trustRevision: policy.signer.trustRevision,
+									policyRevision: policy.policyRevision,
+									archiveBytes,
+								},
+								key,
+							);
+						} catch (error) {
+							throw projectAdmissionFailure(error);
+						}
+					},
+				})
+			: undefined;
+	const projectContentDependencies: SkillHubProjectContentRoutesDependenciesV1 =
+		{
+			identity: input.identity,
+			read: (request, trusted, projectId) =>
+				scope.requestScope(request, async () => {
+					const source = await store.readProjectContent(trusted, projectId);
+					return projectSkillHubProjectContentV1({
+						projectId: source.project.projectId,
+						revision: source.revision,
+						updatedAt: source.updatedAt,
+						content: source.content,
+					});
+				}),
+			save: (request, trusted, projectId, key, value) =>
+				scope.requestScope(request, async () =>
+					store.saveProjectContent(trusted, projectId, key, value),
+				),
+			...(projectPublication
+				? {
+						publish: (
+							request: Request,
+							trusted: SkillHubRequestV1,
+							projectId: string,
+							key: string,
+							value: unknown,
+						) =>
+							scope.requestScope(request, () =>
+								projectPublication.publish(trusted, projectId, key, value),
+							),
+					}
+				: {}),
+			recordRefusal: (metadata, userId, reason) =>
+				store.recordReadRefusal(metadata, userId, reason),
+		};
 	return {
 		dependencies,
 		installationDependencies,
@@ -229,6 +311,29 @@ export function assembleSkillHubReadApiV1(input: {
 		versionDetailDependencies,
 		importDependencies,
 		projectDependencies,
+		projectContentDependencies,
 		close: () => store.close(),
 	};
+}
+
+/**
+ * 网页发布的包准入失败：内容格式、上限或扫描拒绝属于调用方可修改的内容问题；
+ * 来源、签名、摘要或依赖失败属于平台侧，按不可用返回，不暴露内部原因。
+ */
+function projectAdmissionFailure(error: unknown) {
+	if (!(error instanceof SkillPackageAdmissionErrorV1)) return error;
+	return new SkillHubOperationErrorV1(
+		[
+			"invalid_archive",
+			"archive_limit",
+			"invalid_path",
+			"duplicate_path",
+			"path_conflict",
+			"symlink",
+			"missing_entry",
+			"scan_rejected",
+		].includes(error.code)
+			? "invalid_input"
+			: "unavailable",
+	);
 }
