@@ -8,7 +8,9 @@ namespace=${ACK_NAMESPACE:-agent-infra}
 export KUBECONFIG="$ACK_KUBECONFIG"
 
 kubectl version --request-timeout=10s >/dev/null
-kubectl get namespace "$namespace" >/dev/null
+if ! kubectl get namespace "$namespace" >/dev/null 2>&1; then
+  kubectl create namespace "$namespace"
+fi
 helm lint "$chart_dir" >/dev/null
 
 required_secrets=(

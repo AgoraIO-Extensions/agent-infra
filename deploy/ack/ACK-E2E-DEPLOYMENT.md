@@ -78,7 +78,7 @@ kubectl -n agent-infra get deploy,pod,job,svc,ingress,pvc -o wide
 - Platform/Directory migration 均完成；
 - Directory `/readyz` 返回 `200`，快照有效。
 - `helm lint deploy/helm/agent-infra` 和 `helm lint deploy/ack/chart` 均通过；ACK 当前 `helm list -n agent-infra` 为空，线上资源仍是 raw manifests。
-- `helm template ack-e2e deploy/ack/chart --set ingress.enabled=false | kubectl apply --dry-run=server -f -` 通过 ACK API 校验；Ingress 因线上已有同名 wildcard 路由未在该 dry-run 中重复提交。登录回归探针：无 Origin 的合成请求会被安全边界拒绝；带 `Origin: https://118.178.91.138` 的合成请求到达 LDAP 校验并返回 `401`，证明 Web→API token 和 HTTPS 转发链路已打通。
+- `helm template ack-e2e deploy/ack/chart --set ingress.enabled=false | kubectl apply --dry-run=server -f -` 通过 ACK API 校验；Ingress 因线上已有同名 wildcard 路由未在该 dry-run 中重复提交；Helm wrapper 对 ACK Ingress 开启 HTTP→HTTPS 重定向，`publicOrigin` 由每个环境的实际 LB 地址填写。登录回归探针：无 Origin 的合成请求会被安全边界拒绝；带 `Origin: https://118.178.91.138` 的合成请求到达 LDAP 校验并返回 `401`，证明 Web→API token 和 HTTPS 转发链路已打通。
 
 ## 仍需真实业务验收
 

@@ -68,6 +68,5 @@ ingress:
   enabled: true
   className: new-magic-nginx
   tlsSecret: agent-infra-web-tls
-  ip: 118.178.91.138
 migrations:
   enabled: false
