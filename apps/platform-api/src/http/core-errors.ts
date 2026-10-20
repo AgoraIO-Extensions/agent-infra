@@ -90,6 +90,11 @@ export function mapCoreError(
 				"MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
 				traceId,
 			);
+		if (error.code === "platform_identity_entry_unavailable")
+			return new HttpProtocolError(
+				"PLATFORM_IDENTITY_ENTRY_UNAVAILABLE",
+				traceId,
+			);
 		if (error.code === "invalid_command")
 			return new HttpProtocolError("INVALID_REQUEST", traceId);
 		if (error.code === "not_authorized")
@@ -107,6 +112,11 @@ export function mapCoreError(
 		if (error.code === "resource_cap_exceeded")
 			return new HttpProtocolError(
 				"MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+				traceId,
+			);
+		if (error.code === "platform_identity_entry_unavailable")
+			return new HttpProtocolError(
+				"PLATFORM_IDENTITY_ENTRY_UNAVAILABLE",
 				traceId,
 			);
 		if (error.code === "invalid_command")
@@ -132,6 +142,11 @@ export function mapCoreError(
 		if (error.code === "resource_cap_exceeded")
 			return new HttpProtocolError(
 				"MULTI_SERVICE_RESOURCE_CAP_EXCEEDED",
+				traceId,
+			);
+		if (error.code === "platform_identity_entry_unavailable")
+			return new HttpProtocolError(
+				"PLATFORM_IDENTITY_ENTRY_UNAVAILABLE",
 				traceId,
 			);
 		if (error.code === "invalid_command")

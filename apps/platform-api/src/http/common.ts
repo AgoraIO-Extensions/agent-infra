@@ -36,6 +36,14 @@ const protocolErrors = {
 		"The multi-service Agent exceeds the deployment resource cap.",
 		false,
 	],
+	// 部署未装配平台身份入口时拒绝「自有交互入口 + 平台校验」（#3034）；沿用既有终态错误码，
+	// 不扩展公共错误枚举。
+	PLATFORM_IDENTITY_ENTRY_UNAVAILABLE: [
+		409,
+		"ACTION_UNAVAILABLE",
+		"The platform identity entry is not available in this deployment.",
+		false,
+	],
 	BUSY: [409, "AGENT_BUSY", "The conversation is busy.", true],
 	AGENT_STARTING: [
 		409,
@@ -93,7 +101,8 @@ const protocolErrors = {
 		| "CONFLICT"
 		| "FORBIDDEN"
 		| "VERSION_RETIRED"
-		| "CODEX_MODEL_PROFILE_UNSUPPORTED",
+		| "CODEX_MODEL_PROFILE_UNSUPPORTED"
+		| "PLATFORM_IDENTITY_ENTRY_UNAVAILABLE",
 		readonly [HttpErrorStatus, ProtocolErrorCode, string, boolean]
 	>
 >;

@@ -1015,6 +1015,70 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the pinned Agent creation failure category read (#3034)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const failurePath = "/api/v2/agents/{agentId}/creation-failure";
+		const previous = structuredClone(current);
+		delete previous.paths[failurePath];
+		delete previous.components.schemas.AgentCreationFailureCategoryV1;
+		delete previous.components.schemas.AgentCreationFailureProjectionV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-creation-failure-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				// 只接受平台会话，不接受 Bearer 凭证。
+				(value: typeof current) => {
+					value.paths[failurePath].get.security = [
+						{ PlatformSession: [] },
+						{ platformApiCredential: [] },
+					];
+				},
+				// 投影保持 strict，不能带出原因码、次数或 Kubernetes 细节。
+				(value: typeof current) => {
+					value.components.schemas.AgentCreationFailureProjectionV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentCreationFailureProjectionV1.properties.reason =
+						{ type: "string" };
+				},
+				// 类别集合固定。
+				(value: typeof current) => {
+					value.components.schemas.AgentCreationFailureCategoryV1.enum.push(
+						"kubernetes_policy",
+					);
+				},
+				// 既有 V2 投影保持不变。
+				(value: typeof current) => {
+					value.components.schemas.AgentProjectionV2.properties.creationFailure =
+						{ $ref: "#/components/schemas/AgentCreationFailureCategoryV1" };
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the pinned Agent detail with Owner status (#2910)", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -4135,6 +4199,7 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/agents/{agentId}/detail" &&
 				path !== "/api/v2/admin/agents/{agentId}" &&
 				path !== "/api/v2/directory/search" &&
+				path !== "/api/v2/agents/{agentId}/creation-failure" &&
 				path !== "/api/v2/skills/projects" &&
 				path !== "/api/v2/skills/projects/{projectId}" &&
 				path !== "/api/v2/skills/projects/{projectId}/content" &&

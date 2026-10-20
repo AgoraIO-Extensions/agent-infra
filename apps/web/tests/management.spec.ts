@@ -114,6 +114,12 @@ async function fixture(
 	let deferLifecycleReadback = false;
 	let pendingLifecycleReadback: (() => void) | undefined;
 	let failNextConfigurationUpdate = false;
+	// 创建失败类别（#3034）：未设置时接口按不可读处理。
+	let creationFailureCategory:
+		| "configuration_rejected"
+		| "health_check_failed"
+		| "deployment_unavailable"
+		| undefined;
 	const isOwnerSession = role === "owner" || role === "owner-admin";
 	const retryableReadFailure = {
 		schemaVersion: 1 as const,
@@ -262,6 +268,26 @@ async function fixture(
 			};
 		},
 		decideAgentApplication: () => ({ status: 200, body: application }),
+		getAgentCreationFailure: (_request, agentId) =>
+			creationFailureCategory && agentId === agent.agentId
+				? {
+						status: 200,
+						body: {
+							schemaVersion: 1,
+							agentId,
+							category: creationFailureCategory,
+						},
+					}
+				: {
+						status: 404,
+						body: {
+							schemaVersion: 1,
+							code: "RESOURCE_UNAVAILABLE",
+							message: "Controlled unavailable creation failure",
+							retryable: false,
+							traceId: "trace-creation-failure-unavailable",
+						},
+					},
 		updateAgentConfiguration: () => ({ status: 200, body: agent }),
 		commandAgentLifecycle: () => ({
 			status: 202,
@@ -280,6 +306,7 @@ async function fixture(
 	let rejectNextApplication:
 		| "DEPENDENCY_UNAVAILABLE"
 		| "AUTHORIZATION_REVOKED"
+		| "ACTION_UNAVAILABLE"
 		| undefined;
 	let rejectNextWithdrawal = false;
 	const commands: { path: string; body: unknown; key: string | undefined }[] =
@@ -404,12 +431,17 @@ async function fixture(
 				const code = rejectNextApplication;
 				rejectNextApplication = undefined;
 				await route.fulfill({
-					status: code === "AUTHORIZATION_REVOKED" ? 403 : 503,
+					status:
+						code === "AUTHORIZATION_REVOKED"
+							? 403
+							: code === "ACTION_UNAVAILABLE"
+								? 409
+								: 503,
 					json: {
 						schemaVersion: 1,
 						code,
 						message: "Controlled application rejection",
-						retryable: code !== "AUTHORIZATION_REVOKED",
+						retryable: code === "DEPENDENCY_UNAVAILABLE",
 						traceId: "trace-application-retry",
 					},
 				});
@@ -635,9 +667,23 @@ async function fixture(
 		rejectNextApplication(
 			code:
 				| "DEPENDENCY_UNAVAILABLE"
-				| "AUTHORIZATION_REVOKED" = "DEPENDENCY_UNAVAILABLE",
+				| "AUTHORIZATION_REVOKED"
+				| "ACTION_UNAVAILABLE" = "DEPENDENCY_UNAVAILABLE",
 		) {
 			rejectNextApplication = code;
+		},
+		/** 服务端给出的创建失败类别（#3034）。 */
+		creationFailure(category: NonNullable<typeof creationFailureCategory>) {
+			creationFailureCategory = category;
+		},
+		/** 申请已创建 Agent 但创建失败：申请详情读取同一个 Agent 的失败类别。 */
+		creationFailedApplication() {
+			application = AgentApplicationProjectionV2Schema.parse({
+				...application,
+				agentId: agent.agentId,
+				status: "creation_failed",
+				decision: { decidedAt: "2026-09-07T00:00:00Z", reason: null },
+			});
 		},
 		unavailablePendingQueue() {
 			pendingQueueUnavailable = true;
@@ -1009,6 +1055,64 @@ test("directory search and transient submission recover on desktop and mobile", 
 		name: "中文发布 Agent",
 		coOwnerIds: ["user-2"],
 		secrets: [{ name: "TEST_SECRET", value: "synthetic-retry-value" }],
+	});
+});
+
+// #3034：部署未启用平台身份入口时，「由平台校验」在提交时被拒绝，原因写在入口身份字段下；
+// 改选「由自有入口校验」后可以提交，被拒绝的那次不会进入审批队列。
+test("a missing platform identity entry is explained at the identity field and the self-validated entry submits", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	await page.goto("/my-agents/new");
+	await page.getByLabel("Agent 名称").fill("自有入口 Agent");
+	await page.getByLabel("用途说明", { exact: true }).fill("验证平台身份入口");
+	await page.getByRole("combobox", { name: "Agent 来源" }).click();
+	await page
+		.getByRole("option", { name: "自定义 Agent · 自有交互入口" })
+		.click();
+	await page.getByLabel("镜像地址").fill("registry.example/agents/web:v1");
+	const identity = page.getByRole("combobox", { name: "入口身份校验" });
+	await expect(identity).toContainText("由平台校验");
+	const submit = page.getByRole("button", { name: "提交审批", exact: true });
+	api.rejectNextApplication("ACTION_UNAVAILABLE");
+	await submit.click();
+	await expect(page.locator(".application-form-alert")).toHaveText(
+		"申请内容未通过服务端校验，请检查字段后重试。",
+	);
+	await expect(
+		page.locator("#application-identity-responsibility-error"),
+	).toHaveText(
+		"当前部署未启用平台身份入口，请改选「由自有入口校验」后再提交。",
+	);
+	await expect(identity).toHaveAttribute("aria-invalid", "true");
+	await expect(identity).toHaveAttribute(
+		"aria-describedby",
+		"application-identity-responsibility-error",
+	);
+	await expect(identity).toBeFocused();
+	await expect(page.getByLabel("Agent 名称")).toHaveValue("自有入口 Agent");
+	await capture(page, info, "application-platform-identity-unavailable");
+	// 仍选着「由平台校验」时不再重复提交。
+	await submit.click();
+	expect(api.commands).toHaveLength(1);
+
+	await identity.click();
+	await page.getByRole("option", { name: "由自有入口校验" }).click();
+	await expect(
+		page.locator("#application-identity-responsibility-error"),
+	).toHaveCount(0);
+	await expect(identity).not.toHaveAttribute("aria-invalid", "true");
+	await submit.click();
+	await expect(pageStatus(page)).toBeFocused();
+	expect(api.commands).toHaveLength(2);
+	expect(api.commands[1]?.body).toMatchObject({
+		source: {
+			kind: "custom",
+			imageReference: "registry.example/agents/web:v1",
+			interactionMode: "self-managed",
+			identityResponsibility: "self-managed",
+		},
 	});
 });
 
@@ -4913,6 +5017,66 @@ test("a pure administrator reaches the same configuration page with administrato
 	expect(api.commands.map((command) => command.body)).toEqual([
 		{ schemaVersion: 1, command: "retry_creation" },
 	]);
+});
+
+// #3034：创建失败时 Owner 与系统管理员看到服务端给出的失败类别，不出现原因码或部署细节。
+test("an Owner sees the creation failure category next to retry creation", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	api.agentState("creation_failed");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const footer = page.locator(".configuration-form-footer");
+	await expect(footer.getByRole("button", { name: "重试创建" })).toBeVisible();
+	// 没有可读类别时不显示任何原因。
+	await expect(page.locator("[data-creation-failure]")).toHaveCount(0);
+
+	api.creationFailure("configuration_rejected");
+	await page.reload();
+	const notice = page.locator(
+		'[data-creation-failure="configuration_rejected"]',
+	);
+	await expect(notice).toHaveAttribute("role", "status");
+	await expect(notice).toContainText("失败原因：配置与当前部署不兼容");
+	await expect(notice).toContainText("重试创建不会成功");
+	await expect(page.locator("main")).not.toContainText(/kubernetes|policy/i);
+	expect(
+		await notice.evaluate(
+			(element) => element.closest(".configuration-form-footer") !== null,
+		),
+	).toBe(true);
+	await capture(page, info, "configuration-creation-failure-owner");
+});
+
+test("a pure administrator sees the creation failure category above administrator actions", async ({
+	page,
+}, info) => {
+	const api = await fixture(page, "admin");
+	api.agentState("creation_failed");
+	api.creationFailure("deployment_unavailable");
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const notice = page.locator(
+		'[data-creation-failure="deployment_unavailable"]',
+	);
+	await expect(notice).toContainText("失败原因：部署资源暂不可用");
+	const admin = page.getByRole("region", { name: "管理员操作", exact: true });
+	await expect(admin.getByRole("button", { name: "重试创建" })).toBeVisible();
+	await capture(page, info, "configuration-creation-failure-administrator");
+});
+
+test("an application detail explains a failed creation with the server category", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	api.creationFailedApplication();
+	api.creationFailure("health_check_failed");
+	await page.goto("/my-agents/application-browser-1");
+	const notice = page.locator('[data-creation-failure="health_check_failed"]');
+	await expect(notice).toContainText("失败原因：健康检查未通过");
+	await expect(page.locator(".application-progress")).toContainText(
+		"创建未完成，Agent 尚不可用。",
+	);
+	await capture(page, info, "application-detail-creation-failure");
 });
 
 test("lifecycle feedback follows the command and the detail read-back, not the accepted response", async ({

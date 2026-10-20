@@ -27,6 +27,8 @@ import {
 	TraceIdV1Schema,
 } from "./index.ts";
 import {
+	agentCreationFailureOpenApiPathsV1,
+	agentCreationFailureSchemasV1,
 	agentDetailOpenApiPathsV1,
 	agentDetailSchemasV1,
 	directorySearchOpenApiPathsV1,
@@ -859,6 +861,7 @@ function buildArtifacts() {
 			...pilotBrowserOpenApiPathsV2,
 			...agentDetailOpenApiPathsV1,
 			...directorySearchOpenApiPathsV1,
+			...agentCreationFailureOpenApiPathsV1,
 			...pilotOperationOpenApiPathsV2,
 			...skillHubReadOpenApiPathsV1,
 			...skillHubReviewOpenApiPathsV1,
@@ -886,6 +889,7 @@ function buildArtifacts() {
 				...pilotBrowserSchemasV2,
 				...agentDetailSchemasV1,
 				...directorySearchSchemasV1,
+				...agentCreationFailureSchemasV1,
 				...pilotOperationSchemasV2,
 				...skillHubReadSchemasV1,
 				...skillHubReviewSchemasV1,

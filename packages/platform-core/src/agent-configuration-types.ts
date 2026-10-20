@@ -534,8 +534,13 @@ export interface AgentConfigurationImageAdmissionPortV1 {
 				readonly status: "rejected";
 				readonly agentId: string;
 				readonly requestId: string;
-				/** 多服务档位估算总量超过部署上限；其他拒绝不带原因。 */
-				readonly reason?: "multi_service_resource_cap_exceeded";
+				/**
+				 * 多服务档位估算总量超过部署上限，或部署未提供平台身份入口（#3034）；
+				 * 其他拒绝不带原因。
+				 */
+				readonly reason?:
+					| "multi_service_resource_cap_exceeded"
+					| "platform_identity_entry_unavailable";
 		  }
 	>;
 }
@@ -669,6 +674,7 @@ export type AgentConfigurationErrorCode =
 	| "not_admitted"
 	| "model_profile_unsupported"
 	| "resource_cap_exceeded"
+	| "platform_identity_entry_unavailable"
 	| "no_change"
 	| "stale_revision"
 	| "key_version_conflict"

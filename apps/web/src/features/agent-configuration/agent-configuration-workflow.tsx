@@ -1,4 +1,5 @@
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import { AgentCreationFailureNotice } from "../my-agents/agent-creation-failure.js";
 import { useBrowserSession } from "../use-browser-session.js";
 import { AgentAuthorizationControls } from "./agent-authorization-controls.js";
 import {
@@ -104,12 +105,23 @@ function AgentConfigurationWorkflowContent({
 			<ConfigurationAdministratorActions lifecycle={lifecycle} />
 		</>
 	);
+	// 创建失败时向 Owner 与系统管理员说明失败类别（#3034）；是否可读仍由服务端判定。
+	const creationFailure =
+		agent.managementStatus === "creation_failed" &&
+		(isConfigurationOwner || isSystemAdministrator) ? (
+			<AgentCreationFailureNotice agentId={agent.agentId} />
+		) : null;
 
 	if (!isConfigurationOwner && isSystemAdministrator) {
 		return (
 			<AgentAdministratorConfigurationScreen
 				agent={agent}
-				afterForm={afterForm}
+				afterForm={
+					<>
+						{creationFailure}
+						{afterForm}
+					</>
+				}
 				back={administratorProjection ? "admin" : "detail"}
 			/>
 		);
@@ -142,7 +154,10 @@ function AgentConfigurationWorkflowContent({
 				<ConfigurationFooterLifecycleActions lifecycle={lifecycle} />
 			}
 			footerFeedback={
-				<ConfigurationFooterLifecycleFailure lifecycle={lifecycle} />
+				<>
+					{creationFailure}
+					<ConfigurationFooterLifecycleFailure lifecycle={lifecycle} />
+				</>
 			}
 			savedRelayKeyCandidates={savedRelayKeyCandidates.data?.candidates}
 			savedRelayKeyConfigurationRevision={

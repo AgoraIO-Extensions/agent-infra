@@ -41,6 +41,14 @@ vi.mock("./use-agent-default-relay-key-state.js", () => ({
 vi.mock("./use-agent-saved-relay-key-candidates.js", () => ({
 	useAgentSavedRelayKeyCandidates: vi.fn(),
 }));
+// 失败类别的读取与文案由组件自身测试覆盖；这里只验证出现在哪个区域（#3034）。
+vi.mock("../my-agents/agent-creation-failure.js", () => ({
+	AgentCreationFailureNotice: ({ agentId }: { agentId: string }) => (
+		<p data-agent-id={agentId} data-testid="creation-failure-notice">
+			失败原因
+		</p>
+	),
+}));
 vi.mock("./agent-authorization.js", () => ({
 	AgentAuthorizationRequestError: class extends Error {},
 	grantApplicationManager: vi.fn(),
@@ -255,6 +263,40 @@ describe("AgentConfigurationWorkflow", () => {
 			),
 		);
 		await waitFor(() => expect(onAgentChanged).toHaveBeenCalledTimes(1));
+	});
+
+	it("shows the creation failure category next to retry for an Owner and an administrator (#3034)", () => {
+		const failed = {
+			...firstAgent,
+			managementStatus: "creation_failed" as const,
+			serviceAvailability: null,
+		};
+		const owner = render(<AgentConfigurationWorkflow agent={failed} />);
+		const ownerNotice = screen.getByTestId("creation-failure-notice");
+		expect(ownerNotice.dataset.agentId).toBe(failed.agentId);
+		expect(ownerNotice.closest("form")).not.toBeNull();
+		expect(screen.getByRole("button", { name: "重试创建" })).toBeTruthy();
+		owner.unmount();
+
+		useSession(administratorSession);
+		const administrator = render(<AgentConfigurationWorkflow agent={failed} />);
+		expect(screen.getByTestId("creation-failure-notice")).toBeTruthy();
+		expect(
+			within(screen.getByRole("region", { name: "管理员操作" })).getByRole(
+				"button",
+				{ name: "重试创建" },
+			),
+		).toBeTruthy();
+		administrator.unmount();
+
+		useSession(employeeSession);
+		render(<AgentConfigurationWorkflow agent={failed} />);
+		expect(screen.queryByTestId("creation-failure-notice")).toBeNull();
+	});
+
+	it("does not read a creation failure category for an Agent that did not fail creation (#3034)", () => {
+		render(<AgentConfigurationWorkflow agent={firstAgent} />);
+		expect(screen.queryByTestId("creation-failure-notice")).toBeNull();
 	});
 
 	it("keeps the employee unavailable view without any controls", () => {
