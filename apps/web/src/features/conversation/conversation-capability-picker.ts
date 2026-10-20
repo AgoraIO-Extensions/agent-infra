@@ -1,3 +1,5 @@
+import { skillControlFileLimitV1 } from "./conversation-skill-control-file-model.js";
+
 export type ConversationCapabilityV1 = Readonly<{
 	kind: "command" | "skill";
 	name: string;
@@ -12,6 +14,7 @@ export type ConversationCapabilityV1 = Readonly<{
 const maximumCapabilities = 150;
 const maximumQueryBytes = 512;
 const maximumParameterBytes = 4096;
+const maximumControlFiles = skillControlFileLimitV1.maxFiles;
 
 function bounded(value: string, maximum: number) {
 	return (
@@ -66,19 +69,35 @@ export function sameCapability(
 	);
 }
 
-export type CapabilityInvocationBody = Readonly<{
+/** Invocation V1：命令与不带控制文件的 Skill 使用的既有请求体，字段保持原样。 */
+export type CapabilityInvocationBodyV1 = Readonly<{
 	capabilityId: string;
 	directoryRevision: string;
 	parameters: string;
 }>;
 
+/** Invocation V2：仅 Skill 可选，按选择顺序携带已上传的 text/plain 文件 id。 */
+export type CapabilityInvocationBodyV2 = Readonly<{
+	capabilityId: string;
+	directoryRevision: string;
+	parameters: string;
+	schemaVersion: 2;
+	attachments: readonly string[];
+}>;
+
+export type CapabilityInvocationBody =
+	| CapabilityInvocationBodyV1
+	| CapabilityInvocationBodyV2;
+
 /**
  * 提交前校验：Skill 需要用输入框补充目标与范围（与服务端 invalid_parameters 规则一致）；
- * 命令参数固定为空。返回错误文案或可提交的请求体。
+ * 命令参数固定为空。带控制文件时升级为 Invocation V2；没有文件时保持 V1 请求体不变。
+ * 命令不接受控制文件，页面也不会为命令提供上传入口。
  */
 export function prepareCapabilityInvocation(
 	selected: ConversationCapabilityV1,
 	parameterText: string,
+	controlFileIds: readonly string[] = [],
 ): { error: string } | { body: CapabilityInvocationBody } {
 	if (!selected.identity || !selected.directoryRevision)
 		return { error: "所选版本已失效，请重新选择；不会作为普通消息发送。" };
@@ -90,11 +109,21 @@ export function prepareCapabilityInvocation(
 	const parameters = selected.kind === "command" ? "" : parameterText;
 	if (!bounded(parameters, maximumParameterBytes))
 		return { error: "补充内容过长，请缩短后再发送。" };
+	const body: CapabilityInvocationBodyV1 = {
+		capabilityId: selected.identity,
+		directoryRevision: selected.directoryRevision,
+		parameters,
+	};
+	if (controlFileIds.length === 0) return { body };
+	if (selected.kind === "command") return { error: "只读命令不接受控制文件。" };
+	if (controlFileIds.length > maximumControlFiles)
+		return { error: `最多只能附加 ${maximumControlFiles} 个控制文件。` };
+	if (
+		controlFileIds.some((fileId) => fileId.trim() === "") ||
+		new Set(controlFileIds).size !== controlFileIds.length
+	)
+		return { error: "控制文件无效，请重新上传后再发送。" };
 	return {
-		body: {
-			capabilityId: selected.identity,
-			directoryRevision: selected.directoryRevision,
-			parameters,
-		},
+		body: { ...body, schemaVersion: 2, attachments: [...controlFileIds] },
 	};
 }
