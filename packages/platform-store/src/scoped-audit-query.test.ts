@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
 	type ApiPrincipalV1,
+	type ConversationOperationFactV2,
 	createConversationEventUseCaseV1,
 	createPersonalApiCredentialUseCaseV1,
 	type PersonalApiAgentReadAuditV1,
@@ -106,6 +107,169 @@ async function fixture(
 }
 
 describe("controlled PostgreSQL audit query", () => {
+	it.each([false, true])(
+		"reads formally ingested unknown model facts without rewriting history, legacy timing=%s",
+		async (legacy) => {
+			const f = await fixture();
+			const adapter = new PostgresConversationEventTransactionV1({
+				databaseUrl: database.databaseUrl,
+			});
+			const events = createConversationEventUseCaseV1(
+				{ transaction: adapter },
+				{ newId: randomUUID },
+			);
+			const startedAt = "2026-10-01T00:00:00.000Z";
+			const command = (phase: "intent" | "started" | "unknown") => ({
+				schemaVersion: 1 as const,
+				conversationId: f.conversationId,
+				executionId: f.executionId,
+				sessionGeneration: 1,
+				deliveryFence: 1,
+				adapterEventKey: `model-${phase}`,
+				runtimeCursor: `model-${phase}`,
+				occurredAt: "2026-10-01T00:00:00.125Z",
+				event: {
+					schemaVersion: 2 as const,
+					type: "execution.operation" as const,
+					fact: {
+						kind: "model" as const,
+						operationRef: "model-operation",
+						attemptRef: "model-attempt",
+						phase,
+						model: {
+							modelOptionId: "test-model-option",
+							modelId: "controlled-model",
+							configVersion: "configuration-1",
+							reasoningLevel: "medium",
+						},
+						...(phase === "intent" ? {} : { startedAt }),
+						...(phase === "unknown"
+							? {
+									failureCode: "response_incomplete",
+									...(legacy
+										? {
+												finishedAt: "2026-10-01T00:00:00.125Z",
+												durationMs: 125,
+											}
+										: {}),
+								}
+							: {}),
+					} satisfies ConversationOperationFactV2,
+				},
+			});
+			const snapshot = async () => ({
+				events:
+					await sql`select * from platform.conversation_events where execution_id = ${f.executionId} order by sequence`,
+				audits:
+					await sql`select * from platform.audit_events where target_id = ${f.executionId} and action = 'execution.operation.observed' order by id`,
+			});
+			try {
+				for (const phase of ["intent", "started", "unknown"] as const)
+					await events.persist(command(phase));
+				const before = await snapshot();
+				expect(before.events).toHaveLength(3);
+				expect(before.audits).toHaveLength(3);
+				const unknown = before.audits.find(
+					(row) => row.details.fact.phase === "unknown",
+				);
+				if (!unknown) throw new Error("missing ingested unknown audit");
+				for (const scope of [f.scope, admin]) {
+					const record = await query.getAuditWithDisplayNames(
+						scope,
+						unknown.id,
+						detail,
+						request(),
+					);
+					expect(record).toMatchObject({
+						result: "unknown",
+						originalPrincipal: f.principal,
+						operation: {
+							fact: {
+								phase: "unknown",
+								startedAt,
+								failureCode: "response_incomplete",
+							},
+						},
+						displayNames: { agent: "Audit fixture" },
+					});
+					expect(record.operation?.fact).not.toHaveProperty("finishedAt");
+					expect(record.operation?.fact).not.toHaveProperty("durationMs");
+					const ids: string[] = [];
+					let cursor: string | undefined;
+					do {
+						const result = await query.listAuditWithDisplayNames(
+							scope,
+							{
+								limit: 1,
+								filters: {
+									executionId: f.executionId,
+									action: "execution.operation.observed",
+								},
+								...(cursor ? { cursor } : {}),
+							},
+							request(),
+						);
+						ids.push(...result.items.map((item) => item.auditId));
+						cursor = result.nextCursor ?? undefined;
+					} while (cursor);
+					expect(ids.sort()).toEqual(before.audits.map((row) => row.id).sort());
+				}
+				await events.persist(command("unknown"));
+				expect(await snapshot()).toEqual(before);
+				const other = await fixture(undefined, f.agentId);
+				await expect(
+					query.getAudit(other.scope, unknown.id, detail, request()),
+				).rejects.toMatchObject({ code: "access_denied" });
+				if (legacy) {
+					const original = unknown.details;
+					for (const change of [
+						{ ...original, authorizationRecordId: "wrong-authorization" },
+						{ ...original, secret: "PRIVATE_SENTINEL" },
+						{
+							...original,
+							fact: { ...original.fact, secret: "PRIVATE_SENTINEL" },
+						},
+						{ ...original, fact: { ...original.fact, finishedAt: "invalid" } },
+					]) {
+						await sql`update platform.audit_events set details = ${sql.json(change)} where id = ${unknown.id}`;
+						await expect(
+							query.getAudit(admin, unknown.id, detail, request()),
+						).rejects.toMatchObject({ code: "unavailable" });
+					}
+					await sql`update platform.audit_events set details = ${sql.json(original)} where id = ${unknown.id}`;
+					const event = before.events.at(-1);
+					if (!event) throw new Error("missing original event");
+					for (const payload of [
+						{ ...event.event_payload, schemaVersion: 3 },
+						{ ...event.event_payload, secret: "PRIVATE_SENTINEL" },
+						{
+							...event.event_payload,
+							fact: { ...original.fact, attemptRef: "different-attempt" },
+						},
+					]) {
+						await sql`update platform.conversation_events set event_payload = ${sql.json(payload)} where event_id = ${event.event_id}`;
+						await expect(
+							query.getAudit(admin, unknown.id, detail, request()),
+						).rejects.toMatchObject({ code: "unavailable" });
+					}
+					await sql`update platform.conversation_events set event_payload = ${sql.json(event.event_payload)}, execution_id = ${other.executionId}, conversation_id = ${other.conversationId} where event_id = ${event.event_id}`;
+					await expect(
+						query.getAudit(admin, unknown.id, detail, request()),
+					).rejects.toMatchObject({ code: "unavailable" });
+					const unpairedId = randomUUID();
+					await sql`update platform.conversation_events set event_id = ${unpairedId}, execution_id = ${event.execution_id}, conversation_id = ${event.conversation_id} where event_id = ${event.event_id}`;
+					await expect(
+						query.getAudit(admin, unknown.id, detail, request()),
+					).rejects.toMatchObject({ code: "unavailable" });
+					await sql`update platform.conversation_events set event_id = ${event.event_id} where event_id = ${unpairedId}`;
+					expect(await snapshot()).toEqual(before);
+				}
+			} finally {
+				await adapter.close();
+			}
+		},
+	);
+
 	it("retains the actual durable control reference and truthful status timeout reason in detail", async () => {
 		const f = await fixture();
 		const authority = new PostgresTaskAuthorizationStoreV1({

@@ -13,6 +13,8 @@ import {
 	type PlatformAuditQueryScopeV1,
 	PlatformAuditScopeErrorV1,
 	type PlatformExecutionAuditBindingV1,
+	parseConversationOperationEventV2,
+	parseConversationOperationFactV2,
 	parsePersonalApiCredentialIssuanceV1,
 	parsePlatformAuditDisplayNameV1,
 	parsePlatformAuditQueryInputV1,
@@ -623,6 +625,7 @@ const agentDefaultRelayKeyReadActions = new Set([
 function project(
 	row: Row,
 	scope: PlatformAuditQueryScopeV1,
+	operationDetails: unknown = row.details,
 ): ScopedPlatformAuditProjectionV1 {
 	if (
 		!platformAuditQueryActionsV1.some((action) => action === row.action) ||
@@ -739,7 +742,7 @@ function project(
 	if (row.action === "execution.operation.observed") {
 		if (!binding) throw new PlatformAuditScopeErrorV1("unavailable");
 		const projected = projectPlatformOperationAuditV1(
-			row.details,
+			operationDetails,
 			binding,
 			scope,
 		);
@@ -837,6 +840,81 @@ function project(
 		executor,
 		operation,
 	};
+}
+
+/** Read-only compatibility for protected legacy model facts, bounded to this page. */
+async function legacyOperationDetails(
+	transaction: Transaction,
+	rows: readonly Row[],
+): Promise<Map<string, unknown>> {
+	const legacy = rows.flatMap((row) => {
+		if (
+			row.source !== "platform" ||
+			row.action !== "execution.operation.observed"
+		)
+			return [];
+		const details = row.details as Record<string, unknown> | null;
+		const raw = details?.fact as Record<string, unknown> | undefined;
+		if (
+			raw?.kind !== "model" ||
+			raw.phase !== "unknown" ||
+			(raw.finishedAt === undefined && raw.durationMs === undefined)
+		)
+			return [];
+		try {
+			const fact = parseConversationOperationFactV2(raw);
+			if (
+				!details ||
+				!boundedText(details.eventId) ||
+				row.auditId !== `operation-observed:${details.eventId}` ||
+				row.targetType !== "execution" ||
+				row.targetId !== row.executionId ||
+				row.outcome !== "succeeded"
+			)
+				throw new PlatformAuditScopeErrorV1("unavailable");
+			return [{ row, details, fact, eventId: details.eventId }];
+		} catch {
+			throw new PlatformAuditScopeErrorV1("unavailable");
+		}
+	});
+	const normalized = new Map<string, unknown>();
+	if (!legacy.length) return normalized;
+	const events = await transaction<
+		{
+			event_id: string;
+			execution_id: string;
+			conversation_id: string;
+			event_payload: unknown;
+			event_digest: string;
+		}[]
+	>`select event_id, execution_id, conversation_id, event_payload, event_digest
+		from platform.conversation_events
+		where event_id = any(${legacy.map((item) => item.eventId)}::text[])
+			and source = 'runtime' and event_type = 'execution.operation'`;
+	for (const { row, details, fact, eventId } of legacy) {
+		try {
+			const matches = events.filter((event) => event.event_id === eventId);
+			const event = matches[0];
+			if (
+				matches.length !== 1 ||
+				!event ||
+				event.execution_id !== row.executionId ||
+				event.conversation_id !== row.boundConversationId ||
+				!/^[a-f0-9]{64}$/.test(event.event_digest) ||
+				JSON.stringify(
+					parseConversationOperationEventV2(event.event_payload).fact,
+				) !== JSON.stringify(fact)
+			)
+				throw new PlatformAuditScopeErrorV1("unavailable");
+			const presentation = { ...fact };
+			delete presentation.finishedAt;
+			delete presentation.durationMs;
+			normalized.set(row.auditId, { ...details, fact: presentation });
+		} catch {
+			throw new PlatformAuditScopeErrorV1("unavailable");
+		}
+	}
+	return normalized;
 }
 
 function named(
@@ -1043,8 +1121,16 @@ export class PostgresScopedPlatformAuditQueryV1 {
 				for (const agentId of verifiedAgentIds)
 					await this.#requireAgent(transaction, scope, agentId);
 				const visible = rows.slice(0, query.limit);
+				const legacyDetails = await legacyOperationDetails(
+					transaction,
+					visible,
+				);
 				const items = visible.map((row) =>
-					project({ ...row, conversationId: row.boundConversationId }, scope),
+					project(
+						{ ...row, conversationId: row.boundConversationId },
+						scope,
+						legacyDetails.get(row.auditId) ?? row.details,
+					),
 				);
 				// 名称在同一事务内、按刚核验过的当前权限解析，与记录可见性一致。
 				const displayNames = withDisplayNames

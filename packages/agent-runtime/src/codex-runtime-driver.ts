@@ -10477,9 +10477,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			} = {},
 		) => {
 			const finishedAt =
-				phase === "started"
-					? undefined
-					: (details.finishedAt ?? new Date().toISOString());
+				phase === "completed" || phase === "failed"
+					? (details.finishedAt ?? new Date().toISOString())
+					: undefined;
 			await this.update((state) => {
 				const session = ownRecordValue(
 					state.sessions,
@@ -10499,12 +10499,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					(previous.phase !== "intent" && previous.phase !== "started")
 				)
 					stateInvalid();
-				this.appendOperationFact(session, journal, {
+				const next = {
 					...previous,
 					...details,
 					phase,
 					...(finishedAt ? { finishedAt } : {}),
-				});
+				};
+				// Transport closure does not confirm the external operation ended.
+				if (phase === "unknown") {
+					delete next.finishedAt;
+					delete next.durationMs;
+				}
+				this.appendOperationFact(session, journal, next);
 				if (phase === "unknown" || phase === "failed")
 					journal.externalActionsBlocked = true;
 			});
