@@ -14,12 +14,12 @@ UI 选型以[工程 Spec §2.1](../architecture/SPEC-agent-infra-M1-engineering-
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `index.html` | `b540e4c948bd506fc33623f506a1d2b472c26a1fe8bf362b83b0165cbe1ecd26` |
+| `index.html` | `6dd1cb8e825b4899ed088f9b50b72f56bb733ab356a707a228ee7e1825743c13` |
 | `login.html` | `6e04830eb0aac86e7ffea6dc6f3db0faab7942e2379c6230efe0512519d0c0a7` |
-| `DESIGN.md` | `162e8fb0c381cb96da71a0f838c8ce80b7076ebb6b08071cc2845961e481da18` |
-| `IMPLEMENTATION.md` | `3ee03b85afb5567576ff2ac64c1459b811490591d52e16c048809d173bc75a3b` |
+| `DESIGN.md` | `23fbd2373fe8df2d470e395fec264b362fdf695d00996ea11d46b50cacd2b1bd` |
+| `IMPLEMENTATION.md` | `143655a3c2b688ea1c291a395c87957ccccad8737c7a49e4e6b3a1f3b51dceee` |
 | `DESIGN-HANDOFF.md` | `3f2313d6d72bf3d7263d1e864730278217836ccdd5730d4b83460518bd2d3396` |
-| `DESIGN-MANIFEST.json` | `2846fe1e5da4c43a0b8407b635b6591b9fd1ac750b4427e862b7bfd68787ea97` |
+| `DESIGN-MANIFEST.json` | `c5ac355cb2c2b5d453d6a114f600bd6f9482a29e4740cd9a6f5d362402d3aa40` |
 
 `src/index.css` 将暖灰背景、石墨文字、蓝色主操作、状态色、10px 控件圆角和 14px 面板圆角
 映射到现有 shadcn 变量，并提供设计同名别名（`--bg`、`--fg`、`--surface-raised`、`--accent`、
@@ -47,13 +47,14 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 原型中的示例人员、模型、就绪提示和演示操作不作为生产数据或新增能力。
 申请、审批、配置、生命周期及审计继续复用现有组件、请求和权限校验。
 
-### 与导出设计的已定差异
+### 已回写导出设计的结论
 
-以下差异已在 #2862、#2863、#2903、#2996 确认，实现与验收以这里为准，等待设计稿回写：
+以下结论已在 #2862、#2863、#2903、#2996 确认，并由 [#2863](https://github.com/AgoraIO-Extensions/agent-infra/issues/2863)
+回写本版导出稿；实现与验收以这里为准：
 
 | 位置 | 实现 | 依据 |
 | --- | --- | --- |
-| `Button` `size="sm"`（返回链接、卡片按钮） | 最小高度 44px，不采用 `.btn-sm` 的 38px | DESIGN.md 触达下限 |
+| `Button` `size="sm"`（返回链接、卡片按钮） | 最小高度 44px；卡片内 40px 档只用于我的 Agent 卡、申请详情页头与下一步、提交结果、Owner 配置危险区和管理员操作区 | DESIGN.md 触达下限 |
 | 顶栏 | 不展示「平台就绪」 | 平台健康属于运维入口（PRD §11.1） |
 | 创建审批 | 没有「风险」筛选与列 | 审批看资源规格与准入（PRD §5.1、§6.2） |
 | 审批列表、申请详情 | 不展示 `app-024` 式申请编号 | PRD 没有申请编号 |
@@ -64,6 +65,15 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | 新会话首条消息前的「/」 | 不提供命令与 Skill 目录，说明「发送第一条消息后可使用命令与 Skill。」 | [工程 Spec §11.4](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界) |
 | Builder、预览 | 不提供页面 | PRD §1、§5.7、§11.1 |
 | Agent 的 Skill 绑定卡 | 增加「解除绑定」，确认后提交不含该项的完整集合 | #2903 AC-1、[工程 Spec §11.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配) |
+
+导出稿中以下内容仍与 Web 不同，不作为实现依据：
+
+- 示例人员、模型、Agent 标识（如 `AG-042`）、计数、时间和 Skill 目录都是合成数据；Web 只显示服务端投影。
+- 「原型状态」页的演示身份（系统管理员、Agent Owner、员工），以及运维观测、会话确认、回复与提交结果等演示入口，
+  只用于切换原型状态；Web 由会话角色和服务端结果决定，不提供切换。
+- 运维观测的「告警降级」计数是合成值，不代表真实观测数据。
+- API 凭证页的「应用管理」分区在原型中只有应用摘要与签发、轮换入口；打开既有应用、注册应用和凭证表单字段以 Web 为准。
+- 员工访问控制沿用原型的多选目录选择器；Web 一次只选一名员工，选中后收起结果。
 
 ### 申请详情进度
 
@@ -84,9 +94,11 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 
 ### 运维观测页
 
-导出设计没有 `#ops`（F-12，设计回补见 #2863）。按 #2862 定论，`/ops` 保留在「系统管理」末尾
-（[PRD §11.1](../prd/PRD-agent-platform-M1.md#111-页面)、[§14.2](../prd/PRD-agent-platform-M1.md#142-运维观测)）。
-设计稿回写前以本节为这一页的设计依据，样式沿用同类管理页页头与设计 `#my-agents` 已创建卡，不另做原型。
+[#2863](https://github.com/AgoraIO-Extensions/agent-infra/issues/2863) 已在导出稿补画 `#ops`（F-12）：「系统管理」末尾的「运维观测」入口、
+四个区块，以及已读取、未接入、读取中、不可用、无权限状态（演示入口在「原型状态」页）。本页设计以导出稿为准，
+本节记录与之对应的结构、数据来源和状态条件。按 #2862 定论，`/ops` 保留在「系统管理」末尾
+（[PRD §11.1](../prd/PRD-agent-platform-M1.md#111-页面)、[§14.2](../prd/PRD-agent-platform-M1.md#142-运维观测)），
+样式沿用同类管理页页头与设计 `#my-agents` 已创建卡。
 
 - 页头：`.page-heading`，eyebrow「系统管理 / 运维观测」、h1「先确认平台状态，再定位故障。」
   （`tabIndex={-1}`，作为恢复焦点目标）与副标题。读取中和已读取时右侧有 44px ghost 图标按钮「刷新运维状态」，
@@ -173,10 +185,10 @@ Agent 筛选沿用目录选择器的交互按名称单选，候选在展开时�
 
 ## 历史、身份与缺省状态
 
-[#2925](https://github.com/AgoraIO-Extensions/agent-infra/issues/2925) 补充以下局部设计；原稿回写前以本节为依据。
+[#2925](https://github.com/AgoraIO-Extensions/agent-infra/issues/2925) 补充以下局部设计，
+[#2863](https://github.com/AgoraIO-Extensions/agent-infra/issues/2863) 已把这些状态补画到导出稿，演示入口在「原型状态」页。
 行为范围沿用 [PRD 对话与历史](../prd/PRD-agent-platform-M1.md#112-对话能力)及
 [Runtime HLD](../architecture/HLD-agent-runtime-M1.md#8-消息事件与-sse-可靠性)的现有契约，不增加领域状态。
-下表未表示 canonical 已补画；外部原稿与最终摘要继续由 #2863 跟踪。
 
 | 场景 | 呈现与交互 |
 | --- | --- |
@@ -190,8 +202,9 @@ Agent 筛选沿用目录选择器的交互按名称单选，候选在展开时�
 ### 返回链接与管理区布局
 
 Owner 配置与申请详情沿公共管理页页头：页头文字区内的返回链接不额外追加窄屏 16px 上外边距，
-其后 eyebrow 保持 9px 间距；16px 只用于换行后的页头操作。触达尺寸仍采用已定的 44px。
-原稿回写时缩小宽泛 `.page-head .btn` 媒体规则的范围，不改变现有 Web 布局。
+其后 eyebrow 保持 9px 间距；16px 只用于换行后的页头操作，操作组内的按钮不再叠加。触达尺寸仍采用已定的 44px。
+Agent 详情的返回链接在窄屏保留 16px 上外边距（D-02）。#2863 已在导出稿按此缩小宽泛的窄屏 `.page-head .btn` 规则；
+这是设计定版决定，不改变现有 Web 布局。
 
 管理员 Agent 页（AA-01）依次排列页头、筛选、列表、分页、员工访问控制、应用凭证材料授权。
 两个治理区在列表之后，以独立 FormSection 呈现，默认展开；标题采用 16px 正文字体，
@@ -264,7 +277,7 @@ PR 的人工 UI 验收仍遵循[工作流 §7.4](../architecture/SPEC-ai-native-
 | 创建审批 | `management.spec.ts` | `-admin-approvals` |
 | 管理员 Agent 列表 | `admin-agents.spec.ts` | `admin-agents` |
 | 个人、平台审计 | `audit.spec.ts` | `-audit`、`-admin-audit` |
-| 运维观测（导出设计未覆盖，按[运维观测页](#运维观测页)） | `ops.spec.ts` | `ops` |
+| 运维观测（[运维观测页](#运维观测页)） | `ops.spec.ts` | `ops` |
 
 关键状态与行为另由以下测试覆盖，不增加原型状态产品路由：
 
@@ -285,5 +298,5 @@ PR 的人工 UI 验收仍遵循[工作流 §7.4](../architecture/SPEC-ai-native-
 
 截图反映受控 API fixture，不证明 LDAP、真实模型、Kubernetes 或独立 Connection 验收。
 数据条数、身份、模型选项、权限相关操作与导出样例的差异须以实际契约为准；
-原型里的平台就绪、风险评级、保存草稿和示例凭证不能作为生产能力移植。
+原型里的示例凭证、合成数据和演示入口不能作为生产能力移植。
 测量通过仍须回读截图；PR 中记录绑定当前 head 的报告、视觉差异及人工结论。
