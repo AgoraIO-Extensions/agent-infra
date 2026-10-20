@@ -2,7 +2,7 @@ import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { describe, expect, it } from "vitest";
 import { createClient } from "../../pilot/generated-v2/client/index.js";
-import { loadAdminAgents } from "./admin-agents.js";
+import { loadAdminAgent, loadAdminAgents } from "./admin-agents.js";
 
 const firstAgent = AgentProjectionV2Schema.parse(
 	pilotFakeScenariosV2.starting.response.body,
@@ -203,5 +203,70 @@ describe("Administrator Agent inventory generated-client consumer", () => {
 		await rejected;
 		expect(requests).toHaveLength(1);
 		expect(requests[0].signal.aborted).toBe(true);
+	});
+});
+
+describe("Administrator single Agent read (#3033)", () => {
+	const error = (status: number, retryable: boolean) =>
+		Response.json(
+			{
+				schemaVersion: 1,
+				code:
+					status === 401 ? "AUTHENTICATION_REQUIRED" : "RESOURCE_UNAVAILABLE",
+				message: "Controlled failure",
+				retryable,
+				traceId: "trace-admin-agent",
+			},
+			{ status },
+		);
+
+	it("reads only the administrator path for the requested Agent and keeps the server projection", async () => {
+		const { client, requests } = setup(() => Response.json(secondAgent));
+		await expect(loadAdminAgent(secondAgent.agentId, client)).resolves.toEqual({
+			kind: "ready",
+			agent: secondAgent,
+		});
+		expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+			`/api/v2/admin/agents/${secondAgent.agentId}`,
+		]);
+		// 不附带范围、身份或角色参数，也不发 Authorization。
+		expect([...new URL(requests[0].url).searchParams]).toEqual([]);
+		expect(requests[0].headers.has("authorization")).toBe(false);
+	});
+
+	it("merges 403 and 404 into one inaccessible result and keeps 401 distinct", async () => {
+		for (const status of [403, 404]) {
+			const { client } = setup(() => error(status, false));
+			await expect(loadAdminAgent("agent-hidden", client)).resolves.toEqual({
+				kind: "unavailable",
+				retryable: false,
+			});
+		}
+		const { client } = setup(() => error(401, false));
+		await expect(loadAdminAgent("agent-hidden", client)).resolves.toEqual({
+			kind: "unavailable",
+			retryable: false,
+			reason: "authentication-required",
+		});
+	});
+
+	it("throws a retryable error for temporary failures", async () => {
+		const { client } = setup(() => error(503, true));
+		await expect(loadAdminAgent("agent-hidden", client)).rejects.toMatchObject({
+			retryable: true,
+		});
+	});
+
+	it("rejects another Agent's projection and malformed or widened responses", async () => {
+		for (const body of [
+			secondAgent,
+			{ ...firstAgent, applicantId: "user-private" },
+			{ items: [firstAgent], nextCursor: null },
+		]) {
+			const { client } = setup(() => Response.json(body));
+			await expect(loadAdminAgent(firstAgent.agentId, client)).resolves.toEqual(
+				{ kind: "unavailable", retryable: false, reason: "invalid-response" },
+			);
+		}
 	});
 });

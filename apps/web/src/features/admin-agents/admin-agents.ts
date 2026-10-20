@@ -1,9 +1,15 @@
-import { pilotBrowserHttpOpenApiPathsV2 } from "@agent-infra/contracts/pilot";
+import {
+	AgentProjectionV2Schema,
+	pilotBrowserHttpOpenApiPathsV2,
+} from "@agent-infra/contracts/pilot";
 import type {
 	Client,
 	RequestResult,
 } from "../../pilot/generated-v2/client/index.js";
-import { listAdminAgentsV2 } from "../../pilot/generated-v2/sdk.gen.js";
+import {
+	getAdminAgentV2,
+	listAdminAgentsV2,
+} from "../../pilot/generated-v2/sdk.gen.js";
 import type {
 	AgentProjectionV2,
 	ListAdminAgentsV2Errors,
@@ -11,6 +17,7 @@ import type {
 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	type CollectionReadFailureReason,
+	type CollectionReadUnavailable,
 	collectionReadFailure,
 } from "../collection-read-failure.js";
 
@@ -67,4 +74,47 @@ export async function loadAdminAgents(
 		cursors.add(cursor);
 	}
 	return { kind: "error", retryable: false };
+}
+
+export type AdminAgentState =
+	| { kind: "ready"; agent: AgentProjectionV2 }
+	| CollectionReadUnavailable;
+
+/**
+ * 系统管理员读取单个 Agent 的服务端管理员投影（#3033），形状与管理员列表项相同。
+ * 403 与 404 对页面是同一结果（不暴露对象是否存在）；暂时失败抛出可重试错误，
+ * 与 loadAgentDetail 一致，由查询层决定是否重试。
+ */
+export async function loadAdminAgent(
+	agentId: string,
+	client?: Client,
+	signal?: AbortSignal,
+): Promise<AdminAgentState> {
+	const result = await getAdminAgentV2({
+		client,
+		path: { agentId },
+		signal,
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	signal?.throwIfAborted();
+	const status = result.response?.status;
+	if (status !== 200) {
+		const failure = collectionReadFailure(status);
+		if (failure.retryable)
+			throw Object.assign(new Error("Agent data is temporarily unavailable"), {
+				retryable: true as const,
+			});
+		return failure.reason === "denied" || failure.reason === "not-found"
+			? { kind: "unavailable", retryable: false }
+			: failure;
+	}
+	const parsed = AgentProjectionV2Schema.safeParse(result.data);
+	if (!parsed.success || parsed.data.agentId !== agentId)
+		return {
+			kind: "unavailable",
+			retryable: false,
+			reason: "invalid-response",
+		};
+	return { kind: "ready", agent: parsed.data };
 }

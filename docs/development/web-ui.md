@@ -255,6 +255,11 @@ Agent 详情的返回链接在窄屏保留 16px 上外边距（D-02）。#2863 �
 治理权限以 [PRD §2.3](../prd/PRD-agent-platform-M1.md#23-系统管理员)与
 [PRD §7.3](../prd/PRD-agent-platform-M1.md#73-api-身份凭证与授权)为准。
 
+列表行操作依次为「配置」、创建失败时的「重试」和管理员「停用」（[#3033](https://github.com/AgoraIO-Extensions/agent-infra/issues/3033)）：
+停用先确认对象与后果，受理后重新读取列表，该行只剩「—」时焦点移到页面 h1。
+系统管理员不在使用范围内时，配置页改读服务端管理员投影，只显示页头、权限边界与管理员操作，
+返回链接指向 Agent 管理；读取边界见[工程 Spec §9.2](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#92-权限顺序)。
+
 ## 静态规则
 
 `pnpm check` 执行 `tests/support/web-ui-policy.mjs`，`pnpm test` 执行正负样例。

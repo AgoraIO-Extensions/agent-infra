@@ -7,8 +7,8 @@ import {
 	loadAgentDetailView,
 } from "./agent-discovery.js";
 
-/** 创建、启动或更新期间每 2 秒重读一次，其余状态不轮询。 */
-function pollWhileTransitioning(query: {
+/** 创建、启动或更新期间每 2 秒重读一次，其余状态不轮询；管理员单项读取同样使用（#3033）。 */
+export function pollWhileTransitioning(query: {
 	readonly state: {
 		readonly status: string;
 		readonly data?: AgentDetailState | AgentDetailViewState;

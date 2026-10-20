@@ -140,7 +140,7 @@ beforeEach(() => {
 });
 
 describe("AgentConfigurationWorkflow", () => {
-	it("gives a pure administrator the same page heading with authorization and administrator actions only", () => {
+	it("gives a pure administrator the same page heading with administrator actions only", () => {
 		useSession(administratorSession);
 
 		render(<AgentConfigurationWorkflow agent={firstAgent} />);
@@ -151,7 +151,16 @@ describe("AgentConfigurationWorkflow", () => {
 		expect(screen.queryByText("配置不可用")).toBeNull();
 		expect(screen.queryByText("当前无法访问此配置。")).toBeNull();
 		expect(screen.getByText("权限边界")).toBeTruthy();
-		expect(screen.getByRole("region", { name: "Agent 授权控制" })).toBeTruthy();
+		// API 与应用授权只由当前 Owner 治理，服务端拒绝纯管理员；页面不显示该入口（#3033 AC-2）。
+		expect(screen.queryByRole("region", { name: "Agent 授权控制" })).toBeNull();
+		expect(screen.queryByRole("textbox")).toBeNull();
+		expect(screen.queryByRole("button", { name: /^(授权|撤销)/ })).toBeNull();
+		// 管理员在使用范围内时，Agent 详情对其可见，返回链接不变。
+		expect(
+			screen
+				.getByRole("link", { name: "返回 Agent 详情" })
+				.getAttribute("href"),
+		).toBe(`/agents/${firstAgent.agentId}`);
 		const admin = screen.getByRole("region", { name: "管理员操作" });
 		expect(
 			within(admin).getByRole("button", { name: "停用 Agent" }),
@@ -165,14 +174,48 @@ describe("AgentConfigurationWorkflow", () => {
 			screen.queryByRole("button", { name: /停止 Agent|重启 Agent/ }),
 		).toBeNull();
 		expect(screen.queryByRole("region", { name: "停止 Agent" })).toBeNull();
-		// 卡片嵌套不超过两层：没有 form-aside。
+		// 卡片嵌套不超过两层：没有 form-aside，管理员区不在表单卡内。
 		expect(document.querySelector(".form-aside")).toBeNull();
+		expect(admin.closest(".configuration-form-card")).toBeNull();
+	});
+
+	it("sends a pure administrator read through the administrator projection back to Agent management (#3033)", () => {
+		useSession(administratorSession);
+
+		render(
+			<AgentConfigurationWorkflow
+				agent={{ ...firstAgent, serviceAvailability: "ready" }}
+				administratorProjection
+			/>,
+		);
+
+		// Agent 详情对不在使用范围内的管理员不可见：返回链接改为 Agent 管理。
+		expect(screen.queryByRole("link", { name: "返回 Agent 详情" })).toBeNull();
 		expect(
 			screen
-				.getByRole("region", { name: "Agent 授权控制" })
-				.closest(".configuration-form-card")
-				?.contains(admin),
-		).toBe(false);
+				.getByRole("link", { name: "返回 Agent 管理" })
+				.getAttribute("href"),
+		).toBe("/admin/agents");
+		// Owner 字段来自服务端投影，页头照常显示。
+		expect(screen.getByText("Owner · Owner")).toBeTruthy();
+		expect(screen.queryByRole("region", { name: "Agent 授权控制" })).toBeNull();
+		const admin = screen.getByRole("region", { name: "管理员操作" });
+		expect(
+			within(admin)
+				.getAllByRole("button")
+				.map((button) => button.textContent),
+		).toEqual(["停用 Agent"]);
+		expect(
+			screen.queryByRole("button", { name: /停止 Agent|重启 Agent|保存配置/ }),
+		).toBeNull();
+	});
+
+	it("keeps the Agent authorization controls for the current Owner", () => {
+		useSession(ownerSession);
+
+		render(<AgentConfigurationWorkflow agent={firstAgent} />);
+
+		expect(screen.getByRole("region", { name: "Agent 授权控制" })).toBeTruthy();
 	});
 
 	it("keeps the employee unavailable view without any controls", () => {
@@ -334,30 +377,30 @@ describe("AgentConfigurationWorkflow", () => {
 		);
 	});
 
-	it("resets pending authorization controls when an administrator changes Agent", () => {
-		vi.mocked(useBrowserSession).mockReturnValue({
-			state: { kind: "ready", session: administratorSession },
-		} as never);
+	it("resets pending authorization controls when an Owner changes Agent", () => {
+		useSession(ownerSession);
 		vi.mocked(grantApplicationManager).mockReturnValue(
 			new Promise(() => undefined),
 		);
+		const controls = () =>
+			within(screen.getByRole("region", { name: "Agent 授权控制" }));
 
 		const { rerender } = render(
 			<AgentConfigurationWorkflow agent={firstAgent} />,
 		);
-		fireEvent.change(screen.getByLabelText("应用 ID"), {
+		fireEvent.change(controls().getByLabelText("应用 ID"), {
 			target: { value: "application-1" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "授权管理" }));
-		expect(screen.getByRole("button", { name: "授权管理" })).toHaveProperty(
+		fireEvent.click(controls().getByRole("button", { name: "授权管理" }));
+		expect(controls().getByRole("button", { name: "授权管理" })).toHaveProperty(
 			"disabled",
 			true,
 		);
 
 		rerender(<AgentConfigurationWorkflow agent={secondAgent} />);
 
-		expect(screen.getByLabelText("应用 ID")).toHaveProperty("value", "");
-		expect(screen.getByRole("button", { name: "授权管理" })).toHaveProperty(
+		expect(controls().getByLabelText("应用 ID")).toHaveProperty("value", "");
+		expect(controls().getByRole("button", { name: "授权管理" })).toHaveProperty(
 			"disabled",
 			true,
 		);

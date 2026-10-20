@@ -36,7 +36,10 @@ import {
 	catalogModelPickerId,
 	savedModelPickerId,
 } from "./configuration-model-section.js";
-import { ConfigurationPageHeading } from "./configuration-page-heading.js";
+import {
+	type ConfigurationPageBack,
+	ConfigurationPageHeading,
+} from "./configuration-page-heading.js";
 import {
 	ConfigurationAvailabilitySection,
 	ConfigurationCoOwnerSection,
@@ -163,27 +166,24 @@ function environmentErrors(
 }
 
 /**
- * 纯系统管理员的配置页（N-02）：与 Owner 相同的页头与权限边界，下面只有授权控制与
- * 管理员操作区；不显示 Owner 才能编辑的配置。
+ * 纯系统管理员的配置页（N-02）：与 Owner 相同的页头与权限边界，下面只有服务端允许的
+ * 管理员操作区；不显示 Owner 才能编辑的配置与授权控制（#3033 AC-2）。
  */
 export function AgentAdministratorConfigurationScreen({
 	agent,
 	afterForm,
-	authorization,
+	back,
 }: {
 	agent: AgentProjectionV2;
 	afterForm?: ReactNode;
-	authorization?: ReactNode;
+	back?: ConfigurationPageBack;
 }) {
 	return (
 		<section
 			aria-labelledby={configurationHeadingId}
 			className="agent-configuration"
 		>
-			<ConfigurationPageHeading agent={agent} />
-			{authorization ? (
-				<div className="configuration-form-card">{authorization}</div>
-			) : null}
+			<ConfigurationPageHeading agent={agent} back={back} />
 			{afterForm}
 		</section>
 	);
