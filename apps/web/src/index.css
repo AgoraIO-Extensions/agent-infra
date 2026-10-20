@@ -1662,6 +1662,8 @@
 	font-family: inherit;
 	font-size: 15px;
 	font-weight: 620;
+	/* Z-05：设计 h2 的全局行高 1.35（15px → 20.25px）。 */
+	line-height: 1.35;
 	letter-spacing: 0;
 }
 .conversation-history-head .conversation-history-hint {
@@ -2097,7 +2099,8 @@
 }
 
 .assistant-markdown {
-	line-height: 1.8;
+	/* Z-03：设计 .message-body p 为 14px / 1.65（23.1px）；段距仍由下方 16px 规则控制。 */
+	line-height: 1.65;
 	overflow-wrap: anywhere;
 }
 .assistant-markdown > * + * {
@@ -2860,6 +2863,12 @@ body {
 	.agent-detail .agent-detail-back {
 		margin-top: 16px;
 	}
+}
+/* Z-11：对话页「会话上下文」的「打开 Connection」在两个视口都保持 44px 触达高度
+   （DESIGN.md 新操作至少 44px；web-ui.md 的 40px 档不含 Connection 提示），不沿用导出稿桌面的 40px。
+   放在上方通用规则之后，避免特异性倒序。 */
+.chat-context-body .connection-notice-action > a {
+	min-height: 44px;
 }
 
 @media (max-width: 1023px) {

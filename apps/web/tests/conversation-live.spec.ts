@@ -853,6 +853,21 @@ test("saves the next-message model and stops the bound execution", async ({
 					...userMessage,
 					status: phase === "cancelled" ? "cancelled" : "processing",
 				},
+				// 服务端投影：已取消的 Execution 即使没有正文也有一条回答（conversation-read-projection）。
+				...(phase === "cancelled"
+					? [
+							{
+								...userMessage,
+								messageId: `assistant:${executionId}`,
+								role: "assistant" as const,
+								text: "",
+								status: "cancelled" as const,
+								replyToMessageId: messageId,
+								answerVersion: 1,
+								isCurrentAnswer: true,
+							},
+						]
+					: []),
 			],
 		});
 	};
@@ -1027,9 +1042,21 @@ test("saves the next-message model and stops the bound execution", async ({
 	).toHaveCount(0);
 	await expect(input).toHaveValue("保留下一条草稿");
 	await page.getByRole("button", { name: "停止回复" }).click();
+	// Z-14：停止确认后用 Toast 补充确认，回复卡状态行给出「可重新生成」与重新生成入口。
 	await expect(
-		page.getByRole("status").filter({ hasText: "原回复已结束。" }),
+		page.locator('[data-slot="toast"]').filter({ hasText: "回复已停止" }),
 	).toBeVisible();
+	const stoppedLine = page
+		.getByRole("article", { name: `${agent.name}的消息` })
+		.locator(".message-status")
+		.first();
+	await expect(stoppedLine).toHaveText(
+		"已停止 · 可重新生成 · 重新生成 · 查看执行详情",
+	);
+	await expect(
+		stoppedLine.getByRole("button", { name: "重新生成：继续检查当前任务" }),
+	).toBeVisible();
+	await expect(page.getByText("原回复已结束。")).toHaveCount(0);
 	expect(selectionBody).toEqual({
 		schemaVersion: 1,
 		modelOptionId: "model-secondary",

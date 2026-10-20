@@ -24,6 +24,11 @@ export function browserToolLabel(toolId: string): string {
 		: "浏览器操作";
 }
 
+/** Runtime 已登记的浏览器工具；执行详情据此不外露原始 toolId（Z-15）。 */
+export function isBrowserToolId(toolId: string): boolean {
+	return Object.hasOwn(toolLabels, toolId);
+}
+
 /** 执行中正文「Agent 正在{…}。」使用的进行时描述。 */
 export function browserToolProgress(toolId: string): string {
 	return Object.hasOwn(toolLabels, toolId)

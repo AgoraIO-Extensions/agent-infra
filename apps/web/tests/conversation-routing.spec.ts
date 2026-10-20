@@ -15,6 +15,7 @@ import {
 } from "@playwright/test";
 import {
 	event,
+	execution,
 	history,
 } from "../src/features/conversation/conversation-test-fixtures";
 import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures";
@@ -897,6 +898,10 @@ test("creates a conversation in one step from the header and keeps the direct en
 	await expect(direct).toBeVisible();
 	await expect(page.getByLabel("消息", { exact: true })).toBeEditable();
 	await expect(create).toHaveCount(0);
+	// Z-01：新会话的时间线与设计稿一样留空，没有欢迎空态卡。
+	await expect(page.locator(".chat-thread .timeline")).toHaveCount(1);
+	await expect(page.locator('.chat-thread [data-slot="empty"]')).toHaveCount(0);
+	await expect(page.getByText("从一个明确的任务开始")).toHaveCount(0);
 	await page.reload();
 	await expect(direct).toBeVisible();
 	await expect(page.getByLabel("消息", { exact: true })).toBeEditable();
@@ -918,6 +923,9 @@ test("creates a conversation in one step from the header and keeps the direct en
 		"placeholder",
 		"输入消息，或 / 搜索命令与 Skill…",
 	);
+	// Z-01：刚创建、还没有消息的会话时间线同样留空。
+	await expect(page.getByRole("region", { name: "会话时间线" })).toBeAttached();
+	await expect(page.locator('.chat-thread [data-slot="empty"]')).toHaveCount(0);
 	await expect(
 		page.getByRole("status").filter({
 			hasText: "新会话已创建，已出现在最近对话",
@@ -1519,9 +1527,10 @@ test("matches the exported composer toolbar and history panel styles", async ({
 	await expect(send.locator("svg.lucide-arrow-up")).toHaveCount(0);
 	// CH-09：历史头部与条目。
 	const panel = page.getByRole("complementary", { name: "对话历史" });
-	await expect(
-		panel.getByRole("heading", { name: "个人历史", level: 2 }),
-	).toHaveCSS("font-size", "15px");
+	const heading = panel.getByRole("heading", { name: "个人历史", level: 2 });
+	await expect(heading).toHaveCSS("font-size", "15px");
+	// Z-05：设计 h2 行高 1.35，15px 标题为 20.25px。
+	await expect(heading).toHaveCSS("line-height", "20.25px");
 	await expect(panel.getByText("只显示你的会话")).toHaveCSS(
 		"font-size",
 		"13px",
@@ -1746,9 +1755,14 @@ for (const viewport of [
 		expect(geometry.maxHeight).toBeLessThanOrEqual(viewport.height * 0.4);
 		expect(geometry.menu.top).toBeGreaterThanOrEqual(0);
 		expect(geometry.menu.bottom).toBeLessThanOrEqual(viewport.height);
-		expect(geometry.menu.bottom).toBeLessThanOrEqual(
-			(geometry.composer?.top ?? 0) - 8 + 0.5,
-		);
+		// Z-07：设计以 .composer（比输入框外框多 10px padding-top）为锚、再留 8px，
+		// 弹层底边离输入框 18px；只有弹层被钳制在视口顶部 12px 时才会更远。
+		const composerTop = geometry.composer?.top ?? 0;
+		expect(geometry.menu.bottom).toBeLessThanOrEqual(composerTop - 18 + 0.5);
+		if (geometry.menu.top > 12.5)
+			expect(
+				Math.abs(geometry.menu.bottom - (composerTop - 18)),
+			).toBeLessThanOrEqual(0.5);
 		await expect(page.getByText("命令 / Skill · 输入 / 搜索")).toBeVisible();
 		await expect(page.getByText("只读命令").first()).toBeVisible();
 		await expect(menu.getByText(/^command$|^skill$/)).toHaveCount(0);
@@ -1984,3 +1998,130 @@ test("folds session context and files around the timeline with the exported summ
 	);
 	expect(fixture.unexpected).toEqual([]);
 });
+
+for (const viewport of [
+	{ width: 1440, height: 900 },
+	{ width: 390, height: 844 },
+]) {
+	test(`keeps 打开 Connection at the 44px touch height in session context at ${viewport.width} by ${viewport.height} (Z-11)`, async ({
+		page,
+	}, info) => {
+		test.skip(info.project.name !== "desktop", "Viewport list runs once.");
+		await page.setViewportSize(viewport);
+		const fixture = await routingFixture(page, { messageRoles: true });
+		// 后注册的路由优先：只把 Connection 入口换成可用，其余仍走受控 fixture。
+		await page.route("**/api/v1/connection/capability", (route) =>
+			route.fulfill({
+				json: ConnectionCapabilityProjectionV1Schema.parse({
+					schemaVersion: 1,
+					status: "available",
+					publicOrigin: "https://connection.example.test",
+					mcpPath: "/mcp",
+					configFingerprint: "a".repeat(64),
+				}),
+			}),
+		);
+		await page.goto(canonical(fixture.agentId, fixture.conversationId));
+		await assertChat(page);
+		await page.getByRole("button", { name: /^会话上下文/ }).click();
+		const open = page
+			.locator(".chat-context-body")
+			.getByRole("link", { name: "打开 Connection" });
+		await expect(open).toBeVisible();
+		// 两个视口一致：DESIGN.md 新操作至少 44px，不沿用导出稿桌面的 40px。
+		await expect(open).toHaveCSS("min-height", "44px");
+		expect((await open.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+		expect(
+			await page.evaluate(
+				() => document.documentElement.scrollWidth <= innerWidth,
+			),
+		).toBe(true);
+		expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+			true,
+		);
+		expect(fixture.unexpected).toEqual([]);
+	});
+}
+
+for (const viewport of [
+	{ width: 1440, height: 900 },
+	{ width: 390, height: 844 },
+]) {
+	test(`keeps the chat page free of overflow, console errors and duplicate control names at ${viewport.width} by ${viewport.height} (#3039 AC-2)`, async ({
+		page,
+	}, info) => {
+		test.skip(info.project.name !== "desktop", "Viewport list runs once.");
+		await page.setViewportSize(viewport);
+		const errors: string[] = [];
+		page.on("console", (message) => {
+			if (message.type() === "error") errors.push(message.text());
+		});
+		page.on("pageerror", (error) => errors.push(error.message));
+		const fixture = await routingFixture(page, {
+			messageRoles: true,
+			nativeCapabilities: 4,
+		});
+		// 路由 fixture 不提供执行详情；这里按契约补上，让弹窗读到真实形状的投影。
+		await page.route("**/api/v2/conversations/*/executions/*", (route) => {
+			const path = new URL(route.request().url()).pathname.split("/");
+			return route.fulfill({
+				json: execution(path[4], path.at(-1)),
+			});
+		});
+		await page.goto(canonical(fixture.agentId, fixture.conversationId));
+		await assertChat(page);
+		const main = page.locator("main");
+		// 同一页面没有同名控件：主区可见的按钮与链接按可访问名称两两不同。
+		const controlNames = async () =>
+			[
+				...(await main.ariaSnapshot()).matchAll(
+					/- (?:button|link) "((?:[^"\\]|\\.)*)"/g,
+				),
+			].map((match) => match[1]);
+		const duplicates = (names: (string | undefined)[]) => {
+			// 防止快照格式变化让检查空转：主区至少有发送、命令入口与回复卡链接。
+			expect(names.length).toBeGreaterThanOrEqual(5);
+			return names.filter((name, index) => names.indexOf(name) !== index);
+		};
+		const overflow = () =>
+			page.evaluate(
+				() =>
+					Math.max(
+						document.documentElement.scrollWidth,
+						document.body.scrollWidth,
+					) > innerWidth,
+			);
+		expect(duplicates(await controlNames())).toEqual([]);
+		expect(await overflow()).toBe(false);
+		// 执行详情弹窗关闭后焦点回到触发按钮，不落到 body。
+		const trigger = page.getByRole("button", { name: /^查看执行详情/ }).first();
+		await trigger.click();
+		const dialog = page.getByRole("dialog", { name: "执行详情" });
+		await expect(dialog).toBeVisible();
+		expect(await overflow()).toBe(false);
+		await page.keyboard.press("Escape");
+		await expect(dialog).toHaveCount(0);
+		await expect(trigger).toBeFocused();
+		// 命令菜单收起后焦点留在输入框。
+		const input = page.getByLabel("消息", { exact: true });
+		await input.fill("/");
+		const menu = page.getByRole("region", { name: "命令与 Skill 选择" });
+		await expect(menu).toBeVisible();
+		expect(duplicates(await controlNames())).toEqual([]);
+		await page.keyboard.press("Escape");
+		await expect(menu).toHaveCount(0);
+		await expect(input).toBeFocused();
+		// 展开会话上下文后仍没有同名控件与横向溢出。
+		await page.getByRole("button", { name: /^会话上下文/ }).click();
+		expect(duplicates(await controlNames())).toEqual([]);
+		expect(await overflow()).toBe(false);
+		expect(
+			await page.evaluate(() => document.activeElement === document.body),
+		).toBe(false);
+		expect(errors).toEqual([]);
+		expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+			true,
+		);
+		expect(fixture.unexpected).toEqual([]);
+	});
+}

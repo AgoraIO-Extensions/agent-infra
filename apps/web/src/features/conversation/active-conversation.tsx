@@ -245,14 +245,22 @@ export function ActiveConversation({
 		text: string;
 	}>();
 	const executionNotice =
-		stopping && stopping === latestExecution
+		stopping && stopping === latestExecution && !isTerminal(status)
 			? {
 					executionId: stopping,
-					text: isTerminal(status)
-						? "原回复已结束。"
-						: "停止请求已受理，正在等待停止确认。已发生的外部操作不会自动撤回。",
+					text: "停止请求已受理，正在等待停止确认。已发生的外部操作不会自动撤回。",
 				}
 			: stopNotice;
+	// 停止请求受理后原回复进入终态（Z-14）：确认已停止时用 Toast「回复已停止」补充确认，
+	// 回复卡状态行给出「已停止 · 可重新生成」；停止生效前已完成或失败的，在该回复卡说明
+	// 「原回复已结束。」（#1524）。
+	useEffect(() => {
+		if (!stopping || stopping !== latestExecution || !isTerminal(status))
+			return;
+		setStopping(undefined);
+		if (status === "cancelled") toast("回复已停止");
+		else setStopNotice({ executionId: stopping, text: "原回复已结束。" });
+	}, [stopping, latestExecution, status, toast]);
 	const uncertainExecution = active && status === "unknown";
 	const command = useConversationCommands({
 		agentId,

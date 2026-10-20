@@ -10,7 +10,6 @@ import {
 	useState,
 } from "react";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
-import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Button } from "../../components/ui/button.js";
 import {
 	Collapsible,
@@ -428,7 +427,7 @@ export function ConversationMessages({
 					)}
 				</div>
 			)}
-			{!userMessages.length && !events.length && <ConversationWelcome />}
+			{/* Z-01：设计稿的空会话时间线只有「加载更早内容」，不放欢迎空态卡。 */}
 			{timelineItems}
 			{trailingExecutions.map((id, index) => (
 				<div className="exchange" key={id}>
@@ -441,19 +440,6 @@ export function ConversationMessages({
 			))}
 			{trailing}
 		</section>
-	);
-}
-
-/** 还没有消息的会话（以及 /chat/:agentId 新会话页）的欢迎空态。 */
-export function ConversationWelcome() {
-	return (
-		<Empty className="chat-welcome space-y-3 py-8">
-			<Bot className="mx-auto size-8 text-primary" aria-hidden="true" />
-			<EmptyTitle className="text-xl">从一个明确的任务开始</EmptyTitle>
-			<EmptyDescription>
-				描述需要检查的内容和期望结果。对话仅对你可见。
-			</EmptyDescription>
-		</Empty>
 	);
 }
 

@@ -18,7 +18,6 @@ import {
 	ConversationHistoryHeading,
 	ConversationHistoryLink,
 } from "./conversation-history-item.js";
-import { ConversationWelcome } from "./conversation-screen-messages.js";
 import { useAmbiguousDenial } from "./use-ambiguous-denial.js";
 import { useConversationCommands } from "./use-conversation-commands.js";
 import { useConversationHistory } from "./use-conversation-history.js";
@@ -226,9 +225,8 @@ export function NewConversationComposer({
 		modelOptions.length > 0;
 	return (
 		<>
-			<div className="timeline min-h-48">
-				<ConversationWelcome />
-			</div>
+			{/* Z-01：新会话的时间线与设计稿一样留空，只占位让 composer 停在底部。 */}
+			<div className="timeline min-h-48" />
 			{/* 创建结果的反馈：composer 上方、任何折叠条之外（NI-83）。 */}
 			<CreateConversationNotice creation={creation} />
 			<ConversationComposer

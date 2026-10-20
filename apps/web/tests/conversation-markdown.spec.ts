@@ -111,6 +111,13 @@ test("assistant Markdown stays readable through history reload and version switc
 	await expect(page.locator(".assistant-markdown pre code")).toHaveText(
 		longCode,
 	);
+	// Z-03：助手正文对齐设计 .message-body p 的 14px / 1.65（23.1px），段距仍是 16px。
+	const paragraph = page.locator(".assistant-markdown > p").first();
+	await expect(paragraph).toHaveCSS("font-size", "14px");
+	await expect(paragraph).toHaveCSS("line-height", "23.1px");
+	await expect(
+		page.locator(".assistant-markdown > :nth-child(2)").first(),
+	).toHaveCSS("margin-top", "16px");
 	await expect(page.locator(".assistant-markdown img")).toHaveCount(0);
 	await expect(page.getByRole("link", { name: "危险" })).toHaveCount(0);
 	const code = page.getByRole("region", { name: "代码块" });

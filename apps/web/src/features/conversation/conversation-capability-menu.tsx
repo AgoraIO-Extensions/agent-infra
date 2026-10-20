@@ -258,7 +258,11 @@ export function CapabilityTrigger({
 /**
  * 设计 positionCapabilityPicker：fixed 弹层放在 composer 上方，宽 min(320, 视口-32)，
  * max-height 取 min(248, 上方可用空间, 40% 视口高)，左缘对齐入口按钮并钳制在 16px 边距内。
+ * 设计以 .composer 为锚，它比输入框外框多 10px padding-top；这里的锚点就是输入框外框
+ * （form.composer-zone），所以先上移 10px，弹层底边离输入框 18px（Z-07）。
  */
+const designComposerPaddingTop = 10;
+
 function usePickerPosition(
 	open: boolean,
 	menu: RefObject<HTMLElement | null>,
@@ -274,7 +278,7 @@ function usePickerPosition(
 			const bounds = composer.getBoundingClientRect();
 			const left = trigger?.getBoundingClientRect().left ?? bounds.left;
 			const width = Math.min(320, window.innerWidth - 32);
-			const top = Math.max(12, bounds.top);
+			const top = Math.max(12, bounds.top - designComposerPaddingTop);
 			const space = Math.max(80, top - 24);
 			element.style.width = `${width}px`;
 			element.style.maxHeight = `${Math.min(248, space, window.innerHeight * 0.4)}px`;
