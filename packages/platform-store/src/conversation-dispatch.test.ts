@@ -1750,7 +1750,12 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		},
 	);
 
-	it.each(["recover", "stop-during-prepare", "lost-observation"] as const)(
+	it.each([
+		"recover",
+		"stop-during-prepare",
+		"lost-observation",
+		"restart-then-stop",
+	] as const)(
 		"rebuilds the same allocation and PVC only after durable stop proof and fresh business authority (%s)",
 		async (mode) => {
 			const work = await seed("conversation.turn.submit.v1", {
@@ -2213,6 +2218,70 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						actor,
 					),
 				).toMatchObject({ outcome: "accepted" });
+				if (mode === "restart-then-stop") {
+					// #2985：重启后还没准备替换就再次停止。回执已证明停止，认领时直接结束，
+					// 不再停在 pending。
+					expect(
+						await management.executeManagementCommand(
+							{
+								schemaVersion: 1,
+								command: "stop_agent",
+								agentId: "agent-dispatch",
+								expectedRevision: 3,
+								idempotencyKey: "stop-again-before-prepare",
+								requestId: "stop-again",
+								traceId: "stop-again",
+							},
+							actor,
+						),
+					).toMatchObject({ outcome: "accepted" });
+					const [pending] =
+						await client`select status, payload from platform.outbox_items where id = ${request.itemId}`;
+					expect(pending?.status).toBe("pending");
+					expect(pending?.payload.lifecycle.stopReceipt).toEqual(receipt);
+					// 观测里出现了回执之外的资源：回执不再能证明停止，不结束。
+					const [current] =
+						await client`select resource_observation from platform.session_sandbox_allocations where conversation_id = ${work.conversationId}`;
+					const pod = resources.find((resource) => resource.kind === "Pod");
+					if (!pod) throw new Error("Expected source Pod");
+					await client`update platform.session_sandbox_allocations
+						set resource_observation = ${client.json({
+							status: "stopped",
+							resources: [pvc, pod],
+						})}
+						where conversation_id = ${work.conversationId}`;
+					expect(await store.claimSandboxReconciliation(request)).toBeNull();
+					const [held] =
+						await client`select status from platform.outbox_items where id = ${request.itemId}`;
+					expect(held?.status).toBe("pending");
+					await client`update platform.session_sandbox_allocations
+						set resource_observation = ${client.json(current?.resource_observation)}
+						where conversation_id = ${work.conversationId}`;
+					// 回执本身不再通过 Core 判定（来源 fence 不符）：同样不结束。
+					await client`update platform.outbox_items
+						set payload = jsonb_set(payload, '{lifecycle,stopReceipt,sourceResourceFence}', '999')
+						where id = ${request.itemId}`;
+					expect(await store.claimSandboxReconciliation(request)).toBeNull();
+					const [rejected] =
+						await client`select status from platform.outbox_items where id = ${request.itemId}`;
+					expect(rejected?.status).toBe("pending");
+					await client`update platform.outbox_items
+						set payload = ${client.json(pending?.payload)}
+						where id = ${request.itemId}`;
+					expect(await store.claimSandboxReconciliation(request)).toBeNull();
+					const [settled] = await client`
+						select o.status, s.status as allocation_status, s.desired_state, s.resource_observation
+						from platform.outbox_items o
+						join platform.session_sandbox_allocations s on s.conversation_id = o.scope_id
+						where o.id = ${request.itemId}`;
+					expect(settled).toMatchObject({
+						status: "succeeded",
+						allocation_status: "stopped",
+						desired_state: "stopped",
+						resource_observation: { status: "stopped", resources: [pvc] },
+					});
+					return;
+				}
 				// Original verified Workload is a controlled receiver fixture, not runtime acceptance.
 				const target = structuredClone(verified);
 				target.sourceLifecycleRevision = 6;
