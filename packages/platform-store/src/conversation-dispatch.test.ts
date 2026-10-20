@@ -3864,6 +3864,71 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	// #2919：#2951 之前写入的历史参数摘要让 native capability 条目永远认领不到。
+	it.each([
+		["cancelled", "failed"],
+		["submitted", "stale"],
+	] as const)(
+		"retires a native capability item with an invalid payload only when its %s execution is terminal (#2919)",
+		async (executionStatus, outcome) => {
+			const work = await seed("conversation.turn.submit.v1", {
+				executionStatus: "completed",
+			});
+			const parameters = "summarize files";
+			await client`update platform.conversation_executions set status = ${executionStatus}
+				where execution_id = ${work.executionId}`;
+			await client`update platform.outbox_items
+				set operation = 'conversation.native-capability.invoke.v1', status = 'retry_scheduled',
+					payload = ${client.json({
+						schemaVersion: 1,
+						conversationId: work.conversationId,
+						executionId: work.executionId,
+						agentId: "agent-dispatch",
+						actorId: "actor-dispatch",
+						channelId: "web",
+						turnId: "turn-native",
+						sessionGeneration: 1,
+						capabilityId: "a".repeat(64),
+						capabilityKind: "skill",
+						directoryRevision: "b".repeat(64),
+						capabilitySourceVersion: "1.0.0",
+						parameters,
+						// 历史算法：对 JSON 编码后的参数取摘要。
+						parametersDigest: createHash("sha256")
+							.update(JSON.stringify(parameters))
+							.digest("hex"),
+					})}
+				where id = ${work.itemId}`;
+			const { store, decision } = await claim(work.itemId);
+			try {
+				expect(decision).toEqual({ outcome });
+				const [row] = await client<
+					{ status: string; delivery_fence: number }[]
+				>`
+					select status, delivery_fence::int from platform.outbox_items where id = ${work.itemId}`;
+				const events = await client<
+					{ event_type: string; code: string | null }[]
+				>`
+					select event_type, payload->>'errorCode' as code from platform.persisted_events
+					where stream_id = ${`outbox:${work.itemId}`}`;
+				if (outcome === "failed") {
+					expect(row).toEqual({ status: "failed", delivery_fence: 1 });
+					expect(events).toEqual([
+						{
+							event_type: "outbox.failed",
+							code: "NATIVE_CAPABILITY_PAYLOAD_INVALID",
+						},
+					]);
+				} else {
+					expect(row).toEqual({ status: "retry_scheduled", delivery_fence: 0 });
+					expect(events).toEqual([]);
+				}
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
 	it("filters unready business work until the Sandbox is ready", async () => {
 		const work = await seed();
 		const store = new PostgresConversationDispatchStoreV1({ databaseUrl });
