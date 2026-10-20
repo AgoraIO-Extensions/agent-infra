@@ -13,13 +13,15 @@ import type {
 	PersistedConversationEventV1,
 } from "../../pilot/generated/index.js";
 import {
-	completeFileUpload,
-	createFileUpload,
 	downloadFileContent,
 	issueFileAccess,
 	readFileLimits,
-	uploadFileContent,
 } from "../../pilot/generated/sdk.gen.js";
+import {
+	ConversationFileTransferError,
+	describeConversationFile,
+	uploadConversationFile,
+} from "./conversation-file-transfer.js";
 
 type UploadStatus = "queued" | "uploading" | "available" | "failed" | "expired";
 
@@ -122,71 +124,28 @@ export function useConversationFiles({
 			updateUpload(item.localId, { status: "uploading", error: undefined });
 			try {
 				const descriptor =
-					item.descriptor ?? (await describeFile(item.file, fileLimits));
+					item.descriptor ??
+					(await describeConversationFile(item.file, fileLimits));
 				updateUpload(item.localId, { descriptor });
-				const key = `web-file-${item.localId}`;
-				const created = await createFileUpload({
+				const projection = await uploadConversationFile({
 					client,
-					path: { conversationId },
-					headers: { "Idempotency-Key": key },
-					body: { schemaVersion: 1, descriptor },
-					responseStyle: "fields",
-					throwOnError: false,
+					conversationId,
+					file: item.file,
+					descriptor,
+					idempotencyKey: `web-file-${item.localId}`,
 					signal: controller.signal,
 				});
-				if (!created.data || created.response?.status !== 201)
-					throw new UploadError(isExpired(created.response?.status));
-				const access = await issueFileAccess({
-					client,
-					path: { conversationId, fileId: created.data.fileId },
-					headers: { "Idempotency-Key": `${key}-access` },
-					body: { schemaVersion: 1, operation: "write" },
-					responseStyle: "fields",
-					throwOnError: false,
-					signal: controller.signal,
-				});
-				if (!access.data || access.response?.status !== 200)
-					throw new UploadError(isExpired(access.response?.status));
-				const bytes = await uploadFileContent({
-					client,
-					path: { conversationId, fileId: created.data.fileId },
-					headers: {
-						"X-Platform-File-Grant": access.data.grant.token,
-						"Content-Length": descriptor.sizeBytes,
-					},
-					body: item.file,
-					responseStyle: "fields",
-					throwOnError: false,
-					signal: controller.signal,
-				});
-				if (bytes.response?.status !== 204)
-					throw new UploadError(isExpired(bytes.response?.status));
-				const completed = await completeFileUpload({
-					client,
-					path: { conversationId, fileId: created.data.fileId },
-					headers: { "X-Platform-File-Grant": access.data.grant.token },
-					body: { schemaVersion: 1, accessId: access.data.accessId },
-					responseStyle: "fields",
-					throwOnError: false,
-					signal: controller.signal,
-				});
-				if (!completed.data || completed.response?.status !== 200)
-					throw new UploadError(isExpired(completed.response?.status));
 				updateUpload(item.localId, {
-					status: completed.data.status === "expired" ? "expired" : "available",
-					projection: completed.data,
+					status: projection.status === "expired" ? "expired" : "available",
+					projection,
 				});
 			} catch (error) {
 				if (controller.signal.aborted) return;
+				const expired =
+					error instanceof ConversationFileTransferError && error.expired;
 				updateUpload(item.localId, {
-					status:
-						error instanceof UploadError && error.expired
-							? "expired"
-							: "failed",
-					error:
-						error instanceof UploadError && error.expired
-							? "上传授权已过期，请重试。"
-							: "上传失败，请重试。",
+					status: expired ? "expired" : "failed",
+					error: expired ? "上传授权已过期，请重试。" : "上传失败，请重试。",
 				});
 			} finally {
 				controllers.current.delete(item.localId);
@@ -431,34 +390,4 @@ export function formatBytes(value: number) {
 	if (value < 1024 ** 2) return `${Math.round(value / 1024)} KB`;
 	if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
 	return `${(value / 1024 ** 3).toFixed(1)} GB`;
-}
-
-async function describeFile(
-	file: File,
-	limits: FileLimitsV1,
-): Promise<FileDescriptorV1> {
-	const mediaType = file.type || "application/octet-stream";
-	if (!limits.mediaTypes.includes(mediaType)) throw new UploadError(false);
-	if (file.size > limits.maxBytes) throw new UploadError(false);
-	if (!globalThis.crypto?.subtle) throw new UploadError(false);
-	const digest = await crypto.subtle.digest(
-		"SHA-256",
-		await file.arrayBuffer(),
-	);
-	const sha256 = [...new Uint8Array(digest)]
-		.map((value) => value.toString(16).padStart(2, "0"))
-		.join("");
-	return { name: file.name, mediaType, sizeBytes: file.size, sha256 };
-}
-
-function isExpired(status?: number) {
-	return status === 401 || status === 403 || status === 404;
-}
-
-class UploadError extends Error {
-	readonly expired: boolean;
-	constructor(expired: boolean) {
-		super("file transfer failed");
-		this.expired = expired;
-	}
 }

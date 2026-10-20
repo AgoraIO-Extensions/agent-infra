@@ -51,6 +51,7 @@ import {
 	executionStatus,
 	isTerminal,
 } from "./conversation-screen-state.js";
+import { useSkillControlFiles } from "./conversation-skill-control-files.js";
 import { useAmbiguousDenial } from "./use-ambiguous-denial.js";
 import { useConversationCapabilityCatalog } from "./use-conversation-capability-catalog.js";
 import { useConversationCommands } from "./use-conversation-commands.js";
@@ -290,6 +291,21 @@ export function ActiveConversation({
 		attachmentsEnabled: agent.capabilities.attachments,
 		resultFilesEnabled: agent.capabilities.resultFiles,
 	});
+	// Skill 控制文件与普通附件共用同一套会话文件限制和上传授权，但只随 Invocation V2 提交。
+	const skillFiles = useSkillControlFiles({
+		conversationId,
+		limits: files.limits,
+		enabled: agent.capabilities.attachments,
+	});
+	const skillSelection =
+		capability.selected?.kind === "skill"
+			? capability.selected.identity
+			: undefined;
+	const clearSkillFiles = skillFiles.clear;
+	useEffect(() => {
+		// 换选或清除 Skill 后，旧调用选的控制文件不再属于当前待发送内容。
+		clearSkillFiles();
+	}, [skillSelection, clearSkillFiles]);
 	const mismatched = Boolean(conversation && conversation.agentId !== agentId);
 	const denied =
 		timeline.status === "denied" ||
@@ -583,15 +599,17 @@ export function ActiveConversation({
 		) => {
 			if (!command.invokeCapability(body)) return;
 			action.current = "native";
+			const controlFiles = skillFiles.entries.map((entry) => entry.file.name);
 			pendingInvocation.current = {
 				kind: selected.kind,
 				name: selected.name,
 				source: selected.source,
 				version: selected.version,
+				...(controlFiles.length > 0 ? { controlFiles } : {}),
 			};
 			setNotice("");
 		},
-		[command.invokeCapability],
+		[command.invokeCapability, skillFiles.entries],
 	);
 	function regenerate(messageId: string) {
 		if (blocked || preparing || commandLocked || active) return;
@@ -867,6 +885,18 @@ export function ActiveConversation({
 							: "发送"
 					}
 					capability={capability}
+					skillControlFiles={{
+						attachmentsEnabled: agent.capabilities.attachments,
+						limits: files.limits,
+						limitsError: files.limitsError,
+						entries: skillFiles.entries,
+						error: skillFiles.error,
+						ready: skillFiles.ready,
+						attachmentIds: skillFiles.attachmentIds,
+						onSelect: skillFiles.addFiles,
+						onRemove: skillFiles.remove,
+						onRetry: skillFiles.retry,
+					}}
 					model={
 						modelSelectable
 							? {
