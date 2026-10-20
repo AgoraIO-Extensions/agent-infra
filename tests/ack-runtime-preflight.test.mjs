@@ -92,7 +92,8 @@ if(args.includes('exec') && process.env.PROBE_TEST_SCENARIO === 'unsupported') p
 			}
 			if (scenario === "passed")
 				assert.equal(
-					JSON.parse(result.stdout.trim().split("\n").at(-1)).businessConversationVerified,
+					JSON.parse(result.stdout.trim().split("\n").at(-1))
+						.businessConversationVerified,
 					false,
 				);
 		} finally {
