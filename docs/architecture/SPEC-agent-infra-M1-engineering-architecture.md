@@ -756,6 +756,10 @@ Workload 调谐区分永久配置或 admission 拒绝与可重试的基础设施
 
 连续的 Kubernetes 401 或 403 属于明确授权拒绝，默认连续三次后进入既有失败清理/候选拒绝路径，不再消耗完整 `maximumAttempts` 预算；部署可把阈值限制在更小的有效预算内。其他原因继续使用原有重试预算，401/403 的连续计数在原因改变或步骤成功后归零。该规则只改变提前终止时机，不改变既有 `failureCode` 的含义或清理语义。
 
+部署策略不支持期望访问路由属于确定性拒绝。`platform-worker` 在 preflight 开始时、Registry 准入和任何 Kubernetes 写入之前核对访问路由：期望为平台身份入口（自有交互入口且身份责任为 `platform-managed`，对应 `route.exposure: platform-auth`），而部署策略没有提供可信的平台身份路由集成（`platformAuthAnnotations` 为空）时，本步以 `kubernetes_policy` 立即进入既有失败处理，不消耗 `maximumAttempts` 预算；Owner 或系统管理员重试创建时同样在首个 preflight 结束。该检查不改变已配置平台身份路由的部署，也不改变 preflight 之后各阶段对 `kubernetes_policy` 的重试语义。
+
+`creation_failed` 的 Agent 只向当前 Owner 与系统管理员提供一个失败类别。`platform-core` 由管理状态的 `failureCode` 与 Workload `lastFailure.reason` 推导：`health_check_failed` 为健康检查未通过；`preflight_rejected` 或 `kubernetes_policy` 为配置与部署不兼容，需要先调整配置或部署，重试不会成功；其余为部署暂不可用，可以稍后重试。浏览器经 `GET /api/v2/agents/{agentId}/creation-failure` 读取 `AgentCreationFailureProjectionV1`，其中只有 `schemaVersion`、`agentId` 和该类别，不返回原因码、尝试次数、Kubernetes status/kind/verb 或资源名；其他主体、不处于 `creation_failed` 的 Agent 与不存在的 Agent 一律返回 `RESOURCE_UNAVAILABLE`。
+
 ### 10.6 环境变量与 Secret
 
 Platform Secret 使用项目内置密文、部署加密公钥和 Worker-only 解密 keyring，取舍见 [ADR: Platform Secret 使用项目内置密文存储](../adr/0002-store-platform-secrets-as-application-ciphertext.md)。该模型不自动扩展到 Connection Provider 凭证。
@@ -1926,6 +1930,7 @@ Agent 投影的 `channels[].status` 只列出当前配置修订已配置的企�
 - `platform-worker` 根据 Platform DB 中保存的 Owner 身份责任选择只发布对应的一条用户访问路由；Agent Service 与 Pod 地址始终只在集群内部使用，Agent ServiceAccount 和 Owner 无权创建或修改 Service、Ingress 或 NetworkPolicy。
 - 选择自有身份入口时，平台发布 TLS 路由但不经过 Auth Gateway，也不注入可信 IdentityContext、Execution Grant 或平台撤权上下文；自定义 Agent 必须在服务端实施身份和权限，不能信任浏览器自行提交的用户 ID Header。账号生命周期、停用、撤权和会话终止由 Owner 的身份体系负责；需要部署身份状态或 Agent 可用范围变化立即生效时必须选择平台身份入口。
 - 选择平台身份入口时，路由必须经过 Auth Gateway。Gateway 每次请求校验公司账号和 Agent 可用范围，移除或覆盖调用方提交的身份 Header，并传递绑定公司用户、受众、Agent 与有效期的短期签名上下文；自定义 Agent 服务端必须校验签名、签发者、受众、有效期和 Agent 绑定，不能信任浏览器字段。权限撤销后新请求立即失败，长连接按短期凭证到期或服务端主动关闭。
+- 平台身份入口是部署能力。只有部署为 `platform-api` 装配了 Auth Gateway（`customAgentGateway`）时它才可用，此时 `platform-worker` 也必须配置平台身份路由集成（`platformAuthAnnotations`）。未装配时，Web 申请、修改后重新提交和 API 直接创建都在镜像准入前对“自有交互入口 + 平台身份入口”失败关闭，返回 409 `ACTION_UNAVAILABLE`：不创建或更新申请，也不进入审批队列，Web 在入口身份字段说明原因。两侧配置不一致时，由 [§10.5](#105-自定义-agent-runtime-manifest) 的 Worker preflight 规则兜底。
 
 ## 15. 数据与一致性
 
