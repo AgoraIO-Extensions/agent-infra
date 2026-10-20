@@ -1388,7 +1388,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				<FormSection
 					title="基本信息"
 					className="application-basic-section"
-					description="名称和描述会展示在 Agent 目录中。"
+					description="名称和描述会显示在 Agent 目录。"
 				>
 					<div className="form-grid">
 						<Field>
@@ -1424,6 +1424,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								required
 								value={description}
 							/>
+							{/* 文案受 design-tokens.spec.ts 的帮助文字断言锁定，按 web-ui.md「终验待回写设计稿」W-07 保留。 */}
 							<span className="field-help">不填写模型内部思考或外部凭证。</span>
 							<FieldError
 								id={errorId("description")}
@@ -1436,7 +1437,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				<FormSection
 					title="共同 Owner 与使用范围"
 					className="application-scope-section"
-					description="从目录选择可读的姓名和组织路径；提交时由服务端保存稳定标识。"
+					description="从目录选择人员和组织；提交时保存服务端 ID。"
 					descriptionId="application-access-help"
 				>
 					<div className="form-grid">
@@ -1446,6 +1447,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								kind="user"
 								label="共同 Owner 用户"
 								help="至少保留一名有效 Owner"
+								placeholder="搜索共同 Owner"
 								value={coOwnerIds}
 								fallbackLabels={ownerLabels}
 								onChange={(value) => {
@@ -1462,6 +1464,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							kind="user"
 							label="可使用的用户"
 							help="可选；用于补充个人范围"
+							placeholder="搜索姓名、邮箱或组织路径"
 							value={userAvailabilityIds}
 							onChange={(value) => {
 								setUserAvailabilityIds(value);
@@ -1492,7 +1495,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					<FormSection
 						title="模型与推理"
 						className="application-model-section"
-						description="只展示部署提供且通过目录校验的模型端点。"
+						description="这里只显示已部署且通过校验的模型。"
 					>
 						{/* 说明文字与内容之间按设计 .form-grid 留 16px。 */}
 						<div className="mt-4">

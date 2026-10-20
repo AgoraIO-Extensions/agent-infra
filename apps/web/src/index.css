@@ -3788,12 +3788,13 @@ body {
 	background: var(--foreground);
 	color: var(--surface);
 }
+/* 设计 .step.active：当前步为 --accent-ink，不是主操作的 --primary（W-05）。 */
 .form-stepper li.active {
-	color: var(--primary);
+	color: var(--accent-ink);
 }
 .form-stepper li.active::before {
-	border-color: var(--primary);
-	color: var(--primary);
+	border-color: var(--accent-ink);
+	color: var(--accent-ink);
 }
 .management-content .form-grid {
 	margin-top: 16px;

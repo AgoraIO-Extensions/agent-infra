@@ -895,6 +895,8 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await capture(page, info, "application-pending");
 	api.release();
 	await expect(pageStatus(page)).toBeFocused();
+	// W-08：设计 .notice p 为常规字重，提交结果不再加粗。
+	await expect(pageStatus(page)).toHaveCSS("font-weight", "400");
 	await expect(
 		page.getByRole("link", { name: "查看申请详情", exact: true }),
 	).toHaveAttribute("href", "/my-agents/application-browser-1");

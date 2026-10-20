@@ -2194,4 +2194,32 @@ describe("AgentApplicationForm design alignment", () => {
 		expect(icon?.getAttribute("aria-hidden")).toBe("true");
 		expect(submit.lastElementChild).toBe(icon);
 	});
+
+	// W-07：分区说明与目录占位符按设计 renderApplicationForm 原文。
+	it("uses the design section copy and directory placeholders (W-07)", () => {
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		const description = (title: string) =>
+			screen
+				.getByRole("heading", { level: 2, name: title })
+				.parentElement?.querySelector('[data-slot="form-section-description"]')
+				?.textContent;
+		expect(description("基本信息")).toBe("名称和描述会显示在 Agent 目录。");
+		expect(description("共同 Owner 与使用范围")).toBe(
+			"从目录选择人员和组织；提交时保存服务端 ID。",
+		);
+		expect(description("模型与推理")).toBe(
+			"这里只显示已部署且通过校验的模型。",
+		);
+		const placeholder = (label: string) =>
+			screen.getByRole("combobox", { name: label }).getAttribute("placeholder");
+		expect(placeholder("共同 Owner 用户")).toBe("搜索共同 Owner");
+		expect(placeholder("可使用的用户")).toBe("搜索姓名、邮箱或组织路径");
+		expect(placeholder("可使用的组织")).toBe("搜索组织名称或路径");
+	});
 });

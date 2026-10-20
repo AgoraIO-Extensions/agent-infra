@@ -679,6 +679,52 @@ test("application form footer, field errors, legends and option labels follow th
 	await noHorizontalOverflow(page);
 });
 
+// W-05 / W-07 / W-10：创建与修改申请共用的步骤条、分区说明与目录占位符按设计 #application-form。
+for (const path of [
+	"/my-agents/new",
+	"/my-agents/application-browser-1/edit",
+] as const) {
+	test(`application form stepper, section copy and directory placeholders follow the design on ${path} (W-05 / W-07 / W-10)`, async ({
+		page,
+	}) => {
+		await fixture(page);
+		await page.goto(path);
+		await expect(page.getByLabel("Agent 名称")).toBeVisible();
+		const accentInk = await resolved(page, "color", "var(--accent-ink)");
+		const active = page.locator(".form-stepper li.active");
+		await expect(active).toHaveText("配置");
+		await expect(active).toHaveCSS("color", accentInk);
+		expect(
+			await active.evaluate((element) => {
+				const before = getComputedStyle(element, "::before");
+				return [before.borderTopColor, before.color];
+			}),
+		).toEqual([accentInk, accentInk]);
+		const description = (title: string) =>
+			page
+				.locator('section[data-slot="form-section"]', {
+					has: page.getByRole("heading", { level: 2, name: title }),
+				})
+				.locator(':scope > [data-slot="form-section-description"]');
+		await expect(description("基本信息")).toHaveText(
+			"名称和描述会显示在 Agent 目录。",
+		);
+		await expect(description("共同 Owner 与使用范围")).toHaveText(
+			"从目录选择人员和组织；提交时保存服务端 ID。",
+		);
+		await expect(description("模型与推理")).toHaveText(
+			"这里只显示已部署且通过校验的模型。",
+		);
+		await expect(
+			page.getByRole("combobox", { name: "可使用的用户" }),
+		).toHaveAttribute("placeholder", "搜索姓名、邮箱或组织路径");
+		await expect(
+			page.getByRole("combobox", { name: "可使用的组织" }),
+		).toHaveAttribute("placeholder", "搜索组织名称或路径");
+		await noHorizontalOverflow(page);
+	});
+}
+
 test("application detail puts actions in the heading, shows three progress rows and a next step (M-11 / M-12 / M-04)", async ({
 	page,
 }, info) => {

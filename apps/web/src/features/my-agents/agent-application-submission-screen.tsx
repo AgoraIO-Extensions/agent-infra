@@ -186,7 +186,8 @@ export function AgentApplicationSubmissionScreen(
 							tone="info"
 							ref={resultRef}
 							tabIndex={-1}
-							className="my-3 font-medium"
+							// 设计 .notice p：提交结果为常规字重（W-08）。
+							className="my-3"
 							role="status"
 						>
 							<AlertDescription>
