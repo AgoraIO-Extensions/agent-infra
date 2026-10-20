@@ -1,0 +1,42 @@
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agent-infra-platform-migration
+  annotations: {helm.sh/hook: pre-install,pre-upgrade, helm.sh/hook-delete-policy: before-hook-creation}
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      {{- include "ack.pullSecrets" . | nindent 6 }}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: migrate
+          image: {{ .Values.images.api }}
+          command: [node, node_modules/@agent-infra/platform-store/dist/migrate-cli.mjs]
+          env:
+            - name: PLATFORM_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: {{ .Values.secrets.database }}, key: url}}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agent-infra-directory-migration
+  annotations: {helm.sh/hook: pre-install,pre-upgrade, helm.sh/hook-delete-policy: before-hook-creation}
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      {{- include "ack.pullSecrets" . | nindent 6 }}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: migrate
+          image: {{ .Values.images.directory }}
+          command: [node, scripts/migrate.mjs]
+          env:
+            - name: DIRECTORY_MIGRATION_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: {{ .Values.secrets.directoryMigrationDatabase }}, key: url}}
+            - {name: DIRECTORY_RUNTIME_DATABASE_ROLE, value: {{ .Values.directory.runtimeDatabaseRole | quote }}}
+{{- end }}

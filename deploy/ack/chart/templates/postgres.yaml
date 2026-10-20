@@ -1,0 +1,48 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-infra-postgres
+  labels: {app.kubernetes.io/name: agent-infra-postgres}
+spec:
+  clusterIP: None
+  selector: {app.kubernetes.io/name: agent-infra-postgres}
+  ports: [{name: postgres, port: 5432, targetPort: postgres}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: agent-infra-postgres
+  labels: {app.kubernetes.io/name: agent-infra-postgres}
+spec:
+  serviceName: agent-infra-postgres
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: agent-infra-postgres}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: agent-infra-postgres}}
+    spec:
+      {{- include "ack.pullSecrets" . | nindent 6 }}
+      securityContext: {runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999, seccompProfile: {type: RuntimeDefault}}
+      {{- include "ack.scheduling" .Values.scheduling.postgres | nindent 6 }}
+      containers:
+        - name: postgres
+          image: {{ .Values.images.postgres }}
+          imagePullPolicy: IfNotPresent
+          ports: [{name: postgres, containerPort: 5432}]
+          env:
+            - {name: POSTGRES_USER, value: agent_infra}
+            - {name: POSTGRES_DB, value: agent_infra}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.secrets.database }}, key: password}}
+          resources: {{ toYaml .Values.resources.postgres | nindent 12 }}
+          livenessProbe: {exec: {command: [sh, -c, "pg_isready -U agent_infra -d agent_infra"]}, initialDelaySeconds: 20, periodSeconds: 10}
+          readinessProbe: {exec: {command: [sh, -c, "pg_isready -U agent_infra -d agent_infra"]}, initialDelaySeconds: 5, periodSeconds: 5}
+          volumeMounts: [{name: data, mountPath: /var/lib/postgresql/data}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.postgres.storageClass }}
+        resources: {requests: {storage: {{ .Values.postgres.storageSize }}}}
+{{- end }}

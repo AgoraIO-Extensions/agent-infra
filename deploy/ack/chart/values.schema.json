@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["images", "secrets", "publicOrigin", "directory", "scheduling", "resources", "postgres", "ingress", "migrations"],
+  "properties": {
+    "images": {"type": "object", "additionalProperties": true, "required": ["web", "api", "worker", "directory", "postgres", "pullSecrets"]},
+    "secrets": {"type": "object", "additionalProperties": {"type": "string"}},
+    "publicOrigin": {"type": "string", "pattern": "^https://"},
+    "directory": {"type": "object", "required": ["corpId", "sourceConfigMap", "sourceModule", "runtimeDatabaseRole"]},
+    "scheduling": {"type": "object"},
+    "resources": {"type": "object"},
+    "postgres": {"type": "object"},
+    "ingress": {"type": "object"},
+    "migrations": {"type": "object"}
+  }
+}
