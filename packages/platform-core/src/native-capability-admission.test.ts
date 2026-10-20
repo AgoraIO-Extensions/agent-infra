@@ -1,12 +1,19 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { FakeNativeCapabilityMetadataRevalidationV1 } from "./fake-native-capability-admission.ts";
+import type { FileLimitsV1, FileRecordV1 } from "./file-authority.ts";
 import {
 	createNativeCapabilityAdmissionUseCaseV1,
+	type NativeCapabilityAdmissionRequestV2,
 	type NativeCapabilityAdmissionStateV1,
 	type NativeCapabilityAdmissionTransactionPortV1,
+	type NativeCapabilityInputLimitsPortV1,
 	type NativeCapabilityMetadataRevalidationPortV1,
+	nativeCapabilityAdmissionRequestDigest,
+	nativeCapabilityAdmissionRequestDigestV2,
+	parseNativeCapabilityAdmissionRequest,
 	parseNativeCapabilityAdmissionRequestV1,
+	parseNativeCapabilityAdmissionRequestV2,
 } from "./native-capability-admission.ts";
 
 const authority = {
@@ -109,7 +116,9 @@ function useCase(
 		conversation,
 		activeExecution: null,
 		authorizationRevision: "auth-1",
+		inputFiles: null,
 	},
+	inputLimits?: NativeCapabilityInputLimitsPortV1,
 ) {
 	return createNativeCapabilityAdmissionUseCaseV1({
 		authorization: {
@@ -119,6 +128,8 @@ function useCase(
 		},
 		metadata,
 		transaction: transaction(state),
+		...(inputLimits ? { inputLimits } : {}),
+		now: () => new Date("2026-10-13T00:00:00.000Z"),
 		newId: (() => {
 			let next = 0;
 			return () => `generated-${++next}`;
@@ -255,6 +266,7 @@ describe("native capability admission contract", () => {
 				status: "unknown" as const,
 			},
 			authorizationRevision: "auth-1",
+			inputFiles: null,
 		};
 		const decision = await useCase(metadata, state).admit(request);
 		expect(decision).toEqual({ outcome: "busy" });
@@ -311,6 +323,7 @@ describe("native capability admission contract", () => {
 				conversation,
 				activeExecution: null,
 				authorizationRevision: "auth-1",
+				inputFiles: null,
 			}),
 			newId: () => "generated",
 		}).admit(request);
@@ -351,6 +364,7 @@ describe("native capability admission contract", () => {
 				conversation,
 				activeExecution: null,
 				authorizationRevision: "auth-1",
+				inputFiles: null,
 			}),
 			newId: () => "generated",
 		}).admit(request);
@@ -380,6 +394,283 @@ describe("native capability admission contract", () => {
 			isCurrent: () => true,
 		}).admit(request);
 		expect(decision).toEqual({
+			outcome: "unavailable",
+			reason: "metadata_unavailable",
+		});
+	});
+});
+
+const textLimits: FileLimitsV1 = {
+	revision: "limits-1",
+	expiresAt: "2099-01-01T00:00:00Z",
+	mediaTypes: ["text/plain"],
+	maxBytes: 4096,
+};
+
+function textFile(
+	fileId: string,
+	overrides: Partial<FileRecordV1> = {},
+): FileRecordV1 {
+	return {
+		actorId: authority.actorId,
+		agentId: authority.agentId,
+		channelId: authority.channelId,
+		conversationId: "conversation-1",
+		fileId,
+		objectRef: `object-${fileId}`,
+		kind: "attachment",
+		idempotencyKey: `upload-${fileId}`,
+		descriptor: {
+			name: `${fileId}.txt`,
+			mediaType: "text/plain",
+			sizeBytes: 5,
+			sha256: "e".repeat(64),
+		},
+		status: "available",
+		executionId: null,
+		messageId: null,
+		sessionGeneration: null,
+		objectVersion: "version-1",
+		etag: "etag-1",
+		createdAt: "2026-10-13T00:00:00.000Z",
+		expiresAt: "2099-01-01T00:00:00.000Z",
+		updatedAt: "2026-10-13T00:00:00.000Z",
+		revision: 1,
+		...overrides,
+	};
+}
+
+const fileA = "file-a";
+const fileB = "file-b";
+
+const v2Request: NativeCapabilityAdmissionRequestV2 = {
+	...request,
+	schemaVersion: 2,
+	attachments: [fileA, fileB],
+};
+
+function v2UseCase(
+	input: {
+		readonly files?: readonly FileRecordV1[];
+		readonly limits?: FileLimitsV1 | null;
+		readonly metadata?: NativeCapabilityMetadataRevalidationPortV1;
+		readonly inputFiles?: NativeCapabilityAdmissionStateV1["inputFiles"];
+	} = {},
+) {
+	const files = new Map(
+		(input.files ?? [textFile(fileA), textFile(fileB)]).map((file) => [
+			file.fileId,
+			file,
+		]),
+	);
+	return useCase(
+		input.metadata ??
+			new FakeNativeCapabilityMetadataRevalidationV1({ projection }),
+		{
+			conversation,
+			activeExecution: null,
+			authorizationRevision: "auth-1",
+			inputFiles:
+				input.inputFiles === undefined
+					? { getFile: async (fileId) => files.get(fileId) ?? null }
+					: input.inputFiles,
+		},
+		{
+			async read() {
+				return input.limits === undefined ? textLimits : input.limits;
+			},
+		},
+	);
+}
+
+describe("native capability Invocation V2 text inputs", () => {
+	it("persists the ordered resolved inputs into the plan, native payload and idempotency digest", async () => {
+		const decision = await v2UseCase().admit(v2Request);
+		if (decision.outcome !== "accepted")
+			throw new Error("Expected Invocation V2 acceptance");
+		const facts = [
+			{
+				fileId: fileA,
+				sha256: "e".repeat(64),
+				byteLength: 5,
+				mediaType: "text/plain" as const,
+			},
+			{
+				fileId: fileB,
+				sha256: "e".repeat(64),
+				byteLength: 5,
+				mediaType: "text/plain" as const,
+			},
+		];
+		expect(decision.plan.attachments).toEqual(facts);
+		expect(decision.plan.outbox.payload.attachments).toEqual(facts);
+		expect(decision.plan.idempotency.requestDigest).toBe(
+			nativeCapabilityAdmissionRequestDigestV2(v2Request),
+		);
+		expect(decision.plan.idempotency.requestDigest).toBe(
+			nativeCapabilityAdmissionRequestDigest(v2Request),
+		);
+		expect(decision.plan.idempotency.requestDigest).not.toBe(
+			nativeCapabilityAdmissionRequestDigest({
+				...v2Request,
+				attachments: [fileB, fileA],
+			}),
+		);
+	});
+
+	it.each([1, 2, 3, 4])("accepts %i ordered text files", async (count) => {
+		const files = Array.from({ length: count }, (_, index) =>
+			textFile(`file-${index}`),
+		);
+		const decision = await v2UseCase({ files }).admit({
+			...v2Request,
+			attachments: files.map((file) => file.fileId),
+		});
+		expect(decision.outcome).toBe("accepted");
+		if (decision.outcome !== "accepted") return;
+		expect(
+			decision.plan.attachments?.map((attachment) => attachment.fileId),
+		).toEqual(files.map((file) => file.fileId));
+	});
+
+	it("keeps Invocation V1 plans free of attachments", async () => {
+		const decision = await useCase().admit(request);
+		if (decision.outcome !== "accepted")
+			throw new Error("Expected Invocation V1 acceptance");
+		expect(decision.plan.attachments).toBeUndefined();
+		expect(decision.plan.outbox.payload.attachments).toBeUndefined();
+	});
+
+	it("rejects attachments for a command capability", async () => {
+		const decision = await v2UseCase({
+			metadata: new FakeNativeCapabilityMetadataRevalidationV1({
+				projection: commandProjection,
+			}),
+		}).admit({
+			...v2Request,
+			capabilityId: commandRequest.capabilityId,
+			directoryRevision: commandRequest.directoryRevision,
+			parameters: "",
+		});
+		expect(decision).toEqual({ outcome: "unsupported" });
+	});
+
+	it.each([
+		{ attachments: [] },
+		{ attachments: ["a", "b", "c", "d", "e"] },
+		{ attachments: [fileA, fileA] },
+		{ schemaVersion: 1, attachments: [fileA] },
+	])("rejects an invalid ordered input request %j", (change) => {
+		expect(() =>
+			parseNativeCapabilityAdmissionRequest({ ...v2Request, ...change }),
+		).toThrow();
+	});
+
+	it("requires the explicit V2 version for attachments", () => {
+		expect(parseNativeCapabilityAdmissionRequestV2(v2Request)).toEqual(
+			v2Request,
+		);
+		expect(() => parseNativeCapabilityAdmissionRequestV1(v2Request)).toThrow();
+	});
+
+	it.each([
+		{
+			label: "oversize file",
+			files: [
+				textFile(fileA, {
+					descriptor: { ...textFile(fileA).descriptor, sizeBytes: 4097 },
+				}),
+			],
+		},
+		{
+			label: "non-text media",
+			files: [
+				textFile(fileA, {
+					descriptor: { ...textFile(fileA).descriptor, mediaType: "image/png" },
+				}),
+			],
+		},
+		{ label: "missing file", files: [textFile(fileA)] },
+		{
+			label: "foreign actor",
+			files: [textFile(fileA, { actorId: "other-actor" })],
+		},
+		{
+			label: "foreign agent",
+			files: [textFile(fileA, { agentId: "other-agent" })],
+		},
+		{
+			label: "foreign channel",
+			files: [textFile(fileA, { channelId: "other-channel" })],
+		},
+		{
+			label: "foreign conversation",
+			files: [textFile(fileA, { conversationId: "other-conversation" })],
+		},
+		{
+			label: "message-bound file",
+			files: [textFile(fileA, { messageId: "message-1" })],
+		},
+		{
+			label: "execution-bound file",
+			files: [
+				textFile(fileA, { executionId: "execution-1", sessionGeneration: 3 }),
+			],
+		},
+		{
+			label: "unavailable file",
+			files: [textFile(fileA, { status: "pending" })],
+		},
+	])("denies $label", async ({ files }) => {
+		const decision = await v2UseCase({ files }).admit(v2Request);
+		expect(decision).toEqual({ outcome: "denied" });
+	});
+
+	it.each([
+		{
+			label: "media type not allowed",
+			limits: { ...textLimits, mediaTypes: ["image/png"] },
+		},
+		{
+			label: "byte limit below the file",
+			limits: { ...textLimits, maxBytes: 4 },
+		},
+		{
+			label: "expired limits",
+			limits: { ...textLimits, expiresAt: "2000-01-01T00:00:00Z" },
+		},
+		{ label: "missing limits", limits: null },
+	])("denies when FileLimits fail closed: $label", async ({ limits }) => {
+		const decision = await v2UseCase({ limits }).admit(v2Request);
+		expect(decision).toEqual({ outcome: "denied" });
+	});
+
+	it("fails closed without a transaction file reader", async () => {
+		expect(await v2UseCase({ inputFiles: null }).admit(v2Request)).toEqual({
+			outcome: "unavailable",
+			reason: "metadata_unavailable",
+		});
+	});
+
+	it("fails closed without a FileLimits port", async () => {
+		const use = createNativeCapabilityAdmissionUseCaseV1({
+			authorization: {
+				async authorize() {
+					return { outcome: "allowed", authority };
+				},
+			},
+			metadata: new FakeNativeCapabilityMetadataRevalidationV1({
+				projection,
+			}),
+			transaction: transaction({
+				conversation,
+				activeExecution: null,
+				authorizationRevision: "auth-1",
+				inputFiles: { getFile: async () => textFile(fileA) },
+			}),
+			now: () => new Date("2026-10-13T00:00:00.000Z"),
+		});
+		expect(await use.admit(v2Request)).toEqual({
 			outcome: "unavailable",
 			reason: "metadata_unavailable",
 		});

@@ -74,6 +74,10 @@ export async function originalOperationBinding(
 	) {
 		const payload = exactPayload(origin.payload, origin.operation);
 		const native = payload?.nativeCapability;
+		// Native V5 dispatch owns delivering the accepted ordered attachments to
+		// the Host. Until that protocol is wired, never fall back to a V4/V2
+		// request that would silently drop the Execution's input sequence.
+		if (native?.attachments !== undefined) return null;
 		if (
 			origin.id !== `conversation:native-capability:${claim.executionId}` ||
 			!validText(origin.request_id) ||

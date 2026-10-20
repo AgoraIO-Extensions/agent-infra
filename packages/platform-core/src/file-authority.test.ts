@@ -1,6 +1,15 @@
 import { expect, it } from "vitest";
 import { FakeFileStoreV1 } from "./fake-file-store.ts";
-import { createFileAuthorityV1 } from "./file-authority.ts";
+import {
+	bindInputFileV1,
+	bindNativeTextInputFileV1,
+	createFileAuthorityV1,
+	type FileLimitsV1,
+	type FileRecordV1,
+	type FileScopeV1,
+	nativeTextInputLimitV1,
+	resolveNativeTextInputsV1,
+} from "./file-authority.ts";
 
 it("reserves one immutable upload intent and rejects conflicting replay", async () => {
 	const store = new FakeFileStoreV1();
@@ -631,4 +640,327 @@ it("applies current limits to delegated inputs while preserving authorized user 
 			},
 		),
 	).rejects.toMatchObject({ code: "denied" });
+});
+
+const nativeScope: FileScopeV1 = {
+	actorId: "native-actor",
+	agentId: "native-agent",
+	channelId: "web",
+	conversationId: "native-conversation",
+};
+
+const nativeNow = new Date("2026-10-13T00:00:00.000Z");
+
+const nativeLimits: FileLimitsV1 = {
+	revision: "native-limits",
+	expiresAt: "2099-01-01T00:00:00Z",
+	maxBytes: nativeTextInputLimitV1.maxBytes,
+	mediaTypes: [nativeTextInputLimitV1.mediaType],
+};
+
+function nativeRecord(
+	fileId: string,
+	overrides: Partial<FileRecordV1> = {},
+): FileRecordV1 {
+	return {
+		...nativeScope,
+		fileId,
+		objectRef: `object-${fileId}`,
+		kind: "attachment",
+		idempotencyKey: `intent-${fileId}`,
+		descriptor: {
+			name: `${fileId}.txt`,
+			mediaType: "text/plain",
+			sizeBytes: 5,
+			sha256: "a".repeat(64),
+		},
+		status: "available",
+		executionId: null,
+		messageId: null,
+		sessionGeneration: null,
+		objectVersion: "version-1",
+		etag: "etag-1",
+		createdAt: "2026-10-13T00:00:00.000Z",
+		expiresAt: "2099-01-01T00:00:00Z",
+		updatedAt: "2026-10-13T00:00:00.000Z",
+		revision: 1,
+		...overrides,
+	};
+}
+
+it("binds native text inputs once to an Execution and resolves ordered facts", () => {
+	const first = nativeRecord("native-a");
+	const second = nativeRecord("native-b");
+	const bound = bindNativeTextInputFileV1(
+		first,
+		nativeScope,
+		{ executionId: "execution", sessionGeneration: 1 },
+		nativeNow,
+	);
+	expect(bound).toMatchObject({
+		fileId: "native-a",
+		messageId: null,
+		executionId: "execution",
+		sessionGeneration: 1,
+		revision: 2,
+	});
+	expect(() =>
+		bindNativeTextInputFileV1(
+			bound,
+			nativeScope,
+			{ executionId: "other-execution", sessionGeneration: 1 },
+			nativeNow,
+		),
+	).toThrow();
+	expect(() =>
+		bindNativeTextInputFileV1(
+			bindInputFileV1(
+				second,
+				nativeScope,
+				{
+					messageId: "message",
+					executionId: "execution",
+					sessionGeneration: 1,
+				},
+				nativeNow,
+			),
+			nativeScope,
+			{ executionId: "execution-2", sessionGeneration: 1 },
+			nativeNow,
+		),
+	).toThrow();
+	expect(
+		resolveNativeTextInputsV1(
+			[nativeRecord("native-b"), first],
+			nativeScope,
+			nativeLimits,
+			nativeNow,
+		),
+	).toEqual([
+		{
+			fileId: "native-b",
+			sha256: "a".repeat(64),
+			byteLength: 5,
+			mediaType: "text/plain",
+		},
+		{
+			fileId: "native-a",
+			sha256: "a".repeat(64),
+			byteLength: 5,
+			mediaType: "text/plain",
+		},
+	]);
+});
+
+it.each([
+	{ label: "foreign actor", overrides: { actorId: "other" } },
+	{ label: "foreign agent", overrides: { agentId: "other" } },
+	{ label: "foreign channel", overrides: { channelId: "other" } },
+	{ label: "foreign conversation", overrides: { conversationId: "other" } },
+	{ label: "unavailable input", overrides: { status: "pending" as const } },
+	{
+		label: "non-text input",
+		overrides: {
+			descriptor: {
+				name: "a.png",
+				mediaType: "image/png",
+				sizeBytes: 5,
+				sha256: "a".repeat(64),
+			},
+		},
+	},
+	{
+		label: "oversize input",
+		overrides: {
+			descriptor: {
+				name: "a.txt",
+				mediaType: "text/plain",
+				sizeBytes: nativeTextInputLimitV1.maxBytes + 1,
+				sha256: "a".repeat(64),
+			},
+		},
+	},
+	{ label: "message-bound input", overrides: { messageId: "message" } },
+	{
+		label: "execution-bound input",
+		overrides: { executionId: "execution", sessionGeneration: 1 },
+	},
+])("refuses to bind a $label", ({ overrides }) => {
+	expect(() =>
+		bindNativeTextInputFileV1(
+			nativeRecord("native-invalid", overrides as Partial<FileRecordV1>),
+			nativeScope,
+			{ executionId: "execution", sessionGeneration: 1 },
+			nativeNow,
+		),
+	).toThrow();
+});
+
+it.each([
+	{ label: "missing input", inputs: [null] },
+	{
+		label: "five inputs",
+		inputs: ["a", "b", "c", "d", "e"].map((id) => nativeRecord(id)),
+	},
+	{
+		label: "duplicate input",
+		inputs: [nativeRecord("a"), nativeRecord("a")],
+	},
+	{
+		label: "no FileLimits",
+		inputs: [nativeRecord("a")],
+		limits: null,
+	},
+	{
+		label: "media type not allowed",
+		inputs: [nativeRecord("a")],
+		limits: { ...nativeLimits, mediaTypes: ["image/png"] },
+	},
+	{
+		label: "byte limit below the file",
+		inputs: [nativeRecord("a")],
+		limits: { ...nativeLimits, maxBytes: 1 },
+	},
+])("refuses to resolve $label", ({ inputs, limits }) => {
+	expect(() =>
+		resolveNativeTextInputsV1(
+			inputs,
+			nativeScope,
+			limits === undefined ? nativeLimits : limits,
+			nativeNow,
+		),
+	).toThrow();
+});
+
+it("authorizes Execution-scoped input reads only for the bound Execution and generation", async () => {
+	const store = new FakeFileStoreV1();
+	store.seedConversation(nativeScope);
+	store.seedExecution({
+		...nativeScope,
+		executionId: "execution",
+		sessionGeneration: 1,
+		status: "processing",
+		stopPending: false,
+	});
+	const service = createFileAuthorityV1({
+		store,
+		now: () => nativeNow,
+		intentTtlMs: 60000,
+		accessTtlMs: 10000,
+		issuer: "platform",
+		keyVersion: "key",
+		storage: {
+			inspect: async () => ({
+				name: "input.txt",
+				mediaType: "text/plain",
+				sizeBytes: 5,
+				sha256: "a".repeat(64),
+				version: "version",
+				etag: "etag",
+			}),
+		},
+	});
+	const authorization = {
+		authorize: async () => ({
+			...nativeScope,
+			limits: nativeLimits,
+			execution: null,
+		}),
+	};
+	const created = await service.createUpload(
+		{
+			conversationId: nativeScope.conversationId,
+			idempotencyKey: "native-upload",
+			descriptor: {
+				name: "input.txt",
+				mediaType: "text/plain",
+				sizeBytes: 5,
+				sha256: "a".repeat(64),
+			},
+		},
+		authorization,
+	);
+	const write = {
+		conversationId: nativeScope.conversationId,
+		fileId: created.fileId,
+		operation: "write" as const,
+		idempotencyKey: "native-write",
+	};
+	const issued = await service.issueAccess(write, authorization);
+	await service.complete(
+		{ ...write, accessId: issued.accessId },
+		authorization,
+	);
+	await store.transaction(nativeScope.conversationId, async (tx) => {
+		await tx.putFile(
+			bindNativeTextInputFileV1(
+				await tx.getFile(created.fileId),
+				nativeScope,
+				{ executionId: "execution", sessionGeneration: 1 },
+				nativeNow,
+			),
+		);
+	});
+	const executionAuthority = {
+		authorize: async () => ({
+			...nativeScope,
+			limits: nativeLimits,
+			execution: {
+				executionId: "execution",
+				sessionGeneration: 1,
+				grantId: "grant",
+				attachments: [created.fileId],
+				expiresAt: "2099-01-01T00:00:00Z",
+			},
+		}),
+	};
+	const read = {
+		conversationId: nativeScope.conversationId,
+		fileId: created.fileId,
+		operation: "read" as const,
+		idempotencyKey: "native-read",
+	};
+	const access = await service.issueAccess(read, executionAuthority);
+	await expect(
+		service.authorizeAccess(
+			{ ...read, accessId: access.accessId },
+			executionAuthority,
+		),
+	).resolves.toMatchObject({ file: { fileId: created.fileId } });
+	for (const [label, execution] of Object.entries({
+		"another Execution": {
+			executionId: "execution-2",
+			sessionGeneration: 1,
+			grantId: "grant-2",
+			attachments: [created.fileId],
+			expiresAt: "2099-01-01T00:00:00Z",
+		},
+		"another Session generation": {
+			executionId: "execution",
+			sessionGeneration: 2,
+			grantId: "grant-3",
+			attachments: [created.fileId],
+			expiresAt: "2099-01-01T00:00:00Z",
+		},
+		"a revoked Grant": {
+			executionId: "execution",
+			sessionGeneration: 1,
+			grantId: "grant-4",
+			attachments: [],
+			expiresAt: "2099-01-01T00:00:00Z",
+		},
+	})) {
+		await expect(
+			service.issueAccess(
+				{ ...read, idempotencyKey: `denied-${label}` },
+				{
+					authorize: async () => ({
+						...nativeScope,
+						limits: nativeLimits,
+						execution,
+					}),
+				},
+			),
+		).rejects.toMatchObject({ code: "denied" });
+	}
 });

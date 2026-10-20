@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { RuntimeBusinessRequestV4 } from "@agent-infra/contracts/runtime";
 import {
 	bindInputFileV1,
+	bindNativeTextInputFileV1,
 	type ConversationCommandDecisionV1,
 	type ConversationExecutionAuthorityV1,
 	ConversationExecutionError,
@@ -16,9 +18,11 @@ import {
 	type NativeCapabilityAdmissionDecisionV1,
 	type NativeCapabilityAdmissionTransactionPortV1,
 	type NativeCapabilityInvocationPlanV1,
+	type NativeTextInputV1,
 	nativeCapabilityParametersDigestV1,
 	PersonalApiCredentialErrorV1,
 	parseConversationOperationEventV2,
+	parseNativeCapabilityAttachmentsV1,
 	parseTaskAuthorizationBoundaryV1,
 	planTaskSystemControlV1,
 	type TaskApiAuditPlanV1,
@@ -139,6 +143,17 @@ type NativeAdmissionAuthorized = Parameters<
 	NativeCapabilityAdmissionTransactionPortV1["admitNativeCapability"]
 >[3];
 
+function nativePlanAttachments(
+	value: unknown,
+): readonly NativeTextInputV1[] | undefined {
+	if (value === undefined) return undefined;
+	try {
+		return parseNativeCapabilityAttachmentsV1(value);
+	} catch {
+		return unavailable();
+	}
+}
+
 function nativeAdmissionPlan(
 	value: unknown,
 	request: NativeAdmissionRequest,
@@ -190,6 +205,8 @@ function nativeAdmissionPlan(
 			? (capability.source as Record<string, unknown>)
 			: undefined;
 	const command = request.command;
+	const attachments = nativePlanAttachments(candidate.attachments);
+	const outboxAttachments = nativePlanAttachments(outboxPayload?.attachments);
 	if (
 		candidate.schemaVersion !== 1 ||
 		candidate.kind !== "native-capability" ||
@@ -209,6 +226,15 @@ function nativeAdmissionPlan(
 		capability?.directoryRevision !== command.directoryRevision ||
 		typeof capabilitySource?.name !== "string" ||
 		typeof capabilitySource?.version !== "string" ||
+		(command.schemaVersion === 2
+			? !attachments ||
+				attachments.length !== command.attachments.length ||
+				attachments.some(
+					(entry, index) => entry.fileId !== command.attachments[index],
+				) ||
+				!isDeepStrictEqual(outboxAttachments, attachments) ||
+				capability?.kind !== "skill"
+			: attachments !== undefined || outboxAttachments !== undefined) ||
 		outbox?.id !== `conversation:native-capability:${candidate.executionId}` ||
 		outbox?.operation !== "conversation.native-capability.invoke.v1" ||
 		outboxPayload?.parameters !== command.parameters ||
@@ -360,10 +386,24 @@ export class PostgresConversationExecutionTransactionV1
 			}
 
 			const state = await readMessageState(transaction, conversation);
+			const inputFiles =
+				command.schemaVersion === 2
+					? {
+							async getFile(fileId: string) {
+								const [row] = await transaction<{ record: FileRecordV1 }[]>`
+									select record from platform.files
+									where file_id = ${fileId}
+										and conversation_id = ${command.conversationId}
+								`;
+								return row?.record ?? null;
+							},
+						}
+					: null;
 			const decision = await decide({
 				conversation,
 				activeExecution: state.activeExecution ?? null,
 				authorizationRevision: conversation.authorizationRevision,
+				inputFiles,
 			});
 			if ("outcome" in decision) return decision;
 			const plan = decision;
@@ -423,6 +463,50 @@ export class PostgresConversationExecutionTransactionV1
 					traceId: command.traceId,
 					requestId: command.requestId,
 				});
+			}
+			if (plan.attachments !== undefined) {
+				// SPEC §15.4.1: bind the accepted ordered file ids to this Execution
+				// once, in the same transaction that persists the Plan. A file already
+				// bound to a Message or another Execution fails closed.
+				if (command.schemaVersion !== 2) unavailable();
+				const fileScope = {
+					actorId: conversation.actorId,
+					agentId: conversation.agentId,
+					channelId: conversation.channelId,
+					conversationId: conversation.conversationId,
+				};
+				for (let index = 0; index < plan.attachments.length; index += 1) {
+					const attachment = plan.attachments[index];
+					if (!attachment || attachment.fileId !== command.attachments[index])
+						unavailable();
+					const [row] = await transaction<{ record: FileRecordV1 }[]>`
+						select record from platform.files
+						where file_id = ${attachment.fileId}
+							and conversation_id = ${plan.conversationId}
+						for update
+					`;
+					const file = bindNativeTextInputFileV1(
+						row?.record ?? null,
+						fileScope,
+						{
+							executionId: plan.executionId,
+							sessionGeneration: plan.sessionGeneration,
+						},
+						occurredAt,
+					);
+					if (
+						file.descriptor.sha256 !== attachment.sha256 ||
+						file.descriptor.sizeBytes !== attachment.byteLength ||
+						file.descriptor.mediaType !== attachment.mediaType
+					)
+						unavailable();
+					await transaction`
+						update platform.files
+						set record = ${transaction.json(file as unknown as JsonValue)},
+							updated_at = ${occurredAt}
+						where file_id = ${attachment.fileId}
+					`;
+				}
 			}
 			await transaction`
 				insert into platform.outbox_items
