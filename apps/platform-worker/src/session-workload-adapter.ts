@@ -1037,6 +1037,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				allocation.desiredState !== "running" ||
 				lifecycle.authority.targetDesiredState !== "running" ||
 				!receipt ||
+				!receipt.retainedPVC ||
 				!preparation ||
 				preparation.generation !== allocation.generation ||
 				preparation.resourceFence !== allocation.resourceFence ||
@@ -1339,6 +1340,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				readonly recordDeletionProgress?: (
 					progress: SessionSandboxDeletionProgressV1,
 				) => Promise<"committed" | "stale" | "unknown">;
+				/** 来源只记录了部分资源（准备中断，#2918）：未记录且不存在的种类视为从未创建。 */
+				readonly partialSource?: boolean;
 			} = {},
 		): Promise<SessionSandboxStopReceiptV1> {
 			if (options.client.namespace !== allocation.namespace)
@@ -1353,6 +1356,16 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			const previousByKind = new Map(
 				previous.map((resource) => [resource.kind, resource]),
 			);
+			// #2918：部分来源先确认所有未记录的种类都不存在，再删除任何资源；任一同名对象存在
+			// 都失败关闭，不接管也不留下删了一半的状态。
+			if (context.partialSource)
+				for (const expected of expectedResources) {
+					const kind =
+						expected.kind as SessionSandboxResourceIdentityV1["kind"];
+					if (previousByKind.has(kind)) continue;
+					if (await options.client.read(kind, expected.metadata?.name ?? ""))
+						throw new WorkloadKubernetesError("conflict");
+				}
 			const deletedResources: Array<
 				SessionSandboxStopReceiptV1["removed"][number]
 			> = [];
@@ -1435,6 +1448,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					// Runtime Secret：既不在集群里、也没被记录时没有可删除的对象（#2885）。
 					if (!prior && kind === "Secret" && allocation.runtime === null)
 						continue;
+					// #2918：部分准备的来源没有记录、集群里也不存在的种类从未被创建。
+					if (!prior && context.partialSource) continue;
 					if (!prior) throw new WorkloadKubernetesError("unavailable");
 					const identity = existing?.resource ?? prior;
 					const absence = {
@@ -1669,16 +1684,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				pvcExpected.metadata?.name ?? "",
 			);
 			const pvcPrior = previousByKind.get("PersistentVolumeClaim");
-			if (
-				!pvc ||
-				!pvcPrior ||
-				!owned(pvc, pvcExpected, allocation) ||
-				pvc.metadata?.uid !== pvcPrior.uid ||
-				!pvc.metadata.resourceVersion
-			)
-				throw new WorkloadKubernetesError("conflict");
-			return {
-				schemaVersion: 1,
+			const receipt = {
+				schemaVersion: 1 as const,
 				sandboxId: allocation.sandboxId,
 				sessionId: allocation.sessionId,
 				sourceGeneration: context.sourceGeneration ?? allocation.generation,
@@ -1688,6 +1695,23 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				targetResourceFence:
 					context.targetResourceFence ?? allocation.resourceFence,
 				removed: deletedResources,
+			};
+			// #2918：部分准备的来源从未记录 PVC 时，集群里也不能有同名 PVC（未记录的对象一律
+			// 失败关闭，不接管）；回执不保留 PVC。
+			if (context.partialSource && !pvcPrior) {
+				if (pvc) throw new WorkloadKubernetesError("conflict");
+				return { ...receipt, retainedPVC: null };
+			}
+			if (
+				!pvc ||
+				!pvcPrior ||
+				!owned(pvc, pvcExpected, allocation) ||
+				pvc.metadata?.uid !== pvcPrior.uid ||
+				!pvc.metadata.resourceVersion
+			)
+				throw new WorkloadKubernetesError("conflict");
+			return {
+				...receipt,
 				retainedPVC: {
 					...pvcPrior,
 					resourceVersion: pvc.metadata.resourceVersion,

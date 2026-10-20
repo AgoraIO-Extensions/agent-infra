@@ -1333,7 +1333,7 @@ describe("session sandbox workload adapter", () => {
 				return "committed";
 			},
 		});
-		expect(receipt.retainedPVC.kind).toBe("PersistentVolumeClaim");
+		expect(receipt.retainedPVC?.kind).toBe("PersistentVolumeClaim");
 		expect(progress).toHaveLength(15);
 		expect(
 			progress.filter((entry) => entry.state === "delete-requested"),
@@ -2102,7 +2102,7 @@ describe("drain of a source prepared before per-Sandbox Runtime inputs (#2885)",
 			"Service",
 			"ServiceAccount",
 		]);
-		expect(receipt.retainedPVC.uid).toBe(
+		expect(receipt.retainedPVC?.uid).toBe(
 			previous.find((resource) => resource.kind === "PersistentVolumeClaim")
 				?.uid,
 		);

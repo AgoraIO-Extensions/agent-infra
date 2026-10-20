@@ -14,7 +14,11 @@ import {
 	runtimeModelInjectionV4,
 	validateRuntimeModelProjectionV4,
 } from "@agent-infra/model-catalog";
-import type { SessionSandboxDeletionProgressV1 } from "@agent-infra/platform-core";
+import type {
+	SessionSandboxDeletionProgressV1,
+	SessionSandboxResourceIdentityV1,
+	SessionSandboxStopReceiptV1,
+} from "@agent-infra/platform-core";
 import {
 	ConversationRuntimeHostError,
 	type SessionSandboxReconciliationClaimV1,
@@ -566,6 +570,11 @@ function createSessionSandboxAllocationResolverV1(
 	});
 }
 
+/** 停止回执保留的资源：从未记录 PVC 的部分准备来源没有（#2918）。 */
+function retainedResources(receipt: SessionSandboxStopReceiptV1) {
+	return receipt.retainedPVC ? [receipt.retainedPVC] : [];
+}
+
 /** Production resource receiver; invoked only under the original Store lease. */
 export function createProductionSessionSandboxReceiverV1(
 	workload: WorkloadRuntimeOptionsV1,
@@ -613,7 +622,7 @@ export function createProductionSessionSandboxReceiverV1(
 				return {
 					status: "stopped" as const,
 					sourceStop: lifecycle.stopReceipt,
-					resources: [lifecycle.stopReceipt.retainedPVC],
+					resources: retainedResources(lifecycle.stopReceipt),
 				};
 			// #2917：上一轮排空已完成、只剩 PVC 的沙箱被管理转换重新当作来源。没有可删除的资源，
 			// 只读证明停止；与正常排空一样，执行未终态或已进入准备时不下结论。
@@ -643,7 +652,7 @@ export function createProductionSessionSandboxReceiverV1(
 				return {
 					status: "stopped" as const,
 					sourceStop: stopReceipt,
-					resources: [stopReceipt.retainedPVC],
+					resources: retainedResources(stopReceipt),
 				};
 			}
 			// #1481（按 Sandbox 投影 Runtime 输入）之前准备的来源没有模型投影（runtime 为 null），
@@ -668,6 +677,76 @@ export function createProductionSessionSandboxReceiverV1(
 					"control",
 				);
 				signal.throwIfAborted();
+				// #2918：准备中断留下的部分来源（未就绪、只记录了部分资源）。
+				if (
+					source.observation &&
+					source.observation.status !== "ready" &&
+					observed.status === "unknown"
+				) {
+					const same = (
+						left: readonly SessionSandboxResourceIdentityV1[],
+						right: SessionSandboxResourceIdentityV1,
+						version: boolean,
+					) =>
+						left.some(
+							(item) =>
+								item.kind === right.kind &&
+								item.uid === right.uid &&
+								(!version || item.resourceVersion === right.resourceVersion),
+						);
+					const keepsRecorded = sourceResources.every((resource) =>
+						same(observed.resources, resource, false),
+					);
+					const unchanged =
+						keepsRecorded &&
+						observed.resources.length === sourceResources.length &&
+						observed.resources.every((resource) =>
+							same(sourceResources, resource, true),
+						);
+					// 读到了新的归属资源，或记录的资源版本已前进：交给 Core 补全来源证据
+					// （只是证据，不是就绪或停止证明）。
+					if (keepsRecorded && !unchanged)
+						return {
+							status: "observed" as const,
+							resources: observed.resources,
+						};
+					// 证据稳定：按记录的 UID 删除，未记录且不存在的种类视为从未创建。
+					if (unchanged) {
+						if (!claim.drainComputeAllowed || lifecycle.preparation)
+							return { status: "unknown" as const, resources: sourceResources };
+						if (!recordDeletionProgress)
+							throw new Error("Session Sandbox deletion CAS is unavailable");
+						const stopReceipt = await adapter.cleanup(
+							allocationFor(
+								claim.sandbox,
+								source.policy,
+								sourceDeployment,
+								source.modelProjection,
+								"stopped",
+								source.sandbox.generation,
+								source.resourceFence,
+								false,
+							),
+							sourceResources,
+							{
+								sourceGeneration: source.sandbox.generation,
+								sourceResourceFence: source.resourceFence,
+								targetGeneration: claim.sandbox.generation,
+								targetResourceFence: claim.resourceFence,
+								managementFence: lifecycle.authority.managementFence,
+								deletionProgress: lifecycle.deletionProgress,
+								recordDeletionProgress,
+								partialSource: true,
+							},
+						);
+						signal.throwIfAborted();
+						return {
+							status: "stopped" as const,
+							sourceStop: stopReceipt,
+							resources: retainedResources(stopReceipt),
+						};
+					}
+				}
 				return {
 					status:
 						observed.status === "unknown"
@@ -740,7 +819,7 @@ export function createProductionSessionSandboxReceiverV1(
 			return {
 				status: "stopped" as const,
 				sourceStop: stopReceipt,
-				resources: [stopReceipt.retainedPVC],
+				resources: retainedResources(stopReceipt),
 			};
 		}
 		const deployment = validateAgentWorkloadDesiredV1(claim.deployment);
@@ -782,11 +861,12 @@ export function createProductionSessionSandboxReceiverV1(
 			return {
 				status: "stopped" as const,
 				sourceStop: stopReceipt,
-				resources: [stopReceipt.retainedPVC],
+				resources: retainedResources(stopReceipt),
 			};
 		}
 		let previousForApply = previous;
-		if (claim.lifecycle?.stopReceipt) {
+		// 没有保留 PVC 的回执（#2918）按新建准备：apply 会创建 PVC，同名的未归属对象仍判冲突。
+		if (claim.lifecycle?.stopReceipt?.retainedPVC) {
 			await adapter.prepareRetainedPVC(allocation, claim.lifecycle, previous);
 			signal.throwIfAborted();
 			// The retained PVC was just rebound by the authorized CAS above; its

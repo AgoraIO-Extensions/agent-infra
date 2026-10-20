@@ -16,6 +16,11 @@ import {
 	type SessionSandboxObservationV1,
 } from "./session-sandbox-reconciliation.js";
 
+function requirePVC<T>(value: T | null): T {
+	if (!value) throw new Error("Expected a retained PVC");
+	return value;
+}
+
 function fixture() {
 	const sandbox = createSessionSandboxBindingV1(
 		{
@@ -470,7 +475,10 @@ describe("original source stop proof", () => {
 			case "pvc-swap":
 				proof = {
 					...receipt,
-					retainedPVC: { ...receipt.retainedPVC, uid: "new-volume" },
+					retainedPVC: {
+						...requirePVC(receipt.retainedPVC),
+						uid: "new-volume",
+					},
 				};
 				break;
 			case "missing-proof":
@@ -522,6 +530,7 @@ describe("original source stop proof", () => {
 describe("stop proof of a source prepared before per-Sandbox Runtime inputs (#2885)", () => {
 	function withoutSecret(
 		source: Partial<SessionSandboxLifecycleV1["source"]> = {},
+		status: "observed" | "ready" = "observed",
 	) {
 		const input = fixture();
 		const receipt = input.observation.sourceStop;
@@ -534,7 +543,7 @@ describe("stop proof of a source prepared before per-Sandbox Runtime inputs (#28
 				source: {
 					...input.lifecycle.source,
 					observation: {
-						status: "observed" as const,
+						status,
 						resources: observation.resources.filter(
 							(resource) => resource.kind !== "Secret",
 						),
@@ -566,13 +575,14 @@ describe("stop proof of a source prepared before per-Sandbox Runtime inputs (#28
 	});
 
 	it("still requires the Secret when the source was prepared with a model projection or never recorded a preparation", () => {
+		// 就绪（完整）的来源必须记录全部资源；未就绪的部分来源另按 #2918 的规则判定。
 		for (const source of [
 			{ modelProjection: { schemaVersion: 4 } },
 			{ deployment: null },
 			{ deployment: undefined },
 		])
 			expect(
-				decideSessionSandboxDrainObservationV1(withoutSecret(source)),
+				decideSessionSandboxDrainObservationV1(withoutSecret(source, "ready")),
 			).toMatchObject({ status: "unknown", finished: false });
 	});
 
@@ -709,6 +719,151 @@ describe("stop proof of a source that was already stopped (#2917)", () => {
 				generationBarrierPending: false,
 			}),
 		).toBe(true);
+	});
+});
+
+// #2918：准备中断时来源只记录了部分资源（observation 为 unknown / observed）。只需逐个证明删除
+// 了记录过的资源；从未记录 PVC 时回执不保留 PVC，之后按新建准备。
+describe("stop proof of a partially prepared source (#2918)", () => {
+	function partialSource(
+		kinds: readonly string[],
+		status: "unknown" | "observed" | "ready" = "unknown",
+	) {
+		const input = fixture();
+		const receipt = input.observation.sourceStop;
+		const full = input.lifecycle.source.observation?.resources ?? [];
+		if (!receipt) throw new Error("Missing stop proof fixture");
+		const recorded = full.filter((resource) => kinds.includes(resource.kind));
+		const pvc = recorded.find(
+			(resource) => resource.kind === "PersistentVolumeClaim",
+		);
+		const retainedPVC = pvc ? { ...pvc, resourceVersion: "7" } : null;
+		const removed = receipt.removed.filter((proof) =>
+			kinds.includes(proof.resource.kind),
+		);
+		return {
+			...input,
+			lifecycle: {
+				...input.lifecycle,
+				source: {
+					...input.lifecycle.source,
+					observation: { status, resources: recorded },
+				},
+				deletionProgress: (input.lifecycle.deletionProgress ?? []).filter(
+					(entry) => kinds.includes(entry.resource.kind),
+				),
+			},
+			observation: {
+				status: "stopped" as const,
+				resources: retainedPVC ? [retainedPVC] : [],
+				sourceStop: { ...receipt, removed, retainedPVC },
+			},
+		};
+	}
+
+	it("accepts the removal of every recorded resource without a retained PVC", () => {
+		expect(
+			decideSessionSandboxDrainObservationV1(partialSource(["ServiceAccount"])),
+		).toMatchObject({
+			status: "stopped",
+			finished: true,
+		});
+		expect(
+			decideSessionSandboxDrainObservationV1(partialSource([])),
+		).toMatchObject({
+			status: "stopped",
+			finished: true,
+		});
+	});
+
+	it("keeps the recorded PVC when the partial source has one", () => {
+		expect(
+			decideSessionSandboxDrainObservationV1(
+				partialSource(["ServiceAccount", "PersistentVolumeClaim"], "observed"),
+			),
+		).toMatchObject({ status: "stopped", finished: true });
+	});
+
+	it("rejects an incomplete ready source, a dropped or invented PVC and a missing removal", () => {
+		const base = partialSource(
+			["ServiceAccount", "PersistentVolumeClaim"],
+			"observed",
+		);
+		const receipt = base.observation.sourceStop;
+		const withoutPVC = partialSource(["ServiceAccount"]);
+		const variants = [
+			partialSource(["ServiceAccount", "PersistentVolumeClaim"], "ready"),
+			{
+				...base,
+				observation: {
+					...base.observation,
+					resources: [],
+					sourceStop: { ...receipt, retainedPVC: null },
+				},
+			},
+			{
+				...withoutPVC,
+				observation: {
+					...withoutPVC.observation,
+					resources: [requirePVC(receipt.retainedPVC)],
+					sourceStop: {
+						...withoutPVC.observation.sourceStop,
+						retainedPVC: receipt.retainedPVC,
+					},
+				},
+			},
+			{
+				...withoutPVC,
+				observation: {
+					...withoutPVC.observation,
+					sourceStop: { ...withoutPVC.observation.sourceStop, removed: [] },
+				},
+			},
+			{
+				...withoutPVC,
+				observation: {
+					...withoutPVC.observation,
+					resources: [requirePVC(receipt.retainedPVC)],
+				},
+			},
+		];
+		for (const variant of variants)
+			expect(decideSessionSandboxDrainObservationV1(variant)).toMatchObject({
+				status: "unknown",
+				finished: false,
+			});
+	});
+
+	it("permits preparing again without a retained PVC only while no PVC is observed", () => {
+		const input = partialSource(["ServiceAccount"]);
+		const receipt = input.observation.sourceStop;
+		const lifecycle: SessionSandboxLifecycleV1 = {
+			...input.lifecycle,
+			authority: {
+				...input.lifecycle.authority,
+				targetDesiredState: "running",
+			},
+			stopReceipt: receipt,
+		};
+		const request = {
+			sandbox: input.sandbox,
+			resourceFence: receipt.targetResourceFence,
+			lifecycle,
+			observation: { status: "stopped" as const, resources: [] },
+			executions: [],
+			generationBarrierPending: false,
+		};
+		expect(canPrepareSessionSandboxReplacementV1(request)).toBe(true);
+		const pvc = requirePVC(
+			partialSource(["PersistentVolumeClaim"]).observation.sourceStop
+				.retainedPVC,
+		);
+		expect(
+			canPrepareSessionSandboxReplacementV1({
+				...request,
+				observation: { status: "stopped", resources: [pvc] },
+			}),
+		).toBe(false);
 	});
 });
 
