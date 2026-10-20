@@ -1209,6 +1209,47 @@
 	gap: 8px;
 	margin-top: 12px;
 }
+/* #2981：回答上方可折叠的「思考过程」。摘要行沿用会话折叠条的 44px 触达高度与配色；
+   展开后随时间线一起滚动，不另设滚动区域。 */
+.chat-message-body > .message-thinking {
+	margin-bottom: 9px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+}
+.message-thinking-summary {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	min-height: 44px;
+	padding: 9px 12px;
+	border: 0;
+	border-radius: inherit;
+	background: transparent;
+	color: var(--muted-foreground);
+	font: inherit;
+	font-size: 12px;
+	line-height: 1.65;
+	text-align: left;
+}
+.message-thinking-summary strong {
+	color: var(--foreground);
+	font-weight: 650;
+}
+.message-thinking-toggle {
+	flex: none;
+	margin-left: auto;
+	color: var(--accent-ink);
+	font-size: 11px;
+}
+.message-thinking-body {
+	padding: 0 12px 12px;
+}
+.message-thinking-text {
+	color: var(--muted-foreground);
+	font-size: 13px;
+	line-height: 1.7;
+}
 .answer-versions {
 	display: flex;
 	align-items: center;
@@ -1992,10 +2033,14 @@
 		padding: 10px 12px;
 	}
 	/* 设计 ≤767：折叠条摘要 8px 10px；Connection 提示纵向排列、按钮整宽、范围行逐行显示。 */
-	.chat-disclosure-summary {
+	.chat-disclosure-summary,
+	.message-thinking-summary {
 		padding: 8px 10px;
 	}
 	.chat-context-body {
+		padding: 0 10px 10px;
+	}
+	.message-thinking-body {
 		padding: 0 10px 10px;
 	}
 	.connection-notice {

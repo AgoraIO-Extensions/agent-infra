@@ -4,6 +4,7 @@ import {
 	ConversationDetailProjectionV2Schema,
 	PersistedConversationEventV2Schema,
 	PilotProtocolErrorV1Schema,
+	ReasoningDeltaEventV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { BrowserCapabilityProjectionV1Schema } from "@agent-infra/contracts/runtime";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
@@ -4094,5 +4095,291 @@ describe("loading lines, read failures and notices on the conversation page (N-1
 		expect(notice.getAttribute("role")).toBeNull();
 		expect(notice.getAttribute("data-tone")).toBe("warn");
 		expect(notice.querySelector(":scope > svg")).not.toBeNull();
+	});
+});
+
+describe("thinking process above the answer (#2981)", () => {
+	function thought(
+		sequence: number,
+		text: string,
+		executionId = "execution-1",
+		kind: "raw" | "summary" = "raw",
+	) {
+		return ReasoningDeltaEventV2Schema.parse({
+			...event(sequence),
+			executionId,
+			schemaVersion: 2,
+			type: "reasoning.delta",
+			payload: { kind, text },
+		});
+	}
+	function answerDelta(
+		sequence: number,
+		text: string,
+		executionId = "execution-1",
+	) {
+		return PersistedConversationEventV2Schema.parse({
+			...event(sequence),
+			executionId,
+			payload: { text },
+		});
+	}
+	function answer(
+		text: string,
+		changes: Partial<{
+			executionId: string;
+			messageId: string;
+			replyToMessageId: string;
+			answerVersion: number;
+			isCurrentAnswer: boolean;
+		}> = {},
+	) {
+		return {
+			...userMessage(),
+			role: "assistant" as const,
+			messageId: "answer-1",
+			replyToMessageId: "message-1",
+			text,
+			answerVersion: 1,
+			isCurrentAnswer: true,
+			...changes,
+		};
+	}
+	function detail(
+		events: unknown[],
+		messages: unknown[],
+		status: "active" | "ready" = "ready",
+		eventWindow?: { hasEarlier: boolean; beforeCursor: string | null },
+	) {
+		const last = events.at(-1) as { conversationCursor?: string } | undefined;
+		return Response.json(
+			ConversationDetailProjectionV2Schema.parse({
+				...history("conversation-1", []),
+				conversation: {
+					...history().conversation,
+					status,
+					lastConversationCursor: last?.conversationCursor ?? null,
+				},
+				messages,
+				events,
+				...(eventWindow ? { eventWindow } : {}),
+			}),
+		);
+	}
+	const detailPath = "/api/v2/conversations/conversation-1";
+	function thinkingToggle(objectName = "Private question") {
+		return screen.getByRole("button", { name: `思考过程：${objectName}` });
+	}
+	function thinkingPanel(toggle: HTMLElement) {
+		const panel = document.getElementById(
+			toggle.getAttribute("aria-controls") ?? "",
+		);
+		if (!panel) throw new Error("Expected the thinking panel");
+		return panel;
+	}
+
+	it("streams the thinking open above a pending reply and folds it once the answer starts", async () => {
+		const { streams } = setup((request) =>
+			new URL(request.url).pathname === detailPath
+				? detail([], [{ ...userMessage(), status: "processing" }], "active")
+				: undefined,
+		);
+		await screen.findByText("Private question");
+		await waitFor(() => expect(streams.length).toBeGreaterThan(0));
+		// 没有思考内容时不渲染思考区域。
+		expect(screen.queryByRole("button", { name: /^思考过程/ })).toBeNull();
+		act(() =>
+			streams.at(-1)?.send(thought(1, "先读题，"), thought(2, "再作答。")),
+		);
+		const toggle = await screen.findByRole("button", {
+			name: "思考过程：Private question",
+		});
+		const panel = thinkingPanel(toggle);
+		expect(toggle.getAttribute("aria-expanded")).toBe("true");
+		expect(panel.hidden).toBe(false);
+		expect(panel.textContent).toBe("先读题，再作答。");
+		// 「展开 / 收起」只是视觉提示，不进入可访问名称；正文不是 live region。
+		expect(toggle.textContent).toContain("收起");
+		expect(panel.closest("[role=status],[aria-live]")).toBeNull();
+		const article = toggle.closest("article") as HTMLElement;
+		// 思考过程在回答正文之上。
+		expect(
+			within(article)
+				.getByText("正在整理结果…")
+				.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_PRECEDING,
+		).toBeTruthy();
+
+		act(() => streams.at(-1)?.send(answerDelta(3, "最终答案")));
+		await within(article).findByText("最终答案");
+		expect(toggle.getAttribute("aria-expanded")).toBe("false");
+		expect(panel.hidden).toBe(true);
+		expect(article.querySelector(".assistant-markdown")?.textContent).toBe(
+			"最终答案",
+		);
+	});
+
+	it("keeps a completed answer's thinking folded, complete and unduplicated after reload", async () => {
+		const events = [thought(1, "第一步，"), thought(2, "第二步。")];
+		const { streams } = setup((request) =>
+			new URL(request.url).pathname === detailPath
+				? detail(
+						[...events, answerDelta(3, "最终答案")],
+						[userMessage(), answer("最终答案")],
+					)
+				: undefined,
+		);
+		await screen.findByText("最终答案");
+		const toggle = thinkingToggle();
+		const panel = thinkingPanel(toggle);
+		expect(toggle.getAttribute("aria-expanded")).toBe("false");
+		expect(panel.hidden).toBe(true);
+		// 流里重放的同一事件不会让思考过程重复。
+		await waitFor(() => expect(streams.length).toBeGreaterThan(0));
+		act(() => streams.at(-1)?.send(events[1]));
+		fireEvent.click(toggle);
+		expect(toggle.getAttribute("aria-expanded")).toBe("true");
+		expect(panel.hidden).toBe(false);
+		expect(panel.textContent).toBe("第一步，第二步。");
+		expect(screen.getByText("最终答案").textContent).toBe("最终答案");
+	});
+
+	it("shows each answer version's own thinking", async () => {
+		setup((request) =>
+			new URL(request.url).pathname === detailPath
+				? detail(
+						[
+							thought(1, "旧版本的思考"),
+							thought(2, "新版本的思考", "execution-2"),
+						],
+						[
+							userMessage(),
+							answer("Old answer", { isCurrentAnswer: false }),
+							answer("New answer", {
+								executionId: "execution-2",
+								messageId: "answer-2",
+								answerVersion: 2,
+							}),
+						],
+					)
+				: undefined,
+		);
+		await screen.findByText("New answer");
+		expect(thinkingPanel(thinkingToggle()).textContent).toBe("新版本的思考");
+		fireEvent.click(screen.getByRole("button", { name: "上一个回答版本" }));
+		await screen.findByText("Old answer");
+		expect(thinkingPanel(thinkingToggle()).textContent).toBe("旧版本的思考");
+		expect(screen.queryByText("新版本的思考")).toBeNull();
+	});
+
+	it("keeps the reader's choice when the live reply becomes the recorded answer", async () => {
+		let phase: "running" | "completed" = "running";
+		const { streams } = setup((request) =>
+			new URL(request.url).pathname === detailPath
+				? phase === "running"
+					? detail(
+							[thought(1, "推理中")],
+							[{ ...userMessage(), status: "processing" }],
+							"active",
+						)
+					: detail(
+							[
+								thought(1, "推理中"),
+								answerDelta(2, "完成的答案"),
+								PersistedConversationEventV2Schema.parse({
+									...event(3),
+									type: "execution.status",
+									payload: { status: "completed" },
+								}),
+							],
+							[userMessage(), answer("完成的答案")],
+						)
+				: undefined,
+		);
+		const toggle = await screen.findByRole("button", {
+			name: "思考过程：Private question",
+		});
+		expect(toggle.getAttribute("aria-expanded")).toBe("true");
+		await waitFor(() => expect(streams.length).toBeGreaterThan(0));
+		act(() => streams.at(-1)?.send(answerDelta(2, "完成的答案")));
+		await waitFor(() =>
+			expect(thinkingToggle().getAttribute("aria-expanded")).toBe("false"),
+		);
+		// 用户在答案出现后手动展开；回复卡换成已记录的回答后仍保持展开。
+		fireEvent.click(thinkingToggle());
+		expect(thinkingToggle().getAttribute("aria-expanded")).toBe("true");
+		phase = "completed";
+		act(() =>
+			streams.at(-1)?.send(
+				PersistedConversationEventV2Schema.parse({
+					...event(3),
+					type: "execution.status",
+					payload: { status: "completed" },
+				}),
+			),
+		);
+		await screen.findByRole("button", {
+			name: "重新生成：Private question",
+		});
+		expect(thinkingToggle().getAttribute("aria-expanded")).toBe("true");
+		expect(thinkingPanel(thinkingToggle()).textContent).toBe("推理中");
+	});
+
+	it("shows an earlier answer's thinking once after loading earlier content", async () => {
+		const old = {
+			...userMessage("old question"),
+			messageId: "message-old",
+			executionId: "execution-old",
+		};
+		const recent = {
+			...userMessage("new question"),
+			messageId: "message-new",
+			executionId: "execution-new",
+		};
+		const earlier = [
+			thought(1, "更早的思考", "execution-old"),
+			answerDelta(2, "Old answer", "execution-old"),
+		];
+		setup((request) => {
+			const url = new URL(request.url);
+			if (url.pathname !== detailPath) return undefined;
+			if (url.searchParams.has("beforeCursor"))
+				return detail(earlier, [], "ready", {
+					hasEarlier: false,
+					beforeCursor: null,
+				});
+			return detail(
+				[answerDelta(3, "Newest answer", "execution-new")],
+				[
+					old,
+					answer("", {
+						executionId: "execution-old",
+						messageId: "answer-old",
+						replyToMessageId: "message-old",
+					}),
+					recent,
+					answer("Newest answer", {
+						executionId: "execution-new",
+						messageId: "answer-new",
+						replyToMessageId: "message-new",
+					}),
+				],
+				"ready",
+				{ hasEarlier: true, beforeCursor: "before-cursor" },
+			);
+		});
+		await screen.findByText("Newest answer");
+		expect(
+			screen.queryByRole("button", { name: "思考过程：old question" }),
+		).toBeNull();
+		fireEvent.click(
+			screen.getByRole("button", { name: "加载更早内容：old question" }),
+		);
+		expect(await screen.findByText("Old answer")).toBeTruthy();
+		const toggle = thinkingToggle("old question");
+		expect(toggle.getAttribute("aria-expanded")).toBe("false");
+		expect(thinkingPanel(toggle).textContent).toBe("更早的思考");
+		expect(
+			screen.queryByRole("button", { name: "思考过程：new question" }),
+		).toBeNull();
 	});
 });

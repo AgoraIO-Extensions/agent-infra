@@ -139,6 +139,33 @@ export function answerText(
 	);
 }
 
+/**
+ * #2981：每个 Execution 的思考过程（PRD §11.2）。思考没有投影文本，只来自时间线事件；
+ * 时间线已按 eventId 去重，所以首屏、实时与更早页合在一起也不会重复。摘要与原始推理
+ * 各自按到达顺序拼接（Runtime 只在同一 kind 的分段之间加空行），两者都有时先摘要、后原始推理。
+ */
+export function reasoningTexts(
+	events: readonly ConversationTimelineEventV2[],
+): ReadonlyMap<string, string> {
+	const parts = new Map<string, { summary: string[]; raw: string[] }>();
+	for (const event of events) {
+		if (event.type !== "reasoning.delta") continue;
+		let entry = parts.get(event.executionId);
+		if (!entry) {
+			entry = { summary: [], raw: [] };
+			parts.set(event.executionId, entry);
+		}
+		entry[event.payload.kind].push(event.payload.text);
+	}
+	const texts = new Map<string, string>();
+	for (const [executionId, { summary, raw }] of parts)
+		texts.set(
+			executionId,
+			[summary.join(""), raw.join("")].filter(Boolean).join("\n\n"),
+		);
+	return texts;
+}
+
 export const answerNotWrittenYet = "尚未输出正文。";
 
 /**

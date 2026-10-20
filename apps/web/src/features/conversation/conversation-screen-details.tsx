@@ -524,7 +524,7 @@ function ExecutionDetailBody({
 				</Button>
 			)}
 			<p className="conversation-page-note">
-				这里展示可审计的执行事实，不包含模型内部思考。
+				这里展示可审计的执行事实，不包含思考过程；模型提供的思考过程显示在回答上方。
 			</p>
 		</>
 	);

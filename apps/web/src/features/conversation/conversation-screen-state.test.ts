@@ -8,6 +8,7 @@ import {
 	answerText,
 	currentExecution,
 	emptyAnswerKind,
+	reasoningTexts,
 } from "./conversation-screen-state.js";
 import { event, history, timestamp } from "./conversation-test-fixtures.js";
 
@@ -282,5 +283,36 @@ describe("reasoning deltas in the timeline (#2979)", () => {
 				true,
 			),
 		).toBe("empty");
+	});
+});
+
+describe("thinking text per execution (#2981)", () => {
+	const reasoning = (
+		sequence: number,
+		kind: "raw" | "summary",
+		text: string,
+		executionId = "execution-1",
+	) =>
+		ReasoningDeltaEventV2Schema.parse({
+			...event(sequence),
+			executionId,
+			schemaVersion: 2,
+			type: "reasoning.delta",
+			payload: { kind, text },
+		});
+
+	it("joins each execution's reasoning in arrival order, summary before raw", () => {
+		const texts = reasoningTexts([
+			reasoning(1, "raw", "think "),
+			event(2),
+			reasoning(3, "summary", "Plan"),
+			reasoning(4, "raw", "more"),
+			reasoning(5, "raw", "other", "execution-2"),
+			reasoning(6, "summary", "\n\nNext"),
+		]);
+		expect(texts.get("execution-1")).toBe("Plan\n\nNext\n\nthink more");
+		expect(texts.get("execution-2")).toBe("other");
+		// 正文增量不进入思考过程；没有思考的 Execution 没有条目。
+		expect([...texts.keys()]).toEqual(["execution-1", "execution-2"]);
 	});
 });
