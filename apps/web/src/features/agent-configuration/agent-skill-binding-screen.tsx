@@ -29,6 +29,7 @@ import {
 	EmptyTitle,
 } from "@/components/ui/empty";
 import { Field } from "@/components/ui/field";
+import { IdentifierText } from "@/components/ui/identifier-text";
 import { Label } from "@/components/ui/label";
 import {
 	NativeSelect,
@@ -61,6 +62,27 @@ import {
 } from "./agent-skill-binding.js";
 
 export const agentSkillHeadingId = "agent-skill-heading";
+
+/** 绑定卡标题的稳定 id：写入成功后按固定版本找回对应卡片（W-30）。 */
+function bindingTitleId(skillVersionId: string) {
+	return `skill-binding-title-${skillVersionId}`;
+}
+
+/** 确认后的焦点目标：某张绑定卡的标题，或页面 h1（skillVersionId 为 null）。 */
+type FocusTarget = { readonly skillVersionId: string | null };
+
+function focusTargetElement(target: FocusTarget) {
+	return (
+		(target.skillVersionId
+			? document.getElementById(bindingTitleId(target.skillVersionId))
+			: null) ?? document.getElementById(agentSkillHeadingId)
+	);
+}
+
+/** 弹窗关闭时的焦点去处（Base UI finalFocus）；interim 为提交仍在进行时的暂留元素。 */
+type ConfirmFinalFocus = (
+	interim?: () => HTMLElement | null,
+) => () => HTMLElement | boolean;
 
 type SessionState = BrowserSessionState | { kind: "loading" };
 
@@ -280,6 +302,44 @@ function AgentSkillBindings({
 	const [writeFailure, setWriteFailure] = useState(false);
 	const [forbidden, setForbidden] = useState(false);
 	const [writing, setWriting] = useState(false);
+	// W-30：确认绑定、解除绑定或更换版本后，焦点交给结果卡片标题或页面 h1，不落到 body。
+	// 弹窗关闭（finalFocus）时写入可能仍在进行：先落在暂留元素，成功并回读后再移到结果目标。
+	const confirmResult = useRef<
+		| { readonly state: "pending" | "failed" }
+		| { readonly state: "done"; readonly target: FocusTarget }
+		| null
+	>(null);
+	const [focusRequest, setFocusRequest] = useState<
+		(FocusTarget & { readonly revision: number }) | null
+	>(null);
+	useEffect(() => {
+		if (!focusRequest) return;
+		// 回读失败时列表被错误提示替换：焦点落在页面 h1。
+		if (bindings.isError) {
+			document.getElementById(agentSkillHeadingId)?.focus();
+			setFocusRequest(null);
+			return;
+		}
+		// 等回读到写入后的配置修订再找目标卡片；找不到时落在页面 h1。
+		if (
+			!bindings.data ||
+			bindings.data.configurationRevision < focusRequest.revision
+		)
+			return;
+		focusTargetElement(focusRequest)?.focus();
+		setFocusRequest(null);
+	}, [focusRequest, bindings.data, bindings.isError]);
+	const openConfirm = () => {
+		confirmResult.current = null;
+	};
+	const finalFocus: ConfirmFinalFocus = (interim) => () => {
+		const result = confirmResult.current;
+		// 取消、Esc 或写入失败：回到触发按钮。
+		if (!result || result.state === "failed") return true;
+		if (result.state === "done")
+			return focusTargetElement(result.target) ?? false;
+		return interim?.() ?? false;
+	};
 	const idempotencyKey = useStableIdempotencyKey();
 	const readOnly = agent.managementStatus === "disabled";
 	const published =
@@ -287,9 +347,11 @@ function AgentSkillBindings({
 
 	const write = async (
 		next: SkillHubAgentBindingCommandV1["bindings"],
+		focusAfter: FocusTarget,
 		successMessage = "已提交绑定，等待同步",
 	): Promise<boolean> => {
 		if (!bindings.data || writing) return false;
+		confirmResult.current = { state: "pending" };
 		const body: SkillHubAgentBindingCommandV1 = {
 			schemaVersion: 1,
 			expectedConfigurationRevision: bindings.data.configurationRevision,
@@ -299,7 +361,7 @@ function AgentSkillBindings({
 		setConflict(false);
 		setWriteFailure(false);
 		try {
-			await bindVersion(
+			const result = await bindVersion(
 				agent.agentId,
 				agentVersion,
 				body,
@@ -307,8 +369,14 @@ function AgentSkillBindings({
 			);
 			toast(successMessage);
 			await queryClient.invalidateQueries({ queryKey });
+			confirmResult.current = { state: "done", target: focusAfter };
+			setFocusRequest({
+				...focusAfter,
+				revision: result.configurationRevision,
+			});
 			return true;
 		} catch (error) {
+			confirmResult.current = { state: "failed" };
 			const status = requestStatus(error);
 			if (status === 403) setForbidden(true);
 			else if (status === 409) {
@@ -357,7 +425,11 @@ function AgentSkillBindings({
 	return (
 		<>
 			<Alert tone="info" icon={null} className="agent-skill-version-notice">
-				<AlertTitle>当前 Agent 版本：{agentVersion}</AlertTitle>
+				{/* 部署配置的 Agent Version 没有显示名：按内部标识的等宽短形式显示，title 为完整值（W-37）。 */}
+				<AlertTitle>
+					当前 Agent 版本：
+					<IdentifierText value={agentVersion} label="Agent 版本" />
+				</AlertTitle>
 				<AlertDescription>
 					升级前需要确认；已受理的任务继续使用原版本。
 				</AlertDescription>
@@ -387,11 +459,13 @@ function AgentSkillBindings({
 					</EmptyHeader>
 				</Empty>
 			) : (
-				views.map(({ binding, view }) => (
+				views.map(({ binding, view }, index) => (
 					<SkillBindingCard
 						key={binding.skillVersion.skillVersionId}
 						agentId={agent.agentId}
 						binding={binding}
+						finalFocus={finalFocus}
+						onDialogOpen={openConfirm}
 						otherVersions={published.filter(
 							(version) =>
 								version.skillId === binding.skillVersion.skillId &&
@@ -406,17 +480,27 @@ function AgentSkillBindings({
 								skillName: binding.skillName,
 							});
 							// 空集合表示解除全部绑定：组装不出新集合时不提交。
-							return next ? write(next) : Promise.resolve(false);
+							return next
+								? write(next, { skillVersionId: target.skillVersionId })
+								: Promise.resolve(false);
 						}}
-						onUnbind={() =>
-							write(
+						onUnbind={() => {
+							// 解除后焦点交给下一张仍保留的卡片；没有时交给页面 h1。
+							const following = items
+								.slice(index + 1)
+								.find((item) => item.state !== "revoked");
+							return write(
 								skillBindingCollectionWithout(
 									items,
 									binding.skillVersion.skillVersionId,
 								),
+								{
+									skillVersionId:
+										following?.skillVersion.skillVersionId ?? null,
+								},
 								"已解除绑定",
-							)
-						}
+							);
+						}}
 					/>
 				))
 			)}
@@ -429,7 +513,9 @@ function AgentSkillBindings({
 						directory.isError || directory.data?.kind === "unavailable"
 					}
 					writing={writing}
-					onBind={(next) => write(next)}
+					finalFocus={finalFocus}
+					onDialogOpen={openConfirm}
+					onBind={(next, skillVersionId) => write(next, { skillVersionId })}
 					onDuplicate={() => toast("这个固定版本已经绑定")}
 				/>
 			)}
@@ -440,6 +526,8 @@ function AgentSkillBindings({
 function SkillBindingCard({
 	agentId,
 	binding,
+	finalFocus,
+	onDialogOpen,
 	otherVersions,
 	readOnly,
 	view,
@@ -449,6 +537,8 @@ function SkillBindingCard({
 }: {
 	agentId: string;
 	binding: SkillBindingStatus;
+	finalFocus: ConfirmFinalFocus;
+	onDialogOpen: () => void;
 	otherVersions: readonly SkillHubVersionMetadataV1[];
 	readOnly: boolean;
 	view: ReturnType<typeof skillBindingView>;
@@ -456,7 +546,7 @@ function SkillBindingCard({
 	onChangeVersion: (target: SkillHubVersionMetadataV1) => Promise<boolean>;
 	onUnbind: () => Promise<boolean>;
 }) {
-	const titleId = useId();
+	const titleId = bindingTitleId(binding.skillVersion.skillVersionId);
 	const name = binding.skillName;
 	const revoked = binding.state === "revoked";
 	return (
@@ -467,7 +557,8 @@ function SkillBindingCard({
 		>
 			<div className="skill-binding-head">
 				<div className="min-w-0">
-					<h2 id={titleId}>
+					{/* tabIndex=-1：绑定、更换版本或解除相邻卡片后焦点落在这里（W-30）。 */}
+					<h2 id={titleId} tabIndex={-1}>
 						{name}{" "}
 						<span className="quiet-pill">v{binding.skillVersion.version}</span>
 					</h2>
@@ -511,9 +602,11 @@ function SkillBindingCard({
 				{!revoked && !readOnly && otherVersions.length > 0 ? (
 					<ChangeVersionDialog
 						binding={binding}
+						finalFocus={finalFocus()}
 						otherVersions={otherVersions}
 						writing={writing}
 						onConfirm={onChangeVersion}
+						onOpen={onDialogOpen}
 					/>
 				) : null}
 				<Link
@@ -532,6 +625,11 @@ function SkillBindingCard({
 						description="解除后，新的调用不再提供这个 Skill；现有执行保留原版本。"
 						confirmLabel="解除绑定"
 						disabled={writing}
+						onOpenChange={(open) => {
+							if (open) onDialogOpen();
+						}}
+						// 提交期间先落在本卡标题，成功后移到下一张卡片或页面 h1。
+						finalFocus={finalFocus(() => document.getElementById(titleId))}
 						onConfirm={() => void onUnbind()}
 						trigger={
 							<Button
@@ -552,14 +650,18 @@ function SkillBindingCard({
 /** 「更换固定版本」：选择同一 Skill 的另一个已发布版本，确认后只替换这一项。 */
 function ChangeVersionDialog({
 	binding,
+	finalFocus,
 	otherVersions,
 	writing,
 	onConfirm,
+	onOpen,
 }: {
 	binding: SkillBindingStatus;
+	finalFocus: () => HTMLElement | boolean;
 	otherVersions: readonly SkillHubVersionMetadataV1[];
 	writing: boolean;
 	onConfirm: (target: SkillHubVersionMetadataV1) => Promise<boolean>;
+	onOpen: () => void;
 }) {
 	const [open, setOpen] = useState(false);
 	const [targetId, setTargetId] = useState(
@@ -576,11 +678,15 @@ function ChangeVersionDialog({
 				variant="ghost"
 				disabled={writing}
 				aria-label={withObjectName("更换固定版本", binding.skillName)}
-				onClick={() => setOpen(true)}
+				onClick={() => {
+					onOpen();
+					setOpen(true);
+				}}
 			>
 				更换固定版本
 			</Button>
-			<DialogContent variant="skill">
+			{/* 成功后本卡随新版本重建：焦点交给新版本卡片标题（W-30）。 */}
+			<DialogContent variant="skill" finalFocus={finalFocus}>
 				<DialogHeader>
 					<DialogTitle>更换固定版本</DialogTitle>
 				</DialogHeader>
@@ -637,16 +743,23 @@ function BindVersionForm({
 	bindings,
 	candidates,
 	directoryFailed,
+	finalFocus,
 	writing,
 	onBind,
+	onDialogOpen,
 	onDuplicate,
 }: {
 	agentName: string;
 	bindings: readonly SkillBindingStatus[];
 	candidates: readonly SkillHubVersionMetadataV1[];
 	directoryFailed: boolean;
+	finalFocus: ConfirmFinalFocus;
 	writing: boolean;
-	onBind: (next: SkillHubAgentBindingCommandV1["bindings"]) => Promise<boolean>;
+	onBind: (
+		next: SkillHubAgentBindingCommandV1["bindings"],
+		skillVersionId: string,
+	) => Promise<boolean>;
+	onDialogOpen: () => void;
 	onDuplicate: () => void;
 }) {
 	const [selectedId, setSelectedId] = useState("");
@@ -665,7 +778,11 @@ function BindVersionForm({
 			className="skill-binding-card skill-bind-form"
 			data-od-id="skill-bind-form"
 		>
-			<h2 id={`${selectId}-title`}>绑定固定版本</h2>
+			{/* 标题沿用「绑定固定版本」：候选是 Skill Hub 中可见的已发布版本，不限于「我的库」
+			    （W-31 待回写）。tabIndex=-1：确认绑定后、回读完成前焦点暂留在这里。 */}
+			<h2 id={`${selectId}-title`} tabIndex={-1}>
+				绑定固定版本
+			</h2>
 			<div className="skill-bind-grid">
 				<Field>
 					<Label htmlFor={selectId}>固定版本</Label>
@@ -728,12 +845,16 @@ function BindVersionForm({
 								onDuplicate();
 								return;
 							}
+							onDialogOpen();
 							setOpen(true);
 						}}
+						finalFocus={finalFocus(() =>
+							document.getElementById(`${selectId}-title`),
+						)}
 						onConfirm={() => {
 							if (!candidate) return;
 							const next = nextSkillBindingCollection(bindings, candidate);
-							if (next) void onBind(next);
+							if (next) void onBind(next, candidate.skillVersionId);
 						}}
 						trigger={<Button type="button">绑定固定版本</Button>}
 					/>

@@ -4609,10 +4609,14 @@ body {
 	gap: 14px;
 	margin-top: 16px;
 }
+/* 设计 #agent-skills 的绑定按钮在 .field 里撑满右栏（W-32）；高度沿公共 44px 控件高度。 */
 .skill-bind-submit {
 	display: grid;
-	justify-items: start;
+	justify-items: stretch;
 	gap: 7px;
+}
+.skill-bind-submit > [data-slot="button"] {
+	width: 100%;
 }
 .skill-bind-help {
 	color: var(--muted-ink);
