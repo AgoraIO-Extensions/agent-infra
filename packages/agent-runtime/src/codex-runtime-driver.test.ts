@@ -13526,6 +13526,203 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 							},
 						],
 					});
+				if (kind === "command") {
+					expect(accepted.result).toMatchObject({ status: "completed" });
+					const commandBinding = {
+						...f.binding,
+						scope: { ...f.binding.scope, executionId: request.executionId },
+					};
+					const normalRead = {
+						...f.read,
+						assertCurrent: () => commandBinding,
+						revalidate: async () => commandBinding,
+					};
+					expect(normalRead).not.toHaveProperty("allowUnboundExecution");
+					const commandBytes = await readFile(f.path, "utf8");
+					const nativeKey = JSON.stringify([
+						original.agentId,
+						original.conversationId,
+						original.sessionGeneration,
+						"native-command",
+						request.executionId,
+					]);
+					type CommandState = {
+						sessions: Record<
+							string,
+							{
+								activeExecutionId?: string;
+								executions: Record<string, { status: string }>;
+							}
+						>;
+						operations: Record<
+							string,
+							{
+								configVersion?: unknown;
+								state: string;
+								nativeSessionRef: string;
+								executionId?: string;
+								record?: unknown;
+							}
+						>;
+					};
+					const saved = JSON.parse(commandBytes) as CommandState;
+					expect(saved.operations[nativeKey]?.configVersion).toBe("config-1");
+					expect(
+						saved.sessions[nativeSessionRef]?.executions,
+					).not.toHaveProperty(request.executionId);
+					for (const nextSelector of ["commands", "skills", "status"] as const)
+						expect(
+							await f.driver.readNativeMetadataV1(nextSelector, normalRead),
+						).toMatchObject({ selector: nextSelector });
+					const skillDirectory = await f.driver.readNativeMetadataV1(
+						"skills",
+						normalRead,
+					);
+					if (skillDirectory.selector === "status")
+						throw new Error("missing command-bound Skill directory");
+					const skill = skillDirectory.capabilities.find(
+						(entry) => entry.kind === "skill",
+					);
+					if (!skill) throw new Error("missing command-bound Skill");
+					expect(await readFile(f.path, "utf8")).toBe(commandBytes);
+					const commandOperation = (state: CommandState) => {
+						const operation = state.operations[nativeKey];
+						if (!operation) throw new Error("missing saved native command");
+						return operation;
+					};
+					const invalidFacts: [string, (state: CommandState) => void][] = [
+						[
+							"legacy missing configuration",
+							(state) => delete commandOperation(state).configVersion,
+						],
+						[
+							"wrong configuration",
+							(state) => {
+								commandOperation(state).configVersion = "different-config";
+							},
+						],
+						[
+							"malformed configuration",
+							(state) => {
+								commandOperation(state).configVersion = 42;
+							},
+						],
+						[
+							"missing accepted record",
+							(state) => delete commandOperation(state).record,
+						],
+						[
+							"prepared command",
+							(state) => {
+								commandOperation(state).state = "prepared";
+								delete commandOperation(state).record;
+							},
+						],
+						[
+							"another native Session",
+							(state) => {
+								commandOperation(state).nativeSessionRef =
+									"another-native-session";
+							},
+						],
+						[
+							"another Execution",
+							(state) => {
+								commandOperation(state).executionId = "another-execution";
+							},
+						],
+						[
+							"missing operation key",
+							(state) => {
+								delete state.operations[nativeKey];
+							},
+						],
+						[
+							"active Turn conflict",
+							(state) => {
+								const session = state.sessions[nativeSessionRef];
+								const execution = session?.executions[original.executionId];
+								if (!session || !execution)
+									throw new Error("missing original Turn");
+								session.activeExecutionId = original.executionId;
+								execution.status = "running";
+							},
+						],
+					];
+					for (const [label, change] of invalidFacts) {
+						const requests = f.bridge.requests.length;
+						const read = DurableJsonFile.prototype.read;
+						const altered = vi
+							.spyOn(DurableJsonFile.prototype, "read")
+							.mockImplementation(function (this: DurableJsonFile<unknown>) {
+								const state = read.call(this) as CommandState;
+								change(state);
+								return state;
+							});
+						try {
+							const readSaved = () =>
+								(
+									f.driver as unknown as { readState(): CommandState }
+								).readState();
+							if (label === "legacy missing configuration")
+								expect(commandOperation(readSaved()).record).toEqual(
+									commandOperation(saved).record,
+								);
+							if (label === "malformed configuration")
+								expect(readSaved).toThrow();
+							await expect(
+								f.driver.readNativeMetadataV1("commands", normalRead),
+								label,
+							).rejects.toBeInstanceOf(Error);
+							expect(f.bridge.requests, label).toHaveLength(requests);
+						} finally {
+							altered.mockRestore();
+						}
+						expect(await readFile(f.path, "utf8")).toBe(commandBytes);
+					}
+					const following = RuntimeNativeCapabilityRequestV4Schema.parse({
+						...context,
+						requestId: "after-command-skill-request",
+						executionId: "after-command-skill-execution",
+						turnId: "after-command-skill-turn",
+						hostSessionRef: submitted.hostSessionRef,
+						operation: {
+							kind: "execution",
+							id: "after-command-skill-execution",
+							deliveryFence: 3,
+							executionDeliveryFence: 3,
+						},
+						capabilityId: skill.id,
+						capabilityKind: "skill",
+						directoryRevision: skillDirectory.revision,
+						capabilitySourceVersion: skill.source.version,
+						parameters: "summarize files",
+						parametersDigest: createHash("sha256")
+							.update("summarize files")
+							.digest("hex"),
+					});
+					f.bridge.setTurnsListResult({
+						data: [
+							{ id: f.bridge.nativeTurnId, status: "completed", items: [] },
+							{
+								id: `${f.bridge.nativeTurnId}-2`,
+								status: "inProgress",
+								items: [],
+							},
+						],
+					});
+					expect(
+						(await host.nativeCapabilityV4(deliver(following))).result,
+					).toMatchObject({ outcome: "accepted" });
+					expect(
+						f.bridge.requests.filter(
+							(entry) =>
+								entry.method === "turn/start" &&
+								(entry.params as { clientUserMessageId?: string })
+									?.clientUserMessageId === following.executionId,
+						),
+					).toHaveLength(1);
+				}
 			} finally {
 				await host.close();
 				await store.close();
