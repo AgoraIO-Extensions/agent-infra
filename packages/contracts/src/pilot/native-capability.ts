@@ -19,6 +19,17 @@ export const NativeCapabilityInvocationRequestV1Schema = z.strictObject({
 	traceId: TraceIdV1Schema.max(256),
 });
 
+// File inputs use an explicit request version; the old strict wire stays exact.
+export const NativeCapabilityInvocationRequestV2Schema =
+	NativeCapabilityInvocationRequestV1Schema.extend({
+		schemaVersion: z.literal(2),
+		attachments: z
+			.array(OpaqueIdV1Schema)
+			.min(1)
+			.max(4)
+			.refine((files) => new Set(files).size === files.length),
+	});
+
 export const NativeCapabilityInvocationResultV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
 	status: z.literal("submitted"),
@@ -107,6 +118,9 @@ export const nativeCapabilityInvocationSchemasV1 = {
 
 export type NativeCapabilityInvocationRequestV1 = z.infer<
 	typeof NativeCapabilityInvocationRequestV1Schema
+>;
+export type NativeCapabilityInvocationRequestV2 = z.infer<
+	typeof NativeCapabilityInvocationRequestV2Schema
 >;
 export type NativeCapabilityInvocationResponseV1 = z.infer<
 	typeof NativeCapabilityInvocationResponseV1Schema
