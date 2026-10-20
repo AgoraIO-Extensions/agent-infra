@@ -7,6 +7,7 @@ import {
 	executionKeyProjection,
 	executionPrincipalProjection,
 	maximumSafeCounter,
+	type OutboxRow,
 	requireSafeCounter,
 	StaleDispatchLease,
 	safeCounter,
@@ -39,6 +40,61 @@ import {
 	operation,
 	terminal,
 } from "./conversation-dispatch-validation.js";
+
+/**
+ * #2919：payload 已不合当前规则的 native capability 条目（例如 #2951 之前写入的历史参数
+ * 摘要）永远认领不到，却会在每次发现时被扫到。所属执行已终态时它不会再有任何工作，
+ * 也不会再触达 Runtime：按有界原因关闭。执行未终态的条目保持原样，不在这里改执行。
+ */
+async function retireInvalidNativeCapability(
+	transaction: Transaction,
+	outbox: OutboxRow,
+): Promise<boolean> {
+	if (
+		outbox.operation !== "conversation.native-capability.invoke.v1" ||
+		(outbox.status !== "pending" && outbox.status !== "retry_scheduled")
+	)
+		return false;
+	const raw = outbox.payload;
+	const executionId =
+		raw && typeof raw === "object" && !Array.isArray(raw)
+			? (raw as Record<string, unknown>).executionId
+			: undefined;
+	if (typeof executionId !== "string" || !executionId) return false;
+	const [execution] = await transaction<{ status: string }[]>`
+		select status from platform.conversation_executions
+		where execution_id = ${executionId} and conversation_id = ${outbox.scope_id}
+		for share
+	`;
+	if (
+		!execution ||
+		!["completed", "failed", "cancelled"].includes(execution.status)
+	)
+		return false;
+	const fence = requireSafeCounter(outbox.delivery_fence, 0) + 1;
+	const closed = await transaction<{ id: string }[]>`
+		update platform.outbox_items
+		set status = 'failed', lease_owner = null, lease_expires_at = null,
+			delivery_fence = ${fence}, updated_at = clock_timestamp()
+		where id = ${outbox.id} and status in ('pending', 'retry_scheduled')
+		returning id
+	`;
+	if (closed.length !== 1) return false;
+	await transaction`
+		insert into platform.persisted_events
+			(event_id, stream_id, sequence, stream_cursor, event_type, payload,
+			 trace_id, occurred_at)
+		values
+			(${`outbox:${outbox.id}:${fence}`}, ${`outbox:${outbox.id}`}, ${fence},
+			 ${fence}, 'outbox.failed',
+			 jsonb_build_object(
+				'attemptCount', ${outbox.attempt_count}::int,
+				'deliveryFence', ${String(fence)}::text,
+				'errorCode', 'NATIVE_CAPABILITY_PAYLOAD_INVALID'
+			 ), ${outbox.trace_id}, clock_timestamp())
+	`;
+	return true;
+}
 
 export async function claimWork(
 	transaction: Transaction,
@@ -85,7 +141,11 @@ export async function claimWork(
 	const selectedOperation = operation(outbox.operation);
 	if (!selectedOperation) return { outcome: "stale" };
 	const payload = exactPayload(outbox.payload, selectedOperation);
-	if (!payload) return { outcome: "stale" };
+	if (!payload) {
+		if (await retireInvalidNativeCapability(transaction, outbox))
+			return { outcome: "failed" };
+		return { outcome: "stale" };
+	}
 	const execution = await lockExecution(
 		transaction,
 		payload.conversationId,

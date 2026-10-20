@@ -637,6 +637,124 @@ describe("native dispatch parameter bounds", () => {
 	});
 });
 
+describe("native capability with terminal execution (#2919)", () => {
+	// 固定环境的条目：执行已 cancelled，从未被 Runtime 受理（没有 hostSessionRef），
+	// 授权每次都是 unavailable，条目以 AUTHORIZATION_UNAVAILABLE 每秒重试。
+	function nativeTerminalClaim(
+		overrides: Partial<{
+			hostSessionRef: string | null;
+			executionStatus: "cancelled" | "completed" | "failed" | "submitted";
+		}> = {},
+	) {
+		return claim({
+			operation: "conversation.native-capability.invoke.v1",
+			itemId: "conversation:native-capability:execution-cancel-1",
+			input: null,
+			messageId: null,
+			modelConfigurationRevision: null,
+			modelOptionId: null,
+			reasoningLevel: null,
+			hostSessionRef:
+				overrides.hostSessionRef === undefined
+					? null
+					: overrides.hostSessionRef,
+			executionStatus: overrides.executionStatus ?? "cancelled",
+			nativeCapability: {
+				agentId: "agent-1",
+				actorId: "actor-1",
+				channelId: "web",
+				turnId: "turn-1",
+				capabilityId: "a".repeat(64),
+				capabilityKind: "skill",
+				directoryRevision: "b".repeat(64),
+				parameters: "summarize files",
+				parametersDigest: "c".repeat(64),
+				capabilitySourceVersion: "1.0.0",
+			},
+		});
+	}
+	const unavailableAuthorization = () => ({
+		async authorize() {
+			return { outcome: "unavailable" as const };
+		},
+	});
+	const runtime = () => ({
+		dispatch: vi.fn(),
+		recoverStatus: vi.fn(),
+		events: vi.fn(async function* () {}),
+	});
+
+	it.each([
+		["cancelled", "unavailable"],
+		["completed", "unavailable"],
+		["failed", "unavailable"],
+		["cancelled", "denied"],
+		["completed", "denied"],
+		["failed", "denied"],
+	] as const)(
+		"关闭从未被 Runtime 受理的 %s 条目（授权 %s），不重试也不调用 Runtime",
+		async (executionStatus, decision) => {
+			const native = nativeTerminalClaim({ executionStatus });
+			const store = new MemoryDispatchStore(native);
+			const runtimeHost = runtime();
+			const h = setup({
+				store,
+				authorization:
+					decision === "denied"
+						? deniedAuthorization()
+						: unavailableAuthorization(),
+				runtimeHost,
+			});
+			await expect(dispatch(h.useCase, native.itemId)).resolves.toMatchObject({
+				outcome: "already_completed",
+			});
+			expect(runtimeHost.dispatch).not.toHaveBeenCalled();
+			expect(runtimeHost.events).not.toHaveBeenCalled();
+			expect(store.outboxStatus).toBe("succeeded");
+			expect(store.errorCode).toBeUndefined();
+		},
+	);
+
+	it.each(["unavailable", "denied"] as const)(
+		"已被 Runtime 受理（有 hostSessionRef）的已终态条目在授权 %s 时仍重试，保留事件续读",
+		async (decision) => {
+			const native = nativeTerminalClaim({ hostSessionRef: "host-session-1" });
+			const store = new MemoryDispatchStore(native);
+			const h = setup({
+				store,
+				authorization:
+					decision === "denied"
+						? deniedAuthorization()
+						: unavailableAuthorization(),
+				runtimeHost: runtime(),
+			});
+			await expect(dispatch(h.useCase, native.itemId)).resolves.toMatchObject({
+				outcome: "retry",
+			});
+			expect(store.outboxStatus).not.toBe("succeeded");
+		},
+	);
+
+	it("执行仍为 submitted 时行为不变（授权拒绝走 reject）", async () => {
+		const submitted = {
+			...nativeTerminalClaim({ executionStatus: "submitted" }),
+			itemId: "conversation:native-capability:execution-submitted-1",
+		};
+		const store = new MemoryDispatchStore(submitted);
+		const runtimeHost = runtime();
+		const h = setup({
+			store,
+			authorization: deniedAuthorization(),
+			runtimeHost,
+		});
+		await expect(dispatch(h.useCase, submitted.itemId)).resolves.toMatchObject({
+			outcome: "rejected",
+		});
+		expect(runtimeHost.dispatch).not.toHaveBeenCalled();
+		expect(store.outboxStatus).toBe("failed");
+	});
+});
+
 describe("bounded unknown recovery", () => {
 	it("closes a denied unknown stop after the durable attempt limit", async () => {
 		const store = new MemoryDispatchStore(
