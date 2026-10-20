@@ -3067,6 +3067,54 @@ test("Agent detail shows each Owner's server-projected status chip (D-04, #2910)
 	await capture(page, info, "agent-detail-owner-status");
 });
 
+test("Agent detail shows the real WeCom binding status without a visibility scope (D-04, #2910)", async ({
+	page,
+}, info) => {
+	await fixture(page);
+	const base = pilotAgentDetailFromV2(
+		pilotFakeScenariosV2.starting.response.body,
+	);
+	let status: "bound" | "binding" | "failed" = "bound";
+	await page.route("**/api/v2/agents/agent-pilot-1/detail", async (route) => {
+		await route.fulfill({
+			json: AgentDetailProjectionV1Schema.parse({
+				...base,
+				serviceAvailability: "ready",
+				configuration: {
+					...base.configuration,
+					channels: [
+						{ kind: "web", status: "available" },
+						{ kind: "wecom_bot", status },
+					],
+				},
+			}),
+			headers: { "cache-control": "no-store" },
+		});
+	});
+	const runtime = page.getByRole("region", { name: "运行与渠道" });
+	const wecom = runtime
+		.getByRole("listitem")
+		.filter({ has: page.getByText("企微机器人", { exact: true }) });
+	const chip = wecom.locator('[data-slot="badge"][data-variant="chip"]');
+	// 服务端投影的真实状态逐一映射为中文文案与色调；渠道行不显示可见范围。
+	for (const [projected, label, tone] of [
+		["bound", "已绑定", "green"],
+		["binding", "绑定中", "amber"],
+		["failed", "连接异常", "red"],
+	] as const) {
+		status = projected;
+		await page.goto("/agents/agent-pilot-1");
+		await expect(chip).toHaveText(label);
+		await expect(chip).toHaveAttribute("data-tone", tone);
+		await expect(wecom).toHaveText(`企微机器人${label}`);
+		await expect(runtime).not.toContainText(
+			/组织内|可见范围|not_configured|binding|bound|failed/,
+		);
+		if (projected === "bound")
+			await capture(page, info, "agent-detail-wecom-bound");
+	}
+});
+
 test("directory pickers support consecutive picks, keyboard focus and 44px chip targets", async ({
 	page,
 }, info) => {

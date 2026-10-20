@@ -131,6 +131,41 @@ describe("AgentDetailScreen", () => {
 		expect(screen.queryByRole("link", { name: "可用 Skill" })).toBeNull();
 	});
 
+	it("maps each projected WeCom binding status to Chinese copy without a scope (D-04, #2910)", async () => {
+		for (const [status, label, tone] of [
+			["bound", "已绑定", "green"],
+			["binding", "绑定中", "amber"],
+			["failed", "连接异常", "red"],
+		] as const) {
+			const agent = AgentDetailProjectionV1Schema.parse({
+				...readyAgent,
+				configuration: {
+					...readyAgent.configuration,
+					channels: [
+						{ kind: "web", status: "available" },
+						{ kind: "wecom_bot", status },
+					],
+				},
+			});
+			await renderWithAgentRouter(
+				<AgentDetailScreen state={{ kind: "ready", agent }} />,
+			);
+			const runtime = screen.getByRole("region", { name: "运行与渠道" });
+			const row = within(runtime)
+				.getByText("企微机器人", { selector: "strong" })
+				.closest("li") as HTMLElement;
+			expect(row.textContent).toBe(`企微机器人${label}`);
+			const chip = row.querySelector(
+				'[data-slot="badge"][data-variant="chip"]',
+			);
+			expect(chip?.getAttribute("data-tone")).toBe(tone);
+			expect(runtime.textContent).not.toMatch(
+				/组织内|可见范围|not_configured|binding|bound|failed/,
+			);
+			cleanup();
+		}
+	});
+
 	it("links the Owner to the Agent Skill page with a ghost「可用 Skill」(D-03)", async () => {
 		await renderWithAgentRouter(
 			<AgentDetailScreen

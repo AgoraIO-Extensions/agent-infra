@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { IdentifierText } from "@/components/ui/identifier-text";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
-import { type ChipTone, statusTone } from "@/lib/status-tone";
+import type { ChipTone } from "@/lib/status-tone";
 import type {
 	AgentDetailProjectionV1,
 	AgentProjectionV2,
@@ -57,15 +57,27 @@ type AgentDetailScreenProps = {
 };
 type AgentDetail = AgentDetailProjectionV1;
 type AgentOwner = AgentDetail["configuration"]["owners"][number];
+// 渠道 chip 只映射服务端投影的真实状态（#2910）：企微「已绑定」来自已认证连接，
+// 「绑定中」是尚未证实连接，「连接异常」覆盖断开、认证失败或托管绑定失效。
 const channelStatusLabels = {
 	available: "可用",
 	not_configured: "未配置",
 	binding: "绑定中",
 	bound: "已绑定",
-	failed: "绑定失败",
+	failed: "连接异常",
 } satisfies Record<
 	AgentProjectionV2["configuration"]["channels"][number]["status"],
 	string
+>;
+const channelStatusTones = {
+	available: "green",
+	not_configured: "gray",
+	binding: "amber",
+	bound: "green",
+	failed: "red",
+} satisfies Record<
+	AgentProjectionV2["configuration"]["channels"][number]["status"],
+	ChipTone
 >;
 
 function safeInteractionUrl(input: string | null) {
@@ -508,10 +520,13 @@ export function AgentDetailScreen({
 								<li key={channel.kind}>
 									<div className="detail-list-main">
 										<strong>{agentChannelKindLabels[channel.kind]}</strong>
-										{/* 企微渠道的范围说明需要契约字段，确认前不加（D-04）。 */}
+										{/* 企微渠道只显示真实绑定状态，不显示可见范围（#2910 决定）。 */}
 										{channel.kind === "web" && <small>平台对话入口</small>}
 									</div>
-									<Badge variant="chip" tone={statusTone(channel.status)}>
+									<Badge
+										variant="chip"
+										tone={channelStatusTones[channel.status]}
+									>
 										{channelStatusLabels[channel.status]}
 									</Badge>
 								</li>
