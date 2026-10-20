@@ -24,6 +24,7 @@ export * from "./host-v3.ts";
 export * from "./host-v4.ts";
 export * from "./host-v4-events.ts";
 export * from "./host-v4-key-recovery.ts";
+export * from "./host-v5.ts";
 export * from "./installation.ts";
 export * from "./legacy-migration-v1.ts";
 export * from "./native-capability.ts";
@@ -197,6 +198,17 @@ import {
 	RuntimeRestoreExecutionKeyResponseV4Schema,
 	RuntimeRestoreExecutionKeyTransportV4Schema,
 } from "./host-v4-key-recovery.ts";
+import {
+	RuntimeExecutionGrantV5Schema,
+	RuntimeNativeCapabilityRequestV5Schema,
+	RuntimeNativeCapabilityTransportV5Schema,
+	RuntimeOperationResponseV5Schema,
+	RuntimeReadOnlyTextAttachmentV5Schema,
+	RuntimeRestoreExecutionKeyGrantClaimsV5Schema,
+	RuntimeRestoreExecutionKeyRequestV5Schema,
+	RuntimeRestoreExecutionKeyResponseV5Schema,
+	RuntimeRestoreExecutionKeyTransportV5Schema,
+} from "./host-v5.ts";
 
 export const RuntimeHostV4SchemaDefinitions = {
 	RuntimeBusinessGrantClaimsV4: RuntimeBusinessGrantClaimsV4Schema,
@@ -223,6 +235,32 @@ export const RuntimeHostV4SchemaDefinitions = {
 		RuntimeRestoreExecutionKeyTransportV4Schema,
 	RuntimeRestoreExecutionKeyResponseV4:
 		RuntimeRestoreExecutionKeyResponseV4Schema,
+};
+
+export const RuntimeHostV5SchemaDefinitions = {
+	// V5 reuses the V4 business Grant, claims and private Key transport.
+	RuntimeBusinessGrantClaimsV4: RuntimeBusinessGrantClaimsV4Schema,
+	RuntimeExecutionGrantV4: RuntimeExecutionGrantV4Schema,
+	VerifiedRuntimeExecutionGrantV4: VerifiedRuntimeExecutionGrantV4Schema,
+	RuntimeExecutionSourceV1: RuntimeExecutionSourceV1Schema,
+	RuntimeRelayKeyBindingV1: RuntimeRelayKeyBindingV1Schema,
+	RuntimeRelayKeyDeliveryV1: RuntimeRelayKeyDeliveryV1Schema,
+	RuntimePrivateRelayKeyContextV1: RuntimePrivateRelayKeyContextV1Schema,
+	RuntimePrivateRelayKeyFieldV1: RuntimePrivateRelayKeyFieldV1Schema,
+	// V5 adds only the ordered read-only text attachment contract.
+	RuntimeExecutionGrantV5: RuntimeExecutionGrantV5Schema,
+	RuntimeReadOnlyTextAttachmentV5: RuntimeReadOnlyTextAttachmentV5Schema,
+	RuntimeNativeCapabilityRequestV5: RuntimeNativeCapabilityRequestV5Schema,
+	RuntimeNativeCapabilityTransportV5: RuntimeNativeCapabilityTransportV5Schema,
+	RuntimeOperationResponseV5: RuntimeOperationResponseV5Schema,
+	RuntimeRestoreExecutionKeyGrantClaimsV5:
+		RuntimeRestoreExecutionKeyGrantClaimsV5Schema,
+	RuntimeRestoreExecutionKeyRequestV5:
+		RuntimeRestoreExecutionKeyRequestV5Schema,
+	RuntimeRestoreExecutionKeyTransportV5:
+		RuntimeRestoreExecutionKeyTransportV5Schema,
+	RuntimeRestoreExecutionKeyResponseV5:
+		RuntimeRestoreExecutionKeyResponseV5Schema,
 };
 
 export const RuntimeModelConfigurationV4SchemaDefinitions = {

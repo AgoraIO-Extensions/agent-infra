@@ -20,6 +20,11 @@ export const NativeCapabilityInvocationRequestV1Schema = z.strictObject({
 });
 
 // File inputs use an explicit request version; the old strict wire stays exact.
+// The browser only names already uploaded files. Core resolves each id through
+// FileAuthority/FileLimits and accepts only the current read-only `text/plain`
+// set (at most four files of at most 4096 bytes each); digest, byte length and
+// media type are resolved server-side and carried by Runtime Native V5, never
+// asserted by the caller.
 export const NativeCapabilityInvocationRequestV2Schema =
 	NativeCapabilityInvocationRequestV1Schema.extend({
 		schemaVersion: z.literal(2),
