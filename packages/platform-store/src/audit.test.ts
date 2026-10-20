@@ -10,6 +10,8 @@ import {
 } from "vitest";
 
 import {
+	type AuditRow,
+	decodePlatformAuditRowV1,
 	type PlatformAuditAdministratorScopeV1,
 	PlatformAuditQueryError,
 	PostgresPlatformAuditQueryV1,
@@ -29,6 +31,41 @@ const administrator: PlatformAuditAdministratorScopeV1 = {
 };
 
 describe("Platform audit query errors", () => {
+	it.each(["skills", "defaultRelayKey"] as const)(
+		"decodes the current %s configuration writer field without accepting invalid metadata",
+		(field) => {
+			const row = {
+				auditId: "configuration-audit",
+				traceId: "configuration-trace",
+				actorType: "user",
+				actorId: "configuration-owner",
+				action: "agent.configuration.revised",
+				targetType: "agent",
+				targetId: "configuration-agent",
+				outcome: "succeeded",
+				occurredAt: new Date("2026-10-20T00:00:00.000Z"),
+				details: { changedFields: [field] },
+			} satisfies AuditRow;
+			expect(decodePlatformAuditRowV1(row)).toMatchObject({
+				auditId: row.auditId,
+				summary: `agent.configuration.revised: ${field}`,
+			});
+			for (const details of [
+				{ changedFields: [field, field] },
+				{ changedFields: ["source", field] },
+				{ changedFields: [field, "unknown-field"] },
+				{ changedFields: [field], secretValue: "SECRET_SENTINEL" },
+			]) {
+				expect(() => decodePlatformAuditRowV1({ ...row, details })).toThrow(
+					PlatformAuditQueryError,
+				);
+			}
+			expect(() =>
+				decodePlatformAuditRowV1({ ...row, action: "agent.access.updated" }),
+			).toThrow(PlatformAuditQueryError);
+		},
+	);
+
 	it("uses fixed messages without persistence details", async () => {
 		const adapter = new PostgresPlatformAuditQueryV1({
 			databaseUrl:

@@ -344,6 +344,7 @@ const platformAuditActionMetadata = {
 } as const;
 
 const configurationChangedFields = [
+	"defaultRelayKey",
 	"source",
 	"environment",
 	"modelConfiguration",
@@ -352,6 +353,7 @@ const configurationChangedFields = [
 	"channels",
 	"owners",
 	"availability",
+	"skills",
 ] as const;
 
 export type PlatformAuditActionV1 = keyof typeof platformAuditActionMetadata;
