@@ -62,7 +62,7 @@ API 镜像内置[部署模块](../../apps/platform-api/src/deployment-entry.ts)�
 Compose 环境变量。选定 Docker context 必须能读取 API 配置、TLS 和生成状态目录；
 源令牌只由本地主机上的启动脚本读取。
 `up` 在开放 Web 前从本机 loopback 以 `HEAD /auth/login` 检查 API：正确令牌须返回
-`405`，错误令牌须返回 `400`。`HEAD` 不触发 LDAP 登录或 Authentik OIDC 跳转；
+`405`，错误令牌须返回 `400`。`HEAD` 不触发 LDAP 登录或 OIDC 跳转；
 这只验证挂载的部署模块与代理令牌接线，
 不提交账号密码，也不代表 LDAP 登录或当前账号复核已经通过；探测失败时 API/Web 保持关闭。
 真实浏览器登录仍需当前 LDAP 与账号事实验收。
@@ -81,8 +81,6 @@ Compose 环境变量。选定 Docker context 必须能读取 API 配置、TLS �
 身份部署负责 HttpOnly、Secure、SameSite 会话及其真实登录过程，符合
 [身份边界](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#91-identityadapter)。
 此目录只挂给 API，不包含 Kubernetes credential、Worker keyring 或签名私钥。
-独立本地 Authentik 可使用[部署身份 Adapter](authentik/README.md)，同时接通浏览器登录和
-Worker 的当前用户目录；这不替代实际账号和完整首通验收。
 模型凭证由 Owner 在申请和配置时提交，经现有加密公钥加密，只由 Worker 解密注入。
 
 Web 默认使用 `https://localhost:3001`（可由 `PLATFORM_LOCAL_WEB_PORT` 调整），
@@ -148,9 +146,6 @@ bash deploy/local/platform.sh status
 模型出站由 Worker 唯一调谐的 `modelEgress` 与 `dnsEgress` 配置：只允许固定 IP 或指定
 namespace/Pod 标签和端口，缺省拒绝全部出站。不增加另一条 allow-all NetworkPolicy。
 Worker 预检与 Agent 模型调用都必须在真实网络上验证。
-隔离 kind 的合成 A/B HTTPS 目标、测试 CA 和脱敏计数回执可通过
-[受控 Relay 探针](relay-probe.md)准备；它只为相同 Pod/Profile 的正负例提供目标，
-不能替代真实 Provider 或 Connection 验收。
 
 停止时先通过 Platform 正常停止 Agent 并确认调谐完成。脚本先关闭 Web/API 写入口，
 把 Worker 缩至零副本并等待退出，再核对 namespace 中的 Agent StatefulSet 已缩至零副本

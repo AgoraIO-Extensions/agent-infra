@@ -1,11 +1,20 @@
-# Non-secret ACK deployment values. All referenced Secrets and the directory
-# source ConfigMap are created from the E2E private inputs outside this chart.
+# ACK E2E deployment values. All referenced Secrets and the directory source
+# ConfigMap are created from the E2E private inputs outside this chart.
+#
+# The image digests, runtime host digest, public origin, WeCom Corp ID and TLS
+# Secret below are placeholders. Replace them in a private values file kept
+# outside Git; deploy.sh rejects a rendered manifest that still contains the
+# placeholders. Never commit real LB addresses, Corp IDs, Secret values or
+# environment-specific digests to this repository.
 images:
-  web: ghcr.io/agoraio-extensions/agent-infra/web@sha256:df1ee9b1d284b6dc4fc92a5033477fe4e82de7e53e78aabacdb21f9af78c1162
-  api: ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:1ff771514f0fa426fc719f700f16d7f7428d3ccdb33e5c4380ffe8e19625ecea
-  worker: ghcr.io/agoraio-extensions/agent-infra/platform-worker@sha256:f99076114c2690c0a9716b504bb0a12132703a645dc13138110136ae033c4efa
-  directory: ghcr.io/agoraio-extensions/agent-infra/enterprise-directory-sync@sha256:cb8a377ab39877149fd8d852731fc74023b95b7f1e9396d47c7cc79e9501fa37
-  postgres: ghcr.io/agoraio-extensions/agent-infra/postgres@sha256:3a1c948f0c6c857ce1db23caa700794725f0f1a7b3dc395925aa363d3284af49
+  web: ghcr.io/agoraio-extensions/agent-infra/web@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  api: ghcr.io/agoraio-extensions/agent-infra/platform-api@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  worker: ghcr.io/agoraio-extensions/agent-infra/platform-worker@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  directory: ghcr.io/agoraio-extensions/agent-infra/enterprise-directory-sync@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  postgres: ghcr.io/agoraio-extensions/agent-infra/postgres@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  runtimeHost:
+    repository: ghcr.io/agoraio-extensions/agent-infra/agent-runtime-host
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
   pullSecrets:
     - ack-ghcr-pull
 secrets:
@@ -23,9 +32,9 @@ secrets:
   workerDirectoryRead: agent-infra-worker-directory-read
   workerCa: agent-infra-worker-ca
   webTls: agent-infra-web-tls
-publicOrigin: https://118.178.91.138
+publicOrigin: https://ack.example.invalid
 directory:
-  corpId: ww1792ac25c99153bd
+  corpId: ww0000000000000000
   sourceConfigMap: agent-infra-directory-source
   sourceModule: file:///app/directory-source/source.ts
   runtimeDatabaseRole: agent_infra_directory

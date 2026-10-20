@@ -1,5 +1,16 @@
-# Start from chart/values.yaml and keep this file outside Git if it contains
-# environment-specific Secret names or image overrides.
+# Start from chart/values.yaml and keep this file outside Git: it contains the
+# environment-specific image digests, LB origin, WeCom Corp ID and Secret names.
+#
+# Required overrides (chart defaults are placeholders and deploy.sh rejects a
+# rendered manifest that still contains them):
+# - images.{web,api,worker,directory,postgres}      immutable repo@sha256 digests
+# - images.runtimeHost.{repository,digest}          Worker-created Runtime images
+# - publicOrigin                                    actual ACK LB origin
+# - directory.corpId                                real WeCom Corp ID
+# - ingress.tlsSecret / ingress.className           cluster TLS Secret / class
+# - images.pullSecrets                              GHCR pull Secret name(s)
+# - secrets.*                                       Secret names in this namespace
+#
 # The chart expects these existing Secret/ConfigMap objects in the namespace:
 # - ack-ghcr-pull
 # - agent-infra-platform-database

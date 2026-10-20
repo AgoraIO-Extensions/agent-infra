@@ -699,10 +699,11 @@ Agent Pod 的 ServiceAccount、网络隔离、出站范围、Secret 注入和运
 
 Runtime 事件遵循工程 Spec 的[事件保存](SPEC-agent-infra-M1-engineering-architecture.md#123-事件保存)与脱敏边界。
 
-历史迁移的部署入口使用独立的[一次性迁移 Job](../../deploy/helm/runtime-legacy-migration/README.md)，
-由既有 CLI 消费原 PVC 及独立只读信任文件。部署方先完成正常停机和 PVC 清退；提交模式还须
-维持全部 Platform API/Worker 入口的隔离维护窗口。该 Job 不属于主应用升级 hook，不改变
-第 8.1 节的历史证明与授权约束，也不向长期 Workload 增加未消费的信任配置。
+历史迁移由部署方在构建后的 Host 目录手工运行既有 `legacy-migration-cli.mjs` 完成，输入与
+提交语义见 [Runtime 部署说明](../../deploy/runtime/README.md#就绪证明与历史-session-迁移)。
+迁移只消费原 PVC 及独立只读信任文件；部署方先完成正常停机和 PVC 清退，提交模式还须维持
+全部 Platform API/Worker 入口的隔离维护窗口。该迁移不属于主应用升级 hook，不改变第 8.1 节
+的历史证明与授权约束，也不向长期 Workload 增加未消费的信任配置。
 
 ### 10.1 Codex Linux sandbox 启动准入
 

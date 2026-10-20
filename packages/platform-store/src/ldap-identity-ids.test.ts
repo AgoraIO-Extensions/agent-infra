@@ -193,7 +193,7 @@ it("rejects a Platform-disabled administrator inside the governance transaction"
 });
 
 it("reads opaque user IDs for current Platform gates", async () => {
-	const userId = "authentik_opaque_user_01";
+	const userId = "legacy_opaque_user_01";
 	await client`insert into platform.platform_user_disables(user_id) values (${userId})`;
 	try {
 		expect(await store.isPlatformDisabled(userId)).toBe(true);
