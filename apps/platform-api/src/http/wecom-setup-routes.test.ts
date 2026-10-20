@@ -449,6 +449,63 @@ it("returns QR availability on the bot status V2 only to the current Owner, deci
 	expect((await withQr.request(status)).status).toBe(401);
 });
 
+it("reports a dependency outage on the bot status V2 as 503 while V1 keeps its 404 (#2911)", async () => {
+	let outage = false;
+	const setup = createWecomSetupV1({
+		authority: async (agentId, actorId) => {
+			if (outage) throw new Error("database unavailable");
+			return actorId === "owner"
+				? {
+						configuration: {
+							...agentConfigurationConformanceRecordV1,
+							agentId,
+						},
+						authorizationRevision: "fixture",
+					}
+				: null;
+		},
+		store: {
+			activeBinding: async () => false,
+			create: async () => {},
+			read: async () => null,
+			consume: async () => false,
+			cancel: async () => false,
+		},
+		encrypt: async () => ({ cipher: true }),
+	});
+	let actor = "owner";
+	const app = testApp();
+	registerWecomSetupRoutesV1(app, {
+		setup,
+		identity: {
+			resolve: async () => ({
+				schemaVersion: 1 as const,
+				userId: actor,
+				displayName: "Fixture",
+				accountStatus: "active" as const,
+				organizationIds: [],
+				roles: ["employee"],
+				authorizationRevision: "fixture",
+			}),
+			hydrateUsers: async () => [],
+		},
+	});
+	// 依赖故障不是资源判定：V2 为 503 且不带扫码字段；已发布的 V1 行为不变。
+	outage = true;
+	const unavailable = await app.request("/api/v2/agents/agent/wecom-bot");
+	expect(unavailable.status).toBe(503);
+	expect(await unavailable.text()).not.toContain("qrAvailable");
+	expect((await app.request("/api/v1/agents/agent/wecom-bot")).status).toBe(
+		404,
+	);
+	// 非 Owner 仍与不存在的 Agent 一样是 404，不因故障分类而可区分。
+	outage = false;
+	actor = "other";
+	expect((await app.request("/api/v2/agents/agent/wecom-bot")).status).toBe(
+		404,
+	);
+});
+
 it("does not publish the bot status V2 on the application setup routes (#2911)", async () => {
 	const setup = createWecomSetupV1({
 		authority: async (agentId) => ({

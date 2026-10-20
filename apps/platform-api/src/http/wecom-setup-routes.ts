@@ -45,7 +45,12 @@ export function registerWecomSetupRoutesV1(
 	if (dependencies.application && !dependencies.callbackUrl)
 		throw new Error("WeCom application callback URL unavailable");
 	// 连接状态先按当前账号解析 Owner 权限；非 Owner、其他 Agent 与不存在的 Agent 同为 404。
-	async function readCurrent(context: Context) {
+	// V1 沿用既有行为，所有读取失败都为 404；V2 只把权限与资源判定（WecomSetupError）
+	// 归为 404，依赖故障返回 503，与配置会话路由的分类一致。
+	async function readCurrent(
+		context: Context,
+		classifyDependencyFailure = false,
+	) {
 		const metadata = requestMetadata(context.req.raw);
 		const identity = await resolveIdentity(
 			dependencies.identity,
@@ -61,8 +66,13 @@ export function registerWecomSetupRoutesV1(
 					dependencies.application ? "wecom_app" : "wecom_bot",
 				),
 			};
-		} catch {
-			throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);
+		} catch (error) {
+			throw new HttpProtocolError(
+				classifyDependencyFailure && !(error instanceof WecomSetupError)
+					? "DEPENDENCY_UNAVAILABLE"
+					: "RESOURCE_UNAVAILABLE",
+				metadata.traceId,
+			);
 		}
 	}
 	app.get(
@@ -84,7 +94,7 @@ export function registerWecomSetupRoutesV1(
 	// #2911：V2 状态只在 Owner 权限校验通过后附带扫码能力；V1 响应保持只含 status。
 	if (!dependencies.application)
 		app.get("/api/v2/agents/:agentId/wecom-bot", async (context) => {
-			const { metadata, current } = await readCurrent(context);
+			const { metadata, current } = await readCurrent(context, true);
 			const availability = resolveWecomBotQrAvailabilityV1(dependencies.botQr);
 			const projection = WecomBotConnectionProjectionV2Schema.safeParse(
 				availability.qrAvailable
