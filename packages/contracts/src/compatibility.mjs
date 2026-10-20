@@ -821,7 +821,8 @@ function isRuntimeOperationIdentityOpenApiAddition(previous, current) {
 // union on the existing native capability route: the V1 request schema and all
 // existing operations stay byte-compatible, and V1 stays attachment-free.
 function isNativeCapabilityInvocationV2OpenApiAddition(previous, current) {
-	const added = current.components?.schemas?.NativeCapabilityInvocationRequestV2;
+	const added =
+		current.components?.schemas?.NativeCapabilityInvocationRequestV2;
 	if (
 		!added ||
 		previous.components?.schemas?.NativeCapabilityInvocationRequestV2
@@ -832,7 +833,8 @@ function isNativeCapabilityInvocationV2OpenApiAddition(previous, current) {
 	let replaced = false;
 	for (const pathItem of Object.values(normalized.paths ?? {})) {
 		for (const operation of Object.values(pathItem ?? {})) {
-			const schema = operation?.requestBody?.content?.["application/json"]?.schema;
+			const schema =
+				operation?.requestBody?.content?.["application/json"]?.schema;
 			if (!Array.isArray(schema?.anyOf) || schema.anyOf.length !== 2) continue;
 			const references = schema.anyOf.map((entry) => entry?.$ref);
 			if (
