@@ -3677,8 +3677,9 @@ body {
 	padding: 15px 0;
 	border-bottom: 1px solid var(--border);
 }
-.application-row:first-child,
-.application-progress li:first-child {
+/* 设计 .list-row:first-child 只命中申请列表首行；审批进度的步骤前还有 .section-head，
+   首步保留 15px 上内边距（W-11）。 */
+.application-row:first-child {
 	padding-top: 0;
 }
 .application-row:last-child,
@@ -3698,8 +3699,9 @@ body {
 	font-weight: 650;
 	line-height: 1.65;
 }
-/* 设计 .list-row strong：我的 Agent 申请行标题 14px / 700。 */
-.management-content .application-row h2 {
+/* 设计 .list-row strong：申请行标题与审批进度步骤标题都是 14px / 700（W-12）。 */
+.management-content .application-row h2,
+.application-progress strong {
 	font-weight: 700;
 }
 .management-content .application-row p,

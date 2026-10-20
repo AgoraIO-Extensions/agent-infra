@@ -785,6 +785,19 @@ test("application detail puts actions in the heading, shows three progress rows 
 		"color",
 		await resolved(page, "color", "var(--success-ink)"),
 	);
+	// W-11：设计 .list-row:first-child 不命中进度首步（前面还有 .section-head），首步保留 15px 上内边距。
+	await expect(rows.first()).toHaveCSS("padding-top", "15px");
+	// W-12：设计 .list-row-main strong 为默认粗体 700。
+	for (const title of await rows.locator("strong").all())
+		await expect(title).toHaveCSS("font-weight", "700");
+	// W-13：副标题与首步「提交时间 · 申请人」按设计 applicationProgress。
+	await expect(progress.locator(".section-heading p")).toHaveText(
+		"状态来自服务端事件",
+	);
+	await expect(rows.first().locator("small")).toHaveText(
+		new RegExp(` · ${pendingApplication.applicant?.displayName}$`),
+	);
+	await expect(rows.first().locator("small time")).toHaveCount(1);
 
 	const next = page.getByRole("region", { name: "下一步" });
 	await expect(next).toContainText(
@@ -851,6 +864,30 @@ test("rejected application detail offers the resubmit action with an icon in the
 	await expect(page.getByRole("region", { name: "下一步" })).toContainText(
 		"查看审批原因，修改后重新提交。",
 	);
+	// W-13：驳回提示标题按设计为「需要修改后重提」，原因仍取服务端投影。
+	const reason = page.locator(".application-decision-reason");
+	await expect(reason.locator('[data-slot="alert-title"]')).toHaveText(
+		"需要修改后重提",
+	);
+	await expect(reason).toContainText("范围过大");
+});
+
+test("withdraw confirmation uses the design copy and keeps focus inside the dialog until it closes (W-16)", async ({
+	page,
+}) => {
+	await fixture(page);
+	await page.goto("/my-agents/application-browser-1");
+	const withdraw = page.getByRole("button", { name: "撤回申请" });
+	await withdraw.click();
+	const dialog = page.getByRole("dialog", { name: "撤回这条申请？" });
+	await expect(dialog.locator('[data-slot="dialog-description"]')).toHaveText(
+		"撤回后申请不会进入审批队列；你可以重新创建申请。",
+	);
+	await expect(dialog).not.toContainText(pendingApplication.name);
+	await page.keyboard.press("Escape");
+	await expect(dialog).toHaveCount(0);
+	await expect(withdraw).toBeFocused();
+	await noHorizontalOverflow(page);
 });
 
 // N-21：每个页面只有一个导航链接是当前页；页内返回 / 取消链接不因前缀匹配被读成「当前页」。

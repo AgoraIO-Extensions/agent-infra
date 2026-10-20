@@ -953,8 +953,10 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await expect(page.getByRole("button", { name: "正在撤回…" })).toBeDisabled();
 	api.release();
 	await expect(page.getByText("已撤回", { exact: true })).toBeVisible();
-	await expect(pageStatus(page)).toBeFocused();
-	await expect(pageStatus(page)).toHaveText("撤回请求已提交：已撤回。");
+	// W-15：设计只用 Toast「申请已撤回」确认，不再内联结果；「撤回申请」消失后焦点落在页面 h1。
+	await expect(toastHost(page)).toHaveText("申请已撤回");
+	await expect(pageStatus(page)).toHaveCount(0);
+	await expect(page.getByRole("heading", { level: 1 })).toBeFocused();
 	await expect(page.getByRole("button", { name: "撤回申请" })).toHaveCount(0);
 });
 

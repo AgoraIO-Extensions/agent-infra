@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Timestamp } from "@/components/ui/timestamp";
-import { useResultFocus } from "@/hooks/use-result-focus";
+import { useToast } from "@/components/ui/toast";
 import { reasoningLevelLabel } from "@/lib/reasoning-level-label";
 import { statusTone } from "@/lib/status-tone";
 
@@ -77,10 +77,14 @@ function ProgressDetail({
 	step: ApplicationProgressStepKey;
 	application: AgentApplicationProjectionV2;
 }) {
+	// 设计 applicationProgress：首步为「时间 · 申请人」（W-13）；没有申请人投影时只显示时间。
 	if (step === "submitted")
 		return (
 			<>
-				提交于 <Timestamp value={application.submittedAt} />
+				<Timestamp value={application.submittedAt} />
+				{application.applicant?.displayName
+					? ` · ${application.applicant.displayName}`
+					: null}
 			</>
 		);
 	if (step === "approval")
@@ -114,7 +118,8 @@ export function MyAgentApplicationDetailScreen({
 		withdrawalResult?.applicationId === state.application.applicationId
 			? withdrawalResult
 			: undefined;
-	const resultRef = useResultFocus(submittedResult);
+	const toast = useToast();
+	const headingRef = useRef<HTMLHeadingElement>(null);
 	const withdrawButtonRef = useRef<HTMLButtonElement>(null);
 	const confirmationKey =
 		state.kind === "ready"
@@ -133,6 +138,16 @@ export function MyAgentApplicationDetailScreen({
 	useEffect(() => {
 		if (applicationId !== null) setWithdrawalLatched(false);
 	}, [applicationId]);
+	// 设计：撤回成功只给 Toast「申请已撤回」（W-15）；「撤回申请」随状态消失，焦点交给页面 h1。
+	useEffect(() => {
+		if (!submittedResult) return;
+		toast(
+			submittedResult.status === "withdrawn"
+				? "申请已撤回"
+				: `撤回请求已提交：${agentManagementStatusLabels[submittedResult.status]}`,
+		);
+		headingRef.current?.focus();
+	}, [submittedResult, toast]);
 	if (state.kind === "loading")
 		return <PageLoadingState title="申请详情" message="正在读取申请…" />;
 	if (state.kind === "unavailable")
@@ -190,7 +205,11 @@ export function MyAgentApplicationDetailScreen({
 					{/* 设计为可读编号（#2861 跟踪）；接口就绪前只写「申请详情」，不外露内部申请 ID。 */}
 					<p className="page-eyebrow">申请详情</p>
 					{/* tabIndex=-1：读取失败后「重新登录」「重新加载申请」恢复时焦点落在这里。 */}
-					<h1 id="my-agent-application-detail-heading" tabIndex={-1}>
+					<h1
+						id="my-agent-application-detail-heading"
+						ref={headingRef}
+						tabIndex={-1}
+					>
 						{application.name}
 					</h1>
 					<p>{application.description}</p>
@@ -220,12 +239,8 @@ export function MyAgentApplicationDetailScreen({
 									</Button>
 								}
 								title="撤回这条申请？"
-								description={
-									<>
-										“{application.name}
-										”撤回后申请不会进入审批队列；你可以重新创建申请。
-									</>
-								}
+								// 设计文案不重复申请名：页面 h1 已是该申请（W-16）。
+								description="撤回后申请不会进入审批队列；你可以重新创建申请。"
 								// 设计稿只有「确认撤回」与页眉关闭钮，不再另给次按钮。
 								cancelLabel={null}
 								confirmLabel="确认撤回"
@@ -248,20 +263,6 @@ export function MyAgentApplicationDetailScreen({
 					</div>
 				) : null}
 			</header>
-			{submittedResult ? (
-				<Alert
-					tone="info"
-					ref={resultRef}
-					tabIndex={-1}
-					className="application-detail-feedback"
-					role="status"
-				>
-					<AlertDescription>
-						撤回请求已提交：
-						{agentManagementStatusLabels[submittedResult.status]}。
-					</AlertDescription>
-				</Alert>
-			) : null}
 			{withdrawalError ? (
 				<Alert
 					tone="danger"
@@ -281,7 +282,7 @@ export function MyAgentApplicationDetailScreen({
 					<div className="section-heading">
 						<div>
 							<h2 id="application-progress-heading">审批进度</h2>
-							<p>状态以最新申请记录为准</p>
+							<p>状态来自服务端事件</p>
 						</div>
 						<Badge tone={statusTone(application.status)}>
 							{agentManagementStatusLabels[application.status]}
@@ -302,7 +303,12 @@ export function MyAgentApplicationDetailScreen({
 					</ul>
 					{application.decision?.reason ? (
 						<Alert tone="danger" className="application-decision-reason">
-							<AlertTitle>审批原因：</AlertTitle>
+							{/* 设计驳回提示标题「需要修改后重提」（W-13）；只有驳回会带原因。 */}
+							<AlertTitle>
+								{application.status === "rejected"
+									? "需要修改后重提"
+									: "审批原因："}
+							</AlertTitle>
 							<AlertDescription>{application.decision.reason}</AlertDescription>
 						</Alert>
 					) : null}
@@ -334,8 +340,6 @@ export function MyAgentApplicationDetailScreen({
 									)
 									.join("、") || "未提供"}
 							</dd>
-							<dt>申请人</dt>
-							<dd>{application.applicant?.displayName ?? "未知"}</dd>
 							<dt>更新于</dt>
 							<dd>
 								<Timestamp
