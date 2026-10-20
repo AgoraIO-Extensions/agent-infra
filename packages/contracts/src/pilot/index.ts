@@ -11,6 +11,7 @@ export * from "./audit.ts";
 export * from "./browser.ts";
 export * from "./delegated.ts";
 export * from "./direct.ts";
+export * from "./directory-search.ts";
 export * from "./errors.ts";
 export * from "./multi-service.ts";
 export * from "./native-capability.ts";
