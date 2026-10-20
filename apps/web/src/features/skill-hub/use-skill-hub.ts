@@ -6,6 +6,7 @@ import {
 	isRetryableSkillHubError,
 	loadOwnedSkillHubVersions,
 	loadSkillHubDirectory,
+	loadSkillHubInstallations,
 	loadSkillHubVersion,
 } from "./skill-hub.js";
 import { listSkillHubProjects } from "./skill-hub-management.js";
@@ -111,6 +112,22 @@ export function useOwnedSkillHubVersions({
 		allowed: Boolean(identityKey),
 		client,
 		load: (current, signal) => loadOwnedSkillHubVersions(current, signal),
+	});
+}
+
+/** 当前用户在我的库中的安装（「我的安装」）。 */
+export function useSkillHubInstallations({
+	identityKey,
+	client,
+}: {
+	identityKey: string;
+	client?: Client;
+}) {
+	return useIsolatedSkillHubRead({
+		scope: ["skill-hub", "installations", identityKey],
+		allowed: Boolean(identityKey),
+		client,
+		load: (current, signal) => loadSkillHubInstallations(current, signal),
 	});
 }
 

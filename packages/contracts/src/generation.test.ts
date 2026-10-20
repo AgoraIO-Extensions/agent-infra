@@ -306,6 +306,7 @@ describe("standard contract artifacts", () => {
 		).toEqual(["accepted", "replayed"]);
 		for (const path of [
 			"/api/v2/skills",
+			"/api/v2/skills/installations",
 			"/api/v2/skills/owned-versions",
 			"/api/v2/skills/reviews",
 			"/api/v2/skills/versions/{skillVersionId}",

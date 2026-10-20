@@ -1,15 +1,18 @@
 import {
 	SkillHubDirectoryPageV1Schema,
+	SkillHubInstallationPageV1Schema,
 	SkillHubOwnedVersionPageV1Schema,
 	SkillHubVersionDetailV1Schema,
 } from "@agent-infra/contracts/pilot";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
 import {
 	listOwnedSkillHubVersionsV1,
+	listSkillHubInstallationsV1,
 	listSkillHubVersionsV1,
 	readSkillHubVersionDetailV1,
 } from "../../pilot/generated-v2/sdk.gen.js";
 import type {
+	SkillHubInstallationListItemV1,
 	SkillHubOwnedVersionV1,
 	SkillHubVersionDetailV1,
 	SkillHubVersionMetadataV1,
@@ -26,6 +29,11 @@ export type SkillHubDirectoryState =
 /** 当前用户自己的版本（含审核中、已驳回、已撤销）。 */
 export type SkillHubOwnedVersionsState =
 	| { kind: "ready"; versions: SkillHubOwnedVersionV1[] }
+	| CollectionReadUnavailable;
+
+/** 当前用户（user 主体）仍在我的库中的安装。 */
+export type SkillHubInstallationsState =
+	| { kind: "ready"; installations: SkillHubInstallationListItemV1[] }
 	| CollectionReadUnavailable;
 
 export type SkillHubVersionState =
@@ -143,6 +151,31 @@ export function loadOwnedSkillHubVersions(
 		},
 		signal,
 	);
+}
+
+/** 读完当前用户在我的库中的全部安装；服务端按会话主体过滤，页面不提交主体。 */
+export async function loadSkillHubInstallations(
+	client?: Client,
+	signal?: AbortSignal,
+): Promise<SkillHubInstallationsState> {
+	const result = await collectPages(
+		(query, pageSignal) =>
+			listSkillHubInstallationsV1<false>({
+				client,
+				query,
+				signal: pageSignal,
+				responseStyle: "fields",
+				throwOnError: false,
+			}),
+		(data) => {
+			const parsed = SkillHubInstallationPageV1Schema.safeParse(data);
+			return parsed.success ? parsed.data : undefined;
+		},
+		signal,
+	);
+	return result.kind === "ready"
+		? { kind: "ready", installations: result.versions }
+		: result;
 }
 
 /** 版本详情：含有界正文、资源清单、发布者与本人安装状态。 */

@@ -9,6 +9,7 @@ import {
 import type { SkillProviderRegistryV1 } from "@agent-infra/platform-core";
 import {
 	createSkillProviderImportV1,
+	pageSkillHubInstallationsV1,
 	pageSkillHubOwnedVersionsV1,
 	pageSkillHubReviewQueueV1,
 	pageSkillHubVersionsV1,
@@ -22,6 +23,7 @@ import { PostgresSkillHubLifecycleV1 } from "@agent-infra/platform-store";
 import { createDeploymentIdentityScope } from "./deployment-identity.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import type { SkillHubImportRoutesDependenciesV1 } from "./http/skill-hub-import-routes.js";
+import type { SkillHubInstallationListRoutesDependenciesV1 } from "./http/skill-hub-installation-list-routes.js";
 import type { SkillHubInstallationRoutesDependenciesV1 } from "./http/skill-hub-installation-routes.js";
 import type { SkillHubProjectRoutesDependenciesV1 } from "./http/skill-hub-project-routes.js";
 import type { SkillHubPublicationRoutesDependenciesV1 } from "./http/skill-hub-publication-routes.js";
@@ -114,6 +116,19 @@ export function assembleSkillHubReadApiV1(input: {
 				store.uninstallInstallation(trusted, installationId, key),
 			),
 	};
+	const installationListDependencies: SkillHubInstallationListRoutesDependenciesV1 =
+		{
+			identity: input.identity,
+			list: (request, trusted, query) =>
+				scope.requestScope(request, async () =>
+					pageSkillHubInstallationsV1(
+						await store.listInstallations(trusted, query),
+						trusted.userId,
+					),
+				),
+			recordRefusal: (metadata, userId, reason) =>
+				store.recordReadRefusal(metadata, userId, reason),
+		};
 	const publicationDependencies: SkillHubPublicationRoutesDependenciesV1 = {
 		identity: input.identity,
 		publish: (request, trusted, key, command) =>
@@ -208,6 +223,7 @@ export function assembleSkillHubReadApiV1(input: {
 	return {
 		dependencies,
 		installationDependencies,
+		installationListDependencies,
 		publicationDependencies,
 		reviewDependencies,
 		versionDetailDependencies,

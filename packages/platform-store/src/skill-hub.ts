@@ -10,6 +10,7 @@ import {
 	parseSkillHubIdentitySnapshotV1,
 	parseSkillHubIdV1,
 	parseSkillHubInstallationCommandV1,
+	parseSkillHubInstallationQueryV1,
 	parseSkillHubOwnedVersionQueryV1,
 	parseSkillHubProjectCreateV1,
 	parseSkillHubProjectIdempotencyKeyV1,
@@ -30,6 +31,7 @@ import {
 	reviewSkillHubVersionV1,
 	revokeSkillHubVersionV1,
 	type SkillHubInstallationCommandV1,
+	type SkillHubInstallationListEntryV1,
 	type SkillHubInstallationV1,
 	SkillHubLifecycleErrorV1,
 	SkillHubOperationErrorV1,
@@ -1663,6 +1665,83 @@ export class PostgresSkillHubLifecycleV1 {
 		} catch {
 			return null;
 		}
+	}
+
+	/**
+	 * 「我的安装」：只读当前会话用户 user 主体、仍处于 installed 的安装，按安装 ID keyset 分页。
+	 * 版本按详情可见性规则（canViewSkillHubVersionDetailV1）判断，当前不可见时只返回安装事实，
+	 * 不带版本名称。审计只记条数。
+	 */
+	async listInstallations(
+		context: SkillHubRequestV1,
+		queryInput: { readonly cursor?: unknown; readonly limit?: unknown },
+	) {
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				const query = parseSkillHubInstallationQueryV1(queryInput);
+				const rows = await transaction
+					.select({
+						installation: skillHubInstallations,
+						version: skillHubVersions,
+						name: skillHubSkills.name,
+						organizationId: skillHubSkills.organizationId,
+						status: skillHubSkills.status,
+					})
+					.from(skillHubInstallations)
+					.innerJoin(
+						skillHubVersions,
+						eq(skillHubVersions.id, skillHubInstallations.skillVersionId),
+					)
+					.innerJoin(
+						skillHubSkills,
+						eq(skillHubSkills.id, skillHubVersions.skillId),
+					)
+					.where(
+						and(
+							eq(skillHubInstallations.principalType, "user"),
+							eq(skillHubInstallations.principalId, request.userId),
+							eq(skillHubInstallations.state, "installed"),
+							query.cursor === undefined
+								? undefined
+								: gt(skillHubInstallations.id, query.cursor),
+						),
+					)
+					.orderBy(asc(skillHubInstallations.id))
+					.limit(query.limit + 1);
+				const entries: SkillHubInstallationListEntryV1[] = rows
+					.slice(0, query.limit)
+					.map((row) => {
+						const version = decode(row.version, row.name);
+						return Object.freeze({
+							installation: decodeInstallation(row.installation),
+							version: canViewSkillHubVersionDetailV1(
+								version,
+								identity.actor,
+								row.organizationId,
+								row.status,
+							)
+								? Object.freeze({ ...version, name: row.name })
+								: null,
+						});
+					});
+				await audit(
+					transaction,
+					request,
+					"skill.installations.read",
+					"installations",
+					"succeeded",
+					{ count: entries.length },
+				);
+				return Object.freeze({
+					entries: Object.freeze(entries),
+					nextCursor:
+						rows.length > query.limit
+							? (entries.at(-1)?.installation.installationId ?? null)
+							: null,
+				});
+			},
+		);
 	}
 
 	async installVersion(

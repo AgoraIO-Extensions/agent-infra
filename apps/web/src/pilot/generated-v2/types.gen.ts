@@ -1417,6 +1417,30 @@ export type SkillHubInstallationCommandV1 = {
     skillVersionId: string;
 };
 
+export type SkillHubInstallationListItemV1 = {
+    installationId: string;
+    installedAt: string;
+    needUpgrade: boolean;
+    skillVersionId: string;
+    updatedAt: string;
+    version: {
+        access: 'visible';
+        name: string;
+        provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+        skillId: string;
+        state: 'published' | 'revoked';
+        version: string;
+        visibility: 'PRIVATE' | 'MEMBER' | 'ORGANIZATION' | 'MARKET';
+    } | {
+        access: 'unavailable';
+    };
+};
+
+export type SkillHubInstallationPageV1 = {
+    items: Array<SkillHubInstallationListItemV1>;
+    nextCursor: string | null;
+};
+
 export type SkillHubInstallationResponseV1 = {
     installation: SkillHubInstallationV1;
     replayed: boolean;
@@ -5270,6 +5294,46 @@ export type ImportSkillHubVersionV1Responses = {
 };
 
 export type ImportSkillHubVersionV1Response = ImportSkillHubVersionV1Responses[keyof ImportSkillHubVersionV1Responses];
+
+export type ListSkillHubInstallationsV1Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/skills/installations';
+};
+
+export type ListSkillHubInstallationsV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListSkillHubInstallationsV1Error = ListSkillHubInstallationsV1Errors[keyof ListSkillHubInstallationsV1Errors];
+
+export type ListSkillHubInstallationsV1Responses = {
+    /**
+     * The current user's installed Skill versions
+     */
+    200: SkillHubInstallationPageV1;
+};
+
+export type ListSkillHubInstallationsV1Response = ListSkillHubInstallationsV1Responses[keyof ListSkillHubInstallationsV1Responses];
 
 export type InstallSkillHubVersionV1Data = {
     body: SkillHubInstallationCommandV1;
