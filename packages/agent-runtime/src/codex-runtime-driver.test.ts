@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import {
 	chmod,
 	copyFile,
@@ -23,6 +23,13 @@ import type {
 	RuntimeStopRequestV1,
 	RuntimeSubmitTurnRequestV1,
 	RuntimeSubmitTurnRequestV2,
+} from "@agent-infra/contracts/runtime";
+import {
+	RuntimeBusinessGrantClaimsV4Schema,
+	type RuntimeBusinessRequestV4,
+	RuntimeNativeCapabilityRequestV4Schema,
+	RuntimeSubmitTurnRequestV4Schema,
+	runtimeRequestSigningPayloadV4,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -78,6 +85,7 @@ import {
 	ingressVerifiedRuntimeHost,
 	runtimeGrantFixture,
 } from "./grant-fixture.test-support.js";
+import { createRuntimeExecutionGrantValidatorV4 } from "./grant-v4.js";
 import {
 	createRuntimeFileBridgeV1,
 	createRuntimeFileResultReceiptV1,
@@ -13243,12 +13251,14 @@ async function skillDiscoveryFixture(
 		},
 	) => void,
 	optionsOverride: Partial<CodexRuntimeDriverOptions> = {},
+	fresh = false,
 ) {
 	const directory = await runtimeDirectory();
 	const seeded = await seedNativeCommandState(
 		directory,
 		"codex-native-thread-private",
 	);
+	if (fresh) await rm(seeded.path);
 	const bridge = new SkillDiscoveryBridge();
 	const options: CodexRuntimeDriverOptions = {
 		...driverOptions(seeded.path),
@@ -13312,6 +13322,236 @@ async function skillDiscoveryFixture(
 }
 
 describe("installed Codex Skill complete discovery (controlled behavior only)", () => {
+	it.each(["command", "skill"] as const)(
+		"invokes the discovered %s through Host V4 under a new Execution",
+		async (kind) => {
+			const f = await skillDiscoveryFixture(undefined, {}, true);
+			const keys = generateKeyPairSync("ed25519");
+			const store = await FileRuntimeStore.open(join(f.directory, "host.json"));
+			const host = await RuntimeHost.open({
+				store,
+				driver: f.driver,
+				grantValidation: { expectedIssuer: "platform-fixture" },
+				allowLegacyBusiness: false,
+				validateGrantV4: createRuntimeExecutionGrantValidatorV4(
+					new Map([["fixture", keys.publicKey]]),
+					{
+						expectedIssuer: "platform-fixture",
+						expectedWorkerId: "worker-fixture",
+					},
+				),
+			});
+			const deliver = <T extends RuntimeBusinessRequestV4>(request: T) => {
+				const now = Date.now();
+				const claims = RuntimeBusinessGrantClaimsV4Schema.parse({
+					schemaVersion: 4,
+					issuer: "platform-fixture",
+					audience: "runtime_host",
+					workerId: "worker-fixture",
+					issuedAt: now,
+					expiresAt: now + 30_000,
+					grantId: request.requestId,
+					principal: request.principal,
+					executionSource: request.executionSource,
+					channelId: request.channelId,
+					agentId: request.agentId,
+					conversationId: request.conversationId,
+					executionId: request.executionId,
+					turnId: request.turnId,
+					sessionGeneration: request.sessionGeneration,
+					traceId: request.traceId,
+					hostSessionRef: request.hostSessionRef,
+					operation: request.operation,
+					relayKeyBinding: request.keyBinding,
+					requestDigest: createHash("sha256")
+						.update(runtimeRequestSigningPayloadV4(request))
+						.digest("hex"),
+					purpose: "business",
+					authorizationRecordId: `authorization:${request.executionId}`,
+					allowedCommands: [
+						"selection" in request ? "turn.submit" : "native-capability.invoke",
+					],
+					attachments: [],
+				});
+				const header = Buffer.from(
+					JSON.stringify({
+						alg: "EdDSA",
+						kid: "fixture",
+						typ: "runtime-execution+jws",
+					}),
+				).toString("base64url");
+				const payload = Buffer.from(JSON.stringify(claims)).toString(
+					"base64url",
+				);
+				const token = `${header}.${payload}.${sign(null, Buffer.from(`${header}.${payload}`), keys.privateKey).toString("base64url")}`;
+				return {
+					businessRequest: { ...request, grant: { ...request.grant, token } },
+					privateKeyField: {
+						schemaVersion: 1 as const,
+						context: {
+							requestId: request.requestId,
+							grantId: claims.grantId,
+							requestDigest: claims.requestDigest,
+							traceId: request.traceId,
+							principal: request.principal,
+							executionSource: request.executionSource,
+							channelId: request.channelId,
+							agentId: request.agentId,
+							conversationId: request.conversationId,
+							executionId: request.executionId,
+							turnId: request.turnId,
+							sessionGeneration: request.sessionGeneration,
+							hostSessionRef: request.hostSessionRef,
+							operation: request.operation,
+							keyBinding: request.keyBinding,
+						},
+						keyDelivery: { relayKey: "synthetic-frozen-key" },
+					},
+				};
+			};
+			const original = RuntimeSubmitTurnRequestV4Schema.parse({
+				schemaVersion: 4,
+				requestId: "ordinary-request",
+				traceId: "ordinary-trace",
+				principal: f.binding.principal,
+				...f.binding.scope,
+				executionSource: "web",
+				channelId: "web",
+				turnId: "platform-turn-1",
+				hostSessionRef: null,
+				operation: {
+					kind: "execution",
+					id: f.binding.scope.executionId,
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+				},
+				grant: {
+					schemaVersion: 4,
+					format: "runtime-execution-jws",
+					token: "a.b.c",
+				},
+				keyBinding: {
+					purpose: "personal",
+					subjectId: f.binding.principal.id,
+					ciphertextRef: "key-1",
+					version: 1,
+				},
+				input: { text: "controlled original", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-option-primary",
+					reasoningLevel: "high",
+				},
+			});
+			try {
+				const submitted = await host.submitTurnV4(deliver(original));
+				expect(submitted.result).toEqual({
+					outcome: "accepted",
+					status: "running",
+				});
+				const nativeSessionRef = store.nativeSessionRef(
+					submitted.hostSessionRef,
+				);
+				if (!nativeSessionRef)
+					throw new Error("missing accepted native Session");
+				f.read.nativeSessionRef = nativeSessionRef;
+				f.bridge.setTurnStatus("completed");
+				expect(
+					await f.driver.getStatus(nativeSessionRef, original.executionId),
+				).toBe("completed");
+				await store.resolveOperation(
+					submitted.hostSessionRef,
+					original.executionId,
+					{ outcome: "accepted", status: "completed" },
+					nativeSessionRef,
+				);
+				const selector = kind === "command" ? "commands" : "skills";
+				const directory = await f.driver.readNativeMetadataV1(selector, f.read);
+				if (directory.selector === "status")
+					throw new Error("missing directory");
+				const capability = directory.capabilities[0];
+				if (!capability) throw new Error("missing capability");
+				const { input: _input, selection: _selection, ...context } = original;
+				const parameters = kind === "command" ? "" : "summarize files";
+				const request = RuntimeNativeCapabilityRequestV4Schema.parse({
+					...context,
+					requestId: `invoke-${kind}`,
+					executionId: `new-${kind}-execution`,
+					turnId: `new-${kind}-turn`,
+					hostSessionRef: submitted.hostSessionRef,
+					operation: {
+						kind: "execution",
+						id: `new-${kind}-execution`,
+						deliveryFence: 2,
+						executionDeliveryFence: 2,
+					},
+					capabilityId: capability.id,
+					capabilityKind: kind,
+					directoryRevision: directory.revision,
+					capabilitySourceVersion: capability.source.version,
+					parameters,
+					parametersDigest: createHash("sha256")
+						.update(parameters)
+						.digest("hex"),
+				});
+				if (kind === "skill")
+					f.bridge.setTurnsListResult({
+						data: [
+							{ id: f.bridge.nativeTurnId, status: "completed", items: [] },
+							{
+								id: `${f.bridge.nativeTurnId}-2`,
+								status: "inProgress",
+								items: [],
+							},
+						],
+					});
+				const accepted = await host.nativeCapabilityV4(deliver(request));
+				expect(accepted.result).toMatchObject({ outcome: "accepted" });
+				const starts = f.bridge.requests.filter(
+					(entry) =>
+						entry.method === "turn/start" &&
+						(entry.params as { clientUserMessageId?: string })
+							?.clientUserMessageId === request.executionId,
+				);
+				expect(starts).toHaveLength(kind === "skill" ? 1 : 0);
+				if (kind === "skill")
+					expect(starts[0]?.params).toMatchObject({
+						clientUserMessageId: request.executionId,
+						input: [
+							{ type: "text", text: "$workspace-summary summarize files" },
+							{
+								type: "skill",
+								name: "workspace-summary",
+								path: f.bridge.metadata.path,
+							},
+						],
+					});
+			} finally {
+				await host.close();
+				await store.close();
+			}
+		},
+	);
+
+	it.each(["commands", "skills"] as const)(
+		"keeps the selected %s directory stable for a newly admitted Execution",
+		async (selector) => {
+			const f = await skillDiscoveryFixture();
+			const discovered = await f.driver.readNativeMetadataV1(selector, f.read);
+			const binding = {
+				...f.binding,
+				scope: { ...f.binding.scope, executionId: "new-native-execution" },
+			};
+			const invoked = await f.driver.readNativeMetadataV1(selector, {
+				...f.read,
+				allowUnboundExecution: true,
+				assertCurrent: () => binding,
+				revalidate: async () => binding,
+			});
+			expect(invoked).toEqual(discovered);
+		},
+	);
+
 	it("merges fixed and Hub roots and rejects same-name overlap", async () => {
 		const hubEntry = {
 			schemaVersion: 1 as const,

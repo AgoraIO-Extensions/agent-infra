@@ -130,6 +130,7 @@ it("executes an admitted V3 native command through the Driver seam", async () =>
 				capabilitySourceVersion: "1",
 			}),
 		);
+		expect(create.mock.contexts).toEqual([env.driver]);
 		const query = signV3Fixture(
 			{
 				...context,

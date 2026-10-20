@@ -397,7 +397,7 @@ export class RuntimeHostV3 {
 							if (request.capabilityKind === "command") {
 								const create = this.options.driver.createNativeCommandCommand;
 								if (!create) nativeUnsupported();
-								return create({
+								return create.call(this.options.driver, {
 									schemaVersion: 1,
 									kind: "native-command",
 									operationId: request.executionId,
@@ -419,13 +419,13 @@ export class RuntimeHostV3 {
 							if (!create) nativeUnsupported();
 							const resolve = this.options.driver.resolveNativeSkillBinding;
 							if (!resolve) nativeUnsupported();
-							const skillBinding = resolve({
+							const skillBinding = resolve.call(this.options.driver, {
 								nativeSessionRef,
 								capabilityName,
 								capabilitySourceVersion: latestCapability.source.version,
 								directoryRevision: request.directoryRevision,
 							});
-							return create({
+							return create.call(this.options.driver, {
 								schemaVersion: 1,
 								kind: "native-capability",
 								operationId: request.executionId,
