@@ -2353,6 +2353,139 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 							leaseDurationMs: 30_000,
 						}),
 					).toBe(false);
+					// #2995：替换准备已在来源 fence 下建出资源但观测没有提交。来源观测仍是上一轮的
+					// 停止观测；Worker 读到这些归属资源后交回的证据必须被采纳，之后按完整来源删除。
+					expect(stopping?.payload.lifecycle.source.observation).toMatchObject({
+						status: "stopped",
+						resources: [pvc],
+					});
+					const replacementResources = resources.map((resource) =>
+						resource.kind === "PersistentVolumeClaim"
+							? { ...resource, resourceVersion: "restamped" }
+							: {
+									...resource,
+									uid: `replacement-${resource.uid}`,
+									resourceVersion: "2",
+								},
+					);
+					await client`update platform.outbox_items set available_at = now() where id = ${request.itemId}`;
+					const claimedStop = await store.claimSandboxReconciliation(request);
+					if (!claimedStop)
+						throw new Error("Expected drain of the interrupted replacement");
+					let stop: SessionSandboxReconciliationClaimV1 = claimedStop;
+					expect(stop).toMatchObject({
+						purpose: "drain",
+						drainComputeAllowed: true,
+					});
+					expect(
+						await store.recordSandboxObservation({
+							claim: stop,
+							observation: {
+								status: "observed",
+								resources: replacementResources,
+							},
+						}),
+					).toBe("unknown");
+					await client`update platform.outbox_items set available_at = now() where id = ${request.itemId}`;
+					const refinedStop = await store.claimSandboxReconciliation(request);
+					if (!refinedStop?.lifecycle)
+						throw new Error("Expected refined drain");
+					stop = refinedStop;
+					expect(refinedStop.lifecycle.source.observation).toEqual({
+						status: "observed",
+						resources: replacementResources,
+					});
+					for (const resource of replacementResources.filter(
+						(resource) => resource.kind !== "PersistentVolumeClaim",
+					)) {
+						const intent = {
+							schemaVersion: 1 as const,
+							state: "delete-requested" as const,
+							deleteAttemptId: `replacement-delete-${resource.kind}`,
+							deleteAttempted: false,
+							deleteCallResult: "not-attempted" as const,
+							sourceGeneration: refinedStop.lifecycle.source.sandbox.generation,
+							resourceFence: refinedStop.lifecycle.source.resourceFence,
+							managementFence: refinedStop.lifecycle.authority.managementFence,
+							resource,
+							preconditions: {
+								uid: resource.uid,
+								resourceVersion: resource.resourceVersion,
+							},
+						};
+						for (const progress of [
+							intent,
+							{
+								...intent,
+								state: "absent" as const,
+								deleteAttempted: true,
+								deleteCallResult: "acknowledged" as const,
+								absence: {
+									kind: resource.kind,
+									namespace: resource.namespace,
+									name: resource.name,
+								},
+							},
+						]) {
+							const result = await store.recordSandboxDeletionProgress({
+								claim: stop,
+								progress,
+								leaseDurationMs: 30_000,
+							});
+							if (result.status !== "committed")
+								throw new Error(`Expected ${resource.kind} progress`);
+							stop = result.claim;
+						}
+					}
+					if (!stop.lifecycle) throw new Error("Expected drain lifecycle");
+					const retainedPVC = replacementResources.find(
+						(resource) => resource.kind === "PersistentVolumeClaim",
+					)!;
+					expect(
+						await store.recordSandboxObservation({
+							claim: stop,
+							observation: {
+								status: "stopped",
+								resources: [retainedPVC],
+								sourceStop: {
+									schemaVersion: 1,
+									sandboxId: stop.sandbox.sandboxId,
+									sessionId: stop.sandbox.sessionId,
+									sourceGeneration: stop.lifecycle.source.sandbox.generation,
+									sourceResourceFence: stop.lifecycle.source.resourceFence,
+									targetGeneration: stop.sandbox.generation,
+									targetResourceFence: stop.resourceFence,
+									removed: replacementResources
+										.filter(
+											(resource) => resource.kind !== "PersistentVolumeClaim",
+										)
+										.map((resource) => ({
+											resource,
+											preconditions: {
+												uid: resource.uid,
+												resourceVersion: resource.resourceVersion,
+											},
+											absence: {
+												kind: resource.kind,
+												namespace: resource.namespace,
+												name: resource.name,
+											},
+										})),
+									retainedPVC,
+								},
+							},
+						}),
+					).toBe("committed");
+					const [drained] = await client`
+						select o.status, s.status as allocation_status, s.desired_state
+						from platform.outbox_items o
+						join platform.session_sandbox_allocations s on s.conversation_id = o.scope_id
+						where o.id = ${request.itemId}`;
+					expect(drained).toMatchObject({
+						status: "succeeded",
+						allocation_status: "stopped",
+						desired_state: "stopped",
+					});
 					return;
 				}
 				expect(replacement.policy).toMatchObject({
