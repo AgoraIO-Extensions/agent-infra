@@ -151,7 +151,6 @@ export const GenericAcpRuntimeDriver = {
 				let gateway: BrowserMcpGatewayV1 | undefined;
 				let connectionGateway: StandardMcpAcpBridge | undefined;
 				let connectionClient: StandardMcpClient | undefined;
-				let nativeSessionRef = session.nativeId ?? "";
 				let nativeCancel: (() => Promise<void>) | undefined;
 				let nativeClose: (() => Promise<void>) | undefined;
 				try {
@@ -176,7 +175,7 @@ export const GenericAcpRuntimeDriver = {
 						connectionGateway = await createStandardMcpAcpBridge({
 							client,
 							execution: session.connectionReference,
-							nativeSessionRef: () => nativeSessionRef,
+							nativeSessionRef: () => session.runtimeSessionRef,
 							recordOperationFact: callbacks.recordOperationFact,
 							authorizeToolAction: options.authorizeToolAction,
 							onBlocked: async () => {
@@ -275,7 +274,6 @@ export const GenericAcpRuntimeDriver = {
 						} else await callbacks.update();
 					},
 				});
-				nativeSessionRef = native.nativeId;
 				nativeCancel = native.cancel;
 				nativeClose = native.close;
 				negotiatedImageInput = native.supportsImagePrompt;
