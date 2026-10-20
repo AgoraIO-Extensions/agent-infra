@@ -82,6 +82,19 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | 编号 | 位置 | 实现 | 依据 |
 | --- | --- | --- | --- |
 | D-01 | Agent 详情「连接器」的「打开 Connection」 | 1440 与 390 视口都是 44px，与对话页 Z-11 共用同一条规则 | DESIGN.md：新操作至少 44px（触达下限）；「已回写导出设计的结论」`Button` 行的 40px 档不含 Connection 提示（[#3052](https://github.com/AgoraIO-Extensions/agent-infra/issues/3052)）。导出稿桌面为 40px |
+| V-01 | `/admin/approvals` 审阅弹窗事实 | 「申请人」取申请投影，缺失写「未提供」；来源按类型标为「模板 / 多服务清单 / 镜像」，范围标为「使用范围」，并列出说明、Owner、默认模型、默认推理强度、预设规格与预计资源占用 | 标签说明值是哪类引用；审批看来源、资源规格与准入（[PRD §5.1](../prd/PRD-agent-platform-M1.md#51-准入与部署)、[§6.2](../prd/PRD-agent-platform-M1.md#62-审批规则)） |
+| V-04 | `/admin/agents` 页头 | gray 计数 chip 后保留 44px ghost「刷新 Agent 列表」 | 列表的重读入口，形态与审计页头一致（#2820 AA-01） |
+| V-05 | `/admin/skill-reviews` 审阅弹窗 | 不显示 `SKILL.md` 正文 | 审核队列投影不含正文；版本详情只对已发布版本按范围、或对发布者本人可读（[工程 Spec §11.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配)），不为预览放宽权限；接口缺口见 #3046 |
+| V-07 | `/admin/skill-reviews` 本人发布的版本 | 不渲染禁用的「审阅」，改为文字「不能审核自己发布的版本」 | 禁用按钮不可聚焦，读屏得不到原因；创建者不能批准自己的共享发布（[PRD §11.5](../prd/PRD-agent-platform-M1.md#115-skill-hub)） |
+| V-08 | `/audit` 筛选与列表 | 外置三项筛选后保留「更多筛选 / 重置 / 查询」，表格后保留分页 | 按时间、主体、Agent、动作、结果和执行引用筛选并分页（[PRD §13.2](../prd/PRD-agent-platform-M1.md#132-查询与权限)），以提交为准 |
+| V-09 | `/audit` 记录详情 | 审计 V2 字段按「操作与身份 / 请求与执行关联 / 请求尝试结果 / 实际执行事实 / Connection 关联」分组，另有「刷新审计详情」 | 字段集合以审计 V2 投影为准（[工程 Spec §18.3](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#183-持久审计)），分组保持可读；刷新用于回读待核实结果（[PRD §13.3](../prd/PRD-agent-platform-M1.md#133-真实结果与可靠性)） |
+| V-10 | `/admin/audit` 列表区 | 筛选与分页同 V-08；表格前保留「事件时间线 / 平台操作记录」与右侧说明，表格后保留「最小审计数据」notice | 原 #400 管理员审计 IA（#1199 AC-1）；说明审计不保存正文、关联引用不授予查询权限（[PRD §13.1](../prd/PRD-agent-platform-M1.md#131-记录范围)、[§13.2](../prd/PRD-agent-platform-M1.md#132-查询与权限)） |
+| V-11 | `/admin/audit` 记录详情 | 同 V-09 | 同 V-09 |
+| V-13 | `/skills/:id` 版本与权限、适合什么工作 | 不显示「文件权限」行；用途第二条为「不会增加模型、文件或 Connection 权限。」 | 版本详情投影不含逐版本文件授权（[工程 Spec §11.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配)），不伪造；「脚本：禁用」「网络权限：不会新增」与用途说明已表达不扩大权限（[PRD §11.5](../prd/PRD-agent-platform-M1.md#115-skill-hub)） |
+| V-14 | `/skills/:id` 390 侧栏事实行 | 侧栏仍为两列，dt 与 dd 对齐，不加 8px dt 上距 | 导出稿缺陷：≤767 的 `.facts dt{margin-top:8px}` 只适用于单列事实列表 |
+| V-17 | `/skills/manage` 已安装行 | ghost「查看」之外保留「移出我的库」；右侧为固定版本号，可附「有新版本」chip，不显示绑定状态 | 移出我的库（#2953）；新版本只提示可升级，安装与 Agent 配置分开展示（[PRD §11.5](../prd/PRD-agent-platform-M1.md#115-skill-hub)），安装投影不含绑定 |
+| V-18 | `/skills/manage/new` 编辑与发布 | 两栏与右栏四张范围单选卡按设计；左栏首段为「项目信息」（包名称、项目状态、保存项目），没有「显示名称」与 ZIP 上传，内容区另有配套文件与「上传文件到 assets/」；「保存草稿」保存项目内容；字段名为「版本号」，有未保存修改时主按钮为「保存并发布 / 保存并提交审核」；导入区字段名为「导入包名称」 | 项目只有包名称，发布只提交内容修订、版本号与范围，不接收上传包；网页编辑的项目内容即项目草稿（[工程 Spec §11.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配)）；同一页面不出现同名控件 |
+| V-19 | `/skills/manage/new` 新建首屏 | 先「Skill 项目」（包名称、创建项目）与导入区，右栏只有说明；创建后进入该项目，出现内容与发布 | 项目内容只属于已创建的项目，并按项目内容修订号 CAS（[工程 Spec §11.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub版本绑定与-worker-装配)），没有项目时不能保存内容或发布 |
 | W-06 | 创建、修改申请「基本信息」 | 字段依次为 Agent 名称、使用场景、来源；来源与标准模板（或镜像地址、多服务 YAML、入口身份校验）分两级选择 | [PRD §6.1](../prd/PRD-agent-platform-M1.md#61-创建申请)先列名称和说明，再列来源、镜像与交互入口归属；单个来源下拉无法表达交互入口归属与多服务 |
 | W-07 | 申请表单「使用场景」帮助文字 | 保留「不填写模型内部思考或外部凭证。」；分区说明与目录占位符已按导出稿 | 该文案由设计 Token 契约 `design-tokens.spec.ts` 锁定，本轮不改设计锁 |
 | W-09 | 修改申请页头 | eyebrow「我的管理 / 编辑申请」，h1 为「修改申请」或「修改并重新提交」 | 导出稿没有编辑态；动作名沿 [PRD §6.3](../prd/PRD-agent-platform-M1.md#63-管理状态) |
@@ -182,6 +195,7 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `Textarea` | 申请、Owner 配置、多值字段、审批驳回原因 |
 | `NativeSelect` / `NativeSelectOption` | 申请来源、身份责任；保留原生选择和禁用语义 |
 | `Checkbox` | 申请和 Owner 的模型配置开关 |
+| `RadioGroup` / `RadioGroupItem` | 创建与发布 Skill 的发布范围单选卡（设计 `.scope-option`）；方向键切换，选项名称由文字 `aria-labelledby` 提供 |
 | `Label` | 上述表单的可访问名称 |
 | `Field` / `FieldError` | 字段标签与控件的容器；`FieldError` 为字段下方的校验错误（`role="alert"`），如审批驳回原因 |
 | `Badge` | 状态 chip（`tone`，服务端状态经 `lib/status-tone.ts` 的 `statusTone()` 映射）与非状态标签（`variant="tag"`） |
@@ -211,7 +225,7 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 服务端没有返回名称时只显示类型与 ID 短形式，详情写「未提供」，不说明原因。
 Agent 筛选沿用目录选择器的交互按名称单选，候选在展开时从个人可见或管理员 Agent 列表读取，提交的仍是 Agent ID。
 
-`Card`、`Collapsible`、`ConfirmDialog`、`DropdownMenu`、`Spinner`、`StateCard`、`Toast` 与 `features/agent-mark.tsx` 为手写组件，不由 CLI 生成。
+`Card`、`Collapsible`、`ConfirmDialog`、`DropdownMenu`、`RadioGroup`、`Spinner`、`StateCard`、`Toast` 与 `features/agent-mark.tsx` 为手写组件，不由 CLI 生成。
 `Alert` 不设默认 role：首屏静态说明不设 role，异步结果用 `role="status"`，失败用 `role="alert"`。
 `Badge` 只有 `variant="chip"`（状态，显式传 `tone`）与 `variant="tag"` 两种，不从 `data-status` 推导色调。
 `Alert` 必须传 `tone`（`info`、`warn`、`danger`），没有旧变体名与缺省 tone 的兼容层。

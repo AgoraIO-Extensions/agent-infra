@@ -20,6 +20,7 @@ import {
 	NativeSelect,
 	NativeSelectOption,
 } from "@/components/ui/native-select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { withObjectName } from "@/lib/accessible-name";
@@ -190,7 +191,8 @@ function publishResultText(result: SkillHubPublicationResponseV1) {
 /**
  * 「创建与发布」的项目内容编辑与网页发布（#2906）：编辑 SKILL.md 与 scripts/、references/、
  * assets/ 下的文件，按读取到的修订整体保存；发布只提交内容修订、版本号与范围，
- * 包、摘要与签名由服务端生成。
+ * 包、摘要与签名由服务端生成。按设计两栏布局（V-18）：左栏项目、内容与导入，右栏
+ * 版本号、范围单选卡与「保存草稿 / 发布」。
  */
 export function SkillProjectContentEditor({
 	project,
@@ -199,6 +201,9 @@ export function SkillProjectContentEditor({
 	retrying = false,
 	onPublished,
 	actions = defaultActions,
+	before,
+	after,
+	notice,
 }: {
 	project: SkillHubProjectV1;
 	content: SkillProjectContentState;
@@ -208,12 +213,19 @@ export function SkillProjectContentEditor({
 	/** 发布成功后刷新本人版本等读取。 */
 	onPublished?: () => void;
 	actions?: SkillProjectContentActions;
+	/** 左栏内容区之前的分区（项目信息）。 */
+	before?: ReactNode;
+	/** 左栏内容区之后的分区（导入固定来源）。 */
+	after?: ReactNode;
+	/** 右栏范围选择之后的静态说明（权限不会扩大）。 */
+	notice?: ReactNode;
 }) {
 	const id = useId();
 	const toast = useToast();
 	const keys = useRef(new Map<string, { fingerprint: string; key: string }>());
 	const skillMdInput = useRef<HTMLTextAreaElement>(null);
 	const versionInput = useRef<HTMLInputElement>(null);
+	const addFileButton = useRef<HTMLButtonElement>(null);
 	const fileInputs = useRef(new Map<string, HTMLInputElement>());
 	const [draft, setDraft] = useState<Draft>({ skillMd: "", files: [] });
 	const [saved, setSaved] = useState<{ revision: number; snapshot: string }>();
@@ -451,212 +463,355 @@ export function SkillProjectContentEditor({
 		(content.kind === "unavailable" && retrying)
 	)
 		return (
-			<FormSection title="Skill 内容">
-				<SkillHubLoading>正在读取 Skill 内容…</SkillHubLoading>
-			</FormSection>
+			<SkillEditorLayout
+				main={
+					<>
+						{before}
+						<FormSection title="Skill 内容">
+							<SkillHubLoading>正在读取 Skill 内容…</SkillHubLoading>
+						</FormSection>
+						{after}
+					</>
+				}
+				aside={notice}
+			/>
 		);
 	if (content.kind === "unavailable")
 		return (
-			<FormSection title="Skill 内容">
-				<SkillHubReadFailure
-					retryable={content.retryable}
-					reason={content.reason}
-					retryTitle="暂时无法读取 Skill 内容"
-					retryDescription="已发布的版本不受影响。"
-					deniedText="当前账号不能编辑这个项目的内容。"
-					unavailableText="Skill 内容暂时无法访问，请联系管理员。"
-					onRetry={onRetry}
-					retrying={retrying}
-				/>
-			</FormSection>
+			<SkillEditorLayout
+				main={
+					<>
+						{before}
+						<FormSection title="Skill 内容">
+							<SkillHubReadFailure
+								retryable={content.retryable}
+								reason={content.reason}
+								retryTitle="暂时无法读取 Skill 内容"
+								retryDescription="已发布的版本不受影响。"
+								deniedText="当前账号不能编辑这个项目的内容。"
+								unavailableText="Skill 内容暂时无法访问，请联系管理员。"
+								onRetry={onRetry}
+								retrying={retrying}
+							/>
+						</FormSection>
+						{after}
+					</>
+				}
+				aside={notice}
+			/>
 		);
 
 	const fileError = (fileId: string) => errors.files?.[fileId];
+	const shared = visibility !== "PRIVATE";
+	// 设计主按钮：仅自己为「发布固定版本」，共享范围为「提交审核」；有未保存的修改时先保存。
+	const publishLabel =
+		busy === "publish"
+			? shared
+				? "正在提交…"
+				: "正在发布…"
+			: dirty
+				? shared
+					? "保存并提交审核"
+					: "保存并发布"
+				: shared
+					? "提交审核"
+					: "发布固定版本";
+	const contentFormId = `${id}-content-form`;
 	return (
-		<>
-			<FormSection
-				title="Skill 内容"
-				description="SKILL.md 写明用途和使用步骤；脚本、参考资料和资源放在对应目录。已发布的版本不受后续修改影响。"
-			>
-				<form className="skill-editor-form" onSubmit={submitContent} noValidate>
-					<Field className="skill-editor-full">
-						<Label htmlFor={`${id}-skill-md`}>SKILL.md（任务说明）</Label>
-						<Textarea
-							ref={skillMdInput}
-							id={`${id}-skill-md`}
-							className="skill-content-text"
-							value={draft.skillMd}
+		<SkillEditorLayout
+			main={
+				<>
+					{before}
+					<FormSection
+						title="Skill 内容"
+						description="SKILL.md 写明用途和使用步骤；脚本、参考资料和资源放在对应目录。已发布的版本不受后续修改影响。"
+					>
+						<form
+							id={contentFormId}
+							className="skill-editor-form"
+							onSubmit={submitContent}
+							noValidate
+						>
+							<Field className="skill-editor-full">
+								<Label htmlFor={`${id}-skill-md`}>SKILL.md（任务说明）</Label>
+								<Textarea
+									ref={skillMdInput}
+									id={`${id}-skill-md`}
+									className="skill-content-text"
+									value={draft.skillMd}
+									spellCheck={false}
+									placeholder={`# ${project.name}\n\n说明这个 Skill 的用途、触发条件和使用步骤。`}
+									aria-invalid={errors.skillMd ? "true" : undefined}
+									aria-describedby={
+										errors.skillMd ? `${id}-skill-md-error` : undefined
+									}
+									onChange={(event) => {
+										setDraft({ ...draft, skillMd: event.target.value });
+										setErrors({ ...errors, skillMd: undefined });
+									}}
+								/>
+								{errors.skillMd ? (
+									<SkillFieldError id={`${id}-skill-md-error`}>
+										{errors.skillMd}
+									</SkillFieldError>
+								) : null}
+							</Field>
+
+							<div className="skill-content-files">
+								<h3 className="skill-content-heading">配套文件</h3>
+								{draft.files.length === 0 ? (
+									<p className="skill-field-help">
+										还没有配套文件。可以添加脚本、参考资料或资源。
+									</p>
+								) : null}
+								{draft.files.map((file, index) => {
+									const label = `${file.directory}/${file.name.trim() || "未命名"}`;
+									return (
+										<fieldset key={file.id} className="skill-content-file">
+											<legend className="sr-only">
+												{`配套文件 ${index + 1}：${label}`}
+											</legend>
+											<div className="skill-editor-grid">
+												<Field>
+													<Label htmlFor={`${file.id}-directory`}>目录</Label>
+													<NativeSelect
+														id={`${file.id}-directory`}
+														value={file.directory}
+														onChange={(event) =>
+															updateFile(file.id, {
+																directory: event.target.value as Directory,
+															})
+														}
+													>
+														{directories.map((directory) => (
+															<NativeSelectOption
+																key={directory}
+																value={directory}
+															>
+																{directoryLabels[directory]}
+															</NativeSelectOption>
+														))}
+													</NativeSelect>
+												</Field>
+												<Field>
+													<Label htmlFor={`${file.id}-name`}>文件名</Label>
+													<Input
+														ref={(node) => {
+															if (node) fileInputs.current.set(file.id, node);
+															else fileInputs.current.delete(file.id);
+														}}
+														id={`${file.id}-name`}
+														value={file.name}
+														maxLength={500}
+														autoComplete="off"
+														spellCheck={false}
+														placeholder="run.sh"
+														aria-invalid={
+															fileError(file.id) ? "true" : undefined
+														}
+														aria-describedby={
+															fileError(file.id)
+																? `${file.id}-error`
+																: undefined
+														}
+														onChange={(event) =>
+															updateFile(file.id, { name: event.target.value })
+														}
+													/>
+													{fileError(file.id) ? (
+														<SkillFieldError id={`${file.id}-error`}>
+															{fileError(file.id) ?? ""}
+														</SkillFieldError>
+													) : null}
+												</Field>
+												{file.encoding === "utf8" ? (
+													<Field className="skill-editor-full">
+														<Label htmlFor={`${file.id}-content`}>
+															文件内容
+														</Label>
+														<Textarea
+															id={`${file.id}-content`}
+															className="skill-content-text"
+															value={file.content}
+															spellCheck={false}
+															onChange={(event) =>
+																updateFile(file.id, {
+																	content: event.target.value,
+																})
+															}
+														/>
+													</Field>
+												) : (
+													<p className="skill-editor-full skill-field-help">
+														<Badge tone="gray">二进制文件</Badge>{" "}
+														{formatBytes(bytesOf(file))}
+														，按原样打包，不能在网页上编辑。
+													</p>
+												)}
+											</div>
+											<div className="skill-actions skill-form-actions">
+												<Button
+													type="button"
+													variant="ghost"
+													aria-label={withObjectName("移除文件", label)}
+													onClick={() => {
+														setDraft({
+															...draft,
+															files: draft.files.filter(
+																(item) => item.id !== file.id,
+															),
+														});
+														// 移除后本组控件卸载，焦点交给「添加文本文件」，不落到 body。
+														requestAnimationFrame(() =>
+															addFileButton.current?.focus(),
+														);
+													}}
+												>
+													<Trash2 aria-hidden="true" />
+													移除
+												</Button>
+											</div>
+										</fieldset>
+									);
+								})}
+								<div className="skill-actions skill-form-actions">
+									<Button
+										ref={addFileButton}
+										type="button"
+										variant="outline"
+										onClick={() => {
+											const fileId = addFile({
+												directory: "scripts",
+												name: "",
+												encoding: "utf8",
+												content: "",
+											});
+											requestAnimationFrame(() =>
+												fileInputs.current.get(fileId)?.focus(),
+											);
+										}}
+									>
+										<FilePlus aria-hidden="true" />
+										添加文本文件
+									</Button>
+								</div>
+								<Field>
+									<Label htmlFor={`${id}-upload`}>上传文件到 assets/</Label>
+									<Input
+										id={`${id}-upload`}
+										type="file"
+										multiple
+										onChange={(event) => {
+											const input = event.currentTarget;
+											void upload(input.files).then(() => {
+												input.value = "";
+											});
+										}}
+									/>
+								</Field>
+							</div>
+							<p id={`${id}-limits`} className="skill-field-help">
+								共 {draft.files.length + 1} 个文件，{formatBytes(totalBytes)}
+								；最多 {limits.maxFiles} 个文件，单个 256 KB，合计 512 KB。
+							</p>
+							{errors.total ? (
+								<SkillFieldError id={`${id}-total-error`}>
+									{errors.total}
+								</SkillFieldError>
+							) : null}
+						</form>
+					</FormSection>
+					{after}
+				</>
+			}
+			aside={
+				<form className="skill-editor-form" onSubmit={submitPublish} noValidate>
+					<Field className="skill-editor-section">
+						<Label htmlFor={`${id}-version`}>版本号</Label>
+						<Input
+							ref={versionInput}
+							id={`${id}-version`}
+							value={version}
+							maxLength={128}
+							autoComplete="off"
 							spellCheck={false}
-							placeholder={`# ${project.name}\n\n说明这个 Skill 的用途、触发条件和使用步骤。`}
-							aria-invalid={errors.skillMd ? "true" : undefined}
+							placeholder="1.0.0"
+							aria-invalid={errors.version ? "true" : undefined}
 							aria-describedby={
-								errors.skillMd ? `${id}-skill-md-error` : undefined
+								errors.version ? `${id}-version-error` : undefined
 							}
 							onChange={(event) => {
-								setDraft({ ...draft, skillMd: event.target.value });
-								setErrors({ ...errors, skillMd: undefined });
+								setVersion(event.target.value);
+								setErrors({ ...errors, version: undefined });
 							}}
 						/>
-						{errors.skillMd ? (
-							<SkillFieldError id={`${id}-skill-md-error`}>
-								{errors.skillMd}
+						{errors.version ? (
+							<SkillFieldError id={`${id}-version-error`}>
+								{errors.version}
 							</SkillFieldError>
 						) : null}
 					</Field>
-
-					<div className="skill-content-files">
-						<h3 className="skill-content-heading">配套文件</h3>
-						{draft.files.length === 0 ? (
-							<p className="skill-field-help">
-								还没有配套文件。可以添加脚本、参考资料或资源。
-							</p>
-						) : null}
-						{draft.files.map((file, index) => {
-							const label = `${file.directory}/${file.name.trim() || "未命名"}`;
+					{/* 设计 .scope-choice：四张范围单选卡，附审核说明（V-18）。 */}
+					<RadioGroup
+						aria-label="发布范围"
+						className="skill-scope-choice"
+						value={visibility}
+						onValueChange={(value) => setVisibility(value as Visibility)}
+					>
+						{visibilities.map((item) => {
+							const disabled =
+								item === "ORGANIZATION" && !project.organizationId;
 							return (
-								<fieldset key={file.id} className="skill-content-file">
-									<legend className="sr-only">
-										{`配套文件 ${index + 1}：${label}`}
-									</legend>
-									<div className="skill-editor-grid">
-										<Field>
-											<Label htmlFor={`${file.id}-directory`}>目录</Label>
-											<NativeSelect
-												id={`${file.id}-directory`}
-												value={file.directory}
-												onChange={(event) =>
-													updateFile(file.id, {
-														directory: event.target.value as Directory,
-													})
-												}
-											>
-												{directories.map((directory) => (
-													<NativeSelectOption key={directory} value={directory}>
-														{directoryLabels[directory]}
-													</NativeSelectOption>
-												))}
-											</NativeSelect>
-										</Field>
-										<Field>
-											<Label htmlFor={`${file.id}-name`}>文件名</Label>
-											<Input
-												ref={(node) => {
-													if (node) fileInputs.current.set(file.id, node);
-													else fileInputs.current.delete(file.id);
-												}}
-												id={`${file.id}-name`}
-												value={file.name}
-												maxLength={500}
-												autoComplete="off"
-												spellCheck={false}
-												placeholder="run.sh"
-												aria-invalid={fileError(file.id) ? "true" : undefined}
-												aria-describedby={
-													fileError(file.id) ? `${file.id}-error` : undefined
-												}
-												onChange={(event) =>
-													updateFile(file.id, { name: event.target.value })
-												}
-											/>
-											{fileError(file.id) ? (
-												<SkillFieldError id={`${file.id}-error`}>
-													{fileError(file.id) ?? ""}
-												</SkillFieldError>
-											) : null}
-										</Field>
-										{file.encoding === "utf8" ? (
-											<Field className="skill-editor-full">
-												<Label htmlFor={`${file.id}-content`}>文件内容</Label>
-												<Textarea
-													id={`${file.id}-content`}
-													className="skill-content-text"
-													value={file.content}
-													spellCheck={false}
-													onChange={(event) =>
-														updateFile(file.id, { content: event.target.value })
-													}
-												/>
-											</Field>
-										) : (
-											<p className="skill-editor-full skill-field-help">
-												<Badge tone="gray">二进制文件</Badge>{" "}
-												{formatBytes(bytesOf(file))}
-												，按原样打包，不能在网页上编辑。
-											</p>
-										)}
-									</div>
-									<div className="skill-actions skill-form-actions">
-										<Button
-											type="button"
-											variant="ghost"
-											aria-label={withObjectName("移除文件", label)}
-											onClick={() =>
-												setDraft({
-													...draft,
-													files: draft.files.filter(
-														(item) => item.id !== file.id,
-													),
-												})
-											}
-										>
-											<Trash2 aria-hidden="true" />
-											移除
-										</Button>
-									</div>
-								</fieldset>
+								<Label
+									key={item}
+									variant="option"
+									className="skill-scope-option"
+									data-disabled={disabled || undefined}
+								>
+									<RadioGroupItem
+										value={item}
+										disabled={disabled}
+										aria-labelledby={`${id}-scope-${item}`}
+										aria-describedby={`${id}-scope-${item}-note`}
+									/>
+									<span>
+										<span id={`${id}-scope-${item}`}>
+											{skillHubVisibilityLabels[item]}
+										</span>
+										<small id={`${id}-scope-${item}-note`}>
+											{item === "PRIVATE"
+												? "自主创建内容可直接发布"
+												: "需要独立审核后才可见"}
+										</small>
+									</span>
+								</Label>
 							);
 						})}
-						<div className="skill-actions skill-form-actions">
-							<Button
-								type="button"
-								variant="outline"
-								onClick={() => {
-									const fileId = addFile({
-										directory: "scripts",
-										name: "",
-										encoding: "utf8",
-										content: "",
-									});
-									requestAnimationFrame(() =>
-										fileInputs.current.get(fileId)?.focus(),
-									);
-								}}
-							>
-								<FilePlus aria-hidden="true" />
-								添加文本文件
-							</Button>
-						</div>
-						<Field>
-							<Label htmlFor={`${id}-upload`}>上传文件到 assets/</Label>
-							<Input
-								id={`${id}-upload`}
-								type="file"
-								multiple
-								onChange={(event) => {
-									const input = event.currentTarget;
-									void upload(input.files).then(() => {
-										input.value = "";
-									});
-								}}
-							/>
-						</Field>
-					</div>
-					<p id={`${id}-limits`} className="skill-field-help">
-						共 {draft.files.length + 1} 个文件，{formatBytes(totalBytes)}；最多{" "}
-						{limits.maxFiles} 个文件，单个 256 KB，合计 512 KB。
-					</p>
-					{errors.total ? (
-						<SkillFieldError id={`${id}-total-error`}>
-							{errors.total}
-						</SkillFieldError>
-					) : null}
-					<div className="skill-actions skill-form-actions">
+					</RadioGroup>
+					{project.organizationId ? null : (
+						<p className="skill-field-help skill-scope-help">
+							项目没有所属组织，不能选择组织共享。
+						</p>
+					)}
+					{notice}
+					<div className="skill-actions skill-editor-actions">
+						{/* 「保存草稿」保存左栏的项目内容（Spec §11.6：项目内容是该项目的可变草稿）。 */}
+						{/* 提交中保持可聚焦（aria-disabled），提交后焦点留在按钮上，不落到 body。 */}
 						<Button
 							type="submit"
+							form={contentFormId}
 							variant="outline"
 							disabled={busy !== undefined}
+							focusableWhenDisabled
 						>
-							{busy === "save" ? "正在保存…" : "保存内容"}
+							{busy === "save" ? "正在保存…" : "保存草稿"}
+						</Button>
+						<Button
+							type="submit"
+							disabled={busy !== undefined}
+							focusableWhenDisabled
+						>
+							{publishLabel}
 						</Button>
 						{dirty ? <Badge tone="amber">有未保存的修改</Badge> : null}
 					</div>
@@ -669,90 +824,17 @@ export function SkillProjectContentEditor({
 								onClick={() => {
 									setConflict(false);
 									setContentFeedback(undefined);
-									void Promise.resolve(onRetry?.()).then(() =>
-										setReload((value) => value + 1),
-									);
+									void Promise.resolve(onRetry?.()).then(() => {
+										setReload((value) => value + 1);
+										// 按钮随冲突消失，焦点回到正文，不落到 body。
+										requestAnimationFrame(() => skillMdInput.current?.focus());
+									});
 								}}
 							>
 								重新读取内容
 							</Button>
 						</div>
 					) : null}
-				</form>
-			</FormSection>
-
-			<FormSection
-				title="发布版本"
-				description="发布时服务端打包并检查内容，生成固定版本；已提交的版本不能换包，修改内容须发布新的版本号。"
-			>
-				<form className="skill-editor-form" onSubmit={submitPublish} noValidate>
-					<div className="skill-editor-grid">
-						<Field>
-							<Label htmlFor={`${id}-version`}>版本号</Label>
-							<Input
-								ref={versionInput}
-								id={`${id}-version`}
-								value={version}
-								maxLength={128}
-								autoComplete="off"
-								spellCheck={false}
-								placeholder="1.0.0"
-								aria-invalid={errors.version ? "true" : undefined}
-								aria-describedby={
-									errors.version ? `${id}-version-error` : undefined
-								}
-								onChange={(event) => {
-									setVersion(event.target.value);
-									setErrors({ ...errors, version: undefined });
-								}}
-							/>
-							{errors.version ? (
-								<SkillFieldError id={`${id}-version-error`}>
-									{errors.version}
-								</SkillFieldError>
-							) : null}
-						</Field>
-						<Field>
-							<Label htmlFor={`${id}-visibility`}>发布范围</Label>
-							<NativeSelect
-								id={`${id}-visibility`}
-								value={visibility}
-								aria-describedby={`${id}-visibility-help`}
-								onChange={(event) =>
-									setVisibility(event.target.value as Visibility)
-								}
-							>
-								{visibilities.map((item) => (
-									<NativeSelectOption
-										key={item}
-										value={item}
-										disabled={
-											item === "ORGANIZATION" && !project.organizationId
-										}
-									>
-										{skillHubVisibilityLabels[item]}
-									</NativeSelectOption>
-								))}
-							</NativeSelect>
-							<p id={`${id}-visibility-help`} className="skill-field-help">
-								{visibility === "PRIVATE"
-									? "仅自己：检查通过后直接可用。"
-									: "共享范围需管理员审核，通过后才可见、可安装。"}
-								{project.organizationId
-									? ""
-									: "项目没有所属组织，不能选择组织共享。"}
-							</p>
-						</Field>
-					</div>
-					<div className="skill-actions skill-form-actions">
-						<Button type="submit" disabled={busy !== undefined}>
-							{busy === "publish"
-								? "正在发布…"
-								: dirty
-									? "保存并发布"
-									: "发布版本"}
-						</Button>
-					</div>
 					<SkillFeedback feedback={publishFeedback}>
 						{publishResult ? (
 							<span className="skill-actions">
@@ -770,8 +852,34 @@ export function SkillProjectContentEditor({
 						) : null}
 					</SkillFeedback>
 				</form>
-			</FormSection>
-		</>
+			}
+		/>
+	);
+}
+
+/**
+ * 设计 .editor-layout（V-18）：左栏编辑项目与内容、导入固定来源；右栏「版本与发布范围」。
+ * 1023px 及以下单栏。
+ */
+export function SkillEditorLayout({
+	main,
+	aside,
+}: {
+	main: ReactNode;
+	aside: ReactNode;
+}) {
+	const id = useId();
+	return (
+		<div className="skill-editor-layout">
+			<div className="skill-surface skill-editor-surface">{main}</div>
+			<aside
+				className="skill-surface skill-editor-surface skill-editor-aside"
+				aria-labelledby={`${id}-publish`}
+			>
+				<h2 id={`${id}-publish`}>版本与发布范围</h2>
+				{aside}
+			</aside>
+		</div>
 	);
 }
 

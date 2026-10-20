@@ -159,6 +159,10 @@ describe("SkillReviewsScreen", () => {
 			),
 		);
 		expect(within(row).getByText("待审核")).toBeTruthy();
+		// V-06：说明行下是 quiet-pill，陈述与弹窗「权限声明」相同的平台规则。
+		const pill = row.querySelector(".quiet-pill");
+		expect(pill?.textContent).toBe("脚本禁用 · 仅使用 Agent 已有权限");
+		expect(pill?.previousElementSibling?.tagName).toBe("P");
 		expect(row.querySelector("time")?.getAttribute("dateTime")).toBe(
 			others.submittedAt,
 		);

@@ -985,3 +985,67 @@ test("an employee never reads the administrator projection or sees disable for a
 	).toBe(false);
 	expect(data.commands).toHaveLength(0);
 });
+
+// #2830 终验 V-02 / V-03：目录提示行距输入框 13px；两块治理区的状态行 13px / 1.65、上距 5px，
+// 操作行上距 16px。
+test("governance pickers and status lines follow the design spacing (V-02, V-03)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	const errors: string[] = [];
+	page.on("pageerror", (error) => errors.push(error.message));
+	await fixture(page);
+	await page.goto("/admin/agents");
+	await expect(page.getByRole("table", { name: "已创建 Agent" })).toBeVisible();
+	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+	const users = page.getByRole("region", { name: "员工访问控制" });
+	const control = users.locator(".directory-control");
+	const help = users.locator(".directory-help");
+	const [controlBox, helpBox] = await Promise.all([
+		control.boundingBox(),
+		help.boundingBox(),
+	]);
+	expect(
+		Math.round(
+			(helpBox?.y ?? 0) - (controlBox?.y ?? 0) - (controlBox?.height ?? 0),
+		),
+	).toBe(13);
+	const muted = await page.evaluate(() => {
+		const probe = document.createElement("span");
+		probe.style.color = "var(--muted-foreground)";
+		document.body.append(probe);
+		const color = getComputedStyle(probe).color;
+		probe.remove();
+		return color;
+	});
+	for (const [region, text, actions] of [
+		[users, "选择员工后读取当前服务端状态。", "禁用员工"],
+		[
+			page.getByRole("region", { name: "应用凭证材料授权" }),
+			"填写应用和接收主体 ID 后读取当前授权。",
+			"授权材料",
+		],
+	] as const) {
+		const status = region.getByText(text, { exact: true });
+		await expect(status).toHaveCSS("font-size", "13px");
+		await expect(status).toHaveCSS("line-height", "21.45px");
+		await expect(status).toHaveCSS("margin-top", "5px");
+		await expect(status).toHaveCSS("color", muted);
+		const button = region.getByRole("button", { name: actions }).first();
+		const [statusBox, buttonBox] = await Promise.all([
+			status.boundingBox(),
+			button.boundingBox(),
+		]);
+		expect(
+			Math.round(
+				(buttonBox?.y ?? 0) - (statusBox?.y ?? 0) - (statusBox?.height ?? 0),
+			),
+		).toBe(16);
+	}
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= innerWidth,
+		),
+	).toBe(true);
+	expect(errors).toEqual([]);
+});

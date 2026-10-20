@@ -432,10 +432,19 @@ describe("SkillHubVersionScreen", () => {
 		expect(within(summary).getByText("已在我的库")).toBeTruthy();
 		expect(screen.getByRole("link", { name: "配置 Agent 绑定" })).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "加入我的库" })).toBeNull();
+		// V-12：页头只有一个主操作，「移出我的库」在侧栏「版本与权限」。
+		const header = document.querySelector(".page-heading") as HTMLElement;
+		expect(
+			within(header).queryByRole("button", { name: "移出我的库" }),
+		).toBeNull();
+		expect(
+			within(summary).getByRole("button", { name: "移出我的库" }),
+		).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "移出我的库" }));
-		expect((await screen.findByRole("alert")).textContent).toBe(
-			"暂时无法移出我的库，请稍后重试。",
-		);
+		const failure = await screen.findByRole("alert");
+		expect(failure.textContent).toBe("暂时无法移出我的库，请稍后重试。");
+		// 移出失败就地显示在侧栏的操作旁。
+		expect(summary.contains(failure)).toBe(true);
 		fireEvent.click(screen.getByRole("button", { name: "移出我的库" }));
 		const add = await screen.findByRole("button", { name: "加入我的库" });
 		await waitFor(() => expect(document.activeElement).toBe(add));

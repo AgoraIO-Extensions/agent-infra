@@ -141,6 +141,15 @@ test("consumes the Platform login contract and keeps the form retryable", async 
 		page.getByText("请输入公司账号。", { exact: true }),
 	).toBeVisible();
 	await expect(page.getByText("请输入密码。", { exact: true })).toBeVisible();
+	// V-24：login.html 的字段错误色为 --danger 78% 混入 --fg。
+	const loginErrorColor = await resolvedColor(
+		page,
+		"color-mix(in oklch, var(--danger) 78%, var(--foreground))",
+	);
+	await expect(page.getByText("请输入公司账号。", { exact: true })).toHaveCSS(
+		"color",
+		loginErrorColor,
+	);
 	await expect(account(page)).toHaveAttribute("aria-invalid", "true");
 	await expect(password(page)).toHaveAttribute("aria-invalid", "true");
 	await expect(account(page)).toBeFocused();
@@ -488,6 +497,14 @@ for (const scenario of [
 				];
 			}),
 		).toEqual(["12px", "10px", "13px", "22.1px"]);
+		// V-24：表单错误色与字段错误相同，为 --danger 78% 混入 --fg（login.html .form-error）。
+		await expect(alert).toHaveCSS(
+			"color",
+			await resolvedColor(
+				page,
+				"color-mix(in oklch, var(--danger) 78%, var(--foreground))",
+			),
+		);
 
 		await account(page).press("End");
 		await account(page).pressSequentially("x");

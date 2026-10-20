@@ -1231,7 +1231,11 @@ test("approval review dialog follows the design facts, notice and footer", async
 	expect(style.dtColor).toBe(
 		await resolved(page, "color", "var(--muted-foreground)"),
 	);
-	expect(style.terms.slice(0, 2)).toEqual(["申请", "说明"]);
+	// V-01：设计审阅弹窗 facts 为「申请 / 申请人 / …」，申请人取申请投影。
+	expect(style.terms.slice(0, 3)).toEqual(["申请", "申请人", "说明"]);
+	await expect(
+		dialog.locator("dt", { hasText: /^申请人$/ }).locator("+ dd"),
+	).toHaveText("Applicant");
 	expect(style.terms).toEqual(
 		expect.arrayContaining(["预设规格", "预计资源占用"]),
 	);

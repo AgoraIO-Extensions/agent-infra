@@ -407,6 +407,107 @@ async function fitsViewport(page: Page) {
 	}
 }
 
+/** 收集页面脚本错误与控制台错误；受控 fixture 的 404 资源提示不算页面错误。 */
+function pageErrors(page: Page) {
+	const errors: string[] = [];
+	page.on("pageerror", (error) => errors.push(error.message));
+	page.on("console", (message) => {
+		if (
+			message.type() === "error" &&
+			!message.text().startsWith("Failed to load resource")
+		)
+			errors.push(message.text());
+	});
+	return errors;
+}
+
+/** #2830 终验的两个视口：桌面 1440×900，移动 390×844（mobile project 自带）。 */
+async function designViewport(page: Page, mobile: boolean) {
+	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= innerWidth,
+		),
+	).toBe(true);
+}
+
+test("My Skill puts 已安装 with its Agent binding entry before 我创建的 (V-15, V-16, V-17)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	const errors = pageErrors(page);
+	const installed = SkillHubInstallationListItemV1Schema.parse({
+		installationId: "installation-notes",
+		skillVersionId: "weekly-digest-v3",
+		needUpgrade: false,
+		installedAt: "2026-10-01T08:00:00Z",
+		updatedAt: "2026-10-01T08:00:00Z",
+		version: {
+			access: "visible",
+			skillId: "weekly-digest",
+			name: "weekly-digest",
+			version: "3.1.0",
+			provider: "market",
+			visibility: "MARKET",
+			state: "published",
+		},
+	});
+	await fixture(page, "employee", { installations: [installed] });
+	await page.goto("/skills/manage");
+	const main = page.locator("#main-content");
+	await expect(main.locator("article.skill-row")).toHaveCount(3);
+	await designViewport(page, mobile);
+	await expect(
+		main.locator(".page-heading > div:first-child > p:last-child"),
+	).toHaveText("管理自己创建的 Skill 和已安装版本。");
+	// 区块顺序：已安装 → 我创建的；没有独立的「Agent 绑定」区块与说明。
+	await expect(main.getByRole("heading", { level: 2 })).toHaveText([
+		"已安装",
+		"我创建的",
+	]);
+	await expect(main.getByText("在 Agent 的 Owner 配置中绑定")).toHaveCount(0);
+	const installedSection = main.getByRole("region", { name: "已安装" });
+	const binding = installedSection.getByRole("link", { name: "Agent 绑定" });
+	await expect(binding).toHaveAttribute("href", "/my-agents?tab=owned");
+	await expect(main.getByRole("link", { name: "Agent 绑定" })).toHaveCount(1);
+	await expect(binding).toHaveCSS("border-top-width", "1px");
+	const heading = installedSection.locator(".section-heading");
+	const [headingBox, bindingBox] = await Promise.all([
+		heading.boundingBox(),
+		binding.boundingBox(),
+	]);
+	// 设计 .section-head：标题与按钮同一行，按钮靠右。
+	expect(
+		Math.abs(
+			(headingBox?.x ?? 0) +
+				(headingBox?.width ?? 0) -
+				(bindingBox?.x ?? 0) -
+				(bindingBox?.width ?? 0),
+		),
+	).toBeLessThanOrEqual(1);
+	const owned = main.getByRole("region", { name: "我创建的" });
+	const [installedBox, ownedBox] = await Promise.all([
+		installedSection.boundingBox(),
+		owned.boundingBox(),
+	]);
+	expect((ownedBox?.y ?? 0) - (installedBox?.y ?? 0)).toBeGreaterThan(0);
+	// 设计 .section-head.section：「我创建的」上距 32px。
+	expect(
+		Math.round(
+			(ownedBox?.y ?? 0) - (installedBox?.y ?? 0) - (installedBox?.height ?? 0),
+		),
+	).toBe(32);
+	// 已安装行只有 ghost「查看」与「移出我的库」，行标题为 h3。
+	const row = installedSection.locator("article.skill-row");
+	await expect(row.getByRole("link")).toHaveText(["查看"]);
+	await expect(row.getByRole("button")).toHaveText(["移出我的库"]);
+	await expect(owned.locator("article.skill-row h3")).toHaveText([
+		"release-notes",
+		"draft",
+	]);
+	expect(errors).toEqual([]);
+});
+
 test("My Skill lists the user's projects with the same group in eyebrow, breadcrumb and navigation", async ({
 	page,
 }) => {
@@ -482,15 +583,17 @@ test("My Skill lists my installations, removes one and re-reads the list (K-03)"
 	});
 	await page.goto("/skills/manage");
 	const main = page.locator("#main-content");
-	const section = main.getByRole("region", { name: "我的安装" });
+	// V-15：区块标题为「已安装」。
+	const section = main.getByRole("region", { name: "已安装" });
 	const rows = section.locator("article.skill-row");
 	await expect(rows).toHaveCount(2);
 	const digest = rows.filter({ hasText: "weekly-digest" });
 	await expect(digest).toContainText("v3.1.0");
 	await expect(digest).toContainText("内部市场");
 	await expect(digest).toContainText("有新版本");
+	// V-17：已安装行的详情入口按设计为 ghost「查看」。
 	await expect(
-		digest.getByRole("link", { name: "详情：weekly-digest" }),
+		digest.getByRole("link", { name: "查看：weekly-digest" }),
 	).toHaveAttribute("href", "/skills/weekly-digest-v3");
 	// 当前不可见的版本不显示名称和详情入口，仍可移出。
 	const hidden = rows.filter({ hasText: "版本不可用" });
@@ -516,7 +619,7 @@ test("My Skill lists my installations, removes one and re-reads the list (K-03)"
 	await remove.click();
 	await expect(page.locator('[data-slot="toast"]')).toHaveText("已移出我的库");
 	await expect(
-		section.getByRole("heading", { level: 2, name: "我的安装" }),
+		section.getByRole("heading", { level: 2, name: "已安装" }),
 	).toBeFocused();
 	await expect(rows).toHaveCount(1);
 	await expect(rows.filter({ hasText: "weekly-digest" })).toHaveCount(0);
@@ -546,7 +649,7 @@ test("Create and publish edits project content, publishes fixed versions and rep
 	await expect(main.getByText("有未保存的修改")).toHaveCount(0);
 	// 空的 SKILL.md 不能发布，焦点回到正文。
 	await main.getByLabel("版本号").fill("1.0.0");
-	await main.getByRole("button", { name: "发布版本" }).click();
+	await main.getByRole("button", { name: "发布固定版本" }).click();
 	const skillMd = main.getByLabel("SKILL.md（任务说明）");
 	await expect(skillMd).toBeFocused();
 	await expect(main.getByRole("alert")).toHaveText(
@@ -615,14 +718,18 @@ test("Create and publish edits project content, publishes fixed versions and rep
 	await expect(main.getByText("有未保存的修改")).toHaveCount(0);
 
 	// 已提交的版本号不能换包：服务端拒绝后给出中文说明。
-	await main.getByLabel("发布范围").selectOption("MEMBER");
-	await expect(main.getByText(/共享范围需管理员审核/)).toBeVisible();
-	await main.getByRole("button", { name: "发布版本" }).click();
+	// V-18：范围为右栏单选卡；共享范围的主按钮为「提交审核」。
+	await main.getByRole("radio", { name: "全体成员" }).click();
+	await expect(main.getByRole("radio", { name: "全体成员" })).toHaveAttribute(
+		"aria-checked",
+		"true",
+	);
+	await main.getByRole("button", { name: "提交审核" }).click();
 	await expect(main.getByRole("alert")).toHaveText(
 		"这个版本号已被使用，或内容已在其他地方修改。已提交的版本不能换包，修改内容请使用新的版本号。",
 	);
 	await main.getByLabel("版本号").fill("1.1.0");
-	await main.getByRole("button", { name: "发布版本" }).click();
+	await main.getByRole("button", { name: "提交审核" }).click();
 	await expect(
 		main.getByText("v1.1.0 已提交审核，审核通过前不能安装。"),
 	).toBeVisible();
@@ -645,6 +752,174 @@ test("Create and publish edits project content, publishes fixed versions and rep
 	);
 	await expect(main.getByLabel("文件名").first()).toHaveValue("logo.png");
 	await fitsViewport(page);
+});
+
+test("Create and publish follows the design's two columns with scope cards on the right (V-18, V-19)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	const errors = pageErrors(page);
+	const control = await fixture(page);
+	await page.goto("/skills/manage/new?project=release-notes");
+	const main = page.locator("#main-content");
+	await expect(
+		main.getByRole("heading", { level: 2, name: "Skill 内容" }),
+	).toBeVisible();
+	await designViewport(page, mobile);
+	await expect(main.locator(".page-heading p").last()).toHaveText(
+		"填写说明和发布范围。发布后版本固定，修改时创建新版本。",
+	);
+	const layout = main.locator(".skill-editor-layout");
+	const editor = layout.locator(":scope > div");
+	const aside = main.getByRole("complementary", { name: "版本与发布范围" });
+	const [editorBox, asideBox] = await Promise.all([
+		editor.boundingBox(),
+		aside.boundingBox(),
+	]);
+	if (!editorBox || !asideBox) throw new Error("editor layout missing");
+	if (mobile) {
+		// ≤1023px 单栏：右栏排在编辑区之下，两栏同宽，间距 16px。
+		expect(asideBox.x).toBe(editorBox.x);
+		expect(asideBox.width).toBe(editorBox.width);
+		expect(Math.round(asideBox.y - editorBox.y - editorBox.height)).toBe(16);
+	} else {
+		// 设计 .editor-layout：minmax(0,1.5fr) minmax(260px,.8fr)，gap 22px；两栏同高。
+		expect(Math.round(asideBox.x - editorBox.x - editorBox.width)).toBe(22);
+		expect(editorBox.width / asideBox.width).toBeCloseTo(1.5 / 0.8, 1);
+		expect(asideBox.y).toBe(editorBox.y);
+		expect(asideBox.height).toBe(editorBox.height);
+	}
+	// 左栏：项目信息 → Skill 内容 → 导入固定来源；右栏标题 16px / 600 正文字体。
+	await expect(editor.locator('[data-slot="form-section-title"]')).toHaveText([
+		"项目信息",
+		"Skill 内容",
+		"导入固定来源",
+	]);
+	const asideHeading = aside.getByRole("heading", {
+		level: 2,
+		name: "版本与发布范围",
+	});
+	await expect(asideHeading).toHaveCSS("font-size", "16px");
+	await expect(asideHeading).toHaveCSS("font-weight", "600");
+	// 设计 .field.section：版本字段距标题 32px。
+	const [headingBox, versionLabelBox] = await Promise.all([
+		asideHeading.boundingBox(),
+		aside.getByText("版本号", { exact: true }).boundingBox(),
+	]);
+	expect(
+		Math.round(
+			(versionLabelBox?.y ?? 0) -
+				(headingBox?.y ?? 0) -
+				(headingBox?.height ?? 0),
+		),
+	).toBe(32);
+	// 四张范围单选卡：两列（390 单列），圆角 10px、内边距 12px、最小高 60px，说明 11px。
+	const scope = aside.getByRole("radiogroup", { name: "发布范围" });
+	const cards = scope.locator(".skill-scope-option");
+	await expect(cards).toHaveCount(4);
+	await expect(scope.getByRole("radio")).toHaveCount(4);
+	for (const [name, note] of [
+		["仅自己", "自主创建内容可直接发布"],
+		["全体成员", "需要独立审核后才可见"],
+		["组织共享", "需要独立审核后才可见"],
+		["内部市场", "需要独立审核后才可见"],
+	] as const)
+		await expect(
+			cards.filter({ has: page.getByRole("radio", { name }) }),
+		).toHaveText(`${name}${note}`);
+	const card = cards.first();
+	await expect(card).toHaveCSS("border-top-left-radius", "10px");
+	await expect(card).toHaveCSS("padding-top", "12px");
+	await expect(card).toHaveCSS("min-height", "60px");
+	await expect(card.locator("small")).toHaveCSS("font-size", "11px");
+	const resolved = (value: string, property = "color") =>
+		page.evaluate(
+			([css, name]) => {
+				const probe = document.createElement("span");
+				probe.style.setProperty(name as string, css as string);
+				document.body.append(probe);
+				const color = getComputedStyle(probe).getPropertyValue(name as string);
+				probe.remove();
+				return color;
+			},
+			[value, property],
+		);
+	// 选中卡边框为 --muted（应用 --muted-foreground）、底色为 surface-raised。
+	await expect(card).toHaveCSS(
+		"border-top-color",
+		await resolved("var(--muted-foreground)"),
+	);
+	await expect(card).toHaveCSS(
+		"background-color",
+		await resolved("var(--surface-raised)", "background-color"),
+	);
+	const boxes = await Promise.all(
+		[0, 1].map((index) => cards.nth(index).boundingBox()),
+	);
+	if (mobile) expect(boxes[1]?.y).toBeGreaterThan(boxes[0]?.y ?? 0);
+	else {
+		expect(boxes[1]?.y).toBe(boxes[0]?.y);
+		expect(boxes[1]?.x).toBeGreaterThan(boxes[0]?.x ?? 0);
+	}
+	// 项目没有所属组织：「组织共享」不可选并说明原因。
+	await expect(scope.getByRole("radio", { name: "组织共享" })).toHaveAttribute(
+		"data-disabled",
+		"",
+	);
+	await expect(
+		aside.getByText("项目没有所属组织，不能选择组织共享。"),
+	).toBeVisible();
+	// 键盘：Tab 停在已选项，方向键切换范围；共享范围主按钮为「提交审核」。
+	const own = scope.getByRole("radio", { name: "仅自己" });
+	await own.focus();
+	await page.keyboard.press("ArrowDown");
+	const member = scope.getByRole("radio", { name: "全体成员" });
+	await expect(member).toBeFocused();
+	await expect(member).toHaveAttribute("aria-checked", "true");
+	await expect(aside.getByRole("button")).toHaveText(["保存草稿", "提交审核"]);
+	await own.click();
+	await expect(aside.getByRole("button")).toHaveText([
+		"保存草稿",
+		"发布固定版本",
+	]);
+	await expect(aside.getByText("权限不会扩大")).toBeVisible();
+	// 同一页面没有同名控件：项目与导入的包名称分开命名。
+	await expect(main.getByLabel("包名称", { exact: true })).toHaveCount(1);
+	await expect(main.getByLabel("导入包名称", { exact: true })).toHaveCount(1);
+	// 「保存草稿」提交左栏内容：先补正文，再保存；提交后焦点不落到 body。
+	await main.getByLabel("SKILL.md（任务说明）").fill("# release-notes\n");
+	await expect(aside.getByText("有未保存的修改")).toBeVisible();
+	await aside.getByRole("button", { name: "保存草稿" }).click();
+	await expect(aside.getByText(/^内容已保存/)).toBeVisible();
+	await expect(aside.getByText("有未保存的修改")).toHaveCount(0);
+	expect(control.writes.map(({ method, path }) => `${method} ${path}`)).toEqual(
+		["PUT /api/v2/skills/projects/release-notes/content"],
+	);
+	expect(
+		await page.evaluate(() => document.activeElement === document.body),
+	).toBe(false);
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= innerWidth,
+		),
+	).toBe(true);
+
+	// 新建首屏：先创建项目（项目内容属于已创建的项目），右栏只有说明，没有范围卡与发布。
+	await page.goto("/skills/manage/new");
+	const newAside = main.getByRole("complementary", { name: "版本与发布范围" });
+	await expect(newAside).toContainText(
+		"创建 Skill 项目后，可以编辑 SKILL.md，并在这里选择版本与发布范围。",
+	);
+	await expect(newAside.getByRole("radio")).toHaveCount(0);
+	await expect(newAside.getByRole("button")).toHaveCount(0);
+	await expect(main.getByRole("button", { name: "创建项目" })).toBeVisible();
+	await expect(main.getByLabel("包名称", { exact: true })).toHaveCount(1);
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= innerWidth,
+		),
+	).toBe(true);
+	expect(errors).toEqual([]);
 });
 
 test("creating and publishing never asks for internal IDs and reports state in Chinese", async ({
@@ -732,6 +1007,13 @@ test("Skill review lists pending versions, reviews them and re-reads the queue (
 	const own = rows.filter({ hasText: "release-notes" });
 	await expect(own).toContainText("不能审核自己发布的版本");
 	await expect(own.getByRole("button")).toHaveCount(0);
+	// V-06：每行说明下为 quiet-pill「脚本禁用 · 仅使用 Agent 已有权限」（11px、圆角 7px）。
+	const pills = rows.locator(".skill-row-copy > .quiet-pill");
+	await expect(pills).toHaveText(
+		Array(3).fill("脚本禁用 · 仅使用 Agent 已有权限"),
+	);
+	await expect(pills.first()).toHaveCSS("font-size", "11px");
+	await expect(pills.first()).toHaveCSS("border-top-left-radius", "7px");
 	await expect(main).not.toContainText(
 		/pending_review|ORGANIZATION|org-release|user-other|aaaaaaaa/,
 	);

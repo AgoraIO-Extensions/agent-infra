@@ -46,6 +46,11 @@ import type { SkillReviewQueueReadState } from "./skill-review-queue.js";
 /** 与契约 SkillHubReviewRequestV1.reason 上限一致。 */
 export const skillReviewReasonMaxLength = 1024;
 const selfReviewText = "不能审核自己发布的版本";
+/**
+ * 平台对 Skill 的固定权限规则（PRD §11.5：不扩大既有权限、脚本默认不执行）。
+ * 审核队列投影不含逐版本授权，行内与弹窗都只陈述这条规则。
+ */
+const permissionStatement = "脚本禁用 · 仅使用 Agent 已有权限";
 
 /** 服务端待审队列的一项；ownerId 用于隐藏自审入口，服务端仍会拒绝自审。 */
 export type SkillReviewItem = SkillHubReviewQueueItemV1;
@@ -232,6 +237,8 @@ function SkillReviewRow({
 					{names.scope} · {skillHubProviderLabels[item.provider]} ·{" "}
 					<Timestamp value={item.submittedAt} />
 				</p>
+				{/* 设计行内 quiet-pill（V-06）：与审阅弹窗「权限声明」同一条平台规则，不按版本推测授权。 */}
+				<span className="quiet-pill">{permissionStatement}</span>
 				{self ? <p className="skill-form-hint">{selfReviewText}</p> : null}
 			</div>
 			<div className="skill-row-meta">

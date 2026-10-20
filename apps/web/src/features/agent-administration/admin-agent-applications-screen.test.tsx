@@ -254,7 +254,7 @@ describe("AdminAgentApplicationsScreen", () => {
 		expect(visibleRows()).toEqual(["申请丙"]);
 	});
 
-	it("shows an unresolved applicant with an ID short form and omits a missing applicant (F-05)", () => {
+	it("shows an unresolved applicant with an ID short form and omits a missing applicant (F-05)", async () => {
 		render(
 			<AdminAgentApplicationsScreen
 				onDecision={vi.fn()}
@@ -291,6 +291,13 @@ describe("AdminAgentApplicationsScreen", () => {
 		expect(unnamed?.querySelector("code")?.textContent).toBe("user-app…");
 		expect(rows[1]?.querySelector("small")).toBeNull();
 		expect(rows[1]?.textContent).toBe("旧申请");
+		// V-01：审阅弹窗的申请人行同样只取投影；投影没有申请人时写「未提供」，不回退到 Owner。
+		fireEvent.click(screen.getByRole("button", { name: "审阅：旧申请" }));
+		const dialog = await screen.findByRole("dialog", { name: "审阅创建申请" });
+		const applicantTerm = [...dialog.querySelectorAll("dt")].find(
+			(dt) => dt.textContent === "申请人",
+		);
+		expect(applicantTerm?.nextElementSibling?.textContent).toBe("未提供");
 	});
 
 	it("reads directory names once per kind for the whole queue and reuses them in the review", async () => {
@@ -370,11 +377,16 @@ describe("AdminAgentApplicationsScreen", () => {
 		expect(screen.queryByRole("button", { name: "批准申请" })).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: reviewName() }));
 		const dialog = await screen.findByRole("dialog", { name: "审阅创建申请" });
-		// AP-03：facts 首两行为「申请」「说明」，并保留预设规格与预计资源占用。
+		// AP-03 / V-01：facts 依次为「申请」「申请人」「说明」（设计审阅弹窗的申请人行），并保留预设规格与预计资源占用。
 		const terms = [...dialog.querySelectorAll("dt")].map(
 			(dt) => dt.textContent,
 		);
-		expect(terms.slice(0, 2)).toEqual(["申请", "说明"]);
+		expect(terms.slice(0, 3)).toEqual(["申请", "申请人", "说明"]);
+		// 申请人只取申请投影 applicant 的显示名。
+		const applicantTerm = [...dialog.querySelectorAll("dt")].find(
+			(dt) => dt.textContent === "申请人",
+		);
+		expect(applicantTerm?.nextElementSibling?.textContent).toBe("Applicant");
 		expect(terms).toContain("预设规格");
 		expect(terms).toContain("预计资源占用");
 		expect(dialog.querySelector("dl")?.className).toBe("review-facts");
@@ -382,7 +394,11 @@ describe("AdminAgentApplicationsScreen", () => {
 		expect(
 			within(dialog).getByText("250m CPU / 512 MiB 内存 / 1 GiB 存储"),
 		).toBeTruthy();
-		expect(within(dialog).getByText("Applicant")).toBeTruthy();
+		// 申请人行与 Owner 行都显示「Applicant」：Owner 行仍是 Owner 投影的显示名。
+		const ownerTerm = [...dialog.querySelectorAll("dt")].find(
+			(dt) => dt.textContent === "Owner",
+		);
+		expect(ownerTerm?.nextElementSibling?.textContent).toBe("Applicant");
 		// 使用范围显示目录名称，不再显示组织 ID。
 		expect(await within(dialog).findByText("发布工程")).toBeTruthy();
 		expect(dialog.textContent).not.toContain("org-release");

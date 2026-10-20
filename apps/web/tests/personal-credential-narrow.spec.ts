@@ -417,7 +417,27 @@ test("revocation is confirmed with the credential and its consequence before one
 	await trigger.click();
 	const dialog = page.getByRole("dialog", { name: "撤销这张 API 凭证？" });
 	await expect(dialog).toBeVisible();
-	await expect(dialog).toContainText(initial.credentialId);
+	// V-20：凭证标识为等宽 700 短形式（与列表一致），完整值在 title；权限行 11px / 1.65 --muted-ink。
+	const subject = dialog.locator("strong", { hasText: "personal…" });
+	await expect(subject).toHaveText("personal…");
+	await expect(subject).toHaveAttribute("title", initial.credentialId);
+	await expect(subject).toHaveCSS("font-weight", "700");
+	await expect(subject).toHaveCSS("font-family", /^ui-monospace/);
+	const scopes = dialog.locator(".credential-revoke-scopes");
+	await expect(scopes).toHaveText(/^权限：/);
+	await expect(scopes).toHaveCSS("font-size", "11px");
+	await expect(scopes).toHaveCSS("line-height", "18.15px");
+	await expect(scopes).toHaveCSS(
+		"color",
+		await page.evaluate(() => {
+			const probe = document.createElement("span");
+			probe.style.color = "var(--muted-ink)";
+			document.body.append(probe);
+			const color = getComputedStyle(probe).color;
+			probe.remove();
+			return color;
+		}),
+	);
 	await expect(dialog).toContainText("撤销后不能恢复");
 	expect(revocations).toHaveLength(0);
 	await dialog.getByRole("button", { name: "取消" }).click();

@@ -1133,3 +1133,49 @@ for (const administrator of [false, true]) {
 		await expect(chip).toHaveCount(0);
 	});
 }
+
+// #2830 终验 V-08：个人审计按设计「筛选后直接是表格」，没有「审计范围」行和列表标题；
+// 查询按钮与分页保留（PRD §13.2）。平台审计保留原 #400 的区头与「最小审计数据」（V-10）。
+test("personal audit goes from filters straight to the table; platform audit keeps its timeline head (V-08, V-10)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	const errors: string[] = [];
+	page.on("pageerror", (error) => errors.push(error.message));
+	await fixture(page);
+	await page.goto("/audit");
+	const table = page.locator("table.audit-table");
+	await expect(table).toBeVisible();
+	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+	const main = page.locator("#main-content");
+	await expect(main.getByText(/^审计范围：/)).toHaveCount(0);
+	const records = main.getByRole("region", { name: "审计记录" });
+	await expect(records.getByRole("heading")).toHaveCount(0);
+	// 记录区的第一个块就是表格（容器），筛选表单之后没有标题或说明行。
+	expect(
+		await records.evaluate((section) => {
+			const first = section.firstElementChild;
+			return Boolean(first?.matches("table, :has(> table)"));
+		}),
+	).toBe(true);
+	await expect(main.getByRole("button", { name: "查询" })).toBeVisible();
+	await expect(main.getByRole("button", { name: "下一页" })).toBeVisible();
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= innerWidth,
+		),
+	).toBe(true);
+
+	await fixture(page, "admin");
+	await page.goto("/admin/audit");
+	await expect(
+		main.getByRole("heading", { level: 2, name: "平台操作记录" }),
+	).toBeVisible();
+	await expect(main.getByText("最小审计数据", { exact: true })).toBeVisible();
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= innerWidth,
+		),
+	).toBe(true);
+	expect(errors).toEqual([]);
+});

@@ -218,7 +218,11 @@ function ReadyVersion({
 	}, [serverKey]);
 	const [installing, setInstalling] = useState(false);
 	const [removing, setRemoving] = useState(false);
-	const [libraryError, setLibraryError] = useState<string>();
+	// 加入失败显示在页头主操作下方，移出失败显示在侧栏「移出我的库」旁。
+	const [libraryError, setLibraryError] = useState<{
+		action: "install" | "uninstall";
+		text: string;
+	}>();
 	const [revoking, setRevoking] = useState(false);
 	const [revokeError, setRevokeError] = useState<string>();
 	const [focusTarget, setFocusTarget] = useState<
@@ -272,7 +276,10 @@ function ReadyVersion({
 				onVersionChanged?.();
 				return;
 			}
-			setLibraryError(installFailureMessage(error));
+			setLibraryError({
+				action: "install",
+				text: installFailureMessage(error),
+			});
 		} finally {
 			setInstalling(false);
 		}
@@ -296,7 +303,10 @@ function ReadyVersion({
 			setFocusTarget(published ? "add" : "heading");
 			onVersionChanged?.();
 		} catch (error) {
-			setLibraryError(uninstallFailureMessage(error));
+			setLibraryError({
+				action: "uninstall",
+				text: uninstallFailureMessage(error),
+			});
 		} finally {
 			setRemoving(false);
 		}
@@ -352,7 +362,8 @@ function ReadyVersion({
 						{version.name}
 					</h1>
 				</div>
-				{published || owned || installed ? (
+				{/* 页头只放一个主操作（V-12）；「移出我的库」在侧栏「版本与权限」，加入前后页头高度不变。 */}
+				{published || owned ? (
 					<div className="skill-actions skill-primary-action">
 						{published && installed ? (
 							<Link
@@ -388,19 +399,9 @@ function ReadyVersion({
 								编辑新版本
 							</Link>
 						) : null}
-						{installed && library.installationId !== undefined ? (
-							<Button
-								type="button"
-								variant="ghost"
-								disabled={removing}
-								onClick={() => void removeFromLibrary()}
-							>
-								{removing ? "正在移出…" : "移出我的库"}
-							</Button>
-						) : null}
-						{libraryError ? (
+						{libraryError?.action === "install" ? (
 							<Alert tone="danger" role="alert" className="skill-action-error">
-								<AlertDescription>{libraryError}</AlertDescription>
+								<AlertDescription>{libraryError.text}</AlertDescription>
 							</Alert>
 						) : null}
 					</div>
@@ -524,22 +525,40 @@ function ReadyVersion({
 								<AlertDescription>{revokeError}</AlertDescription>
 							</Alert>
 						) : null}
-						{owned && published ? (
+						{libraryError?.action === "uninstall" ? (
+							<Alert tone="danger" role="alert" className="mt-4">
+								<AlertDescription>{libraryError.text}</AlertDescription>
+							</Alert>
+						) : null}
+						{(installed && library.installationId !== undefined) ||
+						(owned && published) ? (
 							<div className="skill-actions skill-summary-actions">
-								<ConfirmDialog
-									variant="skill"
-									disabled={revoking}
-									trigger={
-										<Button variant="ghost" type="button">
-											{revoking ? "正在撤销…" : "撤销此版本"}
-										</Button>
-									}
-									title="撤销这个 Skill 版本？"
-									subject={{ name: `${version.name} · v${version.version}` }}
-									description="阻止新的安装、绑定与调用。已发生的执行及结果继续保留原版本。"
-									confirmLabel="确认撤销"
-									onConfirm={() => void revoke()}
-								/>
+								{installed && library.installationId !== undefined ? (
+									<Button
+										type="button"
+										variant="ghost"
+										disabled={removing}
+										onClick={() => void removeFromLibrary()}
+									>
+										{removing ? "正在移出…" : "移出我的库"}
+									</Button>
+								) : null}
+								{owned && published ? (
+									<ConfirmDialog
+										variant="skill"
+										disabled={revoking}
+										trigger={
+											<Button variant="ghost" type="button">
+												{revoking ? "正在撤销…" : "撤销此版本"}
+											</Button>
+										}
+										title="撤销这个 Skill 版本？"
+										subject={{ name: `${version.name} · v${version.version}` }}
+										description="阻止新的安装、绑定与调用。已发生的执行及结果继续保留原版本。"
+										confirmLabel="确认撤销"
+										onConfirm={() => void revoke()}
+									/>
+								) : null}
 							</div>
 						) : null}
 					</aside>

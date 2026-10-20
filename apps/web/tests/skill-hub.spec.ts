@@ -931,7 +931,19 @@ test.describe("Skill version detail", () => {
 		await expect(library).toHaveText("已在我的库");
 		await expect(configure).toBeVisible();
 
-		const remove = page.getByRole("button", { name: "移出我的库" });
+		// V-12：页头只放一个主操作，「移出我的库」在侧栏，加入前后 h1 不跳动。
+		const header = main.locator(".page-heading");
+		await expect(
+			header.getByRole("button", { name: "移出我的库" }),
+		).toHaveCount(0);
+		await expect(
+			summary.getByRole("button", { name: "移出我的库" }),
+		).toBeVisible();
+		const headingTop = async () =>
+			(await page.getByRole("heading", { level: 1 }).boundingBox())?.y ?? 0;
+		const installedTop = await headingTop();
+
+		const remove = summary.getByRole("button", { name: "移出我的库" });
 		const readsBeforeRemoval = control.requests.details.length;
 		await remove.click();
 		const add = page.getByRole("button", { name: "加入我的库" });
@@ -943,6 +955,9 @@ test.describe("Skill version detail", () => {
 		expect(control.requests.uninstalls).toHaveLength(1);
 		expect(control.requests.uninstalls[0]?.id).toBe("installation-1");
 		expect(control.requests.uninstalls[0]?.key).toBeTruthy();
+		expect(Math.abs((await headingTop()) - installedTop)).toBeLessThanOrEqual(
+			1,
+		);
 		await expect
 			.poll(() => control.requests.details.length)
 			.toBeGreaterThan(readsBeforeRemoval);

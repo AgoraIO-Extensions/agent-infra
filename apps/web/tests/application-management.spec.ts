@@ -354,3 +354,71 @@ test("disabling an application is confirmed before one PATCH and returns focus t
 		page.getByRole("heading", { name: application.name }),
 	).toBeFocused();
 });
+
+// #2830 终验 V-21–V-23：应用摘要为 dl.facts 两列事实行（标签列 150px、13px），应用名与
+// 「应用凭证元数据」为 17px / 650 / 1.4，说明与「应用 ID」13px，「停用应用」不带图标。
+test("application summary follows the design facts, headings and plain disable button (V-21, V-22, V-23)", async ({
+	page,
+}, info) => {
+	const mobile = info.project.name === "mobile";
+	const errors: string[] = [];
+	page.on("pageerror", (error) => errors.push(error.message));
+	await fixture(page);
+	await page.goto(
+		`/my-settings/api-credentials?applicationId=${application.applicationId}`,
+	);
+	const name = page.getByRole("heading", { name: application.name });
+	await expect(name).toBeVisible();
+	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+	for (const heading of [
+		name,
+		page.getByRole("heading", { name: "应用凭证元数据" }),
+	]) {
+		await expect(heading).toHaveCSS("font-size", "17px");
+		await expect(heading).toHaveCSS("font-weight", "650");
+		await expect(heading).toHaveCSS("line-height", "23.8px");
+	}
+	await expect(page.getByText(/^应用 ID：/)).toHaveCSS("font-size", "13px");
+	await expect(page.getByText(/^当前接口只返回元数据/)).toHaveCSS(
+		"font-size",
+		"13px",
+	);
+	const facts = page.locator("dl.application-facts");
+	await expect(facts.locator("dt")).toHaveText([
+		"负责人",
+		"创建时间",
+		"更新时间",
+	]);
+	await expect(facts).toHaveCSS("font-size", "13px");
+	await expect(facts.locator("dd").first()).toHaveCSS("line-height", "21.45px");
+	const columns = await facts.evaluate(
+		(element) =>
+			getComputedStyle(element).gridTemplateColumns.split(" ").length,
+	);
+	if (mobile) expect(columns).toBe(1);
+	else {
+		expect(
+			await facts.evaluate(
+				(element) =>
+					getComputedStyle(element).gridTemplateColumns.split(" ")[0],
+			),
+		).toBe("150px");
+		// 两列事实行：dt 与 dd 在同一行。
+		const [dt, dd] = await Promise.all([
+			facts.locator("dt").first().boundingBox(),
+			facts.locator("dd").first().boundingBox(),
+		]);
+		expect(Math.abs((dt?.y ?? 0) - (dd?.y ?? 0))).toBeLessThanOrEqual(1);
+	}
+	const disable = page.getByRole("button", {
+		name: `停用应用：${application.name}`,
+	});
+	await expect(disable.locator("svg")).toHaveCount(0);
+	await expect(disable).toHaveCSS("border-top-width", "1px");
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= innerWidth,
+		),
+	).toBe(true);
+	expect(errors).toEqual([]);
+});
