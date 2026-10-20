@@ -19,7 +19,7 @@
 4. **Task API 不暴露。** 任务查询、输出与事件订阅跳过 `reasoning.delta` 并推进游标，[PRD §10.4](../prd/PRD-agent-platform-M1.md#104-agent-api-与后台任务) 的输出语义不变。外部集成不会因为 Agent 换了模型而收到新的事件类型；以后要开放需要另行决策。
 5. **批量与顺序。** Driver 把思考增量与正文增量放进同一批持久提交，保持到达顺序，见 [Agent Runtime HLD §8.2](../architecture/HLD-agent-runtime-M1.md#82-事件去重)。
 6. **发布顺序。** 先发布 Platform（Worker、API、Web），再发布 Runtime。旧 Worker 把不认识的 V2 Runtime 事件当作依赖不可用，停在原游标重试，任务无法推进。
-7. **Codex 模型目录。** 标准 Codex 模板通过仓库内受控脚本生成的模型目录接入获准模型：以固定 Codex release 的内置目录为基础，追加经评审的条目。目录烘焙进 Runtime 镜像的只读路径，由 Bridge 以 session flag 传给固定 Codex，Driver 精确校验该配置项。`codexModelProfiles` 仍只由模板与镜像 Digest 决定，运维步骤见 [Platform API 部署说明](../../deploy/platform-api/README.md#标准-codex-模板的模型画像)。
+7. **Codex 模型目录。** 标准 Codex 模板通过仓库内受控脚本生成的模型目录接入获准模型：以固定 Codex release 的内置目录为基础，追加经评审的条目。目录烘焙进 Runtime 镜像的只读路径，由 Bridge 以 session flag 传给固定 Codex，Driver 精确校验该配置项；能力元数据的来源约束见[工程 Spec §10.8](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#108-codex-原生模型传输边界)。`codexModelProfiles` 仍只由模板与镜像 Digest 决定，运维步骤见 [Platform API 部署说明](../../deploy/platform-api/README.md#标准-codex-模板的模型画像)。
 8. **企微展示。** 只有执行完成的回复组合思考过程，组合、截断与各传输方式的差异见 [企微文本渠道部署](../architecture/WECOM-text-deployment.md#思考过程)。
 
 ## 风险与边界

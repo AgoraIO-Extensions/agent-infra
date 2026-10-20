@@ -889,6 +889,9 @@ profile 校验 reasoning；此匹配不代表供应商支持该后缀。多斜�
 已验证 profile 的配置拒绝。父进程仅按完整
 内部模型名查询当前批准集合，将请求的 model 改回真实 model，并使用该项固定 Relay endpoint 与原 Execution 的 Key；不根据模型正文、调用方 URL 或同名 model 猜测路由。该方式必须保留原模型在 pinned
 Codex 中的能力元数据，不自行生成或放宽 capability profile；无已验证 profile 的选项不准入。
+标准 Codex 模板的 pinned 能力元数据以 Codex 加载的、随 Runtime 镜像固定的模型目录为准：固定
+release 的内置条目原样保留，另含经评审的追加条目，决策见
+[ADR-0026](../adr/0026-show-model-reasoning-as-conversation-content.md)。
 同一会话连续切换两个真实 model 同名的选项，以及相邻 Execution 使用不同 Key 版本，必须有原生测试；
 任何上游失败都不得改用其他选项。
 
