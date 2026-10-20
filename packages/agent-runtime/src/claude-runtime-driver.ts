@@ -614,7 +614,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		let file: DurableJsonFile<Session> | undefined;
 		for (const entry of this.index.read().sessions) {
 			const candidate = await this.file(entry);
-			if (candidate.read().nativeId === action.nativeSessionRef) {
+			if (entry.ref === action.nativeSessionRef) {
 				binding = entry;
 				file = candidate;
 				break;
@@ -1653,7 +1653,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						resolveCredential: async () => {
 							const authorized = await this.options.authorizeModelAction?.({
 								kind: "model",
-								nativeSessionRef: before.nativeId,
+								nativeSessionRef: ref,
 								executionId: command.executionId,
 								runtimeOperationId: command.executionId,
 								operationRef,

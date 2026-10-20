@@ -1523,6 +1523,7 @@ it("delivers a per-execution key for a credential-free Claude option", async () 
 		expect(actions).toHaveLength(authorizationHeaders.length);
 		for (const action of actions) {
 			expect(action.kind).toBe("model");
+			expect(action.nativeSessionRef).toBe(first.nativeSessionRef);
 			expect(action.executionId).toBe("execution-a");
 			expect(action.runtimeOperationId).toBe("execution-a");
 			await driver.validateExternalAction?.(action);
