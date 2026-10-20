@@ -1130,6 +1130,21 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			}
 		}
 	});
+	it("passes the deployment-approved WeCom QR authorization source into the API assembly (#2894)", () => {
+		const wecomBotQr = {
+			source: "agent-infra-deployment",
+			authOrigin: "https://work.weixin.qq.com",
+			authorizationEndpoint: "https://work.weixin.qq.com/ai/qc/gen",
+		} satisfies NonNullable<ProductionPlatformApiInputV1["wecomBotQr"]>;
+		const input = createProductionPlatformApiAssemblyInputV1({
+			...fixture.input,
+			wecomBotQr,
+		});
+		expect(input.wecomBotQr).toBe(wecomBotQr);
+		expect(
+			createProductionPlatformApiAssemblyInputV1(fixture.input),
+		).not.toHaveProperty("wecomBotQr");
+	});
 	it("merges Platform-only user disables into the authority context", async () => {
 		const userGovernance = new PostgresPlatformUserDisablesV1(
 			database.databaseUrl,

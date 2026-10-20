@@ -35,9 +35,10 @@ Owner 无需提供公网回调 URL、Token、EncodingAESKey 或内部配置标�
 
 当前长连接 Adapter 固定使用 `@wecom/aibot-node-sdk@1.0.7`；禁用 SDK 原始 payload 日志。
 生产 API 的 `createProductionPlatformApiAssemblyInputV1` 默认不开放机器人配置 API。
-部署同时配置下述 Worker `wecom.setup` 和 `connections` 后，显式设置 `wecomSetupEnabled: true`，
-并提供 API 侧 `wecomIdentity` 当前企微身份映射，才把已有 `encryptionKeys` 公钥输入传给机器人配置模块；
-直接调用 `assemblePlatformApi` 时显式提供 `wecomCredentialEncryptionKeys` 和 `wecomIdentity`。
+部署同时配置下述 Worker `wecom.setup` 和 `connections` 后，在 API 部署输入里同时提供
+`wecomCredentialEncryptionKeys`（与 Runtime Secret 相同格式的 `encryptionKeys` 公钥输入）和
+`wecomIdentity`（API 侧当前企微身份映射），机器人配置模块才会装配；只提供密钥时启动失败。
+直接调用 `assemblePlatformApi` 时提供同样两项。
 回执查询/放弃接口使用当前企微身份映射独立装配，不依赖 HTTP 回调 Token 或回调路由。
 身份 Adapter 必须提供 `resolveUser`，每次配置操作重新校验当前账号和 Owner 权限。
 
@@ -57,8 +58,24 @@ Worker 实际认证通过、Owner/配置版本/连接租约仍有效后，通过
 当前渠道密文尚不参与 Runtime Secret 的自动重新封装任务：更换加密公钥后，逐个重新验证并绑定机器人，
 确认旧渠道引用清除后再退役旧 key；在此之前保留旧 Worker 私钥。不能用 Runtime Secret 轮换完成状态代替该检查。
 
-扫码入口当前返回 `authorization_correlation_unverified` 并展示手动替代入口；
-没有通过官方授权来源与一次性配置会话关联验证前，不启用扫码提交，不将本实现计为扫码验收通过。
+扫码入口由 API 部署输入 `wecomBotQr` 开启，不提供时返回 `authorization_correlation_unverified` 并展示手动替代入口：
+
+```js
+wecomBotQr: {
+  source: "<部署自定的来源标识>",
+  authOrigin: "https://work.weixin.qq.com",
+  authorizationEndpoint: "https://work.weixin.qq.com/ai/qc/gen",
+}
+```
+
+- 授权地址由平台拼上 `source` 和本次配置会话的一次性 `state`。官方扫码页的二维码 300 秒后过期，
+  页面在 Owner 用企业微信确认后只向 opener 发送 `{type:"AUTH_SUCCESS", payload:{botid, secret}}`，不回传 `state`。
+- 浏览器只接受来自 `authOrigin`、且正是本页为这次配置会话打开的那个弹窗的结果；
+  `AUTH_CANCEL`、`WINDOW_CLOSE` 按取消处理，`AUTH_ERROR` 按失败处理，其他类型忽略。
+- 一次性 `state` 仍由本页随凭证提交，服务端照旧校验摘要、有效期和配置版本；之后与手动配置一样，
+  由 Worker 用真实长连接认证、Core 激活绑定。
+- 等待扫码默认到配置会话到期前 30 秒，留给面板确认与 Worker 验证。
+- 部署自有的中转页也可以发送 `{botId, secret, source, state}`，`source` 与 `state` 必须一致。
 
 ## 自建应用与显式回调模式
 
