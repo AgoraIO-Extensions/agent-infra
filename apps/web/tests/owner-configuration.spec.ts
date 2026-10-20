@@ -18,6 +18,7 @@ import type {
 	DeploymentConfigurationProjectionV2,
 	SkillHubAgentBindingStatusV1,
 } from "../src/pilot/generated-v2/types.gen";
+import { expectNoDuplicateControls } from "./page-health";
 import {
 	computed,
 	expectCleanPage,
@@ -1539,3 +1540,44 @@ for (const role of ["admin", "employee"] as const) {
 		await expectNoDocumentNavigation(page, documents);
 	});
 }
+
+// #3040 AC-2：Owner 配置与 Agent 的 Skill 页在 1440×900 与 390×844 下没有横向溢出、
+// 控制台错误与同页同名控件（含一张绑定卡与绑定表单同屏时）。
+test("Owner configuration and the Agent's Skill page have no overflow, console errors or duplicate controls (#3040 AC-2)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const pageErrors = trackPageErrors(page);
+	await ownerConfigFixture(page, { agentVersion: "agent-version-7" });
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(
+		page.getByRole("region", { name: "渠道", exact: true }),
+	).toBeVisible();
+	await expect(
+		page.getByRole("region", { name: "企微机器人", exact: true }),
+	).toBeVisible();
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(page, "Owner 配置");
+
+	await page.goto("/agents/agent-pilot-1/skills");
+	const region = main(page);
+	await expect(region.getByText("还未绑定 Skill")).toBeVisible();
+	await expectNoDuplicateControls(page, "Agent 的 Skill（空）");
+	await region
+		.getByLabel("固定版本", { exact: true })
+		.selectOption("code-review-v1");
+	await region.getByRole("button", { name: "绑定固定版本" }).click();
+	await page
+		.getByRole("dialog", { name: "确认绑定固定版本" })
+		.getByRole("button", { name: "确认绑定" })
+		.click();
+	await expect(
+		region.getByRole("heading", { level: 2, name: "code-review v1.0.0" }),
+	).toBeFocused();
+	await expectCleanPage(page, pageErrors);
+	await expectNoDuplicateControls(page, "Agent 的 Skill（已绑定）");
+});

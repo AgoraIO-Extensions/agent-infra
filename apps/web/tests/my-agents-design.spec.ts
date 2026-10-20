@@ -17,6 +17,7 @@ import type {
 	AgentApplicationProjectionV2,
 	AgentProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
+import { expectNoDuplicateControls } from "./page-health";
 import {
 	computed,
 	expectCleanPage,
@@ -941,4 +942,46 @@ test("my Agent and application form page heads place the h1 at the design height
 		"margin-top",
 		"0px",
 	);
+});
+
+// #3040 AC-2：受影响页面在 1440×900 与 390×844 下没有横向溢出、控制台错误与同页同名控件。
+test("my Agent pages have no overflow, console errors or duplicate controls at the acceptance viewports (#3040 AC-2)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	const pageErrors = trackPageErrors(page);
+	await fixture(page, {
+		applications: [
+			application(),
+			application({
+				applicationId: "application-browser-2",
+				name: "Rejected request",
+				status: "rejected",
+				decision: { decidedAt: "2026-09-03T10:00:00Z", reason: "范围过大" },
+			}),
+		],
+	});
+	for (const [path, ready] of [
+		["/my-agents", page.getByRole("list", { name: "我的申请" })],
+		["/my-agents?tab=owned", page.locator(".owned-agent-card").first()],
+		["/my-agents/new", page.getByLabel("Agent 名称")],
+		["/my-agents/application-browser-1/edit", page.getByLabel("Agent 名称")],
+		[
+			"/my-agents/application-browser-1",
+			page.getByRole("region", { name: "审批进度" }),
+		],
+		[
+			"/my-agents/application-browser-2",
+			page.locator(".application-decision-reason"),
+		],
+	] as const) {
+		await page.goto(path);
+		await expect(ready).toBeVisible();
+		await expectCleanPage(page, pageErrors);
+		await expectNoDuplicateControls(page, path);
+	}
 });
