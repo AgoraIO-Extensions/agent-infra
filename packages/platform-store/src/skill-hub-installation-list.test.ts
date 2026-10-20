@@ -165,9 +165,10 @@ describe("Skill Hub installation list (#2953)", () => {
 				principalId: "member",
 				state: "installed",
 			});
-			expect(entry.version?.skillVersionId).toBe(
+			expect(entry.version.skillVersionId).toBe(
 				entry.installation.skillVersionId,
 			);
+			expect(entry.visible).toBe(true);
 		}
 
 		const removed = ids.get("digest-v1") ?? "";
@@ -203,11 +204,11 @@ describe("Skill Hub installation list (#2953)", () => {
 		const byVersion = new Map(
 			page.entries.map((entry) => [entry.installation.skillVersionId, entry]),
 		);
-		expect(byVersion.get("incident-v1")?.version).toBeNull();
-		expect(byVersion.get("digest-v1")?.version).toBeNull();
-		expect(byVersion.get("notes-v1")?.version).toMatchObject({
-			name: "notes",
-			state: "published",
+		expect(byVersion.get("incident-v1")?.visible).toBe(false);
+		expect(byVersion.get("digest-v1")?.visible).toBe(false);
+		expect(byVersion.get("notes-v1")).toMatchObject({
+			visible: true,
+			version: { name: "notes", state: "published" },
 		});
 		// 父项目停用后同样不可见。
 		await adapter.updateProject(request("owner-a"), "notes", "disable-notes", {
@@ -218,8 +219,8 @@ describe("Skill Hub installation list (#2953)", () => {
 		expect(
 			disabled.entries.find(
 				(entry) => entry.installation.skillVersionId === "notes-v1",
-			)?.version,
-		).toBeNull();
+			)?.visible,
+		).toBe(false);
 	});
 
 	it("keeps the publisher's own revoked version readable in the list", async () => {
@@ -228,7 +229,10 @@ describe("Skill Hub installation list (#2953)", () => {
 		await adapter.revokeVersion(request("owner-a"), "notes-v1", "revoke-notes");
 		const [entry] = (await adapter.listInstallations(request("owner-a"), {}))
 			.entries;
-		expect(entry?.version).toMatchObject({ name: "notes", state: "revoked" });
+		expect(entry).toMatchObject({
+			visible: true,
+			version: { name: "notes", state: "revoked" },
+		});
 	});
 
 	it("refuses invalid queries and unknown callers", async () => {

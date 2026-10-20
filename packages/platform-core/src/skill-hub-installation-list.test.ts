@@ -47,7 +47,9 @@ describe("Skill Hub installation list (#2953)", () => {
 	it("projects visible versions without object locations or review reasons", () => {
 		const page = pageSkillHubInstallationsV1(
 			{
-				entries: [{ installation: installation(), version: version() }],
+				entries: [
+					{ installation: installation(), version: version(), visible: true },
+				],
 				nextCursor: "install-a",
 			},
 			"user-a",
@@ -80,7 +82,11 @@ describe("Skill Hub installation list (#2953)", () => {
 			pageSkillHubInstallationsV1(
 				{
 					entries: [
-						{ installation: installation(), version: version("revoked") },
+						{
+							installation: installation(),
+							version: version("revoked"),
+							visible: true,
+						},
 					],
 					nextCursor: null,
 				},
@@ -90,15 +96,18 @@ describe("Skill Hub installation list (#2953)", () => {
 	});
 
 	it("marks versions the user can no longer view as unavailable without a name", () => {
-		for (const current of [
-			null,
-			version("pending_review"),
-			version("rejected"),
-		])
+		for (const [current, visible] of [
+			[version(), false],
+			[version("revoked"), false],
+			[version("pending_review"), true],
+			[version("rejected"), true],
+		] as const)
 			expect(
 				pageSkillHubInstallationsV1(
 					{
-						entries: [{ installation: installation(), version: current }],
+						entries: [
+							{ installation: installation(), version: current, visible },
+						],
 						nextCursor: null,
 					},
 					"user-a",
@@ -115,15 +124,23 @@ describe("Skill Hub installation list (#2953)", () => {
 		["a removed installation", { state: "uninstalled" as const }],
 		["a mismatched version", { skillVersionId: "version-b" }],
 	])("fails closed for %s", (_label, change) => {
-		expect(() =>
-			pageSkillHubInstallationsV1(
-				{
-					entries: [{ installation: installation(change), version: version() }],
-					nextCursor: null,
-				},
-				"user-a",
-			),
-		).toThrow(SkillHubOperationErrorV1);
+		// 不可见的版本也必须与安装对应，不能借不可见投影带过错配记录。
+		for (const visible of [true, false])
+			expect(() =>
+				pageSkillHubInstallationsV1(
+					{
+						entries: [
+							{
+								installation: installation(change),
+								version: version(),
+								visible,
+							},
+						],
+						nextCursor: null,
+					},
+					"user-a",
+				),
+			).toThrow(SkillHubOperationErrorV1);
 	});
 
 	it("parses bounded page queries", () => {
