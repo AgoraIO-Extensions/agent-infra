@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +16,13 @@ const script = new URL(
 	"../deploy/runtime/codex-model-profiles.mjs",
 	import.meta.url,
 );
+// #2978：与 Runtime 官方 lane 相同的启动参数，生成的画像才与 readiness 看到的列表一致。
+const expectedArguments = [
+	"app-server",
+	"--strict-config",
+	"--config",
+	'model_catalog_json="/opt/codex/share/models.json"',
+];
 
 // 假 codex：按场景应答 initialize 与分页的 model/list，并检查收到的环境。
 async function fakeCodex(scenario) {
@@ -20,6 +34,8 @@ async function fakeCodex(scenario) {
 const scenario = ${JSON.stringify(scenario)};
 // 生成脚本不得把部署环境中的变量传给 Codex，也不得沿用真实 HOME。
 if (process.env.PRIVATE_DEPLOYMENT_TOKEN || process.env.HOME === ${JSON.stringify(process.env.HOME)} || process.env.CODEX_HOME !== process.env.HOME) process.exit(3);
+// 必须以 Runtime 相同的严格配置和模型目录启动。
+if (JSON.stringify(process.argv.slice(2)) !== ${JSON.stringify(JSON.stringify(expectedArguments))}) process.exit(4);
 if (scenario === "exit-immediately") process.exit(0);
 if (scenario === "stdin-closed") {
 	// 读端已关闭但进程仍在运行，Platform 侧收到应答后再写入会得到 EPIPE。
@@ -124,4 +140,19 @@ test("reports an unavailable Codex binary without output (#2382)", async () => {
 	assert.equal(result.stdout, "");
 	assert.equal(result.stderr.trim(), "CODEX_MODEL_PROFILES_UNAVAILABLE");
 	assert.deepEqual(result.leftovers, []);
+});
+
+test("loads the same image model catalog as the Runtime official lane (#2978)", async () => {
+	const bridge = await readFile(
+		new URL(
+			"../packages/agent-runtime/src/codex-app-server-bridge.ts",
+			import.meta.url,
+		),
+		"utf8",
+	);
+	const runtimePath = bridge.match(
+		/export const CODEX_MODEL_CATALOG_PATH = ("[^"]+");/,
+	)?.[1];
+	assert.ok(runtimePath);
+	assert.equal(`model_catalog_json=${runtimePath}`, expectedArguments[3]);
 });

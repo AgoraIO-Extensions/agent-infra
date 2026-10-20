@@ -4,7 +4,11 @@ import { access, lstat, open, readdir, realpath } from "node:fs/promises";
 import { dirname } from "node:path";
 import { arch, getuid, platform } from "node:process";
 import { isDeepStrictEqual } from "node:util";
-import { CODEX_APP_SERVER_V2_PROVENANCE } from "./codex-app-server-bridge.js";
+import {
+	CODEX_APP_SERVER_V2_PROVENANCE,
+	CODEX_MODEL_CATALOG_PATH,
+} from "./codex-app-server-bridge.js";
+import modelCatalog from "./codex-models.json" with { type: "json" };
 import release from "./codex-release.json" with { type: "json" };
 
 export const CODEX_PILOT_EXECUTABLE = "/opt/codex/bin/codex";
@@ -190,6 +194,7 @@ export async function verifyCodexPilotInstallation(
 		await verifyLayout([
 			CODEX_PILOT_EXECUTABLE,
 			installedPath("release.json"),
+			CODEX_MODEL_CATALOG_PATH,
 			...legalNames.map(installedPath),
 			...skillFiles,
 		]);
@@ -200,6 +205,8 @@ export async function verifyCodexPilotInstallation(
 		for (const path of skillFiles) await readProtectedFile(path);
 		for (const [path, expected] of [
 			[CODEX_PILOT_EXECUTABLE, official.executableSha256],
+			// #2978：目录由安装脚本按固定摘要生成，Runtime 只加载摘要一致的文件。
+			[CODEX_MODEL_CATALOG_PATH, modelCatalog.sha256],
 			...Object.entries(legal).map(([name, hash]) => [
 				installedPath(name),
 				hash,

@@ -11,6 +11,17 @@
 `linux/amd64` 与 `linux/arm64`。固定资产、SHA-256 与 LICENSE/NOTICE 的来源记录在
 [`codex-release.json`](../../packages/agent-runtime/src/codex-release.json)。安装程序验证压缩包、
 解压后的可执行文件和法律文件，最终镜像保留 `/opt/codex/share/` 中的来源与法律信息。
+安装程序同时生成标准 Codex 模板的模型目录 `/opt/codex/share/models.json`：以固定
+commit 的 `codex-rs/models-manager/models.json` 为基础，追加经评审的
+[`codex-models-additions.json`](codex-models-additions.json)（DeepSeek 官方
+[Codex 接入文档](https://api-docs.deepseek.com/zh-cn/quick_start/agent_integrations/codex)中的
+条目）。内置目录与生成结果的摘要固定在
+[`codex-models.json`](../../packages/agent-runtime/src/codex-models.json)，任一不符
+即构建失败；正式入口按同一摘要复验该文件，官方 lane 以 `model_catalog_json` 加载它。目录替换
+固定 Codex 的内置列表，内置条目原样保留。升级 Codex 或修改追加条目后，用
+[`codex-models.mjs`](codex-models.mjs) 重新生成摘要，并按
+[Platform API 部署说明](../platform-api/README.md#标准-codex-模板的模型画像)重新生成
+`codexModelProfiles`。
 安装仅接受该官方 release，不接受派生二进制。新文件先在同级临时目录完整校验，再替换原安装；
 替换失败时恢复原目录；替换成功后清理旧目录失败只输出警告，不撤销已生效的新安装。
 目录和二进制固定为 `0555`，元数据为 `0444`，镜像内统一归 root 所有。
