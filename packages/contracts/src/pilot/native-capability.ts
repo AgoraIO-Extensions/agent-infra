@@ -87,6 +87,13 @@ const body = (schema: z.ZodType) => ({
 	content: { "application/json": { schema } },
 });
 
+// One endpoint, two exact request versions. A body without `schemaVersion`
+// stays V1; V2 is selected only by its explicit version and attachment list.
+const nativeCapabilityInvocationRequestSchema = z.union([
+	NativeCapabilityInvocationRequestV1Schema,
+	NativeCapabilityInvocationRequestV2Schema,
+]);
+
 export const nativeCapabilityInvocationOpenApiPathsV1 = {
 	"/api/v2/conversations/{conversationId}/native-capability/invoke": {
 		post: {
@@ -95,7 +102,7 @@ export const nativeCapabilityInvocationOpenApiPathsV1 = {
 			requestParams: {
 				path: z.strictObject({ conversationId: OpaqueIdV1Schema }),
 			},
-			requestBody: body(NativeCapabilityInvocationRequestV1Schema),
+			requestBody: body(nativeCapabilityInvocationRequestSchema),
 			responses: {
 				"202": response(
 					"Native capability admission accepted or replayed",
@@ -116,6 +123,8 @@ export const nativeCapabilityInvocationOpenApiPathsV1 = {
 export const nativeCapabilityInvocationSchemasV1 = {
 	NativeCapabilityInvocationRequestV1:
 		NativeCapabilityInvocationRequestV1Schema,
+	NativeCapabilityInvocationRequestV2:
+		NativeCapabilityInvocationRequestV2Schema,
 	NativeCapabilityInvocationResultV1: NativeCapabilityInvocationResultV1Schema,
 	NativeCapabilityInvocationResponseV1:
 		NativeCapabilityInvocationResponseV1Schema,

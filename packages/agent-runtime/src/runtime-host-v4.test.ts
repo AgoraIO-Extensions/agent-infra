@@ -13,11 +13,14 @@ import {
 	RuntimeEventReadRequestV4Schema,
 	RuntimeExecutionGrantClaimsV2Schema,
 	RuntimeNativeCapabilityRequestV4Schema,
+	type RuntimeNativeCapabilityRequestV5,
+	RuntimeNativeCapabilityTransportV5Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
 	type RuntimeRestoreExecutionKeyRequestV4,
 	RuntimeRestoreExecutionKeyRequestV4Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	runtimeEventRequestDigestV4,
+	runtimeRequestDigestV5,
 	runtimeRequestSigningPayloadV4,
 	runtimeRestoreExecutionKeyRequestDigestV4,
 } from "@agent-infra/contracts/runtime";
@@ -193,6 +196,8 @@ async function setup(
 		request: RuntimeRestoreExecutionKeyRequestV4;
 		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
 	}>,
+	validateGrantV5?: import("./runtime-host.js").RuntimeHostOptions["validateGrantV5"],
+	validateRecoveryGrantV5?: import("./runtime-host.js").RuntimeHostOptions["validateRecoveryGrantV5"],
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-consumer-"));
 	cleanups.push(() => rm(directory, { recursive: true, force: true }));
@@ -219,6 +224,8 @@ async function setup(
 		...(fileBridge ? { fileBridge: () => fileBridge } : {}),
 		...(createBrowserExecutionContext ? { createBrowserExecutionContext } : {}),
 		...(validateRecoveryGrantV4 ? { validateRecoveryGrantV4 } : {}),
+		...(validateGrantV5 ? { validateGrantV5 } : {}),
+		...(validateRecoveryGrantV5 ? { validateRecoveryGrantV5 } : {}),
 	};
 	let host = await RuntimeHost.open(options);
 	cleanups.push(() => host.close());
@@ -1846,4 +1853,222 @@ it("rejects missing or terminal recovery without creating durable state", async 
 	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
 	expect(await readFile(f.path, "utf8")).toBe(before);
 	expect(retainedKeys(f.host).size).toBe(0);
+});
+
+function v5Request(
+	hostSessionRef = "host-v5",
+): RuntimeNativeCapabilityRequestV5 {
+	return {
+		schemaVersion: 5,
+		requestId: "request-v5",
+		traceId: "trace-v5",
+		principal: { kind: "user", id: "alice" },
+		executionSource: "web",
+		channelId: "web",
+		agentId: "agent-1",
+		conversationId: "conversation-v5",
+		executionId: "execution-v5",
+		turnId: "turn-v5",
+		sessionGeneration: 1,
+		hostSessionRef,
+		operation: {
+			kind: "execution",
+			id: "execution-v5",
+			deliveryFence: 1,
+			executionDeliveryFence: 1,
+		},
+		keyBinding: {
+			purpose: "personal",
+			subjectId: "alice",
+			ciphertextRef: "key-1",
+			version: 1,
+		},
+		capabilityKind: "skill",
+		capabilityId: "a".repeat(64),
+		directoryRevision: "b".repeat(64),
+		parameters: "{}",
+		parametersDigest: createHash("sha256").update("{}").digest("hex"),
+		capabilitySourceVersion: "1.0.0",
+		attachments: [
+			{
+				attachmentId: "file-v5",
+				sha256: createHash("sha256").update("hello").digest("hex"),
+				byteLength: 5,
+				mediaType: "text/plain",
+			},
+		],
+		grant: {
+			schemaVersion: 4,
+			format: "runtime-execution-jws",
+			token: "a.b.c",
+		},
+	};
+}
+
+async function v5Accepted(
+	request: RuntimeNativeCapabilityRequestV5,
+	attachments = request.attachments,
+) {
+	const claims = RuntimeBusinessGrantClaimsV4Schema.parse({
+		schemaVersion: 4,
+		issuer: "platform-fixture",
+		audience: "runtime_host",
+		workerId: "worker-fixture",
+		issuedAt: now,
+		expiresAt: now + 30_000,
+		grantId: "grant-v5",
+		principal: request.principal,
+		executionSource: request.executionSource,
+		relayKeyBinding: request.keyBinding,
+		agentId: request.agentId,
+		channelId: request.channelId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		traceId: request.traceId,
+		hostSessionRef: request.hostSessionRef,
+		operation: request.operation,
+		allowedCommands: ["native-capability.invoke"],
+		purpose: "business",
+		authorizationRecordId: "authorization-1",
+		attachments: attachments.map((entry) => ({
+			attachmentId: entry.attachmentId,
+			operations: ["read"] as const,
+		})),
+		requestDigest: await runtimeRequestDigestV5(request),
+	});
+	return { request, claims };
+}
+
+it("requires a V5 validator and a text-input-aware Driver before any file bridge", async () => {
+	const request = v5Request();
+	const transport = RuntimeNativeCapabilityTransportV5Schema.parse({
+		businessRequest: request,
+		privateKeyField: {
+			schemaVersion: 1,
+			context: {
+				requestId: request.requestId,
+				grantId: "grant-v5",
+				requestDigest: (await v5Accepted(request)).claims.requestDigest,
+				traceId: request.traceId,
+				principal: request.principal,
+				executionSource: request.executionSource,
+				channelId: request.channelId,
+				agentId: request.agentId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				turnId: request.turnId,
+				sessionGeneration: request.sessionGeneration,
+				hostSessionRef: request.hostSessionRef,
+				operation: request.operation,
+				keyBinding: request.keyBinding,
+			},
+			keyDelivery: { relayKey: "synthetic-v5-key" },
+		},
+	});
+	const withoutValidator = await setup();
+	await expect(
+		withoutValidator.host.nativeCapabilityV5(transport),
+	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+
+	const accepted = await v5Accepted(request);
+	const withoutTextInputDriver = await setup(
+		undefined,
+		undefined,
+		undefined,
+		async () => accepted,
+	);
+	await expect(
+		withoutTextInputDriver.host.nativeCapabilityV5(transport),
+	).rejects.toMatchObject({ code: "RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED" });
+});
+
+it("rejects a V5 Grant whose ordered attachments do not match the request", async () => {
+	const request = v5Request();
+	const accepted = await v5Accepted(request);
+	const host = await setup(undefined, undefined, undefined, async () => ({
+		request,
+		claims: { ...accepted.claims, attachments: [] },
+	}));
+	await expect(
+		host.host.nativeCapabilityV5(
+			RuntimeNativeCapabilityTransportV5Schema.parse({
+				businessRequest: request,
+				privateKeyField: {
+					schemaVersion: 1,
+					context: {
+						requestId: request.requestId,
+						grantId: accepted.claims.grantId,
+						requestDigest: accepted.claims.requestDigest,
+						traceId: request.traceId,
+						principal: request.principal,
+						executionSource: request.executionSource,
+						channelId: request.channelId,
+						agentId: request.agentId,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+						turnId: request.turnId,
+						sessionGeneration: request.sessionGeneration,
+						hostSessionRef: request.hostSessionRef,
+						operation: request.operation,
+						keyBinding: request.keyBinding,
+					},
+					keyDelivery: { relayKey: "synthetic-v5-key" },
+				},
+			}),
+		),
+	).rejects.toThrow();
+});
+
+it("keeps V5 restore fail-closed without a recovery validator", async () => {
+	const host = await setup();
+	await expect(
+		host.host.restoreExecutionKeyV5({
+			recoveryRequest: {
+				schemaVersion: 5,
+				mode: "existing-accepted-only",
+				acceptedHostSessionRef: "host-v5",
+				acceptedOperationDigest: "A".repeat(43),
+				acceptedAttachmentIds: ["file-v5"],
+				grant: {
+					schemaVersion: 5,
+					format: "runtime-execution-jws",
+					token: "a.b.c",
+				},
+				originalRequest: v5Request(),
+			},
+			privateKeyField: {
+				schemaVersion: 1,
+				context: {
+					requestId: "request-v5",
+					grantId: "grant-v5",
+					requestDigest: "a".repeat(64),
+					traceId: "trace-v5",
+					principal: { kind: "user", id: "alice" },
+					executionSource: "web",
+					channelId: "web",
+					agentId: "agent-1",
+					conversationId: "conversation-v5",
+					executionId: "execution-v5",
+					turnId: "turn-v5",
+					sessionGeneration: 1,
+					hostSessionRef: "host-v5",
+					operation: {
+						kind: "execution",
+						id: "execution-v5",
+						deliveryFence: 1,
+						executionDeliveryFence: 1,
+					},
+					keyBinding: {
+						purpose: "personal",
+						subjectId: "alice",
+						ciphertextRef: "key-1",
+						version: 1,
+					},
+				},
+				keyDelivery: { relayKey: "synthetic-v5-key" },
+			},
+		}),
+	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
 });

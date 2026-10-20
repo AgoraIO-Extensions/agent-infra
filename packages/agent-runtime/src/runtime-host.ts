@@ -9,6 +9,7 @@ import type {
 	RuntimeAuthorizationRenewRequestV3,
 	RuntimeBrowserCapabilityProbeEvidenceV1,
 	RuntimeBrowserHandoffRequestV3,
+	RuntimeBusinessGrantClaimsV4,
 	RuntimeBusinessRequestV4,
 	RuntimeCapabilitiesRequestV1,
 	RuntimeCapabilitiesResponseV1,
@@ -23,6 +24,8 @@ import type {
 	RuntimeModelDirectoryRequestV1,
 	RuntimeModelDirectoryResponseV1,
 	RuntimeNativeCapabilityRequestV3,
+	RuntimeNativeCapabilityRequestV5,
+	RuntimeNativeCapabilityTransportV5,
 	RuntimeNativeMetadataReadRequestV1,
 	RuntimeNativeMetadataReadResponseV1,
 	RuntimeOperationResponseV1,
@@ -31,7 +34,10 @@ import type {
 	RuntimePrincipalV1,
 	RuntimeReplayRequestV1,
 	RuntimeReplayResponseV1,
+	RuntimeRestoreExecutionKeyGrantClaimsV5,
+	RuntimeRestoreExecutionKeyRequestV5,
 	RuntimeRestoreExecutionKeyTransportV4,
+	RuntimeRestoreExecutionKeyTransportV5,
 	RuntimeSkillDirectoryRequestV1,
 	RuntimeSkillDirectoryResponseV1,
 	RuntimeSkillResourceReadRequestV1,
@@ -71,9 +77,14 @@ import {
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeModelDirectoryRequestV1Schema,
 	RuntimeModelDirectoryResponseV1Schema,
+	RuntimeNativeCapabilityTransportV5Schema,
 	RuntimeNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataReadResponseV1Schema,
+	RuntimeOperationResponseV5Schema,
+	RuntimePinnedExecutionKeyScopeV4Schema,
 	RuntimeReplayRequestV1Schema,
+	RuntimeRestoreExecutionKeyResponseV5Schema,
+	RuntimeRestoreExecutionKeyTransportV5Schema,
 	RuntimeSkillDirectoryRequestV1Schema,
 	RuntimeSkillDirectoryResponseV1Schema,
 	RuntimeSkillResourceReadRequestV1Schema,
@@ -85,8 +96,13 @@ import {
 	RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSubmitTurnRequestV2Schema,
 	RuntimeSupplementRequestV1Schema,
+	runtimeOperationDigestInputV5,
 	VerifiedRuntimeExecutionGrantV2Schema,
+	validateRuntimeBusinessBindingV5,
 	validateRuntimeEventAccessV4,
+	validateRuntimePrivateRelayKeyFieldV5,
+	validateRuntimeRestoreExecutionKeyBindingV5,
+	validateRuntimeRestoreExecutionKeyPrivateFieldV5,
 	WorkloadReadinessRequestV1Schema,
 	WorkloadReadinessResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
@@ -102,6 +118,7 @@ import type {
 	RuntimeNativeSkillReadContextV1,
 	RuntimeNativeSkillReaderV1,
 	RuntimeOperationFactInputV1,
+	RuntimeOriginalEvidenceBinding,
 } from "./driver.js";
 import {
 	type NativeSessionUnavailableDiagnostic,
@@ -126,8 +143,13 @@ import {
 } from "./runtime-authorization.js";
 import {
 	createRuntimeFileBridgeBindingV1,
+	createRuntimeNativeTextInputBindingV5,
+	createRuntimeNativeTextInputPortV1,
 	type RuntimeFileBridgeFactoryV1,
 	type RuntimeFileBridgePortV1,
+	type RuntimeNativeTextInputDriverV1,
+	type RuntimeNativeTextInputExecutionContextV1,
+	type RuntimeNativeTextInputPortV1,
 } from "./runtime-file-bridge.js";
 import { RuntimeHostV3 } from "./runtime-host-v3.js";
 import { RuntimeHostV4 } from "./runtime-host-v4.js";
@@ -142,6 +164,20 @@ export interface RuntimeHostOptions {
 	validateRecoveryGrantV4?: (request: unknown) => Promise<{
 		request: RuntimeRestoreExecutionKeyTransportV4["recoveryRequest"];
 		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
+	}>;
+	/**
+	 * Deployment-owned JWS verification for the Native V5 Skill request. It must
+	 * return the parsed request and the verified V4 business Grant claims; the
+	 * Host revalidates the full V5 binding and private Key field itself.
+	 */
+	validateGrantV5?: (request: unknown) => Promise<{
+		readonly request: RuntimeNativeCapabilityRequestV5;
+		readonly claims: RuntimeBusinessGrantClaimsV4;
+	}>;
+	/** Deployment-owned JWS verification for the V5 existing-accepted recovery. */
+	validateRecoveryGrantV5?: (request: unknown) => Promise<{
+		readonly request: RuntimeRestoreExecutionKeyRequestV5;
+		readonly claims: RuntimeRestoreExecutionKeyGrantClaimsV5;
 	}>;
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
 	/** Deployment-owned local Browser readiness probe; caller-supplied inputs are already signed. */
@@ -242,6 +278,14 @@ function nativeSessionStateCategory(
 	)
 		return "unknown_no_native";
 	return "unbound";
+}
+
+function nativeTextInputUnsupported(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
+		"Native Skill text input execution is unavailable for this runtime",
+		409,
+	);
 }
 
 function isTerminalRuntimeStatus(status: RuntimeStatusV1) {
@@ -720,42 +764,50 @@ export class RuntimeHost {
 					: {}),
 				serialize: (key, work) => this.serialize(key, work),
 				installKey: (scope, hostSessionRef, relayKey) => {
-					const original = options.store.readOriginalExecutionKeyScopeV4(scope);
-					if (
-						!original?.scope ||
-						original.hostSessionRef !== hostSessionRef ||
-						!isDeepStrictEqual(original.scope, scope)
-					)
-						runtimeAuthorizationDenied();
-					if (
-						original.operation.result &&
-						!(
-							original.operation.result.outcome === "accepted" &&
-							original.operation.result.status === "running"
-						)
-					) {
-						this.clearFinishedExecutionKey(
-							original.operation,
-							original.operation.result,
-						);
-						return;
-					}
-					const previous = this.executionKeys.get(scope.executionId);
-					if (
-						previous &&
-						(!isDeepStrictEqual(previous.scope, scope) ||
-							previous.hostSessionRef !== hostSessionRef ||
-							previous.relayKey !== relayKey)
-					)
-						runtimeAuthorizationDenied();
-					this.executionKeys.set(scope.executionId, {
-						scope,
-						hostSessionRef,
-						relayKey,
-					});
+					this.installExecutionKey(scope, hostSessionRef, relayKey);
 				},
 				now: options.grantValidationV2?.now,
 			});
+	}
+
+	private installExecutionKey(
+		scope: RuntimePinnedExecutionKeyScopeV4,
+		hostSessionRef: string,
+		relayKey: string,
+	) {
+		const original = this.options.store.readOriginalExecutionKeyScopeV4(scope);
+		if (
+			!original?.scope ||
+			original.hostSessionRef !== hostSessionRef ||
+			!isDeepStrictEqual(original.scope, scope)
+		)
+			runtimeAuthorizationDenied();
+		if (
+			original.operation.result &&
+			!(
+				original.operation.result.outcome === "accepted" &&
+				original.operation.result.status === "running"
+			)
+		) {
+			this.clearFinishedExecutionKey(
+				original.operation,
+				original.operation.result,
+			);
+			return;
+		}
+		const previous = this.executionKeys.get(scope.executionId);
+		if (
+			previous &&
+			(!isDeepStrictEqual(previous.scope, scope) ||
+				previous.hostSessionRef !== hostSessionRef ||
+				previous.relayKey !== relayKey)
+		)
+			runtimeAuthorizationDenied();
+		this.executionKeys.set(scope.executionId, {
+			scope,
+			hostSessionRef,
+			relayKey,
+		});
 	}
 
 	private trustedHost() {
@@ -968,6 +1020,441 @@ export class RuntimeHost {
 		if (this.closed || !this.v4 || !this.options.validateRecoveryGrantV4)
 			runtimeAuthorizationDenied();
 		return this.v4.restoreExecutionKey(value);
+	}
+
+	/**
+	 * Authenticated Native V5 Skill invocation for the exact ordered text input
+	 * set. The Host revalidates the full business binding and private Key field
+	 * and only then binds the FileBridge. A Driver that has not declared the V5
+	 * text-input port fails closed before any file is read.
+	 */
+	async nativeCapabilityV5(value: RuntimeNativeCapabilityTransportV5) {
+		if (this.closed || !this.options.validateGrantV5)
+			runtimeAuthorizationDenied();
+		const parsed = RuntimeNativeCapabilityTransportV5Schema.parse(value);
+		const accepted = await this.options.validateGrantV5(parsed.businessRequest);
+		if (!isDeepStrictEqual(accepted.request, parsed.businessRequest))
+			runtimeAuthorizationDenied();
+		const request = accepted.request;
+		const claims = accepted.claims;
+		await validateRuntimeBusinessBindingV5(request, claims);
+		if (
+			claims.purpose !== "business" ||
+			request.operation.kind !== "execution" ||
+			request.operation.id !== request.executionId ||
+			request.operation.deliveryFence !==
+				request.operation.executionDeliveryFence ||
+			createHash("sha256").update(request.parameters).digest("hex") !==
+				request.parametersDigest
+		)
+			runtimeAuthorizationDenied();
+		const privateField = validateRuntimePrivateRelayKeyFieldV5(
+			parsed.privateKeyField,
+			{
+				request,
+				grantId: claims.grantId,
+				requestDigest: claims.requestDigest,
+			},
+		);
+		const driver = this.options.driver as RuntimeDriver &
+			RuntimeNativeTextInputDriverV1;
+		if (
+			driver.nativeTextInputs?.schemaVersion !== 1 ||
+			!driver.createNativeSkillCommand ||
+			!driver.resolveNativeSkillBinding ||
+			!this.options.fileBridge
+		)
+			nativeTextInputUnsupported();
+		const pinnedScope = this.pinnedScopeForV5(request);
+		const session = this.options.store.getSessionForQuery(
+			request.hostSessionRef,
+			request,
+			request.operation.deliveryFence,
+			true,
+		);
+		const nativeSessionRef =
+			session.nativeSessionRef ?? nativeSessionRequired();
+		const now = this.options.grantValidationV2?.now ?? Date.now;
+		const expiresAt = Math.min(claims.expiresAt, now() + 30_000);
+		if (!Number.isSafeInteger(expiresAt) || expiresAt <= now())
+			nativeSessionRequired();
+		const controller = new AbortController();
+		const timer = setTimeout(
+			() => controller.abort(),
+			Math.max(0, expiresAt - now()),
+		);
+		timer.unref();
+		const evidence: RuntimeOriginalEvidenceBinding = {
+			principal: request.principal,
+			scope: {
+				agentId: request.agentId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				sessionGeneration: request.sessionGeneration,
+			},
+		};
+		const read = {
+			nativeSessionRef,
+			allowUnboundExecution: true,
+			signal: controller.signal,
+			expiresAt,
+			assertCurrent: () => {
+				if (controller.signal.aborted || expiresAt <= now())
+					nativeSessionRequired();
+				this.requireLegacyHost();
+				const current = this.options.store.getSessionForQuery(
+					request.hostSessionRef,
+					request,
+					request.operation.deliveryFence,
+					true,
+				);
+				if (current.nativeSessionRef !== nativeSessionRef)
+					nativeSessionRequired();
+				return evidence;
+			},
+			revalidate: async () => {
+				const current = read.assertCurrent();
+				const reverified = await this.options.validateGrantV5?.(request);
+				if (!reverified || !isDeepStrictEqual(reverified.request, request))
+					runtimeAuthorizationDenied();
+				await validateRuntimeBusinessBindingV5(request, reverified.claims);
+				return current;
+			},
+		};
+		try {
+			read.assertCurrent();
+			const metadataReader = this.options.driver.readNativeMetadataV1;
+			if (!metadataReader) nativeTextInputUnsupported();
+			const selector = "skills" as const;
+			const projection = await metadataReader.call(
+				this.options.driver,
+				selector,
+				read,
+			);
+			await read.revalidate();
+			if (projection.selector !== selector) nativeTextInputUnsupported();
+			if (projection.revision !== request.directoryRevision)
+				throw new RuntimeHostError(
+					"RUNTIME_NATIVE_CAPABILITY_STALE",
+					"Native capability directory is no longer current",
+					409,
+				);
+			const capability = projection.capabilities.find(
+				(entry) => entry.id === request.capabilityId && entry.kind === "skill",
+			);
+			if (
+				!capability ||
+				capability.availability !== "discovered" ||
+				capability.source.version !== request.capabilitySourceVersion
+			)
+				throw new RuntimeHostError(
+					"RUNTIME_NATIVE_CAPABILITY_UNAVAILABLE",
+					"Native capability is unavailable",
+					409,
+				);
+			const capabilityName = capability.name;
+			const response = await this.serialize(
+				this.options.store.sessionQueueKey(request),
+				async () => {
+					this.requireLegacyHost();
+					const revalidated = await this.options.validateGrantV5?.(request);
+					if (!revalidated || !isDeepStrictEqual(revalidated.request, request))
+						runtimeAuthorizationDenied();
+					await validateRuntimeBusinessBindingV5(request, revalidated.claims);
+					const latest = await metadataReader.call(
+						this.options.driver,
+						selector,
+						read,
+					);
+					if (
+						latest.selector !== selector ||
+						latest.revision !== request.directoryRevision
+					)
+						throw new RuntimeHostError(
+							"RUNTIME_NATIVE_CAPABILITY_STALE",
+							"Native capability directory is no longer current",
+							409,
+						);
+					const latestCapability = latest.capabilities.find(
+						(entry) =>
+							entry.id === request.capabilityId && entry.kind === "skill",
+					);
+					if (
+						!latestCapability ||
+						latestCapability.name !== capabilityName ||
+						latestCapability.availability !== "discovered" ||
+						latestCapability.source.version !== request.capabilitySourceVersion
+					)
+						throw new RuntimeHostError(
+							"RUNTIME_NATIVE_CAPABILITY_STALE",
+							"Native capability is no longer current",
+							409,
+						);
+					const prepared = await this.options.store.prepareOperation({
+						authorization: this.businessAuthorityForV5(revalidated.claims),
+						now,
+						requestedHostSessionRef: request.hostSessionRef,
+						binding: request,
+						operationId: request.executionId,
+						kind: "submit-turn",
+						scope: `execution:${request.executionId}`,
+						deliveryFence: request.operation.deliveryFence,
+						requestDigest: requestDigest(
+							runtimeOperationDigestInputV5(request),
+						),
+						keyScopeV4: pinnedScope,
+						command: (commandNativeSessionRef) => {
+							if (commandNativeSessionRef !== nativeSessionRef)
+								nativeSessionRequired();
+							const resolveSkill = driver.resolveNativeSkillBinding;
+							const skillCreate = driver.createNativeSkillCommand;
+							if (!resolveSkill || !skillCreate) nativeTextInputUnsupported();
+							const skillBinding = resolveSkill.call(driver, {
+								nativeSessionRef: commandNativeSessionRef,
+								capabilityName,
+								capabilitySourceVersion: request.capabilitySourceVersion,
+								directoryRevision: request.directoryRevision,
+							});
+							return skillCreate.call(driver, {
+								schemaVersion: 1,
+								kind: "native-capability",
+								operationId: request.executionId,
+								agentId: request.agentId,
+								conversationId: request.conversationId,
+								executionId: request.executionId,
+								turnId: request.turnId,
+								sessionGeneration: request.sessionGeneration,
+								nativeSessionRef: commandNativeSessionRef,
+								capabilityId: request.capabilityId,
+								directoryRevision: request.directoryRevision,
+								parameters: request.parameters,
+								parametersDigest: request.parametersDigest,
+								capabilityName,
+								capabilitySourceVersion: request.capabilitySourceVersion,
+								packageDigest: skillBinding.packageDigest,
+								manifestDigest: skillBinding.manifestDigest,
+							});
+						},
+					});
+					this.requireLegacyHost();
+					if (prepared.operation.state === "resolved") {
+						const replayed = RuntimeOperationResponseV5Schema.parse({
+							schemaVersion: 5,
+							hostSessionRef: prepared.session.hostSessionRef,
+							operationId: prepared.operation.operationId,
+							result: prepared.operation.result,
+						});
+						if (
+							replayed.result.outcome === "accepted" &&
+							replayed.result.status === "running"
+						)
+							this.installExecutionKey(
+								pinnedScope,
+								prepared.session.hostSessionRef,
+								privateField.keyDelivery.relayKey,
+							);
+						return replayed;
+					}
+					this.installExecutionKey(
+						pinnedScope,
+						prepared.session.hostSessionRef,
+						privateField.keyDelivery.relayKey,
+					);
+					const dispatch = await this.withNativeTextInputBridge({
+						request,
+						claims: revalidated.claims,
+						hostSessionRef: prepared.session.hostSessionRef,
+						operationId: prepared.operation.operationId,
+						executionId: request.executionId,
+						sessionGeneration: request.sessionGeneration,
+						now,
+						dispatch: (context) =>
+							this.dispatch(
+								prepared.session.hostSessionRef,
+								prepared.operation,
+								true,
+								context,
+							),
+					});
+					const result = RuntimeOperationResponseV5Schema.shape.result.parse(
+						dispatch.result,
+					);
+					return RuntimeOperationResponseV5Schema.parse({
+						schemaVersion: 5,
+						hostSessionRef: prepared.session.hostSessionRef,
+						operationId: prepared.operation.operationId,
+						result,
+					});
+				},
+			);
+			return response;
+		} finally {
+			clearTimeout(timer);
+			controller.abort();
+		}
+	}
+
+	/**
+	 * Existing-accepted-only V5 Key restore. It never creates a new execution or
+	 * native intent, never rematerializes attachments and never grants file
+	 * access; it only reinstates the frozen private Key context of the original
+	 * accepted Native V5 request.
+	 */
+	async restoreExecutionKeyV5(value: RuntimeRestoreExecutionKeyTransportV5) {
+		if (this.closed || !this.options.validateRecoveryGrantV5)
+			runtimeAuthorizationDenied();
+		const parsed = RuntimeRestoreExecutionKeyTransportV5Schema.parse(value);
+		const accepted = await this.options.validateRecoveryGrantV5(
+			parsed.recoveryRequest,
+		);
+		if (!isDeepStrictEqual(accepted.request, parsed.recoveryRequest))
+			runtimeAuthorizationDenied();
+		const request = accepted.request;
+		const claims = accepted.claims;
+		await validateRuntimeRestoreExecutionKeyBindingV5(request, claims);
+		const privateField = validateRuntimeRestoreExecutionKeyPrivateFieldV5(
+			parsed.privateKeyField,
+			{ request, claims },
+		);
+		const original = request.originalRequest;
+		const operationDigest = requestDigest(
+			runtimeOperationDigestInputV5(original),
+		);
+		if (
+			request.acceptedOperationDigest !== operationDigest ||
+			(original.hostSessionRef !== null &&
+				original.hostSessionRef !== request.acceptedHostSessionRef)
+		)
+			runtimeAuthorizationDenied();
+		const pinnedScope = this.pinnedScopeForV5(original);
+		const indexed =
+			this.options.store.readOriginalExecutionKeyScopeV4(pinnedScope);
+		if (
+			!indexed?.scope ||
+			indexed.hostSessionRef !== request.acceptedHostSessionRef ||
+			!isDeepStrictEqual(indexed.scope, pinnedScope) ||
+			indexed.operation.requestDigest !== operationDigest ||
+			indexed.operation.state !== "resolved" ||
+			indexed.operation.result?.outcome !== "accepted" ||
+			indexed.operation.result.status !== "running"
+		)
+			runtimeAuthorizationDenied();
+		this.requireLegacyHost();
+		const observed = await this.dispatch(
+			request.acceptedHostSessionRef,
+			indexed.operation,
+			false,
+		);
+		if (
+			observed.result.outcome !== "accepted" ||
+			observed.result.status !== "running"
+		)
+			runtimeAuthorizationDenied();
+		// Re-read the accepted original after the Driver observation; a concurrent
+		// terminal transition must not install a Key for a finished execution.
+		const current =
+			this.options.store.readOriginalExecutionKeyScopeV4(pinnedScope);
+		if (
+			!current?.scope ||
+			current.hostSessionRef !== request.acceptedHostSessionRef ||
+			!isDeepStrictEqual(current.scope, pinnedScope) ||
+			current.operation.requestDigest !== operationDigest ||
+			current.operation.state !== "resolved" ||
+			current.operation.result?.outcome !== "accepted" ||
+			current.operation.result.status !== "running"
+		)
+			runtimeAuthorizationDenied();
+		this.requireLegacyHost();
+		this.installExecutionKey(
+			pinnedScope,
+			request.acceptedHostSessionRef,
+			privateField.keyDelivery.relayKey,
+		);
+		return RuntimeRestoreExecutionKeyResponseV5Schema.parse({
+			schemaVersion: 5,
+			hostSessionRef: request.acceptedHostSessionRef,
+			operationId: current.operation.operationId,
+			result: "restored",
+		});
+	}
+
+	private pinnedScopeForV5(request: RuntimeNativeCapabilityRequestV5) {
+		return RuntimePinnedExecutionKeyScopeV4Schema.parse({
+			principal: request.principal,
+			executionSource: request.executionSource,
+			channelId: request.channelId,
+			agentId: request.agentId,
+			conversationId: request.conversationId,
+			executionId: request.executionId,
+			turnId: request.turnId,
+			sessionGeneration: request.sessionGeneration,
+			hostSessionRef: request.hostSessionRef,
+			keyBinding: request.keyBinding,
+		});
+	}
+
+	private businessAuthorityForV5(claims: RuntimeBusinessGrantClaimsV4) {
+		const {
+			schemaVersion: _schemaVersion,
+			executionSource: _executionSource,
+			relayKeyBinding: _relayKeyBinding,
+			...common
+		} = claims;
+		return {
+			...common,
+			schemaVersion: 2 as const,
+		};
+	}
+
+	/**
+	 * Build the FileBridge and the narrow ordered text-input port for exactly one
+	 * admitted V5 request, then dispatch with both. The bridge is never created
+	 * when the grant, attachment set or current operation authority is stale.
+	 */
+	private async withNativeTextInputBridge(input: {
+		readonly request: RuntimeNativeCapabilityRequestV5;
+		readonly claims: RuntimeBusinessGrantClaimsV4;
+		readonly hostSessionRef: string;
+		readonly operationId: string;
+		readonly executionId: string;
+		readonly sessionGeneration: number;
+		readonly now: () => number;
+		readonly dispatch: (
+			context: RuntimeDriverExecutionContextV1 &
+				RuntimeNativeTextInputExecutionContextV1,
+		) => Promise<RuntimeOperationResponse>;
+	}) {
+		const fileBridge = this.options.fileBridge;
+		if (!fileBridge) nativeTextInputUnsupported();
+		const { binding, inputs } = await createRuntimeNativeTextInputBindingV5({
+			request: input.request,
+			claims: input.claims,
+			now: input.now(),
+		});
+		this.requireLegacyHost();
+		const port = fileBridge(binding);
+		const bridge: RuntimeFileBridgePortV1 = {
+			readInput: (fileId, signal) => port.readInput(fileId, signal),
+			writeResult: (descriptor, body) => port.writeResult(descriptor, body),
+			revalidate: () => {
+				this.options.store.assertOperationAuthorityCurrent(
+					input.operationId,
+					input.executionId,
+					input.sessionGeneration,
+					input.now,
+				);
+				port.revalidate();
+			},
+		};
+		const nativeTextInput: RuntimeNativeTextInputPortV1 =
+			createRuntimeNativeTextInputPortV1({
+				binding,
+				inputs,
+				bridge,
+				now: input.now,
+			});
+		this.requireLegacyHost();
+		return input.dispatch({ fileBridge: bridge, nativeTextInput });
 	}
 
 	private async eventAuthorityV4(

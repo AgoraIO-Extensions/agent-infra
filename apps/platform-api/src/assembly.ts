@@ -23,8 +23,11 @@ import {
 	createRecentPersonalConversationsUseCaseV1,
 	createSkillHubAgentBindingUseCaseV1,
 	type FileLimitDeclarationSubjectV1,
+	type FileLimitDeclarationsV1,
+	type FileScopeV1,
 	type NativeCapabilityMetadataRevalidationPortV1,
 	readFileLimitDeclarationV1,
+	resolveFileLimitsV1,
 	type WecomIdentityPortV1,
 	writeFileLimitDeclarationV1,
 } from "@agent-infra/platform-core";
@@ -811,6 +814,34 @@ export function assemblePlatformApi(
 							},
 							metadata,
 							transaction: conversationTransaction,
+							...(input.files
+								? {
+										inputLimits: {
+											async read({
+												actorId,
+												agentId,
+												channelId,
+												conversationId,
+											}) {
+												if (actorId !== identity.userId) return null;
+												const declarations =
+													await readCurrentFileLimitDeclarations(
+														identity,
+														{
+															actorId,
+															agentId,
+															channelId,
+															conversationId,
+														},
+														"attachment",
+													);
+												return declarations
+													? resolveFileLimitsV1(declarations, new Date())
+													: null;
+											},
+										},
+									}
+								: {}),
 						});
 						return admission.admit(request);
 					},
@@ -887,6 +918,57 @@ export function assemblePlatformApi(
 					}),
 			}
 		: undefined;
+	/**
+	 * Current FileLimits for one already-authorized file scope. Invocation V2
+	 * admission and the file data plane read the same configuration and
+	 * management projections, so an attachment accepted here is checked against
+	 * the same declarations the file plane enforces.
+	 */
+	async function readCurrentFileLimitDeclarations(
+		identity: IdentityContext,
+		scope: FileScopeV1,
+		kind: "attachment" | "result",
+	): Promise<FileLimitDeclarationsV1 | null> {
+		const configuration = await configurationQuery.read({
+			agentId: scope.agentId,
+			actorId: identity.userId,
+			organizationIds: identity.organizationIds,
+			isAdministrator: identity.roles.includes("system_admin"),
+			intent: "discover",
+		});
+		if (configuration.outcome !== "found") return null;
+		const agent = await managementQuery.getAgent(
+			{
+				kind: "user",
+				userId: identity.userId,
+				organizationIds: identity.organizationIds,
+			},
+			scope.agentId,
+		);
+		if (!agent) return null;
+		const projection = await presentAgent({
+			agentId: scope.agentId,
+			configuration: configuration.configuration,
+			management: agent.management,
+		});
+		if (
+			!(kind === "attachment"
+				? projection.capabilities.attachments
+				: projection.capabilities.resultFiles)
+		)
+			return null;
+		if (!readFileLimits) return null;
+		const revision = configuration.configuration.revision;
+		const declared = await readFileLimits({
+			agentId: scope.agentId,
+			channelId: scope.channelId,
+			configurationRevision: revision,
+			kind,
+		});
+		return declared?.configurationRevision === revision
+			? declared.declarations
+			: null;
+	}
 	const files = input.files
 		? assemblePlatformFilesV1({
 				databaseUrl: input.databaseUrl,
@@ -895,45 +977,7 @@ export function assemblePlatformApi(
 				conversationAuthorization,
 				limitDeclarations: fileLimitStore,
 				async readCurrentLimits(identity, scope, kind) {
-					const configuration = await configurationQuery.read({
-						agentId: scope.agentId,
-						actorId: identity.userId,
-						organizationIds: identity.organizationIds,
-						isAdministrator: identity.roles.includes("system_admin"),
-						intent: "discover",
-					});
-					if (configuration.outcome !== "found") return null;
-					const agent = await managementQuery.getAgent(
-						{
-							kind: "user",
-							userId: identity.userId,
-							organizationIds: identity.organizationIds,
-						},
-						scope.agentId,
-					);
-					if (!agent) return null;
-					const projection = await presentAgent({
-						agentId: scope.agentId,
-						configuration: configuration.configuration,
-						management: agent.management,
-					});
-					if (
-						!(kind === "attachment"
-							? projection.capabilities.attachments
-							: projection.capabilities.resultFiles)
-					)
-						return null;
-					if (!readFileLimits) return null;
-					const revision = configuration.configuration.revision;
-					const declared = await readFileLimits({
-						agentId: scope.agentId,
-						channelId: scope.channelId,
-						configurationRevision: revision,
-						kind,
-					});
-					return declared?.configurationRevision === revision
-						? declared.declarations
-						: null;
+					return readCurrentFileLimitDeclarations(identity, scope, kind);
 				},
 			})
 		: undefined;

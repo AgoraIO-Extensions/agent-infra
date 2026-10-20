@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
 	type RuntimeNativeCapabilityRequestV4,
+	type RuntimeNativeCapabilityRequestV5,
 	type RuntimeSubmitTurnRequestV4,
 	runtimeOperationDigestInputV4,
+	runtimeOperationDigestInputV5,
 } from "@agent-infra/contracts/runtime";
 import {
 	type ConversationDispatchClaimV1,
@@ -74,10 +76,6 @@ export async function originalOperationBinding(
 	) {
 		const payload = exactPayload(origin.payload, origin.operation);
 		const native = payload?.nativeCapability;
-		// Native V5 dispatch owns delivering the accepted ordered attachments to
-		// the Host. Until that protocol is wired, never fall back to a V4/V2
-		// request that would silently drop the Execution's input sequence.
-		if (native?.attachments !== undefined) return null;
 		if (
 			origin.id !== `conversation:native-capability:${claim.executionId}` ||
 			!validText(origin.request_id) ||
@@ -98,7 +96,12 @@ export async function originalOperationBinding(
 				? origin.id !== state.outbox.id ||
 					!isDeepStrictEqual(native, claim.nativeCapability)
 				: claim.operation !== "conversation.turn.stop.v1") ||
-			(protocol === null && (digest !== null || originalRef !== null))
+			(protocol === null && (digest !== null || originalRef !== null)) ||
+			// V2 attachments have no V2/V4 wire shape: dispatch them only through
+			// the existing-accepted V4 business Grant + Native V5 protocol.
+			(native.attachments !== undefined &&
+				(native.capabilityKind !== "skill" ||
+					!(key.executionSource && key.relayKeyBinding)))
 		)
 			return null;
 		const identity = {
@@ -135,41 +138,99 @@ export async function originalOperationBinding(
 					state.execution.authorization_revision
 			)
 				return null;
-			const request: RuntimeNativeCapabilityRequestV4 = {
-				schemaVersion: 4,
-				requestId: origin.request_id,
-				traceId: origin.trace_id,
-				...base,
-				principal,
-				channelId: state.execution.channel_id,
-				hostSessionRef,
-				operation: {
-					kind: "execution",
-					id: base.executionId,
-					deliveryFence: Math.max(claim.executionDeliveryFence, 1),
-					executionDeliveryFence: Math.max(claim.executionDeliveryFence, 1),
-				},
-				executionSource: key.executionSource,
-				keyBinding: {
-					purpose: key.relayKeyBinding.purpose,
-					subjectId: key.relayKeyBinding.subjectId,
-					ciphertextRef: key.relayKeyBinding.keyId,
-					version: key.relayKeyBinding.keyVersion,
-				},
-				capabilityId: native.capabilityId,
-				capabilityKind: native.capabilityKind,
-				directoryRevision: native.directoryRevision,
-				parameters: native.parameters,
-				parametersDigest: native.parametersDigest,
-				capabilitySourceVersion: native.capabilitySourceVersion,
-				// Shape-only digest projection; this marker is never signed or sent.
-				grant: {
-					schemaVersion: 4,
-					format: "runtime-execution-jws",
-					token: "unsigned.unsigned.unsigned",
-				},
-			};
-			expectedDigest = operationDigest(runtimeOperationDigestInputV4(request));
+			const request:
+				| RuntimeNativeCapabilityRequestV4
+				| RuntimeNativeCapabilityRequestV5 =
+				native.attachments !== undefined
+					? {
+							schemaVersion: 5,
+							requestId: origin.request_id,
+							traceId: origin.trace_id,
+							...base,
+							principal,
+							channelId: state.execution.channel_id,
+							hostSessionRef,
+							operation: {
+								kind: "execution",
+								id: base.executionId,
+								deliveryFence: Math.max(claim.executionDeliveryFence, 1),
+								executionDeliveryFence: Math.max(
+									claim.executionDeliveryFence,
+									1,
+								),
+							},
+							executionSource: key.executionSource,
+							keyBinding: {
+								purpose: key.relayKeyBinding.purpose,
+								subjectId: key.relayKeyBinding.subjectId,
+								ciphertextRef: key.relayKeyBinding.keyId,
+								version: key.relayKeyBinding.keyVersion,
+							},
+							capabilityId: native.capabilityId,
+							capabilityKind: "skill",
+							directoryRevision: native.directoryRevision,
+							parameters: native.parameters,
+							parametersDigest: native.parametersDigest,
+							capabilitySourceVersion: native.capabilitySourceVersion,
+							attachments: native.attachments.map((attachment) => ({
+								attachmentId: attachment.fileId,
+								sha256: attachment.sha256,
+								byteLength: attachment.byteLength,
+								mediaType: attachment.mediaType,
+							})),
+							// Shape-only digest projection; this marker is never signed or sent.
+							grant: {
+								schemaVersion: 4,
+								format: "runtime-execution-jws",
+								token: "unsigned.unsigned.unsigned",
+							},
+						}
+					: {
+							schemaVersion: 4,
+							requestId: origin.request_id,
+							traceId: origin.trace_id,
+							...base,
+							principal,
+							channelId: state.execution.channel_id,
+							hostSessionRef,
+							operation: {
+								kind: "execution",
+								id: base.executionId,
+								deliveryFence: Math.max(claim.executionDeliveryFence, 1),
+								executionDeliveryFence: Math.max(
+									claim.executionDeliveryFence,
+									1,
+								),
+							},
+							executionSource: key.executionSource,
+							keyBinding: {
+								purpose: key.relayKeyBinding.purpose,
+								subjectId: key.relayKeyBinding.subjectId,
+								ciphertextRef: key.relayKeyBinding.keyId,
+								version: key.relayKeyBinding.keyVersion,
+							},
+							capabilityId: native.capabilityId,
+							capabilityKind: native.capabilityKind,
+							directoryRevision: native.directoryRevision,
+							parameters: native.parameters,
+							parametersDigest: native.parametersDigest,
+							capabilitySourceVersion: native.capabilitySourceVersion,
+							// Shape-only digest projection; this marker is never signed or sent.
+							grant: {
+								schemaVersion: 4,
+								format: "runtime-execution-jws",
+								token: "unsigned.unsigned.unsigned",
+							},
+						};
+			expectedDigest = operationDigest(
+				native.attachments !== undefined
+					? runtimeOperationDigestInputV5(
+							request as RuntimeNativeCapabilityRequestV5,
+						)
+					: runtimeOperationDigestInputV4(
+							request as RuntimeNativeCapabilityRequestV4,
+						),
+			);
 		} else {
 			if ((protocol !== null && protocol !== "v2") || originalRef !== null)
 				return null;

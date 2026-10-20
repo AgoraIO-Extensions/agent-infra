@@ -1,6 +1,8 @@
 import {
 	type RuntimeBusinessRequestV4,
 	RuntimeNativeCapabilityRequestV4Schema,
+	type RuntimeNativeCapabilityRequestV5,
+	RuntimeNativeCapabilityRequestV5Schema,
 	type RuntimePinnedExecutionKeyScopeV4,
 	RuntimePinnedExecutionKeyScopeV4Schema,
 	type RuntimeSelectionV1,
@@ -39,14 +41,17 @@ export interface AcceptedExecutionKeyProjectionV4 {
 /** The original Store transaction owns all reads; the request only locates the operation. */
 export async function readAcceptedExecutionKeyInTransactionV4(
 	transaction: Transaction,
-	value: RuntimeBusinessRequestV4,
+	value: RuntimeBusinessRequestV4 | RuntimeNativeCapabilityRequestV5,
 ): Promise<AcceptedExecutionKeyProjectionV4 | null> {
 	const submit = "selection" in value;
 	const native = "capabilityId" in value;
+	const version5 = native && "attachments" in value;
 	const request = submit
 		? RuntimeSubmitTurnRequestV4Schema.parse(value)
 		: native
-			? RuntimeNativeCapabilityRequestV4Schema.parse(value)
+			? version5
+				? RuntimeNativeCapabilityRequestV5Schema.parse(value)
+				: RuntimeNativeCapabilityRequestV4Schema.parse(value)
 			: RuntimeSupplementRequestV4Schema.parse(value);
 	if (
 		request.operation.kind !== (submit || native ? "execution" : "message") ||
@@ -171,9 +176,18 @@ export async function readAcceptedExecutionKeyInTransactionV4(
 		},
 	});
 	try {
+		// V5 reuses the V4 pinned Key scope. Validate the projection because the
+		// pinned-scope helper only parses the V4 native request shape; the ordered
+		// attachments stay bound separately by the Host restore validator.
+		const keyRequest = version5
+			? (({ attachments: _attachments, ...rest }) => ({
+					...rest,
+					schemaVersion: 4 as const,
+				}))(request as RuntimeNativeCapabilityRequestV5)
+			: request;
 		validateRuntimePinnedExecutionKeyScopeV4(
 			scope,
-			request,
+			keyRequest,
 			submit ? scope.hostSessionRef : conversation.host_session_ref,
 		);
 	} catch {

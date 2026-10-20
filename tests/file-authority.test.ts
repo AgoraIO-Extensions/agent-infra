@@ -314,6 +314,72 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 		await expect(
 			worker.readInput(grant, file.fileId, "undeclared-input"),
 		).rejects.toThrow("File read unavailable");
+		const runtimeExchange = assembled.dependencies.runtimeExchange;
+		if (!runtimeExchange) throw new Error("Runtime exchange missing");
+		const runtimeRequest = new Request(
+			"http://platform/internal/v1/files/runtime-exchange",
+			{ headers: { Authorization: `Bearer ${serviceToken}` } },
+		);
+		const runtimeBinding = {
+			schemaVersion: 1 as const,
+			actorId: "alice",
+			agentId: "agent",
+			channelId: "web",
+			conversationId: "conversation",
+			executionId: "execution",
+			sessionGeneration: 1,
+			grantId: "runtime-grant",
+			expiresAt: new Date(Date.now() + 1500).toISOString(),
+			idempotencyKey: "runtime-result-1",
+		};
+		await expect(
+			runtimeExchange.authenticate(
+				new Request("http://platform/internal/v1/files/runtime-exchange", {
+					headers: {
+						Authorization: "Bearer unmapped-runtime-token-123456789012",
+					},
+				}),
+				{
+					...runtimeBinding,
+					operation: "result",
+					descriptor,
+				},
+			),
+		).rejects.toThrow();
+		await expect(
+			runtimeExchange.authenticate(runtimeRequest, {
+				...runtimeBinding,
+				actorId: "mallory",
+				operation: "result",
+				descriptor,
+			}),
+		).rejects.toThrow();
+		await expect(
+			runtimeExchange.authenticate(runtimeRequest, {
+				...runtimeBinding,
+				sessionGeneration: 2,
+				operation: "result",
+				descriptor,
+			}),
+		).rejects.toThrow();
+		const authorizedResult = await runtimeExchange.authenticate(
+			runtimeRequest,
+			{
+				...runtimeBinding,
+				operation: "result",
+				descriptor,
+			},
+		);
+		const runtimeResult = await assembled.dependencies.service.createResult(
+			{
+				conversationId: "conversation",
+				idempotencyKey: "runtime-result-1",
+				descriptor,
+			},
+			authorizedResult.authorization,
+		);
+		expect(runtimeResult.kind).toBe("result");
+		expect(runtimeResult.executionId).toBe("execution");
 		await sql`update platform.conversation_executions set status = 'completed' where execution_id = 'execution'`;
 		const messageBody = {
 			schemaVersion: 1,
@@ -359,7 +425,7 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 				).arrayBuffer(),
 			),
 		).toEqual(bytes);
-		expect((await sql`select file_id from platform.files`).length).toBe(2);
+		expect((await sql`select file_id from platform.files`).length).toBe(3);
 		await sql`update platform.conversations set session_generation = 2 where id = 'conversation'`;
 		await expect(
 			worker.writeResult(grant, descriptor, body(), "late-result"),

@@ -6068,6 +6068,63 @@
         ],
         "type": "object"
       },
+      "NativeCapabilityInvocationRequestV2": {
+        "additionalProperties": false,
+        "properties": {
+          "attachments": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "type": "array"
+          },
+          "capabilityId": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "directoryRevision": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "type": "string"
+          },
+          "parameters": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "requestId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 2,
+            "type": "number"
+          },
+          "traceId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "capabilityId",
+          "directoryRevision",
+          "parameters",
+          "idempotencyKey",
+          "requestId",
+          "traceId",
+          "schemaVersion",
+          "attachments"
+        ],
+        "type": "object"
+      },
       "NativeCapabilityInvocationResponseV1": {
         "anyOf": [
           {
@@ -18492,7 +18549,14 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NativeCapabilityInvocationRequestV1"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/NativeCapabilityInvocationRequestV1"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NativeCapabilityInvocationRequestV2"
+                  }
+                ]
               }
             }
           },
