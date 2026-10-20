@@ -1053,11 +1053,25 @@ async function forwardValidatedStream(
 			ending = `${ending}${decoded}`.slice(-4);
 			if (!failed) parser.feed(decoded);
 			if (failed) break;
-			for (const encoded of queued) {
+			// 按 64 KiB 分批写入，避免大量小事件形成超长微任务链，让事件循环能及时
+			// 处理 I/O 回调（包括 fetch 响应头送达与 drain 事件）。
+			if (queued.length > 0) {
 				if (!response.headersSent) {
 					response.writeHead(200, { "content-type": "text/event-stream" });
 				}
-				await write(response, encoded);
+				let batch = "";
+				let batchBytes = 0;
+				for (const encoded of queued) {
+					const encodedBytes = Buffer.byteLength(encoded);
+					batch += encoded;
+					batchBytes += encodedBytes;
+					if (batchBytes >= 65536) {
+						await write(response, batch);
+						batch = "";
+						batchBytes = 0;
+					}
+				}
+				if (batch) await write(response, batch);
 			}
 			queued = [];
 			if (failed) break;

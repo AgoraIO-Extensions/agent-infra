@@ -8036,9 +8036,18 @@ describe("Codex Runtime Driver", () => {
 			await f.bridge.emitAgentMessageDelta("first ");
 			await vi.waitFor(async () => expect(await f.texts()).toHaveLength(1));
 			const updates = vi.spyOn(DurableJsonFile.prototype, "update");
-			for (const delta of ["second ", "third ", "fourth"])
-				await f.bridge.emitAgentMessageDelta(delta);
-			await vi.waitFor(async () => expect(await f.texts()).toHaveLength(4));
+			// 用假时钟冻结 100ms spacing 窗口计时器，确保三个 delta 都在同一批提交，
+			// 避免 CI 慢速机器上 emitAgentMessageDelta 耗时超过窗口而拆成多次提交。
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+			try {
+				for (const delta of ["second ", "third ", "fourth"])
+					await f.bridge.emitAgentMessageDelta(delta);
+				// 推进假时钟，让 spacing 窗口到期，三个 delta 合并为一次提交。
+				await vi.advanceTimersByTimeAsync(200);
+				await vi.waitFor(async () => expect(await f.texts()).toHaveLength(4));
+			} finally {
+				vi.useRealTimers();
+			}
 			// The three deltas inside the spacing window committed together.
 			expect(updates).toHaveBeenCalledTimes(1);
 		});
