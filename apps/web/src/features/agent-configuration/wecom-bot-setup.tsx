@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useToast } from "@/components/ui/toast";
 import { withObjectName } from "@/lib/accessible-name";
 import {
 	beginWecomSetup,
@@ -96,6 +97,7 @@ export function WecomBotSetup({
 	/** 独立的解绑请求（只含 wecom_bot disabled）；未提供时不显示解绑入口。 */
 	unbindChannel?: () => Promise<void>;
 }) {
+	const toast = useToast();
 	const [botId, setBotId] = useState("");
 	const [secret, setSecret] = useState("");
 	const [confirmed, setConfirmed] = useState(false);
@@ -211,11 +213,10 @@ export function WecomBotSetup({
 			} else {
 				setBusy(false);
 				session.current = undefined;
-				setError(
-					current.data.status === "active"
-						? ""
-						: "绑定未完成，请检查凭证后重试。",
-				);
+				const active = current.data.status === "active";
+				setError(active ? "" : "绑定未完成，请检查凭证后重试。");
+				// 设计：手动与扫码绑定成功后都给 Toast「企微机器人已连接」（W-26）。
+				if (active) toast(`${setupTitle}已连接`);
 				await refresh();
 				return;
 			}
@@ -527,16 +528,17 @@ export function WecomBotSetup({
 			titleId="wecom-bot-title"
 			titleRef={titleRef}
 		>
+			{/* 设计 renderWecomBot 文案（W-21）。 */}
 			<p className="wecom-channel-copy">
-				{
-					"可扫码授权，也可填写已有机器人的 Bot ID 和 Secret，无需公网回调。群消息和回复对群成员可见，每位发送者的会话上下文独立。Secret 提交后清空。"
-				}
+				支持单聊与群聊，群消息和回复对群成员可见；不同发送者的会话上下文独立。Secret
+				只提交一次，页面不回显。
 			</p>
 			<div className="wecom-channel-fields">
 				<Field>
 					<Label htmlFor="wecom-bot-id">Bot ID</Label>
 					<Input
 						id="wecom-bot-id"
+						placeholder="输入 Bot ID"
 						value={botId}
 						disabled={busy || qrConfirming}
 						onChange={(e) => setBotId(e.target.value)}
@@ -548,6 +550,7 @@ export function WecomBotSetup({
 					<Input
 						id="wecom-bot-secret"
 						type="password"
+						placeholder="仅本次提交使用"
 						value={secret}
 						disabled={busy || qrConfirming}
 						onChange={(e) => setSecret(e.target.value)}
@@ -555,16 +558,14 @@ export function WecomBotSetup({
 					/>
 				</Field>
 			</div>
-			<Label variant="option" className="items-start">
+			{/* 设计 .check：44px 行内垂直居中，紧接字段（W-20、W-21）。 */}
+			<Label variant="option">
 				<Checkbox
-					className="mt-0.5"
 					checked={confirmed}
 					disabled={busy || qrConfirming}
 					onCheckedChange={(value) => setConfirmed(value)}
 				/>
-				<span className="min-w-0">
-					我已知悉：连接此机器人可能断开它在其他服务中的现有连接。
-				</span>
+				<span className="min-w-0">我已知悉可能断开其他连接</span>
 			</Label>
 			{error ? (
 				<Alert tone="danger" role="alert">

@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useToast } from "@/components/ui/toast";
 import { withObjectName } from "@/lib/accessible-name";
 import {
 	beginWecomAppSetup,
@@ -36,6 +37,7 @@ export function WecomAppSetup({
 	/** 独立的解绑请求（只含 wecom_app disabled）；未提供时不显示解绑入口。 */
 	unbindChannel?: () => Promise<void>;
 }) {
+	const toast = useToast();
 	const [corporationId, setCorporationId] = useState("");
 	const [applicationId, setApplicationId] = useState("");
 	const [secret, setSecret] = useState("");
@@ -156,6 +158,8 @@ export function WecomAppSetup({
 							: undefined,
 				);
 				setError(next === "active" ? "" : "绑定未完成，请检查应用凭证后重试。");
+				// 设计：绑定成功后给 Toast「企微应用已连接」（W-26）。
+				if (next === "active") toast(`${setupTitle}已连接`);
 				await refresh();
 				return;
 			}
@@ -290,16 +294,17 @@ export function WecomAppSetup({
 			titleId="wecom-app-title"
 			titleRef={titleRef}
 		>
+			{/* 设计 renderWecomApp 文案（W-21）。 */}
 			<p className="wecom-channel-copy">
-				{
-					"输入框中的 Secret、Token 和 EncodingAESKey 提交后清空；平台加密保存用于渠道收发。"
-				}
+				配置企业 ID、应用 ID 和回调材料。验证期间保留原绑定，Secret
+				类字段只保存密文状态。
 			</p>
 			<div className="wecom-channel-fields">
 				<Field>
 					<Label htmlFor="wecom-app-corporation-id">企业 ID</Label>
 					<Input
 						id="wecom-app-corporation-id"
+						placeholder="输入企业 ID"
 						aria-invalid={!!fieldErrors.corporationId}
 						aria-describedby={
 							fieldErrors.corporationId
@@ -325,6 +330,7 @@ export function WecomAppSetup({
 					{/* Owner 配置同页还有授权目标的「应用 ID」，名称带卡片标题以便区分（N-12）。 */}
 					<Input
 						id="wecom-app-application-id"
+						placeholder="输入应用 ID"
 						aria-label={withObjectName("应用 ID", setupTitle)}
 						aria-invalid={!!fieldErrors.applicationId}
 						aria-describedby={
@@ -351,6 +357,7 @@ export function WecomAppSetup({
 					<Label htmlFor="wecom-app-secret">应用 Secret</Label>
 					<Input
 						id="wecom-app-secret"
+						placeholder="仅本次提交使用"
 						aria-invalid={!!fieldErrors.secret}
 						aria-describedby={
 							fieldErrors.secret ? "wecom-app-secret-error" : undefined
@@ -371,6 +378,7 @@ export function WecomAppSetup({
 					<Label htmlFor="wecom-app-token">回调 Token</Label>
 					<Input
 						id="wecom-app-token"
+						placeholder="输入回调 Token"
 						aria-invalid={!!fieldErrors.token}
 						aria-describedby={
 							fieldErrors.token ? "wecom-app-token-error" : undefined
@@ -391,6 +399,7 @@ export function WecomAppSetup({
 					<Label htmlFor="wecom-app-encoding-aes-key">EncodingAESKey</Label>
 					<Input
 						id="wecom-app-encoding-aes-key"
+						placeholder="输入 43 位密钥"
 						aria-invalid={!!fieldErrors.encodingAesKey}
 						aria-describedby={
 							fieldErrors.encodingAesKey
@@ -413,10 +422,10 @@ export function WecomAppSetup({
 					) : null}
 				</Field>
 			</div>
-			<Label variant="option" className="items-start">
+			{/* 设计 .check：44px 行内垂直居中，紧接字段（W-20、W-21）。 */}
+			<Label variant="option">
 				<Checkbox
 					id="wecom-app-takeover"
-					className="mt-0.5"
 					checked={confirmed}
 					disabled={busy}
 					aria-invalid={!!fieldErrors.takeoverConfirmed}
@@ -427,7 +436,7 @@ export function WecomAppSetup({
 					}
 					onCheckedChange={(value) => setConfirmed(value === true)}
 				/>
-				<span>我已知悉：连接此应用可能影响其在其他服务中的现有配置。</span>
+				<span className="min-w-0">我已知悉可能影响现有回调</span>
 			</Label>
 			{fieldErrors.takeoverConfirmed ? (
 				<p id="wecom-app-takeover-error" className="text-destructive text-sm">
