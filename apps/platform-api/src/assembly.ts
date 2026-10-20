@@ -830,9 +830,12 @@ export function assemblePlatformApi(
 					>
 				).store
 			: undefined;
-	const fileLimitStore = input.files
-		? new PostgresFileLimitDeclarationStoreV1(input.databaseUrl)
-		: undefined;
+	// File-limit declarations are an independent management surface persisted in
+	// the Platform DB; only the data-plane `files` adapter depends on the
+	// deployment's file configuration (PR-Agent review, #3063).
+	const fileLimitStore = new PostgresFileLimitDeclarationStoreV1(
+		input.databaseUrl,
+	);
 	let readFileLimits:
 		| ReturnType<typeof assemblePlatformFilesV1>["readLimits"]
 		| undefined;
