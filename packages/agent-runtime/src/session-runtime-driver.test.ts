@@ -1,10 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type {
 	RuntimeDriverCommand,
+	RuntimeExternalActionAuthorization,
 	RuntimeNativeCommandCommandV1,
 	RuntimeNativeMetadataReadContextV1,
 	RuntimeNativeSkillCommandV1,
@@ -19,6 +20,7 @@ import {
 	type NativeSession,
 	type NativeSessionOptions,
 	SessionRuntimeDriver,
+	type SessionRuntimeDriverOptions,
 } from "./session-runtime-driver.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
@@ -173,6 +175,7 @@ async function driver(
 		attachmentsNegotiated?: () => boolean;
 		skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 		nativeSkillPrompt?: (name: string, parameters: string) => string;
+		authorizeModelAction?: SessionRuntimeDriverOptions["authorizeModelAction"];
 	} = {},
 ): Promise<SessionRuntimeDriver> {
 	return SessionRuntimeDriver.open({
@@ -200,9 +203,231 @@ async function driver(
 		cursorPrefix: "test",
 		retireSession: async () => {},
 		completionStatus: () => "completed",
+		...(options.authorizeModelAction
+			? { authorizeModelAction: options.authorizeModelAction }
+			: {}),
 		openSession,
 	});
 }
+
+it("binds first and reused model Key delivery to the Driver Session and durable native attempt", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-model-authority-"));
+	const outcomes: unknown[] = [];
+	const attempts = new Map<
+		string,
+		{ operationRef: string; attemptRef: string }
+	>();
+	let release!: () => void;
+	const released = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let runtime: SessionRuntimeDriver;
+	let firstSessionRef: string | undefined;
+	const authorizeModelAction = vi.fn(
+		async (action: RuntimeExternalActionAuthorization) => {
+			await runtime.validateExternalAction(action);
+			for (const override of [
+				{ nativeSessionRef: "vendor-session-a" },
+				...(firstSessionRef && firstSessionRef !== action.nativeSessionRef
+					? [{ nativeSessionRef: firstSessionRef }]
+					: []),
+				{ executionId: "other-execution" },
+				{ runtimeOperationId: "other-operation" },
+				{ attemptRef: randomUUID() },
+			])
+				await expect(
+					runtime.validateExternalAction({ ...action, ...override }),
+				).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			return { relayKey: "synthetic-execution-key" };
+		},
+	);
+	runtime = await driver(
+		path,
+		async (opened) => {
+			let current = opened;
+			return {
+				nativeId: "vendor-session-a",
+				select: async () => {},
+				startTurn: (next: NativeSessionOptions) => {
+					current = next;
+				},
+				reusable: () => true,
+				prompt: async () => {
+					const options = current;
+					const identity = {
+						operationRef: randomUUID(),
+						attemptRef: randomUUID(),
+					};
+					attempts.set(options.executionId ?? "", identity);
+					const model = options.modelFact?.();
+					if (!model) throw new Error("Missing model fixture");
+					await options.recordOperationFact?.({
+						kind: "model",
+						...identity,
+						phase: "intent",
+						model,
+					});
+					await options.recordOperationFact?.({
+						kind: "model",
+						...identity,
+						phase: "started",
+						startedAt: new Date().toISOString(),
+						model,
+					});
+					await options.admit();
+					try {
+						outcomes.push(await options.resolveModelCredential?.());
+					} catch (error) {
+						outcomes.push(error);
+					}
+					await released;
+					await options.recordOperationFact?.({
+						kind: "model",
+						...identity,
+						phase: "completed",
+						finishedAt: new Date().toISOString(),
+						durationMs: 1,
+						model,
+					});
+					return { stopReason: "completed" };
+				},
+				cancel: async () => {},
+				close: async () => {},
+			};
+		},
+		{ authorizeModelAction },
+	);
+	try {
+		const first = await runtime.execute(command([]));
+		firstSessionRef = first.nativeSessionRef;
+		await vi.waitFor(() => expect(outcomes).toHaveLength(1));
+		expect(outcomes).toEqual(["synthetic-execution-key"]);
+		const firstAction = authorizeModelAction.mock.calls[0]?.[0];
+		expect(firstAction).toMatchObject({
+			nativeSessionRef: first.nativeSessionRef,
+			...attempts.get("execution-a"),
+		});
+		release();
+		for await (const _event of await runtime.subscribeEvents(
+			first.nativeSessionRef,
+			"execution-a",
+			undefined,
+			AbortSignal.timeout(1000),
+		)) {
+			/* Wait for its durable terminal. */
+		}
+		await expect(
+			runtime.validateExternalAction(
+				firstAction as RuntimeExternalActionAuthorization,
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		const second = await runtime.execute({
+			...command([]),
+			nativeSessionRef: first.nativeSessionRef,
+			executionId: "execution-b",
+			operationId: "operation-b",
+			turnId: "turn-b",
+		} as RuntimeDriverCommand);
+		await vi.waitFor(() => expect(outcomes).toHaveLength(2));
+		expect(outcomes).toEqual([
+			"synthetic-execution-key",
+			"synthetic-execution-key",
+		]);
+		expect(second.nativeSessionRef).toBe(first.nativeSessionRef);
+		expect(authorizeModelAction.mock.calls[1]?.[0]).toMatchObject({
+			nativeSessionRef: second.nativeSessionRef,
+			...attempts.get("execution-b"),
+		});
+		const other = await runtime.execute({
+			...command([]),
+			conversationId: "conversation-b",
+			executionId: "execution-c",
+			operationId: "operation-c",
+			turnId: "turn-c",
+		} as RuntimeDriverCommand);
+		await vi.waitFor(() => expect(outcomes).toHaveLength(3));
+		expect(outcomes[2]).toBe("synthetic-execution-key");
+		expect(other.nativeSessionRef).not.toBe(first.nativeSessionRef);
+	} finally {
+		release();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it.each(["missing", "ambiguous", "completed"] as const)(
+	"refuses model Key delivery with %s native attempt evidence",
+	async (state) => {
+		const path = await mkdtemp(join(tmpdir(), "session-model-evidence-"));
+		const authorizeModelAction = vi.fn(async () => ({
+			relayKey: "synthetic-execution-key",
+		}));
+		const outcomes: unknown[] = [];
+		const runtime = await driver(
+			path,
+			async (options) => ({
+				nativeId: "vendor-session-a",
+				select: async () => {},
+				prompt: async () => {
+					const model = options.modelFact?.();
+					if (!model) throw new Error("Missing model fixture");
+					if (state !== "missing")
+						for (
+							let index = 0;
+							index < (state === "ambiguous" ? 2 : 1);
+							index++
+						) {
+							const identity = {
+								operationRef: randomUUID(),
+								attemptRef: randomUUID(),
+							};
+							await options.recordOperationFact?.({
+								kind: "model",
+								...identity,
+								phase: "intent",
+								model,
+							});
+							await options.recordOperationFact?.({
+								kind: "model",
+								...identity,
+								phase: "started",
+								startedAt: new Date().toISOString(),
+								model,
+							});
+							if (state === "completed")
+								await options.recordOperationFact?.({
+									kind: "model",
+									...identity,
+									phase: "completed",
+									finishedAt: new Date().toISOString(),
+									durationMs: 1,
+									model,
+								});
+						}
+					await options.admit();
+					try {
+						outcomes.push(await options.resolveModelCredential?.());
+					} catch (error) {
+						outcomes.push(error);
+					}
+					return { stopReason: "completed" };
+				},
+				cancel: async () => {},
+				close: async () => {},
+			}),
+			{ authorizeModelAction },
+		);
+		try {
+			await runtime.execute(command([]));
+			await vi.waitFor(() => expect(outcomes).toHaveLength(1));
+			expect(outcomes[0]).toBeInstanceOf(Error);
+			expect(authorizeModelAction).not.toHaveBeenCalled();
+		} finally {
+			await runtime.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);
 
 it("builds the bounded Pi native Skill command from the mounted directory", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-native-skill-command-"));

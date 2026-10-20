@@ -422,16 +422,41 @@ it("keeps overlapping same-tool operation facts bound to each call id", async ()
 });
 
 it("refreshes the execution Key when Pi reuses a native session", async () => {
-	const f = await fixture("normal", true);
+	const f = await fixture("cancel", true);
+	const stop = (
+		nativeSessionRef: string,
+		executionId: string,
+		turnId: string,
+	) =>
+		f.driver.execute({
+			schemaVersion: 1,
+			kind: "stop",
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			sessionGeneration: 1,
+			nativeSessionRef,
+			executionId,
+			turnId,
+			operationId: `stop-${executionId}`,
+		});
 	try {
 		const first = await f.driver.execute(command);
 		await vi.waitFor(async () =>
 			expect(
 				await f.driver.getStatus(first.nativeSessionRef, command.executionId),
-			).toBe("completed"),
+			).toBe("running"),
 		);
 		expect(f.keyResolvers).toHaveLength(1);
 		expect(await f.keyResolvers[0]?.()).toBe("key-a");
+		await stop(first.nativeSessionRef, command.executionId, command.turnId);
+		await vi.waitFor(async () =>
+			expect(
+				await f.driver.getStatus(first.nativeSessionRef, command.executionId),
+			).toBe("cancelled"),
+		);
+		await expect(f.keyResolvers[0]?.()).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
 
 		const second = await f.driver.execute({
 			...command,
@@ -443,10 +468,19 @@ it("refreshes the execution Key when Pi reuses a native session", async () => {
 		await vi.waitFor(async () =>
 			expect(
 				await f.driver.getStatus(second.nativeSessionRef, "execution-b"),
-			).toBe("completed"),
+			).toBe("running"),
 		);
 		expect(f.keyResolvers).toHaveLength(1);
 		expect(await f.keyResolvers[0]?.()).toBe("key-b");
+		await stop(second.nativeSessionRef, "execution-b", "turn-b");
+		await vi.waitFor(async () =>
+			expect(
+				await f.driver.getStatus(second.nativeSessionRef, "execution-b"),
+			).toBe("cancelled"),
+		);
+		await expect(f.keyResolvers[0]?.()).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
 	} finally {
 		await f.close();
 	}

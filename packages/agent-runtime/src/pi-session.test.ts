@@ -61,6 +61,7 @@ async function fixture() {
 	);
 	const session = await openPiSession({
 		directory,
+		runtimeSessionRef: "driver-session-a",
 		cwd: directory,
 		selection: {
 			schemaVersion: 1,
