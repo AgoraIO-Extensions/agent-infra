@@ -629,6 +629,31 @@ export function createProductionSessionSandboxReceiverV1(
 			if (source.observation?.status === "stopped") {
 				if (!claim.drainComputeAllowed || lifecycle.preparation)
 					return { status: "unknown" as const, resources: sourceResources };
+				// #2995：停止发生在替换准备期间时，准备可能已在来源 fence 下建出资源（PVC 也被改写到
+				// 该 fence），但观测没来得及提交，来源仍是上一轮的停止观测。读到这些归属资源、且仍包含
+				// 记录的同一 PVC 时，交给 Core 补全来源证据（只是证据，不是停止证明），下一次按完整或
+				// 部分来源逐个删除。fence 不符、不归属本沙箱的同名资源不算，仍由下面失败关闭。
+				const owned = await adapter.observe(
+					sourceAllocation,
+					sourceResources,
+					"control",
+				);
+				signal.throwIfAborted();
+				if (
+					owned.resources.some(
+						(resource) => resource.kind !== "PersistentVolumeClaim",
+					) &&
+					sourceResources.every((recorded) =>
+						owned.resources.some(
+							(resource) =>
+								resource.kind === recorded.kind &&
+								resource.namespace === recorded.namespace &&
+								resource.name === recorded.name &&
+								resource.uid === recorded.uid,
+						),
+					)
+				)
+					return { status: "observed" as const, resources: owned.resources };
 				const stopReceipt = await adapter.confirmStoppedSource(
 					allocationFor(
 						claim.sandbox,

@@ -1003,6 +1003,237 @@ describe("production SessionSandbox resource receiver", () => {
 					expect(await f.client.read("Pod", name)).not.toBeNull();
 			}
 		});
+
+		// #2995：重启后替换准备已在来源 fence 下建出资源（PVC 也被改写到该 fence），观测未提交时
+		// 又停止。管理转换的来源仍是上一轮的停止观测，排空之前每次都在 confirmStoppedSource 冲突，
+		// 替换 Pod 一直运行。
+		describe("stop during an unobserved replacement preparation (#2995)", () => {
+			/** 停止 → 回执 → 替换准备建出资源（观测未提交）→ 再停止的排空认领。 */
+			const interruptedReplacementClaim = async (
+				f: ReturnType<typeof fixture>,
+			) => {
+				const {
+					claim: stoppedSource,
+					signal,
+					pvc,
+				} = await stoppedSourceClaim(f);
+				const stopped = await f.receive(
+					stoppedSource,
+					signal,
+					async () => "committed",
+				);
+				if (!stoppedSource.lifecycle || !stopped.sourceStop)
+					throw new Error("Expected stop");
+				const sourceFence = stoppedSource.resourceFence + 1;
+				const policy = {
+					...f.claim.policy,
+					workloadRevision: 2,
+					managementFence: 2,
+				};
+				const deployment = {
+					...(f.claim.deployment as ReturnType<typeof workloadDesiredFixture>),
+					workloadRevision: 2,
+				};
+				await f.receive(
+					{
+						...stoppedSource,
+						purpose: "prepare",
+						desiredState: "running",
+						drainComputeAllowed: false,
+						resourceFence: sourceFence,
+						resourceStatus: "applying",
+						policy,
+						deployment,
+						previousObservation: stopped,
+						lifecycle: {
+							...stoppedSource.lifecycle,
+							authority: {
+								...stoppedSource.lifecycle.authority,
+								targetDesiredState: "running",
+							},
+							stopReceipt: stopped.sourceStop,
+							preparation: {
+								generation: stoppedSource.sandbox.generation,
+								resourceFence: sourceFence,
+							},
+						},
+					},
+					signal,
+				);
+				// 管理停止转换：上一个生命周期还在准备，来源取当时的分配——fence 是替换准备的
+				// fence，观测仍是上一轮的停止观测；回执与准备都不保留。
+				const claim: SessionSandboxReconciliationClaimV1 = {
+					...stoppedSource,
+					resourceFence: sourceFence + 1,
+					resourceStatus: "unknown",
+					policy,
+					previousObservation: stopped,
+					lifecycle: {
+						...stoppedSource.lifecycle,
+						source: {
+							...stoppedSource.lifecycle.source,
+							resourceFence: sourceFence,
+							policy,
+							deployment,
+							observation: stopped,
+						},
+						stopReceipt: null,
+						deletionProgress: [],
+					},
+				};
+				return { claim, signal, pvc };
+			};
+			/** 模拟 Store：按 Core 判定写回来源证据与分配观测。 */
+			const refined = (
+				claim: SessionSandboxReconciliationClaimV1,
+				observation: SessionSandboxObservationV1,
+			): SessionSandboxReconciliationClaimV1 => {
+				if (!claim.lifecycle) throw new Error("Expected lifecycle");
+				const decision = decideSessionSandboxDrainObservationV1({
+					sandbox: claim.sandbox,
+					resourceFence: claim.resourceFence,
+					lifecycle: claim.lifecycle,
+					observation,
+				});
+				expect(decision.finished).toBe(false);
+				return {
+					...claim,
+					previousObservation: decision.observation,
+					lifecycle: {
+						...claim.lifecycle,
+						source: {
+							...claim.lifecycle.source,
+							observation: decision.observation,
+						},
+					},
+				};
+			};
+
+			it("records the replacement resources as source evidence, then removes them and keeps the same PVC", async () => {
+				const f = fixture();
+				const { claim, signal, pvc } = await interruptedReplacementClaim(f);
+				const name = claim.sandbox.resourceName;
+				expect(await f.client.read("Pod", name)).not.toBeNull();
+				const progress = new Map<string, SessionSandboxDeletionProgressV1>();
+				const record = async (entry: SessionSandboxDeletionProgressV1) => {
+					progress.set(entry.resource.kind, entry);
+					return "committed" as const;
+				};
+				const writes = f.writes.length;
+				const first = await f.receive(claim, signal, record);
+				expect(first.status).toBe("observed");
+				expect(f.writes).toHaveLength(writes);
+				expect(
+					first.resources.find(
+						(resource) => resource.kind === "PersistentVolumeClaim",
+					)?.uid,
+				).toBe(pvc?.uid);
+				let next = refined(claim, first);
+				expect(next.lifecycle?.source.observation?.status).toBe("observed");
+				let observation = first;
+				for (let attempt = 0; attempt < 3; attempt += 1) {
+					observation = await f.receive(next, signal, record);
+					if (observation.status === "stopped") break;
+					next = refined(next, observation);
+				}
+				expect(observation.status).toBe("stopped");
+				expect(
+					observation.sourceStop?.removed
+						.map((proof) => proof.resource.kind)
+						.sort(),
+				).toEqual(
+					[
+						"NetworkPolicy",
+						"Pod",
+						"Secret",
+						"Service",
+						"ServiceAccount",
+					].sort(),
+				);
+				expect(observation.sourceStop?.retainedPVC?.uid).toBe(pvc?.uid);
+				for (const kind of [
+					"Pod",
+					"Secret",
+					"Service",
+					"ServiceAccount",
+					"NetworkPolicy",
+				] as const)
+					expect(await f.client.read(kind, name)).toBeNull();
+				expect(
+					(await f.client.read("PersistentVolumeClaim", name))?.metadata?.uid,
+				).toBe(pvc?.uid);
+				if (!next.lifecycle) throw new Error("Expected lifecycle");
+				expect(
+					decideSessionSandboxDrainObservationV1({
+						sandbox: next.sandbox,
+						resourceFence: next.resourceFence,
+						lifecycle: {
+							...next.lifecycle,
+							deletionProgress: [...progress.values()],
+						},
+						observation,
+					}),
+				).toMatchObject({ status: "stopped", finished: true });
+			});
+
+			it("proves the stop directly when the interrupted preparation only moved the PVC", async () => {
+				const f = fixture();
+				const { claim, signal, pvc } = await interruptedReplacementClaim(f);
+				const name = claim.sandbox.resourceName;
+				for (const key of [...f.resources.keys()])
+					if (
+						key.endsWith(`/${name}`) &&
+						key !== `PersistentVolumeClaim/${name}`
+					)
+						f.resources.delete(key);
+				const writes = f.writes.length;
+				const observation = await f.receive(
+					claim,
+					signal,
+					async () => "committed",
+				);
+				expect(observation.status).toBe("stopped");
+				expect(observation.sourceStop?.removed).toEqual([]);
+				expect(observation.sourceStop?.retainedPVC?.uid).toBe(pvc?.uid);
+				expect(f.writes).toHaveLength(writes);
+				if (!claim.lifecycle) throw new Error("Expected lifecycle");
+				expect(
+					decideSessionSandboxDrainObservationV1({
+						sandbox: claim.sandbox,
+						resourceFence: claim.resourceFence,
+						lifecycle: claim.lifecycle,
+						observation,
+					}),
+				).toMatchObject({ status: "stopped", finished: true });
+			});
+
+			it("still fails closed without deleting when the leftovers carry a newer fence or the PVC was replaced", async () => {
+				for (const drift of ["fence", "pvc-uid"] as const) {
+					const f = fixture();
+					const { claim, signal } = await interruptedReplacementClaim(f);
+					const name = claim.sandbox.resourceName;
+					for (const [key, resource] of f.resources) {
+						if (!key.endsWith(`/${name}`) || !resource.metadata?.annotations)
+							continue;
+						if (drift === "fence")
+							resource.metadata.annotations[fence] = String(
+								claim.resourceFence + 1,
+							);
+						if (
+							drift === "pvc-uid" &&
+							resource.kind === "PersistentVolumeClaim"
+						)
+							resource.metadata.uid = "replaced-pvc";
+					}
+					const writes = f.writes.length;
+					await expect(
+						f.receive(claim, signal, async () => "committed"),
+					).rejects.toMatchObject({ code: "conflict" });
+					expect(f.writes).toHaveLength(writes);
+					expect(await f.client.read("Pod", name)).not.toBeNull();
+				}
+			});
+		});
 	});
 
 	// #2918：准备中断，只建出了 ServiceAccount、观测从未提交。来源 observation 为 unknown 且没有资源，
