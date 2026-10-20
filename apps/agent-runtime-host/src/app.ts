@@ -672,6 +672,21 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 				path: context.req.path,
 				traceId,
 			});
+		// #3017：记录 RUNTIME_SESSION_UNAVAILABLE 的有界诊断，不进入 HTTP 响应
+		if (
+			runtimeError.code === "RUNTIME_SESSION_UNAVAILABLE" &&
+			runtimeError.diagnostic
+		)
+			(
+				options.logDiagnostic ??
+				((entry) => console.error(JSON.stringify(entry)))
+			)({
+				service: runtimeHostService,
+				code: "RUNTIME_SESSION_UNAVAILABLE",
+				diagnostic: runtimeError.diagnostic,
+				path: context.req.path,
+				traceId,
+			});
 		return context.json(
 			{
 				schemaVersion: 1,
