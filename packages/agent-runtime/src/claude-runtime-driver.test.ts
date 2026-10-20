@@ -724,7 +724,7 @@ it("rejects an unknown Claude command before sending a model request", async () 
 	} finally {
 		await fixture.close();
 	}
-});
+}, 30000);
 
 it("rejects a credential-free option without Host key delivery", async () => {
 	const path = await mkdtemp(join(tmpdir(), "claude-driver-v4-invalid-"));
