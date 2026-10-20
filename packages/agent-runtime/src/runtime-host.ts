@@ -1071,11 +1071,16 @@ export class RuntimeHost {
 			true,
 		);
 		const nativeSessionRef =
-			session.nativeSessionRef ?? nativeSessionRequired();
+			session.nativeSessionRef ??
+			nativeSessionRequired(
+				`executeNativeCapabilityV5:${nativeSessionStateCategory(session)}`,
+			);
 		const now = this.options.grantValidationV2?.now ?? Date.now;
 		const expiresAt = Math.min(claims.expiresAt, now() + 30_000);
 		if (!Number.isSafeInteger(expiresAt) || expiresAt <= now())
-			nativeSessionRequired();
+			nativeSessionRequired(
+				`executeNativeCapabilityV5:${nativeSessionStateCategory(session)}`,
+			);
 		const controller = new AbortController();
 		const timer = setTimeout(
 			() => controller.abort(),
@@ -1098,7 +1103,9 @@ export class RuntimeHost {
 			expiresAt,
 			assertCurrent: () => {
 				if (controller.signal.aborted || expiresAt <= now())
-					nativeSessionRequired();
+					nativeSessionRequired(
+						`executeNativeCapabilityV5:${nativeSessionStateCategory(session)}`,
+					);
 				this.requireLegacyHost();
 				const current = this.options.store.getSessionForQuery(
 					request.hostSessionRef,
@@ -1107,7 +1114,9 @@ export class RuntimeHost {
 					true,
 				);
 				if (current.nativeSessionRef !== nativeSessionRef)
-					nativeSessionRequired();
+					nativeSessionRequired(
+						`executeNativeCapabilityV5:${nativeSessionStateCategory(current)}`,
+					);
 				return evidence;
 			},
 			revalidate: async () => {
@@ -1203,7 +1212,9 @@ export class RuntimeHost {
 						keyScopeV4: pinnedScope,
 						command: (commandNativeSessionRef) => {
 							if (commandNativeSessionRef !== nativeSessionRef)
-								nativeSessionRequired();
+								nativeSessionRequired(
+									`executeNativeCapabilityV5:${nativeSessionStateCategory(session)}`,
+								);
 							const resolveSkill = driver.resolveNativeSkillBinding;
 							const skillCreate = driver.createNativeSkillCommand;
 							if (!resolveSkill || !skillCreate) nativeTextInputUnsupported();
