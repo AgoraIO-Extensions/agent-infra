@@ -18,7 +18,9 @@ import { createCredentialMatcher } from "./model-credential-matcher.js";
 const maximumRequestBytes = 8 * 1024 * 1024;
 const maximumEventBytes = 1024 * 1024;
 const maximumStreamBytes = 16 * 1024 * 1024;
-const maximumStreamEvents = 8_192;
+// #3000：原始推理按 token 流式返回，一次响应可达上万个事件。转发是流式的，事件数上限
+// 不额外保护内存；最小的合法事件约 110 字节，16 MiB 的字节上限会先生效。
+const maximumStreamEvents = 131_072;
 const maximumConversationAccessEntries = 1_024;
 const requestTimeoutMs = 120_000;
 /** The provider may stream indefinitely while each body read stays active. */

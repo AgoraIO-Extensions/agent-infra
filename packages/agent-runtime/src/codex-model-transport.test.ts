@@ -1051,6 +1051,82 @@ describe("Codex model transport", () => {
 		expect(await response.text()).toBe(stream);
 	}, 30_000);
 
+	// #3000：DeepSeek 的原始推理按 token 流式返回，一次响应可超过 8,192 个事件。
+	it("forwards a long reasoning stream past 8,192 events within the byte bound", async () => {
+		const stream =
+			event({
+				type: "response.reasoning_text.delta",
+				delta: "想",
+				content_index: 0,
+			}).repeat(6_000) +
+			event({ type: "response.output_text.delta", delta: "答" }).repeat(2_500) +
+			completedEvent();
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(stream);
+			}),
+		);
+		const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
+		const value = await transport(target, true, {
+			modelOnly: true,
+			beforeRequest: async () => ({ started: async () => {}, finish }),
+		});
+		const response = await request(value.modelAccess);
+
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe(stream);
+		expect(finish).toHaveBeenCalledWith(
+			expect.objectContaining({ phase: "succeeded" }),
+		);
+	}, 30_000);
+
+	it.each([
+		[
+			"more events than one stream allows",
+			() =>
+				event({ type: "response.output_text.delta", delta: "x" }).repeat(
+					131_073,
+				) + completedEvent(),
+		],
+		[
+			"more bytes than one stream allows",
+			() =>
+				event({
+					type: "response.output_text.delta",
+					delta: "x".repeat(1024 * 1024 - 256),
+				}).repeat(17) + completedEvent(),
+		],
+	])(
+		"fails a stream with %s",
+		async (_name, build) => {
+			const stream = build();
+			const target = await listen(
+				createServer((_incoming, response) => {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(stream);
+				}),
+			);
+			const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
+			const value = await transport(target, true, {
+				modelOnly: true,
+				beforeRequest: async () => ({ started: async () => {}, finish }),
+			});
+			const response = await request(value.modelAccess);
+
+			expect(await response.text()).not.toContain(
+				'"type":"response.completed"',
+			);
+			expect(finish).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "unknown",
+					failureCode: "invalid_response",
+				}),
+			);
+		},
+		60_000,
+	);
+
 	it.each([
 		["gzip", gzipSync, gunzipSync],
 		["zstd", zstdCompressSync, zstdDecompressSync],
