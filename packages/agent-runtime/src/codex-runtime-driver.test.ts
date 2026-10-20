@@ -5483,6 +5483,57 @@ describe("Codex Runtime Driver", () => {
 		).toBe("failed");
 	});
 
+	it("keeps unconfirmed model results readable without claiming terminal timing", async () => {
+		const directory = await runtimeDirectory();
+		let upstreamCalls = 0;
+		const endpoint = await listen(
+			createServer((_request, response) => {
+				upstreamCalls += 1;
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end("data: malformed\n\n");
+			}),
+		);
+		const bridge = new TestCodexBridge();
+		let loopback: CodexModelAccess | undefined;
+		const driver = await openDriverWithModelEndpoint(
+			join(directory, "driver.json"),
+			bridge,
+			endpoint,
+			(options) => {
+				loopback = options.modelAccess;
+			},
+		);
+		drivers.push(driver);
+		const command = submitCommandV2();
+		const accepted = await driver.execute(command);
+		if (!loopback) throw new Error("missing loopback access");
+		const response = await modelRequest(loopback, bridge);
+		await response.text();
+		const facts = (
+			await driver.replayEvents(accepted.nativeSessionRef, command.executionId)
+		).flatMap((event) => (event.type === "operation" ? [event.payload] : []));
+		expect(facts.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"unknown",
+		]);
+		expect(new Set(facts.map((fact) => fact.operationRef)).size).toBe(1);
+		expect(new Set(facts.map((fact) => fact.attemptRef)).size).toBe(1);
+		const fact = facts.at(-1);
+		expect(fact).toMatchObject({
+			kind: "model",
+			phase: "unknown",
+			failureCode: "response_incomplete",
+			startedAt: expect.any(String),
+		});
+		expect(fact).not.toHaveProperty("finishedAt");
+		expect(fact).not.toHaveProperty("durationMs");
+		const repeated = await modelRequest(loopback, bridge);
+		expect(repeated.status).toBe(409);
+		await repeated.text();
+		expect(upstreamCalls).toBe(1);
+	});
+
 	it("keeps a start response without a recognized notification unavailable", async () => {
 		const directory = await runtimeDirectory();
 		const path = join(directory, "driver.json");
