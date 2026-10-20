@@ -37,6 +37,7 @@ import {
 	type SkillHubInstallationV1,
 	SkillHubLifecycleErrorV1,
 	SkillHubOperationErrorV1,
+	type SkillHubProjectPublicationSourceV1,
 	type SkillHubProjectV1,
 	type SkillHubRegistrationV1,
 	type SkillHubRequestV1,
@@ -855,21 +856,29 @@ export class PostgresSkillHubLifecycleV1 {
 	async readProjectPublicationSource(
 		context: SkillHubRequestV1,
 		projectIdInput: string,
-		check: (
-			source: Awaited<
-				ReturnType<PostgresSkillHubLifecycleV1["readProjectContent"]>
-			>,
-		) => unknown = () => undefined,
+		check: (source: SkillHubProjectPublicationSourceV1) => unknown = () =>
+			undefined,
 	) {
-		return this.#transaction(context, async (transaction, request) => {
-			const source = await this.#projectSource(
-				transaction,
-				request,
-				parseSkillHubProjectIdV1(projectIdInput),
-			);
-			check(source);
-			return source;
-		});
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				const content = await this.#projectSource(
+					transaction,
+					request,
+					parseSkillHubProjectIdV1(projectIdInput),
+				);
+				const organizationId = content.project.organizationId;
+				// 组织成员资格按本事务解析的当前身份判断；组织共享发布在打包、上传与扫描前就据此拒绝。
+				const source = Object.freeze({
+					...content,
+					organizationMember:
+						organizationId !== null &&
+						identity.actor.organizationIds.includes(organizationId),
+				});
+				check(source);
+				return source;
+			},
+		);
 	}
 
 	async #projectSource(

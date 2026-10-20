@@ -243,7 +243,13 @@ describe("Skill Hub project publication use case (#2906)", () => {
 		const publication = createSkillHubProjectPublicationV1({
 			// 与 Store 一样在读取事务内执行用例检查。
 			readSource: async (_context, _projectId, check) => {
-				const value = { project, revision: 3, content, ...source };
+				const value = {
+					project,
+					revision: 3,
+					content,
+					organizationMember: true,
+					...source,
+				};
 				checked();
 				check(value);
 				return value;
@@ -327,6 +333,12 @@ describe("Skill Hub project publication use case (#2906)", () => {
 			{ project: { ...project, organizationId: null } },
 			request("ORGANIZATION"),
 			"invalid_input",
+		],
+		[
+			"an organization scope after the owner left the project organization",
+			{ organizationMember: false },
+			request("ORGANIZATION"),
+			"forbidden",
 		],
 		[
 			"stored content that no longer matches its digest",

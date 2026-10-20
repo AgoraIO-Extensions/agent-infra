@@ -215,6 +215,36 @@ describe("Skill Hub project content (#2906)", () => {
 		).toBe("disabled");
 	});
 
+	it("resolves the project organization membership from the current identity", async () => {
+		// 没有所属组织的项目不存在组织成员资格。
+		expect(
+			(await store.readProjectPublicationSource(request(), projectId))
+				.organizationMember,
+		).toBe(false);
+		const { project } = await store.createProject(request(), "create-org", {
+			schemaVersion: 1,
+			name: "org-notes",
+			organizationId: "org-a",
+		});
+		expect(
+			(await store.readProjectPublicationSource(request(), project.projectId))
+				.organizationMember,
+		).toBe(true);
+		// 失去组织身份后，同一事务内按当前身份解析为非成员，检查函数看到的也是这一结果。
+		identities.set("owner-a", {
+			...actor("owner-a"),
+			actor: { ...actor("owner-a").actor, organizationIds: [] },
+		});
+		const seen: boolean[] = [];
+		const source = await store.readProjectPublicationSource(
+			request(),
+			project.projectId,
+			(candidate) => seen.push(candidate.organizationMember),
+		);
+		expect(source.organizationMember).toBe(false);
+		expect(seen).toEqual([false]);
+	});
+
 	it("fails closed when stored content no longer matches its digest", async () => {
 		await store.saveProjectContent(request(), projectId, "save-1", update(0));
 		await client`update platform.skill_hub_project_contents set content_digest = ${"f".repeat(64)} where project_id = ${projectId}`;

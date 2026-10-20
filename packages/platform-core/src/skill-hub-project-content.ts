@@ -269,6 +269,8 @@ export type SkillHubProjectPublicationSourceV1 = Readonly<{
 	project: SkillHubProjectV1;
 	revision: number;
 	content: SkillHubProjectContentDraftV1 | null;
+	/** 当前主体是否仍属于项目所属组织，由 Store 在同一事务内按当前身份解析。 */
+	organizationMember: boolean;
 }>;
 
 export type SkillHubProjectPublicationSelectionV1 = Readonly<{
@@ -353,6 +355,12 @@ export function createSkillHubProjectPublicationV1(
 					!candidate.project.organizationId
 				)
 					invalid();
+				// 组织共享须当前主体仍属于项目所属组织；在打包、上传与扫描前拒绝。
+				if (
+					command.visibility === "ORGANIZATION" &&
+					candidate.organizationMember !== true
+				)
+					throw new SkillHubOperationErrorV1("forbidden");
 				return candidate.content;
 			};
 			// Store 在读取事务内执行同一检查，拒绝随事务写入拒绝审计；返回后再核对一次。

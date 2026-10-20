@@ -559,11 +559,17 @@ describe("Skill Hub web project editing and publication over HTTP (#2906)", () =
 		expect((await publish(member, 1, "2.0.0", "ORGANIZATION")).status).toBe(
 			400,
 		);
-		// 失去项目所属组织的成员身份后，组织共享发布被拒绝且不登记版本。
+		// 失去项目所属组织的成员身份后，组织共享发布在进入供应前就被拒绝，不打包、不上传、不登记版本。
+		const operations = async () =>
+			(
+				await sql`select count(*)::int as count from platform.outbox_items where scope_type = 'skill_package'`
+			)[0]?.count;
+		const before = await operations();
 		users["owner-a"] = user("owner-a", []);
 		expect(
 			(await publish(organizational, 1, "2.0.0", "ORGANIZATION")).status,
 		).toBe(403);
+		expect(await operations()).toBe(before);
 		const versions =
 			await sql`select count(*)::int as count from platform.skill_hub_versions where skill_id = ${organizational}`;
 		expect(versions[0]?.count).toBe(1);
