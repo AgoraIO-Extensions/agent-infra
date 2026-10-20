@@ -232,6 +232,35 @@ describe("standard contract artifacts", () => {
 			artifacts.pilotBrowserOpenapi.components.schemas
 				.ScopedPlatformAuditProjectionV1.properties,
 		).not.toHaveProperty("agentDisplayName");
+		// #2911：V1 状态响应只含 status，扫码可用性只在 V2 入口返回。
+		expect(
+			artifacts.pilotBrowserOpenapi.paths["/api/v1/agents/{agentId}/wecom-bot"]
+				.get.responses[200].content["application/json"].schema,
+		).toEqual({
+			additionalProperties: false,
+			properties: {
+				status: {
+					enum: [
+						"not_configured",
+						"callback",
+						"verifying",
+						"connected",
+						"disconnected",
+						"auth_failed",
+					],
+					type: "string",
+				},
+			},
+			required: ["status"],
+			type: "object",
+		});
+		expect(
+			artifacts.pilotBrowserOpenapi.paths["/api/v2/agents/{agentId}/wecom-bot"]
+				.get.responses[200].content["application/json"].schema,
+		).toEqual({ $ref: "#/components/schemas/WecomBotConnectionProjectionV2" });
+		expect(artifacts.pilotBrowserOpenapiV2.paths).not.toHaveProperty(
+			"/api/v2/agents/{agentId}/wecom-bot",
+		);
 		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
 			"/api/v1/conversations/{conversationId}/messages",
 		);

@@ -2639,6 +2639,31 @@ function isAgentDetailOwnerStatusOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2911 新增带扫码可用性的企微机器人状态 V2 入口；V1 状态响应、配置会话响应和全部既有 schema 保持不变。
+// 新增路径与投影用写死的 SHA-256 固定，任何改动都会使门禁失败。
+function isWecomBotQrAvailabilityOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents/{agentId}/wecom-bot";
+	const schema = "WecomBotConnectionProjectionV2";
+	if (
+		previous.paths?.[path] !== undefined ||
+		previous.components?.schemas?.[schema] !== undefined
+	)
+		return false;
+	const addition = {
+		paths: { [path]: current.paths?.[path] },
+		schemas: { [schema]: current.components?.schemas?.[schema] },
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"10d62369c397a995fa6366ae764eef2a7114d0a5c5ed37fd97670c7be84b11d4"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	delete normalized.components.schemas[schema];
+	return sameValue(previous, normalized);
+}
+
 // #2904 新增版本详情与本人版本目录两条只读入口；已发布目录、原版本读取和全部既有 schema 保持不变。
 function isSkillHubVersionDetailOpenApiAddition(previous, current) {
 	const paths = [
@@ -5137,6 +5162,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isNativeCapabilityInvocationOpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomQrAuthorizationOpenApiAddition(previous, current) &&
+			!isWecomBotQrAvailabilityOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
 			!isScopedAuditDisplayNameV2OpenApiAddition(previous, current) &&

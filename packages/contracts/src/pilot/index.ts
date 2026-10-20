@@ -32,3 +32,4 @@ export * from "./sse.ts";
 export * from "./task.ts";
 export * from "./template-release.ts";
 export * from "./wecom-application.ts";
+export * from "./wecom-bot-connection.ts";

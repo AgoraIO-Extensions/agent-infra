@@ -82,7 +82,7 @@ it("requires takeover acknowledgement and clears the Secret before submitting th
 	await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
 	expect(screen.queryByLabelText(/配置标识/)).toBeNull();
 });
-it("explains unavailable QR in a fallback panel without opening a window or requiring the acknowledgement", async () => {
+it("gates unavailable QR on the status V2 and shows the manual fallback without creating a setup session (#2911)", async () => {
 	client.setConfig({ baseUrl: "https://platform.test" });
 	const requests: string[] = [];
 	vi.stubGlobal(
@@ -91,7 +91,117 @@ it("explains unavailable QR in a fallback panel without opening a window or requ
 			const path = new URL(input.url).pathname;
 			requests.push(`${input.method} ${path}`);
 			if (path.endsWith("/wecom-bot"))
-				return Response.json({ status: "not_configured" });
+				return Response.json({
+					status: "not_configured",
+					qrAvailable: false,
+					qrUnavailableReason: "authorization_correlation_unverified",
+				});
+			return Response.json({ error: "unexpected" }, { status: 500 });
+		}),
+	);
+	const open = vi.fn(() => null);
+	Object.defineProperty(window, "open", { configurable: true, value: open });
+	render(<WecomBotSetup agentId="agent" />, { wrapper: ToastProvider });
+	await waitFor(() => expect(screen.getByText("未配置")).toBeTruthy());
+	// 状态与扫码能力只读 V2 入口。
+	expect(requests).toEqual(["GET /api/v2/agents/agent/wecom-bot"]);
+	// CK-09：扫码入口不要求先勾选「我已知悉」。
+	const trigger = screen.getByRole("button", { name: "扫码授权" });
+	fireEvent.click(trigger);
+	// 能力已知不可用：点击后同步显示面板，不经过读取中的状态。
+	expect(screen.getByText("扫码授权暂不可用")).toBeTruthy();
+	// Toast 宿主也是 role="status"，这里只取扫码面板内的状态区域。
+	const status = screen.getByText("请使用手动配置").closest('[role="status"]');
+	expect(status?.getAttribute("aria-live")).toBe("polite");
+	expect(status?.textContent).toContain("当前平台尚未完成授权关联校验。");
+	expect(screen.getByText("扫码授权暂不可用")).toBeTruthy();
+	expect(document.body.textContent).not.toContain(
+		"authorization_correlation_unverified",
+	);
+	expect(document.body.textContent).not.toContain("请先确认连接影响");
+	expect(screen.queryByRole("alert")).toBeNull();
+	expect(open).not.toHaveBeenCalled();
+	expect(trigger.getAttribute("aria-expanded")).toBe("true");
+
+	// 「改用手动配置」关闭面板并聚焦 Bot ID。
+	fireEvent.click(screen.getByRole("button", { name: "改用手动配置" }));
+	await waitFor(() =>
+		expect(document.activeElement).toBe(screen.getByLabelText("Bot ID")),
+	);
+	expect(screen.queryByText("扫码授权暂不可用")).toBeNull();
+
+	// 再次打开同样不请求；「关闭」把焦点交回扫码按钮。
+	fireEvent.click(trigger);
+	expect(await screen.findByText("扫码授权暂不可用")).toBeTruthy();
+	fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+	await waitFor(() => expect(document.activeElement).toBe(trigger));
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	// AC-1：全程没有建立或取消 setup session。
+	expect(requests).toEqual(["GET /api/v2/agents/agent/wecom-bot"]);
+	expect(open).not.toHaveBeenCalled();
+});
+
+it("re-reads the status V2 when QR availability is unknown and never begins a setup session without it (#2911)", async () => {
+	client.setConfig({ baseUrl: "https://platform.test" });
+	const requests: string[] = [];
+	const replies: Array<() => Response> = [
+		// 首屏读取失败，扫码能力未知。
+		() => Response.json({ error: "unavailable" }, { status: 503 }),
+		// 点击后重读仍拿不到明确结论（缺少扫码能力字段）。
+		() => Response.json({ status: "not_configured" }),
+		// 再次点击时服务端给出不可用。
+		() =>
+			Response.json({
+				status: "not_configured",
+				qrAvailable: false,
+				qrUnavailableReason: "authorization_correlation_unverified",
+			}),
+	];
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: Request) => {
+			const path = new URL(input.url).pathname;
+			requests.push(`${input.method} ${path}`);
+			if (path.endsWith("/wecom-bot"))
+				return (replies.shift() ?? replies[0])?.() ?? Response.json({});
+			return Response.json({ error: "unexpected" }, { status: 500 });
+		}),
+	);
+	const open = vi.fn(() => null);
+	Object.defineProperty(window, "open", { configurable: true, value: open });
+	render(<WecomBotSetup agentId="agent" />, { wrapper: ToastProvider });
+	await waitFor(() =>
+		expect(screen.getByText("连接状态暂不可用")).toBeTruthy(),
+	);
+	const trigger = screen.getByRole("button", { name: "扫码授权" });
+	fireEvent.click(trigger);
+	await waitFor(() =>
+		expect(screen.getByRole("alert").textContent).toBe(
+			"扫码授权未完成，请重试或使用下方手动配置。",
+		),
+	);
+	expect(screen.queryByText("扫码授权暂不可用")).toBeNull();
+	fireEvent.click(trigger);
+	expect(await screen.findByText("扫码授权暂不可用")).toBeTruthy();
+	expect(screen.queryByRole("alert")).toBeNull();
+	expect(requests).toEqual([
+		"GET /api/v2/agents/agent/wecom-bot",
+		"GET /api/v2/agents/agent/wecom-bot",
+		"GET /api/v2/agents/agent/wecom-bot",
+	]);
+	expect(open).not.toHaveBeenCalled();
+});
+
+it("releases the setup session when its response disagrees with an available status V2", async () => {
+	client.setConfig({ baseUrl: "https://platform.test" });
+	const requests: string[] = [];
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: Request) => {
+			const path = new URL(input.url).pathname;
+			requests.push(`${input.method} ${path}`);
+			if (path.endsWith("/wecom-bot"))
+				return Response.json({ status: "not_configured", qrAvailable: true });
 			if (path.endsWith("/cancel"))
 				return Response.json({ status: "cancelled" });
 			return Response.json({
@@ -110,43 +220,21 @@ it("explains unavailable QR in a fallback panel without opening a window or requ
 	Object.defineProperty(window, "open", { configurable: true, value: open });
 	render(<WecomBotSetup agentId="agent" />, { wrapper: ToastProvider });
 	await waitFor(() => expect(screen.getByText("未配置")).toBeTruthy());
-	// CK-09：扫码入口不要求先勾选「我已知悉」。
 	const trigger = screen.getByRole("button", { name: "扫码授权" });
 	fireEvent.click(trigger);
-	// Toast 宿主也是 role="status"，这里只取扫码面板内的状态区域。
-	const status = (await screen.findByText("请使用手动配置")).closest(
-		'[role="status"]',
-	);
-	expect(status?.getAttribute("aria-live")).toBe("polite");
-	expect(status?.textContent).toContain("当前平台尚未完成授权关联校验。");
-	expect(screen.getByText("扫码授权暂不可用")).toBeTruthy();
-	expect(document.body.textContent).not.toContain(
-		"authorization_correlation_unverified",
-	);
-	expect(document.body.textContent).not.toContain("请先确认连接影响");
-	expect(screen.queryByRole("alert")).toBeNull();
-	expect(open).not.toHaveBeenCalled();
-	// 每次点击最多建一次 session，且随后取消。
+	expect(await screen.findByText("扫码授权暂不可用")).toBeTruthy();
 	await waitFor(() =>
 		expect(requests.filter((request) => request.startsWith("POST"))).toEqual([
 			"POST /api/v1/agents/agent/wecom-setup",
 			"POST /api/v1/agents/agent/wecom-setup/setup-unavailable/cancel",
 		]),
 	);
-	expect(trigger.getAttribute("aria-expanded")).toBe("true");
-
-	// 「改用手动配置」关闭面板并聚焦 Bot ID。
-	fireEvent.click(screen.getByRole("button", { name: "改用手动配置" }));
-	await waitFor(() =>
-		expect(document.activeElement).toBe(screen.getByLabelText("Bot ID")),
-	);
-	expect(screen.queryByText("扫码授权暂不可用")).toBeNull();
-
-	// 已知不可用后再次打开不再请求；「关闭」把焦点交回扫码按钮。
-	fireEvent.click(trigger);
-	expect(await screen.findByText("扫码授权暂不可用")).toBeTruthy();
+	// 以会话响应为准记住不可用，再次打开不再建立 setup session。
 	fireEvent.click(screen.getByRole("button", { name: "关闭" }));
 	await waitFor(() => expect(document.activeElement).toBe(trigger));
+	fireEvent.click(trigger);
+	expect(screen.getByText("扫码授权暂不可用")).toBeTruthy();
+	await new Promise((resolve) => setTimeout(resolve, 20));
 	expect(requests.filter((request) => request.startsWith("POST"))).toHaveLength(
 		2,
 	);
@@ -169,8 +257,9 @@ function qrAvailableFixture() {
 		vi.fn(async (input: Request) => {
 			const url = new URL(input.url);
 			requests.push(`${input.method} ${url.pathname}`);
+			// 状态 V2 先确认扫码可用，之后才建立 setup session（#2911）。
 			if (url.pathname.endsWith("/wecom-bot"))
-				return Response.json({ status: "not_configured" });
+				return Response.json({ status: "not_configured", qrAvailable: true });
 			if (url.pathname.endsWith("/wecom-setup") && input.method === "POST")
 				return Response.json({
 					sessionId: "setup-qr",

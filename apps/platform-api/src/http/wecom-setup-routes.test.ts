@@ -334,3 +334,222 @@ it("returns only deployment-approved QR metadata and keeps manual fallback when 
 		`state=${encodeURIComponent(body.state)}`,
 	);
 });
+
+it("returns QR availability on the bot status V2 only to the current Owner, decided like the setup session (#2911)", async () => {
+	let actor: string | null = "owner";
+	// 只有 owner 拥有 agent；other 不是 Owner，agent-b 不属于 owner。
+	const setup = createWecomSetupV1({
+		authority: async (agentId, actorId) =>
+			actorId === "owner" && agentId === "agent"
+				? {
+						configuration: {
+							...agentConfigurationConformanceRecordV1,
+							agentId,
+							revision: 2,
+						},
+						authorizationRevision: "qr-status",
+					}
+				: null,
+		store: {
+			activeBinding: async () => false,
+			create: async () => {},
+			read: async () => null,
+			consume: async () => false,
+			cancel: async () => false,
+		},
+		encrypt: async () => ({ cipher: true }),
+	});
+	const identity = {
+		resolve: async () =>
+			actor
+				? {
+						schemaVersion: 1 as const,
+						userId: actor,
+						displayName: "Fixture",
+						accountStatus: "active" as const,
+						organizationIds: [],
+						roles: ["employee"],
+						authorizationRevision: "qr-status",
+					}
+				: null,
+		hydrateUsers: async () => [],
+	};
+	const botQr = {
+		source: "agent-infra",
+		authOrigin: "https://auth.example.test",
+		authorizationEndpoint: "https://auth.example.test/authorize",
+	};
+	const withQr = testApp();
+	registerWecomSetupRoutesV1(withQr, { setup, identity, botQr });
+	const withoutQr = testApp();
+	registerWecomSetupRoutesV1(withoutQr, { setup, identity });
+	const status = "/api/v2/agents/agent/wecom-bot";
+
+	// 扫码能力与建立配置会话的响应来自同一份部署判定。
+	for (const [app, expected] of [
+		[withQr, { status: "not_configured", qrAvailable: true }],
+		[
+			withoutQr,
+			{
+				status: "not_configured",
+				qrAvailable: false,
+				qrUnavailableReason: "authorization_correlation_unverified",
+			},
+		],
+	] as const) {
+		const read = await app.request(status);
+		expect(read.status).toBe(200);
+		const text = await read.text();
+		expect(JSON.parse(text)).toEqual(expected);
+		// 状态投影不带授权地址、来源或 state，二者仍只由配置会话响应给出。
+		for (const material of ["authorizationUrl", "auth.example.test", "state"])
+			expect(text).not.toContain(material);
+		const begun = (await (
+			await app.request("/api/v1/agents/agent/wecom-setup", { method: "POST" })
+		).json()) as { qrAvailable: boolean; qrUnavailableReason?: string };
+		expect(begun.qrAvailable).toBe(expected.qrAvailable);
+		expect(begun.qrUnavailableReason).toBe(
+			"qrUnavailableReason" in expected
+				? expected.qrUnavailableReason
+				: undefined,
+		);
+		// 已发布的 V1 状态响应保持只含 status。
+		expect(
+			await (await app.request("/api/v1/agents/agent/wecom-bot")).json(),
+		).toEqual({
+			status: "not_configured",
+		});
+	}
+
+	// 非 Owner、跨 Agent 与不存在的 Agent 不可区分，响应里没有扫码能力字段。
+	for (const [who, path] of [
+		["other", status],
+		["owner", "/api/v2/agents/agent-b/wecom-bot"],
+		["owner", "/api/v2/agents/missing/wecom-bot"],
+	] as const) {
+		actor = who;
+		for (const app of [withQr, withoutQr]) {
+			const denied = await app.request(path);
+			expect(denied.status).toBe(404);
+			const text = await denied.text();
+			expect(text).not.toContain("qrAvailable");
+			expect(text).not.toContain("qrUnavailableReason");
+		}
+	}
+	// 调用方提交的身份字段不改变服务端解析的主体。
+	actor = "other";
+	expect(
+		(
+			await withQr.request(`${status}?actorId=owner`, {
+				headers: { "x-user-id": "owner" },
+			})
+		).status,
+	).toBe(404);
+	actor = null;
+	expect((await withQr.request(status)).status).toBe(401);
+});
+
+it("reports a dependency outage on the bot status V2 as 503 while V1 keeps its 404 (#2911)", async () => {
+	let outage = false;
+	const setup = createWecomSetupV1({
+		authority: async (agentId, actorId) => {
+			if (outage) throw new Error("database unavailable");
+			return actorId === "owner"
+				? {
+						configuration: {
+							...agentConfigurationConformanceRecordV1,
+							agentId,
+						},
+						authorizationRevision: "fixture",
+					}
+				: null;
+		},
+		store: {
+			activeBinding: async () => false,
+			create: async () => {},
+			read: async () => null,
+			consume: async () => false,
+			cancel: async () => false,
+		},
+		encrypt: async () => ({ cipher: true }),
+	});
+	let actor = "owner";
+	const app = testApp();
+	registerWecomSetupRoutesV1(app, {
+		setup,
+		identity: {
+			resolve: async () => ({
+				schemaVersion: 1 as const,
+				userId: actor,
+				displayName: "Fixture",
+				accountStatus: "active" as const,
+				organizationIds: [],
+				roles: ["employee"],
+				authorizationRevision: "fixture",
+			}),
+			hydrateUsers: async () => [],
+		},
+	});
+	// 依赖故障不是资源判定：V2 为 503 且不带扫码字段；已发布的 V1 行为不变。
+	outage = true;
+	const unavailable = await app.request("/api/v2/agents/agent/wecom-bot");
+	expect(unavailable.status).toBe(503);
+	expect(await unavailable.text()).not.toContain("qrAvailable");
+	expect((await app.request("/api/v1/agents/agent/wecom-bot")).status).toBe(
+		404,
+	);
+	// 非 Owner 仍与不存在的 Agent 一样是 404，不因故障分类而可区分。
+	outage = false;
+	actor = "other";
+	expect((await app.request("/api/v2/agents/agent/wecom-bot")).status).toBe(
+		404,
+	);
+});
+
+it("does not publish the bot status V2 on the application setup routes (#2911)", async () => {
+	const setup = createWecomSetupV1({
+		authority: async (agentId) => ({
+			configuration: { ...agentConfigurationConformanceRecordV1, agentId },
+			authorizationRevision: "fixture",
+		}),
+		store: {
+			activeBinding: async () => false,
+			create: async () => {},
+			read: async () => null,
+			consume: async () => false,
+			cancel: async () => false,
+		},
+		encrypt: async () => ({ cipher: true }),
+		encryptApplication: async () => ({
+			encryptedCredential: {},
+			encryptedCallback: {},
+		}),
+	});
+	const app = testApp();
+	registerWecomSetupRoutesV1(app, {
+		setup,
+		identity: {
+			resolve: async () => ({
+				schemaVersion: 1 as const,
+				userId: "owner",
+				displayName: "Owner",
+				accountStatus: "active" as const,
+				organizationIds: [],
+				roles: ["employee"],
+				authorizationRevision: "fixture",
+			}),
+			hydrateUsers: async () => [],
+		},
+		application: true,
+		callbackUrl: (id) => `https://example.invalid/callbacks/wecom/${id}`,
+	});
+	expect((await app.request("/api/v1/agents/agent/wecom-app")).status).toBe(
+		200,
+	);
+	expect((await app.request("/api/v2/agents/agent/wecom-bot")).status).toBe(
+		404,
+	);
+	expect((await app.request("/api/v2/agents/agent/wecom-app")).status).toBe(
+		404,
+	);
+});
