@@ -105,6 +105,7 @@ export {
 	type FileRecordV1,
 	type FileScopeV1,
 	type FileStoreV1,
+	type FileTaskAuthorizationRecordV1,
 	type FileTransactionV1,
 	isConfirmedResultFileV1,
 	type ObjectStoragePortV1,

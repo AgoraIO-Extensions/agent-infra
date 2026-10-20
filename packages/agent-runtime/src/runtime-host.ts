@@ -898,7 +898,13 @@ export class RuntimeHost {
 		// they were pending must not issue new file authority afterwards.
 		this.requireLegacyHost();
 
-		const port = fileBridge(binding);
+		// The Platform exchange needs the original signed V4 Grant as its only
+		// positive evidence. It is passed beside the binding so no token can leak
+		// into a Driver context, receipt or durable record.
+		const evidence = Object.freeze({
+			executionGrant: Object.freeze({ ...request.grant }),
+		});
+		const port = fileBridge(binding, evidence);
 		const operationId = request.operation.id;
 		return {
 			readInput: (fileId, signal) => port.readInput(fileId, signal),

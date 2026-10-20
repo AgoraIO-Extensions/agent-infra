@@ -99,3 +99,52 @@ it("persists cleanup checkpoints across reopen and rolls back a failed page", as
 		await store.close();
 	}
 });
+
+it("reads the persisted delivery fence and task authorization facts", async () => {
+	const sql = postgres(db.databaseUrl);
+	const boundary = {
+		schemaVersion: 1,
+		principal: { kind: "user", id: "alice" },
+		agentId: "agent",
+		channelId: "web",
+		identityRevision: "auth",
+		agentAuthorizationRevision: "auth",
+		accessSources: [{ kind: "user", userId: "alice" }],
+	};
+	try {
+		await sql`insert into platform.conversations (id, agent_id, actor_id, channel_id, status, session_generation, authorization_revision) values ('conversation-auth','agent','alice','web','active',1,'auth')`;
+		await sql`insert into platform.conversation_executions (execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, status, session_generation, delivery_fence, authorization_revision, created_at, updated_at) values ('execution-auth','conversation-auth','agent','alice','web','turn-auth','processing',1,3,'auth',now(),now())`;
+		await sql`insert into platform.task_authorization_records (id, execution_id, boundary) values ('authorization-auth','execution-auth',${sql.json(boundary)})`;
+		const store = new PostgresFileStoreV1(db.databaseUrl);
+		try {
+			const execution = await store.transaction("conversation-auth", (tx) =>
+				tx.getExecution("execution-auth"),
+			);
+			expect(execution).toMatchObject({
+				deliveryFence: 3,
+				authorizationRevision: "auth",
+				status: "processing",
+				stopPending: false,
+			});
+			expect(
+				await store.transaction("conversation-auth", (tx) =>
+					tx.getTaskAuthorization("authorization-auth", "execution-auth"),
+				),
+			).toEqual({
+				id: "authorization-auth",
+				executionId: "execution-auth",
+				revoked: false,
+				boundary,
+			});
+			expect(
+				await store.transaction("conversation-auth", (tx) =>
+					tx.getTaskAuthorization("authorization-auth", "other-execution"),
+				),
+			).toBeNull();
+		} finally {
+			await store.close();
+		}
+	} finally {
+		await sql.end();
+	}
+});

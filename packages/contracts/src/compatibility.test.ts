@@ -1369,8 +1369,13 @@ describe("contract compatibility command", () => {
 	it("admits the runtime exchange path after its schema is already published", async () => {
 		const current = JSON.parse(await readFile(filesArtifactPath, "utf8"));
 		const path = "/internal/v1/files/runtime-exchange";
+		const added = [
+			"RuntimeFileExchangeRequest",
+			"RuntimeFileExchangeRequestV2",
+		];
 		const previous = structuredClone(current);
 		delete previous.paths[path];
+		for (const name of added) delete previous.components.schemas[name];
 		const directory = await mkdtemp(
 			resolve(tmpdir(), "runtime-file-path-compat-"),
 		);
@@ -1384,6 +1389,47 @@ describe("contract compatibility command", () => {
 			changed.paths[path].post.operationId = "changedRuntimeFileAccess";
 			await writeFile(currentPath, JSON.stringify(changed));
 			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true });
+		}
+	});
+	it("admits only the reviewed V2 runtime exchange addition and keeps V1 strict", async () => {
+		const current = JSON.parse(await readFile(filesArtifactPath, "utf8"));
+		const path = "/internal/v1/files/runtime-exchange";
+		const previous = structuredClone(current);
+		delete previous.components.schemas.RuntimeFileExchangeRequest;
+		delete previous.components.schemas.RuntimeFileExchangeRequestV2;
+		previous.paths[path].post.requestBody.content["application/json"].schema = {
+			$ref: "#/components/schemas/RuntimeFileExchangeRequestV1",
+		};
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "runtime-file-v2-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					document.components.schemas.RuntimeFileExchangeRequestV2.oneOf[1].properties.actorId =
+						{ type: "string" };
+				},
+				(document: typeof current) => {
+					document.paths[path].post.requestBody.content[
+						"application/json"
+					].schema.$ref = "#/components/schemas/RuntimeFileExchangeRequestV1";
+				},
+				(document: typeof current) => {
+					delete document.components.schemas.RuntimeFileExchangeRequestV1;
+				},
+			]) {
+				const altered = structuredClone(current);
+				mutate(altered);
+				await writeFile(currentPath, JSON.stringify(altered));
+				expect(comparePaths(currentPath, previousPath).status).not.toBe(0);
+			}
 		} finally {
 			await rm(directory, { recursive: true });
 		}

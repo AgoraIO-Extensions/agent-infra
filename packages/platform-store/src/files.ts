@@ -12,6 +12,7 @@ import {
 	conversations,
 	platformFileAccesses,
 	platformFiles,
+	taskAuthorizationRecords,
 } from "./schema.js";
 
 export class PostgresFileStoreV1 implements FileStoreV1 {
@@ -75,9 +76,35 @@ export class PostgresFileStoreV1 implements FileStoreV1 {
 							conversationId: row.conversationId,
 							executionId: row.executionId,
 							sessionGeneration: row.sessionGeneration,
+							deliveryFence: row.deliveryFence,
+							authorizationRevision: row.authorizationRevision,
 							status: row.status,
 							stopPending: stop?.status === "submitted",
 						};
+					},
+					async getTaskAuthorization(authorizationRecordId, executionId) {
+						const [row] = await tx
+							.select({
+								id: taskAuthorizationRecords.id,
+								executionId: taskAuthorizationRecords.executionId,
+								revokedAt: taskAuthorizationRecords.revokedAt,
+								boundary: taskAuthorizationRecords.boundary,
+							})
+							.from(taskAuthorizationRecords)
+							.where(
+								and(
+									eq(taskAuthorizationRecords.id, authorizationRecordId),
+									eq(taskAuthorizationRecords.executionId, executionId),
+								),
+							);
+						return row
+							? {
+									id: row.id,
+									executionId: row.executionId,
+									revoked: row.revokedAt !== null,
+									boundary: row.boundary,
+								}
+							: null;
 					},
 					async getIntent(actorId, key) {
 						const [row] = await tx

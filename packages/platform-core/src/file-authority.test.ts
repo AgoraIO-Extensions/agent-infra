@@ -162,6 +162,8 @@ it("allocates one result for the trusted execution and denies stale generation a
 		...scope,
 		executionId: "execution",
 		sessionGeneration: 1,
+		deliveryFence: 1,
+		authorizationRevision: "auth-1",
 		status: "processing",
 		stopPending: false,
 	});
@@ -217,6 +219,8 @@ it("allocates one result for the trusted execution and denies stale generation a
 		...scope,
 		executionId: "execution",
 		sessionGeneration: 1,
+		deliveryFence: 1,
+		authorizationRevision: "auth-1",
 		status: "waiting",
 		stopPending: false,
 	});
@@ -239,6 +243,8 @@ it("allocates one result for the trusted execution and denies stale generation a
 		...scope,
 		executionId: "execution",
 		sessionGeneration: 2,
+		deliveryFence: 1,
+		authorizationRevision: "auth-1",
 		status: "processing",
 		stopPending: false,
 	});
@@ -464,6 +470,8 @@ it("applies current limits to delegated inputs while preserving authorized user 
 		...scope,
 		executionId: "execution",
 		sessionGeneration: 1,
+		deliveryFence: 1,
+		authorizationRevision: "auth-1",
 		status: "processing",
 		stopPending: false,
 	});
@@ -570,6 +578,8 @@ it("applies current limits to delegated inputs while preserving authorized user 
 		...scope,
 		executionId: "regenerated",
 		sessionGeneration: 2,
+		deliveryFence: 1,
+		authorizationRevision: "auth-1",
 		status: "processing",
 		stopPending: false,
 	});

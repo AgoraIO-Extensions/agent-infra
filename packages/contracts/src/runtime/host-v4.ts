@@ -55,6 +55,9 @@ export const RuntimeExecutionGrantV4Schema = z.strictObject({
 	format: z.literal("runtime-execution-jws"),
 	token: RuntimeExecutionGrantV2Schema.shape.token,
 });
+export type RuntimeExecutionGrantV4 = z.infer<
+	typeof RuntimeExecutionGrantV4Schema
+>;
 
 export const VerifiedRuntimeExecutionGrantV4Schema = z.strictObject({
 	token: RuntimeExecutionGrantV4Schema.shape.token,

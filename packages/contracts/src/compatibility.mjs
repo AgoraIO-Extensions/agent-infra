@@ -1861,6 +1861,52 @@ function isRuntimeFileExchangeOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2968 adds the reviewed V2 runtime file exchange request (the original
+// signed V4 Execution Grant) next to the unchanged V1 wire. Only the
+// runtime-exchange request body may switch to the versioned envelope.
+function isRuntimeFileExchangeV2OpenApiAddition(previous, current) {
+	const path = "/internal/v1/files/runtime-exchange";
+	const names = ["RuntimeFileExchangeRequest", "RuntimeFileExchangeRequestV2"];
+	const currentSchemas = current.components?.schemas;
+	if (
+		!currentSchemas ||
+		names.some(
+			(name) =>
+				typeof currentSchemas[name] !== "object" ||
+				previous.components?.schemas?.[name] !== undefined,
+		)
+	)
+		return false;
+	const addition = {
+		schemas: Object.fromEntries(
+			names.map((name) => [name, currentSchemas[name]]),
+		),
+		...(current.paths?.[path] === undefined
+			? {}
+			: { paths: { [path]: current.paths[path] } }),
+	};
+	const expectedHash =
+		current.paths?.[path] === undefined
+			? "f5baceb85d1fe80355d9307c10c269c5ad6a7782cd5471f3bcbc572d47b8f8b4"
+			: "8f1feb2d1aa64ea424f2855b27b4bbb85e814ebb87d7fd75c269b79c0f6731e7";
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		expectedHash
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const name of names) delete normalized.components.schemas[name];
+	// The files document previously published the V1 request body at this path;
+	// otherwise the path itself is the reviewed addition.
+	if (previous.paths?.[path] !== undefined) {
+		if (normalized.paths?.[path])
+			normalized.paths[path] = structuredClone(previous.paths[path]);
+	} else {
+		delete normalized.paths?.[path];
+	}
+	return sameValue(previous, normalized);
+}
+
 // Only the reviewed #442 additive file surface may differ; every old contract remains exact.
 function isFileAuthorityOpenApiAddition(previous, current) {
 	const paths = [
@@ -5284,6 +5330,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isAdminAuditActionsRegistration2879OpenApiAddition(previous, current) &&
 			!isScopedAuditCredentialSecurityAddition(previous, current) &&
 			!isRuntimeFileExchangeOpenApiAddition(previous, current) &&
+			!isRuntimeFileExchangeV2OpenApiAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current) &&
 			!isCustomAgentModelSelectionOpenApiAddition(previous, current) &&
 			!isRuntimeOperationIdentityOpenApiAddition(previous, current) &&

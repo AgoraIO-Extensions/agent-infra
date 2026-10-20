@@ -90,6 +90,8 @@ export interface FileAccessRecordV1 extends FileScopeV1 {
 export interface FileExecutionStateV1 extends FileScopeV1 {
 	readonly executionId: string;
 	readonly sessionGeneration: number;
+	readonly deliveryFence: number;
+	readonly authorizationRevision: string;
 	readonly status:
 		| "waiting"
 		| "submitted"
@@ -100,11 +102,26 @@ export interface FileExecutionStateV1 extends FileScopeV1 {
 		| "cancelled";
 	readonly stopPending: boolean;
 }
+/**
+ * The persisted task authorization that admitted one Execution. The boundary
+ * is parsed and validated by the caller; an unreadable row is treated as
+ * absent rather than trusted.
+ */
+export interface FileTaskAuthorizationRecordV1 {
+	readonly id: string;
+	readonly executionId: string;
+	readonly revoked: boolean;
+	readonly boundary: unknown;
+}
 export interface FileTransactionV1 {
 	readonly conversation:
 		| (FileScopeV1 & { readonly sessionGeneration: number })
 		| null;
 	getExecution(executionId: string): Promise<FileExecutionStateV1 | null>;
+	getTaskAuthorization(
+		authorizationRecordId: string,
+		executionId: string,
+	): Promise<FileTaskAuthorizationRecordV1 | null>;
 	getIntent(actorId: string, key: string): Promise<FileRecordV1 | null>;
 	getFile(fileId: string): Promise<FileRecordV1 | null>;
 	putFile(file: FileRecordV1): Promise<void>;

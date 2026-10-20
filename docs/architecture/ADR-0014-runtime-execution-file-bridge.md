@@ -36,13 +36,13 @@ Platform 已有 `FileAuthority`、`FileAccessGrantV1`、Execution Grant 附件�
 
 V4 Runtime Grant 不能直接作为 File Grant 使用。Worker 与 Platform API 之间增加一个受认证的内部 exchange seam；该 seam 的 request 只传业务绑定和操作意图，Platform API 仍是唯一 `FileAccessGrantV1` 签发方。现有 `ExecutionGrantV1` exchange 保持兼容，不接收 V4 token 作为替代输入。
 
-请求使用独立的 `RuntimeFileExchangeRequestV1` wire，字段为：`schemaVersion`、`operation`（`read` 或 `result`）、`actorId`、`agentId`、`channelId`、`conversationId`、`executionId`、`sessionGeneration`、`grantId`、`expiresAt`、`fileId`（read 必填）、`descriptor`（result 必填）和 `idempotencyKey`。Worker 只从已验证的 Runtime bridge context 生成这些字段；调用方提交的 file ID、owner、execution 或 generation 不被信任。`result` 的 idempotency key 由当前 execution binding 与规范化 descriptor 共同确定，重试和响应丢失必须复用同一意图。
+请求使用独立的 `RuntimeFileExchangeRequestV2` wire，字段仅为：`schemaVersion=2`、`executionGrant`（RuntimeHost 收到并验证过的 V4 Execution Grant 签名原文）、`operation`（`read` 或 `result`）、`fileId`（read 必填）、`descriptor`（result 必填）和 `idempotencyKey`。V1 的自报 `actorId`、`agentId`、`channelId`、`conversationId`、`executionId`、`sessionGeneration`、`grantId`、`expiresAt` 字段已从 V2 wire 移除；同一内部路由继续严格拒绝 V1 请求，不把旧字段解释为授权，也不把旧 verifier 扩宽为接受 V4 token。`result` 的 idempotency key 仍由当前 execution binding 与规范化 descriptor 确定，重试和响应丢失复用同一意图。
 
-Platform API 先认证 Worker service identity，并检查该 identity 被 deployment 映射到目标 Agent；随后在同一当前权限边界内重新读取 execution、actor、Agent、Channel、Conversation、session generation、grant 状态和 capability。任何绑定不一致、终态、撤权、过期或 service identity 越权都在对象访问前拒绝，且不返回对象存在性。通过后，Platform File Authority 执行现有 read access exchange，或创建 execution-bound result intent/access；响应复用现有 `FileAccessResponseV1`，其中短期 File Grant 只存在于 Worker 内存和一次有界数据面请求，不进入 RuntimeHost、Driver、journal、普通日志或业务 JSON。
+Platform API 在任一对象 I/O 前验证 V4 JWS：header 恰为 `alg=EdDSA`、`kid`、`typ=runtime_execution+jws`，签发者与签名 Worker 身份均等于部署配置，命令只允许 `turn.submit`/`turn.supplement`，submit 必须绑定同一 Execution 与相等 delivery fence。随后认证 Worker service identity，检查该 identity 被 deployment 映射到目标 Agent，并在同一事务内重新读取持久 Conversation、Execution、session generation、delivery fence、终态/停止标记及 `task_authorization_records`（存在、未撤销、principal/Agent/Channel 和 `agentAuthorizationRevision` 匹配）。输入 allowlist 只来自签名 claims 的 attachments；File Grant 有效期取部署 `accessTtlMs`，不复制请求或原 Grant 的 `expiresAt`。签名中的 30 秒窗口只限制签发时的委托范围；该 Grant 是委托范围证明而非持续授权，窗口自然过期不构成放行，当前授权始终由持久状态决定（本票 OQ-1 的评审确认决策）。任何绑定不一致、终态、停止、撤权、generation/fence 变化或 service identity 越权都在对象访问前拒绝，且不返回对象存在性。通过后，Platform File Authority 执行现有 read access exchange，或创建 execution-bound result intent/access；响应复用现有 `FileAccessResponseV1`，其中短期 File Grant 只存在于 Worker 内存和一次有界数据面请求，不进入 RuntimeHost、Driver、journal、普通日志或业务 JSON。
 
 Worker 将 response 的短期 grant 封装为 Runtime bridge 的 stream port。RuntimeHost 只看到已校验的 `FileDescriptorV1`、有限流和 `RuntimeFileBridgeContextV1`；它不能读取 File Grant、S3 URL、objectRef 或 service token。读取固定对象版本并限制大小、时间和并发；结果写入完成确认再次检查当前 binding 与对象版本，只有 `available` 文件才能进入 `result.file` 事件。
 
-该 wire 必须先作为独立 contracts seam 生成 JSON Schema/OpenAPI 并由 Platform API、Worker、RuntimeHost 评审；在该 seam 合入前，不得把旧 `ExecutionGrantV1` 扩展为 V4 兼容层，也不得开启 Driver attachment/result capability。
+该 wire 作为独立 contracts seam 生成 JSON Schema/OpenAPI，并已由 Platform API、Worker、RuntimeHost 评审；旧 `ExecutionGrantV1` 未被扩展为 V4 兼容层。`PlatformFileDeploymentV1` 新增 `runtimeWorkerId`：配置了文件能力但缺少该 Worker identity 时，装配必须 fail-closed。生产 deployment builder 与四模板文件 E2E 由 #3060 负责，本 ADR 不据此声称 Driver attachment/result capability 已全面开启。
 
 ## 后果
 

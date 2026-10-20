@@ -428,6 +428,16 @@
         ],
         "type": "object"
       },
+      "RuntimeFileExchangeRequest": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/RuntimeFileExchangeRequestV1"
+          },
+          {
+            "$ref": "#/components/schemas/RuntimeFileExchangeRequestV2"
+          }
+        ]
+      },
       "RuntimeFileExchangeRequestV1": {
         "oneOf": [
           {
@@ -567,6 +577,120 @@
               "sessionGeneration",
               "grantId",
               "expiresAt",
+              "idempotencyKey",
+              "operation",
+              "descriptor"
+            ],
+            "type": "object"
+          }
+        ],
+        "type": "object"
+      },
+      "RuntimeFileExchangeRequestV2": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "executionGrant": {
+                "additionalProperties": false,
+                "properties": {
+                  "format": {
+                    "const": "runtime-execution-jws",
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 4,
+                    "type": "number"
+                  },
+                  "token": {
+                    "maxLength": 262144,
+                    "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "format",
+                  "token"
+                ],
+                "type": "object"
+              },
+              "fileId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "idempotencyKey": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9._~-]+$",
+                "type": "string"
+              },
+              "operation": {
+                "const": "read",
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 2,
+                "type": "number"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "executionGrant",
+              "idempotencyKey",
+              "operation",
+              "fileId"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "descriptor": {
+                "$ref": "#/components/schemas/FileDescriptorV1"
+              },
+              "executionGrant": {
+                "additionalProperties": false,
+                "properties": {
+                  "format": {
+                    "const": "runtime-execution-jws",
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 4,
+                    "type": "number"
+                  },
+                  "token": {
+                    "maxLength": 262144,
+                    "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "format",
+                  "token"
+                ],
+                "type": "object"
+              },
+              "idempotencyKey": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9._~-]+$",
+                "type": "string"
+              },
+              "operation": {
+                "const": "result",
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 2,
+                "type": "number"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "executionGrant",
               "idempotencyKey",
               "operation",
               "descriptor"
@@ -1122,7 +1246,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RuntimeFileExchangeRequestV1"
+                "$ref": "#/components/schemas/RuntimeFileExchangeRequest"
               }
             }
           },

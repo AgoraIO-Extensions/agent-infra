@@ -1051,6 +1051,7 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			privateKey: generateKeyPairSync("ed25519").privateKey,
 			publicKeys: new Map(),
 			runtimeIssuer: "platform-runtime",
+			runtimeWorkerId: "runtime-worker",
 			runtimePublicKeys: new Map(),
 			intentTtlMs: 60_000,
 			accessTtlMs: 60_000,
