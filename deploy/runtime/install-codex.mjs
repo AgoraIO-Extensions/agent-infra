@@ -15,12 +15,31 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import {
+	buildCodexModelCatalog,
+	sha256,
+	upstreamCatalogUrl,
+} from "./codex-models.mjs";
 
 const releasePath = new URL(
 	"../../packages/agent-runtime/src/codex-release.json",
 	import.meta.url,
 );
 const release = JSON.parse(await readFile(releasePath, "utf8"));
+// #2978：模型目录的两个固定摘要与经评审的追加条目。
+const modelCatalog = JSON.parse(
+	await readFile(
+		new URL(
+			"../../packages/agent-runtime/src/codex-models.json",
+			import.meta.url,
+		),
+		"utf8",
+	),
+);
+const modelCatalogAdditionsPath = new URL(
+	"./codex-models-additions.json",
+	import.meta.url,
+);
 
 // The upstream archive can carry a non-root owner on its executable entry.
 // `fs.copyFile` preserves that metadata on Linux, so normalize the installed
@@ -44,16 +63,18 @@ async function removeIsolatedTree(path) {
 	await rm(path, { recursive: true, force: true });
 }
 
-async function download(url, expected, path) {
+async function downloadBytes(url, expected) {
 	const response = await fetch(url, { signal: AbortSignal.timeout(300_000) });
 	if (!response.ok) throw new Error("Codex release asset unavailable");
 	const bytes = Buffer.from(await response.arrayBuffer());
-	if (
-		`sha256:${createHash("sha256").update(bytes).digest("hex")}` !== expected
-	) {
+	if (sha256(bytes) !== expected) {
 		throw new Error("Codex release asset checksum mismatch");
 	}
-	await writeFile(path, bytes);
+	return bytes;
+}
+
+async function download(url, expected, path) {
+	await writeFile(path, await downloadBytes(url, expected));
 }
 
 const [architecture, destination, ...extra] = process.argv.slice(2);
@@ -123,6 +144,20 @@ try {
 			await normalizeRootOwnership(legalPath);
 			await chmod(legalPath, 0o444);
 		}
+		// #2978：固定提交的内置目录加上经评审的追加条目；两个摘要都核对后才写入。
+		const catalog = buildCodexModelCatalog(
+			await downloadBytes(
+				upstreamCatalogUrl(release.provenance.upstreamCommit),
+				modelCatalog.upstreamSha256,
+			),
+			await readFile(modelCatalogAdditionsPath),
+		);
+		if (sha256(catalog) !== modelCatalog.sha256)
+			throw new Error("Codex model catalog checksum mismatch");
+		const catalogPath = join(share, "models.json");
+		await writeFile(catalogPath, catalog);
+		await normalizeRootOwnership(catalogPath);
+		await chmod(catalogPath, 0o444);
 		await chmod(share, 0o555);
 		await chmod(bin, 0o555);
 		await chmod(stagingRoot, 0o555);
