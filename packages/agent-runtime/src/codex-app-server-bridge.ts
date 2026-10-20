@@ -206,6 +206,9 @@ export const CODEX_MODEL_CATALOG_PATH = "/opt/codex/share/models.json";
 /** Fixed deployment policy for the official lane, never native/user overrides. */
 export const CODEX_MODEL_ONLY_CONFIG = Object.freeze({
 	web_search: "disabled",
+	// #2980：请会隐藏推理的模型返回明文推理摘要，作为思考过程展示；
+	// 原始推理（DeepSeek）不需要额外配置也会流式返回。
+	model_reasoning_summary: "auto",
 	"features.apps": false,
 	"features.multi_agent": false,
 	"features.multi_agent_v2": false,

@@ -485,6 +485,9 @@ describe.sequential("Codex app-server v2 bridge", () => {
 				expect(server?.args).toContain(
 					'model_catalog_json="/opt/codex/share/models.json"',
 				);
+				// #2980：会总结推理的模型被要求返回明文摘要，作为思考过程展示；
+				// 原始推理不需要额外配置。
+				expect(server?.args).toContain('model_reasoning_summary="auto"');
 			} finally {
 				await bridge.close();
 			}
