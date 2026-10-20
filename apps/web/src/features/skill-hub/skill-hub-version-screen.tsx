@@ -527,6 +527,7 @@ function ReadyVersion({
 						{owned && published ? (
 							<div className="skill-actions skill-summary-actions">
 								<ConfirmDialog
+									variant="skill"
 									disabled={revoking}
 									trigger={
 										<Button variant="ghost" type="button">

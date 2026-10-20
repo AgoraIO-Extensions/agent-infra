@@ -170,8 +170,14 @@ describe("execution details dialog", () => {
 		expect(
 			within(dialog).queryByRole("button", { name: "返回对话" }),
 		).toBeNull();
+		// 页眉图标钮「关闭弹窗」与页脚主按钮「关闭」不同名（X-04）。
+		expect(
+			within(dialog)
+				.getByRole("button", { name: "关闭弹窗" })
+				.closest('[data-slot="dialog-header"]'),
+		).not.toBeNull();
 		const closes = within(dialog).getAllByRole("button", { name: "关闭" });
-		expect(closes).toHaveLength(2);
+		expect(closes).toHaveLength(1);
 		const primary = within(dialog).getByText("关闭", { selector: "button" });
 		expect(primary.closest('[data-slot="dialog-footer"]')).not.toBeNull();
 		expect(primary.className).toContain("bg-accent-ink");

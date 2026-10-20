@@ -763,10 +763,12 @@
 	line-height: 1.35;
 	letter-spacing: -0.01em;
 }
+/* 设计 .page-head-copy p：副标题最宽 64ch，长副标题（如运维观测）在桌面折成两行（X-17）。 */
 .management-content .page-heading p {
 	font-size: 14px;
 	color: var(--muted-foreground);
 	margin-top: 9px;
+	max-width: 64ch;
 }
 /* 用链接或按钮切换范围的导航（审计范围、评测区域），外观同设计稿 .tabs 容器。 */
 .scope-tabs {
@@ -1666,6 +1668,12 @@
 	margin-top: 4px;
 	color: var(--muted-foreground);
 	font-size: 13px;
+}
+/* 设计 ≤767px .section-head{align-items:flex-start}：窄屏计数 chip 与 h2 顶对齐（X-03）。 */
+@media (max-width: 767px) {
+	.conversation-history-head {
+		align-items: flex-start;
+	}
 }
 /* 列宽固定为面板内容宽：长标题不能把条目撑出面板，省略号才会生效（CH-09）。 */
 .conversation-history-list {
@@ -3642,6 +3650,12 @@ body {
 	justify-content: space-between;
 	gap: 18px;
 	margin-bottom: 14px;
+}
+/* 设计 ≤767px .section-head{align-items:flex-start}：右侧 chip 或入口与 h2 顶对齐（X-05、X-14）。 */
+@media (max-width: 767px) {
+	.section-heading {
+		align-items: flex-start;
+	}
 }
 .management-content .section-heading p {
 	margin-top: 4px;

@@ -249,13 +249,14 @@ describe("BrowserOperationRecordDialog", () => {
 		expect(
 			[...dialog.querySelectorAll("dt")].map((item) => item.textContent),
 		).toEqual(["域名", "操作范围", "接管人", "结果", "凭证"]);
+		// 页眉图标钮与页脚主按钮不同名（X-04）。
 		expect(
 			within(dialog)
 				.getAllByRole("button")
 				.map(
 					(button) => button.textContent || button.getAttribute("aria-label"),
 				),
-		).toEqual(["关闭", "关闭"]);
+		).toEqual(["关闭弹窗", "关闭"]);
 		const list = within(dialog).getByRole("list", { name: "操作步骤" });
 		const items = within(list).getAllByRole("listitem");
 		expect(items).toHaveLength(3);

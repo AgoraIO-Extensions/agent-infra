@@ -526,6 +526,7 @@ function SkillBindingCard({
 				</Link>
 				{readOnly ? null : (
 					<ConfirmDialog
+						variant="skill"
 						title="确认解除绑定"
 						subject={{ name: `${name} · v${binding.skillVersion.version}` }}
 						description="解除后，新的调用不再提供这个 Skill；现有执行保留原版本。"
@@ -579,7 +580,7 @@ function ChangeVersionDialog({
 			>
 				更换固定版本
 			</Button>
-			<DialogContent>
+			<DialogContent variant="skill">
 				<DialogHeader>
 					<DialogTitle>更换固定版本</DialogTitle>
 				</DialogHeader>
@@ -697,6 +698,7 @@ function BindVersionForm({
 						仅当前 Owner 可修改
 					</p>
 					<ConfirmDialog
+						variant="skill"
 						tone="default"
 						title="确认绑定固定版本"
 						subject={selected ? { name: versionLabel(selected) } : undefined}

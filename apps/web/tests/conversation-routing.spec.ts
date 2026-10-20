@@ -20,6 +20,11 @@ import {
 import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
+import {
+	expectCleanPage,
+	expectSectionHeadTopAligned,
+	trackPageErrors,
+} from "./primitive-styles";
 
 async function routingFixture(
 	page: Page,
@@ -1555,6 +1560,7 @@ for (const viewport of [
 	}, info) => {
 		test.skip(info.project.name !== "desktop", "Viewport list runs once.");
 		await page.setViewportSize(viewport);
+		const pageErrors = trackPageErrors(page);
 		const fixture = await routingFixture(page, {
 			longTitles: true,
 			recentAcrossAgents: true,
@@ -1564,6 +1570,13 @@ for (const viewport of [
 		if (viewport.width < 1024)
 			await page.getByRole("button", { name: "个人历史", exact: true }).click();
 		const panel = page.getByRole("complementary", { name: "对话历史" });
+		// #3037 X-03：窄屏历史头部的计数 chip 与「个人历史」顶对齐（设计 ≤767px .section-head）。
+		if (viewport.width <= 767)
+			await expectSectionHeadTopAligned(
+				panel.getByRole("heading", { name: "个人历史", level: 2 }),
+				panel.locator('.conversation-history-head [data-slot="badge"]'),
+			);
+		await expectCleanPage(page, pageErrors);
 		for (const scope of ["recent", "full"] as const) {
 			if (scope === "full")
 				await panel

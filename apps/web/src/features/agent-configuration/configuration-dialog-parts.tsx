@@ -46,7 +46,8 @@ export function ConfigurationDialogHeader({
 			</div>
 			<DialogClose
 				data-slot="dialog-close"
-				aria-label="关闭"
+				// 与基础层 DialogHeader 的图标关闭钮同名，避免与页脚文字按钮重名（X-04）。
+				aria-label="关闭弹窗"
 				disabled={closeDisabled}
 				render={<Button variant="ghost" size="icon" className="shrink-0" />}
 			>

@@ -1,6 +1,9 @@
 import { cn } from "@/lib/utils";
 
 // 设计 .empty：虚线边框的居中空态；调用点不覆盖 padding、min-height 与边框。
+// 直接子元素就是网格行：220px 内的剩余高度由各行均分，每行内容居中；行与行之间
+// 不另加外边距（只有图标下方 11px）。需要同一行的内容（如标题与说明）用
+// EmptyHeader 包在一起，单独成行的图标、标题、说明或操作直接放在 Empty 下。
 function Empty({ className, ...props }: React.ComponentProps<"div">) {
 	return (
 		<div
@@ -65,13 +68,13 @@ function EmptyDescription({ className, ...props }: React.ComponentProps<"p">) {
 	);
 }
 
-// 动作按钮放在说明下方。
+// 动作按钮单独成行，放在说明下方；与上一行的距离由网格均分决定。
 function EmptyContent({ className, ...props }: React.ComponentProps<"div">) {
 	return (
 		<div
 			data-slot="empty-content"
 			className={cn(
-				"mt-[14px] flex w-full min-w-0 max-w-sm flex-col items-center gap-2.5",
+				"flex w-full min-w-0 max-w-sm flex-col items-center gap-2.5",
 				className,
 			)}
 			{...props}

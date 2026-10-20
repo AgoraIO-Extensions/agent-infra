@@ -99,7 +99,7 @@ describe("ConfirmDialog", () => {
 		expect(within(dialog).queryByRole("button", { name: "取消" })).toBeNull();
 		const footer = dialog.querySelector('[data-slot="dialog-footer"]');
 		expect(footer?.querySelectorAll("button")).toHaveLength(1);
-		fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
+		fireEvent.click(within(dialog).getByRole("button", { name: "关闭弹窗" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 		expect(onConfirm).not.toHaveBeenCalled();
 	});

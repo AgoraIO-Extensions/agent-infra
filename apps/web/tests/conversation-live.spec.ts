@@ -19,6 +19,11 @@ import {
 } from "../src/features/conversation/conversation-test-fixtures";
 import { keepConversationStreamOpen } from "./conversation-stream";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
+import {
+	expectCleanPage,
+	expectDistinctDialogControls,
+	trackPageErrors,
+} from "./primitive-styles";
 
 const timestamp = "2026-09-28T02:00:00Z";
 const agentId = "agent-1";
@@ -1498,6 +1503,7 @@ for (const source of ["standard", "custom"] as const) {
 test("explains a model fallback with the requested and actual model (G-07)", async ({
 	page,
 }, info) => {
+	const pageErrors = trackPageErrors(page);
 	// Owner 已从清单删除「Removed model」，会话之后的消息回退到默认选项。
 	const agent = activeAgent();
 	const legacyExecutionId = "execution-fallback-legacy";
@@ -1637,6 +1643,9 @@ test("explains a model fallback with the requested and actual model (G-07)", asy
 	});
 	await expect(dialog).not.toContainText("model-removed");
 	await expect(dialog).not.toContainText("model-primary");
+	// #3037 X-04：页眉图标钮与页脚主按钮不同名。
+	await expectDistinctDialogControls(dialog);
+	await expectCleanPage(page, pageErrors);
 	await info.attach("model-fallback-requested", {
 		body: await page.screenshot({ animations: "disabled" }),
 		contentType: "image/png",

@@ -356,7 +356,7 @@ export function SkillReviewDialog({
 			>
 				审阅
 			</DialogTrigger>
-			<DialogContent>
+			<DialogContent variant="skill">
 				<DialogHeader>
 					<DialogTitle>审阅发布申请</DialogTitle>
 				</DialogHeader>

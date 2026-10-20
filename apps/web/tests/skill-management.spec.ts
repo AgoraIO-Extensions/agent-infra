@@ -15,6 +15,11 @@ import {
 	SkillHubReviewRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, test } from "@playwright/test";
+import {
+	expectCleanPage,
+	expectSkillDialog,
+	trackPageErrors,
+} from "./primitive-styles";
 
 // 我的 Skill、创建与发布、Skill 审核（K-03、K-04 与防回归 NI-31、NI-74）。
 const userId = "skill-management-user";
@@ -689,6 +694,7 @@ test("creating and publishing never asks for internal IDs and reports state in C
 test("Skill review lists pending versions, reviews them and re-reads the queue (K-04)", async ({
 	page,
 }) => {
+	const pageErrors = trackPageErrors(page);
 	const control = await fixture(page, "admin");
 	await page.goto("/admin/skill-reviews");
 	const main = page.locator("#main-content");
@@ -737,6 +743,8 @@ test("Skill review lists pending versions, reviews them and re-reads the queue (
 		.click();
 	const dialog = page.getByRole("dialog", { name: "审阅发布申请" });
 	await expect(dialog).toContainText("组织共享：发布工程");
+	// #3037 X-11：审阅弹窗使用设计 .skill-dialog 外观与文字「关闭」。
+	await expectSkillDialog(page, dialog, test.info().project.name === "mobile");
 	await dialog.getByRole("button", { name: "驳回" }).click();
 	await expect(dialog.getByRole("alert")).toHaveText("请填写驳回原因。");
 	await expect(dialog.getByLabel("审核说明 · 驳回时必填")).toBeFocused();
@@ -748,6 +756,10 @@ test("Skill review lists pending versions, reviews them and re-reads the queue (
 	await dialog.getByRole("button", { name: "驳回" }).click();
 	await expect(dialog).toBeHidden();
 	await expect(page.getByText("已驳回，发布者可修改后重提")).toBeVisible();
+	// 提交后审阅入口随该版本离开队列，焦点不落到 body（#3037 AC-2）。
+	await expect
+		.poll(() => page.evaluate(() => document.activeElement === document.body))
+		.toBe(false);
 	// 处理后队列立即回读，已驳回的版本离开队列。
 	await expect(rows).toHaveCount(2);
 	await expect(rows.filter({ hasText: "incident-summary" })).toHaveCount(0);
@@ -763,6 +775,10 @@ test("Skill review lists pending versions, reviews them and re-reads the queue (
 		page.getByText("版本已批准发布，现有绑定继续使用原版本"),
 	).toBeVisible();
 	await expect(rows).toHaveCount(1);
+	await expect
+		.poll(() => page.evaluate(() => document.activeElement === document.body))
+		.toBe(false);
+	await expectCleanPage(page, pageErrors);
 	await expect(rows).toContainText("release-notes");
 	expect(control.writes).toEqual([
 		{

@@ -15,9 +15,13 @@ import {
 	test,
 } from "@playwright/test";
 import {
+	expectCleanPage,
+	expectEmptyRows,
 	expectFieldControl,
 	expectFieldLabel,
+	expectNativeSelectArrow,
 	expectSearchInput,
+	trackPageErrors,
 } from "./primitive-styles";
 
 const baseAgent = AgentProjectionV2Schema.parse(
@@ -486,6 +490,7 @@ test("template search and keyboard detail activation remain visible in short vie
 test("directory search and filters use the shared search box and field styles", async ({
 	page,
 }) => {
+	const pageErrors = trackPageErrors(page);
 	await fixture(page);
 	await page.goto("/agents");
 	const search = page.getByRole("searchbox", { name: "搜索 Agent" });
@@ -493,6 +498,10 @@ test("directory search and filters use the shared search box and field styles", 
 	await expectSearchInput(search);
 	await expectFieldLabel(page, page.locator("label", { hasText: "状态" }));
 	await expectFieldControl(page, page.getByLabel("状态", { exact: true }));
+	// #3037 X-01：筛选下拉的箭头是设计 .select 的背景小三角。
+	for (const name of ["状态", "模板", "模型"])
+		await expectNativeSelectArrow(page, page.getByLabel(name, { exact: true }));
+	await expectCleanPage(page, pageErrors);
 });
 
 async function resolvedColor(page: Page, value: string) {
@@ -713,6 +722,7 @@ test.describe("Agent directory design alignment", () => {
 	test("search empty state clears every filter and an empty directory has no clear action", async ({
 		page,
 	}) => {
+		const pageErrors = trackPageErrors(page);
 		const api = await fixture(page);
 		await page.goto("/agents");
 		const cards = page.locator(".agent-list > li");
@@ -732,6 +742,14 @@ test.describe("Agent directory design alignment", () => {
 		const title = empty.getByText("没有匹配的 Agent", { exact: true });
 		await expect(title).toHaveCSS("font-size", "15px");
 		expect(await title.evaluate((node) => node.tagName)).toBe("STRONG");
+		// #3037 X-02：图标、标题与说明、操作三行均分，取导出稿 agent-directory-empty 的测量值。
+		await expectEmptyRows(empty, {
+			icon: 34.47,
+			title: 84.41,
+			description: 109.16,
+			action: 141.53,
+		});
+		await expectCleanPage(page, pageErrors);
 		await empty.getByRole("button", { name: "清除筛选" }).click();
 		await expect(
 			page.getByRole("searchbox", { name: "搜索 Agent" }),

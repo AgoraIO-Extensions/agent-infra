@@ -9,7 +9,13 @@ import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { keepConversationStreamOpen } from "./conversation-stream";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
-import { computed, resolved } from "./primitive-styles";
+import {
+	computed,
+	expectCleanPage,
+	expectDistinctDialogControls,
+	resolved,
+	trackPageErrors,
+} from "./primitive-styles";
 
 // 浏览器卡（BR-01~03、NW-09~11）、浏览器操作记录（NW-01~08）与执行详情弹窗（R4-09、N-08）。
 // 事件与响应都是契约校验过的合成 fixture，不代表真实 Runtime 或浏览器接管验收。
@@ -613,6 +619,7 @@ async function threadGeometry(page: Page) {
 test("keeps browser records in a read-only dialog without squeezing the thread (NW-01~07)", async ({
 	page,
 }, info) => {
+	const pageErrors = trackPageErrors(page);
 	const one = [status(1, "completed"), operation(2, "completed")];
 	await openBrowserConversation(page, one);
 	await expect(
@@ -658,6 +665,9 @@ test("keeps browser records in a read-only dialog without squeezing the thread (
 	]);
 	await expect(dialog.getByRole("listitem")).toHaveCount(50);
 	await expect(dialog).toContainText("仅显示最近 50 条");
+	// #3037 X-04：页眉图标钮与页脚主按钮不同名。
+	await expectDistinctDialogControls(dialog);
+	await expectCleanPage(page, pageErrors);
 	await expect(dialog.getByRole("alert")).toHaveCount(0);
 	await expect(dialog.getByRole("status")).toHaveText("");
 	expect(await dialog.innerText()).not.toMatch(
@@ -696,6 +706,7 @@ test("keeps browser records in a read-only dialog without squeezing the thread (
 test("opens execution details as a modal dialog that traps focus (R4-09, N-08, NI-19, NI-106)", async ({
 	page,
 }, info) => {
+	const pageErrors = trackPageErrors(page);
 	const fixture = await openBrowserConversation(page, [
 		status(1, "completed"),
 		operation(2, "completed"),
@@ -733,7 +744,9 @@ test("opens execution details as a modal dialog that traps focus (R4-09, N-08, N
 	await expect(
 		dialog.getByRole("button", { name: "核实原执行状态" }),
 	).toHaveCount(0);
-	await expect(dialog.getByRole("button", { name: "关闭" })).toHaveCount(2);
+	// #3037 X-04：页眉图标钮「关闭弹窗」与页脚主按钮「关闭」不再同名。
+	await expectDistinctDialogControls(dialog);
+	await expectCleanPage(page, pageErrors);
 	const primary = dialog
 		.locator('[data-slot="dialog-footer"]')
 		.getByRole("button", { name: "关闭" });
@@ -766,8 +779,10 @@ test("opens execution details as a modal dialog that traps focus (R4-09, N-08, N
 			() => document.documentElement.scrollWidth <= innerWidth,
 		),
 	).toBe(true);
-	for (const name of ["关闭"]) {
-		for (const button of await dialog.getByRole("button", { name }).all()) {
+	for (const name of ["关闭弹窗", "关闭"]) {
+		for (const button of await dialog
+			.getByRole("button", { name, exact: true })
+			.all()) {
 			const hit = await button.boundingBox();
 			expect(hit?.width ?? 0).toBeGreaterThanOrEqual(44);
 			expect(hit?.height ?? 0).toBeGreaterThanOrEqual(44);
@@ -805,7 +820,8 @@ test("opens execution details as a modal dialog that traps focus (R4-09, N-08, N
 	);
 	await expect(
 		dialog.locator('[data-slot="dialog-header"]').getByRole("button", {
-			name: "关闭",
+			name: "关闭弹窗",
+			exact: true,
 		}),
 	).toBeFocused();
 	await page.keyboard.press("Shift+Tab");
