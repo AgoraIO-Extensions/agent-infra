@@ -602,7 +602,8 @@ function SkillBindingCard({
 				{!revoked && !readOnly && otherVersions.length > 0 ? (
 					<ChangeVersionDialog
 						binding={binding}
-						finalFocus={finalFocus()}
+						// 写入回读前弹窗随旧卡片卸载时，先暂留在本卡标题（仍在页面时）。
+						finalFocus={finalFocus(() => document.getElementById(titleId))}
 						otherVersions={otherVersions}
 						writing={writing}
 						onConfirm={onChangeVersion}
