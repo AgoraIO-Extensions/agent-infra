@@ -233,6 +233,9 @@ it("verifies a signed V4 business grant as a delegation-scope proof", () => {
 			claims.allowedCommands = ["native-capability.invoke"];
 		},
 		(claims: ReturnType<typeof runtimeClaims>) => {
+			claims.allowedCommands = ["turn.submit", "native-capability.invoke"];
+		},
+		(claims: ReturnType<typeof runtimeClaims>) => {
 			claims.purpose = "control";
 		},
 		(claims: ReturnType<typeof runtimeClaims>) => {

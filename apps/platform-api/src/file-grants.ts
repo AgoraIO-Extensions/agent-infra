@@ -131,12 +131,17 @@ export function verifyRuntimeExecutionGrantForFilesV4(
 		const claims = RuntimeBusinessGrantClaimsV4Schema.parse(
 			verifiedRuntimePayloadV4(input, options.publicKeys),
 		);
-		const command = claims.allowedCommands[0];
+		// A file-capable proof must carry exactly one approved business command;
+		// a Grant with any additional command would otherwise be authorized by
+		// its first entry alone (PR-Agent review, #3062).
+		const commands = claims.allowedCommands;
+		const command = commands.length === 1 ? commands[0] : undefined;
 		if (
 			!options.issuer ||
 			!options.workerId ||
 			claims.issuer !== options.issuer ||
 			claims.workerId !== options.workerId ||
+			commands.length !== 1 ||
 			(command !== "turn.submit" && command !== "turn.supplement") ||
 			claims.expiresAt <= claims.issuedAt ||
 			claims.expiresAt - claims.issuedAt >
