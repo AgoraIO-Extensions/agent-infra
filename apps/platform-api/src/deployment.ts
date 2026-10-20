@@ -396,13 +396,17 @@ export function createProductionPlatformApiAssemblyInputV1(
 	const apiCandidates =
 		input.agentApiCreation?.candidates ?? deploymentDefaultRelayKeyCandidates;
 	const apiModelAdmission = input.agentApiCreation?.keylessModelAdmission;
-	const keylessModelAdmission = apiModelAdmission
-		? { admitModels: apiModelAdmission.admitModels.bind(apiModelAdmission) }
-		: undefined;
 	const admissions = createDeploymentAdmissionsV1({
 		...input,
 		currentIdentity: identityScope.currentIdentity,
 	});
+	const keylessModelAdmission = apiModelAdmission
+		? { admitModels: apiModelAdmission.admitModels.bind(apiModelAdmission) }
+		: {
+				admitModels: admissions.keylessModelAdmission.admitModels.bind(
+					admissions.keylessModelAdmission,
+				),
+			};
 	// Capture the same startup policy as browser admission; only the principal varies per request.
 	const apiAdmissionInput = {
 		imageRepository: input.imageRepository,
