@@ -241,6 +241,8 @@ test("my Agent tabs keep the selected view in ?tab=owned across refresh, deep li
 		"color",
 		await resolved(page, "color", "var(--muted-foreground)"),
 	);
+	// W-01：设计 .tab 内的 .chip 没有自己的字重，继承 Tab 的 650。
+	await expect(count).toHaveCSS("font-weight", "650");
 
 	await owned.click();
 	await expect(page).toHaveURL(/\/my-agents\?tab=owned$/);
@@ -328,6 +330,25 @@ test("owned Agent cards use one status chip, 150px facts, 40px icon actions and 
 		await resolved(page, "color", "var(--warning-ink)"),
 	);
 	await expect(page.locator("main")).not.toContainText("服务：");
+	// W-03：设计 .card-head 里标识与标题组 align-items:center；状态 chip 仍在卡头顶部。
+	const heading = card.locator(".owned-card-heading");
+	const [mark, titleGroup, headingBox] = await Promise.all([
+		rect(heading.locator('[data-slot="agent-mark"]')),
+		rect(heading.locator(":scope > div").first()),
+		rect(heading),
+	]);
+	expect(
+		Math.abs(
+			(mark.top + mark.bottom) / 2 - (titleGroup.top + titleGroup.bottom) / 2,
+		),
+	).toBeLessThanOrEqual(0.5);
+	expect(
+		Math.abs((await rect(chips)).top - headingBox.top),
+	).toBeLessThanOrEqual(0.5);
+	// W-04：设计 renderOwnedAgents 的渠道用「 · 」分隔。
+	await expect(
+		card.locator(".metadata-facts dt", { hasText: /^渠道$/ }).locator("+ dd"),
+	).toHaveText("Web · 企微机器人");
 	// M-04：可用范围按目录显示组织名，不出现内部 ID。
 	await expect(card.locator(".metadata-facts")).toContainText("平台工程");
 	await expect(page.locator("main")).not.toContainText("org-platform");
@@ -436,6 +457,10 @@ test("application rows show a text title, one detail entrance and unique link na
 		const time = row.locator("time");
 		await expect(time).toHaveAttribute("datetime", /^\d{4}-\d{2}-\d{2}T/);
 		await expect(time.locator("xpath=..")).toContainText(" · 更新于 ");
+		// W-02：设计 .list-row 只有标题与「说明 · 更新于」两行，不再另起「申请人」行。
+		const copy = row.locator(":scope > div").first();
+		await expect(copy.locator(":scope > p")).toHaveCount(1);
+		await expect(row).not.toContainText("申请人");
 	}
 	await expect(page.locator("main")).not.toContainText(
 		/\d{4}-\d{2}-\d{2}T\d{2}:/,

@@ -3728,6 +3728,10 @@ body {
 .application-detail-feedback {
 	margin-bottom: 20px;
 }
+/* 设计 .tab 内的计数 .chip 没有自己的字重，继承 Tab 的 650（W-01）。 */
+.my-agents-tab-count {
+	font-weight: inherit;
+}
 /* 设计 #my-agents：说明 notice 与「显示更多」都在申请列表之后 16px。 */
 .my-agents-note,
 .application-list-more {
@@ -4076,6 +4080,10 @@ body {
 .owned-card-heading > div {
 	min-width: 0;
 	flex: 1;
+}
+/* 设计 .card-head 内标识与标题组同处 align-items:center 的行；状态 chip 仍顶对齐（W-03）。 */
+.owned-card-heading > [data-slot="agent-mark"] {
+	align-self: center;
 }
 .management-content .owned-card-heading h2 {
 	font:

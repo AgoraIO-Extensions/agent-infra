@@ -159,7 +159,10 @@ export function MyAgentsScreen({
 						{state.kind === "ready" ? (
 							<>
 								{" "}
-								<Badge tone="gray">{applications.length}</Badge>
+								{/* 设计 .tab 内的 .chip 继承 Tab 的 650 字重（W-01）。 */}
+								<Badge tone="gray" className="my-agents-tab-count">
+									{applications.length}
+								</Badge>
 							</>
 						) : null}
 					</TabsTrigger>
@@ -238,7 +241,8 @@ export function MyAgentsScreen({
 														</div>
 														{/* 设计稿标题不是链接，详情入口只有同行的「查看申请」。 */}
 														<h2>{application.name}</h2>
-														{/* 更新时间来自申请生命周期投影；提交时间仍保留在详情进度。 */}
+														{/* 设计 .list-row：标题下只有一行「说明 · 更新于 时间」（W-02）。列表只含本人申请，
+														    申请人显示在详情进度的「申请已提交」一步。 */}
 														<p>
 															{application.description} · 更新于{" "}
 															<Timestamp
@@ -247,10 +251,6 @@ export function MyAgentsScreen({
 																	application.submittedAt
 																}
 															/>
-														</p>
-														<p>
-															申请人：
-															{application.applicant?.displayName ?? "未知"}
 														</p>
 													</div>
 
@@ -412,19 +412,20 @@ export function MyAgentsScreen({
 														empty="未额外指定"
 													/>
 												</dd>
+												{/* 设计 renderOwnedAgents：渠道与模型都用「 · 」分隔（W-04）。 */}
 												<dt>渠道</dt>
 												<dd>
 													{agent.configuration.channels
 														.map(
 															(channel) => agentChannelKindLabels[channel.kind],
 														)
-														.join("、") || "未配置"}
+														.join(" · ") || "未配置"}
 												</dd>
 												<dt>模型</dt>
 												<dd>
 													{agent.configuration.modelOptions
 														.map((model) => model.displayName)
-														.join("、") || "未提供模型选项"}
+														.join(" · ") || "未提供模型选项"}
 												</dd>
 											</dl>
 											<div className="card-actions">
