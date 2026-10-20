@@ -2203,6 +2203,7 @@ describe("PostgreSQL Agent configuration query", () => {
 		const withoutRuntime = {
 			outcome: "found",
 			sourceReference: deployment.imageDigest,
+			channels: [],
 			capabilities: null,
 			interactionUrl: null,
 		};
@@ -2367,6 +2368,7 @@ describe("PostgreSQL Agent configuration query", () => {
 		await expect(query.readRuntimePresentation(input)).resolves.toEqual({
 			outcome: "found",
 			sourceReference: nextDigest,
+			channels: [],
 			capabilities: nextState.capabilities,
 			interactionUrl: null,
 		});
@@ -2398,11 +2400,165 @@ describe("PostgreSQL Agent configuration query", () => {
 		).resolves.toEqual({
 			outcome: "found",
 			sourceReference: state.verified.configuration.source.imageDigest,
+			channels: [],
 			capabilities: null,
 			interactionUrl: null,
 		});
 		await adminClient`delete from platform.agent_availability where agent_id = 'agent_01'`;
 		await expect(query.readRuntimePresentation(viewer)).resolves.toEqual({
+			outcome: "unavailable",
+		});
+	});
+
+	// #2910：企微渠道状态只取当前 Agent、当前绑定引用的连接与会话事实，不受其他 Agent 或旧引用影响。
+	it("projects WeCom channel status only from the current Agent binding facts", async () => {
+		const channels = [
+			{ kind: "wecom_bot" as const, bindingReference: "bot_ref" },
+			{ kind: "wecom_app" as const, bindingReference: "app_ref" },
+		];
+		const record = {
+			...agentConfigurationConformanceRecordV1,
+			source: {
+				kind: "custom" as const,
+				imageDigest: workloadDesiredFixture(1, "agent_01", "internal-only")
+					.imageDigest,
+				admissionRevision: "verified-image",
+				interactionMode: "platform-adapter" as const,
+				connectionEnabled: true,
+			},
+			modelConfiguration: null,
+			channels,
+		};
+		const { query, input } = await runtimePresentationFixture(record);
+		await seed("agent_02", { ...record, agentId: "agent_02" });
+		const statuses = async (actorId = "owner_01") => {
+			const result = await query.readRuntimePresentation({
+				...input,
+				actorId,
+			});
+			return result.outcome === "found"
+				? Object.fromEntries(
+						result.channels.map(({ kind, status }) => [kind, status]),
+					)
+				: result;
+		};
+		const connection = (
+			botId: string,
+			agentId: string,
+			reference: string,
+			status: string,
+			lease = "1 minute",
+		) =>
+			adminClient`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status)
+				values (${botId},${agentId},${reference},'worker',1,clock_timestamp() + ${lease}::interval,${status})
+				on conflict (bot_id) do update set agent_id=excluded.agent_id,binding_reference=excluded.binding_reference,lease_until=excluded.lease_until,status=excluded.status`;
+		const session = (
+			sessionId: string,
+			agentId: string,
+			kind: string,
+			status: string,
+			botId: string | null,
+			callbackVerified: boolean,
+		) =>
+			adminClient`insert into platform.wecom_setup_sessions (session_id,agent_id,actor_id,configuration_revision,authorization_revision,state_digest,expires_at,status,kind,bot_id,callback_verified_at)
+				values (${sessionId},${agentId},'owner_01',7,'authorization_9',${"a".repeat(64)},now() + interval '5 minutes',${status},${kind},${botId},case when ${callbackVerified}::boolean then clock_timestamp() end)`;
+
+		// 已配置但尚无连接事实：未证实，不能显示为已绑定。
+		await expect(statuses()).resolves.toEqual({
+			wecom_bot: "binding",
+			wecom_app: "binding",
+		});
+		// 其他 Agent 同一绑定引用的连接与会话、本 Agent 旧绑定引用的连接都不参与。
+		await connection("bot_foreign", "agent_02", "bot_ref", "connected");
+		await connection("bot_old", "agent_01", "old_ref", "connected");
+		await session("app_ref", "agent_02", "wecom_app", "active", null, true);
+		await expect(statuses()).resolves.toEqual({
+			wecom_bot: "binding",
+			wecom_app: "binding",
+		});
+		await adminClient`delete from platform.wecom_setup_sessions where session_id = 'app_ref'`;
+
+		await connection("bot_01", "agent_01", "bot_ref", "verifying");
+		await expect(statuses()).resolves.toEqual({
+			wecom_bot: "binding",
+			wecom_app: "binding",
+		});
+		await connection("bot_01", "agent_01", "bot_ref", "connected");
+		await expect(statuses()).resolves.toEqual({
+			wecom_bot: "bound",
+			wecom_app: "binding",
+		});
+		// 租约失效后残留的 connected 不能证明仍在连接。
+		await connection("bot_01", "agent_01", "bot_ref", "connected", "-1 second");
+		await expect(statuses()).resolves.toEqual({
+			wecom_bot: "failed",
+			wecom_app: "binding",
+		});
+		await connection("bot_01", "agent_01", "bot_ref", "auth_failed");
+		await expect(statuses()).resolves.toEqual({
+			wecom_bot: "failed",
+			wecom_app: "binding",
+		});
+
+		// 托管绑定只认会话记录的机器人；会话失效即连接异常。
+		await connection("bot_01", "agent_01", "bot_ref", "connected");
+		await session(
+			"bot_ref",
+			"agent_01",
+			"wecom_bot",
+			"active",
+			"bot_02",
+			false,
+		);
+		await expect(statuses()).resolves.toEqual({
+			wecom_bot: "binding",
+			wecom_app: "binding",
+		});
+		await adminClient`update platform.wecom_setup_sessions set bot_id = 'bot_01' where session_id = 'bot_ref'`;
+		await expect(statuses()).resolves.toEqual({
+			wecom_bot: "bound",
+			wecom_app: "binding",
+		});
+		await adminClient`update platform.wecom_setup_sessions set status = 'cancelled' where session_id = 'bot_ref'`;
+		await expect(statuses()).resolves.toEqual({
+			wecom_bot: "failed",
+			wecom_app: "binding",
+		});
+
+		// 自建应用：激活且回调已验证为已绑定；探测行释放后的 disconnected 不影响。
+		await session(
+			"app_ref",
+			"agent_01",
+			"wecom_app",
+			"active",
+			"app:probe",
+			true,
+		);
+		await connection(
+			"app:probe",
+			"agent_01",
+			"app_ref",
+			"disconnected",
+			"-1 second",
+		);
+		await expect(statuses()).resolves.toEqual({
+			wecom_bot: "failed",
+			wecom_app: "bound",
+		});
+		await connection("app:probe", "agent_01", "app_ref", "auth_failed");
+		await expect(statuses()).resolves.toEqual({
+			wecom_bot: "failed",
+			wecom_app: "failed",
+		});
+		await adminClient`update platform.wecom_connections set status = 'disconnected' where bot_id = 'app:probe'`;
+		await adminClient`update platform.wecom_setup_sessions set callback_verified_at = null where session_id = 'app_ref'`;
+		await expect(statuses()).resolves.toEqual({
+			wecom_bot: "failed",
+			wecom_app: "failed",
+		});
+
+		// 不可见的主体拿不到任何渠道事实。
+		await expect(statuses("unrelated")).resolves.toEqual({
 			outcome: "unavailable",
 		});
 	});

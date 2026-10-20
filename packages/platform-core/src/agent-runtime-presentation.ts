@@ -31,10 +31,43 @@ export interface AgentRuntimePresentationExpectationV1 {
 	readonly management: AgentManagementStateV1;
 }
 
+/** 企微连接行按租约推导后的状态：auth_failed 原样保留，租约已失效的行视为 disconnected。 */
+export type AgentChannelConnectionStatusV1 =
+	| "verifying"
+	| "connected"
+	| "disconnected"
+	| "auth_failed";
+
+/**
+ * 当前修订中一个企微渠道绑定引用的连接事实（#2910），由 Store 在同一只读快照内读取。
+ * 只含判定所需的粗粒度事实，不含机器人 ID、凭证、持有者或租约。
+ */
+export interface AgentChannelConnectionFactV1 {
+	readonly kind: "wecom_bot" | "wecom_app";
+	readonly bindingReference: string;
+	/** session_id 等于该绑定引用的配置会话；部署静态绑定没有会话。 */
+	readonly session: null | {
+		readonly agentId: string;
+		readonly kind: string;
+		readonly status: string;
+		readonly callbackVerified: boolean;
+	};
+	/** 同一 Agent、同一绑定引用（托管绑定还须是会话的机器人）的连接行。 */
+	readonly connections: readonly AgentChannelConnectionStatusV1[];
+}
+
+/** 已配置企微渠道的展示状态；取值属于已发布的 ChannelBindingProjectionV1 枚举。 */
+export interface AgentChannelPresentationV1 {
+	readonly kind: "wecom_bot" | "wecom_app";
+	readonly status: "binding" | "bound" | "failed";
+}
+
 export type AgentRuntimePresentationDecisionV1 =
 	| {
 			readonly outcome: "found";
 			readonly sourceReference: string;
+			/** 当前修订已配置的企微渠道，顺序与配置相同；未配置的渠道不列出。 */
+			readonly channels: readonly AgentChannelPresentationV1[];
 			readonly capabilities:
 				| (Readonly<Record<string, boolean>> & {
 						readonly browser?: WorkloadBrowserCapabilityProjectionV1;
@@ -70,6 +103,8 @@ export interface AgentRuntimePresentationFactsV1 {
 	readonly management: AgentManagementStateV1;
 	readonly configuration: AgentConfigurationRecord;
 	readonly sourceReference: string;
+	/** 当前修订各企微渠道的连接事实；缺少某个渠道的事实时该渠道按未证实处理。 */
+	readonly channels: readonly AgentChannelConnectionFactV1[];
 	readonly runtime: null | {
 		readonly revision: number;
 		readonly state: WorkloadReconciliationStateV1;
@@ -138,6 +173,45 @@ export function snapshotAgentRuntimePresentationExpectationV1(
 	};
 }
 
+/**
+ * 已配置企微渠道的展示状态只来自该绑定引用的当前事实（#2910），不由 Web 或配置推断：
+ * 智能机器人已认证连接为 bound，认证中或尚无连接为 binding，断开或认证失败为 failed；
+ * 自建应用走回调没有长连接，激活且回调已验证的托管会话为 bound，部署静态绑定无平台事实时为 binding。
+ * 托管会话不再有效、不属于该 Agent 或渠道类型、事实不唯一时一律 failed，不推断为已绑定。
+ */
+function presentAgentChannelStatusV1(
+	agentId: string,
+	channel: AgentConfigurationRecord["channels"][number],
+	facts: readonly AgentChannelConnectionFactV1[],
+): AgentChannelPresentationV1["status"] {
+	const matches = facts.filter(
+		(fact) =>
+			fact.kind === channel.kind &&
+			fact.bindingReference === channel.bindingReference,
+	);
+	if (matches.length === 0) return "binding";
+	const [fact] = matches;
+	if (matches.length > 1 || !fact || fact.connections.length > 1)
+		return "failed";
+	const session = fact.session;
+	if (
+		session &&
+		(session.agentId !== agentId ||
+			session.kind !== channel.kind ||
+			session.status !== "active")
+	)
+		return "failed";
+	const connection = fact.connections[0];
+	if (connection === "auth_failed") return "failed";
+	if (channel.kind === "wecom_app") {
+		if (!session) return "binding";
+		return session.callbackVerified ? "bound" : "failed";
+	}
+	if (connection === "connected") return "bound";
+	if (connection === "disconnected") return "failed";
+	return "binding";
+}
+
 /** A projection must describe one authorized configuration/management snapshot. */
 export function decideAgentRuntimePresentationV1(input: {
 	readonly agentId: string;
@@ -164,9 +238,14 @@ export function decideAgentRuntimePresentationV1(input: {
 		!isDeepStrictEqual(management, input.expected.management)
 	)
 		return { outcome: "stale" };
+	const channels = facts.configuration.channels.map((channel) => ({
+		kind: channel.kind,
+		status: presentAgentChannelStatusV1(input.agentId, channel, facts.channels),
+	}));
 	const foundWithoutRuntimeProjection: AgentRuntimePresentationDecisionV1 = {
 		outcome: "found",
 		sourceReference: facts.sourceReference,
+		channels,
 		capabilities: null,
 		interactionUrl: null,
 	};
@@ -238,6 +317,7 @@ export function decideAgentRuntimePresentationV1(input: {
 	return {
 		outcome: "found",
 		sourceReference: facts.sourceReference,
+		channels,
 		capabilities: state.capabilities
 			? ({
 					...Object.fromEntries(

@@ -58,6 +58,7 @@ function fixture() {
 		management: structuredClone(management),
 		configuration,
 		sourceReference: "template_01",
+		channels: [],
 		runtime: {
 			revision: 1,
 			verifiedConfiguration: configuration,
@@ -387,6 +388,7 @@ describe("Agent runtime presentation policy", () => {
 		).toEqual({
 			outcome: "found",
 			sourceReference: "template_01",
+			channels: [],
 			capabilities: null,
 			interactionUrl: null,
 		});
@@ -587,4 +589,214 @@ describe("personal API runtime presentation purpose", () => {
 			).toEqual({ outcome: "unavailable" });
 		},
 	);
+});
+
+// #2910：已配置企微渠道的展示状态只来自当前绑定引用的连接事实。
+describe("Agent channel presentation status", () => {
+	type Fact = AgentRuntimePresentationFactsV1["channels"][number];
+	const bot = { kind: "wecom_bot" as const, bindingReference: "bot_ref" };
+	const app = { kind: "wecom_app" as const, bindingReference: "app_ref" };
+	const activeSession = (
+		kind: "wecom_bot" | "wecom_app",
+		overrides: Partial<NonNullable<Fact["session"]>> = {},
+	) => ({
+		agentId: "agent_01",
+		kind,
+		status: "active",
+		callbackVerified: kind === "wecom_app",
+		...overrides,
+	});
+
+	function decide(
+		channels: readonly (typeof bot | typeof app)[],
+		facts: readonly Fact[],
+		hasRuntime = false,
+	) {
+		const input = fixture();
+		// 同一配置对象同时是当前修订与已验证修订，保持运行时投影路径可用。
+		Object.assign(input.facts.configuration, { channels });
+		return decideAgentRuntimePresentationV1({
+			...input,
+			facts: {
+				...input.facts,
+				channels: facts,
+				runtime: hasRuntime ? input.facts.runtime : null,
+			},
+		});
+	}
+
+	it.each<[string, Fact | undefined, "binding" | "bound" | "failed"]>([
+		["no fact", undefined, "binding"],
+		[
+			"no connection row",
+			{ ...bot, session: null, connections: [] },
+			"binding",
+		],
+		[
+			"verifying",
+			{ ...bot, session: null, connections: ["verifying"] },
+			"binding",
+		],
+		[
+			"connected",
+			{ ...bot, session: null, connections: ["connected"] },
+			"bound",
+		],
+		[
+			"disconnected",
+			{ ...bot, session: null, connections: ["disconnected"] },
+			"failed",
+		],
+		[
+			"auth_failed",
+			{ ...bot, session: null, connections: ["auth_failed"] },
+			"failed",
+		],
+		[
+			"managed connected",
+			{
+				...bot,
+				session: activeSession("wecom_bot"),
+				connections: ["connected"],
+			},
+			"bound",
+		],
+		[
+			"cancelled managed session",
+			{
+				...bot,
+				session: activeSession("wecom_bot", { status: "cancelled" }),
+				connections: ["connected"],
+			},
+			"failed",
+		],
+		[
+			"another Agent's session",
+			{
+				...bot,
+				session: activeSession("wecom_bot", { agentId: "agent_02" }),
+				connections: ["connected"],
+			},
+			"failed",
+		],
+		[
+			"session of another channel kind",
+			{
+				...bot,
+				session: activeSession("wecom_app"),
+				connections: ["connected"],
+			},
+			"failed",
+		],
+		[
+			"ambiguous connection rows",
+			{ ...bot, session: null, connections: ["connected", "connected"] },
+			"failed",
+		],
+		[
+			"connected row of an old binding reference",
+			{
+				...bot,
+				bindingReference: "old_ref",
+				session: null,
+				connections: ["connected"],
+			},
+			"binding",
+		],
+	])("maps a WeCom bot with %s", (_name, fact, status) => {
+		expect(decide([bot], fact ? [fact] : [])).toMatchObject({
+			outcome: "found",
+			channels: [{ kind: "wecom_bot", status }],
+		});
+	});
+
+	it.each<[string, Fact, "binding" | "bound" | "failed"]>([
+		[
+			"an activated callback-verified session",
+			{
+				...app,
+				session: activeSession("wecom_app"),
+				connections: ["disconnected"],
+			},
+			"bound",
+		],
+		[
+			"an activated session without callback verification",
+			{
+				...app,
+				session: activeSession("wecom_app", { callbackVerified: false }),
+				connections: [],
+			},
+			"failed",
+		],
+		[
+			"a failed session",
+			{
+				...app,
+				session: activeSession("wecom_app", { status: "auth_failed" }),
+				connections: [],
+			},
+			"failed",
+		],
+		[
+			"a failed application probe",
+			{
+				...app,
+				session: activeSession("wecom_app"),
+				connections: ["auth_failed"],
+			},
+			"failed",
+		],
+		[
+			"a deployment binding without platform evidence",
+			{ ...app, session: null, connections: [] },
+			"binding",
+		],
+	])("maps a WeCom application with %s", (_name, fact, status) => {
+		expect(decide([app], [fact])).toMatchObject({
+			outcome: "found",
+			channels: [{ kind: "wecom_app", status }],
+		});
+	});
+
+	it("keeps configuration order and only lists configured channels with verified runtime", () => {
+		const decision = decide(
+			[app, bot],
+			[
+				{ ...bot, session: null, connections: ["connected"] },
+				{
+					...app,
+					session: activeSession("wecom_app"),
+					connections: [],
+				},
+			],
+			true,
+		);
+		expect(decision).toMatchObject({
+			outcome: "found",
+			capabilities: { modelSelection: true },
+		});
+		expect(decision.outcome === "found" && decision.channels).toEqual([
+			{ kind: "wecom_app", status: "bound" },
+			{ kind: "wecom_bot", status: "bound" },
+		]);
+		expect(
+			decide([], [{ ...bot, session: null, connections: ["connected"] }]),
+		).toMatchObject({ outcome: "found", channels: [] });
+	});
+
+	it("does not project channel facts to an unauthorized subject", () => {
+		const input = fixture();
+		Object.assign(input.facts.configuration, { channels: [bot] });
+		expect(
+			decideAgentRuntimePresentationV1({
+				...input,
+				actor: { ...actor, userId: "unrelated" },
+				facts: {
+					...input.facts,
+					channels: [{ ...bot, session: null, connections: ["connected"] }],
+				},
+			}),
+		).toEqual({ outcome: "unavailable" });
+	});
 });

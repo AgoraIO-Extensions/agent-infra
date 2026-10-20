@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import {
 	AgentApiCreationResponseV1Schema,
 	AgentApplicationProjectionV2Schema,
+	AgentDetailProjectionV1Schema,
 	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
@@ -226,7 +227,13 @@ const sessionKeys: Record<User, string> = {
 };
 const identity: IdentityAdapter = {
 	async resolve(request) {
-		return sessions.get(request.headers.get("authorization") ?? "") ?? null;
+		// 浏览器专用入口（如 Agent 详情）不接受 Authorization，改用同一合成会话的 Cookie。
+		const cookie = /(?:^|;\s*)synthetic-session=([^;]+)/.exec(
+			request.headers.get("cookie") ?? "",
+		)?.[1];
+		return (
+			sessions.get(request.headers.get("authorization") ?? cookie ?? "") ?? null
+		);
 	},
 	async hydrateUsers(userIds) {
 		return userIds.map((userId) => {
@@ -1457,6 +1464,89 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			}
 		},
 	);
+	// #2910：渠道状态来自本 Agent 当前绑定引用的连接事实；同一引用下其他 Agent 的连接不泄露。
+	it("projects real WeCom bot status per Agent without leaking another Agent's connection", async () => {
+		const createApproved = async (user: User, key: string) => {
+			const created = AgentApplicationProjectionV2Schema.parse(
+				await json(
+					await request(
+						"/api/v2/agent-applications",
+						user,
+						applicationBody,
+						key,
+					),
+					201,
+				),
+			);
+			await json(
+				await request(
+					`/api/v2/admin/agent-applications/${created.applicationId}/decision`,
+					"admin",
+					{ schemaVersion: 1, decision: "approve" },
+					`${key}-approve`,
+				),
+				200,
+			);
+			if (!created.agentId) throw new Error("Expected an approved Agent");
+			return created.agentId;
+		};
+		const bound = await createApproved("alice", "wecom-status-alice");
+		const pending = await createApproved("bob", "wecom-status-bob");
+		const browser = (path: string, user: User) =>
+			fetch(`${origin}${path}`, {
+				headers: { cookie: `synthetic-session=${sessionKeys[user]}` },
+			});
+		const channels = [{ kind: "wecom_bot", bindingReference: "shared_ref" }];
+		for (const agentId of [bound, pending])
+			await reader.unsafe(
+				`update platform.agent_configuration_revisions c
+				set configuration = jsonb_set(c.configuration, '{channels}', $2::text::jsonb)
+				from platform.agents a
+				where a.id = $1 and c.agent_id = a.id and c.revision = a.current_configuration_revision`,
+				[agentId, JSON.stringify(channels)],
+			);
+		await reader.unsafe(
+			`insert into platform.wecom_connections (bot_id,agent_id,binding_reference,holder_id,fence,lease_until,status)
+			values ('bot_status_alice',$1,'shared_ref','worker',1,clock_timestamp() + interval '1 minute','connected')`,
+			[bound],
+		);
+		const detail = async (agentId: string, user: User) =>
+			AgentDetailProjectionV1Schema.parse(
+				await json(
+					await browser(`/api/v2/agents/${agentId}/detail`, user),
+					200,
+				),
+			).configuration.channels;
+		await expect(detail(bound, "alice")).resolves.toEqual([
+			{ kind: "web", status: "available" },
+			{ kind: "wecom_bot", status: "bound" },
+		]);
+		await expect(detail(pending, "bob")).resolves.toEqual([
+			{ kind: "web", status: "available" },
+			{ kind: "wecom_bot", status: "binding" },
+		]);
+		// 旧版 strict reader 继续接受同一枚举内的真实状态。
+		expect(
+			AgentProjectionV2Schema.parse(
+				await json(await request(`/api/v2/agents/${bound}`, "alice"), 200),
+			).configuration.channels,
+		).toEqual([
+			{ kind: "web", status: "available" },
+			{ kind: "wecom_bot", status: "bound" },
+		]);
+		const denied = await json(
+			await browser(`/api/v2/agents/${bound}/detail`, "bob"),
+			404,
+		);
+		expect(JSON.stringify(denied)).not.toMatch(/wecom|bound|bot_status/);
+		await reader.unsafe(
+			`update platform.wecom_connections set lease_until = clock_timestamp() - interval '1 second' where bot_id = 'bot_status_alice'`,
+		);
+		await expect(detail(bound, "alice")).resolves.toEqual([
+			{ kind: "web", status: "available" },
+			{ kind: "wecom_bot", status: "failed" },
+		]);
+	});
 });
 
 const apiTokens = {
