@@ -905,6 +905,46 @@ describe("Codex model transport", () => {
 			writes.mockRestore();
 		}
 	});
+	// Node 24 可能对已经排空的响应返回 write() === false，然后永远不再发出
+	// 配对的 'drain'：消息级 need-drain 标记在同步 socket 刷新之后才被置位，
+	// 此后没有残留字节能再触发 drain。只等 'drain' 会让这条流转发永久挂起
+	// （见 #3032 的 CI 120s 超时）。
+	it("finishes a stream when Node loses the response drain event", async () => {
+		const stream =
+			event({ type: "response.output_text.delta", delta: "synthetic answer" }) +
+			completedEvent();
+		const target = await listen(
+			createServer((_incoming, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(stream);
+			}),
+		);
+		const value = await transport(target);
+		let dropped = false;
+		const original = ServerResponse.prototype.write;
+		const writes = vi
+			.spyOn(ServerResponse.prototype, "write")
+			.mockImplementation(function (
+				this: ServerResponse,
+				...args: Parameters<ServerResponse["write"]>
+			) {
+				const accepted = Reflect.apply(original, this, args) as boolean;
+				if (dropped || !this.req.headers["x-codex-turn-metadata"])
+					return accepted;
+				// Accept the bytes, then report backpressure that Node will never
+				// pair with a 'drain' event; the response is already empty.
+				dropped = true;
+				return false;
+			});
+		try {
+			const response = await request(value.modelAccess);
+			expect(response.status).toBe(200);
+			expect(await response.text()).toBe(stream);
+			expect(dropped).toBe(true);
+		} finally {
+			writes.mockRestore();
+		}
+	});
 	it("removes its startup error listener after listening", async () => {
 		const target = await listen(
 			createServer((_request, response) => response.end()),

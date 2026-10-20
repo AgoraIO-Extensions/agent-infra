@@ -160,6 +160,38 @@ function reject(response: ServerResponse, status = 502) {
 	response.end(sanitizedFailureBody);
 }
 
+/**
+ * Node can report backpressure for a response whose socket is already
+ * drained, and then never emit the matching `drain`: `write()` latches its
+ * message-level need-drain flag only after the synchronous socket flush that
+ * would have cleared it, and the socket has no pending bytes left to emit a
+ * later `drain` from. Waiting only for the event strands the response
+ * forever, so also observe the buffer the response exposes.
+ */
+function responseDrained(response: ServerResponse, signal: AbortSignal) {
+	return new Promise<void>((resolve) => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const settle = () => {
+			if (timer !== undefined) clearTimeout(timer);
+			timer = undefined;
+			resolve();
+		};
+		const check = () => {
+			timer = undefined;
+			// `destroyed`/`writableEnded` stay pending: the 'close' arm owns that.
+			if (response.destroyed || response.writableEnded) return;
+			if (signal.aborted || response.writableLength === 0) {
+				settle();
+				return;
+			}
+			timer = setTimeout(check, 10);
+			timer.unref();
+		};
+		signal.addEventListener("abort", settle, { once: true });
+		check();
+	});
+}
+
 async function write(response: ServerResponse, value: string) {
 	if (response.destroyed || response.writableEnded) throw new Error();
 	if (response.write(value)) return;
@@ -170,6 +202,7 @@ async function write(response: ServerResponse, value: string) {
 			once(response, "close", { signal: pending.signal }).then(() =>
 				Promise.reject(new Error()),
 			),
+			responseDrained(response, pending.signal),
 		]);
 	} finally {
 		pending.abort();
