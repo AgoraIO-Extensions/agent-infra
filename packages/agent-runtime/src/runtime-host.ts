@@ -102,7 +102,10 @@ import type {
 	RuntimeNativeSkillReaderV1,
 	RuntimeOperationFactInputV1,
 } from "./driver.js";
-import { RuntimeHostError } from "./errors.js";
+import {
+	type NativeSessionUnavailableDiagnostic,
+	RuntimeHostError,
+} from "./errors.js";
 import {
 	type FileRuntimeStore,
 	requestDigest,
@@ -205,12 +208,39 @@ function invalidRequest(): never {
 	);
 }
 
-function nativeSessionRequired(): never {
+function nativeSessionRequired(
+	diagnostic: NativeSessionUnavailableDiagnostic,
+): never {
 	throw new RuntimeHostError(
 		"RUNTIME_SESSION_UNAVAILABLE",
 		"Runtime session could not be recovered",
 		503,
+		false,
+		undefined,
+		diagnostic,
 	);
+}
+
+/**
+ * 从 StoredSession 推断原生会话不可用时的状态类别（#3017）。
+ * 不含 ID、路径或会话内容，只反映操作和恢复的粗粒度状态。
+ */
+function nativeSessionStateCategory(
+	session: StoredSession,
+): NativeSessionUnavailableDiagnostic extends `${infer _}:${infer S}`
+	? S
+	: never {
+	if (session.recovery?.status === "blocked") return "recovery_blocked";
+	const ops = Object.values(session.operations);
+	if (ops.length === 0) return "no_operations";
+	if (ops.some((op) => op.state === "prepared")) return "prepared_no_native";
+	if (
+		ops.some(
+			(op) => op.state === "resolved" && op.result?.outcome === "unknown",
+		)
+	)
+		return "unknown_no_native";
+	return "unbound";
 }
 
 function isTerminalRuntimeStatus(status: RuntimeStatusV1) {
@@ -744,7 +774,10 @@ export class RuntimeHost {
 			this.options.grantValidationV2?.now ?? Date.now,
 		);
 		const nativeSessionRef =
-			session.session.nativeSessionRef ?? nativeSessionRequired();
+			session.session.nativeSessionRef ??
+			nativeSessionRequired(
+				`executeBrowserHandoffV3:${nativeSessionStateCategory(session.session)}`,
+			);
 		const admitted = runtimeBrowserExecutionContextForCommand(
 			this.browserExecutionContext,
 			request,
@@ -778,7 +811,10 @@ export class RuntimeHost {
 			this.options.grantValidationV2?.now ?? Date.now,
 		);
 		const nativeSessionRef =
-			session.session.nativeSessionRef ?? nativeSessionRequired();
+			session.session.nativeSessionRef ??
+			nativeSessionRequired(
+				`executeBrowserSideEffectV3:${nativeSessionStateCategory(session.session)}`,
+			);
 		const admitted = runtimeBrowserExecutionContextForCommand(
 			this.browserExecutionContext,
 			request,
@@ -989,7 +1025,10 @@ export class RuntimeHost {
 					this.options.grantValidationV2?.now ?? Date.now,
 				);
 				const nativeSessionRef =
-					session.nativeSessionRef ?? nativeSessionRequired();
+					session.nativeSessionRef ??
+					nativeSessionRequired(
+						`readEventsV4:${nativeSessionStateCategory(session)}`,
+					);
 				const replay = RuntimeEventSchema.array().safeParse(
 					await callDriver(() =>
 						this.options.driver.replayEvents(
@@ -1055,7 +1094,10 @@ export class RuntimeHost {
 				);
 				await this.eventAuthorityV4(request, verification);
 				await this.options.driver.acknowledgeEvents?.(
-					session.nativeSessionRef ?? nativeSessionRequired(),
+					session.nativeSessionRef ??
+						nativeSessionRequired(
+							`acknowledgeEventsV4:${nativeSessionStateCategory(session)}`,
+						),
 					request.executionId,
 					request.confirmedCursor,
 				);
@@ -1491,7 +1533,10 @@ export class RuntimeHost {
 	private async readStatus(session: StoredSession, executionId: string) {
 		if (session.recovery?.status === "blocked") return "unavailable" as const;
 		const nativeSessionRef =
-			session.nativeSessionRef ?? nativeSessionRequired();
+			session.nativeSessionRef ??
+			nativeSessionRequired(
+				`readStatus:${nativeSessionStateCategory(session)}`,
+			);
 		const status = RuntimeStatusV1Schema.safeParse(
 			await callDriver(() =>
 				this.options.driver.getStatus(nativeSessionRef, executionId),
@@ -1773,12 +1818,16 @@ export class RuntimeHost {
 		const expiresAt = Math.min(Date.parse(claims.expiresAt), now() + 30_000);
 		if (!Number.isSafeInteger(expiresAt) || expiresAt <= now())
 			runtimeAuthorizationDenied();
+		const nativeSkillSession = this.options.store.getSessionForQuery(
+			request.hostSessionRef,
+			request,
+			request.deliveryFence,
+		);
 		const nativeSessionRef =
-			this.options.store.getSessionForQuery(
-				request.hostSessionRef,
-				request,
-				request.deliveryFence,
-			).nativeSessionRef ?? nativeSessionRequired();
+			nativeSkillSession.nativeSessionRef ??
+			nativeSessionRequired(
+				`nativeSkillReadContext:${nativeSessionStateCategory(nativeSkillSession)}`,
+			);
 		const deadline = new AbortController();
 		const readSignal = AbortSignal.any([signal, deadline.signal]);
 		const deadlineTimer = setTimeout(
@@ -2095,7 +2144,10 @@ export class RuntimeHost {
 			request.deliveryFence,
 		);
 		const nativeSessionRef =
-			session.nativeSessionRef ?? nativeSessionRequired();
+			session.nativeSessionRef ??
+			nativeSessionRequired(
+				`modelDirectory:${nativeSessionStateCategory(session)}`,
+			);
 		const directory = await callDriver(() =>
 			this.options.driver.getModelDirectory(nativeSessionRef),
 		);
@@ -2134,7 +2186,8 @@ export class RuntimeHost {
 			request.deliveryFence,
 		);
 		const nativeSessionRef =
-			session.nativeSessionRef ?? nativeSessionRequired();
+			session.nativeSessionRef ??
+			nativeSessionRequired(`replay:${nativeSessionStateCategory(session)}`);
 		const events = RuntimeEventSchema.array().safeParse(
 			await callDriver(() =>
 				this.options.driver.replayEvents(
@@ -2183,7 +2236,10 @@ export class RuntimeHost {
 			request.deliveryFence,
 		);
 		const nativeSessionRef =
-			session.nativeSessionRef ?? nativeSessionRequired();
+			session.nativeSessionRef ??
+			nativeSessionRequired(
+				`streamEvents:${nativeSessionStateCategory(session)}`,
+			);
 		const events = await callDriver(() =>
 			this.options.driver.subscribeEvents(
 				nativeSessionRef,
@@ -2252,7 +2308,8 @@ export class RuntimeHost {
 						executionId: request.executionId,
 						turnId: request.turnId,
 						sessionGeneration: request.sessionGeneration,
-						nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
+						nativeSessionRef:
+							nativeSessionRef ?? nativeSessionRequired("supplement:unbound"),
 						input: request.input,
 					}),
 				});
@@ -2306,7 +2363,8 @@ export class RuntimeHost {
 						executionId: request.executionId,
 						turnId: request.turnId,
 						sessionGeneration: request.sessionGeneration,
-						nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
+						nativeSessionRef:
+							nativeSessionRef ?? nativeSessionRequired("stop:unbound"),
 					}),
 				});
 				return v1OperationResponse(
@@ -2358,7 +2416,9 @@ export class RuntimeHost {
 						executionId: request.executionId,
 						turnId: request.turnId,
 						sessionGeneration: request.sessionGeneration,
-						nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
+						nativeSessionRef:
+							nativeSessionRef ??
+							nativeSessionRequired("cancelGeneration:unbound"),
 					}),
 				});
 				await this.options.store.activateGenerationBarrier(
@@ -2435,7 +2495,7 @@ export class RuntimeHost {
 			if (result.outcome === "accepted" && result.status === "running") {
 				const nativeSessionRef =
 					this.options.store.nativeSessionRef(hostSessionRef) ??
-					nativeSessionRequired();
+					nativeSessionRequired("dispatch:running_unbound");
 				result = await this.currentDriverResult(
 					{ nativeSessionRef, result },
 					operation,

@@ -39,7 +39,10 @@ import type {
 	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
 } from "./driver.js";
-import { RuntimeHostError } from "./errors.js";
+import {
+	type NativeSessionUnavailableDiagnostic,
+	RuntimeHostError,
+} from "./errors.js";
 import {
 	type FileRuntimeStore,
 	requestDigest,
@@ -79,12 +82,37 @@ interface Options {
 	>;
 }
 
-function nativeRequired(): never {
+function nativeRequired(diagnostic: NativeSessionUnavailableDiagnostic): never {
 	throw new RuntimeHostError(
 		"RUNTIME_SESSION_UNAVAILABLE",
 		"Runtime session could not be recovered",
 		503,
+		false,
+		undefined,
+		diagnostic,
 	);
+}
+
+/**
+ * 从 StoredSession 推断原生会话不可用时的状态类别（#3017）。
+ * 不含 ID、路径或会话内容，只反映操作和恢复的粗粒度状态。
+ */
+function nativeSessionStateCategory(
+	session: StoredSession,
+): NativeSessionUnavailableDiagnostic extends `${infer _}:${infer S}`
+	? S
+	: never {
+	if (session.recovery?.status === "blocked") return "recovery_blocked";
+	const ops = Object.values(session.operations);
+	if (ops.length === 0) return "no_operations";
+	if (ops.some((op) => op.state === "prepared")) return "prepared_no_native";
+	if (
+		ops.some(
+			(op) => op.state === "resolved" && op.result?.outcome === "unknown",
+		)
+	)
+		return "unknown_no_native";
+	return "unbound";
 }
 function invalidDriver(): never {
 	throw new RuntimeHostError(
@@ -171,7 +199,7 @@ export class RuntimeHostV3 {
 	}
 
 	private assertOpen() {
-		if (this.closed) nativeRequired();
+		if (this.closed) nativeRequired("assertOpen:host_closed");
 	}
 
 	private async abortRecovery(key: string, recoveryGenerationKey: string) {
@@ -192,7 +220,7 @@ export class RuntimeHostV3 {
 		const now = this.options.grantValidation.now ?? Date.now;
 		const expiresAt = Math.min(claims.expiresAt, now() + 30_000);
 		if (!Number.isSafeInteger(expiresAt) || expiresAt <= now())
-			nativeRequired();
+			nativeRequired("nativeCapability:unbound");
 		const controller = new AbortController();
 		const active = AbortSignal.any([
 			this.lifetime.signal,
@@ -215,7 +243,7 @@ export class RuntimeHostV3 {
 		};
 		const assertCurrent = () => {
 			active.throwIfAborted();
-			if (expiresAt <= now()) nativeRequired();
+			if (expiresAt <= now()) nativeRequired("nativeCapability:unbound");
 			this.assertOpen();
 			this.validate(request, "native-capability.invoke", verification);
 			this.options.store.getSessionForQuery(
@@ -226,14 +254,18 @@ export class RuntimeHostV3 {
 			);
 			return binding;
 		};
+		const nativeSkillSession = this.options.store.getSessionForQuery(
+			request.hostSessionRef,
+			request,
+			request.operation.deliveryFence,
+			true,
+		);
 		return {
 			nativeSessionRef:
-				this.options.store.getSessionForQuery(
-					request.hostSessionRef,
-					request,
-					request.operation.deliveryFence,
-					true,
-				).nativeSessionRef ?? nativeRequired(),
+				nativeSkillSession.nativeSessionRef ??
+				nativeRequired(
+					`nativeCapability:${nativeSessionStateCategory(nativeSkillSession)}`,
+				),
 			allowUnboundExecution: request.operation.kind === "execution",
 			active,
 			signal: active,
@@ -393,7 +425,7 @@ export class RuntimeHostV3 {
 							capabilitySourceVersion: request.capabilitySourceVersion,
 						}),
 						command: (nativeSessionRef) => {
-							if (!nativeSessionRef) nativeRequired();
+							if (!nativeSessionRef) nativeRequired("nativeCapability:unbound");
 							if (request.capabilityKind === "command") {
 								const create = this.options.driver.createNativeCommandCommand;
 								if (!create) nativeUnsupported();
@@ -510,9 +542,9 @@ export class RuntimeHostV3 {
 				this.closedRecoveryGenerations.has(recoveryGenerationKey) ||
 				now() >= expiresAt
 			)
-				nativeRequired();
+				nativeRequired("recoverEvidence:unbound");
 			const allowedCommand = claims.allowedCommands[0];
-			if (!allowedCommand) nativeRequired();
+			if (!allowedCommand) nativeRequired("recoverEvidence:unbound");
 			this.validate(request, allowedCommand, verification);
 			return this.options.store.assertOriginalEvidenceBinding(
 				queryClaims,
@@ -544,10 +576,10 @@ export class RuntimeHostV3 {
 					this.options.serialize(key, async () => {
 						active.throwIfAborted();
 						const allowedCommand = claims.allowedCommands[0];
-						if (!allowedCommand) nativeRequired();
+						if (!allowedCommand) nativeRequired("recoverEvidence:unbound");
 						this.validate(request, allowedCommand, verification);
 						if (this.closedRecoveryGenerations.has(recoveryGenerationKey))
-							nativeRequired();
+							nativeRequired("recoverEvidence:unbound");
 						return this.options.store.latchOriginalEvidenceQuery(
 							queryClaims,
 							request.requestId,
@@ -802,7 +834,8 @@ export class RuntimeHostV3 {
 						executionId: request.executionId,
 						turnId: request.turnId,
 						sessionGeneration: request.sessionGeneration,
-						nativeSessionRef: nativeSessionRef ?? nativeRequired(),
+						nativeSessionRef:
+							nativeSessionRef ?? nativeRequired("supplement:unbound"),
 						input: request.input,
 					}),
 				});
@@ -873,7 +906,8 @@ export class RuntimeHostV3 {
 							executionId: request.executionId,
 							turnId: request.turnId,
 							sessionGeneration: request.sessionGeneration,
-							nativeSessionRef: nativeSessionRef ?? nativeRequired(),
+							nativeSessionRef:
+								nativeSessionRef ?? nativeRequired("stop:unbound"),
 						}),
 					});
 					return {
@@ -914,7 +948,7 @@ export class RuntimeHostV3 {
 					!request.hostSessionRef &&
 					!(claims.purpose === "control" && claims.reason === "recovery")
 				)
-					nativeRequired();
+					nativeRequired("assertOpen:unbound");
 				return this.options.store.recoverOperationV3(
 					claims,
 					request.originalOperationDigest,
@@ -1090,7 +1124,8 @@ export class RuntimeHostV3 {
 							executionId: request.executionId,
 							turnId: request.turnId,
 							sessionGeneration: request.sessionGeneration,
-							nativeSessionRef: nativeSessionRef ?? nativeRequired(),
+							nativeSessionRef:
+								nativeSessionRef ?? nativeRequired("cancelGeneration:unbound"),
 						}),
 					});
 					await this.options.store.activateGenerationBarrier(
@@ -1194,7 +1229,10 @@ export class RuntimeHostV3 {
 					this.options.grantValidation.now ?? Date.now,
 				);
 				await this.options.driver.acknowledgeEvents?.(
-					session.nativeSessionRef ?? nativeRequired(),
+					session.nativeSessionRef ??
+						nativeRequired(
+							`acknowledgeEventsV3:${nativeSessionStateCategory(session)}`,
+						),
 					request.executionId,
 					request.confirmedCursor,
 				);
@@ -1262,7 +1300,10 @@ export class RuntimeHostV3 {
 				true,
 			);
 			const subscription = this.options.driver.subscribeEvents(
-				session.nativeSessionRef ?? nativeRequired(),
+				session.nativeSessionRef ??
+					nativeRequired(
+						`streamEventsV3:${nativeSessionStateCategory(session)}`,
+					),
 				request.executionId,
 				request.afterCursor ?? undefined,
 				bounded,
