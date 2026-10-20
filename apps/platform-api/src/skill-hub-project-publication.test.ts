@@ -72,6 +72,8 @@ const resetUsers = () => {
 	users = {
 		"owner-a": user("owner-a", ["org-a"]),
 		"owner-b": user("owner-b", ["org-b"]),
+		// 与 owner-a 同组织的普通成员：组织共享不授予编辑或发布他人项目的权限。
+		"member-a": user("member-a", ["org-a"]),
 		admin: user("admin", ["org-a"], true),
 	};
 };
@@ -646,9 +648,10 @@ describe("Skill Hub web project editing and publication over HTTP (#2906)", () =
 	});
 
 	it("refuses other users, administrators, disabled projects and malformed requests", async () => {
-		const projectId = await createProject();
+		// 组织项目：跨组织用户、同组织成员与管理员都不能读取、修改或发布 Owner 的项目内容。
+		const projectId = await createProject("org-a");
 		expect((await save(projectId, 0)).status).toBe(200);
-		for (const userId of ["owner-b", "admin"]) {
+		for (const userId of ["owner-b", "member-a", "admin"]) {
 			const headers = {
 				"x-user-id": "owner-a",
 				"x-agent-infra-user": "owner-a",
@@ -687,6 +690,9 @@ describe("Skill Hub web project editing and publication over HTTP (#2906)", () =
 			).json(),
 		);
 		expect(after.revision).toBe(1);
+		const versions =
+			await sql`select count(*)::int as count from platform.skill_hub_versions where skill_id = ${projectId}`;
+		expect(versions[0]?.count).toBe(0);
 		const path = `/api/v2/skills/projects/${projectId}/content`;
 		expect((await fetchAs(path, null)).status).toBe(401);
 		expect(
