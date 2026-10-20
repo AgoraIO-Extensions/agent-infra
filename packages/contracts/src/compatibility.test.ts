@@ -4053,6 +4053,7 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/agents/{agentId}/skills/current-version" &&
 				path !== "/api/v2/agents/{agentId}/detail" &&
 				path !== "/api/v2/admin/agents/{agentId}" &&
+				path !== "/api/v2/directory/search" &&
 				path !== "/api/v2/skills/projects" &&
 				path !== "/api/v2/skills/projects/{projectId}" &&
 				path !== "/api/v2/skills/projects/{projectId}/content" &&
