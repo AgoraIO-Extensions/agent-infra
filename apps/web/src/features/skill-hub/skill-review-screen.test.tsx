@@ -9,7 +9,12 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/components/ui/toast";
+import { client as generatedClient } from "../../pilot/generated-v2/client.gen.js";
 import type { SkillHubPublicationResponseV1 } from "../../pilot/generated-v2/types.gen.js";
+import {
+	directoryRequestUrl,
+	directorySearchResponse,
+} from "../directory-test-fixtures.js";
 import {
 	type SkillReviewItem,
 	SkillReviewsScreen,
@@ -23,6 +28,8 @@ let directoryRecords: {
 	displayName: string;
 }[] = [];
 beforeEach(() => {
+	// 生成 Client 默认使用相对地址；jsdom 下的 Request 需要绝对地址。
+	generatedClient.setConfig({ baseUrl: "https://platform.test" });
 	directoryRecords = [
 		{ kind: "user", canonicalId: "user-other", displayName: "周可" },
 		{ kind: "user", canonicalId: "user-admin", displayName: "陈昊" },
@@ -35,15 +42,18 @@ beforeEach(() => {
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (input: string | URL | Request) => {
-			const url = new URL(String(input), "http://localhost");
+			const url = directoryRequestUrl(input);
 			const ids = url.searchParams.get("ids")?.split(",") ?? [];
-			return Response.json({
-				items: directoryRecords.filter(
-					(item) =>
-						item.kind === url.searchParams.get("kind") &&
-						ids.includes(item.canonicalId),
+			return Response.json(
+				directorySearchResponse(
+					url,
+					directoryRecords.filter(
+						(item) =>
+							item.kind === url.searchParams.get("kind") &&
+							ids.includes(item.canonicalId),
+					),
 				),
-			});
+			);
 		}),
 	);
 });

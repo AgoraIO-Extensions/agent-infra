@@ -6,6 +6,7 @@ import {
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, test } from "@playwright/test";
+import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { expectNoDuplicateControls } from "./page-health";
 import {
@@ -178,9 +179,9 @@ async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 		const ids =
 			new URL(route.request().url()).searchParams.get("ids")?.split(",") ?? [];
 		return route.fulfill({
-			json: {
-				schemaVersion: 1,
-				items: (["admin", "employee"] as const)
+			json: directorySearchResponse(
+				new URL(route.request().url()),
+				(["admin", "employee"] as const)
 					.map((item) => ({
 						kind: "user",
 						canonicalId: session(item).user.userId,
@@ -188,7 +189,7 @@ async function fixture(page: Page, role: "employee" | "admin" = "employee") {
 						email: `${session(item).user.userId}@example.test`,
 					}))
 					.filter((item) => ids.includes(item.canonicalId)),
-			},
+			),
 		});
 	});
 	await page.route(/\/api\/v2\/(admin\/)?agents(?:\?.*)?$/, (route) => {

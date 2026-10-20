@@ -6,9 +6,13 @@ import {
 	screen,
 	waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { client as generatedClient } from "../../pilot/generated-v2/client.gen.js";
 import type { DeploymentConfigurationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
-
+import {
+	directoryRequestUrl,
+	directorySearchResponse,
+} from "../directory-test-fixtures.js";
 import { AgentApplicationForm as AgentApplicationFormView } from "./agent-application-form.js";
 import {
 	pendingApplication as basePendingApplication,
@@ -16,6 +20,10 @@ import {
 	pendingApplication,
 } from "./test-fixtures.js";
 
+beforeEach(() => {
+	// 生成 Client 默认使用相对地址；jsdom 下的 Request 需要绝对地址。
+	generatedClient.setConfig({ baseUrl: "https://platform.test" });
+});
 afterEach(() => {
 	cleanup();
 	vi.unstubAllGlobals();
@@ -74,10 +82,10 @@ function stubDirectorySearch() {
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(
-			async () =>
+			async (input: string | URL | Request) =>
 				new Response(
-					JSON.stringify({
-						items: [
+					JSON.stringify(
+						directorySearchResponse(directoryRequestUrl(input), [
 							{
 								kind: "user",
 								canonicalId: "owner-2",
@@ -105,8 +113,8 @@ function stubDirectorySearch() {
 								displayName: "Available Organization",
 								organizationPath: "客户成功 / 支持中心",
 							},
-						],
-					}),
+						]),
+					),
 					{ headers: { "Content-Type": "application/json" } },
 				),
 		),
@@ -900,11 +908,13 @@ resources:
 
 	it("does not add a directory option after Escape or while loading", async () => {
 		let resolveSearch: ((response: Response) => void) | undefined;
+		let searchUrl: URL | undefined;
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(
-				() =>
+				(input: string | URL | Request) =>
 					new Promise<Response>((resolve) => {
+						searchUrl = directoryRequestUrl(input);
 						resolveSearch = resolve;
 					}),
 			),
@@ -922,18 +932,23 @@ resources:
 		fireEvent.keyDown(input, { key: "Enter" });
 		expect(screen.queryByText("Owner Two")).toBeNull();
 
+		// 生成 Client 在若干微任务后才调用 fetch：等关键词请求真正发出后再返回结果。
+		await waitFor(() => expect(searchUrl?.searchParams.get("q")).toBe("owner"));
 		resolveSearch?.(
 			new Response(
-				JSON.stringify({
-					items: [
-						{
-							kind: "user",
-							canonicalId: "owner-2",
-							displayName: "Owner Two",
-							email: "owner.two@example.test",
-						},
-					],
-				}),
+				JSON.stringify(
+					directorySearchResponse(
+						searchUrl ?? new URL("https://platform.test/?kind=user"),
+						[
+							{
+								kind: "user",
+								canonicalId: "owner-2",
+								displayName: "Owner Two",
+								email: "owner.two@example.test",
+							},
+						],
+					),
+				),
 				{ headers: { "Content-Type": "application/json" } },
 			),
 		);
