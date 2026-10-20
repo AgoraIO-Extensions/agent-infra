@@ -213,6 +213,20 @@ function nativeSessionRequired(): never {
 	);
 }
 
+/**
+ * 会话存在但原生进程尚未绑定（nativeSessionRef 为空）时抛出可重试错误。
+ * Worker 可通过重新提交 Turn 恢复；不同于 RUNTIME_SESSION_RECOVERY_FAILED（已绑定但丢失，不可重试）。
+ * 修复 #3017。
+ */
+function nativeSessionUnbound(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_SESSION_UNAVAILABLE",
+		"Runtime session could not be recovered",
+		503,
+		true, // retryable：原生会话尚未绑定，Worker 可重新提交后重试
+	);
+}
+
 function isTerminalRuntimeStatus(status: RuntimeStatusV1) {
 	return (
 		status === "completed" || status === "failed" || status === "cancelled"
@@ -744,7 +758,7 @@ export class RuntimeHost {
 			this.options.grantValidationV2?.now ?? Date.now,
 		);
 		const nativeSessionRef =
-			session.session.nativeSessionRef ?? nativeSessionRequired();
+			session.session.nativeSessionRef ?? nativeSessionUnbound();
 		const admitted = runtimeBrowserExecutionContextForCommand(
 			this.browserExecutionContext,
 			request,
@@ -778,7 +792,7 @@ export class RuntimeHost {
 			this.options.grantValidationV2?.now ?? Date.now,
 		);
 		const nativeSessionRef =
-			session.session.nativeSessionRef ?? nativeSessionRequired();
+			session.session.nativeSessionRef ?? nativeSessionUnbound();
 		const admitted = runtimeBrowserExecutionContextForCommand(
 			this.browserExecutionContext,
 			request,
@@ -989,7 +1003,7 @@ export class RuntimeHost {
 					this.options.grantValidationV2?.now ?? Date.now,
 				);
 				const nativeSessionRef =
-					session.nativeSessionRef ?? nativeSessionRequired();
+					session.nativeSessionRef ?? nativeSessionUnbound();
 				const replay = RuntimeEventSchema.array().safeParse(
 					await callDriver(() =>
 						this.options.driver.replayEvents(
@@ -1055,7 +1069,7 @@ export class RuntimeHost {
 				);
 				await this.eventAuthorityV4(request, verification);
 				await this.options.driver.acknowledgeEvents?.(
-					session.nativeSessionRef ?? nativeSessionRequired(),
+					session.nativeSessionRef ?? nativeSessionUnbound(),
 					request.executionId,
 					request.confirmedCursor,
 				);
@@ -1490,8 +1504,7 @@ export class RuntimeHost {
 
 	private async readStatus(session: StoredSession, executionId: string) {
 		if (session.recovery?.status === "blocked") return "unavailable" as const;
-		const nativeSessionRef =
-			session.nativeSessionRef ?? nativeSessionRequired();
+		const nativeSessionRef = session.nativeSessionRef ?? nativeSessionUnbound();
 		const status = RuntimeStatusV1Schema.safeParse(
 			await callDriver(() =>
 				this.options.driver.getStatus(nativeSessionRef, executionId),
@@ -1778,7 +1791,7 @@ export class RuntimeHost {
 				request.hostSessionRef,
 				request,
 				request.deliveryFence,
-			).nativeSessionRef ?? nativeSessionRequired();
+			).nativeSessionRef ?? nativeSessionUnbound();
 		const deadline = new AbortController();
 		const readSignal = AbortSignal.any([signal, deadline.signal]);
 		const deadlineTimer = setTimeout(
@@ -2094,8 +2107,7 @@ export class RuntimeHost {
 			request,
 			request.deliveryFence,
 		);
-		const nativeSessionRef =
-			session.nativeSessionRef ?? nativeSessionRequired();
+		const nativeSessionRef = session.nativeSessionRef ?? nativeSessionUnbound();
 		const directory = await callDriver(() =>
 			this.options.driver.getModelDirectory(nativeSessionRef),
 		);
@@ -2133,8 +2145,7 @@ export class RuntimeHost {
 			request,
 			request.deliveryFence,
 		);
-		const nativeSessionRef =
-			session.nativeSessionRef ?? nativeSessionRequired();
+		const nativeSessionRef = session.nativeSessionRef ?? nativeSessionUnbound();
 		const events = RuntimeEventSchema.array().safeParse(
 			await callDriver(() =>
 				this.options.driver.replayEvents(
@@ -2182,8 +2193,7 @@ export class RuntimeHost {
 			request,
 			request.deliveryFence,
 		);
-		const nativeSessionRef =
-			session.nativeSessionRef ?? nativeSessionRequired();
+		const nativeSessionRef = session.nativeSessionRef ?? nativeSessionUnbound();
 		const events = await callDriver(() =>
 			this.options.driver.subscribeEvents(
 				nativeSessionRef,
@@ -2252,7 +2262,7 @@ export class RuntimeHost {
 						executionId: request.executionId,
 						turnId: request.turnId,
 						sessionGeneration: request.sessionGeneration,
-						nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
+						nativeSessionRef: nativeSessionRef ?? nativeSessionUnbound(),
 						input: request.input,
 					}),
 				});
@@ -2306,7 +2316,7 @@ export class RuntimeHost {
 						executionId: request.executionId,
 						turnId: request.turnId,
 						sessionGeneration: request.sessionGeneration,
-						nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
+						nativeSessionRef: nativeSessionRef ?? nativeSessionUnbound(),
 					}),
 				});
 				return v1OperationResponse(
@@ -2358,7 +2368,7 @@ export class RuntimeHost {
 						executionId: request.executionId,
 						turnId: request.turnId,
 						sessionGeneration: request.sessionGeneration,
-						nativeSessionRef: nativeSessionRef ?? nativeSessionRequired(),
+						nativeSessionRef: nativeSessionRef ?? nativeSessionUnbound(),
 					}),
 				});
 				await this.options.store.activateGenerationBarrier(

@@ -80,6 +80,20 @@ function nativeRequired(): never {
 	);
 }
 
+/**
+ * 会话存在但原生进程尚未绑定（nativeSessionRef 为空）时抛出可重试错误。
+ * Worker 可通过重新提交 Turn 恢复；不同于 RUNTIME_SESSION_RECOVERY_FAILED（已绑定但丢失，不可重试）。
+ * 修复 #3017。
+ */
+function nativeSessionUnbound(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_SESSION_UNAVAILABLE",
+		"Runtime session could not be recovered",
+		503,
+		true, // retryable：原生会话尚未绑定，Worker 可重新提交后重试
+	);
+}
+
 function nativeUnsupported(): never {
 	throw new RuntimeHostError(
 		"RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED",
@@ -160,7 +174,7 @@ export class RuntimeHostV4 {
 			request.operation.deliveryFence,
 			"capabilityKind" in request,
 		);
-		const nativeSessionRef = session.nativeSessionRef ?? nativeRequired();
+		const nativeSessionRef = session.nativeSessionRef ?? nativeSessionUnbound();
 		const now = this.options.now ?? Date.now;
 		const expiresAt = Math.min(claims.expiresAt, now() + 30_000);
 		if (!Number.isSafeInteger(expiresAt) || expiresAt <= now())

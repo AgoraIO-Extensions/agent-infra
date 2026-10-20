@@ -86,6 +86,20 @@ function nativeRequired(): never {
 		503,
 	);
 }
+
+/**
+ * 会话存在但原生进程尚未绑定（nativeSessionRef 为空）时抛出可重试错误。
+ * Worker 可通过重新提交 Turn 恢复；不同于 RUNTIME_SESSION_RECOVERY_FAILED（已绑定但丢失，不可重试）。
+ * 修复 #3017。
+ */
+function nativeSessionUnbound(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_SESSION_UNAVAILABLE",
+		"Runtime session could not be recovered",
+		503,
+		true, // retryable：原生会话尚未绑定，Worker 可重新提交后重试
+	);
+}
 function invalidDriver(): never {
 	throw new RuntimeHostError(
 		"RUNTIME_DRIVER_INVALID",
@@ -233,7 +247,7 @@ export class RuntimeHostV3 {
 					request,
 					request.operation.deliveryFence,
 					true,
-				).nativeSessionRef ?? nativeRequired(),
+				).nativeSessionRef ?? nativeSessionUnbound(),
 			allowUnboundExecution: request.operation.kind === "execution",
 			active,
 			signal: active,
@@ -393,7 +407,7 @@ export class RuntimeHostV3 {
 							capabilitySourceVersion: request.capabilitySourceVersion,
 						}),
 						command: (nativeSessionRef) => {
-							if (!nativeSessionRef) nativeRequired();
+							if (!nativeSessionRef) nativeSessionUnbound();
 							if (request.capabilityKind === "command") {
 								const create = this.options.driver.createNativeCommandCommand;
 								if (!create) nativeUnsupported();
@@ -802,7 +816,7 @@ export class RuntimeHostV3 {
 						executionId: request.executionId,
 						turnId: request.turnId,
 						sessionGeneration: request.sessionGeneration,
-						nativeSessionRef: nativeSessionRef ?? nativeRequired(),
+						nativeSessionRef: nativeSessionRef ?? nativeSessionUnbound(),
 						input: request.input,
 					}),
 				});
@@ -873,7 +887,7 @@ export class RuntimeHostV3 {
 							executionId: request.executionId,
 							turnId: request.turnId,
 							sessionGeneration: request.sessionGeneration,
-							nativeSessionRef: nativeSessionRef ?? nativeRequired(),
+							nativeSessionRef: nativeSessionRef ?? nativeSessionUnbound(),
 						}),
 					});
 					return {
@@ -1090,7 +1104,7 @@ export class RuntimeHostV3 {
 							executionId: request.executionId,
 							turnId: request.turnId,
 							sessionGeneration: request.sessionGeneration,
-							nativeSessionRef: nativeSessionRef ?? nativeRequired(),
+							nativeSessionRef: nativeSessionRef ?? nativeSessionUnbound(),
 						}),
 					});
 					await this.options.store.activateGenerationBarrier(
@@ -1194,7 +1208,7 @@ export class RuntimeHostV3 {
 					this.options.grantValidation.now ?? Date.now,
 				);
 				await this.options.driver.acknowledgeEvents?.(
-					session.nativeSessionRef ?? nativeRequired(),
+					session.nativeSessionRef ?? nativeSessionUnbound(),
 					request.executionId,
 					request.confirmedCursor,
 				);
@@ -1262,7 +1276,7 @@ export class RuntimeHostV3 {
 				true,
 			);
 			const subscription = this.options.driver.subscribeEvents(
-				session.nativeSessionRef ?? nativeRequired(),
+				session.nativeSessionRef ?? nativeSessionUnbound(),
 				request.executionId,
 				request.afterCursor ?? undefined,
 				bounded,
