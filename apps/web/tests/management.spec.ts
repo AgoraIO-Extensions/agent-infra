@@ -1891,12 +1891,20 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	};
 	let active = false;
 	let saved: unknown;
-	await page.route(/\/api\/v1\/agents\/[^/]+\/wecom-/, async (route) => {
+	const statusReads: string[] = [];
+	await page.route(/\/api\/v[12]\/agents\/[^/]+\/wecom-/, async (route) => {
 		const path = new URL(route.request().url()).pathname;
-		if (path.endsWith("/wecom-bot"))
+		// 状态 V2 在首次点击前给出扫码不可用（#2911）。
+		if (path.endsWith("/wecom-bot")) {
+			statusReads.push(path);
 			return route.fulfill({
-				json: { status: active ? "connected" : "not_configured" },
+				json: {
+					status: active ? "connected" : "not_configured",
+					qrAvailable: false,
+					qrUnavailableReason: "authorization_correlation_unverified",
+				},
 			});
+		}
 		if (path.endsWith("/wecom-app"))
 			return route.fulfill({ json: { status: "not_configured" } });
 		if (path.endsWith("/wecom-setup"))
@@ -1933,10 +1941,12 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	});
 	await page.goto("/agents/agent-pilot-1");
 	await page.getByRole("link", { name: "Owner 配置" }).click();
+	const bot = page.getByRole("region", { name: "企微机器人", exact: true });
+	await expect(bot.getByText("未配置", { exact: true })).toBeVisible();
+	expect(statusReads).toContain("/api/v2/agents/agent-pilot-1/wecom-bot");
 	// CK-09：扫码入口不要求先勾选「我已知悉」；O-08：不可用时显示面板，不打开窗口。
 	const qrTrigger = page.getByRole("button", { name: "扫码授权" });
 	await qrTrigger.click();
-	const bot = page.getByRole("region", { name: "企微机器人", exact: true });
 	await expect(
 		bot.getByText("扫码授权暂不可用", { exact: true }),
 	).toBeVisible();
@@ -1954,19 +1964,17 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 				(window as unknown as { __openedWindows: string[] }).__openedWindows,
 		),
 	).toEqual([]);
-	await expect
-		.poll(() => setupRequests)
-		.toEqual([
-			"POST /api/v1/agents/agent-pilot-1/wecom-setup",
-			"POST /api/v1/agents/agent-pilot-1/wecom-setup/fixture-setup/cancel",
-		]);
+	// AC-1（#2911）：扫码不可用时打开面板不建立也不取消 setup session。
+	await page.waitForTimeout(300);
+	expect(setupRequests).toEqual([]);
+	await capture(page, info, "wecom-qr-unavailable");
 	await bot.getByRole("button", { name: "改用手动配置" }).click();
 	await expect(page.getByLabel("Bot ID", { exact: true })).toBeFocused();
 	await qrTrigger.click();
 	await bot.getByRole("button", { name: "关闭", exact: true }).click();
 	await expect(qrTrigger).toBeFocused();
-	// 已知扫码不可用后再次打开不再创建 setup session。
-	expect(setupRequests).toHaveLength(2);
+	// 再次打开同样不创建 setup session。
+	expect(setupRequests).toEqual([]);
 	await page
 		.getByRole("checkbox", {
 			name: "我已知悉：连接此机器人可能断开它在其他服务中的现有连接。",
@@ -1989,6 +1997,11 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 		secret,
 		takeoverConfirmed: true,
 	});
+	// 只有手动提交才建立 setup session。
+	expect(setupRequests.slice(0, 2)).toEqual([
+		"POST /api/v1/agents/agent-pilot-1/wecom-setup",
+		"POST /api/v1/agents/agent-pilot-1/wecom-setup/fixture-setup/credentials",
+	]);
 	await expect(page.getByLabel(/配置标识/)).toHaveCount(0);
 	await capture(page, info, "wecom-connected");
 });
@@ -2006,11 +2019,15 @@ test("Owner opens the bot QR window without the manual acknowledgement and confi
 	const authOrigin = "https://wecom-auth.example.test";
 	let active = false;
 	const submitted: unknown[] = [];
-	await page.route(/\/api\/v1\/agents\/[^/]+\/wecom-/, async (route) => {
+	await page.route(/\/api\/v[12]\/agents\/[^/]+\/wecom-/, async (route) => {
 		const path = new URL(route.request().url()).pathname;
+		// 状态 V2 确认扫码可用后，点击才建立 setup session（#2911）。
 		if (path.endsWith("/wecom-bot"))
 			return route.fulfill({
-				json: { status: active ? "connected" : "not_configured" },
+				json: {
+					status: active ? "connected" : "not_configured",
+					qrAvailable: true,
+				},
 			});
 		if (path.endsWith("/wecom-app"))
 			return route.fulfill({ json: { status: "not_configured" } });
@@ -2045,15 +2062,28 @@ test("Owner opens the bot QR window without the manual acknowledgement and confi
 			body: `<script>window.opener.postMessage({source:"agent-infra",state:"qr-state",botId:"qr-bot",secret:"synthetic-qr-secret"},"*");</script>`,
 		}),
 	);
+	const setupRequests: string[] = [];
+	page.on("request", (request) => {
+		if (/\/wecom-setup/.test(request.url()))
+			setupRequests.push(
+				`${request.method()} ${new URL(request.url()).pathname}`,
+			);
+	});
 	await page.goto("/agents/agent-pilot-1/configuration");
 	const bot = page.getByRole("region", { name: "企微机器人", exact: true });
 	const acknowledgement = bot.getByRole("checkbox", {
 		name: "我已知悉：连接此机器人可能断开它在其他服务中的现有连接。",
 	});
+	await expect(bot.getByText("未配置", { exact: true })).toBeVisible();
+	// AC-2（#2911）：扫码可用时，打开页面不建立 setup session，点击后才建立一次。
+	expect(setupRequests).toEqual([]);
 	await bot.getByRole("button", { name: "扫码授权" }).click();
 	// 扫码前不需要勾选上方「我已知悉」。
 	const openWindow = bot.getByRole("button", { name: "打开扫码窗口" });
 	await expect(openWindow).toBeEnabled();
+	expect(setupRequests).toEqual([
+		"POST /api/v1/agents/agent-pilot-1/wecom-setup",
+	]);
 	await expect(acknowledgement).not.toBeChecked();
 	await expect(bot).not.toContainText("请先勾选");
 	const popup = page.waitForEvent("popup");
@@ -4860,10 +4890,17 @@ async function wecomStatuses(
 ) {
 	const state = { ...initial };
 	const setupRequests: string[] = [];
-	await page.route(/\/api\/v1\/agents\/[^/]+\/wecom-/, async (route) => {
+	// 机器人卡片读取带扫码能力的状态 V2（#2911），自建应用仍读 V1。
+	await page.route(/\/api\/v[12]\/agents\/[^/]+\/wecom-/, async (route) => {
 		const path = new URL(route.request().url()).pathname;
 		if (path.endsWith("/wecom-bot"))
-			return route.fulfill({ json: { status: state.bot } });
+			return route.fulfill({
+				json: {
+					status: state.bot,
+					qrAvailable: false,
+					qrUnavailableReason: "authorization_correlation_unverified",
+				},
+			});
 		if (path.endsWith("/wecom-app"))
 			return route.fulfill({
 				json: {
