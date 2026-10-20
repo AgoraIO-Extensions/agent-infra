@@ -43,6 +43,11 @@ import {
 	SkillHubLoading,
 	SkillHubReadFailure,
 } from "./skill-hub-screen.js";
+import {
+	type SkillProjectContentActions,
+	SkillProjectContentEditor,
+	type SkillProjectContentState,
+} from "./skill-project-content-editor.js";
 
 /** 契约 packageName：小写字母或数字开头，最长 63 位。 */
 export const skillPackageNamePattern = /^[a-z0-9][a-z0-9._-]{0,62}$/;
@@ -310,6 +315,12 @@ export function SkillEditorScreen({
 	projectMissing = false,
 	actions = defaultEditorActions,
 	onProjectsChanged,
+	onProjectCreated,
+	content = { kind: "loading" },
+	onContentRetry,
+	contentRetrying = false,
+	contentActions,
+	onPublished,
 }: {
 	/** 从「编辑新版本」进入时的项目；新建时为空。 */
 	project?: SkillHubProjectV1;
@@ -317,6 +328,14 @@ export function SkillEditorScreen({
 	projectMissing?: boolean;
 	actions?: SkillEditorActions;
 	onProjectsChanged?: () => void;
+	/** 新建项目后进入该项目，继续编辑内容并发布。 */
+	onProjectCreated?: (projectId: string) => void;
+	/** 已有项目的当前内容（#2906）。 */
+	content?: SkillProjectContentState;
+	onContentRetry?: () => unknown;
+	contentRetrying?: boolean;
+	contentActions?: SkillProjectContentActions;
+	onPublished?: () => void;
 }) {
 	const id = useId();
 	const toast = useToast();
@@ -399,10 +418,11 @@ export function SkillEditorScreen({
 				);
 				setProjectFeedback({
 					tone: "status",
-					text: `Skill 项目已创建：${result.name}。可以继续导入第一个版本。`,
+					text: `Skill 项目已创建：${result.name}。可以继续编辑内容并发布，或导入第一个版本。`,
 				});
 				setImportForm((current) => ({ ...current, name: result.name }));
 				toast("Skill 项目已创建");
+				onProjectCreated?.(result.projectId);
 			}
 			operationKeys.current.delete(scope);
 			onProjectsChanged?.();
@@ -488,7 +508,7 @@ export function SkillEditorScreen({
 					<h1 id={`${id}-heading`}>创建与发布 Skill</h1>
 					<p>
 						创建 Skill
-						项目，或从固定来源导入版本。版本一经提交即固定，修改时导入新版本。
+						项目，在网页上编辑内容并发布固定版本，或从固定来源导入版本。版本一经提交即固定，修改内容须发布新版本。
 					</p>
 				</div>
 			</header>
@@ -571,6 +591,17 @@ export function SkillEditorScreen({
 						<FeedbackText feedback={projectFeedback} />
 					</form>
 				</FormSection>
+
+				{project ? (
+					<SkillProjectContentEditor
+						project={project}
+						content={content}
+						onRetry={onContentRetry}
+						retrying={contentRetrying}
+						onPublished={onPublished}
+						{...(contentActions ? { actions: contentActions } : {})}
+					/>
+				) : null}
 
 				<FormSection
 					title="导入固定来源"
@@ -673,8 +704,8 @@ export function SkillEditorScreen({
 				<Alert tone="info" icon={<ShieldCheck aria-hidden="true" />}>
 					<AlertTitle>权限不会扩大</AlertTitle>
 					<AlertDescription>
-						脚本保持禁用，Skill 只消费已授予 Agent 的文件、工具与 Connection
-						权限。
+						脚本只随包分发，打包、检查与绑定时都不会执行；Skill 只消费已授予
+						Agent 的文件、工具与 Connection 权限。
 					</AlertDescription>
 				</Alert>
 			</div>

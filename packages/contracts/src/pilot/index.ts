@@ -23,6 +23,7 @@ export * from "./skill-hub-agent-binding.ts";
 export * from "./skill-hub-import.ts";
 export * from "./skill-hub-installation.ts";
 export * from "./skill-hub-project.ts";
+export * from "./skill-hub-project-content.ts";
 export * from "./skill-hub-publication.ts";
 export * from "./skill-hub-read.ts";
 export * from "./skill-hub-review.ts";

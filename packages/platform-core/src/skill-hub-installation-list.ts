@@ -32,12 +32,13 @@ export function parseSkillHubInstallationQueryV1(query: {
 }
 
 /**
- * Store 读出的一条本人安装。version 只在当前主体按版本详情规则可见时给出，
- * 否则为 null，由投影标记为不可用。
+ * Store 读出的一条本人安装及其对应版本。visible 表示当前主体按版本详情规则可以查看该版本；
+ * 不可见时投影只保留安装事实，不带版本名称。
  */
 export type SkillHubInstallationListEntryV1 = Readonly<{
 	installation: SkillHubInstallationV1;
-	version: (SkillHubVersionV1 & { readonly name: string }) | null;
+	version: SkillHubVersionV1 & { readonly name: string };
+	visible: boolean;
 }>;
 
 /**
@@ -52,13 +53,14 @@ export function pageSkillHubInstallationsV1(
 	userId: string,
 ) {
 	return {
-		items: page.entries.map(({ installation, version }) => {
+		items: page.entries.map(({ installation, version, visible }) => {
+			// 可见与否都要求版本与安装一一对应。
 			if (
 				installation.principalType !== "user" ||
 				installation.principalId !== userId ||
 				installation.state !== "installed" ||
-				(version !== null &&
-					version.skillVersionId !== installation.skillVersionId)
+				version.skillVersionId !== installation.skillVersionId ||
+				typeof visible !== "boolean"
 			)
 				throw new SkillHubOperationErrorV1("unavailable");
 			return {
@@ -69,7 +71,7 @@ export function pageSkillHubInstallationsV1(
 				updatedAt: installation.updatedAt,
 				// 安装只接受已发布版本，之后只可能被撤销；其他状态不应出现，按不可见处理。
 				version:
-					version &&
+					visible &&
 					(version.state === "published" || version.state === "revoked")
 						? {
 								access: "visible" as const,

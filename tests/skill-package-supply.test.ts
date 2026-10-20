@@ -15,15 +15,27 @@ import {
 } from "vitest";
 import { startMinioFileFixtureV1 } from "../packages/object-storage/src/minio.test-support.ts";
 import {
+	admissionSignatureBytesV1,
+	canonicalSkillPackageScanReceiptV1,
+	canonicalSkillPackageSourceProofV1,
 	packSkillProjectSnapshotV1,
 	prepareSkillPackageV1,
+	verifyAdmissionSignatureV1,
+	verifySkillPackageScanReceiptV1,
 } from "../packages/object-storage/src/skill-package-admission.ts";
 import { createClamAvSkillPackageScannerV1 } from "../packages/object-storage/src/skill-package-clamav.ts";
 import {
 	SkillPackageSupplierV1,
 	type SkillPackageSupplyInputV1,
 } from "../packages/object-storage/src/skill-package-supplier.ts";
+import { createSkillProjectSourceVerifierV1 } from "../packages/object-storage/src/skill-project-source.ts";
 import type { ObjectStorageDataV1 } from "../packages/object-storage/src/types.ts";
+import { createSkillHubProjectPublicationV1 } from "../packages/platform-core/src/skill-hub-project-content.ts";
+import {
+	parseSkillPackagePublicationStateV1,
+	skillPackagePublicationStagesV1,
+} from "../packages/platform-core/src/skill-package-publication.ts";
+import { skillPackageObjectRefV1 } from "../packages/platform-core/src/skill-package-ref.ts";
 import { migratePlatformDatabase } from "../packages/platform-store/src/migrate.ts";
 import { startPostgresTestDatabase } from "../packages/platform-store/src/postgres-test.ts";
 import { PostgresSkillHubLifecycleV1 } from "../packages/platform-store/src/skill-hub.ts";
@@ -214,7 +226,7 @@ beforeAll(async () => {
 	fixture = await startMinioFileFixtureV1("skill-package");
 });
 beforeEach(async () => {
-	await sql`truncate platform.skill_hub_skills, platform.skill_hub_versions, platform.idempotency_records, platform.audit_events, platform.outbox_items, platform.platform_user_disables, platform.persisted_events cascade`;
+	await sql`truncate platform.skill_hub_project_contents, platform.skill_hub_skills, platform.skill_hub_versions, platform.idempotency_records, platform.audit_events, platform.outbox_items, platform.platform_user_disables, platform.persisted_events cascade`;
 	identities = new Map([
 		["owner-a", identity("owner-a")],
 		["owner-b", identity("owner-b")],
@@ -482,5 +494,346 @@ describe("Skill supplier with real PG, versioned S3 and native ClamAV", () => {
 			supplier().value.admitVersion(request(), input()),
 		).rejects.toThrow(/rejected/);
 		expect(scanCount).toBe(1);
+	});
+});
+
+// 网页编辑项目的发布（#2906）沿同一 Supplier：真实 PG、版本化 MinIO、原生 ClamAV 与 Ed25519。
+describe("web-edited Skill project publication with real PG, versioned S3 and native ClamAV", () => {
+	function projectPublication(lifecycle: PostgresSkillHubLifecycleV1) {
+		const projectSupplier = new SkillPackageSupplierV1({
+			storage: fixture.storage,
+			lifecycle,
+			resolveAdmissionPolicy: async () => ({
+				...(await scanner.describe()),
+				policyRevision,
+				signer: { ...keys, keyId: "key-1", trustRevision: "trust-1" },
+			}),
+			sourceVerifier: createSkillProjectSourceVerifierV1(),
+			scanner: {
+				scan: async (selected) => {
+					scanCount++;
+					return scanner.scan(selected);
+				},
+			},
+		});
+		return createSkillHubProjectPublicationV1({
+			readSource: (context, projectId, check) =>
+				lifecycle.readProjectPublicationSource(context, projectId, check),
+			pack: packSkillProjectSnapshotV1,
+			admit: ({ context, key, selection, source, archiveBytes }) =>
+				projectSupplier.admitVersion(
+					context,
+					{
+						...selection,
+						...source,
+						trustRevision: "trust-1",
+						policyRevision,
+						archiveBytes,
+					},
+					key,
+				),
+		});
+	}
+	async function project(
+		lifecycle: PostgresSkillHubLifecycleV1,
+		body: string,
+		organizationId?: string,
+	) {
+		const { project: created } = await lifecycle.createProject(
+			request(),
+			`create-${randomUUID()}`,
+			{
+				schemaVersion: 1,
+				name: `notes-${randomUUID().slice(0, 8)}`,
+				...(organizationId ? { organizationId } : {}),
+			},
+		);
+		await lifecycle.saveProjectContent(request(), created.projectId, "save-1", {
+			schemaVersion: 1,
+			baseRevision: 0,
+			files: [
+				{ path: "SKILL.md", encoding: "utf8", content: body },
+				{ path: "scripts/run.sh", encoding: "utf8", content: "echo run\n" },
+				{ path: "references/info.txt", encoding: "utf8", content: "resource" },
+			],
+		});
+		return created.projectId;
+	}
+
+	it("publishes the stored snapshot as a my_library version whose fixed objects verify", async () => {
+		const lifecycle = supplier().lifecycle;
+		const projectId = await project(lifecycle, "# notes\n", "org");
+		const result = await projectPublication(lifecycle).publish(
+			request(),
+			projectId,
+			"publish-1",
+			{
+				schemaVersion: 1,
+				contentRevision: 1,
+				version: "1.0.0",
+				visibility: "ORGANIZATION",
+			},
+		);
+		expect(result.version).toMatchObject({
+			skillId: projectId,
+			provider: "my_library",
+			visibility: "ORGANIZATION",
+			state: "pending_review",
+		});
+		expect(Object.keys(result.artifacts).toSorted()).toEqual(
+			[
+				"bundle",
+				"manifest",
+				"scan",
+				"signature",
+				"signature-record",
+				"source-proof",
+				"zip",
+			].toSorted(),
+		);
+		// 固定 ZIP 字节即服务端从已保存内容打出的包；来源证明固定项目修订且没有审批引用。
+		const source = await lifecycle.readProjectPublicationSource(
+			request(),
+			projectId,
+		);
+		const zip = result.artifacts.zip;
+		if (!zip || !source.content) throw new Error("zip missing");
+		expect(zip.sha256).toBe(
+			sha(packSkillProjectSnapshotV1(source.content.files)),
+		);
+		const [operation] =
+			await sql`select payload from platform.outbox_items where scope_type = 'skill_package' and scope_id = ${result.version.skillVersionId}`;
+		expect(operation?.payload.intents["source-proof"].evidence).toEqual({
+			schemaVersion: 1,
+			provider: "my_library",
+			publisherId: "owner-a",
+			sourceVersion: `project:${projectId}:r1`,
+			sourceDigest: zip.sha256,
+			approvalRef: null,
+			trustRevision: "trust-1",
+		});
+		expect(operation?.payload.selection.organizationId).toBe("org");
+		expect(scanCount).toBe(1);
+		// 同一版本号的新内容不能再进入供应。
+		await lifecycle.saveProjectContent(request(), projectId, "save-2", {
+			schemaVersion: 1,
+			baseRevision: 1,
+			files: [{ path: "SKILL.md", encoding: "utf8", content: "# changed\n" }],
+		});
+		await expect(
+			projectPublication(lifecycle).publish(request(), projectId, "publish-2", {
+				schemaVersion: 1,
+				contentRevision: 2,
+				version: "1.0.0",
+				visibility: "PRIVATE",
+			}),
+		).rejects.toMatchObject({ code: "version_conflict" });
+		expect(scanCount).toBe(1);
+	});
+
+	// #2949 的 consumer 只认同一原发布操作及其七阶段固定证据；网页发布必须留下同样完整、可逐项核对的事实。
+	it("leaves the unique original operation and every fixed evidence object verifiable after restart", async () => {
+		const command = {
+			schemaVersion: 1,
+			contentRevision: 1,
+			version: "1.0.0",
+			visibility: "PRIVATE",
+		};
+		const projectId = await project(supplier().lifecycle, "# evidence\n");
+		const result = await projectPublication(supplier().lifecycle).publish(
+			request(),
+			projectId,
+			"publish-evidence",
+			command,
+		);
+		const versionId = result.version.skillVersionId;
+		// 唯一原操作：同一 Skill Version 只有一条已成功的 skill.package.publish.v1 outbox 与一条已完成的幂等记录。
+		const operations =
+			await sql`select id, operation, status, payload from platform.outbox_items where scope_type = 'skill_package' and scope_id = ${versionId}`;
+		expect(operations).toHaveLength(1);
+		const operation = operations[0];
+		if (!operation) throw new Error("operation missing");
+		expect(operation).toMatchObject({
+			operation: "skill.package.publish.v1",
+			status: "succeeded",
+		});
+		const records =
+			await sql`select id, actor_id, command_type, status, result from platform.idempotency_records where scope_type = 'skill_package' and scope_id = ${versionId}`;
+		expect(records).toEqual([
+			{
+				id: operation.id,
+				actor_id: "owner-a",
+				command_type: "skill.package.publish.v1",
+				status: "completed",
+				result: { operationId: operation.id, skillVersionId: versionId },
+			},
+		]);
+		const state = parseSkillPackagePublicationStateV1(operation.payload);
+		expect(state).toMatchObject({
+			operationId: operation.id,
+			ownerId: "owner-a",
+			selection: {
+				skillId: projectId,
+				skillVersionId: versionId,
+				provider: "my_library",
+				version: "1.0.0",
+				sourceVersion: `project:${projectId}:r1`,
+				sourceDigest: result.version.packageDigest,
+				archiveDigest: result.version.packageDigest,
+				approvalRef: null,
+			},
+		});
+		expect(state.objects).toEqual(result.artifacts);
+		const [registered] =
+			await sql`select package_object_version, package_digest, manifest_digest, signature_digest from platform.skill_hub_versions where id = ${versionId}`;
+		expect(registered).toEqual({
+			package_object_version: state.objects.zip?.version,
+			package_digest: state.objects.zip?.sha256,
+			manifest_digest: state.objects.manifest?.sha256,
+			signature_digest: state.objects.signature?.sha256,
+		});
+
+		// 七阶段固定对象逐项按对象版本与 ETag 从版本化 MinIO 回读，长度、摘要与 mediaType 一致。
+		const bytes = new Map<string, Buffer>();
+		for (const stage of skillPackagePublicationStagesV1) {
+			const object = state.objects[stage];
+			if (!object) throw new Error(`${stage} missing`);
+			expect(object.objectRef).toBe(
+				skillPackageObjectRefV1(state.operationId, stage),
+			);
+			expect(object.version).not.toBe("null");
+			expect(object.mediaType).toBe(
+				stage === "zip"
+					? "application/zip"
+					: stage === "signature"
+						? "application/octet-stream"
+						: "application/json",
+			);
+			const body = Buffer.from(
+				await new Response(
+					await fixture.storage.download({
+						objectRef: object.objectRef,
+						version: object.version,
+						etag: object.etag,
+						expiresAt: new Date(Date.now() + 60_000).toISOString(),
+					}),
+				).arrayBuffer(),
+			);
+			expect(body.byteLength).toBe(object.sizeBytes);
+			expect(sha(body)).toBe(object.sha256);
+			bytes.set(stage, body);
+		}
+		const stored = (stage: string) => bytes.get(stage) ?? Buffer.alloc(0);
+		// manifest 由实际 ZIP 重建；来源证明与扫描回执按规范编码保存，扫描来自原生 ClamAV 且覆盖实际包。
+		const prepared = prepareSkillPackageV1({
+			archiveBytes: stored("zip"),
+			name: state.selection.name,
+			version: "1.0.0",
+		});
+		expect(prepared.packageDigest).toBe(result.version.packageDigest);
+		expect(Buffer.from(prepared.manifestBytes).equals(stored("manifest"))).toBe(
+			true,
+		);
+		const proof = JSON.parse(stored("source-proof").toString("utf8"));
+		expect(proof).toEqual(state.intents["source-proof"]?.evidence);
+		expect(
+			Buffer.from(canonicalSkillPackageSourceProofV1(proof)).equals(
+				stored("source-proof"),
+			),
+		).toBe(true);
+		const receipt = JSON.parse(stored("scan").toString("utf8"));
+		expect(receipt).toEqual(state.intents.scan?.evidence);
+		expect(
+			Buffer.from(canonicalSkillPackageScanReceiptV1(receipt)).equals(
+				stored("scan"),
+			),
+		).toBe(true);
+		expect(receipt).toMatchObject({
+			scannerId: "native-clamav",
+			verdict: "clean",
+		});
+		verifySkillPackageScanReceiptV1(
+			receipt,
+			prepared,
+			sha(stored("source-proof")),
+			policyRevision,
+			300_000,
+		);
+		// 签名记录关联同一固定 ZIP 版本、来源证明与扫描回执，Ed25519 签名可用受信公钥核对。
+		const record = JSON.parse(stored("signature-record").toString("utf8"));
+		expect(record).toEqual({
+			schemaVersion: 1,
+			skillId: projectId,
+			skillVersionId: versionId,
+			ownerId: "owner-a",
+			provider: "my_library",
+			version: "1.0.0",
+			packageObjectVersion: state.objects.zip?.version,
+			packageDigest: result.version.packageDigest,
+			manifestDigest: result.version.manifestDigest,
+			sourceProofDigest: sha(stored("source-proof")),
+			scanReceiptDigest: sha(stored("scan")),
+			trustRevision: "trust-1",
+			policyRevision,
+			signingKeyId: "key-1",
+		});
+		const { schemaVersion: _schemaVersion, ...signed } = record;
+		expect(() =>
+			verifyAdmissionSignatureV1(
+				admissionSignatureBytesV1(signed),
+				stored("signature"),
+				keys.publicKey,
+			),
+		).not.toThrow();
+		// bundle 绑定原操作、Owner、selection 与其余六个阶段的固定对象。
+		expect(JSON.parse(stored("bundle").toString("utf8"))).toEqual({
+			schemaVersion: 1,
+			operationId: state.operationId,
+			ownerId: "owner-a",
+			selection: { ...state.selection },
+			objects: Object.fromEntries(
+				skillPackagePublicationStagesV1
+					.filter((stage) => stage !== "bundle")
+					.map((stage) => [stage, state.objects[stage]]),
+			),
+		});
+		// 原操作与证据只含摘要和固定引用，不含项目正文。
+		expect(JSON.stringify(operation.payload)).not.toContain("# evidence");
+
+		// 重启后同一键重试只消费原结果：不重新扫描、不更换对象或签名，也不产生第二个发布操作。
+		const replay = await projectPublication(supplier().lifecycle).publish(
+			request(),
+			projectId,
+			"publish-evidence",
+			command,
+		);
+		expect(replay.replayed).toBe(true);
+		expect(replay.version).toEqual(result.version);
+		expect(replay.artifacts).toEqual(result.artifacts);
+		expect(scanCount).toBe(1);
+		const [after] =
+			await sql`select count(*)::int as count from platform.outbox_items where scope_type = 'skill_package'`;
+		expect(after?.count).toBe(1);
+	});
+
+	it("rejects an infected project snapshot without registering a version", async () => {
+		const lifecycle = supplier().lifecycle;
+		const projectId = await project(
+			lifecycle,
+			"EICAR-STANDARD-ANTIVIRUS-TEST-FILE",
+		);
+		await expect(
+			projectPublication(lifecycle).publish(request(), projectId, "publish-1", {
+				schemaVersion: 1,
+				contentRevision: 1,
+				version: "1.0.0",
+				visibility: "PRIVATE",
+			}),
+		).rejects.toThrow(/rejected/);
+		expect(await counts()).toEqual({
+			versions: 0,
+			completed: 0,
+			idempotency: 0,
+		});
 	});
 });

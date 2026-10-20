@@ -2706,6 +2706,44 @@ function isSkillHubInstallationListOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2906 新增 Skill 项目内容的读取与整体保存，以及由服务端打包、扫描、签名的网页发布；
+// 发布响应复用既有 SkillHubPublicationResponseV1，已发布的项目、版本登记与导入接口保持不变。
+function isSkillHubProjectContentOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/skills/projects/{projectId}/content",
+		"/api/v2/skills/projects/{projectId}/versions",
+	];
+	const schemas = [
+		"SkillHubProjectContentV1",
+		"SkillHubProjectContentUpdateV1",
+		"SkillHubProjectContentSaveResponseV1",
+		"SkillHubProjectPublicationRequestV1",
+	];
+	if (
+		previous.components?.schemas?.SkillHubPublicationResponseV1 === undefined ||
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"06df660d487eb336ef631e6ba9bb216b0d7a1e02c87e7b78c771d373f8ef40b3"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #2270 publishes the existing authenticated native metadata read route and
 // projection as an additive Browser v2 consumer contract.
 function isNativeMetadataOpenApiAddition(previous, current) {
@@ -5088,6 +5126,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isSkillHubVersionDetailOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationListOpenApiAddition(previous, current) &&
 			!isAgentDetailOwnerStatusOpenApiAddition(previous, current) &&
+			!isSkillHubProjectContentOpenApiAddition(previous, current) &&
 			!isSkillHubProjectAndImportOpenApiAddition(previous, current) &&
 			!isSkillHubProjectOpenApiAddition(previous, current) &&
 			!isSkillHubImportOpenApiAddition(previous, current) &&

@@ -2,6 +2,8 @@ import {
 	SkillHubAgentBindingStatusResponseV1Schema,
 	SkillHubAgentCurrentVersionV1Schema,
 	SkillHubInstallationResponseV1Schema,
+	SkillHubProjectContentSaveResponseV1Schema,
+	SkillHubProjectContentV1Schema,
 	SkillHubProjectPageV1Schema,
 	SkillHubPublicationResponseV1Schema,
 } from "@agent-infra/contracts/pilot";
@@ -15,11 +17,14 @@ import {
 	importSkillHubVersionV1,
 	installSkillHubVersionV1,
 	listSkillHubProjectsV1,
+	publishSkillHubProjectVersionV1,
 	publishSkillHubVersionV1,
 	readSkillHubAgentBindingsV1,
 	readSkillHubAgentCurrentVersionV1,
+	readSkillHubProjectContentV1,
 	reviewSkillHubVersionV1,
 	revokeSkillHubVersionV1,
+	saveSkillHubProjectContentV1,
 	uninstallSkillHubInstallationV1,
 	updateSkillHubProjectV1,
 } from "../../pilot/generated-v2/sdk.gen.js";
@@ -34,6 +39,8 @@ import type {
 	InstallSkillHubVersionV1Responses,
 	ListSkillHubProjectsV1Errors,
 	ListSkillHubProjectsV1Responses,
+	PublishSkillHubProjectVersionV1Errors,
+	PublishSkillHubProjectVersionV1Responses,
 	PublishSkillHubVersionV1Data,
 	PublishSkillHubVersionV1Errors,
 	PublishSkillHubVersionV1Responses,
@@ -41,14 +48,21 @@ import type {
 	ReadSkillHubAgentBindingsV1Responses,
 	ReadSkillHubAgentCurrentVersionV1Errors,
 	ReadSkillHubAgentCurrentVersionV1Responses,
+	ReadSkillHubProjectContentV1Errors,
+	ReadSkillHubProjectContentV1Responses,
 	ReviewSkillHubVersionV1Errors,
 	ReviewSkillHubVersionV1Responses,
 	RevokeSkillHubVersionV1Errors,
 	RevokeSkillHubVersionV1Responses,
+	SaveSkillHubProjectContentV1Errors,
+	SaveSkillHubProjectContentV1Responses,
 	SkillHubAgentBindingCommandV1,
 	SkillHubInstallationCommandV1,
+	SkillHubProjectContentUpdateV1,
+	SkillHubProjectContentV1,
 	SkillHubProjectCreateV1,
 	SkillHubProjectPageV1,
+	SkillHubProjectPublicationRequestV1,
 	SkillHubProviderImportRequestV1,
 	SkillHubReviewRequestV1,
 	UninstallSkillHubInstallationV1Errors,
@@ -174,6 +188,95 @@ export async function importSkillHubVersion(
 	const data = requireData("Skill 导入失败。", result);
 	const parsed = SkillHubPublicationResponseV1Schema.safeParse(data);
 	if (!parsed.success) throw requestError("导入响应无效。", result);
+	return parsed.data;
+}
+
+/** 本人项目的当前内容（网页编辑草稿）；只有项目 Owner 能读。 */
+export async function readSkillHubProjectContent(
+	projectId: string,
+	client?: Client,
+): Promise<SkillHubProjectContentV1> {
+	const result: Awaited<
+		RequestResult<
+			ReadSkillHubProjectContentV1Responses,
+			ReadSkillHubProjectContentV1Errors,
+			false
+		>
+	> = await readSkillHubProjectContentV1({
+		client,
+		path: { projectId },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	const data = requireData("项目内容暂时无法读取。", result);
+	const parsed = SkillHubProjectContentV1Schema.safeParse(data);
+	if (!parsed.success || parsed.data.projectId !== projectId)
+		throw requestError("项目内容响应无效。", {
+			...result,
+			error: { retryable: false },
+		});
+	return parsed.data;
+}
+
+/** 以读取到的修订号整体保存项目内容；修订已变化时服务端返回 409。 */
+export async function saveSkillHubProjectContent(
+	projectId: string,
+	body: SkillHubProjectContentUpdateV1,
+	idempotencyKey: string,
+	client?: Client,
+) {
+	const result: Awaited<
+		RequestResult<
+			SaveSkillHubProjectContentV1Responses,
+			SaveSkillHubProjectContentV1Errors,
+			false
+		>
+	> = await saveSkillHubProjectContentV1({
+		client,
+		path: { projectId },
+		body,
+		headers: { "Idempotency-Key": idempotencyKey },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	const data = requireData("项目内容保存失败。", result);
+	const parsed = SkillHubProjectContentSaveResponseV1Schema.safeParse(data);
+	if (!parsed.success || parsed.data.projectId !== projectId)
+		throw requestError("保存响应无效。", {
+			...result,
+			error: { retryable: false },
+		});
+	return parsed.data;
+}
+
+/** 网页发布：只提交内容修订、版本号与发布范围，包、摘要与签名都由服务端生成。 */
+export async function publishSkillHubProjectVersion(
+	projectId: string,
+	body: SkillHubProjectPublicationRequestV1,
+	idempotencyKey: string,
+	client?: Client,
+) {
+	const result: Awaited<
+		RequestResult<
+			PublishSkillHubProjectVersionV1Responses,
+			PublishSkillHubProjectVersionV1Errors,
+			false
+		>
+	> = await publishSkillHubProjectVersionV1({
+		client,
+		path: { projectId },
+		body,
+		headers: { "Idempotency-Key": idempotencyKey },
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	const data = requireData("版本发布失败。", result);
+	const parsed = SkillHubPublicationResponseV1Schema.safeParse(data);
+	if (!parsed.success || parsed.data.version.skillId !== projectId)
+		throw requestError("发布响应无效。", {
+			...result,
+			error: { retryable: false },
+		});
 	return parsed.data;
 }
 

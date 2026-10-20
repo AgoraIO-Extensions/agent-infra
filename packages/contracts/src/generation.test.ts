@@ -289,6 +289,8 @@ describe("standard contract artifacts", () => {
 			"/api/v2/skills/owned-versions",
 			"/api/v2/skills/projects",
 			"/api/v2/skills/projects/{projectId}",
+			"/api/v2/skills/projects/{projectId}/content",
+			"/api/v2/skills/projects/{projectId}/versions",
 			"/api/v2/skills/reviews",
 			"/api/v2/skills/versions",
 			"/api/v2/skills/versions/{skillVersionId}",
@@ -310,12 +312,28 @@ describe("standard contract artifacts", () => {
 			"/api/v2/skills",
 			"/api/v2/skills/installations",
 			"/api/v2/skills/owned-versions",
+			"/api/v2/skills/projects/{projectId}/content",
 			"/api/v2/skills/reviews",
 			"/api/v2/skills/versions/{skillVersionId}",
 			"/api/v2/skills/versions/{skillVersionId}/detail",
 		]) {
 			expect(artifacts.pilotBrowserOpenapiV2.paths[path].get.security).toEqual([
 				{ PlatformSession: [] },
+			]);
+		}
+		// #2906 内容保存与网页发布只接受平台会话并要求幂等键。
+		for (const [path, method] of [
+			["/api/v2/skills/projects/{projectId}/content", "put"],
+			["/api/v2/skills/projects/{projectId}/versions", "post"],
+		] as const) {
+			const operation = artifacts.pilotBrowserOpenapiV2.paths[path][method];
+			expect(operation.security).toEqual([{ PlatformSession: [] }]);
+			expect(
+				operation.parameters.filter(
+					(parameter: { in: string }) => parameter.in === "header",
+				),
+			).toEqual([
+				expect.objectContaining({ name: "Idempotency-Key", required: true }),
 			]);
 		}
 		const recent =

@@ -3285,6 +3285,34 @@ body {
 .skill-form-actions {
 	margin-top: 16px;
 }
+/* 网页编辑的项目内容（#2906）：正文与文件内容等宽显示，配套文件逐个分组。 */
+.skill-editor-form > .skill-editor-full {
+	margin-top: 16px;
+}
+.skill-content-text {
+	min-height: 180px;
+	font-family: var(--font-mono);
+	font-size: 13px;
+	line-height: 1.6;
+}
+.skill-content-files {
+	display: grid;
+	gap: 12px;
+	margin-top: 20px;
+}
+.skill-page h3.skill-content-heading {
+	font-family: var(--font-body);
+	font-size: 14px;
+	font-weight: 600;
+	letter-spacing: 0;
+}
+.skill-content-file {
+	min-width: 0;
+	margin: 0;
+	padding: 0 16px 16px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+}
 .skill-field-help {
 	color: var(--muted-ink);
 	font-size: 11px;

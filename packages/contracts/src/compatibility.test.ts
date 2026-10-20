@@ -929,6 +929,113 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the pinned Skill Hub project content and web publication (#2906)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const contentPath = "/api/v2/skills/projects/{projectId}/content";
+		const publishPath = "/api/v2/skills/projects/{projectId}/versions";
+		const schemas = [
+			"SkillHubProjectContentV1",
+			"SkillHubProjectContentUpdateV1",
+			"SkillHubProjectContentSaveResponseV1",
+			"SkillHubProjectPublicationRequestV1",
+		];
+		const previous = structuredClone(current);
+		delete previous.paths[contentPath];
+		delete previous.paths[publishPath];
+		for (const name of schemas) delete previous.components.schemas[name];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "skill-hub-project-content-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const publication = (value: typeof current) =>
+				value.components.schemas.SkillHubProjectPublicationRequestV1;
+			const update = (value: typeof current) =>
+				value.components.schemas.SkillHubProjectContentUpdateV1;
+			for (const mutate of [
+				// 三个入口都必须要求平台会话，写入必须带幂等键。
+				(value: typeof current) => {
+					value.paths[contentPath].get.security = [];
+				},
+				(value: typeof current) => {
+					value.paths[contentPath].put.security = [];
+				},
+				(value: typeof current) => {
+					value.paths[publishPath].post.security = [];
+				},
+				(value: typeof current) => {
+					value.paths[publishPath].post.parameters = value.paths[
+						publishPath
+					].post.parameters.filter(
+						(parameter: { in: string }) => parameter.in !== "header",
+					);
+				},
+				// 浏览器不能提交对象版本、摘要、签名、来源或组织。
+				(value: typeof current) => {
+					publication(value).additionalProperties = true;
+				},
+				(value: typeof current) => {
+					publication(value).properties.packageObjectVersion = {
+						type: "string",
+					};
+				},
+				(value: typeof current) => {
+					publication(value).properties.signatureDigest = { type: "string" };
+				},
+				(value: typeof current) => {
+					publication(value).properties.organizationId = { type: "string" };
+				},
+				// 内容保持有界，路径只能在规范布局内。
+				(value: typeof current) => {
+					delete update(value).properties.files.maxItems;
+				},
+				(value: typeof current) => {
+					delete update(value).properties.files.items.oneOf[0].properties
+						.content.maxLength;
+				},
+				(value: typeof current) => {
+					update(
+						value,
+					).properties.files.items.oneOf[0].properties.path.pattern = "^.+$";
+				},
+				// 已发布的版本登记、发布响应与项目投影保持不变。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubPublicationRequestV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubPublicationResponseV1.properties.content =
+						{ type: "string" };
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubProjectV1.properties.files = {
+						type: "array",
+					};
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the exact direct Agent creation contract", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -3453,6 +3560,8 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/agents/{agentId}/detail" &&
 				path !== "/api/v2/skills/projects" &&
 				path !== "/api/v2/skills/projects/{projectId}" &&
+				path !== "/api/v2/skills/projects/{projectId}/content" &&
+				path !== "/api/v2/skills/projects/{projectId}/versions" &&
 				path !== "/api/v2/skills/reviews" &&
 				path !== "/api/v2/skills/owned-versions" &&
 				path !== "/api/v2/skills/versions" &&

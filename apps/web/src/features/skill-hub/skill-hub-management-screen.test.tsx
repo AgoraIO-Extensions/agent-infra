@@ -283,10 +283,12 @@ describe("SkillEditorScreen", () => {
 	it("creates a project through the server action boundary without internal IDs", async () => {
 		const createProject = vi.fn().mockResolvedValue(project);
 		const onProjectsChanged = vi.fn();
+		const onProjectCreated = vi.fn();
 		await renderWithRouter(
 			<SkillEditorScreen
 				actions={editorActions({ createProject })}
 				onProjectsChanged={onProjectsChanged}
+				onProjectCreated={onProjectCreated}
 			/>,
 		);
 		expect(
@@ -312,10 +314,11 @@ describe("SkillEditorScreen", () => {
 		);
 		expect(
 			await screen.findByText(
-				"Skill 项目已创建：release-notes。可以继续导入第一个版本。",
+				"Skill 项目已创建：release-notes。可以继续编辑内容并发布，或导入第一个版本。",
 			),
 		).toBeTruthy();
 		expect(onProjectsChanged).toHaveBeenCalledOnce();
+		expect(onProjectCreated).toHaveBeenCalledWith("release-notes");
 	});
 
 	it("reuses the idempotency key when a write is retried", async () => {
@@ -412,5 +415,39 @@ describe("SkillEditorScreen", () => {
 		expect(
 			await screen.findByText("Skill 项目已停用：release-notes。"),
 		).toBeTruthy();
+	});
+
+	it("offers content editing and web publication only for an existing project (#2906)", async () => {
+		await renderWithRouter(<SkillEditorScreen actions={editorActions()} />);
+		expect(screen.queryByRole("heading", { name: "Skill 内容" })).toBeNull();
+		expect(screen.queryByRole("heading", { name: "发布版本" })).toBeNull();
+		cleanup();
+		await renderWithRouter(
+			<SkillEditorScreen
+				project={project}
+				actions={editorActions()}
+				content={{
+					kind: "ready",
+					content: {
+						schemaVersion: 1,
+						projectId: "release-notes",
+						revision: 0,
+						contentDigest: null,
+						fileCount: 0,
+						totalBytes: 0,
+						updatedAt: null,
+						files: [],
+					},
+				}}
+			/>,
+		);
+		expect(screen.getByRole("heading", { name: "Skill 内容" })).toBeTruthy();
+		expect(screen.getByRole("heading", { name: "发布版本" })).toBeTruthy();
+		expect(
+			(screen.getByLabelText("SKILL.md（任务说明）") as HTMLTextAreaElement)
+				.value,
+		).toBe("");
+		// 浏览器不提交、也不显示包事实。
+		expect(document.body.textContent).not.toMatch(/项目 ID|版本 ID|digest/i);
 	});
 });
