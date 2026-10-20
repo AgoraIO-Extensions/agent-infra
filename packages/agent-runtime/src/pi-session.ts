@@ -5,7 +5,6 @@ import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
-import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import type { RuntimeNativeCommandCommandV1 } from "./driver.js";
 import type { NativeProcessLaunch } from "./native-process.js";
 import { readPiNativeCommandsV1 } from "./pi-native-command.js";
@@ -302,6 +301,9 @@ export async function openPiSession(
 				ids.add(entry.id);
 			}
 		}
+		const { buildSessionContext } = await import(
+			"@earendil-works/pi-coding-agent"
+		);
 		return buildSessionContext(lines.slice(1)).messages;
 	}
 	try {
