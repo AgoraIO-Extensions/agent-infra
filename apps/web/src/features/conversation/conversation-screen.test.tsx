@@ -3243,6 +3243,25 @@ describe("session context, command feedback and reply cards (design alignment)",
 		};
 	}
 
+	it.each([
+		["an empty conversation", { conversationId: "conversation-1" }],
+		["the new-conversation page", { conversationId: undefined }],
+	] as const)(
+		"leaves the timeline of %s blank like the design (Z-01)",
+		async (_, changes) => {
+			setup(undefined, changes);
+			await composer();
+			// 时间线出现后再检查：旧实现的欢迎空态与时间线同时渲染。
+			await waitFor(() =>
+				expect(document.querySelector(".chat-thread .timeline")).not.toBeNull(),
+			);
+			const main = document.querySelector(".chat-thread");
+			expect(main?.querySelector('[data-slot="empty"]')).toBeNull();
+			expect(main?.textContent).not.toContain("从一个明确的任务开始");
+			expect(main?.textContent).not.toContain("对话仅对你可见");
+		},
+	);
+
 	it("puts a collapsed 会话上下文 bar above the timeline with a session-level Connection notice (CH-03, BR-04)", async () => {
 		setup(undefined, { connectionUrl: "https://connection.example.test/mcp" });
 		const trigger = await screen.findByRole("button", { name: /^会话上下文/ });
@@ -3605,6 +3624,86 @@ describe("session context, command feedback and reply cards (design alignment)",
 		const line = (await within(reply).findByText("已停止")).closest("p");
 		expect(line?.textContent).toContain("已停止 · 可重新生成");
 		expect(within(reply).queryByText("尚未输出正文。")).toBeNull();
+	});
+
+	it("confirms a cancelled stop with a toast and offers regeneration (Z-14)", async () => {
+		const cancelled = PersistedConversationEventV2Schema.parse({
+			...event(1),
+			type: "execution.status",
+			payload: { status: "cancelled" },
+		});
+		let stopped = false;
+		const { requests } = setup((request) => {
+			if (request.method === "POST") {
+				const path = new URL(request.url).pathname;
+				if (path.endsWith("/stops")) stopped = true;
+				return receipt();
+			}
+			// 服务端投影：已取消的 Execution 即使没有正文也有一条回答（conversation-read-projection）。
+			return stopped
+				? conversationWith(
+						[cancelled],
+						[userMessage(), answer({ status: "cancelled" })],
+					)(request)
+				: conversationWith([], [userMessage()], "active")(request);
+		});
+		fireEvent.click(await screen.findByRole("button", { name: "停止回复" }));
+		const toast = await screen.findByText("回复已停止", {
+			selector: '[data-slot="toast"]',
+		});
+		expect(toast.getAttribute("data-state")).toBe("open");
+		const reply = await screen.findByRole("article", {
+			name: `${agent.name}的消息`,
+		});
+		const line = (await within(reply).findByText("已停止")).closest("p");
+		expect(line?.textContent).toBe(
+			"已停止 · 可重新生成 · 重新生成 · 查看执行详情",
+		);
+		// 停止已确认：不再说「原回复已结束。」，也不再显示「正在停止」。
+		expect(screen.queryByText("原回复已结束。")).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /正在停止|停止回复/ }),
+		).toBeNull();
+		fireEvent.click(
+			within(reply).getByRole("button", { name: "重新生成：Private question" }),
+		);
+		await waitFor(() =>
+			expect(
+				requests.some(
+					(request) =>
+						request.method === "POST" &&
+						new URL(request.url).pathname.endsWith("/regenerations"),
+				),
+			).toBe(true),
+		);
+	});
+
+	it("says 原回复已结束 when the reply finished before the stop took effect (Z-14, #1524)", async () => {
+		const completed = PersistedConversationEventV2Schema.parse({
+			...event(2),
+			type: "execution.status",
+			payload: { status: "completed" },
+		});
+		let stopped = false;
+		setup((request) => {
+			if (request.method === "POST") {
+				stopped = true;
+				return receipt();
+			}
+			return stopped
+				? conversationWith(
+						[event(1), completed],
+						[userMessage(), answer({ text: "output 1" })],
+					)(request)
+				: conversationWith([event(1)], [userMessage()], "active")(request);
+		});
+		fireEvent.click(await screen.findByRole("button", { name: "停止回复" }));
+		const notice = await screen.findByText("原回复已结束。");
+		expect(notice.getAttribute("role")).toBe("status");
+		expect(notice.closest("article")?.getAttribute("aria-label")).toBe(
+			`${agent.name}的消息`,
+		);
+		expect(screen.queryByText("回复已停止")).toBeNull();
 	});
 
 	it("labels messages with the signed-in user and their times (CH-08)", async () => {

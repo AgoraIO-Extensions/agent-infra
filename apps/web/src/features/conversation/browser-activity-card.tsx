@@ -34,6 +34,14 @@ const phaseIcons: Record<BrowserCardPhase, typeof Eye> = {
 
 const timelineSteps = ["请求已确认", "页面已打开", "结果已回读"] as const;
 
+/** 设计只在终态卡上放「查看操作记录」；非终态只保留本阶段的操作，记录仍可从执行详情打开（Z-09）。 */
+const recordPhases: ReadonlySet<BrowserCardPhase> = new Set([
+	"complete",
+	"denied",
+	"stopped",
+	"unknown",
+]);
+
 /** 在待处理请求到期的那一刻重新渲染，让过期的请求立即失去动作。 */
 function useExpiryTick(expiresAt: string | undefined, readNow: () => number) {
 	const [, setTick] = useState(0);
@@ -91,6 +99,7 @@ export function BrowserActivityCard({
 	useExpiryTick(card?.expiresAt, now);
 	if (!card || (card.phase === "idle" && !includeIdle)) return null;
 	const records =
+		recordPhases.has(card.phase) &&
 		browserAuditEntries(events, conversationId, executionId).length > 0;
 	const actions = card.actions.filter(
 		(action) => action.command.kind !== "stop_execution" || canStop,
@@ -163,12 +172,14 @@ export function BrowserActivityCard({
 							{action.label}
 						</Button>
 					))}
-					<BrowserOperationRecordDialog
-						conversationId={conversationId}
-						events={events}
-						executionId={executionId}
-						viewer={viewer}
-					/>
+					{records && (
+						<BrowserOperationRecordDialog
+							conversationId={conversationId}
+							events={events}
+							executionId={executionId}
+							viewer={viewer}
+						/>
+					)}
 				</div>
 			)}
 		</section>

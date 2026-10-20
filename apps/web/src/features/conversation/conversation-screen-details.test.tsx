@@ -261,6 +261,30 @@ describe("execution details dialog", () => {
 	});
 
 	it.each([
+		["browser_navigate", true, "打开页面"],
+		["browser_observe", true, "读取页面"],
+		["browser_interact", false, "操作页面"],
+		["browser_unregistered", true, "浏览器操作"],
+	])(
+		"labels the browser tool %s like the browser card instead of its raw ID (Z-15)",
+		async (toolId, bound, label) => {
+			const browserEvent = {
+				...operationEvent(3, "completed", { executionId, toolId }),
+				conversationId,
+			};
+			const payload = { ...browserEvent.payload } as Record<string, unknown>;
+			// 没有浏览器绑定、但 toolId 是已登记浏览器工具的事实同样不外露原值。
+			if (!bound) delete payload.browser;
+			renderDetails(
+				detail({ events: [modelFact, { ...browserEvent, payload }] }),
+			);
+			const dialog = await screen.findByRole("dialog", { name: "执行详情" });
+			expect(dialog.textContent).toContain(`工具调用 · ${label} · 已完成`);
+			expect(dialog.textContent).not.toContain(toolId);
+		},
+	);
+
+	it.each([
 		[[modelFact, connectionFact("verified")], [], "已调用 1 次 · 已核实"],
 		[[modelFact, connectionFact("unverified")], [], "已调用 1 次 · 待核实"],
 		[[modelFact], [], "未调用"],

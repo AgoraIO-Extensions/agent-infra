@@ -129,6 +129,60 @@ describe("BrowserActivityCard", () => {
 		expect(screen.queryByRole("button", { name: "停止操作" })).toBeNull();
 	});
 
+	it.each([
+		[
+			"waiting for confirmation",
+			[operationEvent(1, "completed"), sideEffectEvent(2, "pending")],
+			"浏览器操作请求",
+			["允许这次操作", "拒绝"],
+		],
+		[
+			"waiting for a handoff",
+			[operationEvent(1, "completed"), handoffEvent(2, "requested")],
+			"需要你接管浏览器",
+			["接管浏览器", "停止"],
+		],
+		[
+			"running",
+			[
+				operationEvent(1, "completed"),
+				operationEvent(2, "started", { operationRef: "operation-2" }),
+			],
+			"浏览器操作进行中",
+			["停止操作"],
+		],
+	])(
+		"keeps only this phase's actions while %s (Z-09)",
+		(_, events, title, labels) => {
+			renderCard(events, { canStop: true });
+			const region = screen.getByRole("region", { name: title });
+			// 已有操作记录，但非终态卡不放「查看操作记录」；记录仍可从执行详情打开。
+			expect(
+				within(region)
+					.getAllByRole("button")
+					.map((button) => button.textContent),
+			).toEqual(labels);
+		},
+	);
+
+	it.each([
+		["complete", [operationEvent(1, "completed")], "浏览器操作已完成"],
+		["denied", [sideEffectEvent(1, "rejected")], "浏览器操作已拒绝"],
+		["stopped", [sideEffectEvent(1, "cancelled")], "浏览器操作已停止"],
+		["unknown", [operationEvent(1, "unknown")], "浏览器结果待核实"],
+	])(
+		"offers the operation record on the %s card (Z-09)",
+		(_, events, title) => {
+			renderCard(events);
+			const region = screen.getByRole("region", { name: title });
+			expect(
+				within(region)
+					.getAllByRole("button")
+					.map((button) => button.textContent),
+			).toEqual(["查看操作记录"]);
+		},
+	);
+
 	it("leaves terminal cards without commands", () => {
 		renderCard([operationEvent(1, "completed")]);
 		const region = screen.getByRole("region", { name: "浏览器操作已完成" });

@@ -28,6 +28,7 @@ import {
 	type BrowserRecordViewer,
 	browserAuditEntries,
 } from "./browser-audit-view.js";
+import { browserToolLabel, isBrowserToolId } from "./browser-labels.js";
 import { ConnectionInstallationPanel } from "./connection-installation-panel.js";
 import {
 	commandFailure,
@@ -222,6 +223,16 @@ function ProcessSummary({
 	);
 }
 
+/**
+ * 工具调用事实的名称（Z-15）：浏览器工具与浏览器卡、操作记录共用 browser-labels 的映射，
+ * 不外露 browser_navigate 等原始值；其他工具没有显示名，仍显示 Runtime 上报的 toolId。
+ */
+function toolName(fact: Extract<OperationEvent["payload"], { kind: "tool" }>) {
+	return fact.browser || isBrowserToolId(fact.toolId)
+		? browserToolLabel(fact.toolId)
+		: fact.toolId;
+}
+
 function usageText(
 	fact: Extract<OperationEvent["payload"], { kind: "model" }>,
 ) {
@@ -266,7 +277,7 @@ function OperationFacts({
 										optionId: fact.model.modelOptionId,
 										modelId: fact.model.modelId,
 									})}`
-								: `工具调用 · ${fact.toolId}`}{" "}
+								: `工具调用 · ${toolName(fact)}`}{" "}
 							· {phaseLabels[fact.phase]}
 						</p>
 						<p className="execution-detail-meta">{meta.join(" · ")}</p>

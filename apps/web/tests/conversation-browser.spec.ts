@@ -419,6 +419,11 @@ test("renders one design browser card for a pending request and sends only its c
 	);
 	const actions = card.locator(".browser-capability-actions");
 	expect((await computed(actions, ["columnGap"])).columnGap).toBe("8px");
+	// Z-09：已有操作记录，但等待确认卡只放本阶段的「允许 / 拒绝」，不放「查看操作记录」。
+	await expect(actions.getByRole("button")).toHaveText([
+		"允许这次操作",
+		"拒绝",
+	]);
 	const allow = page.getByRole("button", {
 		name: "允许这次操作：提交 example.test",
 	});
@@ -511,6 +516,10 @@ test("shows the running timeline and stops through the current execution", async
 	});
 	const stop = card.getByRole("button", { name: "停止操作" });
 	await expect(stop.locator("svg")).toHaveCount(1);
+	// Z-09：执行中只有「停止操作」，操作记录从执行详情查看。
+	await expect(
+		card.locator(".browser-capability-actions").getByRole("button"),
+	).toHaveText(["停止操作"]);
 	await stop.click();
 	await expect.poll(() => fixture.posts.length).toBe(1);
 	expect(fixture.posts[0]?.body).toEqual({
@@ -533,6 +542,10 @@ test("offers takeover with a stop instead of allow on a handoff request (NI-94)"
 	await expect(page.getByRole("button", { name: /允许这次操作/ })).toHaveCount(
 		0,
 	);
+	// Z-09：等待接管只有「接管浏览器 / 停止」，没有「查看操作记录」。
+	await expect(
+		card.locator(".browser-capability-actions").getByRole("button"),
+	).toHaveText(["接管浏览器", "停止"]);
 	await card.getByRole("button", { name: "接管浏览器" }).click();
 	await expect.poll(() => fixture.posts.length).toBe(1);
 	await card.getByRole("button", { name: "停止接管" }).click();
@@ -740,6 +753,9 @@ test("opens execution details as a modal dialog that traps focus (R4-09, N-08, N
 	await expect(dialog.locator("dl.conversation-facts > dt").nth(3)).toHaveText(
 		"Connection",
 	);
+	// Z-15：工具调用事实按 browser-labels 映射显示「打开页面」，不外露 browser_navigate。
+	await expect(dialog).toContainText("工具调用 · 打开页面 · 已完成");
+	expect(await dialog.innerText()).not.toContain("browser_");
 	await expect(dialog.getByRole("button", { name: "返回对话" })).toHaveCount(0);
 	await expect(
 		dialog.getByRole("button", { name: "核实原执行状态" }),
