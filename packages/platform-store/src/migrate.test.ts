@@ -2440,7 +2440,9 @@ describe("published Relay authority migration", () => {
 						"idempotency_key_non_empty",
 						"request_digest_hex",
 						"updated_by_non_empty",
-					].map((name) => `file_limit_declarations:file_limit_declaration_${name}`),
+					].map(
+						(name) => `file_limit_declarations:file_limit_declaration_${name}`,
+					),
 				].sort(),
 				indexes: [
 					...expectedDelta.indexes,
