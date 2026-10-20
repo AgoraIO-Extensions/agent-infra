@@ -9,6 +9,7 @@ import {
 	readFile,
 	realpath,
 	rm,
+	rmdir,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1092,9 +1093,42 @@ export function createCodexNativeSkillInputV1(
 
 interface MaterializedCodexInput {
 	readonly items: readonly CodexNativeInputItem[];
-	readonly directory: string;
 	readonly cleanup: () => Promise<void>;
 }
+
+/** Server-resolved V5 facts paired with the exact admitted bytes. */
+export type CodexNativeTextInputBytesV1 = Readonly<{
+	readonly bytes: Uint8Array;
+	readonly sha256: string;
+	readonly byteLength: number;
+	readonly mediaType: "text/plain";
+}>;
+
+/**
+ * Request-scoped V5 text input seam for one native Skill execution.
+ *
+ * The deployment supplies `readNativeTextInput` on the same object it passes as
+ * `RuntimeFileBridgePortV1`. It must return the V5-admitted `sha256`,
+ * `byteLength` and `mediaType` for the keyed `attachmentId` together with the
+ * exact bytes; the Driver recomputes the digest and verifies every fact.
+ * Recomputing the facts from the bytes and calling that verification does not
+ * satisfy this contract. A missing or unsupported input fails closed.
+ */
+export interface CodexNativeTextInputPortV1 {
+	readNativeTextInput(
+		attachmentId: string,
+		signal?: AbortSignal,
+	): Promise<CodexNativeTextInputBytesV1>;
+}
+
+/** Server-derived root and file names; no attachment identifier is a path. */
+const codexNativeTextInputRootName = ".agent-infra-inputs";
+const codexNativeTextInputMediaType = "text/plain";
+const codexNativeTextInputMaximumFiles = 4;
+const codexNativeTextInputMaximumBytes = 4 * 1024;
+const codexNativeTextInputExecutionPattern =
+	/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const codexNativeTextInputDigestPattern = /^[a-f0-9]{64}$/;
 
 /**
  * Image media types the pinned Codex `local_image` consumer accepts. Anything
@@ -1132,6 +1166,159 @@ async function cleanupCodexInputDirectory(directory: string): Promise<void> {
 				setTimeout(resolve, codexInputCleanupRetryDelayMs);
 			});
 		}
+	}
+}
+
+/**
+ * Detects the request-scoped V5 text input seam. Legacy V4 and non-Skill paths
+ * never receive it, so they keep failing closed for text attachments.
+ */
+function codexNativeTextInputPort(
+	fileBridge: RuntimeFileBridgePortV1 | undefined,
+): RuntimeFileBridgePortV1 & CodexNativeTextInputPortV1 {
+	const candidate = fileBridge as
+		| (RuntimeFileBridgePortV1 & Partial<CodexNativeTextInputPortV1>)
+		| undefined;
+	if (!candidate || typeof candidate.readNativeTextInput !== "function")
+		unavailable();
+	return candidate as RuntimeFileBridgePortV1 & CodexNativeTextInputPortV1;
+}
+
+/**
+ * Reads one V5 text input under a bounded deadline. The signal reaches the
+ * deployment authority; a late result is released instead of holding the
+ * Execution open after its own deadline.
+ */
+async function acquireCodexNativeTextInput(
+	port: CodexNativeTextInputPortV1,
+	attachmentId: string,
+): Promise<unknown> {
+	const controller = new AbortController();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const deadline = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(() => {
+			controller.abort();
+			reject(unavailableError());
+		}, codexInputAcquisitionTimeoutMs);
+	});
+	let pending: Promise<unknown>;
+	try {
+		pending = port.readNativeTextInput(attachmentId, controller.signal);
+	} catch (error) {
+		clearTimeout(timer);
+		throw error;
+	}
+	try {
+		return await Promise.race([pending, deadline]);
+	} catch (error) {
+		controller.abort();
+		void pending.catch(() => {});
+		throw error;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
+ * Verifies one V5 text input against its declared facts. NUL and non-UTF-8
+ * content is rejected before any file exists; the digest is recomputed rather
+ * than trusted.
+ */
+function verifyCodexNativeTextInput(input: unknown): Uint8Array {
+	if (!isPlainRecord(input)) unavailable();
+	const { bytes, sha256, byteLength, mediaType } = input;
+	if (
+		!(bytes instanceof Uint8Array) ||
+		typeof sha256 !== "string" ||
+		!codexNativeTextInputDigestPattern.test(sha256) ||
+		typeof byteLength !== "number" ||
+		!Number.isSafeInteger(byteLength) ||
+		byteLength < 0 ||
+		byteLength > codexNativeTextInputMaximumBytes ||
+		mediaType !== codexNativeTextInputMediaType ||
+		bytes.byteLength !== byteLength ||
+		createHash("sha256").update(bytes).digest("hex") !== sha256 ||
+		bytes.includes(0)
+	)
+		unavailable();
+	try {
+		new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+	} catch {
+		unavailable();
+	}
+	return bytes;
+}
+
+/** Rejects links, foreign owners and group/other-accessible directories. */
+async function assertPrivateCodexInputDirectory(path: string): Promise<void> {
+	let info: Awaited<ReturnType<typeof lstat>>;
+	try {
+		info = await lstat(path);
+	} catch {
+		unavailable();
+	}
+	if (info.isSymbolicLink() || !info.isDirectory()) unavailable();
+	const uid = process.getuid?.();
+	if (uid !== undefined && info.uid !== uid) unavailable();
+	if ((info.mode & 0o077) !== 0) unavailable();
+}
+
+async function ensurePrivateCodexInputRoot(root: string): Promise<void> {
+	try {
+		await mkdir(root, { mode: 0o700 });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") unavailable();
+	}
+	await assertPrivateCodexInputDirectory(root);
+}
+
+/**
+ * Writes one server-named file with an exclusive, non-following create. The
+ * file is never replaced and the opened descriptor is re-checked.
+ */
+async function writeCodexNativeTextInputFile(
+	directory: string,
+	name: string,
+	bytes: Uint8Array,
+): Promise<void> {
+	const path = join(directory, name);
+	let handle: Awaited<ReturnType<typeof open>> | undefined;
+	try {
+		handle = await open(
+			path,
+			fsConstants.O_WRONLY |
+				fsConstants.O_CREAT |
+				fsConstants.O_EXCL |
+				(fsConstants.O_NOFOLLOW ?? 0),
+			0o600,
+		);
+		await handle.writeFile(bytes);
+		const info = await handle.stat();
+		if (!info.isFile() || info.nlink !== 1) unavailable();
+		const uid = process.getuid?.();
+		if (uid !== undefined && info.uid !== uid) unavailable();
+		if ((info.mode & 0o077) !== 0) unavailable();
+	} catch (error) {
+		if (error instanceof RuntimeHostError) throw error;
+		unavailable();
+	} finally {
+		await handle?.close().catch(() => {});
+	}
+}
+
+/**
+ * Removes one Execution directory and, when it is the last one, the shared
+ * root. A non-empty root belongs to another live Execution and is left alone.
+ */
+async function cleanupCodexNativeTextInputDirectory(
+	executionDirectory: string,
+	root: string,
+): Promise<void> {
+	await cleanupCodexInputDirectory(executionDirectory);
+	try {
+		await rmdir(root);
+	} catch {
+		// Another Execution may still own the root, or it is already gone.
 	}
 }
 
@@ -4204,8 +4391,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	 * memory only: a replay retries the removal before it may report success.
 	 */
 	private readonly pendingInputCleanups = new Map<string, string>();
-	/** Accepted native Turns own these directories until their terminal receipt. */
-	private readonly retainedInputDirectories = new Map<string, string>();
+	/** Accepted native Turns own these materializations until their terminal receipt. */
+	private readonly retainedInputDirectories = new Map<
+		string,
+		MaterializedCodexInput
+	>();
 	/** Request-local authority for one accepted Turn's native file changes. */
 	private readonly nativeResultFiles = new Map<
 		string,
@@ -6805,13 +6995,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.pendingInputCleanups.delete(key);
 		}
 		let materialized: MaterializedCodexInput | undefined;
-		const ensureInput = async () => {
-			materialized ??= await this.materializeCodexInput(
-				command,
-				text,
-				fileBridge,
-				key,
-			);
+		const ensureInput = async (nativeSessionRef?: string) => {
+			materialized ??= command.nativeSkill
+				? await this.materializeNativeSkillTextInput(
+						command,
+						text,
+						fileBridge,
+						key,
+						nativeSessionRef,
+					)
+				: await this.materializeCodexInput(command, text, fileBridge, key);
 			return materialized;
 		};
 		// Materialized bytes must never cross into a native side effect under a File
@@ -6826,8 +7019,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		try {
 			if (
 				command.input.attachments.length > 0 &&
+				!command.nativeSkill &&
 				!this.operationRecord(command)
 			) {
+				// A native Skill text input is materialized only after its Conversation
+				// process and cwd exist; it cannot use this pre-admission path.
 				await ensureInput();
 				revalidateInput();
 			}
@@ -6967,7 +7163,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			let cleaned = false;
 			return {
 				items,
-				directory,
 				cleanup: async () => {
 					if (cleaned) return;
 					try {
@@ -6992,9 +7187,103 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 	}
 
+	/**
+	 * Materializes ordered V5 text inputs inside the current Conversation's
+	 * native process cwd. Only server-derived names are written and only their
+	 * relative paths are exposed to the model; the original task text and its
+	 * parameter digest are never rewritten.
+	 */
+	private async materializeNativeSkillTextInput(
+		command: CodexSubmitTurnCommand,
+		text: string,
+		fileBridge: RuntimeFileBridgePortV1 | undefined,
+		key: string,
+		nativeSessionRef: string | undefined,
+	): Promise<MaterializedCodexInput> {
+		if (!command.nativeSkill || !nativeSessionRef) stateInvalid();
+		const skillInput = await this.nativeSkillInput(
+			command,
+			text,
+			nativeSessionRef,
+		);
+		const attachmentIds = command.input.attachments;
+		if (
+			attachmentIds.length === 0 ||
+			attachmentIds.length > codexNativeTextInputMaximumFiles ||
+			new Set(attachmentIds).size !== attachmentIds.length ||
+			!codexNativeTextInputExecutionPattern.test(command.executionId)
+		)
+			unavailable();
+		if (!fileBridge) unavailable();
+		const port = codexNativeTextInputPort(fileBridge);
+		const cwd = this.workspaceReadRoot(nativeSessionRef);
+		const root = join(cwd, codexNativeTextInputRootName);
+		const executionDirectory = join(root, command.executionId);
+		let created = false;
+		try {
+			await ensurePrivateCodexInputRoot(root);
+			try {
+				await mkdir(executionDirectory, { mode: 0o700 });
+			} catch {
+				// The Execution directory is exclusive; a leftover or planted path is
+				// never reused or overwritten.
+				unavailable();
+			}
+			created = true;
+			await assertPrivateCodexInputDirectory(executionDirectory);
+			fileBridge.revalidate();
+			const relativePaths: string[] = [];
+			for (const [index, attachmentId] of attachmentIds.entries()) {
+				const bytes = verifyCodexNativeTextInput(
+					await acquireCodexNativeTextInput(port, attachmentId),
+				);
+				const name = `${String(index).padStart(2, "0")}.txt`;
+				await writeCodexNativeTextInputFile(executionDirectory, name, bytes);
+				relativePaths.push(
+					`${codexNativeTextInputRootName}/${command.executionId}/${name}`,
+				);
+			}
+			fileBridge.revalidate();
+			const mapping = [
+				"Trusted control text inputs for this execution (paths are relative to the current workspace):",
+				...relativePaths.map((path) => `- ${path}`),
+			].join("\n");
+			let cleaned = false;
+			return {
+				items: [...skillInput.items, { type: "text", text: mapping }],
+				cleanup: async () => {
+					if (cleaned) return;
+					try {
+						await cleanupCodexNativeTextInputDirectory(
+							executionDirectory,
+							root,
+						);
+						cleaned = true;
+					} catch {
+						this.pendingInputCleanups.set(key, executionDirectory);
+						throw unavailableError();
+					}
+				},
+			};
+		} catch (error) {
+			if (created) {
+				try {
+					await cleanupCodexNativeTextInputDirectory(executionDirectory, root);
+				} catch {
+					// Retain ownership of the remaining private bytes and surface the
+					// cleanup failure; a later attempt must retry it before proceeding.
+					this.pendingInputCleanups.set(key, executionDirectory);
+					throw unavailableError();
+				}
+			}
+			throw error;
+		}
+	}
+
 	private async nativeSkillInput(
 		command: CodexSubmitTurnCommand,
 		text: string,
+		nativeSessionRef = command.nativeSessionRef,
 	) {
 		if (!command.nativeSkill) skillDirectoryInvalid();
 		const entries = nativeSkillEntries(
@@ -7002,7 +7291,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.skillDirectory,
 		);
 		const receipt = this.nativeSkillDirectoryReceipts.get(
-			command.nativeSessionRef ?? "",
+			nativeSessionRef ?? "",
 		);
 		if (
 			!receipt ||
@@ -7047,7 +7336,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async executePreparedSubmitTurn(
 		command: CodexSubmitTurnCommand,
 		text: string,
-		ensureInput: () => Promise<MaterializedCodexInput>,
+		ensureInput: (nativeSessionRef?: string) => Promise<MaterializedCodexInput>,
 		revalidateInput: () => void,
 		retainInputUntilTerminal: (nativeTurn: CodexModelTurn) => Promise<void>,
 	) {
@@ -7064,13 +7353,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!prepared.created) {
 			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
-		if (command.nativeSkill && command.input.attachments.length > 0)
-			stateInvalid();
-		const nativeInput = command.nativeSkill
-			? await this.nativeSkillInput(command, text)
-			: command.input.attachments.length > 0
-				? await ensureInput()
-				: { items: [{ type: "text", text }], cleanup: async () => {} };
 		const nativeSelection = this.operationSelection(prepared.operation);
 		if (!nativeSelection) stateInvalid();
 		const hasPersistedThread =
@@ -7105,6 +7387,27 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		if (!session.threadId) stateInvalid();
 		this.assertRuntimeRequirements(this.session(session.nativeSessionRef));
+		// Native Skill text inputs can only be placed once this Conversation's
+		// process and cwd exist, so materialization happens after ensureThread.
+		let nativeInput: MaterializedCodexInput | undefined;
+		try {
+			nativeInput = command.nativeSkill
+				? command.input.attachments.length > 0
+					? await ensureInput(session.nativeSessionRef)
+					: await this.nativeSkillInput(command, text, session.nativeSessionRef)
+				: command.input.attachments.length > 0
+					? await ensureInput(session.nativeSessionRef)
+					: { items: [{ type: "text", text }], cleanup: async () => {} };
+		} catch (error) {
+			// Nothing crossed the native side; release the prepared operation so a
+			// corrected retry is not reported as unknown.
+			await this.discardUnsubmittedPreparedOperation(
+				command,
+				prepared.operation.nativeSessionRef,
+			);
+			throw error;
+		}
+		if (!nativeInput) stateInvalid();
 		const admissionKey = operationKey(command);
 		const admissionDeadline = Date.now() + rpcRequestTimeoutMs;
 		this.modelAdmissionDeadlines.set(admissionKey, admissionDeadline);
@@ -8244,20 +8547,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		await Promise.allSettled(
 			[...this.textDeltaBatches].map((batch) => batch.flushing),
 		);
+		// Native text inputs live under each Conversation cwd, not the private
+		// temporary root, so every retained materialization is cleaned first.
+		const retained = [...this.retainedInputDirectories.values()];
+		this.retainedInputDirectories.clear();
+		await Promise.allSettled(
+			retained.map((materialized) => materialized.cleanup()),
+		);
 		if (this.codexInputRootPath) {
 			try {
 				await cleanupCodexInputDirectory(this.codexInputRootPath);
-				this.retainedInputDirectories.clear();
 			} catch {
 				// A failed close leaves the root for the next open to reclaim.
 			}
-		} else {
-			await Promise.allSettled(
-				[...this.retainedInputDirectories.values()].map((directory) =>
-					cleanupCodexInputDirectory(directory),
-				),
-			);
-			this.retainedInputDirectories.clear();
 		}
 		await this.journalArchiving;
 		try {
@@ -12017,7 +12319,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			await materialized.cleanup();
 			return;
 		}
-		this.retainedInputDirectories.set(key, materialized.directory);
+		this.retainedInputDirectories.set(key, materialized);
 	}
 
 	private async cleanupRetainedMaterializedInput(nativeTurn: CodexModelTurn) {
@@ -12026,14 +12328,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			nativeTurn.threadId,
 			nativeTurn.turnId,
 		);
-		const directory = this.retainedInputDirectories.get(key);
-		if (!directory) return;
+		const materialized = this.retainedInputDirectories.get(key);
+		if (!materialized) return;
 		try {
-			await cleanupCodexInputDirectory(directory);
-			if (this.retainedInputDirectories.get(key) === directory)
+			await materialized.cleanup();
+			if (this.retainedInputDirectories.get(key) === materialized)
 				this.retainedInputDirectories.delete(key);
 		} catch {
-			// Driver shutdown retries the private root cleanup. A local cleanup
+			// Driver shutdown retries owned materializations. A local cleanup
 			// failure must not hide the already confirmed native terminal.
 		}
 	}
@@ -12953,6 +13255,35 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			delete state.operations[key];
 		});
+	}
+
+	/**
+	 * Releases a prepared submit operation that never reached the native side.
+	 * A concurrent uncertainty marker or active Execution keeps it in place.
+	 */
+	private async discardUnsubmittedPreparedOperation(
+		command: CodexSubmitTurnCommand,
+		nativeSessionRef: string,
+	) {
+		const key = operationKey(command);
+		try {
+			await this.update((state) => {
+				const session = ownRecordValue(state.sessions, nativeSessionRef);
+				const operation = ownRecordValue(state.operations, key);
+				if (
+					!session ||
+					!operation ||
+					operation.nativeSessionRef !== nativeSessionRef ||
+					operation.state !== "prepared" ||
+					session.acceptanceUncertainOperationKey !== undefined ||
+					session.activeExecutionId !== undefined
+				)
+					return;
+				delete state.operations[key];
+			});
+		} catch {
+			// The original materialization failure is the actionable error.
+		}
 	}
 
 	private session(nativeSessionRef: string) {

@@ -1,9 +1,9 @@
-// Run inside the pinned Runtime image. The provider and Host-current seam are
-// controlled; Codex and file IO are real. This is not Platform/LDAP or real-model
-// acceptance evidence.
+// Run inside the pinned Runtime image. The provider, Host current authority and
+// V5 text-input port are controlled; Codex and file IO are real. This is not
+// Platform/LDAP or real-model acceptance evidence.
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -35,6 +35,15 @@ const installedSkill = {
 const directory = await mkdtemp("/tmp/codex-workspace-native-");
 const path = join(directory, "driver.json");
 const marker = `file-only-${randomUUID()}`;
+const inputId = "controlled-input";
+const inputPath = ".agent-infra-inputs/controlled-skill/00.txt";
+const inputBytes = Buffer.from(`controlled native Skill input ${marker}`);
+const inputFacts = {
+	bytes: inputBytes,
+	sha256: hash(inputBytes),
+	byteLength: inputBytes.byteLength,
+	mediaType: "text/plain",
+};
 const callId = "controlled-workspace-read";
 let requests = 0;
 let completedTool = false;
@@ -43,6 +52,7 @@ let authorizations = 0;
 let driver;
 let finished = false;
 let ack;
+let workspacePath;
 
 function events(response, items) {
 	response.writeHead(200, { "content-type": "text/event-stream" });
@@ -73,7 +83,30 @@ const provider = createServer(async (request, response) => {
 		requests++;
 		assert.equal(request.headers.authorization, "Bearer controlled-credential");
 		if (requests === 1) {
+			// Phase A only creates the Conversation Thread and its reader snapshot.
 			assert.ok(!JSON.stringify(body).includes(marker));
+			events(response, [
+				{
+					type: "message",
+					id: "controlled-prepared",
+					role: "assistant",
+					status: "completed",
+					content: [
+						{
+							type: "output_text",
+							text: "controlled workspace prepared",
+							annotations: [],
+						},
+					],
+				},
+			]);
+			return;
+		}
+		if (requests === 2) {
+			// The V5 input is on disk and only its server-derived relative path is
+			// visible to the model; its bytes must not be inlined into the request.
+			assert.ok(!JSON.stringify(body).includes(marker));
+			assert.ok(JSON.stringify(body).includes(inputPath));
 			assert.ok(
 				JSON.stringify(body.tools ?? []).includes("read_text_file") ||
 					JSON.stringify(body.input).includes("read_text_file"),
@@ -81,11 +114,9 @@ const provider = createServer(async (request, response) => {
 			const root = join(`${path}.native`, "conversations");
 			const conversations = await readdir(root);
 			assert.equal(conversations.length, 1);
-			// Operator fixture input, placed in the Driver-created workspace only.
-			await writeFile(
-				join(root, conversations[0], "workspace", "proof.txt"),
-				marker,
-			);
+			workspacePath = join(root, conversations[0], "workspace");
+			const info = await stat(join(workspacePath, inputPath));
+			assert.equal(info.mode & 0o777, 0o600);
 			events(response, [
 				{
 					type: "function_call",
@@ -93,34 +124,33 @@ const provider = createServer(async (request, response) => {
 					call_id: callId,
 					namespace: "workspace",
 					name: "read_text_file",
-					arguments: JSON.stringify({ path: "proof.txt" }),
+					arguments: JSON.stringify({ path: inputPath }),
 				},
 			]);
-		} else {
-			assert.equal(requests, 2, "unexpected provider retry");
-			const output = body.input.find(
-				(item) =>
-					item.type === "function_call_output" && item.call_id === callId,
-			);
-			assert.ok(output, "missing actual native client-tool output");
-			assert.ok(JSON.stringify(output.output).includes(marker));
-			completedTool = true;
-			events(response, [
-				{
-					type: "message",
-					id: "controlled-answer",
-					role: "assistant",
-					status: "completed",
-					content: [
-						{
-							type: "output_text",
-							text: "controlled summary completed",
-							annotations: [],
-						},
-					],
-				},
-			]);
+			return;
 		}
+		assert.equal(requests, 3, "unexpected provider retry");
+		const output = body.input.find(
+			(item) => item.type === "function_call_output" && item.call_id === callId,
+		);
+		assert.ok(output, "missing actual native client-tool output");
+		assert.ok(JSON.stringify(output.output).includes(marker));
+		completedTool = true;
+		events(response, [
+			{
+				type: "message",
+				id: "controlled-answer",
+				role: "assistant",
+				status: "completed",
+				content: [
+					{
+						type: "output_text",
+						text: "controlled summary completed",
+						annotations: [],
+					},
+				],
+			},
+		]);
 	} catch (error) {
 		providerError = error;
 		response.writeHead(500).end();
@@ -150,54 +180,121 @@ try {
 			return { revalidate() {} };
 		},
 	});
-	const command = {
+	const setupCommand = {
 		schemaVersion: 1,
 		kind: "submit-turn",
-		operationId: "controlled-execution",
+		operationId: "controlled-setup",
 		agentId: "controlled-agent",
 		conversationId: "controlled-conversation",
-		executionId: "controlled-execution",
-		turnId: "controlled-turn",
+		executionId: "controlled-setup",
+		turnId: "controlled-setup-turn",
 		sessionGeneration: 1,
 		input: {
-			text: "Summarize proof.txt using the approved workspace read tool.",
+			text: "Prepare the controlled workspace.",
 			attachments: [],
 		},
 	};
-	const accepted = await driver.execute(command);
+	const setup = await driver.execute(setupCommand);
+	assert.equal(setup.result.outcome, "accepted");
+	const waitFor = async (nativeSessionRef, executionId) => {
+		const deadline = Date.now() + 60_000;
+		for (;;) {
+			if (providerError) throw providerError;
+			const status = await driver.getStatus(nativeSessionRef, executionId);
+			if (status === "completed" || status === "failed") return status;
+			if (Date.now() >= deadline) return status;
+			await delay(50);
+		}
+	};
+	assert.equal(
+		await waitFor(setup.nativeSessionRef, setupCommand.executionId),
+		"completed",
+	);
+
+	const binding = {
+		principal: { kind: "user", id: "controlled-reader" },
+		scope: {
+			agentId: setupCommand.agentId,
+			conversationId: setupCommand.conversationId,
+			executionId: setupCommand.executionId,
+			sessionGeneration: setupCommand.sessionGeneration,
+		},
+	};
+	const abort = new AbortController();
+	const projection = await driver.discoverNativeSkills({
+		nativeSessionRef: setup.nativeSessionRef,
+		signal: abort.signal,
+		expiresAt: Date.now() + 60_000,
+		assertCurrent: () => binding,
+		revalidate: async () => binding,
+	});
+	const capability = projection.capabilities.find(
+		(entry) => entry.kind === "skill" && entry.name === "workspace-summary",
+	);
+	assert.ok(capability, "missing installed Skill capability");
+	const parameters = "summarize the controlled input";
+	const skillBase = driver.createNativeSkillCommand({
+		schemaVersion: 1,
+		kind: "native-capability",
+		operationId: "controlled-skill",
+		agentId: setupCommand.agentId,
+		conversationId: setupCommand.conversationId,
+		executionId: "controlled-skill",
+		turnId: "controlled-skill-turn",
+		sessionGeneration: setupCommand.sessionGeneration,
+		nativeSessionRef: setup.nativeSessionRef,
+		capabilityId: capability.id,
+		directoryRevision: projection.revision,
+		packageDigest: manifest.packageDigest.sha256,
+		manifestDigest: build.manifestSha256,
+		parameters,
+		parametersDigest: hash(parameters),
+		capabilityName: capability.name,
+		capabilitySourceVersion: capability.source.version,
+	});
+	const skillCommand = {
+		...skillBase,
+		input: { ...skillBase.input, attachments: [inputId] },
+	};
+	const fileBridge = {
+		readNativeTextInput: async (attachmentId) => {
+			assert.equal(attachmentId, inputId);
+			return inputFacts;
+		},
+		readInput: async () => {
+			throw new Error("unexpected image input read");
+		},
+		revalidate: () => {},
+		writeResult: async () => {
+			throw new Error("unexpected result write");
+		},
+	};
+	const accepted = await driver.execute(skillCommand, { fileBridge });
 	assert.equal(accepted.result.outcome, "accepted");
 	ack = (async () => {
 		while (!finished) {
 			const batch = await driver.replayEvents(
 				accepted.nativeSessionRef,
-				command.executionId,
+				skillCommand.executionId,
 			);
 			if (batch.at(-1)?.cursor)
 				await driver.acknowledgeEvents(
 					accepted.nativeSessionRef,
-					command.executionId,
+					skillCommand.executionId,
 					batch.at(-1).cursor,
 				);
 			await delay(10);
 		}
 	})();
-	const deadline = Date.now() + 60_000;
-	let status;
-	do {
-		if (providerError) throw providerError;
-		status = await driver.getStatus(
-			accepted.nativeSessionRef,
-			command.executionId,
-		);
-		if (status === "completed" || status === "failed") break;
-		await delay(50);
-	} while (Date.now() < deadline);
-	assert.equal(status, "completed");
+	assert.equal(
+		await waitFor(accepted.nativeSessionRef, skillCommand.executionId),
+		"completed",
+	);
 	assert.equal(completedTool, true);
-	assert.equal(requests, 2);
+	assert.equal(requests, 3);
 	const replay = await driver.replayEvents(
 		accepted.nativeSessionRef,
-		command.executionId,
+		skillCommand.executionId,
 	);
 	const tools = replay
 		.filter((event) => event.type === "operation")
@@ -206,6 +303,21 @@ try {
 	assert.deepEqual(
 		tools.map((fact) => fact.phase),
 		["intent", "started", "completed"],
+	);
+	assert.ok(workspacePath, "missing Driver-created workspace");
+	const cleanupDeadline = Date.now() + 5_000;
+	for (;;) {
+		try {
+			await stat(join(workspacePath, ".agent-infra-inputs"));
+		} catch {
+			break;
+		}
+		if (Date.now() >= cleanupDeadline) break;
+		await delay(25);
+	}
+	await assert.rejects(
+		stat(join(workspacePath, ".agent-infra-inputs")),
+		(error) => error.code === "ENOENT",
 	);
 	let durable = await readFile(path, "utf8");
 	try {
@@ -220,18 +332,21 @@ try {
 		if (error.code !== "ENOENT") throw error;
 	}
 	assert.ok(!durable.includes(marker));
-	assert.ok(!durable.includes("proof.txt"));
+	assert.ok(!durable.includes(inputPath));
+	assert.ok(!durable.includes(inputId));
 	console.info(
 		JSON.stringify({
 			status: "passed",
-			check: "pinned-native-workspace-read",
+			check: "pinned-native-skill-text-input-workspace-read",
 			codexVersion: provenance.codexVersion,
 			imageSourceRevision: build.sourceRevision,
 			provider: "controlled-loopback",
 			hostAuthorization: "controlled",
+			textInput: "controlled-v5-port",
 			providerRequests: requests,
 			authorizations,
 			fileOnlyMarkerReturnedByTool: completedTool,
+			materializedInputCleaned: true,
 			durablePayloadAbsent: true,
 		}),
 	);
