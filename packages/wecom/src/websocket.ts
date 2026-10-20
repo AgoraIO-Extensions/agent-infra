@@ -327,6 +327,12 @@ export function createWecomWebSocketV1(options: {
 		client.on(`message.${kind}`, receiveMessageFrame);
 	const sender: WecomSendPortV1 = {
 		async send(input) {
+			// #2982：stream 回复按企微思考过程样式渲染 `<think>`；带思考的文本不合规时退回只发答案，
+			// 思考过程不会让答案发送失败。
+			const content =
+				input.textWithThinking && text(input.textWithThinking, 20480)
+					? input.textWithThinking
+					: input.text;
 			let route: WecomReplyRouteV1;
 			try {
 				route = await options.revealReply(input.replyHandle);
@@ -344,7 +350,7 @@ export function createWecomWebSocketV1(options: {
 					scopeKey(route.scope) !== scopeKey(input.scope) ||
 					!Number.isFinite(Date.parse(route.expiresAt)) ||
 					Date.parse(route.expiresAt) <= now().getTime() ||
-					!text(input.text, 20480) ||
+					!text(content, 20480) ||
 					sending.has(route.websocket.requestId) ||
 					!(await current())
 				)
@@ -373,7 +379,7 @@ export function createWecomWebSocketV1(options: {
 				const ack = await client.replyStream(
 					{ headers: { req_id: ws.requestId } },
 					ws.streamId,
-					input.text,
+					content,
 					true,
 				);
 				return ack.errcode === 0 ? "sent" : "unknown";

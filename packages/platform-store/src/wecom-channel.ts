@@ -126,6 +126,27 @@ function receipt(row: Row) {
 		executionId: row.execution_id,
 	};
 }
+/** #2982：把有界读取的思考过程行转成 claim 字段；少读或不认识的行都按「没有读完」处理。 */
+function thinkingClaim(
+	rows: readonly { kind: string | null; text: string | null; total: string }[],
+): Pick<WecomDeliveryClaimV1, "thinking"> {
+	const parts = rows.flatMap(
+		(row): { kind: "raw" | "summary"; text: string }[] => {
+			const kind = row.kind;
+			return (kind === "raw" || kind === "summary") && row.text
+				? [{ kind, text: row.text }]
+				: [];
+		},
+	);
+	return parts.length
+		? {
+				thinking: {
+					parts,
+					complete: parts.length === Number(rows[0]?.total),
+				},
+			}
+		: {};
+}
 export class PostgresWecomChannelV1
 	implements WecomChannelStorePortV1, WecomDeliveryStorePortV1
 {
@@ -776,6 +797,26 @@ export class PostgresWecomChannelV1
 							order by e.event_payload->>'fileId',e.sequence
 						) confirmed order by sequence::bigint`
 					: [];
+			// #2982：只有完成的回答读取思考过程。按顺序只取到累计约 20480 字节（最多 10000 条）的前缀，
+			// 读取量有界；没有读完时 Core 截短并附提示，答案照常发送。
+			const thinking =
+				row.execution_id &&
+				row.acceptance_status === "accepted" &&
+				row.execution_status === "completed"
+					? await sql<
+							{ kind: string | null; text: string | null; total: string }[]
+						>`select kind,text,total from (
+							select e.event_payload->>'kind' as kind,
+								e.event_payload->>'text' as text,
+								e.sequence,
+								coalesce(sum(octet_length(e.event_payload->>'text')) over (order by e.sequence rows between unbounded preceding and 1 preceding),0) as before_bytes,
+								count(*) over () as total
+							from platform.conversation_events e
+							where e.execution_id=${row.execution_id}
+								and e.event_type='reasoning.delta'
+								and e.source='runtime'
+						) reasoning where before_bytes<20480 order by sequence limit 10000`
+					: [];
 			return {
 				receiptId: row.id,
 				fence: row.fence + 1,
@@ -804,6 +845,7 @@ export class PostgresWecomChannelV1
 							]
 						: [];
 				}),
+				...thinkingClaim(thinking),
 			};
 		});
 		for (let i = 0; i < unknown; i++) this.#observe("unknown");

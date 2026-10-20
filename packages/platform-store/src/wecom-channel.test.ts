@@ -3,10 +3,12 @@ import {
 	createWecomAuthorizationV1,
 	createWecomChannelV1,
 	createWecomDeliveryV1,
+	type WecomAuthorizationPortV1,
 	type WecomChannelStorePortV1,
 	type WecomConnectionFenceV1,
 	type WecomIdentityPortV1,
 	type WecomMessageV1,
+	type WecomSendPortV1,
 	wecomChannelIdV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
@@ -113,39 +115,41 @@ const keylessConfiguration = (() => {
 		],
 	};
 })();
+/** 测试用的放行授权：主体即企微发送者，修订与 fixture Agent 一致。 */
+const allowedAuthorization: WecomAuthorizationPortV1 = {
+	async authorize(scope) {
+		return {
+			outcome: "allowed",
+			authority: {
+				managementRevision: 1,
+				channelRevision: "channels_1",
+				actor: {
+					schemaVersion: 1,
+					actorId: scope.senderId,
+					agentId: scope.agentId,
+					channelId: wecomChannelIdV1(scope),
+					authorizationRevision: "authorization_1",
+					supportsSupplementaryInstruction: false,
+					taskBoundary: {
+						schemaVersion: 1,
+						principal: { kind: "user", id: scope.senderId },
+						agentId: scope.agentId,
+						channelId: wecomChannelIdV1(scope),
+						identityRevision: "identity-1",
+						agentAuthorizationRevision: "authorization_1",
+						accessSources: [
+							{ kind: "organization", organizationId: "controlled-org" },
+						],
+					},
+				},
+			},
+		};
+	},
+};
 function channel(target = store) {
 	const base = createWecomChannelV1({
 		store: target,
-		authorization: {
-			async authorize(scope) {
-				return {
-					outcome: "allowed",
-					authority: {
-						managementRevision: 1,
-						channelRevision: "channels_1",
-						actor: {
-							schemaVersion: 1,
-							actorId: scope.senderId,
-							agentId: scope.agentId,
-							channelId: wecomChannelIdV1(scope),
-							authorizationRevision: "authorization_1",
-							supportsSupplementaryInstruction: false,
-							taskBoundary: {
-								schemaVersion: 1,
-								principal: { kind: "user", id: scope.senderId },
-								agentId: scope.agentId,
-								channelId: wecomChannelIdV1(scope),
-								identityRevision: "identity-1",
-								agentAuthorizationRevision: "authorization_1",
-								accessSources: [
-									{ kind: "organization", organizationId: "controlled-org" },
-								],
-							},
-						},
-					},
-				};
-			},
-		},
+		authorization: allowedAuthorization,
 	});
 	return {
 		...base,
@@ -491,26 +495,32 @@ it("claims confirmed result files once per file and preserves event order", asyn
 		},
 	]);
 });
-it("claims only answer text when the Execution also stored reasoning (#2979)", async () => {
+type ExecutionEventRow =
+	| { readonly type: "text.delta"; readonly text: string }
+	| {
+			readonly type: "reasoning.delta";
+			readonly kind: "raw" | "summary";
+			readonly text: string;
+	  };
+/** 一条企微消息对应的 Execution 写入给定事件并进入终态，供 claim 读取。 */
+async function executionWithEvents(
+	senderId: string,
+	rows: readonly ExecutionEventRow[],
+	status: "completed" | "failed" | "cancelled" = "completed",
+) {
 	await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
 	const accepted = await channel().receive({
 		...message,
-		senderId: "reasoning_sender",
-		eventId: "reasoning_event",
+		senderId,
+		eventId: `${senderId}_event`,
 	});
 	if (accepted.outcome !== "accepted") throw new Error("Expected receipt");
 	const executionId = accepted.receipt.executionId;
 	const conversationId = accepted.receipt.conversationId;
 	if (!executionId || !conversationId) throw new Error("Expected execution");
-	const rows = [
-		{ type: "reasoning.delta", kind: "raw", text: "private thought " },
-		{ type: "text.delta", text: "答案" },
-		{ type: "reasoning.delta", kind: "summary", text: "private summary" },
-		{ type: "text.delta", text: "完整" },
-	];
 	await sql`update platform.conversation_executions
-		set status='completed',last_event_sequence=${rows.length},
-			last_runtime_cursor=${`runtime-reasoning-${rows.length}`}
+		set status=${status},last_event_sequence=${rows.length},
+			last_runtime_cursor=${`runtime-${senderId}-${rows.length}`}
 		where execution_id=${executionId}`;
 	await sql`update platform.conversations
 		set last_conversation_cursor=${rows.length} where id=${conversationId}`;
@@ -520,16 +530,102 @@ it("claims only answer text when the Execution also stored reasoning (#2979)", a
 			(event_id,conversation_id,execution_id,adapter_event_key,sequence,
 			 conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,
 			 occurred_at,source)
-			values (${`reasoning-event-${sequence}`},${conversationId},${executionId},
-			 ${`reasoning-${sequence}`},${sequence},${sequence},${payload.type},
-			 ${sql.json(payload)},${String(sequence).repeat(64)},
-			 ${`runtime-reasoning-${sequence}`},now(),'runtime')`;
+			values (${`${senderId}-event-${sequence}`},${conversationId},${executionId},
+			 ${`${senderId}-${sequence}`},${sequence},${sequence},${payload.type},
+			 ${sql.json(payload)},${sequence.toString(16).padStart(64, "0")},
+			 ${`runtime-${senderId}-${sequence}`},now(),'runtime')`;
 	}
+	return accepted.receipt;
+}
+it("claims the answer text and the thinking separately (#2979, #2982)", async () => {
+	const receipt = await executionWithEvents("reasoning_sender", [
+		{ type: "reasoning.delta", kind: "raw", text: "private thought " },
+		{ type: "text.delta", text: "答案" },
+		{ type: "reasoning.delta", kind: "summary", text: "private summary" },
+		{ type: "text.delta", text: "完整" },
+	]);
 	const claim = await store.claim();
-	expect(claim?.receiptId).toBe(accepted.receipt.receiptId);
-	// 企微答案只拼接正文增量；思考过程由 #2982 另行组合。
+	expect(claim?.receiptId).toBe(receipt.receiptId);
+	// 企微答案只拼接正文增量；思考过程单独带出，由 Core 按回复方式组合。
 	expect(claim?.textDeltas).toEqual(["答案", "完整"]);
-	expect(JSON.stringify(claim)).not.toContain("private");
+	expect(claim?.thinking).toEqual({
+		parts: [
+			{ kind: "raw", text: "private thought " },
+			{ kind: "summary", text: "private summary" },
+		],
+		complete: true,
+	});
+});
+it("reads only a bounded thinking prefix and marks it incomplete (#2982)", async () => {
+	const receipt = await executionWithEvents("long_reasoning_sender", [
+		...Array.from({ length: 4 }, (_, index) => ({
+			type: "reasoning.delta" as const,
+			kind: "raw" as const,
+			text: String(index).repeat(10_000),
+		})),
+		{ type: "text.delta", text: "答案照常发送" },
+	]);
+	const claim = await store.claim();
+	expect(claim?.receiptId).toBe(receipt.receiptId);
+	expect(claim?.textDeltas).toEqual(["答案照常发送"]);
+	// 前三条开始于 20480 字节之前，第四条开始于 30000 字节，不再读取。
+	expect(claim?.thinking?.parts.map((part) => part.text)).toEqual([
+		"0".repeat(10_000),
+		"1".repeat(10_000),
+		"2".repeat(10_000),
+	]);
+	expect(claim?.thinking?.complete).toBe(false);
+});
+it.each(["failed", "cancelled"] as const)(
+	"does not read thinking for a %s execution (#2982)",
+	async (status) => {
+		const receipt = await executionWithEvents(
+			`${status}_reasoning_sender`,
+			[
+				{ type: "reasoning.delta", kind: "raw", text: "private thought" },
+				{ type: "text.delta", text: "partial" },
+			],
+			status,
+		);
+		const claim = await store.claim();
+		expect(claim?.receiptId).toBe(receipt.receiptId);
+		expect(claim?.executionStatus).toBe(status);
+		expect(claim?.thinking).toBeUndefined();
+	},
+);
+it("sends a long-connection reply whose thinking is cut to the reply bound (#2982)", async () => {
+	const receipt = await executionWithEvents("bounded_reply_sender", [
+		...Array.from({ length: 3 }, () => ({
+			type: "reasoning.delta" as const,
+			kind: "raw" as const,
+			text: "思".repeat(3_000),
+		})),
+		{ type: "text.delta", text: "最终答案" },
+	]);
+	const sent: Parameters<WecomSendPortV1["send"]>[0][] = [];
+	const delivery = createWecomDeliveryV1({
+		store,
+		authorization: allowedAuthorization,
+		sender: {
+			async send(input) {
+				sent.push(input);
+				return "sent";
+			},
+		},
+	});
+	expect(await delivery.dispatch()).toBe(true);
+	expect(sent).toHaveLength(1);
+	const [reply] = sent;
+	expect(reply?.text).toBe("最终答案");
+	const withThinking = reply?.textWithThinking ?? "";
+	expect(Buffer.byteLength(withThinking)).toBeLessThanOrEqual(20_480);
+	expect(withThinking.startsWith("<think>思思")).toBe(true);
+	expect(
+		withThinking.endsWith("（思考过程较长，已截断）</think>\n\n最终答案"),
+	).toBe(true);
+	expect(
+		await store.read(receipt.receiptId, "bounded_reply_sender"),
+	).toMatchObject({ deliveryStatus: "sent" });
 });
 it("keeps an application reply sending through the bounded multipart window", async () => {
 	await sql`update platform.agent_configuration_revisions set configuration=${sql.json(
