@@ -2248,7 +2248,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						set resource_observation = ${client.json({
 							status: "stopped",
 							resources: [pvc, pod],
-						})}
+						} as unknown as Parameters<typeof client.json>[0])}
 						where conversation_id = ${work.conversationId}`;
 					expect(await store.claimSandboxReconciliation(request)).toBeNull();
 					const [held] =
