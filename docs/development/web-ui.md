@@ -75,6 +75,19 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 - API 凭证页的「应用管理」分区在原型中只有应用摘要与签发、轮换入口；打开既有应用、注册应用和凭证表单字段以 Web 为准。
 - 员工访问控制沿用原型的多选目录选择器；Web 一次只选一名员工，选中后收起结果。
 
+### 终验待回写设计稿
+
+以下结论来自 #2830 终验，导出稿尚未回写；实现与验收以这里为准。
+
+| 编号 | 位置 | 实现 | 依据 |
+| --- | --- | --- | --- |
+| X-04 | 公共 `Dialog` 页眉的图标关闭钮（执行详情、浏览器操作记录、模型回退等） | 可访问名称为「关闭弹窗」，页脚文字按钮仍为「关闭」 | 可访问性：导出稿两者都叫「关闭」，同一弹窗出现同名控件 |
+| X-06 | Owner 配置 Skill 分区（≤767px） | 「管理 Skill 绑定」换到说明下方，保持 44px 单行按钮 | 导出稿把按钮挤在标题右侧、折成两行（116.5×62.9px），应用布局更清楚 |
+| X-08 | 创建审批 390 卡片表格的「申请」「来源 / Owner」 | 值放在同一个容器内，名称与 `small` 右对齐上下排列 | 导出稿缺陷：`.table-wrap td{display:flex}` 让 `td small` 成为第三个 flex 项，名称被挤到标签与 `small` 之间 |
+| X-10 | 管理员 Agent 390 卡片表格的「Agent 名称 / 说明」 | 同 X-08 | 同 X-08 |
+| X-12 | 审计 390 卡片表格的「对象」（名称 / ID 短形式） | 同 X-08 | 同 X-08 |
+| X-13 | Skill Hub 读取失败、无匹配空态 | 图标下方 11px，其余高度按网格行均分 | 导出稿缺陷：`skillEmpty` 把图标作为行内元素放进文字块，基线下多出约 6.8px（图标到标题 17.8px） |
+
 ### 申请详情进度
 
 [#2920](https://github.com/AgoraIO-Extensions/agent-infra/issues/2920) 已将 M-11 回写本版导出稿。
@@ -145,8 +158,8 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `Badge` | 状态 chip（`tone`，服务端状态经 `lib/status-tone.ts` 的 `statusTone()` 映射）与非状态标签（`variant="tag"`） |
 | `Sidebar` / `Sheet` / `Breadcrumb` / `Avatar` | 桌面与移动导航、当前位置及登录身份 |
 | `Tabs` | 我的申请与已创建 Agent 切换，Skill 详情的用途与版本 |
-| `Dialog` / `ConfirmDialog` | 审批、Skill 审阅；撤回、生命周期、撤销凭证、撤销 Skill 版本、停用应用、禁用员工等确认 |
-| `Alert` / `Empty` | 设计 notice（`tone` 与默认图标）与空态 |
+| `Dialog` / `ConfirmDialog` | 审批、Skill 审阅；撤回、生命周期、撤销凭证、撤销 Skill 版本、停用应用、禁用员工等确认；Skill 的审阅与确认用 `variant="skill"`（设计 `.skill-dialog`） |
+| `Alert` / `Empty` | 设计 notice（`tone` 与默认图标）与空态；`Empty` 的直接子元素是均分高度的网格行，同一行的标题与说明用 `EmptyHeader` 包住 |
 | `Spinner` / `LoadingLine` | 读取中的加载态，`PageLoadingState` 内部使用 |
 | `StateCard` / `PageStateCard` | 会话不可用、详情读取失败（401 / 403·404 / 503 / 响应无效）与 404 页的公共状态卡；401 的「重新登录」确认会话仍有效后调用 `onStillValid` 重读数据 |
 | `Toast` | 根布局常驻的补充确认，页面通过 `useToast()` 调用 |
@@ -180,6 +193,7 @@ Agent 筛选沿用目录选择器的交互按名称单选，候选在展开时�
 读取失败后的「重新登录」「重新加载…」「重新读取」使用 `features/recovery-button.tsx` 的 `RecoveryButton`
 （`PageStateCard` / `ReadFailureCard` 默认操作已内置）：请求中用 `aria-disabled` 保持可聚焦，失败后焦点留在按钮上；
 恢复成功、按钮卸载后焦点移到页面 h1（需 `tabIndex={-1}`），没有可聚焦标题时落到 `#main-content`。
+`Dialog` 关闭后焦点回到触发按钮；触发按钮当时被禁用、已卸载或随后随列表回读卸载时，焦点移到同一目标，不落到 body。
 段落、列表、定义列表、表单和 fieldset 保持语义 HTML。
 申请详情、Agent 详情和我的 Skill 使用索引路由，确保编辑、配置和创建子路径能渲染对应页面。
 

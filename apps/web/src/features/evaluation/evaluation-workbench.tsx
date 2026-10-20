@@ -5,7 +5,6 @@ import {
 	Empty,
 	EmptyContent,
 	EmptyDescription,
-	EmptyHeader,
 	EmptyTitle,
 } from "@/components/ui/empty";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -82,11 +81,10 @@ export function EvaluationWorkbench() {
 					</TabsList>
 					{sections.map((item) => (
 						<TabsContent key={item.id} value={item.id}>
+							{/* 设计 eval-feedback-empty：标题、说明与操作直接作为空态的网格行（X-16）。 */}
 							<Empty>
-								<EmptyHeader>
-									<EmptyTitle>{item.emptyTitle}</EmptyTitle>
-									<EmptyDescription>{item.emptyDescription}</EmptyDescription>
-								</EmptyHeader>
+								<EmptyTitle>{item.emptyTitle}</EmptyTitle>
+								<EmptyDescription>{item.emptyDescription}</EmptyDescription>
 								{item.id === "feedback" ? (
 									<EmptyContent>
 										{/* 反馈在对话里提交：先选择 Agent 再进入对话（与导航「对话」一致）。 */}

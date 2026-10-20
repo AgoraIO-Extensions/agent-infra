@@ -1,5 +1,11 @@
 import { expect, type Page, test } from "@playwright/test";
-import { computed, resolved } from "./primitive-styles";
+import {
+	computed,
+	expectCleanPage,
+	expectEmptyRows,
+	resolved,
+	trackPageErrors,
+} from "./primitive-styles";
 
 // 评测页（R-03）：设计 #eval 的页头主操作、notice、卡内分段与各段空态。
 async function fixture(page: Page) {
@@ -36,6 +42,7 @@ async function fixture(page: Page) {
 test("evaluation keeps the design heading, notice and in-card segments without sample data", async ({
 	page,
 }, info) => {
+	const pageErrors = trackPageErrors(page);
 	const api = await fixture(page);
 	await page.goto("/eval");
 	const main = page.locator("#main-content");
@@ -131,9 +138,16 @@ test("evaluation keeps the design heading, notice and in-card segments without s
 		"还没有实验",
 	);
 	await tablist.getByRole("tab", { name: "反馈" }).click();
-	await expect(surface.getByRole("tabpanel", { name: "反馈" })).toContainText(
-		"还没有主动反馈",
-	);
+	const feedback = surface.getByRole("tabpanel", { name: "反馈" });
+	await expect(feedback).toContainText("还没有主动反馈");
+	// #3037 X-16：标题、说明与操作各占一行均分，取导出稿 eval-feedback-empty 的测量值。
+	await expectEmptyRows(feedback.locator('[data-slot="empty"]'), {
+		icon: null,
+		title: 40.97,
+		description: 89.66,
+		action: 135.03,
+	});
+	await expectCleanPage(page, pageErrors);
 	await surface.getByRole("link", { name: "查看对话反馈" }).click();
 	await expect(page).toHaveURL(/\/agents\?mode=conversation$/);
 	expect(api.writes).toEqual([]);

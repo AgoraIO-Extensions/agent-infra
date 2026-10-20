@@ -24,15 +24,18 @@ import { captureDesignContract, designViewports } from "./design-contract";
 import {
 	computed,
 	expectCardTable,
+	expectCleanPage,
 	expectDesktopTable,
 	expectFieldControl,
 	expectFieldFocus,
 	expectFieldLabel,
 	expectFormSection,
+	expectNativeSelectArrow,
 	expectNoLegendOnBorder,
 	expectPageHeadTop,
 	expectSearchInput,
 	resolved,
+	trackPageErrors,
 } from "./primitive-styles";
 
 // 根布局常驻一个 role="status" 的 Toast 宿主（B-13），页面自身的结果状态只在主内容区内查找。
@@ -3757,6 +3760,7 @@ test("approval table becomes readable cards on narrow screens with the review ac
 test("approval filters, columns and page chrome follow the exported design", async ({
 	page,
 }) => {
+	const pageErrors = trackPageErrors(page);
 	await fixture(page, "admin");
 	await page.goto("/admin/approvals");
 	const table = page.getByRole("table", { name: "创建审批" });
@@ -3789,6 +3793,9 @@ test("approval filters, columns and page chrome follow the exported design", asy
 	await expectSearchInput(search);
 	// F-05：设计 placeholder「搜索申请名称或申请人」，申请人来自申请投影 applicant。
 	await expect(search).toHaveAttribute("placeholder", "搜索申请名称或申请人");
+	// #3037 X-09：「来源」下拉的箭头是设计 .select 的背景小三角。
+	await expectNativeSelectArrow(page, page.getByLabel("来源"));
+	await expectCleanPage(page, pageErrors);
 	if (!narrow) {
 		const searchBox = await search.boundingBox();
 		const sourceBox = await page.getByLabel("来源").boundingBox();

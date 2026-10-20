@@ -17,7 +17,14 @@ import type {
 	AgentApplicationProjectionV2,
 	AgentProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
-import { computed, expectPageHeadTop, resolved } from "./primitive-styles";
+import {
+	computed,
+	expectCleanPage,
+	expectPageHeadTop,
+	expectSectionHeadTopAligned,
+	resolved,
+	trackPageErrors,
+} from "./primitive-styles";
 
 // 我的 Agent、申请表单与申请详情按 OpenDesign #my-agents / #application-form /
 // #application-detail 对齐后的浏览器回归（M-01~M-12、R4-11、F-09、N-03、N-11）。
@@ -650,6 +657,7 @@ test("application form footer, field errors, legends and option labels follow th
 test("application detail puts actions in the heading, shows three progress rows and a next step (M-11 / M-12 / M-04)", async ({
 	page,
 }, info) => {
+	const pageErrors = trackPageErrors(page);
 	await fixture(page, {
 		applications: [
 			application({
@@ -687,6 +695,13 @@ test("application detail puts actions in the heading, shows three progress rows 
 	const progress = page.getByRole("region", { name: "审批进度" });
 	await expect(progress.getByRole("button")).toHaveCount(0);
 	await expect(progress.getByRole("link")).toHaveCount(0);
+	// #3037 X-05：窄屏审批进度标题区的状态 chip 与 h2 顶对齐（设计 ≤767px .section-head）。
+	if (info.project.name === "mobile")
+		await expectSectionHeadTopAligned(
+			progress.getByRole("heading", { level: 2, name: "审批进度" }),
+			progress.locator('.section-heading > [data-slot="badge"]'),
+		);
+	await expectCleanPage(page, pageErrors);
 	const rows = progress.locator(".application-progress li");
 	await expect(rows.locator("strong")).toHaveText([
 		"申请已提交",

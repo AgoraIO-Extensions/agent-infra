@@ -10,6 +10,14 @@ import {
 	SkillHubVersionMetadataV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, test } from "@playwright/test";
+import {
+	expectCleanPage,
+	expectEmptyRows,
+	expectNativeSelectArrow,
+	expectSectionHeadTopAligned,
+	expectSkillDialog,
+	trackPageErrors,
+} from "./primitive-styles";
 
 // Skill 目录与版本详情（K-01、K-02、K-05、K-06、N-04 与防回归 NI-98/100/103）。
 const ownerId = "skill-browser-owner";
@@ -579,6 +587,7 @@ test.describe("Skill directory", () => {
 	test("shows a skeleton while reading and clears filters back to the full list", async ({
 		page,
 	}) => {
+		const pageErrors = trackPageErrors(page);
 		const control = await fixture(page, { directory: "delayed" });
 		await page.goto("/skills");
 		const loading = page.locator("#main-content .skill-loading");
@@ -589,11 +598,32 @@ test.describe("Skill directory", () => {
 		control.releaseDirectory();
 		await expect(page.locator("article.skill-row")).toHaveCount(3);
 		await expect(page.getByRole("button", { name: "清除筛选" })).toHaveCount(0);
+		// #3037 X-14：窄屏区头「我的 Skill」与「Skill 目录」顶对齐。
+		if (test.info().project.name === "mobile")
+			await expectSectionHeadTopAligned(
+				page.getByRole("heading", { level: 2, name: "Skill 目录" }),
+				page.getByRole("link", { name: "我的 Skill" }),
+			);
+		await expectNativeSelectArrow(
+			page,
+			page.getByRole("combobox", { name: "来源", exact: true }),
+		);
 
 		const search = page.getByRole("searchbox", { name: "搜索 Skill" });
 		await search.fill("no-such-skill");
 		await expect(page.getByText("没有匹配的 Skill")).toBeVisible();
 		await expect(page.getByText("换个关键词，或清除筛选。")).toBeVisible();
+		// #3037 X-13：图标与文字一行、操作一行，两行均分，操作不再额外下移 14px。
+		// 导出稿 skill-empty 把图标作为行内元素，基线下多出约 6.8px（图标→标题 17.8px），
+		// 应用沿 .empty svg 的 11px，不复制该间隙；因此各项比导出稿的 35.5 / 81.3 / 106.0 / 140.5
+		// 分别差 +1.7 / −5.1 / −5.1 / −1.7px（web-ui.md「终验待回写设计稿」X-13）。
+		await expectEmptyRows(page.locator('#main-content [data-slot="empty"]'), {
+			icon: 37.2,
+			title: 76.2,
+			description: 100.95,
+			action: 138.8,
+		});
+		await expectCleanPage(page, pageErrors);
 		await page
 			.getByRole("combobox", { name: "来源", exact: true })
 			.selectOption("github");
@@ -615,6 +645,13 @@ test.describe("Skill directory", () => {
 		await expect(main.getByText("暂时无法读取目录")).toBeVisible();
 		await expect(main.getByText("已安装和绑定记录仍然保留。")).toBeVisible();
 		await expect(main.locator('[data-slot="alert"]')).toHaveCount(0);
+		// #3037 X-13：读取失败空态与无匹配空态同一行分配。
+		await expectEmptyRows(main.locator('[data-slot="empty"]'), {
+			icon: 37.2,
+			title: 76.2,
+			description: 100.95,
+			action: 138.8,
+		});
 		await main.getByRole("button", { name: "重新读取" }).click();
 		await expect(page.locator("article.skill-row")).toHaveCount(3);
 		expect(control.requests.directory).toBeGreaterThanOrEqual(2);
@@ -764,6 +801,7 @@ test.describe("Skill version detail", () => {
 	test("confirms revoke before one request and keeps cancel, Escape and backdrop request-free", async ({
 		page,
 	}) => {
+		const pageErrors = trackPageErrors(page);
 		const control = await fixture(page);
 		await page.goto("/skills/release-notes-v2");
 		const trigger = page.getByRole("button", { name: "撤销此版本" });
@@ -772,6 +810,12 @@ test.describe("Skill version detail", () => {
 		const dialog = page.getByRole("dialog", { name: "撤销这个 Skill 版本？" });
 		await expect(dialog).toContainText(
 			"阻止新的安装、绑定与调用。已发生的执行及结果继续保留原版本。",
+		);
+		// #3037 X-15：Skill 确认弹窗使用设计 .skill-dialog 外观与文字「关闭」。
+		await expectSkillDialog(
+			page,
+			dialog,
+			test.info().project.name === "mobile",
 		);
 		await dialog.getByRole("button", { name: "取消" }).click();
 		await expect(dialog).toBeHidden();
@@ -792,6 +836,7 @@ test.describe("Skill version detail", () => {
 			"版本已撤销，新的调用已被阻止",
 		);
 		await expect(page.getByRole("heading", { level: 1 })).toBeFocused();
+		await expectCleanPage(page, pageErrors);
 		expect(control.requests.revokes).toHaveLength(1);
 		expect(control.requests.revokes[0]).toMatchObject({
 			id: "release-notes-v2",

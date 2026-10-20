@@ -730,7 +730,7 @@ describe("Secrets (O-10, N-08)", () => {
 		).toBe(true);
 		expect(
 			within(dialog)
-				.getByRole("button", { name: "关闭" })
+				.getByRole("button", { name: "关闭弹窗" })
 				.hasAttribute("disabled"),
 		).toBe(true);
 		fireEvent.keyDown(dialog, { key: "Escape" });

@@ -528,7 +528,7 @@ describe("AdminAgentApplicationsScreen", () => {
 				.getByRole("button", { name: "驳回并说明" })
 				.getAttribute("disabled"),
 		).not.toBeNull();
-		expect(screen.queryByRole("button", { name: "关闭" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "关闭弹窗" })).toBeNull();
 		fireEvent.click(approve);
 		expect(onDecision).toHaveBeenCalledTimes(1);
 		rerender(
@@ -853,7 +853,7 @@ describe("AdminAgentApplicationsScreen", () => {
 		fireEvent.click(screen.getByRole("button", { name: reviewName() }));
 		const dialog = await screen.findByRole("dialog");
 		// 审阅视图按设计没有「取消」，用标题行的关闭钮关闭。
-		fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
+		fireEvent.click(within(dialog).getByRole("button", { name: "关闭弹窗" }));
 		await waitFor(() => {
 			expect(screen.queryByRole("dialog")).toBeNull();
 			expect(screen.getAllByRole("alert")).toHaveLength(1);

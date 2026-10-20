@@ -45,4 +45,26 @@ describe("Empty", () => {
 			container.querySelector('[data-slot="empty-icon"]')?.className,
 		).toContain("[&_svg]:size-[28px]");
 	});
+
+	it("lets direct children become evenly shared grid rows without extra action margin", () => {
+		const { container } = render(
+			<Empty>
+				<EmptyTitle>还没有主动反馈</EmptyTitle>
+				<EmptyDescription>反馈只关联当前用户自己的任务。</EmptyDescription>
+				<EmptyContent>
+					<button type="button">查看对话反馈</button>
+				</EmptyContent>
+			</Empty>,
+		);
+		const empty = container.querySelector('[data-slot="empty"]');
+		expect(empty?.className).toContain("grid");
+		// 标题、说明与操作各是一个网格行，间距由行高均分，不额外加外边距（X-13、X-16）。
+		expect(
+			[...(empty?.children ?? [])].map((node) =>
+				node.getAttribute("data-slot"),
+			),
+		).toEqual(["empty-title", "empty-description", "empty-content"]);
+		const content = container.querySelector('[data-slot="empty-content"]');
+		expect(content?.className).not.toMatch(/(^|\s)m[ty]?-/);
+	});
 });

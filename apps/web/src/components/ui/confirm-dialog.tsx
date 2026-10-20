@@ -33,6 +33,8 @@ type ConfirmDialogProps = {
 	open?: boolean;
 	onOpenChange?: (open: boolean) => void;
 	finalFocus?: DialogPrimitive.Popup.Props["finalFocus"];
+	// 传 "skill" 时使用设计 .skill-dialog 外观（Skill 的撤销、绑定与解除绑定确认）。
+	variant?: React.ComponentProps<typeof DialogContent>["variant"];
 };
 
 // 所有「标题 + 后果 + 取消 / 确认」型确认都用它；确认前不发请求，
@@ -50,6 +52,7 @@ function ConfirmDialog({
 	open: controlledOpen,
 	onOpenChange,
 	finalFocus,
+	variant,
 }: ConfirmDialogProps) {
 	const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
 	const open = controlledOpen ?? uncontrolledOpen;
@@ -66,7 +69,7 @@ function ConfirmDialog({
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogTrigger render={trigger} disabled={disabled} />
-			<DialogContent finalFocus={finalFocus}>
+			<DialogContent finalFocus={finalFocus} variant={variant}>
 				<DialogHeader>
 					<DialogTitle>{title}</DialogTitle>
 				</DialogHeader>

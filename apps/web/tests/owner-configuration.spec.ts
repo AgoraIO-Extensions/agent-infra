@@ -18,7 +18,13 @@ import type {
 	DeploymentConfigurationProjectionV2,
 	SkillHubAgentBindingStatusV1,
 } from "../src/pilot/generated-v2/types.gen";
-import { computed, resolved } from "./primitive-styles";
+import {
+	computed,
+	expectCleanPage,
+	expectSkillDialog,
+	resolved,
+	trackPageErrors,
+} from "./primitive-styles";
 
 // Owner 配置的 Secret 与环境变量（O-10、N-08）、模型与默认 Relay Key（G-08、G-09、RK2-01～09）、
 // Skill 绑定入口与绑定页（O-02、#2903）。契约 Fake API；页面级状态只在 #main-content 内查找（Toast 宿主是 role=status）。
@@ -1194,6 +1200,7 @@ test("the Owner configuration links to the Agent's Skill page (O-02)", async ({
 test("an Owner lists, binds and unbinds Skill versions under the server's Agent Version (O-02, #2903)", async ({
 	page,
 }) => {
+	const pageErrors = trackPageErrors(page);
 	const api = await ownerConfigFixture(page, {
 		agentVersion: "agent-version-7",
 	});
@@ -1222,8 +1229,17 @@ test("an Owner lists, binds and unbinds Skill versions under the server's Agent 
 		await region.getByRole("button", { name: "绑定固定版本" }).click();
 		const dialog = page.getByRole("dialog", { name: "确认绑定固定版本" });
 		await expect(dialog).toContainText(label);
+		// #3037 X-07：Skill 确认弹窗使用设计 .skill-dialog 外观与文字「关闭」。
+		await expectSkillDialog(
+			page,
+			dialog,
+			test.info().project.name === "mobile",
+		);
 		await dialog.getByRole("button", { name: "确认绑定" }).click();
 		await expect(dialog).toHaveCount(0);
+		await expect
+			.poll(() => page.evaluate(() => document.activeElement === document.body))
+			.toBe(false);
 	};
 	await bind("code-review-v1", "code-review · v1.0.0");
 	await expect(toast(page).last()).toHaveText("已提交绑定，等待同步");
@@ -1237,9 +1253,15 @@ test("an Owner lists, binds and unbinds Skill versions under the server's Agent 
 	await region.getByRole("button", { name: "解除绑定：code-review" }).click();
 	const unbind = page.getByRole("dialog", { name: "确认解除绑定" });
 	await expect(unbind).toContainText("code-review · v1.0.0");
+	await expectSkillDialog(page, unbind, test.info().project.name === "mobile");
 	await unbind.getByRole("button", { name: "解除绑定" }).click();
 	await expect(toast(page).last()).toHaveText("已解除绑定");
 	await expect(region.getByRole("article")).toHaveCount(1);
+	// 解除绑定后触发按钮随卡片卸载，焦点不落到 body（#3037 AC-2）。
+	await expect
+		.poll(() => page.evaluate(() => document.activeElement === document.body))
+		.toBe(false);
+	await expectCleanPage(page, pageErrors);
 	await expect(
 		region.getByRole("heading", { level: 2, name: "workspace-summary v1.0.0" }),
 	).toBeVisible();

@@ -369,12 +369,13 @@ export function AgentDiscoveryScreen({
 							</Badge>
 						</div>
 					</div>
+					{/* 设计 agent-directory-empty：图标、标题与说明、操作各占一行（X-02）。 */}
 					{!agents.length ? (
 						<Empty>
+							<EmptyMedia>
+								<Bot aria-hidden="true" />
+							</EmptyMedia>
 							<EmptyHeader>
-								<EmptyMedia>
-									<Bot aria-hidden="true" />
-								</EmptyMedia>
 								<EmptyTitle>暂无你有权访问的 Agent</EmptyTitle>
 								<EmptyDescription>
 									目录只展示当前账号有权访问的 Agent。
@@ -383,10 +384,10 @@ export function AgentDiscoveryScreen({
 						</Empty>
 					) : !visible.length ? (
 						<Empty>
+							<EmptyMedia>
+								<Search aria-hidden="true" />
+							</EmptyMedia>
 							<EmptyHeader>
-								<EmptyMedia>
-									<Search aria-hidden="true" />
-								</EmptyMedia>
 								<EmptyTitle>没有匹配的 Agent</EmptyTitle>
 								<EmptyDescription>
 									换一个名称、模板或渠道关键词再试。

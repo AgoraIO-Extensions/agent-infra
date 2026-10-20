@@ -98,7 +98,7 @@ describe("MyAgentApplicationDetailScreen", () => {
 		expect(onWithdraw).not.toHaveBeenCalled();
 		// 设计稿只有「确认撤回」与页眉关闭钮，没有「继续保留申请」次按钮。
 		expect(screen.queryByRole("button", { name: "继续保留申请" })).toBeNull();
-		fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+		fireEvent.click(screen.getByRole("button", { name: "关闭弹窗" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 		await waitFor(() => expect(document.activeElement).toBe(withdraw));
 		expect(onWithdraw).not.toHaveBeenCalled();

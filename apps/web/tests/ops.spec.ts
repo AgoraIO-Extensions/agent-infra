@@ -1,6 +1,12 @@
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import { captureDesignContract, designViewports } from "./design-contract";
-import { computed, expectPageHeadTop, resolved } from "./primitive-styles";
+import {
+	computed,
+	expectCleanPage,
+	expectPageHeadTop,
+	resolved,
+	trackPageErrors,
+} from "./primitive-styles";
 
 // 运维观测（F-12）：结构与状态以导出设计 #ops 与 docs/development/web-ui.md「运维观测页」为准；
 // 样式断言取设计 #my-agents 已创建卡（.grid-2 > .card：.card-head + .chip + dl.facts）与同类管理页页头的计算值。
@@ -129,6 +135,7 @@ test("not-connected domains follow the design card, chip and facts at 1440×900 
 }, info) => {
 	const mobile = info.project.name === "mobile";
 	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+	const pageErrors = trackPageErrors(page);
 	const api = await fixture(page);
 	await page.goto("/ops");
 	const main = page.locator("main");
@@ -148,6 +155,31 @@ test("not-connected domains follow the design card, chip and facts at 1440×900 
 	await expect(header.locator("p").nth(1)).toHaveText(
 		"只显示正式观测查询返回的状态；没有数据源的区块标为「未接入」，页面不生成指标或告警。",
 	);
+	// #3037 X-17：副标题与设计 .page-head-copy p 一样最宽 64ch，桌面折成两行。
+	const subtitle = await header
+		.locator("p")
+		.nth(1)
+		.evaluate((element) => {
+			const probe = document.createElement("span");
+			probe.style.cssText = "position:absolute;visibility:hidden;width:64ch";
+			element.append(probe);
+			const limit = probe.getBoundingClientRect().width;
+			probe.remove();
+			const box = element.getBoundingClientRect();
+			const lineHeight = Number.parseFloat(
+				getComputedStyle(element).lineHeight,
+			);
+			return {
+				maxWidth: Number.parseFloat(getComputedStyle(element).maxWidth),
+				limit,
+				width: box.width,
+				lines: Math.round(box.height / lineHeight),
+			};
+		});
+	expect(Math.abs(subtitle.maxWidth - subtitle.limit)).toBeLessThanOrEqual(0.5);
+	expect(subtitle.width).toBeLessThanOrEqual(subtitle.limit + 0.5);
+	if (!mobile) expect(subtitle.lines).toBe(2);
+	await expectCleanPage(page, pageErrors);
 	await expectPageHeadTop(page, mobile);
 	const refresh = header.getByRole("button", { name: "刷新运维状态" });
 	await expect(refresh).toBeEnabled();

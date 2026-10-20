@@ -362,3 +362,223 @@ export async function expectPageHeadTop(page: Page, mobile: boolean) {
 		Math.abs(geometry.h1.top - (mobile ? 121.4 : 130.4)),
 	).toBeLessThanOrEqual(1);
 }
+
+// 设计稿 .select 的箭头（#3037 X-01、X-09）：背景上 45° / 135° 两段渐变拼成的 5px 实心小三角，
+// 位于右侧 13–18px、上距 18px，颜色为 muted 文字色；控件内不再叠加图标元素。
+export async function expectNativeSelectArrow(page: Page, select: Locator) {
+	const muted = await resolved(page, "color", "var(--muted-foreground)");
+	expect(
+		await computed(select, [
+			"appearance",
+			"backgroundImage",
+			"backgroundPosition",
+			"backgroundSize",
+			"backgroundRepeat",
+			"paddingRight",
+			"height",
+		]),
+	).toEqual({
+		appearance: "none",
+		backgroundImage: `linear-gradient(45deg, rgba(0, 0, 0, 0) 50%, ${muted} 50%), linear-gradient(135deg, ${muted} 50%, rgba(0, 0, 0, 0) 50%)`,
+		backgroundPosition: "calc(100% - 18px) 18px, calc(100% - 13px) 18px",
+		backgroundSize: "5px 5px, 5px 5px",
+		backgroundRepeat: "no-repeat, no-repeat",
+		paddingRight: "40px",
+		height: "44px",
+	});
+	expect(
+		await select.evaluate(
+			(element) =>
+				element.closest('[data-slot="native-select-wrapper"]')?.children.length,
+		),
+	).toBe(1);
+}
+
+/**
+ * 设计 .empty（#3037 X-02、X-13、X-16）：直接子元素是网格行，220px 内的剩余高度由各行均分、
+ * 每行内容居中，只有图标下方 11px。`expected` 是图标、标题、说明与操作相对空态上缘的 top（±1px），
+ * 取自导出稿同一空态的测量值；没有的项写 null。
+ */
+export async function expectEmptyRows(
+	empty: Locator,
+	expected: {
+		icon: number | null;
+		title: number;
+		description: number;
+		action: number | null;
+	},
+) {
+	const tops = await empty.evaluate((element) => {
+		const top = element.getBoundingClientRect().top;
+		const at = (node: Element | null | undefined) =>
+			node ? node.getBoundingClientRect().top - top : null;
+		return {
+			height: element.getBoundingClientRect().height,
+			display: getComputedStyle(element).display,
+			icon: at(element.querySelector('svg[aria-hidden="true"]')),
+			title: at(element.querySelector('[data-slot="empty-title"]')),
+			description: at(element.querySelector('[data-slot="empty-description"]')),
+			action: at(
+				element.querySelector(
+					'[data-slot="empty-content"] :is(a, button), :scope > :is(a, button)',
+				),
+			),
+		};
+	});
+	expect(tops.display).toBe("grid");
+	expect(tops.height).toBe(220);
+	for (const key of ["icon", "title", "description", "action"] as const) {
+		const want = expected[key];
+		if (want === null) {
+			expect(tops[key], key).toBeNull();
+			continue;
+		}
+		expect(
+			Math.abs((tops[key] ?? Number.NaN) - want),
+			`${key}: ${tops[key]} vs ${want}`,
+		).toBeLessThanOrEqual(1);
+	}
+}
+
+/**
+ * 设计 .skill-dialog（#3037 X-07、X-11、X-15）：宽 min(620px, 视口 − 36px)、高不超过 86dvh、
+ * 圆角 14px、var(--shadow)，内边距 24px（窄屏 18px）；标题 20px / 600 / 28px，
+ * 页眉关闭是 ghost 文字按钮「关闭」，操作区上距 20px。
+ */
+export async function expectSkillDialog(
+	page: Page,
+	dialog: Locator,
+	mobile: boolean,
+) {
+	await expect(dialog).toBeVisible();
+	await expect(dialog).toHaveAttribute("data-variant", "skill");
+	const viewport = page.viewportSize();
+	const box = await dialog.boundingBox();
+	if (!viewport || !box) throw new Error("Missing Skill dialog geometry");
+	expect(
+		Math.abs(box.width - Math.min(620, viewport.width - 36)),
+	).toBeLessThanOrEqual(1);
+	expect(box.height).toBeLessThanOrEqual(viewport.height * 0.86 + 1);
+	expect(
+		Math.abs(box.x + box.width / 2 - viewport.width / 2),
+	).toBeLessThanOrEqual(1);
+	const padding = mobile ? "18px" : "24px";
+	expect(
+		await computed(dialog, [
+			"paddingTop",
+			"paddingLeft",
+			"borderTopLeftRadius",
+			"borderTopWidth",
+			"boxShadow",
+		]),
+	).toEqual({
+		paddingTop: padding,
+		paddingLeft: padding,
+		borderTopLeftRadius: "14px",
+		borderTopWidth: "1px",
+		boxShadow: await resolved(page, "boxShadow", "var(--shadow)"),
+	});
+	const title = dialog.locator('[data-slot="dialog-title"]');
+	expect(
+		await computed(title, [
+			"fontSize",
+			"fontWeight",
+			"lineHeight",
+			"letterSpacing",
+		]),
+	).toEqual({
+		fontSize: "20px",
+		fontWeight: "600",
+		lineHeight: "28px",
+		letterSpacing: "normal",
+	});
+	expect(
+		await title.evaluate(
+			(element) =>
+				getComputedStyle(element).fontFamily ===
+				getComputedStyle(document.body).fontFamily,
+		),
+	).toBe(true);
+	const header = dialog.locator('[data-slot="dialog-header"]');
+	const close = header.getByRole("button", { name: "关闭", exact: true });
+	await expect(close).toHaveCount(1);
+	await expect(close).toHaveText("关闭");
+	expect((await close.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+	await expect(dialog.getByRole("button", { name: "关闭弹窗" })).toHaveCount(0);
+	await expect(dialog.locator('[data-slot="dialog-footer"]')).toHaveCSS(
+		"margin-top",
+		"20px",
+	);
+}
+
+/**
+ * 设计 ≤767px .section-head{align-items:flex-start}（#3037 X-03、X-05、X-14）：
+ * 区头右侧的 chip 或入口与 h2 顶对齐（±1px）。
+ */
+export async function expectSectionHeadTopAligned(
+	heading: Locator,
+	side: Locator,
+) {
+	const [title, aside] = await Promise.all([
+		heading.boundingBox(),
+		side.boundingBox(),
+	]);
+	if (!title || !aside) throw new Error("Missing section head geometry");
+	expect(Math.abs(aside.y - title.y)).toBeLessThanOrEqual(1);
+}
+
+/**
+ * 弹窗内没有同名控件（#3037 X-04、AC-2）：页眉图标钮名为「关闭弹窗」，页脚主按钮「关闭」各一个；
+ * 弹窗打开时页面其余部分不可交互，所以弹窗内的按钮名逐一不同。
+ */
+export async function expectDistinctDialogControls(dialog: Locator) {
+	await expect(
+		dialog
+			.locator('[data-slot="dialog-header"]')
+			.getByRole("button", { name: "关闭弹窗", exact: true }),
+	).toHaveCount(1);
+	await expect(
+		dialog
+			.locator('[data-slot="dialog-footer"]')
+			.getByRole("button", { name: "关闭", exact: true }),
+	).toHaveCount(1);
+	await expect(
+		dialog.getByRole("button", { name: "关闭", exact: true }),
+	).toHaveCount(1);
+	const names = await dialog
+		.locator("button:visible")
+		.evaluateAll((buttons) =>
+			buttons.map(
+				(button) =>
+					button.getAttribute("aria-label") ?? button.textContent?.trim() ?? "",
+			),
+		);
+	expect(new Set(names).size, names.join(" / ")).toBe(names.length);
+}
+
+/**
+ * #3037 AC-2：记录页面的未捕获异常与 console.error。fixture 故意返回的 4xx / 5xx 会让浏览器
+ * 打出「Failed to load resource」资源日志，这不是页面错误，不计入。
+ */
+export function trackPageErrors(page: Page) {
+	const errors: string[] = [];
+	page.on("pageerror", (error) => errors.push(error.message));
+	page.on("console", (message) => {
+		if (
+			message.type() === "error" &&
+			!message.text().startsWith("Failed to load resource")
+		)
+			errors.push(message.text());
+	});
+	return errors;
+}
+
+/** #3037 AC-2：没有控制台错误，页面没有横向溢出。 */
+export async function expectCleanPage(page: Page, errors: readonly string[]) {
+	expect(errors).toEqual([]);
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= window.innerWidth,
+		),
+	).toBe(true);
+}
