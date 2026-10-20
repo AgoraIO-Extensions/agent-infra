@@ -1079,7 +1079,7 @@ describe("Codex model transport", () => {
 		expect(finish).toHaveBeenCalledWith(
 			expect.objectContaining({ phase: "succeeded" }),
 		);
-	}, 120_000);
+	}, 30_000);
 
 	it.each([
 		[
