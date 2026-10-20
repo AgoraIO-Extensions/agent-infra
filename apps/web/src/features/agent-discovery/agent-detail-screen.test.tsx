@@ -115,6 +115,44 @@ describe("AgentDetailScreen", () => {
 				"此 Agent 支持独立 Connection 直连，使用前需由当前主体完成授权。",
 			),
 		).toBeTruthy();
+		// Y-13：左栏首个区块标题按设计「Agent 信息」。
+		expect(
+			screen.getByRole("heading", { level: 2, name: "Agent 信息" }),
+		).toBeTruthy();
+		expect(screen.queryByText("关于此 Agent")).toBeNull();
+		// Y-14：「可用范围」后是「渠道」，只列可用或已绑定的渠道（企微机器人未配置，不列）。
+		const terms = Array.from(document.querySelectorAll("dl dt")).map(
+			(term) => term.textContent,
+		);
+		expect(
+			terms.slice(terms.indexOf("可用范围"), terms.indexOf("可用范围") + 2),
+		).toEqual(["可用范围", "渠道"]);
+		expect(
+			screen.getByText("渠道", { selector: "dt" }).nextElementSibling
+				?.textContent,
+		).toBe("Web");
+		// Y-15：个人历史说明按设计原文，操作在独立的操作组里。
+		const note = screen.getByText(
+			"这里只显示你提交的消息和执行状态，Agent Owner 看不到正文。",
+		);
+		expect(note.className).toBe("agent-detail-section-note");
+		expect(
+			screen.getByRole("link", { name: "查看对话历史" }).parentElement
+				?.className,
+		).toBe("agent-detail-section-actions");
+		// Y-18：右栏两个区块头的副标题按设计，右侧各有一个读屏忽略的图标。
+		for (const [name, description] of [
+			["Owner", "Owner 和运行状态"],
+			["运行与渠道", "当前状态"],
+		] as const) {
+			const region = screen.getByRole("region", { name });
+			const header = region.querySelector("header") as HTMLElement;
+			expect(within(header).getByText(description)).toBeTruthy();
+			expect(header.lastElementChild?.tagName.toLowerCase()).toBe("svg");
+			expect(header.lastElementChild?.getAttribute("aria-hidden")).toBe("true");
+		}
+		expect(screen.queryByText("负责范围与运行状态")).toBeNull();
+		expect(screen.queryByText("平台当前观测")).toBeNull();
 		// D-02：ghost sm「返回 Agent 目录」在页头文案块内、Agent 标识行之前。
 		const back = screen.getByRole("link", { name: "返回 Agent 目录" });
 		expect(back.getAttribute("href")).toBe("/agents");
@@ -162,6 +200,11 @@ describe("AgentDetailScreen", () => {
 			expect(runtime.textContent).not.toMatch(
 				/组织内|可见范围|not_configured|binding|bound|failed/,
 			);
+			// Y-14：「渠道」只列可用或已绑定的渠道，按设计用「 · 」连接。
+			expect(
+				screen.getByText("渠道", { selector: "dt" }).nextElementSibling
+					?.textContent,
+			).toBe(status === "bound" ? "Web · 企微机器人" : "Web");
 			cleanup();
 		}
 	});

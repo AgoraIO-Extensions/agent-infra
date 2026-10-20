@@ -252,7 +252,7 @@ describe("AgentDiscoveryScreen", () => {
 		expect(
 			screen.getByRole("link", { name: /Release assistant/ }),
 		).toBeTruthy();
-		expect(screen.queryByRole("link", { name: "开始对话" })).toBeNull();
+		expect(screen.queryByRole("link", { name: /^开始对话/ })).toBeNull();
 	});
 
 	it("filters only the authorized projection by status, template and model and clears filters", async () => {
@@ -399,7 +399,7 @@ describe("AgentDiscoveryScreen", () => {
 				state={{ kind: "ready", agents: [agent] }}
 			/>,
 		);
-		expect(screen.queryByRole("link", { name: "开始对话" })).toBeNull();
+		expect(screen.queryByRole("link", { name: /^开始对话/ })).toBeNull();
 		expect(
 			screen.getByRole("link", { name: /查看 Release assistant 详情/ }),
 		).toBeTruthy();
@@ -428,16 +428,20 @@ describe("AgentDiscoveryScreen", () => {
 					state={{ kind: "ready", agents: [agent] }}
 				/>,
 			);
+			// 「开始对话」的名称带对象名（N-12），可见文字仍是「开始对话」。
 			const action = screen.getByRole("link", {
-				name: canOpenConversation ? "开始对话" : /查看 Release assistant 详情/,
+				name: canOpenConversation
+					? "开始对话：Release assistant"
+					: /查看 Release assistant 详情/,
 			});
+			if (canOpenConversation) expect(action.textContent).toBe("开始对话");
 			expect(action.getAttribute("href")).toBe(
 				canOpenConversation
 					? `/chat/${agent.agentId}`
 					: `/agents/${agent.agentId}`,
 			);
 			if (!canOpenConversation)
-				expect(screen.queryByRole("link", { name: "开始对话" })).toBeNull();
+				expect(screen.queryByRole("link", { name: /^开始对话/ })).toBeNull();
 		},
 	);
 
