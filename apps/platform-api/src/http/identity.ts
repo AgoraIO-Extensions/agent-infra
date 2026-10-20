@@ -349,12 +349,19 @@ export async function describeBrowserOwners(
 	}
 	if (userIds.length === 0) return [];
 	if (!adapter.describeOwners) {
-		const users = await hydrateBrowserUsers(adapter, userIds, traceId);
-		return users.map((user) => ({
-			userId: user.userId,
-			displayName: user.displayName,
-			status: "unavailable" as const,
-		}));
+		// 逐个 Owner 尽力读取名称：一个 Owner 读不到只让它的名称为空，不阻断整个详情。
+		return Promise.all(
+			userIds.map(async (userId) => {
+				let displayName: string | null = null;
+				try {
+					const [user] = await hydrateBrowserUsers(adapter, [userId], traceId);
+					displayName = user?.displayName ?? null;
+				} catch {
+					displayName = null;
+				}
+				return { userId, displayName, status: "unavailable" as const };
+			}),
+		);
 	}
 	let value: unknown;
 	try {

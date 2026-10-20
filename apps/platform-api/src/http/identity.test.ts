@@ -258,6 +258,25 @@ describe("Agent Owner status boundary (#2910)", () => {
 		).resolves.toEqual([
 			{ userId: "user-01", displayName: "One", status: "unavailable" },
 		]);
+		// 名称逐个尽力读取：一个 Owner 读不到只让它的名称为空，不阻断其他 Owner 或整个详情。
+		const hydrateUsers = vi.fn(async (userIds: readonly string[]) => {
+			if (userIds.includes("user-02")) throw new Error("private-detail");
+			return userIds.map((userId) => ({
+				userId,
+				displayName: `Name ${userId}`,
+				roles: ["employee"],
+			}));
+		});
+		await expect(
+			describeBrowserOwners(
+				{ resolve: vi.fn(), hydrateUsers },
+				["user-01", "user-02"],
+				traceId,
+			),
+		).resolves.toEqual([
+			{ userId: "user-01", displayName: "Name user-01", status: "unavailable" },
+			{ userId: "user-02", displayName: null, status: "unavailable" },
+		]);
 	});
 
 	it("fails closed for malformed, reordered, foreign or extra Owner results", async () => {
