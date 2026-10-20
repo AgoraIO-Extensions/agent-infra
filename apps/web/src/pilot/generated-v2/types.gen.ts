@@ -2336,6 +2336,57 @@ export type ListAdminAgentsV2Responses = {
 
 export type ListAdminAgentsV2Response = ListAdminAgentsV2Responses[keyof ListAdminAgentsV2Responses];
 
+export type GetAdminAgentV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/admin/agents/{agentId}';
+};
+
+export type GetAdminAgentV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAdminAgentV2Error = GetAdminAgentV2Errors[keyof GetAdminAgentV2Errors];
+
+export type GetAdminAgentV2Responses = {
+    /**
+     * Administrator Agent
+     */
+    200: AgentProjectionV2;
+};
+
+export type GetAdminAgentV2Response = GetAdminAgentV2Responses[keyof GetAdminAgentV2Responses];
+
 export type ListPlatformAuditV2Data = {
     body?: never;
     path?: never;

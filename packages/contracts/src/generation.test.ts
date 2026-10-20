@@ -274,6 +274,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/admin/agent-applications",
 			"/api/v2/admin/agent-applications/{applicationId}/decision",
 			"/api/v2/admin/agents",
+			"/api/v2/admin/agents/{agentId}",
 			"/api/v2/admin/audit",
 			"/api/v2/admin/users/{userId}/disable",
 			"/api/v2/agent-applications",
@@ -337,6 +338,7 @@ describe("standard contract artifacts", () => {
 				.properties.outcome.enum,
 		).toEqual(["accepted", "replayed"]);
 		for (const path of [
+			"/api/v2/admin/agents/{agentId}",
 			"/api/v2/agents/{agentId}/detail",
 			"/api/v2/skills",
 			"/api/v2/skills/installations",

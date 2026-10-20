@@ -195,12 +195,16 @@ beforeAll(async () => {
 
 	const foundationAdmissions = new FakeAgentConfigurationAdmissionsV1({
 		authorizations: [
-			...["agent-run", "agent-withdraw", "agent-v2", "agent-owner-status"].map(
-				(agentId) => ({
-					agentId,
-					owner: "owner" as const,
-				}),
-			),
+			...[
+				"agent-run",
+				"agent-withdraw",
+				"agent-v2",
+				"agent-owner-status",
+				"agent-admin-out-of-scope",
+			].map((agentId) => ({
+				agentId,
+				owner: "owner" as const,
+			})),
 			{ agentId: "agent-owner-status-other", owner: "attacker" as const },
 			...administratorReadResources,
 		].map(({ agentId, owner }) => ({
@@ -479,7 +483,12 @@ beforeAll(async () => {
 										applicationId: "application-owner-status-other",
 										agentId: "agent-owner-status-other",
 									}
-								: { applicationId: "application-run", agentId: "agent-run" };
+								: idempotencyKey === "create-admin-out-of-scope"
+									? {
+											applicationId: "application-admin-out-of-scope",
+											agentId: "agent-admin-out-of-scope",
+										}
+									: { applicationId: "application-run", agentId: "agent-run" };
 			},
 			prepareSecretReplacements: async () => ({ secrets: [] }),
 			readApplicationProjection: projectionReaders.readApplicationProjection,
@@ -1249,6 +1258,211 @@ describe("PostgreSQL Platform HTTP integration", () => {
 			describedOwnerIds.length = 0;
 		}
 	});
+
+	it("lets an administrator outside the use scope read and disable an Agent only through the administrator projection (#3033)", async () => {
+		const key = "admin-out-of-scope";
+		const agentId = `agent-${key}`;
+		// Owner 申请、管理员批准；可用范围只有 org-1，管理员（org-admin）与 attacker（org-other）都不在范围内。
+		expect(
+			(
+				await app.request("/api/v2/agent-applications", {
+					method: "POST",
+					headers: {
+						...requestHeaders("owner", `create-${key}`),
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ ...applicationBody, name: "Out of scope" }),
+				})
+			).status,
+		).toBe(201);
+		expect(
+			(
+				await app.request(
+					`/api/v2/admin/agent-applications/application-${key}/decision`,
+					{
+						method: "POST",
+						headers: {
+							...requestHeaders("admin", `approve-${key}`),
+							"content-type": "application/json",
+						},
+						body: JSON.stringify({ schemaVersion: 1, decision: "approve" }),
+					},
+				)
+			).status,
+		).toBe(200);
+		const created = await managementQuery.getAgent(
+			{ kind: "administrator" },
+			agentId,
+		);
+		if (!created) throw new Error("Missing fixture aggregate");
+		expect(
+			(
+				await managementUseCase.recordWorkloadObservation({
+					schemaVersion: 1,
+					observationId: `observation-${key}`,
+					agentId,
+					expectedRevision: created.management.revision,
+					workloadRevision: created.management.workloadRevision,
+					fence: created.management.fence,
+					requestId: `request-${key}`,
+					traceId: `trace-${key}`,
+					observation: "creation_succeeded",
+				})
+			).outcome,
+		).toBe("accepted");
+		const read = (
+			identity: keyof typeof identities,
+			path: string,
+			headers: Record<string, string> = {},
+		) =>
+			app.request(path, {
+				headers: { ...requestHeaders(identity), ...headers },
+			});
+		const lifecycle = (
+			identity: keyof typeof identities,
+			command: "disable" | "restart",
+			idempotencyKey: string,
+			headers: Record<string, string> = {},
+		) =>
+			app.request(`/api/v2/agents/${agentId}/lifecycle`, {
+				method: "POST",
+				headers: {
+					...requestHeaders(identity, idempotencyKey),
+					"content-type": "application/json",
+					...headers,
+				},
+				body: JSON.stringify({ schemaVersion: 1, command }),
+			});
+		const forgedAdministrator = {
+			"x-user-id": identities.admin.userId,
+			"x-principal-id": identities.admin.userId,
+			"x-role": "system_admin",
+			"x-roles": "system_admin",
+		};
+
+		// 普通读取不扩大：管理员与跨组织员工都看不到，结果与不存在的 Agent 相同。
+		const missing = await read("attacker", "/api/v2/agents/agent-missing");
+		expect(missing.status).toBe(404);
+		const missingBody = PilotProtocolErrorV1Schema.parse(await missing.json());
+		for (const identity of ["admin", "attacker"] as const) {
+			const hidden = await read(identity, `/api/v2/agents/${agentId}`);
+			expect(hidden.status).toBe(404);
+			expect({
+				...PilotProtocolErrorV1Schema.parse(await hidden.json()),
+				traceId: "",
+			}).toEqual({ ...missingBody, traceId: "" });
+		}
+
+		// 管理员投影：与 Owner 的普通读取是同一个服务端投影，Owner 字段不由调用方提供。
+		const administrator = await read(
+			"admin",
+			`/api/v2/admin/agents/${agentId}`,
+		);
+		expect(administrator.status).toBe(200);
+		expect(administrator.headers.get("cache-control")).toBe("no-store");
+		const projected = AgentProjectionV2Schema.parse(await administrator.json());
+		expect(projected).toMatchObject({
+			agentId,
+			name: "Out of scope",
+			managementStatus: "available",
+			serviceAvailability: "ready",
+			configuration: {
+				owners: [
+					{
+						userId: identities.owner.userId,
+						displayName: identities.owner.displayName,
+						roles: identities.owner.roles,
+					},
+				],
+				availability: [{ kind: "organization", organizationId: "org-1" }],
+			},
+		});
+		const ownerRead = await read("owner", `/api/v2/agents/${agentId}`);
+		expect(ownerRead.status).toBe(200);
+		expect(projected).toEqual(
+			AgentProjectionV2Schema.parse(await ownerRead.json()),
+		);
+		expect(
+			(await read("admin", "/api/v2/admin/agents/agent-missing")).status,
+		).toBe(404);
+
+		// 非管理员（Owner 本人、跨组织员工，含伪造身份头）调不了管理员入口；只接受浏览器会话。
+		for (const [identity, headers] of [
+			["owner", {}],
+			["attacker", {}],
+			["attacker", forgedAdministrator],
+		] as const) {
+			const denied = await read(
+				identity,
+				`/api/v2/admin/agents/${agentId}`,
+				headers,
+			);
+			expect(denied.status).toBe(403);
+			const body = PilotProtocolErrorV1Schema.parse(await denied.json());
+			expect(body.code).toBe("RESOURCE_UNAVAILABLE");
+			expect(JSON.stringify(body)).not.toMatch(/Out of scope|user-owner/);
+		}
+		expect(
+			(
+				await read("admin", `/api/v2/admin/agents/${agentId}`, {
+					Authorization: `Bearer papi_${"a".repeat(43)}`,
+				})
+			).status,
+		).toBe(401);
+		expect(
+			(
+				await read(
+					"admin",
+					`/api/v2/admin/agents/${agentId}?scope=administrator`,
+				)
+			).status,
+		).toBe(400);
+		expect((await app.request(`/api/v2/admin/agents/${agentId}`)).status).toBe(
+			401,
+		);
+
+		// 跨组织员工即使伪造管理员身份头也不能停用。
+		const attackerDisable = await lifecycle(
+			"attacker",
+			"disable",
+			`disable-attacker-${key}`,
+			forgedAdministrator,
+		);
+		expect(attackerDisable.status).toBe(404);
+		expect(
+			PilotProtocolErrorV1Schema.parse(await attackerDisable.json()).code,
+		).toBe("RESOURCE_UNAVAILABLE");
+		expect(
+			(await managementQuery.getAgent({ kind: "administrator" }, agentId))
+				?.management.status,
+		).toBe("available");
+
+		// 不在使用范围内的管理员停用成功，管理员投影回读为已停用。
+		expect((await lifecycle("admin", "disable", `disable-${key}`)).status).toBe(
+			202,
+		);
+		const disabled = await read("admin", `/api/v2/admin/agents/${agentId}`);
+		expect(disabled.status).toBe(200);
+		expect(AgentProjectionV2Schema.parse(await disabled.json())).toMatchObject({
+			agentId,
+			managementStatus: "disabled",
+			serviceAvailability: null,
+		});
+		// Owner 不能恢复被管理员停用的 Agent（PRD §6.3）：重启按状态冲突拒绝（409）。
+		const ownerRestart = await lifecycle(
+			"owner",
+			"restart",
+			`restart-owner-${key}`,
+		);
+		expect(ownerRestart.status).toBe(409);
+		expect(
+			PilotProtocolErrorV1Schema.parse(await ownerRestart.json()).code,
+		).toBe("INVALID_REQUEST");
+		expect(
+			(await managementQuery.getAgent({ kind: "administrator" }, agentId))
+				?.management.status,
+		).toBe("disabled");
+	}, 30_000);
 
 	it("reads cross-Owner administrator pages over real HTTP and the generated SDK without writes or expanded employee access", async () => {
 		for (const resource of administratorReadResources) {

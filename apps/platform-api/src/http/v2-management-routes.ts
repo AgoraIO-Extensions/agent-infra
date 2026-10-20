@@ -1051,6 +1051,38 @@ export function registerV2ManagementRoutes(
 		}),
 	);
 
+	// #3033：系统管理员按职责读取单个 Agent，可见范围与管理员列表相同（administrator scope），
+	// 投影与列表项一致，Owner 等字段由服务端读取。只接受浏览器会话；
+	// GET /api/v2/agents/:agentId 的使用范围不随之扩大，也不授予配置或授权写入。
+	app.get("/api/v2/admin/agents/:agentId", (context) =>
+		boundary(context, async (metadata) => {
+			context.header("Cache-Control", "no-store");
+			const request = context.req.raw;
+			if (request.headers.has("authorization"))
+				fail("AUTHENTICATION_REQUIRED", metadata.traceId);
+			// 调用方不能用查询参数选择范围、身份或角色。
+			if (new URL(request.url).search)
+				fail("INVALID_REQUEST", metadata.traceId);
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				request,
+				metadata.traceId,
+			);
+			if (!isAdministratorAgentReadAllowedV1(actor(identity))) {
+				fail("FORBIDDEN", metadata.traceId);
+			}
+			const agentId = context.req.param("agentId");
+			const scope = { kind: "administrator" } as const;
+			return context.json(
+				await projectCurrent(
+					() =>
+						agentOrUnavailable(dependencies, scope, agentId, metadata.traceId),
+					(agent) => projectAgent(dependencies, agent, identity, metadata),
+				),
+			);
+		}),
+	);
+
 	app.get("/api/v2/agents", (context) =>
 		boundary(context, async (metadata) => {
 			const request = context.req.raw;

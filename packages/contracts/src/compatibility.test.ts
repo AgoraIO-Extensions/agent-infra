@@ -841,6 +841,73 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the pinned administrator single-Agent read (#3033)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/admin/agents/{agentId}";
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "administrator-agent-detail-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				// 只接受平台会话，不接受 Bearer 凭证，也不能去掉鉴权。
+				(value: typeof current) => {
+					value.paths[path].get.security = [
+						{ PlatformSession: [] },
+						{ platformApiCredential: [] },
+					];
+				},
+				(value: typeof current) => {
+					value.paths[path].get.security = [];
+				},
+				// 响应复用已发布的 AgentProjectionV2，不能换成其他投影。
+				(value: typeof current) => {
+					value.paths[path].get.responses["200"].content[
+						"application/json"
+					].schema = { $ref: "#/components/schemas/AgentProjectionV1" };
+				},
+				// 不接受查询参数选择范围或身份。
+				(value: typeof current) => {
+					value.paths[path].get.parameters.push({
+						in: "query",
+						name: "scope",
+						required: false,
+						schema: { type: "string" },
+					});
+				},
+				// 已发布的 strict 投影与其他入口保持不变。
+				(value: typeof current) => {
+					value.components.schemas.AgentProjectionV2.properties.applicantId = {
+						type: "string",
+					};
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the pinned Skill Hub version detail and owned-version reads (#2904)", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -3771,6 +3838,7 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/agents/{agentId}/versions/{agentVersion}/skills" &&
 				path !== "/api/v2/agents/{agentId}/skills/current-version" &&
 				path !== "/api/v2/agents/{agentId}/detail" &&
+				path !== "/api/v2/admin/agents/{agentId}" &&
 				path !== "/api/v2/skills/projects" &&
 				path !== "/api/v2/skills/projects/{projectId}" &&
 				path !== "/api/v2/skills/projects/{projectId}/content" &&
