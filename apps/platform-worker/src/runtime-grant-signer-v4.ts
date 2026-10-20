@@ -15,14 +15,21 @@ import {
 	RuntimeExecutionGrantClaimsV2Schema,
 	RuntimeExecutionGrantV2Schema,
 	RuntimeExecutionGrantV4Schema,
+	RuntimeExecutionGrantV5Schema,
+	type RuntimeNativeCapabilityRequestV5,
 	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
+	RuntimeRestoreExecutionKeyGrantClaimsV5Schema,
 	type RuntimeRestoreExecutionKeyRequestV4,
+	type RuntimeRestoreExecutionKeyRequestV5,
 	runtimeEventRequestDigestV4,
+	runtimeRequestDigestV5,
 	runtimeRequestSigningPayloadV4,
 	runtimeRestoreExecutionKeyRequestDigestV4,
+	runtimeRestoreExecutionKeyRequestDigestV5,
 	validateVerifiedRuntimeExecutionGrantClaimsV2,
 	validateVerifiedRuntimeExecutionGrantClaimsV4,
 	validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV4,
+	validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV5,
 } from "@agent-infra/contracts/runtime";
 
 import type { WorkerRuntimeAuthorizationV2 } from "./runtime-grant-signer.js";
@@ -128,6 +135,137 @@ export function createWorkerRuntimeGrantSignerV4(options: SignerOptionsV4) {
 			});
 			const grant = RuntimeExecutionGrantV4Schema.parse({
 				schemaVersion: 4,
+				format: "runtime-execution-jws",
+				token: tokenFor(claims),
+			});
+			return { request: { ...unsigned, grant }, claims };
+		},
+		async signV5(
+			request: RuntimeNativeCapabilityRequestV5,
+			authorizationRecordId: string,
+		) {
+			if (!authorizationRecordId)
+				throw new TypeError("Runtime V5 business authorization is required");
+			if (
+				request.capabilityKind !== "skill" ||
+				request.attachments.length < 1 ||
+				request.attachments.length > 4 ||
+				new Set(request.attachments.map((entry) => entry.attachmentId)).size !==
+					request.attachments.length ||
+				request.operation.kind !== "execution" ||
+				request.operation.id !== request.executionId ||
+				request.keyBinding.purpose !==
+					(request.executionSource === "web" ||
+					request.executionSource === "wecom"
+						? "personal"
+						: "agent-default")
+			)
+				throw new TypeError("Runtime V5 business binding is invalid");
+			const issuedAt = now();
+			const claims = RuntimeBusinessGrantClaimsV4Schema.parse({
+				schemaVersion: 4,
+				issuer: options.issuer,
+				audience: "runtime_host",
+				issuedAt,
+				expiresAt: issuedAt + 30_000,
+				grantId: (options.id ?? randomUUID)(),
+				workerId: options.workerId,
+				principal: request.principal,
+				executionSource: request.executionSource,
+				relayKeyBinding: request.keyBinding,
+				agentId: request.agentId,
+				channelId: request.channelId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				turnId: request.turnId,
+				sessionGeneration: request.sessionGeneration,
+				traceId: request.traceId,
+				hostSessionRef: request.hostSessionRef,
+				operation: request.operation,
+				allowedCommands: ["native-capability.invoke"],
+				purpose: "business",
+				authorizationRecordId,
+				attachments: request.attachments.map((entry) => ({
+					attachmentId: entry.attachmentId,
+					operations: ["read"] as const,
+				})),
+				requestDigest: await runtimeRequestDigestV5(request),
+			});
+			validateVerifiedRuntimeExecutionGrantClaimsV4(claims, {
+				expectedIssuer: options.issuer,
+				expectedWorkerId: options.workerId,
+				now: issuedAt,
+			});
+			// V5 reuses the V4 business Grant wrapper and claims; only the request,
+			// private Key field and operation identity are V5.
+			return RuntimeExecutionGrantV4Schema.parse({
+				schemaVersion: 4,
+				format: "runtime-execution-jws",
+				token: tokenFor(claims),
+			});
+		},
+		async signRecoveryV5(
+			originalRequest: RuntimeRestoreExecutionKeyRequestV5["originalRequest"],
+			acceptedHostSessionRef: string,
+			acceptedOperationDigest: string,
+			acceptedAttachmentIds: readonly string[],
+			authorizationRecordId: string,
+		) {
+			if (!authorizationRecordId || !acceptedHostSessionRef)
+				throw new TypeError("Runtime V5 recovery authorization is required");
+			const unsigned: RuntimeRestoreExecutionKeyRequestV5 = {
+				schemaVersion: 5,
+				mode: "existing-accepted-only",
+				acceptedHostSessionRef,
+				acceptedOperationDigest,
+				acceptedAttachmentIds: [...acceptedAttachmentIds],
+				grant: {
+					schemaVersion: 5,
+					format: "runtime-execution-jws",
+					token: "unsigned.unsigned.unsigned",
+				},
+				originalRequest,
+			};
+			const issuedAt = now();
+			const requestDigest =
+				await runtimeRestoreExecutionKeyRequestDigestV5(unsigned);
+			const claims = RuntimeRestoreExecutionKeyGrantClaimsV5Schema.parse({
+				schemaVersion: 5,
+				issuer: options.issuer,
+				audience: "runtime_host",
+				issuedAt,
+				expiresAt: issuedAt + 30_000,
+				grantId: (options.id ?? randomUUID)(),
+				workerId: options.workerId,
+				principal: originalRequest.principal,
+				executionSource: originalRequest.executionSource,
+				relayKeyBinding: originalRequest.keyBinding,
+				agentId: originalRequest.agentId,
+				channelId: originalRequest.channelId,
+				conversationId: originalRequest.conversationId,
+				executionId: originalRequest.executionId,
+				turnId: originalRequest.turnId,
+				sessionGeneration: originalRequest.sessionGeneration,
+				traceId: originalRequest.traceId,
+				hostSessionRef: originalRequest.hostSessionRef,
+				operation: originalRequest.operation,
+				allowedCommands: ["execution.key.restore"],
+				purpose: "business",
+				authorizationRecordId,
+				attachments: [],
+				requestDigest,
+				mode: unsigned.mode,
+				acceptedHostSessionRef,
+				acceptedOperationDigest,
+				acceptedAttachmentIds: [...acceptedAttachmentIds],
+			});
+			validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV5(claims, {
+				expectedIssuer: options.issuer,
+				expectedWorkerId: options.workerId,
+				now: issuedAt,
+			});
+			const grant = RuntimeExecutionGrantV5Schema.parse({
+				schemaVersion: 5,
 				format: "runtime-execution-jws",
 				token: tokenFor(claims),
 			});
@@ -255,6 +393,42 @@ export function createWorkerRuntimeGrantSignerV4(options: SignerOptionsV4) {
 				format: "runtime-execution-jws",
 				token: tokenFor(claims),
 			});
+		},
+		verifyV5(grant: RuntimeNativeCapabilityRequestV5["grant"]) {
+			try {
+				const parsed = RuntimeExecutionGrantV4Schema.parse(grant);
+				const [headerPart, payloadPart, signaturePart, extra] =
+					parsed.token.split(".");
+				if (!headerPart || !payloadPart || !signaturePart || extra)
+					throw new Error();
+				const header = JSON.parse(utf8.decode(decode(headerPart))) as Record<
+					string,
+					unknown
+				>;
+				if (
+					Object.keys(header).sort().join(",") !== "alg,kid,typ" ||
+					header.alg !== "EdDSA" ||
+					header.kid !== options.keyId ||
+					header.typ !== "runtime-execution+jws" ||
+					!verify(
+						null,
+						Buffer.from(`${headerPart}.${payloadPart}`, "ascii"),
+						publicKey,
+						decode(signaturePart),
+					)
+				)
+					throw new Error();
+				return validateVerifiedRuntimeExecutionGrantClaimsV4(
+					JSON.parse(utf8.decode(decode(payloadPart))),
+					{
+						expectedIssuer: options.issuer,
+						expectedWorkerId: options.workerId,
+						now: now(),
+					},
+				);
+			} catch {
+				throw new TypeError("Runtime V5 grant is invalid");
+			}
 		},
 		verify(grant: RuntimeBusinessRequestV4["grant"]) {
 			try {

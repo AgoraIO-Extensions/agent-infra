@@ -71,6 +71,149 @@ const terminal = {
 } as const;
 
 describe("Execution-bound V4 in the production conversation adapter", () => {
+	it("dispatches and restores an Invocation V2 Skill plan over Native V5", async () => {
+		const h = runtimeV4Harness();
+		const parameters = JSON.stringify({ path: "workspace/file.txt" });
+		const attachments = [
+			{
+				fileId: "file-input-1",
+				sha256: createHash("sha256").update("first").digest("hex"),
+				byteLength: 5,
+				mediaType: "text/plain" as const,
+			},
+			{
+				fileId: "file-input-2",
+				sha256: createHash("sha256").update("second").digest("hex"),
+				byteLength: 6,
+				mediaType: "text/plain" as const,
+			},
+		];
+		const nativeCapability = {
+			agentId: "agent",
+			actorId: "user",
+			channelId: "web",
+			turnId: "turn",
+			capabilityId: "a".repeat(64),
+			capabilityKind: "skill",
+			directoryRevision: "b".repeat(64),
+			capabilitySourceVersion: "1.0.0",
+			parameters,
+			parametersDigest: createHash("sha256").update(parameters).digest("hex"),
+			attachments,
+		} as const;
+		Object.assign(h.claim, {
+			operation: "conversation.native-capability.invoke.v1",
+			messageId: null,
+			modelConfigurationRevision: null,
+			modelOptionId: null,
+			reasoningLevel: null,
+			input: null,
+			nativeCapability,
+		});
+		const accepted = h.accepted();
+		if (!accepted) throw new Error("Missing accepted execution");
+		h.setAccepted({
+			...accepted,
+			trustedHostSessionRef: "host",
+			scope: { ...accepted.scope, hostSessionRef: "host" },
+			selection: undefined,
+		});
+		const fallback = h.fetcher.getMockImplementation();
+		h.fetcher.mockImplementation(async (url, init) => {
+			if (String(url).endsWith("/v5/native-capability"))
+				return Response.json({
+					schemaVersion: 5,
+					hostSessionRef: "host",
+					operationId: "execution",
+					result: { outcome: "accepted", status: "running" },
+				});
+			if (String(url).endsWith("/v5/execution-key/restore"))
+				return Response.json({
+					schemaVersion: 5,
+					hostSessionRef: "host",
+					operationId: "execution",
+					result: "restored",
+				});
+			if (!fallback) throw new Error("missing fixture transport");
+			return fallback(url, init);
+		});
+		try {
+			const reference = await h.authorize();
+			const request: ConversationRuntimeDispatchRequestV1 = {
+				schemaVersion: 1,
+				operation: "native-capability.invoke",
+				requestId: "request",
+				traceId: "trace",
+				agentId: "agent",
+				actorId: "user",
+				channelId: "web",
+				conversationId: "conversation",
+				executionId: "execution",
+				turnId: "turn",
+				sessionGeneration: 1,
+				deliveryFence: 2,
+				executionDeliveryFence: 2,
+				hostSessionRef: "host",
+				runtimeGrant: reference,
+				nativeCapability,
+			};
+			await expect(
+				h.runtime.runtimeHost.dispatch(request),
+			).resolves.toMatchObject({ result: { outcome: "accepted" } });
+			const sent = h.sent();
+			expect(sent.url).toContain("/v5/native-capability");
+			expect(sent.body.businessRequest).toMatchObject({
+				schemaVersion: 5,
+				capabilityKind: "skill",
+				capabilityId: nativeCapability.capabilityId,
+				attachments: [
+					{
+						attachmentId: "file-input-1",
+						sha256: attachments[0]?.sha256,
+						byteLength: 5,
+						mediaType: "text/plain",
+					},
+					{
+						attachmentId: "file-input-2",
+						sha256: attachments[1]?.sha256,
+						byteLength: 6,
+						mediaType: "text/plain",
+					},
+				],
+			});
+			expect(sent.body.businessRequest.grant.schemaVersion).toBe(4);
+			expect(sent.body.privateKeyField.keyDelivery.relayKey).toBe(keySentinel);
+
+			Object.assign(h.state, { originalSubmitHostSessionRef: "host" });
+			await expect(
+				h.runtime.runtimeHost.recoverOriginalStatus?.({
+					...h.events(reference),
+					schemaVersion: 2,
+				}),
+			).resolves.toMatchObject({ outcome: "found", status: "running" });
+			const restores = h.fetcher.mock.calls.filter(([url]) =>
+				String(url).endsWith("/v5/execution-key/restore"),
+			);
+			expect(restores).toHaveLength(1);
+			const restored = JSON.parse(restores[0]?.[1]?.body as string);
+			expect(restored.recoveryRequest).toMatchObject({
+				schemaVersion: 5,
+				acceptedAttachmentIds: ["file-input-1", "file-input-2"],
+				originalRequest: {
+					schemaVersion: 5,
+					hostSessionRef: "host",
+					attachments: [
+						{ attachmentId: "file-input-1", byteLength: 5 },
+						{ attachmentId: "file-input-2", byteLength: 6 },
+					],
+				},
+			});
+			expect(restored.privateKeyField.keyDelivery.relayKey).toBe(keySentinel);
+		} finally {
+			if (fallback) h.fetcher.mockImplementation(fallback);
+		}
+	});
+
 	it.each(["command", "skill"] as const)(
 		"dispatches an admitted V4 native %s plan with its exact binding",
 		async (capabilityKind) => {

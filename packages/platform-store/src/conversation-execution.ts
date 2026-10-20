@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { RuntimeBusinessRequestV4 } from "@agent-infra/contracts/runtime";
+import type {
+	RuntimeBusinessRequestV4,
+	RuntimeNativeCapabilityRequestV5,
+} from "@agent-infra/contracts/runtime";
 import {
 	bindInputFileV1,
 	bindNativeTextInputFileV1,
@@ -545,7 +548,7 @@ export class PostgresConversationExecutionTransactionV1
 
 	/** Reads the saved operation and Key tuple using this original Store instance. */
 	async readAcceptedExecution(
-		request: RuntimeBusinessRequestV4,
+		request: RuntimeBusinessRequestV4 | RuntimeNativeCapabilityRequestV5,
 	): Promise<AcceptedExecutionKeyProjectionV4 | null> {
 		if (this.#acceptedKeyClosing) unavailable();
 		const pending = this.#transaction((transaction) =>

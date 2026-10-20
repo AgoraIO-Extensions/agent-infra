@@ -1,7 +1,10 @@
-import { NativeCapabilityInvocationRequestV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	NativeCapabilityInvocationRequestV1Schema,
+	NativeCapabilityInvocationRequestV2Schema,
+} from "@agent-infra/contracts/pilot";
 import type {
 	NativeCapabilityAdmissionDecisionV1,
-	NativeCapabilityAdmissionRequestV1,
+	NativeCapabilityAdmissionRequest,
 } from "@agent-infra/platform-core";
 import type { Hono } from "hono";
 import type { z } from "zod";
@@ -17,8 +20,33 @@ import {
 } from "./identity.js";
 
 const path = "/api/v2/conversations/:conversationId/native-capability/invoke";
-const requestSchema = NativeCapabilityInvocationRequestV1Schema;
-type HttpRequest = z.infer<typeof requestSchema>;
+type V1HttpRequest = z.infer<typeof NativeCapabilityInvocationRequestV1Schema>;
+type V2HttpRequest = z.infer<typeof NativeCapabilityInvocationRequestV2Schema>;
+type HttpRequest =
+	| (V1HttpRequest & { readonly schemaVersion: 1 })
+	| V2HttpRequest;
+
+/**
+ * The old V1 wire has no version field and stays exact, so a body is V2 only
+ * when it explicitly carries `schemaVersion: 2`. Everything else is parsed by
+ * the strict V1 schema, which rejects an added `schemaVersion` or
+ * `attachments` field instead of silently accepting caller-selected files.
+ */
+function parseHttpRequest(value: unknown): HttpRequest {
+	if (
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		(value as Record<string, unknown>).schemaVersion === 2
+	)
+		return NativeCapabilityInvocationRequestV2Schema.parse(value);
+	// The legacy wire omits the version; normalize it for admission without
+	// accepting a version or attachment field from the caller.
+	return {
+		...NativeCapabilityInvocationRequestV1Schema.parse(value),
+		schemaVersion: 1,
+	};
+}
 
 export interface NativeCapabilityInvocationRouteDependenciesV1 {
 	readonly identity: IdentityAdapter;
@@ -26,13 +54,13 @@ export interface NativeCapabilityInvocationRouteDependenciesV1 {
 		readonly identity: IdentityContext;
 		readonly conversationId: string;
 		readonly body: HttpRequest;
-	}): Promise<NativeCapabilityAdmissionRequestV1>;
+	}): Promise<NativeCapabilityAdmissionRequest>;
 	readonly admit?: (
-		request: NativeCapabilityAdmissionRequestV1,
+		request: NativeCapabilityAdmissionRequest,
 	) => Promise<NativeCapabilityAdmissionDecisionV1>;
 	readonly admitWithIdentity?: (input: {
 		readonly identity: IdentityContext;
-		readonly request: NativeCapabilityAdmissionRequestV1;
+		readonly request: NativeCapabilityAdmissionRequest;
 		readonly requestContext: RuntimeNativeMetadataRequestContextV1;
 	}) => Promise<NativeCapabilityAdmissionDecisionV1>;
 }
@@ -98,7 +126,7 @@ export function registerNativeCapabilityInvocationRoutesV1(
 				});
 				if (!parsed.valid)
 					return context.json({ outcome: "invalid_parameters" }, 400);
-				body = requestSchema.parse(parsed.value);
+				body = parseHttpRequest(parsed.value);
 			} catch {
 				if (requestContext.signal.aborted)
 					return context.json({ outcome: "unavailable" }, 503);

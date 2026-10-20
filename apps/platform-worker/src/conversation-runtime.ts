@@ -13,6 +13,7 @@ import type {
 	RuntimeControlReasonV2,
 	RuntimeEventAckRequestV4,
 	RuntimeEventReadRequestV4,
+	RuntimeNativeCapabilityRequestV5,
 	RuntimeRestoreExecutionKeyRequestV4,
 } from "@agent-infra/contracts/runtime";
 import {
@@ -868,6 +869,7 @@ export function createConversationRuntimeV2(
 			...prepared.target,
 			fetch: options.fetch,
 			verifyGrant: signV4.verify,
+			verifyGrantV5: signV4.verifyV5,
 			executionKeys,
 			decryptor,
 			...(claim.modelOptionId && claim.reasoningLevel
@@ -892,6 +894,20 @@ export function createConversationRuntimeV2(
 					acceptedOperationDigest,
 					authorizationRecordId,
 				),
+			signRecoveryV5: (
+				originalRequest,
+				acceptedHostSessionRef,
+				acceptedOperationDigest,
+				acceptedAttachmentIds,
+				authorizationRecordId,
+			) =>
+				signV4.signRecoveryV5(
+					originalRequest,
+					acceptedHostSessionRef,
+					acceptedOperationDigest,
+					acceptedAttachmentIds,
+					authorizationRecordId,
+				),
 		});
 	}
 	async function dispatchBusinessV4(
@@ -908,6 +924,55 @@ export function createConversationRuntimeV2(
 			if (!claim.nativeCapability || !state.hostSessionRef)
 				unavailable("RUNTIME_REQUEST_INVALID");
 			const identity = keyedIdentity(prepared);
+			if (claim.nativeCapability.attachments !== undefined) {
+				if (claim.nativeCapability.capabilityKind !== "skill")
+					unavailable("RUNTIME_REQUEST_INVALID");
+				const unsigned: RuntimeNativeCapabilityRequestV5 = {
+					...base,
+					schemaVersion: 5,
+					...identity,
+					hostSessionRef: state.hostSessionRef,
+					operation: {
+						kind: "execution",
+						id: claim.executionId,
+						deliveryFence: claim.deliveryFence,
+						executionDeliveryFence: claim.executionDeliveryFence,
+					},
+					capabilityId: claim.nativeCapability.capabilityId,
+					capabilityKind: "skill",
+					directoryRevision: claim.nativeCapability.directoryRevision,
+					parameters: claim.nativeCapability.parameters,
+					parametersDigest: claim.nativeCapability.parametersDigest,
+					capabilitySourceVersion:
+						claim.nativeCapability.capabilitySourceVersion,
+					attachments: claim.nativeCapability.attachments.map((attachment) => ({
+						attachmentId: attachment.fileId,
+						sha256: attachment.sha256,
+						byteLength: attachment.byteLength,
+						mediaType: attachment.mediaType,
+					})),
+					grant: {
+						schemaVersion: 4,
+						format: "runtime-execution-jws",
+						token: "unsigned.unsigned.unsigned",
+					},
+				};
+				const response = await v4Client(
+					prepared,
+					"native-capability.invoke",
+					signal,
+				).nativeCapabilityV5(
+					{
+						...unsigned,
+						grant: await signV4.signV5(
+							unsigned,
+							authority.authorizationRecordId,
+						),
+					},
+					signal,
+				);
+				return { ...response, schemaVersion: 1 as const };
+			}
 			const unsigned: RuntimeBusinessRequestV4 = {
 				...base,
 				schemaVersion: 4,
@@ -1163,16 +1228,15 @@ export function createConversationRuntimeV2(
 					token: "unsigned.unsigned.unsigned",
 				},
 			});
-			let originalRequest:
-				| RuntimeRestoreExecutionKeyRequestV4["originalRequest"]
-				| undefined;
 			if (
 				claim.operation === "conversation.native-capability.invoke.v1" &&
-				claim.nativeCapability?.capabilityKind === "skill" &&
+				claim.nativeCapability?.attachments !== undefined &&
+				claim.nativeCapability.capabilityKind === "skill" &&
 				state.originalSubmitHostSessionRef !== null
 			) {
-				originalRequest = {
+				const originalV5: RuntimeNativeCapabilityRequestV5 = {
 					...common(),
+					schemaVersion: 5,
 					hostSessionRef: state.originalSubmitHostSessionRef,
 					capabilityId: claim.nativeCapability.capabilityId,
 					capabilityKind: "skill",
@@ -1181,42 +1245,87 @@ export function createConversationRuntimeV2(
 					parametersDigest: claim.nativeCapability.parametersDigest,
 					capabilitySourceVersion:
 						claim.nativeCapability.capabilitySourceVersion,
+					attachments: claim.nativeCapability.attachments.map((attachment) => ({
+						attachmentId: attachment.fileId,
+						sha256: attachment.sha256,
+						byteLength: attachment.byteLength,
+						mediaType: attachment.mediaType,
+					})),
 				};
-			} else if (
-				(claim.operation === "conversation.turn.submit.v1" ||
-					claim.operation === "conversation.turn.regenerate.v1") &&
-				claim.input &&
-				claim.modelOptionId &&
-				claim.reasoningLevel
-			) {
-				originalRequest = {
-					...common(),
-					input: { ...claim.input, attachments: [...claim.input.attachments] },
-					selection: {
-						schemaVersion: 1,
-						modelOptionId: claim.modelOptionId,
-						reasoningLevel: claim.reasoningLevel,
-					},
-				};
-			}
-			if (originalRequest) {
 				try {
 					await v4Client(
 						prepared,
-						"capabilityId" in originalRequest
-							? "native-capability.invoke"
-							: "turn.submit",
+						"native-capability.invoke",
 						active,
-					).restoreExecutionKey(
-						originalRequest,
+					).restoreExecutionKeyV5(
+						originalV5,
 						state.hostSessionRef,
 						state.originalOperationDigest,
 						active,
 					);
 				} catch (error) {
-					// A terminal transition can race this read-only Key restore. The
-					// following status query is authoritative and must still reconcile it.
 					if (!(error instanceof ConversationRuntimeHostError)) throw error;
+				}
+			}
+			let originalRequest:
+				| RuntimeRestoreExecutionKeyRequestV4["originalRequest"]
+				| undefined;
+			if (claim.nativeCapability?.attachments === undefined) {
+				if (
+					claim.operation === "conversation.native-capability.invoke.v1" &&
+					claim.nativeCapability?.capabilityKind === "skill" &&
+					state.originalSubmitHostSessionRef !== null
+				) {
+					originalRequest = {
+						...common(),
+						hostSessionRef: state.originalSubmitHostSessionRef,
+						capabilityId: claim.nativeCapability.capabilityId,
+						capabilityKind: "skill",
+						directoryRevision: claim.nativeCapability.directoryRevision,
+						parameters: claim.nativeCapability.parameters,
+						parametersDigest: claim.nativeCapability.parametersDigest,
+						capabilitySourceVersion:
+							claim.nativeCapability.capabilitySourceVersion,
+					};
+				} else if (
+					(claim.operation === "conversation.turn.submit.v1" ||
+						claim.operation === "conversation.turn.regenerate.v1") &&
+					claim.input &&
+					claim.modelOptionId &&
+					claim.reasoningLevel
+				) {
+					originalRequest = {
+						...common(),
+						input: {
+							...claim.input,
+							attachments: [...claim.input.attachments],
+						},
+						selection: {
+							schemaVersion: 1,
+							modelOptionId: claim.modelOptionId,
+							reasoningLevel: claim.reasoningLevel,
+						},
+					};
+				}
+				if (originalRequest) {
+					try {
+						await v4Client(
+							prepared,
+							"capabilityId" in originalRequest
+								? "native-capability.invoke"
+								: "turn.submit",
+							active,
+						).restoreExecutionKey(
+							originalRequest,
+							state.hostSessionRef,
+							state.originalOperationDigest,
+							active,
+						);
+					} catch (error) {
+						// A terminal transition can race this read-only Key restore. The
+						// following status query is authoritative and must still reconcile it.
+						if (!(error instanceof ConversationRuntimeHostError)) throw error;
+					}
 				}
 			}
 		}

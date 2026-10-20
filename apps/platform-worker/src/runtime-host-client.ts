@@ -41,11 +41,15 @@ import {
 	RuntimeNativeCapabilityRequestV3Schema,
 	type RuntimeNativeCapabilityRequestV4,
 	RuntimeNativeCapabilityRequestV4Schema,
+	type RuntimeNativeCapabilityRequestV5,
+	RuntimeNativeCapabilityRequestV5Schema,
 	RuntimeNativeCapabilityTransportV4Schema,
+	RuntimeNativeCapabilityTransportV5Schema,
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV3Schema,
 	RuntimeOperationResponseV4Schema,
+	RuntimeOperationResponseV5Schema,
 	RuntimeOriginalBindingResponseV3Schema,
 	type RuntimePinnedExecutionKeyScopeV4,
 	RuntimePrivateRelayKeyFieldV1Schema,
@@ -54,8 +58,11 @@ import {
 	RuntimeReplayRequestV1Schema,
 	type RuntimeRestoreExecutionKeyRequestV4,
 	RuntimeRestoreExecutionKeyRequestV4Schema,
+	type RuntimeRestoreExecutionKeyRequestV5,
 	RuntimeRestoreExecutionKeyResponseV4Schema,
+	RuntimeRestoreExecutionKeyResponseV5Schema,
 	RuntimeRestoreExecutionKeyTransportV4Schema,
+	RuntimeRestoreExecutionKeyTransportV5Schema,
 	type RuntimeSelectionV1,
 	type RuntimeSkillDirectoryEntryV1,
 	RuntimeSkillDirectoryEntryV1Schema,
@@ -87,6 +94,7 @@ import {
 	RuntimeSupplementRequestV4Schema,
 	RuntimeSupplementTransportV4Schema,
 	validateRuntimeBusinessBindingV4,
+	validateRuntimeBusinessBindingV5,
 	validateRuntimePinnedExecutionKeyScopeV4,
 	validateRuntimeReplayResponseV4,
 } from "@agent-infra/contracts/runtime";
@@ -121,7 +129,7 @@ export interface WorkerAcceptedExecutionV4 {
 
 export interface WorkerExecutionKeyReaderV4 {
 	readAcceptedExecution(
-		request: RuntimeBusinessRequestV4,
+		request: RuntimeBusinessRequestV4 | RuntimeNativeCapabilityRequestV5,
 	): Promise<WorkerAcceptedExecutionV4 | null>;
 	readCiphertext(binding: {
 		readonly purpose: "personal" | "agent-default";
@@ -149,6 +157,19 @@ export interface WorkerRuntimeHostClientOptionsV4
 	) => Promise<{
 		request: RuntimeRestoreExecutionKeyRequestV4;
 		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
+	}>;
+	readonly verifyGrantV5?: (
+		grant: RuntimeNativeCapabilityRequestV5["grant"],
+	) => RuntimeBusinessGrantClaimsV4;
+	readonly signRecoveryV5?: (
+		originalRequest: RuntimeRestoreExecutionKeyRequestV5["originalRequest"],
+		acceptedHostSessionRef: string,
+		acceptedOperationDigest: string,
+		acceptedAttachmentIds: readonly string[],
+		authorizationRecordId: string,
+	) => Promise<{
+		request: RuntimeRestoreExecutionKeyRequestV5;
+		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV5;
 	}>;
 }
 
@@ -624,6 +645,24 @@ async function* eventStream<T extends { cursor: string; type: string }>(
 	} finally {
 		await reader.cancel().catch(() => undefined);
 	}
+}
+
+function nativeV4KeyProjection(request: RuntimeNativeCapabilityRequestV5) {
+	const {
+		attachments: _attachments,
+		schemaVersion: _schemaVersion,
+		grant: _grant,
+		...rest
+	} = request;
+	return {
+		...rest,
+		schemaVersion: 4 as const,
+		grant: {
+			schemaVersion: 4 as const,
+			format: "runtime-execution-jws" as const,
+			token: "unsigned.unsigned.unsigned",
+		},
+	};
 }
 
 export function createWorkerRuntimeHostClientV1(
@@ -1355,6 +1394,139 @@ export function createWorkerRuntimeHostClientV4(
 			return failure("RUNTIME_REQUEST_INVALID", false);
 		}
 	}
+	/**
+	 * Native V5 Skill dispatch. The ordered attachment facts are already resolved
+	 * by Platform admission; this client only forwards ids/digests/byte lengths to
+	 * the Host after the same Key delivery and current-authority checks as V4.
+	 */
+	async function sendV5(
+		value: RuntimeNativeCapabilityRequestV5,
+		signal?: AbortSignal,
+	) {
+		let sending = false;
+		try {
+			signal?.throwIfAborted();
+			const request = RuntimeNativeCapabilityRequestV5Schema.parse(value);
+			if (!options.verifyGrantV5)
+				throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
+			const claims = options.verifyGrantV5(request.grant);
+			await validateRuntimeBusinessBindingV5(request, claims);
+			const reader = options.executionKeys;
+			const decryptor = options.decryptor;
+			if (!reader || !decryptor)
+				throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
+			const accepted = await interruptedDependency(
+				reader.readAcceptedExecution(request),
+				signal,
+			);
+			if (!accepted) return await acceptanceLost(signal);
+			validateRuntimePinnedExecutionKeyScopeV4(
+				accepted.scope,
+				nativeV4KeyProjection(request),
+				accepted.trustedHostSessionRef,
+			);
+			if (accepted.stopPending) return failure("RUNTIME_STOP_PENDING", false);
+			if (accepted.authorizationRecordId !== claims.authorizationRecordId)
+				return failure("RUNTIME_GRANT_INVALID", false);
+			const original = structuredClone(accepted);
+			const binding = {
+				purpose: original.scope.keyBinding.purpose,
+				subjectId: original.scope.keyBinding.subjectId,
+				keyId: original.scope.keyBinding.ciphertextRef,
+				keyVersion: original.scope.keyBinding.version,
+			};
+			const encryptedRecord = await interruptedDependency(
+				reader.readCiphertext(binding),
+				signal,
+			);
+			signal?.throwIfAborted();
+			if (!encryptedRecord)
+				throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
+			const decryption = decryptor
+				.decrypt({ encryptedRecord, expectedBinding: binding })
+				.then((result) => {
+					if (signal?.aborted && result.outcome === "decrypted")
+						result.plaintext.fill(0);
+					return result;
+				});
+			const decrypted = await interruptedDependency(decryption, signal);
+			if (decrypted.outcome !== "decrypted")
+				throw new RuntimeRelayKeyDeliveryError(decrypted.code);
+			let relayKey: string;
+			try {
+				signal?.throwIfAborted();
+				relayKey = new TextDecoder("utf-8", { fatal: true }).decode(
+					decrypted.plaintext,
+				);
+				RuntimeRelayKeyDeliveryV1Schema.parse({ relayKey });
+			} finally {
+				decrypted.plaintext.fill(0);
+			}
+			const current = await interruptedDependency(
+				reader.readAcceptedExecution(request),
+				signal,
+			);
+			if (!current || !isDeepStrictEqual(current, original))
+				return await acceptanceLost(signal);
+			const privateKeyField = RuntimePrivateRelayKeyFieldV1Schema.parse({
+				schemaVersion: 1,
+				context: {
+					requestId: request.requestId,
+					grantId: claims.grantId,
+					requestDigest: claims.requestDigest,
+					traceId: request.traceId,
+					principal: request.principal,
+					executionSource: request.executionSource,
+					channelId: request.channelId,
+					agentId: request.agentId,
+					conversationId: request.conversationId,
+					executionId: request.executionId,
+					turnId: request.turnId,
+					sessionGeneration: request.sessionGeneration,
+					hostSessionRef: request.hostSessionRef,
+					operation: request.operation,
+					keyBinding: request.keyBinding,
+				},
+				keyDelivery: { relayKey },
+			});
+			const transport = RuntimeNativeCapabilityTransportV5Schema.parse({
+				businessRequest: request,
+				privateKeyField,
+			});
+			await interruptedDependency(options.assertCurrentAuthorization(), signal);
+			signal?.throwIfAborted();
+			const finalClaims = options.verifyGrantV5(request.grant);
+			if (!isDeepStrictEqual(finalClaims, claims))
+				return failure("RUNTIME_GRANT_INVALID", false);
+			sending = true;
+			const response = await post(
+				fetcher,
+				new URL("internal/runtime/v5/native-capability", base),
+				options.serviceToken,
+				request.traceId,
+				transport,
+				signal,
+			);
+			try {
+				const result = RuntimeOperationResponseV5Schema.parse(
+					JSON.parse(await boundedResponseText(response)),
+				);
+				if (
+					result.operationId !== request.operation.id ||
+					(request.hostSessionRef !== null &&
+						result.hostSessionRef !== request.hostSessionRef)
+				)
+					return failure("RUNTIME_RESPONSE_INVALID", true);
+				return result;
+			} catch {
+				return failure("RUNTIME_RESPONSE_INVALID", true);
+			}
+		} catch (error) {
+			if (error instanceof ConversationRuntimeHostError)
+				throw sending ? error : unsent(error);
+			return failure("RUNTIME_REQUEST_INVALID", false);
+		}
+	}
 	return {
 		submitTurn: send,
 		supplement: send,
@@ -1362,6 +1534,7 @@ export function createWorkerRuntimeHostClientV4(
 			value: RuntimeNativeCapabilityRequestV4,
 			signal?: AbortSignal,
 		) => send(value, signal),
+		nativeCapabilityV5: sendV5,
 		async restoreExecutionKey(
 			originalRequest: RuntimeRestoreExecutionKeyRequestV4["originalRequest"],
 			acceptedHostSessionRef: string,
@@ -1488,6 +1661,141 @@ export function createWorkerRuntimeHostClientV4(
 					signal,
 				);
 				const result = RuntimeRestoreExecutionKeyResponseV4Schema.parse(
+					JSON.parse(await boundedResponseText(response)),
+				);
+				if (
+					result.hostSessionRef !== acceptedHostSessionRef ||
+					result.operationId !== request.operation.id
+				)
+					return failure("RUNTIME_RESPONSE_INVALID", true);
+				return result;
+			} catch (error) {
+				if (error instanceof ConversationRuntimeHostError) throw error;
+				return failure("RUNTIME_REQUEST_INVALID", false);
+			}
+		},
+		async restoreExecutionKeyV5(
+			originalRequest: RuntimeRestoreExecutionKeyRequestV5["originalRequest"],
+			acceptedHostSessionRef: string,
+			acceptedOperationDigest: string,
+			signal?: AbortSignal,
+		) {
+			try {
+				if (
+					!options.signRecoveryV5 ||
+					!options.executionKeys ||
+					!options.decryptor
+				)
+					throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
+				const request =
+					RuntimeNativeCapabilityRequestV5Schema.parse(originalRequest);
+				const accepted = await interruptedDependency(
+					options.executionKeys.readAcceptedExecution(request),
+					signal,
+				);
+				if (
+					!accepted ||
+					accepted.trustedHostSessionRef !== acceptedHostSessionRef ||
+					accepted.authorizationRecordId.length === 0 ||
+					accepted.scope.hostSessionRef !== request.hostSessionRef ||
+					accepted.scope.executionId !== request.executionId ||
+					accepted.scope.turnId !== request.turnId ||
+					accepted.scope.agentId !== request.agentId ||
+					accepted.scope.conversationId !== request.conversationId ||
+					!isDeepStrictEqual(accepted.scope.keyBinding, request.keyBinding)
+				)
+					return failure("RUNTIME_GRANT_INVALID", false);
+				if (accepted.stopPending) return failure("RUNTIME_STOP_PENDING", false);
+				validateRuntimePinnedExecutionKeyScopeV4(
+					accepted.scope,
+					nativeV4KeyProjection(request),
+					accepted.scope.hostSessionRef,
+				);
+				const binding: RuntimeRelayKeyBindingV1 = {
+					purpose: accepted.scope.keyBinding.purpose,
+					subjectId: accepted.scope.keyBinding.subjectId,
+					ciphertextRef: accepted.scope.keyBinding.ciphertextRef,
+					version: accepted.scope.keyBinding.version,
+				};
+				const encryptedRecord = await interruptedDependency(
+					options.executionKeys.readCiphertext({
+						purpose: binding.purpose,
+						subjectId: binding.subjectId,
+						keyId: binding.ciphertextRef,
+						keyVersion: binding.version,
+					}),
+					signal,
+				);
+				if (!encryptedRecord)
+					throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
+				const decrypted = await interruptedDependency(
+					options.decryptor.decrypt({
+						encryptedRecord,
+						expectedBinding: {
+							purpose: binding.purpose,
+							subjectId: binding.subjectId,
+							keyId: binding.ciphertextRef,
+							keyVersion: binding.version,
+						},
+					}),
+					signal,
+				);
+				if (decrypted.outcome !== "decrypted")
+					throw new RuntimeRelayKeyDeliveryError(decrypted.code);
+				let relayKey: string;
+				try {
+					relayKey = new TextDecoder("utf-8", { fatal: true }).decode(
+						decrypted.plaintext,
+					);
+					RuntimeRelayKeyDeliveryV1Schema.parse({ relayKey });
+				} finally {
+					decrypted.plaintext.fill(0);
+				}
+				const signed = await options.signRecoveryV5(
+					request,
+					acceptedHostSessionRef,
+					acceptedOperationDigest,
+					request.attachments.map((entry) => entry.attachmentId),
+					accepted.authorizationRecordId,
+				);
+				const privateKeyField = RuntimePrivateRelayKeyFieldV1Schema.parse({
+					schemaVersion: 1,
+					context: {
+						requestId: request.requestId,
+						grantId: signed.claims.grantId,
+						requestDigest: signed.claims.requestDigest,
+						traceId: request.traceId,
+						principal: request.principal,
+						executionSource: request.executionSource,
+						channelId: request.channelId,
+						agentId: request.agentId,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+						turnId: request.turnId,
+						sessionGeneration: request.sessionGeneration,
+						hostSessionRef: request.hostSessionRef,
+						operation: request.operation,
+						keyBinding: request.keyBinding,
+					},
+					keyDelivery: { relayKey },
+				});
+				const transport = RuntimeRestoreExecutionKeyTransportV5Schema.parse({
+					recoveryRequest: signed.request,
+					privateKeyField,
+				});
+				await interruptedDependency(
+					options.assertCurrentAuthorization(),
+					signal,
+				);
+				const response = await post(
+					fetcher,
+					new URL("internal/runtime/v5/execution-key/restore", base),
+					options.serviceToken,
+					request.traceId,
+					transport,
+					signal,
+				);
+				const result = RuntimeRestoreExecutionKeyResponseV5Schema.parse(
 					JSON.parse(await boundedResponseText(response)),
 				);
 				if (

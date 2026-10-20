@@ -136,7 +136,7 @@ it("requires both a signed execution delegation and a mapped service, then reche
 	}
 });
 
-it("keeps the production Runtime exchange fail-closed until the grant is resolved server-side", async () => {
+it("rejects a Runtime exchange before persistence when its service or expiry is not current", async () => {
 	const { assembled, mapping } = createAssemblyFixture();
 	const request = new Request(
 		"http://platform/internal/v1/files/runtime-exchange",
@@ -151,31 +151,32 @@ it("keeps the production Runtime exchange fail-closed until the grant is resolve
 		executionId: "execution",
 		sessionGeneration: 1,
 		grantId: "grant",
-		expiresAt: "2099-01-01T00:00:00Z",
+		expiresAt: new Date(Date.now() + 1000).toISOString(),
 		idempotencyKey: "runtime-1",
 	};
 	try {
 		const runtimeExchange = assembled.dependencies.runtimeExchange;
 		if (!runtimeExchange) throw new Error("Runtime exchange missing");
 		await expect(
-			runtimeExchange.authenticate(request, {
-				...binding,
-				operation: "read",
-				fileId: "unlisted-same-conversation-file",
-			}),
+			runtimeExchange.authenticate(
+				new Request("http://platform/internal/v1/files/runtime-exchange", {
+					headers: {
+						Authorization: "Bearer unmapped-service-token-123456789012",
+					},
+				}),
+				{
+					...binding,
+					operation: "read",
+					fileId: "file",
+				},
+			),
 		).rejects.toThrow();
 		await expect(
 			runtimeExchange.authenticate(request, {
 				...binding,
-				operation: "result",
-				expiresAt: "2100-01-01T00:00:00Z",
-				descriptor: {
-					name: "runtime.txt",
-					mediaType: "text/plain",
-					sizeBytes: 5,
-					sha256:
-						"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
-				},
+				operation: "read",
+				expiresAt: "2000-01-01T00:00:00Z",
+				fileId: "file",
 			}),
 		).rejects.toThrow();
 	} finally {

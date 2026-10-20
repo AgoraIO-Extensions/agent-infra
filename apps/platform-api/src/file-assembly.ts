@@ -207,18 +207,79 @@ export function assemblePlatformFilesV1(input: {
 			},
 		},
 		runtimeExchange: {
-			// The V4 wire carries no signed grant, so nothing submitted in the request may
-			// become the authorized attachment allowlist or the authoritative grant expiry.
-			// Stay fail-closed until the current Runtime grant is resolved server-side
-			// (ADR-0014 §41 与 §45)。
+			/**
+			 * Minimal #2968 resolver: the V4 exchange carries no signed Runtime
+			 * Grant, so the request's identity fields are not authority. The
+			 * deployment service token and the persisted Conversation/Execution
+			 * rows are. `grantId` stays an opaque per-grant key, and the expiry is
+			 * capped on the server clock instead of trusted as submitted.
+			 */
 			async authenticate(
-				_request: Request,
-				_value: RuntimeFileExchangeRequestV1,
+				request: Request,
+				value: RuntimeFileExchangeRequestV1,
 			): Promise<{
 				conversationId: string;
 				authorization: FileAuthorizationPortV1;
 			}> {
-				throw new Error("Runtime file exchange denied");
+				if (!serviceAllowed(request, value.agentId))
+					throw new Error("Runtime file exchange denied");
+				const now = Date.now();
+				const submittedExpiry = Date.parse(value.expiresAt);
+				if (
+					!Number.isFinite(submittedExpiry) ||
+					submittedExpiry <= now ||
+					submittedExpiry > now + deployment.accessTtlMs
+				)
+					throw new Error("Runtime file exchange denied");
+				const trusted = await store.transaction(
+					value.conversationId,
+					async (transaction) => {
+						const conversation = transaction.conversation;
+						const execution = await transaction.getExecution(value.executionId);
+						if (!conversation || !execution) return null;
+						if (
+							conversation.actorId !== value.actorId ||
+							conversation.agentId !== value.agentId ||
+							conversation.channelId !== value.channelId ||
+							conversation.conversationId !== value.conversationId ||
+							conversation.sessionGeneration !== value.sessionGeneration
+						)
+							return null;
+						if (
+							execution.actorId !== value.actorId ||
+							execution.agentId !== value.agentId ||
+							execution.channelId !== value.channelId ||
+							execution.conversationId !== value.conversationId ||
+							execution.executionId !== value.executionId ||
+							execution.sessionGeneration !== value.sessionGeneration ||
+							execution.stopPending ||
+							(execution.status !== "processing" &&
+								execution.status !== "submitted")
+						)
+							return null;
+						return execution;
+					},
+				);
+				if (!trusted) throw new Error("Runtime file exchange denied");
+				return {
+					conversationId: value.conversationId,
+					authorization: authorization(request, {
+						actorId: value.actorId,
+						agentId: value.agentId,
+						channelId: value.channelId,
+						conversationId: value.conversationId,
+						executionId: value.executionId,
+						sessionGeneration: value.sessionGeneration,
+						grantId: value.grantId,
+						attachments:
+							value.operation === "read" && "fileId" in value
+								? [value.fileId]
+								: [],
+						expiresAt: new Date(
+							Math.min(submittedExpiry, now + 60_000),
+						).toISOString(),
+					}),
+				};
 			},
 		},
 	};
