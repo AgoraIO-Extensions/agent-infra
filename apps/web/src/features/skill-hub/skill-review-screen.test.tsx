@@ -10,7 +10,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/components/ui/toast";
 import { client as generatedClient } from "../../pilot/generated-v2/client.gen.js";
-import type { SkillHubPublicationResponseV1 } from "../../pilot/generated-v2/types.gen.js";
+import type {
+	DirectorySearchItemV1,
+	SkillHubPublicationResponseV1,
+} from "../../pilot/generated-v2/types.gen.js";
 import {
 	directoryRequestUrl,
 	directorySearchResponse,
@@ -22,11 +25,7 @@ import {
 } from "./skill-review-screen.js";
 
 // 发布者与组织名称由页面级目录读取解析：测试与生产一样经 QueryClient 读取固定目录记录。
-let directoryRecords: {
-	kind: "user" | "organization";
-	canonicalId: string;
-	displayName: string;
-}[] = [];
+let directoryRecords: DirectorySearchItemV1[] = [];
 beforeEach(() => {
 	// 生成 Client 默认使用相对地址；jsdom 下的 Request 需要绝对地址。
 	generatedClient.setConfig({ baseUrl: "https://platform.test" });
