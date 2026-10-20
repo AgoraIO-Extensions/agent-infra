@@ -241,10 +241,11 @@ function RecentConversations({
 						(agent !== undefined && !canStartPlatformConversation(agent)) ||
 						conversationUnavailable;
 					const title = conversationDisplayTitle(conversation.title);
-					// 三种文案都是四个字：加载期到就绪后按钮宽度不变（NI-28）。
+					// 设计 #workbench：只有首行可继续的会话写「继续对话」，其余可用会话写「打开对话」（Y-11）；
+					// Agent 未确认可用时也写「打开对话」。三种文案都是四个字：加载期到就绪后按钮宽度不变（NI-28）。
 					const action = readOnly
 						? "查看历史"
-						: agent
+						: agent && index === 0
 							? "继续对话"
 							: "打开对话";
 					return (
@@ -421,8 +422,9 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 								}}
 								search={{ view: undefined }}
 							>
-								查看全部
+								{/* 设计 linkBtn icon:'arrow'：箭头在文字前（Y-05）。 */}
 								<ArrowRight aria-hidden="true" />
+								查看全部
 							</Link>
 						)
 					}
@@ -470,8 +472,10 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 							</section>
 						)}
 						<section aria-label="需要你处理" className="workbench-list">
+							{/* 设计 #workbench 待处理：「Owner 待办」进申请详情（查看原因、修改后重新提交，PRD §6.3），
+							    「运行状态」进 Owner 配置（Owner 可以重试，PRD §6.3）（Y-09）。 */}
 							{applications.kind !== "ready" ? (
-								<TaskRow title="Owner 事项">
+								<TaskRow title="Owner 待办">
 									<ReadNotice
 										{...notice}
 										state={applications}
@@ -482,31 +486,25 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 								rejected.map((application) => (
 									<TaskRow
 										key={application.applicationId}
-										title="Owner 事项"
+										title="Owner 待办"
 										action={
 											<Link
 												className={buttonVariants({ variant: "ghost" })}
-												to="/my-agents/$applicationId/edit"
+												to="/my-agents/$applicationId"
 												params={{ applicationId: application.applicationId }}
-												aria-label={withObjectName(
-													"修改并重新提交",
-													application.name,
-												)}
+												aria-label={withObjectName("查看", application.name)}
 											>
-												修改并重新提交
+												查看
 											</Link>
 										}
 									>
 										<small>
-											<span>{application.name}</span> ·{" "}
-											<span>
-												{application.decision?.reason ?? "暂未提供驳回原因。"}
-											</span>
+											{cjkSpaced`${application.name}被驳回，可修改后重提`}
 										</small>
 									</TaskRow>
 								))
 							) : (
-								<TaskRow title="Owner 事项">
+								<TaskRow title="Owner 待办">
 									<small>暂无需要修改的申请。</small>
 								</TaskRow>
 							)}
@@ -528,15 +526,13 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 												className={buttonVariants({ variant: "ghost" })}
 												to="/agents/$agentId/configuration"
 												params={{ agentId: agent.agentId }}
-												aria-label={withObjectName("配置与管理", agent.name)}
+												aria-label={withObjectName("处理", agent.name)}
 											>
-												配置与管理
+												处理
 											</Link>
 										}
 									>
-										<small>
-											<span>{agent.name}</span> · 创建失败
-										</small>
+										<small>{cjkSpaced`${agent.name}创建失败，可重试`}</small>
 									</TaskRow>
 								))
 							) : (
@@ -544,6 +540,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 									<small>暂无创建失败的 Agent。</small>
 								</TaskRow>
 							)}
+							{/* 系统管理员代替 Owner 重试创建失败的 Agent（PRD §2.3）：导出稿没有这一行，待回写（Y-09）。 */}
 							{administrator &&
 								(adminAgents.kind !== "ready" ? (
 									<TaskRow title="运行状态">
@@ -580,8 +577,8 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 				title="可用 Agent"
 				action={
 					<Link className={buttonVariants({ variant: "ghost" })} to="/agents">
-						查看目录
 						<ArrowRight aria-hidden="true" />
+						查看目录
 					</Link>
 				}
 			>
@@ -621,6 +618,8 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 										params={{ agentId: agent.agentId }}
 										aria-label={withObjectName("查看详情", agent.name)}
 									>
+										{/* 设计 ghost 按钮带前置箭头（Y-06）。 */}
+										<ArrowRight aria-hidden="true" />
 										查看详情
 									</Link>
 								</Card>
@@ -661,19 +660,30 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 											</Badge>
 										</div>
 										<h3>{application.name}</h3>
-										<small>{application.description}</small>
+										{/* 设计 #workbench：「来源 · 更新时间 · 说明」（Y-10）。 */}
+										<small>
+											{application.source.kind === "standard"
+												? templateDisplayName(
+														application.source.templateId,
+														templateName,
+													)
+												: "自定义 Agent"}
+											{" · "}
+											<Timestamp
+												value={application.updatedAt ?? application.submittedAt}
+											/>
+											{application.description &&
+												` · ${application.description}`}
+										</small>
 									</div>
 									<div className="workbench-list-side">
 										<Link
 											className={buttonVariants({ variant: "ghost" })}
 											to="/my-agents/$applicationId"
 											params={{ applicationId: application.applicationId }}
-											aria-label={withObjectName(
-												"查看申请状态",
-												application.name,
-											)}
+											aria-label={withObjectName("查看状态", application.name)}
 										>
-											查看申请状态
+											查看状态
 										</Link>
 									</div>
 								</article>

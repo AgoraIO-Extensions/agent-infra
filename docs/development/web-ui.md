@@ -103,6 +103,9 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
 | X-10 | 管理员 Agent 390 卡片表格的「Agent 名称 / 说明」 | 同 X-08 | 同 X-08 |
 | X-12 | 审计 390 卡片表格的「对象」（名称 / ID 短形式） | 同 X-08 | 同 X-08 |
 | X-13 | Skill Hub 读取失败、无匹配空态 | 图标下方 11px，其余高度按网格行均分 | 导出稿缺陷：`skillEmpty` 把图标作为行内元素放进文字块，基线下多出约 6.8px（图标到标题 17.8px） |
+| Y-03 | 窄屏导航 Sheet 头部 | 保留右上角 44px ghost 图标按钮「关闭导航」，品牌块让出 48px，两者命中区不重叠；遮罩与 Esc 仍可关闭，关闭后焦点回到「打开导航」 | 可访问性：模态导航提供可见、可触达的关闭控件，不只依赖 Esc 或遮罩 |
+| Y-04 | 侧栏「个人 Relay Key」「API 凭证」「我的 Connection」图标 | 沿用 lucide `KeyRound`（17px） | 全站 key 语义（侧栏、连接器提示、对话上下文条、Connection 安装面板、Secret、Relay Key、API 凭证空态）统一为同一字形；只换侧栏会让同页出现两种 key 图标 |
+| Y-09 | 工作台「待处理」管理员行 | 系统管理员另有一行「运行状态 / N 个 Agent 创建失败 / 查看失败清单」，进入 `/admin/agents?status=creation_failed`；Owner 行按导出稿对齐 | 系统管理员可代替 Owner 重试创建失败的 Agent（[PRD §2.3](../prd/PRD-agent-platform-M1.md#23-系统管理员)、[§6.3](../prd/PRD-agent-platform-M1.md#63-管理状态)） |
 | Z-02 | 对话 composer 的发送按钮 | 草稿为空且没有选中命令或 Skill 时禁用 | 消息命令 `MessageCommandRequestV1.text` 必须非空；导出稿的发送处理同样忽略空草稿，禁用比无反馈的点击更清楚 |
 | Z-04 | 已完成回答的状态行 | 「已完成 · 重新生成 · 查看执行详情」：已完成、失败与已停止的回答都可重新生成；不显示「n 步」 | [PRD §11.2](../prd/PRD-agent-platform-M1.md#112-对话能力)：重新生成基于同一条用户消息产生新回答，服务端只要求会话没有活跃回复；导出稿的多回答版本示例也来自已完成回答。会话投影没有步数，过程摘要在执行详情 |
 | Z-06 | 对话页个人历史面板 | 列表下保留 ghost「此 Agent 的全部历史」与「最近对话」切换 | 面板默认是跨 Agent 的最近对话，切换后才是当前 Agent 的分页历史（[PRD §11.2](../prd/PRD-agent-platform-M1.md#112-对话能力) 查看历史会话、[§12.2](../prd/PRD-agent-platform-M1.md#122-会话历史)） |

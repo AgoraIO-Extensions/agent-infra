@@ -342,6 +342,20 @@ describe("deployment links", () => {
 				.getByRole("link", { name: /我的 Connection/ })
 				.getAttribute("href"),
 		).toBe("https://connection.example.test/mcp");
+		// Y-01：key 与外链图标都按设计 .nav-item svg 统一为 17px。
+		const icons = screen
+			.getByRole("link", { name: /我的 Connection/ })
+			.querySelectorAll("svg");
+		expect(
+			Array.from(icons).map((icon) => [
+				icon.getAttribute("width"),
+				icon.getAttribute("height"),
+				icon.getAttribute("aria-hidden"),
+			]),
+		).toEqual([
+			["17", "17", "true"],
+			["17", "17", "true"],
+		]);
 	});
 
 	it.each([

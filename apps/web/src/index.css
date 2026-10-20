@@ -375,8 +375,10 @@
 	.platform-topbar {
 		padding: 0 18px;
 	}
+	/* 设计 .topbar-left gap 12px：菜单按钮与面包屑之间收回顶栏 16px gap 的 4px（Y-02）。 */
 	.platform-topbar .mobile-menu {
 		display: inline-flex;
+		margin-inline-end: -4px;
 	}
 	.platform-breadcrumb {
 		flex: 1;
@@ -2478,11 +2480,12 @@ body {
 .workbench-agent-grid {
 	grid-template-columns: repeat(3, minmax(0, 1fr));
 }
+/* 设计 #workbench 可用 Agent 卡：mark→h3 14px、h3→p 5px、p→tag 14px、tag→操作 16px（Y-07）。 */
 .workbench-card {
 	display: flex;
 	flex-direction: column;
 	align-items: start;
-	gap: 12px;
+	gap: 0;
 	min-width: 0;
 	overflow-wrap: anywhere;
 }
@@ -2492,10 +2495,12 @@ body {
 	line-height: 1.4;
 }
 .ia-workbench .workbench-card p {
+	margin-top: 5px;
 	color: var(--muted-foreground);
 	font-size: 13px;
 	line-height: 1.65;
 }
+/* 同行卡片的操作仍对齐卡底；最高的卡片 tag 与操作之间正好 16px。 */
 .workbench-card a {
 	margin-top: auto;
 }
@@ -2584,6 +2589,8 @@ body {
 	display: flex;
 	gap: 6px;
 	flex-wrap: wrap;
+	margin-top: 14px;
+	margin-bottom: 16px;
 }
 .workbench-agent-top {
 	display: flex;
@@ -2595,6 +2602,7 @@ body {
 .workbench-agent-copy {
 	min-width: 0;
 	width: 100%;
+	margin-top: 14px;
 }
 .workbench-agent-grid .workbench-card a {
 	align-self: start;
@@ -2913,6 +2921,10 @@ body {
 	.ia-agent-directory .directory-section-head h2 {
 		font-size: 20px;
 	}
+	/* 设计 ≤767px .section margin-top 26px；概览内两块仍为 margin 0（特异性更高）（Y-08）。 */
+	.workbench-section {
+		margin-top: 26px;
+	}
 	.management-content .form-layout > div:first-child,
 	.agent-detail-panel,
 	.workbench-overview .workbench-section {
@@ -2987,6 +2999,41 @@ body {
 	font-family: inherit;
 	font-size: 16px;
 	letter-spacing: 0;
+}
+/* 设计 #agent-detail .detail-section p：h2 下 8px，13px / 1.65 muted；操作组上距 16px（Y-15、Y-16）。 */
+.agent-detail .detail-section h2:has(+ .agent-detail-section-note) {
+	margin-bottom: 0;
+}
+.agent-detail .agent-detail-section-note {
+	margin-top: 8px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	line-height: 1.65;
+}
+.agent-detail-section-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-top: 16px;
+}
+/* 设计 .section-head：标题组在左，18px 图标在右并与底边对齐；≤767px 顶对齐（Y-18）。 */
+.detail-panel-heading {
+	display: flex;
+	align-items: end;
+	justify-content: space-between;
+	gap: 18px;
+}
+.detail-panel-heading > div {
+	min-width: 0;
+}
+.detail-panel-heading > svg {
+	flex: none;
+}
+@media (max-width: 767px) {
+	.detail-panel-heading {
+		align-items: flex-start;
+	}
 }
 .detail-panel-heading h2 {
 	font-family: var(--font-display);

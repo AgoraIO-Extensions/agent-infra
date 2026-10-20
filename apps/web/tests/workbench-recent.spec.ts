@@ -24,6 +24,8 @@ import type {
 } from "../src/pilot/generated-v2/types.gen";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
+import { duplicateControlNames } from "./page-hygiene";
+import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
 type ControlledSession = {
 	tag: "old" | "new";
@@ -1169,15 +1171,16 @@ test("untitled recent conversations keep distinct continue link names (N-12)", a
 		"未命名对话",
 		"未命名对话",
 	]);
-	const links = recent.getByRole("link", { name: /^继续对话：/ });
+	const links = recent.getByRole("link", { name: /^(继续对话|打开对话)：/ });
 	await expect(links).toHaveCount(3);
 	const names = await links.evaluateAll((items) =>
 		items.map((item) => item.getAttribute("aria-label")),
 	);
+	// Y-11：只有首行写「继续对话」，其余可用会话写「打开对话」；对象名仍按出现顺序编号。
 	expect(names).toEqual([
 		"继续对话：未命名对话（第 1 次）",
-		"继续对话：未命名对话（第 2 次）",
-		"继续对话：未命名对话（第 3 次）",
+		"打开对话：未命名对话（第 2 次）",
+		"打开对话：未命名对话（第 3 次）",
 	]);
 	expect(fixture.unexpected).toEqual([]);
 });
@@ -1728,16 +1731,41 @@ test("administrator root exposes the six original blocks and legitimate Owner an
 		"我的申请",
 	]);
 	const owner = page.getByRole("region", { name: "需要你处理", exact: true });
-	await expect(
-		owner.getByRole("link", { name: "修改并重新提交" }),
-	).toHaveAttribute("href", "/my-agents/controlled-rejected-application/edit");
-	await expect(owner.getByRole("link", { name: "配置与管理" })).toHaveAttribute(
+	// Y-09：Owner 行按导出稿 #workbench：「Owner 待办 / 名称被驳回，可修改后重提 / 查看」进申请详情，
+	// 「运行状态 / 名称创建失败，可重试 / 处理」进 Owner 配置；驳回原因在申请详情显示（PRD §6.3）。
+	await expect(owner.getByRole("heading", { level: 3 })).toHaveText([
+		"Owner 待办",
+		"运行状态",
+		"运行状态",
+	]);
+	const review = owner.getByRole("link", {
+		name: "查看：受控驳回申请",
+		exact: true,
+	});
+	await expect(review).toHaveText("查看");
+	await expect(review).toHaveAttribute(
+		"href",
+		"/my-agents/controlled-rejected-application",
+	);
+	const handle = owner.getByRole("link", {
+		name: "处理：受控创建失败助手",
+		exact: true,
+	});
+	await expect(handle).toHaveText("处理");
+	await expect(handle).toHaveAttribute(
 		"href",
 		"/agents/controlled-failed-agent/configuration",
 	);
 	await expect(
-		owner.getByText("受控申请需要缩小可用范围。", { exact: true }),
+		owner.getByText("受控驳回申请被驳回，可修改后重提", { exact: true }),
 	).toBeVisible();
+	await expect(
+		owner.getByText("受控创建失败助手创建失败，可重试", { exact: true }),
+	).toBeVisible();
+	await expect(owner.getByText("受控申请需要缩小可用范围。")).toHaveCount(0);
+	await expect(
+		owner.getByRole("link", { name: /^(修改并重新提交|配置与管理)/ }),
+	).toHaveCount(0);
 	const admin = page.getByRole("region", {
 		name: "需要管理员处理",
 		exact: true,
@@ -2117,11 +2145,14 @@ test.describe("workbench design alignment", () => {
 			page.getByText("历史仍可查看，当前不能继续发送消息。"),
 		).toHaveCount(0);
 		await page.setViewportSize({ width: 390, height: 844 });
-		for (const name of ["修改并重新提交", "配置与管理", "查看失败清单"]) {
+		for (const name of [
+			"查看：受控驳回申请",
+			"处理：受控创建失败助手",
+			"查看失败清单",
+		]) {
 			const action = page
 				.getByRole("complementary", { name: "待处理" })
-				.getByRole("link", { name: new RegExp(`^${name}`) })
-				.first();
+				.getByRole("link", { name, exact: true });
 			const row = action.locator(
 				"xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' workbench-list-row ')][1]",
 			);
@@ -2236,6 +2267,132 @@ test.describe("workbench design alignment", () => {
 		await expect(enter).toHaveAttribute("href", "/admin/approvals");
 		expect(fixture.unexpected).toEqual([]);
 	});
+
+	// #2830 终验 Y：1440×900 与 390×844 下逐项对照导出稿 #workbench。
+	for (const viewport of [
+		{ width: 1440, height: 900 },
+		{ width: 390, height: 844 },
+	]) {
+		test(`final acceptance Y workbench rhythm, arrows and rows at ${viewport.width}px (Y-05–Y-11)`, async ({
+			page,
+		}, info) => {
+			test.skip(
+				(viewport.width === 1440) !== (info.project.name === "desktop"),
+				"Each viewport runs in its own project",
+			);
+			const errors = trackPageErrors(page);
+			await page.setViewportSize(viewport);
+			const fixture = await workbenchFixture(page, {
+				administrator: true,
+				attention: true,
+			});
+			await page.goto("/");
+			const agents = page.getByRole("region", {
+				name: "可用 Agent",
+				exact: true,
+			});
+			await expect(agents.getByRole("heading", { level: 3 })).toHaveCount(3);
+			// Y-05：区块头「查看全部」「查看目录」的箭头在文字前。
+			for (const link of [
+				recentRegion(page).getByRole("link", { name: "查看全部", exact: true }),
+				agents.getByRole("link", { name: "查看目录", exact: true }),
+			]) {
+				const [icon, label] = await link.evaluate((element) => {
+					const svg = element.querySelector("svg");
+					const range = document.createRange();
+					range.selectNodeContents(element);
+					range.setStartAfter(svg as SVGElement);
+					return [
+						svg?.getBoundingClientRect().right ?? 0,
+						range.getBoundingClientRect().left,
+					];
+				});
+				expect(label).toBeGreaterThan(icon);
+				await expect(link.locator(":scope > svg")).toHaveCount(1);
+				expect(
+					await link.evaluate(
+						(element) => element.firstElementChild?.tagName.toLowerCase() ?? "",
+					),
+				).toBe("svg");
+			}
+			// Y-06 / Y-07：卡片纵向节奏 14 / 5 / 14 / 16，ghost「查看详情」带前置箭头，宽 107px、卡高 244.4px。
+			const card = agents.locator('[data-slot="card"].workbench-card').first();
+			const parts = await card.evaluate((element) => {
+				const rect = (selector: string) => {
+					const node = element.querySelector(selector);
+					if (!node) throw new Error(`Missing ${selector}`);
+					return node.getBoundingClientRect();
+				};
+				const mark = rect('[data-slot="agent-mark"]');
+				const title = rect("h3");
+				const copy = rect(".workbench-agent-copy p");
+				const tags = rect(".workbench-agent-tags");
+				const action = rect("a");
+				return {
+					markToTitle: title.top - mark.bottom,
+					titleToCopy: copy.top - title.bottom,
+					copyToTags: tags.top - copy.bottom,
+					tagsToAction: action.top - tags.bottom,
+					actionWidth: action.width,
+					height: element.getBoundingClientRect().height,
+					firstIcon: element
+						.querySelector("a")
+						?.firstElementChild?.tagName.toLowerCase(),
+				};
+			});
+			expect(Math.abs(parts.markToTitle - 14)).toBeLessThanOrEqual(0.5);
+			expect(Math.abs(parts.titleToCopy - 5)).toBeLessThanOrEqual(0.5);
+			expect(Math.abs(parts.copyToTags - 14)).toBeLessThanOrEqual(0.5);
+			expect(Math.abs(parts.tagsToAction - 16)).toBeLessThanOrEqual(0.5);
+			expect(Math.abs(parts.actionWidth - 107.05)).toBeLessThanOrEqual(1);
+			expect(Math.abs(parts.height - 244.38)).toBeLessThanOrEqual(1);
+			expect(parts.firstIcon).toBe("svg");
+			// Y-08：≤767px 区块上距 26px，桌面 32px；概览内两块不受影响。
+			const sectionGap = viewport.width <= 767 ? "26px" : "32px";
+			await expect(agents).toHaveCSS("margin-top", sectionGap);
+			const applications = page.getByRole("region", {
+				name: "我的申请",
+				exact: true,
+			});
+			await expect(applications).toHaveCSS("margin-top", sectionGap);
+			await expect(recentRegion(page)).toHaveCSS("margin-top", "0px");
+			// Y-10：我的申请行为「来源 · 更新时间 · 说明」，按钮可见文字「查看状态」。
+			const pending = applications.locator(".workbench-list-row").filter({
+				has: page.getByRole("heading", {
+					level: 3,
+					name: "Release assistant request",
+					exact: true,
+				}),
+			});
+			await expect(pending.locator("small")).toHaveText(
+				/^Codex · .+ · Helps the release team$/,
+			);
+			await expect(pending.locator("small time")).toHaveAttribute(
+				"datetime",
+				"2026-09-03T08:00:00Z",
+			);
+			const status = pending.getByRole("link", {
+				name: "查看状态：Release assistant request",
+				exact: true,
+			});
+			await expect(status).toHaveText("查看状态");
+			await expect(
+				page.getByRole("link", { name: /查看申请状态/ }),
+			).toHaveCount(0);
+			// Y-11：首行可继续的会话「继续对话」，只读会话「查看历史」。
+			await expect(
+				recentRegion(page).locator(".workbench-list-side a"),
+			).toHaveText(["继续对话", "查看历史"]);
+			// AC-2：无横向溢出、无控制台错误、同页没有同名控件。
+			await expectCleanPage(page, errors);
+			expect(await duplicateControlNames(page)).toEqual([]);
+			await info.attach(`final-acceptance-y-workbench-${viewport.width}`, {
+				body: await page.screenshot({ fullPage: true, animations: "disabled" }),
+				contentType: "image/png",
+			});
+			expect(fixture.unexpected).toEqual([]);
+		});
+	}
 
 	test.describe("in Asia/Shanghai", () => {
 		test.use({ timezoneId: "Asia/Shanghai" });

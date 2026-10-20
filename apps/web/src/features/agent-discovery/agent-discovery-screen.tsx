@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/native-select";
 import { SearchInput } from "@/components/ui/search-input";
 import { LoadingLine } from "@/components/ui/spinner";
-import { distinctObjectNames } from "@/lib/accessible-name";
+import { distinctObjectNames, withObjectName } from "@/lib/accessible-name";
 import { cn } from "@/lib/utils";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -173,12 +173,19 @@ function DirectoryUnavailable({
 	);
 }
 
-function agentChannelSummary(agent: AgentProjectionV2) {
+/**
+ * 可用渠道摘要（PRD §11.1「可用渠道」）：只列可用或已绑定的渠道，按设计 `Web · 企微机器人` 用「 · 」连接。
+ * 目录卡 tag 与 Agent 详情「渠道」行共用这一规则（Y-14）。
+ */
+export function agentChannelSummary(agent: {
+	configuration: Pick<AgentProjectionV2["configuration"], "channels">;
+	source: AgentProjectionV2["source"];
+}) {
 	return (
 		agent.configuration.channels
 			.filter((channel) => ["available", "bound"].includes(channel.status))
 			.map((channel) => agentChannelKindLabels[channel.kind])
-			.join("、") ||
+			.join(" · ") ||
 		(agent.source.kind === "custom" &&
 		agent.source.interactionMode === "self-managed"
 			? "自有交互入口"
@@ -461,9 +468,12 @@ export function AgentDiscoveryScreen({
 														}}
 														search={{ view: undefined }}
 														to="/chat/$agentId/{-$conversationId}"
+														// 每张卡都有「开始对话」：名称带对象名，同页没有同名控件（N-12）。
+														aria-label={withObjectName("开始对话", agent.name)}
 													>
-														开始对话
+														{/* 设计 linkBtn icon:'arrow'：箭头在文字前（Y-12）。 */}
 														<ArrowRight aria-hidden="true" />
+														开始对话
 													</Link>
 												) : (
 													<Link
@@ -477,8 +487,8 @@ export function AgentDiscoveryScreen({
 														to="/agents/$agentId"
 														aria-label={`查看 ${agent.name} 详情`}
 													>
-														查看详情
 														<ArrowRight aria-hidden="true" />
+														查看详情
 													</Link>
 												)}
 											</div>

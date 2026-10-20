@@ -1,11 +1,13 @@
 import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runtime";
 import { Link } from "@tanstack/react-router";
 import {
+	Activity,
 	ArrowLeft,
 	ExternalLink,
 	History,
 	MessageCircle,
 	Settings,
+	UserRound,
 } from "lucide-react";
 import { Fragment } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -35,7 +37,10 @@ import {
 	type AgentDetailViewState,
 	canStartPlatformConversation,
 } from "./agent-discovery.js";
-import { agentChannelKindLabels } from "./agent-discovery-screen.js";
+import {
+	agentChannelKindLabels,
+	agentChannelSummary,
+} from "./agent-discovery-screen.js";
 import { BrowserCapabilityStatus } from "./browser-capability-status.js";
 import { ConnectionNotice } from "./connection-notice.js";
 
@@ -316,7 +321,8 @@ export function AgentDetailScreen({
 							>
 								{agent.name}
 							</h1>
-							<p className="mt-2 max-w-2xl whitespace-pre-wrap break-words text-muted-foreground leading-7">
+							{/* 设计 .page-head-copy p：14px / 1.65，不另设 leading-7（Y-17）。 */}
+							<p className="mt-2 max-w-2xl whitespace-pre-wrap break-words text-muted-foreground">
 								{agent.description}
 							</p>
 						</div>
@@ -390,7 +396,7 @@ export function AgentDetailScreen({
 						aria-labelledby="about-agent-heading"
 					>
 						<h2 id="about-agent-heading" className="font-semibold text-lg">
-							关于此 Agent
+							Agent 信息
 						</h2>
 						<dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-[auto_minmax(0,1fr)]">
 							<dt className="text-muted-foreground">Owner</dt>
@@ -425,6 +431,9 @@ export function AgentDetailScreen({
 									"未提供范围信息"
 								)}
 							</dd>
+							{/* 设计 #agent-detail「渠道 Web · 企微机器人」：可用渠道摘要与目录卡同一规则（Y-14）。 */}
+							<dt className="text-muted-foreground">渠道</dt>
+							<dd className="break-words">{agentChannelSummary(agent)}</dd>
 							{!selfManaged && (
 								<>
 									<dt className="text-muted-foreground">模型范围</dt>
@@ -452,19 +461,21 @@ export function AgentDetailScreen({
 					{!selfManaged && (
 						<section className="detail-section">
 							<h2>个人历史</h2>
-							<p className="mb-4 text-muted-foreground text-sm">
-								只显示当前账号提交的消息与执行状态，Agent Owner
-								无法替你查看正文。
+							{/* 设计 #agent-detail .detail-section p：13px / 1.65 muted，h2 下 8px；操作上距 16px（Y-15）。 */}
+							<p className="agent-detail-section-note">
+								这里只显示你提交的消息和执行状态，Agent Owner 看不到正文。
 							</p>
-							<Link
-								className={buttonVariants({ variant: "outline" })}
-								to="/chat/$agentId/{-$conversationId}"
-								params={{ agentId: agent.agentId, conversationId: undefined }}
-								search={{ view: "history" }}
-							>
-								<History aria-hidden="true" />
-								查看对话历史
-							</Link>
+							<div className="agent-detail-section-actions">
+								<Link
+									className={buttonVariants({ variant: "outline" })}
+									to="/chat/$agentId/{-$conversationId}"
+									params={{ agentId: agent.agentId, conversationId: undefined }}
+									search={{ view: "history" }}
+								>
+									<History aria-hidden="true" />
+									查看对话历史
+								</Link>
+							</div>
 						</section>
 					)}
 					<section
@@ -474,7 +485,8 @@ export function AgentDetailScreen({
 						<h2 id="agent-capability-heading" className="font-semibold text-lg">
 							连接器
 						</h2>
-						<p>
+						{/* 与「个人历史」说明同一规格：13px muted，h2 下 8px（Y-16）。 */}
+						<p className="agent-detail-section-note">
 							{agent.capabilities.connection
 								? "此 Agent 支持独立 Connection 直连，使用前需由当前主体完成授权。"
 								: "当前 Agent 未提供 Connection 能力。"}
@@ -493,8 +505,12 @@ export function AgentDetailScreen({
 						aria-labelledby="agent-owner-heading"
 					>
 						<header className="detail-panel-heading">
-							<h2 id="agent-owner-heading">Owner</h2>
-							<p>负责范围与运行状态</p>
+							<div>
+								<h2 id="agent-owner-heading">Owner</h2>
+								<p>Owner 和运行状态</p>
+							</div>
+							{/* 设计 .section-head 右侧 18px user 图标（Y-18）。 */}
+							<UserRound size={18} strokeWidth={1.8} aria-hidden="true" />
 						</header>
 						<OwnerList owners={agent.configuration.owners} />
 					</section>
@@ -503,8 +519,12 @@ export function AgentDetailScreen({
 						aria-labelledby="agent-runtime-heading"
 					>
 						<header className="detail-panel-heading">
-							<h2 id="agent-runtime-heading">运行与渠道</h2>
-							<p>平台当前观测</p>
+							<div>
+								<h2 id="agent-runtime-heading">运行与渠道</h2>
+								<p>当前状态</p>
+							</div>
+							{/* 设计 .section-head 右侧 18px activity 图标（Y-18）。 */}
+							<Activity size={18} strokeWidth={1.8} aria-hidden="true" />
 						</header>
 						<ul className="detail-list">
 							<li>

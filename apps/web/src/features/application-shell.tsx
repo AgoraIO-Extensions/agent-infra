@@ -408,7 +408,8 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							<KeyRound {...navigationIconProps} />
 							{label}
 						</span>
-						<ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
+						{/* 设计 .nav-item svg 统一为 17px，外链图标同尺寸（Y-01）。 */}
+						<ExternalLink {...navigationIconProps} />
 					</a>
 				) : (
 					connectionUnavailable(surface)

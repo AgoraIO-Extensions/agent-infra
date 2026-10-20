@@ -192,15 +192,30 @@ describe("OpenDesign workbench presentation", () => {
 		).toBe("/agents/usable-agent");
 		expect(
 			screen
-				.getByRole("link", { name: `修改并重新提交：${rejected.name}` })
+				.getByRole("link", { name: `查看：${rejected.name}` })
 				.getAttribute("href"),
-		).toBe("/my-agents/rejected-application/edit");
+		).toBe("/my-agents/rejected-application");
 		expect(
 			screen
-				.getByRole("link", { name: `配置与管理：${failed.name}` })
+				.getByRole("link", { name: `处理：${failed.name}` })
 				.getAttribute("href"),
 		).toBe("/agents/owned-failed-agent/configuration");
-		expect(screen.getByText("请缩小申请的可用范围。")).toBeTruthy();
+		// Y-09：Owner 行标题、说明按导出稿 #workbench；驳回原因与修改入口在申请详情（PRD §6.3）。
+		const ownerTasks = screen.getByRole("region", { name: "需要你处理" });
+		expect(
+			Array.from(ownerTasks.querySelectorAll("h3")).map(
+				(heading) => heading.textContent,
+			),
+		).toEqual(["Owner 待办", "运行状态", "运行状态"]);
+		expect(
+			within(ownerTasks).getByText("已驳回的本人申请被驳回，可修改后重提"),
+		).toBeTruthy();
+		expect(
+			within(ownerTasks).getByText("Owner 创建失败助手创建失败，可重试"),
+		).toBeTruthy();
+		expect(screen.queryByText("请缩小申请的可用范围。")).toBeNull();
+		expect(screen.queryByRole("link", { name: /^修改并重新提交/ })).toBeNull();
+		expect(screen.queryByRole("link", { name: /^配置与管理/ })).toBeNull();
 		expect(
 			screen.getByRole("link", { name: "查看失败清单" }).getAttribute("href"),
 		).toBe("/admin/agents?status=creation_failed");
@@ -212,13 +227,21 @@ describe("OpenDesign workbench presentation", () => {
 		expect(screen.queryByRole("link", { name: /进入审批/ })).toBeNull();
 		const directory = screen.getByRole("link", { name: "查看目录" });
 		expect(directory.getAttribute("href")).toBe("/agents");
+		// Y-05：箭头在文字前。
+		expect(directory.firstElementChild?.tagName.toLowerCase()).toBe("svg");
 		expect(directory.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+		// Y-06：可用 Agent 卡「查看详情」带前置箭头。
+		const detail = screen.getByRole("link", {
+			name: `查看详情：${available.name}`,
+		});
+		expect(detail.firstElementChild?.tagName.toLowerCase()).toBe("svg");
+		expect(detail.textContent).toBe("查看详情");
 		expect(screen.queryByRole("link", { name: "查看全部 Agent" })).toBeNull();
 		// W-04：待处理的操作放在行右侧，不夹在说明文字里。
 		for (const name of [
 			"进入：创建审批",
-			`修改并重新提交：${rejected.name}`,
-			`配置与管理：${failed.name}`,
+			`查看：${rejected.name}`,
+			`处理：${failed.name}`,
 			"查看失败清单",
 		]) {
 			const link = screen.getByRole("link", { name });
@@ -296,6 +319,8 @@ describe("OpenDesign workbench presentation", () => {
 		const all = within(region).getByRole("link", { name: "查看全部" });
 		expect(all.className).toContain("text-muted-foreground");
 		expect(all.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+		// Y-05：箭头在文字前。
+		expect(all.firstElementChild?.tagName.toLowerCase()).toBe("svg");
 		expect(all.getAttribute("href")).not.toBe("/agents?mode=conversation");
 		expect(
 			region.querySelector('time[datetime="2026-09-30T21:00:00Z"]'),
@@ -515,7 +540,8 @@ describe("OpenDesign workbench presentation", () => {
 			);
 			try {
 				await screen.findByText("可用编程助手");
-				await screen.findByText("Owner 创建失败助手");
+				// Y-09：Owner 行说明把 Agent 名并入「…创建失败，可重试」。
+				await screen.findByText("Owner 创建失败助手创建失败，可重试");
 				failedRead = true;
 				await act(async () => refresh());
 				await waitFor(() => {
@@ -523,8 +549,8 @@ describe("OpenDesign workbench presentation", () => {
 						expect(screen.getByText(notice)).toBeTruthy();
 				});
 				expect(screen.queryByText("可用编程助手")).toBeNull();
-				expect(screen.queryByText("Owner 创建失败助手")).toBeNull();
-				expect(screen.queryByText("已驳回的本人申请")).toBeNull();
+				expect(screen.queryByText(/Owner 创建失败助手/)).toBeNull();
+				expect(screen.queryByText(/已驳回的本人申请/)).toBeNull();
 				expect(screen.queryByRole("button", { name: /^重新加载/ })).toBeNull();
 				// W-03：只有 401 在页面级给出唯一的「重新登录」，其余失败没有按钮。
 				expect(
@@ -559,6 +585,7 @@ describe("OpenDesign workbench presentation", () => {
 				}}
 			/>,
 		);
+		expect(screen.getByText(/Owner 创建失败助手/)).toBeTruthy();
 		view.rerender(
 			<WorkbenchScreen
 				{...empty}
@@ -570,7 +597,8 @@ describe("OpenDesign workbench presentation", () => {
 			/>,
 		);
 		expect(screen.queryByText("可用编程助手")).toBeNull();
-		expect(screen.queryByText("Owner 创建失败助手")).toBeNull();
+		// Y-09：Agent 名并入运行状态说明，按包含匹配，确保旧行确实被移除。
+		expect(screen.queryByText(/Owner 创建失败助手/)).toBeNull();
 		expect(screen.queryByText("较后 ID 的最近对话")).toBeNull();
 		expect(screen.queryByRole("region", { name: "需要管理员处理" })).toBeNull();
 		expect(screen.queryByRole("link", { name: "处理创建审批" })).toBeNull();
@@ -766,6 +794,101 @@ describe("OpenDesign workbench presentation", () => {
 		}
 	});
 
+	it("lists each application with source, update time and description and a 查看状态 link (Y-10)", async () => {
+		const custom = {
+			...pendingApplication,
+			applicationId: "custom-application",
+			name: "自定义镜像申请",
+			description: "镜像来源的申请说明",
+			source: {
+				kind: "custom" as const,
+				imageReference: "registry.example.test/agent:1.0.0",
+				interactionMode: "platform-adapter" as const,
+			},
+			updatedAt: undefined,
+			submittedAt: "2026-09-04T08:00:00Z",
+		};
+		await showWorkbench(
+			<WorkbenchScreen
+				{...empty}
+				applications={{
+					kind: "ready",
+					applications: [pendingApplication, custom],
+				}}
+				templateName={(templateId) =>
+					templateId === "codex" ? "Codex" : undefined
+				}
+			/>,
+		);
+		const region = screen.getByRole("region", { name: "我的申请" });
+		const rows = Array.from(region.querySelectorAll(".workbench-list-row"));
+		const meta = rows.map((row) => row.querySelector("small"));
+		expect(meta[0]?.textContent).toMatch(
+			/^Codex · .+ · Helps the release team$/,
+		);
+		expect(meta[0]?.querySelector("time")?.getAttribute("datetime")).toBe(
+			pendingApplication.updatedAt,
+		);
+		// 没有 updatedAt 时用提交时间；自定义来源不外露镜像地址。
+		expect(meta[1]?.textContent).toMatch(
+			/^自定义 Agent · .+ · 镜像来源的申请说明$/,
+		);
+		expect(meta[1]?.querySelector("time")?.getAttribute("datetime")).toBe(
+			"2026-09-04T08:00:00Z",
+		);
+		expect(region.textContent).not.toContain("registry.example.test");
+		const links = within(region).getAllByRole("link", { name: /^查看状态：/ });
+		expect(links.map((link) => link.textContent)).toEqual([
+			"查看状态",
+			"查看状态",
+		]);
+		expect(links.map((link) => link.getAttribute("aria-label"))).toEqual([
+			`查看状态：${pendingApplication.name}`,
+			"查看状态：自定义镜像申请",
+		]);
+		expect(screen.queryByRole("link", { name: /^查看申请状态/ })).toBeNull();
+	});
+
+	it("continues only the first recent conversation and opens the others (Y-11)", async () => {
+		await showWorkbench(
+			<WorkbenchScreen
+				{...empty}
+				agents={{ kind: "ready", agents: [available, stopped] }}
+				recent={{
+					kind: "ready",
+					conversations: [
+						conversation,
+						{
+							...conversation,
+							conversationId: "conversation-second",
+							title: "第二条可用会话",
+						},
+						{
+							...conversation,
+							conversationId: "conversation-stopped",
+							agentId: stopped.agentId,
+							title: "已停止 Agent 的会话",
+						},
+					],
+					nextCursor: null,
+				}}
+			/>,
+		);
+		const region = screen.getByRole("region", { name: "最近对话" });
+		const actions = Array.from(
+			region.querySelectorAll(".workbench-list-side a"),
+		);
+		expect(actions.map((link) => link.textContent)).toEqual([
+			"继续对话",
+			"打开对话",
+			"查看历史",
+		]);
+		// 设计：「继续对话」「打开对话」为 outline，「查看历史」为 ghost。
+		expect(
+			actions.map((link) => link.className.includes("border-border")),
+		).toEqual([true, true, false]);
+	});
+
 	it("numbers duplicate and untitled recent titles so continue links stay distinct (N-12)", async () => {
 		await showWorkbench(
 			<WorkbenchScreen
@@ -790,12 +913,13 @@ describe("OpenDesign workbench presentation", () => {
 				.map((heading) => heading.textContent),
 		).toEqual(["未命名对话", "未命名对话", "较后 ID 的最近对话"]);
 		const names = within(region)
-			.getAllByRole("link", { name: /^继续对话：/ })
+			.getAllByRole("link", { name: /^(继续对话|打开对话)：/ })
 			.map((link) => link.getAttribute("aria-label"));
+		// Y-11：只有首行写「继续对话」，其余可用会话写「打开对话」；对象名仍按出现顺序编号。
 		expect(names).toEqual([
 			"继续对话：未命名对话（第 1 次）",
-			"继续对话：未命名对话（第 2 次）",
-			"继续对话：较后 ID 的最近对话",
+			"打开对话：未命名对话（第 2 次）",
+			"打开对话：较后 ID 的最近对话",
 		]);
 		expect(new Set(names).size).toBe(names.length);
 	});

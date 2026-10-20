@@ -21,6 +21,7 @@ import type {
 	DeploymentConfigurationProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
 import { captureDesignContract, designViewports } from "./design-contract";
+import { duplicateControlNames } from "./page-hygiene";
 import {
 	computed,
 	expectCardTable,
@@ -5766,4 +5767,237 @@ test.describe("Agent detail design alignment", () => {
 		await expect(page.getByRole("link", { name: "Owner 配置" })).toBeVisible();
 		await expect(page.getByRole("link", { name: "可用 Skill" })).toHaveCount(0);
 	});
+
+	// #2830 终验 Y：1440×900 与 390×844 下对照导出稿 #agent-detail（Y-13–Y-18）。
+	test("final acceptance Y detail facts, section notes and panel heads follow the design", async ({
+		page,
+	}, info) => {
+		const errors = trackPageErrors(page);
+		const mobile = info.project.name === "mobile";
+		await page.setViewportSize(
+			mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+		);
+		const api = await fixture(page, "owner");
+		await stubConnectionCapability(page, availableCapability());
+		const base = pilotAgentDetailFromV2(
+			pilotFakeScenariosV2.starting.response.body,
+		);
+		await page.route("**/api/v2/agents/agent-pilot-1/detail", (route) =>
+			route.fulfill({
+				json: AgentDetailProjectionV1Schema.parse({
+					...base,
+					serviceAvailability: "ready",
+					configuration: {
+						...base.configuration,
+						channels: [
+							{ kind: "web", status: "available" },
+							{ kind: "wecom_bot", status: "bound" },
+						],
+					},
+				}),
+			}),
+		);
+		await page.goto("/agents/agent-pilot-1");
+		// Y-13：左栏首个区块标题「Agent 信息」。
+		const about = page.getByRole("region", { name: "Agent 信息", exact: true });
+		await expect(about.getByRole("heading", { level: 2 })).toHaveText(
+			"Agent 信息",
+		);
+		await expect(page.getByText("关于此 Agent")).toHaveCount(0);
+		// Y-14：「可用范围」后是「渠道 Web · 企微机器人」。
+		const terms = await about.locator("dt").allTextContents();
+		expect(
+			terms.slice(terms.indexOf("可用范围"), terms.indexOf("可用范围") + 2),
+		).toEqual(["可用范围", "渠道"]);
+		await expect(
+			about
+				.getByRole("term")
+				.filter({ hasText: /^渠道$/ })
+				.locator("xpath=following-sibling::dd[1]"),
+		).toHaveText("Web · 企微机器人");
+		// Y-17：页头副标题 14px / 23.1px（设计 .page-head-copy p）。
+		const subtitle = page.locator(
+			"main .page-heading .agent-detail-heading h1 + p",
+		);
+		await expect(subtitle).toHaveCSS("font-size", "14px");
+		await expect(subtitle).toHaveCSS("line-height", "23.1px");
+		// Y-15 / Y-16：两段说明 13px / 21.45px muted，h2 下 8px；历史操作上距 16px。
+		const muted = await resolved(page, "color", "var(--muted-foreground)");
+		const history = page.locator("main .detail-section").filter({
+			has: page.getByRole("heading", { level: 2, name: "个人历史" }),
+		});
+		const connector = connectorSection(page);
+		for (const [section, text] of [
+			[history, "这里只显示你提交的消息和执行状态，Agent Owner 看不到正文。"],
+			[
+				connector,
+				"此 Agent 支持独立 Connection 直连，使用前需由当前主体完成授权。",
+			],
+		] as const) {
+			const note = section.getByText(text, { exact: true });
+			await expect(note).toHaveCSS("font-size", "13px");
+			await expect(note).toHaveCSS("line-height", "21.45px");
+			await expect(note).toHaveCSS("color", muted);
+			const [heading, noteBox] = await Promise.all([
+				section.getByRole("heading", { level: 2 }).boundingBox(),
+				note.boundingBox(),
+			]);
+			if (!heading || !noteBox) throw new Error("Expected note geometry");
+			expect(
+				Math.abs(noteBox.y - (heading.y + heading.height) - 8),
+			).toBeLessThanOrEqual(0.5);
+		}
+		const historyNote = await history
+			.getByText("这里只显示你提交的消息和执行状态，Agent Owner 看不到正文。")
+			.boundingBox();
+		const historyLink = await history
+			.getByRole("link", { name: "查看对话历史" })
+			.boundingBox();
+		if (!historyNote || !historyLink)
+			throw new Error("Expected history geometry");
+		expect(
+			Math.abs(historyLink.y - (historyNote.y + historyNote.height) - 16),
+		).toBeLessThanOrEqual(0.5);
+		// Y-18：右栏区块头副标题与 18px 图标；桌面图标与区块头底边对齐，≤767px 顶对齐。
+		for (const [name, description] of [
+			["Owner", "Owner 和运行状态"],
+			["运行与渠道", "当前状态"],
+		] as const) {
+			const header = page
+				.getByRole("region", { name, exact: true })
+				.locator("header");
+			await expect(header.locator("p")).toHaveText(description);
+			const icon = header.locator(':scope > svg[aria-hidden="true"]');
+			await expect(icon).toHaveCount(1);
+			const [headerBox, iconBox] = await Promise.all([
+				header.boundingBox(),
+				icon.boundingBox(),
+			]);
+			if (!headerBox || !iconBox) throw new Error("Expected header geometry");
+			expect([iconBox.width, iconBox.height]).toEqual([18, 18]);
+			expect(
+				Math.abs(iconBox.x + iconBox.width - (headerBox.x + headerBox.width)),
+			).toBeLessThanOrEqual(0.5);
+			if (mobile)
+				expect(Math.abs(iconBox.y - headerBox.y)).toBeLessThanOrEqual(0.5);
+			else
+				expect(
+					Math.abs(
+						iconBox.y + iconBox.height - (headerBox.y + headerBox.height),
+					),
+				).toBeLessThanOrEqual(0.5);
+		}
+		await expect(page.getByText(/负责范围与运行状态|平台当前观测/)).toHaveCount(
+			0,
+		);
+		// AC-2：无横向溢出、无控制台错误、同页没有同名控件。
+		await expectCleanPage(page, errors);
+		expect(await duplicateControlNames(page)).toEqual([]);
+		await capture(page, info, "final-acceptance-y-agent-detail");
+		expect(api.commands).toHaveLength(0);
+	});
+});
+
+// #2830 终验 Y：壳层、/agents 在 1440×900 与 390×844 下对照导出稿（Y-01–Y-03、Y-12）。
+test.describe("final acceptance Y shell and directory", () => {
+	test("the Connection entry icons are 17px and the narrow topbar keeps a 12px menu gap", async ({
+		page,
+	}, info) => {
+		const mobile = info.project.name === "mobile";
+		await page.setViewportSize(
+			mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+		);
+		await fixture(page, "employee");
+		await stubConnectionCapability(page, availableCapability());
+		await page.goto("/agents");
+		if (mobile) {
+			// Y-02：菜单按钮右缘与面包屑左缘相距 12px，标题 x=74（设计 .topbar-left gap）。
+			const menu = await page
+				.getByRole("button", { name: "打开导航" })
+				.boundingBox();
+			const crumbs = await page.locator(".platform-breadcrumb").boundingBox();
+			if (!menu || !crumbs) throw new Error("Expected topbar geometry");
+			expect(
+				Math.abs(crumbs.x - (menu.x + menu.width) - 12),
+			).toBeLessThanOrEqual(0.5);
+			expect(Math.abs(crumbs.x - 74)).toBeLessThanOrEqual(0.5);
+			await page.getByRole("button", { name: "打开导航" }).click();
+		}
+		const nav = mobile
+			? page.getByRole("dialog", { name: "主导航" })
+			: page.locator(".platform-sidebar");
+		// Y-01：key 与外链图标都是 17×17。
+		const icons = nav.locator("a.platform-nav-external svg");
+		await expect(icons).toHaveCount(2);
+		for (const icon of await icons.all()) {
+			const box = await icon.boundingBox();
+			expect([box?.width, box?.height]).toEqual([17, 17]);
+		}
+	});
+
+	test("closing the narrow navigation with its close button returns focus to the trigger", async ({
+		page,
+	}, info) => {
+		test.skip(info.project.name !== "mobile", "Mobile Sheet behavior");
+		const errors = trackPageErrors(page);
+		await fixture(page, "employee");
+		await page.goto("/");
+		const trigger = page.getByRole("button", { name: "打开导航" });
+		await trigger.click();
+		const dialog = page.getByRole("dialog", { name: "主导航" });
+		await expect(dialog).toBeVisible();
+		// Y-03：保留「关闭导航」（待回写设计稿），点击后焦点回到「打开导航」而不是 body。
+		const close = dialog.getByRole("button", { name: "关闭导航" });
+		const closeBox = await close.boundingBox();
+		expect([closeBox?.width, closeBox?.height]).toEqual([44, 44]);
+		await close.click();
+		await expect(dialog).not.toBeVisible();
+		await expect(trigger).toBeFocused();
+		expect(
+			await page.evaluate(() => document.activeElement === document.body),
+		).toBe(false);
+		// 键盘打开后用 Enter 激活关闭钮，焦点同样回到触发按钮。
+		await trigger.press("Enter");
+		await expect(dialog).toBeVisible();
+		await dialog.getByRole("button", { name: "关闭导航" }).focus();
+		await page.keyboard.press("Enter");
+		await expect(dialog).not.toBeVisible();
+		await expect(trigger).toBeFocused();
+		expect(errors).toEqual([]);
+	});
+
+	for (const mode of ["directory", "conversation"] as const) {
+		test(`Agent ${mode} cards put the arrow first and the page has no overflow or duplicate controls`, async ({
+			page,
+		}, info) => {
+			const errors = trackPageErrors(page);
+			await page.setViewportSize(
+				info.project.name === "mobile"
+					? { width: 390, height: 844 }
+					: { width: 1440, height: 900 },
+			);
+			const api = await fixture(page, "employee");
+			api.conversationChoices();
+			await page.goto(
+				mode === "conversation" ? "/agents?mode=conversation" : "/agents",
+			);
+			const label = mode === "conversation" ? "开始对话" : "查看详情";
+			const actions = page.locator(".directory-card-foot-side a", {
+				hasText: label,
+			});
+			await expect(actions.first()).toBeVisible();
+			expect(await actions.count()).toBeGreaterThan(1);
+			// Y-12：箭头在文字前。
+			for (const action of await actions.all())
+				expect(
+					await action.evaluate(
+						(element) => element.firstElementChild?.tagName.toLowerCase() ?? "",
+					),
+				).toBe("svg");
+			// AC-2：无横向溢出、无控制台错误、同页没有同名控件。
+			await expectCleanPage(page, errors);
+			expect(await duplicateControlNames(page)).toEqual([]);
+			await capture(page, info, `final-acceptance-y-agents-${mode}`);
+		});
+	}
 });
