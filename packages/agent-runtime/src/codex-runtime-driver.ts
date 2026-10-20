@@ -2612,7 +2612,7 @@ function isCodexOperation(
 	const isInterruption = kind === "stop" || kind === "generation-cancel";
 	const isNativeCommand = kind === "native-command";
 	if (
-		(kind === "submit-turn" &&
+		((kind === "submit-turn" || isNativeCommand) &&
 			value.configVersion !== undefined &&
 			(typeof value.configVersion !== "string" ||
 				!codexModelPattern.test(value.configVersion))) ||
@@ -5879,13 +5879,31 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		const session = ownRecordValue(state.sessions, read.nativeSessionRef);
 		const allowUnboundExecution = read.allowUnboundExecution === true;
+		const nativeCommand = ownRecordValue(
+			state.operations,
+			operationKey({
+				agentId: scope.agentId,
+				conversationId: scope.conversationId,
+				sessionGeneration: scope.sessionGeneration,
+				kind: "native-command",
+				operationId: scope.executionId,
+			}),
+		);
+		const hasBoundNativeCommand =
+			nativeCommand !== undefined &&
+			nativeCommand.nativeSessionRef === read.nativeSessionRef &&
+			nativeCommand.executionId === scope.executionId &&
+			nativeCommand.state === "resolved" &&
+			nativeCommand.record?.kind === "native-command" &&
+			nativeCommand.record.result.outcome === "accepted";
 		if (
 			!session ||
 			session.agentId !== scope.agentId ||
 			session.conversationId !== scope.conversationId ||
 			session.sessionGeneration !== scope.sessionGeneration ||
 			(!allowUnboundExecution &&
-				!ownRecordValue(session.executions, scope.executionId)) ||
+				!ownRecordValue(session.executions, scope.executionId) &&
+				!hasBoundNativeCommand) ||
 			(session.activeExecutionId !== undefined &&
 				session.activeExecutionId !== scope.executionId)
 		)
@@ -5908,7 +5926,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							candidate.nativeSessionRef === read.nativeSessionRef &&
 							nonEmptyString(candidate.configVersion),
 					)
-				: undefined);
+				: hasBoundNativeCommand
+					? nativeCommand
+					: undefined);
 		if (
 			!operation ||
 			operation.nativeSessionRef !== read.nativeSessionRef ||
@@ -6675,6 +6695,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				schemaVersion: 1,
 				state: "prepared",
 				nativeSessionRef: command.nativeSessionRef,
+				configVersion: this.configVersion,
 				executionId: command.executionId,
 				turnId: command.turnId,
 			};
