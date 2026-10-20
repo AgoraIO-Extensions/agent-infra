@@ -221,7 +221,7 @@ agent-infra/
 | Agent Access | Owner、员工/组织范围、管理员手动禁用、应用与责任人、API 凭证范围/失效、显式授权及当前权限交集 | LDAP 员工身份、企微目录快照、Connection 授权 |
 | Agent Configuration | 模板、自定义镜像、交互模式、自有交互入口身份责任、env/Secret、个人与 Agent 默认 Relay Key、模型、渠道和已验证的集成能力 | Relay 路由和 Connection Provider 凭证 |
 | Builder / 多服务 Agent | 普通 Agent 通过现有 Connection 读写 Repo；平台准入受限的多服务资源描述、Digest 版本和最终部署资源 | 用户业务授权、Connection 凭证、生产合并与发布决定 |
-| Conversation | 会话、消息、回答版本、附件引用、执行事件和历史查询 | Agent 内部思考原文 |
+| Conversation | 会话、消息、回答版本、思考过程、附件引用、执行事件和历史查询 | 模型未公开的推理（加密内容、签名或被隐藏的思考） |
 | Agent Dispatch | API 有界受理/等待与投递、幂等、取消/恢复、Web 繁忙与补充指令 | Runtime 内部执行算法、通用调度服务 |
 | Channel | Web、API、企微的主体、会话与附件映射 | Runtime 原生 Session 和协议语义 |
 | Platform Audit | 治理、API/执行/Eval 元数据、持久审计与受控查询 | 会话正文、Connection 状态或审计副本 |
@@ -324,6 +324,7 @@ API 契约覆盖 Agent 创建/启动/停止/重启、任务提交/查询/取消�
 - Runtime 来源事件与 Platform 来源事件写入同一持久化时间线并共享上述排序空间。Runtime 来源必须携带非空 Runtime cursor，且不能写入 Platform 保留事件类型；Platform 来源按 Schema 显式区分任务受理/等待/取消/失败/待核实等状态事件和 `model.selection.fell_back`，其中 Worker 失败与待核实收敛事件在同一 Dispatch 事务内写入并保持空 Runtime cursor，Runtime 终态事件已持久化时不追加（见 [Agent Runtime M1 HLD §8.1](HLD-agent-runtime-M1.md#81-消息与命令幂等)）；模型回退事件绑定接收消息的 Execution、Runtime cursor 为空，payload 只包含实际采用的模型选项、推理强度、固定的受限原因，以及会话原所选选项的 ID 与受理时的显示名。
 - 原选项显示名在写入回退事件的同一事务中确定：从不晚于当前已应用配置修订、且包含该选项的最新修订读取原 endpoint/model 关联；部署配置了可信名称时，按该关联解析受理时的显示名，未配置时沿用模型 ID。历史关联或名称无法确认时记为空，之后的配置或部署名称变化不改写已写入的事件。endpoint 标识只在服务端解析名称，不进入公开事件；名称解析不改变原授权与回退选择，也不增加 stop/native metadata 路径的外部依赖。带原选项的回退事件以 `schemaVersion: 2` 进入 V2 混合版本事件历史（V2 Conversation 读取、V2 SSE 与 Task 投影）；只接受 V1 事件的 V1 SSE 仍收到不含原选项的 V1 形状，未记录原选项的旧事件在各读取方保持 V1 原样。
 - 标准模板当前选择失效时，`platform-api` 在接受消息的同一 Conversation 事务中写入一条 `model.selection.fell_back`：初始消息和重新生成绑定新建 Execution，补充指令绑定当前活跃 Execution。该事务同时分配下一 Execution `sequence` 和 Conversation `conversationCursor`、推进两个平台计数器并保存对应审计；幂等重放复用原分配，任何一步失败均整体回滚，且不推进 Execution 的 Runtime cursor。
+- 思考过程：Runtime 以 `schemaVersion: 2` 的 `reasoning` 事件输出模型提供的原始推理或推理摘要增量（`kind` 为 `raw` 或 `summary`，单条上限与正文增量相同），Worker 保存为 Runtime 来源的 `reasoning.delta`，属于会话正文，只在 Conversation 读取权限内返回。该事件只进入 V2 Conversation 读取与 V2 SSE；V1 SSE 和 Task 投影（任务查询、输出与事件订阅）跳过它但推进持久游标。回答正文、任务输出和企微答案只拼接 `text.delta`。发布时先让 Platform 各读取方接受该事件，再更新 Runtime。决策与边界见 [ADR-0026](../adr/0026-show-model-reasoning-as-conversation-content.md)。
 - Web/API 调用方通过 `Last-Event-ID` 或显式游标重连；服务端验证游标属于当前主体有权访问的 Conversation/Execution，任务流不能带出同会话其他任务的数据。
 - 服务端先保存事件，再向在线连接推送；断线后按持久化序列补发。事件事务提交后，数据库发出只含 Conversation 标识的唤醒提示，在线连接据此立即从持久化游标读取；提示只用于缩短等待，丢失时按固定轮询送达，不改变持久化、排序和授权规则。
 - 心跳只用于保持连接，不进入业务时间线。
@@ -1320,7 +1321,7 @@ sequenceDiagram
 
 ### 12.3 事件保存
 
-平台保存用户可见消息、最终回答、状态变化、模型/工具调用事实和已验证的 Connection 关联引用。Runtime 原生事件由 RuntimeHost/Driver 归一化，再由 `platform-worker` 按 fence 去重并保存；保存成功后才由 `platform-api` 推送给浏览器。有限补发规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)。模型内部思考原文、Provider 原始凭证和未脱敏请求不能进入事件表。
+平台保存用户可见消息、最终回答、思考过程、状态变化、模型/工具调用事实和已验证的 Connection 关联引用。Runtime 原生事件由 RuntimeHost/Driver 归一化，再由 `platform-worker` 按 fence 去重并保存；保存成功后才由 `platform-api` 推送给浏览器。有限补发规则见 [Agent Runtime M1 HLD](HLD-agent-runtime-M1.md)。思考过程按 [§8.2](#82-sse) 保存为会话正文；模型未公开的推理（加密内容、签名或被隐藏的思考）、Provider 原始凭证和未脱敏请求不能进入事件表。
 
 ### 12.4 API 受理、调度与恢复
 
@@ -1993,7 +1994,7 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 - 自定义镜像必须通过 ImageRegistryAdapter 准入，并使用不可变 Digest。
 - 容器以非 root 用户运行，根文件系统默认只读；需要写入的数据挂载到明确卷。
 - 个人与 Agent 默认 Relay Key、Owner Secret 和企微凭证按各自用途加密保存、不回显，只能替换。旧 Key 密文只在仍有已受理 Execution 引用时保留。
-- 审计和日志不记录聊天正文、模型思考原文和原始凭证。M1 不从会话正文派生标题，标题投影保持空值，由 Web 按 [PRD §12.2](../prd/PRD-agent-platform-M1.md#122-会话历史) 统一展示“未命名对话”。
+- 审计和日志不记录聊天正文（含思考过程）和原始凭证。M1 不从会话正文派生标题，标题投影保持空值，由 Web 按 [PRD §12.2](../prd/PRD-agent-platform-M1.md#122-会话历史) 统一展示“未命名对话”。
 - 所有跨主体（用户或应用）资源访问测试按“资源不存在”返回，避免枚举。
 - 任务、会话、附件、执行详情和自身审计查询始终匹配提交主体；Owner/应用责任人不因此获得他人内容或使用记录。Eval 按独立用途和对象授权，不能成为会话访问旁路。
 

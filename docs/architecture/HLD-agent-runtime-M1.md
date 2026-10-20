@@ -162,7 +162,7 @@ Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation
 - 将 Platform 已持久化的消息/任务 Execution 提交为一个带已固化有效模型选择的 Turn，并接收 accepted/busy/rejected/unknown；平台受理和 Runtime 接受是不同阶段，Host 不创建平台 Execution。
 - 停止当前 Turn，以及在 capability 支持时提交补充指令。
 - 查询 Session 和 Turn 状态。
-- 订阅并归一化文本、状态、文件、完成和错误事件；实际模型/工具事实按 8.5 生产，不把自由文本摘要当作可信操作结果。
+- 订阅并归一化文本、思考过程、状态、文件、完成和错误事件；实际模型/工具事实按 8.5 生产，不把自由文本摘要当作可信操作结果。思考过程的事件版本与读取边界见[工程 Spec §8.2](SPEC-agent-infra-M1-engineering-architecture.md#82-sse)。
 - 探测模型、附件、结果文件、Connection 和补充指令 capability；Browser Capability 的内部 probe 另由 §4.2 的版本化契约定义，尚不等同于 Platform/API Agent projection。
 
 `packages/agent-runtime` 实现 RuntimeHost 深 Module 和四个固定 Runtime Driver；`apps/agent-runtime-host` 只负责 Agent Pod 内的进程入口、依赖装配和 HTTP/SSE 接入。worker 侧 RuntimeHost Client Adapter 只依赖版本化 Host Contract，不依赖该 package 或任何 Native/ACP library。Agent Service 对 `platform-worker` 始终提供同一内部 HTTP/SSE Interface。
@@ -410,8 +410,9 @@ execution/turn/digest 不匹配时整次拒绝。映射由部署提供受保护�
 - Runtime 在事件读完前结束时，Host 不再续期原业务授权。Worker 以状态核实取得终态证明并在同一租约内持久化后，于同一次认领中改用控制用途 Grant 续读至终态事件，outbox 不重新排队（工程 Spec 9.3）；续期被拒但无法证明终态时，沿原恢复路径重新认领。每次认领在首个事件读取或确认前先续期一次业务授权：中断后重新认领时，原授权可能已过期，此时只续期仍在运行的原执行，并按上述规则处理续期被拒；业务授权已因停止或撤权失效时不续期，只经控制用途的状态核实闩住 Host，并用控制用途 Grant 续读；续期请求本身失败时重新认领，不把该 Turn 判为失败。
 - Worker 只能在上述事务提交后向 Runtime Host、Bridge 或原生 Runtime 确认已处理游标。Runtime 事件连接中断、Worker/Pod 重启或事件事务失败时，Adapter 从 Platform DB 最后已确认游标重放；事务已提交但 Runtime 确认前崩溃会产生可去重的重放，不能丢失事件。浏览器 SSE 连接状态不得推进该 Runtime 游标。确认是累计的：确认某个已提交游标即确认其前的全部事件，Worker 可以按批只确认最后已提交游标；Runtime 等待确认才继续的事实（如标准工具调用事实）和终态事件提交后立即确认，未确认事件数保持在 Host 上限以内。
 - 跨 Execution 或迟到的首次事件按实际持久化顺序追加。重复事件返回已有平台事件及原 `sequence` 和 `conversationCursor`，不能重新分配游标。
-- 高频文本可以在同一事务中批量持久化，但不能合并原生事件边界。批次内每个原生事件保留稳定 `adapterEventKey`，按原始顺序独立生成平台事件及游标；事务提交前不能推送内容，重试同一批次必须返回已保存事件及原游标，不能重复追加文本或改变最终文本顺序。
-- Runtime Driver 同样可以把原生文本增量合并为一次 `durable commit`：读取原生事件不等待逐条落盘，相邻两次提交至少间隔 100 ms，持久写进行期间与间隔内收到的增量并入下一次提交；每个增量仍是独立 journal 事件并保留到达顺序与到达时间，提交前不可回放；其他原生通知先等待此前收到的增量提交。持久写失败时该批全部不可见，并按原生通知失败处理。Host 一页事件读取最多一次持久写，状态未变化的复核不重写；一页总是包含可读的前 8 个事件，并在总数不超过 64、序列化事件字节不超过 Worker 接受的 1 MiB 时带出更多积压事件。
+- 高频文本与思考增量可以在同一事务中批量持久化，但不能合并原生事件边界。批次内每个原生事件保留稳定 `adapterEventKey`，按原始顺序独立生成平台事件及游标；事务提交前不能推送内容，重试同一批次必须返回已保存事件及原游标，不能重复追加文本或改变最终文本顺序。
+- Runtime Driver 同样可以把原生文本与思考增量合并为一次 `durable commit`：读取原生事件不等待逐条落盘，相邻两次提交至少间隔 100 ms，持久写进行期间与间隔内收到的增量并入下一次提交；每个增量仍是独立 journal 事件并保留到达顺序与到达时间，提交前不可回放；其他原生通知先等待此前收到的增量提交。持久写失败时该批全部不可见，并按原生通知失败处理。Host 一页事件读取最多一次持久写，状态未变化的复核不重写；一页总是包含可读的前 8 个事件，并在总数不超过 64、序列化事件字节不超过 Worker 接受的 1 MiB 时带出更多积压事件。
+- Codex Driver 把官方原始推理与推理摘要的增量通知分别归一化为 `kind: raw` 与 `kind: summary` 的 `reasoning` 事件，与正文增量共用上述批次与到达顺序，不拼入回答正文。只输出模型以明文提供的增量，不输出 `encrypted_content`、签名或被隐藏的思考；模型未提供时不产生该事件，也不补造内容。
 - Codex Runtime Driver 把已结束 Turn 的 journal 移出主状态文件：Worker 确认到该 Turn 的终态事件时，或 Driver 启动时，先把 journal 原样写入独立文件并同步落盘，再以一次持久提交删除主状态中的 journal 并记录固定大小的索引项（字节数、SHA-256、事件数、游标序列范围与终态）。只归档终态唯一、不可能再追加的 journal：没有待定操作、原生工具 attempt、子执行源、Connection 恢复、未结束的标准 MCP 调用或中断。两步之间失败或崩溃只保留原 journal，之后重复归档。启动时按索引读取并校验全部归档文件，缺失或不一致按 §7.3 拒绝恢复。回放、游标、事件字节与 ACK 语义不变，归档后的 ACK 只校验游标、不再写入；主状态只随未结束 Turn 的事件与每个 Turn 的固定索引项增长。
 - Runtime 的 `execution.detail` 只作为 Agent 提供的过程摘要，浏览器标明其来源。自由文本或摘要中自报的 `callId` 不能建立可信外部调用绑定，也不能据此补齐模型、Provider、账号或结果。实际模型/工具事实走 8.5 的结构化事件；平台对 Connection 只保存按第 9 节核实的关联引用，不建立 Connection 状态或审计投影。
 
@@ -730,6 +731,7 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
 [Sandbox ADR](../adr/0017-session-owned-sandbox-isolation.md)。
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、带 Execution 级有效模型选择的 Turn、流式事件与按已确认游标重放、停止、状态和 capability。
+- Codex 思考过程验证覆盖：原始推理与推理摘要通知映射为 `reasoning` 事件，并与正文增量保持同批与到达顺序；`encrypted_content` 和签名不输出；回答正文、任务输出与企微答案不含思考内容；V1 SSE 与 Task 投影跳过该事件但推进游标；跨用户、跨 Agent 读不到思考过程；推理中出现的凭证片段被模型传输拦截。真实验收在固定环境用提供原始推理的模型完成 Web 与企微链路。
 - 四模板分别以真实镜像、Driver 与 Relay 模型链路验证可申请状态；未就绪项显示受限原因并拒绝申请。合成目录、`/v1/models` 可见、Fake Driver 或单个模板通过不证明其他模板就绪。
 - 标准模板 Key 契约覆盖同 Agent 的 Alice/Bob 使用不同个人 Key、Web/企微与全部 API/Eval 费用归属、缺失/失效/额度不足不回退、Owner 清单与个人 Key 实际权限不一致的调用失败、Key K1→K2 替换后的新旧执行分离、Relay 撤销 K1、Worker/Pod 重启后同版本恢复，以及跨主体、Agent、Execution、渠道/用途和 Grant/fence 的负向替换。OpenCode/Pi 还须以同一模型的相邻执行验证旧 native handle 退役、新 Key 实际生效和原 Session 连续；旧 handle 排空失败必须拒绝。证实 Key 原值不进入 Pod env/Kubernetes Secret、持久状态、日志、事件、错误或普通查询。
 - API 与 Store/Worker 组合验证用户/应用任务的受理、默认新会话幂等、显式续接、同会话排队、不同会话容量、启动/更新等待、满容量受理前拒绝、等待到期及重启后原顺序/期限恢复；Web 仍可合法补充指令且新 Turn 不插队，停止/停用/故障不能由提交任务绕过。
