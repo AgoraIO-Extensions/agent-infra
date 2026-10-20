@@ -1010,6 +1010,7 @@ export function assemblePlatformApi(
 			prepareSecretReplacements: input.prepareApplicationSecrets,
 			readApplicationProjection: projections.readApplicationProjection,
 			readAgentProjection: projections.readManagementAgentProjection,
+			readAgentDetailProjection: projections.readAgentDetailProjection,
 			personalApiAgentRead,
 			readApiAgentProjection: projections.readApiAgentProjection,
 			...(input.validateDefaultRelayKey

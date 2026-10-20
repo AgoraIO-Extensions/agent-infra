@@ -1,7 +1,10 @@
 import { Buffer } from "node:buffer";
 import { types } from "node:util";
 
-import { BrowserUserProjectionV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	AgentOwnerProjectionV1Schema,
+	BrowserUserProjectionV1Schema,
+} from "@agent-infra/contracts/pilot";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import { recordHttpFailureContext } from "@agent-infra/observability/http";
 import type {
@@ -27,6 +30,11 @@ export interface IdentityContext {
 export interface IdentityAdapter {
 	resolve(request: Request): Promise<unknown | null>;
 	hydrateUsers(userIds: readonly string[]): Promise<unknown>;
+	/**
+	 * Agent 详情的 Owner 当前状态（#2910）：按输入顺序逐个返回 { userId, displayName, status }。
+	 * 单个 Owner 读不到时返回 unavailable，不因此整体抛错；未实现时详情只返回 unavailable。
+	 */
+	describeOwners?: (userIds: readonly string[]) => Promise<unknown>;
 	/** Current task facts must come from the directory, never a saved browser Request. */
 	resolveUser?: TaskUserDirectoryV1["resolveUser"];
 	/** Current first-party LDAP facts for sensitive material-grant governance. */
@@ -317,4 +325,63 @@ export async function hydrateBrowserUsers(
 		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}
 	return ordered as BrowserUserProjection[];
+}
+
+export type AgentOwnerProjection = ReturnType<
+	typeof AgentOwnerProjectionV1Schema.parse
+>;
+
+/**
+ * Agent 详情的 Owner 当前状态（#2910）。Adapter 返回值逐项按精确字段校验，
+ * 数量、顺序或主体不一致时整体失败，不把格式错误的结果当作某种状态。
+ * Adapter 未提供该能力时只返回 unavailable，名称仍取自 hydrateUsers。
+ */
+export async function describeBrowserOwners(
+	adapter: IdentityAdapter,
+	userIds: readonly string[],
+	traceId: string,
+): Promise<readonly AgentOwnerProjection[]> {
+	if (
+		userIds.some((userId) => !text(userId)) ||
+		new Set(userIds).size !== userIds.length
+	) {
+		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+	}
+	if (userIds.length === 0) return [];
+	if (!adapter.describeOwners) {
+		const users = await hydrateBrowserUsers(adapter, userIds, traceId);
+		return users.map((user) => ({
+			userId: user.userId,
+			displayName: user.displayName,
+			status: "unavailable" as const,
+		}));
+	}
+	let value: unknown;
+	try {
+		value = await adapter.describeOwners(userIds);
+	} catch (error) {
+		recordHttpFailureContext({ failureStep: "identity.describeOwners", error });
+		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+	}
+	let owners: AgentOwnerProjection[];
+	try {
+		owners = denseArray(value, 256).map((item) =>
+			AgentOwnerProjectionV1Schema.parse(
+				record(item, ["userId", "displayName", "status"]),
+			),
+		);
+	} catch {
+		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+	}
+	if (
+		owners.length !== userIds.length ||
+		owners.some(
+			(owner, index) =>
+				owner.userId !== userIds[index] ||
+				(owner.displayName !== null && !text(owner.displayName)),
+		)
+	) {
+		throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
+	}
+	return owners;
 }

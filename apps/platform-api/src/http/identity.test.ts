@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { HttpProtocolError } from "./common";
 import {
+	describeBrowserOwners,
 	hydrateBrowserUsers,
 	type IdentityAdapter,
 	resolveCurrentMaterialGrantActor,
@@ -221,6 +222,88 @@ describe("trusted identity boundary", () => {
 			);
 			expect(error.body.code).toBe("DEPENDENCY_UNAVAILABLE");
 		}
+	});
+});
+
+describe("Agent Owner status boundary (#2910)", () => {
+	const owners = [
+		{ userId: "user-01", displayName: "One", status: "active" },
+		{ userId: "user-02", displayName: "Two", status: "disabled" },
+		{ userId: "user-03", displayName: null, status: "departed" },
+		{ userId: "user-04", displayName: null, status: "unavailable" },
+	] as const;
+	const ids = owners.map((owner) => owner.userId);
+
+	it("returns each requested Owner's server status in the requested order", async () => {
+		const describeOwners = vi.fn().mockResolvedValue(owners);
+		await expect(
+			describeBrowserOwners(
+				{ ...adapter(activeIdentity), describeOwners },
+				ids,
+				traceId,
+			),
+		).resolves.toEqual(owners);
+		expect(describeOwners).toHaveBeenCalledWith(ids);
+	});
+
+	it("marks every Owner unavailable when the adapter cannot describe status", async () => {
+		await expect(
+			describeBrowserOwners(
+				adapter(activeIdentity, [
+					{ userId: "user-01", displayName: "One", roles: ["employee"] },
+				]),
+				["user-01"],
+				traceId,
+			),
+		).resolves.toEqual([
+			{ userId: "user-01", displayName: "One", status: "unavailable" },
+		]);
+	});
+
+	it("fails closed for malformed, reordered, foreign or extra Owner results", async () => {
+		for (const described of [
+			owners.slice(0, 3),
+			[owners[1], owners[0], owners[2], owners[3]],
+			[...owners.slice(0, 3), { ...owners[3], userId: "user-foreign" }],
+			[...owners.slice(0, 3), { ...owners[3], status: "unknown" }],
+			[...owners.slice(0, 3), { ...owners[3], displayName: "" }],
+			[...owners.slice(0, 3), { ...owners[3], email: "four@example.test" }],
+			[...owners.slice(0, 3), { userId: "user-04", status: "active" }],
+		]) {
+			const error = await caught(
+				describeBrowserOwners(
+					{
+						...adapter(activeIdentity),
+						describeOwners: vi.fn().mockResolvedValue(described),
+					},
+					ids,
+					traceId,
+				),
+			);
+			expect(error.body.code).toBe("DEPENDENCY_UNAVAILABLE");
+		}
+		const thrown = await caught(
+			describeBrowserOwners(
+				{
+					...adapter(activeIdentity),
+					describeOwners: vi
+						.fn()
+						.mockRejectedValue(new Error("private-ldap-detail")),
+				},
+				ids,
+				traceId,
+			),
+		);
+		expect(thrown.body.code).toBe("DEPENDENCY_UNAVAILABLE");
+		expect(JSON.stringify(thrown.body)).not.toContain("private-ldap-detail");
+		const duplicate = await caught(
+			describeBrowserOwners(
+				adapter(activeIdentity),
+				["user-01", "user-01"],
+				traceId,
+			),
+		);
+		expect(duplicate.body.code).toBe("DEPENDENCY_UNAVAILABLE");
 	});
 });
 

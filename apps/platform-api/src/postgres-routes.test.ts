@@ -3,6 +3,7 @@ import { once } from "node:events";
 
 import {
 	AgentApplicationProjectionV2Schema,
+	AgentDetailProjectionV1Schema,
 	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
@@ -116,6 +117,11 @@ let managementUseCase: ReturnType<typeof createAgentManagementV1>;
 let managementQuery: PostgresAgentManagementQueryV1;
 let currentBrowserAdmin: IdentityContext = identities.admin;
 let identityDependencyFails = false;
+const ownerStatuses = new Map<
+	string,
+	"active" | "disabled" | "departed" | "unavailable"
+>();
+const describedOwnerIds: string[][] = [];
 
 const administratorReadFixtures = [
 	{ status: "creating", owner: "owner" },
@@ -189,10 +195,13 @@ beforeAll(async () => {
 
 	const foundationAdmissions = new FakeAgentConfigurationAdmissionsV1({
 		authorizations: [
-			...["agent-run", "agent-withdraw", "agent-v2"].map((agentId) => ({
-				agentId,
-				owner: "owner" as const,
-			})),
+			...["agent-run", "agent-withdraw", "agent-v2", "agent-owner-status"].map(
+				(agentId) => ({
+					agentId,
+					owner: "owner" as const,
+				}),
+			),
+			{ agentId: "agent-owner-status-other", owner: "attacker" as const },
 			...administratorReadResources,
 		].map(({ agentId, owner }) => ({
 			agentId,
@@ -332,6 +341,22 @@ beforeAll(async () => {
 				};
 			});
 		},
+		// 受控的 Owner 当前状态（#2910）；记录每次被查询的 Owner，用于核对不越过可见 Agent。
+		async describeOwners(userIds) {
+			describedOwnerIds.push([...userIds]);
+			return userIds.map((userId) => {
+				const identity = Object.values(identities).find(
+					(candidate) => candidate.userId === userId,
+				);
+				if (!identity) throw new Error("unknown test identity");
+				const status = ownerStatuses.get(userId) ?? "active";
+				return {
+					userId,
+					displayName: status === "departed" ? null : identity.displayName,
+					status,
+				};
+			});
+		},
 	};
 	const projectionReaders = createPlatformProjectionReaders({
 		identity: identityAdapter,
@@ -444,11 +469,22 @@ beforeAll(async () => {
 					? { applicationId: "application-withdraw", agentId: "agent-withdraw" }
 					: idempotencyKey === "create-v2"
 						? { applicationId: "application-v2", agentId: "agent-v2" }
-						: { applicationId: "application-run", agentId: "agent-run" };
+						: idempotencyKey === "create-owner-status"
+							? {
+									applicationId: "application-owner-status",
+									agentId: "agent-owner-status",
+								}
+							: idempotencyKey === "create-owner-status-other"
+								? {
+										applicationId: "application-owner-status-other",
+										agentId: "agent-owner-status-other",
+									}
+								: { applicationId: "application-run", agentId: "agent-run" };
 			},
 			prepareSecretReplacements: async () => ({ secrets: [] }),
 			readApplicationProjection: projectionReaders.readApplicationProjection,
 			readAgentProjection: projectionReaders.readManagementAgentProjection,
+			readAgentDetailProjection: projectionReaders.readAgentDetailProjection,
 		},
 		configuration: {
 			identity: identityAdapter,
@@ -1053,6 +1089,164 @@ describe("PostgreSQL Platform HTTP integration", () => {
 			}),
 		]) {
 			expect([403, 404]).toContain(response.status);
+		}
+	});
+
+	it("projects current Owner status on the Agent detail without crossing Agent visibility (#2910)", async () => {
+		for (const [owner, key, agentId] of [
+			["owner", "owner-status", "agent-owner-status"],
+			["attacker", "owner-status-other", "agent-owner-status-other"],
+		] as const) {
+			expect(
+				(
+					await app.request("/api/v2/agent-applications", {
+						method: "POST",
+						headers: {
+							...requestHeaders(owner, `create-${key}`),
+							"content-type": "application/json",
+						},
+						body: JSON.stringify({
+							...applicationBody,
+							name: `Owner status ${key}`,
+						}),
+					})
+				).status,
+			).toBe(201);
+			expect(
+				(
+					await app.request(
+						`/api/v2/admin/agent-applications/application-${key}/decision`,
+						{
+							method: "POST",
+							headers: {
+								...requestHeaders("admin", `approve-${key}`),
+								"content-type": "application/json",
+							},
+							body: JSON.stringify({ schemaVersion: 1, decision: "approve" }),
+						},
+					)
+				).status,
+			).toBe(200);
+			expect(
+				(
+					await app.request(`/api/v2/agents/${agentId}`, {
+						headers: requestHeaders(owner),
+					})
+				).status,
+			).toBe(200);
+		}
+		const detail = async (
+			identity: keyof typeof identities,
+			agentId = "agent-owner-status",
+			headers: Record<string, string> = {},
+		) =>
+			app.request(`/api/v2/agents/${agentId}/detail`, {
+				headers: { ...requestHeaders(identity), ...headers },
+			});
+		try {
+			for (const [status, displayName] of [
+				["active", "Owner"],
+				["disabled", "Owner"],
+				["departed", null],
+				["unavailable", "Owner"],
+			] as const) {
+				ownerStatuses.set(identities.owner.userId, status);
+				describedOwnerIds.length = 0;
+				const response = await detail("owner");
+				expect(response.status).toBe(200);
+				expect(response.headers.get("cache-control")).toBe("no-store");
+				const projection = AgentDetailProjectionV1Schema.parse(
+					await response.json(),
+				);
+				expect(projection.agentId).toBe("agent-owner-status");
+				expect(projection.configuration.owners).toEqual([
+					{ userId: identities.owner.userId, displayName, status },
+				]);
+				// 只查询本 Agent 的 Owner，不读取其他 Agent 的 Owner 状态。
+				expect(describedOwnerIds).toEqual([[identities.owner.userId]]);
+				// 已发布的 V2 详情不变：仍是 strict V2 形状，Owner 不带状态字段。
+				const v2 = await app.request("/api/v2/agents/agent-owner-status", {
+					headers: requestHeaders("owner"),
+				});
+				expect(v2.status).toBe(200);
+				const v2Projection = AgentProjectionV2Schema.parse(await v2.json());
+				expect(v2Projection.configuration.owners).toEqual([
+					{
+						userId: identities.owner.userId,
+						displayName: "Owner",
+						roles: ["employee"],
+					},
+				]);
+			}
+
+			// 另一 Agent 只返回它自己的 Owner；本 Agent 的 Owner 状态不随之出现。
+			ownerStatuses.set(identities.owner.userId, "disabled");
+			describedOwnerIds.length = 0;
+			const other = await detail("owner", "agent-owner-status-other");
+			expect(other.status).toBe(200);
+			const otherProjection = AgentDetailProjectionV1Schema.parse(
+				await other.json(),
+			);
+			expect(otherProjection.configuration.owners).toEqual([
+				{
+					userId: identities.attacker.userId,
+					displayName: "Attacker",
+					status: "active",
+				},
+			]);
+			expect(describedOwnerIds).toEqual([[identities.attacker.userId]]);
+			expect(JSON.stringify(otherProjection)).not.toContain(
+				identities.owner.userId,
+			);
+
+			// 不在可用范围的主体：与不存在的 Agent 同为 404，且不触发任何 Owner 状态读取。
+			describedOwnerIds.length = 0;
+			const invisible = await detail("attacker");
+			const missing = await detail("attacker", "agent-missing");
+			for (const response of [invisible, missing]) {
+				expect(response.status).toBe(404);
+				expect(response.headers.get("cache-control")).toBe("no-store");
+			}
+			const invisibleBody = PilotProtocolErrorV1Schema.parse(
+				await invisible.json(),
+			);
+			const missingBody = PilotProtocolErrorV1Schema.parse(
+				await missing.json(),
+			);
+			expect(invisibleBody.code).toBe("RESOURCE_UNAVAILABLE");
+			expect({ ...invisibleBody, traceId: "" }).toEqual({
+				...missingBody,
+				traceId: "",
+			});
+			expect(JSON.stringify(invisibleBody)).not.toMatch(
+				/user-owner|disabled|Owner/,
+			);
+			// 调用方提交的身份字段不能改变服务端解析的主体。
+			const forged = await detail("attacker", "agent-owner-status", {
+				"x-user-id": identities.owner.userId,
+				"x-principal-id": identities.owner.userId,
+			});
+			expect(forged.status).toBe(404);
+			expect(describedOwnerIds).toEqual([]);
+
+			// 只接受浏览器会话：Bearer、查询参数与未认证请求都不返回 Owner 状态。
+			const bearer = await detail("owner", "agent-owner-status", {
+				Authorization: `Bearer papi_${"a".repeat(43)}`,
+			});
+			expect(bearer.status).toBe(401);
+			const query = await app.request(
+				"/api/v2/agents/agent-owner-status/detail?ownerId=user-attacker",
+				{ headers: requestHeaders("owner") },
+			);
+			expect(query.status).toBe(400);
+			const anonymous = await app.request(
+				"/api/v2/agents/agent-owner-status/detail",
+			);
+			expect(anonymous.status).toBe(401);
+			expect(describedOwnerIds).toEqual([]);
+		} finally {
+			ownerStatuses.clear();
+			describedOwnerIds.length = 0;
 		}
 	});
 

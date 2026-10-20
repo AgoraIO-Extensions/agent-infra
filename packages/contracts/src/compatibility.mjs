@@ -2609,6 +2609,36 @@ function isSkillHubReviewQueueOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2910 新增带 Owner 有效状态的 Agent 详情只读入口；AgentProjectionV2、列表、命令响应和全部既有 schema 保持不变。
+function isAgentDetailOwnerStatusOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents/{agentId}/detail";
+	const schemas = [
+		"AgentOwnerProjectionV1",
+		"AgentDetailConfigurationProjectionV1",
+		"AgentDetailProjectionV1",
+	];
+	if (
+		previous.paths?.[path] !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: { [path]: current.paths?.[path] },
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"f7ded998e7ae0effe4ac2a123310ecdc2e703171962836b9e4bcfd2202fb7a4a"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #2904 新增版本详情与本人版本目录两条只读入口；已发布目录、原版本读取和全部既有 schema 保持不变。
 function isSkillHubVersionDetailOpenApiAddition(previous, current) {
 	const paths = [
@@ -5057,6 +5087,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isSkillHubReviewQueueOpenApiAddition(previous, current) &&
 			!isSkillHubVersionDetailOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationListOpenApiAddition(previous, current) &&
+			!isAgentDetailOwnerStatusOpenApiAddition(previous, current) &&
 			!isSkillHubProjectAndImportOpenApiAddition(previous, current) &&
 			!isSkillHubProjectOpenApiAddition(previous, current) &&
 			!isSkillHubImportOpenApiAddition(previous, current) &&

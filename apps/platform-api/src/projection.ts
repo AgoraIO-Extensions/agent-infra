@@ -1,5 +1,6 @@
 import {
 	AgentApplicationProjectionV1Schema,
+	AgentDetailProjectionV1Schema,
 	AgentProjectionV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { recordHttpFailureContext } from "@agent-infra/observability/http";
@@ -16,6 +17,7 @@ import type {
 } from "@agent-infra/platform-store";
 import { HttpProtocolError } from "./http/common.js";
 import {
+	describeBrowserOwners,
 	hydrateBrowserUsers,
 	type IdentityAdapter,
 	type IdentityContext,
@@ -25,6 +27,9 @@ type ApplicationProjection = ReturnType<
 	typeof AgentApplicationProjectionV1Schema.parse
 >;
 type AgentProjection = ReturnType<typeof AgentProjectionV1Schema.parse>;
+type AgentDetailProjection = ReturnType<
+	typeof AgentDetailProjectionV1Schema.parse
+>;
 
 export type PresentPlatformAgent = (input: {
 	readonly agentId: string;
@@ -120,6 +125,11 @@ export function createPlatformProjectionReaders(
 		agentId: string,
 		management: AgentManagementStateV1,
 		metadata: ProjectionMetadata | ApiProjectionMetadata,
+		readOwners: (
+			request: object,
+			ownerIds: readonly string[],
+			traceId: string,
+		) => Promise<readonly unknown[]> = owners,
 	) {
 		const api = "apiUser" in metadata;
 		const user = api ? metadata.apiUser : metadata.identity;
@@ -135,7 +145,7 @@ export function createPlatformProjectionReaders(
 		}
 		const configuration = result.configuration;
 		const [hydratedOwners, presentation] = await Promise.all([
-			owners(
+			readOwners(
 				metadata.requestScope ?? metadata,
 				configuration.ownerIds,
 				metadata.traceId,
@@ -199,6 +209,48 @@ export function createPlatformProjectionReaders(
 	}
 
 	return {
+		/**
+		 * Agent 详情（#2910）：与 readManagementAgentProjection 相同的可见性与配置读取，
+		 * Owner 改为服务端当次解析的有效状态；单个 Owner 失效不让整个详情失败。
+		 */
+		async readAgentDetailProjection(
+			input: ProjectionMetadata & {
+				readonly agent?: AgentManagementAgentProjectionV1;
+			},
+		): Promise<AgentDetailProjection> {
+			if (!input.agent) {
+				throw new HttpProtocolError("RESOURCE_UNAVAILABLE", input.traceId);
+			}
+			const agent = input.agent;
+			try {
+				const { presentation, wire } = await configurationProjection(
+					agent.agentId,
+					agent.management,
+					input,
+					(_request, ownerIds, traceId) =>
+						describeBrowserOwners(dependencies.identity, ownerIds, traceId),
+				);
+				const { actions: _actions, ...configuration } = wire;
+				return AgentDetailProjectionV1Schema.parse({
+					schemaVersion: 1,
+					agentId: agent.agentId,
+					name: agent.name,
+					description: agent.description,
+					source: presentation.source,
+					managementStatus: agent.management.status,
+					serviceAvailability: agent.management.serviceAvailability,
+					configuration,
+					capabilities: {
+						...presentation.capabilities,
+						nativeMetadata: dependencies.nativeMetadataAvailable === true,
+					},
+					interactionUrl: presentation.interactionUrl,
+				});
+			} catch (error) {
+				recordHttpFailureContext({ failureStep: "projection.read", error });
+				throw error;
+			}
+		},
 		async readApiAgentProjection(
 			input: ApiProjectionMetadata & {
 				readonly agent: AgentManagementAgentProjectionV1;
