@@ -164,7 +164,9 @@ describe("execution details dialog", () => {
 		expect(
 			dialog.querySelector("[data-slot='dialog-body'] > p:last-child")
 				?.textContent,
-		).toBe("这里展示可审计的执行事实，不包含模型内部思考。");
+		).toBe(
+			"这里展示可审计的执行事实，不包含思考过程；模型提供的思考过程显示在回答上方。",
+		);
 		expect(
 			within(dialog).queryByRole("button", { name: "返回对话" }),
 		).toBeNull();

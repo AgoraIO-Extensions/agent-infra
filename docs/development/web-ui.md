@@ -156,7 +156,7 @@ tailwind-merge 与 lucide 依赖。主题变量在 `src/index.css`，按页面�
 | `IdentifierText` | 审批、Skill 审核与审计中未解析人员的 ID 短形式；审计列表对象 ID 同样用它的等宽短形式（`title` 为完整值），完整值在记录详情 |
 | `Listbox` / `ListboxOption` | 目录选择器与审计 Agent 筛选的结果层、对话 `/` 命令弹层；候选不进入 Tab 序列，由输入框的 `aria-activedescendant` 导航 |
 | `DropdownMenu` | 对话输入框工具栏的模型与思考菜单（`menuitemradio`，向上展开，无入场动画） |
-| `Collapsible` / `CollapsibleTrigger` / `CollapsiblePanel` | 对话页「会话上下文」「会话文件」折叠条（替代原生 `details/summary`）；面板默认 `keepMounted`，收起只隐藏不卸载 |
+| `Collapsible` / `CollapsibleTrigger` / `CollapsiblePanel` | 对话页「会话上下文」「会话文件」折叠条与回复卡「思考过程」（替代原生 `details/summary`）；面板默认 `keepMounted`，收起只隐藏不卸载 |
 
 时间统一由 `src/lib/format-time.ts` 按浏览器本地时区与自然日格式化，`<Timestamp>` 渲染
 `<time dateTime title>`，`title` 为带秒的完整本地时间。人员与组织显示名由

@@ -9,6 +9,7 @@ import {
 	ExecutionDetailProjectionV2Schema,
 	PersistedConversationEventV2Schema,
 	PilotProtocolErrorV1Schema,
+	ReasoningDeltaEventV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, test } from "@playwright/test";
@@ -362,6 +363,203 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 	).toBeVisible();
 	await expect.poll(() => submitRequests).toBe(1);
 	await test.info().attach("conversation-completed-after-reload", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+});
+
+// #2981：思考过程随推理增量实时展开；答案开始后收起，刷新后仍完整且不重复。
+test("streams the thinking process above the reply and restores it folded after reload", async ({
+	page,
+}) => {
+	const question = "请分析这道题";
+	const thought = (sequence: number, text: string) =>
+		ReasoningDeltaEventV2Schema.parse({
+			schemaVersion: 2,
+			kind: "event",
+			eventId: `live-event-${sequence}`,
+			conversationId,
+			executionId,
+			sequence,
+			conversationCursor: `live-cursor-${sequence}`,
+			occurredAt: timestamp,
+			type: "reasoning.delta",
+			payload: { kind: "raw", text },
+		});
+	const thoughts = [thought(1, "先列出已知条件，"), thought(2, "再逐步推导。")];
+	const answerDelta = event("text.delta", 3, { text: "答案是 42。" });
+	const completed = event("execution.status", 4, { status: "completed" });
+	const userQuestion = {
+		messageId,
+		role: "user",
+		text: question,
+		status: "processing",
+		executionId,
+		replyToMessageId: null,
+		answerVersion: null,
+		isCurrentAnswer: null,
+		error: null,
+		createdAt: timestamp,
+	};
+	let phase: "running" | "completed" = "running";
+	await page.addInitScript(() => {
+		type FixtureWindow = Window & {
+			hasConversationStream: () => boolean;
+			emitConversationFrame: (value: unknown, id: string) => void;
+		};
+		const fixture = window as unknown as FixtureWindow;
+		const realFetch = window.fetch.bind(window);
+		const encoder = new TextEncoder();
+		let activeController:
+			| ReadableStreamDefaultController<Uint8Array>
+			| undefined;
+		fixture.hasConversationStream = () => Boolean(activeController);
+		fixture.emitConversationFrame = (value, id) => {
+			if (!activeController)
+				throw new Error("The conversation stream is not open");
+			activeController.enqueue(
+				encoder.encode(`id: ${id}\n` + `data: ${JSON.stringify(value)}\n\n`),
+			);
+		};
+		window.fetch = async (input, init) => {
+			const url = new URL(
+				typeof input === "string"
+					? input
+					: input instanceof Request
+						? input.url
+						: String(input),
+				window.location.href,
+			);
+			if (!url.pathname.endsWith("/events")) return realFetch(input, init);
+			let controllerForStream:
+				| ReadableStreamDefaultController<Uint8Array>
+				| undefined;
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controllerForStream = controller;
+					activeController = controller;
+				},
+				cancel() {
+					if (activeController === controllerForStream)
+						activeController = undefined;
+				},
+			});
+			return new Response(body, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+	});
+	await page.route(/\/api\/v[12]\//, async (route) => {
+		const request = route.request();
+		const path = new URL(request.url()).pathname;
+		if (isFileLimitsRequest(request.method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
+		if (path === "/api/v2/me/conversations/recent")
+			return route.fulfill({
+				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+			});
+		if (path.endsWith("/session"))
+			return route.fulfill({ json: ownerSession() });
+		if (path === `/api/v2/agents/${agentId}`)
+			return route.fulfill({ json: activeAgent() });
+		if (path === `/api/v2/conversations/${conversationId}`) {
+			const events =
+				phase === "completed" ? [...thoughts, answerDelta, completed] : [];
+			return route.fulfill({
+				json: ConversationDetailProjectionV2Schema.parse({
+					schemaVersion: 2,
+					conversation: {
+						schemaVersion: 1,
+						conversationId,
+						agentId,
+						title: "思考过程验收会话",
+						status: phase === "completed" ? "ready" : "active",
+						selectedModelOptionId: null,
+						selectedReasoningLevel: null,
+						lastConversationCursor: events.at(-1)?.conversationCursor ?? null,
+						createdAt: timestamp,
+						updatedAt: timestamp,
+					},
+					messages:
+						phase === "completed"
+							? [
+									{ ...userQuestion, status: "completed" },
+									{
+										...userQuestion,
+										messageId: "answer-live-1",
+										role: "assistant",
+										text: "答案是 42。",
+										status: "completed",
+										replyToMessageId: messageId,
+										answerVersion: 1,
+										isCurrentAnswer: true,
+									},
+								]
+							: [userQuestion],
+					events,
+				}),
+			});
+		}
+		await route.fulfill({ json: { items: [], nextCursor: null } });
+	});
+
+	await page.goto(
+		`/agents/${agentId}/conversations?conversation=${conversationId}`,
+	);
+	await expect(page.getByText(question, { exact: true })).toBeVisible();
+	await page.waitForFunction(() =>
+		(
+			window as unknown as { hasConversationStream: () => boolean }
+		).hasConversationStream(),
+	);
+	const emit = (frame: unknown, id: string) =>
+		page.evaluate(
+			([value, frameId]) =>
+				(
+					window as unknown as {
+						emitConversationFrame: (value: unknown, id: string) => void;
+					}
+				).emitConversationFrame(value, frameId as string),
+			[frame, id] as const,
+		);
+	const toggle = page.getByRole("button", { name: `思考过程：${question}` });
+	await expect(toggle).toHaveCount(0);
+	await emit(thoughts[0], "live-event-1");
+	await emit(thoughts[1], "live-event-2");
+	await expect(toggle).toHaveAttribute("aria-expanded", "true");
+	await expect(
+		page.getByText("先列出已知条件，再逐步推导。", { exact: true }),
+	).toBeVisible();
+	await test.info().attach("conversation-thinking-live", {
+		body: await page.screenshot({ fullPage: true }),
+		contentType: "image/png",
+	});
+
+	await emit(answerDelta, "live-event-3");
+	await expect(page.getByText("答案是 42。", { exact: true })).toBeVisible();
+	await expect(toggle).toHaveAttribute("aria-expanded", "false");
+	await expect(
+		page.getByText("先列出已知条件，再逐步推导。", { exact: true }),
+	).toBeHidden();
+
+	phase = "completed";
+	await emit(completed, "live-event-4");
+	await expect(
+		page.getByRole("button", { name: `重新生成：${question}` }),
+	).toBeVisible();
+	await page.reload();
+	await expect(page.getByText("答案是 42。", { exact: true })).toBeVisible();
+	await expect(toggle).toHaveAttribute("aria-expanded", "false");
+	await toggle.click();
+	await expect(toggle).toHaveAttribute("aria-expanded", "true");
+	await expect(
+		page.getByText("先列出已知条件，再逐步推导。", { exact: true }),
+	).toHaveCount(1);
+	await expect(
+		page.getByText("先列出已知条件，再逐步推导。", { exact: true }),
+	).toBeVisible();
+	await test.info().attach("conversation-thinking-after-reload", {
 		body: await page.screenshot({ fullPage: true }),
 		contentType: "image/png",
 	});
