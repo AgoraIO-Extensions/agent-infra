@@ -151,6 +151,74 @@ function observePromise<T>(
 	) as T;
 }
 
+type Then = (
+	onFulfilled?: ((value: unknown) => unknown) | null,
+	onRejected?: ((reason: unknown) => unknown) | null,
+) => PromiseLike<unknown>;
+
+/**
+ * postgres.js 的 Query 是惰性的：调用方 await（then / catch / finally）时才执行，
+ * 作为片段嵌入另一条模板时不会执行。这里不能像 observePromise 那样包一层 Promise：
+ * 那会在构造时就把片段当成独立语句发出，主查询拿到的也不再是片段，失败的 Promise
+ * 还没人等待，变成未处理的拒绝让进程退出（企微连接租约的 admissible 片段，#2892）。
+ * 因此原样返回 Query，只替换它的 then：第一次执行时开始计时，结束时按原规则记录一次，
+ * 结果与错误照常交给调用方。
+ */
+function observeLazyQuery<T>(
+	query: T,
+	operationRef: string,
+	options: StoreQueryObservabilityOptions,
+): T {
+	if (
+		!options.observability ||
+		!query ||
+		typeof query !== "object" ||
+		typeof (query as { then?: unknown }).then !== "function"
+	)
+		return query;
+	// 已在执行的原生 Promise 不是片段；而且 await 原生 Promise 不会读取实例上的 then，只能沿用外包一层的做法。
+	if (query instanceof Promise && query.constructor === Promise)
+		return observePromise(query, operationRef, options);
+	const execute = (query as unknown as { then: Then }).then;
+	let observed = false;
+	// biome-ignore lint/suspicious/noThenProperty: 有意替换 postgres.js Query 自身的 then，只在执行时观测（#2892）。
+	Object.defineProperty(query, "then", {
+		configurable: true,
+		writable: true,
+		value(
+			this: unknown,
+			onFulfilled?: ((value: unknown) => unknown) | null,
+			onRejected?: ((reason: unknown) => unknown) | null,
+		) {
+			if (observed) return execute.call(this, onFulfilled, onRejected);
+			observed = true;
+			const startedAt = performance.now();
+			return execute.call(
+				this,
+				(value) => {
+					if (
+						boundedDuration(startedAt) >=
+						storeSlowQueryThresholdMs(options.slowQueryThresholdMs)
+					)
+						recordSlowQuery(options.observability, operationRef, startedAt);
+					return onFulfilled ? onFulfilled(value) : value;
+				},
+				(error) => {
+					recordFailedQuery(
+						options.observability,
+						operationRef,
+						startedAt,
+						error,
+					);
+					if (onRejected) return onRejected(error);
+					throw error;
+				},
+			);
+		},
+	});
+	return query;
+}
+
 /** Wraps postgres.js tagged queries while keeping SQL, parameters and IDs out of telemetry. */
 export function observePostgresClient(
 	client: ReturnType<typeof postgres>,
@@ -159,12 +227,10 @@ export function observePostgresClient(
 	if (!options.observability) return client;
 	return new Proxy(client, {
 		apply(target, thisArg, args) {
-			const startedAt = performance.now();
-			return observePromise(
+			return observeLazyQuery(
 				Reflect.apply(target, thisArg, args),
 				currentOperationRef("store.query"),
 				options,
-				startedAt,
 			);
 		},
 		get(target, property, receiver) {
