@@ -132,15 +132,36 @@ export const RuntimeEventV2Schema = z.strictObject({
 	payload: RuntimeOperationFactV2Schema,
 });
 
+/**
+ * #2979：模型以明文提供的思考过程增量，`raw` 为原始推理、`summary` 为推理摘要。
+ * 属于会话正文，与正文增量共用游标与确认；加密推理、签名或被隐藏的思考不进入该事件。
+ */
+export const RuntimeReasoningEventV2Schema = z.strictObject({
+	schemaVersion: z.literal(2),
+	adapterEventKey: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+	cursor: OpaqueCursorV1Schema,
+	occurredAt: Rfc3339TimestampV1Schema,
+	type: z.literal("reasoning"),
+	payload: z.strictObject({
+		kind: z.enum(["raw", "summary"]),
+		delta: z.string().min(1),
+	}),
+});
+
 /** V3 transport and durable Driver journals preserve each event's original version. */
 export const RuntimeEventSchema = z.union([
 	RuntimeEventV1Schema,
 	RuntimeEventV2Schema,
+	RuntimeReasoningEventV2Schema,
 ]);
 export type RuntimeOperationFactV2 = z.infer<
 	typeof RuntimeOperationFactV2Schema
 >;
 export type RuntimeEventV2 = z.infer<typeof RuntimeEventV2Schema>;
+export type RuntimeReasoningEventV2 = z.infer<
+	typeof RuntimeReasoningEventV2Schema
+>;
 export type RuntimeEvent = z.infer<typeof RuntimeEventSchema>;
 
 export const RuntimeEventV2SchemaDefinitions = {
@@ -149,5 +170,6 @@ export const RuntimeEventV2SchemaDefinitions = {
 	RuntimeOperationFailureV2: RuntimeOperationFailureV2Schema,
 	RuntimeOperationFactV2: RuntimeOperationFactV2Schema,
 	RuntimeEventV2: RuntimeEventV2Schema,
+	RuntimeReasoningEventV2: RuntimeReasoningEventV2Schema,
 	RuntimeEvent: RuntimeEventSchema,
 };

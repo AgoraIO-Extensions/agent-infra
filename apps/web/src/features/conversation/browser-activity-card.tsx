@@ -9,7 +9,6 @@ import {
 import { useEffect, useId, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { PersistedConversationEventV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	BrowserOperationRecordDialog,
 	type BrowserRecordViewer,
@@ -20,6 +19,7 @@ import {
 	type BrowserCardPhase,
 	selectBrowserCard,
 } from "./browser-card.js";
+import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
 
 const phaseIcons: Record<BrowserCardPhase, typeof Eye> = {
 	idle: Eye,
@@ -65,7 +65,7 @@ export function BrowserActivityCard({
 	onCommand,
 	viewer,
 }: {
-	readonly events: readonly PersistedConversationEventV2[];
+	readonly events: readonly ConversationTimelineEventV2[];
 	readonly conversationId?: string;
 	readonly executionId?: string;
 	readonly browserAvailable: boolean;

@@ -906,6 +906,104 @@ describe("PostgreSQL actual operation facts and necessary audits", () => {
 	});
 });
 
+describe("PostgreSQL reasoning deltas (#2979)", () => {
+	it("stores reasoning as Runtime content readable only by the original actor and channel", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		const opened = openEvents(`${executionId}_reasoning`);
+		const query = new PostgresConversationQueryV1({ databaseUrl });
+		const reasoning = {
+			type: "reasoning.delta" as const,
+			kind: "raw" as const,
+			text: "Synthetic thought",
+		};
+		try {
+			const decision = await opened.events.persist({
+				...eventInput(conversationId, executionId, "reasoning_1"),
+				event: reasoning,
+			});
+			expect(decision.outcome).toBe("accepted");
+			expect(
+				await client`
+					select event_type, event_payload, source, runtime_cursor
+					from platform.conversation_events where execution_id = ${executionId}
+				`,
+			).toEqual([
+				{
+					event_type: "reasoning.delta",
+					event_payload: reasoning,
+					source: "runtime",
+					runtime_cursor: "runtime_cursor_reasoning_1",
+				},
+			]);
+			const owner = { actorId: "actor_event", channelId: "channel_event" };
+			const detail = await query.get(owner, conversationId);
+			expect(
+				detail?.events.map(({ eventType, eventPayload }) => ({
+					eventType,
+					eventPayload,
+				})),
+			).toEqual([{ eventType: "reasoning.delta", eventPayload: reasoning }]);
+			expect(
+				(await query.getExecution(owner, conversationId, executionId))?.events,
+			).toHaveLength(1);
+			expect(
+				await query.replay(owner, conversationId, undefined),
+			).toMatchObject({
+				outcome: "events",
+				events: [{ eventType: "reasoning.delta" }],
+			});
+			// 其他用户或其他渠道读不到含思考过程的会话，也无法探知它是否存在。
+			for (const denied of [
+				{ actorId: "actor_other", channelId: "channel_event" },
+				{ actorId: "actor_event", channelId: "channel_other" },
+			]) {
+				await expect(
+					query.get(denied, conversationId),
+				).resolves.toBeUndefined();
+				await expect(
+					query.getExecution(denied, conversationId, executionId),
+				).resolves.toBeUndefined();
+				await expect(
+					query.replay(denied, conversationId, undefined),
+				).resolves.toBeUndefined();
+			}
+		} finally {
+			await query.close();
+			await opened.close();
+		}
+	});
+
+	it.each([
+		{ kind: "encrypted", text: "opaque" },
+		{ kind: "raw", text: "" },
+		{ kind: "raw", text: "x".repeat(65_537) },
+	])(
+		"rejects a malformed reasoning delta without advancing cursors: %j",
+		async (change) => {
+			const { conversationId, executionId } = await seedConversation();
+			const opened = openEvents(`${executionId}_reasoning_invalid`);
+			try {
+				await expect(
+					opened.events.persist({
+						...eventInput(conversationId, executionId, "reasoning_invalid"),
+						event: { type: "reasoning.delta", ...change } as never,
+					}),
+				).rejects.toMatchObject({ code: "invalid_input" });
+				const [row] = await client`
+				select
+					(select count(*)::int from platform.conversation_events
+						where execution_id = ${executionId}) as events,
+					c.last_conversation_cursor::int as conversation_cursor
+				from platform.conversations c where c.id = ${conversationId}
+			`;
+				expect(row).toEqual({ events: 0, conversation_cursor: 0 });
+			} finally {
+				await opened.close();
+			}
+		},
+	);
+});
+
 describe("PostgreSQL Conversation event transaction", () => {
 	it("rejects new and replayed events after the Execution loses its Sandbox binding", async () => {
 		const { conversationId, executionId } = await seedConversation();

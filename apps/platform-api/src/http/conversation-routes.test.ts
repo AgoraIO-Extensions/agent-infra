@@ -1112,6 +1112,168 @@ describe("Conversation persisted SSE", () => {
 		);
 		expect(response.status).toBe(503);
 	});
+	const reasoningEvent = {
+		...persistedEvent,
+		eventId: "reasoning-event-2",
+		sequence: 2,
+		conversationCursor: "cursor-2",
+		eventType: "reasoning.delta",
+		eventPayload: {
+			type: "reasoning.delta",
+			kind: "raw",
+			text: "Synthetic thought",
+		},
+	};
+	it("projects reasoning only through V2 reads and skips it on V1 streams (#2979)", async () => {
+		const input = dependencies();
+		const scope = { actorId: identity.userId, channelId: "web" };
+		const detail = await input.query.get(scope, conversation.conversationId);
+		const execution = await input.query.getExecution(
+			scope,
+			conversation.conversationId,
+			"execution-1",
+		);
+		if (!detail || !execution) throw new Error("Missing detail fixture");
+		const events = [persistedEvent, reasoningEvent];
+		input.query.get = vi.fn().mockResolvedValue({ ...detail, events });
+		input.query.getExecution = vi
+			.fn()
+			.mockResolvedValue({ ...execution, events });
+		const { app } = testApp(input);
+		const history = ConversationDetailProjectionV2Schema.parse(
+			await (await app.request("/api/v2/conversations/conversation-1")).json(),
+		);
+		const executionHistory = ExecutionDetailProjectionV2Schema.parse(
+			await (
+				await app.request(
+					"/api/v2/conversations/conversation-1/executions/execution-1",
+				)
+			).json(),
+		);
+		expect(history.events[1]).toEqual({
+			schemaVersion: 2,
+			kind: "event",
+			eventId: "reasoning-event-2",
+			conversationId: conversation.conversationId,
+			executionId: "execution-1",
+			sequence: 2,
+			conversationCursor: "cursor-2",
+			occurredAt: "2026-09-06T00:00:02.000Z",
+			type: "reasoning.delta",
+			payload: { kind: "raw", text: "Synthetic thought" },
+		});
+		expect(executionHistory.events).toEqual(history.events);
+		// V1 详情只有回答正文，思考过程不会混进消息。
+		const v1Detail = ConversationDetailProjectionV1Schema.parse(
+			await (await app.request("/api/v1/conversations/conversation-1")).json(),
+		);
+		expect(JSON.stringify(v1Detail)).not.toContain("Synthetic thought");
+		const v1Execution = ExecutionDetailProjectionV1Schema.parse(
+			await (
+				await app.request(
+					"/api/v1/conversations/conversation-1/executions/execution-1",
+				)
+			).json(),
+		);
+		expect(JSON.stringify(v1Execution)).not.toContain("Synthetic thought");
+
+		const replayed = () =>
+			vi
+				.fn()
+				.mockResolvedValueOnce({
+					outcome: "events",
+					events: [persistedEvent, reasoningEvent],
+					resumeCursor: "cursor-2",
+				})
+				.mockResolvedValueOnce({
+					outcome: "events",
+					events: [
+						{
+							...persistedEvent,
+							eventId: "event-3",
+							sequence: 3,
+							conversationCursor: "cursor-3",
+							eventPayload: { type: "text.delta", text: "after thought" },
+						},
+					],
+					resumeCursor: "cursor-3",
+				})
+				.mockResolvedValue({
+					outcome: "reload",
+					reason: "cursor_expired",
+					resumeCursor: "cursor-3",
+				});
+		const v2Query = dependencies().query;
+		v2Query.replay = replayed();
+		const v2Stream = await (
+			await testApp(dependencies({ query: v2Query })).app.request(
+				"/api/v2/conversations/conversation-1/events",
+			)
+		).text();
+		const v2Events = v2Stream
+			.split("\n")
+			.filter((line) => line.startsWith("data: "))
+			.map((line) =>
+				ConversationSseMessageV2Schema.parse(JSON.parse(line.slice(6))),
+			)
+			.filter((message) => message.kind === "event");
+		expect(v2Events.map((message) => message.eventId)).toEqual([
+			"event-1",
+			"reasoning-event-2",
+			"event-3",
+		]);
+		const v1Query = dependencies().query;
+		v1Query.replay = replayed();
+		const v1Stream = await (
+			await testApp(dependencies({ query: v1Query })).app.request(
+				"/api/v1/conversations/conversation-1/events",
+			)
+		).text();
+		const v1Events = v1Stream
+			.split("\n")
+			.filter((line) => line.startsWith("data: "))
+			.map((line) =>
+				ConversationSseMessageV1Schema.parse(JSON.parse(line.slice(6))),
+			)
+			.filter((message) => message.kind === "event");
+		expect(v1Events.map((message) => message.eventId)).toEqual([
+			"event-1",
+			"event-3",
+		]);
+		expect(v1Stream).not.toContain("Synthetic thought");
+		// 跳过的思考过程仍推进持久游标，续读从它之后开始。
+		expect(v1Query.replay).toHaveBeenNthCalledWith(
+			2,
+			scope,
+			conversation.conversationId,
+			{ kind: "cursor", value: "cursor-2" },
+			expect.any(AbortSignal),
+		);
+	});
+	it.each([
+		{ eventPayload: { ...reasoningEvent.eventPayload, kind: "encrypted" } },
+		{ eventPayload: { ...reasoningEvent.eventPayload, text: "" } },
+		{
+			eventPayload: { ...reasoningEvent.eventPayload, signature: "opaque" },
+		},
+		{ eventPayload: { type: "reasoning.delta", text: "missing kind" } },
+	])(
+		"rejects a malformed persisted reasoning delta on V1 and V2 streams: %j",
+		async (change) => {
+			for (const version of ["v1", "v2"]) {
+				const query = dependencies().query;
+				query.replay = vi.fn().mockResolvedValue({
+					outcome: "events",
+					events: [{ ...reasoningEvent, ...change }],
+					resumeCursor: "cursor-2",
+				});
+				const response = await testApp(dependencies({ query })).app.request(
+					`/api/${version}/conversations/conversation-1/events`,
+				);
+				expect(response.status, version).toBe(503);
+			}
+		},
+	);
 	it("maps the persisted model fallback notice without local policy", async () => {
 		const input = dependencies();
 		input.query.replay = vi

@@ -33,6 +33,7 @@ import {
 	executionStatusLabels,
 	isTerminal,
 } from "./conversation-screen-state.js";
+import type { ConversationTimelineEventV2 } from "./conversation-timeline.js";
 
 /** 进行中回复的停止入口：只渲染在该 Execution 的回复卡内（R4-07）。 */
 export type ConversationStopControl = Readonly<{
@@ -79,7 +80,7 @@ export function ConversationMessages({
 	/** 当前会话用户的显示名：个人对话只对本人可见，用户消息的发送者就是当前用户（CH-08）。 */
 	userName: string;
 	history: ConversationDetailProjectionV2;
-	events: readonly PersistedConversationEventV2[];
+	events: readonly ConversationTimelineEventV2[];
 	/** 页面认定的当前 Execution 与状态（含刚受理、尚无状态事件的回复）。 */
 	current?: Readonly<{
 		executionId: string | undefined;
@@ -610,7 +611,7 @@ function ResultFiles({
 	onDownloadFile,
 	downloadingFileId,
 }: {
-	events: readonly PersistedConversationEventV2[];
+	events: readonly ConversationTimelineEventV2[];
 	executionId: string;
 	onDownloadFile: (file: ResultFile) => Promise<boolean>;
 	downloadingFileId?: string;

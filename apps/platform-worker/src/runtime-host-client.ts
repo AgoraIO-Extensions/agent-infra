@@ -17,6 +17,7 @@ import {
 	RuntimeBrowserSideEffectConfirmationResponseV3Schema,
 	type RuntimeBusinessGrantClaimsV4,
 	type RuntimeBusinessRequestV4,
+	type RuntimeEvent,
 	type RuntimeEventAckRequestV3,
 	RuntimeEventAckRequestV3Schema,
 	type RuntimeEventAckRequestV4,
@@ -863,6 +864,13 @@ export function createWorkerRuntimeHostClientV1(
 }
 
 /** Project only the already schema-validated public fields into domain facts. */
+// #2979：只有操作事实需要转换为平台形状；思考过程等其他 V2 事件原样交给 Core 精确校验。
+function workerRuntimeEvent(event: RuntimeEvent) {
+	return event.schemaVersion === 2 && event.type === "operation"
+		? operationEvent(event)
+		: event;
+}
+
 function operationEvent(
 	event: RuntimeEventV2,
 ): ConversationRuntimeOperationEventV2 {
@@ -1128,7 +1136,7 @@ export function createWorkerRuntimeHostClientV3(
 			for await (const event of eventStream(response, RuntimeEventSchema)) {
 				if (event.executionId !== body.executionId)
 					return failure("RUNTIME_EVENT_INVALID", true);
-				yield event.schemaVersion === 2 ? operationEvent(event) : event;
+				yield workerRuntimeEvent(event);
 			}
 		},
 	};
@@ -1527,9 +1535,7 @@ export function createWorkerRuntimeHostClientV4(
 				}
 				return {
 					...replay,
-					events: replay.events.map((event) =>
-						event.schemaVersion === 2 ? operationEvent(event) : event,
-					),
+					events: replay.events.map((event) => workerRuntimeEvent(event)),
 				};
 			} catch {
 				return failure("RUNTIME_EVENT_INVALID", true);

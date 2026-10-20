@@ -95,9 +95,17 @@ export interface ConversationBrowserSideEffectEventV1 {
 	readonly binding: ConversationBrowserSideEffectBindingV1;
 }
 
+/** #2979：思考过程的来源，`raw` 为原始推理，`summary` 为推理摘要。 */
+export type ConversationReasoningKindV1 = "raw" | "summary";
+
 export type ConversationNormalizedEventV1 =
 	| ConversationOperationEventV2
 	| { readonly type: "text.delta"; readonly text: string }
+	| {
+			readonly type: "reasoning.delta";
+			readonly kind: ConversationReasoningKindV1;
+			readonly text: string;
+	  }
 	| {
 			readonly type: "execution.status";
 			readonly status: ConversationEventStatusV1;
@@ -451,6 +459,15 @@ function parseEvent(input: unknown): ConversationNormalizedEventV1 {
 		const values = snapshotObject(input, ["type", "text"]);
 		if (!isText(values.text, 65_536)) invalidInput();
 		return { type: "text.delta", text: values.text };
+	}
+	if (type === "reasoning.delta") {
+		const values = snapshotObject(input, ["type", "kind", "text"]);
+		if (
+			(values.kind !== "raw" && values.kind !== "summary") ||
+			!isText(values.text, 65_536)
+		)
+			invalidInput();
+		return { type: "reasoning.delta", kind: values.kind, text: values.text };
 	}
 	if (type === "execution.status") {
 		const values = snapshotObject(input, ["type", "status"]);

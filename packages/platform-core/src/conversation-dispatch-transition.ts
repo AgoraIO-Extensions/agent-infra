@@ -27,6 +27,12 @@ export function normalizedEvent(
 		};
 	if (event.type === "text")
 		return { type: "text.delta", text: event.payload.delta };
+	if (event.type === "reasoning")
+		return {
+			type: "reasoning.delta",
+			kind: event.payload.kind,
+			text: event.payload.delta,
+		};
 	if (event.type === "file") {
 		return {
 			type: "result.file",

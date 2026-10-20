@@ -11,12 +11,18 @@ import {
 import type {
 	ConversationDetailProjectionV2,
 	PersistedConversationEventV2,
+	ReasoningDeltaEventV2,
 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	ConversationReadError,
 	type ConversationReadFailure,
 	responseFailure,
 } from "./execution-detail.js";
+
+/** 会话时间线的事件：混合版本历史加上模型提供的思考过程（#2979）。 */
+export type ConversationTimelineEventV2 =
+	| PersistedConversationEventV2
+	| ReasoningDeltaEventV2;
 
 export type ConversationTimelineState = {
 	conversationId: string | null;
@@ -30,7 +36,7 @@ export type ConversationTimelineState = {
 		| "denied";
 	/** Original persisted projection; render the merged timeline from events. */
 	history: ConversationDetailProjectionV2 | null;
-	events: readonly PersistedConversationEventV2[];
+	events: readonly ConversationTimelineEventV2[];
 	failure: ConversationReadFailure | null;
 	hasEarlier: boolean;
 	beforeCursor: string | null;
@@ -110,9 +116,9 @@ function emptyState(): ConversationTimelineState {
 // Preserve the server's order and original V1/V2 facts; cursors are opaque and
 // execution sequence numbers cannot order events from different executions.
 function reduceTimelineEvents(
-	current: readonly PersistedConversationEventV2[],
-	incoming: readonly PersistedConversationEventV2[],
-): readonly PersistedConversationEventV2[] {
+	current: readonly ConversationTimelineEventV2[],
+	incoming: readonly ConversationTimelineEventV2[],
+): readonly ConversationTimelineEventV2[] {
 	const seen = new Set(current.map((event) => event.eventId));
 	const added = incoming.filter((event) => {
 		if (seen.has(event.eventId)) return false;
@@ -123,9 +129,9 @@ function reduceTimelineEvents(
 }
 
 function prependTimelineEvents(
-	current: readonly PersistedConversationEventV2[],
-	incoming: readonly PersistedConversationEventV2[],
-): readonly PersistedConversationEventV2[] {
+	current: readonly ConversationTimelineEventV2[],
+	incoming: readonly ConversationTimelineEventV2[],
+): readonly ConversationTimelineEventV2[] {
 	const seen = new Set(current.map((event) => event.eventId));
 	const added = incoming.filter((event) => {
 		if (seen.has(event.eventId)) return false;

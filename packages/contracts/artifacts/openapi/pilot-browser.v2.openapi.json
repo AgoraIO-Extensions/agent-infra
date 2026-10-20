@@ -4541,7 +4541,14 @@
           },
           "events": {
             "items": {
-              "$ref": "#/components/schemas/PersistedConversationEventV2"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PersistedConversationEventV2"
+                },
+                {
+                  "$ref": "#/components/schemas/ReasoningDeltaEventV2"
+                }
+              ]
             },
             "type": "array"
           },
@@ -4800,6 +4807,9 @@
         "anyOf": [
           {
             "$ref": "#/components/schemas/PersistedConversationEventV2"
+          },
+          {
+            "$ref": "#/components/schemas/ReasoningDeltaEventV2"
           },
           {
             "$ref": "#/components/schemas/HeartbeatSignalV1"
@@ -5101,7 +5111,14 @@
               },
               "events": {
                 "items": {
-                  "$ref": "#/components/schemas/PersistedConversationEventV2"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PersistedConversationEventV2"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReasoningDeltaEventV2"
+                    }
+                  ]
                 },
                 "type": "array"
               },
@@ -5360,7 +5377,14 @@
               },
               "events": {
                 "items": {
-                  "$ref": "#/components/schemas/PersistedConversationEventV2"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PersistedConversationEventV2"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReasoningDeltaEventV2"
+                    }
+                  ]
                 },
                 "type": "array"
               },
@@ -7322,6 +7346,82 @@
           "schemaVersion",
           "userId",
           "disabled"
+        ],
+        "type": "object"
+      },
+      "ReasoningDeltaEventV2": {
+        "additionalProperties": false,
+        "properties": {
+          "conversationCursor": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "conversationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "eventId": {
+            "$ref": "#/components/schemas/SseEventIdV1"
+          },
+          "executionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "const": "event",
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "raw",
+                  "summary"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "text"
+            ],
+            "type": "object"
+          },
+          "schemaVersion": {
+            "const": 2,
+            "type": "number"
+          },
+          "sequence": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "type": {
+            "const": "reasoning.delta",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "kind",
+          "eventId",
+          "conversationId",
+          "executionId",
+          "sequence",
+          "conversationCursor",
+          "occurredAt",
+          "type",
+          "payload"
         ],
         "type": "object"
       },

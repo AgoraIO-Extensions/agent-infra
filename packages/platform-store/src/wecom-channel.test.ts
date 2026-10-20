@@ -491,6 +491,46 @@ it("claims confirmed result files once per file and preserves event order", asyn
 		},
 	]);
 });
+it("claims only answer text when the Execution also stored reasoning (#2979)", async () => {
+	await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+	const accepted = await channel().receive({
+		...message,
+		senderId: "reasoning_sender",
+		eventId: "reasoning_event",
+	});
+	if (accepted.outcome !== "accepted") throw new Error("Expected receipt");
+	const executionId = accepted.receipt.executionId;
+	const conversationId = accepted.receipt.conversationId;
+	if (!executionId || !conversationId) throw new Error("Expected execution");
+	const rows = [
+		{ type: "reasoning.delta", kind: "raw", text: "private thought " },
+		{ type: "text.delta", text: "答案" },
+		{ type: "reasoning.delta", kind: "summary", text: "private summary" },
+		{ type: "text.delta", text: "完整" },
+	];
+	await sql`update platform.conversation_executions
+		set status='completed',last_event_sequence=${rows.length},
+			last_runtime_cursor=${`runtime-reasoning-${rows.length}`}
+		where execution_id=${executionId}`;
+	await sql`update platform.conversations
+		set last_conversation_cursor=${rows.length} where id=${conversationId}`;
+	for (const [index, payload] of rows.entries()) {
+		const sequence = index + 1;
+		await sql`insert into platform.conversation_events
+			(event_id,conversation_id,execution_id,adapter_event_key,sequence,
+			 conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,
+			 occurred_at,source)
+			values (${`reasoning-event-${sequence}`},${conversationId},${executionId},
+			 ${`reasoning-${sequence}`},${sequence},${sequence},${payload.type},
+			 ${sql.json(payload)},${String(sequence).repeat(64)},
+			 ${`runtime-reasoning-${sequence}`},now(),'runtime')`;
+	}
+	const claim = await store.claim();
+	expect(claim?.receiptId).toBe(accepted.receipt.receiptId);
+	// 企微答案只拼接正文增量；思考过程由 #2982 另行组合。
+	expect(claim?.textDeltas).toEqual(["答案", "完整"]);
+	expect(JSON.stringify(claim)).not.toContain("private");
+});
 it("keeps an application reply sending through the bounded multipart window", async () => {
 	await sql`update platform.agent_configuration_revisions set configuration=${sql.json(
 		{
