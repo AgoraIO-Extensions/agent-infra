@@ -12,7 +12,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { pendingApplication } from "../src/features/my-agents/test-fixtures";
 import type { DeploymentConfigurationProjectionV2 } from "../src/pilot/generated-v2/types.gen";
 
-// 设计 index.html（SHA-256 b540e4c9…cd26）:root 的原始写法；颜色由浏览器解析后与实现比较。
+// 设计 index.html（SHA-256 6dd1cb8e…3c13）:root 的原始写法；颜色由浏览器解析后与实现比较。
 const designColors = {
 	"--bg": "oklch(0.975 0.008 95)",
 	"--surface": "oklch(0.995 0.005 90)",

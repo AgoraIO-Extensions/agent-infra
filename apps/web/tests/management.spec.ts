@@ -5471,9 +5471,8 @@ test.describe("Agent detail design alignment", () => {
 			Math.abs(identity.y - (backBox.y + backBox.height) - 16),
 		).toBeLessThanOrEqual(1);
 		// 设计 #agent-detail .eyebrow margin 0 0 9px：eyebrow 顶部与标识行顶部对齐（不继承
-		// .page-heading p 的 9px 上外边距），h1 在 eyebrow 下 9px。设计 1440 下 h1 y=184.39、
-		// 390 下 191.39，基于 38px 的 sm 返回按钮；应用的 sm 按钮暂保持 44px（#2863 B-15），
-		// 差值只来自按钮高度。
+		// .page-heading p 的 9px 上外边距），h1 在 eyebrow 下 9px。导出稿已按 B-15 回写 44px 的
+		// sm 返回按钮（#2863），设计 1440 下 h1 y=190.39、390 下 197.39（窄屏返回链接保留 16px 上外边距）。
 		const eyebrowGeometry = await heading
 			.locator(".agent-detail-heading")
 			.evaluate((element) => {
@@ -5495,10 +5494,8 @@ test.describe("Agent detail design alignment", () => {
 		expect(
 			Math.abs(eyebrowGeometry.h1Top - (eyebrowGeometry.eyebrowBottom + 9)),
 		).toBeLessThanOrEqual(0.5);
-		const designH1 = info.project.name === "mobile" ? 191.39 : 184.39;
-		expect(
-			Math.abs(eyebrowGeometry.h1Top - (designH1 + backBox.height - 38)),
-		).toBeLessThanOrEqual(1);
+		const designH1 = info.project.name === "mobile" ? 197.39 : 190.39;
+		expect(Math.abs(eyebrowGeometry.h1Top - designH1)).toBeLessThanOrEqual(1);
 		await back.hover();
 		await expect(back).toHaveCSS("text-decoration-line", "none");
 		await expect(

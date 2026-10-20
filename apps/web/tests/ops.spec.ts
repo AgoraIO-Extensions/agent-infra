@@ -2,7 +2,7 @@ import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import { captureDesignContract, designViewports } from "./design-contract";
 import { computed, expectPageHeadTop, resolved } from "./primitive-styles";
 
-// 运维观测（F-12）：导出设计没有 #ops，结构与状态以 docs/development/web-ui.md「运维观测页」为准；
+// 运维观测（F-12）：结构与状态以导出设计 #ops 与 docs/development/web-ui.md「运维观测页」为准；
 // 样式断言取设计 #my-agents 已创建卡（.grid-2 > .card：.card-head + .chip + dl.facts）与同类管理页页头的计算值。
 const observabilityPath = "/api/v1/ops/observability";
 const activeProjection = {
