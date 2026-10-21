@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -315,6 +315,41 @@ test("configuration-only smoke rejects a state file readable by other users", as
 		if (result.error) throw result.error;
 		assert.notEqual(result.status, 0);
 		assert.match(`${result.stderr}${result.stdout}`, /must be private/);
+	} finally {
+		await rm(fixture.directory, { recursive: true, force: true });
+	}
+});
+
+test("configuration-only smoke validates real acceptance gates", async () => {
+	const fixture = await fixtureDirectory();
+	try {
+		const parsed = JSON.parse(await readFile(fixture.config, "utf8"));
+		parsed.acceptance = {
+			requireThinking: true,
+			requireResultFile: true,
+			requireSkillMetadata: true,
+			requiredSkillName: "workspace-summary",
+			requireToolOperation: true,
+			requiredToolId: "workspace-summary",
+		};
+		await writeFile(fixture.config, JSON.stringify(parsed), { mode: 0o600 });
+		const result = spawnSync(
+			process.execPath,
+			[script, "--check-config", fixture.config],
+			{ cwd: process.cwd(), encoding: "utf8" },
+		);
+		if (result.error) throw result.error;
+		assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+
+		parsed.acceptance.requireThinking = "yes";
+		await writeFile(fixture.config, JSON.stringify(parsed), { mode: 0o600 });
+		const invalid = spawnSync(
+			process.execPath,
+			[script, "--check-config", fixture.config],
+			{ cwd: process.cwd(), encoding: "utf8" },
+		);
+		if (invalid.error) throw invalid.error;
+		assert.notEqual(invalid.status, 0);
 	} finally {
 		await rm(fixture.directory, { recursive: true, force: true });
 	}
