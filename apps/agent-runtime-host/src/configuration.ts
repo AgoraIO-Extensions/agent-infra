@@ -25,12 +25,49 @@ export function readWorkloadReadinessBindingV1(environment: NodeJS.ProcessEnv) {
 
 export const CODEX_PILOT_CONFIGURATION_VERSION = 2;
 
+const FILE_EXCHANGE_TOKEN = /^[\x21-\x7e]{32,4096}$/;
+const DNS_NAME =
+	/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/i;
+const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
+/** Exact HTTP(S) origin without credentials, path, query or fragment. */
+function fileExchangeOrigin(value: string) {
+	let origin: URL;
+	try {
+		origin = new URL(value);
+	} catch {
+		return false;
+	}
+	return (
+		value.length <= 512 &&
+		(origin.protocol === "http:" || origin.protocol === "https:") &&
+		origin.origin === value &&
+		origin.username === "" &&
+		origin.password === "" &&
+		(origin.pathname === "/" || origin.pathname === "") &&
+		origin.search === "" &&
+		origin.hash === "" &&
+		// In-cluster cleartext is limited to DNS Service names; TLS may use a
+		// deployment-approved external address.
+		(origin.protocol === "https:" ||
+			(DNS_NAME.test(origin.hostname) &&
+				!IPV4.test(origin.hostname) &&
+				!origin.hostname.startsWith("[")))
+	);
+}
+
 export function readRuntimeFileExchangeOptions(environment: NodeJS.ProcessEnv) {
 	const origin = environment.AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN;
 	const serviceToken =
 		environment.AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN;
 	if (origin === undefined && serviceToken === undefined) return undefined;
-	if (!origin || !serviceToken) runtimeConfigurationInvalid();
+	if (
+		!origin ||
+		!serviceToken ||
+		!fileExchangeOrigin(origin) ||
+		!FILE_EXCHANGE_TOKEN.test(serviceToken)
+	)
+		runtimeConfigurationInvalid();
 	return { origin, serviceToken };
 }
 

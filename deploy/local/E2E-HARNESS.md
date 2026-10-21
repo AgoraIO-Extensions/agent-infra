@@ -105,6 +105,26 @@ Worker 只在启动时加载这些材料；配置、部署输入或信任 bundle
 私有 API 配置的 Codex 模板还必须提供由同一镜像离线生成的 `codexModelProfiles`，生成方法与启动
 报错见 [Platform API 部署模块](../platform-api/README.md#标准-codex-模板的模型画像)。
 
+## 文件数据面（分阶段）
+
+文件 E2E 仍由 #3060 跟踪，Harness 的 `verify` 不执行它。需要显式启用时才设置：
+
+1. 把 `file-deployment.json`、Ed25519 签名密钥、Runtime 公钥和服务令牌文件放入
+   `PLATFORM_LOCAL_API_DIRECTORY`（该目录只读挂到 API 的 `/app/deployment`），并设置
+   `PLATFORM_LOCAL_API_FILE_DEPLOYMENT_CONFIGURATION_FILE=/app/deployment/file-deployment.json`。
+   配置形状见[文件存储部署与验收](../../docs/architecture/FILE-storage-deployment.md#生产部署装配)。
+2. 设置 `PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED=true`。`platform.sh` 会向 Worker values 写入
+   `platformWorker.fileExchangeOrigin=http://<release>-native-metadata-api:3000`；该 Service
+   只在 native metadata 路由启用时存在。origin 必须是精确值，不能带路径或尾斜杠。
+3. `services[].tokenFile` 必须与 Worker 的 runtime-auth transport Secret（默认
+   `platform-runtime-transport`／键 `token`，可用 `E2E_RUNTIME_TRANSPORT_SECRET` 覆盖）使用
+   同一令牌，并登记允许的 Agent。Harness 不会把该令牌复制到 API 目录，避免隐式扩大 Secret 暴露面。
+4. 准备可从 API 容器访问的 S3／MinIO bucket 和部署独占前缀；bucket 必须启用 versioning。
+   未准备时不要启用文件入口，否则上传与交换会失败。
+
+本地 kind 使用 kindnet，不强制执行 NetworkPolicy，因此本地文件往返通过不证明生产 egress 已配置。
+生产必须把 Platform API origin 端口加入 Agent NetworkPolicy 的 allow-list。
+
 ## 配置模块
 
 API/Worker 的私有 `configuration.mjs` 是部署 adapter，不是业务代码或 Secret 容器。

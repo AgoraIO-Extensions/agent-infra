@@ -225,6 +225,8 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly nativeCapabilityMetadata?: PlatformApiAssemblyInput["nativeCapabilityMetadata"];
 	readonly browserCommands?: ConversationBrowserCommandPortV1;
 	readonly providerImport?: SkillHubProviderImportDeploymentV1;
+	/** Deployment-owned file data plane assembled from configuration/secret files. */
+	readonly files?: ProductionPlatformApiInputV1["files"];
 }): ProductionPlatformApiInputV1 {
 	if (
 		input.customAgentGateway !== undefined &&
@@ -276,6 +278,8 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 		input.apiInput.providerImport !== undefined
 	)
 		throw new Error("PLATFORM_PROVIDER_IMPORT_DUPLICATE");
+	if (input.files !== undefined && input.apiInput.files !== undefined)
+		throw new Error("PLATFORM_FILES_DUPLICATE");
 	return {
 		...input.apiInput,
 		...(input.customAgentGateway !== undefined
@@ -311,6 +315,7 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 		...(input.providerImport !== undefined
 			? { providerImport: input.providerImport }
 			: {}),
+		...(input.files !== undefined ? { files: input.files } : {}),
 	};
 }
 

@@ -179,6 +179,17 @@ Agent 详情的 `source.services` 返回每个 Service 实际使用的档位。
 两项配置必须与 Worker 的 `workloadInput.policy` 同名字段取相同值，Worker 侧规则见
 [Worker 部署说明](../platform-worker/README.md#多服务资源档位)。
 
+## 文件数据面装配
+
+文件能力有两种互斥来源：
+
+- `configuration.mjs` 导出 `apiInput.files`（[`PlatformFileDeploymentV1`](../../apps/platform-api/src/file-assembly.ts)）。
+- 环境变量 `PLATFORM_API_FILE_DEPLOYMENT_CONFIGURATION_FILE` 指向部署私有 JSON。变量为空时不启用；设置后文件缺失、不是普通文件、schema／密钥／令牌无效时启动失败。
+
+两者同时提供返回 `PLATFORM_FILES_DUPLICATE`。配置字段、密钥与令牌约束、Actor 解析和失败语义见[文件存储部署与验收](../../docs/architecture/FILE-storage-deployment.md#生产部署装配)。`apiInput.files.runtimeWorkerId` 必须等于 Worker 的签名 identity；`services` 必须登记 Worker 注入的 runtime service token 所对应的 Agent。
+
+本地 Compose 把该变量默认置空，只在私有 `.env` 中指向容器内绝对路径；Helm in-cluster API 不注入该变量，由部署配置模块显式导出。文件入口是否启用不影响无关 API 路由；启用后 S3、签名密钥或服务令牌不可用会拒绝文件请求，不会回退到无文件能力。
+
 ## HTTP 失败日志
 
 每个请求结束时 Platform API 输出一条 `stage=http` 的结构化日志（5xx 为 error 级，4xx 为 info 级的

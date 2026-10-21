@@ -358,6 +358,18 @@ export const createWecomDeploymentCoordinatorV1 = (input) => { globalThis.calls.
 `,
 	);
 	await writeFile(
+		join(directory, "workload-runtime-auth.js"),
+		`
+export const resolveWorkloadFileExchangeOriginV1 = (input) => {
+  const environment = input.environment === undefined || input.environment === "" ? undefined : input.environment;
+  if (input.configured !== undefined && environment !== undefined) throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_DUPLICATE");
+  if (environment === undefined) return input.configured;
+  if (!input.hasRuntimeAuth) throw new Error("PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID");
+  return environment;
+};
+`,
+	);
+	await writeFile(
 		join(directory, "run.mjs"),
 		`
 globalThis.calls = [];

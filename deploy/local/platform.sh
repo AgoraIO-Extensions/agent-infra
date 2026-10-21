@@ -163,6 +163,18 @@ worker_values() {
     --set-string database.secretRef.key=url
     --set-string platformWorker.deploymentModule=file:///app/dist/deployment.mjs
   )
+  # Optional staged file-plane E2E. The API Service already exists when the
+  # native metadata route is enabled; the API still needs its own
+  # file-deployment configuration and the same service token registered.
+  if [[ -n "${PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED:-}" ]]; then
+    [[ "$PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED" == "true" ]] || {
+      echo "PLATFORM_LOCAL_FILE_EXCHANGE_ENABLED must be true when set" >&2
+      exit 1
+    }
+    worker_options+=(
+      --set-string "platformWorker.fileExchangeOrigin=http://$native_metadata_api_service:3000"
+    )
+  fi
   if [[ -n "${PLATFORM_LOCAL_HELM_POST_RENDERER:-}" ]]; then
     [[ "$PLATFORM_LOCAL_HELM_POST_RENDERER" = /* && -x "$PLATFORM_LOCAL_HELM_POST_RENDERER" ]] || {
       echo "PLATFORM_LOCAL_HELM_POST_RENDERER must be an executable absolute path" >&2

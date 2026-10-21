@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
 	readCodexPilotConfiguration,
+	readRuntimeFileExchangeOptions,
 	readRuntimeModelConfigurationV3,
 	readRuntimeModelConfigurationV4,
 } from "./configuration.js";
@@ -349,6 +350,74 @@ describe("Runtime deployment configuration", () => {
 					AGENT_INFRA_RUNTIME_MODEL_CONFIG: input,
 				}),
 			).toThrow(/^RUNTIME_CONFIGURATION_INVALID$/);
+		}
+	});
+});
+
+describe("Runtime file exchange configuration", () => {
+	const token = "s".repeat(48);
+	const valid = {
+		AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN: "http://platform-api:3000",
+		AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN: token,
+	};
+
+	it("stays disabled when neither value is provided and needs both when enabled", () => {
+		expect(readRuntimeFileExchangeOptions({})).toBeUndefined();
+		expect(readRuntimeFileExchangeOptions(valid)).toEqual({
+			origin: "http://platform-api:3000",
+			serviceToken: token,
+		});
+		expect(() =>
+			readRuntimeFileExchangeOptions({
+				AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN:
+					valid.AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN,
+			}),
+		).toThrow("RUNTIME_CONFIGURATION_INVALID");
+		expect(() =>
+			readRuntimeFileExchangeOptions({
+				AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN: token,
+			}),
+		).toThrow("RUNTIME_CONFIGURATION_INVALID");
+	});
+
+	it.each([
+		"http://platform-api:3000/",
+		"http://platform-api:3000/path",
+		"http://user@platform-api:3000",
+		"http://platform-api:3000?query=1",
+		"http://platform-api:3000#fragment",
+		"http://127.0.0.1:3000",
+		"ftp://platform-api:3000",
+	])("rejects an inexact file exchange origin %s", (origin) => {
+		expect(() =>
+			readRuntimeFileExchangeOptions({
+				...valid,
+				AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN: origin,
+			}),
+		).toThrow("RUNTIME_CONFIGURATION_INVALID");
+	});
+
+	it("accepts an unchanged HTTPS origin and rejects a short or non-printable token", () => {
+		expect(
+			readRuntimeFileExchangeOptions({
+				AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN: "https://api.example.test",
+				AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN: token,
+			})?.origin,
+		).toBe("https://api.example.test");
+		for (const invalid of ["short", `${token}\n`, `${token} extra`]) {
+			const error = (() => {
+				try {
+					readRuntimeFileExchangeOptions({
+						...valid,
+						AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN: invalid,
+					});
+				} catch (caught) {
+					return caught;
+				}
+			})();
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).message).toBe("RUNTIME_CONFIGURATION_INVALID");
+			expect((error as Error).message).not.toContain(token);
 		}
 	});
 });
