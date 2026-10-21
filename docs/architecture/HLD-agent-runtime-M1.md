@@ -96,6 +96,14 @@ Native 与 OpenCode 的 Generic ACP 模板消费 Messages；支持某种原生�
 
 `platform-adapter` Manifest 未声明 ACP 时创建失败或升级被拒绝；实际 ACP 兼容性在创建或升级的 Workload 启动后验证。M1 不为未知协议增加专用 Adapter。
 
+custom ACP 的 Session 输入和 Owner Secret 物化遵循工程 Spec
+[10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定)、
+[10.6](SPEC-agent-infra-M1-engineering-architecture.md#106-环境变量与-secret)。它复用平台的身份、
+会话、事件和控制授权，不建立第二套 Session 权威，不消费标准模板 V4 模型投影或平台 Relay Key。
+Host 的只读 readiness 不调用模型或工具；custom 业务使用工程 Spec
+[10.7](SPEC-agent-infra-M1-engineering-architecture.md#107-标准模板模型配置) 规定的独立版本化契约，
+不得据此给标准模板降级，Store 内部协议标记不等于 HTTP 版本。
+
 四个标准模板的任务与真实模型/工具采集按第 11 节分别验收，不从原生协议名推断能力。自定义 Agent 的任务 API、观测和 Eval 复用以实际接入验证为准；Agent 管理 API 可用不代表 `self-managed` 已兼容平台任务协议，其自有会话不纳入本 Contract。
 
 `self-managed` 的应用接口由镜像负责，但 StatefulSet、Service、Ingress 和 NetworkPolicy 仍只由 `platform-worker` 调谐。自有身份入口不经过 Auth Gateway，也不获得可信平台身份或撤权上下文，账号生命周期由 Owner 的身份体系负责；平台身份入口必须经过 Auth Gateway。网络与鉴权细节见工程 Spec 14.3。
@@ -167,7 +175,7 @@ Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation
 
 `packages/agent-runtime` 实现 RuntimeHost 深 Module 和四个固定 Runtime Driver；`apps/agent-runtime-host` 只负责 Agent Pod 内的进程入口、依赖装配和 HTTP/SSE 接入。worker 侧 RuntimeHost Client Adapter 只依赖版本化 Host Contract，不依赖该 package 或任何 Native/ACP library。Agent Service 对 `platform-worker` 始终提供同一内部 HTTP/SSE Interface。
 
-标准模板新 Execution 使用 `RuntimeHostV4` submit：保留 `RuntimeInputV1` 和 `RuntimeSelectionV1` 的 `modelOptionId`/`reasoningLevel`，继承 V3 的 Session 恢复与 Grant 屏障，另由 Worker 在受认证、具传输保密的私有字段交付本次 Relay Key。持久 Execution、outbox、业务 Grant 和 Host 请求摘要只绑定 Key 用途、引用与版本，不保存原值或摘要。Host 在 Driver 副作用前校验选择、Grant、Execution、版本和 operation/fence；重投必须使用相同选择与 Key 版本，否则冲突。RuntimeHost/Driver 不查询 Platform DB、当前默认项或个人设置。旧 submit V1–V3 仅处理已受理执行及历史恢复，不能以静态 Pod Key 接纳新业务执行；版本退役遵守独立兼容门禁。原模型选择语义见 [ADR: 将 Execution 有效模型选择绑定到 Runtime submit](../adr/0004-bind-execution-model-selection-to-runtime-submit.md)。
+标准模板新 Execution 使用 `RuntimeHostV4` submit：保留 `RuntimeInputV1` 和 `RuntimeSelectionV1` 的 `modelOptionId`/`reasoningLevel`，继承 V3 的 Session 恢复与 Grant 屏障，另由 Worker 在受认证、具传输保密的私有字段交付本次 Relay Key。持久 Execution、outbox、业务 Grant 和 Host 请求摘要只绑定 Key 用途、引用与版本，不保存原值或摘要。Host 在 Driver 副作用前校验选择、Grant、Execution、版本和 operation/fence；重投必须使用相同选择与 Key 版本，否则冲突。RuntimeHost/Driver 不查询 Platform DB、当前默认项或个人设置。标准模板的旧 submit V1–V3 仅处理已受理执行及历史恢复，不能以静态 Pod Key 接纳新业务执行；版本退役遵守独立兼容门禁。原模型选择语义见 [ADR: 将 Execution 有效模型选择绑定到 Runtime submit](../adr/0004-bind-execution-model-selection-to-runtime-submit.md)。
 
 固定 Driver 只使用 Agent Pod 已装配并通过候选配置验证的 active Runtime 配置，把 `modelOptionId` 映射为原生模型，并校验 `reasoningLevel` 属于该选项允许集合。Driver 必须在启动下一次原生执行的协议点显式应用两者；映射缺失、reasoning 不支持或原生协议不能保证应用时，返回稳定且脱敏的 `RUNTIME_MODEL_SELECTION_UNSUPPORTED` rejected 结果，不能静默使用进程默认值、其他模型或其他 reasoning。该失败不产生原生 Turn 副作用，也不暴露 endpoint、credential、原生协议帧或供应商错误正文。
 

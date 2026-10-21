@@ -559,22 +559,43 @@ StatefulSet 仅为可选 Pod 控制器，不是所有 Sandbox 就绪回执的必
 须同时核验其真实 UID/resourceVersion、owner 及与 Pod 的控制关系，不得忽略实际控制器。
 此可选性不改变 `self-managed` 部署、独立验证 Workload 及 §10.6 的既有 StatefulSet 规则。
 
-专属 Secret 是该 Sandbox 的受控 Secret materialization，与 Sandbox 同名、`immutable`，只含两项：
+专属 Secret 是该 Sandbox 的受控 Secret materialization，与 Sandbox 同名且 `immutable`。
+所有 Session 都有独立的 `token`：部署级 service token 对 `session-sandbox-v1`、namespace 与
+Sandbox ID 的 HMAC-SHA256（base64url）。Worker 每次路由时重新计算，不另行存储；business 与
+control 路由只发送该值，部署 token 和其他 Sandbox 的 token 均被该 Host 拒绝。Agent 级路由
+不变，部署 token 轮换仍遵循下述受控停止与重建流程。
 
-- `token`：该 Sandbox 的 transport token，为部署级 service token 对
-  `session-sandbox-v1`、namespace 与 Sandbox ID 的 HMAC-SHA256（base64url）。Worker 每次路由
-  该 Sandbox 时重新计算，不另行存储；部署 token 轮换按下述受控停止与重建流程更换。Sandbox 的 business 与 control
-  路由只发送该值，Agent 级路由不变；部署 token 和其他 Sandbox 的 token 均被该 Host 拒绝。
-- `model-config`：Store 随 claim 交付的 verified 模型投影的非敏感配置。只接受 V4 无 Key 投影；
-  不是 V4、模板绑定不再受信，或 verified 部署含 Agent 级 `secretRefs` 时，Session prepare 在
-  任何写入前以 policy 失败，Worker 不自行推导投影，也不挂载 Agent 级 Secret 或静态模型 Key。
-  模型 Key 仍按 [ADR-0016](../adr/0016-bind-relay-key-to-execution.md) 随执行交付。
+Session 输入按 Store 已验证的来源使用独立、版本化的辨别形状，标准模板与 custom ACP
+不得互相推断或回退；缺失、未知或与 verified 来源不一致的输入，在任何资源写入前拒绝。
 
-Pod 以 secretKeyRef 引用这两项，并直接获得 Driver、Agent ID、Worker ID、端口、Grant key ID、
-公钥与 issuer；数据目录位于 Sandbox PVC。安全上下文与 Agent 级 Workload 一致：UID/GID/fsGroup
+- 标准模板的专属 Secret 只含 `token` 和 `model-config`。`model-config` 只接受 Store 随
+  claim 交付的 verified V4 无 Key 模型投影；投影缺失或不是 V4、模板绑定不再受信，或标准模板
+  verified 部署含 Agent 级 `secretRefs` 时，prepare 以 policy 失败。Worker 不自行推导投影，
+  不挂载 Agent 级 Secret 或静态模型 Key；个人与 Agent 默认 Relay Key 仍按
+  [ADR-0016](../adr/0016-bind-relay-key-to-execution.md) 随 Execution 交付。
+- `platform-adapter` 自定义 Agent 不生成标准模板模型投影，不要求 `standardTemplateBinding`，
+  不取得平台保存的个人或 Agent 默认 Relay Key。Worker 只消费 Store 随 claim 交付、绑定当前
+  已验证镜像与 Runtime 修订的 Owner env 和加密 Secret 引用，按 [§10.6](#106-环境变量与-secret)
+  从原始密文记录可信解密并物化到本 Sandbox 的专属 Secret。不得从 Agent Pod 或其他
+  Kubernetes Secret 反向读取、复制明文；不得把 Secret 值改放普通 env。
+- custom 物化保留 Secret 原始 AAD、用途、Owner/Agent 绑定、ID、版本及引用来源 Runtime 修订，
+  并绑定 Session、Sandbox、代次、resourceFence 和当前已验证部署。写入及接受就绪观测前均须
+  重校验相同绑定；缺失、失效、跨主体/Agent/Session 或版本不一致时拒绝。Secret 版本或运行
+  输入变更沿既有更新、停止和原执行恢复流程处理，不就地修改在用对象或改绑原执行。
+  本流程不重新加密或重新激活旧引用，也不把镜像自报或请求字段当作 Secret 物化授权。
+
+Pod 通过 secretKeyRef 引用本 Sandbox 的 token 和适用的配置项；custom 的 Owner Secret
+使用与系统保留键不冲突的受控映射，缺项或冲突拒绝，不拼接未声明的引用。明文不进入 claim、
+配置投影、annotation、日志、事件或持久会话文件。Owner 为同一 Agent 配置的外部密钥可以
+具有相同值，但各 Session 不共享 Kubernetes 凭据对象、可读路径或运行实例。
+
+Driver/Host 装配、Agent/Worker 身份、端口、Grant key ID、公钥与 issuer 均由受信部署来源
+确定，Owner 输入不能覆盖平台保留字段；custom 镜像负责自己的模型装配，不借标准模板配置
+取得平台 Key。数据目录位于本 Sandbox PVC。安全上下文与 Agent 级 Workload 一致：UID/GID/fsGroup
 1000、只读根文件系统且 `/tmp` 使用内存 emptyDir、去掉全部 capabilities、seccomp RuntimeDefault，
-且不注入其他 Service 的地址。上述任一字段或 Secret 内容漂移均判为 unknown 或 conflict，
-不原地修复。Secret 随计算资源一起停止和回收，只保留 PVC；同名外部 Secret 不被接管。
+且不注入其他 Service 的地址。任一字段或 Secret 内容漂移均判为 unknown 或 conflict，不原地
+修复。Secret 随计算资源按原 UID/resourceVersion 停止和回收，只保留 PVC；同名外部 Secret
+不被接管，恢复仍沿原 Sandbox/PVC 及既有授权流程，不改变历史归属。
 
 部署 token 轮换须沿现有 Agent 管理停止/重启意图进行：先关闭业务路由并确认原执行和停止
 屏障，再以原资源 UID/resourceVersion 回收 Pod 和 Secret；轮换后在同一 Sandbox/PVC 上重新
@@ -773,7 +794,7 @@ Platform Secret 使用项目内置密文、部署加密公钥和 Worker-only 解
 - 普通 env 保存于 Platform DB。Agent 级 Secret `algorithmVersion = aes-256-gcm:v1` 要求每次加密（包括轮换和失败重试）都由 CSPRNG 新生成 256-bit DEK 和 96-bit nonce，同一 DEK 只允许加密一条记录且不得复用 nonce；`platform-api` 计算不泄露 DEK 的 SHA-256 fingerprint，并通过 Platform DB 唯一约束检测冲突，冲突时丢弃结果并重新生成 DEK/nonce。AEAD 使用 128-bit authentication tag 和版本化 canonical AAD；AAD 按固定顺序对 Secret ID、Owner 类型/ID、Agent ID、Secret 名称、Secret 版本和 `algorithmVersion` 做无歧义的长度前缀 UTF-8 编码。`platform-api` 用 DEK 加密明文，再用部署 active 公钥按 `wrappingAlgorithmVersion = rsa-oaep-sha256:v1` 和至少 3072-bit RSA key 封装 DEK。Platform DB 保存 DEK fingerprint、nonce、ciphertext、authentication tag、wrapped DEK、`algorithmVersion`、`wrappingAlgorithmVersion`、`wrappingKeyVersion` 和生命周期状态；任何字段或 AAD 绑定不一致都必须认证失败。
 - 部署只向 `platform-api` 注入版本化加密公钥，向 `platform-worker` 注入对应私钥 keyring；API 不持有可解密历史 Secret 的私钥。私钥不进入仓库、数据库、日志、错误、审计、模型上下文或 Agent Pod；缺少目标私钥、DEK 解封或 AEAD 认证失败、密文元数据非法时 fail closed。
 - 新 Secret 先保存为 pending 版本并产生配置修订。`platform-worker` 解封 DEK、受控解密，并以包含 Agent、Secret 版本和配置修订标识的不可变名称创建 Agent 专属 Kubernetes Secret；禁止原地修改已被任一 Workload 引用的 Secret，再调谐只引用该版本化名称的候选 Workload。
-- Secret record/reference 的 `configRevision` 表示该不可变 Secret 物化的来源修订，即引入该 Secret 引用的配置修订。Secret 属于 Runtime 输入，该修订必然推进 Runtime 修订，因此它与 Runtime 修订同属一个版本域（[ADR-0028](../adr/0028-separate-runtime-revision-from-configuration-revision.md)），但可以早于后续 Workload 的当前 Runtime 修订；只改变非 Runtime 输入的配置修订不引入 Secret 引用，不产生新的物化，也不改变已有物化的复用。后续配置保留完全相同的名称、Secret ID 和版本时，Core/Store 只能在 Agent 锁内从当前 Runtime 修订的持久化配置派生已验证的 active 物化；Worker 沿用其原始 AAD、Kubernetes 名称和激活 fence，正常物化复用时不解密、复制、重新加密或重新激活；候选模型访问验证仅允许 10.7 的受控解密例外，物化丢失或 UID 变化时仅允许下述受控恢复。只有新引入或替换的引用才创建并激活新的 pending 版本。
+- Secret record/reference 的 `configRevision` 表示该不可变 Secret 物化的来源修订，即引入该 Secret 引用的配置修订。Secret 属于 Runtime 输入，该修订必然推进 Runtime 修订，因此它与 Runtime 修订同属一个版本域（[ADR-0028](../adr/0028-separate-runtime-revision-from-configuration-revision.md)），但可以早于后续 Workload 的当前 Runtime 修订；只改变非 Runtime 输入的配置修订不引入 Secret 引用，不产生新的物化，也不改变已有物化的复用。后续配置保留完全相同的名称、Secret ID 和版本时，Core/Store 只能在 Agent 锁内从当前 Runtime 修订的持久化配置派生已验证的 active 物化；Worker 沿用其原始 AAD、Kubernetes 名称和激活 fence，正常物化复用时不解密、复制、重新加密或重新激活；候选模型访问验证仅允许 10.7 的受控解密例外，物化丢失或 UID 变化时仅允许下述受控恢复。custom ACP 的 Session 专属物化按 10.1.1 从原密文进行独立解密和审计，不属于 Agent 级 active 对象的复用，不复制其 Kubernetes 明文或重新激活旧版本。只有新引入或替换的引用才创建并激活新的 pending 版本。
 - Platform DB 与 Kubernetes 不共享事务。Worker 只有在观测到目标 Workload 已使用对应版本化 Secret、通过健康检查，且观测到的 Agent ID、Secret 版本、Runtime 修订、Workload UID/generation 与当前 fence 全部匹配后，才能在同一条件更新中将 pending 版本提升为 active；任一值变化都拒绝激活并重新调谐。Worker 重启时幂等恢复 pending、applying、observed 和 active 中间状态。失败或状态不确定时旧 Workload 与旧 active Secret 继续有效，确认新版本生效、没有 Workload 引用旧名称且满足回滚保留策略前不得回收旧版本。
 - Secret 只能替换，Owner/API 只能读取“已设置”、版本和状态。添加新 active 公钥/私钥版本后，由 Worker 执行幂等、可恢复的历史 Secret 重新加密或 DEK 重新封装；数据库不再引用旧 `wrappingKeyVersion` 后，部署才能移除旧私钥。
 - `platform-worker` 只把当前 Agent 运行所需的 active Secret 装配到其 Kubernetes Secret；值不进入 annotation、日志、错误或模型上下文，Agent Pod 不能访问解密私钥或其他 Agent Secret。
@@ -837,12 +858,12 @@ UID 或不匹配的 fence 不能授权删除。停止、停用或更高管理 fe
 - 模型显示名由 API 的受信部署输入提供，按精确的 `endpointId`、`modelId` 关联，并由 ModelCatalog 模块校验名称表及其当前目录关联。名称只用于展示，不参与允许集合、协议、Key、版本或执行绑定；不能从浏览器输入、模型自报名称或解析 `optionId` 推导。名称非空、有界且不含控制字符，重复关联、未知端点或目录政策不允许的模型拒绝；缺少名称时保留真实 `modelId`，不杜撰名称或缩小候选集合。已授权配置查询为内部展示保留端点关联，对外明确选取既有 `ModelOptionProjectionV1` 字段，不透传端点或部署输入。
 - 带显示名的默认 Key 候选使用独立的 `GET` / `POST /api/v2/agents/{agentId}/default-relay-key/display-candidates`，响应 envelope 与候选项组成独立的 strict `schemaVersion: 2` 投影；新 Key 和已存 Key 两条路径沿用原授权、候选交集、配置修订及 Key 版本检查后，由 API 装配名称。旧 `/candidates` 路径精确保留原 V1 响应，政策 Catalog V1、部署目录 V2 与 Worker 私有 saved-Key V1 不增加字段。Web 显式消费新入口，选择、比较和保存仍使用原稳定 ID；同名不合并，不把旧响应推断为已支持显示名。契约继续按 §6.4 从 Zod 生成并验证精确兼容边界。
 - 每次受理标准模板 Execution 时，在同一持久事务内冻结 `modelOptionId`、`reasoningLevel`、Key 用途、密文引用和版本：Web/企微绑定实际发送者的个人 Key，全部 Platform API 调用及 Eval 样本运行绑定 Agent 默认 Key；Eval 模型评分也绑定其工作项开始时的 Agent 默认 Key。界面明确费用归属。缺 Key、失效或额度不足不自动回退到其他主体的 Key；Relay 拒绝调用时如实失败。个人或 Agent Key 替换后，新执行选新版本，已受理执行继续用旧版本至终态；仅 Relay 撤销或实际调用失败才使其失败。旧密文在所有引用它的执行终态前不能回收，停止和恢复也不得改绑版本。
-- Workload 候选仅预检目录/Driver/profile/模型选项结构及固定 Relay 路由；四个模板的真实镜像与模型链路须逐项独立验证。模型选项集合以 `RuntimeModelConfigurationV4` 保存并校验；该配置仅包含 endpoint、protocol、authentication、模型、reasoning 和能力绑定，**不包含 Key 原值或引用**。它可以沿用现有 immutable 配置 Secret、candidate/verified 投影、指纹、fence 和回滚机制，但不再生成 `AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_*`。调谐、回滚和 Pod 重启不能从 Kubernetes Secret、env 或旧 active 配置取得任何用户或 Agent 默认 Relay Key。
+- 标准模板 Workload 候选仅预检目录/Driver/profile/模型选项结构及固定 Relay 路由；四个模板的真实镜像与模型链路须逐项独立验证。模型选项集合以 `RuntimeModelConfigurationV4` 保存并校验；该配置仅包含 endpoint、protocol、authentication、模型、reasoning 和能力绑定，**不包含 Key 原值或引用**。它可以沿用现有 immutable 配置 Secret、candidate/verified 投影、指纹、fence 和回滚机制，但不再生成 `AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_*`。调谐、回滚和 Pod 重启不能从 Kubernetes Secret、env 或旧 active 配置取得任何用户或 Agent 默认 Relay Key。
 - Worker 在当前业务 Grant、Execution、选择与 Key 引用/版本一致后，才通过既有受认证且具传输保密的 Worker–Host 私有接口交付本次 Key；原值只在 Worker 解密缓冲区和 Host/Driver 的本次执行内存存在，不进入 Grant、公共 RuntimeSelection、配置、Pod env、PVC、journal、日志、事件或普通错误。Host 在模型请求前核对 Agent、Conversation、Execution、渠道/用途、版本及 operation/fence；同 Agent 的不同用户和相邻 Execution 不能复用传输能力。补充指令继续绑定原 Execution。Worker/Host 重启时只为仍获准的原执行重交同一版本；无法确认旧版本或授权时拒绝恢复，不用当前 Key 替代。执行结束排空在途请求后清除内存中的 Key。
 - `RuntimeHostV4` 的 `existing-accepted-only` Key 恢复输入仅允许原 Submit 或原 native Skill 请求。Skill 保留原能力、目录修订、来源版本和参数摘要，不虚构普通 Turn 的 input/selection，不重新发现同名 Skill。Host 必须以原 journal 的 accepted/running 回执、操作摘要、Key scope、模型配置绑定和当前授权/fence 核实；缺少原记录或冻结绑定、unknown/终态、stop/control 均不安装 Key，command/supplement 不能冒充恢复原操作。恢复只重交原版本到受保护内存，不重新 invoke，也不改变既有控制绑定和元数据只读边界。
 - 四个 Driver 均须在每次实际模型请求前证明原 Execution Key 版本绑定。Codex/Claude 的本地传输按原生 Turn/Query 隔离；OpenCode/Pi 即使相邻执行选择同一模型，也不能复用在启动时固定了旧 Key 的原生 handle。若固定上游不支持可信的执行期换 Key，Driver 须先停止并排空旧 handle，再以同一原 Session 和新执行 Key 重建；无法确认旧 handle 退役或 Session 连续性时拒绝新执行。恢复旧执行只可重交旧版本，不能以新 Key 重建后继续旧执行。
-- Worker–Host 使用 `RuntimeHostV4` 的独立版本化私有 Key 字段和共享 Schema；不能把旧 Runtime 配置 V2/V3 中静态 credential 当作新执行的默认值。旧 Host V1–V3 和 verified 投影保持原样可读以供已受理执行的查询、有界恢复和迁移，不推断缺失字段或重写指纹；迁移到 V4 无 Key 配置并完成实际链路验证前，旧版本不接纳新业务 Execution。候选失败沿原 verified 投影和精确清理机制收敛，但不能回滚到会重新准入静态 Key 的配置。既有 [Execution 模型选择 ADR](../adr/0004-bind-execution-model-selection-to-runtime-submit.md)和[协议绑定 ADR](../adr/0009-bind-model-profiles-to-runtime-configuration.md)继续约束选择和 profile；静态凭证交付部分由[按 Execution 绑定 Relay Key ADR](../adr/0016-bind-relay-key-to-execution.md)替代。
-- 自定义 Agent 的模型配置仍属镜像内部。Generic ACP 只读取当前 Runtime 模型选项并转发选择，不能取得平台保存的个人或 Agent 默认 Relay Key。
+- 标准模板的 Worker–Host 使用 `RuntimeHostV4` 的独立版本化私有 Key 字段和共享 Schema；不能把旧 Runtime 配置 V2/V3 中静态 credential 当作新执行的默认值。旧 Host V1–V3 和 verified 投影保持原样可读以供已受理执行的查询、有界恢复和迁移，不推断缺失字段或重写指纹；迁移到 V4 无 Key 配置并完成实际链路验证前，旧版本不接纳新业务 Execution。候选失败沿原 verified 投影和精确清理机制收敛，但不能回滚到会重新准入静态 Key 的配置。既有 [Execution 模型选择 ADR](../adr/0004-bind-execution-model-selection-to-runtime-submit.md)和[协议绑定 ADR](../adr/0009-bind-model-profiles-to-runtime-configuration.md)继续约束选择和 profile；静态凭证交付部分由[按 Execution 绑定 Relay Key ADR](../adr/0016-bind-relay-key-to-execution.md)替代。
+- 自定义 Agent 的模型配置仍属镜像内部。Generic ACP 只读取当前 Runtime 模型选项并转发选择，不能取得平台保存的个人或 Agent 默认 Relay Key；Owner env/Secret 按 10.1.1、10.6 进入其专属 Session。custom ACP 沿已验证的 Worker/Host 版本化业务契约使用不含标准模板 Key 绑定的业务 Grant，业务与控制授权仍严格分离；当前 HTTP V3、Grant V2 与 Store 内部协议标记分别按各自共享 Schema 校验，不能用内部标记推导 HTTP 版本。此 custom 路径不允许标准模板降级，不修改 V4 Schema 或把其 Key 绑定变成可选。
 
 ### 10.8 Codex 原生模型传输边界
 
