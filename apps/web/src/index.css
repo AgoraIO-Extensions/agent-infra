@@ -2853,8 +2853,11 @@ body {
 .connection-notice-action {
 	flex: none;
 }
+/* D-01 / Z-11（#3052）：Agent 详情连接器与对话「会话上下文」的「打开 Connection」共用这一条规则，
+   两个视口都保持 44px 触达高度（DESIGN.md 新操作至少 44px；web-ui.md 的 40px 档不含 Connection 提示），
+   不沿用导出稿桌面的 40px。 */
 .connection-notice-action > a {
-	min-height: 40px;
+	min-height: 44px;
 }
 @media (max-width: 767px) {
 	.connection-notice {
@@ -2863,20 +2866,13 @@ body {
 	.connection-notice-action {
 		margin-top: 10px;
 	}
-	/* DESIGN.md：390px 下跳转按钮整宽并保持 44px 触控高度。 */
+	/* DESIGN.md：390px 下跳转按钮整宽，高度沿用上方 44px 规则。 */
 	.connection-notice-action > a {
 		width: 100%;
-		min-height: 44px;
 	}
 	.agent-detail .agent-detail-back {
 		margin-top: 16px;
 	}
-}
-/* Z-11：对话页「会话上下文」的「打开 Connection」在两个视口都保持 44px 触达高度
-   （DESIGN.md 新操作至少 44px；web-ui.md 的 40px 档不含 Connection 提示），不沿用导出稿桌面的 40px。
-   放在上方通用规则之后，避免特异性倒序。 */
-.chat-context-body .connection-notice-action > a {
-	min-height: 44px;
 }
 
 @media (max-width: 1023px) {
