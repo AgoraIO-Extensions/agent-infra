@@ -1211,19 +1211,20 @@
 .chat-message .message-status + .message-status {
 	margin-top: 4px;
 }
+/* 设计处理中卡片 `<p>正在整理结果…</p>`：正文色（--fg），不是 muted（A2-08）。 */
 .chat-message .message-pending {
-	color: var(--muted-foreground);
+	color: var(--foreground);
 }
 .chat-message-body > :is(.supplement, .message-files, .answer-versions) {
 	margin-top: 9px;
 }
-/* 设计 .card-actions：处理中卡内的「停止回复」（R4-07）。 */
+/* 设计 .card-actions：处理中卡内的「停止回复」（R4-07），状态行之后 16px（A2-08）。 */
 .chat-message-body > .card-actions {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 8px;
-	margin-top: 12px;
+	margin-top: 16px;
 }
 /* #2981：回答上方可折叠的「思考过程」。摘要行沿用会话折叠条的 44px 触达高度与配色；
    展开后随时间线一起滚动，不另设滚动区域。 */

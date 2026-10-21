@@ -1445,10 +1445,14 @@ describe("functional conversation screen", () => {
 			targetExecutionId: "execution-1",
 		});
 		expect(screen.queryByText("已停止")).toBeNull();
+		// 「正在停止」不可再次操作；按 A2-09 用 aria-disabled 保持可聚焦，焦点不在等待确认时落到 body。
+		const stopping = screen.getByRole("button", { name: "正在停止" });
+		expect(stopping.getAttribute("aria-disabled")).toBe("true");
+		fireEvent.click(stopping);
+		await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
 		expect(
-			(screen.getByRole("button", { name: "正在停止" }) as HTMLButtonElement)
-				.disabled,
-		).toBe(true);
+			requests.filter((request) => request.method === "POST"),
+		).toHaveLength(1);
 	});
 	it("keeps a preparing Session read-only with its draft and enables sending once ready (#1534)", async () => {
 		let ready = false;
@@ -3896,6 +3900,89 @@ describe("session context, command feedback and reply cards (design alignment)",
 				),
 			).toBe(true),
 		);
+	});
+
+	// A2-09：「停止回复」随处理中卡片卸载后，焦点移到该回复卡的「重新生成」，没有时移到输入框；
+	// 用户已把焦点移到别处时不抢焦点。
+	describe("focus after stopping a reply (A2-09)", () => {
+		const cancelled = PersistedConversationEventV2Schema.parse({
+			...event(1),
+			type: "execution.status",
+			payload: { status: "cancelled" },
+		});
+		function stoppable(
+			answers: "with-answer" | "without-answer",
+			gate?: Promise<void>,
+		) {
+			let stopped = false;
+			setup(async (request) => {
+				if (request.method === "POST") {
+					if (new URL(request.url).pathname.endsWith("/stops")) stopped = true;
+					return receipt();
+				}
+				if (!stopped)
+					return conversationWith([], [userMessage()], "active")(request);
+				// 停止受理后的回读可先挂起，页面停在「正在停止」。
+				if (gate) await gate;
+				return conversationWith(
+					[cancelled],
+					answers === "with-answer"
+						? [userMessage(), answer({ status: "cancelled" })]
+						: [userMessage()],
+				)(request);
+			});
+		}
+
+		it("moves focus to the stopped reply's 重新生成", async () => {
+			stoppable("with-answer");
+			const stop = await screen.findByRole("button", { name: "停止回复" });
+			stop.focus();
+			fireEvent.click(stop);
+			const regenerate = await screen.findByRole("button", {
+				name: "重新生成：Private question",
+			});
+			await waitFor(() => expect(document.activeElement).toBe(regenerate));
+		});
+
+		it("falls back to the message input when the reply has no 重新生成 yet", async () => {
+			stoppable("without-answer");
+			const stop = await screen.findByRole("button", { name: "停止回复" });
+			stop.focus();
+			fireEvent.click(stop);
+			await screen.findByText("回复已停止", {
+				selector: '[data-slot="toast"]',
+			});
+			await waitFor(() =>
+				expect(
+					screen.queryByRole("button", { name: /正在停止|停止回复/ }),
+				).toBeNull(),
+			);
+			await waitFor(() =>
+				expect(document.activeElement).toBe(
+					screen.getByRole("textbox", { name: "消息" }),
+				),
+			);
+		});
+
+		it("keeps focus on 正在停止 while waiting and leaves it where the user moved it", async () => {
+			let release = () => {};
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			stoppable("with-answer", gate);
+			const stop = await screen.findByRole("button", { name: "停止回复" });
+			stop.focus();
+			fireEvent.click(stop);
+			const stopping = await screen.findByRole("button", { name: "正在停止" });
+			expect(document.activeElement).toBe(stopping);
+			const input = await composer();
+			await waitFor(() => expect(input.disabled).toBe(false));
+			input.focus();
+			release();
+			await screen.findByRole("button", { name: "重新生成：Private question" });
+			await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+			expect(document.activeElement).toBe(input);
+		});
 	});
 
 	it("says 原回复已结束 when the reply finished before the stop took effect (Z-14, #1524)", async () => {

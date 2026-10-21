@@ -12,6 +12,7 @@ import {
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { LoadingLine } from "@/components/ui/spinner";
 import { useToast } from "@/components/ui/toast";
+import { pageRecoveryTarget } from "@/hooks/use-recovery-focus";
 import { distinctObjectNames } from "@/lib/accessible-name";
 import { Button } from "../../components/ui/button.js";
 import type { BrowserSessionProjectionV1 } from "../../pilot/generated/types.gen.js";
@@ -262,6 +263,34 @@ export function ActiveConversation({
 		if (status === "cancelled") toast("回复已停止");
 		else setStopNotice({ executionId: stopping, text: "原回复已结束。" });
 	}, [stopping, latestExecution, status, toast]);
+	// A2-09：「停止回复」随处理中卡片卸载后焦点不能落到 body。发出停止时记下目标 Execution；它不再
+	// 进行中（停止确认、原回复已结束或已换成新的回复）时，若焦点已落到 body，就移到该回复卡状态行的
+	// 「重新生成」，没有可用的「重新生成」时移到输入框，再没有就交给页面标题（与弹窗焦点看护同一兜底）。
+	// 用户按下指针或把焦点移到别处后不再代管。
+	const [stopFocus, setStopFocus] = useState<string>();
+	useEffect(() => {
+		if (!stopFocus) return;
+		const release = () => setStopFocus(undefined);
+		document.addEventListener("pointerdown", release, true);
+		return () => document.removeEventListener("pointerdown", release, true);
+	}, [stopFocus]);
+	useEffect(() => {
+		if (!stopFocus || (stopFocus === latestExecution && !isTerminal(status)))
+			return;
+		setStopFocus(undefined);
+		const focused = document.activeElement;
+		if (focused && focused !== document.body) return;
+		const regenerate = [
+			...document.querySelectorAll<HTMLButtonElement>(
+				"[data-regenerate-execution]",
+			),
+		].find(
+			(button) =>
+				button.dataset.regenerateExecution === stopFocus && !button.disabled,
+		);
+		const input = composer.current?.disabled ? null : composer.current;
+		(regenerate ?? input ?? pageRecoveryTarget())?.focus();
+	}, [stopFocus, latestExecution, status]);
 	const uncertainExecution = active && status === "unknown";
 	const command = useConversationCommands({
 		agentId,
@@ -650,6 +679,7 @@ export function ActiveConversation({
 						if (command.stop()) {
 							action.current = "stop";
 							setStopNotice(undefined);
+							setStopFocus(latestExecution);
 						}
 					},
 				}
@@ -794,6 +824,7 @@ export function ActiveConversation({
 											type="button"
 											variant="outline"
 											disabled={stopControl.disabled}
+											focusableWhenDisabled
 											onClick={stopControl.onStop}
 										>
 											<Square aria-hidden="true" />

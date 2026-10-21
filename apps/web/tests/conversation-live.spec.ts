@@ -19,6 +19,7 @@ import {
 } from "../src/features/conversation/conversation-test-fixtures";
 import { keepConversationStreamOpen } from "./conversation-stream";
 import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
+import { duplicateControlNames } from "./page-hygiene";
 import {
 	expectCleanPage,
 	expectDistinctDialogControls,
@@ -1398,6 +1399,174 @@ test("saves the next-message model and stops the bound execution", async ({
 		),
 	).toBe(true);
 });
+
+// #2830 终验第二轮 A：处理中卡片按导出稿（A2-08），停止回复后焦点不落到 body（A2-09）。
+for (const mode of ["click", "keyboard"] as const) {
+	test(`processing card follows the design and stopping by ${mode} keeps focus off the body (A2-08, A2-09)`, async ({
+		page,
+	}, info) => {
+		const errors = trackPageErrors(page);
+		const mobile = info.project.name === "mobile";
+		await page.setViewportSize(
+			mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+		);
+		const agent = activeAgent();
+		const processing = event("execution.status", 1, { status: "processing" });
+		const cancelled = event("execution.status", 2, { status: "cancelled" });
+		const userMessage = {
+			messageId,
+			role: "user" as const,
+			text: "继续检查当前任务",
+			status: "processing" as const,
+			executionId,
+			replyToMessageId: null,
+			answerVersion: null,
+			isCurrentAnswer: null,
+			error: null,
+			createdAt: timestamp,
+		};
+		let phase: "active" | "cancelled" = "active";
+		// 停止受理后的回读先挂起，页面停在「正在停止」，再放行到已取消的投影。
+		let releaseCancelled = () => {};
+		const cancelledGate = new Promise<void>((resolve) => {
+			releaseCancelled = resolve;
+		});
+		const detail = () =>
+			ConversationDetailProjectionV2Schema.parse({
+				...history(
+					conversationId,
+					phase === "cancelled" ? [processing, cancelled] : [processing],
+				),
+				conversation: {
+					...history(conversationId, []).conversation,
+					status: phase === "cancelled" ? "ready" : "active",
+				},
+				messages: [
+					{
+						...userMessage,
+						status: phase === "cancelled" ? "cancelled" : "processing",
+					},
+					...(phase === "cancelled"
+						? [
+								{
+									...userMessage,
+									messageId: `assistant:${executionId}`,
+									role: "assistant" as const,
+									text: "",
+									status: "cancelled" as const,
+									replyToMessageId: messageId,
+									answerVersion: 1,
+									isCurrentAnswer: true,
+								},
+							]
+						: []),
+				],
+			});
+		const stops: unknown[] = [];
+		await keepConversationStreamOpen(page);
+		await page.route(/\/api\/v[12]\//, async (route) => {
+			const request = route.request();
+			const path = new URL(request.url()).pathname;
+			if (isFileLimitsRequest(request.method(), path))
+				return route.fulfill({ json: controlledFileLimits() });
+			if (path === "/api/v2/me/conversations/recent")
+				return route.fulfill({
+					json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
+				});
+			if (path.endsWith("/events"))
+				return route.fulfill({
+					status: 200,
+					contentType: "text/event-stream",
+					body: ": heartbeat\n\n",
+				});
+			if (path.endsWith("/session"))
+				return route.fulfill({ json: ownerSession() });
+			if (path === `/api/v2/agents/${agentId}`)
+				return route.fulfill({ json: agent });
+			if (path === `/api/v2/conversations/${conversationId}`) {
+				if (phase === "cancelled") await cancelledGate;
+				return route.fulfill({ json: detail() });
+			}
+			if (path.endsWith("/stops")) {
+				stops.push(request.postDataJSON());
+				phase = "cancelled";
+				return route.fulfill({
+					status: 202,
+					json: {
+						schemaVersion: 1,
+						status: "submitted",
+						messageId: null,
+						executionId,
+					},
+				});
+			}
+			await route.fulfill({ json: { items: [], nextCursor: null } });
+		});
+		await page.goto(`/chat/${agentId}/${conversationId}`);
+		const reply = page.getByRole("article", { name: `${agent.name}的消息` });
+		const stop = reply.getByRole("button", { name: "停止回复", exact: true });
+		await expect(stop).toBeVisible();
+		// A2-08：「正在整理结果…」用正文色，状态行到「停止回复」16px。
+		const pending = reply.getByText("正在整理结果…", { exact: true });
+		await expect(pending).toHaveCSS(
+			"color",
+			await page.evaluate(() => {
+				const probe = document.createElement("span");
+				probe.style.color = "var(--foreground)";
+				document.body.append(probe);
+				const color = getComputedStyle(probe).color;
+				probe.remove();
+				return color;
+			}),
+		);
+		const actions = reply.locator(".card-actions");
+		await expect(actions).toHaveCSS("margin-top", "16px");
+		const [status, actionsBox] = await Promise.all([
+			reply.locator(".message-status").boundingBox(),
+			actions.boundingBox(),
+		]);
+		if (!status || !actionsBox) throw new Error("Expected card geometry");
+		expect(
+			Math.abs(actionsBox.y - (status.y + status.height) - 16),
+		).toBeLessThanOrEqual(0.5);
+		await expectCleanPage(page, errors);
+		if (mode === "click") await stop.click();
+		else {
+			await stop.focus();
+			await page.keyboard.press("Enter");
+		}
+		// 停止受理、等待确认期间按钮改为「正在停止」并保持焦点（aria-disabled），不落到 body。
+		const stopping = reply.getByRole("button", {
+			name: "正在停止",
+			exact: true,
+		});
+		await expect(stopping).toBeFocused();
+		await expect(stopping).toHaveAttribute("aria-disabled", "true");
+		await expect(stopping).toBeDisabled();
+		releaseCancelled();
+		await expect(
+			page.locator('[data-slot="toast"]').filter({ hasText: "回复已停止" }),
+		).toBeVisible();
+		const regenerate = reply.getByRole("button", {
+			name: "重新生成：继续检查当前任务",
+		});
+		await expect(regenerate).toBeFocused();
+		// 稍后仍在「重新生成」上，没有被后续回读挪到 body。
+		await page.waitForTimeout(300);
+		await expect(regenerate).toBeFocused();
+		expect(
+			await page.evaluate(() => document.activeElement === document.body),
+		).toBe(false);
+		await expect(
+			reply.getByRole("button", { name: /停止回复|正在停止/ }),
+		).toHaveCount(0);
+		expect(stops).toEqual([
+			{ schemaVersion: 1, targetExecutionId: executionId },
+		]);
+		await expectCleanPage(page, errors);
+		expect(await duplicateControlNames(page)).toEqual([]);
+	});
+}
 
 test("regenerates a terminal answer and opens its execution details", async ({
 	page,
