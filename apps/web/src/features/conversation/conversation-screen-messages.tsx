@@ -28,6 +28,10 @@ import type {
 	PersistedConversationEventV2,
 } from "../../pilot/generated-v2/types.gen.js";
 import { AssistantMarkdown } from "./assistant-markdown.js";
+import {
+	ArtifactPreviewDialog,
+	artifactCanPreview,
+} from "./conversation-artifact-preview.js";
 import type { ResultFile } from "./conversation-files.js";
 import {
 	type ModelFallback,
@@ -80,7 +84,9 @@ export function ConversationMessages({
 	canRegenerate,
 	onResend,
 	onDownloadFile,
+	onPreviewFile,
 	downloadingFileId,
+	previewingFileId,
 	hasEarlier,
 	earlierLoading,
 	earlierFailure,
@@ -105,7 +111,9 @@ export function ConversationMessages({
 	canRegenerate: boolean;
 	onResend: (text: string) => void;
 	onDownloadFile?: (file: ResultFile) => Promise<boolean>;
+	onPreviewFile?: (file: ResultFile) => Promise<Blob | null>;
 	downloadingFileId?: string;
+	previewingFileId?: string;
 	hasEarlier: boolean;
 	earlierLoading: boolean;
 	earlierFailure: boolean;
@@ -235,7 +243,9 @@ export function ConversationMessages({
 						events={events}
 						executionId={executionId}
 						onDownloadFile={onDownloadFile}
+						onPreviewFile={onPreviewFile}
 						downloadingFileId={downloadingFileId}
+						previewingFileId={previewingFileId}
 					/>
 				) : null
 			}
@@ -695,13 +705,21 @@ function ResultFiles({
 	events,
 	executionId,
 	onDownloadFile,
+	onPreviewFile,
 	downloadingFileId,
+	previewingFileId,
 }: {
 	events: readonly ConversationTimelineEventV2[];
 	executionId: string;
 	onDownloadFile: (file: ResultFile) => Promise<boolean>;
+	onPreviewFile?: (file: ResultFile) => Promise<Blob | null>;
 	downloadingFileId?: string;
+	previewingFileId?: string;
 }) {
+	const [selected, setSelected] = useState<ResultFile>();
+	const [content, setContent] = useState<Blob | null>(null);
+	const [loading, setLoading] = useState(false);
+	const [error, setError] = useState<string>();
 	const files = events
 		.filter(
 			(
@@ -713,25 +731,64 @@ function ResultFiles({
 		)
 		.map((event) => ({ ...event.payload, executionId: event.executionId }));
 	if (!files.length) return null;
+	async function preview(file: ResultFile) {
+		if (!onPreviewFile || !artifactCanPreview(file)) return;
+		setSelected(file);
+		setContent(null);
+		setError(undefined);
+		setLoading(true);
+		const result = await onPreviewFile(file);
+		setLoading(false);
+		if (result) setContent(result);
+		else setError("文件读取失败，请重试。");
+	}
 	return (
-		<div className="message-files space-y-2">
-			<p className="font-medium text-sm">结果文件</p>
-			{files.map((file) => (
-				<div key={file.fileId} className="flex items-center gap-2 text-sm">
-					<span className="min-w-0 flex-1 truncate" title={file.name}>
-						{file.name} ({formatResultSize(file.sizeBytes)})
-					</span>
-					<Button
-						variant="outline"
-						size="sm"
-						disabled={downloadingFileId === file.fileId}
-						onClick={() => void onDownloadFile(file)}
-					>
-						{downloadingFileId === file.fileId ? "准备下载…" : "下载"}
-					</Button>
-				</div>
-			))}
-		</div>
+		<>
+			<div className="message-files space-y-2">
+				<p className="font-medium text-sm">结果文件</p>
+				{files.map((file) => (
+					<div key={file.fileId} className="flex items-center gap-2 text-sm">
+						<span className="min-w-0 flex-1 truncate" title={file.name}>
+							{file.name} ({formatResultSize(file.sizeBytes)})
+						</span>
+						{onPreviewFile && artifactCanPreview(file) && (
+							<Button
+								variant="ghost"
+								size="sm"
+								disabled={previewingFileId === file.fileId}
+								onClick={() => void preview(file)}
+							>
+								{previewingFileId === file.fileId ? "准备预览…" : "预览"}
+							</Button>
+						)}
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={downloadingFileId === file.fileId}
+							onClick={() => void onDownloadFile(file)}
+						>
+							{downloadingFileId === file.fileId ? "准备下载…" : "下载"}
+						</Button>
+					</div>
+				))}
+			</div>
+			<ArtifactPreviewDialog
+				file={selected}
+				content={content}
+				open={selected !== undefined}
+				loading={loading}
+				error={error}
+				onOpenChange={(open) => {
+					if (!open) {
+						setSelected(undefined);
+						setContent(null);
+						setError(undefined);
+					}
+				}}
+				onRetry={() => selected && void preview(selected)}
+				onDownload={() => selected && void onDownloadFile(selected)}
+			/>
+		</>
 	);
 }
 

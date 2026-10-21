@@ -13,13 +13,20 @@ function safeExternalUrl(href: string | undefined) {
 	if (!href) return undefined;
 	try {
 		const url = new URL(href);
-		return url.protocol === "https:" &&
-			!url.username &&
-			!url.password &&
-			!url.search &&
-			!url.hash
-			? url.href
-			: undefined;
+		if (url.protocol !== "https:" || url.username || url.password)
+			return undefined;
+		// Normal documentation links often use query parameters and fragments. Keep
+		// those, while refusing the parameter names most commonly used to carry
+		// bearer credentials or one-time authorization material.
+		for (const key of url.searchParams.keys()) {
+			if (
+				/(?:token|secret|password|passwd|api[_-]?key|access[_-]?token|auth|signature|sig|code)/i.test(
+					key,
+				)
+			)
+				return undefined;
+		}
+		return url.href;
 	} catch {
 		return undefined;
 	}

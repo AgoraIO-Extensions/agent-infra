@@ -764,7 +764,9 @@ export function ActiveConversation({
 							composer.current?.focus();
 						}}
 						onDownloadFile={files.download}
+						onPreviewFile={files.readResultFile}
 						downloadingFileId={files.downloading}
+						previewingFileId={files.reading}
 						hasEarlier={timeline.hasEarlier}
 						earlierLoading={timeline.earlierLoading}
 						earlierFailure={timeline.earlierFailure !== null}

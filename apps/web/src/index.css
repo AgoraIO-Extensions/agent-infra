@@ -2159,6 +2159,44 @@
 	outline: 2px solid var(--ring);
 	outline-offset: 3px;
 }
+.artifact-preview-dialog {
+	max-width: min(900px, calc(100% - 40px));
+}
+.artifact-text-preview,
+.artifact-diff-code {
+	max-height: min(60dvh, 560px);
+	overflow: auto;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 14px;
+	background: var(--muted);
+	font-family: var(--font-mono);
+	font-size: 12px;
+	line-height: 1.6;
+	white-space: pre;
+}
+.artifact-text-preview pre,
+.artifact-diff-code pre {
+	margin: 0;
+	white-space: inherit;
+}
+.artifact-diff-row {
+	min-height: 1.6em;
+	padding: 0 8px;
+}
+.artifact-diff-add {
+	background: color-mix(in oklch, var(--success) 14%, transparent);
+}
+.artifact-diff-del {
+	background: color-mix(in oklch, var(--danger) 14%, transparent);
+}
+.artifact-diff-hunk {
+	color: var(--accent-ink);
+	background: color-mix(in oklch, var(--accent) 10%, transparent);
+}
+.artifact-diff-file {
+	font-weight: 650;
+}
 .assistant-markdown table {
 	width: 100%;
 	border-collapse: collapse;
