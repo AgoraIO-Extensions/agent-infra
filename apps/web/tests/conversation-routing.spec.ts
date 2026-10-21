@@ -2125,3 +2125,112 @@ for (const viewport of [
 		expect(fixture.unexpected).toEqual([]);
 	});
 }
+
+// #2830 终验第二轮 A：对话页纵向间距（A2-05）、个人历史说明到首项（A2-06）与窄屏已选命令卡（A2-07）
+// 在 1440×900 与 390×844 下按导出稿 #chat。
+for (const viewport of [
+	{ width: 1440, height: 900 },
+	{ width: 390, height: 844 },
+]) {
+	test(`final acceptance A2 chat rhythm, history list and selected command card at ${viewport.width} by ${viewport.height} (A2-05–A2-07)`, async ({
+		page,
+	}, info) => {
+		test.skip(info.project.name !== "desktop", "Viewport list runs once.");
+		const mobile = viewport.width <= 767;
+		await page.setViewportSize(viewport);
+		const errors = trackPageErrors(page);
+		const fixture = await routingFixture(page, {
+			messageRoles: true,
+			nativeCapabilities: 4,
+			recentAcrossAgents: true,
+		});
+		await page.goto(canonical(fixture.agentId, fixture.conversationId));
+		await assertChat(page);
+		// A2-05：页头→会话上下文（≤767px 12px、桌面 16px）、会话上下文→时间线 10px、
+		// 时间线→会话文件 0、会话文件→输入框 18px。
+		const rhythm = await page.evaluate(() => {
+			const rect = (selector: string) => {
+				const node = document.querySelector(selector);
+				if (!node) throw new Error(`Missing ${selector}`);
+				return node.getBoundingClientRect();
+			};
+			const header = rect(".conversation-header");
+			const context = rect(".chat-thread > .chat-context");
+			const timeline = rect(".chat-thread > .timeline");
+			const files = rect(".chat-thread > .chat-files");
+			const composer = rect(".chat-thread > form.composer-zone");
+			return {
+				headerToContext: context.top - header.bottom,
+				contextToTimeline: timeline.top - context.bottom,
+				timelineToFiles: files.top - timeline.bottom,
+				filesToComposer: composer.top - files.bottom,
+			};
+		});
+		await info.attach(`a2-chat-rhythm-${viewport.width}`, {
+			body: JSON.stringify(rhythm),
+			contentType: "application/json",
+		});
+		expect(
+			Math.abs(rhythm.headerToContext - (mobile ? 12 : 16)),
+		).toBeLessThanOrEqual(0.5);
+		expect(Math.abs(rhythm.contextToTimeline - 10)).toBeLessThanOrEqual(0.5);
+		expect(Math.abs(rhythm.timelineToFiles)).toBeLessThanOrEqual(0.5);
+		expect(Math.abs(rhythm.filesToComposer - 18)).toBeLessThanOrEqual(0.5);
+		// A2-06：个人历史说明到首个会话项 14px（设计 .section-head 14px 与 .history-list 13px 折叠）。
+		if (mobile)
+			await page.getByRole("button", { name: "个人历史", exact: true }).click();
+		const panel = page.locator(".conversation-history-panel");
+		await expect(
+			panel.locator(".conversation-history-list > li").first(),
+		).toBeVisible();
+		const historyGap = await panel.evaluate((node) => {
+			const hint = node.querySelector(".conversation-history-hint");
+			const first = node.querySelector(".conversation-history-list > li");
+			if (!hint || !first) throw new Error("Expected history hint and item");
+			return (
+				first.getBoundingClientRect().top - hint.getBoundingClientRect().bottom
+			);
+		});
+		expect(Math.abs(historyGap - 14)).toBeLessThanOrEqual(0.5);
+		if (mobile)
+			await page.getByRole("button", { name: "返回对话", exact: true }).click();
+		// A2-07：已选命令卡在 ≤767px 为 margin 8px 8px 0、padding 9px，桌面沿用 10px 12px 0 / 10px 12px。
+		const input = page.getByLabel("消息", { exact: true });
+		await input.fill("/");
+		const listbox = page.getByRole("listbox", {
+			name: "命令与 Skill 搜索结果",
+		});
+		await expect(listbox.getByRole("option")).toHaveCount(4);
+		await page.keyboard.press("ArrowDown");
+		await page.keyboard.press("Enter");
+		const selection = page.locator(".capability-selection");
+		await expect(selection).toBeVisible();
+		await expect(selection).toHaveCSS(
+			"margin",
+			mobile ? "8px 8px 0px" : "10px 12px 0px",
+		);
+		await expect(selection).toHaveCSS("padding", mobile ? "9px" : "10px 12px");
+		const inset = await selection.evaluate((node) => {
+			const parent = node.parentElement;
+			if (!parent) throw new Error("Expected selection container");
+			const box = node.getBoundingClientRect();
+			const outer = parent.getBoundingClientRect();
+			return {
+				left: box.left - (outer.left + parent.clientLeft),
+				right: outer.left + parent.clientLeft + parent.clientWidth - box.right,
+			};
+		});
+		expect(Math.abs(inset.left - (mobile ? 8 : 12))).toBeLessThanOrEqual(0.5);
+		expect(Math.abs(inset.right - (mobile ? 8 : 12))).toBeLessThanOrEqual(0.5);
+		await expect(input).toBeFocused();
+		await expectCleanPage(page, errors);
+		await info.attach(`a2-chat-selected-${viewport.width}`, {
+			body: await page.screenshot({ animations: "disabled" }),
+			contentType: "image/png",
+		});
+		expect(fixture.requests.every((request) => request.method === "GET")).toBe(
+			true,
+		);
+		expect(fixture.unexpected).toEqual([]);
+	});
+}

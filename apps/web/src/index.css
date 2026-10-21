@@ -984,6 +984,17 @@
 	border-radius: 10px;
 	background: var(--surface);
 }
+/* 设计 .chat-files：紧接时间线（时间线自带下内边距，时间线→会话文件 0），下外边距 8px 加 composer
+   上内边距 10px，会话文件→输入框共 18px（A2-05）。负上外边距抵消对话列的 10px gap；
+   短视口（高度 ≤600px）另有压缩规则，不在这里改。 */
+@media (min-height: 601px) {
+	.chat-thread > .chat-files {
+		margin-bottom: 8px;
+	}
+	.chat-thread .timeline + .chat-files {
+		margin-top: -10px;
+	}
+}
 .chat-disclosure-summary {
 	display: flex;
 	align-items: center;
@@ -1596,6 +1607,13 @@
 	color: var(--muted-foreground);
 	overflow-wrap: anywhere;
 }
+/* 设计 ≤767px `.cap-selection{margin:8px 8px 0;padding:9px}`：窄屏已选命令卡收紧外边距与内边距（A2-07）。 */
+@media (max-width: 767px) {
+	.capability-selection {
+		margin: 8px 8px 0;
+		padding: 9px;
+	}
+}
 /* 设计 .cap-error：12px 危险色文字行，不是带边框的提示框。 */
 .composer-zone .capability-inline-alert,
 .capability-menu .capability-inline-alert {
@@ -1685,6 +1703,11 @@
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);
 	gap: 4px;
+}
+/* 设计 .section-head margin-bottom 14px 与 .history-list margin-top 13px 折叠后为 14px：
+   说明到首个会话项 14px，不用分区 space-y-3 的 12px（A2-06）。 */
+.conversation-history-head + .conversation-history-list {
+	margin-top: 14px;
 }
 .conversation-history-list > li {
 	min-width: 0;
@@ -2088,16 +2111,14 @@
 }
 
 @media (max-width: 430px) {
+	/* 页头下距沿用 ≤767px 的 12px（设计 ≤767 `.chat-page > .page-head{margin-bottom:12px}`）；
+	   对话列子项之间只用 flex gap，不再叠加 8px 上外边距（A2-05）。 */
 	.conversation-header {
 		gap: 6px;
-		margin-bottom: 8px;
 	}
 	.conversation-heading-copy {
 		flex: 1;
 		min-width: 100px;
-	}
-	.chat-thread.space-y-5 > :not([hidden]) ~ :not([hidden]) {
-		margin-top: 8px;
 	}
 }
 
