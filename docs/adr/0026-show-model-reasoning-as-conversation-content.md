@@ -2,7 +2,7 @@
 
 ## 状态
 
-已采纳。产品方向由 [#2976](https://github.com/AgoraIO-Extensions/agent-infra/issues/2976) 确认，随 [#2977](https://github.com/AgoraIO-Extensions/agent-infra/issues/2977) 的文档评审合入生效；实现按 #2976 的子票推进。
+已采纳。产品方向由 [#2976](https://github.com/AgoraIO-Extensions/agent-infra/issues/2976) 确认，随 [#2977](https://github.com/AgoraIO-Extensions/agent-infra/issues/2977) 的文档评审合入生效；实现按 #2976 的子票推进。决策 7（模型目录追加条目与 `codexModelProfiles`）已由 [ADR-0029](0029-source-standard-template-models-from-relay.md) 取代。
 
 ## 背景
 
