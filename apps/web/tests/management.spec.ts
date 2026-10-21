@@ -1200,11 +1200,15 @@ test("approvals page head places the h1 at the design height while Owner configu
 test("approval review dialog follows the design facts, notice and footer", async ({
 	page,
 }) => {
+	const errors = trackPageErrors(page);
 	const api = await fixture(page, "admin");
 	api.applicationModelOptions();
 	const narrow = test.info().project.name === "mobile";
 	await page.goto("/admin/approvals");
-	await page.getByRole("button", { name: /^审阅：/ }).click();
+	const trigger = page.getByRole("button", { name: /^审阅：/ });
+	// AC-2：审批页同页没有同名控件（审阅按钮带申请名）。
+	expect(await duplicateControlNames(page)).toEqual([]);
+	await trigger.click();
 	const dialog = page.getByRole("dialog", { name: "审阅创建申请" });
 	await expect(dialog).toBeVisible();
 	// AP-03：facts 标签列 150px、gap 10px 18px、13px，dt muted；390 下单列。
@@ -1231,7 +1235,11 @@ test("approval review dialog follows the design facts, notice and footer", async
 	expect(style.dtColor).toBe(
 		await resolved(page, "color", "var(--muted-foreground)"),
 	);
-	expect(style.terms.slice(0, 2)).toEqual(["申请", "说明"]);
+	// V-01：设计审阅弹窗 facts 为「申请 / 申请人 / …」，申请人取申请投影。
+	expect(style.terms.slice(0, 3)).toEqual(["申请", "申请人", "说明"]);
+	await expect(
+		dialog.locator("dt", { hasText: /^申请人$/ }).locator("+ dd"),
+	).toHaveText("Applicant");
 	expect(style.terms).toEqual(
 		expect.arrayContaining(["预设规格", "预计资源占用"]),
 	);
@@ -1299,6 +1307,23 @@ test("approval review dialog follows the design facts, notice and footer", async
 			.locator("xpath=following-sibling::dd[1]"),
 	).toHaveText("Codex");
 	await expect(dialog).not.toContainText("codex");
+	// AC-2：弹窗内按钮逐一不同名；Esc 关闭后焦点回到「审阅」，不落到 body。
+	const dialogButtons = await dialog
+		.getByRole("button")
+		.evaluateAll((buttons) =>
+			buttons.map(
+				(button) =>
+					button.getAttribute("aria-label") ?? button.textContent?.trim() ?? "",
+			),
+		);
+	expect(new Set(dialogButtons).size, dialogButtons.join(" / ")).toBe(
+		dialogButtons.length,
+	);
+	await page.keyboard.press("Escape");
+	await expect(dialog).toBeHidden();
+	await expect(trigger).toBeFocused();
+	expect(api.commands).toHaveLength(0);
+	await expectCleanPage(page, errors);
 });
 
 test("application detail model range matches the review dialog without modelId", async ({

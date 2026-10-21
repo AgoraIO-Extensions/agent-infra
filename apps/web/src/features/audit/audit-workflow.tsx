@@ -45,11 +45,7 @@ import { Timestamp } from "@/components/ui/timestamp";
 import { withObjectName } from "@/lib/accessible-name";
 import { formatTimestamp } from "@/lib/format-time";
 import { useApplicationSession } from "../application-shell.js";
-import {
-	DirectoryReadAlert,
-	formatPerson,
-	useDirectoryNames,
-} from "../directory-names.js";
+import { DirectoryReadAlert, useDirectoryNames } from "../directory-names.js";
 import {
 	type AuditAgentOption,
 	AuditAgentPicker,
@@ -256,12 +252,6 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					</Link>
 				</nav>
 			)}
-			{!administrator && (
-				<p className="mb-5 break-words text-muted-foreground text-sm">
-					审计范围：当前用户 ·{" "}
-					{formatPerson({ displayName: session.user.displayName }).name}
-				</p>
-			)}
 			<form
 				ref={form}
 				onSubmit={apply}
@@ -379,21 +369,19 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 				</div>
 			</form>
 			<section className="py-5" aria-label="审计记录" aria-busy={busy}>
-				<div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-					<div>
-						{administrator && (
+				{/* 平台审计保留原 #400 管理员审计的「事件时间线 / 平台操作记录」区头（#1199 AC-1）；
+				    个人审计按设计筛选后直接是表格，不另设标题（V-08）。 */}
+				{administrator && (
+					<div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+						<div>
 							<p className="mb-1 text-muted-foreground text-sm">事件时间线</p>
-						)}
-						<h2 className="font-semibold text-base">
-							{administrator ? "平台操作记录" : "审计记录"}
-						</h2>
-					</div>
-					{administrator && (
+							<h2 className="font-semibold text-base">平台操作记录</h2>
+						</div>
 						<p className="text-muted-foreground text-sm">
 							不包含会话正文、凭证值或模型内部思考
 						</p>
-					)}
-				</div>
+					</div>
+				)}
 				<DirectoryReadAlert names={[userNames]} className="mb-4" />
 				{denied ? (
 					<Alert tone="danger" role="alert">

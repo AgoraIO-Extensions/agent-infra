@@ -1,4 +1,4 @@
-import { AlertCircle, RefreshCw, ShieldOff } from "lucide-react";
+import { AlertCircle, RefreshCw } from "lucide-react";
 import {
 	type FormEvent,
 	type Ref,
@@ -382,14 +382,19 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 				<div className="flex flex-wrap items-start justify-between gap-4">
 					<div>
 						<div className="flex flex-wrap items-center gap-2">
-							<h3 ref={title} tabIndex={-1} className="font-semibold text-lg">
+							{/* 设计 h3 17px / 650 / 1.4，说明与「应用 ID」13px（V-22）。 */}
+							<h3
+								ref={title}
+								tabIndex={-1}
+								className="application-section-title"
+							>
 								{application.name}
 							</h3>
 							<Badge tone={disabled ? "red" : "green"}>
 								{disabled ? "已停用" : "运行中"}
 							</Badge>
 						</div>
-						<p className="mt-2 text-muted-foreground text-sm">
+						<p className="mt-2 text-[13px] text-muted-foreground">
 							应用 ID：
 							<code className="[overflow-wrap:anywhere]">
 								{application.applicationId}
@@ -408,7 +413,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 										application.name,
 									)}
 								>
-									<ShieldOff aria-hidden="true" />
+									{/* 设计 outline「停用应用」不带图标（V-23）。 */}
 									{props.isDisabling ? "正在停用…" : "停用应用"}
 								</Button>
 							}
@@ -426,28 +431,23 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 						/>
 					) : null}
 				</div>
-				<dl className="mt-5 grid gap-3 text-sm sm:grid-cols-3">
-					<div>
-						<dt className="text-muted-foreground">负责人</dt>
-						<dd>
-							<DirectoryNameText
-								name={userNames.resolve(application.responsibleUserId)}
-								status={userNames.status}
-							/>
-						</dd>
-					</div>
-					<div>
-						<dt className="text-muted-foreground">创建时间</dt>
-						<dd>
-							<Timestamp value={application.createdAt} />
-						</dd>
-					</div>
-					<div>
-						<dt className="text-muted-foreground">更新时间</dt>
-						<dd>
-							<Timestamp value={application.updatedAt} />
-						</dd>
-					</div>
+				{/* 设计 dl.facts：标签列 150px 的两列事实行，13px（V-21）。 */}
+				<dl className="review-facts application-facts">
+					<dt>负责人</dt>
+					<dd>
+						<DirectoryNameText
+							name={userNames.resolve(application.responsibleUserId)}
+							status={userNames.status}
+						/>
+					</dd>
+					<dt>创建时间</dt>
+					<dd>
+						<Timestamp value={application.createdAt} />
+					</dd>
+					<dt>更新时间</dt>
+					<dd>
+						<Timestamp value={application.updatedAt} />
+					</dd>
 				</dl>
 			</div>
 			<DirectoryReadAlert names={[userNames]} />
@@ -471,8 +471,8 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 					onSubmit={submitCredential}
 				>
 					<div>
-						<h3 className="font-semibold text-base">应用凭证元数据</h3>
-						<p className="mt-1 text-muted-foreground text-sm">
+						<h3 className="application-section-title">应用凭证元数据</h3>
+						<p className="mt-2 text-[13px] text-muted-foreground">
 							当前接口只返回元数据和投递状态。请先由管理员授予 recipient
 							获取材料的权限。
 						</p>

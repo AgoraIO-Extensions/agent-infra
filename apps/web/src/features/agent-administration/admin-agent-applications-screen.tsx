@@ -138,14 +138,27 @@ function ApplicantLine({
 	if (!applicant) return null;
 	return (
 		<small>
-			申请人 · {formatPerson({ displayName: applicant.displayName }).name}
+			申请人 · <ApplicantName applicant={applicant} />
+		</small>
+	);
+}
+/** 申请人姓名；姓名缺失时附 ID 短形式，投影没有申请人时显示「未提供」。 */
+function ApplicantName({
+	applicant,
+}: {
+	applicant: AgentApplicationProjectionV2["applicant"];
+}) {
+	if (!applicant) return <>未提供</>;
+	return (
+		<>
+			{formatPerson({ displayName: applicant.displayName }).name}
 			{applicant.displayName.trim() ? null : (
 				<>
 					{" "}
 					<IdentifierText label="申请人 ID" value={applicant.userId} />
 				</>
 			)}
-		</small>
+		</>
 	);
 }
 function isSystemAdministrator(session: BrowserSessionProjectionV1) {
@@ -308,6 +321,11 @@ function ApplicationReview({
 							<dl className="review-facts">
 								<dt>申请</dt>
 								<dd>{application.name}</dd>
+								{/* 设计「申请人」行（V-01）：只取申请投影的 applicant，投影没有时写「未提供」。 */}
+								<dt>申请人</dt>
+								<dd>
+									<ApplicantName applicant={application.applicant} />
+								</dd>
 								<dt>说明</dt>
 								<dd>{application.description}</dd>
 								<dt>

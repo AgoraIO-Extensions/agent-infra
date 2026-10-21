@@ -140,6 +140,25 @@ describe("MySkillsScreen", () => {
 		expect(
 			screen.getByRole("link", { name: "Agent 绑定" }).getAttribute("href"),
 		).toBe("/my-agents?tab=owned");
+		// V-15 / V-16：设计顺序为「已安装」→「我创建的」，「Agent 绑定」在已安装区头，没有独立绑定区块。
+		expect(
+			screen
+				.getAllByRole("heading", { level: 2 })
+				.map((heading) => heading.textContent),
+		).toEqual(["已安装", "我创建的"]);
+		const installedHeading = screen.getByRole("heading", {
+			level: 2,
+			name: "已安装",
+		});
+		expect(
+			installedHeading
+				.closest("section")
+				?.contains(screen.getByRole("link", { name: "Agent 绑定" })),
+		).toBe(true);
+		expect(screen.queryByText("在 Agent 的 Owner 配置中绑定")).toBeNull();
+		expect(
+			screen.getByText("管理自己创建的 Skill 和已安装版本。"),
+		).toBeTruthy();
 		const rows = document.querySelectorAll("article.skill-row");
 		expect(rows).toHaveLength(2);
 		const release = rows[0] as HTMLElement;
@@ -223,7 +242,8 @@ describe("MySkillsScreen", () => {
 		] as HTMLElement[];
 		expect(
 			rows.map((row) => [
-				row.querySelector("h2")?.textContent,
+				// 「我创建的」是 h2 分区，行标题降为 h3（V-15）。
+				row.querySelector("h3")?.textContent,
 				row.querySelector('[data-slot="badge"]')?.textContent,
 				row.querySelector(".skill-row-meta strong")?.textContent,
 				within(row).getByRole("link", { name: /^详情/ }).getAttribute("href"),
@@ -420,7 +440,13 @@ describe("SkillEditorScreen", () => {
 	it("offers content editing and web publication only for an existing project (#2906)", async () => {
 		await renderWithRouter(<SkillEditorScreen actions={editorActions()} />);
 		expect(screen.queryByRole("heading", { name: "Skill 内容" })).toBeNull();
-		expect(screen.queryByRole("heading", { name: "发布版本" })).toBeNull();
+		// V-18 / V-19：新建时右栏只有说明，没有版本号、范围与发布按钮（项目内容属于已创建的项目）。
+		const newAside = screen.getByRole("complementary", {
+			name: "版本与发布范围",
+		});
+		expect(within(newAside).queryByLabelText("版本号")).toBeNull();
+		expect(within(newAside).queryByRole("radiogroup")).toBeNull();
+		expect(within(newAside).queryByRole("button")).toBeNull();
 		cleanup();
 		await renderWithRouter(
 			<SkillEditorScreen
@@ -442,7 +468,33 @@ describe("SkillEditorScreen", () => {
 			/>,
 		);
 		expect(screen.getByRole("heading", { name: "Skill 内容" })).toBeTruthy();
-		expect(screen.getByRole("heading", { name: "发布版本" })).toBeTruthy();
+		const aside = screen.getByRole("complementary", {
+			name: "版本与发布范围",
+		});
+		expect(within(aside).getByLabelText("版本号")).toBeTruthy();
+		// 四张范围单选卡，名称为范围文字，说明为审核规则；默认「仅自己」。
+		expect(
+			within(aside)
+				.getAllByRole("radio")
+				.map((radio) => radio.getAttribute("aria-checked")),
+		).toEqual(["true", "false", "false", "false"]);
+		for (const name of ["仅自己", "全体成员", "组织共享", "内部市场"])
+			expect(within(aside).getByRole("radio", { name })).toBeTruthy();
+		// 项目没有所属组织：「组织共享」不可选，并说明原因。
+		expect(
+			within(aside)
+				.getByRole("radio", { name: "组织共享" })
+				.hasAttribute("data-disabled"),
+		).toBe(true);
+		expect(
+			within(aside).getByText("项目没有所属组织，不能选择组织共享。"),
+		).toBeTruthy();
+		expect(
+			within(aside).getByRole("button", { name: "保存草稿" }),
+		).toBeTruthy();
+		expect(
+			within(aside).getByRole("button", { name: "发布固定版本" }),
+		).toBeTruthy();
 		expect(
 			(screen.getByLabelText("SKILL.md（任务说明）") as HTMLTextAreaElement)
 				.value,

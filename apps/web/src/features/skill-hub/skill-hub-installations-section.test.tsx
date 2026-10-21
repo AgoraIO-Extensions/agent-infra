@@ -65,7 +65,7 @@ async function renderWithRouter(content: ReactNode) {
 			path: "/",
 			component: () => content,
 		}),
-		...["/skills", "/skills/$skillVersionId"].map((path) =>
+		...["/skills", "/skills/$skillVersionId", "/my-agents"].map((path) =>
 			createRoute({ getParentRoute: () => root, path, component: () => null }),
 		),
 	];
@@ -94,9 +94,13 @@ describe("MyInstallationsSection (#2953)", () => {
 				}}
 			/>,
 		);
+		// V-15：区块标题为「已安装」，区头右侧是 outline「Agent 绑定」，直达「已创建」标签页。
 		expect(
-			screen.getByRole("heading", { level: 2, name: "我的安装" }),
+			screen.getByRole("heading", { level: 2, name: "已安装" }),
 		).toBeTruthy();
+		expect(
+			screen.getByRole("link", { name: "Agent 绑定" }).getAttribute("href"),
+		).toBe("/my-agents?tab=owned");
 		expect(rows().map((row) => row.querySelector("h3")?.textContent)).toEqual([
 			"release-notes",
 			"old",
@@ -112,7 +116,7 @@ describe("MyInstallationsSection (#2953)", () => {
 		expect(notes.textContent).toContain("内部市场");
 		expect(
 			within(notes)
-				.getByRole("link", { name: "详情：release-notes" })
+				.getByRole("link", { name: "查看：release-notes" })
 				.getAttribute("href"),
 		).toBe("/skills/release-notes-v1");
 		expect(within(old).getByText("已撤销")).toBeTruthy();
@@ -157,7 +161,7 @@ describe("MyInstallationsSection (#2953)", () => {
 		expect(rows().map((row) => row.querySelector("h3")?.textContent)).toEqual([
 			"old",
 		]);
-		expect(document.activeElement?.textContent).toBe("我的安装");
+		expect(document.activeElement?.textContent).toBe("已安装");
 		expect(await screen.findByText("已移出我的库")).toBeTruthy();
 	});
 
@@ -216,7 +220,7 @@ describe("MyInstallationsSection (#2953)", () => {
 		await renderWithRouter(
 			<MyInstallationsSection installations={{ kind: "loading" }} />,
 		);
-		expect(screen.getByText("正在读取我的安装…")).toBeTruthy();
+		expect(screen.getByText("正在读取已安装的 Skill…")).toBeTruthy();
 		cleanup();
 		await renderWithRouter(
 			<MyInstallationsSection
@@ -247,7 +251,9 @@ describe("MyInstallationsSection (#2953)", () => {
 				}}
 			/>,
 		);
-		expect(screen.getByText("当前账号没有读取我的安装的权限。")).toBeTruthy();
+		expect(
+			screen.getByText("当前账号没有读取已安装 Skill 的权限。"),
+		).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "重新读取" })).toBeNull();
 	});
 });

@@ -4,6 +4,8 @@ import {
 	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, type Route, test } from "@playwright/test";
+import { expectNoDuplicateControls } from "./page-health";
+import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
 // 本文件在 auth-desktop / auth-mobile project 中运行：构建配置了同源登录入口（NI-113）。
 const session = {
@@ -130,6 +132,7 @@ function resolvedColor(page: Page, value: string) {
 test("consumes the Platform login contract and keeps the form retryable", async ({
 	page,
 }) => {
+	const errors = trackPageErrors(page);
 	const api = await platform(page);
 	await page.goto("/agents");
 	const expectedOrigin = new URL(page.url()).origin;
@@ -141,10 +144,22 @@ test("consumes the Platform login contract and keeps the form retryable", async 
 		page.getByText("请输入公司账号。", { exact: true }),
 	).toBeVisible();
 	await expect(page.getByText("请输入密码。", { exact: true })).toBeVisible();
+	// V-24：login.html 的字段错误色为 --danger 78% 混入 --fg。
+	const loginErrorColor = await resolvedColor(
+		page,
+		"color-mix(in oklch, var(--danger) 78%, var(--foreground))",
+	);
+	await expect(page.getByText("请输入公司账号。", { exact: true })).toHaveCSS(
+		"color",
+		loginErrorColor,
+	);
 	await expect(account(page)).toHaveAttribute("aria-invalid", "true");
 	await expect(password(page)).toHaveAttribute("aria-invalid", "true");
 	await expect(account(page)).toBeFocused();
 	expect(api.loginBodies).toHaveLength(0);
+	// AC-2：登录页没有同名控件（密码显隐钮与「登录」不同名），没有控制台错误与横向溢出。
+	await expectNoDuplicateControls(page, "登录");
+	await expectCleanPage(page, errors);
 
 	await account(page).fill("alice");
 	await password(page).fill("wrong");
@@ -488,6 +503,14 @@ for (const scenario of [
 				];
 			}),
 		).toEqual(["12px", "10px", "13px", "22.1px"]);
+		// V-24：表单错误色与字段错误相同，为 --danger 78% 混入 --fg（login.html .form-error）。
+		await expect(alert).toHaveCSS(
+			"color",
+			await resolvedColor(
+				page,
+				"color-mix(in oklch, var(--danger) 78%, var(--foreground))",
+			),
+		);
 
 		await account(page).press("End");
 		await account(page).pressSequentially("x");

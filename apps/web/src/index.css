@@ -574,8 +574,9 @@
 	width: 19px;
 	height: 19px;
 }
+/* login.html 的字段与表单错误为 --danger 78% 混入 --fg（V-24），与登录页其余 color-mix 一致。 */
 .login-field-error {
-	color: var(--danger-ink);
+	color: color-mix(in oklch, var(--danger) 78%, var(--foreground));
 	font-size: 12px;
 	line-height: 1.6;
 }
@@ -585,7 +586,7 @@
 	border: 1px solid color-mix(in oklch, var(--danger) 35%, var(--border));
 	border-radius: 10px;
 	background: color-mix(in oklch, var(--danger) 5%, var(--surface));
-	color: var(--danger-ink);
+	color: color-mix(in oklch, var(--danger) 78%, var(--foreground));
 	font-size: 13px;
 	line-height: 1.7;
 }
@@ -2964,6 +2965,20 @@ body {
 .admin-agent-governance {
 	margin-top: 32px;
 }
+/* 设计 p.governance-status 是 .form-section 的直接子元素，计算值取 `.form-section > p`：
+   13px / 1.65、上距 5px（V-03）；操作行上距 16px、gap 12px。 */
+.governance-status {
+	margin-top: 5px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	line-height: 1.65;
+}
+.governance-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	margin-top: 16px;
+}
 /* 页头计数 chip 与 44px 刷新按钮同一行：chip 不随按钮拉高。 */
 .admin-agent-heading-tools {
 	align-items: center;
@@ -3375,6 +3390,7 @@ body {
 }
 .skill-editor-surface {
 	display: grid;
+	align-content: start;
 	gap: 0;
 	padding: 22px;
 }
@@ -3430,8 +3446,64 @@ body {
 	font-size: 12px;
 	line-height: 1.5;
 }
+/* 设计 .editor-layout（V-18）：左栏编辑，右栏「版本与发布范围」至少 260px；≤1023px 单栏。 */
+.skill-editor-layout {
+	display: grid;
+	grid-template-columns: minmax(0, 1.5fr) minmax(260px, 0.8fr);
+	gap: 22px;
+}
+.skill-editor-layout > * {
+	min-width: 0;
+}
+.skill-page .skill-editor-aside > h2 {
+	font: 600 16px / 1.5 var(--font-body);
+	letter-spacing: 0;
+}
+/* 设计右栏 .section：版本、说明与操作各段上距 32px。 */
+.skill-editor-aside .skill-editor-section,
+.skill-editor-aside .skill-editor-actions {
+	margin-top: 32px;
+}
+/* 设计 .scope-choice / .scope-option：两列范围卡，选中卡边框加深、底色为 surface-raised。 */
+.skill-scope-choice {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 8px;
+	margin-top: 12px;
+}
+.skill-page .skill-scope-option {
+	display: flex;
+	align-items: flex-start;
+	gap: 9px;
+	min-width: 0;
+	min-height: 60px;
+	padding: 12px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	cursor: pointer;
+}
+.skill-scope-option [data-slot="radio-group-item"] {
+	margin-top: 4px;
+}
+.skill-scope-option small {
+	display: block;
+	color: var(--muted-foreground);
+	font-size: 11px;
+	line-height: 1.65;
+}
+.skill-scope-option:has([data-slot="radio-group-item"][data-checked]) {
+	border-color: var(--muted-foreground);
+	background: var(--surface-raised);
+}
+.skill-page .skill-scope-option[data-disabled] {
+	cursor: not-allowed;
+	opacity: 0.55;
+}
+.skill-scope-help {
+	margin-top: 8px;
+}
 @media (max-width: 1023px) {
-	.skill-grid {
+	.skill-grid,
+	.skill-editor-layout {
 		grid-template-columns: minmax(0, 1fr);
 	}
 	.skill-row {
@@ -3476,6 +3548,12 @@ body {
 	.skill-summary,
 	.skill-editor-surface {
 		padding: 16px;
+	}
+	.skill-editor-layout {
+		gap: 16px;
+	}
+	.skill-scope-choice {
+		grid-template-columns: minmax(0, 1fr);
 	}
 }
 
@@ -3582,6 +3660,12 @@ body {
 }
 .credential-table tr:hover {
 	background: transparent;
+}
+/* 设计撤销确认 p.field-help（V-20）：权限行 11px / 1.65、--muted-ink。 */
+.credential-revoke-scopes {
+	color: var(--muted-ink);
+	font-size: 11px;
+	line-height: 1.65;
 }
 @media (max-width: 767px) {
 	.settings-surface,
@@ -4045,6 +4129,16 @@ body {
 	overflow-wrap: anywhere;
 }
 .operations-domain .review-facts {
+	margin-top: 15px;
+}
+/* 应用管理分区（设计 .credential-app-title h3 与 .detail-section h3，V-22）：17px / 650 / 1.4；
+   应用摘要 dl.facts 上距 15px（V-21）。 */
+.management-content .application-section-title {
+	font: 650 17px / 1.4 var(--font-body);
+	letter-spacing: 0;
+	overflow-wrap: anywhere;
+}
+.application-facts {
 	margin-top: 15px;
 }
 /* 设计 .page-note：列表或详情之后的补充说明。 */
@@ -4961,11 +5055,13 @@ body {
 		transform: rotate(360deg);
 	}
 }
+/* 设计 .field.directory-field 是 gap 7px 的 grid，.directory-help 自带 6px 上外边距，
+   输入框到提示行共 13px（V-02）；这里的容器不是 grid，直接写合计值。 */
 .directory-help {
 	display: flex;
 	justify-content: space-between;
 	gap: 8px;
-	margin-top: 6px;
+	margin-top: 13px;
 	color: var(--muted-ink);
 	font-size: 11px;
 	line-height: 1.45;
