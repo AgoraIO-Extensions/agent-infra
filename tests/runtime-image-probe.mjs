@@ -967,7 +967,35 @@ async function assertNoSensitiveDataOnDisk(directory) {
 	}
 }
 
+export function verifyRuntimeOrphanReaping() {
+	// Run as the image's non-root user under its real subreaper. Without it,
+	// the short-lived grandchild remains a zombie under a Node PID 1.
+	execFileSync(
+		"/usr/bin/tini",
+		[
+			"-s",
+			"--",
+			"/usr/local/bin/node",
+			"--disable-sigusr1",
+			"--input-type=module",
+			"-e",
+			`import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
+import {existsSync} from 'node:fs';
+import {setTimeout as delay} from 'node:timers/promises';
+const pid = Number(execFileSync('/bin/sh', ['-c', '/usr/bin/sleep 0.1 >/dev/null 2>&1 & echo $!'], {encoding:'utf8'}).trim());
+assert(Number.isSafeInteger(pid) && pid > 1);
+for (let attempt = 0; attempt < 100 && existsSync('/proc/' + pid); attempt++) await delay(50);
+assert(!existsSync('/proc/' + pid));`,
+		],
+		{ env: { PATH: "/usr/local/bin:/usr/bin:/bin" }, timeout: 10_000 },
+	);
+}
+
 async function runImageProbe() {
+	stage = "orphan-process-reaping";
+	verifyRuntimeOrphanReaping();
+	stage = "model-substitute";
 	runtimeRequest = createRuntimeProbeTransport({
 		serviceDnsName: runtimeServiceDnsName,
 	});

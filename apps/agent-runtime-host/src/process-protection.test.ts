@@ -154,7 +154,7 @@ describe("credential holder process protection", () => {
 		const poisoned = join(cwd, "poisoned");
 		await mkdir(poisoned);
 		const marker = join(cwd, "path-hijacked");
-		for (const command of ["node", "env", "grep"]) {
+		for (const command of ["node", "env", "grep", "tini"]) {
 			const executable = join(poisoned, command);
 			await writeFile(
 				executable,
@@ -176,6 +176,10 @@ describe("credential holder process protection", () => {
 		// The production image has the pinned path; a test host may not.
 		// Both must bypass injected executables, including npm_node_execpath.
 		const hasProductionNode = await access("/usr/local/bin/node").then(
+			() => true,
+			() => false,
+		);
+		const hasProductionInit = await access("/usr/bin/tini").then(
 			() => true,
 			() => false,
 		);
@@ -212,12 +216,14 @@ describe("credential holder process protection", () => {
 				),
 			}),
 		);
-		if (hasProductionNode) {
+		if (hasProductionNode && hasProductionInit) {
 			expect(defaultResult.code).toBeUndefined();
 			expect(defaultResult.stdout).toBe("application-entered\n");
 		} else {
 			expect([1, 127]).toContain(defaultResult.code);
-			expect(defaultResult.stderr).toContain("/usr/local/bin/node");
+			expect(defaultResult.stderr).toContain(
+				hasProductionInit ? "/usr/local/bin/node" : "/usr/bin/tini",
+			);
 		}
 		await expect(
 			execute(
