@@ -1486,6 +1486,16 @@ function operationKey(
 	]);
 }
 
+/** 判断 operationKey 编码的操作是否为 submit-turn（键格式见 operationKey）。 */
+function isSubmitTurnOperationKey(key: string) {
+	try {
+		const parsed: unknown = JSON.parse(key);
+		return Array.isArray(parsed) && parsed[3] === "submit-turn";
+	} catch {
+		return false;
+	}
+}
+
 function isCodexInterruptionCommand(
 	command: RuntimeDriverCommand,
 ): command is CodexInterruptionCommand {
@@ -13006,13 +13016,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							: [],
 				);
 				if (uncertain || preparedKeys.length > 0) {
-					// 受理不明标记在本代次内不会清除；不属于本进程在途调用的已准备操作
-					// 也不再有收敛路径。两者都使该原生会话永久无法受理新 Turn。
-					// 已准备操作仍属于本进程在途调用时只是暂时状态，保持可重试的不可用。
+					// 受理不明标记在本代次内不会清除；不属于本进程在途调用的 submit-turn
+					// 已准备操作也不再有收敛路径（重放只能得到 unknown）。两者都使该原生会话
+					// 永久无法受理新 Turn。已准备操作仍属于本进程在途调用，或是 stop 等可由
+					// 原请求重放收敛的中断类操作时，只是暂时状态，保持可重试的不可用。
 					const blocked =
 						uncertain ||
 						preparedKeys.some(
-							(preparedKey) => !this.inFlightOperations.has(preparedKey),
+							(preparedKey) =>
+								isSubmitTurnOperationKey(preparedKey) &&
+								!this.inFlightOperations.has(preparedKey),
 						);
 					// submit V1 的结果枚举不扩展，保持原有失败关闭。
 					if (!blocked || command.schemaVersion !== 2) unavailable();

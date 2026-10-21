@@ -10747,6 +10747,52 @@ describe("Codex Runtime Driver", () => {
 		await pending;
 	});
 
+	it("keeps a later V2 Turn retryable when only a stop is left prepared", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		const first = await firstDriver.execute(submitCommandV2());
+		await firstDriver.close();
+		// stop 等中断类操作可由原请求重放收敛，残留的已准备 stop 不构成永久阻塞。
+		const state = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		const stop = stopCommand(first.nativeSessionRef);
+		state.operations[
+			JSON.stringify([
+				stop.agentId,
+				stop.conversationId,
+				stop.sessionGeneration,
+				stop.kind,
+				stop.operationId,
+			])
+		] = {
+			schemaVersion: 1,
+			state: "prepared",
+			nativeSessionRef: first.nativeSessionRef,
+			executionId: stop.executionId,
+			turnId: stop.turnId,
+		} as StoredCodexDriverState["operations"][string];
+		await writeFile(path, JSON.stringify(state));
+		const recoveredBridge = new TestCodexBridge(firstBridge.nativeThreadId);
+		const recoveredDriver = await openDriver(path, recoveredBridge);
+		drivers.push(recoveredDriver);
+		const next = nextSubmitCommandV2();
+
+		await expect(recoveredDriver.execute(next)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+			retryable: true,
+		});
+		expect(await recoveredDriver.lookupOperation(next)).toEqual({
+			state: "missing",
+		});
+		expect(
+			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
+		).toEqual([]);
+	});
+
 	it.each(["rejected", "disconnected"] as const)(
 		"distinguishes an acknowledged Session restoration failure from %s transport recovery",
 		async (failure) => {
