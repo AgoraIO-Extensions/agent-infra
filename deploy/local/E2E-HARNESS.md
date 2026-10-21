@@ -99,7 +99,7 @@ Worker 只在启动时加载这些材料；配置、部署输入或信任 bundle
 注解并等待滚动完成。新 Agent 通过审批后，先执行 `runtime` 再等待或重试创建。
 
 标准 Codex 模板的 Runtime readiness 不再用镜像内 Codex 的 `model/list` 核对模型选项
-（[ADR-0029](../../docs/adr/0029-source-standard-template-models-from-relay.md)）。可选模型来自
+（[ADR-0030](../../docs/adr/0030-source-standard-template-models-from-relay.md)）。可选模型来自
 Agent 默认 Relay Key 的 `/models`，私有 API/Worker Model Catalog 的 `allowedModels` 只做收窄
 （`null` 不收窄）；推理档位固定为 `low`、`medium`、`high`，保存时用默认 Key 真实验证。私有配置里
 旧的 `codexModelProfiles` 与模板 `reasoningLevels` 会被忽略，见
