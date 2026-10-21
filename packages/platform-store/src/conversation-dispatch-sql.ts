@@ -208,6 +208,41 @@ async function failPendingSupplements(
 	}
 }
 
+/**
+ * Runtime 以 RUNTIME_SESSION_BLOCKED 明确拒绝本次 Turn 且会话转为不可用时（ADR-0029），
+ * 在同一事务内收敛绑定本次 Execution 的待处理工作：会话不可用后认领会因绑定不匹配返回
+ * stale，若不在此收敛，补充指令与 stop 会永久停在待处理。
+ * - 补充指令：Runtime 未接受初始 Turn，按“投递失败：原回复未开始”终结；
+ * - stop：目标 Execution 已失败且未被 Runtime 接受，stop 请求完成、outbox 置为成功终态。
+ */
+export async function settleSessionBlockedExecutionWork(
+	transaction: Transaction,
+	claim: ConversationDispatchClaimV1,
+) {
+	await failPendingSupplements(
+		transaction,
+		claim.conversationId,
+		claim.executionId,
+		claim.sessionGeneration,
+	);
+	await transaction`
+		update platform.conversation_stops
+		set status = 'completed', updated_at = clock_timestamp()
+		where execution_id = ${claim.executionId} and status = 'submitted'
+	`;
+	await transaction`
+		update platform.outbox_items
+		set status = 'succeeded', lease_owner = null, lease_expires_at = null,
+			updated_at = clock_timestamp()
+		where scope_type = 'conversation' and scope_id = ${claim.conversationId}
+			and id <> ${claim.itemId}
+			and operation = 'conversation.turn.stop.v1'
+			and status in ('pending', 'processing', 'retry_scheduled')
+			and payload->>'executionId' = ${claim.executionId}
+			and payload->>'sessionGeneration' = ${String(claim.sessionGeneration)}
+	`;
+}
+
 export async function cancelStoppedTurn(
 	transaction: Transaction,
 	outbox: OutboxRow,

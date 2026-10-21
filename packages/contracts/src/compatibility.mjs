@@ -1263,6 +1263,69 @@ function isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #3017 只给 submit V2 及以上的 Runtime 操作结果联合新增一个稳定脱敏、不可重试的 rejected
+// 成员 RUNTIME_SESSION_BLOCKED。成员内容逐字段固定，且只允许出现在 V2 结果组件和
+// V3/V4/V5 响应的 result 联合中；V1 结果不扩展，删除新增成员后须与基线逐字节一致。
+const runtimeSessionBlockedResult = {
+	additionalProperties: false,
+	properties: {
+		code: { const: "RUNTIME_SESSION_BLOCKED", type: "string" },
+		message: {
+			const: "Runtime session is blocked by an unconfirmed turn",
+			type: "string",
+		},
+		outcome: { const: "rejected", type: "string" },
+		retryable: { const: false, type: "boolean" },
+	},
+	required: ["outcome", "code", "message", "retryable"],
+	type: "object",
+};
+function runtimeSessionBlockedResultUnions(schemas) {
+	return [
+		schemas?.RuntimeOperationResultV2?.anyOf,
+		...[
+			"RuntimeOperationResponseV3",
+			"RuntimeOperationResponseV4",
+			"RuntimeOperationResponseV5",
+		].map((name) => schemas?.[name]?.properties?.result?.anyOf),
+	];
+}
+function isRuntimeSessionBlockedOpenApiAddition(previous, current) {
+	const isBlocked = (option) =>
+		option?.properties?.code?.const === "RUNTIME_SESSION_BLOCKED";
+	// 先在原文档上判断，避免对无关的大文档做整体复制。
+	if (
+		!runtimeSessionBlockedResultUnions(current.components?.schemas).some(
+			(union) => Array.isArray(union) && union.some(isBlocked),
+		)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	const previousUnions = runtimeSessionBlockedResultUnions(
+		previous.components?.schemas,
+	);
+	const currentUnions = runtimeSessionBlockedResultUnions(
+		normalized.components?.schemas,
+	);
+	let changed = false;
+	for (const [index, union] of currentUnions.entries()) {
+		if (!Array.isArray(union)) continue;
+		const added = union.filter(isBlocked);
+		if (added.length === 0) continue;
+		const before = previousUnions[index];
+		if (
+			added.length !== 1 ||
+			!sameValue(added[0], runtimeSessionBlockedResult) ||
+			!Array.isArray(before) ||
+			before.some(isBlocked)
+		)
+			return false;
+		union.splice(union.indexOf(added[0]), 1);
+		changed = true;
+	}
+	return changed && sameValue(previous, normalized);
+}
+
 // #504 adds versioned management routes. Preserve the published audit contract
 // exactly and admit only this immutable addition, as for Runtime recovery above.
 function withoutAgentOwnerScope(operation) {
@@ -5488,6 +5551,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) &&
+			!isRuntimeSessionBlockedOpenApiAddition(previous, current) &&
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeSkillHostReadOpenApiAddition(previous, current) &&
 			!isRuntimeSkillReadGrantCommandOpenApiAddition(previous, current) &&

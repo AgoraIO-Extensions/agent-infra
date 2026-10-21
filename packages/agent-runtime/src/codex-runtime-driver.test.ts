@@ -816,6 +816,7 @@ class TestCodexBridge {
 	private turnStartCount = 0;
 	private duplicateNextNativeTurnId = false;
 	private dropThreadStartResponse = false;
+	private holdThreadStartResponses = false;
 	private dropThreadResumeResponse = false;
 	private terminalStatusOnThreadResume?: Exclude<CodexTurnStatus, "inProgress">;
 	private dropInterruptResponse = false;
@@ -888,6 +889,8 @@ class TestCodexBridge {
 			return;
 		}
 		if (method === "thread/start") {
+			// 不响应：模拟原生会话启动仍在等待（同进程在途，或进程在此期间被杀）。
+			if (this.holdThreadStartResponses) return;
 			if (this.dropThreadStartResponse) {
 				await this.close();
 				return;
@@ -1020,6 +1023,10 @@ class TestCodexBridge {
 
 	dropNextThreadStartResponse() {
 		this.dropThreadStartResponse = true;
+	}
+
+	holdThreadStart() {
+		this.holdThreadStartResponses = true;
 	}
 
 	dropNextThreadResumeResponse() {
@@ -10459,23 +10466,37 @@ describe("Codex Runtime Driver", () => {
 				outcome: "unknown",
 				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
 			});
-			await expect(
-				recoveredDriver.execute(
-					submitCommandV2({
-						operationId: "execution-codex-after-v2-unknown",
-						executionId: "execution-codex-after-v2-unknown",
-						turnId: "turn-codex-after-v2-unknown",
-						nativeSessionRef: preparedOperation.nativeSessionRef,
-						selection: {
-							schemaVersion: 1,
-							modelOptionId: "model-option-primary",
-							reasoningLevel: "high",
-						},
-					}),
-				),
-			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+			// #3017：受理不明阻塞的原生会话以持久的 RUNTIME_SESSION_BLOCKED 拒绝新 V2
+			// Turn；原受理不明的操作与会话标记保持不变，且没有原生请求。
+			const blocked = await recoveredDriver.execute(
+				submitCommandV2({
+					operationId: "execution-codex-after-v2-unknown",
+					executionId: "execution-codex-after-v2-unknown",
+					turnId: "turn-codex-after-v2-unknown",
+					nativeSessionRef: preparedOperation.nativeSessionRef,
+					selection: {
+						schemaVersion: 1,
+						modelOptionId: "model-option-primary",
+						reasoningLevel: "high",
+					},
+				}),
+			);
+			expect(blocked.result).toEqual({
+				outcome: "rejected",
+				code: "RUNTIME_SESSION_BLOCKED",
+				message: "Runtime session is blocked by an unconfirmed turn",
+				retryable: false,
+			});
+			expect(blocked.nativeSessionRef).toBe(preparedOperation.nativeSessionRef);
 			expect(recoveredBridge.requests.slice(beforeRecovery)).toEqual([]);
-			expect(await readFile(path, "utf8")).toBe(durableBeforeRecovery);
+			const recoveredState = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			expect(recoveredState.sessions).toEqual(durableState.sessions);
+			expect(recoveredState.operations[preparedOperationKey]).toEqual(
+				preparedOperation,
+			);
+			expect(Object.keys(recoveredState.operations)).toHaveLength(2);
 		},
 	);
 
@@ -10517,6 +10538,259 @@ describe("Codex Runtime Driver", () => {
 		expect(
 			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
 		).toHaveLength(0);
+	});
+
+	// #3017：原生会话被受理不明的 Turn 阻塞后，同 Conversation 与 generation 的
+	// 新 submit V2 在任何原生副作用前得到持久的 RUNTIME_SESSION_BLOCKED。
+	const sessionBlockedResult = {
+		outcome: "rejected",
+		code: "RUNTIME_SESSION_BLOCKED",
+		message: "Runtime session is blocked by an unconfirmed turn",
+		retryable: false,
+	} as const;
+	const nativeSessionRequests = (bridge: TestCodexBridge) =>
+		bridge.requests.filter(({ method }) =>
+			["thread/start", "thread/resume", "turn/start"].includes(method),
+		);
+	const nextSubmitCommandV2 = () =>
+		submitCommandV2({
+			operationId: "execution-codex-next",
+			executionId: "execution-codex-next",
+			turnId: "turn-codex-next",
+		});
+
+	it.each(["start-response-lost", "process-killed-while-prepared"] as const)(
+		"durably rejects a later V2 Turn on a native Session blocked after %s",
+		async (failure) => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const first = submitCommandV2();
+			const failedBridge = new TestCodexBridge();
+			const failedDriver = await openDriver(path, failedBridge);
+			drivers.push(failedDriver);
+			if (failure === "start-response-lost") {
+				failedBridge.dropNextThreadStartResponse();
+				await expect(failedDriver.execute(first)).rejects.toMatchObject({
+					code: "RUNTIME_CODEX_UNAVAILABLE",
+				});
+			} else {
+				// 首条调用停在 thread/start，已准备操作已落盘；之后视为进程被杀，
+				// 不再推进该调用，由新的 Driver 实例重开同一份状态文件。
+				failedBridge.holdThreadStart();
+				void failedDriver.execute(first).catch(() => undefined);
+				await vi.waitFor(() =>
+					expect(
+						failedBridge.requests.some(
+							({ method }) => method === "thread/start",
+						),
+					).toBe(true),
+				);
+			}
+			const durable = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			const [firstKey, firstOperation] =
+				Object.entries(durable.operations)[0] ?? [];
+			if (!firstKey || !firstOperation?.nativeSessionRef)
+				throw new Error("missing prepared submit operation");
+			const nativeSessionRef = firstOperation.nativeSessionRef;
+			expect(Object.keys(durable.operations)).toHaveLength(1);
+			expect(firstOperation.state).toBe("prepared");
+			expect(
+				durable.sessions[nativeSessionRef]?.acceptanceUncertainOperationKey,
+			).toBe(failure === "start-response-lost" ? firstKey : undefined);
+
+			const recoveredBridge = new TestCodexBridge();
+			const recoveredDriver = await openDriver(path, recoveredBridge);
+			drivers.push(recoveredDriver);
+			expect(await recoveredDriver.lookupOperation(first)).toEqual({
+				state: "unknown",
+			});
+			const next = nextSubmitCommandV2();
+			expect(await recoveredDriver.lookupOperation(next)).toEqual({
+				state: "missing",
+			});
+			const blocked = await recoveredDriver.execute(next);
+			expect(blocked).toEqual({
+				schemaVersion: 2,
+				agentId: next.agentId,
+				conversationId: next.conversationId,
+				sessionGeneration: next.sessionGeneration,
+				kind: "submit-turn",
+				operationId: next.operationId,
+				nativeSessionRef,
+				result: sessionBlockedResult,
+			});
+			expect(nativeSessionRequests(recoveredBridge)).toEqual([]);
+			// 拒绝与该操作原子持久化；原受理不明的操作与会话标记保持不变。
+			const persisted = JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState;
+			expect(persisted.operations[firstKey]).toEqual(firstOperation);
+			expect(persisted.sessions[nativeSessionRef]).toEqual(
+				durable.sessions[nativeSessionRef],
+			);
+			expect(Object.keys(persisted.sessions)).toEqual([nativeSessionRef]);
+			expect(
+				Object.entries(persisted.operations).filter(
+					([key]) => key !== firstKey,
+				),
+			).toEqual([
+				[
+					expect.any(String),
+					expect.objectContaining({
+						state: "resolved",
+						nativeSessionRef,
+						record: expect.objectContaining({ result: sessionBlockedResult }),
+					}),
+				],
+			]);
+			await recoveredDriver.close();
+
+			const reopenedBridge = new TestCodexBridge();
+			const reopenedDriver = await openDriver(path, reopenedBridge);
+			drivers.push(reopenedDriver);
+			expect(await reopenedDriver.lookupOperation(next)).toEqual({
+				state: "found",
+				record: blocked,
+			});
+			expect(await reopenedDriver.execute(next)).toEqual(blocked);
+			// 原 Execution 自身的重放仍为 unknown，不被新拒绝覆盖。
+			expect(await reopenedDriver.lookupOperation(first)).toEqual({
+				state: "unknown",
+			});
+			expect((await reopenedDriver.execute(first)).result).toEqual({
+				outcome: "unknown",
+				code: "RUNTIME_ACCEPTANCE_UNKNOWN",
+				message: "Runtime command acceptance could not be confirmed",
+			});
+			// 显式携带同一原生会话引用的新 V2 命令同样被拒绝。
+			expect(
+				(
+					await reopenedDriver.execute(
+						submitCommandV2({
+							operationId: "execution-codex-bound-next",
+							executionId: "execution-codex-bound-next",
+							turnId: "turn-codex-bound-next",
+							nativeSessionRef,
+						}),
+					)
+				).result,
+			).toEqual(sessionBlockedResult);
+			expect(nativeSessionRequests(reopenedBridge)).toEqual([]);
+		},
+	);
+
+	it("keeps submit V1 fail-closed on a blocked native Session", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const failedBridge = new TestCodexBridge();
+		failedBridge.dropNextThreadStartResponse();
+		const failedDriver = await openDriver(path, failedBridge);
+		drivers.push(failedDriver);
+		await expect(failedDriver.execute(submitCommandV2())).rejects.toMatchObject(
+			{ code: "RUNTIME_CODEX_UNAVAILABLE" },
+		);
+		const recoveredBridge = new TestCodexBridge();
+		const recoveredDriver = await openDriver(path, recoveredBridge);
+		drivers.push(recoveredDriver);
+		const before = await readFile(path, "utf8");
+		const v1 = submitCommand({
+			operationId: "execution-codex-v1-next",
+			executionId: "execution-codex-v1-next",
+			turnId: "turn-codex-v1-next",
+		});
+
+		await expect(recoveredDriver.execute(v1)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+			retryable: true,
+		});
+		expect(await recoveredDriver.lookupOperation(v1)).toEqual({
+			state: "missing",
+		});
+		expect(await readFile(path, "utf8")).toBe(before);
+		expect(nativeSessionRequests(recoveredBridge)).toEqual([]);
+	});
+
+	it("keeps a later V2 Turn retryable while the prepared Turn is still in flight in this process", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		bridge.holdThreadStart();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const first = submitCommandV2();
+		const pending = driver.execute(first).catch((error: unknown) => error);
+		await vi.waitFor(() =>
+			expect(
+				bridge.requests.some(({ method }) => method === "thread/start"),
+			).toBe(true),
+		);
+		const before = await readFile(path, "utf8");
+		const next = nextSubmitCommandV2();
+
+		await expect(driver.execute(next)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+			retryable: true,
+		});
+		expect(await driver.lookupOperation(next)).toEqual({ state: "missing" });
+		expect(await readFile(path, "utf8")).toBe(before);
+		expect(
+			bridge.requests.filter(({ method }) => method === "thread/start"),
+		).toHaveLength(1);
+		expect(
+			bridge.requests.filter(({ method }) =>
+				["thread/resume", "turn/start"].includes(method),
+			),
+		).toEqual([]);
+		await driver.close();
+		await pending;
+	});
+
+	it("keeps a later V2 Turn retryable when only a stop is left prepared", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const firstBridge = new TestCodexBridge();
+		const firstDriver = await openDriver(path, firstBridge);
+		drivers.push(firstDriver);
+		const first = await firstDriver.execute(submitCommandV2());
+		await firstDriver.close();
+		// stop 等中断类操作可由原请求重放收敛，残留的已准备 stop 不构成永久阻塞。
+		const state = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		const stop = stopCommand(first.nativeSessionRef);
+		state.operations[
+			JSON.stringify([
+				stop.agentId,
+				stop.conversationId,
+				stop.sessionGeneration,
+				stop.kind,
+				stop.operationId,
+			])
+		] = {
+			schemaVersion: 1,
+			state: "prepared",
+			nativeSessionRef: first.nativeSessionRef,
+			executionId: stop.executionId,
+			turnId: stop.turnId,
+		} as StoredCodexDriverState["operations"][string];
+		await writeFile(path, JSON.stringify(state));
+		const recoveredBridge = new TestCodexBridge(firstBridge.nativeThreadId);
+		const recoveredDriver = await openDriver(path, recoveredBridge);
+		drivers.push(recoveredDriver);
+		const next = nextSubmitCommandV2();
+
+		await expect(recoveredDriver.execute(next)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_UNAVAILABLE",
+			retryable: true,
+		});
+		expect(await recoveredDriver.lookupOperation(next)).toEqual({
+			state: "missing",
+		});
+		expect(
+			recoveredBridge.requests.filter(({ method }) => method === "turn/start"),
+		).toEqual([]);
 	});
 
 	it.each(["rejected", "disconnected"] as const)(

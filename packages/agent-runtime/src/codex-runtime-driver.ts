@@ -1486,6 +1486,16 @@ function operationKey(
 	]);
 }
 
+/** 判断 operationKey 编码的操作是否为 submit-turn（键格式见 operationKey）。 */
+function isSubmitTurnOperationKey(key: string) {
+	try {
+		const parsed: unknown = JSON.parse(key);
+		return Array.isArray(parsed) && parsed[3] === "submit-turn";
+	} catch {
+		return false;
+	}
+}
+
 function isCodexInterruptionCommand(
 	command: RuntimeDriverCommand,
 ): command is CodexInterruptionCommand {
@@ -12997,15 +13007,53 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					protocolInvalid();
 				}
 				this.assertRuntimeRequirements(session);
-				if (
-					session.acceptanceUncertainOperationKey !== undefined ||
-					Object.values(state.operations).some(
-						(operation) =>
-							operation.nativeSessionRef === nativeSessionRef &&
-							operation.state === "prepared",
-					)
-				) {
-					unavailable();
+				const uncertain = session.acceptanceUncertainOperationKey !== undefined;
+				const preparedKeys = Object.entries(state.operations).flatMap(
+					([preparedKey, operation]) =>
+						operation.nativeSessionRef === nativeSessionRef &&
+						operation.state === "prepared"
+							? [preparedKey]
+							: [],
+				);
+				if (uncertain || preparedKeys.length > 0) {
+					// 受理不明标记在本代次内不会清除；不属于本进程在途调用的 submit-turn
+					// 已准备操作也不再有收敛路径（重放只能得到 unknown）。两者都使该原生会话
+					// 永久无法受理新 Turn。已准备操作仍属于本进程在途调用，或是 stop 等可由
+					// 原请求重放收敛的中断类操作时，只是暂时状态，保持可重试的不可用。
+					const blocked =
+						uncertain ||
+						preparedKeys.some(
+							(preparedKey) =>
+								isSubmitTurnOperationKey(preparedKey) &&
+								!this.inFlightOperations.has(preparedKey),
+						);
+					// submit V1 的结果枚举不扩展，保持原有失败关闭。
+					if (!blocked || command.schemaVersion !== 2) unavailable();
+					// 在任何原生副作用之前，把稳定脱敏的拒绝与该操作原子持久化；
+					// 同请求重放直接返回该结果，原受理不明的 Execution 不受影响。
+					const operation: CodexOperation = {
+						schemaVersion: command.schemaVersion,
+						state: "resolved",
+						nativeSessionRef,
+						configVersion: this.configVersion,
+						record: driverRecord(command, {
+							schemaVersion: command.schemaVersion,
+							agentId: command.agentId,
+							conversationId: command.conversationId,
+							sessionGeneration: command.sessionGeneration,
+							kind: command.kind,
+							operationId: command.operationId,
+							nativeSessionRef,
+							result: {
+								outcome: "rejected",
+								code: "RUNTIME_SESSION_BLOCKED",
+								message: "Runtime session is blocked by an unconfirmed turn",
+								retryable: false,
+							},
+						}),
+					};
+					state.operations[key] = operation;
+					return { operation, created: true };
 				}
 				if (session.activeExecutionId !== undefined) {
 					const activeExecution = ownRecordValue(

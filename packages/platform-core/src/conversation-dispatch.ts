@@ -15,6 +15,7 @@ import {
 } from "./conversation-dispatch-runtime.js";
 import {
 	acceptedTransition,
+	decideConversationDispatchRejectedTransitionV1,
 	executionTerminal,
 	heartbeat,
 	normalizedEvent,
@@ -1638,6 +1639,10 @@ export function createConversationDispatchUseCaseV1(
 						response.result.code === "RUNTIME_TURN_NOT_ACTIVE"
 						? "ORIGINAL_RESPONSE_ALREADY_FINISHED"
 						: response.result.code,
+					decideConversationDispatchRejectedTransitionV1({
+						operation: claim.operation,
+						code: response.result.code,
+					}),
 				);
 			}
 			if (

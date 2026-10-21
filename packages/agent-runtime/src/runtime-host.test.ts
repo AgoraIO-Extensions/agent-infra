@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -479,6 +479,85 @@ describe("RuntimeHost durable Session", () => {
 				requestId: "request-conformance-v2-unsupported-replay",
 			}),
 		).toEqual(rejected);
+		expect(await driver.sideEffectCount()).toBe(0);
+	});
+
+	// #3017：Driver 对受理不明阻塞的原生会话返回的拒绝与其他已持久 rejected 一样保存。
+	const sessionBlockedResult = {
+		outcome: "rejected",
+		code: "RUNTIME_SESSION_BLOCKED",
+		message: "Runtime session is blocked by an unconfirmed turn",
+		retryable: false,
+	} as const;
+	const sessionBlockedRecord = (
+		command: Parameters<RuntimeDriver["execute"]>[0],
+	) =>
+		({
+			schemaVersion: command.schemaVersion,
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			sessionGeneration: command.sessionGeneration,
+			kind: command.kind,
+			operationId: command.operationId,
+			nativeSessionRef: "native-session-blocked",
+			result: sessionBlockedResult,
+		}) as Awaited<ReturnType<RuntimeDriver["execute"]>>;
+
+	it("persists a session blocked V2 rejection and replays it without Driver execution", async () => {
+		const directory = await runtimeDirectory();
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const hostPath = join(directory, "host.json");
+		const runtimeHost = await host(
+			await FileRuntimeStore.open(hostPath),
+			driver,
+		);
+		const execute = vi
+			.spyOn(driver, "execute")
+			.mockImplementation(async (command) => sessionBlockedRecord(command));
+		const request = submitRequestV2();
+
+		const rejected = await runtimeHost.submitTurnV2(request);
+		expect(rejected).toEqual({
+			schemaVersion: 2,
+			hostSessionRef: expect.any(String),
+			operationId: request.executionId,
+			result: sessionBlockedResult,
+		});
+		const persisted = JSON.parse(await readFile(hostPath, "utf8")) as {
+			sessions: Record<
+				string,
+				{ operations: Record<string, { state: string; result?: unknown }> }
+			>;
+		};
+		expect(
+			persisted.sessions[rejected.hostSessionRef]?.operations[
+				rejected.operationId
+			],
+		).toMatchObject({ state: "resolved", result: sessionBlockedResult });
+		expect(
+			await runtimeHost.submitTurnV2({
+				...request,
+				requestId: "request-conformance-v2-blocked-replay",
+			}),
+		).toEqual(rejected);
+		expect(execute).toHaveBeenCalledTimes(1);
+		expect(await driver.sideEffectCount()).toBe(0);
+	});
+
+	it("keeps submit V1 fail-closed when the Driver reports a blocked session", async () => {
+		const directory = await runtimeDirectory();
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const runtimeHost = await host(
+			await FileRuntimeStore.open(join(directory, "host.json")),
+			driver,
+		);
+		vi.spyOn(driver, "execute").mockImplementation(async (command) =>
+			sessionBlockedRecord(command),
+		);
+
+		await expect(runtimeHost.submitTurn(submitRequest())).rejects.toMatchObject(
+			{ code: "RUNTIME_DRIVER_INVALID" },
+		);
 		expect(await driver.sideEffectCount()).toBe(0);
 	});
 

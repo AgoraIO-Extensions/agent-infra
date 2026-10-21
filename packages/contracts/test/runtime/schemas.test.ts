@@ -6,7 +6,15 @@ import {
 	RuntimeDriverLookupV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
+	RuntimeDriverSubmitTurnOperationRecordV2Schema,
 	RuntimeEventV1Schema,
+	RuntimeOperationResponseV1Schema,
+	RuntimeOperationResponseV2Schema,
+	RuntimeOperationResponseV3Schema,
+	RuntimeOperationResponseV4Schema,
+	RuntimeOperationResponseV5Schema,
+	RuntimeOperationResultV1Schema,
+	RuntimeOperationResultV2Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStopRequestV1Schema,
 	RuntimeSubmitTurnRequestV1Schema,
@@ -272,6 +280,86 @@ describe("RuntimeHost V2 model selection schemas", () => {
 				schemaVersion: 2,
 				input: { text: "synthetic-conformance-input", attachments: [] },
 				...(candidate === undefined ? {} : { selection: candidate }),
+			}).success,
+		).toBe(false);
+	});
+});
+
+// #3017：受理不明阻塞的原生会话以稳定脱敏、不可重试的 rejected 拒绝新 Turn；
+// 只有 submit V2 及以上的结果联合包含该成员，V1 结果保持不变。
+describe("RuntimeHost session blocked rejection", () => {
+	const blocked = {
+		outcome: "rejected",
+		code: "RUNTIME_SESSION_BLOCKED",
+		message: "Runtime session is blocked by an unconfirmed turn",
+		retryable: false,
+	} as const;
+	const response = {
+		hostSessionRef: "host-session-1",
+		operationId: "operation-1",
+		result: blocked,
+	} as const;
+
+	it("accepts the pinned result through V2 to V5 responses and the V2 Driver record", () => {
+		expect(RuntimeOperationResultV2Schema.parse(blocked)).toEqual(blocked);
+		for (const [schema, schemaVersion] of [
+			[RuntimeOperationResponseV2Schema, 2],
+			[RuntimeOperationResponseV3Schema, 3],
+			[RuntimeOperationResponseV4Schema, 4],
+			[RuntimeOperationResponseV5Schema, 5],
+		] as const) {
+			expect(schema.parse({ ...response, schemaVersion })).toEqual({
+				...response,
+				schemaVersion,
+			});
+		}
+		expect(
+			RuntimeDriverSubmitTurnOperationRecordV2Schema.safeParse({
+				schemaVersion: 2,
+				agentId: "agent-1",
+				conversationId: "conversation-1",
+				sessionGeneration: 1,
+				kind: "submit-turn",
+				operationId: "operation-1",
+				nativeSessionRef: "native-1",
+				result: blocked,
+			}).success,
+		).toBe(true);
+	});
+
+	it.each([
+		{ ...blocked, message: "Codex thread thread-secret is blocked" },
+		{ ...blocked, message: "" },
+		{ ...blocked, retryable: true },
+		{ outcome: blocked.outcome, code: blocked.code, message: blocked.message },
+		{ ...blocked, detail: "native-session-1" },
+		{ ...blocked, outcome: "unknown" },
+	])("rejects drifted session blocked result %j", (candidate) => {
+		expect(RuntimeOperationResultV2Schema.safeParse(candidate).success).toBe(
+			false,
+		);
+	});
+
+	it("keeps the submit V1 result closed", () => {
+		expect(RuntimeOperationResultV1Schema.safeParse(blocked).success).toBe(
+			false,
+		);
+		expect(
+			RuntimeOperationResponseV1Schema.safeParse({
+				...response,
+				schemaVersion: 1,
+			}).success,
+		).toBe(false);
+		expect(
+			RuntimeDriverOperationRecordV1Schema.safeParse({
+				schemaVersion: 1,
+				agentId: "agent-1",
+				conversationId: "conversation-1",
+				sessionGeneration: 1,
+				kind: "submit-turn",
+				operationId: "operation-1",
+				nativeSessionRef: "native-1",
+				result: blocked,
 			}).success,
 		).toBe(false);
 	});

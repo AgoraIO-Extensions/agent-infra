@@ -8,6 +8,7 @@ import {
 	type ConversationDispatchStorePortV1,
 	type ConversationRuntimeEvent,
 	ConversationRuntimeHostError,
+	type ConversationRuntimeOperationResultV1,
 	type ConversationRuntimeStatusV1,
 } from "./conversation-dispatch-types.js";
 import type {
@@ -193,12 +194,41 @@ export function retryTransition(claim: ConversationDispatchClaimV1) {
 	});
 }
 
-export function rejectedTransition(claim: ConversationDispatchClaimV1) {
+export function rejectedTransition(
+	claim: Pick<ConversationDispatchClaimV1, "operation">,
+) {
 	return claim.operation === "conversation.turn.submit.v1" ||
 		claim.operation === "conversation.turn.regenerate.v1" ||
 		claim.operation === "conversation.native-capability.invoke.v1"
 		? transitionForStatus("failed")
 		: {};
+}
+
+type ConversationRuntimeRejectedCodeV1 = Extract<
+	ConversationRuntimeOperationResultV1,
+	{ readonly outcome: "rejected" }
+>["code"];
+
+/**
+ * Runtime 已持久 rejected 结果对应的状态迁移。
+ *
+ * `RUNTIME_SESSION_BLOCKED`（ADR-0029）表示原生会话被受理不明的 Turn 阻塞：本次 Execution
+ * 收敛为 failed，同一 Dispatch 事务把 Conversation 标记为会话不可用。它不是 Session 恢复失败的
+ * 证明，因此不提升 sessionGeneration、不创建 generation tombstone。只有产生 Execution 的
+ * submit/regenerate/native-capability.invoke 会改变 Conversation；supplement/stop 等控制操作
+ * 沿用普通 rejected 迁移，不改变会话状态。
+ */
+export function decideConversationDispatchRejectedTransitionV1(input: {
+	readonly operation: ConversationDispatchOperationV1;
+	readonly code: ConversationRuntimeRejectedCodeV1;
+}): ConversationDispatchStateTransitionV1 {
+	const transition = rejectedTransition(input);
+	if (
+		input.code !== "RUNTIME_SESSION_BLOCKED" ||
+		transition.executionStatus !== "failed"
+	)
+		return transition;
+	return { executionStatus: "failed", conversationStatus: "unavailable" };
 }
 
 export function runtimeFailure(error: unknown) {

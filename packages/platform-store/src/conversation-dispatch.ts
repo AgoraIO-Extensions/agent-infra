@@ -48,6 +48,7 @@ import {
 	readStop,
 	renewLease,
 	retryOutbox,
+	settleSessionBlockedExecutionWork,
 	transactionResult,
 } from "./conversation-dispatch-sql.js";
 import {
@@ -1412,6 +1413,14 @@ export class PostgresConversationDispatchStoreV1
 			const state = await ownedState(transaction, input.claim, true);
 			if (!state) throw new StaleDispatchLease();
 			await applyTransition(transaction, state, input.claim, input.transition);
+			// 只有 RUNTIME_SESSION_BLOCKED 的 rejected 收敛会经 finish 把会话置为不可用（ADR-0029）；
+			// 代次隔离走 confirmGenerationIsolation，不经过这里。两个条件同时满足才收敛，避免其他
+			// 路径将来复用 unavailable 迁移时误终结本次 Execution 的补充指令与 stop。
+			if (
+				input.errorCode === "RUNTIME_SESSION_BLOCKED" &&
+				input.transition.conversationStatus === "unavailable"
+			)
+				await settleSessionBlockedExecutionWork(transaction, input.claim);
 			if (
 				input.claim.operation === "conversation.turn.stop.v1" &&
 				input.status === "succeeded" &&

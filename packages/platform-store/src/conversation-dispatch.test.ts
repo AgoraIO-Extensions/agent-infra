@@ -3765,6 +3765,211 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	describe("Runtime session blocked by an unconfirmed Turn (ADR-0029)", () => {
+		const blockedTransition = {
+			executionStatus: "failed",
+			conversationStatus: "unavailable",
+		} as const;
+
+		async function conversationState(conversationId: string) {
+			const [row] = await client<
+				{
+					status: string;
+					session_generation: number;
+					allocation_generation: number;
+					allocation_status: string;
+					tombstones: number;
+				}[]
+			>`
+				select c.status, c.session_generation::int,
+					a.session_generation::int as allocation_generation,
+					a.status as allocation_status,
+					(select count(*)::int from platform.conversation_generation_tombstones t
+						where t.conversation_id = c.id) as tombstones
+				from platform.conversations c
+				join platform.session_sandbox_allocations a on a.conversation_id = c.id
+				where c.id = ${conversationId}
+			`;
+			return row;
+		}
+
+		async function expectBlockedOutcome(
+			work: Awaited<ReturnType<typeof seed>>,
+			sibling: Awaited<ReturnType<typeof seed>>,
+			before: Awaited<ReturnType<typeof conversationState>>,
+			siblingBefore: Awaited<ReturnType<typeof conversationState>>,
+		) {
+			expect(await dispatchState(work)).toMatchObject({
+				status: "failed",
+				execution_status: "failed",
+			});
+			// 会话不可用，但不提升代次、不写 tombstone、不改动 Sandbox 绑定。
+			expect(await conversationState(work.conversationId)).toEqual({
+				...before,
+				status: "unavailable",
+				session_generation: 1,
+				tombstones: 0,
+			});
+			const events = await client`
+				select event_type, event_payload, source, runtime_cursor
+				from platform.conversation_events
+				where execution_id = ${work.executionId}
+			`;
+			expect(events).toEqual([
+				{
+					event_type: "execution.status",
+					event_payload: { type: "execution.status", status: "failed" },
+					source: "platform",
+					runtime_cursor: null,
+				},
+			]);
+			const [attempt] = await client`
+				select payload->>'errorCode' as error_code from platform.persisted_events
+				where stream_id = ${`outbox:${work.itemId}`} and event_type = 'outbox.failed'
+			`;
+			expect(attempt?.error_code).toBe("RUNTIME_SESSION_BLOCKED");
+			// 同 Agent 的其他 Conversation 不受影响。
+			expect(await conversationState(sibling.conversationId)).toEqual(
+				siblingBefore,
+			);
+			expect(await dispatchState(sibling)).toMatchObject({
+				status: "pending",
+				execution_status: "submitted",
+			});
+		}
+
+		it("fails the Execution and marks only its Conversation unavailable in one finish", async () => {
+			const work = await seed();
+			const sibling = await seed();
+			const before = await conversationState(work.conversationId);
+			const siblingBefore = await conversationState(sibling.conversationId);
+			const { store, decision } = await claim(work.itemId, "blocked-worker");
+			try {
+				if (decision.outcome !== "claimed")
+					throw new Error(`Expected claim: ${decision.outcome}`);
+				const owned = decision.claim;
+				expect(
+					await store.prepareRuntimeDispatch({
+						claim: owned,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				expect(
+					await store.finish({
+						claim: owned,
+						status: "failed",
+						transition: blockedTransition,
+						errorCode: "RUNTIME_SESSION_BLOCKED",
+					}),
+				).toBe(true);
+				await expectBlockedOutcome(work, sibling, before, siblingBefore);
+				// 已关闭的认领不能再次提交终态。
+				expect(
+					await store.finish({
+						claim: owned,
+						status: "failed",
+						transition: blockedTransition,
+						errorCode: "RUNTIME_SESSION_BLOCKED",
+					}),
+				).toBe(false);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("settles the blocked Execution's pending supplement and stop in the same finish", async () => {
+			const work = await seed();
+			const { store, decision } = await claim(work.itemId, "blocked-worker");
+			try {
+				if (decision.outcome !== "claimed")
+					throw new Error(`Expected claim: ${decision.outcome}`);
+				const owned = decision.claim;
+				expect(
+					await store.prepareRuntimeDispatch({
+						claim: owned,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				// 被拒绝的 Turn 投递期间到达的补充指令与 stop。
+				const messageId = await seedSupplement(work);
+				await seedStop(work);
+				expect(
+					await store.finish({
+						claim: owned,
+						status: "failed",
+						transition: blockedTransition,
+						errorCode: "RUNTIME_SESSION_BLOCKED",
+					}),
+				).toBe(true);
+				const outboxes = await client<{ id: string; status: string }[]>`
+					select id, status from platform.outbox_items
+					where scope_id = ${work.conversationId}
+						and operation in ('conversation.turn.supplement.v1', 'conversation.turn.stop.v1')
+					order by id
+				`;
+				expect(outboxes).toEqual([
+					{
+						id: `conversation:stop:${work.stopRequestId}`,
+						status: "succeeded",
+					},
+					{ id: `conversation:supplement:${messageId}`, status: "failed" },
+				]);
+				const [message] = await client<
+					{ status: string; failure_code: string | null }[]
+				>`select status, failure_code from platform.conversation_messages where message_id = ${messageId}`;
+				expect(message).toEqual({
+					status: "failed",
+					failure_code: "ORIGINAL_RESPONSE_NOT_STARTED",
+				});
+				const [stop] = await client<{ status: string }[]>`
+					select status from platform.conversation_stops where execution_id = ${work.executionId}
+				`;
+				expect(stop?.status).toBe("completed");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("converges a persisted V2 blocked rejection through Core without isolation", async () => {
+			const work = await seed();
+			const sibling = await seed();
+			const before = await conversationState(work.conversationId);
+			const siblingBefore = await conversationState(sibling.conversationId);
+			const store = open();
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.setResult({
+				outcome: "rejected",
+				code: "RUNTIME_SESSION_BLOCKED",
+				message: "Runtime session is blocked by an unconfirmed turn",
+				retryable: false,
+			});
+			try {
+				const decision = await createConversationDispatchUseCaseV1(
+					{
+						store,
+						runtimeHost,
+						authorization: isolationAuthorization,
+						events: {
+							async persist() {
+								throw new Error("A rejected Turn has no runtime events");
+							},
+						},
+					},
+					{ retryDelayMs: 0 },
+				).dispatch({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "blocked-core-worker",
+				});
+				expect(decision).toEqual({ schemaVersion: 1, outcome: "rejected" });
+				expect(runtimeHost.sideEffectCount()).toBe(1);
+				await expectBlockedOutcome(work, sibling, before, siblingBefore);
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
 	it("atomically admits verified Agent capacity across Workers and retains it through takeover and failed terminal commit", async () => {
 		await seedCapacityAgent("agent-dispatch", 1);
 		const first = await seed();

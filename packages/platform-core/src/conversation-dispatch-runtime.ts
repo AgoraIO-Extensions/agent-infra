@@ -188,9 +188,16 @@ export function parseRuntimeResponse(
 			expectedVersion === 2 &&
 			resultInput.code === "RUNTIME_MODEL_SELECTION_UNSUPPORTED" &&
 			resultInput.message === "Runtime model selection is unsupported";
+		// 原生会话被受理不明的 Turn 阻塞（ADR-0029）：只有 submit V2 及以上的结果枚举包含该成员，
+		// V1 响应出现该码仍失败关闭。
+		const sessionBlocked =
+			expectedVersion === 2 &&
+			resultInput.code === "RUNTIME_SESSION_BLOCKED" &&
+			resultInput.message ===
+				"Runtime session is blocked by an unconfirmed turn";
 		if (
 			resultInput.status !== undefined ||
-			(!turnEnded && !unsupportedSelection) ||
+			(!turnEnded && !unsupportedSelection && !sessionBlocked) ||
 			resultInput.retryable !== false
 		) {
 			return unavailable();
@@ -199,10 +206,12 @@ export function parseRuntimeResponse(
 			outcome: "rejected",
 			code: resultInput.code as
 				| "RUNTIME_TURN_NOT_ACTIVE"
-				| "RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+				| "RUNTIME_MODEL_SELECTION_UNSUPPORTED"
+				| "RUNTIME_SESSION_BLOCKED",
 			message: resultInput.message as
 				| "Runtime turn is no longer active"
-				| "Runtime model selection is unsupported",
+				| "Runtime model selection is unsupported"
+				| "Runtime session is blocked by an unconfirmed turn",
 			retryable: false,
 		};
 	} else if (resultInput.outcome === "unknown") {

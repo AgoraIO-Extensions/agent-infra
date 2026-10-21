@@ -429,7 +429,9 @@ function operationResponse(
 	}
 	if (
 		result.outcome === "rejected" &&
-		result.code === "RUNTIME_MODEL_SELECTION_UNSUPPORTED"
+		(result.code === "RUNTIME_MODEL_SELECTION_UNSUPPORTED" ||
+			// submit V1 的结果枚举不扩展：会话阻塞拒绝对 V1 调用方保持失败关闭。
+			result.code === "RUNTIME_SESSION_BLOCKED")
 	) {
 		driverInvalid();
 	}

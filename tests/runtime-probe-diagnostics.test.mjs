@@ -45,6 +45,23 @@ test("probe diagnostic only retains bounded permitted fields", () => {
 		),
 		'{"status":"failed"}',
 	);
+	// #3017：会话阻塞拒绝码稳定且脱敏，可以作为探针诊断保留。
+	assert.deepEqual(
+		JSON.parse(
+			safeRuntimeProbeFailure(
+				JSON.stringify({
+					status: "failed",
+					stage: "default-submit",
+					responseCode: "RUNTIME_SESSION_BLOCKED",
+				}),
+			),
+		),
+		{
+			status: "failed",
+			stage: "default-submit",
+			responseCode: "RUNTIME_SESSION_BLOCKED",
+		},
+	);
 });
 test("probe diagnostic rejects malformed, multiple, oversized or extended records", () => {
 	for (const text of [
