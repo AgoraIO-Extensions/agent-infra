@@ -1743,6 +1743,11 @@ secret、PKCE verifier、access/refresh Token，也不兑换授权码、刷新�
 接受 Agent、模型或请求覆盖这些字段；issuer、registration endpoint、回调 origin、resource
 和 scope 必须与已批准 profile 完全匹配。注册响应只保留非秘密 `client_id` 及部署合同引用；
 缺少可信的 Consumer/Instance 映射时保持安装不可用，不能把本地 client_id 猜作服务端实例。
+DCR 响应还必须逐字段校验 `client_id`、返回的 `redirect_uris`、grant/response 类型、
+scope、`token_endpoint_auth_method` 和 token endpoint 与批准 metadata 完全一致；未知字段、
+服务端 secret、状态不明或无法建立可信 Consumer/Instance 映射都拒绝安装，并清除本地注册
+结果。注册成功、Consumer 可见或本机登录不构成连接器授权，也不允许自动回退到其他 Consumer
+或 Portable PAT。
 
 **Loopback callback binding。** 路径由受保护 Runtime 使用高熵随机值生成，绝不接受 Agent、
 模型、请求或 Connection 回调中的路径覆盖；它与原 principal、Agent、安装/Execution、

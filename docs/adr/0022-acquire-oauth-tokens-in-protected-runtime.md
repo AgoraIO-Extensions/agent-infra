@@ -33,7 +33,11 @@ Runtime 安装供应，也不替代原主体/Agent 映射。直接复制 PAT、�
 ## 取舍
 
 动态注册增加每个 Agent 独立 client 的生命周期与清理责任；注册只建立 OAuth client 入口，
-不创建 Grant 或替代用户确认。授权码转交通道需要共同评审 Platform 与 Runtime 接缝，并排除访问日志、持久队列和
+不创建 Grant 或替代用户确认。Runtime 必须校验 DCR 响应的 `client_id`、redirect URI、
+grant/response 类型、scope、token endpoint authentication method 与批准 metadata 完全一致，
+拒绝未知字段或服务端 secret。卸载、重装、Agent 删除、注册失败重试必须执行幂等注销
+（若端点支持）、Token 撤销和本地凭据擦除；清理未完成时安装保持不可用并进入可观测的
+待清理状态，不以新 client 绕过旧状态。授权码转交通道需要共同评审 Platform 与 Runtime 接缝，并排除访问日志、持久队列和
 自动重试；它让 access/refresh Token 的领取完全留在原 Runtime 秘密边界，避免建立另一个
 Token 服务或将 PKCE verifier 放进控制面。该通道尚未实现，部署回跳地址也须明确批准。
 
