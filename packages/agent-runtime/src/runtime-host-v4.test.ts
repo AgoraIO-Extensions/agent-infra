@@ -395,6 +395,53 @@ it("binds the first durable native receipt and returns the original Key before s
 	);
 });
 
+// #3017：受理不明阻塞会话的拒绝经 V4 持久化；同请求重放（含 Host 重启后）
+// 直接返回持久结果，不再调用 Driver 执行。
+it("persists a session blocked V4 rejection and replays it without Driver execution", async () => {
+	const f = await setup();
+	const blocked = {
+		outcome: "rejected",
+		code: "RUNTIME_SESSION_BLOCKED",
+		message: "Runtime session is blocked by an unconfirmed turn",
+		retryable: false,
+	} as const;
+	const execute = vi.spyOn(f.driver, "execute").mockImplementation(
+		async (command) =>
+			({
+				schemaVersion: command.schemaVersion,
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: command.sessionGeneration,
+				kind: command.kind,
+				operationId: command.operationId,
+				nativeSessionRef: "native-session-blocked",
+				result: blocked,
+			}) as Awaited<ReturnType<RuntimeDriver["execute"]>>,
+	);
+
+	const rejected = await f.host.submitTurnV4(f.transport);
+	expect(rejected).toEqual({
+		schemaVersion: 4,
+		hostSessionRef: expect.any(String),
+		operationId: "execution-1",
+		result: blocked,
+	});
+	const persisted = JSON.parse(await readFile(f.path, "utf8")) as {
+		sessions: Record<
+			string,
+			{ operations: Record<string, { state: string; result?: unknown }> }
+		>;
+	};
+	expect(
+		persisted.sessions[rejected.hostSessionRef]?.operations["execution-1"],
+	).toMatchObject({ state: "resolved", result: blocked });
+	expect(await f.host.submitTurnV4(f.transport)).toEqual(rejected);
+	const reopened = await f.reopen();
+	expect(await reopened.submitTurnV4(f.transport)).toEqual(rejected);
+	expect(execute).toHaveBeenCalledTimes(1);
+	expect(await f.driver.sideEffectCount()).toBe(0);
+});
+
 it("executes an admitted V4 native command through the Driver seam without text", async () => {
 	const f = await setup();
 	const submitted = await f.host.submitTurnV4(f.transport);

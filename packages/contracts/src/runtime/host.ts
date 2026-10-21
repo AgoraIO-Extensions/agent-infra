@@ -174,6 +174,13 @@ export const RuntimeOperationResultV2Schema = z.union([
 		message: z.literal("Runtime model selection is unsupported"),
 		retryable: z.literal(false),
 	}),
+	// 原生会话已被受理不明的 Turn 阻塞：稳定脱敏、不可重试，仅 submit V2 及以上可返回。
+	z.strictObject({
+		outcome: z.literal("rejected"),
+		code: z.literal("RUNTIME_SESSION_BLOCKED"),
+		message: z.literal("Runtime session is blocked by an unconfirmed turn"),
+		retryable: z.literal(false),
+	}),
 	z.strictObject({
 		outcome: z.literal("unknown"),
 		code: z.literal("RUNTIME_ACCEPTANCE_UNKNOWN"),

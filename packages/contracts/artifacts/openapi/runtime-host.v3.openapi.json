@@ -2942,6 +2942,34 @@
                 "additionalProperties": false,
                 "properties": {
                   "code": {
+                    "const": "RUNTIME_SESSION_BLOCKED",
+                    "type": "string"
+                  },
+                  "message": {
+                    "const": "Runtime session is blocked by an unconfirmed turn",
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "const": "rejected",
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "const": false,
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "outcome",
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
                     "const": "RUNTIME_ACCEPTANCE_UNKNOWN",
                     "type": "string"
                   },
