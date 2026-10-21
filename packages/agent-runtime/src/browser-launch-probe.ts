@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -15,6 +16,17 @@ export async function probeChromiumLaunchV1() {
 	const root = await mkdtemp(join(tmpdir(), "agent-infra-browser-probe-"));
 	const html =
 		"<title>Browser supply probe</title><button onclick=\"this.textContent='Clicked';localStorage.setItem('probe-state','retained')\">Continue</button><output aria-label=\"Profile state\"></output><script>document.querySelector('output').textContent=localStorage.getItem('probe-state')||'empty'</script>";
+	const server = createServer((_request, response) => {
+		response.writeHead(200, { "content-type": "text/html" });
+		response.end(html);
+	});
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", resolve);
+	});
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("server");
+	const url = `http://127.0.0.1:${address.port}/`;
 	const binding = {
 		agentId: "controlled-probe-agent",
 		conversationId: "controlled-probe-conversation",
@@ -32,7 +44,7 @@ export async function probeChromiumLaunchV1() {
 		status: "available",
 		operations: ["observe", "interact"],
 		policy: {
-			allowedOrigins: ["http://browser-probe.invalid/"],
+			allowedOrigins: [url],
 			maxContexts: 1,
 			maxTabs: 1,
 			maxPages: 1,
@@ -66,7 +78,6 @@ export async function probeChromiumLaunchV1() {
 			operations: ["observe", "interact"],
 		},
 	};
-	const url = "http://browser-probe.invalid/";
 	const session = createChromiumBrowserSessionControllerV1({
 		sandboxRoot: root,
 		binding,
@@ -143,6 +154,7 @@ export async function probeChromiumLaunchV1() {
 		try {
 			await session.close();
 		} finally {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
 			await rm(root, { recursive: true, force: true });
 		}
 	}
