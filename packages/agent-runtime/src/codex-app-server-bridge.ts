@@ -219,7 +219,8 @@ export const CODEX_MODEL_ONLY_CONFIG = Object.freeze({
 	"features.hooks": false,
 	"features.memories": false,
 	"features.shell_snapshot": false,
-	// 目录替换固定 Codex 的内置模型列表：内置条目原样保留，另含经评审的追加模型。
+	// 固定 Codex 只用镜像内的上游内置目录，不向模型端点请求 /models；未内置的模型
+	// 使用 Codex 默认回退元数据（ADR-0029）。
 	model_catalog_json: CODEX_MODEL_CATALOG_PATH,
 });
 
