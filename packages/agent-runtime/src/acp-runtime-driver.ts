@@ -362,6 +362,9 @@ async function probeAcpReadiness(
 	const cwd = join(directory, "workspace");
 	await mkdir(cwd, { recursive: true, mode: 0o700 });
 	let session: Awaited<ReturnType<typeof openAcpSession>> | undefined;
+	const denyModelAccess = async (): Promise<never> => {
+		throw new Error("RUNTIME_READINESS_UNAVAILABLE");
+	};
 	try {
 		const probe = (async () => {
 			const selection: RuntimeSelectionV1 = {
@@ -370,7 +373,12 @@ async function probeAcpReadiness(
 				reasoningLevel: options.defaultReasoningLevel,
 			};
 			session = await openAcpSession({
-				launch: await options.launch(directory, selection, async () => {}),
+				launch: await options.launch(
+					directory,
+					selection,
+					denyModelAccess,
+					denyModelAccess,
+				),
 				directory,
 				cwd,
 				update: async () => {},

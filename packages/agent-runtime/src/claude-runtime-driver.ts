@@ -4,12 +4,15 @@ import {
 	chmod,
 	lstat,
 	mkdir,
+	mkdtemp,
 	readdir,
 	readFile,
 	realpath,
+	rm,
 	unlink,
 	writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import {
@@ -600,7 +603,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	private readonly handles = new Map<string, Handle>();
 	private readonly waiters = new Map<string, Set<() => void>>();
 	private closed = false;
-	private readonly pending = new Set<Promise<RuntimeDriverOperationRecord>>();
+	private readonly pending = new Set<Promise<unknown>>();
+	private readonly readinessAbort = new AbortController();
 	private closing?: Promise<void>;
 	async validateExternalAction(
 		action: import("./driver.js").RuntimeExternalActionAuthorization,
@@ -2386,6 +2390,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	close() {
 		this.closing ??= (async () => {
 			this.closed = true;
+			this.readinessAbort.abort();
 			await Promise.all(
 				[...this.handles.keys()].map((ref) => this.retire(ref)),
 			);
@@ -2634,6 +2639,93 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			);
 		});
 		for (const wake of this.waiters.get(session.ref) ?? []) wake();
+	}
+
+	probeReadiness(signal: AbortSignal) {
+		const pending = this.probeNativeReadiness(
+			AbortSignal.any([signal, this.readinessAbort.signal]),
+		);
+		this.pending.add(pending);
+		void pending.then(
+			() => this.pending.delete(pending),
+			() => this.pending.delete(pending),
+		);
+		return pending;
+	}
+
+	private async probeNativeReadiness(signal: AbortSignal) {
+		if (this.closed) unavailable();
+		signal.throwIfAborted();
+		const option =
+			this.options.modelOptions.find(
+				(option) => option.modelOptionId === this.options.defaultModelOptionId,
+			) ?? unavailable();
+		const directory = await mkdtemp(
+			join(tmpdir(), "agent-infra-claude-readiness-"),
+		);
+		let transport:
+			| Awaited<ReturnType<typeof openRuntimeMessagesTransport>>
+			| undefined;
+		let native: ReturnType<typeof claudeQuery> | undefined;
+		const denyModelAccess = async (): Promise<never> => {
+			throw new Error("RUNTIME_READINESS_UNAVAILABLE");
+		};
+		try {
+			await Promise.all(
+				["home", "config", "workspace", "tmp"].map((name) =>
+					mkdir(join(directory, name), { mode: 0o700 }),
+				),
+			);
+			// Readiness has no Execution Key or authority to contact the model.
+			transport = await openRuntimeMessagesTransport({
+				endpoint: option.endpoint,
+				authentication: option.authentication,
+				model: option.model,
+				effort: this.options.defaultReasoningLevel,
+				client: "claude",
+				admit: denyModelAccess,
+				resolveCredential: denyModelAccess,
+			});
+			signal.throwIfAborted();
+			native = claudeQuery({
+				pathToClaudeCodeExecutable: this.executable,
+				cwd: join(directory, "workspace"),
+				env: {
+					PATH: process.env.PATH,
+					HOME: join(directory, "home"),
+					TMPDIR: join(directory, "tmp"),
+					CLAUDE_CONFIG_DIR: join(directory, "config"),
+					ANTHROPIC_BASE_URL: transport.modelAccess.endpoint,
+					ANTHROPIC_AUTH_TOKEN: transport.modelAccess.credential,
+					CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+				},
+				...claudeNativeQuerySettings(),
+				model: option.model,
+				tools: [],
+				mcpServers: {},
+				strictMcpConfig: true,
+				permissionMode: "dontAsk",
+				persistSession: false,
+			});
+			await boundedNativeCommandRead(native.query.initializationResult(), {
+				signal,
+				expiresAt: Date.now() + 10_000,
+			});
+			signal.throwIfAborted();
+			return await this.getCapabilities();
+		} catch {
+			throw new Error("RUNTIME_READINESS_UNAVAILABLE");
+		} finally {
+			try {
+				await native?.close();
+			} finally {
+				try {
+					await transport?.close();
+				} finally {
+					await rm(directory, { recursive: true, force: true });
+				}
+			}
+		}
 	}
 
 	async getCapabilities() {

@@ -857,16 +857,23 @@ it("probes ACP initialization and Session creation without prompting", async () 
 				reasoningLevels: ["high"],
 			},
 		],
-		launch: async () => ({
-			command: process.execPath,
-			args: [
-				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
-			],
-			env: { ACP_TEST_MODE: "grouped-models" },
-			close: async () => {
-				launches++;
-			},
-		}),
+		launch: async (_directory, _selection, admit, resolveCredential) => {
+			expect(resolveCredential).toBeTypeOf("function");
+			await expect(admit()).rejects.toThrow();
+			await expect(resolveCredential?.()).rejects.toThrow();
+			return {
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL("./acp-peer.test-support.mjs", import.meta.url),
+					),
+				],
+				env: { ACP_TEST_MODE: "grouped-models" },
+				close: async () => {
+					launches++;
+				},
+			};
+		},
 	});
 	try {
 		expect(await driver.getCapabilities()).toMatchObject({
