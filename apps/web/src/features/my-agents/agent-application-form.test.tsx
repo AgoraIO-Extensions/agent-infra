@@ -261,6 +261,36 @@ resources:
 		expect(screen.getByText(/多服务 YAML 不符合/)).toBeTruthy();
 	});
 
+	// #3119：文本框与上方文件输入各有名称，占位符是三行示例而不是字面量 \n。
+	it("names the multi-service YAML textarea apart from the file input with a three-line placeholder", () => {
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		choose("Agent 来源", "多服务 Agent · 自有交互入口");
+		const manifestField = screen.getByRole("textbox", {
+			name: "多服务资源 YAML 内容",
+		});
+		expect(manifestField.id).toBe("application-multi-service-manifest");
+		// 同页只有这一个控件使用该名称；文件输入保留「多服务资源 YAML」。
+		expect(screen.getAllByLabelText("多服务资源 YAML 内容")).toEqual([
+			manifestField,
+		]);
+		expect(screen.getByLabelText("多服务资源 YAML").id).toBe(
+			"application-multi-service-file",
+		);
+		const placeholder = manifestField.getAttribute("placeholder") ?? "";
+		expect(placeholder.split("\n")).toEqual([
+			"schemaVersion: 1",
+			"entryServiceName: api",
+			"resources:",
+		]);
+		expect(placeholder).not.toContain("\\n");
+	});
+
 	it("shows required model fields for a standard-template application", () => {
 		const onSubmit = vi.fn();
 		render(

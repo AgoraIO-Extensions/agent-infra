@@ -1194,16 +1194,19 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							bytes。
 						</p>
 					</Field>
+					{/* 上方「多服务资源 YAML」标签绑定的是文件输入；文本框另给可访问名称以便区分（#3119）。
+					    占位符用 JSX 表达式字符串，属性字符串不处理 \n 转义，会把反斜杠原样显示。 */}
 					<Textarea
 						aria-describedby={
 							fieldErrors.manifest ? errorId("manifest") : undefined
 						}
 						aria-invalid={fieldErrors.manifest ? true : undefined}
+						aria-label="多服务资源 YAML 内容"
 						className="min-h-56 font-mono text-sm"
 						disabled={props.mode === "update"}
 						id="application-multi-service-manifest"
 						onChange={(event) => updateManifest(event.target.value)}
-						placeholder="schemaVersion: 1\nentryServiceName: api\nresources:"
+						placeholder={"schemaVersion: 1\nentryServiceName: api\nresources:"}
 						value={manifest}
 					/>
 					<FieldError id={errorId("manifest")} message={fieldErrors.manifest} />
