@@ -1,5 +1,6 @@
 import { Download, FileText, Image as ImageIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
 import {
 	Dialog,
@@ -191,7 +192,12 @@ function TextPreview({
 			active = false;
 		};
 	}, [content]);
-	if (error) return <p role="alert">文件内容无法读取。</p>;
+	if (error)
+		return (
+			<Alert tone="danger">
+				<AlertDescription>文件内容无法读取。</AlertDescription>
+			</Alert>
+		);
 	if (text === undefined) return <p role="status">正在准备预览…</p>;
 	return kind === "diff" ? (
 		<DiffPreview text={text} />
@@ -242,12 +248,12 @@ export function ArtifactPreviewDialog({
 				<DialogBody>
 					{loading && <p role="status">正在准备预览…</p>}
 					{error && (
-						<div role="alert" className="space-y-2">
-							<p>{error}</p>
+						<Alert tone="danger" className="space-y-2">
+							<AlertDescription>{error}</AlertDescription>
 							<Button variant="outline" onClick={onRetry}>
 								重新读取
 							</Button>
-						</div>
+						</Alert>
 					)}
 					{!loading && !error && content && kind === "image" && (
 						<img
