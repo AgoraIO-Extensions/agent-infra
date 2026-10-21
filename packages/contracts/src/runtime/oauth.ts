@@ -40,14 +40,11 @@ const patBinding = z.strictObject({
 	consumerId: OpaqueIdV1Schema,
 	bindingEndpoint: https,
 });
-const runtimeOAuthConfiguration = z.strictObject({
+const runtimeOAuthConfigurationBase = z.strictObject({
 	schemaVersion: z.literal(1),
 	ref: OpaqueIdV1Schema,
 	revision: OpaqueIdV1Schema,
 	clientId: OpaqueIdV1Schema,
-	/** `dcr` makes the protected Runtime register one native client per install. */
-	clientRegistration: z.literal("dcr").optional(),
-	registrationEndpoint: https.optional(),
 	issuer: https,
 	authorizationEndpoint: https,
 	tokenEndpoint: https,
@@ -61,29 +58,15 @@ const runtimeOAuthConfiguration = z.strictObject({
 	/** Optional approved Connection PAT binding route; OAuth remains the default. */
 	patBinding: patBinding.optional(),
 });
-export const RuntimeOAuthConfigurationV1Schema =
-	runtimeOAuthConfiguration.superRefine((value, context) => {
-		if (value.clientRegistration === "dcr") {
-			if (value.clientId !== "dcr")
-				context.addIssue({
-					code: z.ZodIssueCode.custom,
-					path: ["clientId"],
-					message: "DCR configuration must use the dcr client marker",
-				});
-			if (value.registrationEndpoint === undefined)
-				context.addIssue({
-					code: z.ZodIssueCode.custom,
-					path: ["registrationEndpoint"],
-					message: "DCR configuration requires registrationEndpoint",
-				});
-		} else if (value.registrationEndpoint !== undefined) {
-			context.addIssue({
-				code: z.ZodIssueCode.custom,
-				path: ["registrationEndpoint"],
-				message: "registrationEndpoint requires clientRegistration=dcr",
-			});
-		}
-	});
+const runtimeOAuthDcrConfiguration = runtimeOAuthConfigurationBase.extend({
+	clientId: z.literal("dcr"),
+	clientRegistration: z.literal("dcr"),
+	registrationEndpoint: https,
+});
+export const RuntimeOAuthConfigurationV1Schema = z.union([
+	runtimeOAuthConfigurationBase,
+	runtimeOAuthDcrConfiguration,
+]);
 export type RuntimeOAuthConfigurationV1 = z.infer<
 	typeof RuntimeOAuthConfigurationV1Schema
 >;

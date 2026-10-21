@@ -25,7 +25,6 @@ export async function registerStandardOAuthClient(options: {
 		issuer.search ||
 		issuer.hash ||
 		endpoint.origin !== issuer.origin ||
-		endpoint.pathname !== "/oauth/register" ||
 		endpoint.search ||
 		endpoint.hash ||
 		redirect.username ||
