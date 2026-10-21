@@ -291,6 +291,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/agents/{agentId}/commands",
 			"/api/v2/agents/{agentId}/configuration",
 			"/api/v2/agents/{agentId}/configuration/saved-model",
+			"/api/v2/agents/{agentId}/creation-failure",
 			"/api/v2/agents/{agentId}/default-relay-key",
 			"/api/v2/agents/{agentId}/default-relay-key/candidates",
 			"/api/v2/agents/{agentId}/default-relay-key/display-candidates",
@@ -394,6 +395,7 @@ describe("standard contract artifacts", () => {
 		});
 		for (const path of [
 			"/api/v2/admin/agents/{agentId}",
+			"/api/v2/agents/{agentId}/creation-failure",
 			"/api/v2/agents/{agentId}/detail",
 			"/api/v2/directory/search",
 			"/api/v2/skills",

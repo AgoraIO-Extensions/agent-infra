@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
 	AgentApiLifecycleAcceptedResponseV1Schema,
 	AgentApplicationProjectionV2Schema,
+	AgentCreationFailureProjectionV1Schema,
 	AgentProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
@@ -1516,5 +1517,228 @@ describe("reads re-read a snapshot that went stale while projecting (#2661)", ()
 			outcome: "succeeded",
 			details: { returnedAgentIds: ["agent-1", "agent-2"] },
 		});
+	});
+});
+
+// #3034：创建失败类别只给当前 Owner 与系统管理员，且只在创建失败时可读；其他主体、其他
+// Agent、其他状态与不存在一律按 RESOURCE_UNAVAILABLE 处理，不调用失败原因读取。
+describe("creation failure category route (#3034)", () => {
+	const failedAgent = (agentId: string, ownerIds: readonly string[]) => ({
+		...agentRecord,
+		agentId,
+		management: {
+			...management,
+			agentId,
+			status: "creation_failed" as const,
+			serviceAvailability: null,
+			workloadRevision: 1,
+			fence: 1,
+			ownerIds: [...ownerIds],
+			failureCode: "reconciliation_failed" as
+				| "reconciliation_failed"
+				| "health_check_failed",
+		},
+	});
+
+	function creationFailureApp(
+		options: {
+			readonly userId?: string;
+			readonly organizationIds?: readonly string[];
+			readonly administrator?: boolean;
+			readonly agents?: readonly ReturnType<typeof failedAgent>[];
+			readonly reason?: string | null;
+			readonly readerFailure?: boolean;
+			readonly withoutReader?: boolean;
+		} = {},
+	) {
+		const app = new Hono();
+		const agents = options.agents ?? [
+			failedAgent("agent-1", ["user-1"]),
+			failedAgent("agent-2", ["user-2"]),
+		];
+		const getAgent = vi.fn(
+			async (
+				scope: { readonly kind: string; readonly ownerId?: string },
+				agentId: string,
+			) =>
+				agents.find(
+					(agent) =>
+						agent.agentId === agentId &&
+						(scope.kind === "administrator" ||
+							(scope.kind === "owner" &&
+								agent.management.ownerIds.includes(scope.ownerId ?? ""))),
+				),
+		);
+		const readWorkloadFailureReason = options.readerFailure
+			? vi.fn().mockRejectedValue(new Error("private failure detail"))
+			: vi
+					.fn()
+					.mockResolvedValue(
+						options.reason === undefined ? "kubernetes_policy" : options.reason,
+					);
+		const unavailable = vi.fn().mockRejectedValue(new Error("unused"));
+		registerV2ManagementRoutes(app, {
+			identity: {
+				resolve: vi.fn().mockResolvedValue({
+					...identity,
+					userId: options.userId ?? "user-1",
+					organizationIds: [
+						...(options.organizationIds ?? identity.organizationIds),
+					],
+					roles: options.administrator
+						? (["employee", "system_admin"] as const)
+						: identity.roles,
+				}),
+				hydrateUsers: vi.fn().mockResolvedValue([]),
+			},
+			foundation: { submit: unavailable },
+			revision: { revise: unavailable },
+			management: { executeManagementCommand: unavailable },
+			configuration: { upgradeCustomImage: unavailable },
+			query: {
+				listApplications: unavailable,
+				getApplication: unavailable,
+				listAgents: unavailable,
+				getAgent: getAgent as never,
+			},
+			allocateApplicationIds: unavailable,
+			prepareSecretReplacements: unavailable,
+			readApplicationProjection: unavailable,
+			readAgentProjection: unavailable,
+			...(options.withoutReader ? {} : { readWorkloadFailureReason }),
+		});
+		return { app, getAgent, readWorkloadFailureReason };
+	}
+
+	const read = (app: Hono, agentId = "agent-1", init?: RequestInit) =>
+		app.request(`/api/v2/agents/${agentId}/creation-failure`, init);
+
+	it("returns only the bounded category to a current Owner", async () => {
+		const h = creationFailureApp();
+		const response = await read(h.app);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		const body = await response.json();
+		expect(AgentCreationFailureProjectionV1Schema.parse(body)).toEqual({
+			schemaVersion: 1,
+			agentId: "agent-1",
+			category: "configuration_rejected",
+		});
+		expect(JSON.stringify(body)).not.toMatch(/kubernetes|policy|attempt/);
+		expect(h.getAgent).toHaveBeenCalledWith(
+			{ kind: "owner", ownerId: "user-1" },
+			"agent-1",
+		);
+		expect(h.readWorkloadFailureReason).toHaveBeenCalledWith("agent-1");
+	});
+
+	it("lets a system administrator read an Agent that it does not own", async () => {
+		const h = creationFailureApp({ userId: "admin-1", administrator: true });
+		const response = await read(h.app, "agent-2");
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			schemaVersion: 1,
+			agentId: "agent-2",
+			category: "configuration_rejected",
+		});
+		expect(h.getAgent).toHaveBeenCalledWith(
+			{ kind: "administrator" },
+			"agent-2",
+		);
+	});
+
+	it.each([
+		["another user", { userId: "user-3" }, "agent-1"],
+		[
+			"a user of another organization",
+			{ userId: "user-3", organizationIds: ["org-2"] },
+			"agent-1",
+		],
+		["the Owner of another Agent", { userId: "user-1" }, "agent-2"],
+		["anyone for a missing Agent", { userId: "user-1" }, "agent-missing"],
+	] as const)(
+		"hides the category from %s",
+		async (_label, options, agentId) => {
+			const h = creationFailureApp(options);
+			const response = await read(h.app, agentId);
+			expect(response.status).toBe(404);
+			expect(
+				PilotProtocolErrorV1Schema.parse(await response.json()),
+			).toMatchObject({ code: "RESOURCE_UNAVAILABLE", retryable: false });
+			expect(h.readWorkloadFailureReason).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["creating", "available", "stopped", "disabled"] as const)(
+		"hides the category while the Agent is %s",
+		async (status) => {
+			const agent = failedAgent("agent-1", ["user-1"]);
+			const h = creationFailureApp({
+				agents: [
+					{
+						...agent,
+						management: {
+							...agent.management,
+							status: status as never,
+							failureCode: null as never,
+						},
+					},
+				],
+			});
+			const response = await read(h.app);
+			expect(response.status).toBe(404);
+			expect(h.readWorkloadFailureReason).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		["health_check_failed", "health_check_failed", null],
+		["reconciliation_failed", "deployment_unavailable", null],
+		["reconciliation_failed", "deployment_unavailable", "kubernetes_forbidden"],
+		["reconciliation_failed", "configuration_rejected", "preflight_rejected"],
+	] as const)(
+		"maps %s to %s when the Workload reason is %s",
+		async (failureCode, category, reason) => {
+			const agent = failedAgent("agent-1", ["user-1"]);
+			const h = creationFailureApp({
+				agents: [
+					{ ...agent, management: { ...agent.management, failureCode } },
+				],
+				reason,
+			});
+			const response = await read(h.app);
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({ category });
+		},
+	);
+
+	it("accepts only a browser session without query parameters", async () => {
+		const h = creationFailureApp();
+		expect(
+			(
+				await read(h.app, "agent-1", {
+					headers: { Authorization: `Bearer papi_${"b".repeat(43)}` },
+				})
+			).status,
+		).toBe(401);
+		const query = await h.app.request(
+			"/api/v2/agents/agent-1/creation-failure?reason=1",
+		);
+		expect(query.status).toBe(400);
+		expect(h.getAgent).not.toHaveBeenCalled();
+	});
+
+	it("fails as a retryable dependency error without leaking the reader failure", async () => {
+		for (const options of [{ withoutReader: true }, { readerFailure: true }]) {
+			const h = creationFailureApp(options);
+			const response = await read(h.app);
+			expect(response.status).toBe(503);
+			const body = await response.json();
+			expect(body).toMatchObject({
+				code: "DEPENDENCY_UNAVAILABLE",
+				retryable: true,
+			});
+			expect(JSON.stringify(body)).not.toContain("private failure detail");
+		}
 	});
 });

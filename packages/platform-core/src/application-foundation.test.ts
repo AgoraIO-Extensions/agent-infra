@@ -404,6 +404,42 @@ describe("Application foundation use case", () => {
 		expect(commit).not.toHaveBeenCalled();
 	});
 
+	it("converts a missing platform identity entry before persistence (#3034)", async () => {
+		const commit = vi.fn();
+		const error = await createApplicationFoundationUseCaseV1(
+			{
+				...applicationFoundationAdmissionDependenciesV1(),
+				imageAdmission: {
+					async admitImage(input) {
+						return {
+							schemaVersion: 1,
+							status: "rejected",
+							agentId: input.agentId,
+							requestId: input.requestId,
+							reason: "platform_identity_entry_unavailable",
+						};
+					},
+				},
+				transaction: readyTransaction({ commit }),
+			},
+			{ now: () => new Date(serverInstant) },
+		)
+			.submit(
+				applicationFoundationCommandV1,
+				applicationFoundationActorContextV1,
+				pendingSecretRecordAttachmentFixtureV1(),
+			)
+			.then(
+				() => expect.fail("Expected a platform identity entry rejection"),
+				(reason: unknown) => reason,
+			);
+		expect(error).toEqual(expect.any(ApplicationFoundationError));
+		expect(error).toMatchObject({
+			code: "platform_identity_entry_unavailable",
+		});
+		expect(commit).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		[
 			"same-bundle conflict",

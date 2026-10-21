@@ -138,6 +138,26 @@ describe("AgentApplicationSubmissionScreen", () => {
 		expectSingleFooterCancel("/my-agents");
 	});
 
+	// #3034：部署未提供平台身份入口的拒绝按字段校验处理，原因写在入口身份字段下。
+	it("treats a missing platform identity entry as a field validation rejection", async () => {
+		await renderWithMyAgentsRouter(
+			<AgentApplicationSubmissionScreen
+				error={Object.assign(new Error("private deployment detail"), {
+					code: "ACTION_UNAVAILABLE",
+					retryable: false,
+				})}
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+		expect(screen.getByRole("alert").textContent).toBe(
+			"申请内容未通过服务端校验，请检查字段后重试。",
+		);
+		expect(screen.queryByText("private deployment detail")).toBeNull();
+		expectSingleFooterCancel("/my-agents");
+	});
+
 	it("offers one ghost footer cancel and leaves without submitting", async () => {
 		const onSubmit = vi.fn();
 		await renderWithMyAgentsRouter(

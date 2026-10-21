@@ -2867,6 +2867,35 @@ function isSkillHubReviewContentOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #3034 新增创建失败类别的只读入口；Agent、申请、命令响应和全部既有 schema 保持不变。
+function isAgentCreationFailureOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents/{agentId}/creation-failure";
+	const schemas = [
+		"AgentCreationFailureCategoryV1",
+		"AgentCreationFailureProjectionV1",
+	];
+	if (
+		previous.paths?.[path] !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: { [path]: current.paths?.[path] },
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"f3ed8b326b54d40557e2f8a29b168f02532ded0436686fb950f3c17a10915449"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #2910 新增带 Owner 有效状态的 Agent 详情只读入口；AgentProjectionV2、列表、命令响应和全部既有 schema 保持不变。
 function isAgentDetailOwnerStatusOpenApiAddition(previous, current) {
 	const path = "/api/v2/agents/{agentId}/detail";
@@ -5486,6 +5515,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isSkillHubInstallationListOpenApiAddition(previous, current) &&
 			!isAgentDetailOwnerStatusOpenApiAddition(previous, current) &&
 			!isAdministratorAgentDetailOpenApiAddition(previous, current) &&
+			!isAgentCreationFailureOpenApiAddition(previous, current) &&
 			!isSkillHubProjectContentOpenApiAddition(previous, current) &&
 			!isSkillHubProjectAndImportOpenApiAddition(previous, current) &&
 			!isSkillHubProjectOpenApiAddition(previous, current) &&

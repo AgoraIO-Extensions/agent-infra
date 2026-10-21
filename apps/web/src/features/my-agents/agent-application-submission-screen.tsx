@@ -88,9 +88,11 @@ export function AgentApplicationSubmissionScreen(
 			取消
 		</Link>
 	);
+	// ACTION_UNAVAILABLE：部署未提供所选入口身份校验（#3034），具体原因在表单字段下说明。
 	const validationError =
 		props.error?.code === "INVALID_REQUEST" ||
-		props.error?.code === "MODEL_SELECTION_INVALID";
+		props.error?.code === "MODEL_SELECTION_INVALID" ||
+		props.error?.code === "ACTION_UNAVAILABLE";
 	const deploymentUnavailable =
 		props.deploymentConfiguration.status !== "populated" ||
 		props.deploymentConfiguration.modelCatalog.status !== "populated";

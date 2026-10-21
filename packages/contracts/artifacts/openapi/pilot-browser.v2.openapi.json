@@ -2173,6 +2173,36 @@
         ],
         "type": "object"
       },
+      "AgentCreationFailureCategoryV1": {
+        "enum": [
+          "configuration_rejected",
+          "health_check_failed",
+          "deployment_unavailable"
+        ],
+        "type": "string"
+      },
+      "AgentCreationFailureProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "category": {
+            "$ref": "#/components/schemas/AgentCreationFailureCategoryV1"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "agentId",
+          "category"
+        ],
+        "type": "object"
+      },
       "AgentDetailConfigurationProjectionV1": {
         "additionalProperties": false,
         "properties": {
@@ -14812,6 +14842,101 @@
           }
         },
         "summary": "Update models bound to the persisted Agent default Relay Key"
+      }
+    },
+    "/api/v2/agents/{agentId}/creation-failure": {
+      "get": {
+        "description": "Browser session only; no Authorization header or query. Only a current Owner or a system administrator can read it, and only while the Agent is creation_failed; any other caller, state or a missing Agent is RESOURCE_UNAVAILABLE. The category never carries reason codes, attempts or Kubernetes details. Responses are no-store.",
+        "operationId": "getAgentCreationFailureV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentCreationFailureProjectionV1"
+                }
+              }
+            },
+            "description": "Creation failure category"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ],
+        "summary": "Read the bounded creation failure category of one Agent"
       }
     },
     "/api/v2/agents/{agentId}/default-relay-key": {

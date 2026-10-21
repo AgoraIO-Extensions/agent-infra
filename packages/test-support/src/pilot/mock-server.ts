@@ -1,4 +1,5 @@
 import {
+	agentCreationFailureOpenApiPathsV1,
 	agentDetailOpenApiPathsV1,
 	pilotBrowserHttpOpenApiPathsV1,
 	pilotBrowserHttpOpenApiPathsV2,
@@ -24,6 +25,10 @@ export type PilotAgentMockServerScenarioV1 = {
 	 * Owner 均为 active；错误响应原样返回。
 	 */
 	readonly getAgentDetail?: PilotAgentMockResponderV1<[Request, string]>;
+	/** 创建失败类别（#3034）；未提供时按不可读处理（404），页面不展示原因。 */
+	readonly getAgentCreationFailure?: PilotAgentMockResponderV1<
+		[Request, string]
+	>;
 	readonly getAgentDefaultRelayKey?: PilotAgentMockResponderV1<
 		[Request, string]
 	>;
@@ -169,6 +174,12 @@ function createPilotAgentMockServer(
 		version === 2
 			? operation("/api/v2/agents/{agentId}/default-relay-key", "get")
 			: undefined;
+	const getAgentCreationFailureOperation =
+		version === 2
+			? (agentCreationFailureOpenApiPathsV1[
+					"/api/v2/agents/{agentId}/creation-failure"
+				].get as unknown as Operation)
+			: undefined;
 	const updateAgentConfigurationOperation = operation(
 		"/api/v1/agents/{agentId}/configuration",
 		"put",
@@ -225,6 +236,12 @@ function createPilotAgentMockServer(
 		validateStaticResponse(
 			scenario.getAgentDefaultRelayKey,
 			getAgentDefaultRelayKeyOperation,
+		);
+	}
+	if (getAgentCreationFailureOperation) {
+		validateStaticResponse(
+			scenario.getAgentCreationFailure,
+			getAgentCreationFailureOperation,
 		);
 	}
 	validateStaticResponse(
@@ -562,6 +579,30 @@ function createPilotAgentMockServer(
 						},
 					};
 			validateResponse(getAgentDefaultRelayKeyOperation, response);
+			return jsonResponse(response);
+		}
+		const creationFailureAgentIdPath =
+			/^\/api\/v1\/agents\/([^/]+)\/creation-failure$/.exec(routingPath)?.[1];
+		if (
+			request.method === "GET" &&
+			creationFailureAgentIdPath !== undefined &&
+			getAgentCreationFailureOperation !== undefined
+		) {
+			const agentId = decodeURIComponent(creationFailureAgentIdPath);
+			getAgentCreationFailureOperation.requestParams.path?.parse({ agentId });
+			const response = scenario.getAgentCreationFailure
+				? resolveResponse(scenario.getAgentCreationFailure, request, agentId)
+				: {
+						status: 404,
+						body: {
+							schemaVersion: 1,
+							code: "RESOURCE_UNAVAILABLE",
+							message: "Resource is unavailable.",
+							retryable: false,
+							traceId: "trace-mock-creation-failure",
+						},
+					};
+			validateResponse(getAgentCreationFailureOperation, response);
 			return jsonResponse(response);
 		}
 		if (request.method === "GET" && agentIdPath !== undefined) {

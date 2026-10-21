@@ -197,6 +197,7 @@ export type ApplicationFoundationErrorCode =
 	| "not_admitted"
 	| "model_profile_unsupported"
 	| "resource_cap_exceeded"
+	| "platform_identity_entry_unavailable"
 	| "dependency_unavailable"
 	| "conflict"
 	| "idempotency_conflict"
@@ -234,6 +235,7 @@ function isApplicationFoundationErrorCode(
 		value === "not_admitted" ||
 		value === "model_profile_unsupported" ||
 		value === "resource_cap_exceeded" ||
+		value === "platform_identity_entry_unavailable" ||
 		value === "dependency_unavailable" ||
 		value === "conflict" ||
 		value === "idempotency_conflict" ||
@@ -794,6 +796,7 @@ function normalizeInitialAdmissionError(
 			case "not_admitted":
 			case "model_profile_unsupported":
 			case "resource_cap_exceeded":
+			case "platform_identity_entry_unavailable":
 			case "dependency_unavailable":
 				return new ApplicationFoundationError(error.code);
 		}

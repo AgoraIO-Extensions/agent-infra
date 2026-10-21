@@ -44,4 +44,44 @@ describe("core error mapping", () => {
 				.code,
 		).not.toBe("MULTI_SERVICE_RESOURCE_CAP_EXCEEDED");
 	});
+
+	it.each([
+		[
+			"Application creation",
+			new ApplicationFoundationError("platform_identity_entry_unavailable"),
+		],
+		[
+			"Application revision",
+			new ApplicationRevisionError("platform_identity_entry_unavailable"),
+		],
+		[
+			"Agent configuration",
+			new AgentConfigurationError("platform_identity_entry_unavailable"),
+		],
+	])(
+		"maps a %s without a platform identity entry to a terminal 409 (#3034)",
+		(_label, error) => {
+			const mapped = mapCoreError(error, traceId);
+			expect(mapped).toMatchObject({
+				status: 409,
+				body: {
+					schemaVersion: 1,
+					code: "ACTION_UNAVAILABLE",
+					retryable: false,
+					traceId,
+				},
+			});
+			// 不暴露内部错误码或部署细节。
+			expect(JSON.stringify(mapped.body)).not.toMatch(
+				/platform_identity_entry_unavailable|customAgentGateway|annotation/i,
+			);
+		},
+	);
+
+	it("keeps an ordinary admission rejection distinct from the missing platform identity entry", () => {
+		expect(
+			mapCoreError(new AgentConfigurationError("not_admitted"), traceId).body
+				.code,
+		).not.toBe("ACTION_UNAVAILABLE");
+	});
 });

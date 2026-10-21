@@ -208,6 +208,7 @@ export type ApplicationRevisionErrorCode =
 	| "not_authorized"
 	| "not_admitted"
 	| "resource_cap_exceeded"
+	| "platform_identity_entry_unavailable"
 	| "no_change"
 	| "stale_revision"
 	| "key_version_conflict"
@@ -883,6 +884,7 @@ function configurationError(error: unknown): ApplicationRevisionError {
 		error.code === "not_authorized" ||
 		error.code === "not_admitted" ||
 		error.code === "resource_cap_exceeded" ||
+		error.code === "platform_identity_entry_unavailable" ||
 		error.code === "no_change" ||
 		error.code === "idempotency_conflict"
 	) {

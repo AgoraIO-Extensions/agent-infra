@@ -363,6 +363,13 @@ function createAgentConfigurationUseCaseV1Internal(
 				admission.reason === "multi_service_resource_cap_exceeded"
 			)
 				throw new AgentConfigurationError("resource_cap_exceeded");
+			if (
+				admission.status === "rejected" &&
+				admission.reason === "platform_identity_entry_unavailable"
+			)
+				throw new AgentConfigurationError(
+					"platform_identity_entry_unavailable",
+				);
 			const admittedSource =
 				admission.status === "admitted" ? admission.source : current.source;
 			const selectionMatches =

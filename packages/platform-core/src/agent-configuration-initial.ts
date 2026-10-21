@@ -124,6 +124,11 @@ async function completeInitialAgentConfigurationAdmissionV1(
 		imageAdmission.reason === "multi_service_resource_cap_exceeded"
 	)
 		throw new AgentConfigurationError("resource_cap_exceeded");
+	if (
+		imageAdmission.status === "rejected" &&
+		imageAdmission.reason === "platform_identity_entry_unavailable"
+	)
+		throw new AgentConfigurationError("platform_identity_entry_unavailable");
 	const source =
 		imageAdmission.status === "admitted" ? imageAdmission.source : undefined;
 	const selectionMatches =

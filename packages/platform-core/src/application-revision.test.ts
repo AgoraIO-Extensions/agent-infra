@@ -370,6 +370,40 @@ describe("Application revision input and plan boundary", () => {
 		expect(transaction.snapshot().commitCount).toBe(0);
 	});
 
+	it("converts a missing platform identity entry without a commit (#3034)", async () => {
+		const transaction = new FakeApplicationRevisionTransactionV1(
+			applicationRevisionStateV1,
+		);
+		const error = await createApplicationRevisionUseCaseV1(
+			{
+				transaction,
+				...applicationRevisionAdmissionsV1(),
+				imageAdmission: {
+					async admitImage(input) {
+						return {
+							schemaVersion: 1,
+							status: "rejected",
+							agentId: input.agentId,
+							requestId: input.requestId,
+							reason: "platform_identity_entry_unavailable",
+						};
+					},
+				},
+			},
+			{ now: () => new Date("2026-09-02T04:00:00.000Z") },
+		)
+			.revise(applicationRevisionCommandV1, applicationRevisionActorContextV1)
+			.then(
+				() => expect.fail("Expected a platform identity entry rejection"),
+				(reason: unknown) => reason,
+			);
+		expect(error).toEqual(expect.any(ApplicationRevisionError));
+		expect(error).toMatchObject({
+			code: "platform_identity_entry_unavailable",
+		});
+		expect(transaction.snapshot().commitCount).toBe(0);
+	});
+
 	it("rejects an empty pending edit without a commit", async () => {
 		const transaction = new FakeApplicationRevisionTransactionV1(
 			applicationRevisionStateV1,

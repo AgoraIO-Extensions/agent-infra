@@ -371,6 +371,14 @@ export type AgentConfigurationUpdateRequestV2 = {
     }>;
 };
 
+export type AgentCreationFailureCategoryV1 = 'configuration_rejected' | 'health_check_failed' | 'deployment_unavailable';
+
+export type AgentCreationFailureProjectionV1 = {
+    agentId: string;
+    category: AgentCreationFailureCategoryV1;
+    schemaVersion: 1;
+};
+
 export type AgentDetailConfigurationProjectionV1 = {
     availability: Array<{
         kind: 'user';
@@ -3891,6 +3899,53 @@ export type UpdateAgentSavedModelConfigurationV2Responses = {
 };
 
 export type UpdateAgentSavedModelConfigurationV2Response = UpdateAgentSavedModelConfigurationV2Responses[keyof UpdateAgentSavedModelConfigurationV2Responses];
+
+export type GetAgentCreationFailureV1Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/creation-failure';
+};
+
+export type GetAgentCreationFailureV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentCreationFailureV1Error = GetAgentCreationFailureV1Errors[keyof GetAgentCreationFailureV1Errors];
+
+export type GetAgentCreationFailureV1Responses = {
+    /**
+     * Creation failure category
+     */
+    200: AgentCreationFailureProjectionV1;
+};
+
+export type GetAgentCreationFailureV1Response = GetAgentCreationFailureV1Responses[keyof GetAgentCreationFailureV1Responses];
 
 export type GetAgentDefaultRelayKeyV2Data = {
     body?: never;

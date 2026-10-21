@@ -36,6 +36,24 @@ describe("agent configuration admission rejection reasons", () => {
 		expect(parseImageDecision(rejection)).toEqual(rejection);
 	});
 
+	it("accepts the platform identity entry reason from the image port (#3034)", () => {
+		expect(
+			parseImageDecision({
+				...rejection,
+				reason: "platform_identity_entry_unavailable",
+			}),
+		).toEqual({
+			...rejection,
+			reason: "platform_identity_entry_unavailable",
+		});
+		expect(() =>
+			parseModelDecision({
+				...rejection,
+				reason: "platform_identity_entry_unavailable",
+			}),
+		).toThrowError(expect.objectContaining({ code: "dependency_unavailable" }));
+	});
+
 	it.each(["codex_model_profile_unsupported", "unknown_profile", "", null])(
 		"treats image rejection reason %j as an invalid dependency value",
 		(reason) => {

@@ -1,5 +1,6 @@
 import {
 	AgentApplicationProjectionV1Schema,
+	AgentCreationFailureProjectionV1Schema,
 	AgentDetailProjectionV1Schema,
 	AgentProjectionV1Schema,
 	AgentProjectionV2Schema,
@@ -177,6 +178,62 @@ describe("Pilot Agent Mock Server", () => {
 				listAgents: { status: 200, body: { items: [], nextCursor: null } },
 				getAgent: { status: 200, body: startingAgentV2 },
 				getAgentDetail: { status: 200, body: startingAgentV2 },
+			}),
+		).toThrow();
+	});
+
+	it("answers the creation failure category as unavailable unless a scenario declares it (#3034)", async () => {
+		const fallback = createPilotAgentMockServerV2({
+			listAgents: { status: 200, body: { items: [], nextCursor: null } },
+			getAgent: { status: 200, body: startingAgentV2 },
+		});
+		const unavailable = await fallback.fetch(
+			new Request(
+				"https://platform.example.test/api/v2/agents/agent-pilot-1/creation-failure",
+			),
+		);
+		expect(unavailable.status).toBe(404);
+		expect(await unavailable.json()).toMatchObject({
+			code: "RESOURCE_UNAVAILABLE",
+			retryable: false,
+		});
+		const declared = createPilotAgentMockServerV2({
+			listAgents: { status: 200, body: { items: [], nextCursor: null } },
+			getAgent: { status: 200, body: startingAgentV2 },
+			getAgentCreationFailure: (_request, agentId) => ({
+				status: 200,
+				body: {
+					schemaVersion: 1,
+					agentId,
+					category: "configuration_rejected",
+				},
+			}),
+		});
+		const response = await declared.fetch(
+			new Request(
+				"https://platform.example.test/api/v2/agents/agent-pilot-1/creation-failure",
+			),
+		);
+		expect(
+			AgentCreationFailureProjectionV1Schema.parse(await response.json()),
+		).toEqual({
+			schemaVersion: 1,
+			agentId: "agent-pilot-1",
+			category: "configuration_rejected",
+		});
+		// 契约之外的类别或字段不能伪装成服务端结果。
+		expect(() =>
+			createPilotAgentMockServerV2({
+				listAgents: { status: 200, body: { items: [], nextCursor: null } },
+				getAgent: { status: 200, body: startingAgentV2 },
+				getAgentCreationFailure: {
+					status: 200,
+					body: {
+						schemaVersion: 1,
+						agentId: "agent-pilot-1",
+						category: "kubernetes_policy",
+					},
+				},
 			}),
 		).toThrow();
 	});

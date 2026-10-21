@@ -146,7 +146,8 @@ export function parseAuthorizationDecision(
 
 type AdmissionRejectionReasonV1 =
 	| "codex_model_profile_unsupported"
-	| "multi_service_resource_cap_exceeded";
+	| "multi_service_resource_cap_exceeded"
+	| "platform_identity_entry_unavailable";
 
 function snapshotAdmissionDecision<
 	Reason extends AdmissionRejectionReasonV1 = never,
@@ -219,7 +220,10 @@ export function parseImageDecision(
 		input,
 		["source"],
 		["reason"],
-		["multi_service_resource_cap_exceeded"],
+		[
+			"multi_service_resource_cap_exceeded",
+			"platform_identity_entry_unavailable",
+		],
 	);
 	return decision.status === "rejected"
 		? { schemaVersion: 1, ...decision }
