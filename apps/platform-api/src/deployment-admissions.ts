@@ -26,6 +26,7 @@ import {
 	type StandardTemplateModelBindingV1,
 	standardTemplateDefinitionsV1,
 	standardTemplateReadinessV1,
+	standardTemplateReasoningLevelsV1,
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationModelAdmissionPortV2,
@@ -251,7 +252,8 @@ export function createDeploymentConfigurationProjectionV2(input: {
 						displayName: endpoint.endpointId,
 						models: (endpoint.allowedModels ?? []).map((modelId) => ({
 							modelId,
-							reasoningLevels: [...endpoint.capabilities.reasoningLevels],
+							// ADR-0029：标准模板的档位是平台固定集合，不取端点登记的档位。
+							reasoningLevels: [...standardTemplateReasoningLevelsV1],
 						})),
 					}));
 				catalogStatus = endpoints.some((endpoint) => endpoint.models.length > 0)

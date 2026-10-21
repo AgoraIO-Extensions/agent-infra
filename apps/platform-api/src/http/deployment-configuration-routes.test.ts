@@ -118,7 +118,8 @@ describe("deployment configuration projection", () => {
 						models: [
 							{
 								modelId: "model-a",
-								reasoningLevels: ["balanced", "deep"],
+								// ADR-0029：端点登记 balanced/deep，标准模板仍只提供平台固定档位。
+								reasoningLevels: ["low", "medium", "high"],
 							},
 						],
 					},
