@@ -330,7 +330,7 @@ beforeAll(async () => {
 				state: "active" as const,
 				captureFailures: 0,
 				exportFailures: 0,
-				lastExportFailureAt: null,
+				lastExportFailureAt: undefined,
 				droppedLogs: 0,
 				invalidRecords: 0,
 			}),
