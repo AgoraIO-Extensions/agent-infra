@@ -720,6 +720,7 @@ function ResultFiles({
 	const [content, setContent] = useState<Blob | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string>();
+	const previewRequest = useRef(0);
 	const files = events
 		.filter(
 			(
@@ -733,11 +734,13 @@ function ResultFiles({
 	if (!files.length) return null;
 	async function preview(file: ResultFile) {
 		if (!onPreviewFile || !artifactCanPreview(file)) return;
+		const request = ++previewRequest.current;
 		setSelected(file);
 		setContent(null);
 		setError(undefined);
 		setLoading(true);
 		const result = await onPreviewFile(file);
+		if (request !== previewRequest.current) return;
 		setLoading(false);
 		if (result) setContent(result);
 		else setError("文件读取失败，请重试。");
@@ -780,6 +783,7 @@ function ResultFiles({
 				error={error}
 				onOpenChange={(open) => {
 					if (!open) {
+						previewRequest.current += 1;
 						setSelected(undefined);
 						setContent(null);
 						setError(undefined);
