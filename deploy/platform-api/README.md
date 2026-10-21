@@ -88,6 +88,13 @@ API 直接创建 Agent 由 `apiInput.agentApiCreation` 开启。`allowedPrincipa
 省略 `agentApiCreation` 或列表为空时，直接创建保持失败关闭。
 标准模板创建时提交的默认 Relay Key 默认按上面两项 Relay Key 策略校验，与 Web 申请同源；任一策略缺失时，标准模板的 API 创建同样失败关闭。
 只有部署需要不同的 endpoint/模型策略时，才另外提供受审阅的 `candidates` adapter。
+
+Registry 返回的配置 blob 若需跳转到对象存储，部署可通过
+`apiInput.registry.allowedBlobRedirectOrigins` 登记精确 HTTPS origin（例如
+`https://pkg-containers.githubusercontent.com`）。默认不允许跳转；只支持配置 blob 的一次
+302/307 跳转，不向存储端转发 Registry Authorization，读取后仍校验大小和 SHA-256。
+API 与 Worker 的 Registry 配置应登记相同的获准存储 origin，禁止通配符或调用方覆盖。
+
 API 创建时，镜像准入交给 `registry.policy.authorize` 的 `subjectRef` 不是用户 ID，而是
 `api-subject-<sha256>`；其中 `<sha256>` 是 `JSON.stringify({ kind, id })` 的 SHA-256 十六进制，`kind` 为 `user` 或
 `application`，`id` 为该主体的稳定 ID。部署策略必须能识别获准的 API 主体，例如把它映射回对应的用户 / 应用 ID 后再按原规则判定；
