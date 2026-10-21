@@ -768,30 +768,102 @@ describe("OpenDesign workbench presentation", () => {
 			name: "创建失败的本人申请",
 			status: "creation_failed" as const,
 		};
+		// 工作台最多列 2 条申请（A2-02），三种状态分两次渲染，逐行核对 chip 色调。
+		for (const batch of [
+			[
+				[failedApplication, "创建失败", "red"],
+				[rejected, "已驳回", "red"],
+			],
+			[[pendingApplication, "待审批", "amber"]],
+		] as const) {
+			const view = await showWorkbench(
+				<WorkbenchScreen
+					{...empty}
+					applications={{
+						kind: "ready",
+						applications: batch.map(([application]) => application),
+					}}
+				/>,
+			);
+			const region = screen.getByRole("region", { name: "我的申请" });
+			for (const [application, label, tone] of batch) {
+				const row = within(region)
+					.getByRole("heading", { level: 3, name: application.name })
+					.closest(".workbench-list-row") as HTMLElement;
+				const chip = within(row).getByText(label, {
+					selector: '[data-slot="badge"]',
+				});
+				expect(chip.dataset.variant).toBe("chip");
+				expect(chip.dataset.tone).toBe(tone);
+			}
+			view.unmount();
+		}
+	});
+
+	it("lists at most two applications like the exported design (A2-02)", async () => {
+		const applications = [1, 2, 3].map((index) => ({
+			...pendingApplication,
+			applicationId: `application-${index}`,
+			name: `本人申请 ${index}`,
+		}));
 		await showWorkbench(
 			<WorkbenchScreen
 				{...empty}
-				applications={{
-					kind: "ready",
-					applications: [failedApplication, rejected, pendingApplication],
-				}}
+				applications={{ kind: "ready", applications }}
 			/>,
 		);
 		const region = screen.getByRole("region", { name: "我的申请" });
-		for (const [name, label, tone] of [
-			[failedApplication.name, "创建失败", "red"],
-			[rejected.name, "已驳回", "red"],
-			[pendingApplication.name, "待审批", "amber"],
-		] as const) {
-			const row = within(region)
-				.getByRole("heading", { level: 3, name })
-				.closest(".workbench-list-row") as HTMLElement;
-			const chip = within(row).getByText(label, {
-				selector: '[data-slot="badge"]',
-			});
-			expect(chip.dataset.variant).toBe("chip");
-			expect(chip.dataset.tone).toBe(tone);
-		}
+		expect(
+			within(region)
+				.getAllByRole("heading", { level: 3 })
+				.map((heading) => heading.textContent),
+		).toEqual(["本人申请 1", "本人申请 2"]);
+		expect(region.querySelectorAll(".workbench-list-row")).toHaveLength(2);
+	});
+
+	it("shows one channel tag with the available channel summary (A2-01)", async () => {
+		const agent = AgentProjectionV2Schema.parse({
+			...available,
+			configuration: {
+				...available.configuration,
+				channels: [
+					{ kind: "web", status: "available" },
+					{ kind: "wecom_bot", status: "bound" },
+					{ kind: "wecom_app", status: "not_configured" },
+				],
+			},
+		});
+		const unconfigured = AgentProjectionV2Schema.parse({
+			...available,
+			agentId: "unconfigured-agent",
+			name: "未配置渠道的助手",
+			configuration: {
+				...available.configuration,
+				channels: [{ kind: "wecom_bot", status: "not_configured" }],
+			},
+		});
+		await showWorkbench(
+			<WorkbenchScreen
+				{...empty}
+				agents={{ kind: "ready", agents: [agent, unconfigured] }}
+				templateName={(templateId) =>
+					templateId === "codex" ? "Codex" : undefined
+				}
+			/>,
+		);
+		const region = screen.getByRole("region", { name: "可用 Agent" });
+		const tags = (name: string) =>
+			Array.from(
+				(
+					within(region)
+						.getByRole("heading", { level: 3, name })
+						.closest(".workbench-card") as HTMLElement
+				).querySelectorAll('.workbench-agent-tags [data-slot="badge"]'),
+			).map((tag) => tag.textContent);
+		expect(tags(agent.name)).toEqual(["Codex", "Web · 企微机器人"]);
+		// 只列可用或已绑定的渠道：未配置的企微机器人不出现，与 /agents 卡片一致。
+		expect(tags(unconfigured.name)).toEqual(["Codex", "暂无可用渠道"]);
+		expect(within(region).queryByText("企微应用")).toBeNull();
 	});
 
 	it("lists each application with source, update time and description and a 查看状态 link (Y-10)", async () => {

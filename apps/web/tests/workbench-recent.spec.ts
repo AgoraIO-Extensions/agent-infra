@@ -1023,11 +1023,12 @@ test("401 re-login with a still-valid session re-reads every failed section and 
 			.getByRole("region", { name: "可用 Agent", exact: true })
 			.getByRole("heading", { level: 3 }),
 	).toHaveCount(3);
+	// fixture 有 3 条本人申请，工作台按导出稿最多列 2 条（A2-02）。
 	await expect(
 		page
 			.getByRole("region", { name: "我的申请", exact: true })
 			.getByRole("heading", { level: 3 }),
-	).toHaveCount(3);
+	).toHaveCount(2);
 	await expect(
 		page.getByRole("region", { name: "需要管理员处理", exact: true }),
 	).toContainText("1 项申请等待系统管理员审阅");
@@ -2221,10 +2222,18 @@ test.describe("workbench design alignment", () => {
 		});
 		const red = await resolvedColor(page, "var(--danger-ink)");
 		const amber = await resolvedColor(page, "var(--warning-ink)");
+		// A2-02：工作台按导出稿最多列 2 条申请，第三条「受控创建失败申请」只在「我的 Agent」列出。
+		await expect(applications.locator(".workbench-list-row")).toHaveCount(2);
+		await expect(
+			applications.getByRole("heading", {
+				level: 3,
+				name: "受控创建失败申请",
+				exact: true,
+			}),
+		).toHaveCount(0);
 		for (const [name, label, color] of [
-			["受控创建失败申请", "创建失败", red],
-			["受控驳回申请", "已驳回", red],
 			["Release assistant request", "待审批", amber],
+			["受控驳回申请", "已驳回", red],
 		] as const) {
 			const row = applications.locator(".workbench-list-row").filter({
 				has: page.getByRole("heading", { level: 3, name, exact: true }),
@@ -2347,6 +2356,11 @@ test.describe("workbench design alignment", () => {
 			expect(Math.abs(parts.actionWidth - 107.05)).toBeLessThanOrEqual(1);
 			expect(Math.abs(parts.height - 244.38)).toBeLessThanOrEqual(1);
 			expect(parts.firstIcon).toBe("svg");
+			// A2-01：模板 tag 之后只有一个渠道摘要 tag；fixture 的企微机器人未配置，不列出。
+			await expect(
+				card.locator('.workbench-agent-tags [data-slot="badge"]'),
+			).toHaveText(["Codex", "Web"]);
+			await expect(agents.getByText("企微机器人")).toHaveCount(0);
 			// Y-08：≤767px 区块上距 26px，桌面 32px；概览内两块不受影响。
 			const sectionGap = viewport.width <= 767 ? "26px" : "32px";
 			await expect(agents).toHaveCSS("margin-top", sectionGap);

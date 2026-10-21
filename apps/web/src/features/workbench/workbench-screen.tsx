@@ -32,7 +32,7 @@ import {
 	type AgentDiscoveryState,
 	canStartPlatformConversation,
 } from "../agent-discovery/agent-discovery.js";
-import { agentChannelKindLabels } from "../agent-discovery/agent-discovery-screen.js";
+import { agentChannelSummary } from "../agent-discovery/agent-discovery-screen.js";
 import {
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
@@ -606,11 +606,8 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 													)
 												: "自定义 Agent"}
 										</Badge>
-										{agent.configuration.channels.map((channel) => (
-											<Badge variant="tag" key={channel.kind}>
-												{agentChannelKindLabels[channel.kind]}
-											</Badge>
-										))}
+										{/* 设计只有一个渠道 tag「Web · 企微机器人」：与 /agents 卡片、详情「渠道」行共用可用渠道摘要，不列未配置的渠道（A2-01）。 */}
+										<Badge variant="tag">{agentChannelSummary(agent)}</Badge>
 									</div>
 									<Link
 										className={buttonVariants({ variant: "ghost" })}
@@ -648,7 +645,8 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 						<p>暂无创建申请。</p>
 					) : (
 						<div className="workbench-applications workbench-list">
-							{applications.applications.slice(0, 3).map((application) => (
+							{/* 导出稿 #workbench `state.applications.slice(0,2)`：最多 2 条，全部申请在「我的 Agent」（A2-02）。 */}
+							{applications.applications.slice(0, 2).map((application) => (
 								<article
 									className="workbench-list-row workbench-application-row"
 									key={application.applicationId}
