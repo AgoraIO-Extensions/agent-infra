@@ -564,6 +564,8 @@ function AssistantReply({
 				variant="link"
 				className="inline-link"
 				aria-label={withObjectName("重新生成", objectName)}
+				// 停止回复后的焦点落点（A2-09）：页面按 Execution 找到这张回复卡的「重新生成」。
+				data-regenerate-execution={executionId ?? undefined}
 				onClick={regenerate}
 			>
 				重新生成
@@ -629,10 +631,12 @@ function AssistantReply({
 			{files}
 			{stop && (
 				<div className="card-actions">
+					{/* 「正在停止」期间用 aria-disabled 保持可聚焦，焦点不在受理后落到 body（A2-09）。 */}
 					<Button
 						type="button"
 						variant="outline"
 						disabled={stop.disabled}
+						focusableWhenDisabled
 						onClick={stop.onStop}
 					>
 						<Square aria-hidden="true" />
