@@ -1,5 +1,11 @@
 import { SearchIcon, XIcon } from "lucide-react";
-import { type RefObject, useEffect, useRef, useState } from "react";
+import {
+	type RefObject,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -102,6 +108,68 @@ export function usePickerDismiss(
 	}, [pickerRef, expanded]);
 }
 
+/**
+ * 选中、移除或清空后在下一帧把焦点交还输入框（等 React 提交、被点击的节点卸载之后）。
+ * 帧回调在高负载或节流下可能被推迟（#3154）：Esc、焦点移到选择器外的控件或卸载时取消；
+ * 执行时焦点既不在选择器内、也不在安排聚焦时所在的控件上，就放弃聚焦并收起结果层，
+ * 不把焦点和结果层抢回这个选择器。
+ */
+function useDeferredInputFocus(
+	pickerRef: RefObject<HTMLElement | null>,
+	inputRef: RefObject<HTMLInputElement | null>,
+	collapse: () => void,
+) {
+	const frameRef = useRef<number | null>(null);
+	const collapseRef = useRef(collapse);
+	collapseRef.current = collapse;
+	const cancel = useCallback(() => {
+		if (frameRef.current === null) return;
+		cancelAnimationFrame(frameRef.current);
+		frameRef.current = null;
+	}, []);
+	useEffect(() => {
+		const picker = pickerRef.current;
+		if (!picker) return cancel;
+		const cancelOnFocusLeave = (event: FocusEvent) => {
+			const next = event.relatedTarget;
+			// relatedTarget 为空（例如键盘触发的移除钮随 chip 卸载）时不取消，留给执行时判断。
+			if (next instanceof Node && !picker.contains(next)) cancel();
+		};
+		picker.addEventListener("focusout", cancelOnFocusLeave);
+		return () => {
+			picker.removeEventListener("focusout", cancelOnFocusLeave);
+			cancel();
+		};
+	}, [pickerRef, cancel]);
+	const focus = () => {
+		cancel();
+		// 选中项与移除钮按下时不抢焦点，安排聚焦时焦点可能还在另一个选择器里（B2-03）。
+		const origin = document.activeElement;
+		frameRef.current = requestAnimationFrame(() => {
+			frameRef.current = null;
+			const picker = pickerRef.current;
+			const input = inputRef.current;
+			if (!picker || !input) return;
+			const active = document.activeElement;
+			const focusStayed =
+				active === origin ||
+				(active instanceof Node && picker.contains(active)) ||
+				// 键盘触发的移除钮随 chip 卸载，焦点落到 body。
+				((active === null || active === document.body) &&
+					origin !== null &&
+					!origin.isConnected);
+			if (!focusStayed) {
+				collapseRef.current();
+				return;
+			}
+			input.focus();
+			const end = input.value.length;
+			input.setSelectionRange(end, end);
+		});
+	};
+	return { focus, cancel };
+}
+
 export type DirectorySelection = {
 	id: string;
 	name: string;
@@ -187,6 +255,11 @@ export function DirectoryPicker({
 	const inputRef = useRef<HTMLInputElement>(null);
 	const expanded = open && !disabled;
 	usePickerDismiss(pickerRef, expanded, () => setOpen(false));
+	const { focus: focusInput, cancel: cancelFocusInput } = useDeferredInputFocus(
+		pickerRef,
+		inputRef,
+		() => setOpen(false),
+	);
 	// 搜索结果：只在展开时读取。
 	useEffect(() => {
 		if (!expanded) return;
@@ -302,14 +375,6 @@ export function DirectoryPicker({
 		});
 	};
 	const selected = describe(selectedIds);
-	const focusInput = () =>
-		requestAnimationFrame(() => {
-			const input = inputRef.current;
-			if (!input) return;
-			input.focus();
-			const end = input.value.length;
-			input.setSelectionRange(end, end);
-		});
 	const add = (option: DirectoryOption | undefined) => {
 		if (
 			disabled ||
@@ -420,7 +485,10 @@ export function DirectoryPicker({
 						} else if (event.key === "Enter") {
 							event.preventDefault();
 							add(visibleOptions[activeIndex]);
-						} else if (event.key === "Escape" && expanded) {
+						} else if (event.key === "Escape") {
+							// Esc 同时取消待执行的延迟聚焦（#3154）。
+							cancelFocusInput();
+							if (!expanded) return;
 							event.preventDefault();
 							event.stopPropagation();
 							setOpen(false);

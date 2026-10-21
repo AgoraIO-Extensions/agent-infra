@@ -692,3 +692,171 @@ describe("DirectoryPicker interaction", () => {
 		]);
 	});
 });
+
+/** 接管 requestAnimationFrame：帧回调只在 flush 时执行，模拟高负载或节流下被推迟的帧（#3154）。 */
+function holdAnimationFrames() {
+	const frames = new Map<number, FrameRequestCallback>();
+	let lastId = 0;
+	vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+		lastId += 1;
+		frames.set(lastId, callback);
+		return lastId;
+	});
+	vi.stubGlobal("cancelAnimationFrame", (frameId: number) => {
+		frames.delete(frameId);
+	});
+	return {
+		get pending() {
+			return frames.size;
+		},
+		flush() {
+			const callbacks = [...frames.values()];
+			frames.clear();
+			act(() => {
+				for (const callback of callbacks) callback(performance.now());
+			});
+		},
+	};
+}
+
+function TwoPickers() {
+	const [owners, setOwners] = useState("user-2");
+	const [users, setUsers] = useState("");
+	return (
+		<>
+			<DirectoryPicker
+				id="picker-owner"
+				kind="user"
+				label="共同 Owner 用户"
+				help="至少保留一名有效 Owner"
+				value={owners}
+				onChange={setOwners}
+			/>
+			<DirectoryPicker
+				id="picker-users"
+				kind="user"
+				label="可使用的用户"
+				help="可选；用于补充个人范围"
+				value={users}
+				onChange={setUsers}
+			/>
+			<input aria-label="下一个字段" />
+		</>
+	);
+}
+
+// #3154：选中、移除或清空后的焦点交还在下一帧执行；帧被推迟、焦点已移到别的控件时，
+// 原选择器不能把焦点和结果层抢回来。
+describe("DirectoryPicker deferred focus (#3154)", () => {
+	it("does not take focus back or reopen when focus moves away right after a pick", async () => {
+		directoryFixture();
+		const frames = holdAnimationFrames();
+		render(<PickerHarness />);
+		const input = await openPicker("Owner");
+		pick(await screen.findByRole("option", { name: /Current Owner/ }));
+		expect(frames.pending).toBe(1);
+		const next = screen.getByRole("textbox", { name: "下一个字段" });
+		act(() => next.focus());
+		// 焦点离开选择器时取消待执行的帧回调。
+		expect(frames.pending).toBe(0);
+		frames.flush();
+		expect(document.activeElement).toBe(next);
+		expect(input.getAttribute("aria-expanded")).toBe("false");
+		expect(screen.queryByRole("listbox")).toBeNull();
+		expect(
+			screen.getByRole("button", {
+				name: "从共同 Owner 用户移除 Current Owner",
+			}),
+		).toBeTruthy();
+	});
+
+	it("does not take focus back or reopen when focus moves away right after a removal", async () => {
+		directoryFixture();
+		const frames = holdAnimationFrames();
+		render(<PickerHarness initial={"user-owner-1\nuser-2"} />);
+		const remove = await screen.findByRole("button", {
+			name: "从共同 Owner 用户移除 Directory User",
+		});
+		const input = await openPicker();
+		pick(remove);
+		expect(frames.pending).toBe(1);
+		const next = screen.getByRole("textbox", { name: "下一个字段" });
+		act(() => next.focus());
+		frames.flush();
+		expect(document.activeElement).toBe(next);
+		expect(input.getAttribute("aria-expanded")).toBe("false");
+		expect(screen.queryByRole("listbox")).toBeNull();
+	});
+
+	it("gives up and collapses when focus moved on from another picker before the frame runs", async () => {
+		directoryFixture();
+		const frames = holdAnimationFrames();
+		render(<TwoPickers />);
+		const owners = screen.getByRole("combobox", { name: "共同 Owner 用户" });
+		const users = screen.getByRole("combobox", { name: "可使用的用户" });
+		const remove = await screen.findByRole("button", {
+			name: "从共同 Owner 用户移除 Directory User",
+		});
+		act(() => users.focus());
+		fireEvent.keyDown(users, { key: "Escape" });
+		// 移除钮按下时不抢焦点，焦点仍在另一个选择器；原选择器收不到 focusout，只能靠执行时判断。
+		pick(remove);
+		expect(owners.getAttribute("aria-expanded")).toBe("true");
+		const next = screen.getByRole("textbox", { name: "下一个字段" });
+		act(() => next.focus());
+		expect(frames.pending).toBe(1);
+		frames.flush();
+		expect(document.activeElement).toBe(next);
+		expect(owners.getAttribute("aria-expanded")).toBe("false");
+		expect(users.getAttribute("aria-expanded")).toBe("false");
+		expect(screen.queryByRole("listbox")).toBeNull();
+	});
+
+	it("still returns focus when it stayed where the pick or removal started", async () => {
+		directoryFixture();
+		const frames = holdAnimationFrames();
+		render(<TwoPickers />);
+		const owners = screen.getByRole("combobox", { name: "共同 Owner 用户" });
+		const users = screen.getByRole("combobox", { name: "可使用的用户" });
+		const remove = await screen.findByRole("button", {
+			name: "从共同 Owner 用户移除 Directory User",
+		});
+		// 焦点在另一个选择器时点移除钮，焦点没有再移动：交还给被操作的选择器（B2-03）。
+		act(() => users.focus());
+		fireEvent.keyDown(users, { key: "Escape" });
+		pick(remove);
+		frames.flush();
+		expect(document.activeElement).toBe(owners);
+		expect(owners.getAttribute("aria-expanded")).toBe("true");
+		// 键盘触发的移除钮随 chip 卸载、焦点落到 body，仍交还输入框。
+		fireEvent.change(owners, { target: { value: "Owner" } });
+		await screen.findByRole("option", { name: /Current Owner/ });
+		fireEvent.keyDown(owners, { key: "Enter" });
+		frames.flush();
+		const keyboardRemove = screen.getByRole("button", {
+			name: "从共同 Owner 用户移除 Current Owner",
+		});
+		act(() => keyboardRemove.focus());
+		fireEvent.click(keyboardRemove);
+		expect(document.activeElement).toBe(document.body);
+		frames.flush();
+		expect(document.activeElement).toBe(owners);
+	});
+
+	it("cancels the pending frame on Escape and on unmount", async () => {
+		directoryFixture();
+		const frames = holdAnimationFrames();
+		const { unmount } = render(<PickerHarness />);
+		const input = await openPicker("Owner");
+		pick(await screen.findByRole("option", { name: /Current Owner/ }));
+		expect(frames.pending).toBe(1);
+		fireEvent.keyDown(input, { key: "Escape" });
+		expect(frames.pending).toBe(0);
+		expect(input.getAttribute("aria-expanded")).toBe("false");
+		fireEvent.click(input);
+		pick(await screen.findByRole("option", { name: /Directory User/ }));
+		expect(frames.pending).toBe(1);
+		unmount();
+		expect(frames.pending).toBe(0);
+	});
+});

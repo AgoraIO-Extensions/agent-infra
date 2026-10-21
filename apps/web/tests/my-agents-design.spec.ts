@@ -1163,6 +1163,105 @@ test("one person picked in two directory pickers gets distinct remove buttons (B
 	await expectCleanPage(page, pageErrors);
 });
 
+type HeldFrames = { hold: boolean; release: () => void };
+
+// #3154：选中后的焦点交还在下一帧执行。帧回调被推迟（高负载或节流）、焦点已移到别的控件时，
+// 原选择器不能把焦点和结果层抢回去；这里在页面内接管 rAF，把推迟的帧放到焦点移走之后执行。
+test("a deferred focus frame does not pull focus back from the next directory picker (#3154)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	await page.addInitScript(() => {
+		const request = window.requestAnimationFrame.bind(window);
+		const cancel = window.cancelAnimationFrame.bind(window);
+		const held = new Map<number, FrameRequestCallback>();
+		let lastHeldId = 0;
+		const frames: HeldFrames = {
+			hold: false,
+			release() {
+				frames.hold = false;
+				const callbacks = [...held.values()];
+				held.clear();
+				for (const callback of callbacks) callback(performance.now());
+			},
+		};
+		Object.assign(window, { __heldFrames: frames });
+		window.requestAnimationFrame = (callback) => {
+			if (!frames.hold) return request(callback);
+			// 推迟的帧用负数 ID，与浏览器分配的 ID 区分。
+			lastHeldId -= 1;
+			held.set(lastHeldId, callback);
+			return lastHeldId;
+		};
+		window.cancelAnimationFrame = (frameId) => {
+			if (!held.delete(frameId)) cancel(frameId);
+		};
+	});
+	const frames = (action: "hold" | "release") =>
+		page.evaluate((next) => {
+			const control = (window as unknown as { __heldFrames: HeldFrames })
+				.__heldFrames;
+			if (next === "hold") control.hold = true;
+			else control.release();
+		}, action);
+	const pageErrors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/my-agents/new");
+	const owners = page.getByRole("combobox", {
+		name: "共同 Owner 用户",
+		exact: true,
+	});
+	const users = page.getByRole("combobox", {
+		name: "可使用的用户",
+		exact: true,
+	});
+	const candidate = page.getByRole("option", { name: /验收用户二/ });
+	const removeFromOwners = page.getByRole("button", {
+		name: "从共同 Owner 用户移除 验收用户二",
+		exact: true,
+	});
+	// Issue 中的时序：选中后 Esc 收起，再去填第二个选择器，推迟的帧最后才执行。
+	await owners.fill("user.two");
+	await expect(candidate).toBeVisible();
+	await frames("hold");
+	await owners.press("Enter");
+	await expect(removeFromOwners).toBeVisible();
+	await owners.press("Escape");
+	await expect(owners).toHaveAttribute("aria-expanded", "false");
+	await users.fill("user.two");
+	await expect(candidate).toBeVisible();
+	await frames("release");
+	await expect(users).toBeFocused();
+	await expect(users).toHaveAttribute("aria-expanded", "true");
+	await expect(owners).toHaveAttribute("aria-expanded", "false");
+	await expect(candidate).toBeVisible();
+	await users.press("Enter");
+	await expect(
+		page.getByRole("button", {
+			name: "从可使用的用户移除 验收用户二",
+			exact: true,
+		}),
+	).toBeVisible();
+	await users.press("Escape");
+	// 焦点在另一个选择器时点移除钮（按下不抢焦点）：原选择器收不到 focusout、不会取消帧，
+	// 只能在帧执行时发现焦点已移到别的控件，放弃聚焦并收起。
+	await frames("hold");
+	await removeFromOwners.click();
+	await expect(removeFromOwners).toHaveCount(0);
+	await expect(owners).toHaveAttribute("aria-expanded", "true");
+	const agentName = page.getByLabel("Agent 名称");
+	await agentName.focus();
+	await frames("release");
+	await expect(agentName).toBeFocused();
+	await expect(owners).toHaveAttribute("aria-expanded", "false");
+	await expect(users).toHaveAttribute("aria-expanded", "false");
+	await expectCleanPage(page, pageErrors);
+});
+
 // #3128 B2-11：设计稿全局 button{cursor:pointer}。我的 Agent 各页与撤回弹窗的按钮悬停为指针，
 // 禁用按钮不是指针。
 test("buttons on my Agent pages use the pointer cursor (B2-11)", async ({
