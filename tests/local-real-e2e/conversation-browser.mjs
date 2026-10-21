@@ -182,9 +182,9 @@ async function assertAcceptance(
 	);
 	const browserOperations = events.filter(
 		(event) =>
-			(event.type === "execution.operation" && event.payload?.browser) ||
-			event.type === "browser.handoff" ||
-			event.type === "browser.side_effect",
+			event.type === "execution.operation" &&
+			event.payload?.kind === "tool" &&
+			event.payload.browser !== undefined,
 	);
 	const browserHandoffs = events.filter(
 		(event) => event.type === "browser.handoff",
@@ -226,7 +226,10 @@ async function assertAcceptance(
 		if (required.requiredSkillName !== undefined)
 			assert(
 				nativeMetadata.capabilities.some(
-					(entry) => entry.name === required.requiredSkillName,
+					(entry) =>
+						entry &&
+						typeof entry === "object" &&
+						entry.name === required.requiredSkillName,
 				),
 				`Expected Skill ${required.requiredSkillName} in native metadata`,
 			);
