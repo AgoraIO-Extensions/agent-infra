@@ -11,6 +11,7 @@ import {
 	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
+import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import { pendingApplication } from "../src/features/my-agents/test-fixtures";
 import type {
 	AgentLifecycleCommandRequestV1,
@@ -21,6 +22,7 @@ import type {
 	DeploymentConfigurationProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
 import { captureDesignContract, designViewports } from "./design-contract";
+import { recordApiRequests } from "./generated-client-paths";
 import { duplicateControlNames } from "./page-hygiene";
 import {
 	computed,
@@ -337,9 +339,9 @@ async function fixture(
 				},
 			];
 			await route.fulfill({
-				json: {
-					schemaVersion: 1,
-					items: items.filter(
+				json: directorySearchResponse(
+					url,
+					items.filter(
 						(item) =>
 							item.kind === url.searchParams.get("kind") &&
 							(!url.searchParams.has("ids") ||
@@ -351,7 +353,7 @@ async function fixture(
 								.toLowerCase()
 								.includes((url.searchParams.get("q") ?? "").toLowerCase()),
 					),
-				},
+				),
 			});
 			return;
 		}
@@ -3063,6 +3065,29 @@ test("Agent detail and configuration use readable directory records with canonic
 	});
 });
 
+test("application form and Owner configuration read the directory only through the generated client (#3035)", async ({
+	page,
+}) => {
+	await fixture(page);
+	const api = recordApiRequests(page);
+	await page.goto("/my-agents/new");
+	const owner = page.getByRole("combobox", { name: "共同 Owner 用户" });
+	await owner.fill("user.two");
+	await expect(page.getByRole("option", { name: /验收用户二/ })).toBeVisible();
+	await page.goto("/agents/agent-pilot-1/configuration");
+	await expect(
+		page.getByRole("button", { name: "移除 平台工程" }),
+	).toBeVisible();
+	await page.getByRole("combobox", { name: "可使用的用户" }).fill("user.three");
+	await expect(page.getByRole("option", { name: /验收用户三/ })).toBeVisible();
+	// 关键词搜索与按 ID 回显都发生过，且全部请求都能匹配生成 Client 的路径模板。
+	expect(
+		api.requests.filter((entry) => entry === "GET /api/v2/directory/search")
+			.length,
+	).toBeGreaterThanOrEqual(2);
+	api.expectGenerated("申请表单与 Owner 配置");
+});
+
 test("Agent detail shows each Owner's server-projected status chip (D-04, #2910)", async ({
 	page,
 }, info) => {
@@ -3424,7 +3449,9 @@ test("Owner configuration names records missing from the directory with the Agen
 }) => {
 	await fixture(page);
 	await page.route("**/api/v2/directory/search?**", (route) =>
-		route.fulfill({ json: { schemaVersion: 1, items: [] } }),
+		route.fulfill({
+			json: directorySearchResponse(new URL(route.request().url()), []),
+		}),
 	);
 	await page.goto("/agents/agent-pilot-1/configuration");
 	await expect(page.getByRole("button", { name: "移除 Owner" })).toBeVisible();
@@ -5637,20 +5664,19 @@ test.describe("Agent detail design alignment", () => {
 		await page.route("**/api/v2/directory/search?**", async (route) => {
 			const url = new URL(route.request().url());
 			return route.fulfill({
-				json: {
-					schemaVersion: 1,
-					items:
-						url.searchParams.get("kind") === "user"
-							? [
-									{
-										kind: "user",
-										canonicalId: "user-owner-1",
-										displayName: "当前 Owner",
-										organizationPath: "研发 / 平台工程",
-									},
-								]
-							: [],
-				},
+				json: directorySearchResponse(
+					url,
+					url.searchParams.get("kind") === "user"
+						? [
+								{
+									kind: "user",
+									canonicalId: "user-owner-1",
+									displayName: "当前 Owner",
+									organizationPath: "研发 / 平台工程",
+								},
+							]
+						: [],
+				),
 			});
 		});
 		await page.goto("/agents/agent-pilot-1");

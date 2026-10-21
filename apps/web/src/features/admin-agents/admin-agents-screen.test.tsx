@@ -13,7 +13,12 @@ import {
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/components/ui/toast";
+import { client as generatedClient } from "../../pilot/generated-v2/client.gen.js";
 import { commandAgentLifecycle } from "../agent-administration/agent-administration.js";
+import {
+	directoryRequestUrl,
+	directorySearchResponse,
+} from "../directory-test-fixtures.js";
 import {
 	AdminAgentsScreen,
 	adminAgentStatuses,
@@ -54,23 +59,25 @@ const directoryRecords = [
 ];
 const directoryRequests: URL[] = [];
 beforeEach(() => {
+	// 生成 Client 默认使用相对地址；jsdom 下的 Request 需要绝对地址。
+	generatedClient.setConfig({ baseUrl: "https://platform.test" });
 	directoryRequests.length = 0;
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (input: string | URL | Request) => {
-			const url = new URL(
-				input instanceof Request ? input.url : String(input),
-				"http://localhost",
-			);
+			const url = directoryRequestUrl(input);
 			directoryRequests.push(url);
 			const ids = url.searchParams.get("ids")?.split(",") ?? [];
-			return Response.json({
-				items: directoryRecords.filter(
-					(item) =>
-						item.kind === url.searchParams.get("kind") &&
-						ids.includes(item.canonicalId),
+			return Response.json(
+				directorySearchResponse(
+					url,
+					directoryRecords.filter(
+						(item) =>
+							item.kind === url.searchParams.get("kind") &&
+							ids.includes(item.canonicalId),
+					),
 				),
-			});
+			);
 		}),
 	);
 });

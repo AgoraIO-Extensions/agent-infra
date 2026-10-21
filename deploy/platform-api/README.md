@@ -71,7 +71,7 @@ native 业务验收；外联仍由部署方配置明确的 NetworkPolicy。
 | `nativeMetadataCurrent` | 可选的 current-confirmation override。与默认 reader 组合时，必须由 `nativeMetadataWorker.requestRegistry` 显式提供同一 registry；缺失即拒绝启动。未配置时，API 自动使用 request-local registry、现有 ConversationAuthorization 和同一个 Worker service token 装配 current route；过期、释放、跨 binding、撤权和 authorization revision 变化均 fail closed |
 | `nativeCapabilityMetadata` | native command/Skill admission 的可信 metadata revalidation port；必须来自已认证的当前 Runtime metadata boundary，缺失时 admission 保持 unavailable，平台不提供 fake 默认值 |
 | `providerImport` | 可选的受控 Skill Hub Provider import port：部署方提供已获准 registry、ObjectStorage、source verifier、scanner 和 admission policy；HTTP 只提交 provider/name/version 选择，不能提交 archive bytes、存储路径、trust、policy 或 approval 事实；不要同时放入 `apiInput.providerImport`。版本详情也只从同一 ObjectStorage 按固定对象版本有界读取 `SKILL.md` 与资源清单；未提供时详情内容显示不可用。网页编辑的 Skill 项目发布复用同一 ObjectStorage、scanner 与 admission policy（含签名 key 与 trust/policy 修订），来源证明由平台项目供应生成，不调用这里的 source verifier；未提供时网页发布返回不可用，项目内容仍可编辑 |
-| `directorySearch` | 查询当前用户和组织目录记录的函数，返回 canonical ID、可读名称及邮箱或组织路径；依赖不可用时抛错 |
+| `directorySearch` | 查询当前用户和组织目录记录的函数，返回 canonical ID、可读名称及邮箱或组织路径；依赖不可用时抛错。每条记录须符合浏览器契约 `DirectorySearchItemV1`（`kind`、非空 `canonicalId`、字符串 `displayName`，可选字符串 `email`、`organizationPath`），其他字段不进入响应；抛错或记录不符合契约时 `GET /api/v2/directory/search` 返回 503 `DEPENDENCY_UNAVAILABLE` |
 
 `apiInput.taskAdmissionPolicy` 必须由真实部署配置显式提供。`maximumWaitingTasksPerAgent`
 是每个 Agent 的等待任务容量（单位：任务），`waitingTimeoutMs` 是等待期限（单位：毫秒）；

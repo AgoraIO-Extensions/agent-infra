@@ -29,6 +29,8 @@ import {
 import {
 	agentDetailOpenApiPathsV1,
 	agentDetailSchemasV1,
+	directorySearchOpenApiPathsV1,
+	directorySearchSchemasV1,
 	nativeCapabilityInvocationOpenApiPathsV1,
 	nativeCapabilityInvocationSchemasV1,
 	nativeMetadataOpenApiPathsV1,
@@ -856,6 +858,7 @@ function buildArtifacts() {
 		paths: {
 			...pilotBrowserOpenApiPathsV2,
 			...agentDetailOpenApiPathsV1,
+			...directorySearchOpenApiPathsV1,
 			...pilotOperationOpenApiPathsV2,
 			...skillHubReadOpenApiPathsV1,
 			...skillHubReviewOpenApiPathsV1,
@@ -882,6 +885,7 @@ function buildArtifacts() {
 			schemas: {
 				...pilotBrowserSchemasV2,
 				...agentDetailSchemasV1,
+				...directorySearchSchemasV1,
 				...pilotOperationSchemasV2,
 				...skillHubReadSchemasV1,
 				...skillHubReviewSchemasV1,

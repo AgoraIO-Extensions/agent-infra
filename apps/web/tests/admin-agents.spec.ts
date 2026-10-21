@@ -1,8 +1,10 @@
 import { AgentProjectionV2Schema } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
+import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures";
 import { captureDesignContract, designViewports } from "./design-contract";
+import { recordApiRequests } from "./generated-client-paths";
 import { expectNoDuplicateControls } from "./page-health";
 import {
 	expectCardTable,
@@ -101,9 +103,9 @@ async function fixture(page: Page, admin = true) {
 			const ids = url.searchParams.get("ids")?.split(",") ?? [];
 			directory.push({ kind: url.searchParams.get("kind"), ids });
 			await route.fulfill({
-				json: {
-					schemaVersion: 1,
-					items: ids.includes("org-platform")
+				json: directorySearchResponse(
+					url,
+					ids.includes("org-platform")
 						? [
 								{
 									kind: "organization",
@@ -113,7 +115,7 @@ async function fixture(page: Page, admin = true) {
 								},
 							]
 						: [],
-				},
+				),
 			});
 			return;
 		}
@@ -337,6 +339,20 @@ test("Agent management page head places the h1 at the design height", async ({
 	).toBeVisible();
 	// 设计 .page-head-copy .eyebrow 上外边距为 0，h1 与设计同高（±1px）。
 	await expectPageHeadTop(page, info.project.name === "mobile");
+});
+
+test("Agent management reads directory names only through the generated client (#3035)", async ({
+	page,
+}) => {
+	const data = await fixture(page);
+	const api = recordApiRequests(page);
+	await page.goto("/admin/agents");
+	await expect(
+		page.getByRole("table").getByText("平台工程").first(),
+	).toBeVisible();
+	expect(data.directory.length).toBeGreaterThan(0);
+	expect(api.requests).toContain("GET /api/v2/directory/search");
+	api.expectGenerated("Agent 管理");
 });
 
 test("refresh second-page failure collapses the page to the heading and one retry", async ({
@@ -752,17 +768,14 @@ test("disabling an employee is confirmed with the person before one request", as
 	const writes: unknown[] = [];
 	await page.route("**/api/v2/directory/search?**", (route) =>
 		route.fulfill({
-			json: {
-				schemaVersion: 1,
-				items: [
-					{
-						kind: "user",
-						canonicalId: userId,
-						displayName: "验收员工",
-						email: "employee@example.test",
-					},
-				],
-			},
+			json: directorySearchResponse(new URL(route.request().url()), [
+				{
+					kind: "user",
+					canonicalId: userId,
+					displayName: "验收员工",
+					email: "employee@example.test",
+				},
+			]),
 		}),
 	);
 	await page.route(`**/api/v2/admin/users/${userId}/disable`, (route) => {

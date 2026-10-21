@@ -3,6 +3,7 @@ import {
 	ApplicationMetadataV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, test } from "@playwright/test";
+import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import { duplicateControlNames } from "./page-hygiene";
 import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
@@ -67,9 +68,9 @@ async function fixture(page: Page) {
 			const ids =
 				new URL(request.url()).searchParams.get("ids")?.split(",") ?? [];
 			return route.fulfill({
-				json: {
-					schemaVersion: 1,
-					items: [
+				json: directorySearchResponse(
+					new URL(request.url()),
+					[
 						{
 							kind: "user",
 							canonicalId: application.responsibleUserId,
@@ -83,7 +84,7 @@ async function fixture(page: Page) {
 							email: "recipient@example.test",
 						},
 					].filter((item) => ids.includes(item.canonicalId)),
-				},
+				),
 			});
 		}
 		const match = /^\/api\/v2\/applications\/([^/]+)(\/credentials)?$/.exec(

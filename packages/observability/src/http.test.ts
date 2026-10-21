@@ -290,6 +290,23 @@ it("accepts the bounded authority.load failure step (#2696)", async () => {
 	expect(JSON.stringify(events)).not.toContain("PRIVATE_DIRECTORY_DETAIL");
 });
 
+it("accepts the bounded directory.search failure step (#3035)", async () => {
+	const { app, events } = observed();
+	app.get("/directory", (context) => {
+		recordHttpFailureContext({
+			failureStep: "directory.search",
+			error: new TypeError("PRIVATE_DIRECTORY_MEMBER"),
+		});
+		return context.json(failureBody("DEPENDENCY_UNAVAILABLE"), 503);
+	});
+	expect((await app.request("/directory")).status).toBe(503);
+	expect(events[0]).toMatchObject({
+		failureStep: "directory.search",
+		errorClass: "TypeError",
+	});
+	expect(JSON.stringify(events)).not.toContain("PRIVATE_DIRECTORY_MEMBER");
+});
+
 it("records the route template, status and protocol code of a failed request without identifiers (#2569)", async () => {
 	const { app, events } = observed();
 	app.post("/api/v2/agents/:agentId/lifecycle", (context) =>

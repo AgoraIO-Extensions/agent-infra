@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { client as generatedClient } from "../pilot/generated-v2/client.gen.js";
 import {
 	AvailabilityNameList,
 	type DirectoryNames,
@@ -10,7 +11,15 @@ import {
 	useAvailabilityNames,
 	useDirectoryNames,
 } from "./directory-names.js";
+import {
+	directoryRequestUrl,
+	directorySearchResponse,
+} from "./directory-test-fixtures.js";
 
+// 生成 Client 默认使用相对地址；jsdom 下的 Request 需要绝对地址。
+beforeEach(() => {
+	generatedClient.setConfig({ baseUrl: "https://platform.test" });
+});
 afterEach(() => {
 	cleanup();
 	vi.unstubAllGlobals();
@@ -18,19 +27,22 @@ afterEach(() => {
 
 function namedDirectory(delay?: Promise<void>) {
 	const fetch = vi.fn(async (input: string | URL | Request) => {
-		const url = new URL(String(input), "http://localhost");
+		const url = directoryRequestUrl(input);
 		const ids = url.searchParams.get("ids")?.split(",") ?? [];
 		await delay;
-		return Response.json({
-			items: ids
-				.filter((id) => !id.endsWith("-missing"))
-				.map((id) => ({
-					kind: url.searchParams.get("kind"),
-					canonicalId: id,
-					displayName: `Name ${id}`,
-					email: `${id}@example.test`,
-				})),
-		});
+		return Response.json(
+			directorySearchResponse(
+				url,
+				ids
+					.filter((id) => !id.endsWith("-missing"))
+					.map((id) => ({
+						kind: url.searchParams.get("kind"),
+						canonicalId: id,
+						displayName: `Name ${id}`,
+						email: `${id}@example.test`,
+					})),
+			),
+		);
 	});
 	vi.stubGlobal("fetch", fetch);
 	return fetch;
@@ -61,6 +73,117 @@ function wrapper(client: QueryClient) {
 }
 
 describe("useDirectoryNames", () => {
+	it("reads through the generated V2 client with the contract query (#3035)", async () => {
+		const fetch = namedDirectory();
+		let latest: DirectoryNames | undefined;
+		render(
+			<Names
+				ids={["user-a"]}
+				onNames={(names) => {
+					latest = names;
+				}}
+			/>,
+			{ wrapper: wrapper(new QueryClient()) },
+		);
+		await waitFor(() => expect(latest?.status).toBe("ready"));
+		expect(fetch).toHaveBeenCalledTimes(1);
+		const [request] = fetch.mock.calls[0] ?? [];
+		expect(request).toBeInstanceOf(Request);
+		const url = directoryRequestUrl(request as Request);
+		expect((request as Request).method).toBe("GET");
+		expect(url.pathname).toBe("/api/v2/directory/search");
+		expect(Object.fromEntries(url.searchParams)).toEqual({
+			kind: "user",
+			q: "",
+			limit: "50",
+			ids: "user-a",
+		});
+	});
+
+	it.each([
+		[
+			"a response without the echoed query and kind",
+			() => ({
+				items: [{ kind: "user", canonicalId: "user-a", displayName: "Ada" }],
+			}),
+		],
+		[
+			"an undeclared top-level field",
+			() => ({
+				items: [],
+				query: "",
+				kind: "user",
+				schemaVersion: 1,
+			}),
+		],
+		[
+			"a record with a null email",
+			() => ({
+				items: [
+					{
+						kind: "user",
+						canonicalId: "user-a",
+						displayName: "Ada",
+						email: null,
+					},
+				],
+				query: "",
+				kind: "user",
+			}),
+		],
+	])("treats %s as a read failure", async (_name, body) => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => Response.json(body())),
+		);
+		let latest: DirectoryNames | undefined;
+		render(
+			<Names
+				ids={["user-a"]}
+				onNames={(names) => {
+					latest = names;
+				}}
+			/>,
+			{ wrapper: wrapper(new QueryClient()) },
+		);
+		await waitFor(() => expect(latest?.status).toBe("error"));
+		expect(latest?.resolve("user-a").resolved).toBe(false);
+		expect(document.body.textContent).not.toContain("Ada");
+	});
+
+	it("treats the contract 503 as a read failure", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json(
+					{
+						schemaVersion: 1,
+						code: "DEPENDENCY_UNAVAILABLE",
+						message: "A required service is temporarily unavailable.",
+						retryable: true,
+						traceId: "trace-directory",
+					},
+					{ status: 503 },
+				),
+			),
+		);
+		let latest: DirectoryNames | undefined;
+		render(
+			<Names
+				ids={["user-a"]}
+				onNames={(names) => {
+					latest = names;
+				}}
+			/>,
+			{ wrapper: wrapper(new QueryClient()) },
+		);
+		await waitFor(() => expect(latest?.status).toBe("error"));
+		expect(latest?.resolve("user-a")).toMatchObject({
+			name: "未识别的用户",
+			resolved: false,
+		});
+	});
+
 	it("batches one page of IDs and reuses the cached set", async () => {
 		const fetch = namedDirectory();
 		const client = new QueryClient({
@@ -72,10 +195,8 @@ describe("useDirectoryNames", () => {
 		expect(fetch).toHaveBeenCalledTimes(3);
 		expect(
 			fetch.mock.calls.map(
-				([url]) =>
-					new URL(String(url), "http://localhost").searchParams
-						.get("ids")
-						?.split(",").length,
+				([input]) =>
+					directoryRequestUrl(input).searchParams.get("ids")?.split(",").length,
 			),
 		).toEqual([50, 50, 20]);
 		view.unmount();
@@ -118,9 +239,9 @@ describe("useDirectoryNames", () => {
 	it("exposes a user's organization path as detail only when the directory returns one", async () => {
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () =>
-				Response.json({
-					items: [
+			vi.fn(async (input: string | URL | Request) =>
+				Response.json(
+					directorySearchResponse(directoryRequestUrl(input), [
 						{
 							kind: "user",
 							canonicalId: "user-with-path",
@@ -132,8 +253,8 @@ describe("useDirectoryNames", () => {
 							canonicalId: "user-without-path",
 							displayName: "无组织的用户",
 						},
-					],
-				}),
+					]),
+				),
 			),
 		);
 		let latest: DirectoryNames | undefined;

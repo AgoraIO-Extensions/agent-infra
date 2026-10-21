@@ -14,6 +14,7 @@ import {
 	type TestInfo,
 	test,
 } from "@playwright/test";
+import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import {
 	expectCleanPage,
 	expectEmptyRows,
@@ -187,31 +188,27 @@ async function fixture(page: Page) {
 			if (url.searchParams.get("kind") === "user") {
 				expect(url.searchParams.get("ids")).toBe("user-owner-1");
 				return route.fulfill({
-					json: {
-						items: [
-							{
-								kind: "user",
-								canonicalId: "user-owner-1",
-								displayName: "Owner",
-								organizationPath: "研发 / 发布",
-							},
-						],
-					},
+					json: directorySearchResponse(url, [
+						{
+							kind: "user",
+							canonicalId: "user-owner-1",
+							displayName: "Owner",
+							organizationPath: "研发 / 发布",
+						},
+					]),
 				});
 			}
 			expect(url.searchParams.get("kind")).toBe("organization");
 			expect(url.searchParams.get("ids")).toBe("org-platform");
 			return route.fulfill({
-				json: {
-					items: [
-						{
-							kind: "organization",
-							canonicalId: "org-platform",
-							displayName: "平台工程",
-							organizationPath: "研发 / 平台工程",
-						},
-					],
-				},
+				json: directorySearchResponse(url, [
+					{
+						kind: "organization",
+						canonicalId: "org-platform",
+						displayName: "平台工程",
+						organizationPath: "研发 / 平台工程",
+					},
+				]),
 			});
 		}
 		if (request.method() !== "GET") {
