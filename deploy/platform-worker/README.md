@@ -99,6 +99,13 @@ Codex 使用 `openai-responses-v1`；Claude、OpenCode（`acp`）与 Pi 使用
 本地注入方式见 [API 部署说明](../platform-api/README.md#skill-绑定的-agent-version)。未导出或配置
 不完整时 Skill 物化不可用，普通 Workload 照常启动。
 
+## 集群注入的 Pod 标签
+
+集群向运行中 Pod 注入地域标签时，可在
+`workloadInput.policy.allowedPodTopologyLabelValues` 登记精确获准值列表；键仅限
+`topology.kubernetes.io/region` 和 `topology.kubernetes.io/zone`。默认不接受额外标签。
+此配置只允许运行中 Pod 携带这些标签，不改变模板、Agent 身份、revision 或 Pod spec 校验。
+
 ## 多服务资源档位
 
 `workloadInput.policy.multiServiceResourceProfiles` 与 `workloadInput.policy.multiServiceResourceCap`
