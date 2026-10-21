@@ -1543,6 +1543,7 @@ describe("creation failure category route (#3034)", () => {
 	function creationFailureApp(
 		options: {
 			readonly userId?: string;
+			readonly organizationIds?: readonly string[];
 			readonly administrator?: boolean;
 			readonly agents?: readonly ReturnType<typeof failedAgent>[];
 			readonly reason?: string | null;
@@ -1581,6 +1582,9 @@ describe("creation failure category route (#3034)", () => {
 				resolve: vi.fn().mockResolvedValue({
 					...identity,
 					userId: options.userId ?? "user-1",
+					organizationIds: [
+						...(options.organizationIds ?? identity.organizationIds),
+					],
 					roles: options.administrator
 						? (["employee", "system_admin"] as const)
 						: identity.roles,
@@ -1645,6 +1649,11 @@ describe("creation failure category route (#3034)", () => {
 
 	it.each([
 		["another user", { userId: "user-3" }, "agent-1"],
+		[
+			"a user of another organization",
+			{ userId: "user-3", organizationIds: ["org-2"] },
+			"agent-1",
+		],
 		["the Owner of another Agent", { userId: "user-1" }, "agent-2"],
 		["anyone for a missing Agent", { userId: "user-1" }, "agent-missing"],
 	] as const)(

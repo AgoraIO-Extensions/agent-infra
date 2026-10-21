@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import {
 	AgentApiCreationResponseV1Schema,
 	AgentApplicationProjectionV2Schema,
+	AgentCreationFailureProjectionV1Schema,
 	AgentDetailProjectionV1Schema,
 	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
@@ -1657,6 +1658,91 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			{ kind: "web", status: "available" },
 			{ kind: "wecom_bot", status: "failed" },
 		]);
+	});
+	// #3034：创建失败类别经真实装配、Store 与 PostgreSQL 读取。只有当前 Owner 与系统管理员能读到，
+	// 其他用户（含其他组织）、其他 Agent 的 Owner 与未处于创建失败的 Agent 一律 404。
+	it("serves the creation failure category only to the Owner and an administrator", async () => {
+		const createApproved = async (user: User, key: string) => {
+			const created = AgentApplicationProjectionV2Schema.parse(
+				await json(
+					await request(
+						"/api/v2/agent-applications",
+						user,
+						applicationBody,
+						key,
+					),
+					201,
+				),
+			);
+			await json(
+				await request(
+					`/api/v2/admin/agent-applications/${created.applicationId}/decision`,
+					"admin",
+					{ schemaVersion: 1, decision: "approve" },
+					`${key}-approve`,
+				),
+				200,
+			);
+			if (!created.agentId) throw new Error("Expected an approved Agent");
+			return created.agentId;
+		};
+		const failed = await createApproved("alice", "creation-failure-alice");
+		const creating = await createApproved("bob", "creation-failure-bob");
+		const read = (agentId: string, user: User) =>
+			fetch(`${origin}/api/v2/agents/${agentId}/creation-failure`, {
+				headers: { cookie: `synthetic-session=${sessionKeys[user]}` },
+			});
+		const unavailable = async (agentId: string, user: User) => {
+			const body = await json(await read(agentId, user), 404);
+			expect(body).toMatchObject({ code: "RESOURCE_UNAVAILABLE" });
+			expect(JSON.stringify(body)).not.toMatch(/kubernetes|policy|attempt/);
+		};
+		// 仍在创建中：Owner 与管理员都读不到。
+		await unavailable(failed, "alice");
+		await unavailable(failed, "admin");
+		await reader.unsafe(
+			`update platform.agent_applications set status = 'creation_failed', failure_code = 'reconciliation_failed' where agent_id = $1`,
+			[failed],
+		);
+		await reader.unsafe(
+			`insert into platform.workload_reconciliations (agent_id, revision, state)
+			values ($1, 1, $2::text::jsonb)
+			on conflict (agent_id) do update set state = excluded.state`,
+			[
+				failed,
+				JSON.stringify({
+					schemaVersion: 1,
+					agentId: failed,
+					revision: 1,
+					lastFailure: {
+						schemaVersion: 1,
+						reason: "kubernetes_policy",
+						attempts: 1,
+					},
+				}),
+			],
+		);
+		for (const user of ["alice", "admin"] as const) {
+			const response = await read(failed, user);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+			const body = await json(response, 200);
+			expect(AgentCreationFailureProjectionV1Schema.parse(body)).toEqual({
+				schemaVersion: 1,
+				agentId: failed,
+				category: "configuration_rejected",
+			});
+			expect(JSON.stringify(body)).not.toMatch(/kubernetes|policy|attempt/);
+		}
+		// bob 属于另一个组织，也是另一个 Agent 的 Owner：读不到 alice 的 Agent，自己的 Agent 未失败也读不到。
+		await unavailable(failed, "bob");
+		await unavailable(creating, "bob");
+		await unavailable(creating, "admin");
+		await unavailable("agent_missing_creation_failure", "alice");
+		// 只接受浏览器会话：同一主体改用 Authorization 也被拒绝。
+		expect(
+			(await request(`/api/v2/agents/${failed}/creation-failure`, "alice"))
+				.status,
+		).toBe(401);
 	});
 });
 

@@ -756,7 +756,7 @@ Workload 调谐区分永久配置或 admission 拒绝与可重试的基础设施
 
 连续的 Kubernetes 401 或 403 属于明确授权拒绝，默认连续三次后进入既有失败清理/候选拒绝路径，不再消耗完整 `maximumAttempts` 预算；部署可把阈值限制在更小的有效预算内。其他原因继续使用原有重试预算，401/403 的连续计数在原因改变或步骤成功后归零。该规则只改变提前终止时机，不改变既有 `failureCode` 的含义或清理语义。
 
-部署策略不支持期望访问路由属于确定性拒绝。`platform-worker` 在 preflight 开始时、Registry 准入和任何 Kubernetes 写入之前核对访问路由：期望为平台身份入口（自有交互入口且身份责任为 `platform-managed`，对应 `route.exposure: platform-auth`），而部署策略没有提供可信的平台身份路由集成（`platformAuthAnnotations` 为空）时，本步以 `kubernetes_policy` 立即进入既有失败处理，不消耗 `maximumAttempts` 预算；Owner 或系统管理员重试创建时同样在首个 preflight 结束。该检查不改变已配置平台身份路由的部署，也不改变 preflight 之后各阶段对 `kubernetes_policy` 的重试语义。
+部署策略不支持期望配置属于确定性拒绝。preflight 中的 `kubernetes_policy` 只来自部署策略对期望配置的静态校验（目前是下述访问路由核对），与 Registry/Manifest 的永久拒绝一样立即进入既有失败处理，不消耗 `maximumAttempts` 预算；preflight 内的临时 Registry、模型目录或依赖异常仍按预算重试。其中访问路由在 preflight 开始时、Registry 准入和任何 Kubernetes 写入之前核对：期望为平台身份入口（自有交互入口且身份责任为 `platform-managed`，对应 `route.exposure: platform-auth`），而部署策略没有提供可信的平台身份路由集成（`platformAuthAnnotations` 为空）时，本步以 `kubernetes_policy` 结束；Owner 或系统管理员重试创建时同样在首个 preflight 结束。该规则不改变已配置平台身份路由的部署，也不改变 preflight 之后各阶段对 `kubernetes_policy` 的重试语义。
 
 `creation_failed` 的 Agent 只向当前 Owner 与系统管理员提供一个失败类别。`platform-core` 由管理状态的 `failureCode` 与 Workload `lastFailure.reason` 推导：`health_check_failed` 为健康检查未通过；`preflight_rejected` 或 `kubernetes_policy` 为配置与部署不兼容，需要先调整配置或部署，重试不会成功；其余为部署暂不可用，可以稍后重试。浏览器经 `GET /api/v2/agents/{agentId}/creation-failure` 读取 `AgentCreationFailureProjectionV1`，其中只有 `schemaVersion`、`agentId` 和该类别，不返回原因码、尝试次数、Kubernetes status/kind/verb 或资源名；其他主体、不处于 `creation_failed` 的 Agent 与不存在的 Agent 一律返回 `RESOURCE_UNAVAILABLE`。
 
