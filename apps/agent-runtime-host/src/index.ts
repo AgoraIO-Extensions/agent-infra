@@ -12,8 +12,10 @@ import {
 	createAppliedRuntimeSkillDirectoryV1,
 	createExecutionGrantVerifier,
 	createRuntimeExecutionGrantValidatorV4,
+	createRuntimeExecutionGrantValidatorV5,
 	createRuntimeExecutionGrantVerifierV2,
 	createRuntimeExecutionKeyRecoveryValidatorV4,
+	createRuntimeExecutionKeyRecoveryValidatorV5,
 	createWorkloadReadinessVerifierV1,
 	discoverRuntimeBrowserCapabilityV1,
 	FakeRuntimeDriver,
@@ -31,7 +33,9 @@ import type {
 	ExecutionGrantV1,
 	RuntimeBusinessRequestV4,
 	RuntimeExecutionGrantV2,
+	RuntimeNativeCapabilityRequestV5,
 	RuntimeRestoreExecutionKeyRequestV4,
+	RuntimeRestoreExecutionKeyRequestV5,
 	VerifiedExecutionGrantV1,
 	VerifiedRuntimeExecutionGrantV2,
 } from "@agent-infra/contracts/runtime";
@@ -115,6 +119,14 @@ interface StartOptions {
 	verifyRecoveryGrantV4?: (request: unknown) => Promise<{
 		request: RuntimeRestoreExecutionKeyRequestV4;
 		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
+	}>;
+	verifyGrantV5?: (request: unknown) => Promise<{
+		request: RuntimeNativeCapabilityRequestV5;
+		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
+	}>;
+	verifyRecoveryGrantV5?: (request: unknown) => Promise<{
+		request: RuntimeRestoreExecutionKeyRequestV5;
+		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV5;
 	}>;
 	nativeMetadataRead?: (
 		request: import("@agent-infra/contracts/runtime").RuntimeNativeMetadataReadRequestV1,
@@ -753,6 +765,50 @@ export async function assembleRuntimeHost(
 					return verified;
 				}
 			: undefined;
+		const rawValidateV5 =
+			runtimeWorkerId && activeConfiguration?.schemaVersion === 4
+				? createRuntimeExecutionGrantValidatorV5(
+						new Map([[keyId, publicKey]]),
+						{
+							expectedIssuer,
+							expectedWorkerId: runtimeWorkerId,
+						},
+					)
+				: undefined;
+		const validateV5 = rawValidateV5
+			? async (request: unknown) => {
+					const verified = await rawValidateV5(request);
+					if (agentId && verified.claims.agentId !== agentId)
+						throw new RuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							"Runtime authorization does not match this deployment",
+							403,
+						);
+					return verified;
+				}
+			: undefined;
+		const rawValidateRecoveryV5 =
+			runtimeWorkerId && activeConfiguration?.schemaVersion === 4
+				? createRuntimeExecutionKeyRecoveryValidatorV5(
+						new Map([[keyId, publicKey]]),
+						{
+							expectedIssuer,
+							expectedWorkerId: runtimeWorkerId,
+						},
+					)
+				: undefined;
+		const validateRecoveryV5 = rawValidateRecoveryV5
+			? async (request: unknown) => {
+					const verified = await rawValidateRecoveryV5(request);
+					if (agentId && verified.claims.agentId !== agentId)
+						throw new RuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							"Runtime authorization does not match this deployment",
+							403,
+						);
+					return verified;
+				}
+			: undefined;
 		const host = await RuntimeHost.open({
 			createBrowserExecutionContext,
 			probeBrowserCapability: async ({ declaration, binding, signal }) =>
@@ -793,6 +849,10 @@ export async function assembleRuntimeHost(
 			...(validateV4 ? { validateGrantV4: validateV4 } : {}),
 			...(validateRecoveryV4
 				? { validateRecoveryGrantV4: validateRecoveryV4 }
+				: {}),
+			...(validateV5 ? { validateGrantV5: validateV5 } : {}),
+			...(validateRecoveryV5
+				? { validateRecoveryGrantV5: validateRecoveryV5 }
 				: {}),
 		});
 		assembledHost = host;
@@ -841,6 +901,15 @@ export async function assembleRuntimeHost(
 				? {
 						verifyRecoveryGrantV4: (request: unknown) =>
 							validateRecoveryV4(request),
+					}
+				: {}),
+			...(validateV5
+				? { verifyGrantV5: (request: unknown) => validateV5(request) }
+				: {}),
+			...(validateRecoveryV5
+				? {
+						verifyRecoveryGrantV5: (request: unknown) =>
+							validateRecoveryV5(request),
 					}
 				: {}),
 			...(activeConfiguration

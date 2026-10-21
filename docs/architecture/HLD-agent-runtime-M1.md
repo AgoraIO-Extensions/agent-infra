@@ -472,6 +472,69 @@ Driver 直接执行的标准 MCP 使用工程 Spec
 的官方工具请求/结果接缝，在原持久意图、当前授权与结果确认后交付原生响应。
 它只覆盖受保护 Driver 内的实际 MCP 操作，不替代其他原生工具或私有 lane 的屏障。
 
+首方工作区文本读取同样使用官方 client-tool 请求/结果接缝，由受保护 Driver 执行
+`workspace.read_text_file`，与 Connection 工具分别处理。根目录取自已验证、仍存活的当前
+Conversation 原生进程的 cwd，不接收模型提供的根目录或身份；新 Thread 保存工具版本，
+恢复时保留原快照，没有该快照的历史 Thread 不自动获得读取能力。
+Host 为已获准的工具返回可同步复验的当前授权回调，不携带 Relay Key，也不依赖 Connection
+consumer 是否存在。
+
+- 参数只接受有界相对路径；逐级拒绝符号链接、父目录跳转与非普通文件，校验打开文件和
+  路径的归属与身份。每次最多返回 4096 字节的 UTF-8 文本，明确截断范围；每个 Execution
+  最多四次新读取。已确认的同一请求不能再次触发 I/O，同一请求的参数变化立即拒绝；崩溃后
+  未确认的请求保持 unknown，不自动重读。
+- intent 绑定原 thread/Turn/callId、Execution、操作和尝试并可靠保存、确认后，才重验当前
+  Host 授权并读取；实际开始、完成或失败沿既有操作事实记录，文件正文与路径不进入事实。
+  结果交付前再次核对当前权限、停止状态、进程与原操作绑定。授权变化或结果保存失败时
+  封闭交付，不以普通错误继续推理。
+- 这不是原生 shell/file 工具许可，也不新增 Connection 或外部网络权利。测试可以在本机
+  自有 Conversation 工作区准备明确的控制文本作为输入，但实际 Skill 加载、工具调用、
+  当前授权、模型结果和终态必须来自真实链路；控制文件本身不证明业务授权或调用成功。
+
+##### Codex Skill 的执行期文本输入
+
+浏览器上传继续走 Platform 文件服务。带附件的 Skill 调用使用独立 Invocation V2；旧
+Invocation V1 与 Host Native V4 不接收新增字段，继续生成和验证各自精确 Schema。新
+Worker→Host Native V5 只为所选 Skill 携带附件 ID，command 不接受附件，不从自由任务参数
+解析文件 ID。公开请求、持久 native payload、幂等摘要和原 Execution 绑定同一附件序列；
+服务端在受理事务中复用文件 Core 的归属、available 状态与单次关联检查。
+
+Native V5 沿用 V4 business Grant 的身份、Key 版本和只读附件语义，Grant 必须列出与请求
+完全一致的附件集合；签名摘要覆盖 V5 业务请求的规范化字段及完整附件序列，排除 Grant
+token 和独立私有 Key 原值及其摘要，仍精确绑定 Key 的用途、引用与版本。Host 在创建
+FileBridge 前验证版本、
+主体、Conversation、Execution、generation/fence、当前权限与摘要。恢复必须沿原持久输入
+与冻结 Key 版本，旧请求不能通过默认空集合或重新解释参数取得文件；旧 V4 的独立私有 Key
+交付含义保持不变。
+
+Native V5 的 Key 恢复使用独立 RestoreExecutionKey V5 契约，旧恢复 V4 继续严格接收原
+Submit/Native V4。V5 仅接受已持久受理的原 Native V5 请求：原业务摘要、附件序列、
+accepted Host/operation 引用、代次/fence 和冻结 Key 引用/版本必须一致；不能将它降为
+空附件 V4，也不能由恢复请求创建新的执行或 native intent。恢复 Grant 只恢复原执行的私有
+Key 上下文，不授予附件访问，不恢复 File Grant、旧临时路径或重新物化文件；后续动作仍须
+通过当前授权与原 journal/ACK 屏障。
+
+Codex 仅接受 FileLimits 当前交集允许的 `text/plain`，最多四个文件，每个最多 4096 字节。
+FileAuthority 的固定对象版本、descriptor、实际字节数及 SHA-256 必须一致；验证 UTF-8，
+拒绝 NUL、超限和无法确认的内容。准备不授予模型写工具：受保护 Driver 在当前原生进程的
+私有 cwd 内创建服务端派生、仅属于本次 Execution 的临时子目录，以排他方式物化普通文件。
+目标不能由文件名、模型或浏览器指定；逐级拒绝链接、越界、非本人目录和覆盖。Skill 的可信
+输入只补充文件的临时相对路径映射，原任务参数及 `parametersDigest` 不变；完整调用摘要
+另包含附件，不传内部 URL、File Grant、
+service token 或原对象引用；实际读取继续经过 8.5.1 的持久 intent、Host 授权与结果确认。
+
+准备前后、工具读取与交付前都核对当前执行及撤权/停止状态。文件仅在本次受授权执行内
+有效；终态、已确认取消、授权失效或恢复失败后有界清理，清理失败保留受限诊断与清理责任。
+重启不恢复旧 File Grant，unknown 不触发重新下载、覆盖或新模型/工具尝试；需要控制核实时
+保留原执行与屏障，不把旧副本解释成下一次执行的授权输入。路径、正文和凭据不进入业务
+持久请求、Driver journal、操作事实或日志；清理归属只使用服务端生成的非敏感绑定。
+
+此能力须在新旧契约消费者、FileAuthority/PostgreSQL/对象存储、Host/Driver 的当前授权、
+跨主体/Conversation、停止、重启/unknown、损坏字节与清理 conformance 通过后才启用。
+未实现或未验证时继续拒绝带文件调用；已有图片 `local_image` 路径及其他 Driver 的声明不被
+静默扩大。实际浏览器正例须核对上传 fileId/内容 hash、所选 Skill source/package/version、
+真实工具回执和终态；操作员直接向 Pod/cwd 写文件只属于读取机制 fixture。
+
 以下屏障契约只适用于明确启用私有 FD callback、Connection bootstrap/recovery 或等价 native
 lane 的发布 target。部署 provenance 必须声明 lane、协议/schema 与工具覆盖，且在任何业务
 副作用前验证不可由模型/Owner 关闭的 native barrier；缺失、错配、断连、过期或配置被关闭

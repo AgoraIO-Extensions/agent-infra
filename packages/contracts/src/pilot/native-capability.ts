@@ -19,6 +19,22 @@ export const NativeCapabilityInvocationRequestV1Schema = z.strictObject({
 	traceId: TraceIdV1Schema.max(256),
 });
 
+// File inputs use an explicit request version; the old strict wire stays exact.
+// The browser only names already uploaded files. Core resolves each id through
+// FileAuthority/FileLimits and accepts only the current read-only `text/plain`
+// set (at most four files of at most 4096 bytes each); digest, byte length and
+// media type are resolved server-side and carried by Runtime Native V5, never
+// asserted by the caller.
+export const NativeCapabilityInvocationRequestV2Schema =
+	NativeCapabilityInvocationRequestV1Schema.extend({
+		schemaVersion: z.literal(2),
+		attachments: z
+			.array(OpaqueIdV1Schema)
+			.min(1)
+			.max(4)
+			.refine((files) => new Set(files).size === files.length),
+	});
+
 export const NativeCapabilityInvocationResultV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
 	status: z.literal("submitted"),
@@ -71,6 +87,13 @@ const body = (schema: z.ZodType) => ({
 	content: { "application/json": { schema } },
 });
 
+// One endpoint, two exact request versions. A body without `schemaVersion`
+// stays V1; V2 is selected only by its explicit version and attachment list.
+const nativeCapabilityInvocationRequestSchema = z.union([
+	NativeCapabilityInvocationRequestV1Schema,
+	NativeCapabilityInvocationRequestV2Schema,
+]);
+
 export const nativeCapabilityInvocationOpenApiPathsV1 = {
 	"/api/v2/conversations/{conversationId}/native-capability/invoke": {
 		post: {
@@ -79,7 +102,7 @@ export const nativeCapabilityInvocationOpenApiPathsV1 = {
 			requestParams: {
 				path: z.strictObject({ conversationId: OpaqueIdV1Schema }),
 			},
-			requestBody: body(NativeCapabilityInvocationRequestV1Schema),
+			requestBody: body(nativeCapabilityInvocationRequestSchema),
 			responses: {
 				"202": response(
 					"Native capability admission accepted or replayed",
@@ -100,6 +123,8 @@ export const nativeCapabilityInvocationOpenApiPathsV1 = {
 export const nativeCapabilityInvocationSchemasV1 = {
 	NativeCapabilityInvocationRequestV1:
 		NativeCapabilityInvocationRequestV1Schema,
+	NativeCapabilityInvocationRequestV2:
+		NativeCapabilityInvocationRequestV2Schema,
 	NativeCapabilityInvocationResultV1: NativeCapabilityInvocationResultV1Schema,
 	NativeCapabilityInvocationResponseV1:
 		NativeCapabilityInvocationResponseV1Schema,
@@ -107,6 +132,9 @@ export const nativeCapabilityInvocationSchemasV1 = {
 
 export type NativeCapabilityInvocationRequestV1 = z.infer<
 	typeof NativeCapabilityInvocationRequestV1Schema
+>;
+export type NativeCapabilityInvocationRequestV2 = z.infer<
+	typeof NativeCapabilityInvocationRequestV2Schema
 >;
 export type NativeCapabilityInvocationResponseV1 = z.infer<
 	typeof NativeCapabilityInvocationResponseV1Schema

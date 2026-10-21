@@ -39,6 +39,11 @@ export function CapabilityReceipt({
 			<p className="capability-receipt-text" role="status">
 				{capabilityReceiptLabels[phase]}
 			</p>
+			{invocation.controlFiles && invocation.controlFiles.length > 0 && (
+				<p className="capability-receipt-text">
+					控制文件：{invocation.controlFiles.join("、")}
+				</p>
+			)}
 			{phase === "failed" && (
 				<p className="capability-receipt-text capability-receipt-error">
 					{capabilityFailedNotice}

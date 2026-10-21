@@ -106,6 +106,7 @@ import {
 	RuntimeHostV2SchemaDefinitions,
 	RuntimeHostV3SchemaDefinitions,
 	RuntimeHostV4SchemaDefinitions,
+	RuntimeHostV5SchemaDefinitions,
 	RuntimeLegacyMigrationV1SchemaDefinitions,
 	RuntimeModelConfigurationV3Schema,
 	RuntimeModelConfigurationV4Schema,
@@ -113,9 +114,12 @@ import {
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV4Schema,
+	RuntimeOperationResponseV5Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeRestoreExecutionKeyResponseV4Schema,
+	RuntimeRestoreExecutionKeyResponseV5Schema,
 	RuntimeRestoreExecutionKeyTransportV4Schema,
+	RuntimeRestoreExecutionKeyTransportV5Schema,
 	RuntimeSkillDirectoryRequestV1Schema,
 	RuntimeSkillDirectoryResponseV1Schema,
 	RuntimeSkillResourceReadRequestV1Schema,
@@ -203,6 +207,10 @@ const artifactPaths = {
 		artifactRoot,
 		"json-schema/runtime.v4.schema.json",
 	),
+	runtimeJsonSchemaV5: resolve(
+		artifactRoot,
+		"json-schema/runtime.v5.schema.json",
+	),
 	runtimeOpenapiV3: resolve(
 		artifactRoot,
 		"openapi/runtime-host.v3.openapi.json",
@@ -210,6 +218,10 @@ const artifactPaths = {
 	runtimeOpenapiV4: resolve(
 		artifactRoot,
 		"openapi/runtime-host.v4.openapi.json",
+	),
+	runtimeOpenapiV5: resolve(
+		artifactRoot,
+		"openapi/runtime-host.v5.openapi.json",
 	),
 	readinessJsonSchema: resolve(
 		artifactRoot,
@@ -759,6 +771,47 @@ function buildArtifacts() {
 		},
 	});
 
+	const runtimeJsonSchemaV5 = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime.v5.schema.json",
+		title: "Agent Infra Runtime Contracts V5",
+		definitions: {
+			...RuntimeGrantV2SchemaDefinitions,
+			...RuntimeHostV5SchemaDefinitions,
+		},
+	});
+	const runtimeOpenapiV5 = createDocument({
+		openapi: "3.1.0",
+		info: { title: "Agent Infra RuntimeHost Contract", version: "5.0.0" },
+		security: [{ RuntimeServiceBearer: [] }],
+		paths: {
+			"/internal/runtime/v5/native-capability": {
+				post: postOperation(
+					"invokeNativeCapabilityV5",
+					RuntimeHostV5SchemaDefinitions.RuntimeNativeCapabilityTransportV5,
+					RuntimeOperationResponseV5Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v5/execution-key/restore": {
+				post: postOperation(
+					"restoreRuntimeExecutionKeyV5",
+					RuntimeRestoreExecutionKeyTransportV5Schema,
+					RuntimeRestoreExecutionKeyResponseV5Schema,
+					"application/json",
+				),
+			},
+		},
+		components: {
+			securitySchemes: {
+				RuntimeServiceBearer: { type: "http", scheme: "bearer" },
+			},
+			schemas: {
+				ProtocolErrorV1: ProtocolErrorV1Schema,
+				...RuntimeHostV5SchemaDefinitions,
+			},
+		},
+	});
+
 	const pilotBrowserOpenapi = createDocument({
 		openapi: "3.1.0",
 		info: {
@@ -1097,8 +1150,10 @@ function buildArtifacts() {
 		}),
 		runtimeJsonSchemaV3,
 		runtimeJsonSchemaV4,
+		runtimeJsonSchemaV5,
 		runtimeOpenapiV3,
 		runtimeOpenapiV4,
+		runtimeOpenapiV5,
 		runtimeJsonSchema,
 		runtimeNativeMetadataJsonSchema,
 		runtimeJsonSchemaV2,

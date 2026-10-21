@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	type FileDescriptorV1,
 	FileProjectionV1Schema,
@@ -7,9 +8,12 @@ import {
 	RuntimeBusinessGrantClaimsV4Schema,
 	type RuntimeBusinessRequestV4,
 	type RuntimeExecutionGrantV4,
+	type RuntimeNativeCapabilityRequestV5,
+	RuntimeNativeCapabilityRequestV5Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	RuntimeSupplementRequestV4Schema,
 	validateRuntimeBusinessBindingV4,
+	validateRuntimeBusinessBindingV5,
 } from "@agent-infra/contracts/runtime";
 
 export type RuntimeFileResultV1 = ReturnType<
@@ -54,6 +58,58 @@ export interface RuntimeFileBridgeBindingV1 {
 }
 
 export type RuntimeFileBridgeOperationV1 = "read" | "write";
+
+/**
+ * Server-resolved facts for one admitted Native V5 Skill text input.
+ *
+ * The values come from the Request and its verified V4 business Grant; the
+ * browser never supplies them. They are intentionally duplicated here (rather
+ * than imported from the wire) so the Driver port stays independent of the
+ * Worker -> Host transport shape.
+ */
+export interface RuntimeNativeTextInputV1 {
+	readonly attachmentId: string;
+	readonly sha256: string;
+	readonly byteLength: number;
+	readonly mediaType: "text/plain";
+}
+
+/** Admitted facts plus the exact bytes returned for one V5 text input. */
+export interface RuntimeNativeTextInputBytesV1 {
+	readonly bytes: Uint8Array;
+	readonly sha256: string;
+	readonly byteLength: number;
+	readonly mediaType: "text/plain";
+}
+
+/**
+ * Narrow Host -> Driver port for the exact ordered Native V5 text input set.
+ *
+ * The Driver calls `readNativeTextInput` on the same request-scoped object it
+ * receives as `RuntimeFileBridgePortV1` (P4). Only the admitted attachment ids
+ * are readable, in any order it needs, but each read is bounded by the admitted
+ * byte length and verified against the admitted SHA-256 before any bytes are
+ * returned. Unknown ids, reordered/forged facts, a size or digest mismatch and
+ * a lapsed authority all fail before a byte reaches the Driver.
+ */
+export interface RuntimeNativeTextInputPortV1 {
+	readonly schemaVersion: 1;
+	readonly inputs: readonly RuntimeNativeTextInputV1[];
+	readNativeTextInput(
+		attachmentId: string,
+		signal?: AbortSignal,
+	): Promise<RuntimeNativeTextInputBytesV1>;
+	revalidate(): void;
+}
+
+/** Request-scoped Driver port that also carries the V5 text-input method. */
+export type RuntimeFileBridgeWithNativeTextInputV1 = RuntimeFileBridgePortV1 &
+	RuntimeNativeTextInputPortV1;
+
+/** Optional execution-context extension for Drivers that inspect the port directly. */
+export interface RuntimeNativeTextInputExecutionContextV1 {
+	readonly nativeTextInput?: RuntimeNativeTextInputPortV1;
+}
 
 /**
  * Synthetic `fileId` for the operation-local write context. The authority
@@ -336,6 +392,152 @@ export async function createRuntimeFileBridgeBindingV1(input: {
 	} satisfies RuntimeFileBridgeBindingV1;
 	assertBinding(binding);
 	return Object.freeze(binding);
+}
+
+/**
+ * Builds the ephemeral V5 binding for the exact ordered attachment set.
+ * The verified V4 business Grant must list the same ids in the same order;
+ * `validateRuntimeBusinessBindingV5` rejects a reorder, extra or missing file.
+ */
+export async function createRuntimeNativeTextInputBindingV5(input: {
+	readonly request: RuntimeNativeCapabilityRequestV5;
+	readonly claims: RuntimeBusinessGrantClaimsV4;
+	readonly now?: number;
+}): Promise<{
+	readonly binding: RuntimeFileBridgeBindingV1;
+	readonly inputs: readonly RuntimeNativeTextInputV1[];
+}> {
+	const request = RuntimeNativeCapabilityRequestV5Schema.parse(input.request);
+	const claims = RuntimeBusinessGrantClaimsV4Schema.parse(input.claims);
+	await validateRuntimeBusinessBindingV5(request, claims);
+	const now = input.now ?? Date.now();
+	if (!Number.isSafeInteger(now) || claims.expiresAt <= now) invalidBinding();
+	const inputs = Object.freeze(
+		request.attachments.map((attachment) =>
+			Object.freeze({
+				attachmentId: attachment.attachmentId,
+				sha256: attachment.sha256,
+				byteLength: attachment.byteLength,
+				mediaType: attachment.mediaType,
+			} satisfies RuntimeNativeTextInputV1),
+		),
+	);
+	const binding = {
+		actorId: request.principal.id,
+		channelId: request.channelId,
+		agentId: request.agentId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		sessionGeneration: request.sessionGeneration,
+		grantId: claims.grantId,
+		expiresAt: claims.expiresAt,
+		inputFileIds: Object.freeze(
+			inputs.map((attachment) => attachment.attachmentId),
+		),
+	} satisfies RuntimeFileBridgeBindingV1;
+	assertBinding(binding);
+	return { binding: Object.freeze(binding), inputs };
+}
+
+/**
+ * Binds one admitted V5 input set to the request-local FileBridge. Reading is
+ * exact: unknown ids, reordered facts, more/fewer bytes, a digest mismatch or a
+ * lapsed authority fail before the Driver can use any byte.
+ */
+export function createRuntimeNativeTextInputPortV1(input: {
+	readonly binding: RuntimeFileBridgeBindingV1;
+	readonly inputs: readonly RuntimeNativeTextInputV1[];
+	readonly bridge: RuntimeFileBridgePortV1;
+	readonly now?: () => number;
+}): RuntimeNativeTextInputPortV1 {
+	assertBinding(input.binding);
+	const now = input.now ?? Date.now;
+	if (
+		!Array.isArray(input.inputs) ||
+		input.inputs.length < 1 ||
+		input.inputs.length > 4 ||
+		new Set(input.inputs.map(({ attachmentId }) => attachmentId)).size !==
+			input.inputs.length ||
+		input.inputs.length !== input.binding.inputFileIds.length ||
+		input.inputs.some(
+			(entry, index) =>
+				entry.attachmentId !== input.binding.inputFileIds[index] ||
+				typeof entry.sha256 !== "string" ||
+				!/^[a-f0-9]{64}$/u.test(entry.sha256) ||
+				!Number.isSafeInteger(entry.byteLength) ||
+				entry.byteLength < 0 ||
+				entry.byteLength > 4096 ||
+				entry.mediaType !== "text/plain",
+		)
+	)
+		invalidBinding();
+	const inputs = Object.freeze(
+		input.inputs.map((entry) => Object.freeze({ ...entry })),
+	);
+	function assertLive(): void {
+		if (now() >= input.binding.expiresAt) invalidBinding();
+		input.bridge.revalidate();
+	}
+	return {
+		schemaVersion: 1,
+		inputs,
+		async readNativeTextInput(attachmentId, signal) {
+			if (signal?.aborted) throw new Error("RUNTIME_FILE_INPUT_ABORTED");
+			const admitted = inputs.find(
+				(candidate) => candidate.attachmentId === attachmentId,
+			);
+			if (!admitted) throw new Error("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
+			assertLive();
+			const result = await input.bridge.readInput(attachmentId, signal);
+			const bytes = await readBoundedInput(result.body, admitted.byteLength);
+			assertLive();
+			const digest = createHash("sha256").update(bytes).digest("hex");
+			if (
+				digest !== admitted.sha256 ||
+				bytes.byteLength !== admitted.byteLength
+			)
+				throw new Error("RUNTIME_FILE_INPUT_INVALID");
+			return {
+				bytes,
+				sha256: admitted.sha256,
+				byteLength: admitted.byteLength,
+				mediaType: admitted.mediaType,
+			};
+		},
+		revalidate() {
+			assertLive();
+		},
+	};
+}
+
+async function readBoundedInput(
+	body: ReadableStream<Uint8Array>,
+	limit: number,
+): Promise<Uint8Array> {
+	const reader = body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		while (true) {
+			const next = await reader.read();
+			if (next.done) break;
+			if (!(next.value instanceof Uint8Array))
+				throw new Error("RUNTIME_FILE_INPUT_INVALID");
+			total += next.value.byteLength;
+			if (total > limit) throw new Error("RUNTIME_FILE_INPUT_INVALID");
+			chunks.push(next.value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	if (total !== limit) throw new Error("RUNTIME_FILE_INPUT_INVALID");
+	const bytes = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return bytes;
 }
 
 /**

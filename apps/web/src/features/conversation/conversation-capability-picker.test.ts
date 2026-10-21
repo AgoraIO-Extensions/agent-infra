@@ -74,6 +74,49 @@ describe("conversation capability picker model", () => {
 		});
 	});
 
+	it("keeps Invocation V1 without control files and upgrades a Skill to V2 with them", () => {
+		expect(prepareCapabilityInvocation(capabilities[0], "列出变更")).toEqual({
+			body: {
+				capabilityId: "e".repeat(64),
+				directoryRevision: "d".repeat(64),
+				parameters: "列出变更",
+			},
+		});
+		expect(
+			prepareCapabilityInvocation(capabilities[0], "列出变更", [
+				"file-2",
+				"file-1",
+			]),
+		).toEqual({
+			body: {
+				capabilityId: "e".repeat(64),
+				directoryRevision: "d".repeat(64),
+				parameters: "列出变更",
+				schemaVersion: 2,
+				attachments: ["file-2", "file-1"],
+			},
+		});
+	});
+
+	it("rejects control files for commands, more than four files and duplicates", () => {
+		expect(
+			prepareCapabilityInvocation(capabilities[1], "", ["file-1"]),
+		).toEqual({ error: "只读命令不接受控制文件。" });
+		expect(
+			prepareCapabilityInvocation(
+				capabilities[0],
+				"整理",
+				Array.from({ length: 5 }, (_, index) => `file-${index}`),
+			),
+		).toEqual({ error: "最多只能附加 4 个控制文件。" });
+		expect(
+			prepareCapabilityInvocation(capabilities[0], "整理", [
+				"file-1",
+				"file-1",
+			]),
+		).toEqual({ error: "控制文件无效，请重新上传后再发送。" });
+	});
+
 	it("never submits a capability without its server identity", () => {
 		const { identity: _identity, ...withoutIdentity } = capabilities[0];
 		expect(prepareCapabilityInvocation(withoutIdentity, "目标")).toEqual({

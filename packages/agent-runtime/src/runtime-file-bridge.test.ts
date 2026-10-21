@@ -1,11 +1,15 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FileDescriptorV1 } from "@agent-infra/contracts/files";
 import {
+	type RuntimeBusinessGrantClaimsV4,
 	RuntimeBusinessGrantClaimsV4Schema,
+	type RuntimeNativeCapabilityRequestV5,
 	RuntimeSubmitTurnRequestV4Schema,
 	runtimeRequestDigestV4,
+	runtimeRequestDigestV5,
 } from "@agent-infra/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -17,6 +21,8 @@ import {
 	assertRuntimeFileBridgeContextMatchesV1,
 	assertRuntimeFileBridgeContextV1,
 	createRuntimeFileBridgeV1,
+	createRuntimeNativeTextInputBindingV5,
+	createRuntimeNativeTextInputPortV1,
 	type RuntimeFileBridgeBindingV1,
 	type RuntimeFileBridgeContextV1,
 	readRuntimeFileResultReceiptV1,
@@ -624,5 +630,219 @@ describe("RuntimeHost execution file bridge", () => {
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("Native V5 ordered text input bridge", () => {
+	const text = new TextEncoder().encode("hello");
+	function sha256Hex(value: Uint8Array | string) {
+		return createHash("sha256")
+			.update(typeof value === "string" ? value : Buffer.from(value))
+			.digest("hex");
+	}
+	async function fixture() {
+		const request: RuntimeNativeCapabilityRequestV5 = {
+			schemaVersion: 5,
+			requestId: "request-v5",
+			traceId: "trace-v5",
+			principal: { kind: "user", id: "actor-1" },
+			executionSource: "web",
+			channelId: "web",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			turnId: "turn-1",
+			sessionGeneration: 3,
+			hostSessionRef: "host-1",
+			operation: {
+				kind: "execution",
+				id: "execution-1",
+				deliveryFence: 2,
+				executionDeliveryFence: 2,
+			},
+			keyBinding: {
+				purpose: "personal",
+				subjectId: "actor-1",
+				ciphertextRef: "key-1",
+				version: 1,
+			},
+			capabilityKind: "skill",
+			capabilityId: "a".repeat(64),
+			directoryRevision: "b".repeat(64),
+			parameters: "{}",
+			parametersDigest: sha256Hex("{}"),
+			capabilitySourceVersion: "1.0.0",
+			attachments: [
+				{
+					attachmentId: "file-1",
+					sha256: sha256Hex(text),
+					byteLength: text.byteLength,
+					mediaType: "text/plain",
+				},
+			],
+			grant: {
+				schemaVersion: 4,
+				format: "runtime-execution-jws",
+				token: "unsigned.unsigned.unsigned",
+			},
+		};
+		const claims: RuntimeBusinessGrantClaimsV4 =
+			RuntimeBusinessGrantClaimsV4Schema.parse({
+				schemaVersion: 4,
+				issuer: "worker",
+				audience: "runtime_host",
+				issuedAt: 10_000,
+				expiresAt: 20_000,
+				grantId: "grant-1",
+				workerId: "worker-1",
+				principal: request.principal,
+				executionSource: request.executionSource,
+				relayKeyBinding: request.keyBinding,
+				agentId: request.agentId,
+				channelId: request.channelId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				turnId: request.turnId,
+				sessionGeneration: request.sessionGeneration,
+				traceId: request.traceId,
+				hostSessionRef: request.hostSessionRef,
+				operation: request.operation,
+				allowedCommands: ["native-capability.invoke"],
+				purpose: "business",
+				authorizationRecordId: "auth-1",
+				attachments: [{ attachmentId: "file-1", operations: ["read"] }],
+				requestDigest: await runtimeRequestDigestV5(request),
+			});
+		return { request, claims };
+	}
+	function inputBridge(
+		bindingValue: RuntimeFileBridgeBindingV1,
+		body: ReadableStream<Uint8Array> = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(text);
+				controller.close();
+			},
+		}),
+	) {
+		return createRuntimeFileBridgeV1({
+			binding: bindingValue,
+			now: () => 10_000,
+			isRevoked: () => false,
+			isCurrent: () => true,
+			readInput: async (context) => ({
+				fileId: context.fileId,
+				descriptor: { ...descriptor, sizeBytes: text.byteLength },
+				body,
+			}),
+			writeResult: async () => projection,
+		});
+	}
+	it("binds the exact ordered attachment set and returns verified bytes only", async () => {
+		const { request, claims } = await fixture();
+		const { binding: admitted, inputs } =
+			await createRuntimeNativeTextInputBindingV5({
+				request,
+				claims,
+				now: 10_000,
+			});
+		expect(inputs).toEqual(request.attachments);
+		expect(admitted.inputFileIds).toEqual(["file-1"]);
+		const port = createRuntimeNativeTextInputPortV1({
+			binding: admitted,
+			inputs,
+			bridge: inputBridge(admitted),
+			now: () => 10_000,
+		});
+		await expect(port.readNativeTextInput("file-1")).resolves.toEqual({
+			bytes: text,
+			sha256: sha256Hex(text),
+			byteLength: text.byteLength,
+			mediaType: "text/plain",
+		});
+		await expect(port.readNativeTextInput("file-2")).rejects.toThrow(
+			"RUNTIME_FILE_INPUT_NOT_AUTHORIZED",
+		);
+	});
+	it("rejects reordered, extra or missing attachments in the reused V4 Grant", async () => {
+		const { request, claims } = await fixture();
+		const second = {
+			attachmentId: "file-2",
+			sha256: sha256Hex("second"),
+			byteLength: 6,
+			mediaType: "text/plain" as const,
+		};
+		const two = { ...request, attachments: [request.attachments[0]!, second] };
+		const digest = await runtimeRequestDigestV5(two);
+		await expect(
+			createRuntimeNativeTextInputBindingV5({
+				request: two,
+				claims: {
+					...claims,
+					requestDigest: digest,
+					attachments: [
+						{ attachmentId: "file-2", operations: ["read"] },
+						{ attachmentId: "file-1", operations: ["read"] },
+					],
+				},
+				now: 10_000,
+			}),
+		).rejects.toThrow();
+		await expect(
+			createRuntimeNativeTextInputBindingV5({
+				request: two,
+				claims: {
+					...claims,
+					requestDigest: digest,
+					attachments: [{ attachmentId: "file-1", operations: ["read"] }],
+				},
+				now: 10_000,
+			}),
+		).rejects.toThrow();
+	});
+	it("rejects oversized, short or digest-mismatched bytes and expired authority", async () => {
+		const { request, claims } = await fixture();
+		const { binding: admitted, inputs } =
+			await createRuntimeNativeTextInputBindingV5({
+				request,
+				claims,
+				now: 10_000,
+			});
+		const oversized = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode("hello!"));
+				controller.close();
+			},
+		});
+		await expect(
+			createRuntimeNativeTextInputPortV1({
+				binding: admitted,
+				inputs,
+				bridge: inputBridge(admitted, oversized),
+				now: () => 10_000,
+			}).readNativeTextInput("file-1"),
+		).rejects.toThrow("RUNTIME_FILE_INPUT_INVALID");
+		const mismatched = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode("world"));
+				controller.close();
+			},
+		});
+		await expect(
+			createRuntimeNativeTextInputPortV1({
+				binding: admitted,
+				inputs,
+				bridge: inputBridge(admitted, mismatched),
+				now: () => 10_000,
+			}).readNativeTextInput("file-1"),
+		).rejects.toThrow("RUNTIME_FILE_INPUT_INVALID");
+		const expired = createRuntimeNativeTextInputPortV1({
+			binding: admitted,
+			inputs,
+			bridge: inputBridge(admitted),
+			now: () => 20_000,
+		});
+		await expect(expired.readNativeTextInput("file-1")).rejects.toThrow(
+			"RUNTIME_FILE_BRIDGE_BINDING_INVALID",
+		);
 	});
 });

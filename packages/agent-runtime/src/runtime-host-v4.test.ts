@@ -13,11 +13,14 @@ import {
 	RuntimeEventReadRequestV4Schema,
 	RuntimeExecutionGrantClaimsV2Schema,
 	RuntimeNativeCapabilityRequestV4Schema,
+	type RuntimeNativeCapabilityRequestV5,
+	RuntimeNativeCapabilityTransportV5Schema,
 	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
 	type RuntimeRestoreExecutionKeyRequestV4,
 	RuntimeRestoreExecutionKeyRequestV4Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	runtimeEventRequestDigestV4,
+	runtimeRequestDigestV5,
 	runtimeRequestSigningPayloadV4,
 	runtimeRestoreExecutionKeyRequestDigestV4,
 } from "@agent-infra/contracts/runtime";
@@ -193,6 +196,8 @@ async function setup(
 		request: RuntimeRestoreExecutionKeyRequestV4;
 		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
 	}>,
+	validateGrantV5?: import("./runtime-host.js").RuntimeHostOptions["validateGrantV5"],
+	validateRecoveryGrantV5?: import("./runtime-host.js").RuntimeHostOptions["validateRecoveryGrantV5"],
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-consumer-"));
 	cleanups.push(() => rm(directory, { recursive: true, force: true }));
@@ -219,6 +224,8 @@ async function setup(
 		...(fileBridge ? { fileBridge: () => fileBridge } : {}),
 		...(createBrowserExecutionContext ? { createBrowserExecutionContext } : {}),
 		...(validateRecoveryGrantV4 ? { validateRecoveryGrantV4 } : {}),
+		...(validateGrantV5 ? { validateGrantV5 } : {}),
+		...(validateRecoveryGrantV5 ? { validateRecoveryGrantV5 } : {}),
 	};
 	let host = await RuntimeHost.open(options);
 	cleanups.push(() => host.close());
@@ -332,6 +339,30 @@ async function event(
 		verification: verifyV2({ ...parsed.grant, token: token(claims) }),
 	};
 }
+
+it.each(["current", "expiry", "close"] as const)(
+	"returns a keyless tool guard without a Connection consumer: %s",
+	async (change) => {
+		const f = await setup();
+		const accepted = await f.host.submitTurnV4(f.transport);
+		const native = f.store.nativeSessionRef(accepted.hostSessionRef);
+		if (!native) throw new Error("Missing original native Session");
+		const authorized = await f.host.authorizeExternalAction({
+			...action(native),
+			kind: "tool",
+		});
+		expect(authorized).toEqual({ revalidate: expect.any(Function) });
+		if (!authorized?.revalidate) throw new Error("Missing Host tool guard");
+		expect(authorized.relayKey).toBeUndefined();
+		expect(authorized.revalidate()).toBeUndefined();
+		if (change === "expiry") f.expire();
+		else if (change === "close") await f.host.close();
+		if (change !== "current")
+			expect(authorized.revalidate).toThrowError(
+				expect.objectContaining({ code: "RUNTIME_GRANT_INVALID" }),
+			);
+	},
+);
 
 it("binds the first durable native receipt and returns the original Key before submit resolves", async () => {
 	const f = await setup();
@@ -1822,4 +1853,373 @@ it("rejects missing or terminal recovery without creating durable state", async 
 	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
 	expect(await readFile(f.path, "utf8")).toBe(before);
 	expect(retainedKeys(f.host).size).toBe(0);
+});
+
+function v5Request(
+	hostSessionRef = "host-v5",
+): RuntimeNativeCapabilityRequestV5 {
+	return {
+		schemaVersion: 5,
+		requestId: "request-v5",
+		traceId: "trace-v5",
+		principal: { kind: "user", id: "alice" },
+		executionSource: "web",
+		channelId: "web",
+		agentId: "agent-1",
+		conversationId: "conversation-v5",
+		executionId: "execution-v5",
+		turnId: "turn-v5",
+		sessionGeneration: 1,
+		hostSessionRef,
+		operation: {
+			kind: "execution",
+			id: "execution-v5",
+			deliveryFence: 1,
+			executionDeliveryFence: 1,
+		},
+		keyBinding: {
+			purpose: "personal",
+			subjectId: "alice",
+			ciphertextRef: "key-1",
+			version: 1,
+		},
+		capabilityKind: "skill",
+		capabilityId: "a".repeat(64),
+		directoryRevision: "b".repeat(64),
+		parameters: "{}",
+		parametersDigest: createHash("sha256").update("{}").digest("hex"),
+		capabilitySourceVersion: "1.0.0",
+		attachments: [
+			{
+				attachmentId: "file-v5",
+				sha256: createHash("sha256").update("hello").digest("hex"),
+				byteLength: 5,
+				mediaType: "text/plain",
+			},
+		],
+		grant: {
+			schemaVersion: 4,
+			format: "runtime-execution-jws",
+			token: "a.b.c",
+		},
+	};
+}
+
+async function v5Accepted(
+	request: RuntimeNativeCapabilityRequestV5,
+	attachments = request.attachments,
+) {
+	const claims = RuntimeBusinessGrantClaimsV4Schema.parse({
+		schemaVersion: 4,
+		issuer: "platform-fixture",
+		audience: "runtime_host",
+		workerId: "worker-fixture",
+		issuedAt: now,
+		expiresAt: now + 30_000,
+		grantId: "grant-v5",
+		principal: request.principal,
+		executionSource: request.executionSource,
+		relayKeyBinding: request.keyBinding,
+		agentId: request.agentId,
+		channelId: request.channelId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		traceId: request.traceId,
+		hostSessionRef: request.hostSessionRef,
+		operation: request.operation,
+		allowedCommands: ["native-capability.invoke"],
+		purpose: "business",
+		authorizationRecordId: "authorization-1",
+		attachments: attachments.map((entry) => ({
+			attachmentId: entry.attachmentId,
+			operations: ["read"] as const,
+		})),
+		requestDigest: await runtimeRequestDigestV5(request),
+	});
+	return { request, claims };
+}
+
+it("requires a V5 validator and a text-input-aware Driver before any file bridge", async () => {
+	const request = v5Request();
+	const transport = RuntimeNativeCapabilityTransportV5Schema.parse({
+		businessRequest: request,
+		privateKeyField: {
+			schemaVersion: 1,
+			context: {
+				requestId: request.requestId,
+				grantId: "grant-v5",
+				requestDigest: (await v5Accepted(request)).claims.requestDigest,
+				traceId: request.traceId,
+				principal: request.principal,
+				executionSource: request.executionSource,
+				channelId: request.channelId,
+				agentId: request.agentId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				turnId: request.turnId,
+				sessionGeneration: request.sessionGeneration,
+				hostSessionRef: request.hostSessionRef,
+				operation: request.operation,
+				keyBinding: request.keyBinding,
+			},
+			keyDelivery: { relayKey: "synthetic-v5-key" },
+		},
+	});
+	const withoutValidator = await setup();
+	await expect(
+		withoutValidator.host.nativeCapabilityV5(transport),
+	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+
+	const accepted = await v5Accepted(request);
+	const withoutTextInputDriver = await setup(
+		undefined,
+		undefined,
+		undefined,
+		async () => accepted,
+	);
+	await expect(
+		withoutTextInputDriver.host.nativeCapabilityV5(transport),
+	).rejects.toMatchObject({ code: "RUNTIME_NATIVE_CAPABILITY_UNSUPPORTED" });
+});
+
+it("rejects a V5 Grant whose ordered attachments do not match the request", async () => {
+	const request = v5Request();
+	const accepted = await v5Accepted(request);
+	const host = await setup(undefined, undefined, undefined, async () => ({
+		request,
+		claims: { ...accepted.claims, attachments: [] },
+	}));
+	await expect(
+		host.host.nativeCapabilityV5(
+			RuntimeNativeCapabilityTransportV5Schema.parse({
+				businessRequest: request,
+				privateKeyField: {
+					schemaVersion: 1,
+					context: {
+						requestId: request.requestId,
+						grantId: accepted.claims.grantId,
+						requestDigest: accepted.claims.requestDigest,
+						traceId: request.traceId,
+						principal: request.principal,
+						executionSource: request.executionSource,
+						channelId: request.channelId,
+						agentId: request.agentId,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+						turnId: request.turnId,
+						sessionGeneration: request.sessionGeneration,
+						hostSessionRef: request.hostSessionRef,
+						operation: request.operation,
+						keyBinding: request.keyBinding,
+					},
+					keyDelivery: { relayKey: "synthetic-v5-key" },
+				},
+			}),
+		),
+	).rejects.toThrow();
+});
+
+it("keeps V5 restore fail-closed without a recovery validator", async () => {
+	const host = await setup();
+	await expect(
+		host.host.restoreExecutionKeyV5({
+			recoveryRequest: {
+				schemaVersion: 5,
+				mode: "existing-accepted-only",
+				acceptedHostSessionRef: "host-v5",
+				acceptedOperationDigest: "A".repeat(43),
+				acceptedAttachmentIds: ["file-v5"],
+				grant: {
+					schemaVersion: 5,
+					format: "runtime-execution-jws",
+					token: "a.b.c",
+				},
+				originalRequest: v5Request(),
+			},
+			privateKeyField: {
+				schemaVersion: 1,
+				context: {
+					requestId: "request-v5",
+					grantId: "grant-v5",
+					requestDigest: "a".repeat(64),
+					traceId: "trace-v5",
+					principal: { kind: "user", id: "alice" },
+					executionSource: "web",
+					channelId: "web",
+					agentId: "agent-1",
+					conversationId: "conversation-v5",
+					executionId: "execution-v5",
+					turnId: "turn-v5",
+					sessionGeneration: 1,
+					hostSessionRef: "host-v5",
+					operation: {
+						kind: "execution",
+						id: "execution-v5",
+						deliveryFence: 1,
+						executionDeliveryFence: 1,
+					},
+					keyBinding: {
+						purpose: "personal",
+						subjectId: "alice",
+						ciphertextRef: "key-1",
+						version: 1,
+					},
+				},
+				keyDelivery: { relayKey: "synthetic-v5-key" },
+			},
+		}),
+	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+});
+
+it("dispatches a V5 Skill with the ordered ids on the same FileBridge port the Driver reads", async () => {
+	let accepted: Awaited<ReturnType<typeof v5Accepted>> | undefined;
+	const deploymentBridge: RuntimeFileBridgePortV1 = {
+		async readInput(fileId) {
+			return {
+				fileId,
+				descriptor: {
+					name: "input.txt",
+					mediaType: "text/plain",
+					sizeBytes: 5,
+					sha256: createHash("sha256").update("hello").digest("hex"),
+				},
+				body: new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode("hello"));
+						controller.close();
+					},
+				}),
+			};
+		},
+		async writeResult() {
+			throw new Error("unused V5 result write");
+		},
+		revalidate() {},
+	};
+	const f = await setup(deploymentBridge, undefined, undefined, async () => {
+		if (!accepted) throw new Error("V5 fixture is not ready");
+		return accepted;
+	});
+	const submitted = await f.host.submitTurnV4(f.transport);
+	await f.driver.setOperationStatus("execution-1", "completed");
+	const request = {
+		...v5Request(submitted.hostSessionRef),
+		conversationId: "conversation-1",
+	};
+	accepted = await v5Accepted(request);
+	const metadata = vi.fn(async () => ({
+		selector: "skills" as const,
+		revision: request.directoryRevision,
+		capabilities: [
+			{
+				id: request.capabilityId,
+				kind: "skill" as const,
+				name: "v5-skill",
+				description: "Controlled V5 Skill",
+				source: {
+					name: "controlled",
+					version: request.capabilitySourceVersion,
+				},
+				parameters: [],
+				effect: "model_turn" as const,
+				availability: "discovered" as const,
+			},
+		],
+	}));
+	const originalExecute = f.driver.execute.bind(f.driver);
+	let observedCommand: unknown;
+	let observedInput: unknown;
+	Object.assign(f.driver, {
+		readNativeMetadataV1: metadata,
+		resolveNativeSkillBinding: () => ({
+			packageDigest: "c".repeat(64),
+			manifestDigest: "d".repeat(64),
+		}),
+		createNativeSkillCommand: (
+			command: import("./driver.js").RuntimeNativeSkillCommandV1,
+		) => ({
+			schemaVersion: 1 as const,
+			kind: "submit-turn" as const,
+			operationId: command.operationId,
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			executionId: command.executionId,
+			turnId: command.turnId,
+			sessionGeneration: command.sessionGeneration,
+			nativeSessionRef: command.nativeSessionRef,
+			input: { text: command.parameters, attachments: [] },
+			nativeSkill: {
+				capabilityId: command.capabilityId,
+				directoryRevision: command.directoryRevision,
+				name: command.capabilityName,
+				version: command.capabilitySourceVersion,
+				packageDigest: command.packageDigest,
+				manifestDigest: command.manifestDigest,
+			},
+		}),
+		execute: async (
+			command: import("./driver.js").RuntimeDriverCommand,
+			context?: import("./driver.js").RuntimeDriverExecutionContextV1,
+		) => {
+			if (command.kind === "submit-turn" && "nativeSkill" in command) {
+				observedCommand = command;
+				const bridge = context?.fileBridge as
+					| (RuntimeFileBridgePortV1 & {
+							readNativeTextInput?: (
+								attachmentId: string,
+								signal?: AbortSignal,
+							) => Promise<unknown>;
+					  })
+					| undefined;
+				if (typeof bridge?.readNativeTextInput === "function")
+					observedInput = await bridge.readNativeTextInput("file-v5");
+			}
+			return originalExecute(command, context);
+		},
+	});
+	const transport = RuntimeNativeCapabilityTransportV5Schema.parse({
+		businessRequest: request,
+		privateKeyField: {
+			schemaVersion: 1,
+			context: {
+				requestId: request.requestId,
+				grantId: accepted.claims.grantId,
+				requestDigest: accepted.claims.requestDigest,
+				traceId: request.traceId,
+				principal: request.principal,
+				executionSource: request.executionSource,
+				channelId: request.channelId,
+				agentId: request.agentId,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+				turnId: request.turnId,
+				sessionGeneration: request.sessionGeneration,
+				hostSessionRef: request.hostSessionRef,
+				operation: request.operation,
+				keyBinding: request.keyBinding,
+			},
+			keyDelivery: { relayKey: "synthetic-v5-key" },
+		},
+	});
+	await expect(f.host.nativeCapabilityV5(transport)).resolves.toMatchObject({
+		schemaVersion: 5,
+		operationId: "execution-v5",
+		result: { outcome: "accepted", status: "running" },
+	});
+	expect(observedCommand).toMatchObject({
+		kind: "submit-turn",
+		nativeSkill: { name: "v5-skill" },
+		input: { attachments: ["file-v5"] },
+	});
+	expect(observedInput).toEqual({
+		bytes: new TextEncoder().encode("hello"),
+		sha256: createHash("sha256").update("hello").digest("hex"),
+		byteLength: 5,
+		mediaType: "text/plain",
+	});
+	expect(retainedKeys(f.host).get("execution-v5")).toMatchObject({
+		relayKey: "synthetic-v5-key",
+	});
 });

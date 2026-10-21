@@ -8,6 +8,8 @@ export type CapabilityInvocation = Readonly<{
 	name: string;
 	source: string;
 	version?: string;
+	/** Invocation V2 的控制文件显示名，按提交顺序；回执据此回显本次实际提交的文件。 */
+	controlFiles?: readonly string[];
 }>;
 
 export type CapabilityReceiptPhase =

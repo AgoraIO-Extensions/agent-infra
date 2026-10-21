@@ -68,7 +68,7 @@ it("resolves identity server-side and returns only the sanitized admission recei
 		buildRequest: async (input) => {
 			expect(input.identity.userId).toBe(identity.userId);
 			expect(input.conversationId).toBe("conversation-native-capability");
-			expect(input.body).toEqual(body);
+			expect(input.body).toEqual({ ...body, schemaVersion: 1 });
 			return {
 				schemaVersion: 1,
 				conversationId: input.conversationId,
@@ -191,3 +191,68 @@ it.each([
 		expect(await response.json()).toEqual({ outcome });
 	},
 );
+
+it("admits Invocation V2 with the server-resolved ordered attachment ids", async () => {
+	const files = ["file-native-a", "file-native-b"];
+	const buildRequest = vi.fn<
+		NativeCapabilityInvocationRouteDependenciesV1["buildRequest"]
+	>(async ({ conversationId, body: value }) => ({
+		...value,
+		conversationId,
+	}));
+	const response = await app({
+		buildRequest,
+		admit: async (request) => {
+			expect(request).toMatchObject({
+				schemaVersion: 2,
+				conversationId: "conversation-native-capability",
+				attachments: files,
+			});
+			return { outcome: "accepted", result: {} } as never;
+		},
+	}).request(
+		"/api/v2/conversations/conversation-native-capability/native-capability/invoke",
+		{
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ ...body, schemaVersion: 2, attachments: files }),
+		},
+	);
+	expect(response.status).toBe(202);
+	expect(buildRequest).toHaveBeenCalledOnce();
+});
+
+it.each([
+	["attachments without the V2 version", { ...body, attachments: ["file-a"] }],
+	["an explicit V1 version", { ...body, schemaVersion: 1 }],
+	[
+		"more than four attachments",
+		{ ...body, schemaVersion: 2, attachments: ["a", "b", "c", "d", "e"] },
+	],
+	["empty attachments", { ...body, schemaVersion: 2, attachments: [] }],
+	[
+		"duplicate attachments",
+		{ ...body, schemaVersion: 2, attachments: ["file-a", "file-a"] },
+	],
+	[
+		"an extra caller-selected authority field",
+		{
+			...body,
+			schemaVersion: 2,
+			attachments: ["file-a"],
+			grantId: "caller-selected",
+		},
+	],
+])("rejects V2 body with %s before admission", async (_label, value) => {
+	const admit = vi.fn();
+	const response = await app({ admit }).request(
+		"/api/v2/conversations/conversation/native-capability/invoke",
+		{
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(value),
+		},
+	);
+	expect(response.status).toBe(400);
+	expect(admit).not.toHaveBeenCalled();
+});

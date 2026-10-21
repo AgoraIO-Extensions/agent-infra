@@ -20,6 +20,10 @@ import {
 	type ConversationCapabilityV1,
 	prepareCapabilityInvocation,
 } from "./conversation-capability-picker.js";
+import {
+	SkillControlFilePicker,
+	type SkillControlFilePickerProps,
+} from "./conversation-skill-control-files.js";
 
 /** 设计 isCompactChatSettings：composer 宽 ≤440 时进入紧凑态。 */
 const compactComposerWidth = 440;
@@ -50,6 +54,11 @@ export type ConversationComposerProps = {
 	invokeReady: boolean;
 	sendLabel: string;
 	capability: CapabilityComposer;
+	/** 已选 Skill 的控制文件（Invocation V2）；命令不获得上传入口。 */
+	skillControlFiles?: SkillControlFilePickerProps & {
+		ready: boolean;
+		attachmentIds: readonly string[];
+	};
 	model?: ComposerModelControlsProps;
 	/** 不可重试的模型保存失败原因，显示在工具栏上方。 */
 	modelFailure?: string;
@@ -78,6 +87,7 @@ export function ConversationComposer({
 	invokeReady,
 	sendLabel,
 	capability,
+	skillControlFiles,
 	model,
 	modelFailure,
 	draftDescribedBy,
@@ -90,14 +100,22 @@ export function ConversationComposer({
 	const composing = useRef(false);
 	const compact = useCompactComposer(form);
 	const { selected, catalog } = capability;
+	const skillSelected = selected?.kind === "skill";
+	// 已选控制文件必须全部上传完成才能提交；否则不得静默省略用户选择的文件。
+	const controlFilesReady =
+		!skillSelected || skillControlFiles?.ready !== false;
 	const canSubmit = selected
-		? submitReady && invokeReady
+		? submitReady && invokeReady && controlFilesReady
 		: submitReady && Boolean(draft.trim());
 	function submit() {
 		if (!canSubmit) return;
 		if (selected) {
 			if (!capability.selectionValid) return;
-			const prepared = prepareCapabilityInvocation(selected, draft);
+			const prepared = prepareCapabilityInvocation(
+				selected,
+				draft,
+				skillSelected ? (skillControlFiles?.attachmentIds ?? []) : [],
+			);
 			if ("error" in prepared) {
 				capability.setError(prepared.error);
 				textarea.current?.focus();
@@ -144,6 +162,9 @@ export function ConversationComposer({
 				textarea={textarea}
 			/>
 			<CapabilitySelection capability={capability} />
+			{skillSelected && skillControlFiles && (
+				<SkillControlFilePicker {...skillControlFiles} />
+			)}
 			<Label className="sr-only" htmlFor={composerId}>
 				消息
 			</Label>

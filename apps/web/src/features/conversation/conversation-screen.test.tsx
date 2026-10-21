@@ -236,6 +236,15 @@ function fileProjection(status: "pending" | "available" = "available") {
 	};
 }
 
+function namedFileProjection(fileId: string, name: string) {
+	const projection = fileProjection();
+	return {
+		...projection,
+		fileId,
+		descriptor: { ...projection.descriptor, name },
+	};
+}
+
 const completedExecution = {
 	...event(2),
 	schemaVersion: 1 as const,
@@ -464,6 +473,217 @@ describe("functional conversation screen", () => {
 				request.url.endsWith("/native-capability/invoke"),
 			),
 		).toHaveLength(1);
+	});
+
+	it("invokes a Skill with ordered text control files over Invocation V2", async () => {
+		const originalCrypto = globalThis.crypto;
+		let ids = 0;
+		vi.stubGlobal("crypto", {
+			...(originalCrypto ?? {}),
+			randomUUID: () => `control-local-${++ids}`,
+			subtle: { digest: async () => new ArrayBuffer(32) },
+		});
+		try {
+			let created = 0;
+			const { requests } = setup((request) => {
+				const url = new URL(request.url);
+				const path = url.pathname;
+				if (path.endsWith("/native-capability/invoke"))
+					return Response.json(
+						{
+							outcome: "accepted",
+							result: {
+								schemaVersion: 1,
+								status: "submitted",
+								executionId: "execution-native",
+								capabilityId: "e".repeat(64),
+								capabilityKind: "skill",
+								conversationId: "conversation-1",
+								directoryRevision: "d".repeat(64),
+							},
+						},
+						{ status: 202 },
+					);
+				if (path.endsWith("/native-metadata")) return nativeCatalog(url);
+				if (path === "/api/v2/conversations/conversation-1")
+					return Response.json(idleHistory());
+				if (request.method === "POST" && path.endsWith("/files")) {
+					created += 1;
+					return Response.json(
+						namedFileProjection(`file-${created}`, `control-${created}.txt`),
+						{ status: 201 },
+					);
+				}
+				if (request.method === "POST" && path.endsWith("/access")) {
+					const fileId = path.split("/").at(-2) ?? "";
+					return Response.json({
+						schemaVersion: 1,
+						accessId: `access-${fileId}`,
+						file: namedFileProjection(fileId, "control.txt"),
+						path: `/api/v1/conversations/conversation-1/files/${fileId}/content`,
+						grant: {
+							format: "compact-jws",
+							schemaVersion: 1,
+							token: "grant",
+						},
+						expiresAt: "2027-01-01T00:00:00Z",
+					});
+				}
+				if (request.method === "PUT" && path.endsWith("/content"))
+					return new Response(null, { status: 204 });
+				if (request.method === "POST" && path.endsWith("/complete")) {
+					const fileId = path.split("/").at(-2) ?? "";
+					return Response.json(namedFileProjection(fileId, "control.txt"));
+				}
+				return undefined;
+			});
+			const input = await composer();
+			fireEvent.change(input, { target: { value: "/summary" } });
+			await screen.findByRole("option", { name: /workspace-summary/ });
+			fireEvent.keyDown(input, { key: "Enter" });
+			const picker = await screen.findByLabelText("添加 Skill 控制文件");
+			expect(
+				screen.getByText(
+					"仅支持 text/plain 文本文件，最多 4 个，单个文件不超过 4096 字节。",
+				),
+			).toBeTruthy();
+			await waitFor(() =>
+				expect((picker as HTMLInputElement).disabled).toBe(false),
+			);
+			fireEvent.change(picker, {
+				target: {
+					files: [
+						new File(["a"], "a.txt", { type: "text/plain" }),
+						new File(["b"], "b.txt", { type: "text/plain" }),
+					],
+				},
+			});
+			await waitFor(() =>
+				expect(screen.getAllByText("已上传")).toHaveLength(2),
+			);
+			fireEvent.change(input, { target: { value: "总结这些控制文件" } });
+			fireEvent.click(screen.getByRole("button", { name: "确认发送" }));
+			await screen.findByText("已受理，尚未开始");
+			const invoke = requests.find((request) =>
+				request.url.endsWith("/native-capability/invoke"),
+			);
+			const body = await invoke?.json();
+			expect(body).toMatchObject({
+				capabilityId: "e".repeat(64),
+				directoryRevision: "d".repeat(64),
+				parameters: "总结这些控制文件",
+				schemaVersion: 2,
+				attachments: ["file-1", "file-2"],
+			});
+			expect(body.idempotencyKey).toBe(invoke?.headers.get("Idempotency-Key"));
+			expect(body.requestId).toEqual(expect.any(String));
+			expect(body.traceId).toEqual(expect.any(String));
+			// 调用受理后选择与上传列表清空，回执仍回显本次提交的控制文件。
+			expect(screen.getByText("控制文件：a.txt、b.txt")).toBeTruthy();
+		} finally {
+			vi.stubGlobal("crypto", originalCrypto);
+		}
+	});
+
+	it("rejects Skill control files outside the limits before uploading", async () => {
+		const { requests } = setup((request) => {
+			const url = new URL(request.url);
+			if (url.pathname.endsWith("/native-metadata")) return nativeCatalog(url);
+			if (url.pathname === "/api/v2/conversations/conversation-1")
+				return Response.json(idleHistory());
+			return undefined;
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "/summary" } });
+		await screen.findByRole("option", { name: /workspace-summary/ });
+		fireEvent.keyDown(input, { key: "Enter" });
+		const picker = await screen.findByLabelText("添加 Skill 控制文件");
+		await waitFor(() =>
+			expect((picker as HTMLInputElement).disabled).toBe(false),
+		);
+		fireEvent.change(picker, {
+			target: {
+				files: [new File(["x"], "notes.pdf", { type: "application/pdf" })],
+			},
+		});
+		expect((await screen.findByRole("alert")).textContent).toBe(
+			"仅支持 text/plain 文本文件。",
+		);
+		fireEvent.change(picker, {
+			target: {
+				files: [
+					new File(["x".repeat(4097)], "big.txt", { type: "text/plain" }),
+				],
+			},
+		});
+		await waitFor(() =>
+			expect(screen.getByRole("alert").textContent).toBe(
+				"单个控制文件不能超过 4096 字节。",
+			),
+		);
+		fireEvent.change(picker, {
+			target: {
+				files: Array.from(
+					{ length: 5 },
+					(_, index) => new File(["x"], `${index}.txt`, { type: "text/plain" }),
+				),
+			},
+		});
+		await waitFor(() =>
+			expect(screen.getByRole("alert").textContent).toBe(
+				"最多只能附加 4 个控制文件。",
+			),
+		);
+		expect(
+			requests.filter(
+				(request) =>
+					request.method === "POST" &&
+					new URL(request.url).pathname.endsWith("/files"),
+			),
+		).toHaveLength(0);
+	});
+
+	it("keeps commands on Invocation V1 and never offers control files", async () => {
+		const { requests } = setup((request) => {
+			const url = new URL(request.url);
+			if (url.pathname.endsWith("/native-capability/invoke"))
+				return Response.json(
+					{
+						outcome: "accepted",
+						result: {
+							schemaVersion: 1,
+							status: "submitted",
+							executionId: "execution-native",
+							capabilityId: "f".repeat(64),
+							capabilityKind: "command",
+							conversationId: "conversation-1",
+							directoryRevision: "c".repeat(64),
+						},
+					},
+					{ status: 202 },
+				);
+			if (url.pathname.endsWith("/native-metadata")) return nativeCatalog(url);
+			if (url.pathname === "/api/v2/conversations/conversation-1")
+				return Response.json(idleHistory());
+			return undefined;
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "/list" } });
+		await screen.findByRole("listbox");
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(screen.getByText("原生命令 · list-files")).toBeTruthy();
+		expect(screen.queryByText("Skill 控制文件")).toBeNull();
+		expect(screen.queryByLabelText("添加 Skill 控制文件")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "确认发送" }));
+		await screen.findByText("已受理，尚未开始");
+		const invoke = requests.find((request) =>
+			request.url.endsWith("/native-capability/invoke"),
+		);
+		expect(await invoke?.json()).toEqual({
+			capabilityId: "f".repeat(64),
+			directoryRevision: "c".repeat(64),
+			parameters: "",
+		});
 	});
 
 	it("keeps an unselected slash draft out of plain messages while the catalog is available", async () => {

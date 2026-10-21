@@ -8,7 +8,10 @@ import {
 	createConversationExecutionUseCaseV1,
 	createNativeCapabilityAdmissionUseCaseV1,
 	createSessionSandboxBindingV1,
+	type FileLimitsV1,
+	type FileRecordV1,
 	nativeCapabilityAdmissionRequestDigestV1,
+	nativeCapabilityAdmissionRequestDigestV2,
 	nativeCapabilityParametersDigestV1,
 } from "@agent-infra/platform-core";
 import {
@@ -971,6 +974,161 @@ describe("PostgreSQL Conversation command transaction", () => {
 				outcome: "unavailable",
 			});
 			expect(await snapshot()).toEqual(beforeInvalidReplay);
+		} finally {
+			await transaction.close();
+		}
+	});
+
+	it("persists an Invocation V2 skill input sequence and binds each file to the Execution", async () => {
+		await persistConformanceModelConfiguration(undefined, authority);
+		const { transaction, useCase } = createConversation();
+		try {
+			const created = await useCase.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "native-v2-create",
+				requestId: "native-v2-create",
+				traceId: "native-v2-create",
+			});
+			if (created.outcome !== "accepted")
+				throw new Error("Expected native capability Conversation");
+			const conversationId = created.result.conversationId;
+			const capabilityId = "1".repeat(64);
+			const directoryRevision = "2".repeat(64);
+			const metadata = new FakeNativeCapabilityMetadataRevalidationV1({
+				hostScopeRef: null,
+				projection: {
+					selector: "skills",
+					revision: directoryRevision,
+					capabilities: [
+						{
+							id: capabilityId,
+							kind: "skill",
+							name: "workspace-summary",
+							description: "Summarize workspace files",
+							source: { name: "skill-hub", version: "1.0.0" },
+							availability: "discovered",
+						},
+					],
+				},
+			});
+			const limits: FileLimitsV1 = {
+				revision: "native-limits",
+				expiresAt: "2099-01-01T00:00:00Z",
+				mediaTypes: ["text/plain"],
+				maxBytes: 4096,
+			};
+			const admission = createNativeCapabilityAdmissionUseCaseV1({
+				authorization: {
+					async authorize() {
+						return { outcome: "allowed", authority };
+					},
+				},
+				metadata,
+				transaction,
+				inputLimits: {
+					async read() {
+						return limits;
+					},
+				},
+				now: () => new Date("2026-10-13T00:00:00.000Z"),
+				newId: (() => {
+					let id = 1;
+					return () => `native-v2-execution-${id++}`;
+				})(),
+			});
+			const files: FileRecordV1[] = ["native-file-a", "native-file-b"].map(
+				(fileId) => ({
+					...authority,
+					conversationId,
+					fileId,
+					objectRef: `object-${fileId}`,
+					kind: "attachment",
+					idempotencyKey: `intent-${fileId}`,
+					descriptor: {
+						name: `${fileId}.txt`,
+						mediaType: "text/plain",
+						sizeBytes: 5,
+						sha256: "e".repeat(64),
+					},
+					status: "available",
+					executionId: null,
+					messageId: null,
+					sessionGeneration: null,
+					objectVersion: "version-1",
+					etag: "etag-1",
+					createdAt: "2026-10-13T00:00:00.000Z",
+					expiresAt: "2099-01-01T00:00:00Z",
+					updatedAt: "2026-10-13T00:00:00.000Z",
+					revision: 1,
+				}),
+			);
+			for (const file of files)
+				await client`insert into platform.files (file_id, actor_id, conversation_id, idempotency_key, record, updated_at)
+					values (${file.fileId}, ${file.actorId}, ${file.conversationId}, ${file.idempotencyKey}, ${client.json(file as unknown as Parameters<typeof client.json>[0])}, now())`;
+			const request = {
+				schemaVersion: 2 as const,
+				conversationId,
+				capabilityId,
+				directoryRevision,
+				parameters: "summarize the attached inputs",
+				idempotencyKey: "native-v2-invoke",
+				requestId: "native-v2-request",
+				traceId: "native-v2-trace",
+				attachments: files.map((file) => file.fileId),
+			};
+			const accepted = await admission.admit(request);
+			if (accepted.outcome !== "accepted")
+				throw new Error("Expected accepted Invocation V2 plan");
+			expect(accepted.plan.idempotency.requestDigest).toBe(
+				nativeCapabilityAdmissionRequestDigestV2(request),
+			);
+			expect(accepted.plan.attachments).toMatchObject([
+				{ fileId: "native-file-a", byteLength: 5, mediaType: "text/plain" },
+				{ fileId: "native-file-b", byteLength: 5, mediaType: "text/plain" },
+			]);
+			const [outbox] = await client<{ payload: Record<string, unknown> }[]>`
+				select payload from platform.outbox_items
+				where id = ${accepted.plan.outbox.id}`;
+			expect(outbox?.payload).toMatchObject({
+				attachments: accepted.plan.attachments,
+			});
+			const readFiles = () =>
+				client<{ record: FileRecordV1 }[]>`
+					select record from platform.files
+					where file_id in ('native-file-a','native-file-b')
+					order by file_id`;
+			const bound = await readFiles();
+			expect(bound.map((row) => row.record)).toMatchObject([
+				{
+					fileId: "native-file-a",
+					messageId: null,
+					executionId: "native-v2-execution-1",
+					sessionGeneration: 1,
+					revision: 2,
+				},
+				{
+					fileId: "native-file-b",
+					messageId: null,
+					executionId: "native-v2-execution-1",
+					sessionGeneration: 1,
+					revision: 2,
+				},
+			]);
+			await expect(
+				admission.admit({ ...request, requestId: "native-v2-replay" }),
+			).resolves.toMatchObject({
+				outcome: "replayed",
+				plan: { attachments: accepted.plan.attachments },
+			});
+			expect(await readFiles()).toEqual(bound);
+			await expect(
+				admission.admit({
+					...request,
+					idempotencyKey: "native-v2-busy",
+					requestId: "native-v2-busy",
+				}),
+			).resolves.toEqual({ outcome: "busy" });
 		} finally {
 			await transaction.close();
 		}

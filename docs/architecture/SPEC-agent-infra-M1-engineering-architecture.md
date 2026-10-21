@@ -1054,6 +1054,25 @@ Runtime Driver 直接执行的标准 MCP 路径按 [§13.5.4](#1354-runtime-driv
 持久确认。此覆盖仅适用于该 Driver 执行的 MCP 操作，不授予其他原生工具 native barrier
 conformance，也不改变下述私有 lane 的前置。
 
+首方 `workspace-summary` 使用 Driver 直接执行的受控 `workspace.read_text_file` client tool，
+不调用原生 shell。工具根目录由已验证的原生进程与当前 Conversation 绑定派生；模型只能提供
+相对文本路径，每次最多返回 4096 字节、每个 Execution 最多四次新读取。绝对路径、父路径、
+符号链接、非普通文件或无法确认归属的目标拒绝读取。新 Thread 固定工具版本；既有 Thread
+不能因部署更新静默增加工具。读取前保存原 Execution 的操作意图并等待确认，实际读取及
+结果交付分别重验 Host 当前授权；结果或 unknown 仍沿原 journal、游标与 ACK 交付。路径、
+文件正文和凭据不进入操作事实。该本地只读能力使用独立 namespace，不复用 Connection
+身份，也不授予原生文件、进程、网络工具或私有 native barrier conformance；详细约束见
+[Runtime HLD 8.5.1](HLD-agent-runtime-M1.md#851-codex-原生执行屏障)。
+
+带附件的原生 Skill 使用独立的浏览器 Invocation V2 与 Worker→Host Native V5 契约；既有
+Invocation V1、Native V4 和无附件 command 的严格请求/响应保持原样。附件必须成为同一次
+Execution 的持久输入、幂等摘要与 V4 business Grant 的精确只读集合。签名摘要覆盖 V5
+业务请求的规范化字段及完整附件序列，排除 Grant token、独立私有 Key 原值及其摘要；Key
+用途、引用和版本仍精确绑定。不得从自由参数解析文件授权，也不新增 Grant 用途或交付凭据。
+Codex 只通过现有 FileAuthority/FileBridge 将有界文本准备到当前 Conversation、当前执行的
+专属临时子目录，再由上述只读工具读取；不保留供下一次执行绕过授权的副本。版本接收、
+清理与启用门禁见 [Runtime HLD 的执行期文本输入](HLD-agent-runtime-M1.md#codex-skill-的执行期文本输入)。
+
 需要私有 FD callback、Connection bootstrap/recovery 或等价 native lane 的能力，只有在部署
 provenance 明确声明该 lane、协议/Schema 与工具覆盖，并实际验证不可关闭的 native barrier 后
 才能启用。该 barrier 在每个真实外部动作前等待 Driver 的持久 intent 与 Host 当前授权，在

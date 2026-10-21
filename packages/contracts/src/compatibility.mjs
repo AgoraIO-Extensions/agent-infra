@@ -24,6 +24,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/json-schema/runtime.v1.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime.v2.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime.v3.schema.json",
+	"packages/contracts/artifacts/json-schema/runtime.v5.schema.json",
 	"packages/contracts/artifacts/json-schema/runtime-readiness.v1.schema.json",
 	"packages/contracts/artifacts/openapi/common.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/browser-capability.v1.openapi.json",
@@ -34,6 +35,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/openapi/runtime-host.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v2.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-host.v3.openapi.json",
+	"packages/contracts/artifacts/openapi/runtime-host.v5.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-readiness.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/standard-template-release.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/standard-template-release.v2.openapi.json",
@@ -813,6 +815,44 @@ function isRuntimeOperationIdentityOpenApiAddition(previous, current) {
 	delete normalizedTool.properties.rpcRequestId;
 	delete normalizedTool.properties.requestDigest;
 	return isDeepStrictEqual(previous, normalized);
+}
+
+// Native capability Invocation V2 (browser -> Core) is an additive strict body
+// union on the existing native capability route: the V1 request schema and all
+// existing operations stay byte-compatible, and V1 stays attachment-free.
+function isNativeCapabilityInvocationV2OpenApiAddition(previous, current) {
+	const added =
+		current.components?.schemas?.NativeCapabilityInvocationRequestV2;
+	if (
+		!added ||
+		previous.components?.schemas?.NativeCapabilityInvocationRequestV2
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas.NativeCapabilityInvocationRequestV2;
+	let replaced = false;
+	for (const pathItem of Object.values(normalized.paths ?? {})) {
+		for (const operation of Object.values(pathItem ?? {})) {
+			const schema =
+				operation?.requestBody?.content?.["application/json"]?.schema;
+			if (!Array.isArray(schema?.anyOf) || schema.anyOf.length !== 2) continue;
+			const references = schema.anyOf.map((entry) => entry?.$ref);
+			if (
+				!references.includes(
+					"#/components/schemas/NativeCapabilityInvocationRequestV1",
+				) ||
+				!references.includes(
+					"#/components/schemas/NativeCapabilityInvocationRequestV2",
+				)
+			)
+				continue;
+			operation.requestBody.content["application/json"].schema = {
+				$ref: "#/components/schemas/NativeCapabilityInvocationRequestV1",
+			};
+			replaced = true;
+		}
+	}
+	return replaced && isDeepStrictEqual(previous, normalized);
 }
 
 // Browser handoff is an additive, authenticated V3 control route. Its request
@@ -5393,7 +5433,8 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 				previous,
 				current,
 			) &&
-			!isFileLimitDeclarationOpenApiAddition(previous, current)
+			!isFileLimitDeclarationOpenApiAddition(previous, current) &&
+			!isNativeCapabilityInvocationV2OpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}

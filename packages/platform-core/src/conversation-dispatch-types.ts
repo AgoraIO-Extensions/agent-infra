@@ -3,6 +3,7 @@ import type { ConversationReasoningKindV1 } from "./conversation-events.js";
 import type { ConversationExecutionSourceV1 } from "./conversation-execution-types.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
+import type { NativeTextInputV1 } from "./file-authority.js";
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 
 export type ConversationDispatchOperationV1 =
@@ -24,6 +25,12 @@ export type ConversationNativeCapabilityBindingV1 = Readonly<{
 	readonly capabilitySourceVersion: string;
 	readonly parameters: string;
 	readonly parametersDigest: string;
+	/**
+	 * Ordered Invocation V2 text inputs accepted with the same Execution. Absent
+	 * for Invocation V1; the Worker must deliver exactly this sequence to Native
+	 * V5 and must never re-read or extend it.
+	 */
+	readonly attachments?: readonly NativeTextInputV1[];
 }>;
 
 export type ConversationRuntimeDispatchOperationV1 =

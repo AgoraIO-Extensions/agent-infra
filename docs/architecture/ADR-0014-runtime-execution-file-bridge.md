@@ -44,6 +44,15 @@ Worker 将 response 的短期 grant 封装为 Runtime bridge 的 stream port。R
 
 该 wire 作为独立 contracts seam 生成 JSON Schema/OpenAPI，并已由 Platform API、Worker、RuntimeHost 评审；旧 `ExecutionGrantV1` 未被扩展为 V4 兼容层。`PlatformFileDeploymentV1` 新增 `runtimeWorkerId`：配置了文件能力但缺少该 Worker identity 时，装配必须 fail-closed。生产 deployment builder 与四模板文件 E2E 由 #3060 负责，本 ADR 不据此声称 Driver attachment/result capability 已全面开启。
 
+## Codex Skill 文本输入接收
+
+Issue #2887 的文本输入复用上述 FileAuthority/FileBridge，不增加第二套文件授权。新增的
+Invocation V2 / Native V5 将附件绑定到同一次 Skill Execution；旧 V1/V4 继续严格接收。
+Codex 的物化位置是当前 Conversation cwd 内、只属于本次执行的临时子目录，不成为长期
+工作区数据，也不允许下次 Skill 复用过期授权下的副本。输入来源、签名摘要、恢复与清理的
+完整约束见 [Runtime HLD](HLD-agent-runtime-M1.md#codex-skill-的执行期文本输入)。
+实际接收与 conformance 完成前，不以文档或操作员 fixture 开放能力。
+
 ## 后果
 
 该决定复用现有 File Authority 和 Runtime Grant，不新增对象存储、文件表或第二套授权 DTO。短期内所有 Driver capability 仍可保持 false；真实文件能力必须按 Driver 逐个通过受控 Fake、PostgreSQL/S3、重启/unknown 和跨主体负向测试后再开放。Web、企微和 ObjectStorage 只能消费已确认的 `fileId`，不能绕过此桥直接向 Runtime 提供文件。
