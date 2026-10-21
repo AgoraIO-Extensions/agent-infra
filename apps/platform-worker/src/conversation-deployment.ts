@@ -607,7 +607,10 @@ function createSessionSandboxAllocationResolverV1(
 			workspaceMountPath: "/workspace",
 			desiredState,
 		};
-		if (desiredState === "running" && allocation.runtime?.custom) {
+		if (
+			allocation.runtime?.custom &&
+			(desiredState === "running" || !requireCurrentTemplateTrust)
+		) {
 			const data: Record<string, string> = {};
 			const sourceSecret = !requireCurrentTemplateTrust
 				? await workload.client.read<V1Secret>("Secret", allocation.secretName)
