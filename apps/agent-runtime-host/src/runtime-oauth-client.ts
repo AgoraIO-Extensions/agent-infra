@@ -318,6 +318,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 	// the approved Agent profile. Host uses that nonsecret binding for OAuth;
 	// it never registers a client or guesses a Consumer/Instance mapping here.
 	const configuration =
+		"clientRegistration" in parsedConfiguration &&
 		parsedConfiguration.clientRegistration === "dcr"
 			? (() => {
 					const {
