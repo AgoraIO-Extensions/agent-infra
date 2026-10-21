@@ -1744,6 +1744,16 @@ secret、PKCE verifier、access/refresh Token，也不兑换授权码、刷新�
 和 scope 必须与已批准 profile 完全匹配。注册响应只保留非秘密 `client_id` 及部署合同引用；
 缺少可信的 Consumer/Instance 映射时保持安装不可用，不能把本地 client_id 猜作服务端实例。
 
+**Loopback callback binding。** 路径由受保护 Runtime 使用高熵随机值生成，绝不接受 Agent、
+模型、请求或 Connection 回调中的路径覆盖；它与原 principal、Agent、安装/Execution、
+client_id、配置修订、PKCE/state 和期限在同一受保护安装记录中绑定。Runtime 只为该记录
+启动有界 callback receiver，receiver 仅接受已登记的精确 loopback URI、一次性 state、
+匹配 issuer/client/resource 和内部 callback 认证；成功、拒绝、超时或进程关闭后立即使
+路径失效并关闭 receiver。通用 `/callback`、未知路径、第二次回调、跨安装 state、任意
+redirect 或未绑定的本地监听器都 fail closed。若部署不能把 loopback receiver 可靠地绑定到
+原安装（例如远程 Pod 无受控回传），不得选择 DCR，必须使用部署批准的预注册 client/HTTPS
+callback 路线。
+
 Platform 从当前认证身份与 Agent 使用权限固定原 principal＋Agent，并将安装授权发给
 其所属受保护 Runtime。此授权只允许原客户端发起或确认登录，不签发 Connection 权限；
 不能由 Owner、应用责任人、工作负载身份或模型代替原主体确认。命令合同和接收符号须在

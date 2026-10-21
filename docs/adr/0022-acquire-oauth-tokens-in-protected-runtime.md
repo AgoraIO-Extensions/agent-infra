@@ -37,6 +37,10 @@ Runtime 安装供应，也不替代原主体/Agent 映射。直接复制 PAT、�
 自动重试；它让 access/refresh Token 的领取完全留在原 Runtime 秘密边界，避免建立另一个
 Token 服务或将 PKCE verifier 放进控制面。该通道尚未实现，部署回跳地址也须明确批准。
 
+DCR 的 loopback redirect URI 只能由受保护 Runtime 为单一安装生成，并与原 principal、Agent、
+client_id、state/PKCE、配置修订和期限绑定；没有受控 loopback receiver 的远程部署不选择
+DCR，继续使用预注册 client 与固定 HTTPS callback。未知、重复或跨安装 callback 均拒绝。
+
 平台侧确认生产者与 callback 接收的具名合同由
 [#1589](https://github.com/AgoraIO-Extensions/agent-infra/issues/1589) 细化，仍以工程 Spec
 §13.5.6 为唯一边界。Platform DB 只保存自身非敏感确认和命令交付事实，Worker 复用原
