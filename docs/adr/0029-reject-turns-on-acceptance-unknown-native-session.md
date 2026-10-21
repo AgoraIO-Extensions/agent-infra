@@ -2,7 +2,7 @@
 
 ## 状态
 
-草案，待 [#3117](https://github.com/AgoraIO-Extensions/agent-infra/issues/3117) 评审后采纳；实现归属 [#3017](https://github.com/AgoraIO-Extensions/agent-infra/issues/3017)。
+已采纳。随 [#3117](https://github.com/AgoraIO-Extensions/agent-infra/issues/3117) 的文档评审（#3118）合入；实现归属 [#3017](https://github.com/AgoraIO-Extensions/agent-infra/issues/3017)。
 
 ## 背景
 
@@ -33,7 +33,7 @@
 
 1. **Runtime 明确拒绝。** 同一 Conversation 与 generation 的原生会话满足以下任一条件时，不再接受新 Turn：
    - 已持久标记受理不明；
-   - 存在不属于当前进程内在途调用的残留已准备操作。
+   - 存在不属于当前进程内在途调用的残留已准备 Turn 提交操作（stop 等中断类操作可由原请求重放收敛，不计入）。
 
    对不同 `executionId` 的新 submit，Driver 在任何原生调用之前返回稳定且脱敏的 rejected 结果 `RUNTIME_SESSION_BLOCKED`，并把它与该操作原子持久化。同一 Execution 的重放仍按原操作返回 `unknown`。该结果：
    - 不可重试；
@@ -44,6 +44,7 @@
    - 历史只读，不能继续发送；
    - 用户可以明确新建 Conversation；
    - 不提升 `sessionGeneration`，不创建 generation tombstone，也不新建 Runtime Session；
+   - 绑定本次 Execution 的待处理补充指令按「投递失败：原回复未开始」终结，stop 置为成功终态；会话不可用后它们无法再被认领，必须在同一事务内收敛；
    - 原受理不明的 Execution 保留已持久的状态与证据；
    - 其他 Conversation 不受影响。
 4. **范围。** 当前只有 Codex Driver 持有这种持久阻塞状态。其他 Driver 出现同类状态时，适用同一规则和同一结果码。产品表现沿用 PRD 已定义的「会话不可用」，不新增公共错误码。
