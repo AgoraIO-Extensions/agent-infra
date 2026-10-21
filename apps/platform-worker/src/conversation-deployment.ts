@@ -86,15 +86,57 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	readonly serviceToken: string;
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerApproval?: unknown;
+	readonly connectionConsumerProfilesByAgent?: Readonly<
+		Record<string, { readonly profile: unknown; readonly approval: unknown }>
+	>;
 	readonly requireConnectionConsumerProfile?: boolean;
 }): ConversationRuntimeOptionsV2["resolveRuntimeHost"] {
 	const { workload, signing, serviceToken } = options;
-	const connectionConsumer = approvedConnectionConsumerTarget(
-		options.connectionConsumerProfile,
-		options.connectionConsumerApproval,
-		options.requireConnectionConsumerProfile,
-	);
-	const auth = workload.policy.runtimeAuth;
+	const staticProfile = structuredClone(options.connectionConsumerProfile);
+	const staticApproval = structuredClone(options.connectionConsumerApproval);
+	const perAgentProfiles = options.connectionConsumerProfilesByAgent
+		? structuredClone(options.connectionConsumerProfilesByAgent)
+		: undefined;
+	if (!perAgentProfiles) {
+		approvedConnectionConsumerTarget(
+			staticProfile,
+			staticApproval,
+			options.requireConnectionConsumerProfile,
+		);
+	}
+	const connectionConsumerFor = (agentId: string) => {
+		const perAgent = perAgentProfiles?.[agentId];
+		const perAgentSnapshots =
+			workload.policy?.connectionConsumerSnapshotsByAgent;
+		if (
+			(perAgentProfiles || perAgentSnapshots) &&
+			!perAgent &&
+			(perAgentSnapshots === undefined ||
+				!Object.hasOwn(perAgentSnapshots, agentId))
+		)
+			throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+		let profile = perAgent?.profile;
+		let approval = perAgent?.approval;
+		if (!perAgent && perAgentSnapshots) {
+			try {
+				const parsed = JSON.parse(perAgentSnapshots[agentId] ?? "null");
+				profile = parsed?.profile;
+				approval = parsed?.approval;
+			} catch {
+				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+			}
+		}
+		if (!perAgent && !perAgentSnapshots) {
+			profile = staticProfile;
+			approval = staticApproval;
+		}
+		return approvedConnectionConsumerTarget(
+			profile,
+			approval,
+			options.requireConnectionConsumerProfile,
+		);
+	};
+	const auth = workload.policy?.runtimeAuth;
 	try {
 		if (!auth) throw new Error();
 		validateWorkloadRuntimeAuthV1(auth);
@@ -124,9 +166,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	});
 	const connectionDeliveryConfigured =
 		workload.policy.connectionConsumerSnapshot !== undefined ||
-		workload.policy.connectionInstallationRevision !== undefined;
+		workload.policy.connectionInstallationRevision !== undefined ||
+		workload.policy.connectionConsumerSnapshotsByAgent !== undefined ||
+		workload.policy.connectionInstallationRevisionsByAgent !== undefined;
 	return async (input) => {
 		try {
+			const connectionConsumer = connectionConsumerFor(input.agentId);
 			input.signal.throwIfAborted();
 			const state = input.workload;
 			const controlSource = input.sandboxResource?.controlSource;

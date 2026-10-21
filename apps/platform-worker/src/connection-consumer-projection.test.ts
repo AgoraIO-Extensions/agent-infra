@@ -9,6 +9,7 @@ import {
 	runtimeConnectionConsumerFileEnvironment,
 	runtimeConnectionConsumerProjectionV1,
 	runtimeConnectionConsumerRevisionEnvironment,
+	runtimeConnectionConsumerSnapshotForAgentV1,
 	runtimeConnectionInstallationRevisionEnvironment,
 	runtimeConnectionPiMcpBridgeEnvironment,
 } from "./connection-consumer-projection.js";
@@ -38,6 +39,30 @@ function source() {
 		},
 	};
 }
+
+it("selects an approved snapshot per Agent and fails closed for an unmapped Agent", () => {
+	const shared = snapshot();
+	const agentB = JSON.stringify({
+		profile: { ...source().profile, consumerId: "consumer-b" },
+		approval: {
+			...source().approval,
+			configFingerprint: connectionConsumerProfileFingerprintV1({
+				...source().profile,
+				consumerId: "consumer-b",
+			}),
+		},
+	});
+	const byAgent = { "agent-a": shared, "agent-b": agentB };
+	expect(
+		runtimeConnectionConsumerSnapshotForAgentV1(undefined, byAgent, "agent-a"),
+	).toBe(shared);
+	expect(
+		runtimeConnectionConsumerSnapshotForAgentV1(undefined, byAgent, "agent-b"),
+	).toBe(agentB);
+	expect(
+		runtimeConnectionConsumerSnapshotForAgentV1(undefined, byAgent, "agent-c"),
+	).toBeNull();
+});
 
 function snapshot() {
 	const input = source();

@@ -28,6 +28,8 @@ import type {
 import {
 	isRuntimeConnectionEnvironmentV1,
 	runtimeConnectionConsumerProjectionV1,
+	runtimeConnectionConsumerSnapshotForAgentV1,
+	runtimeConnectionInstallationRevisionForAgentV1,
 } from "./connection-consumer-projection.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import type { KubernetesWorkloadPolicyV1 } from "./kubernetes-runtime-adapter.js";
@@ -127,15 +129,24 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	} = dependencies;
 	const templateBinding =
 		standardTemplateBinding ?? modelProjection?.standardTemplateBinding;
-	const connection = runtimeConnectionConsumerProjectionV1(
-		dependencies.connectionConsumerControl
-			? undefined
-			: policy.connectionConsumerSnapshot,
-		dependencies.connectionConsumerControl
-			? undefined
-			: policy.connectionInstallationRevision,
-		templateBinding,
-	);
+	const connectionFor = (agentId: string) =>
+		runtimeConnectionConsumerProjectionV1(
+			dependencies.connectionConsumerControl
+				? undefined
+				: runtimeConnectionConsumerSnapshotForAgentV1(
+						policy.connectionConsumerSnapshot,
+						policy.connectionConsumerSnapshotsByAgent,
+						agentId,
+					),
+			dependencies.connectionConsumerControl
+				? undefined
+				: runtimeConnectionInstallationRevisionForAgentV1(
+						policy.connectionInstallationRevision,
+						policy.connectionInstallationRevisionsByAgent,
+						agentId,
+					),
+			templateBinding,
+		);
 	function modelBindings(value: AgentWorkloadDesiredV1) {
 		if (!modelProjection || !modelInjection) return undefined;
 		if (
@@ -158,6 +169,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		return modelInjection;
 	}
 	function workloadEnvironment(value: AgentWorkloadDesiredV1) {
+		const connection = connectionFor(value.agentId);
 		if (
 			!dependencies.connectionConsumerControl &&
 			value.replicas !== 0 &&
