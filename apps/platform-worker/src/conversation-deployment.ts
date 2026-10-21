@@ -609,7 +609,24 @@ function createSessionSandboxAllocationResolverV1(
 		};
 		if (desiredState === "running" && allocation.runtime?.custom) {
 			const data: Record<string, string> = {};
-			for (const ref of allocation.runtime.custom.secretRefs) {
+			const sourceSecret = !requireCurrentTemplateTrust
+				? await workload.client.read<V1Secret>("Secret", allocation.secretName)
+				: null;
+			const refs = requireCurrentTemplateTrust
+				? allocation.runtime.custom.secretRefs
+				: [];
+			if (!requireCurrentTemplateTrust && sourceSecret?.data) {
+				for (const [name, encoded] of Object.entries(sourceSecret.data)) {
+					if (["token", "model-config"].includes(name)) continue;
+					if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+						throw new WorkloadKubernetesError("policy");
+					const decoded = Buffer.from(encoded, "base64");
+					if (decoded.toString("base64") !== encoded)
+						throw new WorkloadKubernetesError("policy");
+					data[name] = decoded.toString("utf8");
+				}
+			}
+			for (const ref of refs) {
 				const secret = await workload.client.read<V1Secret>("Secret", ref.name);
 				const annotations = secret?.metadata?.annotations;
 				if (
