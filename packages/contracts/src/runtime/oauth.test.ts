@@ -32,7 +32,10 @@ describe("Runtime OAuth configuration", () => {
 	});
 
 	it.each([
-		{ clientId: "client-a", registrationEndpoint: base.issuer + "oauth/register" },
+		{
+			clientId: "client-a",
+			registrationEndpoint: `${base.issuer}oauth/register`,
+		},
 		{ clientId: "dcr", clientRegistration: "dcr" as const },
 	])("rejects incomplete DCR configuration %j", (change) => {
 		expect(() =>

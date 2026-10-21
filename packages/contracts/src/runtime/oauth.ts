@@ -21,7 +21,11 @@ const https = z
 			!url.search
 		);
 	});
-const callbackUrlSchema = z.string().max(2048).url().refine((value) => {
+const callbackUrlSchema = z
+	.string()
+	.max(2048)
+	.url()
+	.refine((value) => {
 		const url = new URL(value);
 		if (url.username || url.password || url.search || url.hash) return false;
 		if (url.protocol === "https:") return true;
@@ -57,8 +61,8 @@ const runtimeOAuthConfiguration = z.strictObject({
 	/** Optional approved Connection PAT binding route; OAuth remains the default. */
 	patBinding: patBinding.optional(),
 });
-export const RuntimeOAuthConfigurationV1Schema = runtimeOAuthConfiguration.superRefine(
-	(value, context) => {
+export const RuntimeOAuthConfigurationV1Schema =
+	runtimeOAuthConfiguration.superRefine((value, context) => {
 		if (value.clientRegistration === "dcr") {
 			if (value.clientId !== "dcr")
 				context.addIssue({
@@ -79,8 +83,7 @@ export const RuntimeOAuthConfigurationV1Schema = runtimeOAuthConfiguration.super
 				message: "registrationEndpoint requires clientRegistration=dcr",
 			});
 		}
-	},
-);
+	});
 export type RuntimeOAuthConfigurationV1 = z.infer<
 	typeof RuntimeOAuthConfigurationV1Schema
 >;

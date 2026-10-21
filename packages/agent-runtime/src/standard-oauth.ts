@@ -32,9 +32,11 @@ export async function registerStandardOAuthClient(options: {
 		redirect.password ||
 		redirect.search ||
 		redirect.hash ||
-		!(redirect.protocol === "https:" ||
+		!(
+			redirect.protocol === "https:" ||
 			(redirect.protocol === "http:" &&
-				["localhost", "127.0.0.1", "[::1]"].includes(redirect.hostname)))
+				["localhost", "127.0.0.1", "[::1]"].includes(redirect.hostname))
+		)
 	)
 		standardOAuthUnavailable();
 	const signal = AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]);
@@ -57,7 +59,8 @@ export async function registerStandardOAuthClient(options: {
 			signal,
 		});
 		options.assertCurrent();
-		if (response.status !== 201 || response.redirected) standardOAuthUnavailable();
+		if (response.status !== 201 || response.redirected)
+			standardOAuthUnavailable();
 		const text = await response.text();
 		options.assertCurrent();
 		if (text.length > 16_384) standardOAuthUnavailable();
@@ -83,17 +86,18 @@ export async function registerStandardOAuthClient(options: {
 			record.client_name !== "Codex" ||
 			record.scope !== options.scope ||
 			record.token_endpoint_auth_method !== "none" ||
-		!registrationId.test(String(record.client_id)) ||
-		!Number.isSafeInteger(record.client_id_issued_at) ||
-		!Array.isArray(record.grant_types) ||
-		!Array.isArray(record.response_types) ||
-		!Array.isArray(record.redirect_uris) ||
-		JSON.stringify(record.grant_types) !==
-			JSON.stringify(["authorization_code", "refresh_token"]) ||
-		JSON.stringify(record.response_types) !== JSON.stringify(["code"]) ||
-		JSON.stringify(record.redirect_uris) !== JSON.stringify([options.redirectUri])
-	)
-		standardOAuthUnavailable();
+			!registrationId.test(String(record.client_id)) ||
+			!Number.isSafeInteger(record.client_id_issued_at) ||
+			!Array.isArray(record.grant_types) ||
+			!Array.isArray(record.response_types) ||
+			!Array.isArray(record.redirect_uris) ||
+			JSON.stringify(record.grant_types) !==
+				JSON.stringify(["authorization_code", "refresh_token"]) ||
+			JSON.stringify(record.response_types) !== JSON.stringify(["code"]) ||
+			JSON.stringify(record.redirect_uris) !==
+				JSON.stringify([options.redirectUri])
+		)
+			standardOAuthUnavailable();
 		return String(record.client_id);
 	} catch {
 		standardOAuthUnavailable();

@@ -42,7 +42,9 @@ describe("per-install OAuth DCR", () => {
 		});
 		expect(clientId).toBe("client-a");
 		expect(calls).toHaveLength(1);
-		expect(await calls[0]!.json()).toEqual({
+		const request = calls[0];
+		if (!request) throw new Error("request missing");
+		expect(await request.json()).toEqual({
 			client_name: "Codex",
 			redirect_uris: [redirectUri],
 			grant_types: ["authorization_code", "refresh_token"],
@@ -55,7 +57,10 @@ describe("per-install OAuth DCR", () => {
 
 	it.each([
 		["secret response", { ...valid(), client_secret: "secret" }],
-		["foreign redirect", { ...valid(), redirect_uris: ["http://127.0.0.1:3044/other"] }],
+		[
+			"foreign redirect",
+			{ ...valid(), redirect_uris: ["http://127.0.0.1:3044/other"] },
+		],
 		["wrong scope", { ...valid(), scope: "other" }],
 		["wrong grant", { ...valid(), grant_types: ["authorization_code"] }],
 	])("rejects %s without returning a client", async (_label, body) => {
