@@ -2383,54 +2383,18 @@ describe("Codex Runtime Driver", () => {
 		).rejects.toThrow();
 	});
 
+	// ADR-0029：模型与档位由保存时的真实请求判定，Driver 不再按 `model/list` 准入；
+	// 未内置的模型使用 Codex 默认回退元数据。
 	it.each([
-		["missing model metadata", "unverified-model", "high"],
-		["unrelated prefix extension", "gpt-5.3x", "high"],
-		["numeric prefix extension", "gpt-5.30", "high"],
-		["unsupported reasoning profile", "gpt-5.3-codex", "ultra"],
+		["a model outside the pinned catalog", "unverified-model", "high"],
+		["an unrelated prefix extension", "gpt-5.3x", "high"],
+		["a numeric prefix extension", "gpt-5.30", "high"],
+		["a reasoning level the catalog does not list", "gpt-5.3-codex", "ultra"],
+		["an exact built-in model", "gpt-5.3-codex", "high"],
+		["a hyphen-separated built-in model", "gpt-5.3-codex-2026-01-01", "high"],
 	] as const)(
-		"rejects routed configuration with %s",
+		"admits routed configuration with %s without model/list",
 		async (_name, model, reasoningLevel) => {
-			const directory = await runtimeDirectory();
-			const bridge = new TestCodexBridge();
-			await expect(
-				openCodexRuntimeDriverForTest(
-					{
-						path: join(directory, "driver.json"),
-						configVersion: "synthetic-config-1",
-						defaultModelOptionId: "model-option-primary",
-						defaultReasoningLevel: reasoningLevel,
-						modelOptions: [
-							{
-								modelOptionId: "model-option-primary",
-								model,
-								reasoningLevels: [reasoningLevel],
-								...upstreamModelAccess,
-							},
-						],
-					},
-					async (options) => {
-						if (!options.modelAccess)
-							throw new Error("missing loopback access");
-						bridge.setConfigReadResult(
-							modelAccessConfigReadResult(
-								options.modelAccess,
-								internalModel("model-option-primary", model),
-								reasoningLevel,
-							),
-						);
-						return bridge;
-					},
-				),
-			).rejects.toMatchObject({
-				code: "RUNTIME_CODEX_CONFIGURATION_INVALID",
-			});
-		},
-	);
-
-	it.each(["gpt-5.3-codex", "gpt-5.3-codex-2026-01-01"])(
-		"admits exact or hyphen-separated model profile %s",
-		async (model) => {
 			const directory = await runtimeDirectory();
 			const bridge = new TestCodexBridge();
 			const driver = await openCodexRuntimeDriverForTest(
@@ -2438,12 +2402,12 @@ describe("Codex Runtime Driver", () => {
 					path: join(directory, "driver.json"),
 					configVersion: "synthetic-config-1",
 					defaultModelOptionId: "model-option-primary",
-					defaultReasoningLevel: "high",
+					defaultReasoningLevel: reasoningLevel,
 					modelOptions: [
 						{
 							modelOptionId: "model-option-primary",
 							model,
-							reasoningLevels: ["high"],
+							reasoningLevels: [reasoningLevel],
 							...upstreamModelAccess,
 						},
 					],
@@ -2454,92 +2418,31 @@ describe("Codex Runtime Driver", () => {
 						modelAccessConfigReadResult(
 							options.modelAccess,
 							internalModel("model-option-primary", model),
-							"high",
+							reasoningLevel,
 						),
 					);
 					return bridge;
 				},
 			);
 			drivers.push(driver);
-			await driver.execute(submitCommandV2());
-			expect(
-				bridge.requests.find(({ method }) => method === "turn/start")?.params,
-			).toMatchObject({ model: internalModel("model-option-primary", model) });
-		},
-	);
-
-	it.each(["same-page", "cross-page", "unique-pages"] as const)(
-		"validates model profile identity across %s",
-		async (scenario) => {
-			const model = "gpt-5.3-codex";
-			const directory = await runtimeDirectory();
-			const bridge = new TestCodexBridge();
-			const profile = {
-				model,
-				supportedReasoningEfforts: [{ reasoningEffort: "high" }],
-			};
-			const other = {
-				...profile,
-				model: scenario === "unique-pages" ? "gpt-5.2-codex" : model,
-				supportedReasoningEfforts: [{ reasoningEffort: "low" }],
-			};
-			bridge.modelListPages =
-				scenario === "same-page"
-					? [{ data: [profile, other], nextCursor: null }]
-					: [
-							{ data: [profile], nextCursor: "page-two" },
-							{ data: [other], nextCursor: null },
-						];
-			const opening = openCodexRuntimeDriverForTest(
-				{
-					path: join(directory, "driver.json"),
-					configVersion: "synthetic-config-1",
-					defaultModelOptionId: "model-option-primary",
-					defaultReasoningLevel: "high",
-					modelOptions: [
-						{
-							modelOptionId: "model-option-primary",
-							model,
-							reasoningLevels: ["high"],
-							...upstreamModelAccess,
-						},
-					],
-				},
-				async (options) => {
-					if (!options.modelAccess) throw new Error("missing loopback access");
-					bridge.setConfigReadResult(
-						modelAccessConfigReadResult(
-							options.modelAccess,
-							internalModel("model-option-primary", model),
-							"high",
-						),
-					);
-					return bridge;
-				},
+			await driver.execute(
+				submitCommandV2({
+					selection: {
+						schemaVersion: 1,
+						modelOptionId: "model-option-primary",
+						reasoningLevel,
+					},
+				}),
 			);
-			if (scenario !== "unique-pages") {
-				await expect(opening).rejects.toMatchObject({
-					code: "RUNTIME_CODEX_PROTOCOL_INVALID",
-				});
-				expect(
-					bridge.requests.some(({ method }) => method === "turn/start"),
-				).toBe(false);
-				return;
-			}
-			const driver = await opening;
 			expect(
-				bridge.requests
-					.filter(({ method }) => method === "model/list")
-					.map(({ params }) => params),
-			).toEqual([
-				{ includeHidden: true, limit: 100 },
-				{ includeHidden: true, limit: 100, cursor: "page-two" },
-			]);
-			drivers.push(driver);
-			await driver.execute(submitCommandV2());
+				bridge.requests.some(({ method }) => method === "model/list"),
+			).toBe(false);
 			expect(
 				bridge.requests.find(({ method }) => method === "turn/start")?.params,
-			).toMatchObject({ model: internalModel("model-option-primary", model) });
+			).toMatchObject({
+				model: internalModel("model-option-primary", model),
+				effort: reasoningLevel,
+			});
 		},
 	);
 
@@ -15528,7 +15431,6 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 	it.each([
 		"initialize",
 		"config/read",
-		"model/list",
 		"skills/extraRoots/set",
 		"skills/list",
 		"projection",
@@ -15665,15 +15567,14 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 		expect(f.bridge.requests.map((r) => r.method)).toEqual([
 			"initialize",
 			"config/read",
-			"model/list",
 			"skills/extraRoots/set",
 			"skills/list",
 			"skills/list",
 		]);
-		expect(f.bridge.requests[3]?.params).toEqual({
+		expect(f.bridge.requests[2]?.params).toEqual({
 			extraRoots: ["/opt/codex/agent-infra-skills"],
 		});
-		expect(f.bridge.requests[4]?.params).toEqual({
+		expect(f.bridge.requests[3]?.params).toEqual({
 			cwds: [f.bridge.launch?.cwd],
 			forceReload: true,
 		});
@@ -15984,7 +15885,6 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 	it.each([
 		"initialize",
 		"config/read",
-		"model/list",
 		"skills/extraRoots/set",
 		"skills/list",
 	])("rechecks authority after awaited %s", async (method) => {

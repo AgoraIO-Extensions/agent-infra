@@ -596,9 +596,13 @@ function agentDefaultRelayKeyReadSummary(
 		Object.keys(details).some((k) => !allowedKeys.has(k)) ||
 		// reason 只能是 AgentDefaultRelayKeyErrorV1 的错误码；数值字段只能是非负整数。
 		(details.reason !== undefined &&
-			!["invalid_input", "not_authorized", "conflict", "unavailable"].includes(
-				details.reason as string,
-			)) ||
+			![
+				"invalid_input",
+				"not_authorized",
+				"conflict",
+				"unavailable",
+				"model_unsupported",
+			].includes(details.reason as string)) ||
 		!counter(details.configurationRevision) ||
 		!counter(details.previousVersion) ||
 		!counter(details.keyVersion)

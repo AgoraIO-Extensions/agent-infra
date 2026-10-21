@@ -639,9 +639,7 @@ export async function createPlatformSavedKeyCandidatesOptionsV1(
 			load: (loadSignal) => workloadInput.modelCatalog.load(loadSignal),
 		},
 		templateBindings: deployment.workload
-			.templateModelBindings as readonly (StandardTemplateModelBindingV1 & {
-			readonly reasoningLevels: readonly string[];
-		})[],
+			.templateModelBindings as readonly StandardTemplateModelBindingV1[],
 		relayEndpointId: savedKeyCandidatesPolicy.relayEndpointId,
 		relayBaseUrl: savedKeyCandidatesPolicy.relayBaseUrl,
 		validation: savedKeyCandidatesPolicy.validation,

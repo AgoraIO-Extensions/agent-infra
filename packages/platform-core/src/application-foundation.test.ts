@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-
+import { AgentDefaultRelayKeyErrorV1 } from "./agent-default-relay-key.ts";
 import {
 	applicationFoundationActorContextV1,
 	applicationFoundationAdmissionDependenciesV1,
@@ -575,6 +575,73 @@ describe("Application foundation Secret sidecar", () => {
 		});
 		expect(plan).toBeUndefined();
 	});
+
+	it.each([
+		[undefined, "committed"],
+		[
+			new AgentDefaultRelayKeyErrorV1("model_unsupported"),
+			"model_profile_unsupported",
+		],
+		[new AgentDefaultRelayKeyErrorV1("unavailable"), "dependency_unavailable"],
+	] as const)(
+		"verifies every selected pair with the submitted Key before persisting (ADR-0029, failure %s)",
+		async (failure, expected) => {
+			let commits = 0;
+			const keyValue = "relay-key-controlled-test-value";
+			const verify = vi.fn(async () => {
+				if (failure) throw failure;
+			});
+			const options =
+				applicationFoundationCommandV1.modelConfiguration?.options ?? [];
+			const useCase = createApplicationFoundationUseCaseV1(
+				{
+					transaction: readyTransaction({
+						async commit(plan) {
+							commits += 1;
+							return { outcome: "committed", result: plan.result };
+						},
+					}),
+					...applicationFoundationAdmissionDependenciesV1(),
+					defaultRelayKey: {
+						candidates: async () =>
+							options.map(({ endpointId, modelId, reasoningLevels }) => ({
+								endpointId,
+								modelId,
+								reasoningLevels,
+							})),
+						verify,
+						encrypt: () => ({ ciphertext: "opaque" }),
+						currentIdentity: async () => ({
+							userId: applicationFoundationActorContextV1.userId,
+							accountStatus: "active",
+							// 与准入夹具返回的授权修订一致。
+							authorizationRevision: "authorization_9",
+						}),
+					},
+				},
+				{ now: () => new Date(serverInstant) },
+			);
+			const submitted = useCase.submit(
+				{ ...applicationFoundationCommandV1, defaultRelayKey: keyValue },
+				applicationFoundationActorContextV1,
+				pendingSecretRecordAttachmentFixtureV1(),
+			);
+			if (expected === "committed") await submitted;
+			else await expect(submitted).rejects.toMatchObject({ code: expected });
+			expect(verify).toHaveBeenCalledExactlyOnceWith(
+				keyValue,
+				expect.objectContaining({ source: expect.anything() }),
+				options.flatMap(({ endpointId, modelId, reasoningLevels }) =>
+					reasoningLevels.map((reasoningLevel) => ({
+						endpointId,
+						modelId,
+						reasoningLevel,
+					})),
+				),
+			);
+			expect(commits).toBe(expected === "committed" ? 1 : 0);
+		},
+	);
 
 	it("fails closed before persistence when a Secret sidecar is missing", async () => {
 		let commits = 0;

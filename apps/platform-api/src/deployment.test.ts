@@ -368,9 +368,6 @@ function deploymentInput(
 				templateId: "codex",
 				imageDigest,
 				modelBinding,
-				codexModelProfiles: [
-					{ model: "model-a", reasoningLevels: ["medium", "high"] },
-				],
 				configurationRevision: "configuration-a",
 			},
 			validation: readiness.revision,
@@ -437,6 +434,7 @@ function deploymentInput(
 				platformManagedKeys: ["PORT"],
 				connectionEnabled: false,
 				modelBinding,
+				// ADR-0029 之前要求的模型画像：仍可出现在部署配置里，但被忽略。
 				codexModelProfiles: [
 					{ model: "model-a", reasoningLevels: ["medium", "high"] },
 				],
@@ -1859,6 +1857,12 @@ describe("production API creation with user and application Tokens", () => {
 				>["candidates"]
 			>
 		>();
+	const verify =
+		vi.fn<
+			NonNullable<
+				NonNullable<ProductionPlatformApiInputV1["agentApiCreation"]>["verify"]
+			>
+		>();
 	let currentOwnerStatus: "active" | "disabled";
 	beforeEach(async () => {
 		if (running.server.listening) await createPlatformApiShutdown(running)();
@@ -1888,6 +1892,7 @@ describe("production API creation with user and application Tokens", () => {
 			},
 		};
 		candidates.mockReset().mockResolvedValue(apiModel.options);
+		verify.mockReset().mockResolvedValue(undefined);
 		fixture.input = {
 			...fixture.input,
 			agentApiCreation: {
@@ -1900,6 +1905,7 @@ describe("production API creation with user and application Tokens", () => {
 						requested ? { ...requested, catalogRevision: "catalog-a" } : null,
 				},
 				candidates,
+				verify,
 			},
 		};
 		await reader.unsafe(
@@ -1944,6 +1950,18 @@ describe("production API creation with user and application Tokens", () => {
 		expect(response.response?.status).toBe(201);
 		const result = AgentApiCreationResponseV1Schema.parse(response.data);
 		expect(result).toMatchObject({ status: "creating", replayed: false });
+		// 保存前用提交的默认 Key 对所选模型与档位做一次真实验证（ADR-0029）。
+		expect(verify).toHaveBeenCalledExactlyOnceWith(
+			apiBody.defaultRelayKey,
+			expect.objectContaining({ source: expect.anything() }),
+			[
+				{
+					endpointId: "endpoint-a",
+					modelId: "model-a",
+					reasoningLevel: "medium",
+				},
+			],
+		);
 		expect(await effects()).toEqual([
 			{ agents: 1, grants: 2, secrets: 1, keys: 1, outbox: 1 },
 		]);
@@ -2030,36 +2048,44 @@ describe("production API creation with user and application Tokens", () => {
 			{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
 		]);
 	});
-	it.each(["missing-key", "rejected-key", "failed-key"])(
-		"fails closed with %s provider",
-		async (failure) => {
-			await createPlatformApiShutdown(running)();
-			const configured = fixture.input.agentApiCreation;
-			if (!configured) throw new Error("Missing controlled configuration");
-			fixture.input = {
-				...fixture.input,
-				agentApiCreation: {
-					...configured,
-					...(failure === "missing-key" ? { candidates: undefined } : {}),
-				},
-			};
-			if (failure === "rejected-key") candidates.mockResolvedValue([]);
-			if (failure === "failed-key")
-				candidates.mockRejectedValue(new Error(apiBody.defaultRelayKey));
-			await openApi();
-			const response = await create();
-			expect(response.status).toBeGreaterThanOrEqual(400);
-			expect(await response.text()).not.toContain(apiBody.defaultRelayKey);
-			expect(await effects()).toEqual([
-				{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
-			]);
-		},
-	);
+	it.each([
+		"missing-key",
+		"missing-verification",
+		"rejected-key",
+		"failed-key",
+		"failed-verification",
+	])("fails closed with %s provider", async (failure) => {
+		await createPlatformApiShutdown(running)();
+		const configured = fixture.input.agentApiCreation;
+		if (!configured) throw new Error("Missing controlled configuration");
+		fixture.input = {
+			...fixture.input,
+			agentApiCreation: {
+				...configured,
+				...(failure === "missing-key" ? { candidates: undefined } : {}),
+				// 只给 candidates 不给验证：不装配默认 Key，标准模板创建失败关闭（ADR-0029）。
+				...(failure === "missing-verification" ? { verify: undefined } : {}),
+			},
+		};
+		if (failure === "rejected-key") candidates.mockResolvedValue([]);
+		if (failure === "failed-key")
+			candidates.mockRejectedValue(new Error(apiBody.defaultRelayKey));
+		if (failure === "failed-verification")
+			verify.mockRejectedValue(new Error(apiBody.defaultRelayKey));
+		await openApi();
+		const response = await create();
+		expect(response.status).toBeGreaterThanOrEqual(400);
+		expect(await response.text()).not.toContain(apiBody.defaultRelayKey);
+		expect(await effects()).toEqual([
+			{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+		]);
+	});
 	describe("without a separate API candidates adapter (#2759)", () => {
 		// 只换掉 candidates：部署提供与 Web 申请相同的默认 Relay Key 策略（受控 billing 与模型列表）。
 		async function openWithDeploymentPolicy(
 			billingStatus: number,
 			explicit?: typeof candidates,
+			probeStatus = 200,
 		) {
 			await createPlatformApiShutdown(running)();
 			const configured = fixture.input.agentApiCreation;
@@ -2074,6 +2100,26 @@ describe("production API creation with user and application Tokens", () => {
 							billing_scope: "token",
 						},
 						{ status: billingStatus },
+					);
+				// 保存前对所选模型与档位做一次真实验证请求（ADR-0029）。
+				if (String(url).endsWith("/responses") && probeStatus !== 200)
+					return Response.json({}, { status: probeStatus });
+				if (String(url).endsWith("/responses"))
+					return new Response(
+						`data: ${JSON.stringify({
+							type: "response.completed",
+							response: {
+								output: [
+									{
+										type: "function_call",
+										name: "agent_infra_conformance",
+										arguments: "{}",
+										status: "completed",
+									},
+								],
+							},
+						})}\n\n`,
+						{ headers: { "content-type": "text/event-stream" } },
 					);
 				return Response.json({ data: [{ id: "model-a" }] });
 			});
@@ -2128,11 +2174,12 @@ describe("production API creation with user and application Tokens", () => {
 			expect(await effects()).toEqual([
 				{ agents: 1, grants: 2, secrets: 1, keys: 1, outbox: 1 },
 			]);
-			// 提交的 Key 只发给固定的 billing 与模型目录路由。
+			// 提交的 Key 只发给固定的 billing、模型目录与验证请求路由。
 			expect(
 				relayFetch.mock.calls.map(([url]) => String(url)).toSorted(),
 			).toEqual([
 				"https://relay.example.test/v1/models",
+				"https://relay.example.test/v1/responses",
 				"https://sub2api.la3.agoralab.co/v1/sub2api/billing",
 			]);
 			expect(candidates).not.toHaveBeenCalled();
@@ -2151,6 +2198,24 @@ describe("production API creation with user and application Tokens", () => {
 			"classifies billing status %i as HTTP %i without effects",
 			async (billingStatus, status, code) => {
 				await openWithDeploymentPolicy(billingStatus);
+				const response = await create();
+				expect(response.status).toBe(status);
+				const text = await response.text();
+				expect(JSON.parse(text)).toMatchObject({ code });
+				expect(text).not.toContain(apiBody.defaultRelayKey);
+				expect(await effects()).toEqual([
+					{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+				]);
+			},
+		);
+		it.each([
+			[400, 409, "MODEL_SELECTION_INVALID"],
+			[401, 400, "INVALID_REQUEST"],
+			[503, 503, "DEPENDENCY_UNAVAILABLE"],
+		] as const)(
+			"classifies verification status %i as HTTP %i without effects",
+			async (probeStatus, status, code) => {
+				await openWithDeploymentPolicy(200, undefined, probeStatus);
 				const response = await create();
 				expect(response.status).toBe(status);
 				const text = await response.text();

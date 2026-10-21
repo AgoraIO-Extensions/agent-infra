@@ -173,9 +173,11 @@ export function registerAgentDefaultRelayKeyRoutes(
 									? "RESOURCE_UNAVAILABLE"
 									: error.code === "invalid_input"
 										? "INVALID_REQUEST"
-										: error.code === "conflict"
-											? "CONFLICT"
-											: "DEPENDENCY_UNAVAILABLE"
+										: error.code === "model_unsupported"
+											? "CODEX_MODEL_PROFILE_UNSUPPORTED"
+											: error.code === "conflict"
+												? "CONFLICT"
+												: "DEPENDENCY_UNAVAILABLE"
 								: "DEPENDENCY_UNAVAILABLE",
 							metadata.traceId,
 						);

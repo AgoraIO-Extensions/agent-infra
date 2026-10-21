@@ -7,7 +7,9 @@ export class AgentDefaultRelayKeyErrorV1 extends Error {
 			| "invalid_input"
 			| "not_authorized"
 			| "conflict"
-			| "unavailable",
+			| "unavailable"
+			/** 保存时用默认 Key 真实调用验证（ADR-0029）：模型或推理档位不兼容。 */
+			| "model_unsupported",
 	) {
 		super("Agent default Relay Key operation failed");
 	}
@@ -69,10 +71,83 @@ export interface AgentDefaultRelayKeyDependenciesV1 {
 		keyValue: string,
 		configuration: Pick<AgentConfigurationRecord, "source">,
 	) => Promise<readonly AgentDefaultRelayKeyCandidateV1[]>;
+	/**
+	 * Save-time real request per (model, level) with this Key (ADR-0029). Resolves only
+	 * when every pair is verified; throws `model_unsupported`, `invalid_input` (Key
+	 * rejected) or `unavailable`. Required so that no save path can skip verification.
+	 */
+	readonly verify: (
+		keyValue: string,
+		configuration: Pick<AgentConfigurationRecord, "source">,
+		combos: readonly AgentDefaultRelayKeyModelComboV1[],
+	) => Promise<void>;
 	readonly encrypt: (
 		binding: AgentDefaultRelayKeyBindingV1,
 		keyValue: string,
 	) => unknown | Promise<unknown>;
+}
+
+export interface AgentDefaultRelayKeyModelComboV1 {
+	readonly endpointId: string;
+	readonly modelId: string;
+	readonly reasoningLevel: string;
+}
+
+/**
+ * Shared save-time admission for every path that carries the default Key value
+ * (application, API creation, configuration update with a new Key, Key replacement).
+ * Every option's model must be visible to this Key. New pairs must use an offered
+ * level; pairs already saved in `previous` keep their level (ADR-0029). Because the
+ * Key value is new on all these paths, every pair is verified with a real request.
+ */
+export async function admitAgentDefaultRelayKeyModelsV1(input: {
+	readonly ports: Pick<
+		AgentDefaultRelayKeyDependenciesV1,
+		"candidates" | "verify"
+	>;
+	readonly keyValue: string;
+	readonly configuration: Pick<
+		AgentConfigurationRecord,
+		"source" | "modelConfiguration"
+	>;
+	readonly previous?: AgentConfigurationRecord["modelConfiguration"];
+}): Promise<void> {
+	const model = input.configuration.modelConfiguration;
+	if (!model) throw new AgentDefaultRelayKeyErrorV1("invalid_input");
+	const visible = await input.ports.candidates(input.keyValue, {
+		source: structuredClone(input.configuration.source),
+	});
+	const combos: AgentDefaultRelayKeyModelComboV1[] = [];
+	for (const option of model.options) {
+		const candidate = visible.find(
+			(item) =>
+				item.endpointId === option.endpointId &&
+				item.modelId === option.modelId,
+		);
+		if (!candidate) throw new AgentDefaultRelayKeyErrorV1("invalid_input");
+		const saved = input.previous?.options.find(
+			(item) =>
+				item.endpointId === option.endpointId &&
+				item.modelId === option.modelId,
+		);
+		for (const level of option.reasoningLevels) {
+			if (
+				!candidate.reasoningLevels.includes(level) &&
+				!saved?.reasoningLevels.includes(level)
+			)
+				throw new AgentDefaultRelayKeyErrorV1("invalid_input");
+			combos.push({
+				endpointId: option.endpointId,
+				modelId: option.modelId,
+				reasoningLevel: level,
+			});
+		}
+	}
+	await input.ports.verify(
+		input.keyValue,
+		{ source: structuredClone(input.configuration.source) },
+		combos,
+	);
 }
 const text = (value: unknown): value is string =>
 	typeof value === "string" &&
@@ -201,7 +276,7 @@ export function createAgentDefaultRelayKeyUseCaseV1(
 	}
 	async function candidates(
 		key: string,
-		configuration: AgentConfigurationRecord,
+		configuration: Pick<AgentConfigurationRecord, "source">,
 	) {
 		const result = await input.candidates(key, structuredClone(configuration));
 		if (
@@ -221,6 +296,7 @@ export function createAgentDefaultRelayKeyUseCaseV1(
 			reasoningLevels: [...reasoningLevels],
 		}));
 	}
+	const admissionPorts = { candidates, verify: input.verify };
 	return {
 		current: (request: AgentDefaultRelayKeyRequestV1) =>
 			execute(request, "read", async (tx, configuration) => {
@@ -256,23 +332,13 @@ export function createAgentDefaultRelayKeyUseCaseV1(
 					(await tx.current(request.agentId)) !== command.expectedVersion
 				)
 					throw new AgentDefaultRelayKeyErrorV1("conflict");
-				const visible = await candidates(command.keyValue, configuration);
-				const model = configuration.modelConfiguration;
-				if (
-					!model ||
-					model.options.some(
-						(option) =>
-							!visible.some(
-								(candidate) =>
-									candidate.endpointId === option.endpointId &&
-									candidate.modelId === option.modelId &&
-									option.reasoningLevels.every((level) =>
-										candidate.reasoningLevels.includes(level),
-									),
-							),
-					)
-				)
-					throw new AgentDefaultRelayKeyErrorV1("invalid_input");
+				// 替换 Key：已保存的组合保留原档位，全部用新 Key 真实验证（ADR-0029）。
+				await admitAgentDefaultRelayKeyModelsV1({
+					ports: admissionPorts,
+					keyValue: command.keyValue,
+					configuration,
+					previous: configuration.modelConfiguration,
+				});
 				const keyVersion = await tx.replace(
 					request.agentId,
 					command.expectedVersion,

@@ -66,6 +66,7 @@ describe("platform-core package surface", () => {
 			"TaskApiAuditError",
 			"WecomSetupError",
 			"WorkloadPreflightRejectedErrorV1",
+			"admitAgentDefaultRelayKeyModelsV1",
 			"agentApiCreationIdsV1",
 			"agentCreationFailureCategoryV1",
 			"bindInputFileV1",

@@ -66,7 +66,10 @@ import {
 	maxSecretReplacements,
 	sameValue,
 } from "./agent-configuration-values.js";
-import { AgentDefaultRelayKeyErrorV1 } from "./agent-default-relay-key.js";
+import {
+	AgentDefaultRelayKeyErrorV1,
+	admitAgentDefaultRelayKeyModelsV1,
+} from "./agent-default-relay-key.js";
 import { decideAgentAccessUpdatePolicy } from "./agent-management-access-policy.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 import {
@@ -824,25 +827,13 @@ function createAgentConfigurationUseCaseV1Internal(
 					)
 						throw new AgentConfigurationError("key_version_conflict");
 				} else {
-					const visible = await ports.candidates(
-						keyless.defaultRelayKey,
-						structuredClone(configuration),
-					);
-					if (
-						!configuration.modelConfiguration ||
-						configuration.modelConfiguration.options.some(
-							(option) =>
-								!visible.some(
-									(candidate) =>
-										candidate.endpointId === option.endpointId &&
-										candidate.modelId === option.modelId &&
-										option.reasoningLevels.every((level) =>
-											candidate.reasoningLevels.includes(level),
-										),
-								),
-						)
-					)
-						throw new AgentConfigurationError("not_admitted");
+					// 新 Key：已保存的组合保留原档位，全部用新 Key 真实验证（ADR-0029）。
+					await admitAgentDefaultRelayKeyModelsV1({
+						ports,
+						keyValue: keyless.defaultRelayKey,
+						configuration,
+						previous: current.modelConfiguration,
+					});
 				}
 				const identity = await ports.currentIdentity(command.traceId);
 				if (
@@ -863,6 +854,11 @@ function createAgentConfigurationUseCaseV1Internal(
 					};
 			} catch (error) {
 				if (error instanceof AgentConfigurationError) throw error;
+				if (
+					error instanceof AgentDefaultRelayKeyErrorV1 &&
+					error.code === "model_unsupported"
+				)
+					throw new AgentConfigurationError("model_profile_unsupported");
 				if (
 					error instanceof AgentDefaultRelayKeyErrorV1 &&
 					error.code === "invalid_input"

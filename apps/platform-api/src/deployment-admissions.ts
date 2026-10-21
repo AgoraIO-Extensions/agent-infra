@@ -18,8 +18,6 @@ import {
 } from "@agent-infra/contracts/workload";
 import { createOciImageRegistryAdapterV1 } from "@agent-infra/image-registry";
 import {
-	assertCodexModelProfilesV1,
-	type CodexModelProfileV1,
 	createDeploymentModelCatalogAdapterV1,
 	ModelCatalogSnapshotV1Schema,
 	ModelConfigurationErrorV1,
@@ -28,7 +26,6 @@ import {
 	type StandardTemplateModelBindingV1,
 	standardTemplateDefinitionsV1,
 	standardTemplateReadinessV1,
-	validateCodexModelProfilesV1,
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationModelAdmissionPortV2,
@@ -81,8 +78,11 @@ export interface DeploymentAdmissionInputV1 {
 		readonly imageReference: string;
 		readonly displayName?: string;
 		readonly modelBinding?: StandardTemplateModelBindingV1;
-		/** Deployment-owned profiles read from the exact pinned Codex image. */
-		readonly codexModelProfiles?: readonly CodexModelProfileV1[];
+		/**
+		 * ADR-0029 之前要求填写的模型画像。现在兼容读取并忽略：模型与档位由默认 Key 的
+		 * `/models` 和保存时的真实请求判定，不再按镜像登记。
+		 */
+		readonly codexModelProfiles?: unknown;
 		readonly configurationRevision?: string;
 		readonly loadValidation?: (signal: AbortSignal) => Promise<unknown>;
 	})[];
@@ -164,7 +164,6 @@ async function readTemplateReadiness(template: Template) {
 							templateId: template.templateId,
 							imageDigest: template.imageDigest,
 							modelBinding: template.modelBinding,
-							codexModelProfiles: template.codexModelProfiles,
 							configurationRevision: template.configurationRevision,
 						},
 						validation: readiness.revision,
@@ -397,23 +396,6 @@ export function createDeploymentAdmissionsV1(
 				standard.driver !== template.modelBinding.driver
 			)
 				throw new Error();
-			if (template.modelBinding?.driver === "codex") {
-				diagnostic = {
-					reason:
-						template.codexModelProfiles === undefined
-							? "codex_model_profiles_missing"
-							: "codex_model_profiles_invalid",
-					templateId: template.templateId,
-				};
-				validateCodexModelProfilesV1(template.codexModelProfiles);
-				diagnostic = undefined;
-			} else if (template.codexModelProfiles !== undefined) {
-				diagnostic = {
-					reason: "codex_model_profiles_unexpected",
-					templateId: template.templateId,
-				};
-				throw new Error();
-			}
 			if (
 				!template.templateId ||
 				!ImmutableOciDigestV1Schema.safeParse(template.imageDigest).success ||
@@ -475,24 +457,23 @@ export function createDeploymentAdmissionsV1(
 	const imageRepository = input.imageRepository;
 	const platformIdentityEntryAvailable =
 		input.platformIdentityEntryAvailable === true;
-	function codexModelProfilesFor(
+	/** A standard Codex source must match one exact trusted template/image binding. */
+	function hasTrustedCodexBinding(
 		source: AgentConfigurationSourceV1 | undefined,
-	): readonly CodexModelProfileV1[] | null | undefined {
-		if (source?.kind !== "standard") return undefined;
+	): boolean {
+		if (source?.kind !== "standard") return true;
 		if (
 			standardTemplateDefinitionsV1.find(
 				(template) => template.templateId === source.templateId,
 			)?.driver !== "codex"
 		)
-			return undefined;
-		const template = templates.find(
+			return true;
+		return templates.some(
 			(item) =>
 				item.templateId === source.templateId &&
-				item.imageDigest === source.imageDigest,
+				item.imageDigest === source.imageDigest &&
+				item.modelBinding?.driver === "codex",
 		);
-		return template?.modelBinding?.driver === "codex"
-			? (template.codexModelProfiles ?? null)
-			: null;
 	}
 	async function resolveSubjectRef(traceId: string) {
 		try {
@@ -532,30 +513,10 @@ export function createDeploymentAdmissionsV1(
 					snapshot.validUntil <= Date.now()
 				)
 					return null;
-				const codexModelProfiles = codexModelProfilesFor(request.source);
-				if (request.source?.kind === "standard" && codexModelProfiles) {
-					try {
-						assertCodexModelProfilesV1({
-							profiles: codexModelProfiles,
-							options: request.requested.options,
-						});
-					} catch (error) {
-						if (
-							error instanceof ModelConfigurationErrorV1 &&
-							error.reason === "codex_model_profile_unsupported"
-						)
-							return {
-								status: "rejected",
-								reason: "codex_model_profile_unsupported",
-							};
-						return null;
-					}
-				} else if (
-					request.source?.kind === "standard" &&
-					codexModelProfiles === null
-				) {
-					return null;
-				}
+				// 标准 Codex 来源必须对应一份受信的模板/镜像绑定，否则失败关闭。
+				if (!hasTrustedCodexBinding(request.source)) return null;
+				// 模型与档位由默认 Key 的 `/models` 和保存时真实请求判定（ADR-0029），
+				// 这里只保留端点可用与部署可选的 `allowedModels` 收窄。
 				const options: AgentConfigurationModelV2["options"][number][] = [];
 				for (const option of request.requested.options) {
 					const endpoint = snapshot.endpoints.find(
@@ -564,10 +525,7 @@ export function createDeploymentAdmissionsV1(
 					if (
 						!endpoint?.available ||
 						(endpoint.allowedModels !== null &&
-							!endpoint.allowedModels.includes(option.modelId)) ||
-						option.reasoningLevels.some(
-							(level) => !endpoint.capabilities.reasoningLevels.includes(level),
-						)
+							!endpoint.allowedModels.includes(option.modelId))
 					)
 						return null;
 					options.push({
@@ -802,18 +760,7 @@ export function createDeploymentAdmissionsV1(
 					const catalog = createDeploymentModelCatalogAdapterV1({
 						load: async () => snapshot,
 					});
-					const codexModelProfiles = codexModelProfilesFor(request.source);
-					if (request.source?.kind === "standard" && codexModelProfiles) {
-						assertCodexModelProfilesV1({
-							profiles: codexModelProfiles,
-							options: request.requested.options,
-						});
-					} else if (
-						request.source?.kind === "standard" &&
-						codexModelProfiles === null
-					) {
-						return denied;
-					}
+					if (!hasTrustedCodexBinding(request.source)) return denied;
 					const options = [];
 					for (const option of requested.options) {
 						const endpoint = await catalog.resolve(
@@ -858,14 +805,6 @@ export function createDeploymentAdmissionsV1(
 						},
 					};
 				} catch (error) {
-					if (
-						error instanceof ModelConfigurationErrorV1 &&
-						error.reason === "codex_model_profile_unsupported"
-					)
-						return {
-							...denied,
-							reason: "codex_model_profile_unsupported",
-						};
 					if (error instanceof ModelConfigurationErrorV1 && !error.retryable)
 						return denied;
 					throw new Error("PLATFORM_DEPLOYMENT_MODEL_ADMISSION_UNAVAILABLE");

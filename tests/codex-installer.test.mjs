@@ -30,16 +30,15 @@ async function cleanFixture(path) {
 	await rm(path, { recursive: true, force: true });
 }
 
-// #2978：安装脚本连同模型目录模块、追加条目与摘要清单一起放进临时仓库根目录。
+// #2978：安装脚本连同模型目录模块与摘要清单一起放进临时仓库根目录（ADR-0029 起不含追加条目）。
 const upstreamCommit = "a".repeat(40);
 const upstreamCatalogUrl = `https://raw.githubusercontent.com/openai/codex/${upstreamCommit}/codex-rs/models-manager/models.json`;
 const upstreamCatalog = JSON.stringify({
 	models: [{ slug: "upstream-model", priority: 1 }],
 });
-const catalogAdditions = JSON.stringify({ models: [{ slug: "added-model" }] });
-// 独立写出期望字节，不复用被测模块：内置条目在前，追加条目在后。
+// 独立写出期望字节，不复用被测模块：只有内置条目，原样保留。
 const expectedCatalog = `${JSON.stringify({
-	models: [{ slug: "upstream-model", priority: 1 }, { slug: "added-model" }],
+	models: [{ slug: "upstream-model", priority: 1 }],
 })}\n`;
 const digest = (bytes) =>
 	`sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -47,7 +46,6 @@ const digest = (bytes) =>
 async function stageInstaller(
 	root,
 	{
-		additions = catalogAdditions,
 		upstreamPin = digest(upstreamCatalog),
 		catalogPin = digest(expectedCatalog),
 	} = {},
@@ -59,10 +57,6 @@ async function stageInstaller(
 			new URL(`../deploy/runtime/${name}`, import.meta.url),
 			join(root, "deploy/runtime", name),
 		);
-	await writeFile(
-		join(root, "deploy/runtime/codex-models-additions.json"),
-		additions,
-	);
 	await writeFile(
 		join(root, "packages/agent-runtime/src/codex-models.json"),
 		JSON.stringify({ upstreamSha256: upstreamPin, sha256: catalogPin }),
@@ -309,7 +303,7 @@ test("upstream installer keeps the previous install when staging validation fail
 	}
 });
 
-// #2978：目录摘要、追加条目或内置目录任一不符时，安装失败且保留原安装。
+// #2978：目录摘要或内置目录任一不符时，安装失败且保留原安装。
 for (const [scenario, options, expected] of [
 	[
 		"catalog pin mismatch",
@@ -320,16 +314,6 @@ for (const [scenario, options, expected] of [
 		"upstream catalog pin mismatch",
 		{ upstreamPin: digest("another upstream catalog") },
 		/Codex release asset checksum mismatch/,
-	],
-	[
-		"addition overriding a built-in model",
-		{ additions: JSON.stringify({ models: [{ slug: "upstream-model" }] }) },
-		/Codex model catalog is invalid/,
-	],
-	[
-		"addition with an extra top-level field",
-		{ additions: JSON.stringify({ models: [{ slug: "x" }], extra: true }) },
-		/Codex model catalog is invalid/,
 	],
 ])
 	test(`upstream installer keeps the previous install on ${scenario}`, async () => {

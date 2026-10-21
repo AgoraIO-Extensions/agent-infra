@@ -970,8 +970,6 @@ const capabilities: RuntimeCapabilitiesV1 = {
 
 const itemsListPageSize = 100;
 const maximumItemsListPages = 8;
-const modelsListPageSize = 100;
-const maximumModelsListPages = 8;
 const turnsListPageSize = 100;
 const maximumTurnsListPages = 8;
 const rpcRequestTimeoutMs = 30_000;
@@ -3663,110 +3661,6 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 	};
 }
 
-interface PinnedModelProfile {
-	model: string;
-	reasoningLevels: ReadonlySet<string>;
-}
-
-function parsePinnedModelProfiles(value: unknown) {
-	if (
-		!isPlainRecord(value) ||
-		!hasOnlyKeys(value, ["data", "nextCursor"]) ||
-		!Array.isArray(value.data) ||
-		(value.nextCursor !== undefined &&
-			value.nextCursor !== null &&
-			!nonEmptyString(value.nextCursor))
-	) {
-		protocolInvalid();
-	}
-	const profiles: PinnedModelProfile[] = [];
-	for (const model of value.data) {
-		if (
-			!isPlainRecord(model) ||
-			typeof model.model !== "string" ||
-			!codexModelPattern.test(model.model) ||
-			!Array.isArray(model.supportedReasoningEfforts)
-		) {
-			protocolInvalid();
-		}
-		const reasoningLevels = new Set<string>();
-		for (const effort of model.supportedReasoningEfforts) {
-			if (
-				!isPlainRecord(effort) ||
-				typeof effort.reasoningEffort !== "string" ||
-				!codexReasoningPattern.test(effort.reasoningEffort) ||
-				reasoningLevels.has(effort.reasoningEffort)
-			) {
-				protocolInvalid();
-			}
-			reasoningLevels.add(effort.reasoningEffort);
-		}
-		profiles.push({ model: model.model, reasoningLevels });
-	}
-	return {
-		profiles,
-		nextCursor: value.nextCursor as string | null | undefined,
-	};
-}
-
-async function assertPinnedModelProfiles(
-	rpc: CodexRpc,
-	modelOptions: ReadonlyMap<string, ConfiguredCodexRuntimeModelOption>,
-	assertCurrent?: () => void,
-	metadataRead?: NativeMetadataReadBoundary,
-) {
-	const profiles: PinnedModelProfile[] = [];
-	const cursors = new Set<string>();
-	const modelNames = new Set<string>();
-	let cursor: string | undefined;
-	for (let page = 0; page < maximumModelsListPages; page += 1) {
-		if (metadataRead) await metadataRead.revalidate();
-		const pending = rpc.request(
-			"model/list",
-			{
-				includeHidden: true,
-				limit: modelsListPageSize,
-				...(cursor ? { cursor } : {}),
-			},
-			parsePinnedModelProfiles,
-		);
-		const result = await (metadataRead?.wait(pending) ?? pending).finally(() =>
-			assertCurrent?.(),
-		);
-		for (const profile of result.profiles) {
-			if (modelNames.has(profile.model)) protocolInvalid();
-			modelNames.add(profile.model);
-			profiles.push(profile);
-		}
-		if (!result.nextCursor) {
-			for (const option of modelOptions.values()) {
-				const profile = profiles.reduce<PinnedModelProfile | undefined>(
-					(best, candidate) =>
-						(option.model === candidate.model ||
-							option.model.startsWith(`${candidate.model}-`)) &&
-						(!best || candidate.model.length > best.model.length)
-							? candidate
-							: best,
-					undefined,
-				);
-				if (
-					!profile ||
-					option.reasoningLevels.some(
-						(level) => !profile.reasoningLevels.has(level),
-					)
-				) {
-					configurationInvalid();
-				}
-			}
-			return;
-		}
-		if (cursors.has(result.nextCursor)) protocolInvalid();
-		cursors.add(result.nextCursor);
-		cursor = result.nextCursor;
-	}
-	protocolInvalid();
-}
-
 function turnStartedNotification(frame: CodexAppServerFrame) {
 	if (frame.method !== "turn/started") return undefined;
 	const params = frame.params;
@@ -5718,15 +5612,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			await (metadataRead?.wait(pending) ?? pending).finally(() =>
 				assertCurrent?.(),
 			);
-			if (modelTransport) {
-				await assertPinnedModelProfiles(
-					rpc,
-					modelOptions,
-					assertCurrent,
-					metadataRead,
-				);
-				assertCurrent?.();
-			}
+			// ADR-0029：不再要求模型出现在固定 Codex 的 `model/list` 中；未内置的模型
+			// 使用 Codex 默认回退元数据，模型与档位能否使用由保存时的真实请求判定。
 		};
 		const conversationContainedConfiguration = {
 			...containedConfiguration,

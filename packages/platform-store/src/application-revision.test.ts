@@ -1096,6 +1096,7 @@ describe("PostgreSQL application revision transaction", () => {
 								modelId,
 								reasoningLevels: ["low"],
 							})),
+						verify: async () => {},
 						encrypt: (binding, keyValue) => {
 							encrypted.push(keyValue);
 							return ciphertext(binding as RelayKeyVersionBindingV1);

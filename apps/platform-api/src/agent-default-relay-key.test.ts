@@ -82,6 +82,7 @@ let app: Hono;
 let visible: string[];
 let billingStatus = 200;
 let modelStatus = 200;
+let probeStatus = 200;
 let identityActive = true;
 let duringModels: (() => Promise<void>) | undefined;
 const fetcher = vi.fn<typeof fetch>(async (url) => {
@@ -94,6 +95,26 @@ const fetcher = vi.fn<typeof fetch>(async (url) => {
 			},
 			{ status: billingStatus },
 		);
+	// 保存时的真实验证请求（ADR-0029）：成功时返回一次完成的工具调用。
+	if (String(url).endsWith("/responses"))
+		return probeStatus === 200
+			? new Response(
+					`data: ${JSON.stringify({
+						type: "response.completed",
+						response: {
+							output: [
+								{
+									type: "function_call",
+									name: "agent_infra_conformance",
+									arguments: "{}",
+									status: "completed",
+								},
+							],
+						},
+					})}\n\n`,
+					{ headers: { "content-type": "text/event-stream" } },
+				)
+			: Response.json({}, { status: probeStatus });
 	await duringModels?.();
 	return Response.json(
 		{ data: visible.map((id) => ({ id })) },
@@ -173,6 +194,7 @@ beforeEach(async () => {
 	visible = ["gpt-5", "outside-policy"];
 	billingStatus = 200;
 	modelStatus = 200;
+	probeStatus = 200;
 	identityActive = true;
 	duringModels = undefined;
 	fetcher.mockClear();
@@ -195,7 +217,7 @@ beforeEach(async () => {
 		}),
 		encrypt: (binding, keyValue) =>
 			encryptor.encrypt({ ...binding, plaintext: keyValue }),
-		candidates: createAgentDefaultRelayKeyCandidatesV1({
+		...createAgentDefaultRelayKeyCandidatesV1({
 			relayEndpointId: "endpoint_01",
 			relayBaseUrl: "https://relay.example.test/v1",
 			modelCatalog: { revision: "catalog_3", load: async () => catalog() },
@@ -241,7 +263,8 @@ describe("existing Agent default Relay Key HTTP and original PostgreSQL authorit
 				{
 					endpointId: "endpoint_01",
 					modelId: "gpt-5",
-					reasoningLevels: ["low"],
+					// 推理档位是平台固定集合，不取端点或模板配置（ADR-0029）。
+					reasoningLevels: ["low", "medium", "high"],
 				},
 			],
 		});
@@ -326,6 +349,29 @@ describe("existing Agent default Relay Key HTTP and original PostgreSQL authorit
 			0,
 		);
 	});
+	it("verifies every saved pair with the new Key before replacing it", async () => {
+		expect((await request("PUT", command())).status).toBe(200);
+		const probes = fetcher.mock.calls.filter(([url]) =>
+			String(url).endsWith("/responses"),
+		);
+		// 每个已保存的模型与档位组合都用新 Key 发一次真实验证请求（ADR-0029）。
+		expect(
+			probes.map(([, init]) => {
+				const body = JSON.parse(String(init?.body));
+				return { model: body.model, effort: body.reasoning.effort };
+			}),
+		).toEqual(
+			fixture.modelConfiguration?.options.flatMap((option) =>
+				option.reasoningLevels.map((effort) => ({
+					model: option.modelId,
+					effort,
+				})),
+			),
+		);
+		expect(
+			probes.map(([, init]) => new Headers(init?.headers).get("authorization")),
+		).toEqual(probes.map(() => `Bearer ${key}`));
+	});
 	it.each([
 		"stale configuration",
 		"template changed",
@@ -334,7 +380,7 @@ describe("existing Agent default Relay Key HTTP and original PostgreSQL authorit
 		"identity revoked",
 		"nonowner",
 		"missing Agent",
-		"unsupported reasoning",
+		"failed verification",
 	])("rejects %s without changing the Key", async (mode) => {
 		if (mode === "stale configuration")
 			await sql`update platform.agents set current_configuration_revision = 8 where id = 'agent_01'`;
@@ -346,8 +392,8 @@ describe("existing Agent default Relay Key HTTP and original PostgreSQL authorit
 			duringModels = async () => {
 				identityActive = false;
 			};
-		if (mode === "unsupported reasoning")
-			await sql`update platform.agent_configuration_revisions set configuration = jsonb_set(jsonb_set(configuration, '{modelConfiguration,options,0,reasoningLevels}', '["high"]'), '{modelConfiguration,defaultReasoningLevel}', '"high"')`;
+		// 已保存的组合用新 Key 真实验证失败（ADR-0029）。
+		if (mode === "failed verification") probeStatus = 400;
 		const response = await request(
 			"PUT",
 			command(),
@@ -418,7 +464,8 @@ describe("keyless (V3) Agent default Relay Key HTTP and PostgreSQL authority", (
 				{
 					endpointId: "endpoint_01",
 					modelId: "gpt-5",
-					reasoningLevels: ["low"],
+					// 推理档位是平台固定集合，不取端点或模板配置（ADR-0029）。
+					reasoningLevels: ["low", "medium", "high"],
 				},
 			],
 		});

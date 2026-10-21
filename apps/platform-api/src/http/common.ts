@@ -27,7 +27,7 @@ const protocolErrors = {
 	CODEX_MODEL_PROFILE_UNSUPPORTED: [
 		409,
 		"MODEL_SELECTION_INVALID",
-		"The selected model or reasoning level is not supported by this Codex template.",
+		"The selected model or reasoning level failed verification with the Agent default Relay Key.",
 		false,
 	],
 	MULTI_SERVICE_RESOURCE_CAP_EXCEEDED: [

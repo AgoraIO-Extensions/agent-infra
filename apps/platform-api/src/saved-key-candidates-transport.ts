@@ -67,6 +67,8 @@ export function createWorkerSavedKeyCandidatesTransportV1(options: {
 			signal?: AbortSignal,
 		) {
 			const request = RuntimeSavedKeyCandidatesRequestV1Schema.parse(value);
+			// 带保存时真实验证（ADR-0029）时，每个组合一次模型请求，给出更长的上限。
+			const timeout = AbortSignal.timeout(request.verify ? 150_000 : 30_000);
 			const response = await fetcher(url, {
 				method: "POST",
 				redirect: "error",
@@ -78,9 +80,7 @@ export function createWorkerSavedKeyCandidatesTransportV1(options: {
 					"x-trace-id": request.traceId,
 				},
 				body: JSON.stringify(request),
-				signal: signal
-					? AbortSignal.any([signal, AbortSignal.timeout(30_000)])
-					: AbortSignal.timeout(30_000),
+				signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
 			});
 			if (
 				!response.ok ||

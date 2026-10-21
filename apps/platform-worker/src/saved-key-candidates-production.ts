@@ -5,6 +5,7 @@ import type {
 } from "@agent-infra/contracts/runtime";
 import {
 	createAgentDefaultRelayKeyCandidateReaderV1,
+	createAgentDefaultRelayKeyModelVerifierV1,
 	createPersonalRelayKeyValidatorV1,
 	type StandardTemplateModelBindingV1,
 } from "@agent-infra/model-catalog";
@@ -28,8 +29,9 @@ export function createProductionSavedKeyCandidatesReaderV1(input: {
 		readonly revision: string;
 		readonly load: (signal: AbortSignal) => Promise<unknown>;
 	};
+	/** 旧部署配置里的 `reasoningLevels` 兼容读取并忽略（ADR-0029）。 */
 	readonly templateBindings: readonly (StandardTemplateModelBindingV1 & {
-		readonly reasoningLevels: readonly string[];
+		readonly reasoningLevels?: readonly string[];
 	})[];
 	readonly relayEndpointId: string;
 	readonly relayBaseUrl: string;
@@ -43,14 +45,18 @@ export function createProductionSavedKeyCandidatesReaderV1(input: {
 		databaseUrl: input.databaseUrl,
 	});
 	const validate = createPersonalRelayKeyValidatorV1(input.validation);
-	const candidateReader = createAgentDefaultRelayKeyCandidateReaderV1({
+	const relay = {
 		modelCatalog: input.modelCatalog,
 		templateBindings: input.templateBindings,
 		relayEndpointId: input.relayEndpointId,
 		relayBaseUrl: input.relayBaseUrl,
-		validateKey: validate,
 		...(input.fetch ? { fetch: input.fetch } : {}),
+	};
+	const candidateReader = createAgentDefaultRelayKeyCandidateReaderV1({
+		...relay,
+		validateKey: validate,
 	});
+	const verify = createAgentDefaultRelayKeyModelVerifierV1(relay);
 	return {
 		async read(request: RuntimeSavedKeyCandidatesRequestV1, signal) {
 			signal.throwIfAborted();
@@ -97,6 +103,22 @@ export function createProductionSavedKeyCandidatesReaderV1(input: {
 					authority.configuration as Configuration,
 					signal,
 				);
+				// 保存时真实验证（ADR-0029）：只在 API 带上新增组合时用已保存的 Key 发请求；
+				// 有组合的模型不在 /models 可见清单中时不发请求，由 API 按候选拒绝。
+				const verification = request.verify?.every((combo) =>
+					candidates.some(
+						(candidate) =>
+							candidate.endpointId === combo.endpointId &&
+							candidate.modelId === combo.modelId,
+					),
+				)
+					? await verify(
+							keyValue,
+							authority.configuration as Configuration,
+							request.verify,
+							signal,
+						)
+					: undefined;
 				return {
 					schemaVersion: 1,
 					agentId: request.agentId,
@@ -106,6 +128,7 @@ export function createProductionSavedKeyCandidatesReaderV1(input: {
 						...candidate,
 						reasoningLevels: [...candidate.reasoningLevels],
 					})),
+					...(verification ? { verification } : {}),
 				} satisfies RuntimeSavedKeyCandidatesResponseV1;
 			} finally {
 				decrypted.plaintext.fill(0);

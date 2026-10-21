@@ -15,7 +15,7 @@ COPY --from=isolation-tools /usr/lib/libcap-ng.so.0* /usr/lib/libeconf.so.0* /us
 
 COPY deploy/runtime/install-codex.mjs ./deploy/runtime/install-codex.mjs
 COPY packages/agent-runtime/src/codex-release.json ./packages/agent-runtime/src/codex-release.json
-COPY deploy/runtime/codex-models.mjs deploy/runtime/codex-models-additions.json ./deploy/runtime/
+COPY deploy/runtime/codex-models.mjs ./deploy/runtime/
 COPY packages/agent-runtime/src/codex-models.json ./packages/agent-runtime/src/codex-models.json
 RUN node --use-env-proxy deploy/runtime/install-codex.mjs "$TARGETARCH" /opt/codex
 COPY deploy/runtime/install-opencode.mjs ./deploy/runtime/install-opencode.mjs

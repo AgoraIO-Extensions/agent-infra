@@ -162,6 +162,7 @@ beforeAll(async () => {
 			},
 			defaultRelayKey: {
 				candidates: async () => agentModelConfiguration.options,
+				verify: async () => {},
 				encrypt: (binding: AgentDefaultRelayKeyBindingV1) =>
 					encryptor.encrypt({
 						...binding,

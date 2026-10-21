@@ -35,6 +35,7 @@ function assemble(agentDefaultRelayKeys?: {
 	currentIdentity: () => Promise<never>;
 	encrypt: () => never;
 	candidates: () => Promise<never>;
+	verify: () => Promise<never>;
 }) {
 	return assemblePlatformApi({
 		taskAdmissionPolicy: {
@@ -75,6 +76,7 @@ describe("Platform API assembly of the default Relay Key ports (#2421)", () => {
 			currentIdentity: vi.fn(),
 			encrypt: vi.fn(),
 			candidates: vi.fn(),
+			verify: vi.fn(),
 		};
 		vi.mocked(platformCore.createAgentConfigurationUseCaseV1).mockClear();
 		vi.mocked(platformCore.createApplicationRevisionUseCaseV1).mockClear();

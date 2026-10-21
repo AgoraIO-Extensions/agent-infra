@@ -19,6 +19,7 @@ import {
 	type InitialAgentConfigurationCommandV2,
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.ts";
+import { AgentDefaultRelayKeyErrorV1 } from "./agent-default-relay-key.ts";
 import type { AgentManagementStateV1 } from "./agent-management.ts";
 import {
 	type FakeAgentConfigurationAdmissionsOptionsV1,
@@ -3176,6 +3177,7 @@ describe("Agent configuration replaces the model set together with the default K
 			visible?: readonly string[];
 			keyVersion?: number | null;
 			identityRevision?: string;
+			unsupported?: boolean;
 		} = {},
 	) {
 		const transaction = new FakeAgentConfigurationTransactionV1(record, {
@@ -3195,6 +3197,7 @@ describe("Agent configuration replaces the model set together with the default K
 			],
 		});
 		const encrypted: unknown[] = [];
+		const verified: unknown[] = [];
 		const useCase = createAgentConfigurationUseCaseV1({
 			transaction,
 			authorizationAdmission: admissions,
@@ -3220,13 +3223,19 @@ describe("Agent configuration replaces the model set together with the default K
 						modelId,
 						reasoningLevels: ["low"],
 					})),
+				// 保存时的真实验证请求（ADR-0029）：记录收到的组合，按选项给出结果。
+				verify: async (_keyValue, _configuration, combos) => {
+					verified.push(...combos);
+					if (options.unsupported)
+						throw new AgentDefaultRelayKeyErrorV1("model_unsupported");
+				},
 				encrypt: (binding, keyValue) => {
 					encrypted.push({ binding, keyValue });
 					return { ciphertext: "opaque" };
 				},
 			},
 		});
-		return { transaction, useCase, encrypted };
+		return { transaction, useCase, encrypted, verified };
 	}
 	const keyedCommand = (overrides: Record<string, unknown> = {}) => ({
 		...command,
@@ -3240,9 +3249,18 @@ describe("Agent configuration replaces the model set together with the default K
 	});
 
 	it("advances the revision, the model set and the Key version together", async () => {
-		const { transaction, useCase, encrypted } = create();
+		const { transaction, useCase, encrypted, verified } = create();
 		const result = await useCase.update(keyedCommand() as never, actor);
 		expect(result).toMatchObject({ revision: 8 });
+		// 新 Key 对每个模型与档位组合都做了一次真实验证（ADR-0029）。
+		expect(verified).toEqual([
+			{ endpointId: "endpoint_01", modelId: "gpt-5", reasoningLevel: "low" },
+			{
+				endpointId: "endpoint_01",
+				modelId: "gpt-5-mini",
+				reasoningLevel: "low",
+			},
+		]);
 		expect(result.changedFields).toEqual(
 			expect.arrayContaining(["modelConfiguration", "defaultRelayKey"]),
 		);
@@ -3329,6 +3347,11 @@ describe("Agent configuration replaces the model set together with the default K
 
 	it.each([
 		["a model the Key cannot see", { visible: ["gpt-5"] }, "not_admitted"],
+		[
+			"a model or level that fails verification with the new Key",
+			{ unsupported: true },
+			"model_profile_unsupported",
+		],
 		[
 			"an identity revision that changed during validation",
 			{ identityRevision: "authorization_10" },

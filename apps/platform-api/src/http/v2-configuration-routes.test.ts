@@ -56,7 +56,7 @@ function createApp(savedKeyCandidates?: {
 	const update = vi.fn().mockResolvedValue({});
 	const read = vi.fn().mockResolvedValue({
 		outcome: "found",
-		configuration: { revision: 7 },
+		configuration: { revision: 7, modelOptions: [] },
 	});
 	const readAgentProjection = vi.fn().mockResolvedValue(agentProjection);
 
@@ -319,5 +319,123 @@ describe("V2 configuration routes with a re-submitted default Relay Key (#2421)"
 			"INVALID_REQUEST",
 		);
 		expect(update).not.toHaveBeenCalled();
+	});
+
+	describe("save-time verification with the saved Key (ADR-0029)", () => {
+		const savedResponse = (verification?: string) => ({
+			schemaVersion: 1,
+			agentId: "agent-1",
+			configurationRevision: 7,
+			keyVersion: 2,
+			candidates: [
+				{
+					endpointId: "ep",
+					modelId: "gpt-5",
+					reasoningLevels: ["low", "medium", "high"],
+				},
+			],
+			...(verification ? { verification } : {}),
+		});
+		const savedPut = (app: ReturnType<typeof createApp>["app"], body = {}) =>
+			put(
+				app,
+				{ ...replacement, defaultRelayKey: undefined, ...body },
+				"/api/v2/agents/agent-1/configuration/saved-model",
+			);
+		const savedOption = (reasoningLevels: string[]) => ({
+			outcome: "found",
+			configuration: {
+				revision: 7,
+				modelOptions: [
+					{
+						optionId: "ep:gpt-5",
+						endpointId: "ep",
+						modelId: "gpt-5",
+						reasoningLevels,
+					},
+				],
+			},
+		});
+
+		it("asks the Worker to verify only new pairs and saves when they pass", async () => {
+			const savedKeyCandidates = {
+				read: vi.fn().mockResolvedValue(savedResponse("verified")),
+			};
+			const { app, update, read } = createApp(savedKeyCandidates);
+			read.mockResolvedValue(savedOption(["high", "max"]));
+			const response = await savedPut(app, {
+				modelConfiguration: {
+					...modelConfiguration,
+					options: [
+						{
+							...modelConfiguration.options[0],
+							// `max` 是已保存的旧档位：保留且不重复验证。
+							reasoningLevels: ["high", "max", "medium"],
+						},
+					],
+				},
+			});
+			expect(response.status).toBe(200);
+			expect(savedKeyCandidates.read.mock.calls[0]?.[0]).toMatchObject({
+				verify: [
+					{ endpointId: "ep", modelId: "gpt-5", reasoningLevel: "medium" },
+				],
+			});
+			expect(update).toHaveBeenCalled();
+		});
+
+		it("does not request verification when every pair is already saved", async () => {
+			const savedKeyCandidates = {
+				read: vi.fn().mockResolvedValue(savedResponse()),
+			};
+			const { app, update, read } = createApp(savedKeyCandidates);
+			read.mockResolvedValue(savedOption(["high", "medium"]));
+			const response = await savedPut(app);
+			expect(response.status).toBe(200);
+			expect(savedKeyCandidates.read.mock.calls[0]?.[0]).not.toHaveProperty(
+				"verify",
+			);
+			expect(update).toHaveBeenCalled();
+		});
+
+		it.each([
+			["incompatible", 409, "MODEL_SELECTION_INVALID"],
+			["key_invalid", 400, "INVALID_REQUEST"],
+			["unavailable", 503, "DEPENDENCY_UNAVAILABLE"],
+			[undefined, 503, "DEPENDENCY_UNAVAILABLE"],
+		] as const)(
+			"refuses a %s verification before touching Core",
+			async (verification, status, code) => {
+				const savedKeyCandidates = {
+					read: vi.fn().mockResolvedValue(savedResponse(verification)),
+				};
+				const { app, update } = createApp(savedKeyCandidates);
+				const response = await savedPut(app);
+				expect(response.status).toBe(status);
+				expect(
+					PilotProtocolErrorV1Schema.parse(await response.json()).code,
+				).toBe(code);
+				expect(update).not.toHaveBeenCalled();
+			},
+		);
+
+		it("rejects a new pair outside the offered levels without probing it", async () => {
+			const savedKeyCandidates = {
+				read: vi.fn().mockResolvedValue(savedResponse("verified")),
+			};
+			const { app, update } = createApp(savedKeyCandidates);
+			const response = await savedPut(app, {
+				modelConfiguration: {
+					...modelConfiguration,
+					options: [
+						{ ...modelConfiguration.options[0], reasoningLevels: ["max"] },
+					],
+					defaultReasoningLevel: "max",
+				},
+			});
+			expect(response.status).toBe(400);
+			expect(savedKeyCandidates.read).not.toHaveBeenCalled();
+			expect(update).not.toHaveBeenCalled();
+		});
 	});
 });
