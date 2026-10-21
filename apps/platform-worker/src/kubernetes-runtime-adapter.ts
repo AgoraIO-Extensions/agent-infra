@@ -151,6 +151,10 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	readonly storageClassName?: string;
 	readonly imageRepository: string;
 	readonly workerSelector: Readonly<Record<string, string>>;
+	/** Deployment-approved values for region/zone labels injected into live Pods. */
+	readonly allowedPodTopologyLabelValues?: Readonly<
+		Record<string, readonly string[]>
+	>;
 	/** Optional deployment-owned Platform API selector for platform-auth routes. */
 	readonly platformApiSelector?: Readonly<Record<string, string>>;
 	readonly routeNamespace: string;

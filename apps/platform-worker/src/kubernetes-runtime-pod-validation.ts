@@ -11,6 +11,7 @@ import {
 	runtimeConnectionConsumerControlPodV1,
 	runtimeConnectionConsumerProjectionV1,
 } from "./connection-consumer-projection.js";
+import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import type { KubernetesWorkloadPolicyV1 } from "./kubernetes-runtime-adapter.js";
 import {
 	agentContainerSecurityContext,
@@ -32,6 +33,26 @@ export function createKubernetesPodValidationV1(dependencies: {
 	) => AgentWorkloadDesiredV1["secretRefs"];
 }) {
 	const { policy, workloadEnvironment, environmentSecrets } = dependencies;
+	const topologyLabelValues = structuredClone(
+		policy.allowedPodTopologyLabelValues ?? {},
+	);
+	for (const [key, values] of Object.entries(topologyLabelValues)) {
+		if (
+			![
+				"topology.kubernetes.io/region",
+				"topology.kubernetes.io/zone",
+			].includes(key) ||
+			!Array.isArray(values) ||
+			values.length === 0 ||
+			values.length > 64 ||
+			!values.every(
+				(value) =>
+					typeof value === "string" &&
+					/^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/.test(value),
+			)
+		)
+			throw new WorkloadKubernetesError("policy");
+	}
 	const connection = runtimeConnectionConsumerProjectionV1(
 		dependencies.connectionConsumerControl
 			? undefined
@@ -56,6 +77,13 @@ export function createKubernetesPodValidationV1(dependencies: {
 			[revisionLabel]: String(value.workloadRevision),
 		};
 		if (live) {
+			for (const [key, values] of Object.entries(topologyLabelValues)) {
+				const actualValue = actual?.labels?.[key];
+				if (actualValue !== undefined) {
+					if (!values.includes(actualValue)) return false;
+					expectedLabels[key] = actualValue;
+				}
+			}
 			const injected = {
 				"statefulset.kubernetes.io/pod-name": `${name}-0`,
 				"apps.kubernetes.io/pod-index": "0",
