@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { parseClaim } from "./conversation-dispatch-input.js";
 import {
 	isRuntimeEventOperation,
+	parseRuntimeResponse,
 	parseRuntimeStatusResponse,
 } from "./conversation-dispatch-runtime.js";
+import { decideConversationDispatchRejectedTransitionV1 } from "./conversation-dispatch-transition.js";
 import { ConversationRuntimeHostError } from "./conversation-dispatch-types.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 import { FakeConversationRuntimeHostV1 } from "./fake-conversation-runtime-host.js";
@@ -142,6 +144,121 @@ describe("current-state retry transition", () => {
 					transition,
 				}),
 			).toEqual(transition);
+	});
+});
+
+describe("rejected Runtime result transition", () => {
+	it.each([
+		"conversation.turn.submit.v1",
+		"conversation.turn.regenerate.v1",
+		"conversation.native-capability.invoke.v1",
+	] as const)(
+		"fails the %s Execution and marks the Conversation unavailable for a blocked session",
+		(operation) => {
+			expect(
+				decideConversationDispatchRejectedTransitionV1({
+					operation,
+					code: "RUNTIME_SESSION_BLOCKED",
+				}),
+			).toEqual({
+				executionStatus: "failed",
+				conversationStatus: "unavailable",
+			});
+		},
+	);
+
+	it.each([
+		"RUNTIME_TURN_NOT_ACTIVE",
+		"RUNTIME_MODEL_SELECTION_UNSUPPORTED",
+	] as const)("keeps the Conversation ready for %s", (code) => {
+		for (const operation of [
+			"conversation.turn.submit.v1",
+			"conversation.turn.regenerate.v1",
+			"conversation.native-capability.invoke.v1",
+		] as const)
+			expect(
+				decideConversationDispatchRejectedTransitionV1({ operation, code }),
+			).toEqual({ executionStatus: "failed", conversationStatus: "ready" });
+	});
+
+	it.each([
+		"conversation.turn.supplement.v1",
+		"conversation.turn.stop.v1",
+		"conversation.browser.handoff.v1",
+	] as const)(
+		"never changes Execution or Conversation state for a blocked %s",
+		(operation) => {
+			expect(
+				decideConversationDispatchRejectedTransitionV1({
+					operation,
+					code: "RUNTIME_SESSION_BLOCKED",
+				}),
+			).toEqual({});
+		},
+	);
+});
+
+describe("Runtime operation response parsing", () => {
+	const blocked = {
+		outcome: "rejected",
+		code: "RUNTIME_SESSION_BLOCKED",
+		message: "Runtime session is blocked by an unconfirmed turn",
+		retryable: false,
+	} as const;
+	const response = (
+		result: Record<string, unknown>,
+		schemaVersion: 1 | 2 = 2,
+	) => ({
+		schemaVersion,
+		hostSessionRef: "host-session-conversation-1",
+		operationId: "execution-1",
+		result,
+	});
+
+	it("accepts the exact blocked rejection from a V2 submit response", () => {
+		for (const operation of [
+			"conversation.turn.submit.v1",
+			"conversation.turn.regenerate.v1",
+		] as const)
+			expect(
+				parseRuntimeResponse(response(blocked), claim({ operation })),
+			).toEqual({
+				schemaVersion: 2,
+				hostSessionRef: "host-session-conversation-1",
+				operationId: "execution-1",
+				result: blocked,
+			});
+	});
+
+	it.each([
+		["a different message", { ...blocked, message: "Runtime session blocked" }],
+		["a retryable flag", { ...blocked, retryable: true }],
+		["a missing retryable flag", { ...blocked, retryable: undefined }],
+		["an extra status", { ...blocked, status: "unknown" }],
+	])("fails closed on a V2 blocked rejection with %s", (_label, result) => {
+		const input = Object.fromEntries(
+			Object.entries(result).filter(([, value]) => value !== undefined),
+		);
+		expect(() => parseRuntimeResponse(response(input), claim())).toThrow(
+			expect.objectContaining({ code: "unavailable" }),
+		);
+	});
+
+	it("fails closed when a V1 response carries the blocked code", () => {
+		const v1Claim = claim({
+			modelConfigurationRevision: null,
+			modelOptionId: null,
+			reasoningLevel: null,
+		});
+		expect(() => parseRuntimeResponse(response(blocked, 1), v1Claim)).toThrow(
+			expect.objectContaining({ code: "unavailable" }),
+		);
+		expect(() =>
+			parseRuntimeResponse(
+				response(blocked, 1),
+				nativeParametersClaim("summary", "skill"),
+			),
+		).toThrow(expect.objectContaining({ code: "unavailable" }));
 	});
 });
 
@@ -2707,6 +2824,7 @@ describe("Conversation Worker dispatch", () => {
 			{ schemaVersion: 1, outcome: "rejected" },
 			"RUNTIME_BUSY",
 			"failed",
+			{ executionStatus: "failed", conversationStatus: "ready" },
 		],
 		[
 			{
@@ -2717,6 +2835,7 @@ describe("Conversation Worker dispatch", () => {
 			{ schemaVersion: 1, outcome: "unknown", retryScheduled: true },
 			"RUNTIME_ACCEPTANCE_UNKNOWN",
 			"retry_scheduled",
+			undefined,
 		],
 		[
 			{
@@ -2728,6 +2847,7 @@ describe("Conversation Worker dispatch", () => {
 			{ schemaVersion: 1, outcome: "rejected" },
 			"RUNTIME_TURN_NOT_ACTIVE",
 			"failed",
+			{ executionStatus: "failed", conversationStatus: "ready" },
 		],
 		[
 			{
@@ -2739,18 +2859,130 @@ describe("Conversation Worker dispatch", () => {
 			{ schemaVersion: 1, outcome: "rejected" },
 			"RUNTIME_MODEL_SELECTION_UNSUPPORTED",
 			"failed",
+			{ executionStatus: "failed", conversationStatus: "ready" },
 		],
-	])(
+		[
+			{
+				outcome: "rejected" as const,
+				code: "RUNTIME_SESSION_BLOCKED" as const,
+				message: "Runtime session is blocked by an unconfirmed turn" as const,
+				retryable: false as const,
+			},
+			{ schemaVersion: 1, outcome: "rejected" },
+			"RUNTIME_SESSION_BLOCKED",
+			"failed",
+			// ADR-0029：本次执行失败，同一事务把会话标记为不可用。
+			{ executionStatus: "failed", conversationStatus: "unavailable" },
+		],
+	] as const)(
 		"maps Runtime result %# to one durable product state",
-		async (result, expected, code, status) => {
+		async (result, expected, code, status, transition) => {
 			const runtimeHost = new FakeConversationRuntimeHostV1();
 			runtimeHost.setResult(result);
 			const { useCase, store } = setup({ runtimeHost });
+			const finish = vi.spyOn(store, "finish");
 
 			await expect(dispatch(useCase)).resolves.toEqual(expected);
 			expect(store.errorCode).toBe(code);
 			expect(store.outboxStatus).toBe(status);
 			expect(runtimeHost.sideEffectCount()).toBe(1);
+			if (transition === undefined) expect(finish).not.toHaveBeenCalled();
+			else
+				expect(finish).toHaveBeenCalledExactlyOnceWith(
+					expect.objectContaining({
+						status: "failed",
+						errorCode: code,
+						transition,
+					}),
+				);
+		},
+	);
+
+	const sessionBlocked = {
+		outcome: "rejected",
+		code: "RUNTIME_SESSION_BLOCKED",
+		message: "Runtime session is blocked by an unconfirmed turn",
+		retryable: false,
+	} as const;
+
+	it("fails a blocked regenerate and marks only its Conversation unavailable", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.setResult(sessionBlocked);
+		const store = new MemoryDispatchStore(
+			claim({ operation: "conversation.turn.regenerate.v1" }),
+		);
+		const { useCase } = setup({ store, runtimeHost });
+		const finish = vi.spyOn(store, "finish");
+		const isolation = vi.fn();
+		Object.assign(store, { beginGenerationIsolation: isolation });
+
+		await expect(dispatch(useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "rejected",
+		});
+		expect(finish).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({
+				status: "failed",
+				errorCode: "RUNTIME_SESSION_BLOCKED",
+				transition: {
+					executionStatus: "failed",
+					conversationStatus: "unavailable",
+				},
+			}),
+		);
+		expect(store.current.executionStatus).toBe("failed");
+		expect(isolation).not.toHaveBeenCalled();
+		expect(runtimeHost.sideEffectCount()).toBe(1);
+	});
+
+	it.each([
+		[
+			"native-capability.invoke",
+			nativeParametersClaim("summary", "skill"),
+			"conversation:native-capability:execution-1",
+		],
+		[
+			"supplement",
+			claim({
+				operation: "conversation.turn.supplement.v1",
+				messageId: "message-supplement",
+				executionStatus: "processing",
+				hostSessionRef: "host-session-conversation-1",
+			}),
+			"conversation:turn:execution-1",
+		],
+		[
+			"stop",
+			claim({
+				operation: "conversation.turn.stop.v1",
+				messageId: null,
+				input: null,
+				stopRequestId: "stop-request-1",
+				executionStatus: "processing",
+				hostSessionRef: "host-session-conversation-1",
+			}),
+			"conversation:turn:execution-1",
+		],
+	] as const)(
+		"fails closed on a V1 %s response carrying the blocked code without marking the Conversation unavailable",
+		async (_label, seed, itemId) => {
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.setResult(sessionBlocked);
+			const store = new MemoryDispatchStore(seed);
+			const { useCase } = setup({ store, runtimeHost });
+			const finish = vi.spyOn(store, "finish");
+			const retry = vi.spyOn(store, "retry");
+
+			await expect(dispatch(useCase, itemId)).resolves.toMatchObject({
+				outcome: "retry",
+			});
+			expect(finish).not.toHaveBeenCalled();
+			expect(store.errorCode).toBe("RUNTIME_UNAVAILABLE");
+			expect(
+				retry.mock.calls.some(
+					([input]) => input.transition.conversationStatus === "unavailable",
+				),
+			).toBe(false);
 		},
 	);
 
