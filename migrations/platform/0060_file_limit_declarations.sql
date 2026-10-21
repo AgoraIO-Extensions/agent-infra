@@ -1,0 +1,22 @@
+CREATE TABLE "platform"."file_limit_declarations" (
+	"scope" text NOT NULL,
+	"agent_id" text NOT NULL,
+	"channel_id" text DEFAULT '' NOT NULL,
+	"revision" bigint NOT NULL,
+	"expires_at" timestamp with time zone NOT NULL,
+	"max_bytes" bigint NOT NULL,
+	"media_types" jsonb NOT NULL,
+	"idempotency_key" text NOT NULL,
+	"request_digest" char(64) NOT NULL,
+	"updated_at" timestamp with time zone NOT NULL,
+	"updated_by" text NOT NULL,
+	CONSTRAINT "file_limit_declarations_scope_agent_id_channel_id_pk" PRIMARY KEY("scope","agent_id","channel_id"),
+	CONSTRAINT "file_limit_declaration_scope_valid" CHECK ("platform"."file_limit_declarations"."scope" in ('deployment','agent','channel')),
+	CONSTRAINT "file_limit_declaration_binding" CHECK (("platform"."file_limit_declarations"."scope" = 'deployment' AND "platform"."file_limit_declarations"."agent_id" = '' AND "platform"."file_limit_declarations"."channel_id" = '') OR ("platform"."file_limit_declarations"."scope" = 'agent' AND "platform"."file_limit_declarations"."agent_id" <> '' AND "platform"."file_limit_declarations"."channel_id" = '') OR ("platform"."file_limit_declarations"."scope" = 'channel' AND "platform"."file_limit_declarations"."agent_id" <> '' AND "platform"."file_limit_declarations"."channel_id" <> '')),
+	CONSTRAINT "file_limit_declaration_revision_safe" CHECK ("platform"."file_limit_declarations"."revision" between 1 and 9007199254740991),
+	CONSTRAINT "file_limit_declaration_max_bytes_safe" CHECK ("platform"."file_limit_declarations"."max_bytes" between 1 and 9007199254740991),
+	CONSTRAINT "file_limit_declaration_media_types_array" CHECK (jsonb_typeof("platform"."file_limit_declarations"."media_types") = 'array' AND jsonb_array_length("platform"."file_limit_declarations"."media_types") between 1 and 128),
+	CONSTRAINT "file_limit_declaration_idempotency_key_non_empty" CHECK (char_length("platform"."file_limit_declarations"."idempotency_key") between 1 and 128),
+	CONSTRAINT "file_limit_declaration_request_digest_hex" CHECK ("platform"."file_limit_declarations"."request_digest" ~ '^[0-9a-f]{64}$'),
+	CONSTRAINT "file_limit_declaration_updated_by_non_empty" CHECK (char_length("platform"."file_limit_declarations"."updated_by") > 0)
+);

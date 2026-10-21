@@ -3874,6 +3874,9 @@ describe("contract compatibility command", () => {
 		for (const path of Object.keys(previous.paths)) {
 			if (
 				path !== "/api/v2/admin/audit" &&
+				path !== "/api/v2/agents/{agentId}/file-limits" &&
+				path !== "/api/v2/agents/{agentId}/channels/{channelId}/file-limits" &&
+				path !== "/api/v2/admin/deployment/file-limits" &&
 				path !== "/api/v2/me/conversations/recent" &&
 				path !== "/api/v2/me/api-credentials" &&
 				path !== "/api/v2/me/api-credentials/{credentialId}" &&
@@ -4155,6 +4158,92 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the exact FileLimits declaration management addition (#3061)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const agentPath = "/api/v2/agents/{agentId}/file-limits";
+		const channelPath =
+			"/api/v2/agents/{agentId}/channels/{channelId}/file-limits";
+		const deploymentPath = "/api/v2/admin/deployment/file-limits";
+		const paths = [agentPath, channelPath, deploymentPath];
+		const schemas = [
+			"FileLimitDeclarationProjectionV1",
+			"FileLimitDeclarationResponseV1",
+			"FileLimitDeclarationWriteRequestV1",
+		];
+		const previous = structuredClone(current);
+		for (const path of paths) delete previous.paths[path];
+		for (const name of schemas) delete previous.components.schemas[name];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-file-limits-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					document.paths[agentPath].put.operationId = "unreviewed";
+				},
+				(document: typeof current) => {
+					document.components.schemas.FileLimitDeclarationWriteRequestV1.properties.declaration.properties.maxBytes.maximum = 1024;
+				},
+				(document: typeof current) => {
+					document.components.schemas.FileLimitDeclarationWriteRequestV1.properties.schemaVersion.const = 2;
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/admin/unreviewed"] =
+						document.paths[deploymentPath];
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only the exact FileLimits declaration schemas in the file API (#3061)", async () => {
+		const current = JSON.parse(await readFile(filesArtifactPath, "utf8"));
+		const schemas = [
+			"FileLimitDeclarationInputV1",
+			"FileLimitDeclarationProjectionV1",
+			"FileLimitDeclarationResponseV1",
+			"FileLimitDeclarationScopeV1",
+			"FileLimitDeclarationWriteRequestV1",
+		];
+		const previous = structuredClone(current);
+		for (const name of schemas) delete previous.components.schemas[name];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-file-limits-files-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const changed = structuredClone(current);
+			changed.components.schemas.FileLimitDeclarationInputV1.properties.mediaTypes.maxItems = 64;
+			await writeFile(currentPath, JSON.stringify(changed));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it.each([
 		["removed", "removed"],
 		["narrowed", "narrowed"],
@@ -4276,8 +4365,17 @@ describe("contract compatibility command", () => {
 		const previous = structuredClone(current);
 		for (const path of Object.keys(previous.paths))
 			if (path.includes("/files")) delete previous.paths[path];
+		// FileLimit declarations are a separate additive contract (#3061).
+		const fileLimitDeclarationSchemas = new Set([
+			"FileLimitDeclarationInputV1",
+			"FileLimitDeclarationProjectionV1",
+			"FileLimitDeclarationResponseV1",
+			"FileLimitDeclarationScopeV1",
+			"FileLimitDeclarationWriteRequestV1",
+		]);
 		for (const name of Object.keys(previous.components.schemas))
-			if (name.startsWith("File")) delete previous.components.schemas[name];
+			if (name.startsWith("File") && !fileLimitDeclarationSchemas.has(name))
+				delete previous.components.schemas[name];
 		delete previous.components.schemas.MessageCommandRequestV1.properties
 			.attachments;
 		const directory = await mkdtemp(

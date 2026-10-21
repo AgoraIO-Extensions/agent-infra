@@ -11,6 +11,7 @@ import {
 	workloadReconciliations,
 } from "./schema-agents";
 import {
+	fileLimitDeclarations,
 	fileReconciliation,
 	platformFileAccesses,
 	platformFiles,
@@ -76,6 +77,7 @@ export {
 	workloadReconciliations,
 } from "./schema-agents";
 export {
+	fileLimitDeclarations,
 	fileReconciliation,
 	platformFileAccesses,
 	platformFiles,
@@ -178,6 +180,7 @@ export const platformInfrastructureTables = [
 	wecomSetupSessions,
 	platformFiles,
 	platformFileAccesses,
+	fileLimitDeclarations,
 	fileReconciliation,
 	skillHubSkills,
 	skillHubVersions,

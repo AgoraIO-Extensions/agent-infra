@@ -155,6 +155,7 @@ beforeAll(async () => {
 		{ idx: 57, tag: "0057_trace_context" },
 		{ idx: 58, tag: "0058_accepted_original_host" },
 		{ idx: 59, tag: "0059_skill_project_content" },
+		{ idx: 60, tag: "0060_file_limit_declarations" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({

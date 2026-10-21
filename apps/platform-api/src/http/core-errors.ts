@@ -5,6 +5,7 @@ import {
 	ApplicationMaterialGrantErrorV1,
 	ApplicationRegistrationErrorV1,
 	ApplicationRevisionError,
+	FileLimitDeclarationErrorV1,
 	PersonalApiCredentialErrorV1,
 	PersonalRelayKeyErrorV1,
 	SkillHubAgentBindingErrorV1,
@@ -18,6 +19,15 @@ export function mapCoreError(
 	traceId: string,
 ): HttpProtocolError {
 	if (error instanceof HttpProtocolError) return error;
+	if (error instanceof FileLimitDeclarationErrorV1) {
+		const codes = {
+			invalid_input: "INVALID_REQUEST",
+			forbidden: "AUTHORIZATION_REVOKED",
+			conflict: "CONFLICT",
+			unavailable: "DEPENDENCY_UNAVAILABLE",
+		} as const;
+		return new HttpProtocolError(codes[error.code], traceId);
+	}
 	if (error instanceof SkillHubOperationErrorV1) {
 		const codes = {
 			invalid_input: "INVALID_REQUEST",

@@ -528,6 +528,241 @@
       ],
       "type": "object"
     },
+    "FileLimitDeclarationInputV1": {
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "type": "string"
+        },
+        "maxBytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "mediaTypes": {
+          "items": {
+            "maxLength": 127,
+            "pattern": "^[a-z0-9!#$&^_.+-]+\\/[a-z0-9!#$&^_.+-]+$",
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "expiresAt",
+        "mediaTypes",
+        "maxBytes"
+      ],
+      "type": "object"
+    },
+    "FileLimitDeclarationProjectionV1": {
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "type": "string"
+        },
+        "maxBytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "mediaTypes": {
+          "items": {
+            "maxLength": 127,
+            "pattern": "^[a-z0-9!#$&^_.+-]+\\/[a-z0-9!#$&^_.+-]+$",
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array"
+        },
+        "revision": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "scope": {
+          "enum": [
+            "deployment",
+            "agent",
+            "channel"
+          ],
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+          "type": "string"
+        },
+        "updatedBy": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "scope",
+        "revision",
+        "expiresAt",
+        "mediaTypes",
+        "maxBytes",
+        "updatedAt",
+        "updatedBy"
+      ],
+      "type": "object"
+    },
+    "FileLimitDeclarationResponseV1": {
+      "additionalProperties": false,
+      "properties": {
+        "declaration": {
+          "additionalProperties": false,
+          "properties": {
+            "expiresAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "maxBytes": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "mediaTypes": {
+              "items": {
+                "maxLength": 127,
+                "pattern": "^[a-z0-9!#$&^_.+-]+\\/[a-z0-9!#$&^_.+-]+$",
+                "type": "string"
+              },
+              "maxItems": 128,
+              "minItems": 1,
+              "type": "array"
+            },
+            "revision": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "scope": {
+              "enum": [
+                "deployment",
+                "agent",
+                "channel"
+              ],
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "updatedBy": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "scope",
+            "revision",
+            "expiresAt",
+            "mediaTypes",
+            "maxBytes",
+            "updatedAt",
+            "updatedBy"
+          ],
+          "type": "object"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "declaration"
+      ],
+      "type": "object"
+    },
+    "FileLimitDeclarationScopeV1": {
+      "enum": [
+        "deployment",
+        "agent",
+        "channel"
+      ],
+      "type": "string"
+    },
+    "FileLimitDeclarationWriteRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "declaration": {
+          "additionalProperties": false,
+          "properties": {
+            "expiresAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "maxBytes": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "mediaTypes": {
+              "items": {
+                "maxLength": 127,
+                "pattern": "^[a-z0-9!#$&^_.+-]+\\/[a-z0-9!#$&^_.+-]+$",
+                "type": "string"
+              },
+              "maxItems": 128,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "expiresAt",
+            "mediaTypes",
+            "maxBytes"
+          ],
+          "type": "object"
+        },
+        "expectedRevision": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "declaration",
+        "expectedRevision"
+      ],
+      "type": "object"
+    },
     "FileLimitsV1": {
       "additionalProperties": false,
       "properties": {

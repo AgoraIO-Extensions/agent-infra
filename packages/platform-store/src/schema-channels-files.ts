@@ -1,10 +1,12 @@
 import { sql } from "drizzle-orm";
 import {
 	bigint,
+	char,
 	check,
 	index,
 	integer,
 	jsonb,
+	primaryKey,
 	text,
 	timestamp,
 	uniqueIndex,
@@ -193,3 +195,58 @@ export const fileReconciliation = platformSchema.table("file_reconciliation", {
 	id: integer("id").primaryKey(),
 	cursor: text("cursor"),
 });
+
+export const fileLimitDeclarations = platformSchema.table(
+	"file_limit_declarations",
+	{
+		scope: text("scope").notNull(),
+		agentId: text("agent_id").notNull(),
+		/** Empty for deployment and Agent declarations; the channel id for channel scope. */
+		channelId: text("channel_id").notNull().default(""),
+		revision: bigint("revision", { mode: "number" }).notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		maxBytes: bigint("max_bytes", { mode: "number" }).notNull(),
+		mediaTypes: jsonb("media_types").$type<readonly string[]>().notNull(),
+		idempotencyKey: text("idempotency_key").notNull(),
+		requestDigest: char("request_digest", { length: 64 }).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+		updatedBy: text("updated_by").notNull(),
+	},
+	(table) => [
+		primaryKey({
+			columns: [table.scope, table.agentId, table.channelId],
+		}),
+		check(
+			"file_limit_declaration_scope_valid",
+			sql`${table.scope} in ('deployment','agent','channel')`,
+		),
+		check(
+			"file_limit_declaration_binding",
+			sql`(${table.scope} = 'deployment' AND ${table.agentId} = '' AND ${table.channelId} = '') OR (${table.scope} = 'agent' AND ${table.agentId} <> '' AND ${table.channelId} = '') OR (${table.scope} = 'channel' AND ${table.agentId} <> '' AND ${table.channelId} <> '')`,
+		),
+		check(
+			"file_limit_declaration_revision_safe",
+			sql`${table.revision} between 1 and 9007199254740991`,
+		),
+		check(
+			"file_limit_declaration_max_bytes_safe",
+			sql`${table.maxBytes} between 1 and 9007199254740991`,
+		),
+		check(
+			"file_limit_declaration_media_types_array",
+			sql`jsonb_typeof(${table.mediaTypes}) = 'array' AND jsonb_array_length(${table.mediaTypes}) between 1 and 128`,
+		),
+		check(
+			"file_limit_declaration_idempotency_key_non_empty",
+			sql`char_length(${table.idempotencyKey}) between 1 and 128`,
+		),
+		check(
+			"file_limit_declaration_request_digest_hex",
+			sql`${table.requestDigest} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"file_limit_declaration_updated_by_non_empty",
+			sql`char_length(${table.updatedBy}) > 0`,
+		),
+	],
+);

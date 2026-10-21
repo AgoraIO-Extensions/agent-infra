@@ -7,14 +7,19 @@ import type {
 import type { ObjectStorageDataV1 } from "@agent-infra/object-storage";
 import {
 	createFileAuthorityV1,
+	createFileLimitDeclarationReaderV1,
 	type FileAuthorizationPortV1,
 	type FileExecutionV1,
+	type FileLimitDeclarationStoreV1,
 	type FileLimitDeclarationsV1,
 	type FileScopeV1,
 	parseTaskAuthorizationBoundaryV1,
 	resolveFileLimitsV1,
 } from "@agent-infra/platform-core";
-import { PostgresFileStoreV1 } from "@agent-infra/platform-store";
+import {
+	PostgresFileLimitDeclarationStoreV1,
+	PostgresFileStoreV1,
+} from "@agent-infra/platform-store";
 import {
 	createFileGrantCodecV1,
 	verifyExecutionGrantForFilesV1,
@@ -48,7 +53,8 @@ export interface PlatformFileDeploymentV1 {
 		readonly agentIds: readonly string[];
 	}[];
 	resolveActor(actorId: string): Promise<unknown | null>;
-	readLimits(input: {
+	/** Defaults to the authoritative Platform DB reader when omitted. */
+	readLimits?(input: {
 		readonly agentId: string;
 		readonly channelId: string;
 		readonly configurationRevision: number;
@@ -68,11 +74,25 @@ export function assemblePlatformFilesV1(input: {
 		scope: FileScopeV1,
 		kind: "attachment" | "result",
 	): Promise<FileLimitDeclarationsV1 | null>;
+	/** Authoritative declaration store; defaults to a Platform DB reader. */
+	readonly limitDeclarations?: FileLimitDeclarationStoreV1;
 }) {
 	const deployment = input.deployment;
 	if (!deployment.runtimeWorkerId?.trim())
 		throw new Error("File runtime worker identity configuration is invalid");
 	const store = new PostgresFileStoreV1(input.databaseUrl);
+	const ownedLimitDeclarations =
+		deployment.readLimits === undefined && input.limitDeclarations === undefined
+			? new PostgresFileLimitDeclarationStoreV1(input.databaseUrl)
+			: undefined;
+	const limitDeclarations = input.limitDeclarations ?? ownedLimitDeclarations;
+	const readLimits =
+		deployment.readLimits ??
+		(limitDeclarations
+			? createFileLimitDeclarationReaderV1({ store: limitDeclarations })
+			: undefined);
+	if (!readLimits)
+		throw new Error("File limit declaration reader is unavailable");
 	const service = createFileAuthorityV1({
 		store,
 		storage: deployment.storage,
@@ -151,11 +171,18 @@ export function assemblePlatformFilesV1(input: {
 					return null;
 				let limits = null;
 				if (operation === "write" || execution) {
-					const declarations = await input.readCurrentLimits(
-						identity,
-						scope,
-						execution && operation === "write" ? "result" : "attachment",
-					);
+					let declarations: FileLimitDeclarationsV1 | null = null;
+					try {
+						declarations = await input.readCurrentLimits(
+							identity,
+							scope,
+							execution && operation === "write" ? "result" : "attachment",
+						);
+					} catch {
+						// A declaration read failure denies the operation instead of
+						// falling back to a wider or synthetic limit.
+						declarations = null;
+					}
 					limits = declarations
 						? resolveFileLimitsV1(declarations, new Date())
 						: null;
@@ -325,5 +352,12 @@ export function assemblePlatformFilesV1(input: {
 			},
 		},
 	};
-	return { dependencies, close: () => store.close() };
+	return {
+		dependencies,
+		readLimits,
+		close: async () => {
+			await store.close();
+			await ownedLimitDeclarations?.close();
+		},
+	};
 }

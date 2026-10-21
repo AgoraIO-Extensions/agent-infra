@@ -112,6 +112,22 @@ export {
 	type StoredFileObjectV1,
 } from "./file-authority.js";
 export {
+	createFileLimitDeclarationReaderV1,
+	FileLimitDeclarationErrorV1,
+	type FileLimitDeclarationInputV1,
+	type FileLimitDeclarationReaderInputV1,
+	type FileLimitDeclarationReaderResultV1,
+	type FileLimitDeclarationRecordV1,
+	type FileLimitDeclarationScopeV1,
+	type FileLimitDeclarationStoreV1,
+	type FileLimitDeclarationSubjectV1,
+	type FileLimitDeclarationWriteRequestV1,
+	fileLimitDeclarationToLimitsV1,
+	normalizeFileLimitDeclarationV1,
+	readFileLimitDeclarationV1,
+	writeFileLimitDeclarationV1,
+} from "./file-limit-declarations.js";
+export {
 	type FileLimitDeclarationsV1,
 	resolveFileLimitsV1,
 } from "./file-limits.js";
