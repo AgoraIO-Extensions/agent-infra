@@ -114,6 +114,59 @@ export function createWecomWebSocketV1(options: {
 	}, 500);
 	ownershipTimer.unref();
 	const sending = new Set<string>();
+	// #3077：处理中提示仍在等待 ACK 的请求。最终回复先等它结束（SDK 回复队列长度为 1），
+	// 已开始最终回复的请求不再发处理中提示，避免它落在已结束的 stream 之后。只保留最近的请求。
+	const acknowledging = new Map<string, Promise<unknown>>();
+	const replied = new Set<string>();
+	function markReplied(requestId: string) {
+		replied.add(requestId);
+		if (replied.size > 256) {
+			const oldest = replied.values().next().value;
+			if (oldest !== undefined) replied.delete(oldest);
+		}
+	}
+	async function settleAcknowledgement(requestId: string) {
+		const pending = acknowledging.get(requestId);
+		if (!pending) return;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				pending.catch(() => {}),
+				new Promise<void>((resolve) => {
+					timer = setTimeout(resolve, 5_000);
+					timer.unref();
+				}),
+			]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+	/** 揭开回复路由并核对它仍属于当前连接、绑定和会话，且未过期。 */
+	async function currentRoute(
+		input: { readonly scope: WecomScopeV1; readonly replyHandle: string },
+		content: string,
+	) {
+		const route = await options.revealReply(input.replyHandle);
+		const ws = route.websocket;
+		if (
+			!authenticated ||
+			closed ||
+			!ws ||
+			ws.connectionId !== connectionId ||
+			!text(ws.requestId) ||
+			!text(ws.streamId) ||
+			route.bindingReference !== config.bindingReference ||
+			route.credentialVersion !== config.credentialVersion ||
+			route.scope.agentId !== config.agentId ||
+			route.scope.kind !== "wecom_bot" ||
+			scopeKey(route.scope) !== scopeKey(input.scope) ||
+			!Number.isFinite(Date.parse(route.expiresAt)) ||
+			Date.parse(route.expiresAt) <= now().getTime() ||
+			!text(content, 20480)
+		)
+			return null;
+		return { route, ws };
+	}
 	function observe(status: WecomConnectionStatusV1) {
 		try {
 			options.observe(status);
@@ -279,7 +332,9 @@ export function createWecomWebSocketV1(options: {
 				conversationType: body.chattype,
 				threadId: null,
 			};
-			const expiresAt = new Date(receivedAt + 300_000).toISOString();
+			// #3077：官方 stream 从首次发送起 10 分钟内必须结束；处理中提示在受理后立即发送，
+			// 回复有效期取 9 分钟，留出余量。
+			const expiresAt = new Date(receivedAt + 540_000).toISOString();
 			const replyHandle = await options.protectReply({
 				bindingReference: config.bindingReference,
 				credentialVersion: config.credentialVersion,
@@ -334,35 +389,26 @@ export function createWecomWebSocketV1(options: {
 					? input.textWithThinking
 					: input.text;
 			let route: WecomReplyRouteV1;
+			let ws: NonNullable<WecomReplyRouteV1["websocket"]>;
 			try {
-				route = await options.revealReply(input.replyHandle);
+				const resolved = await currentRoute(input, content);
 				if (
-					!authenticated ||
-					closed ||
-					!route.websocket ||
-					route.websocket.connectionId !== connectionId ||
-					!text(route.websocket.requestId) ||
-					!text(route.websocket.streamId) ||
-					route.bindingReference !== config.bindingReference ||
-					route.credentialVersion !== config.credentialVersion ||
-					route.scope.agentId !== config.agentId ||
-					route.scope.kind !== "wecom_bot" ||
-					scopeKey(route.scope) !== scopeKey(input.scope) ||
-					!Number.isFinite(Date.parse(route.expiresAt)) ||
-					Date.parse(route.expiresAt) <= now().getTime() ||
-					!text(content, 20480) ||
-					sending.has(route.websocket.requestId) ||
+					!resolved ||
+					sending.has(resolved.ws.requestId) ||
 					!(await current())
 				)
 					return "failed";
+				({ route, ws } = resolved);
 			} catch {
 				return "failed";
 			}
-			const ws = route.websocket;
-			if (!ws || !authenticated || ws.connectionId !== connectionId || closed)
+			if (!authenticated || ws.connectionId !== connectionId || closed)
 				return "failed";
 			sending.add(ws.requestId);
+			markReplied(ws.requestId);
 			try {
+				// 标记之后不会再开始新的处理中提示；已经在途的先等它结束。
+				await settleAcknowledgement(ws.requestId);
 				let authorized = false;
 				try {
 					authorized =
@@ -398,7 +444,63 @@ export function createWecomWebSocketV1(options: {
 			}
 		},
 	};
+	/**
+	 * #3077：受理后立即在该消息的 stream 上发送 `finish=false` 的固定处理中提示。它不是业务回复：
+	 * 不经回执状态机、不重发；最终回复在同一 stream 上 `finish=true` 覆盖它。
+	 */
+	async function acknowledge(input: {
+		readonly scope: WecomScopeV1;
+		readonly replyHandle: string;
+		readonly text: string;
+	}): Promise<"sent" | "failed" | "unknown"> {
+		let ws: NonNullable<WecomReplyRouteV1["websocket"]>;
+		try {
+			const resolved = await currentRoute(input, input.text);
+			if (!resolved || !(await current())) return "failed";
+			ws = resolved.ws;
+		} catch {
+			return "failed";
+		}
+		// 同步核对后立即登记，最终回复与重复提示都不会与它交错。
+		if (
+			!authenticated ||
+			closed ||
+			ws.connectionId !== connectionId ||
+			sending.has(ws.requestId) ||
+			replied.has(ws.requestId) ||
+			acknowledging.has(ws.requestId)
+		)
+			return "failed";
+		let pending: ReturnType<typeof client.replyStream>;
+		try {
+			pending = client.replyStream(
+				{ headers: { req_id: ws.requestId } },
+				ws.streamId,
+				input.text,
+				false,
+			);
+		} catch {
+			return "failed";
+		}
+		acknowledging.set(ws.requestId, pending);
+		try {
+			const ack = await pending;
+			return ack.errcode === 0 ? "sent" : "unknown";
+		} catch (error) {
+			return error &&
+				typeof error === "object" &&
+				"errcode" in error &&
+				typeof error.errcode === "number" &&
+				error.errcode !== 0
+				? "failed"
+				: "unknown";
+		} finally {
+			if (acknowledging.get(ws.requestId) === pending)
+				acknowledging.delete(ws.requestId);
+		}
+	}
 	return {
+		acknowledge,
 		async connect() {
 			if (started || closed) return;
 			started = true;

@@ -441,6 +441,11 @@ export interface WecomDeliveryClaimV1 {
 	readonly connectionAuthorizationFact?: WecomConnectionAuthorizationFactV1;
 	readonly acceptanceStatus: WecomReceiptStatusV1;
 	readonly executionStatus: string | null;
+	/**
+	 * #3077：已受理执行的回复内容是否就绪（失败、停止，或完成且答案已完整落库）。为 false 时，Store
+	 * 只在回复有效期最后 {@link wecomReplyTimeoutNoticeLeadMsV1} 内领取，Core 发送固定超时提示。
+	 */
+	readonly answerReady?: boolean;
 	readonly textDeltas: readonly string[];
 	/** Result files already confirmed by File Authority for this execution. */
 	readonly media?: readonly WecomResultFileReferenceV1[];
@@ -525,6 +530,13 @@ function composeWecomThinkingReplyV1(
 	return `<think>${content.slice(0, end)}${wecomThinkingTruncatedNotice}</think>\n\n${answer}`;
 }
 
+/** #3077：长连接受理后立即发送的固定处理中提示，最终回复在同一 stream 上覆盖它。 */
+export const wecomProcessingTextV1 = "已收到，正在处理…";
+/** #3077：回复有效期内回答仍未就绪时发送的固定超时提示。 */
+export const wecomReplyTimeoutTextV1 =
+	"回复超时，Agent 未能在企微回复时限内完成，请稍后重试";
+/** #3077：回复有效期结束前多久领取仍未就绪的回执，用来发送超时提示。 */
+export const wecomReplyTimeoutNoticeLeadMsV1 = 30_000;
 export function createWecomDeliveryV1(dependencies: {
 	readonly store: WecomDeliveryStorePortV1;
 	readonly authorization: WecomAuthorizationPortV1;
@@ -567,17 +579,22 @@ export function createWecomDeliveryV1(dependencies: {
 				await dependencies.store.finish(claim, "cancelled");
 				return true;
 			}
+			// #3077：回答在有效期内没有就绪时，结束本次回复并明确提示超时，不静默过期。
+			const timedOut =
+				claim.acceptanceStatus === "accepted" && claim.answerReady === false;
 			const text =
 				claim.acceptanceStatus === "busy"
 					? "Agent 正忙，请稍后重试"
 					: claim.acceptanceStatus === "unavailable"
 						? "Agent 当前不可用，请稍后重试"
-						: claim.executionStatus === "completed"
-							? claim.textDeltas.join("")
-							: claim.executionStatus === "cancelled"
-								? "本次任务已停止"
-								: "本次任务执行失败，请稍后重试";
-			const media = claim.media ?? [];
+						: timedOut
+							? wecomReplyTimeoutTextV1
+							: claim.executionStatus === "completed"
+								? claim.textDeltas.join("")
+								: claim.executionStatus === "cancelled"
+									? "本次任务已停止"
+									: "本次任务执行失败，请稍后重试";
+			const media = timedOut ? [] : (claim.media ?? []);
 			if (
 				(!text && media.length === 0) ||
 				Buffer.byteLength(text) > wecomReplyMaximumBytes
@@ -588,6 +605,7 @@ export function createWecomDeliveryV1(dependencies: {
 			// #2982：只有完成且有答案的回复组合思考过程；固定文案与只有文件的回复不附带。
 			const textWithThinking =
 				claim.acceptanceStatus === "accepted" &&
+				!timedOut &&
 				claim.executionStatus === "completed" &&
 				text &&
 				claim.thinking

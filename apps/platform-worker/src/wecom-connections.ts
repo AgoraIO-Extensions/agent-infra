@@ -1,8 +1,9 @@
-import type {
-	WecomAcceptanceV1,
-	WecomConnectionFenceV1,
-	WecomMessageV1,
-	WecomSendPortV1,
+import {
+	type WecomAcceptanceV1,
+	type WecomConnectionFenceV1,
+	type WecomMessageV1,
+	type WecomSendPortV1,
+	wecomProcessingTextV1,
 } from "@agent-infra/platform-core";
 import {
 	PostgresWecomConnectionsV1,
@@ -140,6 +141,19 @@ export function createPlatformWecomConnectionsV1(
 					const result = await options
 						.receive(message, claim)
 						.catch(() => ({ outcome: "unavailable" as const }));
+					// #3077：新受理并已开始执行的消息立即回处理中提示；繁忙、重投与拒绝的消息不发。
+					if (
+						result.outcome === "accepted" &&
+						result.receipt.status === "accepted"
+					) {
+						if (!(await leases.current(claim))) return;
+						await connection.acknowledge({
+							scope: message,
+							replyHandle: message.replyHandle,
+							text: wecomProcessingTextV1,
+						});
+						return;
+					}
 					if (result.outcome === "denied" || result.outcome === "unavailable") {
 						if (!(await leases.current(claim))) return;
 						const status = await connection.sender.send({

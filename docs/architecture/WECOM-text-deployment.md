@@ -107,6 +107,12 @@ API 仅持公钥，Worker 使用私钥 keyring，密文绑定 Agent、渠道、�
 回复沿当前有效绑定的协议发送；长连接使用其受支持的回复/发送命令，回调模式使用其获准回复路由。
 SDK 自动重连、重试或队列不能突破已持久化的发送状态：
 
+- 长连接受理（回执写入）后，用回调的 `req_id` 与该消息的 stream ID 立即发送一帧 `finish=false` 的
+  “已收到，正在处理”。它不经回执状态机、不记发送意图；发送失败或 ACK 丢失不重发，也不影响最终回复。
+  最终回复（答案或固定提示）在同一 stream 上 `finish=true`，覆盖处理中提示；繁忙与拒绝的消息不发处理中提示。
+- 回复有效期：长连接为收到消息后 9 分钟，留在[官方 stream 时限](https://developer.work.weixin.qq.com/document/path/101463)
+  （首次发送起 10 分钟内必须结束）之内。到期前 30 秒回答仍未就绪时领取回执，发送固定超时提示
+  “回复超时，Agent 未能在企微回复时限内完成，请稍后重试”；已经到期则记为 `expired`。
 - `pending` / `claimed`：尚未开始外部发送，领取前重验授权与当前绑定。已受理消息的答案只取已落库的正文：
   执行 `completed` 后，还要等 Runtime 的终态 `execution.status` 事件落库才领取（状态响应或恢复可能先写入终态）；
   `failed`、`cancelled` 只发固定文案，不等待；回复过期时照常领取并记为 `expired`。
@@ -127,7 +133,7 @@ SDK 自动重连、重试或队列不能突破已持久化的发送状态：
 事件保存、发送状态机、fence 与一次性发送语义不变，决策见
 [ADR-0026](../adr/0026-show-model-reasoning-as-conversation-content.md)。
 
-- 只有执行完成（completed）的回复组合思考过程。繁忙、不可用、无权限、取消和失败等固定文案不附带；
+- 只有执行完成（completed）的回复组合思考过程。处理中、超时、繁忙、不可用、无权限、取消和失败等固定文案不附带；
   答案为空时不发送只有思考过程的回复。
 - 格式为 `<think>{思考过程}</think>`、一个空行、答案。企微按
   [被动回复消息](https://developer.work.weixin.qq.com/document/path/101031)把 `<think></think>` 中的内容

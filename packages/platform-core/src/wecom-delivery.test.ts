@@ -5,6 +5,7 @@ import {
 	type WecomAuthorizationPortV1,
 	type WecomDeliveryClaimV1,
 	type WecomSendPortV1,
+	wecomReplyTimeoutTextV1,
 } from "./wecom-channel.ts";
 
 const boundary = {
@@ -371,3 +372,56 @@ it.each([
 		expect(JSON.stringify(input)).not.toContain("私密思考");
 	},
 );
+
+// #3077：回答在有效期内没有就绪时，Store 在最后 30 秒领取，Core 发固定超时提示结束本次回复。
+it("ends an unready reply with the fixed timeout notice instead of expiring silently (#3077)", async () => {
+	const media = [
+		{
+			fileId: "result-file-1",
+			name: "report.pdf",
+			mediaType: "application/pdf",
+			sizeBytes: 42,
+		},
+	];
+	const { f, input } = await sentFor({
+		answerReady: false,
+		executionStatus: "completed",
+		textDeltas: ["partial "],
+		media,
+		thinking: { parts: [raw("思考")], complete: true },
+	});
+	expect(f.store.prepare).toHaveBeenCalledTimes(1);
+	expect(input).toEqual({
+		scope: claim.scope,
+		replyHandle: claim.replyHandle,
+		text: wecomReplyTimeoutTextV1,
+		revalidate: expect.any(Function),
+	});
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "sent");
+});
+it.each([
+	["a ready answer", { answerReady: true }],
+	["a claim without the readiness field", {}],
+	["a busy receipt", { answerReady: false, acceptanceStatus: "busy" as const }],
+])(
+	"keeps the existing text for %s (#3077)",
+	async (_name, changes: Partial<WecomDeliveryClaimV1>) => {
+		const { input } = await sentFor(changes);
+		expect(input?.text).toBe(
+			changes.acceptanceStatus === "busy"
+				? "Agent 正忙，请稍后重试"
+				: "final reply",
+		);
+	},
+);
+it("still records an expired unready reply as expired without sending (#3077)", async () => {
+	const f = fixture();
+	f.store.claim.mockResolvedValueOnce({
+		...claim,
+		answerReady: false,
+		replyExpiresAt: "2000-01-01T00:00:00Z",
+	});
+	await f.useCase.dispatch();
+	expect(f.sender.send).not.toHaveBeenCalled();
+	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "expired");
+});

@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 	socketClose: vi.fn(),
 	storeClose: vi.fn(async () => {}),
 	socketSend: vi.fn(async () => "sent"),
+	socketAcknowledge: vi.fn(async () => "sent"),
 	receive: undefined as
 		| undefined
 		| ((message: WecomMessageV1) => Promise<void>),
@@ -35,6 +36,7 @@ vi.mock("@agent-infra/wecom/worker", () => ({
 				return mocks.terminal;
 			},
 			sender: { send: mocks.socketSend },
+			acknowledge: mocks.socketAcknowledge,
 		};
 	},
 }));
@@ -377,6 +379,125 @@ it("revalidates the lease immediately before sending a reply", async () => {
 			}),
 		).resolves.toBe("failed");
 		expect(mocks.socketSend).not.toHaveBeenCalled();
+	} finally {
+		await worker.close();
+	}
+});
+
+// #3077：新受理的消息立即在原 stream 上回处理中提示；繁忙、重投与拒绝的消息不发。
+it.each([
+	[
+		"a newly accepted message",
+		{ outcome: "accepted", status: "accepted" },
+		true,
+	],
+	["a busy acceptance", { outcome: "accepted", status: "busy" }, false],
+	["a replayed message", { outcome: "replayed", status: "accepted" }, false],
+] as const)(
+	"acknowledges %s only when it started an execution",
+	async (_name, decision, acknowledged) => {
+		const worker = createPlatformWecomConnectionsV1({
+			databaseUrl: "postgres://fixture",
+			holderId: "worker",
+			bindings: async () => [
+				{
+					botId: "bot",
+					agentId: "agent",
+					bindingReference: "binding",
+					credentialVersion: "v1",
+					secret: "fixture",
+				},
+			],
+			protectReply: async () => "fixture",
+			revealReply: async () => {
+				throw new Error("unused");
+			},
+			receive: async () => ({
+				outcome: decision.outcome,
+				receipt: {
+					receiptId: "receipt",
+					status: decision.status,
+					conversationId: "conversation",
+					executionId: decision.status === "accepted" ? "execution" : null,
+				},
+			}),
+		});
+		try {
+			await worker.tick();
+			const message: WecomMessageV1 = {
+				agentId: "agent",
+				bindingReference: "binding",
+				kind: "wecom_bot",
+				senderId: "sender",
+				peerId: "peer",
+				conversationType: "single",
+				threadId: null,
+				providerId: "bot",
+				eventId: "event",
+				text: "fixture",
+				replyHandle: "reply",
+				replyExpiresAt: new Date(Date.now() + 60000).toISOString(),
+			};
+			await mocks.receive?.(message);
+			if (acknowledged)
+				expect(mocks.socketAcknowledge).toHaveBeenCalledWith({
+					scope: message,
+					replyHandle: "reply",
+					text: "已收到，正在处理…",
+				});
+			else expect(mocks.socketAcknowledge).not.toHaveBeenCalled();
+			expect(mocks.socketSend).not.toHaveBeenCalled();
+		} finally {
+			await worker.close();
+		}
+	},
+);
+
+it("does not acknowledge after the connection lease is lost", async () => {
+	const worker = createPlatformWecomConnectionsV1({
+		databaseUrl: "postgres://fixture",
+		holderId: "worker",
+		bindings: async () => [
+			{
+				botId: "bot",
+				agentId: "agent",
+				bindingReference: "binding",
+				credentialVersion: "v1",
+				secret: "fixture",
+			},
+		],
+		protectReply: async () => "fixture",
+		revealReply: async () => {
+			throw new Error("unused");
+		},
+		receive: async () => ({
+			outcome: "accepted",
+			receipt: {
+				receiptId: "receipt",
+				status: "accepted",
+				conversationId: "conversation",
+				executionId: "execution",
+			},
+		}),
+	});
+	try {
+		await worker.tick();
+		mocks.current.mockResolvedValueOnce(false);
+		await mocks.receive?.({
+			agentId: "agent",
+			bindingReference: "binding",
+			kind: "wecom_bot",
+			senderId: "sender",
+			peerId: "peer",
+			conversationType: "single",
+			threadId: null,
+			providerId: "bot",
+			eventId: "event",
+			text: "fixture",
+			replyHandle: "reply",
+			replyExpiresAt: new Date(Date.now() + 60000).toISOString(),
+		});
+		expect(mocks.socketAcknowledge).not.toHaveBeenCalled();
 	} finally {
 		await worker.close();
 	}
