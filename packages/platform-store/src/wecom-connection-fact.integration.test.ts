@@ -18,6 +18,7 @@ import {
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
 import { PostgresWecomChannelV1 } from "./wecom-channel.ts";
+import { completeWecomExecutionFixture } from "./wecom-receipt.fixture.ts";
 
 let db: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
@@ -440,6 +441,7 @@ describe("WeCom sender-to-Connection authorization fact", () => {
 				 ${accepted.receipt.executionId},${`reply-adapter-${agentId}`},1,1,
 				 'text.delta',${sql.json({ type: "text.delta", text: "legitimate reply" })},
 				 ${"d".repeat(64)},${`runtime-reply-${agentId}`},now(),'runtime')`;
+			await completeWecomExecutionFixture(sql, accepted.receipt.executionId);
 		} finally {
 			await first.store.close();
 		}
@@ -495,7 +497,7 @@ describe("WeCom sender-to-Connection authorization fact", () => {
 			const accepted = await useCase.receive(message, fence);
 			expect(accepted.outcome).toBe("accepted");
 			if (accepted.outcome !== "accepted") throw new Error("Expected accepted");
-			await sql`update platform.conversation_executions set status='completed' where execution_id=${accepted.receipt.executionId}`;
+			await completeWecomExecutionFixture(sql, accepted.receipt.executionId);
 			current = null;
 			let sends = 0;
 			const delivery = createWecomDeliveryV1({
@@ -544,6 +546,7 @@ describe("WeCom sender-to-Connection authorization fact", () => {
 				 ${accepted.receipt.executionId},${`disable-adapter-${agentId}`},1,1,'text.delta',
 				 ${sql.json({ type: "text.delta", text: "reply" })},${"e".repeat(64)},
 				 ${`runtime-disable-${agentId}`},now(),'runtime')`;
+			await completeWecomExecutionFixture(sql, accepted.receipt.executionId);
 			disabledUsers.add(message.senderId);
 			let sends = 0;
 			const delivery = createWecomDeliveryV1({
