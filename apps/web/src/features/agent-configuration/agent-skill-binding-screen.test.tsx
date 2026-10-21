@@ -599,6 +599,16 @@ describe("AgentSkillBindingScreen (O-02)", () => {
 		expect(dialog.textContent).toContain(
 			"现有执行保留原版本。新的调用要等同步和装配确认完成。",
 		);
+		// B2-09：说明套用设计 .form-hint，仍是弹窗的可访问描述。
+		const hint = within(dialog).getByText(
+			"现有执行保留原版本。新的调用要等同步和装配确认完成。",
+		);
+		expect(hint.classList.contains("skill-form-hint")).toBe(true);
+		expect(
+			(dialog.getAttribute("aria-describedby") ?? "")
+				.split(/\s+/)
+				.includes(hint.id),
+		).toBe(true);
 		fireEvent.click(
 			within(dialog).getByRole("button", { name: "确认版本变更" }),
 		);
@@ -626,16 +636,16 @@ describe("AgentSkillBindingScreen (O-02)", () => {
 		expect(screen.queryByRole("button", { name: /^解除绑定/ })).toBeNull();
 	});
 
-	it("reads bindings under the server-provided version and shows it (#2903)", async () => {
+	it("reads bindings under the server-provided version without showing its internal identifier (#2903, B2-07)", async () => {
 		const { readBindings } = renderScreen({ agentVersion: "2026.10:r1" });
-		// W-37：版本值由 IdentifierText 显示（不超过 12 个字符时为全文），标题文字不变。
+		// W-37 / B2-07：版本只有内部标识、没有显示名，提示按导出稿写「当前配置版本」，
+		// 不显示也不截断内部标识；读写仍用服务端给出的完整版本。
 		const title = await screen.findByText("当前 Agent 版本：", {
 			exact: false,
 		});
-		expect(title.textContent).toBe("当前 Agent 版本：2026.10:r1");
-		expect(title.querySelector("code")?.getAttribute("title")).toBe(
-			"2026.10:r1",
-		);
+		expect(title.textContent).toBe("当前 Agent 版本：当前配置版本");
+		expect(title.querySelector("code")).toBeNull();
+		expect(document.body.textContent).not.toContain("2026.10:r1");
 		expect(readBindings).toHaveBeenCalledWith("agent-pilot-1", "2026.10:r1");
 		expect(screen.queryAllByRole("textbox")).toEqual([]);
 	});
@@ -671,6 +681,18 @@ describe("AgentSkillBindingScreen (O-02)", () => {
 		const dialog = await screen.findByRole("dialog", { name: "确认解除绑定" });
 		expect(dialog.textContent).toContain("workspace-summary · v1.0.0");
 		expect(dialog.textContent).toContain("现有执行保留原版本");
+		// B2-09：后果说明是设计 .form-hint 段落，仍是弹窗的可访问描述。
+		const hint = within(dialog).getByText(
+			"解除后，新的调用不再提供这个 Skill；现有执行保留原版本。",
+		);
+		expect(hint.tagName).toBe("P");
+		expect(hint.classList.contains("skill-form-hint")).toBe(true);
+		const describedBy = dialog.getAttribute("aria-describedby") ?? "";
+		expect(
+			describedBy
+				.split(/\s+/)
+				.some((id) => document.getElementById(id)?.contains(hint)),
+		).toBe(true);
 		expect(bindVersion).not.toHaveBeenCalled();
 		fireEvent.click(within(dialog).getByRole("button", { name: "解除绑定" }));
 		await waitFor(() => expect(bindVersion).toHaveBeenCalledOnce());

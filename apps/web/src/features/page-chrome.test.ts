@@ -67,4 +67,16 @@ describe("page chrome route table", () => {
 			notFoundChrome,
 		);
 	});
+
+	// B2-06：Agent 的 Skill 页顶栏按导出稿 'agent-skills' 为「Owner 配置 / Skill 绑定」。
+	it("names the Agent Skill page Skill 绑定 under Owner 配置 (B2-06)", () => {
+		expect(
+			resolvePageChrome({ pathname: "/agents/agent-pilot-1/skills" }),
+		).toEqual({
+			navKey: "agents",
+			crumbParent: "Owner 配置",
+			title: "Skill 绑定",
+			documentTitle: "Skill 绑定 · Agora Agent",
+		});
+	});
 });

@@ -582,3 +582,90 @@ export async function expectCleanPage(page: Page, errors: readonly string[]) {
 		),
 	).toBe(true);
 }
+
+/**
+ * 文字颜色与其实际背景的 WCAG 对比度（#3128 B2-01）：向上叠加祖先的半透明背景，
+ * 缺省为白色；颜色经 canvas 归一为 sRGB，兼容 oklch / color-mix 计算值。
+ */
+export async function textContrast(locator: Locator) {
+	return locator.evaluate((element) => {
+		const canvas = document.createElement("canvas");
+		canvas.width = 1;
+		canvas.height = 1;
+		const context = canvas.getContext("2d", { willReadFrequently: true });
+		if (!context) throw new Error("Missing canvas context");
+		const rgba = (color: string) => {
+			context.clearRect(0, 0, 1, 1);
+			context.fillStyle = "#000";
+			context.fillStyle = color;
+			context.fillRect(0, 0, 1, 1);
+			const [r = 0, g = 0, b = 0, a = 0] = context.getImageData(
+				0,
+				0,
+				1,
+				1,
+			).data;
+			return [r, g, b, a / 255] as const;
+		};
+		const luminance = (channels: readonly number[]) => {
+			const [r = 0, g = 0, b = 0] = channels.map((channel) => {
+				const value = channel / 255;
+				return value <= 0.03928
+					? value / 12.92
+					: ((value + 0.055) / 1.055) ** 2.4;
+			});
+			return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+		};
+		const layers: (readonly [number, number, number, number])[] = [];
+		for (let node: Element | null = element; node; node = node.parentElement) {
+			const layer = rgba(getComputedStyle(node).backgroundColor);
+			if (layer[3] > 0) layers.push(layer);
+			if (layer[3] >= 1) break;
+		}
+		let background = [255, 255, 255];
+		for (const [r, g, b, a] of layers.toReversed())
+			background = [r, g, b].map(
+				(channel, index) => channel * a + (background[index] ?? 0) * (1 - a),
+			);
+		const [r, g, b, a] = rgba(getComputedStyle(element).color);
+		const foreground = [r, g, b].map(
+			(channel, index) => channel * a + (background[index] ?? 0) * (1 - a),
+		);
+		const [light = 1, dark = 1] = [luminance(foreground), luminance(background)]
+			.toSorted((left, right) => right - left)
+			.map((value) => value + 0.05);
+		return light / dark;
+	});
+}
+
+/**
+ * #3128 B2-11：设计稿全局 button{cursor:pointer}。范围内可见的按钮，可用时悬停为指针，
+ * 禁用（:disabled 或 aria-disabled）时不是指针。范围内至少要有一个按钮。
+ */
+export async function expectPointerButtons(scope: Locator, context: string) {
+	const buttons = await scope
+		.locator('button, [role="button"]')
+		.evaluateAll((nodes) =>
+			nodes
+				.filter((node) => (node as HTMLElement).checkVisibility())
+				.map((node) => ({
+					name:
+						node.getAttribute("aria-label") ??
+						node.textContent?.trim() ??
+						node.tagName,
+					disabled:
+						node.matches(":disabled") ||
+						node.getAttribute("aria-disabled") === "true",
+					cursor: getComputedStyle(node).cursor,
+				})),
+		);
+	expect(buttons.length, `${context} 按钮`).toBeGreaterThan(0);
+	expect(
+		buttons
+			.filter(({ disabled, cursor }) =>
+				disabled ? cursor === "pointer" : cursor !== "pointer",
+			)
+			.map(({ name, cursor }) => `${name}: ${cursor}`),
+		`${context} 按钮光标`,
+	).toEqual([]);
+}

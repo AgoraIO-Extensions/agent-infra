@@ -136,6 +136,14 @@ Owner 配置页的企微机器人卡片读取带扫码能力的状态 V2（[工�
   Web 以「多服务资源 YAML 内容」命名，与上方文件输入「多服务资源 YAML」区分（[#3119](https://github.com/AgoraIO-Extensions/agent-infra/issues/3119)），
   待后续设计回写同步。
 
+### 终验待回写设计稿
+
+以下结论来自 #2830 终验，导出稿尚未回写；实现与验收以这里为准。
+
+| 编号 | 位置 | 实现 | 依据 |
+| --- | --- | --- | --- |
+| B2-03 | 目录选择器 chip 的移除按钮（申请表单、Owner 配置、员工访问控制） | 可访问名称先写选择器标签、再写对象名，如「从可使用的用户移除 陈昊」「从共同 Owner 用户移除 陈昊」；按钮仍只显示图标 | 可访问性：同一人员同时选入「共同 Owner 用户」与「可使用的用户」时，同页不出现同名控件（[#3128](https://github.com/AgoraIO-Extensions/agent-infra/issues/3128)，原导出稿为「移除 陈昊」×2） |
+
 ### 申请详情进度
 
 [#2920](https://github.com/AgoraIO-Extensions/agent-infra/issues/2920) 已将 M-11 回写本版导出稿。

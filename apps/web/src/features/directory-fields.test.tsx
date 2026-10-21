@@ -236,7 +236,7 @@ describe("Agent detail and Owner configuration directory fields", () => {
 		fireEvent.change(input, { target: { value: "New" } });
 		fireEvent.click(await screen.findByRole("option", { name: /New Owner/ }));
 		fireEvent.click(
-			screen.getByRole("button", { name: "移除 Directory User" }),
+			screen.getByRole("button", { name: "从可使用的用户移除 Directory User" }),
 		);
 		fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
 		expect(onSave).toHaveBeenCalledWith(
@@ -292,7 +292,9 @@ describe("Agent detail and Owner configuration directory fields", () => {
 		if (!(ownerField instanceof HTMLElement))
 			throw new Error("Missing Owner field");
 		fireEvent.click(
-			within(ownerField).getByRole("button", { name: "移除 Owner" }),
+			within(ownerField).getByRole("button", {
+				name: "从共同 Owner 用户移除 Owner",
+			}),
 		);
 		fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
 		expect(onSave).not.toHaveBeenCalled();
@@ -365,7 +367,7 @@ it.each(["pending", "disabled"])(
 			expect(input.hasAttribute("disabled")).toBe(true);
 		expect(
 			screen
-				.getByRole("button", { name: "移除 Current Owner" })
+				.getByRole("button", { name: "从共同 Owner 用户移除 Current Owner" })
 				.hasAttribute("disabled"),
 		).toBe(true);
 	},
@@ -467,10 +469,14 @@ describe("DirectoryPicker interaction", () => {
 			]),
 		);
 		expect(
-			screen.getByRole("button", { name: "移除 Current Owner" }),
+			screen.getByRole("button", {
+				name: "从共同 Owner 用户移除 Current Owner",
+			}),
 		).toBeTruthy();
 		expect(
-			screen.getByRole("button", { name: "移除 Directory User" }),
+			screen.getByRole("button", {
+				name: "从共同 Owner 用户移除 Directory User",
+			}),
 		).toBeTruthy();
 		expect(document.activeElement).toBe(input);
 	});
@@ -487,7 +493,9 @@ describe("DirectoryPicker interaction", () => {
 		).toBeTruthy();
 		fireEvent.keyDown(input, { key: "Enter" });
 		expect(
-			await screen.findByRole("button", { name: "移除 Directory User" }),
+			await screen.findByRole("button", {
+				name: "从共同 Owner 用户移除 Directory User",
+			}),
 		).toBeTruthy();
 		expect(input.getAttribute("aria-expanded")).toBe("true");
 		fireEvent.keyDown(input, { key: "Escape" });
@@ -504,15 +512,59 @@ describe("DirectoryPicker interaction", () => {
 		directoryFixture();
 		render(<PickerHarness initial={"user-owner-1\nuser-2"} />);
 		const remove = await screen.findByRole("button", {
-			name: "移除 Directory User",
+			name: "从共同 Owner 用户移除 Directory User",
 		});
 		const input = screen.getByRole("combobox", { name: "共同 Owner 用户" });
 		fireEvent.click(remove);
 		await waitFor(() => expect(document.activeElement).toBe(input));
 		expect(input.getAttribute("aria-expanded")).toBe("true");
 		expect(
-			screen.queryByRole("button", { name: "移除 Directory User" }),
+			screen.queryByRole("button", {
+				name: "从共同 Owner 用户移除 Directory User",
+			}),
 		).toBeNull();
+	});
+
+	// B2-03：同一人员同时选入两个选择器时，移除按钮的名称带各自的选择器标签，同页不重名；
+	// 从一个选择器移除不影响另一个。
+	it("names chip remove buttons with the picker label so one person in two pickers stays distinct (B2-03)", async () => {
+		directoryFixture();
+		const onOwners = vi.fn();
+		const onUsers = vi.fn();
+		render(
+			<>
+				<DirectoryPicker
+					id="picker-owner"
+					kind="user"
+					label="共同 Owner 用户"
+					help="至少保留一名有效 Owner"
+					value="user-2"
+					onChange={onOwners}
+				/>
+				<DirectoryPicker
+					id="picker-users"
+					kind="user"
+					label="可使用的用户"
+					help="可选；用于补充个人范围"
+					value="user-2"
+					onChange={onUsers}
+				/>
+			</>,
+		);
+		const fromOwners = await screen.findByRole("button", {
+			name: "从共同 Owner 用户移除 Directory User",
+		});
+		expect(
+			screen.getByRole("button", { name: "从可使用的用户移除 Directory User" }),
+		).toBeTruthy();
+		const names = screen
+			.getAllByRole("button", { name: /移除 Directory User$/ })
+			.map((button) => button.getAttribute("aria-label"));
+		expect(names).toHaveLength(2);
+		expect(new Set(names).size).toBe(2);
+		fireEvent.click(fromOwners);
+		expect(onOwners).toHaveBeenLastCalledWith("", []);
+		expect(onUsers).not.toHaveBeenCalled();
 	});
 
 	it("offers clear search outside the listbox only when a query exists", async () => {
@@ -592,22 +644,22 @@ describe("DirectoryPicker interaction", () => {
 		);
 		const removeNames = () =>
 			screen
-				.getAllByRole("button", { name: /^移除 / })
+				.getAllByRole("button", { name: /^从共同 Owner 用户移除 / })
 				.map((button) => button.getAttribute("aria-label") ?? "");
 		// 读取完成前只显示中性占位，不下「未识别」的结论。
 		expect(screen.getAllByText("正在读取目录详情…")).toHaveLength(3);
-		expect(removeNames()[0]).toBe("移除 林默");
+		expect(removeNames()[0]).toBe("从共同 Owner 用户移除 林默");
 		expect(removeNames().slice(1)).toEqual([
-			expect.stringMatching(/^移除 用户 \d+$/),
-			expect.stringMatching(/^移除 用户 \d+$/),
+			expect.stringMatching(/^从共同 Owner 用户移除 用户 \d+$/),
+			expect.stringMatching(/^从共同 Owner 用户移除 用户 \d+$/),
 		]);
 		release();
 		expect(await screen.findAllByText("目录中暂未找到该记录")).toHaveLength(3);
 		const names = removeNames();
-		expect(names[0]).toBe("移除 林默");
+		expect(names[0]).toBe("从共同 Owner 用户移除 林默");
 		expect(names.slice(1)).toEqual([
-			expect.stringMatching(/^移除 未识别的用户 \d+$/),
-			expect.stringMatching(/^移除 未识别的用户 \d+$/),
+			expect.stringMatching(/^从共同 Owner 用户移除 未识别的用户 \d+$/),
+			expect.stringMatching(/^从共同 Owner 用户移除 未识别的用户 \d+$/),
 		]);
 		expect(new Set(names).size).toBe(3);
 		expect(document.body.textContent).not.toMatch(
@@ -633,7 +685,7 @@ describe("DirectoryPicker interaction", () => {
 			},
 			{
 				id: "user-y",
-				name: kept?.replace("移除 ", ""),
+				name: kept?.replace("从共同 Owner 用户移除 ", ""),
 				secondary: "目录中暂未找到该记录",
 				resolved: false,
 			},

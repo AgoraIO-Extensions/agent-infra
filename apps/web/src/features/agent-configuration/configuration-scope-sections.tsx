@@ -64,6 +64,8 @@ export function ConfigurationAvailabilitySection({
 					id="configuration-user-availability"
 					kind="user"
 					label="可使用的用户"
+					// 与申请表单同一占位符（B2-05）。
+					placeholder="搜索姓名、邮箱或组织路径"
 					help="可选；用于补充个人范围"
 					value={userIds}
 					disabled={disabled}

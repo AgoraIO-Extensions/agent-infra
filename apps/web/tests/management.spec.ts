@@ -946,6 +946,30 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await expect(pageStatus(page)).toBeFocused();
 	// W-08：设计 .notice p 为常规字重，提交结果不再加粗。
 	await expect(pageStatus(page)).toHaveCSS("font-weight", "400");
+	// B2-02：提交结果提示紧贴卡片内边距（上外边距 0），与下方操作相距 .card-actions 的 16px。
+	await expect(pageStatus(page)).toHaveCSS("margin-top", "0px");
+	const resultCard = page.locator("main .application-form-card");
+	const [cardBox, statusBox, actionsBox] = await Promise.all([
+		resultCard.boundingBox(),
+		pageStatus(page).boundingBox(),
+		resultCard.locator(".application-submitted-actions").boundingBox(),
+	]);
+	const cardInset = await resultCard.evaluate((element) => {
+		const style = getComputedStyle(element);
+		return (
+			Number.parseFloat(style.borderTopWidth) +
+			Number.parseFloat(style.paddingTop)
+		);
+	});
+	expect(
+		Math.abs((statusBox?.y ?? 0) - ((cardBox?.y ?? 0) + cardInset)),
+	).toBeLessThanOrEqual(0.5);
+	expect(
+		Math.abs(
+			(actionsBox?.y ?? 0) -
+				((statusBox?.y ?? 0) + (statusBox?.height ?? 0) + 16),
+		),
+	).toBeLessThanOrEqual(0.5);
 	await expect(
 		page.getByRole("link", { name: "查看申请详情", exact: true }),
 	).toHaveAttribute("href", "/my-agents/application-browser-1");
@@ -3532,7 +3556,7 @@ test("editing an application keeps 44px chip remove targets", async ({
 	await fixture(page);
 	await page.goto("/my-agents/application-browser-1/edit");
 	await expect(
-		page.getByRole("button", { name: /^移除 / }).first(),
+		page.getByRole("button", { name: /^从.+移除 / }).first(),
 	).toBeVisible();
 	const sizes = await page
 		.locator(".directory-chip-remove")
@@ -3631,7 +3655,10 @@ test("Agent detail directory failure stays readable and configuration preserves 
 	await expect(page.getByRole("button", { name: "移除 Owner" })).toBeVisible();
 	// 读取失败不等于记录不存在：组织用中性占位，不说「未识别」（acc-3 新问题 3）。
 	await expect(
-		page.getByRole("button", { name: "移除 组织 1", exact: true }),
+		page.getByRole("button", {
+			name: "从可使用的组织移除 组织 1",
+			exact: true,
+		}),
 	).toBeVisible();
 	await expect(page.locator("main")).not.toContainText("未识别");
 	await expect(page.locator("main")).not.toContainText(
@@ -5478,6 +5505,14 @@ test("WeCom channel cards follow the design grid, chip and status border", async
 	await expect(
 		app.locator('[data-slot="badge"][data-variant="chip"]'),
 	).toHaveAttribute("data-tone", "red");
+	// B2-04：状态 chip 与卡头顶对齐；包裹的 live 区域不形成行盒，chip 不按基线下移。
+	for (const card of [bot, app]) {
+		const [head, chip] = await Promise.all([
+			card.locator(".wecom-channel-head").boundingBox(),
+			card.locator('[data-slot="badge"][data-variant="chip"]').boundingBox(),
+		]);
+		expect(Math.abs((chip?.y ?? 0) - (head?.y ?? 0))).toBeLessThanOrEqual(0.5);
+	}
 	expect((await computed(bot, ["borderTopColor"])).borderTopColor).toBe(
 		await resolvedColor(
 			page,

@@ -84,7 +84,8 @@ export function WecomChannelCard({
 						<p>{subtitle}</p>
 					</div>
 				</div>
-				<span aria-live="polite">
+				{/* flex：包裹层不再形成行盒，chip 与卡头顶对齐，不按基线下移（B2-04）。 */}
+				<span aria-live="polite" className="flex">
 					<Badge tone={wecomStatusTone(status)}>
 						{status ? wecomStatusLabels[status] : "连接状态暂不可用"}
 					</Badge>

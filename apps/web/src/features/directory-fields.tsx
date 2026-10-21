@@ -360,9 +360,10 @@ export function DirectoryPicker({
 								<span className="directory-chip-name">{item.name}</span>
 								{item.secondary ? <small>{item.secondary}</small> : null}
 							</span>
+							{/* 名称带选择器标签：同一人员选入两个选择器时，同页不出现同名移除按钮（B2-03）。 */}
 							<Button
 								disabled={disabled}
-								aria-label={`移除 ${item.name}`}
+								aria-label={`从${label}移除 ${item.name}`}
 								className="directory-chip-remove"
 								onClick={() => remove(item.id)}
 								onMouseDown={keepInputFocus}
