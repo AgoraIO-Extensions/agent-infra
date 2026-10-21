@@ -2029,6 +2029,7 @@ Connection DB 保存自己的用户/应用及客户端身份、授权、Provider
 | 正在应用新的 Runtime 修订 | 更新中 |
 | 探针失败或 Adapter 不可达 | 暂时不可用 |
 | 单个 Runtime Session 恢复失败 | 对应 Conversation 显示“会话不可用”，历史只读且禁止继续发送；其他 Conversation 不受影响 |
+| 原生会话被受理不明的 Turn 阻塞（Runtime 返回 `RUNTIME_SESSION_BLOCKED`） | 本次执行失败；对应 Conversation 显示“会话不可用”，历史只读且禁止继续发送，可明确新建会话；其他 Conversation 不受影响 |
 | API 等待容量已满 | 受理前拒绝，可稍后重试，不返回新任务标识 |
 | 已受理任务等待到期 | 原执行明确失败，保留失败原因 |
 | 取消已请求但停止未确认 | 取消处理中，同 Conversation 后续任务继续等待 |
