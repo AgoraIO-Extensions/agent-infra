@@ -60,6 +60,27 @@ type DeploymentConfiguration = {
 		string,
 		{ readonly profile: unknown; readonly approval: unknown }
 	>;
+	/**
+	 * Deployment adapter hook for the real per-Agent Connection registration
+	 * path. The adapter owns the authenticated API call and returns only the
+	 * approved non-secret binding; the Worker never receives a service secret
+	 * or PAT. A returned entry is atomic: profile, approval and installation
+	 * supply must use the same Agent key.
+	 */
+	readonly resolveConnectionConsumerBindingsByAgent?: (
+		signal: AbortSignal,
+	) => Promise<
+		Readonly<
+			Record<
+				string,
+				{
+					readonly profile: unknown;
+					readonly approval: unknown;
+					readonly installationSupply: unknown;
+				}
+			>
+		>
+	>;
 	readonly connectionInstallationSupply?: unknown;
 	readonly connectionInstallationSuppliesByAgent?: Record<string, unknown>;
 	readonly connectionInstallation?: {
@@ -132,6 +153,7 @@ const {
 	connectionConsumerProfile,
 	connectionConsumerApproval,
 	connectionConsumerProfilesByAgent,
+	resolveConnectionConsumerBindingsByAgent,
 	connectionInstallationSupply,
 	connectionInstallationSuppliesByAgent,
 	connectionInstallation: configuredConnectionInstallation,
@@ -269,36 +291,20 @@ const workloadInput = {
 
 // Both the Pod file and Runtime HTTP assertion consume this captured source.
 const perAgentConsumerSelection =
-	connectionConsumerProfilesByAgent !== undefined;
+	connectionConsumerProfilesByAgent !== undefined ||
+	resolveConnectionConsumerBindingsByAgent !== undefined;
 const connectionConsumerSnapshot = perAgentConsumerSelection
 	? undefined
 	: createRuntimeConnectionConsumerSnapshotV1(
 			connectionConsumerProfile,
 			connectionConsumerApproval,
 		);
-const connectionConsumerSnapshotsByAgent = connectionConsumerProfilesByAgent
-	? Object.fromEntries(
-			Object.entries(connectionConsumerProfilesByAgent).map(
-				([agentId, value]) => {
-					if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
-						throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
-					return [
-						agentId,
-						createRuntimeConnectionConsumerSnapshotV1(
-							value.profile,
-							value.approval,
-						) ?? null,
-					];
-				},
-			),
-		)
-	: undefined;
 if (Object.hasOwn(workloadInput.policy, "connectionConsumerSnapshot"))
 	throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 if (Object.hasOwn(workloadInput.policy, "connectionInstallationRevision"))
 	throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
 if (
-	perAgentConsumerSelection !==
+	(connectionConsumerProfilesByAgent !== undefined) !==
 	(connectionInstallationSuppliesByAgent !== undefined)
 )
 	throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
@@ -308,21 +314,6 @@ const connectionInstallationRevision = perAgentConsumerSelection
 			connectionInstallationSupply,
 			connectionConsumerSnapshot,
 		);
-const connectionInstallationRevisionsByAgent = perAgentConsumerSelection
-	? Object.fromEntries(
-			Object.entries(connectionConsumerProfilesByAgent).map(([agentId]) => {
-				if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
-					throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
-				return [
-					agentId,
-					createRuntimeConnectionInstallationRevisionV1(
-						connectionInstallationSuppliesByAgent?.[agentId],
-						connectionConsumerSnapshotsByAgent?.[agentId] ?? null,
-					) ?? null,
-				];
-			}),
-		)
-	: undefined;
 const connectionInstallation = resolveConnectionInstallation(
 	configuredConnectionInstallation,
 );
@@ -337,6 +328,65 @@ let conversationPrepared:
 	| undefined;
 
 async function createPrepared(signal: AbortSignal) {
+	const resolvedBindings = resolveConnectionConsumerBindingsByAgent
+		? await resolveConnectionConsumerBindingsByAgent(signal)
+		: undefined;
+	if (
+		resolvedBindings &&
+		(connectionConsumerProfilesByAgent !== undefined ||
+			connectionInstallationSuppliesByAgent !== undefined)
+	)
+		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	const resolvedProfilesByAgent = resolvedBindings
+		? Object.fromEntries(
+				Object.entries(resolvedBindings).map(([agentId, binding]) => {
+					if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
+						throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+					return [
+						agentId,
+						{ profile: binding.profile, approval: binding.approval },
+					];
+				}),
+			)
+		: connectionConsumerProfilesByAgent;
+	const resolvedInstallationSuppliesByAgent = resolvedBindings
+		? Object.fromEntries(
+				Object.entries(resolvedBindings).map(([agentId, binding]) => [
+					agentId,
+					binding.installationSupply,
+				]),
+			)
+		: connectionInstallationSuppliesByAgent;
+	if (
+		resolvedProfilesByAgent !== undefined &&
+		resolvedInstallationSuppliesByAgent === undefined
+	)
+		throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
+	for (const agentId of Object.keys(resolvedProfilesByAgent ?? {}))
+		if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
+			throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	const resolvedSnapshotsByAgent = resolvedProfilesByAgent
+		? Object.fromEntries(
+				Object.entries(resolvedProfilesByAgent).map(([agentId, value]) => [
+					agentId,
+					createRuntimeConnectionConsumerSnapshotV1(
+						value.profile,
+						value.approval,
+					) ?? null,
+				]),
+			)
+		: undefined;
+	const resolvedInstallationRevisionsByAgent = resolvedProfilesByAgent
+		? Object.fromEntries(
+				Object.entries(resolvedProfilesByAgent).map(([agentId]) => [
+					agentId,
+					createRuntimeConnectionInstallationRevisionV1(
+						resolvedInstallationSuppliesByAgent?.[agentId],
+						resolvedSnapshotsByAgent?.[agentId] ?? null,
+					) ?? null,
+				]),
+			)
+		: undefined;
 	const databaseUrl = process.env.PLATFORM_DATABASE_URL;
 	try {
 		if (!databaseUrl) throw new Error();
@@ -375,11 +425,14 @@ async function createPrepared(signal: AbortSignal) {
 			policy: {
 				...workloadInput.policy,
 				connectionConsumerSnapshot,
-				...(connectionConsumerSnapshotsByAgent
-					? { connectionConsumerSnapshotsByAgent }
+				...(resolvedSnapshotsByAgent
+					? { connectionConsumerSnapshotsByAgent: resolvedSnapshotsByAgent }
 					: {}),
-				...(connectionInstallationRevisionsByAgent
-					? { connectionInstallationRevisionsByAgent }
+				...(resolvedInstallationRevisionsByAgent
+					? {
+							connectionInstallationRevisionsByAgent:
+								resolvedInstallationRevisionsByAgent,
+						}
 					: {}),
 				connectionInstallationRevision,
 			},
@@ -423,8 +476,8 @@ async function createPrepared(signal: AbortSignal) {
 			serviceToken,
 			connectionConsumerProfile: connectionConsumer?.profile,
 			connectionConsumerApproval: connectionConsumer?.approval,
-			...(connectionConsumerProfilesByAgent
-				? { connectionConsumerProfilesByAgent }
+			...(resolvedProfilesByAgent
+				? { connectionConsumerProfilesByAgent: resolvedProfilesByAgent }
 				: {}),
 		});
 	let installationStore:

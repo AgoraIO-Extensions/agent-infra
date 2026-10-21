@@ -94,14 +94,30 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	const { workload, signing, serviceToken } = options;
 	const connectionConsumerFor = (agentId: string) => {
 		const perAgent = options.connectionConsumerProfilesByAgent?.[agentId];
-		if (options.connectionConsumerProfilesByAgent && !perAgent)
+		const perAgentSnapshots =
+			workload.policy.connectionConsumerSnapshotsByAgent;
+		if (
+			(options.connectionConsumerProfilesByAgent || perAgentSnapshots) &&
+			!perAgent &&
+			(perAgentSnapshots === undefined ||
+				!Object.hasOwn(perAgentSnapshots, agentId))
+		)
 			throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
-		const profile = perAgent
-			? perAgent.profile
-			: options.connectionConsumerProfile;
-		const approval = perAgent
-			? perAgent.approval
-			: options.connectionConsumerApproval;
+		let profile = perAgent?.profile;
+		let approval = perAgent?.approval;
+		if (!perAgent && perAgentSnapshots) {
+			try {
+				const parsed = JSON.parse(perAgentSnapshots[agentId] ?? "null");
+				profile = parsed?.profile;
+				approval = parsed?.approval;
+			} catch {
+				throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+			}
+		}
+		if (!perAgent && !perAgentSnapshots) {
+			profile = options.connectionConsumerProfile;
+			approval = options.connectionConsumerApproval;
+		}
 		return approvedConnectionConsumerTarget(
 			profile,
 			approval,
@@ -138,7 +154,9 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	});
 	const connectionDeliveryConfigured =
 		workload.policy.connectionConsumerSnapshot !== undefined ||
-		workload.policy.connectionInstallationRevision !== undefined;
+		workload.policy.connectionInstallationRevision !== undefined ||
+		workload.policy.connectionConsumerSnapshotsByAgent !== undefined ||
+		workload.policy.connectionInstallationRevisionsByAgent !== undefined;
 	return async (input) => {
 		try {
 			const connectionConsumer = connectionConsumerFor(input.agentId);

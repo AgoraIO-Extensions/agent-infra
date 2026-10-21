@@ -524,6 +524,56 @@ it("rejects a per-Agent consumer map without a matching installation map", async
 	}
 });
 
+it("loads each Agent binding through the deployment Connection resolver", async () => {
+	const configurationPath = join(directory, "configuration.mjs");
+	const original = await readFile(configurationPath, "utf8");
+	const agentBProfile = {
+		...connectionConsumerProfile,
+		consumerId: "platform-worker-agent-b",
+		schemaVersion: 1 as const,
+	} as const;
+	const agentBApproval = {
+		...connectionConsumerApproval,
+		configFingerprint: connectionConsumerProfileFingerprintV1(agentBProfile),
+	};
+	try {
+		await writeFile(
+			configurationPath,
+			`${original}\nexport const resolveConnectionConsumerBindingsByAgent = async (signal) => { signal.throwIfAborted(); return ${JSON.stringify(
+				{
+					"agent-a": {
+						profile: connectionConsumerProfile,
+						approval: connectionConsumerApproval,
+						installationSupply: { ref: "installation-a", revision: "r1" },
+					},
+					"agent-b": {
+						profile: agentBProfile,
+						approval: agentBApproval,
+						installationSupply: { ref: "installation-b", revision: "r2" },
+					},
+				},
+			)}; };\n`,
+		);
+		const result = run();
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toMatchObject({
+			snapshot: null,
+			snapshots: {
+				"agent-a": expect.stringContaining('"consumerId":"platform-worker"'),
+				"agent-b": expect.stringContaining(
+					'"consumerId":"platform-worker-agent-b"',
+				),
+			},
+			installations: {
+				"agent-a": '["installation-a","r1"]',
+				"agent-b": '["installation-b","r2"]',
+			},
+		});
+	} finally {
+		await writeFile(configurationPath, original);
+	}
+});
+
 it("fails closed when native metadata is enabled without runtime auth", () => {
 	const result = run({
 		PLATFORM_WORKER_NATIVE_METADATA_GATEWAY_ENABLED: "true",
