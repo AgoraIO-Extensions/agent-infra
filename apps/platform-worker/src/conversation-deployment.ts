@@ -97,10 +97,17 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	const perAgentProfiles = options.connectionConsumerProfilesByAgent
 		? structuredClone(options.connectionConsumerProfilesByAgent)
 		: undefined;
+	if (!perAgentProfiles) {
+		approvedConnectionConsumerTarget(
+			staticProfile,
+			staticApproval,
+			options.requireConnectionConsumerProfile,
+		);
+	}
 	const connectionConsumerFor = (agentId: string) => {
 		const perAgent = perAgentProfiles?.[agentId];
 		const perAgentSnapshots =
-			workload.policy.connectionConsumerSnapshotsByAgent;
+			workload.policy?.connectionConsumerSnapshotsByAgent;
 		if (
 			(perAgentProfiles || perAgentSnapshots) &&
 			!perAgent &&
@@ -129,7 +136,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			options.requireConnectionConsumerProfile,
 		);
 	};
-	const auth = workload.policy.runtimeAuth;
+	const auth = workload.policy?.runtimeAuth;
 	try {
 		if (!auth) throw new Error();
 		validateWorkloadRuntimeAuthV1(auth);
