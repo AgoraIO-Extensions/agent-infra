@@ -14,10 +14,20 @@ import {
 	DialogTrigger,
 } from "@/components/ui/dialog";
 
-type ConfirmDialogProps = {
+type ConfirmDialogContent =
+	| {
+			// 写明后果。渲染为 <p>（DialogDescription），只放文字与行内元素。
+			description: React.ReactNode;
+			children?: undefined;
+	  }
+	| {
+			description?: undefined;
+			// 块级说明（如事实列表 <dl>）：渲染为 <div>，同样作为弹窗的可访问描述。
+			children: React.ReactNode;
+	  };
+
+type ConfirmDialogProps = ConfirmDialogContent & {
 	title: React.ReactNode;
-	// 写明后果。
-	description: React.ReactNode;
 	// 写明动作（如「撤销凭证」「停止 Agent」「确认撤回」），没有默认值。
 	confirmLabel: string;
 	onConfirm: () => void;
@@ -42,6 +52,7 @@ type ConfirmDialogProps = {
 function ConfirmDialog({
 	title,
 	description,
+	children,
 	confirmLabel,
 	onConfirm,
 	trigger,
@@ -85,7 +96,12 @@ function ConfirmDialog({
 							) : null}
 						</div>
 					) : null}
-					<DialogDescription>{description}</DialogDescription>
+					{description === undefined ? (
+						// <p> 不能包含 dl 等块级元素（#3075），块级说明改用 div 承载。
+						<DialogDescription render={<div />}>{children}</DialogDescription>
+					) : (
+						<DialogDescription>{description}</DialogDescription>
+					)}
 				</DialogBody>
 				<DialogFooter>
 					{cancelLabel === null ? null : (

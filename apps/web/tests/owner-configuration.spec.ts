@@ -525,6 +525,34 @@ async function height(locator: Locator) {
 	return (await locator.boundingBox())?.height ?? 0;
 }
 
+/**
+ * #3075：绑定确认弹窗显示 Agent、文件范围、脚本、生效条件四项事实，事实列表不是 <p> 的后代。
+ * CI 的生产构建不打 React DOM 嵌套告警，所以这里直接断言结构。
+ */
+async function expectBindingFacts(dialog: Locator) {
+	const facts = dialog.locator("dl.skill-binding-facts");
+	await expect(facts).toBeVisible();
+	await expect(facts.locator("dt")).toHaveText([
+		"Agent",
+		"文件范围",
+		"脚本",
+		"生效条件",
+	]);
+	await expect(facts.locator("dd")).toHaveText([
+		AgentProjectionV2Schema.parse(pilotFakeScenariosV2.starting.response.body)
+			.name,
+		"不额外授予文件或网络权限",
+		"禁用",
+		"同步完成且装配确认",
+	]);
+	await expect(dialog.locator("p dl, p dt, p dd")).toHaveCount(0);
+	expect(await facts.evaluate((element) => element.closest("p") === null)).toBe(
+		true,
+	);
+	// 事实列表仍是弹窗的可访问描述。
+	await expect(dialog).toHaveAccessibleDescription(/同步完成且装配确认/);
+}
+
 /** 在窗口上放一个探针并记录之后的文档请求：整页刷新会丢掉探针并发出文档请求。 */
 async function markSinglePageNavigation(page: Page) {
 	await page.evaluate(() => {
@@ -1255,6 +1283,7 @@ test("an Owner lists, binds and unbinds Skill versions under the server's Agent 
 		await region.getByRole("button", { name: "绑定固定版本" }).click();
 		const dialog = page.getByRole("dialog", { name: "确认绑定固定版本" });
 		await expect(dialog).toContainText(label);
+		await expectBindingFacts(dialog);
 		// #3037 X-07：Skill 确认弹窗使用设计 .skill-dialog 外观与文字「关闭」。
 		await expectSkillDialog(
 			page,
@@ -1572,10 +1601,9 @@ test("Owner configuration and the Agent's Skill page have no overflow, console e
 		.getByLabel("固定版本", { exact: true })
 		.selectOption("code-review-v1");
 	await region.getByRole("button", { name: "绑定固定版本" }).click();
-	await page
-		.getByRole("dialog", { name: "确认绑定固定版本" })
-		.getByRole("button", { name: "确认绑定" })
-		.click();
+	const bindDialog = page.getByRole("dialog", { name: "确认绑定固定版本" });
+	await expectBindingFacts(bindDialog);
+	await bindDialog.getByRole("button", { name: "确认绑定" }).click();
 	await expect(
 		region.getByRole("heading", { level: 2, name: "code-review v1.0.0" }),
 	).toBeFocused();
