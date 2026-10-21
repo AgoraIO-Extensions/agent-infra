@@ -10,6 +10,8 @@ import type {
 import {
 	runtimeConnectionConsumerControlPodV1,
 	runtimeConnectionConsumerProjectionV1,
+	runtimeConnectionConsumerSnapshotForAgentV1,
+	runtimeConnectionInstallationRevisionForAgentV1,
 } from "./connection-consumer-projection.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import type { KubernetesWorkloadPolicyV1 } from "./kubernetes-runtime-adapter.js";
@@ -53,15 +55,24 @@ export function createKubernetesPodValidationV1(dependencies: {
 		)
 			throw new WorkloadKubernetesError("policy");
 	}
-	const connection = runtimeConnectionConsumerProjectionV1(
-		dependencies.connectionConsumerControl
-			? undefined
-			: policy.connectionConsumerSnapshot,
-		dependencies.connectionConsumerControl
-			? undefined
-			: policy.connectionInstallationRevision,
-		dependencies.standardTemplateBinding,
-	);
+	const connectionFor = (agentId: string) =>
+		runtimeConnectionConsumerProjectionV1(
+			dependencies.connectionConsumerControl
+				? undefined
+				: runtimeConnectionConsumerSnapshotForAgentV1(
+						policy.connectionConsumerSnapshot,
+						policy.connectionConsumerSnapshotsByAgent,
+						agentId,
+					),
+			dependencies.connectionConsumerControl
+				? undefined
+				: runtimeConnectionInstallationRevisionForAgentV1(
+						policy.connectionInstallationRevision,
+						policy.connectionInstallationRevisionsByAgent,
+						agentId,
+					),
+			dependencies.standardTemplateBinding,
+		);
 	function hasSafePodMetadata(
 		value: AgentWorkloadDesiredV1,
 		metadataInput: V1Pod["metadata"],
@@ -72,6 +83,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 					.metadata
 			: metadataInput;
 		const name = workloadResourceNameV1(value.agentId);
+		const connection = connectionFor(value.agentId);
 		const expectedLabels: Record<string, string> = {
 			[ownerLabel]: name,
 			[revisionLabel]: String(value.workloadRevision),
@@ -444,6 +456,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 			: specInput;
 		if (hasUnsafePodSpec(pod, expectedIdentity)) return true;
 		const container = pod?.containers.find((entry) => entry.name === "agent");
+		const connection = connectionFor(value.agentId);
 		const probe = container?.readinessProbe;
 		const ports = container?.ports?.map((port) => ({
 			...port,

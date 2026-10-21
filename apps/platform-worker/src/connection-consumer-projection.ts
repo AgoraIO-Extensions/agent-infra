@@ -24,6 +24,31 @@ export const runtimeConnectionAcpMcpBridgeEnvironment =
 export const runtimeConnectionPiMcpBridgeEnvironment =
 	"AGENT_INFRA_RUNTIME_PI_MCP_BRIDGE";
 
+/** Per-Agent approved snapshots. A present map is authoritative and missing IDs fail closed. */
+export type RuntimeConnectionConsumerSnapshotsByAgentV1 = Readonly<
+	Record<string, string | null>
+>;
+
+export function runtimeConnectionConsumerSnapshotForAgentV1(
+	snapshot: string | null | undefined,
+	byAgent: RuntimeConnectionConsumerSnapshotsByAgentV1 | undefined,
+	agentId: string,
+): string | null | undefined {
+	if (byAgent === undefined) return snapshot;
+	if (!Object.hasOwn(byAgent, agentId)) return null;
+	return byAgent[agentId] ?? null;
+}
+
+export function runtimeConnectionInstallationRevisionForAgentV1(
+	revision: string | null | undefined,
+	byAgent: Readonly<Record<string, string | null>> | undefined,
+	agentId: string,
+): string | null | undefined {
+	if (byAgent === undefined) return revision;
+	if (!Object.hasOwn(byAgent, agentId)) return null;
+	return byAgent[agentId] ?? null;
+}
+
 export function isRuntimeConnectionEnvironmentV1(name: string): boolean {
 	return [
 		runtimeConnectionConsumerFileEnvironment,

@@ -86,14 +86,22 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	readonly serviceToken: string;
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerApproval?: unknown;
+	readonly connectionConsumerProfilesByAgent?: Readonly<
+		Record<string, { readonly profile: unknown; readonly approval: unknown }>
+	>;
 	readonly requireConnectionConsumerProfile?: boolean;
 }): ConversationRuntimeOptionsV2["resolveRuntimeHost"] {
 	const { workload, signing, serviceToken } = options;
-	const connectionConsumer = approvedConnectionConsumerTarget(
-		options.connectionConsumerProfile,
-		options.connectionConsumerApproval,
-		options.requireConnectionConsumerProfile,
-	);
+	const connectionConsumerFor = (agentId: string) => {
+		const perAgent = options.connectionConsumerProfilesByAgent?.[agentId];
+		if (options.connectionConsumerProfilesByAgent && !perAgent)
+			throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+		return approvedConnectionConsumerTarget(
+			perAgent?.profile ?? options.connectionConsumerProfile,
+			perAgent?.approval ?? options.connectionConsumerApproval,
+			options.requireConnectionConsumerProfile,
+		);
+	};
 	const auth = workload.policy.runtimeAuth;
 	try {
 		if (!auth) throw new Error();
@@ -127,6 +135,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 		workload.policy.connectionInstallationRevision !== undefined;
 	return async (input) => {
 		try {
+			const connectionConsumer = connectionConsumerFor(input.agentId);
 			input.signal.throwIfAborted();
 			const state = input.workload;
 			const controlSource = input.sandboxResource?.controlSource;

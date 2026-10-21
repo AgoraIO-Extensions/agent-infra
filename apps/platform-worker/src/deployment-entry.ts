@@ -55,7 +55,13 @@ type DeploymentConfiguration = {
 	readonly wecom: unknown;
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerApproval?: unknown;
+	/** Deployment-owned approved profile per Agent. Missing Agent IDs fail closed. */
+	readonly connectionConsumerProfilesByAgent?: Record<
+		string,
+		{ readonly profile: unknown; readonly approval: unknown }
+	>;
 	readonly connectionInstallationSupply?: unknown;
+	readonly connectionInstallationSuppliesByAgent?: Record<string, unknown>;
 	readonly connectionInstallation?: {
 		readonly configuration: NonNullable<
 			ConversationRuntimeOptionsV2["connectionInstallation"]
@@ -125,7 +131,9 @@ const {
 	wecom,
 	connectionConsumerProfile,
 	connectionConsumerApproval,
+	connectionConsumerProfilesByAgent,
 	connectionInstallationSupply,
+	connectionInstallationSuppliesByAgent,
 	connectionInstallation: configuredConnectionInstallation,
 	createSkillMaterializer,
 	skillMaterialization,
@@ -264,6 +272,23 @@ const connectionConsumerSnapshot = createRuntimeConnectionConsumerSnapshotV1(
 	connectionConsumerProfile,
 	connectionConsumerApproval,
 );
+const connectionConsumerSnapshotsByAgent = connectionConsumerProfilesByAgent
+	? Object.fromEntries(
+			Object.entries(connectionConsumerProfilesByAgent).map(
+				([agentId, value]) => {
+					if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
+						throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+					return [
+						agentId,
+						createRuntimeConnectionConsumerSnapshotV1(
+							value.profile,
+							value.approval,
+						) ?? null,
+					];
+				},
+			),
+		)
+	: undefined;
 if (Object.hasOwn(workloadInput.policy, "connectionConsumerSnapshot"))
 	throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 if (Object.hasOwn(workloadInput.policy, "connectionInstallationRevision"))
@@ -273,6 +298,24 @@ const connectionInstallationRevision =
 		connectionInstallationSupply,
 		connectionConsumerSnapshot,
 	);
+const connectionInstallationRevisionsByAgent =
+	connectionInstallationSuppliesByAgent
+		? Object.fromEntries(
+				Object.entries(connectionInstallationSuppliesByAgent).map(
+					([agentId, supply]) => {
+						if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
+							throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
+						return [
+							agentId,
+							createRuntimeConnectionInstallationRevisionV1(
+								supply,
+								connectionConsumerSnapshotsByAgent?.[agentId] ?? null,
+							) ?? null,
+						];
+					},
+				),
+			)
+		: undefined;
 const connectionInstallation = resolveConnectionInstallation(
 	configuredConnectionInstallation,
 );
@@ -325,6 +368,12 @@ async function createPrepared(signal: AbortSignal) {
 			policy: {
 				...workloadInput.policy,
 				connectionConsumerSnapshot,
+				...(connectionConsumerSnapshotsByAgent
+					? { connectionConsumerSnapshotsByAgent }
+					: {}),
+				...(connectionInstallationRevisionsByAgent
+					? { connectionInstallationRevisionsByAgent }
+					: {}),
 				connectionInstallationRevision,
 			},
 			databaseUrl,
@@ -367,6 +416,9 @@ async function createPrepared(signal: AbortSignal) {
 			serviceToken,
 			connectionConsumerProfile: connectionConsumer?.profile,
 			connectionConsumerApproval: connectionConsumer?.approval,
+			...(connectionConsumerProfilesByAgent
+				? { connectionConsumerProfilesByAgent }
+				: {}),
 		});
 	let installationStore:
 		| import("@agent-infra/platform-store").PostgresConnectionInstallationAuthorizationTransactionV1
