@@ -2028,7 +2028,7 @@ for (const viewport of [
 			.locator(".chat-context-body")
 			.getByRole("link", { name: "打开 Connection" });
 		await expect(open).toBeVisible();
-		// 两个视口一致：DESIGN.md 新操作至少 44px，不沿用导出稿桌面的 40px。
+		// 两个视口一致：DESIGN.md 新操作至少 44px；导出稿已按 #3107 回写。
 		await expect(open).toHaveCSS("min-height", "44px");
 		expect((await open.boundingBox())?.height).toBeGreaterThanOrEqual(44);
 		expect(

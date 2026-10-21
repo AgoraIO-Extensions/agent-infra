@@ -1451,7 +1451,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								required
 								value={description}
 							/>
-							{/* 文案受 design-tokens.spec.ts 的帮助文字断言锁定，按 web-ui.md「终验待回写设计稿」W-07 保留。 */}
+							{/* 文案受 design-tokens.spec.ts 的帮助文字断言锁定，与导出稿一致（web-ui.md「已回写导出设计的结论」W-07）。 */}
 							<span className="field-help">不填写模型内部思考或外部凭证。</span>
 							<FieldError
 								id={errorId("description")}

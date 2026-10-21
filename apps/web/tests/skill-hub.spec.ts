@@ -617,9 +617,8 @@ test.describe("Skill directory", () => {
 		await expect(page.getByText("没有匹配的 Skill")).toBeVisible();
 		await expect(page.getByText("换个关键词，或清除筛选。")).toBeVisible();
 		// #3037 X-13：图标与文字一行、操作一行，两行均分，操作不再额外下移 14px。
-		// 导出稿 skill-empty 把图标作为行内元素，基线下多出约 6.8px（图标→标题 17.8px），
-		// 应用沿 .empty svg 的 11px，不复制该间隙；因此各项比导出稿的 35.5 / 81.3 / 106.0 / 140.5
-		// 分别差 +1.7 / −5.1 / −5.1 / −1.7px（web-ui.md「终验待回写设计稿」X-13）。
+		// 图标下方沿 .empty svg 的 11px，不作为行内元素多出基线间隙；#3107 已按此回写导出稿 skillEmpty，
+		// 各行与导出稿实测一致（web-ui.md「已回写导出设计的结论」X-13）。
 		await expectEmptyRows(page.locator('#main-content [data-slot="empty"]'), {
 			icon: 37.2,
 			title: 76.2,
