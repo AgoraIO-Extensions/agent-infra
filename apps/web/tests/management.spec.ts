@@ -2097,7 +2097,7 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	);
 	await expect(page.locator("main")).not.toContainText("请先确认连接影响");
 	await expect(bot.getByRole("alert")).toHaveCount(0);
-	// W-24 / W-25（待回写）：面板只有底部一个「关闭」；说明不外露 setup session 术语。
+	// W-24 / W-25（已回写导出稿）：面板只有底部一个「关闭」；说明不外露 setup session 术语。
 	const qrPanel = bot.locator("#wecom-bot-qr-panel");
 	await expect(
 		qrPanel.getByRole("button", { name: "关闭", exact: true }),
@@ -5264,7 +5264,7 @@ test("Owner configuration channels, WeCom fields, scope grid and footer status f
 			),
 		).toBeLessThanOrEqual(1);
 	}
-	// W-27：回调 URL 块保留操作提示（待回写）。
+	// W-27：回调 URL 块保留操作提示（已回写导出稿）。
 	await expect(app.locator(".wecom-channel-callback strong")).toHaveText(
 		"请在企微后台配置回调 URL",
 	);
@@ -5594,7 +5594,7 @@ test.describe("Agent detail design alignment", () => {
 			const openBox = await open.boundingBox();
 			const copyBox = await copy.boundingBox();
 			if (!openBox || !copyBox) throw new Error("Expected notice geometry");
-			// D-01（#3052）：与对话页 Z-11 一致为 44px 触达高度，不沿用导出稿桌面的 40px。
+			// D-01（#3052）：与对话页 Z-11 一致为 44px 触达高度；导出稿已按 #3107 回写。
 			await expect(open).toHaveCSS("min-height", "44px");
 			expect(openBox.height).toBeGreaterThanOrEqual(44);
 			expect(openBox.x).toBeGreaterThanOrEqual(copyBox.x + copyBox.width);
@@ -6195,7 +6195,7 @@ test.describe("final acceptance Y shell and directory", () => {
 		await trigger.click();
 		const dialog = page.getByRole("dialog", { name: "主导航" });
 		await expect(dialog).toBeVisible();
-		// Y-03：保留「关闭导航」（待回写设计稿），点击后焦点回到「打开导航」而不是 body。
+		// Y-03：保留「关闭导航」（已回写导出稿），点击后焦点回到「打开导航」而不是 body。
 		const close = dialog.getByRole("button", { name: "关闭导航" });
 		const closeBox = await close.boundingBox();
 		expect([closeBox?.width, closeBox?.height]).toEqual([44, 44]);

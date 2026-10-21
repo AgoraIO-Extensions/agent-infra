@@ -13,7 +13,7 @@ import { directorySearchResponse } from "../src/features/directory-test-fixtures
 import { pendingApplication } from "../src/features/my-agents/test-fixtures";
 import type { DeploymentConfigurationProjectionV2 } from "../src/pilot/generated-v2/types.gen";
 
-// 设计 index.html（SHA-256 6dd1cb8e…3c13）:root 的原始写法；颜色由浏览器解析后与实现比较。
+// 设计 index.html（SHA-256 aea726f7…7b27）:root 的原始写法；颜色由浏览器解析后与实现比较。
 const designColors = {
 	"--bg": "oklch(0.975 0.008 95)",
 	"--surface": "oklch(0.995 0.005 90)",
@@ -628,6 +628,7 @@ test("primary actions, steppers, directory help and table heads use the expected
 	expect(report.helpTexts.map((item) => item.text)).toEqual(
 		expect.arrayContaining([
 			"已选 0 项 · Enter 添加",
+			// W-07：「使用场景」帮助文字，main 与导出稿（#3107 回写）一致。
 			"不填写模型内部思考或外部凭证。",
 		]),
 	);
