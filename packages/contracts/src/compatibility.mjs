@@ -3000,6 +3000,33 @@ function isDirectorySearchV2OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #3058 把既有的运维观测查询 GET /api/v1/ops/observability 纳入浏览器 V1 契约；
+// 新增路径与 strict 投影用写死的 SHA-256 固定，删除新增后须与基线逐字节一致。
+function isObservabilityStatusV1OpenApiAddition(previous, current) {
+	const path = "/api/v1/ops/observability";
+	const schemas = ["ObservabilityStatusProjectionV1"];
+	if (
+		previous.paths?.[path] !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: { [path]: current.paths?.[path] },
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"2df4d5c0d36b0fb2a9b7cdc8b70b1291167dedc30bf4328b723916cf95ced700"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #2911 新增带扫码可用性的企微机器人状态 V2 入口；V1 状态响应、配置会话响应和全部既有 schema 保持不变。
 // 新增路径与投影用写死的 SHA-256 固定，任何改动都会使门禁失败。
 function isWecomBotQrAvailabilityOpenApiAddition(previous, current) {
@@ -5529,6 +5556,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isWecomQrAuthorizationOpenApiAddition(previous, current) &&
 			!isWecomBotQrAvailabilityOpenApiAddition(previous, current) &&
 			!isDirectorySearchV2OpenApiAddition(previous, current) &&
+			!isObservabilityStatusV1OpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
 			!isScopedAuditDisplayNameV2OpenApiAddition(previous, current) &&

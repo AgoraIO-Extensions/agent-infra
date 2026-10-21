@@ -261,6 +261,47 @@ describe("standard contract artifacts", () => {
 		expect(artifacts.pilotBrowserOpenapiV2.paths).not.toHaveProperty(
 			"/api/v2/agents/{agentId}/wecom-bot",
 		);
+		// #3058：运维观测查询登记在 V1 浏览器产物，只接受平台会话；
+		// 声明 strict 投影与稳定错误，不声明 500，部署未提供该查询时的 404 没有协议正文。
+		const observability =
+			artifacts.pilotBrowserOpenapi.paths["/api/v1/ops/observability"].get;
+		expect(observability.operationId).toBe("getObservabilityStatus");
+		expect(observability.security).toEqual([{ PlatformSession: [] }]);
+		expect(observability).not.toHaveProperty("parameters");
+		expect(Object.keys(observability.responses)).toEqual([
+			"200",
+			"401",
+			"403",
+			"404",
+			"503",
+		]);
+		expect(
+			observability.responses[200].content["application/json"].schema,
+		).toEqual({ $ref: "#/components/schemas/ObservabilityStatusProjectionV1" });
+		for (const status of ["401", "403", "503"])
+			expect(
+				observability.responses[status].content["application/json"].schema,
+			).toEqual({ $ref: "#/components/schemas/PilotProtocolErrorV1" });
+		expect(observability.responses[404]).not.toHaveProperty("content");
+		expect(
+			artifacts.pilotBrowserOpenapi.components.schemas
+				.ObservabilityStatusProjectionV1,
+		).toMatchObject({
+			additionalProperties: false,
+			required: [
+				"schemaVersion",
+				"service",
+				"enabled",
+				"state",
+				"captureFailures",
+				"exportFailures",
+				"droppedLogs",
+				"invalidRecords",
+			],
+		});
+		expect(artifacts.pilotBrowserOpenapiV2.paths).not.toHaveProperty(
+			"/api/v1/ops/observability",
+		);
 		expect(artifacts.pilotBrowserOpenapi.paths).toHaveProperty(
 			"/api/v1/conversations/{conversationId}/messages",
 		);
