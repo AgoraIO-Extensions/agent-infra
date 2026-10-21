@@ -48,8 +48,11 @@ const images = [
 		key: "web",
 		name: "web",
 		dockerfile: "apps/web/Dockerfile",
-		runOptions: ["--tmpfs", "/tmp:size=16m,mode=1777"],
-		command: ["-t"],
+		runOptions: [
+			"--tmpfs", "/tmp:size=16m,mode=1777",
+			"--add-host", "agent-infra-api:127.0.0.1",
+		],
+		command: ["nginx", "-t"],
 	},
 	{
 		key: "platformApi",
