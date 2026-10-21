@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -13,6 +14,19 @@ export async function probeChromiumLaunchV1() {
 		throw new Error("RUNTIME_BROWSER_PROBE_NON_ROOT_REQUIRED");
 	const installation = await verifyChromiumInstallationV1();
 	const root = await mkdtemp(join(tmpdir(), "agent-infra-browser-probe-"));
+	const html =
+		"<title>Browser supply probe</title><button onclick=\"this.textContent='Clicked';localStorage.setItem('probe-state','retained')\">Continue</button><output aria-label=\"Profile state\"></output><script>document.querySelector('output').textContent=localStorage.getItem('probe-state')||'empty'</script>";
+	const server = createServer((_request, response) => {
+		response.writeHead(200, { "content-type": "text/html" });
+		response.end(html);
+	});
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", resolve);
+	});
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("server");
+	const url = `http://127.0.0.1:${address.port}/`;
 	const binding = {
 		agentId: "controlled-probe-agent",
 		conversationId: "controlled-probe-conversation",
@@ -30,7 +44,7 @@ export async function probeChromiumLaunchV1() {
 		status: "available",
 		operations: ["observe", "interact"],
 		policy: {
-			allowedOrigins: ["https://browser-probe.invalid/"],
+			allowedOrigins: [url],
 			maxContexts: 1,
 			maxTabs: 1,
 			maxPages: 1,
@@ -64,14 +78,10 @@ export async function probeChromiumLaunchV1() {
 			operations: ["observe", "interact"],
 		},
 	};
-	const url = "https://browser-probe.invalid/";
-	const html =
-		"<title>Browser supply probe</title><button onclick=\"this.textContent='Clicked';localStorage.setItem('probe-state','retained')\">Continue</button><output aria-label=\"Profile state\"></output><script>document.querySelector('output').textContent=localStorage.getItem('probe-state')||'empty'</script>";
 	const session = createChromiumBrowserSessionControllerV1({
 		sandboxRoot: root,
 		binding,
 		capability,
-		controlledFixture: { url, body: html },
 	});
 	try {
 		const started = await session.start();
@@ -101,7 +111,8 @@ export async function probeChromiumLaunchV1() {
 			attemptRef: "probe-attempt",
 			idempotencyKey: "probe-click",
 		});
-		if (action.status !== "completed") throw new Error("click");
+		if (action.status !== "completed")
+			throw new Error(`click:${action.status}:${action.reasonCode ?? ""}`);
 		const clicked = await session.observe(page);
 		if (!clicked.text.includes("Clicked")) throw new Error("clicked-text");
 		await session.close();
@@ -142,6 +153,7 @@ export async function probeChromiumLaunchV1() {
 		try {
 			await session.close();
 		} finally {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
 			await rm(root, { recursive: true, force: true });
 		}
 	}
