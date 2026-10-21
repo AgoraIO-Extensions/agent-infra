@@ -5,7 +5,7 @@ RUN apk add --no-cache --upgrade 'libcrypto3=3.5.9-r0' 'libssl3=3.5.9-r0' \
 WORKDIR /app
 
 COPY . .
-RUN pnpm install --frozen-lockfile --store-dir /pnpm-store
+RUN pnpm install --filter @agent-infra/enterprise-directory-sync... --frozen-lockfile --store-dir /pnpm-store --child-concurrency=1 --network-concurrency=8
 
 ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/enterprise-directory-sync... build

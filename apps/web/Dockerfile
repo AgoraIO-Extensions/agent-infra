@@ -7,7 +7,7 @@ ENV VITE_PLATFORM_LOGIN_URL=$VITE_PLATFORM_LOGIN_URL
 ENV VITE_PLATFORM_LOGOUT_URL=$VITE_PLATFORM_LOGOUT_URL
 
 COPY . .
-RUN pnpm install --frozen-lockfile --store-dir /pnpm-store
+RUN pnpm install --filter @agent-infra/web... --frozen-lockfile --store-dir /pnpm-store --child-concurrency=1 --network-concurrency=8
 
 ENV NODE_ENV=production
 RUN pnpm --filter @agent-infra/web... build
