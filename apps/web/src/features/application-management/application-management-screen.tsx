@@ -557,14 +557,23 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 										key={scope}
 										className="flex min-h-11 items-center gap-2 rounded-[10px] border px-3 py-2 text-sm"
 									>
+										{/* 签发个人凭证区也有同名权限复选框：名称为「{权限}：{应用名}」（E3-16，同 C2-19），
+										    取自下方隐藏文本，以可见标签文字开头；可见文字与点击标签切换不变。 */}
 										<Checkbox
 											id={checkboxId}
+											aria-labelledby={`${checkboxId}-name`}
 											checked={scopes.includes(scope)}
 											onCheckedChange={() => toggleScope(scope)}
 										/>
 										<Label htmlFor={checkboxId} variant="option">
 											{personalApiCredentialScopeLabels[scope]}
 										</Label>
+										<span id={`${checkboxId}-name`} hidden>
+											{withObjectName(
+												personalApiCredentialScopeLabels[scope],
+												application.name,
+											)}
+										</span>
 										<code className="ml-auto text-[11px] text-muted-foreground">
 											{scope}
 										</code>

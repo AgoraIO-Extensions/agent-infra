@@ -169,6 +169,23 @@ describe("ApplicationManagementScreen", () => {
 			screen.getByRole("group", { name: "权限范围：应用凭证" }),
 		).toBeTruthy();
 		expect(screen.getByLabelText("过期时间（可选）：应用凭证")).toBeTruthy();
+		// E3-16：权限复选框名称为「{权限}：{应用名}」，与签发个人凭证区的同名复选框区分；
+		// 可见标签与点击标签切换不变。
+		const group = screen.getByRole("group", { name: "权限范围：应用凭证" });
+		expect(within(group).getAllByRole("checkbox")).toHaveLength(4);
+		for (const label of [
+			"读取 Agent",
+			"使用 Agent",
+			"管理 Agent",
+			"创建 Agent",
+		]) {
+			const checkbox = within(group).getByRole("checkbox", {
+				name: `${label}：Build service`,
+			});
+			const before = checkbox.getAttribute("aria-checked");
+			fireEvent.click(within(group).getByText(label, { selector: "label" }));
+			expect(checkbox.getAttribute("aria-checked")).not.toBe(before);
+		}
 	});
 
 	it("registers an application using the current-session owner", async () => {

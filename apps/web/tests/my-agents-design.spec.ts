@@ -851,6 +851,21 @@ test("application detail puts actions in the heading, shows three progress rows 
 	await expect(facts).toContainText("user.two@example.test");
 	await expect(facts).toContainText("研发 / 平台工程");
 	await expect(page.locator("main")).not.toContainText(/user-2\b|org-platform/);
+	// E3-03：「资源预设」卡按设计 .application-resource p{margin:12px 0 0}，末段到卡底只有
+	// 20px 内边距 + 1px 边框；`.form-aside p` 的 12px 下外边距不再叠加。
+	const resource = page.locator(
+		".application-detail-aside .application-resource",
+	);
+	await expect(resource.locator("h2")).toHaveText("资源预设");
+	const resourceParagraphs = resource.locator("p");
+	await expect(resourceParagraphs).toHaveCount(3);
+	for (const paragraph of await resourceParagraphs.all())
+		await expect(paragraph).toHaveCSS("margin", "12px 0px 0px");
+	const [lastParagraph, resourceBox] = [
+		await rect(resourceParagraphs.last()),
+		await rect(resource),
+	];
+	expect(resourceBox.bottom - lastParagraph.bottom).toBeCloseTo(21, 1);
 	await noHorizontalOverflow(page);
 });
 
@@ -894,6 +909,15 @@ test("rejected application detail offers the resubmit action with an icon in the
 		"需要修改后重提",
 	);
 	await expect(reason).toContainText("范围过大");
+	// E3-04：全站 Alert danger 默认图标为设计 icon('alert') 三角形，尺寸与颜色不变（17px、--danger）。
+	const icon = reason.locator(":scope > svg");
+	await expect(icon).toHaveClass(/lucide-triangle-alert/);
+	await expect(icon).toHaveCSS("width", "17px");
+	await expect(icon).toHaveCSS("height", "17px");
+	await expect(icon).toHaveCSS(
+		"color",
+		await resolved(page, "color", "var(--danger)"),
+	);
 });
 
 // #3152 AC-1：创建失败提示与驳回原因同是审批进度卡片内的提示，上边框距最后一个进度步骤 18px

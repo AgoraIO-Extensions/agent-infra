@@ -477,6 +477,22 @@ async function designViewport(page: Page, mobile: boolean) {
 	).toBe(true);
 }
 
+/**
+ * E3-07：设计 .field-error margin-top 6px，加上 .field 的 7px 间距，文本框底到错误文字 13px，
+ * 与公共 FieldError（审批驳回弹窗）一致。
+ */
+async function expectFieldErrorBelow(control: Locator, error: Locator) {
+	await expect(error).toHaveCSS("margin-top", "6px");
+	const [controlBox, errorBox] = await Promise.all([
+		control.boundingBox(),
+		error.boundingBox(),
+	]);
+	if (!controlBox || !errorBox) throw new Error("Missing field error geometry");
+	expect(
+		Math.abs(errorBox.y - (controlBox.y + controlBox.height) - 13),
+	).toBeLessThanOrEqual(0.5);
+}
+
 test("My Skill puts 已安装 with its Agent binding entry before 我创建的 (V-15, V-16, V-17)", async ({
 	page,
 }, info) => {
@@ -537,12 +553,13 @@ test("My Skill puts 已安装 with its Agent binding entry before 我创建的 (
 		owned.boundingBox(),
 	]);
 	expect((ownedBox?.y ?? 0) - (installedBox?.y ?? 0)).toBeGreaterThan(0);
-	// 设计 .section-head.section：「我创建的」上距 32px。
+	// 设计 .section-head.section：「我创建的」上距 32px；≤767px 为 26px（E3-11，设计
+	// `.section{margin-top:26px}`；原断言两视口都按 32px）。
 	expect(
 		Math.round(
 			(ownedBox?.y ?? 0) - (installedBox?.y ?? 0) - (installedBox?.height ?? 0),
 		),
-	).toBe(32);
+	).toBe(mobile ? 26 : 32);
 	// 已安装行只有 ghost「查看」与「移出我的库」，行标题为 h3。
 	const row = installedSection.locator("article.skill-row");
 	await expect(row.getByRole("link")).toHaveText(["查看"]);
@@ -719,6 +736,7 @@ test("Create and publish edits project content, publishes fixed versions and rep
 	await expect(main.getByRole("alert")).toHaveText(
 		"请填写 SKILL.md，说明用途和使用步骤。",
 	);
+	await expectFieldErrorBelow(skillMd, main.getByRole("alert"));
 	expect(control.writes).toHaveLength(0);
 
 	await skillMd.fill("# release-notes\n汇总本周发布说明。\n");
@@ -900,6 +918,37 @@ test("Create and publish follows the design's two columns with scope cards on th
 	await expect(
 		main.getByRole("button", { name: "添加文本文件" }).locator("svg"),
 	).toHaveClass(/lucide-plus\b/);
+	const gapBetween = async (above: Locator, below: Locator) => {
+		const [top, bottom] = await Promise.all([
+			above.boundingBox(),
+			below.boundingBox(),
+		]);
+		if (!top || !bottom) throw new Error("Missing editor geometry");
+		return bottom.y - top.y - top.height;
+	};
+	// E3-12：h3「配套文件」14px / 600 / 1.5；「还没有配套文件」到「添加文本文件」只隔 grid 的 12px。
+	const filesHeading = main.getByRole("heading", {
+		level: 3,
+		name: "配套文件",
+	});
+	expect(
+		await computed(filesHeading, ["fontSize", "fontWeight", "lineHeight"]),
+	).toEqual({ fontSize: "14px", fontWeight: "600", lineHeight: "21px" });
+	expect(
+		await gapBetween(
+			main.getByText("还没有配套文件。可以添加脚本、参考资料或资源。", {
+				exact: true,
+			}),
+			main.getByRole("button", { name: "添加文本文件" }),
+		),
+	).toBeCloseTo(12, 0);
+	// E3-13：「共 N 个文件…」距上方文件输入框 5px（设计 .form-section > p）。
+	expect(
+		await gapBetween(
+			main.getByLabel("上传文件到 assets/"),
+			main.getByText(/^共 \d+ 个文件，/),
+		),
+	).toBeCloseTo(5, 0);
 	// 四张范围单选卡：两列（390 单列），圆角 10px、内边距 12px、最小高 60px，说明 11px。
 	const scope = aside.getByRole("radiogroup", { name: "发布范围" });
 	const cards = scope.locator(".skill-scope-option");
@@ -956,6 +1005,13 @@ test("Create and publish follows the design's two columns with scope cards on th
 	await expect(
 		aside.getByText("项目没有所属组织，不能选择组织共享。"),
 	).toBeVisible();
+	// E3-14：提示距最后一张范围卡 15px（设计 p.field-help.section-tight）。
+	expect(
+		await gapBetween(
+			cards.last(),
+			aside.getByText("项目没有所属组织，不能选择组织共享。"),
+		),
+	).toBeCloseTo(15, 0);
 	// 键盘：Tab 停在已选项，方向键切换范围；共享范围主按钮为「提交审核」。
 	const own = scope.getByRole("radio", { name: "仅自己" });
 	await own.focus();
@@ -970,6 +1026,14 @@ test("Create and publish follows the design's two columns with scope cards on th
 		"发布固定版本",
 	]);
 	await expect(aside.getByText("权限不会扩大")).toBeVisible();
+	// E3-11：右栏说明卡与操作区的分区上距桌面 32px，≤767px 按设计 .section 收为 26px。
+	for (const section of [
+		aside.locator(".skill-editor-section"),
+		aside.locator(".skill-editor-actions"),
+	]) {
+		await expect(section).toHaveCount(1);
+		await expect(section).toHaveCSS("margin-top", mobile ? "26px" : "32px");
+	}
 	// 同一页面没有同名控件：项目与导入的包名称分开命名。
 	await expect(main.getByLabel("包名称", { exact: true })).toHaveCount(1);
 	await expect(main.getByLabel("导入包名称", { exact: true })).toHaveCount(1);
@@ -1128,6 +1192,10 @@ test("Skill review lists pending versions, reviews them and re-reads the queue (
 	await dialog.getByRole("button", { name: "驳回" }).click();
 	await expect(dialog.getByRole("alert")).toHaveText("请填写驳回原因。");
 	await expect(dialog.getByLabel("审核说明 · 驳回时必填")).toBeFocused();
+	await expectFieldErrorBelow(
+		dialog.getByLabel("审核说明 · 驳回时必填"),
+		dialog.getByRole("alert"),
+	);
 	expect(control.writes).toHaveLength(0);
 	await dialog.getByLabel("审核说明 · 驳回时必填").fill("  缺少使用说明  ");
 	const queueReads = control.reads.filter(

@@ -518,6 +518,8 @@ const statusMatrix = [
 	["available", "updating", "更新中", "amber"],
 	["available", "unavailable", "暂时不可用", "gray"],
 	["stopped", null, "已停止", "gray"],
+	// E3-05：创建失败按设计为 red（与 Owner 配置页头、申请详情「失败」一致）。
+	["creation_failed", null, "创建失败", "red"],
 ] as const;
 
 test.describe("Agent directory design alignment", () => {
@@ -655,16 +657,18 @@ test.describe("Agent directory design alignment", () => {
 		);
 		await page.goto("/agents");
 		const cards = page.locator(".agent-list > li");
-		await expect(cards).toHaveCount(5);
+		await expect(cards).toHaveCount(statusMatrix.length);
 		const tones = {
 			green: await resolvedColor(page, "var(--success-ink)"),
 			amber: await resolvedColor(page, "var(--warning-ink)"),
 			gray: await resolvedColor(page, "var(--muted-foreground)"),
+			red: await resolvedColor(page, "var(--danger-ink)"),
 		};
 		for (const [index, [, , label, tone]] of statusMatrix.entries()) {
 			const card = cards.nth(index);
 			const chips = card.locator('[data-slot="badge"][data-variant="chip"]');
 			await expect(chips).toHaveText([label]);
+			await expect(chips).toHaveAttribute("data-tone", tone);
 			await expect(chips).toHaveCSS("color", tones[tone]);
 			await expect(card.locator('[class*="bg-secondary"]')).toHaveCount(0);
 		}
@@ -712,6 +716,23 @@ test.describe("Agent directory design alignment", () => {
 					cardBox.x + cardBox.width + 1,
 				);
 			}
+		}
+		// E3-05：详情页状态行与「服务状态」行的 chip 与目录卡同一派生规则，创建失败为 red。
+		await cards
+			.last()
+			.getByRole("link", { name: "查看 状态 创建失败 详情" })
+			.click();
+		await expect(
+			page.getByRole("heading", { level: 1, name: "状态 创建失败" }),
+		).toBeVisible();
+		const detailChips = page.locator(
+			'main [data-slot="badge"][data-variant="chip"]',
+			{ hasText: /^创建失败$/ },
+		);
+		await expect(detailChips).toHaveCount(2);
+		for (const detailChip of await detailChips.all()) {
+			await expect(detailChip).toHaveAttribute("data-tone", "red");
+			await expect(detailChip).toHaveCSS("color", tones.red);
 		}
 		expect(api.unexpected).toEqual([]);
 	});

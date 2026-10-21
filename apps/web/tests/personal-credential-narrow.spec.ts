@@ -470,29 +470,73 @@ test("revocation is confirmed with the credential and its consequence before one
 	expect(revocations).toHaveLength(0);
 	await dialog.getByRole("button", { name: "取消" }).click();
 	await expect(dialog).not.toBeVisible();
-	// AC-2：取消与 Esc 关闭后焦点回到该行的凭证标识（finalFocus），不落到 body。
+	// E3-15：取消、Esc 或点击外部关闭后焦点回到「撤销：{凭证}」触发按钮（设计如此；原断言为
+	// 行凭证标识，只有确认撤销、触发按钮随后消失时才用行标识），不落到 body。
 	const rowLabel = rows.locator(`code[title="${initial.credentialId}"]`);
-	await expect(rowLabel).toBeFocused();
+	await expect(trigger).toBeFocused();
 	await trigger.click();
 	await expect(dialog).toBeVisible();
 	await page.keyboard.press("Escape");
 	await expect(dialog).not.toBeVisible();
-	await expect(rowLabel).toBeFocused();
+	await expect(trigger).toBeFocused();
 	await trigger.click();
 	await expect(dialog).toBeVisible();
 	await page.mouse.click(4, 4);
 	await expect(dialog).not.toBeVisible();
+	await expect(trigger).toBeFocused();
 	expect(revocations).toHaveLength(0);
 
 	await trigger.click();
 	await dialog.getByRole("button", { name: "撤销凭证", exact: true }).click();
 	await expect(dialog).not.toBeVisible();
 	await expect.poll(() => revocations).toEqual([initial.credentialId]);
+	// 确认撤销后触发按钮先禁用、随后消失：焦点落在该行凭证标识（D2-59）。
+	await expect(rowLabel).toBeFocused();
 	await expect
 		.poll(() => page.evaluate(() => document.activeElement === document.body))
 		.toBe(false);
 	await expectCleanPage(page, errors);
 	await capture(page, "credential-revoke-confirmed");
+});
+
+// E3-15：确认后撤销失败、触发按钮仍在时，焦点从行凭证标识交还「撤销：{凭证}」，不落到 body。
+test("a failed confirmed revocation returns focus to its revoke trigger", async ({
+	page,
+}) => {
+	await fixture(page);
+	const revocations: string[] = [];
+	await page.route(/\/api\/v2\/me\/api-credentials\/[^/]+$/, async (route) => {
+		const request = route.request();
+		if (request.method() !== "DELETE") return route.fallback();
+		revocations.push(request.url());
+		await route.fulfill({
+			status: 503,
+			json: {
+				schemaVersion: 1,
+				code: "DEPENDENCY_UNAVAILABLE",
+				message: "Controlled revoke failure",
+				retryable: true,
+				traceId: "trace-credential-revoke",
+			},
+		});
+	});
+	await page.goto("/my-settings/api-credentials");
+	const trigger = page
+		.getByRole("table", { name: "个人 API 凭证" })
+		.getByRole("button", {
+			name: `撤销：${initial.credentialId}`,
+			exact: true,
+		});
+	await trigger.click();
+	const dialog = page.getByRole("dialog", { name: "撤销这张 API 凭证？" });
+	await dialog.getByRole("button", { name: "撤销凭证", exact: true }).click();
+	await expect(dialog).not.toBeVisible();
+	await expect(
+		page.getByRole("alert").filter({ hasText: "API 凭证请求暂时不可用" }),
+	).toBeVisible();
+	await expect(trigger).toBeEnabled();
+	await expect(trigger).toBeFocused();
+	expect(revocations).toHaveLength(1);
 });
 
 // R-02：页头、notice 与 credential-table；窄屏按 X-07 转为行卡片。

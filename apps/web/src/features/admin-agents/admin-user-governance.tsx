@@ -151,11 +151,14 @@ export function AdminUserGovernance() {
 					}
 					title="禁用这名员工？"
 					subject={{
+						// 设计 .confirm-subject-detail：邮箱行 13px / 400 / muted，不继承姓名行的 650（D2-33、E3-06）。
 						name: (
-							<DirectoryRecords
-								targets={userId ? [{ kind: "user", userId }] : []}
-								empty="未选择员工"
-							/>
+							<div className="[&_small]:font-normal [&_small]:text-[13px]">
+								<DirectoryRecords
+									targets={userId ? [{ kind: "user", userId }] : []}
+									empty="未选择员工"
+								/>
+							</div>
 						),
 					}}
 					description="禁用后对方立即不能登录平台，也不能通过平台入口使用或管理 Agent；进行中的任务会收到取消请求。之后可以「解除禁用」恢复资格，已取消的任务不会恢复。"

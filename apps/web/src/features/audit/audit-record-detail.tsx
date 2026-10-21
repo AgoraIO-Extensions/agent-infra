@@ -117,7 +117,8 @@ function AuditPrincipalDetail({
 			) : (
 				auditPrincipalLabels[kind]
 			)}
-			<small className="block break-all font-mono text-muted-foreground text-xs">
+			{/* 设计 small.mono：ID 行 11px / 1.65，与列表「对象」列的 IdentifierText 相同（E3-09）。 */}
+			<small className="block break-all font-mono text-[11px] text-muted-foreground leading-[1.65]">
 				{id}
 			</small>
 		</>

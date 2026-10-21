@@ -65,10 +65,13 @@ describe("ApiCredentialsScreen", () => {
 		expect(onRevoke).not.toHaveBeenCalled();
 		fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		// E3-15：取消与 Escape 关闭后焦点回到「撤销：{凭证}」触发按钮。
+		await waitFor(() => expect(document.activeElement).toBe(trigger));
 		fireEvent.click(trigger);
 		dialog = await screen.findByRole("dialog");
 		fireEvent.keyDown(dialog, { key: "Escape" });
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		await waitFor(() => expect(document.activeElement).toBe(trigger));
 		expect(onRevoke).not.toHaveBeenCalled();
 		fireEvent.click(trigger);
 		dialog = await screen.findByRole("dialog");
@@ -81,6 +84,37 @@ describe("ApiCredentialsScreen", () => {
 				screen.getByText("credential-1", { selector: "code" }),
 			),
 		);
+	});
+
+	// E3-15：确认后撤销失败、触发按钮没有消失时，焦点从行标识交还「撤销：{凭证}」以便重试。
+	it("returns focus to the revoke trigger when a confirmed revocation fails", async () => {
+		let reject: (reason: unknown) => void = () => undefined;
+		const onRevoke = vi.fn<(credentialId: string) => Promise<unknown>>(
+			() =>
+				new Promise((_resolve, rejectRevoke) => {
+					reject = rejectRevoke;
+				}),
+		);
+		render(
+			<ApiCredentialsScreen
+				state={{ kind: "ready", credentials: [metadata] }}
+				onRevoke={onRevoke}
+			/>,
+		);
+		const trigger = screen.getByRole("button", {
+			name: "撤销：credential-1",
+		});
+		fireEvent.click(trigger);
+		const dialog = await screen.findByRole("dialog", {
+			name: "撤销这张 API 凭证？",
+		});
+		fireEvent.click(within(dialog).getByRole("button", { name: "撤销凭证" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		const label = screen.getByText("credential-1", { selector: "code" });
+		await waitFor(() => expect(document.activeElement).toBe(label));
+		await act(async () => reject(new Error("synthetic revoke failure")));
+		await waitFor(() => expect(document.activeElement).toBe(trigger));
+		expect(onRevoke).toHaveBeenCalledExactlyOnceWith("credential-1");
 	});
 
 	it("shows first-delivery material once and explains replay behavior", async () => {

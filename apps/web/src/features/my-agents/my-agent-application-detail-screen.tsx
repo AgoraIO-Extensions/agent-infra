@@ -411,7 +411,8 @@ export function MyAgentApplicationDetailScreen({
 							</Link>
 						</div>
 					</section>
-					<section className="form-aside">
+					{/* 设计 .application-resource：段落只留 12px 上外边距，末段不再多出下外边距（E3-03）。 */}
+					<section className="form-aside application-resource">
 						<h2>资源预设</h2>
 						<p>{application.resourceProfile.displayName}</p>
 						<p>

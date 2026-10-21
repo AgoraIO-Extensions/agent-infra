@@ -3440,6 +3440,10 @@ body {
 	font-size: 12px;
 	line-height: 1.7;
 }
+/* 设计 .skill-summary .facts margin 15px 0 12px：「版本与权限」事实列表到说明 12px（E3-10）。 */
+.skill-summary .skill-facts + .skill-form-hint {
+	margin-top: 12px;
+}
 .skill-summary-actions,
 .skill-section-block {
 	margin-top: 32px;
@@ -3564,10 +3568,16 @@ body {
 	gap: 12px;
 	margin-top: 20px;
 }
+/* 设计 .skill-content-files 内的 .skill-actions 没有上外边距：「添加文本文件」只隔 grid 的 12px（E3-12）。 */
+.skill-content-files > .skill-form-actions {
+	margin-top: 0;
+}
+/* 设计 .skill-content-files h3：14px / 600 / 1.5（E3-12）。 */
 .skill-page h3.skill-content-heading {
 	font-family: var(--font-body);
 	font-size: 14px;
 	font-weight: 600;
+	line-height: 1.5;
 	letter-spacing: 0;
 }
 .skill-content-file {
@@ -3581,7 +3591,14 @@ body {
 	color: var(--muted-ink);
 	font-size: 11px;
 }
+/* 设计 .form-section > p.field-help：「共 N 个文件…」距上方文件输入框 5px（E3-13）。 */
+.skill-file-limits {
+	margin-top: 5px;
+}
+/* 设计 .field-error：margin-top 6px，加上字段 7px 间距，文本框到错误 13px（E3-07）；
+   与公共 FieldError 一致。Skill 审阅弹窗、创建与发布页共用。 */
 .skill-field-error {
+	margin-top: 6px;
 	padding: 0;
 	border: 0;
 	background: transparent;
@@ -3644,8 +3661,9 @@ body {
 	cursor: not-allowed;
 	opacity: 0.55;
 }
+/* 设计 p.field-help.section-tight：「项目没有所属组织…」距最后一张范围卡 15px（E3-14）。 */
 .skill-scope-help {
-	margin-top: 8px;
+	margin-top: 15px;
 }
 @media (max-width: 1023px) {
 	.skill-grid,
@@ -3712,6 +3730,14 @@ body {
 		margin-bottom: 4px;
 	}
 	.skill-review-reason {
+		margin-top: 26px;
+	}
+	/* 设计 ≤767px .section{margin-top:26px}：Skill 详情侧栏操作区、「我创建的」区头、创建与发布页
+	   右栏说明卡与操作区的分区上距由 32px 收为 26px（E3-11）。 */
+	.skill-summary-actions,
+	.skill-section-block,
+	.skill-editor-aside .skill-editor-section,
+	.skill-editor-aside .skill-editor-actions {
 		margin-top: 26px;
 	}
 }
@@ -4441,6 +4467,11 @@ body {
 	color: var(--muted-ink);
 	font-size: 12px;
 }
+/* 设计 .application-resource p{margin:12px 0 0}：申请详情「资源预设」卡的末段不留下外边距（E3-03）。
+   申请表单侧栏仍按 `.form-aside p` 的 12px 0。 */
+.management-content .application-resource p {
+	margin: 12px 0 0;
+}
 .lifecycle-panel .actions {
 	align-items: stretch;
 	width: 100%;
@@ -4998,6 +5029,11 @@ body {
 .audit-detail-panel:focus-visible {
 	outline: 2px solid var(--primary);
 	outline-offset: 3px;
+}
+/* 设计 .eyebrow margin 4px 0 9px：「记录详情」与标题相距 9px，同 `.management-content .page-heading
+   .page-eyebrow`（E3-08）。/audit 与 /admin/audit 共用。 */
+.audit-detail-panel .section-heading .page-eyebrow {
+	margin-bottom: 9px;
 }
 
 /* OpenDesign directory picker: compact chips, inline search and field-level menu. */

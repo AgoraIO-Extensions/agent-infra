@@ -441,7 +441,8 @@ export function AgentDiscoveryScreen({
 												{agent.description}
 											</p>
 										</div>
-										<div className="directory-tags flex flex-wrap gap-2">
+										{/* 设计 .tag-row：tag 间距 6px，与工作台卡片一致（E3-01）。 */}
+										<div className="directory-tags flex flex-wrap gap-1.5">
 											<Badge variant="tag">
 												{agentConversationSourceLabel(agent, templateName)}
 											</Badge>

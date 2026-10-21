@@ -1,5 +1,5 @@
 import { cva } from "class-variance-authority";
-import { CircleAlert, Info, TriangleAlert } from "lucide-react";
+import { Info, TriangleAlert } from "lucide-react";
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
@@ -22,10 +22,11 @@ const alertVariants = cva(
 	},
 );
 
+// 设计 .notice.warn 与 .notice.danger 都用 icon('alert') 三角形，只按 tone 变色（E3-04）。
 const defaultIcons = {
 	info: Info,
 	warn: TriangleAlert,
-	danger: CircleAlert,
+	danger: TriangleAlert,
 } satisfies Record<AlertTone, React.ComponentType<{ "aria-hidden"?: boolean }>>;
 
 type AlertProps = React.ComponentProps<"div"> & {
