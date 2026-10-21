@@ -525,7 +525,8 @@ function parseBearerChallenge(
 		.matchAll(/(?:^|,)\s*([a-z][a-z0-9_-]*)="((?:\\.|[^"\\])*)"/gi)) {
 		const key = match[1];
 		const parameter = match[2];
-		if (key && parameter) parameters[key.toLowerCase()] = parameter.replace(/\\(.)/g, "$1");
+		if (key && parameter)
+			parameters[key.toLowerCase()] = parameter.replace(/\\(.)/g, "$1");
 	}
 	const realm = parameters.realm;
 	if (!realm) return undefined;
