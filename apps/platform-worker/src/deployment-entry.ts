@@ -293,29 +293,34 @@ if (Object.hasOwn(workloadInput.policy, "connectionConsumerSnapshot"))
 	throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 if (Object.hasOwn(workloadInput.policy, "connectionInstallationRevision"))
 	throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
-const connectionInstallationRevision =
-	createRuntimeConnectionInstallationRevisionV1(
-		connectionInstallationSupply,
-		connectionConsumerSnapshot,
-	);
-const connectionInstallationRevisionsByAgent =
-	connectionInstallationSuppliesByAgent
-		? Object.fromEntries(
-				Object.entries(connectionInstallationSuppliesByAgent).map(
-					([agentId, supply]) => {
-						if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
-							throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
-						return [
-							agentId,
-							createRuntimeConnectionInstallationRevisionV1(
-								supply,
-								connectionConsumerSnapshotsByAgent?.[agentId] ?? null,
-							) ?? null,
-						];
-					},
-				),
-			)
-		: undefined;
+const perAgentConsumerSelection =
+	connectionConsumerProfilesByAgent !== undefined;
+if (
+	perAgentConsumerSelection !==
+	(connectionInstallationSuppliesByAgent !== undefined)
+)
+	throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
+const connectionInstallationRevision = perAgentConsumerSelection
+	? undefined
+	: createRuntimeConnectionInstallationRevisionV1(
+			connectionInstallationSupply,
+			connectionConsumerSnapshot,
+		);
+const connectionInstallationRevisionsByAgent = perAgentConsumerSelection
+	? Object.fromEntries(
+			Object.entries(connectionConsumerProfilesByAgent).map(([agentId]) => {
+				if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(agentId))
+					throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
+				return [
+					agentId,
+					createRuntimeConnectionInstallationRevisionV1(
+						connectionInstallationSuppliesByAgent?.[agentId],
+						connectionConsumerSnapshotsByAgent?.[agentId] ?? null,
+					) ?? null,
+				];
+			}),
+		)
+	: undefined;
 const connectionInstallation = resolveConnectionInstallation(
 	configuredConnectionInstallation,
 );
