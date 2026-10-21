@@ -75,7 +75,7 @@ export async function probeChromiumLaunchV1() {
 	});
 	try {
 		const started = await session.start();
-		if (started.status !== "ready") throw new Error();
+		if (started.status !== "ready") throw new Error("start");
 		const version = await promisify(execFile)(
 			installation.executable,
 			["--version"],
@@ -84,14 +84,15 @@ export async function probeChromiumLaunchV1() {
 		if (
 			version.stdout.trim().split(" ").at(-1) !== installation.chromiumVersion
 		)
-			throw new Error();
+			throw new Error("version");
 		const page = await session.navigate(url);
 		const initial = await session.observe(page);
-		if (initial.title !== "Browser supply probe") throw new Error();
+		if (initial.title !== "Browser supply probe")
+			throw new Error("initial-title");
 		const target = initial.elements.find(
 			(element) => element.name === "Continue",
 		);
-		if (!target) throw new Error();
+		if (!target) throw new Error("initial-target");
 		const action = await session.act({
 			kind: "click",
 			page,
@@ -100,18 +101,18 @@ export async function probeChromiumLaunchV1() {
 			attemptRef: "probe-attempt",
 			idempotencyKey: "probe-click",
 		});
-		if (action.status !== "completed") throw new Error();
+		if (action.status !== "completed") throw new Error("click");
 		const clicked = await session.observe(page);
-		if (!clicked.text.includes("Clicked")) throw new Error();
+		if (!clicked.text.includes("Clicked")) throw new Error("clicked-text");
 		await session.close();
-		if (session.snapshot().status !== "closed") throw new Error();
+		if (session.snapshot().status !== "closed") throw new Error("close");
 		const resumed = await session.start();
-		if (resumed.status !== "ready") throw new Error();
+		if (resumed.status !== "ready") throw new Error("resume");
 		const restoredPage = await session.navigate(url);
 		const restored = await session.observe(restoredPage);
-		if (!restored.text.includes("retained")) throw new Error();
+		if (!restored.text.includes("retained")) throw new Error("retained-text");
 		await session.close();
-		if (session.snapshot().status !== "closed") throw new Error();
+		if (session.snapshot().status !== "closed") throw new Error("final-close");
 		return {
 			schemaVersion: 1 as const,
 			status: "passed" as const,
