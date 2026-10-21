@@ -13,13 +13,39 @@ function safeExternalUrl(href: string | undefined) {
 	if (!href) return undefined;
 	try {
 		const url = new URL(href);
-		return url.protocol === "https:" &&
-			!url.username &&
-			!url.password &&
-			!url.search &&
-			!url.hash
-			? url.href
-			: undefined;
+		if (url.protocol !== "https:" || url.username || url.password)
+			return undefined;
+		const fragment = decodeURIComponent(url.hash.slice(1));
+		if (
+			/(?:access[_-]?token|refresh[_-]?token|id[_-]?token|bearer|password|secret|api[_-]?key|signature|sig)\s*=/i.test(
+				fragment,
+			) ||
+			/eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}/.test(
+				fragment,
+			)
+		)
+			return undefined;
+		// Normal documentation links often use query parameters and fragments. Keep
+		// those, while refusing the parameter names most commonly used to carry
+		// bearer credentials or one-time authorization material.
+		for (const key of url.searchParams.keys()) {
+			if (
+				/(?:token|secret|password|passwd|api[_-]?key|access[_-]?token|auth|signature|sig|code)/i.test(
+					key,
+				)
+			)
+				return undefined;
+		}
+		for (const value of url.searchParams.values()) {
+			if (
+				/eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}/.test(
+					value,
+				) ||
+				/^(?:Bearer\s+)?[A-Za-z0-9_-]{32,}$/.test(value)
+			)
+				return undefined;
+		}
+		return url.href;
 	} catch {
 		return undefined;
 	}

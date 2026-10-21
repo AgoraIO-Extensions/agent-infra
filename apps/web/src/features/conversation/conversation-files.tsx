@@ -1,5 +1,5 @@
 import { FileLimitsV1Schema } from "@agent-infra/contracts/files";
-import { Paperclip, RotateCw, X } from "lucide-react";
+import { FileText, Paperclip, RotateCw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
@@ -31,6 +31,7 @@ export type ConversationUpload = {
 	descriptor: FileDescriptorV1 | null;
 	projection: FileProjectionV1 | null;
 	status: UploadStatus;
+	previewUrl?: string;
 	error?: string;
 };
 
@@ -54,7 +55,9 @@ export function useConversationFiles({
 	const [limitsError, setLimitsError] = useState(false);
 	const [uploads, setUploads] = useState<ConversationUpload[]>([]);
 	const [downloading, setDownloading] = useState<string>();
+	const [reading, setReading] = useState<string>();
 	const controllers = useRef(new Map<string, AbortController>());
+	const previewUrls = useRef(new Map<string, string>());
 
 	const refreshLimits = useCallback(
 		async (signal?: AbortSignal) => {
@@ -97,6 +100,8 @@ export function useConversationFiles({
 		return () => {
 			for (const controller of controllers.current.values()) controller.abort();
 			controllers.current.clear();
+			for (const url of previewUrls.current.values()) URL.revokeObjectURL(url);
+			previewUrls.current.clear();
 		};
 	}, [conversationId]);
 	// The picker stays disabled until the current limits are known, so read them
@@ -161,12 +166,17 @@ export function useConversationFiles({
 			if (!fileLimits) return;
 			for (const file of selected) {
 				const localId = crypto.randomUUID();
+				const previewUrl = file.type.startsWith("image/")
+					? URL.createObjectURL(file)
+					: undefined;
+				if (previewUrl) previewUrls.current.set(localId, previewUrl);
 				const item: ConversationUpload = {
 					localId,
 					file,
 					descriptor: null,
 					projection: null,
 					status: "queued",
+					previewUrl,
 				};
 				setUploads((current) => [...current, item]);
 				if (
@@ -200,6 +210,9 @@ export function useConversationFiles({
 	const remove = useCallback((localId: string) => {
 		controllers.current.get(localId)?.abort();
 		controllers.current.delete(localId);
+		const previewUrl = previewUrls.current.get(localId);
+		if (previewUrl) URL.revokeObjectURL(previewUrl);
+		previewUrls.current.delete(localId);
 		setUploads((current) => current.filter((item) => item.localId !== localId));
 	}, []);
 
@@ -219,10 +232,10 @@ export function useConversationFiles({
 		[limits, refreshLimits, transfer, uploads],
 	);
 
-	const download = useCallback(
+	const readResultFile = useCallback(
 		async (file: ResultFile) => {
-			if (!resultFilesEnabled || !conversationId || downloading) return false;
-			setDownloading(file.fileId);
+			if (!resultFilesEnabled || !conversationId || reading) return null;
+			setReading(file.fileId);
 			try {
 				const key = `web-result-${crypto.randomUUID()}`;
 				const access = await issueFileAccess({
@@ -233,7 +246,7 @@ export function useConversationFiles({
 					responseStyle: "fields",
 					throwOnError: false,
 				});
-				if (!access.data || access.response?.status !== 200) return false;
+				if (!access.data || access.response?.status !== 200) return null;
 				const response = await downloadFileContent({
 					client,
 					path: { conversationId, fileId: file.fileId },
@@ -242,21 +255,37 @@ export function useConversationFiles({
 					responseStyle: "fields",
 					throwOnError: false,
 				});
-				if (!response.data || response.response?.status !== 200) return false;
-				const url = URL.createObjectURL(response.data);
+				if (!response.data || response.response?.status !== 200) return null;
+				return response.data;
+			} catch {
+				return null;
+			} finally {
+				setReading(undefined);
+			}
+		},
+		[client, conversationId, reading, resultFilesEnabled],
+	);
+
+	const download = useCallback(
+		async (file: ResultFile) => {
+			if (!resultFilesEnabled || !conversationId || downloading || reading)
+				return false;
+			setDownloading(file.fileId);
+			try {
+				const content = await readResultFile(file);
+				if (!content) return false;
+				const url = URL.createObjectURL(content);
 				const anchor = document.createElement("a");
 				anchor.href = url;
 				anchor.download = file.name;
 				anchor.click();
 				setTimeout(() => URL.revokeObjectURL(url), 0);
 				return true;
-			} catch {
-				return false;
 			} finally {
 				setDownloading(undefined);
 			}
 		},
-		[client, conversationId, downloading, resultFilesEnabled],
+		[conversationId, downloading, readResultFile, reading, resultFilesEnabled],
 	);
 
 	return {
@@ -273,7 +302,9 @@ export function useConversationFiles({
 		remove,
 		retry,
 		download,
+		readResultFile,
 		downloading,
+		reading,
 		refreshLimits,
 	};
 }
@@ -346,6 +377,19 @@ export function ConversationFilePicker({
 					className="flex items-center gap-2 text-sm"
 					data-file-status={item.status}
 				>
+					{item.previewUrl ? (
+						<img
+							className="size-10 rounded border object-cover"
+							src={item.previewUrl}
+							alt=""
+							aria-hidden="true"
+						/>
+					) : (
+						<FileText
+							aria-hidden="true"
+							className="size-4 text-muted-foreground"
+						/>
+					)}
 					<span className="min-w-0 flex-1 truncate">{item.file.name}</span>
 					{item.status === "uploading" && <span role="status">上传中…</span>}
 					{item.status === "available" && <span role="status">已上传</span>}
