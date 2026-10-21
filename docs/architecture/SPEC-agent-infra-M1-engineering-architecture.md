@@ -399,7 +399,7 @@ API 创建许可由部署显式配置获准主体集合，以主体类型和稳�
 
 创建用例将 Agent、创建主体、Owner、初始管理/使用授权、outbox 和必要审计原子保存。用户创建的 Owner 为本人，应用创建的 Owner 为登记的自然人责任人，创建主体仍为应用。API 不进入 Web 申请审批状态机，也不设预审批；镜像/配置与运行能力准入仍适用。管理与使用授权可分别撤销，应用不继承责任人的权限，Owner 不能绕过已撤销的 API 授权。
 
-其他方式创建的 Agent 没有初始 API 授权。当前 Owner 经浏览器会话为用户显式授予或撤销逐主体的 API 管理/使用授权（`api-manage-grants`、`api-use-grants`），按 Agent 管理修订校验、幂等并审计；该入口不接受 API 凭证，授权不随 Owner 身份自动产生或延续。
+其他方式创建的 Agent 没有初始 API 授权。当前 Owner 经浏览器会话为用户显式授予或撤销逐主体的 API 管理/使用授权（`api-manage-grants`、`api-use-grants`），按 Agent 管理修订校验、幂等并审计；该修订只在 Owner 读取 Agent 投影时以 `managementRevision` 返回，非 Owner 的投影不含此字段。该入口不接受 API 凭证，授权不随 Owner 身份自动产生或延续。
 
 上述事务是创建请求的可靠受理点，先于 Workload 创建；实例创建失败保留原 Agent 与初始授权，按现有生命周期权限查询、停止或重试，不能产生只有成功部署后才能管理的 Agent。
 

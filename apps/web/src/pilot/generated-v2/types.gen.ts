@@ -471,6 +471,7 @@ export type AgentDetailProjectionV1 = {
     configuration: AgentDetailConfigurationProjectionV1;
     description: string;
     interactionUrl: string | null;
+    managementRevision?: number;
     managementStatus: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
     name: string;
     schemaVersion: 1;
@@ -583,6 +584,7 @@ export type AgentProjectionV2 = {
     configuration: AgentConfigurationProjectionV2;
     description: string;
     interactionUrl: string | null;
+    managementRevision?: number;
     managementStatus: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
     name: string;
     schemaVersion: 2;

@@ -26,24 +26,36 @@ type Metadata = {
 	replayed: boolean;
 };
 
-function errorMessage(error: unknown) {
+function errorMessage(error: unknown, userTarget: boolean) {
 	if (error instanceof AgentAuthorizationRequestError && error.status === 403)
 		return "服务端拒绝了此次授权操作，请确认当前 Owner 或管理员权限。";
 	if (error instanceof AgentAuthorizationRequestError && error.status === 409)
-		return "授权版本已变化，请重新填写目标和版本后重试。";
+		return "授权版本已变化，请刷新页面后重试。";
+	// 用户 API 授权按 Agent 管理修订号校验，过期时服务端返回 404；页面已重新读取详情（#3070）。
+	if (
+		userTarget &&
+		error instanceof AgentAuthorizationRequestError &&
+		error.status === 404
+	)
+		return "Agent 管理状态已变化或目标不可用，页面已重新读取，请确认后重试。";
 	return "操作未确认，请刷新页面后重试。未显示上游错误详情。";
 }
 
 export function AgentAuthorizationControls({
 	agentId,
 	enabled,
+	managementRevision,
+	onChanged,
 }: {
 	agentId: string;
 	enabled: boolean;
+	/** Owner 读到的 Agent 当前管理修订号；用户 API 授权以它作为 expectedRevision（#3070）。 */
+	managementRevision?: number;
+	/** 用户 API 授权完成或被拒绝后，重新读取 Agent 详情以取得最新修订号。 */
+	onChanged?: () => void;
 }) {
 	const [targetKind, setTargetKind] = useState<TargetKind>("application");
 	const [targetId, setTargetId] = useState("");
-	const [expectedRevision, setExpectedRevision] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [metadata, setMetadata] = useState<Metadata>();
 	const [message, setMessage] = useState("");
@@ -52,17 +64,17 @@ export function AgentAuthorizationControls({
 	if (!enabled) return null;
 
 	const target = targetId.trim();
-	const revision = Number(expectedRevision.trim());
+	const revision = managementRevision;
 	const validRevision =
-		expectedRevision.trim() !== "" &&
-		Number.isInteger(revision) &&
-		revision >= 0;
+		revision !== undefined && Number.isSafeInteger(revision) && revision >= 0;
 
 	async function run(permission: Permission, revoke: boolean) {
 		if (busy || !target) return;
+		const userTarget = targetKind === "user";
 		if (
-			targetKind === "user" &&
+			userTarget &&
 			((permission !== "api-use" && permission !== "api-manage") ||
+				revision === undefined ||
 				!validRevision)
 		)
 			return;
@@ -71,7 +83,7 @@ export function AgentAuthorizationControls({
 		setFailed(false);
 		try {
 			const result =
-				targetKind === "user"
+				userTarget && revision !== undefined
 					? permission === "api-manage"
 						? revoke
 							? await revokeUserApiManage(agentId, target, revision)
@@ -101,9 +113,11 @@ export function AgentAuthorizationControls({
 		} catch (error) {
 			setMetadata(undefined);
 			setFailed(true);
-			setMessage(errorMessage(error));
+			setMessage(errorMessage(error, userTarget));
 		} finally {
 			setBusy(false);
+			// 修订号可能已随管理操作前进：无论成功与否都重新读取详情，下一次提交用最新值。
+			if (userTarget) onChanged?.();
 		}
 	}
 
@@ -163,22 +177,14 @@ export function AgentAuthorizationControls({
 					</Field>
 				</div>
 				{targetKind === "user" ? (
-					<Field>
-						<Label htmlFor="agent-authorization-expected-revision">
-							授权版本
-						</Label>
-						<Input
-							id="agent-authorization-expected-revision"
-							inputMode="numeric"
-							disabled={busy}
-							value={expectedRevision}
-							onChange={(event) => setExpectedRevision(event.target.value)}
-						/>
-						<p className="text-muted-foreground text-xs">
-							API 使用权与 API
-							管理权分别授予和撤销，可以授权自己；提交时平台会核对授权版本。
-						</p>
-					</Field>
+					<p
+						className="text-muted-foreground text-xs"
+						role={validRevision ? undefined : "status"}
+					>
+						{validRevision
+							? "API 使用权与 API 管理权分别授予和撤销，可以授权自己；提交时平台会核对 Agent 当前的管理修订号。"
+							: "未能读取 Agent 管理修订号，暂不能授予或撤销用户 API 授权。请刷新页面后重试。"}
+					</p>
 				) : null}
 				{/* 授权与撤销都用 outline：页面唯一的主按钮是页脚保存，未填写目标时不出现浅蓝实心禁用按钮（O-12）。 */}
 				{targetKind === "application" ? (

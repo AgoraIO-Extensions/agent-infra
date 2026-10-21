@@ -8,6 +8,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+	AgentAuthorizationRequestError,
 	grantApplicationManager,
 	grantApplicationUse,
 	grantUserApiManage,
@@ -50,7 +51,7 @@ describe("AgentAuthorizationControls", () => {
 		).toBeTruthy();
 	});
 
-	it("grants and revokes a user's API management with the entered revision", async () => {
+	it("grants and revokes a user's API management with the Owner's management revision (#3070)", async () => {
 		vi.mocked(grantUserApiManage).mockResolvedValue({
 			agentId: "agent-1",
 			userId: "user-2",
@@ -67,17 +68,22 @@ describe("AgentAuthorizationControls", () => {
 			replayed: false,
 			schemaVersion: 1,
 		});
-		render(<AgentAuthorizationControls agentId="agent-1" enabled />);
+		const onChanged = vi.fn();
+		render(
+			<AgentAuthorizationControls
+				agentId="agent-1"
+				enabled
+				managementRevision={7}
+				onChanged={onChanged}
+			/>,
+		);
 		fireEvent.click(screen.getByRole("button", { name: "用户" }));
+		// 不再要求 Owner 手工填写修订号（#3070）。
+		expect(screen.queryByLabelText("授权版本")).toBeNull();
 		fireEvent.change(screen.getByLabelText("用户 ID"), {
 			target: { value: "user-2" },
 		});
 		const grant = screen.getByRole("button", { name: "授权用户 API 管理" });
-		// 没有授权版本时不发请求。
-		expect((grant as HTMLButtonElement).disabled).toBe(true);
-		fireEvent.change(screen.getByLabelText("授权版本"), {
-			target: { value: "7" },
-		});
 		fireEvent.click(grant);
 		await waitFor(() =>
 			expect(grantUserApiManage).toHaveBeenCalledWith("agent-1", "user-2", 7),
@@ -88,6 +94,8 @@ describe("AgentAuthorizationControls", () => {
 			expect(revokeUserApiManage).toHaveBeenCalledWith("agent-1", "user-2", 7),
 		);
 		expect(await screen.findByText("已撤销")).toBeTruthy();
+		// 每次用户 API 授权后都重新读取详情，下一次提交用最新修订号。
+		await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
 		expect(grantUserApiUse).not.toHaveBeenCalled();
 		expect(revokeUserApiUse).not.toHaveBeenCalled();
 	});
@@ -142,7 +150,7 @@ describe("AgentAuthorizationControls", () => {
 		expect(screen.getByText("无")).toBeTruthy();
 	});
 
-	it("revokes user API use with an explicit expected revision", async () => {
+	it("revokes user API use with the Owner's management revision", async () => {
 		vi.mocked(revokeUserApiUse).mockResolvedValue({
 			agentId: "agent-1",
 			userId: "user-1",
@@ -152,13 +160,16 @@ describe("AgentAuthorizationControls", () => {
 			schemaVersion: 1,
 		});
 
-		render(<AgentAuthorizationControls agentId="agent-1" enabled />);
+		render(
+			<AgentAuthorizationControls
+				agentId="agent-1"
+				enabled
+				managementRevision={7}
+			/>,
+		);
 		fireEvent.click(screen.getByRole("button", { name: /^用户$/ }));
 		fireEvent.change(screen.getByLabelText("用户 ID"), {
 			target: { value: "user-1" },
-		});
-		fireEvent.change(screen.getByLabelText("授权版本"), {
-			target: { value: "7" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "撤销用户 API 使用" }));
 
@@ -167,7 +178,7 @@ describe("AgentAuthorizationControls", () => {
 		);
 	});
 
-	it("grants user API use with an explicit expected revision", async () => {
+	it("grants user API use with the Owner's management revision", async () => {
 		vi.mocked(grantUserApiUse).mockResolvedValue({
 			agentId: "agent-1",
 			userId: "user-1",
@@ -177,13 +188,16 @@ describe("AgentAuthorizationControls", () => {
 			schemaVersion: 1,
 		});
 
-		render(<AgentAuthorizationControls agentId="agent-1" enabled />);
+		render(
+			<AgentAuthorizationControls
+				agentId="agent-1"
+				enabled
+				managementRevision={7}
+			/>,
+		);
 		fireEvent.click(screen.getByRole("button", { name: /^用户$/ }));
 		fireEvent.change(screen.getByLabelText("用户 ID"), {
 			target: { value: "user-1" },
-		});
-		fireEvent.change(screen.getByLabelText("授权版本"), {
-			target: { value: "7" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "授权用户 API 使用" }));
 
@@ -191,6 +205,54 @@ describe("AgentAuthorizationControls", () => {
 			expect(grantUserApiUse).toHaveBeenCalledWith("agent-1", "user-1", 7),
 		);
 		expect(await screen.findByText("已授权")).toBeTruthy();
+	});
+
+	it("does not submit user API grants without a management revision (#3070)", () => {
+		render(<AgentAuthorizationControls agentId="agent-1" enabled />);
+		fireEvent.click(screen.getByRole("button", { name: /^用户$/ }));
+		fireEvent.change(screen.getByLabelText("用户 ID"), {
+			target: { value: "user-1" },
+		});
+		for (const name of [
+			"授权用户 API 使用",
+			"撤销用户 API 使用",
+			"授权用户 API 管理",
+			"撤销用户 API 管理",
+		])
+			expect(
+				(screen.getByRole("button", { name }) as HTMLButtonElement).disabled,
+			).toBe(true);
+		expect(screen.getByRole("status").textContent).toContain(
+			"未能读取 Agent 管理修订号",
+		);
+	});
+
+	it("explains a stale management revision and re-reads the Agent (#3070)", async () => {
+		vi.mocked(grantUserApiUse).mockRejectedValue(
+			Object.assign(new AgentAuthorizationRequestError(404, false), {
+				status: 404,
+			}),
+		);
+		const onChanged = vi.fn();
+		render(
+			<AgentAuthorizationControls
+				agentId="agent-1"
+				enabled
+				managementRevision={7}
+				onChanged={onChanged}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /^用户$/ }));
+		fireEvent.change(screen.getByLabelText("用户 ID"), {
+			target: { value: "user-1" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "授权用户 API 使用" }));
+		expect(
+			await screen.findByText(
+				"Agent 管理状态已变化或目标不可用，页面已重新读取，请确认后重试。",
+			),
+		).toBeTruthy();
+		expect(onChanged).toHaveBeenCalledTimes(1);
 	});
 
 	it("keeps rejected responses opaque and never renders upstream details", async () => {

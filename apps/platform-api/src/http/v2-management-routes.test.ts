@@ -639,6 +639,34 @@ describe("V2 management routes", () => {
 		);
 	});
 
+	// #3070：浏览器授予或撤销用户 API 授权要带管理修订号；只有当前 Owner 能从详情拿到它。
+	it("returns the management revision only to a current Owner (#3070)", async () => {
+		const owner = createApp();
+		const ownerBody = AgentProjectionV2Schema.parse(
+			await (await owner.app.request("/api/v2/agents/agent-1")).json(),
+		);
+		expect(ownerBody.managementRevision).toBe(management.revision);
+		const ownerList = (await (
+			await owner.app.request("/api/v2/agents")
+		).json()) as { items: unknown[] };
+		expect(
+			AgentProjectionV2Schema.parse(ownerList.items[0]).managementRevision,
+		).toBe(management.revision);
+
+		// 非 Owner（包括不是 Owner 的系统管理员）即使能读到这个 Agent，也拿不到修订号。
+		for (const roles of [["employee"], ["employee", "system_admin"]]) {
+			const other = createApp({
+				identityValue: { ...identity, userId: "user-2", roles },
+			});
+			const response = await other.app.request("/api/v2/agents/agent-1");
+			expect(response.status).toBe(200);
+			expect(await response.json()).not.toHaveProperty("managementRevision");
+			const admin = await other.app.request("/api/v2/admin/agents/agent-1");
+			if (admin.status === 200)
+				expect(await admin.json()).not.toHaveProperty("managementRevision");
+		}
+	});
+
 	it("returns the ordinary unavailable result when the administrator scope has no such Agent", async () => {
 		const { app, getAgent, readAgentProjection } = createApp({
 			administrator: true,
