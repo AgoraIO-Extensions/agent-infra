@@ -975,3 +975,209 @@ describe("Conversation generated-client data consumer", () => {
 		expect(JSON.stringify(snapshots)).not.toContain("untrusted-payload");
 	});
 });
+
+// #3068：重新读取会话详情时，首屏窗口可能只剩最新一轮；已显示的回合不能因此消失。
+describe("re-reading history keeps loaded rounds (#3068)", () => {
+	/** 第 round 轮的第 sequence 个事件，游标按 round * 100 + sequence 递增。 */
+	function roundEvent(round: number, sequence: number) {
+		const position = round * 100 + sequence;
+		return PersistedConversationEventV2Schema.parse({
+			...event(position),
+			executionId: `execution-${round}`,
+			sequence,
+		});
+	}
+	const round = (index: number, count: number) =>
+		Array.from({ length: count }, (_, offset) => roundEvent(index, offset + 1));
+
+	it("keeps earlier rounds when a refresh returns a narrower window", async () => {
+		const stream = sse();
+		const firstRound = round(1, 3);
+		const secondRound = round(2, 4);
+		let reads = 0;
+		const narrower = windowedHistory("conversation-1", secondRound, {
+			hasEarlier: true,
+			beforeCursor: "before-round-2",
+		});
+		const { reader } = setup((request) => {
+			if (route(request) === "stream") return stream.response;
+			return Response.json(
+				++reads === 1
+					? windowedHistory("conversation-1", [...firstRound, secondRound[0]], {
+							hasEarlier: false,
+							beforeCursor: null,
+						})
+					: narrower,
+			);
+		});
+		await reader.open("conversation-1");
+		stream.send(...secondRound.slice(1));
+		await vi.waitFor(() => expect(reader.getSnapshot().events).toHaveLength(7));
+		await reader.refresh();
+		expect(reader.getSnapshot()).toMatchObject({
+			status: "ready",
+			history: narrower,
+			events: [...firstRound, ...secondRound],
+			// 保留的第 1 轮已经是会话开头，不再提示加载更早内容。
+			hasEarlier: false,
+			beforeCursor: null,
+		});
+	});
+
+	it("keeps earlier rounds across a timeline reload whose window overlaps them", async () => {
+		const first = sse();
+		const second = sse();
+		const firstRound = round(1, 3);
+		const secondRound = round(2, 5);
+		let histories = 0;
+		let streams = 0;
+		const { reader, requests } = setup((request) => {
+			if (route(request) === "stream")
+				return (++streams === 1 ? first : second).response;
+			return Response.json(
+				++histories === 1
+					? windowedHistory("conversation-1", [...firstRound, secondRound[0]], {
+							hasEarlier: false,
+							beforeCursor: null,
+						})
+					: windowedHistory("conversation-1", secondRound.slice(0, 4), {
+							hasEarlier: true,
+							beforeCursor: "before-round-2",
+						}),
+			);
+		});
+		await reader.open("conversation-1");
+		// 一批持久化的事件超过补发窗口：服务端要求重新加载时间线。
+		first.send(reload(secondRound[0].conversationCursor));
+		await vi.waitFor(() => expect(streams).toBe(2));
+		second.send(secondRound[4]);
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot().events).toEqual([
+				...firstRound,
+				...secondRound,
+			]),
+		);
+		expect(reader.getSnapshot()).toMatchObject({
+			hasEarlier: false,
+			beforeCursor: null,
+		});
+		expect(new URL(requests[3].url).searchParams.get("cursor")).toBe(
+			secondRound[3].conversationCursor,
+		);
+	});
+
+	it("rebuilds from the new window when it does not overlap the loaded events", async () => {
+		const first = sse();
+		const firstRound = round(1, 2);
+		const thirdRound = round(3, 2);
+		let histories = 0;
+		const { reader } = setup((request) => {
+			if (route(request) === "stream")
+				return histories === 1 ? first.response : sse().response;
+			return Response.json(
+				++histories === 1
+					? windowedHistory("conversation-1", firstRound, {
+							hasEarlier: false,
+							beforeCursor: null,
+						})
+					: windowedHistory("conversation-1", thirdRound, {
+							hasEarlier: true,
+							beforeCursor: "before-round-3",
+						}),
+			);
+		});
+		await reader.open("conversation-1");
+		// 第 2 轮整个错过：拼接旧事件会留下无法发现的缺口，只能按新首屏重建。
+		first.send(reload(firstRound[1].conversationCursor));
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot()).toMatchObject({
+				status: "ready",
+				events: thirdRound,
+				hasEarlier: true,
+				beforeCursor: "before-round-3",
+			}),
+		);
+	});
+
+	it("keeps a page loaded earlier and continues paging from its boundary", async () => {
+		const stream = sse();
+		const earliest = round(1, 2);
+		const earlierRound = round(2, 2);
+		const latestRound = round(3, 3);
+		let recentReads = 0;
+		const { reader, requests } = setup((request) => {
+			if (route(request) === "stream") return stream.response;
+			const before = new URL(request.url).searchParams.get("beforeCursor");
+			if (before === "before-round-3")
+				return Response.json(
+					windowedHistory("conversation-1", earlierRound, {
+						hasEarlier: true,
+						beforeCursor: "before-round-2",
+					}),
+				);
+			if (before === "before-round-2")
+				return Response.json(
+					windowedHistory("conversation-1", earliest, {
+						hasEarlier: false,
+						beforeCursor: null,
+					}),
+				);
+			return Response.json(
+				windowedHistory(
+					"conversation-1",
+					++recentReads === 1 ? latestRound.slice(0, 2) : latestRound,
+					{ hasEarlier: true, beforeCursor: "before-round-3" },
+				),
+			);
+		});
+		await reader.open("conversation-1");
+		await reader.loadEarlier();
+		await reader.refresh();
+		expect(reader.getSnapshot()).toMatchObject({
+			events: [...earlierRound, ...latestRound],
+			hasEarlier: true,
+			beforeCursor: "before-round-2",
+		});
+		await reader.loadEarlier();
+		expect(reader.getSnapshot()).toMatchObject({
+			events: [...earliest, ...earlierRound, ...latestRound],
+			hasEarlier: false,
+			beforeCursor: null,
+		});
+		expect(
+			requests
+				.filter((request) => route(request) === "history")
+				.map((request) =>
+					new URL(request.url).searchParams.get("beforeCursor"),
+				),
+		).toEqual([null, "before-round-3", null, "before-round-2"]);
+	});
+
+	it("keeps increments received after the re-read snapshot without duplicating their replay", async () => {
+		const first = sse();
+		const second = sse();
+		const events = round(1, 4);
+		let histories = 0;
+		let streams = 0;
+		const { reader } = setup((request) => {
+			if (route(request) === "stream")
+				return (++streams === 1 ? first : second).response;
+			return Response.json(
+				windowedHistory(
+					"conversation-1",
+					++histories === 1 ? events.slice(0, 1) : events.slice(0, 2),
+					{ hasEarlier: false, beforeCursor: null },
+				),
+			);
+		});
+		await reader.open("conversation-1");
+		first.send(events[1], events[2]);
+		await vi.waitFor(() => expect(reader.getSnapshot().events).toHaveLength(3));
+		// 快照只提交到第 2 个事件；第 3 个已经显示，不能因重读而闪退。
+		await reader.refresh();
+		expect(reader.getSnapshot().events).toEqual(events.slice(0, 3));
+		await vi.waitFor(() => expect(streams).toBe(2));
+		second.send(events[2], events[3]);
+		await vi.waitFor(() => expect(reader.getSnapshot().events).toEqual(events));
+	});
+});

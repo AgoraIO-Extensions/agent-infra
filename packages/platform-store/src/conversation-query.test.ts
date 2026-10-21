@@ -1,4 +1,7 @@
-import { wecomChannelIdV1 } from "@agent-infra/platform-core";
+import {
+	projectConversationMessagesV1,
+	wecomChannelIdV1,
+} from "@agent-infra/platform-core";
 import postgres from "postgres";
 import {
 	afterAll,
@@ -2026,6 +2029,253 @@ describe("long Conversation reads (#1732)", () => {
 		await expect(
 			query.replay(longScope, "long-history", undefined, controller.signal),
 		).rejects.toBeInstanceOf(ConversationQueryError);
+	});
+});
+
+describe("reasoning-heavy Conversation windows (#3068)", () => {
+	const reasoningScope = { actorId: "reasoning-actor", channelId: "web" };
+	type Round = { readonly reasoning: number; readonly text: number };
+	/** 与固定环境 DeepSeek「高」档实测同量级：每轮 500 条以上思考增量、几十条正文增量。 */
+	const deepSeekRounds: readonly Round[] = [
+		{ reasoning: 520, text: 60 },
+		{ reasoning: 610, text: 45 },
+		{ reasoning: 505, text: 70 },
+	];
+	const roundSize = (round: Round) => round.reasoning + round.text + 2;
+	const executionOf = (conversationId: string, round: number) =>
+		`${conversationId}-round-${round}`;
+	/** 第 round 轮的完整回答正文，与写入的 text.delta 逐条拼接一致。 */
+	const answerOf = (
+		conversationId: string,
+		round: number,
+		rounds: readonly Round[],
+	) => {
+		const shape = rounds[round - 1] as Round;
+		return Array.from(
+			{ length: shape.text },
+			(_, index) =>
+				`${executionOf(conversationId, round)}-answer-${shape.reasoning + 2 + index} `,
+		).join("");
+	};
+	const fourRounds: readonly Round[] = [
+		{ reasoning: 540, text: 50 },
+		...deepSeekRounds,
+	];
+	const executions = (events: readonly { executionId: string }[] = []) => [
+		...new Set(events.map((event) => event.executionId)),
+	];
+	/** 会话详情投影出的各轮回答正文，按 Execution 取用。 */
+	const answersOf = (
+		detail: Awaited<ReturnType<PostgresConversationQueryV1["get"]>>,
+	) =>
+		new Map(
+			projectConversationMessagesV1(detail as NonNullable<typeof detail>)
+				.filter((message) => message.role === "assistant")
+				.map((message) => [message.executionId, message.text]),
+		);
+
+	/** 按轮次批量写入：每轮依次为 processing、思考增量、正文增量、completed。 */
+	async function seedRounds(conversationId: string, rounds: readonly Round[]) {
+		const total = rounds.reduce((sum, round) => sum + roundSize(round), 0);
+		await client`insert into platform.conversations
+			(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision,last_conversation_cursor)
+			values (${conversationId},'reasoning-agent','reasoning-actor','web','ready',1,'auth-reasoning',${total})`;
+		let cursor = 0;
+		for (const [index, round] of rounds.entries()) {
+			const executionId = executionOf(conversationId, index + 1);
+			const messageId = `${executionId}-question`;
+			const createdAt = new Date(Date.UTC(2026, 9, 1, 0, index)).toISOString();
+			await client`insert into platform.conversation_executions
+				(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at)
+				values (${executionId},${conversationId},'reasoning-agent','reasoning-actor','web',${`turn-${executionId}`},'completed',1,'auth-reasoning',${createdAt})`;
+			await client`insert into platform.conversation_messages
+				(message_id,conversation_id,actor_id,role,text,execution_id,status,created_at,updated_at)
+				values (${messageId},${conversationId},'reasoning-actor','user',${`question-${index + 1}`},${executionId},'submitted',${createdAt},${createdAt})`;
+			await client`insert into platform.outbox_items
+				(id,scope_type,scope_id,operation,payload,trace_id,request_id,available_at,created_at,updated_at)
+				values (${`outbox-${executionId}`},'conversation',${conversationId},'conversation.turn.submit.v1',
+					${client.json({
+						schemaVersion: 1,
+						conversationId,
+						executionId,
+						messageId,
+						turnId: `turn-${executionId}`,
+						sessionGeneration: 1,
+					})},'trace-reasoning','request-reasoning',${createdAt},${createdAt},${createdAt})`;
+			await client`insert into platform.conversation_events
+				(event_id,conversation_id,execution_id,adapter_event_key,sequence,conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,occurred_at,source)
+				select ${executionId} || '-event-' || n, ${conversationId}, ${executionId},
+					${executionId} || '-key-' || n, n, ${cursor}::bigint + n, kind.event_type, kind.event_payload,
+					${"d".repeat(64)}, ${executionId} || '-runtime-' || n,
+					${createdAt}::timestamptz + n * interval '1 millisecond', 'runtime'
+				from generate_series(1, ${roundSize(round)}::int) as n
+				cross join lateral (
+					select
+						case
+							when n = 1 or n = ${roundSize(round)}::int then 'execution.status'
+							when n <= 1 + ${round.reasoning}::int then 'reasoning.delta'
+							else 'text.delta'
+						end as event_type,
+						case
+							when n = 1 then jsonb_build_object('type', 'execution.status', 'status', 'processing')
+							when n = ${roundSize(round)}::int then jsonb_build_object('type', 'execution.status', 'status', 'completed')
+							when n <= 1 + ${round.reasoning}::int then jsonb_build_object('type', 'reasoning.delta', 'kind', 'raw', 'text', 'thought-' || n || ' ')
+							else jsonb_build_object('type', 'text.delta', 'text', ${executionId} || '-answer-' || n || ' ')
+						end as event_payload
+				) kind`;
+			cursor += roundSize(round);
+		}
+		await seedSessionSandboxFixture(client, conversationId);
+	}
+
+	beforeAll(async () => {
+		await seedRounds("reasoning-three", deepSeekRounds);
+		await seedRounds("reasoning-four", fourRounds);
+		await seedRounds("reasoning-walk", [
+			{ reasoning: 30, text: 5 },
+			{ reasoning: 150, text: 3 },
+			{ reasoning: 10, text: 20 },
+			{ reasoning: 40, text: 2 },
+			{ reasoning: 0, text: 8 },
+			{ reasoning: 120, text: 4 },
+		]);
+	}, 60_000);
+
+	/** 与 platform-api 装配一致：窗口 200 条、总上限取默认值。 */
+	function platformReader() {
+		return new PostgresConversationQueryV1({ databaseUrl, eventWindow: 200 });
+	}
+
+	it("shows every answer and thinking process of a three-round reasoning conversation on the first screen", async () => {
+		const reader = platformReader();
+		try {
+			const detail = await reader.get(reasoningScope, "reasoning-three");
+			// 思考增量不计入窗口条数：3 轮共 1,816 条事件，旧规则只装得下最新一轮。
+			expect(detail?.events).toHaveLength(
+				deepSeekRounds.reduce((sum, round) => sum + roundSize(round), 0),
+			);
+			expect(detail?.eventWindow).toEqual({
+				hasEarlier: false,
+				beforeCursor: null,
+			});
+			expect(answersOf(detail)).toEqual(
+				new Map(
+					[1, 2, 3].map((round) => [
+						executionOf("reasoning-three", round),
+						answerOf("reasoning-three", round, deepSeekRounds),
+					]),
+				),
+			);
+			for (const [index, round] of deepSeekRounds.entries())
+				expect(
+					detail?.events.filter(
+						(event) =>
+							event.executionId === executionOf("reasoning-three", index + 1) &&
+							event.eventType === "reasoning.delta",
+					),
+				).toHaveLength(round.reasoning);
+		} finally {
+			await reader.close();
+		}
+	});
+
+	it("bounds the first screen by total events and pages the rest without duplicates or gaps", async () => {
+		const reader = platformReader();
+		try {
+			const recent = await reader.get(reasoningScope, "reasoning-four");
+			// 计数窗口会跨到第 1 轮，但加入它会超过 2,000 条总上限，留给更早的页；最近 3 轮完整。
+			expect(executions(recent?.events)).toEqual(
+				[2, 3, 4].map((round) => executionOf("reasoning-four", round)),
+			);
+			expect(recent?.events.length).toBeLessThanOrEqual(2_000);
+			// 窗口外的第 1 轮没有正文，由 Web 提示「加载更早内容」（NW-15）。
+			expect(answersOf(recent)).toEqual(
+				new Map([
+					[executionOf("reasoning-four", 1), ""],
+					...[2, 3, 4].map(
+						(round) =>
+							[
+								executionOf("reasoning-four", round),
+								answerOf("reasoning-four", round, fourRounds),
+							] as const,
+					),
+				]),
+			);
+			expect(recent?.eventWindow).toEqual({
+				hasEarlier: true,
+				beforeCursor: expect.any(String),
+			});
+			const earlier = await reader.get(
+				reasoningScope,
+				"reasoning-four",
+				undefined,
+				{ beforeCursor: recent?.eventWindow?.beforeCursor as string },
+			);
+			expect(executions(earlier?.events)).toEqual([
+				executionOf("reasoning-four", 1),
+			]);
+			expect(earlier?.eventWindow).toEqual({
+				hasEarlier: false,
+				beforeCursor: null,
+			});
+			const full = await query.get(reasoningScope, "reasoning-four");
+			expect(
+				[...(earlier?.events ?? []), ...(recent?.events ?? [])].map(
+					(event) => event.eventId,
+				),
+			).toEqual(full?.events.map((event) => event.eventId));
+		} finally {
+			await reader.close();
+		}
+	});
+
+	it("keeps every page within the total limit except a single oversized Execution", async () => {
+		const reader = new PostgresConversationQueryV1({
+			databaseUrl,
+			eventWindow: 20,
+			eventWindowMaxEvents: 100,
+		});
+		try {
+			const pages: (readonly string[])[] = [];
+			const walked: string[] = [];
+			let beforeCursor: string | undefined;
+			for (let page = 0; page < 10; page++) {
+				const detail = await reader.get(
+					reasoningScope,
+					"reasoning-walk",
+					undefined,
+					beforeCursor === undefined ? undefined : { beforeCursor },
+				);
+				pages.push(executions(detail?.events));
+				walked.unshift(...(detail?.events.map((event) => event.eventId) ?? []));
+				if (!detail?.eventWindow?.hasEarlier) break;
+				beforeCursor = detail.eventWindow.beforeCursor as string;
+			}
+			// 第 6、2 轮各自超过 100 条，只能独占一页且完整返回；第 3–5 轮合计 86 条同页；
+			// 第 1 轮不足计数窗口，读到最早。
+			expect(pages).toEqual(
+				[[6], [3, 4, 5], [2], [1]].map((rounds) =>
+					rounds.map((round) => executionOf("reasoning-walk", round)),
+				),
+			);
+			const full = await query.get(reasoningScope, "reasoning-walk");
+			expect(walked).toEqual(full?.events.map((event) => event.eventId));
+			expect(new Set(walked).size).toBe(walked.length);
+		} finally {
+			await reader.close();
+		}
+	});
+
+	it("rejects an invalid total event limit", () => {
+		for (const eventWindowMaxEvents of [0, 10_001, 1.5])
+			expect(
+				() =>
+					new PostgresConversationQueryV1({
+						databaseUrl,
+						eventWindow: 200,
+						eventWindowMaxEvents,
+					}),
+			).toThrow(ConversationQueryError);
 	});
 });
 

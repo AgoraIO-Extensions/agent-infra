@@ -295,7 +295,7 @@ Connection 使用独立 `connection-web` 和独立浏览器会话，包含登录
 
 - TanStack Query 管理列表、详情、配置和审批等服务端状态。
 - 路由参数和 URL Search Params 保存可分享的页面筛选状态，但 M1 不提供会话分享。
-- 对话时间线使用独立 reducer 合并持久化消息、SSE 增量和重连补发事件。
+- 对话时间线使用独立 reducer 合并持久化消息、SSE 增量和重连补发事件。命令受理、回复结束或 `timeline.reload` 后重新读取会话详情时，新首屏与已加载事件按 `eventId` 有重叠，就保留重叠之前已加载的更早事件，已显示的回合不因首屏窗口收窄而消失；没有重叠时无法排除缺口，按新首屏重建。
 - 表单使用 Schema 校验；服务端重复执行同一校验，不能信任浏览器结果。
 - 不预装全局状态库。只有出现跨路由、非服务端且难以由 React Context 管理的状态后再引入。
 - Web 使用 OpenAPI 生成的 TypeScript Client，并通过同一 Contract Schema 校验的 Mock Server 和场景 fixture 独立开发。Mock 必须覆盖正常、无权限、启动中、繁忙、失败和 SSE 重连，不能维护另一套手写假接口。
@@ -326,6 +326,7 @@ API 契约覆盖 Agent 创建/启动/停止/重启、任务提交/查询/取消�
 - 标准模板当前选择失效时，`platform-api` 在接受消息的同一 Conversation 事务中写入一条 `model.selection.fell_back`：初始消息和重新生成绑定新建 Execution，补充指令绑定当前活跃 Execution。该事务同时分配下一 Execution `sequence` 和 Conversation `conversationCursor`、推进两个平台计数器并保存对应审计；幂等重放复用原分配，任何一步失败均整体回滚，且不推进 Execution 的 Runtime cursor。
 - 思考过程：Runtime 以 `schemaVersion: 2` 的 `reasoning` 事件输出模型提供的原始推理或推理摘要增量（`kind` 为 `raw` 或 `summary`，单条上限与正文增量相同），Worker 保存为 Runtime 来源的 `reasoning.delta`，属于会话正文，只在 Conversation 读取权限内返回。该事件只进入 V2 Conversation 读取与 V2 SSE；V1 SSE 和 Task 投影（任务查询、输出与事件订阅）跳过它但推进持久游标。回答正文、任务输出和企微答案只拼接 `text.delta`。发布时先让 Platform 各读取方接受该事件，再更新 Runtime。决策与边界见 [ADR-0026](../adr/0026-show-model-reasoning-as-conversation-content.md)。
 - Web/API 调用方通过 `Last-Event-ID` 或显式游标重连；服务端验证游标属于当前主体有权访问的 Conversation/Execution，任务流不能带出同会话其他任务的数据。
+- 会话详情首屏只返回最近的有界事件窗口，「加载更早内容」用 `beforeCursor` 按同一规则逐页向前读取。每页是连续的 `conversationCursor` 区间，由完整 Execution 组成：从最近的 Execution 向前逐个加入，`reasoning.delta` 以外的事件累计达到 200 条时停止，跨过该数的 Execution 仍完整加入；页内事件总数不超过 2,000 条，加入后会超出的 Execution 留给更早的页。最近的 Execution 自身超过总上限时，该页只含它且完整返回，不切断单轮回复。思考增量不计入 200 条，前几轮回答不会被思考过程挤出首屏；总上限约束首屏响应大小。窗口不改变 `conversationCursor`、`Last-Event-ID`、SSE 补发和 `timeline.reload` 语义。
 - 服务端先保存事件，再向在线连接推送；断线后按持久化序列补发。事件事务提交后，数据库发出只含 Conversation 标识的唤醒提示，在线连接据此立即从持久化游标读取；提示只用于缩短等待，丢失时按固定轮询送达，不改变持久化、排序和授权规则。
 - 心跳只用于保持连接，不进入业务时间线。
 - 同一事件可能被重复投递，消费者按 `eventId` 去重。订阅建立、续传和存续期间执行当前主体/凭证授权：每批事件写出前复核一次，空闲期间按固定间隔复核；失效后该批不写出并关闭流，审计订阅起止，不逐条审计输出。
