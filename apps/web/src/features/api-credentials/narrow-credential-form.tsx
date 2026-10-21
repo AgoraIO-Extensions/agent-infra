@@ -168,8 +168,11 @@ export function NarrowCredentialForm({
 							key={scope}
 							className="flex min-h-11 items-center gap-2 rounded border px-3 py-2"
 						>
+							{/* 签发区与其他已展开的收窄表单也有同名权限复选框：名称为「{权限}：{凭证标识}」
+							    （C2-19、N-12），取自下方隐藏文本，以可见标签文字开头；可见文字与点击标签切换不变。 */}
 							<Checkbox
 								id={`${id}-${scope}`}
+								aria-labelledby={`${id}-${scope}-name`}
 								checked={scopes.includes(scope)}
 								disabled={busy}
 								aria-invalid={Boolean(scopeError)}
@@ -188,6 +191,12 @@ export function NarrowCredentialForm({
 							<Label htmlFor={`${id}-${scope}`} variant="option">
 								{personalApiCredentialScopeLabels[scope]}
 							</Label>
+							<span id={`${id}-${scope}-name`} hidden>
+								{withObjectName(
+									personalApiCredentialScopeLabels[scope],
+									credential.credentialId,
+								)}
+							</span>
 						</div>
 					))}
 				</div>

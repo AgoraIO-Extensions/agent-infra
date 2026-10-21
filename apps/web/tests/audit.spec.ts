@@ -10,6 +10,7 @@ import { directorySearchResponse } from "../src/features/directory-test-fixtures
 import { captureDesignContract, designViewports } from "./design-contract";
 import { expectNoDuplicateControls } from "./page-health";
 import {
+	computed,
 	expectCardTable,
 	expectCleanPage,
 	expectDesktopTable,
@@ -1163,16 +1164,98 @@ test("personal audit goes from filters straight to the table; platform audit kee
 	).toBe(true);
 	await expect(main.getByRole("button", { name: "查询" })).toBeVisible();
 	await expect(main.getByRole("button", { name: "下一页" })).toBeVisible();
+	// C2-06：设计 .audit-pagination 页码 14px / 1.65；「上一页 / 下一页」与「重置 / 查询」同为 .tag-row，间距 6px。
+	await expectAuditPagination(page);
 	// AC-2：同一页面没有同名控件，没有控制台错误与横向溢出。
 	await expectNoDuplicateControls(page, "我的审计");
 	await expectCleanPage(page, errors);
 
 	await fixture(page, "admin");
 	await page.goto("/admin/audit");
-	await expect(
-		main.getByRole("heading", { level: 2, name: "平台操作记录" }),
-	).toBeVisible();
+	const timelineTitle = main.getByRole("heading", {
+		level: 2,
+		name: "平台操作记录",
+	});
+	await expect(timelineTitle).toBeVisible();
+	// C2-07、V-10：时间线标题为 16px / 600 / 1.5 正文字体，不用分区展示字体；
+	// eyebrow「事件时间线」与右侧说明 14px / 1.65。
+	const bodyFont = await page.evaluate(() => {
+		const probe = document.createElement("span");
+		probe.style.fontFamily = "var(--font-body)";
+		document.body.append(probe);
+		const font = getComputedStyle(probe).fontFamily;
+		probe.remove();
+		return font;
+	});
+	expect(
+		await computed(timelineTitle, [
+			"fontFamily",
+			"fontSize",
+			"fontWeight",
+			"lineHeight",
+			"marginTop",
+		]),
+	).toEqual({
+		fontFamily: bodyFont,
+		fontSize: "16px",
+		fontWeight: "600",
+		lineHeight: "24px",
+		marginTop: "4px",
+	});
+	for (const text of ["事件时间线", "不包含会话正文、凭证值或模型内部思考"])
+		expect(
+			await computed(main.getByText(text, { exact: true }), [
+				"fontSize",
+				"lineHeight",
+			]),
+		).toEqual({ fontSize: "14px", lineHeight: "23.1px" });
+	await expectAuditPagination(page);
 	await expect(main.getByText("最小审计数据", { exact: true })).toBeVisible();
+	// C2-08：设计 .notice > p 不放大、宽度随最长一行收缩；正文与导出稿同文，「。」后不多出空格。
+	const minimalNotice = main.locator('[data-slot="alert"]', {
+		hasText: "最小审计数据",
+	});
+	await expect(minimalNotice.locator('[data-slot="alert-content"]')).toHaveCSS(
+		"flex-grow",
+		"0",
+	);
+	await expect(
+		minimalNotice.locator('[data-slot="alert-description"]'),
+	).toHaveText(
+		"记录谁在何时对哪个对象做了什么及其结果，不保存对话正文、凭证值或模型内部思考。Connection 授权与外部效果由独立 Connection 审计核实，关联引用不授予查询权限。",
+	);
 	await expectNoDuplicateControls(page, "平台审计");
 	await expectCleanPage(page, errors);
 });
+
+/** 审计列表分页行与筛选按钮组（设计 .audit-pagination、.tag-row，C2-06）。 */
+async function expectAuditPagination(page: Page) {
+	const main = page.locator("#main-content");
+	const pageText = main.getByText(/^第 \d+ 页 · 本页 \d+ 条$/);
+	expect(await computed(pageText, ["fontSize", "lineHeight"])).toEqual({
+		fontSize: "14px",
+		lineHeight: "23.1px",
+	});
+	for (const [first, second] of [
+		["上一页", "下一页"],
+		["重置", "查询"],
+	] as const) {
+		const left = main.getByRole("button", { name: first, exact: true });
+		const right = main.getByRole("button", { name: second, exact: true });
+		expect(
+			await left.evaluate(
+				(element) =>
+					getComputedStyle(element.parentElement as Element).columnGap,
+			),
+		).toBe("6px");
+		const [leftBox, rightBox] = await Promise.all([
+			left.boundingBox(),
+			right.boundingBox(),
+		]);
+		if (!leftBox || !rightBox) throw new Error(`${first} / ${second} missing`);
+		expect(Math.round(rightBox.y)).toBe(Math.round(leftBox.y));
+		expect(
+			Math.abs(rightBox.x - leftBox.x - leftBox.width - 6),
+		).toBeLessThanOrEqual(0.5);
+	}
+}

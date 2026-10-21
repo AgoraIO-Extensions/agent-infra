@@ -701,6 +701,45 @@
 .audit-table [data-slot="table-head"]:last-child {
 	width: 120px;
 }
+/* 设计 .audit-timeline-head（V-10、C2-07）：eyebrow 与右侧说明 14px / 1.65 muted；
+   标题 h2 为 16px / 600 / 1.5 正文字体，两级类选择器压过未分层的 `.management-content h2` 展示字体。 */
+.audit-timeline-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	margin-bottom: 16px;
+}
+.audit-timeline-head p {
+	color: var(--muted-foreground);
+	font-size: 14px;
+	line-height: 1.65;
+}
+.audit-timeline-head .audit-timeline-title {
+	margin-top: 4px;
+	font: 600 16px / 1.5 var(--font-body);
+	letter-spacing: 0;
+}
+/* 设计 .audit-pagination（C2-06）：页码 14px / 1.65 muted，按钮组间距 6px（.tag-row）。 */
+.audit-pagination {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin-top: 16px;
+}
+.audit-pagination > p {
+	color: var(--muted-foreground);
+	font-size: 14px;
+	line-height: 1.65;
+}
+/* 设计 .notice > p（C2-08）：正文是不放大的 flex 项，宽度随最长一行收缩（1440 下 1007.6px），
+   不撑满 notice；窄屏放不下时仍按可用宽度换行。 */
+.audit-minimal-notice [data-slot="alert-content"] {
+	flex: 0 1 auto;
+}
 .audit-detail {
 	width: min(100%, 680px);
 }
@@ -3033,6 +3072,12 @@ body {
 .admin-agent-table [data-slot="table-head"]:last-child {
 	width: 200px;
 }
+/* 创建失败行有「配置」「重试」「停用」三个按钮（3 × 80.5px + 2 × 6px + 左右 15px 内边距）：
+   本页有这样的行时操作列放宽到能放下三个按钮，保持单行（C2-01、#3033）；其余列表仍为 200px。 */
+.admin-agent-table:has(.admin-agent-row-actions > :nth-child(3))
+[data-slot="table-head"]:last-child {
+	width: 288px;
+}
 .admin-agent-governance {
 	margin-top: 32px;
 }
@@ -3273,6 +3318,8 @@ body {
 	font-family: var(--font-body);
 	font-size: 16px;
 	font-weight: 600;
+	/* 设计 h2 行高 1.35（21.6px）；「已安装」「我创建的」行标题为 h3，同样取 1.35（C2-11）。 */
+	line-height: 1.35;
 	letter-spacing: 0;
 }
 .skill-page .skill-row-copy p {
@@ -3298,13 +3345,11 @@ body {
 	font-size: 12px;
 	overflow-wrap: anywhere;
 }
+/* 版本号独占一行；审核行的状态 chip 紧跟其下，按设计不另加上距（C2-05）。 */
 .skill-row-meta strong {
 	display: block;
 	color: var(--foreground);
 	font-weight: 550;
-}
-.skill-page .skill-row-meta [data-slot="badge"] {
-	margin-top: 4px;
 }
 .skill-mark {
 	display: grid;
@@ -3381,8 +3426,11 @@ body {
 	margin: 0;
 	overflow-wrap: anywhere;
 }
+/* 设计 .skill-dialog .facts（#3046 审阅弹窗）：标签列 100px，gap 10px 18px（C2-03）；
+   ≤767px 与审批审阅弹窗 .review-facts 一样改为单列，dt 上距 8px（C2-02）。 */
 .skill-dialog-facts {
 	grid-template-columns: 100px minmax(0, 1fr);
+	gap: 10px 18px;
 	margin-top: 0;
 	font-size: 13px;
 }
@@ -3432,6 +3480,11 @@ body {
 .skill-review-content .skill-code {
 	margin-top: 0;
 	padding: 16px;
+}
+/* 设计 label.field.section：「审核说明」距正文区 32px（≤767px 为 26px，C2-04）；
+   与弹窗 space-y-4 的 16px 外边距折叠，取较大值。标签沿用公共字段标签样式（W-33 同源）。 */
+.skill-review-reason {
+	margin-top: 32px;
 }
 .skill-page .skill-code pre,
 .skill-review-content .skill-code pre {
@@ -3498,6 +3551,14 @@ body {
 	font-size: 13px;
 	line-height: 1.6;
 }
+/* 设计 textarea.skill-editor：SKILL.md 至少 280px、最多 600px，13px / 1.8 等宽（C2-12）；
+   配套文件的「文件内容」仍按 .skill-content-text（180px / 1.6）。 */
+.skill-md-text {
+	min-height: 280px;
+	max-height: 600px;
+	line-height: 1.8;
+	resize: vertical;
+}
 .skill-content-files {
 	display: grid;
 	gap: 12px;
@@ -3541,10 +3602,13 @@ body {
 	font: 600 16px / 1.5 var(--font-body);
 	letter-spacing: 0;
 }
-/* 设计右栏 .section：版本、说明与操作各段上距 32px。 */
+/* 设计右栏 .section：说明与操作各段上距 32px；版本号为 .field.section-tight，距标题 15px（C2-13）。 */
 .skill-editor-aside .skill-editor-section,
 .skill-editor-aside .skill-editor-actions {
 	margin-top: 32px;
+}
+.skill-editor-aside .skill-editor-version {
+	margin-top: 15px;
 }
 /* 设计 .scope-choice / .scope-option：两列范围卡，选中卡边框加深、底色为 surface-raised。 */
 .skill-scope-choice {
@@ -3636,6 +3700,19 @@ body {
 	}
 	.skill-scope-choice {
 		grid-template-columns: minmax(0, 1fr);
+	}
+	.skill-dialog-facts {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 3px;
+	}
+	.skill-dialog-facts dt {
+		margin-top: 8px;
+	}
+	.skill-dialog-facts dd {
+		margin-bottom: 4px;
+	}
+	.skill-review-reason {
+		margin-top: 26px;
 	}
 }
 
@@ -3748,6 +3825,10 @@ body {
 	color: var(--muted-ink);
 	font-size: 11px;
 	line-height: 1.65;
+}
+/* 设计撤销确认：对象与权限行之后，说明段上距 10px（C2-15）；公共确认弹窗的其余间距仍为 8px。 */
+[data-slot="confirm-dialog-subject"]:has(.credential-revoke-scopes) {
+	margin-bottom: 10px;
 }
 @media (max-width: 767px) {
 	.settings-surface,
