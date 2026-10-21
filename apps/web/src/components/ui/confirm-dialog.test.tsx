@@ -29,6 +29,81 @@ describe("ConfirmDialog", () => {
 		expect(required).toBe(true);
 	});
 
+	it("requires a description or block-level content", () => {
+		type Props = Parameters<typeof ConfirmDialog>[0];
+		// @ts-expect-error 必须用 description 或块级正文写明后果。
+		const missing: Props = {
+			title: "确认绑定固定版本",
+			confirmLabel: "确认绑定",
+			onConfirm: () => undefined,
+			trigger: <Button>绑定</Button>,
+		};
+		// @ts-expect-error 文字说明与块级正文二选一，块级正文本身就是可访问描述。
+		const both: Props = {
+			title: "确认绑定固定版本",
+			description: "确认后提交绑定。",
+			children: <dl />,
+			confirmLabel: "确认绑定",
+			onConfirm: () => undefined,
+			trigger: <Button>绑定</Button>,
+		};
+		expect(missing).toBeTruthy();
+		expect(both).toBeTruthy();
+	});
+
+	// #3075：DialogDescription 渲染为 <p>，dl 等块级正文改用 div 承载，仍作为可访问描述。
+	it("renders block-level content outside <p> as the accessible description", async () => {
+		const consoleError = vi.spyOn(console, "error");
+		try {
+			render(
+				<ConfirmDialog
+					variant="skill"
+					tone="default"
+					title="确认绑定固定版本"
+					subject={{ name: "code-review · v1.0.0" }}
+					confirmLabel="确认绑定"
+					onConfirm={() => undefined}
+					trigger={<Button>绑定固定版本</Button>}
+				>
+					<dl>
+						<dt>脚本</dt>
+						<dd>禁用</dd>
+					</dl>
+				</ConfirmDialog>,
+			);
+			fireEvent.click(screen.getByRole("button", { name: "绑定固定版本" }));
+			const dialog = await screen.findByRole("dialog", {
+				name: "确认绑定固定版本",
+			});
+			const list = dialog.querySelector("dl");
+			if (!list) throw new Error("Missing block-level content");
+			expect(list.closest("p")).toBeNull();
+			const description = list.closest('[data-slot="dialog-description"]');
+			expect(description?.tagName).toBe("DIV");
+			expect(dialog.getAttribute("aria-describedby")).toBe(description?.id);
+			expect(consoleError).not.toHaveBeenCalled();
+		} finally {
+			consoleError.mockRestore();
+		}
+	});
+
+	it("keeps a text description in a <p>", async () => {
+		render(
+			<ConfirmDialog
+				title="停用这个应用？"
+				description="停用后平台拒绝新任务。"
+				confirmLabel="停用应用"
+				onConfirm={() => undefined}
+				trigger={<Button variant="outline">停用应用</Button>}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "停用应用" }));
+		const dialog = await screen.findByRole("dialog");
+		const description = within(dialog).getByText("停用后平台拒绝新任务。");
+		expect(description.tagName).toBe("P");
+		expect(dialog.getAttribute("aria-describedby")).toBe(description.id);
+	});
+
 	it("shows the subject and consequence, and only confirms once", async () => {
 		const onConfirm = vi.fn();
 		render(

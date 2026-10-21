@@ -355,6 +355,48 @@ describe("AgentSkillBindingScreen (O-02)", () => {
 		await waitFor(() => expect(toastText()).toBe("已提交绑定，等待同步"));
 	});
 
+	// #3075：事实列表是块级 <dl>，不能落进渲染为 <p> 的 DialogDescription；
+	// React 开发版会把这类非法嵌套打到 console.error。
+	it("renders the binding facts outside any <p> without console errors (#3075)", async () => {
+		const consoleError = vi.spyOn(console, "error");
+		try {
+			renderScreen();
+			await screen.findByRole("article");
+			fireEvent.change(screen.getByLabelText("固定版本"), {
+				target: { value: "code-review-v1" },
+			});
+			fireEvent.click(screen.getByRole("button", { name: "绑定固定版本" }));
+			const dialog = await screen.findByRole("dialog", {
+				name: "确认绑定固定版本",
+			});
+			const facts = dialog.querySelector("dl.skill-binding-facts");
+			if (!facts) throw new Error("Missing binding facts");
+			expect(facts.closest("p")).toBeNull();
+			expect(dialog.querySelector("p dl, p dt, p dd")).toBeNull();
+			expect(
+				[...facts.querySelectorAll("dt")].map((term) => term.textContent),
+			).toEqual(["Agent", "文件范围", "脚本", "生效条件"]);
+			expect(
+				[...facts.querySelectorAll("dd")].map((value) => value.textContent),
+			).toEqual([
+				agent.name,
+				"不额外授予文件或网络权限",
+				"禁用",
+				"同步完成且装配确认",
+			]);
+			// 事实列表仍是弹窗的可访问描述。
+			const describedBy = dialog.getAttribute("aria-describedby");
+			expect(
+				describedBy
+					? document.getElementById(describedBy)?.contains(facts)
+					: false,
+			).toBe(true);
+			expect(consoleError).not.toHaveBeenCalled();
+		} finally {
+			consoleError.mockRestore();
+		}
+	});
+
 	// W-30：写入并回读后，焦点交给结果卡片标题或页面 h1，不落到 body。
 	function statefulBindings(
 		initial: ReturnType<typeof skillBinding>[],

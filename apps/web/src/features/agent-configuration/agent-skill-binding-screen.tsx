@@ -820,18 +820,6 @@ function BindVersionForm({
 						tone="default"
 						title="确认绑定固定版本"
 						subject={selected ? { name: versionLabel(selected) } : undefined}
-						description={
-							<dl className="skill-binding-facts">
-								<dt>Agent</dt>
-								<dd>{agentName}</dd>
-								<dt>文件范围</dt>
-								<dd>不额外授予文件或网络权限</dd>
-								<dt>脚本</dt>
-								<dd>禁用</dd>
-								<dt>生效条件</dt>
-								<dd>同步完成且装配确认</dd>
-							</dl>
-						}
 						confirmLabel="确认绑定"
 						disabled={!candidate || writing}
 						open={open}
@@ -858,7 +846,19 @@ function BindVersionForm({
 							if (next) void onBind(next, candidate.skillVersionId);
 						}}
 						trigger={<Button type="button">绑定固定版本</Button>}
-					/>
+					>
+						{/* 事实列表是块级 dl，作为正文传入，不放进渲染为 <p> 的 description（#3075）。 */}
+						<dl className="skill-binding-facts">
+							<dt>Agent</dt>
+							<dd>{agentName}</dd>
+							<dt>文件范围</dt>
+							<dd>不额外授予文件或网络权限</dd>
+							<dt>脚本</dt>
+							<dd>禁用</dd>
+							<dt>生效条件</dt>
+							<dd>同步完成且装配确认</dd>
+						</dl>
+					</ConfirmDialog>
 				</div>
 			</div>
 		</section>
