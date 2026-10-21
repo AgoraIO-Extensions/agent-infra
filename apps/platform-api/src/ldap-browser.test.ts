@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type {
 	createLdapIdentityDirectory,
 	LdapAccount,
@@ -8,6 +9,7 @@ import {
 	type LdapBrowserInput,
 	type LdapSessionStore,
 } from "./ldap-browser.js";
+import { createPostgresLdapBrowserDeployment } from "./ldap-browser-deployment.js";
 
 const origin = "https://platform.example.test";
 const account: LdapAccount = {
@@ -745,5 +747,103 @@ describe("current material-grant administrator", () => {
 			new Error("private directory failure"),
 		);
 		await expect(resolve()).rejects.toThrow();
+	});
+});
+
+describe("current file-exchange actor identity", () => {
+	it("resolves the current identity for an active user", async () => {
+		const f = fixture();
+		await expect(
+			f.adapter.resolveCurrentIdentity(account.userId),
+		).resolves.toMatchObject({
+			schemaVersion: 1,
+			userId: account.userId,
+			displayName: account.displayName,
+			accountStatus: "active",
+			organizationIds: ["org-a"],
+			roles: ["employee", "system_admin"],
+			authorizationRevision: expect.any(String),
+		});
+	});
+
+	it("returns null for a missing or mismatched current account", async () => {
+		const f = fixture();
+		f.setCurrent(null);
+		expect(await f.adapter.resolveCurrentIdentity(account.userId)).toBeNull();
+		f.setCurrent({ ...account, userId: "another-user" });
+		expect(await f.adapter.resolveCurrentIdentity(account.userId)).toBeNull();
+	});
+
+	it("treats a Platform-disabled user as disabled instead of active", async () => {
+		const f = fixture();
+		f.setDisabled(true);
+		await expect(
+			f.adapter.resolveCurrentIdentity(account.userId),
+		).resolves.toMatchObject({
+			userId: account.userId,
+			accountStatus: "disabled",
+			organizationIds: [],
+		});
+	});
+
+	it("treats an LDAP-disabled user as disabled", async () => {
+		const f = fixture();
+		f.setCurrent({ ...account, accountStatus: "disabled" });
+		await expect(
+			f.adapter.resolveCurrentIdentity(account.userId),
+		).resolves.toMatchObject({ accountStatus: "disabled" });
+	});
+
+	it("fails closed when directory, disable-store or organization facts are unavailable", async () => {
+		const f = fixture();
+		vi.mocked(f.directory.currentByUserId).mockRejectedValueOnce(
+			new Error("private directory failure"),
+		);
+		await expect(
+			f.adapter.resolveCurrentIdentity(account.userId),
+		).rejects.toThrow();
+		vi.mocked(f.isPlatformDisabled).mockRejectedValueOnce(
+			new Error("private disable-store failure"),
+		);
+		await expect(
+			f.adapter.resolveCurrentIdentity(account.userId),
+		).rejects.toThrow();
+		f.setOrganizationsAvailable(false);
+		await expect(
+			f.adapter.resolveCurrentIdentity(account.userId),
+		).rejects.toThrow();
+	});
+});
+
+describe("browser deployment file actor identity", () => {
+	it("forwards the current identity mapping and preserves null for missing accounts", async () => {
+		let current: LdapAccount | null = account;
+		const directory = {
+			userIdForUid: vi.fn(async () => account.userId),
+			currentByUserId: vi.fn(async () => current),
+		} as unknown as ReturnType<typeof createLdapIdentityDirectory>;
+		const deployment = createPostgresLdapBrowserDeployment({
+			databaseUrl: "postgresql://agent_infra:unused@127.0.0.1:1/agent_infra",
+			directory,
+			isPlatformDisabled: async () => false,
+			organizationIds: async () => ["org-a"],
+			publicOrigin: origin,
+			trustedProxyToken: randomBytes(32).toString("base64url"),
+		});
+		try {
+			await expect(
+				deployment.resolveCurrentIdentity(account.userId),
+			).resolves.toMatchObject({
+				userId: account.userId,
+				accountStatus: "active",
+				organizationIds: ["org-a"],
+			});
+			current = null;
+			await expect(
+				deployment.resolveCurrentIdentity(account.userId),
+			).resolves.toBeNull();
+		} finally {
+			await deployment.browserAuth.close();
+		}
 	});
 });

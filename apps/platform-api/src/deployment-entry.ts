@@ -1,8 +1,5 @@
 import { readFile } from "node:fs/promises";
-import {
-	createLdapIdentityDirectory,
-	resolveLdapPrincipal,
-} from "@agent-infra/identity";
+import { createLdapIdentityDirectory } from "@agent-infra/identity";
 import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
 import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
 import {
@@ -188,21 +185,13 @@ if (
 
 /**
  * File exchange re-resolves the signed actor against current directory and
- * Platform disable facts; it must never reuse the browser session or a stale
- * request identity. Dependency failures propagate and deny the exchange.
+ * Platform disable facts through the same current identity mapping as browser
+ * sessions; it never reuses a browser session or a stale request identity.
+ * Dependency failures propagate and deny the exchange.
  */
 const fileDeployment =
 	await createProductionPlatformFileDeploymentFromEnvironmentV1({
-		resolveActor: async (actorId) => {
-			const account = await directory.currentByUserId(actorId);
-			if (!account || account.userId !== actorId) return null;
-			return resolveLdapPrincipal(account, {
-				isPlatformDisabled: (userId) =>
-					userGovernance.isPlatformDisabled(userId),
-				organizationIds,
-				...(organizationAuthority ? { organizationAuthority } : {}),
-			});
-		},
+		resolveActor: (actorId) => browser.resolveCurrentIdentity(actorId),
 	});
 
 export const browserAuth = browser.browserAuth;

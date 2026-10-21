@@ -158,6 +158,17 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 	const current = (account: LdapAccount) =>
 		resolveLdapPrincipal(account, input);
 
+	/**
+	 * 文件交换的 Actor 解析必须与浏览器会话使用同一组当前事实（#3060）：
+	 * 每次调用都重新读取 LDAP 当前账户与 Platform 停用状态，不复用会话或请求中的旧身份。
+	 * 账户缺失或映射不一致返回 null；目录、停用记录或组织快照不可用时抛错，由调用方失败关闭。
+	 */
+	const resolveCurrentIdentity = async (userId: string) => {
+		const account = await input.directory.currentByUserId(userId);
+		if (!account || account.userId !== userId) return null;
+		return current(account);
+	};
+
 	const identityAdapter = {
 		async resolve(request: Request) {
 			const token = cookie(request);
@@ -361,5 +372,5 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 		return result;
 	}
 
-	return { identityAdapter, handleRequest };
+	return { identityAdapter, handleRequest, resolveCurrentIdentity };
 }

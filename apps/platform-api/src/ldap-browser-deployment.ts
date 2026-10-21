@@ -33,6 +33,11 @@ export function createPostgresLdapBrowserDeployment(
 	};
 	return {
 		identity: adapter.identityAdapter,
+		/**
+		 * 文件交换 Actor 与浏览器会话共享同一当前身份映射（#3060），
+		 * 不再由部署入口另行拼装 LDAP 授权输入。
+		 */
+		resolveCurrentIdentity: adapter.resolveCurrentIdentity,
 		browserAuth: {
 			handleRequest(request: Request) {
 				if (!trustedProxy(request)) return new Response(null, { status: 400 });
