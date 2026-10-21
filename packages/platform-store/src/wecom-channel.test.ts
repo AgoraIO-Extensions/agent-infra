@@ -623,6 +623,30 @@ it("still claims expired and failed receipts without a terminal event (#3076)", 
 	expect(claim?.receiptId).toBe(failed.receipt.receiptId);
 	expect(claim?.executionStatus).toBe("failed");
 });
+it("claims an unready receipt only in the last 30 seconds for the timeout notice (#3077)", async () => {
+	await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+	const accepted = await channel().receive({
+		...message,
+		senderId: "timeout_notice_sender",
+		eventId: "timeout_notice_event",
+	});
+	if (accepted.outcome !== "accepted") throw new Error("Expected receipt");
+	// 执行仍在进行：有效期还剩 31 秒时不领取。
+	await sql`update platform.wecom_receipts set expires_at=now()+interval '31 seconds' where id=${accepted.receipt.receiptId}`;
+	expect(await store.claim()).toBeNull();
+	// 只剩 29 秒：领取，并标明回答未就绪，由 Core 发超时提示。
+	await sql`update platform.wecom_receipts set expires_at=now()+interval '29 seconds' where id=${accepted.receipt.receiptId}`;
+	const claim = await store.claim();
+	expect(claim?.receiptId).toBe(accepted.receipt.receiptId);
+	expect(claim?.answerReady).toBe(false);
+	// 回答已就绪的回执照常领取并标明就绪。
+	const ready = await executionWithEvents("timeout_ready_sender", [
+		{ type: "text.delta", text: "答案" },
+	]);
+	const readyClaim = await store.claim();
+	expect(readyClaim?.receiptId).toBe(ready.receiptId);
+	expect(readyClaim?.answerReady).toBe(true);
+});
 it("reads only a bounded thinking prefix and marks it incomplete (#2982)", async () => {
 	const receipt = await executionWithEvents("long_reasoning_sender", [
 		...Array.from({ length: 4 }, (_, index) => ({

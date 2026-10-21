@@ -230,6 +230,107 @@ it.each([
 	s.socket.send(JSON.stringify({ headers: frame.headers, errcode: 0 }));
 	expect(await result).toBe("sent");
 });
+// #3077：受理后立即发 finish=false 的处理中提示，最终回复在同一 stream 上 finish=true 覆盖它。
+it("acknowledges on the message stream first and finishes the same stream with the reply", async () => {
+	const s = await setup();
+	await s.authenticate();
+	const before = Date.now();
+	s.push();
+	await expect.poll(() => s.messages.length).toBe(1);
+	const message = s.messages[0];
+	if (!message) throw new Error("Missing admitted message");
+	// 回复有效期留在官方 stream 的 10 分钟时限之内。
+	const lifetime = Date.parse(message.replyExpiresAt) - before;
+	expect(lifetime).toBeGreaterThan(530_000);
+	expect(lifetime).toBeLessThanOrEqual(540_000 + 1_000);
+	const frames: Record<string, unknown>[] = [];
+	s.socket.on("message", (data) => {
+		const frame = JSON.parse(data.toString());
+		frames.push(frame);
+		// ACK 延迟一点：最终回复必须等处理中提示的 ACK 之后才发出。
+		setTimeout(
+			() =>
+				s.socket.send(JSON.stringify({ headers: frame.headers, errcode: 0 })),
+			frames.length === 1 ? 150 : 0,
+		);
+	});
+	const acknowledged = s.adapter.acknowledge({
+		scope: message,
+		replyHandle: message.replyHandle,
+		text: "已收到，正在处理…",
+	});
+	const replied = s.adapter.sender.send({
+		scope: message,
+		replyHandle: message.replyHandle,
+		text: "fixture answer",
+	});
+	expect(await acknowledged).toBe("sent");
+	expect(await replied).toBe("sent");
+	expect(frames).toHaveLength(2);
+	const [first, second] = frames as {
+		headers: { req_id: string };
+		body: { stream: { id: string; finish: boolean; content: string } };
+	}[];
+	expect(first).toMatchObject({
+		cmd: "aibot_respond_msg",
+		headers: { req_id: "request-1" },
+		body: {
+			msgtype: "stream",
+			stream: { finish: false, content: "已收到，正在处理…" },
+		},
+	});
+	expect(second).toMatchObject({
+		cmd: "aibot_respond_msg",
+		headers: { req_id: "request-1" },
+		body: {
+			msgtype: "stream",
+			stream: { finish: true, content: "fixture answer" },
+		},
+	});
+	expect(second?.body.stream.id).toBe(first?.body.stream.id);
+});
+it("does not acknowledge a stream whose final reply has started", async () => {
+	const s = await setup();
+	await s.authenticate();
+	s.push();
+	await expect.poll(() => s.messages.length).toBe(1);
+	const message = s.messages[0];
+	if (!message) throw new Error("Missing admitted message");
+	const frames: string[] = [];
+	s.socket.on("message", (data) => {
+		frames.push(data.toString());
+		s.socket.send(
+			JSON.stringify({
+				headers: JSON.parse(data.toString()).headers,
+				errcode: 0,
+			}),
+		);
+	});
+	expect(
+		await s.adapter.sender.send({
+			scope: message,
+			replyHandle: message.replyHandle,
+			text: "fixture answer",
+		}),
+	).toBe("sent");
+	expect(
+		await s.adapter.acknowledge({
+			scope: message,
+			replyHandle: message.replyHandle,
+			text: "已收到，正在处理…",
+		}),
+	).toBe("failed");
+	// 其他会话的路由或已关闭的连接同样不发。
+	expect(
+		await s.adapter.acknowledge({
+			scope: { ...message, senderId: "other-user" },
+			replyHandle: message.replyHandle,
+			text: "已收到，正在处理…",
+		}),
+	).toBe("failed");
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	expect(frames).toHaveLength(1);
+});
 it("does not send a bot reply after the final actor authorization is revoked", async () => {
 	const s = await setup();
 	await s.authenticate();
