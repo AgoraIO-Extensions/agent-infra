@@ -1726,12 +1726,23 @@ PKCE（S256）；既有获准 PAT/export 路线继续遵循 §13.5.3/§13.5.5，
 本节只定义平台使用方，不注册 Consumer、不修改 Connection 服务、Provider 或 Grant。
 取舍见 [ADR 0022](../adr/0022-acquire-oauth-tokens-in-protected-runtime.md)。
 
-**批准与入口。** 部署固定同一获准 Consumer 的 OAuth client ID、精确 HTTPS callback、
-issuer、authorization/token/revocation endpoint、resource、scope 和合同修订；这些输入与
-完整 profile/source 一起校验，不能由请求或 OAuth discovery 动态扩大目标。DCR 成功、
-Consumer 可见或本机登录不构成平台部署批准；不得使用其他产品 Consumer 或 Portable PAT
-作为自动 fallback。API/Worker/Web 不持有 Consumer secret、PKCE verifier、access/refresh
-Token，也不兑换授权码、刷新或代调用 MCP。
+**批准与入口。** 部署固定获准 Connection issuer、authorization/token/revocation endpoint、
+resource、scope 和合同修订；这些输入与完整 profile/source 一起校验，不能由请求或 OAuth
+discovery 动态扩大目标。部署若选择标准 OAuth Dynamic Client Registration（DCR），还必须把
+同一 issuer 下的 `registration_endpoint` 固定为批准的 `/oauth/register`，只发送本节规定的
+native client metadata，并把每个 Agent 的返回 `client_id` 绑定到该 Agent 的安装记录。DCR
+只创建独立 OAuth client/Consumer 入口，不创建 Grant、不替代用户确认，也不能把多个 Agent
+折叠到一个部署 client。DCR 成功、Consumer 可见或本机登录本身不构成连接器授权；不得使用
+其他产品 Consumer 或 Portable PAT 作为自动 fallback。API/Worker/Web 不持有 Consumer
+secret、PKCE verifier、access/refresh Token，也不兑换授权码、刷新或代调用 MCP。
+
+**DCR metadata。** 受保护 Runtime 为每个 Agent/安装生成唯一短期 loopback callback 路径，
+并发送固定 metadata：`client_name="Codex"`、该 callback 的单元素 `redirect_uris`、
+`grant_types=["authorization_code","refresh_token"]`、`response_types=["code"]`、
+`token_endpoint_auth_method="none"`、`scope="mcp"`、`application_type="native"`。不得
+接受 Agent、模型或请求覆盖这些字段；issuer、registration endpoint、回调 origin、resource
+和 scope 必须与已批准 profile 完全匹配。注册响应只保留非秘密 `client_id` 及部署合同引用；
+缺少可信的 Consumer/Instance 映射时保持安装不可用，不能把本地 client_id 猜作服务端实例。
 
 Platform 从当前认证身份与 Agent 使用权限固定原 principal＋Agent，并将安装授权发给
 其所属受保护 Runtime。此授权只允许原客户端发起或确认登录，不签发 Connection 权限；

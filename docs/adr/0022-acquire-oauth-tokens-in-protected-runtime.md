@@ -17,19 +17,23 @@ Runtime 安装供应，也不替代原主体/Agent 映射。直接复制 PAT、�
 
 ## 决策
 
-新增供应优先复用标准 Authorization Code + PKCE，由受保护 Runtime 客户端直接兑换、
+新增供应优先复用标准 Authorization Code + PKCE；当部署发布同一 issuer 的 DCR endpoint 时，
+受保护 Runtime 为每个 Agent/安装先创建独立 native OAuth client，再由该 client 直接兑换、
 保存及刷新/撤销。平台控制面只固定自身主体/Agent 的安装授权并传递登录入口与受限状态；
 固定 HTTP callback 只允许瞬时转交一次性授权码，不传 Token、verifier 或 Consumer secret。
 凭据仍通过现有私有 export/接收器发布，保留固定安装快照和受控重新装配。
 
 完整边界只在工程 Spec
 [§13.5.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)
-维护；原身份、当前授权、Linux 保护和发布规则继续引用 §13.5.3–§13.5.5。
+维护。DCR metadata、registration endpoint、client_id 与服务端 Consumer/Instance 映射必须
+按同一节校验；缺映射时保持 unavailable。原身份、当前授权、Linux 保护和发布规则继续
+引用 §13.5.3–§13.5.5。
 获准 PAT 仍可沿原路线供应，不自动选用已有 Portable PAT 或其他产品 Consumer。
 
 ## 取舍
 
-授权码转交通道需要共同评审 Platform 与 Runtime 接缝，并排除访问日志、持久队列和
+动态注册增加每个 Agent 独立 client 的生命周期与清理责任；注册只建立 OAuth client 入口，
+不创建 Grant 或替代用户确认。授权码转交通道需要共同评审 Platform 与 Runtime 接缝，并排除访问日志、持久队列和
 自动重试；它让 access/refresh Token 的领取完全留在原 Runtime 秘密边界，避免建立另一个
 Token 服务或将 PKCE verifier 放进控制面。该通道尚未实现，部署回跳地址也须明确批准。
 
