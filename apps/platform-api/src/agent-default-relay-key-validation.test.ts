@@ -196,11 +196,18 @@ describe("save-time verification with the default Key (ADR-0029)", () => {
 		expect(
 			probes.map(([, init]) => {
 				const body = JSON.parse(String(init?.body));
-				return [body.model, body.reasoning.effort, body.store, body.stream];
+				return [
+					body.model,
+					body.reasoning.effort,
+					body.store,
+					body.stream,
+					body.tool_choice,
+				];
 			}),
 		).toEqual([
-			["gpt-5", "low", false, true],
-			["gpt-5", "medium", false, true],
+			// 与固定 Codex 一致用 auto：DeepSeek 等思考模式模型拒绝强制的 tool_choice（#3115）。
+			["gpt-5", "low", false, true, "auto"],
+			["gpt-5", "medium", false, true, "auto"],
 		]);
 		expect(new Headers(probes[0]?.[1]?.headers).get("authorization")).toBe(
 			`Bearer ${key}`,
