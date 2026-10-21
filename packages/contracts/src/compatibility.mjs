@@ -2838,6 +2838,35 @@ function isSkillHubReviewQueueOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #3046 新增系统管理员读取他人待审版本正文的只读入口；版本详情、目录、审核队列与全部既有 schema
+// 保持不变，新增路径与投影用写死的 SHA-256 固定，任何改动都会使门禁失败。
+function isSkillHubReviewContentOpenApiAddition(previous, current) {
+	const paths = ["/api/v2/skills/reviews/{skillVersionId}/content"];
+	const schemas = ["SkillHubReviewContentV1"];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"1fbe96d347d71e2e0579b931c94e431ba99b9c43291bd034b978329cbb306848"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #2910 新增带 Owner 有效状态的 Agent 详情只读入口；AgentProjectionV2、列表、命令响应和全部既有 schema 保持不变。
 function isAgentDetailOwnerStatusOpenApiAddition(previous, current) {
 	const path = "/api/v2/agents/{agentId}/detail";
@@ -5425,6 +5454,7 @@ function evaluateBreakingChanges(previousValue, currentValue) {
 			!isSkillHubInstallationOpenApiAddition(previous, current) &&
 			!isSkillHubPublicationOpenApiAddition(previous, current) &&
 			!isSkillHubReviewQueueOpenApiAddition(previous, current) &&
+			!isSkillHubReviewContentOpenApiAddition(previous, current) &&
 			!isSkillHubVersionDetailOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationListOpenApiAddition(previous, current) &&
 			!isAgentDetailOwnerStatusOpenApiAddition(previous, current) &&

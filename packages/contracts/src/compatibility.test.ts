@@ -712,6 +712,87 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the pinned Skill Hub review content read (#3046)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const contentPath = "/api/v2/skills/reviews/{skillVersionId}/content";
+		const previous = structuredClone(current);
+		delete previous.paths[contentPath];
+		delete previous.components.schemas.SkillHubReviewContentV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "skill-hub-review-content-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const reviewContent = (value: typeof current) =>
+				value.components.schemas.SkillHubReviewContentV1;
+			for (const mutate of [
+				// 审核正文必须要求平台会话。
+				(value: typeof current) => {
+					value.paths[contentPath].get.security = [];
+				},
+				// 投影保持严格，不能带出对象位置、审核原因或安装状态。
+				(value: typeof current) => {
+					reviewContent(value).additionalProperties = true;
+				},
+				(value: typeof current) => {
+					reviewContent(value).properties.packageObjectVersion = {
+						type: "string",
+					};
+				},
+				(value: typeof current) => {
+					reviewContent(value).properties.reviewReason = { type: "string" };
+				},
+				(value: typeof current) => {
+					reviewContent(value).properties.installation =
+						value.components.schemas.SkillHubVersionDetailV1.properties.installation;
+				},
+				// 正文上限沿用版本详情，资源只给清单不给内容。
+				(value: typeof current) => {
+					delete reviewContent(value).properties.content.oneOf[0].properties
+						.body.maxLength;
+				},
+				(value: typeof current) => {
+					reviewContent(
+						value,
+					).properties.content.oneOf[0].properties.resources.items.properties.content =
+						{ type: "string" };
+				},
+				// 审核队列投影与版本详情保持不变，正文不进入队列。
+				(value: typeof current) => {
+					value.components.schemas.SkillHubReviewQueueItemV1.properties.body = {
+						type: "string",
+					};
+				},
+				(value: typeof current) => {
+					value.components.schemas.SkillHubVersionDetailV1.properties.state.enum.push(
+						"approved",
+					);
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the Owner current Agent Version read and the empty binding set (#2903)", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -3962,6 +4043,7 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/skills/projects/{projectId}/content" &&
 				path !== "/api/v2/skills/projects/{projectId}/versions" &&
 				path !== "/api/v2/skills/reviews" &&
+				path !== "/api/v2/skills/reviews/{skillVersionId}/content" &&
 				path !== "/api/v2/skills/owned-versions" &&
 				path !== "/api/v2/skills/versions" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}" &&
