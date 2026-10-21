@@ -36,6 +36,8 @@ const credentials = {
 	selected: `synthetic-${randomBytes(24).toString("hex")}`,
 };
 const serviceToken = `synthetic-${randomBytes(24).toString("hex")}`;
+// A Relay model absent from the pinned Codex catalog (ADR-0029).
+const unlistedModel = "synthetic-relay-model";
 // The in-cluster Service DNS the Worker uses; plaintext per ADR-0020.
 const runtimeServiceDnsName = `agent-${createHash("sha256").update("synthetic-agent").digest("hex").slice(0, 32)}.default.svc`;
 const failureMarker = `failure-${randomBytes(24).toString("hex")}`;
@@ -258,6 +260,12 @@ const model = createServer(async (request, response) => {
 			authenticated,
 			model: body.model,
 			effort: body.reasoning?.effort,
+			// ADR-0029：未内置模型开始的会话使用 Codex 默认指令，不带 GPT 条目的身份声明。
+			instructions:
+				typeof body.instructions === "string" && body.instructions.length > 0,
+			claimsGpt5: /GPT-5/i.test(
+				JSON.stringify([body.instructions, body.input]),
+			),
 			input: JSON.stringify(body.input).includes("synthetic-runtime-input"),
 			history: JSON.stringify(body.input).includes("synthetic runtime answer"),
 			closed: false,
@@ -609,7 +617,8 @@ function deployment(origin, directory) {
 				{
 					modelOptionId: "default-option",
 					endpoint: `${origin}/approved-default/v1`,
-					model: "gpt-5.6-sol",
+					// 不在固定 Codex 内置目录中：就绪检查不再按 model/list 拒绝（ADR-0029）。
+					model: unlistedModel,
 					reasoningLevels: ["medium"],
 					credentialEnvironmentVariable:
 						"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_DEFAULT",
@@ -1043,8 +1052,10 @@ async function runImageProbe() {
 			requests.length === 1 &&
 				requests[0].authenticated &&
 				requests[0].path === "/approved-default/v1/responses" &&
-				requests[0].model === "gpt-5.6-sol" &&
+				requests[0].model === unlistedModel &&
 				requests[0].effort === "medium" &&
+				requests[0].instructions &&
+				!requests[0].claimsGpt5 &&
 				requests[0].input,
 		);
 		stage = "execution-selection";
