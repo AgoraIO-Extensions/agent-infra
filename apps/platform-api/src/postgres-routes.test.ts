@@ -1379,9 +1379,14 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		});
 		const ownerRead = await read("owner", `/api/v2/agents/${agentId}`);
 		expect(ownerRead.status).toBe(200);
-		expect(projected).toEqual(
-			AgentProjectionV2Schema.parse(await ownerRead.json()),
+		const ownerProjection = AgentProjectionV2Schema.parse(
+			await ownerRead.json(),
 		);
+		expect(ownerProjection.managementRevision).toBeGreaterThanOrEqual(0);
+		// 管理修订号只投影给当前 Owner；管理员入口的投影不带这个字段。
+		expect(projected).not.toHaveProperty("managementRevision");
+		delete ownerProjection.managementRevision;
+		expect(projected).toEqual(ownerProjection);
 		expect(
 			(await read("admin", "/api/v2/admin/agents/agent-missing")).status,
 		).toBe(404);
