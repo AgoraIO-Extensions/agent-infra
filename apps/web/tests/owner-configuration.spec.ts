@@ -16,6 +16,7 @@ import {
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import type {
+	AgentCreationFailureCategoryV1,
 	DeploymentConfigurationProjectionV2,
 	SkillHubAgentBindingStatusV1,
 } from "../src/pilot/generated-v2/types.gen";
@@ -181,12 +182,15 @@ async function ownerConfigFixture(
 		keySet = false,
 		saved = "same",
 		agentVersion = null,
+		creationFailure,
 	}: {
 		role?: Role;
 		keySet?: boolean;
 		saved?: CandidateMode;
 		/** 部署级 Agent Version；null 表示部署未配置（#2903）。 */
 		agentVersion?: string | null;
+		/** 设置时 Agent 处于创建失败，服务端给出该失败类别（#3034）。 */
+		creationFailure?: AgentCreationFailureCategoryV1;
 	} = {},
 ) {
 	const base = AgentProjectionV2Schema.parse(
@@ -194,6 +198,9 @@ async function ownerConfigFixture(
 	);
 	let agent = AgentProjectionV2Schema.parse({
 		...base,
+		...(creationFailure
+			? { managementStatus: "creation_failed", serviceAvailability: null }
+			: {}),
 		configuration: {
 			...base.configuration,
 			environment: [{ name: "AGENT_WORKSPACE", value: "platform" }],
@@ -254,6 +261,13 @@ async function ownerConfigFixture(
 					},
 		}),
 		updateAgentConfiguration: () => ({ status: 200, body: agent }),
+		getAgentCreationFailure: (_request, agentId) =>
+			creationFailure
+				? {
+						status: 200,
+						body: { schemaVersion: 1, agentId, category: creationFailure },
+					}
+				: { status: 404, body: unavailable(404, false).json },
 	});
 	const gate = async (name: string) => {
 		await gates.get(name);
@@ -1628,6 +1642,55 @@ async function verticalGap(previous: Locator, next: Locator) {
 	if (!above || !below) throw new Error("Missing dialog geometry");
 	return below.y - (above.y + above.height);
 }
+
+// #3152 AC-2：纯系统管理员视图的创建失败提示距「权限边界」12px（与 .configuration-notices 内提示间距一致，
+// 设计 owner-config-notice + owner-config-creation-failure），距下方「管理员操作」16px；两视口一致。
+test("a pure administrator's creation failure notice keeps 12px below the permission boundary and 16px above administrator actions (#3152 AC-2)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	await ownerConfigFixture(page, {
+		role: "admin",
+		creationFailure: "deployment_unavailable",
+	});
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const region = main(page);
+	const notice = region.locator(
+		'[data-creation-failure="deployment_unavailable"]',
+	);
+	await expect(notice).toContainText("失败原因：部署资源暂不可用");
+	const boundary = region.locator(
+		'.configuration-notices > [data-slot="alert"]',
+		{ hasText: "权限边界" },
+	);
+	const admin = region.getByRole("region", {
+		name: "管理员操作",
+		exact: true,
+	});
+	await expect(admin.getByRole("button", { name: "重试创建" })).toBeVisible();
+	await expect(region.locator(".configuration-notices")).toHaveCSS(
+		"row-gap",
+		"12px",
+	);
+	expect(await verticalGap(boundary, notice)).toBeCloseTo(12, 1);
+	expect(await verticalGap(notice, admin)).toBeCloseTo(16, 1);
+});
+
+// #3152：Owner 视图的创建失败提示仍在页脚 flex 内，不额外加上外边距。
+test("an Owner's creation failure notice stays in the footer without extra top margin (#3152)", async ({
+	page,
+}, info) => {
+	await viewport(page, info.project.name === "mobile");
+	await ownerConfigFixture(page, { creationFailure: "health_check_failed" });
+	await page.goto("/agents/agent-pilot-1/configuration");
+	const footer = main(page).locator(".configuration-form-footer");
+	const notice = footer.locator(
+		'[data-creation-failure="health_check_failed"]',
+	);
+	await expect(notice).toContainText("失败原因：健康检查未通过");
+	await expect(notice).toHaveCSS("margin-top", "0px");
+	await expect(footer).toHaveCSS("row-gap", "14px");
+});
 
 // #3128 B2-03 / B2-05 / B2-11：Owner 配置「可使用的用户」的占位符与申请表单一致；同一人员同时在
 // 「共同 Owner 用户」与「可使用的用户」时，两个移除按钮带各自的选择器标签，同页没有同名控件；

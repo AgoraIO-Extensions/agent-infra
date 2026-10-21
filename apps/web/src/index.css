@@ -4016,14 +4016,15 @@ body {
 	justify-content: flex-end;
 	gap: 8px;
 }
-/* 设计 #application-detail：审批进度在 surface 内，驳回原因 notice 与列表间距 18px。 */
+/* 设计 #application-detail：审批进度在 surface 内，驳回原因与创建失败 notice 都与列表间距 18px（#3152）。 */
 .application-progress-panel {
 	padding: 20px;
 	border: 1px solid var(--border);
 	border-radius: 14px;
 	background: var(--surface);
 }
-.application-progress-panel .application-decision-reason {
+.application-progress-panel .application-decision-reason,
+.application-progress-panel .application-creation-failure {
 	margin-top: 18px;
 }
 .application-detail-feedback {
@@ -4465,6 +4466,11 @@ body {
 .agent-configuration .configuration-notices {
 	display: grid;
 	gap: 12px;
+}
+/* 纯管理员视图（设计 owner-config-notice + owner-config-creation-failure，#3152）：创建失败提示紧跟
+   权限边界说明，间距同说明之间的 12px；下方管理员操作区自带 16px 上外边距。 */
+.agent-configuration .configuration-notices + .configuration-creation-failure {
+	margin-top: 12px;
 }
 .configuration-form-card {
 	min-width: 0;

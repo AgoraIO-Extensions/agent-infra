@@ -16,6 +16,7 @@ import {
 } from "../src/features/my-agents/test-fixtures";
 import type {
 	AgentApplicationProjectionV2,
+	AgentCreationFailureCategoryV1,
 	AgentProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
 import { expectNoDuplicateControls } from "./page-health";
@@ -74,10 +75,13 @@ async function fixture(
 	input: {
 		applications?: AgentApplicationProjectionV2[];
 		agents?: AgentProjectionV2[];
+		/** 服务端给出的创建失败类别（#3034）；未设置时接口按不可读处理。 */
+		creationFailure?: AgentCreationFailureCategoryV1;
 	} = {},
 ) {
 	const applications = input.applications ?? [application()];
 	const agents = input.agents ?? [ownedAgent];
+	const { creationFailure } = input;
 	const commands: string[] = [];
 	const server = createPilotAgentMockServerV2({
 		getCurrentSession: {
@@ -138,6 +142,22 @@ async function fixture(
 						},
 					};
 		},
+		getAgentCreationFailure: (_request, agentId) =>
+			creationFailure
+				? {
+						status: 200,
+						body: { schemaVersion: 1, agentId, category: creationFailure },
+					}
+				: {
+						status: 404,
+						body: {
+							schemaVersion: 1,
+							code: "RESOURCE_UNAVAILABLE",
+							message: "Controlled unavailable creation failure",
+							retryable: false,
+							traceId: "trace-creation-failure-unavailable",
+						},
+					},
 	});
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
@@ -874,6 +894,53 @@ test("rejected application detail offers the resubmit action with an icon in the
 		"需要修改后重提",
 	);
 	await expect(reason).toContainText("范围过大");
+});
+
+// #3152 AC-1：创建失败提示与驳回原因同是审批进度卡片内的提示，上边框距最后一个进度步骤 18px
+// （设计 #application-detail 两处提示都是 margin-top:18px），1440×900 与 390×844 一致。
+test("a failed creation notice sits 18px below the last progress step like the rejection reason (#3152 AC-1)", async ({
+	page,
+}, info) => {
+	await page.setViewportSize(
+		info.project.name === "mobile"
+			? { width: 390, height: 844 }
+			: { width: 1440, height: 900 },
+	);
+	await fixture(page, {
+		applications: [
+			application({
+				agentId: ownedAgent.agentId,
+				status: "creation_failed",
+				decision: { decidedAt: "2026-09-03T10:00:00Z", reason: null },
+			}),
+			application({
+				applicationId: "application-browser-2",
+				status: "rejected",
+				decision: { decidedAt: "2026-09-03T10:00:00Z", reason: "范围过大" },
+			}),
+		],
+		creationFailure: "health_check_failed",
+	});
+	const progress = page.getByRole("region", { name: "审批进度" });
+	const lastStep = progress.locator(".application-progress li").last();
+	const gapBelowLastStep = async (notice: Locator) => {
+		await expect(notice).toBeVisible();
+		const [step, box] = [await rect(lastStep), await rect(notice)];
+		return box.top - step.bottom;
+	};
+
+	await page.goto("/my-agents/application-browser-1");
+	const failure = progress.locator(
+		'[data-creation-failure="health_check_failed"]',
+	);
+	await expect(failure).toContainText("失败原因：健康检查未通过");
+	await expect(lastStep).toHaveAttribute("data-step", "creation");
+	expect(await gapBelowLastStep(failure)).toBeCloseTo(18, 1);
+
+	await page.goto("/my-agents/application-browser-2");
+	expect(
+		await gapBelowLastStep(progress.locator(".application-decision-reason")),
+	).toBeCloseTo(18, 1);
 });
 
 test("withdraw confirmation uses the design copy and keeps focus inside the dialog until it closes (W-16)", async ({

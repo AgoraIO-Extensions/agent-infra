@@ -106,11 +106,9 @@ function AgentConfigurationWorkflowContent({
 		</>
 	);
 	// 创建失败时向 Owner 与系统管理员说明失败类别（#3034）；是否可读仍由服务端判定。
-	const creationFailure =
+	const showCreationFailure =
 		agent.managementStatus === "creation_failed" &&
-		(isConfigurationOwner || isSystemAdministrator) ? (
-			<AgentCreationFailureNotice agentId={agent.agentId} />
-		) : null;
+		(isConfigurationOwner || isSystemAdministrator);
 
 	if (!isConfigurationOwner && isSystemAdministrator) {
 		return (
@@ -118,7 +116,13 @@ function AgentConfigurationWorkflowContent({
 				agent={agent}
 				afterForm={
 					<>
-						{creationFailure}
+						{/* 纯管理员视图的提示紧跟权限边界说明，间距与说明之间一致（#3152）。 */}
+						{showCreationFailure ? (
+							<AgentCreationFailureNotice
+								agentId={agent.agentId}
+								className="configuration-creation-failure"
+							/>
+						) : null}
 						{afterForm}
 					</>
 				}
@@ -155,7 +159,9 @@ function AgentConfigurationWorkflowContent({
 			}
 			footerFeedback={
 				<>
-					{creationFailure}
+					{showCreationFailure ? (
+						<AgentCreationFailureNotice agentId={agent.agentId} />
+					) : null}
 					<ConfigurationFooterLifecycleFailure lifecycle={lifecycle} />
 				</>
 			}
