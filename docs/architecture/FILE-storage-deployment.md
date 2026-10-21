@@ -66,7 +66,7 @@ Platform API 通过 `PLATFORM_API_FILE_DEPLOYMENT_CONFIGURATION_FILE` 指向部�
 - 配置错误返回 `PLATFORM_FILE_DEPLOYMENT_CONFIGURATION_INVALID`，可附带静态字段名；日志、错误和测试不得回显配置值、路径或令牌。
 - 部署模块也可以直接导出 `apiInput.files`。显式端口与环境配置只能二选一，同时提供时以 `PLATFORM_FILES_DUPLICATE` 拒绝。
 
-文件 Actor 在每次交换时重新从 LDAP 当前目录与 Platform 停用状态解析，不复用浏览器会话或请求中的旧身份；目录或停用查询失败时拒绝请求。
+文件 Actor 在每次交换时通过与浏览器会话相同的当前身份映射（部署对象暴露的 `resolveCurrentIdentity`）重新从 LDAP 当前目录与 Platform 停用状态解析，不复用浏览器会话或请求中的旧身份；目录、停用记录或组织快照查询失败时拒绝请求，停用账户以 `accountStatus: "disabled"` 拒绝。
 
 文件数据面只接受平台路径和 `X-Platform-File-Grant` Header。浏览器同时携带当前会话；Worker 同时携带服务身份。S3 签名地址仅用于平台内部上传，不返回给用户或 Runtime。
 
