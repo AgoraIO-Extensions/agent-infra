@@ -93,6 +93,14 @@ node tests/local-real-e2e/conversation-browser.mjs /absolute/local-development/c
   "origin": "https://127.0.0.1:3511",
   "agentId": "agent-under-test",
   "prompt": "请返回一段可核对的结果",
+  "acceptance": {
+    "requireThinking": true,
+    "requireResultFile": true,
+    "requireSkillMetadata": true,
+    "requiredSkillName": "workspace-summary",
+    "requireToolOperation": true,
+    "requiredToolId": "workspace-summary"
+  },
   "owner": {
     "userId": "controlled-owner",
     "stateFile": "/absolute/local-development/owner-state.json"
@@ -103,6 +111,12 @@ node tests/local-real-e2e/conversation-browser.mjs /absolute/local-development/c
   }
 }
 ```
+
+`acceptance` 是可选的真实链路门禁；开启后，旅程会在同一 Execution 的持久事件上
+强制检查 `reasoning.delta`、`result.file`、`execution.operation` 和当前 Skill metadata。
+`requireBrowserOperation` / `requireBrowserHandoff` 也可用于 Browser 任务。它们只接受
+真实 API/SSE 回读，不把 Web fixture 或菜单渲染当作通过；证据文件只保存计数、哈希和
+状态，不保存消息正文、Cookie 或凭证。
 
 两个 `storageState` 必须由同一受控部署登录流程生成、属于当前用户且权限为 `0600`；
 不得把 token、Cookie 或真实消息正文提交到仓库。

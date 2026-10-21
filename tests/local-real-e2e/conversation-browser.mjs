@@ -32,6 +32,45 @@ function nonEmptyString(value, message) {
 	return value;
 }
 
+function acceptance(value) {
+	if (value === undefined) return Object.freeze({});
+	assert(
+		value && typeof value === "object" && !Array.isArray(value),
+		"acceptance must be an object",
+	);
+	for (const name of [
+		"requireThinking",
+		"requireResultFile",
+		"requireToolOperation",
+		"requireBrowserOperation",
+		"requireBrowserHandoff",
+		"requireSkillMetadata",
+	]) {
+		if (value[name] !== undefined) assert(typeof value[name] === "boolean");
+	}
+	const requiredSkillName =
+		value.requiredSkillName === undefined
+			? undefined
+			: nonEmptyString(
+					value.requiredSkillName,
+					"requiredSkillName is required",
+				);
+	const requiredToolId =
+		value.requiredToolId === undefined
+			? undefined
+			: nonEmptyString(value.requiredToolId, "requiredToolId is required");
+	return Object.freeze({
+		requireThinking: value.requireThinking === true,
+		requireResultFile: value.requireResultFile === true,
+		requireToolOperation: value.requireToolOperation === true,
+		requireBrowserOperation: value.requireBrowserOperation === true,
+		requireBrowserHandoff: value.requireBrowserHandoff === true,
+		requireSkillMetadata: value.requireSkillMetadata === true,
+		...(requiredSkillName === undefined ? {} : { requiredSkillName }),
+		...(requiredToolId === undefined ? {} : { requiredToolId }),
+	});
+}
+
 async function privateFile(path) {
 	assert(isAbsolute(path), "Browser state files must have absolute paths");
 	const stat = await lstat(path);
@@ -60,6 +99,7 @@ function configuration(value) {
 	);
 	nonEmptyString(agentId, "agentId is required");
 	nonEmptyString(prompt, "prompt is required");
+	acceptance(value.acceptance);
 	for (const subject of [owner, other]) {
 		assert(
 			subject && typeof subject === "object" && !Array.isArray(subject),
@@ -122,6 +162,85 @@ async function conversationStream(context, origin, conversationId) {
 		`${origin}/api/v2/conversations/${encodeURIComponent(conversationId)}/events`,
 		{ timeout: 30_000 },
 	);
+}
+
+async function assertAcceptance(
+	input,
+	owner,
+	conversationId,
+	events,
+	evidence,
+) {
+	const required = input.acceptance ?? {};
+	const reasoningEvents = events.filter(
+		(event) => event.type === "reasoning.delta",
+	);
+	const resultFiles = events.filter((event) => event.type === "result.file");
+	const toolOperations = events.filter(
+		(event) =>
+			event.type === "execution.operation" && event.payload?.kind === "tool",
+	);
+	const browserOperations = events.filter(
+		(event) =>
+			(event.type === "execution.operation" && event.payload?.browser) ||
+			event.type === "browser.handoff" ||
+			event.type === "browser.side_effect",
+	);
+	const browserHandoffs = events.filter(
+		(event) => event.type === "browser.handoff",
+	);
+	if (required.requireThinking)
+		assert(reasoningEvents.length > 0, "Expected real reasoning.delta events");
+	if (required.requireResultFile)
+		assert(resultFiles.length > 0, "Expected a real result.file event");
+	if (required.requireToolOperation)
+		assert(toolOperations.length > 0, "Expected a real tool operation event");
+	if (required.requireBrowserOperation)
+		assert(
+			browserOperations.length > 0,
+			"Expected a real Browser operation event",
+		);
+	if (required.requireBrowserHandoff)
+		assert(browserHandoffs.length > 0, "Expected a real browser.handoff event");
+	if (required.requiredToolId !== undefined)
+		assert(
+			toolOperations.some(
+				(event) => event.payload.toolId === required.requiredToolId,
+			),
+			`Expected tool operation ${required.requiredToolId}`,
+		);
+	let nativeMetadata;
+	if (
+		required.requireSkillMetadata ||
+		required.requiredSkillName !== undefined
+	) {
+		const response = await owner.request.get(
+			`${input.origin}/api/v2/conversations/${encodeURIComponent(conversationId)}/executions/${encodeURIComponent(events[0]?.executionId ?? "")}/native-metadata?selector=skills`,
+		);
+		assert.equal(response.status(), 200, "Skill metadata must be readable");
+		nativeMetadata = await response.json();
+		assert(
+			Array.isArray(nativeMetadata.capabilities),
+			"Skill metadata must contain capabilities",
+		);
+		if (required.requiredSkillName !== undefined)
+			assert(
+				nativeMetadata.capabilities.some(
+					(entry) => entry.name === required.requiredSkillName,
+				),
+				`Expected Skill ${required.requiredSkillName} in native metadata`,
+			);
+	}
+	evidence.acceptance = {
+		reasoningDeltaCount: reasoningEvents.length,
+		resultFileCount: resultFiles.length,
+		toolOperationCount: toolOperations.length,
+		browserOperationCount: browserOperations.length,
+		browserHandoffCount: browserHandoffs.length,
+		...(nativeMetadata === undefined
+			? {}
+			: { skillMetadataCount: nativeMetadata.capabilities.length }),
+	};
 }
 
 async function run(input, evidence) {
@@ -325,6 +444,7 @@ async function run(input, evidence) {
 			events,
 			"Current-execution events must stay bound to this conversation and execution",
 		);
+		await assertAcceptance(input, owner, conversationId, events, evidence);
 		const sseFrames = await page.evaluate(
 			() => window.__agentInfraSseFrames ?? [],
 		);
