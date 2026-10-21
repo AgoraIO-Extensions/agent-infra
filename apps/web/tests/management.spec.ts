@@ -6187,6 +6187,61 @@ test.describe("Agent detail design alignment", () => {
 		await capture(page, info, "final-acceptance-y-agent-detail");
 		expect(api.commands).toHaveLength(0);
 	});
+
+	// #2830 终验第二轮 A：页头 AgentMark 与标题区 14px（A2-03），状态行到详情栅格 ≤767px 26px、桌面 32px（A2-04）。
+	test("final acceptance A2 detail heading gap and status line spacing follow the design", async ({
+		page,
+	}, info) => {
+		const errors = trackPageErrors(page);
+		const mobile = info.project.name === "mobile";
+		await page.setViewportSize(
+			mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+		);
+		const api = await fixture(page, "owner");
+		await page.goto("/agents/agent-pilot-1");
+		const geometry = await page
+			.locator("main .agent-detail")
+			.evaluate((element) => {
+				const rect = (selector: string) => {
+					const node = element.querySelector(selector);
+					if (!node) throw new Error(`Missing ${selector}`);
+					return node.getBoundingClientRect();
+				};
+				const status = element.querySelector(".agent-detail-status");
+				if (!status) throw new Error("Missing status line");
+				return {
+					mark: rect('.agent-detail-heading [data-slot="agent-mark"]'),
+					eyebrow: rect(".agent-detail-heading .page-eyebrow"),
+					h1: rect(".agent-detail-heading h1"),
+					statusContentBottom: Math.max(
+						...Array.from(
+							status.children,
+							(child) => child.getBoundingClientRect().bottom,
+						),
+					),
+					grid: rect(".agent-detail-grid"),
+				};
+			});
+		expect(
+			Math.abs(geometry.eyebrow.left - geometry.mark.right - 14),
+		).toBeLessThanOrEqual(0.5);
+		expect(
+			Math.abs(geometry.h1.left - geometry.mark.right - 14),
+		).toBeLessThanOrEqual(0.5);
+		// 导出稿 eyebrow：1440 下 x=346，390 下 x=72。
+		expect(
+			Math.abs(geometry.eyebrow.left - (mobile ? 72 : 346)),
+		).toBeLessThanOrEqual(1);
+		expect(
+			Math.abs(
+				geometry.grid.top - geometry.statusContentBottom - (mobile ? 26 : 32),
+			),
+		).toBeLessThanOrEqual(0.5);
+		await expectCleanPage(page, errors);
+		expect(await duplicateControlNames(page)).toEqual([]);
+		await capture(page, info, "final-acceptance-a2-agent-detail");
+		expect(api.commands).toHaveLength(0);
+	});
 });
 
 // #2830 终验 Y：壳层、/agents 在 1440×900 与 390×844 下对照导出稿（Y-01–Y-03、Y-12）。

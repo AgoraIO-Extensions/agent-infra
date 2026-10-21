@@ -2720,7 +2720,8 @@ body {
 .agent-detail-heading {
 	display: flex;
 	align-items: start;
-	gap: 16px;
+	/* 设计 #agent-detail 页头：AgentMark 与标题区相距 14px（eyebrow 1440 下 x=346、390 下 x=72，A2-03）。 */
+	gap: 14px;
 	min-width: 0;
 	margin-top: 16px;
 }
@@ -2873,6 +2874,10 @@ body {
 	}
 	.agent-detail .agent-detail-back {
 		margin-top: 16px;
+	}
+	/* 设计 ≤767px `.section{margin-top:26px}`：状态行到详情栅格 26px，桌面仍 32px（A2-04）。 */
+	.agent-detail .status-line {
+		padding-bottom: 26px;
 	}
 }
 
