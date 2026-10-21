@@ -1,5 +1,8 @@
 import { readFile } from "node:fs/promises";
-import { createLdapIdentityDirectory } from "@agent-infra/identity";
+import {
+	createLdapIdentityDirectory,
+	resolveLdapPrincipal,
+} from "@agent-infra/identity";
 import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
 import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
 import {
@@ -11,6 +14,7 @@ import {
 	createDirectoryOrganizationAuthorityResolverV1,
 	createDirectoryOrganizationIdsResolverV1,
 } from "./directory-authority.js";
+import { createProductionPlatformFileDeploymentFromEnvironmentV1 } from "./file-deployment.js";
 import {
 	createPostgresLdapBrowserDeployment,
 	createProductionPlatformApiAssemblyInputV1,
@@ -182,6 +186,25 @@ if (
 )
 	throw new Error("PLATFORM_NATIVE_METADATA_CONFIGURATION_INVALID");
 
+/**
+ * File exchange re-resolves the signed actor against current directory and
+ * Platform disable facts; it must never reuse the browser session or a stale
+ * request identity. Dependency failures propagate and deny the exchange.
+ */
+const fileDeployment =
+	await createProductionPlatformFileDeploymentFromEnvironmentV1({
+		resolveActor: async (actorId) => {
+			const account = await directory.currentByUserId(actorId);
+			if (!account || account.userId !== actorId) return null;
+			return resolveLdapPrincipal(account, {
+				isPlatformDisabled: (userId) =>
+					userGovernance.isPlatformDisabled(userId),
+				organizationIds,
+				...(organizationAuthority ? { organizationAuthority } : {}),
+			});
+		},
+	});
+
 export const browserAuth = browser.browserAuth;
 export function createPlatformApiAssemblyInput() {
 	const relayKeyPolicy = inspectProductionRelayKeyPolicyV1(apiInput);
@@ -227,6 +250,7 @@ export function createPlatformApiAssemblyInput() {
 			: {}),
 		...(browserCommands !== undefined ? { browserCommands } : {}),
 		...(providerImport !== undefined ? { providerImport } : {}),
+		...(fileDeployment !== undefined ? { files: fileDeployment } : {}),
 	});
 	return createProductionPlatformApiAssemblyInputV1({
 		...configuredApiInput,

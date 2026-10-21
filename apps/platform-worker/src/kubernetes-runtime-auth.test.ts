@@ -190,3 +190,69 @@ it("rejects caller-provided platform identity on a custom platform-adapter", asy
 		}),
 	).rejects.toMatchObject({ code: "policy" });
 });
+
+it("injects the file exchange origin and the existing runtime-auth token Secret", async () => {
+	const api = fakeKubernetesApi();
+	const { publicKey } = generateKeyPairSync("ed25519");
+	const adapter = createKubernetesRuntimeAdapterV1({
+		client: api.client,
+		policy: {
+			...workloadTestPolicy,
+			runtimeAuth: {
+				workerId: "worker-a",
+				grantKeyId: "grant-a",
+				grantPublicKey: publicKey
+					.export({ format: "pem", type: "spki" })
+					.toString(),
+				grantIssuer: "platform-worker",
+				serviceTokenSecret: { name: "runtime-transport", key: "token" },
+				fileExchangeOrigin: "http://platform-api:3000",
+			},
+		},
+		probe: async () => true,
+	});
+	const desired = workloadDesiredFixture(2, "custom-agent", "internal-only");
+	await adapter.apply(desired);
+	const workload = await api.client.read<V1StatefulSet>(
+		"StatefulSet",
+		desired.service.name,
+	);
+	const env = workload?.spec?.template.spec?.containers[0]?.env ?? [];
+	expect(
+		env.find(
+			(entry) => entry.name === "AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN",
+		),
+	).toEqual({
+		name: "AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN",
+		value: "http://platform-api:3000",
+	});
+	expect(
+		env.find(
+			(entry) =>
+				entry.name === "AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN",
+		)?.valueFrom,
+	).toEqual({
+		secretKeyRef: {
+			name: "runtime-transport",
+			key: "token",
+			optional: false,
+		},
+	});
+	expect(JSON.stringify(env)).not.toContain("Bearer");
+});
+
+it("rejects a caller-provided file exchange environment pair", async () => {
+	const { adapter } = fixture();
+	const desired = workloadDesiredFixture(2, "custom-agent", "internal-only");
+	for (const name of [
+		"AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN",
+		"AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN",
+	]) {
+		await expect(
+			adapter.apply({
+				...desired,
+				env: { ...desired.env, [name]: "http://attacker.example" },
+			}),
+		).rejects.toMatchObject({ code: "policy" });
+	}
+});

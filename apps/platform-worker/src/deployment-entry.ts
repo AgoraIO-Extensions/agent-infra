@@ -38,6 +38,7 @@ import {
 	createWorkloadReadinessLedgerV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
+import { resolveWorkloadFileExchangeOriginV1 } from "./workload-runtime-auth.js";
 
 type DeploymentConfiguration = {
 	readonly workloadInput: Omit<
@@ -213,47 +214,50 @@ const nativeMetadataGateway =
 							},
 						}),
 			};
-const workloadInput =
-	nativeMetadataGatewayPort === undefined
-		? configuredWorkloadInput
+// The mounted deployment module stays authoritative; the environment only
+// supplies a release-scoped origin for the fixed deployment and never a token.
+const fileExchangeOrigin = resolveWorkloadFileExchangeOriginV1({
+	configured: configuredWorkloadInput.policy.runtimeAuth?.fileExchangeOrigin,
+	environment: process.env.PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN,
+	hasRuntimeAuth: configuredWorkloadInput.policy.runtimeAuth !== undefined,
+});
+const runtimeAuth =
+	configuredWorkloadInput.policy.runtimeAuth === undefined
+		? undefined
 		: {
-				...configuredWorkloadInput,
-				policy: {
-					...configuredWorkloadInput.policy,
-					...(configuredWorkloadInput.policy.runtimeAuth
-						? {
-								runtimeAuth: {
-									...configuredWorkloadInput.policy.runtimeAuth,
-									...(configuredWorkloadInput.policy.runtimeAuth
-										.nativeMetadataWorkerOrigin === undefined
-										? {
-												nativeMetadataWorkerOrigin: nativeMetadataWorkerOrigin,
-											}
-										: {}),
-								},
-							}
-						: {}),
-					...(nativeMetadataGatewayEnabled &&
-					configuredWorkloadInput.policy.nativeMetadataWorkerEgress ===
-						undefined
-						? {
-								nativeMetadataWorkerEgress: [
-									{
-										destination: {
-											namespace: process.env.PLATFORM_WORKER_NAMESPACE ?? "",
-											podLabels: {
-												"app.kubernetes.io/component": "platform-worker",
-												"app.kubernetes.io/instance":
-													validatedNativeMetadataGatewaySelectorInstance as string,
-											},
-										},
-										port: nativeMetadataGatewayPort,
-									},
-								],
-							}
-						: {}),
-				},
+				...configuredWorkloadInput.policy.runtimeAuth,
+				...(nativeMetadataGatewayPort !== undefined &&
+				configuredWorkloadInput.policy.runtimeAuth
+					.nativeMetadataWorkerOrigin === undefined
+					? { nativeMetadataWorkerOrigin }
+					: {}),
+				...(fileExchangeOrigin !== undefined ? { fileExchangeOrigin } : {}),
 			};
+const workloadInput = {
+	...configuredWorkloadInput,
+	policy: {
+		...configuredWorkloadInput.policy,
+		...(runtimeAuth ? { runtimeAuth } : {}),
+		...(nativeMetadataGatewayPort !== undefined &&
+		configuredWorkloadInput.policy.nativeMetadataWorkerEgress === undefined
+			? {
+					nativeMetadataWorkerEgress: [
+						{
+							destination: {
+								namespace: process.env.PLATFORM_WORKER_NAMESPACE ?? "",
+								podLabels: {
+									"app.kubernetes.io/component": "platform-worker",
+									"app.kubernetes.io/instance":
+										validatedNativeMetadataGatewaySelectorInstance as string,
+								},
+							},
+							port: nativeMetadataGatewayPort,
+						},
+					],
+				}
+			: {}),
+	},
+};
 
 // Both the Pod file and Runtime HTTP assertion consume this captured source.
 const connectionConsumerSnapshot = createRuntimeConnectionConsumerSnapshotV1(

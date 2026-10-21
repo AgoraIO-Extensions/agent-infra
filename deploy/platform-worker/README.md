@@ -184,6 +184,19 @@ Worker 镜像中的对应目录是 `/app/dist`。部署模块与配置模块必�
 缺失、不合法或 namespace 不匹配时，在创建 Worker 依赖前返回固定脱敏错误。
 Workload、Conversation 和可选 WeCom 实例共同使用这一数据库绑定。
 
+## Runtime 文件交换注入
+
+Worker 向 Agent Workload 注入文件交换配置的前提是 `policy.runtimeAuth` 存在，并且提供精确的 Platform API origin：
+
+- 部署模块：`workloadInput.policy.runtimeAuth.fileExchangeOrigin = "https://platform-api.example.internal"`。
+- 固定环境：Helm `platformWorker.fileExchangeOrigin`，或直接设置 `PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN`。模块已显式提供时不得再给环境变量，否则返回 `PLATFORM_WORKER_FILE_EXCHANGE_DUPLICATE`；只给 origin 而没有 Runtime auth 返回 `PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID`。
+
+origin 必须是精确的 `http(s)://host[:port]`，不含路径、查询、片段或凭据；明文 HTTP 只接受集群 DNS 名称。缺失时 Worker 不注入，Runtime FileBridge 关闭；存在时同时注入 `AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN` 和 `AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN`，后者通过 `secretKeyRef` 引用 `runtimeAuthSecretRef`，不把令牌写入 Pod env、values、日志或错误。
+
+Agent NetworkPolicy egress 不由 Chart 自动追加；生产必须把该 Platform API origin 的端口加入 Agent egress。本地 kind（kindnet）不强制执行 NetworkPolicy，本地通过不证明生产可达。
+
+令牌轮换：更新 runtime-auth Secret，重启 Worker 与 Agent Workload；同时确保 Platform API 的 `services` 登记同一令牌和允许的 Agent。完整配置与失败语义见[文件存储部署与验收](../../docs/architecture/FILE-storage-deployment.md#runtime-文件交换注入)。
+
 ## 配置模块形状
 
 以下只说明已有工厂参数的装配方式，具体 IdentityAdapter、Registry policy 和模型目录
@@ -238,7 +251,8 @@ export const workloadInput = {
   `AGENT_INFRA_WORKER_KEY_VERSIONS` 核对每个版本，并转成工厂要求的版本化 PKCS#8 DER
   Base64 输入；不能把 PEM 原样传给工厂，也不能以同一把私钥冒充多个版本。
 - `policy.runtimeAuth` 的 Worker ID、issuer、key ID、公钥必须与 `signing` 匹配；其中只保存
-  Kubernetes 内预置的 Runtime transport Secret 名称/键，不保存私钥或 Token 值。
+  Kubernetes 内预置的 Runtime transport Secret 名称/键，不保存私钥或 Token 值。可选的
+  `fileExchangeOrigin` 见 [Runtime 文件交换注入](#runtime-文件交换注入)。
 - `templateModelBindings` 使用当前获准标准模板 digest、必需 `driver` 与协议，绑定规则见
   [Runtime HLD §3.1](../../docs/architecture/HLD-agent-runtime-M1.md#31-标准-runtime)。上面空数组仅是形状示例，
   不能验证标准模板；自定义 Agent 可使用空数组。

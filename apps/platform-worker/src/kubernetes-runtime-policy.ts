@@ -189,6 +189,14 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 				: [];
 		if (runtimeAuth.some((entry) => Object.hasOwn(value.env, entry.name)))
 			throw new WorkloadKubernetesError("policy");
+		// File exchange is a platform input: a Workload env cannot add a
+		// half-configured origin/token pair on its own.
+		if (
+			Object.keys(value.env).some((name) =>
+				name.startsWith("AGENT_INFRA_RUNTIME_FILE_EXCHANGE_"),
+			)
+		)
+			throw new WorkloadKubernetesError("policy");
 		return [
 			...Object.entries(value.env)
 				.filter(

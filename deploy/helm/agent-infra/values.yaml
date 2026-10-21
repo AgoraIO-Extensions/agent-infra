@@ -103,6 +103,11 @@ platformWorker:
   runtimeImageDigest: ""
   replicas: 1
   wecomEnabled: false
+  # 可选的 Platform API 精确 origin（不含路径、凭据、查询或片段）。非空时 Worker
+  # 向 Agent Workload 注入 Runtime 文件交换 origin，并复用 runtimeAuthSecretRef
+  # 的 service token；留空时 Runtime FileBridge 保持关闭。见
+  # docs/architecture/FILE-storage-deployment.md。
+  fileExchangeOrigin: ""
   # 可选的容器资源配置。不设时 Pod 为 BestEffort，内存紧张时 OOM Killer 会优先杀掉。
   # 本地环境建议只设 requests 不设 limits，避免容器自身的 cgroup OOM；
   # 生产环境按实际负载评估后再补充 limits。

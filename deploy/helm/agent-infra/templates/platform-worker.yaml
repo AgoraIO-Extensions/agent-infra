@@ -159,6 +159,10 @@ spec:
               value: {{ $nativeMetadataApiOrigin | quote }}
             {{- end }}
             {{- end }}
+            {{- with .Values.platformWorker.fileExchangeOrigin }}
+            - name: PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN
+              value: {{ . | quote }}
+            {{- end }}
             {{- if .Values.platformWorker.runtimeImageRepository }}
             - name: AGENT_INFRA_RUNTIME_IMAGE_REPOSITORY
               value: {{ .Values.platformWorker.runtimeImageRepository | quote }}

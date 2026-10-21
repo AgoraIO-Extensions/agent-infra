@@ -110,6 +110,7 @@ describe("explicit custom Agent deployment ports", () => {
 			{} as ProductionPlatformApiInputV1["nativeMetadataCurrent"];
 		const nativeCapabilityMetadata =
 			{} as ProductionPlatformApiInputV1["nativeCapabilityMetadata"];
+		const files = {} as ProductionPlatformApiInputV1["files"];
 		const apiInput = {} as ProductionPlatformApiInputV1;
 
 		expect(
@@ -122,6 +123,7 @@ describe("explicit custom Agent deployment ports", () => {
 				nativeMetadataWorker,
 				nativeMetadataCurrent,
 				nativeCapabilityMetadata,
+				files,
 			}),
 		).toMatchObject({
 			customAgentGateway,
@@ -131,7 +133,18 @@ describe("explicit custom Agent deployment ports", () => {
 			nativeMetadataWorker,
 			nativeMetadataCurrent,
 			nativeCapabilityMetadata,
+			files,
 		});
+	});
+
+	it("rejects a duplicate file data plane authority", () => {
+		const files = {} as ProductionPlatformApiInputV1["files"];
+		expect(() =>
+			mergeProductionPlatformApiDeploymentPortsV1({
+				apiInput: { files } as ProductionPlatformApiInputV1,
+				files,
+			}),
+		).toThrow("PLATFORM_FILES_DUPLICATE");
 	});
 
 	it("preserves Relay Key policy fields supplied through apiInput", () => {

@@ -840,6 +840,66 @@ test("production Worker requires a private module and runtime authorization moun
 	assert.match(invalidCaRef.stderr, /trustedCaSecretRef/);
 });
 
+test("production Worker injects the optional file exchange origin (#3060)", () => {
+	const production = [
+		"--set",
+		"workloadTopology.enabled=false",
+		"--set-string",
+		"platformWorker.deploymentModule=file:///app/dist/deployment.mjs",
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.name=worker-module",
+		"--set-string",
+		"platformWorker.configurationModuleSecretRef.key=configuration.mjs",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.name=worker-runtime-auth",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.privateKeyKey=grant.pem",
+		"--set-string",
+		"platformWorker.runtimeAuthSecretRef.serviceTokenKey=service-token",
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+	];
+	const enabled = render(
+		...production,
+		"--set-string",
+		"platformWorker.fileExchangeOrigin=http://platform-api:3000",
+	);
+	assert.equal(enabled.status, 0, enabled.stderr);
+	const worker = resource(
+		objects(enabled.stdout),
+		"Deployment",
+		"topology-agent-infra-platform-worker",
+	).spec.template.spec;
+	assert.equal(
+		worker.containers[0].env.find(
+			(entry) => entry.name === "PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN",
+		)?.value,
+		"http://platform-api:3000",
+	);
+	const disabled = render(...production);
+	assert.equal(disabled.status, 0, disabled.stderr);
+	const disabledWorker = resource(
+		objects(disabled.stdout),
+		"Deployment",
+		"topology-agent-infra-platform-worker",
+	).spec.template.spec;
+	assert.equal(
+		disabledWorker.containers[0].env.some(
+			(entry) => entry.name === "PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN",
+		),
+		false,
+	);
+	const invalid = render(
+		...production,
+		"--set-string",
+		"platformWorker.fileExchangeOrigin=http://platform-api:3000/files",
+	);
+	assert.notEqual(invalid.status, 0);
+	assert.match(invalid.stderr, /fileExchangeOrigin/);
+});
+
 test("one agentVersion value reaches both the in-cluster API and the production Worker (#2903)", () => {
 	const production = [
 		"--set",

@@ -4,9 +4,69 @@
 
 ## 装配
 
-Platform API 的 `PlatformApiAssemblyInput.files` 接收部署创建的 ObjectStorage Adapter、文件签名密钥、原 Execution Grant V4 验签公钥与其签名 Worker identity（`runtimeWorkerId`）、服务身份到允许 Agent 的映射，以及当前用户与文件限制查询。配置了文件能力但缺少 `runtimeWorkerId` 时装配必须 fail-closed；缺失整体配置时不注册文件入口，带附件的 Message 被拒绝。生产 deployment builder 与四模板文件 E2E 由 #3060 负责，本页不据此声明已全面交付。
+Platform API 的 `PlatformApiAssemblyInput.files` 接收部署创建的 ObjectStorage Adapter、文件签名密钥、原 Execution Grant V4 验签公钥与其签名 Worker identity（`runtimeWorkerId`）、服务身份到允许 Agent 的映射，以及当前用户与文件限制查询。配置了文件能力但缺少 `runtimeWorkerId` 时装配必须 fail-closed；缺失整体配置时不注册文件入口，带附件的 Message 被拒绝。生产 deployment builder 已由 #3064 实现；四模板文件 E2E 与固定环境验收仍由 #3060 跟踪，本页不据此声明已全面交付。
 
 使用 `createS3ObjectStorageV1` 创建 S3 Adapter。bucket 必须启用 versioning，并支持条件创建、按版本读取、版本列举及删除。部署独占一个前缀；所有对象引用均由平台生成。endpoint、region、bucket、prefix、凭证和 SDK 只在 Adapter／部署模块内配置。生产凭证通过部署凭证供应链提供，不写入仓库。
+
+### 生产部署装配
+
+Platform API 通过 `PLATFORM_API_FILE_DEPLOYMENT_CONFIGURATION_FILE` 指向部署私有的 JSON 配置。变量未设置或为空时不注册文件入口；设置但文件缺失、不是普通文件、JSON 或 schema 无效、密钥不匹配时启动失败，不回退到部分能力。示例中的路径均为容器内绝对路径，令牌与私钥只从只读文件读取：
+
+```json
+{
+  "schemaVersion": 1,
+  "storage": {
+    "region": "us-east-1",
+    "bucket": "agent-infra-files",
+    "prefix": "prod/",
+    "maxObjectBytes": 26214400,
+    "timeoutMs": 30000,
+    "endpoint": "https://s3.example.internal",
+    "credentialsFile": "/var/run/agent-infra/files/s3-credentials.json"
+  },
+  "signing": {
+    "issuer": "platform-api",
+    "keyVersion": "file-2026-01",
+    "privateKeyFile": "/var/run/agent-infra/files/signing-private.pem",
+    "publicKeys": [
+      {
+        "keyVersion": "file-2026-01",
+        "publicKeyFile": "/var/run/agent-infra/files/signing-public.pem"
+      }
+    ]
+  },
+  "runtime": {
+    "issuer": "platform-worker",
+    "workerId": "worker-a",
+    "publicKeys": [
+      {
+        "keyId": "grant-a",
+        "publicKeyFile": "/var/run/agent-infra/files/runtime-grant.pem"
+      }
+    ]
+  },
+  "limits": {
+    "intentTtlMs": 86400000,
+    "accessTtlMs": 900000,
+    "maxConcurrentTransfers": 16
+  },
+  "services": [
+    {
+      "tokenFile": "/var/run/agent-infra/files/api-service-token",
+      "agentIds": ["agent-a"]
+    }
+  ]
+}
+```
+
+- `signing` 与 `runtime` 公钥使用 Ed25519；签名公钥必须与私钥匹配，密钥 ID 在各自集合内唯一。
+- `services[].tokenFile` 至少 32 个可打印 ASCII 字符；同一令牌不得登记到不同条目。服务身份只来自该令牌，不接受请求体自报。
+- 每个 TTL 不超过 24 小时，`maxConcurrentTransfers` 为 1–256。
+- `storage.credentialsFile` 可选，内容为严格 JSON `{"accessKeyId","secretAccessKey","sessionToken"?}`，不写环境变量。
+- 配置错误返回 `PLATFORM_FILE_DEPLOYMENT_CONFIGURATION_INVALID`，可附带静态字段名；日志、错误和测试不得回显配置值、路径或令牌。
+- 部署模块也可以直接导出 `apiInput.files`。显式端口与环境配置只能二选一，同时提供时以 `PLATFORM_FILES_DUPLICATE` 拒绝。
+
+文件 Actor 在每次交换时重新从 LDAP 当前目录与 Platform 停用状态解析，不复用浏览器会话或请求中的旧身份；目录或停用查询失败时拒绝请求。
 
 文件数据面只接受平台路径和 `X-Platform-File-Grant` Header。浏览器同时携带当前会话；Worker 同时携带服务身份。S3 签名地址仅用于平台内部上传，不返回给用户或 Runtime。
 
@@ -21,6 +81,21 @@ Agent 与 Channel 声明通过 `/api/v2/agents/{agentId}/file-limits`、`/api/v2
 `PlatformFileDeploymentV1.readLimits` 保留为部署覆盖点；缺省时 Platform API 装配用 Platform DB 读取器读取三方声明，并以 `agents.current_configuration_revision` 作为配置修订事实。读取器返回的修订与调用方已验证的配置修订不一致时装配层拒绝；`resolveFileLimitsV1` 继续执行三方交集，缺失、过期或空交集返回 `null`；声明读取不可用会拒绝请求而不是放行。
 
 ## Worker 与恢复
+
+### Runtime 文件交换注入
+
+Worker 只有同时拿到精确的 Platform API origin 与 runtime-auth service token 引用时才向 Agent Pod 注入这两个变量：
+
+- `AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN=<exact origin>`
+- `AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN`：`secretKeyRef` 指向 `runtimeAuthSecretRef`，不是字面量。
+
+来源为部署模块 `WorkloadRuntimeAuthV1.fileExchangeOrigin`，或固定环境的 `PLATFORM_WORKER_FILE_EXCHANGE_ORIGIN`（Helm `platformWorker.fileExchangeOrigin`／本地私有环境）。两者同时提供返回 `PLATFORM_WORKER_FILE_EXCHANGE_DUPLICATE`；只给 origin 而没有 Runtime auth 返回 `PLATFORM_WORKER_FILE_EXCHANGE_CONFIGURATION_INVALID`；origin 不是精确的 `http(s)://host[:port]`（无路径、查询、片段、凭据；明文仅限集群 DNS 名称）同样拒绝。配置错误在写入任何 Kubernetes 资源之前发生。
+
+未提供 origin 时不注入两个变量，Runtime Host FileBridge 保持关闭，`capabilities.attachments` 为 false。只注入一个变量时 Runtime Host 以 `RUNTIME_CONFIGURATION_INVALID` 拒绝启动。Workload 不能通过自定义 `env` 添加 `AGENT_INFRA_RUNTIME_FILE_EXCHANGE_*`，命中即按 policy 拒绝。
+
+令牌轮换：更新 deployment-owned runtime-auth Secret，并重启 Worker 与 Agent Workload；Platform API 的 `services[].tokenFile` 必须同时登记该令牌和允许的 Agent。不得把令牌复制到 Pod env 字面量、Helm values、日志或错误。
+
+生产 Agent NetworkPolicy 是 allow-list egress，当前文件交换不会自动追加规则。部署必须把该 Platform API origin 的端口加入 Agent egress；本地 kind（kindnet）不强制执行 NetworkPolicy，本地联调通过不证明生产可达。
 
 `createWorkerFileClientV1` 提供输入读取与结果写入。它使用 RuntimeHost 已验证的原始 V4 Execution Grant 调用 `RuntimeFileExchangeRequestV2` 交换入口（`schemaVersion=2`、`executionGrant`、操作、单一文件引用或结果描述、幂等键），随后携带文件 Grant 与服务身份传输字节；不接受调用者指定的对象键或存储地址。旧 V1 自报身份 wire 继续被拒绝。原 Grant 仅证明执行委托范围，交换后的当前授权由持久 Conversation、Execution、generation、delivery fence、停止/终态和 `task_authorization_records` 决定，File Grant 有效期取部署 `accessTtlMs`。实际 Driver 文件桥接不属于本模块。
 
@@ -37,3 +112,5 @@ Agent 与 Channel 声明通过 `/api/v2/agents/{agentId}/file-limits`、`/api/v2
 测试创建随机命名、仅绑定 loopback 的独立容器，并仅回收这些容器。Fake 与 S3 使用同一对象契约，测试覆盖版本固定、重放、并发、过期、对象缺失、冲突及重复清理。平台联测覆盖上传、下载、结果写入、同入口跨用户拒绝、撤权与旧代次拒绝。V4 文件交换另覆盖签名伪造、错误 issuer/Worker/audience、控制用途、非 allowlist 文件、终态、停止、撤销的 `task_authorization_records`、fence/generation 变化，以及可读与不可读文件一致的 404。FileLimits 声明另有 PostgreSQL 集成测试覆盖持久化、revision 比较并交换、幂等重放、过期与配置修订失配；HTTP 路由测试覆盖 Owner、非 Owner、已撤销管理员、过期声明与 revision 冲突。
 
 发布验收记录只保留 source commit、配置版本、对象存储实现／镜像 digest、测试命令和结果。禁止记录文件正文、服务凭证、JWS 或内部签名 URL。测试通过不替代后续文件消费者整装与人工验收。
+
+本次（#3064）的自动化覆盖：builder 的合法装配、缺字段／未知字段／相对路径、非 Ed25519／公私钥不匹配／重复密钥、令牌与私钥脱敏、凭证文件严格解析；Worker 的 origin 注入、Secret 引用、半配置／重复／非法 origin、Workload 自带变量拒绝；Runtime Host 的双变量与精确 origin 校验；Helm 渲染与 schema。以下仍未执行，保留为 #3060 的验收项：四模板真实文件 E2E、固定环境浏览器上传／下载／结果写回、生产 S3 bucket 与 NetworkPolicy egress 装配。
