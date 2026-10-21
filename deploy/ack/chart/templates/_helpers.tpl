@@ -1,4 +1,7 @@
 {{- define "ack.labels" -}}
+{{- if not (has .Values.encryption.currentKeyVersion .Values.encryption.workerKeyVersions) -}}
+{{- fail "encryption.workerKeyVersions must include encryption.currentKeyVersion" -}}
+{{- end -}}
 app.kubernetes.io/name: agent-infra
 app.kubernetes.io/managed-by: Helm
 {{- end }}

@@ -10,6 +10,7 @@
 # - ingress.tlsSecret / ingress.className           cluster TLS Secret / class
 # - images.pullSecrets                              GHCR pull Secret name(s)
 # - secrets.*                                       Secret names in this namespace
+# - encryption.currentKeyVersion / workerKeyVersions existing public key/keyring versions
 #
 # The chart expects these existing Secret/ConfigMap objects in the namespace:
 # - ack-ghcr-pull
@@ -34,3 +35,7 @@ postgres:
   enabled: false
 migrations:
   enabled: false
+encryption:
+  currentKeyVersion: key-v1
+  workerKeyVersions:
+    - key-v1

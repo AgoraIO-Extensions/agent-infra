@@ -33,6 +33,10 @@ secrets:
   workerCa: agent-infra-worker-ca
   webTls: agent-infra-web-tls
 publicOrigin: https://ack.example.invalid
+encryption:
+  currentKeyVersion: key-v1
+  workerKeyVersions:
+    - key-v1
 directory:
   corpId: ww0000000000000000
   sourceConfigMap: agent-infra-directory-source

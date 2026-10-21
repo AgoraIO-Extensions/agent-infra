@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["images", "secrets", "publicOrigin", "directory", "scheduling", "resources", "postgres", "ingress", "migrations"],
+  "required": ["images", "secrets", "publicOrigin", "directory", "scheduling", "resources", "postgres", "ingress", "migrations", "encryption"],
   "properties": {
     "images": {
       "type": "object",
@@ -20,6 +20,20 @@
     },
     "secrets": {"type": "object", "additionalProperties": {"type": "string"}},
     "publicOrigin": {"type": "string", "pattern": "^https://"},
+    "encryption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currentKeyVersion", "workerKeyVersions"],
+      "properties": {
+        "currentKeyVersion": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+        "workerKeyVersions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}
+        }
+      }
+    },
     "directory": {"type": "object", "required": ["corpId", "sourceConfigMap", "sourceModule", "runtimeDatabaseRole"]},
     "scheduling": {"type": "object"},
     "sessionRuntimeScheduling": {
