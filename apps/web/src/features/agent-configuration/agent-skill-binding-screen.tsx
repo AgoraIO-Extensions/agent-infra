@@ -780,7 +780,7 @@ function BindVersionForm({
 			data-od-id="skill-bind-form"
 		>
 			{/* 标题沿用「绑定固定版本」：候选是 Skill Hub 中可见的已发布版本，不限于「我的库」
-			    （W-31 待回写）。tabIndex=-1：确认绑定后、回读完成前焦点暂留在这里。 */}
+			    （W-31，已回写导出稿）。tabIndex=-1：确认绑定后、回读完成前焦点暂留在这里。 */}
 			<h2 id={`${selectId}-title`} tabIndex={-1}>
 				绑定固定版本
 			</h2>

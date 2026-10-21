@@ -4457,7 +4457,7 @@ body {
 .wecom-channel-card > [data-slot="label"] {
 	margin-top: 0;
 }
-/* PRD §10.3 的群聊可见性提示，沿分区说明之后的小字（W-17 待回写）。 */
+/* PRD §10.3 的群聊可见性提示，沿分区说明之后的小字（W-17，已回写导出稿）。 */
 .management-content .wecom-visibility-note {
 	margin-top: 15px;
 	color: var(--muted-foreground);

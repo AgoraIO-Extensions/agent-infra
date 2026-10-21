@@ -22,7 +22,7 @@ export function ConfigurationWecomSection({
 			description="Web 对话默认可用；企微入口需要分别绑定，状态会在这里更新。"
 			aria-describedby="wecom-visibility"
 		>
-			{/* PRD §10.3：Owner 绑定群聊时必须看到群内可见性提示（记入终验待回写 W-17）。 */}
+			{/* PRD §10.3：Owner 绑定群聊时必须看到群内可见性提示（W-17，已回写导出稿）。 */}
 			<p id="wecom-visibility" className="wecom-visibility-note">
 				群消息和 Agent 回复对群成员可见。Agent 可用范围只限制谁能触发
 				Agent，不能阻止群成员阅读已有内容；每位发送者的会话上下文仍独立。

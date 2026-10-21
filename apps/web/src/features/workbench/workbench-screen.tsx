@@ -540,7 +540,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 									<small>暂无创建失败的 Agent。</small>
 								</TaskRow>
 							)}
-							{/* 系统管理员代替 Owner 重试创建失败的 Agent（PRD §2.3）：导出稿没有这一行，待回写（Y-09）。 */}
+							{/* 系统管理员代替 Owner 重试创建失败的 Agent（PRD §2.3）：导出稿已回写这一行（Y-09）。 */}
 							{administrator &&
 								(adminAgents.kind !== "ready" ? (
 									<TaskRow title="运行状态">
