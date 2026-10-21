@@ -37,6 +37,8 @@ import {
 	nativeCapabilityInvocationSchemasV1,
 	nativeMetadataOpenApiPathsV1,
 	nativeMetadataSchemasV1,
+	observabilityOpenApiPathsV1,
+	observabilitySchemasV1,
 	pilotBrowserOpenApiPathsV1,
 	pilotBrowserOpenApiPathsV2,
 	pilotBrowserSchemasV1,
@@ -830,6 +832,7 @@ function buildArtifacts() {
 			...pilotScopedAuditOpenApiPathsV2,
 			...pilotTaskOpenApiPathsV1,
 			...wecomBotConnectionOpenApiPathsV2,
+			...observabilityOpenApiPathsV1,
 		},
 		components: {
 			securitySchemes: {
@@ -848,6 +851,7 @@ function buildArtifacts() {
 				...pilotScopedAuditSchemasV2,
 				...pilotTaskSchemasV1,
 				...wecomBotConnectionSchemasV2,
+				...observabilitySchemasV1,
 			},
 		},
 	});

@@ -648,6 +648,89 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the pinned observability status V1 read (#3058)", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const statusPath = "/api/v1/ops/observability";
+		const previous = structuredClone(current);
+		delete previous.paths[statusPath];
+		delete previous.components.schemas.ObservabilityStatusProjectionV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "observability-status-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const projection = (value: typeof current) =>
+				value.components.schemas.ObservabilityStatusProjectionV1;
+			const operation = (value: typeof current) => value.paths[statusPath].get;
+			for (const [name, mutate] of Object.entries({
+				// 只接受平台会话：不能匿名，也不能改用 API 凭证读取。
+				anonymous: (value: typeof current) => {
+					operation(value).security = [];
+				},
+				bearer: (value: typeof current) => {
+					operation(value).security.push({ platformApiCredential: [] });
+				},
+				// 身份与角色只由服务端解析，不能由调用方参数指定。
+				callerRole: (value: typeof current) => {
+					operation(value).parameters = [
+						{ in: "query", name: "role", schema: { type: "string" } },
+					];
+				},
+				// 投影保持 strict 与有界，不带出未声明的指标或正文。
+				openProjection: (value: typeof current) => {
+					projection(value).additionalProperties = true;
+				},
+				extraField: (value: typeof current) => {
+					projection(value).properties.cpuPercent = { type: "number" };
+				},
+				optionalCounter: (value: typeof current) => {
+					projection(value).required = projection(value).required.filter(
+						(field: string) => field !== "exportFailures",
+					);
+				},
+				negativeCounter: (value: typeof current) => {
+					delete projection(value).properties.droppedLogs.minimum;
+				},
+				otherService: (value: typeof current) => {
+					projection(value).properties.service = { type: "string" };
+				},
+				// 错误只返回契约内的稳定状态码，不新增 500，也不删掉已声明的错误。
+				internalError: (value: typeof current) => {
+					operation(value).responses["500"] = structuredClone(
+						operation(value).responses["503"],
+					);
+				},
+				missingDenial: (value: typeof current) => {
+					delete operation(value).responses["403"];
+				},
+				untypedSuccess: (value: typeof current) => {
+					operation(value).responses["200"].content["application/json"].schema =
+						{ type: "object" };
+				},
+				renamed: (value: typeof current) => {
+					operation(value).operationId = "unreviewed";
+				},
+				copied: (value: typeof current) => {
+					value.paths["/api/v2/ops/observability"] = structuredClone(
+						value.paths[statusPath],
+					);
+				},
+			})) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status, name).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the pinned directory search V2 read (#3035)", async () => {
 		const current = JSON.parse(
 			await readFile(

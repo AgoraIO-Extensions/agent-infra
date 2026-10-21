@@ -703,6 +703,18 @@ export type ModelSelectionUpdateRequestV1 = {
     schemaVersion: 1;
 };
 
+export type ObservabilityStatusProjectionV1 = {
+    captureFailures: number;
+    droppedLogs: number;
+    enabled: boolean;
+    exportFailures: number;
+    invalidRecords: number;
+    lastExportFailureAt?: string;
+    schemaVersion: 1;
+    service: 'platform-api';
+    state: 'active' | 'closing' | 'closed';
+};
+
 export type PersistedConversationEventV1 = {
     conversationCursor: string;
     conversationId: string;
@@ -3958,6 +3970,43 @@ export type StreamAgentTaskEventsResponses = {
 };
 
 export type StreamAgentTaskEventsResponse = StreamAgentTaskEventsResponses[keyof StreamAgentTaskEventsResponses];
+
+export type GetObservabilityStatusData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/ops/observability';
+};
+
+export type GetObservabilityStatusErrors = {
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Not a system administrator, or authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * This deployment does not provide the query
+     */
+    404: unknown;
+    /**
+     * Observability is not assembled or temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetObservabilityStatusError = GetObservabilityStatusErrors[keyof GetObservabilityStatusErrors];
+
+export type GetObservabilityStatusResponses = {
+    /**
+     * Observability collection status
+     */
+    200: ObservabilityStatusProjectionV1;
+};
+
+export type GetObservabilityStatusResponse = GetObservabilityStatusResponses[keyof GetObservabilityStatusResponses];
 
 export type GetCurrentSessionData = {
     body?: never;

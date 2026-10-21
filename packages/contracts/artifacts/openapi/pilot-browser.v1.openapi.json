@@ -3955,6 +3955,66 @@
         ],
         "type": "object"
       },
+      "ObservabilityStatusProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "captureFailures": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "droppedLogs": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "exportFailures": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "invalidRecords": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lastExportFailureAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "service": {
+            "const": "platform-api",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "closing",
+              "closed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "service",
+          "enabled",
+          "state",
+          "captureFailures",
+          "exportFailures",
+          "droppedLogs",
+          "invalidRecords"
+        ],
+        "type": "object"
+      },
       "PersistedConversationEventV1": {
         "oneOf": [
           {
@@ -14178,6 +14238,63 @@
           "controlId": null,
           "persistedEventId": "eventId"
         }
+      }
+    },
+    "/api/v1/ops/observability": {
+      "get": {
+        "description": "System administrators only, resolved by the server from the current browser session; caller-supplied identity fields are ignored. Returns only the redacted capture and export health of Platform API observability. A signed-out session returns 401; a non-administrator or disabled account returns 403. Observability that is not assembled or cannot report its status returns 503. A deployment that does not provide this query answers 404 without a protocol body.",
+        "operationId": "getObservabilityStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservabilityStatusProjectionV1"
+                }
+              }
+            },
+            "description": "Observability collection status"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Not a system administrator, or authorization is no longer valid"
+          },
+          "404": {
+            "description": "This deployment does not provide the query"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Observability is not assembled or temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ],
+        "summary": "Read the Platform API observability collection status"
       }
     },
     "/api/v1/session": {
