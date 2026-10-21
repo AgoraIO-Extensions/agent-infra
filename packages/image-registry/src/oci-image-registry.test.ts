@@ -238,9 +238,126 @@ describe("OCI ImageRegistryAdapter V1", () => {
 			status: "admitted",
 			immutableDigest: manifestDigest,
 		});
-		expect(calls.some((call) => call.includes("opaque-test-token"))).toBe(true);
+		expect(
+			calls.some((call) => call.endsWith(" Bearer opaque-test-token")),
+		).toBe(true);
 		expect(JSON.stringify(result)).not.toContain("opaque-test-token");
 	});
+
+	it.each([
+		{
+			location: "https://storage.example/config?signature=private",
+			allowed: true,
+			expected: "admitted",
+		},
+		{
+			location: "https://storage.example/config",
+			allowed: false,
+			expected: "rejected",
+		},
+		{
+			location: "https://unapproved.example/config",
+			allowed: true,
+			expected: "rejected",
+		},
+		{
+			location: "http://storage.example/config",
+			allowed: true,
+			expected: "rejected",
+		},
+		{
+			location: "https://user:secret@storage.example/config",
+			allowed: true,
+			expected: "rejected",
+		},
+		{
+			location: "https://storage.example/config#fragment",
+			allowed: true,
+			expected: "rejected",
+		},
+		{
+			location: "https://storage.example:8443/config",
+			allowed: true,
+			expected: "rejected",
+		},
+	])(
+		"limits authenticated blob redirects: $location / $allowed",
+		async ({ location, allowed, expected }) => {
+			const targets: string[] = [];
+			const adapter = createOciImageRegistryAdapterV1({
+				imageReferencePrefix: "registry.example/agents",
+				endpoint: "https://registry.example",
+				allowedBlobRedirectOrigins: allowed ? ["https://storage.example"] : [],
+				async fetch(input, init) {
+					const url = requestUrl(input);
+					targets.push(url);
+					if (url.includes("/manifests/"))
+						return ociManifestResponse(registryManifestBody, manifestDigest);
+					if (url === "https://registry.example/token")
+						return Response.json({ token: "opaque-token" });
+					if (url.includes("/blobs/")) {
+						if (!new Headers(init?.headers).has("authorization"))
+							return new Response(null, {
+								status: 401,
+								headers: {
+									"www-authenticate":
+										'Bearer realm="https://registry.example/token"',
+								},
+							});
+						expect(new Headers(init?.headers).get("authorization")).toBe(
+							"Bearer opaque-token",
+						);
+						expect(init?.redirect).toBe("manual");
+						return new Response(null, { status: 307, headers: { location } });
+					}
+					expect(new Headers(init?.headers).has("authorization")).toBe(false);
+					expect(init?.redirect).toBe("error");
+					return ociConfigResponse(registryConfigBody);
+				},
+				policy: { authorize: async () => admittedPolicy },
+			});
+			const result = await adapter.admit(request);
+			expect(result.status).toBe(expected);
+			expect(targets.includes(location)).toBe(expected === "admitted");
+			expect(JSON.stringify(result)).not.toContain("private");
+		},
+	);
+
+	it.each(["manifest", "chain", "digest"])(
+		"rejects redirect misuse: %s",
+		async (kind) => {
+			const fetch = vi.fn(
+				async (input: Parameters<typeof globalThis.fetch>[0]) => {
+					const url = requestUrl(input);
+					if (url.includes("/manifests/") && kind !== "manifest")
+						return ociManifestResponse(registryManifestBody, manifestDigest);
+					if (url.startsWith("https://storage.example")) {
+						if (kind === "digest")
+							return ociConfigResponse(
+								registryConfigBody.replace("linux", "other"),
+							);
+						return new Response(null, {
+							status: 307,
+							headers: { location: "https://storage.example/again" },
+						});
+					}
+					return new Response(null, {
+						status: 307,
+						headers: { location: "https://storage.example/config" },
+					});
+				},
+			);
+			const adapter = createOciImageRegistryAdapterV1({
+				imageReferencePrefix: "registry.example/agents",
+				endpoint: "https://registry.example",
+				allowedBlobRedirectOrigins: ["https://storage.example"],
+				fetch,
+				policy: { authorize: async () => admittedPolicy },
+			});
+			expect((await adapter.admit(request)).status).toBe("rejected");
+			expect(fetch).toHaveBeenCalledTimes(kind === "manifest" ? 1 : 3);
+		},
+	);
 
 	it("admits an approved image without Base Image ancestry as an immutable sanitized candidate", async () => {
 		const adapter = createOciImageRegistryAdapterV1({

@@ -131,6 +131,7 @@ function createOciDistributionClientV1(options: {
 	readonly imageReferencePrefix: string;
 	readonly endpoint: string;
 	readonly fetch: typeof globalThis.fetch;
+	readonly allowedBlobRedirectOrigins?: readonly string[];
 }): OciDistributionClientV1 {
 	const binding = parseBinding(options);
 
@@ -207,12 +208,15 @@ export function createOciImageRegistryAdapterV1(options: {
 	readonly imageReferencePrefix: string;
 	readonly endpoint: string;
 	readonly fetch?: typeof globalThis.fetch;
+	/** Exact HTTPS storage origins approved by the deployment; redirects default to denied. */
+	readonly allowedBlobRedirectOrigins?: readonly string[];
 	readonly policy: OciImageAdmissionPolicyV1;
 }): OciImageRegistryAdapterV1 {
 	const distribution = createOciDistributionClientV1({
 		imageReferencePrefix: options.imageReferencePrefix,
 		endpoint: options.endpoint,
 		fetch: options.fetch ?? globalThis.fetch,
+		allowedBlobRedirectOrigins: options.allowedBlobRedirectOrigins,
 	});
 	return {
 		async admit(
@@ -371,10 +375,12 @@ function parseBinding(options: {
 	readonly imageReferencePrefix: string;
 	readonly endpoint: string;
 	readonly fetch: typeof globalThis.fetch;
+	readonly allowedBlobRedirectOrigins?: readonly string[];
 }): {
 	readonly imageReferencePrefix: string;
 	readonly endpoint: URL;
 	readonly fetch: typeof globalThis.fetch;
+	readonly allowedBlobRedirectOrigins: ReadonlySet<string>;
 } {
 	if (
 		typeof options.imageReferencePrefix !== "string" ||
@@ -404,10 +410,20 @@ function parseBinding(options: {
 		throw new TypeError("OCI Distribution configuration is invalid");
 	}
 	endpoint.pathname = endpoint.pathname === "/" ? "" : "/v2";
+	const allowedBlobRedirectOrigins = new Set(
+		options.allowedBlobRedirectOrigins,
+	);
+	for (const origin of allowedBlobRedirectOrigins) {
+		const url = new URL(origin);
+		if (url.protocol !== "https:" || url.origin !== origin) {
+			throw new TypeError("OCI blob redirect origin is invalid");
+		}
+	}
 	return {
 		imageReferencePrefix: options.imageReferencePrefix,
 		endpoint,
 		fetch: options.fetch,
+		allowedBlobRedirectOrigins,
 	};
 }
 
@@ -465,6 +481,7 @@ async function requestOci(
 	binding: {
 		readonly endpoint: URL;
 		readonly fetch: typeof globalThis.fetch;
+		readonly allowedBlobRedirectOrigins: ReadonlySet<string>;
 	},
 	path: string,
 	accept: string,
@@ -486,20 +503,20 @@ async function requestOci(
 		: controller.signal;
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	try {
-		const first = await Promise.race([
-			readOciResponse(binding, path, accept, signal),
-			new Promise<never>((_resolve, reject) => {
-				timeout = setTimeout(() => {
-					controller.abort();
-					reject(new Error("OCI request timed out"));
-				}, ociRequestTimeoutMs);
-			}),
-		]);
-		if (first.status !== "not-admitted" || !first.challenge) return first;
-		const token = await bearerToken(binding, first.challenge, signal);
-		if (!token) return { status: "not-admitted" };
 		return await Promise.race([
-			readOciResponse(binding, path, accept, signal, token),
+			(async () => {
+				const first = await readOciResponse(binding, path, accept, signal);
+				if (first.status !== "not-admitted" || !first.challenge) return first;
+				const token = await bearerToken(binding, first.challenge, signal);
+				if (!token) return { status: "not-admitted" as const };
+				return readOciResponse(
+					binding,
+					path,
+					accept,
+					signal,
+					`Bearer ${token}`,
+				);
+			})(),
 			new Promise<never>((_resolve, reject) => {
 				timeout = setTimeout(() => {
 					controller.abort();
@@ -587,6 +604,7 @@ async function readOciResponse(
 	binding: {
 		readonly endpoint: URL;
 		readonly fetch: typeof globalThis.fetch;
+		readonly allowedBlobRedirectOrigins: ReadonlySet<string>;
 	},
 	path: string,
 	accept: string,
@@ -603,18 +621,37 @@ async function readOciResponse(
 			readonly challenge?: BearerChallengeV1;
 	  }
 > {
-	const response = await binding.fetch(
-		new URL(`/v2/${path}`, binding.endpoint),
-		{
-			headers: {
-				accept,
-				"accept-encoding": "identity",
-				...(authorization ? { authorization } : {}),
-			},
+	let response = await binding.fetch(new URL(`/v2/${path}`, binding.endpoint), {
+		headers: {
+			accept,
+			"accept-encoding": "identity",
+			...(authorization ? { authorization } : {}),
+		},
+		redirect: accept === configMediaType ? "manual" : "error",
+		signal,
+	});
+	if (
+		accept === configMediaType &&
+		(response.status === 307 || response.status === 302)
+	) {
+		cancelOciBody(response.body);
+		const location = response.headers.get("location");
+		if (!location) return { status: "invalid" };
+		const target = new URL(location, binding.endpoint);
+		if (
+			target.username ||
+			target.password ||
+			target.hash ||
+			!binding.allowedBlobRedirectOrigins.has(target.origin)
+		)
+			return { status: "not-admitted" };
+		// A registry's storage URL must not receive its Bearer token or redirect again.
+		response = await binding.fetch(target, {
+			headers: { accept, "accept-encoding": "identity" },
 			redirect: "error",
 			signal,
-		},
-	);
+		});
+	}
 	if (
 		typeof response !== "object" ||
 		response === null ||
