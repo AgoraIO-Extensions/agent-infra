@@ -3,7 +3,11 @@ import { createServer, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { vi } from "vitest";
 import { ClaudeRuntimeDriver } from "./claude-runtime-driver.js";
-import type { RuntimeDriverCommand } from "./driver.js";
+import type {
+	RuntimeDriverCommand,
+	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
+} from "./driver.js";
 import { openOpenCodeRuntime } from "./opencode-bootstrap.js";
 import { openPiRuntime } from "./pi-bootstrap.js";
 
@@ -11,6 +15,9 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 	path: string,
 	loseFirstResult = false,
 	runtime: "claude" | "opencode" | "pi" = "claude",
+	authorizeModelAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>,
 ) {
 	let loseResult = loseFirstResult;
 	let calls = 0;
@@ -80,6 +87,7 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 	});
 	const options = {
 		path,
+		...(authorizeModelAction ? { authorizeModelAction } : {}),
 		configVersion: "conformance-1",
 		defaultModelOptionId: "model-option-primary",
 		defaultReasoningLevel: "high",
@@ -88,7 +96,9 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 			model: id === "primary" ? "claude-opus-5" : "claude-sonnet-4-6",
 			reasoningLevels: ["low", "high"],
 			endpoint: `http://127.0.0.1:${ports[index]}`,
-			credential: `synthetic-${id}-credential`,
+			...(authorizeModelAction
+				? {}
+				: { credential: `synthetic-${id}-credential` }),
 			authentication: "bearer" as const,
 		})),
 	};
