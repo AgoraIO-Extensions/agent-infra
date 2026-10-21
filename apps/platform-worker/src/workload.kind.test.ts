@@ -474,6 +474,9 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					.split("\0")
 					.filter(Boolean);
 				expect(argv).toEqual([
+					"/usr/bin/tini",
+					"-s",
+					"--",
 					"/usr/local/bin/node",
 					"--disable-sigusr1",
 					"dist/index.mjs",
