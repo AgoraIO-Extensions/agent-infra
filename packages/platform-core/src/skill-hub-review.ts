@@ -1,8 +1,10 @@
+import type { AgentManagementActorContextV1 } from "./agent-management.js";
 import type { SkillHubVersionV1 } from "./skill-hub.js";
 import {
 	parseSkillHubIdV1,
 	SkillHubOperationErrorV1,
 } from "./skill-hub-management.js";
+import type { SkillHubVersionContentV1 } from "./skill-hub-version-detail.js";
 
 /** 待审队列的一页查询；游标是上一页最后一个版本，按提交时间与版本 ID 继续。 */
 export type SkillHubReviewQueueQueryV1 = Readonly<{
@@ -74,5 +76,37 @@ export function pageSkillHubReviewQueueV1(page: {
 	return {
 		items: page.versions.map(projectSkillHubReviewQueueItemV1),
 		nextCursor: page.nextCursor,
+	};
+}
+
+/**
+ * 审核正文入口的可读性（#3046）：只有当前有效的系统管理员，只限审核队列中仍待审核的
+ * 共享版本（ORGANIZATION 须有目标组织），且不是调用者本人发布的。与版本详情的
+ * canViewSkillHubVersionDetailV1 相互独立，不放宽详情、目录、安装或绑定的可见性。
+ */
+export function canReadSkillHubReviewContentV1(
+	version: SkillHubVersionV1,
+	actor: AgentManagementActorContextV1,
+	organizationId: string | null,
+): boolean {
+	return (
+		actor.accountStatus === "active" &&
+		actor.isAdministrator &&
+		version.state === "pending_review" &&
+		version.visibility !== "PRIVATE" &&
+		(version.visibility !== "ORGANIZATION" || organizationId !== null) &&
+		version.ownerId !== actor.userId
+	);
+}
+
+/** 审核正文投影只含契约版本、版本 ID 与内容；内容由版本详情的同一实现生成。 */
+export function projectSkillHubReviewContentV1(input: {
+	readonly version: SkillHubVersionV1;
+	readonly content: SkillHubVersionContentV1;
+}) {
+	return {
+		schemaVersion: input.version.schemaVersion,
+		skillVersionId: input.version.skillVersionId,
+		content: input.content,
 	};
 }

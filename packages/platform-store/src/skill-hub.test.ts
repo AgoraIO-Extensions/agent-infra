@@ -670,6 +670,71 @@ describe("Skill Hub administrator review queue", () => {
 		]);
 	});
 
+	it("reads review content only for other publishers' pending shared versions (#3046)", async () => {
+		await seed();
+		const adapter = store();
+		for (const versionId of ["version-b", "version-a"])
+			expect(
+				await adapter.readPendingReviewContent(request("admin"), versionId),
+			).toEqual({
+				version: expect.objectContaining({
+					skillVersionId: versionId,
+					name: versionId.replace("version", "skill"),
+					state: "pending_review",
+				}),
+				// 只登记了元数据、没有完成供应的版本没有包描述，由调用方标记内容不可用。
+				packageObject: null,
+			});
+		// 非系统管理员一律拒绝，与版本是否存在、是否同组织无关。
+		for (const userId of ["owner-a", "owner-b"])
+			for (const versionId of ["version-a", "version-b", "missing"])
+				await expect(
+					adapter.readPendingReviewContent(request(userId), versionId),
+				).rejects.toMatchObject({ code: "forbidden" });
+		// 管理员本人发布的、私有、已批准、已驳回与不存在的版本同样不可见。
+		for (const versionId of [
+			"version-d",
+			"version-c",
+			"version-e",
+			"version-f",
+			"missing",
+		])
+			await expect(
+				adapter.readPendingReviewContent(request("admin"), versionId),
+			).rejects.toMatchObject({ code: "not_found" });
+		await client`insert into platform.platform_user_disables (user_id) values ('admin')`;
+		await expect(
+			adapter.readPendingReviewContent(request("admin"), "version-b"),
+		).rejects.toMatchObject({ code: "forbidden" });
+		const audits =
+			await client`select action, target_id as "targetId", outcome, details from platform.audit_events where action in ('skill.version.read', 'skill.version.refused') and actor_id in ('owner-a', 'owner-b', 'admin') order by occurred_at`;
+		expect(
+			audits.filter((audit) => audit.action === "skill.version.read"),
+		).toEqual([
+			expect.objectContaining({
+				targetId: "version-b",
+				outcome: "succeeded",
+				details: { state: "pending_review", replayed: false },
+			}),
+			expect.objectContaining({
+				targetId: "version-a",
+				details: { state: "pending_review", replayed: false },
+			}),
+		]);
+		expect(
+			audits
+				.filter((audit) => audit.action === "skill.version.refused")
+				.map((audit) => (audit.details as { reason: string }).reason),
+		).toEqual([
+			...Array(6).fill("forbidden"),
+			...Array(5).fill("not_found"),
+			"forbidden",
+		]);
+		expect(JSON.stringify(audits)).not.toMatch(
+			/internal-object|private-review-text/,
+		);
+	});
+
 	it("skips pending rows that cannot be reviewed instead of failing the whole queue", async () => {
 		await seed();
 		// 共享范围以外的待审行（数据异常）与已失去目标组织的 ORGANIZATION 版本都不可审核。

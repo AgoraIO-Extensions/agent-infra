@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
 	canInstallSkillHubVersionV1,
+	canReadSkillHubReviewContentV1,
 	canViewSkillHubVersionDetailV1,
 	canViewSkillHubVersionV1,
 	createSkillHubVersionV1,
@@ -1864,6 +1865,58 @@ export class PostgresSkillHubLifecycleV1 {
 				return Object.freeze({
 					version: Object.freeze({ ...version, name: parent.name }),
 					installation: installation ? decodeInstallation(installation) : null,
+					packageObject,
+				});
+			},
+		);
+	}
+
+	/**
+	 * 审核正文（#3046）：先要求当前有效的系统管理员（否则 forbidden，与版本无关）；再只放行
+	 * 审核队列中他人仍待审核的共享版本，已处理、不存在与本人版本同样返回 not_found。
+	 * 返回已完成供应操作的固定 ZIP 描述，由调用方沿版本详情的同一规则读取并核对正文；
+	 * 审计只记版本 ID 与状态，正文不经过 Store。
+	 */
+	async readPendingReviewContent(
+		context: SkillHubRequestV1,
+		versionId: string,
+	) {
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				requireSkillHubReviewerV1(identity.actor);
+				// 与 reviewVersion 相同的父项目 -> 版本锁顺序，与并发审核串行。
+				const version = await this.#version(
+					transaction,
+					parseSkillHubIdV1(versionId),
+				);
+				const [parent] = await transaction
+					.select({
+						name: skillHubSkills.name,
+						organizationId: skillHubSkills.organizationId,
+					})
+					.from(skillHubSkills)
+					.where(eq(skillHubSkills.id, version.skillId));
+				if (
+					!parent ||
+					!canReadSkillHubReviewContentV1(
+						version,
+						identity.actor,
+						parent.organizationId,
+					)
+				)
+					throw new SkillHubOperationErrorV1("not_found");
+				const packageObject = await this.#admittedPackage(transaction, version);
+				await audit(
+					transaction,
+					request,
+					"skill.version.read",
+					version.skillVersionId,
+					"succeeded",
+					{ state: version.state, replayed: false },
+				);
+				return Object.freeze({
+					version: Object.freeze({ ...version, name: parent.name }),
 					packageObject,
 				});
 			},

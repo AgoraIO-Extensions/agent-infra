@@ -1811,6 +1811,23 @@ export type SkillHubPublicationVersionV1 = {
     visibility: 'PRIVATE' | 'MEMBER' | 'ORGANIZATION' | 'MARKET';
 };
 
+export type SkillHubReviewContentV1 = {
+    content: {
+        body: string;
+        bodyTruncated: boolean;
+        resources: Array<{
+            kind: 'script' | 'reference' | 'asset' | 'file';
+            path: string;
+            sizeBytes: number;
+        }>;
+        state: 'available';
+    } | {
+        state: 'unavailable';
+    };
+    schemaVersion: 1;
+    skillVersionId: string;
+};
+
 export type SkillHubReviewQueueItemV1 = {
     manifestDigest: string;
     name: string;
@@ -6566,6 +6583,49 @@ export type ListSkillHubReviewQueueV1Responses = {
 };
 
 export type ListSkillHubReviewQueueV1Response = ListSkillHubReviewQueueV1Responses[keyof ListSkillHubReviewQueueV1Responses];
+
+export type ReadSkillHubReviewContentV1Data = {
+    body?: never;
+    path: {
+        skillVersionId: string;
+    };
+    query?: never;
+    url: '/api/v2/skills/reviews/{skillVersionId}/content';
+};
+
+export type ReadSkillHubReviewContentV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadSkillHubReviewContentV1Error = ReadSkillHubReviewContentV1Errors[keyof ReadSkillHubReviewContentV1Errors];
+
+export type ReadSkillHubReviewContentV1Responses = {
+    /**
+     * Bounded content of another publisher's version waiting for review
+     */
+    200: SkillHubReviewContentV1;
+};
+
+export type ReadSkillHubReviewContentV1Response = ReadSkillHubReviewContentV1Responses[keyof ReadSkillHubReviewContentV1Responses];
 
 export type PublishSkillHubVersionV1Data = {
     body: SkillHubPublicationRequestV1;

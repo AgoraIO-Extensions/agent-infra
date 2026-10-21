@@ -568,8 +568,8 @@ function ReadyVersion({
 	);
 }
 
-/** SKILL.md 只作为纯文本显示，不解析 Markdown 或 HTML；资源只列清单。 */
-function SkillBody({ body }: { body: string }) {
+/** SKILL.md 只作为纯文本显示，不解析 Markdown 或 HTML；资源只列清单。审阅弹窗（#3046）共用。 */
+export function SkillBody({ body }: { body: string }) {
 	return (
 		// biome-ignore lint/a11y/noNoninteractiveTabindex: 可滚动的正文需要键盘可达。
 		<section className="skill-code" tabIndex={0} aria-label="SKILL.md 正文">

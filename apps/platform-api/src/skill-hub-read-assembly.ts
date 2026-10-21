@@ -18,12 +18,14 @@ import {
 	pageSkillHubReviewQueueV1,
 	pageSkillHubVersionsV1,
 	projectSkillHubProjectContentV1,
+	projectSkillHubReviewContentV1,
 	projectSkillHubVersionContentV1,
 	projectSkillHubVersionDetailV1,
 	projectSkillHubVersionMetadataV1,
 	SkillHubOperationErrorV1,
 	type SkillHubRequestV1,
 	type SkillHubVersionContentV1,
+	type SkillPackagePublicationObjectV1,
 } from "@agent-infra/platform-core";
 import { PostgresSkillHubLifecycleV1 } from "@agent-infra/platform-store";
 import { createDeploymentIdentityScope } from "./deployment-identity.js";
@@ -151,6 +153,37 @@ export function assembleSkillHubReadApiV1(input: {
 				store.revokeVersion(trusted, versionId, key),
 			),
 	};
+	// 详情正文只从部署维护的 Skill 包存储按固定对象版本读取；未装配、无包描述或核对失败时
+	// 内容标记不可用，版本、发布者与安装状态照常返回。审核正文（#3046）复用同一读取与截断。
+	const packageStorage = input.providerImport?.storage;
+	async function readVersionContent(
+		request: Request,
+		version: Readonly<{
+			name: string;
+			version: string;
+			packageDigest: string;
+			manifestDigest: string;
+		}>,
+		packageObject: SkillPackagePublicationObjectV1 | null,
+	): Promise<SkillHubVersionContentV1> {
+		if (!packageStorage || !packageObject) return { state: "unavailable" };
+		try {
+			return projectSkillHubVersionContentV1(
+				await readAdmittedSkillPackageEntryV1({
+					storage: packageStorage,
+					zip: packageObject,
+					name: version.name,
+					version: version.version,
+					packageDigest: version.packageDigest,
+					manifestDigest: version.manifestDigest,
+					signal: request.signal,
+				}),
+			);
+		} catch {
+			/* 内容读取或核对失败不暴露原因，只标记不可用。 */
+			return { state: "unavailable" };
+		}
+	}
 	const reviewDependencies: SkillHubReviewRoutesDependenciesV1 = {
 		identity: input.identity,
 		list: (request, trusted, query) =>
@@ -159,12 +192,22 @@ export function assembleSkillHubReadApiV1(input: {
 					await store.listPendingReviewVersions(trusted, query),
 				),
 			),
+		readContent: (request, trusted, versionId) =>
+			scope.requestScope(request, async () => {
+				const review = await store.readPendingReviewContent(trusted, versionId);
+				const content = await readVersionContent(
+					request,
+					review.version,
+					review.packageObject,
+				);
+				return projectSkillHubReviewContentV1({
+					version: review.version,
+					content,
+				});
+			}),
 		recordRefusal: (metadata, userId, reason) =>
 			store.recordReadRefusal(metadata, userId, reason),
 	};
-	// 详情正文只从部署维护的 Skill 包存储按固定对象版本读取；未装配、无包描述或核对失败时
-	// 内容标记不可用，版本、发布者与安装状态照常返回。
-	const packageStorage = input.providerImport?.storage;
 	const versionDetailDependencies: SkillHubVersionDetailRoutesDependenciesV1 = {
 		identity: input.identity,
 		listOwned: (request, trusted, query) =>
@@ -177,23 +220,11 @@ export function assembleSkillHubReadApiV1(input: {
 		readDetail: (request, trusted, versionId) =>
 			scope.requestScope(request, async () => {
 				const detail = await store.readVersionDetail(trusted, versionId);
-				let content: SkillHubVersionContentV1 = { state: "unavailable" };
-				if (packageStorage && detail.packageObject)
-					try {
-						content = projectSkillHubVersionContentV1(
-							await readAdmittedSkillPackageEntryV1({
-								storage: packageStorage,
-								zip: detail.packageObject,
-								name: detail.version.name,
-								version: detail.version.version,
-								packageDigest: detail.version.packageDigest,
-								manifestDigest: detail.version.manifestDigest,
-								signal: request.signal,
-							}),
-						);
-					} catch {
-						/* 内容读取或核对失败不暴露原因，只标记不可用。 */
-					}
+				const content = await readVersionContent(
+					request,
+					detail.version,
+					detail.packageObject,
+				);
 				return projectSkillHubVersionDetailV1({ ...detail, content });
 			}),
 		recordRefusal: (metadata, userId, reason) =>

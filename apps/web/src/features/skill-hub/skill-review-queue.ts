@@ -1,13 +1,20 @@
-import { SkillHubReviewQueuePageV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	SkillHubReviewContentV1Schema,
+	SkillHubReviewQueuePageV1Schema,
+} from "@agent-infra/contracts/pilot";
 import { useQuery } from "@tanstack/react-query";
 import type {
 	Client,
 	RequestResult,
 } from "../../pilot/generated-v2/client/index.js";
-import { listSkillHubReviewQueueV1 } from "../../pilot/generated-v2/sdk.gen.js";
+import {
+	listSkillHubReviewQueueV1,
+	readSkillHubReviewContentV1,
+} from "../../pilot/generated-v2/sdk.gen.js";
 import type {
 	ListSkillHubReviewQueueV1Errors,
 	ListSkillHubReviewQueueV1Responses,
+	SkillHubReviewContentV1,
 	SkillHubReviewQueueItemV1,
 } from "../../pilot/generated-v2/types.gen.js";
 import {
@@ -17,6 +24,11 @@ import {
 
 export type SkillReviewQueueReadState =
 	| { kind: "ready"; items: SkillHubReviewQueueItemV1[] }
+	| CollectionReadUnavailable;
+
+/** 审阅弹窗读取的待审正文；不可读时保留状态码对应的原因（无权、已不在队列、响应无效）。 */
+export type SkillReviewContentReadState =
+	| { kind: "ready"; content: SkillHubReviewContentV1["content"] }
 	| CollectionReadUnavailable;
 
 const maximumPages = 50;
@@ -92,5 +104,58 @@ export function useSkillReviewQueue({
 		queryFn: ({ signal }) => loadSkillReviewQueue(client, signal),
 		enabled: enabled && Boolean(identityKey),
 		retry: false,
+	});
+}
+
+/**
+ * 审核正文（#3046）：只读一个待审版本；系统管理员身份与版本是否仍在队列都由服务端判定，
+ * 页面只提交版本 ID。可重试失败交给 react-query 的 error 状态。
+ */
+export async function loadSkillReviewContent(
+	skillVersionId: string,
+	client?: Client,
+	signal?: AbortSignal,
+): Promise<SkillReviewContentReadState> {
+	signal?.throwIfAborted();
+	const result = await readSkillHubReviewContentV1<false>({
+		client,
+		path: { skillVersionId },
+		signal,
+		responseStyle: "fields",
+		throwOnError: false,
+	});
+	signal?.throwIfAborted();
+	const status = result.response?.status;
+	if (status !== 200) return failure(collectionReadFailure(status));
+	const parsed = SkillHubReviewContentV1Schema.safeParse(result.data);
+	if (!parsed.success || parsed.data.skillVersionId !== skillVersionId)
+		return failure({
+			kind: "unavailable",
+			retryable: false,
+			reason: "invalid-response",
+		});
+	return { kind: "ready", content: parsed.data.content };
+}
+
+/**
+ * 只在审阅弹窗打开时读取；查询键带身份，切换账号不复用上一个人的结果。
+ * gcTime 为 0：弹窗关闭、内容组件卸载后正文不留在缓存里，再次打开重新读取。
+ */
+export function useSkillReviewContent({
+	identityKey,
+	skillVersionId,
+	client,
+}: {
+	identityKey: string;
+	skillVersionId: string;
+	client?: Client;
+}) {
+	return useQuery({
+		queryKey: ["skill-hub", "review-content", identityKey, skillVersionId],
+		queryFn: ({ signal }) =>
+			loadSkillReviewContent(skillVersionId, client, signal),
+		enabled: Boolean(identityKey),
+		retry: false,
+		gcTime: 0,
 	});
 }

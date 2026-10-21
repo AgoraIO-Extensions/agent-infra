@@ -1,6 +1,6 @@
 import { Shield, ShieldOff } from "lucide-react";
-import { useId, useRef, useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { type ReactNode, useId, useRef, useState } from "react";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -41,7 +41,11 @@ import {
 	SkillHubLoading,
 	SkillHubReadFailure,
 } from "./skill-hub-screen.js";
-import type { SkillReviewQueueReadState } from "./skill-review-queue.js";
+import { SkillBody } from "./skill-hub-version-screen.js";
+import {
+	type SkillReviewQueueReadState,
+	useSkillReviewContent,
+} from "./skill-review-queue.js";
 
 /** 与契约 SkillHubReviewRequestV1.reason 上限一致。 */
 export const skillReviewReasonMaxLength = 1024;
@@ -187,6 +191,7 @@ export function SkillReviewsScreen({
 								item={item}
 								names={reviewNames(item, users, organizations)}
 								self={item.ownerId === currentUserId}
+								identityKey={currentUserId}
 								review={review}
 								onReviewed={onReviewed}
 							/>
@@ -207,12 +212,14 @@ function SkillReviewRow({
 	item,
 	names,
 	self,
+	identityKey,
 	review,
 	onReviewed,
 }: {
 	item: SkillReviewItem;
 	names: ReviewNames;
 	self: boolean;
+	identityKey: string;
 	review: ReviewAction;
 	onReviewed?: () => void;
 }) {
@@ -251,6 +258,7 @@ function SkillReviewRow({
 					<SkillReviewDialog
 						item={item}
 						names={names}
+						identityKey={identityKey}
 						disabled={state !== "pending_review"}
 						review={review}
 						onReviewed={(next) => {
@@ -267,12 +275,15 @@ function SkillReviewRow({
 export function SkillReviewDialog({
 	item,
 	names,
+	identityKey,
 	disabled = false,
 	review,
 	onReviewed,
 }: {
 	item: SkillReviewItem;
 	names: ReviewNames;
+	/** 读取待审正文的查询身份（当前用户 ID）。 */
+	identityKey: string;
 	disabled?: boolean;
 	review: ReviewAction;
 	/** 成功时带回新状态；版本已不在待审状态时不带状态，只回读队列。 */
@@ -368,32 +379,39 @@ export function SkillReviewDialog({
 					<DialogTitle>审阅发布申请</DialogTitle>
 				</DialogHeader>
 				<DialogBody className="space-y-4">
-					<dl className="skill-facts skill-dialog-facts">
-						<dt>Skill</dt>
-						<dd>
-							{item.name} · v{item.version}
-						</dd>
-						<dt>申请人</dt>
-						<dd>
-							{names.submitter}
-							{names.submitterUnresolved ? (
-								<>
-									{" "}
-									<IdentifierText value={item.ownerId} label="发布者 ID" />
-								</>
-							) : null}
-						</dd>
-						<dt>提交时间</dt>
-						<dd>
-							<Timestamp value={item.submittedAt} />
-						</dd>
-						<dt>共享范围</dt>
-						<dd>{names.scope}</dd>
-						<dt>来源</dt>
-						<dd>{skillHubProviderLabels[item.provider]}</dd>
-						<dt>权限声明</dt>
-						<dd>仅使用 Agent 已有权限 · 脚本禁用</dd>
-					</dl>
+					{/* 设计：事实列表下方紧跟 pre.skill-code，纯文本显示待审的 SKILL.md（#3046）；两者作为一组与审核说明分隔。 */}
+					<div>
+						<dl className="skill-facts skill-dialog-facts">
+							<dt>Skill</dt>
+							<dd>
+								{item.name} · v{item.version}
+							</dd>
+							<dt>申请人</dt>
+							<dd>
+								{names.submitter}
+								{names.submitterUnresolved ? (
+									<>
+										{" "}
+										<IdentifierText value={item.ownerId} label="发布者 ID" />
+									</>
+								) : null}
+							</dd>
+							<dt>提交时间</dt>
+							<dd>
+								<Timestamp value={item.submittedAt} />
+							</dd>
+							<dt>共享范围</dt>
+							<dd>{names.scope}</dd>
+							<dt>来源</dt>
+							<dd>{skillHubProviderLabels[item.provider]}</dd>
+							<dt>权限声明</dt>
+							<dd>仅使用 Agent 已有权限 · 脚本禁用</dd>
+						</dl>
+						<SkillReviewContent
+							skillVersionId={item.skillVersionId}
+							identityKey={identityKey}
+						/>
+					</div>
 					<Field>
 						<Label htmlFor={`${id}-reason`}>审核说明 · 驳回时必填</Label>
 						<Textarea
@@ -441,5 +459,93 @@ export function SkillReviewDialog({
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+/** 不可读的待审正文按原因说明；不显示状态码或服务端内部原因。 */
+function unreadableContentText(reason?: string) {
+	if (reason === "denied") return "当前账号没有读取待审正文的权限。";
+	if (reason === "not-found") return "这个版本已不在待审核状态，正文不再提供。";
+	return "待审正文暂时无法访问，请联系管理员。";
+}
+
+/**
+ * 审阅弹窗里的待审 SKILL.md（#3046）：读取中、可重试的读取失败、无权或已不在队列、内容不可用
+ * 与截断分别反馈。正文只按纯文本显示，不解析 Markdown 或 HTML，也不执行其中的脚本。
+ * 只在弹窗打开时挂载，关闭后查询随之释放，正文不留在缓存里。
+ */
+function SkillReviewContent({
+	skillVersionId,
+	identityKey,
+}: {
+	skillVersionId: string;
+	identityKey: string;
+}) {
+	const query = useSkillReviewContent({ identityKey, skillVersionId });
+	const container = useRef<HTMLDivElement>(null);
+	const state = query.data;
+	let content: ReactNode;
+	if (query.isError)
+		content = (
+			<Alert tone="danger" role="alert">
+				<AlertDescription>
+					暂时无法读取 SKILL.md 正文，可以稍后重新读取。
+				</AlertDescription>
+				<AlertAction>
+					<Button
+						variant="outline"
+						type="button"
+						onClick={() => {
+							// 重新读取时失败提示连同按钮一起换成读取中：先把焦点交给正文区域，不落到 body。
+							container.current?.focus();
+							void query.refetch();
+						}}
+					>
+						重新读取正文
+					</Button>
+				</AlertAction>
+			</Alert>
+		);
+	else if (!state)
+		content = (
+			<p className="skill-form-hint" role="status">
+				正在读取 SKILL.md 正文…
+			</p>
+		);
+	else if (state.kind === "unavailable")
+		content = (
+			<Alert tone="warn" role="alert">
+				<AlertDescription>
+					{unreadableContentText(state.reason)}
+				</AlertDescription>
+			</Alert>
+		);
+	else if (state.content.state === "unavailable")
+		content = (
+			<Alert tone="warn" role="status">
+				<AlertDescription>
+					这个版本的正文暂时无法读取，其余审核信息不受影响。
+				</AlertDescription>
+			</Alert>
+		);
+	else
+		content = (
+			<>
+				{state.content.body ? (
+					<SkillBody body={state.content.body} />
+				) : (
+					<p className="skill-form-hint">SKILL.md 没有正文。</p>
+				)}
+				{state.content.bodyTruncated ? (
+					<p className="skill-form-hint">
+						正文较长，这里只显示开头部分（64 KiB）。
+					</p>
+				) : null}
+			</>
+		);
+	return (
+		<div ref={container} tabIndex={-1} className="skill-review-content">
+			{content}
+		</div>
 	);
 }

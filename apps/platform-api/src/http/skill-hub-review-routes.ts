@@ -1,10 +1,13 @@
 import {
+	SkillHubReviewContentV1Schema,
 	SkillHubReviewQueuePageV1Schema,
 	SkillHubReviewQueueQueryV1Schema,
 } from "@agent-infra/contracts/pilot";
-import type {
-	pageSkillHubReviewQueueV1,
-	SkillHubRequestV1,
+import {
+	type pageSkillHubReviewQueueV1,
+	parseSkillHubIdV1,
+	type projectSkillHubReviewContentV1,
+	type SkillHubRequestV1,
 } from "@agent-infra/platform-core";
 import type { Context, Hono } from "hono";
 import { HttpProtocolError, requestMetadata } from "./common.js";
@@ -20,6 +23,12 @@ export interface SkillHubReviewRoutesDependenciesV1 {
 		trusted: SkillHubRequestV1,
 		query: { cursor?: string; limit?: number },
 	) => Promise<ReturnType<typeof pageSkillHubReviewQueueV1>>;
+	/** 审核正文（#3046）：管理员身份与版本是否仍在队列由 Store 在事务内判定。 */
+	readonly readContent: (
+		request: Request,
+		trusted: SkillHubRequestV1,
+		versionId: string,
+	) => Promise<ReturnType<typeof projectSkillHubReviewContentV1>>;
 	readonly recordRefusal: SkillHubReadRoutesDependenciesV1["recordRefusal"];
 }
 
@@ -27,7 +36,7 @@ export function registerSkillHubReviewRoutesV1(
 	app: Hono,
 	dependencies: SkillHubReviewRoutesDependenciesV1,
 ) {
-	async function handle(context: Context) {
+	async function handle(context: Context, content: boolean) {
 		const request = context.req.raw;
 		const metadata = requestMetadata(request);
 		let userId: string | null = null;
@@ -46,16 +55,34 @@ export function registerSkillHubReviewRoutesV1(
 				metadata.traceId,
 			);
 			userId = identity.userId;
+			const trusted = { ...metadata, userId };
 			const search = new URL(request.url).searchParams;
 			if (
 				request.body !== null ||
 				[...search.keys()].some(
 					(key) =>
+						content ||
 						!["cursor", "limit"].includes(key) ||
 						search.getAll(key).length !== 1,
 				)
 			)
 				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+			if (content) {
+				const versionId = parseSkillHubIdV1(
+					context.req.param("skillVersionId"),
+				);
+				// 之后的拒绝（含非管理员、已处理与本人版本）由 Store 事务写入拒绝审计。
+				submitted = true;
+				const result = SkillHubReviewContentV1Schema.safeParse(
+					await dependencies.readContent(request, trusted, versionId),
+				);
+				if (!result.success || result.data.skillVersionId !== versionId)
+					throw new HttpProtocolError(
+						"DEPENDENCY_UNAVAILABLE",
+						metadata.traceId,
+					);
+				return context.json(result.data);
+			}
 			const query = SkillHubReviewQueueQueryV1Schema.safeParse(
 				Object.fromEntries(search),
 			);
@@ -64,7 +91,7 @@ export function registerSkillHubReviewRoutesV1(
 			// 之后的拒绝（含非管理员）由 Store 事务写入拒绝审计。
 			submitted = true;
 			const result = SkillHubReviewQueuePageV1Schema.safeParse(
-				await dependencies.list(request, { ...metadata, userId }, query.data),
+				await dependencies.list(request, trusted, query.data),
 			);
 			if (!result.success)
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
@@ -94,5 +121,8 @@ export function registerSkillHubReviewRoutesV1(
 			return context.json(protocol.body, protocol.status);
 		}
 	}
-	app.get("/api/v2/skills/reviews", handle);
+	app.get("/api/v2/skills/reviews", (context) => handle(context, false));
+	app.get("/api/v2/skills/reviews/:skillVersionId/content", (context) =>
+		handle(context, true),
+	);
 }

@@ -5,6 +5,7 @@ import {
 	SkillVisibilityV1Schema,
 } from "../skill-hub.ts";
 import { PilotProtocolErrorV1Schema } from "./errors.ts";
+import { SkillHubVersionContentV1Schema } from "./skill-hub-version-detail.ts";
 
 // 系统管理员的待审队列：只含审核所需的有界 metadata，不含对象存储位置、审核原因或运行态。
 const versionId = SkillVersionRefV1Schema.shape.skillVersionId;
@@ -29,17 +30,38 @@ export const SkillHubReviewQueuePageV1Schema = z.strictObject({
 	items: z.array(SkillHubReviewQueueItemV1Schema).max(100),
 	nextCursor: versionId.nullable(),
 });
+/**
+ * 审核正文（#3046）：系统管理员读取他人仍待审核的共享版本。正文上限、截断标记与资源清单
+ * 沿用版本详情；不含对象存储位置、审核原因、资源内容或安装状态。
+ */
+export const SkillHubReviewContentV1Schema = z.strictObject({
+	schemaVersion: SkillVersionRefV1Schema.shape.schemaVersion,
+	skillVersionId: versionId,
+	content: SkillHubVersionContentV1Schema,
+});
 export type SkillHubReviewQueueItemV1 = z.infer<
 	typeof SkillHubReviewQueueItemV1Schema
 >;
 export type SkillHubReviewQueuePageV1 = z.infer<
 	typeof SkillHubReviewQueuePageV1Schema
 >;
+export type SkillHubReviewContentV1 = z.infer<
+	typeof SkillHubReviewContentV1Schema
+>;
 
 const response = (description: string, schema: z.ZodType) => ({
 	description,
 	content: { "application/json": { schema } },
 });
+const errors = {
+	"400": response("Invalid request", PilotProtocolErrorV1Schema),
+	"401": response("Authentication required", PilotProtocolErrorV1Schema),
+	"403": response(
+		"Authorization is no longer valid",
+		PilotProtocolErrorV1Schema,
+	),
+	"503": response("Dependency unavailable", PilotProtocolErrorV1Schema),
+};
 export const skillHubReviewOpenApiPathsV1 = {
 	"/api/v2/skills/reviews": {
 		get: {
@@ -51,13 +73,22 @@ export const skillHubReviewOpenApiPathsV1 = {
 					"Skill versions waiting for administrator review",
 					SkillHubReviewQueuePageV1Schema,
 				),
-				"400": response("Invalid request", PilotProtocolErrorV1Schema),
-				"401": response("Authentication required", PilotProtocolErrorV1Schema),
-				"403": response(
-					"Authorization is no longer valid",
-					PilotProtocolErrorV1Schema,
+				...errors,
+			},
+		},
+	},
+	"/api/v2/skills/reviews/{skillVersionId}/content": {
+		get: {
+			operationId: "readSkillHubReviewContentV1",
+			security: [{ PlatformSession: [] }],
+			requestParams: { path: z.strictObject({ skillVersionId: versionId }) },
+			responses: {
+				"200": response(
+					"Bounded content of another publisher's version waiting for review",
+					SkillHubReviewContentV1Schema,
 				),
-				"503": response("Dependency unavailable", PilotProtocolErrorV1Schema),
+				...errors,
+				"404": response("Resource is unavailable", PilotProtocolErrorV1Schema),
 			},
 		},
 	},
@@ -65,4 +96,5 @@ export const skillHubReviewOpenApiPathsV1 = {
 export const skillHubReviewSchemasV1 = {
 	SkillHubReviewQueueItemV1: SkillHubReviewQueueItemV1Schema,
 	SkillHubReviewQueuePageV1: SkillHubReviewQueuePageV1Schema,
+	SkillHubReviewContentV1: SkillHubReviewContentV1Schema,
 };
