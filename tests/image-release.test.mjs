@@ -29,6 +29,10 @@ async function fakes(directory) {
 	const git = join(directory, "git.mjs");
 	const docker = join(directory, "docker.mjs");
 	await executable(
+		join(directory, "nginx"),
+		`if (JSON.stringify(process.argv.slice(2)) !== '["-t"]') process.exit(94);`,
+	);
+	await executable(
 		git,
 		`import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -55,7 +59,8 @@ else process.exit(1);`,
 	);
 	await executable(
 		docker,
-		`import { createHash } from "node:crypto";
+		`import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const args = process.argv.slice(2);
@@ -102,6 +107,17 @@ if (args[0] === "manifest" && args[1] === "inspect") {
   process.exit(0);
 }
 if (args[0] === "run") {
+  const web = args.findIndex((arg) => arg.includes("/web:"));
+  if (web >= 0 && !args.includes("--entrypoint")) {
+    const entrypoint = readFileSync(join(process.cwd(), "apps/web/ack-web-entrypoint.sh"), "utf8");
+    const exec = entrypoint.split("\\n").find((line) => line.startsWith("exec "));
+    if (!exec) process.exit(95);
+    const result = spawnSync("/bin/sh", ["-c", exec, "web-image", ...args.slice(web + 1)], {
+      env: { ...process.env, PATH: ${JSON.stringify(directory)} + ":" + process.env.PATH },
+      stdio: "inherit",
+    });
+    process.exit(result.status ?? 1);
+  }
   if (args.includes("/probe/runtime-image-probe.mjs")) {
     if (process.env.FAKE_RUNTIME_PROBE_FAIL) { console.error(process.env.FAKE_RUNTIME_PROBE_STDERR ?? "synthetic-credential-do-not-log"); process.exit(42); }
     if (args.includes("--provenance-rejection")) console.log(JSON.stringify({ status: "passed", check: "provenance-fail-closed" }));
@@ -307,7 +323,11 @@ test("image build validates reproducibility and read-only non-root execution", a
 			);
 			assert.ok(referenceIndex > args.indexOf("--read-only"));
 			if (args[referenceIndex].includes("/web:")) {
-				assert.deepEqual(args.slice(referenceIndex + 1), ["-t"]);
+				assert.deepEqual(args.slice(referenceIndex + 1), ["nginx", "-t"]);
+				assert.equal(
+					args[args.indexOf("--add-host") + 1],
+					"agent-infra-api:127.0.0.1",
+				);
 			} else {
 				assert.equal(args[referenceIndex + 1], "node");
 				if (
