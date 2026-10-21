@@ -996,6 +996,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							: undefined,
 						selection,
 						admit: async () => unavailable(),
+						// Recovery inspects native history without an active Execution Key.
+						resolveModelCredential: async () => unavailable(),
 						...(active
 							? {
 									connectionReference: {
