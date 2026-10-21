@@ -38,7 +38,8 @@ const resource = z.strictObject({
 	kind: z.enum(["script", "reference", "asset", "file"]),
 	sizeBytes: z.number().int().nonnegative(),
 });
-const content = z.discriminatedUnion("state", [
+/** 有界正文与资源清单；版本详情与审核正文入口（skill-hub-review.ts）共用同一形状。 */
+export const SkillHubVersionContentV1Schema = z.discriminatedUnion("state", [
 	z.strictObject({
 		state: z.literal("available"),
 		/** 以文本返回的 SKILL.md 开头部分；调用方只能按纯文本显示。 */
@@ -61,7 +62,7 @@ export const SkillHubVersionDetailV1Schema = versionMetadata.extend({
 	ownerId: versionId,
 	/** 只反映当前用户本人（principalType user）的安装。 */
 	installation,
-	content,
+	content: SkillHubVersionContentV1Schema,
 });
 export type SkillHubOwnedVersionV1 = z.infer<
 	typeof SkillHubOwnedVersionV1Schema

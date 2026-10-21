@@ -10055,6 +10055,100 @@
         ],
         "type": "object"
       },
+      "SkillHubReviewContentV1": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "body": {
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  "bodyTruncated": {
+                    "type": "boolean"
+                  },
+                  "resources": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "enum": [
+                            "script",
+                            "reference",
+                            "asset",
+                            "file"
+                          ],
+                          "type": "string"
+                        },
+                        "path": {
+                          "maxLength": 512,
+                          "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                          "type": "string"
+                        },
+                        "sizeBytes": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "kind",
+                        "sizeBytes"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 1999,
+                    "type": "array"
+                  },
+                  "state": {
+                    "const": "available",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "body",
+                  "bodyTruncated",
+                  "resources"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "state": {
+                    "const": "unavailable",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              }
+            ],
+            "type": "object"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "skillVersionId": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "skillVersionId",
+          "content"
+        ],
+        "type": "object"
+      },
       "SkillHubReviewQueueItemV1": {
         "additionalProperties": false,
         "properties": {
@@ -21416,6 +21510,89 @@
               }
             },
             "description": "Authorization is no longer valid"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
+    "/api/v2/skills/reviews/{skillVersionId}/content": {
+      "get": {
+        "operationId": "readSkillHubReviewContentV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skillVersionId",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubReviewContentV1"
+                }
+              }
+            },
+            "description": "Bounded content of another publisher's version waiting for review"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
           },
           "503": {
             "content": {

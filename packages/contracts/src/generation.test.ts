@@ -326,6 +326,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/skills/projects/{projectId}/content",
 			"/api/v2/skills/projects/{projectId}/versions",
 			"/api/v2/skills/reviews",
+			"/api/v2/skills/reviews/{skillVersionId}/content",
 			"/api/v2/skills/versions",
 			"/api/v2/skills/versions/{skillVersionId}",
 			"/api/v2/skills/versions/{skillVersionId}/detail",
@@ -400,6 +401,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/skills/owned-versions",
 			"/api/v2/skills/projects/{projectId}/content",
 			"/api/v2/skills/reviews",
+			"/api/v2/skills/reviews/{skillVersionId}/content",
 			"/api/v2/skills/versions/{skillVersionId}",
 			"/api/v2/skills/versions/{skillVersionId}/detail",
 		]) {

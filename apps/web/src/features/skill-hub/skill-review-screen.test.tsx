@@ -26,6 +26,32 @@ import {
 
 // 发布者与组织名称由页面级目录读取解析：测试与生产一样经 QueryClient 读取固定目录记录。
 let directoryRecords: DirectorySearchItemV1[] = [];
+// 审阅弹窗读取的待审正文（#3046）：默认返回一段含 HTML 的正文，用例可替换为失败或其他内容。
+const reviewBody =
+	"# incident-summary\n汇总事故时间线。\n<script>alert(1)</script>\n";
+let reviewContent: (skillVersionId: string) => Response | Promise<Response>;
+let contentReads: string[] = [];
+const contentResponse = (
+	skillVersionId: string,
+	content: Record<string, unknown> = {
+		state: "available",
+		body: reviewBody,
+		bodyTruncated: false,
+		resources: [{ path: "scripts/run.sh", kind: "script", sizeBytes: 8 }],
+	},
+) => Response.json({ schemaVersion: 1, skillVersionId, content });
+const protocolError = (status: number) =>
+	Response.json(
+		{
+			schemaVersion: 1,
+			code: status === 503 ? "DEPENDENCY_UNAVAILABLE" : "RESOURCE_UNAVAILABLE",
+			message: "Skill review content fixture",
+			retryable: status === 503,
+			traceId: "trace-skill-review",
+		},
+		{ status },
+	);
+
 beforeEach(() => {
 	// 生成 Client 默认使用相对地址；jsdom 下的 Request 需要绝对地址。
 	generatedClient.setConfig({ baseUrl: "https://platform.test" });
@@ -38,10 +64,21 @@ beforeEach(() => {
 			displayName: "发布工程",
 		},
 	];
+	contentReads = [];
+	reviewContent = (skillVersionId) => contentResponse(skillVersionId);
+	// 待审正文经生成的 v2 client 读取；测试环境没有页面来源，给出固定的平台地址。
+	generatedClient.setConfig({ baseUrl: "https://platform.test" });
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (input: string | URL | Request) => {
 			const url = directoryRequestUrl(input);
+			const content = url.pathname.match(
+				/^\/api\/v2\/skills\/reviews\/([^/]+)\/content$/,
+			);
+			if (content) {
+				contentReads.push(url.pathname + url.search);
+				return reviewContent(decodeURIComponent(content[1] ?? ""));
+			}
 			const ids = url.searchParams.get("ids")?.split(",") ?? [];
 			return Response.json(
 				directorySearchResponse(
@@ -143,7 +180,7 @@ function renderReviews({
 			</ToastProvider>
 		</QueryClientProvider>,
 	);
-	return { review, onReviewed };
+	return { review, onReviewed, client };
 }
 
 async function openReview(name = "审阅：incident-summary · v1.0.0") {
@@ -361,5 +398,184 @@ describe("SkillReviewsScreen", () => {
 		expect(onReviewed).toHaveBeenCalledOnce();
 		// 冲突时不在本行假定新状态，等待队列回读。
 		expect(screen.getAllByText("待审核")).toHaveLength(2);
+	});
+});
+
+// 审阅弹窗的待审正文（#3046）：事实列表下方纯文本显示，读取中、失败、无权、不可用与截断分别反馈。
+describe("SkillReviewDialog pending SKILL.md", () => {
+	async function codeRegion(dialog: HTMLElement) {
+		return within(dialog).findByRole("region", { name: "SKILL.md 正文" });
+	}
+
+	it("shows the pending body as plain text below the facts and above the review reason", async () => {
+		// 先挂起响应，确定地观察读取中的反馈，再放行。
+		let release = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		reviewContent = async (skillVersionId) => {
+			await held;
+			return contentResponse(skillVersionId);
+		};
+		renderReviews();
+		const dialog = await openReview();
+		expect((await within(dialog).findByRole("status")).textContent).toBe(
+			"正在读取 SKILL.md 正文…",
+		);
+		expect(dialog.querySelector(".skill-code")).toBeNull();
+		release();
+		const region = await codeRegion(dialog);
+		const pre = region.querySelector("pre");
+		// 正文按原样显示为文本，其中的 HTML 不被解析，脚本不执行。
+		expect(pre?.textContent).toBe(reviewBody);
+		expect(region.querySelector("script")).toBeNull();
+		expect(document.querySelector("script")).toBeNull();
+		const facts = dialog.querySelector("dl");
+		const reason = within(dialog).getByLabelText("审核说明 · 驳回时必填");
+		if (!facts || !pre) throw new Error("dialog layout missing");
+		expect(
+			facts.compareDocumentPosition(pre) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			pre.compareDocumentPosition(reason) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		// 只提交版本 ID，不带主体或其他查询参数。
+		expect(contentReads).toEqual([
+			"/api/v2/skills/reviews/incident-summary-v1/content",
+		]);
+		expect(within(dialog).queryByRole("alert")).toBeNull();
+		expect(within(dialog).queryByText(/正文较长/)).toBeNull();
+	});
+
+	it("does not read any body for the publisher's own version", async () => {
+		renderReviews({ queue: { kind: "ready", items: [own] } });
+		await screen.findByText("不能审核自己发布的版本");
+		expect(screen.queryByRole("button", { name: /^审阅/ })).toBeNull();
+		expect(contentReads).toEqual([]);
+	});
+
+	it("offers a distinct recovery action after a retryable failure and keeps focus inside the dialog", async () => {
+		const statuses = [503];
+		reviewContent = (skillVersionId) => {
+			const status = statuses.shift();
+			return status ? protocolError(status) : contentResponse(skillVersionId);
+		};
+		renderReviews();
+		const dialog = await openReview();
+		const alert = await within(dialog).findByRole("alert");
+		expect(alert.textContent).toContain(
+			"暂时无法读取 SKILL.md 正文，可以稍后重新读取。",
+		);
+		// 弹窗内只有一个恢复操作，名称与页面其他控件不同。
+		expect(
+			within(dialog).getAllByRole("button", { name: "重新读取正文" }),
+		).toHaveLength(1);
+		expect(screen.queryByRole("button", { name: "重新读取" })).toBeNull();
+		fireEvent.click(
+			within(dialog).getByRole("button", { name: "重新读取正文" }),
+		);
+		expect(document.activeElement).not.toBe(document.body);
+		expect(dialog.contains(document.activeElement)).toBe(true);
+		await codeRegion(dialog);
+		expect(within(dialog).queryByRole("alert")).toBeNull();
+		expect(document.activeElement).not.toBe(document.body);
+		expect(contentReads).toHaveLength(2);
+	});
+
+	it("tells no permission and a handled version apart from a read failure", async () => {
+		for (const [status, text] of [
+			[403, "当前账号没有读取待审正文的权限。"],
+			[404, "这个版本已不在待审核状态，正文不再提供。"],
+		] as const) {
+			reviewContent = () => protocolError(status);
+			renderReviews();
+			const dialog = await openReview();
+			await waitFor(() =>
+				expect(within(dialog).getByRole("alert").textContent).toBe(text),
+			);
+			// 无权与已处理不可重试，不提供重新读取。
+			expect(
+				within(dialog).queryByRole("button", { name: "重新读取正文" }),
+			).toBeNull();
+			expect(dialog.querySelector(".skill-code")).toBeNull();
+			cleanup();
+		}
+		// 响应不符合契约时不显示任何正文。
+		reviewContent = () =>
+			Response.json({
+				schemaVersion: 1,
+				skillVersionId: "another-version",
+				content: {
+					state: "available",
+					body: "x",
+					bodyTruncated: false,
+					resources: [],
+				},
+			});
+		renderReviews();
+		const dialog = await openReview();
+		await waitFor(() =>
+			expect(within(dialog).getByRole("alert").textContent).toBe(
+				"待审正文暂时无法访问，请联系管理员。",
+			),
+		);
+		expect(dialog.querySelector(".skill-code")).toBeNull();
+	});
+
+	it("reports unavailable content, an empty body and truncation separately", async () => {
+		reviewContent = (skillVersionId) =>
+			contentResponse(skillVersionId, { state: "unavailable" });
+		renderReviews();
+		let dialog = await openReview();
+		await waitFor(() =>
+			expect(within(dialog).getByRole("status").textContent).toBe(
+				"这个版本的正文暂时无法读取，其余审核信息不受影响。",
+			),
+		);
+		expect(within(dialog).queryByRole("alert")).toBeNull();
+		cleanup();
+		reviewContent = (skillVersionId) =>
+			contentResponse(skillVersionId, {
+				state: "available",
+				body: "",
+				bodyTruncated: false,
+				resources: [],
+			});
+		renderReviews();
+		dialog = await openReview();
+		expect(await within(dialog).findByText("SKILL.md 没有正文。")).toBeTruthy();
+		cleanup();
+		reviewContent = (skillVersionId) =>
+			contentResponse(skillVersionId, {
+				state: "available",
+				body: "y".repeat(2_000),
+				bodyTruncated: true,
+				resources: [],
+			});
+		renderReviews();
+		dialog = await openReview();
+		const region = await codeRegion(dialog);
+		expect(region.textContent).toBe("y".repeat(2_000));
+		expect(
+			within(dialog).getByText("正文较长，这里只显示开头部分（64 KiB）。"),
+		).toBeTruthy();
+	});
+
+	it("re-reads the body on reopen and drops it from the cache after closing", async () => {
+		const { client } = renderReviews();
+		let dialog = await openReview();
+		await codeRegion(dialog);
+		fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		await waitFor(() =>
+			expect(
+				client
+					.getQueryCache()
+					.findAll({ queryKey: ["skill-hub", "review-content"] }),
+			).toHaveLength(0),
+		);
+		dialog = await openReview();
+		await codeRegion(dialog);
+		expect(contentReads).toHaveLength(2);
 	});
 });
