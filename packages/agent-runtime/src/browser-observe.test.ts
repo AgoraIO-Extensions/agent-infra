@@ -59,6 +59,9 @@ class FakePage {
 		evaluate: vi.fn(async () => "button"),
 	};
 	setDefaultTimeout = vi.fn();
+	setContent = vi.fn(async () => {
+		this.handlers.get("framenavigated")?.(this);
+	});
 
 	on(event: string, handler: (value: unknown) => void) {
 		this.handlers.set(event, handler);

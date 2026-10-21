@@ -526,6 +526,12 @@ export function createBrowserObserveControllerV1(input: {
 		const page = input.context.pages()[0] ?? (await input.context.newPage());
 		applyActionTimeout(page);
 		const state = pageStateFor(page, pages);
+		if (input.controlledFixture?.url === url) {
+			await page.setContent(input.controlledFixture.body, {
+				waitUntil: "domcontentloaded",
+			});
+			return { pageId: state.pageId, pageRevision: state.revision };
+		}
 		await page.goto(url, {
 			waitUntil: "domcontentloaded",
 			timeout: capability.policy.navigationTimeoutMs,
