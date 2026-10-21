@@ -35,6 +35,12 @@ type OciDistributionFailureV1 =
 	| "invalid"
 	| "unavailable";
 
+type BearerChallengeV1 = Readonly<{
+	realm: string;
+	service?: string;
+	scope?: string;
+}>;
+
 type OciManifestResolutionV1 =
 	| {
 			readonly status: "resolved";
@@ -469,7 +475,10 @@ async function requestOci(
 			readonly body: Uint8Array;
 			readonly headers: Readonly<Record<string, string | undefined>>;
 	  }
-	| { readonly status: OciDistributionFailureV1 }
+	| {
+			readonly status: OciDistributionFailureV1;
+			readonly challenge?: BearerChallengeV1;
+	  }
 > {
 	const controller = new AbortController();
 	const signal = parentSignal
@@ -477,8 +486,20 @@ async function requestOci(
 		: controller.signal;
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	try {
-		return await Promise.race([
+		const first = await Promise.race([
 			readOciResponse(binding, path, accept, signal),
+			new Promise<never>((_resolve, reject) => {
+				timeout = setTimeout(() => {
+					controller.abort();
+					reject(new Error("OCI request timed out"));
+				}, ociRequestTimeoutMs);
+			}),
+		]);
+		if (first.status !== "not-admitted" || !first.challenge) return first;
+		const token = await bearerToken(binding, first.challenge, signal);
+		if (!token) return { status: "not-admitted" };
+		return await Promise.race([
+			readOciResponse(binding, path, accept, signal, token),
 			new Promise<never>((_resolve, reject) => {
 				timeout = setTimeout(() => {
 					controller.abort();
@@ -494,6 +515,74 @@ async function requestOci(
 	}
 }
 
+function parseBearerChallenge(
+	value: string | undefined,
+): BearerChallengeV1 | undefined {
+	if (!value?.toLowerCase().startsWith("bearer ")) return undefined;
+	const parameters: Record<string, string> = {};
+	for (const match of value
+		.slice(7)
+		.matchAll(/(?:^|,)\s*([a-z][a-z0-9_-]*)="((?:\\.|[^"\\])*)"/gi)) {
+		const key = match[1];
+		const parameter = match[2];
+		if (key && parameter)
+			parameters[key.toLowerCase()] = parameter.replace(/\\(.)/g, "$1");
+	}
+	const realm = parameters.realm;
+	if (!realm) return undefined;
+	try {
+		const url = new URL(realm);
+		if (url.protocol !== "https:" || url.username || url.password || url.hash)
+			return undefined;
+		return {
+			realm: url.href,
+			...(parameters.service ? { service: parameters.service } : {}),
+			...(parameters.scope ? { scope: parameters.scope } : {}),
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+async function bearerToken(
+	binding: { readonly fetch: typeof globalThis.fetch },
+	challenge: BearerChallengeV1,
+	signal: AbortSignal,
+): Promise<string | undefined> {
+	try {
+		const url = new URL(challenge.realm);
+		if (challenge.service) url.searchParams.set("service", challenge.service);
+		if (challenge.scope) url.searchParams.set("scope", challenge.scope);
+		const response = await binding.fetch(url, {
+			method: "GET",
+			redirect: "error",
+			headers: { accept: "application/json", "accept-encoding": "identity" },
+			signal,
+		});
+		if (
+			response.status !== 200 ||
+			!response.headers
+				.get("content-type")
+				?.toLowerCase()
+				.startsWith("application/json")
+		) {
+			response.body?.cancel().catch(() => undefined);
+			return undefined;
+		}
+		const body = (await response.json()) as unknown;
+		const token =
+			typeof body === "object" && body !== null && !Array.isArray(body)
+				? ((body as Record<string, unknown>).token ??
+					(body as Record<string, unknown>).access_token)
+				: undefined;
+		return typeof token === "string" && token.length > 0 && token.length <= 8192
+			? token
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 async function readOciResponse(
 	binding: {
 		readonly endpoint: URL;
@@ -502,18 +591,26 @@ async function readOciResponse(
 	path: string,
 	accept: string,
 	signal: AbortSignal,
+	authorization?: string,
 ): Promise<
 	| {
 			readonly status: "ok";
 			readonly body: Uint8Array;
 			readonly headers: Readonly<Record<string, string | undefined>>;
 	  }
-	| { readonly status: OciDistributionFailureV1 }
+	| {
+			readonly status: OciDistributionFailureV1;
+			readonly challenge?: BearerChallengeV1;
+	  }
 > {
 	const response = await binding.fetch(
 		new URL(`/v2/${path}`, binding.endpoint),
 		{
-			headers: { accept, "accept-encoding": "identity" },
+			headers: {
+				accept,
+				"accept-encoding": "identity",
+				...(authorization ? { authorization } : {}),
+			},
 			redirect: "error",
 			signal,
 		},
@@ -532,7 +629,12 @@ async function readOciResponse(
 	});
 	if (response.status !== 200) {
 		cancelOciBody(response.body);
-		return { status: responseFailure(response.status) };
+		return {
+			status: responseFailure(response.status),
+			...(response.status === 401
+				? { challenge: parseBearerChallenge(headers["www-authenticate"]) }
+				: {}),
+		};
 	}
 	if (!hasIdentityContentEncoding(headers)) {
 		cancelOciBody(response.body);
