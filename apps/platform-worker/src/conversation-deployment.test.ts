@@ -162,6 +162,66 @@ function drainClaim(
 }
 
 describe("production SessionSandbox resource receiver", () => {
+	it("copies custom Owner Secret data into the Session Secret and keeps it out of the claim", async () => {
+		const f = fixture();
+		const ownerSecretName = "agent-owner-secret";
+		await f.client.create({
+			apiVersion: "v1",
+			kind: "Secret",
+			metadata: {
+				name: ownerSecretName,
+				namespace: f.options.policy.namespace,
+				annotations: {
+					"agent-infra.agora.io/secret-id": "owner-secret",
+					"agent-infra.agora.io/secret-version": "1",
+					"agent-infra.agora.io/config-revision": "1",
+				},
+			},
+			immutable: true,
+			data: { MODEL_API_KEY: Buffer.from("owner-value").toString("base64") },
+		});
+		const secretRef = {
+			schemaVersion: 1 as const,
+			ownerType: "agent-owner" as const,
+			ownerId: "actor-a",
+			agentId: "agent-a",
+			secretId: "owner-secret",
+			secretVersion: 1,
+			configRevision: 1,
+			algorithmVersion: "aes-256-gcm:v1" as const,
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1" as const,
+			wrappingKeyVersion: "key-a",
+			name: ownerSecretName,
+		};
+		const customDeployment = workloadDesiredFixture(
+			1,
+			"agent-a",
+			"internal-only",
+		);
+		(customDeployment as { secretRefs: (typeof secretRef)[] }).secretRefs = [
+			secretRef,
+		];
+		const customClaim = {
+			...f.claim,
+			deployment: customDeployment,
+			modelProjection: null,
+		};
+		await f.receive(customClaim, new AbortController().signal);
+		const sandboxSecret = f.resources.get(
+			"Secret/sandbox-allocation-a",
+		) as V1Secret;
+		const sandboxPod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+		expect(
+			Buffer.from(sandboxSecret.data?.MODEL_API_KEY ?? "", "base64").toString(),
+		).toBe("owner-value");
+		expect(JSON.stringify(customClaim)).not.toContain("owner-value");
+		expect(JSON.stringify(sandboxPod)).not.toContain("owner-value");
+		expect(
+			sandboxPod.spec?.containers[0]?.env?.some(
+				(entry) => entry.name === "MODEL_API_KEY",
+			),
+		).toBe(true);
+	});
 	it("preserves the approved Connection snapshot through the production control resolver", async () => {
 		const f = fixture();
 		const signal = new AbortController().signal;

@@ -23,14 +23,17 @@ import {
 	ConversationRuntimeHostError,
 	type SessionSandboxReconciliationClaimV1,
 } from "@agent-infra/platform-core";
-import type { V1Service } from "@kubernetes/client-node";
+import type { V1Secret, V1Service } from "@kubernetes/client-node";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import {
+	bindSessionSandboxCustomSecretMaterializationV1,
 	createSessionSandboxWorkloadAdapterV1,
+	hasSessionSandboxIdentityV1,
 	isNativeMetadataWorkerOriginV1,
 	type SessionSandboxAllocationV1,
+	type SessionSandboxCustomSecretMaterializationV1,
 	type SessionSandboxRuntimeInputV1,
 	sessionSandboxIdentityAnnotationsV1,
 	sessionSandboxLabelsMatchV1,
@@ -433,7 +436,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					)
 						throw new Error();
 					const observed = await sandboxAdapter.observe(
-						allocationFor(
+						await allocationFor(
 							sandboxResource.sandbox,
 							sandboxResource.policy,
 							deployment,
@@ -518,6 +521,43 @@ function createSessionSandboxAllocationResolverV1(
 		requireCurrentTemplateTrust: boolean,
 	): SessionSandboxRuntimeInputV1 | null => {
 		const auth = workload.policy.runtimeAuth;
+		// Custom platform-adapter runtimes deliberately have no standard V4 model
+		// projection. Their Owner secrets are copied by the Session adapter into a
+		// Session-specific Secret; the claim carries references only.
+		if (
+			!modelProjection &&
+			deployment.runtimeManifest.interactionMode === "platform-adapter" &&
+			deployment.secretRefs.length > 0 &&
+			deployment.secretRefs.every(
+				(ref) =>
+					ref.ownerType === "agent-owner" && ref.agentId === deployment.agentId,
+			)
+		) {
+			if (
+				!auth ||
+				deployment.agentId !== binding.agentId ||
+				(workload.policy.nativeMetadataWorkerEgress !== undefined &&
+					!isNativeMetadataWorkerOriginV1(auth.nativeMetadataWorkerOrigin)) ||
+				!deployment.secretRefs.length
+			)
+				throw new WorkloadKubernetesError("policy");
+			validateWorkloadRuntimeAuthV1(auth);
+			return {
+				driver: "acp",
+				modelConfiguration: "",
+				workerId: auth.workerId,
+				grantKeyId: auth.grantKeyId,
+				grantPublicKey: auth.grantPublicKey,
+				grantIssuer: auth.grantIssuer,
+				nativeMetadataWorkerOrigin: auth.nativeMetadataWorkerOrigin,
+				serviceToken: sessionSandboxServiceTokenV1(
+					options.serviceToken,
+					policy.namespace,
+					binding.sandboxId,
+				),
+				custom: { secretRefs: deployment.secretRefs },
+			};
+		}
 		let projection: RuntimeModelProjectionV4;
 		try {
 			if (
@@ -570,7 +610,7 @@ function createSessionSandboxAllocationResolverV1(
 			),
 		};
 	};
-	return (
+	const allocationFor = async (
 		binding: SessionSandboxReconciliationClaimV1["sandbox"],
 		policy: SessionSandboxReconciliationClaimV1["policy"],
 		deployment: AgentWorkloadDesiredV1,
@@ -579,39 +619,110 @@ function createSessionSandboxAllocationResolverV1(
 		generation: number,
 		resourceFence: number,
 		requireCurrentTemplateTrust = true,
-	): SessionSandboxAllocationV1 => ({
-		...binding,
-		generation,
-		resourceFence,
-		namespace: policy.namespace,
-		podName: binding.resourceName,
-		serviceName: binding.resourceName,
-		serviceAccountName: binding.resourceName,
-		pvcName: binding.resourceName,
-		networkPolicyName: binding.resourceName,
-		secretName: binding.resourceName,
-		// Only the reviewed deployment egress, identical to the Agent Workload's.
-		egress: sessionSandboxEgressPolicyV1(workload.policy),
-		imageDigest: `${workload.policy.imageRepository}@${deployment.imageDigest}`,
-		containerPort: deployment.service.port,
-		env: deployment.env,
-		// V4-only: a static-key or missing projection fails before any write.
-		runtime: runtimeFor(
-			binding,
-			policy,
-			deployment,
-			modelProjection,
-			requireCurrentTemplateTrust,
-		),
-		connectionConsumerSnapshot,
-		connectionInstallationRevision,
-		authorizedIngressSelector: workload.policy.workerSelector,
-		resources: workload.policy.resources,
-		storageSize: workload.policy.storageSize,
-		storageClassName: workload.policy.storageClassName,
-		workspaceMountPath: "/workspace",
-		desiredState,
-	});
+	): Promise<SessionSandboxAllocationV1> => {
+		const allocation: SessionSandboxAllocationV1 = {
+			...binding,
+			generation,
+			resourceFence,
+			namespace: policy.namespace,
+			podName: binding.resourceName,
+			serviceName: binding.resourceName,
+			serviceAccountName: binding.resourceName,
+			pvcName: binding.resourceName,
+			networkPolicyName: binding.resourceName,
+			secretName: binding.resourceName,
+			// Only the reviewed deployment egress, identical to the Agent Workload's.
+			egress: sessionSandboxEgressPolicyV1(workload.policy),
+			imageDigest: `${workload.policy.imageRepository}@${deployment.imageDigest}`,
+			containerPort: deployment.service.port,
+			env: deployment.env,
+			// V4-only: a static-key or missing projection fails before any write.
+			runtime: runtimeFor(
+				binding,
+				policy,
+				deployment,
+				modelProjection,
+				requireCurrentTemplateTrust,
+			),
+			connectionConsumerSnapshot,
+			connectionInstallationRevision,
+			authorizedIngressSelector: workload.policy.workerSelector,
+			resources: workload.policy.resources,
+			storageSize: workload.policy.storageSize,
+			storageClassName: workload.policy.storageClassName,
+			workspaceMountPath: "/workspace",
+			desiredState,
+		};
+		if (
+			allocation.runtime?.custom &&
+			(desiredState === "running" || !requireCurrentTemplateTrust)
+		) {
+			const data: Record<string, string> = {};
+			const sourceSecret = !requireCurrentTemplateTrust
+				? await workload.client.read<V1Secret>("Secret", allocation.secretName)
+				: null;
+			const refs = requireCurrentTemplateTrust
+				? allocation.runtime.custom.secretRefs
+				: [];
+			if (
+				!requireCurrentTemplateTrust &&
+				sourceSecret?.data &&
+				hasSessionSandboxIdentityV1(sourceSecret, allocation)
+			) {
+				for (const [name, encoded] of Object.entries(sourceSecret.data)) {
+					if (["token", "model-config"].includes(name)) continue;
+					if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+						throw new WorkloadKubernetesError("policy");
+					const decoded = Buffer.from(encoded, "base64");
+					if (decoded.toString("base64") !== encoded)
+						throw new WorkloadKubernetesError("policy");
+					data[name] = decoded.toString("utf8");
+				}
+			}
+			for (const ref of refs) {
+				const secret = await workload.client.read<V1Secret>("Secret", ref.name);
+				const annotations = secret?.metadata?.annotations;
+				if (
+					!secret ||
+					secret.metadata?.namespace !== allocation.namespace ||
+					secret.immutable !== true ||
+					annotations?.["agent-infra.agora.io/secret-id"] !== ref.secretId ||
+					annotations?.["agent-infra.agora.io/secret-version"] !==
+						String(ref.secretVersion) ||
+					annotations?.["agent-infra.agora.io/config-revision"] !==
+						String(ref.configRevision) ||
+					!secret.data
+				)
+					throw new WorkloadKubernetesError("policy");
+				for (const [name, encoded] of Object.entries(secret.data)) {
+					if (
+						!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
+						name.startsWith("AGENT_INFRA_") ||
+						["token", "model-config"].includes(name) ||
+						data[name] !== undefined
+					)
+						throw new WorkloadKubernetesError("policy");
+					try {
+						const decoded = Buffer.from(encoded, "base64");
+						if (decoded.toString("base64") !== encoded) throw new Error();
+						data[name] = decoded.toString("utf8");
+					} catch {
+						throw new WorkloadKubernetesError("policy");
+					}
+				}
+			}
+			const materialization: SessionSandboxCustomSecretMaterializationV1 = {
+				data,
+				environmentNames: Object.keys(data).toSorted(),
+			};
+			bindSessionSandboxCustomSecretMaterializationV1(
+				allocation,
+				materialization,
+			);
+		}
+		return allocation;
+	};
+	return allocationFor;
 }
 
 /** 停止回执保留的资源：从未记录 PVC 的部分准备来源没有（#2918）。 */
@@ -650,7 +761,7 @@ export function createProductionSessionSandboxReceiverV1(
 				source.deployment,
 			);
 			// The source keeps the projection it was prepared with (#1466).
-			const sourceAllocation = allocationFor(
+			const sourceAllocation = await allocationFor(
 				source.sandbox,
 				source.policy,
 				sourceDeployment,
@@ -699,7 +810,7 @@ export function createProductionSessionSandboxReceiverV1(
 				)
 					return { status: "observed" as const, resources: owned.resources };
 				const stopReceipt = await adapter.confirmStoppedSource(
-					allocationFor(
+					await allocationFor(
 						claim.sandbox,
 						source.policy,
 						sourceDeployment,
@@ -786,7 +897,7 @@ export function createProductionSessionSandboxReceiverV1(
 						if (!recordDeletionProgress)
 							throw new Error("Session Sandbox deletion CAS is unavailable");
 						const stopReceipt = await adapter.cleanup(
-							allocationFor(
+							await allocationFor(
 								claim.sandbox,
 								source.policy,
 								sourceDeployment,
@@ -863,7 +974,7 @@ export function createProductionSessionSandboxReceiverV1(
 				)
 					return { status: "observed" as const, resources: observed.resources };
 			}
-			const allocation = allocationFor(
+			const allocation = await allocationFor(
 				claim.sandbox,
 				source.policy,
 				sourceDeployment,
@@ -903,7 +1014,7 @@ export function createProductionSessionSandboxReceiverV1(
 				workloadResourceConfigurationHashV1(workload.policy)
 		)
 			throw new Error("SessionSandbox verified policy is unavailable");
-		const allocation = allocationFor(
+		const allocation = await allocationFor(
 			claim.sandbox,
 			claim.policy,
 			deployment,
