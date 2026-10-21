@@ -80,6 +80,7 @@ export const GenericAcpRuntimeDriver = {
 		// created, so the last negotiated answer gates attachment input before any
 		// bridge read or Session side effect. An unknown answer fails closed.
 		let negotiatedImageInput: boolean | undefined;
+		let readinessProbe: Promise<RuntimeCapabilitiesV1> | undefined;
 		const driver = await SessionRuntimeDriver.open({
 			...options,
 			...(browserCapability
@@ -342,7 +343,14 @@ export const GenericAcpRuntimeDriver = {
 			probeReadiness: async (
 				signal: AbortSignal,
 			): Promise<RuntimeCapabilitiesV1> => {
-				const capabilities = await probeAcpReadiness(options, signal);
+				if (signal.aborted) throw new Error("RUNTIME_READINESS_UNAVAILABLE");
+				// Concurrent authenticated checks share one native initialization.
+				// Retire it on completion or failure; never cache a ready result.
+				readinessProbe ??= probeAcpReadiness(options, signal).finally(() => {
+					readinessProbe = undefined;
+				});
+				const capabilities = await readinessProbe;
+				if (signal.aborted) throw new Error("RUNTIME_READINESS_UNAVAILABLE");
 				negotiatedImageInput = capabilities.attachments;
 				return {
 					...capabilities,
@@ -381,6 +389,7 @@ async function probeAcpReadiness(
 				),
 				directory,
 				cwd,
+				signal,
 				update: async () => {},
 			});
 			if (signal.aborted) throw new Error("RUNTIME_READINESS_UNAVAILABLE");
@@ -397,18 +406,9 @@ async function probeAcpReadiness(
 				supplementaryInstruction: false,
 			} satisfies RuntimeCapabilitiesV1;
 		})();
-		const interrupted = new Promise<never>((_, reject) => {
-			if (signal.aborted) {
-				reject(new Error("RUNTIME_READINESS_UNAVAILABLE"));
-				return;
-			}
-			signal.addEventListener(
-				"abort",
-				() => reject(new Error("RUNTIME_READINESS_UNAVAILABLE")),
-				{ once: true },
-			);
-		});
-		return await Promise.race([probe, interrupted]);
+		// openAcpSession drains an interrupted handshake before this directory
+		// is removed, including when no Session handle has been returned yet.
+		return await probe;
 	} catch {
 		throw new Error("RUNTIME_READINESS_UNAVAILABLE");
 	} finally {
