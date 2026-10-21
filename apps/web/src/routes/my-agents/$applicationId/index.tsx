@@ -22,9 +22,13 @@ function MyAgentApplicationRoute() {
 	const application =
 		query.data?.kind === "ready" ? query.data.application : undefined;
 	// 创建失败时读取服务端给出的失败类别（#3034）；读不到时不展示任何原因。
+	// 提示在审批进度卡片内，与驳回原因同样距进度列表 18px（#3152）。
 	const creationFailure =
 		application?.status === "creation_failed" && application.agentId ? (
-			<AgentCreationFailureNotice agentId={application.agentId} />
+			<AgentCreationFailureNotice
+				agentId={application.agentId}
+				className="application-creation-failure"
+			/>
 		) : undefined;
 
 	return (
