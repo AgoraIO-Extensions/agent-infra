@@ -855,7 +855,7 @@ UID 或不匹配的 fence 不能授权删除。停止、停用或更高管理 fe
 
 - 部署通过既有 ModelCatalogAdapter 提供固定、获准的 Relay endpoint、protocol profile 和流式/tool/reasoning 能力政策；Owner 不能输入 Base URL、认证 header 或目录外 endpoint。目录快照继续使用 `schemaVersion: 1`、精确 `revision`、`validUntil`、TLS/禁止重定向和可用状态，过期、移除或不兼容时拒绝新配置。Responses 与 Messages 仍分别按目录 profile 和标准模板 Driver 绑定，不能按 URL 或模型名猜协议。
 - 标准模板申请或 API 创建提交一把 Agent 默认 Relay Key；任一当前 Owner 可替换。使用者在个人设置提交本人用于 Web/企微的 Relay Key。两类 Key 分别以 Agent 或用户为用途和 AAD 加密、版本化、不可回显；API 只写密文，Worker-only keyring 按授权用途解密。平台审计提交者，不使用 Relay Admin API 枚举 Key，也不声称已核实个人 Key 的 Relay 账号归属。Relay 实际按 Key 归属计费和授权；Platform 不建 Agent Group 权威。
-- Owner 允许模型与默认模型从 Agent 默认 Key 的 Relay `/v1/models` 可见结果中选取；部署目录可以用 `allowedModels` 进一步限制，但不要求逐个登记模型，值为 `null` 时不限制。reasoning 档位为平台固定的 `low`、`medium`、`high`，不按模型、端点或模板登记。`/v1/models` 仅用于候选展示，不证明真实模型请求必然成功：保存时用默认 Key 对新增的（模型，档位）组合各发起一次按模板协议的极小真实请求，失败即拒绝保存，并返回稳定、可操作的原因；已保存且未变化的组合不重复验证。Web/企微只展示 Owner 允许清单，不按个人 Key 预过滤；API 使用同一 Owner 清单。候选、默认值或 capability 无效时拒绝保存或提交，不静默切换模型。实际认证、模型和额度错误由 Relay 返回后映射为稳定、脱敏、可操作的错误。来源与验证的取舍见 [ADR-0029](../adr/0029-source-standard-template-models-from-relay.md)。
+- Owner 允许模型与默认模型从 Agent 默认 Key 的 Relay `/v1/models` 可见结果中选取；部署目录可以用 `allowedModels` 进一步限制，但不要求逐个登记模型，值为 `null` 时不限制。reasoning 档位为平台固定的 `low`、`medium`、`high`，不按模型、端点或模板登记。`/v1/models` 仅用于候选展示，不证明真实模型请求必然成功：保存时用默认 Key 对新增的（模型，档位）组合各发起一次按模板协议的极小真实请求，失败即拒绝保存，并返回稳定、可操作的原因；已保存且未变化的组合不重复验证。Web/企微只展示 Owner 允许清单，不按个人 Key 预过滤；API 使用同一 Owner 清单。候选、默认值或 capability 无效时拒绝保存或提交，不静默切换模型。实际认证、模型和额度错误由 Relay 返回后映射为稳定、脱敏、可操作的错误。来源与验证的取舍见 [ADR-0030](../adr/0030-source-standard-template-models-from-relay.md)。
 - 模型显示名由 API 的受信部署输入提供，按精确的 `endpointId`、`modelId` 关联，并由 ModelCatalog 模块校验名称表及其当前目录关联。名称只用于展示，不参与允许集合、协议、Key、版本或执行绑定；不能从浏览器输入、模型自报名称或解析 `optionId` 推导。名称非空、有界且不含控制字符，重复关联、未知端点或目录政策不允许的模型拒绝；缺少名称时保留真实 `modelId`，不杜撰名称或缩小候选集合。已授权配置查询为内部展示保留端点关联，对外明确选取既有 `ModelOptionProjectionV1` 字段，不透传端点或部署输入。
 - 带显示名的默认 Key 候选使用独立的 `GET` / `POST /api/v2/agents/{agentId}/default-relay-key/display-candidates`，响应 envelope 与候选项组成独立的 strict `schemaVersion: 2` 投影；新 Key 和已存 Key 两条路径沿用原授权、候选交集、配置修订及 Key 版本检查后，由 API 装配名称。旧 `/candidates` 路径精确保留原 V1 响应，政策 Catalog V1、部署目录 V2 与 Worker 私有 saved-Key V1 不增加字段。Web 显式消费新入口，选择、比较和保存仍使用原稳定 ID；同名不合并，不把旧响应推断为已支持显示名。契约继续按 §6.4 从 Zod 生成并验证精确兼容边界。
 - 每次受理标准模板 Execution 时，在同一持久事务内冻结 `modelOptionId`、`reasoningLevel`、Key 用途、密文引用和版本：Web/企微绑定实际发送者的个人 Key，全部 Platform API 调用及 Eval 样本运行绑定 Agent 默认 Key；Eval 模型评分也绑定其工作项开始时的 Agent 默认 Key。界面明确费用归属。缺 Key、失效或额度不足不自动回退到其他主体的 Key；Relay 拒绝调用时如实失败。个人或 Agent Key 替换后，新执行选新版本，已受理执行继续用旧版本至终态；仅 Relay 撤销或实际调用失败才使其失败。旧密文在所有引用它的执行终态前不能回收，停止和恢复也不得改绑版本。
@@ -919,7 +919,7 @@ Driver 不要求模型出现在 `model/list` 中，也不为单个模型生成�
 内部模型名查询当前批准集合，将请求的 model 改回真实 model，并使用该项固定 Relay endpoint 与原 Execution 的 Key；不根据模型正文、调用方 URL 或同名 model 猜测路由。
 标准 Codex 模板的模型目录随 Runtime 镜像固定，只包含固定 release 的内置条目，不含平台追加条目；
 有特殊需要的模型参数由 Owner 通过模板开放的环境变量配置。模型与档位能否使用由 §10.7 的保存时真实请求判定，见
-[ADR-0029](../adr/0029-source-standard-template-models-from-relay.md)。
+[ADR-0030](../adr/0030-source-standard-template-models-from-relay.md)。
 同一会话连续切换两个真实 model 同名的选项，以及相邻 Execution 使用不同 Key 版本，必须有原生测试；
 任何上游失败都不得改用其他选项。
 

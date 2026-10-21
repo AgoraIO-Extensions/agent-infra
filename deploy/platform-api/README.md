@@ -136,7 +136,7 @@ Agent 版本”。取值不符合规则时 API 以 `PLATFORM_DEPLOYMENT_CONFIGUR
 不按模型、端点或模板登记。Web 申请、API 创建和配置更新在保存前用默认 Key 按模板协议，对每个
 所选模型与档位各发一次有界的真实请求（Codex 用 Responses，Claude 用 Messages），全部通过才保存。
 用已保存 Key 改模型时，只验证新增的组合；已保存的组合沿用原档位。决策与边界见
-[ADR-0029](../../docs/adr/0029-source-standard-template-models-from-relay.md) 和
+[ADR-0030](../../docs/adr/0030-source-standard-template-models-from-relay.md) 和
 [工程 Spec §10.7](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#107-标准模板模型配置)。
 
 旧配置中模板的 `codexModelProfiles`、模板绑定的 `reasoningLevels` 仍可读取，但会被忽略，可以在
