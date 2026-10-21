@@ -75,6 +75,7 @@ const resolveUser = vi.fn(async (userId: string) => ({
 const admissions = applicationFoundationAdmissionDependenciesV1();
 const imageAdmission = vi.fn(admissions.imageAdmission.admitImage);
 const candidates = vi.fn(async () => modelConfiguration.options);
+const verify = vi.fn(async () => {});
 const encrypt =
 	vi.fn<
 		(binding: AgentDefaultRelayKeyBindingV1, plaintext: string) => unknown
@@ -123,7 +124,7 @@ async function start() {
 				],
 				organizationIds: [],
 			}),
-			defaultRelayKey: { candidates, encrypt },
+			defaultRelayKey: { candidates, verify, encrypt },
 		},
 		admissions: {
 			...admissions,
@@ -191,6 +192,7 @@ beforeEach(async () => {
 		.mockReset()
 		.mockImplementation(admissions.imageAdmission.admitImage);
 	candidates.mockReset().mockResolvedValue(modelConfiguration.options);
+	verify.mockReset().mockResolvedValue(undefined);
 	encrypt.mockClear();
 	await sql`truncate platform.agents, platform.platform_applications, platform.platform_api_credentials, platform.platform_user_disables, platform.relay_key_subjects, platform.relay_key_versions, platform.audit_events, platform.outbox_items, platform.idempotency_records cascade`;
 	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('same-id','Robot','human-owner','app-1')`;

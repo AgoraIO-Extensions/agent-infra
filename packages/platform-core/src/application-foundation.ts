@@ -18,6 +18,7 @@ import {
 	type AgentDefaultRelayKeyBindingV1,
 	type AgentDefaultRelayKeyDependenciesV1,
 	AgentDefaultRelayKeyErrorV1,
+	admitAgentDefaultRelayKeyModelsV1,
 } from "./agent-default-relay-key.js";
 import {
 	type PendingSecretRecordAttachmentResolverV1,
@@ -187,7 +188,7 @@ export interface ApplicationFoundationUseCaseDependenciesV1
 	readonly transaction: ApplicationFoundationTransactionPortV1;
 	readonly defaultRelayKey?: Pick<
 		AgentDefaultRelayKeyDependenciesV1,
-		"candidates" | "encrypt" | "currentIdentity"
+		"candidates" | "encrypt" | "currentIdentity" | "verify"
 	>;
 }
 
@@ -887,24 +888,11 @@ export function createApplicationFoundationUseCaseV1(
 			)
 				throw new ApplicationFoundationError("not_admitted");
 			try {
-				const visible = await ports.candidates(
+				await admitAgentDefaultRelayKeyModelsV1({
+					ports,
 					keyValue,
-					structuredClone(admitted.configuration),
-				);
-				if (
-					admitted.configuration.modelConfiguration.options.some(
-						(option) =>
-							!visible.some(
-								(candidate) =>
-									candidate.endpointId === option.endpointId &&
-									candidate.modelId === option.modelId &&
-									option.reasoningLevels.every((level) =>
-										candidate.reasoningLevels.includes(level),
-									),
-							),
-					)
-				)
-					throw new ApplicationFoundationError("not_admitted");
+					configuration: admitted.configuration,
+				});
 				const identity = await ports.currentIdentity(command.traceId);
 				if (
 					!identity ||
@@ -919,6 +907,11 @@ export function createApplicationFoundationUseCaseV1(
 				};
 			} catch (error) {
 				if (error instanceof ApplicationFoundationError) throw error;
+				if (
+					error instanceof AgentDefaultRelayKeyErrorV1 &&
+					error.code === "model_unsupported"
+				)
+					throw new ApplicationFoundationError("model_profile_unsupported");
 				if (
 					error instanceof AgentDefaultRelayKeyErrorV1 &&
 					error.code === "invalid_input"

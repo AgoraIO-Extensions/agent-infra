@@ -83,15 +83,9 @@ export interface ModelCatalogAdapterV1 {
 export class ModelConfigurationErrorV1 extends Error {
 	constructor(
 		readonly retryable = false,
-		readonly reason:
-			| "unavailable"
-			| "codex_model_profile_unsupported" = "unavailable",
+		readonly reason = "unavailable",
 	) {
-		super(
-			reason === "codex_model_profile_unsupported"
-				? "CODEX_MODEL_PROFILE_UNSUPPORTED"
-				: "MODEL_CONFIGURATION_UNAVAILABLE",
-		);
+		super("MODEL_CONFIGURATION_UNAVAILABLE");
 	}
 }
 

@@ -87,7 +87,8 @@ warning 只列出缺失字段名，不输出 Relay Key、endpoint、billing URL 
 API 直接创建 Agent 由 `apiInput.agentApiCreation` 开启。`allowedPrincipals` 列出获准的应用或用户主体，规则见[工程 Spec](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md)。
 省略 `agentApiCreation` 或列表为空时，直接创建保持失败关闭。
 标准模板创建时提交的默认 Relay Key 默认按上面两项 Relay Key 策略校验，与 Web 申请同源；任一策略缺失时，标准模板的 API 创建同样失败关闭。
-只有部署需要不同的 endpoint/模型策略时，才另外提供受审阅的 `candidates` adapter。
+只有部署需要不同的 endpoint/模型策略时，才另外提供受审阅的 `candidates` adapter，并且必须同时提供对应的
+保存时验证 `verify`；只提供其一时标准模板的 API 创建失败关闭（见[标准模板的模型与推理档位](#标准模板的模型与推理档位)）。
 
 Registry 返回的配置 blob 若需跳转到对象存储，部署可通过
 `apiInput.registry.allowedBlobRedirectOrigins` 登记精确 HTTPS origin（例如
@@ -128,34 +129,24 @@ Agent 版本”。取值不符合规则时 API 以 `PLATFORM_DEPLOYMENT_CONFIGUR
 标准模板升级不改变这个值，已有绑定沿用。修改这个值等于换用新的 Agent Version，原值下的绑定不会
 出现在新值下，因此只在确实要切换版本时修改。
 
-## 标准 Codex 模板的模型画像
+## 标准模板的模型与推理档位
 
-`apiInput.templates` 中 `modelBinding.driver` 为 `codex` 的模板必须提供
-`codexModelProfiles`：一个非空数组，每项为 `{ model, reasoningLevels }`，内容必须是该模板
-`imageDigest` 镜像内固定 Codex 的 `model/list` 结果。申请和配置准入用它提前拒绝固定 Codex
-不支持的模型或推理档位；Runtime readiness 仍按同一列表做 fail-closed 校验。其他 driver 的模板
-不得提供该字段。缺失、为空、格式无效或出现在非 Codex 模板上时，Platform API 拒绝启动，日志为
-`Platform API failed to start: codex_model_profiles_<missing|invalid|unexpected> (template <templateId>)`，
-不包含任何配置值。
+标准模板的可选模型只来自 Agent 默认 Relay Key 调用 `/models` 返回的模型 ID。Model Catalog 端点的
+`allowedModels` 只做部署方收窄，`null` 表示不收窄。推理档位是平台固定的 `low`、`medium`、`high`，
+不按模型、端点或模板登记。Web 申请、API 创建和配置更新在保存前用默认 Key 按模板协议，对每个
+所选模型与档位各发一次有界的真实请求（Codex 用 Responses，Claude 用 Messages），全部通过才保存。
+用已保存 Key 改模型时，只验证新增的组合；已保存的组合沿用原档位。决策与边界见
+[ADR-0029](../../docs/adr/0029-source-standard-template-models-from-relay.md) 和
+[工程 Spec §10.7](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#107-标准模板模型配置)。
 
-用模板镜像离线生成该列表，镜像 digest 变化时必须重新生成：
+旧配置中模板的 `codexModelProfiles`、模板绑定的 `reasoningLevels` 仍可读取，但会被忽略，可以在
+后续配置变更中删除，不需要与镜像同时发布。端点的 `capabilities.reasoningLevels` 也不再限制标准
+模板的选择。Runtime 镜像不再追加模型条目，固定 Codex 遇到未内置的模型时使用其默认回退元数据，
+见 [Codex 运行装配](../runtime/README.md#固定镜像)。
 
-```bash
-docker run --rm -i --network none --entrypoint node \
-  <registry>/agent-runtime-host@sha256:<digest> --input-type=module - \
-  < deploy/runtime/codex-model-profiles.mjs > codex-model-profiles.json
-```
-
-[`codex-model-profiles.mjs`](../runtime/codex-model-profiles.mjs) 在容器内以临时空 HOME 启动
-`codex app-server`，按 Runtime 相同的分页读取含隐藏项的 `model/list`；不联网、不读取凭证，
-失败时只输出固定错误码。它与 Runtime 官方 lane 一样以 `--strict-config` 加载镜像内的模型目录
-`/opt/codex/share/models.json`（见 [Codex 运行装配](../runtime/README.md#固定镜像)），所以
-结果包含固定 Codex 的内置模型以及经评审追加的 DeepSeek 模型（`deepseek-flash`、`deepseek-v4-pro`，
-推理档位 `low`、`high`、`max`）。不含该目录的旧镜像上脚本以 `CODEX_MODEL_PROFILES_UNAVAILABLE`
-失败，这类镜像使用其源码提交中的同名脚本生成。把生成的数组原样写入私有配置的 `codexModelProfiles`。Model Catalog
-的 `allowedModels` 仍只应列出该数组中存在、且模型端点实际可用的模型；要让 Owner 选用 DeepSeek，
-该端点的 `capabilities.reasoningLevels` 还要包含所需档位（DeepSeek 为 `low`、`high`、`max`）。
-每个模型实际可选的档位仍以 `codexModelProfiles` 为准。
+所选模型或档位未通过验证时，Web 申请、API 创建与配置更新都返回 409 `MODEL_SELECTION_INVALID`；
+验证请求被 Relay 以 401、403 拒绝时按 Key 无效处理，结果与 billing 拒绝该 Key 相同；超时或 Relay
+返回 429、5xx 时返回 `DEPENDENCY_UNAVAILABLE`。
 
 ## 多服务 Agent 资源档位
 

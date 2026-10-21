@@ -1771,18 +1771,21 @@ describe("admin audit for #2879 registered actions", () => {
 		expect(record.summary).toBe("relay_key.agent_default.candidates");
 	});
 
-	it("projects relay_key.agent_default.read rejection with reason in summary", async () => {
-		const userId = randomUUID();
-		const agentId = randomUUID();
-		const id = randomUUID();
-		await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
-			values (${id}, 'rk-rej-trace', ${randomUUID()}, 'user', ${userId}, 'relay_key.agent_default.read', 'agent', ${agentId}, 'rejected', ${sql.json({ schemaVersion: 1, reason: "not_authorized" })})`;
-		const record = await query.getAudit(admin, id, detail, request());
-		expect(record.action).toBe("relay_key.agent_default.read");
-		expect(record.summary).toBe(
-			"relay_key.agent_default.read: reason=not_authorized",
-		);
-	});
+	it.each(["not_authorized", "model_unsupported"])(
+		"projects relay_key.agent_default.read rejection with reason %s in summary",
+		async (reason) => {
+			const userId = randomUUID();
+			const agentId = randomUUID();
+			const id = randomUUID();
+			await sql`insert into platform.audit_events (id, trace_id, request_id, actor_type, actor_id, action, target_type, target_id, outcome, details)
+			values (${id}, 'rk-rej-trace', ${randomUUID()}, 'user', ${userId}, 'relay_key.agent_default.read', 'agent', ${agentId}, 'rejected', ${sql.json({ schemaVersion: 1, reason })})`;
+			const record = await query.getAudit(admin, id, detail, request());
+			expect(record.action).toBe("relay_key.agent_default.read");
+			expect(record.summary).toBe(
+				`relay_key.agent_default.read: reason=${reason}`,
+			);
+		},
+	);
 
 	it("rejects relay_key.agent_default.read with wrong schemaVersion (fails closed)", async () => {
 		const id = randomUUID();

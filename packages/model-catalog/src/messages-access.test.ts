@@ -1,46 +1,11 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { catalogFixture } from "./catalog.fixture.js";
 import { ModelEndpointV1Schema } from "./catalog.js";
-import { createMessagesModelAccessValidatorV1 } from "./messages-access.js";
-
-export function messagesStreamFixture(
-	message: unknown = {
-		id: "msg_conformance",
-		type: "message",
-		role: "assistant",
-		model: "claude-opus-5",
-		content: [],
-		usage: { input_tokens: 100, output_tokens: 1 },
-	},
-) {
-	return [
-		{ type: "message_start", message },
-		{
-			type: "content_block_start",
-			index: 0,
-			content_block: {
-				type: "tool_use",
-				id: "tool_conformance",
-				name: "agent_infra_conformance",
-				input: {},
-			},
-		},
-		{
-			type: "content_block_delta",
-			index: 0,
-			delta: { type: "input_json_delta", partial_json: "{}" },
-		},
-		{ type: "content_block_stop", index: 0 },
-		{
-			type: "message_delta",
-			delta: { stop_reason: "tool_use" },
-			usage: { output_tokens: 10 },
-		},
-		{ type: "message_stop" },
-	]
-		.map((v) => `event: ${v.type}\ndata: ${JSON.stringify(v)}\n\n`)
-		.join("");
-}
+import {
+	createMessagesModelAccessValidatorV1,
+	probeMessagesModelV1,
+} from "./messages-access.js";
+import { messagesStreamFixture } from "./messages-stream.fixture.js";
 
 it.each(["api-key", "bearer"])(
 	"preflights Messages with explicit %s authentication, tool completion and each effort",
@@ -226,4 +191,109 @@ it.each([
 			{ signal: AbortSignal.timeout(100) },
 		),
 	).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+});
+
+// ADR-0029：保存时用 Agent 默认 Key 对每个模型与档位发一次真实 Messages 请求。
+const messagesEndpoint = (authentication: "api-key" | "bearer") =>
+	ModelEndpointV1Schema.parse({
+		...catalogFixture().endpoints[0],
+		baseUrl: "https://models.example.test/team-a",
+		protocol: "anthropic-messages-v1",
+		authentication,
+	});
+
+it.each(["api-key", "bearer"] as const)(
+	"verifies one model and level with a single %s Messages request",
+	async (authentication) => {
+		const fetcher = vi.fn<typeof fetch>(
+			async () =>
+				new Response(messagesStreamFixture(), {
+					headers: { "content-type": "text/event-stream" },
+				}),
+		);
+		await expect(
+			probeMessagesModelV1({
+				endpoint: messagesEndpoint(authentication),
+				credential: "synthetic-credential-a",
+				modelId: "claude-opus-5",
+				reasoningLevel: "low",
+				signal: AbortSignal.timeout(1000),
+				fetch: fetcher,
+			}),
+		).resolves.toBe("verified");
+		// 不做 count_tokens 预检，也不受端点登记的档位约束（端点只登记了 medium/high）。
+		expect(fetcher).toHaveBeenCalledOnce();
+		const [url, init] = fetcher.mock.calls[0] ?? [];
+		expect(String(url)).toBe(
+			"https://models.example.test/team-a/v1/messages?beta=true",
+		);
+		expect(init?.redirect).toBe("error");
+		const headers = new Headers(init?.headers);
+		expect(
+			authentication === "bearer"
+				? headers.get("authorization")
+				: headers.get("x-api-key"),
+		).toBe(
+			authentication === "bearer"
+				? "Bearer synthetic-credential-a"
+				: "synthetic-credential-a",
+		);
+		const body = JSON.parse(String(init?.body));
+		expect([body.model, body.output_config.effort]).toEqual([
+			"claude-opus-5",
+			"low",
+		]);
+	},
+);
+
+it.each([
+	[401, "key_invalid"],
+	[403, "key_invalid"],
+	[400, "incompatible"],
+	[404, "incompatible"],
+	[429, "unavailable"],
+	[503, "unavailable"],
+] as const)("classifies Messages HTTP %i as %s", async (status, outcome) => {
+	await expect(
+		probeMessagesModelV1({
+			endpoint: messagesEndpoint("bearer"),
+			credential: "synthetic-credential-a",
+			modelId: "claude-opus-5",
+			reasoningLevel: "high",
+			signal: AbortSignal.timeout(1000),
+			fetch: async () => Response.json({}, { status }),
+		}),
+	).resolves.toBe(outcome);
+});
+
+it("treats a stream without the conformance tool call as incompatible", async () => {
+	await expect(
+		probeMessagesModelV1({
+			endpoint: messagesEndpoint("bearer"),
+			credential: "synthetic-credential-a",
+			modelId: "claude-opus-5",
+			reasoningLevel: "high",
+			signal: AbortSignal.timeout(1000),
+			fetch: async () =>
+				new Response(
+					`event: message_start\ndata: ${JSON.stringify({ type: "message_start" })}\n\n`,
+					{ headers: { "content-type": "text/event-stream" } },
+				),
+		}),
+	).resolves.toBe("incompatible");
+});
+
+it("rejects a level outside the fixed Claude profile without a request", async () => {
+	const fetcher = vi.fn<typeof fetch>();
+	await expect(
+		probeMessagesModelV1({
+			endpoint: messagesEndpoint("bearer"),
+			credential: "synthetic-credential-a",
+			modelId: "claude-opus-5",
+			reasoningLevel: "minimal",
+			signal: AbortSignal.timeout(1000),
+			fetch: fetcher,
+		}),
+	).resolves.toBe("incompatible");
+	expect(fetcher).not.toHaveBeenCalled();
 });

@@ -90,6 +90,12 @@ export interface ProductionPlatformApiInputV1
 				PlatformApiAssemblyInput["agentApiCreation"]
 			>["defaultRelayKey"]
 		>["candidates"];
+		/** 与 `candidates` 成对提供的保存时真实验证（ADR-0029）；只给其一时标准模板 API 创建失败关闭。 */
+		readonly verify?: NonNullable<
+			NonNullable<
+				PlatformApiAssemblyInput["agentApiCreation"]
+			>["defaultRelayKey"]
+		>["verify"];
 	};
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionInstallation?: Omit<
@@ -390,7 +396,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 	// Web 申请与 API 创建提交的是同一种默认 Relay Key（PRD 7.4）：部署没有单独提供 API 的
 	// candidates 时，沿用 Web 申请的候选校验（同一 ModelCatalog、模板绑定与 billing 校验），
 	// 不另设一套可见模型规则（#2759）。两项策略缺任一时仍不装配，标准模板创建保持失败关闭。
-	const deploymentDefaultRelayKeyCandidates =
+	const deploymentDefaultRelayKey =
 		input.personalRelayKeyValidation && input.agentDefaultRelayKeyPolicy
 			? createAgentDefaultRelayKeyCandidatesV1({
 					modelCatalog: input.modelCatalog,
@@ -398,8 +404,18 @@ export function createProductionPlatformApiAssemblyInputV1(
 					validation: input.personalRelayKeyValidation,
 				})
 			: undefined;
-	const apiCandidates =
-		input.agentApiCreation?.candidates ?? deploymentDefaultRelayKeyCandidates;
+	// 部署提供了自己的 API candidates 时，必须同时提供对应的验证，不混用部署 Relay 的
+	// 验证（两者的端点来源可能不同）；只给其一时不装配，标准模板 API 创建失败关闭（ADR-0029）。
+	const explicitApiRelayKey = input.agentApiCreation?.candidates
+		? input.agentApiCreation.verify
+			? {
+					candidates: input.agentApiCreation.candidates,
+					verify: input.agentApiCreation.verify,
+				}
+			: undefined
+		: deploymentDefaultRelayKey;
+	const apiCandidates = explicitApiRelayKey?.candidates;
+	const apiVerify = explicitApiRelayKey?.verify;
 	const apiModelAdmission = input.agentApiCreation?.keylessModelAdmission;
 	// 平台身份入口只在部署装配了 Auth Gateway 时可用；浏览器与 API 创建两条准入路径
 	// 使用同一个事实（#3034，工程 Spec §14.3）。
@@ -550,10 +566,11 @@ export function createProductionPlatformApiAssemblyInputV1(
 				...(keylessModelAdmission ? { keylessModelAdmission } : {}),
 			}),
 			prepareSecrets: secrets.prepareAgentApiSecrets,
-			...(relayKeyEncryptor && apiCandidates
+			...(relayKeyEncryptor && apiCandidates && apiVerify
 				? {
 						defaultRelayKey: {
 							candidates: apiCandidates,
+							verify: apiVerify,
 							encrypt: (binding, plaintext) =>
 								relayKeyEncryptor.encrypt({ ...binding, plaintext }),
 						},
@@ -578,9 +595,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(validatePersonalRelayKey
 			? { validateDefaultRelayKey: validatePersonalRelayKey }
 			: {}),
-		...(personalRelayKeys &&
-		relayKeyEncryptor &&
-		deploymentDefaultRelayKeyCandidates
+		...(personalRelayKeys && relayKeyEncryptor && deploymentDefaultRelayKey
 			? {
 					agentDefaultRelayKeys: {
 						currentIdentity: personalRelayKeys.currentIdentity,
@@ -588,7 +603,8 @@ export function createProductionPlatformApiAssemblyInputV1(
 							binding: AgentDefaultRelayKeyBindingV1,
 							keyValue: string,
 						) => relayKeyEncryptor.encrypt({ ...binding, plaintext: keyValue }),
-						candidates: deploymentDefaultRelayKeyCandidates,
+						candidates: deploymentDefaultRelayKey.candidates,
+						verify: deploymentDefaultRelayKey.verify,
 					},
 				}
 			: {}),

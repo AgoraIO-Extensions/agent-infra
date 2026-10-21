@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { beginInitialAgentConfigurationAdmissionV1 } from "./agent-configuration-initial.js";
 import { parseInitialCommand } from "./agent-configuration-input.js";
-import type {
-	AgentConfigurationAuthorizationAdmissionPortV1,
-	InitialAgentConfigurationAdmissionDependenciesV1,
+import {
+	type AgentConfigurationAuthorizationAdmissionPortV1,
+	AgentConfigurationError,
+	type InitialAgentConfigurationAdmissionDependenciesV1,
 } from "./agent-configuration-types.js";
-import { AgentDefaultRelayKeyErrorV1 } from "./agent-default-relay-key.js";
+import {
+	AgentDefaultRelayKeyErrorV1,
+	admitAgentDefaultRelayKeyModelsV1,
+} from "./agent-default-relay-key.js";
 import type {
 	AgentManagementStateV1,
 	AgentManagementStatusV1,
@@ -259,7 +263,7 @@ export function createAgentApiCreationV1(dependencies: {
 		  ) => InitialAgentConfigurationAdmissionDependenciesV1);
 	readonly defaultRelayKey?: Pick<
 		NonNullable<ApplicationFoundationUseCaseDependenciesV1["defaultRelayKey"]>,
-		"candidates" | "encrypt"
+		"candidates" | "encrypt" | "verify"
 	>;
 	readonly prepareSecrets?: (input: {
 		readonly agentId: string;
@@ -318,31 +322,25 @@ export function createAgentApiCreationV1(dependencies: {
 						const ports = dependencies.defaultRelayKey;
 						if (!ports || !key || !admitted.configuration.modelConfiguration)
 							throw new PersonalApiCredentialErrorV1("unavailable");
-						// 与 Web 申请一致：候选校验判定 Key 无效时是调用方可修正的请求错误，其余失败才是依赖不可用（#2759）。
-						const visible = await ports
-							.candidates(key, admitted.configuration)
-							.catch((error: unknown) => {
-								throw new PersonalApiCredentialErrorV1(
-									error instanceof AgentDefaultRelayKeyErrorV1 &&
-										error.code === "invalid_input"
-										? "invalid_input"
-										: "unavailable",
-								);
-							});
-						if (
-							admitted.configuration.modelConfiguration.options.some(
-								(option) =>
-									!visible.some(
-										(candidate) =>
-											candidate.endpointId === option.endpointId &&
-											candidate.modelId === option.modelId &&
-											option.reasoningLevels.every((level) =>
-												candidate.reasoningLevels.includes(level),
-											),
-									),
+						// 与 Web 申请一致（#2759、ADR-0029）：Key 无效是调用方可修正的请求错误；
+						// 模型或档位未通过真实验证与申请同为模型选择无效；其余失败才是依赖不可用。
+						await admitAgentDefaultRelayKeyModelsV1({
+							ports,
+							keyValue: key,
+							configuration: admitted.configuration,
+						}).catch((error: unknown) => {
+							if (
+								error instanceof AgentDefaultRelayKeyErrorV1 &&
+								error.code === "model_unsupported"
 							)
-						)
-							throw new PersonalApiCredentialErrorV1("invalid_input");
+								throw new AgentConfigurationError("model_profile_unsupported");
+							throw new PersonalApiCredentialErrorV1(
+								error instanceof AgentDefaultRelayKeyErrorV1 &&
+									error.code === "invalid_input"
+									? "invalid_input"
+									: "unavailable",
+							);
+						});
 						defaultRelayKey = {
 							encrypt: (binding) => ports.encrypt(binding, key),
 						};

@@ -11,6 +11,7 @@ import {
 	RuntimeSavedKeyCandidatesRequestV1Schema,
 	RuntimeSavedKeyCandidatesResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { standardTemplateReasoningLevelsV1 } from "@agent-infra/model-catalog";
 import type {
 	AgentConfigurationUseCaseV1,
 	PendingSecretRecordAttachmentResolverV1,
@@ -266,6 +267,37 @@ export function registerV2ConfigurationRoutes(
 					keyReplacement.expectedConfigurationRevision
 			)
 				throw new HttpProtocolError("CONFLICT", metadata.traceId);
+			// ADR-0029：已保存的组合保留原档位；新增组合须在提供的档位内，并用已保存的 Key 真实验证。
+			const savedOptions = current.configuration.modelOptions;
+			const isSaved = (
+				option: (typeof body.modelConfiguration.options)[number],
+				level: string,
+			) =>
+				savedOptions.some(
+					(item) =>
+						item.endpointId === option.endpointId &&
+						item.modelId === option.modelId &&
+						item.reasoningLevels.includes(level),
+				);
+			const verify = body.modelConfiguration.options.flatMap((option) =>
+				option.reasoningLevels
+					.filter((level) => !isSaved(option, level))
+					.map((reasoningLevel) => ({
+						endpointId: option.endpointId,
+						modelId: option.modelId,
+						reasoningLevel,
+					})),
+			);
+			// 新增组合只能使用平台固定档位；不为注定被拒的组合发起真实请求。
+			if (
+				verify.some(
+					({ reasoningLevel }) =>
+						!(standardTemplateReasoningLevelsV1 as readonly string[]).includes(
+							reasoningLevel,
+						),
+				)
+			)
+				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
 			let saved: ReturnType<
 				typeof RuntimeSavedKeyCandidatesResponseV1Schema.parse
 			>;
@@ -281,6 +313,7 @@ export function registerV2ConfigurationRoutes(
 							configurationRevision:
 								keyReplacement.expectedConfigurationRevision,
 							keyVersion: keyReplacement.expectedKeyVersion,
+							...(verify.length ? { verify } : {}),
 						}),
 					),
 				);
@@ -292,19 +325,32 @@ export function registerV2ConfigurationRoutes(
 				saved.configurationRevision !==
 					keyReplacement.expectedConfigurationRevision ||
 				saved.keyVersion !== keyReplacement.expectedKeyVersion ||
-				body.modelConfiguration.options.some(
-					(option) =>
-						!saved.candidates.some(
-							(candidate) =>
-								candidate.endpointId === option.endpointId &&
-								candidate.modelId === option.modelId &&
-								option.reasoningLevels.every((level) =>
-									candidate.reasoningLevels.includes(level),
-								),
-						),
-				)
+				body.modelConfiguration.options.some((option) => {
+					const candidate = saved.candidates.find(
+						(item) =>
+							item.endpointId === option.endpointId &&
+							item.modelId === option.modelId,
+					);
+					return (
+						!candidate ||
+						option.reasoningLevels.some(
+							(level) =>
+								!candidate.reasoningLevels.includes(level) &&
+								!isSaved(option, level),
+						)
+					);
+				})
 			)
 				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+			if (verify.length && saved.verification !== "verified")
+				throw new HttpProtocolError(
+					saved.verification === "incompatible"
+						? "CODEX_MODEL_PROFILE_UNSUPPORTED"
+						: saved.verification === "key_invalid"
+							? "INVALID_REQUEST"
+							: "DEPENDENCY_UNAVAILABLE",
+					metadata.traceId,
+				);
 		}
 		let prepared: Awaited<
 			ReturnType<ConfigurationRoutesDependencies["prepareSecretReplacements"]>

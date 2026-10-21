@@ -929,14 +929,15 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		if (!serverValidationDismissed && modelConfigurationVisible)
 			for (const index of modelServerErrorIndexes)
 				errors[`model.${index}.modelId`] =
-					"服务端拒绝了该模型选项，请重新选择。";
+					"该模型或推理档位未通过默认 Relay Key 的验证，请重新选择。";
 		if (
 			!serverValidationDismissed &&
 			props.serverError?.code === "MODEL_SELECTION_INVALID" &&
 			modelServerErrorIndexes.length === 0 &&
 			modelConfigurationVisible
 		)
-			errors.defaultModelOptionId = "服务端拒绝了默认模型，请重新选择。";
+			errors.defaultModelOptionId =
+				"默认模型未通过默认 Relay Key 的验证，请重新选择。";
 		if (
 			!serverValidationDismissed &&
 			props.mode === "update" &&
@@ -944,7 +945,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			!modelConfigurationVisible &&
 			!managedModelEdit
 		)
-			errors.configureModels = "服务端拒绝了模型配置，请开启修改模型配置。";
+			errors.configureModels =
+				"模型配置未通过默认 Relay Key 的验证，请开启修改模型配置。";
 		// 部署未提供平台身份入口时，服务端以 ACTION_UNAVAILABLE 拒绝「由平台校验」（#3034）。
 		// 只要仍选着它就保留提示并阻止再次提交；修改申请不能更改入口身份，提示新建申请。
 		if (

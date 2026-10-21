@@ -1,11 +1,11 @@
-// 标准 Codex 模板的模型目录（#2978）：固定 Codex 提交中的内置目录
-// `codex-rs/models-manager/models.json`，加上经评审的追加条目
-// （`codex-models-additions.json`，DeepSeek 官方 Codex 接入文档中的条目）。
+// 标准 Codex 模板的模型目录：固定 Codex 提交中的内置目录 `codex-rs/models-manager/models.json`，
+// 不含平台追加条目（ADR-0029）。未内置的模型由 Codex 使用默认回退元数据；能否使用由保存时的
+// 真实请求判定。
 //
 // `install-codex.mjs` 在镜像构建时调用 `buildCodexModelCatalog`，校验两个摘要后把结果写入
-// `/opt/codex/share/models.json`；Runtime 以 `model_catalog_json` 加载它。升级 Codex
-// 或修改追加条目后，在仓库根目录运行本脚本（需要访问 GitHub），用输出替换
-// `packages/agent-runtime/src/codex-models.json`：
+// `/opt/codex/share/models.json`；Runtime 以 `model_catalog_json` 加载它，使固定 Codex 只用
+// 进程内目录、不向模型端点请求 `/models`。升级 Codex 后，在仓库根目录运行本脚本（需要访问
+// GitHub），用输出替换 `packages/agent-runtime/src/codex-models.json`：
 //
 //   node --use-env-proxy deploy/runtime/codex-models.mjs \
 //     > packages/agent-runtime/src/codex-models.json
@@ -43,12 +43,9 @@ function catalogModels(bytes) {
 	return value.models;
 }
 
-// 内置条目原样保留在前，追加条目在后；任何重名都拒绝，追加条目不能覆盖内置模型。
-export function buildCodexModelCatalog(upstreamBytes, additionsBytes) {
-	const models = [
-		...catalogModels(upstreamBytes),
-		...catalogModels(additionsBytes),
-	];
+// 内置条目原样保留，顺序不变；重名拒绝。
+export function buildCodexModelCatalog(upstreamBytes) {
+	const models = catalogModels(upstreamBytes);
 	if (new Set(models.map((entry) => entry.slug)).size !== models.length)
 		throw new Error("Codex model catalog is invalid");
 	return Buffer.from(`${JSON.stringify({ models })}\n`);
@@ -76,10 +73,7 @@ if (argv[1] && fileURLToPath(import.meta.url) === argv[1]) {
 	);
 	if (!response.ok) throw new Error("Codex model catalog is unavailable");
 	const upstream = Buffer.from(await response.arrayBuffer());
-	const catalog = buildCodexModelCatalog(
-		upstream,
-		await readFile(new URL("./codex-models-additions.json", import.meta.url)),
-	);
+	const catalog = buildCodexModelCatalog(upstream);
 	process.stdout.write(
 		`${JSON.stringify({ upstreamSha256: sha256(upstream), sha256: sha256(catalog) }, null, "\t")}\n`,
 	);

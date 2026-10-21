@@ -349,19 +349,10 @@ describe("Codex metadata async current confirmation (controlled behavior only)",
 		).toEqual({ threadId: "native-thread-private", includeTurns: false });
 	});
 
-	it.each([
-		"bridge",
-		"initialize",
-		"config/read",
-		"model page 1",
-		"model page 2",
-		"thread/read",
-		"projection",
-	])(
+	it.each(["bridge", "initialize", "config/read", "thread/read", "projection"])(
 		"awaits fresh remote authority after %s and prevents the next dependency on denial",
 		async (stage) => {
 			const f = await fixture();
-			f.transport.modelPages = ["gpt-5.4", "gpt-5.3-codex"];
 			let projected = false;
 			f.transport.status = {
 				get type() {
@@ -373,19 +364,12 @@ describe("Codex metadata async current confirmation (controlled behavior only)",
 			let reached = false;
 			f.read.revalidate = async () => {
 				const last = f.transport.requests.at(-1)?.method;
-				const pages = f.transport.requests.filter(
-					(request) => request.method === "model/list",
-				).length;
 				const at =
 					stage === "bridge"
 						? f.transport.openCount > 0 && last === undefined
 						: stage === "projection"
 							? projected
-							: stage === "model page 1"
-								? last === "model/list" && pages === 1
-								: stage === "model page 2"
-									? last === "model/list" && pages === 2
-									: last === stage;
+							: last === stage;
 				if (at) {
 					reached = true;
 					return held.promise;

@@ -550,6 +550,7 @@ describe("Application revision with a re-submitted default Key (#2421)", () => {
 							reasoningLevels: ["low"],
 						},
 					],
+					verify: async () => {},
 					encrypt: () => ({ ciphertext: "opaque" }),
 				},
 			},

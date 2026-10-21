@@ -181,7 +181,7 @@ describe("HTTP common boundary", () => {
 			body: {
 				code: "MODEL_SELECTION_INVALID",
 				message:
-					"The selected model or reasoning level is not supported by this Codex template.",
+					"The selected model or reasoning level failed verification with the Agent default Relay Key.",
 				retryable: false,
 			},
 		});

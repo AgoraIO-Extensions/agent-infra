@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { agentConfigurationConformanceRecordV1 } from "./agent-configuration.conformance.ts";
 import {
 	type AgentDefaultRelayKeyAuditV1,
+	AgentDefaultRelayKeyErrorV1,
 	type AgentDefaultRelayKeyTransactionV1,
 	createAgentDefaultRelayKeyUseCaseV1,
 } from "./agent-default-relay-key.ts";
@@ -30,6 +31,12 @@ function fixture() {
 	const audits: AgentDefaultRelayKeyAuditV1[] = [];
 	const encrypted: number[] = [];
 	let onValidate = () => {};
+	const verified: {
+		endpointId: string;
+		modelId: string;
+		reasoningLevel: string;
+	}[][] = [];
+	let verifyFailure: AgentDefaultRelayKeyErrorV1 | undefined;
 	const useCase = createAgentDefaultRelayKeyUseCaseV1({
 		transaction: {
 			async execute<T>(
@@ -78,6 +85,11 @@ function fixture() {
 			onValidate();
 			return structuredClone(candidates);
 		},
+		verify: async (value, _configuration, combos) => {
+			expect(value).toBe(key);
+			verified.push(structuredClone([...combos]));
+			if (verifyFailure) throw verifyFailure;
+		},
 		encrypt: async (binding, value) => {
 			expect(binding.purpose).toBe("agent-default");
 			expect(value).toBe(key);
@@ -89,6 +101,10 @@ function fixture() {
 		useCase,
 		audits,
 		encrypted,
+		verified,
+		setVerifyFailure: (value: AgentDefaultRelayKeyErrorV1) => {
+			verifyFailure = value;
+		},
 		setOwned: (value: boolean) => {
 			owned = value;
 		},
@@ -130,19 +146,49 @@ describe("default Agent Key command contract (controlled transaction)", () => {
 		]);
 		expect(JSON.stringify(f.audits)).not.toContain(key);
 	});
-	it("requires every configured model and reasoning level in the fresh intersection", async () => {
+	it("requires every configured model to stay visible to the new Key", async () => {
 		const f = fixture();
 		f.setCandidates([
 			{
 				endpointId: "endpoint_01",
-				modelId: "gpt-5",
-				reasoningLevels: ["high"],
+				modelId: "gpt-5-other",
+				reasoningLevels: ["low", "medium", "high"],
 			},
 		]);
 		await expect(f.useCase.replace(trusted, command)).rejects.toMatchObject({
 			code: "invalid_input",
 		});
+		expect(f.verified).toEqual([]);
 		expect(f.encrypted).toEqual([]);
+	});
+	it("keeps saved levels outside the offered set and verifies every saved pair with the new Key (ADR-0029)", async () => {
+		const f = fixture();
+		f.setCandidates([
+			{
+				endpointId: "endpoint_01",
+				modelId: "gpt-5",
+				reasoningLevels: ["medium", "high"],
+			},
+		]);
+		await expect(f.useCase.replace(trusted, command)).resolves.toMatchObject({
+			keyVersion: 1,
+		});
+		expect(f.verified).toEqual([
+			[{ endpointId: "endpoint_01", modelId: "gpt-5", reasoningLevel: "low" }],
+		]);
+	});
+	it("does not store the new Key when a saved pair fails verification (ADR-0029)", async () => {
+		const f = fixture();
+		f.setVerifyFailure(new AgentDefaultRelayKeyErrorV1("model_unsupported"));
+		await expect(f.useCase.replace(trusted, command)).rejects.toMatchObject({
+			code: "model_unsupported",
+		});
+		expect(f.encrypted).toEqual([]);
+		expect(f.current()).toBeNull();
+		expect(f.audits.at(-1)).toMatchObject({
+			outcome: "rejected",
+			reason: "model_unsupported",
+		});
 	});
 	it("does not accept a stale preview or configuration revision", async () => {
 		const f = fixture();

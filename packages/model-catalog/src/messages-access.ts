@@ -1,7 +1,14 @@
 import { createParser } from "eventsource-parser";
-import type { ModelAccessValidatorV1 } from "./access.js";
+import type {
+	ModelAccessValidatorV1,
+	ResponsesModelProbeOutcomeV1,
+} from "./access.js";
 import { validateModelAccessPolicyV1 } from "./access.js";
-import { ModelConfigurationErrorV1, modelOperationV1 } from "./catalog.js";
+import {
+	ModelConfigurationErrorV1,
+	type ModelEndpointV1,
+	modelOperationV1,
+} from "./catalog.js";
 
 // Fixed Claude SDK 0.3.246 / CLI 2.1.246 Messages profile, also exercised by native conformance.
 const betas =
@@ -241,4 +248,91 @@ export function createMessagesModelAccessValidatorV1(
 			});
 		},
 	};
+}
+
+/**
+ * One bounded synthetic Messages request for one reasoning level with the Agent default
+ * Key (ADR-0029). Same fixed Claude profile as the validator above, without the
+ * deployment's per-endpoint level policy; no conversation data and no tool execution.
+ */
+export async function probeMessagesModelV1(input: {
+	readonly endpoint: ModelEndpointV1;
+	readonly credential: string;
+	readonly modelId: string;
+	readonly reasoningLevel: string;
+	readonly signal: AbortSignal;
+	readonly fetch?: typeof fetch;
+}): Promise<ResponsesModelProbeOutcomeV1> {
+	if (!efforts.includes(input.reasoningLevel)) return "incompatible";
+	const fetcher = input.fetch ?? globalThis.fetch;
+	const { signal } = input;
+	const status = (response: Response): ResponsesModelProbeOutcomeV1 => {
+		void response.body?.cancel().catch(() => {});
+		if (response.status === 401 || response.status === 403)
+			return "key_invalid";
+		return response.status === 429 || response.status >= 500
+			? "unavailable"
+			: "incompatible";
+	};
+	const headers = {
+		"content-type": "application/json",
+		"anthropic-version": "2023-06-01",
+		"anthropic-beta": betas,
+		"user-agent": "claude-cli/2.1.246 (external, sdk-ts, agent-sdk/0.3.246)",
+		"x-app": "cli",
+		...(input.endpoint.authentication === "bearer"
+			? { authorization: `Bearer ${input.credential}` }
+			: { "x-api-key": input.credential }),
+	};
+	const response = await fetcher(
+		`${input.endpoint.baseUrl.replace(/\/$/, "")}/v1/messages?beta=true`,
+		{
+			method: "POST",
+			headers: { ...headers, accept: "text/event-stream" },
+			redirect: "error",
+			signal,
+			body: JSON.stringify({
+				model: input.modelId,
+				messages: [
+					{
+						role: "user",
+						content: "Call agent_infra_conformance with no arguments.",
+					},
+				],
+				tools: [
+					{
+						name: "agent_infra_conformance",
+						description: "Configuration conformance; no side effects.",
+						input_schema: {
+							type: "object",
+							properties: {},
+							required: [],
+							additionalProperties: false,
+						},
+					},
+				],
+				stream: true,
+				max_tokens: 2048,
+				thinking: { type: "adaptive" },
+				output_config: { effort: input.reasoningLevel },
+				tool_choice: { type: "auto" },
+			}),
+		},
+	);
+	if (
+		!response.ok ||
+		!/^text\/event-stream(?:;|$)/i.test(
+			response.headers.get("content-type") ?? "",
+		)
+	)
+		return status(response);
+	try {
+		verifyCompletion(await boundedBody(response, signal), input.modelId);
+		return "verified";
+	} catch (error) {
+		if (signal.aborted) throw new ModelConfigurationErrorV1(true);
+		if (error instanceof ModelConfigurationErrorV1)
+			return error.retryable ? "unavailable" : "incompatible";
+		return "unavailable";
+	}
 }

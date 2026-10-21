@@ -1733,7 +1733,9 @@ resources:
 		const toggle = screen.getByRole("checkbox", { name: "修改模型配置" });
 		expect(toggle.getAttribute("aria-invalid")).toBe("true");
 		expect(
-			screen.getByText("服务端拒绝了模型配置，请开启修改模型配置。"),
+			screen.getByText(
+				"模型配置未通过默认 Relay Key 的验证，请开启修改模型配置。",
+			),
 		).toBeTruthy();
 		expect(document.activeElement).toBe(toggle);
 	});

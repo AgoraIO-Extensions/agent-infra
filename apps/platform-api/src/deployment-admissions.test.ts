@@ -201,10 +201,6 @@ function fixture(
 					templateId: "codex",
 					imageDigest,
 					modelBinding,
-					codexModelProfiles: [
-						{ model: "model-a", reasoningLevels: ["medium", "high"] },
-						{ model: "model-b", reasoningLevels: ["medium", "high"] },
-					],
 					configurationRevision: "config-a",
 				},
 				validation: readiness.revision,
@@ -760,35 +756,24 @@ describe("production deployment admissions", () => {
 		).toThrow("PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID");
 	});
 	it.each([
-		["codex_model_profiles_missing", { codexModelProfiles: undefined }],
-		["codex_model_profiles_invalid", { codexModelProfiles: [] }],
+		["missing", { codexModelProfiles: undefined }],
+		["empty", { codexModelProfiles: [] }],
 		[
-			"codex_model_profiles_unexpected",
+			"on a template without a model binding",
 			{ modelBinding: undefined, codexModelProfiles: [] },
 		],
 	] as const)(
-		"names %s and the template in the startup diagnostic (#2382)",
-		(reason, change) => {
+		"accepts and ignores legacy codexModelProfiles that are %s (ADR-0029)",
+		(_name, change) => {
 			const { input } = fixture();
 			const [template] = input.templates;
 			if (!template) throw new Error("fixture template missing");
-			let caught: unknown;
-			try {
+			expect(() =>
 				createDeploymentAdmissionsV1({
 					...input,
 					templates: [{ ...template, ...change }],
-				});
-			} catch (error) {
-				caught = error;
-			}
-			expect(caught).toBeInstanceOf(Error);
-			expect((caught as Error).message).toBe(
-				"PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID",
-			);
-			expect(deploymentDiagnosticV1(caught)).toEqual({
-				reason,
-				templateId: "codex",
-			});
+				}),
+			).not.toThrow();
 		},
 	);
 	it("keeps the generic configuration error for non-profile problems (#2382)", () => {
@@ -1366,30 +1351,26 @@ describe("production deployment admissions", () => {
 		).toMatchObject({ status: "rejected" });
 	});
 
-	it("rejects a Codex model outside the fixed profile before endpoint admission", async () => {
+	it("admits a Codex model outside any legacy profile when the catalog allows it (ADR-0029)", async () => {
 		const f = fixture();
 		const first = modelInput().options[0];
 		if (!first) throw new Error("model fixture missing");
-		const source = {
-			kind: "standard" as const,
-			templateId: "codex",
-			imageDigest: f.imageDigest,
-		} as AgentConfigurationSourceV1;
 		const result = await createDeploymentAdmissionsV1(
 			f.input,
 		).modelAdmission.admitModels({
 			...request,
-			source,
+			source: {
+				kind: "standard" as const,
+				templateId: "codex",
+				imageDigest: f.imageDigest,
+			} as AgentConfigurationSourceV1,
 			current: null,
 			requested: {
 				...modelInput(),
-				options: [{ ...first, modelId: "gpt-6.1-sol" }],
+				options: [{ ...first, modelId: "model-b" }],
 			},
 		});
-		expect(result).toMatchObject({
-			status: "rejected",
-			reason: "codex_model_profile_unsupported",
-		});
+		expect(result).toMatchObject({ status: "admitted" });
 	});
 
 	it("admits a Codex model and reasoning level covered by the fixed profile", async () => {
@@ -1437,33 +1418,44 @@ describe("production deployment admissions", () => {
 		expect(result).toBeNull();
 	});
 
-	it("returns an explicit profile rejection for the keyless admission path", async () => {
+	it("leaves model compatibility to save-time verification on the keyless path (ADR-0029)", async () => {
 		const f = fixture();
 		const first = modelInput().options[0];
 		if (!first) throw new Error("model fixture missing");
-		const result = await createDeploymentAdmissionsV1(
-			f.input,
-		).keylessModelAdmission.admitModels({
-			...request,
-			source: {
-				kind: "standard",
-				templateId: "codex",
-				imageDigest: f.imageDigest,
-			} as AgentConfigurationSourceV1,
-			requested: {
-				...modelInput(),
-				options: [
-					{
-						...first,
-						modelId: "gpt-6.1-sol",
-					},
-				],
-			},
+		const keyless = createDeploymentAdmissionsV1(f.input).keylessModelAdmission;
+		const source = {
+			kind: "standard",
+			templateId: "codex",
+			imageDigest: f.imageDigest,
+		} as AgentConfigurationSourceV1;
+		const { replaceCredential: _replaceCredential, ...option } = first;
+		// 端点没登记的档位也放行：档位由平台固定，能否使用由保存时真实请求判定。
+		expect(
+			await keyless.admitModels({
+				...request,
+				source,
+				requested: {
+					...modelInput(),
+					options: [
+						{ ...option, modelId: "model-b", reasoningLevels: ["low"] },
+					],
+					defaultReasoningLevel: "low",
+				},
+			}),
+		).toMatchObject({
+			options: [{ modelId: "model-b", reasoningLevels: ["low"] }],
 		});
-		expect(result).toEqual({
-			status: "rejected",
-			reason: "codex_model_profile_unsupported",
-		});
+		// 部署显式收窄的 allowedModels 仍然生效。
+		expect(
+			await keyless.admitModels({
+				...request,
+				source,
+				requested: {
+					...modelInput(),
+					options: [{ ...option, modelId: "gpt-6.1-sol" }],
+				},
+			}),
+		).toBeNull();
 	});
 
 	it("reports unavailable catalog loading without leaking source errors", async () => {

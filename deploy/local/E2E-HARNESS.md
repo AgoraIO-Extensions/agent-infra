@@ -98,12 +98,12 @@ Worker 到 Runtime 是集群内明文 HTTP（[ADR-0020](../../docs/adr/0020-use-
 Worker 只在启动时加载这些材料；配置、部署输入或信任 bundle 变化时 Harness 更新 Pod 模板
 注解并等待滚动完成。新 Agent 通过审批后，先执行 `runtime` 再等待或重试创建。
 
-标准 Codex 模板的 Runtime readiness 会用镜像内固定版本 Codex 的 `model/list` 核对每个模型
-选项及推理档位。私有 API/Worker Model Catalog 的 `allowedModels` 只能列出该列表中存在、且
-模型端点实际可用的模型；否则申请和 Worker 预检都会通过，但 Runtime 以
-`RUNTIME_CODEX_CONFIGURATION_INVALID` 拒绝 readiness，Worker 记为 `health_check_failed`。
-私有 API 配置的 Codex 模板还必须提供由同一镜像离线生成的 `codexModelProfiles`，生成方法与启动
-报错见 [Platform API 部署模块](../platform-api/README.md#标准-codex-模板的模型画像)。
+标准 Codex 模板的 Runtime readiness 不再用镜像内 Codex 的 `model/list` 核对模型选项
+（[ADR-0029](../../docs/adr/0029-source-standard-template-models-from-relay.md)）。可选模型来自
+Agent 默认 Relay Key 的 `/models`，私有 API/Worker Model Catalog 的 `allowedModels` 只做收窄
+（`null` 不收窄）；推理档位固定为 `low`、`medium`、`high`，保存时用默认 Key 真实验证。私有配置里
+旧的 `codexModelProfiles` 与模板 `reasoningLevels` 会被忽略，见
+[Platform API 部署模块](../platform-api/README.md#标准模板的模型与推理档位)。
 
 ## 文件数据面（分阶段）
 

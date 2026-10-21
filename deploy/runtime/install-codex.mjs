@@ -26,7 +26,7 @@ const releasePath = new URL(
 	import.meta.url,
 );
 const release = JSON.parse(await readFile(releasePath, "utf8"));
-// #2978：模型目录的两个固定摘要与经评审的追加条目。
+// #2978：模型目录的两个固定摘要（ADR-0029 起只含固定上游的内置条目）。
 const modelCatalog = JSON.parse(
 	await readFile(
 		new URL(
@@ -35,10 +35,6 @@ const modelCatalog = JSON.parse(
 		),
 		"utf8",
 	),
-);
-const modelCatalogAdditionsPath = new URL(
-	"./codex-models-additions.json",
-	import.meta.url,
 );
 
 // The upstream archive can carry a non-root owner on its executable entry.
@@ -144,13 +140,12 @@ try {
 			await normalizeRootOwnership(legalPath);
 			await chmod(legalPath, 0o444);
 		}
-		// #2978：固定提交的内置目录加上经评审的追加条目；两个摘要都核对后才写入。
+		// #2978：固定提交的内置目录（ADR-0029 起不含追加条目）；两个摘要都核对后才写入。
 		const catalog = buildCodexModelCatalog(
 			await downloadBytes(
 				upstreamCatalogUrl(release.provenance.upstreamCommit),
 				modelCatalog.upstreamSha256,
 			),
-			await readFile(modelCatalogAdditionsPath),
 		);
 		if (sha256(catalog) !== modelCatalog.sha256)
 			throw new Error("Codex model catalog checksum mismatch");

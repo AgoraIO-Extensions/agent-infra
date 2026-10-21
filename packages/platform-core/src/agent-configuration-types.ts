@@ -695,7 +695,7 @@ export class AgentConfigurationError extends Error {
 export interface AgentConfigurationUseCaseDependenciesV1 {
 	readonly defaultRelayKey?: Pick<
 		AgentDefaultRelayKeyDependenciesV1,
-		"candidates" | "encrypt" | "currentIdentity"
+		"candidates" | "encrypt" | "currentIdentity" | "verify"
 	> & { readonly current?: (agentId: string) => Promise<number | null> };
 	readonly standardTemplateReleaseAuthorization?: StandardTemplateReleaseAuthorizationPortV1;
 	readonly transaction: AgentConfigurationTransactionPortV1;

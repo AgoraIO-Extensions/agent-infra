@@ -538,9 +538,7 @@ export function validateRuntimeModelProjectionV4(
 				({ endpoint, modelId, reasoningLevels }) =>
 					!validV4ModelEndpoint(endpoint, content.standardTemplateBinding) ||
 					new Set(reasoningLevels).size !== reasoningLevels.length ||
-					reasoningLevels.some(
-						(level) => !endpoint.capabilities.reasoningLevels.includes(level),
-					) ||
+					// ADR-0029：档位由平台固定并在保存时真实验证，不再要求落在端点登记的档位内。
 					(endpoint.allowedModels !== null &&
 						!endpoint.allowedModels.includes(modelId)),
 			)
