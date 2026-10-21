@@ -311,6 +311,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata",
 			"/api/v2/conversations/{conversationId}/native-capability/invoke",
 			"/api/v2/deployment/configuration",
+			"/api/v2/directory/search",
 			"/api/v2/me/api-credentials",
 			"/api/v2/me/api-credentials/{credentialId}",
 			"/api/v2/me/conversations/recent",
@@ -341,9 +342,60 @@ describe("standard contract artifacts", () => {
 			nativeCapability.responses["202"].content["application/json"].schema
 				.properties.outcome.enum,
 		).toEqual(["accepted", "replayed"]);
+		// #3035：目录搜索声明完整的查询参数与 strict 响应，依赖异常只声明 503。
+		const directorySearch =
+			artifacts.pilotBrowserOpenapiV2.paths["/api/v2/directory/search"].get;
+		expect(directorySearch.operationId).toBe("searchDirectoryV2");
+		expect(directorySearch.parameters).toEqual([
+			{
+				in: "query",
+				name: "kind",
+				required: true,
+				schema: { enum: ["user", "organization"], type: "string" },
+			},
+			{
+				in: "query",
+				name: "q",
+				schema: { default: "", maxLength: 120, type: "string" },
+			},
+			{
+				in: "query",
+				name: "limit",
+				schema: { default: 20, maximum: 50, minimum: 1, type: "integer" },
+			},
+			{
+				in: "query",
+				name: "ids",
+				schema: { pattern: "^[^,]*(?:,[^,]*){0,49}$", type: "string" },
+			},
+		]);
+		expect(Object.keys(directorySearch.responses)).toEqual([
+			"200",
+			"400",
+			"401",
+			"403",
+			"503",
+		]);
+		expect(
+			directorySearch.responses[200].content["application/json"].schema,
+		).toEqual({ $ref: "#/components/schemas/DirectorySearchResponseV1" });
+		expect(
+			artifacts.pilotBrowserOpenapiV2.components.schemas
+				.DirectorySearchResponseV1,
+		).toMatchObject({
+			additionalProperties: false,
+			required: ["items", "query", "kind"],
+		});
+		expect(
+			artifacts.pilotBrowserOpenapiV2.components.schemas.DirectorySearchItemV1,
+		).toMatchObject({
+			additionalProperties: false,
+			required: ["kind", "canonicalId", "displayName"],
+		});
 		for (const path of [
 			"/api/v2/admin/agents/{agentId}",
 			"/api/v2/agents/{agentId}/detail",
+			"/api/v2/directory/search",
 			"/api/v2/skills",
 			"/api/v2/skills/installations",
 			"/api/v2/skills/owned-versions",

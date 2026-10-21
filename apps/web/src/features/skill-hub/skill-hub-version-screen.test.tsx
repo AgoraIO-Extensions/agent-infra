@@ -23,11 +23,16 @@ import {
 import { type ReactNode, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/components/ui/toast";
+import { client as generatedClient } from "../../pilot/generated-v2/client.gen.js";
 import type {
 	SkillHubInstallationResponseV1,
 	SkillHubPublicationResponseV1,
 	SkillHubVersionDetailV1,
 } from "../../pilot/generated-v2/types.gen.js";
+import {
+	directoryRequestUrl,
+	directorySearchResponse,
+} from "../directory-test-fixtures.js";
 import type { SkillHubOwnedVersionsState } from "./skill-hub.js";
 import {
 	type SkillDetailTab,
@@ -110,20 +115,25 @@ function removed(installationId = "installation-1") {
 
 // 发布者显示名由页面级目录读取解析：测试与生产一样经 QueryClient 读取固定目录记录。
 beforeEach(() => {
+	// 生成 Client 默认使用相对地址；jsdom 下的 Request 需要绝对地址。
+	generatedClient.setConfig({ baseUrl: "https://platform.test" });
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (input: string | URL | Request) => {
-			const url = new URL(String(input), "http://localhost");
+			const url = directoryRequestUrl(input);
 			const ids = url.searchParams.get("ids")?.split(",") ?? [];
-			return Response.json({
-				items: [
-					{ kind: "user", canonicalId: "user-owner", displayName: "周可" },
-				].filter(
-					(item) =>
-						item.kind === url.searchParams.get("kind") &&
-						ids.includes(item.canonicalId),
+			return Response.json(
+				directorySearchResponse(
+					url,
+					[
+						{ kind: "user", canonicalId: "user-owner", displayName: "周可" },
+					].filter(
+						(item) =>
+							item.kind === url.searchParams.get("kind") &&
+							ids.includes(item.canonicalId),
+					),
 				),
-			});
+			);
 		}),
 	);
 });

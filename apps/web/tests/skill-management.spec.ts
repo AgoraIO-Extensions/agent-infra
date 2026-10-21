@@ -16,6 +16,7 @@ import {
 	SkillHubReviewRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import { expectNoDuplicateControls } from "./page-health";
 import {
 	computed,
@@ -391,8 +392,9 @@ async function fixture(
 			const url = new URL(request.url());
 			const ids = url.searchParams.get("ids")?.split(",") ?? [];
 			return route.fulfill({
-				json: {
-					items: [
+				json: directorySearchResponse(
+					url,
+					[
 						{ kind: "user", canonicalId: "user-other", displayName: "周可" },
 						{
 							kind: "user",
@@ -410,7 +412,7 @@ async function fixture(
 							item.kind === url.searchParams.get("kind") &&
 							ids.includes(item.canonicalId),
 					),
-				},
+				),
 			});
 		}
 		return route.fulfill({

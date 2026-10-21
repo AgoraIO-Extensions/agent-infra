@@ -893,6 +893,20 @@ export type DeploymentTemplateProjectionV2 = {
     templateId: string;
 };
 
+export type DirectorySearchItemV1 = {
+    canonicalId: string;
+    displayName: string;
+    email?: string;
+    kind: 'user' | 'organization';
+    organizationPath?: string;
+};
+
+export type DirectorySearchResponseV1 = {
+    items: Array<DirectorySearchItemV1>;
+    kind: 'user' | 'organization';
+    query: string;
+};
+
 export type ExecutionDetailProjectionV2 = {
     conversationId: string;
     error: null;
@@ -5432,6 +5446,48 @@ export type GetDeploymentConfigurationV2Responses = {
 };
 
 export type GetDeploymentConfigurationV2Response = GetDeploymentConfigurationV2Responses[keyof GetDeploymentConfigurationV2Responses];
+
+export type SearchDirectoryV2Data = {
+    body?: never;
+    path?: never;
+    query: {
+        kind: 'user' | 'organization';
+        q?: string;
+        limit?: number;
+        ids?: string;
+    };
+    url: '/api/v2/directory/search';
+};
+
+export type SearchDirectoryV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Directory is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type SearchDirectoryV2Error = SearchDirectoryV2Errors[keyof SearchDirectoryV2Errors];
+
+export type SearchDirectoryV2Responses = {
+    /**
+     * Current directory records
+     */
+    200: DirectorySearchResponseV1;
+};
+
+export type SearchDirectoryV2Response = SearchDirectoryV2Responses[keyof SearchDirectoryV2Responses];
 
 export type ListPersonalApiCredentialsV2Data = {
     body?: never;

@@ -9,6 +9,7 @@ import {
 	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, test } from "@playwright/test";
+import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import { pendingApplication } from "../src/features/my-agents/test-fixtures";
 import type { DeploymentConfigurationProjectionV2 } from "../src/pilot/generated-v2/types.gen";
 
@@ -148,14 +149,14 @@ async function tokenFixture(page: Page, role: "owner" | "admin" = "owner") {
 			await directoryGate;
 			const ids = url.searchParams.get("ids")?.split(",");
 			return route.fulfill({
-				json: {
-					schemaVersion: 1,
-					items: directory.filter(
+				json: directorySearchResponse(
+					url,
+					directory.filter(
 						(item) =>
 							item.kind === url.searchParams.get("kind") &&
 							(!ids || ids.includes(item.canonicalId)),
 					),
-				},
+				),
 			});
 		}
 		if (path.endsWith("/wecom-bot") || path.endsWith("/wecom-app"))

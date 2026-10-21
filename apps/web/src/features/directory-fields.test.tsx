@@ -18,7 +18,8 @@ import {
 	within,
 } from "@testing-library/react";
 import { type ReactElement, useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { client as generatedClient } from "../pilot/generated-v2/client.gen.js";
 import { AgentConfigurationScreen } from "./agent-configuration/agent-configuration-screen.js";
 import { ConfigurationTestProviders } from "./agent-configuration/test-router-context.js";
 import { AgentDetailScreen } from "./agent-discovery/agent-detail-screen.js";
@@ -28,6 +29,10 @@ import {
 	DirectoryRecords,
 	type DirectorySelection,
 } from "./directory-fields.js";
+import {
+	directoryRequestUrl,
+	directorySearchResponse,
+} from "./directory-test-fixtures.js";
 
 function render(element: ReactElement) {
 	const client = new QueryClient({
@@ -98,23 +103,30 @@ const items = [
 ];
 function directoryFixture() {
 	const fetch = vi.fn(async (input: string | URL | Request) => {
-		const url = new URL(String(input), "http://localhost");
+		const url = directoryRequestUrl(input);
 		if (!url.pathname.endsWith("/directory/search"))
 			return Response.json({ status: "not_configured" });
 		const ids = url.searchParams.get("ids")?.split(",");
 		const query = url.searchParams.get("q")?.toLowerCase() ?? "";
-		return Response.json({
-			items: items.filter(
-				(item) =>
-					item.kind === url.searchParams.get("kind") &&
-					(!ids || ids.includes(item.canonicalId)) &&
-					JSON.stringify(item).toLowerCase().includes(query),
+		return Response.json(
+			directorySearchResponse(
+				url,
+				items.filter(
+					(item) =>
+						item.kind === url.searchParams.get("kind") &&
+						(!ids || ids.includes(item.canonicalId)) &&
+						JSON.stringify(item).toLowerCase().includes(query),
+				),
 			),
-		});
+		);
 	});
 	vi.stubGlobal("fetch", fetch);
 	return fetch;
 }
+// 生成 Client 默认使用相对地址；jsdom 下的 Request 需要绝对地址。
+beforeEach(() => {
+	generatedClient.setConfig({ baseUrl: "https://platform.test" });
+});
 afterEach(() => {
 	cleanup();
 	vi.unstubAllGlobals();
@@ -132,10 +144,20 @@ describe("Agent detail and Owner configuration directory fields", () => {
 		expect(document.body.textContent).not.toContain("user-2");
 		expect(document.body.textContent).not.toContain("org-1");
 		expect(
-			fetch.mock.calls.some(([url]) => String(url).includes("ids=user-2")),
+			fetch.mock.calls.some(([input]) =>
+				directoryRequestUrl(input)
+					.searchParams.get("ids")
+					?.split(",")
+					.includes("user-2"),
+			),
 		).toBe(true);
 		expect(
-			fetch.mock.calls.some(([url]) => String(url).includes("ids=org-1")),
+			fetch.mock.calls.some(([input]) =>
+				directoryRequestUrl(input)
+					.searchParams.get("ids")
+					?.split(",")
+					.includes("org-1"),
+			),
 		).toBe(true);
 	});
 	it("shows a non-live placeholder while reading availability names", async () => {
@@ -182,7 +204,9 @@ describe("Agent detail and Owner configuration directory fields", () => {
 		cleanup();
 		vi.stubGlobal(
 			"fetch",
-			vi.fn(async () => Response.json({ items: [] })),
+			vi.fn(async (input: string | URL | Request) =>
+				Response.json(directorySearchResponse(directoryRequestUrl(input), [])),
+			),
 		);
 		await renderWithAgentRouter(
 			<AgentDetailScreen state={{ kind: "ready", agent: detailAgent }} />,
@@ -294,16 +318,19 @@ it("does not reuse readable records when a new scope fails", async () => {
 it("resolves all selected records beyond the 50-result search limit", async () => {
 	const ids = Array.from({ length: 51 }, (_, index) => `selected-${index}`);
 	const fetch = vi.fn(async (input: string | URL | Request) => {
-		const url = new URL(String(input), "http://localhost");
+		const url = directoryRequestUrl(input);
 		const batch = url.searchParams.get("ids")?.split(",") ?? [];
 		expect(batch.length).toBeLessThanOrEqual(50);
-		return Response.json({
-			items: batch.map((id) => ({
-				kind: "user",
-				canonicalId: id,
-				displayName: `Name ${id}`,
-			})),
-		});
+		return Response.json(
+			directorySearchResponse(
+				url,
+				batch.map((id) => ({
+					kind: "user",
+					canonicalId: id,
+					displayName: `Name ${id}`,
+				})),
+			),
+		);
 	});
 	vi.stubGlobal("fetch", fetch);
 	render(
@@ -548,9 +575,11 @@ describe("DirectoryPicker interaction", () => {
 		const pending = new Promise<void>((resolve) => {
 			release = resolve;
 		});
-		const fetch = vi.fn(async (_input: string | URL | Request) => {
+		const fetch = vi.fn(async (input: string | URL | Request) => {
 			await pending;
-			return Response.json({ items: [] });
+			return Response.json(
+				directorySearchResponse(directoryRequestUrl(input), []),
+			);
 		});
 		vi.stubGlobal("fetch", fetch);
 		const onChange = vi.fn();
@@ -591,7 +620,9 @@ describe("DirectoryPicker interaction", () => {
 		expect(screen.getAllByText("目录中暂未找到该记录")).toHaveLength(2);
 		// 移除后展开会发起一次搜索；按 ID 反查只发生过一次。
 		expect(
-			fetch.mock.calls.filter(([input]) => String(input).includes("ids=")),
+			fetch.mock.calls.filter(([input]) =>
+				directoryRequestUrl(input).searchParams.has("ids"),
+			),
 		).toHaveLength(1);
 		expect(onChange).toHaveBeenLastCalledWith("user-known\nuser-y", [
 			{

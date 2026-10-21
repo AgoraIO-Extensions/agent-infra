@@ -5107,6 +5107,65 @@
         ],
         "type": "object"
       },
+      "DirectorySearchItemV1": {
+        "additionalProperties": false,
+        "properties": {
+          "canonicalId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "user",
+              "organization"
+            ],
+            "type": "string"
+          },
+          "organizationPath": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "canonicalId",
+          "displayName"
+        ],
+        "type": "object"
+      },
+      "DirectorySearchResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DirectorySearchItemV1"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "user",
+              "organization"
+            ],
+            "type": "string"
+          },
+          "query": {
+            "maxLength": 120,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "query",
+          "kind"
+        ],
+        "type": "object"
+      },
       "ExecutionDetailProjectionV2": {
         "oneOf": [
           {
@@ -18947,6 +19006,111 @@
             "description": "Dependency is temporarily unavailable"
           }
         }
+      }
+    },
+    "/api/v2/directory/search": {
+      "get": {
+        "description": "Active browser session only; the server resolves the current account and refuses disabled accounts. Returns current directory records of the requested kind for pickers and name display; records never grant access. ids looks up at most 50 comma-separated canonical IDs. Undeclared or repeated query parameters are rejected. Directory dependency failures return 503.",
+        "operationId": "searchDirectoryV2",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "user",
+                "organization"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "default": "",
+              "maxLength": 120,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ids",
+            "schema": {
+              "pattern": "^[^,]*(?:,[^,]*){0,49}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectorySearchResponseV1"
+                }
+              }
+            },
+            "description": "Current directory records"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Directory is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ],
+        "summary": "Search current user or organization directory records"
       }
     },
     "/api/v2/me/api-credentials": {

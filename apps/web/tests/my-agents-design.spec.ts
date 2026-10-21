@@ -9,6 +9,7 @@ import {
 	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import {
 	deploymentConfiguration,
 	pendingApplication,
@@ -159,15 +160,15 @@ async function fixture(
 			const ids = url.searchParams.get("ids")?.split(",");
 			const query = (url.searchParams.get("q") ?? "").toLowerCase();
 			return route.fulfill({
-				json: {
-					schemaVersion: 1,
-					items: directoryRecords.filter(
+				json: directorySearchResponse(
+					url,
+					directoryRecords.filter(
 						(item) =>
 							item.kind === url.searchParams.get("kind") &&
 							(!ids || ids.includes(item.canonicalId)) &&
 							JSON.stringify(item).toLowerCase().includes(query),
 					),
-				},
+				),
 			});
 		}
 		if (/\/wecom-(bot|app)$/.test(url.pathname))

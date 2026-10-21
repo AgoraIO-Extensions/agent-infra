@@ -58,7 +58,8 @@ Agent 配置每保存一次（只改可用范围除外）都会产生新的配�
 5. **迁移与兼容。**
    - 回填时，既有修订行的 Runtime 修订等于自身修订号。
    - 缺省值也按“本修订改变了 Runtime 输入”解释：未更新的写入路径保守地退回当前行为，即多重建一次，不会漏掉 Runtime 变化。
-   - 持久状态中的 `sourceConfigurationRevision`、`configRevision` 和 Sandbox `resource_policy.configurationRevision` 保留字段名，含义改为 Runtime 修订。回填后数值不变，已有 Workload、Sandbox 与 Execution 不需要迁移或重新调谐。
+   - Workload 状态的 `sourceConfigurationRevision`、Workload deployment 的 `configRevision`（及对应 `config-revision` 注解）和 Sandbox `resource_policy.configurationRevision` 保留字段名，含义改为 Runtime 修订。回填后数值不变，已有 Workload、Sandbox 与 Execution 不需要迁移或重新调谐。
+   - Secret record/reference 的 `configRevision` 含义不变，仍是引入该 Secret 引用的来源修订（[工程 Spec §10.6](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#106-环境变量与-secret)）。Secret 属于 Runtime 输入，该修订必然推进 Runtime 修订，所以它与 Runtime 修订同属一个版本域，但可以早于 Workload 当前的 Runtime 修订。Workload 的 Runtime 修订是上界：只有来源修订不晚于该修订、且仍被该 Runtime 修订的配置引用的 Secret 物化才能激活或复用（现有 deployment 契约已拒绝 `secretRef.configRevision` 大于 deployment `configRevision`）；激活与复用比较 Workload 的 Runtime 修订，不把二者当作同一个值。
 
 ## 实现前的验证契约
 
