@@ -189,6 +189,59 @@ function requestUrl(input: Parameters<typeof globalThis.fetch>[0]): string {
 }
 
 describe("OCI ImageRegistryAdapter V1", () => {
+	it("follows a standard Bearer challenge for a public registry", async () => {
+		const calls: string[] = [];
+		const adapter = createOciImageRegistryAdapterV1({
+			imageReferencePrefix: "registry.example/agents",
+			endpoint: "https://registry.example",
+			async fetch(input, init) {
+				const url = requestUrl(input);
+				calls.push(
+					`${url} ${new Headers(init?.headers).get("authorization") ?? ""}`,
+				);
+				if (
+					url.endsWith("/v2/codex/manifests/pilot") &&
+					!new Headers(init?.headers).has("authorization")
+				) {
+					return new Response(null, {
+						status: 401,
+						headers: {
+							"www-authenticate":
+								'Bearer realm="https://registry.example/token",service="registry.example",scope="repository:agents/codex:pull"',
+						},
+					});
+				}
+				if (
+					url ===
+					"https://registry.example/token?service=registry.example&scope=repository%3Aagents%2Fcodex%3Apull"
+				)
+					return new Response(JSON.stringify({ token: "opaque-test-token" }), {
+						status: 200,
+						headers: { "content-type": "application/json" },
+					});
+				if (url.endsWith("/v2/codex/manifests/pilot"))
+					return ociManifestResponse(registryManifestBody, manifestDigest);
+				if (url.endsWith(`/v2/codex/blobs/${encodeURIComponent(configDigest)}`))
+					return ociConfigResponse(registryConfigBody);
+				throw new Error(`Unexpected OCI request ${url}`);
+			},
+			policy: {
+				authorize: async () => ({
+					status: "admitted",
+					decisionRef: "decision_bearer",
+					evaluatedAt: "2026-10-21T00:00:00Z",
+				}),
+			},
+		});
+		const result = await adapter.admit(request);
+		expect(result).toMatchObject({
+			status: "admitted",
+			immutableDigest: manifestDigest,
+		});
+		expect(calls.some((call) => call.includes("opaque-test-token"))).toBe(true);
+		expect(JSON.stringify(result)).not.toContain("opaque-test-token");
+	});
+
 	it("admits an approved image without Base Image ancestry as an immutable sanitized candidate", async () => {
 		const adapter = createOciImageRegistryAdapterV1({
 			imageReferencePrefix: "registry.example/agents",
