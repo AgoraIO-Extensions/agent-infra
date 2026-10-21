@@ -490,9 +490,7 @@ export function createBrowserObserveControllerV1(input: {
 		await input.context.route("**/*", async (route: Route) => {
 			try {
 				const requestUrl = route.request().url();
-				const isControlledFixture = input.controlledFixture?.url === requestUrl;
-				if (!isControlledFixture)
-					assertAllowedUrl(requestUrl, allowedOrigins());
+				assertAllowedUrl(requestUrl, allowedOrigins());
 				if (input.controlledFixture) {
 					if (input.controlledFixture.url === requestUrl) {
 						await route.fulfill({
@@ -522,26 +520,24 @@ export function createBrowserObserveControllerV1(input: {
 	async function navigate(url: string): Promise<BrowserPageReferenceV1> {
 		await installPolicy();
 		const capability = readCapability();
-		const isControlledFixture = input.controlledFixture?.url === url;
-		if (!isControlledFixture) assertAllowedUrl(url, allowedOrigins());
+		assertAllowedUrl(url, allowedOrigins());
 		if (input.context.pages().length > capability.policy.maxPages)
 			throw new Error("BROWSER_PAGE_LIMIT_EXCEEDED");
 		const page = input.context.pages()[0] ?? (await input.context.newPage());
 		applyActionTimeout(page);
 		const state = pageStateFor(page, pages);
+		const isControlledFixture = input.controlledFixture?.url === url;
 		if (isControlledFixture) {
-			await page.goto(url, {
-				waitUntil: "commit",
-				timeout: capability.policy.navigationTimeoutMs,
+			await page.setContent(input.controlledFixture?.body ?? "", {
+				waitUntil: "domcontentloaded",
 			});
-			if (!isControlledFixture) assertAllowedUrl(page.url(), allowedOrigins());
 			return { pageId: state.pageId, pageRevision: state.revision };
 		}
 		await page.goto(url, {
 			waitUntil: "domcontentloaded",
 			timeout: capability.policy.navigationTimeoutMs,
 		});
-		if (!isControlledFixture) assertAllowedUrl(page.url(), allowedOrigins());
+		assertAllowedUrl(page.url(), allowedOrigins());
 		return { pageId: state.pageId, pageRevision: state.revision };
 	}
 
