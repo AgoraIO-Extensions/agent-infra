@@ -13,7 +13,7 @@
 解压后的可执行文件和法律文件，最终镜像保留 `/opt/codex/share/` 中的来源与法律信息。
 安装程序同时生成标准 Codex 模板的模型目录 `/opt/codex/share/models.json`：内容就是固定
 commit 的 `codex-rs/models-manager/models.json`，平台不追加、不改写任何条目
-（[ADR-0029](../../docs/adr/0029-source-standard-template-models-from-relay.md)）。内置目录与生成
+（[ADR-0030](../../docs/adr/0030-source-standard-template-models-from-relay.md)）。内置目录与生成
 结果的摘要固定在
 [`codex-models.json`](../../packages/agent-runtime/src/codex-models.json)，任一不符
 即构建失败；正式入口按同一摘要复验该文件，官方 lane 以 `model_catalog_json` 加载它，使固定
