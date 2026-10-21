@@ -30,6 +30,7 @@ import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import {
 	bindSessionSandboxCustomSecretMaterializationV1,
 	createSessionSandboxWorkloadAdapterV1,
+	hasSessionSandboxIdentityV1,
 	isNativeMetadataWorkerOriginV1,
 	type SessionSandboxAllocationV1,
 	type SessionSandboxCustomSecretMaterializationV1,
@@ -618,7 +619,11 @@ function createSessionSandboxAllocationResolverV1(
 			const refs = requireCurrentTemplateTrust
 				? allocation.runtime.custom.secretRefs
 				: [];
-			if (!requireCurrentTemplateTrust && sourceSecret?.data) {
+			if (
+				!requireCurrentTemplateTrust &&
+				sourceSecret?.data &&
+				hasSessionSandboxIdentityV1(sourceSecret, allocation)
+			) {
 				for (const [name, encoded] of Object.entries(sourceSecret.data)) {
 					if (["token", "model-config"].includes(name)) continue;
 					if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
