@@ -1,5 +1,10 @@
+import {
+	ObservabilityStatusProjectionV1Schema,
+	PilotProtocolErrorV1Schema,
+} from "@agent-infra/contracts/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import { captureDesignContract, designViewports } from "./design-contract";
+import { recordApiRequests } from "./generated-client-paths";
 import {
 	computed,
 	expectCleanPage,
@@ -32,6 +37,8 @@ async function fixture(page: Page, { admin = true } = {}) {
 	let hold: Promise<void> | undefined;
 	let release: (() => void) | undefined;
 	const requests: string[] = [];
+	// 页面发出的每个 /api/ 请求都必须能匹配生成 Client 的方法与路径模板（#3058）。
+	const generated = recordApiRequests(page);
 	await page.route("**/api/**", async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
@@ -49,21 +56,30 @@ async function fixture(page: Page, { admin = true } = {}) {
 			});
 		if (path === observabilityPath) {
 			if (hold) await hold;
-			if (reply.status === 200) return route.fulfill({ json: reply.body });
+			// 夹具按契约构造（#3058）：200 为 strict 投影，403 / 503 为协议错误；
+			// 部署未提供查询时的 404 没有协议正文。
+			if (reply.status === 200)
+				return route.fulfill({
+					json: ObservabilityStatusProjectionV1Schema.parse(reply.body),
+				});
+			if (reply.status === 404)
+				return route.fulfill({
+					status: 404,
+					contentType: "text/plain",
+					body: "404 Not Found",
+				});
 			return route.fulfill({
 				status: reply.status,
-				json: {
+				json: PilotProtocolErrorV1Schema.parse({
 					schemaVersion: 1,
 					code:
 						reply.status === 403
-							? "FORBIDDEN"
-							: reply.status === 404
-								? "RESOURCE_UNAVAILABLE"
-								: "DEPENDENCY_UNAVAILABLE",
+							? "RESOURCE_UNAVAILABLE"
+							: "DEPENDENCY_UNAVAILABLE",
 					message: "Controlled observability fixture",
 					retryable: reply.status === 503,
 					traceId: "trace-ops-fixture",
-				},
+				}),
 			});
 		}
 		return route.fulfill({
@@ -79,6 +95,7 @@ async function fixture(page: Page, { admin = true } = {}) {
 	});
 	return {
 		requests,
+		expectGenerated: generated.expectGenerated,
 		observabilityReads: () =>
 			requests.filter((entry) => entry === `GET ${observabilityPath}`).length,
 		writes: () => requests.filter((entry) => !entry.startsWith("GET ")),
@@ -375,6 +392,50 @@ test("not-connected domains follow the design card, chip and facts at 1440×900 
 	await capture(page, info, "ops-not-connected");
 	expect(api.observabilityReads()).toBe(1);
 	expect(api.writes()).toEqual([]);
+	api.expectGenerated("运维观测页");
+});
+
+test("ops reads observability only through the generated client in every query state (#3058)", async ({
+	page,
+}) => {
+	const api = await fixture(page);
+	const main = page.locator("main");
+	// 每种契约响应各读取一次：页面状态不变，且全部 /api/ 请求都在生成 Client 中。
+	for (const [reply, expectState] of [
+		[
+			{ status: 200, body: activeProjection },
+			() => expect(main.locator('[data-slot="card"]')).toHaveCount(4),
+		],
+		[
+			{ status: 403 },
+			() =>
+				expect(main.locator('[data-slot="state-card"]')).toHaveAttribute(
+					"data-kind",
+					"unauthorized",
+				),
+		],
+		[
+			{ status: 404 },
+			() =>
+				expect(
+					main.locator('[data-slot="state-card"]').getByRole("heading", {
+						level: 2,
+					}),
+				).toHaveText("观测查询未接入"),
+		],
+		[
+			{ status: 503 },
+			() =>
+				expect(main.getByRole("alert")).toContainText("观测服务当前不可用。"),
+		],
+	] as const) {
+		api.reply(reply);
+		await page.goto("/ops");
+		await expectState();
+	}
+	expect(api.observabilityReads()).toBe(4);
+	expect(api.writes()).toEqual([]);
+	api.expectGenerated("运维观测页各查询状态");
 });
 
 test("a deployment without the observability query shows the not-connected state card", async ({
@@ -522,6 +583,7 @@ test("a non-administrator sees the unauthorized card and never requests observab
 	await card.getByRole("link", { name: "返回工作台" }).click();
 	await expect(page).toHaveURL(/\/$/);
 	expect(api.observabilityReads()).toBe(0);
+	api.expectGenerated("非系统管理员的运维观测页");
 });
 
 test("a server denial for a stale administrator session shows the same unauthorized card", async ({
@@ -537,6 +599,7 @@ test("a server denial for a stale administrator session shows the same unauthori
 	await expect(main.getByRole("button")).toHaveCount(0);
 	await expect(main.locator('[data-slot="card"]')).toHaveCount(0);
 	expect(api.observabilityReads()).toBe(1);
+	api.expectGenerated("会话过期的系统管理员");
 });
 
 test("exported design viewport matrix ops", async ({ page }, info) => {
