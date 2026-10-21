@@ -130,7 +130,10 @@ export async function probeChromiumLaunchV1() {
 			],
 		};
 	} catch (error) {
-		const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+		const detail =
+			error instanceof Error
+				? `${error.name}: ${error.message}`
+				: String(error);
 		throw new Error(`RUNTIME_BROWSER_LAUNCH_PROBE_FAILED: ${detail}`, {
 			cause: error,
 		});
