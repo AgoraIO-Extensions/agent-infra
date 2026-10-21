@@ -21,20 +21,34 @@ const https = z
 			!url.search
 		);
 	});
+const callbackUrlSchema = z.string().max(2048).url().refine((value) => {
+		const url = new URL(value);
+		if (url.username || url.password || url.search || url.hash) return false;
+		if (url.protocol === "https:") return true;
+		return (
+			url.protocol === "http:" &&
+			(url.hostname === "localhost" ||
+				url.hostname === "127.0.0.1" ||
+				url.hostname === "[::1]")
+		);
+	});
 const patBinding = z.strictObject({
 	consumerId: OpaqueIdV1Schema,
 	bindingEndpoint: https,
 });
-export const RuntimeOAuthConfigurationV1Schema = z.strictObject({
+const runtimeOAuthConfiguration = z.strictObject({
 	schemaVersion: z.literal(1),
 	ref: OpaqueIdV1Schema,
 	revision: OpaqueIdV1Schema,
 	clientId: OpaqueIdV1Schema,
+	/** `dcr` makes the protected Runtime register one native client per install. */
+	clientRegistration: z.literal("dcr").optional(),
+	registrationEndpoint: https.optional(),
 	issuer: https,
 	authorizationEndpoint: https,
 	tokenEndpoint: https,
 	revocationEndpoint: https,
-	callbackUrl: https,
+	callbackUrl: callbackUrlSchema,
 	runtimeOrigin: https,
 	resource: z.string().max(2048),
 	scope: z.literal("mcp"),
@@ -43,6 +57,30 @@ export const RuntimeOAuthConfigurationV1Schema = z.strictObject({
 	/** Optional approved Connection PAT binding route; OAuth remains the default. */
 	patBinding: patBinding.optional(),
 });
+export const RuntimeOAuthConfigurationV1Schema = runtimeOAuthConfiguration.superRefine(
+	(value, context) => {
+		if (value.clientRegistration === "dcr") {
+			if (value.clientId !== "dcr")
+				context.addIssue({
+					code: z.ZodIssueCode.custom,
+					path: ["clientId"],
+					message: "DCR configuration must use the dcr client marker",
+				});
+			if (value.registrationEndpoint === undefined)
+				context.addIssue({
+					code: z.ZodIssueCode.custom,
+					path: ["registrationEndpoint"],
+					message: "DCR configuration requires registrationEndpoint",
+				});
+		} else if (value.registrationEndpoint !== undefined) {
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["registrationEndpoint"],
+				message: "registrationEndpoint requires clientRegistration=dcr",
+			});
+		}
+	},
+);
 export type RuntimeOAuthConfigurationV1 = z.infer<
 	typeof RuntimeOAuthConfigurationV1Schema
 >;

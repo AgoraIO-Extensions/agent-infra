@@ -310,11 +310,28 @@ export async function createProtectedRuntimeOAuthClient(options: {
 	>;
 	fetch?: Parameters<typeof exchangeStandardOAuthCode>[0]["fetch"];
 }) {
-	const configuration = RuntimeOAuthConfigurationV1Schema.parse(
+	const target = structuredClone(options.target);
+	const parsedConfiguration = RuntimeOAuthConfigurationV1Schema.parse(
 		options.configuration,
 	);
+	// The deployment resolver performs DCR and binds the returned client_id to
+	// the approved Agent profile. Host uses that nonsecret binding for OAuth;
+	// it never registers a client or guesses a Consumer/Instance mapping here.
+	const configuration =
+		parsedConfiguration.clientRegistration === "dcr"
+			? (() => {
+					const {
+						clientRegistration: _clientRegistration,
+						registrationEndpoint: _registrationEndpoint,
+						...staticConfiguration
+					} = parsedConfiguration;
+					return RuntimeOAuthConfigurationV1Schema.parse({
+						...staticConfiguration,
+						clientId: target.profile.consumerId,
+					});
+				})()
+			: parsedConfiguration;
 	const configurationFingerprint = digest(configuration);
-	const target = structuredClone(options.target);
 	const principal = RuntimePrincipalV1Schema.parse(
 		structuredClone(options.principal),
 	);

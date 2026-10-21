@@ -726,6 +726,10 @@
           "minLength": 1,
           "type": "string"
         },
+        "clientRegistration": {
+          "const": "dcr",
+          "type": "string"
+        },
         "configFingerprint": {
           "pattern": "^[a-f0-9]{64}$",
           "type": "string"
@@ -756,6 +760,11 @@
         },
         "ref": {
           "minLength": 1,
+          "type": "string"
+        },
+        "registrationEndpoint": {
+          "format": "uri",
+          "maxLength": 2048,
           "type": "string"
         },
         "resource": {
