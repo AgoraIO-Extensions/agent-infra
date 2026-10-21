@@ -853,6 +853,38 @@ describe("Conversation HTTP routes", () => {
 		});
 	});
 
+	it("maps a regenerate on an unavailable Conversation to the same public error", async () => {
+		const input = dependencies();
+		input.commands(identity).regenerate = vi
+			.fn()
+			.mockResolvedValue({ outcome: "denied" });
+		const current = await input.query.get(
+			{ actorId: identity.userId, channelId: "web" },
+			"conversation-1",
+		);
+		if (!current) throw new Error("Expected Conversation fixture");
+		input.query.get = vi.fn().mockResolvedValue({
+			...current,
+			conversation: { ...conversation, status: "unavailable" },
+		});
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/regenerations",
+			{
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({ schemaVersion: 1, messageId: "message-1" }),
+			},
+		);
+
+		expect(response.status).toBe(409);
+		expect(
+			PilotProtocolErrorV1Schema.parse(await response.json()),
+		).toMatchObject({
+			code: "CONVERSATION_UNAVAILABLE",
+			retryable: false,
+		});
+	});
+
 	it("does not inspect an actor-scoped row after Conversation access is revoked", async () => {
 		const input = dependencies({
 			authorization: {

@@ -1371,6 +1371,69 @@ describe("PostgreSQL Conversation command transaction", () => {
 		}
 	});
 
+	it("denies a new message, supplement and regenerate once the Conversation is unavailable (ADR-0029)", async () => {
+		await persistConformanceModelConfiguration(undefined, authority);
+		const { transaction, useCase } = createConversation(authority);
+		try {
+			const created = await useCase.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "unavailable-create",
+				requestId: "unavailable-create",
+				traceId: "unavailable",
+			});
+			if (created.outcome !== "accepted")
+				throw new Error("Expected Session creation");
+			const conversationId = created.result.conversationId;
+			const message = {
+				schemaVersion: 1 as const,
+				command: "message" as const,
+				conversationId,
+				text: "controlled message",
+				requestId: "unavailable-message",
+				traceId: "unavailable",
+			};
+			const accepted = await useCase.accept({
+				...message,
+				idempotencyKey: "unavailable-message",
+			});
+			if (accepted.outcome !== "accepted" || !accepted.result.messageId)
+				throw new Error("Expected the first message");
+			// 回复仍在进行时会话变为不可用：补充指令也必须被拒绝。
+			await client`update platform.conversations set status = 'unavailable' where id = ${conversationId}`;
+			const counts = await commandEffectCounts();
+			expect(
+				await useCase.accept({
+					...message,
+					idempotencyKey: "unavailable-supplement",
+				}),
+			).toEqual({ outcome: "denied" });
+			// Worker 以 RUNTIME_SESSION_BLOCKED 收敛后：执行失败、会话不可用。
+			await client`update platform.conversation_executions set status = 'failed'
+				where execution_id = ${accepted.result.executionId}`;
+			expect(
+				await useCase.accept({
+					...message,
+					idempotencyKey: "unavailable-next-message",
+				}),
+			).toEqual({ outcome: "denied" });
+			expect(
+				await useCase.regenerate({
+					schemaVersion: 1,
+					command: "regenerate",
+					conversationId,
+					sourceMessageId: accepted.result.messageId,
+					idempotencyKey: "unavailable-regenerate",
+					requestId: "unavailable-regenerate",
+					traceId: "unavailable",
+				}),
+			).toEqual({ outcome: "denied" });
+			expect(await commandEffectCounts()).toEqual(counts);
+		} finally {
+			await transaction.close();
+		}
+	});
+
 	it("keeps a Web Session read-only until its own Sandbox is ready and preserves accepted replay when readiness is lost", async () => {
 		await persistConformanceModelConfiguration(
 			conformanceModelConfiguration,
