@@ -10,6 +10,7 @@ import {
 	SkillHubVersionMetadataV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, test } from "@playwright/test";
+import { expectNoDuplicateControls } from "./page-health";
 import {
 	expectCleanPage,
 	expectEmptyRows,
@@ -875,6 +876,7 @@ test.describe("Skill version detail", () => {
 	test("shows SKILL.md as text with its resources and re-reads the library after install and removal (K-02)", async ({
 		page,
 	}) => {
+		const errors = trackPageErrors(page);
 		const control = await fixture(page);
 		await page.goto("/skills/release-notes-v2");
 		const main = page.locator("#main-content");
@@ -942,6 +944,8 @@ test.describe("Skill version detail", () => {
 		const headingTop = async () =>
 			(await page.getByRole("heading", { level: 1 }).boundingBox())?.y ?? 0;
 		const installedTop = await headingTop();
+		// AC-2：页头「配置 Agent 绑定」与侧栏「移出我的库」不同名，同页没有同名控件。
+		await expectNoDuplicateControls(page, "Skill 详情（已加入）");
 
 		const remove = summary.getByRole("button", { name: "移出我的库" });
 		const readsBeforeRemoval = control.requests.details.length;
@@ -963,11 +967,8 @@ test.describe("Skill version detail", () => {
 			.toBeGreaterThan(readsBeforeRemoval);
 		await page.reload();
 		await expect(library).toHaveText("尚未安装");
-		expect(
-			await page.evaluate(
-				() => document.documentElement.scrollWidth <= innerWidth,
-			),
-		).toBe(true);
+		await expectNoDuplicateControls(page, "Skill 详情");
+		await expectCleanPage(page, errors);
 	});
 
 	test("lets the publisher read back pending and rejected versions from My Skill (K-02)", async ({

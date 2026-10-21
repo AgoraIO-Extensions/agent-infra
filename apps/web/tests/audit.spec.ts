@@ -7,12 +7,15 @@ import {
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, test } from "@playwright/test";
 import { captureDesignContract, designViewports } from "./design-contract";
+import { expectNoDuplicateControls } from "./page-health";
 import {
 	expectCardTable,
+	expectCleanPage,
 	expectDesktopTable,
 	expectFieldControl,
 	expectFieldLabel,
 	expectPageHeadTop,
+	trackPageErrors,
 } from "./primitive-styles";
 
 const session = (role: "employee" | "admin") => ({
@@ -1140,8 +1143,7 @@ test("personal audit goes from filters straight to the table; platform audit kee
 	page,
 }, info) => {
 	const mobile = info.project.name === "mobile";
-	const errors: string[] = [];
-	page.on("pageerror", (error) => errors.push(error.message));
+	const errors = trackPageErrors(page);
 	await fixture(page);
 	await page.goto("/audit");
 	const table = page.locator("table.audit-table");
@@ -1160,11 +1162,9 @@ test("personal audit goes from filters straight to the table; platform audit kee
 	).toBe(true);
 	await expect(main.getByRole("button", { name: "查询" })).toBeVisible();
 	await expect(main.getByRole("button", { name: "下一页" })).toBeVisible();
-	expect(
-		await page.evaluate(
-			() => document.documentElement.scrollWidth <= innerWidth,
-		),
-	).toBe(true);
+	// AC-2：同一页面没有同名控件，没有控制台错误与横向溢出。
+	await expectNoDuplicateControls(page, "我的审计");
+	await expectCleanPage(page, errors);
 
 	await fixture(page, "admin");
 	await page.goto("/admin/audit");
@@ -1172,10 +1172,6 @@ test("personal audit goes from filters straight to the table; platform audit kee
 		main.getByRole("heading", { level: 2, name: "平台操作记录" }),
 	).toBeVisible();
 	await expect(main.getByText("最小审计数据", { exact: true })).toBeVisible();
-	expect(
-		await page.evaluate(
-			() => document.documentElement.scrollWidth <= innerWidth,
-		),
-	).toBe(true);
-	expect(errors).toEqual([]);
+	await expectNoDuplicateControls(page, "平台审计");
+	await expectCleanPage(page, errors);
 });

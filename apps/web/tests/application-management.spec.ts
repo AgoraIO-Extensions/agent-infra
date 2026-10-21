@@ -3,6 +3,8 @@ import {
 	ApplicationMetadataV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, test } from "@playwright/test";
+import { duplicateControlNames } from "./page-hygiene";
+import { expectCleanPage, trackPageErrors } from "./primitive-styles";
 
 const application = ApplicationMetadataV1Schema.parse({
 	applicationId: "application-browser-1",
@@ -361,8 +363,7 @@ test("application summary follows the design facts, headings and plain disable b
 	page,
 }, info) => {
 	const mobile = info.project.name === "mobile";
-	const errors: string[] = [];
-	page.on("pageerror", (error) => errors.push(error.message));
+	const errors = trackPageErrors(page);
 	await fixture(page);
 	await page.goto(
 		`/my-settings/api-credentials?applicationId=${application.applicationId}`,
@@ -415,10 +416,12 @@ test("application summary follows the design facts, headings and plain disable b
 	});
 	await expect(disable.locator("svg")).toHaveCount(0);
 	await expect(disable).toHaveCSS("border-top-width", "1px");
-	expect(
-		await page.evaluate(
-			() => document.documentElement.scrollWidth <= innerWidth,
-		),
-	).toBe(true);
-	expect(errors).toEqual([]);
+	// AC-2：同一页面没有同名按钮或链接，没有控制台错误与横向溢出。个人凭证与应用凭证的权限
+	// 复选框选项相同，各自在「权限范围：个人凭证 / 应用凭证」命名分组内，由分组名区分。
+	expect(await duplicateControlNames(page)).toEqual([]);
+	for (const group of ["权限范围：个人凭证", "权限范围：应用凭证"])
+		await expect(
+			page.getByRole("group", { name: group, exact: true }),
+		).toHaveCount(1);
+	await expectCleanPage(page, errors);
 });

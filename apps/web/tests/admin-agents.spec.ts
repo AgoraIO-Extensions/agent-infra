@@ -3,12 +3,15 @@ import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
 import { expect, type Page, type TestInfo, test } from "@playwright/test";
 import { deploymentConfiguration } from "../src/features/my-agents/test-fixtures";
 import { captureDesignContract, designViewports } from "./design-contract";
+import { expectNoDuplicateControls } from "./page-health";
 import {
 	expectCardTable,
+	expectCleanPage,
 	expectDesktopTable,
 	expectFieldLabel,
 	expectPageHeadTop,
 	expectSearchInput,
+	trackPageErrors,
 } from "./primitive-styles";
 
 const baseline = AgentProjectionV2Schema.parse(
@@ -992,8 +995,7 @@ test("governance pickers and status lines follow the design spacing (V-02, V-03)
 	page,
 }, info) => {
 	const mobile = info.project.name === "mobile";
-	const errors: string[] = [];
-	page.on("pageerror", (error) => errors.push(error.message));
+	const errors = trackPageErrors(page);
 	await fixture(page);
 	await page.goto("/admin/agents");
 	await expect(page.getByRole("table", { name: "已创建 Agent" })).toBeVisible();
@@ -1042,10 +1044,7 @@ test("governance pickers and status lines follow the design spacing (V-02, V-03)
 			),
 		).toBe(16);
 	}
-	expect(
-		await page.evaluate(
-			() => document.documentElement.scrollWidth <= innerWidth,
-		),
-	).toBe(true);
-	expect(errors).toEqual([]);
+	// AC-2：同一页面没有同名控件，没有控制台错误与横向溢出。
+	await expectNoDuplicateControls(page, "Agent 管理");
+	await expectCleanPage(page, errors);
 });

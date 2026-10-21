@@ -1003,6 +1003,8 @@ test("Skill review lists pending versions, reviews them and re-reads the queue (
 		/pending_review|ORGANIZATION|org-release|user-other|aaaaaaaa/,
 	);
 	await expect(main.locator("input, textarea")).toHaveCount(0);
+	// AC-2：各行「审阅：{名称 · 版本}」互不同名。
+	await expectNoDuplicateControls(page, "Skill 审核");
 
 	// 驳回理由必填：空理由不发出请求。
 	await main
