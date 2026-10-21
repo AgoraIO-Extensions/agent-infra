@@ -5378,9 +5378,9 @@ test.describe("Agent detail design alignment", () => {
 			const openBox = await open.boundingBox();
 			const copyBox = await copy.boundingBox();
 			if (!openBox || !copyBox) throw new Error("Expected notice geometry");
-			// 设计 .connection-notice-action .btn{min-height:40px}，内容撑开后实测 41.4px。
-			await expect(open).toHaveCSS("min-height", "40px");
-			expect(openBox.height).toBeLessThan(44);
+			// D-01（#3052）：与对话页 Z-11 一致为 44px 触达高度，不沿用导出稿桌面的 40px。
+			await expect(open).toHaveCSS("min-height", "44px");
+			expect(openBox.height).toBeGreaterThanOrEqual(44);
 			expect(openBox.x).toBeGreaterThanOrEqual(copyBox.x + copyBox.width);
 		} else {
 			// D-01：≤767px 卡片纵向，按钮整宽、上间距 10px、触控高度 ≥ 44px。
@@ -5418,6 +5418,39 @@ test.describe("Agent detail design alignment", () => {
 		expect(mainRequests).toEqual([]);
 		await page.reload();
 		await expect(notice).toHaveAttribute("data-state", "needs-auth");
+	});
+
+	// D-01（#3052 AC-2）：1440×900 与 390×844 下「打开 Connection」与对话页 Z-11 同为 44px，页面无横向溢出。
+	test("Connection notice keeps 打开 Connection at the 44px touch height at 1440 by 900 and 390 by 844 (D-01)", async ({
+		page,
+	}, info) => {
+		const viewport =
+			info.project.name === "mobile"
+				? { width: 390, height: 844 }
+				: { width: 1440, height: 900 };
+		await page.setViewportSize(viewport);
+		await fixture(page, "employee");
+		await stubConnectionCapability(page, availableCapability());
+		await page.goto("/agents/agent-pilot-1");
+		const notice = connectorSection(page).locator(".connection-notice");
+		await expect(notice).toHaveAttribute("data-state", "needs-auth");
+		const open = notice.getByRole("link", { name: "打开 Connection" });
+		await expect(open).toBeVisible();
+		await expect(open).toHaveCSS("min-height", "44px");
+		const openBox = await open.boundingBox();
+		const noticeBox = await notice.boundingBox();
+		if (!openBox || !noticeBox) throw new Error("Expected notice geometry");
+		expect(openBox.height).toBeGreaterThanOrEqual(44);
+		// 按钮与提示卡都留在视口内，页面没有横向滚动。
+		expect(openBox.x + openBox.width).toBeLessThanOrEqual(
+			noticeBox.x + noticeBox.width,
+		);
+		expect(noticeBox.x + noticeBox.width).toBeLessThanOrEqual(viewport.width);
+		expect(
+			await page.evaluate(
+				() => document.documentElement.scrollWidth <= innerWidth,
+			),
+		).toBe(true);
 	});
 
 	test("an Agent without the Connection capability shows no notice or link", async ({
