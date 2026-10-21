@@ -7,7 +7,12 @@ import {
 	waitFor,
 	within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { client as generatedClient } from "../../pilot/generated-v2/client.gen.js";
+import {
+	directoryRequestUrl,
+	directorySearchResponse,
+} from "../directory-test-fixtures.js";
 import { AdminUserGovernance } from "./admin-user-governance.js";
 
 // 禁用确认弹窗用目录记录显示员工姓名与邮箱，需要 QueryClient。
@@ -25,11 +30,19 @@ const { getPlatformUserDisabledV2, setPlatformUserDisabledV2 } = vi.hoisted(
 		setPlatformUserDisabledV2: vi.fn(),
 	}),
 );
-vi.mock("../../pilot/generated-v2/sdk.gen.js", () => ({
+// 只替换禁用状态的两个调用；目录选择器仍经真实生成的 searchDirectoryV2 读取下面的 fetch 夹具。
+vi.mock("../../pilot/generated-v2/sdk.gen.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../pilot/generated-v2/sdk.gen.js")
+	>()),
 	getPlatformUserDisabledV2,
 	setPlatformUserDisabledV2,
 }));
 
+beforeEach(() => {
+	// 生成 Client 默认使用相对地址；jsdom 下的 Request 需要绝对地址。
+	generatedClient.setConfig({ baseUrl: "https://platform.test" });
+});
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
@@ -38,19 +51,17 @@ afterEach(() => {
 function setupDirectory() {
 	vi.stubGlobal(
 		"fetch",
-		vi.fn(async () =>
-			Response.json({
-				items: [
+		vi.fn(async (input: string | URL | Request) =>
+			Response.json(
+				directorySearchResponse(directoryRequestUrl(input), [
 					{
 						kind: "user",
 						canonicalId: "11111111-1111-4111-8111-111111111111",
 						displayName: "Alice",
 						email: "alice@example.test",
 					},
-				],
-				kind: "user",
-				query: "",
-			}),
+				]),
+			),
 		),
 	);
 }

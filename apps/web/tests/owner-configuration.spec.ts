@@ -14,6 +14,7 @@ import {
 	pilotFakeScenariosV2,
 } from "@agent-infra/test-support/pilot";
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import type {
 	DeploymentConfigurationProjectionV2,
 	SkillHubAgentBindingStatusV1,
@@ -292,9 +293,9 @@ async function ownerConfigFixture(
 				},
 			];
 			return route.fulfill({
-				json: {
-					schemaVersion: 1,
-					items: items.filter(
+				json: directorySearchResponse(
+					url,
+					items.filter(
 						(item) =>
 							item.kind === url.searchParams.get("kind") &&
 							(!url.searchParams.has("ids") ||
@@ -303,7 +304,7 @@ async function ownerConfigFixture(
 									?.split(",")
 									.includes(item.canonicalId)),
 					),
-				},
+				),
 			});
 		}
 		if (/\/wecom-(bot|app)$/.test(pathname))

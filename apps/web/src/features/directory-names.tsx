@@ -1,10 +1,16 @@
+import {
+	DirectorySearchResponseV1Schema,
+	directorySearchMaxIdsV1,
+} from "@agent-infra/contracts/pilot";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { IdentifierText } from "@/components/ui/identifier-text";
+import { searchDirectoryV2 } from "../pilot/generated-v2/sdk.gen.js";
+import type { DirectorySearchItemV1 } from "../pilot/generated-v2/types.gen.js";
 
-export type DirectoryKind = "user" | "organization";
+export type DirectoryKind = DirectorySearchItemV1["kind"];
 export type DirectoryOption = {
 	id: string;
 	name: string;
@@ -16,7 +22,10 @@ export type DirectoryTarget =
 	| { kind: "user"; userId: string }
 	| { kind: "organization"; organizationId: string };
 
-/** 目录搜索与按 canonical ID 反查；ID 按 50 个一批读取。 */
+/**
+ * 目录搜索与按 canonical ID 反查，只经生成的 V2 Client；响应按同一份契约 Schema 校验。
+ * ID 按契约上限（50 个）一批读取。
+ */
 export async function readDirectory(
 	kind: DirectoryKind,
 	query: string,
@@ -24,42 +33,34 @@ export async function readDirectory(
 	signal: AbortSignal,
 ): Promise<DirectoryOption[]> {
 	const batches: readonly string[][] = ids.length
-		? Array.from({ length: Math.ceil(ids.length / 50) }, (_, index) =>
-				ids.slice(index * 50, (index + 1) * 50),
+		? Array.from(
+				{ length: Math.ceil(ids.length / directorySearchMaxIdsV1) },
+				(_, index) =>
+					ids.slice(
+						index * directorySearchMaxIdsV1,
+						(index + 1) * directorySearchMaxIdsV1,
+					),
 			)
 		: [[]];
 	const results = await Promise.all(
 		batches.map(async (batch) => {
-			const params = new URLSearchParams({ kind, q: query, limit: "50" });
-			if (batch.length) params.set("ids", batch.join(","));
-			const response = await fetch(`/api/v2/directory/search?${params}`, {
+			const result = await searchDirectoryV2({
+				query: {
+					kind,
+					q: query,
+					limit: 50,
+					...(batch.length ? { ids: batch.join(",") } : {}),
+				},
 				signal,
-				headers: { Accept: "application/json" },
+				throwOnError: false,
 			});
-			if (!response.ok) throw new Error("directory search unavailable");
-			const body = (await response.json()) as {
-				items?: {
-					kind: DirectoryKind;
-					canonicalId: string;
-					displayName: string;
-					email?: string;
-					organizationPath?: string;
-				}[];
-			};
-			if (
-				!Array.isArray(body.items) ||
-				body.items.some(
-					(item) =>
-						!item ||
-						typeof item.canonicalId !== "string" ||
-						typeof item.displayName !== "string" ||
-						(item.email !== undefined && typeof item.email !== "string") ||
-						(item.organizationPath !== undefined &&
-							typeof item.organizationPath !== "string"),
-				)
-			)
-				throw new Error("directory response invalid");
-			return body.items
+			// 传输层可能忽略取消后仍然返回，取消时一律按取消处理。
+			signal.throwIfAborted();
+			if (result.response?.status !== 200)
+				throw new Error("directory search unavailable");
+			const body = DirectorySearchResponseV1Schema.safeParse(result.data);
+			if (!body.success) throw new Error("directory response invalid");
+			return body.data.items
 				.filter(
 					(item) =>
 						item.kind === kind &&

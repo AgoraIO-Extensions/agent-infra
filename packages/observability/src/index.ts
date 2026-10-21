@@ -136,6 +136,8 @@ const operationalFailureSteps = new Set([
 	"identity.hydrate",
 	// 准入时读取当前权限事实（目录成员与组织）失败（#2696）。
 	"authority.load",
+	// 浏览器目录搜索读取部署目录失败或返回不符合契约的记录（#3035）。
+	"directory.search",
 	"projection.read",
 	"store.query",
 	"store.management_transaction",

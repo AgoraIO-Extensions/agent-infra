@@ -648,6 +648,102 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the pinned directory search V2 read (#3035)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const searchPath = "/api/v2/directory/search";
+		const previous = structuredClone(current);
+		delete previous.paths[searchPath];
+		delete previous.components.schemas.DirectorySearchItemV1;
+		delete previous.components.schemas.DirectorySearchResponseV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "directory-search-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			const item = (value: typeof current) =>
+				value.components.schemas.DirectorySearchItemV1;
+			const parameter = (value: typeof current, name: string) =>
+				value.paths[searchPath].get.parameters.find(
+					(entry: { name: string }) => entry.name === name,
+				);
+			for (const mutate of [
+				// 只接受平台会话，不能按查询参数指定身份或组织范围。
+				(value: typeof current) => {
+					value.paths[searchPath].get.security = [];
+				},
+				(value: typeof current) => {
+					value.paths[searchPath].get.parameters.push({
+						in: "query",
+						name: "organizationId",
+						schema: { type: "string" },
+					});
+				},
+				// 查询参数的取值范围不能放宽。
+				(value: typeof current) => {
+					parameter(value, "limit").schema.maximum = 500;
+				},
+				(value: typeof current) => {
+					delete parameter(value, "ids").schema.pattern;
+				},
+				(value: typeof current) => {
+					parameter(value, "kind").schema.enum.push("group");
+				},
+				// 记录保持 strict，不能带出未声明字段。
+				(value: typeof current) => {
+					item(value).additionalProperties = true;
+				},
+				(value: typeof current) => {
+					item(value).properties.phone = { type: "string" };
+				},
+				(value: typeof current) => {
+					item(value).required = ["kind", "canonicalId"];
+				},
+				// 既有响应形状不变：不新增或删除顶层字段。
+				(value: typeof current) => {
+					value.components.schemas.DirectorySearchResponseV1.properties.schemaVersion =
+						{ const: 1, type: "number" };
+				},
+				(value: typeof current) => {
+					value.components.schemas.DirectorySearchResponseV1.required = [
+						"items",
+					];
+				},
+				// 依赖异常只返回契约内的稳定错误码，不新增 500。
+				(value: typeof current) => {
+					value.paths[searchPath].get.responses["500"] = structuredClone(
+						value.paths[searchPath].get.responses["503"],
+					);
+				},
+				(value: typeof current) => {
+					value.paths[searchPath].get.operationId = "unreviewed";
+				},
+				(value: typeof current) => {
+					value.paths["/api/v3/directory/search"] = structuredClone(
+						value.paths[searchPath],
+					);
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the pinned Skill Hub review queue read (#2905)", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -3957,6 +4053,7 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/agents/{agentId}/skills/current-version" &&
 				path !== "/api/v2/agents/{agentId}/detail" &&
 				path !== "/api/v2/admin/agents/{agentId}" &&
+				path !== "/api/v2/directory/search" &&
 				path !== "/api/v2/skills/projects" &&
 				path !== "/api/v2/skills/projects/{projectId}" &&
 				path !== "/api/v2/skills/projects/{projectId}/content" &&

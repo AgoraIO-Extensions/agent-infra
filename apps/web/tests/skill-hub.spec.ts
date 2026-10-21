@@ -10,6 +10,7 @@ import {
 	SkillHubVersionMetadataV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, test } from "@playwright/test";
+import { directorySearchResponse } from "../src/features/directory-test-fixtures";
 import { expectNoDuplicateControls } from "./page-health";
 import {
 	expectCleanPage,
@@ -218,8 +219,9 @@ async function fixture(page: Page, options: Fixture = {}) {
 			const url = new URL(request.url());
 			const ids = url.searchParams.get("ids")?.split(",") ?? [];
 			return route.fulfill({
-				json: {
-					items: [
+				json: directorySearchResponse(
+					url,
+					[
 						{ kind: "user", canonicalId: ownerId, displayName: "Skill 发布者" },
 						{
 							kind: "user",
@@ -231,7 +233,7 @@ async function fixture(page: Page, options: Fixture = {}) {
 							item.kind === url.searchParams.get("kind") &&
 							ids.includes(item.canonicalId),
 					),
-				},
+				),
 			});
 		}
 		if (path === "/api/v2/skills/projects" && request.method() === "GET")

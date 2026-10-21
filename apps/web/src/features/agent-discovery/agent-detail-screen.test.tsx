@@ -10,8 +10,12 @@ import {
 	waitFor,
 	within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { client as generatedClient } from "../../pilot/generated-v2/client.gen.js";
+import {
+	directoryRequestUrl,
+	directorySearchResponse,
+} from "../directory-test-fixtures.js";
 import { AgentDetailScreen } from "./agent-detail-screen.js";
 import { renderWithAgentRouter } from "./test-router.js";
 
@@ -24,6 +28,10 @@ const readyAgent = AgentDetailProjectionV1Schema.parse({
 });
 const connectionUrl = "https://connection.example.test/mcp";
 
+beforeEach(() => {
+	// 生成 Client 默认使用相对地址；jsdom 下的 Request 需要绝对地址。
+	generatedClient.setConfig({ baseUrl: "https://platform.test" });
+});
 afterEach(() => {
 	vi.unstubAllGlobals();
 });
@@ -577,19 +585,19 @@ describe("AgentDetailScreen", () => {
 
 	it("shows an Owner's organization path from the directory and only the name when it cannot be read", async () => {
 		const fetch = vi.fn(async (input: string | URL | Request) => {
-			const url = new URL(String(input), "http://localhost");
+			const url = directoryRequestUrl(input);
 			if (url.searchParams.get("kind") !== "user")
-				return Response.json({ items: [] });
-			return Response.json({
-				items: [
+				return Response.json(directorySearchResponse(url, []));
+			return Response.json(
+				directorySearchResponse(url, [
 					{
 						kind: "user",
 						canonicalId: "user-owner-1",
 						displayName: "Owner",
 						organizationPath: "研发 / 平台工程",
 					},
-				],
-			});
+				]),
+			);
 		});
 		vi.stubGlobal("fetch", fetch);
 		const view = await renderWithAgentRouter(
