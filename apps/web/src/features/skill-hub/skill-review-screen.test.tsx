@@ -26,7 +26,7 @@ let directoryRecords: {
 // 审阅弹窗读取的待审正文（#3046）：默认返回一段含 HTML 的正文，用例可替换为失败或其他内容。
 const reviewBody =
 	"# incident-summary\n汇总事故时间线。\n<script>alert(1)</script>\n";
-let reviewContent: (skillVersionId: string) => Response;
+let reviewContent: (skillVersionId: string) => Response | Promise<Response>;
 let contentReads: string[] = [];
 const contentResponse = (
 	skillVersionId: string,
@@ -402,11 +402,22 @@ describe("SkillReviewDialog pending SKILL.md", () => {
 	}
 
 	it("shows the pending body as plain text below the facts and above the review reason", async () => {
+		// 先挂起响应，确定地观察读取中的反馈，再放行。
+		let release = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		reviewContent = async (skillVersionId) => {
+			await held;
+			return contentResponse(skillVersionId);
+		};
 		renderReviews();
 		const dialog = await openReview();
-		expect(within(dialog).getByRole("status").textContent).toBe(
+		expect((await within(dialog).findByRole("status")).textContent).toBe(
 			"正在读取 SKILL.md 正文…",
 		);
+		expect(dialog.querySelector(".skill-code")).toBeNull();
+		release();
 		const region = await codeRegion(dialog);
 		const pre = region.querySelector("pre");
 		// 正文按原样显示为文本，其中的 HTML 不被解析，脚本不执行。

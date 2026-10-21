@@ -10,15 +10,18 @@ import {
 	SkillHubProjectPublicationRequestV1Schema,
 	SkillHubProviderImportRequestV1Schema,
 	SkillHubPublicationResponseV1Schema,
+	SkillHubReviewContentV1Schema,
 	SkillHubReviewQueueItemV1Schema,
 	SkillHubReviewQueuePageV1Schema,
 	SkillHubReviewRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { expectNoDuplicateControls } from "./page-health";
 import {
+	computed,
 	expectCleanPage,
 	expectSkillDialog,
+	resolved,
 	trackPageErrors,
 } from "./primitive-styles";
 
@@ -38,6 +41,12 @@ const project = {
 type InstallationItem = ReturnType<
 	typeof SkillHubInstallationListItemV1Schema.parse
 >;
+/** 待审正文读取的一步：HTTP 失败码、内容不可用、截断或完整正文。 */
+type ReviewContentStep = number | "unavailable" | "truncated" | "available";
+// 待审正文含 HTML 与脚本标记：页面只能按纯文本显示，不能解析或执行。
+const reviewBody = (skillVersionId: string) =>
+	`# ${skillVersionId}\n核对变更范围。\n<img src=x onerror="window.__reviewXss=1"><script>window.__reviewXss=1</script>\n`;
+const truncatedReviewBody = `# weekly-digest\n${"长行".repeat(400)}\n`;
 
 async function fixture(
 	page: Page,
@@ -46,6 +55,8 @@ async function fixture(
 		installations?: InstallationItem[];
 		/** 依次返回的移出状态码；成功后服务端列表不再包含该安装。 */
 		uninstall?: number[];
+		/** 按版本依次返回的待审正文读取结果（#3046）；用完后返回完整正文。 */
+		reviewContent?: Record<string, ReviewContentStep[]>;
 	} = {},
 ) {
 	const writes: { method: string; path: string; body: unknown }[] = [];
@@ -64,6 +75,12 @@ async function fixture(
 	>();
 	const publishedVersions = new Set<string>();
 	let publications = 0;
+	const contentSteps = Object.fromEntries(
+		Object.entries(options.reviewContent ?? {}).map(([id, steps]) => [
+			id,
+			[...steps],
+		]),
+	);
 	// 待审队列按服务端规则回读：审核成功后该版本离开队列。
 	const pending = [
 		reviewItem("incident-summary", "user-other", "ORGANIZATION", "org-release"),
@@ -298,6 +315,46 @@ async function fixture(
 					nextCursor: null,
 				}),
 			});
+		// 审核正文只读入口（#3046）：只读待审版本，系统管理员身份与队列状态由服务端判定。
+		const reviewContentPath = path.match(
+			/^\/api\/v2\/skills\/reviews\/([^/]+)\/content$/,
+		);
+		if (reviewContentPath && request.method() === "GET" && role === "admin") {
+			const skillVersionId = reviewContentPath[1] ?? "";
+			const step = contentSteps[skillVersionId]?.shift() ?? "available";
+			if (typeof step === "number")
+				return route.fulfill({
+					status: step,
+					json: {
+						schemaVersion: 1,
+						code:
+							step === 503 ? "DEPENDENCY_UNAVAILABLE" : "RESOURCE_UNAVAILABLE",
+						message: "Skill review content fixture unavailable",
+						retryable: step === 503,
+						traceId: "trace-skill-management",
+					},
+				});
+			return route.fulfill({
+				json: SkillHubReviewContentV1Schema.parse({
+					schemaVersion: 1,
+					skillVersionId,
+					content:
+						step === "unavailable"
+							? { state: "unavailable" }
+							: {
+									state: "available",
+									body:
+										step === "truncated"
+											? truncatedReviewBody
+											: reviewBody(skillVersionId),
+									bodyTruncated: step === "truncated",
+									resources: [
+										{ path: "scripts/run.sh", kind: "script", sizeBytes: 8 },
+									],
+								},
+				}),
+			});
+		}
 		const reviewPath = path.match(
 			/^\/api\/v2\/skills\/versions\/([^/]+)\/review$/,
 		);
@@ -1064,6 +1121,212 @@ test("Skill review lists pending versions, reviews them and re-reads the queue (
 	await fitsViewport(page);
 });
 
+/** 弹窗内同一角色的可交互控件不同名（读屏用户按名称区分）。 */
+async function expectDistinctDialogNames(dialog: Locator) {
+	const snapshot = await dialog.ariaSnapshot();
+	const names = [
+		...snapshot.matchAll(
+			/^\s*- (button|link|textbox|checkbox|combobox) "((?:[^"\\]|\\.)*)"/gm,
+		),
+	].map((match) => `${match[1]} "${match[2]}"`);
+	expect(
+		names.filter((name, index) => names.indexOf(name) !== index),
+		names.join(" / "),
+	).toEqual([]);
+}
+
+async function box(locator: Locator) {
+	const value = await locator.boundingBox();
+	if (!value) throw new Error("Missing review dialog geometry");
+	return value;
+}
+
+test("Skill review dialog shows the pending SKILL.md as plain text below the facts (#3046 V-05)", async ({
+	page,
+}) => {
+	const mobile = test.info().project.name === "mobile";
+	// 终验视口：桌面 1440×900，窄屏 390×844（mobile 项目默认）。
+	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
+	const pageErrors = trackPageErrors(page);
+	const control = await fixture(page, "admin", {
+		reviewContent: { "weekly-digest-v1": [503, "truncated"] },
+	});
+	await page.goto("/admin/skill-reviews");
+	const main = page.locator("#main-content");
+	const contentReads = () =>
+		control.reads.filter((path) => path.endsWith("/content"));
+	// 列表只读队列，不预取任何正文。
+	await expect(main.locator("article.skill-row")).toHaveCount(3);
+	expect(contentReads()).toEqual([]);
+
+	await main
+		.getByRole("button", { name: "审阅：incident-summary · v1.0.0" })
+		.click();
+	const dialog = page.getByRole("dialog", { name: "审阅发布申请" });
+	const region = dialog.getByRole("region", { name: "SKILL.md 正文" });
+	await expect(region).toBeVisible();
+	// 正文原样显示为文本：其中的 HTML 不被解析，脚本与事件处理不执行。
+	expect(await region.locator("pre").textContent()).toBe(
+		reviewBody("incident-summary-v1"),
+	);
+	await expect(dialog.locator("img, script")).toHaveCount(0);
+	expect(
+		await page.evaluate(() => (window as { __reviewXss?: number }).__reviewXss),
+	).toBeUndefined();
+	expect(contentReads()).toEqual([
+		"/api/v2/skills/reviews/incident-summary-v1/content",
+	]);
+	// 设计 pre.skill-code：紧跟事实列表（上距 12px）、与之同宽，审核说明在其下方。
+	const facts = await box(dialog.locator("dl"));
+	const code = await box(region);
+	const reason = await box(dialog.getByText("审核说明 · 驳回时必填"));
+	expect(Math.abs(code.y - (facts.y + facts.height) - 12)).toBeLessThanOrEqual(
+		1,
+	);
+	expect(Math.abs(code.x - facts.x)).toBeLessThanOrEqual(1);
+	expect(Math.abs(code.width - facts.width)).toBeLessThanOrEqual(1);
+	expect(reason.y).toBeGreaterThan(code.y + code.height);
+	expect(
+		await computed(region, [
+			"paddingTop",
+			"paddingLeft",
+			"borderTopWidth",
+			"borderTopStyle",
+			"borderTopLeftRadius",
+			"backgroundColor",
+			"borderTopColor",
+			"fontSize",
+			"lineHeight",
+		]),
+	).toEqual({
+		paddingTop: "16px",
+		paddingLeft: "16px",
+		borderTopWidth: "1px",
+		borderTopStyle: "solid",
+		borderTopLeftRadius: "10px",
+		backgroundColor: await resolved(
+			page,
+			"backgroundColor",
+			"var(--surface-raised)",
+		),
+		borderTopColor: await resolved(page, "color", "var(--border)"),
+		fontSize: "12px",
+		lineHeight: "20.4px",
+	});
+	expect(
+		await region.evaluate((element) => {
+			const pre = element.querySelector("pre");
+			return {
+				mono: getComputedStyle(element).fontFamily.startsWith("ui-monospace"),
+				whiteSpace: pre ? getComputedStyle(pre).whiteSpace : "",
+				overflowWrap: pre ? getComputedStyle(pre).overflowWrap : "",
+			};
+		}),
+	).toEqual({ mono: true, whiteSpace: "pre-wrap", overflowWrap: "anywhere" });
+	await expect
+		.poll(() => page.evaluate(() => document.activeElement === document.body))
+		.toBe(false);
+	await expectDistinctDialogNames(dialog);
+	await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+	await expect(dialog).toBeHidden();
+
+	// 可重试的读取失败：弹窗内唯一的「重新读取正文」，重读时焦点留在弹窗内。
+	await main
+		.getByRole("button", { name: "审阅：weekly-digest · v1.0.0" })
+		.click();
+	const failure = dialog.getByRole("alert");
+	await expect(failure).toContainText(
+		"暂时无法读取 SKILL.md 正文，可以稍后重新读取。",
+	);
+	await expect(region).toHaveCount(0);
+	const retry = dialog.getByRole("button", { name: "重新读取正文" });
+	await expect(retry).toHaveCount(1);
+	await expectDistinctDialogNames(dialog);
+	await retry.click();
+	await expect(region).toBeVisible();
+	await expect(dialog.getByRole("alert")).toHaveCount(0);
+	expect(
+		await page.evaluate(() => {
+			const active = document.activeElement;
+			return (
+				active !== document.body && Boolean(active?.closest('[role="dialog"]'))
+			);
+		}),
+	).toBe(true);
+	// 截断沿用版本详情的 64 KiB 上限，单独提示；长行在块内换行，不撑宽弹窗。
+	expect(await region.locator("pre").textContent()).toBe(truncatedReviewBody);
+	await expect(
+		dialog.getByText("正文较长，这里只显示开头部分（64 KiB）。"),
+	).toBeVisible();
+	const dialogBox = await box(dialog);
+	const truncated = await box(region);
+	expect(truncated.x + truncated.width).toBeLessThanOrEqual(
+		dialogBox.x + dialogBox.width,
+	);
+	expect(truncated.height).toBeLessThanOrEqual(421);
+	expect(contentReads()).toEqual([
+		"/api/v2/skills/reviews/incident-summary-v1/content",
+		"/api/v2/skills/reviews/weekly-digest-v1/content",
+		"/api/v2/skills/reviews/weekly-digest-v1/content",
+	]);
+	await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+	await expect(dialog).toBeHidden();
+	// 再次打开重新读取，不复用关闭前的正文。
+	await main
+		.getByRole("button", { name: "审阅：incident-summary · v1.0.0" })
+		.click();
+	await expect(region).toBeVisible();
+	expect(contentReads()).toHaveLength(4);
+	expect(control.writes).toEqual([]);
+	await expectCleanPage(page, pageErrors);
+});
+
+test("Skill review dialog tells a handled version and unavailable content apart (#3046)", async ({
+	page,
+}) => {
+	if (test.info().project.name !== "mobile")
+		await page.setViewportSize({ width: 1440, height: 900 });
+	const pageErrors = trackPageErrors(page);
+	const control = await fixture(page, "admin", {
+		reviewContent: {
+			"incident-summary-v1": [404],
+			"weekly-digest-v1": ["unavailable"],
+		},
+	});
+	await page.goto("/admin/skill-reviews");
+	const main = page.locator("#main-content");
+	const dialog = page.getByRole("dialog", { name: "审阅发布申请" });
+	await main
+		.getByRole("button", { name: "审阅：incident-summary · v1.0.0" })
+		.click();
+	// 已处理（与不存在不可区分）：不可重试，不显示正文。
+	await expect(dialog.getByRole("alert")).toHaveText(
+		"这个版本已不在待审核状态，正文不再提供。",
+	);
+	await expect(
+		dialog.getByRole("button", { name: "重新读取正文" }),
+	).toHaveCount(0);
+	await expect(dialog.locator(".skill-code")).toHaveCount(0);
+	await expectDistinctDialogNames(dialog);
+	await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+	await expect(dialog).toBeHidden();
+	await main
+		.getByRole("button", { name: "审阅：weekly-digest · v1.0.0" })
+		.click();
+	// 内容不可用不是错误：其余审核信息与操作照常。
+	await expect(
+		dialog.getByText("这个版本的正文暂时无法读取，其余审核信息不受影响。"),
+	).toBeVisible();
+	await expect(dialog.getByRole("alert")).toHaveCount(0);
+	await expect(dialog.locator(".skill-code")).toHaveCount(0);
+	await expect(dialog.getByRole("button", { name: "批准发布" })).toBeEnabled();
+	await expect
+		.poll(() => page.evaluate(() => document.activeElement === document.body))
+		.toBe(false);
+	expect(control.writes).toEqual([]);
+	await expectCleanPage(page, pageErrors);
+});
+
 test("employees see no Skill review entry and a no-permission page on deep links", async ({
 	page,
 }) => {
@@ -1084,4 +1347,8 @@ test("employees see no Skill review entry and a no-permission page on deep links
 	expect(control.writes).toHaveLength(0);
 	// 普通员工不发出待审队列读取。
 	expect(control.reads).not.toContain("/api/v2/skills/reviews");
+	// 也不读取任何待审正文（#3046）。
+	expect(
+		control.reads.filter((path) => path.startsWith("/api/v2/skills/reviews/")),
+	).toEqual([]);
 });

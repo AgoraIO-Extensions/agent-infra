@@ -379,37 +379,39 @@ export function SkillReviewDialog({
 					<DialogTitle>审阅发布申请</DialogTitle>
 				</DialogHeader>
 				<DialogBody className="space-y-4">
-					<dl className="skill-facts skill-dialog-facts">
-						<dt>Skill</dt>
-						<dd>
-							{item.name} · v{item.version}
-						</dd>
-						<dt>申请人</dt>
-						<dd>
-							{names.submitter}
-							{names.submitterUnresolved ? (
-								<>
-									{" "}
-									<IdentifierText value={item.ownerId} label="发布者 ID" />
-								</>
-							) : null}
-						</dd>
-						<dt>提交时间</dt>
-						<dd>
-							<Timestamp value={item.submittedAt} />
-						</dd>
-						<dt>共享范围</dt>
-						<dd>{names.scope}</dd>
-						<dt>来源</dt>
-						<dd>{skillHubProviderLabels[item.provider]}</dd>
-						<dt>权限声明</dt>
-						<dd>仅使用 Agent 已有权限 · 脚本禁用</dd>
-					</dl>
-					{/* 设计：事实列表下方以 pre.skill-code 纯文本显示待审的 SKILL.md（#3046）。 */}
-					<SkillReviewContent
-						skillVersionId={item.skillVersionId}
-						identityKey={identityKey}
-					/>
+					{/* 设计：事实列表下方紧跟 pre.skill-code，纯文本显示待审的 SKILL.md（#3046）；两者作为一组与审核说明分隔。 */}
+					<div>
+						<dl className="skill-facts skill-dialog-facts">
+							<dt>Skill</dt>
+							<dd>
+								{item.name} · v{item.version}
+							</dd>
+							<dt>申请人</dt>
+							<dd>
+								{names.submitter}
+								{names.submitterUnresolved ? (
+									<>
+										{" "}
+										<IdentifierText value={item.ownerId} label="发布者 ID" />
+									</>
+								) : null}
+							</dd>
+							<dt>提交时间</dt>
+							<dd>
+								<Timestamp value={item.submittedAt} />
+							</dd>
+							<dt>共享范围</dt>
+							<dd>{names.scope}</dd>
+							<dt>来源</dt>
+							<dd>{skillHubProviderLabels[item.provider]}</dd>
+							<dt>权限声明</dt>
+							<dd>仅使用 Agent 已有权限 · 脚本禁用</dd>
+						</dl>
+						<SkillReviewContent
+							skillVersionId={item.skillVersionId}
+							identityKey={identityKey}
+						/>
+					</div>
 					<Field>
 						<Label htmlFor={`${id}-reason`}>审核说明 · 驳回时必填</Label>
 						<Textarea

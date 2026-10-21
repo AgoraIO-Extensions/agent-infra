@@ -3341,7 +3341,7 @@ body {
 	font-size: 14px;
 }
 /* 设计 pre.skill-code：SKILL.md 只按纯文本显示，长行换行，过长时在块内滚动。
- * 审阅弹窗（#3046）的待审正文共用同一外观，内边距按设计为 16px，上距由弹窗正文的间距给出。 */
+ * 审阅弹窗（#3046）的待审正文共用同一外观：按设计紧跟事实列表、上距 12px，内边距 16px。 */
 .skill-page .skill-code,
 .skill-review-content .skill-code {
 	max-height: 420px;
@@ -3354,6 +3354,9 @@ body {
 	background: var(--surface-raised);
 	color: var(--foreground);
 	font: 12px / 1.7 var(--font-mono);
+}
+.skill-review-content {
+	margin-top: 12px;
 }
 .skill-review-content .skill-code {
 	margin-top: 0;
