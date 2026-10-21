@@ -92,12 +92,17 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	readonly requireConnectionConsumerProfile?: boolean;
 }): ConversationRuntimeOptionsV2["resolveRuntimeHost"] {
 	const { workload, signing, serviceToken } = options;
+	const staticProfile = structuredClone(options.connectionConsumerProfile);
+	const staticApproval = structuredClone(options.connectionConsumerApproval);
+	const perAgentProfiles = options.connectionConsumerProfilesByAgent
+		? structuredClone(options.connectionConsumerProfilesByAgent)
+		: undefined;
 	const connectionConsumerFor = (agentId: string) => {
-		const perAgent = options.connectionConsumerProfilesByAgent?.[agentId];
+		const perAgent = perAgentProfiles?.[agentId];
 		const perAgentSnapshots =
 			workload.policy.connectionConsumerSnapshotsByAgent;
 		if (
-			(options.connectionConsumerProfilesByAgent || perAgentSnapshots) &&
+			(perAgentProfiles || perAgentSnapshots) &&
 			!perAgent &&
 			(perAgentSnapshots === undefined ||
 				!Object.hasOwn(perAgentSnapshots, agentId))
@@ -115,8 +120,8 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			}
 		}
 		if (!perAgent && !perAgentSnapshots) {
-			profile = options.connectionConsumerProfile;
-			approval = options.connectionConsumerApproval;
+			profile = staticProfile;
+			approval = staticApproval;
 		}
 		return approvedConnectionConsumerTarget(
 			profile,
