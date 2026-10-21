@@ -15,6 +15,7 @@ import {
 	SkillHubReviewRequestV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { expect, type Page, test } from "@playwright/test";
+import { expectNoDuplicateControls } from "./page-health";
 import {
 	expectCleanPage,
 	expectSkillDialog,
@@ -407,20 +408,6 @@ async function fitsViewport(page: Page) {
 	}
 }
 
-/** 收集页面脚本错误与控制台错误；受控 fixture 的 404 资源提示不算页面错误。 */
-function pageErrors(page: Page) {
-	const errors: string[] = [];
-	page.on("pageerror", (error) => errors.push(error.message));
-	page.on("console", (message) => {
-		if (
-			message.type() === "error" &&
-			!message.text().startsWith("Failed to load resource")
-		)
-			errors.push(message.text());
-	});
-	return errors;
-}
-
 /** #2830 终验的两个视口：桌面 1440×900，移动 390×844（mobile project 自带）。 */
 async function designViewport(page: Page, mobile: boolean) {
 	if (!mobile) await page.setViewportSize({ width: 1440, height: 900 });
@@ -435,7 +422,7 @@ test("My Skill puts 已安装 with its Agent binding entry before 我创建的 (
 	page,
 }, info) => {
 	const mobile = info.project.name === "mobile";
-	const errors = pageErrors(page);
+	const errors = trackPageErrors(page);
 	const installed = SkillHubInstallationListItemV1Schema.parse({
 		installationId: "installation-notes",
 		skillVersionId: "weekly-digest-v3",
@@ -505,7 +492,8 @@ test("My Skill puts 已安装 with its Agent binding entry before 我创建的 (
 		"release-notes",
 		"draft",
 	]);
-	expect(errors).toEqual([]);
+	await expectNoDuplicateControls(page, "我的 Skill");
+	await expectCleanPage(page, errors);
 });
 
 test("My Skill lists the user's projects with the same group in eyebrow, breadcrumb and navigation", async ({
@@ -758,7 +746,7 @@ test("Create and publish follows the design's two columns with scope cards on th
 	page,
 }, info) => {
 	const mobile = info.project.name === "mobile";
-	const errors = pageErrors(page);
+	const errors = trackPageErrors(page);
 	const control = await fixture(page);
 	await page.goto("/skills/manage/new?project=release-notes");
 	const main = page.locator("#main-content");
@@ -886,6 +874,7 @@ test("Create and publish follows the design's two columns with scope cards on th
 	// 同一页面没有同名控件：项目与导入的包名称分开命名。
 	await expect(main.getByLabel("包名称", { exact: true })).toHaveCount(1);
 	await expect(main.getByLabel("导入包名称", { exact: true })).toHaveCount(1);
+	await expectNoDuplicateControls(page, "创建与发布 Skill");
 	// 「保存草稿」提交左栏内容：先补正文，再保存；提交后焦点不落到 body。
 	await main.getByLabel("SKILL.md（任务说明）").fill("# release-notes\n");
 	await expect(aside.getByText("有未保存的修改")).toBeVisible();
@@ -914,12 +903,8 @@ test("Create and publish follows the design's two columns with scope cards on th
 	await expect(newAside.getByRole("button")).toHaveCount(0);
 	await expect(main.getByRole("button", { name: "创建项目" })).toBeVisible();
 	await expect(main.getByLabel("包名称", { exact: true })).toHaveCount(1);
-	expect(
-		await page.evaluate(
-			() => document.documentElement.scrollWidth <= innerWidth,
-		),
-	).toBe(true);
-	expect(errors).toEqual([]);
+	await expectNoDuplicateControls(page, "新建 Skill");
+	await expectCleanPage(page, errors);
 });
 
 test("creating and publishing never asks for internal IDs and reports state in Chinese", async ({
