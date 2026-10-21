@@ -35,6 +35,8 @@ import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 type Database = ReturnType<typeof postgres> | postgres.TransactionSql;
 
 const defaultReplayWindowMs = 5 * 60 * 1000;
+/** 首屏与每个更早页的事件总数上限（工程 Spec §8.2，#3068）。 */
+const defaultEventWindowMaxEvents = 2_000;
 const maximumReplayWindowMs = 31 * 24 * 60 * 60 * 1000;
 
 export interface ConversationQueryScopeV1 {
@@ -242,6 +244,11 @@ export interface PostgresConversationQueryOptionsV1 {
 	readonly replayWindowMs?: number;
 	/** Recent event window for detail reads; omitted keeps historical full reads. */
 	readonly eventWindow?: number;
+	/**
+	 * 每页事件总数上限（#3068）。`eventWindow` 不计 `reasoning.delta`，本上限计入全部事件，
+	 * 约束首屏与每个更早页的响应大小；默认 2,000 条。
+	 */
+	readonly eventWindowMaxEvents?: number;
 }
 
 export interface PlatformQueueResourceSnapshot {
@@ -894,44 +901,89 @@ async function readEvents(
 	return rows.map(event);
 }
 
+/**
+ * 会话详情的一页事件（工程 Spec §8.2，#1812、#3068）。每页是连续的游标区间、由完整 Execution
+ * 组成：从最近的 Execution 往前加入，`reasoning.delta` 以外的事件累计到 `limit` 条为止（跨过的
+ * 那个 Execution 仍完整加入）；页内事件总数不超过 `maxEvents`，加入后会超出的 Execution 留给
+ * 更早的页。最近开始的 Execution 自身超过上限时只返回它，单轮回复不被切断。
+ */
 async function readEventPage(
 	database: Database,
 	conversationId: string,
-	options: { readonly beforeCursor?: number; readonly limit: number },
+	options: {
+		readonly beforeCursor?: number;
+		readonly limit: number;
+		readonly maxEvents: number;
+	},
 	run: RunStatement = runStatement,
 ): Promise<{
 	readonly events: readonly ConversationQueryEventV1[];
 	readonly eventWindow: ConversationEventWindowV1;
 }> {
+	// 只扫描最近的 maxEvents + 1 条：超过这个范围的起点必然超出总上限。
 	const [boundary] = await run(database<
-		{ page_start: string | number | null }[]
+		{
+			counted_start: string | number | null;
+			first_start: string | number | null;
+			overflow_cursor: string | number | null;
+			capped_start: string | number | null;
+			latest_start: string | number | null;
+		}[]
 	>`
-		with boundary_event as (
-			select e.execution_id
+		with recent as materialized (
+			select e.conversation_cursor, e.execution_id, e.event_type
 			from platform.conversation_events e
 			where e.conversation_id = ${conversationId}
 				${options.beforeCursor === undefined ? database`` : database`and e.conversation_cursor < ${options.beforeCursor}`}
 			order by e.conversation_cursor desc
+			limit ${options.maxEvents + 1}
+		), starts as materialized (
+			select r.execution_id, (
+				select min(e.conversation_cursor)
+				from platform.conversation_events e
+				where e.conversation_id = ${conversationId}
+					and e.execution_id = r.execution_id
+			) as execution_start
+			from (select distinct execution_id from recent) r
+		), counted as (
+			select r.execution_id
+			from recent r
+			where r.event_type <> 'reasoning.delta'
+			order by r.conversation_cursor desc
 			offset ${Math.max(0, options.limit - 1)}
 			limit 1
-		), boundary as (
-			select min(e.conversation_cursor) as page_start
-			from platform.conversation_events e
-			join boundary_event b on b.execution_id = e.execution_id
-			where e.conversation_id = ${conversationId}
-		), first_event as (
-			select min(e.conversation_cursor) as page_start
-			from platform.conversation_events e
-			where e.conversation_id = ${conversationId}
-				${options.beforeCursor === undefined ? database`` : database`and e.conversation_cursor < ${options.beforeCursor}`}
+		), overflow as (
+			select r.conversation_cursor
+			from recent r
+			order by r.conversation_cursor desc
+			offset ${options.maxEvents}
+			limit 1
 		)
-		select coalesce(boundary.page_start, first_event.page_start) as page_start
-		from boundary cross join first_event
+		select
+			(select s.execution_start from starts s
+				join counted c on c.execution_id = s.execution_id) as counted_start,
+			(select min(r.conversation_cursor) from recent r) as first_start,
+			(select o.conversation_cursor from overflow o) as overflow_cursor,
+			(select min(s.execution_start) from starts s cross join overflow o
+				where s.execution_start > o.conversation_cursor) as capped_start,
+			(select max(s.execution_start) from starts s) as latest_start
 	`);
-	const pageStart =
-		boundary?.page_start === null || boundary?.page_start === undefined
-			? 0
-			: safeInteger(boundary.page_start, 1);
+	const position = (value: string | number | null | undefined) =>
+		value === null || value === undefined ? undefined : safeInteger(value, 1);
+	const overflowCursor = position(boundary?.overflow_cursor);
+	// 计数窗口的起点：第 limit 条非思考事件所在 Execution 的开头；不足 limit 条且没有超出总上限时
+	// 读到最早的事件。
+	const countedStart =
+		position(boundary?.counted_start) ??
+		(overflowCursor === undefined
+			? position(boundary?.first_start)
+			: undefined);
+	// 总上限的起点：完全落在最近 maxEvents 条之内的最早 Execution；没有时只保留最近开始的 Execution。
+	const cappedStart =
+		overflowCursor === undefined
+			? undefined
+			: (position(boundary?.capped_start) ?? position(boundary?.latest_start));
+	const pageStart = Math.max(countedStart ?? 0, cappedStart ?? 0);
 	const events =
 		pageStart === 0
 			? []
@@ -1205,6 +1257,7 @@ export class PostgresConversationQueryV1 {
 	readonly #replayWindow: number;
 	readonly #replayWindowMs: number;
 	readonly #eventWindow: number | undefined;
+	readonly #eventWindowMaxEvents: number;
 
 	constructor(options: PostgresConversationQueryOptionsV1) {
 		try {
@@ -1221,7 +1274,11 @@ export class PostgresConversationQueryV1 {
 				(options.eventWindow !== undefined &&
 					(!Number.isSafeInteger(options.eventWindow) ||
 						options.eventWindow < 1 ||
-						options.eventWindow > 10_000))
+						options.eventWindow > 10_000)) ||
+				(options.eventWindowMaxEvents !== undefined &&
+					(!Number.isSafeInteger(options.eventWindowMaxEvents) ||
+						options.eventWindowMaxEvents < 1 ||
+						options.eventWindowMaxEvents > 10_000))
 			) {
 				invalidRequest();
 			}
@@ -1234,6 +1291,8 @@ export class PostgresConversationQueryV1 {
 			this.#replayWindow = options.replayWindow ?? 100;
 			this.#replayWindowMs = options.replayWindowMs ?? defaultReplayWindowMs;
 			this.#eventWindow = options.eventWindow;
+			this.#eventWindowMaxEvents =
+				options.eventWindowMaxEvents ?? defaultEventWindowMaxEvents;
 		} catch (error) {
 			if (error instanceof ConversationQueryError) throw error;
 			unavailable();
@@ -1997,6 +2056,7 @@ export class PostgresConversationQueryV1 {
 									conversationId,
 									{
 										limit: this.#eventWindow ?? 200,
+										maxEvents: this.#eventWindowMaxEvents,
 										...(beforeCursor === undefined ? {} : { beforeCursor }),
 									},
 									run,
