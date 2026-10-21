@@ -759,6 +759,51 @@ test("a failed creation row retries once, keeps focus on its row and reports fai
 	await expect(page.locator('[data-slot="toast"]')).toHaveText("");
 });
 
+// C2-01 / C2-20：创建失败行有「配置」「重试」「停用」三个操作，桌面放宽操作列后仍是单行，行高与其余行一致。
+test("a failed creation row keeps configure, retry and disable on one line", async ({
+	page,
+}, info) => {
+	const errors = trackPageErrors(page);
+	await fixture(page);
+	await page.goto("/admin/agents");
+	if (info.project.name === "desktop")
+		await page.setViewportSize({ width: 1440, height: 900 });
+	const failed = page.getByRole("row", { name: /编程助手 3/ });
+	await expect(failed.locator('[data-slot="badge"]')).toHaveText("创建失败");
+	await expect(failed.locator(".admin-agent-row-actions > *")).toHaveText([
+		"配置",
+		"重试",
+		"停用",
+	]);
+	const tops = await failed
+		.locator(".admin-agent-row-actions > *")
+		.evaluateAll((nodes) =>
+			nodes.map((node) => Math.round(node.getBoundingClientRect().top)),
+		);
+	expect(new Set(tops).size).toBe(1);
+	if (info.project.name === "desktop") {
+		// 与只有「配置」「停用」的行同高：操作没有折到第二行。
+		const ready = page.getByRole("row", { name: /编程助手 2/ });
+		const [failedBox, readyBox] = await Promise.all([
+			failed.boundingBox(),
+			ready.boundingBox(),
+		]);
+		expect(Math.round(failedBox?.height ?? 0)).toBe(
+			Math.round(readyBox?.height ?? -1),
+		);
+		// 三个按钮都在操作列内，不溢出到相邻列或表格外。
+		const cell = failed.locator('[data-cell="actions"]');
+		const [cellBox, lastBox] = await Promise.all([
+			cell.boundingBox(),
+			failed.locator(".admin-agent-row-actions > *").last().boundingBox(),
+		]);
+		expect((lastBox?.x ?? 0) + (lastBox?.width ?? 0)).toBeLessThanOrEqual(
+			(cellBox?.x ?? 0) + (cellBox?.width ?? 0),
+		);
+	}
+	await expectCleanPage(page, errors);
+});
+
 // F-11：禁用员工先确认对象（姓名与邮箱）与后果；解除禁用仍直接提交。
 test("disabling an employee is confirmed with the person before one request", async ({
 	page,

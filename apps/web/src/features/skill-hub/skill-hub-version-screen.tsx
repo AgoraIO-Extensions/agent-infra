@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, PenLine, Plus, Settings } from "lucide-react";
+import { ArrowLeft, Plus, Settings } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -390,12 +390,12 @@ function ReadyVersion({
 								{installing ? "正在校验包…" : "加入我的库"}
 							</Button>
 						) : owned ? (
+							// 设计页头「编辑新版本」为 outline 文字按钮，不带图标（C2-09）。
 							<Link
 								className={buttonVariants({ variant: "outline" })}
 								to="/skills/manage/new"
 								search={{ project: version.skillId }}
 							>
-								<PenLine aria-hidden="true" />
 								编辑新版本
 							</Link>
 						) : null}

@@ -352,7 +352,8 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 					>
 						{moreFilterCount ? `更多筛选（${moreFilterCount}）` : "更多筛选"}
 					</Button>
-					<div className="flex flex-wrap gap-2">
+					{/* 设计 .tag-row：「重置」「查询」间距 6px（C2-06）。 */}
+					<div className="tag-row">
 						<Button
 							type="button"
 							variant="outline"
@@ -372,14 +373,13 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 				{/* 平台审计保留原 #400 管理员审计的「事件时间线 / 平台操作记录」区头（#1199 AC-1）；
 				    个人审计按设计筛选后直接是表格，不另设标题（V-08）。 */}
 				{administrator && (
-					<div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+					// 设计 .audit-timeline-head：标题 16px / 600 正文字体，eyebrow 与说明 14px / 1.65（C2-07）。
+					<div className="audit-timeline-head">
 						<div>
-							<p className="mb-1 text-muted-foreground text-sm">事件时间线</p>
-							<h2 className="font-semibold text-base">平台操作记录</h2>
+							<p>事件时间线</p>
+							<h2 className="audit-timeline-title">平台操作记录</h2>
 						</div>
-						<p className="text-muted-foreground text-sm">
-							不包含会话正文、凭证值或模型内部思考
-						</p>
+						<p>不包含会话正文、凭证值或模型内部思考</p>
 					</div>
 				)}
 				<DirectoryReadAlert names={[userNames]} className="mb-4" />
@@ -490,13 +490,14 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 						</Table>
 					)
 				)}
-				<div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+				{/* 设计 .audit-pagination：页码 14px / 1.65，按钮组为 .tag-row（间距 6px，C2-06）。 */}
+				<div className="audit-pagination">
 					{query.status === "ready" && !busy && !formFailure && (
-						<p className="text-muted-foreground text-sm">
+						<p>
 							第 {query.pageNumber} 页 · 本页 {items.length} 条
 						</p>
 					)}
-					<div className="flex gap-2">
+					<div className="tag-row">
 						<Button
 							variant="outline"
 							disabled={busy || formFailure !== null || !query.canPreviousPage}
@@ -605,12 +606,13 @@ function AuditScreen({ scope }: { scope: AuditScope }) {
 			)}
 			{administrator && (
 				// 首屏即存在的审计范围说明，不设 live 角色。
-				<Alert tone="info" className="mt-5">
+				<Alert tone="info" className="audit-minimal-notice mt-5">
 					<AlertTitle>最小审计数据</AlertTitle>
+					{/* 用字符串字面量：JSX 换行会在「。」与「Connection」之间多出一个空格（C2-08）。 */}
 					<AlertDescription>
-						记录谁在何时对哪个对象做了什么及其结果，不保存对话正文、凭证值或模型内部思考。
-						Connection 授权与外部效果由独立 Connection
-						审计核实，关联引用不授予查询权限。
+						{
+							"记录谁在何时对哪个对象做了什么及其结果，不保存对话正文、凭证值或模型内部思考。Connection 授权与外部效果由独立 Connection 审计核实，关联引用不授予查询权限。"
+						}
 					</AlertDescription>
 				</Alert>
 			)}

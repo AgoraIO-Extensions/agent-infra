@@ -1,6 +1,6 @@
 import { skillHubProjectContentLimitsV1 } from "@agent-infra/contracts/pilot";
 import { Link } from "@tanstack/react-router";
-import { FilePlus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import {
 	type FormEvent,
 	type ReactNode,
@@ -537,7 +537,7 @@ export function SkillProjectContentEditor({
 								<Textarea
 									ref={skillMdInput}
 									id={`${id}-skill-md`}
-									className="skill-content-text"
+									className="skill-content-text skill-md-text"
 									value={draft.skillMd}
 									spellCheck={false}
 									placeholder={`# ${project.name}\n\n说明这个 Skill 的用途、触发条件和使用步骤。`}
@@ -691,7 +691,8 @@ export function SkillProjectContentEditor({
 											);
 										}}
 									>
-										<FilePlus aria-hidden="true" />
+										{/* 设计 plus 图标（C2-14）。 */}
+										<Plus aria-hidden="true" />
 										添加文本文件
 									</Button>
 								</div>
@@ -726,7 +727,8 @@ export function SkillProjectContentEditor({
 			}
 			aside={
 				<form className="skill-editor-form" onSubmit={submitPublish} noValidate>
-					<Field className="skill-editor-section">
+					{/* 设计 .field.section-tight：版本号距「版本与发布范围」标题 15px（C2-13）。 */}
+					<Field className="skill-editor-version">
 						<Label htmlFor={`${id}-version`}>版本号</Label>
 						<Input
 							ref={versionInput}

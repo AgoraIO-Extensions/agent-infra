@@ -19,6 +19,10 @@ const metadata: PersonalApiCredentialMetadataV1 = {
 	scopes: ["agent:read", "agent:use"],
 };
 
+// 收窄表单的复选框名称带凭证标识（C2-19），与签发区的同名权限区分。
+const readScope = `读取 Agent：${metadata.credentialId}`;
+const useScope = `使用 Agent：${metadata.credentialId}`;
+
 function setup(credential = metadata) {
 	vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-10T00:00:00Z"));
 	const onNarrow = vi.fn().mockResolvedValue(undefined);
@@ -50,9 +54,9 @@ describe("NarrowCredentialForm", () => {
 		expect(screen.getAllByRole("checkbox")).toHaveLength(2);
 		expect(screen.queryByLabelText("管理 Agent")).toBeNull();
 		expect(document.activeElement).toBe(
-			screen.getByRole("checkbox", { name: "读取 Agent" }),
+			screen.getByRole("checkbox", { name: readScope }),
 		);
-		fireEvent.click(screen.getByRole("checkbox", { name: "使用 Agent" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: useScope }));
 		submit();
 		await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
 		expect(onNarrow).toHaveBeenCalledWith(metadata.credentialId, {
@@ -60,10 +64,28 @@ describe("NarrowCredentialForm", () => {
 		});
 	});
 
+	it("names each checkbox with the credential so it differs from the issue form (C2-19)", () => {
+		setup();
+		expect(screen.getAllByRole("checkbox")).toEqual([
+			screen.getByRole("checkbox", { name: readScope }),
+			screen.getByRole("checkbox", { name: useScope }),
+		]);
+		expect(screen.queryByRole("checkbox", { name: "读取 Agent" })).toBeNull();
+		// 可见标签仍是权限文字，可访问名称以它开头（Label in Name）；点击标签仍切换复选框。
+		const label = screen.getByText("使用 Agent", { selector: "label" });
+		expect(label.textContent).toBe("使用 Agent");
+		fireEvent.click(label);
+		expect(
+			screen
+				.getByRole("checkbox", { name: useScope })
+				.getAttribute("aria-checked"),
+		).toBe("false");
+	});
+
 	it("rejects an empty subset with errors associated with both checkboxes", () => {
 		const { onNarrow } = setup();
-		fireEvent.click(screen.getByRole("checkbox", { name: "读取 Agent" }));
-		fireEvent.click(screen.getByRole("checkbox", { name: "使用 Agent" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: readScope }));
+		fireEvent.click(screen.getByRole("checkbox", { name: useScope }));
 		submit();
 		const error = screen.getByText("至少保留一项当前权限。");
 		for (const checkbox of screen.getAllByRole("checkbox")) {
@@ -138,7 +160,7 @@ describe("NarrowCredentialForm", () => {
 		onNarrow.mockRejectedValueOnce(
 			Object.assign(new Error("Rejected"), { code: "AUTHORIZATION_REVOKED" }),
 		);
-		fireEvent.click(screen.getByRole("checkbox", { name: "使用 Agent" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: useScope }));
 		submit();
 		await waitFor(() =>
 			expect(screen.getByText(/当前账号无权修改/)).toBeTruthy(),
@@ -179,8 +201,8 @@ describe("NarrowCredentialForm", () => {
 			/>,
 		);
 
-		fireEvent.click(screen.getByRole("checkbox", { name: "使用 Agent" }));
-		fireEvent.click(screen.getByRole("checkbox", { name: "读取 Agent" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: useScope }));
+		fireEvent.click(screen.getByRole("checkbox", { name: readScope }));
 		fireEvent.change(screen.getByLabelText("提前到期时间（可选）"), {
 			target: { value: "2026-10-20T12:30" },
 		});
@@ -204,7 +226,7 @@ describe("NarrowCredentialForm", () => {
 		await waitFor(() =>
 			expect(
 				screen
-					.getByRole("checkbox", { name: "读取 Agent" })
+					.getByRole("checkbox", { name: readScope })
 					.getAttribute("aria-checked"),
 			).toBe("true"),
 		);
@@ -236,7 +258,7 @@ describe("NarrowCredentialForm", () => {
 				onCancel={vi.fn()}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("checkbox", { name: "使用 Agent" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: useScope }));
 		fireEvent.change(screen.getByLabelText("提前到期时间（可选）"), {
 			target: { value: "2026-10-20T12:30" },
 		});
@@ -252,7 +274,7 @@ describe("NarrowCredentialForm", () => {
 
 		expect(
 			screen
-				.getByRole("checkbox", { name: "使用 Agent" })
+				.getByRole("checkbox", { name: useScope })
 				.getAttribute("aria-checked"),
 		).toBe("false");
 		expect(
@@ -268,7 +290,7 @@ describe("NarrowCredentialForm", () => {
 				finish = resolve;
 			}),
 		);
-		fireEvent.click(screen.getByRole("checkbox", { name: "使用 Agent" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: useScope }));
 		fireEvent.submit(screen.getByRole("form"));
 		fireEvent.submit(screen.getByRole("form"));
 		expect(onNarrow).toHaveBeenCalledOnce();

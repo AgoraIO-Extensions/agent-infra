@@ -9,11 +9,9 @@ import { useToast } from "@/components/ui/toast";
 import { withObjectName } from "@/lib/accessible-name";
 import type { SkillHubInstallationListItemV1 } from "../../pilot/generated-v2/types.gen.js";
 import type { SkillHubInstallationsState } from "./skill-hub.js";
+import { skillHubProviderLabels } from "./skill-hub-labels.js";
 import { uninstallSkillHubInstallation } from "./skill-hub-management.js";
-import {
-	SkillHubScopePill,
-	SkillHubStateChip,
-} from "./skill-hub-scope-pill.js";
+import { SkillHubStateChip } from "./skill-hub-scope-pill.js";
 import {
 	SkillHubEmpty,
 	SkillHubLoading,
@@ -201,20 +199,24 @@ function InstallationRow({
 			</span>
 			<div className="skill-row-copy">
 				<h3>{name}</h3>
-				<div className="skill-row-badges">
-					{version.access === "visible" ? (
-						version.state === "revoked" ? (
-							<SkillHubStateChip state="revoked" />
-						) : (
-							<SkillHubScopePill version={version} />
-						)
-					) : (
+				{version.access === "visible" ? (
+					<>
+						{/* 设计已安装行（V-17、C2-10）：说明行为「固定版本 v{版本} · {来源}」，其下是发布状态与
+						    「有新版本」；版本号、来源与状态都取安装投影，不另读版本详情。 */}
+						<p>
+							固定版本 v{version.version} ·{" "}
+							{skillHubProviderLabels[version.provider]}
+						</p>
+						<div className="skill-row-badges">
+							<SkillHubStateChip state={version.state} />
+							{item.needUpgrade ? <Badge tone="amber">有新版本</Badge> : null}
+						</div>
+					</>
+				) : (
+					<div className="skill-row-badges">
 						<Badge tone="gray">当前无权查看</Badge>
-					)}
-					{item.needUpgrade && version.access === "visible" ? (
-						<Badge tone="amber">有新版本</Badge>
-					) : null}
-				</div>
+					</div>
+				)}
 			</div>
 			<div className="skill-row-meta">
 				{version.access === "visible" ? (

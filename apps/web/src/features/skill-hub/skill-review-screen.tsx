@@ -412,7 +412,7 @@ export function SkillReviewDialog({
 							identityKey={identityKey}
 						/>
 					</div>
-					<Field>
+					<Field className="skill-review-reason">
 						<Label htmlFor={`${id}-reason`}>审核说明 · 驳回时必填</Label>
 						<Textarea
 							ref={reasonInput}
