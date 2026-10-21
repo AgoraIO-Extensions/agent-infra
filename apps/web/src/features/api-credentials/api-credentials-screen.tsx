@@ -409,6 +409,8 @@ function CredentialRow({
 	// 成功后会消失，焦点落到该行的凭证标识上（E3-15）。
 	const revokeTrigger = useRef<HTMLButtonElement>(null);
 	const revokeConfirmed = useRef(false);
+	// 确认后撤销失败、触发按钮仍在：等它恢复可用后把焦点从行标识交还给它，便于重试。
+	const [revokeFailed, setRevokeFailed] = useState(false);
 	const credentialLabel = useRef<HTMLElement>(null);
 	const restoreFocus = useRef(false);
 	const expiry = credential.expiresAt
@@ -432,6 +434,14 @@ function CredentialRow({
 			restoreFocus.current = false;
 		}
 	}, [editing, busy]);
+	useEffect(() => {
+		if (!revokeFailed || busy) return;
+		setRevokeFailed(false);
+		// 用户已把焦点移到别处时不抢回。
+		const current = document.activeElement;
+		if (current === credentialLabel.current || current === document.body)
+			revokeTrigger.current?.focus();
+	}, [revokeFailed, busy]);
 	function closeForm() {
 		restoreFocus.current = true;
 		setEditing(false);
@@ -551,7 +561,9 @@ function CredentialRow({
 								onConfirm={() => {
 									revokeConfirmed.current = true;
 									setEditing(false);
-									void onRevoke(credential.credentialId).catch(() => undefined);
+									void onRevoke(credential.credentialId).catch(() =>
+										setRevokeFailed(true),
+									);
 								}}
 							/>
 						) : null}

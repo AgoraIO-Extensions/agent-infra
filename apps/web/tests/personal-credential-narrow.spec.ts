@@ -499,6 +499,46 @@ test("revocation is confirmed with the credential and its consequence before one
 	await capture(page, "credential-revoke-confirmed");
 });
 
+// E3-15：确认后撤销失败、触发按钮仍在时，焦点从行凭证标识交还「撤销：{凭证}」，不落到 body。
+test("a failed confirmed revocation returns focus to its revoke trigger", async ({
+	page,
+}) => {
+	await fixture(page);
+	const revocations: string[] = [];
+	await page.route(/\/api\/v2\/me\/api-credentials\/[^/]+$/, async (route) => {
+		const request = route.request();
+		if (request.method() !== "DELETE") return route.fallback();
+		revocations.push(request.url());
+		await route.fulfill({
+			status: 503,
+			json: {
+				schemaVersion: 1,
+				code: "DEPENDENCY_UNAVAILABLE",
+				message: "Controlled revoke failure",
+				retryable: true,
+				traceId: "trace-credential-revoke",
+			},
+		});
+	});
+	await page.goto("/my-settings/api-credentials");
+	const trigger = page
+		.getByRole("table", { name: "个人 API 凭证" })
+		.getByRole("button", {
+			name: `撤销：${initial.credentialId}`,
+			exact: true,
+		});
+	await trigger.click();
+	const dialog = page.getByRole("dialog", { name: "撤销这张 API 凭证？" });
+	await dialog.getByRole("button", { name: "撤销凭证", exact: true }).click();
+	await expect(dialog).not.toBeVisible();
+	await expect(
+		page.getByRole("alert").filter({ hasText: "API 凭证请求暂时不可用" }),
+	).toBeVisible();
+	await expect(trigger).toBeEnabled();
+	await expect(trigger).toBeFocused();
+	expect(revocations).toHaveLength(1);
+});
+
 // R-02：页头、notice 与 credential-table；窄屏按 X-07 转为行卡片。
 test("lays out the API credential page head, notice and credential table", async ({
 	page,
