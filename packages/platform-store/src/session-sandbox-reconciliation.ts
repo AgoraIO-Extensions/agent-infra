@@ -40,10 +40,25 @@ import { lockConversation, lockOutbox } from "./conversation-dispatch-sql.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
 type Transaction = postgres.TransactionSql;
+/**
+ * #3089：认领 Session Sandbox 准备任务时返回 null 的固定原因，只用于观测，不改变认领判定。
+ */
+export type SessionSandboxClaimWaitReasonV1 =
+	| "intent_mismatch"
+	| "lifecycle_stale"
+	| "authorization_changed"
+	| "agent_not_running"
+	| "workload_not_ready"
+	| "configuration_pending"
+	| "capacity_mismatch"
+	| "lease_ineligible"
+	| "policy_changed";
 export interface SandboxClaimRequest {
 	readonly itemId: string;
 	readonly workerId: string;
 	readonly leaseDurationMs: number;
+	/** 认领返回 null 时同步报告原因；只在认领路径上调用。 */
+	readonly onWait?: (reason: SessionSandboxClaimWaitReasonV1) => void;
 }
 
 interface AllocationRow {
@@ -60,7 +75,12 @@ async function lockedContext(
 	itemId: string,
 	policy: SessionSandboxPolicyV1,
 	directory: TaskUserDirectoryV1 | undefined,
+	wait: (reason: SessionSandboxClaimWaitReasonV1) => void = () => {},
 ) {
+	const waiting = (reason: SessionSandboxClaimWaitReasonV1) => {
+		wait(reason);
+		return null;
+	};
 	await transaction`select set_config('lock_timeout', '5s', true)`;
 	const [hint] = await transaction<
 		{ agent_id: string; actor_id: string; principal_type: string }[]
@@ -68,7 +88,7 @@ async function lockedContext(
 		select c.agent_id, c.actor_id, c.principal_type from platform.outbox_items o
 		join platform.conversations c on c.id = o.scope_id
 		where o.id = ${itemId} and o.scope_type = 'conversation' and o.operation = 'conversation.sandbox.reconcile.v1'`;
-	if (!hint) return null;
+	if (!hint) return waiting("intent_mismatch");
 	await transaction`lock table platform.platform_user_disables in share mode`;
 	await transaction`select id from platform.platform_applications where id = ${hint.actor_id} and ${hint.principal_type} = 'application' for share`;
 	await transaction`select principal_id from platform.agent_principal_grants where agent_id = ${hint.agent_id} and principal_type = ${hint.principal_type} and principal_id = ${hint.actor_id} for share`;
@@ -90,7 +110,7 @@ async function lockedContext(
 		outbox?.operation !== "conversation.sandbox.reconcile.v1" ||
 		outbox.scope_type !== "conversation"
 	)
-		return null;
+		return waiting("intent_mismatch");
 	const conversation = await lockConversation(transaction, outbox.scope_id);
 	const sandbox = conversation?.sandbox;
 	if (
@@ -102,7 +122,7 @@ async function lockedContext(
 		sandbox.principal.id !== hint.actor_id ||
 		sandbox.principal.kind !== hint.principal_type
 	)
-		return null;
+		return waiting("intent_mismatch");
 	const payload = outbox.payload;
 	if (
 		!payload ||
@@ -124,12 +144,12 @@ async function lockedContext(
 			},
 		)
 	)
-		return null;
+		return waiting("intent_mismatch");
 	const [allocation] = await transaction<
 		AllocationRow[]
 	>`select resource_fence, desired_state, status, resource_policy, resource_observation
 		from platform.session_sandbox_allocations where sandbox_id = ${sandbox.sandboxId} for update`;
-	if (!allocation) return null;
+	if (!allocation) return waiting("intent_mismatch");
 	let lifecycle =
 		(payload as { lifecycle?: SessionSandboxLifecycleV1 }).lifecycle ?? null;
 	let preparationAllowed = false;
@@ -180,7 +200,7 @@ async function lockedContext(
 			source.resourceFence >= Number(allocation.resource_fence) ||
 			(source.policy && source.policy.namespace !== policy.namespace)
 		)
-			return null;
+			return waiting("lifecycle_stale");
 		const executions = await transaction<
 			{ status: string }[]
 		>`select status from platform.conversation_executions where conversation_id = ${sandbox.sessionId}`;
@@ -200,7 +220,7 @@ async function lockedContext(
 					executions,
 				})
 			)
-				return null;
+				return waiting("lifecycle_stale");
 			preparationAllowed = true;
 		} else {
 			if (
@@ -210,7 +230,7 @@ async function lockedContext(
 				!isDeepStrictEqual(source.policy, allocation.resource_policy) ||
 				!isDeepStrictEqual(source.observation, allocation.resource_observation)
 			)
-				return null;
+				return waiting("lifecycle_stale");
 			return {
 				outbox,
 				sandbox,
@@ -227,13 +247,14 @@ async function lockedContext(
 			};
 		}
 	}
+	if (conversation.authorization_revision !== agent.authorization_revision)
+		return waiting("authorization_changed");
 	if (
 		(allocation.desired_state !== "running" && !preparationAllowed) ||
-		conversation.authorization_revision !== agent.authorization_revision ||
 		management.status !== "available" ||
 		management.desiredState !== "running"
 	)
-		return null;
+		return waiting("agent_not_running");
 	const [workload] = await transaction<
 		{ state: unknown }[]
 	>`select state from platform.workload_reconciliations where agent_id = ${sandbox.agentId} for share`;
@@ -241,31 +262,36 @@ async function lockedContext(
 		workload?.state,
 		sandbox.agentId,
 	);
-	if (!decoded || decoded.legacy) return null;
+	if (!decoded || decoded.legacy) return waiting("workload_not_ready");
 	const state = decoded.state;
 	const verified = state.verified;
-	if (!verified) return null;
+	if (!verified) return waiting("workload_not_ready");
 	const deployment = validateAgentWorkloadDesiredV1(verified.deployment);
 	if (
 		state.phase !== "ready" ||
 		state.verifiedRevision === null ||
-		state.sourceConfigurationRevision !==
-			Number(agent.current_configuration_revision) ||
-		verified.configuration.revision !==
-			Number(agent.current_configuration_revision) ||
 		deployment.agentId !== sandbox.agentId ||
-		deployment.configRevision !==
-			Number(agent.current_configuration_revision) ||
 		deployment.desiredState !== "running" ||
 		deployment.runtimeManifest.interactionMode !== "platform-adapter" ||
 		// Two distinct revisions (#1480): the deployment is read from the verified
 		// state itself (a rollback keeps its original Workload revision), and the
 		// management lifecycle revision proves that state is still current.
-		state.sourceLifecycleRevision !== management.workloadRevision ||
-		verified.executionCapacity?.resourceConfigurationHash !==
-			policy.resourceConfigurationHash
+		state.sourceLifecycleRevision !== management.workloadRevision
 	)
-		return null;
+		return waiting("workload_not_ready");
+	if (
+		state.sourceConfigurationRevision !==
+			Number(agent.current_configuration_revision) ||
+		verified.configuration.revision !==
+			Number(agent.current_configuration_revision) ||
+		deployment.configRevision !== Number(agent.current_configuration_revision)
+	)
+		return waiting("configuration_pending");
+	if (
+		verified.executionCapacity?.resourceConfigurationHash !==
+		policy.resourceConfigurationHash
+	)
+		return waiting("capacity_mismatch");
 	const common = {
 		principal: sandbox.principal,
 		agent: management,
@@ -287,12 +313,13 @@ async function lockedContext(
 	} else {
 		const disabled =
 			await transaction`select user_id from platform.platform_user_disables where user_id = ${sandbox.principal.id}`;
-		if (disabled.length) return null;
+		if (disabled.length) return waiting("authorization_changed");
 		const user = await resolveCurrentPersonalApiUserV1(
 			directory,
 			sandbox.principal.id,
 		);
-		if (user.accountStatus !== "active") return null;
+		if (user.accountStatus !== "active")
+			return waiting("authorization_changed");
 		authorization = isTaskApiChannelV1(sandbox.channelId, sandbox.principal)
 			? capturePersonalApiTaskAuthorizationBoundaryV1({
 					...common,
@@ -305,7 +332,7 @@ async function lockedContext(
 				})
 			: captureTaskAuthorizationBoundaryV1({ ...common, user });
 	}
-	if (!authorization) return null;
+	if (!authorization) return waiting("authorization_changed");
 	const currentPolicy: SessionSandboxVerifiedPolicyV1 = {
 		...policy,
 		configurationRevision: Number(agent.current_configuration_revision),
@@ -427,11 +454,13 @@ export async function claimSandboxReconciliation(
 	  })
 	| null
 > {
+	const wait = input.onWait ?? (() => {});
 	const context = await lockedContext(
 		transaction,
 		input.itemId,
 		policy,
 		directory,
+		wait,
 	);
 	if (!context) {
 		await settleRetainedStopReceipt(transaction, input.itemId);
@@ -442,7 +471,10 @@ export async function claimSandboxReconciliation(
 		(status in ('pending','retry_scheduled') and available_at <= clock_timestamp()) or
 		(status = 'processing' and lease_expires_at <= clock_timestamp()) as eligible
 		from platform.outbox_items where id = ${input.itemId}`;
-	if (!lease?.eligible) return null;
+	if (!lease?.eligible) {
+		wait("lease_ineligible");
+		return null;
+	}
 	if (
 		allocation.resource_policy &&
 		!isDeepStrictEqual(allocation.resource_policy, context.policy) &&
@@ -451,8 +483,10 @@ export async function claimSandboxReconciliation(
 			context.lifecycle?.stopReceipt &&
 			allocation.desired_state === "stopped"
 		)
-	)
+	) {
+		wait("policy_changed");
 		return null;
+	}
 	const resourceFence = Math.max(1, Number(allocation.resource_fence));
 	const deliveryFence = Number(outbox.delivery_fence) + 1;
 	if (

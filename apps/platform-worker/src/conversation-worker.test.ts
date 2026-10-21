@@ -204,6 +204,7 @@ describe("Conversation Worker discovery and shutdown", () => {
 		await worker.stop();
 		expect(mocks.claimSandbox).toHaveBeenCalledWith(
 			expect.objectContaining({ itemId: "sandbox-1", workerId: "instance" }),
+			expect.any(Function),
 		);
 		expect(mocks.prepareSandbox.mock.calls.length).toBeGreaterThanOrEqual(3);
 		expect(mocks.recordSandbox).toHaveBeenCalledWith({
@@ -728,6 +729,68 @@ describe("conversation dispatch observability", () => {
 		} finally {
 			await worker.stop();
 		}
+	});
+
+	it("records a sandbox claim wait once per reason change (#3089)", async () => {
+		const sandbox = {
+			itemId: "sandbox-a",
+			operation: "conversation.sandbox.reconcile.v1",
+		};
+		mocks.find.mockResolvedValue([sandbox]);
+		const waits = [
+			"workload_not_ready",
+			"workload_not_ready",
+			"configuration_pending",
+			null,
+			"configuration_pending",
+		] as const;
+		for (const reason of waits)
+			mocks.claimSandbox.mockImplementationOnce(
+				async (_input: unknown, onWait?: (reason: string) => void) => {
+					if (reason === null)
+						return { schemaVersion: 1, execution: null } as never;
+					onWait?.(reason);
+					return null;
+				},
+			);
+		mocks.recordSandbox.mockResolvedValue(undefined);
+		const telemetry = { record: vi.fn() };
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			observability: telemetry,
+		});
+		try {
+			for (const [index, reason] of waits.entries()) {
+				expect(await worker.tick()).toBe(1);
+				await vi.waitFor(() =>
+					expect(mocks.claimSandbox).toHaveBeenCalledTimes(index + 1),
+				);
+				if (reason === null)
+					await vi.waitFor(() =>
+						expect(mocks.recordSandbox).toHaveBeenCalled(),
+					);
+			}
+		} finally {
+			await worker.stop();
+		}
+		const events = telemetry.record.mock.calls
+			.map(([event]) => event)
+			.filter((event) => event.stage === "workload");
+		// 同一原因连续出现只记一次；原因变化或认领成功后再次等待都会重新记录。
+		expect(events).toEqual(
+			[
+				"sandbox.workload_not_ready",
+				"sandbox.configuration_pending",
+				"sandbox.configuration_pending",
+			].map((failureStep) => ({
+				stage: "workload",
+				outcome: "waiting",
+				code: "WORKLOAD_UNAVAILABLE",
+				failureStep,
+				operationRef: "conversation.sandbox.reconcile.v1",
+			})),
+		);
+		expect(JSON.stringify(events)).not.toContain("sandbox-a");
 	});
 
 	describe("a Session Sandbox receiver failure (#2733)", () => {

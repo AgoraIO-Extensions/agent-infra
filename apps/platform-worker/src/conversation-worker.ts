@@ -21,6 +21,7 @@ import {
 	PostgresLegacyTaskRecoveryReaderV1,
 	PostgresTaskAuthorizationStoreV1,
 	platformQueueResourceSnapshotTimeoutMs,
+	type SessionSandboxClaimWaitReasonV1,
 } from "@agent-infra/platform-store";
 import {
 	type BrowserHandoffCommandInvocationV1,
@@ -556,6 +557,29 @@ export function createPlatformConversationWorkerV2(
 		string,
 		{ control: boolean; promise: Promise<void> }
 	>();
+	// #3089：Session Sandbox 准备任务认领等待的最近原因。同一任务每轮轮询都会重试认领，
+	// 只在原因变化时记录一次；记录只有固定标签，不含任务或会话 ID。
+	const sandboxWaits = new Map<string, SessionSandboxClaimWaitReasonV1>();
+	function observeSandboxWait(
+		item: { readonly itemId: string; readonly operation: string },
+		reason: SessionSandboxClaimWaitReasonV1,
+	) {
+		if (sandboxWaits.get(item.itemId) === reason) return;
+		sandboxWaits.delete(item.itemId);
+		sandboxWaits.set(item.itemId, reason);
+		if (sandboxWaits.size > 1024) {
+			const oldest = sandboxWaits.keys().next().value;
+			if (oldest !== undefined) sandboxWaits.delete(oldest);
+		}
+		if (options.observability)
+			record(options.observability, {
+				stage: "workload",
+				outcome: "waiting",
+				code: "WORKLOAD_UNAVAILABLE",
+				failureStep: `sandbox.${reason}`,
+				operationRef: item.operation,
+			});
+	}
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let polling: Promise<number> | undefined;
 	let resourceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -699,13 +723,17 @@ export function createPlatformConversationWorkerV2(
 		}
 		signal.throwIfAborted();
 		const leaseDurationMs = options.leaseDurationMs ?? 30_000;
-		const initialClaim = await store.claimSandboxReconciliation({
-			schemaVersion: 1,
-			itemId: item.itemId,
-			workerId: options.workerId,
-			leaseDurationMs,
-		});
+		const initialClaim = await store.claimSandboxReconciliation(
+			{
+				schemaVersion: 1,
+				itemId: item.itemId,
+				workerId: options.workerId,
+				leaseDurationMs,
+			},
+			(reason) => observeSandboxWait(item, reason),
+		);
 		if (!initialClaim) return;
+		sandboxWaits.delete(item.itemId);
 		let claim: NonNullable<typeof initialClaim> = initialClaim;
 		signal.throwIfAborted();
 		if (
