@@ -46,6 +46,7 @@ import {
 	readSessionSandboxUpgrading,
 	requestSessionSandboxResume,
 } from "./session-sandbox.ts";
+import type { SessionSandboxClaimWaitReasonV1 } from "./session-sandbox-reconciliation.ts";
 import { persistSessionSandboxUpgradeIntents } from "./session-sandbox-upgrade.ts";
 import { PostgresTaskAuthorizationStoreV1 } from "./task-authorization.ts";
 import { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.ts";
@@ -2637,13 +2638,22 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					await client`select status, attempt_count, delivery_fence from platform.outbox_items where id = ${request.itemId}`,
 			});
 			const before = await unchanged();
+			// #3089：认领返回 null 时报告固定原因，用于观测首条消息卡在哪一步。
+			const reasons: SessionSandboxClaimWaitReasonV1[] = [];
+			const claimObserved = async () => {
+				reasons.length = 0;
+				return store.claimSandboxReconciliation(request, (reason) => {
+					reasons.push(reason);
+				});
+			};
 			for (const stale of [
 				// Lifecycle source is behind or ahead of the current management lifecycle.
 				{ verified: 7, deployment: 7, lifecycle: 3, management: 4 },
 				{ verified: 7, deployment: 7, lifecycle: 4, management: 5 },
 			]) {
 				await setRevisions(stale);
-				expect(await store.claimSandboxReconciliation(request)).toBeNull();
+				expect(await claimObserved()).toBeNull();
+				expect(reasons).toEqual(["workload_not_ready"]);
 				expect(await unchanged()).toEqual(before);
 			}
 			// A rollback re-promotes the earlier deployment (Workload revision 7)
@@ -2654,12 +2664,32 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				lifecycle: 4,
 				management: 4,
 			});
-			const claim = await store.claimSandboxReconciliation(request);
+			// 配置已前进但 Workload 尚未按新配置验证完成：等待配置生效。
+			await client`update platform.agents set current_configuration_revision = 5 where id = 'agent-dispatch'`;
+			expect(await claimObserved()).toBeNull();
+			expect(reasons).toEqual(["configuration_pending"]);
+			expect(await unchanged()).toEqual(before);
+			await client`update platform.agents set current_configuration_revision = 4 where id = 'agent-dispatch'`;
+			// 已验证的执行容量对应另一份资源配置：等待容量证据与当前策略一致。
+			const [workloadBefore] =
+				await client`select state from platform.workload_reconciliations where agent_id = 'agent-dispatch'`;
+			await client`update platform.workload_reconciliations
+				set state = jsonb_set(state, '{verified,executionCapacity,resourceConfigurationHash}', ${client.json("d".repeat(64))})
+				where agent_id = 'agent-dispatch'`;
+			expect(await claimObserved()).toBeNull();
+			expect(reasons).toEqual(["capacity_mismatch"]);
+			expect(await unchanged()).toEqual(before);
+			await client`update platform.workload_reconciliations set state = ${client.json(workloadBefore?.state)} where agent_id = 'agent-dispatch'`;
+			const claim = await claimObserved();
 			if (!claim)
 				throw new Error("Expected prepare claim after reconfiguration");
+			expect(reasons).toEqual([]);
 			expect(claim.purpose).toBe("prepare");
 			expect(claim.policy.workloadRevision).toBe(7);
 			expect(claim.resourceFence).toBe(1);
+			// 租约仍由当前认领持有：重复认领只报告租约不可用。
+			expect(await claimObserved()).toBeNull();
+			expect(reasons).toEqual(["lease_ineligible"]);
 			const resources = (
 				[
 					"Pod",

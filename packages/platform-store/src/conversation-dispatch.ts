@@ -83,6 +83,7 @@ import {
 	recordSandboxDeletionProgress,
 	recordSandboxObservation,
 	type SandboxClaimRequest,
+	type SessionSandboxClaimWaitReasonV1,
 } from "./session-sandbox-reconciliation.js";
 import { readLegacyControlRecoveryInTransaction } from "./task-authorization-migration.ts";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.ts";
@@ -161,8 +162,10 @@ export class PostgresConversationDispatchStoreV1
 		return readPlatformQueueResourceSnapshot(this.#client, signal);
 	}
 
+	/** #3089：`onWait` 在认领返回 null 时报告固定原因码，只用于观测。 */
 	async claimSandboxReconciliation(
-		input: SandboxClaimRequest & { readonly schemaVersion: 1 },
+		input: Omit<SandboxClaimRequest, "onWait"> & { readonly schemaVersion: 1 },
+		onWait?: (reason: SessionSandboxClaimWaitReasonV1) => void,
 	) {
 		requireCommand(input);
 		const policy = this.#sandboxPolicy;
@@ -171,7 +174,7 @@ export class PostgresConversationDispatchStoreV1
 			this.#client.begin((transaction) =>
 				claimSandboxReconciliation(
 					transaction,
-					input,
+					{ ...input, ...(onWait ? { onWait } : {}) },
 					policy,
 					this.#userDirectory,
 				),

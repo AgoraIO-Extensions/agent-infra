@@ -150,6 +150,41 @@ it("keeps the bounded Session Sandbox workload failure steps (#2733)", () => {
 	]);
 });
 
+it("keeps only the fixed Session Sandbox claim wait steps (#3089)", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-worker",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	const known = [
+		"sandbox.intent_mismatch",
+		"sandbox.lifecycle_stale",
+		"sandbox.authorization_changed",
+		"sandbox.agent_not_running",
+		"sandbox.workload_not_ready",
+		"sandbox.configuration_pending",
+		"sandbox.capacity_mismatch",
+		"sandbox.lease_ineligible",
+		"sandbox.policy_changed",
+	];
+	for (const failureStep of [...known, "sandbox.conversation-secret-id"])
+		telemetry.record({
+			stage: "workload",
+			outcome: "waiting",
+			code: "WORKLOAD_UNAVAILABLE",
+			failureStep,
+		});
+	const steps = lines.map((line) => JSON.parse(line).failureStep);
+	expect(steps).toEqual([...known, undefined]);
+	expect(lines.join("")).not.toContain("conversation-secret-id");
+});
+
 it("accepts waiting as a non-error operational outcome", () => {
 	const lines: string[] = [];
 	const telemetry = startObservability({

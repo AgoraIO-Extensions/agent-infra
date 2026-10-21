@@ -143,6 +143,16 @@ const operationalFailureSteps = new Set([
 	"workload.policy",
 	"workload.conflict",
 	"workload.unavailable",
+	// Session Sandbox 准备任务认领等待的原因（SessionSandboxClaimWaitReasonV1，#3089）。
+	"sandbox.intent_mismatch",
+	"sandbox.lifecycle_stale",
+	"sandbox.authorization_changed",
+	"sandbox.agent_not_running",
+	"sandbox.workload_not_ready",
+	"sandbox.configuration_pending",
+	"sandbox.capacity_mismatch",
+	"sandbox.lease_ineligible",
+	"sandbox.policy_changed",
 ]);
 
 export function isOperationalFailureStep(value: unknown): value is string {
