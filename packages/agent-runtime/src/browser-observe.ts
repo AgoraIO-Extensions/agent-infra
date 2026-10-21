@@ -865,7 +865,11 @@ export function createBrowserObserveControllerV1(input: {
 		}
 		const capability = readCapability();
 		try {
-			assertAllowedUrl(state.page.url(), allowedOrigins());
+			const isControlledFixturePage =
+				input.controlledFixture !== undefined &&
+				state.page.url() === "about:blank";
+			if (!isControlledFixturePage)
+				assertAllowedUrl(state.page.url(), allowedOrigins());
 		} catch (error) {
 			return actionRecord(
 				request,
