@@ -1116,6 +1116,48 @@ test("a missing platform identity entry is explained at the identity field and t
 	});
 });
 
+// #3119：多服务 YAML 文本框与上方文件输入各有可访问名称，占位符按三行示例显示。
+test("the multi-service YAML textarea has its own accessible name and a three-line placeholder", async ({
+	page,
+}, info) => {
+	await fixture(page);
+	await page.goto("/my-agents/new");
+	await page.getByRole("combobox", { name: "Agent 来源" }).click();
+	await page
+		.getByRole("option", { name: "多服务 Agent · 自有交互入口" })
+		.click();
+	const name = "多服务资源 YAML 内容";
+	// 默认的子串匹配也只命中这一个文本框。
+	const manifest = page.getByRole("textbox", { name });
+	await expect(manifest).toHaveCount(1);
+	await expect(manifest).toHaveAttribute(
+		"id",
+		"application-multi-service-manifest",
+	);
+	// 同页没有同名控件：该名称只属于文本框，也不是任何按钮或链接的文字。
+	await expect(page.getByLabel(name, { exact: true })).toHaveCount(1);
+	await expect(page.getByText(name, { exact: true })).toHaveCount(0);
+	expect(await duplicateControlNames(page)).toEqual([]);
+	// 文件输入保留「多服务资源 YAML」，与文本框区分。
+	await expect(
+		page.getByLabel("多服务资源 YAML", { exact: true }),
+	).toHaveAttribute("type", "file");
+	// 占位符是真正的换行，不是字面量反斜杠加 n。
+	await expect(manifest).toHaveAttribute(
+		"placeholder",
+		"schemaVersion: 1\nentryServiceName: api\nresources:",
+	);
+	expect(
+		await manifest.evaluate(
+			(element) => (element as HTMLTextAreaElement).placeholder,
+		),
+	).not.toContain("\\n");
+	// 截图保留占位符的三行示例，随后确认按名称定位的文本框可以输入。
+	await capture(page, info, "application-multi-service-manifest");
+	await manifest.fill("schemaVersion: 1");
+	await expect(manifest).toHaveValue("schemaVersion: 1");
+});
+
 test("stale deployment options block submission in the browser", async ({
 	page,
 }, info) => {
