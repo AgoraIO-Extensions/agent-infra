@@ -1453,7 +1453,12 @@ export class RuntimeHost {
 			now: input.now(),
 		});
 		this.requireLegacyHost();
-		const port = fileBridge(binding);
+		// The Platform's formal V4 exchange needs the original signed Grant as
+		// its only positive evidence; it never enters the binding or receipts.
+		const evidence = Object.freeze({
+			executionGrant: Object.freeze({ ...input.request.grant }),
+		});
+		const port = fileBridge(binding, evidence);
 		const authorityBridge: RuntimeFileBridgePortV1 = {
 			readInput: (fileId, signal) => port.readInput(fileId, signal),
 			writeResult: (descriptor, body) => port.writeResult(descriptor, body),

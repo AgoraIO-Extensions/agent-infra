@@ -839,6 +839,8 @@ it("authorizes Execution-scoped input reads only for the bound Execution and gen
 		...nativeScope,
 		executionId: "execution",
 		sessionGeneration: 1,
+		deliveryFence: 1,
+		authorizationRevision: "revision-1",
 		status: "processing",
 		stopPending: false,
 	});
